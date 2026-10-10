@@ -808,6 +808,10 @@ describe('installRuntimeArtifacts (copilot integration)', () => {
     const staleDir = path.join(skillsDir, 'gsd-old-stale-skill');
     fs.mkdirSync(staleDir, { recursive: true });
     fs.writeFileSync(path.join(staleDir, 'SKILL.md'), 'stale content');
+    // #5161: a prefix alone no longer proves GSD owns a skill dir. A stale GSD
+    // skill is one a previous install recorded, so record it the way that install would.
+    fs.writeFileSync(path.join(configDir, 'gsd-file-manifest.json'),
+      JSON.stringify({ version: '0.0.0', files: { 'skills/gsd-old-stale-skill/SKILL.md': 'deadbeef' } }));
 
     // Non-GSD dir should survive (installRuntimeArtifacts never prunes non-gsd-*)
     fs.mkdirSync(path.join(skillsDir, 'user-custom'), { recursive: true });
@@ -1276,8 +1280,9 @@ describe('Copilot manifest and patches fixes', () => {
     fs.mkdirSync(gsdDir, { recursive: true });
     fs.writeFileSync(path.join(gsdDir, 'verify.cjs'), '// verify stub');
 
-    // Create Copilot skills directory
-    const skillDir = path.join(tmpDir, 'skills', 'gsd-test');
+    // Create Copilot skills directory. #5161: writeManifest records only skill dirs
+    // GSD owns, so use a first-party skill name rather than an arbitrary gsd-* one.
+    const skillDir = path.join(tmpDir, 'skills', 'gsd-help');
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Test Skill\n\nA test skill.');
 
@@ -1289,7 +1294,7 @@ describe('Copilot manifest and patches fixes', () => {
 
     // Read and verify skills are hashed
     const data = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    const skillKey = 'skills/gsd-test/SKILL.md';
+    const skillKey = 'skills/gsd-help/SKILL.md';
     assert.ok(data.files[skillKey], 'skill file hashed in manifest');
     assert.ok(typeof data.files[skillKey] === 'string', 'hash is a string');
     assert.ok(data.files[skillKey].length === 64, 'hash is SHA-256 (64 hex chars)');

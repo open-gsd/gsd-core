@@ -19,6 +19,7 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { INSTALL_TIMEOUT_MS, FIXTURE_HOOK_TIMEOUT_SECONDS } = require('./helpers/timeouts.cjs');
@@ -2353,5 +2354,456 @@ describe('#1874 F18: ~/.gsd/defaults.json read-modify-write is locked and atomic
       'defaults.json must be untouched when the lock could not be acquired — no partial RMW');
     assert.strictEqual(fs.existsSync(lockPath), false,
       'no lock file may be left behind when its creation itself failed');
+  });
+});
+
+// ─── #5161: the install skills prune must not delete a gsd-* skill dir GSD does not own ───
+// `_removeGsdEntries` used to rmSync every `skills/gsd-*` entry on each install, sparing only the
+// hard-coded `gsd-dev-preferences`. A user-created `skills/gsd-<x>/` was deleted with no log line,
+// even after the same run's first-time baseline migration had resolved that path to `keep`.
+// Ownership now mirrors surface.cts pruneSkillDirs: a prefix match is necessary but not
+// sufficient — the dir must be a first-party skill, carry the capability-skill marker, or be
+// recorded by the previous install manifest. Anything else is preserved and named in the log.
+describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them', () => {
+  const USER_SKILL = '---\nname: gsd-mine\ndescription: user-owned\n---\nKEEP ME\n';
+
+  function seedUserSkills(skillsDir) {
+    for (const [name, body] of [
+      ['gsd-mine', USER_SKILL],
+      ['gsd-dev-preferences', '---\nname: gsd-dev-preferences\n---\nPREFS\n'],
+      ['xr-mine', '---\nname: xr-mine\n---\nNOT GSD\n'],
+    ]) {
+      fs.mkdirSync(path.join(skillsDir, name), { recursive: true });
+      fs.writeFileSync(path.join(skillsDir, name, 'SKILL.md'), body);
+    }
+  }
+
+  function readManifestFiles(configDir) {
+    return JSON.parse(fs.readFileSync(path.join(configDir, 'gsd-file-manifest.json'), 'utf8')).files;
+  }
+
+  test('global: fresh install then update both keep a user gsd-* skill, log its path, and never record it in the manifest', (t) => {
+    const root = createTempDir('gsd-5161-global-');
+    t.after(() => cleanup(root));
+    const configDir = path.join(root, '.claude');
+    const skillsDir = path.join(configDir, 'skills');
+    seedUserSkills(skillsDir);
+    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+    const userSkillPath = path.join(skillsDir, 'gsd-mine');
+
+    // Run 1 — fresh config dir: the first-time baseline resolves gsd-mine to `keep`.
+    const r1 = runNode([INSTALL_SCRIPT, '--claude', '--global', '--config-dir', configDir], runOpts);
+    assert.strictEqual(r1.exitCode, 0, `install failed: ${r1.stdout}\n${r1.stderr}`);
+    assert.match(r1.stdout + r1.stderr, /skills\/gsd-mine\/SKILL\.md → keep/,
+      'precondition: the first-time baseline must resolve the user skill to keep');
+    assert.ok(fs.existsSync(userSkillPath), 'a baseline `keep` must not be followed by a deletion in the same run');
+    assert.strictEqual(fs.readFileSync(path.join(userSkillPath, 'SKILL.md'), 'utf8'), USER_SKILL,
+      'the preserved user skill must be byte-identical');
+    assert.ok((r1.stdout + r1.stderr).includes(userSkillPath),
+      'the install output must name the preserved dir by path');
+    assert.ok(!(r1.stdout + r1.stderr).includes(`Preserved ${path.join(skillsDir, 'gsd-dev-preferences')}`),
+      'gsd-dev-preferences is GSD-special-cased, never named as a dir GSD does not own');
+    const manifest1 = readManifestFiles(configDir);
+    assert.ok(!Object.keys(manifest1).some((k) => k.startsWith('skills/gsd-mine/')),
+      'a preserved user skill must not be recorded as GSD-owned — the next install would delete it');
+
+    // Run 2 — update path (manifest present, no baseline).
+    const r2 = runNode([INSTALL_SCRIPT, '--claude', '--global', '--config-dir', configDir], runOpts);
+    assert.strictEqual(r2.exitCode, 0, `update failed: ${r2.stdout}\n${r2.stderr}`);
+    assert.ok(fs.existsSync(userSkillPath), 'the update install must keep the user skill too');
+    assert.strictEqual(fs.readFileSync(path.join(userSkillPath, 'SKILL.md'), 'utf8'), USER_SKILL);
+    assert.ok((r2.stdout + r2.stderr).includes(userSkillPath),
+      'the update output must name the preserved dir by path');
+
+    // Controls: the allowlisted dir and the non-prefixed dir are untouched.
+    assert.strictEqual(fs.readFileSync(path.join(skillsDir, 'gsd-dev-preferences', 'SKILL.md'), 'utf8'),
+      '---\nname: gsd-dev-preferences\n---\nPREFS\n');
+    assert.strictEqual(fs.readFileSync(path.join(skillsDir, 'xr-mine', 'SKILL.md'), 'utf8'),
+      '---\nname: xr-mine\n---\nNOT GSD\n');
+  });
+
+  test('global: gsd-dev-preferences generated after an install is restored on update without a preserved-dir warning', (t) => {
+    const root = createTempDir('gsd-5161-devprefs-');
+    t.after(() => cleanup(root));
+    const configDir = path.join(root, '.claude');
+    const skillsDir = path.join(configDir, 'skills');
+    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+
+    const r1 = runNode([INSTALL_SCRIPT, '--claude', '--global', '--config-dir', configDir], runOpts);
+    assert.strictEqual(r1.exitCode, 0, `install failed: ${r1.stdout}\n${r1.stderr}`);
+    // Generated after the install, so the manifest that install wrote does not record it.
+    const devPrefs = path.join(skillsDir, 'gsd-dev-preferences');
+    const PREFS = '---\nname: gsd-dev-preferences\n---\nPREFS\n';
+    fs.mkdirSync(devPrefs, { recursive: true });
+    fs.writeFileSync(path.join(devPrefs, 'SKILL.md'), PREFS);
+    assert.ok(!Object.keys(readManifestFiles(configDir)).some((k) => k.startsWith('skills/gsd-dev-preferences/')),
+      'precondition: the previous manifest does not record gsd-dev-preferences');
+
+    const r2 = runNode([INSTALL_SCRIPT, '--claude', '--global', '--config-dir', configDir], runOpts);
+    assert.strictEqual(r2.exitCode, 0, `update failed: ${r2.stdout}\n${r2.stderr}`);
+    assert.strictEqual(fs.readFileSync(path.join(devPrefs, 'SKILL.md'), 'utf8'), PREFS,
+      'gsd-dev-preferences survives the update byte-identical');
+    assert.ok(!(r2.stdout + r2.stderr).includes(`Preserved ${devPrefs}`),
+      'gsd-dev-preferences is never named as a dir GSD does not own');
+
+    // "Installed N skills" counts it, as it did before #5161 and as writeManifest records it.
+    const countOf = (r) => {
+      const m = (r.stdout + r.stderr).match(/Installed (\d+) skills to skills\//);
+      assert.ok(m, `the install reports a skill count: ${r.stdout}`);
+      return Number(m[1]);
+    };
+    assert.strictEqual(countOf(r2), countOf(r1) + 1, 'the reported count includes the restored gsd-dev-preferences');
+    assert.ok(Object.keys(readManifestFiles(configDir)).some((k) => k.startsWith('skills/gsd-dev-preferences/')),
+      'writeManifest records gsd-dev-preferences once it exists');
+  });
+
+  test('global: a gsd-dev-preferences whose SKILL.md is a symlink, beside a read-only file, survives updates untouched once the manifest records it', (t) => {
+    const root = createTempDir('gsd-5161-devprefs-link-');
+    t.after(() => cleanup(root));
+    const configDir = path.join(root, '.claude');
+    const devPrefs = path.join(configDir, 'skills', 'gsd-dev-preferences');
+    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+    const install = () => {
+      const r = runNode([INSTALL_SCRIPT, '--claude', '--global', '--config-dir', configDir], runOpts);
+      assert.strictEqual(r.exitCode, 0, `install failed: ${r.stdout}\n${r.stderr}`);
+    };
+
+    install();
+    const shared = path.join(root, 'shared-prefs.md');
+    fs.writeFileSync(shared, '---\nname: gsd-dev-preferences\n---\nSHARED\n');
+    fs.mkdirSync(devPrefs, { recursive: true });
+    fs.symlinkSync(shared, path.join(devPrefs, 'SKILL.md'));
+    // A read-only file the user left there: keeping the dir must not mean rewriting it.
+    fs.writeFileSync(path.join(devPrefs, 'notes.md'), 'NOTES\n');
+    fs.chmodSync(path.join(devPrefs, 'notes.md'), 0o444);
+    t.after(() => { try { fs.chmodSync(path.join(devPrefs, 'notes.md'), 0o644); } catch { /* already gone */ } });
+
+    install();   // records the dir in the manifest
+    assert.ok(Object.keys(readManifestFiles(configDir)).some((k) => k.startsWith('skills/gsd-dev-preferences/')),
+      'precondition: the manifest now records gsd-dev-preferences, so the manifest leg owns it');
+    install();   // the update that used to prune it and restore everything but the link
+    assert.ok(fs.lstatSync(path.join(devPrefs, 'SKILL.md')).isSymbolicLink(),
+      'gsd-dev-preferences/SKILL.md is still the user\'s symlink');
+    assert.strictEqual(fs.readlinkSync(path.join(devPrefs, 'SKILL.md')), shared);
+    assert.strictEqual(fs.readFileSync(path.join(devPrefs, 'notes.md'), 'utf8'), 'NOTES\n',
+      'the read-only file is untouched (the update exited 0 above)');
+  });
+
+  test('gsd-dev-preferences that an old manifest records survives the Hermes flat-root and Claude local stale-skills cleanups', (t) => {
+    const root = createTempDir('gsd-5161-devprefs-cleanup-');
+    t.after(() => cleanup(root));
+    const runOpts = (cwd) => ({ cwd, env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS });
+    const PREFS = '---\nname: gsd-dev-preferences\n---\nPREFS\n';
+    // Seed the dir and record it in the manifest, as an install that wrote the old layout would have.
+    const seedRecorded = (configDir, skillsDir) => {
+      fs.mkdirSync(path.join(skillsDir, 'gsd-dev-preferences'), { recursive: true });
+      fs.writeFileSync(path.join(skillsDir, 'gsd-dev-preferences', 'SKILL.md'), PREFS);
+      const manifestPath = path.join(configDir, 'gsd-file-manifest.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      manifest.files['skills/gsd-dev-preferences/SKILL.md'] = crypto.createHash('sha256').update(PREFS).digest('hex');
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    };
+
+    // Hermes: the pre-#2841 flat skills/ root.
+    const hermesDir = path.join(root, '.hermes');
+    const h1 = runNode([INSTALL_SCRIPT, '--hermes', '--global', '--config-dir', hermesDir], runOpts(root));
+    assert.strictEqual(h1.exitCode, 0, `hermes install failed: ${h1.stdout}\n${h1.stderr}`);
+    seedRecorded(hermesDir, path.join(hermesDir, 'skills'));
+    const h2 = runNode([INSTALL_SCRIPT, '--hermes', '--global', '--config-dir', hermesDir], runOpts(root));
+    assert.strictEqual(h2.exitCode, 0, `hermes update failed: ${h2.stdout}\n${h2.stderr}`);
+    assert.strictEqual(fs.readFileSync(path.join(hermesDir, 'skills', 'gsd-dev-preferences', 'SKILL.md'), 'utf8'), PREFS,
+      'the Hermes flat-root cleanup must not delete gsd-dev-preferences, even manifest-recorded');
+
+    // Claude local: the stale project skills/ cleanup.
+    const projectDir = path.join(root, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const claudeDir = path.join(projectDir, '.claude');
+    const c1 = runNode([INSTALL_SCRIPT, '--claude', '--local'], runOpts(projectDir));
+    assert.strictEqual(c1.exitCode, 0, `claude local install failed: ${c1.stdout}\n${c1.stderr}`);
+    seedRecorded(claudeDir, path.join(claudeDir, 'skills'));
+    const c2 = runNode([INSTALL_SCRIPT, '--claude', '--local'], runOpts(projectDir));
+    assert.strictEqual(c2.exitCode, 0, `claude local update failed: ${c2.stdout}\n${c2.stderr}`);
+    assert.strictEqual(fs.readFileSync(path.join(claudeDir, 'skills', 'gsd-dev-preferences', 'SKILL.md'), 'utf8'), PREFS,
+      'the Claude local stale-skills/ cleanup must not delete gsd-dev-preferences, even manifest-recorded');
+  });
+
+  test('global: GSD-owned gsd-* skill dirs are still replaced or pruned (non-vacuity control)', (t) => {
+    const root = createTempDir('gsd-5161-owned-');
+    t.after(() => cleanup(root));
+    const configDir = path.join(root, '.claude');
+    const skillsDir = path.join(configDir, 'skills');
+    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+
+    const r1 = runNode([INSTALL_SCRIPT, '--claude', '--global', '--config-dir', configDir], runOpts);
+    assert.strictEqual(r1.exitCode, 0, `install failed: ${r1.stdout}\n${r1.stderr}`);
+    const helpSkill = path.join(skillsDir, 'gsd-help', 'SKILL.md');
+    const pristineHelp = fs.readFileSync(helpSkill, 'utf8');
+
+    // A first-party skill carrying a stale extra file: the reinstall replaces the whole dir.
+    fs.writeFileSync(helpSkill, 'TAMPERED\n');
+    fs.writeFileSync(path.join(skillsDir, 'gsd-help', 'stale.md'), 'stale\n');
+    // A skill the previous manifest recorded but this version no longer ships (retired).
+    const retired = path.join(skillsDir, 'gsd-retired-5161');
+    fs.mkdirSync(retired, { recursive: true });
+    fs.writeFileSync(path.join(retired, 'SKILL.md'), 'old GSD skill\n');
+    const manifestPath = path.join(configDir, 'gsd-file-manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.files['skills/gsd-retired-5161/SKILL.md'] = 'deadbeef';
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+    const r2 = runNode([INSTALL_SCRIPT, '--claude', '--global', '--config-dir', configDir], runOpts);
+    assert.strictEqual(r2.exitCode, 0, `update failed: ${r2.stdout}\n${r2.stderr}`);
+    assert.strictEqual(fs.readFileSync(helpSkill, 'utf8'), pristineHelp, 'a first-party skill is still replaced');
+    assert.strictEqual(fs.existsSync(path.join(skillsDir, 'gsd-help', 'stale.md')), false,
+      'a first-party skill dir is still wiped before the copy');
+    assert.strictEqual(fs.existsSync(retired), false,
+      'a manifest-recorded gsd-* skill that is no longer shipped is still pruned');
+  });
+
+  test('codex: a kept user gsd-* skill keeps its agents/openai.yaml and is not counted as installed', (t) => {
+    const root = createTempDir('gsd-5161-codex-');
+    t.after(() => cleanup(root));
+    const configDir = path.join(root, '.codex');
+    const skillsDir = path.join(root, '.agents', 'skills');   // codex skills kind `home` override
+    const userDir = path.join(skillsDir, 'gsd-user-5161');
+    fs.mkdirSync(path.join(userDir, 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(userDir, 'SKILL.md'), USER_SKILL);
+    fs.writeFileSync(path.join(userDir, 'agents', 'openai.yaml'), 'display_name: mine\n');
+    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+
+    const r = runNode([INSTALL_SCRIPT, '--codex', '--global', '--config-dir', configDir], runOpts);
+    assert.strictEqual(r.exitCode, 0, `codex install failed: ${r.stdout}\n${r.stderr}`);
+    assert.strictEqual(fs.readFileSync(path.join(userDir, 'agents', 'openai.yaml'), 'utf8'), 'display_name: mine\n',
+      'the sidecar cleanup must not touch files inside a skill dir GSD does not own');
+
+    const manifest = JSON.parse(fs.readFileSync(path.join(configDir, 'gsd-file-manifest.json'), 'utf8'));
+    const recordedRoots = new Set(Object.keys(manifest.files)
+      .filter((k) => k.startsWith('skills/gsd-')).map((k) => k.split('/')[1]));
+    assert.ok(recordedRoots.size > 0, 'precondition: the install recorded its skills');
+    const reported = (r.stdout + r.stderr).match(/Installed (\d+) skills to skills\//);
+    assert.ok(reported, 'the install reports a skill count');
+    assert.strictEqual(Number(reported[1]), recordedRoots.size,
+      'the reported count is the skills GSD installed, not every gsd-* dir present');
+  });
+
+  test('codex: the pre-home skills dir migration removes only GSD-owned gsd-* dirs and names the ones it keeps', (t) => {
+    const root = createTempDir('gsd-5161-codex-oldhome-');
+    t.after(() => cleanup(root));
+    const configDir = path.join(root, '.codex');
+    const oldSkillsDir = path.join(configDir, 'skills');   // where codex skills lived before the `home` move
+    fs.mkdirSync(path.join(oldSkillsDir, 'gsd-plan-phase'), { recursive: true });
+    fs.writeFileSync(path.join(oldSkillsDir, 'gsd-plan-phase', 'SKILL.md'), 'old GSD plan-phase\n');
+    seedUserSkills(oldSkillsDir);
+    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+
+    const r = runNode([INSTALL_SCRIPT, '--codex', '--global', '--config-dir', configDir], runOpts);
+    assert.strictEqual(r.exitCode, 0, `codex install failed: ${r.stdout}\n${r.stderr}`);
+    const out = r.stdout + r.stderr;
+    assert.strictEqual(fs.existsSync(path.join(oldSkillsDir, 'gsd-plan-phase')), false,
+      'a first-party skill left at the pre-home location is still migrated away');
+    assert.strictEqual(fs.readFileSync(path.join(oldSkillsDir, 'gsd-mine', 'SKILL.md'), 'utf8'), USER_SKILL,
+      'a user gsd-* skill at the pre-home location must survive byte-identical');
+    assert.ok(out.includes(`Preserved ${path.join(oldSkillsDir, 'gsd-mine')}`),
+      'the install output must name the kept dir by path');
+    assert.ok(fs.existsSync(path.join(oldSkillsDir, 'gsd-dev-preferences', 'SKILL.md')), 'gsd-dev-preferences is kept');
+    assert.ok(!out.includes(`Preserved ${path.join(oldSkillsDir, 'gsd-dev-preferences')}`),
+      'gsd-dev-preferences is never named as a dir GSD does not own');
+    assert.ok(fs.existsSync(path.join(oldSkillsDir, 'xr-mine', 'SKILL.md')), 'a non-prefixed dir is untouched');
+
+    // Update path: codex records its skills under `skills/` whichever root they sit in, so a name the
+    // manifest recorded for the new home must not claim a same-named user dir at the old root.
+    const manifestPath = path.join(configDir, 'gsd-file-manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.files['skills/gsd-retired-5161/SKILL.md'] = 'recorded-for-the-new-home';
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    fs.mkdirSync(path.join(oldSkillsDir, 'gsd-retired-5161'), { recursive: true });
+    fs.writeFileSync(path.join(oldSkillsDir, 'gsd-retired-5161', 'SKILL.md'), USER_SKILL);
+    const r2 = runNode([INSTALL_SCRIPT, '--codex', '--global', '--config-dir', configDir], runOpts);
+    assert.strictEqual(r2.exitCode, 0, `codex update failed: ${r2.stdout}\n${r2.stderr}`);
+    assert.strictEqual(fs.readFileSync(path.join(oldSkillsDir, 'gsd-retired-5161', 'SKILL.md'), 'utf8'), USER_SKILL,
+      'a manifest name recorded for the new home must not claim a user dir at the pre-home location');
+    assert.ok((r2.stdout + r2.stderr).includes(`Preserved ${path.join(oldSkillsDir, 'gsd-retired-5161')}`),
+      'the kept dir is named by path');
+  });
+
+  test('windsurf local: the legacy .devin/skills cleanup removes only GSD-owned gsd-* dirs and names the ones it keeps', (t) => {
+    // The installer resolves the workspace from process.cwd(), which is the REAL path; on macOS the temp
+    // dir sits under the /var -> /private/var symlink, so compare against the resolved root.
+    const root = fs.realpathSync(createTempDir('gsd-5161-devin-'));
+    t.after(() => cleanup(root));
+    const devinSkillsDir = path.join(root, '.devin', 'skills');   // pre-#1615 Windsurf layout
+    fs.mkdirSync(path.join(devinSkillsDir, 'gsd-help'), { recursive: true });
+    fs.writeFileSync(path.join(devinSkillsDir, 'gsd-help', 'SKILL.md'), 'old GSD help\n');
+    seedUserSkills(devinSkillsDir);
+
+    const env = { ...process.env, HOME: root, USERPROFILE: root };
+    delete env.GSD_TEST_MODE;
+    const r = runNode([INSTALL_SCRIPT, '--windsurf', '--local'], { cwd: root, env, timeoutMs: INSTALL_TIMEOUT_MS });
+    assert.strictEqual(r.exitCode, 0, `windsurf local install failed: ${r.stdout}\n${r.stderr}`);
+    const out = r.stdout + r.stderr;
+    assert.strictEqual(fs.existsSync(path.join(devinSkillsDir, 'gsd-help')), false,
+      'a first-party skill left in .devin/skills is still removed');
+    assert.strictEqual(fs.readFileSync(path.join(devinSkillsDir, 'gsd-mine', 'SKILL.md'), 'utf8'), USER_SKILL,
+      'a user gsd-* skill in .devin/skills must survive byte-identical');
+    assert.ok(out.includes(`Preserved ${path.join(devinSkillsDir, 'gsd-mine')}`),
+      'the install output must name the kept dir by path');
+    assert.ok(fs.existsSync(path.join(devinSkillsDir, 'gsd-dev-preferences', 'SKILL.md')), 'gsd-dev-preferences is kept');
+    assert.ok(!out.includes(`Preserved ${path.join(devinSkillsDir, 'gsd-dev-preferences')}`),
+      'gsd-dev-preferences is never named as a dir GSD does not own');
+    assert.ok(fs.existsSync(path.join(devinSkillsDir, 'xr-mine', 'SKILL.md')), 'a non-prefixed dir is untouched');
+  });
+
+  test('writeManifest ownership: an unreadable install source carries the previous manifest forward and adds no unrecorded user dir', (t) => {
+    const { createSkillDirOwnership } = require('../gsd-core/bin/lib/install-engine.cjs');
+    const { withInstallFs } = require('../gsd-core/bin/lib/install-fs-adapter.cjs');
+    const { CAPABILITY_SKILL_MARKER } = require('../gsd-core/bin/lib/install-profiles.cjs');
+    const root = createTempDir('gsd-5161-unresolved-');
+    t.after(() => cleanup(root));
+    const configDir = path.join(root, '.claude');
+    const skillsDir = path.join(configDir, 'skills');
+    for (const name of ['gsd-recorded-5161', 'gsd-user-5161', 'gsd-cap-5161']) {
+      fs.mkdirSync(path.join(skillsDir, name), { recursive: true });
+      fs.writeFileSync(path.join(skillsDir, name, 'SKILL.md'), USER_SKILL);
+    }
+    fs.writeFileSync(path.join(skillsDir, 'gsd-cap-5161', CAPABILITY_SKILL_MARKER), 'cap\n');
+    fs.writeFileSync(path.join(configDir, 'gsd-file-manifest.json'),
+      JSON.stringify({ version: '0.0.0', files: { 'skills/gsd-recorded-5161/SKILL.md': 'deadbeef' } }));
+    const opts = { includeManifest: false, manifestIfSourceUnresolved: true };
+
+    // Every install-source read fails: no first-party leg can be built. Real fs for the
+    // rest — the guarded adapter refuses a partial one that falls through.
+    const unreadable = {
+      ...fs,
+      readdirSync: (p, ...rest) => {
+        if (String(p).endsWith(path.join('commands', 'gsd'))) {
+          throw Object.assign(new Error(`EACCES: permission denied, scandir '${p}'`), { code: 'EACCES' });
+        }
+        return fs.readdirSync(p, ...rest);
+      },
+    };
+    const warn = t.mock.method(console, 'warn', () => {});
+    const owns = withInstallFs(unreadable, () => createSkillDirOwnership('claude', configDir, skillsDir, 'gsd-', opts));
+    assert.ok(warn.mock.calls.some((c) => /could not read the install source/.test(String(c.arguments[0]))),
+      'precondition: the install source was unresolved');
+    assert.strictEqual(owns('gsd-recorded-5161'), true, 'a dir the previous manifest recorded stays recorded');
+    assert.strictEqual(owns('gsd-cap-5161'), true, 'a capability-marked dir is still GSD-owned');
+    assert.strictEqual(owns('gsd-user-5161'), false,
+      'a user dir the previous manifest does not record must not be added: the next install would read it back as GSD-owned and delete it');
+
+    // Control: with a readable source the manifest leg stays off, as includeManifest:false says.
+    const ownsReadable = createSkillDirOwnership('claude', configDir, skillsDir, 'gsd-', opts);
+    assert.strictEqual(ownsReadable('gsd-help'), true, 'control: the first-party leg resolves');
+    assert.strictEqual(ownsReadable('gsd-recorded-5161'), false, 'control: the previous manifest does not vouch for itself');
+  });
+
+  test('hermes: the pre-#2841 flat skills/ cleanup keeps a user gsd-* skill and still removes first-party ones', (t) => {
+    const root = createTempDir('gsd-5161-hermes-');
+    t.after(() => cleanup(root));
+    const configDir = path.join(root, '.hermes');
+    const flatDir = path.join(configDir, 'skills');
+    fs.mkdirSync(path.join(flatDir, 'gsd-mine'), { recursive: true });
+    fs.writeFileSync(path.join(flatDir, 'gsd-mine', 'SKILL.md'), USER_SKILL);
+    fs.mkdirSync(path.join(flatDir, 'gsd-help'), { recursive: true });
+    fs.writeFileSync(path.join(flatDir, 'gsd-help', 'SKILL.md'), 'old flat GSD help\n');
+    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+
+    const r = runNode([INSTALL_SCRIPT, '--hermes', '--global', '--config-dir', configDir], runOpts);
+    assert.strictEqual(r.exitCode, 0, `hermes install failed: ${r.stdout}\n${r.stderr}`);
+    assert.ok(fs.existsSync(path.join(flatDir, 'gsd-mine')), 'a user skill in Hermes\' own skills root must survive');
+    assert.strictEqual(fs.readFileSync(path.join(flatDir, 'gsd-mine', 'SKILL.md'), 'utf8'), USER_SKILL);
+    assert.ok((r.stdout + r.stderr).includes(path.join(flatDir, 'gsd-mine')), 'the kept dir is named by path');
+    assert.strictEqual(fs.existsSync(path.join(flatDir, 'gsd-help')), false,
+      'a pre-#2841 flat first-party skill is still removed');
+    assert.ok(fs.existsSync(path.join(flatDir, 'gsd', 'gsd-ns-workflow', 'SKILL.md')), 'the nested layout is still installed');
+
+    // Update path. The flat root's manifest entries are recorded flat (skills/gsd-<x>/…): a retired
+    // flat skill recorded that way is GSD's and goes silently. A name the manifest records only under
+    // the NESTED root says nothing about a same-named dir in the flat root, which stays the user's.
+    const retiredBody = 'retired flat GSD skill\n';
+    fs.mkdirSync(path.join(flatDir, 'gsd-retired-5161'), { recursive: true });
+    fs.writeFileSync(path.join(flatDir, 'gsd-retired-5161', 'SKILL.md'), retiredBody);
+    fs.mkdirSync(path.join(flatDir, 'gsd-cross-5161'), { recursive: true });
+    fs.writeFileSync(path.join(flatDir, 'gsd-cross-5161', 'SKILL.md'), USER_SKILL);
+    const manifestPath = path.join(configDir, 'gsd-file-manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.files['skills/gsd-retired-5161/SKILL.md'] = crypto.createHash('sha256').update(retiredBody).digest('hex');
+    manifest.files['skills/gsd/gsd-cross-5161/SKILL.md'] = 'deadbeef';
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+    // A user's own pair under the nested root: a kept gsd-<x>/ must not make GSD's bare-stem
+    // cleanup treat <x>/ as a legacy twin of something it installed.
+    fs.mkdirSync(path.join(flatDir, 'gsd', 'gsd-pair-5161'), { recursive: true });
+    fs.writeFileSync(path.join(flatDir, 'gsd', 'gsd-pair-5161', 'SKILL.md'), USER_SKILL);
+    fs.mkdirSync(path.join(flatDir, 'gsd', 'pair-5161'), { recursive: true });
+    fs.writeFileSync(path.join(flatDir, 'gsd', 'pair-5161', 'SKILL.md'), USER_SKILL);
+    // A flat user skill provided as a symlink: never removed, and named.
+    const linkTarget = path.join(root, 'my-skills', 'linked');
+    fs.mkdirSync(linkTarget, { recursive: true });
+    fs.writeFileSync(path.join(linkTarget, 'SKILL.md'), USER_SKILL);
+    fs.symlinkSync(linkTarget, path.join(flatDir, 'gsd-linked-5161'), 'dir');
+
+    const r2 = runNode([INSTALL_SCRIPT, '--hermes', '--global', '--config-dir', configDir], runOpts);
+    assert.strictEqual(r2.exitCode, 0, `hermes update failed: ${r2.stdout}\n${r2.stderr}`);
+    assert.ok(fs.existsSync(path.join(flatDir, 'gsd', 'gsd-pair-5161')), 'a nested user gsd-* skill survives');
+    assert.ok(fs.existsSync(path.join(flatDir, 'gsd', 'pair-5161')),
+      'its bare-stem neighbour is the user\'s too and must survive the bare-stem cleanup');
+    assert.ok(fs.lstatSync(path.join(flatDir, 'gsd-linked-5161')).isSymbolicLink(), 'a flat user symlink survives');
+    assert.ok((r2.stdout + r2.stderr).includes(path.join(flatDir, 'gsd-linked-5161')), 'and is named');
+    const out2 = r2.stdout + r2.stderr;
+    assert.strictEqual(fs.existsSync(path.join(flatDir, 'gsd-retired-5161')), false,
+      'a flat skill the previous manifest recorded flat is still removed');
+    assert.ok(!out2.includes(path.join(flatDir, 'gsd-retired-5161')), 'and is never reported as preserved');
+    assert.ok(fs.existsSync(path.join(flatDir, 'gsd-cross-5161')),
+      'a nested-root manifest entry must not make a same-named flat user dir GSD-owned');
+    assert.ok(out2.includes(path.join(flatDir, 'gsd-cross-5161')), 'the kept flat dir is named');
+  });
+
+  test('local: the legacy stale-skills cleanup keeps a user gsd-* project skill and still removes first-party ones', (t) => {
+    // The installer resolves the workspace from process.cwd(), which is the REAL path; on macOS the temp
+    // dir sits under the /var -> /private/var symlink, so compare against the resolved root.
+    const root = fs.realpathSync(createTempDir('gsd-5161-local-'));
+    t.after(() => cleanup(root));
+    const skillsDir = path.join(root, '.claude', 'skills');
+    fs.mkdirSync(path.join(skillsDir, 'gsd-mine'), { recursive: true });
+    fs.writeFileSync(path.join(skillsDir, 'gsd-mine', 'SKILL.md'), USER_SKILL);
+    // A first-party skill left by a previous skills-layout local install.
+    fs.mkdirSync(path.join(skillsDir, 'gsd-help'), { recursive: true });
+    fs.writeFileSync(path.join(skillsDir, 'gsd-help', 'SKILL.md'), 'old GSD help\n');
+
+    const env = { ...process.env, HOME: root, USERPROFILE: root };
+    delete env.GSD_TEST_MODE;
+    const r = runNode([INSTALL_SCRIPT, '--claude', '--local'], { cwd: root, env, timeoutMs: INSTALL_TIMEOUT_MS });
+    assert.strictEqual(r.exitCode, 0, `local install failed: ${r.stdout}\n${r.stderr}`);
+    assert.ok(fs.existsSync(path.join(skillsDir, 'gsd-mine')),
+      'a user project skill under .claude/skills/gsd-* must survive a local install');
+    assert.strictEqual(fs.readFileSync(path.join(skillsDir, 'gsd-mine', 'SKILL.md'), 'utf8'), USER_SKILL);
+    assert.ok((r.stdout + r.stderr).includes(path.join(skillsDir, 'gsd-mine')),
+      'the local install output must name the preserved dir by path');
+    assert.strictEqual(fs.existsSync(path.join(skillsDir, 'gsd-help')), false,
+      'a stale first-party skill from a previous local install is still removed');
+
+    // Update path (no first-time baseline): a marker-carrying capability skill is owned, so it is
+    // removed and must never be reported as preserved; a symlinked user skill is never removed and
+    // is named like any other kept dir.
+    fs.mkdirSync(path.join(skillsDir, 'gsd-cap-5161'), { recursive: true });
+    fs.writeFileSync(path.join(skillsDir, 'gsd-cap-5161', 'SKILL.md'), '---\nname: gsd-cap-5161\n---\n');
+    fs.writeFileSync(path.join(skillsDir, 'gsd-cap-5161', '.gsd-capability-skill'), 'some-cap\n');
+    const linkTarget = path.join(root, 'my-skills', 'linked');
+    fs.mkdirSync(linkTarget, { recursive: true });
+    fs.writeFileSync(path.join(linkTarget, 'SKILL.md'), USER_SKILL);
+    fs.symlinkSync(linkTarget, path.join(skillsDir, 'gsd-linked-5161'), 'dir');
+
+    const r2 = runNode([INSTALL_SCRIPT, '--claude', '--local'], { cwd: root, env, timeoutMs: INSTALL_TIMEOUT_MS });
+    assert.strictEqual(r2.exitCode, 0, `local update failed: ${r2.stdout}\n${r2.stderr}`);
+    const out2 = r2.stdout + r2.stderr;
+    assert.strictEqual(fs.existsSync(path.join(skillsDir, 'gsd-cap-5161')), false,
+      'a marker-carrying capability skill is still removed');
+    assert.ok(!out2.includes(path.join(skillsDir, 'gsd-cap-5161')),
+      'a removed dir must never be reported as preserved');
+    assert.strictEqual(fs.readFileSync(path.join(linkTarget, 'SKILL.md'), 'utf8'), USER_SKILL,
+      'the symlink target is untouched');
+    assert.ok(fs.lstatSync(path.join(skillsDir, 'gsd-linked-5161')).isSymbolicLink(), 'the symlink itself survives');
+    assert.ok(out2.includes(path.join(skillsDir, 'gsd-linked-5161')), 'a kept symlinked user skill is named too');
+    assert.ok(fs.existsSync(path.join(skillsDir, 'gsd-mine')), 'the user skill survives the update too');
   });
 });
