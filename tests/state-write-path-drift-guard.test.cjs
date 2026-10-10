@@ -1317,6 +1317,58 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
     assert.deepStrictEqual(crlfOut, lfOut);
   });
 
+  // The scanned sources are TypeScript, so a declaration may carry a type
+  // annotation between its name and `=`.
+  test('guard: a typed declaration binds its name like an untyped one', () => {
+    const stateJoin = "path.join(dir, 'STATE.md')";
+    assert.deepStrictEqual(lines(W(`  const p: string = ${stateJoin};`, '  fs.writeFileSync(p, c);')), [3]);
+    assert.deepStrictEqual(lines(W(`  let p: string = ${stateJoin};`, '  fs.writeFileSync(p, c);')), [3]);
+    assert.deepStrictEqual(lines(W(`  var p: string = ${stateJoin};`, '  fs.writeFileSync(p, c);')), [3]);
+    assert.deepStrictEqual(lines(W(`  let p: string | undefined = ${stateJoin};`, '  fs.writeFileSync(p, c);')), [3]);
+    assert.deepStrictEqual(lines(W("  const parts: Array<string> = [dir, 'STATE.md'];", '  fs.writeFileSync(path.join(...parts), c);')), [3]);
+    assert.deepStrictEqual(lines(W(`  const p: string = ${stateJoin}; fs.writeFileSync(p, c);`)), [2]);
+    // A typed join tail decides the write exactly as an untyped one does.
+    assert.deepStrictEqual(lines(N("  const n: string = 'STATE.md';", '  fs.writeFileSync(path.join(dir, n), c);')), [3]);
+    assert.deepStrictEqual(lines(N('  const d = path.dirname(statePath);', "  const n: string = 'ROADMAP.md';", '  fs.writeFileSync(path.join(d, n), c);')), []);
+  });
+
+  test('control: a comparison or an object key is not a typed binding', () => {
+    const P = (...body) => ['function w(p, dir, c) {', ...body, '  fs.writeFileSync(p, c);', '}'].join('\n');
+    assert.deepStrictEqual(lines(P("  const same: boolean = p == path.join(dir, 'STATE.md');")), []);
+    assert.deepStrictEqual(lines(P("  const same: boolean = p === path.join(dir, 'STATE.md');")), []);
+    assert.deepStrictEqual(lines(P("  const o = { p: path.join(dir, 'STATE.md') };")), []);
+    assert.deepStrictEqual(lines(P("  let q: string; const r = path.join(dir, 'STATE.md');")), []);
+  });
+
+  test('parity: Axis 2 and Axis 3 read the same binding grammar', () => {
+    // Both axes take their assignment regex from one shared builder. A change
+    // that moves one axis without the other fails a row here.
+    const { nearestPrecedingAssignment } = guard;
+    const FORMS = [
+      [(rhs) => `  const p = ${rhs};`, true],
+      [(rhs) => `  let p = ${rhs};`, true],
+      [(rhs) => `  var p = ${rhs};`, true],
+      [(rhs) => `  p = ${rhs};`, true],
+      [(rhs) => `  const p: string = ${rhs};`, true],
+      [(rhs) => `  let p: string = ${rhs};`, true],
+      [(rhs) => `  var p: string = ${rhs};`, true],
+      [(rhs) => `  const p: Array<string> = ${rhs};`, true],
+      [(rhs) => `  let p: string | undefined = ${rhs};`, true],
+      [(rhs) => `  const p: Record<string, string> = ${rhs};`, true],
+      [(rhs) => `  let p: string; p = ${rhs};`, true],
+      [(rhs) => `  const ok: boolean = p == ${rhs};`, false],
+      [(rhs) => `  const ok = p === ${rhs};`, false],
+      [(rhs) => `  const o = { p: ${rhs} };`, false],
+      [(rhs) => `  let p: string; const q = ${rhs};`, false],
+    ];
+    for (const [form, binds] of FORMS) {
+      const axis3 = nearestPrecedingAssignment([form('stripFrontmatter(content)')], 0, 'p') !== null;
+      const axis2 = lines(['function w(dir, c) {', form("path.join(dir, 'STATE.md')"), '  fs.writeFileSync(p, c);', '}'].join('\n')).length === 1;
+      assert.strictEqual(axis3, binds, `Axis 3 on ${form('R')}`);
+      assert.strictEqual(axis2, binds, `Axis 2 on ${form('R')}`);
+    }
+  });
+
   test('property: a write through a renamed variable is reported for STATE.md and not for another file', () => {
     const fc = require('./helpers/fast-check-setup.cjs');
     const RESERVED = new Set(['const', 'let', 'var', 'for', 'of', 'if', 'do', 'in', 'new', 'path', 'fs', 'dir', 'content', 'statePath', 'base']);

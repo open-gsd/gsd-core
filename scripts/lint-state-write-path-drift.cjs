@@ -486,9 +486,18 @@ function isQuotedLiteralArg(arg) {
 // One line that assigns `varName` (`const`/`let`/`var` optional), capturing the
 // right-hand side. Shared by Axis 3's `nearestPrecedingAssignment` and Axis 2's
 // `nearestTargetBinding`, so the two backward scans agree on what an
-// assignment is.
+// assignment is (the test file pins that parity). A `const`/`let`/`var`
+// declaration may carry a TypeScript annotation (`const p: string = …`,
+// `let p: Array<string> | undefined = …`) between its name and `=`, because
+// the scanned sources are TypeScript (#5104). The annotation is read only
+// after a declaration keyword, so an object entry (`{ p: x }`) is not an
+// assignment, and it holds no `=` or `;`, so `p == x`, `p === x` and
+// `let p: T; q = x` are not either. A bare `name =>` still matches, as before.
 function assignmentLineRe(varName) {
-  return new RegExp(`(?:^|[^.\\w$])(?:const|let|var)?\\s*${escapeRegex(varName)}\\s*=\\s*([^=].*)$`);
+  const name = escapeRegex(varName);
+  return new RegExp(
+    `(?:^|[^.\\w$])(?:(?:const|let|var)\\s+${name}\\s*:\\s*[^=;]+?|(?:const|let|var)?\\s*${name})\\s*=\\s*([^=].*)$`,
+  );
 }
 
 /**
