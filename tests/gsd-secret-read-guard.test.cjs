@@ -1353,4 +1353,22 @@ describe('gsd-secret-read-guard: bundled short-flag clusters (#5046)', () => {
       assertAllowed(runHook(bash(allowed)), allowed);
     }
   });
+
+  // Dot-dense boundary. A word made of (almost) nothing but `.` used to cost
+  // O(n^2): every `.` position paid a full `namesSecret` over the remaining
+  // tail. The walk now gates on an eight-character prefix test, so the verdict
+  // is what these rows assert — never wall-clock, which measures the host.
+  // limit-1 / limit / limit+1 around the tail length at which the prefix test
+  // stops seeing `.env`; `.a` keeps a non-secret character right after each
+  // dot so the positions are dense without forming `.env`.
+  test('dot-dense words: verdicts hold at the limit-1 / limit / limit+1 rows', () => {
+    for (const n of [199, 200, 201]) {
+      const dense = `grep -${'.'.repeat(n)}pat f`;
+      assertAllowed(runHook(bash(dense)), dense);
+      const denseTail = `grep -${'.'.repeat(n)}.env pat f`;
+      assertBlocked(runHook(bash(denseTail)), denseTail, { tool: 'Bash', path: `-${'.'.repeat(n)}.env` });
+      const interleaved = `grep -${'.a'.repeat(n)}pat f`;
+      assertAllowed(runHook(bash(interleaved)), interleaved);
+    }
+  });
 });

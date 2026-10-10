@@ -796,11 +796,12 @@ function tokenize(str) {
 
 // `@file` (curl -d), `--flag=value`, `-Xvalue` → the operand that names the file.
 // A bundled short cluster (`-if.env`) hides the value after more than one
-// flag letter (#5046). Every accepted secret name starts with `.`, so the walk
-// only calls namesSecret at positions where the character is `.` (linear in
-// word length; a per-position namesSecret would be quadratic). The first
-// matching tail wins; `.env.example` / `.envrc` stay allowed. A cluster that
-// names nothing secret keeps the historical two-character strip.
+// flag letter (#5046). The walk visits only `.` positions whose next eight
+// characters spell `.env` or `.secrets` — the only prefixes a secret basename
+// can have — so each position costs O(1) and a dot-dense word cannot make the
+// scan quadratic. The first matching tail wins; `.env.example` / `.envrc` stay
+// allowed. A cluster that names nothing secret keeps the historical
+// two-character strip.
 // The cluster need not start with a letter: `-2if.env` is the same defect with
 // a digit-first cluster, so the guard takes any single-dash word
 // (`/^-[^-]./`) rather than a letter-first one.
@@ -817,10 +818,20 @@ function normalizeOperand(text) {
     const eq = v.indexOf('=');
     if (eq !== -1) v = v.slice(eq + 1);
   } else if (/^-[^-]./.test(v)) {
-    // Only positions that can start a secret name (every accepted name
-    // begins with '.') — keeps the walk linear in |v|.
+    // Two gates keep the walk O(1) per position in the tail length, so a
+    // dot-dense word cannot make it quadratic:
+    //   1. only positions that can start a secret name (every accepted name
+    //      begins with `.`), and
+    //   2. at such a position, a bounded prefix test — a secret basename is
+    //      `.env`, `.secrets`, or `.env.<suffix>`, so the tail must begin with
+    //      `.env` or `.secrets` (case-folded) for `namesSecret` to say yes.
+    // `namesSecret` (which lowercases the tail and runs `lastSegment`) is
+    // therefore called at most once per secret-prefix occurrence, not once per
+    // `.` — and the walk itself only ever looks at the next 8 characters.
     for (let k = 2; k < v.length; k++) {
       if (v[k] !== '.') continue;
+      const head = v.slice(k, k + 8).toLowerCase();
+      if (!head.startsWith('.env') && !head.startsWith('.secrets')) continue;
       const tail = v.slice(k);
       if (namesSecret(tail)) return tail;
     }
