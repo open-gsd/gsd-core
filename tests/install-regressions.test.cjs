@@ -2635,6 +2635,31 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
       'the kept dir is named by path');
   });
 
+  test('windsurf local: the legacy .devin/skills cleanup removes only GSD-owned gsd-* dirs and names the ones it keeps', (t) => {
+    const root = createTempDir('gsd-5161-devin-');
+    t.after(() => cleanup(root));
+    const devinSkillsDir = path.join(root, '.devin', 'skills');   // pre-#1615 Windsurf layout
+    fs.mkdirSync(path.join(devinSkillsDir, 'gsd-help'), { recursive: true });
+    fs.writeFileSync(path.join(devinSkillsDir, 'gsd-help', 'SKILL.md'), 'old GSD help\n');
+    seedUserSkills(devinSkillsDir);
+
+    const env = { ...process.env, HOME: root, USERPROFILE: root };
+    delete env.GSD_TEST_MODE;
+    const r = runNode([INSTALL_SCRIPT, '--windsurf', '--local'], { cwd: root, env, timeoutMs: INSTALL_TIMEOUT_MS });
+    assert.strictEqual(r.exitCode, 0, `windsurf local install failed: ${r.stdout}\n${r.stderr}`);
+    const out = r.stdout + r.stderr;
+    assert.strictEqual(fs.existsSync(path.join(devinSkillsDir, 'gsd-help')), false,
+      'a first-party skill left in .devin/skills is still removed');
+    assert.strictEqual(fs.readFileSync(path.join(devinSkillsDir, 'gsd-mine', 'SKILL.md'), 'utf8'), USER_SKILL,
+      'a user gsd-* skill in .devin/skills must survive byte-identical');
+    assert.ok(out.includes(`Preserved ${path.join(devinSkillsDir, 'gsd-mine')}`),
+      'the install output must name the kept dir by path');
+    assert.ok(fs.existsSync(path.join(devinSkillsDir, 'gsd-dev-preferences', 'SKILL.md')), 'gsd-dev-preferences is kept');
+    assert.ok(!out.includes(`Preserved ${path.join(devinSkillsDir, 'gsd-dev-preferences')}`),
+      'gsd-dev-preferences is never named as a dir GSD does not own');
+    assert.ok(fs.existsSync(path.join(devinSkillsDir, 'xr-mine', 'SKILL.md')), 'a non-prefixed dir is untouched');
+  });
+
   test('writeManifest ownership: an unreadable install source carries the previous manifest forward and adds no unrecorded user dir', (t) => {
     const { createSkillDirOwnership } = require('../gsd-core/bin/lib/install-engine.cjs');
     const { withInstallFs } = require('../gsd-core/bin/lib/install-fs-adapter.cjs');

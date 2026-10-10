@@ -4344,11 +4344,13 @@ function cleanupCodexSkillMetadataSidecars(skillsDir, owns) {
  *   - non-gsd-* dirs under .devin/skills/ (user-authored skills)
  *   - gsd-dev-preferences/ (user-owned per #2973)
  *   - any files (not dirs) under .devin/skills/
+ *   - with `owns` (#5161), any gsd-* dir GSD does not own, which is named by path
  *
  * @param {string} workspaceDir - workspace root (process.cwd() for local installs)
+ * @param {(name: string) => boolean} [owns] ownership predicate (createSkillDirOwnership)
  * @returns {number} count of removed legacy gsd-* skill directories
  */
-function cleanupWindsurfLegacyDevinSkills(workspaceDir) {
+function cleanupWindsurfLegacyDevinSkills(workspaceDir, owns) {
   const legacySkillsDir = path.join(workspaceDir, '.devin', 'skills');
   if (!fs.existsSync(legacySkillsDir)) return 0;
 
@@ -4356,9 +4358,14 @@ function cleanupWindsurfLegacyDevinSkills(workspaceDir) {
   const _userOwnedSkillDirs = new Set(['gsd-dev-preferences']);
   let removed = 0;
 
-  for (const entry of fs.readdirSync(legacySkillsDir, { withFileTypes: true })) {
-    if (!entry.isDirectory() || !entry.name.startsWith('gsd-')) continue;
-    if (_userOwnedSkillDirs.has(entry.name)) continue;
+  // Decide ownership once, BEFORE deleting: the capability-marker leg reads the
+  // dir itself, so asking after a removal would report the removed dir as kept.
+  const candidates = fs.readdirSync(legacySkillsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith('gsd-') && !_userOwnedSkillDirs.has(entry.name));
+  const notOwned = owns ? candidates.filter((entry) => !owns(entry.name)).map((entry) => entry.name) : [];
+
+  for (const entry of candidates) {
+    if (notOwned.includes(entry.name)) continue;
 
     const dirToRemove = path.join(legacySkillsDir, entry.name);
     try {
@@ -4373,6 +4380,7 @@ function cleanupWindsurfLegacyDevinSkills(workspaceDir) {
       // Fail open — a single bad dir must not block the install.
     }
   }
+  _warnPreservedSkillDirs(legacySkillsDir, notOwned);
 
   // If .devin/skills/ is now empty, prune it. If .devin/ itself is then empty,
   // prune that too — leaves the workspace clean for the new .windsurf/ layout.
@@ -11775,8 +11783,13 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     // Descriptor-driven (ADR-1239 / #2100): folded from `isWindsurf` into
     // hostBehaviors.legacyDevinSkillsCleanup (windsurf is the only runtime that
     // declares it, so this is byte-parity).
+    // #5161: only the gsd-* dirs GSD owns. The local manifest describes
+    // .windsurf/, never .devin/, so the manifest leg stays off here: a name it
+    // records under one root says nothing about a same-named dir under another.
     if (hostBehaviorsFor(runtime).legacyDevinSkillsCleanup && !isGlobal) {
-      const removedCount = cleanupWindsurfLegacyDevinSkills(process.cwd());
+      const _devinSkillsDir = path.join(process.cwd(), '.devin', 'skills');
+      const removedCount = cleanupWindsurfLegacyDevinSkills(process.cwd(),
+        createSkillDirOwnership(runtime, targetDir, _devinSkillsDir, 'gsd-', { includeManifest: false }));
       if (removedCount > 0) {
         console.log(`  ${green}✓${reset} Removed ${removedCount} legacy .devin/skills/gsd-* dir(s) (pre-#1615 Windsurf layout)`);
       }
