@@ -271,17 +271,6 @@ describe('bug #685: Windows spawns must set windowsHide:true (no console-window 
     assert.match(region, /windowsHide:\s*true/, 'execGit spawnSync must set windowsHide: true');
   });
 
-  test('roadmap-upgrade execSync git calls all set windowsHide', () => {
-    const src = read('src/roadmap-upgrade.cts');
-    const calls = src.match(/execSync\([^)]*\)/g) || [];
-    // #1542 made rollback git-independent (surgical fs restore), so the only
-    // remaining git execSync is the `git status --porcelain` precondition. The
-    // durable guard is that EVERY git execSync still present sets windowsHide.
-    assert.ok(calls.length >= 1, 'expected at least the roadmap-upgrade git status execSync call to be present');
-    const missing = calls.filter((c) => !/windowsHide:\s*true/.test(c));
-    assert.deepEqual(missing, [], `execSync without windowsHide:\n${missing.join('\n')}`);
-  });
-
   test('gsd-check-update spawn retains windowsHide (precedent guard)', () => {
     assert.match(read('hooks/gsd-check-update.js'), /windowsHide:\s*true/,
       'gsd-check-update.js must keep windowsHide: true');

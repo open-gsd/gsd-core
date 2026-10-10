@@ -595,6 +595,31 @@ function compactModelName(name) {
 const GIT_STATUS_TIMEOUT_MS = 1500;
 
 /**
+ * #5048: env for the read-only git spawn in this file.
+ *
+ * By default `git status` refreshes the index and takes an *optional*
+ * `.git/index.lock` to write the refreshed copy back. That is a write the
+ * caller never asked for, and it turns a pure read into a contender for the
+ * lock a real `git add` / `git commit` needs — a read-only statusline render
+ * can then make a concurrent commit fail with
+ * `Unable to create '.git/index.lock': File exists`. The statusline spawns
+ * git on every render, so the lock is re-created continuously.
+ *
+ * `GIT_OPTIONAL_LOCKS=0` tells git to skip only those *optional* index
+ * operations. Nothing this read needs is lost: `git status` reads the index,
+ * it just doesn't need to rewrite it. Spreading process.env keeps the user's
+ * git config, credential helpers and PATH intact; it is read per call rather
+ * than snapshotted at load, matching execGit in src/shell-command-projection.cts.
+ *
+ * Deliberately NOT applied to the `git rev-list` spawn in
+ * readStateHeadCommits(): that walks the commit graph and never opens the
+ * index, so the variable would be a no-op there.
+ */
+function readOnlyGitEnv() {
+  return { ...process.env, GIT_OPTIONAL_LOCKS: '0' };
+}
+
+/**
  * Run `git status --porcelain=v2 --branch` in dir.
  * Returns raw stdout, or null when git is missing, dir isn't a repo, or the
  * call times out. Never throws.
@@ -605,7 +630,7 @@ function readGitStatus(dir) {
     // or untracked files; overflow still degrades safely to segment-absent via
     // the catch below.
     return childProcess.execFileSync('git', ['-C', dir, 'status', '--porcelain=v2', '--branch'],
-      { encoding: 'utf8', timeout: GIT_STATUS_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+      { encoding: 'utf8', timeout: GIT_STATUS_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, env: readOnlyGitEnv() });
   } catch (e) {
     return null;
   }

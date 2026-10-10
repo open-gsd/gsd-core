@@ -336,3 +336,89 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
     assert.equal(fs.existsSync(path.join(dir, '.planning', 'phases', '1-01-foo')), false, 'rename rolled back');
   });
 });
+
+/**
+ * #5048 — applyMigration's clean-tree check moved from a bare `execSync` to the
+ * shared `execGit` seam, which is what gets GIT_OPTIONAL_LOCKS=0 there. The
+ * trade is that `execGit` reports a timeout, a signal or a spawn failure as
+ * `timedOut` / `signal` / `error` with `status ?? 1` and an empty stderr,
+ * where `execSync` put the cause on the error it threw. Without branching on
+ * those first, every one of them collapses into "git exited 1" and the reason
+ * the migration could not start is gone. These rows pin the message per
+ * cause; the env half of #5048 is covered in
+ * tests/git-optional-locks-parity.test.cjs.
+ */
+describe('roadmap-upgrade clean-tree failure reports its cause (#5048)', () => {
+  const EMPTY_PLAN = { alreadyMigrated: false, phases: [], roadmapEdits: [], crossRefEdits: [] };
+
+  /**
+   * Drive applyMigration with spawnSync faked to return `result`, and return
+   * the error it threw. Patching the `node:child_process` module object (rather
+   * than injecting) is what the tsc CommonJS emit allows: the compiled seam
+   * holds the module and reads `.spawnSync` at CALL time.
+   */
+  function statusFailureThrows(t, result) {
+    const childProcess = require('node:child_process');
+    const dir = createTempDir('m3-status-fail-');
+    t.after(() => {
+      childProcess.spawnSync = realSpawnSync;
+      cleanup(dir);
+    });
+    const realSpawnSync = childProcess.spawnSync;
+    childProcess.spawnSync = () => result;
+    let thrown;
+    try {
+      applyMigration(dir, EMPTY_PLAN, { dryRun: false });
+    } catch (err) {
+      thrown = err;
+    }
+    assert.ok(thrown, 'applyMigration resolved despite a failing git status');
+    return thrown;
+  }
+
+  test('a timed-out status says so, with the bound it exceeded', (t) => {
+    const err = Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' });
+    const thrown = statusFailureThrows(t, { status: null, stdout: '', stderr: '', signal: 'SIGTERM', error: err });
+    assert.match(thrown.message, /^git status failed: git status timed out after 10000 ms$/);
+  });
+
+  test('a signalled status names the signal instead of reporting exit 1', (t) => {
+    const thrown = statusFailureThrows(t, { status: null, stdout: '', stderr: '', signal: 'SIGKILL', error: null });
+    assert.match(thrown.message, /^git status failed: git status was killed by SIGKILL$/);
+  });
+
+  test('a maxBuffer overflow reports the buffer cause, not a spawn failure and not "killed by SIGTERM"', (t) => {
+    // spawnSync shape for stdout over maxBuffer: status null, signal SIGTERM,
+    // error.code ENOBUFS. error must win over signal or the cause is dropped,
+    // and the message must not claim git never started — it did run and was
+    // killed for producing more output than the buffer holds.
+    const err = Object.assign(new Error('spawnSync git ENOBUFS'), { code: 'ENOBUFS' });
+    const thrown = statusFailureThrows(t, { status: null, stdout: '', stderr: '', signal: 'SIGTERM', error: err });
+    assert.match(thrown.message, /^git status failed: spawnSync git ENOBUFS \(output exceeded the buffer\)$/);
+  });
+
+  test('a git binary that is missing reports the spawn failure, not a bare exit code', (t) => {
+    const err = Object.assign(new Error('spawnSync git ENOENT'), { code: 'ENOENT' });
+    const thrown = statusFailureThrows(t, { status: null, stdout: '', stderr: 'git: not found', signal: null, error: err });
+    // The code is already in the message, so it is not repeated.
+    assert.match(thrown.message, /^git status failed: spawnSync git ENOENT$/);
+  });
+
+  test('an EPERM kill on kill reports the code, not a claim that git never started', (t) => {
+    // EPERM reaches the error branch with the process already started too, so
+    // it must read the same way ENOBUFS does.
+    const err = Object.assign(new Error('spawnSync git EPERM'), { code: 'EPERM' });
+    const thrown = statusFailureThrows(t, { status: null, stdout: '', stderr: '', signal: 'SIGTERM', error: err });
+    assert.match(thrown.message, /^git status failed: spawnSync git EPERM$/);
+  });
+
+  test('a genuine non-zero exit still surfaces git stderr verbatim', (t) => {
+    const thrown = statusFailureThrows(t, { status: 128, stdout: '', stderr: 'fatal: detected dubious ownership', signal: null, error: null });
+    assert.match(thrown.message, /^git status failed: fatal: detected dubious ownership$/);
+  });
+
+  test('a non-zero exit with no stderr falls back to the exit code', (t) => {
+    const thrown = statusFailureThrows(t, { status: 2, stdout: '', stderr: '', signal: null, error: null });
+    assert.match(thrown.message, /^git status failed: git exited 2$/);
+  });
+});

@@ -291,6 +291,16 @@ function readGitSignals(cwd: string): GitSignals {
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'],
         timeout: 10_000,
+        // #5048: readGitSignals runs `git status`, which by default refreshes
+        // the index and takes an *optional* `.git/index.lock` to write the
+        // refreshed copy back. That lock is the one a real `git add` / `git
+        // commit` needs, so a routine "which phase am I in" probe can fail
+        // someone else's commit with `Unable to create '.git/index.lock': File
+        // exists`. GIT_OPTIONAL_LOCKS=0 turns off exactly that optional write.
+        // The `rev-parse` / `log` calls sharing this helper never open the
+        // index, so the variable is inert for them. Parity across every
+        // read-only surface is asserted in tests/git-optional-locks-parity.test.cjs.
+        env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
       });
     } catch {
       return '';

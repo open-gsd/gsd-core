@@ -660,10 +660,22 @@ export function execGit(args: string[], opts: { cwd?: string; env?: Record<strin
   // Non-interactive defaults: a hung credential prompt or terminal-input
   // probe must surface as a timeout, not block the tool forever. Callers
   // can override via opts.env.
+  //
+  // #5048: GIT_OPTIONAL_LOCKS=0 as well. execGit is the shared seam behind
+  // every git call the tool makes, including the read-only ones (`status`,
+  // `diff --cached`, `rev-parse`, `log`, …). By default git refreshes the
+  // index and takes an *optional* `.git/index.lock` to write the refreshed
+  // copy back, so a read can lose a race against a real `git add` /
+  // `git commit` and fail it with
+  // `Unable to create '.git/index.lock': File exists`. The variable disables
+  // only those optional index operations; a caller that genuinely needs one
+  // (a writing command, or a status whose freshness it wants persisted) can
+  // still set it back through opts.env, which is spread last on purpose.
   const env = {
     ...process.env,
     GIT_TERMINAL_PROMPT: '0',
     GCM_INTERACTIVE: 'never',
+    GIT_OPTIONAL_LOCKS: '0',
     ...(opts.env || {}),
   };
   const result = childProcess.spawnSync('git', args, {

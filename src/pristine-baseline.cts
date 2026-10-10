@@ -140,13 +140,18 @@ export function isCleanRelativePosixPath(relPath: string): boolean {
 
 export function gitExec(gitDir: string, args: string[]): string {
   return execFileSync('git', args, {
+    // windowsHide (#685): a console-window flash per git call would spam the
+    // user on Windows for what is a background, read-only history walk. Kept
+    // high in the options so the completeness guard's 400-char scan finds it.
+    windowsHide: true,
     cwd: gitDir,
     encoding: 'utf8',
+    // #5048: every call here is a history/objects walk that never opens the
+    // index, so the variable is inert today — set anyway so a future `status` /
+    // `diff` caller inherits it. Parity: tests/git-optional-locks-parity.test.cjs.
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
     timeout: GIT_SUBPROCESS_TIMEOUT_MS,
     maxBuffer: GIT_MAX_BUFFER_BYTES,
-    // windowsHide (#685): a console-window flash per git call would spam the
-    // user on Windows for what is a background, read-only history walk.
-    windowsHide: true,
     // stderr is discarded: "file absent in commit" is an expected walk outcome,
     // not operator-visible diagnostics.
     stdio: ['ignore', 'pipe', 'ignore'],
