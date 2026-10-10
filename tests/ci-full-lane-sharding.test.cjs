@@ -105,23 +105,22 @@ test('the test job has no windows lane; test-conformance is the sole Windows sel
     + JSON.stringify(conformanceWindowsEntries),
   );
 
-  // macos-latest is, by design, a single UNSHARDED entry (see the workflow's
-  // "macos-latest stays unsharded; it has real headroom" comment above the
-  // `test-conformance` job) — unlike the windows/full shard counts, this "1"
-  // is not a fact about the live tree that grows with the suite, it is the
-  // structural claim the test exists to pin: more than one entry here would
-  // silently duplicate full macOS runs, and a `shard` key would mean the
-  // workflow started partitioning a lane the run-tests.cjs invocation below
-  // does not expect to be partitioned.
-  assert.equal(
-    conformanceMacosEntries.length, 1,
-    `expected a single unsharded macos-latest entry in test-conformance, got ${conformanceMacosEntries.length}: `
-    + JSON.stringify(conformanceMacosEntries),
+  // macos-latest was a single UNSHARDED entry until #5029, which split it
+  // three ways after a slow runner took the whole tier to 39m43s against the
+  // job's 45m cap. Pinned the same way as windows above — a complete shard
+  // set, whatever N is declared — which also keeps the two failure modes the
+  // old single-entry check guarded against: an extra unsharded entry would
+  // silently duplicate a full macOS run, and a missing or duplicated shard
+  // would silently drop or double part of the tier. The run-tests.cjs
+  // invocation appends `--shard` for any row that declares one.
+  assert.ok(
+    conformanceMacosEntries.length > 0,
+    `test-conformance declares no macos-latest entries: ${JSON.stringify(conformanceInclude)}`,
   );
-  assert.equal(
-    conformanceMacosEntries[0] && conformanceMacosEntries[0].shard, undefined,
-    'the macos-latest entry in test-conformance declares a shard, contradicting the '
-    + `workflow's "macos-latest stays unsharded" design: ${JSON.stringify(conformanceMacosEntries)}`,
+  assert.ok(
+    isCompleteShardSet(conformanceMacosEntries.map((e) => e.shard)),
+    'the macos-latest entries in test-conformance are not a complete shard set: '
+    + JSON.stringify(conformanceMacosEntries),
   );
 });
 

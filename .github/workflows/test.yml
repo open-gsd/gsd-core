@@ -578,14 +578,16 @@ jobs:
   # ubuntu-latest in the `test` job above. Gated on product code changed AND
   # full_matrix (#4591); this is the sole gating signal for windows/macos
   # coverage (#4603 retired the parallel legacy full-matrix job). Windows is
-  # sharded 3 ways, for the same reason a prior full-suite windows lane
-  # needed 3-way sharding (#3057, since retired — #4603), after the first
-  # real CI run measured it: unsharded, windows-latest hit its 45-minute
+  # sharded 6 ways (3 until #5029 — see the matrix comment below for the
+  # measurements that resized it), for the same reason a prior full-suite
+  # windows lane needed sharding at all (#3057, since retired — #4603), after
+  # the first real CI run measured it: unsharded, windows-latest hit its 45-minute
   # timeout and was CANCELLED (started 03:41:19Z, cancelled 04:26:25Z, run
   # 34434252144) while macos-latest finished the identical file set in
   # 26m58s — this conformance tier is dominated by subprocess-spawning tests
-  # (343/565 files). macos-latest stays unsharded; it has real headroom (27m
-  # against the 45m cap).
+  # (343/565 files). macos-latest is sharded 3 ways since #5029: unsharded it
+  # ran 18-27m on a normal runner, but 39m43s on a slow one (run 37086102648),
+  # ~5m from the same cap — see the macOS comment in the matrix below.
   test-conformance:
     name: conformance test (${{ matrix.os }}, ${{ matrix.node-version }}${{ matrix.shard && format(', shard {0}', matrix.shard) || '' }})
     needs: [changes, preflight]
@@ -594,11 +596,17 @@ jobs:
     defaults:
       run:
         shell: ${{ matrix.shell }}
-    # No LANE_COSTS entry exists yet for this brand-new job — see
-    # tests/ci-test-job-timeout-budget.test.cjs's own header: "no unit test
-    # can prove a lane fits its budget — only a real CI run measures that."
-    # Generous until a real measurement exists; the smaller file count
-    # should comfortably undercut this ceiling.
+    # This cap is deliberately NOT raised. #5029: the Windows lane was
+    # cancelled at the cap with zero failing tests, and the remedy for a lane
+    # that outgrew its budget is a finer split, not a bigger ceiling — raising
+    # it would only move the same cliff further out (ADR-4641 records 45m as
+    # the cliff #869 and #3057 were both filed about).
+    #
+    # This cap is now GUARDED: #5029 gave the lane its first LANE_COSTS entry
+    # in tests/ci-test-job-timeout-budget.test.cjs, measured on whichever row
+    # (windows or macos shard) is slowest: windows, 19m, so this cap may not
+    # drop below 29m. It had been uncovered since #4591, which is how
+    # it drifted to a 34m long pole here in the first place.
     timeout-minutes: 45
     env:
       GSD_PLUGIN_ROOT: .ci-gsd-plugin-root-disabled
@@ -609,21 +617,82 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # #5029: the lane outgrew a 3-way split. Measured job wall-clock, long
+          # pole per layout: 3-shard 34m24s (run 36322513056) and 34m14s (run
+          # 36357457440); 4-shard 30m17s (run 36349891343); 6-shard 15m17s (run
+          # 36785097774). The budget gate (tests/ci-test-job-timeout-budget.test.cjs)
+          # rounds the long pole UP and requires ceil(m * 1.5) <= the cap, so a 45m
+          # cap admits m <= 30 EXACTLY — which is why 3 and 4 both fail (53m and 47m
+          # required) and why the cap itself is not the lever.
+          #
+          # Windows cost is now modelled properly: #5071 -> #5097 added
+          # tests/test-timings.win32.json and the platformTimings arm of
+          # makeFileWeigher, so the packer prices win32 files by win32
+          # measurements instead of Linux ones. Measured effect on this tier —
+          # imbalance 1.18-1.32 -> 1.01-1.02, and observed shard spread 1.73x ->
+          # 1.36x across the two 6-shard runs whose heads bracket #5097. Before
+          # it, selectShard scored these shards as perfectly balanced in its own
+          # weight units while they ran 0.75x / 1.21x / 1.04x of an equal split;
+          # that gap is closed, so **do not re-derive the shard count from the old
+          # Linux-weight imbalance** (and note the packer's own units always report
+          # perfect balance — score a partition against a measured table instead).
+          #
+          # Sharding is not free per shard: fitting total(N) = N*F + V gives
+          # F ~= 515s, of which only ~60s is job-level checkout/npm ci — the rest
+          # is the per-shard artifact rebuild, harness startup and per-chunk spawns
+          # inside the test step. So each added shard buys less while costing a
+          # 2x-billed Windows runner permanently.
+          #
+          # Fewer files per shard (47, from 94) also relaxes the per-chunk 600s cap
+          # and maxUnmeasuredPerChunk, both of which have drawn red builds here
+          # before (#4936, #4733).
           - os: windows-latest
             node-version: 24
             shell: pwsh
-            shard: 1/3
+            shard: 1/6
           - os: windows-latest
             node-version: 24
             shell: pwsh
-            shard: 2/3
+            shard: 2/6
           - os: windows-latest
             node-version: 24
             shell: pwsh
-            shard: 3/3
+            shard: 3/6
+          - os: windows-latest
+            node-version: 24
+            shell: pwsh
+            shard: 4/6
+          - os: windows-latest
+            node-version: 24
+            shell: pwsh
+            shard: 5/6
+          - os: windows-latest
+            node-version: 24
+            shell: pwsh
+            shard: 6/6
+          # #5029: macos-latest shares this job's single 45m cap. Unsharded it
+          # ran 18-27m on normal runners (p90 26.0m over 43 runs, 09-30..10-04,
+          # tests/ci-timeout-budget-history.jsonl) but 39m43s on a slow one (run
+          # 37086102648, every chunk 1.1-2.1x slower, same 228-file tier) — m=40
+          # requires 60m, so the row could not meet the budget gate unsplit.
+          # Three shards, not two, for margin as the tier grows; first 3-shard
+          # run (37694227292) measured 8m42s / 7m48s / 10m09s. No darwin
+          # timing table exists yet, so the packer weighs macOS files with the
+          # Linux table (expect the pre-#5097 Windows imbalance, ~1.2-1.3); a
+          # tests/test-timings.darwin.json built from the uploaded
+          # test-timings-macos-latest-job* artifacts would tighten it.
           - os: macos-latest
             node-version: 24
             shell: 'zsh {0}'
+            shard: 1/3
+          - os: macos-latest
+            node-version: 24
+            shell: 'zsh {0}'
+            shard: 2/3
+          - os: macos-latest
+            node-version: 24
+            shell: 'zsh {0}'
+            shard: 3/3
 
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1 (Windows)
@@ -721,7 +790,13 @@ jobs:
         if: always()
         continue-on-error: true
         env:
-          CI_JOB_LABEL: "conformance test (${{ matrix.os }}, ${{ matrix.node-version }})"
+          # #5029: the shard suffix matters now that Windows is split across
+          # shards — without it a near-cap warning and its job summary cannot
+          # say WHICH shard is drifting, which is the one thing
+          # docs/how-to/read-ci-timeout-signals.md sends a maintainer here to
+          # find. Same expression as the job `name:` above and the parallel
+          # `test` lane's label, so the three agree on one spelling.
+          CI_JOB_LABEL: "conformance test (${{ matrix.os }}, ${{ matrix.node-version }}${{ matrix.shard && format(', shard {0}', matrix.shard) || '' }})"
           CI_JOB_TIMEOUT_MINUTES: '45'
         run: node scripts/ci-check-job-near-cap.cjs
 

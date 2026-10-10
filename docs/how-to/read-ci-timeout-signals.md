@@ -4,8 +4,8 @@ Every matrixed CI job (`test`, `test-conformance` in `.github/workflows/test.yml
 `mutate` in `mutation.yml`; `smoke` in `install-smoke.yml`) now reports how close it ran to its
 `timeout-minutes` cap. This page is for a maintainer trying to answer: *is a lane drifting
 toward its cap, and where do I look?* (`test-conformance` runs the platform-conformance-tier file
-list — `scripts/lib/platform-conformance-tier.generated.cjs` — on `windows-latest`, sharded three
-ways, and `macos-latest`, unsharded; it is the sole gating signal for real-OS coverage.)
+list — `scripts/lib/platform-conformance-tier.generated.cjs` — on `windows-latest`, sharded six
+ways, and `macos-latest`, sharded three ways; it is the sole gating signal for real-OS coverage.)
 
 ## 1. A single run crossed 90% of its budget
 
@@ -63,7 +63,14 @@ cap. That is a maintainer call among three options, each with real tradeoffs:
 - **Raise the `timeout-minutes` cap** for that job.
 - **Rebalance the shard split** so no single shard carries a disproportionate share of the
   suite (see `scripts/run-tests.cjs`'s `selectShard`, which packs shards by measured cost from
-  `tests/test-timings.json`).
+  `tests/test-timings.json`, and on win32 from `tests/test-timings.win32.json` via
+  `makeFileWeigher`'s `platformTimings` arm — #5071/#5097). **Never read a balanced packing as a
+  balanced runtime:** LPT balances in its own weight units by construction, so it reports a
+  perfect split whatever the real durations are. To see the truth, score each shard by summing
+  its files' durations from a measured table for that platform. Before #5097 the Windows lane
+  was the cautionary case — shards the packer scored identically ran 0.75x / 1.21x / 1.04x of an
+  equal split (#5029) — and with win32 measurements in place that imbalance measures 1.01-1.02,
+  so a long pole on this lane is now a capacity question rather than a mis-pricing one.
 - **Trim what runs on the long-pole shard** — for the `test` job, shard 1 also carries the
   unsharded aux suites (integration/security/install/slow); moving one elsewhere changes what
   shard 1 costs.

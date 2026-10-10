@@ -123,6 +123,45 @@ const LANE_COSTS = [
     // convention.
     evidence: 'run 32260569855 — 65s, macos-latest push (full matrix)',
   },
+  {
+    job: 'test-conformance',
+    measuredMinutes: 19,
+    // #5029: the first entry this lane has had. It ran uncovered from #4591
+    // until now on the comment "no LANE_COSTS entry exists yet for this
+    // brand-new job — generous until a real measurement exists", and that gap
+    // is what let it drift to a 34m long pole against its 45m cap and start
+    // cancelling shards whose every chunk passed (#4935).
+    //
+    // GitHub applies ONE job-level budget across every matrix combination, so
+    // this figure is the slowest ROW, windows or macos shard.
+    //
+    // It is windows. Sharded SIX ways as of #5029, its long pole across nine
+    // 6-shard runs was 16m38s / 15m17s / 16m25s / 16m21s / 17m22s / 18m15s /
+    // 16m31s / 18m07s / 15m34s — usually shard 5/6. The worst, 18m15s (run
+    // 37041237415), rounds up to 19, so this cap may not drop below 29m.
+    //
+    // macOS was the slowest row until #5029 sharded it too. Unsharded it ran
+    // 18m13s-26m01s across six runs on this PR, 26m58s on run 34434252144 —
+    // and 39m43s on run 37086102648, a slow runner (every chunk 1.1-2.1x
+    // slower on the same 228-file tier). By this file's convention that
+    // observation counts: m=40 requires 60m, over the 45m cap, so the row was
+    // split three ways rather than the observation excluded. First 3-shard
+    // run (37694227292): 8m42s / 7m48s / 10m09s. Even at that slow runner's
+    // worst 2.1x, the 10m09s shard would be ~21m: it would then set this
+    // entry (22, so 33m required), still inside the 45m cap. If a macOS shard
+    // ever outruns windows, it sets this entry — re-measured, never scaled.
+    //
+    // Why six shards and not fewer, in budget terms: measured windows long
+    // poles were 34m24s at 3 shards (run 36322513056) and 30m17s at 4 (run
+    // 36349891343), requiring 53m and 47m against a 45m cap. Raising the cap
+    // was ruled out by #5029 — ADR-4641 records 45m as the cliff #869 and #3057
+    // were filed about — so the split moved instead. #5071 -> #5097 has since
+    // priced Windows files by Windows measurements, which collapsed shard
+    // imbalance to 1.01-1.02; if this lane is ever resharded downward on the
+    // strength of that, re-measure the windows long pole from that run and
+    // set this entry from the slowest row, rather than scaling a figure.
+    evidence: 'run 37041237415 — windows shard 5/6 18m15s, worst of nine 6-shard runs (binding row); macOS 3-shard long pole 10m09s on run 37694227292',
+  },
 ];
 
 function requiredBudgetMinutes(measuredMinutes, headroomFactor = HEADROOM_FACTOR) {
