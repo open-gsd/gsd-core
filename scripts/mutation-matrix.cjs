@@ -693,14 +693,14 @@ const COVERED = {
   // global trigger (below); it changed in 2 commits on next since 2026-07-01, the same rate
   // as state-contract.unit.test.cjs.
   //
-  // Measured locally with the CI shard's exact inputs (tap runner, perTest, 0 timeouts):
-  // 85.29% (29 killed / 5 survived / 4 runtime errors). All 5 survivors are equivalent for
+  // CI run 38048199134, job 114201958561, `Stryker (dispatch-isolation)` (PR #5126):
+  // 85.29% (29 killed / 0 timeout / 5 survived / 4 runtime errors), matching a local run with
+  // the same inputs. All 5 survivors are equivalent for
   // this tree: the three __esModule interop mutants (only a default or namespace import
   // reads that flag, and no consumer uses either), and `typeof value === 'string' &&` ->
   // `true &&` in both guards (the views hold only strings and the module's exports are
   // frozen, so no non-string can be a member). Floor = floor(85.29) - 1
-  // = 84, provisional until this PR's CI shard confirms it, which the ratchet step does:
-  // it fails unless the CI score lands within RATCHET_SLACK of the floor.
+  // = 84.
   'dispatch-isolation': {
     cjs: 'gsd-core/bin/lib/dispatch-isolation.cjs',
     extraTests: ['host-integration-validator-parity.test.cjs'],
