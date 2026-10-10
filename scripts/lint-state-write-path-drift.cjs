@@ -836,11 +836,12 @@ const CUT_LINE_BODY_RE = /[{}]|=>|\b(?:function|for)\b/;
  */
 function nearestTargetBinding(ctx, index, cut, name) {
   const { lines } = ctx;
+  const regexes = bindingRegexesFor(ctx, name);
   for (let i = index; i >= 0; i--) {
     const text = i === index ? (CUT_LINE_BODY_RE.test(cut) ? '' : cut) : lines[i];
     if (i < index && FUNCTION_DECL_LINE_RE.test(text)) return null;
     if (!text.includes(name)) continue; // a line without the name cannot bind it
-    const found = lastBindingInText(text, name);
+    const found = lastBindingInText(text, name, regexes);
     if (found === 'unresolved') return null;
     if (found) {
       return {
@@ -869,16 +870,17 @@ function crossesBodyBoundary(ctx, binding) {
   return /[{}]|=>/.test(ctx.joined.slice(binding.end, ctx.writeAt));
 }
 
-// Per-name assignment regexes, built once per name rather than once per line.
-const bindingRegexCache = new Map();
-function bindingRegexesFor(name) {
-  let res = bindingRegexCache.get(name);
+// Per-name assignment regexes, built once per name per `findRawStateWrites`
+// call (`ctx.bindingRegexes`), not once per line, and not kept in module
+// state between files.
+function bindingRegexesFor(ctx, name) {
+  let res = ctx.bindingRegexes.get(name);
   if (!res) {
     res = [
       [assignmentLineRe(name), false],
       [new RegExp(`(?:^|[^.\\w$])${escapeRegex(name)}\\s*\\+=\\s*(.*)$`), true],
     ];
-    bindingRegexCache.set(name, res);
+    ctx.bindingRegexes.set(name, res);
   }
   return res;
 }
@@ -890,20 +892,21 @@ const CONST_DECL_RE = /^[^.\w$]?const\s/;
 
 /**
  * The last binding of `name` in one line of text: statements last to first,
- * and within a statement the last assignment first. Returns
+ * and within a statement the last assignment first, matched with `regexes`
+ * (`bindingRegexesFor(ctx, name)`). Returns
  * `{ rhs, index, isConst, end }` (`index` is where the match starts in `text`,
  * `end` where its right-hand side ends; `isConst` is true for a `const`
  * declaration), the string `'unresolved'` when a `for...of` / destructuring
  * binding is reached first, or null. A right-hand side ends at its own `;`,
  * and `name += x` reads as `name + x`.
  */
-function lastBindingInText(text, name) {
+function lastBindingInText(text, name, regexes) {
   const spans = statementSpans(text);
   for (let s = spans.length - 1; s >= 0; s--) {
     const { start, body } = spans[s];
     if (bindsByPattern(body, name)) return 'unresolved';
     const hits = [];
-    for (const [re, compound] of bindingRegexesFor(name)) {
+    for (const [re, compound] of regexes) {
       for (let from = 0; from < body.length; ) {
         const m = re.exec(body.slice(from));
         if (!m) break;
@@ -1068,6 +1071,7 @@ function findRawStateWrites(rel, rawText) {
     lineStarts[i] = at;
     at += stripped[i].length + 1;
   }
+  const bindingRegexes = new Map();
   const out = [];
   let lineIdx = 0;
   let counted = 0;
@@ -1080,7 +1084,7 @@ function findRawStateWrites(rel, rawText) {
     // `const p = …; fs.writeFileSync(p, …)` resolves, while an assignment
     // after the call on that line does not.
     const cut = joined.slice(joined.lastIndexOf('\n', m.index - 1) + 1, m.index);
-    if (!resolvesToStatePath({ lines: stripped, lineStarts, joined, writeAt: m.index }, lineIdx, cut, targetArg)) continue;
+    if (!resolvesToStatePath({ lines: stripped, lineStarts, joined, writeAt: m.index, bindingRegexes }, lineIdx, cut, targetArg)) continue;
     // `file`/`source` sanitized for the same fork-PR reason as every other
     // finding in this guard.
     out.push({
