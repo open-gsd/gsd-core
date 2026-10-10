@@ -1313,6 +1313,12 @@ function rewriteLegacyManagedNodeHookCommands(settings, absoluteRunner, opts) {
 // bindings were dead code with no reachable body — removed rather than kept
 // as unreachable wrappers.
 
+// #5100: the bare-`bash` sentinel the win32 Git Bash policy writes when it
+// resolves nothing. Bare reference to hooksSurface's own export, same dedup
+// rule as the cursor constants below — exactly one literal definition of
+// this value exists in the package.
+const UNRESOLVED_BASH_SENTINEL = hooksSurface.UNRESOLVED_BASH_SENTINEL;
+
 /**
  * Ensure Codex hooks.json contains exactly one managed SessionStart
  * gsd-check-update hook entry, while preserving user-owned entries.
@@ -13339,7 +13345,16 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     || !readGuardCommand
     || !readInjectionScannerCommand;
   if (anyJsHookCommandNull) {
-    console.warn(`  ${yellow}⚠${reset}  Skipping managed JS hook registration — Node executable path unavailable (process.execPath is empty). See #2979 / #3002.`);
+    // #5100: a null JS-hook command has two causes with different fixes. A
+    // command-less tracked entry carrying the bare-`bash` sentinel means
+    // resolveBashRunner found no Git Bash (fix: install Git for Windows or
+    // set GSD_BASH_PATH to its bash.exe); any other null means the node
+    // runner did not resolve (fix: #2979/#3002). Name the actual cause.
+    const unresolvedBash = settingsEntrypoints.some(entry =>
+      entry.command === undefined && (entry.interpreterCandidates || []).includes(UNRESOLVED_BASH_SENTINEL));
+    console.warn(unresolvedBash
+      ? `  ${yellow}⚠${reset}  Skipping managed JS hook registration — no Git Bash found on win32 (the Git Bash policy resolved nothing). Install Git for Windows or set GSD_BASH_PATH to its bash.exe. See #5100.`
+      : `  ${yellow}⚠${reset}  Skipping managed JS hook registration — Node executable path unavailable (process.execPath is empty). See #2979 / #3002.`);
   }
 
   // Register all GSD-managed hook entries into settings.hooks.* for runtimes
@@ -13391,10 +13406,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // bare basename so an unrelated user command that merely mentions the same
   // filename can't false-positive into GSD's validated set.
   configuredEntrypoints.push(
-    ...settingsEntrypoints.filter(entry => {
-      const hooksSegment = '/hooks/' + path.basename(entry.scriptPath);
-      return registeredHookCommands.some(command => command.includes(hooksSegment));
-    }),
+    ...selectConfiguredEntrypointsForValidation(settingsEntrypoints, registeredHookCommands),
   );
   const statuslineEntrypoints = settingsEntrypoints.filter(entry => entry.command === statuslineCommand);
   const updateBannerEntrypoints = settingsEntrypoints.filter(entry => entry.command === updateBannerCommand);
@@ -13488,6 +13500,26 @@ function describeEntrypointConsequence(invalidRuntime) {
   if (invalidRuntime === 'codex') return 'reverted: its pre-install snapshot was restored';
   if (ENTRYPOINT_LEFT_UNREVERTED_RUNTIMES.has(invalidRuntime)) return 'NOT reverted: its config file is already written and was left on disk — fix the reported path and rerun install';
   return 'not persisted: this runtime writes its config after this check';
+}
+
+// #5100: select which tracked entrypoints reach the validation gate. A named
+// export (see module.exports) so tests can drive the fresh-vs-upgrade split
+// directly — a full win32 install cannot be emulated on Linux CI
+// (resolveBashRunner reads the real platform), so install()-level coverage of
+// the no-Git-Bash path is not obtainable there.
+function selectConfiguredEntrypointsForValidation(settingsEntrypoints, registeredHookCommands) {
+  return (settingsEntrypoints || []).filter(entry => {
+    // A command-less entry never produced a registered command, so the
+    // segment match below can never keep it — but it is exactly the
+    // unresolved-bash entry the gate must see (buildHookCommand pushes it
+    // without a `command` when no Git Bash is found). Exempt it: without this
+    // a fresh install silently drops it (gate passes) while an upgrade keeps
+    // it via the persisted command (gate fails) — same host, opposite
+    // verdicts. Surface it in both cases and let the gate decide loudly.
+    if (entry.command === undefined) return true;
+    const hooksSegment = '/hooks/' + path.basename(entry.scriptPath);
+    return registeredHookCommands.some(command => command.includes(hooksSegment));
+  });
 }
 
 function assertConfiguredEntrypoints(entries) {
@@ -14651,6 +14683,8 @@ module.exports = {
     install,
     installAllRuntimes,
     uninstall,
+    // #5100 — installer entrypoint-selection seam, exported for direct tests
+    selectConfiguredEntrypointsForValidation,
     // #3023 — shared hook bundle directory name, descriptor-driven
     SHARED_HOOKS_DIR_DEFAULT,
     resolveSharedHooksDirName,

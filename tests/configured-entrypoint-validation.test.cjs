@@ -7,9 +7,11 @@ const path = require('node:path');
 const test = require('node:test');
 
 const helpers = require('./helpers.cjs');
+const { runNode } = require('./helpers/process-seam.cjs');
+const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const hooksSurface = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
-const { install, installAllRuntimes, finishInstall } = require('../bin/install.js');
+const { install, installAllRuntimes, finishInstall, selectConfiguredEntrypointsForValidation } = require('../bin/install.js');
 
 /**
  * Run `fn` with HOME/USERPROFILE pointed at a fresh temp dir and every
@@ -556,3 +558,337 @@ test('a NON-entrypoint finalize failure leaves an already-successful Codex insta
     );
   });
 });
+
+// #5100: a bare win32 bash token is the "Git Bash was not found" sentinel.
+// The gate must resolve it through the Git Bash policy, not a PATH scan that
+// accepts WSL's System32 launcher. These cases inject that launcher.
+const GSD_5100_GIT_BASH = 'C:\\Program Files\\Git\\bin\\bash.exe';
+const GSD_5100_WSL_BASH = 'C:\\WINDOWS\\System32\\bash.exe';
+
+function gsd5100WslStandIn(candidate) {
+  if (typeof candidate !== 'string') return null;
+  if (candidate.includes('/') || candidate.includes('\\')) {
+    if (/node/i.test(candidate)) return candidate;
+    if (/git[\\/]+bin[\\/]+bash\.exe$/i.test(candidate)) return candidate;
+    return null;
+  }
+  const lower = candidate.toLowerCase();
+  if (lower === 'bash' || lower === 'bash.exe') return GSD_5100_WSL_BASH;
+  if (lower === 'node' || lower === 'node.exe') return 'C:\\Program Files\\nodejs\\node.exe';
+  return null;
+}
+
+function gsd5100HookTree(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5100-'));
+  t.after(() => helpers.cleanup(root));
+  const configDir = path.join(root, '.claude');
+  fs.mkdirSync(path.join(configDir, 'hooks'), { recursive: true });
+  for (const name of ['gsd-foo.js', 'gsd-bar.sh', 'gsd-node-runner.sh']) {
+    fs.writeFileSync(path.join(configDir, 'hooks', name), '');
+  }
+  return configDir;
+}
+
+test('#5100 win32 portable JS and .sh hooks stay unresolved when only WSL bash is on PATH', (t) => {
+  const configDir = gsd5100HookTree(t);
+  const missing = { platform: 'win32', env: {}, existsSync: () => false };
+  const jsEntries = [];
+  const jsCmd = hooksSurface.buildHookCommand(configDir, 'gsd-foo.js', {
+    ...missing,
+    runtime: 'claude',
+    portableHooks: true,
+    configuredEntrypoints: jsEntries,
+    execPath: 'C:\\Program Files\\nodejs\\node.exe',
+  });
+  assert.equal(jsCmd, null, 'portable JS must not fall back to a bare bash command');
+  assert.ok(jsEntries.some(entry => (entry.interpreterCandidates || []).includes('bash')));
+
+  const shEntries = [];
+  const shCmd = hooksSurface.buildHookCommand(configDir, 'gsd-bar.sh', {
+    ...missing,
+    runtime: 'codex',
+    portableHooks: true,
+    configuredEntrypoints: shEntries,
+  });
+  assert.equal(shCmd, null, '.sh hooks already return null when Git Bash is missing');
+  assert.ok(shEntries.some(entry => (entry.interpreterCandidates || []).includes('bash')));
+
+  // #5100 (review, Nit 12): the Antigravity portable path reaches the same
+  // null branch — previously only claude and codex pinned it here.
+  const agyEntries = [];
+  const agyCmd = hooksSurface.buildHookCommand(configDir, 'gsd-foo.js', {
+    ...missing,
+    runtime: 'antigravity',
+    portableHooks: true,
+    configuredEntrypoints: agyEntries,
+    execPath: 'C:\\Program Files\\nodejs\\node.exe',
+  });
+  assert.equal(agyCmd, null, 'Antigravity portable JS must not fall back to a bare bash command');
+  assert.ok(agyEntries.some(entry => (entry.interpreterCandidates || []).includes('bash')));
+
+  const gateDeps = { env: {}, existsSync: () => false, resolveExecutableBinary: gsd5100WslStandIn };
+  for (const entries of [jsEntries, shEntries, agyEntries]) {
+    const gate = hooksSurface.validateConfiguredEntrypoints(entries, gateDeps);
+    assert.equal(gate.ok, false);
+    assert.ok(gate.invalid.some(item => item.reason === 'unresolved-interpreter' && String(item.path).includes('bash')));
+  }
+});
+
+test('#5100 a bare win32 bash candidate follows the Git Bash policy, not PATH', (t) => {
+  const configDir = gsd5100HookTree(t);
+  const entry = {
+    runtime: 'codex',
+    configPath: configDir,
+    scriptPath: path.join(configDir, 'hooks', 'gsd-bar.sh'),
+    platform: 'win32',
+    interpreterCandidates: ['bash'],
+  };
+  const missing = hooksSurface.validateConfiguredEntrypoints([entry], {
+    env: {},
+    existsSync: () => false,
+    resolveExecutableBinary: () => GSD_5100_WSL_BASH,
+  });
+  assert.equal(missing.ok, false);
+  assert.equal(missing.invalid[0].reason, 'unresolved-interpreter');
+
+  const found = hooksSurface.validateConfiguredEntrypoints([entry], {
+    env: { ProgramFiles: 'C:\\Program Files' },
+    existsSync: (candidate) => candidate === GSD_5100_GIT_BASH,
+    resolveExecutableBinary: () => null,
+  });
+  assert.equal(found.ok, true);
+});
+
+test('#5100 Git Bash found by policy still emits a portable JS command and passes the gate', (t) => {
+  const configDir = gsd5100HookTree(t);
+  const entries = [];
+  const cmd = hooksSurface.buildHookCommand(configDir, 'gsd-foo.js', {
+    platform: 'win32',
+    runtime: 'claude',
+    portableHooks: true,
+    env: { ProgramFiles: 'C:\\Program Files' },
+    existsSync: (candidate) => candidate === GSD_5100_GIT_BASH,
+    configuredEntrypoints: entries,
+    execPath: 'C:\\Program Files\\nodejs\\node.exe',
+  });
+  assert.equal(typeof cmd, 'string');
+  assert.match(cmd, /Git\/bin\/bash\.exe/);
+  // Not `assert.equal(/^bash(\s|$)/.test(cmd), false)`: on win32 the resolved
+  // runner is JSON.stringify'd, so the command opens with a quote and that
+  // pattern is false for any value — it could not fail. Assert the two facts
+  // that matter instead: the command names the Git Bash path, and it never
+  // names the WSL launcher the gate exists to reject.
+  assert.doesNotMatch(cmd, /System32|Sysnative|SysWOW64/i);
+  const gate = hooksSurface.validateConfiguredEntrypoints(entries, {
+    env: { ProgramFiles: 'C:\\Program Files' },
+    existsSync: (candidate) => candidate === GSD_5100_GIT_BASH,
+    resolveExecutableBinary: gsd5100WslStandIn,
+  });
+  assert.equal(gate.ok, true, JSON.stringify(gate));
+});
+
+test('#5100 a GSD_BASH_PATH-only Git Bash satisfies the gate for a bare win32 bash candidate', (t) => {
+  const configDir = gsd5100HookTree(t);
+  const entry = {
+    runtime: 'codex',
+    configPath: configDir,
+    scriptPath: path.join(configDir, 'hooks', 'gsd-bar.sh'),
+    platform: 'win32',
+    interpreterCandidates: ['bash'],
+  };
+
+  // GSD_BASH_PATH is the only candidate resolveBashExecutable consults here:
+  // no ProgramFiles, no ProgramFiles(x86), no SystemDrive.
+  const found = hooksSurface.validateConfiguredEntrypoints([entry], {
+    env: { GSD_BASH_PATH: GSD_5100_GIT_BASH },
+    existsSync: (candidate) => candidate === GSD_5100_GIT_BASH,
+    resolveExecutableBinary: () => null,
+  });
+  assert.equal(found.ok, true, JSON.stringify(found));
+
+  // A GSD_BASH_PATH that does not exist must not satisfy the gate - the
+  // policy finds nothing, so the bare token stays unresolved even though a
+  // PATH scan would happily hand back WSL's System32 launcher.
+  const stale = hooksSurface.validateConfiguredEntrypoints([entry], {
+    env: { GSD_BASH_PATH: 'D:\\tools\\git\\bin\\bash.exe' },
+    existsSync: () => false,
+    resolveExecutableBinary: gsd5100WslStandIn,
+  });
+  assert.equal(stale.ok, false);
+  assert.equal(stale.invalid[0].reason, 'unresolved-interpreter');
+
+  // GSD_BASH_PATH is the user's explicit override, so the policy accepts
+  // whatever it names — including System32\bash.exe, the WSL launcher this
+  // issue is about. That is opt-in semantics, unchanged by #5100, but it is
+  // the one path where the WSL launcher can still reach a hook, so it is
+  // pinned here rather than left implicit: if a future change ever tightens
+  // the override, this row goes red and the behaviour change is deliberate.
+  const explicit = hooksSurface.validateConfiguredEntrypoints([entry], {
+    env: { GSD_BASH_PATH: 'C:\\Windows\\System32\\bash.exe' },
+    existsSync: (candidate) => candidate === 'C:\\Windows\\System32\\bash.exe',
+    resolveExecutableBinary: gsd5100WslStandIn,
+  });
+  assert.equal(explicit.ok, true, JSON.stringify(explicit));
+});
+
+test('#5100 non-win32 bare bash still resolves through the executable scan', () => {
+  const gate = hooksSurface.validateConfiguredEntrypoints([{
+    runtime: 'claude',
+    configPath: '/tmp/cfg',
+    scriptPath: '/tmp/cfg/hooks/gsd-foo.js',
+    platform: 'linux',
+    interpreterCandidates: ['bash'],
+  }], {
+    statSync: () => ({ isFile: () => true }),
+    accessSync: () => {},
+    resolveExecutableBinary: (candidate) => (candidate === 'bash' ? '/usr/bin/bash' : null),
+  });
+  assert.equal(gate.ok, true);
+});
+
+test('#5100 installer surfaces command-less unresolved-bash entries on fresh and upgrade installs', (t) => {
+  const configDir = gsd5100HookTree(t);
+  // The entry exactly as the installer sees it: buildHookCommand with no Git
+  // Bash pushes command-less entries (no `command` key at all).
+  const produced = [];
+  const cmd = hooksSurface.buildHookCommand(configDir, 'gsd-foo.js', {
+    platform: 'win32',
+    env: {},
+    existsSync: () => false,
+    runtime: 'claude',
+    portableHooks: true,
+    configuredEntrypoints: produced,
+    execPath: 'C:\\Program Files\\nodejs\\node.exe',
+  });
+  assert.equal(cmd, null);
+  assert.equal(produced.length, 2);
+  assert.ok(produced.every(entry => entry.command === undefined));
+  assert.ok(produced.some(entry => (entry.interpreterCandidates || []).includes('bash')));
+  const sentinel = produced[0];
+
+  const entryFor = (hookFile) => ({
+    runtime: 'claude',
+    configPath: path.join(configDir, 'settings.json'),
+    scriptPath: path.join(configDir, 'hooks', hookFile),
+    platform: 'win32',
+    interpreterCandidates: ['node'],
+    command: `"node" "/cfg/hooks/${hookFile}"`,
+  });
+  const tracked = [sentinel, entryFor('gsd-unreferenced.js'), entryFor('gsd-live.js')];
+
+  // Fresh install: nothing registered yet — the sentinel must still surface,
+  // while entries no hook references stay dropped (the #4154 contract).
+  const fresh = selectConfiguredEntrypointsForValidation(tracked, []);
+  assert.ok(fresh.includes(sentinel), 'fresh installs must surface the unresolved-bash entry');
+  assert.equal(fresh.length, 1, 'fresh installs still drop entries no hook references');
+
+  // Upgrade: commands persisted by the earlier install keep entries alive —
+  // the sentinel must surface there too, so both paths reach the gate instead
+  // of diverging into silent-pass vs hard-fail.
+  const upgraded = selectConfiguredEntrypointsForValidation(tracked, [
+    'bash "C:/old/hooks/gsd-foo.js"',
+    '"node" "/cfg/hooks/gsd-live.js"',
+  ]);
+  assert.ok(upgraded.includes(sentinel), 'upgrades must surface the unresolved-bash entry too');
+  assert.ok(
+    upgraded.some(entry => path.basename(entry.scriptPath) === 'gsd-live.js'),
+    'upgrades keep entries whose hook is still registered',
+  );
+  assert.ok(
+    upgraded.every(entry => path.basename(entry.scriptPath) !== 'gsd-unreferenced.js'),
+    'the registered-command filter still discards entries no hook references',
+  );
+
+  // The surfaced entry fails the gate loudly on a host with no Git Bash —
+  // the fresh-install silent pass Major 1 removed.
+  const gate = hooksSurface.validateConfiguredEntrypoints(fresh, {
+    env: {},
+    existsSync: () => false,
+    resolveExecutableBinary: gsd5100WslStandIn,
+  });
+  assert.equal(gate.ok, false);
+  // Name bash explicitly: any other unresolved interpreter would satisfy a
+  // bare reason check, which is the sibling rows at :605-625 shape.
+  assert.ok(gate.invalid.some(item => item.reason === 'unresolved-interpreter' && String(item.path).includes('bash')));
+  // And nothing else may be flagged — the gate must fail on the bash entry
+  // alone, not on a node entry the filter wrongly let through.
+  assert.deepEqual(
+    gate.invalid.map(item => item.reason),
+    ['unresolved-interpreter'],
+  );
+});
+
+// #5100 Minor 1 (review of 611a5eeb): the rows above drive
+// selectConfiguredEntrypointsForValidation directly, so they cannot see the
+// installer's CALL SITE. Reverting bin/install.js's call back to the pre-PR
+// inline filter — or deleting it — leaves every one of them green, while the
+// Major 1 defect (a fresh install silently passing the gate with zero entries)
+// returns. This row therefore runs a REAL install() and asserts on what the
+// caller actually received.
+//
+// `process.platform` is a configurable own property of `process`, so a child
+// process can present itself as win32 before bin/install.js is required. The
+// child's install() writes only under the sandboxed HOME it is handed, and
+// GSD_TEST_MODE keeps it off the interactive main() block.
+const GSD_5100_WIN32_INSTALL_PROBE = `
+Object.defineProperty(process, 'platform', { value: 'win32' });
+const path = require('node:path');
+const { install } = require(path.join(process.env.PROBE_REPO, 'bin', 'install.js'));
+const result = install(true, 'claude');
+const entries = result.configuredEntrypoints || [];
+const unresolvedBash = entries.filter(entry => (
+  entry.command === undefined
+  && (entry.interpreterCandidates || []).some(c => c.trim().toLowerCase().startsWith('bash'))
+));
+process.stdout.write('PROBE_JSON ' + JSON.stringify({
+  total: entries.length,
+  unresolvedBash: unresolvedBash.length,
+}) + '\\n');
+`;
+
+function gsd5100RunWin32InstallProbe(t) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5100-win32-'));
+  t.after(() => helpers.cleanup(home));
+  const result = runNode(['-e', GSD_5100_WIN32_INSTALL_PROBE], {
+    cwd: path.join(__dirname, '..'),
+    env: helpers.installSpawnEnv({
+      HOME: home,
+      USERPROFILE: home,
+      PROBE_REPO: path.join(__dirname, '..'),
+      GSD_TEST_MODE: '1',
+      // #5100: portable hooks are what route a JS hook through the Git Bash
+      // policy at all; without them the win32 branch never runs.
+      GSD_PORTABLE_HOOKS: '1',
+      // Blank every Git Bash discovery input so resolveBashExecutable cannot
+      // find one — the host this PR is about. Empty string, not unset:
+      // resolveBashExecutable reads truthiness, so either works, and an
+      // explicit blank survives an env-inheriting host that exports one.
+      GSD_BASH_PATH: '',
+      ProgramFiles: '',
+      'ProgramFiles(x86)': '',
+      SystemDrive: '',
+    }),
+    timeoutMs: INSTALL_TIMEOUT_MS,
+  });
+  const marker = 'PROBE_JSON ';
+  const line = result.stdout.split('\n').find(entry => entry.startsWith(marker));
+  assert.ok(
+    line,
+    `the win32 install probe must report its summary on stdout; got outcome=${result.outcome} `
+      + `exitCode=${result.exitCode} stderr=${result.stderr.slice(-800)}`,
+  );
+  return JSON.parse(line.slice(marker.length));
+}
+
+test('#5100 the installer CALL SITE surfaces command-less unresolved-bash entries on a fresh install', (t) => {
+  const probe = gsd5100RunWin32InstallProbe(t);
+  // The pre-PR inline filter matched every entry by its registered command
+  // segment; a command-less entry never registered one, so a fresh install
+  // kept ZERO entries and the gate passed silently. The call site must now
+  // hand the unresolved-bash entry through.
+  assert.ok(
+    probe.unresolvedBash > 0,
+    'install() on a win32 host with no Git Bash must return command-less bash '
+      + `entries to the validation gate; got ${JSON.stringify(probe)}`,
+  );
+  });

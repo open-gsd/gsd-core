@@ -3,6 +3,7 @@
 
 module.exports = {
   CONFORMANCE_TIER_FILES: [
+  "tests/5100-win32-bare-bash-sentinel.property.test.cjs",
   "tests/adr-index-gate.test.cjs",
   "tests/adr857-core-without-capabilities.test.cjs",
   "tests/agent-install-check.test.cjs",
