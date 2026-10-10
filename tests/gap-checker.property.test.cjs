@@ -279,7 +279,7 @@ const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, seedConfigSection, createTempProject, cleanup } = require('./helpers.cjs');
 const { normalizePhaseReqIds } = require('../gsd-core/bin/lib/gap-checker.cjs');
 
 describe('gap-analysis --phase-req-ids scoping (#447)', () => {
@@ -310,7 +310,7 @@ describe('gap-analysis --phase-req-ids scoping (#447)', () => {
     tmpDir = createTempProject();
     phaseDir = path.join(tmpDir, '.planning', 'phases', '01-test');
     fs.mkdirSync(phaseDir, { recursive: true });
-    const r = runGsdTools('config-ensure-section', tmpDir);
+    const r = seedConfigSection(tmpDir);
     assert.ok(r.success, `config-ensure-section failed: ${r.error}`);
   });
 
@@ -617,7 +617,7 @@ describe('#1269 — gap-analysis --phase-req-ids range (integration)', () => {
     tmpDir = createTempProject();
     phaseDir = path.join(tmpDir, '.planning', 'phases', '01-test');
     fs.mkdirSync(phaseDir, { recursive: true });
-    const r = runGsdTools('config-ensure-section', tmpDir);
+    const r = seedConfigSection(tmpDir);
     assert.ok(r.success, `config-ensure-section failed: ${r.error}`);
   });
 

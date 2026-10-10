@@ -34,14 +34,14 @@ const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, seedConfigSection, createTempProject, cleanup } = require('./helpers.cjs');
 
 describe('workflow.compact_content config (#4139)', () => {
   let tmpDir;
 
   beforeEach(() => {
     tmpDir = createTempProject();
-    runGsdTools('config-ensure-section', tmpDir);
+    seedConfigSection(tmpDir);
   });
   afterEach(() => { cleanup(tmpDir); });
 

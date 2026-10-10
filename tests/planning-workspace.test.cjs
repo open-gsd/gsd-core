@@ -440,7 +440,7 @@ const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, seedConfigSection, createTempProject, cleanup } = require('./helpers.cjs');
 
 describe('bug #3739 — gap-analysis padded-prefix CONTEXT.md', () => {
   let tmpDir;
@@ -459,7 +459,7 @@ describe('bug #3739 — gap-analysis padded-prefix CONTEXT.md', () => {
   }
 
   function ensureConfig() {
-    const r = runGsdTools('config-ensure-section', tmpDir);
+    const r = seedConfigSection(tmpDir);
     assert.ok(r.success, `config-ensure-section failed: ${r.error}`);
   }
 
