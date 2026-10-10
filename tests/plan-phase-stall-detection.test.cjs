@@ -1573,4 +1573,74 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     // A literal (non-glob) artifact path with a space, as the chunked sites pass it.
     assert.equal(watch(NOW - 11 * 60, f.receipt, `${fwd(spaced)}/01-PLAN.md`, markers, { interval: 5 }), 'active');
   });
+
+  // -- Review 5477738387 Minor 3: the cleanup is a command at each watch site, not
+  // helper prose only. The clause lives in the site's ORCHESTRATOR RULE paragraph,
+  // after its gsd_stall_watch call, and names stalled and Retry, so every route of
+  // that site (success, ISSUES FOUND, stalled, Retry) removes its receipt.
+  function rulePara(section) {
+    const at = section.indexOf('ORCHESTRATOR RULE');
+    assert.notEqual(at, -1, 'section must hold an ORCHESTRATOR RULE paragraph');
+    const stop = section.indexOf('\n\n', at);
+    return section.slice(at, stop === -1 ? undefined : stop);
+  }
+
+  test('every watch site removes its receipt after routing any result, stalled and Retry included', () => {
+    const plan = readPlanPhase();
+    const chunked = readChunkedPlanningMode();
+    const sites = [
+      ['planner', sectionOf(plan, PLANNER_SECTION)],
+      ['checker', sectionOf(plan, CHECKER_SECTION)],
+      ['revision', sectionOf(plan, REVISION_SECTION)],
+      ['chunked outline', sectionOf(chunked, ['### 8.5.1 Outline Phase', '### 8.5.2 Per-Plan Tasks'])],
+      ['chunked per-plan', sectionOf(chunked, ['### 8.5.2 Per-Plan Tasks', '\u0000'])],
+    ];
+    let ran = 0;
+    for (const [label, section] of sites) {
+      const para = rulePara(section);
+      const call = para.search(/gsd_stall_watch\s+"\$TS"\s+"\{receipt\}"/);
+      assert.notEqual(call, -1, `${label}: the rule paragraph holds the watch call`);
+      assert.match(para.slice(call), /after routing any result \(stalled\/Retry too\): `rm -f "\{receipt\}"`/,
+        `${label}: the watch rule must end with the receipt cleanup for every route`);
+      ran += 1;
+    }
+    assert.equal(ran, 5);
+  });
+
+  test('helpers doc: a site with no receipt and no fresh artifact can only end stalled at the threshold', () => {
+    const doc = readStallHelpersDoc();
+    const at = doc.indexOf('**Known limit, kimi-code:**');
+    assert.notEqual(at, -1);
+    const near = doc.slice(at, at + 900);
+    assert.match(near, /checker[^\n]*no receipt|no receipt[^\n]*checker/i, 'the checker-without-receipt outcome is stated beside the kimi-code note');
+    assert.match(near, /first `?PLAN\.md`?/, 'the planner before its first PLAN.md is named');
+    assert.match(near, /`stalled` at the threshold/, 'the outcome is stalled at the threshold');
+    assert.match(near, /no heartbeat/i, 'it says there is no heartbeat protocol');
+    assert.doesNotMatch(doc, /After routing, the orchestrator runs/, 'the prose-only cleanup sentence is replaced by the site commands');
+  });
+
+  // -- Review 5477738387 Minor 5: the *-PLAN.md freshness window (find -mmin -INTERVAL)
+  // at its edge. find reads the real clock, not the stubbed `date +%s`, so the mtime is
+  // set from the wall clock just before the call. GNU find and BSD find round a file's
+  // age to whole minutes differently (BSD rounds up), so "inside" is 3m20s old (under 4
+  // minutes even rounded up, with slack for a slow bash start) and "outside" is 5m10s
+  // old, past the 5-minute interval under either rounding. Boundary rows on unchanged
+  // code: green before and after this change.
+  test('*-PLAN.md freshness boundary: a plan just inside the interval is active, just outside is waiting', (t) => {
+    const f = fixture(t);
+    const markers = watchCallOf(sectionOf(readPlanPhase(), PLANNER_SECTION)).markers;
+    const plan = path.join(f.dir, '01-PLAN.md');
+    fs.writeFileSync(plan, '# plan\n');
+    const glob = `${f.fwd}/*-PLAN.md`;
+    const age = (seconds) => {
+      const at = Date.now() / 1000 - seconds;
+      fs.utimesSync(plan, at, at);
+    };
+    age(200);
+    assert.equal(watch(NOW, f.receipt, glob, markers, { interval: 5, threshold: 99999 }), 'active', '3m20s old: inside a 5-minute interval');
+    age(310);
+    assert.equal(watch(NOW, f.receipt, glob, markers, { interval: 5, threshold: 99999 }), 'waiting', '5m10s old: outside a 5-minute interval');
+    age(310);
+    assert.equal(watch(NOW, f.receipt, glob, markers, { interval: 7, threshold: 99999 }), 'active', 'the window follows the interval: 5m10s is inside 7 minutes');
+  });
 });

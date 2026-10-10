@@ -75,7 +75,7 @@ Agent(
 )
 ```
 
-**ORCHESTRATOR RULE — ALL RUNTIMES (when `PLANNER_STALL_DETECTION_ENABLED` is `true`):** before dispatch bind `{receipt}` via `gsd_receipt_path "${PHASE_DIR}" outline`, `TS=$(date +%s)`; repeat `PLANNER_STALL_RESULT=$(gsd_stall_watch "$TS" "{receipt}" "$OUTLINE_FILE" "## OUTLINE COMPLETE")` while waiting/active.
+**ORCHESTRATOR RULE — ALL RUNTIMES (when `PLANNER_STALL_DETECTION_ENABLED` is `true`):** before dispatch bind `{receipt}` via `gsd_receipt_path "${PHASE_DIR}" outline`, `TS=$(date +%s)`; repeat `PLANNER_STALL_RESULT=$(gsd_stall_watch "$TS" "{receipt}" "$OUTLINE_FILE" "## OUTLINE COMPLETE")` while waiting/active; after routing any result (stalled/Retry too): `rm -f "{receipt}"`.
 
 - **`false`:** issue the same Agent() call but omit `run_in_background`; await its ordinary runtime-native completion and consume the real returned result. Skip `gsd_stall_watch` entirely and treat a recognized `## OUTLINE COMPLETE` return exactly like `marker_received`; empty or unrecognized returns keep the existing Retry/Stop path.
 
@@ -171,7 +171,7 @@ path regardless of `CHUNKED_PARALLEL` — there is nothing to batch.
 
 5. **ORCHESTRATOR RULE — ALL RUNTIMES, per batch (when `PLANNER_STALL_DETECTION_ENABLED` is `true`):** for every entry dispatched in this round,
    bind that entry's own `{receipt}` via `gsd_receipt_path "${PHASE_DIR}" "{plan_id}"` before its dispatch, `TS=$(date +%s)`; repeat `PLANNER_STALL_RESULT=$(gsd_stall_watch "$TS" "{receipt}" "$PLAN_FILE" "## PLAN COMPLETE")`
-   while waiting/active for THAT entry. Serial dispatch waits on one entry at a time (unchanged).
+   while waiting/active for THAT entry; after routing any result (stalled/Retry too): `rm -f "{receipt}"`. Serial dispatch waits on one entry at a time (unchanged).
    Concurrent dispatch waits on every entry issued in step 4 before proceeding — this is the
    "per-batch" join the config makes possible: nothing in step 6 runs until every plan dispatched
    this round has reached `marker_received` or `stalled`. A `stalled` entry falls into step 7's

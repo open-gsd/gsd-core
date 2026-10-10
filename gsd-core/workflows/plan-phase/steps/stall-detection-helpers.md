@@ -40,10 +40,10 @@ the subagent transcript, which already holds the agent's prompt and definition
 snapshot, and both quote the markers, so a match there proves nothing. Other hosts
 return no such file at all. The receipt is the same on every runtime, and
 `gsd_return_marker` counts a marker only at the START of a receipt line, so quoted or
-JSON-encoded marker text can never match. After routing, the orchestrator runs
-`rm -f "{receipt}"`. With the toggle `false`, the prompt still carries the receipt
-line and the agent still writes it; the orchestrator consumes the real returned
-result and removes the receipt the same way.
+JSON-encoded marker text can never match. Each watch site's rule runs `rm -f "{receipt}"`
+after routing any result, stalled and Retry included. With the toggle `false`, the
+prompt still carries the receipt line and the agent still writes it; the orchestrator
+consumes the real returned result and removes the receipt the same way.
 
 **The runtime's completion result ends the wait:** the receipt bounds the wait; it does
 not replace the runtime's own completion. If the spawned agent's real completion
@@ -72,6 +72,11 @@ derives `workspace-write` from its `tools:`), so it can write the receipt on bot
 `-checker` to `explore`, and neither can write files (`runtime-aware-dispatch.md`),
 so no receipt is written there. The wait ends on the completion result, as above,
 or as `stalled` at the threshold.
+
+**Known limit, no receipt and no fresh artifact:** a checker with no receipt (any
+Write failure, or the host above) touches no `*-PLAN.md`, and neither does a planner
+before its first `PLAN.md`, so its watch can only end on the completion result or
+as `stalled` at the threshold. There is no heartbeat protocol.
 
 **Single-cycle by design, not one long-lived loop:** `gsd_stall_watch` sleeps
 for exactly one `PLANNER_STALL_INTERVAL_MINUTES` and returns — it does NOT

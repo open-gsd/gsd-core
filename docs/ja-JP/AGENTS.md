@@ -411,7 +411,7 @@ GSD はマルチエージェントアーキテクチャを採用しており、�
 | planner | ✓ | ✓ | | ✓ | ✓ | ✓ | | ✓ | ✓ |
 | roadmapper | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
 | executor | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | | |
-| plan-checker | ✓ | | | ✓ | ✓ | ✓ | | | |
+| plan-checker | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
 | integration-checker | ✓ | | | ✓ | ✓ | ✓ | | | |
 | ui-checker | ✓ | | | ✓ | ✓ | ✓ | | | |
 | verifier | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
