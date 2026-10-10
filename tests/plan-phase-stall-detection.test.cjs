@@ -30,7 +30,7 @@
  *
  * Seam: gsd-core/workflows/plan-phase.md,
  *       gsd-core/workflows/plan-phase/steps/stall-detection-helpers.md,
- *       src/config.cts (SCHEMA_DEFAULTS),
+ *       src/config-schema-defaults.cts (SCHEMA_DEFAULTS),
  *       gsd-core/bin/shared/config-schema.manifest.json, docs/CONFIGURATION.md
  */
 

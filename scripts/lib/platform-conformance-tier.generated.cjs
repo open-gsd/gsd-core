@@ -68,6 +68,7 @@ module.exports = {
   "tests/config-get-default.test.cjs",
   "tests/config-loader.test.cjs",
   "tests/config-schema.property.test.cjs",
+  "tests/config-value-resolver.test.cjs",
   "tests/config.platform.test.cjs",
   "tests/configured-entrypoint-validation.test.cjs",
   "tests/context-drift.test.cjs",

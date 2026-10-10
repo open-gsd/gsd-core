@@ -550,8 +550,10 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `commands.cjs` | Misc CLI commands (slug, timestamp, todos, scaffolding, stats) |
 | `complexity-trigger.cjs` | Pure leaf for the complexity-triggered refactor capability — analyzer, evaluator, and baseline persistence; wrapped by `refactor-trigger-command-router.cjs` (#1953) |
 | `config-loader.cjs` | Project config loading — defaults merge, legacy-key migration, workstream overlay, unknown-key/profile-override validation (extracted from `core.cjs`, ADR-857) |
+| `config-schema-defaults.cjs` | Shared schema-default lookup for config-get and the per-key resolver; preserves the capability-registry fallback (#5096) |
 | `config-schema.cjs` | Single source of truth for `VALID_CONFIG_KEYS` and dynamic key patterns; imported by both the validator and the config-schema-docs parity test |
 | `config-types.cjs` | TypeScript type definitions for the `model_policy` config block — `ModelPolicyConfig`, `TierEntry`, `RuntimeTiers`; compiled from `src/config-types.cts` at publish time (ADR-457) |
+| `config-value-resolver.cjs` | Config Value Resolution Module — read-only per-key resolution with family-specific precedence and producing-layer provenance (#5096) |
 | `health-diagnostic-rules/config-validation.cjs` | Health-diagnostic rules: config.json validation checks (W003, W004, W022, E005, W008, W012-W016), reading only `snapshot.config`, ported behavior-preserving from `cmdValidateHealth` (ADR-3180 §8.2/§8.3/§8.5, Phase 11, #3309) |
 | `config.cjs` | `config.json` read/write, section initialization; imports validator from `config-schema.cjs` |
 | `configuration.cjs` | Configuration Module — legacy-key normalization, defaults merge, and explicit on-disk migration; pure normalization primitives consumed by `config-loader.cjs` and `config-schema.cjs` (loadConfig extracted to config-loader per ADR-857 #885) |
@@ -718,6 +720,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `section-manifest.cjs` | Pure `when=` evaluator over `InvocationFacts` (ADR-1671, epic #1671 Phase 5, #2932) — `selectSections` partitions a document-order list of parsed `gsd:section` sections into `included`/`excluded` id arrays for one concrete invocation, via `WHEN_PREDICATES`, a total lookup (never a parser) over the frozen `WHEN_VOCABULARY` imported unchanged from `workflow-fragments.cjs`; an unrecognized `when=` value fails closed (`REASON.UNKNOWN_WHEN`), and a coordinated-change guard at module load throws if a vocabulary entry has no predicate. Compiled from `src/section-manifest.cts` |
 | `semver-compare.cjs` | Shared semver comparison policy helpers (`compareSemverCore`, stable-triplet validation, normalized tuple parsing) consumed by update-check hooks, statusline dev-install detection, and changeset extract range logic (#10) |
 | `security.cjs` | Path traversal prevention, prompt injection detection, safe JSON/shell helpers |
+| `settings-jsonc.cjs` | JSONC parser shared by worktree-base-ref and family-B config resolution; the installer retains its separate parser (#5096) |
 | `shell-command-projection.cjs` | Runtime-aware shell command projection for managed hook serialization: decides PowerShell call-operator usage by runtime/platform and normalizes Windows script path tokens |
 | `smart-entry.cjs` | Classifies workflow state into the enumerated smart-entry situations and their next actions (ADR-1787) |
 | `spec-section.cjs` | SPEC section-status helper (compiled from `src/spec-section.cts`, gitignored) — the single source of truth for the canonical SPEC headings (suffix-tolerant) and markdown-table row counting; `specSectionStatus`/`countSectionDataRows` decide per-section "supplied" for plan-phase's spec-less probe fallback, replacing ad-hoc awk (contract pinned by `tests/spec-section.test.cjs`) |

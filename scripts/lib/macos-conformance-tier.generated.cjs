@@ -54,6 +54,7 @@ module.exports = {
   "tests/completion-ratio-scope-withholding.test.cjs",
   "tests/config-loader.test.cjs",
   "tests/config-schema.property.test.cjs",
+  "tests/config-value-resolver.test.cjs",
   "tests/config.test.cjs",
   "tests/configured-entrypoint-validation.test.cjs",
   "tests/contributor-standards.test.cjs",

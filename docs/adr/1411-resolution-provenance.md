@@ -327,7 +327,8 @@ found by path-construction search over `src/`, `bin/`, `hooks/`, `scripts/` at `
 | Site | What it re-implements |
 |---|---|
 | `src/capability-activation.cts` `resolveConfigKey` | A full four-level walk (loadConfig result → workstream file → root file → schema default) returning `{found, value}` with **no layer**. The closest thing to the epic's owner that already exists, and the reason the owner must absorb these rather than become another walk beside them |
-| `src/config.cts` `resolveFromRootConfig` + `resolveSchemaDefault` | `cmdConfigGet`'s own workstream→root→schema cascade (#2702, #2256) |
+| `src/config.cts` `resolveFromRootConfig` | `cmdConfigGet`'s own workstream→root inheritance rung (#2702, #2256) |
+| `src/config-schema-defaults.cts` `resolveSchemaDefault` | `cmdConfigGet`'s schema-default fallback, extracted from `src/config.cts` by C1 (#5096) and shared with the resolver |
 | `src/config-loader.cts` `_globalBaseCfg` (Branch D) | The 26-key `??` / `\|\|` projection of `~/.gsd/defaults.json` — #4071's site |
 | `src/config.cts` `buildNewProjectConfig` | A project-creation merge of `~/.gsd/defaults.json` |
 | `src/install-model-override-resolver.cts` | Install-time global+project merges (`model_overrides`, `agent_tools`, runtime/profile) |
