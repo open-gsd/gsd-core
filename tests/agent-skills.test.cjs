@@ -2224,3 +2224,59 @@ describe('regressions: workflows forward the started workstream to agent-skills 
     });
   });
 });
+
+describe('agent-skills on an UNKNOWN runtime id', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('config.runtime UNKNOWN, no agent_skills: an empty block', () => {
+    writeConfig(tmpDir, { runtime: 'example-host' });
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-planner'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '');
+  });
+
+  test('GSD_RUNTIME UNKNOWN, no agent_skills: an empty block', () => {
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-planner'], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir, GSD_RUNTIME: 'example-host' });
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '');
+  });
+
+  test('a project-relative skill still resolves; a global: skill is skipped with a warning', () => {
+    const skillDir = path.join(tmpDir, 'skills', 'local-skill');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Local Skill\n');
+    writeConfig(tmpDir, {
+      runtime: 'example-host',
+      agent_skills: { 'gsd-planner': ['skills/local-skill', 'global:some-skill'] },
+    });
+
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-planner'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.ok(r.ir.block.includes('skills/local-skill/SKILL.md'), `block must contain the local skill, got: ${r.ir.block}`);
+    assert.ok(!r.ir.block.includes('some-skill'), 'the global: skill must not be included');
+    assert.ok(
+      r.ir.warnings.some((w) => w.includes('does not know runtime "example-host"') && w.includes('global:some-skill')),
+      `warnings must name the UNKNOWN runtime and the skipped skill, got: ${JSON.stringify(r.ir.warnings)}`,
+    );
+  });
+
+  test('GSD_AGENTS_DIR still serves the agent payload fallback for an UNKNOWN runtime id', () => {
+    const agentsDir = path.join(tmpDir, 'host-agents');
+    fs.mkdirSync(agentsDir, { recursive: true });
+    fs.writeFileSync(path.join(agentsDir, 'gsd-planner.md'), '# planner persona\n');
+
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-planner'], tmpDir, {
+      HOME: tmpDir, USERPROFILE: tmpDir, GSD_RUNTIME: 'example-host', GSD_AGENTS_DIR: agentsDir,
+    });
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '# planner persona\n');
+  });
+});

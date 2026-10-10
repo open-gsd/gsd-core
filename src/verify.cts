@@ -2243,6 +2243,7 @@ function cmdValidateAgents(cwd: string, raw: boolean): void {
     {
       agents_dir: agentStatus.agents_dir,
       agents_found: agentStatus.agents_installed,
+      ...(agentStatus.reason ? { agents_found_reason: agentStatus.reason } : {}),
       installed: agentStatus.installed_agents,
       missing: agentStatus.missing_agents,
       incomplete: agentStatus.incomplete_agents,

@@ -69,6 +69,8 @@ Proceeding without research subagents — roadmap will be generated inline.
 ```
 Skip Steps 6–7 (parallel research and synthesis) and proceed directly to roadmap creation in Step 8.
 
+**If `agents_installed` is null:** GSD could not check agents for this runtime (`agents_installed_reason`). Do not show the warning above; continue with Steps 6–7.
+
 **Detect runtime and set instruction file name:**
 
 Derive `RUNTIME` from the invoking prompt's `execution_context` path:

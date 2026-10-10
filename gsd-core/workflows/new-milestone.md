@@ -325,6 +325,8 @@ Proceeding without research subagents — roadmap will be generated inline.
 ```
 Skip the parallel research spawn step and generate the roadmap inline.
 
+**If `agents_installed` is null:** GSD could not check agents for this runtime (`agents_installed_reason`). Do not show the warning above; continue with the parallel research spawn step.
+
 <!-- gsd:section id="reset-phase-safety" when="flag:--reset-phase-numbers" -->
 If `section_manifest` is `null` or `"reset-phase-safety"` is in its `included` list: read and execute `gsd-core/workflows/new-milestone/steps/reset-phase-safety.md`. Otherwise skip — do not read the file.
 <!-- /gsd:section -->

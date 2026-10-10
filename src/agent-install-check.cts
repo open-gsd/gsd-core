@@ -15,7 +15,7 @@ import path from 'node:path';
 import modelProfiles = require('./model-profiles.cjs');
 const { MODEL_PROFILES } = modelProfiles;
 import { getGlobalConfigDir } from './runtime-homes.cjs';
-import { getDirName, hostBehaviorsFor, NO_LOCAL_CONFIG_DIR_SENTINEL } from './runtime-name-policy.cjs';
+import { getDirName, hostBehaviorsFor, NO_LOCAL_CONFIG_DIR_SENTINEL, UnknownRuntimeError } from './runtime-name-policy.cjs';
 // #3242 — model-catalog is a genuine leaf (only node:path + its own JSON), which is
 // exactly why Phase 1 (#3241) moved isAnthropicFlavoredModel there: this module can
 // consume it without dragging model-resolver's config-loader chain into a
@@ -42,13 +42,21 @@ import { isAnthropicFlavoredModel } from './model-catalog.cjs';
 // added.
 import { stripBOM, scanTomlLines, deriveCodexSandboxMode, extractToolsValue } from './codex-agent-toml.cjs';
 
+const AGENTS_INSTALLED_REASON = Object.freeze({
+  UNKNOWN_RUNTIME: 'unknown_runtime',
+});
+
+type AgentsInstalledReason = (typeof AGENTS_INSTALLED_REASON)[keyof typeof AGENTS_INSTALLED_REASON];
+
 interface AgentsInstalledResult {
-  agents_installed: boolean;
+  /** `null` when the check could not run; `reason` then says why. */
+  agents_installed: boolean | null;
   missing_agents: string[];
   installed_agents: string[];
   incomplete_agents: string[];
   agents_dir: string;
   agent_runtime: string;
+  reason?: AgentsInstalledReason;
 }
 
 /**
@@ -194,8 +202,23 @@ function getAgentsDir(runtime?: string, projectRoot?: string): string {
  */
 function checkAgentsInstalled(runtime?: string, projectRoot?: string): AgentsInstalledResult {
   const resolvedRuntime = runtime ?? (process.env['GSD_RUNTIME'] || 'claude');
-  const agentsDir = getAgentsDir(resolvedRuntime, projectRoot);
   const expectedAgents = Object.keys(MODEL_PROFILES);
+  let agentsDir: string;
+  try {
+    agentsDir = getAgentsDir(resolvedRuntime, projectRoot);
+  } catch (err) {
+    // An UNKNOWN runtime id has no agents dir GSD can locate; report, don't throw.
+    if (!(err instanceof UnknownRuntimeError)) throw err;
+    return {
+      agents_installed: null,
+      missing_agents: [],
+      installed_agents: [],
+      incomplete_agents: [],
+      agents_dir: '',
+      agent_runtime: resolvedRuntime,
+      reason: AGENTS_INSTALLED_REASON.UNKNOWN_RUNTIME,
+    };
+  }
   const installed: string[] = [];
   const missing: string[] = [];
 
@@ -609,5 +632,6 @@ export = {
   checkCodexModelPosture,
   checkCodexSandboxPosture,
   POSTURE_REASON,
+  AGENTS_INSTALLED_REASON,
   resolveAgentHint,
 };

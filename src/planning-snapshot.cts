@@ -518,15 +518,17 @@ function buildConfigField(cwd: string): { value: Record<string, unknown> | null;
  * its `_slashRuntime`). Not `.planning/`-sourced (see design doc). `scope`
  * is `COMPLETE` whenever the scan itself ran, even when it reports missing
  * or incomplete agents — that is a real answer, not a non-answer.
- * `UNREADABLE` only if the scan itself throws, mirroring cmdValidateHealth's
- * own try/catch around this same call (there, the exception is swallowed as
- * "non-blocking"; here it is surfaced via `scope` instead of silently
- * dropped, since a snapshot field has nowhere else to carry that fact).
+ * `UNREADABLE` if the scan throws or reports `agents_installed: null`. A throw
+ * mirrors cmdValidateHealth's own try/catch around this same call (there, the
+ * exception is swallowed as "non-blocking"; here it is surfaced via `scope`
+ * instead of silently dropped, since a snapshot field has nowhere else to
+ * carry that fact).
  */
 function buildAgentInstallField(cwd: string): { value: ReturnType<typeof checkAgentsInstalled>; scope: Scope } {
   const runtime = resolveRuntime(cwd);
   try {
-    return { value: checkAgentsInstalled(runtime, cwd), scope: SCOPE.COMPLETE };
+    const value = checkAgentsInstalled(runtime, cwd);
+    return { value, scope: value.agents_installed === null ? SCOPE.UNREADABLE : SCOPE.COMPLETE };
   } catch {
     return {
       value: {
