@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "query",
+    "check.decision-coverage-verify",
+    ".planning/phases/01-decisions/CONTEXT.md",
+    ".planning/phases/01-decisions/CONTEXT.md"
+  ],
+  "fixture": "dc",
+  "stdout": "{\n  \"skipped\": false,\n  \"blocking\": false,\n  \"reason\": \"phase path is not a directory\",\n  \"total\": null,\n  \"honored\": null,\n  \"not_honored\": [],\n  \"message\": \"Decision coverage verify (warning): the phase directory \\\".planning/phases/01-decisions/CONTEXT.md\\\" is a file, not a directory, so no plans or summaries were scanned. Pass the phase DIRECTORY (e.g. .planning/phases/01-slug), not the phase number.\"\n}",
+  "stderr": "",
+  "exitCode": 0
+}

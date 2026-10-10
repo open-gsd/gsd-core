@@ -6,7 +6,7 @@
     ".planning/phases/01-decisions/CONTEXT-unparsable.md"
   ],
   "fixture": "dc",
-  "stdout": "{\n  \"skipped\": false,\n  \"blocking\": false,\n  \"reason\": \"could-not-parse\",\n  \"total\": 0,\n  \"honored\": 0,\n  \"not_honored\": [],\n  \"message\": \"Decision coverage verify (warning): could not parse decisions — possible format mismatch. Check the formatting of the CONTEXT.md decisions block (accepted forms: `- **D-NN:** text`, `- **D4-NN:** text` (phase-prefixed), `- **D-NN — title** body`).\"\n}",
+  "stdout": "{\n  \"skipped\": false,\n  \"blocking\": false,\n  \"reason\": \"could-not-parse\",\n  \"total\": null,\n  \"honored\": null,\n  \"not_honored\": [],\n  \"message\": \"Decision coverage verify (warning): could not parse decisions — possible format mismatch. Check the formatting of the CONTEXT.md decisions block (accepted forms: `- **D-NN:** text`, `- **D4-NN:** text` (phase-prefixed), `- **D-NN — title** body`).\"\n}",
   "stderr": "",
   "exitCode": 0
 }

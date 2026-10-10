@@ -14,6 +14,7 @@ import { isDecisionCoverageGateEnabled } from './gate-config.cjs';
 import {
   decisionMentioned,
   loadPlanContents,
+  phaseDirProblem,
   loadSummaryContents,
   loadDecisionExtraction,
   readModifiedFilesContent,
@@ -80,14 +81,15 @@ export function evaluateDecisionCoverageVerify(input: { projectDir: string; args
   // Mirror could-not-parse surface for verify (non-blocking advisory WARN).
   // Fire independent of decisions.length — a parse-miss on any bullet must surface,
   // even when some decisions were partially extracted (#1365 fix-parity with plan gate).
+  // Nothing was checked, so total/honored are null, as in the plan gate (#4794).
   if (decisionOutcome === 'could-not-parse') {
     const partialParse = decisions.length > 0;
     return gateVerdict('advisory', false, {
       skipped: false,
       blocking: false,
       reason: 'could-not-parse',
-      total: decisions.length,
-      honored: 0,
+      total: null,
+      honored: null,
       not_honored: [],
       message: partialParse
         ? 'Decision coverage verify (warning): decisions could not be fully parsed — one or more ' +
@@ -101,6 +103,15 @@ export function evaluateDecisionCoverageVerify(input: { projectDir: string; args
 
   if (decisions.length === 0) {
     return gateVerdict('skip', false, { skipped: true, blocking: false, reason: 'no trackable decisions', total: 0, honored: 0, not_honored: [], message: 'No trackable decisions in CONTEXT.md.' });
+  }
+
+  // #4939: mirror the plan gate. A phase-dir argument that names no directory
+  // means no plan or summary was scanned, so no decision can be reported
+  // not-honored. Warn (verify stays non-blocking) rather than list every decision.
+  const phaseDirIssue = phaseDir ? phaseDirProblem(phaseDir) : null;
+  if (phaseDirIssue) {
+    const phaseDirResult = { skipped: false, blocking: false, reason: phaseDirIssue.reason, total: null, honored: null, not_honored: [], message: `Decision coverage verify (warning): the phase directory "${args[0]}" ${phaseDirIssue.what}, so no plans or summaries were scanned. ${phaseDirIssue.hint}` };
+    return phaseDirIssue.unreadable ? gateUnreadable(false, phaseDirResult) : gateVerdict('advisory', false, phaseDirResult);
   }
 
   // Every file the haystack is built from is typed evidence (#5170): one that exists but cannot be

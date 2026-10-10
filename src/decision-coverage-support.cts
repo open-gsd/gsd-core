@@ -22,7 +22,7 @@ import type { Decision } from './decisions.cjs';
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 import { stripFencedCode, collectSections, extractXmlTagBodies } from './markdown-sectionizer.cjs';
 import { tryWithinRoot, PathAcceptance } from './security.cjs';
-import { readDirEvidence, readTextEvidence, evidenceFound } from './gate-evidence.cjs';
+import { readDirEvidence, readTextEvidence, statEvidence, evidenceFound } from './gate-evidence.cjs';
 import type { Evidence, Observed } from './gate-evidence.cjs';
 import { resolveEvaluationScope } from './gate-evaluation-scope.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -62,6 +62,22 @@ export function decisionMentioned(haystack: string | null | undefined, decision:
 }
 
 // ─── File reading ─────────────────────────────────────────────────────────────
+
+// #4939: loadPlanContents answers no files for a path that is not there, and that reads
+// as "no plan cites anything" — so a phase-dir argument that names no directory
+// (the phase NUMBER in the phase-dir slot) must be told apart BEFORE the scan.
+// Answers null for a directory, else what is wrong with the path and what to do
+// about it. Like the plan gate's contextKind (#4794), the message names the real
+// stat outcome: a permission or I/O failure (EACCES, ELOOP, EIO) is reported as
+// unreadable, not as a missing directory. Only ENOENT/ENOTDIR mean the path is not there.
+export function phaseDirProblem(dirPath: string): { reason: string; what: string; hint: string; unreadable: boolean } | null {
+  const passDirectory = 'Pass the phase DIRECTORY (e.g. .planning/phases/01-slug), not the phase number.';
+  const st = statEvidence(dirPath);
+  if (st.kind === 'none') return { reason: 'phase directory not found', what: 'does not exist', hint: passDirectory, unreadable: false };
+  if (st.kind === 'unreadable') return { reason: 'phase directory unreadable', what: `could not be read (${st.reason})`, hint: 'Check that the directory is readable.', unreadable: true };
+  if (st.value.isDirectory()) return null;
+  return { reason: 'phase path is not a directory', what: st.value.isFile() ? 'is a file, not a directory' : 'is not a directory', hint: passDirectory, unreadable: false };
+}
 
 /**
  * The contents of the phase files `pick` selects (#5170, ADR-5057 §4). An ABSENT phase directory

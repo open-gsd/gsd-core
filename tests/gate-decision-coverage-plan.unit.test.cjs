@@ -354,6 +354,79 @@ const CASES = [
       };
     },
   },
+  {
+    // #4939: a phase-dir argument that names no directory (the phase NUMBER in the phase-dir slot) used to
+    // scan nothing and answer a measured-looking `covered: 0`. It is a caller error: fail closed, null totals.
+    id: 'U1o',
+    title: 'phase dir that does not exist -> block:true, reason "phase directory not found", null totals (#4939)',
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-CONTEXT.md', ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '</decisions>', ''].join('\n'));
+    },
+    args() { return ['1', '--context', '.planning/phases/01-x/01-CONTEXT.md']; },
+    outcome: 'block',
+    block: true,
+    expected() {
+      return {
+        passed: false,
+        skipped: false,
+        reason: 'phase directory not found',
+        total: null,
+        covered: null,
+        message: 'Decision coverage gate: the phase directory "1" does not exist, so no plans were scanned. Pass the phase DIRECTORY (e.g. .planning/phases/01-slug), not the phase number.',
+      };
+    },
+  },
+  {
+    id: 'U1p',
+    title: 'a FILE in the phase-dir slot -> block:true, reason "phase path is not a directory", null totals (#4939)',
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-CONTEXT.md', ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '</decisions>', ''].join('\n'));
+    },
+    args() { return ['.planning/phases/01-x/01-CONTEXT.md', '--context', '.planning/phases/01-x/01-CONTEXT.md']; },
+    outcome: 'block',
+    block: true,
+    expected() {
+      return {
+        passed: false,
+        skipped: false,
+        reason: 'phase path is not a directory',
+        total: null,
+        covered: null,
+        message: 'Decision coverage gate: the phase directory ".planning/phases/01-x/01-CONTEXT.md" is a file, not a directory, so no plans were scanned. Pass the phase DIRECTORY (e.g. .planning/phases/01-slug), not the phase number.',
+      };
+    },
+  },
+  {
+    // A stat failure other than ENOENT/ENOTDIR is not "the directory is missing": the message must not say so.
+    id: 'U1q',
+    title: 'phase dir whose stat fails with EACCES -> unreadable outcome, reason "phase directory unreadable" (stat failure injected, #4939)',
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-CONTEXT.md', ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '</decisions>', ''].join('\n'));
+      const real = fs.statSync;
+      fs.statSync = function (p, ...rest) {
+        if (String(p).endsWith('01-x')) {
+          const err = new Error('EACCES: simulated stat failure');
+          err.code = 'EACCES';
+          throw err;
+        }
+        return real.call(fs, p, ...rest);
+      };
+      return function restore() { fs.statSync = real; };
+    },
+    args() { return ['.planning/phases/01-x', '--context', '.planning/phases/01-x/01-CONTEXT.md']; },
+    outcome: 'unreadable',
+    block: true,
+    expected() {
+      return {
+        passed: false,
+        skipped: false,
+        reason: 'phase directory unreadable',
+        total: null,
+        covered: null,
+        message: 'Decision coverage gate: the phase directory ".planning/phases/01-x" could not be read (EACCES), so no plans were scanned. Check that the directory is readable.',
+      };
+    },
+  },
 ];
 
 function run(c) {

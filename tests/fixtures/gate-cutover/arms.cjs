@@ -539,6 +539,9 @@ arm('E1', 'decision-coverage-plan-no-trackable', 'dc', 'decision-coverage-plan',
 arm('E1', 'decision-coverage-plan-uncovered', 'dc', 'decision-coverage-plan', [P, `${P}/CONTEXT.md`]);
 arm('E1', 'decision-coverage-plan-all-covered', 'dc', 'decision-coverage-plan', [P, `${P}/CONTEXT-allcovered.md`]);
 arm('E1', 'decision-coverage-plan-context-flag', 'dc', 'decision-coverage-plan', [P, '--context', `${P}/CONTEXT.md`]);
+// #4939: a phase-dir argument that names no directory (the phase NUMBER, or a file) is a caller error, not a measured zero.
+arm('E1', 'decision-coverage-plan-phase-dir-not-found', 'dc', 'decision-coverage-plan', ['1', `${P}/CONTEXT.md`]);
+arm('E1', 'decision-coverage-plan-phase-dir-is-file', 'dc', 'decision-coverage-plan', [`${P}/CONTEXT.md`, `${P}/CONTEXT.md`]);
 arm('E1', 'decision-coverage-plan-path-escape', 'dc', 'decision-coverage-plan', ['../../outside', `${P}/CONTEXT.md`]);
 arm('E1', 'decision-coverage-plan-dotted-verb', 'dc', 'decision.coverage.plan', [P, `${P}/CONTEXT.md`]);
 
@@ -550,6 +553,8 @@ arm('E2', 'decision-coverage-verify-could-not-parse', 'dc', 'decision-coverage-v
 arm('E2', 'decision-coverage-verify-could-not-parse-partial', 'dc', 'decision-coverage-verify', [P, `${P}/CONTEXT-partial.md`]);
 arm('E2', 'decision-coverage-verify-no-trackable', 'dc', 'decision-coverage-verify', [P, `${P}/CONTEXT-empty.md`]);
 arm('E2', 'decision-coverage-verify-final', 'dc', 'decision-coverage-verify', [P, `${P}/CONTEXT-verify.md`]);
+arm('E2', 'decision-coverage-verify-phase-dir-not-found', 'dc', 'decision-coverage-verify', ['1', `${P}/CONTEXT.md`]);
+arm('E2', 'decision-coverage-verify-phase-dir-is-file', 'dc', 'decision-coverage-verify', [`${P}/CONTEXT.md`, `${P}/CONTEXT.md`]);
 arm('E2', 'decision-coverage-verify-path-escape', 'dc', 'decision-coverage-verify', ['../../outside', `${P}/CONTEXT.md`]);
 
 // R4 readModifiedFilesContent caps (through decision-coverage-verify)
