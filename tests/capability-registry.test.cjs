@@ -5294,13 +5294,21 @@ describe('#1196 — discuss loop wiring + wired-point guard', () => {
       );
 
       const workflow = fs.readFileSync(path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase.md'), 'utf8');
-      const wavePre = workflow.indexOf('WAVE_PRE_HOOKS_JSON=$(gsd_run loop render-hooks execute:wave:pre --raw)');
+      // #4030: anchor on the call-site prefix, not the full literal — --phase/GSD_WS
+      // args now follow --raw, tolerating that legitimate CLI extension.
+      const wavePre = workflow.indexOf('WAVE_PRE_HOOKS_JSON=$(gsd_run loop render-hooks execute:wave:pre');
       const stepDispatch = workflow.indexOf('**Step dispatch:**', wavePre);
       const executorSpawn = workflow.indexOf('3. **Spawn executor agents:**', wavePre);
       assert.ok(
         wavePre !== -1 && stepDispatch > wavePre && executorSpawn > stepDispatch,
         'wave-pre step dispatch must occur after hook rendering and before executor spawning',
       );
+      // #4030: the call site must actually pass --raw and --phase, not merely start
+      // with the anchored prefix above (which alone would still match a --raw-less
+      // or --phase-less call).
+      const wavePreCall = workflow.slice(wavePre, workflow.indexOf(')', wavePre) + 1);
+      assert.match(wavePreCall, /--raw\b/, 'execute:wave:pre call must pass --raw');
+      assert.match(wavePreCall, /--phase "\$\{PHASE_NUMBER\}"/, 'execute:wave:pre call must pass --phase "${PHASE_NUMBER}"');
 
       const stepContract = workflow.slice(stepDispatch, executorSpawn);
       assert.match(stepContract, /kind == "step"/, 'wave-pre must select step hooks');

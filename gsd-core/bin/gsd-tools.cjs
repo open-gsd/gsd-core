@@ -225,7 +225,9 @@
  *                                        [--config-dir <path>] [--runtime <r>] [--active-cap <capId>]
  *                                        [--after-fingerprint <phaseDir>] (#5105: skip verify:post
  *                                        steps whose declared artifact already exists in phaseDir)
- *                                        Returns JSON envelope { point, activeHooks, rendered }
+ *                                        [--phase <token>] [--phase-dir <dir>] (#4030: add context:{phase,phaseDir};
+ *                                        --phase-dir only cross-checks --phase)
+ *                                        Returns JSON envelope { point, activeHooks, rendered[, context] }
  *                                        Valid points: discuss:pre/post, plan:pre/post,
  *                                        execute:pre/wave:pre/wave:post/post, verify:pre/post, ship:pre/post
  *                                        --runtime: override the auto-detected runtime (#2003) so the config
@@ -3201,6 +3203,17 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           commands.cmdScaffold(cwd, scaffoldType, scaffoldOptions, raw);
   }
 
+  // #4030: --phase/--phase-dir, both forms. An explicit empty value returns ''
+  // (the resolver warns); a missing one returns undefined (same as omitting the
+  // flag). Never errors: phase-scoped hooks degrade, they do not fail.
+  function readOptionalFlag(args, flag) {
+    const eq = args.find(arg => arg.startsWith(`${flag}=`));
+    if (eq) return eq.slice(flag.length + 1).trim();
+    const idx = args.indexOf(flag);
+    const value = idx === -1 ? undefined : args[idx + 1];
+    return value === undefined || value.startsWith('--') ? undefined : value.trim();
+  }
+
   function routeLoop({ args, cwd, raw, error }) {
     // loop render-hooks <point>
           const loopSubcommand = args[1];
@@ -3273,6 +3286,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
               activeCap: loopActiveCap,
               runtime: loopRuntime,
               afterFingerprint: loopAfterFingerprint,
+              phase: readOptionalFlag(args, '--phase'),
+              phaseDir: readOptionalFlag(args, '--phase-dir'),
             });
           } else {
             error(
