@@ -27,7 +27,7 @@ import modelProfiles = require('./model-profiles.cjs');
 const { VALID_PROFILES, getAgentToModelMapForProfile, formatAgentToModelMapAsTable } = modelProfiles;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configSchema = require('./config-schema.cjs');
-const { VALID_CONFIG_KEYS, isValidConfigKey, getCapabilityConfigSchema } = configSchema;
+const { VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS, isValidConfigKey, getCapabilityConfigSchema } = configSchema;
 import { isSecretKey, maskSecret } from './secrets.cjs';
 import { normalizeConfiguredDefaultReviewers, INSTANCE_NAME_PATTERN, KNOWN_REVIEWER_SLUGS } from './review-reviewer-selection.cjs';
 import { migrateOnDisk } from './configuration.cjs';
@@ -220,6 +220,20 @@ function validateKnownConfigKeyPath(keyPath: string): void {
 }
 
 /**
+ * The key gate `config-set` and `config-new-project` share (#5268): a known
+ * misspelling gets its suggestion, and anything else outside the schema is
+ * refused with the valid-key list. One function, so the two verbs cannot
+ * disagree about which keys they accept or about the error text.
+ */
+function assertKnownConfigKey(cwd: string, kp: string): void {
+  validateKnownConfigKeyPath(kp);
+
+  if (!isValidConfigKey(kp, cwd)) {
+    error(`Unknown config key: "${kp}". Valid keys: ${[...VALID_CONFIG_KEYS].sort().join(', ')}, agent_skills.<agent-type>, features.<feature_name>, phase_commit_docs.<phase-id>`, ERROR_REASON.CONFIG_INVALID_KEY);
+  }
+}
+
+/**
  * Is `value` an acceptable `git.protected_branches` list (#3552)?
  *
  * A non-empty array whose every element is a string with non-whitespace
@@ -324,8 +338,17 @@ function validateShipPrBodySections(value: unknown): void {
  *
  * Returns a plain object — does NOT write any files.
  */
-function buildNewProjectConfig(userChoices: Record<string, unknown>): Record<string, unknown> {
+function buildNewProjectConfig(
+  userChoices: Record<string, unknown>,
+  options: { persistDefaultsMigration?: boolean } = {},
+): Record<string, unknown> {
   const choices = userChoices || {};
+  // #5268: the depth -> granularity rewrite of the user defaults file is a
+  // write, so a `--dry-run` build turns it off, and every other build holds
+  // it until the config below has validated: a refused build writes nothing.
+  // The migrated value is used for this build either way.
+  const persistDefaultsMigration = options.persistDefaultsMigration !== false;
+  let pendingDefaultsMigration: string | null = null;
   // #4976: the GSD-owned store resolves exactly as the config loader resolves
   // it (`GSD_HOME || homedir()`), so the defaults.json seeding this project is
   // the one the loader and its #3532 shadow warning read in the same run.
@@ -358,9 +381,9 @@ function buildNewProjectConfig(userChoices: Record<string, unknown>): Record<str
         const depthToGranularity: Record<string, string> = { quick: 'coarse', standard: 'standard', comprehensive: 'fine' };
         userDefaults['granularity'] = depthToGranularity[userDefaults['depth'] as string] || userDefaults['depth'];
         delete userDefaults['depth'];
-        try {
-          platformWriteSync(globalDefaultsPath, JSON.stringify(userDefaults, null, 2));
-        } catch { /* intentionally empty */ }
+        if (persistDefaultsMigration) {
+          pendingDefaultsMigration = JSON.stringify(userDefaults, null, 2);
+        }
       }
     }
   } catch {
@@ -486,7 +509,97 @@ function buildNewProjectConfig(userChoices: Record<string, unknown>): Record<str
   };
 
   validateShipPrBodySections((config['ship'] as Record<string, unknown>)['pr_body_sections']);
+  if (pendingDefaultsMigration !== null) {
+    try {
+      platformWriteSync(globalDefaultsPath, pendingDefaultsMigration);
+    } catch { /* intentionally empty */ }
+  }
   return config;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Does any schema key live under `keyPath`? True for a section (`workflow`)
+ * and for the settings that are also parents
+ * (`review.max_prompt_tokens_per_reviewer` and its per-reviewer keys).
+ */
+function hasChildConfigKeys(cwd: string, keyPath: string): boolean {
+  const childPrefix = `${keyPath}.`;
+  for (const known of VALID_CONFIG_KEYS) {
+    if (known.startsWith(childPrefix)) return true;
+  }
+  return Object.keys(getCapabilityConfigSchema(cwd)).some((known) => known.startsWith(childPrefix));
+}
+
+/**
+ * Hold `config-new-project` choices to the rules `config-set` applies (#5268).
+ *
+ * Choices arrive nested (`{"workflow":{"research":true}}`) while the schema
+ * and `config-set` address dotted leaf paths (`workflow.research`), so the
+ * walk descends through section objects and checks each leaf under its dotted
+ * path: the key through `assertKnownConfigKey`, the value through
+ * `validateConfigValue`. An object whose own path is a settable key with
+ * nothing under it (`model_overrides.<agent>`) is a leaf, as it is for
+ * `config-set`.
+ *
+ * Mutates `choices` in two narrow ways: a normalizing rule's result replaces
+ * the value, and a section object with no settings in it is dropped, since it
+ * would otherwise reach the config as a key nothing validated.
+ */
+function validateNewProjectChoices(cwd: string, choices: Record<string, unknown>, prefix = ''): void {
+  for (const key of Object.keys(choices)) {
+    const kp = prefix ? `${prefix}.${key}` : key;
+
+    // An empty key names no setting. Refused here because an empty section
+    // name would otherwise be walked as if its contents sat one level up.
+    if (key === '') assertKnownConfigKey(cwd, kp);
+
+    // A key is one path segment. A dot inside it spells a deeper path, which
+    // would pass the key gate while the merge wrote it as one literal key no
+    // reader resolves. The exception is a dot inside an id: one dynamic key
+    // family admits both the path cut at the dot and the whole path, so the
+    // dot is part of what that family calls a single key (`phase_commit_docs`
+    // is a map keyed by phase id, and "2.1" is a phase id).
+    const dot = key.indexOf('.');
+    if (dot !== -1) {
+      const head = prefix ? `${prefix}.${key.slice(0, dot)}` : key.slice(0, dot);
+      const dotIsInsideAnId = prefix !== '' && DYNAMIC_KEY_PATTERNS.some((family) => family.test(head) && family.test(kp));
+      if (!dotIsInsideAnId) {
+        error(
+          `Invalid choice key "${key}" for config-new-project. Nest it instead of using a dotted key, e.g. {"workflow":{"research":true}}.`,
+          ERROR_REASON.CONFIG_INVALID_KEY,
+        );
+      }
+    }
+    const value = choices[key];
+
+    if (isPlainObject(value) && (!isValidConfigKey(kp, cwd) || hasChildConfigKeys(cwd, kp))) {
+      validateNewProjectChoices(cwd, value, kp);
+      // Empty as given, or emptied by the walk below it: either way it now
+      // addresses no setting, and its own name was never checked.
+      if (Object.keys(value).length === 0) delete choices[key];
+      continue;
+    }
+
+    assertKnownConfigKey(cwd, kp);
+    // `config-set <key> null` clears the key and skips its typed rules. A null
+    // choice likewise skips them and is written as null, as it always was.
+    if (value !== null) {
+      choices[key] = validateConfigValue(cwd, kp, value, typeof value === 'string' ? value : JSON.stringify(value));
+    }
+    // config-set's setter refuses these segments after the key and value
+    // rules have run (`_setNestedValue`); same refusal, same place in the order.
+    if (kp.split('.').some((segment) => segment === '__proto__' || segment === 'prototype' || segment === 'constructor')) {
+      error('Invalid config key (prototype pollution guard): ' + kp, ERROR_REASON.CONFIG_PARSE_FAILED);
+    }
+  }
+}
+
+interface ConfigNewProjectOptions {
+  dryRun?: boolean;
 }
 
 /**
@@ -496,9 +609,14 @@ function buildNewProjectConfig(userChoices: Record<string, unknown>): Record<str
  * configured during /gsd:new-project). All remaining keys are filled from
  * hardcoded defaults and optional $GSD_HOME/.gsd/defaults.json.
  *
+ * Choices are validated with `config-set`'s key and value rules before
+ * anything is written (#5268). With `dryRun`, prints the config that would be
+ * created and writes nothing.
+ *
  * Idempotent: if config.json already exists, returns { created: false }.
  */
-function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: boolean): void {
+function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: boolean, options: ConfigNewProjectOptions = {}): void {
+  const dryRun = options.dryRun === true;
   const planningBase = planningDir(cwd);
   const configPath = path.join(planningBase, 'config.json');
 
@@ -511,11 +629,34 @@ function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: 
   // Parse user choices
   let userChoices: Record<string, unknown> = {};
   if (choicesJson && choicesJson.trim() !== '') {
+    let parsedChoices: unknown;
     try {
-      userChoices = JSON.parse(choicesJson) as Record<string, unknown>;
+      parsedChoices = JSON.parse(choicesJson);
     } catch (err) {
       error('Invalid JSON for config-new-project: ' + (err as Error).message);
     }
+    // #5268: an array or a string parses as JSON and was then spread into the
+    // config as index keys.
+    if (!isPlainObject(parsedChoices)) {
+      error('Invalid choices for config-new-project: expected a JSON object of config keys.', ERROR_REASON.USAGE);
+    }
+    userChoices = parsedChoices as Record<string, unknown>;
+  }
+
+  // #5268: refuse what config-set refuses, before the first write.
+  validateNewProjectChoices(cwd, userChoices);
+
+  const config = buildNewProjectConfig(userChoices, { persistDefaultsMigration: !dryRun });
+
+  if (dryRun) {
+    // The preview is CLI output, so secret keys are masked exactly as
+    // config-set and config-get mask them. See lib/secrets.cjs.
+    const preview: Record<string, unknown> = { ...config };
+    for (const key of Object.keys(preview)) {
+      if (isSecretKey(key)) preview[key] = maskSecret(preview[key] as Parameters<typeof maskSecret>[0]);
+    }
+    output({ dry_run: true, would_create: true, path: '.planning/config.json', config: preview }, raw, 'would create (dry run)');
+    return;
   }
 
   // Ensure .planning directory exists
@@ -524,8 +665,6 @@ function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: 
   } catch (err) {
     error('Failed to create .planning directory: ' + (err as Error).message);
   }
-
-  const config = buildNewProjectConfig(userChoices);
 
   try {
     platformWriteSync(configPath, JSON.stringify(config, null, 2));
@@ -859,11 +998,7 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
   const kp = keyPath!;
   const val = value!;
 
-  validateKnownConfigKeyPath(kp);
-
-  if (!isValidConfigKey(kp, cwd)) {
-    error(`Unknown config key: "${kp}". Valid keys: ${[...VALID_CONFIG_KEYS].sort().join(', ')}, agent_skills.<agent-type>, features.<feature_name>, phase_commit_docs.<phase-id>`, ERROR_REASON.CONFIG_INVALID_KEY);
-  }
+  assertKnownConfigKey(cwd, kp);
 
   // Parse value (handle booleans, numbers, and JSON arrays/objects)
   let parsedValue: unknown = val;
@@ -917,6 +1052,58 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
     parsedValue = val;
   }
 
+  parsedValue = validateConfigValue(cwd, kp, parsedValue, val);
+
+  if (dryRun) {
+    const preview = previewConfigValue(cwd, kp, parsedValue);
+    if (isSecretKey(kp)) {
+      const masked = maskSecret(parsedValue as Parameters<typeof maskSecret>[0]);
+      const maskedPrev = preview.previousValue === undefined
+        ? undefined
+        : maskSecret(preview.previousValue as Parameters<typeof maskSecret>[0]);
+      output({ dry_run: true, would_update: true, key: kp, value: masked, previousValue: maskedPrev, masked: true }, raw, `${kp}=${masked} (dry run)`);
+      return;
+    }
+    output({ dry_run: true, would_update: true, key: kp, value: parsedValue, previousValue: preview.previousValue }, raw, `${kp}=${String(parsedValue)} (dry run)`);
+    return;
+  }
+
+  const setConfigValueResult = setConfigValue(cwd, kp, parsedValue);
+
+  // Mask secrets in both JSON and text output. The plaintext is written
+  // to config.json (that's where secrets live on disk); the CLI output
+  // must never echo it. See lib/secrets.cjs.
+  if (isSecretKey(kp)) {
+    // parsedValue is unknown at this point; maskSecret accepts MaskableValue
+    const masked = maskSecret(parsedValue as Parameters<typeof maskSecret>[0]);
+    const maskedPrev = setConfigValueResult.previousValue === undefined
+      ? undefined
+      : maskSecret(setConfigValueResult.previousValue as Parameters<typeof maskSecret>[0]);
+    const maskedResult = {
+      ...setConfigValueResult,
+      value: masked,
+      previousValue: maskedPrev,
+      masked: true,
+    };
+    output(maskedResult, raw, `${kp}=${masked}`);
+    return;
+  }
+
+  output(setConfigValueResult, raw, `${kp}=${String(parsedValue)}`);
+}
+
+/**
+ * The per-key VALUE rules, shared by `config-set` and `config-new-project`
+ * (#5268). They were inline in `cmdConfigSet`, so `config-new-project` had no
+ * way to apply them and wrote values `config-set` refuses for the same key.
+ *
+ * `parsedValue` is the typed value about to be persisted and `val` its text
+ * form, used only in error messages. Exits non-zero through `error()` on a
+ * value the key does not accept; otherwise returns the value to persist, which
+ * differs from the input only where a rule normalizes
+ * (`review.default_reviewers`).
+ */
+function validateConfigValue(cwd: string, kp: string, parsedValue: unknown, val: string): unknown {
   const VALID_CONTEXT_VALUES = ['dev', 'research', 'review'];
   if (kp === 'context') assertEnumValue(parsedValue, val, VALID_CONTEXT_VALUES, 'context value');
 
@@ -1178,42 +1365,7 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
     }
   }
 
-  if (dryRun) {
-    const preview = previewConfigValue(cwd, kp, parsedValue);
-    if (isSecretKey(kp)) {
-      const masked = maskSecret(parsedValue as Parameters<typeof maskSecret>[0]);
-      const maskedPrev = preview.previousValue === undefined
-        ? undefined
-        : maskSecret(preview.previousValue as Parameters<typeof maskSecret>[0]);
-      output({ dry_run: true, would_update: true, key: kp, value: masked, previousValue: maskedPrev, masked: true }, raw, `${kp}=${masked} (dry run)`);
-      return;
-    }
-    output({ dry_run: true, would_update: true, key: kp, value: parsedValue, previousValue: preview.previousValue }, raw, `${kp}=${String(parsedValue)} (dry run)`);
-    return;
-  }
-
-  const setConfigValueResult = setConfigValue(cwd, kp, parsedValue);
-
-  // Mask secrets in both JSON and text output. The plaintext is written
-  // to config.json (that's where secrets live on disk); the CLI output
-  // must never echo it. See lib/secrets.cjs.
-  if (isSecretKey(kp)) {
-    // parsedValue is unknown at this point; maskSecret accepts MaskableValue
-    const masked = maskSecret(parsedValue as Parameters<typeof maskSecret>[0]);
-    const maskedPrev = setConfigValueResult.previousValue === undefined
-      ? undefined
-      : maskSecret(setConfigValueResult.previousValue as Parameters<typeof maskSecret>[0]);
-    const maskedResult = {
-      ...setConfigValueResult,
-      value: masked,
-      previousValue: maskedPrev,
-      masked: true,
-    };
-    output(maskedResult, raw, `${kp}=${masked}`);
-    return;
-  }
-
-  output(setConfigValueResult, raw, `${kp}=${String(parsedValue)}`);
+  return parsedValue;
 }
 
 function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, defaultValue: unknown): void {
