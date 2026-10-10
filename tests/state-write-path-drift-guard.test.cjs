@@ -1580,9 +1580,20 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
     }
   });
 
+  // Names a generated identifier must not take: JS/TS reserved and keyword-like
+  // words (a draw of `function` or `for` would change what the fixture means),
+  // and the names the fixtures already use.
+  const RESERVED = new Set([
+    'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do', 'else',
+    'enum', 'export', 'extends', 'false', 'finally', 'for', 'function', 'if', 'import', 'in', 'instanceof',
+    'new', 'null', 'return', 'super', 'switch', 'this', 'throw', 'true', 'try', 'typeof', 'var', 'void',
+    'while', 'with', 'yield', 'await', 'async', 'static', 'let', 'of', 'undefined', 'implements',
+    'interface', 'package', 'private', 'protected', 'public', 'type', 'as', 'declare',
+    'path', 'fs', 'dir', 'content', 'statePath', 'base', 'writer', 'use', 'x', 'unrelated', 'doWork',
+  ]);
+
   test('property: a write through a renamed variable is reported for STATE.md and not for another file', () => {
     const fc = require('./helpers/fast-check-setup.cjs');
-    const RESERVED = new Set(['const', 'let', 'var', 'for', 'of', 'if', 'do', 'in', 'new', 'path', 'fs', 'dir', 'content', 'statePath', 'base']);
     const ident = fc.stringMatching(/^[a-z][a-zA-Z0-9]{0,7}$/).filter((s) => !RESERVED.has(s));
     const fileName = fc.constantFrom('ROADMAP.md', 'PLAN.md', 'STATE.json', 'notes.md');
     const filler = fc.array(fc.constantFrom('  const unrelated = 1;', '', '  // a comment', '  doWork();'), { maxLength: 4 });
@@ -1604,6 +1615,48 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
         const hit = findRawStateWrites(OTHER_FILE, build('STATE.md'));
         return hit.length === 1 && hit[0].line === writeLine && findRawStateWrites(OTHER_FILE, build(other)).length === 0;
       }),
+    );
+  });
+
+  test('property: a write whose target can be STATE.md is reported through typed, let/var, chained and shadowed declarations', () => {
+    // Oracle, from the spec rather than the resolver: a write whose target can
+    // be STATE.md must be reported, at its own line; a write whose every
+    // possible target is a known other file must not be. The fixture binds a
+    // chain of 1..MAX_TARGET_RESOLUTION_HOPS declarations (within the bound)
+    // ending in path.join(<dir>, '<file>'). With `shadow`, a closed block before
+    // the write redeclares the target as ROADMAP.md: out of scope at the write
+    // for `const`/`let`, a possible reassignment for `var`. Either way the
+    // target can still be the chain's value, so STATE.md must still report.
+    const fc = require('./helpers/fast-check-setup.cjs');
+    const ident = fc.stringMatching(/^[a-z][a-zA-Z0-9]{0,7}$/).filter((s) => !RESERVED.has(s));
+    const keyword = fc.constantFrom('const', 'let', 'var');
+    const annotation = fc.constantFrom('', ': string', ': string | undefined', ': PathLike', ': Readonly<string>');
+    const depth = fc.integer({ min: 1, max: MAX_TARGET_RESOLUTION_HOPS });
+    const dirExpr = fc.constantFrom('dir', 'base', 'path.dirname(statePath)');
+    const otherFile = fc.constantFrom('ROADMAP.md', 'PLAN.md', 'STATE.json', 'notes.md');
+    const filler = fc.array(fc.constantFrom('  const unrelated = 1;', '', '  // a comment', '  doWork();'), { maxLength: 3 });
+    fc.assert(
+      fc.property(
+        fc.record({ name: ident, kw: keyword, ann: annotation, depth, d: dirExpr, other: otherFile, fill: filler, shadow: fc.boolean(), wrapped: fc.boolean(), crlf: fc.boolean() }),
+        ({ name, kw, ann, depth: n, d, other, fill, shadow, wrapped, crlf }) => {
+          const v = (k) => `${name}_${k}`;
+          const build = (file) => {
+            const out = ['function writer(dir, statePath, content, x) {', '  const base = path.dirname(statePath);', ...fill];
+            out.push(`  ${kw} ${v(0)}${ann} = path.join(${d}, '${file}');`);
+            for (let k = 1; k < n; k++) out.push(`  ${kw} ${v(k)}${ann} = ${v(k - 1)};`);
+            const target = v(n - 1);
+            if (shadow) out.push('  if (x) {', `    ${kw} ${target}${ann} = path.join(dir, 'ROADMAP.md');`, `    use(${target});`, '  }');
+            const writeLine = out.length + 1;
+            if (wrapped) out.push('  fs.writeFileSync(', `    ${target},`, '    content);');
+            else out.push(`  fs.writeFileSync(${target}, content);`);
+            out.push('}');
+            return { text: out.join(crlf ? '\r\n' : '\n'), writeLine };
+          };
+          const hit = build('STATE.md');
+          const found = findRawStateWrites(OTHER_FILE, hit.text);
+          return found.length === 1 && found[0].line === hit.writeLine && findRawStateWrites(OTHER_FILE, build(other).text).length === 0;
+        },
+      ),
     );
   });
 
