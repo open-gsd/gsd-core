@@ -28,7 +28,7 @@ const { INSTALL_TIMEOUT_MS, FIXTURE_HOOK_TIMEOUT_SECONDS } = require('./helpers/
 // (120000ms), so kept as its own constant rather than raised to that bound.
 const SCOPED_INSTALL_TIMEOUT_MS = 60_000;
 
-const { createTempDir, cleanup, mockPartialWriteThenThrow } = require('./helpers.cjs');
+const { createTempDir, cleanup, mockPartialWriteThenThrow, installSpawnEnv } = require('./helpers.cjs');
 const {
   loadSkillsManifest,
   resolveProfile,
@@ -2137,6 +2137,146 @@ describe('#1874 F6 adjacent: malformed settings.local.json does not crash the in
       malformedLocal,
       'the unparseable file must be left intact'
     );
+  });
+});
+
+// ─── #5037: a symlinked settings.json is never replaced with a plain file ───
+// A dotfiles setup links settings.json to a file kept elsewhere. Every install
+// used to replace that link with a plain file and leave the target stale. Both
+// installer writes of the file, the primary settings write and the #338
+// local-install migration, must refuse the link without GSD_ALLOW_SYMLINKED_DEST
+// and write through to its target with it.
+
+describe('#5037: the installer never replaces a symlinked settings.json', () => {
+  const USER_SETTINGS = { env: { MY_TOKEN: 'keep-me' } };
+
+  // The settings writer's own refusal. Exit code 1 and an untouched link alone
+  // would also hold for an install that failed earlier for an unrelated reason,
+  // so the refusal cases require this message, which also names the opt-in.
+  const SETTINGS_SYMLINK_REFUSAL =
+    /writeSettings: settings file "[^"]*settings\.json" is a symlink the install root "[^"]*" does not trust[^\n]*re-run with GSD_ALLOW_SYMLINKED_DEST=1/;
+
+  function runInstaller(root, args, { optIn }) {
+    const env = installSpawnEnv({
+      HOME: root,
+      USERPROFILE: root,
+      ...(optIn ? { GSD_ALLOW_SYMLINKED_DEST: '1' } : {}),
+    });
+    delete env.GSD_TEST_MODE;
+    return runNode([INSTALL_SCRIPT, ...args], { cwd: root, env, timeoutMs: SCOPED_INSTALL_TIMEOUT_MS });
+  }
+
+  // Writes `content` to <root>/dotfiles/settings.json and links `linkPath` to it.
+  // Returns null when this platform or account cannot create symlinks.
+  function linkSettings(root, linkPath, content) {
+    const targetPath = path.join(root, 'dotfiles', 'settings.json');
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+    fs.writeFileSync(targetPath, content);
+    try {
+      fs.symlinkSync(targetPath, linkPath, 'file');
+    } catch {
+      return null;
+    }
+    return targetPath;
+  }
+
+  function hasGsdCheckUpdateHook(settings) {
+    const sessionStart = (settings.hooks && settings.hooks.SessionStart) || [];
+    return sessionStart.some(
+      entry => entry && Array.isArray(entry.hooks) &&
+        entry.hooks.some(h => h && typeof h.command === 'string' && h.command.includes('gsd-check-update'))
+    );
+  }
+
+  describe('primary settings write (global install)', () => {
+    for (const optIn of [false, true]) {
+      test(optIn
+        ? 'with GSD_ALLOW_SYMLINKED_DEST=1 the install writes through and the link survives'
+        : 'without GSD_ALLOW_SYMLINKED_DEST the install refuses and leaves the link and its target unchanged', (t) => {
+        const root = createTempDir('gsd-5037-global-');
+        t.after(() => cleanup(root));
+        const claudeDir = path.join(root, '.claude');
+        const settingsPath = path.join(claudeDir, 'settings.json');
+        const before = JSON.stringify(USER_SETTINGS, null, 2) + '\n';
+        const targetPath = linkSettings(root, settingsPath, before);
+        if (!targetPath) {
+          t.skip('symlink creation unsupported on this platform/privilege');
+          return;
+        }
+
+        const result = runInstaller(root, ['--claude', '--global', '--config-dir', claudeDir], { optIn });
+
+        assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+        assert.strictEqual(fs.readlinkSync(settingsPath), targetPath, 'the link must still point at the same target');
+        if (optIn) {
+          assert.strictEqual(result.exitCode, 0, `installer exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`);
+          const after = JSON.parse(fs.readFileSync(targetPath, 'utf8'));
+          assert.deepStrictEqual(after.env, USER_SETTINGS.env, 'user settings must survive the write-through');
+          assert.ok(hasGsdCheckUpdateHook(after), 'GSD hooks must land in the link target');
+        } else {
+          // 1, not merely non-zero: a timed-out or killed installer reports null.
+          assert.strictEqual(result.exitCode, 1,
+            `a refused settings write must fail the install\n${result.stdout}\n${result.stderr}`);
+          assert.match(result.stderr, SETTINGS_SYMLINK_REFUSAL,
+            'the install must fail on the settings symlink refusal, not on some earlier error');
+          assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), before, 'the link target must be byte-for-byte unchanged');
+        }
+      });
+    }
+  });
+
+  describe('#338 migration write (local install with GSD entries in a linked settings.json)', () => {
+    for (const optIn of [false, true]) {
+      test(optIn
+        ? 'with GSD_ALLOW_SYMLINKED_DEST=1 the GSD entries move out of the link target and the link survives'
+        : 'without GSD_ALLOW_SYMLINKED_DEST the install refuses before writing either settings file', (t) => {
+        const root = createTempDir('gsd-5037-local-');
+        t.after(() => cleanup(root));
+        const claudeDir = path.join(root, '.claude');
+        const sharedSettingsPath = path.join(claudeDir, 'settings.json');
+        const sharedBefore = JSON.stringify({
+          ...USER_SETTINGS,
+          hooks: {
+            SessionStart: [
+              { hooks: [{ type: 'command', command: `${process.execPath} ${path.join(claudeDir, 'hooks', 'gsd-check-update.js')}` }] },
+            ],
+          },
+        }, null, 2) + '\n';
+        const targetPath = linkSettings(root, sharedSettingsPath, sharedBefore);
+        if (!targetPath) {
+          t.skip('symlink creation unsupported on this platform/privilege');
+          return;
+        }
+        const localSettingsPath = path.join(claudeDir, 'settings.local.json');
+        const localBefore = JSON.stringify({ permissions: { allow: ['Bash(npm test)'] } }, null, 2) + '\n';
+        fs.writeFileSync(localSettingsPath, localBefore);
+
+        const result = runInstaller(root, ['--claude', '--local'], { optIn });
+
+        assert.ok(fs.lstatSync(sharedSettingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+        assert.strictEqual(fs.readlinkSync(sharedSettingsPath), targetPath, 'the link must still point at the same target');
+        if (optIn) {
+          assert.strictEqual(result.exitCode, 0, `installer exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`);
+          const sharedAfter = JSON.parse(fs.readFileSync(targetPath, 'utf8'));
+          assert.deepStrictEqual(sharedAfter.env, USER_SETTINGS.env, 'user settings must survive in the link target');
+          assert.strictEqual(hasGsdCheckUpdateHook(sharedAfter), false, 'GSD entries must be stripped from the link target');
+          const localAfter = JSON.parse(fs.readFileSync(localSettingsPath, 'utf8'));
+          assert.ok(hasGsdCheckUpdateHook(localAfter), 'GSD entries must be relocated to settings.local.json');
+          assert.ok(localAfter.permissions.allow.includes('Bash(npm test)'),
+            'user permissions in settings.local.json must survive');
+        } else {
+          // 1, not merely non-zero: a timed-out or killed installer reports null.
+          assert.strictEqual(result.exitCode, 1,
+            `a refused settings write must fail the install\n${result.stdout}\n${result.stderr}`);
+          assert.match(result.stderr, SETTINGS_SYMLINK_REFUSAL,
+            'the install must fail on the settings symlink refusal, not on some earlier error');
+          assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), sharedBefore, 'the link target must be byte-for-byte unchanged');
+          assert.strictEqual(fs.readFileSync(localSettingsPath, 'utf8'), localBefore,
+            'settings.local.json must not be half-migrated when the shared write is refused');
+        }
+      });
+    }
   });
 });
 
