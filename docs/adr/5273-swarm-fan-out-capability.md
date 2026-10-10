@@ -1,7 +1,7 @@
 # ADR-5273: Swarm — read-only small-model fan-out with one synthesizer, as a default-off capability
 
 - **Status:** Proposed
-- **Date:** 2026-10-09
+- **Date:** 2026-10-09 (revised 2026-10-10: concurrency cap, token-usage provenance, implementation plan)
 - **Issue:** [#5273](https://github.com/open-gsd/gsd-core/issues/5273) (`approved-feature`, maintainer verdict Go-with-conditions; this ADR is the first deliverable the verdict requires)
 - **Amends:** [ADR-894](894-capability-declaration-format.md) — adds the `supportsFanOut` step trait and the `fanOutStrategy` feature-body field to the declaration format (in force only once this ADR is accepted)
 - **Builds on:** [ADR-857](857-capability-system.md) (loop extension points, federated config), [ADR-959](959-capability-command-contribution.md) (capability command families), [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) (`dispatch.maxConcurrency` and the `dispatch-capacity` query), [ADR-2782](2782-reviewer-lane-capability-surface.md) (the `supportsReviewerLanes` trait and its untrusted-evidence contract), [ADR-4650](4650-path-containment-and-filename-classification-seam.md) (the path-containment predicate)
@@ -60,7 +60,7 @@ The `fanOutStrategy` seam is also a candidate answer to #4747 E1 for capability-
 
 ### 2. Concurrency, agent budget and size
 
-- **Concurrency.** *C* = min(`dispatch-capacity`, `parallelization.max_concurrent_agents`). Swarm becomes the first reader of `parallelization.max_concurrent_agents`. The implementation registers the key in the central schema manifest, so `config-set` accepts it, and reads it through one accessor in core config. An absent key uses the documented default `3`. A value that is not a positive integer fails closed to single-agent with reason `invalid_max_concurrent_agents`. It is never silently clamped.
+- **Concurrency.** *C* = min(`dispatch-capacity`, `parallelization.max_concurrent_agents`, `swarm.max_workers`). Each term has one owner: the host's ceiling (`dispatch-capacity`, the seam #3777 gates on), the user's project-wide ceiling (`parallelization.max_concurrent_agents`), and swarm's own fan-out width (`swarm.max_workers`). The third term is redundant for the worker stage, which never holds more than `max_workers` dispatches, and is stated so that no reader has to derive it. Swarm becomes the first reader of `parallelization.max_concurrent_agents`. The implementation registers the key in the central schema manifest, so `config-set` accepts it, and reads it through one accessor in core config. An absent key uses the documented default `3`. A value that is not a positive integer fails closed to single-agent with reason `invalid_max_concurrent_agents`. It is never silently clamped. Leaving the key unread and capping at min(`dispatch-capacity`, `swarm.max_workers`) alone was considered and rejected: a documented, templated key that no code reads is a defect, and a swarm run that ignored the user's stated ceiling would be the first place that defect costs something.
 - **Agent budget.** Claude Code's `workflowSizeGuideline` defaults to `medium`, which aims for *"fewer than 10 agents"* (Claude Code workflows documentation, read 2026-10-09). GSD fixes the bound as its own constant: **one role run dispatches at most 9 agents in total, and every dispatch counts**, including the single-agent fallback rerun. The bound does not read the user's setting and does not move if that page changes. No GSD seam reads `workflowSizeGuideline` today, so reading it is out of scope.
 
   | Role | Decomposition | Workers | Cross-file worker | Synthesizer | Reserved fallback | Maximum |
@@ -98,7 +98,7 @@ Every swarm-eligible role run appends one entry to `${PHASE_DIR}/${PADDED_PHASE}
 - `dispatches[]` as `{ stage, agentType, model, tier, tokens, duration_ms, usage_source }`
 - `tokens_by_model`
 
-`tokens` is the host-reported usage for that dispatch. When the host reports none, `tokens` is `null` with `usage_source: "unreported"`. It is never estimated, and `0` is never written for unknown. When `swarm.enabled` is false, no file is written, so output is byte-identical to today. When [ADR-2619](2619-observability-shareable-diagnostics.md) observability is on, the same fields are also emitted as trace events, aligned with that ADR's D2 grain (model tier, durations).
+`tokens` is the host-reported usage for that dispatch, with `usage_source: "host"`. When the host reports none, `tokens` is `null`, and `0` is never written for unknown. Interactive Claude Code sessions do not expose exact per-dispatch, per-model totals, so a dispatch with no host figure may instead carry `estimated_tokens` with `usage_source: "estimate_chars_div_4"`: the dispatch's prompt plus its returned text, in characters, divided by 4. An estimate is never written into `tokens`, and never summed with host figures. The entry carries two maps, `tokens_by_model` (host figures only) and `estimated_tokens_by_model` (estimates only), so no reader can mistake one for the other. The Layer 2 acceptance runs (Decision 8) are headless, and their figures must all be `usage_source: "host"`; an estimate there fails the evidence. When `swarm.enabled` is false, no file is written, so output is byte-identical to today. When [ADR-2619](2619-observability-shareable-diagnostics.md) observability is on, the same fields are also emitted as trace events, aligned with that ADR's D2 grain (model tier, durations).
 
 ### 6. Runtime gating: degrade to single-agent, loudly
 
@@ -147,7 +147,9 @@ The keys use the namespace `swarm.*` rather than the issue's `workflow.swarm.*`.
 
 The gate has two layers, because the plan-checker and the verifier are LLM agents and cannot run in CI.
 
-**Layer 1: CI, deterministic, written before the implementation.**
+**Layer 1: CI, deterministic, landing in the same PR as the code it tests.**
+
+An earlier draft wrote these tests first, in a PR of their own, with the cases that need unwritten code marked `todo`. That cannot work in this repository: `gsd-test` recognizes only `pass` and `fail`, so a `todo` test whose body throws counts as a real failure and blocks the push gate (`tests/fixtures/representative/README.md`, "Why the still-broken fixtures assert `currentBuggyOutput`"). Each case therefore lands with the step that makes it pass (see the implementation plan), and is written before that step's code inside the PR.
 
 The tests are `tests/swarm.test.cjs` for the ladder, the plan validator and `verify-anchors`, and `tests/swarm-equivalence.test.cjs`. That stays within the two test files per production module that `scripts/lint-test-file-count.cjs` allows. The fixture phase lives at `tests/fixtures/representative/swarm-equivalence/`. Its `CONTEXT.md`, single-agent artefacts and swarm artefacts come from **real runs**, including a real worker answer carrying a fabricated anchor as the negative fixture. That follows the fixture-provenance rule: a gate's fixtures are never written by the gate's author. Every assertion goes through the CLI or exported functions (TESTING-STANDARDS contract 1). The tests assert that:
 
@@ -157,12 +159,13 @@ The tests are `tests/swarm.test.cjs` for the ladder, the plan validator and `ver
 - the swarm artefacts carry every structure a downstream consumer reads in the single-agent fixture:
   - REVIEW.md frontmatter `status` and `findings.{critical,warning,info,total}`;
   - the RESEARCH.md headings `## Architectural Responsibility Map`, `## Open Questions` and `## Validation Architecture`;
-- telemetry `tokens_by_model` sums to its dispatch entries, and unreported usage is `null`;
+- telemetry `tokens_by_model` sums exactly the `usage_source: "host"` entries, `estimated_tokens_by_model` sums exactly the estimate entries, no entry carries both `tokens` and `estimated_tokens`, and unreported usage is `null`;
 - **boundaries**, each at limit−1, limit and limit+1:
   - `swarm.max_workers` 1, 2, 6 and 7 (1 and 7 rejected by config validation);
   - the agent total 8, 9 and 10 (10 rejected as `over_agent_budget`);
   - code-review file counts 1, 2, 6 and 7 (1 runs single, 2 and 6 give one unit per file, 7 is grouped into 6 units with every file kept once);
   - decomposition unit counts 1, 2, `max_workers` and `max_workers`+1 (1 is `too_few_units`, the last is `invalid_plan`);
+  - *C* at 1 and 2 from each of its three terms (1 is `no_concurrency`, whichever term set it);
 - **properties** (`fast-check`): the `verify-anchors` parser never throws on arbitrary artefact text and every anchor it reports round-trips; the plan validator accepts every plan built from valid parts and rejects every plan carrying one invalid part (Decision 9);
 - **line endings**: an anchor into a CRLF file matches its excerpt, because excerpt comparison normalizes line endings on both sides;
 - **hostile input** (`CONTRIBUTING.md`, "Security and prompt-injection surfaces"): anchors and scopes using `..`, an absolute path, a symlink that escapes the root, or a control character are rejected with no read outside the root; a worker answer carrying a fake instruction tag reaches the synthesizer prompt only JSON-encoded inside the `<swarm_worker_answers>` block.
@@ -218,13 +221,23 @@ Swarm reads paths written by models and passes model output to an agent that hol
 
 Each step is one PR, tracked by its own issue opened after this ADR is accepted. #5273 stays open as their parent, and this ADR authorizes none of them by itself.
 
-1. **Tests-first.** Add the fixture phase and both test files. The cases that need step 3 are `todo`-marked and listed in the PR.
-2. **Core seam.** Add the `supportsFanOut` trait, the `fanOutStrategy` field with its validator, the `loop fan-out-plan` verb, the plan schema and its validator (Decision 9), and `gsd-core/references/fan-out-dispatch.md`. Register `parallelization.max_concurrent_agents` with its accessor.
-3. **Swarm capability.** Add the manifest, the `gsd-swarm-worker` agent and catalog row, `swarm plan|record|verify-anchors`, `fragments/synthesize.md`, the opt-in traits on the three role steps, docs (`docs/CONFIGURATION.md`, a how-to, inventory and capability matrix) and a changeset. Layer 1 turns fully green.
+1. **Fixture capture (input, not code).** Record the representative fixture phase from real runs on Claude Code: `CONTEXT.md`, the single-agent `RESEARCH.md`, `PATTERNS.md` and `REVIEW.md`, and a real worker answer carrying a fabricated anchor. The fixture-provenance rule forbids the gate's author from writing them, so this is a separate input with its own `README.md` and `MANIFEST.json` naming each run. Steps 2 and 3 do not wait for it; the assertions that read it land with step 3.
+2. **Core seam, with its tests.** Add the `supportsFanOut` trait, the `fanOutStrategy` field with its validator, the `loop fan-out-plan` verb, the plan schema and its validator (Decision 9), and `gsd-core/references/fan-out-dispatch.md`. Register `parallelization.max_concurrent_agents` with its accessor. The PR carries the Layer 1 cases that need only the seam: plan validation with its boundaries and properties, path containment and hostile input, the config rungs, and *C*.
+3. **Swarm capability.** Add the manifest, the `gsd-swarm-worker` agent and catalog row, `swarm plan|record|verify-anchors`, `fragments/synthesize.md`, the opt-in traits on the three role steps, docs (`docs/CONFIGURATION.md`, a how-to, inventory and capability matrix) and a changeset. The PR carries the remaining Layer 1 cases: the strategy's rungs, `verify-anchors` against the step 1 fixtures, telemetry, and the structural equivalence assertions. Layer 1 is then complete.
 4. **Wire the spawn sites** in `plan-phase.md` (two sites) and `code-review.md` (one site), with acks for the growth. This PR carries the Layer 2 evidence.
 5. **Optional, gated on #4747 E.** Refactor `emitWorkflowScript` into `wavesToFanOutPlan` plus `renderFanOutPlan`, byte-identical for waves, then route fan-out plans through the Workflow executor.
 
 ## Open questions for the maintainer
+
+Resolved on 2026-10-10, after review on the issue:
+
+- **Concurrency cap.** Decided as min(`dispatch-capacity`, `parallelization.max_concurrent_agents`, `swarm.max_workers`), with swarm the first reader of the parallelization key (Decision 2).
+- **Token split in interactive sessions.** Decided as exact host figures where reported, otherwise `null` or a labelled chars/4 estimate kept in its own map, and exact-only for the Layer 2 evidence (Decision 5).
+- **Nesting (#853).** Unaffected. Swarm fans out from the main loop on every runtime, so a host's nesting depth is never on its path. This ADR does not change any runtime descriptor's `dispatch.nested` or `maxDepth`; if host documentation has moved on nesting, that is a descriptor correction for its own issue. The `no_agent_tool` run-time rung (Decision 6) stays as the observed backstop.
+- **Tests-first with `todo` cases.** Not workable under `gsd-test`; the tests land with the code they test (Decision 8, implementation plan).
+
+Still open:
+
 
 1. Should `fanOutStrategy` be added now as the generic seam (recommended), or should the first cut hard-wire swarm's verb and generalize later?
 2. On a failed anchor check, the run falls back to a single-agent rerun. Is the rerun's cost acceptable, or should swarm instead keep its artefact with the unresolved claims removed?
