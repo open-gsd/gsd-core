@@ -77,6 +77,12 @@ const { syncAndPreserveStateMd, withStateLock, readModifyWriteStateMd, assertVer
 // live-read value, so a crafted value cannot escape `.planning/milestones/`.
 const ARCHIVE_VERSION_LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
+// Archive layout (#5270): the directory name and suffix below are the single
+// source for `archivePhaseDirectories` and for the two `phases clear` messages,
+// which render the same layout with an `<label>` placeholder.
+const PHASES_ARCHIVE_DIR = 'milestones';
+const PHASES_ARCHIVE_SUFFIX = '-phases';
+
 interface MilestoneCompleteOptions {
   name?: string;
   force?: boolean;
@@ -1230,7 +1236,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
     // any failure, instead of being lost with the swallowed exception.
     let archivedCount = 0;
     try {
-      const phaseArchiveDir = path.join(archiveDir, `${version}-phases`);
+      const phaseArchiveDir = path.join(archiveDir, `${version}${PHASES_ARCHIVE_SUFFIX}`);
       platformEnsureDir(phaseArchiveDir);
 
       // #3185 (ADR-3180 Decision 1) / #3597: same single routed derivation as
@@ -1301,7 +1307,8 @@ function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
   const phasesDir = planningPaths(cwd).phases;
   const confirm = Array.isArray(args) && args.includes('--confirm');
   // --force bypasses the uncommitted-changes guard. Only use when the caller
-  // has already archived or explicitly accepts loss of uncommitted work. (#1447)
+  // has already archived or committed the uncommitted work, or accepts that
+  // it will be moved into the archive. (#1447)
   const force = Array.isArray(args) && args.includes('--force');
   // #2288: explicit outgoing-version override for the archive destination.
   // new-milestone.md runs `state.milestone-switch` BEFORE `phases.clear --confirm`,
@@ -1335,29 +1342,32 @@ function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
     const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
     // #3185 (ADR-3180 Decision 1): this carried the FIFTH copy of the
     // sentinel rule and its THIRD regex variant — `/^999(?:\.|$)/` — which
-    // excluded 999 but NOT 0. Because this is the DESTRUCTIVE path, that
+    // excluded 999 but NOT 0. Because this was the DESTRUCTIVE path, that
     // divergence meant a `0-*` directory `roadmap analyze` preserves as a
-    // sentinel was DELETED here. Routed through the canonical predicate so
-    // every reader of "is this a sentinel phase" agrees by construction.
+    // sentinel was DELETED here. Since #1871 this path archives instead, so
+    // the same divergence would misfile, not remove. Routed through the
+    // canonical predicate so every reader of "is this a sentinel phase"
+    // agrees by construction.
     // #3639: the DIR-AWARE recognizer — the convention-less id predicate
     // never saw bracket sentinel dirs (GSD.999-07-icebox), so they were
-    // counted for deletion here while the disk guards (post-#3639) preserve
-    // them; the destructive path must not be the one blind reader left.
+    // counted for removal here while the disk guards (post-#3639) preserve
+    // them; the archive path must not be the one blind reader left.
     const dirs = entries.filter((e) => e.isDirectory() && !isSentinelPhaseDir(e.name));
 
     if (dirs.length > 0 && !confirm) {
       error(
-        `phases clear would delete ${dirs.length} phase director${dirs.length === 1 ? 'y' : 'ies'}. ` +
-          `Pass --confirm to proceed.`,
+        `phases clear would archive ${dirs.length} phase director${dirs.length === 1 ? 'y' : 'ies'} to ` +
+          `.planning/${PHASES_ARCHIVE_DIR}/<label>${PHASES_ARCHIVE_SUFFIX}/. Pass --confirm to proceed.`,
       );
     }
 
-    // Guard (#1447): refuse to hard-delete phase directories that contain
-    // uncommitted changes. This prevents data loss when `new-milestone` runs
-    // `phases.clear --confirm` before the operator has archived or committed
-    // phase work from the outgoing milestone.
-    // Use `--force` to bypass this guard only when you have verified that
-    // archive or commit of the outgoing phases is already done.
+    // Guard (#1447): refuse to clear phase directories that contain
+    // uncommitted changes. The guard's purpose is unchanged since #1871 —
+    // only the consequence changed: the directories (and their uncommitted
+    // edits) are archived, not deleted, so `--force` bypasses a visibility
+    // check, not a data-loss check. Use `--force` to bypass this guard only
+    // when you have verified that archive or commit of the outgoing phases
+    // is already done.
     if (dirs.length > 0 && !force) {
       // Compute the path relative to cwd for git status
       let relPhasesDir: string;
@@ -1386,7 +1396,8 @@ function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
         error(
           `phases clear aborted: ${uncommittedLines.length} uncommitted change${uncommittedLines.length === 1 ? '' : 's'} detected in phase directories. ` +
             `Archive or commit outgoing phase work before running this command, ` +
-            `or pass --force to skip this check and permanently delete the phase directories. (#1447)`,
+            `or pass --force to skip this check; the directories, uncommitted changes included, ` +
+            `are archived under .planning/${PHASES_ARCHIVE_DIR}/<label>${PHASES_ARCHIVE_SUFFIX}/. (#1447, #1871)`,
         );
       }
     }
@@ -1406,9 +1417,11 @@ function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
 
 /**
  * #1871: move each non-999 phase directory under `phasesDir` into
- * `milestones/<version>-phases/` (collision-safe). Shared by `phases clear`
- * (archive-then-remove) and the internal milestone.complete phase archival so
- * phase history survives a milestone switch instead of being hard-deleted.
+ * `milestones/<version>-phases/` (collision-safe; see PHASES_ARCHIVE_DIR /
+ * PHASES_ARCHIVE_SUFFIX for the single-sourced layout). Shared by `phases
+ * clear` and the internal milestone.complete phase archival: both rename
+ * directories into the archive, so phase history remains available under
+ * `.planning/milestones/` after a milestone switch.
  *
  * Archive-version precedence (#2288): an explicit `archiveVersionOverride` wins
  * first, then a live `getMilestoneInfo(cwd)` read (which itself defaults to a
@@ -1455,7 +1468,7 @@ function archivePhaseDirectories(cwd: string, phasesDir: string, dirs: ReadonlyA
   if (!archiveVersion) {
     archiveVersion = `archived-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 8)}`;
   }
-  const archivePhasesDir = path.join(planningPaths(cwd).planning, 'milestones', `${archiveVersion}-phases`);
+  const archivePhasesDir = path.join(planningPaths(cwd).planning, PHASES_ARCHIVE_DIR, `${archiveVersion}${PHASES_ARCHIVE_SUFFIX}`);
   platformEnsureDir(archivePhasesDir);
   let archived = 0;
   for (const entry of dirs) {

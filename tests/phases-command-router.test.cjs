@@ -94,13 +94,13 @@ describe('phases-command-router', () => {
 /**
  * Regression tests for bug #1826
  *
- * `phases clear` must require an explicit --confirm flag before deleting any
+ * `phases clear` must require an explicit --confirm flag before archiving any
  * phase directories. Without it, any accidental or hallucinated invocation
- * wipes the entire .planning/phases/ tree with no warning.
+ * moves the entire .planning/phases/ tree into the milestone archive with no warning.
  *
  * Rules:
  *   - Phase dirs present + no --confirm → non-zero exit, clear error message
- *   - Phase dirs present + --confirm    → deletes, exits 0, reports count
+ *   - Phase dirs present + --confirm    → archives, exits 0, reports count
  *   - No phase dirs + no --confirm      → exits 0, cleared=0 (nothing to guard)
  */
 
@@ -145,11 +145,11 @@ describe('bug #1826: phases clear --confirm guard', () => {
     );
 
     // Dirs must be untouched
-    assert.ok(fs.existsSync(path.join(phasesDir, '01-foundation')), 'dirs must not be deleted');
-    assert.ok(fs.existsSync(path.join(phasesDir, '02-api')), 'dirs must not be deleted');
+    assert.ok(fs.existsSync(path.join(phasesDir, '01-foundation')), 'dirs must not be archived away');
+    assert.ok(fs.existsSync(path.join(phasesDir, '02-api')), 'dirs must not be archived away');
   });
 
-  test('phases clear --confirm deletes dirs and reports count', () => {
+  test('phases clear --confirm archives dirs and reports count', () => {
     const phasesDir = path.join(tmpDir, '.planning', 'phases');
     fs.mkdirSync(path.join(phasesDir, '01-foundation'), { recursive: true });
     fs.mkdirSync(path.join(phasesDir, '02-api'), { recursive: true });

@@ -1,11 +1,12 @@
 /**
  * GSD Tools Tests - New Milestone Clear Phases (#1588, #1447)
  *
- * Verifies that `phases clear` removes all phase subdirectories from
- * .planning/phases/, leaving the directory itself intact.
+ * Verifies that `phases clear` archives all phase subdirectories from
+ * .planning/phases/ into `.planning/milestones/<label>-phases/`,
+ * leaving the directory itself intact.
  *
  * Also covers the #1447 uncommitted-changes guard: phases clear must refuse
- * to delete phase directories that contain uncommitted work.
+ * to archive phase directories that contain uncommitted work.
  */
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
@@ -116,7 +117,7 @@ describe('phases clear command', () => {
     );
   });
 
-  test('archives nested phase content (moved, not deleted) (#1871)', () => {
+  test('archives nested phase content (moved into the archive) (#1871)', () => {
     const phasesDir = path.join(tmpDir, '.planning', 'phases');
     const phase1 = path.join(phasesDir, '01-foundation');
     const nested = path.join(phase1, 'subdir');
@@ -128,17 +129,17 @@ describe('phases clear command', () => {
 
     // Source is cleared (moved away)...
     assert.ok(!fs.existsSync(phase1), 'phase directory should be moved out of .planning/phases/');
-    // ...but the nested content SURVIVES in the archive (not destroyed).
+    // ...but the nested content SURVIVES in the archive (kept).
     const archive = findPhasesArchive(tmpDir);
     assert.ok(archive, 'an archive dir milestones/*-phases/ should exist');
     assert.ok(
       fs.existsSync(path.join(archive, '01-foundation', 'subdir', 'deep-file.md')),
-      'nested phase content must be preserved in the archive, not deleted',
+      'nested phase content must be preserved in the archive',
     );
   });
 });
 
-// Locate the `milestones/<version>-phases/` archive directory created by phases clear.
+// Locate the `.planning/milestones/<label>-phases/` archive directory created by phases clear.
 function findPhasesArchive(tmpDir) {
   const milestonesDir = path.join(tmpDir, '.planning', 'milestones');
   try {
@@ -180,7 +181,7 @@ describe('phases clear: uncommitted-changes guard (#1447)', () => {
       result.error.includes('uncommitted') || result.error.includes('aborted'),
       `expected error about uncommitted changes, got: ${result.error}`
     );
-    // Phase directory must still exist (was not deleted)
+    // Phase directory must still exist (left in place, not archived)
     assert.ok(fs.existsSync(phase1), 'phase directory must survive when guard fires');
   });
 
@@ -201,7 +202,7 @@ describe('phases clear: uncommitted-changes guard (#1447)', () => {
     assert.ok(fs.existsSync(phase1), 'phase directory must survive when guard fires');
   });
 
-  test('--force bypasses the uncommitted-changes guard and deletes anyway', () => {
+  test('--force bypasses the uncommitted-changes guard and archives anyway (#5270)', () => {
     const phasesDir = path.join(tmpDir, '.planning', 'phases');
     const phase1 = path.join(phasesDir, '01-foundation');
     fs.mkdirSync(phase1, { recursive: true });
@@ -212,7 +213,67 @@ describe('phases clear: uncommitted-changes guard (#1447)', () => {
     assert.ok(result.success, `--force should bypass guard and succeed: ${result.error}`);
     const output = JSON.parse(result.output);
     assert.strictEqual(output.cleared, 1, 'should clear 1 phase directory');
-    assert.ok(!fs.existsSync(phase1), 'phase directory must be removed when --force is passed');
+    assert.ok(!fs.existsSync(phase1), 'phase directory must be moved out of .planning/phases/ when --force is passed');
+    // #5270: --force never deletes. The uncommitted edit travels into the
+    // archive with the directory, so the guard message promising a
+    // "permanent delete" was steering the operator away from a recoverable
+    // action (and, per #3129, is what made a reader conclude the command
+    // destroys phase work at all).
+    const archive = findPhasesArchive(tmpDir);
+    assert.ok(archive, 'a milestones/*-phases/ archive should be created by --force');
+    assert.ok(
+      fs.existsSync(path.join(archive, '01-foundation', 'PLAN.md')),
+      'the uncommitted file must survive inside the archive',
+    );
+  });
+
+  // ─── #5270: the two messages describe the archive ────────────────────────
+
+  test('#5270 the --confirm gate describes the archive, not a delete', () => {
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    const phase1 = path.join(phasesDir, '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, 'PLAN.md'), '# Plan\n');
+    gitOrThrow(['add', '.planning/phases/'], { cwd: tmpDir });
+    gitOrThrow(['commit', '-m', 'add phase'], { cwd: tmpDir });
+
+    const result = runGsdTools('phases clear', tmpDir);
+    assert.ok(!result.success, 'phases clear without --confirm must refuse');
+    assert.match(result.error, /would archive 1 phase directory/);
+    assert.match(result.error, /\.planning\/milestones\/<label>-phases\//);
+    assert.match(result.error, /Pass --confirm to proceed/, 'the gate must retain the --confirm follow-up');
+    assert.doesNotMatch(result.error, /delet/i, 'the gate message must contain no delete wording');
+    assert.doesNotMatch(result.error, /permanently/i, 'the gate message must contain no permanently wording');
+  });
+
+  test('#5270 the --confirm gate pluralizes the archive count', () => {
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    for (const name of ['01-foundation', '02-api']) {
+      const dir = path.join(phasesDir, name);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'PLAN.md'), '# Plan\n');
+    }
+    gitOrThrow(['add', '.planning/phases/'], { cwd: tmpDir });
+    gitOrThrow(['commit', '-m', 'add phases'], { cwd: tmpDir });
+
+    const result = runGsdTools('phases clear', tmpDir);
+    assert.ok(!result.success, 'phases clear without --confirm must refuse');
+    assert.match(result.error, /would archive 2 phase directories/);
+  });
+
+  test('#5270 the --force guard message describes the archive, not a permanent delete', () => {
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    const phase1 = path.join(phasesDir, '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, 'PLAN.md'), '# Plan (uncommitted)\n');
+    // Do NOT commit — the guard fires.
+
+    const result = runGsdTools('phases clear --confirm', tmpDir);
+    assert.ok(!result.success, 'phases clear must abort on uncommitted phase work');
+    assert.match(result.error, /uncommitted changes included/);
+    assert.match(result.error, /\.planning\/milestones\/<label>-phases\//);
+    assert.doesNotMatch(result.error, /delet/i, 'the guard message must contain no delete wording');
+    assert.doesNotMatch(result.error, /permanently/i, 'the guard message must contain no permanently wording');
   });
 
   test('succeeds without --force when all phase files are committed', () => {
@@ -228,13 +289,13 @@ describe('phases clear: uncommitted-changes guard (#1447)', () => {
     assert.ok(result.success, `should succeed when phase files are committed: ${result.error}`);
     const output = JSON.parse(result.output);
     assert.strictEqual(output.cleared, 1, 'should clear 1 phase directory');
-    // #1871: a committed phase dir is ARCHIVED (moved to milestones/*-phases/), not destroyed.
+    // #1871: a committed phase dir is ARCHIVED (moved to milestones/*-phases/).
     assert.ok(!fs.existsSync(phase1), 'committed phase directory should be moved out of .planning/phases/');
     const archive = findPhasesArchive(tmpDir);
     assert.ok(archive, 'a milestones/*-phases/ archive should be created for committed phase dirs');
     assert.ok(
       fs.existsSync(path.join(archive, '01-foundation', 'PLAN.md')),
-      'committed phase content must be preserved in the archive, not hard-deleted',
+      'committed phase content must be preserved in the archive',
     );
   });
 
@@ -375,7 +436,7 @@ describe('phases clear: archive-version override (#2288)', () => {
     );
     assert.ok(
       fs.existsSync(path.join(archive, '01-foundation')),
-      'the phase directory must still be archived (moved, not deleted) under the dated label'
+      'the phase directory must still be moved into the archive under the dated label'
     );
   });
 

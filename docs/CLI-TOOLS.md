@@ -183,7 +183,8 @@ node gsd-tools.cjs phase-plan-index <phase>
 # List phases with filtering
 node gsd-tools.cjs phases list [--type planned|executed|all] [--phase N] [--include-archived]
 
-# Archive (or, with --force, permanently delete) every current phase directory —
+# Archive every current phase directory under .planning/milestones/<label>-phases/;
+# --force skips only the uncommitted-changes guard, it never deletes —
 # used by /gsd-new-milestone before roadmapping the next cycle
 node gsd-tools.cjs phases clear [--confirm] [--force] [--archive-version <version>]
 ```
@@ -201,12 +202,15 @@ sentinel and out-of-window directories.
 
 ### `phases clear` and sentinel directories
 
-`phases clear` moves (or, with `--force` and no prior archive, permanently
-deletes) every phase directory under `.planning/phases/` except sentinels. It
-now excludes both `999.*` (backlog) and `0-*` (pre-milestone) directories via
+`phases clear` moves every phase directory under `.planning/phases/`
+(except sentinels) into the milestone archive at
+`.planning/milestones/<label>-phases/`. It now excludes both `999.*`
+(backlog) and `0-*` (pre-milestone) directories via
 the same canonical sentinel predicate `phases list` uses — previously its own
-regex excluded `999` but not `0`, so a `0-*` directory could be destroyed on
-this irreversible path.
+regex excluded `999` but not `0`, so a `0-*` directory could be archived away
+with the outgoing milestone instead of staying put. Since #1871 the command
+archives rather than deletes: `--force` only skips the uncommitted-changes
+guard, it never deletes.
 
 ### `find-phase` plan/summary counts (live vs physical)
 
