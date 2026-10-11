@@ -502,6 +502,411 @@ describe('regressions: #4651 — trailing-dot normalization must not touch prose
   });
 });
 
+describe('regressions: #5267 — a `case` pattern paren does not close a substitution', () => {
+  // bash ends `$( … )` at the paren that closes it, and the `)` that ends a
+  // `case` pattern is not that paren. The guard used to count every unquoted
+  // paren, so the first pattern closed the span and the arm after it was
+  // never scanned. Each command below holds `cat .env` where bash 5.2 reads
+  // a command (a `case` arm counts whether or not its pattern can match: the
+  // guard does not evaluate the subject), or is unterminated and fails
+  // closed. The commands come from the issue, its triage acceptance criteria
+  // and the `case` grammar in the bash manual, not from the guard's own
+  // tables.
+  const blocks = [
+    // The issue's forms: quoted, unquoted, multi-line, extended-glob pattern
+    // and `;&` fall-through.
+    'echo "$(case x in x) cat .env;; esac)"',
+    'echo $(case x in x) cat .env;; esac)',
+    'echo "$(case x in\n  x) cat .env ;;\nesac)"',
+    'echo "$(case x in @(x|y)) cat .env;; esac)"',
+    'echo "$(case x in y) :;& x) cat .env;; esac)"',
+    // Unterminated input fails closed: the span runs to the end and is scanned.
+    'echo "$(case x in x) cat .env',
+    'echo "$(case x in x) cat .env;; esac"',
+    // Every other route into the span finder: a process substitution, an
+    // unquoted heredoc body, a substitution nested in a case arm, and one
+    // inside an arithmetic expansion.
+    'echo <(case x in x) cat .env;; esac)',
+    'cat <<EOF\n$(case x in x) cat .env;; esac)\nEOF',
+    'echo "$(case x in x) echo "$(case y in y) cat .env;; esac)";; esac)"',
+    'echo "$(( $(case x in x) cat .env;; esac) + 1 ))"',
+    // Pattern lists: alternatives, the optional paren, a quoted or escaped
+    // paren, a later arm, a last arm without `;;`, a comment between arms.
+    'echo "$(case x in a|b) cat .env;; esac)"',
+    'echo "$(case x in (a|b) cat .env;; esac)"',
+    'echo "$(case x in ")") cat .env;; esac)"',
+    'echo "$(case x in \\)) cat .env;; esac)"',
+    'echo "$(case x in a) :;; *) cat .env;; esac)"',
+    'echo "$(case x in a) :;;& x) cat .env;; esac)"',
+    'echo "$(case x in x) cat .env; esac)"',
+    'echo "$(case x in # first )\n x) cat .env;; esac)"',
+    // A process substitution is a part of the word it touches, in a pattern
+    // or a subject as anywhere else.
+    'echo "$(case x in <(echo x)) cat .env;; esac)"',
+    'echo "$(case x in a|>(echo x)) cat .env;; esac)"',
+    'echo "$(case <(echo x) in x) cat .env;; esac)"',
+    'echo "$(case x<(echo x) in x) cat .env;; esac)"',
+    'echo "$(case "x">(echo x) in x) cat .env;; esac)"',
+    // The word after `case`: an expansion, a substitution, a reserved word.
+    'echo "$(case $(echo x) in x) cat .env;; esac)"',
+    'echo "$(case ${x%% *} in x) cat .env;; esac)"',
+    'echo "$(case case in case) cat .env;; esac)"',
+    'echo "$(case x\nin x) cat .env;; esac)"',
+    // Everywhere bash reads `case` as the reserved word.
+    'echo "$(true; case x in x) cat .env;; esac)"',
+    'echo "$(true && case x in x) cat .env;; esac)"',
+    'echo "$(true | case x in x) cat .env;; esac)"',
+    'echo "$(true\ncase x in x) cat .env;; esac)"',
+    'echo "$(if case x in x) true;; esac; then cat .env; fi)"',
+    'echo "$(if (true) then case x in x) cat .env;; esac; fi)"',
+    'echo "$( ! (case x in x) cat .env;; esac) )"',
+    'echo "$(f() case x in x) cat .env;; esac; f)"',
+    'echo "$(! case x in x) cat .env;; esac)"',
+    'echo "$(time -p case x in x) cat .env;; esac)"',
+    'echo "$( (case x in x) cat .env;; esac) )"',
+    'echo "$({ case x in x) cat .env;; esac; })"',
+    'echo "$(for i in a; do case $i in a) cat .env;; esac; done)"',
+    'echo "$(f() { case x in x) cat .env;; esac; }; f)"',
+    'echo "$(function f { case x in x) cat .env;; esac; }; f)"',
+    'echo "$(a=(1 2); case x in x) cat .env;; esac)"',
+    // A line continuation in an array literal leaves the `#` after it a comment.
+    'echo "$(a=(\\\n# )\nx); case x in x) cat .env;; esac)"',
+  ];
+  for (const cmd of blocks) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  // The converse error: a `case` that is not the reserved word must not open
+  // a pattern list, or its "pattern" swallows the paren that really closes the
+  // span and the read after it is hidden inside a string. Each command puts
+  // the words `case … in` where bash reads them as plain text, then reads
+  // `.env` after the substitution.
+  const afterSpan = [
+    ['an argument', 'x=$(echo case); cat .env'],
+    ['an argument list', 'echo "$(echo case x in y)"; cat .env'],
+    ['a loop variable', 'echo "$(for case in a b; do echo $case; done)"; cat .env'],
+    ['after an assignment', 'echo "$(x=1 case x in y)"; cat .env'],
+    ['after a redirection', 'echo "$(>f case x in y)"; cat .env'],
+    ['an array literal', 'echo "$(a=(case x in y); echo z)"; cat .env'],
+    ['a multi-line array literal', 'echo "$(a=(\n  case x in\n); echo z)"; cat .env'],
+    ['inside [[ ]]', 'echo "$([[ -n x && case != in ]])"; cat .env'],
+    ['inside (( ))', 'echo "$( (( case x in y )) )"; cat .env'],
+    ['after an extended-glob word', 'echo "$(ls !(a|b) case x in y)"; cat .env'],
+    ['inside an extended-glob group', 'echo "$(ls @(case x in y) z)"; cat .env'],
+    ['after a process substitution', 'echo "$(cat <(echo a) case x in y)"; cat .env'],
+    ['after a subshell closes, where no command can start', 'echo "$( (echo hi) case x in y )"; cat .env'],
+    ['after an extended-glob command name', 'echo "$( !(a|b) case x in y )"; cat .env'],
+    ['after an extended-glob group holding a `#`', 'echo "$( !(a # b)\n)"; cat .env'],
+    ['`time` after a pipe is a command', 'echo "$(true | time -- case x in y)"; cat .env'],
+    ['`}` with no open group is a command', 'echo "$(} case x in y)"; cat .env'],
+    ['a comment', 'echo "$(echo hi # (case insensitive in bash)\n)"; cat .env'],
+    ['a ${ } default', 'echo "$(echo ${m:-none; case closed in court})"; cat .env'],
+    ['a heredoc body', 'echo "$(cat <<EOF\ncase x in y)\nEOF\n)"; cat .env'],
+    ['a quoted string', 'echo "$(echo "; case x in y")"; cat .env'],
+    // A carriage return is a word character to bash, not a blank.
+    ['part of a word that starts with a carriage return', 'echo "$(\rcase x in y)"; cat .env'],
+    ['an argument after a carriage return', 'echo "$(\r case x in y)"; cat .env'],
+  ];
+  for (const [what, cmd] of afterSpan) {
+    test(`\`case\` as ${what} opens no pattern list: blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+    // The same span followed by a string. With the pattern list wrongly open
+    // the span runs on through the closing quote, and the text of the string
+    // is then read as commands. That needs the span inside double quotes: an
+    // unquoted span that closes late hides nothing, so it has no twin.
+    if (!cmd.startsWith('echo "$(')) continue;
+    const quiet = cmd.replace(/; cat \.env$/, '; echo "; cat .env; "');
+    test(`\`case\` as ${what} opens no pattern list: allows ${JSON.stringify(quiet)}`, () => {
+      assert.notEqual(quiet, cmd, 'the table entry must end in the read this twin replaces');
+      assertAllowed(runHook(bash(quiet)), quiet);
+    });
+  }
+
+  // Which bash runs the command decides where a span closes, and the guard
+  // cannot know which will. bash 3.2 — the /bin/bash macOS ships — counts
+  // parens: it ends each span below at the `case` pattern, fails the
+  // substitution and runs the `cat`. bash 5 rejects the same lines whole. A
+  // read that either would perform is blocked, so nothing the guard blocked
+  // before #5267 is allowed after it.
+  const eitherBash = [
+    'echo "$(case x in y)"; cat .env',
+    'x=$(case x in y); cat .env',
+    'echo "$(then case x in y)"; cat .env',
+    'echo "$(if true; then :; fi case x in y)"; cat .env',
+    'echo "$( ((1)) case x in y)"; cat .env',
+    'echo "$(echo x; coproc time case x in y)"; cat .env',
+  ];
+  for (const cmd of eitherBash) {
+    test(`blocks under the paren-counting reading ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  test('a carriage return inside a pattern word does not end the case: blocks the later arm', () => {
+    // `esac\rfoo` is one pattern word, so the case is still open at `x)`.
+    const cmd = 'echo "$(case x in esac\rfoo) :;; x) cat .env;; esac)"';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  // Reading reserved words made three more parens visible as not the closing
+  // one: a `)` in a comment, a `)` in a `${ }`, and the lines after a
+  // here-string, which the span finder took for a heredoc body.
+  const sameScan = [
+    'echo "$(echo hi # )\ncat .env)"',
+    'echo "$(echo ${x:-)}; cat .env)"',
+    'echo "$(grep x <<< "$t"\n)"; cat .env',
+    // A backslash-escaped backtick does not end a backtick span, so the `")"`
+    // after it is still inside one.
+    'echo "$(echo `echo \\` ")" `)"; cat .env',
+  ];
+  for (const cmd of sameScan) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  // bash removes a line continuation (a backslash-newline) before it reads a
+  // token, so an operator split by one is still that operator. Each row splits
+  // one the readers look ahead for: the parens of a function definition, the
+  // end of a case arm, and the openers of a heredoc and a here-string.
+  const continued = [
+    ['in a function definition', 'echo "$(f(\\\n) case x in x) cat .env;; esac)"'],
+    ['in a function definition, between blanks', 'echo "$(f( \\\n ) case x in x) cat .env;; esac)"'],
+    ['in `;;`', 'echo "$(case x in a) :;\\\n; x) cat .env;; esac)"'],
+    ['in `;&`', 'echo "$(case x in a) :;\\\n& x) cat .env;; esac)"'],
+    ['in `;;&`', 'echo "$(case x in a) :;;\\\n& x) cat .env;; esac)"'],
+    ['in `<<`', 'echo "$(cat <\\\n<EOF\nx)\nEOF\ncase x in x) cat .env;; esac)"'],
+    ['in `<<-`', 'echo "$(cat <<\\\n-EOF\nx)\nEOF\n)"; cat .env'],
+    ['in `<<<`', 'echo "$(cat <<\\\n<"y)"; echo hi)"; cat .env'],
+    ['in a heredoc tag', 'echo "$(cat <<EO\\\nF\nx)\nEOF\ncase x in x) cat .env;; esac)"'],
+    ['in `&&`', 'echo "$(true &\\\n& case x in x) cat .env;; esac)"'],
+    ['in `||`, before `time`', 'echo "$(false |\\\n| time case x in x) cat .env;; esac)"'],
+    // Split, `|&` would leave `time` reserved, and a word ending in `@` would
+    // not open an extended-glob group: either opens a phantom `case`.
+    ['in `|&`, before `time`', 'echo "$(true |\\\n& time case x in y)"; cat .env'],
+    ['between `@` and its group', 'echo "$(ls @\\\n(case x in y) z)"; cat .env'],
+    // A heredoc body is read with its continuations removed, so a terminator
+    // line split by one still ends it; and the body of an orphan heredoc
+    // starts at the next newline in the text, a continuation's included.
+    ['in a heredoc terminator line', 'echo "$(cat <<EOF\nx)\nEO\\\nF\n)"; cat .env'],
+    ['before an orphan heredoc body', 'echo "$(echo $(cat <<EOF) a \\\nx)\nEOF\n)"; cat .env'],
+  ];
+  // No twin for three rows. The paren-counting reading takes `<<` + `<` for a
+  // heredoc, so the string after that span reads as commands to it: a false
+  // positive the guard had before #5267 and keeps. A twin of the other two
+  // cannot fail for reasons outside the span reader, so it would test nothing.
+  const continuedNoTwin = new Set(['in `<<<`', 'in `<<-`', 'in a heredoc terminator line']);
+  // Each read below is visible only where the span closes where bash closes
+  // it: after a here-string split from `<<`, a heredoc tag split by a
+  // continuation, and an orphan body that starts at a continuation's newline.
+  // No twins: a quoted string after these spans cannot fail for reasons
+  // outside the span reader, so it would test nothing.
+  const continuedReads = [
+    'echo "$(cat <<\\\n<x\n)"; cat .env',
+    'echo "$(cat <<EO\\\nF\nx)\nEOF\n)"; cat .env',
+    'echo "$(echo $(cat <<EOF) a \\\nx)\nEOF\ncat .env)"',
+  ];
+  for (const cmd of continuedReads) {
+    test(`a line continuation is read where bash reads it: blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+  for (const [where, cmd] of continued) {
+    test(`a line continuation ${where} keeps the operator whole: blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+    if (!cmd.endsWith('; cat .env') || continuedNoTwin.has(where)) continue;
+    const quiet = cmd.replace(/; cat \.env$/, '; echo "; cat .env; "');
+    test(`a line continuation ${where} keeps the operator whole: allows ${JSON.stringify(quiet)}`, () => {
+      assert.notEqual(quiet, cmd, 'the table entry must end in the read this twin replaces');
+      assertAllowed(runHook(bash(quiet)), quiet);
+    });
+  }
+
+  // A heredoc body is data wherever bash reads it from, so a `)"` inside one
+  // must neither close the span nor end the string around it. Bash reads the
+  // body at the span's next newline; when the heredoc was opened in a nested
+  // `$( )` that already closed, at the next newline of the input; and a
+  // nested span never takes the body of a heredoc its parent opened.
+  const heredocBodies = [
+    ['in the span that opened it', 'echo "$(cat <<EOF\ncase x in y)"\nEOF\n)"; cat .env'],
+    ['after a nested span that opened it', 'echo "$(echo $(cat <<EOF) x\nbody )"\nEOF\n)"; cat .env'],
+    ['past a nested span that crosses the newline', 'echo "$(cat <<EOF $(echo a\necho b)\nbody )"\nEOF\n)"; cat .env'],
+    ['past a process substitution that crosses the newline', 'echo "$(cat <<EOF <(echo a\necho b)\nbody )"\nEOF\n)"; cat .env'],
+    ['inside an array literal', 'echo "$(cat <<EOF; a=(\nbody )"\nEOF\nx); echo z)"; cat .env'],
+    ['inside `!(`, which is closed as it was before', 'echo "$( !(cat <<EOF\nbody )"\nEOF\n) )"; cat .env'],
+  ];
+  // The paren-counting reading takes the body's `)"` for the close in these
+  // two, so the string after the span reads as commands to it: a false
+  // positive the guard had before #5267 and keeps.
+  const countedShort = new Set(['past a nested span that crosses the newline', 'past a process substitution that crosses the newline']);
+  for (const [where, cmd] of heredocBodies) {
+    test(`a heredoc body ${where} is skipped: blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+    if (countedShort.has(where)) continue;
+    const quiet = cmd.replace(/; cat \.env$/, '; echo "; cat .env; "');
+    test(`a heredoc body ${where} is skipped: allows ${JSON.stringify(quiet)}`, () => {
+      assert.notEqual(quiet, cmd, 'the table entry must end in the read this twin replaces');
+      assertAllowed(runHook(bash(quiet)), quiet);
+    });
+  }
+
+  // The rows above end in a read the paren-counting reading blocks by itself.
+  // These end in one only the grammar-following reading can see: the case arm
+  // is inside the span only when the body's `)` did not close it.
+  const heredocThenArm = [
+    ['in the span that opened it', 'echo "$(cat <<EOF\nbody )"\nEOF\ncase x in x) cat .env;; esac)"'],
+    ['after a nested span that opened it', 'echo "$(echo $(cat <<EOF) x\nbody )\nEOF\ncase x in x) cat .env;; esac)"'],
+    ['inside an array literal', 'echo "$(cat <<EOF; a=(\nbody )"\nEOF\nx); case x in x) cat .env;; esac)"'],
+    ['inside `!(`, which is closed as it was before', 'echo "$( !(cat <<EOF\nbody )"\nEOF\n); case x in x) cat .env;; esac)"'],
+  ];
+  for (const [where, cmd] of heredocThenArm) {
+    test(`a heredoc body ${where} is skipped, and the case arm after it is read: blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  test('a command nested too deep for the span reader is still scanned, not crashed open', () => {
+    // The reader recurses per nested span; 5000 levels exhaust the stack. A
+    // crash would take the hook's fail-open exit and allow the read in front.
+    const cmd = `cat .env; echo ${'$('.repeat(5000)}`;
+    assertBlocked(runHook(bash(cmd)), '5000 nested $(', { tool: 'Bash', path: '.env' });
+  });
+
+  // Four shapes the readers once took quadratic time on. A hook that outlives
+  // its timeout is skipped by the runtime, which allows the command, so each
+  // has a read in front that must still be blocked within the spawn timeout.
+  test('arithmetic probes behind waiting heredocs are scanned in linear time', () => {
+    // Each `((` is probed on a copy of the heredocs still waiting for a body:
+    // 38,000 of those, then 72,000 probes, just under the command-size cap.
+    const waiting = ' $(cat <<X)'.repeat(38000);
+    const probes = '((1)); '.repeat(72000);
+    const cmd = `cat .env; echo "$(echo${waiting}; ${probes})"\n${'X\n'.repeat(38000)}`;
+    assertBlocked(runHook(bash(cmd)), '72000 probes behind 38000 waiting heredocs', { tool: 'Bash', path: '.env' });
+  });
+
+  test('nested arithmetic probes around a long word are scanned in linear time', () => {
+    // Every `((` reads ahead to its matching paren. Started inside one
+    // another, 800 of them would each read the 900,000-character word. (A
+    // deeper nest exhausts the stack first and never gets that far.)
+    const cmd = `cat .env; echo "$( ${'(( $( '.repeat(800)}echo ${'x'.repeat(900000)}${' ) ) ) '.repeat(800)})"`;
+    assertBlocked(runHook(bash(cmd)), '800 nested probes around a long word', { tool: 'Bash', path: '.env' });
+  });
+
+  test('a deep nest that paren counting closes early is scanned in linear time', () => {
+    // The nest exhausts the stack; the counter then ends each level at the
+    // comment's `)`, and the next `$(` must not start the same climb again.
+    const cmd = `cat .env; echo "$(${'# c )\n$( '.repeat(30000)}`;
+    assertBlocked(runHook(bash(cmd)), '30000 nested $( behind comments', { tool: 'Bash', path: '.env' });
+  });
+
+  test('a long word of extended-glob groups is scanned in linear time', () => {
+    // Each `@(` asks what the word ends in. Read from the word as it is being
+    // built, a character at a time, that flattened the whole word every time.
+    const cmd = `cat .env; echo "$(echo ${'a@(x)'.repeat(209000)})"`;
+    assertBlocked(runHook(bash(cmd)), '209000 extended-glob groups in one word', { tool: 'Bash', path: '.env' });
+  });
+
+  const allows = [
+    // The triage control, and the inline-value idiom this must keep working.
+    'x=$(echo case); echo hi',
+    'os="$(case "$OSTYPE" in linux*) echo linux;; freebsd*) echo bsd;; *) echo other;; esac)"; echo "$os"',
+    'echo "$(case x in x) echo ok;; esac)"; echo done',
+    // The arm is scanned, not refused: a template name and an existence check pass.
+    'echo "$(case x in x) cat .env.example;; esac)"',
+    'echo "$(case x in x) test -f .env && echo yes;; esac)"',
+    // Each "not the reserved word" shape above, with nothing secret after it.
+    'echo "$(for case in a b; do echo $case; done)"; echo hi',
+    'echo "$(a=(case x in y); echo z)"; echo hi',
+    'echo "$(echo hi # (case insensitive in bash)\n)"; echo hi',
+    'echo "$(grep x <<< "$t"\n)"; echo hi',
+  ];
+  for (const cmd of allows) {
+    test(`allows ${JSON.stringify(cmd)}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  // ── Properties over generated `case` commands ─────────────────────────────
+  // Built from the manual's syntax — `case WORD in [ [(] PATTERN [| PATTERN]…)
+  // LIST ;; ]… esac` — with every vocabulary declared here. Each run spawns the
+  // hook, which keeps numRuns small; fast-check prints the seed and the
+  // counterexample on failure.
+  const PROPERTY_RUNS = { seed: 5267, numRuns: 40 };
+  const SECRET = fc.constantFrom('.env', '.env.local', '.secrets', 'config/.env.production');
+  const SUBJECT = fc.constantFrom('x', '$1', '"$OSTYPE"', '${v}', '$(uname -s)', 'case', 'in', 'esac');
+  const PATTERN = fc.constantFrom('a', '*', '*.txt', '[ab]', 'linux*', '"a b"', "')'", '\\)', '$v', 'case', 'in');
+  const BENIGN = fc.constantFrom('echo ok', ':', 'true', 'echo case', 'echo esac', 'printf %s x', 'echo "a)"');
+  const arm = fc.record({
+    paren: fc.boolean(),
+    patterns: fc.array(PATTERN, { minLength: 1, maxLength: 3 }),
+    bar: fc.constantFrom('|', ' | '),
+    terminator: fc.constantFrom(';;', ';&', ';;&'),
+  });
+  const caseShape = fc.record({
+    subject: SUBJECT,
+    arms: fc.array(arm, { minLength: 1, maxLength: 3 }),
+    gap: fc.constantFrom(' ', '\n', '\n  '),
+    lastTerminator: fc.constantFrom(';;', ';', '\n'),
+  });
+  // `bodies[k]` is the command list of arm k.
+  const render = ({ subject, arms, gap, lastTerminator }, bodies) => {
+    const parts = arms.map((a, k) => {
+      const end = k === arms.length - 1 ? lastTerminator : a.terminator;
+      return `${a.paren ? '(' : ''}${a.patterns.join(a.bar)}) ${bodies[k]}${end === '\n' ? '' : ' '}${end}`;
+    });
+    return `case ${subject} in${gap}${parts.join(gap)}${gap}esac`;
+  };
+  const WRAP = fc.constantFrom(
+    (c) => `echo "$(${c})"`,
+    (c) => `echo $(${c})`,
+    (c) => `v=$(${c})`,
+    (c) => `echo <(${c})`,
+    (c) => `cat <<EOF\n$(${c})\nEOF`,
+  );
+
+  test('property: a secret read in any arm of a case inside a substitution is blocked', () => {
+    const withRead = caseShape.chain((shape) => fc.tuple(
+      fc.constant(shape), fc.nat({ max: shape.arms.length - 1 }),
+      fc.array(BENIGN, { minLength: shape.arms.length, maxLength: shape.arms.length }), SECRET, WRAP,
+    ));
+    fc.assert(fc.property(withRead, ([shape, at, benign, secret, wrap]) => {
+      const bodies = benign.map((b, k) => (k === at ? `cat ${secret}` : b));
+      const cmd = wrap(render(shape, bodies));
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: secret });
+    }), PROPERTY_RUNS);
+  });
+
+  test('property: no run of words before a `case` hides the command after the span', () => {
+    // Words that end a compound command, start one, or are no command at all:
+    // whatever the grammar-following reading makes of `case` after them, the
+    // paren-counting one closes the span at the pattern.
+    const BEFORE = fc.constantFrom(
+      'if', 'then', 'else', 'elif', 'fi', 'while', 'do', 'done', 'esac', 'time', 'coproc', 'function', '!', '{', '}',
+      '[[', ']]', 'echo', 'x', 'x=1', '>f', ';', '&&', '|', '\n', '\r',
+    );
+    fc.assert(fc.property(fc.array(BEFORE, { maxLength: 6 }), SUBJECT, SECRET, (words, subject, secret) => {
+      const cmd = `echo "$(${[...words, 'case', subject, 'in', 'y'].join(' ')})"; cat ${secret}`;
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: secret });
+    }), PROPERTY_RUNS);
+  });
+
+  test('property: the span ends where the case ends — a read after it is blocked, and nothing else is', () => {
+    const benignOnly = caseShape.chain((shape) => fc.tuple(
+      fc.constant(shape), fc.array(BENIGN, { minLength: shape.arms.length, maxLength: shape.arms.length }), SECRET,
+    ));
+    fc.assert(fc.property(benignOnly, ([shape, bodies, secret]) => {
+      const span = `echo "$(${render(shape, bodies)})"`;
+      assertAllowed(runHook(bash(`${span}; echo done`)), `${span}; echo done`);
+      assertBlocked(runHook(bash(`${span}; cat ${secret}`)), `${span}; cat ${secret}`, { tool: 'Bash', path: secret });
+    }), PROPERTY_RUNS);
+  });
+});
+
 describe('gsd-secret-read-guard: scope and crash policy', () => {
   test('ignores other tools even when they name a secret file', () => {
     assertAllowed(runHook({ tool_name: 'Write', tool_input: { file_path: '.env', content: 'X=1' } }), 'Write');
