@@ -612,12 +612,23 @@ node gsd-tools.cjs config-new-project '<choices-json>' [--dry-run]
 user defaults. It checks each choice with the same key and value rules as `config-set` and
 creates nothing if any choice is refused: an unknown key, a value the key does not accept,
 or a dotted key (`"workflow.research"`) in place of a nested one. A `null` choice leaves its
-key at the default, as `config-set <key> null` clears it. An empty object under a real section (`"workflow":{}`) sets nothing; under any other name it is
-refused as an unknown key, and a section given anything but an object is refused. `--dry-run` prints the
-config that would be created and writes nothing; any other flag is refused. The choices
-are checked first, so a refused choice fails even when `config.json` already exists; with
-valid choices and an existing `config.json`, the command reports `already_exists` and leaves
-it untouched.
+key at the default, as `config-set <key> null` clears it. An empty object under a real
+section (`"workflow":{}`) sets nothing; under any other name it is refused as an unknown key,
+and a section given anything but an object is refused.
+
+Two differences from `config-set` follow from the input being JSON rather than typed text:
+
+- Values are JSON-typed and never coerced. `config-set workflow.research true` parses the
+  text `true` to a boolean; the choice `"research":"true"` is a string and is refused.
+- A setting that also has per-entry settings under it
+  (`review.max_prompt_tokens_per_reviewer`) takes a number for itself, or an object of its
+  per-entry settings, each checked: `{"codex":5000}` is accepted and `{"a":1}` is refused,
+  where `config-set` stores any object given to it whole.
+
+`--dry-run` prints the config that would be created and writes nothing, with secret keys
+masked as `config-set` masks them; any other flag is refused. The choices are checked first,
+so a refused choice fails even when `config.json` already exists; with valid choices and an
+existing `config.json`, the command reports `already_exists` and leaves it untouched.
 
 ---
 

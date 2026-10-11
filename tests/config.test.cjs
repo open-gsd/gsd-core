@@ -763,6 +763,12 @@ describe('config-new-project — refuses what config-set refuses (#5268)', () =>
     return keyPath.split('.').reduce((node, segment) => (node == null ? undefined : node[segment]), obj);
   }
 
+  function stringLeaves(value) {
+    if (typeof value === 'string') return [value];
+    if (value !== null && typeof value === 'object') return Object.values(value).flatMap(stringLeaves);
+    return [];
+  }
+
   // `cli` is the value as typed to config-set, `json` the same value as it
   // arrives in a choices object. Every row is refused by config-set.
   const REFUSED_BY_CONFIG_SET = [
@@ -982,6 +988,46 @@ describe('config-new-project — refuses what config-set refuses (#5268)', () =>
     });
   }
 
+  test('--raw --dry-run prints the text form and writes nothing', () => {
+    const dir = bareDir();
+    const result = newProject([JSON.stringify({ mode: 'yolo' }), '--raw', '--dry-run'], dir);
+
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.output, 'would create (dry run)');
+    assertNothingWritten(dir);
+  });
+
+  test('--dry-run masks a secret choice exactly as config-set --dry-run masks it, and never prints it', () => {
+    const viaSet = runGsdTools(['config-set', 'brave_search', 'SECRETVAL', '--dry-run'], projectDir());
+    assert.ok(viaSet.success, `positive control: ${viaSet.error}`);
+    const maskedBySet = JSON.parse(viaSet.output).value;
+    assert.notStrictEqual(maskedBySet, 'SECRETVAL', 'positive control: config-set must mask the value');
+
+    const dir = bareDir();
+    const preview = newProject([JSON.stringify({ brave_search: 'SECRETVAL' }), '--dry-run'], dir);
+
+    assert.ok(preview.success, `Command failed: ${preview.error}`);
+    assert.strictEqual(preview.output.includes('SECRETVAL'), false, 'the plaintext secret reached the preview');
+    assert.strictEqual(JSON.parse(preview.output).config.brave_search, maskedBySet);
+    assertNothingWritten(dir);
+  });
+
+  // Choices are JSON-typed: config-set parses the text "true" to a boolean and
+  // "5" to a number, while a JSON string stays a string and is held to the
+  // key's typed rule. The documented difference from config-set, pinned.
+  for (const [keyPath, text] of [['workflow.research', 'true'], ['git.create_tag', 'false'], ['context_window', '5'], ['workflow.security_asvs_level', '2']]) {
+    test(`a string where ${keyPath} takes a ${text === 'true' || text === 'false' ? 'boolean' : 'number'} is refused, though config-set coerces the same text`, () => {
+      const viaSet = runGsdTools(['config-set', keyPath, text], projectDir());
+      assert.ok(viaSet.success, `positive control: config-set must accept ${keyPath} ${text}: ${viaSet.error}`);
+
+      const dir = bareDir();
+      const result = newProject([JSON.stringify(nest(keyPath, text))], dir);
+
+      assert.strictEqual(result.success, false, `config-new-project accepted the string "${text}" for ${keyPath}`);
+      assertNothingWritten(dir);
+    });
+  }
+
   test('--dry-run still refuses invalid choices', () => {
     const dir = bareDir();
     const result = newProject([JSON.stringify({ bogus_key: 'x', mode: 'nonsense' }), '--dry-run'], dir);
@@ -1099,6 +1145,10 @@ describe('config-new-project — refuses what config-set refuses (#5268)', () =>
       assert.ok(template, `${workflow} no longer carries a config-new-project choices template`);
       const filled = TEMPLATE_PLACEHOLDERS.reduce((text, [placeholder, value]) => text.split(placeholder).join(value), template[1]);
       const choices = JSON.parse(filled);
+      // A placeholder spelling TEMPLATE_PLACEHOLDERS does not know survives the
+      // fill as a string; one inside a non-string slot already broke the parse.
+      const unfilled = stringLeaves(choices).filter((text) => /^\[.*\]$/.test(text) || /^[a-z-]+(\|[a-z-]+)+$/.test(text));
+      assert.deepStrictEqual(unfilled, [], `${workflow} carries a placeholder TEMPLATE_PLACEHOLDERS does not fill`);
 
       const baselineDir = bareDir();
       assert.ok(newProject(['{}'], baselineDir).success);
