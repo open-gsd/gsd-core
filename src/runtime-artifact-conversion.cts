@@ -3923,12 +3923,13 @@ function injectDisallowedToolsFrontmatter(content: string, disallowedValue: stri
 
 // #767 — Read-only verifier/auditor agents get a Claude-Code disallowedTools deny-list.
 // Group A (pure read-only) deny Write,Edit,MultiEdit. Group B report-writers Write one
-// output file so they deny only Edit,MultiEdit. gsd-nyquist-auditor is intentionally
+// output file so they deny only Edit,MultiEdit (gsd-plan-checker joins them: its one
+// write is the plan-phase stall-watch return receipt, #5182). gsd-nyquist-auditor is intentionally
 // excluded (it legitimately uses Write AND Edit to create/patch test files). Relocated
 // verbatim from bin/install.js (#2875 Part 2) — single source of truth for both the
 // inline loop (which now requires this export) and the descriptor pipeline.
 const READONLY_AGENT_DISALLOWED_TOOLS: Record<string, string> = {
-  'gsd-plan-checker': 'Write, Edit, MultiEdit',
+  'gsd-plan-checker': 'Edit, MultiEdit',
   'gsd-integration-checker': 'Write, Edit, MultiEdit',
   'gsd-ui-checker': 'Write, Edit, MultiEdit',
   'gsd-verifier': 'Edit, MultiEdit',

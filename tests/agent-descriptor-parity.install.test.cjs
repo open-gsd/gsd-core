@@ -506,7 +506,7 @@ test('agent-descriptor-parity: J3 — a runtime NOT declaring agentFrontmatterEx
 test('agent-descriptor-parity: J4 — disallowedTools injected only on a READONLY_AGENT_DISALLOWED_TOOLS hit', () => {
   const content = '---\nname: gsd-plan-checker\ndescription: x\n---\n\nBody.\n';
   const hit = runtimeArtifactConversion.applyAgentFrontmatterExtensions(content, { runtime: 'claude', agentName: 'gsd-plan-checker', targetDir: null });
-  assert.match(hit, /^disallowedTools: /m, 'gsd-plan-checker is a declared read-only agent — expected a disallowedTools hit');
+  assert.match(hit, /^disallowedTools: Edit, MultiEdit$/m, 'gsd-plan-checker is a declared Group B report-writer (#5182) — expected a disallowedTools hit of Edit, MultiEdit');
 
   const missContent = '---\nname: gsd-not-a-readonly-agent\ndescription: x\n---\n\nBody.\n';
   const miss = runtimeArtifactConversion.applyAgentFrontmatterExtensions(missContent, { runtime: 'claude', agentName: 'gsd-not-a-readonly-agent', targetDir: null });

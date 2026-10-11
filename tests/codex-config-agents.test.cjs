@@ -456,7 +456,7 @@ describe('installCodexConfig (integration)', () => {
 
     const checkerToml = fs.readFileSync(path.join(agentsDir, 'gsd-plan-checker.toml'), 'utf8');
     assert.ok(checkerToml.includes('name = "gsd-plan-checker"'), 'plan-checker has name');
-    assert.ok(checkerToml.includes('sandbox_mode = "read-only"'), 'plan-checker is read-only');
+    assert.ok(checkerToml.includes('sandbox_mode = "workspace-write"'), 'plan-checker is workspace-write (#5182 receipt write)');
   });
 
   // PATHS-01: no ~/.claude references should leak into generated .toml files (#2320)

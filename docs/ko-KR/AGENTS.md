@@ -411,7 +411,7 @@ GSD는 멀티 에이전트 아키텍처를 사용합니다. 가벼운 오케스�
 | planner | ✓ | ✓ | | ✓ | ✓ | ✓ | | ✓ | ✓ |
 | roadmapper | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
 | executor | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | | |
-| plan-checker | ✓ | | | ✓ | ✓ | ✓ | | | |
+| plan-checker | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
 | integration-checker | ✓ | | | ✓ | ✓ | ✓ | | | |
 | ui-checker | ✓ | | | ✓ | ✓ | ✓ | | | |
 | verifier | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
