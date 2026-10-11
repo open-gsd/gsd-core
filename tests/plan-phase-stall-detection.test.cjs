@@ -1619,6 +1619,18 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.doesNotMatch(doc, /After routing, the orchestrator runs/, 'the prose-only cleanup sentence is replaced by the site commands');
   });
 
+  // gsd_receipt_path fails closed (rc=1, no output); the orchestrator must know what to
+  // bind then, and an empty receipt argument must behave as "no receipt", never as a match.
+  test('a refused receipt (gsd_receipt_path rc=1) drops the prompt line and watches with an empty receipt', (t) => {
+    const f = fixture(t);
+    const doc = readStallHelpersDoc();
+    assert.match(doc, /If `gsd_receipt_path` prints nothing[\s\S]{0,200}?omit the `<return_receipt>` line\s+and pass `""` as the watch's second argument/,
+      'the helpers doc states the binding for a refused receipt');
+    const checker = watchCallOf(sectionOf(readPlanPhase(), CHECKER_SECTION));
+    assert.equal(watch(NOW, '', f.noPlans, checker.markers), 'waiting', 'an empty receipt is no return');
+    assert.equal(watch(NOW - 11 * 60, '', f.noPlans, checker.markers), 'stalled', 'past the threshold an empty receipt ends stalled');
+  });
+
   // -- Review 5477738387 Minor 5: the *-PLAN.md freshness window (find -mmin -INTERVAL)
   // at its edge. find reads the real clock, not the stubbed `date +%s`, so the mtime is
   // set from the wall clock just before the call. GNU find and BSD find round a file's

@@ -27,7 +27,10 @@ dispatch. Before each watched Agent() call the orchestrator runs
 `gsd_receipt_path "${PHASE_DIR}" <spawn>` (`<spawn>` is `planner`, `checker`, `revision`,
 `outline`, or the plan ID) and substitutes the printed absolute path for `{receipt}`,
 both in the spawn prompt's `<return_receipt>{receipt}</return_receipt>` line and in
-every watch call for that spawn. Like `$TS`, it is a literal the orchestrator carries
+every watch call for that spawn. If `gsd_receipt_path` prints nothing (it fails closed on
+an unsafe or symlinked phase dir), there is no receipt: omit the `<return_receipt>` line
+and pass `""` as the watch's second argument; the wait then ends on the runtime's
+completion result or as `stalled`. Like `$TS`, it is a literal the orchestrator carries
 across tool calls; nothing persists across fences, so never pass an unexpanded
 `$RECEIPT`/`$TS` expression. The agent's LAST action is to write the marker line it
 returns to that path (`agents/gsd-planner.md`, `agents/gsd-plan-checker.md`).
