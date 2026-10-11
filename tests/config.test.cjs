@@ -922,6 +922,24 @@ describe('config-new-project — refuses what config-set refuses (#5268)', () =>
     assert.deepStrictEqual(readProjectConfig(dir).phase_commit_docs, { '2.1': true, '03': false });
   });
 
+  // agent_tools is a setting AND the top level of the agent_tools.<selector>
+  // family, so its entries are keys and each is checked, as config-set checks
+  // `agent_tools.<selector>`.
+  test('agent_tools entries are checked as agent_tools.<selector> keys', () => {
+    const viaSet = runGsdTools(['config-set', 'agent_tools.$bad', '[]'], projectDir());
+    assert.strictEqual(viaSet.success, false, 'positive control: config-set must refuse agent_tools.$bad');
+
+    const refused = bareDir();
+    const result = newProject([JSON.stringify({ agent_tools: { $bad: [] } })], refused);
+    assert.strictEqual(result.success, false, 'an invalid agent_tools selector was written');
+    assert.strictEqual(result.error, viaSet.error);
+    assertNothingWritten(refused);
+
+    const accepted = bareDir();
+    assert.ok(newProject([JSON.stringify({ agent_tools: { 'gsd-executor': ['Read'], '*': [] } })], accepted).success);
+    assert.deepStrictEqual(readProjectConfig(accepted).agent_tools, { 'gsd-executor': ['Read'], '*': [] });
+  });
+
   test('a setting that is also a parent is walked, not accepted whole', () => {
     const accepted = bareDir();
     const perReviewer = { review: { max_prompt_tokens_per_reviewer: { codex: 5000 } } };
@@ -960,7 +978,7 @@ describe('config-new-project — refuses what config-set refuses (#5268)', () =>
     assert.ok(newProject(['{}'], baselineDir).success);
 
     const dir = bareDir();
-    const result = newProject([JSON.stringify({ workflow: {}, agent_skills: {}, review: { max_prompt_tokens_per_reviewer: {} } })], dir);
+    const result = newProject([JSON.stringify({ workflow: {}, agent_skills: {}, agent_tools: {}, review: { max_prompt_tokens_per_reviewer: {} } })], dir);
 
     assert.ok(result.success, `Command failed: ${result.error}`);
     assert.deepStrictEqual(readProjectConfig(dir), readProjectConfig(baselineDir));

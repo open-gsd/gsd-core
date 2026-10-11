@@ -539,27 +539,30 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Does any schema key live under `keyPath`? True for a section (`workflow`)
- * and for the settings that are also parents
- * (`review.max_prompt_tokens_per_reviewer` and its per-reviewer keys).
+ * Does any schema key live under `keyPath`? True for a section (`workflow`),
+ * for the top level of a dynamic key family (`agent_skills`, whose keys are
+ * `agent_skills.<agent-type>`), and for the settings that are also parents
+ * (`review.max_prompt_tokens_per_reviewer` and its per-reviewer keys;
+ * `agent_tools`, a setting whose entries are the `agent_tools.<selector>`
+ * family).
  */
 function hasChildConfigKeys(cwd: string, keyPath: string): boolean {
   const childPrefix = `${keyPath}.`;
   for (const known of VALID_CONFIG_KEYS) {
     if (known.startsWith(childPrefix)) return true;
   }
+  if (DYNAMIC_KEY_PATTERNS.some((family) => family['topLevel'] === keyPath)) return true;
   return Object.keys(getCapabilityConfigSchema(cwd)).some((known) => known.startsWith(childPrefix));
 }
 
 /**
- * Is `keyPath` a section a choice may nest settings under: a schema key
- * lives under it, or it is the top level of a dynamic key family
- * (`agent_skills`, `features`)? A family's deeper levels
- * (`model_profile_overrides.<runtime>`) are not recognised here; an empty
- * object there is refused as an unknown key, and it would set nothing anyway.
+ * Is `keyPath` a section a choice may nest settings under? The same test as
+ * `hasChildConfigKeys`. A dynamic family's deeper levels
+ * (`model_profile_overrides.<runtime>`) are not recognised; an empty object
+ * there is refused as an unknown key, and it would set nothing anyway.
  */
 function isConfigSection(cwd: string, keyPath: string): boolean {
-  return hasChildConfigKeys(cwd, keyPath) || DYNAMIC_KEY_PATTERNS.some((family) => family['topLevel'] === keyPath);
+  return hasChildConfigKeys(cwd, keyPath);
 }
 
 /**

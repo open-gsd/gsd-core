@@ -630,10 +630,11 @@ Two differences from `config-set` follow from the input being JSON rather than t
 
 - Values are JSON-typed and never coerced. `config-set workflow.research true` parses the
   text `true` to a boolean; the choice `"research":"true"` is a string and is refused.
-- A setting that also has per-entry settings under it
-  (`review.max_prompt_tokens_per_reviewer`) takes a number for itself, or an object of its
-  per-entry settings, each checked: `{"codex":5000}` is accepted and `{"a":1}` is refused,
-  where `config-set` stores any object given to it whole.
+- A setting that also has per-entry settings under it (`review.max_prompt_tokens_per_reviewer`,
+  `agent_tools`) takes an object of those entries, each checked as `config-set` checks that
+  entry's own key: `{"codex":5000}` is accepted and `{"a":1}` is refused, where `config-set`
+  stores any object given to the setting whole. `review.max_prompt_tokens_per_reviewer` also
+  takes a number for itself.
 
 `--dry-run` prints the config that would be created and writes nothing, with secret keys
 masked as `config-set` masks them; any other flag is refused. The choices are checked first,
