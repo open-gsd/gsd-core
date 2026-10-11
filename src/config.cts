@@ -714,8 +714,6 @@ function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: 
     return;
   }
 
-  persistDefaultsRewrite(plan);
-
   // Ensure .planning directory exists
   try {
     platformEnsureDir(planningBase);
@@ -725,10 +723,13 @@ function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: 
 
   try {
     platformWriteSync(configPath, JSON.stringify(config, null, 2));
-    output({ created: true, path: '.planning/config.json' }, raw, 'created');
   } catch (err) {
     error('Failed to write config.json: ' + (err as Error).message);
   }
+  // The user defaults rewrite follows the config it was planned for: a
+  // creation that fails before here leaves the defaults file as it was.
+  persistDefaultsRewrite(plan);
+  output({ created: true, path: '.planning/config.json' }, raw, 'created');
 }
 
 /**

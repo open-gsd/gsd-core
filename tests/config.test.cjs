@@ -11,7 +11,7 @@ const { test, describe, before, after, beforeEach, afterEach } = require('node:t
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempDir, createTempProject, cleanup, delay, withIsolatedProcessState, homeSandboxEnv, suppressFdAsync } = require('./helpers.cjs');
+const { runGsdTools, createTempDir, createTempProject, cleanup, delay, withIsolatedProcessState, homeSandboxEnv, mockPartialWriteThenThrow, suppressFdAsync } = require('./helpers.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const configLib = require('../gsd-core/bin/lib/config.cjs');
 const { ExitError } = require('../gsd-core/bin/lib/cli-exit.cjs');
@@ -1151,6 +1151,43 @@ describe('config-new-project — refuses what config-set refuses (#5268)', () =>
     assert.strictEqual(result.success, false);
     assert.match(result.error, /Unknown config key: "workflow\.reserch"/);
     assertNothingWritten(dir);
+  });
+
+  test('a creation whose config write fails leaves the user defaults file unmigrated', async (t) => {
+    const dir = bareDir();
+    const gsdHome = bareDir();
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    const defaultsBefore = JSON.stringify({ depth: 'quick' });
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.writeFileSync(defaultsPath, defaultsBefore);
+    const savedGsdHome = process.env.GSD_HOME;
+    process.env.GSD_HOME = gsdHome;
+    t.after(() => {
+      if (savedGsdHome === undefined) delete process.env.GSD_HOME;
+      else process.env.GSD_HOME = savedGsdHome;
+    });
+    // In-process, so the fault lands on the config write itself and on nothing before it.
+    const configPath = path.join(dir, '.planning', 'config.json');
+    t.after(mockPartialWriteThenThrow(fs, (target) => String(target).startsWith(configPath), 0));
+
+    const result = await runQuietly(() => configLib.cmdConfigNewProject(dir, JSON.stringify({ mode: 'yolo' }), false));
+
+    assert.strictEqual(result.ok, false);
+    assert.match(result.err, /Failed to write config\.json/);
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), defaultsBefore);
+  });
+
+  test('a successful creation migrates the user defaults file', () => {
+    const dir = bareDir();
+    const gsdHome = bareDir();
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.writeFileSync(defaultsPath, JSON.stringify({ depth: 'quick' }));
+
+    const result = runGsdTools(['config-new-project', '{}'], dir, { ...homeSandboxEnv(dir), GSD_HOME: gsdHome });
+
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')), { granularity: 'coarse' });
   });
 
   test('--dry-run on an existing config reports already_exists', () => {
