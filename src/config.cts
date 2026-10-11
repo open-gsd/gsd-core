@@ -605,8 +605,10 @@ function validateNewProjectChoices(cwd: string, choices: Record<string, unknown>
     }
 
     assertKnownConfigKey(cwd, kp);
-    // `config-set <key> null` clears the key and skips its typed rules. A null
-    // choice likewise skips them and is written as null, as it always was.
+    // `config-set <key> null` clears the key: it skips the typed rules and
+    // leaves the key to its default. A null choice is the same request, so it
+    // skips them too and is left unchosen, where it used to be written as a
+    // literal null that config-set can never store.
     const checkedValue = value === null
       ? null
       : validateConfigValue(cwd, kp, value, typeof value === 'string' ? value : JSON.stringify(value));
@@ -616,6 +618,7 @@ function validateNewProjectChoices(cwd: string, choices: Record<string, unknown>
     if (kp.split('.').some((segment) => segment === '__proto__' || segment === 'prototype' || segment === 'constructor')) {
       error('Invalid config key (prototype pollution guard): ' + kp, ERROR_REASON.CONFIG_PARSE_FAILED);
     }
+    if (value === null) continue;
     checked[key] = checkedValue;
   }
   return checked;

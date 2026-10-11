@@ -966,16 +966,44 @@ describe('config-new-project — refuses what config-set refuses (#5268)', () =>
     const dir = bareDir();
     const gsdHome = bareDir();
     const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
-    const defaultsBefore = JSON.stringify({ depth: 'quick' });
+    // The choices are valid; the user defaults are not (their contents are
+    // not validated as choices), so the builder's own array check refuses.
+    const defaultsBefore = JSON.stringify({ depth: 'quick', ship: { pr_body_sections: 'not-a-list' } });
     fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
     fs.writeFileSync(defaultsPath, defaultsBefore);
 
-    // A null skips the per-key value rules, so this one is refused by the builder's array check.
-    const result = runGsdTools(['config-new-project', JSON.stringify({ ship: { pr_body_sections: null } })], dir, { ...homeSandboxEnv(dir), GSD_HOME: gsdHome });
+    const result = runGsdTools(['config-new-project', JSON.stringify({ mode: 'yolo' })], dir, { ...homeSandboxEnv(dir), GSD_HOME: gsdHome });
 
     assert.strictEqual(result.success, false);
     assert.match(result.error, /Invalid ship\.pr_body_sections value/);
     assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), defaultsBefore);
+    assertNothingWritten(dir);
+  });
+
+  // config-set <key> null clears the key; a null choice leaves it unchosen.
+  // Both end with the key at its default, whatever its typed rules require.
+  for (const keyPath of ['mode', 'ship.pr_body_sections', 'workflow.research']) {
+    test(`a null choice is accepted as config-set accepts it, and leaves ${keyPath} as an empty payload would`, () => {
+      const viaSet = runGsdTools(['config-set', keyPath, 'null'], projectDir());
+      assert.ok(viaSet.success, `positive control: config-set must accept ${keyPath}=null: ${viaSet.error}`);
+
+      const baselineDir = bareDir();
+      assert.ok(newProject(['{}'], baselineDir).success);
+
+      const dir = bareDir();
+      const result = newProject([JSON.stringify(nest(keyPath, null))], dir);
+
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      assert.deepStrictEqual(readProjectConfig(dir), readProjectConfig(baselineDir));
+    });
+  }
+
+  test('a null choice still has its key checked', () => {
+    const dir = bareDir();
+    const result = newProject([JSON.stringify({ workflow: { reserch: null } })], dir);
+
+    assert.strictEqual(result.success, false);
+    assert.match(result.error, /Unknown config key: "workflow\.reserch"/);
     assertNothingWritten(dir);
   });
 
