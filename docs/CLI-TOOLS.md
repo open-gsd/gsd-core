@@ -623,8 +623,9 @@ one exception: below the first level of a dynamic key family
 `config-set` refuses it. Under a key with no settings below it, an object is a value, held to
 that key's rule as `config-set` holds it (`"model_overrides":{"gsd-executor":{}}` is written,
 `"mode":{}` is refused). Under a name that is neither, it is refused as an unknown key. A
-section given anything but an object is refused. An empty or blank choices argument is the same
-as none.
+section given anything but an object is refused, unless its key is itself a setting
+(`agent_tools`), where the value is held to that setting's rule as `config-set` holds it. An
+empty or blank choices argument is the same as none.
 
 Two differences from `config-set` follow from the input being JSON rather than typed text:
 
@@ -632,8 +633,8 @@ Two differences from `config-set` follow from the input being JSON rather than t
   text `true` to a boolean; the choice `"research":"true"` is a string and is refused.
 - A setting that also has per-entry settings under it (`review.max_prompt_tokens_per_reviewer`,
   `agent_tools`) takes an object of those entries, each checked as `config-set` checks that
-  entry's own key: `{"codex":5000}` is accepted and `{"a":1}` is refused, where `config-set`
-  stores any object given to the setting whole. `review.max_prompt_tokens_per_reviewer` also
+  entry's own key: for the reviewer budget `{"codex":5000}` is accepted and `{"a":1}` is
+  refused, where `config-set` stores any object given to the setting whole. `review.max_prompt_tokens_per_reviewer` also
   takes a number for itself.
 
 `--dry-run` prints the config that would be created and writes nothing, with secret keys
