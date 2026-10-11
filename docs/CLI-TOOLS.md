@@ -611,10 +611,20 @@ node gsd-tools.cjs config-new-project '<choices-json>' [--dry-run]
 (`'{"mode":"yolo","workflow":{"research":false}}'`), and layers them over the built-in and
 user defaults. It checks each choice with the same key and value rules as `config-set` and
 creates nothing if any choice is refused: an unknown key, a value the key does not accept,
-or a dotted key (`"workflow.research"`) in place of a nested one. A `null` choice leaves its
-key at the default, as `config-set <key> null` clears it. An empty object under a real
-section (`"workflow":{}`) sets nothing; under any other name it is refused as an unknown key,
-and a section given anything but an object is refused.
+or a dotted key (`"workflow.research"`) in place of a nested one. A `null` choice is treated
+as not chosen: its key is still checked, and it takes the value it would have had without the
+choice (the built-in or user default). That is the creation-time counterpart of `config-set
+<key> null`, which removes the key from an existing config.
+
+An object is read as a section whenever settings live under its key, and its entries are
+checked one by one. An empty section sets nothing (`"workflow":{}`, `"agent_skills":{}`), with
+one exception: below the first level of a dynamic key family
+(`"model_profile_overrides":{"claude":{}}`) an empty object is refused as an unknown key, as
+`config-set` refuses it. Under a key with no settings below it, an object is a value, held to
+that key's rule as `config-set` holds it (`"model_overrides":{"gsd-executor":{}}` is written,
+`"mode":{}` is refused). Under a name that is neither, it is refused as an unknown key. A
+section given anything but an object is refused. An empty or blank choices argument is the same
+as none.
 
 Two differences from `config-set` follow from the input being JSON rather than typed text:
 
@@ -627,8 +637,10 @@ Two differences from `config-set` follow from the input being JSON rather than t
 
 `--dry-run` prints the config that would be created and writes nothing, with secret keys
 masked as `config-set` masks them; any other flag is refused. The choices are checked first,
-so a refused choice fails even when `config.json` already exists; with valid choices and an
-existing `config.json`, the command reports `already_exists` and leaves it untouched.
+so a refused choice, malformed JSON included, fails even when `config.json` already exists;
+with valid choices and an existing `config.json`, the command reports `already_exists` and
+leaves it untouched. The user defaults file is read only to build a new config, so a problem in
+it is not reported when the config already exists.
 
 ---
 
