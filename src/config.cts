@@ -552,6 +552,17 @@ function hasChildConfigKeys(cwd: string, keyPath: string): boolean {
 }
 
 /**
+ * Is `keyPath` a section a choice may nest settings under: a schema key
+ * lives under it, or it is the top level of a dynamic key family
+ * (`agent_skills`, `features`)? A family's deeper levels
+ * (`model_profile_overrides.<runtime>`) are not recognised here; an empty
+ * object there is refused as an unknown key, and it would set nothing anyway.
+ */
+function isConfigSection(cwd: string, keyPath: string): boolean {
+  return hasChildConfigKeys(cwd, keyPath) || DYNAMIC_KEY_PATTERNS.some((family) => family['topLevel'] === keyPath);
+}
+
+/**
  * Hold `config-new-project` choices to the rules `config-set` applies (#5268).
  *
  * Choices arrive nested (`{"workflow":{"research":true}}`) while the schema
@@ -564,9 +575,9 @@ function hasChildConfigKeys(cwd: string, keyPath: string): boolean {
  *
  * Returns the checked choices as a new object and leaves `choices` as given:
  * each value is the one `config-set` would persist (a normalizing rule's
- * result where one applies), and a section object with no settings in it is
- * left out, since it would otherwise reach the config as a key nothing
- * validated.
+ * result where one applies). An empty object is a section with nothing set:
+ * refused as an unknown key unless its name is a real section, and left out
+ * of the result either way.
  */
 function validateNewProjectChoices(cwd: string, choices: Record<string, unknown>, prefix = ''): Record<string, unknown> {
   const checked: Record<string, unknown> = {};
@@ -597,11 +608,25 @@ function validateNewProjectChoices(cwd: string, choices: Record<string, unknown>
     const value = choices[key];
 
     if (isPlainObject(value) && (!isValidConfigKey(kp, cwd) || hasChildConfigKeys(cwd, kp))) {
+      // A non-empty section has its name checked through its leaves. An empty
+      // one has no leaves, so its name is checked here: config-set refuses
+      // `bogus '{}'` as an unknown key, and so does this.
+      if (Object.keys(value).length === 0 && !isValidConfigKey(kp, cwd) && !isConfigSection(cwd, kp)) {
+        assertKnownConfigKey(cwd, kp);
+      }
       const section = validateNewProjectChoices(cwd, value, kp);
-      // Empty as given, or emptied by the walk below it: either way it now
-      // addresses no setting, and its own name was never checked.
+      // Empty as given, or emptied by null choices: it sets nothing.
       if (Object.keys(section).length > 0) checked[key] = section;
       continue;
+    }
+
+    // A section given a value that is not an object. config-set would call
+    // the name unknown, which misdescribes a real section; say what is wrong.
+    if (!isValidConfigKey(kp, cwd) && isConfigSection(cwd, kp)) {
+      error(
+        `Invalid choice "${kp}" for config-new-project: it is a section, so its value must be an object of settings, e.g. {"workflow":{"research":true}}.`,
+        ERROR_REASON.CONFIG_INVALID_KEY,
+      );
     }
 
     assertKnownConfigKey(cwd, kp);

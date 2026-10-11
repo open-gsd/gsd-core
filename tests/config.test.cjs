@@ -881,16 +881,47 @@ describe('config-new-project — refuses what config-set refuses (#5268)', () =>
     assertNothingWritten(refused);
   });
 
-  test('a section object with no settings in it is not written to the config', () => {
+  // config-set refuses `bogus_section '{}'` as an unknown key; an empty object
+  // under a name that is not a section is refused the same way, at any depth.
+  for (const [choices, key] of [
+    [{ bogus_section: {} }, 'bogus_section'],
+    [{ bogus_parent: { inner: { innermost: {} } } }, 'bogus_parent.inner.innermost'],
+    [{ workflow: { bogus: {} } }, 'workflow.bogus'],
+  ]) {
+    test(`an empty object under an unknown name is refused: ${key}`, () => {
+      const viaSet = runGsdTools(['config-set', key, '{}'], projectDir());
+      assert.strictEqual(viaSet.success, false, `positive control: config-set must refuse ${key}={}`);
+
+      const dir = bareDir();
+      const result = newProject([JSON.stringify(choices)], dir);
+
+      assert.strictEqual(result.success, false);
+      assert.strictEqual(result.error, viaSet.error);
+      assertNothingWritten(dir);
+    });
+  }
+
+  test('an empty object under a real section sets nothing', () => {
+    const baselineDir = bareDir();
+    assert.ok(newProject(['{}'], baselineDir).success);
+
     const dir = bareDir();
-    const result = newProject([JSON.stringify({ bogus_section: {}, bogus_parent: { inner: { innermost: {} } }, workflow: {} })], dir);
+    const result = newProject([JSON.stringify({ workflow: {}, agent_skills: {}, review: { max_prompt_tokens_per_reviewer: {} } })], dir);
 
     assert.ok(result.success, `Command failed: ${result.error}`);
-    const config = readProjectConfig(dir);
-    assert.strictEqual(Object.hasOwn(config, 'bogus_section'), false);
-    assert.strictEqual(Object.hasOwn(config, 'bogus_parent'), false);
-    assert.strictEqual(config.workflow.research, true);
+    assert.deepStrictEqual(readProjectConfig(dir), readProjectConfig(baselineDir));
   });
+
+  for (const value of ['x', true, 3, null, ['research']]) {
+    test(`a section given ${JSON.stringify(value)} is refused as a section, not as an unknown key`, () => {
+      const dir = bareDir();
+      const result = newProject([JSON.stringify({ workflow: value })], dir);
+
+      assert.strictEqual(result.success, false);
+      assert.ok(result.error.startsWith('Error: Invalid choice "workflow" for config-new-project: it is a section'), result.error);
+      assertNothingWritten(dir);
+    });
+  }
 
   test('an unsupported flag is refused and nothing is written', () => {
     const dir = bareDir();
