@@ -991,6 +991,23 @@ describe('config-new-project — refuses what config-set refuses (#5268)', () =>
     assert.strictEqual(fs.readFileSync(path.join(dir, '.planning', 'config.json'), 'utf-8'), before);
   });
 
+  for (const choices of [{ mode: 'nonsense' }, { bogus_key: 'x' }]) {
+    for (const dryRun of [false, true]) {
+      test(`an existing config does not hide a refused choice${dryRun ? ' under --dry-run' : ''}: ${JSON.stringify(choices)}`, () => {
+        const dir = projectDir();
+        assert.ok(newProject(['{}'], dir).success);
+        const configPath = path.join(dir, '.planning', 'config.json');
+        const before = fs.readFileSync(configPath, 'utf-8');
+
+        const result = newProject([JSON.stringify(choices), ...(dryRun ? ['--dry-run'] : [])], dir);
+
+        assert.strictEqual(result.success, false, 'a refused choice must not report already_exists');
+        assert.match(result.error, /Invalid mode 'nonsense'|Unknown config key: "bogus_key"/);
+        assert.strictEqual(fs.readFileSync(configPath, 'utf-8'), before);
+      });
+    }
+  }
+
   // The shipped callers: the choices template each workflow hands the model,
   // with every placeholder filled in. A key added to a template without being
   // registered in the schema fails here rather than in a user's new project.

@@ -636,18 +636,13 @@ interface ConfigNewProjectOptions {
  * anything is written (#5268). With `dryRun`, prints the config that would be
  * created and writes nothing.
  *
- * Idempotent: if config.json already exists, returns { created: false }.
+ * Idempotent: if config.json already exists, returns { created: false } once
+ * the choices have been checked; a refused choice is refused either way.
  */
 function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: boolean, options: ConfigNewProjectOptions = {}): void {
   const dryRun = options.dryRun === true;
   const planningBase = planningDir(cwd);
   const configPath = path.join(planningBase, 'config.json');
-
-  // Idempotent: don't overwrite existing config
-  if (fs.existsSync(configPath)) {
-    output({ created: false, reason: 'already_exists' }, raw, 'exists');
-    return;
-  }
 
   // Parse user choices
   let userChoices: Record<string, unknown> = {};
@@ -666,8 +661,16 @@ function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: 
     userChoices = parsedChoices as Record<string, unknown>;
   }
 
-  // #5268: refuse what config-set refuses, before the first write.
+  // #5268: refuse what config-set refuses, before the first write — and
+  // before the existing-config check, so a refused choice is reported
+  // whether or not the project already has a config.
   const checkedChoices = validateNewProjectChoices(cwd, userChoices);
+
+  // Idempotent: don't overwrite existing config
+  if (fs.existsSync(configPath)) {
+    output({ created: false, reason: 'already_exists' }, raw, 'exists');
+    return;
+  }
 
   const plan = planNewProjectConfig(checkedChoices);
   const config = plan.config;

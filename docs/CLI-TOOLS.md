@@ -613,8 +613,10 @@ user defaults. It checks each choice with the same key and value rules as `confi
 creates nothing if any choice is refused: an unknown key, a value the key does not accept,
 or a dotted key (`"workflow.research"`) in place of a nested one. A section given as an empty
 object (`"workflow":{}`) sets nothing and is left out, whatever its name. `--dry-run` prints the
-config that would be created and writes nothing; any other flag is refused. If
-`config.json` already exists the command reports `already_exists` and leaves it untouched.
+config that would be created and writes nothing; any other flag is refused. The choices
+are checked first, so a refused choice fails even when `config.json` already exists; with
+valid choices and an existing `config.json`, the command reports `already_exists` and leaves
+it untouched.
 
 ---
 
