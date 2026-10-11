@@ -801,6 +801,20 @@ describe('config-new-project — refuses what config-set refuses (#5268)', () =>
     });
   }
 
+  // config-set stores project_code as the text typed (#1581), so a code is a
+  // string; a JSON number is a type it can never store.
+  test('a project_code that is not a string is refused; a string is written as given', () => {
+    const refused = bareDir();
+    const result = newProject([JSON.stringify({ project_code: 7 })], refused);
+    assert.strictEqual(result.success, false);
+    assert.match(result.error, /Invalid project_code '7'\. Must be a string/);
+    assertNothingWritten(refused);
+
+    const accepted = bareDir();
+    assert.ok(newProject([JSON.stringify({ project_code: '007' })], accepted).success);
+    assert.strictEqual(readProjectConfig(accepted).project_code, '007');
+  });
+
   test('one bad key among valid choices refuses the whole payload', () => {
     const dir = bareDir();
     const result = newProject([JSON.stringify({ mode: 'yolo', workflow: { research: true }, bogus_key: 'x' })], dir);

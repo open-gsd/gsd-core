@@ -1161,6 +1161,14 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
  * to persist, so it is refused through `error()` instead.
  */
 function validateConfigValue(cwd: string, kp: string, parsedValue: unknown, val: string): unknown {
+  // #1581: project_code is an identifier, and config-set stores it as the text
+  // typed. Through config-set this never fires; it holds a JSON choice (#5268)
+  // to the type config-set stores, rather than writing a number readers cast
+  // to string.
+  if (kp === 'project_code' && typeof parsedValue !== 'string') {
+    error(`Invalid project_code '${val}'. Must be a string identifier, e.g. "PROJ".`);
+  }
+
   const VALID_CONTEXT_VALUES = ['dev', 'research', 'review'];
   if (kp === 'context') assertEnumValue(parsedValue, val, VALID_CONTEXT_VALUES, 'context value');
 
