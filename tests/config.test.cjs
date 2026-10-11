@@ -7,11 +7,14 @@
  * Requirements: TEST-13
  */
 
-const { test, describe, beforeEach, afterEach } = require('node:test');
+const { test, describe, before, after, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempDir, createTempProject, cleanup, delay, withIsolatedProcessState, homeSandboxEnv } = require('./helpers.cjs');
+const { runGsdTools, createTempDir, createTempProject, cleanup, delay, withIsolatedProcessState, homeSandboxEnv, suppressFdAsync } = require('./helpers.cjs');
+const fc = require('./helpers/fast-check-setup.cjs');
+const configLib = require('../gsd-core/bin/lib/config.cjs');
+const { ExitError } = require('../gsd-core/bin/lib/cli-exit.cjs');
 
 // ─── ADR-612 PR-5: phase_id_convention enum validation ──────────────────────
 
@@ -3799,5 +3802,202 @@ describe('config-set hooks.context_warning_threshold / hooks.context_critical_th
     const config = readConfig(tmpDir);
     assert.strictEqual(config.hooks.context_warning_threshold, 20);
     assert.strictEqual(config.hooks.context_critical_threshold, 10);
+  });
+});
+
+// ─── config-new-project properties: choices held to config-set leaf by leaf (#5268) ───
+
+/**
+ * Property-based tests for config-new-project's choice validation (#5268).
+ * Exported: cmdConfigNewProject(cwd, choicesJson, raw, { dryRun })
+ *           cmdConfigSet(cwd, keyPath, value, raw, { dryRun })
+ *
+ * `config-new-project` takes its choices as one nested JSON object and holds
+ * each leaf to the key and value rules `config-set` applies to that leaf. The
+ * table rows above pin chosen cases; these properties pin the walk:
+ *   (a) a payload is accepted exactly when config-set accepts every one of its
+ *       leaves, it is refused with the error config-set gives for one of them,
+ *       and an accepted leaf is written as config-set would write it
+ *   (b) one unknown leaf anywhere in a payload refuses the whole payload, and
+ *       nothing is written
+ *
+ * The leaf values are JSON-typed, and the text handed to config-set is the
+ * text config-set parses back to that same value. A string config-set would
+ * coerce ("true", "5") is left out on purpose: config-new-project does not
+ * coerce, and the rows above pin that difference by name.
+ *
+ * Both verbs run in-process: error() throws ExitError (ADR-3889) rather than
+ * exiting, so each verdict is a caught throw, not a spawned CLI.
+ */
+
+/**
+ * Run one in-process verb call with fd 1 and fd 2 recorded instead of
+ * written. Returns { ok, out, err }; `ok` is false when the verb refused
+ * through error(). Built on suppressFdAsync for the reason it exists
+ * (#4448): io.output()'s fd-1 write races node:test's child-to-parent IPC,
+ * and the window here is one verb call that nothing else writes into.
+ */
+async function runQuietly(fn) {
+  let thrown = null;
+  let err = '';
+  const out = await suppressFdAsync(1, async () => {
+    err = await suppressFdAsync(2, () => {
+      try {
+        fn();
+      } catch (caught) {
+        thrown = caught;
+      }
+    });
+  });
+  if (thrown !== null && !(thrown instanceof ExitError)) throw thrown;
+  return { ok: thrown === null, out, err };
+}
+
+/** The text that config-set parses back to `value`. */
+function cliText(value) {
+  if (typeof value === 'string') return value;
+  return JSON.stringify(value);
+}
+
+function setPath(target, keyPath, value) {
+  const segments = keyPath.split('.');
+  let node = target;
+  for (const segment of segments.slice(0, -1)) {
+    if (node[segment] === undefined) node[segment] = {};
+    node = node[segment];
+  }
+  node[segments[segments.length - 1]] = value;
+  return target;
+}
+
+function valueAt(obj, keyPath) {
+  return keyPath.split('.').reduce((node, segment) => (node == null ? undefined : node[segment]), obj);
+}
+
+// Each leaf draws from values its rule accepts and values it refuses, so both
+// verdicts occur. `null` is drawn too: config-set clears the key, and
+// config-new-project leaves it unchosen; both accept.
+const orNull = (arb) => fc.oneof({ weight: 1, arbitrary: fc.constant(null) }, { weight: 6, arbitrary: arb });
+const LEAVES = {
+  mode: orNull(fc.constantFrom('yolo', 'interactive', 'nonsense', 'YOLO')),
+  granularity: orNull(fc.constantFrom('coarse', 'standard', 'fine', 'huge')),
+  context_window: orNull(fc.integer({ min: -2, max: 3 })),
+  project_code: orNull(fc.constantFrom('PROJ', 'APP_CODE')),
+  'workflow.research': orNull(fc.oneof(fc.boolean(), fc.constant('maybe'))),
+  'workflow.code_review_depth': orNull(fc.constantFrom('quick', 'standard', 'deep', 'weird')),
+  'workflow.security_asvs_level': orNull(fc.integer({ min: -1, max: 5 })),
+  'workflow.drift_threshold': orNull(fc.integer({ min: -1, max: 3 })),
+  'workflow.human_verify_mode': orNull(fc.constantFrom('mid-flight', 'end-of-phase', 'never')),
+  'git.create_tag': orNull(fc.oneof(fc.boolean(), fc.constant('yes'))),
+  'git.branching_strategy': orNull(fc.constantFrom('none', 'phase', 'milestone', 'sometimes')),
+  'hooks.context_warning_threshold': orNull(fc.integer({ min: -1, max: 101 })),
+  'review.default_reviewers': orNull(fc.subarray(['codex', 'Codex', 'gemini', 'not-a-reviewer'])),
+  'ship.pr_body_sections': orNull(fc.constantFrom([], 'x', [{}])),
+};
+
+const leafEntries = fc
+  .uniqueArray(fc.constantFrom(...Object.keys(LEAVES)), { minLength: 1, maxLength: 5 })
+  .chain((keys) => fc.tuple(...keys.map((key) => LEAVES[key].map((value) => [key, value]))));
+
+const UNKNOWN_LEAVES = ['bogus_key', 'workflow.reserch', 'git.no_such_setting', 'hooks.nope', 'review.not_a_setting'];
+
+describe('config-new-project: choices are held to config-set leaf by leaf (#5268)', () => {
+  let projectDir;
+  let gsdHome;
+  let savedGsdHome;
+
+  before(() => {
+    // Neither verb may see this host's defaults or installed capabilities.
+    gsdHome = createTempDir('gsd-5268-prop-home-');
+    savedGsdHome = process.env.GSD_HOME;
+    process.env.GSD_HOME = gsdHome;
+    // config-set previews against an existing config; config-new-project
+    // previews from a directory that has none.
+    projectDir = createTempDir('gsd-5268-prop-project-');
+    fs.mkdirSync(path.join(projectDir, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(projectDir, '.planning', 'config.json'), '{}');
+  });
+
+  after(() => {
+    if (savedGsdHome === undefined) delete process.env.GSD_HOME;
+    else process.env.GSD_HOME = savedGsdHome;
+    cleanup(projectDir);
+    cleanup(gsdHome);
+  });
+
+  test('property: a payload is accepted exactly when config-set accepts each leaf, and written as config-set writes it', async (t) => {
+    const seen = { accepted: 0, refused: 0 };
+    const bareDir = createTempDir('gsd-5268-prop-bare-');
+    t.after(() => cleanup(bareDir));
+    await fc.assert(
+      fc.asyncProperty(leafEntries, async (entries) => {
+        const viaSet = [];
+        for (const [key, value] of entries) {
+          viaSet.push(await runQuietly(() => configLib.cmdConfigSet(projectDir, key, cliText(value), false, { dryRun: true })));
+        }
+        const choices = entries.reduce((acc, [key, value]) => setPath(acc, key, value), {});
+        const viaNewProject = await runQuietly(() =>
+          configLib.cmdConfigNewProject(bareDir, JSON.stringify(choices), false, { dryRun: true }),
+        );
+
+        const setAcceptsAll = viaSet.every((verdict) => verdict.ok);
+        assert.strictEqual(
+          viaNewProject.ok,
+          setAcceptsAll,
+          `config-new-project ${viaNewProject.ok ? 'accepted' : 'refused'} ${JSON.stringify(choices)}; config-set verdicts: ${
+            entries.map(([key], i) => `${key}=${viaSet[i].ok}`).join(', ')}\n${viaNewProject.err}`,
+        );
+
+        if (!viaNewProject.ok) {
+          seen.refused += 1;
+          const setErrors = viaSet.filter((verdict) => !verdict.ok).map((verdict) => verdict.err);
+          assert.ok(setErrors.includes(viaNewProject.err), `refused with an error config-set does not give: ${viaNewProject.err}`);
+          return;
+        }
+
+        seen.accepted += 1;
+        const preview = JSON.parse(viaNewProject.out).config;
+        entries.forEach(([key, value], i) => {
+          if (value === null) return; // unchosen: the key keeps its default
+          assert.deepStrictEqual(valueAt(preview, key), JSON.parse(viaSet[i].out).value, `${key} is not written as config-set writes it`);
+        });
+      }),
+    );
+    // Positive control: a generator that only ever produced one verdict would
+    // pass the property vacuously.
+    assert.ok(seen.accepted > 0 && seen.refused > 0, `both verdicts must occur: ${JSON.stringify(seen)}`);
+  });
+
+  test('property: one unknown leaf anywhere in a payload refuses it and nothing is written', async (t) => {
+    const dirs = [];
+    t.after(() => dirs.forEach((dir) => cleanup(dir)));
+    await fc.assert(
+      fc.asyncProperty(
+        leafEntries,
+        fc.constantFrom(...UNKNOWN_LEAVES),
+        fc.nat(),
+        async (entries, unknownKey, position) => {
+          const withUnknown = [...entries];
+          withUnknown.splice(position % (entries.length + 1), 0, [unknownKey, true]);
+          const choices = withUnknown.reduce((acc, [key, value]) => setPath(acc, key, value), {});
+
+          const dir = createTempDir('gsd-5268-prop-unknown-');
+          dirs.push(dir);
+          const result = await runQuietly(() => configLib.cmdConfigNewProject(dir, JSON.stringify(choices), false));
+          assert.strictEqual(result.ok, false, `accepted ${JSON.stringify(choices)}`);
+          assert.strictEqual(fs.existsSync(path.join(dir, '.planning')), false, '.planning must not be created');
+
+          let othersAccepted = true;
+          for (const [key, value] of entries) {
+            const verdict = await runQuietly(() => configLib.cmdConfigSet(projectDir, key, cliText(value), false, { dryRun: true }));
+            othersAccepted = othersAccepted && verdict.ok;
+          }
+          if (othersAccepted) {
+            assert.match(result.err, new RegExp(`^Error: Unknown config key: "${unknownKey.replace(/\./g, '\\.')}"`));
+          }
+        },
+      ),
+      { numRuns: 100 },
+    );
   });
 });
