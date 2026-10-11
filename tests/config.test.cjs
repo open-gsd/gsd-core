@@ -1007,6 +1007,19 @@ describe('config-new-project — refuses what config-set refuses (#5268)', () =>
     });
   }
 
+  // A flag is a dash followed by a letter; any other dash-led token is the
+  // choices argument and is held to the choices rules.
+  for (const [arg, message] of [['-1', /expected a JSON object/], ['-', /Invalid JSON for config-new-project/], ['-x', /Unknown flag for config-new-project: -x/]]) {
+    test(`${arg} is ${message.source.startsWith('Unknown flag') ? 'refused as an unknown flag' : 'read as the choices argument'}`, () => {
+      const dir = bareDir();
+      const result = newProject([arg], dir);
+
+      assert.strictEqual(result.success, false);
+      assert.match(result.error, message);
+      assertNothingWritten(dir);
+    });
+  }
+
   test('a second positional argument is refused and nothing is written', () => {
     const dir = bareDir();
     const result = newProject([JSON.stringify({ mode: 'yolo' }), JSON.stringify({ mode: 'interactive' })], dir);

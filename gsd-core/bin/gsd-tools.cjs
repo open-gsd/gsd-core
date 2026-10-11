@@ -856,10 +856,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // dispatcher before routing; it stays in the set as a guard against that
     // splice ever moving.) The choices JSON is the one positional argument,
     // wherever the flag sits, and a second one is refused for the same reason.
+    // A flag is a dash followed by a letter: `-1` is a (negative-number) JSON
+    // argument, refused below as choices that are not an object, not a flag.
     const CONFIG_NEW_PROJECT_KNOWN_FLAGS = new Set(['--dry-run', '--raw']);
     const positionals = [];
     for (const a of args.slice(1)) {
-      if (typeof a === 'string' && a.startsWith('-')) {
+      if (typeof a === 'string' && /^--?[A-Za-z]/.test(a)) {
         if (!CONFIG_NEW_PROJECT_KNOWN_FLAGS.has(a)) {
           error(`Unknown flag for config-new-project: ${a}`, ERROR_REASON.USAGE);
         }
