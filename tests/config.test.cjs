@@ -821,6 +821,37 @@ describe('config-new-project — refuses what config-set refuses (#5268)', () =>
     assert.strictEqual(readProjectConfig(accepted).project_code, '007');
   });
 
+  // Both sides of every numeric limit: the last refused value, the first
+  // accepted one, and the step past it (limit-1 / limit / limit+1), on each
+  // end the rule has. Every row asserts config-set's verdict first, so the
+  // expected column is checked against the oracle, not just against itself.
+  const BOUNDARIES = [
+    ['hooks.context_warning_threshold', [[-1, false], [0, false], [1, true], [99, true], [100, true], [101, false]]],
+    ['workflow.security_asvs_level', [[0, false], [1, true], [2, true], [3, true], [4, false]]],
+    ['context_window', [[0, false], [1, true], [2, true]]],
+    ['workflow.drift_threshold', [[0, false], [1, true], [2, true]]],
+  ];
+
+  for (const [keyPath, rows] of BOUNDARIES) {
+    for (const [value, accepted] of rows) {
+      test(`${keyPath}=${value} is ${accepted ? 'accepted' : 'refused'} exactly as config-set ${accepted ? 'accepts' : 'refuses'} it`, () => {
+        const viaSet = runGsdTools(['config-set', keyPath, String(value)], projectDir());
+        assert.strictEqual(viaSet.success, accepted, `oracle: config-set ${accepted ? 'refused' : 'accepted'} ${keyPath}=${value}`);
+
+        const dir = bareDir();
+        const result = newProject([JSON.stringify(nest(keyPath, value))], dir);
+
+        assert.strictEqual(result.success, accepted, result.error);
+        if (accepted) {
+          assert.strictEqual(valueAt(readProjectConfig(dir), keyPath), value);
+        } else {
+          assert.strictEqual(result.error, viaSet.error);
+          assertNothingWritten(dir);
+        }
+      });
+    }
+  }
+
   test('one bad key among valid choices refuses the whole payload', () => {
     const dir = bareDir();
     const result = newProject([JSON.stringify({ mode: 'yolo', workflow: { research: true }, bogus_key: 'x' })], dir);
@@ -951,6 +982,27 @@ describe('config-new-project — refuses what config-set refuses (#5268)', () =>
     assert.match(result.error, /Unknown flag for config-new-project: --force/);
     assertNothingWritten(dir);
   });
+
+  // Positional count: none (defaults only) and one are accepted; two is
+  // refused (below). A flag alone counts as no positional.
+  for (const args of [[], ['--dry-run']]) {
+    test(`no choices argument${args.length ? ' with --dry-run alone' : ''} builds the defaults-only config`, () => {
+      const baselineDir = bareDir();
+      assert.ok(newProject(['{}'], baselineDir).success);
+      const baseline = readProjectConfig(baselineDir);
+
+      const dir = bareDir();
+      const result = newProject(args, dir);
+
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      if (args.includes('--dry-run')) {
+        assertNothingWritten(dir);
+        assert.strictEqual(JSON.parse(result.output).config.workflow.research, baseline.workflow.research);
+      } else {
+        assert.deepStrictEqual(readProjectConfig(dir), baseline);
+      }
+    });
+  }
 
   test('a second positional argument is refused and nothing is written', () => {
     const dir = bareDir();
