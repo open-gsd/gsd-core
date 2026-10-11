@@ -324,7 +324,20 @@ function validateShipPrBodySections(value: unknown): void {
 // ─── Core config operations ───────────────────────────────────────────────────
 
 /**
- * Build a fully-materialized config object for a new project.
+ * A new project's config, and the one write building it can owe: the user
+ * defaults file rewritten with its deprecated `depth` migrated to
+ * `granularity` (null when the file needs no rewrite).
+ */
+interface NewProjectConfigPlan {
+  config: Record<string, unknown>;
+  defaultsRewrite: { path: string; contents: string } | null;
+}
+
+/**
+ * Plan a fully-materialized config object for a new project. Writes nothing:
+ * the user defaults rewrite comes back as data, for the caller to persist once
+ * it has decided to write at all (#5268: a `--dry-run` never does, and a
+ * refused build never gets that far).
  *
  * Merges (increasing priority):
  *   1. Hardcoded defaults — every key that loadConfig() resolves, plus mode/granularity
@@ -335,20 +348,10 @@ function validateShipPrBodySections(value: unknown): void {
  * Uses the canonical `git` namespace for branching keys (consistent with VALID_CONFIG_KEYS
  * and the settings workflow). loadConfig() handles both flat and nested formats, so this
  * is backward-compatible with existing projects that have flat keys.
- *
- * Returns a plain object — does NOT write any files.
  */
-function buildNewProjectConfig(
-  userChoices: Record<string, unknown>,
-  options: { persistDefaultsMigration?: boolean } = {},
-): Record<string, unknown> {
+function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectConfigPlan {
   const choices = userChoices || {};
-  // #5268: the depth -> granularity rewrite of the user defaults file is a
-  // write, so a `--dry-run` build turns it off, and every other build holds
-  // it until the config below has validated: a refused build writes nothing.
-  // The migrated value is used for this build either way.
-  const persistDefaultsMigration = options.persistDefaultsMigration !== false;
-  let pendingDefaultsMigration: string | null = null;
+  let defaultsRewrite: NewProjectConfigPlan['defaultsRewrite'] = null;
   // #4976: the GSD-owned store resolves exactly as the config loader resolves
   // it (`GSD_HOME || homedir()`), so the defaults.json seeding this project is
   // the one the loader and its #3532 shadow warning read in the same run.
@@ -381,9 +384,9 @@ function buildNewProjectConfig(
         const depthToGranularity: Record<string, string> = { quick: 'coarse', standard: 'standard', comprehensive: 'fine' };
         userDefaults['granularity'] = depthToGranularity[userDefaults['depth'] as string] || userDefaults['depth'];
         delete userDefaults['depth'];
-        if (persistDefaultsMigration) {
-          pendingDefaultsMigration = JSON.stringify(userDefaults, null, 2);
-        }
+        // The migrated value is used for this build whether or not the
+        // rewrite is ever persisted.
+        defaultsRewrite = { path: globalDefaultsPath, contents: JSON.stringify(userDefaults, null, 2) };
       }
     }
   } catch {
@@ -509,12 +512,26 @@ function buildNewProjectConfig(
   };
 
   validateShipPrBodySections((config['ship'] as Record<string, unknown>)['pr_body_sections']);
-  if (pendingDefaultsMigration !== null) {
-    try {
-      platformWriteSync(globalDefaultsPath, pendingDefaultsMigration);
-    } catch { /* intentionally empty */ }
-  }
-  return config;
+  return { config, defaultsRewrite };
+}
+
+/** Persist a plan's user defaults rewrite, best-effort as it always was. */
+function persistDefaultsRewrite(plan: NewProjectConfigPlan): void {
+  if (plan.defaultsRewrite === null) return;
+  try {
+    platformWriteSync(plan.defaultsRewrite.path, plan.defaultsRewrite.contents);
+  } catch { /* intentionally empty */ }
+}
+
+/**
+ * Build a new project's config and persist the user defaults rewrite its plan
+ * carries. For callers that write the config unconditionally; one that may not
+ * (a `--dry-run`) plans with `planNewProjectConfig` and persists only on write.
+ */
+function buildNewProjectConfig(userChoices: Record<string, unknown>): Record<string, unknown> {
+  const plan = planNewProjectConfig(userChoices);
+  persistDefaultsRewrite(plan);
+  return plan.config;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -545,11 +562,14 @@ function hasChildConfigKeys(cwd: string, keyPath: string): boolean {
  * nothing under it (`model_overrides.<agent>`) is a leaf, as it is for
  * `config-set`.
  *
- * Mutates `choices` in two narrow ways: a normalizing rule's result replaces
- * the value, and a section object with no settings in it is dropped, since it
- * would otherwise reach the config as a key nothing validated.
+ * Returns the checked choices as a new object and leaves `choices` as given:
+ * each value is the one `config-set` would persist (a normalizing rule's
+ * result where one applies), and a section object with no settings in it is
+ * left out, since it would otherwise reach the config as a key nothing
+ * validated.
  */
-function validateNewProjectChoices(cwd: string, choices: Record<string, unknown>, prefix = ''): void {
+function validateNewProjectChoices(cwd: string, choices: Record<string, unknown>, prefix = ''): Record<string, unknown> {
+  const checked: Record<string, unknown> = {};
   for (const key of Object.keys(choices)) {
     const kp = prefix ? `${prefix}.${key}` : key;
 
@@ -577,25 +597,28 @@ function validateNewProjectChoices(cwd: string, choices: Record<string, unknown>
     const value = choices[key];
 
     if (isPlainObject(value) && (!isValidConfigKey(kp, cwd) || hasChildConfigKeys(cwd, kp))) {
-      validateNewProjectChoices(cwd, value, kp);
+      const section = validateNewProjectChoices(cwd, value, kp);
       // Empty as given, or emptied by the walk below it: either way it now
       // addresses no setting, and its own name was never checked.
-      if (Object.keys(value).length === 0) delete choices[key];
+      if (Object.keys(section).length > 0) checked[key] = section;
       continue;
     }
 
     assertKnownConfigKey(cwd, kp);
     // `config-set <key> null` clears the key and skips its typed rules. A null
     // choice likewise skips them and is written as null, as it always was.
-    if (value !== null) {
-      choices[key] = validateConfigValue(cwd, kp, value, typeof value === 'string' ? value : JSON.stringify(value));
-    }
+    const checkedValue = value === null
+      ? null
+      : validateConfigValue(cwd, kp, value, typeof value === 'string' ? value : JSON.stringify(value));
     // config-set's setter refuses these segments after the key and value
     // rules have run (`_setNestedValue`); same refusal, same place in the order.
+    // It also runs before the assignment below, so no such key reaches `checked`.
     if (kp.split('.').some((segment) => segment === '__proto__' || segment === 'prototype' || segment === 'constructor')) {
       error('Invalid config key (prototype pollution guard): ' + kp, ERROR_REASON.CONFIG_PARSE_FAILED);
     }
+    checked[key] = checkedValue;
   }
+  return checked;
 }
 
 interface ConfigNewProjectOptions {
@@ -644,9 +667,10 @@ function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: 
   }
 
   // #5268: refuse what config-set refuses, before the first write.
-  validateNewProjectChoices(cwd, userChoices);
+  const checkedChoices = validateNewProjectChoices(cwd, userChoices);
 
-  const config = buildNewProjectConfig(userChoices, { persistDefaultsMigration: !dryRun });
+  const plan = planNewProjectConfig(checkedChoices);
+  const config = plan.config;
 
   if (dryRun) {
     // The preview is CLI output, so secret keys are masked exactly as
@@ -658,6 +682,8 @@ function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: 
     output({ dry_run: true, would_create: true, path: '.planning/config.json', config: preview }, raw, 'would create (dry run)');
     return;
   }
+
+  persistDefaultsRewrite(plan);
 
   // Ensure .planning directory exists
   try {
@@ -1098,10 +1124,10 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
  * way to apply them and wrote values `config-set` refuses for the same key.
  *
  * `parsedValue` is the typed value about to be persisted and `val` its text
- * form, used only in error messages. Exits non-zero through `error()` on a
- * value the key does not accept; otherwise returns the value to persist, which
- * differs from the input only where a rule normalizes
- * (`review.default_reviewers`).
+ * form, used only in error messages. Returns the value to persist for `kp`:
+ * the input itself, or its normalized form where a rule normalizes
+ * (`review.default_reviewers`). A value the key does not accept has no value
+ * to persist, so it is refused through `error()` instead.
  */
 function validateConfigValue(cwd: string, kp: string, parsedValue: unknown, val: string): unknown {
   const VALID_CONTEXT_VALUES = ['dev', 'research', 'review'];

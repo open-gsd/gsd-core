@@ -849,8 +849,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       output: output,
     });
     if (handled) return;
-    // #5268: this verb's flag surface is closed. `--dry-run` is parsed and
-    // plumbed (mirroring routeConfigSet), and any OTHER flag fails loudly
+    // #5268: this verb's flag surface is closed, as `todo complete`'s is
+    // (#4096). `--dry-run` is parsed and plumbed, and any OTHER flag fails loudly
     // instead of being silently ignored: an accepted-but-ignored `--dry-run`
     // wrote the config it was meant to preview. (`--raw` is spliced by the
     // dispatcher before routing; it stays in the set as a guard against that
