@@ -1646,7 +1646,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       [R`cat $'.env\0'`, '.env'], // both read `.env`
       ["cat $'.env\\0'\u00a0", '.env'], // a no-break space continues the word; zsh still reads `.env`
       [R`cat $'.e\x6ev\0'x`, '.env'], // escape-spelled, then NUL-truncated
-      [R`cat dir/$'.env\0'x`, 'dir/.env'], // bash `dir/.envx`, zsh `dir/.env` \u2014 the zsh value is the secret
+      [R`cat dir/$'.env\0'x`, 'dir/.env'], // bash `dir/.envx`, zsh `dir/.env` — the zsh value is the secret
     ];
     for (const [cmd, path] of nulTruncation) {
       test(`blocks ${JSON.stringify(cmd)} on the NUL-truncated reading`, () => {
@@ -1720,6 +1720,39 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
         assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
       }), { seed: 5285, numRuns: 60 });
     });
+  });
+
+  describe('boundaries (#5255 review round 6, Minor 5)', () => {
+    const LIMIT = 1024 * 1024;
+    // A command of exactly `len` characters: `prefix`, a run of `$`, `suffix`.
+    const sized = (prefix, suffix, len) => `${prefix}${'$'.repeat(len - prefix.length - suffix.length)}${suffix}`;
+
+    for (const [label, prefix] of [['a bare run of `$`', 'echo '], ["a run of `$` after a $'…' word (every reading)", "echo $'x' "]]) {
+      test(`${label}: LIMIT - 1 and LIMIT are scanned, LIMIT + 1 is command-too-large`, () => {
+        for (const len of [LIMIT - 1, LIMIT]) {
+          assertAllowed(runHook(bash(sized(prefix, '; ls', len))), `${label}, ${len} chars`);
+          assertBlocked(runHook(bash(sized(prefix, '; cat .env', len))), `${label}, ${len} chars, then a read`, { tool: 'Bash', path: '.env' });
+        }
+        assertBlocked(runHook(bash(sized(prefix, '; ls', LIMIT + 1))), `${label}, LIMIT + 1`, { code: 'command-too-large', tool: 'Bash' });
+      });
+    }
+
+    // MAX_NESTING_DEPTH is 3: a read inside three nested `"$( )"` is scanned,
+    // a fourth level is not — the same cutoff as the plain reading has.
+    const nest = (inner, n) => (n === 0 ? inner : nest(`echo "$(${inner})"`, n - 1));
+    for (const inner of [R`cat $'.e\x6ev'`, R`echo $'x\'y'; cat .env`, R`cat $'.env.\local'`]) {
+      for (const n of [2, 3]) {
+        test(`blocks ${JSON.stringify(inner)} at nesting depth ${n}`, () => {
+          const cmd = nest(inner, n);
+          assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash' });
+        });
+      }
+      test(`pinned: ${JSON.stringify(inner)} at nesting depth 4 is past MAX_NESTING_DEPTH, as \`cat .env\` is`, () => {
+        const cmd = nest(inner, 4);
+        assertAllowed(runHook(bash(cmd)), cmd);
+        assertAllowed(runHook(bash(nest('cat .env', 4))), 'plain read at depth 4');
+      });
+    }
   });
 
   describe("a $'…' span inside ${…} (#5255 review round 6, Major 1)", () => {
