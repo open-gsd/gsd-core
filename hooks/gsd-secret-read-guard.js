@@ -91,7 +91,8 @@
 // not the word, and bash and zsh then read the word to different lengths —
 // bash keeps the rest, zsh's kernel cuts the argument at the NUL — so the
 // word is checked at BOTH lengths (`cat $'.env\0'x` is a zsh read of `.env`).
-// A `$'…'` inside `${…}` is not read: `${…}` is taken whole, as before.
+// A `$'…'` inside `${…}` ends the `${…}` where bash ends it, past a `}` in the
+// span, but its text is not checked: `${…}` content is not scanned.
 //
 // Grep globs are judged per brace alternative (never on the whole glob, so
 // `{.env.local,zzz.ts}` cannot hide behind a benign sibling): a pure-wildcard
@@ -490,10 +491,11 @@ function classifyGrepGlob(glob) {
 // on either (findSecretRead). The plain reading is the scan as it was before
 // #5255, so nothing it denied can become allowed. Every scanner below takes
 // `ansiC` to say which reading it is doing.
-// Not reached, under either reading: `${…}` is still taken whole up to its
-// first `}`, so a `$'…'` inside one is neither decoded nor checked for
-// readability (the `$VAR` indirection gap in the header), and a command nested
-// deeper than MAX_NESTING_DEPTH is not scanned at all.
+// Not reached, under either reading: the text inside `${…}` is not scanned,
+// so a `$'…'` there is neither decoded nor checked for readability (the
+// `$VAR` indirection gap in the header) — the ANSI-C reading only ends the
+// `${…}` where bash does, past any `}` inside a span (ansiCBraceClose). A
+// command nested deeper than MAX_NESTING_DEPTH is not scanned at all.
 
 // The run of `$` starting at `i`: `end` is the index just past it, `last` the
 // index of its last `$`, `atQuote` whether a quote follows, and `owned`
@@ -527,6 +529,27 @@ function dollarRun(str, i) {
 function ansiCQuoteEnd(str, i) {
   i++;
   while (i < str.length && str[i] !== "'") i += str[i] === '\\' ? 2 : 1;
+  return i < str.length ? i : -1;
+}
+
+// Index of the `}` closing a `${` opened just before `i`, under the ANSI-C
+// reading: the first `}` outside a `$'…'` span, so `${x:-$'}'}` ends where
+// bash ends it. Only the span END is read — the text inside `${…}` is still
+// not scanned (`cat ${x:-.env}` is the `$VAR` gap in the header). A span that
+// never closes leaves the brace to the plain reading's first `}`: bash runs
+// nothing from such a line. -1 when no `}` closes it.
+function ansiCBraceClose(str, i) {
+  while (i < str.length && str[i] !== '}') {
+    if (str[i] !== '$') { i++; continue; }
+    const run = dollarRun(str, i);
+    if (run.owned && str[run.end] === "'") {
+      const end = ansiCQuoteEnd(str, run.end);
+      if (end === -1) return str.indexOf('}', i);
+      i = end + 1;
+    } else {
+      i = run.end;
+    }
+  }
   return i < str.length ? i : -1;
 }
 
@@ -1019,7 +1042,7 @@ function tokenize(str, ansiC) {
 
     if (ch === '$' && str[i + 1] === '{') {
       hasWord = true;
-      const j = str.indexOf('}', i);
+      const j = ansiC ? ansiCBraceClose(str, i + 2) : str.indexOf('}', i);
       const e = j === -1 ? str.length - 1 : j;
       buf += str.slice(i, e + 1);
       i = e + 1;

@@ -1722,6 +1722,35 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     });
   });
 
+  describe("a $'…' span inside ${…} (#5255 review round 6, Major 1)", () => {
+    // `${…}` used to end at its first `}`, which here sits inside the span, so
+    // the rest of the line was read as part of the word.
+    const blocks = [
+      "echo ${x:-$'}'}; cat .env",
+      "echo ${x//$'}'/y}; cat .env",
+      "echo ${x:-$'a}b\\'c'}; cat .env",
+      "y=$(echo ${x:-$'}'}; cat .env)",
+    ];
+    for (const cmd of blocks) {
+      test(`blocks ${JSON.stringify(cmd)}`, () => {
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      });
+    }
+
+    test("allows ${x:-$'}'} followed by an ordinary command", () => {
+      const cmd = "echo ${x:-$'}'}; ls";
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+
+    test('accepted hole, pinned: the text inside ${…} is not scanned (out of scope in the #5255 brief)', () => {
+      // bash reads `.env` here when x is unset; so does `cat ${x:-.env}`,
+      // allowed before #5255 too. The span END is read; the content is not.
+      // A change that starts scanning ${…} content should flip this pin.
+      const cmd = "cat ${x:-$'.e\\x6ev'}";
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  });
+
   describe("parity: tokenize, the $( ) scanner and the heredoc-tag reader end a $'…' span at the same quote", () => {
     // Span text is built from pieces whose bash value is known, with exactly
     // one `\'` among them: the plain reading then always loses the rest of the
