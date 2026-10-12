@@ -1952,3 +1952,20 @@ describe("decodeAnsiC against bash 5.2 and zsh 5.9 (in-process; review round 6, 
     }), PROPERTY_RUNS);
   });
 });
+
+describe('findSecretRead returns one result shape (#5255 review round 6, Nit 3)', () => {
+  const { findSecretRead } = require(HOOK_PATH);
+  const R = String.raw;
+  for (const [cmd, want] of [
+    ['cat .env', { code: 'secret-read', text: '.env' }],
+    ['cat < .env', { code: 'secret-read', text: '.env' }],
+    [R`cat $'.e\x6ev'`, { code: 'secret-read', text: '.env' }],
+    ['find . -name x | xargs cat .env', { code: 'secret-read', text: '.env' }],
+    [R`echo $'abc`, { code: 'ansi-c-unterminated', text: R`$'abc` }],
+    ['ls', null],
+  ]) {
+    test(`${JSON.stringify(cmd)} -> ${JSON.stringify(want)}`, () => {
+      assert.deepEqual(findSecretRead(cmd, 0), want);
+    });
+  }
+});
