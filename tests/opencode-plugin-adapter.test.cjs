@@ -1256,7 +1256,7 @@ test('V2 execute.after puts scanner advisories in a new metadata object and prop
   const ev = readEv({ content: 'plain text', metadata: Object.freeze({ lines: 1 }) });
   await assert.doesNotReject(() => first.hooks['tool.execute.after'](ev));
   assert.deepEqual(ev.result.metadata, { lines: 1, _gsdAdvisory: ['heads up'] });
-  assert.equal(ev.result.content, 'plain text');
+  assert.equal(ev.result.content, 'plain text\n\nheads up');
   assert.ok(errors.some((line) => line.includes('heads up')));
 
   const blocking = buildInstalledLayout(t, {
@@ -1268,6 +1268,179 @@ test('V2 execute.after puts scanner advisories in a new metadata object and prop
     () => second.hooks['tool.execute.after'](readEv({ content: 'plain text' })),
     /injection found/,
   );
+});
+
+test('V2 shows before- and after-hook advisories to the model in the completed tool result', async (t) => {
+  const realError = console.error;
+  console.error = () => {};
+  t.after(() => { console.error = realError; });
+  const advise = (text) => stubHook(JSON.stringify({ hookSpecificOutput: { additionalContext: text } }));
+  const { mod } = buildInstalledLayout(t, {
+    'gsd-secret-read-guard.js': advise('before note'),
+    'gsd-read-injection-scanner.js': advise('after note'),
+  });
+  const { hooks, ctx } = fakeV2Ctx(makeProjectDir(t));
+  await mod.setup(ctx);
+
+  const input = { path: '/p/notes.md' };
+  await hooks['tool.execute.before']({ id: 'c1', tool: 'read', sessionID: 's1', input });
+  const ev = { id: 'c1', tool: 'read', sessionID: 's1', input, status: 'completed', result: { content: 'file text', metadata: {} } };
+  await hooks['tool.execute.after'](ev);
+  assert.equal(ev.result.content, 'file text\n\nbefore note\n\nafter note');
+  assert.deepEqual(ev.result.metadata._gsdAdvisory, ['after note']);
+});
+
+// Drives one V2 location whose hooks answer from `gate`: `gate.respond[hook]` is
+// returned as is, `gate.advise[hook]` (a string or a function of the payload)
+// becomes an advisory while `gate.on` is true, and every other hook allows.
+async function v2AdvisoryHarness(t, gate) {
+  const realError = console.error;
+  console.error = () => {};
+  t.after(() => { console.error = realError; });
+  const respond = (call) => {
+    const hook = path.basename(call[1][0]);
+    if (gate.respond?.[hook]) return gate.respond[hook];
+    const advice = gate.on && gate.advise?.[hook];
+    const text = typeof advice === 'function' ? advice(JSON.parse(call[2].input)) : advice;
+    return text ? { stdout: JSON.stringify({ hookSpecificOutput: { additionalContext: text } }) } : {};
+  };
+  const { mod } = loadTracedPlugin(t, ALL_GUARD_STUBS, respond);
+  const { hooks, ctx } = fakeV2Ctx(makeProjectDir(t));
+  await mod.setup(ctx);
+  return {
+    before: (id, tool, input) => hooks['tool.execute.before']({ id, tool, sessionID: 's1', input }),
+    after: async (id, tool, input, result, status = 'completed') => {
+      const ev = { id, tool, sessionID: 's1', input, status };
+      if (result) ev.result = result;
+      await hooks['tool.execute.after'](ev);
+      return ev;
+    },
+  };
+}
+
+test('V2 advisory: every result content shape gets the advisory appended without mutating the host value, and no advisory returns content unchanged', async (t) => {
+  const gate = { on: true };
+  const h = await v2AdvisoryHarness(t, gate);
+  const textPart = { type: 'text', text: 'Image read' };
+  const filePart = { type: 'file', uri: 'file:///p/a.png', mime: 'image/png', name: 'a.png' };
+  const shellNote = { 'gsd-workflow-guard.js': 'shell note' };
+  const rows = [
+    { id: 'c1', tool: 'read', input: { path: '/p/a.png' }, advise: { 'gsd-secret-read-guard.js': 'img note' }, result: { content: [textPart, filePart] }, expected: [textPart, filePart, { type: 'text', text: 'img note' }] },
+    { id: 'c2', tool: 'shell', input: { command: 'true' }, advise: shellNote, result: { content: [], output: 'host out' }, expected: [{ type: 'text', text: 'host out' }, { type: 'text', text: 'shell note' }] },
+    { id: 'c3', tool: 'shell', input: { command: 'true' }, advise: shellNote, result: { output: { exit: 0 } }, expected: [{ type: 'text', text: '{"exit":0}' }, { type: 'text', text: 'shell note' }] },
+    { id: 'c4', tool: 'shell', input: { command: 'true' }, advise: shellNote, result: {}, expected: [{ type: 'text', text: 'shell note' }] },
+    { id: 'c5', tool: 'read', input: { path: '/p/a.md' }, result: { content: 'ok' } },
+    { id: 'c6', tool: 'shell', input: { command: 'ls' }, result: { content: [{ type: 'text', text: 'out' }] } },
+  ];
+  for (const row of rows) {
+    const isArray = Array.isArray(row.result.content);
+    const host = isArray ? structuredClone(row.result.content) : undefined;
+    gate.advise = row.advise;
+    await h.before(row.id, row.tool, row.input);
+    const ev = await h.after(row.id, row.tool, row.input, row.result);
+    if (row.expected) assert.deepEqual(ev.result.content, row.expected, row.id);
+    else assert.equal(ev.result.content, row.result.content, row.id);
+    if (isArray) assert.deepEqual(row.result.content, host, row.id);
+  }
+});
+
+test('V2 advisory: a failed call drops its stash, so a later completed after for the same input gets no stale advisory', async (t) => {
+  const gate = { on: true, advise: { 'gsd-secret-read-guard.js': 'stale' } };
+  const h = await v2AdvisoryHarness(t, gate);
+  const input = { path: '/p/a.md' };
+  await h.before('c1', 'read', input);
+  const failed = await h.after('c1', 'read', input, undefined, 'error');
+  assert.equal(Object.hasOwn(failed, 'result'), false);
+  gate.on = false;
+  const ev = await h.after('c1', 'read', input, { content: 'ok' });
+  assert.equal(ev.result.content, 'ok');
+});
+
+test('V2 advisory: a call that never reaches execute.after leaves nothing for a later call with the same id', async (t) => {
+  const gate = { on: true, advise: { 'gsd-secret-read-guard.js': 'abandoned' } };
+  const h = await v2AdvisoryHarness(t, gate);
+  await h.before('c1', 'read', { path: '/p/a.md' });
+  gate.on = false;
+  const input = { path: '/p/a.md' };
+  await h.before('c1', 'read', input);
+  const ev = await h.after('c1', 'read', input, { content: 'ok' });
+  assert.equal(ev.result.content, 'ok');
+});
+
+test('V2 advisory: an advised call without an input object still resolves', async (t) => {
+  const h = await v2AdvisoryHarness(t, { on: true, advise: { 'gsd-secret-read-guard.js': 'no input' } });
+  await assert.doesNotReject(() => h.before('c1', 'read', undefined));
+});
+
+test('V2 advisory: a blocked call stashes nothing, even when an earlier guard advised', async (t) => {
+  const gate = {
+    on: true,
+    advise: { 'gsd-prompt-guard.js': 'P' },
+    respond: { 'gsd-worktree-path-guard.js': { status: 2, stdout: JSON.stringify({ decision: 'block', reason: 'outside worktree' }) } },
+  };
+  const h = await v2AdvisoryHarness(t, gate);
+  const input = { path: '/p/a.md', content: 'x' };
+  await assert.rejects(() => h.before('c2', 'write', input), /outside worktree/);
+  gate.on = false;
+  const ev = await h.after('c2', 'write', input, { content: 'ok' });
+  assert.equal(ev.result.content, 'ok');
+});
+
+test('V2 advisory: interleaved calls each receive only their own advisories', async (t) => {
+  const gate = { on: true, advise: { 'gsd-read-guard.js': (payload) => `advice for ${payload.tool_input.file_path}` } };
+  const h = await v2AdvisoryHarness(t, gate);
+  const a = { path: '/p/a.md', content: 'x' };
+  const b = { path: '/p/b.md', content: 'x' };
+  await Promise.all([h.before('a', 'write', a), h.before('b', 'write', b)]);
+  const evB = await h.after('b', 'write', b, { content: 'ok' });
+  const evA = await h.after('a', 'write', a, { content: 'ok' });
+  assert.ok(evA.result.content.endsWith('advice for /p/a.md'), evA.result.content);
+  assert.ok(!evA.result.content.includes('/p/b.md'), evA.result.content);
+  assert.ok(evB.result.content.endsWith('advice for /p/b.md'), evB.result.content);
+  assert.ok(!evB.result.content.includes('/p/a.md'), evB.result.content);
+});
+
+test('V2 advisory: identical advisories from different hooks are all kept', async (t) => {
+  const gate = { on: true, advise: { 'gsd-prompt-guard.js': 'same', 'gsd-read-guard.js': 'same' } };
+  const h = await v2AdvisoryHarness(t, gate);
+  const input = { path: '/p/a.md', content: 'x' };
+  await h.before('c1', 'write', input);
+  const ev = await h.after('c1', 'write', input, { content: 'ok' });
+  assert.equal(ev.result.content, 'ok\n\nsame\n\nsame');
+});
+
+test('V2 advisory: a guard that did not run is reported in the tool result the model sees', async (t) => {
+  const h = await v2AdvisoryHarness(t, { respond: { 'gsd-secret-read-guard.js': { status: 1 } } });
+  const input = { path: '/p/a.md' };
+  await h.before('c1', 'read', input);
+  const ev = await h.after('c1', 'read', input, { content: 'ok' });
+  assert.ok(
+    ev.result.content.includes('[gsd-core] gsd-secret-read-guard.js did not run: exit 1; it was not enforced'),
+    ev.result.content,
+  );
+});
+
+test('a missing guard script is reported as not enforced in the 1.x metadata and in the 2.x tool result', async (t) => {
+  const realError = console.error;
+  console.error = () => {};
+  t.after(() => { console.error = realError; });
+  const stubs = { ...ALL_GUARD_STUBS };
+  delete stubs['gsd-secret-read-guard.js'];
+  const { mod } = buildInstalledLayout(t, stubs);
+  const line = '[gsd-core] gsd-secret-read-guard.js did not run: hook script missing; it was not enforced';
+
+  const v1 = await mod.server({ directory: makeProjectDir(t) });
+  const output = { args: { filePath: '/p/a.md' } };
+  await v1['tool.execute.before']({ tool: 'read' }, output);
+  assert.deepEqual(output.metadata._gsdAdvisory, [line]);
+
+  const { hooks, ctx } = fakeV2Ctx(makeProjectDir(t));
+  await mod.setup(ctx);
+  const input = { path: '/p/a.md' };
+  await hooks['tool.execute.before']({ id: 'c1', tool: 'read', sessionID: 's1', input });
+  const ev = { id: 'c1', tool: 'read', sessionID: 's1', input, status: 'completed', result: { content: 'ok', metadata: {} } };
+  await hooks['tool.execute.after'](ev);
+  assert.equal(ev.result.content, `ok\n\n${line}`);
 });
 
 test('V1 server() and V2 setup() spawn the same PostToolUse hooks in the same order for each tool pair', async (t) => {

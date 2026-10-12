@@ -9,7 +9,8 @@
  *   2. Spawns `node <HOOKS_DIR>/<hook>.js` with the payload on stdin
  *   3. Translates hook output back into OpenCode semantics
  *      - block  → throw Error (OpenCode returns the error to the model)
- *      - advisory → output.metadata + console.error (best-effort surfacing)
+ *      - advisory → output.metadata + console.error on 1.x; appended to the
+ *        tool result content on 2.x
  *
  * Namespace conversion (/gsd:xxx → /gsd-xxx) reuses scripts/fix-slash-commands.cjs
  * via require(), keeping the single source of truth.
@@ -412,6 +413,15 @@ function pushAdvisory(output, text) {
     output.metadata._gsdAdvisory = [];
   }
   output.metadata._gsdAdvisory.push(text);
+}
+
+function appendAdvisory(content, output, text) {
+  if (typeof content === "string") return content + "\n\n" + text;
+  if (Array.isArray(content) && content.length) return [...content, { type: "text", text }];
+  // The host only falls back to `output` when content is empty, so carry the
+  // output text over before adding the advisory.
+  const parts = output === undefined ? [] : [{ type: "text", text: typeof output === "string" ? output : JSON.stringify(output) }];
+  return [...parts, { type: "text", text }];
 }
 
 // ---------------------------------------------------------------------------
@@ -905,19 +915,33 @@ async function GsdCoreSetup(ctx) {
     currentCwd = dir;
     currentSessionId = ev.sessionID;
   };
+  // The host hands execute.after the same input object execute.before saw, and
+  // a call that never reaches execute.after leaves nothing behind.
+  const advisories = new WeakMap();
   const errorText = (err) => (err instanceof Error ? err.message : String(err));
   await ctx.tool.hook("execute.before", async (ev) => {
     pin(ev);
-    await v1["tool.execute.before"]({ tool: V2_TOOL_ALIASES.get(ev.tool) ?? ev.tool }, { args: ev.input });
+    const before = { args: ev.input };
+    await v1["tool.execute.before"]({ tool: V2_TOOL_ALIASES.get(ev.tool) ?? ev.tool }, before);
+    const list = before.metadata?._gsdAdvisory;
+    if (Array.isArray(list) && list.length && ev.input && typeof ev.input === "object") {
+      advisories.set(ev.input, [...list]);
+    }
   });
   await ctx.tool.hook("execute.after", async (ev) => {
+    const stashed = advisories.get(ev.input) ?? [];
+    advisories.delete(ev.input);
     if (ev.status !== "completed") return;
     const { content } = ev.result;
     const isText = typeof content === "string";
     const out = { output: isText ? content : undefined, metadata: { ...ev.result.metadata } };
     pin(ev);
     await v1["tool.execute.after"]({ tool: V2_TOOL_ALIASES.get(ev.tool) ?? ev.tool, args: ev.input }, out);
-    ev.result = { ...ev.result, content: isText ? out.output : content, metadata: out.metadata };
+    const afterList = Array.isArray(out.metadata._gsdAdvisory) ? out.metadata._gsdAdvisory : [];
+    const text = [...stashed, ...afterList].join("\n\n");
+    let next = isText ? out.output : content;
+    if (text) next = appendAdvisory(next, ev.result.output, text);
+    ev.result = { ...ev.result, content: next, metadata: out.metadata };
     if (!["write", "edit", "patch"].includes(ev.tool)) return;
     try {
       const paths = ev.tool === "patch" ? patchFilePaths(ev.input.patchText) : [ev.input.path];
