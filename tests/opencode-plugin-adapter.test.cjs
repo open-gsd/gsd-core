@@ -771,7 +771,9 @@ test('hookSpawnOptions adds BUN_BE_BUN=1 to a copy of process.env under Bun', ()
   assert.notEqual(out, HOOK_SPAWN_BASE);
   for (const key of Object.keys(HOOK_SPAWN_BASE)) assert.equal(out[key], HOOK_SPAWN_BASE[key]);
   assert.equal(out.env.BUN_BE_BUN, '1');
-  assert.equal(out.env.PATH, process.env.PATH);
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key !== 'BUN_BE_BUN') assert.equal(out.env[key], value, key);
+  }
   assert.equal(Object.hasOwn(HOOK_SPAWN_BASE, 'env'), false);
   assert.equal(process.env.BUN_BE_BUN, before);
 });
