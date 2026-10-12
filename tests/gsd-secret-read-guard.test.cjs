@@ -1683,6 +1683,45 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     });
   });
 
+  describe('a run of `$` holding line continuations reads as bash joins it (#5255 review round 6, Blocker 1)', () => {
+    // bash removes `\<newline>` before it tokenizes, so `cat $$\<newline> .env`
+    // is `cat $$ .env`. A scanner that resumes on the continuation's newline
+    // reads it as a command separator and `.env` as a bare command word.
+    const cases = [
+      'cat $$\\\n .env',
+      'cat $\\\n$\\\n .env',
+      'cat$$\\\n .env.local', // denied before #5255 (the plain reading), and still
+      'diff <(cat $$\\\n .env) x',
+      'echo "$(cat $$\\\n .env)"',
+      // `$'x\'y'` hides the rest of the line from the plain reading, so these
+      // are denied only if the ANSI-C reading joins the run as bash does.
+      'echo $\'x\\\'y\'; cat $$\\\n .env',
+      'echo $\'x\\\'y\'; echo "$(cat $$\\\n .env)"',
+      'echo $\'x\\\'y\'; cat $\\\n$\\\n$ .env',
+    ];
+    for (const cmd of cases) {
+      test(`blocks ${JSON.stringify(cmd)}`, () => {
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: cmd.includes('.env.local') ? '.env.local' : '.env' });
+      });
+    }
+
+    test('property: any mix of `$` and continuations before a read leaves the read visible', () => {
+      const run = fc.array(fc.constantFrom('$', '\\\n'), { minLength: 1, maxLength: 8 })
+        .filter((parts) => parts.includes('$'))
+        .map((parts) => parts.join(''));
+      const forms = [
+        (r) => `cat ${r} .env`,
+        (r) => `echo "$(cat ${r} .env)"`,
+        (r) => `echo $'x\\'y'; cat ${r} .env`,
+        (r) => `echo $'x\\'y'; diff <(cat ${r} .env) x`,
+      ];
+      fc.assert(fc.property(run, fc.constantFrom(...forms), (r, form) => {
+        const cmd = form(r);
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      }), { seed: 5285, numRuns: 60 });
+    });
+  });
+
   describe("parity: tokenize, the $( ) scanner and the heredoc-tag reader end a $'…' span at the same quote", () => {
     // Span text is built from pieces whose bash value is known, with exactly
     // one `\'` among them: the plain reading then always loses the rest of the

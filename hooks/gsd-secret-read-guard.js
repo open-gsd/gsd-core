@@ -495,25 +495,29 @@ function classifyGrepGlob(glob) {
 // readability (the `$VAR` indirection gap in the header), and a command nested
 // deeper than MAX_NESTING_DEPTH is not scanned at all.
 
-// The run of `$` starting at `i`: `end` is the index just past it, `atQuote`
-// whether a quote follows, and `owned` whether a `$` opens that quote. `$$`
-// is the PID and pairs left to right, so only an odd `$` left over owns the
-// quote: `$$'x'` is the PID and a plain 'x', `$$$'x'` is the PID and `$'x'`.
-// Callers consume the whole run in one step — a megabyte of `$` is read once,
-// not once per character.
+// The run of `$` starting at `i`: `end` is the index just past it, `last` the
+// index of its last `$`, `atQuote` whether a quote follows, and `owned`
+// whether a `$` opens that quote. `$$` is the PID and pairs left to right, so
+// only an odd `$` left over owns the quote: `$$'x'` is the PID and a plain
+// 'x', `$$$'x'` is the PID and `$'x'`. Callers consume the whole run in one
+// step — a megabyte of `$` is read once, not once per character.
 function dollarRun(str, i) {
   let end = i;
+  let last = i;
   let dollars = 0;
   // bash removes `\<newline>` line continuations before it tokenizes, so one
   // does not break a run of `$`: `$\<newline>$'x'` is `$$'x'` to bash, a PID
-  // and a plain quote, not ANSI-C quoting.
+  // and a plain quote, not ANSI-C quoting. So the run's text is `dollars`
+  // `$` characters, never `str.slice(i, end)`, and a caller that does not
+  // consume the whole run stops on `last`, never on `end - 1`, which can be
+  // the newline of a continuation (`cat $$\<newline> .env` is `cat $$ .env`).
   for (;;) {
-    if (str[end] === '$') { dollars++; end++; }
+    if (str[end] === '$') { dollars++; last = end; end++; }
     else if (str[end] === '\\' && str[end + 1] === '\n') { end += 2; }
     else break;
   }
   const atQuote = str[end] === "'" || str[end] === '"';
-  return { end, dollars, atQuote, owned: atQuote && dollars % 2 === 1 };
+  return { end, last, dollars, atQuote, owned: atQuote && dollars % 2 === 1 };
 }
 
 // Index of the `'` closing a `$'…'` span whose opening quote is at `i`, or -1
@@ -661,7 +665,7 @@ function findParenClose(str, i, ansiC) {
         continue;
       }
       // Any other run: only its last `$` can open `$(`, read below as before.
-      if (run.end - i > 1) { i = run.end - 1; continue; }
+      if (run.last > i) { i = run.last; continue; }
     }
     if (ch === "'") {
       const j = str.indexOf("'", i + 1);
@@ -724,7 +728,7 @@ function ansiCTagWord(str, i) {
       i += 2;
     } else if (ch === '$') {
       const run = dollarRun(str, i);
-      tag += str.slice(i, run.end - (run.owned ? 1 : 0));
+      tag += '$'.repeat(run.dollars - (run.owned ? 1 : 0));
       i = run.end; // at the quote, when there is one: the branches below read it
       if (run.owned && str[i] === "'") {
         const end = ansiCQuoteEnd(str, i);
@@ -910,9 +914,9 @@ function tokenize(str, ansiC) {
     if (ansiC && ch === '$') {
       const run = dollarRun(str, i);
       if (run.atQuote) {
-        // The `$` run (and any line continuation in it) up to the quote; the
+        // The `$` run up to the quote, without its line continuations; the
         // `$` that owns a span is dropped, the rest is literal word text.
-        const literal = str.slice(i, run.end - (run.owned ? 1 : 0));
+        const literal = '$'.repeat(run.dollars - (run.owned ? 1 : 0));
         if (literal) { hasWord = true; buf += literal; }
         if (run.owned && str[run.end] === "'") {
           hasWord = true;
@@ -945,11 +949,12 @@ function tokenize(str, ansiC) {
         continue;
       }
       // Any other run: every `$` but the last is a literal, and the last is
-      // read by the `$(` / `${` branches below, exactly as before.
-      if (run.dollars > 1) {
+      // read by the `$(` / `${` branches below, exactly as before. A line
+      // continuation after it is the main loop's to strip, as before.
+      if (run.last > i) {
         hasWord = true;
-        buf += str.slice(i, run.end - 1);
-        i = run.end - 1;
+        buf += '$'.repeat(run.dollars - 1);
+        i = run.last;
         continue;
       }
     }
@@ -1435,9 +1440,13 @@ function findSecretReadUnderOtherReadings(command) {
 // (`{ code, text }`, see tokenize), or null. A command holding dollar-quoting
 // is scanned under both readings (see the dollar-quoting section): the ANSI-C
 // one first, then the plain one, which is the scan as it was before #5255.
-// A command holding none gets one scan, which is the same under both.
+// A command holding none gets the plain scan alone, so for it the guard is
+// the pre-#5255 guard by construction. "Holding" is tested on the text with
+// its `\<newline>` continuations removed, because bash joins them before it
+// reads a quote: `$\<newline>'x'` is `$'x'`.
 function findSecretRead(command, depth) {
-  if (!command.includes("$'") && !command.includes('$"')) return scanCommand(command, depth, true);
+  const joined = command.includes('\\\n') ? command.replace(/\\\n/g, '') : command;
+  if (!joined.includes("$'") && !joined.includes('$"')) return scanCommand(command, depth, false);
   let hit = null;
   try {
     hit = scanCommand(command, depth, true);
