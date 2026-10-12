@@ -24,6 +24,7 @@ const PLUGIN = path.join(ROOT, '.opencode', 'plugins', 'gsd-core.js');
 
 function fakeModel(toolCall) {
   const seenToolResults = [];
+  const seenUserMessages = [];
   const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', (c) => { body += c; });
@@ -37,6 +38,7 @@ function fakeModel(toolCall) {
       const msgs = Array.isArray(j.messages) ? j.messages : [];
       const last = msgs[msgs.length - 1] || {};
       const names = (j.tools || []).map((x) => (x.function && x.function.name) || x.name);
+      if (last.role === 'user') seenUserMessages.push(typeof last.content === 'string' ? last.content : JSON.stringify(last.content));
       if (last.role === 'tool') seenToolResults.push(typeof last.content === 'string' ? last.content : JSON.stringify(last.content));
       const call = last.role !== 'tool' && names.includes(toolCall.tool);
       res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -46,17 +48,17 @@ function fakeModel(toolCall) {
         send({ ...base, choices: [{ index: 0, delta: { role: 'assistant', content: null, tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: toolCall.tool, arguments: JSON.stringify(toolCall.args) } }] }, finish_reason: null }] });
         send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] });
       } else {
-        send({ ...base, choices: [{ index: 0, delta: { role: 'assistant', content: 'done' }, finish_reason: null }] });
+        send({ ...base, choices: [{ index: 0, delta: { role: 'assistant', content: toolCall.reply || 'done' }, finish_reason: null }] });
         send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
       }
       res.write('data: [DONE]\n\n');
       res.end();
     });
   });
-  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ server, seenToolResults, port: server.address().port })));
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ server, seenToolResults, seenUserMessages, port: server.address().port })));
 }
 
-async function runOpencode(t, { bin, v2, toolCall }) {
+async function runOpencode(t, { bin, v2, toolCall, lane = false }) {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-oc-smoke-')));
   t.after(() => cleanup(home));
   const cfg = path.join(home, '.config', 'opencode');
@@ -67,14 +69,30 @@ async function runOpencode(t, { bin, v2, toolCall }) {
   fs.copyFileSync(PLUGIN, path.join(cfg, 'plugins', 'gsd-core.js'));
   fs.mkdirSync(proj, { recursive: true });
   fs.writeFileSync(path.join(proj, '.env'), 'API_KEY=supersecret\n');
-  const { server, seenToolResults, port } = await fakeModel(toolCall);
+  const { server, seenToolResults, seenUserMessages, port } = await fakeModel(toolCall);
   t.after(() => server.close());
   fs.writeFileSync(path.join(cfg, 'opencode.json'), JSON.stringify({
     provider: { fake: { npm: '@ai-sdk/openai-compatible', name: 'Fake', options: { baseURL: `http://127.0.0.1:${port}/v1`, apiKey: 'x' }, models: { m: { name: 'm', tool_call: true, limit: { context: 100000, output: 4000 } } } } },
     model: 'fake/m',
   }));
+  const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local', 'share'), XDG_CACHE_HOME: path.join(home, '.cache'), XDG_STATE_HOME: path.join(home, '.local', 'state'), OPENCODE_DISABLE_AUTOUPDATE: 'true',
+    // A shell that `cd`s into the worktree updates PWD; 2.x resolves its directory from it (E13).
+    PWD: proj };
+  if (lane) {
+    // The real reviewer lane: gsd-tools resolves the plan for the opencode on PATH and runs it.
+    const binDir = path.join(home, 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.symlinkSync(fs.realpathSync(bin), path.join(binDir, 'opencode'));
+    fs.mkdirSync(path.join(proj, '.planning'), { recursive: true });
+    fs.mkdirSync(path.join(proj, 'run'), { recursive: true });
+    fs.writeFileSync(path.join(proj, '.planning', 'config.json'), JSON.stringify({ review: { models: { opencode: 'fake/m' }, effort: { opencode: 'high' } } }));
+    fs.writeFileSync(path.join(proj, 'prompt.md'), 'Review this plan please\n');
+    const child = spawn(process.execPath, [path.join(ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs'), 'review-lane', 'invoke', '--slug', 'opencode', '--run-dir', path.join(proj, 'run'), '--repo-root', proj, '--prompt-file', path.join(proj, 'prompt.md')], { cwd: proj, env: { ...env, PATH: `${binDir}${path.delimiter}${env.PATH}` }, stdio: ['ignore', 'ignore', 'ignore'], timeout: INSTALL_TIMEOUT_MS, killSignal: 'SIGKILL' });
+    await new Promise((resolve) => { child.on('exit', resolve); child.on('error', resolve); });
+    const reviewPath = path.join(proj, 'run', 'gsd-review-opencode.md');
+    return { review: fs.existsSync(reviewPath) ? fs.readFileSync(reviewPath, 'utf8') : '', prompts: seenUserMessages };
+  }
   const args = ['run', ...(v2 ? ['--standalone'] : []), '--auto', '--model', 'fake/m', '--format', 'json', 'do it'];
-  const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local', 'share'), XDG_CACHE_HOME: path.join(home, '.cache'), XDG_STATE_HOME: path.join(home, '.local', 'state'), OPENCODE_DISABLE_AUTOUPDATE: 'true' };
   const child = spawn(bin, args, { cwd: proj, env, stdio: ['ignore', 'ignore', 'ignore'], timeout: INSTALL_TIMEOUT_MS, killSignal: 'SIGKILL' });
   await new Promise((resolve) => { child.on('exit', resolve); child.on('error', resolve); });
   return seenToolResults.join('\n');
@@ -99,4 +117,17 @@ test('OpenCode 2.x: the plugin blocks a secret read through the 2.x `shell` tool
   const out = await runOpencode(t, { bin: V2, v2: true, toolCall: { tool: 'shell', args: { command: 'cat .env' } } });
   assert.match(out, /Secret read guard/);
   assert.doesNotMatch(out, /supersecret/);
+});
+
+for (const [label, bin, v2] of [['1.x', V1, false], ['2.x', V2, true]]) {
+  test(`OpenCode ${label}: the real reviewer lane runs end to end and the prompt carries no stdin marker`, { skip: !bin && 'binary env var not set' }, async (t) => {
+    const out = await runOpencode(t, { bin, v2, lane: true, toolCall: { tool: 'none', args: {}, reply: 'REVIEW: src/a.js:1 fine' } });
+    assert.match(out.review, /REVIEW: src\/a\.js:1 fine/);
+    if (v2) assert.ok(out.prompts.every((p) => !p.startsWith('-')), `prompt was polluted: ${JSON.stringify(out.prompts)}`);
+  });
+}
+
+test('OpenCode 2.x: the spawn working directory is the worktree (no --dir needed, ADR-5331 D5)', { skip: !V2 && 'GSD_TEST_OPENCODE_V2_BIN not set' }, async (t) => {
+  const out = await runOpencode(t, { bin: V2, v2: true, toolCall: { tool: 'shell', args: { command: 'pwd' } } });
+  assert.match(out, /gsd-oc-smoke-[^/\\\n]+[/\\]proj/, out);
 });

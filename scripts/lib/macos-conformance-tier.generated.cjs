@@ -143,6 +143,7 @@ module.exports = {
   "tests/nsegment-phase-grammar.test.cjs",
   "tests/observability/event.test.cjs",
   "tests/onboard-command.test.cjs",
+  "tests/opencode-generations.smoke.test.cjs",
   "tests/opencode-plugin-adapter.test.cjs",
   "tests/pause-work-context-detection.test.cjs",
   "tests/pause-work-improvements.test.cjs",

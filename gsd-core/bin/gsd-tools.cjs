@@ -1601,7 +1601,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       const ocv = require('./lib/opencode-version.cjs');
       const adapted = ocv.adaptLaneInputForGeneration(laneInput, ocv.detectOpencodeGeneration().generation);
       for (const w of adapted.warnings) process.stderr.write('gsd: ' + w + '\n');
-      return resolveLanePlanBase(adapted.input);
+      return ocv.adaptLanePlanForGeneration(resolveLanePlanBase(adapted.input), ocv.detectOpencodeGeneration().generation);
     };
     const modelCatalog = require('./lib/model-catalog.cjs');
     const runner = require('./lib/review-lane-runner.cjs');

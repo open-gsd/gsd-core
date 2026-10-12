@@ -432,3 +432,38 @@ export function adaptLaneInputForGeneration<T extends LaneInputLike>(
   }
   return { input: { ...input, configGet, effortArgs: [] }, warnings };
 }
+
+interface LanePlanResultLike {
+  ok?: unknown;
+  plan?: { slug?: unknown; stdin?: unknown; argv?: unknown } | null;
+  [k: string]: unknown;
+}
+
+/**
+ * 2.x `opencode run` treats a trailing `-` as message text, not as a "read stdin" marker: the model
+ * receives `-\n<prompt>` (verified on 2.0.27, E12). Piped stdin is read either way (E4), so for a
+ * stdin-fed opencode plan on generation 2 the marker is dropped and the run is made `--standalone`.
+ * Everything else is untouched.
+ */
+export function adaptLanePlanForGeneration<T extends LanePlanResultLike>(
+  result: T,
+  generation: OpencodeGeneration | null,
+): T {
+  if (generation !== 2 || !result || result.ok !== true || !result.plan) return result;
+  const plan = result.plan;
+  if (plan.slug !== 'opencode' || plan.stdin === null || plan.stdin === undefined) return result;
+  const argv = plan.argv;
+  if (!Array.isArray(argv)) return result;
+  let next: unknown[] = argv;
+  if (next[next.length - 1] === '-') next = next.slice(0, -1);
+  // `--standalone` ("Run with a private server instead of the background service", `opencode run
+  // --help` on 2.0.27): without it `run` attaches to a long-lived managed service on a fixed port
+  // that outlives the review, serves whichever config it booted with, and fails when another
+  // process holds the port. A review is one-shot, so it gets its own server.
+  const runIdx = next.indexOf('run');
+  if (runIdx !== -1 && !next.includes('--standalone')) {
+    next = [...next.slice(0, runIdx + 1), '--standalone', ...next.slice(runIdx + 1)];
+  }
+  if (next === argv) return result;
+  return { ...result, plan: { ...plan, argv: next } };
+}

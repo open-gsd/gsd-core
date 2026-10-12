@@ -915,7 +915,28 @@ async function setupV2(ctx) {
     if (text !== null && typeof out.output === "string" && out.output !== text) {
       e.result.content[0].text = out.output;
     }
+    // 2.x emits no file.edited event (observed on 2.0.27), so derive it from the edit tools: the
+    // only consumer is the .planning/config.json reload hook.
+    const claudeTool = mapToolName(e.tool);
+    if (claudeTool === "Write" || claudeTool === "Edit" || claudeTool === "MultiEdit") {
+      const edited = mapToolInput(e.input || {}).file_path;
+      if (typeof edited === "string" && edited.endsWith("config.json")) {
+        await hooks.event({
+          event: { type: "file.edited", properties: { file: edited, cwd: path.dirname(path.dirname(edited)) } },
+        });
+      }
+    }
   });
+  if (ctx.session && typeof ctx.session.hook === "function") {
+    // 2.x compaction event: { sessionID, system: [{ type: "text", text }], messages, … }; items added
+    // to `system` reach the summarizer (observed on 2.0.27).
+    await ctx.session.hook("compaction", async (e) => {
+      if (!e || !Array.isArray(e.system)) return;
+      const out = { context: [] };
+      await hooks["experimental.session.compacting"]({}, out);
+      for (const line of out.context) e.system.push({ type: "text", text: String(line) });
+    });
+  }
   if (ctx.shell && typeof ctx.shell.hook === "function") {
     await ctx.shell.hook("create.before", async (e) => {
       if (e && e.env && typeof e.env === "object") e.env.GSD_DIR = GSD_CORE;

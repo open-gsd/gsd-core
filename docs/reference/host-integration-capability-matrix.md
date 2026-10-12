@@ -173,6 +173,18 @@ Documentation gaps:
 | dispatch.isolation | orchestrator-worktree | https://opencode.ai/docs/cli ; opencode.ai/docs/plugins ; opencode issues #14195/#29638/#5887 | "`opencode run --dir <path>` sets an explicit working root at the process level" — native subagent dispatch is synchronous-only, so GSD creates + manages the worktree and process-spawns the executor into it via `--dir` (#2584) |
 | dispatch.maxConcurrency | undocumented | not researched / no documented concurrent-subagent capacity for this axis | no authoritative source consulted for concurrent-executor capacity on this host — fails closed to `1` in negotiation (#3673) |
 
+### OpenCode 2.x notes (ADR-5331, #5337)
+
+The descriptor above is the OpenCode 1.x row; the same descriptor serves 2.x with these generation differences, each reproduced against `opencode` 1.19.0 and 2.0.27 (ADR-5331 evidence register) and applied at spawn time by `src/opencode-version.cts`:
+
+| Axis | 1.x | 2.x | Reconciliation |
+|---|---|---|---|
+| `runtime` | `bun` — plugin context offers Bun's `$` | `bun` — the 2.x CLI is a Bun single-file binary (`$bunfs` in its stack traces), but the 2.x plugin context has **no** `$` helper ([Migrate plugins from V1](https://opencode.ai/v2/docs/build/plugins/migrate-v1) § Migrate the context) | The axis names the host's plugin runtime, not the runtime of GSD's hooks. GSD hook scripts are separate Node child processes on both generations; the plugin spawns `node` (or `GSD_HOOK_RUNTIME`), never `process.execPath`, because that is the OpenCode binary (#4849). |
+| `modelMode` | `active` | `active` | ADR-1239's prose table lists OpenCode as `passive`; that is the pre-research appendix the ADR itself corrects ("Two findings corrected this ADR's original appendix matrix"). The documented plugin model API (`ctx.aisdk.sdk` / `ctx.aisdk.language`, Context7 `/anomalyco/opencode`, `packages/plugin/src/v2/promise/README.md`) is what the `active` row cites and is unchanged by 2.x. This matrix is the source of truth. |
+| `effortSurface` | `argv` — `--variant <level>` | `argv` — `--model provider/model#variant`; `--variant` exits 1 with usage | `adaptLaneInputForGeneration` moves the level onto the model on 2.x. |
+| `dispatch.isolation` | `orchestrator-worktree` via `--dir <path>` | `orchestrator-worktree` via the spawned process's working directory; `--dir` exits 1 with usage | `adaptOrchestratorExecForGeneration` selects the descriptor's `cwdFlag: null` shape on 2.x. 2.x resolves its directory from `$PWD`, so the worker must be launched from a shell that has `cd`'d into the worktree. |
+| reviewer `invoke.args` | trailing `-` | `-` is sent to the model as message text; piped stdin is read without it. `run` otherwise attaches to a long-lived background service | `adaptLanePlanForGeneration` drops the `-` and adds `--standalone`. |
+
 Sources consulted:
 - https://opencode.ai/docs/plugins
 - https://opencode.ai/docs/agents

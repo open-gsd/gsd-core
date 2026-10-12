@@ -165,12 +165,29 @@ export interface UpdateContext {
   scope: 'LOCAL' | 'GLOBAL' | 'UNKNOWN';
   runtime: string;
   gsdDir: string;
+  /** OpenCode generation the install was made for (1 | 2), present only when the install recorded it (ADR-5331 D2). */
+  hostGeneration?: 1 | 2;
 }
 
 /**
  * Pure resolver. Returns { installedVersion, scope, runtime, gsdDir }.
  */
-export function resolveUpdateContext({
+export function resolveUpdateContext(opts: ResolveUpdateContextOpts): UpdateContext {
+  const base = resolveBaseUpdateContext(opts);
+  if (base.runtime !== 'opencode' || !base.gsdDir) return base;
+  // The install records which OpenCode generation it targets; surface it when present.
+  const raw = opts.fs.readFile(path.join(base.gsdDir, 'gsd-install-state.json'));
+  if (raw == null) return base;
+  try {
+    const hg = (JSON.parse(raw) as { hostGeneration?: { runtime?: unknown; generation?: unknown } }).hostGeneration;
+    if (hg && hg.runtime === 'opencode' && (hg.generation === 1 || hg.generation === 2)) {
+      return { ...base, hostGeneration: hg.generation };
+    }
+  } catch { /* an unreadable state file contributes nothing */ }
+  return base;
+}
+
+function resolveBaseUpdateContext({
   home,
   cwd,
   env = {},

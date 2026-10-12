@@ -333,9 +333,24 @@ function readInstallManifest(configDir: string): InstallManifest {
   };
 }
 
+/** Which OpenCode generation the install was made for (ADR-5331 D2; #5337). Deterministic: no timestamps. */
+interface HostGeneration {
+  runtime: 'opencode';
+  generation: 1 | 2;
+  version: string | null;
+}
+
 interface InstallState {
   schemaVersion: number;
   appliedMigrations: Array<Record<string, unknown>>;
+  hostGeneration?: HostGeneration;
+}
+
+function normalizeHostGeneration(raw: unknown): HostGeneration | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  if (r.runtime !== 'opencode' || (r.generation !== 1 && r.generation !== 2)) return undefined;
+  return { runtime: 'opencode', generation: r.generation, version: typeof r.version === 'string' ? r.version : null };
 }
 
 function readInstallState(configDir: string): InstallState {
@@ -344,9 +359,11 @@ function readInstallState(configDir: string): InstallState {
     return { schemaVersion: 1, appliedMigrations: [] };
   }
   const s = state as Record<string, unknown>;
+  const hostGeneration = normalizeHostGeneration(s.hostGeneration);
   return {
     schemaVersion: typeof s.schemaVersion === 'number' ? s.schemaVersion : 1,
     appliedMigrations: Array.isArray(s.appliedMigrations) ? s.appliedMigrations as Array<Record<string, unknown>> : [],
+    ...(hostGeneration ? { hostGeneration } : {}),
   };
 }
 
@@ -1097,6 +1114,7 @@ function applyInstallerMigrationPlan({
     writeInstallState(configDir, {
       schemaVersion: 1,
       appliedMigrations: nextApplied,
+      ...(state.hostGeneration ? { hostGeneration: state.hostGeneration } : {}),
     });
 
     return {
@@ -1177,6 +1195,7 @@ function markPendingMigrationsApplied({
     writeInstallState(configDir, {
       schemaVersion: 1,
       appliedMigrations: nextApplied,
+      ...(state.hostGeneration ? { hostGeneration: state.hostGeneration } : {}),
     });
   }
   return newlyApplied;
@@ -1257,6 +1276,18 @@ function runInstallerMigrations({
 // and may be used by test code that patches this module.
 void sleepSync;
 
+/**
+ * Record which OpenCode generation this install targets (ADR-5331 D2; #5337). Idempotent and
+ * atomic; leaves the applied-migrations journal untouched.
+ */
+function recordHostGeneration(configDir: string, info: { generation: 1 | 2; version?: string | null }): void {
+  const state = readInstallState(configDir);
+  const next: HostGeneration = { runtime: 'opencode', generation: info.generation, version: info.version ?? null };
+  const prev = state.hostGeneration;
+  if (prev && prev.generation === next.generation && prev.version === next.version) return;
+  writeInstallState(configDir, { ...state, hostGeneration: next });
+}
+
 export = {
   DEFAULT_MIGRATIONS_DIR,
   INSTALL_MIGRATION_LOCK_NAME,
@@ -1273,6 +1304,7 @@ export = {
   planInstallerMigrations,
   readInstallManifest,
   readInstallState,
+  recordHostGeneration,
   runInstallerMigrations,
   writeInstallState,
 };

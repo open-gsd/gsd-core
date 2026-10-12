@@ -135,3 +135,20 @@ test('adaptLaneInputForGeneration moves effort onto the model for opencode on 2.
   const other = { ...v1, lane: { slug: 'codex', modelConfigKey: 'k.model' } };
   assert.equal(mod.adaptLaneInputForGeneration(other, 2).input, other);
 });
+
+test('adaptLanePlanForGeneration drops the trailing stdin marker only for a stdin-fed opencode plan on 2.x', () => {
+  const mk = (over = {}) => ({ ok: true, plan: { slug: 'opencode', stdin: 'prompt', argv: ['run', '--format', 'json', '-'], ...over } });
+  assert.deepEqual(mod.adaptLanePlanForGeneration(mk(), 2).plan.argv, ['run', '--standalone', '--format', 'json']);
+  const already = mk({ argv: ['run', '--standalone', '-'] });
+  assert.deepEqual(mod.adaptLanePlanForGeneration(already, 2).plan.argv, ['run', '--standalone']);
+  const v1 = mk();
+  assert.equal(mod.adaptLanePlanForGeneration(v1, 1), v1);
+  const noStdin = mk({ stdin: null });
+  assert.equal(mod.adaptLanePlanForGeneration(noStdin, 2), noStdin);
+  const other = mk({ slug: 'codex' });
+  assert.equal(mod.adaptLanePlanForGeneration(other, 2), other);
+  const fail = { ok: false };
+  assert.equal(mod.adaptLanePlanForGeneration(fail, 2), fail);
+  const noRun = mk({ argv: ['x'] });
+  assert.equal(mod.adaptLanePlanForGeneration(noRun, 2), noRun);
+});

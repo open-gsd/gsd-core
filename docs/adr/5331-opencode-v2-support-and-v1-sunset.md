@@ -192,14 +192,29 @@ The decisive facts are structural: one command name, one set of config locations
 
 | # | Question | Why it matters | Resolved by |
 |---|---|---|---|
-| 1 | What is the `--format json` event shape for assistant text with a real provider? | The reviewer lane rebuilds the review from text parts (`src/review-lane-runner.cts:513`). | Phase 1, a run with provider access |
-| 2 | Does `opencode run` accept a `-` positional for stdin? | GSD's reviewer invocation ends with `-` (`capabilities/opencode/capability.json:158`). E4 shows piped stdin is accepted without it. | Phase 1 |
-| 3 | Which tool ids and event names do V2 hooks actually receive (`shell`, `edit`, `write`, `patch`, `subagent`; session/file events)? | Guards key on tool names. [D6] lists ids; `ctx.tool.list()` shows `read` ([D3]). | Phase 1, on a live V2 |
-| 4 | Is there a V2 equivalent of `todowrite`? | GSD maps `TodoWrite` to it. Not on the Tools page ([D6]). | Phase 3 matrix |
-| 5 | Do `OPENCODE_CONFIG_DIR` / `OPENCODE_CONFIG` still redirect config on V2? | GSD's config-dir cascade uses them (`src/runtime-homes.cts:320-337`). Documented for V1 (https://opencode.ai/docs/config/); the V2 [D1] lists three fixed locations. | Phase 1 |
+| 1 | What is the `--format json` event shape for assistant text with a real provider? | The reviewer lane rebuilds the review from text parts (`src/review-lane-runner.cts:513`). | **Answered in Phase 1 (E12):** same `{type:"text", part:{text}}` lines as 1.x; `handleOpencodeOutput` rebuilds the review unchanged. 2.x emits no `step_finish`, so the diagnostic reads `?` |
+| 2 | Does `opencode run` accept a `-` positional for stdin? | GSD's reviewer invocation ends with `-` (`capabilities/opencode/capability.json:158`). E4 shows piped stdin is accepted without it. | **Answered in Phase 1 (E12):** no — on 2.x `-` is message text (the model receives `-\n<prompt>`); stdin alone is read. The 2.x plan drops the `-` |
+| 3 | Which tool ids and event names do V2 hooks actually receive (`shell`, `edit`, `write`, `patch`, `subagent`; session/file events)? | Guards key on tool names. [D6] lists ids; `ctx.tool.list()` shows `read` ([D3]). | **Answered in Phase 1 (E13):** tools `edit glob grep question read shell skill subagent webfetch websearch write execute`; `execute.before` gets `{tool, input}`, `execute.after` `{tool, status, input, result}`; events carry `{type, location:{directory}, data:{sessionID,…}}` (`session.created`, `session.compaction.*`, `session.tool.*`, `session.execution.*`); **no `file.edited` and no `session.idle`** are emitted — the config-reload hook is driven from the edit tools instead |
+| 4 | Is there a V2 equivalent of `todowrite`? | GSD maps `TodoWrite` to it. Not on the Tools page ([D6]). | Phase 3 matrix. Phase 1 observation (E13): not in the 2.0.27 tool list |
+| 5 | Do `OPENCODE_CONFIG_DIR` / `OPENCODE_CONFIG` still redirect config on V2? | GSD's config-dir cascade uses them (`src/runtime-homes.cts:320-337`). Documented for V1 (https://opencode.ai/docs/config/); the V2 [D1] lists three fixed locations. | **Answered in Phase 1 (E14):** `OPENCODE_CONFIG_DIR` is honored on 2.0.27 and 1.18.29 (config and `plugins/` loaded from it). `OPENCODE_CONFIG` alone loaded no provider on either generation in the same harness, so behavior is identical and GSD does not rely on it for loading |
 | 6 | Is `codemode` honored on V1-shaped `mcp.<name>` entries? | `codemode` defaults to `true` ([D11]); GSD's tools may be reached only through Code Mode. | Phase 2 |
-| 7 | How does the dual export behave exactly at the documented floor, OpenCode 1.18.29? | [D2] says object entrypoints work from 1.18.29; E6 shows 1.19.0 also calls `setup()`. | Phase 1 CI leg |
+| 7 | How does the dual export behave exactly at the documented floor, OpenCode 1.18.29? | [D2] says object entrypoints work from 1.18.29; E6 shows 1.19.0 also calls `setup()`. | **Answered in Phase 1 (E15):** 1.18.29 also calls `setup()` with a context that has no `tool` (keys `options agent aisdk catalog command integration plugin reference skill`); the guard keeps it inert, and the guard, a full install and the reviewer lane all pass on 1.18.29 |
 | 8 | Which plugin directory does Kilo read (`plugin/` per [K2] vs the `plugins/` GSD installs), and are `.opencode` directories still scanned? | Kilo must not regress ([K1] says it no longer falls back to `.opencode`). | Phase 2/4 |
+
+## Amendment — 2026-10-12, Phase 1 findings (#5337)
+
+New evidence from the Phase 1 implementation, each reproduced on `opencode` 1.18.29, 1.19.0 and 2.0.27 with an offline local model (`tests/opencode-generations.smoke.test.cjs`).
+
+| ID | Finding | Consequence |
+|---|---|---|
+| E12 | 2.x `run --format json` emits `text` parts shaped as on 1.x and no `step_finish`. `opencode run … -` sends `-` to the model as message text on 2.x (prompt `-\nPlease review…`); stdin alone is read. Without `--standalone`, `run` attaches to a long-lived managed service on a fixed port and failed with "port … already in use" when another process held it. `--model provider/model#high` is accepted. | Reviewer plan on 2.x: drop `-`, add `--standalone` (`adaptLanePlanForGeneration`). |
+| E13 | 2.0.27 tool ids: `edit glob grep question read shell skill subagent webfetch websearch write execute` (no `todowrite`, no `bash`). Hook payloads and event shapes as in open question 3. `shell.create.before` receives `{command, cwd, timeout, shell, env}` and edits to `env` reach the command (`GSD_DIR` verified). `session.compaction` receives `{sessionID, model, system:[{type:"text",text}], messages, options, agent, tools}`; items pushed onto `system` reach the summarizer. | Plugin `setup()` adapts these; `file.edited` is derived from completed `write`/`edit`/`patch` calls on `.planning/config.json`. |
+| E14 | `OPENCODE_CONFIG_DIR` redirects config and `plugins/` on 1.18.29 and 2.0.27. | Config-dir cascade unchanged. |
+| E15 | 1.18.29 calls `setup()` with a non-2.x context. | `setup()` feature-detects `ctx.tool.hook`. |
+| E16 | `process.execPath` inside both generations is the OpenCode binary; spawning it with a `.js` path runs OpenCode, not the script, so every GSD hook was silently skipped (#4849). On 2.0.27 the secret-read guard did not block until hooks were started with Node. | Hooks run under `node` from `PATH` or `GSD_HOOK_RUNTIME`. |
+| E17 | 2.0.27 resolves its working directory from `$PWD`, not the process cwd: a child spawned with `cwd: X` but an inherited `PWD` ran in the parent's directory. | The worktree-dispatch step must launch from a shell that has `cd`'d into the worktree (documented in `executor-isolation-dispatch.md`). |
+
+Descriptor reconciliation (`runtime: bun`, `modelMode: active`): resolved in `docs/reference/host-integration-capability-matrix.md` § OpenCode 2.x notes — the matrix, not ADR-1239's pre-research prose table, is the source of truth, and `runtime` names the host's plugin runtime while GSD hooks run under Node.
 
 ## Action Items
 

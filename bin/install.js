@@ -767,6 +767,7 @@ const {
   discoverInstallerMigrations,
   MANIFEST_SCHEMA_VERSION,
   readInstallManifest,
+  recordHostGeneration,
   runInstallerMigrations,
 } = require(path.join(_gsdLibDir, 'installer-migrations.cjs'));
 const {
@@ -13636,6 +13637,9 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
     try {
       const ocv = require('../gsd-core/bin/lib/opencode-version.cjs');
       const gen = ocv.detectOpencodeGeneration();
+      if (gen.generation !== null && typeof configDir === 'string' && configDir) {
+        recordHostGeneration(configDir, { generation: gen.generation, version: gen.version });
+      }
       if (gen.generation === 2) {
         console.log(`  ${green}✓${reset} OpenCode ${gen.version || '2.x'} detected — GSD loads its OpenCode 2.x plugin entrypoint`);
       } else if (gen.generation === 1) {

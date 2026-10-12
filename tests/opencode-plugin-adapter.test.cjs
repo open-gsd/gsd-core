@@ -621,6 +621,7 @@ function fakeV2Ctx() {
   const ctx = {
     tool: { hook: async (name, fn) => { hooks[`tool.${name}`] = fn; } },
     shell: { hook: async (name, fn) => { hooks[`shell.${name}`] = fn; } },
+    session: { hook: async (name, fn) => { hooks[`session.${name}`] = fn; } },
     event: { subscribe: () => (async function* () {})() },
   };
   return { ctx, hooks };
@@ -646,7 +647,7 @@ test('2.x entrypoint: execute.before blocks a secret read via the 2.x `shell` to
   });
   const { ctx, hooks } = fakeV2Ctx();
   await mod.setup(ctx);
-  assert.deepEqual(Object.keys(hooks).sort(), ['shell.create.before', 'tool.execute.after', 'tool.execute.before']);
+  assert.deepEqual(Object.keys(hooks).sort(), ['session.compaction', 'shell.create.before', 'tool.execute.after', 'tool.execute.before']);
   await assert.rejects(() => hooks['tool.execute.before']({ tool: 'shell', input: { command: 'cat .env' } }), /secret read denied/);
 });
 
@@ -717,4 +718,47 @@ let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{
   const payload = JSON.parse(fs.readFileSync(trace, 'utf8'));
   assert.equal(payload.session_id, 'ses_1');
   assert.equal(payload.cwd, projDir);
+});
+
+test('2.x entrypoint: shell.create.before sets GSD_DIR on the 2.x env object', async (t) => {
+  const { mod, root } = buildInstalledLayout(t, {});
+  const { ctx, hooks } = fakeV2Ctx();
+  await mod.setup(ctx);
+  const e = { command: 'echo', env: {} };
+  await hooks['shell.create.before'](e);
+  assert.equal(e.env.GSD_DIR, path.join(root, 'gsd-core'));
+});
+
+test('2.x entrypoint: compaction adds the GSD breadcrumb to the 2.x system array', async (t) => {
+  const projDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-oc-cmp-')));
+  t.after(() => cleanup(projDir));
+  const { mod } = buildInstalledLayout(t, { 'gsd-context-monitor.js': stubHook(''), 'gsd-ensure-canonical-path.js': stubHook(''), 'gsd-check-update.js': stubHook('') });
+  const { ctx, hooks } = fakeV2Ctx();
+  ctx.event.subscribe = () => (async function* () {
+    yield { type: 'session.created', data: { sessionID: 'ses_9' }, location: { directory: projDir } };
+  })();
+  await mod.setup(ctx);
+  for (let i = 0; i < 50; i++) await new Promise((r) => setImmediate(r));
+  const e = { sessionID: 'ses_9', system: [{ type: 'text', text: 'base' }], messages: [] };
+  await hooks['session.compaction'](e);
+  assert.equal(e.system.length, 2);
+  assert.deepEqual(e.system[1].type, 'text');
+  assert.match(e.system[1].text, /ses_9/);
+});
+
+test('2.x entrypoint: a completed write to .planning/config.json drives the config reload hook (2.x has no file.edited)', async (t) => {
+  const trace = path.join(os.tmpdir(), `gsd-oc-cfg-${process.pid}-${Date.now()}.json`);
+  t.after(() => cleanup(trace));
+  const projDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-oc-cfgproj-')));
+  t.after(() => cleanup(projDir));
+  const recorder = `
+let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{require('fs').writeFileSync(${JSON.stringify(trace)}, d);});`;
+  const { mod } = buildInstalledLayout(t, { 'gsd-config-reload.js': recorder, 'gsd-context-monitor.js': stubHook('') });
+  const { ctx, hooks } = fakeV2Ctx();
+  await mod.setup(ctx);
+  const file = path.join(projDir, '.planning', 'config.json');
+  const result = { content: [{ type: 'text', text: 'ok' }] };
+  await hooks['tool.execute.after']({ tool: 'write', status: 'completed', input: { path: file }, result });
+  assert.ok(fs.existsSync(trace), 'config reload hook never ran');
+  assert.equal(JSON.parse(fs.readFileSync(trace, 'utf8')).hook_event_name, 'FileChanged');
 });
