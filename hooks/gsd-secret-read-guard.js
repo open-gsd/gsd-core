@@ -79,20 +79,11 @@
 //   scans a `<( )` operand; and `find … | xargs cat` infers the upstream
 //   segment's names as the sub-command's read operands.
 //
-// Dollar-quoting (#5255): `$'…'` is ANSI-C quoting in bash and zsh — `\'`
-// does not close it and the word is its decoded value, so `$'.e\x6ev'` is
-// `.env` — and `$` plus a plain quote in dash, the `sh` of Debian and Ubuntu.
-// The hook cannot see which shell runs a command or a `sh -c` body, and each
-// reading hides what the other one runs, so a command holding `$'` or `$"` is
-// scanned under both and denied on either. A `$'…'` word with no value to
-// check is denied too, with its own code: `ansi-c-unterminated` when the
-// quote never closes, `ansi-c-undecodable` when its bytes are not valid UTF-8
-// or it holds a literal NUL. An escaped NUL (`\0`) ends the span's value but
-// not the word, and bash and zsh then read the word to different lengths —
-// bash keeps the rest, zsh's kernel cuts the argument at the NUL — so the
-// word is checked at BOTH lengths (`cat $'.env\0'x` is a zsh read of `.env`).
-// A `$'…'` inside `${…}` ends the `${…}` where bash ends it, past a `}` in the
-// span, but its text is not checked: `${…}` content is not scanned.
+// Dollar-quoting (#5255): a command holding `$'…'` or `$"…"` is scanned under
+// bash's, zsh's and dash's reading of it and denied on any; a `$'…'` word with
+// no value to check is denied as `ansi-c-unterminated` / `ansi-c-undecodable`.
+// The readings, and what they do not reach, are in "Bash command scan —
+// dollar-quoting" below.
 //
 // Grep globs are judged per brace alternative (never on the whole glob, so
 // `{.env.local,zzz.ts}` cannot hide behind a benign sibling): a pure-wildcard
@@ -124,21 +115,6 @@
 //   onto a secret name (`ln -s .env.example l && mv l .env`), so a later
 //   edit of `.env` lands in the link target — a write redirection, the
 //   out-of-scope write class, not a read.)
-//   #5255's `$'…'` handling adds its own, all shared with the pre-#5255
-//   scanner and unreachable by a realistic command: a `\<newline>` line
-//   continuation is modelled only where the main loop and `dollarRun` already
-//   strip it, not inside a double-quoted heredoc-tag part read by other
-//   scanners; a heredoc tag word (inside `$( )`) holding a `${…}`, a `$(…)`,
-//   a backtick or a bare carriage return is read by the span-unaware path, so
-//   its end can differ from bash's; and several-thousand-level nested `$( )`
-//   overflows the parser and fails open under both the old and new scanner
-//   (the new one carries a larger frame, so the depth at which it does is
-//   somewhat lower) — bounded by the 1 MiB cap, and absent from a 423k-command
-//   corpus. The decoder models BASH's `$'…'` value; zsh shares `\'`-does-not-
-//   close and the common escapes but differs on some (`\C-x`, a bare `\x`/`\u`),
-//   so a zsh-only escape that yields a NUL could truncate an argument the hook
-//   reads at full length — unmeasured as a reachable read, named here so the
-//   next editor weighs covering zsh's escape set.
 //
 // A second, unrelated contract is enforced on the Bash leg because this is the
 // one hook that already parses EVERY Bash command (#5214): a Bash command that
@@ -349,19 +325,6 @@ function namesSecret(tok) {
   return colon !== -1 && isSecretBasename(lastSegment(lower.slice(colon + 1)));
 }
 
-// A word token names a secret under EITHER shell's reading: its bash value
-// (`text`) or, when a `\0` span cut it, zsh's shorter value (`altText`, set in
-// tokenize). Returns the offending literal — the bash value when both match,
-// since that is what the agent wrote — or null. `normalize` reads the word as
-// an operand (operandNamesSecret: the `@file`, `--flag=value`, `-Xvalue` and
-// bundled-short-flag forms); a redirect target is a bare path and passes false.
-function wordSecret(tok, normalize) {
-  const names = normalize ? operandNamesSecret : namesSecret;
-  if (names(tok.text)) return tok.text;
-  if (tok.altText !== undefined && names(tok.altText)) return tok.altText;
-  return null;
-}
-
 // ---------------------------------------------------------------------------
 // Grep glob analysis
 // ---------------------------------------------------------------------------
@@ -475,27 +438,40 @@ function classifyGrepGlob(glob) {
 // Bash command scan — dollar-quoting (`$'…'`, `$"…"`)
 // ---------------------------------------------------------------------------
 
-// #5255: dollar-quoting has two readings, and which one applies depends on
-// the shell that runs the text, which a hook cannot see. bash and zsh read
-// `$'…'` as ANSI-C quoting: a backslash escapes the next character, so `\'`
-// does not close the span, and the word's value is the decoded string
-// (`$'.e\x6ev'` is `.env`). bash also reads `$"…"` as `"…"`. dash, which is
-// `sh` on Debian and Ubuntu, has neither form: `$` is a literal and the quote
-// after it is a plain one (zsh reads `$"…"` that way too). Each reading hides
-// what the other one runs:
+// #5255: dollar-quoting is read three ways, and which one applies depends on
+// the shell that runs the text, which a hook cannot see (zsh is the Bash
+// tool's shell on macOS; dash is `sh` on Debian and Ubuntu, and so a `sh -c`
+// body there):
+//   bash  `$'…'` is ANSI-C quoting — a backslash escapes the next character,
+//         so `\'` does not close the span — and the word is the decoded value
+//         (`$'.e\x6ev'` is `.env`); `$"…"` is `"…"`.
+//   zsh   the same span end, but its own decoding (decodeAnsiCZsh): an unknown
+//         escape drops its backslash (`$'.env.\local'` is `.env.local`), a
+//         bare `\x` or `\u` is a NUL that cuts the argument (`$'.env\u'` is
+//         `.env`), and it decodes heredoc tags, so a tag can end the heredoc
+//         on a different line; `$"…"` is `$` and `"…"`.
+//   plain `$` is a literal and the quote after it a plain one (dash).
+// Each reading hides what another runs:
 //   echo $'x\'y'; cat .env          bash and zsh run `cat .env`; the plain
 //                                   reading sees a quote that never closes
-//   echo $'x\'; cat .env; echo '\'  dash runs `cat .env`; the ANSI-C reading
-//                                   sees one quoted word
-// So a command holding either form is scanned under BOTH readings and denied
-// on either (findSecretRead). The plain reading is the scan as it was before
-// #5255, so nothing it denied can become allowed. Every scanner below takes
-// `ansiC` to say which reading it is doing.
-// Not reached, under either reading: the text inside `${…}` is not scanned,
-// so a `$'…'` there is neither decoded nor checked for readability (the
-// `$VAR` indirection gap in the header) — the ANSI-C reading only ends the
-// `${…}` where bash does, past any `}` inside a span (ansiCBraceClose). A
-// command nested deeper than MAX_NESTING_DEPTH is not scanned at all.
+//   echo $'x\'; cat .env; echo '\'  dash runs `cat .env`; the ANSI-C readings
+//                                   see one quoted word
+// So a command holding either form is scanned under all three and denied on
+// any (findSecretRead). The plain reading is the scan as it was before #5255,
+// so nothing it denied can become allowed. Every scanner below takes `ansiC`:
+// false for the plain reading, or the shell whose ANSI-C reading it is doing.
+// Not reached: the text inside `${…}` is not scanned, so a `$'…'` there is not
+// decoded (the `$VAR` indirection gap in the header) — the ANSI-C readings only
+// end the `${…}` where the shell does, past a `}` inside a span
+// (ansiCBraceClose). A command nested deeper than MAX_NESTING_DEPTH is not
+// scanned at all, and several thousand levels of `$( )` overflow the parser and
+// fail open, before #5255 as after (bounded by the 1 MiB cap). A heredoc tag
+// word inside `$( )` holding a `${…}`, `$(…)`, backtick or bare carriage
+// return is read by the span-unaware path, so its end can differ from the
+// shell's. bash 3.2 (`/bin/bash` on macOS) is not modelled: it has no `\u` /
+// `\U` and reads `\c` differently, and on 4,000 generated spans every value
+// where it differed from 5.2 still held a backslash or a control byte, which
+// no protected name contains.
 
 // The run of `$` starting at `i`: `end` is the index just past it, `last` the
 // index of its last `$`, `atQuote` whether a quote follows, and `owned`
@@ -520,6 +496,12 @@ function dollarRun(str, i) {
   }
   const atQuote = str[end] === "'" || str[end] === '"';
   return { end, last, dollars, atQuote, owned: atQuote && dollars % 2 === 1 };
+}
+
+// Whether the run's last `$` belongs to the quote after it, under the reading
+// `shell`: always for `$'…'`, and for `$"…"` only in bash — zsh keeps the `$`.
+function ownsQuote(run, str, shell) {
+  return run.owned && (str[run.end] === "'" || shell === 'bash');
 }
 
 // Index of the `'` closing a `$'…'` span whose opening quote is at `i`, or -1
@@ -553,7 +535,10 @@ function ansiCBraceClose(str, i) {
   return i < str.length ? i : -1;
 }
 
-// Single-character escapes of `$'…'`, as byte values.
+// The shells whose ANSI-C reading a dollar-quoted command is scanned under.
+const ANSI_C_SHELLS = ['bash', 'zsh'];
+
+// Single-character escapes of bash's `$'…'`, as byte values.
 const ANSI_C_ESCAPES = new Map([
   ['a', 0x07], ['b', 0x08], ['e', 0x1b], ['E', 0x1b], ['f', 0x0c], ['n', 0x0a], ['r', 0x0d],
   ['t', 0x09], ['v', 0x0b], ['\\', 0x5c], ["'", 0x27], ['"', 0x22], ['?', 0x3f],
@@ -568,19 +553,27 @@ function hexDigit(byte) {
   return -1;
 }
 
-// The value bash gives the text between `$'` and its closing quote, in a
-// UTF-8 locale: `{ value, nul }`, or null when the bytes are not valid UTF-8
-// (`$'\xff'`, a surrogate or out-of-range `\U`) or the text holds a literal
-// NUL, which no file name the guard classifies can be compared with. Works on bytes because bash does:
-// `$'\xc3\xa9'` is one character. Escapes: the single characters above,
-// `\nnn` (one to three octal digits), `\xHH` and `\x{H…}`, `\uHHHH`,
-// `\UHHHHHHHH`, `\cX`; any other escape keeps its backslash. A NUL ends the
-// value (`nul`) while the span still runs to its quote.
-function decodeAnsiC(raw) {
-  // A literal NUL (not an escape): bash drops it from a script it reads and no
-  // shell can take it in an argument, so the span has no one value.
+// The value `shell` ('bash' or 'zsh') gives the text between `$'` and its
+// closing quote, in a UTF-8 locale, or null when it has none: the text holds a
+// literal NUL (bash drops it from a script it reads and no shell can take it
+// in an argument), or the shell's bytes cannot be read (below). Both readings
+// are measured against the shells themselves in
+// tests/fixtures/ansi-c-decode-oracle.json.
+function decodeAnsiC(raw, shell) {
   if (raw.includes('\0')) return null;
-  if (!raw.includes('\\')) return { value: raw, nul: false };
+  return shell === 'zsh' ? decodeAnsiCZsh(raw) : decodeAnsiCBash(raw);
+}
+
+// bash 5.2's value (ansicstr, lib/sh/strtrans.c), or null when its bytes are
+// not valid UTF-8 (`$'\xff'`, a surrogate or out-of-range `\U`). Works on
+// bytes because bash does: `$'\xc3\xa9'` is one character. Escapes: the
+// single characters above, `\nnn` (one to three octal digits), `\xHH`, and
+// `\x{H…}` (every hex digit, the low byte kept — bash's own form since 4.3,
+// not zsh's: zsh reads `\x{` as a NUL), `\uHHHH`, `\UHHHHHHHH`, `\cX`; any
+// other escape keeps its backslash. A NUL ends the value while the span still
+// runs to its quote, and the word goes on after it: `$'.env\0'x` is `.envx`.
+function decodeAnsiCBash(raw) {
+  if (!raw.includes('\\')) return raw;
   const s = Buffer.from(raw, 'utf8');
   const out = [];
   let k = 0;
@@ -634,10 +627,88 @@ function decodeAnsiC(raw) {
   }
   const cut = out.indexOf(0);
   try {
-    return { value: UTF8_STRICT.decode(Uint8Array.from(cut === -1 ? out : out.slice(0, cut))), nul: cut !== -1 };
+    return UTF8_STRICT.decode(Uint8Array.from(cut === -1 ? out : out.slice(0, cut)));
   } catch {
     return null;
   }
+}
+
+// Single-character escapes of zsh's `$'…'` that are not the character itself.
+const ZSH_ANSI_C_ESCAPES = new Map([
+  ['a', 0x07], ['b', 0x08], ['e', 0x1b], ['E', 0x1b], ['f', 0x0c], ['n', 0x0a], ['r', 0x0d],
+  ['t', 0x09], ['v', 0x0b],
+].map(([ch, byte]) => [ch.charCodeAt(0), byte]));
+
+const UTF8_LOSSY = new TextDecoder('utf-8', { ignoreBOM: true });
+
+// zsh 5.9's value (getkeystring with GETKEYS_DOLLARS_QUOTE, Src/utils.c), or
+// null for a code point zsh cannot encode, which aborts the whole line. Where
+// it differs from bash: any other escape drops its backslash (`\.` is `.`,
+// `\c` is `c`, `\8` is `8`); `\x` and an octal escape are read by zstrtol
+// over a three-byte window, so `\x` skips blanks and takes a sign before up
+// to two hex digits and `\x` with none (or `\x{`) is a NUL; `\u` / `\U` with
+// no digit is a NUL; `\M` and `\C` (the dash after them optional) set the meta
+// bit and mask the control bits of the next character written, `\C-?` being
+// DEL. The value keeps its NULs: a command gets the word cut at the first one
+// (tokenize), a heredoc tag keeps it. Bytes that are not UTF-8 decode lossily
+// — a U+FFFD can neither spell nor hide a secret name — so this reading adds
+// no `ansi-c-undecodable` denial of its own.
+function decodeAnsiCZsh(raw) {
+  if (!raw.includes('\\')) return raw;
+  const s = Buffer.from(raw, 'utf8');
+  const out = [];
+  let meta = 0; // 2: `\M` written after `\C`, applied first
+  let control = 0;
+  const modify = () => {
+    const t = out.length - 1;
+    if (meta === 2) { out[t] |= 0x80; meta = 0; }
+    if (control) { out[t] = out[t] === 0x3f ? 0x7f : out[t] & 0x9f; control = 0; }
+    if (meta) { out[t] |= 0x80; meta = 0; }
+  };
+  let k = 0;
+  while (k < s.length) {
+    const c = s[k++];
+    if (c !== 0x5c || k === s.length) { out.push(c); modify(); continue; }
+    const e = s[k++];
+    const simple = ZSH_ANSI_C_ESCAPES.get(e);
+    if (simple !== undefined) { out.push(simple); modify(); continue; }
+    if (e === 0x4d || e === 0x43) { // M, C
+      if (s[k] === 0x2d) k++;
+      if (e === 0x4d) meta = 1 + control;
+      else control = 1;
+      continue;
+    }
+    if (e === 0x75 || e === 0x55) { // u, U
+      const max = e === 0x75 ? 4 : 8;
+      let v = 0;
+      let n = 0;
+      while (n < max && hexDigit(s[k]) !== -1) { v = v * 16 + hexDigit(s[k++]); n++; }
+      if (v > 0x10ffff || (v >= 0xd800 && v <= 0xdfff)) return null; // "character not in range"
+      out.push(...Buffer.from(String.fromCodePoint(v), 'utf8'));
+      continue; // a pending `\M` / `\C` waits for the next character
+    }
+    if ((e >= 0x30 && e <= 0x37) || e === 0x78) { // octal digit, x
+      const hex = e === 0x78;
+      let p = hex ? k : k - 1;
+      const stop = Math.min(k + 2, s.length);
+      while (p < stop && (s[p] === 0x20 || s[p] === 0x09 || s[p] === 0x0a)) p++;
+      let neg = false;
+      if (p < stop && (s[p] === 0x2d || s[p] === 0x2b)) { neg = s[p] === 0x2d; p++; }
+      let v = 0;
+      for (; p < stop; p++) {
+        const d = hex ? hexDigit(s[p]) : (s[p] >= 0x30 && s[p] <= 0x37 ? s[p] - 0x30 : -1);
+        if (d === -1) break;
+        v = v * (hex ? 16 : 8) + d;
+      }
+      k = p;
+      out.push((neg ? -v : v) & 0xff);
+      modify();
+      continue;
+    }
+    out.push(e);
+    modify();
+  }
+  return UTF8_LOSSY.decode(Uint8Array.from(out));
 }
 
 // A shell metacharacter that ends a heredoc TAG word (ansiCTagWord). Not `\r`,
@@ -738,10 +809,12 @@ function findParenClose(str, i, ansiC) {
 
 // A heredoc tag word that holds a `$'…'` span, read whole the way tokenize
 // reads a word — plain and double quotes, a backslash escape, the span's
-// decoded value — so `<<$'E\x4fF'`, `<<E$'O'F` and `<<'E'$'O'F` all wait for
-// `EOF`. Returns null for a word with no span: readHeredocTag then reads it
-// exactly as it did before #5255.
-function ansiCTagWord(str, i) {
+// value under `shell` — so `<<$'E\x4fF'`, `<<E$'O'F` and `<<'E'$'O'F` all wait
+// for `EOF`. zsh decodes a tag too, and where its value differs the heredoc
+// ends on a different line: `<<$'\.E'` ends at `.E` in zsh, at `\.E` in bash.
+// Returns null for a word with no span: readHeredocTag then reads it exactly
+// as it did before #5255.
+function ansiCTagWord(str, i, shell) {
   let tag = '';
   let sawSpan = false;
   while (i < str.length && !TAG_WORD_END_RE.test(str[i])) {
@@ -751,14 +824,14 @@ function ansiCTagWord(str, i) {
       i += 2;
     } else if (ch === '$') {
       const run = dollarRun(str, i);
-      tag += '$'.repeat(run.dollars - (run.owned ? 1 : 0));
+      tag += '$'.repeat(run.dollars - (ownsQuote(run, str, shell) ? 1 : 0));
       i = run.end; // at the quote, when there is one: the branches below read it
       if (run.owned && str[i] === "'") {
         const end = ansiCQuoteEnd(str, i);
         const raw = str.slice(i + 1, end === -1 ? str.length : end);
-        const decoded = decodeAnsiC(raw);
+        const decoded = decodeAnsiC(raw, shell);
         // An unreadable span is denied where tokenize meets it.
-        tag += decoded === null ? raw : decoded.value;
+        tag += decoded === null ? raw : decoded;
         sawSpan = true;
         i = end === -1 ? str.length : end + 1;
       }
@@ -781,20 +854,20 @@ function ansiCTagWord(str, i) {
   return sawSpan ? { tag, end: Math.min(i, str.length) } : null;
 }
 
-// Reads the tag word after `<<` / `<<-` starting at `i`. Under the ANSI-C
+// Reads the tag word after `<<` / `<<-` starting at `i`. Under an ANSI-C
 // reading a word that holds a `$'…'` span is read whole (ansiCTagWord), and
-// `<<$"EOF"` is `<<"EOF"`.
+// bash's `<<$"EOF"` is `<<"EOF"`.
 function readHeredocTag(str, i, ansiC) {
   let stripTabs = false;
   if (str[i] === '-') { stripTabs = true; i++; }
   while (str[i] === ' ' || str[i] === '\t') i++;
   if (ansiC) {
-    const word = ansiCTagWord(str, i);
+    const word = ansiCTagWord(str, i, ansiC);
     if (word !== null) return { tag: word.tag, quoted: true, stripTabs, end: word.end };
   }
   let quoted = false;
   let tag = '';
-  if (ansiC && str[i] === '$' && str[i + 1] === '"') i++;
+  if (ansiC === 'bash' && str[i] === '$' && str[i + 1] === '"') i++;
   if (str[i] === "'" || str[i] === '"') {
     const q = str[i];
     const j = str.indexOf(q, i + 1);
@@ -896,26 +969,23 @@ function tokenize(str, ansiC) {
   let heredocs = [];
   let expectTag = null;
   let unreadable = null;
-  // zsh's value of the current word when a `\0` span truncated it (see the
-  // dollar branch); undefined when the word has no NUL span.
-  let nulValue;
 
   const flush = () => {
-    if (!hasWord) { nulValue = undefined; return; }
+    if (!hasWord) return;
     if (expectTag) {
       // Record the current seg (still the `<<` segment — flush runs before the
       // newline sep increments it) so pass 2 can attach the body to the shell.
       heredocs.push({ tag: buf, quoted: quoted !== 'none', stripTabs: expectTag.stripTabs, seg });
       expectTag = null;
     } else {
-      const tok = { kind: 'word', text: buf, quoted, seg };
-      if (nulValue !== undefined) tok.altText = nulValue; // the shorter zsh reading
-      tokens.push(tok);
+      // zsh keeps a `\0` escape's NUL in the word and hands a command the
+      // word cut there: `$'.env\0'x` is `.env` to zsh, `.envx` to bash.
+      const nul = ansiC === 'zsh' ? buf.indexOf('\0') : -1;
+      tokens.push({ kind: 'word', text: nul === -1 ? buf : buf.slice(0, nul), quoted, seg });
     }
     buf = '';
     quoted = 'none';
     hasWord = false;
-    nulValue = undefined;
   };
   // The operator text ends segment `seg`; pass 2 reads it to tell `a | bash`
   // (pipe inference) from `a || bash` and to skip grouping seps.
@@ -938,8 +1008,8 @@ function tokenize(str, ansiC) {
       const run = dollarRun(str, i);
       if (run.atQuote) {
         // The `$` run up to the quote, without its line continuations; the
-        // `$` that owns a span is dropped, the rest is literal word text.
-        const literal = '$'.repeat(run.dollars - (run.owned ? 1 : 0));
+        // `$` that owns the quote is dropped, the rest is literal word text.
+        const literal = '$'.repeat(run.dollars - (ownsQuote(run, str, ansiC) ? 1 : 0));
         if (literal) { hasWord = true; buf += literal; }
         if (run.owned && str[run.end] === "'") {
           hasWord = true;
@@ -950,24 +1020,17 @@ function tokenize(str, ansiC) {
             i = str.length;
             continue;
           }
-          const decoded = decodeAnsiC(str.slice(run.end + 1, end));
+          const decoded = decodeAnsiC(str.slice(run.end + 1, end), ansiC);
           if (decoded === null) {
             if (unreadable === null) unreadable = { code: 'ansi-c-undecodable', text: quoteExcerpt(str, run.end - 1) };
           } else {
-            buf += decoded.value;
-            // A `\0` escape ends the span's VALUE but not the word: bash drops
-            // it and keeps reading the word (`$'.env\0'x` is `.envx`), while
-            // zsh keeps the NUL and the kernel cuts the whole argument there
-            // (`.env`). The word's bash value is `buf` as it ends; its zsh
-            // value is `buf` AT THE FIRST NUL, recorded here so the operand
-            // scan checks both — `cat $'.env\0'x` is a zsh read of `.env`.
-            if (decoded.nul && nulValue === undefined) nulValue = buf;
+            buf += decoded;
           }
           i = end + 1;
           continue;
         }
-        // A plain quote after the PID, or `$"…"` read as `"…"`: the quote
-        // branches below take it from here.
+        // A plain quote after the PID, or `$"…"` — `"…"` to bash, `$` and
+        // `"…"` to zsh: the quote branches below take it from here.
         i = run.end;
         continue;
       }
@@ -1461,30 +1524,33 @@ function findSecretReadUnderOtherReadings(command) {
 
 // Returns the offending token text, an unreadable-quote record
 // (`{ code, text }`, see tokenize), or null. A command holding dollar-quoting
-// is scanned under both readings (see the dollar-quoting section): the ANSI-C
-// one first, then the plain one, which is the scan as it was before #5255.
-// A command holding none gets the plain scan alone, so for it the guard is
-// the pre-#5255 guard by construction. "Holding" is tested on the text with
-// its `\<newline>` continuations removed, because bash joins them before it
-// reads a quote: `$\<newline>'x'` is `$'x'`.
+// is scanned under every reading (see the dollar-quoting section): bash's and
+// zsh's ANSI-C readings first, then the plain one, which is the scan as it was
+// before #5255. A command holding none gets the plain scan alone, so for it
+// the guard is the pre-#5255 guard by construction. "Holding" is tested on the
+// text with its `\<newline>` continuations removed, because bash joins them
+// before it reads a quote: `$\<newline>'x'` is `$'x'`.
 function findSecretRead(command, depth) {
   const joined = command.includes('\\\n') ? command.replace(/\\\n/g, '') : command;
   if (!joined.includes("$'") && !joined.includes('$"')) return scanCommand(command, depth, false);
-  let hit = null;
-  try {
-    hit = scanCommand(command, depth, true);
-  } catch {
-    // The ANSI-C reading decodes text the plain reading takes literally, so it
-    // can reach code the plain one does not — a `bash -c $'…'` body whose
-    // escaped quotes decode into thousands of nested `"$( )"` overflows the
-    // stack in findParenClose. An error here must not cost the plain reading's
-    // verdict, which is the one the guard gave before #5255.
+  for (const shell of ANSI_C_SHELLS) {
+    let hit = null;
+    try {
+      hit = scanCommand(command, depth, shell);
+    } catch {
+      // An ANSI-C reading decodes text the plain reading takes literally, so
+      // it can reach code the plain one does not — a `bash -c $'…'` body whose
+      // escaped quotes decode into thousands of nested `"$( )"` overflows the
+      // stack in findParenClose. An error here must not cost the plain
+      // reading's verdict, which is the one the guard gave before #5255.
+    }
+    if (hit !== null) return hit;
   }
-  if (hit !== null) return hit;
   return scanCommand(command, depth, false);
 }
 
-// One reading of `command`.
+// One reading of `command`: `ansiC` is false for the plain reading, or the
+// shell ('bash' | 'zsh') whose `$'…'` values an ANSI-C reading uses.
 function scanCommand(command, depth, ansiC) {
   const { tokens, nested, unreadable } = tokenize(command, ansiC);
 
@@ -1531,7 +1597,7 @@ function scanCommand(command, depth, ansiC) {
           k++;
           if (t.text.endsWith('<<<')) hereStrings.push(target.text); // stdin data for a shell
           // Input redirects are reads regardless of the command's exemption.
-          else if (t.read) { const hit = wordSecret(target, false); if (hit) return hit; }
+          else if (t.read && namesSecret(target.text)) return target.text;
         }
         continue;
       }
@@ -1562,7 +1628,7 @@ function scanCommand(command, depth, ansiC) {
             const hit = findSecretRead(src, depth + 1);
             if (hit) return hit;
           }
-        } else { const hit = wordSecret(w, true); if (hit) return hit; }
+        } else if (operandNamesSecret(w.text)) return w.text;
       }
       continue;
     }
@@ -1592,7 +1658,7 @@ function scanCommand(command, depth, ansiC) {
     const nameOnly = nameOnlyOperandIndices(base, operands);
     for (let k = 0; k < operands.length; k++) {
       if (nameOnly.has(k)) continue;
-      const hit = wordSecret(operands[k], true); if (hit) return hit;
+      if (operandNamesSecret(operands[k].text)) return operands[k].text;
     }
   }
   // No secret read found; a `$'…'` word with no value to check still denies.
@@ -1755,7 +1821,7 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, ansiC) {
   const prevCmd = resolveCommand((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
   if (!prevCmd) return null;
   for (const w of prevCmd.operands) {
-    { const hit = wordSecret(w, true); if (hit) return hit; }
+    if (operandNamesSecret(w.text)) return w.text;
   }
   return null;
 }
@@ -1893,62 +1959,70 @@ function normalizeKimiPayload(data) {
   return data;
 }
 
-let input = '';
-const stdinTimeout = setTimeout(() => allow(undefined), 3000);
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', chunk => input += chunk);
-process.stdin.on('end', () => {
-  clearTimeout(stdinTimeout);
-  try {
-    const data = normalizeKimiPayload(JSON.parse(input));
+// The PreToolUse entry. Tests load the scanners in-process (module.exports
+// below); the hook body runs only when the file is executed as the hook.
+function main() {
+  let input = '';
+  const stdinTimeout = setTimeout(() => allow(undefined), 3000);
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', chunk => input += chunk);
+  process.stdin.on('end', () => {
+    clearTimeout(stdinTimeout);
+    try {
+      const data = normalizeKimiPayload(JSON.parse(input));
 
-    // A null/primitive payload has nothing to guard — exit deliberately
-    // rather than throwing into the fail-open catch below (#2595 class).
-    if (data === null || typeof data !== 'object') {
-      allow(undefined);
-    }
-
-    const tool = bareToolName(data.tool_name);
-    if (tool !== 'Read' && tool !== 'Grep' && tool !== 'Bash') {
-      allow(undefined);
-    }
-    if (!data.tool_input || typeof data.tool_input !== 'object') {
-      allow(undefined);
-    }
-
-    // Every payload field is read TYPED in a single statement (#2547 class):
-    // `[]`/`{}` are truthy and a non-string degrades to '' here.
-    if (tool === 'Read') {
-      const filePath = typeof data.tool_input.file_path === 'string' ? data.tool_input.file_path : '';
-      if (namesSecret(filePath)) emitBlock('secret-read', tool, filePath);
-      allow(undefined);
-    }
-
-    if (tool === 'Grep') {
-      const grepPath = typeof data.tool_input.path === 'string' ? data.tool_input.path
-        : (typeof data.tool_input.file_path === 'string' ? data.tool_input.file_path : '');
-      if (namesSecret(grepPath)) emitBlock('secret-read', tool, grepPath);
-      const glob = typeof data.tool_input.glob === 'string' ? data.tool_input.glob : '';
-      if (glob !== '') {
-        const verdict = classifyGrepGlob(glob);
-        if (verdict) emitBlock(verdict, tool, glob);
+      // A null/primitive payload has nothing to guard — exit deliberately
+      // rather than throwing into the fail-open catch below (#2595 class).
+      if (data === null || typeof data !== 'object') {
+        allow(undefined);
       }
-      allow(undefined);
-    }
 
-    // Bash
-    const command = typeof data.tool_input.command === 'string' ? data.tool_input.command : '';
-    if (command === '') allow(undefined);
-    if (command.length > MAX_COMMAND_LENGTH) emitBlock('command-too-large', tool, '');
-    const hit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
-    if (hit !== null && typeof hit === 'object') emitBlock(hit.code, tool, hit.text);
-    if (hit !== null) emitBlock('secret-read', tool, hit);
-    const spawn = findDebuggerCliSpawn(command, 0);
-    if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
-    allow(undefined);
-  } catch {
-    // Fail open — never block valid tool calls due to hook errors.
-    // ON_CRASH is declared ALLOW at module top (#3911).
-    crash(ON_CRASH, undefined);
-  }
-});
+      const tool = bareToolName(data.tool_name);
+      if (tool !== 'Read' && tool !== 'Grep' && tool !== 'Bash') {
+        allow(undefined);
+      }
+      if (!data.tool_input || typeof data.tool_input !== 'object') {
+        allow(undefined);
+      }
+
+      // Every payload field is read TYPED in a single statement (#2547 class):
+      // `[]`/`{}` are truthy and a non-string degrades to '' here.
+      if (tool === 'Read') {
+        const filePath = typeof data.tool_input.file_path === 'string' ? data.tool_input.file_path : '';
+        if (namesSecret(filePath)) emitBlock('secret-read', tool, filePath);
+        allow(undefined);
+      }
+
+      if (tool === 'Grep') {
+        const grepPath = typeof data.tool_input.path === 'string' ? data.tool_input.path
+          : (typeof data.tool_input.file_path === 'string' ? data.tool_input.file_path : '');
+        if (namesSecret(grepPath)) emitBlock('secret-read', tool, grepPath);
+        const glob = typeof data.tool_input.glob === 'string' ? data.tool_input.glob : '';
+        if (glob !== '') {
+          const verdict = classifyGrepGlob(glob);
+          if (verdict) emitBlock(verdict, tool, glob);
+        }
+        allow(undefined);
+      }
+
+      // Bash
+      const command = typeof data.tool_input.command === 'string' ? data.tool_input.command : '';
+      if (command === '') allow(undefined);
+      if (command.length > MAX_COMMAND_LENGTH) emitBlock('command-too-large', tool, '');
+      const hit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
+      if (hit !== null && typeof hit === 'object') emitBlock(hit.code, tool, hit.text);
+      if (hit !== null) emitBlock('secret-read', tool, hit);
+      const spawn = findDebuggerCliSpawn(command, 0);
+      if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
+      allow(undefined);
+    } catch {
+      // Fail open — never block valid tool calls due to hook errors.
+      // ON_CRASH is declared ALLOW at module top (#3911).
+      crash(ON_CRASH, undefined);
+    }
+  });
+}
+
+module.exports = { decodeAnsiC, findSecretRead };
+
+if (require.main === module) main();

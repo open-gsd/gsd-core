@@ -1638,9 +1638,9 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       });
     }
 
-    // A `\0` escape ends the span VALUE but not the word; bash keeps reading the
-    // word, zsh's kernel cuts the argument at the NUL. The word is checked at
-    // BOTH lengths, so a secret at EITHER length is a read (#5255 review r2/r4).
+    // A `\0` escape ends the span VALUE but not the word: bash keeps reading the
+    // word, zsh hands a command the argument cut at the NUL. The bash and zsh
+    // readings each check their own value, so a secret under EITHER is a read.
     const nulTruncation = [
       [R`cat $'.env\0'x`, '.env'], // zsh reads `.env`; bash reads `.envx`
       [R`cat $'.env\0'`, '.env'], // both read `.env`
@@ -1783,5 +1783,139 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
         }), PARITY_RUNS);
       });
     }
+  });
+});
+
+describe("regressions: #5255 — zsh's reading of $'…' (review round 6, Major 2)", () => {
+  // zsh is the Bash tool's shell on macOS, and it decodes `$'…'` differently
+  // from bash (zsh 5.9 getkeystring): an unknown escape drops its backslash,
+  // a bare `\x` / `\u` / `\U` is a NUL, `\C-` / `\M-` modify the next byte,
+  // and heredoc tags are decoded too. Each row reads `.env` under zsh only.
+  const R = String.raw;
+  const zshOnly = [
+    [R`cat $'.env\u'`, '.env'],
+    [R`cat $'.env\x'`, '.env'],
+    [R`cat $'.env\U'`, '.env'],
+    [R`cat $'.env\x{'x`, '.env'], // `\x{` is a NUL to zsh; bash reads `.env\x{x`
+    [R`cat $'.env\C-@'`, '.env'],
+    [R`cat $'.env.\local'`, '.env.local'], // zsh drops an unknown escape's backslash
+  ];
+  for (const [cmd, path] of zshOnly) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path });
+    });
+  }
+
+  test('a heredoc tag zsh decodes differently ends the heredoc on zsh\'s line', () => {
+    // zsh ends this heredoc at `.E` and runs `cat .env`; bash reads on to `\.E`.
+    const cmd = "cat <<$'\\.E'\nbody\n.E\ncat .env\n\\.E";
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  const allows = [
+    R`echo $'\M-a'; ls`, // a meta byte: not UTF-8 under zsh, decoded lossily, never a denial
+    R`grep -P $'\d+\s' notes.txt`,
+    R`echo $'\c'; ls`,
+    R`printf $'\x 41'`,
+    R`cat $'.e\nv'`, // `.e<newline>v` to both shells
+    'cat <<$\'\\.E\'\nbody\n\\.E\nls', // both shells end at a line neither reads `.env` on
+  ];
+  for (const cmd of allows) {
+    test(`allows ${JSON.stringify(cmd)}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+});
+
+describe("decodeAnsiC against bash 5.2 and zsh 5.9 (in-process; review round 6, Minors 3 and 6)", () => {
+  const R = String.raw;
+  const { decodeAnsiC } = require(HOOK_PATH);
+  const oracle = require('./fixtures/ansi-c-decode-oracle.json');
+  const STRICT = new TextDecoder('utf-8', { fatal: true });
+  const LOSSY = new TextDecoder('utf-8');
+  // What the hook should read for a span, from the bytes the shell handed a
+  // child: bash's value must be UTF-8 or the word has none (null); zsh's is
+  // decoded lossily and compared at its first NUL, where a child's argument
+  // ends.
+  const expected = (hex, shell) => {
+    if (hex === null) return null;
+    const bytes = Buffer.from(hex, 'hex');
+    if (shell === 'zsh') return LOSSY.decode(bytes);
+    try { return STRICT.decode(bytes); } catch { return null; }
+  };
+  const asChild = (v, shell) => (v !== null && shell === 'zsh' && v.includes('\0') ? v.slice(0, v.indexOf('\0')) : v);
+
+  test(`agrees with the committed oracle on all ${oracle.cases.length} spans, both shells`, () => {
+    const misses = [];
+    for (const [raw, bashHex, zshHex] of oracle.cases) {
+      for (const [shell, hex] of [['bash', bashHex], ['zsh', zshHex]]) {
+        const got = asChild(decodeAnsiC(raw, shell), shell);
+        if (got !== expected(hex, shell)) misses.push(`${shell} ${JSON.stringify(raw)}`);
+      }
+    }
+    assert.deepEqual(misses, []);
+  });
+
+  // Each branch the oracle exercises, named, so a mutant in one fails by name.
+  const branches = [
+    // [raw, bash value, zsh value (before the child's NUL cut)]
+    [R`\cA`, '\x01', 'cA'],
+    [R`\c?`, '\x7f', 'c?'],
+    [R`\c\\`, '\x1c', 'c\\'],
+    [R`\x{2e}`, '.', '\0{2e}'],
+    [R`\x{4142}`, 'B', '\0{4142}'],
+    [R`\x{41zz}`, 'Azz}', '\0{41zz}'],
+    [R`\U0000002e`, '.', '.'],
+    [R`\U`, '\\U', '\0'],
+    [R`\u`, '\\u', '\0'],
+    [R`\x`, '\\x', '\0'],
+    [R`\x 4`, '\\x 4', '\x04'],
+    [R`\x-1`, '\\x-1', '\ufffd'],
+    [R`a\0b`, 'a', 'a\0b'],
+    [R`\0101`, '\x081', '\x081'],
+    [R`\777`, null, '\ufffd'],
+    [R`\.env`, '\\.env', '.env'],
+    [R`\C-@`, '\\C-@', '\0'],
+    [R`\C-a`, '\\C-a', '\x01'],
+    [R`\M-\C-@`, '\\M-\\C-@', '\ufffd'],
+  ];
+  for (const [raw, bash, zsh] of branches) {
+    test(`${JSON.stringify(raw)} is ${JSON.stringify(bash)} to bash and ${JSON.stringify(zsh)} to zsh`, () => {
+      assert.equal(decodeAnsiC(raw, 'bash'), bash);
+      assert.equal(decodeAnsiC(raw, 'zsh'), zsh);
+    });
+  }
+
+  // A string spelled with escapes both shells read the same way decodes back
+  // to itself, in either shell.
+  const PROPERTY_RUNS = { seed: 5285, numRuns: 2000 };
+  const char = fc.integer({ min: 1, max: 0xffff })
+    .filter((c) => c < 0xd800 || c > 0xdfff)
+    .map((c) => String.fromCharCode(c));
+  const hex = (n, w) => n.toString(16).padStart(w, '0');
+  const spell = (ch, form) => {
+    const cp = ch.codePointAt(0);
+    if (form === 0) return ch === '\\' ? '\\\\' : ch === "'" ? "\\'" : ch;
+    if (form === 1) return `\\u${hex(cp, 4)}`;
+    if (form === 2) return `\\U${hex(cp, 8)}`;
+    if (cp < 0x80 && form === 3) return `\\x${hex(cp, 2)}`;
+    if (cp < 0x80) return `\\${cp.toString(8).padStart(3, '0')}`;
+    return `\\u${hex(cp, 4)}`;
+  };
+
+  test('property: an escape-spelled string decodes to itself in bash and zsh', () => {
+    fc.assert(fc.property(fc.array(fc.tuple(char, fc.integer({ min: 0, max: 4 })), { maxLength: 24 }), (parts) => {
+      const value = parts.map(([ch]) => ch).join('');
+      const raw = parts.map(([ch, form]) => spell(ch, form)).join('');
+      assert.equal(decodeAnsiC(raw, 'bash'), value);
+      assert.equal(decodeAnsiC(raw, 'zsh'), value);
+    }), PROPERTY_RUNS);
+  });
+
+  test('property: text with no backslash and no NUL is its own value in both shells', () => {
+    fc.assert(fc.property(fc.string({ unit: 'grapheme', maxLength: 40 }).filter((s) => !s.includes('\\') && !s.includes('\0')), (s) => {
+      assert.equal(decodeAnsiC(s, 'bash'), s);
+      assert.equal(decodeAnsiC(s, 'zsh'), s);
+    }), PROPERTY_RUNS);
   });
 });
