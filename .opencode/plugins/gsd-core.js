@@ -927,11 +927,20 @@ async function setupV2(ctx) {
     stop = () => ac.abort();
     (async () => {
       for await (const ev of ctx.event.subscribe({ signal: ac.signal })) {
+        // 2.0.27 shape (observed): { type, location: { directory }, data: { sessionID, … } }.
         const d = (ev && ev.data) || {};
-        const info = d.info || d.session || d;
-        await hooks.event({
-          event: { type: ev.type, properties: { info, file: d.file, cwd: d.cwd }, sessionID: d.sessionID },
-        });
+        const dir = (ev && ev.location && ev.location.directory) || (d.location && d.location.directory);
+        try {
+          await hooks.event({
+            event: {
+              type: ev.type,
+              properties: { info: { id: d.sessionID, directory: dir }, file: d.file, cwd: dir },
+              sessionID: d.sessionID,
+            },
+          });
+        } catch {
+          // one bad event must not end the subscription
+        }
       }
     })().catch(() => {});
   }

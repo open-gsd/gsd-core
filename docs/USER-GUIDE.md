@@ -859,6 +859,14 @@ To assign different models on a non-Claude runtime:
 }
 ```
 
+#### OpenCode 1.x and 2.x (#5337)
+
+OpenCode 1.x and 2.x use the same `opencode` command and the same config directories, so GSD tells them apart by running `opencode --version` (5-second limit, no shell). The GSD plugin at `plugins/gsd-core.js` serves both: OpenCode 1.x loads its `server` export and OpenCode 2.x loads its `setup` export, and both run the same GSD guards (secret-read, injection scan, workflow, worktree, write).
+
+Differences GSD handles for you on 2.x: worktree dispatch sets the working directory of the spawned `opencode run` instead of passing `--dir`, and the reviewer lane carries a configured reasoning effort as a `#variant` suffix on the model (for example `provider/model#high`) instead of `--variant`. If the version cannot be read, set `GSD_OPENCODE_GENERATION=1` or `2` to choose explicitly. Kilo is unaffected and stays on the OpenCode 1.x behavior.
+
+The plugin now starts its hook scripts with Node from `PATH` (override with `GSD_HOOK_RUNTIME`) instead of the OpenCode executable, which ran OpenCode rather than the script and left the guards silently inactive (#4849).
+
 #### Codex skill picker and agent scheduling (#774)
 
 GSD enriches each Codex install with an additional artifact:

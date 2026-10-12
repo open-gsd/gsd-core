@@ -696,3 +696,25 @@ test('hook runtime: a non-JS host executable never runs the hook; node from PATH
   await handlers['tool.execute.before']({ tool: 'read' }, { args: { filePath: '/p/a.txt' } });
   assert.equal(secretSpawnRuntime(), '/usr/local/bin/node');
 });
+
+test('2.x entrypoint: a 2.x session.created event (data.sessionID, location.directory) drives the SessionStart hooks', async (t) => {
+  const trace = path.join(os.tmpdir(), `gsd-oc-evt-${process.pid}-${Date.now()}.json`);
+  t.after(() => cleanup(trace));
+  const recorder = `
+let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{
+  require('fs').appendFileSync(${JSON.stringify(trace)}, d + '\\n');
+});`;
+  const { mod } = buildInstalledLayout(t, { 'gsd-ensure-canonical-path.js': recorder, 'gsd-check-update.js': stubHook('') });
+  const projDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-oc-evtproj-')));
+  t.after(() => cleanup(projDir));
+  const { ctx } = fakeV2Ctx();
+  ctx.event.subscribe = () => (async function* () {
+    yield { type: 'session.created', data: { sessionID: 'ses_1' }, location: { directory: projDir } };
+  })();
+  await mod.setup(ctx);
+  for (let i = 0; i < 100 && !fs.existsSync(trace); i++) await new Promise((r) => setImmediate(r));
+  assert.ok(fs.existsSync(trace), 'SessionStart hook never ran');
+  const payload = JSON.parse(fs.readFileSync(trace, 'utf8'));
+  assert.equal(payload.session_id, 'ses_1');
+  assert.equal(payload.cwd, projDir);
+});
