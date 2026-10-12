@@ -814,6 +814,83 @@ test('V1 server() picked from a Bun namespace by the detect path runs the secret
   );
 });
 
+test('a guard blocks through a Bun-like host only because the spawn env sets BUN_BE_BUN=1', async (t) => {
+  const { root, mod } = buildInstalledLayout(t, {
+    'gsd-secret-read-guard.js': stubHook(JSON.stringify({ decision: 'block', code: 'secret-read', reason: 'secret read denied' }), 2),
+  });
+  const fakeHostPath = path.join(root, 'fake-host.cjs');
+  fs.writeFileSync(
+    fakeHostPath,
+    "if (process.env.BUN_BE_BUN !== '1') { process.stderr.write(`Error: Failed to change directory to ${process.argv[1]}\\n`); process.exit(0); }\n",
+  );
+
+  const previousBun = process.versions.bun;
+  const previousNodeOptions = process.env.NODE_OPTIONS;
+  const realConsoleError = console.error;
+  t.after(() => {
+    if (previousBun === undefined) delete process.versions.bun;
+    else process.versions.bun = previousBun;
+    if (previousNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = previousNodeOptions;
+    console.error = realConsoleError;
+  });
+  process.versions.bun = '1.4.2';
+  const preload = `--require ${JSON.stringify(fakeHostPath)}`;
+  process.env.NODE_OPTIONS = previousNodeOptions ? `${previousNodeOptions} ${preload}` : preload;
+
+  const handlers = await mod.server({ directory: process.cwd() });
+  await assert.rejects(
+    () => handlers['tool.execute.before']({ tool: 'read' }, { args: { filePath: '/p/.env' } }),
+    /secret read denied/,
+  );
+
+  delete process.versions.bun;
+  const warnings = [];
+  console.error = (...args) => { warnings.push(args.join(' ')); };
+  const output = { args: { filePath: '/p/.env' } };
+  await handlers['tool.execute.before']({ tool: 'read' }, output);
+  const advisory = output.metadata._gsdAdvisory.find((line) => line.startsWith('[gsd-core] gsd-secret-read-guard.js did not run:'));
+  assert.ok(advisory?.includes('Failed to change directory'), String(output.metadata._gsdAdvisory));
+  assert.equal(warnings.filter((w) => w.includes('did not run')).length, 1);
+});
+
+test('a guard blocks through a non-node host executable only when the spawn env sets BUN_BE_BUN=1', { skip: process.platform === 'win32' }, async (t) => {
+  const { root, mod } = buildInstalledLayout(t, {
+    'gsd-secret-read-guard.js': stubHook(JSON.stringify({ decision: 'block', code: 'secret-read', reason: 'secret read denied' }), 2),
+  });
+  const quotedNode = `'${process.execPath.replace(/'/g, "'\\''")}'`;
+  const wrapper = path.join(root, 'fake-host');
+  fs.writeFileSync(
+    wrapper,
+    `#!/bin/sh\nif [ "$BUN_BE_BUN" = 1 ]; then exec ${quotedNode} "$@"; else echo "Error: Failed to change directory to $1" >&2; exit 0; fi\n`,
+    { mode: 0o755 },
+  );
+
+  const previousBun = process.versions.bun;
+  const previousExecPath = process.execPath;
+  t.after(() => {
+    if (previousBun === undefined) delete process.versions.bun;
+    else process.versions.bun = previousBun;
+    process.execPath = previousExecPath;
+  });
+  const errors = captureErrors(t);
+  process.versions.bun = '1.4.2';
+  process.execPath = wrapper;
+
+  const handlers = await mod.server({ directory: process.cwd() });
+  await assert.rejects(
+    () => handlers['tool.execute.before']({ tool: 'read' }, { args: { filePath: '/p/.env' } }),
+    /secret read denied/,
+  );
+
+  delete process.versions.bun;
+  const output = { args: { filePath: '/p/.env' } };
+  await handlers['tool.execute.before']({ tool: 'read' }, output);
+  const advisory = output.metadata._gsdAdvisory.find((line) => line.startsWith('[gsd-core] gsd-secret-read-guard.js did not run:'));
+  assert.ok(advisory?.includes('Failed to change directory'), String(output.metadata._gsdAdvisory));
+  assert.equal(errors.filter((line) => line.includes('gsd-secret-read-guard.js did not run')).length, 1);
+});
+
 // A V2 event stream the test feeds by hand. The promise push() returns settles
 // once the consumer pulls again (it finished that event) or the stream stops.
 function fakeEventStream() {
