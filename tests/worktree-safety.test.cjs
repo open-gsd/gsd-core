@@ -6639,6 +6639,52 @@ describe('bug #260: gsd-worktree-path-guard.js', () => {
       assert.strictEqual(result.status, 0);
       assert.strictEqual(result.stdout, '');
     });
+
+    for (const [toolName, title] of [
+      ['Edit', 'Edit with a relative ../ path into the main repo is blocked'],
+      ['MultiEdit', 'MultiEdit with a relative ../ path into the main repo is blocked'],
+    ]) {
+      test(title, () => {
+        const payload = {
+          cwd: worktreeDir,
+          tool_name: toolName,
+          tool_input: { file_path: path.relative(worktreeDir, path.join(mainRepo, 'x.js')) },
+        };
+        const result = runHook(worktreeDir, payload);
+        assert.strictEqual(result.status, 2, `Expected exit 2, got ${result.status}. stderr: ${result.stderr}`);
+        const parsed = JSON.parse(result.stdout);
+        assert.strictEqual(parsed.decision, 'block');
+        assert.ok(parsed.reason.startsWith('Worktree path guard:'), `unexpected reason: ${parsed.reason}`);
+        assert.ok(parsed.reason.includes('edit only files inside the active worktree'), parsed.reason);
+        assert.ok(!/relative path/i.test(parsed.reason), `a blocked relative path must not be told to use one: ${parsed.reason}`);
+      });
+    }
+
+    test('Write with a relative ../ path into the main repo .git internals is blocked without suggesting a relative path', () => {
+      const payload = {
+        cwd: worktreeDir,
+        tool_name: 'Write',
+        tool_input: { file_path: path.relative(worktreeDir, path.join(mainRepo, '.git', 'config')) },
+      };
+      const result = runHook(worktreeDir, payload);
+      assert.strictEqual(result.status, 2, `Expected exit 2, got ${result.status}. stderr: ${result.stderr}`);
+      const parsed = JSON.parse(result.stdout);
+      assert.strictEqual(parsed.decision, 'block');
+      assert.ok(parsed.reason.includes('git internal (.git) directory'), parsed.reason);
+      assert.ok(parsed.reason.includes('Edit only files inside the active worktree'), parsed.reason);
+      assert.ok(!/relative path/i.test(parsed.reason), `a blocked relative path must not be told to use one: ${parsed.reason}`);
+    });
+
+    test('Edit with a relative path whose ../ stays inside the worktree exits 0', () => {
+      const payload = {
+        cwd: worktreeDir,
+        tool_name: 'Edit',
+        tool_input: { file_path: 'src/../README.md' },
+      };
+      const result = runHook(worktreeDir, payload);
+      assert.strictEqual(result.status, 0, `stderr: ${result.stderr}`);
+      assert.strictEqual(result.stdout, '');
+    });
   });
 
   // 3. Non-Edit/Write tools always pass

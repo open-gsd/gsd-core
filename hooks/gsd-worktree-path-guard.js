@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // gsd-hook-version: {{GSD_VERSION}}
 // GSD Worktree Path Guard — PreToolUse hook
-// Blocks Edit/Write/MultiEdit tool calls that target absolute paths outside the worktree root.
+// Blocks Edit/Write/MultiEdit tool calls whose path, absolute or relative to the
+// tool's cwd, resolves outside the worktree root.
 //
 // Problem: gsd-executor agents spawned with isolation="worktree" sometimes issue
 // Edit/Write calls with absolute paths rooted at the MAIN repository instead of
@@ -11,8 +12,8 @@
 // This hook enforces the constraint at the tooling layer, making it HARD-BLOCKING.
 //
 // Triggers on: Edit, Write, and MultiEdit tool calls
-// Action: BLOCK (exit 2) if file_path is absolute and outside the worktree root
-// No-op: relative paths, non-worktree CWDs, hook errors (silent fail)
+// Action: BLOCK (exit 2) if file_path is outside the worktree root
+// No-op: non-worktree CWDs, hook errors (silent fail)
 
 const fs = require('fs');
 const path = require('path');
@@ -221,7 +222,7 @@ process.stdin.on('end', () => {
 
     // #2595 (review Major 3): read the field TYPED. `?.file_path || ''` let a
     // non-string through — `[]` and `{}` are truthy, so they survived the
-    // `!rawFilePath` check and threw inside path.isAbsolute() below, landing in
+    // `!rawFilePath` check and threw inside path.resolve() below, landing in
     // this script's outer `catch { process.exit(0) }`. That is the same
     // crash-to-allow #2547 closes elsewhere, reached through the guard's own
     // read rather than through normalization, and it is NOT closed by making
@@ -236,27 +237,10 @@ process.stdin.on('end', () => {
       allow(undefined);
     }
 
-    // Relative paths resolve against the tool's CWD, which is inside the worktree
-    // — so under the runtime this guard was written for they cannot leave it.
-    //
-    // #2595 (review Minor 5) — state the premise rather than leave it implicit,
-    // because THIS PR is what widened the guard's reach to Kimi. "Always safe"
-    // holds only while every runtime reaching here either rejects relative paths
-    // or resolves them against the worktree CWD. Claude Code's Edit/Write require
-    // an absolute file_path, so the original #260 surface satisfies it by
-    // construction. kimi-cli's StrReplaceFile takes `path` with no documented
-    // absoluteness guarantee, and its resolution behaviour is NOT verified here
-    // (no source available to this repo at 4a550ef beyond the schema). If it
-    // resolves relative paths against anything other than the tool CWD, a
-    // `../`-laden path exits 0 at this line and escapes the worktree. Stating a
-    // mechanism and an unverified premise — not asserting a live bypass.
-    if (!path.isAbsolute(rawFilePath)) {
-      allow(undefined);
-    }
-
-    // Normalise .. traversal so /worktree/src/../../../main/file
-    // resolves to its true location before we check containment.
-    const filePath = path.resolve(rawFilePath);
+    // Relative paths resolve against the tool's cwd, and .. traversal is
+    // normalised, so /worktree/src/../../../main/file and ../main/file both
+    // reach their true location before we check containment.
+    const filePath = path.resolve(cwd, rawFilePath);
 
     // Find the nearest existing ancestor of filePath so we can ask git
     // for its toplevel. The file itself may not exist yet (Write creates
@@ -291,7 +275,7 @@ process.stdin.on('end', () => {
     if (fileTopResult.status !== 0 || !fileTopResult.stdout) {
       // The target's location is not a git work tree. Two sub-cases:
       //  - Inside a .git directory (e.g. /main-repo/.git/config or .git/hooks/*)
-      //    → an absolute write into a repository's internals; still a #260-class
+      //    → a write into a repository's internals; still a #260-class
       //    escape (and dangerous) → BLOCK.
       //  - Truly outside all git repositories (e.g. ~/.claude/plans/) → not the
       //    main-repo vector → fail open. (#1342)
@@ -302,8 +286,8 @@ process.stdin.on('end', () => {
           decision: 'block',
           reason:
             `Worktree path guard: '${filePath}' is inside a git internal (.git) directory, ` +
-            `not the active worktree at '${wtTopRaw}'. Writing to repository internals via an ` +
-            `absolute path is not permitted from an isolated executor worktree. Use a relative path.`,
+            `outside the active worktree at '${wtTopRaw}'. Writing to repository internals is ` +
+            `not permitted from an isolated executor worktree. Edit only files inside the active worktree.`,
         };
         deny(output, output.reason);
       }
@@ -323,11 +307,11 @@ process.stdin.on('end', () => {
       decision: 'block',
       reason:
         `Worktree path guard: '${filePath}' resolves to git root '${fileTopRaw}' which ` +
-        `differs from the active worktree root '${wtTopRaw}'. This likely means an ` +
-        `absolute path was derived from the orchestrator's main repository instead of ` +
-        `the active worktree. To fix: use a relative path, or re-derive the base ` +
-        `directory with \`git rev-parse --show-toplevel\` from within the worktree ` +
-        `(hook cwd: '${cwd}').`,
+        `differs from the active worktree root '${wtTopRaw}'. This likely means the ` +
+        `path was derived from the orchestrator's main repository instead of the ` +
+        `active worktree. To fix: edit only files inside the active worktree at ` +
+        `'${wtTopRaw}', re-deriving the base directory with \`git rev-parse --show-toplevel\` ` +
+        `from within the worktree if needed (hook cwd: '${cwd}').`,
     };
 
     deny(output, output.reason);
