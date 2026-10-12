@@ -203,28 +203,12 @@ function patchFilePaths(patchText) {
 // Hook subprocess runner
 // ---------------------------------------------------------------------------
 
-/**
- * Spawn a Claude Code hook script asynchronously and pipe a JSON payload to
- * its stdin.
- *
- * Hooks follow the convention:
- *   - stdout: JSON object (decision/advisory) or empty
- *   - exit 0: allow (with optional advisory JSON on stdout)
- *   - exit 2: block (Claude convention; reason in stdout JSON)
- *   - any error: exit 0 silently (hooks swallow their own errors)
- *
- * @param {string} hookFile  filename under hooks/, e.g. "gsd-prompt-guard.js"
- * @param {object} payload   stdin JSON (hook_event_name, tool_name, ...)
- * @param {object} [opts]
- * @param {number} [opts.timeout=8000] spawn timeout in ms
- * @param {string} opts.cwd          working directory for the child
- * @returns {Promise<{ stdout: string, exitCode: number, timedOut: boolean }>}
- */
 const warnedMissingHooks = new Set();
+const warnedFailedHooks = new Set();
 
-// A hook this adapter kills on timeout has no exit status, so runHook below
-// reports it as exit 0 — an ALLOW. For a guard that blocks, a bound shorter
-// than the guard's own worst case therefore silently disables the gate. The
+// A hook this adapter kills on timeout cannot block, so the call is allowed
+// and only reported as not enforced. For a guard that blocks, a bound shorter
+// than the guard's own worst case therefore disables the gate. The
 // two guards that probe git (worktree path, workflow force-add) run up to
 // BLOCKING_GUARD_MAX_SEQUENTIAL_PROBES sequential probes of
 // BLOCKING_GUARD_PROBE_TIMEOUT_MS each (hooks/lib/git-probe.js, #5180), so
@@ -263,13 +247,17 @@ function hookSpawnOptions(options, versions = process.versions) {
   return options;
 }
 
+/**
+ * Spawns hooks/<hookFile> with `payload` as JSON on stdin and resolves
+ * { stdout, exitCode, timedOut, failed?, hook? }, where `failed` says why the hook did not run.
+ */
 async function runHook(hookFile, payload, opts = {}) {
   const hookPath = path.join(HOOKS_DIR, hookFile);
   if (!fs.existsSync(hookPath)) {
-    // A missing guard script means the guard is silently NOT enforced — the
-    // exact failure mode of #2305 (plugin staged, hooks bundle not). Never
-    // break the tool call (the adapter's design contract), but never be
-    // silent about it either: warn loudly, once per hook file.
+    // A missing guard script means the guard is NOT enforced — the exact
+    // failure mode of #2305 (plugin staged, hooks bundle not). Never break the
+    // tool call (the adapter's design contract), but never be silent about it
+    // either: warn loudly once per hook file, and report it as not enforced.
     if (!warnedMissingHooks.has(hookFile)) {
       warnedMissingHooks.add(hookFile);
       console.error(
@@ -278,41 +266,62 @@ async function runHook(hookFile, payload, opts = {}) {
           "/gsd-update) to restage the hooks/ bundle.",
       );
     }
-    return { stdout: "", exitCode: 0, timedOut: false };
+    return { stdout: "", exitCode: 0, timedOut: false, failed: "hook script missing", hook: hookFile };
   }
   const timeout =
     opts.timeout ??
     (GIT_PROBING_GUARDS.has(hookFile) ? gitProbingGuardTimeoutMs() : 8000);
-  return new Promise((resolve) => {
+  const result = await new Promise((resolve) => {
     let settled = false;
-    const done = (result) => {
+    const done = (r, failed) => {
       if (settled) return;
       settled = true;
-      resolve(result);
+      resolve(failed ? { ...r, failed, hook: hookFile } : r);
     };
+    const spawnFailed = (err) =>
+      done({ stdout: "", exitCode: 0, timedOut: false }, `spawn failed (${err.code || err.message})`);
+    const started = Date.now();
     let child;
     try {
       child = spawn(process.execPath, [hookPath], hookSpawnOptions({
         cwd: opts.cwd,
         timeout,
         windowsHide: true,
-        stdio: ["pipe", "pipe", "ignore"],
+        stdio: ["pipe", "pipe", "pipe"],
       }));
-    } catch {
-      done({ stdout: "", exitCode: 0, timedOut: false });
+    } catch (err) {
+      spawnFailed(err);
       return;
     }
     let stdout = "";
+    let stderr = "";
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
     // Absorbs EPIPE when the hook exits before reading its stdin.
     child.stdin.on("error", () => {});
-    child.on("error", () => done({ stdout: "", exitCode: 0, timedOut: false }));
+    child.on("error", spawnFailed);
     child.on("close", (code, signal) => {
-      done({ stdout: stdout.trim(), exitCode: code == null ? 0 : code, timedOut: signal === "SIGTERM" });
+      // Only a SIGTERM that arrives once the timeout has elapsed is ours.
+      const timedOut = signal === "SIGTERM" && Date.now() - started >= timeout;
+      const r = { stdout: stdout.trim(), exitCode: code == null ? 0 : code, timedOut };
+      if (timedOut) return done(r, `timed out after ${timeout} ms`);
+      // Bun reports a missing signal as undefined, Node as null.
+      if (signal) return done(r, `killed by ${signal}`);
+      if (code !== 0 && code !== 2) return done(r, `exit ${code}`);
+      if (!r.stdout && stderr.includes("Failed to change directory")) {
+        return done(r, 'the host printed "Failed to change directory" instead of running it');
+      }
+      done(r);
     });
     child.stdin.end(JSON.stringify(payload));
   });
+  if (result.failed && !warnedFailedHooks.has(hookFile)) {
+    warnedFailedHooks.add(hookFile);
+    console.error(`[gsd-core] ${hookFile} did not run: ${result.failed}; it was not enforced`);
+  }
+  return result;
 }
 
 /**
@@ -350,14 +359,16 @@ function contextWarningsDisabled(cwd) {
  *
  * - Block   → throw Error(parsed.reason) so OpenCode aborts the tool call
  * - Advisory→ append to output.metadata._gsdAdvisory[] and log to stderr
+ * - Did not run → append a "not enforced" line to output.metadata._gsdAdvisory[]
+ *   ahead of any advisory the hook printed (runHook already warned once on stderr)
  * - Silent  → no-op
  *
- * @param {{ stdout: string, exitCode: number }} hookResult
+ * @param {{ stdout: string, exitCode: number, failed?: string }} hookResult
  * @param {object} [output]  OpenCode mutable output object (optional)
  */
 function handleHookResult(hookResult, output) {
-  const { stdout, exitCode } = hookResult;
-  if (!stdout && exitCode !== 2) return; // silent allow
+  const { stdout, exitCode, failed, hook } = hookResult;
+  if (!stdout && exitCode !== 2 && !failed) return; // silent allow
 
   let parsed = null;
   if (stdout) {
@@ -376,26 +387,31 @@ function handleHookResult(hookResult, output) {
     throw new Error(reason);
   }
 
+  if (failed && output) {
+    pushAdvisory(output, `[gsd-core] ${hook} did not run: ${failed}; it was not enforced`);
+  }
+
   // Advisory: inject additionalContext into metadata + log
   const advisory =
     parsed &&
     parsed.hookSpecificOutput &&
     parsed.hookSpecificOutput.additionalContext;
   if (advisory) {
-    if (output) {
-      output.metadata = output.metadata || {};
-      // Accumulate: a single tool call can run several advisory hooks in
-      // sequence (prompt guard, read guard, worktree guard, workflow guard).
-      // Storing a scalar would let a later advisory clobber an earlier one, so
-      // collect them all.
-      if (!Array.isArray(output.metadata._gsdAdvisory)) {
-        output.metadata._gsdAdvisory = [];
-      }
-      output.metadata._gsdAdvisory.push(advisory);
-    }
+    if (output) pushAdvisory(output, advisory);
     // Best-effort visibility when metadata isn't surfaced to the model
     console.error(advisory);
   }
+}
+
+// Accumulate: a single tool call can run several advisory hooks in sequence
+// (prompt guard, read guard, worktree guard, workflow guard). Storing a scalar
+// would let a later advisory clobber an earlier one, so collect them all.
+function pushAdvisory(output, text) {
+  output.metadata = output.metadata || {};
+  if (!Array.isArray(output.metadata._gsdAdvisory)) {
+    output.metadata._gsdAdvisory = [];
+  }
+  output.metadata._gsdAdvisory.push(text);
 }
 
 // ---------------------------------------------------------------------------

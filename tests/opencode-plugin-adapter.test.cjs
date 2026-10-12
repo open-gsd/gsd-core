@@ -16,8 +16,9 @@
  * Cross-platform note: filesystem-failure paths are not exercised here; the
  * adapter's own error handling swallows spawn failures by design (a broken hook
  * must never break a tool call). A MISSING hook script likewise never breaks
- * the tool call, but since #2305 it warns loudly (once per hook file) — a
- * silently-absent guard script was exactly how every Kilo guard no-opped.
+ * the tool call, but since #2305 it warns loudly (once per hook file) and is
+ * reported as not enforced — a silently-absent guard script was exactly how
+ * every Kilo guard no-opped.
  */
 
 const { test } = require('node:test');
@@ -217,6 +218,24 @@ test('handleHookResult: multiple advisories accumulate (no clobber)', () => {
     'prompt-guard note',
     'read-guard note',
     'workflow-guard note',
+  ]);
+});
+
+test('handleHookResult: a hook that did not run keeps any advisory it printed after the not-enforced line', (t) => {
+  t.mock.method(console, 'error', () => {});
+  const output = {};
+  _internals.handleHookResult(
+    {
+      stdout: JSON.stringify({ hookSpecificOutput: { additionalContext: 'hook note' } }),
+      exitCode: 1,
+      failed: 'exit 1',
+      hook: 'gsd-x.js',
+    },
+    output,
+  );
+  assert.deepEqual(output.metadata._gsdAdvisory, [
+    '[gsd-core] gsd-x.js did not run: exit 1; it was not enforced',
+    'hook note',
   ]);
 });
 
@@ -961,6 +980,87 @@ function makeProjectDir(t) {
   t.after(() => cleanup(dir));
   return dir;
 }
+
+// Drives two V1 secret-read calls with the secret-read guard answering `response`
+// (a fake-spawn response, or a function of the spawn call) and every other hook allowing; returns the outputs and the captured stderr lines.
+async function readSecretTwice(t, response) {
+  const warnings = [];
+  const realConsoleError = console.error;
+  t.after(() => { console.error = realConsoleError; });
+  console.error = (...args) => { warnings.push(args.join(' ')); };
+  const respond = (call) => {
+    if (path.basename(call[1][0]) !== 'gsd-secret-read-guard.js') return {};
+    return typeof response === 'function' ? response(call) : response;
+  };
+  const { mod } = loadTracedPlugin(t, ALL_GUARD_STUBS, respond);
+  const v1 = await mod.server({ directory: makeProjectDir(t) });
+  const outputs = [];
+  for (let i = 0; i < 2; i++) {
+    const output = { args: { filePath: '/p/.env' } };
+    await v1['tool.execute.before']({ tool: 'read' }, output);
+    outputs.push(output);
+  }
+  return { outputs, warnings };
+}
+
+const DID_NOT_RUN_SHAPES = [
+  { name: 'exit 1', response: { status: 1 }, reason: 'exit 1' },
+  { name: 'a foreign SIGKILL', response: { status: null, signal: 'SIGKILL' }, reason: 'killed by SIGKILL' },
+  { name: 'a SIGTERM before the timeout elapsed', response: { status: null, signal: 'SIGTERM' }, reason: 'killed by SIGTERM' },
+  {
+    name: 'a spawn ENOENT',
+    response: { error: Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }) },
+    reason: 'spawn failed (ENOENT)',
+  },
+  {
+    name: 'the host printing "Failed to change directory" with exit 0',
+    response: { status: 0, stderr: 'Error: Failed to change directory to /x\n' },
+    reason: 'the host printed "Failed to change directory" instead of running it',
+  },
+];
+
+for (const shape of DID_NOT_RUN_SHAPES) {
+  test(`a guard hook that did not run (${shape.name}) warns once and is reported as not enforced on every call`, async (t) => {
+    const { outputs, warnings } = await readSecretTwice(t, shape.response);
+    const line = `[gsd-core] gsd-secret-read-guard.js did not run: ${shape.reason}; it was not enforced`;
+    for (const output of outputs) assert.deepEqual(output.metadata?._gsdAdvisory, [line]);
+    assert.deepEqual(warnings.filter((w) => w.includes('did not run')), [line]);
+  });
+}
+
+test('a guard hook killed by the spawn timeout warns once and is reported as not enforced on every call', async (t) => {
+  const realNow = Date.now;
+  let elapsed = 0;
+  t.mock.method(Date, 'now', () => realNow() + elapsed);
+  const { outputs, warnings } = await readSecretTwice(t, (call) => {
+    elapsed += call[2].timeout;
+    return { status: null, signal: 'SIGTERM' };
+  });
+  const line = '[gsd-core] gsd-secret-read-guard.js did not run: timed out after 8000 ms; it was not enforced';
+  for (const output of outputs) assert.deepEqual(output.metadata?._gsdAdvisory, [line]);
+  assert.deepEqual(warnings.filter((w) => w.includes('did not run')), [line]);
+});
+
+test('a guard hook that exits 0 with empty stdout and unrelated stderr stays a silent allow', async (t) => {
+  const { outputs, warnings } = await readSecretTwice(t, { status: 0, stderr: 'some debug noise\n' });
+  for (const output of outputs) assert.equal(output.metadata, undefined);
+  assert.deepEqual(warnings.filter((w) => w.includes('did not run')), []);
+});
+
+test('a block verdict on stdout still blocks when the guard hook exits 1', async (t) => {
+  const respond = (call) => (path.basename(call[1][0]) === 'gsd-secret-read-guard.js'
+    ? { status: 1, stdout: JSON.stringify({ decision: 'block', reason: 'denied' }) }
+    : {});
+  const realConsoleError = console.error;
+  t.after(() => { console.error = realConsoleError; });
+  console.error = () => {};
+  const { mod } = loadTracedPlugin(t, ALL_GUARD_STUBS, respond);
+  const v1 = await mod.server({ directory: makeProjectDir(t) });
+  await assert.rejects(
+    () => v1['tool.execute.before']({ tool: 'read' }, { args: { filePath: '/p/.env' } }),
+    /^Error: denied$/,
+  );
+});
 
 test('V1 server() and V2 setup() spawn the same PreToolUse hooks in the same order for each tool pair', async (t) => {
   const { mod, spawns } = loadTracedPlugin(t, ALL_GUARD_STUBS);

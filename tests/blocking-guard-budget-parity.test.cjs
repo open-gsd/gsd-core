@@ -323,9 +323,9 @@ describe('guard git probes receive the shared budget at runtime (#5180)', () => 
 
 // ---------------------------------------------------------------------------
 // The OpenCode / Kilo plugin adapters spawn the same guards through their own
-// runHook, and a hook they kill on timeout is reported as exit 0 — an ALLOW. So
-// the bound they spawn the git-probing guards with must hold the guards' worst
-// case, or the gate is silently off. The plugin is driven in-process with
+// runHook, and a hook they kill on timeout cannot block: the call is allowed and
+// only reported as not enforced. So the bound they spawn the git-probing guards
+// with must hold the guards' worst case, or the gate is off. The plugin is driven in-process with
 // child_process.spawn replaced by a recorder (no real hook runs), so what is
 // asserted is the `timeout` the adapter actually hands to spawn.
 // ---------------------------------------------------------------------------
