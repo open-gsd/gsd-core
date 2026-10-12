@@ -201,6 +201,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/review-reviewer-selection.cjs',
       'gsd-core/bin/lib/review-lane-descriptor.cjs',
       'gsd-core/bin/lib/review-lane-invocation.cjs',
+      // #5337: tsc-generated runtime artifact — lint src/opencode-version.cts, not this.
+      'gsd-core/bin/lib/opencode-version.cjs',
       'gsd-core/bin/lib/review-lane-runner.cjs',
       'gsd-core/bin/lib/reviewer-step-dispatch.cjs',
       'gsd-core/bin/lib/clusters.cjs',

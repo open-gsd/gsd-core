@@ -513,6 +513,7 @@
       "observability/logger.cjs",
       "observability/redaction.cjs",
       "onboard-projection.cjs",
+      "opencode-version.cjs",
       "package-identity.cjs",
       "package-legitimacy.cjs",
       "pattern.cjs",

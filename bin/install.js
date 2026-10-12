@@ -13631,6 +13631,17 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   // Configure OpenCode permissions
   if (plan.finishPermissionWriter === 'opencode' && !process.env.GSD_TEST_MODE) {
     configureOpencodePermissions(isGlobal, configDir);
+    // ADR-5331: say which OpenCode generation this install will run under. Informational only —
+    // a failed probe never affects the install.
+    try {
+      const ocv = require('../gsd-core/bin/lib/opencode-version.cjs');
+      const gen = ocv.detectOpencodeGeneration();
+      if (gen.generation === 2) {
+        console.log(`  ${green}✓${reset} OpenCode ${gen.version || '2.x'} detected — GSD loads its OpenCode 2.x plugin entrypoint`);
+      } else if (gen.generation === 1) {
+        console.log(`  ${green}✓${reset} OpenCode ${gen.version || '1.x'} detected — GSD loads its OpenCode 1.x plugin entrypoint`);
+      }
+    } catch { /* detection is advisory */ }
   }
 
   // Configure Kilo permissions

@@ -239,6 +239,18 @@ function gitProbingGuardTimeoutMs() {
   return GIT_PROBING_GUARD_FALLBACK_TIMEOUT_MS;
 }
 
+// Hooks are Node scripts. `process.execPath` is only a JS runtime when the host is Node or Bun
+// itself; inside OpenCode's single-file binary (1.x and 2.x) spawning it with a .js path boots
+// OpenCode instead and exits 0, silently disabling every guard (#4849). So: an explicit
+// GSD_HOOK_RUNTIME wins, then a Node/Bun host's own executable, else `node` from PATH.
+let warnedMissingRuntime = false;
+function hookRuntime() {
+  const fromEnv = process.env.GSD_HOOK_RUNTIME;
+  if (typeof fromEnv === "string" && fromEnv.length > 0) return fromEnv;
+  const base = path.basename(process.execPath).toLowerCase().replace(/\.exe$/, "");
+  return base === "node" || base === "bun" ? process.execPath : "node";
+}
+
 function runHook(hookFile, payload, opts = {}) {
   const hookPath = path.join(HOOKS_DIR, hookFile);
   if (!fs.existsSync(hookPath)) {
@@ -261,7 +273,7 @@ function runHook(hookFile, payload, opts = {}) {
     (GIT_PROBING_GUARDS.has(hookFile) ? gitProbingGuardTimeoutMs() : 8000);
   let result;
   try {
-    result = spawnSync(process.execPath, [hookPath], {
+    result = spawnSync(hookRuntime(), [hookPath], {
       input: JSON.stringify(payload),
       encoding: "utf8",
       timeout,
@@ -273,6 +285,15 @@ function runHook(hookFile, payload, opts = {}) {
     return { stdout: "", exitCode: 0, timedOut: false };
   }
 
+  if (result.error && !warnedMissingRuntime) {
+    // The runtime could not be started: the guard did not run. Fail open (adapter contract) but
+    // never silently (#4849).
+    warnedMissingRuntime = true;
+    console.error(
+      `[gsd-core] cannot start hook runtime '${hookRuntime()}' (${result.error.code || result.error.message}) — ` +
+        "GSD hooks are NOT enforced. Install Node.js or set GSD_HOOK_RUNTIME to a node/bun executable.",
+    );
+  }
   const stdout = (result.stdout || "").trim();
   const exitCode = result.status == null ? 0 : result.status;
   return { stdout, exitCode, timedOut: result.signal === "SIGTERM" };

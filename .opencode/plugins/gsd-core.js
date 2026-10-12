@@ -146,6 +146,11 @@ const TOOL_NAME_MAP = {
   websearch: "WebSearch",
   task: "Task",
   subagent: "Task",
+  // >>> gsd:opencode-v2
+  // OpenCode 2.x tool ids (ADR-5331 E4): `shell` replaces `bash`, `patch` replaces `apply_patch`.
+  shell: "Bash",
+  patch: "MultiEdit",
+  // <<< gsd:opencode-v2
 };
 
 function mapToolName(tool) {
@@ -239,6 +244,18 @@ function gitProbingGuardTimeoutMs() {
   return GIT_PROBING_GUARD_FALLBACK_TIMEOUT_MS;
 }
 
+// Hooks are Node scripts. `process.execPath` is only a JS runtime when the host is Node or Bun
+// itself; inside OpenCode's single-file binary (1.x and 2.x) spawning it with a .js path boots
+// OpenCode instead and exits 0, silently disabling every guard (#4849). So: an explicit
+// GSD_HOOK_RUNTIME wins, then a Node/Bun host's own executable, else `node` from PATH.
+let warnedMissingRuntime = false;
+function hookRuntime() {
+  const fromEnv = process.env.GSD_HOOK_RUNTIME;
+  if (typeof fromEnv === "string" && fromEnv.length > 0) return fromEnv;
+  const base = path.basename(process.execPath).toLowerCase().replace(/\.exe$/, "");
+  return base === "node" || base === "bun" ? process.execPath : "node";
+}
+
 function runHook(hookFile, payload, opts = {}) {
   const hookPath = path.join(HOOKS_DIR, hookFile);
   if (!fs.existsSync(hookPath)) {
@@ -261,7 +278,7 @@ function runHook(hookFile, payload, opts = {}) {
     (GIT_PROBING_GUARDS.has(hookFile) ? gitProbingGuardTimeoutMs() : 8000);
   let result;
   try {
-    result = spawnSync(process.execPath, [hookPath], {
+    result = spawnSync(hookRuntime(), [hookPath], {
       input: JSON.stringify(payload),
       encoding: "utf8",
       timeout,
@@ -273,6 +290,15 @@ function runHook(hookFile, payload, opts = {}) {
     return { stdout: "", exitCode: 0, timedOut: false };
   }
 
+  if (result.error && !warnedMissingRuntime) {
+    // The runtime could not be started: the guard did not run. Fail open (adapter contract) but
+    // never silently (#4849).
+    warnedMissingRuntime = true;
+    console.error(
+      `[gsd-core] cannot start hook runtime '${hookRuntime()}' (${result.error.code || result.error.message}) — ` +
+        "GSD hooks are NOT enforced. Install Node.js or set GSD_HOOK_RUNTIME to a node/bun executable.",
+    );
+  }
   const stdout = (result.stdout || "").trim();
   const exitCode = result.status == null ? 0 : result.status;
   return { stdout, exitCode, timedOut: result.signal === "SIGTERM" };
@@ -864,7 +890,58 @@ GsdCorePlugin._internals = {
   GsdCorePlugin,
 };
 
+// >>> gsd:opencode-v2 (ADR-5331 D2; OpenCode 2.x entrypoint — the Kilo mirror omits this block)
+// OpenCode 2.x calls `setup(ctx)` with a `ctx` exposing `ctx.tool.hook(...)`; 1.x loads `server`
+// and never calls `setup` with such a ctx. `setup` therefore returns at once unless it is
+// handed a 2.x ctx. The 1.x hook handlers are reused through thin adapters so both generations
+// run the same guards.
+function v2ResultText(result) {
+  const first = result && Array.isArray(result.content) ? result.content[0] : null;
+  return first && typeof first.text === "string" ? first.text : null;
+}
+
+async function setupV2(ctx) {
+  if (!(ctx && ctx.tool && typeof ctx.tool.hook === "function")) return undefined;
+  const hooks = await GsdCorePlugin({ directory: ctx.directory });
+  // A thrown error in a 2.x before-hook blocks the tool (verified on 2.0.27), as in 1.x.
+  await ctx.tool.hook("execute.before", async (e) => {
+    await hooks["tool.execute.before"]({ tool: e.tool }, { args: e.input || {} });
+  });
+  await ctx.tool.hook("execute.after", async (e) => {
+    if (e.status !== "completed") return;
+    const text = v2ResultText(e.result);
+    const out = { output: text, metadata: {} };
+    await hooks["tool.execute.after"]({ tool: e.tool, args: e.input || {} }, out);
+    if (text !== null && typeof out.output === "string" && out.output !== text) {
+      e.result.content[0].text = out.output;
+    }
+  });
+  if (ctx.shell && typeof ctx.shell.hook === "function") {
+    await ctx.shell.hook("create.before", async (e) => {
+      if (e && e.env && typeof e.env === "object") e.env.GSD_DIR = GSD_CORE;
+    });
+  }
+  let stop = null;
+  if (ctx.event && typeof ctx.event.subscribe === "function") {
+    const ac = new AbortController();
+    stop = () => ac.abort();
+    (async () => {
+      for await (const ev of ctx.event.subscribe({ signal: ac.signal })) {
+        const d = (ev && ev.data) || {};
+        const info = d.info || d.session || d;
+        await hooks.event({
+          event: { type: ev.type, properties: { info, file: d.file, cwd: d.cwd }, sessionID: d.sessionID },
+        });
+      }
+    })().catch(() => {});
+  }
+  return stop || undefined;
+}
+// <<< gsd:opencode-v2
 const gsdCorePluginExport = { server: GsdCorePlugin };
+// >>> gsd:opencode-v2
+Object.defineProperty(gsdCorePluginExport, "setup", { value: setupV2, enumerable: false });
+// <<< gsd:opencode-v2
 Object.defineProperty(gsdCorePluginExport, "id", {
   value: "gsd-core",
   enumerable: false,

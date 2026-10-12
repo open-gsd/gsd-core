@@ -610,3 +610,89 @@ test('#2697: context-monitor skipped for Write when context_warnings disabled (n
     `context-monitor spawn must be skipped for Write when context_warnings:false; spawn argvs: ${JSON.stringify(spawns)}`,
   );
 });
+
+// ---------------------------------------------------------------------------
+// OpenCode 2.x entrypoint (ADR-5331 D2, epic #5331 Phase 1 #5337) and hook runtime (#4849)
+// ---------------------------------------------------------------------------
+
+// Minimal stand-in for the 2.x plugin context: records the hooks the plugin registers.
+function fakeV2Ctx() {
+  const hooks = {};
+  const ctx = {
+    tool: { hook: async (name, fn) => { hooks[`tool.${name}`] = fn; } },
+    shell: { hook: async (name, fn) => { hooks[`shell.${name}`] = fn; } },
+    event: { subscribe: () => (async function* () {})() },
+  };
+  return { ctx, hooks };
+}
+
+test('2.x entrypoint: exports a non-enumerable setup next to server and a non-enumerable id', async (t) => {
+  const { mod } = buildInstalledLayout(t, {});
+  assert.equal(typeof mod.setup, 'function');
+  assert.deepEqual(Object.keys(mod), ['server']);
+  assert.equal(loaderExtract(mod).length, 1);
+});
+
+test('2.x entrypoint: setup is inert when handed a 1.x-shaped context', async (t) => {
+  const { mod } = buildInstalledLayout(t, {});
+  assert.equal(await mod.setup({ directory: process.cwd() }), undefined);
+  assert.equal(await mod.setup(undefined), undefined);
+});
+
+test('2.x entrypoint: execute.before blocks a secret read via the 2.x `shell` tool id', async (t) => {
+  const { mod } = buildInstalledLayout(t, {
+    'gsd-workflow-guard.js': stubHook(''),
+    'gsd-secret-read-guard.js': stubHook(JSON.stringify({ decision: 'block', code: 'secret-read', reason: 'secret read denied' }), 2),
+  });
+  const { ctx, hooks } = fakeV2Ctx();
+  await mod.setup(ctx);
+  assert.deepEqual(Object.keys(hooks).sort(), ['shell.create.before', 'tool.execute.after', 'tool.execute.before']);
+  await assert.rejects(() => hooks['tool.execute.before']({ tool: 'shell', input: { command: 'cat .env' } }), /secret read denied/);
+});
+
+test('2.x entrypoint: execute.before applies the Read path rewrite to the 2.x input object in place', async (t) => {
+  const { mod, root } = buildInstalledLayout(t, {});
+  const { ctx, hooks } = fakeV2Ctx();
+  await mod.setup(ctx);
+  const input = { path: '~/.claude/gsd-core/workflows/x.md' };
+  await hooks['tool.execute.before']({ tool: 'read', input });
+  assert.equal(input.path, path.join(root, 'gsd-core') + '/workflows/x.md');
+});
+
+test('2.x tool ids map onto the Claude tool names the guards key on', async (t) => {
+  const { mod } = buildInstalledLayout(t, {});
+  const { mapToolName } = mod.server._internals;
+  assert.equal(mapToolName('shell'), 'Bash');
+  assert.equal(mapToolName('patch'), 'MultiEdit');
+  assert.equal(mapToolName('subagent'), 'Task');
+});
+
+test('hook runtime: a non-JS host executable never runs the hook; node from PATH does (#4849)', async (t) => {
+  const savedExec = process.execPath;
+  const savedEnv = process.env.GSD_HOOK_RUNTIME;
+  delete process.env.GSD_HOOK_RUNTIME;
+  t.after(() => {
+    Object.defineProperty(process, 'execPath', { value: savedExec, configurable: true, writable: true });
+    if (savedEnv === undefined) delete process.env.GSD_HOOK_RUNTIME; else process.env.GSD_HOOK_RUNTIME = savedEnv;
+  });
+  const { handlers, spawns } = await buildLayoutWithSpawnTrace(t, {
+    stubHooks: { 'gsd-secret-read-guard.js': stubHook('') },
+    planningConfig: null,
+  });
+  const secretSpawnRuntime = () => {
+    const s = spawns.filter((a) => String(a[1][0]).endsWith('gsd-secret-read-guard.js'));
+    return s.length ? s[s.length - 1][0] : null;
+  };
+  Object.defineProperty(process, 'execPath', { value: '/opt/opencode/bin/opencode', configurable: true, writable: true });
+  await handlers['tool.execute.before']({ tool: 'read' }, { args: { filePath: '/p/a.txt' } });
+  assert.equal(secretSpawnRuntime(), 'node');
+
+  process.env.GSD_HOOK_RUNTIME = '/custom/node';
+  await handlers['tool.execute.before']({ tool: 'read' }, { args: { filePath: '/p/a.txt' } });
+  assert.equal(secretSpawnRuntime(), '/custom/node');
+
+  delete process.env.GSD_HOOK_RUNTIME;
+  Object.defineProperty(process, 'execPath', { value: '/usr/local/bin/node', configurable: true, writable: true });
+  await handlers['tool.execute.before']({ tool: 'read' }, { args: { filePath: '/p/a.txt' } });
+  assert.equal(secretSpawnRuntime(), '/usr/local/bin/node');
+});

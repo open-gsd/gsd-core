@@ -1593,7 +1593,16 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     const fsx = require('node:fs');
     const os = require('node:os');
     const { REVIEWER_LANES, mergeReviewerLanes } = require('./lib/review-lane-descriptor.cjs');
-    const { resolveLanePlan, resolveLaneEffort, resolveLaneBudget } = require('./lib/review-lane-invocation.cjs');
+    const { resolveLanePlan: resolveLanePlanBase, resolveLaneEffort, resolveLaneBudget } = require('./lib/review-lane-invocation.cjs');
+    // OpenCode 2.x argv differs from 1.x (no --variant; effort rides on the model as `#variant`;
+    // ADR-5331 D5/D8). The generation is probed lazily, only when the opencode lane is resolved.
+    const resolveLanePlan = (laneInput) => {
+      if (!laneInput || !laneInput.lane || laneInput.lane.slug !== 'opencode') return resolveLanePlanBase(laneInput);
+      const ocv = require('./lib/opencode-version.cjs');
+      const adapted = ocv.adaptLaneInputForGeneration(laneInput, ocv.detectOpencodeGeneration().generation);
+      for (const w of adapted.warnings) process.stderr.write('gsd: ' + w + '\n');
+      return resolveLanePlanBase(adapted.input);
+    };
     const modelCatalog = require('./lib/model-catalog.cjs');
     const runner = require('./lib/review-lane-runner.cjs');
     const cfgLoader = require('./lib/config-loader.cjs');
@@ -2675,8 +2684,14 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
               'gsd-executor', readGsdEffectiveModelOverrides(cwd), null);
             model = resolveDispatchModelPin('gsd-executor', pinned);
           }
+          let orchestratorExec = runtimeEntry?.runtime?.orchestratorExec;
+          if (orchestratorExec && orchestratorExec.cwdFlag === '--dir' && runtimeId === 'opencode') {
+            // OpenCode 2.x `run` has no --dir: bind the worktree through the process cwd (ADR-5331 D5).
+            const ocv = require('./lib/opencode-version.cjs');
+            orchestratorExec = ocv.adaptOrchestratorExecForGeneration(orchestratorExec, ocv.detectOpencodeGeneration().generation);
+          }
           const resolution = hostIntegration.resolveOrchestratorExec(
-            runtimeEntry?.runtime?.orchestratorExec,
+            orchestratorExec,
             cwdTarget,
             promptArg,
             model,
