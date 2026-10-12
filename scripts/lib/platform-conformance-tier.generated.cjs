@@ -196,6 +196,7 @@ module.exports = {
   "tests/nsegment-phase-grammar.test.cjs",
   "tests/onboard-command.test.cjs",
   "tests/opencode-command-dir-plural.test.cjs",
+  "tests/opencode-generations.smoke.test.cjs",
   "tests/opencode-plugin-adapter.test.cjs",
   "tests/overlay-repo-helpers.test.cjs",
   "tests/packaging-shipped-scripts-require-only-shipped.test.cjs",
