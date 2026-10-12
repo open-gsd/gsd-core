@@ -49,7 +49,7 @@
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
-const { spawnSync } = require("child_process");
+const { spawn } = require("child_process");
 
 // Resolve REPO_ROOT to the directory that actually holds the GSD payload
 // (hooks/ + gsd-core/). This must work across three physical layouts because a
@@ -204,7 +204,8 @@ function patchFilePaths(patchText) {
 // ---------------------------------------------------------------------------
 
 /**
- * Spawn a Claude Code hook script and pipe a JSON payload to its stdin.
+ * Spawn a Claude Code hook script asynchronously and pipe a JSON payload to
+ * its stdin.
  *
  * Hooks follow the convention:
  *   - stdout: JSON object (decision/advisory) or empty
@@ -216,8 +217,8 @@ function patchFilePaths(patchText) {
  * @param {object} payload   stdin JSON (hook_event_name, tool_name, ...)
  * @param {object} [opts]
  * @param {number} [opts.timeout=8000] spawn timeout in ms
- * @param {string} [opts.cwd]         working directory for the child
- * @returns {{ stdout: string, exitCode: number, timedOut: boolean }}
+ * @param {string} opts.cwd          working directory for the child
+ * @returns {Promise<{ stdout: string, exitCode: number, timedOut: boolean }>}
  */
 const warnedMissingHooks = new Set();
 
@@ -262,7 +263,7 @@ function hookSpawnOptions(options, versions = process.versions) {
   return options;
 }
 
-function runHook(hookFile, payload, opts = {}) {
+async function runHook(hookFile, payload, opts = {}) {
   const hookPath = path.join(HOOKS_DIR, hookFile);
   if (!fs.existsSync(hookPath)) {
     // A missing guard script means the guard is silently NOT enforced — the
@@ -282,23 +283,36 @@ function runHook(hookFile, payload, opts = {}) {
   const timeout =
     opts.timeout ??
     (GIT_PROBING_GUARDS.has(hookFile) ? gitProbingGuardTimeoutMs() : 8000);
-  let result;
-  try {
-    result = spawnSync(process.execPath, [hookPath], hookSpawnOptions({
-      input: JSON.stringify(payload),
-      encoding: "utf8",
-      timeout,
-      cwd: opts.cwd || currentCwd,
-      windowsHide: true,
-    }));
-  } catch {
-    // Spawn failure — never break the tool call
-    return { stdout: "", exitCode: 0, timedOut: false };
-  }
-
-  const stdout = (result.stdout || "").trim();
-  const exitCode = result.status == null ? 0 : result.status;
-  return { stdout, exitCode, timedOut: result.signal === "SIGTERM" };
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    let child;
+    try {
+      child = spawn(process.execPath, [hookPath], hookSpawnOptions({
+        cwd: opts.cwd,
+        timeout,
+        windowsHide: true,
+        stdio: ["pipe", "pipe", "ignore"],
+      }));
+    } catch {
+      done({ stdout: "", exitCode: 0, timedOut: false });
+      return;
+    }
+    let stdout = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    // Absorbs EPIPE when the hook exits before reading its stdin.
+    child.stdin.on("error", () => {});
+    child.on("error", () => done({ stdout: "", exitCode: 0, timedOut: false }));
+    child.on("close", (code, signal) => {
+      done({ stdout: stdout.trim(), exitCode: code == null ? 0 : code, timedOut: signal === "SIGTERM" });
+    });
+    child.stdin.end(JSON.stringify(payload));
+  });
 }
 
 /**
@@ -658,27 +672,27 @@ const GsdCorePlugin = async ({ directory } = {}) => {
 
       // 1. gsd-prompt-guard.js — injection scan on .planning/ writes
       if (claudeTool === "Write" || claudeTool === "Edit") {
-        const r = runHook("gsd-prompt-guard.js", prePayload());
+        const r = await runHook("gsd-prompt-guard.js", prePayload(), { cwd });
         handleHookResult(r, output);
       }
 
       // 2. gsd-read-guard.js — read-before-edit advisory
       if (claudeTool === "Write" || claudeTool === "Edit") {
-        const r = runHook("gsd-read-guard.js", prePayload());
+        const r = await runHook("gsd-read-guard.js", prePayload(), { cwd });
         handleHookResult(r, output);
       }
 
       // 3. gsd-worktree-path-guard.js — hard-block edits outside worktree
       if (isWriteLike) {
         for (const payload of pathPayloads) {
-          handleHookResult(runHook("gsd-worktree-path-guard.js", payload), output);
+          handleHookResult(await runHook("gsd-worktree-path-guard.js", payload, { cwd }), output);
         }
       }
 
       // 4. gsd-write-guard.js — hard-block catastrophic shrink of curated
       //    .planning/ artifacts (ROADMAP.md, milestones/*-ROADMAP.md, STATE.md)
       if (claudeTool === "Write") {
-        const r = runHook("gsd-write-guard.js", prePayload());
+        const r = await runHook("gsd-write-guard.js", prePayload(), { cwd });
         handleHookResult(r, output);
       }
 
@@ -686,14 +700,14 @@ const GsdCorePlugin = async ({ directory } = {}) => {
       //    (covers Write/Edit/MultiEdit AND Bash force-add detection)
       if (isWriteLike || claudeTool === "Bash") {
         for (const payload of pathPayloads) {
-          handleHookResult(runHook("gsd-workflow-guard.js", payload), output);
+          handleHookResult(await runHook("gsd-workflow-guard.js", payload, { cwd }), output);
         }
       }
 
       // 6. gsd-secret-read-guard.js — hard-block reads of .env / .env.<suffix> /
       //    .secrets via Read (file_path), Grep (path or glob) and Bash (command)
       if (["Read", "Grep", "Bash"].includes(claudeTool)) {
-        const r = runHook("gsd-secret-read-guard.js", prePayload());
+        const r = await runHook("gsd-secret-read-guard.js", prePayload(), { cwd });
         handleHookResult(r, output);
       }
     },
@@ -705,6 +719,7 @@ const GsdCorePlugin = async ({ directory } = {}) => {
       // The `output` object only has { title, output, metadata }.
       const toolInput = mapToolInput(input.args || {});
       const cwd = currentCwd;
+      const sessionId = currentSessionId;
 
       // GSD content transform — rewrite paths + namespace in Read results
       // BEFORE injection scanning so the scanner sees the final content.
@@ -733,7 +748,7 @@ const GsdCorePlugin = async ({ directory } = {}) => {
           tool_response: output.output,
           cwd,
         };
-        const r = runHook("gsd-read-injection-scanner.js", payload);
+        const r = await runHook("gsd-read-injection-scanner.js", payload, { cwd });
         handleHookResult(r, output);
         return;
       }
@@ -744,34 +759,36 @@ const GsdCorePlugin = async ({ directory } = {}) => {
       // explicitly disabled in project config — the hook would exit early anyway,
       // so hoisting the check in-process avoids paying a Node boot per tool call.
       // Missing/unparseable config = enabled (default), so the spawn still runs.
-      if (currentSessionId && !contextWarningsDisabled(cwd)) {
+      if (sessionId && !contextWarningsDisabled(cwd)) {
         const payload = {
           hook_event_name: "PostToolUse",
           tool_name: claudeTool,
           tool_input: toolInput,
-          session_id: currentSessionId,
+          session_id: sessionId,
           cwd,
         };
-        const r = runHook("gsd-context-monitor.js", payload);
+        const r = await runHook("gsd-context-monitor.js", payload, { cwd });
         handleHookResult(r, output);
       }
     },
 
     // ── experimental.session.compacting — PreCompact ───────────────────
     "experimental.session.compacting": async (_input, output) => {
-      if (!currentSessionId) return;
+      const sessionId = currentSessionId;
+      const cwd = currentCwd;
+      if (!sessionId) return;
       const payload = {
         hook_event_name: "PreCompact",
-        session_id: currentSessionId,
-        cwd: currentCwd,
+        session_id: sessionId,
+        cwd,
       };
-      const r = runHook("gsd-context-monitor.js", payload);
+      const r = await runHook("gsd-context-monitor.js", payload, { cwd });
       handleHookResult(r, output);
 
       // Also inject a GSD compaction breadcrumb (mirrors the original plugin)
       output.context = output.context || [];
       output.context.push(
-        `[GSD] Active session: ${currentSessionId}. Preserve any in-flight phase/plan state.`,
+        `[GSD] Active session: ${sessionId}. Preserve any in-flight phase/plan state.`,
       );
     },
 
@@ -786,19 +803,21 @@ const GsdCorePlugin = async ({ directory } = {}) => {
         currentSessionId =
           info?.id || event.sessionID || event.session_id || null;
         if (info?.directory) currentCwd = info.directory;
+        const sessionId = currentSessionId;
+        const cwd = currentCwd;
 
         // gsd-ensure-canonical-path.js — no stdin dependency; silent
-        runHook("gsd-ensure-canonical-path.js", {
+        await runHook("gsd-ensure-canonical-path.js", {
           hook_event_name: "SessionStart",
-          session_id: currentSessionId,
-          cwd: currentCwd,
-        });
+          session_id: sessionId,
+          cwd,
+        }, { cwd });
         // gsd-check-update.js — spawns its own background worker; no stdin
-        runHook("gsd-check-update.js", {
+        await runHook("gsd-check-update.js", {
           hook_event_name: "SessionStart",
-          session_id: currentSessionId,
-          cwd: currentCwd,
-        });
+          session_id: sessionId,
+          cwd,
+        }, { cwd });
         return;
       }
 
@@ -817,7 +836,7 @@ const GsdCorePlugin = async ({ directory } = {}) => {
           event: "change",
           cwd,
         };
-        const r = runHook("gsd-config-reload.js", payload);
+        const r = await runHook("gsd-config-reload.js", payload, { cwd });
         // Advisory-only (additionalContext); surface to logs
         handleHookResult(r);
         return;
@@ -860,25 +879,12 @@ const GsdCorePlugin = async ({ directory } = {}) => {
 
 const V2_TOOL_ALIASES = new Map([["shell", "bash"], ["patch", "apply_patch"]]);
 
-// Export shape, checked against both OpenCode plugin loaders:
-//   - OpenCode 1.x (>= 1.4) reads `mod.default` through
-//     `readV1Plugin(..., "detect")` and calls only `default.server`. Older
-//     legacy loaders iterate `Object.values(mod)` and throw on any value that
-//     is not a function or an object with `.server`; `id` and `setup` are
-//     non-enumerable, so raw-CommonJS `Object.values` is `[server]`.
-//   - Bun exposes every own property of `module.exports`, non-enumerable ones
-//     included, as named namespace exports, so under Bun the namespace also
-//     carries `id` and `setup`. Harmless: the detect path never reaches the
-//     `Object.values` loop.
-//   - OpenCode 2.x decodes `default` as `{ id, setup }` and ignores `server`.
-//     Never define `effect`: the 2.x loader prefers it over `setup`.
+// `id` and `setup` are non-enumerable so 1.x loaders that walk `Object.values(mod)` see only `server`.
+// Never define `effect`: the 2.x loader prefers it over `setup`.
 // Test-only helpers hang off `server._internals`, never as sibling exports.
 async function GsdCoreSetup(ctx) {
   const dir = ctx.location.directory;
   const v1 = await GsdCorePlugin({ directory: dir });
-  // currentCwd and currentSessionId are module globals re-pinned on every call.
-  // This holds only while the V1 tool handlers never await and runHook stays
-  // synchronous; otherwise { cwd, sessionId } must be passed through the handlers.
   const pin = (ev) => {
     currentCwd = dir;
     currentSessionId = ev.sessionID;
@@ -901,19 +907,17 @@ async function GsdCoreSetup(ctx) {
       const paths = ev.tool === "patch" ? patchFilePaths(ev.input.patchText) : [ev.input.path];
       for (const p of paths) {
         if (typeof p !== "string") continue;
-        currentCwd = dir;
         await v1.event({ event: { type: "file.edited", properties: { file: path.resolve(dir, p), cwd: dir } } });
       }
     } catch (err) {
-      console.error(`[gsd-core] config reload failed: ${err.message}`);
+      console.error(`[gsd-core] config reload failed: ${errorText(err)}`);
     }
   });
   await ctx.shell.hook("create.before", async (ev) => {
-    currentCwd = dir;
     try {
       await v1["shell.env"]({}, { env: ev.env });
     } catch (err) {
-      console.error(`[gsd-core] shell env hook failed: ${err.message}`);
+      console.error(`[gsd-core] shell env hook failed: ${errorText(err)}`);
     }
   });
   await ctx.session.hook("compaction", async (ev) => {

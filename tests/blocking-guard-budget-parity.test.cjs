@@ -326,12 +326,12 @@ describe('guard git probes receive the shared budget at runtime (#5180)', () => 
 // runHook, and a hook they kill on timeout is reported as exit 0 — an ALLOW. So
 // the bound they spawn the git-probing guards with must hold the guards' worst
 // case, or the gate is silently off. The plugin is driven in-process with
-// child_process.spawnSync replaced by a recorder (no real hook runs), so what is
-// asserted is the `timeout` the adapter actually hands to spawnSync.
+// child_process.spawn replaced by a recorder (no real hook runs), so what is
+// asserted is the `timeout` the adapter actually hands to spawn.
 // ---------------------------------------------------------------------------
 
 describe('OpenCode / Kilo plugin bound for the git-probing guards holds their worst case (#5180)', () => {
-  const childProcess = require('node:child_process');
+  const { installFakeSpawn } = require('./helpers/fake-spawn.cjs');
   const PLUGINS = [
     path.join(__dirname, '..', '.opencode', 'plugins', 'gsd-core.js'),
     path.join(__dirname, '..', '.kilo', 'plugins', 'gsd-core.js'),
@@ -343,7 +343,6 @@ describe('OpenCode / Kilo plugin bound for the git-probing guards holds their wo
   // `gitProbeLibMissing` makes hooks/lib/git-probe.js unresolvable for the plugin
   // (a partial install), so the adapter's own fallback bound is what is observed.
   async function recordedHookTimeouts(pluginPath, { gitProbeLibMissing = false } = {}) {
-    const original = childProcess.spawnSync;
     const originalLoad = Module._load;
     const seen = new Map();
     // How many times the plugin's require of git-probe.js was intercepted and made
@@ -358,19 +357,18 @@ describe('OpenCode / Kilo plugin bound for the git-probing guards holds their wo
         return originalLoad.call(this, request, ...rest);
       };
     }
-    childProcess.spawnSync = (command, args, options) => {
-      const hookFile = path.basename(String(args && args[0]));
-      seen.set(hookFile, options && options.timeout);
-      return { status: 0, signal: null, stdout: '', stderr: '' };
-    };
+    const fake = installFakeSpawn(() => ({ status: 0 }));
     delete require.cache[require.resolve(pluginPath)];
     try {
       const plugin = require(pluginPath);
       const hooks = await plugin.server({ directory: os.tmpdir() });
       await hooks['tool.execute.before']({ tool: 'write' }, { args: { filePath: path.join(os.tmpdir(), 'x.txt') } });
       await hooks['tool.execute.before']({ tool: 'bash' }, { args: { command: 'git status' } });
+      for (const [, args, options] of fake.spawns) {
+        seen.set(path.basename(String(args && args[0])), options && options.timeout);
+      }
     } finally {
-      childProcess.spawnSync = original;
+      fake.restore();
       Module._load = originalLoad;
       delete require.cache[require.resolve(pluginPath)];
     }

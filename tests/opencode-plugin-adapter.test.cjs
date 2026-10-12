@@ -28,6 +28,7 @@ const os = require('os');
 const fc = require('fast-check');
 const { cleanup } = require('./helpers.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { installFakeSpawn } = require('./helpers/fake-spawn.cjs');
 
 const ADAPTER_SRC = path.join(__dirname, '..', '.opencode', 'plugins', 'gsd-core.js');
 
@@ -517,29 +518,15 @@ test('installer copies plugin as .js, records it in the manifest, and removes it
 // ---------------------------------------------------------------------------
 // #2697: context-monitor subprocess is skipped in-process when context_warnings
 // is disabled, instead of paying a full Node boot inside the child only to exit.
-// The plugin destructures spawnSync at require-time, so we intercept by
-// monkeypatching require('child_process').spawnSync BEFORE loading the copied
-// plugin, recording every spawn's argv. Restore in t.after.
 // ---------------------------------------------------------------------------
 
 /**
- * Build an installed layout, intercept spawnSync, and return { handlers, spawns, projectDir }.
+ * Build an installed layout, intercept spawn, and return { handlers, spawns, projectDir }.
  * `planningConfig` (object|null) is written to <projectDir>/.planning/config.json; null = absent.
  */
 async function buildLayoutWithSpawnTrace(t, { stubHooks, planningConfig }) {
-  const cp = require('node:child_process');
-  const spawns = [];
-  const realSpawnSync = cp.spawnSync;
-  // IMPORTANT: the plugin destructures spawnSync at require-time
-  // (`const { spawnSync } = require("child_process")`), so the patch MUST be in
-  // place BEFORE buildInstalledLayout requires the copied plugin, or the plugin
-  // captures the original spawnSync and our trace records nothing.
-  cp.spawnSync = (...args) => {
-    spawns.push(args);
-    // Return an allow/no-op result so the adapter's handleHookResult path completes.
-    return { stdout: '', status: 0, signal: null };
-  };
-  t.after(() => { cp.spawnSync = realSpawnSync; });
+  const { spawns, restore } = installFakeSpawn();
+  t.after(restore);
 
   const { mod } = buildInstalledLayout(t, stubHooks || {});
 
@@ -610,12 +597,8 @@ test('#2697: context-monitor subprocess runs when context_warnings explicitly tr
 });
 
 test('#2697: context-monitor subprocess runs when config.json is unparseable (defaults enabled)', async (t) => {
-  const cp = require('node:child_process');
-  const spawns = [];
-  const realSpawnSync = cp.spawnSync;
-  // Patch BEFORE requiring the plugin (it destructures spawnSync at require-time).
-  cp.spawnSync = (...args) => { spawns.push(args); return { stdout: '', status: 0, signal: null }; };
-  t.after(() => { cp.spawnSync = realSpawnSync; });
+  const { spawns, restore } = installFakeSpawn();
+  t.after(restore);
 
   const { mod } = buildInstalledLayout(t, { 'gsd-context-monitor.js': stubHook('') });
   const projectDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-oc-proj-')));
@@ -945,19 +928,29 @@ const ALL_GUARD_STUBS = Object.fromEntries([
   'gsd-context-monitor.js',
 ].map((name) => [name, stubHook('')]));
 
-// The plugin captures spawnSync at require time, so patch it before loading.
 function loadTracedPlugin(t, stubHooks, respond = () => ({ stdout: '', status: 0, signal: null })) {
-  const cp = require('node:child_process');
-  const spawns = [];
-  const realSpawnSync = cp.spawnSync;
-  cp.spawnSync = (...args) => {
-    spawns.push(args);
-    return respond(args);
-  };
-  t.after(() => { cp.spawnSync = realSpawnSync; });
+  const { spawns, restore } = installFakeSpawn(respond);
+  t.after(restore);
   const { root, mod } = buildInstalledLayout(t, stubHooks);
   return { root, mod, spawns };
 }
+
+test('fake spawn closes a signalled child with a null status and turns a throwing respond into a child error', async (t) => {
+  const { restore } = installFakeSpawn((call) => {
+    if (call[1][0] === 'boom') throw new Error('respond broke');
+    return { status: 1, signal: 'SIGKILL' };
+  });
+  t.after(restore);
+  const run = (arg) => new Promise((resolve) => {
+    const child = require('node:child_process').spawn('node', [arg]);
+    const seen = {};
+    child.on('error', (err) => { seen.error = err.message; });
+    child.on('close', (code, signal) => resolve({ ...seen, code, signal }));
+    child.stdin.end('');
+  });
+  assert.deepEqual(await run('ok'), { code: null, signal: 'SIGKILL' });
+  assert.deepEqual(await run('boom'), { error: 'respond broke', code: -2, signal: null });
+});
 
 function spawnedHooks(spawns) {
   return spawns.map((call) => path.basename(call[1][0]));
@@ -1014,7 +1007,21 @@ test('V1 server() and V2 setup() spawn the same PreToolUse hooks in the same ord
 });
 
 test('each V2 location runs its guards in its own directory when calls interleave', async (t) => {
-  const { mod, spawns } = loadTracedPlugin(t, ALL_GUARD_STUBS);
+  const cp = require('node:child_process');
+  const { spawns, restore } = installFakeSpawn();
+  t.after(restore);
+  const fakeSpawn = cp.spawn;
+  let releaseFirst;
+  const firstHeld = new Promise((resolve) => { releaseFirst = resolve; });
+  cp.spawn = (...args) => {
+    const child = fakeSpawn(...args);
+    if (spawns.length === 1) {
+      const end = child.stdin.end.bind(child.stdin);
+      child.stdin.end = (chunk) => { firstHeld.then(() => end(chunk)); return child.stdin; };
+    }
+    return child;
+  };
+  const { mod } = buildInstalledLayout(t, ALL_GUARD_STUBS);
   const dirA = makeProjectDir(t);
   const dirB = makeProjectDir(t);
   const a = fakeV2Ctx(dirA);
@@ -1023,16 +1030,19 @@ test('each V2 location runs its guards in its own directory when calls interleav
   await setup(a.ctx);
   await setup(b.ctx);
 
-  for (const [loc, dir] of [[a, dirA], [b, dirB], [a, dirA]]) {
-    await loc.hooks['tool.execute.before']({
-      id: 'c', tool: 'write', sessionID: 's', input: { path: path.join(dir, 'notes.md'), content: 'x' },
-    });
-    const calls = spawns.splice(0);
-    assert.ok(calls.length > 0);
-    for (const entry of calls) {
-      assert.equal(entry[2].cwd, dir);
-      assert.equal(JSON.parse(entry[2].input).cwd, dir);
-    }
+  const write = (loc, dir) => loc.hooks['tool.execute.before']({
+    id: 'c', tool: 'write', sessionID: 's', input: { path: path.join(dir, 'notes.md'), content: 'x' },
+  });
+  await Promise.all([write(a, dirA), write(b, dirB).then(releaseFirst)]);
+
+  const order = spawns.map((entry) => entry[2].cwd);
+  const perCall = order.filter((dir) => dir === dirA).length;
+  assert.ok(perCall > 1);
+  assert.deepEqual(order, [dirA, ...Array(perCall).fill(dirB), ...Array(perCall - 1).fill(dirA)]);
+  for (const entry of spawns) {
+    const payload = JSON.parse(entry[2].input);
+    assert.equal(payload.cwd, entry[2].cwd);
+    assert.equal(path.dirname(payload.tool_input.file_path), entry[2].cwd);
   }
 });
 
@@ -1595,7 +1605,7 @@ function captureErrors(t) {
 
 const nextTurn = () => new Promise((resolve) => setImmediate(resolve));
 
-test('V2 session event loop logs a bad event without its contents and keeps running SessionStart for later sessions', async (t) => {
+test('V2 session event loop logs a bad event, Error or not, without its contents and keeps running SessionStart for later sessions', async (t) => {
   const errors = captureErrors(t);
   const { mod, spawns } = loadTracedPlugin(t, LIFECYCLE_STUBS);
   const dir = makeProjectDir(t);
@@ -1613,13 +1623,23 @@ test('V2 session event loop logs a bad event without its contents and keeps runn
   assert.ok(!errors.some((line) => line.includes('TOPSECRET-TITLE')));
   assert.deepEqual(spawns, []);
 
+  const beforeNull = errors.length;
+  await events.push({ type: 'session.created', get location() { throw null; }, data: { sessionID: 'sY' } });
+  assert.equal(errors.slice(beforeNull).filter((line) => line.startsWith('[gsd-core] session event failed')).length, 1);
+  assert.ok(!errors.some((line) => line.includes('event stream failed')));
+  assert.deepEqual(spawns, []);
+
   await events.push(v2SessionCreated(dir, 's1'));
   assert.deepEqual(spawnedHooks(spawns), SESSION_START_HOOKS);
   for (const call of spawns) assert.equal(JSON.parse(call[2].input).session_id, 's1');
 });
 
-test('V2 session event loop logs and stops when the stream fails or ends, and stays silent after cleanup', async (t) => {
+test('V2 session event loop logs once and stops when the stream fails, Error or not, or ends, raises no unhandled rejection, and stays silent after cleanup', async (t) => {
   const errors = captureErrors(t);
+  const rejections = [];
+  const onRejection = (reason) => rejections.push(reason);
+  process.on('unhandledRejection', onRejection);
+  t.after(() => process.off('unhandledRejection', onRejection));
   const { mod, spawns } = loadTracedPlugin(t, LIFECYCLE_STUBS);
   const dir = makeProjectDir(t);
   const { setup } = mod;
@@ -1629,6 +1649,17 @@ test('V2 session event loop logs and stops when the stream fails or ends, and st
   failing.events.fail(new Error('stream broke'));
   await nextTurn();
   assert.ok(errors.some((line) => line.includes('[gsd-core]') && line.includes('stream broke')));
+
+  const nonError = fakeV2Ctx(dir);
+  const cleanupNonError = await setup(nonError.ctx);
+  assert.equal(typeof cleanupNonError, 'function');
+  t.after(cleanupNonError);
+  assert.equal(nonError.events.waiting, true);
+  const beforeNonError = errors.length;
+  nonError.events.fail(undefined);
+  await nextTurn();
+  assert.deepEqual(rejections, []);
+  assert.equal(errors.slice(beforeNonError).filter((line) => line.startsWith('[gsd-core] event stream failed')).length, 1);
 
   const ending = fakeV2Ctx(dir);
   t.after(await setup(ending.ctx));
@@ -1884,49 +1915,6 @@ test('V2 config reload runs in the editing location directory when two locations
 
   await b.hooks['tool.execute.after']({ ...completed('write', { path: configOf(dirA), content: '{}' }), sessionID: 'sB' });
   assert.deepEqual(reloadSpawns(spawns), []);
-});
-
-test('V2 session event loop logs a non-Error stream rejection once and raises no unhandled rejection', async (t) => {
-  const errors = captureErrors(t);
-  const rejections = [];
-  const onRejection = (reason) => rejections.push(reason);
-  process.on('unhandledRejection', onRejection);
-  t.after(() => process.off('unhandledRejection', onRejection));
-  const { mod } = loadTracedPlugin(t, LIFECYCLE_STUBS);
-  const dir = makeProjectDir(t);
-  const { setup } = mod;
-  const { events, ctx } = fakeV2Ctx(dir);
-  const cleanup = await setup(ctx);
-  t.after(cleanup);
-  assert.equal(typeof cleanup, 'function');
-  assert.equal(events.waiting, true);
-
-  events.fail(undefined);
-  await nextTurn();
-  assert.deepEqual(rejections, []);
-  assert.equal(errors.filter((line) => line.startsWith('[gsd-core] event stream failed')).length, 1);
-});
-
-test('V2 session event loop logs a non-Error throw from one event and keeps running SessionStart for later sessions', async (t) => {
-  const errors = captureErrors(t);
-  const { mod, spawns } = loadTracedPlugin(t, LIFECYCLE_STUBS);
-  const dir = makeProjectDir(t);
-  const { setup } = mod;
-  const { events, ctx } = fakeV2Ctx(dir);
-  t.after(await setup(ctx));
-
-  await events.push({
-    type: 'session.created',
-    get location() { throw null; },
-    data: { sessionID: 'sX' },
-  });
-  assert.equal(errors.filter((line) => line.startsWith('[gsd-core] session event failed')).length, 1);
-  assert.ok(!errors.some((line) => line.includes('event stream failed')));
-  assert.deepEqual(spawns, []);
-
-  await events.push(v2SessionCreated(dir, 's1'));
-  assert.deepEqual(spawnedHooks(spawns), SESSION_START_HOOKS);
-  for (const call of spawns) assert.equal(JSON.parse(call[2].input).session_id, 's1');
 });
 
 test('V2 session event loop runs no SessionStart hook for an event the host yields after cleanup', async (t) => {
