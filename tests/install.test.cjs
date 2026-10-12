@@ -783,7 +783,10 @@ describe('configureKiloPermissions', () => {
     const configPath = path.join(configDir, 'kilo.jsonc');
     fs.writeFileSync(configPath, '{\n  // existing\n  "permission": {\n    "bash": "ask",\n  },\n}\n');
     configureKiloPermissions(true);
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const written = fs.readFileSync(configPath, 'utf8');
+    // #5334: the user's comment survives; only the GSD-owned keys were spliced in.
+    assert.ok(written.includes('// existing'), 'the comment is preserved');
+    const config = JSON.parse(written.replace(/^\s*\/\/.*$/gm, '').replace(/,(\s*[}\]])/g, '$1'));
     const gsdPath = `${configDir.replace(/\\/g, '/')}/gsd-core/*`;
     assert.strictEqual(config.permission.bash, 'ask');
     assert.strictEqual(config.permission.read[gsdPath], 'allow');

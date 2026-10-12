@@ -865,6 +865,10 @@ OpenCode 1.x and 2.x use the same `opencode` command and the same config directo
 
 Differences GSD handles for you on 2.x: worktree dispatch sets the working directory of the spawned `opencode run` instead of passing `--dir`, and the reviewer lane carries a configured reasoning effort as a `#variant` suffix on the model (for example `provider/model#high`) instead of `--variant`. If the version cannot be read, set `GSD_OPENCODE_GENERATION=1` or `2` to choose explicitly. Kilo is unaffected and stays on the OpenCode 1.x behavior.
 
+**Moving from OpenCode 1.x to 2.x.** `opencode upgrade --major` replaces 1.x with 2.x (they share the `opencode` command and cannot be installed side by side). Your GSD files stay where they are, but the plugin installed by an older GSD is rejected by 2.x, so run `npx @opengsd/gsd-core@latest --opencode --global` (or `/gsd-update`) once afterwards; that installs the plugin that serves both generations and converges the `gsd` MCP entry in your config, keeping any comments in `opencode.jsonc`. OpenCode 2.x adds its own session tables to the data directory beside the 1.x ones, so 1.x keeps working there; a data directory that 2.x created from scratch cannot be opened by 1.x, and the installer warns when it sees that combination. Going back to 1.x after using 2.x means reinstalling 1.x, then re-running the GSD installer.
+
+**Uninstalling** (`--opencode --uninstall`, either generation) removes everything GSD installed — commands, agents, skills, the plugin, every hook helper, the install state and journal records, the `gsd` MCP entry, and the `~/.gsd/defaults.json` keys the install set once no other runtime needs them — and leaves your own files, comments and settings exactly as they were. Backups of files you had modified are kept.
+
 The plugin now starts its hook scripts with Node from `PATH` (override with `GSD_HOOK_RUNTIME`) instead of the OpenCode executable, which ran OpenCode rather than the script and left the guards silently inactive (#4849).
 
 #### Codex skill picker and agent scheduling (#774)

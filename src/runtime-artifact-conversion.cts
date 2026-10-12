@@ -309,6 +309,60 @@ function buildKiloAgentPermissionBlock(claudeTools) {
   return lines;
 }
 
+// OpenCode agent tool restrictions (#5338, ADR-5331 D4). Claude's `tools:` allowlist and
+// `disallowedTools:` denylist become OpenCode `permission:` entries. The V1 `permission` form is the one
+// written because OpenCode 2.x translates it automatically ("legacy agent frontmatter … is translated"),
+// so one form serves both generations — verified: a `permission: {edit: deny, bash: deny}` agent drops the
+// edit/write/shell tools from the model's tool list on 1.18.29 and 2.0.27. Only denials are emitted: an
+// allowed tool keeps the user's own configured default instead of being forced to `allow`, and MCP tool
+// entries are not restricted.
+const claudeToOpencodePermission = {
+  Read: 'read',
+  Write: 'edit',
+  Edit: 'edit',
+  MultiEdit: 'edit',
+  NotebookEdit: 'edit',
+  Bash: 'bash',
+  Grep: 'grep',
+  Glob: 'glob',
+  WebFetch: 'webfetch',
+  WebSearch: 'websearch',
+  Task: 'task',
+  Agent: 'task',
+  Skill: 'skill',
+  SlashCommand: 'skill',
+  TodoWrite: 'todowrite',
+};
+
+const opencodeAgentPermissionOrder = ['read', 'edit', 'bash', 'grep', 'glob', 'webfetch', 'websearch', 'task', 'skill', 'todowrite'];
+
+/**
+ * `permission:` frontmatter lines for an OpenCode agent, or `[]` when the agent declares no tool
+ * restriction (an agent with neither `tools` nor `disallowedTools` inherits everything, as in Claude).
+ */
+function buildOpencodeAgentPermissionBlock(allowedTools, disallowedTools) {
+  const allowed = new Set<string>();
+  for (const tool of allowedTools) {
+    const mapped = claudeToOpencodePermission[tool];
+    if (mapped) allowed.add(mapped);
+  }
+  const denied = new Set<string>();
+  if (allowedTools.length > 0) {
+    for (const permission of opencodeAgentPermissionOrder) {
+      if (!allowed.has(permission)) denied.add(permission);
+    }
+  }
+  for (const tool of disallowedTools) {
+    const mapped = claudeToOpencodePermission[tool];
+    if (mapped) denied.add(mapped);
+  }
+  const lines = [];
+  for (const permission of opencodeAgentPermissionOrder) {
+    if (denied.has(permission)) lines.push(`  ${permission}: deny`);
+  }
+  return lines.length > 0 ? ['permission:', ...lines] : [];
+}
+
 function replaceRelativePathReference(content, fromPath, toPath) {
   const escapedPath = escapeRegExp(fromPath);
   return content.replace(
@@ -2069,7 +2123,11 @@ function convertClaudeToOpencodeFrontmatter(content, { isAgent = false, modelOve
   const newLines = [];
   let inAllowedTools = false;
   let inSkippedArray = false;
+  let inAgentTools = false;
+  let inDisallowedTools = false;
   const allowedTools = [];
+  const agentTools = [];
+  const agentDisallowed = [];
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -2085,11 +2143,30 @@ function convertClaudeToOpencodeFrontmatter(content, { isAgent = false, modelOve
       continue;
     }
 
+    // Agents: collect the `tools:` allowlist and `disallowedTools:` denylist (block-list continuation
+    // lines) so they can be rendered as `permission:` entries below.
+    if (isAgent && (inAgentTools || inDisallowedTools)) {
+      if (trimmed.startsWith('- ')) {
+        const tool = decodeToolScalar(trimmed.substring(2));
+        if (tool !== null) (inAgentTools ? agentTools : agentDisallowed).push(tool);
+        continue;
+      }
+      if (trimmed && !trimmed.startsWith('-')) {
+        inAgentTools = false;
+        inDisallowedTools = false;
+      }
+    }
+
     // Detect inline tools: field (comma-separated string)
     if (trimmed.startsWith('tools:')) {
       if (isAgent) {
-        // Agents: strip tools entirely (not supported in OpenCode agent frontmatter)
-        inSkippedArray = true;
+        const toolsValue = trimmed.substring(6).trim();
+        // A comment-only value (`tools: # note`) is not inline content: read the block list instead.
+        if (toolsValue && !toolsValue.startsWith('#')) {
+          agentTools.push(...splitToolScalars(toolsValue).map(decodeToolScalar).filter((tool) => tool !== null));
+        } else {
+          inAgentTools = true;
+        }
         continue;
       }
       const toolsValue = trimmed.substring(6).trim();
@@ -2101,8 +2178,18 @@ function convertClaudeToOpencodeFrontmatter(content, { isAgent = false, modelOve
       continue;
     }
 
-    // For agents: strip skills:, color:, memory:, maxTurns:, permissionMode:, disallowedTools:
-    if (isAgent && /^(skills|color|memory|maxTurns|permissionMode|disallowedTools):/.test(trimmed)) {
+    if (isAgent && trimmed.startsWith('disallowedTools:')) {
+      const value = trimmed.substring(16).trim();
+      if (value && !value.startsWith('#')) {
+        agentDisallowed.push(...splitToolScalars(value).map(decodeToolScalar).filter((tool) => tool !== null));
+      } else {
+        inDisallowedTools = true;
+      }
+      continue;
+    }
+
+    // For agents: strip skills:, color:, memory:, maxTurns:, permissionMode:
+    if (isAgent && /^(skills|color|memory|maxTurns|permissionMode):/.test(trimmed)) {
       inSkippedArray = true;
       continue;
     }
@@ -2191,6 +2278,7 @@ function convertClaudeToOpencodeFrontmatter(content, { isAgent = false, modelOve
     if (variant) {
       newLines.push(frontmatterScalar('variant:', variant));
     }
+    newLines.push(...buildOpencodeAgentPermissionBlock(agentTools, agentDisallowed));
   }
 
   // For commands: add tools object if we had allowed-tools or tools
@@ -4078,6 +4166,7 @@ export = {
   convertClaudeToOpencodeFrontmatter,
   convertClaudeToKiloFrontmatter,
   _decodeToolScalar: decodeToolScalar,
+  _buildOpencodeAgentPermissionBlock: buildOpencodeAgentPermissionBlock,
   _splitToolScalars: splitToolScalars,
   readGsdCommandNames,
   transformContentToHyphen,

@@ -268,6 +268,24 @@ describe('stale-bake-guard.warnIfStaleBake (orchestrator, fixtures)', () => {
     return { KILO_CONFIG_DIR: agentParentDir };
   }
 
+  test('opencode: the guard is independent of the agent file\'s effort form — 1.x `variant:` and 2.x `model#variant` both warn (#5338)', () => {
+    for (const [label, body] of [
+      ['1.x variant key', '---\nname: gsd-executor\nmodel: p/m\nvariant: high\n---\n'],
+      ['2.x model#variant', '---\nname: gsd-executor\nmodel: p/m#high\n---\n'],
+    ]) {
+      _resetWarnedForTests();
+      chunks.length = 0;
+      const agentParent = path.join(tmpRoot, `oc-${label.replace(/\W+/g, '-')}`);
+      const agentDir = path.join(agentParent, 'agents');
+      setupProject({ runtime: 'opencode', configMtime: NEWER, agentDir, agentMtime: OLDER });
+      fs.writeFileSync(path.join(agentDir, 'gsd-executor.md'), body);
+      setMtime(path.join(agentDir, 'gsd-executor.md'), OLDER);
+      const wrote = warnIfStaleBake(tmpRoot, { stderr: stderrStub, homedir: () => tmpRoot, env: ocEnv(agentParent) });
+      assert.equal(wrote, true, label);
+      assert.match(chunks[0], /changed since agents were last baked/, label);
+    }
+  });
+
   test('claude runtime → no warning even when config is newer than agents', () => {
     // OpenCode agent dir shape so the runtime path resolves, but runtime is claude.
     const agentParent = path.join(tmpRoot, 'oc-config');

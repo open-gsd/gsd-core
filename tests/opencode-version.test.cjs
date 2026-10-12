@@ -152,3 +152,44 @@ test('adaptLanePlanForGeneration drops the trailing stdin marker only for a stdi
   const noRun = mk({ argv: ['x'] });
   assert.equal(mod.adaptLanePlanForGeneration(noRun, 2), noRun);
 });
+
+test('classifyOpencodeDatabase maps table names to the generation that migrated the database', () => {
+  const exists = () => true;
+  const kind = (names) => mod.classifyOpencodeDatabase('/d/opencode.db', { exists, readTables: () => names });
+  assert.equal(kind(['project', 'session', 'message', 'part']), 'v1');
+  assert.equal(kind(['project', 'session_v2', 'session_inbox']), 'v2');
+  assert.equal(kind(['session', 'session_v2']), 'both', '2.x tables beside 1.x ones: 1.x still opens it');
+  assert.equal(kind([]), 'empty');
+  assert.equal(kind(['unrelated']), 'unknown');
+  assert.equal(kind(null), 'unknown', 'an unreadable database is unknown, never a guess');
+  assert.equal(mod.classifyOpencodeDatabase('/d/opencode.db', { exists: () => false }), 'empty');
+});
+
+test('resolveOpencodeDataDir prefers the binary\'s own answer and falls back to the XDG default', () => {
+  const fromBinary = mod.resolveOpencodeDataDir({
+    spawn: (cmd, args) => {
+      assert.deepEqual([cmd, args], ['opencode', ['debug', 'paths']]);
+      return { status: 0, stdout: 'home       /h\ndata       /srv/oc/data/opencode\ncache      /c\n' };
+    },
+  });
+  assert.equal(fromBinary, '/srv/oc/data/opencode');
+  const spawnFails = () => ({ status: null, error: Object.assign(new Error('x'), { code: 'ENOENT' }) });
+  assert.equal(mod.resolveOpencodeDataDir({ spawn: spawnFails, env: { HOME: '/h' } }), require('node:path').join('/h', '.local', 'share', 'opencode'));
+  assert.equal(mod.resolveOpencodeDataDir({ spawn: spawnFails, env: { HOME: '/h', XDG_DATA_HOME: '/x' } }), require('node:path').join('/x', 'opencode'));
+  const relative = () => ({ status: 0, stdout: 'data  relative/dir\n' });
+  assert.equal(mod.resolveOpencodeDataDir({ spawn: relative, env: { HOME: '/h' } }), require('node:path').join('/h', '.local', 'share', 'opencode'), 'a relative path from the binary is not trusted');
+});
+
+test('describeDataDirNotice warns only where the installed binary cannot open the data dir', () => {
+  const warn = mod.describeDataDirNotice(1, 'v2', '/d');
+  assert.equal(warn.level, 'warn');
+  assert.match(warn.text, /cannot open it/);
+  assert.match(warn.text, /never modifies/);
+  assert.equal(mod.describeDataDirNotice(1, 'both', '/d').level, 'info');
+  const upgrade = mod.describeDataDirNotice(2, 'v1', '/d');
+  assert.equal(upgrade.level, 'info');
+  assert.match(upgrade.text, /1\.x still opens it/);
+  for (const [g, k] of [[1, 'v1'], [2, 'v2'], [2, 'both'], [1, 'empty'], [2, 'empty'], [null, 'v2'], [1, 'unknown']]) {
+    assert.equal(mod.describeDataDirNotice(g, k, '/d'), null, `${g}/${k}`);
+  }
+});

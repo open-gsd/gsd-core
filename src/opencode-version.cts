@@ -26,6 +26,7 @@ import nodeFs from 'node:fs';
 import path from 'node:path';
 import { spawnSync as nodeSpawnSync } from 'node:child_process';
 import { configString } from './review-lane-invocation.cjs';
+import { envGet } from './shell-command-projection.cjs';
 
 /** Environment variable that forces a generation (`1` or `2`), bypassing the probe. */
 export const OPENCODE_GENERATION_ENV = 'GSD_OPENCODE_GENERATION';
@@ -466,4 +467,143 @@ export function adaptLanePlanForGeneration<T extends LanePlanResultLike>(
   }
   if (next === argv) return result;
   return { ...result, plan: { ...plan, argv: next } };
+}
+
+// ─── Data-directory rollback hazard (ADR-5331 D6, E8) ────────────────────────
+
+/**
+ * `v1`: 1.x tables only. `v2`: 2.x tables only (1.x cannot open it). `both`: 2.x added its tables beside an
+ * existing 1.x database (1.x keeps working). `empty`: no database or no tables. `unknown`: unreadable/unrecognized.
+ */
+export type OpencodeDataKind = 'v1' | 'v2' | 'both' | 'empty' | 'unknown';
+
+/** Reads the table names of an SQLite database, or `null` when it cannot be opened. */
+export type TableReader = (dbPath: string) => string[] | null;
+
+/**
+ * Default reader: `node:sqlite`, read-only. Its schema lives in the write-ahead log until a checkpoint,
+ * so reading the main file's bytes would see an empty database; SQLite itself merges both. The module
+ * prints an ExperimentalWarning on some Node versions, which is swallowed for the duration of the read.
+ * Any failure (module missing, file locked or corrupt) is `null`, never a throw.
+ */
+function readTableNames(dbPath: string): string[] | null {
+  const emit = process.emitWarning.bind(process);
+  try {
+    process.emitWarning = () => undefined;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const sqlite = require('node:sqlite') as {
+      DatabaseSync: new (p: string, o: { readOnly: boolean }) => {
+        prepare(sql: string): { all(): Array<{ name: string }> };
+        close(): void;
+      };
+    };
+    const db = new sqlite.DatabaseSync(dbPath, { readOnly: true });
+    try {
+      return db.prepare("select name from sqlite_master where type='table'").all().map((r) => r.name);
+    } finally {
+      db.close();
+    }
+  } catch {
+    return null;
+  } finally {
+    process.emitWarning = emit;
+  }
+}
+
+/**
+ * Which generation(s) built an OpenCode database. 1.x keeps sessions in a `session` table; 2.x in
+ * `session_v2`. A database 2.x created from scratch has no `session` table and 1.x cannot open it; a 1.x
+ * database that 2.x later used gains the 2.x tables beside `session` and 1.x keeps working — both
+ * reproduced on 1.18.29 and 2.0.27 (ADR-5331 E8, E18). GSD only reads the schema; it never writes to this
+ * database.
+ */
+export function classifyOpencodeDatabase(
+  dbPath: string,
+  deps: { exists?: (p: string) => boolean; readTables?: TableReader } = {},
+): OpencodeDataKind {
+  const exists = deps.exists ?? ((p: string) => nodeFs.existsSync(p));
+  if (!exists(dbPath)) return 'empty';
+  const names = (deps.readTables ?? readTableNames)(dbPath);
+  if (names === null) return 'unknown';
+  const v1 = names.includes('session');
+  const v2 = names.includes('session_v2');
+  if (v1 && v2) return 'both';
+  if (v2) return 'v2';
+  if (v1) return 'v1';
+  return names.length === 0 ? 'empty' : 'unknown';
+}
+
+/**
+ * The directory holding `opencode.db`: the `data` entry of `opencode debug paths` (the binary's own
+ * answer, identical on 1.x and 2.x), else the XDG default every OpenCode generation shares.
+ */
+export function resolveOpencodeDataDir(opts: ProbeOptions & { home?: string } = {}): string {
+  const spawn: SpawnLike = opts.spawn ?? nodeSpawnSync;
+  const binary = typeof opts.binary === 'string' && opts.binary.length > 0 ? opts.binary : 'opencode';
+  try {
+    const r = spawn(binary, ['debug', 'paths'], {
+      encoding: 'utf8',
+      timeout: opts.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
+      shell: false,
+      windowsHide: true,
+      maxBuffer: PROBE_OUTPUT_LIMIT,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      ...(opts.env ? { env: opts.env } : {}),
+    });
+    if (!r.error && r.status === 0) {
+      const m = /^data[ \t]+(.+?)[ \t]*$/m.exec(text(r.stdout));
+      if (m && m[1] && path.isAbsolute(m[1])) return m[1];
+    }
+  } catch {
+    /* fall through to the XDG default */
+  }
+  const env = opts.env ?? process.env;
+  const home = opts.home ?? envGet(env, 'HOME') ?? envGet(env, 'USERPROFILE') ?? '';
+  const xdgData = envGet(env, 'XDG_DATA_HOME');
+  const base = xdgData && path.isAbsolute(xdgData) ? xdgData : path.join(home, '.local', 'share');
+  return path.join(base, 'opencode');
+}
+
+export interface DataDirNotice {
+  /** `warn`: the installed binary cannot open the data directory. `info`: worth knowing, nothing is broken. */
+  level: 'warn' | 'info';
+  text: string;
+}
+
+/**
+ * What to tell the operator about the data directory, given the installed generation and the schema
+ * generation(s) found there; `null` when there is nothing to say.
+ */
+export function describeDataDirNotice(
+  generation: OpencodeGeneration | null,
+  kind: OpencodeDataKind,
+  dataDir: string,
+): DataDirNotice | null {
+  if (generation === 1 && kind === 'v2') {
+    return {
+      level: 'warn',
+      text:
+        `OpenCode 1.x is installed but its data directory (${dataDir}) was created by OpenCode 2.x. ` +
+        "1.x cannot open it (\"Database is not empty and has no session table\"). Reinstall 2.x, or restore a " +
+        'backup of the data directory taken before 2.x first ran. GSD never modifies this database.',
+    };
+  }
+  if (generation === 1 && kind === 'both') {
+    return {
+      level: 'info',
+      text:
+        `OpenCode 2.x has also used the data directory (${dataDir}); it keeps its sessions in its own tables ` +
+        'beside the 1.x ones, and 1.x still opens it.',
+    };
+  }
+  if (generation === 2 && kind === 'v1') {
+    return {
+      level: 'info',
+      text:
+        `OpenCode 2.x will add its own tables to the data directory (${dataDir}) beside the 1.x ones; ` +
+        'OpenCode 1.x still opens it afterwards. A data directory that 2.x creates from scratch, by contrast, ' +
+        'cannot be opened by 1.x.',
+    };
+  }
+  return null;
 }

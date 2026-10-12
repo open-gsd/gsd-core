@@ -145,3 +145,17 @@ function createTempDirClean() {
   const os = require('node:os');
   return fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-cwd-'));
 }
+
+test('--no-prompts (ctx.prompts === false) withholds the prompt catalog but keeps tools and resources (#5338)', () => {
+  const init = handleMessage({ jsonrpc: '2.0', id: 1, method: 'initialize' }, { prompts: false });
+  assert.deepEqual(Object.keys(init.result.capabilities).sort(), ['resources', 'tools']);
+  for (const method of ['prompts/list', 'prompts/get']) {
+    const res = handleMessage({ jsonrpc: '2.0', id: 2, method, params: { name: 'x' } }, { prompts: false });
+    assert.equal(res.error.code, -32601, method);
+  }
+  assert.ok(Array.isArray(handleMessage({ jsonrpc: '2.0', id: 3, method: 'tools/list' }, { prompts: false }).result.tools));
+  // The default is unchanged: prompts advertised and listed.
+  const dflt = handleMessage({ jsonrpc: '2.0', id: 4, method: 'initialize' });
+  assert.ok('prompts' in dflt.result.capabilities);
+  assert.ok(handleMessage({ jsonrpc: '2.0', id: 5, method: 'prompts/list' }).result.prompts.length > 0);
+});

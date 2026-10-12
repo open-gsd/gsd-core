@@ -64,7 +64,8 @@ async function runOpencode(t, { bin, v2, toolCall, lane = false }) {
   const cfg = path.join(home, '.config', 'opencode');
   const proj = path.join(home, 'proj');
   fs.mkdirSync(path.join(cfg, 'plugins'), { recursive: true });
-  fs.mkdirSync(path.join(cfg, 'gsd-core'), { recursive: true });
+  fs.mkdirSync(path.join(cfg, 'gsd-core', 'references'), { recursive: true });
+  fs.writeFileSync(path.join(cfg, 'gsd-core', 'references', 'hello.md'), 'GSD-REFERENCE-CONTENT\n');
   fs.cpSync(path.join(ROOT, 'hooks'), path.join(cfg, 'hooks'), { recursive: true });
   fs.copyFileSync(PLUGIN, path.join(cfg, 'plugins', 'gsd-core.js'));
   fs.mkdirSync(proj, { recursive: true });
@@ -130,4 +131,49 @@ for (const [label, bin, v2] of [['1.x', V1, false], ['2.x', V2, true]]) {
 test('OpenCode 2.x: the spawn working directory is the worktree (no --dir needed, ADR-5331 D5)', { skip: !V2 && 'GSD_TEST_OPENCODE_V2_BIN not set' }, async (t) => {
   const out = await runOpencode(t, { bin: V2, v2: true, toolCall: { tool: 'shell', args: { command: 'pwd' } } });
   assert.match(out, /gsd-oc-smoke-[^/\\\n]+[/\\]proj/, out);
+});
+
+for (const [label, bin, v2, argKey] of [['1.x', V1, false, 'filePath'], ['2.x', V2, true, 'path']]) {
+  test(`OpenCode ${label}: a Read of ~/.claude/gsd-core/... is redirected to the installed payload (the 364 .claude references)`, { skip: !bin && 'binary env var not set' }, async (t) => {
+    const out = await runOpencode(t, { bin, v2, toolCall: { tool: 'read', args: { [argKey]: '~/.claude/gsd-core/references/hello.md' } } });
+    assert.match(out, /GSD-REFERENCE-CONTENT/);
+  });
+}
+
+test('data dir: 2.x beside 1.x tables keeps 1.x working, but a data dir 2.x creates from scratch cannot be opened by 1.x (ADR-5331 E8, E18)', { skip: !(V1 && V2) && 'both GSD_TEST_OPENCODE_V1_BIN and _V2_BIN are required' }, async (t) => {
+  const { classifyOpencodeDatabase, resolveOpencodeDataDir, describeDataDirNotice } = require('../gsd-core/bin/lib/opencode-version.cjs');
+  const mkHome = () => {
+    const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-oc-data-')));
+    t.after(() => cleanup(home));
+    const env = { ...process.env, HOME: home, USERPROFILE: home, XDG_DATA_HOME: path.join(home, 'data'), XDG_CONFIG_HOME: path.join(home, 'cfg'), XDG_CACHE_HOME: path.join(home, 'cache'), XDG_STATE_HOME: path.join(home, 'state'), OPENCODE_DISABLE_AUTOUPDATE: 'true' };
+    return { home, env, dataDir: path.join(home, 'data', 'opencode') };
+  };
+  const runBin = (bin, args, { home, env }) => new Promise((resolve) => {
+    let out = '';
+    const child = spawn(bin, args, { cwd: home, env, stdio: ['ignore', 'pipe', 'pipe'], timeout: INSTALL_TIMEOUT_MS, killSignal: 'SIGKILL' });
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { out += d; });
+    child.on('exit', (code) => resolve({ code, out }));
+    child.on('error', () => resolve({ code: -1, out }));
+  });
+
+  // 1.x first, then 2.x: 2.x adds its tables beside 1.x's and 1.x keeps working.
+  const a = mkHome();
+  assert.equal(resolveOpencodeDataDir({ binary: V2, env: a.env }), a.dataDir);
+  assert.equal((await runBin(V1, ['session', 'list'], a)).code, 0);
+  const dbA = path.join(a.dataDir, 'opencode.db');
+  assert.equal(classifyOpencodeDatabase(dbA), 'v1');
+  assert.equal((await runBin(V2, ['session', 'list', '--standalone'], a)).code, 0);
+  assert.equal(classifyOpencodeDatabase(dbA), 'both');
+  assert.equal((await runBin(V1, ['session', 'list'], a)).code, 0, '1.x still opens a data dir 2.x added tables to');
+  assert.equal(describeDataDirNotice(1, 'both', a.dataDir).level, 'info');
+
+  // 2.x first: no 1.x tables exist, and 1.x cannot open the database.
+  const b = mkHome();
+  assert.equal((await runBin(V2, ['session', 'list', '--standalone'], b)).code, 0);
+  assert.equal(classifyOpencodeDatabase(path.join(b.dataDir, 'opencode.db')), 'v2');
+  const back = await runBin(V1, ['run', '--format', 'json', 'hi'], b);
+  assert.notEqual(back.code, 0, '1.x cannot open a data dir 2.x created');
+  assert.match(back.out, /no session table/);
+  assert.equal(describeDataDirNotice(1, 'v2', b.dataDir).level, 'warn');
 });

@@ -203,6 +203,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/review-lane-invocation.cjs',
       // #5337: tsc-generated runtime artifact — lint src/opencode-version.cts, not this.
       'gsd-core/bin/lib/opencode-version.cjs',
+      // #5334: tsc-generated runtime artifact — lint src/jsonc-edit.cts, not this.
+      'gsd-core/bin/lib/jsonc-edit.cjs',
       'gsd-core/bin/lib/review-lane-runner.cjs',
       'gsd-core/bin/lib/reviewer-step-dispatch.cjs',
       'gsd-core/bin/lib/clusters.cjs',
@@ -285,6 +287,10 @@ export default tseslint.config(
       // 010 also imports node builtins (fs, path) like 007/009, so tsc emits
       // the same `__importDefault` helper. ADR-457: the linted source is the .cts.
       'gsd-core/bin/lib/installer-migrations/010-antigravity-retire-confighome-artifacts.cjs',
+      // 011 imports node builtins (fs, path), so tsc emits the same `__importDefault` helper. ADR-457: lint the .cts.
+      'gsd-core/bin/lib/installer-migrations/011-opencode-mcp-no-prompts.cjs',
+      // #5338: tsc-generated runtime artifact — lint src/opencode-mcp-entry.cts, not this.
+      'gsd-core/bin/lib/opencode-mcp-entry.cjs',
       'gsd-core/bin/lib/observability/logger.cjs',
       'gsd-core/bin/lib/active-workstream-store.cjs',
       'gsd-core/bin/lib/adr-parser.cjs',

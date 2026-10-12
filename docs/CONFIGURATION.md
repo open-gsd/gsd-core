@@ -2071,6 +2071,27 @@ The intent is the same as the Claude profile tiers -- use a stronger model for p
 | `true` | Maps aliases to full Claude model IDs (`claude-opus-4-8`) | Claude Code with API that requires full IDs |
 | `"omit"` | Claude protection: yields an empty string when no runtime identity is known (or the value fails recognition); a runtime identified by its install marker resolves its own tier map instead | Non-Claude runtimes (Codex, OpenCode, Antigravity CLI, Kilo) |
 
+#### OpenCode 1.x and 2.x
+
+One `opencode` runtime serves OpenCode 1.x and 2.x (design: [ADR-5331](adr/5331-opencode-v2-support-and-v1-sunset.md)).
+
+| Setting | Where | Effect |
+|---------|-------|--------|
+| `GSD_OPENCODE_GENERATION` | environment | `1`, `2`, `v1`, `v2` (any case). Forces the generation GSD assumes when it builds an `opencode run` command line; otherwise GSD runs `opencode --version`. An unreadable version leaves the 1.x behavior. |
+| `GSD_HOOK_RUNTIME` | environment | Executable the OpenCode plugin starts GSD's hook scripts with. Default: `node` from `PATH`. The OpenCode binary itself cannot run them. |
+| `review.models.opencode` | `.planning/config.json` | Reviewer model, `provider/model`. On 2.x a configured reasoning effort is appended as `#<level>` (`provider/model#high`); a model that already has a `#variant` is used as written. |
+| `review.effort.opencode` | `.planning/config.json` | Reasoning effort for the OpenCode reviewer. On 1.x it is passed as `--variant <level>`; on 2.x it needs a configured model to ride on, and is dropped with a warning otherwise. |
+
+Installed agents carry a `permission:` block that denies the tools their Claude `tools:` allowlist leaves out (and any
+`disallowedTools:`); allowed tools keep your own configured default, and MCP tool entries are not restricted. An agent
+with neither key inherits everything. `effort sync` keeps the effort in `variant:` on 1.x and in the `#variant` suffix of
+`model:` when an agent already uses the 2.x form.
+
+GSD edits `opencode.json`/`opencode.jsonc` (and Kilo's `kilo.json(c)`) as text when the file has comments or trailing
+commas, so annotations survive install, update and uninstall. It writes the `mcp.gsd` companion entry with
+`--no-prompts`; remove or edit the entry and GSD treats it as yours.
+
+
 ### The `tier` Field
 
 `node gsd-tools.cjs query resolve-model <agent> --pick tier` returns the tier GSD resolved for that agent, independent of `resolve_model_ids`: `opus` | `sonnet` | `haiku` | `fable` | `inherit` | `unknown`. It is also emitted as a `tier` key in the command's full JSON output.

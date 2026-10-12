@@ -84,7 +84,7 @@ describe('configureOpencodePermissions', () => {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     assert.deepEqual(config.mcp.gsd, {
       type: 'local',
-      command: ['npx', '-y', '-p', PACKAGE_NAME, 'gsd-mcp-server'],
+      command: ['npx', '-y', '-p', PACKAGE_NAME, 'gsd-mcp-server', '--no-prompts'],
       enabled: true,
     });
   });

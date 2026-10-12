@@ -103,6 +103,12 @@ const INTERNAL_ERROR = -32603;
 
 export interface McpContext {
   cwd?: string;
+  /**
+   * `false` withholds the prompt catalog (`--no-prompts`). Hosts that surface MCP prompts as slash
+   * commands (OpenCode: `<server>:<prompt>`) otherwise list every GSD command twice, next to the command
+   * files the installer already wrote (#5338, ADR-5331).
+   */
+  prompts?: boolean;
 }
 
 export interface JsonRpcRequest {
@@ -252,7 +258,7 @@ export function handleMessage(request: JsonRpcRequest, ctx: McpContext = {}): Re
         // subscribe/listChanged — nothing ever sends those notifications
         // (design row 2 / Hyrum's Law: advertising an unimplemented
         // notification is a lie a host would act on).
-        capabilities: { tools: {}, resources: {}, prompts: {} },
+        capabilities: ctx.prompts === false ? { tools: {}, resources: {} } : { tools: {}, resources: {}, prompts: {} },
         serverInfo: { name: SERVER_NAME, version: resolveServerVersion() },
       };
       break;
@@ -291,6 +297,7 @@ export function handleMessage(request: JsonRpcRequest, ctx: McpContext = {}): Re
       break;
     }
     case 'prompts/list':
+      if (ctx.prompts === false) return isNotification ? null : errorResponse(id, METHOD_NOT_FOUND, 'Method not found: prompts/list.');
       result = {
         prompts: [...getCatalog().prompts.values()]
           .map(wirePrompt)
@@ -298,6 +305,7 @@ export function handleMessage(request: JsonRpcRequest, ctx: McpContext = {}): Re
       };
       break;
     case 'prompts/get': {
+      if (ctx.prompts === false) return isNotification ? null : errorResponse(id, METHOD_NOT_FOUND, 'Method not found: prompts/get.');
       const params = (request.params && typeof request.params === 'object' ? request.params : {}) as Record<string, unknown>;
       const name = asString(params.name);
       if (!name) return errorResponse(id, INVALID_PARAMS, 'prompts/get requires string "name".');

@@ -1045,7 +1045,7 @@ The migration-specific ownership and source snapshots live in
 | Runtime | Global root | Local root | Invocation surface | Agent surface | Config and hooks |
 | --- | --- | --- | --- | --- | --- |
 | Claude Code | `~/.claude` | `./.claude` | Global `skills/gsd-*/SKILL.md` (flat, #924); local `commands/gsd/*.md` | `agents/gsd-*.md` | `settings.json` hook and statusLine entries |
-| OpenCode | `~/.config/opencode` | `./.opencode` | `commands/gsd-*.md` | `agents/gsd-*.md` | `opencode.json` or `opencode.jsonc`; no GSD hooks |
+| OpenCode (1.x and 2.x) | `~/.config/opencode` | `./.opencode` | `commands/gsd-*.md`; every command is also a model-loadable skill (`skills/gsd-*/SKILL.md`) | `agents/gsd-*.md`, with a `permission:` block denying the tools an agent's `tools:` allowlist leaves out | `opencode.json` or `opencode.jsonc` (edited as text, so a commented file keeps its comments); one native plugin, `plugins/gsd-core.js`, that serves both generations and runs the `hooks/` guards under Node — see [OpenCode 1.x and 2.x](#opencode-1x-and-2x) |
 | Kilo | `~/.config/kilo` | `./.kilo` | `command/gsd-*.md` | `agents/gsd-*.md` | `kilo.json` or `kilo.jsonc`; no GSD hooks |
 | Kimi CLI | First-existing generic root: `~/.config/agents` recommended, then `~/.agents` when `~/.agents/skills` exists and `~/.config/agents/skills` does not | Deferred and guarded | `skills/gsd-*/SKILL.md` (flat) invoked as `/skill:gsd-*` | `agents/gsd.yaml`, `agents/gsd.md`, and `agents/subagents/gsd-*` YAML/prompt pairs | Explicit `kimi --agent-file <configRoot>/agents/gsd.yaml`; no GSD hooks or statusline |
 | Codex | `~/.codex` | `./.codex` | `skills/gsd-*/SKILL.md` (flat) | `agents/` source markdown plus per-agent TOML (Codex auto-discovers each `agents/gsd-*.toml`; this is the sole canonical role registration, #2406) | `config.toml` bare `[agents]` dispatch-tuning scalar (`max_depth`, no per-role `[agents.gsd-*]` tables), `[features].hooks` (canonical; legacy alias `codex_hooks` is recognized and migrated forward on reinstall, #3566), and hook tables |
@@ -1059,6 +1059,41 @@ The migration-specific ownership and source snapshots live in
 | Hermes Agent | `~/.hermes` | `./.hermes` | `skills/gsd/ns-*/SKILL.md` (6 routers, prefix='') + `skills/gsd/ns-*/skills/<name>/SKILL.md` (nested concretes) | `agents/gsd-*.md` | Common GSD settings and hook entries where supported |
 | CodeBuddy | `~/.codebuddy` | `./.codebuddy` | `skills/gsd-*/SKILL.md` (flat, `user-invocable: false`) | `agents/gsd-*.md` | `/gsd-*` slash commands under `commands/`; common GSD settings and hook entries where supported |
 | Cline | `~/.cline` | project root | `skills/gsd-ns-*/SKILL.md` (6 routers) + `skills/gsd-ns-*/skills/<name>/SKILL.md` (nested concretes) + `.clinerules` | Rules only | No GSD hooks or statusline |
+
+### OpenCode 1.x and 2.x
+
+OpenCode 1.x and 2.x use the same `opencode` command and config directories and cannot be installed side by side,
+so one `opencode` runtime serves both. The design is recorded in
+[ADR-5331](adr/5331-opencode-v2-support-and-v1-sunset.md); Kilo is a fork on the 1.x line and is unaffected.
+
+- **Generation detection** (`opencode-version.cts`): a bounded, argv-only `opencode --version` run (`1.19.0` on 1.x,
+  `opencode v2.0.27` on 2.x), `GSD_OPENCODE_GENERATION=1|2` to force it, and 2.x-only config signals as a fallback.
+  An undeterminable generation is `null` and keeps today's behavior. The installer prints the result and records it as
+  `hostGeneration` in `gsd-install-state.json`, which `update-context` reports.
+- **One plugin, two entrypoints:** `plugins/gsd-core.js` exports `server` (1.x) and a non-enumerable `setup` (2.x). `setup`
+  is inert unless it is handed a 2.x context (1.18.29 and 1.19.0 also call it, with one that has no `tool`). Both
+  adapters run the same guards; the 2.x `shell` and `patch` tool ids map to `Bash` and `MultiEdit`; `file.edited`, which
+  2.x never emits, is derived from completed edit-tool calls on `.planning/config.json`.
+- **Hooks run under Node.** Inside OpenCode `process.execPath` is the OpenCode binary, so the plugin starts hook
+  scripts with `node` from `PATH` (override: `GSD_HOOK_RUNTIME`); before this every guard was silently skipped (#4849).
+- **Spawn arguments differ by generation** and are adapted when a command line is built: 2.x has no `--dir` (the worker
+  binds through its working directory, which 2.x takes from `$PWD`, so it must be launched from a shell that has
+  `cd`'d there) and no `--variant` (effort rides on the model as `provider/model#variant`); the reviewer lane drops the
+  trailing stdin `-`, which 2.x sends to the model as text, and runs `--standalone` so no background service outlives it.
+- **Config edits preserve JSONC.** `jsonc-edit.cts` splices only the keys GSD owns, so an annotated `opencode.jsonc` or
+  `kilo.jsonc` keeps its comments, trailing commas and layout through install, migration and uninstall (#5334). Plain
+  JSON without comments is rewritten as before. GSD never writes 2.x-only shapes to user config.
+- **MCP companion.** The installer registers `mcp.gsd` with `--no-prompts`; OpenCode would otherwise list every GSD
+  prompt as a second `gsd:<name>` slash command next to the command files. Migration 011 converges existing entries.
+  The entry stays in the 1.x shape, which 2.x reads in place; 2.x's default Code Mode is left as it is, because the
+  companion's tools are reached by exact name from GSD workflows and nothing relies on them being native tools.
+- **Data directory.** 2.x adds its own session tables beside 1.x's and 1.x keeps working; a data directory 2.x creates
+  from scratch has no 1.x tables and 1.x cannot open it. The installer reads the schema (never writes it) and says which
+  case applies.
+- **Uninstall is complete on both generations:** it removes every staged `hooks/lib` helper (derived from what the
+  installer copies, so the lists cannot drift), the install state and migration-journal records (backups of files the
+  user modified are kept), an empty `settings.json`, the GSD `mcp` entry in both shapes, empty directories GSD created,
+  and the `~/.gsd/defaults.json` keys the install set once no other runtime needs them and the user has not changed them.
 
 ### Upstream Contract Sources
 

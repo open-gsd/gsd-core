@@ -414,6 +414,26 @@ const GSD_WINDSURF_HOOK_SCRIPTS = hooksSurface.GSD_WINDSURF_HOOK_SCRIPTS;
 const GSD_HOOK_LIB_FILES = ['git-cmd.js', 'gsd-graphify-rebuild.sh', 'cursor-workspace.js', 'injection-patterns.js'];
 
 /**
+ * Every file GSD stages under `hooks/lib/` (#5335). The install copies `hooks/dist/lib/` wholesale (and the
+ * allow-listed names from `hooks/lib/`), so a fixed list drifts the moment a helper is added: the new file is
+ * staged but never removed, which also keeps `hooks/lib/` non-empty and blocks its rmdir. The set is the
+ * allow-list plus the top-level files of the directories the installer copies from, so uninstall and the
+ * manifest cannot disagree with install. Only these names are ever removed; a user's own helper beside them
+ * is left alone.
+ */
+function gsdHookLibFiles() {
+  const names = new Set(GSD_HOOK_LIB_FILES);
+  for (const parts of [['hooks', 'dist', 'lib'], ['hooks', 'lib']]) {
+    try {
+      for (const entry of fs.readdirSync(path.join(__dirname, '..', ...parts), { withFileTypes: true })) {
+        if (entry.isFile()) names.add(entry.name);
+      }
+    } catch { /* the directory is absent from this package layout */ }
+  }
+  return [...names];
+}
+
+/**
  * Directory name GSD stages its shared hook bundle under, inside a runtime's
  * install root. Defaults to 'hooks' — the name every runtime used before #3023.
  *
@@ -770,6 +790,8 @@ const {
   recordHostGeneration,
   runInstallerMigrations,
 } = require(path.join(_gsdLibDir, 'installer-migrations.cjs'));
+const { setJsoncValue, removeJsoncValue, hasJsoncFeatures, parseJsonc } = require(path.join(_gsdLibDir, 'jsonc-edit.cjs'));
+const { isGsdMcpEntry, GSD_MCP_NO_PROMPTS_FLAG } = require(path.join(_gsdLibDir, 'opencode-mcp-entry.cjs'));
 const {
   assertInstallerMigrationsUnblocked,
   resolveInstallerMigrationPromptsForNonTty,
@@ -6965,6 +6987,82 @@ function writeCopilotHookConfig(targetDir) {
  * Reads agent .md files from source, extracts metadata, writes .toml configs.
  */
 
+// #5335: ~/.gsd/defaults.json is machine-wide, so uninstalling one runtime must not strip a default another
+// still needs, nor one the user chose. A sidecar records which keys an install SET (not ones it found), the
+// value it set, and which non-Claude runtimes have installed since; uninstall reverts a key only when its
+// last such runtime is gone and the value is still the one the installer wrote.
+const DEFAULTS_PROVENANCE_NAME = 'defaults-provenance.json';
+
+function readDefaultsProvenance(gsdDir) {
+  try {
+    const p = JSON.parse(fs.readFileSync(path.join(gsdDir, DEFAULTS_PROVENANCE_NAME), 'utf8'));
+    if (p && typeof p === 'object' && p.keys && typeof p.keys === 'object') return p;
+  } catch { /* absent or unreadable */ }
+  return { version: 1, keys: {} };
+}
+
+function recordDefaultsProvenance(gsdDir, runtime, defaults, setNow) {
+  const prov = readDefaultsProvenance(gsdDir);
+  let changed = false;
+  for (const key of ['resolve_model_ids', 'runtime']) {
+    let entry = prov.keys[key];
+    if (setNow[key]) {
+      entry = { setValue: defaults[key], runtimes: [] };
+      prov.keys[key] = entry;
+      changed = true;
+    }
+    if (entry && Array.isArray(entry.runtimes) && !entry.runtimes.includes(runtime)) {
+      entry.runtimes.push(runtime);
+      changed = true;
+    }
+  }
+  if (changed) atomicWriteFileSync(path.join(gsdDir, DEFAULTS_PROVENANCE_NAME), JSON.stringify(prov, null, 2) + '\n', 'utf8');
+}
+
+/** @returns {boolean} true when it removed or reverted something */
+function revertNonClaudeDefaults(runtime) {
+  if (hostBehaviorsFor(runtime).nativeModelAliases || process.env.GSD_TEST_MODE) return false;
+  const gsdDir = path.join(os.homedir(), '.gsd');
+  const provPath = path.join(gsdDir, DEFAULTS_PROVENANCE_NAME);
+  if (!fs.existsSync(provPath)) return false;
+  let releaseLock = null;
+  try {
+    releaseLock = acquireInstallMigrationLock(gsdDir);
+    const prov = readDefaultsProvenance(gsdDir);
+    const defaultsPath = path.join(gsdDir, 'defaults.json');
+    let defaults = null;
+    try { defaults = JSON.parse(fs.readFileSync(defaultsPath, 'utf8')); } catch { /* absent or corrupt */ }
+    const reverted = [];
+    for (const [key, entry] of Object.entries(prov.keys)) {
+      if (!entry || !Array.isArray(entry.runtimes)) { delete prov.keys[key]; continue; }
+      entry.runtimes = entry.runtimes.filter((r) => r !== runtime);
+      if (entry.runtimes.length > 0) continue;
+      if (defaults && typeof defaults === 'object' && defaults[key] === entry.setValue) {
+        delete defaults[key];
+        reverted.push(key);
+      }
+      delete prov.keys[key];
+    }
+    if (reverted.length > 0 && defaults) {
+      if (Object.keys(defaults).length === 0) fs.rmSync(defaultsPath, { force: true });
+      else atomicWriteFileSync(defaultsPath, JSON.stringify(defaults, null, 2) + '\n', 'utf8');
+      console.log(`  ${green}✓${reset} Reverted ${reverted.join(', ')} in ~/.gsd/defaults.json (set by the ${runtime} install)`);
+    }
+    if (Object.keys(prov.keys).length === 0) fs.rmSync(provPath, { force: true });
+    else atomicWriteFileSync(provPath, JSON.stringify(prov, null, 2) + '\n', 'utf8');
+    return reverted.length > 0;
+  } catch (e) {
+    console.log(`  ${yellow}⚠${reset} Could not update ~/.gsd/defaults.json: ${e.message}`);
+    return false;
+  } finally {
+    if (releaseLock) {
+      try { releaseLock(); } catch { /* the stale-lock reaper clears it */ }
+    }
+    // ~/.gsd is GSD's own directory; drop it once the lock is released and nothing else lives in it.
+    try { fs.rmdirSync(gsdDir); } catch { /* other GSD state lives here */ }
+  }
+}
+
 /**
  * #2834: Write ~/.gsd/defaults.json for non-Claude runtimes — sets
  * resolve_model_ids="omit" (so resolveModelInternal() returns '' instead of
@@ -7011,6 +7109,10 @@ function writeNonClaudeDefaults(runtime) {
       atomicWriteFileSync(defaultsPath, JSON.stringify(defaults, null, 2) + '\n', 'utf8');
       for (const message of applied) console.log(`  ${green}✓${reset} ${message}`);
     }
+    recordDefaultsProvenance(gsdDir, runtime, defaults, {
+      resolve_model_ids: shouldDefaultToOmit,
+      runtime: applied.some((m) => m.startsWith('Set runtime:')),
+    });
   } catch (e) {
     console.log(`  ${yellow}⚠${reset} Could not write ~/.gsd/defaults.json: ${e.message}`);
   } finally {
@@ -7218,7 +7320,11 @@ function convertClaudeToOpencodeFrontmatter(content, { isAgent = false, modelOve
   const newLines = [];
   let inAllowedTools = false;
   let inSkippedArray = false;
+  let inAgentTools = false;
+  let inDisallowedTools = false;
   const allowedTools = [];
+  const agentTools = [];
+  const agentDisallowed = [];
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -7234,11 +7340,31 @@ function convertClaudeToOpencodeFrontmatter(content, { isAgent = false, modelOve
       continue;
     }
 
+    // Agents: collect the `tools:` allowlist and `disallowedTools:` denylist (block-list continuation
+    // lines) so they can be rendered as `permission:` entries below (mirrors
+    // src/runtime-artifact-conversion.cts's convertClaudeToOpencodeFrontmatter, #5338).
+    if (isAgent && (inAgentTools || inDisallowedTools)) {
+      if (trimmed.startsWith('- ')) {
+        const tool = runtimeArtifactConversion._decodeToolScalar(trimmed.substring(2));
+        if (tool !== null) (inAgentTools ? agentTools : agentDisallowed).push(tool);
+        continue;
+      }
+      if (trimmed && !trimmed.startsWith('-')) {
+        inAgentTools = false;
+        inDisallowedTools = false;
+      }
+    }
+
     // Detect inline tools: field (comma-separated string)
     if (trimmed.startsWith('tools:')) {
       if (isAgent) {
-        // Agents: strip tools entirely (not supported in OpenCode agent frontmatter)
-        inSkippedArray = true;
+        const toolsValue = trimmed.substring(6).trim();
+        // A comment-only value (`tools: # note`) is not inline content: read the block list instead.
+        if (toolsValue && !toolsValue.startsWith('#')) {
+          agentTools.push(...runtimeArtifactConversion._splitToolScalars(toolsValue).map(runtimeArtifactConversion._decodeToolScalar).filter((tool) => tool !== null));
+        } else {
+          inAgentTools = true;
+        }
         continue;
       }
       const toolsValue = trimmed.substring(6).trim();
@@ -7250,8 +7376,18 @@ function convertClaudeToOpencodeFrontmatter(content, { isAgent = false, modelOve
       continue;
     }
 
-    // For agents: strip skills:, color:, memory:, maxTurns:, permissionMode:, disallowedTools:
-    if (isAgent && /^(skills|color|memory|maxTurns|permissionMode|disallowedTools):/.test(trimmed)) {
+    if (isAgent && trimmed.startsWith('disallowedTools:')) {
+      const value = trimmed.substring(16).trim();
+      if (value && !value.startsWith('#')) {
+        agentDisallowed.push(...runtimeArtifactConversion._splitToolScalars(value).map(runtimeArtifactConversion._decodeToolScalar).filter((tool) => tool !== null));
+      } else {
+        inDisallowedTools = true;
+      }
+      continue;
+    }
+
+    // For agents: strip skills:, color:, memory:, maxTurns:, permissionMode:
+    if (isAgent && /^(skills|color|memory|maxTurns|permissionMode):/.test(trimmed)) {
       inSkippedArray = true;
       continue;
     }
@@ -7324,6 +7460,7 @@ function convertClaudeToOpencodeFrontmatter(content, { isAgent = false, modelOve
     if (modelOverride) {
       newLines.push(`model: ${modelOverride}`);
     }
+    newLines.push(...runtimeArtifactConversion._buildOpencodeAgentPermissionBlock(agentTools, agentDisallowed));
   }
 
   // For commands: add tools object if we had allowed-tools or tools
@@ -8245,7 +8382,7 @@ function reclaimKimiHooksRoot(kimiHooksRoot) {
     const kimiHooksLibDir = path.join(kimiHooksDir, 'lib');
     if (fs.existsSync(kimiHooksLibDir)) {
       let removedKimiLibFiles = 0;
-      for (const file of GSD_HOOK_LIB_FILES) {
+      for (const file of gsdHookLibFiles()) {
         try {
           fs.unlinkSync(path.join(kimiHooksLibDir, file));
           removedKimiLibFiles++;
@@ -8881,7 +9018,7 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
     const hooksLibDir = path.join(hooksDir, 'lib');
     if (fs.existsSync(hooksLibDir)) {
       let removedLibFiles = 0;
-      for (const file of GSD_HOOK_LIB_FILES) {
+      for (const file of gsdHookLibFiles()) {
         const filePath = path.join(hooksLibDir, file);
         try {
           fs.unlinkSync(filePath);
@@ -8917,6 +9054,9 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
         console.log(`  ${green}✓${reset} Removed GSD hooks/package.json (CommonJS marker)`);
       }
     } catch { /* best-effort */ }
+    // Once GSD's hooks, helpers and marker are gone, an empty hooks dir is GSD's own leftover (#5335).
+    // rmdir fails on a non-empty dir, so a user's own hook scripts keep it in place.
+    try { fs.rmdirSync(hooksDir); } catch { /* not empty or absent */ }
   }
 
   // 4z. Remove the native plugin adapter (#1914, extended to Kilo by #2093).
@@ -9177,40 +9317,56 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
     }
   }
 
-  // 6. For OpenCode, clean up permissions from opencode.json or opencode.jsonc
+  // 6. For OpenCode, clean up permissions and the companion MCP entry from opencode.json or opencode.jsonc
   if (resolveInstallPlan(runtime).finishPermissionWriter === 'opencode') {
     const configPath = resolveOpencodeConfigPath(targetDir);
     if (fs.existsSync(configPath)) {
       try {
-        const config = parseJsonc(fs.readFileSync(configPath, 'utf8'));
-        let modified = false;
+        const originalText = fs.readFileSync(configPath, 'utf8');
+        const config = parseJsonc(originalText);
+        const edits = [];
 
         // Remove GSD permission entries
-        if (config.permission) {
+        if (config.permission && typeof config.permission === 'object') {
           for (const permType of ['read', 'external_directory']) {
-            if (config.permission[permType]) {
-              const keys = Object.keys(config.permission[permType]);
-              for (const key of keys) {
-                if (key.includes('gsd-core')) {
-                  delete config.permission[permType][key];
-                  modified = true;
-                }
-              }
-              // Clean up empty objects
-              if (Object.keys(config.permission[permType]).length === 0) {
-                delete config.permission[permType];
+            const section = config.permission[permType];
+            if (!section || typeof section !== 'object') continue;
+            for (const key of Object.keys(section)) {
+              if (key.includes('gsd-core')) {
+                delete section[key];
+                edits.push({ path: ['permission', permType, key], remove: true });
               }
             }
+            // Clean up empty objects
+            if (Object.keys(section).length === 0) delete config.permission[permType];
           }
-          if (Object.keys(config.permission).length === 0) {
-            delete config.permission;
-          }
+          if (Object.keys(config.permission).length === 0) delete config.permission;
         }
 
-        if (modified) {
-          fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+        // #5333: remove the companion MCP entry, but only while it is still the entry GSD wrote — a
+        // user-edited or user-defined `gsd` server stays. Both OpenCode generations' shapes: the 1.x
+        // `mcp.gsd` and the 2.x native `mcp.servers.gsd`.
+        let mcpRemoved = false;
+        if (config.mcp && typeof config.mcp === 'object') {
+          if (isGsdMcpEntry(config.mcp.gsd)) {
+            delete config.mcp.gsd;
+            edits.push({ path: ['mcp', 'gsd'], remove: true });
+            mcpRemoved = true;
+          }
+          const servers = config.mcp.servers;
+          if (servers && typeof servers === 'object' && isGsdMcpEntry(servers.gsd)) {
+            delete servers.gsd;
+            edits.push({ path: ['mcp', 'servers', 'gsd'], remove: true });
+            if (Object.keys(servers).length === 0) delete config.mcp.servers;
+            mcpRemoved = true;
+          }
+          if (Object.keys(config.mcp).length === 0) delete config.mcp;
+        }
+
+        if (edits.length > 0) {
+          writeJsoncConfig(configPath, originalText, config, edits);
           removedCount++;
-          console.log(`  ${green}✓${reset} Removed GSD permissions from ${path.basename(configPath)}`);
+          console.log(`  ${green}✓${reset} Removed GSD permissions${mcpRemoved ? ' and MCP server' : ''} from ${path.basename(configPath)}`);
         }
       } catch (e) {
         // Ignore JSON parse errors
@@ -9225,8 +9381,9 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
     const configPath = resolveKiloConfigPath(targetDir);
     if (fs.existsSync(configPath)) {
       try {
-        const config = parseJsonc(fs.readFileSync(configPath, 'utf8'));
-        let modified = false;
+        const originalText = fs.readFileSync(configPath, 'utf8');
+        const config = parseJsonc(originalText);
+        const edits = [];
 
         // Remove GSD permission entries
         if (config.permission) {
@@ -9236,7 +9393,7 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
               for (const key of keys) {
                 if (key.includes('gsd-core')) {
                   delete config.permission[permType][key];
-                  modified = true;
+                  edits.push({ path: ['permission', permType, key], remove: true });
                 }
               }
               // Clean up empty objects
@@ -9250,8 +9407,8 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
           }
         }
 
-        if (modified) {
-          fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+        if (edits.length > 0) {
+          writeJsoncConfig(configPath, originalText, config, edits);
           removedCount++;
           console.log(`  ${green}✓${reset} Removed GSD permissions from ${path.basename(configPath)}`);
         }
@@ -9293,6 +9450,67 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
     console.log(`  ${green}✓${reset} Removed ${MANIFEST_NAME}`);
   }
 
+  // #5335: the installer's own bookkeeping goes with it — the applied-migrations state and the migration
+  // journal. The journal's `-backups/` folders hold copies of files the USER had modified, so a folder that
+  // still has content is kept; everything GSD generated for itself (run records, rollback snapshots, empty
+  // folders) is removed.
+  const installStatePath = path.join(targetDir, 'gsd-install-state.json');
+  if (fs.existsSync(installStatePath)) {
+    fs.rmSync(installStatePath, { force: true });
+    removedCount++;
+    console.log(`  ${green}✓${reset} Removed gsd-install-state.json`);
+  }
+  const journalDir = path.join(targetDir, 'gsd-migration-journal');
+  if (fs.existsSync(journalDir)) {
+    let journalEntriesRemoved = 0;
+    try {
+      for (const entry of fs.readdirSync(journalDir, { withFileTypes: true })) {
+        const full = path.join(journalDir, entry.name);
+        if (entry.isSymbolicLink()) continue;
+        if (entry.isFile() && entry.name.endsWith('.json')) {
+          fs.rmSync(full, { force: true });
+          journalEntriesRemoved++;
+        } else if (entry.isDirectory() && entry.name.endsWith('-rollback')) {
+          fs.rmSync(full, { recursive: true, force: true });
+          journalEntriesRemoved++;
+        } else if (entry.isDirectory() && entry.name.endsWith('-backups')) {
+          try { fs.rmdirSync(full); journalEntriesRemoved++; } catch { /* holds the user's backed-up files: keep */ }
+        }
+      }
+      fs.rmdirSync(journalDir);
+    } catch { /* a non-empty journal dir (kept backups) stays */ }
+    if (journalEntriesRemoved > 0) {
+      removedCount++;
+      console.log(`  ${green}✓${reset} Removed gsd-migration-journal/ records`);
+    }
+  }
+
+  // #5335: the installer's user-artifact staging area is empty once the install it served is over. rmdir only
+  // succeeds on an empty directory, so anything still staged there is left for its owner.
+  try {
+    fs.rmdirSync(path.join(targetDir, '.gsd-staging', 'user-artifacts'));
+    fs.rmdirSync(path.join(targetDir, '.gsd-staging'));
+  } catch { /* absent or not empty */ }
+
+  // #5335: OpenCode never reads settings.json, but the shared-settings install step creates it as `{}`.
+  // An empty one carries nothing of the user's; a populated one is left alone.
+  if (resolveInstallPlan(runtime).finishPermissionWriter === 'opencode') {
+    const emptySettingsPath = path.join(targetDir, 'settings.json');
+    try {
+      const parsed = JSON.parse(fs.readFileSync(emptySettingsPath, 'utf8'));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.keys(parsed).length === 0) {
+        fs.rmSync(emptySettingsPath, { force: true });
+        removedCount++;
+        console.log(`  ${green}✓${reset} Removed empty settings.json`);
+      }
+    } catch { /* absent, unreadable or populated: leave it */ }
+  }
+
+  // #5335: the machine-wide defaults the install wrote for this runtime, when nothing else needs them.
+  if (revertNonClaudeDefaults(runtime)) {
+    removedCount++;
+  }
+
   if (removedCount === 0) {
     console.log(`  ${yellow}⚠${reset} No GSD files found to remove.`);
   }
@@ -9304,64 +9522,30 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
 }
 
 /**
- * Parse JSONC (JSON with Comments) by stripping comments and trailing commas.
- * OpenCode supports JSONC format via jsonc-parser, so users may have comments.
- * This is a lightweight inline parser to avoid adding dependencies.
+ * Write back an OpenCode/Kilo config the installer changed (#5334).
+ *
+ * A file that carries JSONC syntax (a `.jsonc` name, comments or trailing commas) is edited as text, so
+ * only the keys GSD owns change and the user's annotations and layout survive. Anything the text editor
+ * cannot handle, and plain JSON, keeps the previous `JSON.stringify` rewrite.
+ *
+ * @param {string} configPath
+ * @param {string|null} originalText  current file text, or null when the file is new
+ * @param {object} config             the mutated parsed config (used for the fallback)
+ * @param {Array<{path: string[], value?: unknown, remove?: boolean}>} edits
  */
-function parseJsonc(content) {
-  // Strip BOM if present
-  if (content.charCodeAt(0) === 0xFEFF) {
-    content = content.slice(1);
-  }
-
-  // Remove single-line and block comments while preserving strings
-  let result = '';
-  let inString = false;
-  let i = 0;
-  while (i < content.length) {
-    const char = content[i];
-    const next = content[i + 1];
-
-    if (inString) {
-      result += char;
-      // Handle escape sequences
-      if (char === '\\' && i + 1 < content.length) {
-        result += next;
-        i += 2;
-        continue;
-      }
-      if (char === '"') {
-        inString = false;
-      }
-      i++;
-    } else {
-      if (char === '"') {
-        inString = true;
-        result += char;
-        i++;
-      } else if (char === '/' && next === '/') {
-        // Skip single-line comment until end of line
-        while (i < content.length && content[i] !== '\n') {
-          i++;
-        }
-      } else if (char === '/' && next === '*') {
-        // Skip block comment
-        i += 2;
-        while (i < content.length - 1 && !(content[i] === '*' && content[i + 1] === '/')) {
-          i++;
-        }
-        i += 2; // Skip closing */
-      } else {
-        result += char;
-        i++;
-      }
+function writeJsoncConfig(configPath, originalText, config, edits) {
+  if (typeof originalText === 'string' && (configPath.endsWith('.jsonc') || hasJsoncFeatures(originalText))) {
+    let text = originalText;
+    for (const edit of edits) {
+      text = edit.remove ? removeJsoncValue(text, edit.path) : setJsoncValue(text, edit.path, edit.value);
+      if (text === null) break;
+    }
+    if (text !== null) {
+      fs.writeFileSync(configPath, text);
+      return;
     }
   }
-
-  // Remove trailing commas before } or ]
-  result = result.replace(/,(\s*[}\]])/g, '$1');
-
-  return JSON.parse(result);
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
 }
 
 /**
@@ -9383,9 +9567,11 @@ function configureOpencodePermissions(isGlobal = true, configDir = null) {
 
   // Read existing config or create empty object
   let config = {};
+  let originalText = null;
   if (fs.existsSync(configPath)) {
     try {
       const content = fs.readFileSync(configPath, 'utf8');
+      originalText = content;
       config = parseJsonc(content);
     } catch (e) {
       // Cannot parse - DO NOT overwrite user's config
@@ -9416,6 +9602,7 @@ function configureOpencodePermissions(isGlobal = true, configDir = null) {
     : `${opencodeConfigDir.replace(/\\/g, '/')}/gsd-core/*`;
 
   let modified = false;
+  const edits = [];
 
   // Configure read permission
   if (!config.permission.read || typeof config.permission.read !== 'object') {
@@ -9423,6 +9610,7 @@ function configureOpencodePermissions(isGlobal = true, configDir = null) {
   }
   if (config.permission.read[gsdPath] !== 'allow') {
     config.permission.read[gsdPath] = 'allow';
+    edits.push({ path: ['permission', 'read', gsdPath], value: 'allow' });
     modified = true;
   }
 
@@ -9432,6 +9620,7 @@ function configureOpencodePermissions(isGlobal = true, configDir = null) {
   }
   if (config.permission.external_directory[gsdPath] !== 'allow') {
     config.permission.external_directory[gsdPath] = 'allow';
+    edits.push({ path: ['permission', 'external_directory', gsdPath], value: 'allow' });
     modified = true;
   }
 
@@ -9448,9 +9637,10 @@ function configureOpencodePermissions(isGlobal = true, configDir = null) {
   if (config.mcp.gsd === undefined) {
     config.mcp.gsd = {
       type: 'local',
-      command: ['npx', '-y', '-p', PACKAGE_NAME, 'gsd-mcp-server'],
+      command: ['npx', '-y', '-p', PACKAGE_NAME, 'gsd-mcp-server', GSD_MCP_NO_PROMPTS_FLAG],
       enabled: true,
     };
+    edits.push({ path: ['mcp', 'gsd'], value: config.mcp.gsd });
     modified = true;
   }
 
@@ -9459,7 +9649,7 @@ function configureOpencodePermissions(isGlobal = true, configDir = null) {
   }
 
   // Write config back
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+  writeJsoncConfig(configPath, originalText, config, edits);
   console.log(`  ${green}✓${reset} Configured read permission for GSD docs`);
 }
 
@@ -9482,9 +9672,11 @@ function configureKiloPermissions(isGlobal = true, configDir = null) {
 
   // Read existing config or create empty object
   let config = {};
+  let originalText = null;
   if (fs.existsSync(configPath)) {
     try {
       const content = fs.readFileSync(configPath, 'utf8');
+      originalText = content;
       config = parseJsonc(content);
     } catch (e) {
       // Cannot parse - DO NOT overwrite user's config
@@ -9509,6 +9701,7 @@ function configureKiloPermissions(isGlobal = true, configDir = null) {
     : `${kiloConfigDir.replace(/\\/g, '/')}/gsd-core/*`;
 
   let modified = false;
+  const edits = [];
 
   // Configure read permission
   if (!config.permission.read || typeof config.permission.read !== 'object') {
@@ -9516,6 +9709,7 @@ function configureKiloPermissions(isGlobal = true, configDir = null) {
   }
   if (config.permission.read[gsdPath] !== 'allow') {
     config.permission.read[gsdPath] = 'allow';
+    edits.push({ path: ['permission', 'read', gsdPath], value: 'allow' });
     modified = true;
   }
 
@@ -9525,6 +9719,7 @@ function configureKiloPermissions(isGlobal = true, configDir = null) {
   }
   if (config.permission.external_directory[gsdPath] !== 'allow') {
     config.permission.external_directory[gsdPath] = 'allow';
+    edits.push({ path: ['permission', 'external_directory', gsdPath], value: 'allow' });
     modified = true;
   }
 
@@ -9533,7 +9728,7 @@ function configureKiloPermissions(isGlobal = true, configDir = null) {
   }
 
   // Write config back
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+  writeJsoncConfig(configPath, originalText, config, edits);
   console.log(`  ${green}✓${reset} Configured read permission for GSD docs`);
 }
 
@@ -10018,8 +10213,9 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
       // to git-cmd.js (validate-commit classifier) and gsd-graphify-rebuild.sh.
       const hooksLibDir = path.join(hooksDir, 'lib');
       if (fs.existsSync(hooksLibDir)) {
+        const hookLibNames = new Set(gsdHookLibFiles());
         for (const file of fs.readdirSync(hooksLibDir)) {
-          if (GSD_HOOK_LIB_FILES.includes(file)) {
+          if (hookLibNames.has(file)) {
             manifest.files[sharedHooksDirName + '/lib/' + file] = fileHash(path.join(hooksLibDir, file));
           }
         }
@@ -13644,6 +13840,13 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
         console.log(`  ${green}✓${reset} OpenCode ${gen.version || '2.x'} detected — GSD loads its OpenCode 2.x plugin entrypoint`);
       } else if (gen.generation === 1) {
         console.log(`  ${green}✓${reset} OpenCode ${gen.version || '1.x'} detected — GSD loads its OpenCode 1.x plugin entrypoint`);
+      }
+      // ADR-5331 D6 / E8: OpenCode 2.x migrates its data directory one way. Say so before it happens, and say
+      // when 1.x is installed over a data directory 2.x already migrated (1.x cannot open it).
+      const dataDir = ocv.resolveOpencodeDataDir();
+      const notice = ocv.describeDataDirNotice(gen.generation, ocv.classifyOpencodeDatabase(path.join(dataDir, 'opencode.db')), dataDir);
+      if (notice) {
+        console.log(notice.level === 'warn' ? `  ${yellow}⚠${reset} ${notice.text}` : `  ${dim}${notice.text}${reset}`);
       }
     } catch { /* detection is advisory */ }
   }

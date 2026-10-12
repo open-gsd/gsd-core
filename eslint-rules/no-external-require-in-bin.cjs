@@ -51,6 +51,9 @@ const BUILTIN_MODULES = new Set(builtinModules);
  * @returns {boolean}
  */
 function isBuiltinModule(specifier) {
+  // Every `node:`-prefixed specifier is a builtin by definition. `module.builtinModules` omits the
+  // prefix-only ones (`node:sqlite`, `node:sea`, `node:test`), which are real builtins all the same.
+  if (specifier.startsWith('node:')) return true;
   const bare = specifier.startsWith('node:') ? specifier.slice('node:'.length) : specifier;
   return BUILTIN_MODULES.has(bare) || BUILTIN_MODULES.has(specifier);
 }

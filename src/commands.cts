@@ -1390,6 +1390,21 @@ function cmdEffortSyncOpencode(cwd: string, raw: boolean, dryRun: boolean, confi
     // null — it would leave an unresolvable `variant: null` key on disk
     // forever. Test presence with its own regex, and only compare values
     // once presence is known.
+    // Native OpenCode 2.x form (ADR-5331 D5): the effort rides on the model reference as
+    // `provider/model#variant`, with no separate `variant:` key. When the agent's `model:` carries a
+    // `#` suffix that suffix IS the effort, so the sync edits the model instead of adding a second,
+    // conflicting `variant:` line.
+    const modelLineMatch = /^model:[ \t]*(.+?)[ \t]*$/m.exec(fmMatch.body);
+    const modelValue = modelLineMatch ? modelLineMatch[1].replace(/\r$/, '').replace(/^(["'])(.*)\1$/, '$2') : null;
+    const hashAt = modelValue === null ? -1 : modelValue.lastIndexOf('#');
+    let modelFormContent: string | null = null;
+    let modelFormFrom: string | null = null;
+    if (modelValue !== null && hashAt > 0) {
+      const base = modelValue.slice(0, hashAt);
+      modelFormFrom = modelValue.slice(hashAt + 1);
+      if (target !== null && modelFormFrom === target) { skipped++; continue; }
+      modelFormContent = setFrontmatterKeyLine(content, 'model', target === null ? base : `${base}#${target}`);
+    }
     const variantPresent = /^variant:/m.test(fmMatch.body);
     const variantMatch = /^variant:[ \t]*(.+?)[ \t]*$/m.exec(fmMatch.body);
     // `null` (key absent) and `''` (key present, value empty) are distinct
@@ -1399,14 +1414,16 @@ function cmdEffortSyncOpencode(cwd: string, raw: boolean, dryRun: boolean, confi
     // of them actually has a `variant:` line to remove.
     const currentVariant = variantPresent ? (variantMatch ? variantMatch[1] : '') : null;
 
-    if (target === null) {
-      if (!variantPresent) { skipped++; continue; }
-    } else if (variantPresent && currentVariant === target) {
-      skipped++;
-      continue;
+    if (modelFormContent === null) {
+      if (target === null) {
+        if (!variantPresent) { skipped++; continue; }
+      } else if (variantPresent && currentVariant === target) {
+        skipped++;
+        continue;
+      }
     }
 
-    changes.push({ agent: agentName, from: currentVariant, to: target });
+    changes.push({ agent: agentName, from: modelFormContent === null ? currentVariant : modelFormFrom, to: target });
     synced++;
 
     if (!dryRun) {
@@ -1436,7 +1453,7 @@ function cmdEffortSyncOpencode(cwd: string, raw: boolean, dryRun: boolean, confi
       try {
         fs.writeFileSync(
           tmpPath,
-          target === null ? removeFrontmatterKeyLine(content, 'variant') : setFrontmatterKeyLine(content, 'variant', target),
+          modelFormContent ?? (target === null ? removeFrontmatterKeyLine(content, 'variant') : setFrontmatterKeyLine(content, 'variant', target)),
           originalMode !== undefined ? { mode: originalMode } : undefined,
         );
         // Not redundant with the `mode` option above: `mode` only applies

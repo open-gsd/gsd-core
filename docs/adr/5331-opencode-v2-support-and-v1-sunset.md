@@ -197,7 +197,7 @@ The decisive facts are structural: one command name, one set of config locations
 | 3 | Which tool ids and event names do V2 hooks actually receive (`shell`, `edit`, `write`, `patch`, `subagent`; session/file events)? | Guards key on tool names. [D6] lists ids; `ctx.tool.list()` shows `read` ([D3]). | **Answered in Phase 1 (E13):** tools `edit glob grep question read shell skill subagent webfetch websearch write execute`; `execute.before` gets `{tool, input}`, `execute.after` `{tool, status, input, result}`; events carry `{type, location:{directory}, data:{sessionID,…}}` (`session.created`, `session.compaction.*`, `session.tool.*`, `session.execution.*`); **no `file.edited` and no `session.idle`** are emitted — the config-reload hook is driven from the edit tools instead |
 | 4 | Is there a V2 equivalent of `todowrite`? | GSD maps `TodoWrite` to it. Not on the Tools page ([D6]). | Phase 3 matrix. Phase 1 observation (E13): not in the 2.0.27 tool list |
 | 5 | Do `OPENCODE_CONFIG_DIR` / `OPENCODE_CONFIG` still redirect config on V2? | GSD's config-dir cascade uses them (`src/runtime-homes.cts:320-337`). Documented for V1 (https://opencode.ai/docs/config/); the V2 [D1] lists three fixed locations. | **Answered in Phase 1 (E14):** `OPENCODE_CONFIG_DIR` is honored on 2.0.27 and 1.18.29 (config and `plugins/` loaded from it). `OPENCODE_CONFIG` alone loaded no provider on either generation in the same harness, so behavior is identical and GSD does not rely on it for loading |
-| 6 | Is `codemode` honored on V1-shaped `mcp.<name>` entries? | `codemode` defaults to `true` ([D11]); GSD's tools may be reached only through Code Mode. | Phase 2 |
+| 6 | Is `codemode` honored on V1-shaped `mcp.<name>` entries? | `codemode` defaults to `true` ([D11]); GSD's tools may be reached only through Code Mode. | **Resolved in Phase 2 (E19):** a V1-shaped `mcp.gsd` connects on 2.0.27 (`mcp connected server=gsd tools=3`). Whether it honors `codemode` could not be observed offline (a model request never listed the server's tools, with or without the field), so GSD writes no `codemode` key and keeps 2.x's default Code Mode; its tools are called by exact name from workflows and nothing depends on them being native tools |
 | 7 | How does the dual export behave exactly at the documented floor, OpenCode 1.18.29? | [D2] says object entrypoints work from 1.18.29; E6 shows 1.19.0 also calls `setup()`. | **Answered in Phase 1 (E15):** 1.18.29 also calls `setup()` with a context that has no `tool` (keys `options agent aisdk catalog command integration plugin reference skill`); the guard keeps it inert, and the guard, a full install and the reviewer lane all pass on 1.18.29 |
 | 8 | Which plugin directory does Kilo read (`plugin/` per [K2] vs the `plugins/` GSD installs), and are `.opencode` directories still scanned? | Kilo must not regress ([K1] says it no longer falls back to `.opencode`). | Phase 2/4 |
 
@@ -215,6 +215,28 @@ New evidence from the Phase 1 implementation, each reproduced on `opencode` 1.18
 | E17 | 2.0.27 resolves its working directory from `$PWD`, not the process cwd: a child spawned with `cwd: X` but an inherited `PWD` ran in the parent's directory. | The worktree-dispatch step must launch from a shell that has `cd`'d into the worktree (documented in `executor-isolation-dispatch.md`). |
 
 Descriptor reconciliation (`runtime: bun`, `modelMode: active`): resolved in `docs/reference/host-integration-capability-matrix.md` § OpenCode 2.x notes — the matrix, not ADR-1239's pre-research prose table, is the source of truth, and `runtime` names the host's plugin runtime while GSD hooks run under Node.
+
+## Amendment — 2026-10-12, Phase 2 findings (#5338)
+
+New evidence from the Phase 2 implementation, reproduced on `opencode` 1.18.29 and 2.0.27 unless noted
+(`tests/opencode-*.test.cjs`, `tests/opencode-generations.smoke.test.cjs`).
+
+| ID | Finding | Consequence |
+|---|---|---|
+| E18 | **Corrects E8.** Opening a 1.x data directory with 2.x adds the `session_v2` tables **beside** `session`, and 1.x keeps working (its session count still increments). Only a data directory 2.x creates from scratch has no `session` table, and 1.x then fails with `Database is not empty and has no session table`. The binary's own `opencode debug paths` names the data dir on both generations. | The installer classifies the schema (`v1` / `v2` / `both`) read-only and warns only for 1.x over a 2.x-created directory; 2.x over a 1.x one is informational, not "one-way". |
+| E19 | A 1.x-shaped `mcp.gsd` entry connects on 2.0.27 and its MCP **prompts** appear as `gsd:<name>` slash commands next to the 72 `gsd-<name>` command files (145 commands, 71 duplicates); with the entry registered `--no-prompts` there are 74 and no duplicates. | New installs register `--no-prompts`; migration 011 converges existing GSD-written entries (both shapes). `codemode`: see open question 6. |
+| E20 | An agent file with `permission: {edit: deny, bash: deny}` loses the edit/write/shell tools from the model's tool list on both generations (2.x translates the 1.x form). | Agents get a `permission:` block denying the tools their `tools:` allowlist leaves out; allowed tools keep the user's default; one form serves both generations. |
+| E21 | Installed commands carrying a legacy `tools:` object, `effort:` and `requires:` load on 2.0.27 with no warning. No GSD command selects an `agent:`, so none can be demoted to a background child session. | Nothing to change; a test fails if a command gains `agent:` without `subagent: false`. |
+| E22 | On 2.x, commands (`command.list`) and skills (`skill.list`) are separate surfaces: skills are loaded by the `skill` tool or `@skill-id`, not typed as slash commands. The installer's "72 triggers shadowed" note comes from the uniform `triggerPrecedence: [skills, commands]` default, which does not describe OpenCode. | Both surfaces stay. The note's wording is tracked as a separate issue (a descriptor axis is an ADR-1016 vocabulary change, out of this epic). |
+| E23 | The 364 `~/.claude/gsd-core/...` references are reached through the `Read` tool, which the plugin rewrites to the installed payload on both generations (verified on real binaries). | Functionally reachable; the installer warning is informational. |
+| E24 | `plugins/package.json` (the CommonJS marker) is present in every real 2.0.27 run above and the plugin loads; the CommonJS plugin needs no `@opencode/plugin` import. | Marker is harmless on 2.x. |
+| E25 | `opencode run` without `--standalone` on 2.x attaches to a managed service on a fixed port that outlives the run (E12). | Tests and the reviewer lane use `--standalone`. |
+
+Migration 011 (D6), as built: the only GSD-owned configuration that has to change when a user moves between
+generations is the `gsd` MCP entry; the plugin is replaced by the ordinary managed-file refresh when the installer
+re-runs (2.x rejects the old plugin until it does, so the upgrade note says to re-run it). The migration therefore does
+not depend on which generation is installed, and the rollback hazard is a read-only installer warning, not a migration
+action, because it concerns a database GSD never writes.
 
 ## Action Items
 

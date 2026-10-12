@@ -24,7 +24,9 @@ const { runServer } = require('../gsd-core/bin/lib/mcp-server.cjs');
 runServer({
   input: process.stdin,
   output: process.stdout,
-  ctx: { cwd: process.cwd() },
+  // --no-prompts: do not advertise the prompt catalog (hosts that turn MCP prompts into slash commands
+  // would list every GSD command twice).
+  ctx: { cwd: process.cwd(), prompts: !process.argv.includes('--no-prompts') },
 }).catch((err) => {
   process.stderr.write(String((err && err.message) || err) + '\n');
   process.exit(1);

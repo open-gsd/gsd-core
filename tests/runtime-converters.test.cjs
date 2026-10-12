@@ -174,7 +174,11 @@ for (const { label, convert, configDir } of flatRuntimeSuites) {
         assert.ok(frontmatter.includes('glob: allow'), 'Glob should map to glob: allow');
         assert.ok(frontmatter.includes('task: deny'), 'unspecified permissions should be denied');
       } else {
-        assert.ok(!frontmatter.includes('permission:'), 'OpenCode agents should not emit permission block');
+        // #5338: a tools allowlist becomes denials for the tools it leaves out; allowed tools are not forced to allow.
+        assert.ok(frontmatter.includes('permission:'), 'OpenCode agents should emit a permission block for a tools allowlist');
+        assert.ok(!/^ {2}(read|edit|bash|grep|glob): /m.test(frontmatter), 'allowed tools are left to the user default');
+        assert.ok(frontmatter.includes('task: deny'), 'unspecified tools should be denied');
+        assert.ok(frontmatter.includes('webfetch: deny'), 'unspecified tools should be denied');
       }
     });
 
@@ -2731,7 +2735,7 @@ describe('converters read the frontmatter block the one fence owner finds', () =
   test('OpenCode and Kilo agent conversion keep an `a---b` description whole', () => {
     assert.strictEqual(
       convertClaudeToOpencodeFrontmatter(AGENT, { isAgent: true }),
-      '---\nname: gsd-x\ndescription: Splits a---b inputs\nmode: subagent\n---\n\nBody\n',
+      '---\nname: gsd-x\ndescription: Splits a---b inputs\nmode: subagent\npermission:\n  edit: deny\n  grep: deny\n  glob: deny\n  webfetch: deny\n  websearch: deny\n  task: deny\n  skill: deny\n  todowrite: deny\n---\n\nBody\n',
     );
     const kilo = convertClaudeToKiloFrontmatter(AGENT, { isAgent: true });
     assert.ok(kilo.startsWith('---\nname: gsd-x\ndescription: Splits a---b inputs\nmode: subagent\npermission:\n'), kilo);
