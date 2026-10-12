@@ -1702,6 +1702,11 @@ test('shipped installer-migration checksums are locked to a committed baseline (
     // converges upgraded installs. Global scope only — local .agents is live.
     '2026-08-26-antigravity-retire-confighome-artifacts':
       'sha256:52764c43418accdc26c89482b1a46bf9ebcde1c1d9a80e302971a7b068a3be3c',
+    // Migration 011 (NEW, added here per this test's own sanctioned "adding a new
+    // migration" case): add --no-prompts to the GSD-written OpenCode mcp.gsd command
+    // so OpenCode 2.x does not list the GSD prompts a second time (#5338).
+    '2026-10-12-opencode-mcp-no-prompts':
+      'sha256:220bb8606df910bec58b1351dd6db75536b7563449f32f2b6180b109a79a449e',
   };
 
   const { DEFAULT_MIGRATIONS_DIR, migrationChecksum: computeChecksum } = require('../gsd-core/bin/lib/installer-migrations.cjs');
