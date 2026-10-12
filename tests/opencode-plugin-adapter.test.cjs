@@ -252,7 +252,7 @@ test('handleHookResult: silent allow is a no-op', () => {
 // Build a self-contained payload dir: <root>/hooks/<stub>.js, <root>/gsd-core/,
 // and <root>/plugins/gsd-core.js (a copy of the adapter). Returns the loaded
 // plugin module for that layout. Each stub hook echoes a fixed JSON verdict.
-function buildInstalledLayout(t, stubHooks) {
+function buildInstalledLayout(t, stubHooks, files = {}) {
   // realpath so `root` matches Node's realpath-resolved __dirname inside the
   // copied plugin (macOS /var → /private/var symlink would otherwise diverge).
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-oc-plugin-')));
@@ -264,6 +264,10 @@ function buildInstalledLayout(t, stubHooks) {
 
   for (const [name, jsBody] of Object.entries(stubHooks)) {
     fs.writeFileSync(path.join(root, 'hooks', name), jsBody);
+  }
+  for (const [rel, content] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+    fs.writeFileSync(path.join(root, rel), content);
   }
 
   // Copy the real adapter into the payload's plugins/ dir so REPO_ROOT resolves
@@ -702,11 +706,12 @@ test('setup is non-enumerable, callable unbound, awaits its hook registrations a
   assert.equal(desc.writable, false);
   assert.equal(desc.configurable, false);
   const { setup } = v2Decode(bunNamespace(raw));
-  const { hooks, settled, ctx } = fakeV2Ctx(os.tmpdir());
+  const { hooks, settled, registry, ctx } = fakeV2Ctx(os.tmpdir());
   const cleanup = await setup(ctx);
   assert.equal(typeof cleanup, 'function');
   assert.equal(typeof hooks['tool.execute.before'], 'function');
   assert.deepEqual(settled, Object.keys(hooks));
+  assert.equal(registry.transforms.command.length, 1);
   cleanup();
 });
 
@@ -913,7 +918,39 @@ function fakeV2Ctx(directory) {
       }));
     },
   });
-  return { hooks, settled, events, ctx: { location: { directory }, tool: domain('tool'), shell: domain('shell'), session: domain('session'), event: { subscribe: events.subscribe } } };
+  const registry = { transforms: { command: [], agent: [], skill: [] }, prompts: [], existingCommands: [], listCalls: 0 };
+  const transform = (kind) => (fn) => {
+    registry.transforms[kind].push(fn);
+    return Promise.resolve({ dispose() {} });
+  };
+  return {
+    hooks,
+    settled,
+    events,
+    registry,
+    ctx: {
+      location: { directory },
+      tool: domain('tool'),
+      shell: domain('shell'),
+      session: { ...domain('session'), prompt: async (input) => { registry.prompts.push(input); } },
+      event: { subscribe: events.subscribe },
+      command: {
+        list: async () => {
+          registry.listCalls += 1;
+          return { location: { directory }, data: registry.existingCommands.slice() };
+        },
+        transform: transform('command'),
+      },
+      agent: { transform: transform('agent') },
+      skill: { transform: transform('skill') },
+    },
+  };
+}
+
+function replayCommands(registry) {
+  const commands = new Map();
+  for (const fn of registry.transforms.command) fn({ add: (definition) => commands.set(definition.name, definition) });
+  return commands;
 }
 
 test('V2 setup bridges execute.before: a shell read of .env is blocked with the guard reason, an allowed write resolves', async (t) => {
@@ -2204,4 +2241,68 @@ test('V2 session event loop runs no SessionStart hook for an event the host yiel
   await nextTurn();
   assert.deepEqual(spawns, []);
   assert.deepEqual(errors, []);
+});
+
+const PACKAGE_COMMANDS = {
+  'commands/gsd/hello.md': '---\ndescription: Say hello\n---\nHello $ARGUMENTS from @~/.claude/gsd-core/x.md\n',
+  'commands/gsd/plain.md': 'Plain body\n',
+  'commands/gsd/taken.md': 'Taken body\n',
+};
+
+async function setupPackageTree(t, files = PACKAGE_COMMANDS, prepare = () => {}) {
+  const { root, mod } = buildInstalledLayout(t, ALL_GUARD_STUBS, files);
+  const fake = fakeV2Ctx(makeProjectDir(t));
+  prepare(fake);
+  const cleanup = await mod.setup(fake.ctx);
+  t.after(cleanup);
+  return { root, cleanup, ...fake };
+}
+
+test('V2 package tree: commands register as gsd-<name>, skipping names the host already lists', async (t) => {
+  const { registry } = await setupPackageTree(t, PACKAGE_COMMANDS, ({ registry }) => {
+    registry.existingCommands.push({ name: 'gsd-taken' });
+  });
+  const commands = replayCommands(registry);
+  assert.deepEqual([...commands.keys()].sort(), ['gsd-hello', 'gsd-plain']);
+  assert.equal(commands.get('gsd-hello').description, 'Say hello');
+  assert.equal(commands.get('gsd-plain').description, 'GSD plain command');
+});
+
+test('V2 package tree: a command execute prompts the session with the rewritten, expanded template', async (t) => {
+  const { root, registry } = await setupPackageTree(t);
+  const commands = replayCommands(registry);
+  await commands.get('gsd-hello').execute({ sessionID: 's1', prompt: { text: 'world', files: ['f.txt'] }, delivery: 'queue' });
+  assert.deepEqual(registry.prompts, [
+    { text: `Hello world from @${root}/gsd-core/x.md`, files: ['f.txt'], sessionID: 's1', delivery: 'queue' },
+  ]);
+});
+
+test('V2 package tree: a command without placeholders appends the input after a blank line', async (t) => {
+  const { registry } = await setupPackageTree(t);
+  await replayCommands(registry).get('gsd-plain').execute({ sessionID: 's1', prompt: { text: 'extra' }, delivery: 'steer' });
+  assert.equal(registry.prompts[0].text, 'Plain body\n\nextra');
+});
+
+test('V2 package tree: expandCommandTemplate follows the host template semantics without shell interpolation', () => {
+  const cases = [
+    ['Do $1 then $2', 'a "b c" d', 'Do a then b c d'],
+    ['$1-$3', 'x', 'x-'],
+    ['Run $ARGUMENTS now', 'raw input', 'Run raw input now'],
+    ['Plain', 'more', 'Plain\n\nmore'],
+    ['Plain', '   ', 'Plain'],
+    ['Use $1', "'quoted arg' rest", 'Use quoted arg rest'],
+    ['$1|$2', '[Image 1] tail', '[Image 1]|tail'],
+  ];
+  for (const [template, input, expected] of cases) {
+    assert.equal(_internals.expandCommandTemplate(template, input), expected, `${template} <- ${input}`);
+  }
+});
+
+test('V2 package tree: a file-copy install lists no commands and registers no transform', async (t) => {
+  const { mod } = buildInstalledLayout(t, ALL_GUARD_STUBS);
+  const { registry, ctx } = fakeV2Ctx(makeProjectDir(t));
+  const cleanup = await mod.setup(ctx);
+  t.after(cleanup);
+  assert.equal(registry.listCalls, 0);
+  assert.deepEqual(registry.transforms, { command: [], agent: [], skill: [] });
 });

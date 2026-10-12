@@ -590,6 +590,57 @@ function prepareSkillsCache() {
   return SKILLS_CACHE;
 }
 
+// The 2.x host's command template expansion, without its !`shell` step.
+function expandCommandTemplate(template, input) {
+  const args = (input.match(/(?:\[Image\s+\d+\]|"[^"]*"|'[^']*'|[^\s"']+)/gi) ?? []).map((a) => a.replace(/^["']|["']$/g, ""));
+  const placeholders = template.match(/\$(\d+)/g) ?? [];
+  const last = Math.max(0, ...placeholders.map((p) => Number(p.slice(1))));
+  const expanded = template.replaceAll(/\$(\d+)/g, (_, index) => {
+    const position = Number(index);
+    const argIndex = position - 1;
+    if (argIndex >= args.length) return "";
+    if (position === last) return args.slice(argIndex).join(" ");
+    return args[argIndex];
+  });
+  const withArguments = expanded.replaceAll("$ARGUMENTS", () => input);
+  return placeholders.length === 0 && !template.includes("$ARGUMENTS") && input.trim()
+    ? `${withArguments}\n\n${input}`.trim()
+    : withArguments.trim();
+}
+
+// 2.x has no config hook. A throwing transform callback disables every
+// registration of the plugin, so all reads happen here and the callbacks only
+// call editor methods.
+async function registerPackageTree(ctx) {
+  const commands = loadDir(
+    COMMANDS,
+    (f) => "gsd-" + f.slice(0, -3),
+    (body, fm, name) => ({
+      template: rewriteRefs(body.trim()),
+      description: fm.description || `GSD ${name.slice(0, -3)} command`,
+    }),
+  );
+  const listed = (await ctx.command.list())?.data ?? [];
+  const taken = new Set(listed.map((c) => c.name));
+  const newCommands = Object.entries(commands).filter(([name]) => !taken.has(name));
+  await ctx.command.transform((editor) => {
+    for (const [name, { template, description }] of newCommands) {
+      editor.add({
+        name,
+        description,
+        execute: async (input) => {
+          await ctx.session.prompt({
+            ...input.prompt,
+            sessionID: input.sessionID,
+            text: expandCommandTemplate(template, input.prompt?.text ?? ""),
+            delivery: input.delivery,
+          });
+        },
+      });
+    }
+  });
+}
+
 // ===========================================================================
 // Plugin entry
 // ===========================================================================
@@ -989,6 +1040,13 @@ async function GsdCoreSetup(ctx) {
       if (!controller.signal.aborted) console.error(`[gsd-core] event stream failed: ${errorText(err)}`);
     }
   })().catch(() => {});
+  if (IS_PACKAGE_TREE) {
+    try {
+      await registerPackageTree(ctx);
+    } catch (err) {
+      console.error(`[gsd-core] package registration failed: ${errorText(err)}`);
+    }
+  }
   return () => controller.abort();
 }
 
@@ -1001,6 +1059,7 @@ GsdCorePlugin._internals = {
   locateFrontmatterFence,
   parseFrontmatter,
   rewriteContent,
+  expandCommandTemplate,
   isGsdManagedFile,
   handleHookResult,
   hookSpawnOptions,
