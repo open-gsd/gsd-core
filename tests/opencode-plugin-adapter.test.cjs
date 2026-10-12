@@ -712,6 +712,8 @@ test('setup is non-enumerable, callable unbound, awaits its hook registrations a
   assert.equal(typeof hooks['tool.execute.before'], 'function');
   assert.deepEqual(settled, Object.keys(hooks));
   assert.equal(registry.transforms.command.length, 1);
+  assert.equal(registry.transforms.agent.length, 1);
+  assert.equal(registry.transforms.skill.length, 1);
   cleanup();
 });
 
@@ -951,6 +953,27 @@ function replayCommands(registry) {
   const commands = new Map();
   for (const fn of registry.transforms.command) fn({ add: (definition) => commands.set(definition.name, definition) });
   return commands;
+}
+
+function replayAgents(registry, existing = {}) {
+  const agents = new Map(Object.entries(existing));
+  const editor = {
+    get: (id) => agents.get(id),
+    update: (id, fn) => {
+      const agent = agents.get(id) ?? { id };
+      fn(agent);
+      agents.set(id, agent);
+    },
+  };
+  for (const fn of registry.transforms.agent) fn(editor);
+  return agents;
+}
+
+function replaySkills(registry, existing = {}) {
+  const skills = new Map(Object.entries(existing));
+  const editor = { get: (id) => skills.get(id), add: (info) => skills.set(info.id, info) };
+  for (const fn of registry.transforms.skill) fn(editor);
+  return skills;
 }
 
 test('V2 setup bridges execute.before: a shell read of .env is blocked with the guard reason, an allowed write resolves', async (t) => {
@@ -2305,4 +2328,119 @@ test('V2 package tree: a file-copy install lists no commands and registers no tr
   t.after(cleanup);
   assert.equal(registry.listCalls, 0);
   assert.deepEqual(registry.transforms, { command: [], agent: [], skill: [] });
+});
+
+const PACKAGE_TREE = {
+  ...PACKAGE_COMMANDS,
+  'agents/gsd-x.md': '---\ndescription: X agent\n---\n\n\nBody @~/.claude/gsd-core/y.md\n\n',
+  'agents/gsd-z.md': 'Z body\n',
+  'agents/gsd-m.md': '---\nmode: primary\n---\nM body\n',
+  'agents/gsd-kept.md': 'Kept body\n',
+  'skills/gsd-s/SKILL.md': '---\nname: gsd-s\ndescription: "S skill"\n---\nUse ~/.claude/gsd-core/workflows/s.md\n',
+  'skills/gsd-n/SKILL.md': 'N body\n',
+  'skills/not-a-skill/README.md': 'Not a skill\n',
+  'skills/gsd-kept/SKILL.md': 'Kept skill\n',
+};
+
+const V2_GUARD_HOOKS = ['tool.execute.before', 'tool.execute.after', 'shell.create.before', 'session.compaction'];
+
+test('V2 package tree: agents upsert with the rewritten body as system, skipping ids the host already has', async (t) => {
+  const { root, registry } = await setupPackageTree(t, PACKAGE_TREE);
+  const kept = { id: 'gsd-kept', system: 'host agent' };
+  const agents = replayAgents(registry, { 'gsd-kept': kept });
+  assert.deepEqual(agents.get('gsd-x'), {
+    id: 'gsd-x',
+    system: `Body @${root}/gsd-core/y.md`,
+    description: 'X agent',
+    mode: 'subagent',
+  });
+  assert.equal(agents.get('gsd-z').description, 'GSD gsd-z agent');
+  assert.equal(agents.get('gsd-m').mode, 'primary');
+  assert.deepEqual(agents.get('gsd-kept'), { id: 'gsd-kept', system: 'host agent' });
+});
+
+test('V2 package tree: an agent mode the host does not accept falls back to subagent', async (t) => {
+  const { registry } = await setupPackageTree(t, {
+    'commands/gsd/hello.md': 'Hello\n',
+    'agents/gsd-all.md': '---\nmode: all\n---\nA\n',
+    'agents/gsd-quoted.md': "---\nmode: 'primary'\n---\nQ\n",
+    'agents/gsd-typo.md': '---\nmode: primay\n---\nT\n',
+  });
+  const agents = replayAgents(registry);
+  assert.equal(agents.get('gsd-all').mode, 'all');
+  assert.equal(agents.get('gsd-quoted').mode, 'subagent');
+  assert.equal(agents.get('gsd-typo').mode, 'subagent');
+});
+
+test('V2 package tree: skills add inline rewritten content with the absolute SKILL.md path, skipping ids the host already has', async (t) => {
+  const { root, registry } = await setupPackageTree(t, PACKAGE_TREE);
+  const skills = replaySkills(registry, { 'gsd-kept': { id: 'gsd-kept', name: 'host skill' } });
+  assert.deepEqual(skills.get('gsd-s'), {
+    id: 'gsd-s',
+    name: 'gsd-s',
+    description: 'S skill',
+    path: path.join(root, 'skills', 'gsd-s', 'SKILL.md'),
+    content: `Use ${root}/gsd-core/workflows/s.md\n`,
+  });
+  assert.equal(skills.get('gsd-n').name, 'gsd-n');
+  assert.equal('description' in skills.get('gsd-n'), false);
+  assert.equal(skills.has('not-a-skill'), false);
+  assert.deepEqual(skills.get('gsd-kept'), { id: 'gsd-kept', name: 'host skill' });
+});
+
+test('V2 package tree: replaying every transform callback twice yields the same entries without throwing', async (t) => {
+  const { registry } = await setupPackageTree(t, PACKAGE_TREE);
+  const twice = { transforms: Object.fromEntries(Object.entries(registry.transforms).map(([k, fns]) => [k, [...fns, ...fns]])) };
+  const summary = (commands) => [...commands.values()].map(({ name, description }) => [name, description]);
+  assert.deepEqual(summary(replayCommands(twice)), summary(replayCommands(registry)));
+  assert.deepEqual(replayAgents(twice), replayAgents(registry));
+  assert.deepEqual(replaySkills(twice), replaySkills(registry));
+});
+
+test('V2 package tree: a hot reload registers exactly one callback per domain again', async (t) => {
+  const { mod } = buildInstalledLayout(t, ALL_GUARD_STUBS, PACKAGE_TREE);
+  const dir = makeProjectDir(t);
+  (await mod.setup(fakeV2Ctx(dir).ctx))();
+  const { registry, ctx } = fakeV2Ctx(dir);
+  const cleanup = await mod.setup(ctx);
+  t.after(cleanup);
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(registry.transforms).map(([k, fns]) => [k, fns.length])),
+    { command: 1, agent: 1, skill: 1 },
+  );
+});
+
+test('V2 package tree: registration starts only after every guard hook is registered', async (t) => {
+  let settledAtList;
+  await setupPackageTree(t, PACKAGE_TREE, ({ ctx, settled }) => {
+    const list = ctx.command.list;
+    ctx.command.list = () => {
+      settledAtList = [...settled];
+      return list();
+    };
+  });
+  assert.deepEqual([...settledAtList].sort(), [...V2_GUARD_HOOKS].sort());
+});
+
+for (const [what, message, breakIt] of [
+  ['ctx.command.list', 'list down', (ctx) => { ctx.command.list = () => Promise.reject(new Error('list down')); }],
+  ['ctx.agent.transform', 'agent down', (ctx) => { ctx.agent.transform = () => Promise.reject(new Error('agent down')); }],
+]) {
+  test(`V2 package tree: a rejecting ${what} is logged once and leaves every guard hook registered`, async (t) => {
+    const errors = captureErrors(t);
+    const { hooks, cleanup } = await setupPackageTree(t, PACKAGE_TREE, ({ ctx }) => breakIt(ctx));
+    assert.equal(typeof cleanup, 'function');
+    for (const key of V2_GUARD_HOOKS) assert.equal(typeof hooks[key], 'function', key);
+    const lines = errors.filter((e) => e.includes('[gsd-core]'));
+    assert.equal(lines.length, 1);
+    assert.ok(lines[0].includes(message), lines[0]);
+  });
+}
+
+test('V2 package tree: a tree without agents/ or skills/ registers empty agent and skill callbacks without logging', async (t) => {
+  const errors = captureErrors(t);
+  const { registry } = await setupPackageTree(t);
+  assert.equal(replayAgents(registry).size, 0);
+  assert.equal(replaySkills(registry).size, 0);
+  assert.deepEqual(errors, []);
 });

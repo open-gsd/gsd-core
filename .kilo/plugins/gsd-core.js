@@ -620,6 +620,30 @@ async function registerPackageTree(ctx) {
       description: fm.description || `GSD ${name.slice(0, -3)} command`,
     }),
   );
+  const agents = loadDir(
+    AGENTS,
+    (f) => f.slice(0, -3),
+    (body, fm, name) => ({
+      system: rewriteRefs(body.trim()),
+      description: fm.description || `GSD ${name.slice(0, -3)} agent`,
+      mode: ["subagent", "primary", "all"].includes(fm.mode) ? fm.mode : "subagent",
+    }),
+  );
+  const skills = [];
+  if (fs.existsSync(SKILLS)) {
+    for (const dir of fs.readdirSync(SKILLS)) {
+      const file = path.join(SKILLS, dir, "SKILL.md");
+      if (!fs.existsSync(file)) continue;
+      const { frontmatter: fm, body } = parseFrontmatter(fs.readFileSync(file, "utf8"));
+      skills.push({
+        id: dir,
+        name: fm.name || dir,
+        ...(fm.description ? { description: fm.description } : {}),
+        path: file,
+        content: rewriteContent(body),
+      });
+    }
+  }
   const listed = (await ctx.command.list())?.data ?? [];
   const taken = new Set(listed.map((c) => c.name));
   const newCommands = Object.entries(commands).filter(([name]) => !taken.has(name));
@@ -637,6 +661,21 @@ async function registerPackageTree(ctx) {
           });
         },
       });
+    }
+  });
+  await ctx.agent.transform((editor) => {
+    for (const [id, { system, description, mode }] of Object.entries(agents)) {
+      if (editor.get(id)) continue;
+      editor.update(id, (agent) => {
+        agent.system = system;
+        agent.description = description;
+        agent.mode = mode;
+      });
+    }
+  });
+  await ctx.skill.transform((editor) => {
+    for (const skill of skills) {
+      if (!editor.get(skill.id)) editor.add(skill);
     }
   });
 }
