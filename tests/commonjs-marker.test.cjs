@@ -484,6 +484,8 @@ describe('#2544 regression: install must not clobber the config-root package.jso
     const pluginsDir = path.join(root, 'plugins');
     fs.unlinkSync(path.join(pluginsDir, 'gsd-core.js'));
     fs.unlinkSync(path.join(pluginsDir, 'package.json'));
+    // OpenCode also stages its 2.x terminal-client plugin in a subdirectory (ADR-5331 Phase 3).
+    cleanup(path.join(pluginsDir, 'gsd-statusline'));
     assert.deepEqual(fs.readdirSync(pluginsDir), [], 'precondition: the dir is empty');
 
     runInstall(root, 'opencode', ['--uninstall']);
