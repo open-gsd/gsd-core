@@ -1204,6 +1204,12 @@ export type StateTransitionIntent =
       isLastPhase: boolean;
       planCount: number;
       summaryCount: number;
+      /**
+       * #4824: the selected next phase's on-disk state, from the Phase Status
+       * ladder. Absent/null keeps the historical `Ready to plan` wording (the
+       * next phase has no directory yet, or the caller did not classify it).
+       */
+      nextPhaseDisk?: NextPhaseDisk | null;
     }
   | { kind: 'plannedPhase'; phaseNumber: string | number; phaseName: string | null; planCount: number | null }
   | { kind: 'milestoneSwitch'; version: string; name: string }
@@ -2090,6 +2096,38 @@ function advancePlanCore(content: string, deps: StateTransitionDeps): StateTrans
 // completePhase — intent implementation (Phase 3)
 // ----------------------------------------------------------------------------
 
+/** #4824: the next phase's disk facts, as classified by the Phase Status ladder. */
+type NextPhaseDisk = {
+  status: import('./phase-status.cjs').PhaseStatus;
+  planCount: number;
+  summaryCount: number;
+};
+
+/**
+ * #4824: Status / Current Plan / Stopped-at wording for the phase a
+ * completion hands off to. The historical `Ready to plan` is only true for a
+ * phase with no plans; a phase that already has PLANs routes to execution,
+ * and one whose plans all have SUMMARYs awaits verification — never back to
+ * `/gsd-plan-phase`. Which phase is selected stays #4078's rule.
+ */
+function nextPhaseWording(disk: NextPhaseDisk | null): { status: string; currentPlan: string; stoppedAt: string } {
+  switch (disk?.status) {
+    case 'PLANNED':
+      return { status: 'Ready to execute', currentPlan: 'Not started', stoppedAt: 'ready to execute' };
+    case 'IN_PROGRESS':
+      return { status: 'Ready to execute', currentPlan: String(disk.summaryCount + 1), stoppedAt: 'ready to execute' };
+    case 'EXECUTED':
+    case 'NEEDS_REVIEW':
+      return {
+        status: 'Phase complete — ready for verification',
+        currentPlan: String(disk.planCount),
+        stoppedAt: 'ready to verify',
+      };
+    default:
+      return { status: 'Ready to plan', currentPlan: 'Not started', stoppedAt: 'ready to plan' };
+  }
+}
+
 /**
  * Apply a `completePhase` transition to STATE.md content.
  *
@@ -2097,7 +2135,9 @@ function advancePlanCore(content: string, deps: StateTransitionDeps): StateTrans
  * (phase.cts) onto the substrate. Owns the field-classification-governed body
  * mutations: Current Phase (preserving the `of total` shape and phase name),
  * Current Phase Name, Status (`All phases complete` on the last phase, else
- * `Ready to plan` per ADR-2207), Current Plan (`Not started`), Last Activity + Description,
+ * `Ready to plan` per ADR-2207 — or, #4824, the next phase's disk-derived
+ * wording when it is already planned or executed), Current Plan (`Not started`
+ * unless the next phase is in flight), Last Activity + Description,
  * and the Completed/Total Phases + Progress percent block (re-derived from the
  * roadmap via the injected `roadmapProvider`).
  *
@@ -2121,11 +2161,13 @@ function completePhaseCore(
     isLastPhase: boolean;
     planCount: number;
     summaryCount: number;
+    nextPhaseDisk?: NextPhaseDisk | null;
   },
   deps: StateTransitionDeps,
 ): StateTransitionResult {
   const updated: string[] = [];
   const today = deps.clock.localToday();
+  const nextWording = nextPhaseWording(intent.isLastPhase ? null : intent.nextPhaseDisk ?? null);
 
   // Consult the field-classification table for the frontmatter keys this
   // transition touches (same guard beginPhaseCore applies). A missing row is a
@@ -2196,7 +2238,7 @@ function completePhaseCore(
   // Status — `All phases complete` on the final phase (ADR-2207), otherwise
   // `Ready to plan`. Milestone termination (`<version> milestone complete`) is
   // owned solely by the milestone-close verb (milestoneCompleteCore).
-  const statusValue = intent.isLastPhase ? 'All phases complete' : 'Ready to plan';
+  const statusValue = intent.isLastPhase ? 'All phases complete' : nextWording.status;
   const statusAfter = stateReplaceFieldWithFallback(body, 'Status', null, statusValue);
   if (statusAfter !== body) {
     body = statusAfter;
@@ -2217,11 +2259,11 @@ function completePhaseCore(
     planAfter = withSection(
       body,
       (h) => (h.level === 2 || h.level === 3) && h.text.trim().toLowerCase() === 'current position',
-      (sectionBody) => stateReplaceFieldWithFallback(sectionBody, 'Current Plan', 'Plan', 'Not started'),
+      (sectionBody) => stateReplaceFieldWithFallback(sectionBody, 'Current Plan', 'Plan', nextWording.currentPlan),
       { levelBounded: true },
     );
   } else {
-    planAfter = stateReplaceFieldWithFallback(body, 'Current Plan', 'Plan', 'Not started');
+    planAfter = stateReplaceFieldWithFallback(body, 'Current Plan', 'Plan', nextWording.currentPlan);
   }
   if (planAfter !== body) {
     body = planAfter;
@@ -2267,7 +2309,7 @@ function completePhaseCore(
   // milestone termination wording stays owned by milestoneCompleteCore.
   const stoppedAtLine = intent.isLastPhase
     ? `Phase ${intent.phaseNum} complete — all phases complete`
-    : `Phase ${intent.phaseNum} complete${intent.nextPhaseNum ? `, ready to plan Phase ${intent.nextPhaseNum}` : ''}`;
+    : `Phase ${intent.phaseNum} complete${intent.nextPhaseNum ? `, ${nextWording.stoppedAt} Phase ${intent.nextPhaseNum}` : ''}`;
   const stoppedAfter = stateReplaceFieldInSession(body, 'Stopped At', 'Stopped at', stoppedAtLine);
   if (stoppedAfter !== body) {
     body = stoppedAfter;
