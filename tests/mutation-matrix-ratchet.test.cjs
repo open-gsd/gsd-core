@@ -210,7 +210,7 @@ const RATCHET_BASELINE = {
   'frontmatter-splice':      62,  // #5105: net-new module (the writer, split out of frontmatter);
                                    // CI run 36586350120 (PR #5114): measured 63.82%;
                                    // floor(63.82)-1. Replaces the provisional floor of 50.
-  'adr-parser':              68,
+  'adr-parser':              72,
   'config-schema':           74,  // CI run 33012034388 (2026-08-25): measured 75.51%; floor(75.51)-1
   'active-workstream-store': 86,  // CI run 33012034388 (2026-08-25): measured 87.42%; floor(87.42)-1
   'core-utils':              80,  // CI job 109435636183 (PR #5114): measured 81.13%; floor(81.13)-1

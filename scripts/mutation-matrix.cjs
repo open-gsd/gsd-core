@@ -480,7 +480,9 @@ const COVERED = {
   // dependency of something else under test.
   'adr-parser': {
     cjs: 'gsd-core/bin/lib/adr-parser.cjs',
-    minScore: 68,
+    // CI (2026-10-13, #5227 PR): measured 73.24% after the list-entry splitter tests. Floor =
+    // floor(73.24) - 1 = 72.
+    minScore: 72,
   },
   'config-schema': {
     cjs: 'gsd-core/bin/lib/config-schema.cjs',
