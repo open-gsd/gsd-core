@@ -370,7 +370,10 @@ describe('bug #3689 — workflow text invariant', () => {
   });
 });
 
-describe('#4805 — discovery runs without any external search binary', () => {
+// The empty-PATH runs resolve the shell with `command -v` and strip the environment. On Windows that yields an
+// MSYS path (`/usr/bin/bash`) Node cannot spawn, and the MSYS runtime needs SYSTEMROOT, so the block is POSIX-only,
+// like the repo's other bash-block tests. The listing semantics are plain bash and are covered on Linux and macOS.
+describe('#4805 — discovery runs without any external search binary', { skip: process.platform === 'win32' ? 'POSIX shell paths and an empty PATH' : false }, () => {
   let tmpDir;
   let emptyBin;
 
