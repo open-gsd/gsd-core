@@ -15,7 +15,7 @@ import path from 'node:path';
 import modelProfiles = require('./model-profiles.cjs');
 const { MODEL_PROFILES } = modelProfiles;
 import { getGlobalConfigDir } from './runtime-homes.cjs';
-import { getDirName, hostBehaviorsFor, NO_LOCAL_CONFIG_DIR_SENTINEL, UnknownRuntimeError } from './runtime-name-policy.cjs';
+import { getDirName, hostBehaviorsFor, NO_LOCAL_CONFIG_DIR_SENTINEL, type UnknownRuntimeError } from './runtime-name-policy.cjs';
 // #3242 — model-catalog is a genuine leaf (only node:path + its own JSON), which is
 // exactly why Phase 1 (#3241) moved isAnthropicFlavoredModel there: this module can
 // consume it without dragging model-resolver's config-loader chain into a
@@ -208,7 +208,7 @@ function checkAgentsInstalled(runtime?: string, projectRoot?: string): AgentsIns
     agentsDir = getAgentsDir(resolvedRuntime, projectRoot);
   } catch (err) {
     // An UNKNOWN runtime id has no agents dir GSD can locate; report, don't throw.
-    if (!(err instanceof UnknownRuntimeError)) throw err;
+    if ((err as Partial<UnknownRuntimeError> | null)?.code !== 'GSD_UNKNOWN_RUNTIME') throw err;
     return {
       agents_installed: null,
       missing_agents: [],

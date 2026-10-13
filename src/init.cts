@@ -48,7 +48,7 @@ import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { resolveReportedRuntime } from './host-runtime-detection.cjs';
 import { tryWithinRoot, loadTrustedGlobalRoots, PathAcceptance } from './security.cjs';
 import { getGlobalSkillDir, getGlobalSkillDisplayPath, getGlobalSkillsBase, getGlobalConfigDir } from './runtime-homes.cjs';
-import { UnknownRuntimeError } from './runtime-name-policy.cjs';
+import type { UnknownRuntimeError } from './runtime-name-policy.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
 import frontmatterMod = require('./frontmatter.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- verification.cjs is an export= CommonJS module
@@ -4271,7 +4271,7 @@ function buildAgentSkillsBlock(
   try {
     globalSkillsBase = getGlobalSkillsBase(runtime);
   } catch (err) {
-    if (!(err instanceof UnknownRuntimeError)) throw err;
+    if ((err as Partial<UnknownRuntimeError> | null)?.code !== 'GSD_UNKNOWN_RUNTIME') throw err;
     globalSkillsBase = null;
     runtimeUnknown = true;
   }
