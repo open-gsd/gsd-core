@@ -289,6 +289,12 @@ interface VerificationRoute {
  * too): it re-runs the verifier, which regenerates VERIFICATION.md and its
  * digest (#4682, #4887).
  */
+/**
+ * The one remedy for a stale report (#4682 / #5118), shared by the route table and by the more specific
+ * diagnostic below so the two cannot drift: only re-running the verifier regenerates VERIFICATION.md.
+ */
+const STALE_REMEDY = 'Re-run execute-phase for this phase: it resumes at the verification gates and re-runs the verifier, regenerating VERIFICATION.md and its digest. verify-work alone cannot refresh a stale report.';
+
 const VERIFICATION_ROUTES: Readonly<Record<VerificationStatus, Readonly<VerificationRoute>>> = Object.freeze({
   passed: Object.freeze<VerificationRoute>({
     next_action: 'Verification passed — continue.',
@@ -310,7 +316,7 @@ const VERIFICATION_ROUTES: Readonly<Record<VerificationStatus, Readonly<Verifica
   stale: Object.freeze<VerificationRoute>({
     // #4682 / #5118: the only remedy for a stale report is re-running the
     // verifier; /gsd-verify-work on its own never rewrites VERIFICATION.md.
-    next_action: 'Verification is stale — covered source files changed after the verifier last ran. Re-run execute-phase for this phase: it resumes at the verification gates and re-runs the verifier, regenerating VERIFICATION.md and its digest. verify-work alone cannot refresh a stale report.',
+    next_action: `Verification is stale — covered source files changed after the verifier last ran. ${STALE_REMEDY}`,
     command: 'execute-phase',
     tail: '',
   }),
@@ -1070,8 +1076,8 @@ function computeCoveredDigest(
  * `matchRequestedFile`'s convention) since `coveredFiles` holds
  * project-root-relative paths while the scan returns phase-relative
  * filenames. Returns `true` if every current plan/summary is covered,
- * `false` otherwise — callers only ever branch on this pass/fail, so no
- * caller needs which artifact was uncovered.
+ * `false` otherwise. `uncoveredCurrentArtifacts` below is the same scan returning WHICH artifacts
+ * were never declared (#4817), for the stale diagnostic; `null` when the scan itself was incomplete.
  *
  * Fails CLOSED on an incomplete scan: `scanPhasePlans` never throws on a
  * readdir failure — it reports it via `scope` (`SCOPE.UNREADABLE` for the
@@ -1084,14 +1090,19 @@ function computeCoveredDigest(
  * treating its invisible contents as vacuously covered — the same
  * fail-open regression #3057 B3 fixed for the legacy path.
  */
-function allCurrentArtifactsCovered(phaseDir: string, coveredFiles: readonly string[]): boolean {
+function uncoveredCurrentArtifacts(phaseDir: string, coveredFiles: readonly string[]): string[] | null {
   const scan = scanPhasePlans(phaseDir);
-  if (scan.scope !== SCOPE.COMPLETE) return false;
+  if (scan.scope !== SCOPE.COMPLETE) return null;
   const coveredPosix = canonicalizeCoveredFiles(coveredFiles);
-  return [...scan.allPlanFiles, ...scan.summaryFiles].every((artifact) => {
+  return [...scan.allPlanFiles, ...scan.summaryFiles].filter((artifact) => {
     const artifactPosix = toPosix(artifact);
-    return coveredPosix.some((c) => c === artifactPosix || c.endsWith(`/${artifactPosix}`));
+    return !coveredPosix.some((c) => c === artifactPosix || c.endsWith(`/${artifactPosix}`));
   });
+}
+
+function allCurrentArtifactsCovered(phaseDir: string, coveredFiles: readonly string[]): boolean {
+  const uncovered = uncoveredCurrentArtifacts(phaseDir, coveredFiles);
+  return uncovered !== null && uncovered.length === 0;
 }
 
 /**
@@ -1195,6 +1206,21 @@ interface RouteResultContext {
   staleCheckIndeterminate?: boolean;
   /** A usage-error message (`phase_dir_not_found` names the path it looked at). */
   message?: string;
+  /** #4817: the stale diagnostic's detail — which artifacts the report never covered, and whether a covered file also changed. */
+  staleDetail?: { uncovered: string[]; digestMoved: boolean };
+}
+
+/** At most this many uncovered artifact names are spelled out in `next_action`; the rest are counted. */
+const STALE_NAMED_ARTIFACT_LIMIT = 5;
+
+function staleNextAction(detail: { uncovered: string[]; digestMoved: boolean }): string {
+  const shown = detail.uncovered.slice(0, STALE_NAMED_ARTIFACT_LIMIT).map((a) => io.formatDiagnosticToken(a));
+  const more = detail.uncovered.length - shown.length;
+  const names = `${shown.join(', ')}${more > 0 ? ` and ${more} more` : ''}`;
+  const never = `the report never covered ${names} (a current phase plan or summary it did not declare in covered_files)`;
+  return detail.digestMoved
+    ? `Verification is stale — covered source files changed after the verifier last ran, and ${never}. ${STALE_REMEDY}`
+    : `Verification is stale — ${never}; no covered file changed. ${STALE_REMEDY}`;
 }
 
 /**
@@ -1205,12 +1231,16 @@ interface RouteResultContext {
  */
 function routeResult(status: VerificationStatus, ctx: RouteResultContext): VerificationStatusResult {
   const entry = VERIFICATION_ROUTES[status];
+  const detail = status === VERIFICATION_STATUS.STALE && ctx.staleDetail && ctx.staleDetail.uncovered.length > 0
+    ? ctx.staleDetail
+    : undefined;
   return {
     status,
-    next_action: entry.next_action,
+    next_action: detail ? staleNextAction(detail) : entry.next_action,
     next_command: projectNextCommand(entry.command, ctx.runtime, `${ctx.phaseArg}${entry.tail}`),
     route: entry.command,
     ...(ctx.message !== undefined ? { message: ctx.message } : {}),
+    ...(detail ? { uncovered_artifacts: detail.uncovered } : {}),
     ...(ctx.staleCheckIndeterminate ? { staleCheckIndeterminate: true } : {}),
   };
 }
@@ -1641,6 +1671,13 @@ interface VerificationStatusResult {
    * `gaps_found` short-circuit above it, or no verification file at all).
    */
   staleCheckIndeterminate?: boolean;
+  /**
+   * #4817: on a `stale` result for a legacy (v1/v2) report, the current phase plans/summaries the report
+   * never declared in `covered_files` (phase-relative file names, sorted). Omitted when there are none, so
+   * "a covered file changed" and "an artifact was never covered" are distinguishable. v3 reports cannot
+   * reach this state: their digest includes the live artifacts.
+   */
+  uncovered_artifacts?: string[];
 }
 
 function findStaleVerificationSummary(
@@ -1820,6 +1857,7 @@ function readVerificationStatus(
     coveredDigestVal.trim().length > 0;
 
   let staleCheckIndeterminate = false;
+  let staleDetail: { uncovered: string[]; digestMoved: boolean } | undefined;
   let isStale: boolean;
   if (declaresFingerprint) {
     // Stated directly rather than relying on `null !== coveredDigestVal`
@@ -1854,9 +1892,13 @@ function readVerificationStatus(
     } else {
       // v1/v2: unchanged — the digest alone cannot see a plan/summary that
       // was never declared, so the live-directory re-scan still runs.
-      isStale =
-        computeCoveredDigest(projectRoot, coveredFilesVal, storedVersion, { phaseDir }) !== coveredDigestVal ||
-        !allCurrentArtifactsCovered(phaseDir, coveredFilesVal);
+      const digestMoved =
+        computeCoveredDigest(projectRoot, coveredFilesVal, storedVersion, { phaseDir }) !== coveredDigestVal;
+      const uncovered = uncoveredCurrentArtifacts(phaseDir, coveredFilesVal);
+      isStale = digestMoved || uncovered === null || uncovered.length > 0;
+      if (uncovered !== null && uncovered.length > 0) {
+        staleDetail = { uncovered: [...uncovered].sort(), digestMoved };
+      }
     }
   } else {
     const staleCheck = findStaleVerificationSummary(
@@ -1876,7 +1918,7 @@ function readVerificationStatus(
   if (isStale) {
     // #4682 / #5118: the one stale route — execute-phase's verify_phase_goal
     // step re-runs the verifier, regenerating VERIFICATION.md and its digest.
-    return route(VERIFICATION_STATUS.STALE);
+    return route(VERIFICATION_STATUS.STALE, staleDetail ? { staleDetail } : {});
   }
 
   // 3. Route the writer-set member through the one table.
