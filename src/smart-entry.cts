@@ -42,13 +42,16 @@ import ioMod = require('./io.cjs');
 const { output } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
-const { planningPaths } = planningWorkspace;
+const { planningPaths, resolvePhaseIdConvention } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
 const { extractFrontmatter, frontmatterBlock } = frontmatter;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-lifecycle.cjs is an export= CommonJS module
 import phaseLifecycle = require('./phase-lifecycle.cjs');
 const { deriveProgressFromRoadmap } = phaseLifecycle;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import roadmapParser = require('./roadmap-parser.cjs');
+const { extractCurrentMilestone, scanMilestonePhaseIds } = roadmapParser;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateDocument = require('./state-document.cjs');
 const { stateFieldValue } = stateDocument;
@@ -115,6 +118,14 @@ export interface SmartEntrySignals {
    */
   roadmap_total_phases: number | null;
   roadmap_completed_phases: number | null;
+  /**
+   * The current milestone's phase ids from ROADMAP.md, in phase order (#5228).
+   * A milestone that continues an earlier milestone's numbering (phases 9-17)
+   * is positioned by this list, not by the raw phase number. Empty when
+   * ROADMAP.md is absent, unreadable, or lists no phases — callers then fall
+   * back to the STATE.md figures.
+   */
+  milestone_phases: string[];
   /**
    * Commits between STATE.md's recorded `state_head` and HEAD (#2573). Null
    * when unknown — no stamp, no git, or an unresolvable commit.
@@ -425,6 +436,7 @@ export function detectSignals(cwd: string, now: () => number = Date.now): SmartE
     stale_activity: false,
     roadmap_total_phases: null,
     roadmap_completed_phases: null,
+    milestone_phases: [],
     // No STATE.md (or unreadable) → no stamp to compare. Unknown, not fresh.
     state_commits_behind: null,
     state_commit_stale: null,
@@ -508,12 +520,18 @@ export function detectSignals(cwd: string, now: () => number = Date.now): SmartE
   // Progress table — isComplete falls back to the legacy comparison in that case.
   let roadmapTotalPhases: number | null = null;
   let roadmapCompletedPhases: number | null = null;
+  let milestonePhases: string[] = [];
   if (hasRoadmap) {
     try {
       const roadmapContent = fs.readFileSync(paths.roadmap, 'utf8');
       const derived = deriveProgressFromRoadmap(roadmapContent);
       roadmapTotalPhases = derived.totalPhases;
       roadmapCompletedPhases = derived.completedPhases;
+      // #5228: the ordered phase list of the current milestone, from the same
+      // scan the milestone-scoped commands use.
+      milestonePhases = [
+        ...scanMilestonePhaseIds(extractCurrentMilestone(roadmapContent, cwd), resolvePhaseIdConvention(cwd)),
+      ].sort(comparePhaseNum);
     } catch {
       /* ROADMAP.md unreadable — leave null; isComplete falls back to legacy. */
     }
@@ -541,6 +559,7 @@ export function detectSignals(cwd: string, now: () => number = Date.now): SmartE
     stale_activity: staleActivity,
     roadmap_total_phases: roadmapTotalPhases,
     roadmap_completed_phases: roadmapCompletedPhases,
+    milestone_phases: milestonePhases,
     state_commits_behind: freshness.commits_behind,
     state_commit_stale: freshness.commit_stale,
   };
@@ -571,8 +590,16 @@ function isComplete(s: SmartEntrySignals): boolean {
     // Legacy path: STATE.md comparison. It only fires when ROADMAP.md is
     // absent or has no Progress table, and uses canonical phase-id ordering
     // so dotted phase ids are never coerced to JavaScript numbers.
-    if (s.total_phases === null || s.current_phase === null) return false;
-    if (comparePhaseNum(s.current_phase, s.total_phases) < 0) return false;
+    if (s.current_phase === null) return false;
+    if (s.milestone_phases.length > 0) {
+      // #5228: compare against the milestone's LAST phase. The phase count is
+      // not a phase number once numbering continues from an earlier milestone.
+      const last = s.milestone_phases[s.milestone_phases.length - 1];
+      if (comparePhaseNum(s.current_phase, last) < 0) return false;
+    } else {
+      if (s.total_phases === null) return false;
+      if (comparePhaseNum(s.current_phase, s.total_phases) < 0) return false;
+    }
   }
   // Status regex: require milestone-level completion language. The pre-fix
   // regex matched any "shipped" / "done" substring (per-phase language).
@@ -745,7 +772,7 @@ function buildSummary(situation: Situation, s: SmartEntrySignals): string {
     case 'needs-first-phase':
       return 'Project initialized — plan your first phase';
     case 'planning':
-      return `Phase ${s.current_phase ?? '?'} of ${s.total_phases ?? '?'} — needs a plan`;
+      return `${phasePosition(s)} — needs a plan`;
     case 'executing':
       return progressLine('executing', s);
     case 'verify-pending':
@@ -760,10 +787,24 @@ function buildSummary(situation: Situation, s: SmartEntrySignals): string {
   }
 }
 
+/**
+ * "Phase N of M" for the current phase. N is the phase's 1-based position in
+ * the current milestone's ordered phase list (#5228), so a milestone that
+ * continues the numbering of an earlier one (phases 9-17) reads "Phase 1 of 9",
+ * not "Phase 9 of 9". When the phase is not in that list (or the roadmap lists
+ * none) the STATE.md figures are printed as recorded.
+ */
+function phasePosition(s: SmartEntrySignals): string {
+  const current = s.current_phase;
+  const at = current === null ? -1 : s.milestone_phases.findIndex((id) => comparePhaseNum(id, current) === 0);
+  if (at >= 0) return `Phase ${at + 1} of ${s.milestone_phases.length}`;
+  return `Phase ${s.current_phase ?? '?'} of ${s.total_phases ?? '?'}`;
+}
+
 function progressLine(tail: string, s: SmartEntrySignals): string {
   const parts: string[] = [];
   if (s.current_phase !== null && s.total_phases !== null) {
-    parts.push(`Phase ${s.current_phase} of ${s.total_phases}`);
+    parts.push(phasePosition(s));
   } else if (s.current_phase !== null) {
     parts.push(`Phase ${s.current_phase}`);
   }

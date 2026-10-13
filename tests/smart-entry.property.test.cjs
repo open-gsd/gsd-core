@@ -45,7 +45,7 @@ const path = require('path');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup } = require('./helpers.cjs');
 
-const { detectSignals } = require('../gsd-core/bin/lib/smart-entry.cjs');
+const { detectSignals, classifyProject } = require('../gsd-core/bin/lib/smart-entry.cjs');
 
 const FIXED_NOW = () => Date.parse('2026-08-01T00:00:00Z');
 const HOUR_MS = 3600 * 1000;
@@ -268,6 +268,40 @@ describe('smart-entry stale_activity — properties (#2570)', () => {
             false,
             `${date} does not exist; it must coerce to the safe default, not roll forward`,
           );
+        },
+      ),
+    );
+  });
+});
+
+// #5228: whatever phase numbers a milestone continues from, the printed ordinal is the phase's
+// 1-based position in that milestone, so it always lies in [1, total].
+describe('smart-entry: phase ordinal property (#5228)', () => {
+  test('property: the ordinal is the 1-based position and never exceeds the total', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1, max: 60 }),
+        fc.integer({ min: 1, max: 12 }),
+        fc.nat({ max: 11 }),
+        (start, count, offset) => {
+          const at = offset % count;
+          const ids = Array.from({ length: count }, (_, i) => start + i);
+          const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-ordinal-'));
+          try {
+            fs.mkdirSync(path.join(dir, '.planning'));
+            fs.writeFileSync(
+              path.join(dir, '.planning', 'ROADMAP.md'),
+              `# Roadmap\n\n${ids.map((n) => `### Phase ${n}: Work\n\nGoal.\n`).join('\n')}`,
+            );
+            fs.writeFileSync(
+              path.join(dir, '.planning', 'STATE.md'),
+              `---\nstatus: planning\ncurrent_phase: ${ids[at]}\ntotal_phases: ${count}\n---\n\n# State\n`,
+            );
+            const { summary } = classifyProject(dir);
+            assert.equal(summary, `Phase ${at + 1} of ${count} — needs a plan`);
+          } finally {
+            cleanup(dir);
+          }
         },
       ),
     );

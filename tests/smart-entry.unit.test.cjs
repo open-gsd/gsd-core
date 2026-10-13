@@ -1245,3 +1245,68 @@ describe('#3099: unusable last_activity emits a diagnostic', () => {
       'dedup: second call on the same source must not re-emit');
   });
 });
+
+// #5228: a milestone that continues the numbering of an earlier one (phases 9-17) printed the raw
+// phase number as the ordinal ("Phase 9 of 9") and, without a Progress table, reached "complete"
+// as soon as the phase NUMBER reached the phase COUNT.
+describe('smart-entry: continued milestone numbering (#5228)', () => {
+  afterEach(removeAll);
+
+  const phaseHeadings = (ids) => ids.map((id) => `### Phase ${id}: Work ${id}\n\nGoal.\n`).join('\n');
+  const roadmapFor = (ids) => `# Roadmap\n\n## Milestone v2.0\n\n${phaseHeadings(ids)}`;
+  const range = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
+
+  const project = (ids, stateOpts) =>
+    track(makeProject({ state: state(stateOpts), roadmap: roadmapFor(ids) }));
+
+  test('planning at the first of phases 9-17 reads "Phase 1 of 9"', () => {
+    const dir = project(range(9, 17), { status: 'planning', current_phase: 9, total_phases: 9 });
+    const out = classifyProject(dir);
+    assert.equal(out.situation, 'planning');
+    assert.equal(out.summary, 'Phase 1 of 9 — needs a plan');
+  });
+
+  test('executing and ready-to-verify lines use the same ordinal', () => {
+    const exec = classifyProject(project(range(9, 17), { status: 'executing', current_phase: 11, total_phases: 9, progress: 40 }));
+    assert.equal(exec.summary, 'Phase 3 of 9 · 40% · executing');
+    const verify = classifyProject(project(range(9, 17), { status: 'needs-review', current_phase: 17, total_phases: 9 }));
+    assert.equal(verify.summary, 'Phase 9 of 9 · ready to verify');
+  });
+
+  test('phase 9 complete with 1 of 9 done is not classified complete', () => {
+    const dir = project(range(9, 17), { status: 'phase complete', current_phase: 9, total_phases: 9, completed_phases: 1 });
+    assert.notEqual(classifyProject(dir).situation, 'complete');
+  });
+
+  test('boundary: phase 16 complete is not complete, phase 17 complete is', () => {
+    const at16 = project(range(9, 17), { status: 'complete', current_phase: 16, total_phases: 9 });
+    assert.notEqual(classifyProject(at16).situation, 'complete');
+    const at17 = project(range(9, 17), { status: 'complete', current_phase: 17, total_phases: 9 });
+    assert.equal(classifyProject(at17).situation, 'complete');
+  });
+
+  test('a plain milestone numbered from 1 is unchanged', () => {
+    const dir = project(range(1, 5), { status: 'planning', current_phase: 2, total_phases: 5 });
+    assert.equal(classifyProject(dir).summary, 'Phase 2 of 5 — needs a plan');
+  });
+
+  test('zero-based numbering keeps its ordinal position', () => {
+    const dir = project([0, 1, 2], { status: 'planning', current_phase: 1, total_phases: 3 });
+    assert.equal(classifyProject(dir).summary, 'Phase 2 of 3 — needs a plan');
+  });
+
+  test('dotted decimal phase ids sort into their position', () => {
+    const dir = project(['9', '9.1', '10'], { status: 'planning', current_phase: '9.1', total_phases: 3 });
+    assert.equal(classifyProject(dir).summary, 'Phase 2 of 3 — needs a plan');
+  });
+
+  test('a current phase missing from the roadmap falls back to the STATE.md figures', () => {
+    const dir = project(range(9, 17), { status: 'planning', current_phase: 40, total_phases: 9 });
+    assert.equal(classifyProject(dir).summary, 'Phase 40 of 9 — needs a plan');
+  });
+
+  test('a roadmap that lists no phases keeps the raw STATE.md figures', () => {
+    const dir = track(makeProject({ state: state({ status: 'planning', current_phase: 2, total_phases: 5 }), roadmap: true }));
+    assert.equal(classifyProject(dir).summary, 'Phase 2 of 5 — needs a plan');
+  });
+});
