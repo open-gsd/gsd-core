@@ -330,12 +330,12 @@ describe('crossCheckRoleFamilies (#4740)', () => {
     const ROLE_FAMILY_LOCAL = {
       orchestrator: 'orchestration',
       researcher: 'planning', planner: 'planning', checker: 'planning',
-      executor: 'execution', verifier: 'execution',
+      executor: 'execution', verifier: 'execution', 'code-reviewer': 'execution',
     };
     const familyRoles = {
       orchestration: ['orchestrator'],
       planning: ['researcher', 'planner', 'checker'],
-      execution: ['executor', 'verifier'],
+      execution: ['executor', 'verifier', 'code-reviewer'],
     };
     const stepsByFamily = {
       discuss: 'orchestration', plan: 'planning', execute: 'execution',
