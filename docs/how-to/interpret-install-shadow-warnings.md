@@ -61,6 +61,7 @@ Absence of a shadow warning is not always proof that nothing is shadowed. GSD Co
 **Nothing to report (verified clean)** — the check ran and found no genuine cross-scope collision:
 
 - Only one scope is installed for that runtime.
+- The runtime installs `commands` and `skills` side by side at *one* scope (OpenCode, Kilo, Augment, CodeBuddy, ZCode). GSD wrote both on purpose and the host resolves the pair itself, so a same-scope pair is never reported — only a trigger whose winner and loser sit in different scopes is (#5344).
 - Both scopes resolve to the *same* config directory (for example, `--config-dir` pointed both installs at the same place) — this is one physical install, not two.
 - The runtime's global scope installs no trigger-bearing artifact kind at all (windsurf's global install is `agents`, which is never invoked by a `/gsd-<name>` trigger) — there is nothing for the local scope to collide with.
 - The other scope's manifest exists but declares zero files (an empty or partial install at that scope).

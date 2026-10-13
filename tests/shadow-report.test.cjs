@@ -511,6 +511,51 @@ describe('buildShadowReport — per-scope truth filter (A21-A24)', () => {
   });
 });
 
+// ─── A25-A27 — same-scope kind pairs are not shadows (#5344) ───────────────
+
+describe('buildShadowReport — same-scope commands + skills (A25-A27)', () => {
+  const bothKinds = (stems) => ({ ...skillFilesFor(stems), ...commandFilesFor(stems) });
+
+  for (const runtime of ['opencode', 'kilo', 'augment', 'codebuddy', 'zcode']) {
+    test(`${runtime}: one scope that installs commands and skills side by side reports nothing (A25)`, () => {
+      const home = `/fixture/a25-${runtime}-home`;
+      const cwd = `/fixture/a25-${runtime}-cwd`;
+      const homes = scopeHomes(runtime, home, cwd);
+      const byConfigHome = new Map([
+        [homes.global, manifest({ manifestVersion: 2, runtime, scope: 'global', files: bothKinds(REAL_STEMS) })],
+      ]);
+      const report = buildShadowReport(runtime, baseOpts(home, cwd, { readManifest: mkReadManifest(byConfigHome) }));
+      assert.strictEqual(report.shadowed, false, `${runtime} must not report its own paired surfaces`);
+      assert.strictEqual(report.reason, SHADOW_REASON.NOT_SHADOWED);
+      assert.deepStrictEqual(report.triggers, []);
+    });
+  }
+
+  test('opencode installed at both scopes: the cross-scope shadow is still reported, never the same-scope pair (A26)', () => {
+    const home = '/fixture/a26-home';
+    const cwd = '/fixture/a26-cwd';
+    const homes = scopeHomes('opencode', home, cwd);
+    const byConfigHome = new Map([
+      [homes.global, manifest({ manifestVersion: 2, runtime: 'opencode', scope: 'global', files: bothKinds(['plan-phase']) })],
+      [homes.local, manifest({ manifestVersion: 2, runtime: 'opencode', scope: 'local', files: bothKinds(['plan-phase']) })],
+    ]);
+    const report = buildShadowReport('opencode', baseOpts(home, cwd, { readManifest: mkReadManifest(byConfigHome) }));
+    assert.strictEqual(report.shadowed, true);
+    assert.strictEqual(report.reason, SHADOW_REASON.SCOPE_SHADOWED);
+    assert.ok(report.triggers.length > 0);
+    for (const t of report.triggers) {
+      assert.notStrictEqual(t.winnerScope, t.shadowedScope, `${t.trigger}: a shadow must cross scopes`);
+    }
+  });
+
+  test('claude coexistence (global skills vs local commands) is unaffected (A27)', () => {
+    const report = buildShadowReport('claude', coexistenceOpts('/fixture/a27-home', '/fixture/a27-cwd', ['plan-phase']));
+    assert.strictEqual(report.shadowed, true);
+    assert.deepStrictEqual(report.winner, { kind: 'skills', scope: 'global' });
+    assert.deepStrictEqual(report.shadowedSide, { kind: 'commands', scope: 'local' });
+  });
+});
+
 // ─── F1 — bijective property: every trigger has exactly one winner ────────
 
 describe('buildShadowReport — property (F1)', () => {

@@ -22,6 +22,10 @@
  * (design row #5 / "Not-corruption"). `kindsDiffer` on `ShadowReport` is what
  * lets `renderShadowReport` word the two cases correctly.
  *
+ * Same-scope pairs are not reported: a runtime whose layout installs `commands` and `skills` side by side at one
+ * scope (OpenCode, Kilo, Augment, CodeBuddy, ZCode) writes both on purpose, and `isGenuinelyShadowed` requires the
+ * winner and the loser to sit in different scopes (#5344).
+ *
  * ── Report, don't correct (mirrors the resolver's own law) ─────────────────
  * `mismatches` surfaces a declared runtime/scope that disagrees with the
  * probed one (Postel's Law, design doc: liberal in what is accepted, but the
@@ -276,6 +280,13 @@ function isGenuinelyShadowed(
   prefixFor: (scope: InstallScope, kind: string) => string | null,
 ): boolean {
   if (t.shadowedBy === null) return false;
+  // This is a CROSS-SCOPE report (see the module comment). A winner and a loser in the SAME scope are the two
+  // kinds one install deliberately wrote side by side — OpenCode, Kilo, Augment, CodeBuddy and ZCode install
+  // `commands` and `skills` for every trigger at one scope. GSD wrote both, the operator cannot act on it, and
+  // the host's own dedupe (OpenCode 1.x lists the command and drops the same-named skill; 2.x keeps them on
+  // separate surfaces) is not a loss of reachability. Reporting it printed "72 triggers shadowed" on every
+  // install of those five runtimes (#5344).
+  if (t.shadowedBy.scope === t.scope) return false;
   const winnerRecord = scopeRecords.get(t.shadowedBy.scope);
   const shadowedRecord = scopeRecords.get(t.scope);
   const winnerStem = stemFromTrigger(t.trigger, prefixFor(t.shadowedBy.scope, t.shadowedBy.kind));
