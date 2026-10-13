@@ -16212,6 +16212,116 @@ describe('phase complete lowest-outstanding vs positional-last (#4078)', () => {
   });
 });
 
+describe('phase complete — Status/Current Plan/Stopped at follow the next phase\'s disk state (#4824)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-4824-');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  const statePath = () => path.join(tmpDir, '.planning', 'STATE.md');
+
+  function scaffold(slug, { plans = 0, summaries = 0, passed = false } = {}) {
+    const dir = path.join(tmpDir, '.planning', 'phases', slug);
+    fs.mkdirSync(dir, { recursive: true });
+    const prefix = slug.split('-')[0];
+    for (let i = 1; i <= plans; i++) {
+      fs.writeFileSync(path.join(dir, `${prefix}-${String(i).padStart(2, '0')}-PLAN.md`), '# Plan');
+    }
+    for (let i = 1; i <= summaries; i++) {
+      fs.writeFileSync(path.join(dir, `${prefix}-${String(i).padStart(2, '0')}-SUMMARY.md`), '# Summary');
+    }
+    if (passed) {
+      fs.writeFileSync(path.join(dir, `${prefix}-VERIFICATION.md`), ['---', 'status: passed', '---', '', '# V', ''].join('\n'));
+    }
+  }
+
+  /**
+   * Phase 1 (the lowest outstanding phase) plus an inserted Phase 1.1 that is
+   * completed. #4078 makes Phase 1 the next phase; its disk state is the
+   * variable under test.
+   */
+  function setup(nextPhase) {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## Phases',
+        '- [ ] **Phase 1: Verification**',
+        '- [ ] **Phase 1.1: Hotfix** (INSERTED)',
+        '- [ ] **Phase 2: Later**',
+        '',
+      ].join('\n'),
+    );
+    scaffold('01-verification', nextPhase);
+    scaffold('01.1-hotfix', { plans: 1, summaries: 1, passed: true });
+    fs.writeFileSync(
+      statePath(),
+      [
+        '# State',
+        '',
+        '**Current Phase:** 1.1',
+        '**Current Phase Name:** Hotfix',
+        '**Status:** Executing Phase 1.1',
+        '**Current Plan:** 1',
+        '**Last Activity:** 2025-01-01',
+        '**Last Activity Description:** Working',
+        '',
+        '## Session',
+        '',
+        '**Stopped at:** mid-plan',
+        '',
+      ].join('\n'),
+    );
+    const result = runGsdTools('phase complete 1.1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error || result.output}`);
+    const output = JSON.parse(result.output);
+    assert.strictEqual(String(output.next_phase), '1', 'precondition: #4078 selects Phase 1');
+    return fs.readFileSync(statePath(), 'utf8');
+  }
+
+  const field = (state, name) => {
+    const m = state.match(new RegExp(`^\\*\\*${name}:\\*\\*\\s*(.*)$`, 'm'));
+    return m ? m[1].trim() : null;
+  };
+
+  test('an executed, unverified next phase is routed to verification, not planning', () => {
+    const state = setup({ plans: 2, summaries: 2 });
+    assert.doesNotMatch(field(state, 'Status'), /ready to plan/i);
+    assert.match(field(state, 'Status'), /verification/i);
+    assert.notStrictEqual(field(state, 'Current Plan'), 'Not started');
+    assert.doesNotMatch(field(state, 'Stopped at'), /ready to plan/i);
+    assert.match(field(state, 'Stopped at'), /ready to verify Phase 1/);
+    assert.match(state, /^status: verifying$/m, 'frontmatter status follows the body');
+  });
+
+  test('a planned next phase with no summaries is routed to execution', () => {
+    const state = setup({ plans: 2, summaries: 0 });
+    assert.strictEqual(field(state, 'Status'), 'Ready to execute');
+    assert.match(field(state, 'Stopped at'), /ready to execute Phase 1/);
+    assert.doesNotMatch(state, /ready to plan/i);
+  });
+
+  test('a partly executed next phase points Current Plan at the first unexecuted plan', () => {
+    const state = setup({ plans: 3, summaries: 1 });
+    assert.strictEqual(field(state, 'Status'), 'Ready to execute');
+    assert.strictEqual(field(state, 'Current Plan'), '2');
+    assert.match(field(state, 'Stopped at'), /ready to execute Phase 1/);
+  });
+
+  test('a next phase with no plans keeps Ready to plan / Not started', () => {
+    const state = setup({ plans: 0, summaries: 0 });
+    assert.strictEqual(field(state, 'Status'), 'Ready to plan');
+    assert.strictEqual(field(state, 'Current Plan'), 'Not started');
+    assert.match(field(state, 'Stopped at'), /ready to plan Phase 1/);
+  });
+});
+
 // ─── #3572: phase remove must not prepend a second frontmatter block ──────────
 
 describe('bug #3572: phase remove must not corrupt STATE.md into two frontmatter blocks', () => {
