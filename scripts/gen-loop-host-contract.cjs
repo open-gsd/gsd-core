@@ -85,6 +85,9 @@ const ROLE_TO_AGENT = {
   checker:    'gsd-plan-checker',
   executor:   'gsd-executor',
   verifier:   'gsd-verifier',
+  // #4790 — the built-in source-code reviewer the code-review skill dispatches one hop below
+  // `execute:post`. Admitting the role is what lets a capability contribution name it.
+  'code-reviewer': 'gsd-code-reviewer',
 };
 
 // #4740 — Role → family mapping. Three families: orchestration, planning,
@@ -94,7 +97,7 @@ const ROLE_TO_AGENT = {
 const ROLE_FAMILY = {
   orchestrator: 'orchestration',
   researcher: 'planning', planner: 'planning', checker: 'planning',
-  executor: 'execution', verifier: 'execution',
+  executor: 'execution', verifier: 'execution', 'code-reviewer': 'execution',
 };
 const EXPECTED_FAMILY_BY_STEP = {
   discuss: 'orchestration',

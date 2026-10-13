@@ -1,7 +1,7 @@
 <!-- gsd:loop-host
 step: execute
 points: execute:pre, execute:wave:pre, execute:wave:post, execute:post
-agent-roles: executor, verifier
+agent-roles: executor, verifier, code-reviewer
 produces: SUMMARY.md
 consumes: PLAN.md
 -->
@@ -186,6 +186,8 @@ MVP_MODE=$(gsd_run query phase.mvp-mode "${PHASE_NUMBER}" $MVP_FLAG_ARG --pick a
 EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)
 TDD_MODE=$(gsd_run loop render-hooks execute:post --active-cap tdd)
 ```
+
+A `contribution` hook at this point with `into: code-reviewer` (#4790) is not dispatched from this envelope: `code-review.md` reads it itself and hands it to `gsd-code-reviewer` exactly once.
 
 <step name="safe_resume_gate">
 Before trusting `STATE.md` or dispatching any executor, derive `CURRENT_PLAN_ID`

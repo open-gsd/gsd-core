@@ -345,3 +345,39 @@ This is **additive to §3's existing validation rule** (*"every `contribution.in
   `EXPECTED_FAMILY_BY_STEP`. The value is that the boundary moves from an unstated property of five
   workflow files to a named, reviewed constant with a test that fails when it changes — the same
   bar §3 set for points.
+
+## Amendment (2026-10-13): the built-in code reviewer is an execution-family role
+
+Issue [#4790](https://github.com/open-gsd/gsd-core/issues/4790).
+
+A capability could not deliver review guidance to the built-in `gsd-code-reviewer`. The reviewer is
+dispatched one hop below `execute:post` by the code-review skill, so no role in §3's vocabulary named
+it, and an `into: "code-reviewer"` contribution was rejected at install with `is not in the step's
+agentRoles [executor, verifier]`. Admitting the name alone would not have delivered anything: the
+reviewer prompt rendered no hooks.
+
+### Decision
+
+- **`code-reviewer` joins the execution family.** The partition table above becomes
+  `execution | executor, verifier, code-reviewer`. The `execute` step publishes all three; no other
+  step admits it, and `orchestrator` is still never admitted at an execute point. The role-family
+  separation of #4740 is unchanged, and `code-reviewer` maps to the agent `gsd-code-reviewer` in the
+  generator's role-to-agent presence check.
+- **The receiving boundary is `code-review.md`, not the execute host.** `execute:post` consumers
+  dispatch `step` and `gate` hooks only; a reviewer fragment is not injected from that envelope.
+  `code-review.md` renders the loop point the review step is registered at
+  (`workflow.code_review_point`, default `execute:post`), takes the active `contribution` hooks with
+  `into: code-reviewer`, and appends them once to the reviewer prompt after
+  `${AGENT_SKILLS_REVIEWER}`. The per-project `agent_skills.gsd-code-reviewer` channel is unchanged and
+  is never replaced. Because delivery lives in the review workflow, a standalone `/gsd-code-review`
+  receives the same rules as a review run from the execute loop.
+- **Delivery is advisory.** A failure to resolve the point, render the hooks or parse the envelope leaves
+  the prompt without the fragments; it never blocks the review. A literal closing tag inside a fragment
+  is escaped so third-party text cannot end the block early.
+
+### Consequences
+
+`into` is validated per step, not per point. A `code-reviewer` contribution declared at another execute
+point (`execute:pre`, `execute:wave:pre`) therefore installs but is not delivered; the reference states
+this. Restricting `into` to a subset of points is a separate contract change and is not made here.
+
