@@ -295,4 +295,4 @@ The §5 rule is unchanged: every accessor that would answer with a Claude Code v
 - `checkAgentsInstalled` (Agent Install Check Module) returns `agents_installed: null` with `reason: 'unknown_runtime'` (`AGENTS_INSTALLED_REASON`), so every `init` command, `validate agents` and `docs-init` keep working for an UNKNOWN id.
 - `buildAgentSkillsBlock` treats an UNKNOWN id as having no global skills directory GSD can locate: `global:` entries are skipped with a warning.
 
-The catch is narrow: only `UnknownRuntimeError`. `RetiredRuntimeError` and every other error still propagate.
+The catch is narrow: only the `GSD_UNKNOWN_RUNTIME` error code. `RetiredRuntimeError` and every other error still propagate from `checkAgentsInstalled`. `buildAgentSkillsBlock` refuses a retired id only when skill paths are configured; the `agent-skills` command still refuses it through `checkAgentsInstalled` in its agent payload fallback.

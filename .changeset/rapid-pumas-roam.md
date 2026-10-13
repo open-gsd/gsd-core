@@ -2,4 +2,4 @@
 type: Fixed
 pr: 5251
 ---
-**`init`, `validate agents`, `docs-init` and `agent-skills` no longer exit 1 for an UNKNOWN runtime id** — an EoS host integration whose runtime GSD does not know now gets `agents_installed: null` with `agents_installed_reason: "unknown_runtime"` (`agents_found_reason` in `validate agents`) instead of `UnknownRuntimeError`; KNOWN runtimes are unchanged, and install still refuses an UNKNOWN id. (#5236)
+**`init`, `validate agents`, `docs-init` and `agent-skills` no longer exit 1 for an UNKNOWN runtime id** — an EoS host integration whose runtime GSD does not know now gets `agents_installed: null` with `agents_installed_reason: "unknown_runtime"` (`agents_found_reason` in `validate agents`) instead of `UnknownRuntimeError`; KNOWN runtimes are unchanged, and install still refuses an UNKNOWN id. `buildAgentSkillsBlock` now resolves the global skills base only when skill paths are configured, so it no longer throws for a retired runtime id with no `agent_skills`; the `agent-skills` command still refuses a retired id. (#5236)
