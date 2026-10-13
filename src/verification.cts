@@ -659,7 +659,7 @@ function mapRealPathToRootRelative(
  * cover" — every live `*-PLAN.md`/`*-SUMMARY.md` in `phaseDir`
  * (`scanPhasePlans`'s `allPlanFiles` + `summaryFiles`, BEFORE the
  * `status:superseded` exclusion — row 17: a superseded plan still needs a
- * matching digest entry, the same set `allCurrentArtifactsCovered` checks),
+ * matching digest entry, the same set `uncoveredCurrentArtifacts` checks),
  * minus anything report-shaped (R3: a plan-scan match that is ALSO
  * report-shaped, e.g. `07-PLAN-01-VERIFICATION.md`, must never enter the
  * covered set on either side). Each surviving candidate is realpath-resolved
@@ -685,7 +685,7 @@ function phaseArtifactPaths(phaseDir: string, projectRoot: string): PhaseArtifac
   const scan = scanPhasePlans(phaseDir) as { allPlanFiles: string[]; summaryFiles: string[]; scope: Scope };
   // Fail closed on a non-COMPLETE scan (unreadable phase dir, or an
   // unreadable nested plans/ dir) — a partial scan's invisible contents can
-  // never be proven covered (mirrors allCurrentArtifactsCovered's own
+  // never be proven covered (mirrors uncoveredCurrentArtifacts's own
   // fail-closed contract).
   if (scan.scope !== SCOPE.COMPLETE) {
     return { ok: false, reason: `phase directory scan is incomplete (scope: ${scan.scope}): ${phaseDir}` };
@@ -1075,9 +1075,9 @@ function computeCoveredDigest(
  * each is represented in `coveredFiles` — matched by suffix (mirrors
  * `matchRequestedFile`'s convention) since `coveredFiles` holds
  * project-root-relative paths while the scan returns phase-relative
- * filenames. Returns `true` if every current plan/summary is covered,
- * `false` otherwise. `uncoveredCurrentArtifacts` below is the same scan returning WHICH artifacts
- * were never declared (#4817), for the stale diagnostic; `null` when the scan itself was incomplete.
+ * filenames. Returns the current plans/summaries the report never declared
+ * (empty when every one is covered), so the stale diagnostic can name them (#4817); `null` when the
+ * scan itself was incomplete, which callers treat as stale.
  *
  * Fails CLOSED on an incomplete scan: `scanPhasePlans` never throws on a
  * readdir failure — it reports it via `scope` (`SCOPE.UNREADABLE` for the
@@ -1086,7 +1086,7 @@ function computeCoveredDigest(
  * contract (`planning-scope.cts`): zero items under a non-`COMPLETE` scope
  * is a NON-answer, never "this phase has no plans." Branching on `scope`
  * here (rather than a try/catch, which this scan never triggers) is what
- * makes an unreadable `plans/` dir report `false` instead of silently
+ * makes an unreadable `plans/` dir report `null` (stale) instead of silently
  * treating its invisible contents as vacuously covered — the same
  * fail-open regression #3057 B3 fixed for the legacy path.
  */
@@ -1098,11 +1098,6 @@ function uncoveredCurrentArtifacts(phaseDir: string, coveredFiles: readonly stri
     const artifactPosix = toPosix(artifact);
     return !coveredPosix.some((c) => c === artifactPosix || c.endsWith(`/${artifactPosix}`));
   });
-}
-
-function allCurrentArtifactsCovered(phaseDir: string, coveredFiles: readonly string[]): boolean {
-  const uncovered = uncoveredCurrentArtifacts(phaseDir, coveredFiles);
-  return uncovered !== null && uncovered.length === 0;
 }
 
 /**
@@ -1863,7 +1858,7 @@ function readVerificationStatus(
     // Stated directly rather than relying on `null !== coveredDigestVal`
     // being true whenever the pair is malformed: `!hasWellFormedFingerprint`
     // fails closed explicitly, and its `||` short-circuit means
-    // computeCoveredDigest/allCurrentArtifactsCovered never run on a
+    // computeCoveredDigest/uncoveredCurrentArtifacts never run on a
     // malformed (wrong-shaped) `coveredFilesVal`. The two `||`s after it
     // short-circuit in turn: the live-directory re-scan (for a plan/summary
     // added AFTER verification and never declared in covered_files) only
@@ -1885,7 +1880,7 @@ function readVerificationStatus(
       // #5095 (R1): v3's digest is computed over the declared set UNIONED
       // with the phase's own live artifacts — a plan/summary added after
       // fingerprinting already moves the digest itself, so the separate
-      // live-directory re-scan (`allCurrentArtifactsCovered`) is redundant
+      // live-directory re-scan (`uncoveredCurrentArtifacts`) is redundant
       // for v3 and is not run.
       isStale =
         computeCoveredDigest(projectRoot, coveredFilesVal, storedVersion, { phaseDir }) !== coveredDigestVal;
