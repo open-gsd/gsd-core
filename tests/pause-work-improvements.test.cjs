@@ -252,15 +252,27 @@ const path = require('node:path');
 const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
 const { toLegacyResult } = require('./helpers/git-fixture.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
+const { spawnSync } = require('node:child_process');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { span } = require('./helpers/doc-bash-span.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const WORKFLOW_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'resume-project.md');
 
-// The exact snippet the workflow now embeds. Keep in sync with
-// resume-project.md `check_incomplete_work` step.
-const FIND_SNIPPET = [
+// The discovery lines the workflow ships, read from resume-project.md itself (#4805) rather than a
+// copy that could drift: from the #2962 nullglob prelude (which keeps zsh NOMATCH from aborting a glob
+// loop) through the line before the next check. Shell builtins only, so it runs as is under bash and zsh.
+const DISCOVERY_SNIPPET = span(
+  'gsd-core/workflows/resume-project.md',
+  '# #2962: zsh aborts the block',
+  '# Check for plans without summaries',
+).join('\n');
+
+// What the workflow shipped before #4805, kept only as a control: with `find` unavailable it prints nothing.
+const LEGACY_FIND_SNIPPET = [
   "find .planning -maxdepth 3 -name '.continue-here*.md' -print 2>/dev/null || true",
   "find . -maxdepth 1 -name '.continue-here*.md' -print 2>/dev/null || true",
+  "find .planning/async-jobs -maxdepth 1 -name '*.json' -print 2>/dev/null || true",
 ].join('\n');
 
 function hasShell(name) {
@@ -289,7 +301,7 @@ describe('bug #3689 — resume-project.md continue-here scan under zsh NOMATCH',
   });
 
   test('zsh -o nomatch lists the .planning/.continue-here-* checkpoint', { skip: !hasShell('zsh') }, () => {
-    const result = toLegacyResult(runHookSeam('-o', ['nomatch', '-c', FIND_SNIPPET], {
+    const result = toLegacyResult(runHookSeam('-o', ['nomatch', '-c', DISCOVERY_SNIPPET], {
       interpreter: 'zsh',
       cwd: tmpDir,
     }));
@@ -302,7 +314,7 @@ describe('bug #3689 — resume-project.md continue-here scan under zsh NOMATCH',
   });
 
   test('bash default lists the .planning/.continue-here-* checkpoint', { skip: !hasShell('bash') }, () => {
-    const result = toLegacyResult(runHookSeam('-c', [FIND_SNIPPET], {
+    const result = toLegacyResult(runHookSeam('-c', [DISCOVERY_SNIPPET], {
       interpreter: 'bash',
       cwd: tmpDir,
     }));
@@ -328,7 +340,7 @@ describe('bug #3689 — empty workspace exits cleanly', () => {
   });
 
   test('zsh -o nomatch with no checkpoints exits 0, empty output', { skip: !hasShell('zsh') }, () => {
-    const result = toLegacyResult(runHookSeam('-o', ['nomatch', '-c', FIND_SNIPPET], {
+    const result = toLegacyResult(runHookSeam('-o', ['nomatch', '-c', DISCOVERY_SNIPPET], {
       interpreter: 'zsh',
       cwd: tmpDir,
     }));
@@ -343,13 +355,91 @@ describe('bug #3689 — workflow text invariant', () => {
     assert.doesNotMatch(
       body,
       /ls\s+\.planning\/spikes\/\*\/\.continue-here/,
-      'resume-project.md still contains the chained `ls .planning/spikes/*/.continue-here*.md` pattern that aborts under zsh NOMATCH; the find-based scan should replace it.',
+      'resume-project.md still contains the chained `ls .planning/spikes/*/.continue-here*.md` pattern that aborts under zsh NOMATCH.',
     );
-    assert.match(
-      body,
-      /find \.planning -maxdepth 3 -name '\.continue-here\*\.md'/,
-      'resume-project.md must use the find-based scan introduced by the #3689 fix.',
-    );
+  });
+
+  test('the discovery step does not shell out to the external find binary (#4805)', () => {
+    // Allowlisted agent shells (fd-only policies) refuse a bare `find`, and the per-line `2>/dev/null`
+    // used to hide the refusal, so a checkpoint on disk looked absent.
+    const commandLines = DISCOVERY_SNIPPET.split('\n').filter((l) => !l.trimStart().startsWith('#'));
+    assert.ok(commandLines.length > 0, 'the extracted discovery lines must contain commands');
+    for (const line of commandLines) {
+      assert.doesNotMatch(line, /(^|[\s;&|(])find\s/, `bare find in the discovery step: ${line}`);
+    }
+  });
+});
+
+describe('#4805 — discovery runs without any external search binary', () => {
+  let tmpDir;
+  let emptyBin;
+
+  before(() => {
+    tmpDir = createTempDir('gsd-bug-4805-');
+    emptyBin = createTempDir('gsd-bug-4805-bin-');
+    const plan = path.join(tmpDir, '.planning');
+    fs.mkdirSync(path.join(plan, 'phases', '01-x'), { recursive: true });
+    fs.mkdirSync(path.join(plan, 'phases', '01-x', 'deep'), { recursive: true });
+    fs.mkdirSync(path.join(plan, 'async-jobs'), { recursive: true });
+    fs.writeFileSync(path.join(plan, '.continue-here-AT-1234.md'), 'a\n', 'utf8');
+    fs.writeFileSync(path.join(plan, 'phases', '01-x', '.continue-here.md'), 'b\n', 'utf8');
+    fs.writeFileSync(path.join(plan, 'phases', '01-x', 'deep', '.continue-here-too-deep.md'), 'c\n', 'utf8');
+    fs.writeFileSync(path.join(plan, 'async-jobs', 'job-1.json'), '{}\n', 'utf8');
+    fs.writeFileSync(path.join(plan, 'async-jobs', 'notes.txt'), 'x\n', 'utf8');
+    fs.writeFileSync(path.join(tmpDir, '.continue-here-legacy.md'), 'd\n', 'utf8');
+  });
+
+  after(() => {
+    cleanup(tmpDir);
+    cleanup(emptyBin);
+  });
+
+  // Run `snippet` under `shell` with a PATH holding nothing, so any external command (find included) fails.
+  function runWithoutBinaries(shell, args, snippet, cwd) {
+    const abs = spawnSync('sh', ['-c', `command -v ${shell}`], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS }).stdout.trim();
+    const r = spawnSync(abs, [...args, snippet], { cwd, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS, env: { PATH: emptyBin, HOME: tmpDir } });
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+  }
+
+  const lines = (out) => out.split('\n').filter(Boolean).sort();
+  const EXPECTED = [
+    './.continue-here-legacy.md',
+    '.planning/.continue-here-AT-1234.md',
+    '.planning/async-jobs/job-1.json',
+    '.planning/phases/01-x/.continue-here.md',
+  ];
+
+  for (const [shell, args, skip] of [
+    ['bash', ['-c'], !hasShell('bash')],
+    ['zsh', ['-o', 'nomatch', '-c'], !hasShell('zsh')],
+  ]) {
+    test(`${shell}: lists every checkpoint and async-job manifest with an empty PATH`, { skip }, () => {
+      const r = runWithoutBinaries(shell, args, DISCOVERY_SNIPPET, tmpDir);
+      assert.equal(r.status, 0, `${shell} exited ${r.status}; stderr=${r.stderr}`);
+      assert.deepEqual(lines(r.stdout), EXPECTED);
+    });
+
+    test(`${shell}: a checkpoint deeper than three levels below .planning is not listed (find -maxdepth 3 parity)`, { skip }, () => {
+      const r = runWithoutBinaries(shell, args, DISCOVERY_SNIPPET, tmpDir);
+      assert.ok(!r.stdout.includes('too-deep'), r.stdout);
+    });
+
+    test(`${shell}: an empty workspace exits 0 with no output`, { skip }, () => {
+      const empty = createTempDir('gsd-bug-4805-empty-');
+      try {
+        const r = runWithoutBinaries(shell, args, DISCOVERY_SNIPPET, empty);
+        assert.equal(r.status, 0, `${shell} exited ${r.status}; stderr=${r.stderr}`);
+        assert.equal(r.stdout, '');
+      } finally {
+        cleanup(empty);
+      }
+    });
+  }
+
+  test('control: the pre-#4805 find lines print nothing when find is unavailable', { skip: !hasShell('bash') }, () => {
+    const r = runWithoutBinaries('bash', ['-c'], LEGACY_FIND_SNIPPET, tmpDir);
+    assert.equal(r.status, 0);
+    assert.equal(r.stdout, '', 'the refusal was swallowed, so the checkpoint looked absent');
   });
 });
   });
