@@ -119,6 +119,12 @@ const SIZE_ONLY_WORKFLOWS = new Set([
   // Splitting it per the progressive-disclosure pattern is the real fix and is worth its own change
   // — it is already a step file extracted from execute-phase.md for that same reason.
   'gsd-core/workflows/execute-phase/steps/code-review-disposition.md',
+  // ~51.4K after #4790's reviewer-contribution block. This file sat at 49,961 chars on next — 39
+  // below the 50K prompt-stuffing threshold — so, exactly like review.md and quick.md above, it was
+  // going to trip on whatever was added to it next; the block is ~1.5K of code and its rationale.
+  // Size-only: still fully injection scanned. Splitting it per the progressive-disclosure pattern is
+  // the real fix and is worth its own change.
+  'gsd-core/workflows/code-review.md',
 ]);
 
 // ─── Scanner ────────────────────────────────────────────────────────────────

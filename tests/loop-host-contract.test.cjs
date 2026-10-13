@@ -471,11 +471,11 @@ describe('buildContract from real workflows', () => {
     assert.deepEqual(plan.coreArtifacts.consumes, ['CONTEXT.md']);
   });
 
-  test('execute step has executor/verifier roles and 4 points', () => {
+  test('execute step has executor/verifier/code-reviewer roles and 4 points', () => {
     const contract = buildContract();
     const execute = contract.find((e) => e.step === 'execute');
     assert.ok(execute, 'execute step must be present');
-    assert.deepEqual(execute.agentRoles, ['executor', 'verifier']);
+    assert.deepEqual(execute.agentRoles, ['executor', 'verifier', 'code-reviewer']);
     assert.deepEqual(execute.points, ['execute:pre', 'execute:wave:pre', 'execute:wave:post', 'execute:post']);
     assert.deepEqual(execute.coreArtifacts.produces, ['SUMMARY.md']);
     assert.deepEqual(execute.coreArtifacts.consumes, ['PLAN.md']);
