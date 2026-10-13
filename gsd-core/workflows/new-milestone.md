@@ -317,7 +317,7 @@ below still need to re-read it (each is its own shell) to resolve
 REQUIREMENTS.md/ROADMAP.md/STATE.md correctly under a workstream. It is
 removed in Step 10, its true last consumer. -->
 
-Extract from init JSON: `researcher_model`, `synthesizer_model`, `roadmapper_model`, `commit_docs`, `research_enabled`, `current_milestone`, `project_exists`, `roadmap_exists`, `latest_completed_milestone`, `phase_dir_count`, `phase_archive_path`, `agents_installed`, `missing_agents`, `project_path`, `roadmap_path`, `requirements_path`, `config_path`, `research_dir`, `milestones_path`, `phases_dir`, `archive_dir`.
+Extract from init JSON: `researcher_model`, `synthesizer_model`, `roadmapper_model`, `commit_docs`, `research_enabled`, `current_milestone`, `project_exists`, `roadmap_exists`, `latest_completed_milestone`, `phase_dir_count`, `phase_archive_path`, `agents_installed`, `agents_installed_reason`, `missing_agents`, `project_path`, `roadmap_path`, `requirements_path`, `config_path`, `research_dir`, `milestones_path`, `phases_dir`, `archive_dir`.
 
 **If `agents_installed` is false:** Display a warning before proceeding:
 ```
@@ -333,7 +333,7 @@ Proceeding without research subagents — roadmap will be generated inline.
 ```
 Skip the parallel research spawn step and generate the roadmap inline.
 
-**If `agents_installed` is null:** GSD could not check agents for this runtime (`agents_installed_reason`). Do not show the warning above; continue with the parallel research spawn step.
+**If `agents_installed` is null:** GSD could not check agents for this runtime (`agents_installed_reason`). Do not show the warning above. Spawn the first named subagent alone: the first researcher in the parallel research spawn step, or `gsd-roadmapper` when research is skipped. If it fails with "agent type not found", skip the research spawn step and write the roadmap inline instead of spawning `gsd-roadmapper`. Otherwise spawn the remaining subagents as normal.
 
 <!-- gsd:section id="reset-phase-safety" when="flag:--reset-phase-numbers" -->
 If `section_manifest` is `null` or `"reset-phase-safety"` is in its `included` list: read and execute `gsd-core/workflows/new-milestone/steps/reset-phase-safety.md`. Otherwise skip — do not read the file.
