@@ -49,7 +49,11 @@ const AGENTS_INSTALLED_REASON = Object.freeze({
 type AgentsInstalledReason = (typeof AGENTS_INSTALLED_REASON)[keyof typeof AGENTS_INSTALLED_REASON];
 
 interface AgentsInstalledResult {
-  /** `null` when the check could not run; `reason` then says why. */
+  /**
+   * `null` when the check could not run; `reason` says why when `checkAgentsInstalled`
+   * reports it. The agent lists and `agents_dir` are then empty, which does not mean that
+   * no agent is missing.
+   */
   agents_installed: boolean | null;
   missing_agents: string[];
   installed_agents: string[];

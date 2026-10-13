@@ -54,7 +54,7 @@ function checkAgentInstall(snapshot: PlanningSnapshot): Diagnostic[] {
   // UNREADABLE only when the scan could not run (buildAgentInstallField).
   if (scope === SCOPE.UNREADABLE) return [];
 
-  if (status.agents_installed) return [];
+  if (status.agents_installed !== false) return [];
 
   // verify.cts:1995 — zero agents installed at all.
   if (status.installed_agents.length === 0) {

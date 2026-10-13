@@ -532,7 +532,7 @@ function buildAgentInstallField(cwd: string): { value: ReturnType<typeof checkAg
   } catch {
     return {
       value: {
-        agents_installed: false,
+        agents_installed: null,
         missing_agents: [],
         installed_agents: [],
         incomplete_agents: [],
