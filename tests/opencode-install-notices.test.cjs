@@ -90,3 +90,29 @@ test('1.x installed over a data dir holding both generations\' tables: informati
   assert.match(out, /has also used the data directory/);
   assert.doesNotMatch(out, /cannot open it/);
 });
+
+test('1.x installed: the installer prints the deprecation notice with the freeze date and upgrade paths (#5339)', { skip: SKIP }, (t) => {
+  const sb = sandbox(t, { version: '1.19.0', tables: ['project', 'session'] });
+  const out = install(sb);
+  assert.match(out, /OpenCode 1\.x is deprecated for GSD/);
+  assert.match(out, /bug fixes only until 2026-12-31/);
+  assert.match(out, /opencode upgrade --major/);
+  assert.match(out, /opencode\.ai\/v2\/install/);
+  assert.match(out, /Kilo is not affected/);
+});
+
+test('2.x installed: no deprecation notice (#5339)', { skip: SKIP }, (t) => {
+  const sb = sandbox(t, { version: '2.0.27', tables: ['project', 'session_v2'] });
+  assert.doesNotMatch(install(sb), /deprecated/);
+});
+
+test('Kilo install on a machine whose opencode is 1.x: no deprecation notice (#5339)', { skip: SKIP }, (t) => {
+  const sb = sandbox(t, { version: '1.19.0', tables: ['project', 'session'] });
+  const result = runNode([INSTALL_SCRIPT, '--kilo', '--global', '--config-dir', path.join(sb.home, 'cfg', 'kilo')], {
+    env: installerEnv({ HOME: sb.home, USERPROFILE: sb.home, PATH: `${sb.bin}${path.delimiter}${process.env.PATH}` }),
+    timeoutMs: INSTALL_TIMEOUT_MS,
+  });
+  assert.strictEqual(result.exitCode, 0, `installer failed\n${result.stdout}\n${result.stderr}`);
+  assert.doesNotMatch(result.stdout, /deprecated/);
+  assert.doesNotMatch(result.stdout, /OpenCode 1\.x/);
+});

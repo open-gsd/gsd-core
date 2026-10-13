@@ -607,3 +607,26 @@ export function describeDataDirNotice(
   }
   return null;
 }
+
+/**
+ * End of the OpenCode 1.x bug-fix-only window (ADR-5331 D7, epic #5331 Phase 3). A maintainer decision:
+ * 1.x receives fixes until this date, after which Phase 4 removes the 1.x paths for the `opencode` runtime.
+ * Kilo is a separate runtime on the 1.x line and is not affected.
+ */
+export const OPENCODE_V1_FREEZE_DATE = '2026-12-31';
+
+/**
+ * The deprecation notice shown when the installed `opencode` binary is OpenCode 1.x; `null` for 2.x and for an
+ * undetected generation. The upgrade commands are the binary's own: `opencode upgrade --major` is a flag of
+ * 1.19.0 (absent from 1.18.29) ("upgrade to OpenCode 2 and remove OpenCode 1"), and the V2 installer and package replace the 1.x binary
+ * (https://opencode.ai/v2/docs/migrate-v1/).
+ */
+export function describeDeprecationNotice(generation: OpencodeGeneration | null): string | null {
+  if (generation !== 1) return null;
+  return (
+    `OpenCode 1.x is deprecated for GSD: it receives bug fixes only until ${OPENCODE_V1_FREEZE_DATE}, after which ` +
+    'GSD supports OpenCode 2.x only. Upgrade with `opencode upgrade --major` (OpenCode 1.19 and newer), or install ' +
+    'OpenCode 2 (`curl -fsSL https://opencode.ai/v2/install | bash`, or `npm install -g @opencode/cli`) and re-run the GSD installer. ' +
+    'Your configuration is read in place by 2.x. Kilo is not affected.'
+  );
+}

@@ -2983,8 +2983,8 @@ const capabilities = {
         "commandSurface": "slash-file",
         "dispatch": {
           "namedDispatch": true,
-          "nested": "undocumented",
-          "maxDepth": "undocumented",
+          "nested": false,
+          "maxDepth": 1,
           "background": false,
           "subagentToolkit": "full",
           "backgroundDispatch": false,
@@ -3016,6 +3016,11 @@ const capabilities = {
           "dir": "plugins",
           "file": "gsd-core.js",
           "source": ".opencode/plugins/gsd-core.js"
+        },
+        "nativeCliPlugin": {
+          "dir": "plugins/gsd-statusline",
+          "file": "tui.tsx",
+          "source": ".opencode/plugins/gsd-statusline/tui.tsx"
         },
         "skipHomePrefixSubstitution": true,
         "skipSettingsUi": true,
@@ -7259,8 +7264,8 @@ const runtimes = {
         "commandSurface": "slash-file",
         "dispatch": {
           "namedDispatch": true,
-          "nested": "undocumented",
-          "maxDepth": "undocumented",
+          "nested": false,
+          "maxDepth": 1,
           "background": false,
           "subagentToolkit": "full",
           "backgroundDispatch": false,
@@ -7292,6 +7297,11 @@ const runtimes = {
           "dir": "plugins",
           "file": "gsd-core.js",
           "source": ".opencode/plugins/gsd-core.js"
+        },
+        "nativeCliPlugin": {
+          "dir": "plugins/gsd-statusline",
+          "file": "tui.tsx",
+          "source": ".opencode/plugins/gsd-statusline/tui.tsx"
         },
         "skipHomePrefixSubstitution": true,
         "skipSettingsUi": true,

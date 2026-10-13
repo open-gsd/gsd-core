@@ -433,3 +433,15 @@ Each phase is its own `approved-*` sub-issue + PR, dependency-ordered, exactly t
 | Cursor | declarative | slash-file (`gsd-`-ns) | host sub-agents; 19 hook events | passive | host (19) | yes | node |
 | Cline | declarative (rules) | slash-file | `use_subagents` depth-2 read-only | passive | **none** (rules) / SDK `beforeTool` | yes | node |
 | Hermes | declarative | slash-file | `delegate_task` depth-2 + kanban | passive (`pre/post_llm_call` unbound) | host (6) writes shared config | yes | node |
+
+## Amendment (2026-10-13): the OpenCode binding on OpenCode 2.x — [ADR-5331](5331-opencode-v2-support-and-v1-sunset.md)
+
+Recorded as a dated section, since ADRs here are append-only. The **OpenCode binding** above was written against OpenCode 1.x's plugin API (`opencode.ai/docs/plugins`). OpenCode 2.x is a second generation of the same `opencode` runtime, specified in [ADR-5331](5331-opencode-v2-support-and-v1-sunset.md) and verified on real binaries by its Phases 1–3. What changes in this ADR's six interface points:
+
+- **Point 2 (Dispatch).** The `Negotiated axis value` row claims `nested:true`. Both generations offer a child session no dispatch tool (observed on 1.18.29 and 2.0.27) and the 2.x Tools page documents "the default nesting depth is one", so the descriptor now declares `nested: false`, `maxDepth: 1`. `background` stays `false`: 2.x `subagent` has `background: true` (observed), but 1.x does not, and the descriptor is one value for the runtime until the 1.x sunset (ADR-5331 Phase 4). The "`subtask` is synchronous-only" remark holds for 1.x; on 2.x a command's `subagent`/`subtask` flag runs it as a background child, so GSD commands never set it.
+- **Point 3 (Model).** The table says `modelMode: passive`; the capability matrix, not this table, is the source of truth and declares `active` (see [OpenCode 2.x notes](../reference/host-integration-capability-matrix.md)).
+- **Point 4 (Hooks).** On 2.x the hook bus is `ctx.tool.hook`, `ctx.shell.hook`, `ctx.session.hook` and `ctx.event.subscribe`; the portable event floor maps as follows — `SessionStart` ≈ the first event that names a session (a 2.x `run` never emits `session.created`), `PreToolUse`/`PostToolUse` ≈ `execute.before`/`execute.after`, `PreCompact` ≈ the `compaction` hook, `Stop` has no `session.idle` on 2.x (the nearest event is `session.execution.succeeded`, observed on 2.0.27), and `file.edited` is derived from completed edit-tool calls.
+- **Point 1 (Command).** 2.x `opencode run` has no `--command` flag and does not expand a leading slash; slash commands run in the terminal client or through the session command API.
+- **The plugin runtime.** The "Bun vs Node" open question is answered: the plugin runs inside the host, and GSD's hook scripts are Node child processes started with `node` from `PATH` (never the OpenCode binary).
+- **A terminal-client surface exists** (CLI plugins, `plugins/<name>/tui.tsx`): GSD uses it for the statusline and update banner, the one Claude Code surface the 1.x bus could not carry.
+

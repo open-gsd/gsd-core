@@ -686,6 +686,7 @@
   "hooks/package.json",
   "opencode.json",
   "plugins/gsd-core.js",
+  "plugins/gsd-statusline/tui.tsx",
   "plugins/package.json",
   "scripts/changeset/README.md",
   "scripts/changeset/cli.cjs",

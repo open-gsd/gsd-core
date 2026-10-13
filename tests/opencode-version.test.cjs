@@ -193,3 +193,12 @@ test('describeDataDirNotice warns only where the installed binary cannot open th
     assert.equal(mod.describeDataDirNotice(g, k, '/d'), null, `${g}/${k}`);
   }
 });
+
+test('describeDeprecationNotice speaks only to OpenCode 1.x and names the freeze date (#5339)', () => {
+  const text = mod.describeDeprecationNotice(1);
+  assert.match(text, /until 2026-12-31/);
+  assert.match(text, /opencode upgrade --major/);
+  assert.equal(mod.OPENCODE_V1_FREEZE_DATE, '2026-12-31');
+  assert.equal(mod.describeDeprecationNotice(2), null);
+  assert.equal(mod.describeDeprecationNotice(null), null);
+});

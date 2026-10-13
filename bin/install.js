@@ -9090,6 +9090,20 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
     // unlink above failed, pulling the marker out from under a still-present
     // CommonJS adapter would leave it unloadable. The exact content match
     // still leaves any user-authored package.json in place.
+    // The terminal-client plugin directory (OpenCode 2.x statusline): GSD's file, then its now-empty directory.
+    const _cliU = hostBehaviorsFor(runtime).nativeCliPlugin;
+    if (_cliU) {
+      const cliFile = path.join(targetDir, _cliU.dir, _cliU.file);
+      if (fs.existsSync(cliFile)) {
+        try {
+          fs.unlinkSync(cliFile);
+          removedCount++;
+          removedFromPluginsDir = true;
+          console.log(`  ${green}✓${reset} Removed terminal-client plugin (${runtime})`);
+        } catch (_) { /* best-effort */ }
+      }
+      try { fs.rmdirSync(path.join(targetDir, _cliU.dir)); } catch (_) { /* not empty or absent */ }
+    }
     if (!fs.existsSync(pluginPath) && removeCommonJsMarker(pluginsDir)) {
       removedCount++;
       removedFromPluginsDir = true;
@@ -10263,6 +10277,14 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
     const pluginInstallPath = path.join(configDir, _npM.dir, _npM.file);
     if (fs.existsSync(pluginInstallPath)) {
       manifest.files[`${_npM.dir}/${_npM.file}`] = fileHash(pluginInstallPath);
+    }
+  }
+  // The OpenCode 2.x terminal-client plugin (statusline / update banner) is tracked beside it.
+  const _cliM = hostBehaviorsFor(runtime).nativeCliPlugin;
+  if (_cliM) {
+    const cliInstallPath = path.join(configDir, _cliM.dir, _cliM.file);
+    if (fs.existsSync(cliInstallPath)) {
+      manifest.files[`${_cliM.dir}/${_cliM.file}`] = fileHash(cliInstallPath);
     }
   }
 
@@ -13848,6 +13870,10 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
       if (notice) {
         console.log(notice.level === 'warn' ? `  ${yellow}⚠${reset} ${notice.text}` : `  ${dim}${notice.text}${reset}`);
       }
+      // Phase 3 (#5339): OpenCode 1.x is bug-fix-only until the freeze date. The `opencode` runtime only —
+      // this block does not run for Kilo.
+      const deprecation = ocv.describeDeprecationNotice(gen.generation);
+      if (deprecation) console.log(`  ${yellow}⚠${reset} ${deprecation}`);
     } catch { /* detection is advisory */ }
   }
 

@@ -93,8 +93,8 @@
       "commandSurface": "slash-file",
       "dispatch": {
         "namedDispatch": true,
-        "nested": "undocumented",
-        "maxDepth": "undocumented",
+        "nested": false,
+        "maxDepth": 1,
         "background": false,
         "subagentToolkit": "full",
         "backgroundDispatch": false,
@@ -126,6 +126,11 @@
         "dir": "plugins",
         "file": "gsd-core.js",
         "source": ".opencode/plugins/gsd-core.js"
+      },
+      "nativeCliPlugin": {
+        "dir": "plugins/gsd-statusline",
+        "file": "tui.tsx",
+        "source": ".opencode/plugins/gsd-statusline/tui.tsx"
       },
       "skipHomePrefixSubstitution": true,
       "skipSettingsUi": true,

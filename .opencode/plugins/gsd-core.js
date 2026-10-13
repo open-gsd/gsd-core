@@ -384,8 +384,80 @@ function handleHookResult(hookResult, output) {
     }
     // Best-effort visibility when metadata isn't surfaced to the model
     console.error(advisory);
+    // >>> gsd:opencode-parity
+    deliverAdvisory(advisory, output);
+    // <<< gsd:opencode-parity
   }
 }
+// >>> gsd:opencode-parity (ADR-5331 Phase 3; OpenCode-only — the Kilo mirror omits this block)
+// The four opt-in community hooks are bash scripts. Their gates (hooks.community, graphify.*) are
+// re-checked here in-process so a project that has not opted in never pays a bash spawn per tool call.
+function readProjectConfig(cwd) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(cwd, ".planning", "config.json"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function communityHooksEnabled(cwd) {
+  const config = readProjectConfig(cwd);
+  return !!config && config.hooks && config.hooks.community === true;
+}
+
+function graphifyAutoUpdateEnabled(cwd) {
+  const config = readProjectConfig(cwd);
+  return !!config && !process.env.CI && !!config.graphify &&
+    config.graphify.enabled === true && config.graphify.auto_update === true;
+}
+
+/**
+ * Run a GSD `.sh` hook under bash with the hook payload on stdin. Fails open: a missing script or no
+ * bash on PATH (a Windows host without Git Bash) is the same as the hook not being installed.
+ */
+function runShellHook(hookFile, payload, opts = {}) {
+  const hookPath = path.join(HOOKS_DIR, hookFile);
+  if (!fs.existsSync(hookPath)) return { stdout: "", exitCode: 0, timedOut: false };
+  let result;
+  try {
+    result = spawnSync(process.env.GSD_HOOK_SHELL || "bash", [hookPath], {
+      input: JSON.stringify(payload),
+      encoding: "utf8",
+      timeout: opts.timeout ?? 15000,
+      cwd: opts.cwd || currentCwd,
+      windowsHide: true,
+    });
+  } catch {
+    return { stdout: "", exitCode: 0, timedOut: false };
+  }
+  if (result.error) return { stdout: "", exitCode: 0, timedOut: false };
+  return {
+    stdout: (result.stdout || "").trim(),
+    exitCode: result.status == null ? 0 : result.status,
+    timedOut: result.signal === "SIGTERM",
+  };
+}
+
+// The SessionStart orientation text, produced once per session and handed to the model with its next request.
+let pendingSessionContext = null;
+
+// Advisories (read-before-edit, injection findings, phase-boundary, context warnings) were logged to stderr
+// only — OpenCode does not show a plugin's stderr or metadata to the model. They are appended to the tool's
+// own output instead, which is the one channel the model reads on both generations. An advisory raised before
+// the tool runs waits here for that tool's result.
+const pendingAdvisories = [];
+function deliverAdvisory(text, output) {
+  if (output && typeof output.output === "string") {
+    output.output += "\n\n[GSD advisory] " + text;
+    return;
+  }
+  if (!pendingAdvisories.includes(text) && pendingAdvisories.length < 5) pendingAdvisories.push(text);
+}
+function flushPendingAdvisories(output) {
+  if (!output || typeof output.output !== "string") return;
+  while (pendingAdvisories.length > 0) output.output += "\n\n[GSD advisory] " + pendingAdvisories.shift();
+}
+// <<< gsd:opencode-parity
 
 // ---------------------------------------------------------------------------
 // Frontmatter helpers (for config registration)
@@ -693,6 +765,13 @@ const GsdCorePlugin = async ({ directory } = {}) => {
         const r = runHook("gsd-secret-read-guard.js", prePayload());
         handleHookResult(r, output);
       }
+      // >>> gsd:opencode-parity
+      // 7. gsd-validate-commit.sh — Conventional Commits gate (opt-in: hooks.community)
+      if (claudeTool === "Bash" && communityHooksEnabled(cwd)) {
+        const r = runShellHook("gsd-validate-commit.sh", prePayload());
+        handleHookResult(r, output);
+      }
+      // <<< gsd:opencode-parity
     },
 
     // ── tool.execute.after — PostToolUse hooks ─────────────────────────
@@ -716,6 +795,25 @@ const GsdCorePlugin = async ({ directory } = {}) => {
             : String(output.output);
         output.output = rewriteContent(content);
       }
+      // >>> gsd:opencode-parity
+      flushPendingAdvisories(output);
+      // gsd-phase-boundary.sh — reminder when .planning/ files change outside the workflow (opt-in)
+      // gsd-graphify-update.sh — rebuild the knowledge graph after a HEAD-advancing git op (opt-in)
+      {
+        const postPayload = {
+          hook_event_name: "PostToolUse",
+          tool_name: claudeTool,
+          tool_input: toolInput,
+          cwd,
+        };
+        if ((claudeTool === "Write" || claudeTool === "Edit") && communityHooksEnabled(cwd)) {
+          handleHookResult(runShellHook("gsd-phase-boundary.sh", postPayload), output);
+        }
+        if (claudeTool === "Bash" && graphifyAutoUpdateEnabled(cwd)) {
+          handleHookResult(runShellHook("gsd-graphify-update.sh", postPayload, { timeout: 8000 }), output);
+        }
+      }
+      // <<< gsd:opencode-parity
 
       // gsd-read-injection-scanner.js — scan Read/WebFetch/WebSearch results
       if (
@@ -753,6 +851,16 @@ const GsdCorePlugin = async ({ directory } = {}) => {
         handleHookResult(r, output);
       }
     },
+    // >>> gsd:opencode-parity
+    // ── experimental.chat.system.transform — SessionStart orientation (gsd-session-state.sh) ──
+    "experimental.chat.system.transform": async (_input, output) => {
+      if (!pendingSessionContext) return;
+      const text = pendingSessionContext;
+      pendingSessionContext = null;
+      output.system = output.system || [];
+      output.system.push(text);
+    },
+    // <<< gsd:opencode-parity
 
     // ── experimental.session.compacting — PreCompact ───────────────────
     "experimental.session.compacting": async (_input, output) => {
@@ -796,6 +904,23 @@ const GsdCorePlugin = async ({ directory } = {}) => {
           session_id: currentSessionId,
           cwd: currentCwd,
         });
+        // >>> gsd:opencode-parity
+        // gsd-session-state.sh — project state orientation for the session (opt-in: hooks.community)
+        if (communityHooksEnabled(currentCwd)) {
+          const r = runShellHook("gsd-session-state.sh", {
+            hook_event_name: "SessionStart",
+            session_id: currentSessionId,
+            cwd: currentCwd,
+          });
+          try {
+            const parsed = JSON.parse(r.stdout);
+            const text = parsed && parsed.hookSpecificOutput && parsed.hookSpecificOutput.additionalContext;
+            pendingSessionContext = typeof text === "string" && text ? text : null;
+          } catch {
+            pendingSessionContext = null;
+          }
+        }
+        // <<< gsd:opencode-parity
         return;
       }
 
@@ -930,6 +1055,13 @@ async function setupV2(ctx) {
   if (ctx.session && typeof ctx.session.hook === "function") {
     // 2.x compaction event: { sessionID, system: [{ type: "text", text }], messages, … }; items added
     // to `system` reach the summarizer (observed on 2.0.27).
+    // gsd:opencode-parity: SessionStart orientation reaches the model through the 2.x context hook.
+    await ctx.session.hook("context", async (e) => {
+      if (!e || !Array.isArray(e.system)) return;
+      const out = { system: [] };
+      await hooks["experimental.chat.system.transform"]({}, out);
+      for (const line of out.system) e.system.push({ type: "text", text: String(line) });
+    });
     await ctx.session.hook("compaction", async (e) => {
       if (!e || !Array.isArray(e.system)) return;
       const out = { context: [] };
@@ -943,6 +1075,7 @@ async function setupV2(ctx) {
     });
   }
   let stop = null;
+  const seenSessions = new Set();
   if (ctx.event && typeof ctx.event.subscribe === "function") {
     const ac = new AbortController();
     stop = () => ac.abort();
@@ -952,6 +1085,16 @@ async function setupV2(ctx) {
         const d = (ev && ev.data) || {};
         const dir = (ev && ev.location && ev.location.directory) || (d.location && d.location.directory);
         try {
+          // A 2.x `run` never emits `session.created` (observed on 2.0.27: the first event of a session is
+          // `session.inbox.enqueued`). The first event that names a session is its SessionStart.
+          if (ev.type !== "session.created" && typeof d.sessionID === "string" && !seenSessions.has(d.sessionID)) {
+            seenSessions.add(d.sessionID);
+            await hooks.event({
+              event: { type: "session.created", properties: { info: { id: d.sessionID, directory: dir } }, sessionID: d.sessionID },
+            });
+          } else if (ev.type === "session.created" && typeof d.sessionID === "string") {
+            seenSessions.add(d.sessionID);
+          }
           await hooks.event({
             event: {
               type: ev.type,

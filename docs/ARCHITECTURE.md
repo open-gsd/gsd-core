@@ -1095,6 +1095,16 @@ so one `opencode` runtime serves both. The design is recorded in
   user modified are kept), an empty `settings.json`, the GSD `mcp` entry in both shapes, empty directories GSD created,
   and the `~/.gsd/defaults.json` keys the install set once no other runtime needs them and the user has not changed them.
 
+- **Phase 3 additions (#5339).** The OpenCode-only parity code in the plugin sits between `gsd:opencode-parity` markers and
+  is absent from the byte-identical Kilo mirror: the four opt-in `.sh` hooks (commit validation, phase boundary, session
+  state, graphify auto-update) run under bash, with their config gates re-checked in-process so a project that has not
+  opted in pays no spawn; advisories are appended to the tool result (OpenCode shows neither a plugin's stderr nor its
+  metadata to the model); the 2.x adapter treats the first event naming a session as `session.created`, because a 2.x
+  `run` never emits one. The terminal-client plugin `plugins/gsd-statusline/tui.tsx` (descriptor key
+  `hostBehaviors.nativeCliPlugin`) renders the output of `hooks/gsd-statusline.js` in the `home.footer.status` and
+  `prompt.footer.status` slots; 1.x never loads it. The deprecation notice and freeze date live in `opencode-version.cts`
+  (`describeDeprecationNotice`, `OPENCODE_V1_FREEZE_DATE`). Execution evidence: [verification matrix](reference/opencode-v2-verification-matrix.md).
+
 ### Upstream Contract Sources
 
 Runtime install expectations are checked against primary documentation where

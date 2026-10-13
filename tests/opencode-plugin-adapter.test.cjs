@@ -647,7 +647,7 @@ test('2.x entrypoint: execute.before blocks a secret read via the 2.x `shell` to
   });
   const { ctx, hooks } = fakeV2Ctx();
   await mod.setup(ctx);
-  assert.deepEqual(Object.keys(hooks).sort(), ['session.compaction', 'shell.create.before', 'tool.execute.after', 'tool.execute.before']);
+  assert.deepEqual(Object.keys(hooks).sort(), ['session.compaction', 'session.context', 'shell.create.before', 'tool.execute.after', 'tool.execute.before']);
   await assert.rejects(() => hooks['tool.execute.before']({ tool: 'shell', input: { command: 'cat .env' } }), /secret read denied/);
 });
 

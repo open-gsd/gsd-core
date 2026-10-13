@@ -222,7 +222,7 @@ function stripSkillPrefix(dirName) {
  * capability registry — the only place that mapping is declared.
  * Returns null when the runtime declares none.
  */
-function nativePluginDescriptor(runtime) {
+function nativePluginDescriptor(runtime, key = 'nativePlugin') {
   // Required lazily so a missing build surfaces at call time with a clear message
   // rather than at module load for callers that never touch this family.
   let registry;
@@ -239,7 +239,7 @@ function nativePluginDescriptor(runtime) {
     && registry.runtimes[runtime]
     && registry.runtimes[runtime].runtime
     && registry.runtimes[runtime].runtime.hostBehaviors;
-  return (entry && entry.nativePlugin) || null;
+  return (entry && entry[key]) || null;
 }
 
 // ─── The table ────────────────────────────────────────────────────────────────
@@ -606,6 +606,25 @@ const PROVENANCE_RULES = [
         );
       }
       return [np.source];
+    },
+  },
+
+  // ── Descriptor-declared terminal-client (CLI) plugin ───────────────────────
+  // OpenCode 2.x statusline: plugins/<dir>/<file>, source declared by hostBehaviors.nativeCliPlugin.
+  {
+    id: 'native-cli-plugin',
+    kind: 'descriptor',
+    roots: ['plugins'],
+    pattern: /^gsd-statusline\/tui\.tsx$/,
+    sources: (m, ctx) => {
+      const cli = nativePluginDescriptor(ctx.runtime, 'nativeCliPlugin');
+      if (!cli || !cli.source) {
+        throw new Error(
+          `emitted-provenance: runtime "${ctx.runtime}" emits ${ctx.rel} but declares ` +
+          'no hostBehaviors.nativeCliPlugin.source in the capability registry',
+        );
+      }
+      return [cli.source];
     },
   },
 

@@ -113,14 +113,15 @@ test('.kilo/plugins/gsd-core.js loads as raw CommonJS and exposes id "gsd-core" 
 test('.kilo/plugins/gsd-core.js stays byte-identical to .opencode/plugins/gsd-core.js (Kilo is an OpenCode fork; parity guard, UPGRADE 1)', () => {
   const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
   const kilo = splitLines(fs.readFileSync(ADAPTER_SRC, 'utf8')).join('\n');
-  // The OpenCode 2.x entrypoint (ADR-5331) lives between `gsd:opencode-v2` markers and is
-  // intentionally absent from the Kilo mirror, which runs on the OpenCode 1.x line.
+  // The OpenCode 2.x entrypoint (ADR-5331) lives between `gsd:opencode-v2` markers, and the OpenCode-only
+  // hook parity (Phase 3) between `gsd:opencode-parity` markers; both are intentionally absent from the
+  // Kilo mirror, which runs on the OpenCode 1.x line and keeps its output unchanged.
   const kept = [];
   let inBlock = false;
   for (const line of splitLines(fs.readFileSync(OPENCODE_ADAPTER_SRC, 'utf8'))) {
-    if (/^\s*\/\/ >>> gsd:opencode-v2/.test(line)) inBlock = true;
+    if (/^\s*\/\/ >>> gsd:opencode-(?:v2|parity)/.test(line)) inBlock = true;
     if (!inBlock) kept.push(line);
-    if (/^\s*\/\/ <<< gsd:opencode-v2/.test(line)) inBlock = false;
+    if (/^\s*\/\/ <<< gsd:opencode-(?:v2|parity)/.test(line)) inBlock = false;
   }
   const opencode = kept.join('\n');
   assert.equal(

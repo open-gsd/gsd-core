@@ -145,6 +145,7 @@ module.exports = {
   "tests/onboard-command.test.cjs",
   "tests/opencode-generations.smoke.test.cjs",
   "tests/opencode-install-notices.test.cjs",
+  "tests/opencode-parity-hooks.test.cjs",
   "tests/opencode-plugin-adapter.test.cjs",
   "tests/opencode-uninstall-roundtrip.test.cjs",
   "tests/pause-work-context-detection.test.cjs",
