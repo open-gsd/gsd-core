@@ -75,21 +75,25 @@ shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
 # Check for structured handoff (preferred — machine-readable)
 cat .planning/HANDOFF.json 2>/dev/null || true
 
-# Check for continue-here files (phase + non-phase + legacy fallback).
-# Use `find` rather than a chained `ls` of bare globs: under zsh's default
-# NOMATCH option (macOS default shell), a single non-matching glob aborts
-# the entire command during word-expansion — silently dropping every
-# pattern after the first miss, including `.planning/.continue-here*.md`.
-# `find` does not use shell glob expansion and tolerates absent
-# directories on both bash and zsh.
-find .planning -maxdepth 3 -name '.continue-here*.md' -print 2>/dev/null || true
-find . -maxdepth 1 -name '.continue-here*.md' -print 2>/dev/null || true
+# Check for continue-here files (phase + non-phase + legacy fallback), three levels below .planning.
+# Guarded glob loops, not `find` and not a chained `ls` of bare globs (#4805, #3689):
+#  - a chained `ls` of bare globs aborts under zsh's default NOMATCH on the first miss, silently
+#    dropping every pattern after it, including `.planning/.continue-here*.md` (#3689);
+#  - `find` is an external binary that allowlisted agent shells (an fd-only policy, for one) refuse, and a
+#    per-line `2>/dev/null || true` then hid the refusal, so a checkpoint on disk looked absent (#4805).
+# The shell alone does this: nullglob (set above) drops an unmatched glob, `[ -e ]` guards the shells that
+# keep it, and an absent directory simply matches nothing. Output is `.planning/...` and `./...` as before.
+for f in .planning/.continue-here*.md .planning/*/.continue-here*.md .planning/*/*/.continue-here*.md ./.continue-here*.md; do
+  if [ -e "$f" ]; then echo "$f"; fi
+done 2>/dev/null || true
 
 # Outstanding async external jobs (legal external_job_waiting half-state).
 # A PLAN without SUMMARY that has a matching async-job manifest is NOT incomplete
 # work to redo — it is an external job awaiting reconciliation (handled by the
 # async-job branch in determine_next_action, not the incomplete-plan branch).
-find .planning/async-jobs -maxdepth 1 -name '*.json' -print 2>/dev/null || true
+for f in .planning/async-jobs/*.json; do
+  if [ -e "$f" ]; then echo "$f"; fi
+done 2>/dev/null || true
 
 # Check for plans without summaries (incomplete execution)
 for plan in .planning/phases/*/*-PLAN.md; do
