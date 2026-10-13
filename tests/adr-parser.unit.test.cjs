@@ -1399,20 +1399,52 @@ describe('splitEntries (via parseAdrMarkdown decisions)', () => {
     assert.deepEqual(out.decisions, ['Real entry.']);
   });
 
-  // Regression guard for ADR-1372 T2: iterateBullets folded indented non-bullet
-  // lines into the preceding bullet — the flat splitEntries must keep them.
-  test('indented non-bullet line (4-space) kept verbatim as its own entry', () => {
-    const md = '## Decision\n- Bullet entry\n    indented non-bullet line\n- Another bullet';
+  // #5227: ADR-1372 T2 pinned the opposite (a wrapped line kept as its own
+  // entry); that fragmented every hard-wrapped bullet into sentence fragments.
+  test('indented continuation line joins the bullet it belongs to (#5227)', () => {
+    const md = '## Decision\n- Bullet entry\n    indented continuation\n- Another bullet';
     const out = parseAdrMarkdown(md);
-    assert.deepEqual(out.decisions, ['Bullet entry', 'indented non-bullet line', 'Another bullet']);
+    assert.deepEqual(out.decisions, ['Bullet entry indented continuation', 'Another bullet']);
   });
 
-  // Regression guard for ADR-1372 T2: iterateBullets stripped numbered markers
-  // ("1. Foo" → "Foo") — the flat splitEntries only strips [-*+], not numbers.
-  test('numbered list item kept verbatim (not stripped to bare text)', () => {
-    const md = '## Decision\n1. First\n2. Second';
-    const out = parseAdrMarkdown(md);
-    assert.deepEqual(out.decisions, ['1. First', '2. Second']);
+  test('unindented continuation line also joins its bullet (#5227)', () => {
+    const out = parseAdrMarkdown('## Decision\n- First decision, wrapped\nacross two lines.\n- Second decision.');
+    assert.deepEqual(out.decisions, ['First decision, wrapped across two lines.', 'Second decision.']);
+  });
+
+  test('a bullet wrapped over three lines is one entry (#5227)', () => {
+    const out = parseAdrMarkdown('## Decision\n- one\n  two\n  three\n- four');
+    assert.deepEqual(out.decisions, ['one two three', 'four']);
+  });
+
+  test('ordered markers "1." and "1)" are stripped (#5227)', () => {
+    const out = parseAdrMarkdown('## Decision\n1. First\n2. Second\n3) Third');
+    assert.deepEqual(out.decisions, ['First', 'Second', 'Third']);
+  });
+
+  test('wrapped ordered items join their continuation (#5227)', () => {
+    const out = parseAdrMarkdown('## Decision\n1. First numbered,\n   wrapped.\n2. Second numbered.');
+    assert.deepEqual(out.decisions, ['First numbered, wrapped.', 'Second numbered.']);
+  });
+
+  test('a nested sub-bullet stays attached to its top-level item (#5227)', () => {
+    const out = parseAdrMarkdown('## Decision\n- Parent\n  - child a\n  - child b\n- Sibling');
+    assert.deepEqual(out.decisions, ['Parent - child a - child b', 'Sibling']);
+  });
+
+  test('text before the first marker is its own entry (#5227)', () => {
+    const out = parseAdrMarkdown('## Decision\nWe decided:\n- A\n- B');
+    assert.deepEqual(out.decisions, ['We decided:', 'A', 'B']);
+  });
+
+  test('a block with no list markers keeps one entry per line (#5227)', () => {
+    const out = parseAdrMarkdown('## Decision\nline one\nline two');
+    assert.deepEqual(out.decisions, ['line one', 'line two']);
+  });
+
+  test('a number inside a sentence is not an ordered marker (#5227)', () => {
+    const out = parseAdrMarkdown('## Decision\n- Use v2.\n2024 was the cutoff.');
+    assert.deepEqual(out.decisions, ['Use v2. 2024 was the cutoff.']);
   });
 });
 

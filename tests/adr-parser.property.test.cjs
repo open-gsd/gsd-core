@@ -210,3 +210,31 @@ describe('adr-parser: parseAdrMarkdown properties', () => {
     );
   });
 });
+
+describe('adr-parser: list-entry splitting properties (#5227)', () => {
+  // One entry per top-level marker line, however each item is wrapped.
+  test('property: entry count equals the number of top-level markers, and wrapping never changes it', () => {
+    const word = fc.stringMatching(/^[a-z]{1,8}$/);
+    const item = fc.record({
+      marker: fc.constantFrom('-', '*', '+', '1.', '2)'),
+      words: fc.array(word, { minLength: 1, maxLength: 6 }),
+      wrapAt: fc.integer({ min: 1, max: 6 }),
+      indent: fc.constantFrom('', '  ', '    ', '\t'),
+    });
+    fc.assert(
+      fc.property(fc.array(item, { minLength: 1, maxLength: 8 }), (items) => {
+        const lines = [];
+        for (const it of items) {
+          const first = it.words.slice(0, it.wrapAt).join(' ');
+          lines.push(`${it.marker} ${first}`);
+          const rest = it.words.slice(it.wrapAt);
+          if (rest.length > 0) lines.push(`${it.indent}${rest.join(' ')}`);
+        }
+        const out = parseAdrMarkdown(`## Decision\n${lines.join('\n')}`);
+        // pushUnique de-duplicates, so compare against the distinct expected texts
+        const expected = [...new Set(items.map((it) => it.words.join(' ')))];
+        assert.deepEqual(out.decisions, expected);
+      })
+    );
+  });
+});
