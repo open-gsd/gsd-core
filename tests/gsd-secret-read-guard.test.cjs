@@ -1831,6 +1831,9 @@ describe("regressions: #5255 — zsh's reading of $'…' (review round 6, Major 
     [R`cat $'.env\U'`, '.env'],
     [R`cat $'.env\x{'x`, '.env'], // `\x{` is a NUL to zsh; bash reads `.env\x{x`
     [R`cat $'.env\C-@'`, '.env'],
+    [R`cat $'.env\M-'`, '.env'], // a trailing `\M-` has no byte to modify; zsh drops it
+    [R`cat $'.env\C-'`, '.env'], // the same for `\C-`
+    [R`cat $'.env\M'`, '.env'], // and without the dash
     [R`cat $'.env.\local'`, '.env.local'], // zsh drops an unknown escape's backslash
   ];
   for (const [cmd, path] of zshOnly) {
