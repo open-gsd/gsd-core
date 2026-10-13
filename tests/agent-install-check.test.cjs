@@ -509,6 +509,13 @@ describe('checkAgentsInstalled on an UNKNOWN runtime id', () => {
     .map(([id]) => id);
   const RETIRED = [...runtimeNamePolicy.RETIRED_RUNTIME_IDS];
   const NEAR_MISSES = REGISTERED.flatMap((id) => [id.toUpperCase(), `${id}-cli`]);
+  const LEGACY = [...runtimeNamePolicy.LEGACY_NON_REGISTRY_RUNTIME_IDS];
+  const classified = (s) => Object.hasOwn(REGISTRY_RUNTIMES, s) || LEGACY.includes(s) || runtimeNamePolicy.isRetiredRuntimeId(s);
+  const assertReported = (id) => {
+    const result = agentInstallCheck.checkAgentsInstalled(id);
+    assert.strictEqual(result.reason, AGENTS_INSTALLED_REASON.UNKNOWN_RUNTIME, `${JSON.stringify(id)} is reported`);
+    assert.strictEqual(result.agents_installed, null, `${JSON.stringify(id)} could not be checked`);
+  };
   let savedAgentsDir;
 
   beforeEach(() => {
@@ -558,39 +565,32 @@ describe('checkAgentsInstalled on an UNKNOWN runtime id', () => {
     }
   });
 
-  test('property: an unknown id is reported, a retired id throws, any other id scans without a reason', () => {
-    const seen = { unknown: 0, retired: 0, known: 0 };
+  test('every KNOWN id scans without a reason, every near-miss is reported', () => {
+    for (const id of [...REGISTERED, ...LEGACY]) {
+      const result = agentInstallCheck.checkAgentsInstalled(id);
+      assert.strictEqual(result.reason, undefined, `${id} is scanned`);
+      assert.strictEqual(typeof result.agents_installed, 'boolean', `${id} gets a real answer`);
+    }
+    const nearMisses = NEAR_MISSES.filter((s) => !classified(s));
+    assert.ok(nearMisses.length > 0, 'near-misses remain after filtering');
+    for (const id of nearMisses) assertReported(id);
+  });
+
+  test('property: an arbitrary string that names no runtime is reported', () => {
     fc.assert(
-      fc.property(
-        fc.oneof(
-          fc.constantFrom(...REGISTERED),
-          fc.constantFrom(...RETIRED),
-          fc.constantFrom(...NEAR_MISSES),
-          fc.string({ minLength: 1, maxLength: 40 }),
-        ),
-        (id) => {
-          let refusal = null;
-          try { runtimeNamePolicy.assertKnownRuntime(id); } catch (err) { refusal = err.name; }
-          if (refusal === 'RetiredRuntimeError') {
-            seen.retired++;
-            assert.throws(() => agentInstallCheck.checkAgentsInstalled(id), { name: 'RetiredRuntimeError' });
-            return;
-          }
-          const result = agentInstallCheck.checkAgentsInstalled(id);
-          if (refusal === 'UnknownRuntimeError') {
-            seen.unknown++;
-            assert.strictEqual(result.reason, AGENTS_INSTALLED_REASON.UNKNOWN_RUNTIME, `${JSON.stringify(id)} is reported`);
-            assert.strictEqual(result.agents_installed, null);
-          } else {
-            seen.known++;
-            assert.strictEqual(result.reason, undefined, `${JSON.stringify(id)} is scanned`);
-            assert.strictEqual(typeof result.agents_installed, 'boolean', `${JSON.stringify(id)} gets a real answer`);
-          }
-        },
-      ),
+      fc.property(fc.string({ minLength: 1, maxLength: 40 }).filter((s) => !classified(s)), assertReported),
       { seed: 1729, numRuns: 300 },
     );
-    for (const [branch, count] of Object.entries(seen)) assert.ok(count > 0, `the ${branch} branch ran (${JSON.stringify(seen)})`);
+  });
+
+  test('a refusal from a second copy of the error class is still reported', (t) => {
+    const runtimeHomes = require(RUNTIME_HOMES_PATH);
+    t.mock.method(runtimeHomes, 'getGlobalConfigDir', () => {
+      throw Object.assign(new Error('second copy'), { name: 'UnknownRuntimeError', code: 'GSD_UNKNOWN_RUNTIME' });
+    });
+    const result = agentInstallCheck.checkAgentsInstalled('codex');
+    assert.strictEqual(result.agents_installed, null);
+    assert.strictEqual(result.reason, AGENTS_INSTALLED_REASON.UNKNOWN_RUNTIME);
   });
 
   test('Object.keys(AGENTS_INSTALLED_REASON).sort() is locked', () => {

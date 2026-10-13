@@ -280,4 +280,37 @@ describe('agent-install rule (W010)', () => {
     assert.strictEqual(snap.agentInstall.value.reason, AGENTS_INSTALLED_REASON.UNKNOWN_RUNTIME);
     assert.deepStrictEqual(rule.check(snap), []);
   });
+
+  test('a scan that throws reports agents_installed null, the same as an UNKNOWN id', (t) => {
+    const cwd = createTempDir('gsd-scan-throws-');
+    t.after(() => cleanup(cwd));
+    const saved = process.env['GSD_RUNTIME'];
+    // A retired runtime id makes checkAgentsInstalled throw RetiredRuntimeError.
+    process.env['GSD_RUNTIME'] = [...require('../../gsd-core/bin/lib/runtime-name-policy.cjs').RETIRED_RUNTIME_IDS][0];
+    t.after(() => {
+      if (saved === undefined) delete process.env['GSD_RUNTIME'];
+      else process.env['GSD_RUNTIME'] = saved;
+    });
+
+    const snap = buildPlanningSnapshot(cwd);
+    assert.strictEqual(snap.agentInstall.scope, SCOPE.UNREADABLE);
+    assert.strictEqual(snap.agentInstall.value.agents_installed, null);
+  });
+
+  test('agents_installed null is silent even outside UNREADABLE', () => {
+    const snapshot = {
+      agentInstall: {
+        scope: SCOPE.COMPLETE,
+        value: {
+          agents_installed: null,
+          missing_agents: [],
+          installed_agents: [],
+          incomplete_agents: [],
+          agents_dir: '',
+          agent_runtime: 'example-host',
+        },
+      },
+    };
+    assert.deepStrictEqual(rule.check(snapshot), []);
+  });
 });

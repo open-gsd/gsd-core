@@ -6048,25 +6048,39 @@ describe('#4683 review repairs — fence blindness and deterministic ordering', 
 describe('regressions', () => {
   describe('an UNKNOWN runtime id is reported, not refused', () => {
     const { INIT_SUBCOMMANDS } = require('../gsd-core/bin/lib/command-aliases.cjs');
-    const { UnknownRuntimeError } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
     const { AGENTS_INSTALLED_REASON } = require('../gsd-core/bin/lib/agent-install-check.cjs');
     const UNKNOWN_ID = 'example-host';
-    // The CLI gives this error no typed code, so match the class's own message.
-    const REFUSAL = new UnknownRuntimeError(UNKNOWN_ID).message;
     const envFor = (dir) => ({ ...homeSandboxEnv(dir), GSD_RUNTIME: UNKNOWN_ID });
+    const knownEnvFor = (dir) => ({ ...homeSandboxEnv(dir), GSD_RUNTIME: 'claude' });
+    const NO_AGENTS_FIELDS = new Set(['list-workspaces']);
 
-    test('no init workflow refuses the runtime, with or without a phase argument', (t) => {
+    test('every init workflow exits as for a KNOWN runtime and reports null with the reason', (t) => {
       assert.ok(INIT_SUBCOMMANDS.length > 0, 'the init router lists its workflows');
       const tmpDir = createTempProject('gsd-unknown-');
       t.after(() => cleanup(tmpDir));
-      const refused = [];
+      const diverged = [];
       for (const name of INIT_SUBCOMMANDS) {
         for (const args of [['init', name], ['init', name, '1']]) {
           const r = runGsdTools(args, tmpDir, envFor(tmpDir));
-          if (`${r.output || ''}\n${r.error || ''}`.includes(REFUSAL)) refused.push(args.join(' '));
+          if (!r.success) {
+            const known = runGsdTools(args, tmpDir, knownEnvFor(tmpDir));
+            const firstLine = (text) => String(text || '').split(/\r?\n/)[0];
+            if (known.success || firstLine(known.error) !== firstLine(r.error)) {
+              diverged.push(`${args.join(' ')}: UNKNOWN failed with "${firstLine(r.error)}", KNOWN gave "${known.success ? 'success' : firstLine(known.error)}"`);
+            }
+            continue;
+          }
+          const out = JSON.parse(r.output);
+          if (NO_AGENTS_FIELDS.has(name)) {
+            if ('agents_installed' in out) diverged.push(`${args.join(' ')}: listed in NO_AGENTS_FIELDS but reports agents_installed`);
+            continue;
+          }
+          if (out.agents_installed !== null || out.agents_installed_reason !== AGENTS_INSTALLED_REASON.UNKNOWN_RUNTIME) {
+            diverged.push(`${args.join(' ')}: agents_installed ${JSON.stringify(out.agents_installed)}, reason ${JSON.stringify(out.agents_installed_reason)}`);
+          }
         }
       }
-      assert.deepStrictEqual(refused, []);
+      assert.deepStrictEqual(diverged, []);
     });
 
     test('new-project, plan-phase, execute-phase, quick and progress exit 0 and report that the check could not run', (t) => {
@@ -6094,14 +6108,17 @@ describe('regressions', () => {
       assert.strictEqual(out.agents_dir, '');
     });
 
-    test('control: a KNOWN runtime keeps a boolean and gets no reason key', (t) => {
+    test('control: a KNOWN runtime keeps a boolean and gets no reason key in init, docs-init and validate agents', (t) => {
       const tmpDir = createTempProject('gsd-unknown-');
       t.after(() => cleanup(tmpDir));
-      const r = runGsdTools(['init', 'new-project'], tmpDir, { ...homeSandboxEnv(tmpDir), GSD_RUNTIME: 'codex' });
-      assert.ok(r.success, `init new-project failed: ${r.error}`);
-      const out = JSON.parse(r.output);
-      assert.strictEqual(typeof out.agents_installed, 'boolean');
-      assert.ok(!('agents_installed_reason' in out), 'no reason key for a KNOWN runtime');
+      const knownEnv = knownEnvFor(tmpDir);
+      for (const [args, field] of [[['init', 'new-project'], 'agents_installed'], [['docs-init'], 'agents_installed'], [['validate', 'agents'], 'agents_found']]) {
+        const r = runGsdTools(args, tmpDir, knownEnv);
+        assert.ok(r.success, `${args.join(' ')} failed: ${r.error}`);
+        const out = JSON.parse(r.output);
+        assert.strictEqual(typeof out[field], 'boolean', `${args.join(' ')}: ${field}`);
+        assert.ok(!(`${field}_reason` in out), `${args.join(' ')}: no ${field}_reason key for a KNOWN runtime`);
+      }
     });
 
     test('validate agents and docs-init report that the check could not run, with the reason', (t) => {
