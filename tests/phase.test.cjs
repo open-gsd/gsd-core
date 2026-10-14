@@ -16322,6 +16322,147 @@ describe('phase complete — Status/Current Plan/Stopped at follow the next phas
   });
 });
 
+// ─── #4901: the body Completed Phases counter only ratchets up ────────────────
+
+describe('phase complete — body Completed Phases is not lowered by a narrower Progress table (#4901)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-4901-');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function run({ recordedCompleted, recordedTotal }) {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans Complete | Status | Completed |',
+        '| --- | --- | --- | --- |',
+        '| 1 | 1/1 | Complete | 2026-01-01 |',
+        '| 2 | 1/1 | Complete | 2026-02-01 |',
+        '| 3 | 1/1 | In Progress | - |',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans Complete | Status | Completed |',
+        '| --- | --- | --- | --- |',
+        '| 4 | 0/1 | Not started | - |',
+        '',
+      ].join('\n'),
+    );
+    const dir = path.join(tmpDir, '.planning', 'phases', '03-three');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, '03-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(dir, '03-01-SUMMARY.md'), '# Summary');
+    fs.writeFileSync(path.join(dir, '03-VERIFICATION.md'), ['---', 'status: passed', '---', '', '# V', ''].join('\n'));
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      [
+        '# State',
+        '',
+        '**Current Phase:** 3',
+        '**Current Phase Name:** Three',
+        '**Status:** Executing Phase 3',
+        '**Current Plan:** 1',
+        '**Last Activity:** 2025-01-01',
+        '**Last Activity Description:** Working',
+        `**Completed Phases:** ${recordedCompleted}`,
+        `**Total Phases:** ${recordedTotal}`,
+        '',
+      ].join('\n'),
+    );
+    const result = runGsdTools('phase complete 3', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error || result.output}`);
+    return fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8');
+  }
+
+  const field = (state, name) => {
+    const m = state.match(new RegExp(`^\\*\\*${name}:\\*\\*\\s*(.*)$`, 'm'));
+    return m ? m[1].trim() : null;
+  };
+
+  test('a project-wide counter above the first Progress table survives phase completion', () => {
+    const state = run({ recordedCompleted: 49, recordedTotal: 60 });
+    assert.strictEqual(field(state, 'Completed Phases'), '49');
+    assert.strictEqual(field(state, 'Total Phases'), '60');
+  });
+
+  test('the body counter counts the current milestone\'s Progress table, as the frontmatter counter does', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '- ✅ **v1.0 Shipped** — Phases 1-5',
+        '- 🚧 **v2.0 Current** — Phases 6-8',
+        '',
+        '<details>',
+        '<summary>✅ v1.0 Shipped</summary>',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans Complete | Status | Completed |',
+        '| --- | --- | --- | --- |',
+        '| 1 | 1/1 | Complete | 2026-01-01 |',
+        '| 2 | 1/1 | Complete | 2026-01-02 |',
+        '| 3 | 1/1 | Complete | 2026-01-03 |',
+        '| 4 | 1/1 | Complete | 2026-01-04 |',
+        '| 5 | 1/1 | Complete | 2026-01-05 |',
+        '',
+        '</details>',
+        '',
+        '## v2.0 Current',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans Complete | Status | Completed |',
+        '| --- | --- | --- | --- |',
+        '| 6 | 1/1 | Complete | 2026-02-01 |',
+        '| 7 | 1/1 | In Progress | - |',
+        '| 8 | 0/1 | Not started | - |',
+        '',
+      ].join('\n'),
+    );
+    const dir = path.join(tmpDir, '.planning', 'phases', '07-seven');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, '07-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(dir, '07-01-SUMMARY.md'), '# Summary');
+    fs.writeFileSync(path.join(dir, '07-VERIFICATION.md'), ['---', 'status: passed', '---', '', '# V', ''].join('\n'));
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      [
+        '# State',
+        '',
+        '**Current Phase:** 7',
+        '**Current Phase Name:** Seven',
+        '**Status:** Executing Phase 7',
+        '**Current Plan:** 1',
+        '**Last Activity:** 2025-01-01',
+        '**Last Activity Description:** Working',
+        '**Completed Phases:** 1',
+        '**Total Phases:** 3',
+        '',
+      ].join('\n'),
+    );
+    const result = runGsdTools('phase complete 7', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error || result.output}`);
+    const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8');
+    assert.strictEqual(field(state, 'Completed Phases'), '2', 'the v2.0 table has two Complete rows once phase 7 is done; the shipped v1.0 table must not be counted');
+  });
+
+  test('a counter below the derived count is still raised', () => {
+    const state = run({ recordedCompleted: 0, recordedTotal: 4 });
+    assert.ok(Number(field(state, 'Completed Phases')) >= 2, `expected the derived count to apply, got ${field(state, 'Completed Phases')}`);
+  });
+});
+
 // ─── #3572: phase remove must not prepend a second frontmatter block ──────────
 
 describe('bug #3572: phase remove must not corrupt STATE.md into two frontmatter blocks', () => {
