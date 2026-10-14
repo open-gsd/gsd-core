@@ -5163,6 +5163,102 @@ describe('#3171: init execute-phase emits the display name, not the directory sl
   });
 });
 
+// ─── #4854: the sibling init verbs emit the display name too ─────────────────
+// #3171 fixed `init execute-phase` only. Once a phase directory exists,
+// `searchPhaseInDir` derives `phase_name` from the (already slugified) directory
+// remainder, so plan-phase / verify-work / code-review /
+// discuss-phase-assumptions / phase-op emitted a value byte-identical to
+// `phase_slug`. plan-phase.md forwards plan-phase's `phase_name` into
+// `state planned-phase --name`, so every replan wrote the slug into STATE.md.
+describe('#4854: init verbs emit the ROADMAP display name, not the directory slug', () => {
+  const DISPLAY_NAME = 'Receipts Reconciliation';
+  const PHASE_DIR = '37-receipts-reconciliation';
+  const ROADMAP_4854 = [
+    '# Roadmap',
+    '',
+    `### Phase 37: ${DISPLAY_NAME}`,
+    '**Goal:** Reconcile receipts',
+    '**Plans:** 1 plans',
+    '',
+  ].join('\n');
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = fs.realpathSync(createFixture());
+    seedPhase(tmpDir, PHASE_DIR, { '37-01-PLAN.md': '# Plan' });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), ROADMAP_4854);
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  for (const verb of ['plan-phase', 'verify-work', 'code-review', 'discuss-phase-assumptions', 'phase-op']) {
+    test(`init ${verb}: phase_name is the display name while phase_slug stays the directory remainder`, () => {
+      const result = runGsdTools(`init ${verb} 37 --raw`, tmpDir);
+      assert.ok(result.success, `init ${verb} failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(
+        output.phase_name,
+        DISPLAY_NAME,
+        `init ${verb} must emit the ROADMAP display name, not the directory slug; got ${JSON.stringify(output.phase_name)}`,
+      );
+      if ('phase_slug' in output) {
+        assert.strictEqual(output.phase_slug, 'receipts-reconciliation', `phase_slug must stay disk-derived; got ${JSON.stringify(output.phase_slug)}`);
+      }
+    });
+  }
+
+  test('a phase with no ROADMAP heading keeps the disk-derived name', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
+    const result = runGsdTools('init plan-phase 37 --raw', tmpDir);
+    assert.ok(result.success, `init plan-phase failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).phase_name, 'receipts-reconciliation');
+  });
+
+  test('the plan-phase flow does not land a slug in current_phase_name', () => {
+    const initResult = runGsdTools('init plan-phase 37 --raw', tmpDir);
+    assert.ok(initResult.success, `init plan-phase failed: ${initResult.error}`);
+    const initOutput = JSON.parse(initResult.output);
+    assert.strictEqual(initOutput.phase_name, DISPLAY_NAME);
+
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      [
+        '---',
+        'gsd_state_version: 1.0',
+        'current_phase: 37',
+        `current_phase_name: ${DISPLAY_NAME}`,
+        'status: planning',
+        '---',
+        '',
+        '# Project State',
+        '',
+        '## Current Position',
+        '',
+        'Phase: 37 — Receipts Reconciliation',
+        'Plan: Not started',
+        'Status: Ready to plan',
+        '',
+      ].join('\n'),
+    );
+
+    // The orchestrator wiring (plan-phase.md step 13b): feed init's phase_name into planned-phase --name.
+    const plannedResult = runGsdTools(
+      ['state', 'planned-phase', '--phase', '37', '--name', initOutput.phase_name, '--plans', '2'],
+      tmpDir,
+    );
+    assert.ok(plannedResult.success, `state planned-phase failed: ${plannedResult.error}`);
+
+    const fm = parseFrontmatter(fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8'));
+    assert.strictEqual(
+      fm.current_phase_name,
+      DISPLAY_NAME,
+      `current_phase_name must hold the display name, not a directory slug; got ${JSON.stringify(fm.current_phase_name)}`,
+    );
+  });
+});
+
 // ─── #3581: init.progress frontier prefers roadmap order over stray artifacts ──
 describe('#3581: init.progress next_phase prefers the roadmap frontier', () => {
   function writeProgressFixture(t, { strayNine, completeAll }) {
