@@ -125,7 +125,7 @@ const LANE_COSTS = [
   },
   {
     job: 'test-conformance',
-    measuredMinutes: 19,
+    measuredMinutes: 20,
     // #5029: the first entry this lane has had. It ran uncovered from #4591
     // until now on the comment "no LANE_COSTS entry exists yet for this
     // brand-new job — generous until a real measurement exists", and that gap
@@ -135,11 +135,11 @@ const LANE_COSTS = [
     // GitHub applies ONE job-level budget across every matrix combination, so
     // this figure is the slowest ROW, windows or macos shard.
     //
-    // It is windows. Sharded SIX ways as of #5029, its long pole across ten
+    // It is windows. Sharded SIX ways as of #5029, its long pole across twelve
     // 6-shard runs was 16m38s / 15m17s / 16m25s / 16m21s / 17m22s / 18m15s /
-    // 16m31s / 18m07s / 15m34s / 18m49s — usually shard 5/6. The worst, 18m49s
-    // (shard 3/6, run 37697717410), rounds up to 19, so this cap may not drop
-    // below 29m.
+    // 16m31s / 18m07s / 15m34s / 18m49s / 18m38s / 19m15s — usually shard 5/6.
+    // The worst, 19m15s (shard 5/6, run 38650210804), rounds up to 20, so this
+    // cap may not drop below 30m.
     //
     // macOS was the slowest row until #5029 sharded it too. Unsharded it ran
     // 18m13s-26m01s across six runs on this PR, 26m58s on run 34434252144 —
@@ -161,7 +161,7 @@ const LANE_COSTS = [
     // imbalance to 1.01-1.02; if this lane is ever resharded downward on the
     // strength of that, re-measure the windows long pole from that run and
     // set this entry from the slowest row, rather than scaling a figure.
-    evidence: 'run 37697717410 — windows shard 3/6 18m49s, worst of ten 6-shard runs (binding row); macOS 3-shard long pole 10m09s on run 37694227292',
+    evidence: 'run 38650210804 — windows shard 5/6 19m15s, worst of twelve 6-shard runs (binding row); macOS 3-shard long pole 10m09s on run 37694227292',
   },
 ];
 
