@@ -1647,7 +1647,40 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
 | SOLO-01 | Phase 5 | Pending |
 `;
 
-  test('behavioral: two-plan fixture keeps shared requirement unchecked until all sibling plans finish', () => {
+  function extractExecutorReadyIdsBash() {
+    const executorPath = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
+    const content = fs.readFileSync(executorPath, 'utf-8');
+    const anchor = '# Locate assigned plan path for ready-ids check; fail closed if not found (#4944)';
+    const anchorIdx = content.indexOf(anchor);
+    assert.ok(anchorIdx !== -1, `Anchor "${anchor}" not found in ${executorPath}`);
+    const fenceClose = content.indexOf('```', anchorIdx);
+    assert.ok(fenceClose !== -1, 'Closing ``` fence not found in gsd-executor.md');
+    return content.slice(anchorIdx, fenceClose);
+  }
+
+  function runExtractedExecutorBash(cwd, envOverrides = {}) {
+    const bashSnippet = extractExecutorReadyIdsBash();
+    const { spawnSync } = require('child_process');
+    const fullScript = [
+      '#!/usr/bin/env bash',
+      'set -e',
+      `gsd_run() { node "${TOOLS_PATH}" "$@"; }`,
+      bashSnippet,
+    ].join('\n');
+
+    return spawnSync('bash', ['-c', fullScript], {
+      cwd,
+      env: {
+        ...process.env,
+        ...TEST_ENV_BASE,
+        ...envOverrides,
+      },
+      encoding: 'utf-8',
+      timeout: PROBE_TIMEOUT_MS,
+    });
+  }
+
+  test('behavioral: extracted executor bash gates shared requirement until sibling plan finishes', () => {
     writeRequirements(tmpDir, SHARED_REQUIREMENTS);
     const dir = makePhaseDir(tmpDir);
     const plan1 = path.join(dir, '05-05-01-a-PLAN.md');
@@ -1655,17 +1688,15 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     fs.writeFileSync(plan1, '---\nphase: 05-05\nplan: 01\nrequirements: [SHARED-01]\n---\nPlan A\n');
     fs.writeFileSync(plan2, '---\nphase: 05-05\nplan: 02\nrequirements: [SHARED-01, SOLO-01]\n---\nPlan B\n');
 
-    // Step 1: Plan 1 finishes first (writes its summary).
-    // The executor queries ready-ids (without --raw: JSON output) using its PLAN_PATH.
+    // Step 1: Plan 1 finishes first (writes its summary). Sibling Plan 2 has no summary yet.
     fs.writeFileSync(path.join(dir, '05-05-01-a-SUMMARY.md'), 'done\n');
-    const res1 = runGsdTools(['query', 'requirements.ready-ids', plan1, 'SHARED-01'], tmpDir);
-    const parsed1 = JSON.parse(res1.output);
-    assert.deepStrictEqual(parsed1.ready, [], 'SHARED-01 must be blocked — sibling plan 2 has not finished yet');
 
-    // Simulating executor bash gate: if ready is empty, mark-complete is not called.
-    if (parsed1.ready.length > 0) {
-      runGsdTools(['query', 'requirements.mark-complete', ...parsed1.ready], tmpDir);
-    }
+    // Execute the extracted prompt bash directly
+    const res1 = runExtractedExecutorBash(tmpDir, {
+      PLAN_PATH: plan1,
+      REQ_IDS: 'SHARED-01',
+    });
+    assert.strictEqual(res1.status, 0, `extracted bash failed: ${res1.stderr || res1.stdout}`);
 
     // Assert REQUIREMENTS.md on disk still keeps SHARED-01 unchecked
     let content = readRequirements(tmpDir);
@@ -1673,16 +1704,14 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     assert.ok(content.includes('| SHARED-01 | Phase 5 | Pending |'), 'SHARED-01 traceability must stay Pending');
 
     // Step 2: Plan 2 finishes (writes its summary).
-    // The executor queries ready-ids using its PLAN_PATH.
     fs.writeFileSync(path.join(dir, '05-05-02-b-SUMMARY.md'), 'done\n');
-    const res2 = runGsdTools(['query', 'requirements.ready-ids', plan2, 'SHARED-01,SOLO-01'], tmpDir);
-    const parsed2 = JSON.parse(res2.output);
-    assert.deepStrictEqual(parsed2.ready.sort(), ['SHARED-01', 'SOLO-01'], 'Both SHARED-01 and SOLO-01 must now be ready');
 
-    // Simulating executor bash gate: ready IDs are handed to mark-complete
-    if (parsed2.ready.length > 0) {
-      runGsdTools(['query', 'requirements.mark-complete', ...parsed2.ready], tmpDir);
-    }
+    // Execute the extracted prompt bash for Plan 2
+    const res2 = runExtractedExecutorBash(tmpDir, {
+      PLAN_PATH: plan2,
+      REQ_IDS: 'SHARED-01 SOLO-01',
+    });
+    assert.strictEqual(res2.status, 0, `extracted bash failed: ${res2.stderr || res2.stdout}`);
 
     // Assert REQUIREMENTS.md on disk now has both checked
     content = readRequirements(tmpDir);
@@ -1690,25 +1719,47 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     assert.ok(content.includes('- [x] **SOLO-01**'), 'SOLO-01 checkbox should now be checked on disk');
   });
 
-  test('negative control: empty plan path causes ready-ids to fail and nothing is marked', () => {
+  test('negative control: nonexistent plan path fails closed and skips mark-complete', () => {
     writeRequirements(tmpDir, SHARED_REQUIREMENTS);
-    const res = runGsdTools(['query', 'requirements.ready-ids', '', 'SHARED-01'], tmpDir);
-    assert.notStrictEqual(res.exitCode, 0, 'ready-ids must fail non-zero when plan path is missing');
+    const dir = makePhaseDir(tmpDir);
+    // Plant plan1 without sibling summary
+    const plan1 = path.join(dir, '05-05-01-a-PLAN.md');
+    fs.writeFileSync(plan1, '---\nphase: 05-05\nplan: 01\nrequirements: [SHARED-01]\n---\nPlan A\n');
+
+    // Execute extracted bash with a nonexistent plan path
+    const res = runExtractedExecutorBash(tmpDir, {
+      PLAN_PATH: path.join(tmpDir, '.planning', 'phases', 'nonexistent', 'bogus-PLAN.md'),
+      REQ_IDS: 'SHARED-01',
+    });
+    assert.strictEqual(res.status, 0, `extracted bash should exit 0 on graceful fail-close: ${res.stderr || res.stdout}`);
 
     const content = readRequirements(tmpDir);
-    assert.ok(content.includes('- [ ] **SHARED-01**'), 'REQUIREMENTS.md must stay unchecked on failure');
+    assert.ok(content.includes('- [ ] **SHARED-01**'), 'REQUIREMENTS.md must stay unchecked when PLAN_PATH does not exist');
   });
 
-  test('structural contract: gsd-executor.md prompt queries ready-ids before mark-complete with PLAN_PATH', () => {
-    const executorPath = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
-    const content = fs.readFileSync(executorPath, 'utf-8'); // allow-test-rule: source-text-is-the-product agents/gsd-executor.md prompt text IS the runtime contract for executor state updates (#4944)
-    const readyIdsPos = content.indexOf('gsd_run query requirements.ready-ids');
-    const markCompletePos = content.indexOf('gsd_run query requirements.mark-complete');
+  test('behavioral: extracted executor bash resolves nested plans layout from INIT JSON', () => {
+    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-05-feature');
+    const plansDir = path.join(phaseDir, 'plans');
+    fs.mkdirSync(plansDir, { recursive: true });
 
-    assert.ok(readyIdsPos !== -1, 'gsd-executor.md must call requirements.ready-ids');
-    assert.ok(markCompletePos !== -1, 'gsd-executor.md must call requirements.mark-complete');
-    assert.ok(readyIdsPos < markCompletePos, 'requirements.ready-ids must precede requirements.mark-complete');
-    assert.ok(content.includes('PLAN_PATH='), 'gsd-executor.md must define PLAN_PATH');
+    // Nested layout: .planning/phases/05-05-feature/plans/PLAN-01.md (#3139)
+    const planNested = path.join(plansDir, 'PLAN-01.md');
+    fs.writeFileSync(planNested, '---\nphase: 05-05\nplan: 01\nrequirements: [SOLO-01]\n---\nPlan Nested\n');
+
+    // Run without explicit PLAN_PATH, passing INIT JSON with phase_dir
+    const res = runExtractedExecutorBash(tmpDir, {
+      PLAN_PATH: '',
+      INIT: JSON.stringify({ phase_dir: '.planning/phases/05-05-feature' }),
+      PHASE: '05-05',
+      PLAN: '01',
+      REQ_IDS: 'SOLO-01',
+    });
+    assert.strictEqual(res.status, 0, `extracted bash failed: ${res.stderr || res.stdout}`);
+
+    // SOLO-01 has no sibling blockers, so it completes
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [x] **SOLO-01**'), 'SOLO-01 should be marked complete via nested plan resolution');
   });
 });
 
