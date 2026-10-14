@@ -949,14 +949,14 @@ interface ReconcileResult {
 }
 
 /**
- * Lazily require install-engine.cjs's `hasExistingSymlinkBetween` /
- * `isSymlinkedDestOptIn` — mirrors user-artifact-staging.cts's
- * `_installEngineSymlinkGuard` (same call-time-require rationale: avoid a
- * static circular require between install-engine.cts and this module).
+ * Lazily require install-engine.cjs's `resolveSymlinkedLeafWritePath`, which
+ * applies the `hasExistingSymlinkBetween` / `isSymlinkedDestOptIn` policy to a
+ * single file. Mirrors user-artifact-staging.cts's `_installEngineSymlinkGuard`
+ * (same call-time-require rationale: avoid a static circular require between
+ * install-engine.cts and this module).
  */
 interface InstallEngineSymlinkGuard {
-  hasExistingSymlinkBetween: (root: string, fullPath: string, options?: { allowOptInFollow?: boolean }) => boolean;
-  isSymlinkedDestOptIn: () => boolean;
+  resolveSymlinkedLeafWritePath: (installRoot: string, targetPath: string, label: string) => string;
 }
 
 function _installEngineSymlinkGuard(): InstallEngineSymlinkGuard {
@@ -972,40 +972,21 @@ function reconcileCodexHooksJsonEvent(targetDir: string, eventName: string, opts
   const matcher = typeof opts.matcher === 'string' ? opts.matcher : undefined;
   const timeout = typeof opts.timeout === 'number' ? opts.timeout : undefined;
   // #2586 Major 2: every Codex hooks.json writer funnels through this one
-  // function, and atomicWriteFileSync's final step is a rename(2) onto
-  // `hooksJsonPath` — which, when that path is a symlink, REPLACES the
-  // symlink with a plain file rather than writing through it. Refuse (with
-  // the same GSD_ALLOW_SYMLINKED_DEST opt-in every other install call site
-  // honors) before reading or writing, so a symlinked hooks.json is neither
-  // silently destroyed nor left the caller no escape hatch.
-  const symlinkGuard = _installEngineSymlinkGuard();
-  // The path this function actually reads/writes. Defaults to the nominal
-  // hooks.json path; reassigned below to the symlink's real target when the
-  // opt-in is active, so the write lands on the file the user's symlink
-  // points at instead of clobbering the symlink itself (see note below).
-  let effectiveHooksJsonPath = hooksJsonPath;
-  if (fs.existsSync(hooksJsonPath) && fs.lstatSync(hooksJsonPath).isSymbolicLink()) {
-    if (
-      symlinkGuard.hasExistingSymlinkBetween(targetDir, hooksJsonPath, {
-        allowOptInFollow: symlinkGuard.isSymlinkedDestOptIn(),
-      })
-    ) {
-      throw new Error(
-        `hooks.json at "${hooksJsonPath}" contains a symlink the install root "${targetDir}" does not trust — ` +
-          'refusing to read or write it. If this is an intentional user-owned symlink layout, re-run with ' +
-          'GSD_ALLOW_SYMLINKED_DEST=1.',
-      );
-    }
-    // hasExistingSymlinkBetween returned false only because the opt-in is
-    // active (a symlinked leaf always trips it otherwise) — so this IS a
-    // symlink and we are cleared to follow it. atomicWriteFileSync's final
-    // step is a rename(2) onto its target, which REPLACES an existing
-    // symlink at that path rather than writing through it; resolving to the
-    // real path here makes the read AND the write operate on the symlink's
-    // target, leaving the symlink itself untouched, matching what "follow"
-    // is supposed to mean.
-    effectiveHooksJsonPath = fs.realpathSync(hooksJsonPath);
-  }
+  // function, and atomicWriteFileSync's final step is a rename(2) onto its
+  // target, which replaces a symlink at that path with a plain file instead
+  // of writing through it. install-engine's resolveSymlinkedLeafWritePath,
+  // shared with writeSettings (#5037), refuses a symlinked hooks.json unless
+  // GSD_ALLOW_SYMLINKED_DEST is set, and with the opt-in returns the link's
+  // real target, so the read AND the write below operate on the file the
+  // user's symlink points at and the link itself stays in place.
+  //
+  // The existsSync gate keeps this writer's existing handling of a dangling
+  // hooks.json link: existsSync reports false for one, so the write replaces
+  // it. writeSettings refuses a dangling link instead; dropping the gate
+  // makes the two writers match.
+  const effectiveHooksJsonPath = fs.existsSync(hooksJsonPath)
+    ? _installEngineSymlinkGuard().resolveSymlinkedLeafWritePath(targetDir, hooksJsonPath, 'hooks.json at')
+    : hooksJsonPath;
   let parsed: Record<string, unknown> = {};
   let currentContent: string | null = null;
   if (fs.existsSync(effectiveHooksJsonPath)) {

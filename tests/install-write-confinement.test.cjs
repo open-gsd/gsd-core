@@ -4672,3 +4672,102 @@ describe('#4636 RED: capability-skill symlink escape (isPathConfined has no real
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// resolveSymlinkedLeafWritePath (#5037): the symlinked-file policy shared by
+// writeSettings and the Codex hooks.json writer
+// ---------------------------------------------------------------------------
+
+describe('resolveSymlinkedLeafWritePath (#5037)', () => {
+  const { resolveSymlinkedLeafWritePath } = require('../gsd-core/bin/lib/install-engine.cjs');
+  const LABEL = 'test writer: file';
+
+  let savedOptIn;
+  beforeEach(() => {
+    savedOptIn = process.env.GSD_ALLOW_SYMLINKED_DEST;
+  });
+  afterEach(() => {
+    if (savedOptIn === undefined) delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+    else process.env.GSD_ALLOW_SYMLINKED_DEST = savedOptIn;
+  });
+
+  function setOptIn(value) {
+    if (value === undefined) delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+    else process.env.GSD_ALLOW_SYMLINKED_DEST = value;
+  }
+
+  // An install root holding `file.json`, optionally a link into a separate
+  // dir. Returns null when this platform or account cannot create symlinks.
+  function layout(t, { link = false, targetExists = true } = {}) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-root-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-outside-'));
+    t.after(() => {
+      cleanup(root);
+      cleanup(outside);
+    });
+    const filePath = path.join(root, 'file.json');
+    const targetPath = path.join(outside, 'file.json');
+    if (!link) {
+      if (targetExists) fs.writeFileSync(filePath, '{}\n');
+      return { root, filePath, targetPath };
+    }
+    if (targetExists) fs.writeFileSync(targetPath, '{}\n');
+    try {
+      fs.symlinkSync(targetPath, filePath, 'file');
+    } catch {
+      return null;
+    }
+    return { root, filePath, targetPath };
+  }
+
+  for (const optIn of [undefined, '1']) {
+    const mode = `GSD_ALLOW_SYMLINKED_DEST=${optIn ?? 'unset'}`;
+
+    test(`a plain file is returned unchanged (${mode})`, (t) => {
+      setOptIn(optIn);
+      const { root, filePath } = layout(t);
+      assert.strictEqual(resolveSymlinkedLeafWritePath(root, filePath, LABEL), filePath);
+    });
+
+    test(`a missing file is returned unchanged (${mode})`, (t) => {
+      setOptIn(optIn);
+      const { root, filePath } = layout(t, { targetExists: false });
+      assert.strictEqual(resolveSymlinkedLeafWritePath(root, filePath, LABEL), filePath);
+    });
+
+    test(`a dangling link is refused and left in place (${mode})`, (t) => {
+      setOptIn(optIn);
+      const l = layout(t, { link: true, targetExists: false });
+      if (!l) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      assert.throws(() => resolveSymlinkedLeafWritePath(l.root, l.filePath, LABEL), /GSD_ALLOW_SYMLINKED_DEST=1/);
+      assert.ok(fs.lstatSync(l.filePath).isSymbolicLink(), 'the dangling link must survive');
+      assert.strictEqual(fs.existsSync(l.targetPath), false, 'nothing may be created at the missing target');
+    });
+  }
+
+  test('a symlinked file is refused without the opt-in, and the link is left alone', (t) => {
+    setOptIn(undefined);
+    const l = layout(t, { link: true });
+    if (!l) {
+      t.skip('symlink creation unsupported on this platform/privilege');
+      return;
+    }
+    assert.throws(() => resolveSymlinkedLeafWritePath(l.root, l.filePath, LABEL), /GSD_ALLOW_SYMLINKED_DEST=1/);
+    assert.ok(fs.lstatSync(l.filePath).isSymbolicLink(), 'the link must survive');
+    assert.strictEqual(fs.readlinkSync(l.filePath), l.targetPath, 'the link must still point at the same target');
+  });
+
+  test("with GSD_ALLOW_SYMLINKED_DEST=1 a symlinked file resolves to the link's real target", (t) => {
+    setOptIn('1');
+    const l = layout(t, { link: true });
+    if (!l) {
+      t.skip('symlink creation unsupported on this platform/privilege');
+      return;
+    }
+    assert.strictEqual(resolveSymlinkedLeafWritePath(l.root, l.filePath, LABEL), fs.realpathSync(l.targetPath));
+    assert.ok(fs.lstatSync(l.filePath).isSymbolicLink(), 'resolving must not touch the link');
+  });
+});
