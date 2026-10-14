@@ -2418,7 +2418,9 @@ function plannedPhaseCore(
   const { existingFm, hasFrontmatter, body: initialBody, reassemble } = beginFrontmatterReassembly(content, deps.sourcePath);
   let body = initialBody;
 
-  const statusDefaults = KNOWN_TEMPLATE_DEFAULTS['Status'];
+  // #5320: a bare pre-plan `Ready` is moved to `Ready to execute` here; nothing
+  // else writes bare Ready, so it is local to this transition.
+  const statusDefaults = [...(KNOWN_TEMPLATE_DEFAULTS['Status'] ?? []), 'Ready'];
   const lastActivityDefaults = KNOWN_TEMPLATE_DEFAULTS['Last Activity'];
 
   // Status — template-aware (preserve executor-authored values).
@@ -2473,11 +2475,18 @@ function plannedPhaseCore(
       phase: `${intent.phaseNumber}${intent.phaseName ? ` (${intent.phaseName})` : ''} — READY TO EXECUTE`,
       status: 'Ready to execute',
       lastActivity: `${today} — Phase ${intent.phaseNumber} planning complete`,
+      // #5320: `Plan: A of B in current phase` template shape; advance-plan
+      // parses `N of M` from either spelling (#3784 hybrid for `Current Plan:`).
+      ...(intent.planCount != null && {
+        plan: `0 of ${intent.planCount} in current phase`,
+        currentPlan: `0 of ${intent.planCount} in current phase`,
+      }),
     },
     statusDefaults,
     lastActivityDefaults,
   );
   if (body !== beforePos) updated.push('Current Position');
+  if (stateExtractField(body, 'Plan') !== stateExtractField(beforePos, 'Plan')) updated.push('Plan');
 
   // #2400 Bug B: sync progress.total_plans to the frontmatter when a plan count
   // is given. This writes the explicitly-provided count — it is NOT a re-derivation
