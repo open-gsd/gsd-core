@@ -5448,6 +5448,34 @@ describe('state planned-phase command', () => {
     assert.match(after, /^Current Plan: 1 of 6 in current phase$/m);
   });
 
+  test('#5320: non-integer --plans (3.5, 3abc, unsafe) fail with STATE.md byte-identical', () => {
+    writeTbdPlanFixture(TBD_BODY);
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    const before = fs.readFileSync(statePath);
+    for (const bad of ['3.5', '3abc', '99999999999999999999']) {
+      const r = runGsdTools(['state', 'planned-phase', '--phase', '19', '--name', 'Tbd', '--plans', bad], tmpDir);
+      assert.strictEqual(r.success, false, `--plans ${bad} must fail`);
+    }
+    assert.ok(fs.readFileSync(statePath).equals(before));
+  });
+
+  test('#5320: replan for a different phase resets the plan number to 0', () => {
+    writeTbdPlanFixture(['Phase: 18', 'Plan: 2 of 4 in current phase', 'Status: Ready']);
+    const r = runGsdTools(['state', 'planned-phase', '--phase', '19', '--name', 'Tbd', '--plans', '3'], tmpDir);
+    assert.ok(r.success, r.error);
+    assert.match(fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8'), /^Plan: 0 of 3 in current phase$/m);
+  });
+
+  test('#5320: same-phase replan below the executed plan count fails with STATE.md byte-identical', () => {
+    writeTbdPlanFixture(['Phase: 19', 'Plan: 2 of 4 in current phase', 'Status: Ready']);
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    const before = fs.readFileSync(statePath);
+    const r = runGsdTools(['state', 'planned-phase', '--phase', '19', '--name', 'Tbd', '--plans', '1'], tmpDir);
+    assert.strictEqual(r.success, false);
+    assert.match(r.error, /--plans 1 is below the executed plan count 2/);
+    assert.ok(fs.readFileSync(statePath).equals(before));
+  });
+
   test('#5320: invalid --plans values are rejected before any write', () => {
     writeTbdPlanFixture(TBD_BODY);
     const statePath = path.join(tmpDir, '.planning', 'STATE.md');

@@ -2479,9 +2479,13 @@ function plannedPhaseCore(
   // #5320: `Plan: A of B in current phase` template shape; advance-plan parses
   // `N of M` from either spelling (#3784 hybrid for `Current Plan:`). A replan
   // keeps the recorded leading N and moves only M; anything else starts at 0.
+  // The recorded N carries over only for the SAME phase (`Phase:` leading token).
+  const samePhase = (stateExtractField(posBefore, 'Phase') ?? '').trim().split(/\s/)[0] === String(intent.phaseNumber).trim();
+  const below: { n?: number } = {};
   const planValue = (name: string): string | undefined => {
     if (intent.planCount == null) return undefined;
-    const m = PLAN_SHAPE_N_OF_M.exec(stateExtractField(posBefore, name) ?? '');
+    const m = samePhase ? PLAN_SHAPE_N_OF_M.exec(stateExtractField(posBefore, name) ?? '') : null;
+    if (m && Number(m[1]) > intent.planCount) below.n = Number(m[1]);
     return `${m ? m[1] : 0} of ${intent.planCount} in current phase`;
   };
   body = mutateCurrentPositionForAdvance(
@@ -2504,7 +2508,10 @@ function plannedPhaseCore(
   // #5320: --plans must land somewhere; the caller fails before any write.
   if (intent.planCount != null && !totalRecorded
     && stateExtractField(posBefore, 'Plan') === null && stateExtractField(posBefore, 'Current Plan') === null) {
-    return { content, updated: [], data: { unrecorded: true } };
+    return { content, updated: [], data: { planError: 'state planned-phase: --plans has no line to land on. Add `Plan: 0 TBD in current phase` under `## Current Position` (or a `Total Plans in Phase:` line) and retry.' } };
+  }
+  if (below.n !== undefined) {
+    return { content, updated: [], data: { planError: `state planned-phase: --plans ${intent.planCount} is below the executed plan count ${below.n}.` } };
   }
 
   // #2400 Bug B: sync progress.total_plans to the frontmatter when a plan count

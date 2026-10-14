@@ -6076,9 +6076,7 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number | null |
     }
     const result = transitionCore(content, intent, deps);
     // #5320: nothing to record --plans on; exit before the write.
-    if (result.data?.['unrecorded']) {
-      error('state planned-phase: --plans has no line to land on. Add `Plan: 0 TBD in current phase` under `## Current Position` (or a `Total Plans in Phase:` line) and retry.');
-    }
+    if (result.data?.['planError']) error(result.data['planError'] as string);
     precomputedUpdated = result.updated;
     return result.content;
   }, cwd, rmwOptions);
