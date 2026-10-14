@@ -1504,7 +1504,9 @@ function installRuntimeArtifacts(
         }
         installFs().mkdirSync(dest, { recursive: true });
         const preserved: string[] = [];
-        if (kind.kind === 'skills' && installFs().existsSync(dest)) {
+        // #5161: keyed on the kind alone, so the non-skills branch below can
+        // never reach a skills dest with the prune that ignores ownership.
+        if (kind.kind === 'skills') {
           // Pre-prune: snapshot user-owned content before _removeGsdEntries wipes it,
           // then restore after. This preserves user dirs across a wipe-and-replace
           // install (#2973 / #3664).
