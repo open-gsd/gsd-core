@@ -3481,6 +3481,43 @@ Plans:
       assert.strictEqual((roadmap.match(/\*\*Wave \d+\*\*/g) || []).length, 4);
     });
 
+    for (const truth of ['[Invariant] x', '[ ] x', '[x] x']) {
+      test(`bracket-leading truth "${truth}" round-trips and stays out of the plan list`, () => {
+        const q = JSON.stringify(truth); // unquoted leading `[` is a YAML flow sequence
+        tmpDir = makeFour([1, 1, 2, 2], [[q], [q], ['Solo A'], ['Solo B']]);
+        run();
+        const first = fs.readFileSync(roadmapFile(), 'utf-8');
+        assert.ok(first.includes(`- ${truth}`), 'constraint bullet emitted');
+        const out = run();
+        assert.strictEqual(out.updated, false);
+        assert.strictEqual(fs.readFileSync(roadmapFile(), 'utf-8'), first);
+        const wave1 = first.split('**Wave 2**')[0];
+        assert.ok(!wave1.includes(`- ${truth}`), 'constraint not injected into Wave 1');
+      });
+    }
+
+    test('prose starting with **Wave N** after the checklist is preserved', () => {
+      const roadmap = ROADMAP4.replace(
+        '- [ ] 01-04-PLAN.md — Four\n',
+        '- [ ] 01-04-PLAN.md — Four\n**Wave 9** is deferred\n',
+      );
+      tmpDir = makeFour([1, 2, 3, 3], undefined, roadmap);
+      run();
+      run();
+      assert.ok(fs.readFileSync(roadmapFile(), 'utf-8').includes('**Wave 9** is deferred'));
+    });
+
+    test('user "**Cross-cutting constraints:** keep X" header and bullets are preserved', () => {
+      const roadmap = ROADMAP4.replace(
+        '- [ ] 01-04-PLAN.md — Four\n',
+        '- [ ] 01-04-PLAN.md — Four\n**Cross-cutting constraints:** keep X\n- user bullet\n',
+      );
+      tmpDir = makeFour([1, 2, 3, 3], undefined, roadmap);
+      run();
+      const out = fs.readFileSync(roadmapFile(), 'utf-8');
+      assert.ok(out.includes('**Cross-cutting constraints:** keep X\n- user bullet'));
+    });
+
     test('a cross-cutting constraint no longer shared is removed', () => {
       tmpDir = makeFour([1, 1, 2, 2], [['Shared rule'], ['Shared rule'], ['Solo A'], ['Solo B']]);
       run();

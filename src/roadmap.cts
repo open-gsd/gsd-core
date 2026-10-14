@@ -1883,18 +1883,19 @@ function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | u
     // it accepts the first complete parse and stops, which rules out the #2128-class
     // ambiguous-boundary blowup despite the nested-quantifier shape. Non-global match on
     // already phase-sliced content, not the whole file.
-    // #5321: group 2 also swallows a previous annotation — `**Wave N**` header lines (second
-    // alternative inside the `+`) and an optional trailing `**Cross-cutting constraints:**`
-    // header plus its non-checkbox bullets. Alternatives start with distinct literals (`-` vs
-    // `**Wave`), so the ambiguity profile above is unchanged; `listLines` below still keeps
-    // checkbox lines only, so the rebuild is identical for annotated and bare lists.
+    // #5321: group 2 also swallows a previous annotation's generated `**Wave N**` header lines
+    // (exact generated form only; user prose such as `**Wave 9** is deferred` is kept). Group 3
+    // captures an exact `**Cross-cutting constraints:**` header + its bullets and is never parsed as
+    // plans. Alternatives start with distinct literals (`-` vs `**Wave`), so the ambiguity profile
+    // above is unchanged. Known limitation: a user bullet directly after a generated constraints
+    // block is indistinguishable and gets absorbed.
     // eslint-disable-next-line local/no-unbounded-quantifier -- outer `+` has no trailing constraint to force re-partitioning; alternatives start with distinct literals; measured linear to 10.9MB
-    const plansBlockMatch = phaseSection.match(/(?:^|\r?\n)(\*{0,2}Plans\*{0,2}:[^\r\n]*\r?\n)((?:\s*-\s*\[[ x]\][^\r\n]*\r?\n?|\s*\*\*Wave\s+\d+\*\*[^\r\n]*\r?\n?)+(?:\s*\*\*Cross-cutting constraints:\*\*[^\r\n]*\r?\n?(?:[ \t]*-[ \t]+(?!\[[ x]\])[^\r\n]*\r?\n?)*)?)/i);
+    const plansBlockMatch = phaseSection.match(/(?:^|\r?\n)(\*{0,2}Plans\*{0,2}:[^\r\n]*\r?\n)((?:\s*-\s*\[[ x]\][^\r\n]*\r?\n?|\s*\*\*Wave\s+\d+\*\*(?: \*\(blocked on Wave \d+ completion\)\*)?[ \t]*(?:\r?\n|$))+)(\s*\*\*Cross-cutting constraints:\*\*[ \t]*(?:\r?\n|$)(?:[ \t]*-[ \t]+[^\r\n]*\r?\n?)*)?/i);
     if (!plansBlockMatch) return;
 
     const plansHeader = plansBlockMatch[1];
     const existingList = plansBlockMatch[2];
-    const listLines = splitLines(existingList).filter(l => /^\s*-\s*\[/.test(l));
+    const listLines = splitLines(existingList).filter(l => /^\s*-\s*\[[ x]\]/i.test(l));
 
     if (listLines.length === 0) return;
 
