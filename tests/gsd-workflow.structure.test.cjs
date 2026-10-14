@@ -141,8 +141,9 @@ describe('smart-entry: every emitted command resolves to a real slash command', 
 
   for (const cmd of allCommands) {
     test(`command "${cmd}" resolves to a real commands/gsd/*.md file`, () => {
-      // Strip leading "/gsd:" and any trailing flags, map to a file stem.
-      const stem = cmd.replace(/^\/gsd:/, '').split(/\s+/)[0];
+      // Strip the leading "/gsd-" (the registered form since #4859; "/gsd:" was never registered)
+      // and any trailing flags, map to a file stem.
+      const stem = cmd.replace(/^\/gsd-/, '').split(/\s+/)[0];
       // Special-case: "progress --next" / "progress --do" still → progress.md.
       const file = path.join(CMDS_DIR, `${stem}.md`);
       assert.ok(
