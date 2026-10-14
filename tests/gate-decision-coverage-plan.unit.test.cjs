@@ -575,6 +575,18 @@ describe('U2 evaluateDecisionCoveragePlan tracker-id resolution (#5317)', () => 
     } finally { cleanup(dir); }
   });
 
+  test('U2p: multi-plan phase fails closed when one plan resolver throws though another plan covers all decisions', () => {
+    const covering = ['---', 'phase: 1', '---', '<objective>Honor D-01</objective>', ''].join('\n');
+    const r = evalPlans([covering, trackerPlan(STUB_ONLY)], { loadCapabilities: () => [], resolveTaskContentFn: () => { throw new tcr.ResolverFailedError('bd', 1, 'boom'); } });
+    assert.equal(r.outcome, 'unreadable');
+    assert.equal(r.block, true);
+  });
+
+  test('U2r: unclosed fence in one resolver field does not swallow later fields', () => {
+    const r = evalPlans([trackerPlan(STUB_ONLY)], stubDeps(full({ action: 'intro\n```\nunclosed', done: 'D-01 done' })));
+    assert.equal(r.payload.passed, true);
+  });
+
   for (const kind of ['not-applicable', 'no-resolver', 'empty']) {
     test(`U2m: ${kind} retains inline citation next to a tracker stub task`, () => {
       const plan = ['---', 'phase: 1', '---', '<objective>Honor D-01</objective>', '<tasks>', '<task type="auto" tracker-id="beads:X-1">', `<action>${STUB_ONLY}</action>`, '</task>', '</tasks>', ''].join('\n');

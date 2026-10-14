@@ -222,7 +222,8 @@ export function resolveTrackerBodies(projectDir: string, planContents: string[],
       try {
         const result = resolveFn({ trackerId, capabilities });
         const c = result.kind === 'resolved' ? result.content : null;
-        const texts = c ? [c.action, c.verify, ...c.acceptanceCriteria, ...c.readFirst, c.done].filter((v): v is string => v !== null) : [];
+        // Per field: an unclosed fence in one field must not swallow the rest.
+        const texts = c ? [c.action, c.verify, ...c.acceptanceCriteria, ...c.readFirst, c.done].filter((v): v is string => v !== null).map(stripCommentsAndFences) : [];
         seen.set(trackerId, texts);
         parts.push(...texts);
       } catch (err) {
@@ -237,7 +238,7 @@ export function resolveTrackerBodies(projectDir: string, planContents: string[],
         throw err;
       }
     }
-    bodies.push(stripCommentsAndFences(parts.join('\n')));
+    bodies.push(parts.join('\n'));
   }
   return evidenceFound(bodies);
 }
