@@ -2431,10 +2431,12 @@ function plannedPhaseCore(
   }
 
   // Total Plans in Phase — system-derived; always replaced when a count is given.
+  let totalRecorded = false;
   if (intent.planCount !== null && intent.planCount !== undefined) {
     const result = stateReplaceField(body, 'Total Plans in Phase', String(intent.planCount));
     if (result) {
       body = result;
+      totalRecorded = true;
       updated.push('Total Plans in Phase');
     }
   }
@@ -2469,24 +2471,41 @@ function plannedPhaseCore(
   // Phase is system-derived, always replaced (Knuth invariant does not apply);
   // Status / Last activity stay template-aware.
   const beforePos = body;
+  const posSlice = (b: string): string => {
+    const sp = locateCurrentPosition(b);
+    return sp ? b.slice(sp.start, sp.end) : '';
+  };
+  const posBefore = posSlice(beforePos);
+  // #5320: `Plan: A of B in current phase` template shape; advance-plan parses
+  // `N of M` from either spelling (#3784 hybrid for `Current Plan:`). A replan
+  // keeps the recorded leading N and moves only M; anything else starts at 0.
+  const planValue = (name: string): string | undefined => {
+    if (intent.planCount == null) return undefined;
+    const m = PLAN_SHAPE_N_OF_M.exec(stateExtractField(posBefore, name) ?? '');
+    return `${m ? m[1] : 0} of ${intent.planCount} in current phase`;
+  };
   body = mutateCurrentPositionForAdvance(
     body,
     {
       phase: `${intent.phaseNumber}${intent.phaseName ? ` (${intent.phaseName})` : ''} — READY TO EXECUTE`,
       status: 'Ready to execute',
       lastActivity: `${today} — Phase ${intent.phaseNumber} planning complete`,
-      // #5320: `Plan: A of B in current phase` template shape; advance-plan
-      // parses `N of M` from either spelling (#3784 hybrid for `Current Plan:`).
-      ...(intent.planCount != null && {
-        plan: `0 of ${intent.planCount} in current phase`,
-        currentPlan: `0 of ${intent.planCount} in current phase`,
-      }),
+      plan: planValue('Plan'),
+      currentPlan: planValue('Current Plan'),
     },
     statusDefaults,
     lastActivityDefaults,
   );
   if (body !== beforePos) updated.push('Current Position');
-  if (stateExtractField(body, 'Plan') !== stateExtractField(beforePos, 'Plan')) updated.push('Plan');
+  const posAfter = posSlice(body);
+  for (const name of ['Plan', 'Current Plan']) {
+    if (stateExtractField(posAfter, name) !== stateExtractField(posBefore, name)) updated.push(name);
+  }
+  // #5320: --plans must land somewhere; the caller fails before any write.
+  if (intent.planCount != null && !totalRecorded
+    && stateExtractField(posBefore, 'Plan') === null && stateExtractField(posBefore, 'Current Plan') === null) {
+    return { content, updated: [], data: { unrecorded: true } };
+  }
 
   // #2400 Bug B: sync progress.total_plans to the frontmatter when a plan count
   // is given. This writes the explicitly-provided count — it is NOT a re-derivation

@@ -1407,7 +1407,7 @@ After plans pass all gates, record that planning is complete so STATE.md reflect
 gsd_run query state.planned-phase --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
 ```
 
-This updates STATUS to "Ready to execute", sets the correct plan count, and timestamps Last Activity.
+This updates STATUS to "Ready to execute", sets the correct plan count, and timestamps Last Activity. Fails non-zero, writing nothing, when STATE.md `## Current Position` has no `Plan:`, `Current Plan:` or `Total Plans in Phase:` line.
 
 ## 13c. Annotate ROADMAP with Wave Dependencies and Cross-cutting Constraints
 

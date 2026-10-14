@@ -6019,14 +6019,6 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number | null |
     return;
   }
 
-  // #5320: --plans needs a line to land on; fail before any write otherwise.
-  if (planCount != null) {
-    const stateBody = fs.readFileSync(statePath, 'utf8');
-    if (!['Total Plans in Phase', 'Plan', 'Current Plan'].some((f) => stateExtractField(stateBody, f) !== null)) {
-      error('STATE.md has no Total Plans in Phase / Plan / Current Plan line to record --plans');
-    }
-  }
-
   // ADR-1769 Phase 4: dispatches to the STATE.md Transition Module. The RMW
   // callback that lived here (body strip/reassemble, template-aware Status +
   // Last Activity, Total Plans in Phase, Last Activity Description, Current
@@ -6083,6 +6075,10 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number | null |
       }
     }
     const result = transitionCore(content, intent, deps);
+    // #5320: nothing to record --plans on; exit before the write.
+    if (result.data?.['unrecorded']) {
+      error('state planned-phase: --plans has no line to land on. Add `Plan: 0 TBD in current phase` under `## Current Position` (or a `Total Plans in Phase:` line) and retry.');
+    }
     precomputedUpdated = result.updated;
     return result.content;
   }, cwd, rmwOptions);
