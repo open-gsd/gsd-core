@@ -5493,6 +5493,7 @@ describe('state planned-phase command', () => {
     assert.ok(runGsdTools(args, tmpDir).success, 'first run must succeed');
     const second = runGsdTools(args, tmpDir);
     assert.ok(second.success, `second run must exit 0: ${second.error}`);
+    assert.match(JSON.parse(second.output).warning, /already up to date/);
   });
 
   test('#5320: invalid --plans reports the validation message, not a crash', () => {

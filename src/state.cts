@@ -6090,7 +6090,7 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number | null |
   const updated = reconcileReportedFields(statePath, preWriteState, precomputedUpdated, divergedFields);
 
   const result = updated.length === 0
-    ? { updated, phase: phaseNumber, plan_count: planCount, warning: 'STATE.md Current Position has no recognized labels — transition was a no-op. Verify STATE.md uses the canonical labeled format (Status:, Total Plans in Phase:, etc.).' }
+    ? { updated, phase: phaseNumber, plan_count: planCount, warning: 'No fields changed — STATE.md is already up to date, or its Current Position has no recognized labels. If the latter, verify the canonical labeled format (Status:, Total Plans in Phase:, etc.).' }
     : { updated, phase: phaseNumber, plan_count: planCount };
   output(result, raw, updated.length > 0 ? 'true' : 'false');
   // #3227 (design doc §40 row 26 / "Not-corruption" rule): gate on
