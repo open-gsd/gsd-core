@@ -40,6 +40,36 @@ const PROJECT_CODE_PREFIX_STRIP_RE = /^[A-Z][A-Z0-9_]*-(?=\d)/;
  * Anything that must RECOGNISE a configured code matches here rather than writing the class out.
  */
 const PROJECT_CODE_VALUE_RE = /^[A-Z][A-Z0-9_]*$/;
+
+/**
+ * The ERE SOURCE of the same class `PROJECT_CODE_VALUE_RE` matches — for a consumer that builds a
+ * PATTERN instead of testing a value, and for a `#5177`-shaped workstream-qualified id that wants
+ * the same `<CODE>-<phase>-<plan>` grammar this module already owns for `project_code`.
+ *
+ * The two are pinned to accept exactly the same set by
+ * `tests/phase-id-project-code-grammar.test.cjs`, so a consumer can read the class from whichever
+ * side its call needs without the two answers drifting (#5271 Nit 2).
+ */
+const PROJECT_CODE_VALUE_SOURCE = '[A-Z][A-Z0-9_]*';
+
+/**
+ * The OPTIONAL, code-BOUND prefix group `(PRJ-)?` for a `<CODE>-<phase>-<plan>` id, or null when
+ * `projectCode` is outside `PROJECT_CODE_VALUE_RE` (so a caller cannot bind a code it would not
+ * recognise).
+ *
+ * It is a REAL capturing group, never `(?:…)`: the string is handed to `git log
+ * --extended-regexp`, and POSIX ERE has no non-capturing group, so `(?:…)` is a git-side syntax
+ * error that a JS-side `RegExp` silently accepts. It needs no metacharacter escaping either: the
+ * grammar admits only `A-Z`, `0-9` and `_`, none of which is an ERE metacharacter, and the
+ * trailing `-` is literal outside a bracket expression (#5271).
+ *
+ * Shared with the evaluation-scope reader so the coded id, the workstream-qualified id (#5177) and
+ * `config-set`'s acceptance all answer "what may a project code be" from this one owner.
+ */
+function optionalProjectCodeGroupSource(projectCode: string): string | null {
+  if (!PROJECT_CODE_VALUE_RE.test(projectCode)) return null;
+  return `(${projectCode}-)?`;
+}
 const PROJECT_CODE_PREFIX_STRIP_RE_I = /^[A-Z][A-Z0-9_]*-(?=\d)/i;
 const PROJECT_CODE_PREFIX_CAPTURE_RE_I = /^([A-Z][A-Z0-9_]*)-(\d.*)/i;
 const OPTIONAL_PROJECT_CODE_PREFIX_SOURCE = '(?:[A-Z][A-Z0-9_]*-)?';
@@ -1763,6 +1793,8 @@ function roadmapPhaseLookupSources(phaseNum: unknown): string[] {
 
 export = {
   PROJECT_CODE_VALUE_RE,
+  PROJECT_CODE_VALUE_SOURCE,
+  optionalProjectCodeGroupSource,
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
   OPTIONAL_PHASE_TAG_SOURCE,
   PHASE_NUMBER_TOKEN_SOURCE,

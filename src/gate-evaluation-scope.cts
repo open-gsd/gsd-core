@@ -238,27 +238,22 @@ export function planSubjectPattern(planId: string, projectCode: string | null = 
   // 0, which is the correct answer for a plan that has NOT started and the wrong one for one that
   // has. Retry on the CONFIGURED project-code-stripped id, with the code OPTIONAL so the commit the
   // executor actually wrote still matches.
+  //
+  // Two properties the branch below must keep, and the reasoning behind them (the #5177-shaped
+  // grammar history, and why `(?:…)` is unusable here) is in the PR thread:
+  //   1. the group is a REAL POSIX-ERE capture group `(PRJ-)?` — `git log --extended-regexp` has no
+  //      non-capturing group, so `(?:…)` is a git-side syntax error the JS-side `RegExp` swallows;
+  //   2. the group rides ONLY on a remainder that could be a plan number, so an empty or
+  //      non-numeric remainder keeps the whole id literal — never WIDER than the pre-#5271 pattern.
   const prefix = configuredCodePrefix(planId, projectCode);
   if (prefix !== null) {
-    // The code is a REAL optional group `(PRJ-)?`, never `(?:PRJ-)`: the same string is handed to
-    // `git log --extended-regexp`, and POSIX ERE has no non-capturing group, so `(?:…)` is a syntax
-    // error on the git side while the JS-side `RegExp` (which accepts it) stayed green. The `?`
-    // must follow the GROUP — placed on the escaped `\(` of the subject paren it would merely make
-    // that paren optional.
     const stripped = planId.slice(prefix.length);
     const coded = phasePlanPattern(stripped);
-    // Major 3: the milestone-prefixed coded shape `PRJ-01-02-03` strips to `01-02-03`, whose plan
-    // half still carries a dash, so `phasePlanPattern` returns null and the id would fall to the
-    // LITERAL `PRJ-01-02-03` — a spelling no executor commit carries, i.e. a started plan reading
-    // as unstarted. Such a remainder still takes the code group, because it starts with the phase
-    // number: it IS the coded plan, one segment longer.
-    // Minor 2: an EMPTY or non-numeric remainder takes NO group. `PRJ-` stripped to '' and emitted
-    // `(PRJ-)?` alone, which matches `feat():`; `PRJ-a.b` matches `feat(a.b):`, another plan's
-    // literal id. Both are strictly WIDER than the pre-#5271 pattern, which is the one property
-    // this fallback must keep — so the group rides on `planShaped` alone.
     const planShaped = coded !== null || /^\d/.test(stripped);
     if (!planShaped) return `^[a-z]+\\(${escapeEre(planId)}\\)!?:`;
-    return `^[a-z]+\\((${escapeEre(prefix)})?${coded ?? escapeEre(stripped)}\\)!?:`;
+    // The `(PRJ-)?` group comes from the phase-id grammar owner, not from a second copy here, so
+    // this reader, a `#5177` workstream-qualified id and `config-set`'s acceptance cannot disagree.
+    return `^[a-z]+\\(${phaseIdMod.optionalProjectCodeGroupSource(projectCode!)}${coded ?? escapeEre(stripped)}\\)!?:`;
   }
   return `^[a-z]+\\(${escapeEre(planId)}\\)!?:`;
 }
@@ -275,7 +270,8 @@ export function planSubjectPattern(planId: string, projectCode: string | null = 
  * that project. That degradation is the safe direction — never WIDER than the pre-#5271 pattern,
  * since a literal id can only match a subject naming that exact id — but it is a real limit:
  * a project that configures a code outside the supported grammar does not get coded-id resolution.
- * The supported grammar is stated in `.changeset/eager-jaguars-tumble.md` and `docs/ARCHITECTURE.md`.
+ * The supported grammar is `PROJECT_CODE_VALUE_RE`, `^[A-Z][A-Z0-9_]*$`; every other `project_code`
+ * value keeps the literal behaviour.
  */
 function configuredProjectCode(projectDir: string): string | null {
   const { present, value } = readScopedConfigValue(projectDir, ['project_code']);

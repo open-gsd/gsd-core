@@ -307,6 +307,11 @@ describe('resolveEvaluationScope — plan and quick units', () => {
     assert.equal(planSubjectPattern('a b'), null);
     assert.equal(planSubjectPattern('x'.repeat(201)), null);
     assert.notEqual(planSubjectPattern('x'.repeat(200)), null);
+    // The length bound is on the WHOLE id, so a coded id is refused on the same boundary — the
+    // configured prefix does not buy back the characters it adds (#5271 Minor 3).
+    assert.equal(planSubjectPattern(`PRJ-${'x'.repeat(197)}`, 'PRJ'), null, 'a 201-char coded id');
+    assert.notEqual(planSubjectPattern(`PRJ-${'x'.repeat(196)}`, 'PRJ'), null, '200 chars is accepted');
+    assert.notEqual(planSubjectPattern(`PRJ-${'x'.repeat(195)}`, 'PRJ'), null, '199 chars is accepted');
     const repo = makeRepo();
     commit(repo, 'src/a.js', 'feat(abc-1): unrelated');
     const literal = resolveEvaluationScope(repo.dir, { kind: 'plan', planId: '.*-1' });
