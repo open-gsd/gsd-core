@@ -645,7 +645,7 @@ also declares a `timeout-minutes` cap and runs the same in-job near-cap check
 described below. Since #5029 it **is** covered by the headroom-factor gate. One
 cap covers every matrix row, so its `LANE_COSTS` entry is the slowest row,
 windows or macOS shard: **19 minutes**, from the worst windows long pole across
-nine 6-shard runs (18m15s, shard 5/6, run 37041237415), so the cap may not drop
+ten 6-shard runs (18m49s, shard 3/6, run 37697717410), so the cap may not drop
 below 29m. macOS was split because unsharded it ran 18–27m on normal runners
 but 39m43s on a slow one (run 37086102648); by the gate's convention that
 counts, and m=40 requires 60m, over the 45m cap. Split three ways its shards

@@ -9,7 +9,7 @@ table, see [Platform-measured timings (win32)](../TESTING-SUITES.md#platform-mea
 **When:** the daily shard-balance check opens or comments on its **CI: Windows
 conformance shard balance regressed** issue (see
 [Read CI timeout signals §4](read-ci-timeout-signals.md#4-the-windows-conformance-shards-drift-apart)),
-the three `conformance test (windows-latest, …)` shards otherwise drift apart
+the `conformance test (windows-latest, …, shard i/6)` shards otherwise drift apart
 again (a gap of more than a couple of minutes between their durations), or the
 conformance tier gains or loses expensive files. Not on a schedule.
 

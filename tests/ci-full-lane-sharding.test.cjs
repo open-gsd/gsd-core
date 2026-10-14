@@ -12,9 +12,10 @@
  * the time.
  *
  * The `scope: windows` lane then hit the identical cliff itself: it reached
- * exactly 15m05s and was CANCELLED on PR #3094, four shas in a row. Per #869's
- * stated durable follow-up, it is now sharded three ways too (#3057), leaving
- * `scope: targeted` as the only lane in this job with no shard.
+ * exactly 15m05s and was CANCELLED on PR #3094, four shas in a row, and was
+ * sharded three ways (#3057). #4641 later deleted that lane outright: windows
+ * coverage now runs only in the `test-conformance` job, whose windows and
+ * macos rows are each a complete shard set (six and three ways since #5029).
  *
  * Sharding introduces two failure modes that stay GREEN while being wrong, so
  * both are pinned here:
