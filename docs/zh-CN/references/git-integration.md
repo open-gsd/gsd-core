@@ -233,7 +233,7 @@ a7f2d1 feat(checkout): Stripe payments with webhook verification
 **失败恢复：**
 - 任务 1 已提交 ✅，任务 2 失败 ❌
 - 下次会话中的 Claude：看到任务 1 完成，可以重试任务 2
-- 可以 `git reset --hard` 到最后一个成功的任务
+- 任务 1 的提交是继续工作的已知良好起点
 
 **调试：**
 - `git bisect` 找到确切的失败任务，而不仅仅是失败计划
