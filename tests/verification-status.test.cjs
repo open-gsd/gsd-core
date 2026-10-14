@@ -3728,6 +3728,67 @@ describe('fingerprint input set is closed and idempotent (#5095, ADR-5057 Phase 
     });
   });
 
+  describe('stale diagnostic names the covered files that moved (#4857)', () => {
+    function stampedProject(t) {
+      const projectDir = createTempGitProject();
+      t.after(() => cleanup(projectDir));
+      const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+      fs.mkdirSync(phaseDir, { recursive: true });
+      fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+      fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+      fs.mkdirSync(path.join(projectDir, 'src'));
+      fs.writeFileSync(path.join(projectDir, 'src', 'a.ts'), 'export const a = 1;\n');
+      fs.writeFileSync(path.join(projectDir, 'src', 'b.ts'), 'export const b = 1;\n');
+      writeReportFrom(phaseDir, '01-VERIFICATION.md', fpCli(projectDir, phaseDir, ['src/a.ts', 'src/b.ts']));
+      // The report predates every later edit by a minute, so the edit times below are unambiguous.
+      const past = new Date(Date.now() - 120000);
+      for (const f of ['src/a.ts', 'src/b.ts', '.planning/phases/01-foo/01-01-PLAN.md', '.planning/phases/01-foo/01-01-SUMMARY.md']) {
+        fs.utimesSync(path.join(projectDir, f), past, past);
+      }
+      const reportTime = new Date(Date.now() - 60000);
+      fs.utimesSync(path.join(phaseDir, '01-VERIFICATION.md'), reportTime, reportTime);
+      return { projectDir, phaseDir };
+    }
+
+    function fullStatus(projectDir, phaseDir) {
+      const res = runGsdTools(['verification', 'status', phaseDir], projectDir);
+      assert.ok(res.success, `verification status should run: ${res.error}`);
+      return JSON.parse(res.output);
+    }
+
+    test('one covered file edited after the report: stale, naming exactly that file', (t) => {
+      const { projectDir, phaseDir } = stampedProject(t);
+      fs.writeFileSync(path.join(projectDir, 'src', 'b.ts'), 'export const b = 2;\n');
+      const r = fullStatus(projectDir, phaseDir);
+      assert.equal(r.status, 'stale');
+      assert.deepEqual(r.moved_files, ['src/b.ts']);
+      assert.ok(r.next_action.includes('src/b.ts') && !r.next_action.includes('src/a.ts'), r.next_action);
+    });
+
+    test('a plan edited after the report is a moved covered file too', (t) => {
+      const { projectDir, phaseDir } = stampedProject(t);
+      fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan v2\n');
+      const r = fullStatus(projectDir, phaseDir);
+      assert.equal(r.status, 'stale');
+      assert.deepEqual(r.moved_files, ['.planning/phases/01-foo/01-01-PLAN.md']);
+    });
+
+    test('an unchanged covered set reads passed with no moved_files', (t) => {
+      const { projectDir, phaseDir } = stampedProject(t);
+      const r = fullStatus(projectDir, phaseDir);
+      assert.equal(r.status, 'passed');
+      assert.equal(r.moved_files, undefined);
+    });
+
+    test('a file the report does not cover never appears in moved_files', (t) => {
+      const { projectDir, phaseDir } = stampedProject(t);
+      fs.writeFileSync(path.join(projectDir, 'src', 'unrelated.ts'), 'export const u = 1;\n');
+      const r = fullStatus(projectDir, phaseDir);
+      assert.equal(r.status, 'passed');
+      assert.equal(r.moved_files, undefined);
+    });
+  });
+
   // ── R1(a) (CLI, fail-first): --raw returns only the digest, and a caller
   // that writes its OWN declared list (no plans/summaries) plus that raw
   // digest still reads passed — the checker adds the same union on both
