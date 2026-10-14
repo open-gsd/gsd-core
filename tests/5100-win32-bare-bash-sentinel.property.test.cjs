@@ -9,9 +9,9 @@
  *
  * The sentinel is a parser-like predicate: `bash` / `bash.exe`, matched
  * case-insensitively, trimmed at the edge, and only when the token carries
- * no path separator. The predicate decides which of two resolvers runs - the Git Bash policy
- * (env GSD_BASH_PATH / ProgramFiles / ProgramFiles(x86) / SystemDrive) or
- * the generic PATH scan. Getting it wrong re-opens #5100 for one spelling.
+ * no path separator. The predicate decides which of two resolvers runs -
+ * the Git Bash policy (env GSD_BASH_PATH / ProgramFiles /
+ * ProgramFiles(x86) / SystemDrive) or the generic PATH scan. Getting it wrong re-opens #5100 for one spelling.
  *
  * The properties below observe the predicate only through the gate, with
  * the two resolvers rigged to disagree:
