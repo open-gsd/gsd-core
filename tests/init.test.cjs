@@ -3368,9 +3368,16 @@ describe('#2376 — init.* path fields resolve when process cwd differs from --c
     const wfPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'new-milestone.md');
     const content = fs.readFileSync(wfPath, 'utf8');
 
+    // #5148: the synthesizer reads only the files written in this run, so its
+    // required_reading is filled from a directive whose lines are built from {research_dir}.
     assert.ok(content.includes(
-      '<required_reading>\n- {research_dir}/STACK.md\n- {research_dir}/FEATURES.md\n- {research_dir}/ARCHITECTURE.md\n- {research_dir}/PITFALLS.md\n</required_reading>'
-    ), 'research-synthesizer spawn must read from {research_dir}, not bare .planning/research/*.md literals');
+      'Fill `{required_reading_lines}` with one `- {research_dir}/{FILE}` line per file'
+    ), 'research-synthesizer required_reading lines must be built from {research_dir}, not bare .planning/research/*.md literals');
+    assert.ok(content.includes(
+      '<required_reading>\n{required_reading_lines}\n</required_reading>'
+    ), 'research-synthesizer spawn must read the {required_reading_lines} built from {research_dir}');
+    assert.doesNotMatch(content, /\.planning\/research\/(STACK|FEATURES|ARCHITECTURE|PITFALLS)\.md/,
+      'new-milestone.md must not reference bare .planning/research/<dimension>.md literals');
     assert.ok(content.includes('Write to: {research_dir}/SUMMARY.md'),
       'research-synthesizer spawn must write to {research_dir}/SUMMARY.md, not a bare literal');
 
