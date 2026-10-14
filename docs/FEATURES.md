@@ -1311,7 +1311,7 @@ fix(03-01): correct auth token expiry
 - REQ-HOOK-04: All hooks MUST respect `CLAUDE_CONFIG_DIR` env var
 - REQ-HOOK-05: All hooks MUST include 3-second stdin timeout guard
 - REQ-HOOK-06: All hooks MUST fail silently on any error
-- REQ-HOOK-07: Context usage MUST normalize for autocompact buffer (16.5% reserved)
+- REQ-HOOK-07: The context meter's 100% MUST be the token count at which Claude Code auto-compacts — the window from `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, else the `autoCompactWindow` setting `/autocompact` saves (per model under `modelSettings`, or top-level), else the model window, minus the 33k auto-compact buffer and lowered by `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` — and MUST be the model window when auto-compact is off (`autoCompactEnabled: false` in settings, or `DISABLE_AUTO_COMPACT` / `DISABLE_COMPACT`). The bridge's `remaining_percentage` MUST count down to the same point, so the context monitor warns before compaction
 - REQ-HOOK-08: Update banner MUST be opt-in and silent unless an update is available (PR #2795)
 
 **Statusline Display:**
