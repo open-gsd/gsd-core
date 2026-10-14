@@ -45,3 +45,20 @@ describe('release-coverage-scope', () => {
       'of rc-coverage-gate and finalize-coverage-gate); expected 2');
   });
 });
+
+describe('release-audit-baseline-pin', () => {
+  // The #3588/#4196 npm-audit gate runs inside the sharded unit suites. Unset,
+  // resolveBaselineRef() falls back to the live origin/next tip, which can move
+  // mid-run and flag an already-fixed advisory as "newly introduced" (release
+  // run 38549271057). Every raw-coverage shard step must pin it, as test.yml does.
+  test('every sharded unit-test step in release.yml pins AUDIT_BASELINE_REF', () => {
+    const text = fs.readFileSync(RELEASE_WORKFLOW, 'utf8');
+    const steps = text.split(/\n(?=      - )/)
+      .filter(s => s.includes('npm run test:coverage:unit:raw -- --shard'));
+    assert.strictEqual(steps.length, 2, 'expected rc-test and finalize-test shard steps');
+    for (const step of steps) {
+      assert.match(step, /AUDIT_BASELINE_REF: \$\{\{ github\.sha \}\}/,
+        'shard step must pin AUDIT_BASELINE_REF to github.sha');
+    }
+  });
+});

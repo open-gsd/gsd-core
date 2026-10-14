@@ -415,6 +415,12 @@ jobs:
       - name: Run unit tests (shard ${{ matrix.shard }}, raw coverage only)
         env:
           NODE_OPTIONS: --max-old-space-size=6144
+          # Pin the #3588/#4196 npm-audit gate's baseline to the commit this
+          # run was dispatched from. Unset, resolveBaselineRef() falls back to
+          # the LIVE origin/next tip, which can move mid-run (run 38549271057:
+          # an advisory fixed on next after the run began was reported as
+          # "newly introduced" by this branch). Same pinning test.yml does.
+          AUDIT_BASELINE_REF: ${{ github.sha }}
         run: |
           npm ci
           node scripts/check-npm-integrity.cjs
@@ -694,6 +700,12 @@ jobs:
       - name: Run unit tests (shard ${{ matrix.shard }}, raw coverage only)
         env:
           NODE_OPTIONS: --max-old-space-size=6144
+          # Pin the #3588/#4196 npm-audit gate's baseline to the commit this
+          # run was dispatched from. Unset, resolveBaselineRef() falls back to
+          # the LIVE origin/next tip, which can move mid-run (run 38549271057:
+          # an advisory fixed on next after the run began was reported as
+          # "newly introduced" by this branch). Same pinning test.yml does.
+          AUDIT_BASELINE_REF: ${{ github.sha }}
         run: |
           npm ci
           node scripts/check-npm-integrity.cjs
