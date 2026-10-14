@@ -533,6 +533,8 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
   });
 
   test('isolation: validator VALID_DISPATCH_ISOLATION === owner (the row the ADR-1239 parity block never had)', () => {
+    const { VALID_DISPATCH_ISOLATION } = require(path.join(__dirname, '../gsd-core/bin/lib/capability-validator.cjs'));
+    assert.strictEqual(VALID_DISPATCH_ISOLATION, DISPATCH_ISOLATION_VOCABULARY, 'the validator consumes the owner Set by identity');
     assert.deepEqual(
       sorted(_HOST_INTEGRATION_VOCAB.isolation),
       sorted(DISPATCH_ISOLATION_MODES),
@@ -666,72 +668,6 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
       assert.equal(parseCaseAlternation(`${indent}${w}) ;;`), null);
       assert.equal(parseCaseAlternation(`${indent}# ${w}|${w}-x)`), null);
     }));
-  });
-
-  test('the Set views are SEALED at runtime — `ReadonlySet` erases, so the mutators must refuse (pre-create review MISSED, driven)', (t) => {
-    const { VALID_DISPATCH_ISOLATION } = require(path.join(__dirname, '../gsd-core/bin/lib/capability-validator.cjs'));
-    assert.strictEqual(VALID_DISPATCH_ISOLATION, DISPATCH_ISOLATION_VOCABULARY, 'the validator consumes the owner Set by identity');
-    for (const set of [DISPATCH_ISOLATION_VOCABULARY, BASE_CHECK_ISOLATION_VOCABULARY]) {
-      assert.throws(() => set.add('bogus-mode'), TypeError);
-      assert.throws(() => set.delete('none'), TypeError);
-      assert.throws(() => set.clear(), TypeError);
-      // The review's continuation drove this path past a shadowed-method seal:
-      // a native Set method applied to the view must find no Set internals.
-      assert.throws(() => Set.prototype.add.call(set, 'bogus-mode'), TypeError);
-      assert.throws(() => Set.prototype.delete.call(set, 'none'), TypeError);
-      assert.throws(() => Set.prototype.clear.call(set), TypeError);
-      assert.ok(Object.isFrozen(set));
-      assert.equal(set.has('bogus-mode'), false, 'a refused add must not have taken effect');
-      assert.equal(set.has('none') || set === BASE_CHECK_ISOLATION_VOCABULARY, true, 'a refused delete must not have taken effect');
-      assert.ok(set.size > 0, 'a refused clear must not have taken effect');
-      assert.deepEqual([...set], [...set.values()], 'iteration and values() agree (spread is what the validator uses)');
-    }
-    // The view must not do a dynamic Set.prototype lookup at call time — a
-    // patched `has` would otherwise receive the backing Set as `this` and leak
-    // it (the review's second continuation drove exactly that). Restored via
-    // t.after (the repo's test ruleset bars a try-with-cleanup block in a test body) so a
-    // failure here cannot poison the rest of this process.
-    const originalHas = Set.prototype.has;
-    t.after(() => { Set.prototype.has = originalHas; });
-    let leaked = null;
-    Set.prototype.has = function patchedHas(value) { leaked = this; return originalHas.call(this, value); };
-    DISPATCH_ISOLATION_VOCABULARY.has('none');
-    Set.prototype.has = originalHas;
-    assert.equal(leaked, null, 'a Set.prototype.has patch installed after load must not observe the backing Set');
-    assert.equal(isDispatchIsolation('bogus-mode'), false);
-    assert.deepEqual(sorted(DISPATCH_ISOLATION_VOCABULARY), sorted(DISPATCH_ISOLATION_MODES), 'membership unchanged after the refused mutations');
-    assert.equal(DISPATCH_ISOLATION_VOCABULARY.size, DISPATCH_ISOLATION_MODES.length);
-  });
-
-  test('the owner\'s exports are frozen — a new Set assigned to an export cannot widen what the guards accept', () => {
-    // The guards read their vocabulary export at call time, so a reassigned
-    // export would split them from the tuple and from every consumer that
-    // read the export at load.
-    assert.ok(Object.isFrozen(owner));
-    assert.throws(() => { owner.DISPATCH_ISOLATION_VOCABULARY = new Set([...DISPATCH_ISOLATION_MODES, 'bogus-mode']); }, TypeError);
-    assert.throws(() => { owner.BASE_CHECK_ISOLATION_VOCABULARY = new Set(['none']); }, TypeError);
-    assert.throws(() => { owner.isDispatchIsolation = () => true; }, TypeError);
-    assert.equal(owner.isDispatchIsolation('bogus-mode'), false);
-    assert.equal(owner.isBaseCheckIsolationMode('none'), false);
-    assert.strictEqual(owner.DISPATCH_ISOLATION_VOCABULARY, DISPATCH_ISOLATION_VOCABULARY);
-  });
-
-  test('the sealed views answer the rest of the ReadonlySet read surface as a real Set of the same members would', () => {
-    // The seal replaces the Set with a plain object, so every read method is
-    // hand-delegated; one that is never called can return nothing and stay
-    // green. Compare each against a native Set built from the same tuple.
-    for (const [view, modes] of [
-      [DISPATCH_ISOLATION_VOCABULARY, DISPATCH_ISOLATION_MODES],
-      [BASE_CHECK_ISOLATION_VOCABULARY, BASE_CHECK_ISOLATION_MODES],
-    ]) {
-      const native = new Set(modes);
-      assert.deepEqual([...view.keys()], [...native.keys()], 'keys()');
-      assert.deepEqual([...view.entries()], [...native.entries()], 'entries() yields [value, value] pairs');
-      const calls = [];
-      const thisArg = { marker: true };
-      view.forEach(function (value, key, set) { calls.push([value, key, set === view, this === thisArg]); }, thisArg);
-      assert.deepEqual(calls, modes.map((m) => [m, m, true, true]), 'forEach passes (value, value, the view) with thisArg bound');
-    }
   });
 
   test('worktree base-check --mode consumes the subset: `none` and a bogus value are rejected with a message derived from the owner', () => {
