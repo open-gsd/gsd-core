@@ -18,6 +18,5 @@
     "claude-code",
     "gsd"
   ],
-  "commands": "./commands/gsd/",
   "skills": "./skills/"
 }

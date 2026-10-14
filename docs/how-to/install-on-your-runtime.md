@@ -86,7 +86,7 @@ claude plugin install gsd-core
 
 **Command namespace**
 
-Plugin commands are namespaced as `/gsd-core:<command>` — for example, `/gsd-core:plan-phase`. This is distinct from the classic npm/file-copy installer, which exposes commands as `/gsd:<command>`. Use whichever namespace corresponds to your install method.
+Plugin workflows are skills, namespaced as `/gsd-core:gsd-<command>` — for example, `/gsd-core:gsd-plan-phase`. Each workflow is registered once, so `claude plugin details gsd-core` lists 72 skills with no duplicates (#4860). This is distinct from the classic npm/file-copy installer, which exposes commands as `/gsd:<command>`. Use whichever namespace corresponds to your install method. If you used the earlier `/gsd-core:<command>` spelling (for example `/gsd-core:plan-phase`), switch to `/gsd-core:gsd-<command>`.
 
 **Lifecycle**
 

@@ -26,7 +26,7 @@ The mapping is **defined, not incidental**:
 | Package Identity Module `binName` | `name` | `gsd-core` — drives the `/gsd-core:` command namespace; must be kebab-case (no colon/space/uppercase). |
 | Package Identity Module `repoUrl` | `repository`, `homepage` | derived, never re-typed. |
 | `package.json` `version` / `description` / `license` | `version` / `description` / `license` | `version` is **required** for `claude plugin validate --strict` (a missing version is a strict failure), so it is synced to `package.json` and held by a drift-guard test. |
-| Command surface (`commands/gsd/*.md`) | `commands: "./commands/gsd/"` | exposed as `/gsd-core:<command>`; namespacing replaces the file-copy path's `/gsd:<command>` (an additive UX change, not a data-format break). |
+| Command surface (`commands/gsd/*.md`) | _(not declared — superseded by the skills surface, see Amendment 2026-10-14)_ | was exposed as `/gsd-core:<command>`; namespacing replaces the file-copy path's `/gsd:<command>` (an additive UX change, not a data-format break). |
 | Agent surface (`agents/*.md`) | *(omitted — default `agents/` discovery)* | the explicit `agents: <string>` form is rejected by the plugin schema; relying on Claude Code's default `agents/` discovery loads them and stays self-maintaining. Agents are already plugin-safe — their `hooks`/`permissionMode` frontmatter is inert. |
 | Always-on hook policy (subset of the Installer Module's `settings.json` wiring) | `hooks: "./hooks/hooks.json"` | see below. |
 
@@ -78,3 +78,16 @@ The original mapping table projected commands + hooks but omitted skills. Phase 
 | Skill surface (`commands/gsd/*.md` → build-converted) | `skills: "./skills/"` | A `skills/` dir of build-generated `gsd-<stem>/SKILL.md` files, produced by `scripts/gen-plugin-skills.cjs` running `convertClaudeCommandToClaudeSkill` (the same converter the file-copy installer uses). Generated at build time (`npm run build`) and committed (consistent with ADR-457's generated-committed-output pattern). This closes the gap where plugin-only installs lacked the skill surface because `bin/install.js` never ran. Methodology defined by ADR-1593 §5. |
 
 The `skills/` dir is **generated, not hand-authored** — `scripts/gen-plugin-skills.cjs --check` verifies staleness. The conformance test (`tests/plugin-manifest.test.cjs` Section H) asserts the manifest field, dir presence, frontmatter validity, and count parity with `commands/gsd/*.md` (`DEFECT.GENERATIVE-FIX`).
+
+## Amendment 2026-10-14 — One workflow surface (#4860)
+
+The 2026-06-22 amendment added `skills: "./skills/"` beside the existing `commands: "./commands/gsd/"`. Both hold the same workflows, and Claude Code registers each component directory separately, so `claude plugin details gsd-core` listed 144 skills (each workflow once as `<stem>`, once as `gsd-<stem>`), measured on Claude Code 2.1.296: ~10,702 always-on tokens versus ~8,159 with one surface (the duplicated set is about a quarter of the inventory, not half — the agents account for most of the rest).
+
+**Decision: the `skills/` surface is the single workflow surface; `plugin.json` no longer declares `commands`.**
+
+- Claude Code's plugins reference calls `commands/` the older format ("Prefer `skills/` for new plugins"), and its skills page says commands and skills both create a slash command and that a skill wins a same-name collision. Plugin skills are namespaced `/plugin-name:skill-name`, so workflows are invoked as `/gsd-core:gsd-<stem>`.
+- GSD's own workflows invoke each other as `Skill(skill="gsd-<stem>")`. Only the skills surface carries those names; dropping skills instead would break that chaining, and it would not even remove the duplicates: the default `skills/` directory is scanned whether or not the manifest names it (measured: 144 either way).
+- It matches the rest of the system: the global npm install already uses skills for workflows, and the capability validator's `DEFAULT_TRIGGER_PRECEDENCE` is `['skills', 'commands']`.
+- `commands/gsd/` stays in the repository: it is the source `scripts/gen-plugin-skills.cjs` generates `skills/` from and what the local file-copy installer ships. Claude Code's default scan reads only flat files in `commands/`, so the nested directory is not registered (measured: 72 skills, `claude plugin validate --strict` passes).
+
+Consequences: a plugin user's slash command becomes `/gsd-core:gsd-<stem>` (was `/gsd-core:<stem>`) — a visible rename, called out in the install guide and the changeset. `tests/plugin-manifest.test.cjs` now asserts `commands` is absent and, when the `claude` CLI is available, that the real loader registers each workflow once. The `tests/fixtures/plugin-manifest-schema.json` snapshot no longer lists `commands` as required (the strict validator does not require it).

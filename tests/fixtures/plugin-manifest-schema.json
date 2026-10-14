@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$comment": "Snapshot of the Claude Code plugin.json schema contract as exercised by `claude plugin validate --strict`. Fields marked required mirror the strict-validation failures documented in issue #766 / PR #797. Update this fixture when the upstream Claude Code plugin contract changes.",
+  "$comment": "Snapshot of the Claude Code plugin.json schema contract as exercised by `claude plugin validate --strict`. Fields marked required mirror the strict-validation failures documented in issue #766 / PR #797. Update this fixture when the upstream Claude Code plugin contract changes. #4860: `commands` is optional \u2014 the plugin ships one workflow surface (skills/); `claude plugin validate --strict` passes without it (measured on Claude Code 2.1.296) and the plugins reference lists only `name` as required.",
   "type": "object",
   "required": [
     "name",
@@ -10,14 +10,13 @@
     "author",
     "repository",
     "homepage",
-    "license",
-    "commands"
+    "license"
   ],
   "additionalProperties": true,
   "properties": {
     "name": {
       "type": "string",
-      "description": "Plugin identifier — must be kebab-case (no colon, uppercase, or space) for namespace safety. Drives the /<name>: command namespace.",
+      "description": "Plugin identifier \u2014 must be kebab-case (no colon, uppercase, or space) for namespace safety. Drives the /<name>: command namespace.",
       "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
     },
     "displayName": {
@@ -35,7 +34,9 @@
     },
     "author": {
       "type": "object",
-      "required": ["name"],
+      "required": [
+        "name"
+      ],
       "properties": {
         "name": {
           "type": "string",
