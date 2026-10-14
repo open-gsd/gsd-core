@@ -100,13 +100,16 @@ describe('A: .claude-plugin/plugin.json', () => {
     );
   });
 
-  test('commands field is "./commands/gsd/" and that dir exists with at least one .md file', (t) => {
+  test('#4860: commands field is ABSENT — the skills/ surface is the one workflow surface; commands/gsd/ stays as the generator source', (t) => {
     if (!manifest) { t.skip('manifest could not be parsed'); return; }
-    assert.equal(manifest.commands, './commands/gsd/', 'commands must be "./commands/gsd/"');
-    const resolvedDir = path.resolve(path.dirname(PLUGIN_JSON_PATH), '..', manifest.commands);
-    assert.ok(fs.existsSync(resolvedDir), `resolved commands dir must exist: ${resolvedDir}`);
-    const mdFiles = fs.readdirSync(resolvedDir).filter(f => f.endsWith('.md'));
-    assert.ok(mdFiles.length > 0, `commands dir must contain at least one .md file`);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(manifest, 'commands'),
+      'plugin.json must NOT declare "commands": commands/gsd/ and skills/ hold the same workflows, so declaring both registers every action twice (#4860)'
+    );
+    // commands/gsd/ is still the source skills/ is generated from and what the file-copy installer ships.
+    const sourceDir = path.resolve(path.dirname(PLUGIN_JSON_PATH), '..', 'commands', 'gsd');
+    assert.ok(fs.existsSync(sourceDir), `commands/gsd/ must still exist as the skill generator source: ${sourceDir}`);
+    assert.ok(fs.readdirSync(sourceDir).some(f => f.endsWith('.md')), 'commands/gsd/ must contain at least one .md file');
   });
 
   test('#3029: hooks field is ABSENT — Claude Code auto-loads hooks/hooks.json (explicit declaration caused duplicate-rejection)', (t) => {
@@ -1280,6 +1283,35 @@ describe('H: skills surface projection (#1596)', () => {
       assert.ok(/^\s*name:\s*\S/m.test(fm), `${dir.name}/SKILL.md frontmatter must have a name: field`);
       assert.ok(/^\s*description:\s*\S/m.test(fm), `${dir.name}/SKILL.md frontmatter must have a description: field`);
     }
+  });
+
+  // #4860: before the fix the manifest declared BOTH `commands: ./commands/gsd/`
+  // and `skills: ./skills/` for the same workflows, and `claude plugin details`
+  // listed 144 skills (each action once as `<stem>`, once as `gsd-<stem>`).
+  // This asks the real loader — Claude Code is the owner of what a manifest
+  // registers — and skips when the CLI is not on PATH, like Section C2.
+  test('#4860: the Claude Code loader registers each workflow exactly once (opportunistic — skip when claude is not on PATH)', (t) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4860-home-'));
+    t.after(() => cleanup(home));
+    const env = { ...process.env, ...TEST_ENV_BASE, HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: path.join(home, '.claude') };
+    const probe = spawnSync('claude', ['--version'], { encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS, env });
+    if (probe.error || probe.status !== 0) { t.skip('claude CLI not on PATH'); return; }
+    const res = spawnSync('claude', ['--plugin-dir', ROOT, 'plugin', 'details', 'gsd-core'], {
+      encoding: 'utf-8', timeout: 60000, env, cwd: ROOT,
+    });
+    if (res.status !== 0 || !/Component inventory/.test(res.stdout)) {
+      t.skip(`this claude CLI cannot print plugin details (exit ${res.status})`);
+      return;
+    }
+    const line = res.stdout.split('\n').find(l => /^\s*Skills \(\d+\)/.test(l));
+    assert.ok(line, `plugin details must list a Skills line:\n${res.stdout}`);
+    const count = Number(line.match(/Skills \((\d+)\)/)[1]);
+    const names = line.replace(/^\s*Skills \(\d+\)\s*/, '').split(',').map(n => n.trim()).filter(Boolean);
+    const commandFiles = fs.readdirSync(path.resolve(ROOT, 'commands', 'gsd')).filter(f => f.endsWith('.md'));
+    assert.equal(count, commandFiles.length, `each of the ${commandFiles.length} workflows must register once, got ${count} skills`);
+    assert.equal(new Set(names).size, names.length, 'no skill name may be listed twice');
+    const bare = names.filter(n => !n.startsWith('gsd-'));
+    assert.deepEqual(bare, [], `every workflow must appear only under its gsd-<stem> skill name, not a bare command stem: ${bare.join(', ')}`);
   });
 
   test('parity: one skill dir per command file (DEFECT.GENERATIVE-FIX)', () => {
