@@ -5,7 +5,7 @@
     "1"
   ],
   "fixture": "ctx-drift",
-  "stdout": "{\n  \"block\": false,\n  \"skipped\": false,\n  \"stale_artifacts\": [\n    \"01-RESEARCH.md\"\n  ],\n  \"action\": \"warn\",\n  \"message\": \"CONTEXT.md decisions are newer than: 01-RESEARCH.md. Regenerate research: /gsd:plan-phase 1 --research. Do not hand-inject the newer decisions into a prompt as a substitute for regenerating — that carries the staleness forward.\"\n}",
+  "stdout": "{\n  \"block\": false,\n  \"skipped\": false,\n  \"stale_artifacts\": [\n    \"01-RESEARCH.md\"\n  ],\n  \"action\": \"warn\",\n  \"message\": \"CONTEXT.md decisions are newer than: 01-RESEARCH.md. Regenerate research: /gsd-plan-phase 1 --research. Do not hand-inject the newer decisions into a prompt as a substitute for regenerating — that carries the staleness forward.\"\n}",
   "stderr": "",
   "exitCode": 0
 }
