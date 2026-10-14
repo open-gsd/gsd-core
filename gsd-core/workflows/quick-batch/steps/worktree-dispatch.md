@@ -132,8 +132,8 @@ EXEC_CONCURRENCY=$(printf '%s' "$QB_EXEC_CONC_JSON" | node -e 'let s="";process.
 
    **`isolation == "orchestrator-worktree"`:** GSD creates the worktree
    (`gsd_run query worktree.create --manifest "$QUICK_BATCH_WORKTREE_MANIFEST" --agent-id ... --path ... --branch ... --base ... --files "$PLAN_FILES" --deletions "$PLAN_DELETIONS"`) then
-   process-spawns the executor via `dispatch-isolation --json --cwd-target
-   --prompt`, exactly as `gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md`'s
+   process-spawns the executor via `inspect-dispatch-isolation --json
+   --cwd-target --prompt`, exactly as `gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md`'s
    "orchestrator-worktree" section
    describes — reuse that mechanism verbatim, substituting this item's
    `${quick_id}`/`${ITEM_DIR}`/`${quick_id}-PLAN.md` for its

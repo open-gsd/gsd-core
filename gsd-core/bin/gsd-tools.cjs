@@ -2310,8 +2310,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     //
     // Output:
     //   --raw   → prints exactly harness-worktree | orchestrator-worktree | none
-    //   --json  → prints { runtime, isolation, exec }
+    //   --json  → prints { runtime, isolation, exec, harnessFlag, held }
     //   default → same as --raw
+    //
+    // `held` is true when a plain query is holding a recorded degrade (#4561,
+    // below); `isolation` is then that degrade's `none`.
     //
     // `exec` is the resolved orchestratorExec argv/cwd shape, present only for
     // `orchestrator-worktree`. It requires `--cwd-target` (the GSD-created
@@ -2447,13 +2450,17 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // sticky, and a fresh run with no sentinel records the natural
     // capability as it always did.
     //
-    // STDOUT IS UNCHANGED, deliberately (the same separation #4232 draws):
-    // every dispatch site fails closed on an unguarded `none` from this
-    // query ("declares no executor-isolation primitive", exit 1), so the
-    // held record governs only what the GUARD reads, never what the
-    // workflow's decision tree branches on. `harnessFlag`/`exec` stay the
-    // natural resolution for the same reason — the `--json` read that
-    // fetches the flag is one of the plain re-queries this hold exists for.
+    // STDOUT REPORTS THE HELD VALUE (#4904 review, the #5254 brief): a held
+    // query prints `none`, clears `harnessFlag`/`exec` the way a forced
+    // `none` does, and sets `held: true` under --json. The guard and the
+    // workflow then read the same decision. The dispatch sites tell a held
+    // `none` from a host that declares no primitive by that `held` field
+    // (dispatch-isolation-gate.md, "Resolve ISOLATION"), and they read the
+    // host's descriptors (`harnessFlag`, `exec`) from the sentinel-free
+    // `inspect-dispatch-isolation`, which no hold reaches. The #4222
+    // base-check degrade above stays sentinel-only: it is re-derived from
+    // live git state on every call, and the shell computes the same check
+    // itself.
     //
     // The reader is the guards' own (hooks/lib/isolation-sentinel.js), so
     // "fresh and well-formed" here is byte-for-byte what the guard will
@@ -2493,8 +2500,14 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       }
     }
 
+    const held = heldDegrade !== null;
+    if (held) {
+      isolation = 'none';
+      harnessFlag = null;
+      exec = null;
+    }
     if (args.indexOf('--json') !== -1) {
-      output({ runtime: runtimeId, isolation, exec, harnessFlag }, raw);
+      output({ runtime: runtimeId, isolation, exec, harnessFlag, held }, raw);
     } else {
       process.stdout.write(isolation);
     }
@@ -2977,7 +2990,10 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     }
     const { runtimeId, isolation, exec, harnessFlag } = resolveDispatchIsolationDecision({ args, cwd });
     if (args.indexOf('--json') !== -1) {
-      output({ runtime: runtimeId, isolation, exec, harnessFlag }, raw);
+      // `held` keeps the JSON shape identical to the recording verb's, so a
+      // consumer can switch verbs verbatim. Inspection reads no record, so it
+      // never holds one.
+      output({ runtime: runtimeId, isolation, exec, harnessFlag, held: false }, raw);
     } else {
       process.stdout.write(isolation);
     }

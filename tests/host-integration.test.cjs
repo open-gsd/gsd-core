@@ -2907,11 +2907,20 @@ describe('#2627 dispatch-isolation CLI route', () => {
   const { throwIfFailed } = require('./helpers/git-fixture.cjs');
   const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
   const GSD_TOOLS = path.join(REPO_ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
+  const { createTempDir } = require('./helpers.cjs');
+  const { before, after } = require('node:test');
+  // Its own cwd, not REPO_ROOT. The query writes the run sentinel into its cwd's
+  // project, and since #4904 a plain query over a fresh caller-recorded `none`
+  // ANSWERS `none`; a developer checkout where GSD ran in the last ten minutes
+  // would otherwise decide what this test reads (and receive its writes).
+  let cwd;
+  before(() => { cwd = createTempDir('gsd-2627-route-'); });
+  after(() => cleanup(cwd));
 
   function query(runtimeId, extraArgs = []) {
     const r = runNode(
       [GSD_TOOLS, 'query', 'dispatch-isolation', ...extraArgs],
-      { cwd: REPO_ROOT, env: { ...process.env, GSD_RUNTIME: runtimeId }, timeoutMs: PROBE_TIMEOUT_MS },
+      { cwd, env: { ...process.env, GSD_RUNTIME: runtimeId }, timeoutMs: PROBE_TIMEOUT_MS },
     );
     throwIfFailed(r, `gsd-tools query dispatch-isolation ${extraArgs.join(' ')}`);
     return r.stdout;
@@ -3197,7 +3206,8 @@ describe('#2652 dispatch-site parity — isolation gates on capability, not runt
     // dispatch sites @-reference the gate and merely re-record a degrade
     // (`--force-isolation …` with no assignment), which carries no verdict of
     // its own — matching those too would flag files that have nothing to fix.
-    const INLINE_RESOLVE = /\w+=\$\(gsd_run query dispatch-isolation --raw/;
+    // --raw or --json: since #4904 the blocks read `held` too, from the --json form.
+    const INLINE_RESOLVE = /\w+=\$\(gsd_run query dispatch-isolation --(?:raw|json)/;
     // Dedupe: SCAN_ROOTS already yields the gate reference, so appending it
     // again made `length >= 2` satisfiable by the gate alone — the executor
     // site could drop out of the predicate entirely and this would still pass.
@@ -3221,13 +3231,17 @@ describe('#2652 dispatch-site parity — isolation gates on capability, not runt
       'the set of files inlining the resolver changed — a new inliner needs the same treatment, and a missing one means the predicate stopped seeing it',
     );
 
-    for (const { rel, text } of inliners) {
+    for (const { rel, text: rawText } of inliners) {
+      // Join backslash continuations first: `$(gsd_run … \<newline> || echo …)`
+      // is the same collapse split across lines, and a per-line pattern misses it.
+      const text = rawText.replace(/\\\r?\n[ \t]*/g, ' ');
       // Any assignment target, not just ISOLATION — `_ISOLATION_RAW=$(… || echo
       // "none")` restores the identical defect while leaving ISOLATION_RESOLVED
       // in the file, so a name-specific pattern passes on a broken block.
       assert.doesNotMatch(
         text,
-        /\w+=\$\(gsd_run query dispatch-isolation --raw[^\n]*\|\|[^\n]*echo/,
+        // Any `||` inside the resolve's own $( … ) — echo, printf, or on the next line.
+        /\w+=\$\(gsd_run query dispatch-isolation --(?:raw|json)[^)]*\|\|/,
         `${rel}: collapses a resolver failure straight to none — that reports "declares no primitive" for a host that simply could not be queried`,
       );
       assert.match(

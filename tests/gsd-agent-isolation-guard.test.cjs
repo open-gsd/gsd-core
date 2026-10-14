@@ -52,12 +52,13 @@ const os = require('node:os');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { runHook: runHookSeam, runGit } = require('./helpers/process-seam.cjs');
 const { toLegacyResult, gitOrThrow } = require('./helpers/git-fixture.cjs');
-const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS, HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { createTempDir, createTempProject, createTempGitProject, runGsdTools, cleanup } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 const { SENTINEL_RELATIVE_PATH, SENTINEL_STALE_MS, readSentinel } = require('../hooks/lib/isolation-sentinel.js');
 const { REASON_CODE, REASON_INTERPOLATION_MAX_LEN, sanitizeForReason, describeSentinelDiscard } = require('../hooks/lib/isolation-deny-reason.js');
 const { runtimes } = require('../gsd-core/bin/lib/capability-registry.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-agent-isolation-guard.js');
 
@@ -2278,29 +2279,60 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
     assert.equal(sentinel.written_at, writtenAt, 'held means NOT rewritten: the timestamp must not refresh, or a polling re-query could keep a degrade alive forever');
   });
 
-  test('stdout is UNCHANGED by the hold — a plain re-query still answers the host capability, never the held `none`', (t) => {
-    // Every dispatch site fails closed on an unguarded `none` from this query
-    // ("declares no executor-isolation primitive", exit 1). The hold governs
-    // what the GUARD reads, not what the workflow's decision tree branches on.
+  test('stdout REPORTS the held `none` — raw prints it, and --json marks it held with no harness flag or exec', (t) => {
+    // #4904 review / the #5254 brief: "the query's stdout reports the held
+    // value". The guard and the workflow read one decision; the dispatch
+    // sites tell a held `none` from a declared one by `held`.
     const dir = createTempProject('gsd-4561-hold-');
     t.after(() => cleanup(dir));
-    shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
+    const writtenAt = shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
 
     const raw = runGsdTools(['query', 'dispatch-isolation', '--raw'], dir, env(dir));
     assert.equal(raw.success, true, raw.error);
-    assert.equal(raw.output.trim(), 'harness-worktree');
+    assert.equal(raw.output.trim(), 'none');
 
-    // The `--json` harnessFlag read (executor-isolation-dispatch.md) is one of
-    // the plain re-queries the hold exists for — it must still return the flag.
     const json = runGsdTools(['query', 'dispatch-isolation', '--json', '--phase', '7'], dir, env(dir));
     assert.equal(json.success, true, json.error);
     const parsed = JSON.parse(json.output);
-    assert.equal(parsed.isolation, 'harness-worktree');
-    assert.equal(parsed.harnessFlag, 'isolation="worktree"');
-    assert.equal(readSentinelRaw(dir).isolation, 'none', 'and the record is still held after the --json read');
+    assert.equal(parsed.isolation, 'none');
+    assert.equal(parsed.held, true);
+    assert.equal(parsed.harnessFlag, null, 'a held `none` carries no flag, exactly like a forced one');
+    assert.equal(parsed.exec, null);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'none', 'and the record is still held after both reads');
+    assert.equal(sentinel.written_at, writtenAt, 'reporting the hold writes nothing');
   });
 
-  test('a plain re-query naming the SAME phase (the orchestrator\'s --json harnessFlag read) holds a plan-scoped record — an omitted identifier is unconstrained', (t) => {
+  test('a query that is NOT holding reports the capability with held:false — a resolver-owned or out-of-scope record is not reported as held', (t) => {
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
+    // A different plan is out of scope, so this query writes rather than holds.
+    const other = runGsdTools(['query', 'dispatch-isolation', '--json', '--phase', '7', '--plan', 'plan-b'], dir, env(dir));
+    assert.equal(other.success, true, other.error);
+    const parsed = JSON.parse(other.output);
+    assert.equal(parsed.isolation, 'harness-worktree');
+    assert.equal(parsed.held, false);
+    assert.equal(parsed.harnessFlag, 'isolation="worktree"');
+  });
+
+  test('the descriptor read (inspect-dispatch-isolation) is never reached by a hold — it answers the host\'s flag while the record stays `none`', (t) => {
+    // executor-isolation-dispatch.md reads harnessFlag/exec from the inspect
+    // verb, because a plan-scoped degrade from step 2.5 is held by any query
+    // that names no plan, and would otherwise null the flag for the wave.
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    const writtenAt = shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
+    const r = runGsdTools(['query', 'inspect-dispatch-isolation', '--json'], dir, env(dir));
+    assert.equal(r.success, true, r.error);
+    const parsed = JSON.parse(r.output);
+    assert.equal(parsed.isolation, 'harness-worktree');
+    assert.equal(parsed.harnessFlag, 'isolation="worktree"');
+    assert.equal(parsed.held, false);
+    assert.equal(readSentinelRaw(dir).written_at, writtenAt, 'and inspection leaves the held record alone');
+  });
+
+  test('a plain re-query naming the SAME phase (execute-phase\'s own resolve) holds a plan-scoped record — an omitted identifier is unconstrained', (t) => {
     const dir = createTempProject('gsd-4561-hold-');
     t.after(() => cleanup(dir));
     shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
@@ -2431,12 +2463,151 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
 
     const r1 = runGsdTools(['query', 'dispatch-isolation', '--json', '--phase', ''], dir, env(dir));
     assert.equal(r1.success, true, r1.error);
-    assert.equal(JSON.parse(r1.output).isolation, 'harness-worktree');
-    assert.equal(readSentinelRaw(dir).isolation, 'none', 'an empty --phase must not be read as a differing scope');
+    assert.equal(JSON.parse(r1.output).held, true, 'an empty --phase must not be read as a differing scope');
+    assert.equal(JSON.parse(r1.output).isolation, 'none', 'and the held query answers with the held value');
+    assert.equal(readSentinelRaw(dir).isolation, 'none');
 
     const r2 = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7', '--plan', ''], dir, env(dir));
     assert.equal(r2.success, true, r2.error);
     assert.equal(readSentinelRaw(dir).plan, 'plan-a', 'an empty --plan must not be read as a differing scope');
+  });
+
+  // The shipped `Resolve ISOLATION` blocks, run as a dispatch site runs them.
+  // A held `none` must send the site sequential (no FATAL), and the site must
+  // still re-record it at its OWN scope: the guard reads the record at dispatch
+  // time, and the held one can name another phase/plan or lapse before the
+  // dispatch. A `none` that is NOT held is the host declaring no primitive and
+  // must still fail closed.
+  const GATE_SOURCES = [
+    ['dispatch-isolation-gate.md', path.join(__dirname, '..', 'gsd-core', 'references', 'dispatch-isolation-gate.md')],
+    ['executor-isolation-dispatch.md', path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'executor-isolation-dispatch.md')],
+  ];
+  const NO_BASH = process.platform === 'win32';
+  const TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
+
+  function resolveIsolationBlock(file) {
+    const lines = splitLines(fs.readFileSync(file, 'utf8'));
+    const heading = lines.findIndex((l) => l.startsWith('## Resolve ISOLATION'));
+    assert.notEqual(heading, -1, `${file}: no "## Resolve ISOLATION" heading`);
+    const open = lines.findIndex((l, i) => i > heading && l.trim() === '```bash');
+    const close = lines.findIndex((l, i) => i > open && l.trim() === '```');
+    assert.ok(open !== -1 && close !== -1, `${file}: no bash block under "Resolve ISOLATION"`);
+    // The shim preamble locates gsd-tools on disk; the test supplies gsd_run itself.
+    return lines.slice(open + 1, close).filter((l) => !l.startsWith('_GSD_SHIM_NAME=')).join('\n');
+  }
+
+  function runResolveBlock(dir, file, gsdRunDefinition) {
+    const script = path.join(dir, 'resolve-isolation.sh');
+    fs.writeFileSync(script, [
+      'set -u',
+      gsdRunDefinition,
+      'USE_WORKTREES=true; RUNTIME=claude; PHASE_NUMBER=7',
+      resolveIsolationBlock(file),
+      'printf "ISOLATION=%s\\nUSE_WORKTREES=%s\\n" "$ISOLATION" "$USE_WORKTREES"',
+    ].join('\n'));
+    const childEnv = { ...process.env, GSD_RUNTIME: 'claude', HOME: dir };
+    delete childEnv.CLAUDE_ENV_FILE;
+    return runHookSeam(script, [], { interpreter: 'bash', cwd: dir, env: childEnv, timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
+  }
+
+  // The scope each block records at: the gate is unscoped, the executor site names its phase.
+  const SITE_SCOPE = { 'dispatch-isolation-gate.md': null, 'executor-isolation-dispatch.md': '7' };
+  const guardModule = require('../hooks/gsd-agent-isolation-guard.js');
+
+  for (const [name, file] of GATE_SOURCES) {
+    test(`${name}: a HELD none runs sequentially — no FATAL, and re-records none at the site's own scope`, { skip: NO_BASH }, (t) => {
+      const dir = createTempProject('gsd-4904-gate-held-');
+      t.after(() => cleanup(dir));
+      const writtenAt = shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
+      const run = runResolveBlock(dir, file, `gsd_run() { node ${JSON.stringify(TOOLS)} "$@"; }`);
+      assert.equal(run.outcome, 'exited', run.stderr);
+      assert.equal(run.exitCode, 0, `the block failed closed on a held none: ${run.stderr}`);
+      assert.match(run.stdout, /^ISOLATION=none$/m);
+      assert.match(run.stdout, /^USE_WORKTREES=false$/m);
+      assert.match(run.stderr, /held at none/);
+      assert.doesNotMatch(run.stderr, /FATAL/);
+      const sentinel = readSentinelRaw(dir);
+      assert.equal(sentinel.isolation, 'none');
+      assert.equal(sentinel.decided_by, 'caller', 'the re-record ran: it forces the final value');
+      assert.equal(sentinel.plan, null, 'the re-record replaced the held plan-a record with this site\'s scope');
+      assert.equal(sentinel.phase, SITE_SCOPE[name]);
+      assert.ok(sentinel.written_at >= writtenAt, 'the re-record is fresh as of this site, not as of the held record');
+    });
+
+    // Codex RV6.5 review of #5126: with the re-record skipped, the guard read
+    // the HELD record at dispatch time — a description that parses as another
+    // phase, or the held record lapsing before the dispatch, made it fall back
+    // to the registry and deny the sequential dispatch the hold asked for.
+    test(`${name}: after following a hold, the guard allows the sequential dispatch it leads to`, { skip: NO_BASH }, (t) => {
+      // A git repository: outside one the guard's registry fallback already answers `none`
+      // (#4734), and the deny this test guards against could not happen at all.
+      const dir = createTempGitProject('gsd-4904-gate-held-guard-');
+      t.after(() => cleanup(dir));
+      // A GSD project on a harness-worktree host: without config.json the guard is inert.
+      fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude', workflow: { use_worktrees: true } }));
+      const heldWrittenAt = shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
+      const run = runResolveBlock(dir, file, `gsd_run() { node ${JSON.stringify(TOOLS)} "$@"; }`);
+      assert.equal(run.exitCode, 0, run.stderr);
+      const savedRuntime = process.env.GSD_RUNTIME;
+      process.env.GSD_RUNTIME = 'claude';
+      t.after(() => { if (savedRuntime === undefined) delete process.env.GSD_RUNTIME; else process.env.GSD_RUNTIME = savedRuntime; });
+      const dispatch = (description, nowMs) => guardModule.evaluateDispatch({
+        tool_name: 'Agent', cwd: dir,
+        tool_input: { subagent_type: 'gsd-executor', description, prompt: 'do the work' },
+      }, nowMs === undefined ? {} : { clock: { now: () => nowMs } });
+      // A quick task's description is user text; this one parses as phase 7 — the held record's own phase.
+      assert.equal(dispatch('Execute: fix the crash when we execute plan 01 of phase 7').action, 'allow');
+      if (SITE_SCOPE[name] === null) {
+        // Only the unscoped gate leads to dispatches whose identity can name another phase.
+        assert.equal(dispatch('Execute: fix the crash when we execute plan 02 of phase 8').action, 'allow',
+          'a description naming another phase must not be judged against the held plan-a record');
+      }
+      assert.equal(dispatch('Execute: a quick task', heldWrittenAt + SENTINEL_STALE_MS + 1).action, 'allow',
+        'the dispatch must not lapse with the HELD record\'s ten minutes');
+    });
+
+    test(`${name}: a none that is NOT held is a host with no primitive — still FATAL`, { skip: NO_BASH }, (t) => {
+      const dir = createTempProject('gsd-4904-gate-declared-');
+      t.after(() => cleanup(dir));
+      const answer = JSON.stringify({ runtime: 'claude', isolation: 'none', exec: null, harnessFlag: null, held: false });
+      const run = runResolveBlock(dir, file, `gsd_run() { case "$*" in *"--json"*) printf '%s' '${answer}' ;; *) return 0 ;; esac; }`);
+      assert.equal(run.outcome, 'exited', run.stderr);
+      assert.equal(run.exitCode, 1);
+      assert.match(run.stderr, /declares no executor-isolation primitive/);
+      assert.doesNotMatch(run.stderr, /held at none/);
+    });
+  }
+
+  for (const [name, file] of GATE_SOURCES) test(`${name}: with no record the block resolves the live capability and records it`, { skip: NO_BASH }, (t) => {
+    const dir = createTempProject('gsd-4904-gate-live-');
+    t.after(() => cleanup(dir));
+    // The executor block also runs the #683 base-check and the orphan reaper, which need a
+    // git fork base this fixture does not have; stub those two verbs, keep every isolation call real.
+    const run = runResolveBlock(dir, file, `gsd_run() { case "$2" in worktree.base-check) echo false ;; worktree.reap-orphans) : ;; *) node ${JSON.stringify(TOOLS)} "$@" ;; esac; }`);
+    assert.equal(run.outcome, 'exited', run.stderr);
+    assert.equal(run.exitCode, 0, run.stderr);
+    assert.match(run.stdout, /^ISOLATION=harness-worktree$/m);
+    assert.match(run.stdout, /^USE_WORKTREES=true$/m);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'harness-worktree');
+    assert.equal(sentinel.decided_by, 'caller', 'the re-record ran: it forces the final value');
+    assert.equal(sentinel.phase, SITE_SCOPE[name]);
+  });
+
+  // An answer outside the vocabulary is no verdict, held or not — including one carrying a
+  // byte bash drops from a command substitution, which would otherwise arrive as a valid value.
+  for (const answer of [
+    '{"isolation":"harness-\\u0000worktree","held":false}',
+    '{"isolation":"garbage","held":true}',
+  ]) test(`both blocks treat an out-of-vocabulary answer as unresolved: ${answer}`, { skip: NO_BASH }, (t) => {
+    for (const [name, file] of GATE_SOURCES) {
+      const dir = createTempProject('gsd-4904-gate-vocab-');
+      t.after(() => cleanup(dir));
+      const run = runResolveBlock(dir, file, `gsd_run() { case "$*" in *"--json"*) printf '%s' '${answer}' ;; *) return 0 ;; esac; }`);
+      assert.equal(run.exitCode, 1, `${name}: ${run.stdout}`);
+      assert.match(run.stderr, /could not resolve this runtime's executor-isolation capability/, name);
+      assert.doesNotMatch(run.stderr, /held at none/, name);
+    }
   });
 });
 
