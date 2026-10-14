@@ -3401,6 +3401,100 @@ Plans:
     assert.strictEqual(waveMatches.length, 2, 'exactly 2 wave headers (not doubled)');
   });
 
+  describe('#5321: re-annotation after replan', () => {
+    const ROADMAP4 = `# Roadmap
+
+### Phase 1: Foundation
+**Goal:** Set up project
+**Plans:** 4 plans
+
+Plans:
+- [ ] 01-01-PLAN.md — One
+- [ ] 01-02-PLAN.md — Two
+- [ ] 01-03-PLAN.md — Three
+- [ ] 01-04-PLAN.md — Four
+
+### Phase 2: Next
+**Goal:** Later
+`;
+    const planPath = (n) => path.join('.planning', 'phases', '01-foundation', `01-0${n}-PLAN.md`);
+    const roadmapFile = () => path.join(tmpDir, '.planning', 'ROADMAP.md');
+    const makeFour = (waves, truths = [[], [], [], []], roadmap = ROADMAP4) => makePlanProject({
+      '.planning/ROADMAP.md': roadmap,
+      ...Object.fromEntries(waves.map((w, i) => [planPath(i + 1), PLAN_TEMPLATE(w, truths[i])])),
+    });
+    const setPlan = (n, wave, truths = []) =>
+      fs.writeFileSync(path.join(tmpDir, planPath(n)), PLAN_TEMPLATE(wave, truths), 'utf-8');
+    const run = () => {
+      const r = runGsdTools('roadmap annotate-dependencies 1', tmpDir);
+      assert.ok(r.success, `Command failed: ${r.error}`);
+      return JSON.parse(r.output);
+    };
+
+    test('replanned wave change is regrouped without duplicate headers', () => {
+      tmpDir = makeFour([1, 2, 3, 3]);
+      run();
+      setPlan(4, 4);
+      const out = run();
+      assert.strictEqual(out.updated, true);
+      const roadmap = fs.readFileSync(roadmapFile(), 'utf-8');
+      assert.strictEqual((roadmap.match(/\*\*Wave \d+\*\*/g) || []).length, 4, 'one header per new wave');
+      assert.ok(
+        roadmap.includes(
+          '**Wave 3** *(blocked on Wave 2 completion)*\n- [ ] 01-03-PLAN.md — Three\n\n' +
+          '**Wave 4** *(blocked on Wave 3 completion)*\n- [ ] 01-04-PLAN.md — Four\n',
+        ),
+        'plans grouped under new waves',
+      );
+      assert.strictEqual((roadmap.match(/### Phase 2: Next/g) || []).length, 1, 'next phase intact');
+    });
+
+    test('immediate re-run is byte-identical and reports updated:false', () => {
+      tmpDir = makeFour([1, 2, 3, 3], [['Shared rule'], ['Shared rule'], [], []]);
+      run();
+      setPlan(4, 4);
+      run();
+      const before = fs.readFileSync(roadmapFile(), 'utf-8');
+      const out = run();
+      assert.strictEqual(out.updated, false);
+      assert.strictEqual(fs.readFileSync(roadmapFile(), 'utf-8'), before);
+    });
+
+    test('collapsing to a single wave removes the old wave headers', () => {
+      tmpDir = makeFour([1, 2, 3, 3]);
+      run();
+      for (const n of [1, 2, 3, 4]) setPlan(n, 1);
+      const out = run();
+      assert.strictEqual(out.updated, true);
+      const roadmap = fs.readFileSync(roadmapFile(), 'utf-8');
+      assert.ok(!/\*\*Wave \d+\*\*/.test(roadmap), 'no wave headers remain');
+      assert.ok(!roadmap.includes('blocked on'), 'no blocked-on notes remain');
+      assert.strictEqual((roadmap.match(/- \[ \] 01-0\d-PLAN\.md/g) || []).length, 4, 'all 4 plans kept');
+    });
+
+    test('CRLF ROADMAP.md re-annotates cleanly (platformWriteSync normalizes .md to LF)', () => {
+      tmpDir = makeFour([1, 2, 3, 3], undefined, ROADMAP4.replace(/\n/g, '\r\n'));
+      run();
+      setPlan(4, 4);
+      run();
+      const roadmap = fs.readFileSync(roadmapFile(), 'utf-8');
+      assert.strictEqual((roadmap.match(/\*\*Wave \d+\*\*/g) || []).length, 4);
+    });
+
+    test('a cross-cutting constraint no longer shared is removed', () => {
+      tmpDir = makeFour([1, 1, 2, 2], [['Shared rule'], ['Shared rule'], ['Solo A'], ['Solo B']]);
+      run();
+      assert.ok(fs.readFileSync(roadmapFile(), 'utf-8').includes('**Cross-cutting constraints:**'));
+      setPlan(2, 1, ['Different rule']);
+      const out = run();
+      assert.strictEqual(out.updated, true);
+      const roadmap = fs.readFileSync(roadmapFile(), 'utf-8');
+      assert.ok(!roadmap.includes('Cross-cutting constraints'), 'section removed');
+      assert.ok(!roadmap.includes('Shared rule'), 'stale constraint bullet removed');
+      assert.ok(roadmap.includes('### Phase 2: Next'), 'next phase intact');
+    });
+  });
+
   test('returns no-op when phase has no plans', () => {
     tmpDir = makePlanProject({
       '.planning/ROADMAP.md': `# Roadmap\n\n### Phase 1: Foundation\n**Goal:** Set up project\n`,

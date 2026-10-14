@@ -1728,8 +1728,8 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
  * Cross-cutting constraints: must_haves.truths strings that appear in 2+ plans
  * are surfaced in a "Cross-cutting constraints" subsection below the plan list.
  *
- * The operation is idempotent: if wave headers already exist in the section
- * the function returns without modifying the file.
+ * Re-running regenerates the annotation from current PLAN frontmatter (replans
+ * update waves/constraints, #5321); idempotent: an unchanged result writes nothing.
  */
 function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | undefined, raw: boolean): void {
   if (!phaseNum) {
@@ -1860,11 +1860,9 @@ function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | u
     const phaseEnd = nextPhaseOffset >= 0 ? phaseStart + 1 + nextPhaseOffset : content.length;
     const phaseSection = content.slice(phaseStart, phaseEnd);
 
-    // Idempotency: skip if annotation markers already present
-    if (
-      /\*\*Wave\s+\d+/i.test(phaseSection) ||
-      /\*\*Cross-cutting constraints:\*\*/i.test(phaseSection)
-    ) return;
+    // #5321: no early-return on existing annotations — group 2 below swallows a prior
+    // annotation (wave headers + cross-cutting block) so replans rebuild it from scratch;
+    // an unchanged result is caught by the `nextContent === content` no-write check.
 
     // Find the Plans: section within the phase section.
     // #3691 Bug 1: `Plans:\s*\n` required no text after the colon, missing variants like
@@ -1885,8 +1883,13 @@ function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | u
     // it accepts the first complete parse and stops, which rules out the #2128-class
     // ambiguous-boundary blowup despite the nested-quantifier shape. Non-global match on
     // already phase-sliced content, not the whole file.
-    // eslint-disable-next-line local/no-unbounded-quantifier -- outer `+` has no trailing constraint to force re-partitioning; measured linear to 10.9MB
-    const plansBlockMatch = phaseSection.match(/(?:^|\r?\n)(\*{0,2}Plans\*{0,2}:[^\r\n]*\r?\n)((?:\s*-\s*\[[ x]\][^\r\n]*\r?\n?)+)/i);
+    // #5321: group 2 also swallows a previous annotation — `**Wave N**` header lines (second
+    // alternative inside the `+`) and an optional trailing `**Cross-cutting constraints:**`
+    // header plus its non-checkbox bullets. Alternatives start with distinct literals (`-` vs
+    // `**Wave`), so the ambiguity profile above is unchanged; `listLines` below still keeps
+    // checkbox lines only, so the rebuild is identical for annotated and bare lists.
+    // eslint-disable-next-line local/no-unbounded-quantifier -- outer `+` has no trailing constraint to force re-partitioning; alternatives start with distinct literals; measured linear to 10.9MB
+    const plansBlockMatch = phaseSection.match(/(?:^|\r?\n)(\*{0,2}Plans\*{0,2}:[^\r\n]*\r?\n)((?:\s*-\s*\[[ x]\][^\r\n]*\r?\n?|\s*\*\*Wave\s+\d+\*\*[^\r\n]*\r?\n?)+(?:\s*\*\*Cross-cutting constraints:\*\*[^\r\n]*\r?\n?(?:[ \t]*-[ \t]+(?!\[[ x]\])[^\r\n]*\r?\n?)*)?)/i);
     if (!plansBlockMatch) return;
 
     const plansHeader = plansBlockMatch[1];
