@@ -885,7 +885,10 @@ test('SHARD_BALANCE matches the windows shard layout test.yml declares (#5029)',
   const expectedKeys = Array.from({ length: total }, (_, i) => `${i + 1}/${total}`);
   assert.deepEqual(Object.keys(SHARD_BALANCE.baselineP90Ms).sort(), [...expectedKeys].sort());
   for (const key of expectedKeys) {
-    const ms = SHARD_BALANCE.baselineP90Ms[key];
-    assert.ok(Number.isInteger(ms) && ms > 0, `baselineP90Ms['${key}'] must be a positive integer ms, got ${ms}`);
+    const baseline = SHARD_BALANCE.baselineP90Ms[key];
+    assert.ok(
+      Number.isInteger(baseline) && baseline > 0,
+      `baselineP90Ms['${key}'] must be a positive integer (milliseconds), got ${baseline}`,
+    );
   }
 });
