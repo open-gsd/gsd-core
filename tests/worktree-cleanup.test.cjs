@@ -1750,3 +1750,221 @@ describe('bug #48: orchestrator cwd-drift guard — executable e2e', () => {
 });
   });
 }
+
+describe('durable wave worktree manifest contract (#4853)', () => {
+  const childProcess = require('node:child_process');
+  const os = require('node:os');
+  const { cleanup, readFileNormalized } = require('./helpers.cjs');
+  const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+  const { HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+  const GSD_TOOLS = path.join(REPO_ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
+
+  function extractCleanupTailBash() {
+    const content = readFileNormalized(EXECUTE_PHASE_PATH);
+    const marker = 'Cleanup-tail snippet';
+    const markerIdx = content.indexOf(marker);
+    if (markerIdx === -1) {
+      throw new Error(`extractCleanupTailBash: could not find "${marker}" in ${EXECUTE_PHASE_PATH}`);
+    }
+    const afterMarker = content.slice(markerIdx + marker.length);
+    const lines = splitLines(afterMarker);
+    const fence = scanFencedBlocks(lines).find(
+      (b) => b.closeLineIdx !== -1 && ['bash', 'sh'].includes((b.infoString || '').trim()),
+    );
+    if (!fence) {
+      throw new Error(`extractCleanupTailBash: could not find \`\`\`bash fence after "${marker}"`);
+    }
+    const block = lines.slice(fence.openLineIdx + 1, fence.closeLineIdx).join('\n');
+    if (!block.includes('CLEANUP_FAILED')) {
+      throw new Error('extractCleanupTailBash: extracted block does not contain CLEANUP_FAILED');
+    }
+    return block;
+  }
+
+  function extractManifestCreationBash() {
+    const content = readFileNormalized(EXECUTE_PHASE_PATH);
+    const marker = '**Worktree mode**';
+    const markerIdx = content.indexOf(marker);
+    if (markerIdx === -1) {
+      throw new Error(`extractManifestCreationBash: could not find "${marker}" in ${EXECUTE_PHASE_PATH}`);
+    }
+    const afterMarker = content.slice(markerIdx + marker.length);
+    const lines = splitLines(afterMarker);
+    const fence = scanFencedBlocks(lines).find(
+      (b) => b.closeLineIdx !== -1 && ['bash', 'sh'].includes((b.infoString || '').trim()),
+    );
+    if (!fence) {
+      throw new Error(`extractManifestCreationBash: could not find \`\`\`bash fence after "${marker}"`);
+    }
+    const block = lines.slice(fence.openLineIdx + 1, fence.closeLineIdx).join('\n');
+    if (!block.includes('WAVE_WORKTREE_MANIFEST')) {
+      throw new Error('extractManifestCreationBash: extracted block does not contain WAVE_WORKTREE_MANIFEST');
+    }
+    return block;
+  }
+
+  test('cleanup-tail bash removes residual worktrees and cleans up manifest on success (M3)', (t) => {
+    const cleanupTailBash = extractCleanupTailBash();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-cleanup-succ-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    const repo = path.join(root, 'repo');
+    const wt = path.join(root, 'agent-wt');
+    fs.mkdirSync(repo);
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repo });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repo });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: repo });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repo });
+    fs.writeFileSync(path.join(repo, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: repo });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repo });
+
+    gitOrThrow(['worktree', 'add', '-q', '-b', 'worktree-agent-test1', wt], { cwd: repo });
+    assert.equal(fs.existsSync(wt), true, 'sanity: agent worktree created');
+
+    const manifestPath = path.join(repo, 'wave-1-manifest.json');
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        orchestrator_root: repo,
+        worktrees: [{ agent_id: 'test1', worktree_path: wt, branch: 'worktree-agent-test1' }],
+      }) + '\n',
+    );
+
+    const scriptPath = path.join(root, 'cleanup-tail.sh');
+    fs.writeFileSync(scriptPath, cleanupTailBash);
+    const res = childProcess.spawnSync('bash', [scriptPath], {
+      cwd: repo,
+      env: { ...process.env, WAVE_WORKTREE_MANIFEST: manifestPath },
+      stdio: 'pipe',
+      timeout: HOOK_FANOUT_TIMEOUT_MS,
+    });
+
+    assert.equal(res.status, 0, `cleanup-tail must exit 0 on success. stderr: ${res.stderr?.toString()}`);
+    assert.equal(fs.existsSync(wt), false, 'residual worktree must be removed from disk');
+    assert.equal(
+      gitOrThrow(['branch', '--list', 'worktree-agent-test1'], { cwd: repo }).trim(),
+      '',
+      'residual branch must be deleted',
+    );
+    assert.equal(fs.existsSync(manifestPath), false, 'manifest must be deleted when all residual worktrees are cleaned');
+  });
+
+  test('cleanup-tail bash preserves manifest when residual worktree removal fails (negative control) (M3)', (t) => {
+    if (process.platform === 'win32') {
+      t.skip('directory permission failure simulation is POSIX-specific');
+      return;
+    }
+
+    const cleanupTailBash = extractCleanupTailBash();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-cleanup-fail-'));
+    const repo = path.join(root, 'repo');
+    const wt = path.join(root, 'agent-wt-fail');
+    t.after(() => {
+      try { fs.chmodSync(wt, 0o755); } catch (_) { /* restore */ }
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    fs.mkdirSync(repo);
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repo });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repo });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: repo });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repo });
+    fs.writeFileSync(path.join(repo, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: repo });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repo });
+
+    gitOrThrow(['worktree', 'add', '-q', '-b', 'worktree-agent-fail1', wt], { cwd: repo });
+
+    const manifestPath = path.join(repo, 'wave-1-manifest.json');
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        orchestrator_root: repo,
+        worktrees: [{ agent_id: 'fail1', worktree_path: wt, branch: 'worktree-agent-fail1' }],
+      }) + '\n',
+    );
+
+    // Make worktree undeletable so git worktree remove fails
+    fs.chmodSync(wt, 0o555);
+
+    const scriptPath = path.join(root, 'cleanup-tail.sh');
+    fs.writeFileSync(scriptPath, cleanupTailBash);
+    const res = childProcess.spawnSync('bash', [scriptPath], {
+      cwd: repo,
+      env: { ...process.env, WAVE_WORKTREE_MANIFEST: manifestPath },
+      stdio: 'pipe',
+      timeout: HOOK_FANOUT_TIMEOUT_MS,
+    });
+
+    const stderr = (res.stderr || '').toString();
+    assert.match(stderr, /Residual worktrees remain; preserving manifest at/, 'stderr must report manifest preservation');
+    assert.equal(fs.existsSync(manifestPath), true, 'manifest must be preserved on disk when cleanup fails');
+  });
+
+  test('execute-phase dispatch block exclusively creates manifest with wx and blocks overwrite (M2)', (t) => {
+    const creationBash = extractManifestCreationBash();
+    assert.match(
+      creationBash,
+      /\{flag:"wx"\}/,
+      'manifest creation block must use exclusive create flag wx to prevent truncating pre-existing manifest',
+    );
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-create-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    const repo = path.join(root, 'repo');
+    const phaseDir = path.join(root, 'phase');
+    fs.mkdirSync(repo);
+    fs.mkdirSync(phaseDir);
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repo });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repo });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: repo });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repo });
+    fs.writeFileSync(path.join(repo, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: repo });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repo });
+
+    const script = `
+set -e
+gsd_run() {
+  node "${GSD_TOOLS}" "$@"
+}
+export CURRENT_WAVE=1
+export PHASE_DIR="${phaseDir}"
+${creationBash}
+`;
+    const scriptPath = path.join(root, 'test-create.sh');
+    fs.writeFileSync(scriptPath, script);
+
+    // Initial creation: succeeds
+    const res1 = childProcess.spawnSync('bash', [scriptPath], {
+      cwd: repo,
+      stdio: 'pipe',
+      timeout: HOOK_FANOUT_TIMEOUT_MS,
+    });
+    assert.equal(res1.status, 0, `initial manifest creation must succeed. stderr: ${res1.stderr?.toString()}`);
+    const manifestPath = path.join(phaseDir, 'wave-1-manifest.json');
+    assert.equal(fs.existsSync(manifestPath), true, 'manifest must be created on disk');
+    const manifestContent = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    assert.deepEqual(manifestContent.worktrees, [], 'newly created manifest must have empty worktrees array');
+
+    // Second execution with pre-existing manifest: must block with exit non-zero
+    const res2 = childProcess.spawnSync('bash', [scriptPath], {
+      cwd: repo,
+      stdio: 'pipe',
+      timeout: HOOK_FANOUT_TIMEOUT_MS,
+    });
+    assert.notEqual(res2.status, 0, 'dispatch block must exit non-zero when pre-existing manifest exists');
+    const stderr2 = (res2.stderr || '').toString();
+    assert.match(stderr2, /BLOCKED: pre-existing wave manifest found at/, 'stderr must report pre-existing manifest guard');
+    assert.match(stderr2, /cleanup-wave --manifest/, 'stderr must report reconciliation advice');
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(manifestPath, 'utf8')),
+      manifestContent,
+      'pre-existing manifest content must remain completely untouched',
+    );
+  });
+});
