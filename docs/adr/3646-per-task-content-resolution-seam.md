@@ -82,6 +82,10 @@ irreducibly a human-facing prose step and stays sourced from `PLAN.md`. Plan-lev
 (`<objective>`, `<context>`, `<verification>`, `<success_criteria>`) are out of scope for this
 point; `load_prompt`'s whole-file read is unchanged.
 
+The `decision-coverage-plan` and `decision-coverage-verify` gates also consume the seam (#5317): a
+decision cited only in a tracker-held task body counts, and a resolver failure blocks (plan) or
+reports unreadable (verify) rather than reading the stub as uncovered.
+
 ### 2. Hard-halt enforcement: Lens B — a code-side resolution seam
 
 **Chosen over Lens A** (a prose `step`/`gate` dispatched the same way as the twelve existing

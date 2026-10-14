@@ -348,6 +348,77 @@ function run(c) {
   return { result, writes, dir, real, aliases };
 }
 
+describe('U3 tracker-resolved task content (#5317)', () => {
+  const trc = require('../gsd-core/bin/lib/task-content-resolution.cjs');
+  const CTX = ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '</decisions>', ''].join('\n');
+  const content = (action) => ({ action, verify: null, acceptanceCriteria: [], readFirst: [], done: null });
+  const TRACKED = '<task type="auto" tracker-id="beads:X-1">\n<action>stub</action>\n</task>\n';
+
+  function evalWith(plan, deps) {
+    const dir = createTempGitProject('gate-u3-');
+    try {
+      w(dir, '.planning/phases/01-x/01-CONTEXT.md', CTX);
+      w(dir, '.planning/phases/01-x/01-01-PLAN.md', plan);
+      return gate.evaluateDecisionCoverageVerify({
+        projectDir: dir,
+        args: ['.planning/phases/01-x', '.planning/phases/01-x/01-CONTEXT.md'],
+        deps,
+      });
+    } finally {
+      cleanup(dir);
+    }
+  }
+  const stub = (r) => ({ loadCapabilities: () => [], resolveTaskContentFn: () => r });
+
+  test('a: decision cited only in resolver text is honored', () => {
+    const r = evalWith(TRACKED, stub({ kind: 'resolved', content: content('D-01: use postgres') }));
+    assert.equal(r.outcome, 'pass');
+    assert.equal(r.payload.honored, 1);
+    assert.equal(r.block, false);
+  });
+
+  const errors = {
+    ambiguous: () => new trc.ResolverAmbiguousError('beads', ['a', 'b']),
+    failed: () => new trc.ResolverFailedError('bd', 1, 'boom'),
+    timeout: () => new trc.ResolverTimeoutError('bd', 10),
+    malformed: () => new trc.ResolverMalformedOutputError('bd', 'bad json', 'x'),
+  };
+  for (const [name, make] of Object.entries(errors)) {
+    test(`b: ${name} resolver error -> unreadable, never honored`, () => {
+      const r = evalWith(TRACKED, { loadCapabilities: () => [], resolveTaskContentFn: () => { throw make(); } });
+      assert.equal(r.outcome, 'unreadable');
+      assert.equal(r.block, false);
+      assert.match(r.payload.readError, /^beads:X-1: /);
+      assert.equal(r.payload.honored, null);
+    });
+  }
+
+  for (const kind of ['not-applicable', 'no-resolver', 'empty']) {
+    test(`c: ${kind} adds nothing`, () => {
+      const r = evalWith(TRACKED, stub({ kind }));
+      assert.equal(r.outcome, 'advisory');
+      assert.equal(r.payload.honored, 0);
+    });
+  }
+
+  test('d: non-Resolver error propagates', () => {
+    assert.throws(
+      () => evalWith(TRACKED, { loadCapabilities: () => [], resolveTaskContentFn: () => { throw new TypeError('bug'); } }),
+      TypeError,
+    );
+  });
+
+  test('e: plan without tracker-id never calls the stub', () => {
+    let calls = 0;
+    const r = evalWith('<objective>Unrelated</objective>\n', {
+      loadCapabilities: () => { calls++; return []; },
+      resolveTaskContentFn: () => { calls++; return { kind: 'resolved', content: content('D-01') }; },
+    });
+    assert.equal(calls, 0);
+    assert.equal(r.outcome, 'advisory');
+  });
+});
+
 describe('U2 evaluateDecisionCoverageVerify', () => {
   for (const c of CASES) {
     test(`${c.id}: ${c.title}`, () => {

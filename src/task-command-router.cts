@@ -266,4 +266,5 @@ export = {
   isBehaviorAddingTaskContent,
   routeTaskCommand,
   routeResolveContent,
+  defaultLoadCapabilities,
 };

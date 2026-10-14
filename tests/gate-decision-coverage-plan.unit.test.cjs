@@ -408,3 +408,84 @@ describe('U1 evaluateDecisionCoveragePlan', () => {
     });
   }
 });
+
+// #5317 — tracker-resolved task content counts as plan surface; resolver failure never passes.
+describe('U2 evaluateDecisionCoveragePlan tracker-id resolution (#5317)', () => {
+  const tcr = require('../gsd-core/bin/lib/task-content-resolution.cjs');
+  const ARGS = ['.planning/phases/01-x', '--context', '.planning/phases/01-x/01-CONTEXT.md'];
+  const CONTEXT = ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '</decisions>', ''].join('\n');
+  const trackerPlan = (body) => ['---', 'phase: 1', '---', '<tasks>', '<task type="auto" tracker-id="beads:X-1">', '<name>t</name>', `<action>${body}</action>`, '</task>', '</tasks>', ''].join('\n');
+  const STUB_ONLY = '<!-- beads: content synced to bd -->';
+  const resolved = (action) => ({ kind: 'resolved', content: { action, verify: null, acceptanceCriteria: [], readFirst: [], done: null } });
+
+  function withProject(plan, stub, fn) {
+    const dir = createTempProject('gate-u2-');
+    try {
+      w(dir, '.planning/phases/01-x/01-CONTEXT.md', CONTEXT);
+      w(dir, '.planning/phases/01-x/01-01-PLAN.md', plan);
+      const calls = [];
+      const deps = { loadCapabilities: () => [], resolveTaskContentFn: (i) => { calls.push(i); return stub(i); } };
+      return fn(() => gate.evaluateDecisionCoveragePlan({ projectDir: dir, args: ARGS, deps }), calls);
+    } finally { cleanup(dir); }
+  }
+
+  test('U2a: stub-only body blocks without resolver content; resolved action D-01 covers', () => {
+    withProject(trackerPlan(STUB_ONLY), () => ({ kind: 'no-resolver' }), (run1) => {
+      const r = run1();
+      assert.equal(r.payload.passed, false);
+      assert.equal(r.block, true);
+    });
+    withProject(trackerPlan(STUB_ONLY), () => resolved('D-01: do it'), (run1, calls) => {
+      const r = run1();
+      assert.equal(r.payload.passed, true);
+      assert.equal(r.payload.total, 1);
+      assert.equal(r.payload.covered, 1);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].trackerId, 'beads:X-1');
+    });
+  });
+
+  const errors = {
+    ambiguous: () => new tcr.ResolverAmbiguousError('beads', ['a', 'b']),
+    failed: () => new tcr.ResolverFailedError('bd', 1, 'boom'),
+    timeout: () => new tcr.ResolverTimeoutError('bd', 1000),
+    malformed: () => new tcr.ResolverMalformedOutputError('bd', 'bad json', '{'),
+  };
+  for (const [name, make] of Object.entries(errors)) {
+    test(`U2b: ${name} resolver error blocks, never passes`, () => {
+      // even with D-01 cited inline, an unresolved tracker body must not certify
+      withProject(trackerPlan('D-01 inline'), () => { throw make(); }, (run1) => {
+        const r = run1();
+        assert.equal(r.payload.passed, false);
+        assert.equal(r.block, true);
+        assert.equal(r.outcome, 'unreadable');
+        assert.match(r.payload.readError, /beads:X-1/);
+      });
+    });
+  }
+
+  for (const kind of ['not-applicable', 'no-resolver', 'empty']) {
+    test(`U2c: ${kind} keeps inline text`, () => {
+      withProject(trackerPlan('Honor D-01 inline'), () => ({ kind }), (run1) => {
+        assert.equal(run1().payload.passed, true);
+      });
+      withProject(trackerPlan(STUB_ONLY), () => ({ kind }), (run1) => {
+        assert.equal(run1().payload.passed, false);
+      });
+    });
+  }
+
+  test('U2d: non-Resolver error propagates', () => {
+    withProject(trackerPlan(STUB_ONLY), () => { throw new TypeError('bug'); }, (run1) => {
+      assert.throws(run1, TypeError);
+    });
+  });
+
+  test('U2e: plan without tracker-id never calls the resolver', () => {
+    const plan = ['---', 'phase: 1', '---', '<objective>Honor D-01</objective>', ''].join('\n');
+    withProject(plan, () => { throw new Error('must not be called'); }, (run1, calls) => {
+      assert.equal(run1().payload.passed, true);
+      assert.equal(calls.length, 0);
+    });
+  });
+});

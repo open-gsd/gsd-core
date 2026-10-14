@@ -28,9 +28,10 @@ import {
   extractPlanDesignatedSections,
   loadPlanContents,
   loadDecisionExtraction,
+  resolveTrackerBodies,
   buildPlanMessage,
 } from './decision-coverage-support.cjs';
-import type { UncoveredItem } from './decision-coverage-support.cjs';
+import type { TrackerResolveDeps, UncoveredItem } from './decision-coverage-support.cjs';
 
 /**
  * The verdict when CONTEXT.md or a plan could not be read. The blocking policy is unchanged
@@ -54,7 +55,7 @@ function contextMissingSkip(): GateResult {
   return gateVerdict('skip', false, { passed: true, skipped: true, reason: 'CONTEXT.md missing', total: 0, covered: 0, uncovered: [], message: 'No CONTEXT.md - nothing to check.' });
 }
 
-export function evaluateDecisionCoveragePlan(input: { projectDir: string; args: readonly string[] }): GateResult {
+export function evaluateDecisionCoveragePlan(input: { projectDir: string; args: readonly string[]; deps?: TrackerResolveDeps }): GateResult {
   const { projectDir, args } = input;
   // Partition the argv AFTER the verb so flag tokens and their values never land in a
   // positional slot.
@@ -158,7 +159,9 @@ export function evaluateDecisionCoveragePlan(input: { projectDir: string; args: 
 
   const planContents = loadPlanContents(phaseDir);
   if (planContents.kind === 'unreadable') return unreadableDecisionGate(`${planContents.span ?? phaseDir}: ${planContents.reason}`);
-  const sections = planContents.value.map(extractPlanDesignatedSections);
+  const tracker = resolveTrackerBodies(projectDir, planContents.value, input.deps);
+  if (tracker.kind === 'unreadable') return unreadableDecisionGate(`${tracker.span}: ${tracker.reason}`);
+  const sections = planContents.value.map((c, i) => extractPlanDesignatedSections(c) + (tracker.value[i] ? '\n' + tracker.value[i] : ''));
   const uncovered: UncoveredItem[] = [];
   let covered = 0;
   for (const decision of decisions) {
