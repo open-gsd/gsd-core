@@ -18,7 +18,7 @@ const fc = require('fast-check');
 
 const { cleanup, runGsdTools, installSpawnEnv } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
-const { PROBE_TIMEOUT_MS, INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { PROBE_TIMEOUT_MS, INSTALL_TIMEOUT_MS, SEAM_DEFAULT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const {
   resolveCapabilityState,
@@ -818,6 +818,18 @@ describe('cmdCapabilityState — end-to-end via gsd-tools CLI', () => {
       }, null, 2),
       'utf8',
     );
+
+    // Warm-up spawn (#4904 review). This block makes the file's first
+    // `gsd-tools` spawn, and a cold Windows runner has killed exactly that
+    // spawn at PROBE_TIMEOUT_MS while the ones after it took 0.5-2.4 s. One
+    // untimed-by-the-tests spawn under the seam's default bound pays the cold
+    // start here, so no test's own spawn is the first.
+    const warm = spawnSync(
+      process.execPath,
+      [gsdToolsPath, 'capability', 'state', '--config-dir', tmpConfigDir, '--raw', '--cwd', tmpProjectDir],
+      { encoding: 'utf8', timeout: SEAM_DEFAULT_TIMEOUT_MS },
+    );
+    assert.strictEqual(warm.status, 0, `warm-up gsd-tools spawn failed (signal ${warm.signal}): ${warm.stderr}`);
   });
 
   after(() => {
