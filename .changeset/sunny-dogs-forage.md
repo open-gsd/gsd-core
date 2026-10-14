@@ -2,4 +2,4 @@
 type: Fixed
 pr: 0
 ---
-feature/enhancement/registry-entry PR templates now link CONTRIBUTING.md and docs/registries/README.md with absolute URLs (relative hrefs 404 in PR bodies) and use the correct Documentation Updates anchor
+**PR templates no longer link to 404 pages** — the default, feature, enhancement and registry-entry templates use absolute URLs (relative hrefs resolve against `/pull/N` in a PR body), and the Documentation Updates anchor now has its two hyphens.
