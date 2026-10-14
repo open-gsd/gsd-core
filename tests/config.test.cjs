@@ -810,6 +810,29 @@ describe('config-new-project — refuses what config-set refuses (#5268)', () =>
     });
   }
 
+  // A null choice is checked against the setter's segment guard too. config-set
+  // reaches that guard only through a section that exists: a config with no
+  // agent_skills section leaves it nothing to unset, and after its known-key
+  // check it reports the no-op without reaching the guard. The default config
+  // has the section, so the oracle is config-set run against one.
+  for (const segment of ['__proto__', 'prototype', 'constructor']) {
+    const key = `agent_skills.${segment}`;
+    test(`${key}=null is refused with config-set's own error and nothing is written`, () => {
+      const created = bareDir();
+      assert.ok(newProject(['{}'], created).success, 'seed: a default config');
+      assert.deepStrictEqual(readProjectConfig(created).agent_skills, {}, 'seed: the section config-set walks');
+      const viaSet = runGsdTools(['config-set', key, 'null'], created);
+      assert.strictEqual(viaSet.success, false, `positive control: config-set must refuse ${key}=null`);
+
+      const dir = bareDir();
+      const viaNewProject = newProject([JSON.stringify(nest(key, null))], dir);
+
+      assert.strictEqual(viaNewProject.success, false, `config-new-project accepted ${key}=null`);
+      assert.strictEqual(viaNewProject.error, viaSet.error);
+      assertNothingWritten(dir);
+    });
+  }
+
   // config-set stores project_code as the text typed (#1581), so a code is a
   // string; a JSON number is a type it can never store.
   test('a project_code that is not a string is refused; a string is written as given', () => {

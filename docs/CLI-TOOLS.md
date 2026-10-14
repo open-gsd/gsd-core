@@ -637,6 +637,15 @@ Two differences from `config-set` follow from the input being JSON rather than t
   refused, where `config-set` stores any object given to the setting whole. `review.max_prompt_tokens_per_reviewer` also
   takes a number for itself.
 
+One difference does not: a `null` choice under `__proto__`, `prototype` or `constructor`, for a
+key that is otherwise known (`{"model_overrides":{"constructor":null}}`), is refused by the
+prototype-pollution guard.
+`config-set model_overrides.constructor null` reaches that guard only when the config has a
+`model_overrides` section; without one it finds nothing to remove and exits 0, having checked
+that the key is known but not that guard. The default config (`config-new-project '{}'`) has
+some of these sections (`agent_skills`) and not others (`model_overrides`, `agent_tools`,
+`features`), so the difference can hold after creation too.
+
 `--dry-run` prints the config that would be created and writes nothing, with secret keys
 masked as `config-set` masks them; any other flag is refused. The choices are checked first,
 so a refused choice, malformed JSON included, fails even when `config.json` already exists;
