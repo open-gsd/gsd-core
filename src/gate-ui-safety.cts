@@ -17,6 +17,7 @@ import { gateVerdict, gateUnreadable, gateUsageFailure, GATE_FAILURE_CODE } from
 import type { GateResult } from './gate-verdict.cjs';
 import { locateUiSpec, lookupRoadmapPhase } from './gate-phase-context.cjs';
 import { resolveEvaluationScope } from './gate-evaluation-scope.cjs';
+import { runtimeCommand } from './runtime-slash.cjs';
 import type { ScopeStatus } from './gate-evaluation-scope.cjs';
 import { checkUiPresence } from './ui-safety-gate.cjs';
 
@@ -74,7 +75,7 @@ export function computeUiSafetyGate(projectDir: string, phase: string): UiSafety
   const result: UiSafetyGateResult = { frontend, hasUiFiles, hasUiSpec, block };
   if (block) {
     result.message = `UI files changed in this wave but no UI-SPEC.md exists for Phase ${phase}. ` +
-      `Run /gsd:ui-phase ${phase} to generate the design contract before continuing.`;
+      `Run ${runtimeCommand(projectDir, `ui-phase ${phase}`)} to generate the design contract before continuing.`;
   }
   if (phaseLookupFailed) result.phaseLookupFailed = true;
   if (scope.status !== 'resolved') {

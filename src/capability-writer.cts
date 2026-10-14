@@ -57,6 +57,7 @@ const { planningDir } = planningWorkspaceMod;
 import nodefs = require('fs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import nodepath = require('path');
+import { runtimeCommand } from './runtime-slash.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -412,7 +413,7 @@ function setCapabilityState(
       const afterCap = after.capabilities.find((c: CapabilityStateEntry) => c.id === entry.id);
       if (afterCap && afterCap.enabled !== true) {
         errors.push(
-          `cannot enable "${entry.id}": not in the active surface/profile (widen the profile or use /gsd:surface enable)`,
+          `cannot enable "${entry.id}": not in the active surface/profile (widen the profile or use ${runtimeCommand(cwd, 'surface enable')})`,
         );
       }
     }

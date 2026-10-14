@@ -2573,7 +2573,7 @@ function validateLaneProbe(ctx, probe) {
     if (!isPositiveIntegerMs(probe.timeoutMs)) {
       errors.push(
         ctx + ' reviewer.probe.timeoutMs must be a positive integer of milliseconds for kind "' +
-        probe.kind + '" — an unbounded probe hangs every /gsd:review invocation ' +
+        probe.kind + '" — an unbounded probe hangs every /gsd-review invocation ' +
         '(got: ' + describeValue(probe.timeoutMs) + ')',
       );
     }

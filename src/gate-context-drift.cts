@@ -23,6 +23,7 @@ import { gateVerdict, gateUnreadable, gateUsageFailure, GATE_FAILURE_CODE } from
 import type { GateResult, GateVerdict } from './gate-verdict.cjs';
 import { readDirEvidence, statEvidence } from './gate-evidence.cjs';
 import { readWorkflowConfigValue } from './gate-config.cjs';
+import { runtimeCommand } from './runtime-slash.cjs';
 import { resolvePhaseDirByToken } from './gate-phase-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -48,13 +49,13 @@ export function computeContextDrift(contextEffectiveMs: number, entries: Context
   return entries.filter((e) => e.effectiveMs < contextEffectiveMs).map((e) => e.file);
 }
 
-function buildContextDriftMessage(staleArtifacts: string[], phaseArg: string): string {
+function buildContextDriftMessage(staleArtifacts: string[], phaseArg: string, projectDir: string): string {
   const parts = [`CONTEXT.md decisions are newer than: ${staleArtifacts.join(', ')}.`];
   if (staleArtifacts.some((f) => f.endsWith('-RESEARCH.md'))) {
-    parts.push(`Regenerate research: /gsd:plan-phase ${phaseArg} --research.`);
+    parts.push(`Regenerate research: ${runtimeCommand(projectDir, `plan-phase ${phaseArg} --research`)}.`);
   }
   if (staleArtifacts.some((f) => f.endsWith('-PATTERNS.md'))) {
-    parts.push('Regenerate patterns: delete the PATTERNS.md file, then re-run /gsd:plan-phase.');
+    parts.push(`Regenerate patterns: delete the PATTERNS.md file, then re-run ${runtimeCommand(projectDir, 'plan-phase')}.`);
   }
   if (
     staleArtifacts.some(
@@ -143,7 +144,7 @@ function runContextDriftGate(cwd: string, phaseArg: string): GateVerdict {
   // missing or malformed config is "key absent", nothing is printed).
   const action = readWorkflowConfigValue(cwd, 'workflow.context_drift_action').value === 'block' ? 'block' : 'warn';
   const block = staleArtifacts.length > 0 && action === 'block';
-  const message = staleArtifacts.length > 0 ? buildContextDriftMessage(staleArtifacts, phaseArg) : '';
+  const message = staleArtifacts.length > 0 ? buildContextDriftMessage(staleArtifacts, phaseArg, cwd) : '';
 
   return gateVerdict(block ? 'block' : (staleArtifacts.length > 0 ? 'advisory' : 'pass'), block, {
     block,

@@ -23,31 +23,46 @@ const SRC_DIR = path.join(ROOT, 'src');
 /** `/gsd:` followed by a command name; `/gsd:section` is the fragment close-tag, not a command. */
 const COLON_COMMAND_RE = /\/gsd:(?!section\b)[a-z][a-z-]*/g;
 
-describe('#4859: no colon-form command literal in runtime source code', () => {
+/** Non-comment lines of `file` that spell `/gsd:<command>`, as `rel:line: hits`. */
+function colonCommandOffenders(dir, ext, relPrefix) {
+  const offenders = [];
+  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(ext))) {
+    const lines = fs.readFileSync(path.join(dir, file), 'utf-8').split('\n');
+    let inBlockComment = false;
+    lines.forEach((line, i) => {
+      const trimmed = line.trim();
+      if (inBlockComment) {
+        if (trimmed.includes('*/')) inBlockComment = false;
+        return;
+      }
+      if (trimmed.startsWith('/*')) {
+        if (!trimmed.includes('*/')) inBlockComment = true;
+        return;
+      }
+      if (trimmed.startsWith('//') || trimmed.startsWith('*')) return;
+      const hits = line.match(COLON_COMMAND_RE);
+      if (hits) offenders.push(`${relPrefix}${file}:${i + 1}: ${hits.join(', ')}`);
+    });
+  }
+  return offenders;
+}
+
+describe('#4859: no colon-form command literal in runtime code', () => {
   test('src/*.cts non-comment code never spells /gsd:<command>', () => {
-    const offenders = [];
-    for (const file of fs.readdirSync(SRC_DIR).filter((f) => f.endsWith('.cts'))) {
-      const lines = fs.readFileSync(path.join(SRC_DIR, file), 'utf-8').split('\n');
-      let inBlockComment = false;
-      lines.forEach((line, i) => {
-        const trimmed = line.trim();
-        if (inBlockComment) {
-          if (trimmed.includes('*/')) inBlockComment = false;
-          return;
-        }
-        if (trimmed.startsWith('/*')) {
-          if (!trimmed.includes('*/')) inBlockComment = true;
-          return;
-        }
-        if (trimmed.startsWith('//') || trimmed.startsWith('*')) return;
-        const hits = line.match(COLON_COMMAND_RE);
-        if (hits) offenders.push(`${file}:${i + 1}: ${hits.join(', ')}`);
-      });
-    }
+    const offenders = colonCommandOffenders(SRC_DIR, '.cts', 'src/');
     assert.deepEqual(
       offenders,
       [],
-      `these source lines print the unregistered colon form; route them through formatGsdSlash:\n${offenders.join('\n')}`,
+      `these source lines print the unregistered colon form; route them through runtimeCommand/formatGsdSlash:\n${offenders.join('\n')}`,
+    );
+  });
+
+  test('shipped gsd-core/bin/lib/*.cjs (generated registry included) never spells /gsd:<command>', () => {
+    const offenders = colonCommandOffenders(path.join(ROOT, 'gsd-core', 'bin', 'lib'), '.cjs', 'gsd-core/bin/lib/');
+    assert.deepEqual(
+      offenders,
+      [],
+      `these shipped lines print the unregistered colon form; the registry generator rewrites capability text, hand-written modules must use the hyphen form:\n${offenders.join('\n')}`,
     );
   });
 });

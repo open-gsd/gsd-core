@@ -27,6 +27,7 @@
  */
 
 import type { Result } from './write-set.cjs';
+import { runtimeCommand } from './runtime-slash.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import type verificationTypes = require('./verification.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -57,7 +58,7 @@ function parseQuickBatchArgs(args: string[]): Result<QuickBatchArgs> {
     return { ok: false, reason: 'quick-batch args must be an array' };
   }
   if (args.includes('--discuss')) {
-    return { ok: false, reason: 'quick-batch does not support --discuss in v1 — use /gsd:quick --discuss per item instead' };
+    return { ok: false, reason: `quick-batch does not support --discuss in v1 — use ${runtimeCommand(null, 'quick --discuss')} per item instead` };
   }
   if (args.includes('--full')) {
     return { ok: false, reason: 'quick-batch does not support --full in v1' };

@@ -1066,7 +1066,7 @@ const capabilities = {
     "role": "reviewer",
     "version": "1.16.0",
     "title": "CodeRabbit",
-    "description": "CodeRabbit CLI — cross-AI /gsd:review reviewer lane only; not a GSD install target (no runtime body, no artifacts). Reviews the working-tree diff (`coderabbit review --prompt-only`), not the source tree, and accepts neither a prompt nor a model flag; findings are down-weighted in consensus (evidenceClass: diff-only).",
+    "description": "CodeRabbit CLI — cross-AI /gsd-review reviewer lane only; not a GSD install target (no runtime body, no artifacts). Reviews the working-tree diff (`coderabbit review --prompt-only`), not the source tree, and accepts neither a prompt nor a model flag; findings are down-weighted in consensus (evidenceClass: diff-only).",
     "tier": "full",
     "requires": [],
     "engines": {
@@ -1614,12 +1614,12 @@ const capabilities = {
       "workflow.plan_drift_precheck": {
         "type": "boolean",
         "default": true,
-        "description": "Enable the non-blocking codebase drift pre-check at plan:pre, before /gsd:plan-phase spawns the planner. When enabled, a stale STRUCTURE.md (drift elements exceeding drift_threshold) is surfaced up front as a warn-only advisory pointing to /gsd:map-codebase; it never blocks planning and never spawns the mapper agent. Separate from schema_drift_gate so autonomous/CI runs can silence the plan-time advisory while keeping the execute:wave:post gates enabled."
+        "description": "Enable the non-blocking codebase drift pre-check at plan:pre, before /gsd-plan-phase spawns the planner. When enabled, a stale STRUCTURE.md (drift elements exceeding drift_threshold) is surfaced up front as a warn-only advisory pointing to /gsd-map-codebase; it never blocks planning and never spawns the mapper agent. Separate from schema_drift_gate so autonomous/CI runs can silence the plan-time advisory while keeping the execute:wave:post gates enabled."
       },
       "workflow.context_drift_precheck": {
         "type": "boolean",
         "default": true,
-        "description": "Enable the non-blocking context-drift pre-check at plan:pre, before /gsd:plan-phase reuses an existing RESEARCH.md/PATTERNS.md/VALIDATION.md/SPEC.md. Compares each artifact's effective last-changed time (git commit time, falling back to mtime for uncommitted edits) against CONTEXT.md's own — an artifact that predates CONTEXT.md's newest decision was derived from a premise that has since changed. Warn-only by default (see workflow.context_drift_action); never blocks planning on its own."
+        "description": "Enable the non-blocking context-drift pre-check at plan:pre, before /gsd-plan-phase reuses an existing RESEARCH.md/PATTERNS.md/VALIDATION.md/SPEC.md. Compares each artifact's effective last-changed time (git commit time, falling back to mtime for uncommitted edits) against CONTEXT.md's own — an artifact that predates CONTEXT.md's newest decision was derived from a premise that has since changed. Warn-only by default (see workflow.context_drift_action); never blocks planning on its own."
       },
       "workflow.context_drift_action": {
         "type": "enum",
@@ -2471,7 +2471,7 @@ const capabilities = {
     "role": "reviewer",
     "version": "1.16.0",
     "title": "llama.cpp",
-    "description": "llama.cpp server — cross-AI /gsd:review reviewer lane only; not a GSD install target (no runtime body, no artifacts). OpenAI-compatible HTTP transport against a user-configured `review.llama_cpp_host` (POST /v1/chat/completions); model discovered via GET /v1/models piped through jq. Capability id/folder are kebab (`llama-cpp`, required by KEBAB_RE); `reviewer.slug` stays snake (`llama_cpp`) to match the shipped roster and the `review.llama_cpp_host` config key (ADR-2782's three-namespace trap).",
+    "description": "llama.cpp server — cross-AI /gsd-review reviewer lane only; not a GSD install target (no runtime body, no artifacts). OpenAI-compatible HTTP transport against a user-configured `review.llama_cpp_host` (POST /v1/chat/completions); model discovered via GET /v1/models piped through jq. Capability id/folder are kebab (`llama-cpp`, required by KEBAB_RE); `reviewer.slug` stays snake (`llama_cpp`) to match the shipped roster and the `review.llama_cpp_host` config key (ADR-2782's three-namespace trap).",
     "tier": "full",
     "requires": [],
     "engines": {
@@ -2537,7 +2537,7 @@ const capabilities = {
     "role": "reviewer",
     "version": "1.16.0",
     "title": "LM Studio",
-    "description": "LM Studio local model server — cross-AI /gsd:review reviewer lane only; not a GSD install target (no runtime body, no artifacts). OpenAI-compatible HTTP transport against a user-configured `review.lm_studio_host` (POST /v1/chat/completions); model discovered via GET /v1/models piped through jq. Capability id/folder are kebab (`lm-studio`, required by KEBAB_RE); `reviewer.slug` stays snake (`lm_studio`) to match the shipped roster and the `review.lm_studio_host` config key (ADR-2782's three-namespace trap).",
+    "description": "LM Studio local model server — cross-AI /gsd-review reviewer lane only; not a GSD install target (no runtime body, no artifacts). OpenAI-compatible HTTP transport against a user-configured `review.lm_studio_host` (POST /v1/chat/completions); model discovered via GET /v1/models piped through jq. Capability id/folder are kebab (`lm-studio`, required by KEBAB_RE); `reviewer.slug` stays snake (`lm_studio`) to match the shipped roster and the `review.lm_studio_host` config key (ADR-2782's three-namespace trap).",
     "tier": "full",
     "requires": [],
     "engines": {
@@ -2827,7 +2827,7 @@ const capabilities = {
     "role": "reviewer",
     "version": "1.16.0",
     "title": "Ollama",
-    "description": "Ollama local model server — cross-AI /gsd:review reviewer lane only; not a GSD install target (no runtime body, no artifacts). OpenAI-compatible HTTP transport against a user-configured `review.ollama_host` (POST /v1/chat/completions); model discovered via GET /v1/models piped through jq.",
+    "description": "Ollama local model server — cross-AI /gsd-review reviewer lane only; not a GSD install target (no runtime body, no artifacts). OpenAI-compatible HTTP transport against a user-configured `review.ollama_host` (POST /v1/chat/completions); model discovered via GET /v1/models piped through jq.",
     "tier": "full",
     "requires": [],
     "engines": {
@@ -3131,7 +3131,7 @@ const capabilities = {
         },
         "fragment": {
           "path": "fragments/plan-pre.md",
-          "inline": "<pattern_mapping_context>\n**Phase:** {phase_number} - {phase_name}\n**Phase directory:** {phase_dir}\n**Padded phase:** {padded_phase}\n\n<required_reading>\n- {context_path} (USER DECISIONS from /gsd:discuss-phase)\n- {research_path} (Technical Research)\n</required_reading>\n\n**Output file:** {phase_dir}/{padded_phase}-PATTERNS.md\n\nExtract the list of files to be created/modified from CONTEXT.md and RESEARCH.md. For each file, classify by role and data flow, find the closest existing analog in the codebase, extract concrete code excerpts, and produce PATTERNS.md.\n</pattern_mapping_context>\n"
+          "inline": "<pattern_mapping_context>\n**Phase:** {phase_number} - {phase_name}\n**Phase directory:** {phase_dir}\n**Padded phase:** {padded_phase}\n\n<required_reading>\n- {context_path} (USER DECISIONS from /gsd-discuss-phase)\n- {research_path} (Technical Research)\n</required_reading>\n\n**Output file:** {phase_dir}/{padded_phase}-PATTERNS.md\n\nExtract the list of files to be created/modified from CONTEXT.md and RESEARCH.md. For each file, classify by role and data flow, find the closest existing analog in the codebase, extract concrete code excerpts, and produce PATTERNS.md.\n</pattern_mapping_context>\n"
         },
         "produces": [
           "PATTERNS.md"
@@ -3548,7 +3548,7 @@ const capabilities = {
         },
         "fragment": {
           "path": "fragments/plan-pre.md",
-          "inline": "<objective>\nResearch how to implement Phase {phase_number}: {phase_name}\nAnswer: \"What do I need to know to PLAN this phase well?\"\n</objective>\n\n<required_reading>\n- {context_path} (USER DECISIONS from /gsd:discuss-phase)\n- {requirements_path} (Project requirements)\n- {state_path} (Project decisions and history)\n</required_reading>\n\n${AGENT_SKILLS_RESEARCHER}\n\n<additional_context>\n**Phase description:** {phase_description}\n**Phase requirement IDs (MUST address):** {phase_req_ids}\n\n**Project instructions:** Read ./CLAUDE.md or ./.claude/CLAUDE.md if either exists; follow project-specific guidelines.\n**Project skills:** Check .claude/skills/ or .agents/skills/ directory if either exists. Read SKILL.md files and account for project skill patterns.\n</additional_context>\n\n<output>\nWrite to: {phase_dir}/{phase_num}-RESEARCH.md\n</output>\n"
+          "inline": "<objective>\nResearch how to implement Phase {phase_number}: {phase_name}\nAnswer: \"What do I need to know to PLAN this phase well?\"\n</objective>\n\n<required_reading>\n- {context_path} (USER DECISIONS from /gsd-discuss-phase)\n- {requirements_path} (Project requirements)\n- {state_path} (Project decisions and history)\n</required_reading>\n\n${AGENT_SKILLS_RESEARCHER}\n\n<additional_context>\n**Phase description:** {phase_description}\n**Phase requirement IDs (MUST address):** {phase_req_ids}\n\n**Project instructions:** Read ./CLAUDE.md or ./.claude/CLAUDE.md if either exists; follow project-specific guidelines.\n**Project skills:** Check .claude/skills/ or .agents/skills/ directory if either exists. Read SKILL.md files and account for project skill patterns.\n</additional_context>\n\n<output>\nWrite to: {phase_dir}/{phase_num}-RESEARCH.md\n</output>\n"
         },
         "produces": [
           "RESEARCH.md"
@@ -4349,7 +4349,7 @@ const byLoopPoint = {
         },
         "fragment": {
           "path": "fragments/plan-pre.md",
-          "inline": "<objective>\nResearch how to implement Phase {phase_number}: {phase_name}\nAnswer: \"What do I need to know to PLAN this phase well?\"\n</objective>\n\n<required_reading>\n- {context_path} (USER DECISIONS from /gsd:discuss-phase)\n- {requirements_path} (Project requirements)\n- {state_path} (Project decisions and history)\n</required_reading>\n\n${AGENT_SKILLS_RESEARCHER}\n\n<additional_context>\n**Phase description:** {phase_description}\n**Phase requirement IDs (MUST address):** {phase_req_ids}\n\n**Project instructions:** Read ./CLAUDE.md or ./.claude/CLAUDE.md if either exists; follow project-specific guidelines.\n**Project skills:** Check .claude/skills/ or .agents/skills/ directory if either exists. Read SKILL.md files and account for project skill patterns.\n</additional_context>\n\n<output>\nWrite to: {phase_dir}/{phase_num}-RESEARCH.md\n</output>\n"
+          "inline": "<objective>\nResearch how to implement Phase {phase_number}: {phase_name}\nAnswer: \"What do I need to know to PLAN this phase well?\"\n</objective>\n\n<required_reading>\n- {context_path} (USER DECISIONS from /gsd-discuss-phase)\n- {requirements_path} (Project requirements)\n- {state_path} (Project decisions and history)\n</required_reading>\n\n${AGENT_SKILLS_RESEARCHER}\n\n<additional_context>\n**Phase description:** {phase_description}\n**Phase requirement IDs (MUST address):** {phase_req_ids}\n\n**Project instructions:** Read ./CLAUDE.md or ./.claude/CLAUDE.md if either exists; follow project-specific guidelines.\n**Project skills:** Check .claude/skills/ or .agents/skills/ directory if either exists. Read SKILL.md files and account for project skill patterns.\n</additional_context>\n\n<output>\nWrite to: {phase_dir}/{phase_num}-RESEARCH.md\n</output>\n"
         },
         "produces": [
           "RESEARCH.md"
@@ -4383,7 +4383,7 @@ const byLoopPoint = {
         },
         "fragment": {
           "path": "fragments/plan-pre.md",
-          "inline": "<pattern_mapping_context>\n**Phase:** {phase_number} - {phase_name}\n**Phase directory:** {phase_dir}\n**Padded phase:** {padded_phase}\n\n<required_reading>\n- {context_path} (USER DECISIONS from /gsd:discuss-phase)\n- {research_path} (Technical Research)\n</required_reading>\n\n**Output file:** {phase_dir}/{padded_phase}-PATTERNS.md\n\nExtract the list of files to be created/modified from CONTEXT.md and RESEARCH.md. For each file, classify by role and data flow, find the closest existing analog in the codebase, extract concrete code excerpts, and produce PATTERNS.md.\n</pattern_mapping_context>\n"
+          "inline": "<pattern_mapping_context>\n**Phase:** {phase_number} - {phase_name}\n**Phase directory:** {phase_dir}\n**Padded phase:** {padded_phase}\n\n<required_reading>\n- {context_path} (USER DECISIONS from /gsd-discuss-phase)\n- {research_path} (Technical Research)\n</required_reading>\n\n**Output file:** {phase_dir}/{padded_phase}-PATTERNS.md\n\nExtract the list of files to be created/modified from CONTEXT.md and RESEARCH.md. For each file, classify by role and data flow, find the closest existing analog in the codebase, extract concrete code excerpts, and produce PATTERNS.md.\n</pattern_mapping_context>\n"
         },
         "produces": [
           "PATTERNS.md"
@@ -5135,13 +5135,13 @@ const configSchema = {
     "owner": "drift",
     "type": "boolean",
     "default": true,
-    "description": "Enable the non-blocking codebase drift pre-check at plan:pre, before /gsd:plan-phase spawns the planner. When enabled, a stale STRUCTURE.md (drift elements exceeding drift_threshold) is surfaced up front as a warn-only advisory pointing to /gsd:map-codebase; it never blocks planning and never spawns the mapper agent. Separate from schema_drift_gate so autonomous/CI runs can silence the plan-time advisory while keeping the execute:wave:post gates enabled."
+    "description": "Enable the non-blocking codebase drift pre-check at plan:pre, before /gsd-plan-phase spawns the planner. When enabled, a stale STRUCTURE.md (drift elements exceeding drift_threshold) is surfaced up front as a warn-only advisory pointing to /gsd-map-codebase; it never blocks planning and never spawns the mapper agent. Separate from schema_drift_gate so autonomous/CI runs can silence the plan-time advisory while keeping the execute:wave:post gates enabled."
   },
   "workflow.context_drift_precheck": {
     "owner": "drift",
     "type": "boolean",
     "default": true,
-    "description": "Enable the non-blocking context-drift pre-check at plan:pre, before /gsd:plan-phase reuses an existing RESEARCH.md/PATTERNS.md/VALIDATION.md/SPEC.md. Compares each artifact's effective last-changed time (git commit time, falling back to mtime for uncommitted edits) against CONTEXT.md's own — an artifact that predates CONTEXT.md's newest decision was derived from a premise that has since changed. Warn-only by default (see workflow.context_drift_action); never blocks planning on its own."
+    "description": "Enable the non-blocking context-drift pre-check at plan:pre, before /gsd-plan-phase reuses an existing RESEARCH.md/PATTERNS.md/VALIDATION.md/SPEC.md. Compares each artifact's effective last-changed time (git commit time, falling back to mtime for uncommitted edits) against CONTEXT.md's own — an artifact that predates CONTEXT.md's newest decision was derived from a premise that has since changed. Warn-only by default (see workflow.context_drift_action); never blocks planning on its own."
   },
   "workflow.context_drift_action": {
     "owner": "drift",

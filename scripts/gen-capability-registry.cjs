@@ -38,6 +38,7 @@ const { getWiredKinds } = require('./gen-loop-host-contract.cjs');
 
 // Capability validator — shared runtime-callable module extracted per ADR-1244 D2.
 const capValidator = require('../gsd-core/bin/lib/capability-validator.cjs');
+const { transformContentToHyphen, readCmdNames } = require('./fix-slash-commands.cjs');
 // Destructure only what the generator's own function bodies reference directly.
 // Everything else is re-exported from capValidator in module.exports below.
 const {
@@ -795,7 +796,12 @@ function serializeRegistry(registry, capMap) {
   lines.push('};');
   lines.push('');
 
-  return lines.join('\n');
+  // #4859: capability descriptions and fragment `inline` text are compiled into this
+  // file and printed verbatim — the install-time conversion of markdown artifacts never
+  // reaches them — so the colon form `/gsd:<cmd>` (the repo-source spelling, which no
+  // install route registers) is rewritten to the hyphen form here. Same-length rewrite,
+  // restricted to known command names, so `/gsd:section` and other tokens are untouched.
+  return transformContentToHyphen(lines.join('\n'), readCmdNames());
 }
 
 // ─── --check diff helper ──────────────────────────────────────────────────────

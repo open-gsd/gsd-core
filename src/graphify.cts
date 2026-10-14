@@ -10,6 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execTool, execGit, platformWriteSync } from './shell-command-projection.cjs';
+import { runtimeCommand } from './runtime-slash.cjs';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import capabilityStateMod = require('./capability-state.cjs');
@@ -555,7 +556,7 @@ function graphifyQuery(cwd: string, term: string, options: { budget?: number | n
   const { graphPath, configured } = resolveGraphLocation(cwd, planningDir);
   if (!fs.existsSync(graphPath)) {
     return { error: configured
-      ? `Configured graph not found at ${graphPath}. Set graphify.graph_path or run /gsd:graphify build.`
+      ? `Configured graph not found at ${graphPath}. Set graphify.graph_path or run ${runtimeCommand(cwd, 'graphify build')}.`
       : 'No graph built yet. Run graphify build first.' };
   }
 
@@ -598,7 +599,7 @@ function graphifyStatus(cwd: string): unknown {
   const { graphPath, configured } = resolveGraphLocation(cwd, planningDir);
   if (!fs.existsSync(graphPath)) {
     return { exists: false, graph_path: graphPath, message: configured
-      ? `Configured graph not found at ${graphPath}. Set graphify.graph_path or run /gsd:graphify build.`
+      ? `Configured graph not found at ${graphPath}. Set graphify.graph_path or run ${runtimeCommand(cwd, 'graphify build')}.`
       : 'No graph built yet. Run graphify build to create one.' };
   }
 

@@ -33,6 +33,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { collectSection } from './markdown-sectionizer.cjs';
+import { formatGsdSlash, resolveRuntime, runtimeCommand } from './runtime-slash.cjs';
 // #3696: the calendar-validity predicate moved to the STATE.md document module
 // so `state validate` can assert the same `last_activity` invariant this reader
 // already enforces (ADR-227). Two copies would let the two surfaces disagree
@@ -665,52 +666,54 @@ function rec(id: string, label: string, command: string): SmartEntryAction {
 }
 
 /** Per-situation ordered action list; recommended action first. */
-export function actionsFor(situation: Situation, s: SmartEntrySignals): SmartEntryAction[] {
+export function actionsFor(situation: Situation, s: SmartEntrySignals, runtime = 'claude'): SmartEntryAction[] {
+  // #4859: commands are printed verbatim, so name them the way this runtime registers them.
+  const cmd = (name: string): string => formatGsdSlash(name, runtime) as string;
   const phaseN = s.current_phase ?? '';
   const execLabel = phaseN === '' ? 'Continue executing' : `Continue executing phase ${phaseN}`;
   switch (situation) {
     case 'no-project':
       return [
-        rec('new-project', 'Start a new project', '/gsd:new-project'),
-        action('map-codebase', 'Map an existing codebase', '/gsd:map-codebase'),
-        action('quick', 'Quick task', '/gsd:quick'),
-        action('help', 'Show help', '/gsd:help'),
+        rec('new-project', 'Start a new project', cmd('new-project')),
+        action('map-codebase', 'Map an existing codebase', cmd('map-codebase')),
+        action('quick', 'Quick task', cmd('quick')),
+        action('help', 'Show help', cmd('help')),
       ];
     case 'paused':
       return [
-        rec('resume-work', 'Resume work', '/gsd:resume-work'),
-        action('progress', 'Show progress', '/gsd:progress'),
-        action('quick', 'Quick task', '/gsd:quick'),
-        action('help', 'Show help', '/gsd:help'),
+        rec('resume-work', 'Resume work', cmd('resume-work')),
+        action('progress', 'Show progress', cmd('progress')),
+        action('quick', 'Quick task', cmd('quick')),
+        action('help', 'Show help', cmd('help')),
       ];
     case 'blocked':
       return [
-        rec('debug', 'Debug the blocker', '/gsd:debug'),
-        action('verify-work', 'Verify current work', '/gsd:verify-work'),
-        action('capture', 'Capture a note', '/gsd:capture'),
-        action('progress', 'Show progress', '/gsd:progress'),
+        rec('debug', 'Debug the blocker', cmd('debug')),
+        action('verify-work', 'Verify current work', cmd('verify-work')),
+        action('capture', 'Capture a note', cmd('capture')),
+        action('progress', 'Show progress', cmd('progress')),
       ];
     case 'verify-failed':
       return [
-        rec('verify-work', 'Re-verify work', '/gsd:verify-work'),
-        action('debug', 'Debug the failure', '/gsd:debug'),
-        action('code-review', 'Review recent work', '/gsd:code-review'),
-        action('progress', 'Show progress', '/gsd:progress'),
+        rec('verify-work', 'Re-verify work', cmd('verify-work')),
+        action('debug', 'Debug the failure', cmd('debug')),
+        action('code-review', 'Review recent work', cmd('code-review')),
+        action('progress', 'Show progress', cmd('progress')),
       ];
     case 'needs-first-phase':
       return [
-        rec('discuss-phase', 'Discuss the first phase', '/gsd:discuss-phase'),
-        action('plan-phase', 'Plan phase 1', '/gsd:plan-phase'),
-        action('quick', 'Quick task', '/gsd:quick'),
-        action('progress', 'Show progress', '/gsd:progress'),
+        rec('discuss-phase', 'Discuss the first phase', cmd('discuss-phase')),
+        action('plan-phase', 'Plan phase 1', cmd('plan-phase')),
+        action('quick', 'Quick task', cmd('quick')),
+        action('progress', 'Show progress', cmd('progress')),
       ];
     case 'planning':
       // Forward motion → delegate to the single gated engine (see 'executing').
       return [
-        rec('progress-next', `Advance to the next step (plan phase ${phaseN || 1})`, '/gsd:progress --next'),
-        action('plan-phase', `Plan phase ${phaseN || 1}`, '/gsd:plan-phase'),
-        action('discuss-phase', 'Discuss before planning', '/gsd:discuss-phase'),
-        action('progress', 'Show progress', '/gsd:progress'),
+        rec('progress-next', `Advance to the next step (plan phase ${phaseN || 1})`, cmd('progress --next')),
+        action('plan-phase', `Plan phase ${phaseN || 1}`, cmd('plan-phase')),
+        action('discuss-phase', 'Discuss before planning', cmd('discuss-phase')),
+        action('progress', 'Show progress', cmd('progress')),
       ];
     case 'executing':
       // In-project forward motion delegates to the single gated engine
@@ -719,40 +722,40 @@ export function actionsFor(situation: Situation, s: SmartEntrySignals): SmartEnt
       // /gsd:execute-phase here — that divergence is why the old flat /gsd-next
       // was removed (#3054). Direct execute stays as an explicit secondary choice.
       return [
-        rec('progress-next', 'Advance to the next step', '/gsd:progress --next'),
-        action('execute-phase', execLabel, '/gsd:execute-phase'),
-        action('quick', 'Quick task', '/gsd:quick'),
-        action('code-review', 'Review recent work', '/gsd:code-review'),
+        rec('progress-next', 'Advance to the next step', cmd('progress --next')),
+        action('execute-phase', execLabel, cmd('execute-phase')),
+        action('quick', 'Quick task', cmd('quick')),
+        action('code-review', 'Review recent work', cmd('code-review')),
       ];
     case 'verify-pending':
       // Forward motion → delegate to the single gated engine (see 'executing').
       return [
-        rec('progress-next', 'Advance to the next step (verify)', '/gsd:progress --next'),
-        action('verify-work', 'Verify work', '/gsd:verify-work'),
-        action('code-review', 'Review recent work', '/gsd:code-review'),
-        action('ship', 'Ship completed work', '/gsd:ship'),
+        rec('progress-next', 'Advance to the next step (verify)', cmd('progress --next')),
+        action('verify-work', 'Verify work', cmd('verify-work')),
+        action('code-review', 'Review recent work', cmd('code-review')),
+        action('ship', 'Ship completed work', cmd('ship')),
       ];
     case 'idle-stranded':
       return [
-        rec('ship', 'Ship committed work', '/gsd:ship'),
-        action('complete-milestone', 'Complete the milestone', '/gsd:complete-milestone'),
-        action('progress', 'Show progress', '/gsd:progress'),
-        action('capture', 'Capture a note', '/gsd:capture'),
+        rec('ship', 'Ship committed work', cmd('ship')),
+        action('complete-milestone', 'Complete the milestone', cmd('complete-milestone')),
+        action('progress', 'Show progress', cmd('progress')),
+        action('capture', 'Capture a note', cmd('capture')),
       ];
     case 'complete':
       return [
-        rec('new-milestone', 'Start a new milestone', '/gsd:new-milestone'),
-        action('extract-learnings', 'Extract learnings', '/gsd:extract-learnings'),
-        action('quick', 'Quick task', '/gsd:quick'),
-        action('progress', 'Show progress', '/gsd:progress'),
+        rec('new-milestone', 'Start a new milestone', cmd('new-milestone')),
+        action('extract-learnings', 'Extract learnings', cmd('extract-learnings')),
+        action('quick', 'Quick task', cmd('quick')),
+        action('progress', 'Show progress', cmd('progress')),
       ];
     case 'unknown':
     default:
       return [
-        rec('progress', 'Show progress', '/gsd:progress'),
-        action('progress-next', 'Advance to the next step', '/gsd:progress --next'),
-        action('quick', 'Quick task', '/gsd:quick'),
-        action('help', 'Show help', '/gsd:help'),
+        rec('progress', 'Show progress', cmd('progress')),
+        action('progress-next', 'Advance to the next step', cmd('progress --next')),
+        action('quick', 'Quick task', cmd('quick')),
+        action('help', 'Show help', cmd('help')),
       ];
   }
 }
@@ -823,7 +826,7 @@ function progressLine(tail: string, s: SmartEntrySignals): string {
 export function classifyProject(cwd: string, now: () => number = Date.now): SmartEntryResult {
   const signals = detectSignals(cwd, now);
   const situation = classify(signals);
-  const actions = actionsFor(situation, signals);
+  const actions = actionsFor(situation, signals, resolveRuntime(cwd));
   const recommended = actions.find((a) => a.recommended)?.id ?? 'progress';
   const summary = buildSummary(situation, signals);
   return { situation, recommended, summary, signals, actions };
@@ -844,7 +847,7 @@ export function runSmartEntry(cwd: string, args: string[], raw: boolean): void {
   }
   // Human mode: a compact one-liner plus the recommended action.
   const human = `${result.summary}\nRecommended: ${result.recommended} → ${
-    result.actions.find((a) => a.id === result.recommended)?.command ?? '/gsd:progress'
+    result.actions.find((a) => a.id === result.recommended)?.command ?? runtimeCommand(cwd, 'progress')
   }`;
   output(null, true, human);
 }
