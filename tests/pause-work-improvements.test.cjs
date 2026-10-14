@@ -115,6 +115,58 @@ describe('pause-work improvements', () => {
       'execute-phase.md must use conventional "chore(recover):" commit prefix (#4943)'
     );
   });
+
+  test('bug #4943: zh-CN git-integration.md mirror uses conventional commit prefix docs(pause):', () => {
+    const zhGitIntContent = fs.readFileSync(
+      path.join(__dirname, '..', 'docs', 'zh-CN', 'references', 'git-integration.md'), 'utf-8'
+    );
+    assert.doesNotMatch(
+      zhGitIntContent,
+      /query commit "wip:/,
+      'zh-CN git-integration.md must not use non-conventional "wip:" commit prefix (#4943)'
+    );
+    assert.match(
+      zhGitIntContent,
+      /query commit "docs\(pause\):/,
+      'zh-CN git-integration.md must use conventional "docs(pause):" commit prefix (#4943)'
+    );
+  });
+
+  test('bug #4943: pause-work workflow and command checklists do not use "as WIP" wording', () => {
+    pauseContent = pauseContent || fs.readFileSync(
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'pause-work.md'), 'utf-8'
+    );
+    assert.doesNotMatch(
+      pauseContent,
+      /Committed as WIP/,
+      'pause-work.md must not contain residual "Committed as WIP" checklist item (#4943)'
+    );
+
+    const cmdPauseContent = fs.readFileSync(
+      path.join(__dirname, '..', 'commands', 'gsd', 'pause-work.md'), 'utf-8'
+    );
+    assert.doesNotMatch(
+      cmdPauseContent,
+      /Git commit as WIP/,
+      'commands/gsd/pause-work.md must not contain residual "Git commit as WIP" description (#4943)'
+    );
+  });
+
+  test('bug #4943: agents/gsd-executor.md scratch commit uses conventional commit format', () => {
+    const executorContent = fs.readFileSync(
+      path.join(__dirname, '..', 'agents', 'gsd-executor.md'), 'utf-8'
+    );
+    assert.doesNotMatch(
+      executorContent,
+      /git commit -m "wip"/,
+      'agents/gsd-executor.md must not use non-conventional bare "wip" commit message (#4943)'
+    );
+    assert.match(
+      executorContent,
+      /git commit -m "chore\(wip\): scratch"/,
+      'agents/gsd-executor.md must use conventional "chore(wip): scratch" commit message (#4943)'
+    );
+  });
 });
 
 

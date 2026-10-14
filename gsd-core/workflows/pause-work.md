@@ -260,6 +260,6 @@ To resume: /gsd:resume-work
 - [ ] .continue-here.md created at correct path for detected context
 - [ ] Required Reading, Anti-Patterns, and Infrastructure State sections filled
 - [ ] Pre-Execution Critique section filled if pausing between design and execution
-- [ ] Committed as WIP
+- [ ] Committed handoff
 - [ ] User knows location and how to resume
 </success_criteria>
