@@ -53,7 +53,7 @@ Context files (CLAUDE.md, SUMMARY.md, phase state) are resolved inside the workf
 
 Reviewer lanes run without a phase: pipe canonical repo-relative file paths (one per line) to stdin of
 `gsd_run review-lane dispatch-step --repo-root <root> --depth <quick|standard|deep> --base-sha <sha> --run-dir "$(mktemp -d)" --cap-id code-review --point execute:post --explicit <slugs> --raw`.
-`review-lane` flags are space-separated (`--depth quick`), never `--flag=value`. `--depth`, `--base-sha` (lane reviews changes relative to it; commit them first) and stdin paths are required; `--run-dir` should be a fresh temp dir (default `.` writes the prompt file into the repo root). `--cap-id`/`--point` select the `code-review` capability, which must be enabled (`workflow.code_review`); otherwise nothing dispatches.
+`review-lane` flags are space-separated (`--depth quick`), never `--flag=value`. `--explicit` (omitted, nothing dispatches yet the call exits ok), `--depth`, `--base-sha` (lane reviews changes relative to it; commit them first) and stdin paths are required; `--run-dir` should be a fresh temp dir, removed afterward (default `.` writes the prompt file into the current directory). `--cap-id`/`--point` select the `code-review` capability, which must be enabled (`workflow.code_review`); otherwise nothing dispatches.
 `--explicit` takes comma-separated canonical slugs, no spaces (`codex,antigravity`), not flag aliases (`antigravity`, not `agy`); slugs: first column of `gsd_run review-lane sections` (`review-lane flags` lists flags/aliases).
 Per-lane model key is the flag alias (`review.models.agy`, not `.antigravity`); unset = lane default model.
 </context>
