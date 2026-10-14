@@ -5381,6 +5381,7 @@ describe('state planned-phase command', () => {
     assert.ok(result.success, `Command failed: ${result.error}`);
     const output = JSON.parse(result.output);
     assert.ok(output.updated.includes('Plan'), `updated must include Plan; got ${JSON.stringify(output.updated)}`);
+    assert.ok(!output.updated.includes('Current Plan'), `no Current Plan line existed; got ${JSON.stringify(output.updated)}`);
     assert.ok(!output.updated.includes('Total Plans in Phase'), `no Total Plans line existed; got ${JSON.stringify(output.updated)}`);
 
     const after = fs.readFileSync(statePath, 'utf8');
@@ -5414,6 +5415,9 @@ describe('state planned-phase command', () => {
 
     const planned = runGsdTools(['state', 'planned-phase', '--phase', '19', '--name', 'Tbd', '--plans', '3'], tmpDir);
     assert.ok(planned.success, `planned-phase failed: ${planned.error}`);
+    const plannedOut = JSON.parse(planned.output);
+    assert.ok(plannedOut.updated.includes('Current Plan'), `got ${JSON.stringify(plannedOut.updated)}`);
+    assert.ok(!plannedOut.updated.includes('Plan'), `got ${JSON.stringify(plannedOut.updated)}`);
     const after = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8');
     assert.match(after, /^Current Plan: 0 of 3 in current phase$/m, `STATE.md was:\n${after}`);
     assert.strictEqual(Number(frontmatterLib.extractFrontmatter(after).current_phase), 19);
