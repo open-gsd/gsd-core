@@ -224,16 +224,39 @@ function slugifyPhaseName(phaseName: string | null): string | null {
 }
 
 /**
+ * #4854: the one place that decides which name an `init` verb emits as
+ * `phase_name`. When a phase directory exists, `searchPhaseInDir` derives
+ * `phaseInfo.phase_name` from the directory-name remainder — already slugified
+ * (`phase.add` writes `${num}-${slug}` dirs), so it comes out byte-identical to
+ * `phase_slug`. The ROADMAP carries the curated display name
+ * (`### Phase N: <Name>`), so it wins; the disk-derived name is the fallback
+ * for a phase the ROADMAP does not describe, then `null`. #3171 fixed this
+ * inline for `init execute-phase` only; plan-phase (whose `phase_name` reaches
+ * STATE.md through `state planned-phase --name`), verify-work, code-review,
+ * discuss-phase-assumptions and phase-op read the raw disk value. `phase_slug`
+ * is deliberately not routed through here — it stays disk-derived.
+ */
+function resolvePhaseDisplayName(
+  phaseInfo: Record<string, unknown> | null,
+  roadmapPhase: Record<string, unknown> | null,
+): string | null {
+  return (roadmapPhase?.['phase_name'] as string | undefined)
+    || (phaseInfo?.['phase_name'] as string | undefined)
+    || null;
+}
+
+/**
  * #2994 (review finding, DEFECT.GENERATIVE-FIX): shared archived/not-found
  * fallback applied identically by `cmdInitExecutePhase`, `cmdInitPlanPhase`,
  * `cmdInitVerifyWork`, `cmdInitCodeReview`, `cmdInitReview`, and
  * `cmdInitDiscussPhaseAssumptions` — 6 call sites previously reproducing the
  * exact same two-branch control flow verbatim (only the synthetic
  * replacement object's field set differs per caller, supplied here via
- * `buildFallback`). `cmdInitPhaseOp` is deliberately left untouched (CRITICAL
- * blast radius, 179 dependents) even though it follows the same shape, since
- * its own fallback object differs by one field (`has_reviews` absent) and is
- * not a byte-identical copy.
+ * `buildFallback`). `cmdInitPhaseOp` does not use this helper (its own fallback
+ * object differs by one field, `has_reviews` absent, so it is not a
+ * byte-identical copy), but since #4854 it resolves `roadmapPhase` once up
+ * front like the others, so `resolvePhaseDisplayName` sees it in the ordinary
+ * case too.
  *
  * Behavior-preserving by construction: every original call site either (a)
  * unconditionally computed `roadmapPhase` once up front and then applied
@@ -1083,7 +1106,7 @@ function cmdInitExecutePhase(
     // the human-curated display name (`### Phase N: <Name>`); prefer it,
     // matching the no-disk fallback above. phase_slug stays disk-derived — it
     // correctly feeds branch-name construction below and is unchanged here.
-    phase_name: (roadmapPhase?.['phase_name']) || (phaseInfo?.['phase_name']) || null,
+    phase_name: resolvePhaseDisplayName(phaseInfo, roadmapPhase),
     phase_slug: phaseInfo?.['phase_slug'] || null,
     phase_req_ids,
 
@@ -1228,7 +1251,7 @@ function cmdInitPlanPhase(
 
   const phaseDirPlan = (phaseInfo?.['directory'] as string | undefined) || null;
   const phaseNumberPlan = (phaseInfo?.['phase_number'] as string | undefined) || null;
-  const phaseNamePlan = (phaseInfo?.['phase_name'] as string | undefined) || null;
+  const phaseNamePlan = resolvePhaseDisplayName(phaseInfo, roadmapPhase);
   const rawProjectCodePlan = (config.project_code as string) || '';
   let expectedPhaseDirPlan: string | null = null;
   if (!phaseDirPlan && phaseNumberPlan && phaseNamePlan) {
@@ -1987,7 +2010,7 @@ function cmdInitVerifyWork(cwd: string, phase: string, raw: boolean): void {
     // itself stays relative — evaluateUatPassed above still joins it against cwd.
     phase_dir: phaseDir ? toPosixPath(path.join(cwd, phaseDir)) : null,
     phase_number: phaseInfo?.['phase_number'] || null,
-    phase_name: phaseInfo?.['phase_name'] || null,
+    phase_name: resolvePhaseDisplayName(phaseInfo, roadmapPhase),
 
     // #2376: verify-work.md's plan_gap_closure step reads these instead of
     // hardcoding '.planning/STATE.md' / '.planning/ROADMAP.md' literals.
@@ -2071,7 +2094,7 @@ function cmdInitCodeReview(
 
   const phaseDir = (phaseInfo?.['directory'] as string | undefined) || null;
   const phaseNumber = (phaseInfo?.['phase_number'] as string | undefined) || null;
-  const phaseName = (phaseInfo?.['phase_name'] as string | undefined) || null;
+  const phaseName = resolvePhaseDisplayName(phaseInfo, roadmapPhase);
 
   const fallow = detectFallowConfig(cwd);
 
@@ -2225,7 +2248,7 @@ function cmdInitDiscussPhaseAssumptions(
 
   const phaseDir = (phaseInfo?.['directory'] as string | undefined) || null;
   const phaseNumber = (phaseInfo?.['phase_number'] as string | undefined) || null;
-  const phaseName = (phaseInfo?.['phase_name'] as string | undefined) || null;
+  const phaseName = resolvePhaseDisplayName(phaseInfo, roadmapPhase);
 
   // #2994: mirrors discuss-phase-assumptions.md's own auto_advance step
   // resolver — `--auto` flag OR the consolidated `check auto-mode --pick
@@ -2288,8 +2311,11 @@ function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
     return;
   }
 
+  // #4854: resolved once, up front (a pure read — guardedGetRoadmapPhase has no side effects),
+  // so the ordinary case (phase dir on disk, not archived) also sees the ROADMAP display name.
+  const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
+
   if (phaseInfo?.['archived']) {
-    const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
     if (roadmapPhase?.['found']) {
       const phaseName = roadmapPhase['phase_name'] as string | null;
       phaseInfo = {
@@ -2313,7 +2339,6 @@ function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
   }
 
   if (!phaseInfo) {
-    const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
     if (roadmapPhase?.['found']) {
       const phaseName = roadmapPhase['phase_name'] as string | null;
       phaseInfo = {
@@ -2338,7 +2363,7 @@ function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
 
   const phaseDir = (phaseInfo?.['directory'] as string | undefined) || null;
   const phaseNumber = (phaseInfo?.['phase_number'] as string | undefined) || null;
-  const phaseName = (phaseInfo?.['phase_name'] as string | undefined) || null;
+  const phaseName = resolvePhaseDisplayName(phaseInfo, roadmapPhase);
   const rawProjectCode = (config.project_code as string) || '';
   let expectedPhaseDir: string | null = null;
   if (!phaseDir && phaseNumber && phaseName) {
