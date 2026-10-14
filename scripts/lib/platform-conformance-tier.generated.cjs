@@ -58,6 +58,7 @@ module.exports = {
   "tests/codex-config-install.test.cjs",
   "tests/codex-config.test.cjs",
   "tests/codex-inherit-smoke.test.cjs",
+  "tests/codex-windows-shim-node-resolution.test.cjs",
   "tests/command-routing-hub.test.cjs",
   "tests/commands.platform.test.cjs",
   "tests/commit-files-deletion.test.cjs",

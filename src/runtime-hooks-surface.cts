@@ -1149,7 +1149,16 @@ function buildCodexHookWindowsShimIR(scriptAbsPath: string, absoluteRunnerToken:
   const scriptQuoted = JSON.stringify(targetAbs);
   const cmdPath = scriptAbsPath.replace(/\.js$/, '.cmd');
   const hookCommand = JSON.stringify(shellCmdProjection.posixNormalize(cmdPath));
-  const runnerQuoted = JSON.stringify(interpreter);
+  // #4838: node is resolved when the hook fires. The install-time path dies when a
+  // version manager (WinGet) removes the versioned directory on upgrade, and a
+  // shim that only knew that path failed silently until the installer re-ran.
+  // Order: explicit GSD_NODE_PATH; the install-time path while it still exists
+  // (keeps the #3662 minimal-PATH guarantee); node.exe on PATH. `where $PATH:`
+  // searches PATH only, never the current directory, so repo content cannot
+  // become the runner. `%` is doubled so cmd.exe cannot expand a variable out
+  // of an install path.
+  const bakedBat = JSON.stringify(interpreter).slice(1, -1).replace(/%/g, '%%');
+  const scriptBat = scriptQuoted.replace(/%/g, '%%');
   return {
     invocation: { interpreter, target: scriptAbsPath },
     cmdPath,
@@ -1157,7 +1166,16 @@ function buildCodexHookWindowsShimIR(scriptAbsPath: string, absoluteRunnerToken:
     eol: { cmd: '\r\n' },
     passthroughArgs: true,
     render: {
-      cmd: () => `@ECHO OFF\r\n@SETLOCAL\r\n@${runnerQuoted} ${scriptQuoted} %*\r\n`,
+      cmd: () => [
+        '@ECHO OFF',
+        '@SETLOCAL',
+        '@SET "GSD_NODE="',
+        '@IF DEFINED GSD_NODE_PATH IF EXIST "%GSD_NODE_PATH%" SET "GSD_NODE=%GSD_NODE_PATH%"',
+        `@IF NOT DEFINED GSD_NODE IF EXIST "${bakedBat}" SET "GSD_NODE=${bakedBat}"`,
+        '@IF NOT DEFINED GSD_NODE FOR /F "delims=" %%N IN (\'where $PATH:node.exe 2^>NUL\') DO @IF NOT DEFINED GSD_NODE SET "GSD_NODE=%%N"',
+        `@"%GSD_NODE%" ${scriptBat} %*`,
+        '',
+      ].join('\r\n'),
     },
   };
 }

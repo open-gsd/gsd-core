@@ -15,6 +15,7 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 
+const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
 const { buildCodexHookWindowsShimIR } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
 
 const SCRIPT = 'C:/Users/me/.codex/hooks/gsd-check-update.js';
@@ -38,13 +39,13 @@ describe('#4838: the Codex Windows shim resolves node when the hook fires', () =
   test('every file candidate is checked for existence before it is used', () => {
     const text = render();
     assert.match(text, /IF EXIST "%GSD_NODE_PATH%"/);
-    assert.match(text, new RegExp(`IF EXIST "${WINGET_NODE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`));
+    assert.match(text, new RegExp(`IF EXIST "${escapeRegex(WINGET_NODE)}"`));
   });
 
   test('node.exe on PATH is the last resort, after the baked path', () => {
     const text = render();
-    const where = text.search(/where\s+node\.exe/i);
-    assert.ok(where !== -1, 'the shim must fall back to node.exe on PATH via `where`');
+    const where = text.search(/where\s+\$PATH:node\.exe/i);
+    assert.ok(where !== -1, 'the shim must fall back to node.exe on PATH via `where $PATH:` (PATH only: plain `where` also searches the current directory)');
     assert.ok(where > text.indexOf(WINGET_NODE), 'PATH lookup comes after the install-time path');
   });
 

@@ -179,6 +179,8 @@ GSD registers the following Codex hook event automatically on install (requires 
 
 **Context warnings are not supported on Codex (#2586).** Earlier revisions of GSD also registered `SubagentStart`/`Stop`/`PostToolUse` (plus, briefly, six more events) against `gsd-context-monitor.js` for context-headroom tracking. That hook only produces a warning by reading a remaining-context-percentage bridge file that `gsd-statusline.js` — Claude Code's own statusline mechanism — writes; Codex never installs a statusline writer, so every one of those registrations fired as a guaranteed silent no-op, every invocation, with no exceptions. GSD no longer copies or registers `gsd-context-monitor.js` on a fresh Codex install; a reinstall over an older GSD install removes the stale registrations and the now-unreferenced script automatically. Agent-facing context warnings and GSD phase/lifecycle display remain unsupported capabilities on Codex (see `capabilities/codex/capability.json`) until a real metrics producer exists for this runtime — native Codex `/statusline` configuration is a separate, not-yet-implemented surface.
 
+**Codex on Windows finds Node when the hook runs (#4838).** The `.cmd` shim does not depend on the install-time `node.exe` path alone: a Node upgrade that removes that versioned directory (WinGet does) no longer breaks the hook until you re-run the installer. The shim uses the first of these that exists: `GSD_NODE_PATH` (set it to an absolute `node.exe` to override), the path the installer found, then `node.exe` on `PATH`. The `PATH` lookup never searches the current directory. If none exists the hook fails as it did before.
+
 All registered hooks are managed by GSD and are removed cleanly on `--uninstall`.
 
 ---
