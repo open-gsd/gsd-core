@@ -19,6 +19,7 @@ const { parsePlanDocument } = planDocumentMod;
 import taskContentResolutionMod = require('./task-content-resolution.cjs');
 const {
   resolveTaskContent,
+  loadResolverCapabilities,
   ResolverAmbiguousError,
   ResolverFailedError,
   ResolverTimeoutError,
@@ -168,7 +169,7 @@ function routeResolveContent(
     return;
   }
 
-  const loadCapabilities = deps.loadCapabilities ?? taskContentResolutionMod.loadResolverCapabilities;
+  const loadCapabilities = deps.loadCapabilities ?? loadResolverCapabilities;
   const capabilities = loadCapabilities(projectRoot);
   const resolveFn = deps.resolveTaskContentFn ?? resolveTaskContent;
 
