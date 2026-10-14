@@ -363,8 +363,10 @@ jobs:
     # runs its slice under c8 with NO report/gate (raw V8 dumps only);
     # rc-coverage-gate merges all three before enforcing the threshold. 20m
     # gives each shard generous headroom over its ~1/3 share of the unsharded
-    # run's measured cost.
-    timeout-minutes: 20
+    # run's measured cost. #5421: shard 1/3 later measured ~18.5m of tests
+    # plus the coverage upload, so a 20m cap cancelled it mid-upload twice
+    # (run 38609859394); 30m restores headroom.
+    timeout-minutes: 30
     permissions:
       contents: read
     strategy:
@@ -669,7 +671,7 @@ jobs:
     # unit-coverage step, which is the one that actually hit the 30m cap
     # (run 33988966357: all tests passed, 0 failures, cancelled ~80s into the
     # post-test coverage merge).
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read
     strategy:

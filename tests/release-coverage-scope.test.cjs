@@ -64,3 +64,21 @@ describe('release-audit-baseline-pin', () => {
     }
   });
 });
+
+describe('release-test-shard-timeout', () => {
+  // #5421: shard 1/3 of the sharded unit suites measured ~18.5m of tests plus
+  // the coverage upload; a 20m job cap cancelled it mid-upload (run
+  // 38609859394). Both *-test shard jobs must keep at least 30m of headroom.
+  test('rc-test and finalize-test shard jobs keep timeout-minutes >= 30', () => {
+    const lines = fs.readFileSync(RELEASE_WORKFLOW, 'utf8').split(/\r?\n/);
+    for (const job of ['rc-test', 'finalize-test']) {
+      const start = lines.findIndex(l => l === `  ${job}:`);
+      assert.ok(start >= 0, `${job} job not found`);
+      const end = lines.findIndex((l, i) => i > start && /^ {2}\S/.test(l));
+      const body = lines.slice(start, end < 0 ? undefined : end);
+      const m = body.map(l => /^ {4}timeout-minutes:\s*(\d+)\s*$/.exec(l)).find(Boolean);
+      assert.ok(m, `${job} must set timeout-minutes`);
+      assert.ok(Number(m[1]) >= 30, `${job} timeout-minutes must be >= 30 (was ${m[1]})`);
+    }
+  });
+});
