@@ -364,6 +364,19 @@ const {
   checkShardBalance,
 } = require('../scripts/ci-timeout-report.cjs');
 
+// #5029: the live SHARD_BALANCE describes whatever layout test.yml declares
+// (6 windows shards since #5029). The rule tests below are written against
+// 3-shard fixtures — the layout #5101 shipped with — so they run on this
+// frozen copy of the #5101 config instead: they pin the rules (window, gap,
+// p90, layout-change handling), not the current baselines. The live config's
+// wiring is pinned separately by "SHARD_BALANCE matches the windows shard
+// layout test.yml declares".
+const THREE_SHARD_CONFIG = Object.freeze({
+  ...SHARD_BALANCE,
+  baselineShardTotal: 3,
+  baselineP90Ms: Object.freeze({ '1/3': 1824000, '2/3': 2046000, '3/3': 2208000 }),
+});
+
 function addMs(iso, ms) {
   return new Date(new Date(iso).getTime() + ms).toISOString();
 }
@@ -460,7 +473,7 @@ test('shard balance (#5101)', async (t) => {
       { name: 'conformance test (windows-latest, 24)', conclusion: 'success', started_at: start, completed_at: addMs(start, 20 * 60000) },
     ])];
 
-    const samples = extractShardSamples(runs, SHARD_BALANCE);
+    const samples = extractShardSamples(runs, THREE_SHARD_CONFIG);
 
     assert.equal(samples.length, 1);
     assert.equal(samples[0].shard, '1/3');
@@ -470,9 +483,9 @@ test('shard balance (#5101)', async (t) => {
 
   await t.test('runs before the #5097 merge are excluded', () => {
     const before = runAt(1, '2026-09-28T14:17:50Z', [winJob(1, 3, 20, { start: '2026-09-28T14:17:50Z' })]);
-    const atSince = runAt(2, SHARD_BALANCE.since, [winJob(1, 3, 20, { start: SHARD_BALANCE.since })]);
+    const atSince = runAt(2, THREE_SHARD_CONFIG.since, [winJob(1, 3, 20, { start: THREE_SHARD_CONFIG.since })]);
 
-    const samples = extractShardSamples([before, atSince], SHARD_BALANCE);
+    const samples = extractShardSamples([before, atSince], THREE_SHARD_CONFIG);
 
     assert.equal(samples.length, 1);
     assert.equal(samples[0].runId, 2);
@@ -489,14 +502,14 @@ test('shard balance (#5101)', async (t) => {
     };
     const runs = [runAt(1, start, [cancelledWithSpan, neverRan])];
 
-    const samples = extractShardSamples(runs, SHARD_BALANCE);
+    const samples = extractShardSamples(runs, THREE_SHARD_CONFIG);
 
     assert.equal(samples.length, 1);
     assert.equal(samples[0].shard, '1/3');
   });
 
   await t.test('no samples reports insufficient-data', () => {
-    const result = evaluateShardBalance([], SHARD_BALANCE);
+    const result = evaluateShardBalance([], THREE_SHARD_CONFIG);
 
     assert.equal(result.status, 'insufficient-data');
     assert.equal(result.runs, 0);
@@ -505,27 +518,27 @@ test('shard balance (#5101)', async (t) => {
   await t.test('run-count boundary 9, 10, 11', () => {
     const shardMs = [20 * 60000, 20.5 * 60000, 21 * 60000];
 
-    const nine = evaluateShardBalance(extractShardSamples(constantRuns(9, shardMs), SHARD_BALANCE), SHARD_BALANCE);
+    const nine = evaluateShardBalance(extractShardSamples(constantRuns(9, shardMs), THREE_SHARD_CONFIG), THREE_SHARD_CONFIG);
     assert.equal(nine.status, 'insufficient-data');
     assert.equal(nine.runs, 9);
 
-    const ten = evaluateShardBalance(extractShardSamples(constantRuns(10, shardMs), SHARD_BALANCE), SHARD_BALANCE);
+    const ten = evaluateShardBalance(extractShardSamples(constantRuns(10, shardMs), THREE_SHARD_CONFIG), THREE_SHARD_CONFIG);
     assert.equal(ten.status, 'ok');
     assert.equal(ten.runs, 10);
 
-    const eleven = evaluateShardBalance(extractShardSamples(constantRuns(11, shardMs), SHARD_BALANCE), SHARD_BALANCE);
+    const eleven = evaluateShardBalance(extractShardSamples(constantRuns(11, shardMs), THREE_SHARD_CONFIG), THREE_SHARD_CONFIG);
     assert.equal(eleven.status, 'ok');
     assert.equal(eleven.runs, 11);
   });
 
   await t.test('median gap boundary at 2 minutes', () => {
     const okRuns = constantRuns(10, [1200000, 1200000, 1200000 + 120000]);
-    const okResult = evaluateShardBalance(extractShardSamples(okRuns, SHARD_BALANCE), SHARD_BALANCE);
+    const okResult = evaluateShardBalance(extractShardSamples(okRuns, THREE_SHARD_CONFIG), THREE_SHARD_CONFIG);
     assert.equal(okResult.status, 'ok');
     assert.equal(okResult.gapMs, 120000);
 
     const breachRuns = constantRuns(10, [1200000, 1200000, 1200000 + 120001]);
-    const breachResult = evaluateShardBalance(extractShardSamples(breachRuns, SHARD_BALANCE), SHARD_BALANCE);
+    const breachResult = evaluateShardBalance(extractShardSamples(breachRuns, THREE_SHARD_CONFIG), THREE_SHARD_CONFIG);
     assert.equal(breachResult.status, 'breach');
     assert.equal(breachResult.gapMs, 120001);
     assert.deepEqual(breachResult.breaches.map((b) => [b.kind, b.slowest, b.fastest]), [['gap', '3/3', '1/3']]);
@@ -543,14 +556,14 @@ test('shard balance (#5101)', async (t) => {
     const steadyShard = new Array(10).fill(1740000);
 
     const okResult = evaluateShardBalance(
-      extractShardSamples(buildRunsFromShardLists([shard1AtBaseline, steadyShard, steadyShard]), SHARD_BALANCE),
-      SHARD_BALANCE,
+      extractShardSamples(buildRunsFromShardLists([shard1AtBaseline, steadyShard, steadyShard]), THREE_SHARD_CONFIG),
+      THREE_SHARD_CONFIG,
     );
     assert.equal(okResult.status, 'ok');
 
     const breachResult = evaluateShardBalance(
-      extractShardSamples(buildRunsFromShardLists([shard1OverBaseline, steadyShard, steadyShard]), SHARD_BALANCE),
-      SHARD_BALANCE,
+      extractShardSamples(buildRunsFromShardLists([shard1OverBaseline, steadyShard, steadyShard]), THREE_SHARD_CONFIG),
+      THREE_SHARD_CONFIG,
     );
     assert.equal(breachResult.status, 'breach');
     assert.deepEqual(breachResult.breaches.map((b) => [b.kind, b.shard]), [['p90', '1/3']]);
@@ -559,7 +572,7 @@ test('shard balance (#5101)', async (t) => {
   await t.test('a shard-layout change reports baseline-mismatch', () => {
     const runs = constantRuns(5, [1200000, 1200000, 1200000, 1200000]);
 
-    const result = evaluateShardBalance(extractShardSamples(runs, SHARD_BALANCE), SHARD_BALANCE);
+    const result = evaluateShardBalance(extractShardSamples(runs, THREE_SHARD_CONFIG), THREE_SHARD_CONFIG);
 
     assert.equal(result.status, 'baseline-mismatch');
   });
@@ -568,7 +581,7 @@ test('shard balance (#5101)', async (t) => {
     const oldRuns = constantRuns(12, [1200000, 1200000, 1200000], { startId: 1, base: '2026-09-28T15:00:00Z' });
     const newRuns = constantRuns(10, [1200000, 1200000, 1200000, 1200000], { startId: 101, base: '2026-09-29T15:00:00Z' });
 
-    const result = evaluateShardBalance(extractShardSamples([...oldRuns, ...newRuns], SHARD_BALANCE), SHARD_BALANCE);
+    const result = evaluateShardBalance(extractShardSamples([...oldRuns, ...newRuns], THREE_SHARD_CONFIG), THREE_SHARD_CONFIG);
 
     assert.equal(result.status, 'baseline-mismatch');
     assert.equal(result.runs, 10);
@@ -579,8 +592,8 @@ test('shard balance (#5101)', async (t) => {
     const newBalanced = constantRuns(20, [1200000, 1200000, 1200000], { startId: 101, base: '2026-09-29T00:00:00Z' });
 
     const result = evaluateShardBalance(
-      extractShardSamples([...oldUnbalanced, ...newBalanced], SHARD_BALANCE),
-      SHARD_BALANCE,
+      extractShardSamples([...oldUnbalanced, ...newBalanced], THREE_SHARD_CONFIG),
+      THREE_SHARD_CONFIG,
     );
 
     assert.equal(result.status, 'ok');
@@ -591,7 +604,7 @@ test('shard balance (#5101)', async (t) => {
     const runs = constantRuns(10, [1200000, 1200000, 1200000]);
     runs[4].jobs.splice(1, 1); // drop shard 2/3 from the 5th run
 
-    const result = evaluateShardBalance(extractShardSamples(runs, SHARD_BALANCE), SHARD_BALANCE);
+    const result = evaluateShardBalance(extractShardSamples(runs, THREE_SHARD_CONFIG), THREE_SHARD_CONFIG);
 
     assert.equal(result.runs, 10);
     const shard2 = result.perShard.find((s) => s.shard === '2/3');
@@ -609,7 +622,7 @@ test('shard balance (#5101)', async (t) => {
       runs.push(runAt(k + 1, createdAt, [winJobFromMs(1, 3, 1200000, { start: createdAt })]));
     }
 
-    const result = evaluateShardBalance(extractShardSamples(runs, SHARD_BALANCE), SHARD_BALANCE);
+    const result = evaluateShardBalance(extractShardSamples(runs, THREE_SHARD_CONFIG), THREE_SHARD_CONFIG);
 
     assert.equal(result.status, 'insufficient-data');
   });
@@ -617,7 +630,7 @@ test('shard balance (#5101)', async (t) => {
   await t.test('the #5071 baseline itself is a breach', () => {
     const runs = constantRuns(10, [25.2 * 60000, 29.0 * 60000, 31.6 * 60000]);
 
-    const result = evaluateShardBalance(extractShardSamples(runs, SHARD_BALANCE), SHARD_BALANCE);
+    const result = evaluateShardBalance(extractShardSamples(runs, THREE_SHARD_CONFIG), THREE_SHARD_CONFIG);
 
     assert.equal(result.status, 'breach');
     assert.equal(result.gapMs, 384000);
@@ -698,11 +711,11 @@ test('shard balance (#5101)', async (t) => {
     const { github, calls } = makeGithub({ runs, jobsByRunId, existingIssues: [] });
     const { core, warnings } = makeCore();
 
-    const result = await checkShardBalance({ github, context, core, config: SHARD_BALANCE });
+    const result = await checkShardBalance({ github, context, core, config: THREE_SHARD_CONFIG });
 
     assert.equal(result.status, 'breach');
     assert.equal(calls.create.length, 1);
-    assert.equal(calls.create[0].title, SHARD_BALANCE.issueTitle);
+    assert.equal(calls.create[0].title, THREE_SHARD_CONFIG.issueTitle);
     assert.ok(calls.create[0].body.length > 0);
     assert.equal(calls.comment.length, 0);
     assert.equal(result.issue.action, 'created');
@@ -712,11 +725,11 @@ test('shard balance (#5101)', async (t) => {
 
   await t.test('a breach comments on the open tracking issue', async () => {
     const { runs, jobsByRunId } = breachFixture();
-    const existingIssues = [{ number: 555, title: SHARD_BALANCE.issueTitle }];
+    const existingIssues = [{ number: 555, title: THREE_SHARD_CONFIG.issueTitle }];
     const { github, calls } = makeGithub({ runs, jobsByRunId, existingIssues });
     const { core } = makeCore();
 
-    const result = await checkShardBalance({ github, context, core, config: SHARD_BALANCE });
+    const result = await checkShardBalance({ github, context, core, config: THREE_SHARD_CONFIG });
 
     assert.equal(calls.comment.length, 1);
     assert.equal(calls.comment[0].issue_number, 555);
@@ -728,13 +741,13 @@ test('shard balance (#5101)', async (t) => {
   await t.test('a near-miss search hit or a PR is not treated as the tracking issue', async () => {
     const { runs, jobsByRunId } = breachFixture();
     const existingIssues = [
-      { number: 1, title: `${SHARD_BALANCE.issueTitle} (old)` },
-      { number: 2, title: SHARD_BALANCE.issueTitle, pull_request: {} },
+      { number: 1, title: `${THREE_SHARD_CONFIG.issueTitle} (old)` },
+      { number: 2, title: THREE_SHARD_CONFIG.issueTitle, pull_request: {} },
     ];
     const { github, calls } = makeGithub({ runs, jobsByRunId, existingIssues });
     const { core } = makeCore();
 
-    const result = await checkShardBalance({ github, context, core, config: SHARD_BALANCE });
+    const result = await checkShardBalance({ github, context, core, config: THREE_SHARD_CONFIG });
 
     assert.equal(calls.create.length, 1);
     assert.equal(calls.comment.length, 0);
@@ -756,7 +769,7 @@ test('shard balance (#5101)', async (t) => {
     }
     const { github: okGithub, calls: okCalls } = makeGithub({ runs: okRuns, jobsByRunId: okJobsByRunId });
     const { core: okCore } = makeCore();
-    const okResult = await checkShardBalance({ github: okGithub, context, core: okCore, config: SHARD_BALANCE });
+    const okResult = await checkShardBalance({ github: okGithub, context, core: okCore, config: THREE_SHARD_CONFIG });
     assert.equal(okResult.status, 'ok');
     assert.equal(okCalls.create.length, 0);
     assert.equal(okCalls.comment.length, 0);
@@ -768,7 +781,7 @@ test('shard balance (#5101)', async (t) => {
     });
     const { core: insufficientCore } = makeCore();
     const insufficientResult = await checkShardBalance({
-      github: insufficientGithub, context, core: insufficientCore, config: SHARD_BALANCE,
+      github: insufficientGithub, context, core: insufficientCore, config: THREE_SHARD_CONFIG,
     });
     assert.equal(insufficientResult.status, 'insufficient-data');
     assert.equal(insufficientCalls.create.length, 0);
@@ -779,7 +792,7 @@ test('shard balance (#5101)', async (t) => {
     const { core, warnings } = makeCore();
     const { github } = makeGithub({ runs: [], jobsByRunId: {}, failListRuns: true });
 
-    const result = await checkShardBalance({ github, context, core, config: SHARD_BALANCE });
+    const result = await checkShardBalance({ github, context, core, config: THREE_SHARD_CONFIG });
 
     assert.equal(result.status, 'error');
     assert.equal(warnings.length >= 1, true);
@@ -791,7 +804,7 @@ test('shard balance (#5101)', async (t) => {
     const jobsByRunId = {};
     for (let k = 0; k < totalRuns; k += 1) {
       const id = totalRuns - k;
-      const createdAt = addMs(SHARD_BALANCE.since, (totalRuns - k) * 3600000);
+      const createdAt = addMs(THREE_SHARD_CONFIG.since, (totalRuns - k) * 3600000);
       allRuns.push({ id, created_at: createdAt, head_sha: `sha${id}`, event: 'push' });
       jobsByRunId[id] = [
         winJobFromMs(1, 3, 1200000, { start: createdAt }),
@@ -836,12 +849,43 @@ test('shard balance (#5101)', async (t) => {
     };
     const { core } = makeCore();
 
-    const result = await checkShardBalance({ github, context, core, config: SHARD_BALANCE });
+    const result = await checkShardBalance({ github, context, core, config: THREE_SHARD_CONFIG });
 
-    const runLimit = SHARD_BALANCE.windowRuns * 2;
+    const runLimit = THREE_SHARD_CONFIG.windowRuns * 2;
     const expectedPages = Math.ceil(runLimit / Math.min(100, runLimit));
     assert.equal(runListingPages, expectedPages);
     assert.equal(result.status, 'ok');
-    assert.equal(result.runs, SHARD_BALANCE.windowRuns);
+    assert.equal(result.runs, THREE_SHARD_CONFIG.windowRuns);
   });
+});
+
+// #5029: SHARD_BALANCE's baselines are keyed by the windows shard layout, and
+// a layout it does not describe makes the daily report open a
+// "baseline-mismatch" issue on `next`. #5029 resharded the lane 3 -> 6 without
+// updating it, which only review caught. Derived from the workflow rather than
+// pinned, so the next reshard fails here, in the PR, instead of on `next`.
+test('SHARD_BALANCE matches the windows shard layout test.yml declares (#5029)', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const yaml = require('js-yaml');
+  const workflow = yaml.load(
+    fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', SHARD_BALANCE.workflowFile), 'utf8'),
+  );
+  const windowsEntries = workflow.jobs['test-conformance'].strategy.matrix.include
+    .filter((e) => e.os === 'windows-latest');
+  const totals = [...new Set(windowsEntries.map((e) => Number(String(e.shard).split('/')[1])))];
+  assert.equal(totals.length, 1, `windows conformance entries disagree on the shard total: ${JSON.stringify(windowsEntries)}`);
+  const [total] = totals;
+
+  assert.equal(
+    SHARD_BALANCE.baselineShardTotal, total,
+    `test.yml shards windows conformance ${total} ways but SHARD_BALANCE.baselineShardTotal is `
+    + `${SHARD_BALANCE.baselineShardTotal}: re-measure baselineP90Ms for the new layout (never scale).`,
+  );
+  const expectedKeys = Array.from({ length: total }, (_, i) => `${i + 1}/${total}`);
+  assert.deepEqual(Object.keys(SHARD_BALANCE.baselineP90Ms).sort(), [...expectedKeys].sort());
+  for (const key of expectedKeys) {
+    const ms = SHARD_BALANCE.baselineP90Ms[key];
+    assert.ok(Number.isInteger(ms) && ms > 0, `baselineP90Ms['${key}'] must be a positive integer ms, got ${ms}`);
+  }
 });

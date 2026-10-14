@@ -135,10 +135,11 @@ const LANE_COSTS = [
     // GitHub applies ONE job-level budget across every matrix combination, so
     // this figure is the slowest ROW, windows or macos shard.
     //
-    // It is windows. Sharded SIX ways as of #5029, its long pole across nine
+    // It is windows. Sharded SIX ways as of #5029, its long pole across ten
     // 6-shard runs was 16m38s / 15m17s / 16m25s / 16m21s / 17m22s / 18m15s /
-    // 16m31s / 18m07s / 15m34s — usually shard 5/6. The worst, 18m15s (run
-    // 37041237415), rounds up to 19, so this cap may not drop below 29m.
+    // 16m31s / 18m07s / 15m34s / 18m49s — usually shard 5/6. The worst, 18m49s
+    // (shard 3/6, run 37697717410), rounds up to 19, so this cap may not drop
+    // below 29m.
     //
     // macOS was the slowest row until #5029 sharded it too. Unsharded it ran
     // 18m13s-26m01s across six runs on this PR, 26m58s on run 34434252144 —
@@ -160,7 +161,7 @@ const LANE_COSTS = [
     // imbalance to 1.01-1.02; if this lane is ever resharded downward on the
     // strength of that, re-measure the windows long pole from that run and
     // set this entry from the slowest row, rather than scaling a figure.
-    evidence: 'run 37041237415 — windows shard 5/6 18m15s, worst of nine 6-shard runs (binding row); macOS 3-shard long pole 10m09s on run 37694227292',
+    evidence: 'run 37697717410 — windows shard 3/6 18m49s, worst of ten 6-shard runs (binding row); macOS 3-shard long pole 10m09s on run 37694227292',
   },
 ];
 
