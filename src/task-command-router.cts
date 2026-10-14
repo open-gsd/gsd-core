@@ -16,8 +16,6 @@ const { output, error, ERROR_REASON } = ioMod;
 import planDocumentMod = require('./plan-document.cjs');
 const { parsePlanDocument } = planDocumentMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import capabilityLoaderMod = require('./capability-loader.cjs');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 import taskContentResolutionMod = require('./task-content-resolution.cjs');
 const {
   resolveTaskContent,
@@ -110,22 +108,6 @@ function isBehaviorAddingTaskContent(content: string): BehaviorAddingResult {
   };
 }
 
-/**
- * Default (production) capability loader for `resolve-content`: the merged
- * first-party + validated-installed-overlay registry (ADR-1244 D2), the
- * established runtime read path for "installed capabilities including
- * third-party" — as opposed to `capability-loader.cts`'s heavier build-time
- * validation entry points or the static `capability-registry.cjs` alone
- * (first-party only, would miss a third-party capability's
- * `taskContentResolver` declaration entirely).
- */
-function defaultLoadCapabilities(cwd: string): CapabilityLike[] {
-  const registry = capabilityLoaderMod.loadRegistry({ includeInstalled: true, cwd }) as {
-    capabilities?: Record<string, CapabilityLike>;
-  };
-  return Object.values(registry.capabilities ?? {});
-}
-
 function parseResolveContentArgs(args: string[]): { plan: string | null; taskId: string | null } {
   let plan: string | null = null;
   let taskId: string | null = null;
@@ -186,7 +168,7 @@ function routeResolveContent(
     return;
   }
 
-  const loadCapabilities = deps.loadCapabilities ?? defaultLoadCapabilities;
+  const loadCapabilities = deps.loadCapabilities ?? taskContentResolutionMod.loadResolverCapabilities;
   const capabilities = loadCapabilities(projectRoot);
   const resolveFn = deps.resolveTaskContentFn ?? resolveTaskContent;
 
@@ -266,5 +248,4 @@ export = {
   isBehaviorAddingTaskContent,
   routeTaskCommand,
   routeResolveContent,
-  defaultLoadCapabilities,
 };

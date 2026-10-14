@@ -41,14 +41,12 @@ const { parsePlanDocument } = planDocumentMod;
 import taskContentResolutionMod = require('./task-content-resolution.cjs');
 const {
   resolveTaskContent,
+  loadResolverCapabilities,
   ResolverAmbiguousError,
   ResolverFailedError,
   ResolverTimeoutError,
   ResolverMalformedOutputError,
 } = taskContentResolutionMod;
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-import taskCommandRouterMod = require('./task-command-router.cjs');
-const { defaultLoadCapabilities } = taskCommandRouterMod;
 
 type CapabilityLike = Parameters<typeof resolveTaskContent>[0]['capabilities'][number];
 
@@ -196,22 +194,37 @@ export interface TrackerResolveDeps {
 /** Extra scannable text per plan (same index) from tracker-resolved task content; '' for plans without `tracker-id=`. */
 export function resolveTrackerBodies(projectDir: string, planContents: string[], deps: TrackerResolveDeps = {}): Observed<string[]> {
   let capabilities: CapabilityLike[] | null = null;
+  const seen = new Map<string, string[]>();
   const resolveFn = deps.resolveTaskContentFn ?? resolveTaskContent;
   const bodies: string[] = [];
-  for (const content of planContents) {
-    if (!content.includes('tracker-id=')) {
+  for (const raw of planContents) {
+    const content = stripCommentsAndFences(raw);
+    if (!/\btracker-id\s*=/i.test(content)) {
       bodies.push('');
       continue;
     }
-    capabilities ??= (deps.loadCapabilities ?? defaultLoadCapabilities)(projectDir);
     const parts: string[] = [];
     for (const task of parsePlanDocument(content).tasks) {
-      if (task.trackerId === null) continue;
+      const trackerId = task.trackerId;
+      if (trackerId === null) continue;
+      const cached = seen.get(trackerId);
+      if (cached) {
+        parts.push(...cached);
+        continue;
+      }
+      if (capabilities === null) {
+        try {
+          capabilities = (deps.loadCapabilities ?? loadResolverCapabilities)(projectDir);
+        } catch (err) {
+          return { kind: 'unreadable', reason: `capability registry unreadable: ${err instanceof Error ? err.message : String(err)}`, span: trackerId };
+        }
+      }
       try {
-        const result = resolveFn({ trackerId: task.trackerId, capabilities });
-        if (result.kind !== 'resolved') continue;
-        const c = result.content;
-        for (const v of [c.action, c.verify, ...c.acceptanceCriteria, ...c.readFirst, c.done]) if (v !== null) parts.push(v);
+        const result = resolveFn({ trackerId, capabilities });
+        const c = result.kind === 'resolved' ? result.content : null;
+        const texts = c ? [c.action, c.verify, ...c.acceptanceCriteria, ...c.readFirst, c.done].filter((v): v is string => v !== null) : [];
+        seen.set(trackerId, texts);
+        parts.push(...texts);
       } catch (err) {
         if (
           err instanceof ResolverAmbiguousError ||
@@ -219,12 +232,12 @@ export function resolveTrackerBodies(projectDir: string, planContents: string[],
           err instanceof ResolverTimeoutError ||
           err instanceof ResolverMalformedOutputError
         ) {
-          return { kind: 'unreadable', reason: `tracker task content unresolved: ${err.message}`, span: task.trackerId };
+          return { kind: 'unreadable', reason: `tracker task content unresolved: ${err.message}`, span: trackerId };
         }
         throw err;
       }
     }
-    bodies.push(parts.join('\n'));
+    bodies.push(stripCommentsAndFences(parts.join('\n')));
   }
   return evidenceFound(bodies);
 }

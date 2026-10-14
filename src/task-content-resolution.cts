@@ -40,6 +40,8 @@ import childProcess from 'node:child_process';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { formatDiagnosticToken } = ioMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import capabilityLoaderMod = require('./capability-loader.cjs');
 
 // ─── Result taxonomy ──────────────────────────────────────────────────────────
 
@@ -445,12 +447,25 @@ function resolveTaskContent(input: ResolveTaskContentInput): TaskContentResoluti
   return { kind: TASK_CONTENT_RESULT.RESOLVED, content };
 }
 
+/**
+ * Production capability loader for tracker-id resolution: merged first-party +
+ * validated-installed-overlay registry (ADR-1244 D2), so third-party
+ * `taskContentResolver` declarations are seen.
+ */
+function loadResolverCapabilities(cwd: string): CapabilityLike[] {
+  const registry = capabilityLoaderMod.loadRegistry({ includeInstalled: true, cwd }) as {
+    capabilities?: Record<string, CapabilityLike>;
+  };
+  return Object.values(registry.capabilities ?? {});
+}
+
 const taskContentResolution = {
   TASK_CONTENT_RESULT,
   splitTrackerId,
   findResolver,
   buildInvocation,
   resolveTaskContent,
+  loadResolverCapabilities,
   ResolverAmbiguousError,
   ResolverFailedError,
   ResolverTimeoutError,
