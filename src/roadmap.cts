@@ -1718,6 +1718,10 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
 
 // ─── cmdRoadmapAnnotateDependencies ───────────────────────────────────────────
 
+/** #5321: tags a generated constraints heading so re-runs can tell it from a pre-#5321 one. */
+const GENERATED_MARK = ' <!-- gsd:generated -->';
+const BULLET_RE = /^\s*-\s+/;
+
 /**
  * Annotate the ROADMAP.md plan list for a phase with wave dependency notes
  * and a cross-cutting constraints subsection derived from PLAN frontmatter.
@@ -1829,6 +1833,7 @@ function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | u
 
   // Patch ROADMAP.md
   let updated = false;
+  let skipped: string | undefined;
   withPlanningLock(cwd, () => {
     const content = fs.readFileSync(roadmapPath, 'utf-8');
     // #3413: preserve the file's own EOL style when the checklist block below
@@ -1882,9 +1887,9 @@ function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | u
     // #5321: re-runs rebuild a prior annotation: group 2 swallows generated `**Wave N**` headers
     // only (user prose kept); group 3 the exact constraints header + bullets, never read as plans.
     // Block ends in one blank line (group 3 eats it) so later user bullets survive; legacy blocks
-    // (no trailing blank) absorb a directly-following user bullet once; the exact heading is reserved.
+    // (no marker) keep bullets that are not current shared truths; the exact heading is reserved.
     // eslint-disable-next-line local/no-unbounded-quantifier -- outer `+` has no trailing constraint to force re-partitioning; alternatives start with distinct literals; measured linear to 10.9MB
-    const plansBlockMatch = phaseSection.match(/(?:^|\r?\n)(\*{0,2}Plans\*{0,2}:[^\r\n]*\r?\n)((?:\s*-\s*\[[ x]\][^\r\n]*\r?\n?|\s*\*\*Wave\s+\d+\*\*(?: \*\(blocked on Wave \d+ completion\)\*)?[ \t]*(?:\r?\n|$)(?=\s*-\s*\[[ x]\]))+)(\s*\*\*Cross-cutting constraints:\*\*[ \t]*(?:\r?\n|$)(?:[ \t]*-[ \t]+[^\r\n]*\r?\n?)*(?:[ \t]*\r?\n)?)?/i);
+    const plansBlockMatch = phaseSection.match(/(?:^|\r?\n)(\*{0,2}Plans\*{0,2}:[^\r\n]*\r?\n)((?:\s*-\s*\[[ x]\][^\r\n]*\r?\n?|\s*\*\*Wave\s+\d+\*\*(?: \*\(blocked on Wave \d+ completion\)\*)?[ \t]*(?:\r?\n|$)(?=\s*-\s*\[[ x]\]))+)(\s*\*\*Cross-cutting constraints:\*\*( <!-- gsd:generated -->)?[ \t]*(?:\r?\n|$)(?:[ \t]*-[ \t]+[^\r\n]*\r?\n?)*(?:[ \t]*\r?\n)?)?/i);
     if (!plansBlockMatch) return;
 
     const plansHeader = plansBlockMatch[1];
@@ -1892,6 +1897,19 @@ function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | u
     const listLines = splitLines(existingList).filter(l => /^\s*-\s*\[[ x]\]/i.test(l));
 
     if (listLines.length === 0) return;
+
+    // #5321: a checklist row group 2 rejects (`- [  ]`, `* [ ]`), or an empty generated wave
+    // header, splits the list; rewriting only the prefix would orphan the rest — skip loudly.
+    const stranded = splitLines(phaseSection.slice(plansBlockMatch.index! + plansBlockMatch[0].length))
+      .find(l => !/^\s*(?:\*\*Wave\s+\d+\*\*(?: \*\(blocked on Wave \d+ completion\)\*)?)?[ \t]*$/i.test(l));
+    if (stranded && /^[ \t]*[-*+][ \t]+\[[ \t]*[xX ]?[ \t]*\]/.test(stranded)) {
+      process.stderr.write(
+        `[gsd-tools] WARNING: roadmap annotate-dependencies skipped — unrecognised checklist row `
+        + `"${formatDiagnosticToken(stranded.trim())}" splits the Plans list of phase ${formatDiagnosticToken(String(phaseNum))}.\n`,
+      );
+      skipped = 'unrecognised_checklist_row';
+      return;
+    }
 
     // #314 perf: build a first-wins Map so per-line lookup is O(1) instead of O(plans).
     // First-wins mirrors .find() semantics: if the same planId appears more than once
@@ -1937,11 +1955,23 @@ function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | u
     // Append cross-cutting constraints subsection if any found
     if (crossCuttingTruths.length > 0) {
       annotatedLines.push('');
-      annotatedLines.push('**Cross-cutting constraints:**');
+      annotatedLines.push(`**Cross-cutting constraints:**${GENERATED_MARK}`);
       for (const t of crossCuttingTruths) {
         annotatedLines.push(`- ${t}`);
       }
       annotatedLines.push(''); // #5321: delimiter so user bullets after the block survive re-runs
+    }
+
+    // #5321: a block without the generated marker predates re-runs, so bullets typed right
+    // under it cannot be told apart from generated ones: keep every non-shared bullet.
+    if (plansBlockMatch[3] && !plansBlockMatch[4]) {
+      const shared = new Set(crossCuttingTruths.map(t => t.toLowerCase()));
+      const kept = splitLines(plansBlockMatch[3])
+        .filter(l => BULLET_RE.test(l) && !shared.has(l.replace(BULLET_RE, '').trim().toLowerCase()));
+      if (kept.length > 0) {
+        if (crossCuttingTruths.length === 0) annotatedLines.push('');
+        annotatedLines.push(...kept);
+      }
     }
 
     const newListBlock = joinLines(annotatedLines, eol) + eol;
@@ -1976,7 +2006,8 @@ function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | u
     phase: phaseNum,
     waves: waves.length,
     cross_cutting_constraints: crossCuttingTruths.length,
-  }, raw, updated ? `annotated ${waves.length} wave(s), ${crossCuttingTruths.length} constraint(s)` : 'skipped (already annotated or no plan list)');
+    ...(skipped && { skipped }),
+  }, raw, updated ? `annotated ${waves.length} wave(s), ${crossCuttingTruths.length} constraint(s)` : 'skipped (already up to date or no plan list)');
 }
 
 
