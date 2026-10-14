@@ -5512,6 +5512,13 @@ describe('state planned-phase command', () => {
     }
   });
 
+  test('#5320: planned-phase refusals carry the typed `usage` reason under --json-errors', () => {
+    writeTbdPlanFixture(['Phase: 19', 'Plan: 2 of 4 in current phase', 'Status: Ready']);
+    const r = runGsdTools(['state', 'planned-phase', '--phase', '19', '--name', 'Tbd', '--plans', '1', '--json-errors'], tmpDir);
+    assert.strictEqual(r.success, false);
+    assert.strictEqual(JSON.parse(r.error).reason, 'usage');
+  });
+
   test('#5320: --plans 0 is reported as 0, not ?', () => {
     writeTbdPlanFixture([...TBD_BODY, 'Last Activity Description: x']);
     const r = runGsdTools(['state', 'planned-phase', '--phase', '19', '--name', 'Tbd', '--plans', '0'], tmpDir);
