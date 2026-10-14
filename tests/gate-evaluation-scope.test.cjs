@@ -814,3 +814,64 @@ describe('resolveEvaluationScope — what a scope says when it finds little', ()
     assert.deepEqual(scope.files, ['src/root.js']);
   });
 });
+
+describe('check evaluation-scope — the CLI surface for a coded plan id (#5271 Minor 4)', () => {
+  // The unit tests above prove the RESOLVER answers; the four gates that actually read this are
+  // shell callers branching on `gsd_run check evaluation-scope`, so the exit code and the JSON on
+  // stdout are part of the contract, not an implementation detail of the resolver.
+  const { runTools } = require('./helpers/gsd-tools-cli.cjs');
+
+  function codedRepo() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-scope-cli-'));
+    dirs.push(dir);
+    const git = (...args) => gitOrThrow(args, { cwd: dir, env: { ...process.env, ...IDENTITY } }).trim();
+    git('init', '--initial-branch=main');
+    git('config', 'user.email', 'test@test.io');
+    git('config', 'user.name', 'Test');
+    write(dir, '.planning/config.json', JSON.stringify({ project_code: 'PRJ' }));
+    git('add', '.');
+    git('commit', '-m', 'docs(config): set project_code');
+    return { dir, git };
+  }
+
+  test('a coded id resolves the plan\'s commits and exits 0', () => {
+    const repo = codedRepo();
+    write(repo.dir, 'src/coded.js', 'coded\n');
+    repo.git('add', '.');
+    repo.git('commit', '-m', 'feat(01-01): bare spelling, what the executor writes');
+
+    const res = runTools(['check', 'evaluation-scope', '--plan', 'PRJ-01-01', '--raw'], repo.dir);
+    assert.equal(res.exitCode, 0, `expected exit 0, got ${res.exitCode}: ${res.stderr}`);
+    const payload = JSON.parse(res.stdout);
+    assert.equal(payload.status, 'resolved');
+    assert.equal(payload.reason, null);
+    assert.deepEqual(payload.commits.map((c) => c.subject), ['feat(01-01): bare spelling, what the executor writes']);
+  });
+
+  test('a coded id with no commits is ADVISORY at exit 0, not a silent pass', () => {
+    // The #5271 symptom at the shell: this used to be indistinguishable from "the plan has not
+    // started" for a plan that HAS. The reason must survive to stdout either way.
+    const repo = codedRepo();
+    const res = runTools(['check', 'evaluation-scope', '--plan', 'PRJ-01-09', '--raw'], repo.dir);
+    assert.equal(res.exitCode, 0, `an empty-but-resolved scope is not a failure, got ${res.exitCode}: ${res.stderr}`);
+    const payload = JSON.parse(res.stdout);
+    assert.equal(payload.status, 'resolved');
+    assert.equal(payload.reason, 'no-matching-commits');
+    assert.deepEqual(payload.commits, []);
+  });
+
+  test('an out-of-grammar configured code leaves the coded id LITERAL at the CLI', () => {
+    const repo = codedRepo();
+    write(repo.dir, '.planning/config.json', JSON.stringify({ project_code: 'prj' }));
+    repo.git('add', '.');
+    repo.git('commit', '-m', 'docs(config): lowercase code');
+    write(repo.dir, 'src/bare.js', 'bare\n');
+    repo.git('add', '.');
+    repo.git('commit', '-m', 'feat(01-01): still resolvable by its bare spelling');
+
+    const res = runTools(['check', 'evaluation-scope', '--plan', 'PRJ-01-01', '--raw'], repo.dir);
+    assert.equal(res.exitCode, 0, res.stderr);
+    assert.equal(JSON.parse(res.stdout).reason, 'no-matching-commits',
+      'with no usable configured code the coded id keeps its literal spelling');
+  });
+});
