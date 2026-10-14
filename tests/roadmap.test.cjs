@@ -3509,6 +3509,30 @@ Plans:
       assert.ok(fs.readFileSync(roadmapFile(), 'utf-8').includes('**Wave 9** is deferred'));
     });
 
+    test('standalone **Wave N** heading followed by prose is preserved', () => {
+      const roadmap = ROADMAP4.replace(
+        '- [ ] 01-04-PLAN.md — Four\n',
+        '- [ ] 01-04-PLAN.md — Four\n**Wave 9**\n\nsome prose\n',
+      );
+      tmpDir = makeFour([1, 2, 3, 3], undefined, roadmap);
+      run();
+      run();
+      assert.ok(fs.readFileSync(roadmapFile(), 'utf-8').includes('**Wave 9**\n\nsome prose'));
+    });
+
+    test('user bullet after a generated constraints block survives re-runs', () => {
+      tmpDir = makeFour([1, 1, 2, 2], [['Shared rule'], ['Shared rule'], ['Solo A'], ['Solo B']]);
+      run();
+      const rp = roadmapFile();
+      fs.writeFileSync(rp, fs.readFileSync(rp, 'utf-8').replace('- Shared rule\n', '- Shared rule\n\n- foo\n'), 'utf-8');
+      run();
+      const first = fs.readFileSync(rp, 'utf-8');
+      assert.ok(first.includes('- Shared rule\n\n- foo\n'), 'user bullet kept after blank separator');
+      const out = run();
+      assert.strictEqual(out.updated, false);
+      assert.strictEqual(fs.readFileSync(rp, 'utf-8'), first);
+    });
+
     test('user "**Cross-cutting constraints:** keep X" header and bullets are preserved', () => {
       const roadmap = ROADMAP4.replace(
         '- [ ] 01-04-PLAN.md — Four\n',

@@ -30,7 +30,7 @@ const { stripShippedMilestones, extractCurrentMilestone, extractCurrentMilestone
 import { tokenizeHeadings } from './markdown-sectionizer.cjs';
 import { escapeCell, updateTableCell } from './markdown-table.cjs';
 import { clampPercent } from './phase-lifecycle.cjs';
-import { platformWriteSync } from './shell-command-projection.cjs';
+import { platformWriteSync, contentChangedAfterNormalize } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningPaths, withPlanningLock, findContextMdIn, resolvePhaseIdConvention } = planningWorkspace;
@@ -1881,9 +1881,10 @@ function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | u
     // already phase-sliced content, not the whole file.
     // #5321: re-runs rebuild a prior annotation: group 2 swallows generated `**Wave N**` headers
     // only (user prose kept); group 3 the exact constraints header + bullets, never read as plans.
-    // Known limitation: a user bullet directly after a generated constraints block is absorbed.
+    // Block ends in one blank line (group 3 eats it) so later user bullets survive; legacy blocks
+    // (no trailing blank) absorb a directly-following user bullet once; the exact heading is reserved.
     // eslint-disable-next-line local/no-unbounded-quantifier -- outer `+` has no trailing constraint to force re-partitioning; alternatives start with distinct literals; measured linear to 10.9MB
-    const plansBlockMatch = phaseSection.match(/(?:^|\r?\n)(\*{0,2}Plans\*{0,2}:[^\r\n]*\r?\n)((?:\s*-\s*\[[ x]\][^\r\n]*\r?\n?|\s*\*\*Wave\s+\d+\*\*(?: \*\(blocked on Wave \d+ completion\)\*)?[ \t]*(?:\r?\n|$))+)(\s*\*\*Cross-cutting constraints:\*\*[ \t]*(?:\r?\n|$)(?:[ \t]*-[ \t]+[^\r\n]*\r?\n?)*)?/i);
+    const plansBlockMatch = phaseSection.match(/(?:^|\r?\n)(\*{0,2}Plans\*{0,2}:[^\r\n]*\r?\n)((?:\s*-\s*\[[ x]\][^\r\n]*\r?\n?|\s*\*\*Wave\s+\d+\*\*(?: \*\(blocked on Wave \d+ completion\)\*)?[ \t]*(?:\r?\n|$)(?=\s*-\s*\[[ x]\]))+)(\s*\*\*Cross-cutting constraints:\*\*[ \t]*(?:\r?\n|$)(?:[ \t]*-[ \t]+[^\r\n]*\r?\n?)*(?:[ \t]*\r?\n)?)?/i);
     if (!plansBlockMatch) return;
 
     const plansHeader = plansBlockMatch[1];
@@ -1940,6 +1941,7 @@ function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | u
       for (const t of crossCuttingTruths) {
         annotatedLines.push(`- ${t}`);
       }
+      annotatedLines.push(''); // #5321: delimiter so user bullets after the block survive re-runs
     }
 
     const newListBlock = joinLines(annotatedLines, eol) + eol;
@@ -1963,7 +1965,8 @@ function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | u
     );
 
     const nextContent = content.slice(0, phaseStart) + newPhaseSection + content.slice(phaseEnd);
-    if (nextContent === content) return;
+    // #5321: compare post-normalize (platformWriteSync collapses blank runs), not raw strings.
+    if (!contentChangedAfterNormalize(roadmapPath, content, nextContent)) return;
     platformWriteSync(roadmapPath, nextContent);
     updated = true;
   });
