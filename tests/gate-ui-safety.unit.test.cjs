@@ -68,7 +68,7 @@ const CASES = [
         hasUiFiles: true,
         hasUiSpec: false,
         block: true,
-        message: 'UI files changed in this wave but no UI-SPEC.md exists for Phase 1. Run /gsd:ui-phase 1 to generate the design contract before continuing.',
+        message: 'UI files changed in this wave but no UI-SPEC.md exists for Phase 1. Run /gsd-ui-phase 1 to generate the design contract before continuing.',
         // #5164: the phase records no task commits, so its scope is the widened phase-directory range, and says so.
         scopeStatus: 'degraded',
         scopeReason: 'no-summary',

@@ -204,7 +204,7 @@ describe('evaluateContextDriftGate: the configured policy', () => {
     assert.equal(result.payload.block, true);
     assert.equal(result.payload.action, 'block');
     assert.deepStrictEqual(result.payload.stale_artifacts, ['01-RESEARCH.md']);
-    assert.match(result.payload.message, /^CONTEXT\.md decisions are newer than: 01-RESEARCH\.md\. Regenerate research: \/gsd:plan-phase 1 --research\. /);
+    assert.match(result.payload.message, /^CONTEXT\.md decisions are newer than: 01-RESEARCH\.md\. Regenerate research: \/gsd-plan-phase 1 --research\. /);
   });
 
   test('an unrecognised policy value is read as warn', () => {
@@ -230,8 +230,8 @@ describe('evaluateContextDriftGate: the configured policy', () => {
       artifact(dir, '01-VALIDATION.md', 1000);
     }, ['1']);
     assert.deepStrictEqual(result.payload.stale_artifacts, ['01-RESEARCH.md', '01-PATTERNS.md', '01-VALIDATION.md']);
-    assert.match(result.payload.message, /Regenerate research: \/gsd:plan-phase 1 --research\./);
-    assert.match(result.payload.message, /Regenerate patterns: delete the PATTERNS\.md file, then re-run \/gsd:plan-phase\./);
+    assert.match(result.payload.message, /Regenerate research: \/gsd-plan-phase 1 --research\./);
+    assert.match(result.payload.message, /Regenerate patterns: delete the PATTERNS\.md file, then re-run \/gsd-plan-phase\./);
     assert.match(result.payload.message, /Regenerate or manually reconcile VALIDATION\.md \/ SPEC\.md against the current decisions\./);
     assert.match(result.payload.message, /that carries the staleness forward\.$/);
   });

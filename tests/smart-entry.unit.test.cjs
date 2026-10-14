@@ -6,7 +6,7 @@
  * Spec: docs/superpowers/specs/2026-06-27-gsd-smart-entry-design.md
  *
  * Covers: all 11 situations, priority ordering (paused beats blocked), JSON
- * shape invariants (exactly one recommended, commands are /gsd:* slash forms),
+ * shape invariants (exactly one recommended, commands are /gsd-* slash forms),
  * and the --json / human output modes.
  */
 
@@ -224,7 +224,7 @@ describe('smart-entry: idle-stranded (git-dependent)', () => {
     const actions = smartEntry.actionsFor(situation, forced);
     assert.equal(actions[0].id, 'ship');
     assert.equal(actions[0].recommended, true);
-    assert.equal(actions[0].command, '/gsd:ship');
+    assert.equal(actions[0].command, '/gsd-ship');
   });
 });
 
@@ -387,7 +387,7 @@ describe('smart-entry: in-project advancement delegates to the gated engine', ()
   // is what got the old flat /gsd-next removed (#3054). The specific command
   // (execute-phase / plan-phase / verify-work) stays as an explicit secondary.
   for (const situation of ['planning', 'executing', 'verify-pending']) {
-    test(`${situation}: recommended action is /gsd:progress --next`, () => {
+    test(`${situation}: recommended action is /gsd-progress --next`, () => {
       const signals = {
         current_phase: 2, total_phases: 5, status: situation, progress: 40,
         has_planning: true, has_roadmap: true, git_dirty: false, git_unpushed: false,
@@ -396,19 +396,19 @@ describe('smart-entry: in-project advancement delegates to the gated engine', ()
       const actions = smartEntry.actionsFor(situation, signals);
       const recommended = actions.filter((a) => a.recommended);
       assert.equal(recommended.length, 1, 'exactly one recommended action');
-      assert.equal(recommended[0].command, '/gsd:progress --next');
+      assert.equal(recommended[0].command, '/gsd-progress --next');
     });
   }
 
   // Remediation / lifecycle situations are OFF the linear advance path — they
   // keep direct specific recommendations (their distinct value over --next).
   const DIRECT = {
-    'no-project': '/gsd:new-project',
-    paused: '/gsd:resume-work',
-    blocked: '/gsd:debug',
-    'verify-failed': '/gsd:verify-work',
-    'idle-stranded': '/gsd:ship',
-    complete: '/gsd:new-milestone',
+    'no-project': '/gsd-new-project',
+    paused: '/gsd-resume-work',
+    blocked: '/gsd-debug',
+    'verify-failed': '/gsd-verify-work',
+    'idle-stranded': '/gsd-ship',
+    complete: '/gsd-new-milestone',
   };
   for (const [situation, command] of Object.entries(DIRECT)) {
     test(`${situation}: keeps its direct recommendation (${command})`, () => {
@@ -435,14 +435,14 @@ describe('smart-entry: per-situation action invariants (all 11)', () => {
     paused: false, blockers: [], has_git: true, verify_failed: false, stale_activity: false,
   };
   for (const situation of SITUATIONS) {
-    test(`${situation}: exactly one recommended, 1-4 unique-id /gsd:* actions`, () => {
+    test(`${situation}: exactly one recommended, 1-4 unique-id /gsd-* actions`, () => {
       const actions = smartEntry.actionsFor(situation, sampleSignals);
       assert.ok(actions.length >= 1 && actions.length <= 4, `${situation}: 1-4 actions (got ${actions.length})`);
       assert.equal(actions.filter((a) => a.recommended).length, 1, `${situation}: exactly one recommended`);
       const ids = actions.map((a) => a.id);
       assert.equal(new Set(ids).size, ids.length, `${situation}: action ids are unique`);
       for (const a of actions) {
-        assert.ok(a.command.startsWith('/gsd:'), `${situation}/${a.id}: command is a /gsd: slash form`);
+        assert.ok(a.command.startsWith('/gsd-'), `${situation}/${a.id}: command is a /gsd- slash form`);
       }
     });
   }
@@ -451,7 +451,7 @@ describe('smart-entry: per-situation action invariants (all 11)', () => {
 describe('smart-entry: JSON shape invariants', () => {
   afterEach(removeAll);
 
-  test('every situation yields exactly one recommended action and /gsd:* commands', () => {
+  test('every situation yields exactly one recommended action and /gsd-* commands', () => {
     const dirs = [
       track(makeProject()),                                            // no-project
       track(makeProject({ state: state({ status: 'planning', paused_at: '2026-06-01T00:00:00Z' }), roadmap: true })), // paused
@@ -466,7 +466,7 @@ describe('smart-entry: JSON shape invariants', () => {
       assert.equal(recommended.length, 1, `${result.situation}: exactly one recommended`);
       assert.equal(recommended[0].id, result.recommended, `${result.situation}: recommended id matches`);
       for (const a of result.actions) {
-        assert.ok(a.command.startsWith('/gsd:'), `${result.situation}/${a.id}: command is a slash form`);
+        assert.ok(a.command.startsWith('/gsd-'), `${result.situation}/${a.id}: command is a slash form`);
       }
       assert.ok(result.summary.length > 0, `${result.situation}: summary non-empty`);
       assert.ok(result.actions.length >= 1 && result.actions.length <= 4, `${result.situation}: 1-4 actions`);
@@ -499,7 +499,7 @@ describe('smart-entry: CLI dispatch (gsd-tools smart-entry)', () => {
     const j = JSON.parse(r.stdout);
     assert.equal(j.situation, 'no-project');
     assert.equal(j.recommended, 'new-project');
-    assert.equal(j.actions[0].command, '/gsd:new-project');
+    assert.equal(j.actions[0].command, '/gsd-new-project');
   });
 
   test('default (human) mode prints a plain summary line, not JSON', () => {

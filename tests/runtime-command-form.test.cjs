@@ -16,6 +16,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { cleanup, runGsdTools } = require('./helpers.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const SRC_DIR = path.join(ROOT, 'src');
@@ -27,7 +28,7 @@ const COLON_COMMAND_RE = /\/gsd:(?!section\b)[a-z][a-z-]*/g;
 function colonCommandOffenders(dir, ext, relPrefix) {
   const offenders = [];
   for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(ext))) {
-    const lines = fs.readFileSync(path.join(dir, file), 'utf-8').split('\n');
+    const lines = splitLines(fs.readFileSync(path.join(dir, file), 'utf-8'));
     let inBlockComment = false;
     lines.forEach((line, i) => {
       const trimmed = line.trim();
