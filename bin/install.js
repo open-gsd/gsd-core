@@ -7727,7 +7727,7 @@ function convertClaudeToKiloFrontmatter(content, { isAgent = false, modelOverrid
 function _countOwnedSkillDirs(runtime, configDir, skillsDir) {
   // A verification count fails closed: an unreadable install source must not
   // let a user's gsd-* dir stand in for an install that wrote nothing.
-  const owns = createSkillDirOwnership(runtime, configDir, skillsDir, 'gsd-', { includeManifest: false });
+  const owns = createSkillDirOwnership(runtime, configDir, skillsDir, 'gsd-', { includeManifest: false, includeWritten: true });
   return fs.readdirSync(skillsDir, { withFileTypes: true })
     .filter((e) => e.isDirectory() && e.name.startsWith('gsd-') && (owns(e.name) || USER_OWNED_SKILL_DIRS.includes(e.name)))
     .length;
@@ -10208,7 +10208,7 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
     // unreadable install source from dropping every GSD skill from the manifest
     // by carrying the previous manifest's entries forward instead of recording
     // every gsd-* dir present.
-    const ownsSkillDir = createSkillDirOwnership(runtime, configDir, codexSkillsDir, skillListPrefix, { includeManifest: false, manifestIfSourceUnresolved: true });
+    const ownsSkillDir = createSkillDirOwnership(runtime, configDir, codexSkillsDir, skillListPrefix, { includeManifest: false, manifestIfSourceUnresolved: true, includeWritten: true });
     for (const skillName of listCodexSkillNames(codexSkillsDir, skillListPrefix)) {
       if (!ownsSkillDir(skillName) && !USER_OWNED_SKILL_DIRS.includes(skillName)) continue;
       const skillRoot = path.join(codexSkillsDir, skillName);
@@ -10944,6 +10944,10 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     : hostBehaviorsFor(runtime).localTargetIsProjectRoot
       ? process.cwd()
       : path.join(process.cwd(), dirName);
+
+  // #5161: this install's record of the skill dirs it writes starts empty,
+  // whichever install path it takes.
+  installEngine.clearWrittenSkillDirs();
 
   // #3664: a --config-dir destination holding foreign agent files gets an
   // explicit install-time warning — never a silent Claude-shaped emit.

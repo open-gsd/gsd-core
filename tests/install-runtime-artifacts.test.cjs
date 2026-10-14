@@ -861,6 +861,125 @@ describe('#5161: createSkillDirOwnership first-party set survives a commands-onl
     assert.strictEqual(owns('gsd-mine-5161'), false, 'a dir neither corpus ships stays unowned');
   });
 
+  test('a skill an install wrote from a marker corpus is owned by an includeWritten caller, and only after the write', (t) => {
+    const configDir = createTempDir('gsd-5161-agents-gap-');
+    t.after(() => cleanup(configDir));
+    sandboxHome(t, configDir);
+    // The installed corpus passes a commands-only requirement (its manifest records and hashes every
+    // command) but not commands+agents (it records no agent), so staging an agents-bearing layout
+    // rejects it and takes the `.gsd-source` marker's corpus instead.
+    const installedCommands = path.join(configDir, 'gsd-core', 'commands', 'gsd');
+    fs.mkdirSync(installedCommands, { recursive: true });
+    const installedBody = '---\nname: installed-5161\n---\n';
+    fs.writeFileSync(path.join(installedCommands, 'installed-5161.md'), installedBody);
+    fs.writeFileSync(path.join(configDir, 'gsd-file-manifest.json'), JSON.stringify({
+      files: {
+        'gsd-core/commands/gsd/installed-5161.md': crypto.createHash('sha256').update(installedBody).digest('hex'),
+      },
+    }));
+    const markerCommands = path.join(configDir, 'alt-src', 'commands', 'gsd');
+    fs.mkdirSync(markerCommands, { recursive: true });
+    fs.mkdirSync(path.join(configDir, 'alt-src', 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(markerCommands, 'marker-only-5161.md'), '---\nname: marker-only-5161\n---\n');
+    fs.writeFileSync(path.join(configDir, 'alt-src', 'agents', 'gsd-planner.md'), '---\nname: gsd-planner\n---\n');
+    fs.writeFileSync(path.join(configDir, '.gsd-source'), markerCommands + '\n');
+    const skillsDir = path.join(configDir, 'skills');
+    fs.mkdirSync(skillsDir, { recursive: true });
+
+    const { findInstallSourceRoot } = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
+    assert.strictEqual(findInstallSourceRoot(configDir), installedCommands,
+      'precondition: a commands-only lookup takes the installed corpus, not the marker one');
+    const { clearWrittenSkillDirs } = require('../gsd-core/bin/lib/install-engine.cjs');
+    clearWrittenSkillDirs();
+    const before = ownership('kimi', configDir, skillsDir, 'gsd-', { includeManifest: false, includeWritten: true });
+    assert.strictEqual(before('gsd-marker-only-5161'), false, 'nothing has been written yet, so it owns nothing');
+
+    installRuntimeArtifacts('kimi', configDir, 'global', { name: 'full', skills: '*', agents: '*' });
+    assert.ok(fs.existsSync(path.join(skillsDir, 'gsd-marker-only-5161')), 'precondition: the install wrote the marker corpus skill');
+
+    const owns = ownership('kimi', configDir, skillsDir, 'gsd-', { includeManifest: false, includeWritten: true });
+    assert.strictEqual(owns('gsd-marker-only-5161'), true, 'a skill this install wrote must be owned');
+    assert.strictEqual(owns('gsd-mine-5161'), false, 'a dir no corpus ships stays unowned');
+    // Classified against a config dir no lookup links to the marker corpus, only the record can own it.
+    const unrelated = createTempDir('gsd-5161-unrelated-');
+    t.after(() => cleanup(unrelated));
+    assert.strictEqual(ownership('kimi', unrelated, skillsDir, 'gsd-', { includeManifest: false, includeWritten: true })('gsd-marker-only-5161'), true,
+      'the install recorded the dir it wrote');
+    assert.strictEqual(ownership('kimi', unrelated, skillsDir, 'gsd-', { includeManifest: false })('gsd-marker-only-5161'), false,
+      'a caller that does not opt in (every prune and cleanup) never reads the record');
+  });
+
+  test('installOpencodeFamilySkills records the skill dirs it wrote', (t) => {
+    const configDir = createTempDir('gsd-5161-opencode-written-');
+    t.after(() => cleanup(configDir));
+    writePackageSourceMarkerFixture(configDir);
+    const rawDir = path.join(configDir, 'raw-5161');
+    fs.mkdirSync(rawDir, { recursive: true });
+    fs.writeFileSync(path.join(rawDir, 'written-5161.md'), '---\nname: written-5161\n---\nBody\n');
+    const { clearWrittenSkillDirs } = require('../gsd-core/bin/lib/install-engine.cjs');
+    clearWrittenSkillDirs();
+    installOpencodeFamilySkills('opencode', configDir, rawDir, `${configDir}/`);
+    const skillsDir = path.join(configDir, 'skills');
+    assert.ok(fs.existsSync(path.join(skillsDir, 'gsd-written-5161', 'SKILL.md')), 'precondition: the writer wrote it');
+    const owns = ownership('opencode', configDir, skillsDir, 'gsd-', { includeManifest: false, includeWritten: true });
+    assert.strictEqual(owns('gsd-written-5161'), true, 'a skill dir this writer wrote must be owned');
+    assert.strictEqual(ownership('opencode', configDir, skillsDir, 'gsd-', { includeManifest: false })('gsd-written-5161'), false,
+      'precondition: no first-party lookup reaches the raw dir, so only the record owns it');
+  });
+
+  test('the written-skill record names only written dirs, replaces per dir, resolves its key, and clears', (t) => {
+    const configDir = createTempDir('gsd-5161-record-');
+    t.after(() => cleanup(configDir));
+    const skillsDir = path.join(configDir, 'skills');
+    fs.mkdirSync(skillsDir, { recursive: true });
+    const { recordWrittenSkillDirs, clearWrittenSkillDirs } = require('../gsd-core/bin/lib/install-engine.cjs');
+    const owns = () => ownership('claude', configDir, skillsDir, 'gsd-', { includeManifest: false, includeWritten: true });
+    clearWrittenSkillDirs();
+    recordWrittenSkillDirs(skillsDir + path.sep, ['gsd-a-5161']);
+    assert.strictEqual(owns()('gsd-a-5161'), true, 'a written dir is owned, under a resolved key');
+    assert.strictEqual(owns()('gsd-b-5161'), false, 'a dir the writer did not write is not');
+    recordWrittenSkillDirs(skillsDir, ['gsd-b-5161']);
+    assert.strictEqual(owns()('gsd-a-5161'), false, 'a later write into the same dir replaces its entry');
+    assert.strictEqual(owns()('gsd-b-5161'), true);
+    clearWrittenSkillDirs();
+    assert.strictEqual(owns()('gsd-b-5161'), false, 'clearing empties the record');
+  });
+
+  test('installRuntimeArtifacts starts the written-skill record empty', (t) => {
+    const configDir = createTempDir('gsd-5161-engine-clear-');
+    t.after(() => cleanup(configDir));
+    sandboxHome(t, configDir);
+    const { recordWrittenSkillDirs } = require('../gsd-core/bin/lib/install-engine.cjs');
+    const elsewhere = path.join(configDir, 'earlier-skills');
+    recordWrittenSkillDirs(elsewhere, ['gsd-earlier-5161']);
+    const earlierOwns = () => ownership('claude', configDir, elsewhere, 'gsd-', { includeManifest: false, includeWritten: true })('gsd-earlier-5161');
+    assert.strictEqual(earlierOwns(), true, 'precondition: an earlier install recorded a write');
+    installRuntimeArtifacts('codex', configDir, 'global', RESOLVED_CORE);
+    assert.strictEqual(earlierOwns(), false, 'an earlier install\'s record does not survive into this one');
+  });
+
+  test('a .gsd-source marker naming a root staging refuses (a symlink) owns nothing', (t) => {
+    const configDir = createTempDir('gsd-5161-marker-symlink-');
+    t.after(() => cleanup(configDir));
+    // Unrelated notes reached through a symlink: staging refuses a symlinked root, so nothing in it
+    // can be a corpus this run staged, and a user dir sharing one of its stems must stay unowned.
+    const notes = path.join(configDir, 'notes');
+    fs.mkdirSync(notes, { recursive: true });
+    fs.writeFileSync(path.join(notes, 'user-notes-5161.md'), '# my notes\n');
+    const linked = path.join(configDir, 'linked-src', 'commands');
+    fs.mkdirSync(linked, { recursive: true });
+    fs.symlinkSync(notes, path.join(linked, 'gsd'), 'dir');
+    fs.mkdirSync(path.join(configDir, 'linked-src', 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(configDir, 'linked-src', 'agents', 'gsd-planner.md'), '---\nname: gsd-planner\n---\n');
+    fs.writeFileSync(path.join(configDir, '.gsd-source'), path.join(linked, 'gsd') + '\n');
+    const skillsDir = path.join(configDir, 'skills');
+    fs.mkdirSync(skillsDir, { recursive: true });
+
+    const owns = ownership('kimi', configDir, skillsDir, 'gsd-', { includeManifest: false });
+    assert.strictEqual(owns('gsd-user-notes-5161'), false, 'a stem read through a refused root must not own a user dir');
+    assert.strictEqual(owns('gsd-help'), true, 'precondition: the package corpus is still read');
+  });
+
   test('a source DIRECTORY named like a command is not a first-party stem', (t) => {
     const configDir = createTempDir('gsd-5161-srcdir-');
     t.after(() => cleanup(configDir));

@@ -899,26 +899,55 @@ const USER_OWNED_SKILL_DIRS: readonly string[] = ['gsd-dev-preferences'];
  * cost is a skill first shipped by this release going unrecorded until the
  * next install with a readable source. A prune never needs the flag: it keeps
  * every dir it cannot otherwise prove, and its manifest leg is already on.
+ *
+ * `includeWritten` adds the skill dirs this install wrote into `skillsDir`
+ * (recordWrittenSkillDirs). The first-party lookups can miss the corpus a run
+ * staged: staging resolves its provider under the layout's requirement and the
+ * installed corpus's manifest, so it can take a corpus a `.gsd-source` marker
+ * names that neither lookup reaches, and its skills would then go uncounted
+ * and unrecorded. Only the skill counts and writeManifest pass the flag, since
+ * they must own what the install wrote. Every prune leaves it unset, so the
+ * record never widens what is deleted.
  */
+const writtenSkillDirs = new Map<string, Set<string>>();
+
+/**
+ * Record the skill dirs a writer just wrote into `skillsDir`, replacing that
+ * dir's entry. Called only once the write has returned, so a writer that threw
+ * records nothing.
+ */
+function recordWrittenSkillDirs(skillsDir: string, names: Iterable<string>): void {
+  writtenSkillDirs.set(path.resolve(skillsDir), new Set(names));
+}
+
+/** Start an install's record empty, so no earlier install's writes are read. */
+function clearWrittenSkillDirs(): void {
+  writtenSkillDirs.clear();
+}
+
 function createSkillDirOwnership(
   runtime: string,
   configDir: string,
   skillsDir: string,
   prefix: string,
-  opts: { includeManifest?: boolean; manifestIfSourceUnresolved?: boolean; manifestPrefix?: string } = {},
+  opts: { includeManifest?: boolean; manifestIfSourceUnresolved?: boolean; manifestPrefix?: string; includeWritten?: boolean } = {},
 ): (name: string) => boolean {
   // First-party stems come from BOTH the configDir-resolved source and the
   // executing package's own source. Staging resolves its provider with the
   // commands+agents requirement while a commands-only lookup can accept a
   // different provider (a commands-only `.gsd-source` marker), so either root
-  // alone can miss the corpus this run actually staged. Both are GSD corpora,
-  // so the union only ever widens what GSD owns.
+  // alone can miss the corpus the run staged. Both are GSD corpora, so the
+  // union only ever widens what GSD owns.
   const firstParty = new Set<string>();
   let sourceResolved = false;
   let lastError: unknown = null;
-  for (const lookupDir of [configDir, undefined]) {
+  const roots: Array<() => string> = [
+    () => runtimeArtifactLayout.findInstallSourceRoot(configDir),
+    () => runtimeArtifactLayout.findInstallSourceRoot(undefined),
+  ];
+  for (const root of roots) {
     try {
-      const commandsGsdDir = runtimeArtifactLayout.findInstallSourceRoot(lookupDir);
+      const commandsGsdDir = root();
       // A regular `.md` file only — the filter every skills writer stages
       // with. A source counts as resolved only once it yields a stem.
       for (const entry of installFs().readdirSync(commandsGsdDir, { withFileTypes: true })) {
@@ -948,9 +977,11 @@ function createSkillDirOwnership(
       if (slash > 0) manifestNames.add(rest.slice(0, slash));
     }
   }
+  const written = opts.includeWritten === true ? writtenSkillDirs.get(path.resolve(skillsDir)) : undefined;
   return (name: string): boolean =>
     firstParty.has(name) ||
     manifestNames.has(name) ||
+    written?.has(name) === true ||
     installFs().existsSync(path.join(skillsDir, name, installProfiles.CAPABILITY_SKILL_MARKER));
 }
 
@@ -1347,6 +1378,8 @@ function installRuntimeArtifacts(
   deps: { fs?: any; os?: any; env?: Record<string, string | undefined>; packageRoot?: string } = {},
 ): any {
   return withInstallFs(deps.fs, (): any => {
+    // #5161: this install's record of the skill dirs it writes starts empty.
+    clearWrittenSkillDirs();
     const layout = runtimeArtifactLayout.resolveRuntimeArtifactLayout(
       runtime,
       configDir,
@@ -1540,6 +1573,11 @@ function installRuntimeArtifacts(
             (name) => !USER_OWNED_SKILL_DIRS.includes(name) && (stagedNames.has(name) || ownsSkillDir(name)));
           _warnPreservedSkillDirs(dest, notOwned);
           _copyStaged(item.sourceDir, dest, kind, configDir, runtime);
+          // The dirs _copyStaged just wrote: each directory child of the stage.
+          recordWrittenSkillDirs(dest, installFs().existsSync(item.sourceDir)
+            ? installFs().readdirSync(item.sourceDir, { withFileTypes: true })
+              .filter((e: any) => e.isDirectory()).map((e: any) => e.name)
+            : []);
 
           // Restore user-owned dirs after the prune+copy — only one a prune
           // branch that does not consult `owns` actually removed. Writing over
@@ -1736,6 +1774,7 @@ function installOpencodeFamilySkills(
   );
 
   let count = 0;
+  const written = new Set<string>();
   const firstPartyStems = new Set<string>();
   for (const entry of installFs().readdirSync(rawDir, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
@@ -1749,6 +1788,7 @@ function installOpencodeFamilySkills(
     const skillDir = path.join(dest, skillName);
     installFs().mkdirSync(skillDir, { recursive: true });
     installFs().writeFileSync(path.join(skillDir, 'SKILL.md'), content);
+    written.add(skillName);
     count++;
   }
 
@@ -1799,6 +1839,7 @@ function installOpencodeFamilySkills(
       // capability is uninstalled/unsurfaced and no longer appears in any
       // registry view.
       installFs().writeFileSync(path.join(skillDir, installProfiles.CAPABILITY_SKILL_MARKER), found.capId + '\n', 'utf8');
+      written.add(skillName);
       count++;
     }
   }
@@ -1809,6 +1850,7 @@ function installOpencodeFamilySkills(
     if (!installFs().existsSync(path.join(dest, dirName))) _restoreDir(path.join(dest, dirName), snap);
   }
 
+  recordWrittenSkillDirs(dest, written);
   return count;
 }
 
@@ -2401,6 +2443,8 @@ export = {
   _runLegacyUninstallCleanup,
   _removeGsdEntries,
   createSkillDirOwnership,
+  recordWrittenSkillDirs,
+  clearWrittenSkillDirs,
   _warnPreservedSkillDirs,
   USER_OWNED_SKILL_DIRS,
   _snapshotDir,
