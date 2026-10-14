@@ -115,19 +115,19 @@ export const KNOWN_REVIEWER_SLUGS: ReadonlyArray<string> = (() => {
   }
 })();
 
+type LaneAliases = { slug: string; flags: ReadonlyArray<string> };
+
 /**
  * #5359: map a lane flag alias (`agy` for `--agy`) to its canonical slug via the
  * descriptor roster's declared `flags` (same source as `review-lane explicit-from-argv`).
  * Guarded like KNOWN_REVIEWER_SLUGS: a load failure degrades to the plain error.
  */
-function laneSlugForAlias(name: string): string | undefined {
+function laneSlugForAlias(name: string, lanes?: ReadonlyArray<LaneAliases>): string | undefined {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { REVIEWER_LANES } = require('./review-lane-descriptor.cjs') as {
-      REVIEWER_LANES: ReadonlyArray<{ slug: string; flags: string[] }>;
-    };
+    const roster = lanes ?? (require('./review-lane-descriptor.cjs') as { REVIEWER_LANES: ReadonlyArray<LaneAliases> }).REVIEWER_LANES;
     // `l.slug !== name`: an undetected canonical slug (`--codex` flag) is not an alias.
-    return REVIEWER_LANES.find((l) => l.slug !== name && l.flags.includes(`--${name}`))?.slug;
+    return roster.find((l) => l.slug !== name && l.flags.includes(`--${name}`))?.slug;
   } catch {
     return undefined;
   }
@@ -164,6 +164,8 @@ export interface ResolvedReviewer {
 export interface ReviewerSelectionInput {
   detected?: unknown[];
   explicitFlags?: unknown[];
+  /** Lane roster (first-party + overlays) for alias lookup; default = first-party only. */
+  lanes?: ReadonlyArray<LaneAliases>;
   allFlag?: unknown;
   configuredDefaultReviewers?: unknown;
   /** #1517: the `review.reviewer_instances` config object. */
@@ -334,7 +336,7 @@ export function resolveReviewerSelection(
     // Sorted so the error order does not depend on flag order on the command line.
     const missing = [...explicitFlags].filter((slug) => !detected.has(slug)).sort();
     for (const slug of missing) {
-      const canonical = laneSlugForAlias(slug);
+      const canonical = laneSlugForAlias(slug, input.lanes);
       errors.push(
         canonical
           ? `explicit reviewer '${slug}' is a flag alias; pass its canonical slug '${canonical}'`

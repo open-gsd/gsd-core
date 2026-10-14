@@ -1945,7 +1945,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       const dispatchResult = await dispatchReviewerLanes(
         {
           trait,
-          selection: { explicitFlags, detected: rosterSlugs },
+          selection: { explicitFlags, detected: rosterSlugs, lanes: mergedLanes },
           repoRoot,
           paths,
           depth,

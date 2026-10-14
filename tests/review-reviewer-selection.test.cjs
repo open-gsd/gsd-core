@@ -202,6 +202,12 @@ describe('resolveReviewerSelection — explicit flags are an assertion (ADR-2782
     assert.ok(r.errors.includes("explicit reviewer 'agy' is a flag alias; pass its canonical slug 'antigravity'"), r.errors.join('|'));
   });
 
+  test('an overlay lane alias resolves via the caller-supplied roster (#5359)', () => {
+    const lanes = [{ slug: 'agy-revisor', flags: ['--agy-revisor', '--revisor'] }];
+    const r = resolveReviewerSelection({ detected: ['agy-revisor'], explicitFlags: ['revisor'], lanes });
+    assert.ok(r.errors.includes("explicit reviewer 'revisor' is a flag alias; pass its canonical slug 'agy-revisor'"), r.errors.join('|'));
+  });
+
   test('an undetected canonical slug keeps the plain not-available error (#5359)', () => {
     const r = resolveReviewerSelection({ detected: ['gemini'], explicitFlags: ['antigravity'] });
     assert.deepStrictEqual(r.errors.filter((e) => e.includes("'antigravity'")), [
