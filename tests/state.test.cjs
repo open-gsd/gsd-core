@@ -5494,6 +5494,29 @@ describe('state planned-phase command', () => {
     const second = runGsdTools(args, tmpDir);
     assert.ok(second.success, `second run must exit 0: ${second.error}`);
   });
+
+  test('#5320: invalid --plans reports the validation message, not a crash', () => {
+    writeTbdPlanFixture(TBD_BODY);
+    const r = runGsdTools(['state', 'planned-phase', '--phase', '19', '--name', 'Tbd', '--plans', '3.5'], tmpDir);
+    assert.strictEqual(r.success, false);
+    assert.match(r.error, /Expected a non-negative integer/);
+  });
+
+  test('#5320: same phase in prose or zero-padded form keeps the recorded plan number', () => {
+    for (const phaseLine of ['Phase: Phase 1', 'Phase: 01', 'Phase: 01 (Tbd) — EXECUTING']) {
+      writeTbdPlanFixture([phaseLine, 'Plan: 2 of 4 in current phase', 'Status: Ready']);
+      const r = runGsdTools(['state', 'planned-phase', '--phase', '1', '--name', 'Tbd', '--plans', '6'], tmpDir);
+      assert.ok(r.success, `${phaseLine}: ${r.error}`);
+      assert.match(fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8'), /^Plan: 2 of 6 in current phase$/m, phaseLine);
+    }
+  });
+
+  test('#5320: --plans 0 is reported as 0, not ?', () => {
+    writeTbdPlanFixture([...TBD_BODY, 'Last Activity Description: x']);
+    const r = runGsdTools(['state', 'planned-phase', '--phase', '19', '--name', 'Tbd', '--plans', '0'], tmpDir);
+    assert.ok(r.success, r.error);
+    assert.match(fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8'), /— 0 plans ready/);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -22,6 +22,8 @@ import { tokenizeHeadings, withSection } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
 import { deriveProgressFromRoadmap, clampPercent, clampPercentFromFraction, renderProgressBar } from './phase-lifecycle.cjs';
 import { escapeRegex } from './pattern.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseIdMod = require('./phase-id.cjs');
 // #4129: the completion-ratio kernel for the resync-arm ratchet's percent
 // (planning-scope's SCOPE — state-document's own dependency, no cycle here:
 // state-document never imports this module).
@@ -2452,7 +2454,7 @@ function plannedPhaseCore(
   const ladResult = stateReplaceField(
     body,
     'Last Activity Description',
-    `Phase ${intent.phaseNumber} planning complete — ${intent.planCount || '?'} plans ready`,
+    `Phase ${intent.phaseNumber} planning complete — ${intent.planCount ?? '?'} plans ready`,
   );
   if (ladResult) {
     body = ladResult;
@@ -2480,7 +2482,7 @@ function plannedPhaseCore(
   // `N of M` from either spelling (#3784 hybrid for `Current Plan:`). A replan
   // keeps the recorded leading N and moves only M; anything else starts at 0.
   // The recorded N carries over only for the SAME phase (`Phase:` leading token).
-  const samePhase = (stateExtractField(posBefore, 'Phase') ?? '').trim().split(/\s/)[0] === String(intent.phaseNumber).trim();
+  const samePhase = phaseIdMod.phaseKeyFromProse(stateExtractField(posBefore, 'Phase')) === phaseIdMod.phaseKeyFromToken(intent.phaseNumber);
   const below: { n?: number } = {};
   const planValue = (name: string): string | undefined => {
     if (intent.planCount == null) return undefined;
