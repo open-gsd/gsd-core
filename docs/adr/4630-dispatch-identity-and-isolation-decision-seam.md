@@ -133,6 +133,18 @@ reported against. The hold is consulted on every plain query, including one that
 itself; writing that `none` as `resolver` would re-own the caller's record, and on a repository
 where both degrades apply the caller's decision would be lost when HEAD caught up.
 
+**A held decision is also the query's answer.** A plain query that holds a record prints its
+`none`, with no `harnessFlag` or `exec`, and marks it `held: true` under `--json`, so the guard
+and the workflow read one decision rather than two. A dispatch site therefore tells a held
+`none` (follow it: run sequentially) from a host that declares no primitive (fail closed) by
+that field. It still re-records its final `none`, at its own scope: the guard judges a
+dispatch against the record present at that instant, and a held record can name another phase
+or plan, or lapse before the site dispatches. Each gate that follows a hold therefore renews it,
+which errs toward sequential dispatch. The host's *descriptors* — the harness flag and the orchestrator exec — are not
+decisions and are read from `inspect-dispatch-isolation`, which records nothing and holds
+nothing; read through the deciding query, a degrade recorded for one plan would answer for
+another plan's dispatch.
+
 **An absent field reads as `caller`**, and so does any value other than `resolver`. The
 case this covers is a record written by a pre-Phase-2 `gsd-tools` still in flight during an
 upgrade, and the default is chosen by the cost of being wrong in each direction: holding a

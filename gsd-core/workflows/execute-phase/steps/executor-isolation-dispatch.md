@@ -29,9 +29,14 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 # as references/dispatch-isolation-gate.md does — this site declares that gate
 # canonical, so it must not carry the older collapsing shape. Both outcomes fail
 # closed, which is right, but only one of them may claim the host declared no
-# primitive (#2652 review).
-_ISOLATION_RAW=$(gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}" 2>/dev/null)
+# primitive (#2652 review). The decision and whether it is HELD (a degrade an
+# earlier step recorded, reported as `none` with `held: true`) come from ONE call,
+# exactly as in the gate's own block.
+_ISOLATION_JSON=$(gsd_run query dispatch-isolation --json --phase "${PHASE_NUMBER:-}" 2>/dev/null)
 _ISOLATION_RC=$?
+_ISOLATION_FIELDS=$(printf '%s' "$_ISOLATION_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write((j&&typeof j.isolation==="string"&&/^[a-z-]+$/.test(j.isolation)?j.isolation:"")+" "+(j&&j.held===true?"held":"live"))}catch{process.stdout.write(" live")}})')
+_ISOLATION_RAW=${_ISOLATION_FIELDS% *}
+_ISOLATION_HELD=${_ISOLATION_FIELDS##* }
 if [ $_ISOLATION_RC -ne 0 ] || [ -z "$_ISOLATION_RAW" ]; then
   ISOLATION=none
   ISOLATION_RESOLVED=false      # fail closed, but we did NOT learn a verdict
@@ -43,6 +48,13 @@ case "$ISOLATION" in
   harness-worktree|orchestrator-worktree|none) ;;
   *) ISOLATION=none; ISOLATION_RESOLVED=false ;;   # out of vocabulary is not a verdict either
 esac
+
+# A HELD `none` is a degrade an earlier step of this run recorded for this phase,
+# not a capability verdict: run the wave sequentially instead of failing closed.
+if [ "$ISOLATION" = "none" ] && [ "$ISOLATION_RESOLVED" = "true" ] && [ "$_ISOLATION_HELD" = "held" ]; then
+  echo "⚠ Dispatch isolation is held at none: an earlier step of this run degraded phase ${PHASE_NUMBER:-} to sequential dispatch within the last 10 minutes. Running its plans sequentially." >&2
+  USE_WORKTREES=false
+fi
 
 # Project-level opt-out wins on every host; a host with no primitive fails closed.
 [ "$USE_WORKTREES" = "false" ] && ISOLATION=none
@@ -87,13 +99,15 @@ fi
 # base-check auto-degrade) is a legitimate ISOLATION=none outcome the guards
 # must not treat as a bypass. Best-effort: a write failure here must never
 # fail the wave — the guards' own sentinel-absent fallback is safe, just less
-# precise.
+# precise. A HELD `none` is re-recorded too, for the reason the gate's own
+# block gives: the guard reads the record at dispatch time, and the held one
+# can name another plan or expire before this wave dispatches.
 gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}" --force-isolation "$ISOLATION" >/dev/null 2>&1 || true
 ```
 
 `ISOLATION` — not `RUNTIME` — selects how the wave fans out. These three values are the only
 branch points; **never add a `RUNTIME = "codex"` test to the scheduler.** The per-host
-invocation detail is descriptor data, surfaced by `dispatch-isolation --json` as
+invocation detail is descriptor data, surfaced by `inspect-dispatch-isolation --json` as
 `harnessFlag` / `exec`.
 
 | `ISOLATION` | Fan-out | What the scheduler does |
@@ -112,13 +126,13 @@ both degrade to `none` rather than dispatching executors that only believe they 
 Read the flag once before dispatching; it is descriptor data, never hardcoded per runtime:
 
 ```bash
-# #3045 CORE REDESIGN: `dispatch-isolation --json` already resolves and
-# atomically records `harnessFlag` together with `isolation` and `phase` in
-# ONE write, as a side effect of this same call (routeDispatchIsolation,
-# gsd-core/bin/gsd-tools.cjs) — there is no separate "now also record the
-# flag" step, and therefore no flagless window between recording the mode and
-# recording the flag.
-HARNESS_FLAG=$(gsd_run query dispatch-isolation --json --phase "${PHASE_NUMBER:-}" 2>/dev/null \
+# The flag is the host's DESCRIPTOR, so it is read from the sentinel-free
+# `inspect-dispatch-isolation`. The re-record above already wrote it into the
+# sentinel with the mode (#3045: a forced `harness-worktree` keeps the host's
+# flag), so this read records nothing. A plain `query dispatch-isolation`
+# here would hold a per-plan degrade step 2.5 recorded for another plan of
+# this wave and answer `none` with no flag (#4904), stopping the whole wave.
+HARNESS_FLAG=$(gsd_run query inspect-dispatch-isolation --json 2>/dev/null \
   | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(j&&j.harnessFlag?j.harnessFlag:"")}catch{process.stdout.write("")}})')
 [ -n "$HARNESS_FLAG" ] || { echo "FATAL: runtime declares dispatch.isolation=harness-worktree but no harnessIsolationFlag — refusing to dispatch executors that would believe they are isolated." >&2; exit 1; }
 ```
@@ -319,8 +333,10 @@ CREATE_JSON=$(gsd_run query worktree.create \
 
 # 2. Resolve the host's headless-exec argv for that worktree. Descriptor
 #    data — command, args, cwd flag and prompt flag all come from the
-#    capability descriptor, so no host is named here.
-EXEC_JSON=$(gsd_run query dispatch-isolation --json \
+#    capability descriptor, so no host is named here. Read from the
+#    sentinel-free inspect verb: a plain `query dispatch-isolation` would
+#    hold a degrade another plan recorded and answer exec:null (#4904).
+EXEC_JSON=$(gsd_run query inspect-dispatch-isolation --json \
   --cwd-target "$WT_PATH" \
   --prompt "$EXECUTOR_PROMPT")
 
