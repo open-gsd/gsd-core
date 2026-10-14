@@ -1860,10 +1860,6 @@ function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | u
     const phaseEnd = nextPhaseOffset >= 0 ? phaseStart + 1 + nextPhaseOffset : content.length;
     const phaseSection = content.slice(phaseStart, phaseEnd);
 
-    // #5321: no early-return on existing annotations — group 2 below swallows a prior
-    // annotation (wave headers + cross-cutting block) so replans rebuild it from scratch;
-    // an unchanged result is caught by the `nextContent === content` no-write check.
-
     // Find the Plans: section within the phase section.
     // #3691 Bug 1: `Plans:\s*\n` required no text after the colon, missing variants like
     // `Plans: 3 plans across 2 waves\n` or `**Plans:** 3 plans\n` (bold-wrapped).
@@ -1883,12 +1879,9 @@ function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | u
     // it accepts the first complete parse and stops, which rules out the #2128-class
     // ambiguous-boundary blowup despite the nested-quantifier shape. Non-global match on
     // already phase-sliced content, not the whole file.
-    // #5321: group 2 also swallows a previous annotation's generated `**Wave N**` header lines
-    // (exact generated form only; user prose such as `**Wave 9** is deferred` is kept). Group 3
-    // captures an exact `**Cross-cutting constraints:**` header + its bullets and is never parsed as
-    // plans. Alternatives start with distinct literals (`-` vs `**Wave`), so the ambiguity profile
-    // above is unchanged. Known limitation: a user bullet directly after a generated constraints
-    // block is indistinguishable and gets absorbed.
+    // #5321: re-runs rebuild a prior annotation: group 2 swallows generated `**Wave N**` headers
+    // only (user prose kept); group 3 the exact constraints header + bullets, never read as plans.
+    // Known limitation: a user bullet directly after a generated constraints block is absorbed.
     // eslint-disable-next-line local/no-unbounded-quantifier -- outer `+` has no trailing constraint to force re-partitioning; alternatives start with distinct literals; measured linear to 10.9MB
     const plansBlockMatch = phaseSection.match(/(?:^|\r?\n)(\*{0,2}Plans\*{0,2}:[^\r\n]*\r?\n)((?:\s*-\s*\[[ x]\][^\r\n]*\r?\n?|\s*\*\*Wave\s+\d+\*\*(?: \*\(blocked on Wave \d+ completion\)\*)?[ \t]*(?:\r?\n|$))+)(\s*\*\*Cross-cutting constraints:\*\*[ \t]*(?:\r?\n|$)(?:[ \t]*-[ \t]+[^\r\n]*\r?\n?)*)?/i);
     if (!plansBlockMatch) return;

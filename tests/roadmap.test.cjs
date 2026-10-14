@@ -3479,6 +3479,8 @@ Plans:
       run();
       const roadmap = fs.readFileSync(roadmapFile(), 'utf-8');
       assert.strictEqual((roadmap.match(/\*\*Wave \d+\*\*/g) || []).length, 4);
+      assert.ok(!roadmap.includes('\r'), 'no stray CR');
+      assert.ok(!/\n\n\n/.test(roadmap), 'no duplicate blank lines');
     });
 
     for (const truth of ['[Invariant] x', '[ ] x', '[x] x']) {
