@@ -13543,11 +13543,10 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     : localCmd('gsd-check-update.js');
   // #4840: no metrics writer on this host -> no monitor to register (see runtimeSupportsContextWarnings).
   const contextWarnings = runtimeSupportsContextWarnings(runtime);
-  const contextMonitorCommand = !contextWarnings
-    ? null
-    : (isGlobal
-      ? buildHookCommand(targetDir, 'gsd-context-monitor.js', hookOpts)
-      : localCmd('gsd-context-monitor.js'));
+  // The command stays built: the extended lifecycle events (SubagentStop, PreCompact, ...) still route to it.
+  const contextMonitorCommand = isGlobal
+    ? buildHookCommand(targetDir, 'gsd-context-monitor.js', hookOpts)
+    : localCmd('gsd-context-monitor.js');
   const promptGuardCommand = isGlobal
     ? buildHookCommand(targetDir, 'gsd-prompt-guard.js', hookOpts)
     : localCmd('gsd-prompt-guard.js');
@@ -13568,7 +13567,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // entries to settings.json (which the runtime's hook schema would reject).
   const anyJsHookCommandNull = !statuslineCommand
     || !updateCheckCommand
-    || (contextWarnings && !contextMonitorCommand)
+    || !contextMonitorCommand
     || !promptGuardCommand
     || !readGuardCommand
     || !readInjectionScannerCommand;

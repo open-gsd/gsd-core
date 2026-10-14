@@ -54,6 +54,16 @@ function hooksReferencing(settings, needle) {
   return found;
 }
 
+// The extended lifecycle events (#772, #2098) route to the same file for the PreCompact reset and the
+// SubagentStop envelope handling; only the tool-completion registration emits warnings.
+// Hook timeout (seconds) the installer writes for the monitor; a settings.json field, not a subprocess budget.
+const MONITOR_HOOK_TIMEOUT_SECONDS = 10;
+const LIFECYCLE_EVENTS = new Set(['SubagentStop', 'Stop', 'PreCompact', 'SubagentStart']);
+
+function warningEvents(settings) {
+  return hooksReferencing(settings, 'gsd-context-monitor.js').filter((e) => !LIFECYCLE_EVENTS.has(e));
+}
+
 function fresh() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4840-home-'));
   return { home, configDir: path.join(home, 'cfg') };
@@ -66,12 +76,12 @@ describe('#4840: the context monitor is registered only where a metrics writer i
       t.after(() => cleanup(dirs.home));
       install(runtime, dirs);
       const settings = JSON.parse(fs.readFileSync(path.join(dirs.configDir, 'settings.json'), 'utf-8'));
-      const monitorEvents = hooksReferencing(settings, 'gsd-context-monitor.js');
+      const monitorEvents = warningEvents(settings);
       const writerInstalled = !!(settings.statusLine && String(settings.statusLine.command).includes('gsd-statusline.js'));
       if (runtime === 'claude') {
         assert.ok(monitorEvents.includes('PostToolUse'), 'claude has the statusline writer, so the monitor must stay registered on PostToolUse');
       } else {
-        assert.deepEqual(monitorEvents, [], `${runtime} has no context metrics writer, so no event may register the monitor`);
+        assert.deepEqual(monitorEvents, [], `${runtime} has no context metrics writer, so no tool event may register the monitor`);
       }
       if (monitorEvents.length > 0) {
         assert.ok(
@@ -88,7 +98,9 @@ describe('#4840: the context monitor is registered only where a metrics writer i
       t.after(() => cleanup(dirs.home));
       install(runtime, dirs);
       const toml = fs.readFileSync(path.join(dirs.home, dirName, 'config.toml'), 'utf-8');
-      assert.ok(!toml.includes('gsd-context-monitor.js'), `${runtime} config.toml must not register gsd-context-monitor.js`);
+      const postToolUse = toml.split('[[hooks]]').filter((b) => b.includes('event = "PostToolUse"'));
+      assert.ok(postToolUse.length > 0, 'sanity: other PostToolUse hooks are still registered');
+      assert.ok(postToolUse.every((b) => !b.includes('gsd-context-monitor.js')), `${runtime} config.toml must not register gsd-context-monitor.js on PostToolUse`);
     });
   }
 
@@ -112,7 +124,7 @@ describe('#4840: the context monitor is registered only where a metrics writer i
     settings.hooks.PostToolUse = settings.hooks.PostToolUse || [];
     settings.hooks.PostToolUse.push({
       matcher: 'Bash',
-      hooks: [{ type: 'command', command: `node "${path.join(dirs.configDir, 'hooks', 'gsd-context-monitor.js')}"`, timeout: 10 }],
+      hooks: [{ type: 'command', command: `node "${path.join(dirs.configDir, 'hooks', 'gsd-context-monitor.js')}"`, timeout: MONITOR_HOOK_TIMEOUT_SECONDS }],
     });
     settings.hooks.PostToolUse.push({ matcher: 'Bash', hooks: [{ type: 'command', command: 'echo my-own-hook' }] });
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
@@ -120,7 +132,7 @@ describe('#4840: the context monitor is registered only where a metrics writer i
     install('qwen', dirs);
 
     const after = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-    assert.deepEqual(hooksReferencing(after, 'gsd-context-monitor.js'), [], 'the stale managed registration must be removed');
+    assert.deepEqual(warningEvents(after), [], 'the stale managed registration must be removed');
     assert.deepEqual(hooksReferencing(after, 'echo my-own-hook'), ['PostToolUse'], 'a user-authored hook must survive');
   });
 });

@@ -209,11 +209,14 @@ As a brief reference: the statusline hook registers as `statusLine` in `settings
 
 The monitor only works on a host that also installs the statusline hook, because
 the statusline is the sole writer of the bridge file. GSD wires that writer for
-Claude Code alone, so Claude Code is the only host that registers the monitor.
-Every other host declares `context-warnings` unsupported in its capability
+Claude Code alone, so Claude Code is the only host that registers the monitor
+on the tool-completion event (`PostToolUse` / `AfterTool`), the registration
+that emits warnings. The extended lifecycle events some hosts declare
+(`SubagentStop`, `Stop`, `PreCompact`, `SubagentStart`) keep their existing
+wiring. Every other host declares `context-warnings` unsupported in its capability
 descriptor (`hostBehaviors.unsupportedFeatures`) — Codex, Antigravity, Augment,
 CodeBuddy, Hermes, Qwen, Kimi and Kimi Code — and the installer does not register
-the monitor there: a registered monitor with no writer would fire on every tool
+the tool-event monitor there: a registered monitor with no writer would fire on every tool
 event, find no file and exit silently, with nothing to tell the user it can never
 warn. Reinstalling on such a host removes a monitor registration left by an
 earlier install and leaves any hook you wrote yourself in place. The install log
@@ -222,7 +225,7 @@ bridge writer and dropping the declaration.
 
 The debounce counter (`callsSinceWarn`, written on `PreCompact`) is a
 read-modify-write that assumes one session's hooks run one at a time. That is
-verified for Claude Code, the only host the monitor is registered on; it is the
+verified for Claude Code, the only host the tool-event monitor is registered on; it is the
 reason the assumption does not need to hold for other hosts, and a host that
 later gains the monitor must verify it first.
 - A compaction is never blocked by this hook: if the per-session state cannot be

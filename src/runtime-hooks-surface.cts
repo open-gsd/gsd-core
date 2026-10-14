@@ -2810,14 +2810,6 @@ function applySettingsJsonHookTables(settings: any, opts: ApplySettingsJsonHooks
   const runtimeLabel = _capabilityTitle(runtime);
   for (const row of tables.extendedRows) {
     if (!extendedEvents.includes(row.event)) continue;
-    if (row.file === CONTEXT_MONITOR_HOOK && opts.contextWarnings === false) {
-      const stale: any[] | undefined = settings.hooks[row.event];
-      if (Array.isArray(stale) && stripManagedHookRegistrations(stale, hookStem(row.file))) {
-        console.log(`  ${green}✓${reset} Removed stale ${row.event} context monitor hook (${runtimeLabel} has no context metrics writer, #4840)`);
-        if (stale.length === 0) delete settings.hooks[row.event];
-      }
-      continue;
-    }
     if (!Array.isArray(settings.hooks[row.event])) {
       settings.hooks[row.event] = [];
     }
@@ -2916,8 +2908,6 @@ function buildKimiHookEntryToml(spec: KimiHookEntrySpec): string | null {
 function buildKimiHooksTomlBlock(targetDir: string, opts: { hookOpts: BuildHookCommandOpts; contextWarnings?: boolean }): string | null {
   const { hookOpts } = opts;
   const cmd = (hookName: string): string | null => {
-    // #4840: no metrics writer on kimi, so the monitor is never written (a block from an earlier install is replaced wholesale).
-    if (hookName === CONTEXT_MONITOR_HOOK && opts.contextWarnings === false) return null;
     if (!fs.existsSync(path.join(targetDir, 'hooks', hookName))) return null;
     return buildHookCommand(targetDir, hookName, hookOpts);
   };
@@ -2937,7 +2927,8 @@ function buildKimiHooksTomlBlock(targetDir: string, opts: { hookOpts: BuildHookC
     { event: 'PreToolUse', command: cmd('gsd-validate-commit.sh'), matcher: 'Shell', timeout: kimiBlockingGuardTimeout('gsd-validate-commit.sh') },
 
     // PostToolUse
-    { event: 'PostToolUse', command: cmd('gsd-context-monitor.js'), timeout: 10 },
+    // #4840: no metrics writer on kimi, so the warning registration is skipped (a block from an earlier install is replaced wholesale).
+    { event: 'PostToolUse', command: opts.contextWarnings === false ? null : cmd('gsd-context-monitor.js'), timeout: 10 },
     { event: 'PostToolUse', command: cmd('gsd-phase-boundary.sh'), matcher: 'WriteFile|StrReplaceFile', timeout: 5 },
     { event: 'PostToolUse', command: cmd('gsd-read-injection-scanner.js'), matcher: 'ReadFile', timeout: 5 },
     { event: 'PostToolUse', command: cmd('gsd-graphify-update.sh'), matcher: 'Shell', timeout: 5 },

@@ -72,6 +72,7 @@ module.exports = {
   "tests/config.platform.test.cjs",
   "tests/configured-entrypoint-validation.test.cjs",
   "tests/context-drift.test.cjs",
+  "tests/context-monitor-host-contract.test.cjs",
   "tests/copilot-install.test.cjs",
   "tests/copilot-upgrades.test.cjs",
   "tests/core-utils.test.cjs",
