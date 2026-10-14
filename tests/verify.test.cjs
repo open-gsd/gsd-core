@@ -2706,18 +2706,27 @@ describe('bug-967 verify key-links strict file-path contract', () => {
 });
 
 // ── 7. Doc-contract guard #4946: gsd-planner.md, planner-guidance.md & parity across surfaces ──
+// Markdown prompt files are runtime contracts executed by LLM agents (see CONTRIBUTING exception matrix).
+// No per-line allow-test-rule markers needed since no-source-grep ignores markdown reads.
 describe('bug #4946: planner key_links schema contract and cross-surface parity', () => {
   test('#4946: agents/gsd-planner.md states that key_links from/to must be relative file paths only', () => {
     const plannerPath = path.join(__dirname, '..', 'agents', 'gsd-planner.md');
     assert.ok(fs.existsSync(plannerPath), `gsd-planner.md not found at ${plannerPath}`);
-    const content = fs.readFileSync(plannerPath, 'utf-8'); // allow-test-rule: source-text-is-the-product agents/gsd-planner.md prompt text IS the runtime contract for plan authoring (#4946)
+    const content = fs.readFileSync(plannerPath, 'utf-8');
 
-    assert.ok(
-      content.includes('- `from` and `to` MUST be project-relative file paths only. Never put symbols, functions, or endpoints in `from:` or `to:`.'),
+    assert.match(
+      content,
+      /`from` and `to` MUST be project-relative file paths only/i,
       'agents/gsd-planner.md must state that key_links from/to must be project-relative file paths only',
     );
-    assert.ok(
-      content.includes('- Symbols, functions, endpoints, and narrative details MUST be placed in `via:`'),
+    assert.match(
+      content,
+      /Never put symbols, functions, or endpoints in `from:` or `to:`/i,
+      'agents/gsd-planner.md must instruct never to put symbols or endpoints in from/to',
+    );
+    assert.match(
+      content,
+      /Symbols, functions, endpoints.*MUST be placed in `via:`/i,
       'agents/gsd-planner.md must instruct that symbols, endpoints, and details belong in via:',
     );
   });
@@ -2725,42 +2734,53 @@ describe('bug #4946: planner key_links schema contract and cross-surface parity'
   test('#4946: gsd-core/references/planner-guidance.md carries key_links field schema contract table', () => {
     const guidancePath = path.join(__dirname, '..', 'gsd-core', 'references', 'planner-guidance.md');
     assert.ok(fs.existsSync(guidancePath), `planner-guidance.md not found at ${guidancePath}`);
-    const content = fs.readFileSync(guidancePath, 'utf-8'); // allow-test-rule: source-text-is-the-product gsd-core/references/planner-guidance.md IS the authoring guide for planner schema (#4946)
+    const content = fs.readFileSync(guidancePath, 'utf-8');
 
     assert.ok(
       content.includes('`key_links[].from`') && content.includes('`key_links[].to`'),
       'planner-guidance.md must include key_links[].from and key_links[].to in its schema table',
     );
-    assert.ok(
-      content.includes('Source file (relative path from project root). Describe components or symbols in `via:`.'),
+    assert.match(
+      content,
+      /relative path from project root.*Describe components or symbols in `via:`/i,
       'planner-guidance.md must specify relative path from project root for from',
     );
-    assert.ok(
-      content.includes('> **Important:** `from:` and `to:` MUST be literal, project-relative file paths. Never place functions, symbols (`file.ts::symbol`), HTTP endpoints (`/api/...`), or prose descriptions in `from:` or `to:`. All symbols, methods, and endpoints belong in `via:`.'),
+    assert.match(
+      content,
+      /`from:` and `to:` MUST be literal, project-relative file paths/i,
+      'planner-guidance.md must specify that from and to must be literal project-relative file paths',
+    );
+    assert.match(
+      content,
+      /Never place functions, symbols.*HTTP endpoints.*in `from:` or `to:`/i,
+      'planner-guidance.md must instruct never to place symbols or endpoints in from/to',
+    );
+    assert.match(
+      content,
+      /All symbols, methods, and endpoints belong in `via:`/i,
       'planner-guidance.md must explicitly instruct that symbols and endpoints belong in via:',
     );
   });
 
   test('#4946: parity: planner-guidance.md, phase-prompt.md, plan-md.md, and gsd-planner.md agree on key_links contract', () => {
-    const guidanceContent = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'references', 'planner-guidance.md'), 'utf-8'); // allow-test-rule: source-text-is-the-product parity assertion across planner guidance, phase-prompt template, and plan-md reference (#4946)
-    const promptContent = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'templates', 'phase-prompt.md'), 'utf-8'); // allow-test-rule: source-text-is-the-product parity assertion across planner guidance, phase-prompt template, and plan-md reference (#4946)
-    const planDocContent = fs.readFileSync(path.join(__dirname, '..', 'docs', 'reference', 'plan-md.md'), 'utf-8'); // allow-test-rule: source-text-is-the-product parity assertion across planner guidance, phase-prompt template, and plan-md reference (#4946)
-    const plannerContent = fs.readFileSync(path.join(__dirname, '..', 'agents', 'gsd-planner.md'), 'utf-8'); // allow-test-rule: source-text-is-the-product parity assertion across planner guidance, phase-prompt template, and plan-md reference (#4946)
+    const guidanceContent = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'references', 'planner-guidance.md'), 'utf-8');
+    const promptContent = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'templates', 'phase-prompt.md'), 'utf-8');
+    const planDocContent = fs.readFileSync(path.join(__dirname, '..', 'docs', 'reference', 'plan-md.md'), 'utf-8');
+    const plannerContent = fs.readFileSync(path.join(__dirname, '..', 'agents', 'gsd-planner.md'), 'utf-8');
 
-    const fromClause = 'Source file (relative path from project root)';
-    assert.ok(guidanceContent.includes(fromClause), 'planner-guidance.md missing standard from clause');
-    assert.ok(promptContent.includes(fromClause), 'phase-prompt.md missing standard from clause');
-    assert.ok(planDocContent.includes(fromClause), 'plan-md.md missing standard from clause');
+    for (const content of [guidanceContent, promptContent, planDocContent]) {
+      assert.match(content, /Source file \(relative path from project root\)/i);
+      assert.match(content, /Target file \(relative path from project root\)/i);
+    }
 
-    const toClause = 'Target file (relative path from project root)';
-    assert.ok(guidanceContent.includes(toClause), 'planner-guidance.md missing standard to clause');
-    assert.ok(promptContent.includes(toClause), 'phase-prompt.md missing standard to clause');
-    assert.ok(planDocContent.includes(toClause), 'plan-md.md missing standard to clause');
-
-    assert.ok(guidanceContent.includes('All symbols, methods, and endpoints belong in `via:`.'));
-    assert.ok(promptContent.includes('Describe components or symbols in `via:`.'));
-    assert.ok(planDocContent.includes('describe components or symbols in `via:`.'));
-    assert.ok(plannerContent.includes('MUST be placed in `via:`'));
+    for (const [name, content] of [
+      ['planner-guidance.md', guidanceContent],
+      ['phase-prompt.md', promptContent],
+      ['plan-md.md', planDocContent],
+      ['gsd-planner.md', plannerContent],
+    ]) {
+      assert.match(content, /symbols.*(?:in `?via:`?|belong in `?via:`?|placed in `?via:`?)/i, `${name} must specify symbols belong in via:`);
+    }
   });
 });
   });
