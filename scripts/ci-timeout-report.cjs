@@ -647,11 +647,20 @@ const SHARD_BALANCE = Object.freeze({
   minRuns: 10,
   windowRuns: 20,
   maxMedianGapMs: 120000,
-  baselineShardTotal: 3,
+  // #5029 resharded the lane 3 -> 6. Baselines are the nearest-rank p90 of
+  // job wall-clock over the nine 6-shard runs whose heads carry #5097's
+  // win32 weights (PR #5053: 36785097774, 37024435915, 37031116287,
+  // 37037251805, 37041237415, 37086102648, 37138563782, 37694227292,
+  // 37697717410) — measured, not scaled from the 3-shard values. Those are
+  // pull_request runs; re-derive from `next` push runs once ten exist.
+  baselineShardTotal: 6,
   baselineP90Ms: Object.freeze({
-    '1/3': 1824000,
-    '2/3': 2046000,
-    '3/3': 2208000,
+    '1/6': 934000,
+    '2/6': 725000,
+    '3/6': 1129000,
+    '4/6': 918000,
+    '5/6': 1095000,
+    '6/6': 791000,
   }),
   issueTitle: 'CI: Windows conformance shard balance regressed',
 });
