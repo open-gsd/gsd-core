@@ -226,7 +226,7 @@ Message list component wiring:
 | `key_links[].via` | How they connect, including any endpoint or symbol name (e.g. `fetch in useEffect — calls /api/chat`, `Prisma query via prisma.message`). |
 | `key_links[].pattern` | Optional. Regex to verify connection exists. |
 
-> **Important:** `from:` and `to:` MUST be literal, project-relative file paths. Never place functions, symbols (`file.ts::symbol`), HTTP endpoints (`/api/...`), or prose descriptions in `from:` or `to:`. All symbols, methods, and endpoints belong in `via:`. See docs/reference/plan-md.md for the complete `must_haves` schema.
+> **Important:** `from:` and `to:` MUST be literal, project-relative file paths. Never place functions, symbols (`file.ts::symbol`), HTTP endpoints (`/api/...`), or prose descriptions in `from:` or `to:`. All symbols, methods, and endpoints belong in `via:`. See gsd-core/templates/phase-prompt.md for the complete `must_haves` schema.
 
 ### Must-Haves Output Format
 
