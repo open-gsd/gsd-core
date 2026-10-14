@@ -2637,6 +2637,29 @@ describe('websearch command', () => {
     assert.ok(output.error.includes('401'), 'error should include status code');
   });
 
+  for (const status of [307, 308]) {
+    test(`does not follow ${status} redirects (token must not leave Brave)`, async () => {
+      process.env.BRAVE_API_KEY = 'test-key';
+      let calls = 0;
+      let seenRedirect;
+
+      global.fetch = async (_url, init) => {
+        calls++;
+        seenRedirect = init.redirect;
+        return { ok: false, status, headers: new Headers({ location: 'http://other.example/x' }) };
+      };
+
+      await cmdWebsearch('test query', {}, false);
+
+      const output = JSON.parse(captured);
+      assert.strictEqual(seenRedirect, 'manual');
+      assert.strictEqual(output.available, false);
+      assert.strictEqual(output.error, `API error: ${status}`);
+      assert.strictEqual(calls, 1, 'no retry / second request');
+      assert.ok(!('attempts' in output), 'no attempts field');
+    });
+  }
+
   test('handles network failure', async () => {
     process.env.BRAVE_API_KEY = 'test-key';
 
