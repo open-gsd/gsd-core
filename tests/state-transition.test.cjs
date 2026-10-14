@@ -1707,6 +1707,66 @@ describe('ADR-1769 Phase 3: completePhase progress derivation (roadmap)', () => 
   });
 });
 
+// #4901: the body `Completed Phases` write was a plain overwrite while its
+// frontmatter twin ratchets (completedOnlyRaise). A roadmap whose first
+// `## Progress` table is narrower than the project total derived a LOWER count
+// and silently drove the body counter down.
+describe('#4901: completePhase never lowers the body Completed Phases counter', () => {
+  const NARROW_ROADMAP = [
+    '## Progress',
+    '',
+    '| Phase | Plans Complete | Status | Completed |',
+    '| --- | --- | --- | --- |',
+    '| 1 | A | Complete | 2026-01-01 |',
+    '| 2 | B | Complete | 2026-02-01 |',
+    '| 3 | C | In Progress | - |',
+    '',
+    '## Later milestone',
+    '',
+    'Phases 4-60 live in other milestone sections.',
+    '',
+  ].join('\n');
+  const projectWideBody = () => [
+    '# Project State',
+    '',
+    '**Current Phase:** 3 of 60 (Old Name)',
+    '**Status:** Executing Phase 3',
+    '**Last Activity:** 2026-06-20',
+    '**Completed Phases:** 49',
+    '**Total Phases:** 60',
+    '**Progress:** 82%',
+    'percent: 82',
+    '',
+  ].join('\n');
+  const intent = { kind: 'completePhase', phaseNum: '3', nextPhaseNum: '4', nextPhaseName: null, isLastPhase: false, planCount: 3, summaryCount: 3 };
+
+  test('a lower derived count leaves the recorded counter alone', () => {
+    const result = transitionCore(projectWideBody(), intent, { clock: fixedClock, roadmapProvider: () => NARROW_ROADMAP });
+    assert.strictEqual(stateExtractField(result.content, 'Completed Phases'), '49');
+    assert.ok(!result.updated.includes('Completed Phases'), 'a withheld counter is not reported as updated');
+  });
+
+  test('the percent and total are not recomputed from a derivation that lost the ratchet', () => {
+    const result = transitionCore(projectWideBody(), intent, { clock: fixedClock, roadmapProvider: () => NARROW_ROADMAP });
+    assert.strictEqual(stateExtractField(result.content, 'Total Phases'), '60');
+    assert.strictEqual(stateExtractField(result.content, 'Progress'), '82%');
+    assert.ok(/percent:\s*82/.test(result.content), 'the inline percent token keeps the project-wide value');
+  });
+
+  test('a genuinely higher derived count still raises the counter', () => {
+    const result = transitionCore(completePhaseBody(), intent, { clock: fixedClock, roadmapProvider: () => ROADMAP_3_OF_5 });
+    assert.strictEqual(stateExtractField(result.content, 'Completed Phases'), '3');
+    assert.strictEqual(stateExtractField(result.content, 'Progress'), '60%');
+  });
+
+  test('an equal derived count is a no-op and keeps the percent consistent', () => {
+    const body = completePhaseBody().replace('**Completed Phases:** 2', '**Completed Phases:** 3');
+    const result = transitionCore(body, intent, { clock: fixedClock, roadmapProvider: () => ROADMAP_3_OF_5 });
+    assert.strictEqual(stateExtractField(result.content, 'Completed Phases'), '3');
+    assert.strictEqual(stateExtractField(result.content, 'Progress'), '60%');
+  });
+});
+
 describe('ADR-1769 Phase 3: completePhase edge cases', () => {
   const deps = { clock: fixedClock, roadmapProvider: () => ROADMAP_3_OF_5 };
 
