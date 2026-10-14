@@ -50,6 +50,14 @@ Optional flags parsed from the `<arguments>` block:
 Context files (CLAUDE.md, SUMMARY.md, phase state) are resolved inside the workflow via `gsd-tools query init.phase-op` and delegated to agent via `<required_reading>` blocks.
 </context>
 
+## Outside a phase
+
+Reviewer lanes run without a phase: pipe canonical repo-relative file paths (one per line) to stdin of
+`gsd_run review-lane dispatch-step --repo-root <root> --depth <quick|standard|deep> --base-sha <sha> --run-dir <dir> --cap-id code-review --point execute:post --explicit <slugs> --raw`.
+`--depth`, `--base-sha` (committed `base..HEAD` diff; uncommitted changes are not reviewed) and stdin paths are required; omitting `--cap-id`/`--point` dispatches nothing (`trait_not_enabled`).
+`--explicit` takes canonical slugs, not flag aliases (`antigravity`, not `agy`); roster: `gsd_run review-lane flags`.
+Per-lane model key is the flag alias (`review.models.agy`, not `.antigravity`); unset = lane default model.
+
 <process>
 This command is a thin dispatch layer. It parses arguments and delegates to the workflow.
 

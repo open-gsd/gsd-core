@@ -187,6 +187,22 @@ describe('resolveReviewerSelection — explicit flags are an assertion (ADR-2782
     assert.deepStrictEqual(r.infos, [], 'the miss must not be downgraded to an info');
   });
 
+  test('an explicit lane flag alias errors naming the canonical slug (#5359)', () => {
+    const r = resolveReviewerSelection({ detected: ['gemini'], explicitFlags: ['agy'] });
+    assert.deepStrictEqual(r.selected, []);
+    const e = errorsMentioning(r, 'agy');
+    assert.strictEqual(e.length, 1);
+    assert.ok(e[0].includes('antigravity'), `expected canonical slug in: ${e[0]}`);
+    assert.ok(!e[0].includes('is not available on this host'), `alias must not read as a missing CLI: ${e[0]}`);
+  });
+
+  test('an unknown explicit name keeps the plain not-available error (#5359)', () => {
+    const r = resolveReviewerSelection({ detected: ['gemini'], explicitFlags: ['nope'] });
+    assert.deepStrictEqual(r.errors.filter((e) => e.includes("'nope'")), [
+      "explicit reviewer 'nope' is not available on this host",
+    ]);
+  });
+
   test('a sole explicit flag that is undetected errors per-slug and in aggregate', () => {
     const r = resolveReviewerSelection({
       detected: ['gemini'],
