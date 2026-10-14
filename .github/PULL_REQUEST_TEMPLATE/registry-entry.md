@@ -5,7 +5,7 @@
 > — New feature (not a registry listing): use [feature.md](?template=feature.md)
 > — Enhancement to existing behavior: use [enhancement.md](?template=enhancement.md)
 
-Full schema and process: [docs/registries/README.md](../../docs/registries/README.md).
+Full schema and process: [docs/registries/README.md](https://github.com/open-gsd/gsd-core/blob/next/docs/registries/README.md).
 
 ---
 
@@ -84,7 +84,7 @@ Closes #
 - [ ] Issue linked above with `Closes #NNN` — **PR will be auto-closed if missing**
 - [ ] Linked issue has the `approved-feature` or `approved-enhancement` label — **PR will be auto-closed if missing**
 - [ ] `npm run validate:registry` passes locally against my entry
-- [ ] `discussion` links to a GitHub Discussion in the `EoS Registry` category — which, despite its name, carries threads for all three registries (or notes that one will be created on merge, per [docs/registries/README.md](../../docs/registries/README.md))
+- [ ] `discussion` links to a GitHub Discussion in the `EoS Registry` category — which, despite its name, carries threads for all three registries (or notes that one will be created on merge, per [docs/registries/README.md](https://github.com/open-gsd/gsd-core/blob/next/docs/registries/README.md))
 - [ ] `.changeset/` fragment added with an `Added` type describing the new listing
 
 ---
