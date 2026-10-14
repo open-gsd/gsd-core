@@ -2660,6 +2660,34 @@ describe('websearch command', () => {
     });
   }
 
+  test('real fetch: token never reaches the redirect target', async () => {
+    process.env.BRAVE_API_KEY = 'test-key';
+    const http = require('node:http');
+    const listen = (srv) => new Promise((r) => srv.listen(0, '127.0.0.1', () => r(srv.address().port)));
+    const tHits = [];
+    let rHits = 0;
+    const T = http.createServer((req, res) => { tHits.push(req.headers['x-subscription-token']); res.end('{}'); });
+    const tPort = await listen(T);
+    const R = http.createServer((req, res) => {
+      rHits++;
+      res.writeHead(307, { Location: `http://127.0.0.1:${tPort}/x` });
+      res.end();
+    });
+    const rPort = await listen(R);
+    try {
+      global.fetch = (_url, init) => origFetch(`http://127.0.0.1:${rPort}/res/v1/web/search`, init);
+      await cmdWebsearch('test query', {}, false);
+      const output = JSON.parse(captured);
+      assert.strictEqual(output.available, false);
+      assert.strictEqual(output.error, 'API error: 307');
+      assert.strictEqual(rHits, 1);
+      assert.deepStrictEqual(tHits, [], 'token must never arrive at redirect target');
+    } finally {
+      R.close();
+      T.close();
+    }
+  });
+
   test('handles network failure', async () => {
     process.env.BRAVE_API_KEY = 'test-key';
 
