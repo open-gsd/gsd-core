@@ -28,7 +28,7 @@ const { VALID_PROFILES, getAgentToModelMapForProfile, formatAgentToModelMapAsTab
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configSchema = require('./config-schema.cjs');
 const { VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS, isValidConfigKey, getCapabilityConfigSchema } = configSchema;
-import { isSecretKey, maskSecret } from './secrets.cjs';
+import { isSecretKey, maskIfSecret, maskSecret } from './secrets.cjs';
 import { normalizeConfiguredDefaultReviewers, INSTANCE_NAME_PATTERN, KNOWN_REVIEWER_SLUGS } from './review-reviewer-selection.cjs';
 import { migrateOnDisk } from './configuration.cjs';
 // #3760: the ADR-1411 out-of-band diagnostic. It lives here rather than inside
@@ -711,7 +711,7 @@ function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: 
     // config-set and config-get mask them. See lib/secrets.cjs.
     const preview: Record<string, unknown> = { ...config };
     for (const key of Object.keys(preview)) {
-      if (isSecretKey(key)) preview[key] = maskSecret(preview[key] as Parameters<typeof maskSecret>[0]);
+      preview[key] = maskIfSecret(key, preview[key] as Parameters<typeof maskIfSecret>[1]);
     }
     output({ dry_run: true, would_create: true, path: '.planning/config.json', config: preview }, raw, 'would create (dry run)');
     return;
