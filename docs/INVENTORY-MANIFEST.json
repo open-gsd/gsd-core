@@ -582,6 +582,7 @@
       "section-manifest.cjs",
       "security.cjs",
       "semver-compare.cjs",
+      "session-store.cjs",
       "shell-command-projection.cjs",
       "smart-entry.cjs",
       "spec-section.cjs",

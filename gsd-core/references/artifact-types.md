@@ -54,8 +54,15 @@ reads is inert — the consumption mechanism is what gives an artifact meaning.
 ### HANDOFF.json / .continue-here.md
 - **Shape**: Structured pause state (JSON machine-readable + Markdown human-readable)
 - **Lifecycle**: Created on pause → Consumed on resume → Replaced by next pause
-- **Location**: `.planning/HANDOFF.json` + `.planning/phases/XX-name/.continue-here.md` (or spike/deliberation path)
-- **Consumed by**: `resume-project` workflow
+- **Location**: `.planning/HANDOFF.latest.<role_id>.json` + `.planning/phases/XX-name/.continue-here.latest.<role_id>.md` (or spike/deliberation path). Keyed by role so the file survives `/clear` as the role's single "paused, unclaimed" slot; sessions with no role use `<session_id>` instead of `latest.<role_id>`; the unkeyed names are legacy. Resume claims it by rename (`*.claimed.<role_id>.<session_id>.*`) and `state session-resume` deletes the JSON once the role is restored
+- **Semantics**: the file's existence IS the session's paused state (per session — STATE.md `status:` is never set to `paused` by pause-work; other sessions sharing the same `.planning/` keep their own status). The statusline shows `paused` for the owning session and `⏸N` for N other sessions' handoffs
+- **Consumed by**: `resume-project` workflow (`state sessions` to list, `state session-resume` to consume)
+
+### sessions/<session_id>.json
+- **Shape**: Per-session continuity record (`{ version, session_id, role, role_id, last_session, stopped_at, resume_file, updated_at }`)
+- **Lifecycle**: Upserted by `state record-session --session` / `state session-resume` (and the context-monitor hook's exhaustion breadcrumb); never auto-deleted
+- **Location**: `.planning/sessions/<session_id>.json` (project-root `.planning/`, not workstream-scoped — same as `HANDOFF*.json`)
+- **Consumed by**: `state sessions`, the statusline (role lookup for role-keyed handoffs), `resume-project` workflow
 
 ---
 

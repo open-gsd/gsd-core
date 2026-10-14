@@ -37,6 +37,7 @@ export const CANONICAL_EXACT: ReadonlySet<string> = new Set([
 export const CANONICAL_PATTERNS: ReadonlyArray<RegExp> = [
   /^v\d+\.\d+(?:\.\d+)?-MILESTONE-AUDIT\.md$/i, // gsd-complete-milestone (pre-archive)
   /^v\d+\.\d+(?:\.\d+)?-.*\.md$/i,               // other version-stamped planning docs
+  /^HANDOFF(?:\.[A-Za-z0-9._-]+)?\.json$/,        // gsd-pause-work: HANDOFF.json / HANDOFF.<session_id>.json / HANDOFF.latest.<role_id>.json / HANDOFF.claimed.<role_id>.<session_id>.json (src/session-store.cts)
 ];
 
 /**

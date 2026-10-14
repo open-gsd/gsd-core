@@ -23,7 +23,7 @@ Read STATE.md `status` / `stopped_at` fields (from the STATE snapshot already lo
 
 Check for existence of:
 ```bash
-ls .planning/HANDOFF.json .planning/phases/*/.continue-here.md .planning/phases/*/*HANDOFF*.md 2>/dev/null || true
+ls .planning/HANDOFF*.json .planning/phases/*/.continue-here*.md .planning/phases/*/*HANDOFF*.md 2>/dev/null || true
 ```
 Also check `.planning/continue-here.md`.
 

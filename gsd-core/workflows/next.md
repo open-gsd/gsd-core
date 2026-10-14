@@ -45,15 +45,16 @@ Print a one-line warning: `⚠ --force: skipping safety gates`
 Then proceed directly to `determine_next_action`. (Route 0 and `prior_phase_completeness` are NOT reached under `--force`.)
 
 **Gate 1: Unresolved checkpoint**
-Check if `.planning/.continue-here.md` exists:
+Check if any `.planning/.continue-here*.md` exists (the name is keyed by role or session id — see pause-work; legacy unkeyed `.planning/.continue-here.md` counts too). This session's own file (`.planning/.continue-here.${CLAUDE_CODE_SESSION_ID}.md`, or the role-keyed one for its role) is a hard stop; another session's file in a shared `.planning/` is that session's business — report it in one line and continue:
 ```bash
-[ -f .planning/.continue-here.md ]
+[ -f ".planning/.continue-here.${CLAUDE_CODE_SESSION_ID:-none}.md" ] && echo "own checkpoint"
+find .planning -maxdepth 1 -name '.continue-here*.md' 2>/dev/null | grep -q .
 ```
 If found:
 ```
 ⛔ Hard stop: Unresolved checkpoint
 
-`.planning/.continue-here.md` exists — a previous session left
+`.planning/.continue-here*.md` exists — a previous session left
 unfinished work that needs manual review before advancing.
 
 Read the file, resolve the issue, then delete it to continue.
@@ -263,8 +264,9 @@ If all phases are complete:
 → Next action: `/gsd:complete-milestone`
 
 **Route 8: Paused → resume**
-If STATE.md shows paused_at:
+If this session's own handoff exists — `.planning/HANDOFF.${CLAUDE_CODE_SESSION_ID}.json`, or `HANDOFF.latest.<role_id>.json` for this session's role (`gsd_run state sessions --raw` → `paused: true`) — or, legacy, STATE.md shows paused_at:
 → Next action: `/gsd:resume-work`
+(Other sessions' `HANDOFF*.json` in a shared `.planning/` do not pause this session.)
 </step>
 
 <step name="show_and_execute">

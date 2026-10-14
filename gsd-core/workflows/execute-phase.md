@@ -245,13 +245,13 @@ Pure doc-only / config-only / test-only tasks return `is_behavior_adding=false` 
 <step name="check_blocking_antipatterns" priority="first">
 **MANDATORY — Check for blocking anti-patterns before any other work.**
 
-Look for a `.continue-here.md` in the current phase directory:
+Look for a `.continue-here*.md` in the current phase directory (gsd-pause-work keys the name — `.continue-here.latest.<role_id>.md` for a role, `.continue-here.<session_id>.md` otherwise, bare `.continue-here.md` is legacy — so match the prefix, not the bare name):
 
 ```bash
-ls ${phase_dir}/.continue-here.md 2>/dev/null || true
+find "${phase_dir}" -maxdepth 1 -name '.continue-here*.md' 2>/dev/null || true
 ```
 
-If `.continue-here.md` exists, parse its "Critical Anti-Patterns" table for rows with `severity` = `blocking`.
+If a `.continue-here*.md` exists, parse its "Critical Anti-Patterns" table for rows with `severity` = `blocking`.
 
 **If one or more `blocking` anti-patterns are found:**
 

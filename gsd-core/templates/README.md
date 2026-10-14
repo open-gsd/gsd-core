@@ -29,6 +29,8 @@ These files live directly at `.planning/` — not inside phase subdirectories.
 | `state.json` | *(none)* | `src/state-contract.cts` | Machine-readable state contract published at step boundaries (#3227) |
 | `skill-manifest.json` | *(none)* | `init.cts`'s `cmdSkillManifest --write` | Project-scoped skill manifest (#3964) |
 | `PATTERNS.md` | *(inline)* | `/gsd:extract-learnings` (graduation, `workflows/graduation.md`, `patterns` target) | Graduated cross-phase patterns -- distinct from the per-phase `NN-PATTERNS.md` below (#4282) |
+| `HANDOFF.json`, `HANDOFF.<session_id>.json`, `HANDOFF.latest.<role_id>.json`, `HANDOFF.claimed.<role_id>.<session_id>.json` | *(inline)* | `/gsd:pause-work` (claimed form: `/gsd:resume-work`) | Per-session pause marker + structured handoff; its existence is the session's paused state (pattern-matched, see `src/session-store.cts`) |
+| `sessions/` (directory: `sessions/<session_id>.json`) | *(none)* | `state record-session --session`, `state session-resume` (`src/session-store.cts`) | Per-session continuity records for concurrent sessions sharing one `.planning/` — the `## Session` block of STATE.md is shared/last-writer-wins, these are not. Directories are not checked by W019 |
 
 ### Version-stamped artifacts (pattern: `vX.Y-*.md`)
 

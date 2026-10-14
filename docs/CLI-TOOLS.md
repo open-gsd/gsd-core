@@ -114,7 +114,20 @@ node gsd-tools.cjs state add-blocker --text "..."
 node gsd-tools.cjs state resolve-blocker --text "..."
 
 # Record session continuity (at least one of --stopped-at / --resume-file is required)
-node gsd-tools.cjs state record-session --stopped-at "..." [--resume-file path]
+# --session keys a per-session record (.planning/sessions/<sid>.json) alongside the
+# shared STATE.md `## Session` block; defaults to CLAUDE_CODE_SESSION_ID & co.
+# --role / --role-id carry the session's role (kept on the record until restated).
+node gsd-tools.cjs state record-session --stopped-at "..." [--resume-file path] [--session SID] [--role "..."] [--role-id slug]
+
+# Per-session resume: records "Session resumed, proceeding to <action>", repairs a
+# legacy project-wide `status: paused` (frontmatter only, no `Paused At:` line) from
+# the body `Status:`, and deletes THIS session's HANDOFF*.json (the per-session pause
+# marker). --handoff adopts another session's file; --keep-handoff deletes nothing.
+node gsd-tools.cjs state session-resume [--session SID] [--role "..."] [--role-id slug] [--action "execute-phase 3"] [--handoff .planning/HANDOFF.x.json] [--keep-handoff]
+
+# Read-only view of every session's handoff (HANDOFF*.json) and record (sessions/*.json),
+# with is_self / role / continue_here_path per entry and `paused` for the caller.
+node gsd-tools.cjs state sessions [--session SID] [--role-id slug]
 
 # Phase start — update STATE.md Status/Last activity for a new phase
 node gsd-tools.cjs state begin-phase --phase N --name SLUG --plans COUNT
