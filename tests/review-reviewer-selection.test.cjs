@@ -196,6 +196,13 @@ describe('resolveReviewerSelection — explicit flags are an assertion (ADR-2782
     assert.ok(!e[0].includes('is not available on this host'), `alias must not read as a missing CLI: ${e[0]}`);
   });
 
+  test('an undetected canonical slug keeps the plain not-available error (#5359)', () => {
+    const r = resolveReviewerSelection({ detected: ['gemini'], explicitFlags: ['antigravity'] });
+    assert.deepStrictEqual(r.errors.filter((e) => e.includes("'antigravity'")), [
+      "explicit reviewer 'antigravity' is not available on this host",
+    ]);
+  });
+
   test('an unknown explicit name keeps the plain not-available error (#5359)', () => {
     const r = resolveReviewerSelection({ detected: ['gemini'], explicitFlags: ['nope'] });
     assert.deepStrictEqual(r.errors.filter((e) => e.includes("'nope'")), [

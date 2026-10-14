@@ -126,6 +126,7 @@ function laneSlugForAlias(name: string): string | undefined {
     const { REVIEWER_LANES } = require('./review-lane-descriptor.cjs') as {
       REVIEWER_LANES: ReadonlyArray<{ slug: string; flags: string[] }>;
     };
+    // `l.slug !== name`: an undetected canonical slug (`--codex` flag) is not an alias.
     return REVIEWER_LANES.find((l) => l.slug !== name && l.flags.includes(`--${name}`))?.slug;
   } catch {
     return undefined;
