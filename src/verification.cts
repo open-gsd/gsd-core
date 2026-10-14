@@ -1194,6 +1194,67 @@ function defaultPhaseCleanCommitTimesMs(
   return commitTimes;
 }
 
+/**
+ * #4857: which declared covered files changed since the report was written.
+ * `covered_digest` is one aggregate hash, so it can say THAT something moved
+ * but not what; this names the files by time instead — each covered file
+ * (report paths and, for v2+, shared planning documents excluded, exactly as
+ * the digest excludes them) whose clean commit time, or mtime when it is
+ * uncommitted or edited since, is newer than the report's own. A file that
+ * can no longer be statted counts as moved. Advisory only: it never decides
+ * staleness (the digest does), and an unreadable clock yields fewer names,
+ * never a wrong status. Timed through the same injectable resolver the
+ * legacy mtime check uses, rooted at the project so the covered paths
+ * (project-root-relative) resolve.
+ */
+function coveredFilesMovedSinceReport(
+  projectRoot: string,
+  phaseDir: string,
+  reportPath: string,
+  coveredFiles: readonly string[],
+  version: number,
+  fsImpl: FsLike,
+  resolver: PhaseCleanCommitTimesFn,
+): string[] {
+  const sharedRoots = version >= 2 ? sharedRootsFor(projectRoot, phaseDir, null) : [];
+  const files = canonicalizeCoveredFiles(coveredFiles, { version })
+    .filter((f) => !isVerificationReportPath(f) && !isSharedPlanningDoc(f, sharedRoots));
+  if (files.length === 0) return [];
+  const reportRel = toPosix(path.relative(projectRoot, reportPath));
+  let commitTimes: Map<string, number>;
+  try {
+    commitTimes = resolver(projectRoot, [reportRel, ...files]);
+  } catch {
+    commitTimes = new Map();
+  }
+  const timeOf = (rel: string): number | null => {
+    const committed = commitTimes.get(rel);
+    if (committed !== undefined) return committed;
+    try {
+      return fsImpl.statSync(path.join(projectRoot, rel)).mtimeMs;
+    } catch {
+      return null;
+    }
+  };
+  const reportTime = timeOf(reportRel);
+  if (reportTime === null) return [];
+  return files.filter((rel) => {
+    const t = timeOf(rel);
+    return t === null || t > reportTime;
+  });
+}
+
+/**
+ * The stale diagnostic's detail. `uncovered` (#4817): current plans/summaries
+ * the report never declared. `moved` (#4857): declared covered files modified
+ * after the report was written. `digestMoved`: the recomputed digest differs.
+ */
+interface StaleDetail {
+  uncovered: string[];
+  moved: string[];
+  digestMoved: boolean;
+}
+
 interface RouteResultContext {
   runtime: string;
   /** ` <N>` (leading space) or `''` — see readVerificationStatus's derivation. */
@@ -1202,20 +1263,29 @@ interface RouteResultContext {
   /** A usage-error message (`phase_dir_not_found` names the path it looked at). */
   message?: string;
   /** #4817: the stale diagnostic's detail — which artifacts the report never covered, and whether a covered file also changed. */
-  staleDetail?: { uncovered: string[]; digestMoved: boolean };
+  staleDetail?: StaleDetail;
 }
 
 /** At most this many uncovered artifact names are spelled out in `next_action`; the rest are counted. */
 const STALE_NAMED_ARTIFACT_LIMIT = 5;
 
-function staleNextAction(detail: { uncovered: string[]; digestMoved: boolean }): string {
-  const shown = detail.uncovered.slice(0, STALE_NAMED_ARTIFACT_LIMIT).map((a) => io.formatDiagnosticToken(a));
-  const more = detail.uncovered.length - shown.length;
-  const names = `${shown.join(', ')}${more > 0 ? ` and ${more} more` : ''}`;
-  const never = `the report never covered ${names} (a current phase plan or summary it did not declare in covered_files)`;
-  return detail.digestMoved
-    ? `Verification is stale — covered source files changed after the verifier last ran, and ${never}. ${STALE_REMEDY}`
-    : `Verification is stale — ${never}; no covered file changed. ${STALE_REMEDY}`;
+function staleNextAction(detail: StaleDetail): string {
+  const name = (items: string[]): string => {
+    const shown = items.slice(0, STALE_NAMED_ARTIFACT_LIMIT).map((a) => io.formatDiagnosticToken(a));
+    const more = items.length - shown.length;
+    return `${shown.join(', ')}${more > 0 ? ` and ${more} more` : ''}`;
+  };
+  const reasons: string[] = [];
+  if (detail.moved.length > 0) {
+    reasons.push(`covered source files changed after the verifier last ran: ${name(detail.moved)}`);
+  } else if (detail.digestMoved) {
+    reasons.push('covered source files changed after the verifier last ran');
+  }
+  if (detail.uncovered.length > 0) {
+    reasons.push(`the report never covered ${name(detail.uncovered)} (a current phase plan or summary it did not declare in covered_files)`);
+  }
+  const tail = detail.digestMoved ? '' : '; no covered file changed';
+  return `Verification is stale — ${reasons.join(', and ')}${tail}. ${STALE_REMEDY}`;
 }
 
 /**
@@ -1226,7 +1296,8 @@ function staleNextAction(detail: { uncovered: string[]; digestMoved: boolean }):
  */
 function routeResult(status: VerificationStatus, ctx: RouteResultContext): VerificationStatusResult {
   const entry = VERIFICATION_ROUTES[status];
-  const detail = status === VERIFICATION_STATUS.STALE && ctx.staleDetail && ctx.staleDetail.uncovered.length > 0
+  const detail = status === VERIFICATION_STATUS.STALE && ctx.staleDetail
+    && (ctx.staleDetail.uncovered.length > 0 || ctx.staleDetail.moved.length > 0)
     ? ctx.staleDetail
     : undefined;
   return {
@@ -1235,7 +1306,8 @@ function routeResult(status: VerificationStatus, ctx: RouteResultContext): Verif
     next_command: projectNextCommand(entry.command, ctx.runtime, `${ctx.phaseArg}${entry.tail}`),
     route: entry.command,
     ...(ctx.message !== undefined ? { message: ctx.message } : {}),
-    ...(detail ? { uncovered_artifacts: detail.uncovered } : {}),
+    ...(detail && detail.uncovered.length > 0 ? { uncovered_artifacts: detail.uncovered } : {}),
+    ...(detail && detail.moved.length > 0 ? { moved_files: detail.moved } : {}),
     ...(ctx.staleCheckIndeterminate ? { staleCheckIndeterminate: true } : {}),
   };
 }
@@ -1673,6 +1745,13 @@ interface VerificationStatusResult {
    * reach this state: their digest includes the live artifacts.
    */
   uncovered_artifacts?: string[];
+  /**
+   * #4857: declared covered files whose last commit (or, for an uncommitted edit, mtime) is newer than the
+   * report, project-root-relative and sorted. Present only on a `stale` result whose digest moved and where
+   * at least one such file is identifiable; absent otherwise, so a stale report that names nothing here
+   * was not invalidated by an edit to a file it covers.
+   */
+  moved_files?: string[];
 }
 
 function findStaleVerificationSummary(
@@ -1852,7 +1931,7 @@ function readVerificationStatus(
     coveredDigestVal.trim().length > 0;
 
   let staleCheckIndeterminate = false;
-  let staleDetail: { uncovered: string[]; digestMoved: boolean } | undefined;
+  let staleDetail: StaleDetail | undefined;
   let isStale: boolean;
   if (declaresFingerprint) {
     // Stated directly rather than relying on `null !== coveredDigestVal`
@@ -1884,6 +1963,12 @@ function readVerificationStatus(
       // for v3 and is not run.
       isStale =
         computeCoveredDigest(projectRoot, coveredFilesVal, storedVersion, { phaseDir }) !== coveredDigestVal;
+      if (isStale) {
+        const moved = coveredFilesMovedSinceReport(
+          projectRoot, phaseDir, located.filePath, coveredFilesVal, storedVersion, fsImpl, phaseCleanCommitTimesMs,
+        );
+        if (moved.length > 0) staleDetail = { uncovered: [], moved, digestMoved: true };
+      }
     } else {
       // v1/v2: unchanged — the digest alone cannot see a plan/summary that
       // was never declared, so the live-directory re-scan still runs.
@@ -1891,8 +1976,13 @@ function readVerificationStatus(
         computeCoveredDigest(projectRoot, coveredFilesVal, storedVersion, { phaseDir }) !== coveredDigestVal;
       const uncovered = uncoveredCurrentArtifacts(phaseDir, coveredFilesVal);
       isStale = digestMoved || uncovered === null || uncovered.length > 0;
-      if (uncovered !== null && uncovered.length > 0) {
-        staleDetail = { uncovered: [...uncovered].sort(), digestMoved };
+      const moved = digestMoved
+        ? coveredFilesMovedSinceReport(
+          projectRoot, phaseDir, located.filePath, coveredFilesVal, storedVersion, fsImpl, phaseCleanCommitTimesMs,
+        )
+        : [];
+      if ((uncovered !== null && uncovered.length > 0) || moved.length > 0) {
+        staleDetail = { uncovered: uncovered ? [...uncovered].sort() : [], moved, digestMoved };
       }
     }
   } else {
