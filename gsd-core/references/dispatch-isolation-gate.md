@@ -26,8 +26,15 @@ read. It requires `gsd_run` to be defined (the standard shim preamble).
 # stdout is NOT a capability verdict, and reporting it as one tells a Claude
 # Code user their runtime "declares no executor-isolation primitive", which is
 # false (#2652 review).
-_ISOLATION_RAW=$(gsd_run query dispatch-isolation --raw 2>/dev/null)
+# The decision and whether it is HELD come from ONE call: a plain query reports
+# a degrade an earlier step recorded as `none` with `held: true` (see "A plain
+# re-query reports the held decision" below), and a second call could land
+# after that record went stale and answer the host capability instead.
+_ISOLATION_JSON=$(gsd_run query dispatch-isolation --json 2>/dev/null)
 _ISOLATION_RC=$?
+_ISOLATION_FIELDS=$(printf '%s' "$_ISOLATION_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write((j&&typeof j.isolation==="string"&&/^[a-z-]+$/.test(j.isolation)?j.isolation:"")+" "+(j&&j.held===true?"held":"live"))}catch{process.stdout.write(" live")}})')
+_ISOLATION_RAW=${_ISOLATION_FIELDS% *}
+_ISOLATION_HELD=${_ISOLATION_FIELDS##* }
 if [ $_ISOLATION_RC -ne 0 ] || [ -z "$_ISOLATION_RAW" ]; then
   ISOLATION=none
   ISOLATION_RESOLVED=false      # fail closed, but we did NOT learn a verdict
@@ -39,6 +46,14 @@ case "$ISOLATION" in
   harness-worktree|orchestrator-worktree|none) ;;
   *) ISOLATION=none; ISOLATION_RESOLVED=false ;;   # out of vocabulary is not a verdict either
 esac
+
+# A HELD `none` is a degrade, not a capability verdict: an earlier step of this
+# run decided sequential dispatch and recorded it. Follow it, the way the
+# opt-out below is followed, instead of reading it as a host with no primitive.
+if [ "$ISOLATION" = "none" ] && [ "$ISOLATION_RESOLVED" = "true" ] && [ "$_ISOLATION_HELD" = "held" ]; then
+  echo "⚠ Dispatch isolation is held at none: an earlier step of this run degraded to sequential dispatch within the last 10 minutes. Running sequentially on the main working tree." >&2
+  USE_WORKTREES=false
+fi
 
 # Project-level opt-out wins on every host; a host with no primitive fails closed.
 [ "$USE_WORKTREES" = "false" ] && ISOLATION=none
@@ -56,6 +71,12 @@ fi
 # above; this call still pushes the shell's FINAL value through the same write path.
 # See "Re-record after every degrade" below — this is the first of the mandatory
 # calls, and the orchestrator-worktree fallback further down has its own.
+# A HELD `none` is re-recorded too. The isolation guard reads the record at the
+# instant of the dispatch, and the held one belongs to the step that wrote it: its
+# phase/plan can disagree with what this site dispatches, and its ten minutes can
+# run out before the dispatch, either of which turns this sequential dispatch into
+# a denied one. The cost is that each gate following a hold renews it, so runs
+# started within ten minutes of each other stay sequential — the safe direction.
 gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" >/dev/null 2>&1 || true
 ```
 
@@ -72,11 +93,14 @@ Fail-closed is the invariant: an undeclared, unknown, or unresolvable declaratio
 
 The flag is descriptor data — never hardcode `isolation="worktree"`, which is Claude Code's
 literal and wrong on any other harness-worktree host (Cursor declares the same capability).
+It is read from `inspect-dispatch-isolation`, which answers the host's declaration and records
+nothing: a plain `query dispatch-isolation` here would report a degrade another plan recorded
+as `none` with no flag, and stop a dispatch that has nothing to do with that plan.
 
 ```bash
 HARNESS_FLAG=""
 if [ "$ISOLATION" = "harness-worktree" ]; then
-  HARNESS_FLAG=$(gsd_run query dispatch-isolation --json 2>/dev/null \
+  HARNESS_FLAG=$(gsd_run query inspect-dispatch-isolation --json 2>/dev/null \
     | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(j&&j.harnessFlag?j.harnessFlag:"")}catch{process.stdout.write("")}})')
   [ -n "$HARNESS_FLAG" ] || { echo "FATAL: runtime declares dispatch.isolation=harness-worktree but no harnessIsolationFlag — refusing to dispatch an agent that would believe it is isolated." >&2; exit 1; }
 fi
@@ -129,16 +153,27 @@ simply calls it again — record immediately before dispatch so the sentinel is 
 Best-effort by design: a write failure must never fail the dispatch, since the guards'
 sentinel-absent fallback is safe, just less precise.
 
-**A plain re-query does not undo it (#4561).** Once a fresh `none` is recorded, a later plain
-`query dispatch-isolation` — the `--json` harness-flag read above, a subagent's own `gsd_run`
-traffic, a wave transition — *holds* that record instead of re-persisting the host capability
-over it, provided it names no different `--phase`/`--plan` (an identifier it omits is
-unconstrained; one it names must match). Its **stdout is unchanged** — it still answers the
-capability question every gate in this file branches on — only the sentinel write is skipped.
-A forced record always writes, a plain query scoped to a *different* plan writes (the per-plan
-gate's fresh record for the next plan), and a record past the reader's freshness window is
-replaced as before, so nothing is permanently sticky. The re-record is still mandatory: the
-resolver cannot compute these degrades itself, it only stops racing you for the file.
+**A plain re-query reports the held decision (#4561, #4904).** Once a fresh `none` is recorded
+with `--force-isolation`, a later plain `query dispatch-isolation` — a subagent's own `gsd_run`
+traffic, a wave transition, another dispatch site's resolve — *holds* that record instead of
+re-persisting the host capability over it, provided it names no different `--phase`/`--plan`
+(an identifier it omits is unconstrained; one it names must match). It also **answers with
+it**: stdout is `none`, and under `--json` `harnessFlag` and `exec` are null and `held` is
+`true`. The resolve block above reads `held` and runs sequentially rather than failing closed,
+then re-records `none` at its own scope like any other final value: the guard judges the
+dispatch against the record present at that instant, and the held one may name another
+phase or plan, or lapse before this site dispatches. The host's descriptors (`harnessFlag`,
+`exec`) are read from `inspect-dispatch-isolation`, which no hold reaches. A forced record
+always writes, a plain query scoped to a *different* plan writes (the per-plan gate's fresh
+record for the next plan), and a record past the reader's freshness window is replaced as
+before; a degrade lapses ten minutes after the last gate that followed it. The re-record is
+still mandatory after any degrade a site decides itself: the resolver cannot compute these
+degrades, it only stops racing you for the file.
+
+Because a query that names no `--phase`/`--plan` matches every record, a fresh degrade from one
+workflow also holds for the next unscoped resolve within the window — a `/gsd:quick` run started
+a few minutes after an `execute-plan` Pattern B segment runs sequentially. That errs toward the
+safe side, and the window bounds it.
 
 Wave sites re-record per plan rather than per phase — see
 `gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md`.
