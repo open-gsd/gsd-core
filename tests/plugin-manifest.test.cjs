@@ -46,6 +46,11 @@ const HOOKS_JSON_PATH  = path.join(ROOT, 'hooks', 'hooks.json');
 // and this migration never raises a bound without a fresh bench citation.
 const CLAUDE_VERSION_PROBE_TIMEOUT_MS = 5000;
 
+// #4860: `claude plugin details` loads the whole plugin tree (72 skills, 64 agents,
+// hooks) before printing, so it is a heavier class of subprocess than the
+// `--version` probe above or PROBE_TIMEOUT_MS; measured at a few seconds locally.
+const CLAUDE_PLUGIN_DETAILS_TIMEOUT_MS = 60000;
+
 // ─── Section A: plugin.json ───────────────────────────────────────────────────
 describe('A: .claude-plugin/plugin.json', () => {
 
@@ -1297,7 +1302,7 @@ describe('H: skills surface projection (#1596)', () => {
     const probe = spawnSync('claude', ['--version'], { encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS, env });
     if (probe.error || probe.status !== 0) { t.skip('claude CLI not on PATH'); return; }
     const res = spawnSync('claude', ['--plugin-dir', ROOT, 'plugin', 'details', 'gsd-core'], {
-      encoding: 'utf-8', timeout: 60000, env, cwd: ROOT,
+      encoding: 'utf-8', timeout: CLAUDE_PLUGIN_DETAILS_TIMEOUT_MS, env, cwd: ROOT,
     });
     if (res.status !== 0 || !/Component inventory/.test(res.stdout)) {
       t.skip(`this claude CLI cannot print plugin details (exit ${res.status})`);
