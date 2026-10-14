@@ -9,6 +9,16 @@ Full schema and process: [docs/registries/README.md](../../docs/registries/READM
 
 ---
 
+## Linked Issue
+
+> **Required.** Auto-closed without it.
+
+Closes #
+
+> The issue must carry a maintainer-applied `approved-feature` or `approved-enhancement` label. Title: `type(#<issue>): summary`.
+
+---
+
 ## Registry type
 
 <!-- Check exactly one. -->
