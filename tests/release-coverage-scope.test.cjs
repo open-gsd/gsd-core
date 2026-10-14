@@ -52,13 +52,15 @@ describe('release-audit-baseline-pin', () => {
   // mid-run and flag an already-fixed advisory as "newly introduced" (release
   // run 38549271057). Every raw-coverage shard step must pin it, as test.yml does.
   test('every sharded unit-test step in release.yml pins AUDIT_BASELINE_REF', () => {
-    const text = fs.readFileSync(RELEASE_WORKFLOW, 'utf8');
-    const steps = text.split(/\n(?=      - )/)
-      .filter(s => s.includes('npm run test:coverage:unit:raw -- --shard'));
-    assert.strictEqual(steps.length, 2, 'expected rc-test and finalize-test shard steps');
-    for (const step of steps) {
-      assert.match(step, /AUDIT_BASELINE_REF: \$\{\{ github\.sha \}\}/,
-        'shard step must pin AUDIT_BASELINE_REF to github.sha');
+    const lines = fs.readFileSync(RELEASE_WORKFLOW, 'utf8').split(/\r?\n/);
+    const runLines = lines.map((l, i) => (l.includes('npm run test:coverage:unit:raw -- --shard') ? i : -1))
+      .filter(i => i >= 0);
+    assert.strictEqual(runLines.length, 2, 'expected rc-test and finalize-test shard steps');
+    for (const i of runLines) {
+      // The step's env block sits within a few lines above its `run:` script.
+      const stepHead = lines.slice(Math.max(0, i - 12), i).join('\n');
+      assert.ok(stepHead.includes('AUDIT_BASELINE_REF: ${{ github.sha }}'),
+        `shard step at line ${i + 1} must pin AUDIT_BASELINE_REF to github.sha`);
     }
   });
 });
