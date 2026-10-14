@@ -47,69 +47,10 @@ export const DISPATCH_ISOLATION_MODES = Object.freeze(['harness-worktree', 'orch
 export type DispatchIsolation = (typeof DISPATCH_ISOLATION_MODES)[number];
 
 /**
- * A read-only Set VIEW. `ReadonlySet` is a compile-time annotation that erases
- * to an ordinary, mutable `Set` in the emitted .cjs, and every runtime consumer
- * of this module is plain CommonJS with no compiler in the loop — so a
- * `VALID_DISPATCH_ISOLATION.add('x')` anywhere would split the Set view from
- * the tuple and the type guards inside one process (found by the pre-create
- * adversarial review of #4561, driven). Shadowing `add`/`delete`/`clear` on a
- * real Set is NOT enough: `Set.prototype.add.call(set, 'x')` reaches the
- * internal storage regardless (the same review's continuation drove that too).
- * So the backing Set never leaves this closure; what is exported is a frozen
- * plain object implementing the `ReadonlySet` surface — `has`, `size`,
- * `forEach`, `keys`/`values`/`entries`, iteration and spread all work, while a
- * native Set method applied to it throws "incompatible receiver" because the
- * object carries no Set internals at all. The Set methods the view delegates
- * to are captured HERE, at module load, so the view never performs a dynamic
- * `Set.prototype` lookup at call time — a later `Set.prototype.has = …` patch
- * cannot use the view as a channel to the backing Set.
- *
- * Contract boundary, stated so nobody reads more into this than it holds: the
- * seal defends the vocabulary against ordinary in-process mutation — a stray
- * `.add`, a `Set.prototype.*.call`, a well-meaning "let me just extend the
- * set here". It is not, and cannot be, a defense against code that has
- * already rewritten the language built-ins this module loaded against; such
- * code owns the process and needs no channel through this file. (Raised by
- * the review's second continuation, which patched `Set.prototype.has` before
- * the first call; declared out of contract rather than chased into
- * `Function.prototype.call`.)
- */
-// Captured unbound on purpose — each is invoked below with an explicit
-// `.call(backing, …)`; holding the reference is what pins the method against a
-// later prototype patch. Read through a plain record so the capture is a
-// property read, not a method access (no lint carve-out needed — the emitted
-// .cjs is linted too, under a config without the TypeScript rule set).
-type StringSet = Set<string>;
-const SET_PROTO = Set.prototype as unknown as Record<string, unknown>;
-const SET_HAS = SET_PROTO.has as (this: StringSet, value: string) => boolean;
-const SET_FOR_EACH = SET_PROTO.forEach as (this: StringSet, cb: (value: string) => void) => void;
-const SET_KEYS = SET_PROTO.keys as (this: StringSet) => SetIterator<string>;
-const SET_VALUES = SET_PROTO.values as (this: StringSet) => SetIterator<string>;
-const SET_ENTRIES = SET_PROTO.entries as (this: StringSet) => SetIterator<[string, string]>;
-const SET_SIZE = (Object.getOwnPropertyDescriptor(Set.prototype, 'size') as unknown as { get: (this: StringSet) => number }).get;
-
-function sealedSet(values: readonly string[]): ReadonlySet<string> {
-  const backing = new Set<string>(values);
-  const view: ReadonlySet<string> = {
-    get size() { return SET_SIZE.call(backing); },
-    has: (value: string) => SET_HAS.call(backing, value),
-    forEach(callback: (value: string, value2: string, set: ReadonlySet<string>) => void, thisArg?: unknown) {
-      SET_FOR_EACH.call(backing, (value: string) => callback.call(thisArg, value, value, view));
-    },
-    keys: () => SET_KEYS.call(backing),
-    values: () => SET_VALUES.call(backing),
-    entries: () => SET_ENTRIES.call(backing),
-    [Symbol.iterator]: () => SET_VALUES.call(backing),
-  };
-  return Object.freeze(view);
-}
-
-/**
  * Set view for membership tests over untrusted strings (CLI arguments, a
- * sentinel payload read back from disk, a registry descriptor). Sealed — see
- * `sealedSet`.
+ * sentinel payload read back from disk, a registry descriptor).
  */
-export const DISPATCH_ISOLATION_VOCABULARY: ReadonlySet<string> = sealedSet(DISPATCH_ISOLATION_MODES);
+export const DISPATCH_ISOLATION_VOCABULARY: ReadonlySet<string> = new Set<string>(DISPATCH_ISOLATION_MODES);
 
 /**
  * The worktree-CREATING members — everything but `none`, which creates no
@@ -123,7 +64,7 @@ export const BASE_CHECK_ISOLATION_MODES: readonly BaseCheckIsolationMode[] = Obj
   DISPATCH_ISOLATION_MODES.filter((mode): mode is BaseCheckIsolationMode => mode !== 'none'),
 );
 
-export const BASE_CHECK_ISOLATION_VOCABULARY: ReadonlySet<string> = sealedSet(BASE_CHECK_ISOLATION_MODES);
+export const BASE_CHECK_ISOLATION_VOCABULARY: ReadonlySet<string> = new Set<string>(BASE_CHECK_ISOLATION_MODES);
 
 /** Type guard: is `value` a member of the dispatch-isolation vocabulary? */
 export function isDispatchIsolation(value: unknown): value is DispatchIsolation {
@@ -134,12 +75,3 @@ export function isDispatchIsolation(value: unknown): value is DispatchIsolation 
 export function isBaseCheckIsolationMode(value: unknown): value is BaseCheckIsolationMode {
   return typeof value === 'string' && BASE_CHECK_ISOLATION_VOCABULARY.has(value);
 }
-
-// The seal covers the views, not the slots that hold them. The emitted guards
-// read `exports.DISPATCH_ISOLATION_VOCABULARY` at call time, so a consumer
-// assigning a new Set to that export would make the guards accept a mode the
-// tuple and every load-time consumer lack: the same split, through the
-// module's own export. Freezing the exports makes that assignment fail: a
-// TypeError when the assigning code is strict mode, a silent no-op otherwise,
-// and the guards answer the same either way.
-Object.freeze(module.exports);
