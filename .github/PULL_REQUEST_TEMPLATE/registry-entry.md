@@ -15,8 +15,6 @@ Full schema and process: [docs/registries/README.md](https://github.com/open-gsd
 
 Closes #
 
-> The issue must carry a maintainer-applied `approved-feature` or `approved-enhancement` label.
-
 ---
 
 ## Registry type
