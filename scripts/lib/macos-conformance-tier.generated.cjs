@@ -159,6 +159,7 @@ module.exports = {
   "tests/phase-status.test.cjs",
   "tests/phase.platform.test.cjs",
   "tests/phase.test.cjs",
+  "tests/plan-checker-artifact-loop.test.cjs",
   "tests/plan-count-single-owner.test.cjs",
   "tests/plan-document.test.cjs",
   "tests/plan-phase-stall-detection.test.cjs",
