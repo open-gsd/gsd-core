@@ -72,6 +72,9 @@
     "extendedHookEvents": [],
     "extensionEvents": "hermes",
     "hostBehaviors": {
+      "unsupportedFeatures": [
+        "context-warnings"
+      ],
       "skillFrontmatterVersion": true,
       "skillsManifestPrefix": "skills/gsd/",
       "trackCategoryDescription": true,

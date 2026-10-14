@@ -92,6 +92,9 @@
       "promptFlag": "--prompt"
     },
     "hostBehaviors": {
+      "unsupportedFeatures": [
+        "context-warnings"
+      ],
       "reapplyCommand": "/skill:gsd-update --reapply",
       "localInstallDeferred": true,
       "verificationStyle": "kimi",

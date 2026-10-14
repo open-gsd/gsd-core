@@ -96,6 +96,9 @@
       "effortSurface": "undocumented"
     },
     "hostBehaviors": {
+      "unsupportedFeatures": [
+        "context-warnings"
+      ],
       "skillPriorityFrontmatter": true,
       "brandingRewrites": {
         "CLAUDE.md": "QWEN.md",

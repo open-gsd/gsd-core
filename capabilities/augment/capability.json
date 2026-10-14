@@ -87,6 +87,9 @@
     "permissionWriter": null,
     "extendedHookEvents": [],
     "hostBehaviors": {
+      "unsupportedFeatures": [
+        "context-warnings"
+      ],
       "commandBodyConverter": "convertClaudeToAugmentMarkdown",
       "mcpCompanion": "settings-json",
       "contentRewriteProfile": "slash-lookahead-own-derived"

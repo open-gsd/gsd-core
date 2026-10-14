@@ -112,6 +112,9 @@
       "effortSurface": "undocumented"
     },
     "hostBehaviors": {
+      "unsupportedFeatures": [
+        "context-warnings"
+      ],
       "reportCommandsDir": true,
       "contentRewriteProfile": "slash-bare-own-tilde-bare"
     }

@@ -68,6 +68,11 @@ describe('#4840: the context monitor is registered only where a metrics writer i
       const settings = JSON.parse(fs.readFileSync(path.join(dirs.configDir, 'settings.json'), 'utf-8'));
       const monitorEvents = hooksReferencing(settings, 'gsd-context-monitor.js');
       const writerInstalled = !!(settings.statusLine && String(settings.statusLine.command).includes('gsd-statusline.js'));
+      if (runtime === 'claude') {
+        assert.ok(monitorEvents.includes('PostToolUse'), 'claude has the statusline writer, so the monitor must stay registered on PostToolUse');
+      } else {
+        assert.deepEqual(monitorEvents, [], `${runtime} has no context metrics writer, so no event may register the monitor`);
+      }
       if (monitorEvents.length > 0) {
         assert.ok(
           writerInstalled,

@@ -194,6 +194,9 @@ const capabilities = {
         "effortSurface": "undocumented"
       },
       "hostBehaviors": {
+        "unsupportedFeatures": [
+          "context-warnings"
+        ],
         "projectInstructionFile": "GEMINI.md",
         "noPathRewrite": true,
         "hookPathStyle": "raw",
@@ -428,6 +431,9 @@ const capabilities = {
       "permissionWriter": null,
       "extendedHookEvents": [],
       "hostBehaviors": {
+        "unsupportedFeatures": [
+          "context-warnings"
+        ],
         "commandBodyConverter": "convertClaudeToAugmentMarkdown",
         "mcpCompanion": "settings-json",
         "contentRewriteProfile": "slash-lookahead-own-derived"
@@ -1056,6 +1062,9 @@ const capabilities = {
         "effortSurface": "undocumented"
       },
       "hostBehaviors": {
+        "unsupportedFeatures": [
+          "context-warnings"
+        ],
         "reportCommandsDir": true,
         "contentRewriteProfile": "slash-bare-own-tilde-bare"
       }
@@ -1911,6 +1920,9 @@ const capabilities = {
       "extendedHookEvents": [],
       "extensionEvents": "hermes",
       "hostBehaviors": {
+        "unsupportedFeatures": [
+          "context-warnings"
+        ],
         "skillFrontmatterVersion": true,
         "skillsManifestPrefix": "skills/gsd/",
         "trackCategoryDescription": true,
@@ -2233,6 +2245,9 @@ const capabilities = {
         "promptFlag": "--prompt"
       },
       "hostBehaviors": {
+        "unsupportedFeatures": [
+          "context-warnings"
+        ],
         "reapplyCommand": "/skill:gsd-update --reapply",
         "localInstallDeferred": true,
         "verificationStyle": "kimi",
@@ -2349,6 +2364,9 @@ const capabilities = {
         "promptFlag": "--prompt"
       },
       "hostBehaviors": {
+        "unsupportedFeatures": [
+          "context-warnings"
+        ],
         "reapplyCommand": "/skill:gsd-update --reapply",
         "localInstallDeferred": true,
         "verificationStyle": "kimi-code",
@@ -3391,6 +3409,9 @@ const capabilities = {
         "effortSurface": "undocumented"
       },
       "hostBehaviors": {
+        "unsupportedFeatures": [
+          "context-warnings"
+        ],
         "skillPriorityFrontmatter": true,
         "brandingRewrites": {
           "CLAUDE.md": "QWEN.md",
@@ -5609,6 +5630,9 @@ const runtimes = {
         "effortSurface": "undocumented"
       },
       "hostBehaviors": {
+        "unsupportedFeatures": [
+          "context-warnings"
+        ],
         "projectInstructionFile": "GEMINI.md",
         "noPathRewrite": true,
         "hookPathStyle": "raw",
@@ -5760,6 +5784,9 @@ const runtimes = {
       "permissionWriter": null,
       "extendedHookEvents": [],
       "hostBehaviors": {
+        "unsupportedFeatures": [
+          "context-warnings"
+        ],
         "commandBodyConverter": "convertClaudeToAugmentMarkdown",
         "mcpCompanion": "settings-json",
         "contentRewriteProfile": "slash-lookahead-own-derived"
@@ -6182,6 +6209,9 @@ const runtimes = {
         "effortSurface": "undocumented"
       },
       "hostBehaviors": {
+        "unsupportedFeatures": [
+          "context-warnings"
+        ],
         "reportCommandsDir": true,
         "contentRewriteProfile": "slash-bare-own-tilde-bare"
       }
@@ -6719,6 +6749,9 @@ const runtimes = {
       "extendedHookEvents": [],
       "extensionEvents": "hermes",
       "hostBehaviors": {
+        "unsupportedFeatures": [
+          "context-warnings"
+        ],
         "skillFrontmatterVersion": true,
         "skillsManifestPrefix": "skills/gsd/",
         "trackCategoryDescription": true,
@@ -6989,6 +7022,9 @@ const runtimes = {
         "promptFlag": "--prompt"
       },
       "hostBehaviors": {
+        "unsupportedFeatures": [
+          "context-warnings"
+        ],
         "reapplyCommand": "/skill:gsd-update --reapply",
         "localInstallDeferred": true,
         "verificationStyle": "kimi",
@@ -7105,6 +7141,9 @@ const runtimes = {
         "promptFlag": "--prompt"
       },
       "hostBehaviors": {
+        "unsupportedFeatures": [
+          "context-warnings"
+        ],
         "reapplyCommand": "/skill:gsd-update --reapply",
         "localInstallDeferred": true,
         "verificationStyle": "kimi-code",
@@ -7541,6 +7580,9 @@ const runtimes = {
         "effortSurface": "undocumented"
       },
       "hostBehaviors": {
+        "unsupportedFeatures": [
+          "context-warnings"
+        ],
         "skillPriorityFrontmatter": true,
         "brandingRewrites": {
           "CLAUDE.md": "QWEN.md",

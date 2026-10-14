@@ -2466,6 +2466,14 @@ interface ApplySettingsJsonHooksOpts {
   hookOpts: BuildHookCommandOpts;
   localCmd: (hookFile: string) => string | null;
   localShellCmd: (hookFile: string) => string | null;
+  /**
+   * #4840: false when the runtime declares `context-warnings` unsupported
+   * (`hostBehaviors.unsupportedFeatures`) — it has no statusline writer for the
+   * metrics bridge file `gsd-context-monitor.js` reads, so the hook could never
+   * warn. The monitor is then not registered, and a registration left by an
+   * earlier install is stripped. Absent means supported.
+   */
+  contextWarnings?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -2681,6 +2689,32 @@ function pushHookGroup(entries: any[], matcher: string | undefined, command: str
   entries.push(matcher === undefined ? { hooks: [hook] } : { matcher, hooks: [hook] });
 }
 
+/** #4840: the hook that reads the statusline's metrics bridge file. */
+const CONTEXT_MONITOR_HOOK = 'gsd-context-monitor.js';
+
+/**
+ * #4840: remove GSD-managed registrations of `stem` from one event's groups,
+ * leaving user-authored hooks (even in the same group) untouched. Returns
+ * whether anything was removed. A group left with no hooks is dropped.
+ */
+function stripManagedHookRegistrations(entries: any[], stem: string): boolean {
+  let removed = false;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i];
+    if (!entry || !Array.isArray(entry.hooks)) continue;
+    const kept = entry.hooks.filter((h: HookEntry) => {
+      const managed = referencesHook(h as Record<string, unknown>, stem)
+        && isManagedHookCommand((h as { command?: string }).command, { surface: 'settings-json', includeLegacyAliases: true });
+      if (managed) removed = true;
+      return !managed;
+    });
+    if (kept.length === entry.hooks.length) continue;
+    if (kept.length === 0) entries.splice(i, 1);
+    else entry.hooks = kept;
+  }
+  return removed;
+}
+
 function applySettingsJsonHookTables(settings: any, opts: ApplySettingsJsonHooksOpts, tables: SettingsJsonHookTables): void {
   const { runtime, postToolEvent, hookEvents, extendedHookEvents, hooksSurface, targetDir, hookOpts } = opts;
 
@@ -2735,6 +2769,12 @@ function applySettingsJsonHookTables(settings: any, opts: ApplySettingsJsonHooks
       settings.hooks[key] = [];
     }
     const entries: any[] = settings.hooks[key];
+    if (row.file === CONTEXT_MONITOR_HOOK && opts.contextWarnings === false) {
+      if (stripManagedHookRegistrations(entries, hookStem(row.file))) {
+        console.log(`  ${green}✓${reset} Removed stale context monitor hook (${_capabilityTitle(runtime)} has no context metrics writer, #4840)`);
+      }
+      continue;
+    }
     const command = resolveRowCommand(row, opts);
     if ('build' in row.command && row.command.build === 'sh') shellCommands[row.file] = command;
 
@@ -2770,6 +2810,14 @@ function applySettingsJsonHookTables(settings: any, opts: ApplySettingsJsonHooks
   const runtimeLabel = _capabilityTitle(runtime);
   for (const row of tables.extendedRows) {
     if (!extendedEvents.includes(row.event)) continue;
+    if (row.file === CONTEXT_MONITOR_HOOK && opts.contextWarnings === false) {
+      const stale: any[] | undefined = settings.hooks[row.event];
+      if (Array.isArray(stale) && stripManagedHookRegistrations(stale, hookStem(row.file))) {
+        console.log(`  ${green}✓${reset} Removed stale ${row.event} context monitor hook (${runtimeLabel} has no context metrics writer, #4840)`);
+        if (stale.length === 0) delete settings.hooks[row.event];
+      }
+      continue;
+    }
     if (!Array.isArray(settings.hooks[row.event])) {
       settings.hooks[row.event] = [];
     }
@@ -2865,9 +2913,11 @@ function buildKimiHookEntryToml(spec: KimiHookEntrySpec): string | null {
  * unmatched (all tools) instead, which only widens when it fires, it never
  * narrows incorrectly.
  */
-function buildKimiHooksTomlBlock(targetDir: string, opts: { hookOpts: BuildHookCommandOpts }): string | null {
+function buildKimiHooksTomlBlock(targetDir: string, opts: { hookOpts: BuildHookCommandOpts; contextWarnings?: boolean }): string | null {
   const { hookOpts } = opts;
   const cmd = (hookName: string): string | null => {
+    // #4840: no metrics writer on kimi, so the monitor is never written (a block from an earlier install is replaced wholesale).
+    if (hookName === CONTEXT_MONITOR_HOOK && opts.contextWarnings === false) return null;
     if (!fs.existsSync(path.join(targetDir, 'hooks', hookName))) return null;
     return buildHookCommand(targetDir, hookName, hookOpts);
   };
@@ -2963,10 +3013,11 @@ function stripKimiHooksTomlBlock(content: string): string | null {
 function writeKimiHooksToml(
   configPath: string,
   targetDir: string,
-  opts: { hookOpts: BuildHookCommandOpts },
+  opts: { hookOpts: BuildHookCommandOpts; contextWarnings?: boolean },
 ): { changed: boolean; path: string; entryCount: number; configuredEntrypoints: ConfiguredEntrypoint[] } {
   const configuredEntrypoints: ConfiguredEntrypoint[] = [];
   const trackedOpts = {
+    contextWarnings: opts.contextWarnings,
     hookOpts: {
       ...opts.hookOpts,
       configPath,

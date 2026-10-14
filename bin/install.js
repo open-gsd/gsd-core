@@ -1284,6 +1284,17 @@ const applySettingsJsonHooks = hooksSurface.applySettingsJsonHooks;
 // writeKimiHooksToml / removeKimiHooksToml: kimi's native config.toml [[hooks]]
 // surface (#2095 EoS/kimi Upgrade 1) — separate from settings.json entirely.
 const writeKimiHooksToml = hooksSurface.writeKimiHooksToml;
+
+// #4840: false when the runtime declares `context-warnings` unsupported in its
+// descriptor (`hostBehaviors.unsupportedFeatures`). gsd-context-monitor.js reads
+// the metrics bridge file only the statusline hook writes, and the statusline
+// is wired for Claude Code alone, so on any other host the hook fires on every
+// tool event, finds no file and exits silently — forever. Such a host gets no
+// monitor registration (stale ones are stripped), as Codex does since #2586.
+function runtimeSupportsContextWarnings(runtime) {
+  const unsupported = hostBehaviorsFor(runtime).unsupportedFeatures;
+  return !(Array.isArray(unsupported) && unsupported.includes('context-warnings'));
+}
 const removeKimiHooksToml = hooksSurface.removeKimiHooksToml;
 // processAttribution: pure Co-Authored-By content transform, relocated to the
 // conversion module (ADR-1508 / #1510 Phase 1). Bound here so install.js
@@ -13248,7 +13259,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       }
       const kimiHookOpts = { portableHooks: hasPortableHooks, runtime };
       const kimiHooksTomlPath = path.join(kimiHooksRoot, 'config.toml');
-      const kimiHooksResult = writeKimiHooksToml(kimiHooksTomlPath, kimiHooksRoot, { hookOpts: kimiHookOpts });
+      const kimiHooksResult = writeKimiHooksToml(kimiHooksTomlPath, kimiHooksRoot, { hookOpts: kimiHookOpts, contextWarnings: runtimeSupportsContextWarnings(runtime) });
       configuredEntrypoints.push(...kimiHooksResult.configuredEntrypoints);
       if (kimiHooksResult.changed) {
         console.log(`  ${green}✓${reset} Configured ${kimiHooksResult.entryCount} GSD hook(s) in ${kimiHooksTomlPath}`);
@@ -13530,9 +13541,13 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   const updateCheckCommand = isGlobal
     ? buildHookCommand(targetDir, 'gsd-check-update.js', hookOpts)
     : localCmd('gsd-check-update.js');
-  const contextMonitorCommand = isGlobal
-    ? buildHookCommand(targetDir, 'gsd-context-monitor.js', hookOpts)
-    : localCmd('gsd-context-monitor.js');
+  // #4840: no metrics writer on this host -> no monitor to register (see runtimeSupportsContextWarnings).
+  const contextWarnings = runtimeSupportsContextWarnings(runtime);
+  const contextMonitorCommand = !contextWarnings
+    ? null
+    : (isGlobal
+      ? buildHookCommand(targetDir, 'gsd-context-monitor.js', hookOpts)
+      : localCmd('gsd-context-monitor.js'));
   const promptGuardCommand = isGlobal
     ? buildHookCommand(targetDir, 'gsd-prompt-guard.js', hookOpts)
     : localCmd('gsd-prompt-guard.js');
@@ -13553,7 +13568,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // entries to settings.json (which the runtime's hook schema would reject).
   const anyJsHookCommandNull = !statuslineCommand
     || !updateCheckCommand
-    || !contextMonitorCommand
+    || (contextWarnings && !contextMonitorCommand)
     || !promptGuardCommand
     || !readGuardCommand
     || !readInjectionScannerCommand;
@@ -13574,6 +13589,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     hooksSurface: plan.hooksSurface,
     updateCheckCommand,
     contextMonitorCommand,
+    contextWarnings,
     promptGuardCommand,
     readGuardCommand,
     readInjectionScannerCommand,
@@ -13582,6 +13598,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     localCmd,
     localShellCmd,
   });
+  if (!contextWarnings) {
+    console.log(`  ${dim}↳${reset} ${getRuntimeLabel(runtime)}: agent-facing context warnings are unsupported (no statusline writes the context metrics the monitor reads), so the context monitor hook is not registered`);
+  }
 
   // Compute the update-banner hook command alongside the others so
   // installAllRuntimes can register it at finalize time when the user opts
