@@ -55,7 +55,7 @@ Context files (CLAUDE.md, SUMMARY.md, phase state) are resolved inside the workf
 Reviewer lanes run without a phase: pipe canonical repo-relative file paths (one per line) to stdin of
 `gsd_run review-lane dispatch-step --repo-root <root> --depth <quick|standard|deep> --base-sha <sha> --run-dir <dir> --cap-id code-review --point execute:post --explicit <slugs> --raw`.
 `--depth`, `--base-sha` (lane reviews changes relative to it; commit them first) and stdin paths are required. `--cap-id`/`--point` select the `code-review` capability, which must be enabled (`workflow.code_review`); otherwise nothing dispatches.
-`--explicit` takes canonical slugs, not flag aliases (`antigravity`, not `agy`); roster: `gsd_run review-lane flags`.
+`--explicit` takes canonical slugs, not flag aliases (`antigravity`, not `agy`); slugs: first column of `gsd_run review-lane sections` (`review-lane flags` lists flags/aliases).
 Per-lane model key is the flag alias (`review.models.agy`, not `.antigravity`); unset = lane default model.
 
 <process>
