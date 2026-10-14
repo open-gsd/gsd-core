@@ -30,6 +30,8 @@ const { cleanup } = require('./helpers.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { STAGED_HOOK_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
+const { hostBehaviorsFor } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
+
 const { SETTINGS_JSON_HOOK_ROWS, SETTINGS_JSON_EXTENDED_ROWS } = surface;
 
 const SCOPES = ['global', 'local'];
@@ -92,8 +94,10 @@ function pairsOf(registered) {
 
 /** Every table row the runtime registers: its own rows plus the extended rows its descriptor admits. */
 function expectedPairs(rt) {
+  // #4840: a host with no context metrics writer declares context-warnings unsupported and gets no tool-event monitor.
+  const noMonitor = (hostBehaviorsFor(rt.id).unsupportedFeatures || []).includes('context-warnings');
   const rows = [
-    ...SETTINGS_JSON_HOOK_ROWS,
+    ...SETTINGS_JSON_HOOK_ROWS.filter((r) => !(noMonitor && r.file === 'gsd-context-monitor.js')),
     ...SETTINGS_JSON_EXTENDED_ROWS.filter((r) => rt.extendedHookEvents.includes(r.event)),
   ];
   return rows.map((r) => `${r.event}:${r.file}`).sort();
