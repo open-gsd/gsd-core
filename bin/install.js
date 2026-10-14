@@ -7717,30 +7717,20 @@ function convertClaudeToKiloFrontmatter(content, { isAgent = false, modelOverrid
 // bespoke inline block that used to call this function.
 
 /**
- * Count the gsd-* skill dirs in `skillsDir` (#5161). `owned` is the dirs GSD
- * owns, and only it feeds the non-empty check that detects a failed install:
- * a gsd-* dir the prune kept because GSD does not own it must not stand in for
- * an install that wrote nothing. `reported` is what "Installed N skills" prints:
- * the owned dirs plus any USER_OWNED_SKILL_DIRS entry present
- * (gsd-dev-preferences), which the writers restore and writeManifest records,
- * as the count did before #5161. A user's own gsd-* dir is in neither.
+ * Count the gsd-* skill dirs in `skillsDir` for "Installed N skills" and the
+ * non-empty check that detects a failed install (#5161): the dirs GSD owns,
+ * plus any USER_OWNED_SKILL_DIRS entry present (gsd-dev-preferences), which
+ * both counted before #5161. A gsd-* dir the prune kept because GSD does not
+ * own it is not counted, so it can neither inflate the line nor stand in for
+ * an install that wrote nothing.
  */
 function _countOwnedSkillDirs(runtime, configDir, skillsDir) {
   // A verification count fails closed: an unreadable install source must not
   // let a user's gsd-* dir stand in for an install that wrote nothing.
   const owns = createSkillDirOwnership(runtime, configDir, skillsDir, 'gsd-', { includeManifest: false });
-  let owned = 0;
-  let reported = 0;
-  for (const e of fs.readdirSync(skillsDir, { withFileTypes: true })) {
-    if (!e.isDirectory() || !e.name.startsWith('gsd-')) continue;
-    if (owns(e.name)) {
-      owned++;
-      reported++;
-    } else if (USER_OWNED_SKILL_DIRS.includes(e.name)) {
-      reported++;
-    }
-  }
-  return { owned, reported };
+  return fs.readdirSync(skillsDir, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && e.name.startsWith('gsd-') && (owns(e.name) || USER_OWNED_SKILL_DIRS.includes(e.name)))
+    .length;
 }
 
 function listCodexSkillNames(skillsDir, prefix = 'gsd-') {
@@ -11805,9 +11795,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       const hermesSkillsDir = path.join(targetDir, 'skills', 'gsd');
       if (fs.existsSync(hermesSkillsDir)) {
         // Hermes layout uses prefix: 'gsd-' (#947) — skill dirs have gsd-<stem> names
-        const { owned, reported } = _countOwnedSkillDirs(runtime, targetDir, hermesSkillsDir);
-        if (owned > 0) {
-          console.log(`  ${green}✓${reset} Installed ${reported} skills to skills/gsd/`);
+        const count = _countOwnedSkillDirs(runtime, targetDir, hermesSkillsDir);
+        if (count > 0) {
+          console.log(`  ${green}✓${reset} Installed ${count} skills to skills/gsd/`);
         } else {
           failures.push('skills/gsd/*');
         }
@@ -11818,9 +11808,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       const skillsDir = path.join(targetDir, 'skills');
       const rootAgentPath = path.join(targetDir, 'agents', 'gsd.yaml');
       if (fs.existsSync(skillsDir)) {
-        const { owned, reported } = _countOwnedSkillDirs(runtime, targetDir, skillsDir);
-        if (owned > 0) {
-          console.log(`  ${green}✓${reset} Installed ${reported} Kimi skills to skills/`);
+        const count = _countOwnedSkillDirs(runtime, targetDir, skillsDir);
+        if (count > 0) {
+          console.log(`  ${green}✓${reset} Installed ${count} Kimi skills to skills/`);
         } else {
           failures.push('skills/gsd-*');
         }
@@ -11857,9 +11847,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     } else {
       const skillsDir = _skillsRootDir;
       if (fs.existsSync(skillsDir)) {
-        const { owned, reported } = _countOwnedSkillDirs(runtime, targetDir, skillsDir);
-        if (owned > 0) {
-          console.log(`  ${green}✓${reset} Installed ${reported} skills to skills/`);
+        const count = _countOwnedSkillDirs(runtime, targetDir, skillsDir);
+        if (count > 0) {
+          console.log(`  ${green}✓${reset} Installed ${count} skills to skills/`);
         } else {
           failures.push('skills/gsd-*');
         }
