@@ -232,7 +232,7 @@ const RATCHET_BASELINE = {
   'state-document':          50,  // #4998: CI 50.47% (run 39742269013); range minimum
   'planning-document':       74,  // #4998: CI run 39736529871 (#5234): measured 75.14%; floor(75.14)-1
   'dispatch-isolation':      80,  // #4904: net-new module; re-derived after the seal's removal:
-                                   // local run with the shard's inputs, 81.48%; floor(81.48)-1. PROVISIONAL.
+                                   // CI run 38679417039 (PR #5126): measured 81.48%; floor(81.48)-1.
 };
 
 describe('mutation-matrix ratchet: floor equality enforcement', () => {
