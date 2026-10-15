@@ -1609,6 +1609,161 @@ describe('requirements ready-ids command (#2388 shared-ID gate)', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// gsd-executor.md requirements ready-ids gate (#4944)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  function writeRequirements(tmpDir, content) {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), content, 'utf-8');
+  }
+
+  function readRequirements(tmpDir) {
+    return fs.readFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), 'utf-8');
+  }
+
+  function makePhaseDir(tmpDir) {
+    const dir = path.join(tmpDir, '.planning', 'phases', '05-05-feature');
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  const SHARED_REQUIREMENTS = `# Requirements
+
+## Feature
+
+- [ ] **SHARED-01**: shared across two plans
+- [ ] **SOLO-01**: only plan-02 declares this
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| SHARED-01 | Phase 5 | Pending |
+| SOLO-01 | Phase 5 | Pending |
+`;
+
+  function extractExecutorReadyIdsBash() {
+    const executorPath = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
+    const content = fs.readFileSync(executorPath, 'utf-8');
+    const anchor = '# Locate assigned plan path for ready-ids check; fail closed if not found (#4944)';
+    const anchorIdx = content.indexOf(anchor);
+    assert.ok(anchorIdx !== -1, `Anchor "${anchor}" not found in ${executorPath}`);
+    const fenceClose = content.indexOf('```', anchorIdx);
+    assert.ok(fenceClose !== -1, 'Closing ``` fence not found in gsd-executor.md');
+    return content.slice(anchorIdx, fenceClose);
+  }
+
+  function runExtractedExecutorBash(cwd, envOverrides = {}) {
+    const bashSnippet = extractExecutorReadyIdsBash();
+    const { spawnSync } = require('child_process');
+    const fullScript = [
+      '#!/usr/bin/env bash',
+      'set -e',
+      `gsd_run() { node "${TOOLS_PATH}" "$@"; }`,
+      bashSnippet,
+    ].join('\n');
+
+    return spawnSync('bash', ['-c', fullScript], {
+      cwd,
+      env: {
+        ...process.env,
+        ...TEST_ENV_BASE,
+        ...envOverrides,
+      },
+      encoding: 'utf-8',
+      timeout: PROBE_TIMEOUT_MS,
+    });
+  }
+
+  test('behavioral: extracted executor bash gates shared requirement until sibling plan finishes', () => {
+    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+    const dir = makePhaseDir(tmpDir);
+    const plan1 = path.join(dir, '05-05-01-a-PLAN.md');
+    const plan2 = path.join(dir, '05-05-02-b-PLAN.md');
+    fs.writeFileSync(plan1, '---\nphase: 05-05\nplan: 01\nrequirements: [SHARED-01]\n---\nPlan A\n');
+    fs.writeFileSync(plan2, '---\nphase: 05-05\nplan: 02\nrequirements: [SHARED-01, SOLO-01]\n---\nPlan B\n');
+
+    // Step 1: Plan 1 finishes first (writes its summary). Sibling Plan 2 has no summary yet.
+    fs.writeFileSync(path.join(dir, '05-05-01-a-SUMMARY.md'), 'done\n');
+
+    // Execute the extracted prompt bash directly
+    const res1 = runExtractedExecutorBash(tmpDir, {
+      PLAN_PATH: plan1,
+      REQ_IDS: 'SHARED-01',
+    });
+    assert.strictEqual(res1.status, 0, `extracted bash failed: ${res1.stderr || res1.stdout}`);
+
+    // Assert REQUIREMENTS.md on disk still keeps SHARED-01 unchecked
+    let content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [ ] **SHARED-01**'), 'SHARED-01 checkbox must stay unchecked on disk');
+    assert.ok(content.includes('| SHARED-01 | Phase 5 | Pending |'), 'SHARED-01 traceability must stay Pending');
+
+    // Step 2: Plan 2 finishes (writes its summary).
+    fs.writeFileSync(path.join(dir, '05-05-02-b-SUMMARY.md'), 'done\n');
+
+    // Execute the extracted prompt bash for Plan 2
+    const res2 = runExtractedExecutorBash(tmpDir, {
+      PLAN_PATH: plan2,
+      REQ_IDS: 'SHARED-01 SOLO-01',
+    });
+    assert.strictEqual(res2.status, 0, `extracted bash failed: ${res2.stderr || res2.stdout}`);
+
+    // Assert REQUIREMENTS.md on disk now has both checked
+    content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [x] **SHARED-01**'), 'SHARED-01 checkbox should now be checked on disk');
+    assert.ok(content.includes('- [x] **SOLO-01**'), 'SOLO-01 checkbox should now be checked on disk');
+  });
+
+  test('negative control: nonexistent plan path fails closed and skips mark-complete', () => {
+    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+    const dir = makePhaseDir(tmpDir);
+    // Plant plan1 without sibling summary
+    const plan1 = path.join(dir, '05-05-01-a-PLAN.md');
+    fs.writeFileSync(plan1, '---\nphase: 05-05\nplan: 01\nrequirements: [SHARED-01]\n---\nPlan A\n');
+
+    // Execute extracted bash with a nonexistent plan path
+    const res = runExtractedExecutorBash(tmpDir, {
+      PLAN_PATH: path.join(tmpDir, '.planning', 'phases', 'nonexistent', 'bogus-PLAN.md'),
+      REQ_IDS: 'SHARED-01',
+    });
+    assert.strictEqual(res.status, 0, `extracted bash should exit 0 on graceful fail-close: ${res.stderr || res.stdout}`);
+
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [ ] **SHARED-01**'), 'REQUIREMENTS.md must stay unchecked when PLAN_PATH does not exist');
+  });
+
+  test('behavioral: extracted executor bash resolves nested plans layout from INIT JSON', () => {
+    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-05-feature');
+    const plansDir = path.join(phaseDir, 'plans');
+    fs.mkdirSync(plansDir, { recursive: true });
+
+    // Nested layout: .planning/phases/05-05-feature/plans/PLAN-01.md (#3139)
+    const planNested = path.join(plansDir, 'PLAN-01.md');
+    fs.writeFileSync(planNested, '---\nphase: 05-05\nplan: 01\nrequirements: [SOLO-01]\n---\nPlan Nested\n');
+
+    // Run without explicit PLAN_PATH, passing INIT JSON with phase_dir
+    const res = runExtractedExecutorBash(tmpDir, {
+      PLAN_PATH: '',
+      INIT: JSON.stringify({ phase_dir: '.planning/phases/05-05-feature' }),
+      PHASE: '05-05',
+      PLAN: '01',
+      REQ_IDS: 'SOLO-01',
+    });
+    assert.strictEqual(res.status, 0, `extracted bash failed: ${res.stderr || res.stdout}`);
+
+    // SOLO-01 has no sibling blockers, so it completes
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [x] **SOLO-01**'), 'SOLO-01 should be marked complete via nested plan resolution');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // requirements revert-phase command — gaps_found revert (#2388)
 // ─────────────────────────────────────────────────────────────────────────────
 
