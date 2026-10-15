@@ -514,14 +514,14 @@ Extract requirement IDs from the plan's frontmatter (e.g., `requirements: [AUTH-
 **Shared-ID gate (#2388):** a requirement ID declared by more than one plan in this phase must not read `Complete` until every plan declaring it has finished (produced a `*-SUMMARY.md`) — otherwise the first plan to finish flips it `Complete` while its sibling plans are still running, before phase verification ever gets a chance to catch a real gap. Compute the ready subset first, then mark only those:
 
 ```bash
-READY=$(gsd_run query requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS} --raw)
+READY=$(gsd_run query requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS})
 READY_IDS=$(printf '%s' "$READY" | jq -r '.ready[]' 2>/dev/null | tr '\n' ' ')
 if [ -n "$(printf '%s' "$READY_IDS" | tr -d '[:space:]')" ]; then
   gsd_run query requirements.mark-complete ${READY_IDS}
 fi
 ```
 
-`requirements.ready-ids` is read-only: it scans sibling `*-PLAN.md` files in this plan's phase directory and blocks an ID only when a sibling ALSO declares it and that sibling has no `*-SUMMARY.md` yet. An ID no sibling declares is always ready (single-plan requirements mark immediately, no added latency). A blocked ID is re-evaluated the next time any plan in this phase finishes its own `update_requirements` step, and becomes ready once the LAST declaring plan's SUMMARY exists.
+`requirements.ready-ids` is read-only and prints JSON by default (`--raw` prints a prose summary `jq` cannot read, so the ready list would always be empty, #4956): it scans sibling `*-PLAN.md` files in this plan's phase directory and blocks an ID only when a sibling ALSO declares it and that sibling has no `*-SUMMARY.md` yet. An ID no sibling declares is always ready (single-plan requirements mark immediately, no added latency). A blocked ID is re-evaluated the next time any plan in this phase finishes its own `update_requirements` step, and becomes ready once the LAST declaring plan's SUMMARY exists.
 </step>
 
 <step name="git_commit_metadata">
