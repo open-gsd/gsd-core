@@ -16,7 +16,7 @@ const hrefsOf = (f) => [...fs.readFileSync(path.join(GH, f), 'utf8').matchAll(LI
 describe('PR template links (#5427)', () => {
   const headings = new Set(
     fs.readFileSync(path.join(ROOT, 'CONTRIBUTING.md'), 'utf8')
-      .split('\n').filter((l) => /^#{1,6} /.test(l)).map((l) => slug(l.replace(/^#+ /, ''))),
+      .split(/\r?\n/).filter((l) => /^#{1,6} /.test(l)).map((l) => slug(l.replace(/^#+ /, ''))),
   );
   const files = ['pull_request_template.md', ...fs.readdirSync(DIR).filter((n) => n.endsWith('.md')).map((n) => `PULL_REQUEST_TEMPLATE/${n}`)];
   for (const f of files) {
