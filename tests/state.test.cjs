@@ -22251,3 +22251,92 @@ describe('C2 (ADR-4629 §8.2/§8.3): StateWriteIntent verifying executor', () =>
     });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #4945 — begin-phase on a gap-closure re-entry starts at the first plan still to run
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#4945 begin-phase on a gap-closure re-entry', () => {
+  let tmp;
+  beforeEach(() => {
+    tmp = createFixture();
+  });
+  afterEach(() => cleanup(tmp));
+
+  const writePhase = ({ plans, summarized, status }) => {
+    const dir = path.join(tmp, '.planning', 'phases', '48-survivable');
+    fs.mkdirSync(dir, { recursive: true });
+    for (let n = 1; n <= plans; n++) {
+      const id = String(n).padStart(2, '0');
+      fs.writeFileSync(path.join(dir, `48-${id}-PLAN.md`), `---\nphase: 48\nplan: ${n}\ntype: execute\n---\n# plan ${n}\n`);
+      if (n <= summarized) fs.writeFileSync(path.join(dir, `48-${id}-SUMMARY.md`), `# summary ${n}\n`);
+    }
+    fs.writeFileSync(path.join(tmp, '.planning', 'STATE.md'), `# Project State
+
+**Current Phase:** 48
+**Current Phase Name:** survivable
+**Total Phases:** 60
+**Current Plan:** ${summarized}
+**Total Plans in Phase:** ${summarized}
+**Status:** ${status}
+**Last Activity:** 2026-10-01
+
+## Current Position
+Phase: 48 (survivable) — ${status.toUpperCase()}
+Plan: ${summarized} of ${summarized} in current phase
+Status: ${status}
+Last activity: 2026-10-01 -- done
+`);
+  };
+
+  const read = () => fs.readFileSync(path.join(tmp, '.planning', 'STATE.md'), 'utf-8');
+  const run = (plans) => runGsdTools(['state', 'begin-phase', '--phase', '48', '--name', 'survivable', '--plans', String(plans)], tmp);
+
+  test('17 of 19 plans summarized: Current Plan and Plan: N of M start at the first plan still to run', () => {
+    writePhase({ plans: 19, summarized: 17, status: 'Verifying' });
+    const r = run(19);
+    assert.ok(r.success, r.error);
+    const out = read();
+    assert.match(out, /^\*\*Current Plan:\*\* 18$/m);
+    assert.match(out, /^\*\*Total Plans in Phase:\*\* 19$/m);
+    assert.match(out, /^Plan: 18 of 19/m);
+    assert.doesNotMatch(out, /^\*\*Current Plan:\*\* 1$/m);
+  });
+
+  test('the first incomplete plan is used even when the summarized plans are not a prefix', () => {
+    writePhase({ plans: 5, summarized: 0, status: 'Ready to plan' });
+    const dir = path.join(tmp, '.planning', 'phases', '48-survivable');
+    fs.writeFileSync(path.join(dir, '48-03-SUMMARY.md'), '# s\n');
+    fs.writeFileSync(path.join(dir, '48-04-SUMMARY.md'), '# s\n');
+    const r = run(5);
+    assert.ok(r.success, r.error);
+    assert.match(read(), /^\*\*Current Plan:\*\* 1$/m);
+  });
+
+  test('CONTROL: a phase with no summarized plan starts at plan 1, as before', () => {
+    writePhase({ plans: 4, summarized: 0, status: 'Ready to plan' });
+    const r = run(4);
+    assert.ok(r.success, r.error);
+    const out = read();
+    assert.match(out, /^\*\*Current Plan:\*\* 1$/m);
+    assert.match(out, /^Plan: 1 of 4/m);
+  });
+
+  test('CONTROL: a phase directory that cannot be found starts at plan 1, as before', () => {
+    fs.writeFileSync(path.join(tmp, '.planning', 'STATE.md'), '# Project State\n\n**Status:** Ready\n**Current Plan:** 0\n');
+    const r = runGsdTools(['state', 'begin-phase', '--phase', '77', '--name', 'ghost', '--plans', '3'], tmp);
+    assert.ok(r.success, r.error);
+    assert.match(read(), /^\*\*Current Plan:\*\* 1$/m);
+  });
+
+  test('CONTROL: a resume (Status already Executing Phase 48) still preserves mid-flight progress', () => {
+    writePhase({ plans: 19, summarized: 17, status: 'Executing Phase 48' });
+    fs.writeFileSync(
+      path.join(tmp, '.planning', 'STATE.md'),
+      read().replace('**Current Plan:** 17', '**Current Plan:** 9'),
+    );
+    const r = run(19);
+    assert.ok(r.success, r.error);
+    assert.match(read(), /^\*\*Current Plan:\*\* 9$/m);
+  });
+});
