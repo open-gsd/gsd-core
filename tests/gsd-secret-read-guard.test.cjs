@@ -1544,6 +1544,8 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       [R`cat $'it\'s/.env'`, "it's/.env"],
       [R`cat $'a\tb/.env'`, 'a\tb/.env'],
       [R`cat $'\xc3\xa9/.env'`, 'é/.env'], // bytes, decoded as UTF-8
+      [R`cat $'.env.\xff'`, '.env.\ufffd'], // a byte that is not UTF-8 is read as U+FFFD
+      [R`cat $'x\xc3/.env'`, 'x\ufffd/.env'], // and never swallows the byte after it
       [R`cat $'\d/.env'`, R`\d/.env`], // an unknown escape keeps its backslash
       [R`cat $'.env\0ignored'`, '.env'], // a NUL ends the value
       [R`cat < $'.e\x6ev'`, '.env'],
@@ -1626,15 +1628,26 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     }
 
     const undecodable = [
-      R`echo $'\xff'`, // not UTF-8
-      R`echo $'\xc3'`, // a truncated UTF-8 sequence
-      R`echo $'\ud800'`, // a surrogate
-      R`echo $'\U00110000'`, // past the last code point
+      R`echo $'\ud800'`, // a surrogate: zsh refuses the line
+      R`echo $'\U00110000'`, // past the last code point: zsh refuses the line
       "cat $'.\u0000env'", // a literal NUL, not an escape: bash drops it and reads `.env`
     ];
     for (const cmd of undecodable) {
       test(`denies ${JSON.stringify(cmd)} as ansi-c-undecodable`, () => {
         assertBlocked(runHook(bash(cmd)), cmd, { code: 'ansi-c-undecodable', tool: 'Bash' });
+      });
+    }
+
+    // Bytes that are not UTF-8 are a value like any other: bash hands them to
+    // the command, and no protected name holds one.
+    const notUtf8 = [
+      R`echo $'\xff'; ls`,
+      R`echo $'\xc3'; ls`, // a truncated UTF-8 sequence
+      R`printf $'\x89PNG\r\n' > a.png`,
+    ];
+    for (const cmd of notUtf8) {
+      test(`allows ${JSON.stringify(cmd)}`, () => {
+        assertAllowed(runHook(bash(cmd)), cmd);
       });
     }
 
@@ -1867,18 +1880,11 @@ describe("decodeAnsiC against bash 5.2 and zsh 5.9 (in-process; review round 6, 
   const R = String.raw;
   const { decodeAnsiC } = require(HOOK_PATH);
   const oracle = require('./fixtures/ansi-c-decode-oracle.json');
-  const STRICT = new TextDecoder('utf-8', { fatal: true });
   const LOSSY = new TextDecoder('utf-8');
-  // What the hook should read for a span, from the bytes the shell handed a
-  // child: bash's value must be UTF-8 or the word has none (null); zsh's is
-  // decoded lossily and compared at its first NUL, where a child's argument
-  // ends.
-  const expected = (hex, shell) => {
-    if (hex === null) return null;
-    const bytes = Buffer.from(hex, 'hex');
-    if (shell === 'zsh') return LOSSY.decode(bytes);
-    try { return STRICT.decode(bytes); } catch { return null; }
-  };
+  // What the hook should read for a span: the bytes the shell handed a child,
+  // decoded lossily (null when the shell refused the line). zsh's value is
+  // compared at its first NUL, where a child's argument ends.
+  const expected = (hex) => (hex === null ? null : LOSSY.decode(Buffer.from(hex, 'hex')));
   const asChild = (v, shell) => (v !== null && shell === 'zsh' && v.includes('\0') ? v.slice(0, v.indexOf('\0')) : v);
 
   test(`agrees with the committed oracle on all ${oracle.cases.length} spans, both shells`, () => {
@@ -1886,7 +1892,7 @@ describe("decodeAnsiC against bash 5.2 and zsh 5.9 (in-process; review round 6, 
     for (const [raw, bashHex, zshHex] of oracle.cases) {
       for (const [shell, hex] of [['bash', bashHex], ['zsh', zshHex]]) {
         const got = asChild(decodeAnsiC(raw, shell), shell);
-        if (got !== expected(hex, shell)) misses.push(`${shell} ${JSON.stringify(raw)}`);
+        if (got !== expected(hex)) misses.push(`${shell} ${JSON.stringify(raw)}`);
       }
     }
     assert.deepEqual(misses, []);
@@ -1909,7 +1915,14 @@ describe("decodeAnsiC against bash 5.2 and zsh 5.9 (in-process; review round 6, 
     [R`\x-1`, '\\x-1', '\ufffd'],
     [R`a\0b`, 'a', 'a\0b'],
     [R`\0101`, '\x081', '\x081'],
-    [R`\777`, null, '\ufffd'],
+    [R`\777`, '\ufffd', '\ufffd'],
+    [R`x\xc3/`, 'x\ufffd/', 'x\ufffd/'], // a bad byte never swallows the byte after it
+    // bash writes a surrogate or a value past U+10FFFF in the UTF-8 pattern
+    // (ed a0 80; six bytes for 7fffffff) and nothing from 2^31; zsh refuses all
+    // three. Measured against bash 5.2.21 and zsh 5.9.
+    [R`\ud800`, '\ufffd'.repeat(3), null],
+    [R`\U7fffffff`, '\ufffd'.repeat(6), null],
+    [R`\U80000000`, '', null],
     [R`\.env`, '\\.env', '.env'],
     [R`\C-@`, '\\C-@', '\0'],
     [R`\C-a`, '\\C-a', '\x01'],
