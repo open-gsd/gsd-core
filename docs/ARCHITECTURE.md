@@ -570,7 +570,7 @@ Conceptual spawn-pattern taxonomy for the primary agents. For the authoritative 
 
 | Category         | Agents                                                                                  | Parallelism                                                                               |
 | ---------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| **Researchers**  | gsd-project-researcher, gsd-phase-researcher, gsd-ui-researcher, gsd-advisor-researcher | 4 parallel (stack, features, architecture, pitfalls); advisor spawns during discuss-phase |
+| **Researchers**  | gsd-project-researcher, gsd-phase-researcher, gsd-ui-researcher, gsd-advisor-researcher | Up to 4 parallel (stack, features, architecture, pitfalls); advisor spawns during discuss-phase |
 | **Synthesizers** | gsd-research-synthesizer                                                                | Sequential (after researchers complete)                                                   |
 | **Planners**     | gsd-planner, gsd-roadmapper                                                             | Sequential                                                                                |
 | **Checkers**     | gsd-plan-checker, gsd-integration-checker, gsd-ui-checker, gsd-nyquist-auditor          | Sequential (verification loop, max 3 iterations)                                          |
