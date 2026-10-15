@@ -182,6 +182,7 @@ module.exports = {
   "tests/mcp-catalog.test.cjs",
   "tests/milestone-archive.test.cjs",
   "tests/milestone-window-single-owner.test.cjs",
+  "tests/milestone.test.cjs",
   "tests/model-resolver.test.cjs",
   "tests/mutation-workflow-base-ref.test.cjs",
   "tests/new-milestone-clear-phases.test.cjs",
