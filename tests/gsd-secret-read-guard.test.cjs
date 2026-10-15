@@ -1836,7 +1836,10 @@ describe("regressions: #5255 — zsh's reading of $'…' (review round 6, Major 
   // zsh is the Bash tool's shell on macOS, and it decodes `$'…'` differently
   // from bash (zsh 5.9 getkeystring): an unknown escape drops its backslash,
   // a bare `\x` / `\u` / `\U` is a NUL, `\C-` / `\M-` modify the next byte,
-  // and heredoc tags are decoded too. Each row reads `.env` under zsh only.
+  // and heredoc tags are decoded too. Each row reads its path under zsh only.
+  // Every row was run in zsh 5.9 (Alpine 3, 2026-10-15): `cat` printed the
+  // file, including the trailing-modifier rows, which the decoder model alone
+  // had derived.
   const R = String.raw;
   const zshOnly = [
     [R`cat $'.env\u'`, '.env'],
@@ -1847,6 +1850,12 @@ describe("regressions: #5255 — zsh's reading of $'…' (review round 6, Major 
     [R`cat $'.env\M-'`, '.env'], // a trailing `\M-` has no byte to modify; zsh drops it
     [R`cat $'.env\C-'`, '.env'], // the same for `\C-`
     [R`cat $'.env\M'`, '.env'], // and without the dash
+    [R`cat $'.env\C'`, '.env'],
+    [R`cat $'.env\M-\C-'`, '.env'], // stacked modifiers with no byte after them
+    [R`cat $'.env\M\C-'`, '.env'],
+    [R`cat $'.env\C-\M-'`, '.env'],
+    [R`cat $'.env\x{4'`, '.env'], // `\x{` is a NUL to zsh whatever follows; bash reads `.env\x04`
+    [R`cat $'.env\x{41'`, '.env'],
     [R`cat $'.env.\local'`, '.env.local'], // zsh drops an unknown escape's backslash
   ];
   for (const [cmd, path] of zshOnly) {
