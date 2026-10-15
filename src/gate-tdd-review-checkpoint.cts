@@ -68,13 +68,10 @@ function toPlanId(token: string): string {
  * link can never turn a failing plan into a passing one.
  */
 function dependsOnOf(content: string): string[] {
-  try {
-    const value: unknown = extractFrontmatter(content)['depends_on'];
-    const tokens = Array.isArray(value) ? value.map(String) : typeof value === 'string' ? value.split(',') : [];
-    return tokens.map(toPlanId).filter((id) => id !== '');
-  } catch {
-    return [];
-  }
+  // `extractFrontmatter` does not throw: an unparseable block is an empty result, so `depends_on` is absent.
+  const value: unknown = extractFrontmatter(content)['depends_on'];
+  const tokens = Array.isArray(value) ? value.map(String) : typeof value === 'string' ? value.split(',') : [];
+  return tokens.map(toPlanId).filter((id) => id !== '');
 }
 
 /** Every plan that depends on `planId`, directly or through a chain (#4867); a cycle is walked once. */
