@@ -109,7 +109,7 @@ describe('#4927 authored count/match gates are run before they ship', () => {
   const checker = read('agents/gsd-plan-checker.md');
 
   test('the planner reference says to run a count/match gate against the current tree and record the baseline', () => {
-    assert.match(grounding, /run (it|the gate)[^.]*\b(HEAD|current tree)\b/i);
+    assert.match(grounding, /run[^.]*gate[^.]*\bcurrent tree\b/i);
     assert.match(grounding, /baseline/i);
   });
 
