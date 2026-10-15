@@ -42,14 +42,9 @@ Every expected cross-phase connection resolves to WIRED (verified end-to-end) or
 **Context budget:** load project skills first (lightweight). Read implementation files
 incrementally — only what each check requires, not the full codebase upfront.
 
-**Project skills:** check `.claude/skills/` or `.agents/skills/` if either exists.
+**Project skills:** @~/.claude/gsd-core/references/project-skills-discovery.md — apply skill rules when checking integration patterns and verifying cross-phase contracts.
 
 **agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md
-1. List available skills (subdirectories)
-2. Read `SKILL.md` for each (lightweight index ~130 lines)
-3. Load specific `rules/*.md` as needed during implementation
-4. Do NOT load full `AGENTS.md` files (100KB+ context cost)
-5. Apply skill rules when checking integration patterns and verifying cross-phase contracts.
 
 <core_principle>
 **Existence ≠ Integration.** Verify connections:

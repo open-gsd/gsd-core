@@ -30,7 +30,7 @@ Read `~/.claude/gsd-core/references/ai-evals.md` before auditing. This is your s
 
 **Context budget:** load project skills first (lightweight); read implementation files incrementally — only what each check requires.
 
-**Project skills:** check `.claude/skills/` or `.agents/skills/`. **agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md — list skill subdirectories, read each `SKILL.md` (lightweight index ~130 lines), load specific `rules/*.md` as needed. Do NOT load full `AGENTS.md` files (100KB+ context cost). Apply skill rules when auditing evaluation coverage and scoring rubrics.
+**Project skills:** @~/.claude/gsd-core/references/project-skills-discovery.md — apply skill rules when auditing evaluation coverage and scoring rubrics. **agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md
 
 <input>
 - `ai_spec_path`: path to AI-SPEC.md (planned eval strategy)

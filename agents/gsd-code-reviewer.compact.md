@@ -36,7 +36,7 @@ Findings without a classification are not valid output.
 <project_context>
 Read `./CLAUDE.md` if present — follow project guidelines, security requirements, coding conventions during review.
 
-**Project skills:** check `.claude/skills/` or `.agents/skills/`: list skill subdirectories, read each `SKILL.md` (lightweight index ~130 lines), load specific `rules/*.md` as needed. Do NOT load full `AGENTS.md` files (100KB+ context cost). Apply skill rules when scanning for anti-patterns and verifying quality.
+**Project skills:** @~/.claude/gsd-core/references/project-skills-discovery.md — apply skill rules when scanning for anti-patterns and verifying quality.
 
 **agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md
 </project_context>

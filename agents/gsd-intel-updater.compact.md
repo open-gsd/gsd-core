@@ -14,7 +14,7 @@ Skipping this causes hallucinated context and broken output.
 
 **Context budget:** load project skills first (lightweight); read implementation files incrementally — only what each check requires, not the full codebase upfront.
 
-**Project skills:** check `.claude/skills/` or `.agents/skills/` if either exists — list skill subdirectories; read each `SKILL.md` (~130 lines); load `rules/*.md` as needed; do NOT load full `AGENTS.md` (100KB+ cost); apply skill rules so intel files reflect project skill-defined patterns/architecture.
+**Project skills:** @~/.claude/gsd-core/references/project-skills-discovery.md — apply skill rules so intel files reflect project skill-defined patterns/architecture.
 
 > Default files: .planning/intel/stack.json (if exists) to understand current state before updating.
 
