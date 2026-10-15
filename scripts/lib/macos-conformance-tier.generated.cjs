@@ -71,6 +71,7 @@ module.exports = {
   "tests/execute-phase-decimal-arithmetic.test.cjs",
   "tests/executed-plan.test.cjs",
   "tests/executor-mvp-tdd-section.test.cjs",
+  "tests/executor-sequential-linked-worktree.test.cjs",
   "tests/external-job.test.cjs",
   "tests/failing-direction.test.cjs",
   "tests/fallow-runner.test.cjs",
