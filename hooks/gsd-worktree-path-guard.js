@@ -34,8 +34,23 @@ const ON_CRASH = HOOK_ON_CRASH.ALLOW;
 // hooks/lib/git-probe.js, #5180). This guard runs at most 3 sequential probes.
 const SPAWNOPT = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: BLOCKING_GUARD_PROBE_TIMEOUT_MS, windowsHide: true };
 
+// #5048: GIT_OPTIONAL_LOCKS=0 on every git call from this hook. `git rev-parse`
+// never opens the index, so this is inert for today's callers; it is set anyway
+// so the read-only invariant has no holes if a `status` / `diff` caller is ever
+// added here. git refreshes the index and takes an *optional*
+// `.git/index.lock` on some reads, and this hook runs on every tool call, so a
+// read here can otherwise fail a concurrent `git add` / `git commit` with
+// `Unable to create '.git/index.lock': File exists`.
+//
+// The env block is owned by src/read-only-git-env.cts and shared with every
+// other read-only seam (built artifact, not a sibling hooks/-tree file — same
+// rule hooks/lib/git-cmd.js follows for token-scanner). It is read per spawn,
+// not snapshotted at load, so the two guards behave identically.
+// Parity: tests/git-optional-locks-parity.test.cjs.
+const { readOnlyGitEnv } = require('../gsd-core/bin/lib/read-only-git-env.cjs');
+
 function git(args, cwd) {
-  return spawnSync('git', args, { ...SPAWNOPT, cwd });
+  return spawnSync('git', args, { ...SPAWNOPT, cwd, env: readOnlyGitEnv() });
 }
 
 // Walk up from `start` to find the nearest existing directory.
