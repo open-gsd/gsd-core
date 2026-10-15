@@ -339,6 +339,7 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const NEW_PROJECT_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'new-project.md');
 const NEW_MILESTONE_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'new-milestone.md');
@@ -410,6 +411,22 @@ describe('gsd-project-researcher agent registration (#2419)', () => {
       'new-milestone.md must warn the user when agents are not installed (agents_installed is false)'
     );
   });
+
+  for (const [label, file] of [['new-project.md', NEW_PROJECT_PATH], ['new-milestone.md', NEW_MILESTONE_PATH]]) {
+    test(`${label} parses agents_installed_reason and, when agents_installed is null, probes one named spawn before the inline fallback`, () => {
+      const lines = splitLines(fs.readFileSync(file, 'utf-8'));
+      const parseList = lines.find((line) => /^(Parse JSON for|Extract from init JSON):/.test(line) && line.includes('`agents_installed`'));
+      assert.ok(parseList && parseList.includes('`agents_installed_reason`'), `${label} must parse agents_installed_reason from the init JSON`);
+      const branch = lines.find((line) => line.startsWith('**If `agents_installed` is null:**'));
+      assert.ok(branch, `${label} must have an agents_installed null branch`);
+      assert.ok(branch.includes('Spawn the first named subagent alone'), `${label}: the null branch must probe one spawn first`);
+      assert.ok(branch.includes('`gsd-roadmapper`') && branch.includes('when research is skipped'), `${label}: the probe must cover a run without research`);
+      assert.ok(branch.includes('agent type not found'), `${label}: the null branch must name the rejection that triggers the fallback`);
+      assert.ok(branch.includes('write the roadmap inline instead of spawning `gsd-roadmapper`'), `${label}: the fallback must be the inline roadmap`);
+      assert.ok(!branch.includes('continue with Steps 6–7'), `${label}: the null branch must not send the run into the named spawns unconditionally`);
+      if (label === 'new-project.md') assert.ok(branch.includes('continue with Step 7'), 'new-project.md: the fallback must keep Step 7 (Define Requirements)');
+    });
+  }
 
   test('new-project.md lists gsd-project-researcher in available_agent_types', () => {
     const content = fs.readFileSync(NEW_PROJECT_PATH, 'utf-8');
