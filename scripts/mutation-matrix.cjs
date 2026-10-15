@@ -672,14 +672,13 @@ const COVERED = {
   // as state-contract.unit.test.cjs.
   //
   // Re-derived after the #4904 review removed the sealed Set views and the frozen exports:
-  // PROVISIONAL, from a local run with the shard's exact inputs (the previous floor's local
-  // run matched its CI shard to the hundredth). 81.48% (22 killed / 0 timeout / 5 survived),
+  // CI run 38679417039, job 116240422047, `Stryker (dispatch-isolation)` (PR #5126):
+  // 81.48% (22 killed / 0 timeout / 5 survived), matching a local run with the same inputs,
   // the mutants the seal added gone with it. All 5 survivors are equivalent for this tree:
   // the three __esModule interop mutants (only a default or namespace import reads that
   // flag, and no consumer uses either), and `typeof value === 'string' &&` -> `true &&` in
   // both guards (both Sets are built from the string tuples and nothing in the tree adds to
-  // them, so no non-string is ever a member). Floor = floor(81.48) - 1 = 80; the CI shard's
-  // measurement replaces this note in a follow-up commit.
+  // them, so no non-string is ever a member). Floor = floor(81.48) - 1 = 80.
   'dispatch-isolation': {
     cjs: 'gsd-core/bin/lib/dispatch-isolation.cjs',
     extraTests: ['host-integration-validator-parity.test.cjs'],
