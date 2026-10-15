@@ -544,7 +544,10 @@ const ANSI_C_ESCAPES = new Map([
   ['t', 0x09], ['v', 0x0b], ['\\', 0x5c], ["'", 0x27], ['"', 0x22], ['?', 0x3f],
 ].map(([ch, byte]) => [ch.charCodeAt(0), byte]));
 
-const UTF8_STRICT = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+// Bytes that are not UTF-8 decode lossily, in both readings: a U+FFFD can
+// neither spell nor hide a secret name, and every ASCII byte keeps its place
+// (the decoder never swallows a byte that follows a bad sequence).
+const UTF8_LOSSY = new TextDecoder('utf-8', { ignoreBOM: true });
 
 function hexDigit(byte) {
   if (byte >= 0x30 && byte <= 0x39) return byte - 0x30;
@@ -556,7 +559,7 @@ function hexDigit(byte) {
 // The value `shell` ('bash' or 'zsh') gives the text between `$'` and its
 // closing quote, in a UTF-8 locale, or null when it has none: the text holds a
 // literal NUL (bash drops it from a script it reads and no shell can take it
-// in an argument), or the shell's bytes cannot be read (below). Both readings
+// in an argument), or zsh refuses the line (below). Both readings
 // are measured against the shells themselves in
 // tests/fixtures/ansi-c-decode-oracle.json.
 function decodeAnsiC(raw, shell) {
@@ -564,9 +567,9 @@ function decodeAnsiC(raw, shell) {
   return shell === 'zsh' ? decodeAnsiCZsh(raw) : decodeAnsiCBash(raw);
 }
 
-// bash 5.2's value (ansicstr, lib/sh/strtrans.c), or null when its bytes are
-// not valid UTF-8 (`$'\xff'`, a surrogate or out-of-range `\U`). Works on
-// bytes because bash does: `$'\xc3\xa9'` is one character. Escapes: the
+// bash 5.2's value (ansicstr, lib/sh/strtrans.c). Works on bytes because bash
+// does: `$'\xc3\xa9'` is one character, and `$'\xff'` is the byte 0xff, read
+// here as U+FFFD. Escapes: the
 // single characters above, `\nnn` (one to three octal digits), `\xHH`, and
 // `\x{H…}` (every hex digit, the low byte kept — bash's own form since 4.3,
 // not zsh's: zsh reads `\x{` as a NUL), `\uHHHH`, `\UHHHHHHHH`, `\cX`; any
@@ -611,10 +614,7 @@ function decodeAnsiCBash(raw) {
       let n = 0;
       while (n < max && hexDigit(s[k]) !== -1) { v = v * 16 + hexDigit(s[k++]); n++; }
       if (n === 0) out.push(0x5c, c);
-      // 0xff is never valid UTF-8: the strict decode below rejects the value
-      // unless a NUL cut it off first, as bash's own encoding would be.
-      else if (v > 0x10ffff || (v >= 0xd800 && v <= 0xdfff)) out.push(0xff);
-      else out.push(...Buffer.from(String.fromCodePoint(v), 'utf8'));
+      else out.push(...bashCodePointBytes(v));
       continue;
     }
     if (c === 0x63 && k < s.length) { // `\cX`; `\c\\` is one control character
@@ -626,11 +626,20 @@ function decodeAnsiCBash(raw) {
     out.push(0x5c, c);
   }
   const cut = out.indexOf(0);
-  try {
-    return UTF8_STRICT.decode(Uint8Array.from(cut === -1 ? out : out.slice(0, cut)));
-  } catch {
-    return null;
-  }
+  return UTF8_LOSSY.decode(Uint8Array.from(cut === -1 ? out : out.slice(0, cut)));
+}
+
+// The bytes bash 5.2 writes for `\u` / `\U`: the UTF-8 pattern extended to
+// every value below 2^31, surrogates and values past U+10FFFF included (`\ud800`
+// is ed a0 80, `\U7fffffff` six bytes), and nothing at or above 2^31.
+function bashCodePointBytes(v) {
+  if (v < 0x80) return [v];
+  if (v >= 0x80000000) return [];
+  const len = v < 0x800 ? 2 : v < 0x10000 ? 3 : v < 0x200000 ? 4 : v < 0x4000000 ? 5 : 6;
+  const bytes = new Array(len);
+  for (let n = len - 1; n > 0; n--) { bytes[n] = 0x80 | (v & 0x3f); v = Math.floor(v / 64); }
+  bytes[0] = ((0xff00 >> len) & 0xff) | v;
+  return bytes;
 }
 
 // Single-character escapes of zsh's `$'…'` that are not the character itself.
@@ -639,10 +648,9 @@ const ZSH_ANSI_C_ESCAPES = new Map([
   ['t', 0x09], ['v', 0x0b],
 ].map(([ch, byte]) => [ch.charCodeAt(0), byte]));
 
-const UTF8_LOSSY = new TextDecoder('utf-8', { ignoreBOM: true });
-
 // zsh 5.9's value (getkeystring with GETKEYS_DOLLARS_QUOTE, Src/utils.c), or
-// null for a code point zsh cannot encode, which aborts the whole line. Where
+// null for a code point zsh cannot encode (a surrogate, or past U+10FFFF): zsh
+// stops the line at that word, after running the commands before it. Where
 // it differs from bash: any other escape drops its backslash (`\.` is `.`,
 // `\c` is `c`, `\8` is `8`); `\x` and an octal escape are read by zstrtol
 // over a three-byte window, so `\x` skips blanks and takes a sign before up
@@ -650,9 +658,8 @@ const UTF8_LOSSY = new TextDecoder('utf-8', { ignoreBOM: true });
 // no digit is a NUL; `\M` and `\C` (the dash after them optional) set the meta
 // bit and mask the control bits of the next character written, `\C-?` being
 // DEL. The value keeps its NULs: a command gets the word cut at the first one
-// (tokenize), a heredoc tag keeps it. Bytes that are not UTF-8 decode lossily
-// — a U+FFFD can neither spell nor hide a secret name — so this reading adds
-// no `ansi-c-undecodable` denial of its own.
+// (tokenize), a heredoc tag keeps it. Bytes that are not UTF-8 decode lossily,
+// as bash's do.
 function decodeAnsiCZsh(raw) {
   if (!raw.includes('\\')) return raw;
   const s = Buffer.from(raw, 'utf8');
@@ -1858,8 +1865,8 @@ function reasonFor(code, tool, target) {
   }
   if (code === 'ansi-c-undecodable') {
     return `Secret read guard: the $'…' word at ${target} has no single value to check for a ` +
-      'secret-file name: its bytes are not valid UTF-8, or it holds a NUL, which shells cut ' +
-      'differently. Spell the word with plain quotes, or let the command decode the bytes itself ' +
+      'secret-file name: it holds a NUL, which shells cut differently, or a code point zsh ' +
+      'refuses. Spell the word with plain quotes, or let the command decode the bytes itself ' +
       "(printf '\\xNN').";
   }
   return `Secret read guard: ${tool} would read '${target}', which matches a protected secret-file ` +
