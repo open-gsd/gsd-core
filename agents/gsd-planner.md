@@ -800,6 +800,17 @@ Present breakdown with wave structure. Wait for confirmation in interactive mode
 </step>
 
 <step name="write_phase_prompt">
+Generate the complete candidate content for each PLAN.md before writing any part of it. Send that
+complete candidate content on stdin through the shared programmatic normalizer:
+
+```bash
+gsd_run query normalize-planning-artifact-content --raw
+```
+
+Use stdout byte-for-byte as the Write payload. Perform this once on the complete candidate, before
+the default single Write or before splitting the already-normalized payload for the truncation
+fallback. Never normalize the final file after writing it.
+
 Use template structure for each PLAN.md.
 
 **ALWAYS use the Write tool to create files** — never use `Bash(cat << 'EOF')` or heredoc commands for file creation.

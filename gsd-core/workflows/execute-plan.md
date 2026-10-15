@@ -181,12 +181,15 @@ Pattern B only (verify-only checkpoints). Skip for A/C.
 2. Per segment:
    - Subagent route: spawn gsd-executor for assigned tasks only. Prompt: task range, plan path, read full plan for context, execute assigned tasks, track deviations, NO SUMMARY/commit. Track via agent protocol.
    - Main route: execute tasks using standard flow (step name="execute")
-3. **Critical ordering — write and commit SUMMARY.md as one atomic block.** Do NOT
+3. Delegate SUMMARY creation to the canonical `create_summary` step below. Its complete-
+   candidate normalization is mandatory in segmented execution too; do not create SUMMARY.md
+   directly from this step or normalize a file after writing it.
+4. **Critical ordering — write and commit SUMMARY.md as one atomic block.** Do NOT
    emit narrative output between the Write tool call and the commit tool call.
    Truncation at this boundary is a known failure mode (see #2070 rescue logic in
    execute-phase.md step 5.5).
 
-   After ALL segments: aggregate files/deviations/decisions → create SUMMARY.md → self-check:
+   After ALL segments: aggregate files/deviations/decisions → run `create_summary` to create SUMMARY.md → self-check:
    - Verify key-files.created exist on disk with `[ -f ]`
    - Check `gsd_run check evaluation-scope --plan "{phase}-{plan}" --commits-only --raw` returns `commits` with ≥1 entry (commits on THIS branch only — #5164; a commit that lives only on another branch does not satisfy the check; exit `69` means the scope could not be resolved, which is a failed self-check, never "no commits yet")
    - Re-run ALL `<acceptance_criteria>` from every task — if any fail, fix before finalizing SUMMARY
@@ -406,6 +409,16 @@ If user_setup exists: create `{phase}-USER-SETUP.md` using the template at `~/.c
 </step>
 
 <step name="create_summary">
+Generate the complete candidate payload for SUMMARY.md before writing any part of it. Send that
+complete candidate payload on stdin through the shared programmatic normalizer:
+
+```bash
+gsd_run query normalize-planning-artifact-content --raw
+```
+
+Use stdout byte-for-byte as the Write payload. Normalize once before the final Write; never scrub
+or mutate the final SUMMARY.md after it has been written.
+
 **Critical ordering — write and commit SUMMARY.md as one atomic block.** Do NOT
 emit narrative output between the Write tool call and the commit tool call.
 Truncation at this boundary is a known failure mode (see #2070 rescue logic in

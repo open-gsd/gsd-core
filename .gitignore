@@ -221,6 +221,7 @@ build/
 /gsd-core/bin/lib/planning-document.cjs
 /gsd-core/bin/lib/planning-inspect.cjs
 /gsd-core/bin/lib/planning-command-router.cjs
+/gsd-core/bin/lib/planning-artifact-content.cjs
 /gsd-core/bin/lib/plan-document.cjs
 /gsd-core/bin/lib/state-contract.cjs
 /gsd-core/bin/lib/pattern.cjs
