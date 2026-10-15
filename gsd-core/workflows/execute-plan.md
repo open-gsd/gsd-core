@@ -137,7 +137,7 @@ Otherwise: Apply checkpoint-based routing below.
   gsd_run query dispatch-isolation --raw --force-isolation none >/dev/null 2>&1 || true
   ```
 
-  Segment dispatches therefore carry no `{harnessFlag}`.
+  Segment dispatches therefore carry no `{harnessFlag}` and DO carry a `<sequential_execution>` block (`You are running as a SEQUENTIAL executor agent on the main working tree (set SEQUENTIAL=true in your Step 0 commit guard, #4799).`) so the segment executor's commit guard does not apply the per-agent branch allow-list in a linked phase worktree.
 
 <!-- #2508 runtime-aware-dispatch -->
 

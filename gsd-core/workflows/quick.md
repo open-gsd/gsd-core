@@ -461,7 +461,11 @@ if [ ! -f "$QUICK_RESEARCH_PATH" ] && git cat-file -e "${QUICK_PLAN_COMMIT}:$QUI
   }
 fi
 ` : ''}\`\`\`
-` : ''}
+` : `
+<sequential_execution>
+You are running as a SEQUENTIAL executor agent on the main working tree (set SEQUENTIAL=true in your Step 0 commit guard; a linked worktree on the configured branch is allowed, #4799).
+</sequential_execution>
+`}
 
 <required_reading>
 - ${QUICK_DIR}/${quick_id}-PLAN.md (Plan)
