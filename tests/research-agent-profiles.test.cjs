@@ -226,8 +226,8 @@ describe('bug #222: research synthesizer must write SUMMARY.md via Write tool', 
     );
     assert.match(
       prompt,
-      /Use the `Write` tool[\s\S]*there are no restrictions/i,
-      'Rule 1 must force Write tool usage and reject hallucinated restrictions.'
+      /Use the `Write` tool[\s\S]*try it FIRST[\s\S]*GSD places no restriction/i,
+      'Rule 1 must force Write tool usage first and reject hallucinated restrictions (#5449: the runtime does refuse one exact name, so only an actual Write error counts).'
     );
     assert.match(
       prompt,
@@ -307,6 +307,52 @@ describe('bug #222 recurrence: orchestrator self-heals when synthesizer returns 
       assert.ok(roadIdx >= 0, `${name}: gsd-roadmapper dispatch not found`);
       assert.ok(healIdx > synthIdx, `${name}: self-heal must come AFTER the synthesizer dispatch`);
       assert.ok(roadIdx > healIdx, `${name}: self-heal must come BEFORE the gsd-roadmapper dispatch`);
+    });
+  }
+});
+
+describe('#5449: Claude Code refuses a subagent Write of the exact name SUMMARY.md — the contract must plan for it', () => {
+  const SYNTHESIZERS = [
+    ['gsd-research-synthesizer.md', path.join(REPO_ROOT, 'agents', 'gsd-research-synthesizer.md')],
+    ['gsd-research-synthesizer.compact.md', path.join(REPO_ROOT, 'agents', 'gsd-research-synthesizer.compact.md')],
+  ];
+  const ORCHESTRATORS = [
+    path.join(REPO_ROOT, 'gsd-core', 'workflows', 'new-project.md'),
+    path.join(REPO_ROOT, 'gsd-core', 'workflows', 'new-milestone.md'),
+  ];
+  const REFUSAL = /Subagents should return findings as text, not write report files/;
+
+  for (const [name, file] of SYNTHESIZERS) {
+    test(`${name}: names the runtime's refusal and returns the complete document inline when Write hits it`, () => {
+      const text = fs.readFileSync(file, 'utf8');
+      assert.match(text, REFUSAL, `${name} must quote the runtime's refusal so the agent can recognise it.`);
+      assert.match(text, /complete SUMMARY\.md document/i, `${name} must return the COMPLETE document, not a confirmation.`);
+      assert.match(text, /returned inline/i, `${name} must label the inline document so the orchestrator can find it.`);
+    });
+
+    test(`${name}: on that refusal it does not retry, rename the file or use Bash`, () => {
+      const text = fs.readFileSync(file, 'utf8');
+      assert.match(text, /do not retry/i);
+      assert.match(text, /another name|different (file ?)?name/i);
+    });
+
+    test(`${name}: rule 2 and rule 1 carry the exception without reopening the #222 false-refusal`, () => {
+      const text = fs.readFileSync(file, 'utf8');
+      assert.match(text, /Do NOT return the SUMMARY\.md content in your response[\s\S]{0,200}(except|exception)/i,
+        `${name} rule 2 must point at the one exception.`);
+      assert.match(text, /try it FIRST/i, `${name} must still make the agent try Write first.`);
+      assert.match(text, /Do NOT ask permission to write/i, `${name} must keep the no-permission-ask rule.`);
+    });
+  }
+
+  for (const wf of ORCHESTRATORS) {
+    const name = path.basename(wf);
+    test(`${name}: the self-heal treats the refusal as real and name-specific, and keeps the recovery`, () => {
+      const text = fs.readFileSync(wf, 'utf8');
+      assert.match(text, REFUSAL, `${name} must name the runtime's refusal.`);
+      assert.match(text, /exact basename/i, `${name} must say the refusal is name-specific.`);
+      assert.match(text, /other agents/i, `${name} must not let the refusal generalise to other agents' Writes.`);
+      assert.match(text, /returned the document inline/i, `${name} step 2 must cover both causes of an inline document.`);
     });
   }
 });

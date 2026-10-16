@@ -31,7 +31,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
+import { resolveGsdHome } from './runtime-homes.cjs';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- install-fs-adapter.cjs is an export= CommonJS module
 import installFsAdapter = require('./install-fs-adapter.cjs');
@@ -186,7 +186,7 @@ function _findAncestorGsdConfigPath(targetDir: string): string | null {
  */
 function readGsdEffectiveEffortConfig(targetDir: string | null = null): EffortConfig | null {
   const homeDefaults = _readGsdConfigFile(
-    path.join(os.homedir(), '.gsd', 'defaults.json'),
+    path.join(resolveGsdHome(), '.gsd', 'defaults.json'),
     '~/.gsd/defaults.json',
   );
 

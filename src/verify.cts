@@ -1288,6 +1288,45 @@ function unreadableFileVerdict(evidence: Exclude<Evidence<string>, { kind: 'foun
   return gateUnreadable(false, payload);
 }
 
+/**
+ * Issue #4927 — a PLAN.md can be cut off by a tool that still reported the write
+ * as successful (runtimes cap tool-call output; a ~450-line plan stopped inside
+ * an XML tag). The planner and the plan checker both run `verify plan-structure`
+ * on every plan, so this is where a silent partial write is caught, independent
+ * of what the write call returned.
+ *
+ * Three signals, each a strong sign of a partial file and none of them a shape a
+ * finished plan carries:
+ *   - the incremental-write sentinel (`<!-- gsd:write-continue -->`) left behind
+ *     (the planner's large-file fallback never removed it);
+ *   - `<tasks>` opened and never closed;
+ *   - the file ends inside a tag (`...</ta`). Prose such as `a < b` does not
+ *     match: a tag needs a name character straight after the `<` or `</`.
+ */
+function scanPlanTruncation(content: string): string[] {
+  const errors: string[] = [];
+  const text = content || '';
+  if (/<!--\s*gsd:write-continue\s*-->/.test(text)) {
+    errors.push(
+      'Plan appears truncated: the incremental-write sentinel `<!-- gsd:write-continue -->` is still present — '
+      + 'the last section was never written. Finish the write (or re-write the plan) before treating it as complete.',
+    );
+  }
+  if (/<tasks>/.test(text) && !/<\/tasks>/.test(text)) {
+    errors.push(
+      'Plan appears truncated: `<tasks>` is opened but `</tasks>` never appears — the file was cut off before the task list ended.',
+    );
+  }
+  const trimmed = text.replace(/\s+$/, '');
+  const lastLt = trimmed.lastIndexOf('<');
+  if (lastLt !== -1 && trimmed.indexOf('>', lastLt) === -1 && /^<\/?[A-Za-z_!][^<>]{0,200}$/.test(trimmed.slice(lastLt))) {
+    errors.push(
+      `Plan appears truncated: the file ends inside a tag (\`${trimmed.slice(lastLt).slice(0, 40)}\`) — the write stopped mid-payload.`,
+    );
+  }
+  return errors;
+}
+
 function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): void {
   if (!filePath) {
     error('file path required');
@@ -1313,6 +1352,9 @@ function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): vo
   const fm = extractFrontmatter(content, fullPath);
   const errors: string[] = [];
   const warnings: string[] = [];
+
+  // #4927: a plan the write tool reported as written but that ends mid-payload.
+  errors.push(...scanPlanTruncation(content));
 
   const required = ['phase', 'plan', 'type', 'wave', 'depends_on', 'files_modified', 'autonomous', 'must_haves'];
   for (const field of required) {
@@ -1366,7 +1408,8 @@ function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): vo
     if (!decisionCheckpointOffsets.some((offset) => offset < at)) {
       warnings.push(
         'Task rated <reversibility rating="one-way"> has no preceding checkpoint:decision — '
-          + 'a one-way door must be confirmed before the agent walks through it',
+          + 'a one-way door must be confirmed before the agent walks through it (unless the decision is already settled '
+          + 'in CONTEXT.md, an ingested ADR, or an answered checkpoint)',
       );
     }
   }

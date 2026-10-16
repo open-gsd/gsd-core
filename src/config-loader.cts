@@ -22,11 +22,11 @@
  */
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { execGit, platformWriteSync, platformReadSync } from './shell-command-projection.cjs';
 // #4717: runtime-identity fill — env rung + per-install marker rung.
 import { readInstallRuntimeMarker } from './runtime-slash.cjs';
+import { resolveGsdHome } from './runtime-homes.cjs';
 import { canonicalizeRuntimeName, resolveRuntimeNameFromCandidates } from './runtime-name-policy.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -1010,7 +1010,7 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
     // untouched. Faults in the global file stay silent in this branch (the
     // project config governs; the nearer file is the actionable one).
     try {
-      const shadowHome = process.env['GSD_HOME'] || os.homedir();
+      const shadowHome = resolveGsdHome();
       const shadowPath = path.join(shadowHome, '.gsd', 'defaults.json');
       const shadowRead = _readConfigFile(shadowPath);
       if (shadowRead.kind === 'ok') {
@@ -1073,7 +1073,7 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
     }
     // Branch D or E: no .planning/
     try {
-      const home = process.env['GSD_HOME'] || os.homedir();
+      const home = resolveGsdHome();
       const globalDefaultsPath = path.join(home, '.gsd', 'defaults.json');
       const globalRead = _readConfigFile(globalDefaultsPath);
       if (globalRead.kind === 'fault') {

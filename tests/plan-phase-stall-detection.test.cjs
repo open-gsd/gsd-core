@@ -642,7 +642,7 @@ describe('bug #2650 plan-phase — all five planner/plan-checker spawns dispatch
         [],
         {
           cwd: tmp,
-          env: { ...process.env, HOME: tmp, USERPROFILE: tmp, RUNTIME_DIR: REPO_ROOT, GSD_PROJECT: '', GSD_WORKSTREAM: '' },
+          env: { ...process.env, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, RUNTIME_DIR: REPO_ROOT, GSD_PROJECT: '', GSD_WORKSTREAM: '' },
         },
       );
       assert.equal(result.status, 0, result.stderr);
