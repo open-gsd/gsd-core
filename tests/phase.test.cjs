@@ -12607,6 +12607,8 @@ function build2316GhostReqFixture() {
     fs.writeFileSync(path.join(dir, `${n}-01-SUMMARY.md`), '# Summary\nDone.\n');
   }
 
+  // #4972: these fixtures assert the ABSENCE of unrelated warnings; the verify:post audits (on by default) would add theirs.
+  fs.writeFileSync(path.join(planDir, 'config.json'), JSON.stringify({ workflow: { security_enforcement: false, nyquist_validation: false } }));
   return { tmpDir, planDir };
 }
 
@@ -12989,6 +12991,8 @@ function build2334GhostSurfaceFixture({ reqBody, roadmapRequirementsLine, tracea
     fs.writeFileSync(path.join(dir, `${n}-01-SUMMARY.md`), '# Summary\nDone.\n');
   }
 
+  // #4972: these fixtures assert the ABSENCE of unrelated warnings; the verify:post audits (on by default) would add theirs.
+  fs.writeFileSync(path.join(planDir, 'config.json'), JSON.stringify({ workflow: { security_enforcement: false, nyquist_validation: false } }));
   return tmpDir;
 }
 
@@ -17175,3 +17179,75 @@ describe('phase complete skips already-complete phases as next_phase (#4699)', (
   });
 });
 
+
+// ─── #4972: phase complete names a verify:post audit that never closed ───────
+//
+// security (SECURITY.md) and nyquist (VALIDATION.md) register `verify:post`
+// STEPS with `onError: "halt"`, but a step is advisory by construction, so the
+// phase used to close with the audit unrun and `warnings: []`. The check is
+// advisory on the same `warnings[]` channel as #2572; the gate at `ship:pre`
+// stays the enforced one.
+describe('#4972: phase complete warns when an active verify:post audit is missing or unresolved', () => {
+  function build(tmpDirConfig) {
+    const { tmpDir } = build2572SummaryArtifactFixture();
+    if (tmpDirConfig) {
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify(tmpDirConfig));
+    }
+    return tmpDir;
+  }
+  const phase2 = (tmpDir) => path.join(tmpDir, '.planning', 'phases', '02-clean');
+  const complete = (tmpDir) => {
+    const result = runVerifiedPhaseComplete(['phase', 'complete', '2'], tmpDir);
+    assert.ok(result.success, `phase complete failed: ${result.error}`);
+    return JSON.parse(result.output);
+  };
+  const auditWarnings = (parsed) => (parsed.warnings || []).filter((w) => /#4972/.test(w));
+
+  test('#4972-1: no SECURITY.md and no VALIDATION.md -> both audits are named, completion still succeeds', () => {
+    const tmpDir = build({ workflow: { security_enforcement: true, nyquist_validation: true } });
+    try {
+      const parsed = complete(tmpDir);
+      const w = auditWarnings(parsed);
+      assert.ok(w.some((x) => x.startsWith('SECURITY.md: missing')), JSON.stringify(parsed.warnings));
+      assert.ok(w.some((x) => x.startsWith('VALIDATION.md: missing')), JSON.stringify(parsed.warnings));
+      assert.strictEqual(parsed.has_warnings, true);
+      assert.strictEqual(parsed.completed_phase, '2', 'advisory only — the close is not refused');
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('#4972-2: VALIDATION.md still draft and SECURITY.md with open threats are named', () => {
+    const tmpDir = build({ workflow: { security_enforcement: true, nyquist_validation: true } });
+    try {
+      fs.writeFileSync(path.join(phase2(tmpDir), '02-VALIDATION.md'), '---\nstatus: draft\n---\n\n# Validation\n');
+      fs.writeFileSync(path.join(phase2(tmpDir), '02-SECURITY.md'), '---\nstatus: verified\nthreats_open: 2\n---\n\n# Security\n');
+      const w = auditWarnings(complete(tmpDir));
+      assert.ok(w.some((x) => x.startsWith('02-VALIDATION.md: status is still draft')), JSON.stringify(w));
+      assert.ok(w.some((x) => x.startsWith('02-SECURITY.md: 2 threat(s) still open')), JSON.stringify(w));
+      assert.ok(!w.some((x) => x.includes('missing')), 'present files are not reported missing');
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('#4972-3: closed audits (any non-draft status, zero open threats) add no warning', () => {
+    const tmpDir = build({ workflow: { security_enforcement: true, nyquist_validation: true } });
+    try {
+      fs.writeFileSync(path.join(phase2(tmpDir), '02-VALIDATION.md'), '---\nstatus: validated\n---\n\n# Validation\n');
+      fs.writeFileSync(path.join(phase2(tmpDir), '02-SECURITY.md'), '---\nstatus: secured\nthreats_open: 0\n---\n\n# Security\n');
+      assert.deepStrictEqual(auditWarnings(complete(tmpDir)), []);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('#4972-4: a capability that is switched off is not audited', () => {
+    const tmpDir = build({ workflow: { security_enforcement: false, nyquist_validation: false } });
+    try {
+      assert.deepStrictEqual(auditWarnings(complete(tmpDir)), []);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+});

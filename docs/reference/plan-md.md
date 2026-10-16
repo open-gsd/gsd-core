@@ -232,7 +232,7 @@ Full emission rules, anti-patterns ("the system is ready" is not checkable; do n
 |---|---|---|
 | `reversible` | Undo is local and cheap. | None. This is the default when no rating is given. |
 | `costly` | Undo touches many call sites or needs a coordinated change. | Flagged in the plan so the reader sees the weight. Never blocks. |
-| `one-way` | Undo requires a migration, breaks a published contract, or is impossible. | The planner inserts a `checkpoint:decision` immediately **before** the dependent task. |
+| `one-way` | Undo requires a migration, breaks a published contract, or is impossible. | The planner inserts a `checkpoint:decision` immediately **before** the dependent task, unless the human already settled that decision (CONTEXT.md, an ingested ADR, or an answered checkpoint). |
 
 **Optional and back-compat:** a plan that omits `<reversibility>` on every task behaves exactly as today — no flag, no checkpoint. Plans that include it pass `verify plan-structure` unchanged; the structural validator checks for the presence of required tags and does not reject unknown optional tags.
 

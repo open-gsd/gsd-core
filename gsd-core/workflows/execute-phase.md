@@ -764,7 +764,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    ```
        <sequential_execution>
-       You are running as a SEQUENTIAL executor agent on the main working tree.
+       You are running as a SEQUENTIAL executor agent on the main working tree (set SEQUENTIAL=true in your Step 0 commit guard; a linked phase worktree on the configured branch is allowed, #4799).
        Use normal git commits (with hooks). Do NOT use --no-verify.
        Run the `<project_root_pin>` guard before your first Edit/Write and before every commit (#4254).
        REQUIRED ORDER: Write SUMMARY.md → commit → only then any narration. No text between Write and commit (truncation risk; #2070 rescue is not primary defense).

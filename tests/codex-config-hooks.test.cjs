@@ -9,6 +9,13 @@
 process.env.GSD_TEST_MODE = '1';
 
 const { test: _test, describe: _describe, before, beforeEach: _beforeEach, afterEach: _afterEach } = require('node:test');
+
+// #5017: pinned GSD_HOME (next to HOME) is put back after each test so it never leaks into the next one.
+const __ORIG_GSD_HOME = process.env.GSD_HOME;
+require('node:test').afterEach(() => {
+  if (__ORIG_GSD_HOME === undefined) delete process.env.GSD_HOME;
+  else process.env.GSD_HOME = __ORIG_GSD_HOME;
+});
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
@@ -108,6 +115,7 @@ function _runCodexInstall(codexHome, cwd = path.join(__dirname, '..')) {
   // loader.rs). Sandbox HOME to codexHome so skills land under the temp dir
   // (codexHome/.agents/skills) instead of polluting the developer's real home.
   process.env.HOME = codexHome;
+  process.env.GSD_HOME = codexHome; // #5017: the defaults store root follows HOME
   process.env.USERPROFILE = codexHome;
 
   try {
@@ -267,6 +275,7 @@ function runCodexInstall(codexHome, cwd = path.join(__dirname, '..')) {
   const previousUserProfile = process.env.USERPROFILE;
   process.env.CODEX_HOME = codexHome;
   process.env.HOME = codexHome;
+  process.env.GSD_HOME = codexHome; // #5017: the defaults store root follows HOME
   process.env.USERPROFILE = codexHome;
   try {
     process.chdir(cwd);
@@ -1900,6 +1909,7 @@ function runCodexInstall(codexHome) {
   const previousUserProfile = process.env.USERPROFILE;
   process.env.CODEX_HOME = codexHome;
   process.env.HOME = codexHome;
+  process.env.GSD_HOME = codexHome; // #5017: the defaults store root follows HOME
   process.env.USERPROFILE = codexHome;
   try {
     process.chdir(path.join(__dirname, '..'));
@@ -2401,6 +2411,7 @@ describe('#3245 — idempotent rollback reverts skills/, agents/, and VERSION', 
       const previousCodexHome = process.env.CODEX_HOME;
       const previousCwd = process.cwd();
       process.env.HOME = codexHome;
+      process.env.GSD_HOME = codexHome; // #5017: the defaults store root follows HOME
       process.env.USERPROFILE = codexHome;
       process.env.CODEX_HOME = codexHome;
       process.chdir(path.join(__dirname, '..'));
@@ -2675,6 +2686,7 @@ describe('#3285 — install succeeds when config.toml contains hooks.state entri
     const previousUserProfile = process.env.USERPROFILE;
     process.env.CODEX_HOME = codexHome;
     process.env.HOME = tmpDir;
+    process.env.GSD_HOME = tmpDir; // #5017: the defaults store root follows HOME
     process.env.USERPROFILE = tmpDir;
     try {
       process.chdir(path.join(__dirname, '..'));
@@ -3413,6 +3425,7 @@ describe('#3426 uninstall: gsd-check-update.cmd is removed from hooks dir on uni
     const prevUserProfile = process.env.USERPROFILE;
     process.env.CODEX_HOME = dir;
     process.env.HOME = dir;
+    process.env.GSD_HOME = dir; // #5017: the defaults store root follows HOME
     process.env.USERPROFILE = dir;
     try { return fn(); }
     finally {
@@ -3553,6 +3566,7 @@ function withCodexHome(codexHome, fn) {
   const fakeHome = path.dirname(codexHome);
   process.env.CODEX_HOME = codexHome;
   process.env.HOME = fakeHome;
+  process.env.GSD_HOME = fakeHome; // #5017: the defaults store root follows HOME
   process.env.USERPROFILE = fakeHome;
   try {
     return fn();
@@ -3734,6 +3748,7 @@ describe('#3427 + #3433 — Codex installer avoids duplicate skills and mixed ho
     const previousUserProfile = process.env.USERPROFILE;
     process.env.CODEX_HOME = codexHome;
     process.env.HOME = codexHome;
+    process.env.GSD_HOME = codexHome; // #5017: the defaults store root follows HOME
     process.env.USERPROFILE = codexHome;
     try {
       process.chdir(path.join(__dirname, '..'));

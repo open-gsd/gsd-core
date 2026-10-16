@@ -942,6 +942,7 @@ function runNpm(args, options = {}) {
   const isolatedEnv = {
     ...process.env,
     HOME: _npmIsolatedHome,
+    GSD_HOME: _npmIsolatedHome, // #5017: the defaults store root follows HOME
     npm_config_cache: path.join(_npmIsolatedHome, '.npm'),
     npm_config_userconfig: path.join(_npmIsolatedHome, '.npmrc'),
     npm_config_loglevel: 'error',
@@ -1142,12 +1143,10 @@ function restoreWorkstreamEnv() {
  * never receives TEST_ENV_BASE on its own.
  *
  * Blanking config-LOCATION vars is necessary but NOT sufficient here.
- * bin/install.js writes GSD's own user-owned store through os.homedir()
- * DIRECTLY (writeNonClaudeDefaults -> <home>/.gsd/defaults.json, #2834), and
- * os.homedir() consults no GSD variable at all — so nothing in
- * CONFIG_LOCATION_ENV_KEYS can reach it, and blanking GSD_HOME does not reach
- * it either, because a blank GSD_HOME falls back to exactly that homedir().
- * Only a sandboxed HOME/USERPROFILE contains it.
+ * bin/install.js writes GSD's own user-owned store at
+ * <GSD_HOME || homedir>/.gsd/defaults.json (#2834, #5017). A blank GSD_HOME
+ * falls back to os.homedir(), so blanking it does not contain the write; only
+ * a sandboxed HOME/USERPROFILE does.
  *
  * HOME stays deliberately OUT of TEST_ENV_BASE — blanking it would break far
  * more than it fixed — so it is sandboxed per spawn instead, which is the

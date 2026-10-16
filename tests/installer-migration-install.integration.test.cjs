@@ -202,6 +202,7 @@ function runInstallerCli(runtime, targetDir, options = {}) {
   delete env.GSD_TEST_MODE;
   env.HOME = path.join(path.dirname(targetDir), 'home');
   env.USERPROFILE = env.HOME;
+  env.GSD_HOME = env.HOME; // #5017: the defaults store root follows HOME
 
   return runNode(
     [
