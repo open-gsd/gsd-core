@@ -1393,8 +1393,16 @@ EOF
       'no $(...) command substitution may pipe "$MSG" into head -1 (SIGPIPE race under set -o pipefail)');
     assert.ok(!/\$\([^)]{0,200}"\$CONFIG_OUT"[^)]{0,200}\|\s*head\s+-1[^)]{0,200}\)/.test(hookSrc),
       'no $(...) command substitution may pipe "$CONFIG_OUT" into head -1 (SIGPIPE race under set -o pipefail)');
-    assert.ok(hookSrc.includes('SUBJECT="${MSG%%$\'\\n\'*}"'),
+    // #5473: the SUBJECT extraction moved into gsd_first_line so it can run in the
+    // C locale (bash 3.2 spends ~3.5 s on this expansion over 112KB in a UTF-8
+    // locale). It is still a pure parameter expansion with no pipe: the helper
+    // body is the expansion, and both call sites reach it through a command
+    // substitution (a fork, not a pipe). tests/subject-first-line.platform.test.cjs
+    // pins the locale switch and the verdicts.
+    assert.ok(/printf '%s' "\$\{1%%\$'\\n'\*\}"/.test(hookSrc),
       'subject extraction must use the pure parameter-expansion form');
+    assert.strictEqual(hookSrc.split('SUBJECT=$(gsd_first_line "$MSG")').length - 1, 2,
+      'both subject-extraction sites (resolver fallback and RESOLVE=0) must go through gsd_first_line');
     assert.ok(hookSrc.includes('ENABLED="${CONFIG_OUT%%$\'\\n\'*}"'),
       'ENABLED extraction must use the pure parameter-expansion form');
   });
