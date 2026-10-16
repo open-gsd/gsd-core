@@ -28,9 +28,10 @@
  * Runs are interleaved round-robin across the cells, rotating the starting
  * cell each round, so drift in the tier's load shows up as noise and not as a
  * variant effect. Then one traced run under the PATH bash. It asserts nothing
- * about time. Environment VALUES are never printed except for a short
- * allowlist; everything else is reported by name only (the job environment
- * carries tokens).
+ * about time. The job environment carries tokens and the report goes to a
+ * public log, so no variable name or value is read from the environment into
+ * the report: it prints counts, which of a fixed list are set, and what
+ * `locale` and `command -v bash` themselves say under that environment.
  */
 
 const crypto = require('node:crypto');
@@ -45,21 +46,37 @@ const SYSTEM_BASH = '/bin/bash';
 const DEFAULT_RUNS = 2;
 const VERSION_PROBE_BOUND_MS = 10000;
 
-// Variables whose VALUE is safe and useful to show. Anything else: name only.
-// NODE_OPTIONS is deliberately absent: it can carry --require paths and flags.
-const SHOWN_ENV = [
-  'CI', 'RUNNER_OS', 'RUNNER_ARCH', 'TMPDIR', 'TEST_CONCURRENCY',
-  'LANG', 'LC_ALL', 'LC_CTYPE',
-  'NODE_TEST_CONTEXT', 'NODE_V8_COVERAGE',
+// Variables whose PRESENCE is worth reporting (a constant list: the report names
+// these, never anything read from the environment).
+const PRESENCE_ENV = [
+  'CI', 'TEST_CONCURRENCY', 'NODE_OPTIONS', 'NODE_TEST_CONTEXT', 'NODE_V8_COVERAGE',
   'GSD_PLUGIN_ROOT', 'GSD_STRICT_LIVE_CONFIG_GUARD', 'RUN_TESTS_TIMING_EVENTS_FILE',
 ];
+const FAMILIES = ['NODE_', 'GSD_', 'RUN_TESTS_', 'LC_'];
 
-/** Names of every variable (sorted) plus the values of the allowlisted ones. */
+/**
+ * What the report may say about an environment: how many variables, how many in
+ * each family, and which of PRESENCE_ENV are set. No name and no value is read
+ * from the environment into the result, because the job environment carries
+ * tokens and a report goes to a public log.
+ */
 function describeEnv(env) {
-  const names = Object.keys(env).sort();
-  const shown = {};
-  for (const key of SHOWN_ENV) if (Object.hasOwn(env, key)) shown[key] = env[key];
-  return { names, shown };
+  const keys = Object.keys(env);
+  const families = {};
+  for (const prefix of FAMILIES) families[prefix] = keys.filter((k) => k.startsWith(prefix)).length;
+  const present = PRESENCE_ENV.filter((name) => Object.hasOwn(env, name));
+  return { count: keys.length, families, present };
+}
+
+/**
+ * The effective locale the hook would see under `env`, as `locale` itself reports
+ * it (LANG and LC_* lines only). Asking the tool, rather than reading the variables,
+ * is also what tells a missing locale from a set one.
+ */
+function localeReport(env) {
+  const r = spawnSync('locale', [], { env, encoding: 'utf8', timeout: VERSION_PROBE_BOUND_MS });
+  if (r.error || r.status !== 0) return 'unavailable';
+  return r.stdout.split('\n').filter((line) => /^(LANG|LC_[A-Z]+)=/.test(line)).join(' ');
 }
 
 /** `env` without any variable whose name starts with one of `prefixes`. */
@@ -167,6 +184,12 @@ function roundOrder(count, round) {
   return Array.from({ length: count }, (_, k) => (k + round) % count);
 }
 
+/** Where the shell itself resolves `bash` under `env` (its answer is what the report prints). */
+function resolveBash(env) {
+  const r = spawnSync('/bin/sh', ['-c', 'command -v bash'], { env, encoding: 'utf8', timeout: VERSION_PROBE_BOUND_MS });
+  return r.status === 0 ? r.stdout.trim() : 'not found';
+}
+
 /** Run every cell `runs` times, round-robin, rotating the starting cell each round. */
 async function measureCells(project, command, cells, runs) {
   const walls = cells.map(() => []);
@@ -200,10 +223,10 @@ async function inTierReport({ runs = DEFAULT_RUNS, scenarioList } = {}) {
   const desc = describeEnv(process.env);
   const out = ['# validate-commit INSIDE the conformance tier (#5473)', ''];
   out.push(`- host: ${os.type()} ${os.release()} ${process.arch}, ${os.cpus().length} cpus, load average ${os.loadavg().map((n) => n.toFixed(2)).join(' ')}, node ${process.version}`);
-  out.push(`- \`bash\` on the inherited PATH: ${bash} (${versionLine(bash)})`);
+  out.push(`- \`bash\` on the inherited PATH: ${resolveBash(base)} (${versionLine(bash)})`);
   out.push(`- /bin/bash: ${versionLine(SYSTEM_BASH)}`);
-  out.push(`- environment: ${desc.names.length} variables; shown values: ${JSON.stringify(desc.shown)}`);
-  out.push(`- variable names: ${desc.names.join(' ')}`);
+  out.push(`- environment: ${desc.count} variables (${FAMILIES.map((p) => `${p}* ${desc.families[p]}`).join(', ')}); set: ${desc.present.join(' ') || 'none of the watched ones'}`);
+  out.push(`- effective locale: ${localeReport(base)}`);
   out.push(`- ${runs} runs per cell, interleaved round-robin across cells with a rotating start`, '');
   let project;
   let traced;
@@ -232,6 +255,7 @@ async function inTierReport({ runs = DEFAULT_RUNS, scenarioList } = {}) {
 
 module.exports = {
   describeEnv,
+  localeReport,
   without,
   findOnPath,
   buildCells,
@@ -240,6 +264,7 @@ module.exports = {
   runDetached,
   measureCells,
   inTierReport,
-  SHOWN_ENV,
+  PRESENCE_ENV,
+  FAMILIES,
   SYSTEM_BASH,
 };

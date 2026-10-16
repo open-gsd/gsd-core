@@ -19,6 +19,7 @@ const { cleanup } = require('./helpers.cjs');
 
 const {
   describeEnv,
+  localeReport,
   without,
   findOnPath,
   buildCells,
@@ -26,7 +27,8 @@ const {
   runSync,
   runDetached,
   inTierReport,
-  SHOWN_ENV,
+  PRESENCE_ENV,
+  FAMILIES,
   SYSTEM_BASH,
 } = require('../scripts/diagnose-validate-commit-in-tier.cjs');
 const { makeProject, hookEnv } = require('../scripts/diagnose-validate-commit-phases.cjs');
@@ -35,28 +37,51 @@ const onMac = os.type() === 'Darwin';
 const macOnly = !onMac && 'macOS-only';
 
 describe('describeEnv', () => {
-  test('names are sorted; only allowlisted values are shown', () => {
-    const { names, shown } = describeEnv({ ZED: '1', GITHUB_TOKEN: 'secret', NODE_TEST_CONTEXT: 'child', ALPHA: '2' });
-    assert.deepEqual(names, ['ALPHA', 'GITHUB_TOKEN', 'NODE_TEST_CONTEXT', 'ZED']);
-    assert.deepEqual(shown, { NODE_TEST_CONTEXT: 'child' });
-    assert.ok(!JSON.stringify(shown).includes('secret'));
+  test('counts variables and families; no name and no value from the environment reaches the result', () => {
+    const d = describeEnv({
+      GITHUB_TOKEN: 'ghs_secretvalue', MY_SECRET_NAME: 'x', NODE_TEST_CONTEXT: 'child', NODE_A: '1',
+      GSD_X: '2', RUN_TESTS_Y: '3', LC_ALL: 'C', LC_CTYPE: 'UTF-8', PLAIN: 'z',
+    });
+    assert.equal(d.count, 9);
+    assert.deepEqual(d.families, { NODE_: 2, GSD_: 1, RUN_TESTS_: 1, LC_: 2 });
+    const text = JSON.stringify(d);
+    for (const leak of ['GITHUB_TOKEN', 'ghs_secretvalue', 'MY_SECRET_NAME', 'PLAIN', 'child', 'UTF-8']) {
+      assert.ok(!text.includes(leak), `leaked ${leak}`);
+    }
   });
 
-  test('NODE_OPTIONS is reported by name only: it can carry --require paths and flags', () => {
-    const { names, shown } = describeEnv({ NODE_OPTIONS: '--require /secret/path' });
-    assert.deepEqual(names, ['NODE_OPTIONS']);
-    assert.deepEqual(shown, {});
+  test('present lists only watched names that are set, in the watched order, never their values', () => {
+    const d = describeEnv({ NODE_OPTIONS: '--require /secret/path', CI: 'true', OTHER: 'x' });
+    assert.deepEqual(d.present, ['CI', 'NODE_OPTIONS']);
+    assert.ok(!JSON.stringify(d).includes('/secret/path'));
   });
 
-  test('every allowlisted name is shown when present and none are invented when absent', () => {
-    const all = Object.fromEntries(SHOWN_ENV.map((k) => [k, 'v']));
-    assert.deepEqual(Object.keys(describeEnv(all).shown).sort(), [...SHOWN_ENV].sort());
-    assert.deepEqual(describeEnv({}).shown, {});
+  test('every watched name is reported when set and none is invented when absent', () => {
+    const all = Object.fromEntries(PRESENCE_ENV.map((k) => [k, 'v']));
+    assert.deepEqual(describeEnv(all).present, PRESENCE_ENV);
+    assert.deepEqual(describeEnv({}), { count: 0, families: { NODE_: 0, GSD_: 0, RUN_TESTS_: 0, LC_: 0 }, present: [] });
+    assert.deepEqual(FAMILIES, ['NODE_', 'GSD_', 'RUN_TESTS_', 'LC_']);
   });
 
   test('an inherited property is not a variable', () => {
-    const env = Object.create({ LANG: 'inherited' });
-    assert.deepEqual(describeEnv(env).shown, {});
+    const env = Object.create({ CI: 'inherited' });
+    assert.deepEqual(describeEnv(env).present, []);
+    assert.equal(describeEnv(env).count, 0);
+  });
+});
+
+describe('localeReport', () => {
+  const haveLocale = !fs.existsSync('/usr/bin/locale') && !fs.existsSync('/bin/locale') && 'needs the locale command';
+
+  test('reports only LANG and LC_* lines, and what the tool says under the given env', { skip: haveLocale }, () => {
+    const report = localeReport({ PATH: process.env.PATH, LC_ALL: 'C', SECRET_TOKEN: 'ghs_secretvalue' });
+    assert.match(report, /LC_ALL=/);
+    assert.ok(!report.includes('ghs_secretvalue'));
+    assert.ok(!report.includes('SECRET_TOKEN'));
+  });
+
+  test('is "unavailable" when the command cannot run', () => {
+    assert.equal(localeReport({ PATH: '' }), 'unavailable');
   });
 });
 
@@ -190,5 +215,6 @@ describe('inTierReport', () => {
     assert.match(text, /`bash` on the inherited PATH: /);
     assert.match(text, /async \+ detached \+ group kill/);
     assert.match(text, /LC_ALL=en_US\.UTF-8/);
+    assert.match(text, /effective locale: /);
   });
 });
