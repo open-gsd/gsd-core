@@ -431,6 +431,13 @@ Verified patterns from official sources:
 
 ## Open Questions
 
+> List only what your research could not answer; a question you settled belongs in the findings above,
+> with its source. Never mark a question resolved yourself and never add a `(RESOLVED)` suffix to this
+> heading: only the user closes an open question. If CONTEXT.md already records a decision that answers
+> one, cite it as `RESOLVED (D-NN): <ruling>`. Never cite a plan, a disposition, or any file that does not
+> exist. The plan-checker blocks planning on every question here that cites no `D-NN` in CONTEXT.md
+> (Dimension 11).
+
 1. **[Question]**
    - What we know: [partial info]
    - What's unclear: [the gap]
@@ -837,7 +844,7 @@ gsd_run query commit "docs($PHASE): research phase domain" --files "$PHASE_DIR/$
 | Pitfalls | [level] | [why] |
 
 ### Open Questions
-[Gaps that couldn't be resolved]
+[Gaps that couldn't be resolved: each needs a user ruling, never marked resolved by you]
 
 ### Ready for Planning
 Research complete. Planner can now create PLAN.md files.

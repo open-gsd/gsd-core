@@ -594,22 +594,29 @@ issue:
   fix_hint: "Add eslint verification step to each task's <verify> block"
 ```
 
-## Dimension 11: Research Resolution (#1602)
+## Dimension 11: Research Resolution (#1602, #5438)
 
-**Question:** Are all research questions resolved before planning proceeds?
+**Question:** Is every research question answered by a user decision on record before planning proceeds?
 
 **Skip if:** No RESEARCH.md exists for this phase.
 
+**Why a marker is not a resolution:** `gsd-phase-researcher` writes RESEARCH.md, and its open questions are the ones it could not answer. A `(RESOLVED)` heading suffix or an inline `RESOLVED` marker in that file is the questions' own author declaring them closed; nothing outside the file confirms it. Only the user closes an open question, and GSD records the user's rulings as `D-NN` decisions in the phase's CONTEXT.md. So a question counts as resolved only when its resolution cites a `D-NN` that exists there.
+
 **Process:**
-1. Read the phase's RESEARCH.md file
-2. Search for a `## Open Questions` section
-3. If section heading has `(RESOLVED)` suffix → PASS
-4. If section exists: check each listed question for inline `RESOLVED` marker
-5. FAIL if any question lacks a resolution
+1. Read the phase's RESEARCH.md and find its `## Open Questions` section, whatever its heading suffix. No section, or a section that lists no questions → PASS.
+2. Read the phase's CONTEXT.md, if one exists, and collect the decision IDs it records (`D-01`, `D-02`, …).
+3. For each listed question, find the `D-NN` its resolution cites, and confirm that decision exists in CONTEXT.md and answers the question asked.
+4. BLOCKER for each question that:
+   - has no resolution;
+   - is marked `RESOLVED` (inline, or by a `(RESOLVED)` heading suffix) without citing a `D-NN`;
+   - cites a `D-NN` that CONTEXT.md does not contain, or one that decides something else;
+   - cites something other than a user decision as its authority: a plan, a "planning-time disposition", the research itself, or another agent's output.
+5. A `(RESOLVED)` heading suffix is never evidence. It does not pass the dimension, and it does not exempt any question from step 3.
 
 **Red flags:**
-- RESEARCH.md has `## Open Questions` section without `(RESOLVED)` suffix
-- Individual questions listed without resolution status
+- A `## Open Questions (RESOLVED)` heading whose questions cite no `D-NN`
+- A `RESOLVED` marker citing a plan, disposition, or file that does not exist
+- A cited `D-NN` absent from CONTEXT.md, or a phase with open questions and no CONTEXT.md
 - Prose-style open questions that haven't been addressed
 
 **Example — unresolved questions:**
@@ -617,22 +624,32 @@ issue:
 issue:
   dimension: research_resolution
   severity: blocker
-  required_property: "RESEARCH.md carries no unresolved open question"
-  description: "RESEARCH.md has unresolved open questions"
+  required_property: "Every RESEARCH.md open question cites a D-NN decision that exists in CONTEXT.md"
+  description: "RESEARCH.md has open questions with no user decision on record"
   file: "01-RESEARCH.md"
   unresolved_questions:
     - "Hash prefix — keep or change?"
     - "Cache TTL — what duration?"
-  fix_hint: "Resolve questions and mark section as '## Open Questions (RESOLVED)'"
+  fix_hint: "Ask the user to rule on each question, record each ruling as a D-NN decision in CONTEXT.md (/gsd:discuss-phase), then cite it: 'RESOLVED (D-NN): <ruling>'"
 ```
 
-**Example — resolved (PASS):**
+**Example — self-resolved, no decision on record (BLOCKER):**
 ```markdown
 ## Open Questions (RESOLVED)
 
-1. **Hash prefix** — RESOLVED: Use "guest_contract:"
-2. **Cache TTL** — RESOLVED: 5 minutes with Redis
+1. **Hash prefix** — RESOLVED: keep "guest_contract:" (planning-time disposition)
+2. **Cache TTL** — RESOLVED: 5 minutes, per plan 01-03
 ```
+Neither resolution cites a `D-NN`; the heading suffix and the markers were written by the researcher. Report both questions under `unresolved_questions`.
+
+**Example — resolved (PASS):**
+```markdown
+## Open Questions
+
+1. **Hash prefix** — RESOLVED (D-03): Use "guest_contract:"
+2. **Cache TTL** — RESOLVED (D-04): 5 minutes with Redis
+```
+PASS only after confirming CONTEXT.md records D-03 and D-04 and that each decides the question it is cited for.
 
 ## Dimension 12: Pattern Compliance (#1861)
 
@@ -1065,6 +1082,8 @@ Plan verification complete when:
   - [ ] Locked decisions have implementing tasks
   - [ ] No tasks contradict locked decisions
   - [ ] Deferred ideas not included in plans
+- [ ] Research resolution checked (if RESEARCH.md exists): every open question cites a `D-NN`
+      that exists in CONTEXT.md; a `(RESOLVED)` suffix or marker alone is a blocker
 - [ ] Overall status determined (passed | issues_found)
 - [ ] Architectural tier compliance checked (tasks match responsibility map tiers)
 - [ ] Cross-plan data contracts checked (no conflicting transforms on shared data)
