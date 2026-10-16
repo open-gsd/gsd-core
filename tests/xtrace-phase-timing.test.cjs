@@ -72,6 +72,12 @@ describe('parseTimedXtrace', () => {
     ]);
   });
 
+  test('the newline that terminates the stream is not part of the last command', () => {
+    assert.equal(parseTimedXtrace(`${stamp(1, 1, 2, 'c=3')}\n`, NONCE)[0].cmd, 'c=3');
+    // ...but a genuinely empty continuation line before the terminator is kept.
+    assert.equal(parseTimedXtrace(`${stamp(1, 1, 2, 'c=3')}\n\n`, NONCE)[0].cmd, 'c=3\n');
+  });
+
   test('empty input yields no entries', () => {
     assert.deepEqual(parseTimedXtrace('', NONCE), []);
   });
@@ -296,9 +302,11 @@ describe('property: stamped traces', () => {
     });
     fc.assert(
       fc.property(fc.array(entry, { maxLength: 30 }), (entries) => {
+        // Real stderr: every line, the last included, ends with a newline.
         const text = entries
-          .map((e) => [stamp(e.depth, e.t, e.line, e.cmd, e.fn), ...e.more].join('\n'))
-          .join('\n');
+          .flatMap((e) => [stamp(e.depth, e.t, e.line, e.cmd, e.fn), ...e.more])
+          .map((line) => `${line}\n`)
+          .join('');
         const parsed = parseTimedXtrace(text, NONCE);
         assert.equal(parsed.length, entries.length);
         parsed.forEach((p, i) => {

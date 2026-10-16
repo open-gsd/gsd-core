@@ -70,7 +70,11 @@ function parseTimedXtrace(text, nonce) {
   // The nonce is matched as a literal prefix, never compiled into a pattern.
   const head = `@@${nonce}@@`;
   const entries = [];
-  for (const raw of String(text).split('\n')) {
+  const lines = String(text).split('\n');
+  // A stream ends with the newline of its last line; that is a terminator, not
+  // an empty continuation of the last command.
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+  for (const raw of lines) {
     let depth = 0;
     while (raw[depth] === '+') depth++;
     const tail = depth > 0 && raw.startsWith(head, depth)
