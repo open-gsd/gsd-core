@@ -343,7 +343,7 @@ The `gsd-plan-checker` agent reviews every PLAN.md across 12 dimensions before e
 | **8 — Nyquist Compliance** | When `workflow.nyquist_validation` is enabled and RESEARCH.md exists, every task has an `<automated>` verify command, no consecutive window of 3 tasks lacks coverage, and VALIDATION.md is present. |
 | **9 — Cross-Plan Data Contracts** | When plans share data pipelines, their transformations are compatible — no plan strips data that another plan needs in original form. |
 | **10 — CLAUDE.md Compliance** | Plans respect project-specific conventions, forbidden patterns, required tools, and security requirements from `./CLAUDE.md`. |
-| **11 — Research Resolution** | When RESEARCH.md exists, its `## Open Questions` section is marked `(RESOLVED)` before planning proceeds. |
+| **11 — Research Resolution** | When RESEARCH.md exists, every question in its `## Open Questions` section cites a `D-NN` decision that exists in the phase's CONTEXT.md before planning proceeds. A `(RESOLVED)` suffix or marker the researcher wrote is not a resolution. |
 | **12 — Pattern Compliance** | When PATTERNS.md exists, tasks reference the correct analog patterns for each new or modified file. |
 
 ---
