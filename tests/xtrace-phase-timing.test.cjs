@@ -4,9 +4,12 @@
  *
  * The diagnostic runs hooks/gsd-validate-commit.sh under /bin/bash 3.2 on a
  * macOS runner with a PS4 that stamps every traced command. These tests pin the
- * pure parser and attribution, the instrumentation against a real bash, that a
- * traced run of the real hook behaves exactly like a direct run, and the report
- * pipeline end to end on a cheap command.
+ * pure parts: the parser and attribution, the tracing-line injection, and the
+ * CLI's argument and rendering helpers. Nothing here spawns a process, so this
+ * file carries no real-OS signal and stays out of the Windows/macOS conformance
+ * tiers. The tests that need a real bash (the instrumentation, that a traced run
+ * of the real hook equals a direct run, and the report pipeline) are in
+ * tests/xtrace-phase-timing.platform.test.cjs.
  */
 
 const { test, describe } = require('node:test');
