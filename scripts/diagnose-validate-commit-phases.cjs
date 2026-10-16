@@ -165,7 +165,7 @@ function spawnBash(args, options) {
  * the pipe open and hang this process past its bound (the real test avoids that
  * with a process-group kill; spawnSync cannot).
  */
-function runHook(project, command, script, traced) {
+function runHook(project, command, script, traced, env = hookEnv()) {
   const traceFile = path.join(project, 'trace.err');
   const traceFd = traced ? fs.openSync(traceFile, 'w') : null;
   const started = process.hrtime.bigint();
@@ -173,7 +173,7 @@ function runHook(project, command, script, traced) {
   try {
     r = spawnBash([script], {
       cwd: project,
-      env: hookEnv(),
+      env,
       input: JSON.stringify({ tool_input: { command } }),
       stdio: ['pipe', 'ignore', traceFd === null ? 'ignore' : traceFd],
       timeout: HOOK_BOUND_MS,
@@ -332,11 +332,17 @@ module.exports = {
   renderScenario,
   report,
   prepareTracedHooks,
+  makeProject,
+  hookEnv,
+  runHook,
+  median,
+  measureScenario,
   MAX_LOAD,
   STAMP_COMMAND,
   HOOKS_DIR,
   HOOK,
   HOOK_NAME,
+  HOOK_BOUND_MS,
 };
 
 if (require.main === module) runMain(run);

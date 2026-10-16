@@ -234,6 +234,7 @@ module.exports = {
   "tests/unusable-input.test.cjs",
   "tests/update-custom-backup.test.cjs",
   "tests/user-artifact-staging.test.cjs",
+  "tests/validate-commit-in-tier-timing.test.cjs",
   "tests/verification-append-audit.test.cjs",
   "tests/verification-overrides.test.cjs",
   "tests/verification-status.test.cjs",
