@@ -9,7 +9,7 @@
  * body. The conformance job's own row (tests/hooks-opt-in.test.cjs) costs
  * 2.5-5 s per invocation. So whatever makes it slow is a property of running
  * INSIDE the tier, not of the command. This module is meant to be called from
- * a test that the tier runs (tests/validate-commit-in-tier-timing.test.cjs), so
+ * a test that the tier runs (tests/in-tier-commit-hook-timing.test.cjs), so
  * it sees exactly what the real row sees: the node:test child's environment and
  * the tier's contention. It varies one thing at a time on the same command:
  *
