@@ -3,11 +3,12 @@ name: Diagnose validate-commit (macOS)
 # #5473 — per-line cost of hooks/gsd-validate-commit.sh on the 112KB padded
 # command under macOS /bin/bash 3.2, idle and under the conformance tier's
 # 4-way concurrency. Diagnostic only: the report lands in the job summary and
-# the step never fails the PR on its numbers.
+# the steps never fail the PR (continue-on-error), and the load step runs even
+# if the idle step errors. It triggers only on PRs touching the diagnostic
+# itself, or by hand.
 on:
   pull_request:
     paths:
-      - 'hooks/gsd-validate-commit.sh'
       - 'scripts/diagnose-validate-commit-phases.cjs'
       - 'scripts/lib/xtrace-phase-timing.cjs'
       - '.github/workflows/diagnose-validate-commit-macos.yml'
@@ -32,7 +33,10 @@ jobs:
           node-version: 24
 
       - name: Phase timing, idle runner
+        continue-on-error: true
         run: node scripts/diagnose-validate-commit-phases.cjs --load 0
 
       - name: Phase timing, 4 busy processes (conformance-tier concurrency)
+        if: always()
+        continue-on-error: true
         run: node scripts/diagnose-validate-commit-phases.cjs --load 4

@@ -10,18 +10,30 @@
  * kill bound, and ~12x the same-size unpadded row. This script runs the real
  * hook two ways per scenario and prints a per-line cost table:
  *
- *   - untraced: wall time of the hook exactly as the test runs it;
+ *   - untraced: wall time of the hook exactly as the test runs it, repeated
+ *               (min / median / max), because the effect under study is
+ *               noisy on a shared runner;
  *   - traced:   `bash -x` with a PS4 that stamps every command with an epoch
- *               millisecond and its line number (scripts/lib/xtrace-phase-timing.cjs
- *               turns the stamps into per-line costs).
+ *               millisecond, its line number and its function
+ *               (scripts/lib/xtrace-phase-timing.cjs turns the stamps into
+ *               per-line costs).
+ *
+ * Reading the traced numbers: every traced command pays one stamp (a perl
+ * spawn), measured and reported below, and xtrace prints each 112KB expansion,
+ * a cost the untraced run does not have. The traced span is therefore NOT
+ * comparable to the untraced wall time; use it to RANK lines, not to total them.
+ * bash 3.2 numbers LINENO relative to the enclosing function, so lines inside a
+ * function are reported by function name and function-relative line.
  *
  * `--load N` runs N busy node processes alongside, standing in for the
- * conformance tier's `--test-concurrency=4` on a small runner.
+ * conformance tier's `--test-concurrency=4` on a small runner. They are CPU
+ * spin loops; the real tier's concurrent files also fork heavily.
  *
  * Diagnostic only: it asserts nothing and exits 0 unless it cannot run. A hook
- * run that exceeds its bound is killed and reported (signal SIGKILL), not thrown.
+ * run that exceeds its bound or overflows its buffer is reported, not thrown.
  */
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -38,8 +50,12 @@ const {
 const HOOK = path.join(__dirname, '..', 'hooks', 'gsd-validate-commit.sh');
 const BASH = '/bin/bash';
 const HOOK_BOUND_MS = 30000;
-const VERSION_PROBE_BOUND_MS = 10000;
-const TRACE_MAX_BYTES = 1024 * 1024 * 1024;
+const PROBE_BOUND_MS = 10000;
+const TRACE_MAX_BYTES = 64 * 1024 * 1024;
+const MAX_LOAD = 64;
+const UNTRACED_RUNS = 3;
+const CALIBRATION_COMMANDS = 200;
+const LOAD_LIFETIME_MS = 5 * 60 * 1000;
 // Mirrors the test: 112KB stays under Linux's MAX_ARG_STRLEN (131072).
 const PAD_BYTES = 112 * 1024;
 // Millisecond clock for bash 3.2, which has neither EPOCHREALTIME nor printf %(%s)T.
@@ -74,6 +90,9 @@ function parseArgs(argv) {
     if (!Number.isInteger(value) || value < 0) {
       throw new ExitError(2, `diagnose-validate-commit-phases: ${arg} needs a non-negative integer`);
     }
+    if (arg === '--load' && value > MAX_LOAD) {
+      throw new ExitError(2, `diagnose-validate-commit-phases: --load is capped at ${MAX_LOAD}`);
+    }
     opts[arg === '--load' ? 'load' : 'top'] = value;
   }
   return opts;
@@ -89,16 +108,20 @@ function makeProject() {
   return dir;
 }
 
-function runHook(project, command, { trace }) {
+function hookEnv(ps4) {
   const env = {
     ...process.env,
     PATH: `${path.dirname(process.execPath)}:${process.env.PATH || '/usr/bin:/bin'}`,
   };
-  if (trace) env.PS4 = stampPs4(STAMP_COMMAND);
+  if (ps4) env.PS4 = ps4;
+  return env;
+}
+
+function runHook(project, command, ps4) {
   const started = process.hrtime.bigint();
-  const r = spawnSync(BASH, trace ? ['-x', HOOK] : [HOOK], {
+  const r = spawnSync(BASH, ps4 ? ['-x', HOOK] : [HOOK], {
     cwd: project,
-    env,
+    env: hookEnv(ps4),
     input: JSON.stringify({ tool_input: { command } }),
     encoding: 'utf8',
     timeout: HOOK_BOUND_MS,
@@ -106,12 +129,37 @@ function runHook(project, command, { trace }) {
     maxBuffer: TRACE_MAX_BYTES,
   });
   const wallMs = Number((process.hrtime.bigint() - started) / 1000000n);
-  return { wallMs, status: r.status, signal: r.signal, stderr: r.stderr || '' };
+  return {
+    wallMs,
+    status: r.status,
+    signal: r.signal,
+    error: r.error ? r.error.code || r.error.message : null,
+    stderr: r.stderr || '',
+  };
+}
+
+/** Cost of one stamp: a run of no-op commands under the same PS4. */
+function calibrateStampMs(ps4, nonce) {
+  const script = Array.from({ length: CALIBRATION_COMMANDS }, () => ':').join('\n');
+  const r = spawnSync(BASH, ['-x', '-c', script], {
+    env: hookEnv(ps4),
+    encoding: 'utf8',
+    timeout: PROBE_BOUND_MS,
+    killSignal: 'SIGKILL',
+  });
+  const { totalMs } = phaseCosts(parseTimedXtrace(r.stderr || '', nonce));
+  return totalMs / CALIBRATION_COMMANDS;
+}
+
+function median(sorted) {
+  return sorted[Math.floor(sorted.length / 2)];
 }
 
 function startLoad(count) {
+  // Self-terminating: a parent that is SIGKILLed cannot orphan a spinner forever.
+  const busy = `const end=Date.now()+${LOAD_LIFETIME_MS};while(Date.now()<end){}`;
   return Array.from({ length: count }, () =>
-    spawn(process.execPath, ['-e', 'for(;;){}'], { stdio: 'ignore' }));
+    spawn(process.execPath, ['-e', busy], { stdio: 'ignore' }));
 }
 
 function stopLoad(children) {
@@ -119,37 +167,55 @@ function stopLoad(children) {
 }
 
 function bashVersionLine() {
-  const r = spawnSync(BASH, ['--version'], { encoding: 'utf8', timeout: VERSION_PROBE_BOUND_MS });
+  const r = spawnSync(BASH, ['--version'], { encoding: 'utf8', timeout: PROBE_BOUND_MS });
   return (r.stdout || 'unknown').split('\n')[0];
+}
+
+const cell = (s) => String(s).replace(/\|/g, '\\|');
+
+function whereCell(c, source) {
+  if (c.fn) return { line: `${c.fn}():${c.line}`, text: '(function-relative line)' };
+  return { line: String(c.line), text: abbreviate(source[c.line - 1] || '', 70) };
 }
 
 function report(opts) {
   const project = makeProject();
   const source = fs.readFileSync(HOOK, 'utf8').split('\n');
+  const nonce = crypto.randomBytes(6).toString('hex');
+  const ps4 = stampPs4(STAMP_COMMAND, nonce);
+  const stampMs = calibrateStampMs(ps4, nonce);
   const out = [];
   out.push('# validate-commit phase timing (#5473)', '');
   out.push(`- shell: \`${BASH}\` (${bashVersionLine()})`);
   out.push(`- platform: ${process.platform}/${process.arch}, ${os.cpus().length} cpus, node ${process.version}`);
-  out.push(`- background load: ${opts.load} busy process(es)`, '');
+  out.push(`- background load: ${opts.load} busy process(es)`);
+  out.push(`- stamp overhead: ${stampMs.toFixed(1)} ms per traced command (measured over ${CALIBRATION_COMMANDS} no-ops)`);
+  out.push('- traced numbers rank lines; they are not comparable to untraced wall time (every command pays a stamp and xtrace prints each 112KB expansion)', '');
   const load = startLoad(opts.load);
   try {
     for (const scenario of scenarios()) {
-      const untraced = runHook(project, scenario.command, { trace: false });
-      const traced = runHook(project, scenario.command, { trace: true });
-      const { costs, floorMs, totalMs } = phaseCosts(parseTimedXtrace(traced.stderr));
+      const walls = [];
+      let last = null;
+      for (let i = 0; i < UNTRACED_RUNS; i++) {
+        last = runHook(project, scenario.command, null);
+        walls.push(last.wallMs);
+      }
+      walls.sort((a, b) => a - b);
+      const traced = runHook(project, scenario.command, ps4);
+      const { costs, totalMs } = phaseCosts(parseTimedXtrace(traced.stderr, nonce));
       out.push(`## ${scenario.name}`, '');
       out.push(
-        `untraced wall ${untraced.wallMs} ms (exit ${untraced.status}${untraced.signal ? `, ${untraced.signal}` : ''}); ` +
-        `traced span ${totalMs} ms${traced.signal ? ` (${traced.signal})` : ''}; ` +
-        `stamp floor ${floorMs} ms/command; command ${scenario.command.length} bytes`,
+        `untraced wall ms (${UNTRACED_RUNS} runs): min ${walls[0]} / median ${median(walls)} / max ${walls[walls.length - 1]}` +
+        ` (last exit ${last.status}${last.signal ? `, ${last.signal}` : ''}${last.error ? `, ${last.error}` : ''}); ` +
+        `traced span ${totalMs} ms${traced.signal ? ` (${traced.signal})` : ''}${traced.error ? ` (${traced.error})` : ''}; ` +
+        `command ${scenario.command.length} bytes`,
         '',
       );
       out.push('| hook line | total ms | max ms | runs | source | traced value |');
       out.push('|---:|---:|---:|---:|---|---|');
       for (const c of slowestLines(costs, opts.top)) {
-        const src = abbreviate(source[c.line - 1] || '', 70).replace(/\|/g, '\\|');
-        const val = abbreviate(c.sample, 60).replace(/\|/g, '\\|');
-        out.push(`| ${c.line} | ${c.totalMs} | ${c.maxMs} | ${c.count} | \`${src}\` | \`${val}\` |`);
+        const where = whereCell(c, source);
+        out.push(`| ${cell(where.line)} | ${c.totalMs} | ${c.maxMs} | ${c.count} | \`${cell(where.text)}\` | \`${cell(abbreviate(c.sample, 60))}\` |`);
       }
       out.push('');
     }
@@ -174,6 +240,6 @@ function run(argv = process.argv.slice(2)) {
   return 0;
 }
 
-module.exports = { scenarios, parseArgs };
+module.exports = { scenarios, parseArgs, MAX_LOAD, STAMP_COMMAND };
 
 if (require.main === module) runMain(run);
