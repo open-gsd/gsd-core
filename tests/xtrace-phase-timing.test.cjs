@@ -143,6 +143,28 @@ describe('abbreviate', () => {
   });
 });
 
+describe('diagnose-validate-commit-phases CLI surface', () => {
+  const { scenarios, parseArgs } = require('../scripts/diagnose-validate-commit-phases.cjs');
+
+  test('the padded scenarios carry 112KB of padding and stay under MAX_ARG_STRLEN (131072)', () => {
+    const [control, withOption] = scenarios();
+    for (const s of [control, withOption]) {
+      assert.ok(s.command.length > 112 * 1024, `${s.name} must be over 112KB`);
+      assert.ok(s.command.length < 131072, `${s.name} must stay under MAX_ARG_STRLEN`);
+    }
+    assert.ok(withOption.command.endsWith(' --cleanup=verbatim'));
+    assert.equal(withOption.command.slice(0, control.command.length), control.command);
+  });
+
+  test('arguments: defaults, explicit values, and rejection of bad input', () => {
+    assert.deepEqual(parseArgs([]), { load: 0, top: 15 });
+    assert.deepEqual(parseArgs(['--load', '4', '--top', '3']), { load: 4, top: 3 });
+    assert.throws(() => parseArgs(['--load', '-1']), /non-negative integer/);
+    assert.throws(() => parseArgs(['--load', 'x']), /non-negative integer/);
+    assert.throws(() => parseArgs(['--bogus']), /unknown argument/);
+  });
+});
+
 describe('property: stamped traces round-trip through the parser', () => {
   test('timestamps, lines and depths survive serialize -> parse', () => {
     const entry = fc.record({
