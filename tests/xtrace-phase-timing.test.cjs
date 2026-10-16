@@ -20,7 +20,7 @@ const {
   phaseCosts,
   slowestLines,
   abbreviate,
-} = require('../scripts/lib/xtrace-phase-timing.cjs');
+} = require('../scripts/xtrace-phase-timing.cjs');
 const {
   scenarios,
   parseArgs,

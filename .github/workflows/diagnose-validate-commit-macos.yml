@@ -10,7 +10,7 @@ on:
   pull_request:
     paths:
       - 'scripts/diagnose-validate-commit-phases.cjs'
-      - 'scripts/lib/xtrace-phase-timing.cjs'
+      - 'scripts/xtrace-phase-timing.cjs'
       - '.github/workflows/diagnose-validate-commit-macos.yml'
   workflow_dispatch:
 
@@ -22,6 +22,9 @@ jobs:
     name: validate-commit phase timing (macos-latest)
     runs-on: macos-latest
     timeout-minutes: 15
+    defaults:
+      run:
+        shell: 'zsh {0}'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:

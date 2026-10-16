@@ -15,7 +15,7 @@
  *               noisy on a shared runner;
  *   - traced:   `bash -x` with a PS4 that stamps every command with an epoch
  *               millisecond, its line number and its function
- *               (scripts/lib/xtrace-phase-timing.cjs turns the stamps into
+ *               (scripts/xtrace-phase-timing.cjs turns the stamps into
  *               per-line costs).
  *
  * Reading the traced numbers: every traced command pays one stamp (a perl
@@ -45,7 +45,7 @@ const {
   phaseCosts,
   slowestLines,
   abbreviate,
-} = require('./lib/xtrace-phase-timing.cjs');
+} = require('./xtrace-phase-timing.cjs');
 
 const HOOK = path.join(__dirname, '..', 'hooks', 'gsd-validate-commit.sh');
 const BASH = '/bin/bash';
