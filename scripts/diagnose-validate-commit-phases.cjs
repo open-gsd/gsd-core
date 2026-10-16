@@ -154,8 +154,8 @@ function hookEnv() {
 }
 
 /** bash with the options every call here shares; `options` overrides them. */
-function spawnBash(args, options) {
-  return spawnSync(BASH, args, { encoding: 'utf8', killSignal: 'SIGKILL', timeout: PROBE_BOUND_MS, ...options });
+function spawnBash(args, options, bin = BASH) {
+  return spawnSync(bin, args, { encoding: 'utf8', killSignal: 'SIGKILL', timeout: PROBE_BOUND_MS, ...options });
 }
 
 /**
@@ -165,7 +165,7 @@ function spawnBash(args, options) {
  * the pipe open and hang this process past its bound (the real test avoids that
  * with a process-group kill; spawnSync cannot).
  */
-function runHook(project, command, script, traced, env = hookEnv()) {
+function runHook(project, command, script, traced, env = hookEnv(), bin = BASH) {
   const traceFile = path.join(project, 'trace.err');
   const traceFd = traced ? fs.openSync(traceFile, 'w') : null;
   const started = process.hrtime.bigint();
@@ -177,7 +177,7 @@ function runHook(project, command, script, traced, env = hookEnv()) {
       input: JSON.stringify({ tool_input: { command } }),
       stdio: ['pipe', 'ignore', traceFd === null ? 'ignore' : traceFd],
       timeout: HOOK_BOUND_MS,
-    });
+    }, bin);
   } finally {
     if (traceFd !== null) fs.closeSync(traceFd);
   }
@@ -229,15 +229,15 @@ function whereCell(c, source) {
 }
 
 /** Run one scenario untraced (repeated) and traced; no formatting. */
-function measureScenario(project, scenario, hooks, nonce) {
+function measureScenario(project, scenario, hooks, nonce, bin = BASH) {
   const walls = [];
   let last = null;
   for (let i = 0; i < UNTRACED_RUNS; i++) {
-    last = runHook(project, scenario.command, HOOK, false);
+    last = runHook(project, scenario.command, HOOK, false, hookEnv(), bin);
     walls.push(last.wallMs);
   }
   walls.sort((a, b) => a - b);
-  const traced = runHook(project, scenario.command, hooks.hook, true);
+  const traced = runHook(project, scenario.command, hooks.hook, true, hookEnv(), bin);
   const entries = shiftLines(parseTimedXtrace(traced.trace, nonce), INJECTED_LINES);
   const { costs, totalMs } = phaseCosts(entries);
   return { scenario, walls, last, traced, entries: entries.length, costs, totalMs };
