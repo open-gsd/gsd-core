@@ -344,6 +344,7 @@ const DOCS_GUARD_TESTS = {
     'docs/how-to/develop-a-capability.md',
     'docs/README.md',
   ],
+  'tests/plan-authoring-verification-gaps.test.cjs': ['docs/reference/plan-md.md'],
   'tests/plan-checker-coupling.test.cjs': ['docs/AGENTS.md'],
   'tests/plan-phase-drift-guard.test.cjs': [
     'docs/CONFIGURATION.md',

@@ -30,6 +30,7 @@
  */
 import path from 'node:path';
 import os from 'node:os';
+import { resolveGsdHome } from './runtime-homes.cjs';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- install-fs-adapter.cjs is an export= CommonJS module
 import installFsAdapter = require('./install-fs-adapter.cjs');
@@ -70,7 +71,7 @@ interface RuntimeProfileResolver {
  */
 function readGsdGlobalModelOverrides(options: ReadOptions = {}): Record<string, string> | null {
   try {
-    const home = options.homedir ? options.homedir() : os.homedir();
+    const home = resolveGsdHome(options.homedir ? options.homedir() : os.homedir());
     const defaultsPath = path.join(home, '.gsd', 'defaults.json');
     if (!installFs().existsSync(defaultsPath)) return null;
     const raw = installFs().readFileSync(defaultsPath, 'utf-8');
@@ -154,7 +155,7 @@ function readGsdAgentTools(config: Record<string, unknown> | null): AgentTools |
  * model override resolver.
  */
 function readGsdEffectiveAgentTools(targetDir: string | null = null, options: ReadOptions = {}): AgentTools | null {
-  const home = options.homedir ? options.homedir() : os.homedir();
+  const home = resolveGsdHome(options.homedir ? options.homedir() : os.homedir());
   const globalConfig = _readGsdConfigFile(path.join(home, '.gsd', 'defaults.json'), 'global defaults');
 
   let projectConfig: Record<string, unknown> | null = null;
@@ -201,7 +202,7 @@ interface RuntimeProfileMergedConfig {
  */
 function readGsdRuntimeProfileResolver(targetDir: string | null = null): RuntimeProfileResolver | null {
   const homeDefaults = _readGsdConfigFile(
-    path.join(os.homedir(), '.gsd', 'defaults.json'),
+    path.join(resolveGsdHome(), '.gsd', 'defaults.json'),
     '~/.gsd/defaults.json',
   );
 

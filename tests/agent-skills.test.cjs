@@ -1873,7 +1873,7 @@ describe('#1400 regression: plain agent-skills output survives pipe/file stdout'
         [TOOLS_PATH, 'query', 'agent-skills', agentType],
         {
           cwd: tmpDir,
-          env: { ...process.env, ...TEST_ENV_BASE, HOME: tmpDir, USERPROFILE: tmpDir },
+          env: { ...process.env, ...TEST_ENV_BASE, HOME: tmpDir, USERPROFILE: tmpDir, GSD_HOME: tmpDir },
           stdio: ['ignore', fd, 'pipe'],
           timeout: PROBE_TIMEOUT_MS,
         },
@@ -1937,7 +1937,7 @@ describe('#1400 regression: plain agent-skills output survives pipe/file stdout'
     // spawnSync maxBuffer default, so no override is needed.
     const result = runNode([TOOLS_PATH, 'query', 'agent-skills', 'gsd-executor'], {
       cwd: tmpDir,
-      env: { ...process.env, ...TEST_ENV_BASE, HOME: tmpDir, USERPROFILE: tmpDir },
+      env: { ...process.env, ...TEST_ENV_BASE, HOME: tmpDir, USERPROFILE: tmpDir, GSD_HOME: tmpDir },
       timeoutMs: PROBE_TIMEOUT_MS,
     });
     const out = result.stdout || '';
@@ -2173,7 +2173,7 @@ describe('regressions: workflows forward the started workstream to agent-skills 
     function exec(sh, { script, argumentsValue }, printVars) {
       const r = spawnSync(sh, ['-c', `${script}\n${printVars}`], {
         cwd: proj,
-        env: { ...process.env, ...TEST_ENV_BASE, GSD_WORKSTREAM: '', ARGUMENTS: argumentsValue, HOME: proj, USERPROFILE: proj },
+        env: { ...process.env, ...TEST_ENV_BASE, GSD_WORKSTREAM: '', ARGUMENTS: argumentsValue, HOME: proj, USERPROFILE: proj, GSD_HOME: proj },
         encoding: 'utf-8',
         timeout: PROBE_TIMEOUT_MS * 4,
       });
@@ -2214,7 +2214,7 @@ describe('regressions: workflows forward the started workstream to agent-skills 
       const fence = buildFenceScript('plan-phase.md', /^AGENT_SKILLS_PLANNER=/, '1 --ws none');
       const r = spawnSync('bash', ['-c', `${fence.script}\nprintf "%s" "$AGENT_SKILLS_PLANNER"`], {
         cwd: proj,
-        env: { ...process.env, ...TEST_ENV_BASE, GSD_WORKSTREAM: '', ARGUMENTS: fence.argumentsValue, HOME: proj, USERPROFILE: proj },
+        env: { ...process.env, ...TEST_ENV_BASE, GSD_WORKSTREAM: '', ARGUMENTS: fence.argumentsValue, HOME: proj, USERPROFILE: proj, GSD_HOME: proj },
         encoding: 'utf-8',
         timeout: PROBE_TIMEOUT_MS * 4,
       });

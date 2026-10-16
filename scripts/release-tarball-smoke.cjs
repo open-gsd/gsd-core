@@ -703,6 +703,7 @@ function runSmoke({
             ...effectiveNpmEnv,
             HOME: runtimeHome,
             USERPROFILE: runtimeHome,
+            GSD_HOME: runtimeHome, // #5017: the defaults store root follows HOME
             // Same reason as the init check above: install.js skips its main()
             // block when GSD_TEST_MODE is set and would exit 0 writing nothing.
             GSD_TEST_MODE: '',

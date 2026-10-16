@@ -7,6 +7,13 @@
  */
 
 const { test, describe } = require('node:test');
+
+// #5017: pinned GSD_HOME (next to HOME) is put back after each test so it never leaks into the next one.
+const __ORIG_GSD_HOME = process.env.GSD_HOME;
+require('node:test').afterEach(() => {
+  if (__ORIG_GSD_HOME === undefined) delete process.env.GSD_HOME;
+  else process.env.GSD_HOME = __ORIG_GSD_HOME;
+});
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
@@ -1320,6 +1327,7 @@ describe('skills-kind destination parity: installer vs surface-apply (#2911)', (
     // genuinely-sandboxed caller there. Without it these calls would be refused.
     const savedMarker = process.env.GSD_TEST_HOME_SANDBOX;
     process.env.HOME = fakeHome;
+    process.env.GSD_HOME = fakeHome; // #5017: the defaults store root follows HOME
     process.env.USERPROFILE = fakeHome;
     process.env.GSD_TEST_HOME_SANDBOX = fakeHome;
     try {
@@ -1454,6 +1462,7 @@ describe('codex skills-kind destination: home override (#2911)', () => {
     // genuinely-sandboxed caller there. Without it these calls would be refused.
     const savedMarker = process.env.GSD_TEST_HOME_SANDBOX;
     process.env.HOME = fakeHome;
+    process.env.GSD_HOME = fakeHome; // #5017: the defaults store root follows HOME
     process.env.USERPROFILE = fakeHome;
     process.env.GSD_TEST_HOME_SANDBOX = fakeHome;
     try {

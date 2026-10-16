@@ -3586,6 +3586,46 @@ function formatRequirementsLineWarning(
   };
 }
 
+/**
+ * #4972: advisory gaps for the phase artifacts that active `verify:post` steps
+ * declared `onError: "halt"` and `produces` (SECURITY.md, VALIDATION.md).
+ * Missing file, an unresolved `status: draft`, or (SECURITY.md) `threats_open`
+ * above zero. Any other `status` spelling counts as closed — the audit skills
+ * do not pin one value, so this does not invent a vocabulary.
+ */
+function auditArtifactWarnings(cwd: string, phaseFullDir: string): string[] {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy: loop-resolver pulls in the capability registry
+  const loopResolver = require('./loop-resolver.cjs') as {
+    resolveActiveHooksForPoint: (
+      cwd: string,
+      point: string,
+    ) => { activeHooks: Array<{ capId: string; kind: string; onError?: string; produces?: string[]; ref?: { skill?: string } }> };
+  };
+  const out: string[] = [];
+  const files = fs.readdirSync(phaseFullDir);
+  for (const hook of loopResolver.resolveActiveHooksForPoint(cwd, 'verify:post').activeHooks) {
+    if (hook.kind !== 'step' || hook.onError !== 'halt') continue;
+    for (const artifact of hook.produces ?? []) {
+      if (!/^[A-Z][A-Z0-9-]*\.md$/.test(artifact)) continue;
+      const skill = hook.ref?.skill ?? hook.capId;
+      const found = files.filter((f) => f === artifact || f.endsWith(`-${artifact}`)).sort()[0];
+      if (!found) {
+        out.push(`${artifact}: missing — the ${hook.capId} audit (/gsd:${skill}) never ran for this phase, and a verify:post step cannot block the close (#4972)`);
+        continue;
+      }
+      const fm = frontmatterMod.extractFrontmatter(fs.readFileSync(path.join(phaseFullDir, found), 'utf-8')) as Record<string, unknown>;
+      if (typeof fm['status'] === 'string' && fm['status'].trim().toLowerCase() === 'draft') {
+        out.push(`${found}: status is still draft — the ${hook.capId} audit (/gsd:${skill}) was not completed (#4972)`);
+      }
+      const open = Number(fm['threats_open']);
+      if (artifact === 'SECURITY.md' && Number.isFinite(open) && open > 0) {
+        out.push(`${found}: ${open} threat(s) still open (#4972)`);
+      }
+    }
+  }
+  return out;
+}
+
 function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   if (!phaseNum) {
     error('phase number required for phase complete');
@@ -3828,6 +3868,23 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   } catch {
     /* best-effort, same posture as the #2245 pre-scan above: an unreadable
      * SUMMARY means one fewer advisory this run, never a blocked completion. */
+  }
+
+  // #4972: a `verify:post` STEP declared `onError: "halt"` that produces a
+  // phase artifact (security -> SECURITY.md, nyquist -> VALIDATION.md) reads as
+  // a blocking precondition, but a step is advisory by construction (ADR-894
+  // "steps are additive, gates block") and the workflow only prints a line the
+  // operator can ignore — so a phase could close with the audit never run. This
+  // verb is the one place every close passes through, so it names the gap on
+  // the same ADVISORY `warnings[]` channel as the #2572 check above. Advisory,
+  // not a refusal: both capabilities are on by default, so a hard block here
+  // would stop every existing project's next phase close; the security
+  // threats-open gate at `ship:pre` is the enforced one and is untouched.
+  try {
+    warnings.push(...auditArtifactWarnings(cwd, phaseFullDir));
+  } catch {
+    /* best-effort, same posture as the advisories above: an unresolvable hook
+     * set or unreadable artifact means one fewer advisory, never a blocked close. */
   }
 
   let nextPhaseNum: string | null = null;

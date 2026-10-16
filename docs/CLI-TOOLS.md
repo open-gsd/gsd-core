@@ -116,7 +116,10 @@ node gsd-tools.cjs state resolve-blocker --text "..."
 # Record session continuity (at least one of --stopped-at / --resume-file is required)
 node gsd-tools.cjs state record-session --stopped-at "..." [--resume-file path]
 
-# Phase start — update STATE.md Status/Last activity for a new phase
+# Phase start — update STATE.md Status/Last activity for a new phase. When some of the phase's plans
+# already have summaries (a gap-closure re-entry), Current Plan and `Plan: N of M` start at the first
+# plan still to run instead of 1, and a **Current focus:** value that wraps onto further lines is
+# replaced whole.
 node gsd-tools.cjs state begin-phase --phase N --name SLUG --plans COUNT
 
 # Agent-discoverable blocker signalling (used by discuss-phase / UI flows)

@@ -16,6 +16,13 @@
 // its text IS the deployed behavioral contract for the --reapply path.
 
 const { describe, test, before } = require('node:test');
+
+// #5017: pinned GSD_HOME (next to HOME) is put back after each test so it never leaks into the next one.
+const __ORIG_GSD_HOME = process.env.GSD_HOME;
+require('node:test').afterEach(() => {
+  if (__ORIG_GSD_HOME === undefined) delete process.env.GSD_HOME;
+  else process.env.GSD_HOME = __ORIG_GSD_HOME;
+});
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
@@ -1135,6 +1142,7 @@ beforeEach(() => {
   savedHome = process.env.HOME;
   savedUserProfile = process.env.USERPROFILE;
   process.env.HOME = home;
+  process.env.GSD_HOME = home; // #5017: the defaults store root follows HOME
   process.env.USERPROFILE = home;
   restoreConfigEnv = scrubConfigLocationEnv();
 });

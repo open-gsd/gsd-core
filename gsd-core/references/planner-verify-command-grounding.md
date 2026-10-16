@@ -16,6 +16,24 @@ preferred over `cd <dir> && npm run <script>` — it does not depend on the exec
 `prior_verify_commands` is empty and you cannot ground a path, say so in the plan instead of
 guessing one.
 
+**Run a count/match gate before it ships (#4927).** A gate you author — or one a `RESEARCH.md`
+hands you — that counts or matches text (`grep -c`, `grep -q`, `rg`, `test -n "$(grep …)"`) is a
+claim about the tree, and two defects are invisible to reading and take one command to expose. You
+have a shell when you author the plan, so run each such gate against the **current tree** and write
+the pre-change result next to it as its baseline (`# baseline at HEAD: 0`):
+
+- **It already passes at HEAD.** `grep -c "Agent" .planning/PROJECT.md` returned `6` before any work
+  existed, because the word sat in an unrelated row — the gate measures nothing and passes whether
+  or not the work happens. Fix the gate: anchor it to the new heading, key, or line the task
+  creates, or assert a delta from the recorded baseline.
+- **Its literal can never match the deliverable.** `grep` is case-sensitive, so `grep -c "quickstart"`
+  fails on a correct `## Quickstart`. Match the real casing of the text the task writes, or use
+  `-i` when casing is not part of the contract.
+
+A gate that is meant to prove a *negative* is checked the other way: it must pass after the work
+and its baseline must show the thing was there to remove. Only read-only commands are safe to run
+this way — run `grep`/`rg`/`test` gates; do not execute a gate that builds, installs, or writes.
+
 **Root-relative, never absolute (#4767).** The paths in your prompt's `<required_reading>` are
 absolute on purpose — a subagent's cwd may differ from the orchestrator's (#2376). That rule
 covers prompt *inputs* only. Every path in the plan *body* — `<files>`, `<verify>`, `<automated>`,
