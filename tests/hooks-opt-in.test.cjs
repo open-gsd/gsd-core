@@ -1401,7 +1401,10 @@ EOF
     // pins the locale switch and the verdicts.
     assert.ok(/printf '%s' "\$\{1%%\$'\\n'\*\}"/.test(hookSrc),
       'subject extraction must use the pure parameter-expansion form');
-    assert.strictEqual(hookSrc.split('SUBJECT=$(gsd_first_line "$MSG")').length - 1, 2,
+    // CODE lines only: the helper's own comment quotes the call shape.
+    const callSites = hookSrc.split(/\r?\n/)
+      .filter((line) => !line.trimStart().startsWith('#') && line.includes('SUBJECT=$(gsd_first_line "$MSG")'));
+    assert.strictEqual(callSites.length, 2,
       'both subject-extraction sites (resolver fallback and RESOLVE=0) must go through gsd_first_line');
     assert.ok(hookSrc.includes('ENABLED="${CONFIG_OUT%%$\'\\n\'*}"'),
       'ENABLED extraction must use the pure parameter-expansion form');
