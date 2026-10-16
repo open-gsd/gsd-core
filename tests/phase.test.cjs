@@ -2645,6 +2645,24 @@ describe('phase add allocation vs sibling git worktrees (#3849)', () => {
     git(['commit', '-m', 'init'], repoDir);
   }
 
+  function initBracketRepo(repoDir) {
+    fs.mkdirSync(path.join(repoDir, '.planning', 'phases'), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoDir, '.planning', 'config.json'),
+      JSON.stringify({ project_code: 'CK', phase_id_convention: 'bracket' }, null, 2) + '\n',
+    );
+    fs.writeFileSync(path.join(repoDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fs.writeFileSync(
+      path.join(repoDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n## [CK.02] v2.0 — Foundation\n',
+    );
+    git(['init', '-b', 'main'], repoDir);
+    git(['config', 'user.email', 'test@example.com'], repoDir);
+    git(['config', 'user.name', 'Test'], repoDir);
+    git(['add', '-A'], repoDir);
+    git(['commit', '-m', 'init'], repoDir);
+  }
+
   /** Materialize the issue's repro: a sibling worktree branch holding Phase 441. */
   function addSiblingHolding441(repoDir) {
     const sha = git(['rev-parse', 'HEAD'], repoDir).trim();
@@ -2719,6 +2737,57 @@ describe('phase add allocation vs sibling git worktrees (#3849)', () => {
       442,
       '#3849: the batch allocator must widen its horizon the same way the single-add allocator does'
     );
+  });
+
+  test('bracket allocation reserves reader-resolvable legacy directory and ROADMAP numbers in a sibling', () => {
+    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3849-bracket-'));
+    activeDirs.push(repoDir);
+    initBracketRepo(repoDir);
+    const sha = git(['rev-parse', 'HEAD'], repoDir).trim();
+    const sibling = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3849-bracket-sib-'));
+    git(['worktree', 'add', '--detach', sibling, sha], repoDir);
+    activeWorktrees.push({ repoDir, worktreeDir: sibling });
+    fs.mkdirSync(path.join(sibling, '.planning', 'phases', 'CK-01-legacy'), { recursive: true });
+    fs.appendFileSync(
+      path.join(sibling, '.planning', 'ROADMAP.md'),
+      '\n### Phase 02: sibling roadmap reservation\n\n**Goal:** taken\n',
+    );
+
+    const result = runGsdTools(['phase', 'add', 'After Sibling'], repoDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_number, 3);
+    assert.strictEqual(output.directory, '.planning/phases/CK.02-03-after-sibling');
+  });
+
+  // #4304: a sibling whose bracket write context cannot resolve (no
+  // project_code) contributes nothing, and resolving it must not print an
+  // error to stderr while the local phase add succeeds.
+  test('bracket allocation skips a sibling without a resolvable bracket context, with clean stderr', () => {
+    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3849-bracket-noctx-'));
+    activeDirs.push(repoDir);
+    initBracketRepo(repoDir);
+    const sha = git(['rev-parse', 'HEAD'], repoDir).trim();
+    const sibling = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3849-bracket-noctx-sib-'));
+    git(['worktree', 'add', '--detach', sibling, sha], repoDir);
+    activeWorktrees.push({ repoDir, worktreeDir: sibling });
+    fs.writeFileSync(
+      path.join(sibling, '.planning', 'config.json'),
+      JSON.stringify({ phase_id_convention: 'bracket' }, null, 2) + '\n',
+    );
+    fs.appendFileSync(
+      path.join(sibling, '.planning', 'ROADMAP.md'),
+      '\n### [CK.02] 05: sibling without a project code\n\n**Goal:** ignored\n',
+    );
+
+    const result = runNode([GSD_TOOLS_BIN, 'phase', 'add', 'Local'], { cwd: repoDir, timeoutMs: LOOP_HOOK_POINT_CLI_TIMEOUT_MS });
+
+    assert.strictEqual(result.exitCode, 0, result.stderr);
+    assert.doesNotMatch(result.stderr || '', /Error:|project_code|phase_id_convention/);
+    const output = JSON.parse(result.stdout);
+    assert.strictEqual(output.phase_number, 1);
+    assert.strictEqual(output.directory, '.planning/phases/CK.02-01-local');
   });
 
   test('a sibling worktree without .planning/ changes nothing (fail open)', () => {
@@ -3429,14 +3498,24 @@ describe('phase insert command', () => {
   // — matching the widening the design doc / test matrix call for on this
   // pair, unlike the "counter" sites (collectSiblingWorktreePhaseNums,
   // cmdPhaseAdd/-Batch) which deliberately stay non-widened.
+  //
+  // #4304 (ADR-612 PR-4): bracket insert now emits the canonical bracket
+  // identity and refuses without a resolvable active milestone, so the
+  // fixture carries a milestone heading and STATE.md milestone, and the
+  // expectations take the bracket spelling (`01.01`). The #5007 point is
+  // asserted unchanged: the bracket-tagged target and the next bracket-tagged
+  // heading are both recognized, so the entry lands directly after the target.
   test('#5007: finds and inserts after a bracket-tagged target heading under the bracket convention', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'config.json'),
       JSON.stringify({ phase_id_convention: 'bracket', project_code: 'GSD' }),
     );
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
       `# Roadmap
+
+## [GSD.01] v1.0 Foundation
 
 ### [GSD.01] Phase 1: Foundation
 **Goal:** Setup
@@ -3451,12 +3530,16 @@ describe('phase insert command', () => {
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
-    assert.strictEqual(output.phase_number, '01.1', 'should be 01.1');
+    assert.strictEqual(output.phase_number, '01.01', 'should be 01.01');
 
     const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
     assert.ok(
-      roadmap.includes('Phase 01.1: Fix Critical Bug (INSERTED)'),
+      roadmap.includes('### [GSD.01] 01.01: Fix Critical Bug (INSERTED)'),
       'roadmap should include inserted phase',
+    );
+    assert.ok(
+      roadmap.indexOf('[GSD.01] Phase 1') < roadmap.indexOf('[GSD.01] 01.01'),
+      'inserted phase must follow the bracket-tagged target header',
     );
     // The neighboring next-phase-boundary regex (a few lines below
     // headerPattern, NOT one of the 11 originally-marked sites but the same
@@ -3464,7 +3547,7 @@ describe('phase insert command', () => {
     // land directly after the target section — not fall through to
     // end-of-file because `[GSD.01] Phase 2:` was unrecognized as a boundary.
     assert.ok(
-      roadmap.indexOf('Phase 01.1') < roadmap.indexOf('[GSD.01] Phase 2'),
+      roadmap.indexOf('[GSD.01] 01.01') < roadmap.indexOf('[GSD.01] Phase 2'),
       'inserted phase must land between the bracket-tagged target header and the next phase, not at the end of the document',
     );
   });

@@ -8,6 +8,8 @@ module.exports = {
   MACOS_CONFORMANCE_TIER_FILES: [
   "tests/active-workstream-store.unit.test.cjs",
   "tests/adr-612-bracket-phase-counting.test.cjs",
+  "tests/adr-612-bracket-phase-remove.test.cjs",
+  "tests/adr-612-bracket-write-path.test.cjs",
   "tests/adr-index-gate.test.cjs",
   "tests/adr-parser.property.test.cjs",
   "tests/adr-parser.unit.test.cjs",
