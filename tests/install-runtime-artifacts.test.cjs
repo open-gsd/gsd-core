@@ -5036,6 +5036,28 @@ describe('_computePathPrefix', () => {
     assert.equal(prefix, '/home/u/.config/opencode/');
   });
 
+  test('a sibling directory that merely starts with the home path is NOT under home (#5123)', () => {
+    const prefix = conversion._computePathPrefix({
+      isGlobal: true,
+      isOpencode: false,
+      isWindowsHost: false,
+      resolvedTarget: '/home/u2/cfg',
+      homeDir: '/home/u',
+    });
+    assert.equal(prefix, '/home/u2/cfg/');
+  });
+
+  test('global target equal to home → $HOME/ (#5123)', () => {
+    const prefix = conversion._computePathPrefix({
+      isGlobal: true,
+      isOpencode: false,
+      isWindowsHost: false,
+      resolvedTarget: '/home/u',
+      homeDir: '/home/u',
+    });
+    assert.equal(prefix, '$HOME/');
+  });
+
   test('global target outside home → resolvedTarget/ form', () => {
     const prefix = conversion._computePathPrefix({
       isGlobal: true,
@@ -8597,6 +8619,7 @@ describe('installed @ includes resolve to installed files (#5123)', () => {
       let checked = 0;
       for (const file of files) {
         for (const ref of fs4667.readFileSync(file, 'utf8').match(refRe) || []) {
+          if (/\/\.claude\//.test(ref)) continue; // verbatim Claude-form corpus copies, see gsdIncludes
           checked++;
           if (!fs4667.existsSync(resolveRef(ref, home))) missing.push(`${ref} (in ${path5123.basename(file)})`);
         }
@@ -8610,8 +8633,61 @@ describe('installed @ includes resolve to installed files (#5123)', () => {
       runtimeInstall('--kimi', home, null);
       const prompt = fs4667.readFileSync(
         path5123.join(home, '.config', 'agents', 'agents', 'subagents', 'gsd-executor.md'), 'utf8');
-      assert.ok(/(?:~\/\.config\/agents|\/[^\s]*\.config\/agents)\/gsd-core\/references\/mandatory-initial-read\.md/.test(prompt),
+      assert.ok(/(?:\$HOME|~|\/[^\s]*?)\/\.config\/agents\/gsd-core\/references\/mandatory-initial-read\.md/.test(prompt),
         'gsd-executor must reference the installed mandatory-initial-read.md by path');
     });
+  });
+});
+
+describe('retargetInstalledIncludes (#5123)', () => {
+  const retarget = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs').retargetInstalledIncludes;
+
+  test('copilot: the default-home include becomes the install root', () => {
+    assert.equal(
+      retarget('see @~/.copilot/gsd-core/references/a.md and @$HOME/.copilot/gsd-core/b.md', 'copilot', '/opt/cfg/'),
+      'see @/opt/cfg/gsd-core/references/a.md and @/opt/cfg/gsd-core/b.md',
+    );
+  });
+
+  test('antigravity: the default-home include becomes the install root', () => {
+    assert.equal(
+      retarget('@~/.gemini/antigravity/gsd-core/references/a.md', 'antigravity', '$HOME/cfg/'),
+      '@$HOME/cfg/gsd-core/references/a.md',
+    );
+  });
+
+  test('a default install (prefix is already the default home) is returned byte-identical', () => {
+    const text = '@~/.copilot/gsd-core/references/a.md\n@$HOME/.copilot/gsd-core/b.md\n';
+    assert.equal(retarget(text, 'copilot', '$HOME/.copilot/'), text);
+    const ag = '@~/.gemini/antigravity/gsd-core/references/a.md';
+    assert.equal(retarget(ag, 'antigravity', '$HOME/.gemini/antigravity/'), ag);
+  });
+
+  test('is idempotent', () => {
+    const once = retarget('@~/.copilot/gsd-core/references/a.md', 'copilot', '/opt/cfg/');
+    assert.equal(retarget(once, 'copilot', '/opt/cfg/'), once);
+  });
+
+  test('leaves other text alone: .claude includes, prose mentions, the other runtime home', () => {
+    const text = '@~/.claude/gsd-core/a.md and ~/.copilot prose and @~/.gemini/antigravity/x.md';
+    assert.equal(retarget(text, 'copilot', '/opt/cfg/'), text);
+  });
+
+  test('kimi: "GSD core/<path>" becomes the real path and the unsupported @ is dropped', () => {
+    assert.equal(
+      retarget('Read @GSD core/references/a.md and `GSD core/templates/b.md`', 'kimi', '$HOME/.config/agents/'),
+      'Read $HOME/.config/agents/gsd-core/references/a.md and `$HOME/.config/agents/gsd-core/templates/b.md`',
+    );
+  });
+
+  test('kimi: bare prose "GSD core" and a trailing slash with no path are left alone', () => {
+    const text = 'the GSD core is great; see GSD core/ and GSD core.';
+    assert.equal(retarget(text, 'kimi', '/x/'), text);
+  });
+
+  test('other runtimes and a prefix without a trailing slash are returned unchanged', () => {
+    const text = '@~/.copilot/gsd-core/a.md GSD core/a.md';
+    assert.equal(retarget(text, 'codex', '/x/'), text);
+    assert.equal(retarget(text, 'copilot', '/x'), text);
   });
 });
