@@ -1458,6 +1458,22 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
   // After the error() guard, keyPath is narrowed to string.
   const kp = keyPath!;
 
+  // #5470: `commit_docs` and its documented alias `planning.commit_docs` answer
+  // with the policy the runtime applies, not a literal path walk. The loader
+  // resolves the flat key, then the nested alias, then a gitignored `.planning/`
+  // to false, then the default; the walk below sees only the literal path, so
+  // after `config-set planning.commit_docs false` (the keep-planning-docs-private
+  // how-to) a `config-get commit_docs` read was "Key not found", and every
+  // workflow gate's `|| echo "true"` fallback committed `.planning/`. Same
+  // invariant as #2256: config-get must not disagree with the runtime. The
+  // loader always resolves a value, so `--default` never applies to this key.
+  // `persist: false` because a read must not rewrite config.json (#3648).
+  if (kp === 'commit_docs' || kp === 'planning.commit_docs') {
+    const resolved = configLoader.loadConfig(cwd, { persist: false })['commit_docs'];
+    output(resolved, raw, String(resolved));
+    return;
+  }
+
   let config: Record<string, unknown> = {};
   try {
     if (fs.existsSync(configPath)) {
