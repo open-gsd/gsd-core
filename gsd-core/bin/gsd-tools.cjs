@@ -3019,7 +3019,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           const jsonIdx = args.indexOf('--json');
           const agentSkillsJsonMode = jsonIdx !== -1;
           if (agentSkillsJsonMode) args.splice(jsonIdx, 1);
-          init.cmdAgentSkills(cwd, args[1], raw, agentSkillsJsonMode);
+          // #5122: the agent's own self-load asks for configured skills only,
+          // never the persona fallback served to orchestrator-side injection.
+          const skillsOnlyIdx = args.indexOf('--skills-only');
+          const agentSkillsOnly = skillsOnlyIdx !== -1;
+          if (agentSkillsOnly) args.splice(skillsOnlyIdx, 1);
+          init.cmdAgentSkills(cwd, args[1], raw, agentSkillsJsonMode, agentSkillsOnly);
   }
 
   function routeSkillManifest({ args, cwd, raw, error }) {

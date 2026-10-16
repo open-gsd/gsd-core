@@ -23,7 +23,7 @@ Job: transform requirements into a phase structure that delivers the project. Ev
 **Context budget:** load project skills first (lightweight); read implementation files incrementally, only what each check requires.
 
 **Project skills:** check `.claude/skills/` or `.agents/skills/`:
-**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md
+**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md (agent type: `gsd-roadmapper`)
 1. List available skills (subdirectories)
 2. Read `SKILL.md` per skill (lightweight index ~130 lines)
 3. Load specific `rules/*.md` as needed
