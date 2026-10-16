@@ -3143,45 +3143,40 @@ function computePathPrefix({
 }
 
 /**
- * #5123: the include roots the Copilot and Antigravity converters hard-code —
- * their DEFAULT home. With `--config-dir` the same payload is installed under
- * that directory, so an `@~/.copilot/gsd-core/…` include points at nothing.
- * Kept next to the converters that write the literals so the two cannot drift.
- */
-const DEFAULT_HOME_INCLUDE_ROOTS: Record<string, readonly string[]> = {
-  copilot: ['.copilot'],
-  antigravity: ['.gemini/antigravity'],
-};
-
-/**
  * #5123: retarget an installed artifact's `@` includes to the REAL install root.
+ * Driven by the runtime descriptor's hostBehaviors, never by a runtime name:
  *
- * - Copilot / Antigravity: `@~/<default home>/…` and `@$HOME/<default home>/…`
- *   become `@<pathPrefix>…`. A default install (pathPrefix is already
- *   `$HOME/<default home>/`) is returned unchanged, so it stays byte-identical.
- * - Kimi: its prompt converter turns `~/.claude/gsd-core` into the prose
- *   "GSD core" because Kimi has no `@` include, which leaves `@GSD core/x.md`
- *   pointing nowhere. A `GSD core/<path>` reference followed by a path segment
- *   becomes the real `<pathPrefix>gsd-core/<path>`, with the unsupported `@`
- *   dropped. Bare prose "GSD core" is not followed by `/` and is left alone.
+ * - `defaultHomeIncludeRoot` (Copilot, Antigravity): their converters hard-code
+ *   the DEFAULT home into includes, so with `--config-dir` the payload lives
+ *   elsewhere and `@~/<root>/gsd-core/…` points at nothing. `@~/<root>/` and
+ *   `@$HOME/<root>/` become `@<pathPrefix>`. A default install (pathPrefix is
+ *   already `$HOME/<root>/`) is returned unchanged, so it stays byte-identical.
+ * - `retargetsGsdCoreProsePath` (Kimi): Kimi has no `@` include, so its prompt
+ *   converter turns `~/.claude/gsd-core` into the prose "GSD core", leaving
+ *   `@GSD core/x.md` pointing nowhere. A `GSD core/<path>` reference followed
+ *   by a path segment becomes the real `<pathPrefix>gsd-core/<path>`, with the
+ *   unsupported `@` dropped. Bare prose "GSD core" is not followed by `/`.
  *
  * `pathPrefix` is the install root as computePathPrefix derives it
  * (`$HOME/…/` under HOME, otherwise absolute), with a trailing slash. Pure and
  * idempotent: a second pass finds none of the literals it rewrites.
  */
-function retargetInstalledIncludes(content: string, runtime: string, pathPrefix: string): string {
+function retargetInstalledIncludes(
+  content: string,
+  behaviors: { defaultHomeIncludeRoot?: unknown; retargetsGsdCoreProsePath?: unknown } | null | undefined,
+  pathPrefix: string,
+): string {
   if (typeof content !== 'string' || content.length === 0) return content;
   if (typeof pathPrefix !== 'string' || !pathPrefix.endsWith('/')) return content;
+  if (!behaviors) return content;
+  let result = content;
 
-  if (runtime === 'kimi') {
-    return content.replace(/@?GSD core\/(?=[a-z])/g, `${pathPrefix}gsd-core/`);
+  if (behaviors.retargetsGsdCoreProsePath === true) {
+    result = result.replace(/@?GSD core\/(?=[a-z])/g, `${pathPrefix}gsd-core/`);
   }
 
-  const homes = DEFAULT_HOME_INCLUDE_ROOTS[runtime];
-  if (!homes) return content;
-  let result = content;
-  for (const home of homes) {
-    if (pathPrefix === `$HOME/${home}/`) continue; // default install: leave the bytes alone
+  const home = behaviors.defaultHomeIncludeRoot;
+  if (typeof home === 'string' && home.length > 0 && pathPrefix !== `$HOME/${home}/`) {
     result = result
       .split(`@~/${home}/`).join(`@${pathPrefix}`)
       .split(`@$HOME/${home}/`).join(`@${pathPrefix}`);

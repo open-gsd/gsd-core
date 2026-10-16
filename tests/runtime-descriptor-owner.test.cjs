@@ -307,6 +307,14 @@ describe('descriptor-declared install behaviors replaced the name tests', () => 
     assert.deepEqual(declares('requiresSubagentPair'), ['kimi']);
     assert.deepEqual(declares('reclaimsKimiLegacyHooksRoot'), ['kimi-code']);
     assert.deepEqual(declares('rewriteClaudeAtIncludes'), ['codex']);
+    // String-valued: declares() matches only `=== true`, so read the field itself.
+    assert.deepEqual(
+      REGISTERED.filter((id) => typeof hostBehaviorsFor(id).defaultHomeIncludeRoot === 'string').sort(),
+      ['antigravity', 'copilot'],
+    );
+    assert.equal(hostBehaviorsFor('copilot').defaultHomeIncludeRoot, '.copilot');
+    assert.equal(hostBehaviorsFor('antigravity').defaultHomeIncludeRoot, '.gemini/antigravity');
+    assert.deepEqual(declares('retargetsGsdCoreProsePath'), ['kimi']);
     assert.deepEqual(declares('agentTomlFiles'), ['codex']);
   });
 

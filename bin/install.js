@@ -12572,7 +12572,8 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       // them at the real install root (the same `$HOME/…` / absolute prefix the
       // other runtimes use). Global installs only: a local install resolves
       // against its project, which the converters already handle.
-      if (isGlobal && (runtime === 'copilot' || runtime === 'antigravity' || runtime === 'kimi')) {
+      const includeRetarget = hostBehaviorsFor(runtime);
+      if (isGlobal && (includeRetarget.defaultHomeIncludeRoot || includeRetarget.retargetsGsdCoreProsePath === true)) {
         const includePrefix = runtimeArtifactConversion._computePathPrefix({
           isGlobal: true,
           isOpencode: false,
@@ -12590,7 +12591,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
           } catch (_retargetReadErr) {
             continue; // inaccessible or missing — never fail the install over this pass
           }
-          const retargeted = runtimeArtifactConversion.retargetInstalledIncludes(retargetContent, runtime, includePrefix);
+          const retargeted = runtimeArtifactConversion.retargetInstalledIncludes(retargetContent, includeRetarget, includePrefix);
           if (retargeted !== retargetContent) {
             try {
               fs.writeFileSync(retargetPath, retargeted);

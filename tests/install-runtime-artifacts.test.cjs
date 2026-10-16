@@ -8633,14 +8633,17 @@ describe('installed @ includes resolve to installed files (#5123)', () => {
       runtimeInstall('--kimi', home, null);
       const prompt = fs4667.readFileSync(
         path5123.join(home, '.config', 'agents', 'agents', 'subagents', 'gsd-executor.md'), 'utf8');
-      assert.ok(/(?:\$HOME|~|\/[^\s]*?)\/\.config\/agents\/gsd-core\/references\/mandatory-initial-read\.md/.test(prompt),
+      assert.ok(/(?:\$HOME|~|\/[^\s]{0,200}?)\/\.config\/agents\/gsd-core\/references\/mandatory-initial-read\.md/.test(prompt),
         'gsd-executor must reference the installed mandatory-initial-read.md by path');
     });
   });
 });
 
 describe('retargetInstalledIncludes (#5123)', () => {
-  const retarget = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs').retargetInstalledIncludes;
+  const retargetIncludes = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs').retargetInstalledIncludes;
+  const { hostBehaviorsFor } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
+  // The behaviors come from the real descriptors, not from a runtime name.
+  const retarget = (text, runtime, prefix) => retargetIncludes(text, hostBehaviorsFor(runtime), prefix);
 
   test('copilot: the default-home include becomes the install root', () => {
     assert.equal(
