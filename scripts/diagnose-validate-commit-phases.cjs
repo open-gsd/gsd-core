@@ -8,29 +8,30 @@
  * tests/hooks-opt-in.test.cjs's "suffix window still sees an option after a
  * 112KB command" row costs ~5s on the macOS conformance job against a 10s
  * kill bound, and ~12x the same-size unpadded row. This script runs the real
- * hook two ways per scenario and prints a per-line cost table:
+ * hook two ways per scenario and prints where the time goes:
  *
  *   - untraced: wall time of the hook exactly as the test runs it, repeated
  *               (min / median / max), because the effect under study is
  *               noisy on a shared runner;
- *   - traced:   `bash -x` with a PS4 that stamps every command with an epoch
- *               millisecond, its line number and its function
- *               (scripts/xtrace-phase-timing.cjs turns the stamps into
- *               per-line costs).
+ *   - traced:   the hook sourced under `set -x` with a PS4 that stamps every
+ *               command with an epoch millisecond, its line number and its
+ *               function (scripts/xtrace-phase-timing.cjs turns the stamps
+ *               into per-line and per-region costs).
  *
  * Reading the traced numbers: every traced command pays one stamp (a perl
  * spawn), measured and reported below, and xtrace prints each 112KB expansion,
  * a cost the untraced run does not have. The traced span is therefore NOT
  * comparable to the untraced wall time; use it to RANK lines, not to total them.
- * bash 3.2 numbers LINENO relative to the enclosing function, so lines inside a
- * function are reported by function name and function-relative line.
+ * A gap is the previous command's execution plus the next command's expansion,
+ * so each line carries two numbers (see xtrace-phase-timing.cjs).
  *
- * `--load N` runs N busy node processes alongside, standing in for the
- * conformance tier's `--test-concurrency=4` on a small runner. They are CPU
- * spin loops; the real tier's concurrent files also fork heavily.
+ * `--load N` runs N processes that fork node in a loop alongside the hook,
+ * standing in for the conformance tier's `--test-concurrency=4` (four test
+ * files, most of them spawning subprocesses) on a small runner.
  *
- * Diagnostic only: it asserts nothing and exits 0 unless it cannot run. A hook
- * run that exceeds its bound or overflows its buffer is reported, not thrown.
+ * It exits 1 if it could not produce a usable trace (so a broken diagnostic
+ * is a red step, not a silent empty report); it asserts nothing about the
+ * numbers. A hook run that exceeds its bound is killed and reported, not thrown.
  */
 
 const crypto = require('node:crypto');
@@ -46,6 +47,7 @@ const {
   parseTracedScript,
   phaseCosts,
   slowestLines,
+  rollupByRegion,
   abbreviate,
 } = require('./xtrace-phase-timing.cjs');
 
@@ -53,10 +55,11 @@ const HOOK = path.join(__dirname, '..', 'hooks', 'gsd-validate-commit.sh');
 const BASH = '/bin/bash';
 const HOOK_BOUND_MS = 30000;
 const PROBE_BOUND_MS = 10000;
-const TRACE_MAX_BYTES = 64 * 1024 * 1024;
+const MAX_TRACE_BYTES = 256 * 1024 * 1024;
 const MAX_LOAD = 64;
 const UNTRACED_RUNS = 3;
 const CALIBRATION_COMMANDS = 200;
+const REGION_LINES = 50;
 const LOAD_LIFETIME_MS = 5 * 60 * 1000;
 // Mirrors the test: 112KB stays under Linux's MAX_ARG_STRLEN (131072).
 const PAD_BYTES = 112 * 1024;
@@ -123,35 +126,47 @@ function hookEnv(ps4) {
   return ps4 ? traceEnv(env, ps4) : env;
 }
 
+/** bash with the options every call here shares; `options` overrides them. */
+function spawnBash(args, options) {
+  return spawnSync(BASH, args, { encoding: 'utf8', killSignal: 'SIGKILL', timeout: PROBE_BOUND_MS, ...options });
+}
+
+/**
+ * Run the hook on `command`. stdout is discarded and a traced run's stderr goes
+ * to a FILE, never a pipe: the hook's node classifier inherits both, and a
+ * grandchild that outlives the kill would otherwise hold the pipe open and hang
+ * this process past its bound (the real test avoids that with a process-group
+ * kill; spawnSync cannot).
+ */
 function runHook(project, command, ps4) {
+  const traceFile = path.join(project, 'trace.err');
+  const traceFd = ps4 ? fs.openSync(traceFile, 'w') : null;
   const started = process.hrtime.bigint();
-  const r = spawnSync(BASH, ps4 ? tracedBashArgs(HOOK) : [HOOK], {
-    cwd: project,
-    env: hookEnv(ps4),
-    input: JSON.stringify({ tool_input: { command } }),
-    encoding: 'utf8',
-    timeout: HOOK_BOUND_MS,
-    killSignal: 'SIGKILL',
-    maxBuffer: TRACE_MAX_BYTES,
-  });
+  let r;
+  try {
+    r = spawnBash(ps4 ? tracedBashArgs(HOOK) : [HOOK], {
+      cwd: project,
+      env: hookEnv(ps4),
+      input: JSON.stringify({ tool_input: { command } }),
+      stdio: ['pipe', 'ignore', traceFd === null ? 'ignore' : traceFd],
+      timeout: HOOK_BOUND_MS,
+    });
+  } finally {
+    if (traceFd !== null) fs.closeSync(traceFd);
+  }
   const wallMs = Number((process.hrtime.bigint() - started) / 1000000n);
-  return {
-    wallMs,
-    status: r.status,
-    signal: r.signal,
-    error: r.error ? r.error.code || r.error.message : null,
-    stderr: r.stderr || '',
-  };
+  let trace = '';
+  let error = r.error ? r.error.code || r.error.message : null;
+  if (ps4) {
+    if (fs.statSync(traceFile).size > MAX_TRACE_BYTES) error = error || 'trace exceeds the size cap';
+    else trace = fs.readFileSync(traceFile, 'utf8');
+  }
+  return { wallMs, status: r.status, signal: r.signal, error, trace };
 }
 
 /** Cost of one stamp: a run of no-op commands under the same PS4. */
 function calibrateStampMs(ps4, nonce, noopScript) {
-  const r = spawnSync(BASH, tracedBashArgs(noopScript), {
-    env: hookEnv(ps4),
-    encoding: 'utf8',
-    timeout: PROBE_BOUND_MS,
-    killSignal: 'SIGKILL',
-  });
+  const r = spawnBash(tracedBashArgs(noopScript), { env: hookEnv(ps4) });
   const { totalMs } = phaseCosts(parseTracedScript(r.stderr || '', nonce));
   return totalMs / CALIBRATION_COMMANDS;
 }
@@ -160,11 +175,13 @@ function median(sorted) {
   return sorted[Math.floor(sorted.length / 2)];
 }
 
+/** Processes that keep forking node, like a tier of subprocess-spawning test files. */
 function startLoad(count) {
-  // Self-terminating: a parent that is SIGKILLed cannot orphan a spinner forever.
-  const busy = `const end=Date.now()+${LOAD_LIFETIME_MS};while(Date.now()<end){}`;
-  return Array.from({ length: count }, () =>
-    spawn(process.execPath, ['-e', busy], { stdio: 'ignore' }));
+  const churn =
+    "const {spawnSync}=require('node:child_process');" +
+    `const end=Date.now()+${LOAD_LIFETIME_MS};` +
+    "while(Date.now()<end){spawnSync(process.execPath,['-e','0'],{stdio:'ignore'});}";
+  return Array.from({ length: count }, () => spawn(process.execPath, ['-e', churn], { stdio: 'ignore' }));
 }
 
 function stopLoad(children) {
@@ -172,65 +189,100 @@ function stopLoad(children) {
 }
 
 function bashVersionLine() {
-  const r = spawnSync(BASH, ['--version'], { encoding: 'utf8', timeout: PROBE_BOUND_MS });
-  return (r.stdout || 'unknown').split('\n')[0];
+  return (spawnBash(['--version']).stdout || 'unknown').split('\n')[0];
 }
 
 const cell = (s) => String(s).replace(/\|/g, '\\|');
 
+/** Where a cost row points: the hook line and its source, or the function. */
 function whereCell(c, source) {
-  if (c.fn) return { line: `${c.fn}():${c.line}`, text: '(function-relative line)' };
+  if (c.fn) return { line: `${c.fn}():${c.line}`, text: '(line is function-relative)' };
   return { line: String(c.line), text: abbreviate(source[c.line - 1] || '', 70) };
 }
 
-function report(opts) {
+/** Run one scenario untraced (repeated) and traced; no formatting. */
+function measureScenario(project, scenario, ps4, nonce) {
+  const walls = [];
+  let last = null;
+  for (let i = 0; i < UNTRACED_RUNS; i++) {
+    last = runHook(project, scenario.command, null);
+    walls.push(last.wallMs);
+  }
+  walls.sort((a, b) => a - b);
+  const traced = runHook(project, scenario.command, ps4);
+  const entries = parseTracedScript(traced.trace, nonce);
+  const { costs, totalMs } = phaseCosts(entries);
+  return { scenario, walls, last, traced, entries: entries.length, costs, totalMs };
+}
+
+function renderScenario(m, source, opts) {
+  const { scenario, walls, last, traced } = m;
+  const out = [`## ${scenario.name}`, ''];
+  out.push(
+    `untraced wall ms (${UNTRACED_RUNS} runs): min ${walls[0]} / median ${median(walls)} / max ${walls[walls.length - 1]}` +
+    ` (last exit ${last.status}${last.signal ? `, ${last.signal}` : ''}${last.error ? `, ${last.error}` : ''}); ` +
+    `traced span ${m.totalMs} ms over ${m.entries} commands${traced.signal ? ` (${traced.signal})` : ''}${traced.error ? ` (${traced.error})` : ''}; ` +
+    `command ${scenario.command.length} bytes`,
+    '',
+  );
+  if (m.entries === 0) {
+    out.push('**TRACE EMPTY** — no stamped commands were parsed; the numbers below do not exist.', '');
+    return out;
+  }
+  out.push(`Elapsed per ${REGION_LINES}-line region of the hook (ms):`, '');
+  out.push('| region | ms |', '|---|---:|');
+  for (const r of rollupByRegion(m.costs, REGION_LINES)) out.push(`| ${r.label} | ${r.afterMs} |`);
+  out.push('');
+  out.push('Slowest lines. `after` = gap following the line (slow EXECUTION); `before` = gap preceding it (slow EXPANSION):', '');
+  out.push('| hook line | after ms | before ms | runs | source | traced value |');
+  out.push('|---:|---:|---:|---:|---|---|');
+  for (const c of slowestLines(m.costs, opts.top)) {
+    const where = whereCell(c, source);
+    out.push(`| ${cell(where.line)} | ${c.afterMs} | ${c.beforeMs} | ${c.count} | \`${cell(where.text)}\` | \`${cell(abbreviate(c.sample, 60))}\` |`);
+  }
+  out.push('');
+  return out;
+}
+
+/**
+ * The full report. `scenarioList` is injectable so the tests can drive the
+ * whole pipeline on a cheap command; the CLI uses the three #4492 rows.
+ *
+ * @returns {{ text: string, ok: boolean }} ok is false if any scenario's trace was empty.
+ */
+function report(opts, scenarioList = scenarios()) {
   const project = makeProject();
   const source = fs.readFileSync(HOOK, 'utf8').split('\n');
   const nonce = crypto.randomBytes(6).toString('hex');
   const ps4 = stampPs4(STAMP_COMMAND, nonce);
   const noopScript = path.join(project, 'noop.sh');
   fs.writeFileSync(noopScript, `${Array.from({ length: CALIBRATION_COMMANDS }, () => ':').join('\n')}\n`);
-  const stampMs = calibrateStampMs(ps4, nonce, noopScript);
-  const out = [];
-  out.push('# validate-commit phase timing (#5473)', '');
-  out.push(`- shell: \`${BASH}\` (${bashVersionLine()})`);
+  const versionLine = bashVersionLine();
+  const out = ['# validate-commit phase timing (#5473)', ''];
+  out.push(`- shell: \`${BASH}\` (${versionLine})`);
+  if (!/version 3\.2/.test(versionLine)) {
+    out.push('- **WARNING: this is not bash 3.2, the shell the macOS failure occurs under; numbers do not reproduce it.**');
+  }
   out.push(`- platform: ${process.platform}/${process.arch}, ${os.cpus().length} cpus, node ${process.version}`);
-  out.push(`- background load: ${opts.load} busy process(es)`);
-  out.push(`- stamp overhead: ${stampMs.toFixed(1)} ms per traced command (measured over ${CALIBRATION_COMMANDS} no-ops)`);
+  out.push(`- background load: ${opts.load} process(es) forking node`);
+  out.push(`- stamp overhead: ${calibrateStampMs(ps4, nonce, noopScript).toFixed(1)} ms per traced command (measured over ${CALIBRATION_COMMANDS} no-ops)`);
   out.push('- traced numbers rank lines; they are not comparable to untraced wall time (every command pays a stamp and xtrace prints each 112KB expansion)', '');
   const load = startLoad(opts.load);
+  const measured = [];
   try {
-    for (const scenario of scenarios()) {
-      const walls = [];
-      let last = null;
-      for (let i = 0; i < UNTRACED_RUNS; i++) {
-        last = runHook(project, scenario.command, null);
-        walls.push(last.wallMs);
-      }
-      walls.sort((a, b) => a - b);
-      const traced = runHook(project, scenario.command, ps4);
-      const { costs, totalMs } = phaseCosts(parseTracedScript(traced.stderr, nonce));
-      out.push(`## ${scenario.name}`, '');
-      out.push(
-        `untraced wall ms (${UNTRACED_RUNS} runs): min ${walls[0]} / median ${median(walls)} / max ${walls[walls.length - 1]}` +
-        ` (last exit ${last.status}${last.signal ? `, ${last.signal}` : ''}${last.error ? `, ${last.error}` : ''}); ` +
-        `traced span ${totalMs} ms${traced.signal ? ` (${traced.signal})` : ''}${traced.error ? ` (${traced.error})` : ''}; ` +
-        `command ${scenario.command.length} bytes`,
-        '',
-      );
-      out.push('| hook line | total ms | max ms | runs | source | traced value |');
-      out.push('|---:|---:|---:|---:|---|---|');
-      for (const c of slowestLines(costs, opts.top)) {
-        const where = whereCell(c, source);
-        out.push(`| ${cell(where.line)} | ${c.totalMs} | ${c.maxMs} | ${c.count} | \`${cell(where.text)}\` | \`${cell(abbreviate(c.sample, 60))}\` |`);
-      }
-      out.push('');
-    }
+    for (const scenario of scenarioList) measured.push(measureScenario(project, scenario, ps4, nonce));
   } finally {
     stopLoad(load);
     fs.rmSync(project, { recursive: true, force: true });
   }
-  return out.join('\n');
+  if (measured.length >= 2) {
+    const first = measured[0];
+    const last = measured[measured.length - 1];
+    const ratio = median(last.walls) > 0 ? (median(first.walls) / median(last.walls)).toFixed(1) : 'n/a';
+    out.push(`- untraced median: "${first.scenario.name}" ${median(first.walls)} ms vs "${last.scenario.name}" ${median(last.walls)} ms (ratio ${ratio}x)`, '');
+  }
+  for (const m of measured) out.push(...renderScenario(m, source, opts));
+  return { text: out.join('\n'), ok: measured.every((m) => m.entries > 0) };
 }
 
 function run(argv = process.argv.slice(2)) {
@@ -240,13 +292,13 @@ function run(argv = process.argv.slice(2)) {
   if (!fs.existsSync(BASH)) {
     throw new ExitError(2, `diagnose-validate-commit-phases: ${BASH} not found`);
   }
-  const text = report(parseArgs(argv));
+  const { text, ok } = report(parseArgs(argv));
   process.stdout.write(`${text}\n`);
   const summary = process.env.GITHUB_STEP_SUMMARY;
   if (summary) fs.appendFileSync(summary, `${text}\n`);
-  return 0;
+  return ok ? 0 : 1;
 }
 
-module.exports = { scenarios, parseArgs, MAX_LOAD, STAMP_COMMAND };
+module.exports = { scenarios, parseArgs, whereCell, renderScenario, report, MAX_LOAD, STAMP_COMMAND, HOOK };
 
 if (require.main === module) runMain(run);

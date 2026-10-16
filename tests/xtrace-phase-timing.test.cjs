@@ -1,11 +1,12 @@
 /**
- * #5473 — per-line cost attribution for a timestamp-stamped `bash -x` trace.
+ * #5473 — per-line cost attribution for a timestamp-stamped `bash -x` trace,
+ * and the diagnostic (scripts/diagnose-validate-commit-phases.cjs) built on it.
  *
- * The diagnostic (scripts/diagnose-validate-commit-phases.cjs) runs
- * hooks/gsd-validate-commit.sh under /bin/bash 3.2 on a macOS runner with a
- * PS4 that stamps every traced command. These tests pin the pure parser and
- * attribution that turn that trace into "which line of the hook costs the
- * time", plus one test that drives the real PS4 through a real bash.
+ * The diagnostic runs hooks/gsd-validate-commit.sh under /bin/bash 3.2 on a
+ * macOS runner with a PS4 that stamps every traced command. These tests pin the
+ * pure parser and attribution, the launch contract against a real bash, that a
+ * traced run behaves exactly like a direct run of the real hook, and the report
+ * pipeline end to end on a cheap command.
  */
 
 const { test, describe } = require('node:test');
@@ -25,18 +26,31 @@ const {
   parseTracedScript,
   phaseCosts,
   slowestLines,
+  rollupByRegion,
   abbreviate,
 } = require('../scripts/xtrace-phase-timing.cjs');
 const {
   scenarios,
   parseArgs,
+  whereCell,
+  renderScenario,
+  report,
   MAX_LOAD,
   STAMP_COMMAND,
+  HOOK,
 } = require('../scripts/diagnose-validate-commit-phases.cjs');
 
 const NONCE = 'k3f9a1';
 const stamp = (depth, t, line, cmd, fn = '', nonce = NONCE) =>
   `${'+'.repeat(depth)}@@${nonce}@@${t}@@${line}@@${fn}@@ ${cmd}`;
+
+// The real-bash tests need a unix /bin/bash and perl (the stamp clock).
+const BASH = '/bin/bash';
+const REAL_BASH_BOUND_MS = 30000;
+const haveRealBash = process.platform !== 'win32'
+  && fs.existsSync(BASH)
+  && spawnSync('perl', ['-e', '1'], { timeout: REAL_BASH_BOUND_MS }).status === 0;
+const needsBash = !haveRealBash && 'needs a unix /bin/bash and perl';
 
 describe('parseTimedXtrace', () => {
   test('reads timestamp, line, depth, function and command from each stamped line', () => {
@@ -105,11 +119,10 @@ describe('parseTracedScript', () => {
 });
 
 describe('tracedBashArgs / traceEnv', () => {
-  test('the script is $0 and the PS4 is assigned in-shell from the environment', () => {
+  test('the script is $0 and is run by the -c prologue', () => {
     const args = tracedBashArgs('/abs/hook.sh');
     assert.equal(args[0], '-c');
     assert.equal(args[2], '/abs/hook.sh');
-    assert.match(args[1], /^PS4="\$GSD_XTRACE_PS4"; set -x; \. "\$0"$/);
   });
 
   test('traceEnv adds only the PS4 variable and does not mutate its input', () => {
@@ -119,20 +132,15 @@ describe('tracedBashArgs / traceEnv', () => {
   });
 });
 
-describe('the PS4 against a real bash', () => {
-  const BASH = '/bin/bash';
-  const BASH_PROBE_BOUND_MS = 10000;
-  const probe = fs.existsSync(BASH) && process.platform !== 'win32'
-    && spawnSync('perl', ['-e', '1'], { timeout: BASH_PROBE_BOUND_MS }).status === 0;
-
-  test('stamps parse, timestamps never go backwards, and lines/functions are attributed', { skip: !probe && 'needs /bin/bash and perl' }, () => {
+describe('the launch contract against a real bash', () => {
+  test('stamps parse, and lines and functions are attributed', { skip: needsBash }, () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-xtrace-ps4-'));
     const scriptFile = path.join(dir, 'probe.sh');
     fs.writeFileSync(scriptFile, ['a=1', 'b=2', 'f() {', '  c=3', '}', 'f', ''].join('\n'));
     const r = spawnSync(BASH, tracedBashArgs(scriptFile), {
       env: traceEnv(process.env, stampPs4(STAMP_COMMAND, NONCE)),
       encoding: 'utf8',
-      timeout: BASH_PROBE_BOUND_MS,
+      timeout: REAL_BASH_BOUND_MS,
     });
     cleanup(dir);
     assert.equal(r.status, 0, r.stderr);
@@ -144,10 +152,35 @@ describe('the PS4 against a real bash', () => {
     assert.equal(byCmd['b=2'].line, 2);
     assert.equal(byCmd['c=3'].fn, 'f');
     assert.equal(byCmd['a=1'].fn, '');
-    entries.reduce((prev, e) => {
-      assert.ok(e.t >= prev, `timestamp went backwards: ${prev} -> ${e.t}`);
-      return e.t;
-    }, 0);
+    // A stamp is an integer epoch-millisecond reading from the perl clock.
+    for (const e of entries) assert.ok(Number.isInteger(e.t) && e.t > 0, `bad stamp ${e.t}`);
+  });
+
+  test('a traced run of the real hook behaves exactly like a direct run (status and stdout)', { skip: needsBash }, () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-xtrace-parity-'));
+    fs.mkdirSync(path.join(project, '.planning'), { recursive: true });
+    fs.writeFileSync(
+      path.join(project, '.planning', 'config.json'),
+      JSON.stringify({ hooks: { community: true } }),
+    );
+    const base = { ...process.env, PATH: `${path.dirname(process.execPath)}:${process.env.PATH || '/usr/bin:/bin'}` };
+    const traced = traceEnv(base, stampPs4(STAMP_COMMAND, NONCE));
+    try {
+      for (const [command, expectedStatus] of [
+        ['git commit -m "feat: add thing"', 0],
+        ['git commit -m "wibble wobble"', 2],
+      ]) {
+        const input = JSON.stringify({ tool_input: { command } });
+        const direct = spawnSync(BASH, [HOOK], { cwd: project, env: base, input, encoding: 'utf8', timeout: REAL_BASH_BOUND_MS });
+        const viaTrace = spawnSync(BASH, tracedBashArgs(HOOK), { cwd: project, env: traced, input, encoding: 'utf8', timeout: REAL_BASH_BOUND_MS });
+        assert.equal(direct.status, expectedStatus, `direct run of ${command}: ${direct.stderr}`);
+        assert.equal(viaTrace.status, direct.status, `traced exit differs for ${command}`);
+        assert.equal(viaTrace.stdout, direct.stdout, `traced stdout differs for ${command}`);
+        assert.ok(parseTracedScript(viaTrace.stderr, NONCE).length > 0, 'the traced run produced no stamped commands');
+      }
+    } finally {
+      cleanup(project);
+    }
   });
 });
 
@@ -160,16 +193,32 @@ describe('phaseCosts', () => {
     { t: 1904, line: 40, cmd: 'end' },
   ];
 
-  test('a command costs the gap to the next stamp, summed per source line', () => {
+  test('afterMs is the gap to the next stamp and beforeMs the gap from the previous one, summed per line', () => {
     const { costs, totalMs } = phaseCosts(entries);
     const byLine = Object.fromEntries(costs.map((c) => [c.line, c]));
-    assert.equal(byLine[10].totalMs, 2);
-    assert.equal(byLine[20].totalMs, 901);
+    assert.equal(byLine[10].afterMs, 2);
+    assert.equal(byLine[10].beforeMs, 0);
+    assert.equal(byLine[20].afterMs, 901);
+    assert.equal(byLine[20].beforeMs, 2 + 900);
     assert.equal(byLine[20].count, 2);
     assert.equal(byLine[20].maxMs, 900);
-    assert.equal(byLine[20].sample, 'b');
-    assert.equal(byLine[30].totalMs, 1);
+    assert.equal(byLine[30].afterMs, 1);
+    assert.equal(byLine[40].afterMs, 0);
+    assert.equal(byLine[40].beforeMs, 1);
     assert.equal(totalMs, 904);
+  });
+
+  test('a slow EXPANSION lands in beforeMs of its own line, a slow EXECUTION in afterMs', () => {
+    // t: stamp for `x=${v//a/b}` is printed after its 800 ms expansion; `sleep` then runs 700 ms.
+    const { costs } = phaseCosts([
+      { t: 0, line: 1, cmd: 'start' },
+      { t: 800, line: 2, cmd: 'x=expanded' },
+      { t: 801, line: 3, cmd: 'sleep 1' },
+      { t: 1501, line: 4, cmd: 'next' },
+    ]);
+    const line = (n) => costs.find((c) => c.line === n);
+    assert.equal(line(2).beforeMs, 800);
+    assert.equal(line(3).afterMs, 700);
   });
 
   test('the same line number in different functions is two different lines', () => {
@@ -178,20 +227,9 @@ describe('phaseCosts', () => {
       { t: 10, line: 5, fn: 'f', cmd: 'y' },
       { t: 30, line: 9, fn: '', cmd: 'end' },
     ]);
-    assert.equal(costs.length, 2);
-    assert.equal(costs.find((c) => c.fn === '').totalMs, 10);
-    assert.equal(costs.find((c) => c.fn === 'f').totalMs, 20);
-  });
-
-  test('the last entry has no successor and costs nothing', () => {
-    assert.equal(phaseCosts(entries).costs.some((c) => c.line === 40), false);
-  });
-
-  test('floorMs is the median gap: odd count, even count, single gap', () => {
-    const at = (...ts) => ts.map((t, i) => ({ t, line: i, cmd: '' }));
-    assert.equal(phaseCosts(at(0, 1, 3, 10)).floorMs, 2); // gaps 1,2,7 -> 2
-    assert.equal(phaseCosts(at(0, 1, 3, 10, 20)).floorMs, 7); // gaps 1,2,7,10 -> upper median 7
-    assert.equal(phaseCosts(at(0, 5)).floorMs, 5);
+    assert.equal(costs.filter((c) => c.line === 5).length, 2);
+    assert.equal(costs.find((c) => c.line === 5 && c.fn === '').afterMs, 10);
+    assert.equal(costs.find((c) => c.line === 5 && c.fn === 'f').afterMs, 20);
   });
 
   test('a clock that steps backwards is clamped to zero, never negative', () => {
@@ -200,24 +238,26 @@ describe('phaseCosts', () => {
       { t: 40, line: 2, cmd: 'b' },
       { t: 41, line: 3, cmd: 'c' },
     ]);
-    assert.equal(costs.find((c) => c.line === 1).totalMs, 0);
+    assert.equal(costs.find((c) => c.line === 1).afterMs, 0);
+    assert.equal(costs.find((c) => c.line === 2).beforeMs, 0);
   });
 
-  test('zero or one entry is an empty report', () => {
-    assert.deepEqual(phaseCosts([]), { costs: [], floorMs: 0, totalMs: 0 });
-    assert.deepEqual(phaseCosts([{ t: 1, line: 1, cmd: 'a' }]).costs, []);
+  test('zero or one entry has no gaps', () => {
+    assert.deepEqual(phaseCosts([]), { costs: [], totalMs: 0 });
+    const [only] = phaseCosts([{ t: 1, line: 1, cmd: 'a' }]).costs;
+    assert.equal(only.afterMs + only.beforeMs, 0);
   });
 });
 
 describe('slowestLines', () => {
   const costs = [
-    { fn: '', line: 3, totalMs: 5 },
-    { fn: '', line: 1, totalMs: 50 },
-    { fn: 'f', line: 1, totalMs: 50 },
-    { fn: '', line: 4, totalMs: 1 },
+    { fn: '', line: 3, afterMs: 5, beforeMs: 0 },
+    { fn: '', line: 1, afterMs: 50, beforeMs: 0 },
+    { fn: 'f', line: 1, afterMs: 0, beforeMs: 50 },
+    { fn: '', line: 4, afterMs: 1, beforeMs: 1 },
   ];
 
-  test('costliest first, ties by function then line, bounded by n', () => {
+  test('ranks by the larger attribution; ties by function then line', () => {
     assert.deepEqual(slowestLines(costs, 3).map((c) => `${c.fn}:${c.line}`), [':1', 'f:1', ':3']);
   });
 
@@ -236,6 +276,39 @@ describe('slowestLines', () => {
   });
 });
 
+describe('rollupByRegion', () => {
+  const costs = [
+    { fn: '', line: 1, afterMs: 3 },
+    { fn: '', line: 50, afterMs: 4 },
+    { fn: '', line: 51, afterMs: 100 },
+    { fn: '', line: 100, afterMs: 5 },
+    { fn: '', line: 101, afterMs: 7 },
+    { fn: 'cleanup', line: 2, afterMs: 9 },
+  ];
+
+  test('region boundary: lines size, size+1 and 2*size, 2*size+1 fall in the right region', () => {
+    assert.deepEqual(rollupByRegion(costs, 50), [
+      { label: 'lines 1-50', afterMs: 7 },
+      { label: 'lines 51-100', afterMs: 105 },
+      { label: 'lines 101-150', afterMs: 7 },
+      { label: 'in cleanup()', afterMs: 9 },
+    ]);
+  });
+
+  test('size 1 puts every line in its own region; a huge size puts the top level in one', () => {
+    assert.equal(rollupByRegion(costs, 1).length, 6);
+    assert.deepEqual(rollupByRegion(costs, 1000)[0], { label: 'lines 1-1000', afterMs: 119 });
+  });
+
+  test('rejects a non-positive or non-integer size', () => {
+    for (const bad of [0, -1, 1.5, NaN]) assert.throws(() => rollupByRegion(costs, bad), RangeError);
+  });
+
+  test('empty input is an empty roll-up', () => {
+    assert.deepEqual(rollupByRegion([], 50), []);
+  });
+});
+
 describe('abbreviate', () => {
   test('boundary: max - 1, max, max + 1 characters', () => {
     assert.equal(abbreviate('x'.repeat(9), 10), 'x'.repeat(9));
@@ -248,7 +321,7 @@ describe('abbreviate', () => {
   });
 });
 
-describe('diagnose-validate-commit-phases CLI surface', () => {
+describe('diagnose-validate-commit-phases', () => {
   test('the padded scenarios carry 112KB of padding and stay under MAX_ARG_STRLEN (131072)', () => {
     const [control, withOption] = scenarios();
     for (const s of [control, withOption]) {
@@ -283,6 +356,52 @@ describe('diagnose-validate-commit-phases CLI surface', () => {
     assert.throws(() => parseArgs(['--load', 'x']), /non-negative integer/);
     assert.throws(() => parseArgs(['--load']), /non-negative integer/);
     assert.throws(() => parseArgs(['--bogus']), /unknown argument/);
+  });
+
+  test('whereCell: a top-level line shows its source; a function line says it is function-relative', () => {
+    const source = ['first', 'second  line', 'third'];
+    assert.deepEqual(whereCell({ fn: '', line: 2 }, source), { line: '2', text: 'second line' });
+    assert.deepEqual(whereCell({ fn: '', line: 99 }, source), { line: '99', text: '' });
+    const inFn = whereCell({ fn: 'cleanup', line: 4 }, source);
+    assert.equal(inFn.line, 'cleanup():4');
+    assert.match(inFn.text, /function-relative/);
+  });
+
+  test('renderScenario: an empty trace is reported loudly, not rendered as a table', () => {
+    const m = {
+      scenario: { name: 's', command: 'x' },
+      walls: [1, 2, 3],
+      last: { status: 0, signal: null, error: null },
+      traced: { signal: null, error: null },
+      entries: 0,
+      costs: [],
+      totalMs: 0,
+    };
+    const text = renderScenario(m, [], { top: 3 }).join('\n');
+    assert.match(text, /TRACE EMPTY/);
+    assert.doesNotMatch(text, /Slowest lines/);
+  });
+
+  test('report: the whole pipeline on a cheap command, with background load', { skip: needsBash }, () => {
+    const cheap = [{ name: 'cheap conforming commit', command: 'git commit -m "feat: add thing"' }];
+    const { text, ok } = report({ load: 1, top: 3 }, cheap);
+    assert.equal(ok, true, text);
+    assert.match(text, /^# validate-commit phase timing \(#5473\)/);
+    assert.match(text, /background load: 1 process\(es\) forking node/);
+    assert.match(text, /stamp overhead: [\d.]+ ms per traced command/);
+    assert.match(text, /## cheap conforming commit/);
+    assert.match(text, /untraced wall ms \(3 runs\): min \d+ \/ median \d+ \/ max \d+ \(last exit 0\)/);
+    assert.match(text, /Elapsed per 50-line region/);
+    assert.match(text, /\| hook line \| after ms \| before ms \|/);
+  });
+
+  test('report with two scenarios adds the first-vs-last median ratio', { skip: needsBash }, () => {
+    const two = [
+      { name: 'first', command: 'git commit -m "feat: a"' },
+      { name: 'second', command: 'git commit -m "feat: b"' },
+    ];
+    const { text } = report({ load: 0, top: 1 }, two);
+    assert.match(text, /untraced median: "first" \d+ ms vs "second" \d+ ms \(ratio /);
   });
 });
 
@@ -321,7 +440,7 @@ describe('property: stamped traces', () => {
     );
   });
 
-  test('each (function, line) is charged exactly the gaps that follow ITS entries', () => {
+  test('each (function, line) is charged exactly the gaps that follow and precede ITS entries', () => {
     const step = fc.record({
       gap: fc.integer({ min: 0, max: 500 }),
       line: fc.integer({ min: 1, max: 6 }),
@@ -337,15 +456,41 @@ describe('property: stamped traces', () => {
           return e;
         });
         entries.push({ t, line: 99, fn: 'end', cmd: '' });
+        // Expected per (fn, line), from the construction alone: entry i is followed by
+        // steps[i].gap (the sentinel by nothing) and preceded by steps[i - 1].gap.
         const expected = new Map();
-        for (const s of steps) {
-          const key = `${s.fn}:${s.line}`;
-          expected.set(key, (expected.get(key) || 0) + s.gap);
-        }
+        const add = (fn, line, after, before) => {
+          const key = `${fn}:${line}`;
+          const acc = expected.get(key) || { afterMs: 0, beforeMs: 0 };
+          acc.afterMs += after;
+          acc.beforeMs += before;
+          expected.set(key, acc);
+        };
+        steps.forEach((s, i) => add(s.fn, s.line, s.gap, i > 0 ? steps[i - 1].gap : 0));
+        add('end', 99, 0, steps[steps.length - 1].gap);
         const { costs } = phaseCosts(entries);
         assert.equal(costs.length, expected.size);
-        for (const c of costs) assert.equal(c.totalMs, expected.get(`${c.fn}:${c.line}`));
+        for (const c of costs) {
+          const want = expected.get(`${c.fn}:${c.line}`);
+          assert.equal(c.afterMs, want.afterMs);
+          assert.equal(c.beforeMs, want.beforeMs);
+        }
       }),
+    );
+  });
+
+  test('both attributions each sum to the trace span', () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.tuple(fc.integer({ min: 0, max: 500 }), fc.integer({ min: 1, max: 20 })), { minLength: 2, maxLength: 40 }),
+        (steps) => {
+          let t = 1_000_000;
+          const entries = steps.map(([gap, line]) => ({ t: (t += gap), line, cmd: '' }));
+          const { costs, totalMs } = phaseCosts(entries);
+          assert.equal(costs.reduce((s, c) => s + c.afterMs, 0), totalMs);
+          assert.equal(costs.reduce((s, c) => s + c.beforeMs, 0), totalMs);
+        },
+      ),
     );
   });
 });

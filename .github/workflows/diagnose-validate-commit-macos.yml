@@ -2,10 +2,12 @@ name: Diagnose validate-commit (macOS)
 
 # #5473 — per-line cost of hooks/gsd-validate-commit.sh on the 112KB padded
 # command under macOS /bin/bash 3.2, idle and under the conformance tier's
-# 4-way concurrency. Diagnostic only: the report lands in the job summary and
-# the steps never fail the PR (continue-on-error), and the load step runs even
-# if the idle step errors. It triggers only on PRs touching the diagnostic
-# itself, or by hand.
+# 4-way concurrency. The report lands in the job summary. The script asserts
+# nothing about the numbers but exits 1 when it cannot produce a usable trace,
+# so a broken diagnostic is a red step; the loaded step still runs after a red
+# idle step. It triggers only on PRs touching the diagnostic itself, or by
+# hand. TEMPORARY: delete this workflow, scripts/diagnose-validate-commit-phases.cjs
+# and scripts/xtrace-phase-timing.cjs once #5473 is resolved.
 on:
   pull_request:
     paths:
@@ -36,10 +38,9 @@ jobs:
           node-version: 24
 
       - name: Phase timing, idle runner
-        continue-on-error: true
         run: node scripts/diagnose-validate-commit-phases.cjs --load 0
 
-      - name: Phase timing, 4 busy processes (conformance-tier concurrency)
+      # always(): a broken idle step must not hide the loaded measurement.
+      - name: Phase timing, 4 processes forking node (conformance-tier concurrency)
         if: always()
-        continue-on-error: true
         run: node scripts/diagnose-validate-commit-phases.cjs --load 4

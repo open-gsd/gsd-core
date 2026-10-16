@@ -7,19 +7,30 @@
  *
  * The stamp is `<depth marks>@@<nonce>@@<epoch-ms>@@<lineno>@@<function>@@ `, so
  * one trace line looks like `++@@k3f9@@1760615775123@@271@@@@ MSG_SUFFIX=...`.
- * The cost of a traced command is the gap to the NEXT stamp: bash expands PS4
- * immediately before running the command, so the gap is that command's own
- * execution time PLUS one stamp's own overhead (measure it with a run of no-op
- * commands; see the CLI).
- *
  * The nonce is a per-run random token: a traced value that merely LOOKS like a
  * stamp (hostile or accidental) cannot forge one without knowing it.
  *
- * bash 3.2 numbers LINENO relative to the enclosing function, so a stamp inside
- * a function carries its function name and the line is function-relative.
+ * WHAT A GAP MEANS. bash prints a trace line (and so evaluates PS4) AFTER it
+ * has expanded the command's words and BEFORE it runs the command. The gap
+ * between stamp i and stamp i+1 is therefore
  *
- * Pure functions only: no I/O, no clock. The CLI that produces the trace is
- * scripts/diagnose-validate-commit-phases.cjs.
+ *     execution of command i  +  expansion of command i+1
+ *
+ * which cannot be split from the trace alone. Both attributions are reported:
+ * `afterMs` (the gap that FOLLOWS the line) is large for a line that EXECUTES
+ * slowly (an external command, a `$(...)` already expanded); `beforeMs` (the
+ * gap that PRECEDES it) is large for a line whose EXPANSION is slow (a
+ * `${var//pat/x}` or `${var:off}` over a 112KB value, whose result is only
+ * printed once it is computed). Neither alone is "the cost of the line".
+ *
+ * Every traced command also pays one stamp (a subshell and a perl); measure it
+ * with a run of no-ops (see the CLI) and read gaps below it as zero.
+ *
+ * bash numbers LINENO relative to the enclosing function in some versions, so
+ * a stamp inside a function carries its function name.
+ *
+ * No I/O and no clock: every function returns a value computed from its
+ * arguments. The CLI that runs bash is scripts/diagnose-validate-commit-phases.cjs.
  */
 
 /** PS4 to hand to `bash -x`; `timestampCommand` prints the epoch milliseconds. */
@@ -27,7 +38,6 @@ function stampPs4(timestampCommand, nonce) {
   return `+@@${nonce}@@$(${timestampCommand})@@\${LINENO}@@\${FUNCNAME:-}@@ `;
 }
 
-// After the depth marks and the nonce: `<epoch-ms>@@<lineno>@@<function>@@ `.
 /**
  * The PS4 must reach bash as an in-shell ASSIGNMENT, not as an inherited
  * environment variable: bash 5.x does not run the command substitution in a PS4
@@ -38,9 +48,9 @@ function stampPs4(timestampCommand, nonce) {
  *
  * So the script runs inside a `bash -c` whose prologue assigns PS4, turns on
  * xtrace and SOURCES the script. `$0` is the script path, so `dirname "$0"` and
- * `exit` behave exactly as when it is run directly. The one visible difference:
- * the sourced file's top level reports FUNCNAME `source`, which the parser
- * folds to "no function".
+ * `exit` behave exactly as when it is run directly (the CLI's tests pin this
+ * against the real hook). The one visible difference: the sourced file's top
+ * level may report FUNCNAME `source`, which the parser folds to "no function".
  */
 const PS4_ENV_VAR = 'GSD_XTRACE_PS4';
 const TRACE_PROLOGUE = `PS4="$${PS4_ENV_VAR}"; set -x; . "$0"`;
@@ -55,6 +65,7 @@ function traceEnv(base, ps4) {
   return { ...base, [PS4_ENV_VAR]: ps4 };
 }
 
+// What follows the depth marks and the nonce: `<epoch-ms>@@<lineno>@@<function>@@ `.
 const STAMP_TAIL = /^(\d+)@@(\d+)@@([^@]*)@@ ?/;
 
 /**
@@ -106,34 +117,39 @@ function parseTracedScript(text, nonce) {
 }
 
 /**
- * Attribute each entry's cost (gap to the next stamp) to its (function, line).
+ * Attribute the gaps around each entry to its (function, line): `afterMs` is
+ * the gap to the NEXT stamp, `beforeMs` the gap from the PREVIOUS one (see the
+ * header for what each means). A clock that steps backwards counts as zero.
  *
  * @param {{ t: number, line: number, fn?: string, cmd: string }[]} entries
- * @returns {{ costs: { fn: string, line: number, totalMs: number, maxMs: number, count: number, sample: string }[], floorMs: number, totalMs: number }}
+ * @returns {{ costs: { fn: string, line: number, afterMs: number, beforeMs: number, maxMs: number, count: number, sample: string }[], totalMs: number }}
  */
 function phaseCosts(entries) {
   const byKey = new Map();
-  const gaps = [];
-  for (let i = 0; i < entries.length - 1; i++) {
-    const gap = Math.max(0, entries[i + 1].t - entries[i].t);
-    gaps.push(gap);
+  const last = entries.length - 1;
+  for (let i = 0; i <= last; i++) {
+    const after = i < last ? Math.max(0, entries[i + 1].t - entries[i].t) : 0;
+    const before = i > 0 ? Math.max(0, entries[i].t - entries[i - 1].t) : 0;
     const e = entries[i];
     const fn = e.fn || '';
     const key = `${fn}\u0000${e.line}`;
-    const acc = byKey.get(key) || { fn, line: e.line, totalMs: 0, maxMs: 0, count: 0, sample: '' };
-    acc.totalMs += gap;
+    const acc = byKey.get(key) || { fn, line: e.line, afterMs: 0, beforeMs: 0, maxMs: 0, count: 0, sample: '' };
+    acc.afterMs += after;
+    acc.beforeMs += before;
     acc.count += 1;
-    if (gap >= acc.maxMs) {
-      acc.maxMs = gap;
+    const peak = Math.max(after, before);
+    if (peak >= acc.maxMs) {
+      acc.maxMs = peak;
       acc.sample = e.cmd;
     }
     byKey.set(key, acc);
   }
-  const sorted = [...gaps].sort((a, b) => a - b);
-  const floorMs = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
-  const totalMs = entries.length > 1 ? Math.max(0, entries[entries.length - 1].t - entries[0].t) : 0;
-  return { costs: [...byKey.values()], floorMs, totalMs };
+  const totalMs = entries.length > 1 ? Math.max(0, entries[last].t - entries[0].t) : 0;
+  return { costs: [...byKey.values()], totalMs };
 }
+
+/** A line's weight when ranking: the larger of its two attributions. */
+const peakMs = (c) => Math.max(c.afterMs, c.beforeMs);
 
 /**
  * The `n` most expensive lines, costliest first; ties broken by function then
@@ -141,8 +157,32 @@ function phaseCosts(entries) {
  */
 function slowestLines(costs, n) {
   return [...costs]
-    .sort((a, b) => b.totalMs - a.totalMs || (a.fn < b.fn ? -1 : a.fn > b.fn ? 1 : 0) || a.line - b.line)
+    .sort((a, b) => peakMs(b) - peakMs(a) || (a.fn < b.fn ? -1 : a.fn > b.fn ? 1 : 0) || a.line - b.line)
     .slice(0, n);
+}
+
+/**
+ * Elapsed time per run of `size` source lines of the script's top level, in
+ * line order, plus one entry per function. `afterMs` summed over a region is
+ * the time from its first stamp to the next region's, so regions partition the
+ * run: a coarse "which phase" view that needs no knowledge of the script.
+ *
+ * @returns {{ label: string, afterMs: number }[]}
+ */
+function rollupByRegion(costs, size) {
+  if (!Number.isInteger(size) || size < 1) throw new RangeError('region size must be a positive integer');
+  const regions = new Map();
+  for (const c of costs) {
+    const start = Math.floor((c.line - 1) / size) * size + 1;
+    const label = c.fn ? `in ${c.fn}()` : `lines ${start}-${start + size - 1}`;
+    const from = c.fn ? Number.MAX_SAFE_INTEGER : start; // functions sort after the top level
+    const acc = regions.get(label) || { label, from, afterMs: 0 };
+    acc.afterMs += c.afterMs;
+    regions.set(label, acc);
+  }
+  return [...regions.values()]
+    .sort((a, b) => a.from - b.from || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0))
+    .map(({ label, afterMs }) => ({ label, afterMs }));
 }
 
 /** One-line, length-bounded rendering of a traced command for a report. */
@@ -151,4 +191,15 @@ function abbreviate(cmd, max = 100) {
   return flat.length <= max ? flat : `${flat.slice(0, max)}… (${flat.length} chars)`;
 }
 
-module.exports = { stampPs4, tracedBashArgs, traceEnv, parseTimedXtrace, parseTracedScript, phaseCosts, slowestLines, abbreviate };
+module.exports = {
+  stampPs4,
+  tracedBashArgs,
+  traceEnv,
+  parseTimedXtrace,
+  parseTracedScript,
+  phaseCosts,
+  peakMs,
+  slowestLines,
+  rollupByRegion,
+  abbreviate,
+};
