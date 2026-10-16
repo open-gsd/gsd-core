@@ -1302,9 +1302,23 @@ describe('#3587 per-phase commit_docs override', () => {
  */
 describe('#5470 config-get commit_docs returns the runtime-resolved policy', () => {
   let tmpDir;
+  // Both variables redirect which config.json the loader reads, so a value
+  // inherited from the developer's shell would point every case elsewhere.
+  const SCOPE_VARS = ['GSD_PROJECT', 'GSD_WORKSTREAM'];
+  let savedScope;
 
-  beforeEach(() => { tmpDir = createTempGitProject(); });
-  afterEach(() => cleanup(tmpDir));
+  beforeEach(() => {
+    tmpDir = createTempGitProject();
+    savedScope = SCOPE_VARS.map((name) => [name, process.env[name]]);
+    for (const name of SCOPE_VARS) delete process.env[name];
+  });
+  afterEach(() => {
+    for (const [name, value] of savedScope) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    cleanup(tmpDir);
+  });
 
   function configGet(keyPath, defaultValue) {
     return captureFdWrite(1, () => configCli.cmdConfigGet(tmpDir, keyPath, true, defaultValue)).trim();
@@ -1371,6 +1385,17 @@ describe('#5470 config-get commit_docs returns the runtime-resolved policy', () 
       }
     }
   }
+
+  test("under GSD_PROJECT, the project's own planning.commit_docs is what reads back", () => {
+    writeConfig(tmpDir, { planning: { commit_docs: true } });
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'proj'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'proj', 'config.json'),
+      JSON.stringify({ planning: { commit_docs: false } }),
+    );
+    process.env.GSD_PROJECT = 'proj';
+    assert.strictEqual(configGet('commit_docs'), 'false');
+  });
 
   describe('under a workstream', () => {
     beforeEach(() => {
