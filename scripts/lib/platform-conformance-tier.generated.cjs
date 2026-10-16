@@ -299,6 +299,7 @@ module.exports = {
   "tests/slug-derivation-drift-guard.test.cjs",
   "tests/state-todos-render.test.cjs",
   "tests/state.platform.test.cjs",
+  "tests/subject-first-line.platform.test.cjs",
   "tests/tdd-review-checkpoint-cross-plan.test.cjs",
   "tests/teams-status.test.cjs",
   "tests/test-gate-watch-mode.test.cjs",
