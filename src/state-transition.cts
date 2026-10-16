@@ -17,7 +17,7 @@
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
 import { stateReplaceField, stateExtractField, stateReplaceFieldIfTemplate, stateReplaceFieldWithFallback, stateReplaceFieldInSession, stateCurrentPositionSlice } from './state-document.cjs';
-import { KNOWN_TEMPLATE_DEFAULTS, toFiniteNumber, computeProgressPercent } from './state-document.cjs';
+import { KNOWN_TEMPLATE_DEFAULTS, toFiniteNumber, computeProgressPercent, fieldContinuationEnd } from './state-document.cjs';
 import { tokenizeHeadings, withSection } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
 import { deriveProgressFromRoadmap, clampPercent, clampPercentFromFraction, renderProgressBar } from './phase-lifecycle.cjs';
@@ -1191,7 +1191,17 @@ export type PhaseInventoryResult =
   | { ok: false; reason: string };
 
 export type StateTransitionIntent =
-  | { kind: 'beginPhase'; phaseNumber: string | number; phaseName: string | null; planCount: number | null }
+  | {
+      kind: 'beginPhase';
+      phaseNumber: string | number;
+      phaseName: string | null;
+      planCount: number | null;
+      /**
+       * 1-based position of the first plan still to run, when some of the phase's plans already have
+       * summaries (a gap-closure re-entry, #4945). Absent or null means the phase starts at plan 1.
+       */
+      startPlan?: number | null;
+    }
   | { kind: 'advancePlan' }
   | {
       kind: 'completePhase';
@@ -1312,10 +1322,12 @@ export function transitionCore(
  */
 function beginPhaseCore(
   content: string,
-  intent: { kind: 'beginPhase'; phaseNumber: string | number; phaseName: string | null; planCount: number | null },
+  intent: { kind: 'beginPhase'; phaseNumber: string | number; phaseName: string | null; planCount: number | null; startPlan?: number | null },
   deps: StateTransitionDeps,
 ): StateTransitionResult {
   const updated: string[] = [];
+  // #4945: a re-entry whose earlier plans already have summaries starts at the first plan still to run.
+  const startPlan = intent.startPlan && intent.startPlan > 0 ? Math.floor(intent.startPlan) : 1;
 
   // #1255: body-field replacements operate on body only (frontmatter stripped),
   // not on the full content. The YAML `status:` key matches `^Status:\s*`
@@ -1384,7 +1396,7 @@ function beginPhaseCore(
     if (intent.phaseName) {
       tryField('Current Phase Name', intent.phaseName);
     }
-    tryField('Current Plan', '1');
+    tryField('Current Plan', String(startPlan));
     if (intent.planCount) {
       tryField('Total Plans in Phase', String(intent.planCount));
     }
@@ -1404,15 +1416,22 @@ function beginPhaseCore(
     // end-of-line (inert here since `.` never crosses line terminators
     // without `/s`, which is not set).
     const focusPattern = /^([ \t]*\*\*Current focus:\*\*[ \t]*)(.*)$/im;
-    if (focusPattern.test(body)) {
-      body = body.replace(focusPattern, (_match, prefix: string) => `${prefix}${focusLabel}`);
+    const focusMatch = focusPattern.exec(body);
+    if (focusMatch) {
+      // #4945: a value an author wrapped onto further lines is replaced whole, so its tail is not
+      // left behind under the new value. The lines that count are the ones `state validate` already
+      // reports as a field's continuation (stops at a blank line, a heading, a list item, a table
+      // row, a fence or a sibling field). An empty first line has no value to continue.
+      const valueEnd = focusMatch.index + focusMatch[0].length;
+      const end = focusMatch[2].trim() === '' ? valueEnd : fieldContinuationEnd(body, valueEnd);
+      body = body.slice(0, focusMatch.index) + focusMatch[1] + focusLabel + body.slice(end);
       updated.push('Current focus');
     }
 
     // ## Current Position section mutation (#1104, #1365).
     // `locateCurrentPosition` (fence-aware, tokenizeHeadings-based) locates
     // the section; mirrors state.cts:2261-2324 byte-for-behaviour.
-    body = mutateCurrentPositionFirstTime(body, intent, today, updated);
+    body = mutateCurrentPositionFirstTime(body, { ...intent, startPlan }, today, updated);
   } else {
     // Resume path: only update Last activity timestamp in Current Position
     // (do not touch Plan:, Phase:, Status:, stopped_at, progress.percent).
@@ -1508,7 +1527,7 @@ export function sliceCurrentPositionSection(body: string): string | null {
  */
 function mutateCurrentPositionFirstTime(
   body: string,
-  intent: { phaseNumber: string | number; phaseName: string | null; planCount: number | null },
+  intent: { phaseNumber: string | number; phaseName: string | null; planCount: number | null; startPlan: number },
   today: string,
   updated: string[],
 ): string {
@@ -1526,7 +1545,7 @@ function mutateCurrentPositionFirstTime(
   }
 
   // Plan line.
-  const planValue = `1 of ${intent.planCount || '?'}`;
+  const planValue = `${intent.startPlan} of ${intent.planCount || '?'}`;
   if (/^Plan:/m.test(sectionBody)) {
     sectionBody = sectionBody.replace(/^Plan:.*$/m, `Plan: ${planValue}`);
   } else {

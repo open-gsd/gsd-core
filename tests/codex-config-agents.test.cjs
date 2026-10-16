@@ -9,6 +9,13 @@
 process.env.GSD_TEST_MODE = '1';
 
 const { test, describe, before, beforeEach, afterEach } = require('node:test');
+
+// #5017: pinned GSD_HOME (next to HOME) is put back after each test so it never leaks into the next one.
+const __ORIG_GSD_HOME = process.env.GSD_HOME;
+require('node:test').afterEach(() => {
+  if (__ORIG_GSD_HOME === undefined) delete process.env.GSD_HOME;
+  else process.env.GSD_HOME = __ORIG_GSD_HOME;
+});
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
@@ -108,6 +115,7 @@ function runCodexInstall(codexHome, cwd = path.join(__dirname, '..')) {
   // loader.rs). Sandbox HOME to codexHome so skills land under the temp dir
   // (codexHome/.agents/skills) instead of polluting the developer's real home.
   process.env.HOME = codexHome;
+  process.env.GSD_HOME = codexHome; // #5017: the defaults store root follows HOME
   process.env.USERPROFILE = codexHome;
 
   try {
@@ -2215,6 +2223,7 @@ describe('#2698: CRLF stale gsd-update-check block is removed on Codex reinstall
     _previousHome = process.env.HOME;
     _previousUserProfile = process.env.USERPROFILE;
     process.env.HOME = tmpDir;
+    process.env.GSD_HOME = tmpDir; // #5017: the defaults store root follows HOME
     process.env.USERPROFILE = tmpDir;
   });
 

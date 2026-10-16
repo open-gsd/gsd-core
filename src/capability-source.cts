@@ -30,6 +30,8 @@ import https from 'node:https';
 import crypto from 'node:crypto';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+const { resolveGsdHome } = require('./runtime-homes.cjs') as { resolveGsdHome: () => string };
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const shellSeam = require('./shell-command-projection.cjs') as {
   execGit: (args: string[], opts?: { cwd?: string; timeout?: number }) => SpawnResult;
   execNpm: (args: string[], opts?: { cwd?: string; timeout?: number }) => SpawnResult;
@@ -1206,7 +1208,7 @@ async function resolveCapabilitySource(spec: string, opts: ResolveOptions = {}):
   const parsed = parseSpec(spec);
 
   const hostVersion = opts.hostVersion ?? readHostVersion();
-  const gsdHome = opts.gsdHome ?? process.env['GSD_HOME'] ?? os.homedir();
+  const gsdHome = opts.gsdHome || resolveGsdHome();
 
   switch (parsed.kind) {
     case 'local':

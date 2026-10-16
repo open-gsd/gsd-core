@@ -21,6 +21,14 @@
 process.env.GSD_TEST_MODE = '1';
 
 const { test, describe, before, after } = require('node:test');
+
+// #5017: tests in this file pin GSD_HOME next to HOME (the defaults store root follows GSD_HOME);
+// put the runner's value back after each test so a pinned home never leaks into the next one.
+const __ORIG_GSD_HOME = process.env.GSD_HOME;
+require('node:test').afterEach(() => {
+  if (__ORIG_GSD_HOME === undefined) delete process.env.GSD_HOME;
+  else process.env.GSD_HOME = __ORIG_GSD_HOME;
+});
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -3111,6 +3119,7 @@ describe('bug-2794: readGsdRuntimeProfileResolver resolves opencode tier overrid
     origUP = process.env.USERPROFILE;
     process.env.HOME = homeDir;
     process.env.USERPROFILE = homeDir;
+    process.env.GSD_HOME = homeDir; // #5017: the defaults store root follows HOME
   });
 
   afterEach(() => {
@@ -3204,6 +3213,7 @@ describe('#3705: install-time bake honours model_policy', () => {
     origUP = process.env.USERPROFILE;
     process.env.HOME = homeDir;
     process.env.USERPROFILE = homeDir;
+    process.env.GSD_HOME = homeDir; // #5017: the defaults store root follows HOME
   });
 
   afterEach(() => {
@@ -3406,6 +3416,7 @@ describe('bug-2794: OpenCode agent install embeds model_profile_overrides model'
     origCwd = process.cwd();
     process.env.HOME = homeDir;
     process.env.USERPROFILE = homeDir;
+    process.env.GSD_HOME = homeDir; // #5017: the defaults store root follows HOME
     process.chdir(projectDir);
   });
 
@@ -3929,6 +3940,7 @@ function runClaudeGlobalInstall(claudeHome) {
   process.env.CLAUDE_CONFIG_DIR = claudeHome;
   process.env.HOME = isolatedHome;
   process.env.USERPROFILE = isolatedHome;
+  process.env.GSD_HOME = isolatedHome; // #5017: the defaults store root follows HOME
   process.env.GSD_SKIP_STALE_SDK_CHECK = '1';
   process.chdir(REPO_ROOT);
 
@@ -4271,6 +4283,7 @@ function runGlobalInstall(runtime, tmpHome) {
   process.env[envVar] = tmpHome;
   process.env.HOME = isolatedHome;
   process.env.USERPROFILE = isolatedHome;
+  process.env.GSD_HOME = isolatedHome; // #5017: the defaults store root follows HOME
   process.env.GSD_SKIP_STALE_SDK_CHECK = '1';
   process.chdir(REPO_ROOT);
 
@@ -5799,7 +5812,7 @@ describe('Bug #2973: dev-preferences default writer path is skills/gsd-dev-prefe
         // it -- and the writer under test resolves them env-FIRST. Sandboxing
         // HOME alone let an ambient CLAUDE_CONFIG_DIR win, and the SKILL.md
         // landed in the developer's live config dir instead of tmpHome.
-        env: Object.assign({}, process.env, TEST_ENV_BASE, { HOME: tmpHome, USERPROFILE: tmpHome }),
+        env: Object.assign({}, process.env, TEST_ENV_BASE, { HOME: tmpHome, USERPROFILE: tmpHome, GSD_HOME: tmpHome }),
         encoding: 'utf-8',
         // See WRITER_SUBPROCESS_TIMEOUT_MS's own doc comment (top of file)
         // for the full rationale.
@@ -5911,6 +5924,7 @@ describe('Bug #2911: migrateLegacyDevPreferencesToSkill honors the skills-kind h
     const savedMarker = process.env.GSD_TEST_HOME_SANDBOX;
     process.env.HOME = fakeHome;
     process.env.USERPROFILE = fakeHome;
+    process.env.GSD_HOME = fakeHome; // #5017: the defaults store root follows HOME
     process.env.GSD_TEST_HOME_SANDBOX = fakeHome;
     try {
       return fn();
@@ -7340,7 +7354,7 @@ describe('#2218 cross-scope shadowing', () => {
     // order matters for this fixture (a separate test covers order-independence).
     globalInstallResult = runNode([INSTALL_SCRIPT, '--claude', '--global'], {
       cwd: root,
-      env: installerEnv({ HOME: root, USERPROFILE: root }),
+      env: installerEnv({ HOME: root, USERPROFILE: root, GSD_HOME: root }),
       timeoutMs: INSTALL_TIMEOUT_MS,
     });
     assert.strictEqual(globalInstallResult.exitCode, 0,
@@ -7354,7 +7368,7 @@ describe('#2218 cross-scope shadowing', () => {
     // installer directly instead, with cwd pinned at the project dir.
     localInstallResult = runNode([INSTALL_SCRIPT, '--claude', '--local'], {
       cwd: projectDir,
-      env: installerEnv({ HOME: root, USERPROFILE: root }),
+      env: installerEnv({ HOME: root, USERPROFILE: root, GSD_HOME: root }),
       timeoutMs: INSTALL_TIMEOUT_MS,
     });
     assert.strictEqual(localInstallResult.exitCode, 0,
@@ -7472,7 +7486,7 @@ describe('#2873 C1-C6 — install-time shadow report (spawned installer wiring)'
   function spawnInstall(args, cwd, root, nodeFlags = []) {
     return runNode([...nodeFlags, INSTALL_SCRIPT, ...args], {
       cwd,
-      env: installerEnv({ HOME: root, USERPROFILE: root }),
+      env: installerEnv({ HOME: root, USERPROFILE: root, GSD_HOME: root }),
       timeoutMs: INSTALL_TIMEOUT_MS,
     });
   }
@@ -7742,6 +7756,7 @@ describe('#2873 C1-C6 — install-time shadow report (spawned installer wiring)'
       __prevCwd3543 = process.cwd();
       process.env.HOME = __home3543;
       process.env.USERPROFILE = __home3543;
+      process.env.GSD_HOME = __home3543; // #5017: the defaults store root follows HOME
       process.env.GSD_SKIP_STALE_SDK_CHECK = '1';
       for (const k of __XDG_ENV_3543) delete process.env[k];
       process.chdir(__project3543);
@@ -8346,6 +8361,7 @@ describe('install() global codex — @~/.claude include rewrite (#4667)', () => 
         ...__isolatedNpmEnv4667(),
         HOME: tmpCodexHome,
         USERPROFILE: tmpCodexHome,
+        GSD_HOME: tmpCodexHome,
         GSD_TEST_MODE: '',
         NO_UPDATE_NOTIFIER: '1',
         npm_config_update_notifier: 'false',

@@ -2344,6 +2344,7 @@ describe('#3714 dispatch-isolation CLI — model policy end-to-end (RED pre-fix 
             GSD_RUNTIME: 'codex',
             HOME: sandboxHomeDir,
             USERPROFILE: sandboxHomeDir,
+            GSD_HOME: sandboxHomeDir,
             [TEST_HOME_SANDBOX_MARKER]: sandboxHomeDir,
             ...extraEnv,
           },

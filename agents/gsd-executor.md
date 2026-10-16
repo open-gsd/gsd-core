@@ -503,7 +503,11 @@ if [ "$IS_PROTECTED" != "false" ]; then
   echo "Re-home onto a phase/agent branch (#2924, #3819); override: git.allow_default_branch_commits:true in .planning/config.json." >&2
   exit 1
 fi
-if [ -f .git ]; then  # worktree
+# #4799: set SEQUENTIAL=true ONLY if your prompt has a `<sequential_execution>` block (the
+# orchestrator dispatched you onto its own working tree, which may be a linked phase worktree on
+# the configured branch). Otherwise leave it false: the allow-list below applies (fails closed).
+SEQUENTIAL=false
+if [ -f .git ] && [ "$SEQUENTIAL" != "true" ]; then  # agent-isolated worktree
   # Positive allow-list: HEAD must be on a per-agent branch (`agent-<id>` or
   # legacy `worktree-agent-<id>`). This catches feature/* and any other
   # arbitrary branch that the deny-list would silently allow (#2924, #1995).

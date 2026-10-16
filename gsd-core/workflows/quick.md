@@ -260,6 +260,12 @@ Create the directory for this quick task:
 ```bash
 QUICK_DIR="${task_dir}"
 mkdir -p "$QUICK_DIR"
+# Worktree-relative form for an isolated executor (#5085): the guard blocks absolute paths outside its worktree.
+_QTOP=$(git rev-parse --show-toplevel 2>/dev/null)
+_QTOP_DIR=$(git -C "$QUICK_DIR" rev-parse --show-toplevel 2>/dev/null)
+QUICK_DIR_REL=$(git -C "$QUICK_DIR" rev-parse --show-prefix 2>/dev/null)
+QUICK_DIR_REL="${QUICK_DIR_REL%/}"
+if [ -z "$QUICK_DIR_REL" ] || [ "$_QTOP" != "$_QTOP_DIR" ]; then QUICK_DIR_REL="$QUICK_DIR"; fi
 ```
 
 Report to user:
@@ -461,7 +467,11 @@ if [ ! -f "$QUICK_RESEARCH_PATH" ] && git cat-file -e "${QUICK_PLAN_COMMIT}:$QUI
   }
 fi
 ` : ''}\`\`\`
-` : ''}
+` : `
+<sequential_execution>
+You are running as a SEQUENTIAL executor agent on the main working tree (set SEQUENTIAL=true in your Step 0 commit guard; a linked worktree on the configured branch is allowed, #4799).
+</sequential_execution>
+`}
 
 <required_reading>
 - ${QUICK_DIR}/${quick_id}-PLAN.md (Plan)
@@ -512,8 +522,9 @@ SUMMARY.md and stop — the user must rerun with worktrees disabled.
 - Execute all tasks in the plan
 - Commit each task atomically (code changes only)
 - Run the <submodule_commit_guard> bash block before every \`git commit\` if SUBMODULE_PATHS is non-empty
-- Create summary at: ${QUICK_DIR}/${quick_id}-SUMMARY.md with `status: complete` in SUMMARY frontmatter (required so the audit-open milestone-close scanner recognises the task as done, not [unknown])
+- Create summary at: ${ISOLATION === "harness-worktree" ? QUICK_DIR_REL : QUICK_DIR}/${quick_id}-SUMMARY.md with `status: complete` in SUMMARY frontmatter (required so the audit-open milestone-close scanner recognises the task as done, not [unknown])
 - Do NOT commit docs artifacts (SUMMARY.md, STATE.md, PLAN.md) — the orchestrator handles the docs commit in Step 8
+- If a Write/Edit is denied by gsd-worktree-path-guard, stop and report the denial in your final message — do not work around it by copying or moving the file with Bash (cp, mv, redirects)
 - Do NOT update ROADMAP.md (quick tasks are separate from planned phases)
 </constraints>
 ",

@@ -567,13 +567,13 @@ AskUserQuestion([
 ])
 ```
 
-If "Yes": write the same config object (minus project-specific fields like `brave_search`) to `~/.gsd/defaults.json`:
+If "Yes": write the same config object (minus project-specific fields like `brave_search`) to the global defaults store, `${GSD_HOME:-$HOME}/.gsd/defaults.json` (`~/.gsd/defaults.json` unless `GSD_HOME` is set):
 
 ```bash
-mkdir -p ~/.gsd
+mkdir -p "${GSD_HOME:-$HOME}/.gsd"
 ```
 
-Write `~/.gsd/defaults.json` with:
+Write `${GSD_HOME:-$HOME}/.gsd/defaults.json` with:
 ```json
 {
   "mode": <current>,

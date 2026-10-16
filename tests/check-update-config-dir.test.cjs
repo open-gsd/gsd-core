@@ -74,7 +74,7 @@ function buildProbeSource(hookPath) {
  *   below to point at a fixture copy instead.
  */
 function probe({ homeDir, cwd, envOverrides = {}, hookPath = CHECK_UPDATE_PATH }) {
-  const childEnv = { ...process.env, HOME: homeDir, USERPROFILE: homeDir };
+  const childEnv = { ...process.env, HOME: homeDir, USERPROFILE: homeDir, GSD_HOME: homeDir };
   delete childEnv.CLAUDE_CONFIG_DIR;
   Object.assign(childEnv, envOverrides);
 
