@@ -618,6 +618,7 @@ const {
   loadSkillsManifest,
   stageSkillsForProfile,
   stageAgentsForProfile,
+  selectAgentFilesForProfile,
   stageSkillsForRuntimeAsSkills,
 } = require(path.join(_gsdLibDir, 'install-profiles.cjs'));
 // ADR-857 phase 4c: load capability registry (optional; missing → falls back to undefined)
@@ -808,6 +809,20 @@ const {
 } = require(path.join(_gsdLibDir, 'surface.cjs'));
 const {
   assertDestWithinConfigHome,
+  resolveRuntimeArtifactDestination,
+  resolveRuntimeArtifactInstallRoot,
+  shouldInstallCombinedFamily,
+  isLegacyFlatLocalInstall,
+  shouldInstallStandaloneAgents,
+  requiredRuntimeSurfaceSources,
+  shouldInstallCodexAgentConfig,
+  copyWithPathReplacementSymlinkRefusalMessage,
+  installRuntimeArtifactsSymlinkRefusalMessage,
+  installOpencodeFamilySkillsSymlinkRefusalMessage,
+  installAgentsKindStandaloneSymlinkRefusalMessage,
+  syncRuntimeSurfaceCorpusSymlinkRefusalMessage,
+  installCodexConfigSymlinkRefusalMessage,
+  installCodexAgentTomlSymlinkRefusalMessage,
   createRuntimeArtifactInstallPlan,
   createRuntimeArtifactUninstallPlan,
 } = require(path.join(_gsdLibDir, 'runtime-artifact-install-plan.cjs'));
@@ -872,6 +887,120 @@ function _resolveUserArtifactStagingRoot(configDir) {
     );
   }
   return stagingRoot;
+}
+
+function isSkillsRuntimeInstall(runtime, scope) {
+  const isGlobal = scope === 'global';
+  const behaviors = hostBehaviorsFor(runtime);
+  if (isLegacyFlatLocalInstall(behaviors, scope) && !isGlobal) return false; // legacy flat local path (descriptor-driven; #2086)
+  // #2875 Part 2 defect fix: a runtime whose LOCAL commands are embedded in a
+  // rules file rather than materialized as files (hostBehaviors.localCommandsViaRules
+  // — cline is the only declarant, capabilities/cline/capability.json) must not
+  // flip into this skills/commands-reporting branch merely because its local
+  // artifactLayout now also declares an `agents` kind (#2875 Part 2 cline-local
+  // agents regression fix). That branch's own verification reporting expects a
+  // skills/ or commands/ directory this runtime never writes locally and would
+  // spuriously fail; the `localCommandsViaRules` branch below (unchanged
+  // messaging) and the unconditional agents-materialization block further down
+  // (installAgentsKindStandalone) already cover this runtime/scope correctly.
+  if (!isGlobal && behaviors.localCommandsViaRules) return false;
+  const cap = _capabilityRegistry && _capabilityRegistry.runtimes && _capabilityRegistry.runtimes[runtime];
+  const layout = cap && cap.runtime && cap.runtime.artifactLayout;
+  if (!layout) return false;
+  const scopeLayout = isGlobal ? layout.global : layout.local;
+  return Array.isArray(scopeLayout) && scopeLayout.length > 0;
+}
+
+function preflightInstallSymlinkDestinations(runtime, configDir, scope, installMode, agentProfile, packageRoot) {
+  const check = (installRoot, destination, message) => {
+    if (hasExistingSymlinkBetween(path.resolve(installRoot), destination, { allowOptInFollow: isSymlinkedDestOptIn() })) {
+      throw new Error(message);
+    }
+  };
+
+  const coreDir = assertDestWithinConfigHome(configDir, path.join(configDir, 'gsd-core'));
+  check(configDir, coreDir, copyWithPathReplacementSymlinkRefusalMessage(coreDir, configDir));
+
+  const layout = resolveRuntimeArtifactLayout(runtime, configDir, scope, _installedCapabilityRegistry);
+  const behaviors = hostBehaviorsFor(runtime);
+  const combinedFamily = shouldInstallCombinedFamily(behaviors);
+  const legacyFlatLocal = isLegacyFlatLocalInstall(behaviors, scope);
+  const skillsRuntime = isSkillsRuntimeInstall(runtime, scope);
+  const standaloneAgents = shouldInstallStandaloneAgents(Boolean(behaviors.pluginOnlyInstall), skillsRuntime);
+
+  for (const kind of layout.kinds) {
+    // Combined-family commands have no write-time trust check to front-run.
+    if (combinedFamily && kind.kind === 'commands') continue;
+    const installRoot = resolveRuntimeArtifactInstallRoot(configDir, kind);
+    const dest = resolveRuntimeArtifactDestination(configDir, kind);
+    if (hasExistingSymlinkBetween(path.resolve(installRoot), dest, { allowOptInFollow: isSymlinkedDestOptIn() })) {
+      if (combinedFamily && kind.kind === 'skills') {
+        throw new Error(installOpencodeFamilySkillsSymlinkRefusalMessage(dest, installRoot));
+      }
+      if ((standaloneAgents || combinedFamily) && kind.kind === 'agents') {
+        throw new Error(installAgentsKindStandaloneSymlinkRefusalMessage(dest, installRoot));
+      }
+      if (legacyFlatLocal && (kind.kind === 'commands' || kind.kind === 'skills')) {
+        throw new Error(copyWithPathReplacementSymlinkRefusalMessage(dest, configDir));
+      }
+      throw new Error(installRuntimeArtifactsSymlinkRefusalMessage(dest, installRoot));
+    }
+  }
+
+  if (scope === 'global') {
+    const required = requiredRuntimeSurfaceSources(layout, scope);
+    if (required.has('commands')) {
+      const destination = path.join(configDir, 'gsd-core', 'commands', 'gsd');
+      check(
+        configDir,
+        destination,
+        syncRuntimeSurfaceCorpusSymlinkRefusalMessage(destination, configDir),
+      );
+    }
+    if (required.has('agents')) {
+      const destination = path.join(configDir, 'gsd-core', 'agents');
+      check(
+        configDir,
+        destination,
+        syncRuntimeSurfaceCorpusSymlinkRefusalMessage(destination, configDir),
+      );
+    }
+  }
+
+  if (shouldInstallCodexAgentConfig(behaviors, installMode)) {
+    const configPath = assertDestWithinConfigHome(configDir, 'config.toml');
+    const agentsTomlDir = assertDestWithinConfigHome(configDir, 'agents');
+    const resolvedRoot = path.resolve(configDir);
+    check(configDir, configPath, installCodexConfigSymlinkRefusalMessage(configDir));
+    check(configDir, path.resolve(agentsTomlDir), installCodexConfigSymlinkRefusalMessage(configDir));
+
+    const agentsSrc = path.join(packageRoot, 'agents');
+    const agentFiles = fs.readdirSync(agentsSrc, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.startsWith('gsd-')).map((entry) => entry.name);
+    for (const file of selectAgentFilesForProfile(agentFiles, agentProfile)) {
+      const source = fs.readFileSync(path.join(agentsSrc, file), 'utf8');
+      const name = codexAgentTomlName(file, source);
+      const agentTomlPath = assertDestWithinConfigHome(agentsTomlDir, `${name}.toml`);
+      if (hasExistingSymlinkBetween(resolvedRoot, agentTomlPath, { allowOptInFollow: isSymlinkedDestOptIn() })) {
+        throw new Error(installCodexAgentTomlSymlinkRefusalMessage(agentTomlPath));
+      }
+    }
+  }
+}
+
+function prepareCodexAgentConfigContent(source, sourcePath, targetDir) {
+  let content = composeWorkflow(source, { sourcePath });
+  const codexGsdPath = `${path.resolve(targetDir, 'gsd-core').replace(/\\/g, '/')}/`;
+  content = content.replace(/~\/\.claude\/gsd-core\//g, codexGsdPath);
+  content = content.replace(/\$HOME\/\.claude\/gsd-core\//g, codexGsdPath);
+  return convertClaudeToCodexMarkdown(content);
+}
+
+function codexAgentTomlName(file, source) {
+  const { frontmatter } = extractFrontmatterAndBody(source);
+  // Composition preserves the header. Convert only that header for identity;
+  // if composition ever rewrites identity, resolve it here for both callers.
+  return extractFrontmatterField(convertClaudeToCodexMarkdown(frontmatter), 'name') || file.replace(/\.md$/, '');
 }
 
 /**
@@ -7155,7 +7284,7 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
     hasExistingSymlinkBetween(resolvedTargetRoot, path.resolve(agentsTomlDir), { allowOptInFollow: symlinkOptIn })
   ) {
     throw new Error(
-      `installCodexConfig: a Codex config path under "${targetDir}" contains a symlink the install root does not trust — refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
+      installCodexConfigSymlinkRefusalMessage(targetDir),
     );
   }
   fs.mkdirSync(agentsTomlDir, { recursive: true });
@@ -7193,12 +7322,9 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
   const agentEntries = fs.readdirSync(agentsSrc).filter(f => f.startsWith('gsd-') && f.endsWith('.md'));
   const agents = [];
 
-  // Compute the Codex GSD install path (absolute, so subagents with empty $HOME work — #820)
-  const codexGsdPath = `${path.resolve(targetDir, 'gsd-core').replace(/\\/g, '/')}/`;
-
   for (const file of agentEntries) {
     const agentTomlSourcePath = path.join(agentsSrc, file);
-    let content = fs.readFileSync(agentTomlSourcePath, 'utf8');
+    const source = fs.readFileSync(agentTomlSourcePath, 'utf8');
     // #2995 (epic #1671 Phase 6.4): Codex embeds each agent's prompt into a
     // per-agent `.toml`, reading the source .md independently of the inline
     // agent loop — a separate emission path that must strip gsd:section
@@ -7206,17 +7332,7 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
     // Found by the exhaustive per-runtime emission sweep in
     // tests/agent-fragments-emission.install.test.cjs, not by call-graph
     // analysis, which is why that guard is behavioral rather than structural.
-    content = composeWorkflow(content, { sourcePath: agentTomlSourcePath });
-    // Replace full .claude/gsd-core prefix so path resolves to the Codex
-    // GSD install before generic .claude → .codex conversion rewrites it.
-    content = content.replace(/~\/\.claude\/gsd-core\//g, codexGsdPath);
-    content = content.replace(/\$HOME\/\.claude\/gsd-core\//g, codexGsdPath);
-    // Route TOML emit through the same full Claude→Codex conversion pipeline
-    // used on the `.md` emit path (#2639). Covers: slash-command rewrites,
-    // $ARGUMENTS → {{GSD_ARGS}}, /clear removal, anchored and bare .claude/
-    // paths, .claudeignore → .codexignore, and standalone "Claude" /
-    // CLAUDE.md neutralization via neutralizeAgentReferences(..., 'AGENTS.md').
-    content = convertClaudeToCodexMarkdown(content);
+    const content = prepareCodexAgentConfigContent(source, agentTomlSourcePath, targetDir);
     const { frontmatter } = extractFrontmatterAndBody(content);
     // #3897 security review F1 (blocker, post-merge): this loop used to key
     // the sandbox/hold decision off ONLY the filename stem while the emitted
@@ -7231,7 +7347,7 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
     // for that call; see `deriveCodexSandboxMode`'s doc in
     // `codex-agent-toml.cts` for the resolution.
     const fileStem = file.replace(/\.md$/, '');
-    const name = extractFrontmatterField(frontmatter, 'name') || fileStem;
+    const name = codexAgentTomlName(file, source);
     const description = extractFrontmatterField(frontmatter, 'description') || '';
 
     agents.push({ name, description: toSingleLine(description) });
@@ -7263,7 +7379,7 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
     const agentTomlPath = assertDestWithinConfigHome(agentsTomlDir, `${name}.toml`);
     if (hasExistingSymlinkBetween(resolvedTargetRoot, agentTomlPath, { allowOptInFollow: symlinkOptIn })) {
       throw new Error(
-        `installCodexConfig: agent toml path "${agentTomlPath}" contains a symlink the install root does not trust — refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
+        installCodexAgentTomlSymlinkRefusalMessage(agentTomlPath),
       );
     }
     fs.writeFileSync(agentTomlPath, tomlContent);
@@ -7969,7 +8085,7 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
   // #2393: honor GSD_ALLOW_SYMLINKED_DEST for intentional user-owned symlink layouts.
   if (hasExistingSymlinkBetween(resolvedConfinementRoot, resolvedDestDir, { allowOptInFollow: isSymlinkedDestOptIn() })) {
     throw new Error(
-      `copyWithPathReplacement: destDir "${destDir}" contains a symlink the install root "${confinementRoot}" does not trust — refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
+      copyWithPathReplacementSymlinkRefusalMessage(destDir, confinementRoot),
     );
   }
   // Use the validated absolute path for all writes below so the gate validates
@@ -10900,26 +11016,6 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     warnIfForeignAgentDest(runtime, targetDir, _installScopeId, Boolean(explicitConfigDir));
   }
 
-  // #2875 (#1874-F19 anti-inertness, test-matrix C7): recover any user
-  // artifact orphaned by a PRIOR install run that died between staging and
-  // its own restore/discard, BEFORE this run's own preserve step stages
-  // anything new. This is the production entry point every install() call
-  // reaches — the only place this phase's durability fix is complete rather
-  // than merely callable (40-design.md "The inertness trap this design must
-  // avoid" / #1879-F15). Runs for every runtime, ahead of both the
-  // layout-driven path's _runLegacyInstallMigrations (site 1, inside
-  // installRuntimeArtifacts) and this function's own mainline gsd-core copy
-  // (site 4, below).
-  // #2875 defect fix: DEGRADE, never abort install, when the staging root
-  // itself cannot be resolved — skip this recovery pass rather than throw
-  // out of install() before it does anything.
-  {
-    const _installEntryStagingRoot = _tryResolveUserArtifactStagingRoot(targetDir);
-    if (_installEntryStagingRoot !== null) {
-      recoverOrphanedUserArtifacts(_installEntryStagingRoot, targetDir);
-    }
-  }
-
   const locationLabel = isGlobal
     ? targetDir.replace(os.homedir(), '~')
     : targetDir.replace(process.cwd(), '.');
@@ -10989,8 +11085,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     return stageSkillsForProfile(commandsGsdDir, _resolvedProfile);
   }
   function _stageAgents(agentsDir) {
-    if (_isCoreProfileAlias) return agentsDir;
-    return stageAgentsForProfile(agentsDir, _resolvedProfile);
+    return stageAgentsForProfile(agentsDir, _agentProfile);
   }
   const persistActiveProfileMarker = () => {
     try {
@@ -11015,6 +11110,37 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     // handle re-applied surfaces, not the first install.
     localDirName: hostBehaviorsFor(runtime).localTargetIsProjectRoot === true ? undefined : getDirName(runtime),
   });
+
+  // Resolve the committed surface before preflight and keep that selection
+  // for every subsequent writer, including Codex's staged agent TOMLs.
+  if (isSkillsRuntimeInstall(runtime, _installScopeId)) {
+    const _committedSurface = readSurface(targetDir);
+    if (_committedSurface) {
+      _resolvedProfile = resolveSurface(
+        targetDir,
+        loadSkillsManifest(_commandsDir),
+        undefined,
+        _installedCapabilityRegistry,
+        _committedSurface,
+      );
+    }
+  }
+  // Core keeps the existing unfiltered raw-agent staging behavior. It emits
+  // no Codex TOMLs because its effective install mode is minimal.
+  const _agentProfile = _isCoreProfileAlias ? { ..._resolvedProfile, skills: '*' } : _resolvedProfile;
+  preflightInstallSymlinkDestinations(runtime, targetDir, _installScopeId, _effectiveInstallMode, _agentProfile, src);
+
+  // #2875 (#1874-F19 anti-inertness, test-matrix C7): recover any user
+  // artifact orphaned by a PRIOR install run that died between staging and
+  // its own restore/discard, BEFORE this run's own preserve step stages
+  // anything new. The destination preflight above keeps this first write
+  // behind every symlink trust decision the install will need.
+  {
+    const _installEntryStagingRoot = _tryResolveUserArtifactStagingRoot(targetDir);
+    if (_installEntryStagingRoot !== null) {
+      recoverOrphanedUserArtifacts(_installEntryStagingRoot, targetDir);
+    }
+  }
 
   // runtimeLabel is now the single-source getRuntimeLabel lookup (ADR-1239
   // Phase B / #1679) — collapses the prior 16-line assignment chain.
@@ -11555,25 +11681,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // install (ADR-1239 / #2087), replacing the bespoke inline block this comment
   // used to describe. Claude-local remains the one special-cased path
   // (copyWithPathReplacement + stale-skills cleanup).
-  const _isSkillsRuntime = (() => {
-    if (hostBehaviorsFor(runtime).localInstallStyle === 'legacy-flat' && !isGlobal) return false;  // legacy flat local path (descriptor-driven; #2086)
-    // #2875 Part 2 defect fix: a runtime whose LOCAL commands are embedded in a
-    // rules file rather than materialized as files (hostBehaviors.localCommandsViaRules
-    // — cline is the only declarant, capabilities/cline/capability.json) must not
-    // flip into this skills/commands-reporting branch merely because its local
-    // artifactLayout now also declares an `agents` kind (#2875 Part 2 cline-local
-    // agents regression fix). That branch's own verification reporting expects a
-    // skills/ or commands/ directory this runtime never writes locally and would
-    // spuriously fail; the `localCommandsViaRules` branch below (unchanged
-    // messaging) and the unconditional agents-materialization block further down
-    // (installAgentsKindStandalone) already cover this runtime/scope correctly.
-    if (!isGlobal && hostBehaviorsFor(runtime).localCommandsViaRules) return false;
-    const cap = _capabilityRegistry && _capabilityRegistry.runtimes && _capabilityRegistry.runtimes[runtime];
-    const layout = cap && cap.runtime && cap.runtime.artifactLayout;
-    if (!layout) return false;
-    const scopeLayout = isGlobal ? layout.global : layout.local;
-    return Array.isArray(scopeLayout) && scopeLayout.length > 0;
-  })();
+  const _isSkillsRuntime = isSkillsRuntimeInstall(runtime, _installScopeId);
 
   // Install the distribution-owned gsd-core tree before layout materialization.
   // installRuntimeArtifacts then provisions the durable Runtime Surface corpus
@@ -11642,19 +11750,6 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   if (_isSkillsRuntime) {
     // Layout-driven install for skills-based runtimes (full and minimal modes)
     const scope = _installScopeId;
-    // Preserve an existing Runtime Surface selection during upgrades. The
-    // installer refreshes the source corpus first, then emits exactly the
-    // already-committed selection instead of widening it to the base profile.
-    const _committedSurface = readSurface(targetDir);
-    if (_committedSurface) {
-      _resolvedProfile = resolveSurface(
-        targetDir,
-        loadSkillsManifest(_commandsDir),
-        undefined,
-        _installedCapabilityRegistry,
-        _committedSurface,
-      );
-    }
     // ADR-1239 upgrade 3 / #2088: a kind may declare an alternate install `home`
     // (e.g. Codex skills -> $HOME/.agents/skills) instead of the runtime's normal
     // configDir. Resolve the ACTUAL on-disk skills root here, descriptor-driven
@@ -12031,7 +12126,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // to stage and the function returns `null` without writing anything.
   if (hostBehaviorsFor(runtime).pluginOnlyInstall) {
     console.log(`  ${green}✓${reset} pi: no subagent files (programmatic dispatch, no named-dispatch toolkit)`);
-  } else if (_isSkillsRuntime) {
+  } else if (!shouldInstallStandaloneAgents(Boolean(hostBehaviorsFor(runtime).pluginOnlyInstall), _isSkillsRuntime)) {
     console.log(`  ${dim}↳${reset} Agents installed via descriptor-driven layout (${runtime})`);
   } else {
     const _standaloneProjectDir = isGlobal ? process.cwd() : targetDir;
@@ -12805,7 +12900,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     };
 
     let agentCount = 0;
-    if (!isMinimalMode(_effectiveInstallMode)) {
+    if (shouldInstallCodexAgentConfig(hostBehaviorsFor(runtime), _effectiveInstallMode)) {
       // #2834: write ~/.gsd/defaults.json (resolve_model_ids + runtime) BEFORE generating
       // agent TOMLs — installCodexConfig reads defaults.json at generation time, so on a
       // clean first install the runtime-aware model resolver must already know the runtime.

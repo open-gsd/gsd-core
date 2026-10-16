@@ -97,6 +97,102 @@ const REAL_COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
 const MANIFEST = loadSkillsManifest(REAL_COMMANDS_DIR);
 const RESOLVED_CORE = resolveProfile({ modes: ['core'], manifest: MANIFEST });
 
+function snapshotInstallSymlinkTree(root, prefix) {
+  const snapshot = {};
+
+  function visit(directory, relative = '') {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const fullPath = path.join(directory, entry.name);
+      const relPath = path.posix.join(relative.split(path.sep).join('/'), entry.name);
+      const stat = fs.lstatSync(fullPath);
+      const key = `${prefix}/${relPath}`;
+
+      if (stat.isSymbolicLink()) {
+        snapshot[key] = `symlink:${crypto.createHash('sha256').update(fs.readlinkSync(fullPath)).digest('hex')}`;
+      } else if (stat.isDirectory()) {
+        snapshot[key] = 'directory';
+        visit(fullPath, relPath);
+      } else if (stat.isFile()) {
+        snapshot[key] = `file:${crypto.createHash('sha256').update(fs.readFileSync(fullPath)).digest('hex')}`;
+      } else {
+        snapshot[key] = `other:${stat.mode}`;
+      }
+    }
+  }
+
+  visit(root);
+  return snapshot;
+}
+
+function prepareInstallSymlinkUpgrade(t, { allowOptIn = false } = {}) {
+  const root = createTempDir('gsd-symlink-refusal-');
+  t.after(() => cleanup(root));
+
+  const { configDir } = runMinimalInstall({
+    runtime: 'claude',
+    scope: 'global',
+    root,
+    extraArgs: ['--no-legacy-cleanup'],
+  });
+
+  const coreDir = path.join(configDir, 'gsd-core');
+  fs.writeFileSync(path.join(coreDir, 'VERSION'), '0.0.1\n');
+  fs.writeFileSync(
+    path.join(coreDir, 'previous-install-sentinel.txt'),
+    'must survive a refused upgrade\n',
+  );
+
+  const skillsDir = path.join(configDir, 'skills');
+  const skillsTarget = path.join(root, 'external-skills');
+  fs.renameSync(skillsDir, skillsTarget);
+  try {
+    fs.symlinkSync(skillsTarget, skillsDir, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (error) {
+    if (error.code === 'EPERM' || error.code === 'EACCES' || error.code === 'ENOTSUP') {
+      t.skip(`directory symlink creation is unavailable: ${error.code}`);
+      return null;
+    }
+    throw error;
+  }
+
+  if (allowOptIn) {
+    const skillName = fs.readdirSync(skillsTarget).find((entry) => entry.startsWith('gsd-'));
+    fs.writeFileSync(path.join(skillsTarget, skillName, 'SKILL.md'), 'stale temp fixture content\n');
+  }
+
+  const beforeTarget = snapshotInstallSymlinkTree(skillsTarget, 'skills-target');
+  const before = {
+    ...snapshotInstallSymlinkTree(configDir, 'config'),
+    ...beforeTarget,
+  };
+  const result = runNode(
+    [INSTALL_SCRIPT, '--claude', '--global', '--config-dir', configDir, '--no-legacy-cleanup'],
+    {
+      cwd: process.cwd(),
+      env: installerEnv({
+        HOME: root,
+        USERPROFILE: root,
+        GSD_ALLOW_SYMLINKED_DEST: allowOptIn ? '1' : '',
+      }),
+      timeoutMs: INSTALL_TIMEOUT_MS,
+    },
+  );
+  const afterTarget = snapshotInstallSymlinkTree(skillsTarget, 'skills-target');
+  const after = {
+    ...snapshotInstallSymlinkTree(configDir, 'config'),
+    ...afterTarget,
+  };
+
+  return {
+    result,
+    output: `${result.stdout}\n${result.stderr}`,
+    before,
+    after,
+    beforeTarget,
+    afterTarget,
+  };
+}
+
 function loadFreshInstallerWithInstallPlanStub(stub) {
   return loadFreshInstallerWithPlanStubs({ installStub: stub });
 }
@@ -8447,5 +8543,219 @@ describe('install() global codex — @~/.claude include rewrite (#4667)', () => 
       fallbacks > 0,
       'the _GSD_RUNTIME_ROOT .claude fallback chains must survive the rewrite (must-NOT-rewrite group)'
     );
+  });
+});
+
+describe('#5179 install refusal preserves the previous install', () => {
+  test('refuses an untrusted symlinked destination', (t) => {
+    const fixture = prepareInstallSymlinkUpgrade(t);
+    if (!fixture) return;
+
+    assert.notEqual(fixture.result.exitCode, 0, 'the installer must exit non-zero');
+    assert.match(
+      fixture.output,
+      /installRuntimeArtifacts: destDir .* contains a symlink the install root .* does not trust/,
+    );
+  });
+
+  test('leaves the previous install byte-identical', (t) => {
+    const fixture = prepareInstallSymlinkUpgrade(t);
+    if (!fixture) return;
+
+    const paths = [...new Set([...Object.keys(fixture.before), ...Object.keys(fixture.after)])].sort();
+    const changedPaths = paths
+      .filter((key) => fixture.before[key] !== fixture.after[key])
+      .map((key) => ({
+        path: key,
+        before: fixture.before[key] ?? null,
+        after: fixture.after[key] ?? null,
+      }));
+
+    assert.deepStrictEqual(
+      changedPaths,
+      [],
+      'a refused upgrade must not remove, rewrite, or add paths under the config dir or skills target',
+    );
+  });
+
+  test('installs the same layout with GSD_ALLOW_SYMLINKED_DEST=1', (t) => {
+    const fixture = prepareInstallSymlinkUpgrade(t, { allowOptIn: true });
+    if (!fixture) return;
+
+    assert.equal(fixture.result.exitCode, 0, fixture.output);
+    assert.notDeepStrictEqual(fixture.afterTarget, fixture.beforeTarget, 'the opted-in install must write through the symlink');
+  });
+
+  test('checks a kind with an alternate home against that home', (t) => {
+    const root = createTempDir('gsd-symlink-alt-home-');
+    t.after(() => cleanup(root));
+
+    const { configDir } = runMinimalInstall({
+      runtime: 'codex',
+      scope: 'global',
+      root,
+      extraArgs: ['--no-legacy-cleanup'],
+    });
+    const homeDir = path.join(root, '.agents');
+    const skillsDir = path.join(homeDir, 'skills');
+    assert.equal(fs.statSync(skillsDir).isDirectory(), true, 'the initial Codex install must use $HOME/.agents/skills');
+
+    const skillsTarget = path.join(root, 'external-agent-skills');
+    fs.renameSync(skillsDir, skillsTarget);
+    try {
+      fs.symlinkSync(skillsTarget, skillsDir, process.platform === 'win32' ? 'junction' : 'dir');
+    } catch (error) {
+      if (error.code === 'EPERM' || error.code === 'EACCES' || error.code === 'ENOTSUP') {
+        t.skip(`directory symlink creation is unavailable: ${error.code}`);
+        return;
+      }
+      throw error;
+    }
+
+    const coreDir = path.join(configDir, 'gsd-core');
+    fs.writeFileSync(path.join(coreDir, 'VERSION'), '0.0.1\n');
+    fs.writeFileSync(
+      path.join(coreDir, 'previous-install-sentinel.txt'),
+      'must survive a refused upgrade\n',
+    );
+
+    const before = {
+      ...snapshotInstallSymlinkTree(configDir, 'config'),
+      ...snapshotInstallSymlinkTree(homeDir, 'alternate-home'),
+      ...snapshotInstallSymlinkTree(skillsTarget, 'skills-target'),
+    };
+    const result = runNode(
+      [INSTALL_SCRIPT, '--codex', '--global', '--config-dir', configDir, '--no-legacy-cleanup'],
+      {
+        cwd: process.cwd(),
+        env: installerEnv({ HOME: root, USERPROFILE: root, GSD_ALLOW_SYMLINKED_DEST: '' }),
+        timeoutMs: INSTALL_TIMEOUT_MS,
+      },
+    );
+    const after = {
+      ...snapshotInstallSymlinkTree(configDir, 'config'),
+      ...snapshotInstallSymlinkTree(homeDir, 'alternate-home'),
+      ...snapshotInstallSymlinkTree(skillsTarget, 'skills-target'),
+    };
+
+    assert.notEqual(result.exitCode, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(
+      `${result.stdout}\n${result.stderr}`,
+      /installRuntimeArtifacts: destDir .* contains a symlink the install root .* does not trust/,
+    );
+    assert.deepStrictEqual(after, before, 'an alternate-home refusal must preserve both install roots and the symlink target');
+  });
+});
+
+function prepareInstallSymlinkBranchUpgrade(t, {
+  runtime = 'claude', scope = 'global', destination, surface = null, upgradeArgs = [],
+}) {
+  const root = createTempDir('gsd-5179-branch-');
+  t.after(() => cleanup(root));
+  const { configDir } = runMinimalInstall({
+    runtime, scope, root, extraArgs: ['--no-legacy-cleanup'],
+  });
+  const coreDir = path.join(configDir, 'gsd-core');
+  fs.writeFileSync(path.join(coreDir, 'VERSION'), '0.0.1\n');
+  fs.writeFileSync(path.join(coreDir, 'previous-install-sentinel.txt'), 'must survive a refused upgrade\n');
+  if (surface) {
+    fs.writeFileSync(path.join(configDir, '.gsd-surface.json'), JSON.stringify(surface) + '\n');
+  }
+
+  const dest = path.join(configDir, destination);
+  assert.ok(fs.existsSync(dest), `the previous install must contain ${destination}`);
+  const isDirectory = fs.statSync(dest).isDirectory();
+  const target = path.join(root, 'previous-destination');
+  fs.renameSync(dest, target);
+  try {
+    fs.symlinkSync(target, dest, isDirectory ? (process.platform === 'win32' ? 'junction' : 'dir') : 'file');
+  } catch (error) {
+    if (error.code === 'EPERM' || error.code === 'EACCES' || error.code === 'ENOTSUP') {
+      t.skip(`symlink creation is unavailable: ${error.code}`);
+      return null;
+    }
+    throw error;
+  }
+
+  const before = snapshotInstallSymlinkTree(root, 'previous-install');
+  const args = [INSTALL_SCRIPT, `--${runtime}`, `--${scope}`, '--no-legacy-cleanup', ...upgradeArgs];
+  if (scope === 'global') args.push('--config-dir', configDir);
+  const result = runNode(args, {
+    cwd: scope === 'local' ? root : process.cwd(),
+    env: installerEnv({ HOME: root, USERPROFILE: root, GSD_ALLOW_SYMLINKED_DEST: '' }),
+    timeoutMs: INSTALL_TIMEOUT_MS,
+  });
+  return {
+    result, output: stripAnsi(`${result.stdout}\n${result.stderr}`),
+    before, after: snapshotInstallSymlinkTree(root, 'previous-install'),
+    configDir, dest,
+  };
+}
+
+function assertInstallSymlinkBranchPreserved(fixture, refusal) {
+  assert.notEqual(fixture.result.exitCode, 0, fixture.output);
+  assert.match(fixture.output, refusal);
+  assert.deepStrictEqual(fixture.after, fixture.before, 'a refused upgrade must preserve the previous install and symlink target byte-identically');
+}
+
+describe('#5179 preflight branch coverage', () => {
+  const branches = [
+    { branch: 'gsd-core is symlinked', destination: 'gsd-core', refusal: /copyWithPathReplacement: destDir/ },
+    { branch: 'the commands corpus is symlinked', destination: 'gsd-core/commands/gsd', refusal: /syncRuntimeSurfaceCorpus: destination/ },
+    { branch: 'the agents corpus is symlinked', destination: 'gsd-core/agents', refusal: /syncRuntimeSurfaceCorpus: destination/ },
+    { branch: 'Codex config.toml is symlinked', runtime: 'codex', destination: 'config.toml', refusal: /installCodexConfig: a Codex config path/ },
+    { branch: 'the Codex agents directory is symlinked', runtime: 'codex', destination: 'agents', refusal: /installRuntimeArtifacts: destDir/ },
+    { branch: 'a Codex agent toml is symlinked', runtime: 'codex', destination: 'agents/gsd-planner.toml', refusal: /installCodexConfig: agent toml path/ },
+    { branch: 'combined-family skills are symlinked', runtime: 'opencode', destination: 'skills', refusal: /installOpencodeFamilySkills: destDir/ },
+    { branch: 'combined-family agents are symlinked', runtime: 'opencode', destination: 'agents', refusal: /installAgentsKindStandalone: destDir/ },
+    { branch: 'legacy-flat local commands are symlinked', scope: 'local', destination: 'commands', refusal: /copyWithPathReplacement: destDir/ },
+  ];
+  for (const row of branches) {
+    test(`preserves the previous install when ${row.branch}`, (t) => {
+      const fixture = prepareInstallSymlinkBranchUpgrade(t, row);
+      if (fixture) assertInstallSymlinkBranchPreserved(fixture, row.refusal);
+    });
+  }
+
+  test('does not refuse a trusted non-symlinked layout', (t) => {
+    const root = createTempDir('gsd-5179-trusted-');
+    t.after(() => cleanup(root));
+    const { configDir } = runMinimalInstall({ runtime: 'codex', scope: 'global', root });
+    fs.writeFileSync(path.join(configDir, 'gsd-core', 'VERSION'), '0.0.1\n');
+    const upgrade = runMinimalInstall({ runtime: 'codex', scope: 'global', root });
+    assert.doesNotMatch(`${upgrade.stdout}\n${upgrade.stderr}`, /refusing to (write|create)/);
+    assert.equal(fs.readFileSync(path.join(configDir, 'gsd-core', 'VERSION'), 'utf8'), require('../package.json').version);
+    assert.ok(fs.existsSync(path.join(configDir, 'agents', 'gsd-planner.toml')));
+  });
+
+  test('does not refuse a Codex toml omitted by the committed surface', (t) => {
+    const fixture = prepareInstallSymlinkBranchUpgrade(t, {
+      runtime: 'codex', destination: 'agents/gsd-ai-researcher.toml',
+      surface: { baseProfile: 'standard', disabledClusters: [], explicitAdds: [], explicitRemoves: [] },
+      upgradeArgs: ['--profile', 'standard'],
+    });
+    if (!fixture) return;
+    assert.equal(fixture.result.exitCode, 0, fixture.output);
+    assert.equal(fs.existsSync(fixture.dest), false, 'the omitted agent must not be emitted');
+    assert.ok(fs.existsSync(path.join(fixture.configDir, 'agents', 'gsd-planner.toml')), 'the selected agent must be emitted');
+  });
+
+  test('codex toml preflight honors an agent added by the committed surface', (t) => {
+    const standard = resolveProfile({ modes: ['standard'], manifest: MANIFEST });
+    assert.equal(standard.agents.has('gsd-ai-researcher'), false, 'the base profile must omit the added agent');
+    const fixture = prepareInstallSymlinkBranchUpgrade(t, {
+      runtime: 'codex', destination: 'agents/gsd-ai-researcher.toml',
+      surface: { baseProfile: 'standard', disabledClusters: [], explicitAdds: ['ai-integration-phase'], explicitRemoves: [] },
+      upgradeArgs: ['--profile', 'standard'],
+    });
+    if (fixture) assertInstallSymlinkBranchPreserved(fixture, /installCodexConfig: agent toml path/);
+  });
+
+  test('combined-family refusal message matches the agents write-time check', (t) => {
+    const fixture = prepareInstallSymlinkBranchUpgrade(t, { runtime: 'opencode', destination: 'agents' });
+    if (!fixture) return;
+    assert.notEqual(fixture.result.exitCode, 0, fixture.output);
+    const message = `installAgentsKindStandalone: destDir "${fixture.dest}" contains a symlink the install root "${fixture.configDir}" does not trust \u2014 refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`;
+    assert.ok(fixture.output.includes(message), fixture.output);
   });
 });

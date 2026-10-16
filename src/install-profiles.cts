@@ -479,6 +479,13 @@ function stageSkillsForProfile(srcDir: string, resolvedProfile: ResolvedProfile)
   return stageDir;
 }
 
+function selectAgentFilesForProfile(files: string[], resolvedProfile: ResolvedProfile): string[] {
+  return files.filter((file) => file.endsWith('.md') && (
+    resolvedProfile.skills === '*' ||
+    (resolvedProfile.agents instanceof Set && resolvedProfile.agents.has(file.slice(0, -3)))
+  ));
+}
+
 /**
  * Stage a filtered copy of the agents directory for a resolved profile.
  * For 'full', returns srcAgentsDir unchanged.
@@ -506,17 +513,10 @@ function stageAgentsForProfile(srcAgentsDir: string, resolvedProfile: ResolvedPr
   const stageDir = mkInstallTempDir('gsd-profile-agents-');
   try {
     if (resolvedProfile.agents instanceof Set && resolvedProfile.agents.size > 0) {
-      const entries = installFs().readdirSync(srcAgentsDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isFile()) continue;
-        if (!entry.name.endsWith('.md')) continue;
-        // Agent stem is the full filename without extension, e.g. "gsd-planner"
-        const stem = entry.name.slice(0, -3);
-        if (!resolvedProfile.agents.has(stem)) continue;
-        installFs().copyFileSync(
-          path.join(srcAgentsDir, entry.name),
-          path.join(stageDir, entry.name),
-        );
+      const files = installFs().readdirSync(srcAgentsDir, { withFileTypes: true })
+        .filter((entry) => entry.isFile()).map((entry) => entry.name);
+      for (const file of selectAgentFilesForProfile(files, resolvedProfile)) {
+        installFs().copyFileSync(path.join(srcAgentsDir, file), path.join(stageDir, file));
       }
     }
     // If agents is empty Set, we produce an empty stageDir (no agents for this profile)
@@ -1294,6 +1294,7 @@ export = {
   mostRestrictiveProfile,
   stageSkillsForProfile,
   stageAgentsForProfile,
+  selectAgentFilesForProfile,
   stageAgentsForRuntimeWithConverter,
   stageSkillsForRuntimeAsSkills,
   stageCommandsForRuntimeFlat,
