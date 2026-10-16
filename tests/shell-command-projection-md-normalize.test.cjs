@@ -371,3 +371,25 @@ describe('#5105: write normalization leaves the frontmatter block untouched', ()
     );
   });
 });
+
+describe('#5113: a verbatim write publishes the content exactly as given', () => {
+  const tight = '# T\r\n**field**: yes\r\n### H\r\ntext\r\n\r\n\r\n\r\nend';
+
+  test('normalizeContent leaves a verbatim write untouched, and still normalizes by default', () => {
+    assert.equal(normalizeContent(MD, tight, { verbatim: true }).content, tight);
+    assert.notEqual(normalizeContent(MD, tight).content, tight, 'the default stays a whole-document normalization');
+  });
+
+  test('platformWriteSync honours verbatim on disk', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5113-'));
+    try {
+      const file = path.join(dir, MD);
+      platformWriteSync(file, tight, { verbatim: true });
+      assert.equal(fs.readFileSync(file, 'utf-8'), tight);
+      platformWriteSync(file, tight);
+      assert.notEqual(fs.readFileSync(file, 'utf-8'), tight);
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
