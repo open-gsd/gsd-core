@@ -110,6 +110,8 @@ describe('the PS4 against a real bash', () => {
     assert.equal(r.status, 0, r.stderr);
     const entries = parseTimedXtrace(r.stderr, NONCE);
     const byCmd = Object.fromEntries(entries.map((e) => [e.cmd, e]));
+    const seen = `entries=${JSON.stringify(entries.map((e) => e.cmd))} stderr=${JSON.stringify(r.stderr.slice(0, 600))}`;
+    for (const cmd of ['a=1', 'b=2', 'c=3']) assert.ok(byCmd[cmd], `no stamped entry for ${cmd}: ${seen}`);
     assert.equal(byCmd['a=1'].line, 1);
     assert.equal(byCmd['b=2'].line, 2);
     assert.equal(byCmd['c=3'].fn, 'f');

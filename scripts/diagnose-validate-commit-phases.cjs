@@ -62,7 +62,10 @@ const PAD_BYTES = 112 * 1024;
 // Millisecond clock for bash 3.2, which has neither EPOCHREALTIME nor printf %(%s)T.
 // perl, not node: it is stamped once per traced command, and node's ~40ms startup
 // would dwarf the costs being measured.
-const STAMP_COMMAND = "perl -MTime::HiRes=time -e 'printf \"%d\", time*1000'";
+// LC_ALL=C and 2>/dev/null: perl prints a locale warning to stderr on EVERY stamp
+// when the inherited LANG/LC_* names a locale the machine lacks, and stderr is
+// the trace stream, so each warning would corrupt the command it follows.
+const STAMP_COMMAND = "LC_ALL=C perl -MTime::HiRes=time -e 'printf \"%d\", time*1000' 2>/dev/null";
 
 const bodyOf = (kb) =>
   Array.from({ length: Math.ceil((kb * 1024) / 63) }, () => 'x'.repeat(62)).join('\n');
