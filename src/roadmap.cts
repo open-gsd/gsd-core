@@ -28,7 +28,7 @@ type Scope = planningScopeMod.Scope;
 import roadmapParserModule = require('./roadmap-parser.cjs');
 const { stripShippedMilestones, extractCurrentMilestone, extractCurrentMilestoneScoped, replaceInCurrentMilestone, listMilestoneHeadings, scanMilestonePhaseIds, collectTablePhaseRows, hasPhaseListingTableHeader } = roadmapParserModule;
 import { tokenizeHeadings } from './markdown-sectionizer.cjs';
-import { escapeCell, updateTableCell } from './markdown-table.cjs';
+import { escapeCell, findTableWithColumns, updateTableCell } from './markdown-table.cjs';
 import { clampPercent } from './phase-lifecycle.cjs';
 import { platformWriteSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -1250,6 +1250,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
   // refusal below declines with the analyzer's own `missing_phase_details`
   // vocabulary and leaves ROADMAP.md byte-identical.
   let missingPhaseDetails = false;
+  const warnings: string[] = [];
   withPlanningLock(cwd, () => {
     // #3957 (B9.4): captured BEFORE any transform runs, so the write/report
     // decision below reflects whether the transforms actually changed
@@ -1364,6 +1365,17 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       return text;
     });
 
+    // #4947: a word-prefixed Phase cell (`Phase 68`) is deliberately not a
+    // writable table target (#4247 — the read side ignores it too), but when the
+    // phase's heading section is still written the command reports
+    // `updated: true` and the unwritten Status cell looked like a silent bug.
+    // The row stays byte-identical; the output now says so.
+    const wordPrefixedCellRe = new RegExp(`^Phase\\s+${phasePattern}\\.?(?:\\s|$)`, 'i');
+    const progressTable = tableRowFound ? null : findTableWithColumns(gateActiveRegion, ['Phase', 'Status']);
+    if (progressTable && progressTable.rows.some((row) => wordPrefixedCellRe.test((row['Phase'] ?? '').trim()))) {
+      warnings.push(`Progress table row for phase ${formatDiagnosticToken(String(phaseNum))} was not updated: its Phase cell is word-prefixed ("Phase N"), and only a bare phase number (N or N.) is recognized. Edit that row by hand or rewrite the cell as the bare number.`);
+    }
+
     // Update plan count in phase detail section.
     // Three recognised forms (all tolerated; canonical template uses the first):
     //   `**Plans**: N plans`  — bold word + outer colon (gsd-core/templates/roadmap.md)
@@ -1424,6 +1436,13 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // wording, so it correctly falls through to arm 3 untouched. Kept as a
     // caller-side classifier (NOT seam grammar) reused below against the
     // `boldField` node's own parsed `value`.
+    // #4947: a value that is exactly `TBD` is the planner's own "no plans yet"
+    // marker, not an operator annotation — once plans exist it contradicts the
+    // checklist this verb inserts right under it. `TBD — note` keeps its note
+    // (row 5): on the bold path the note is the node's trailing span, which the
+    // caller checks is empty; on the plain path the note is part of the value,
+    // so the whole-value comparison already excludes it.
+    const isBareTbd = (value: string): boolean => value.trim() === 'TBD';
     const isTemplatePlaceholder = (value: string): boolean => {
       const trimmed = value.trim();
       return /^\[\s*Number of plans\b[\s\S]*\]$/i.test(trimmed);
@@ -1448,6 +1467,34 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     const bareCountPrefixLength = (value: string): number => {
       const m = value.match(/^\d+\s+plans?/i);
       return m ? m[0].length : -1;
+    };
+    // #4947: the pending-plan clause a human or planner glues after the count
+    // (`; 2 gap-closure plans pending (48-18, 48-19)`) is DERIVED from the same
+    // plan/summary facts this verb already computes, so a completed plan left
+    // listed as pending contradicts the count the verb just wrote. The verb
+    // owns that one clause: ids that now have a SUMMARY.md are removed, the
+    // number is recounted, and an emptied clause is dropped. Everything else in
+    // the tail (`in 11 waves`, free prose) stays the operator's — a wave total
+    // does not change when a plan completes. A clause whose ids are not all
+    // plan ids (`(see backlog)`) is not provably derived, so it is left alone.
+    const summarizedPlanIds = new Set(
+      phaseInfo!.summaries
+        .map((summaryFile) => summaryFile.replace('-SUMMARY.md', '').replace('SUMMARY.md', ''))
+        .filter((id) => id !== ''),
+    );
+    const pendingClauseRe = /;[ \t]*(\d+)[ \t]+((?:[\w-]+[ \t]+)*?)plans?[ \t]+pending[ \t]*\(([^()\r\n]*)\)/i;
+    const planIdShape = /^\d+(?:\.\d+)?-\d+(?:\.\d+)?$/;
+    const reconcilePendingClause = (tail: string): string => {
+      const m = pendingClauseRe.exec(tail);
+      if (!m) return tail;
+      const ids = m[3].split(',').map((id) => id.trim());
+      if (ids.length === 0 || !ids.every((id) => planIdShape.test(id))) return tail;
+      const stillPending = ids.filter((id) => !summarizedPlanIds.has(id));
+      if (stillPending.length === ids.length) return tail;
+      const replacement = stillPending.length === 0
+        ? ''
+        : `; ${stillPending.length} ${m[2]}plan${stillPending.length === 1 ? '' : 's'} pending (${stillPending.join(', ')})`;
+      return tail.slice(0, m.index) + replacement + tail.slice(m.index + m[0].length);
     };
     roadmapContent = replaceInCurrentMilestone(roadmapContent, planSectionPattern, (sectionText: string): string => {
       const parsed = parsePlanningDoc(sectionText, 'ROADMAP.md');
@@ -1479,12 +1526,12 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
         const plainFractionLen = fractionCountPrefixLength(plainValue);
         const plainBareLen = bareCountPrefixLength(plainValue);
         const plainCountPrefixLen = plainFractionLen >= 0 ? plainFractionLen : plainBareLen;
-        if (plainCountPrefixLen < 0 && !isTemplatePlaceholder(plainValue)) {
+        if (plainCountPrefixLen < 0 && !isTemplatePlaceholder(plainValue) && !isBareTbd(plainValue)) {
           // Arm 3: freeform prose, TBD, a bracketed human annotation, or an
           // empty value — leave the section exactly as it was.
           return sectionText;
         }
-        const plainSuffix = plainCountPrefixLen >= 0 ? plainValue.slice(plainCountPrefixLen) : '';
+        const plainSuffix = plainCountPrefixLen >= 0 ? reconcilePendingClause(plainValue.slice(plainCountPrefixLen)) : '';
         const newPlainLine = `${indent}Plans:${spacing}${planCountText}${plainSuffix}`;
         const start = plainMatch.index ?? sectionText.indexOf(whole);
         return sectionText.slice(0, start) + newPlainLine + sectionText.slice(start + whole.length);
@@ -1497,7 +1544,11 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       const fractionPrefixLen = fractionCountPrefixLength(currentValue);
       const barePrefixLen = bareCountPrefixLength(currentValue);
       const countPrefixLen = fractionPrefixLen >= 0 ? fractionPrefixLen : barePrefixLen;
-      if (countPrefixLen < 0 && !isTemplatePlaceholder(currentValue)) {
+      const fieldNode = parsed.value.nodes.find((n) => n.id === fieldId);
+      const trailingText = fieldNode && fieldNode.kind === 'boldField'
+        ? parsed.value.source.slice(fieldNode.trailingSpan.start, fieldNode.trailingSpan.end)
+        : '';
+      if (countPrefixLen < 0 && !isTemplatePlaceholder(currentValue) && !(isBareTbd(currentValue) && trailingText.trim() === '')) {
         // Arm 3: freeform prose, TBD, a bracketed human annotation, or an
         // empty value — leave the section exactly as it was.
         return sectionText;
@@ -1508,7 +1559,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       // `setFieldValue`'s valueSpan/trailingSpan split additionally preserves
       // any EM-DASH-separated trailing annotation (#2853) automatically — no
       // separate "preserve trailing" branch needed for that shape.
-      const suffix = countPrefixLen >= 0 ? currentValue.slice(countPrefixLen) : '';
+      const suffix = countPrefixLen >= 0 ? reconcilePendingClause(currentValue.slice(countPrefixLen)) : '';
       const newValueToWrite = planCountText + suffix;
       const staged = setFieldValue(parsed.value, fieldId, newValueToWrite);
       if (!staged.ok) {
@@ -1692,7 +1743,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     verification_stale_check_indeterminate: verificationStaleCheckIndeterminate,
   };
   if (updated) {
-    output({ updated: true, ...computed }, raw, `${summaryCount}/${planCount} ${status}`);
+    output(warnings.length > 0 ? { updated: true, ...computed, warnings } : { updated: true, ...computed }, raw, `${summaryCount}/${planCount} ${status}`);
   } else if (missingPhaseDetails) {
     // #4247: honest refusal — the reason names the real condition (the
     // analyzer's `missing_phase_details` vocabulary), never "already

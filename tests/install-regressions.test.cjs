@@ -16,6 +16,14 @@
  */
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
+
+// #5017: tests in this file pin GSD_HOME next to HOME (the defaults store root follows GSD_HOME);
+// put the runner's value back after each test so a pinned home never leaks into the next one.
+const __ORIG_GSD_HOME = process.env.GSD_HOME;
+require('node:test').afterEach(() => {
+  if (__ORIG_GSD_HOME === undefined) delete process.env.GSD_HOME;
+  else process.env.GSD_HOME = __ORIG_GSD_HOME;
+});
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -94,7 +102,7 @@ describe('#2429 regression: Codex local skills stay project-scoped', () => {
     fs.mkdirSync(homeDir, { recursive: true });
     t.after(() => cleanup(root));
 
-    const env = { ...process.env, HOME: homeDir, USERPROFILE: homeDir };
+    const env = { ...process.env, HOME: homeDir, USERPROFILE: homeDir, GSD_HOME: homeDir };
     delete env.GSD_TEST_MODE;
     delete env.CODEX_HOME;
 
@@ -172,7 +180,7 @@ describe('Defect #2 regression (Qwen, #3664): --qwen --profile=core writes skill
 
     const result = runNode(
       [INSTALL_SCRIPT, '--qwen', '--global', '--config-dir', root, '--profile=core'],
-      { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS },
+      { env: { ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root }, timeoutMs: INSTALL_TIMEOUT_MS },
     );
 
     assert.strictEqual(result.exitCode, 0,
@@ -204,7 +212,7 @@ describe('Defect #2 regression (Hermes, #3664): --hermes --profile=core writes s
 
     const result = runNode(
       [INSTALL_SCRIPT, '--hermes', '--global', '--config-dir', root, '--profile=core'],
-      { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS },
+      { env: { ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root }, timeoutMs: INSTALL_TIMEOUT_MS },
     );
 
     assert.strictEqual(result.exitCode, 0,
@@ -241,7 +249,7 @@ describe('M1 (#2973, #947): --hermes --global --profile=core migrates dev-prefer
 
     const result = runNode(
       [INSTALL_SCRIPT, '--hermes', '--global', '--config-dir', root, '--profile=core'],
-      { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS },
+      { env: { ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root }, timeoutMs: INSTALL_TIMEOUT_MS },
     );
 
     assert.strictEqual(result.exitCode, 0,
@@ -270,7 +278,7 @@ describe('M2 (#2973): --qwen --global --profile=core migrates dev-preferences â†
 
     const result = runNode(
       [INSTALL_SCRIPT, '--qwen', '--global', '--config-dir', root, '--profile=core'],
-      { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS },
+      { env: { ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root }, timeoutMs: INSTALL_TIMEOUT_MS },
     );
 
     assert.strictEqual(result.exitCode, 0,
@@ -297,7 +305,7 @@ describe('M3 (#2973): --claude --global --profile=core migrates dev-preferences 
 
     const result = runNode(
       [INSTALL_SCRIPT, '--claude', '--global', '--config-dir', root, '--profile=core'],
-      { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS },
+      { env: { ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root }, timeoutMs: INSTALL_TIMEOUT_MS },
     );
 
     assert.strictEqual(result.exitCode, 0,
@@ -705,7 +713,7 @@ describe('mergeClaudePermissions (#4221): legacy Read(.env*) deny-rule retiremen
   test('uninstall: GSD-only allow + deny leaves no permissions key at all', (t) => {
     const root = createTempDir('gsd-claude-perm-uninstall-4221-');
     t.after(() => cleanup(root));
-    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root }, timeoutMs: INSTALL_TIMEOUT_MS };
 
     const r1 = runNode([INSTALL_SCRIPT, '--claude', '--global', '--config-dir', root], runOpts);
     assert.strictEqual(r1.exitCode, 0, `install failed: ${r1.stderr}`);
@@ -726,7 +734,7 @@ describe('mergeClaudePermissions (#4221): legacy Read(.env*) deny-rule retiremen
   test('uninstall: a foreign allow entry keeps permissions.allow while the emptied deny key goes', (t) => {
     const root = createTempDir('gsd-claude-perm-uninstall-4221-foreign-');
     t.after(() => cleanup(root));
-    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root }, timeoutMs: INSTALL_TIMEOUT_MS };
 
     const r1 = runNode([INSTALL_SCRIPT, '--claude', '--global', '--config-dir', root], runOpts);
     assert.strictEqual(r1.exitCode, 0, `install failed: ${r1.stderr}`);
@@ -800,7 +808,7 @@ describe('#5054 regression: the unscoped Bash(npx gsd-core *) allow rule is reti
 
     const result = runNode(
       [INSTALL_SCRIPT, '--claude', '--global', '--config-dir', root],
-      { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS },
+      { env: { ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root }, timeoutMs: INSTALL_TIMEOUT_MS },
     );
     assert.strictEqual(result.exitCode, 0,
       `installer exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`);
@@ -824,7 +832,7 @@ describe('#5054 regression: the unscoped Bash(npx gsd-core *) allow rule is reti
       permissions: { allow: ['Bash(npm test)', UNSCOPED_RULE, 'Read(.planning/*)'] },
     }, null, 2) + '\n');
 
-    const env = { ...process.env, HOME: root, USERPROFILE: root };
+    const env = { ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root };
     delete env.GSD_TEST_MODE;
     const result = runNode(
       [INSTALL_SCRIPT, '--claude', '--local'],
@@ -856,7 +864,7 @@ describe('mergeClaudePermissions (#768): end-to-end install writes permissions t
 
     const result = runNode(
       [INSTALL_SCRIPT, '--claude', '--global', '--config-dir', root],
-      { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS },
+      { env: { ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root }, timeoutMs: INSTALL_TIMEOUT_MS },
     );
 
     assert.strictEqual(result.exitCode, 0,
@@ -883,7 +891,7 @@ describe('mergeClaudePermissions (#768): end-to-end install writes permissions t
 
     const result = runNode(
       [INSTALL_SCRIPT, '--antigravity', '--global', '--config-dir', root],
-      { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS },
+      { env: { ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root }, timeoutMs: INSTALL_TIMEOUT_MS },
     );
 
     assert.strictEqual(result.exitCode, 0,
@@ -904,7 +912,7 @@ describe('mergeClaudePermissions (#768): end-to-end install writes permissions t
     t.after(() => cleanup(root));
 
     const runOpts = {
-      env: { ...process.env, HOME: root, USERPROFILE: root },
+      env: { ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root },
       timeoutMs: INSTALL_TIMEOUT_MS,
     };
     const args = [INSTALL_SCRIPT, '--claude', '--global', '--config-dir', root];
@@ -932,7 +940,7 @@ describe('mergeClaudePermissions (#768): end-to-end install writes permissions t
     t.after(() => cleanup(root));
 
     const runOpts = {
-      env: { ...process.env, HOME: root, USERPROFILE: root },
+      env: { ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root },
       timeoutMs: INSTALL_TIMEOUT_MS,
     };
 
@@ -989,7 +997,7 @@ describe('mergeClaudePermissions (#768): end-to-end install writes permissions t
     t.after(() => cleanup(root));
 
     const runOpts = {
-      env: { ...process.env, HOME: root, USERPROFILE: root },
+      env: { ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root },
       timeoutMs: INSTALL_TIMEOUT_MS,
     };
 
@@ -2075,7 +2083,7 @@ describe('#1874 F6 (#338 migration): a malformed settings.local.json is preserve
     const malformedLocal = '{\n  "permissions": { "allow": ["Bash(npm test)"] },\n}}\n';
     fs.writeFileSync(localSettingsPath, malformedLocal);
 
-    const env = { ...process.env, HOME: root, USERPROFILE: root };
+    const env = { ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root };
     delete env.GSD_TEST_MODE;
     const result = runNode(
       [INSTALL_SCRIPT, '--claude', '--local'],
@@ -2123,7 +2131,7 @@ describe('#1874 F6 adjacent: malformed settings.local.json does not crash the in
     const malformedLocal = '{\n  "permissions": { "allow": ["Bash(npm test)"] },\n}}\n';
     fs.writeFileSync(localSettingsPath, malformedLocal);
 
-    const env = { ...process.env, HOME: root, USERPROFILE: root };
+    const env = { ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root };
     delete env.GSD_TEST_MODE;
     const result = runNode(
       [INSTALL_SCRIPT, '--claude', '--local'],
@@ -2161,6 +2169,7 @@ describe('#1874 F18: ~/.gsd/defaults.json read-modify-write is locked and atomic
     delete process.env.GSD_TEST_MODE;
     process.env.HOME = root;
     process.env.USERPROFILE = root;
+    process.env.GSD_HOME = root; // #5017: the defaults store root follows HOME
     try {
       return fn();
     } finally {

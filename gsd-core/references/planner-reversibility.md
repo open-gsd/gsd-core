@@ -20,7 +20,7 @@ this turns out wrong three phases from now, what does undoing it cost?*
 |---|---|---|
 | `reversible` | Local and cheap — one file, one function, an implementation swapped behind a stable interface. | `reversible` decisions get no checkpoint and no flag; the task proceeds normally. |
 | `costly` | Undo touches many call sites or needs a coordinated change — a shared interface shape, a cross-module contract, a dependency major bump. | `costly` decisions are flagged in the plan so the reader sees the weight, but this does not block execution. |
-| `one-way` | Undo requires a data migration, breaks a published contract, or cannot be done at all — on-disk/wire format, public API shape, external-service lock-in, a schema other systems already read. | The planner inserts a `checkpoint:decision` **before** the dependent task, so the human confirms the door before the agent walks through it. |
+| `one-way` | Undo requires a data migration, breaks a published contract, or cannot be done at all — on-disk/wire format, public API shape, external-service lock-in, a schema other systems already read. | The planner inserts a `checkpoint:decision` **before** the dependent task, so the human confirms the door before the agent walks through it — unless the human already settled that decision (see *Already settled*). |
 
 **When unsure, rate it `reversible`.** The value of this feature is
 *discrimination*. A planner that rates everything `one-way` produces checkpoint
@@ -101,6 +101,21 @@ the same terms as any other ingested text (ADR-1577,
   carrying something that belongs in `<context>`, and long free text is where
   smuggled structure hides.
 
+## Already settled
+
+A `one-way` decision the human has **already settled** keeps its rating for the
+record and gets **no** new `checkpoint:decision`. It is settled when any of
+these records the human choosing this exact option:
+
+- the phase `CONTEXT.md` `<decisions>` block (discuss-phase output);
+- an ADR ingested with `--ingest`;
+- a `checkpoint:decision` earlier in this phase's plans that was already answered.
+
+Only a **newly surfaced** `one-way` decision — one nothing above records — earns a
+fresh checkpoint before the implementing task. If you cannot point at the record,
+treat the decision as newly surfaced. `gsd-planner` and this reference state the
+same rule; if they ever diverge, this file wins.
+
 ## Anti-patterns
 
 - **Everything is `one-way`.** The most common failure. Re-read the undo cost:
@@ -111,9 +126,8 @@ the same terms as any other ingested text (ADR-1577,
 - **A rationale that restates the rating.** "This is irreversible because it
   cannot be undone" tells the reader nothing. Name the migration, the contract,
   or the dependent system.
-- **Gating a decision already made.** If the phase CONTEXT.md records the human
-  choosing this exact option, the door is already walked through. Keep the
-  rating for the record; do not insert a checkpoint to re-ask.
+- **Gating a decision already made.** See *Already settled* below: a decision the
+  human has already settled does not earn a fresh checkpoint.
 - **Using the gate as a substitute for design.** The checkpoint buys deliberation
   on a door you must walk through. The better move, when available, is to *make
   the decision reversible* — put the format behind a writer seam, version the

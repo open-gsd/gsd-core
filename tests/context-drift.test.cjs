@@ -378,7 +378,7 @@ describe('verify context-drift CLI', () => {
       cwd: tmp,
       encoding: 'utf-8',
       timeout: PROBE_TIMEOUT_MS,
-      env: { ...process.env, ...TEST_ENV_BASE, HOME: tmp, USERPROFILE: tmp, GSD_WORKSTREAM: '', ...env },
+      env: { ...process.env, ...TEST_ENV_BASE, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, GSD_WORKSTREAM: '', ...env },
     });
   }
 
@@ -455,7 +455,7 @@ describe('verify context-drift CLI', () => {
       cwd: tmp,
       encoding: 'utf-8',
       timeout: PROBE_TIMEOUT_MS,
-      env: { ...process.env, ...TEST_ENV_BASE, HOME: tmp, USERPROFILE: tmp, GSD_WORKSTREAM: '' },
+      env: { ...process.env, ...TEST_ENV_BASE, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, GSD_WORKSTREAM: '' },
     });
     const data = JSON.parse(r.stdout);
     assert.strictEqual(data.skipped, true);
@@ -500,7 +500,7 @@ describe('verify context-drift: workflow.context_drift_action through the gate-c
       cwd: tmp,
       encoding: 'utf-8',
       timeout: PROBE_TIMEOUT_MS,
-      env: { ...process.env, ...TEST_ENV_BASE, HOME: tmp, USERPROFILE: tmp, GSD_WORKSTREAM: workstream ?? '' },
+      env: { ...process.env, ...TEST_ENV_BASE, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, GSD_WORKSTREAM: workstream ?? '' },
     });
     assert.equal(r.status, 0, `verify context-drift failed: ${r.stderr}`);
     return { data: JSON.parse(r.stdout), stderr: r.stderr };

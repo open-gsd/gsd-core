@@ -292,3 +292,71 @@ describe('bug #2523: quick-task final commit includes deferred-items.md', () => 
 });
   });
 }
+
+// ─── #5085: an isolated executor is handed a worktree-relative SUMMARY path ───
+//
+// `init.quick` reports `quick_dir` as an ABSOLUTE path in the primary checkout.
+// Under `isolation="worktree"` the executor was told to write its SUMMARY there,
+// which `gsd-worktree-path-guard` blocks (it is outside the worktree root), and
+// the guard does not cover Bash, so the denied write got copied around the
+// block. The isolated executor now writes a worktree-relative path (the guard
+// ignores relative paths); `worktree.cleanup-wave` already rescues an
+// uncommitted `*SUMMARY.md` from the worktree into the same relative path in
+// the primary checkout, so the orchestrator's later `${QUICK_DIR}` check holds.
+{
+  const { runHook } = require('./helpers/process-seam.cjs');
+  const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  const { createTempGitProject, cleanup } = require('./helpers.cjs');
+  const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+  const quickMd = fs.readFileSync(path.join(WORKFLOWS_DIR, 'quick.md'), 'utf-8');
+
+  describe('#5085: quick executor SUMMARY path under worktree isolation', () => {
+    // The shell block that derives QUICK_DIR_REL: from its first `_QTOP=` line to its one-line fallback.
+    function derivationBlock() {
+      const lines = splitLines(quickMd);
+      const start = lines.findIndex((l) => /^_QTOP=/.test(l));
+      assert.notStrictEqual(start, -1, 'Step 4 must define the QUICK_DIR_REL derivation');
+      const end = lines.findIndex((l, n) => n > start && /^if \[ -z "\$QUICK_DIR_REL" \]/.test(l));
+      assert.notStrictEqual(end, -1, 'the derivation must end with its fallback line');
+      return lines.slice(start, end + 1).join('\n');
+    }
+
+    test('Step 4 derives a repo-relative QUICK_DIR_REL by asking git, not by string-stripping a path', () => {
+      const block = derivationBlock();
+      assert.match(block, /git -C "\$QUICK_DIR" rev-parse --show-prefix/);
+      assert.match(block, /^QUICK_DIR_REL=/m);
+    });
+
+    test('the derivation yields .planning-relative paths however the path is spelled, and leaves a path outside the checkout alone', (t) => {
+      const block = derivationBlock();
+      const dir = createTempGitProject('gsd-5085-');
+      t.after(() => cleanup(dir));
+      const root = fs.realpathSync(dir);
+      const taskDir = path.join(root, '.planning', 'quick', '261016-abc-x');
+      fs.mkdirSync(taskDir, { recursive: true });
+      const run = (quickDir) => runHook('-c', [`QUICK_DIR="$1"\n${block}\nprintf '%s' "$QUICK_DIR_REL"`, 'sh', quickDir], {
+        interpreter: 'bash', cwd: root, timeoutMs: PROBE_TIMEOUT_MS,
+      });
+      assert.strictEqual(run(taskDir).stdout, '.planning/quick/261016-abc-x', 'plain spelling');
+      if (process.platform !== 'win32') {
+        // A symlinked spelling of the same directory (macOS /var -> /private/var): a string prefix strip misses it.
+        const link = path.join(path.dirname(root), `${path.basename(root)}-link`);
+        fs.symlinkSync(root, link);
+        t.after(() => cleanup(link));
+        assert.strictEqual(run(path.join(link, '.planning', 'quick', '261016-abc-x')).stdout, '.planning/quick/261016-abc-x', 'symlinked spelling');
+      }
+      assert.strictEqual(run('/elsewhere/.planning/quick/x').stdout, '/elsewhere/.planning/quick/x', 'not under the checkout -> unchanged');
+    });
+
+    test('the executor SUMMARY target is the relative path when isolated, the absolute one otherwise', () => {
+      const m = quickMd.match(/- Create summary at: (.+?)\/\$\{quick_id\}-SUMMARY\.md/);
+      assert.ok(m, 'executor constraints must name the SUMMARY target');
+      assert.match(m[1], /ISOLATION === "harness-worktree" \? QUICK_DIR_REL : QUICK_DIR/);
+    });
+
+    test('a denied write is reported and stops the run — never copied around with Bash', () => {
+      assert.match(quickMd, /denied by gsd-worktree-path-guard[\s\S]{0,300}stop and report/i);
+      assert.match(quickMd, /not (?:to )?(?:route|work) around[\s\S]{0,120}(?:cp|mv)/i);
+    });
+  });
+}

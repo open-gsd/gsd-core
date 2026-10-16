@@ -5989,6 +5989,81 @@ describe('#4906 Phase 2: cmdRoadmapUpdatePlanProgress Plans-line seam migration 
     assert.equal(read.value, '1/1 plans complete', 'round-tripped value matches exactly what was computed');
   });
 
+  // #4947: the verb owns the count token AND the pending-plan list it derives
+  // from — a glued tail naming plans that now have SUMMARY files is reconciled;
+  // every other word of the annotation stays the operator's.
+  function addPhase10Plan(planId) {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'phases', '10-test-phase', `${planId}-PLAN.md`), '# Plan\n');
+  }
+
+  test('#4947 row 11: a pending-plan clause naming only now-summarized plans is dropped, the rest of the annotation kept', () => {
+    seedPhase10('**Plans:** 0/1 plans executed in 11 waves; 1 gap-closure plan pending (10-01)');
+    const result = runGsdTools('roadmap update-plan-progress 10', tmpDir);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.equal(plansLineIn(fs.readFileSync(roadmapPath, 'utf-8')), '**Plans:** 1/1 plans complete in 11 waves');
+  });
+
+  test('#4947 row 12: a pending-plan clause keeps the still-pending ids and recounts them', () => {
+    seedPhase10('**Plans:** 0/2 plans executed in 3 waves; 2 gap-closure plans pending (10-01, 10-02)');
+    addPhase10Plan('10-02');
+    const result = runGsdTools('roadmap update-plan-progress 10', tmpDir);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.equal(
+      plansLineIn(fs.readFileSync(roadmapPath, 'utf-8')),
+      '**Plans:** 1/2 plans executed in 3 waves; 1 gap-closure plan pending (10-02)',
+    );
+  });
+
+  test('#4947 row 13: a pending clause naming ids this command cannot match is left untouched', () => {
+    seedPhase10('**Plans:** 0/1 plans executed; 1 follow-up plan pending (see backlog)');
+    const result = runGsdTools('roadmap update-plan-progress 10', tmpDir);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.equal(
+      plansLineIn(fs.readFileSync(roadmapPath, 'utf-8')),
+      '**Plans:** 1/1 plans complete; 1 follow-up plan pending (see backlog)',
+    );
+  });
+
+  test('#4947 row 14: a bare TBD value is replaced with the computed count (annotated TBD stays row 5)', () => {
+    seedPhase10('**Plans**: TBD');
+    const result = runGsdTools('roadmap update-plan-progress 10', tmpDir);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.equal(plansLineIn(fs.readFileSync(roadmapPath, 'utf-8')), '**Plans**: 1/1 plans complete');
+  });
+
+  test('#4947 row 15: inserting the checklist under a TBD Plans line leaves no TBD behind', () => {
+    seedPhase10('**Plans**: TBD', { verified: false });
+    addPhase10Plan('10-02');
+    const result = runGsdTools('roadmap update-plan-progress 10', tmpDir);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    const written = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.ok(!/\bTBD\b/.test(written), 'no TBD placeholder remains');
+    assert.ok(written.includes('**Plans**: 1/2 plans executed\n- [x] 10-01-PLAN.md\n- [ ] 10-02-PLAN.md'), written);
+  });
+
+  test('#4947 row 16: a word-prefixed Progress cell is reported, not silently skipped, when the heading is still written', () => {
+    seedPhase10('**Plans**: 0/1 plans');
+    fs.writeFileSync(
+      roadmapPath,
+      fs.readFileSync(roadmapPath, 'utf-8').replace('| 10 Test Phase |', '| Phase 10 |'),
+    );
+    const result = runGsdTools('roadmap update-plan-progress 10', tmpDir);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.updated, true);
+    assert.ok(Array.isArray(output.warnings) && output.warnings.some((w) => /Progress table/.test(w)),
+      `expected a Progress-table warning, got ${JSON.stringify(output.warnings)}`);
+    assert.ok(fs.readFileSync(roadmapPath, 'utf-8').includes('| Phase 10 | 0/1 | Not started | - |'),
+      'the unrecognized row stays byte-identical (#4247 decision)');
+  });
+
+  test('#4947 row 17: a recognized Progress row produces no warnings', () => {
+    seedPhase10('**Plans**: 0/1 plans');
+    const result = runGsdTools('roadmap update-plan-progress 10', tmpDir);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.equal(JSON.parse(result.output).warnings, undefined);
+  });
+
   test('row 12: the Plans-line migration is CRLF-safe', () => {
     const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
     const annotation = '— crlf annotation';

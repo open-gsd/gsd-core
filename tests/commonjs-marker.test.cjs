@@ -74,7 +74,7 @@ function mkTmp(prefix) {
  * installer resolves through exactly those variables.
  */
 function runInstall(root, runtime, extraArgs = []) {
-  const env = { ...process.env, HOME: root, USERPROFILE: root, CLAUDE_CONFIG_DIR: root };
+  const env = { ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root, CLAUDE_CONFIG_DIR: root };
   delete env.GSD_TEST_MODE;
   const result = runNode(
     [INSTALL_SCRIPT, `--${runtime}`, '--global', '--config-dir', root, ...extraArgs],

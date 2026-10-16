@@ -18,6 +18,13 @@
  */
 
 const { test, describe, beforeEach, afterEach, mock } = require('node:test');
+
+// #5017: pinned GSD_HOME (next to HOME) is put back after each test so it never leaks into the next one.
+const __ORIG_GSD_HOME = process.env.GSD_HOME;
+require('node:test').afterEach(() => {
+  if (__ORIG_GSD_HOME === undefined) delete process.env.GSD_HOME;
+  else process.env.GSD_HOME = __ORIG_GSD_HOME;
+});
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
@@ -828,6 +835,7 @@ describe('#1477 .gsd-source marker provisioning', () => {
     // install() targets the fixture regardless of platform.
     savedUserProfile = process.env.USERPROFILE;
     process.env.HOME = tmpRoot;
+    process.env.GSD_HOME = tmpRoot; // #5017: the defaults store root follows HOME
     process.env.USERPROFILE = tmpRoot;
     savedExplicitConfigDir = process.env.GSD_EXPLICIT_CONFIG_DIR;
     delete process.env.GSD_EXPLICIT_CONFIG_DIR;
@@ -1464,6 +1472,7 @@ describe('#2624 .gsd-source marker is rewritten before staging reads it', () => 
     savedHome = process.env.HOME;
     savedUserProfile = process.env.USERPROFILE;
     process.env.HOME = tmpRoot;
+    process.env.GSD_HOME = tmpRoot; // #5017: the defaults store root follows HOME
     process.env.USERPROFILE = tmpRoot;
     savedExplicitConfigDir = process.env.GSD_EXPLICIT_CONFIG_DIR;
     delete process.env.GSD_EXPLICIT_CONFIG_DIR;

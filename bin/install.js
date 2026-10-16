@@ -35,6 +35,7 @@ const {
   getGlobalSkillsBase,
   resolveKimiHooksTomlDir,
   isRegisteredRuntimeId,
+  resolveGsdHome,
 } = require('../gsd-core/bin/lib/runtime-homes.cjs');
 // #2870: the Install Scope Module — turns a bare 'global' | 'local' scope id
 // plus a runtime into one resolved value (configHome, settingsFile,
@@ -7033,7 +7034,7 @@ function recordDefaultsProvenance(gsdDir, runtime, defaults, setNow) {
 /** @returns {boolean} true when it removed or reverted something */
 function revertNonClaudeDefaults(runtime) {
   if (hostBehaviorsFor(runtime).nativeModelAliases || process.env.GSD_TEST_MODE) return false;
-  const gsdDir = path.join(os.homedir(), '.gsd');
+  const gsdDir = path.join(resolveGsdHome(), '.gsd'); // #5017: GSD_HOME-aware, like the loader
   const provPath = path.join(gsdDir, DEFAULTS_PROVENANCE_NAME);
   if (!fs.existsSync(provPath)) return false;
   let releaseLock = null;
@@ -7086,7 +7087,7 @@ function revertNonClaudeDefaults(runtime) {
  */
 function writeNonClaudeDefaults(runtime) {
   if (hostBehaviorsFor(runtime).nativeModelAliases || process.env.GSD_TEST_MODE) return;
-  const gsdDir = path.join(os.homedir(), '.gsd');
+  const gsdDir = path.join(resolveGsdHome(), '.gsd'); // #5017: GSD_HOME-aware, like the loader
   const defaultsPath = path.join(gsdDir, 'defaults.json');
   let releaseLock = null;
   try {
