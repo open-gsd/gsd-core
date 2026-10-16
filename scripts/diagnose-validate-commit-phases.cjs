@@ -123,13 +123,20 @@ function makeProject() {
 }
 
 /**
- * A copy of the hooks directory (the hook finds its lib/ beside itself) whose
- * hook carries the tracing line, the PS4 text beside it, and a no-op script for
- * calibrating the stamp. Returns the paths of the traced hook and the no-op.
+ * A copy of the hooks directory whose hook carries the tracing line, the PS4
+ * text beside it, and a no-op script for calibrating the stamp. Returns the
+ * paths of the traced hook and the no-op.
+ *
+ * The hook's lib/git-cmd.js requires `../../gsd-core/bin/lib/token-scanner.cjs`
+ * relative to itself, so the copy sits at `<project>/hooks` with `<project>/gsd-core`
+ * linked to the real one. Without that link the classifier fails to load and the
+ * hook FAILS OPEN: a traced run would take a different path than the real one
+ * (the parity test in tests/xtrace-phase-timing.test.cjs pins this).
  */
 function prepareTracedHooks(project, ps4) {
-  const dir = path.join(project, 'traced-hooks');
+  const dir = path.join(project, 'hooks');
   fs.cpSync(HOOKS_DIR, dir, { recursive: true });
+  fs.symlinkSync(path.join(HOOKS_DIR, '..', 'gsd-core'), path.join(project, 'gsd-core'), 'dir');
   const hook = path.join(dir, HOOK_NAME);
   fs.writeFileSync(hook, injectTracing(fs.readFileSync(HOOK, 'utf8')));
   fs.writeFileSync(path.join(dir, TRACE_PS4_FILE), ps4);
