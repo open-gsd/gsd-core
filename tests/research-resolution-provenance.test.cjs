@@ -52,18 +52,18 @@ const dim11 = span(checker, '## Dimension 11: Research Resolution', /\n## Dimens
 describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', () => {
   test('no step passes the dimension on the (RESOLVED) heading suffix', () => {
     assert.doesNotMatch(dim11, /\(RESOLVED\)`?\s*suffix\s*(→|->)\s*PASS/);
-    assert.match(dim11, /`\(RESOLVED\)` heading suffix is never evidence/);
+    assert.match(dim11, /A `\(RESOLVED\)` heading suffix is never evidence/);
   });
 
   test('a resolution counts only when it cites a D-NN that exists in CONTEXT.md', () => {
-    assert.match(dim11, /resolved only when its resolution cites a `D-NN` that exists there/);
+    assert.match(dim11, /Only the user closes an open question, recorded as a `D-NN` decision in the phase's CONTEXT\.md/);
     assert.match(dim11, /confirm that decision exists in CONTEXT\.md and answers the question asked/);
   });
 
   test('blocks an uncited marker, a dangling D-NN, and a non-user authority', () => {
-    assert.match(dim11, /marked `RESOLVED` \(inline, or by a `\(RESOLVED\)` heading suffix\) without citing a `D-NN`/);
+    assert.match(dim11, /is marked `RESOLVED` \(inline or by the heading suffix\) without citing a `D-NN`/);
     assert.match(dim11, /cites a `D-NN` that CONTEXT\.md does not contain/);
-    assert.match(dim11, /a plan, a "planning-time disposition", the research itself, or another agent's output/);
+    assert.match(dim11, /rests on a plan, a "planning-time disposition", the research itself, or another agent's output/);
   });
 
   test('fix_hint routes to recording a user ruling, never to writing the marker', () => {
@@ -77,7 +77,7 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
   });
 
   test('the PASS example cites D-NN on every question; the self-resolved shape is a BLOCKER example', () => {
-    const passIdx = dim11.indexOf('**Example — resolved (PASS):**');
+    const passIdx = dim11.indexOf('**Example — resolved (PASS');
     assert.notEqual(passIdx, -1);
     // The example's body: the lines between its opening and closing fence.
     const lines = splitLines(dim11.slice(passIdx));
