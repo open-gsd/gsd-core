@@ -492,7 +492,7 @@ tools: Read, Write, Bash, Skill, WebFetch, SlashCommand
     const toolsItems = result.split('\n').filter(l => l.startsWith('- ')).map(l => l.slice(2));
 
     assert.ok(toolsItems.includes('view_file'), 'maps Read -> view_file (#4705 native name)');
-    assert.ok(toolsItems.includes('web_fetch'), 'maps WebFetch -> web_fetch');
+    assert.ok(toolsItems.includes('read_url_content'), 'maps WebFetch -> read_url_content (#5447 agy-registered name)');
     assert.ok(!toolsItems.some(t => /\bskill\b/.test(t)), 'no invalid skill tool in Antigravity frontmatter');
     assert.ok(!toolsItems.some(t => /\bslashcommand\b/.test(t)), 'no invalid slashcommand tool in Antigravity frontmatter');
   });
@@ -2711,9 +2711,66 @@ Inspect source files.`;
 
   test('unmapped tools keep their lowercase grant (no silent restriction drop) (#4705)', () => {
     const result = convertClaudeAgentToAntigravityAgent(
-      `---\nname: e\ndescription: d\ntools: Glob, WebFetch\n---\n\nbody`);
-    assert.match(result, /- glob/, 'undocumented tools keep their mapped/lowercase grant');
-    assert.match(result, /- web_fetch/, 'WebFetch stays granted');
+      `---\nname: e\ndescription: d\ntools: Glob, WebFetch, NotebookEdit\n---\n\nbody`);
+    assert.match(result, /- find_by_name/, 'Glob stays granted under its agy name');
+    assert.match(result, /- read_url_content/, 'WebFetch stays granted under its agy name');
+    assert.match(result, /- notebookedit/, 'an unmapped tool keeps its lowercase grant');
+  });
+});
+
+// ── #5447 — Antigravity agent tools: names agy 1.3.5 registers; block lists ──
+// agy refuses to start an agent whose tools list holds any name it does not
+// register, so one wrong mapping disabled every installed gsd-* agent. Agents
+// whose `tools:` is a YAML block list collapsed to a single `- - read` entry.
+describe('#5447 — Antigravity agent tools start in agy 1.3.5', () => {
+  test('Write/Glob/WebSearch/WebFetch map to the names agy registers (#5447)', () => {
+    const result = convertClaudeAgentToAntigravityAgent(
+      `---\nname: e\ndescription: d\ntools: Read, Write, Edit, Bash, Glob, Grep, WebSearch, WebFetch\n---\n\nbody`);
+    assert.match(result,
+      /tools:\n- view_file\n- write_to_file\n- replace_file_content\n- run_command\n- find_by_name\n- grep_search\n- search_web\n- read_url_content\n/);
+    for (const unregistered of ['write_file', 'glob', 'google_web_search', 'web_fetch']) {
+      assert.ok(!result.includes(`- ${unregistered}\n`), `${unregistered} is not registered by agy and must not be emitted`);
+    }
+  });
+
+  test('TodoWrite is dropped rather than emitted as an unregistered name (#5447)', () => {
+    const result = convertClaudeAgentToAntigravityAgent(
+      `---\nname: e\ndescription: d\ntools: Read, TodoWrite\n---\n\nbody`);
+    assert.match(result, /tools:\n- view_file\n---/);
+    assert.doesNotMatch(result, /todo/i);
+  });
+
+  test('a YAML block-list tools field converts like the inline form (#5447)', () => {
+    const input = [
+      '---',
+      'name: gsd-security-auditor',
+      'description: d',
+      'tools:',
+      '  - Read',
+      '  - Bash',
+      '  - Glob',
+      '  - Grep',
+      '  - Skill',
+      'color: red',
+      '---',
+      '',
+      'body',
+    ].join('\n');
+    const result = convertClaudeAgentToAntigravityAgent(input);
+    assert.match(result, /tools:\n- view_file\n- run_command\n- find_by_name\n- grep_search\ncolor: red\n---/);
+    assert.doesNotMatch(result, /- - /, 'block-list items must not collapse into a nested entry');
+  });
+
+  test('the shipped block-list agents keep every tool (#5447)', () => {
+    for (const agent of ['gsd-security-auditor', 'gsd-nyquist-auditor']) {
+      const source = fs.readFileSync(path.join(__dirname, '..', 'agents', `${agent}.md`), 'utf8');
+      const result = convertClaudeAgentToAntigravityAgent(source);
+      const fm = result.slice(0, result.indexOf('\n---', 3));
+      const tools = fm.split('\n').filter((l) => l.startsWith('- ')).map((l) => l.slice(2));
+      assert.ok(tools.length > 1, `${agent} must keep more than one tool, got ${JSON.stringify(tools)}`);
+      assert.ok(tools.includes('view_file') && tools.includes('run_command'), `${agent} keeps Read and Bash`);
+      assert.ok(!tools.some((t) => t.startsWith('- ')), `${agent} has no nested entries`);
+    }
   });
 });
 
