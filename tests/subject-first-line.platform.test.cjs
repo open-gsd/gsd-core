@@ -82,6 +82,10 @@ describe('gsd-validate-commit.sh first-line extraction (#5473)', { skip: skipHer
       ['git commit -m "feat: add thing\n"', 0],
       ['git commit -m "wibble wobble"', 2],
       ['git commit -m "wibble wobble\nfeat: not the subject"', 2],
+      // CRLF: the first line carries its \r, as before; and a leading newline
+      // makes the first line EMPTY, so the later conforming line is not the subject.
+      ['git commit -m "feat: x\r\nbody"', 0],
+      ['git commit -m "\nfeat: x"', 2],
     ];
     for (const [command, expected] of cases) {
       for (const suffix of ['', ` ${FALLBACK}`]) {
@@ -98,6 +102,23 @@ describe('gsd-validate-commit.sh first-line extraction (#5473)', { skip: skipHer
       const bad = run(`git commit -m "arreglo: añadir 日本語\nfeat: x" ${FALLBACK}`, { extraEnv });
       assert.equal(bad.status, 2, `${JSON.stringify(extraEnv)}: ${bad.stderr}`);
     }
+  });
+
+  // The C locale is used for the EXTRACTION only. The 72-character length gate must
+  // still count characters, not bytes, in the caller's locale: 72 multibyte characters
+  // pass (216 bytes) and 73 do not. Needs a UTF-8 locale on the machine, else bash
+  // falls back to the C locale and counts bytes (then there is nothing to pin).
+  const hasUtf8Locale = spawnSync('locale', ['-a'], { encoding: 'utf8', timeout: HOOK_BOUND_MS })
+    .stdout?.split(/\r?\n/).some((name) => /^en_US\.utf-?8$/i.test(name));
+
+  test('the length gate still counts characters, not bytes, in the caller\'s UTF-8 locale', { skip: !hasUtf8Locale && 'needs an en_US.UTF-8 locale' }, () => {
+    const subjectOf = (chars) => `feat: ${'日'.repeat(chars - 'feat: '.length)}`;
+    const extraEnv = { LC_ALL: 'en_US.UTF-8' };
+    const at72 = run(`git commit -m "${subjectOf(72)}" ${FALLBACK}`, { extraEnv });
+    assert.equal(at72.status, 0, at72.stderr);
+    const at73 = run(`git commit -m "${subjectOf(73)}" ${FALLBACK}`, { extraEnv });
+    assert.equal(at73.status, 2, at73.stderr);
+    assert.equal(JSON.parse(at73.stdout).code, 'COMMIT_SUBJECT_TOO_LONG');
   });
 
   test('boundary: a 112KB message still yields its first line (limit - 1, limit, limit + 1 bytes of padding)', () => {
