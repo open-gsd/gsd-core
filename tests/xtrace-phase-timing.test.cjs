@@ -11,11 +11,15 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const fc = require('fast-check');
+const { cleanup } = require('./helpers.cjs');
 
 const {
   stampPs4,
+  ps4AssignmentFile,
   parseTimedXtrace,
   phaseCosts,
   slowestLines,
@@ -78,6 +82,14 @@ describe('parseTimedXtrace', () => {
   });
 });
 
+describe('ps4AssignmentFile', () => {
+  test('is a single-quoted assignment, and an embedded single quote is closed, escaped and reopened', () => {
+    assert.equal(ps4AssignmentFile('+ x'), "PS4='+ x'\n");
+    assert.equal(ps4AssignmentFile("a'b"), "PS4='a'\\''b'\n");
+    assert.equal(ps4AssignmentFile(''), "PS4=''\n");
+  });
+});
+
 describe('the PS4 against a real bash', () => {
   const BASH = '/bin/bash';
   const BASH_PROBE_BOUND_MS = 10000;
@@ -86,11 +98,15 @@ describe('the PS4 against a real bash', () => {
 
   test('stamps parse, timestamps never go backwards, and lines/functions are attributed', { skip: !probe && 'needs /bin/bash and perl' }, () => {
     const script = ['a=1', 'b=2', 'f() {', '  c=3', '}', 'f'].join('\n');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-xtrace-ps4-'));
+    const ps4File = path.join(dir, 'ps4.sh');
+    fs.writeFileSync(ps4File, ps4AssignmentFile(stampPs4(STAMP_COMMAND, NONCE)));
     const r = spawnSync(BASH, ['-x', '-c', script], {
-      env: { ...process.env, PS4: stampPs4(STAMP_COMMAND, NONCE) },
+      env: { ...process.env, BASH_ENV: ps4File },
       encoding: 'utf8',
       timeout: BASH_PROBE_BOUND_MS,
     });
+    cleanup(dir);
     assert.equal(r.status, 0, r.stderr);
     const entries = parseTimedXtrace(r.stderr, NONCE);
     const byCmd = Object.fromEntries(entries.map((e) => [e.cmd, e]));

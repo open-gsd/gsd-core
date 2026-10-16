@@ -28,6 +28,17 @@ function stampPs4(timestampCommand, nonce) {
 }
 
 // After the depth marks and the nonce: `<epoch-ms>@@<lineno>@@<function>@@ `.
+/**
+ * The PS4 must reach bash as an in-shell ASSIGNMENT, not as an inherited
+ * environment variable: bash 5.x does not run the command substitution in a PS4
+ * it imported from the environment, so an exported PS4 silently degrades to a
+ * plain `+ `. Hand this file to bash as BASH_ENV (sourced at startup, so the
+ * assignment is expanded normally on 3.2 and 5.x alike), alongside `bash -x`.
+ */
+function ps4AssignmentFile(ps4) {
+  return `PS4='${String(ps4).replace(/'/g, "'\\''")}'\n`;
+}
+
 const STAMP_TAIL = /^(\d+)@@(\d+)@@([^@]*)@@ ?/;
 
 /**
@@ -110,4 +121,4 @@ function abbreviate(cmd, max = 100) {
   return flat.length <= max ? flat : `${flat.slice(0, max)}… (${flat.length} chars)`;
 }
 
-module.exports = { stampPs4, parseTimedXtrace, phaseCosts, slowestLines, abbreviate };
+module.exports = { stampPs4, ps4AssignmentFile, parseTimedXtrace, phaseCosts, slowestLines, abbreviate };
