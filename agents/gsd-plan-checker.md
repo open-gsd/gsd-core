@@ -613,7 +613,7 @@ issue:
 issue:
   dimension: research_resolution
   severity: blocker
-  required_property: "Every RESEARCH.md open question cites a D-NN decision that exists in CONTEXT.md"
+  required_property: "Every RESEARCH.md open question cites a D-NN decision that exists in CONTEXT.md and answers it"
   description: "RESEARCH.md has open questions with no user decision on record"
   file: "01-RESEARCH.md"
   unresolved_questions:
@@ -1070,7 +1070,7 @@ Plan verification complete when:
   - [ ] No tasks contradict locked decisions
   - [ ] Deferred ideas not included in plans
 - [ ] Research resolution checked (if RESEARCH.md exists): every open question cites a `D-NN`
-      that exists in CONTEXT.md; a `(RESOLVED)` suffix or marker alone is a blocker
+      that exists in CONTEXT.md and answers it; a `(RESOLVED)` suffix or marker alone is a blocker
 - [ ] Overall status determined (passed | issues_found)
 - [ ] Architectural tier compliance checked (tasks match responsibility map tiers)
 - [ ] Cross-plan data contracts checked (no conflicting transforms on shared data)

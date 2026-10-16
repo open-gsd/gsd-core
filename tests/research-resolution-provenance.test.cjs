@@ -66,6 +66,12 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.match(dim11, /rests on a plan, a "planning-time disposition", the research itself, or another agent's output/);
   });
 
+  test('the binding required_property carries the relevance condition', () => {
+    const props = [...dim11.matchAll(/required_property:\s*"([^"]*)"/g)].map((m) => m[1]);
+    assert.ok(props.length >= 1, 'Dimension 11 must carry a required_property example');
+    for (const prop of props) assert.match(prop, /D-NN decision that exists in CONTEXT\.md and answers it/);
+  });
+
   test('fix_hint routes to recording a user ruling, never to writing the marker', () => {
     const hints = [...dim11.matchAll(/fix_hint:\s*"([^"]*)"/g)].map((m) => m[1]);
     assert.ok(hints.length >= 1, 'Dimension 11 must carry a fix_hint example');
@@ -99,6 +105,7 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.ok(item, 'success_criteria must list the research resolution check');
     assert.match(item[0], /`D-NN`/);
     assert.match(item[0], /CONTEXT\.md/);
+    assert.match(item[0], /and answers it/, 'the checklist must carry the body\'s relevance condition');
   });
 });
 
