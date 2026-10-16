@@ -1291,5 +1291,110 @@ describe('#3587 per-phase commit_docs override', () => {
     });
   });
 });
+
+/**
+ * #5470: `config-get commit_docs` is the read every workflow gate runs
+ * (`COMMIT_DOCS=$(gsd_run query config-get commit_docs --raw 2>/dev/null || echo "true")`).
+ * It walked the literal key path, so after the how-to's
+ * `config-set planning.commit_docs false` it reported "Key not found", the
+ * gate fell back to "true", and the quick task's pre-dispatch step committed
+ * `.planning/`. Both spellings must answer with the runtime's resolved policy.
+ */
+describe('#5470 config-get commit_docs returns the runtime-resolved policy', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempGitProject(); });
+  afterEach(() => cleanup(tmpDir));
+
+  function configGet(keyPath, defaultValue) {
+    return captureFdWrite(1, () => configCli.cmdConfigGet(tmpDir, keyPath, true, defaultValue)).trim();
+  }
+
+  function gitignorePlanning() {
+    fs.writeFileSync(path.join(tmpDir, '.gitignore'), '.planning/\n');
+  }
+
+  /** Runs fn with GSD_WORKSTREAM set, restoring the caller's value. */
+  function withWorkstream(ws, fn) {
+    const saved = process.env.GSD_WORKSTREAM;
+    process.env.GSD_WORKSTREAM = ws;
+    try {
+      return fn();
+    } finally {
+      if (saved === undefined) delete process.env.GSD_WORKSTREAM;
+      else process.env.GSD_WORKSTREAM = saved;
+    }
+  }
+
+  test('nested planning.commit_docs: false (the how-to form) reads back false through the flat key', () => {
+    writeConfig(tmpDir, { planning: { commit_docs: false } });
+    assert.strictEqual(configGet('commit_docs'), 'false');
+  });
+
+  test('flat commit_docs: false reads back false through the nested key', () => {
+    writeConfig(tmpDir, { commit_docs: false });
+    assert.strictEqual(configGet('planning.commit_docs'), 'false');
+  });
+
+  test('a gitignored .planning/ with no explicit value reads false through both keys', () => {
+    writeConfig(tmpDir, {});
+    gitignorePlanning();
+    assert.strictEqual(configGet('commit_docs'), 'false');
+    assert.strictEqual(configGet('planning.commit_docs'), 'false');
+  });
+
+  test('--default never outranks the resolved policy', () => {
+    writeConfig(tmpDir, { planning: { commit_docs: false } });
+    assert.strictEqual(configGet('commit_docs', 'true'), 'false');
+  });
+
+  // Every combination of the chain's three inputs. Each case gets a fresh
+  // project because the loader caches isGitIgnored per directory.
+  const explicitValues = [undefined, true, false];
+  for (const flat of explicitValues) {
+    for (const nested of explicitValues) {
+      for (const gitIgnored of [false, true]) {
+        const label = `flat=${flat} nested=${nested} gitignored=${gitIgnored}`;
+        test(`both keys agree with the documented chain and the loader: ${label}`, () => {
+          const config = {};
+          if (flat !== undefined) config.commit_docs = flat;
+          if (nested !== undefined) config.planning = { commit_docs: nested };
+          writeConfig(tmpDir, config);
+          if (gitIgnored) gitignorePlanning();
+
+          const expected = String(flat ?? nested ?? !gitIgnored);
+          const runtime = String(loadConfigResolved(tmpDir, { workstream: null, persist: false }).config.commit_docs);
+          assert.strictEqual(runtime, expected);
+          assert.strictEqual(configGet('commit_docs'), expected);
+          assert.strictEqual(configGet('planning.commit_docs'), expected);
+        });
+      }
+    }
+  }
+
+  describe('under a workstream', () => {
+    beforeEach(() => {
+      writeConfig(tmpDir, { planning: { commit_docs: false } });
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha'), { recursive: true });
+    });
+
+    test("a root planning.commit_docs: false shows through a workstream config that doesn't set it", () => {
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha', 'config.json'), '{}');
+      assert.strictEqual(withWorkstream('alpha', () => configGet('commit_docs')), 'false');
+    });
+
+    test('a root planning.commit_docs: false shows through a workstream with no config.json', () => {
+      assert.strictEqual(withWorkstream('alpha', () => configGet('commit_docs')), 'false');
+    });
+
+    test("the workstream's own value overrides the root", () => {
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'workstreams', 'alpha', 'config.json'),
+        JSON.stringify({ commit_docs: true }),
+      );
+      assert.strictEqual(withWorkstream('alpha', () => configGet('commit_docs')), 'true');
+    });
+  });
+});
   });
 }
