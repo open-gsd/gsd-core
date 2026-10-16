@@ -4,8 +4,8 @@
  *
  * The diagnostic runs hooks/gsd-validate-commit.sh under /bin/bash 3.2 on a
  * macOS runner with a PS4 that stamps every traced command. These tests pin the
- * pure parser and attribution, the launch contract against a real bash, that a
- * traced run behaves exactly like a direct run of the real hook, and the report
+ * pure parser and attribution, the instrumentation against a real bash, that a
+ * traced run of the real hook behaves exactly like a direct run, and the report
  * pipeline end to end on a cheap command.
  */
 
@@ -20,10 +20,11 @@ const { cleanup } = require('./helpers.cjs');
 
 const {
   stampPs4,
-  tracedBashArgs,
-  traceEnv,
+  TRACE_PS4_FILE,
+  INJECTED_LINES,
+  injectTracing,
   parseTimedXtrace,
-  parseTracedScript,
+  shiftLines,
   phaseCosts,
   slowestLines,
   rollupByRegion,
@@ -35,6 +36,7 @@ const {
   whereCell,
   renderScenario,
   report,
+  prepareTracedHooks,
   MAX_LOAD,
   STAMP_COMMAND,
   HOOK,
@@ -59,12 +61,6 @@ describe('parseTimedXtrace', () => {
       { t: 1000, line: 12, depth: 1, fn: '', cmd: 'CMD=x' },
       { t: 1005, line: 13, depth: 2, fn: 'cleanup', cmd: 'node -e y' },
     ]);
-  });
-
-  test('FUNCNAME `source` (a sourced script\'s own top level) is not a function', () => {
-    const [top, inFn] = parseTimedXtrace([stamp(1, 1, 2, 'a=1', 'source'), stamp(1, 2, 3, 'b=2', 'f')].join('\n'), NONCE);
-    assert.equal(top.fn, '');
-    assert.equal(inFn.fn, 'f');
   });
 
   test('depth boundary: 1 mark, 2 marks, 7 marks', () => {
@@ -110,46 +106,56 @@ describe('parseTimedXtrace', () => {
   });
 });
 
-describe('parseTracedScript', () => {
-  test('drops the depth-1 prologue entry and keeps the script commands (depth > 1)', () => {
-    const text = [stamp(1, 0, 0, '. /x/hook.sh'), stamp(2, 5, 1, 'a=1'), stamp(3, 6, 2, 'sub')].join('\n');
-    assert.deepEqual(parseTracedScript(text, NONCE).map((e) => e.cmd), ['a=1', 'sub']);
-    assert.equal(parseTimedXtrace(text, NONCE).length, 3);
+describe('shiftLines', () => {
+  test('moves every line back by the injected count and does not mutate its input', () => {
+    const entries = [{ t: 1, line: 3, cmd: 'a' }, { t: 2, line: 10, cmd: 'b' }];
+    assert.deepEqual(shiftLines(entries, 1).map((e) => e.line), [2, 9]);
+    assert.deepEqual(shiftLines(entries, 0).map((e) => e.line), [3, 10]);
+    assert.deepEqual(entries.map((e) => e.line), [3, 10]);
   });
 });
 
-describe('tracedBashArgs / traceEnv', () => {
-  test('the script is $0 and is run by the -c prologue', () => {
-    const args = tracedBashArgs('/abs/hook.sh');
-    assert.equal(args[0], '-c');
-    assert.equal(args[2], '/abs/hook.sh');
+describe('injectTracing', () => {
+  const LINE = `PS4="$(cat "\${0%/*}/${TRACE_PS4_FILE}")"; set -x`;
+
+  test('inserts exactly INJECTED_LINES lines, right after the shebang', () => {
+    const out = injectTracing('#!/bin/bash\necho hi\n');
+    assert.equal(out, `#!/bin/bash\n${LINE}\necho hi\n`);
+    assert.equal(out.split('\n').length - '#!/bin/bash\necho hi\n'.split('\n').length, INJECTED_LINES);
   });
 
-  test('traceEnv adds only the PS4 variable and does not mutate its input', () => {
-    const base = { PATH: '/bin', BASH_ENV: '/etc/other' };
-    assert.deepEqual(traceEnv(base, '+@@x@@'), { PATH: '/bin', BASH_ENV: '/etc/other', GSD_XTRACE_PS4: '+@@x@@' });
-    assert.deepEqual(base, { PATH: '/bin', BASH_ENV: '/etc/other' });
+  test('a script with no shebang gets the line at the top', () => {
+    assert.equal(injectTracing('echo hi\n'), `${LINE}\necho hi\n`);
+  });
+
+  test('boundary: empty script, shebang only, shebang without a newline', () => {
+    assert.equal(injectTracing(''), `${LINE}\n`);
+    assert.equal(injectTracing('#!/bin/bash\n'), `#!/bin/bash\n${LINE}\n`);
+    assert.equal(injectTracing('#!/bin/bash'), `#!/bin/bash\n${LINE}\n`);
+  });
+
+  test('the stamp text is read from a file, never quoted into the injected line', () => {
+    const out = injectTracing('#!/bin/bash\n');
+    assert.ok(!out.includes("'"), 'no quoting of the PS4 text');
+    assert.ok(!out.includes('@@'), 'the stamp text is not in the script');
   });
 });
 
-describe('the launch contract against a real bash', () => {
-  test('stamps parse, and lines and functions are attributed', { skip: needsBash }, () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-xtrace-ps4-'));
-    const scriptFile = path.join(dir, 'probe.sh');
-    fs.writeFileSync(scriptFile, ['a=1', 'b=2', 'f() {', '  c=3', '}', 'f', ''].join('\n'));
-    const r = spawnSync(BASH, tracedBashArgs(scriptFile), {
-      env: traceEnv(process.env, stampPs4(STAMP_COMMAND, NONCE)),
-      encoding: 'utf8',
-      timeout: REAL_BASH_BOUND_MS,
-    });
+describe('the instrumentation against a real bash', () => {
+  test('stamps parse, and the original lines and functions are attributed', { skip: needsBash }, () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-xtrace-probe-'));
+    const script = path.join(dir, 'probe.sh');
+    fs.writeFileSync(script, injectTracing(['#!/bin/bash', 'a=1', 'b=2', 'f() {', '  c=3', '}', 'f', ''].join('\n')));
+    fs.writeFileSync(path.join(dir, TRACE_PS4_FILE), stampPs4(STAMP_COMMAND, NONCE));
+    const r = spawnSync(BASH, [script], { encoding: 'utf8', timeout: REAL_BASH_BOUND_MS });
     cleanup(dir);
     assert.equal(r.status, 0, r.stderr);
-    const entries = parseTracedScript(r.stderr, NONCE);
+    const entries = shiftLines(parseTimedXtrace(r.stderr, NONCE), INJECTED_LINES);
     const byCmd = Object.fromEntries(entries.map((e) => [e.cmd, e]));
     const seen = `entries=${JSON.stringify(entries.map((e) => e.cmd))} stderr=${JSON.stringify(r.stderr.slice(0, 600))}`;
     for (const cmd of ['a=1', 'b=2', 'c=3']) assert.ok(byCmd[cmd], `no stamped entry for ${cmd}: ${seen}`);
-    assert.equal(byCmd['a=1'].line, 1);
-    assert.equal(byCmd['b=2'].line, 2);
+    assert.equal(byCmd['a=1'].line, 2);
+    assert.equal(byCmd['b=2'].line, 3);
     assert.equal(byCmd['c=3'].fn, 'f');
     assert.equal(byCmd['a=1'].fn, '');
     // A stamp is an integer epoch-millisecond reading from the perl clock.
@@ -163,20 +169,20 @@ describe('the launch contract against a real bash', () => {
       path.join(project, '.planning', 'config.json'),
       JSON.stringify({ hooks: { community: true } }),
     );
-    const base = { ...process.env, PATH: `${path.dirname(process.execPath)}:${process.env.PATH || '/usr/bin:/bin'}` };
-    const traced = traceEnv(base, stampPs4(STAMP_COMMAND, NONCE));
+    const env = { ...process.env, PATH: `${path.dirname(process.execPath)}:${process.env.PATH || '/usr/bin:/bin'}` };
+    const { hook: tracedHook } = prepareTracedHooks(project, stampPs4(STAMP_COMMAND, NONCE));
     try {
       for (const [command, expectedStatus] of [
         ['git commit -m "feat: add thing"', 0],
         ['git commit -m "wibble wobble"', 2],
       ]) {
         const input = JSON.stringify({ tool_input: { command } });
-        const direct = spawnSync(BASH, [HOOK], { cwd: project, env: base, input, encoding: 'utf8', timeout: REAL_BASH_BOUND_MS });
-        const viaTrace = spawnSync(BASH, tracedBashArgs(HOOK), { cwd: project, env: traced, input, encoding: 'utf8', timeout: REAL_BASH_BOUND_MS });
+        const direct = spawnSync(BASH, [HOOK], { cwd: project, env, input, encoding: 'utf8', timeout: REAL_BASH_BOUND_MS });
+        const viaTrace = spawnSync(BASH, [tracedHook], { cwd: project, env, input, encoding: 'utf8', timeout: REAL_BASH_BOUND_MS });
         assert.equal(direct.status, expectedStatus, `direct run of ${command}: ${direct.stderr}`);
         assert.equal(viaTrace.status, direct.status, `traced exit differs for ${command}`);
         assert.equal(viaTrace.stdout, direct.stdout, `traced stdout differs for ${command}`);
-        assert.ok(parseTracedScript(viaTrace.stderr, NONCE).length > 0, 'the traced run produced no stamped commands');
+        assert.ok(parseTimedXtrace(viaTrace.stderr, NONCE).length > 0, 'the traced run produced no stamped commands');
       }
     } finally {
       cleanup(project);
@@ -358,7 +364,7 @@ describe('diagnose-validate-commit-phases', () => {
     assert.throws(() => parseArgs(['--bogus']), /unknown argument/);
   });
 
-  test('whereCell: a top-level line shows its source; a function line says it is function-relative', () => {
+  test('whereCell: a top-level line shows its source; a function line says it may be function-relative', () => {
     const source = ['first', 'second  line', 'third'];
     assert.deepEqual(whereCell({ fn: '', line: 2 }, source), { line: '2', text: 'second line' });
     assert.deepEqual(whereCell({ fn: '', line: 99 }, source), { line: '99', text: '' });
@@ -380,6 +386,20 @@ describe('diagnose-validate-commit-phases', () => {
     const text = renderScenario(m, [], { top: 3 }).join('\n');
     assert.match(text, /TRACE EMPTY/);
     assert.doesNotMatch(text, /Slowest lines/);
+  });
+
+  test('renderScenario escapes backslashes and pipes in a table cell', () => {
+    const m = {
+      scenario: { name: 's', command: 'x' },
+      walls: [1, 2, 3],
+      last: { status: 0, signal: null, error: null },
+      traced: { signal: null, error: null },
+      entries: 1,
+      costs: [{ fn: '', line: 1, afterMs: 1, beforeMs: 0, maxMs: 1, count: 1, sample: 'a\\b|c' }],
+      totalMs: 1,
+    };
+    const text = renderScenario(m, ['x'], { top: 1 }).join('\n');
+    assert.ok(text.includes('a\\\\b\\|c'), text);
   });
 
   test('report: the whole pipeline on a cheap command, with background load', { skip: needsBash }, () => {

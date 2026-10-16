@@ -13,10 +13,12 @@
  *   - untraced: wall time of the hook exactly as the test runs it, repeated
  *               (min / median / max), because the effect under study is
  *               noisy on a shared runner;
- *   - traced:   the hook sourced under `set -x` with a PS4 that stamps every
- *               command with an epoch millisecond, its line number and its
+ *   - traced:   a copy of the hooks directory whose hook has one line inserted
+ *               after its shebang (PS4 assigned, xtrace on), so every command
+ *               is stamped with an epoch millisecond, its line number and its
  *               function (scripts/xtrace-phase-timing.cjs turns the stamps
- *               into per-line and per-region costs).
+ *               into per-line and per-region costs, shifted back to the
+ *               hook's own line numbers).
  *
  * Reading the traced numbers: every traced command pays one stamp (a perl
  * spawn), measured and reported below, and xtrace prints each 112KB expansion,
@@ -42,16 +44,20 @@ const { spawn, spawnSync } = require('node:child_process');
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 const {
   stampPs4,
-  tracedBashArgs,
-  traceEnv,
-  parseTracedScript,
+  TRACE_PS4_FILE,
+  INJECTED_LINES,
+  injectTracing,
+  parseTimedXtrace,
+  shiftLines,
   phaseCosts,
   slowestLines,
   rollupByRegion,
   abbreviate,
 } = require('./xtrace-phase-timing.cjs');
 
-const HOOK = path.join(__dirname, '..', 'hooks', 'gsd-validate-commit.sh');
+const HOOKS_DIR = path.join(__dirname, '..', 'hooks');
+const HOOK_NAME = 'gsd-validate-commit.sh';
+const HOOK = path.join(HOOKS_DIR, HOOK_NAME);
 const BASH = '/bin/bash';
 const HOOK_BOUND_MS = 30000;
 const PROBE_BOUND_MS = 10000;
@@ -116,14 +122,28 @@ function makeProject() {
   return dir;
 }
 
-// A traced run installs the stamp with an in-shell PS4 assignment (see
-// tracedBashArgs): bash 5.x ignores the command substitution in an exported PS4.
-function hookEnv(ps4) {
-  const env = {
+/**
+ * A copy of the hooks directory (the hook finds its lib/ beside itself) whose
+ * hook carries the tracing line, the PS4 text beside it, and a no-op script for
+ * calibrating the stamp. Returns the paths of the traced hook and the no-op.
+ */
+function prepareTracedHooks(project, ps4) {
+  const dir = path.join(project, 'traced-hooks');
+  fs.cpSync(HOOKS_DIR, dir, { recursive: true });
+  const hook = path.join(dir, HOOK_NAME);
+  fs.writeFileSync(hook, injectTracing(fs.readFileSync(HOOK, 'utf8')));
+  fs.writeFileSync(path.join(dir, TRACE_PS4_FILE), ps4);
+  const noop = path.join(dir, 'noop.sh');
+  const colons = Array.from({ length: CALIBRATION_COMMANDS }, () => ':').join('\n');
+  fs.writeFileSync(noop, injectTracing(`#!/bin/bash\n${colons}\n`));
+  return { hook, noop };
+}
+
+function hookEnv() {
+  return {
     ...process.env,
     PATH: `${path.dirname(process.execPath)}:${process.env.PATH || '/usr/bin:/bin'}`,
   };
-  return ps4 ? traceEnv(env, ps4) : env;
 }
 
 /** bash with the options every call here shares; `options` overrides them. */
@@ -132,21 +152,21 @@ function spawnBash(args, options) {
 }
 
 /**
- * Run the hook on `command`. stdout is discarded and a traced run's stderr goes
- * to a FILE, never a pipe: the hook's node classifier inherits both, and a
- * grandchild that outlives the kill would otherwise hold the pipe open and hang
- * this process past its bound (the real test avoids that with a process-group
- * kill; spawnSync cannot).
+ * Run the hook script at `script` on `command`. stdout is discarded and a
+ * traced run's stderr goes to a FILE, never a pipe: the hook's node classifier
+ * inherits both, and a grandchild that outlives the kill would otherwise hold
+ * the pipe open and hang this process past its bound (the real test avoids that
+ * with a process-group kill; spawnSync cannot).
  */
-function runHook(project, command, ps4) {
+function runHook(project, command, script, traced) {
   const traceFile = path.join(project, 'trace.err');
-  const traceFd = ps4 ? fs.openSync(traceFile, 'w') : null;
+  const traceFd = traced ? fs.openSync(traceFile, 'w') : null;
   const started = process.hrtime.bigint();
   let r;
   try {
-    r = spawnBash(ps4 ? tracedBashArgs(HOOK) : [HOOK], {
+    r = spawnBash([script], {
       cwd: project,
-      env: hookEnv(ps4),
+      env: hookEnv(),
       input: JSON.stringify({ tool_input: { command } }),
       stdio: ['pipe', 'ignore', traceFd === null ? 'ignore' : traceFd],
       timeout: HOOK_BOUND_MS,
@@ -157,7 +177,7 @@ function runHook(project, command, ps4) {
   const wallMs = Number((process.hrtime.bigint() - started) / 1000000n);
   let trace = '';
   let error = r.error ? r.error.code || r.error.message : null;
-  if (ps4) {
+  if (traced) {
     if (fs.statSync(traceFile).size > MAX_TRACE_BYTES) error = error || 'trace exceeds the size cap';
     else trace = fs.readFileSync(traceFile, 'utf8');
   }
@@ -165,9 +185,9 @@ function runHook(project, command, ps4) {
 }
 
 /** Cost of one stamp: a run of no-op commands under the same PS4. */
-function calibrateStampMs(ps4, nonce, noopScript) {
-  const r = spawnBash(tracedBashArgs(noopScript), { env: hookEnv(ps4) });
-  const { totalMs } = phaseCosts(parseTracedScript(r.stderr || '', nonce));
+function calibrateStampMs(noop, nonce) {
+  const r = spawnBash([noop], { env: hookEnv() });
+  const { totalMs } = phaseCosts(parseTimedXtrace(r.stderr || '', nonce));
   return totalMs / CALIBRATION_COMMANDS;
 }
 
@@ -192,25 +212,26 @@ function bashVersionLine() {
   return (spawnBash(['--version']).stdout || 'unknown').split('\n')[0];
 }
 
-const cell = (s) => String(s).replace(/\|/g, '\\|');
+/** Escape a value for a markdown table cell: backslash first, then the pipe. */
+const cell = (s) => String(s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|');
 
 /** Where a cost row points: the hook line and its source, or the function. */
 function whereCell(c, source) {
-  if (c.fn) return { line: `${c.fn}():${c.line}`, text: '(line is function-relative)' };
+  if (c.fn) return { line: `${c.fn}():${c.line}`, text: '(line may be function-relative)' };
   return { line: String(c.line), text: abbreviate(source[c.line - 1] || '', 70) };
 }
 
 /** Run one scenario untraced (repeated) and traced; no formatting. */
-function measureScenario(project, scenario, ps4, nonce) {
+function measureScenario(project, scenario, hooks, nonce) {
   const walls = [];
   let last = null;
   for (let i = 0; i < UNTRACED_RUNS; i++) {
-    last = runHook(project, scenario.command, null);
+    last = runHook(project, scenario.command, HOOK, false);
     walls.push(last.wallMs);
   }
   walls.sort((a, b) => a - b);
-  const traced = runHook(project, scenario.command, ps4);
-  const entries = parseTracedScript(traced.trace, nonce);
+  const traced = runHook(project, scenario.command, hooks.hook, true);
+  const entries = shiftLines(parseTimedXtrace(traced.trace, nonce), INJECTED_LINES);
   const { costs, totalMs } = phaseCosts(entries);
   return { scenario, walls, last, traced, entries: entries.length, costs, totalMs };
 }
@@ -254,9 +275,7 @@ function report(opts, scenarioList = scenarios()) {
   const project = makeProject();
   const source = fs.readFileSync(HOOK, 'utf8').split('\n');
   const nonce = crypto.randomBytes(6).toString('hex');
-  const ps4 = stampPs4(STAMP_COMMAND, nonce);
-  const noopScript = path.join(project, 'noop.sh');
-  fs.writeFileSync(noopScript, `${Array.from({ length: CALIBRATION_COMMANDS }, () => ':').join('\n')}\n`);
+  const hooks = prepareTracedHooks(project, stampPs4(STAMP_COMMAND, nonce));
   const versionLine = bashVersionLine();
   const out = ['# validate-commit phase timing (#5473)', ''];
   out.push(`- shell: \`${BASH}\` (${versionLine})`);
@@ -265,12 +284,12 @@ function report(opts, scenarioList = scenarios()) {
   }
   out.push(`- platform: ${process.platform}/${process.arch}, ${os.cpus().length} cpus, node ${process.version}`);
   out.push(`- background load: ${opts.load} process(es) forking node`);
-  out.push(`- stamp overhead: ${calibrateStampMs(ps4, nonce, noopScript).toFixed(1)} ms per traced command (measured over ${CALIBRATION_COMMANDS} no-ops)`);
+  out.push(`- stamp overhead: ${calibrateStampMs(hooks.noop, nonce).toFixed(1)} ms per traced command (measured over ${CALIBRATION_COMMANDS} no-ops)`);
   out.push('- traced numbers rank lines; they are not comparable to untraced wall time (every command pays a stamp and xtrace prints each 112KB expansion)', '');
   const load = startLoad(opts.load);
   const measured = [];
   try {
-    for (const scenario of scenarioList) measured.push(measureScenario(project, scenario, ps4, nonce));
+    for (const scenario of scenarioList) measured.push(measureScenario(project, scenario, hooks, nonce));
   } finally {
     stopLoad(load);
     fs.rmSync(project, { recursive: true, force: true });
@@ -299,6 +318,18 @@ function run(argv = process.argv.slice(2)) {
   return ok ? 0 : 1;
 }
 
-module.exports = { scenarios, parseArgs, whereCell, renderScenario, report, MAX_LOAD, STAMP_COMMAND, HOOK };
+module.exports = {
+  scenarios,
+  parseArgs,
+  whereCell,
+  renderScenario,
+  report,
+  prepareTracedHooks,
+  MAX_LOAD,
+  STAMP_COMMAND,
+  HOOKS_DIR,
+  HOOK,
+  HOOK_NAME,
+};
 
 if (require.main === module) runMain(run);

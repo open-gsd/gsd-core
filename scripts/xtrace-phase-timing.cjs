@@ -26,9 +26,6 @@
  * Every traced command also pays one stamp (a subshell and a perl); measure it
  * with a run of no-ops (see the CLI) and read gaps below it as zero.
  *
- * bash numbers LINENO relative to the enclosing function in some versions, so
- * a stamp inside a function carries its function name.
- *
  * No I/O and no clock: every function returns a value computed from its
  * arguments. The CLI that runs bash is scripts/diagnose-validate-commit-phases.cjs.
  */
@@ -39,30 +36,33 @@ function stampPs4(timestampCommand, nonce) {
 }
 
 /**
- * The PS4 must reach bash as an in-shell ASSIGNMENT, not as an inherited
- * environment variable: bash 5.x does not run the command substitution in a PS4
- * it imported from the environment, so an exported PS4 silently degrades to a
- * plain `+ `. It cannot ride on a startup file either (BASH_ENV): bash reads
- * the system bashrc INSTEAD of BASH_ENV in some environments (it did in the
- * gsd-test tester container), and the trace falls back to `+ ` with no error.
- *
- * So the script runs inside a `bash -c` whose prologue assigns PS4, turns on
- * xtrace and SOURCES the script. `$0` is the script path, so `dirname "$0"` and
- * `exit` behave exactly as when it is run directly (the CLI's tests pin this
- * against the real hook). The one visible difference: the sourced file's top
- * level may report FUNCNAME `source`, which the parser folds to "no function".
+ * How the stamp reaches bash. Every other route failed somewhere:
+ *   - an exported PS4: bash 5.x does not run the command substitution in a PS4
+ *     it imported from the environment, so it silently degrades to `+ `;
+ *   - BASH_ENV: bash reads the system bashrc INSTEAD of it in some
+ *     environments (it did in the gsd-test tester container);
+ *   - `bash -c '... . "$0"'`: puts an uncontrolled path inside a shell command.
+ * So the script under test is run as an ordinary script that has ONE line
+ * inserted after its shebang, which assigns PS4 (read from a sibling file, so
+ * the stamp text is never quoted into shell code) and turns on xtrace. `$0`,
+ * `exit` and sibling files then behave exactly as in a direct run (the CLI's
+ * tests pin this against the real hook).
  */
-const PS4_ENV_VAR = 'GSD_XTRACE_PS4';
-const TRACE_PROLOGUE = `PS4="$${PS4_ENV_VAR}"; set -x; . "$0"`;
+const TRACE_PS4_FILE = 'xtrace-ps4.txt';
+const INJECTED_LINES = 1;
+const INJECTED_LINE = `PS4="$(cat "\${0%/*}/${TRACE_PS4_FILE}")"; set -x`;
 
-/** argv (after the bash binary) that runs `script` (an absolute path) traced. */
-function tracedBashArgs(script) {
-  return ['-c', TRACE_PROLOGUE, script];
-}
-
-/** `base` plus the PS4 handed to the prologue. */
-function traceEnv(base, ps4) {
-  return { ...base, [PS4_ENV_VAR]: ps4 };
+/**
+ * `scriptText` with the tracing line inserted after its shebang (or at the top
+ * when it has none). The script must be run by a path containing a `/`, with
+ * the PS4 text in TRACE_PS4_FILE beside it. Adds exactly INJECTED_LINES lines.
+ */
+function injectTracing(scriptText) {
+  const text = String(scriptText);
+  if (!text.startsWith('#!')) return `${INJECTED_LINE}\n${text}`;
+  const eol = text.indexOf('\n');
+  if (eol === -1) return `${text}\n${INJECTED_LINE}\n`;
+  return `${text.slice(0, eol + 1)}${INJECTED_LINE}\n${text.slice(eol + 1)}`;
 }
 
 // What follows the depth marks and the nonce: `<epoch-ms>@@<lineno>@@<function>@@ `.
@@ -96,8 +96,7 @@ function parseTimedXtrace(text, nonce) {
         t: Number(tail[1]),
         line: Number(tail[2]),
         depth,
-        // `source` is the sourced script's own top level, not a function (see tracedBashArgs).
-        fn: tail[3] === 'source' ? '' : tail[3],
+        fn: tail[3],
         cmd: raw.slice(depth + head.length + tail[0].length),
       });
     } else if (entries.length > 0) {
@@ -108,12 +107,11 @@ function parseTimedXtrace(text, nonce) {
 }
 
 /**
- * parseTimedXtrace for a run made with tracedBashArgs: depth 1 is the prologue's
- * own `. script` (its line number belongs to the `-c` string, not the script),
- * so only deeper entries are the script's commands.
+ * Entries with their line numbers moved back by `injected` lines, so a stamp
+ * reports the line of the ORIGINAL script, not of the instrumented copy.
  */
-function parseTracedScript(text, nonce) {
-  return parseTimedXtrace(text, nonce).filter((e) => e.depth > 1);
+function shiftLines(entries, injected) {
+  return entries.map((e) => ({ ...e, line: e.line - injected }));
 }
 
 /**
@@ -164,8 +162,9 @@ function slowestLines(costs, n) {
 /**
  * Elapsed time per run of `size` source lines of the script's top level, in
  * line order, plus one entry per function. `afterMs` summed over a region is
- * the time from its first stamp to the next region's, so regions partition the
- * run: a coarse "which phase" view that needs no knowledge of the script.
+ * the time from its first stamp to the next region's, so regions roughly
+ * partition the run: a coarse "which phase" view that needs no knowledge of
+ * the script.
  *
  * @returns {{ label: string, afterMs: number }[]}
  */
@@ -193,10 +192,11 @@ function abbreviate(cmd, max = 100) {
 
 module.exports = {
   stampPs4,
-  tracedBashArgs,
-  traceEnv,
+  TRACE_PS4_FILE,
+  INJECTED_LINES,
+  injectTracing,
   parseTimedXtrace,
-  parseTracedScript,
+  shiftLines,
   phaseCosts,
   peakMs,
   slowestLines,
