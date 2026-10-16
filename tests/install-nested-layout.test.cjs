@@ -9,6 +9,13 @@
 process.env.GSD_TEST_MODE = '1';
 
 const { describe, test, before, after } = require('node:test');
+
+// #5017: pinned GSD_HOME (next to HOME) is put back after each test so it never leaks into the next one.
+const __ORIG_GSD_HOME = process.env.GSD_HOME;
+require('node:test').afterEach(() => {
+  if (__ORIG_GSD_HOME === undefined) delete process.env.GSD_HOME;
+  else process.env.GSD_HOME = __ORIG_GSD_HOME;
+});
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -73,6 +80,7 @@ function withSandboxedHome(tmpDir, fn) {
   const savedHome = process.env.HOME;
   const savedUserProfile = process.env.USERPROFILE;
   process.env.HOME = tmpDir;
+  process.env.GSD_HOME = tmpDir; // #5017: the defaults store root follows HOME
   process.env.USERPROFILE = tmpDir;
   try {
     return fn();

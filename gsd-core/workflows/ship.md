@@ -496,17 +496,16 @@ git push origin ${CURRENT_BRANCH} 2>&1 || echo "⚠ track_shipping: ship-note pu
 # Poll mergeStateStatus with backoff to avoid racing GitHub's async state computation.
 # Note: Skip tokens recognized by GitHub Actions are [skip ci], [ci skip], [no ci], [skip actions], [actions skip], and skip-checks:true.
 # The recovery commit message MUST NOT contain any of these tokens.
+# Recovery keys on the head only (BLOCKED, zero checks, skip token), never the review state (#4993).
 
 STATUS="UNKNOWN"
 CHECKS=0
-REVIEW_DECISION=""
 for i in {1..5}; do
-  PR_STATE=$(gh pr view ${PR_NUMBER} --json headRefOid,mergeStateStatus,statusCheckRollup,reviewDecision -q '{head: .headRefOid, status: .mergeStateStatus, checks: ((.statusCheckRollup // []) | length), review: (.reviewDecision // "")}' 2>/dev/null || echo '{"head":"","status":"UNKNOWN","checks":0,"review":""}')
+  PR_STATE=$(gh pr view ${PR_NUMBER} --json headRefOid,mergeStateStatus,statusCheckRollup -q '{head: .headRefOid, status: .mergeStateStatus, checks: ((.statusCheckRollup // []) | length)}' 2>/dev/null || echo '{"head":"","status":"UNKNOWN","checks":0}')
   HEAD_OID=$(echo "$PR_STATE" | jq -r .head)
   if [ "$HEAD_OID" = "$SHIP_NOTE_SHA" ]; then
     STATUS=$(echo "$PR_STATE" | jq -r .status)
     CHECKS=$(echo "$PR_STATE" | jq -r .checks)
-    REVIEW_DECISION=$(echo "$PR_STATE" | jq -r .review)
   fi
   if [ "$HEAD_OID" = "$SHIP_NOTE_SHA" ] && [ "$STATUS" != "UNKNOWN" ]; then
     break
@@ -514,7 +513,7 @@ for i in {1..5}; do
   sleep 3
 done
 
-if [ "$STATUS" = "BLOCKED" ] && [ "$CHECKS" = "0" ] && [ "$REVIEW_DECISION" != "REVIEW_REQUIRED" ] && [ "$REVIEW_DECISION" != "CHANGES_REQUESTED" ] && git log -1 --format=%B "$SHIP_NOTE_SHA" | grep -q '\[ci skip\]'; then
+if [ "$STATUS" = "BLOCKED" ] && [ "$CHECKS" = "0" ] && git log -1 --format=%B "$SHIP_NOTE_SHA" | grep -q '\[ci skip\]'; then
   echo "⚠ PR is BLOCKED with zero checks. The [ci skip] trailer wedged the PR due to required checks."
   echo "Pushing an empty commit to trigger the required pipelines..."
   # gsd_run query commit requires a file list; use git directly for this intentionally empty commit.

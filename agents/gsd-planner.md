@@ -192,7 +192,7 @@ Every task has four required fields:
 
 **Inherit the command that already worked (#2401):** reuse `prior_verify_commands` verbatim, prefer `npm --prefix <dir> run <script>`, ground every path you author. @~/.claude/gsd-core/references/planner-verify-command-grounding.md
 
-**Grep gate hygiene:** `grep -c` counts comments, so header prose can be self-invalidating. Use `grep -v '^#' | grep -c token`. Bare `== 0` gates on unfiltered files are forbidden.
+**Grep gate hygiene:** `grep -c` counts comments, so header prose can be self-invalidating. Use `grep -v '^#' | grep -c token`. Bare `== 0` gates on unfiltered files are forbidden. Run every count/match gate against the current tree and record its baseline (#4927): a gate that already passes at HEAD, or whose literal differs in case from the deliverable, is wrong. @~/.claude/gsd-core/references/planner-verify-command-grounding.md
 
 <comment_text_discipline>
 **Comment-text discipline (HARD GATE, #429):** A literal an acceptance criterion negative-greps for must NOT appear verbatim in any `<action>` body. Rules + `<!-- planner-discipline-allow: LIT -->` allowlist + examples: @~/.claude/gsd-core/references/planner-antipatterns.md ("Comment-Text Discipline").
@@ -208,7 +208,7 @@ Every task has four required fields:
 
 **<precondition>** (optional, one prose line): a runnable/checkable fact the task assumes that plan ordering does not guarantee — external setup (`user_setup`), a prior-phase artifact, or an env var. The executor asserts it before running the task and halts on unmet. Emission rules + the contract triad (precondition ↔ `<verify>`/`<done>` ↔ `must_haves.truths`): @~/.claude/gsd-core/references/planner-preconditions.md.
 
-**<reversibility>** (optional): `rating="reversible|costly|one-way"` + one-line rationale for a decision this task implements. `one-way` inserts a `checkpoint:decision` before this task; `costly` is flagged only; unsure means `reversible`. Rules: @~/.claude/gsd-core/references/planner-reversibility.md
+**<reversibility>** (optional): `rating="reversible|costly|one-way"` + one-line rationale for a decision this task implements. A newly surfaced `one-way` decision inserts a `checkpoint:decision` before this task; one the human already settled (CONTEXT.md, an ingested ADR, an answered checkpoint) keeps its rating and gets no new checkpoint; `costly` is flagged only; unsure means `reversible`. Rules: @~/.claude/gsd-core/references/planner-reversibility.md
 
 See @~/.claude/gsd-core/references/planner-guidance.md for Task Types table, Task Sizing rules, Interface-First Task Ordering, and Specificity guidance.
 
@@ -817,7 +817,8 @@ These PLAN.md files are the canonical output of this agent. The orchestrator rea
    - `Write` the file with only the first section, ending with the sentinel line `<!-- gsd:write-continue -->`.
    - `Read` the file, then `Edit` it, replacing `<!-- gsd:write-continue -->` with the next section followed by the sentinel again. Repeat, one section per `Edit`.
    - On the final section, replace the sentinel with the closing content and no trailing sentinel.
-5. **If writing still fails, surface the actual error in your return message.** **Do NOT silently fall back to returning content** — that hides the failure from the orchestrator and truncates identically.
+5. **Verify the write landed (#4927).** A `Write` that returns success can still have stored a truncated payload. After writing each PLAN.md, run `verify.plan-structure` on it (see below) and `tail -n 5` the file: it must end with the closing `</output>` (or the last closing tag of the template) and must not contain `<!-- gsd:write-continue -->`. If it ends mid-tag, rewrite it with the incremental method in rule 4.
+6. **If writing still fails, surface the actual error in your return message.** **Do NOT silently fall back to returning content** — that hides the failure from the orchestrator and truncates identically.
 
 **CRITICAL — File naming convention (enforced):**
 

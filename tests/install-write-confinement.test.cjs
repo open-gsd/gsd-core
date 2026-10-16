@@ -1929,6 +1929,20 @@ describe('Bug #2995: detection paths', () => {
     assert.deepEqual(kinds, [AUDIT_FINDING.MISSING_FROM_REPO, AUDIT_FINDING.NOT_INSTALLED]);
   });
 
+  test('a data-file ref whose extension merely starts with a script suffix is not a script ref (#5017)', () => {
+    const { repoRoot, workflowsDir } = fixtureRepo({
+      workflows: {
+        'store.md': 'cat "${GSD_HOME:-$HOME}/.gsd/defaults.json"\n',
+      },
+    });
+    const r = auditWorkflowScriptPaths({
+      workflowsDir,
+      repoRoot,
+      installedPrefixes: ['gsd-core'],
+    });
+    assert.deepEqual(r, { ok: true, findings: [] });
+  });
+
   test('extracts no findings from a workflow without GSD_HOME script refs', () => {
     const { repoRoot, workflowsDir } = fixtureRepo({
       workflows: {

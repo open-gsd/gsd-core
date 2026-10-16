@@ -435,7 +435,8 @@ function resolveFallbackIsolation(root, configPath) {
   }
   if (!runtimeId) {
     try {
-      const defaultsPath = path.join(os.homedir(), '.gsd', 'defaults.json');
+      // #5017: GSD_HOME when set and non-blank, else the home directory — the loader's rule.
+      const defaultsPath = path.join(process.env.GSD_HOME || os.homedir(), '.gsd', 'defaults.json');
       const defaultsParsed = JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
       if (defaultsParsed && typeof defaultsParsed === 'object' && 'runtime' in defaultsParsed) {
         runtimeId = resolveRuntimeNameFromCandidates(defaultsParsed.runtime) || null;

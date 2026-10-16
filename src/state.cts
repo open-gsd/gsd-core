@@ -5655,6 +5655,22 @@ function cmdStateJson(cwd: string, raw: boolean): void {
 }
 
 /**
+ * 1-based position of the first plan with no summary, when SOME of the phase's plans already have
+ * one (a gap-closure re-entry: plans 1..17 are done and 18 and 19 are the gap plans, #4945).
+ * `null` when no plan is summarized yet, when every plan is, or when the phase directory cannot be
+ * found: the phase then starts at plan 1, exactly as before. Plans and summaries are paired by the
+ * phase locator's own rule, so this agrees with `init` and `phase-plan-index`.
+ */
+function firstPlanToRun(cwd: string, phaseNumber: string | number): number | null {
+  const located = phaseLocatorMod.findPhaseInternal(cwd, String(phaseNumber));
+  if (!located || !located.found) return null;
+  const { plans, incomplete_plans: incomplete } = located;
+  if (incomplete.length === 0 || incomplete.length === plans.length) return null;
+  const index = plans.indexOf(incomplete[0]);
+  return index === -1 ? null : index + 1;
+}
+
+/**
  * Update STATE.md when a new phase begins execution.
  * Updates body text fields (Current focus, Status, Last Activity, Current Position)
  * and synchronizes frontmatter via writeStateMd.
@@ -5702,6 +5718,8 @@ function cmdStateBeginPhase(cwd: string, phaseNumber: string | number | null | u
     phaseNumber: phaseNumber as string | number,
     phaseName: phaseName ?? null,
     planCount: planCount ?? null,
+    // #4945: a gap-closure re-entry starts at the first plan still to run, not at plan 1.
+    startPlan: firstPlanToRun(cwd, phaseNumber as string | number),
   };
   const deps: StateTransitionDeps = {
     clock: realClock,
