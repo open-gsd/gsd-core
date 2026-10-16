@@ -419,6 +419,7 @@ describe('C: plugin.json schema validation', () => {
     ...TEST_ENV_BASE,
     HOME: claudeCliHome,
     USERPROFILE: claudeCliHome,
+    GSD_HOME: claudeCliHome,
     CLAUDE_CONFIG_DIR: path.join(claudeCliHome, '.claude'),
   });
 
@@ -1298,7 +1299,7 @@ describe('H: skills surface projection (#1596)', () => {
   test('#4860: the Claude Code loader registers each workflow exactly once (opportunistic — skip when claude is not on PATH)', (t) => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4860-home-'));
     t.after(() => cleanup(home));
-    const env = { ...process.env, ...TEST_ENV_BASE, HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: path.join(home, '.claude') };
+    const env = { ...process.env, ...TEST_ENV_BASE, HOME: home, USERPROFILE: home, GSD_HOME: home, CLAUDE_CONFIG_DIR: path.join(home, '.claude') };
     const probe = spawnSync('claude', ['--version'], { encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS, env });
     if (probe.error || probe.status !== 0) { t.skip('claude CLI not on PATH'); return; }
     const res = spawnSync('claude', ['--plugin-dir', ROOT, 'plugin', 'details', 'gsd-core'], {

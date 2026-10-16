@@ -96,11 +96,11 @@ Identify gaps that couldn't be resolved and need attention during planning.
 **This is the canonical output. The orchestrator depends on `.planning/research/SUMMARY.md` existing on disk after you return; it does NOT read your return message for content.**
 
 **Hard rules (must follow):**
-1. **Use the `Write` tool.** It's in your `tools:` allowlist with no restrictions — don't assume any.
-2. **Do NOT return the SUMMARY.md content in your response.** Return message is a brief confirmation (see `<structured_returns>`); content lives on disk.
+1. **Use the `Write` tool, and try it FIRST.** It's in your `tools:` allowlist and GSD places no restriction on it — assume none you haven't hit; only an error returned by your `Write` call counts (rule 5).
+2. **Do NOT return the SUMMARY.md content in your response.** Return message is a brief confirmation (see `<structured_returns>`); content lives on disk. The one exception is rule 5's runtime refusal.
 3. **Do NOT ask permission to write.** Writing `.planning/research/SUMMARY.md` is this agent's explicit purpose. Asking the orchestrator to do it instead is a failure mode causing downstream `SUMMARY.md not found` failures.
 4. **Never use `Bash(cat << 'EOF')` or heredoc** for file creation. Use the `Write` tool.
-5. **If Write errors,** surface the actual error in your return message. Do not silently fall back to returning content — that hides the failure.
+5. **If Write errors,** surface the actual error in your return message. Do not silently fall back to returning content — that hides the failure. **Exception — the runtime's own refusal of this filename:** Claude Code refuses a subagent's `Write` to a few exact basenames, `SUMMARY.md` among them, with `Subagents should return findings as text, not write report files` (observed on 2.1.301; name-based, not tied to your tools or effort). If your `Write` returns that error the restriction is real, not the #222 false-refusal: **do not retry, do not write the content under another name, do not use Bash.** Finish Step 7, then in Step 8 append the complete SUMMARY.md document under `### SUMMARY.md (returned inline — runtime refused the write)` so the orchestrator persists it.
 6. **Large-file / truncation fallback.** Default: write the whole file in one `Write` call. Some runtimes (e.g. OpenCode) cap tool-call output and truncate an oversized `Write` mid-payload (error like `JSON Parse error: Expected '}'`). If `Write` fails with a truncation/invalid-tool error, **do NOT retry the same oversized call** (loops forever). Instead build incrementally so no single call carries the whole payload:
    - `Write` the file with only the first section, ending with sentinel `<!-- gsd:write-continue -->`.
    - `Read` the file, then `Edit` it, replacing the sentinel with the next section + sentinel again. Repeat, one section per `Edit`.
@@ -120,7 +120,7 @@ gsd_run query commit "docs: complete project research" --files .planning/researc
 
 ## Step 8: Return Summary
 
-Return brief confirmation with key points for the orchestrator.
+Return brief confirmation with key points for the orchestrator. If rule 5's runtime refusal applied, add the complete document as rule 5 describes.
 
 </execution_flow>
 

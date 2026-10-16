@@ -4995,3 +4995,94 @@ describe('C1 (ADR-4629 §8.1): StateWriteIntent type surface', () => {
     }
   });
 });
+
+// ----------------------------------------------------------------------------
+// #4945 — a wrapped **Current focus:** value is replaced whole
+// ----------------------------------------------------------------------------
+
+const { splitLines: splitLines4945 } = require('../gsd-core/bin/lib/text-lines.cjs');
+const clock4945 = Object.freeze({
+  today: () => '2026-10-15',
+  localToday: () => '2026-10-15',
+  nowIso: () => '2026-10-15T12:00:00.000Z',
+});
+
+const beginPhase4945 = (content, extra = {}) =>
+  transitionCore(
+    content,
+    { kind: 'beginPhase', phaseNumber: 49, phaseName: 'Next Phase', planCount: 3, ...extra },
+    { clock: clock4945, sourcePath: '.planning/STATE.md' },
+  ).content;
+
+const state4945 = (focusBlock) => `# Project State
+
+**Current Phase:** 48
+**Status:** Verifying
+${focusBlock}
+
+## Current Position
+Phase: 48 (Old) — VERIFYING
+Plan: 17 of 17 in current phase
+Status: Verifying
+Last activity: 2026-10-01 -- done
+`;
+
+describe('#4945 multiline **Current focus:** is replaced whole', () => {
+  test('a value wrapped onto a second line leaves no orphaned tail', () => {
+    const out = beginPhase4945(state4945(
+      '**Current focus:** Phase 48 — Survivable State Writes and\nHonest Gate Recovery), executing 17 plans across 11 waves.',
+    ));
+    const lines = splitLines4945(out);
+    const at = lines.findIndex((l) => l.startsWith('**Current focus:**'));
+    assert.equal(lines[at], '**Current focus:** Phase 49 — Next Phase');
+    assert.equal(lines[at + 1], '', 'the line after the new focus is the blank separator, not the old tail');
+    assert.doesNotMatch(out, /Honest Gate Recovery/);
+    assert.doesNotMatch(out, /across 11 waves/);
+  });
+
+  test('a value wrapped onto three lines is replaced whole', () => {
+    const out = beginPhase4945(state4945('**Current focus:** one\ntwo\nthree'));
+    assert.doesNotMatch(out, /\btwo\b|\bthree\b/);
+    assert.match(out, /\*\*Current focus:\*\* Phase 49 — Next Phase\n\n## Current Position/);
+  });
+
+  test('CONTROL: a single-line focus is replaced exactly as before', () => {
+    const out = beginPhase4945(state4945('**Current focus:** Phase 48 — Old'));
+    assert.match(out, /\*\*Current focus:\*\* Phase 49 — Next Phase\n\n## Current Position/);
+  });
+
+  test('CONTROL: a sibling field directly below is not part of the value', () => {
+    const out = beginPhase4945(state4945('**Current focus:** Phase 48 — Old\n**Next step:** run the verifier'));
+    assert.match(out, /\*\*Current focus:\*\* Phase 49 — Next Phase\n\*\*Next step:\*\* run the verifier/);
+  });
+
+  test('CONTROL: prose after a blank line is not part of the value', () => {
+    const out = beginPhase4945(state4945('**Current focus:** Phase 48 — Old\n\nA note the author wrote.'));
+    assert.match(out, /\*\*Current focus:\*\* Phase 49 — Next Phase\n\nA note the author wrote\./);
+  });
+
+  test('CONTROL: a heading directly below is not part of the value', () => {
+    const out = beginPhase4945(state4945('**Current focus:** Phase 48 — Old\n### Notes\ntext'));
+    assert.match(out, /\*\*Current focus:\*\* Phase 49 — Next Phase\n### Notes\ntext/);
+  });
+
+  test('a wrapped value in a CRLF document is replaced whole and keeps its CRLF endings', () => {
+    const crlf = state4945('**Current focus:** Phase 48 — Old and\nwrapped tail').replace(/\n/g, '\r\n');
+    const out = beginPhase4945(crlf);
+    assert.doesNotMatch(out, /wrapped tail/);
+    assert.match(out, /\*\*Current focus:\*\* Phase 49 — Next Phase\r\n\r\n## Current Position/);
+    assert.doesNotMatch(out.replace(/\r\n/g, ''), /[\r\n]/);
+  });
+
+  test('CONTROL: an empty first line has no value to continue, so the line below is kept', () => {
+    const out = beginPhase4945(state4945('**Current focus:**\nA note the author wrote directly below.'));
+    assert.match(out, /\*\*Current focus:\*\*\s?Phase 49 — Next Phase\nA note the author wrote directly below\./);
+  });
+
+  test('CONTROL: a mid-sentence mention is still not matched (#4469)', () => {
+    const body = state4945('') + '\n- decided about **Current focus:** wording earlier\n';
+    const out = beginPhase4945(body);
+    assert.match(out, /- decided about \*\*Current focus:\*\* wording earlier/);
+  });
+});
+
