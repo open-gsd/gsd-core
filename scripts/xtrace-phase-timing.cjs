@@ -32,11 +32,27 @@ function stampPs4(timestampCommand, nonce) {
  * The PS4 must reach bash as an in-shell ASSIGNMENT, not as an inherited
  * environment variable: bash 5.x does not run the command substitution in a PS4
  * it imported from the environment, so an exported PS4 silently degrades to a
- * plain `+ `. Hand this file to bash as BASH_ENV (sourced at startup, so the
- * assignment is expanded normally on 3.2 and 5.x alike), alongside `bash -x`.
+ * plain `+ `. It cannot ride on a startup file either (BASH_ENV): bash reads
+ * the system bashrc INSTEAD of BASH_ENV in some environments (it did in the
+ * gsd-test tester container), and the trace falls back to `+ ` with no error.
+ *
+ * So the script runs inside a `bash -c` whose prologue assigns PS4, turns on
+ * xtrace and SOURCES the script. `$0` is the script path, so `dirname "$0"` and
+ * `exit` behave exactly as when it is run directly. The one visible difference:
+ * the sourced file's top level reports FUNCNAME `source`, which the parser
+ * folds to "no function".
  */
-function ps4AssignmentFile(ps4) {
-  return `PS4='${String(ps4).replace(/'/g, "'\\''")}'\n`;
+const PS4_ENV_VAR = 'GSD_XTRACE_PS4';
+const TRACE_PROLOGUE = `PS4="$${PS4_ENV_VAR}"; set -x; . "$0"`;
+
+/** argv (after the bash binary) that runs `script` (an absolute path) traced. */
+function tracedBashArgs(script) {
+  return ['-c', TRACE_PROLOGUE, script];
+}
+
+/** `base` plus the PS4 handed to the prologue. */
+function traceEnv(base, ps4) {
+  return { ...base, [PS4_ENV_VAR]: ps4 };
 }
 
 const STAMP_TAIL = /^(\d+)@@(\d+)@@([^@]*)@@ ?/;
@@ -65,7 +81,8 @@ function parseTimedXtrace(text, nonce) {
         t: Number(tail[1]),
         line: Number(tail[2]),
         depth,
-        fn: tail[3],
+        // `source` is the sourced script's own top level, not a function (see tracedBashArgs).
+        fn: tail[3] === 'source' ? '' : tail[3],
         cmd: raw.slice(depth + head.length + tail[0].length),
       });
     } else if (entries.length > 0) {
@@ -73,6 +90,15 @@ function parseTimedXtrace(text, nonce) {
     }
   }
   return entries;
+}
+
+/**
+ * parseTimedXtrace for a run made with tracedBashArgs: depth 1 is the prologue's
+ * own `. script` (its line number belongs to the `-c` string, not the script),
+ * so only deeper entries are the script's commands.
+ */
+function parseTracedScript(text, nonce) {
+  return parseTimedXtrace(text, nonce).filter((e) => e.depth > 1);
 }
 
 /**
@@ -121,4 +147,4 @@ function abbreviate(cmd, max = 100) {
   return flat.length <= max ? flat : `${flat.slice(0, max)}… (${flat.length} chars)`;
 }
 
-module.exports = { stampPs4, ps4AssignmentFile, parseTimedXtrace, phaseCosts, slowestLines, abbreviate };
+module.exports = { stampPs4, tracedBashArgs, traceEnv, parseTimedXtrace, parseTracedScript, phaseCosts, slowestLines, abbreviate };

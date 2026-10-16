@@ -19,8 +19,10 @@ const { cleanup } = require('./helpers.cjs');
 
 const {
   stampPs4,
-  ps4AssignmentFile,
+  tracedBashArgs,
+  traceEnv,
   parseTimedXtrace,
+  parseTracedScript,
   phaseCosts,
   slowestLines,
   abbreviate,
@@ -43,6 +45,12 @@ describe('parseTimedXtrace', () => {
       { t: 1000, line: 12, depth: 1, fn: '', cmd: 'CMD=x' },
       { t: 1005, line: 13, depth: 2, fn: 'cleanup', cmd: 'node -e y' },
     ]);
+  });
+
+  test('FUNCNAME `source` (a sourced script\'s own top level) is not a function', () => {
+    const [top, inFn] = parseTimedXtrace([stamp(1, 1, 2, 'a=1', 'source'), stamp(1, 2, 3, 'b=2', 'f')].join('\n'), NONCE);
+    assert.equal(top.fn, '');
+    assert.equal(inFn.fn, 'f');
   });
 
   test('depth boundary: 1 mark, 2 marks, 7 marks', () => {
@@ -82,11 +90,26 @@ describe('parseTimedXtrace', () => {
   });
 });
 
-describe('ps4AssignmentFile', () => {
-  test('is a single-quoted assignment, and an embedded single quote is closed, escaped and reopened', () => {
-    assert.equal(ps4AssignmentFile('+ x'), "PS4='+ x'\n");
-    assert.equal(ps4AssignmentFile("a'b"), "PS4='a'\\''b'\n");
-    assert.equal(ps4AssignmentFile(''), "PS4=''\n");
+describe('parseTracedScript', () => {
+  test('drops the depth-1 prologue entry and keeps the script commands (depth > 1)', () => {
+    const text = [stamp(1, 0, 0, '. /x/hook.sh'), stamp(2, 5, 1, 'a=1'), stamp(3, 6, 2, 'sub')].join('\n');
+    assert.deepEqual(parseTracedScript(text, NONCE).map((e) => e.cmd), ['a=1', 'sub']);
+    assert.equal(parseTimedXtrace(text, NONCE).length, 3);
+  });
+});
+
+describe('tracedBashArgs / traceEnv', () => {
+  test('the script is $0 and the PS4 is assigned in-shell from the environment', () => {
+    const args = tracedBashArgs('/abs/hook.sh');
+    assert.equal(args[0], '-c');
+    assert.equal(args[2], '/abs/hook.sh');
+    assert.match(args[1], /^PS4="\$GSD_XTRACE_PS4"; set -x; \. "\$0"$/);
+  });
+
+  test('traceEnv adds only the PS4 variable and does not mutate its input', () => {
+    const base = { PATH: '/bin', BASH_ENV: '/etc/other' };
+    assert.deepEqual(traceEnv(base, '+@@x@@'), { PATH: '/bin', BASH_ENV: '/etc/other', GSD_XTRACE_PS4: '+@@x@@' });
+    assert.deepEqual(base, { PATH: '/bin', BASH_ENV: '/etc/other' });
   });
 });
 
@@ -97,18 +120,17 @@ describe('the PS4 against a real bash', () => {
     && spawnSync('perl', ['-e', '1'], { timeout: BASH_PROBE_BOUND_MS }).status === 0;
 
   test('stamps parse, timestamps never go backwards, and lines/functions are attributed', { skip: !probe && 'needs /bin/bash and perl' }, () => {
-    const script = ['a=1', 'b=2', 'f() {', '  c=3', '}', 'f'].join('\n');
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-xtrace-ps4-'));
-    const ps4File = path.join(dir, 'ps4.sh');
-    fs.writeFileSync(ps4File, ps4AssignmentFile(stampPs4(STAMP_COMMAND, NONCE)));
-    const r = spawnSync(BASH, ['-x', '-c', script], {
-      env: { ...process.env, BASH_ENV: ps4File },
+    const scriptFile = path.join(dir, 'probe.sh');
+    fs.writeFileSync(scriptFile, ['a=1', 'b=2', 'f() {', '  c=3', '}', 'f', ''].join('\n'));
+    const r = spawnSync(BASH, tracedBashArgs(scriptFile), {
+      env: traceEnv(process.env, stampPs4(STAMP_COMMAND, NONCE)),
       encoding: 'utf8',
       timeout: BASH_PROBE_BOUND_MS,
     });
     cleanup(dir);
     assert.equal(r.status, 0, r.stderr);
-    const entries = parseTimedXtrace(r.stderr, NONCE);
+    const entries = parseTracedScript(r.stderr, NONCE);
     const byCmd = Object.fromEntries(entries.map((e) => [e.cmd, e]));
     const seen = `entries=${JSON.stringify(entries.map((e) => e.cmd))} stderr=${JSON.stringify(r.stderr.slice(0, 600))}`;
     for (const cmd of ['a=1', 'b=2', 'c=3']) assert.ok(byCmd[cmd], `no stamped entry for ${cmd}: ${seen}`);

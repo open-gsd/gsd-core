@@ -41,8 +41,9 @@ const { spawn, spawnSync } = require('node:child_process');
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 const {
   stampPs4,
-  ps4AssignmentFile,
-  parseTimedXtrace,
+  tracedBashArgs,
+  traceEnv,
+  parseTracedScript,
   phaseCosts,
   slowestLines,
   abbreviate,
@@ -112,22 +113,21 @@ function makeProject() {
   return dir;
 }
 
-// `ps4File` is a BASH_ENV file (see ps4AssignmentFile): bash 5.x ignores the
-// command substitution in an exported PS4, so the stamp is assigned in-shell.
-function hookEnv(ps4File) {
+// A traced run installs the stamp with an in-shell PS4 assignment (see
+// tracedBashArgs): bash 5.x ignores the command substitution in an exported PS4.
+function hookEnv(ps4) {
   const env = {
     ...process.env,
     PATH: `${path.dirname(process.execPath)}:${process.env.PATH || '/usr/bin:/bin'}`,
   };
-  if (ps4File) env.BASH_ENV = ps4File;
-  return env;
+  return ps4 ? traceEnv(env, ps4) : env;
 }
 
-function runHook(project, command, ps4File) {
+function runHook(project, command, ps4) {
   const started = process.hrtime.bigint();
-  const r = spawnSync(BASH, ps4File ? ['-x', HOOK] : [HOOK], {
+  const r = spawnSync(BASH, ps4 ? tracedBashArgs(HOOK) : [HOOK], {
     cwd: project,
-    env: hookEnv(ps4File),
+    env: hookEnv(ps4),
     input: JSON.stringify({ tool_input: { command } }),
     encoding: 'utf8',
     timeout: HOOK_BOUND_MS,
@@ -145,15 +145,14 @@ function runHook(project, command, ps4File) {
 }
 
 /** Cost of one stamp: a run of no-op commands under the same PS4. */
-function calibrateStampMs(ps4File, nonce) {
-  const script = Array.from({ length: CALIBRATION_COMMANDS }, () => ':').join('\n');
-  const r = spawnSync(BASH, ['-x', '-c', script], {
-    env: hookEnv(ps4File),
+function calibrateStampMs(ps4, nonce, noopScript) {
+  const r = spawnSync(BASH, tracedBashArgs(noopScript), {
+    env: hookEnv(ps4),
     encoding: 'utf8',
     timeout: PROBE_BOUND_MS,
     killSignal: 'SIGKILL',
   });
-  const { totalMs } = phaseCosts(parseTimedXtrace(r.stderr || '', nonce));
+  const { totalMs } = phaseCosts(parseTracedScript(r.stderr || '', nonce));
   return totalMs / CALIBRATION_COMMANDS;
 }
 
@@ -188,9 +187,10 @@ function report(opts) {
   const project = makeProject();
   const source = fs.readFileSync(HOOK, 'utf8').split('\n');
   const nonce = crypto.randomBytes(6).toString('hex');
-  const ps4File = path.join(project, '.ps4.sh');
-  fs.writeFileSync(ps4File, ps4AssignmentFile(stampPs4(STAMP_COMMAND, nonce)));
-  const stampMs = calibrateStampMs(ps4File, nonce);
+  const ps4 = stampPs4(STAMP_COMMAND, nonce);
+  const noopScript = path.join(project, 'noop.sh');
+  fs.writeFileSync(noopScript, `${Array.from({ length: CALIBRATION_COMMANDS }, () => ':').join('\n')}\n`);
+  const stampMs = calibrateStampMs(ps4, nonce, noopScript);
   const out = [];
   out.push('# validate-commit phase timing (#5473)', '');
   out.push(`- shell: \`${BASH}\` (${bashVersionLine()})`);
@@ -208,8 +208,8 @@ function report(opts) {
         walls.push(last.wallMs);
       }
       walls.sort((a, b) => a - b);
-      const traced = runHook(project, scenario.command, ps4File);
-      const { costs, totalMs } = phaseCosts(parseTimedXtrace(traced.stderr, nonce));
+      const traced = runHook(project, scenario.command, ps4);
+      const { costs, totalMs } = phaseCosts(parseTracedScript(traced.stderr, nonce));
       out.push(`## ${scenario.name}`, '');
       out.push(
         `untraced wall ms (${UNTRACED_RUNS} runs): min ${walls[0]} / median ${median(walls)} / max ${walls[walls.length - 1]}` +
