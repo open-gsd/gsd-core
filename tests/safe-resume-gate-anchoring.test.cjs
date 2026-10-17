@@ -151,7 +151,9 @@ describe('#4379 — the TDD RED pathspec is language-agnostic', () => {
       'tests/c.py', '__tests__/d.js',           // directory conventions
       'test_mod.py', 'mod_test.py',             // Python, outside tests/
       'lib_spec.rb', 'x_test.exs',              // Ruby, Elixir
+      'crates/core/tests/scan_test.rs', 'src/__tests__/util.js', 'pkg/api/test_x.py', // nested (#5181)
       'src/impl.go', 'src/lib.rs',              // NOT tests — must never match
+      'crates/core/src/scan.rs', 'src/test_utils/factory.py',                // NOT a test, nested (#5181)
     ];
     for (const rel of files) {
       const abs = path.join(dir, rel);
@@ -188,6 +190,19 @@ describe('#4379 — the TDD RED pathspec is language-agnostic', () => {
     const hits = matched(dir, shippedRedPathspec());
     assert.ok(hits.has('root.test.js'), 'a root-level .test.js must match');
     assert.ok(hits.has('foo_test.go'), 'a root-level _test.go must match');
+  });
+
+  test('nested tests/, __tests__/ and test_*.py match at any depth (#5181)', (t) => {
+    // git anchors a pathspec containing a slash to the repo root, so `tests/` alone
+    // misses `crates/core/tests/…`.
+    const dir = seedRepo(t);
+    const hits = matched(dir, shippedRedPathspec());
+    for (const rel of ['crates/core/tests/scan_test.rs', 'src/__tests__/util.js', 'pkg/api/test_x.py']) {
+      assert.ok(hits.has(rel), `${rel} must match`);
+    }
+    for (const rel of ['crates/core/src/scan.rs', 'src/test_utils/factory.py']) {
+      assert.ok(!hits.has(rel), `${rel} must NOT match`);
+    }
   });
 
   test('the existing JS/TS conventions still match (no regression)', (t) => {
