@@ -2030,13 +2030,14 @@ describe('regressions: workflows forward the started workstream to agent-skills 
   const WORKFLOWS_DIR = path.join(REPO_ROOT, 'gsd-core', 'workflows');
   const EXTRA_FILES = [path.join(REPO_ROOT, 'gsd-core', 'references', 'autonomous-smart-discuss.md')];
 
-  // The single parse idiom every workflow fence uses. Always ASSIGNS (an empty
+  // The single parse idiom every workflow fence uses (the typed text is read from
+  // the capture variable GSD_ARGS, never spliced into the shell, #5143). Always ASSIGNS (an empty
   // result clears a stale value) and needs no file, so concurrent sessions in
   // one checkout cannot cross-read each other's workstream. (new-milestone.md
   // predates this and keeps its own persisted GSD_WS_ARG file; its calls are
   // held to the same forwarding rule through the `viaFile` branch below.)
   const CANONICAL_PARSE =
-    'GSD_WS=$(echo " $ARGUMENTS" | sed -nE \'s/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \\1/p\' | head -n 1)';
+    'GSD_WS=$(echo " $GSD_ARGS" | sed -nE \'s/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \\1/p\' | head -n 1)';
   // The single-token call-site expansion: `--ws=<name>` or nothing. One token
   // is what makes it safe under zsh, which does not word-split `$GSD_WS`.
   const FLAG_EXPANSION = '${GSD_WS:+--ws=${GSD_WS##* }}';
@@ -2131,7 +2132,7 @@ describe('regressions: workflows forward the started workstream to agent-skills 
     const variants = new Map();
     for (const file of corpus) {
       for (const line of splitLines(fs.readFileSync(file, 'utf-8'))) {
-        if (line.startsWith('GSD_WS=$(echo " $ARGUMENTS"')) {
+        if (line.startsWith('GSD_WS=$(echo " $GSD_ARGS"')) {
           // A trailing ` # ...` note is allowed (Read-loaded files, and disjointness from their spine).
           const key = line.replace(/ # .*$/, '');
           variants.set(key, (variants.get(key) || []).concat(path.relative(REPO_ROOT, file)));
@@ -2157,14 +2158,14 @@ describe('regressions: workflows forward the started workstream to agent-skills 
     for (const name of ['a', 'ws-a', 'backend_api', 'v1.2', 'A9']) {
       assert.ok(validateWorkstreamName(name), `${name} is valid under the policy`);
       const r = spawnSync('bash', ['-c', `${CANONICAL_PARSE}\nprintf '%s' "$GSD_WS"`], {
-        env: { ...process.env, ARGUMENTS: `1 --ws ${name}` }, encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS,
+        env: { ...process.env, GSD_ARGS: `1 --ws ${name}` }, encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS,
       });
       assert.strictEqual(r.stdout, `--ws ${name}`);
     }
     for (const name of ['-x', '.x', '_x']) {
       assert.ok(!validateWorkstreamName(name), `${name} is invalid under the policy`);
       const r = spawnSync('bash', ['-c', `${CANONICAL_PARSE}\nprintf '%s' "$GSD_WS"`], {
-        env: { ...process.env, ARGUMENTS: `1 --ws ${name}` }, encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS,
+        env: { ...process.env, GSD_ARGS: `1 --ws ${name}` }, encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS,
       });
       assert.strictEqual(r.stdout, '', `${name} must not be captured`);
     }
@@ -2178,7 +2179,7 @@ describe('regressions: workflows forward the started workstream to agent-skills 
       function expand(argumentsValue) {
         const script = `${CANONICAL_PARSE}\nset -- ${FLAG_EXPANSION}\nprintf '%s|%s' "$#" "$*"`;
         const r = spawnSync(sh, ['-c', script], {
-          env: { ...process.env, ARGUMENTS: argumentsValue },
+          env: { ...process.env, GSD_ARGS: argumentsValue },
           encoding: 'utf-8',
           timeout: PROBE_TIMEOUT_MS,
         });
@@ -2235,7 +2236,7 @@ describe('regressions: workflows forward the started workstream to agent-skills 
     function exec(sh, { script, argumentsValue }, printVars) {
       const r = spawnSync(sh, ['-c', `${script}\n${printVars}`], {
         cwd: proj,
-        env: { ...process.env, ...TEST_ENV_BASE, GSD_WORKSTREAM: '', ARGUMENTS: argumentsValue, HOME: proj, USERPROFILE: proj, GSD_HOME: proj },
+        env: { ...process.env, ...TEST_ENV_BASE, GSD_WORKSTREAM: '', GSD_ARGS: argumentsValue, HOME: proj, USERPROFILE: proj, GSD_HOME: proj },
         encoding: 'utf-8',
         timeout: PROBE_TIMEOUT_MS * 4,
       });
@@ -2276,7 +2277,7 @@ describe('regressions: workflows forward the started workstream to agent-skills 
       const fence = buildFenceScript('plan-phase.md', /^AGENT_SKILLS_PLANNER=/, '1 --ws none');
       const r = spawnSync('bash', ['-c', `${fence.script}\nprintf "%s" "$AGENT_SKILLS_PLANNER"`], {
         cwd: proj,
-        env: { ...process.env, ...TEST_ENV_BASE, GSD_WORKSTREAM: '', ARGUMENTS: fence.argumentsValue, HOME: proj, USERPROFILE: proj, GSD_HOME: proj },
+        env: { ...process.env, ...TEST_ENV_BASE, GSD_WORKSTREAM: '', GSD_ARGS: fence.argumentsValue, HOME: proj, USERPROFILE: proj, GSD_HOME: proj },
         encoding: 'utf-8',
         timeout: PROBE_TIMEOUT_MS * 4,
       });
