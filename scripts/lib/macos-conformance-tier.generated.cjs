@@ -46,6 +46,7 @@ module.exports = {
   "tests/codex-config-hooks.test.cjs",
   "tests/codex-config-install.test.cjs",
   "tests/codex-config.test.cjs",
+  "tests/command-arguments-block.test.cjs",
   "tests/commands.platform.test.cjs",
   "tests/commit-docs-bypass.test.cjs",
   "tests/commit-files-deletion.test.cjs",
