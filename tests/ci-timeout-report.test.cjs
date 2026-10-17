@@ -373,6 +373,9 @@ const {
 // layout test.yml declares".
 const THREE_SHARD_CONFIG = Object.freeze({
   ...SHARD_BALANCE,
+  // #5101's own gap limit, pinned here because the live one is sized for six
+  // shards (#5029); the 120000/120001 boundary tests below are about this one.
+  maxMedianGapMs: 120000,
   baselineShardTotal: 3,
   baselineP90Ms: Object.freeze({ '1/3': 1824000, '2/3': 2046000, '3/3': 2208000 }),
 });
@@ -891,4 +894,33 @@ test('SHARD_BALANCE matches the windows shard layout test.yml declares (#5029)',
       `baselineP90Ms['${key}'] must be a positive integer (milliseconds), got ${baseline}`,
     );
   }
+});
+
+// #5029: the live gap limit is sized for six ~12-min shards (see the
+// SHARD_BALANCE comment for its measured basis). Boundary-tested against the
+// live config with a 6-shard fixture: the gap exactly at the limit is ok, one
+// millisecond over is a breach. Fixture values are derived from the config
+// (the slow shard is the one with the largest p90 baseline, and every shard
+// stays at or under its baseline) so a re-measured config keeps this test
+// meaningful instead of breaking it.
+test('the live gap limit holds at its boundary on the declared shard layout (#5029)', () => {
+  const total = SHARD_BALANCE.baselineShardTotal;
+  const limit = SHARD_BALANCE.maxMedianGapMs;
+  const keys = Array.from({ length: total }, (_, i) => `${i + 1}/${total}`);
+  const baselines = keys.map((k) => SHARD_BALANCE.baselineP90Ms[k]);
+  const slowIdx = baselines.indexOf(Math.max(...baselines));
+  const base = baselines[slowIdx] - limit - 1;
+  assert.ok(
+    base > 0 && baselines.every((b) => b >= base),
+    `fixture precondition: every baseline must admit ${base} and the slowest must admit ${base + limit + 1}`,
+  );
+
+  const runsWithGap = (gap) => constantRuns(10, keys.map((_, i) => (i === slowIdx ? base + gap : base)));
+  const atLimit = evaluateShardBalance(extractShardSamples(runsWithGap(limit), SHARD_BALANCE), SHARD_BALANCE);
+  assert.equal(atLimit.status, 'ok');
+  assert.equal(atLimit.gapMs, limit);
+
+  const overLimit = evaluateShardBalance(extractShardSamples(runsWithGap(limit + 1), SHARD_BALANCE), SHARD_BALANCE);
+  assert.equal(overLimit.status, 'breach');
+  assert.deepEqual(overLimit.breaches.map((b) => [b.kind, b.slowest]), [['gap', keys[slowIdx]]]);
 });

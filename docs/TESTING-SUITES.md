@@ -645,22 +645,20 @@ retired the parallel legacy full-matrix safety-net job). It
 also declares a `timeout-minutes` cap and runs the same in-job near-cap check
 described below. Since #5029 it **is** covered by the headroom-factor gate. One
 cap covers every matrix row, so its `LANE_COSTS` entry is the slowest row,
-windows or macOS shard: **20 minutes**, from the worst windows long pole across
-twelve 6-shard runs (19m15s, shard 5/6, run 38650210804), so the cap may not drop
-below 30m. macOS was split because unsharded it ran 18–27m on normal runners
-but 39m43s on a slow one (run 37086102648); by the gate's convention that
-counts, and m=40 requires 60m, over the 45m cap. Split three ways its shards
-ran 8m42s / 7m48s / 10m09s (run 37694227292). It had been uncovered since
-#4591, which is how it drifted to a 34m long pole against a 45m cap and began
-cancelling shards whose every chunk passed (#4935).
+windows or macOS shard. That entry, in
+`tests/ci-test-job-timeout-budget.test.cjs`, is the one place the lane's
+measurements are recorded: the long pole per layout, why Windows is split six
+ways and macOS three (a slow macOS runner took the unsharded row past what the
+gate admits), and the figure the cap may not drop below. It had been uncovered
+since #4591, which is how it drifted to a 34m long pole against a 45m cap and
+began cancelling shards whose every chunk passed (#4935).
 
-Measured long poles behind the six-way split: 34m24s at 3 shards (runs
-36322513056, 36357457440) and 30m17s at 4 (run 36349891343), requiring 53m and
-47m against the 45m cap. Note #5071 → #5097 has since priced win32 files by
-win32 measurements, collapsing shard imbalance to 1.01–1.02; if this lane is
-resharded downward on the strength of that, re-measure the windows long pole
-from the new run and set the entry from the slowest row — never scale the
-existing figure.
+#5071 → #5097 has since priced win32 files by win32 measurements. If this lane
+is resharded on the strength of that, re-measure from the new runs and set the
+entry from the slowest row; never scale the existing figure. The per-shard
+balance check (`SHARD_BALANCE`, see
+[Read CI timeout signals](how-to/read-ci-timeout-signals.md)) must then be
+re-baselined too; a test fails until it is.
 
 **`.platform.test.cjs` siblings (#5074).** The tier selects whole files, so a large file whose
 platform signal sits in a few tests can be split: those tests move to

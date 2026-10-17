@@ -142,9 +142,10 @@ const LANE_COSTS = [
     // cap may not drop below 30m.
     //
     // macOS was the slowest row until #5029 sharded it too. Unsharded it ran
-    // 18m13s-26m01s across six runs on this PR, 26m58s on run 34434252144 —
-    // and 39m43s on run 37086102648, a slow runner (every chunk 1.1-2.1x
-    // slower on the same 228-file tier). By this file's convention that
+    // 18m13s-26m01s across six runs on this PR (repo-wide p90 26.0m over 43
+    // runs, 09-30..10-04, tests/ci-timeout-budget-history.jsonl), 26m58s on
+    // run 34434252144 — and 39m43s on run 37086102648, a slow runner (every
+    // chunk 1.1-2.1x slower on the same 228-file tier). By this file's convention that
     // observation counts: m=40 requires 60m, over the 45m cap, so the row was
     // split three ways rather than the observation excluded. First 3-shard
     // run (37694227292): 8m42s / 7m48s / 10m09s. Even at that slow runner's
@@ -153,14 +154,19 @@ const LANE_COSTS = [
     // ever outruns windows, it sets this entry — re-measured, never scaled.
     //
     // Why six shards and not fewer, in budget terms: measured windows long
-    // poles were 34m24s at 3 shards (run 36322513056) and 30m17s at 4 (run
-    // 36349891343), requiring 53m and 47m against a 45m cap. Raising the cap
+    // poles were 34m24s and 34m14s at 3 shards (runs 36322513056, 36357457440)
+    // and 30m17s at 4 (run 36349891343), requiring 53m and 47m against a 45m
+    // cap. Raising the cap
     // was ruled out by #5029 — ADR-4641 records 45m as the cliff #869 and #3057
     // were filed about — so the split moved instead. #5071 -> #5097 has since
     // priced Windows files by Windows measurements, which collapsed shard
     // imbalance to 1.01-1.02; if this lane is ever resharded downward on the
     // strength of that, re-measure the windows long pole from that run and
     // set this entry from the slowest row, rather than scaling a figure.
+    //
+    // This comment is the one record of these long poles (test.yml and
+    // the TESTING-SUITES doc point here). Per-shard medians, p90s and the
+    // shard-balance gap live in SHARD_BALANCE in scripts/ci-timeout-report.cjs.
     evidence: 'run 38650210804 — windows shard 5/6 19m15s, worst of twelve 6-shard runs (binding row); macOS 3-shard long pole 10m09s on run 37694227292',
   },
 ];
