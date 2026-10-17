@@ -749,17 +749,19 @@ function phaseArtifactPaths(phaseDir: string, projectRoot: string): PhaseArtifac
  *                `.planning/<project>/workstreams/<ws>`), covering a
  *                per-project/per-workstream store symlink (amendment 1,
  *                revised R7).
+ *   v4 (#5351) — v3 with each CRLF byte pair hashed as LF. Every other
+ *                byte, including a lone CR and non-UTF-8 input, is preserved.
  *
  * A stored digest names its own version (`v<N>:sha256:…`), and
  * `readVerificationStatus` recomputes under the STORED version rather than
  * this constant — so bumping it does not flip every already-verified phase
- * to `stale` on upgrade. A legacy v1/v2 report keeps its own semantics
- * (shared documents included for v1; no report filter or artifact union for
- * either) until it is re-fingerprinted; only a version outside
+ * to `stale` on upgrade. A legacy v1/v2/v3 report keeps its own raw-byte
+ * semantics (shared documents included for v1; no report filter or artifact
+ * union for v1/v2) until it is re-fingerprinted; only a version outside
  * `KNOWN_FINGERPRINT_VERSIONS` is unrecomputable and fails closed.
  */
-const FINGERPRINT_VERSION = 3;
-const KNOWN_FINGERPRINT_VERSIONS: ReadonlySet<number> = new Set([1, 2, 3]);
+const FINGERPRINT_VERSION = 4;
+const KNOWN_FINGERPRINT_VERSIONS: ReadonlySet<number> = new Set([1, 2, 3, 4]);
 
 /**
  * #4623: the planning roots whose DIRECT children are repo-wide planning
@@ -1028,7 +1030,21 @@ function deriveCoveredDigest(
     } catch {
       return { ok: true, digest: null, files: declared, mappedPhaseDir: artifactMappedPhaseDir };
     }
-    const fileHash = crypto.createHash('sha256').update(bytes).digest('hex');
+    const hash = crypto.createHash('sha256');
+    if (version >= 4) {
+      // #5351: drop only the CR in each CRLF pair without decoding the
+      // covered input — binary files and lone CR bytes keep their meaning.
+      // Hash Buffer slices directly, retaining the LF at each new start.
+      let start = 0;
+      for (let crlf = bytes.indexOf('\r\n'); crlf !== -1; crlf = bytes.indexOf('\r\n', start)) {
+        hash.update(bytes.subarray(start, crlf));
+        start = crlf + 1;
+      }
+      hash.update(bytes.subarray(start));
+    } else {
+      hash.update(bytes);
+    }
+    const fileHash = hash.digest('hex');
     parts.push(`${rel}\n${fileHash}\n`);
     hashed++;
   }
@@ -1741,7 +1757,7 @@ interface VerificationStatusResult {
   /**
    * #4817: on a `stale` result for a legacy (v1/v2) report, the current phase plans/summaries the report
    * never declared in `covered_files` (phase-relative file names, sorted). Omitted when there are none, so
-   * "a covered file changed" and "an artifact was never covered" are distinguishable. v3 reports cannot
+   * "a covered file changed" and "an artifact was never covered" are distinguishable. v3+ reports cannot
    * reach this state: their digest includes the live artifacts.
    */
   uncovered_artifacts?: string[];
@@ -1956,11 +1972,11 @@ function readVerificationStatus(
     if (!hasWellFormedFingerprint || storedVersion === null) {
       isStale = true;
     } else if (storedVersion >= 3) {
-      // #5095 (R1): v3's digest is computed over the declared set UNIONED
+      // #5095 (R1): the v3+ digest is computed over the declared set UNIONED
       // with the phase's own live artifacts — a plan/summary added after
       // fingerprinting already moves the digest itself, so the separate
       // live-directory re-scan (`uncoveredCurrentArtifacts`) is redundant
-      // for v3 and is not run.
+      // for v3+ and is not run.
       isStale =
         computeCoveredDigest(projectRoot, coveredFilesVal, storedVersion, { phaseDir }) !== coveredDigestVal;
       if (isStale) {
@@ -2299,7 +2315,7 @@ function parseFingerprintFileArgs(tokens: readonly string[]): { files: string[] 
  *                       directly assignable. #5095 (ADR-5057 Phase 2): `raw`
  *                       returning only the digest is safe even though the
  *                       emitted `covered_files` is a SUPERSET of the caller's
- *                       declared list — the v3 digest is computed over
+ *                       declared list — the v3+ digest is computed over
  *                       `canonicalize(declared ∪ phaseArtifactPaths)` on BOTH
  *                       the emit side (here) and the check side
  *                       (`readVerificationStatus`), so a `--raw` caller that
