@@ -331,6 +331,5 @@ module.exports = {
   "tests/worktree-cleanup.test.cjs",
   "tests/worktree-safety.test.cjs",
   "tests/worktree.test.cjs",
-  "tests/xtrace-phase-timing.platform.test.cjs",
   ],
 };
