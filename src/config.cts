@@ -1024,6 +1024,9 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
   const VALID_CONTEXT_GUARD_MODES = ['auto', 'warn', 'off'];
   if (kp === 'workflow.context_guard_mode') assertEnumValue(parsedValue, val, VALID_CONTEXT_GUARD_MODES, 'workflow.context_guard_mode');
 
+  // #5328: warn|deny|false. The hook treats any other stored value as warn.
+  if (kp === 'hooks.agent_model_guard' && parsedValue !== false) assertEnumValue(parsedValue, val, ['warn', 'deny'], 'hooks.agent_model_guard');
+
   // Context position enum validation (#2937)
   const VALID_CONTEXT_POSITIONS = ['front', 'end'];
   if (kp === 'statusline.context_position') assertEnumValue(parsedValue, val, VALID_CONTEXT_POSITIONS, 'statusline.context_position');

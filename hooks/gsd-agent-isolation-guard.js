@@ -49,6 +49,10 @@
 // gated additionally by `workflow.use_worktrees` — read directly, in-process,
 // no subprocess spawn.
 //
+// #5328: also warns/denies (hooks.agent_model_guard) when the model passed for
+// gsd-executor/verifier/plan-checker/planner differs from the resolved one
+// (hooks/lib/agent-model-check.js); the isolation verdict always wins.
+//
 // Triggers on: Agent/Task tool calls with subagent_type === "gsd-executor"
 //   (both names accepted — #3045 MAJOR 1: only Agent was previously matched,
 //   silently inert on any host/version whose subagent tool is named Task).
@@ -74,6 +78,7 @@ const os = require('os');
 const { readSentinel, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch, buildSentinelDiscard } = require('./lib/isolation-sentinel.js');
 const { REASON_CODE, describeSentinelDiscard } = require('./lib/isolation-deny-reason.js');
 const { HOOK_ON_CRASH, allow, deny, crash } = require('./lib/hook-exit.js');
+const { checkAgentModel } = require('./lib/agent-model-check.js');
 
 // Required at module top, alongside the other ./lib requires — NOT behind
 // ensureRuntimeBuild() below. Terminating on a parse/timeout failure must
@@ -496,7 +501,7 @@ function resolveIsolationState(cwd, { clock = Date, dispatchIds = null } = {}) {
  *
  * Returns `{ action: 'allow' } | { action: 'block', reason: string }`.
  */
-function evaluateDispatch(data, { clock = Date } = {}) {
+function evaluateIsolation(data, { clock = Date } = {}) {
   if (!data || typeof data !== 'object') return { action: 'allow' };
   // #3045 MAJOR 1: accept both subagent-dispatch tool names. hooks.json's
   // matcher is "Agent|Task" (mirroring the repo's own PostToolUse
@@ -567,6 +572,17 @@ function evaluateDispatch(data, { clock = Date } = {}) {
   return { action: 'block', reason, reasonCode: REASON_CODE.HARNESS_FLAG_MISSING, sentinelDiscarded: state.sentinelDiscarded };
 }
 
+/**
+ * #5328: isolation verdict first (a block always wins), then the Agent-model
+ * check — warn/block on a model that differs from the resolved one.
+ */
+function evaluateDispatch(data, opts = {}) {
+  const iso = evaluateIsolation(data, opts);
+  if (iso.action === 'block') return iso;
+  const model = checkAgentModel(data, opts);
+  return model.action === 'allow' ? iso : { ...model, reasonCode: REASON_CODE.AGENT_MODEL_MISMATCH };
+}
+
 /* istanbul ignore next -- stdin adapter, exercised via spawnSync in tests */
 function main() {
   let input = '';
@@ -578,6 +594,14 @@ function main() {
     try {
       const data = JSON.parse(input);
       const decision = evaluateDispatch(data);
+      if (decision.action === 'warn') {
+        allow({
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            additionalContext: decision.reason,
+          },
+        });
+      }
       if (decision.action === 'block') {
         const out = {
           decision: 'block',

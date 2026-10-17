@@ -120,7 +120,9 @@ function agentPayload(overrides = {}) {
   return {
     hook_event_name: 'PreToolUse',
     tool_name: 'Agent',
-    tool_input: { subagent_type: 'gsd-executor', ...(overrides.tool_input || {}) },
+    // #5328: default `model` matches the executor's resolved default so the
+    // isolation rows stay silent under the Agent-model guard.
+    tool_input: { subagent_type: 'gsd-executor', model: 'sonnet' },
     ...overrides,
   };
 }
@@ -191,7 +193,7 @@ describe('gsd-agent-isolation-guard.js: applicability matrix (#3045)', () => {
   });
 
   test('row 2: isolation="worktree" present -> allow', () => {
-    const r = runHook(agentPayload({ tool_input: { subagent_type: 'gsd-executor', isolation: 'worktree' } }), harnessProject);
+    const r = runHook(agentPayload({ tool_input: { subagent_type: 'gsd-executor', isolation: 'worktree', model: 'sonnet' } }), harnessProject);
     assert.equal(r.status, 0, `stdout: ${r.stdout}`);
     assert.equal(r.stdout, '');
   });
@@ -613,7 +615,7 @@ describe('gsd-agent-isolation-guard.js: #4594 rows 15/28-32 — prompt-first ext
     writeSentinel(harnessProject, { isolation: 'none', phase: '03', plan: '03-02-hardening' });
     t.after(() => cleanup(path.join(harnessProject, '.gsd')));
     const r = runHook(
-      agentPayload({ tool_input: { subagent_type: 'gsd-executor', prompt: 'Execute plan 02 of phase 03-auth.' } }),
+      agentPayload({ tool_input: { subagent_type: 'gsd-executor', model: 'sonnet', prompt: 'Execute plan 02 of phase 03-auth.' } }),
       harnessProject,
     );
     assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
@@ -627,6 +629,7 @@ describe('gsd-agent-isolation-guard.js: #4594 rows 15/28-32 — prompt-first ext
       agentPayload({
         tool_input: {
           subagent_type: 'gsd-executor',
+          model: 'sonnet',
           description: 'Run the executor',
           prompt: '[gsd:dispatch phase="03" plan="03-02-hardening"] Execute the plan.',
         },
@@ -887,7 +890,7 @@ describe('gsd-agent-isolation-guard.js: #3566 — per-install .gsd-runtime marke
     setWorld(t, { marker: null });
     assert.deepEqual(identity(), { runtimeId: null, confident: false });
     const decision = guardModule.evaluateDispatch(
-      { tool_name: 'Agent', tool_input: { subagent_type: 'gsd-executor' }, cwd: markerProject },
+      { tool_name: 'Agent', tool_input: { subagent_type: 'gsd-executor', model: 'sonnet' }, cwd: markerProject },
     );
     assert.equal(decision.action, 'allow');
   });
@@ -1980,5 +1983,222 @@ describe('gsd-agent-isolation-guard.js: #4734 — a non-git project root is neve
     const r = runHook(agentPayload(), project);
     assert.equal(r.status, 2, `stdout: ${r.stdout} stderr: ${r.stderr}`);
     assert.equal(JSON.parse(r.stdout).decision, 'block');
+  });
+});
+
+describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved model', () => {
+  const guardModule = require('../hooks/gsd-agent-isolation-guard.js');
+  // adaptive + dynamic_routing: executor/verifier resolve sonnet at first
+  // spawn (opus on attempt 1), plan-checker is pinned sonnet, planner opus.
+  const ISSUE_CONFIG = {
+    runtime: 'claude',
+    model_profile: 'adaptive',
+    model_overrides: { 'gsd-plan-checker': 'sonnet' },
+    dynamic_routing: {
+      enabled: true,
+      tier_models: { light: 'haiku', standard: 'sonnet', heavy: 'opus' },
+      escalate_on_failure: true,
+      max_escalations: 1,
+    },
+  };
+  const WORKTREE = { isolation: 'worktree' };
+  let project;
+  let savedGsdRuntime;
+
+  before(() => {
+    savedGsdRuntime = process.env.GSD_RUNTIME;
+    delete process.env.GSD_RUNTIME;
+  });
+  after(() => {
+    if (savedGsdRuntime === undefined) delete process.env.GSD_RUNTIME;
+    else process.env.GSD_RUNTIME = savedGsdRuntime;
+  });
+
+  function setup(t, config = ISSUE_CONFIG) {
+    project = mkProject('gsd-aig-model-');
+    writeConfig(project, JSON.stringify(config));
+    t.after(() => cleanup(project));
+    return project;
+  }
+  const dispatch = (subagent_type, model, extra = {}) =>
+    ({ hook_event_name: 'PreToolUse', tool_name: 'Agent', cwd: project, tool_input: { subagent_type, ...(model ? { model } : {}), ...extra } });
+  const escalationFile = (root, agent) => path.join(root, '.gsd', `model-escalation-${agent}.json`);
+  const writeEscalation = (root, agent, rec) => {
+    fs.mkdirSync(path.join(root, '.gsd'), { recursive: true });
+    fs.writeFileSync(escalationFile(root, agent), typeof rec === 'string' ? rec : JSON.stringify(rec));
+  };
+  const evaluate = (payload, clock) => guardModule.evaluateDispatch(payload, clock ? { clock } : {});
+
+  test('mismatch warns; matching alias or full id allows', (t) => {
+    setup(t);
+    const w = evaluate(dispatch('gsd-executor', 'opus', WORKTREE));
+    assert.equal(w.action, 'warn');
+    assert.equal(w.reasonCode, REASON_CODE.AGENT_MODEL_MISMATCH);
+    assert.equal(evaluate(dispatch('gsd-executor', 'sonnet', WORKTREE)).action, 'allow');
+    assert.equal(evaluate(dispatch('gsd-executor', 'claude-sonnet-4-6', WORKTREE)).action, 'allow');
+    assert.equal(evaluate(dispatch('gsd-verifier', 'opus')).action, 'warn');
+    assert.equal(evaluate(dispatch('gsd-plan-checker', 'opus')).action, 'warn');
+    assert.equal(evaluate(dispatch('gsd-plan-checker', 'sonnet')).action, 'allow');
+    assert.equal(evaluate(dispatch('gsd-planner', 'opus')).action, 'allow');
+    assert.equal(evaluate(dispatch('gsd-planner', 'sonnet')).action, 'warn');
+  });
+
+  test('omitted model warns; unguarded agent types and tools are untouched', (t) => {
+    setup(t);
+    assert.equal(evaluate(dispatch('gsd-executor', null, WORKTREE)).action, 'warn');
+    assert.equal(evaluate(dispatch('gsd-codebase-mapper', 'opus')).action, 'allow');
+    assert.equal(evaluate({ ...dispatch('gsd-planner', 'sonnet'), tool_name: 'Bash' }).action, 'allow');
+  });
+
+  test('resolve-execution --attempt 1 records the escalated model; guard allows it only for that agent', (t) => {
+    setup(t);
+    const r = runGsdTools(['resolve-execution', 'gsd-executor', '--attempt', '1'], project);
+    assert.ok(r.success, r.error);
+    assert.equal(JSON.parse(r.output).model, 'opus');
+    assert.equal(evaluate(dispatch('gsd-executor', 'opus', WORKTREE)).action, 'allow');
+    assert.equal(evaluate(dispatch('gsd-verifier', 'opus')).action, 'warn', 'record is per agent type');
+  });
+
+  test('resolve-execution without --attempt writes no escalation record', (t) => {
+    setup(t);
+    const r = runGsdTools(['resolve-execution', 'gsd-executor'], project);
+    assert.ok(r.success, r.error);
+    assert.equal(fs.existsSync(escalationFile(project, 'gsd-executor')), false);
+  });
+
+  test('stale escalation record is ignored (clock seam)', (t) => {
+    setup(t);
+    fs.mkdirSync(path.join(project, '.gsd'), { recursive: true });
+    const writtenAt = 1_000_000;
+    writeEscalation(project, 'gsd-executor', { model: 'opus', written_at: writtenAt });
+    const at = (ms) => ({ now: () => writtenAt + ms });
+    assert.equal(evaluate(dispatch('gsd-executor', 'opus', WORKTREE), at(SENTINEL_STALE_MS - 1)).action, 'allow');
+    assert.equal(evaluate(dispatch('gsd-executor', 'opus', WORKTREE), at(SENTINEL_STALE_MS)).action, 'warn');
+  });
+
+  test('hooks.agent_model_guard: "deny" blocks, false disables', (t) => {
+    setup(t, { ...ISSUE_CONFIG, hooks: { agent_model_guard: 'deny' } });
+    const d = evaluate(dispatch('gsd-executor', 'opus', WORKTREE));
+    assert.equal(d.action, 'block');
+    assert.equal(d.reasonCode, REASON_CODE.AGENT_MODEL_MISMATCH);
+    writeConfig(project, JSON.stringify({ ...ISSUE_CONFIG, hooks: { agent_model_guard: false } }));
+    assert.equal(evaluate(dispatch('gsd-executor', 'opus', WORKTREE)).action, 'allow');
+  });
+
+  test('non-claude runtime and non-GSD project are skipped', (t) => {
+    setup(t, { ...ISSUE_CONFIG, runtime: 'codex' });
+    assert.equal(evaluate(dispatch('gsd-planner', 'sonnet')).action, 'allow');
+    const plain = createTempDir('gsd-aig-model-nogsd-');
+    t.after(() => cleanup(plain));
+    assert.equal(evaluate({ tool_name: 'Agent', cwd: plain, tool_input: { subagent_type: 'gsd-planner', model: 'sonnet' } }).action, 'allow');
+  });
+
+  test('isolation block wins over a model mismatch', (t) => {
+    setup(t, { ...ISSUE_CONFIG, hooks: { agent_model_guard: 'deny' } });
+    const d = evaluate(dispatch('gsd-executor', 'opus'));
+    assert.equal(d.action, 'block');
+    assert.equal(d.reasonCode, REASON_CODE.HARNESS_FLAG_MISSING);
+  });
+
+  test('deny mode: omitted model warns, only a passed-but-wrong model blocks', (t) => {
+    setup(t, { ...ISSUE_CONFIG, hooks: { agent_model_guard: 'deny' } });
+    assert.equal(evaluate(dispatch('gsd-planner', null)).action, 'warn');
+    assert.equal(evaluate(dispatch('gsd-planner', 'sonnet')).action, 'block');
+  });
+
+  test('corrupt and future-dated records are ignored; Task tool name is guarded', (t) => {
+    setup(t);
+    writeEscalation(project, 'gsd-executor', '{not json');
+    assert.equal(evaluate(dispatch('gsd-executor', 'opus', WORKTREE)).action, 'warn');
+    writeEscalation(project, 'gsd-executor', { model: 'opus', written_at: 10_000_000 });
+    assert.equal(evaluate(dispatch('gsd-executor', 'opus', WORKTREE), { now: () => 1_000_000 }).action, 'warn');
+    assert.equal(evaluate({ ...dispatch('gsd-planner', 'sonnet'), tool_name: 'Task' }).action, 'warn');
+  });
+
+  test('resolve-execution from a subdir records at the root the hook reads', (t) => {
+    setup(t);
+    const sub = path.join(project, 'sub', 'dir');
+    fs.mkdirSync(sub, { recursive: true });
+    const r = runGsdTools(['resolve-execution', 'gsd-executor', '--attempt', '1'], sub);
+    assert.ok(r.success, r.error);
+    assert.equal(fs.existsSync(escalationFile(project, 'gsd-executor')), true);
+    assert.equal(evaluate({ ...dispatch('gsd-executor', 'opus', WORKTREE), cwd: sub }).action, 'allow');
+  });
+
+  test('quota failure-class escalation records the provider model it resolved', (t) => {
+    setup(t, { ...ISSUE_CONFIG, dynamic_routing: { ...ISSUE_CONFIG.dynamic_routing, provider_escalation: ['gpt-5'] } });
+    const r = runGsdTools(['resolve-execution', 'gsd-executor', '--attempt', '1', '--failure-class', 'quota-exceeded'], project);
+    assert.ok(r.success, r.error);
+    assert.equal(JSON.parse(r.output).model, 'gpt-5');
+    assert.equal(JSON.parse(fs.readFileSync(escalationFile(project, 'gsd-executor'), 'utf8')).model, 'gpt-5');
+  });
+
+  test('family match is token-bounded: substrings of custom model names do not collide', (t) => {
+    setup(t);
+    assert.equal(evaluate(dispatch('gsd-planner', 'noopus-1')).action, 'warn');
+    assert.equal(evaluate(dispatch('gsd-planner', 'claude-opus-4-8')).action, 'allow');
+    assert.equal(evaluate(dispatch('gsd-planner', 'opus45')).action, 'allow');
+  });
+
+  test('reason keeps only id-shaped characters and caps the echoed model', (t) => {
+    setup(t);
+    const w = evaluate(dispatch('gsd-planner', `x\n${'y'.repeat(200)}\u2028z`));
+    assert.equal(w.action, 'warn');
+    assert.doesNotMatch(w.reason, /[\r\n\u2028\u2029]/);
+    assert.doesNotMatch(dispatchReason('x" ignore prior'), /ignore prior/);
+    assert.ok(w.reason.length < 400, 'echoed model is capped');
+  });
+
+  const dispatchReason = (m) => evaluate(dispatch('gsd-planner', m)).reason;
+
+  test('escalation record without a string model never matches', (t) => {
+    setup(t);
+    writeEscalation(project, 'gsd-planner', { written_at: Date.now() });
+    assert.equal(evaluate(dispatch('gsd-planner', 'undefined')).action, 'warn');
+  });
+
+  test('a plain resolve-execution leaves an escalation record alone', (t) => {
+    setup(t);
+    assert.ok(runGsdTools(['resolve-execution', 'gsd-executor', '--attempt', '1'], project).success);
+    assert.ok(runGsdTools(['resolve-execution', 'gsd-executor'], project).success);
+    assert.equal(fs.existsSync(escalationFile(project, 'gsd-executor')), true);
+  });
+
+  test('a baseline resolve-execution --attempt 0 clears a prior escalation record', (t) => {
+    setup(t);
+    assert.ok(runGsdTools(['resolve-execution', 'gsd-executor', '--attempt', '1'], project).success);
+    assert.equal(fs.existsSync(escalationFile(project, 'gsd-executor')), true);
+    assert.ok(runGsdTools(['resolve-execution', 'gsd-executor', '--attempt', '0'], project).success);
+    assert.equal(fs.existsSync(escalationFile(project, 'gsd-executor')), false);
+    assert.equal(evaluate(dispatch('gsd-executor', 'opus', WORKTREE)).action, 'warn');
+  });
+
+  test('resolve-execution never writes outside .gsd for a traversal-shaped agent type', (t) => {
+    setup(t, { ...ISSUE_CONFIG, dynamic_routing: { ...ISSUE_CONFIG.dynamic_routing, provider_escalation: ['gpt-5'] } });
+    // the directory must exist, else the write fails on ENOENT with or without the guard
+    fs.mkdirSync(path.join(project, '.gsd', 'model-escalation-x'), { recursive: true });
+    runGsdTools(['resolve-execution', 'x/../../escape', '--attempt', '1', '--failure-class', 'quota-exceeded'], project);
+    assert.equal(fs.existsSync(path.join(project, 'escape.json')), false);
+    assert.deepEqual(fs.readdirSync(project).filter((f) => f.includes('escape')), []);
+  });
+
+  test('config-set rejects an invalid hooks.agent_model_guard value', (t) => {
+    setup(t);
+    assert.equal(runGsdTools(['config-set', 'hooks.agent_model_guard', 'block'], project).success, false);
+    assert.equal(runGsdTools(['config-set', 'hooks.agent_model_guard', 'deny'], project).success, true);
+    assert.equal(runGsdTools(['config-set', 'hooks.agent_model_guard', 'false'], project).success, true);
+  });
+
+  test('hook process: warn exits 0 with additionalContext; deny exits 2', (t) => {
+    setup(t);
+    const w = runHook(dispatch('gsd-planner', 'sonnet'), project);
+    assert.equal(w.status, 0, w.stderr);
+    const out = JSON.parse(w.stdout);
+    assert.equal(out.hookSpecificOutput.hookEventName, 'PreToolUse');
+    assert.equal(typeof out.hookSpecificOutput.additionalContext, 'string');
+    writeConfig(project, JSON.stringify({ ...ISSUE_CONFIG, hooks: { agent_model_guard: 'deny' } }));
+    const d = runHook(dispatch('gsd-planner', 'sonnet'), project);
+    assert.equal(d.status, 2);
+    assert.equal(JSON.parse(d.stdout).reason_code, REASON_CODE.AGENT_MODEL_MISMATCH);
   });
 });

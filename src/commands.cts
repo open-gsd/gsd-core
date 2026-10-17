@@ -77,6 +77,9 @@ import modelProfiles = require('./model-profiles.cjs');
 const { MODEL_PROFILES, VALID_PHASE_TYPES } = modelProfiles;
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
+import { findProjectRoot } from './project-root.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import worktreeSafetyMod = require('./worktree-safety.cjs');
 import { clampPercent, renderProgressBar } from './phase-lifecycle.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planScanMod = require('./plan-scan.cjs');
@@ -597,6 +600,41 @@ function cmdResolveGranularity(cwd: string, phaseType: string | undefined, raw: 
 }
 
 /**
+ * #5328: record a model that differs from the resolved baseline so
+ * hooks/lib/agent-model-check.js lets the Agent() call pass it. Written at the
+ * root the hook reads (resolveSentinelRoot semantics); the file name must match
+ * agent-model-check.js escalationPath() there. Best-effort: a write failure only costs a guard warning.
+ */
+function recordModelEscalation(cwd: string, agentType: string, model: string | null): void {
+  if (!/^[a-z0-9_-]+$/i.test(agentType)) return; // agentType becomes a file name
+  try {
+    const root = fs.existsSync(path.join(cwd, '.planning'))
+      ? cwd
+      : findProjectRoot(worktreeSafetyMod.resolveWorktreeRoot(cwd).root);
+    const dir = path.join(root, '.gsd');
+    const file = path.join(dir, `model-escalation-${agentType}.json`);
+    // null = baseline resolved: drop any earlier escalation so it cannot legitimise a stale model.
+    if (model === null) {
+      if (!fs.existsSync(dir) || fs.lstatSync(dir).isSymbolicLink()) return;
+      fs.rmSync(file, { force: true });
+      return;
+    }
+    fs.mkdirSync(dir, { recursive: true });
+    if (fs.lstatSync(dir).isSymbolicLink()) return;
+    try { fs.writeFileSync(path.join(dir, '.gitignore'), '*\n', { flag: 'wx' }); } catch { /* exists */ }
+    const record = JSON.stringify({ model, written_at: Date.now() });
+    if (process.platform !== 'win32') {
+      // rename so the hook never reads a half-written record
+      const tmp = `${file}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, record);
+      fs.renameSync(tmp, file);
+    } else {
+      fs.writeFileSync(file, record); // Windows can hold the target open; skip rename
+    }
+  } catch { /* best-effort */ }
+}
+
+/**
  * #443 — Superset execution query: model + unified effort + fast_mode.
  *
  * Emits JSON:
@@ -618,9 +656,9 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
   // (heavy tier) alongside effort. The FIRST-spawn tier now comes from
   // resolveModelInternal's own dynamic_routing step (#4505), so the absent-attempt
   // branch below reaches it too — this gate is only about escalation.
-  let model = (opts.attempt !== undefined && opts.attempt !== null)
-    ? resolveModelForTier(cwd, agentType, opts.attempt)
-    : resolveModelInternal(cwd, agentType);
+  const baselineModel = resolveModelInternal(cwd, agentType);
+  const hasAttempt = opts.attempt !== undefined && opts.attempt !== null;
+  let model = hasAttempt ? resolveModelForTier(cwd, agentType, opts.attempt) : baselineModel;
 
   // #2296: when the caller reports WHY the previous attempt failed, consult the
   // provider-escalation ladder. Only a quota/rate-limit class warrants it — a
@@ -634,6 +672,10 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
     if (resolved.escalated) model = resolved.to;
     escalation = { class: opts.failureClass, ...resolved };
   }
+
+  // A plain query (no --attempt) is read-only for the record; only an explicit attempt rewrites or clears it.
+  if (model && model !== baselineModel) recordModelEscalation(cwd, agentType, model);
+  else if (hasAttempt) recordModelEscalation(cwd, agentType, null);
 
   const effortOpts: Record<string, unknown> = {};
   if (typeof opts.effortOverride === 'string') effortOpts['override'] = opts.effortOverride;
