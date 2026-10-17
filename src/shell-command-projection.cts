@@ -20,6 +20,7 @@ import childProcess from 'node:child_process';
 import { escapeRegex } from './pattern.cjs';
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 import { hostBehaviorsFor } from './runtime-name-policy.cjs';
+import { readOnlyGitEnv } from './read-only-git-env.cjs';
 
 /**
  * Convert a filesystem path to POSIX form (forward slashes) by translating the
@@ -660,8 +661,20 @@ export function execGit(args: string[], opts: { cwd?: string; env?: Record<strin
   // Non-interactive defaults: a hung credential prompt or terminal-input
   // probe must surface as a timeout, not block the tool forever. Callers
   // can override via opts.env.
+  //
+  // #5048: readOnlyGitEnv() as well. execGit is the shared seam behind every
+  // git call the tool makes, including the read-only ones (`status`,
+  // `diff --cached`, `rev-parse`, `log`, …). By default git refreshes the index
+  // and takes an *optional* `.git/index.lock` to write the refreshed copy back,
+  // so a read can lose a race against a real `git add` / `git commit` and fail
+  // it with `Unable to create '.git/index.lock': File exists`. The owner is
+  // src/read-only-git-env.cts, shared with every other read-only seam, so this
+  // call site cannot drift from them. The variable disables only those optional
+  // index operations; a caller that genuinely needs one (a writing command, or a
+  // status whose freshness it wants persisted) can still set it back through
+  // opts.env, which is spread last on purpose.
   const env = {
-    ...process.env,
+    ...readOnlyGitEnv(),
     GIT_TERMINAL_PROMPT: '0',
     GCM_INTERACTIVE: 'never',
     ...(opts.env || {}),

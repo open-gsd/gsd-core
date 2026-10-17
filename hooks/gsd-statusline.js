@@ -889,7 +889,41 @@ function compactModelName(name) {
 // are a fixed array, and the workspace dir is passed via -C. Fails silently
 // (segment absent) outside a repo, without git, or on timeout.
 
+// #5048: the stat-cache cost of the read below is what this bound buys. With
+// GIT_OPTIONAL_LOCKS=0 the spawn no longer writes the refreshed index back, so
+// the only work left on the hot path is lstat() per tracked path — no object
+// read for unchanged blobs. Measured on a 40k-file tree that is ~35 ms of stat
+// calls against a warm stat cache and ~180 ms cold, so 1500 ms leaves >8x
+// headroom for a cold cache on a large repo while still bounding a hung
+// network filesystem. Raising it would widen the window in which a stalled
+// render holds the terminal; lowering it would start dropping the git segment
+// on large repos. Exported so the test can pin the bound instead of restating
+// the literal (which is how the constant and its assertion drifted before).
 const GIT_STATUS_TIMEOUT_MS = 1500;
+
+/**
+ * #5048: env for the read-only git spawn in this file.
+ *
+ * By default `git status` refreshes the index and takes an *optional*
+ * `.git/index.lock` to write the refreshed copy back. That is a write the
+ * caller never asked for, and it turns a pure read into a contender for the
+ * lock a real `git add` / `git commit` needs — a read-only statusline render
+ * can then make a concurrent commit fail with
+ * `Unable to create '.git/index.lock': File exists`. The statusline spawns
+ * git on every render, so the lock is re-created continuously.
+ *
+ * The env block itself is owned by src/read-only-git-env.cts and shared with
+ * every other read-only seam (`execGit` in src/shell-command-projection.cts,
+ * `readGitSignals` in src/smart-entry.cts, `gitExec` in
+ * src/pristine-baseline.cts, the two blocking guards). This hook reads it per
+ * call rather than snapshotting at load, so a later `process.env` mutation is
+ * visible and the seams behave identically.
+ *
+ * Deliberately NOT applied to the `git rev-list` spawn in
+ * readStateHeadCommits(): that walks the commit graph and never opens the
+ * index, so the variable would be a no-op there.
+ */
+const { readOnlyGitEnv } = require('../gsd-core/bin/lib/read-only-git-env.cjs');
 
 /**
  * Run `git status --porcelain=v2 --branch` in dir.
@@ -902,7 +936,7 @@ function readGitStatus(dir) {
     // or untracked files; overflow still degrades safely to segment-absent via
     // the catch below.
     return childProcess.execFileSync('git', ['-C', dir, 'status', '--porcelain=v2', '--branch'],
-      { encoding: 'utf8', timeout: GIT_STATUS_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+      { encoding: 'utf8', timeout: GIT_STATUS_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, env: readOnlyGitEnv() });
   } catch (e) {
     return null;
   }
@@ -1396,6 +1430,7 @@ module.exports = {
   isAutoCompactDisabled, AUTO_COMPACT_DISABLE_ENV_KEYS, AUTO_COMPACT_ENV_TRUTHY,
   resolveAutoCompactThreshold, contextMeter, SETTINGS_FILE_MAX_BYTES,
   parseAutoCompactWindowEnv, canonicalModelKey, isAutoCompactWindowValue,
+  GIT_STATUS_TIMEOUT_MS,
 };
 
 /**

@@ -87,6 +87,79 @@ describe('execGit', () => {
     const result = execGit(['status', '--porcelain'], { cwd: tmpDir });
     assert.strictEqual(result.exitCode, 0);
   });
+
+  // #5048: execGit is the shared seam behind every git call the tool makes,
+  // including the read-only ones. Left at git's default, a read refreshes the
+  // index and takes an optional .git/index.lock to write the refreshed copy
+  // back, so it can lose a race against a real `git add`/`git commit` and fail
+  // it with `Unable to create '.git/index.lock': File exists`.
+  describe('GIT_OPTIONAL_LOCKS (#5048)', () => {
+    // Deterministic env capture, mirroring the execTool mock convention used
+    // below: spawnSync is fully mocked, so no real spawn runs.
+    function captureGitSpawnOptions(opts) {
+      const original = childProcess.spawnSync;
+      let captured = null;
+      childProcess.spawnSync = (file, args, options) => {
+        captured = { file, args, options };
+        return { status: 0, stdout: '', stderr: '' };
+      };
+      try {
+        execGit(['status', '--porcelain'], opts);
+      } finally {
+        childProcess.spawnSync = original;
+      }
+      return captured;
+    }
+
+    test('defaults to GIT_OPTIONAL_LOCKS=0', () => {
+      const captured = captureGitSpawnOptions();
+      assert.ok(captured, 'spawnSync was not called');
+      assert.equal(captured.file, 'git');
+      assert.equal(captured.options.env.GIT_OPTIONAL_LOCKS, '0');
+    });
+
+    test('the non-interactive defaults are preserved', () => {
+      const captured = captureGitSpawnOptions();
+      assert.equal(captured.options.env.GIT_TERMINAL_PROMPT, '0');
+      assert.equal(captured.options.env.GCM_INTERACTIVE, 'never');
+    });
+
+    test('the env inherits the parent environment', () => {
+      // A minimal env would drop PATH, HOME and the user's git config, so the
+      // assertion is over the whole inherited surface, not one key.
+      const captured = captureGitSpawnOptions();
+      for (const key of Object.keys(process.env)) {
+        assert.deepEqual(
+          captured.options.env[key], process.env[key],
+          `env must inherit ${key} from the parent process`);
+      }
+    });
+
+    test('a caller can opt back in through opts.env', () => {
+      // A writing command, or a status whose index refresh the caller wants
+      // persisted, must be able to turn the default back off. opts.env is
+      // spread last precisely so this override wins.
+      const captured = captureGitSpawnOptions({ env: { GIT_OPTIONAL_LOCKS: '1' } });
+      assert.equal(captured.options.env.GIT_OPTIONAL_LOCKS, '1');
+    });
+
+    test('argv and the spawn bounds are unchanged', () => {
+      // Only the env may change: a rewritten argv or a dropped timeout would
+      // be a behavior change smuggled in under this fix. The timeout is a
+      // fixture value proving execGit still forwards the caller's own option —
+      // execGit is fully mocked above, so no wall clock is involved.
+      const EXEC_GIT_OPTION_PASSTHROUGH_TIMEOUT_MS = 4321;
+      const captured = captureGitSpawnOptions({
+        cwd: tmpDir,
+        timeout: EXEC_GIT_OPTION_PASSTHROUGH_TIMEOUT_MS,
+      });
+      assert.deepEqual(captured.args, ['status', '--porcelain']);
+      assert.equal(captured.options.cwd, tmpDir);
+      assert.equal(captured.options.timeout, EXEC_GIT_OPTION_PASSTHROUGH_TIMEOUT_MS);
+      assert.equal(captured.options.encoding, 'utf-8');
+      assert.equal(captured.options.windowsHide, true);
+    });
+  });
 });
 
 // ─── execNpm ─────────────────────────────────────────────────────────────────
