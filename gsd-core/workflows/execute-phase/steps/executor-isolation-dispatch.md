@@ -56,7 +56,7 @@ if [ "$ISOLATION" = "none" ] && [ "$USE_WORKTREES" != "false" ]; then
 fi
 
 # Sweep orphaned locked worktrees from prior crashed sessions (#3707).
-[ "$ISOLATION" != "none" ] && gsd_run query worktree.reap-orphans 2>/dev/null || true
+[ "$ISOLATION" != "none" ] && gsd_run query worktree.reap-orphans >/dev/null || true
 # Auto-degrade if HEAD diverged from the fork base (#683) — both isolation models.
 if [ "$ISOLATION" != "none" ]; then
   _SHOULD_DEGRADE=$(gsd_run query worktree.base-check --mode "$ISOLATION" --pick shouldDegrade 2>/dev/null || true)
