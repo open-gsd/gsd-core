@@ -61,15 +61,20 @@
  *   `field` only; see `FIELD_VAR_EQ_LITERAL_RE`'s own comment for why.
  *
  *   AXIS 2 — RAW STATE WRITE (§8.6, RETAINED). A direct `fs.writeFileSync(`
- *   call whose target argument is the state path (`statePath`, or a literal
- *   containing `STATE.md`) is a write that skips BOTH the write seam
+ *   call whose target argument is the state path (`statePath`, a literal
+ *   containing `STATE.md`, or — #5104 — a variable that resolves to either
+ *   through same-function assignments, even when the call is wrapped over
+ *   several lines) is a write that skips BOTH the write seam
  *   (`writeStateMd`/`syncAndPreserveStateMd`) AND the OS Shell Projection
  *   seam (`platformWriteSync`, `src/shell-command-projection.cts`) entirely.
  *   No constructor or type can make this unrepresentable — Node's `fs`
  *   module is always one `import` away — so this axis stays a plain
  *   string-match scan, unratcheted: any occurrence is a violation, because no
  *   legitimate call site in this codebase writes STATE.md this way (every
- *   real writer goes through `platformWriteSync`).
+ *   real writer goes through `platformWriteSync`). This axis's zero does NOT
+ *   prove that no raw STATE.md writer remains: it is a line scan, and
+ *   `findRawStateWrites`'s own header lists the verified shapes it misses
+ *   (ADR-3408 Decision 5; the syntax-tree follow-up is #5279).
  *
  *   AXIS 3 — FRONTMATTER-SHAPED WRITE (§8.3(b), closed Phase 2 / #3469).
  *   `findUnstrippedContentWrites` below flags a `stateReplaceField(` call
@@ -501,15 +506,51 @@ function isQuotedLiteralArg(arg) {
  * documented scope) of accepting a bounded risk in trade for not chasing
  * full dataflow, which is exactly what made the Phase 1 approximation
  * unusable (29 false positives to 1 true positive).
+ *
+ * Axis 2 (#5104, `resolvesToStatePath`) passes `options`; Axis 3 passes none,
+ * so its reading is exactly the one above:
+ *   - `typed`: a `const`/`let`/`var` declaration may carry a TypeScript
+ *     annotation between its name and `=` (`const p: string = …`), because
+ *     the scanned sources are TypeScript. The annotation is read only after a
+ *     declaration keyword and holds no `=` or `;`, so `{ p: x }`, `p == x` and
+ *     `let p: T; q = x` are not assignments to `p`.
+ *   - `stopAtPatternBinding`: a line that binds `varName` through a
+ *     `for...of` header or a destructuring declaration (`bindsByPattern`)
+ *     ends the scan with `null`. Neither has a `varName =` to match, so
+ *     without this the scan walks past the binding to a same-named variable
+ *     in a sibling block.
+ *   - `withLine`: return `{ rhs, line }` instead of the bare text, so a
+ *     caller can resume its scan above the assignment it followed.
  */
-function nearestPrecedingAssignment(lines, index, varName) {
-  const assignRe = new RegExp(`(?:^|[^.\\w$])(?:const|let|var)?\\s*${escapeRegex(varName)}\\s*=\\s*([^=].*)$`);
+function nearestPrecedingAssignment(lines, index, varName, options = {}) {
+  const name = escapeRegex(varName);
+  const target = options.typed ? `(?:(?:const|let|var)\\s+${name}\\s*:[^=;]+?|(?:const|let|var)?\\s*${name})` : `(?:const|let|var)?\\s*${name}`;
+  const assignRe = new RegExp(`(?:^|[^.\\w$])${target}\\s*=\\s*([^=].*)$`);
   for (let i = index; i >= 0; i--) {
     if (FUNCTION_DECL_LINE_RE.test(lines[i])) return null;
+    if (!lines[i].includes(varName)) continue; // a line without the name cannot bind it
+    if (options.stopAtPatternBinding && bindsByPattern(lines[i], varName)) return null;
     const m = assignRe.exec(lines[i]);
-    if (m) return m[1].trim();
+    if (m) return options.withLine ? { rhs: m[1].trim(), line: i } : m[1].trim();
   }
   return null;
+}
+
+// A `for (const|let|var <pattern> of …)` loop header, or a `const|let|var`
+// destructuring declaration: each binds a name WITHOUT a `name =` that
+// `nearestPrecedingAssignment` can see.
+const LOOP_BINDING_RE = /\bfor\s*(?:await\s*)?\(\s*(?:const|let|var)\s+(.+?)\s+of\b/;
+const DESTRUCTURING_BINDING_RE = /\b(?:const|let|var)\s+([[{].*?[\]}])\s*=/;
+
+/**
+ * True when `line` binds `name` through a `for...of` loop header or a
+ * destructuring pattern. A `{ key: alias }` entry binds `alias`, not `key`.
+ */
+function bindsByPattern(line, name) {
+  return [LOOP_BINDING_RE, DESTRUCTURING_BINDING_RE].some((re) => {
+    const m = re.exec(line);
+    return m !== null && new RegExp(`(?<![\\w$.])${escapeRegex(name)}(?![\\w$])(?!\\s*:)`).test(m[1]);
+  });
 }
 
 /**
@@ -580,6 +621,10 @@ const RAW_WRITE_CALL_START_RE = /\bfs\.writeFileSync\s*\(/g;
  * `fs.writeFileSync(path.join(cwd, 'STATE.md'), …)` call in the wild
  * (found via `tests/state-write-path-drift-guard.test.cjs` F1: "guard:
  * fs.writeFileSync against a STATE.md literal is reported").
+ *
+ * `line` may span several lines: `findRawStateWrites` passes the whole
+ * comment-stripped file, so a call wrapped after its `(` is captured too
+ * (#5104).
  */
 function captureFirstArg(line, startIdx) {
   let depth = 0;
@@ -613,6 +658,71 @@ function targetsStatePath(arg) {
   return /\bstatePath\b/.test(arg) || /STATE\.md/.test(arg);
 }
 
+// How many assignments Axis 2 follows back from a raw write's target before
+// giving up (#5104). Each hop resumes above the assignment it followed, so the
+// scan always terminates; the bound keeps it a string match, not dataflow.
+const MAX_TARGET_RESOLUTION_HOPS = 4;
+
+// How Axis 2 reads an assignment through `nearestPrecedingAssignment` (#5104).
+const RAW_WRITE_ASSIGNMENT_OPTIONS = Object.freeze({ typed: true, stopAtPatternBinding: true, withLine: true });
+
+/**
+ * The identifiers an expression reads. Quoted `'…'` / `"…"` string contents
+ * are dropped, and a name after a single `.` is a property, not a variable
+ * (a spread, `...parts`, is still a variable). A template literal is kept
+ * whole, so the names in its `${…}` interpolations are read, and so is any
+ * word in its text: that can only add a lookup, never drop one.
+ */
+function identifiersIn(expr) {
+  const code = expr.replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/g, "''");
+  return [...new Set(code.match(/(?<![\w$])(?<!(?:^|[^.])\.)[A-Za-z_$][\w$]*/g) || [])];
+}
+
+// A body opener, closer or arrow between an assignment and the write: the
+// assignment may sit in a closed sibling block or arrow body, out of scope at
+// the write (#5104). Textual, not a brace-depth tracker.
+const BODY_BOUNDARY_RE = /[{}]|=>/;
+
+/**
+ * True when `expr`, the target of the raw write at the end of `scanLines`,
+ * names the state path (`targetsStatePath`), or when one of its identifiers
+ * resolves to an expression that does, following at most `hopsLeft`
+ * same-function assignments through `nearestPrecedingAssignment` (#5104).
+ *
+ * `scanLines` is the comment-stripped file from its first line through the
+ * write's line, and its last entry is that line cut at the
+ * `fs.writeFileSync(` call: an assignment earlier on the write's line is
+ * read, one after the call is not. `index` is the last line an assignment
+ * may sit on; each hop resumes on the line above the assignment it followed,
+ * so `p = p + '.tmp'` reaches the earlier assignment of `p`.
+ *
+ * Unresolved is not flagged: a parameter, a name bound by a `for...of`
+ * header or a destructuring declaration, or a chain longer than the bound.
+ *
+ * Boundary rule: the nearest assignment of a name ends its search only when
+ * no `{`, `}` or `=>` (`BODY_BOUNDARY_RE`) lies between that assignment's
+ * right-hand side and the write. Past such a boundary the nearest assignment
+ * may be a closed sibling block's, so when it does not reach the state path
+ * the search goes on to the next earlier assignment of that name. This can
+ * only add reports: an assignment that reaches the state path reports at
+ * once.
+ */
+function resolvesToStatePath(scanLines, index, expr, hopsLeft = MAX_TARGET_RESOLUTION_HOPS) {
+  if (targetsStatePath(expr)) return true;
+  if (hopsLeft === 0) return false;
+  for (const name of identifiersIn(expr)) {
+    for (let from = index; from >= 0; ) {
+      const found = nearestPrecedingAssignment(scanLines, from, name, RAW_WRITE_ASSIGNMENT_OPTIONS);
+      if (found === null) break;
+      if (resolvesToStatePath(scanLines, found.line - 1, found.rhs, hopsLeft - 1)) return true;
+      const between = [found.rhs, ...scanLines.slice(found.line + 1)].join('\n');
+      if (!BODY_BOUNDARY_RE.test(between)) break;
+      from = found.line - 1;
+    }
+  }
+  return false;
+}
+
 /**
  * AXIS 2: every `fs.writeFileSync(` call in `text` whose target argument
  * names the state path is a raw write that bypasses BOTH the write seam
@@ -623,30 +733,73 @@ function targetsStatePath(arg) {
  * `fs.writeFileSync` calls take a generic `filePath`/`tmpPath` argument, not
  * `statePath`, and are therefore never matched by `targetsStatePath` above).
  * Unratcheted, unexempted: any occurrence is a violation.
+ *
+ * #5104 extended the target check in two ways. The scan runs over the
+ * comment-stripped text JOINED across lines, so a call wrapped after its `(`
+ * is still captured (before, its first argument came back empty). And a
+ * target that is neither `statePath` nor a `STATE.md` literal is resolved
+ * through same-function assignments (`resolvesToStatePath`).
+ *
+ * This axis's zero is not proof that no raw writer exists (ADR-3408
+ * Decision 5). Verified misses, each with a test row (a known gap beside its
+ * correct verdict, or the hop-bound row); the syntax-tree follow-up is #5279:
+ *   - A file name built in another function (a `Map` key, a return value)
+ *     or held in a module-level constant: resolution stops at the
+ *     named-function boundary.
+ *   - A one-line function that assigns and writes: a named-function header
+ *     on the write's line drops that line from the scan.
+ *   - Two assignments of a chain on one line (`const d = …; const p = d;`):
+ *     each hop resumes on the line above.
+ *   - A `+=` that adds the STATE.md segment, a value that starts on the line
+ *     after `=`, an annotation holding `;`, a CRLF file (`.` does not
+ *     match `\r`, so no assignment is read), and a chain longer than
+ *     `MAX_TARGET_RESOLUTION_HOPS`.
+ *   - Any call but the literal text `fs.writeFileSync(` (`fs.promises.
+ *     writeFile`, `fs.appendFileSync`, `fs.renameSync(tmp, statePath)`, an
+ *     alias or destructured `writeFileSync`), and a call after a `//` inside a
+ *     string or regex literal on its line (`stripComments` does not track
+ *     them).
+ * Verified false positives, pinned the same way: a statePath-derived
+ * directory joined with another file name (`path.join(path.dirname(
+ * statePath), 'ROADMAP.md')`, inline or through a variable), a same-name
+ * parameter of an arrow or one-line nested function shadowing an outer
+ * STATE.md variable, a one-line top-level function's parameter resolved
+ * into an earlier function (its header is dropped, see above), a
+ * block-scoped binding or `for` header's `let` earlier on the write's line
+ * (`if (a) { const p = statePath; } else { fs.writeFileSync(p, c); }`), a target
+ * computed from the state file, a longer name such as `STATE.md.bak`, a
+ * right-hand side that runs past its own `;` into a later statement on that
+ * line, and a string that spells the call.
  */
 function findRawStateWrites(rel, text) {
   const rawLines = text.split('\n');
   const stripped = stripComments(text);
+  const joined = stripped.join('\n');
   const out = [];
-  for (let i = 0; i < stripped.length; i++) {
-    const line = stripped[i];
-    if (!line.trim()) continue;
-    RAW_WRITE_CALL_START_RE.lastIndex = 0;
-    let m;
-    while ((m = RAW_WRITE_CALL_START_RE.exec(line)) !== null) {
-      const argStart = m.index + m[0].length;
-      const targetArg = captureFirstArg(line, argStart).trim();
-      if (!targetsStatePath(targetArg)) continue;
-      // `file`/`source` sanitized for the same fork-PR reason as every other
-      // finding in this guard.
-      out.push({
-        reason: REASON.RAW_STATE_WRITE,
-        axis: 'raw-write',
-        file: sanitizeForReport(rel),
-        line: i + 1,
-        source: sanitizeForReport(rawLines[i].trim()),
-      });
-    }
+  let lineIdx = 0;
+  let counted = 0;
+  RAW_WRITE_CALL_START_RE.lastIndex = 0;
+  let m;
+  while ((m = RAW_WRITE_CALL_START_RE.exec(joined)) !== null) {
+    for (; counted < m.index; counted++) if (joined[counted] === '\n') lineIdx++;
+    const targetArg = captureFirstArg(joined, m.index + m[0].length).trim();
+    // The write's own line is read up to the call. When that text holds a
+    // named-function header (a one-line nested function), it is dropped
+    // instead, so the header does not end the scan: the write may read its
+    // enclosing function's variable.
+    const scanLines = stripped.slice(0, lineIdx + 1);
+    const cut = joined.slice(joined.lastIndexOf('\n', m.index - 1) + 1, m.index);
+    scanLines[lineIdx] = FUNCTION_DECL_LINE_RE.test(cut) ? '' : cut;
+    if (!resolvesToStatePath(scanLines, lineIdx, targetArg)) continue;
+    // `file`/`source` sanitized for the same fork-PR reason as every other
+    // finding in this guard.
+    out.push({
+      reason: REASON.RAW_STATE_WRITE,
+      axis: 'raw-write',
+      file: sanitizeForReport(rel),
+      line: lineIdx + 1,
+      source: sanitizeForReport(rawLines[lineIdx].trim()),
+    });
   }
   return out;
 }
@@ -1032,6 +1185,7 @@ module.exports = {
   nearestPrecedingAssignment,
   findRawStateWrites,
   targetsStatePath,
+  MAX_TARGET_RESOLUTION_HOPS,
   findOpaqueStateTransforms,
   captureCallArgList,
   findCompositionBypasses,

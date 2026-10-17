@@ -686,3 +686,455 @@ describe('C1 (ADR-4629 §8.1): findOpaqueStateTransforms — opaque readModifyWr
     );
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// F4 — #5104 (epic #4629, ADR-4629 Decision 5: Axis 2 "extended"): a raw
+// write whose call is wrapped over several lines, or whose target is a
+// variable assigned in the same function, is still a raw STATE.md write.
+// Before #5104 the axis scanned one line at a time and matched only the
+// `statePath` identifier or a `STATE.md` literal in the captured argument,
+// so every positive row below reported 0.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('F4 — the raw-write axis sees wrapped calls and same-function variable targets (#5104)', () => {
+  const { MAX_TARGET_RESOLUTION_HOPS, nearestPrecedingAssignment } = guard;
+
+  // W(...) wraps body lines in a function; `lines` is the reported lines.
+  const W = (...body) => ['function w(statePath, dir, c) {', ...body, '}'].join('\n');
+  const lines = (text) => findRawStateWrites(OTHER_FILE, text).map((f) => f.line);
+
+  // `lookups` assignments stand between the write target `v0` and the
+  // STATE.md literal: v0 = v1, v1 = v2, ..., v(lookups-1) = path.join(dir, 'STATE.md').
+  function chainFixture(lookups) {
+    const out = ['function chained(dir, content) {', `  const v${lookups - 1} = path.join(dir, 'STATE.md');`];
+    for (let k = lookups - 2; k >= 0; k--) out.push(`  const v${k} = v${k + 1};`);
+    out.push('  fs.writeFileSync(v0, content);', '}');
+    return out.join('\n');
+  }
+
+  test('guard: a call wrapped over several lines is reported at the line of the call', () => {
+    const out = findRawStateWrites(OTHER_FILE, W('  fs.writeFileSync(', '    statePath,', '    c,', '  );'));
+    assert.strictEqual(out.length, 1);
+    assert.strictEqual(out[0].reason, REASON.RAW_STATE_WRITE);
+    assert.strictEqual(out[0].line, 2);
+    assert.strictEqual(out[0].source, 'fs.writeFileSync(');
+    assert.deepStrictEqual(lines(W('  fs.writeFileSync( // the state file', '    statePath, c);')), [2]);
+  });
+
+  test('guard: a variable resolved through same-function assignments is reported', () => {
+    // From a STATE.md literal, from statePath, through a file-name constant, and wrapped.
+    assert.deepStrictEqual(lines(W("  const p = path.join(dir, 'STATE.md');", '  fs.writeFileSync(p, c);')), [3]);
+    assert.deepStrictEqual(lines(W('  const target = statePath;', '  fs.writeFileSync(target, c);')), [3]);
+    assert.deepStrictEqual(lines(W("  const name = 'STATE.md';", '  const p = path.join(dir, name);', '  fs.writeFileSync(p, c);')), [4]);
+    assert.deepStrictEqual(lines(W("  const p = path.join(dir, 'STATE.md');", '  fs.writeFileSync(', '    p,', '    c);')), [3]);
+  });
+
+  test('guard: an assignment earlier on the write\'s own line is read, one after the call is not', () => {
+    assert.deepStrictEqual(lines(W("  const p = path.join(dir, 'STATE.md'); fs.writeFileSync(p, c);")), [2]);
+    assert.deepStrictEqual(
+      lines(['function w(p, dir, c) {', "  fs.writeFileSync(p, c); p = path.join(dir, 'STATE.md');", '}'].join('\n')),
+      [],
+    );
+  });
+
+  test('guard: a reassignment that reads its own earlier value resolves to that earlier assignment', () => {
+    assert.deepStrictEqual(lines(W("  let p = path.join(dir, 'STATE.md');", "  p = p + '.tmp';", '  fs.writeFileSync(p, c);')), [4]);
+    // ...and terminates when the earlier value is not STATE.md.
+    assert.deepStrictEqual(lines(W("  let p = path.join(dir, 'notes');", "  p = p + '.md';", '  fs.writeFileSync(p, c);')), []);
+  });
+
+  test('guard: a write inside a nested arrow, method or callback still reads the enclosing variable', () => {
+    const p = "  const p = path.join(dir, 'STATE.md');";
+    assert.deepStrictEqual(lines(W(p, '  const flush = () => {', '    fs.writeFileSync(p, c);', '  };')), [4]);
+    assert.deepStrictEqual(lines(W(p, '  return {', '    commit() {', '      fs.writeFileSync(p, c);', '    },', '  };')), [5]);
+    assert.deepStrictEqual(lines(W(p, '  withLock(() => { fs.writeFileSync(p, c); });')), [3]);
+    assert.deepStrictEqual(lines(W(p, '  function flush() { fs.writeFileSync(p, c); }')), [3]);
+    assert.deepStrictEqual(lines(W(p, '  items.forEach((item) => {', '    fs.writeFileSync(p, item);', '  });')), [4]);
+  });
+
+  test('guard: an assignment and write in a one-line block or arrow body, or a reassignment in a closed block, is reported', () => {
+    assert.deepStrictEqual(lines(W("  if (c) { const p = path.join(dir, 'STATE.md'); fs.writeFileSync(p, c); }")), [2]);
+    assert.deepStrictEqual(lines("const w = () => { const p = join(dir,'STATE.md'); fs.writeFileSync(p,c); };"), [1]);
+    assert.deepStrictEqual(lines(['function f(p, statePath, c) {', '  if (a) { p = statePath; } fs.writeFileSync(p, c);', '}'].join('\n')), [2]);
+  });
+
+  test('bound: chains of MAX_TARGET_RESOLUTION_HOPS - 1 and exactly MAX lookups are reported, one more is not', () => {
+    assert.ok(Number.isInteger(MAX_TARGET_RESOLUTION_HOPS) && MAX_TARGET_RESOLUTION_HOPS > 1);
+    assert.strictEqual(findRawStateWrites(OTHER_FILE, chainFixture(MAX_TARGET_RESOLUTION_HOPS - 1)).length, 1);
+    assert.strictEqual(findRawStateWrites(OTHER_FILE, chainFixture(MAX_TARGET_RESOLUTION_HOPS)).length, 1);
+    assert.strictEqual(findRawStateWrites(OTHER_FILE, chainFixture(MAX_TARGET_RESOLUTION_HOPS + 1)).length, 0);
+  });
+
+  test('control: a variable assigned from a non-STATE.md literal, or a loop over an unrelated list, is NOT reported', () => {
+    assert.deepStrictEqual(lines(W("  const p = path.join(dir, 'ROADMAP.md');", '  fs.writeFileSync(p, c);')), []);
+    assert.deepStrictEqual(lines(W('  for (const f of files) {', '    fs.writeFileSync(f, c);', '  }')), []);
+  });
+
+  test('binding: a for...of or destructuring binding stops resolution; a same-named const in a sibling block is not picked up', () => {
+    // The real shape (src/roadmap-upgrade.cts rollback loop): without the
+    // binding rule the backward scan skips `for (const [filePath, backup] of …)`
+    // (it has no `=`) and resolves to the sibling block's `const filePath`.
+    const sibling = ['  {', "    const filePath = path.join(dir, 'STATE.md');", '    platformWriteSync(filePath, c);', '  }'];
+    assert.deepStrictEqual(lines(W(...sibling, '  for (const [filePath, backup] of backups) {', '    fs.writeFileSync(filePath, backup.content);', '  }')), []);
+    assert.deepStrictEqual(lines(W(...sibling, '  const { filePath, body } = entry;', '  fs.writeFileSync(filePath, body);')), []);
+  });
+
+  test('scope: resolution stops at the enclosing named function, and skips strings and property names', () => {
+    const otherFn = ['function other(dir) {', "  const p = path.join(dir, 'STATE.md');", '  return p;', '}'];
+    assert.deepStrictEqual(lines([...otherFn, 'function writer(p, c) {', '  fs.writeFileSync(p, c);', '}'].join('\n')), []);
+    assert.deepStrictEqual(
+      lines(W('  const target = statePath;', "  fs.writeFileSync(path.join(dir, 'target'), c);", '  fs.writeFileSync(opts.target, c);')),
+      [],
+    );
+  });
+
+  // Boundary rule (#5119 review 5477747649, Major 1): an assignment in a closed
+  // sibling block or arrow body is not in scope at the write. The nearest
+  // assignment ends the search only when no `{`, `}` or `=>` lies between it
+  // and the write; otherwise the search goes on to the next earlier one.
+  test('boundary: an outer STATE.md binding shadowed only inside a closed block or arrow body is still reported', () => {
+    const outer = "  const p = path.join(dir, 'STATE.md');";
+    const inner = "    const p = path.join(dir, 'ROADMAP.md');";
+    assert.deepStrictEqual(lines(W(outer, '  if (x) {', inner, '    use(p);', '  }', '  fs.writeFileSync(p, c);')), [7]);
+    assert.deepStrictEqual(lines(W(outer, "  if (x) { const p = 'ROADMAP.md'; use(p); }", '  fs.writeFileSync(p, c);')), [4]);
+    assert.deepStrictEqual(lines(W(outer, '  const g = () => {', inner, '    return p;', '  };', '  fs.writeFileSync(p, c);')), [7]);
+  });
+
+  test('boundary control: with no boundary between them, the nearest assignment decides', () => {
+    assert.deepStrictEqual(lines(W("  const p = path.join(dir, 'STATE.md');", "  p = path.join(dir, 'ROADMAP.md');", '  fs.writeFileSync(p, c);')), []);
+    assert.deepStrictEqual(
+      lines(W('  withLock(() => {', "    const p = path.join(dir, 'ROADMAP.md');", '    fs.writeFileSync(p, c);', '  });')),
+      [],
+    );
+  });
+
+  // Typed declarations (#5119 review 5477747649, Major 2): the scanned sources
+  // are TypeScript, so a declaration may carry an annotation before `=`.
+  test('typed: a typed declaration binds its name for Axis 2', () => {
+    for (const decl of ['const p: string', 'let p: string', 'var p: string', 'const p: Array<string>', 'let p: string | undefined', 'const p: Record<string, string>']) {
+      assert.deepStrictEqual(lines(W(`  ${decl} = path.join(dir, 'STATE.md');`, '  fs.writeFileSync(p, c);')), [3], decl);
+    }
+    // A comparison, an object key, or a declaration with no initializer is not an assignment to `p`.
+    for (const line of ["  const ok: boolean = p == path.join(dir, 'STATE.md');", "  const o = { p: path.join(dir, 'STATE.md') };", "  let p: string; const q = path.join(dir, 'STATE.md');"]) {
+      assert.deepStrictEqual(lines(['function w(p, dir, c) {', line, '  fs.writeFileSync(p, c);', '}'].join('\n')), [], line);
+    }
+  });
+
+  test('Axis 3 is unchanged: without options, nearestPrecedingAssignment reads only the untyped forms, as before #5104', () => {
+    // Axis 3 calls nearestPrecedingAssignment with no options; Axis 2's typed
+    // and binding rules are opt-in, so Axis 3's verdicts do not move.
+    // The right-hand side runs to the line end, `;` included, as it always has.
+    const rhs = 'stripFrontmatter(content)';
+    for (const form of [`  const p = ${rhs};`, `  let p = ${rhs};`, `  p = ${rhs};`, `  let p: string; p = ${rhs};`]) {
+      assert.strictEqual(nearestPrecedingAssignment([form], 0, 'p'), `${rhs};`, form);
+    }
+    for (const form of [`  const p: string = ${rhs};`, `  const ok = p === ${rhs};`, `  const o = { p: ${rhs} };`]) {
+      assert.strictEqual(nearestPrecedingAssignment([form], 0, 'p'), null, form);
+    }
+    assert.strictEqual(nearestPrecedingAssignment([`  const p: string = ${rhs};`], 0, 'p', { typed: true }), `${rhs};`);
+    assert.deepStrictEqual(nearestPrecedingAssignment(['  for (const p of xs) {'], 0, 'p', { stopAtPatternBinding: true, withLine: true }), null);
+    assert.deepStrictEqual(nearestPrecedingAssignment([`  p = ${rhs}`, ''], 1, 'p', { withLine: true }), { rhs, line: 0 });
+  });
+
+  // Known gaps. Each row records the CORRECT verdict (`expected`) and asserts
+  // today's observed one (`currentBuggyOutput`), per CONTRIBUTING.md's
+  // characterization rule (not `{ todo: true }`, which gsd-test counts as a
+  // failure). `notDeepStrictEqual` checks only that the row's two literals
+  // differ; the `deepStrictEqual` against the guard is what fails loudly when
+  // a fix changes the verdict. Flip the row to a regular assertion then. The
+  // syntax-tree follow-up that closes these is #5279.
+  const gapLoop = (table, kind) => {
+    for (const gap of table) {
+      test(`known gap (${kind}, currently wrong): ${gap.shape}`, () => {
+        assert.notDeepStrictEqual(gap.currentBuggyOutput, gap.expected);
+        assert.deepStrictEqual(lines(gap.text), gap.currentBuggyOutput);
+      });
+    }
+  };
+
+  // The file a join names is not read: a directory derived from statePath
+  // decides, whatever file is joined to it (false positives).
+  const KNOWN_TAIL_GAPS = [
+    {
+      shape: 'statePath-derived directory joined inline with another file name',
+      text: W("  fs.writeFileSync(path.join(path.dirname(statePath), 'ROADMAP.md'), c);"),
+      expected: [],
+      currentBuggyOutput: [2],
+    },
+    {
+      shape: 'statePath-derived directory joined with another file name through variables',
+      text: W('  const d = path.dirname(statePath);', "  const p = path.join(d, 'ROADMAP.md');", '  fs.writeFileSync(p, c);'),
+      expected: [],
+      currentBuggyOutput: [4],
+    },
+    {
+      shape: 'statePath-derived directory joined with a const holding another file name',
+      text: W('  const d = path.dirname(statePath);', "  const n = 'ROADMAP.md';", '  fs.writeFileSync(path.join(d, n), c);'),
+      expected: [],
+      currentBuggyOutput: [4],
+    },
+  ];
+  gapLoop(KNOWN_TAIL_GAPS, 'join tail');
+
+  // Line-based reading of assignments and scope.
+  const KNOWN_SCOPE_GAPS = [
+    {
+      // Missed: each hop resumes on the line above, so a chain on one line breaks.
+      shape: 'two assignments of a chain on the write\'s line',
+      text: W("  const d = path.join(dir, 'STATE.md'); const p = d; fs.writeFileSync(p, c);"),
+      expected: [2],
+      currentBuggyOutput: [],
+    },
+    {
+      // False positive: a right-hand side runs past its own `;` to the line end.
+      shape: 'right-hand side running into a later statement on its line',
+      text: W("  const p = path.join(dir, 'ROADMAP.md'); const q = statePath;", '  fs.writeFileSync(p, c);'),
+      expected: [],
+      currentBuggyOutput: [3],
+    },
+    {
+      // Missed: `p += x` is not read as an assignment, so the scan reaches `let p = dir`.
+      shape: 'a += that adds the STATE.md segment',
+      text: W('  let p = dir;', "  p += '/STATE.md';", '  fs.writeFileSync(p, c);'),
+      expected: [4],
+      currentBuggyOutput: [],
+    },
+    {
+      // Missed: `.` does not match `\r`, so no assignment line matches in a CRLF file.
+      shape: 'a variable target in a CRLF file',
+      text: W("  const p = path.join(dir, 'STATE.md');", '  fs.writeFileSync(p, c);').replace(/\n/g, '\r\n'),
+      expected: [3],
+      currentBuggyOutput: [],
+    },
+    {
+      // False positive: a template is kept whole, so a word in its text is read as a name.
+      shape: 'a word in template text that names a statePath variable',
+      text: W('  const notes = statePath;', '  const p = `${dir}/notes`;', '  fs.writeFileSync(p, c);'),
+      expected: [],
+      currentBuggyOutput: [4],
+    },
+    {
+      // Missed: the value starts on the line after `=`.
+      shape: 'declaration whose STATE.md value starts on the next line',
+      text: W('  const p =', "    path.join(dir, 'STATE.md');", '  fs.writeFileSync(p, c);'),
+      expected: [4],
+      currentBuggyOutput: [],
+    },
+    {
+      // Missed: the annotation holds a `;`, which ends it.
+      shape: 'type annotation holding a semicolon',
+      text: W("  const p: { a: string; b: string } = path.join(dir, 'STATE.md');", '  fs.writeFileSync(p, c);'),
+      expected: [3],
+      currentBuggyOutput: [],
+    },
+    {
+      // Missed: a function header on the write's line ends the scan.
+      shape: 'one-line function assigning and writing a STATE.md path',
+      text: "function w(){ const p = join(dir,'STATE.md'); fs.writeFileSync(p,c); }",
+      expected: [1],
+      currentBuggyOutput: [],
+    },
+    {
+      // Missed: a module-level constant sits behind the function boundary.
+      shape: 'module-level STATE.md file-name constant used inside a function',
+      text: ["const STATE_FILENAME = 'STATE.md';", 'function f(d, c) {', '  fs.writeFileSync(path.join(d, STATE_FILENAME), c);', '}'].join('\n'),
+      expected: [3],
+      currentBuggyOutput: [],
+    },
+    {
+      // Missed: a file name built in another function is not resolved.
+      shape: 'STATE.md file name returned by another function',
+      text: ['function stateName() {', "  return 'STATE.md';", '}', 'function f(d, c) {', '  fs.writeFileSync(path.join(d, stateName()), c);', '}'].join('\n'),
+      expected: [5],
+      currentBuggyOutput: [],
+    },
+    {
+      // False positive: a one-line nested function's parameter shadows the outer variable.
+      shape: 'one-line nested function parameter shadowing an outer statePath variable',
+      text: W('  const target = statePath;', '  function inner(target) { fs.writeFileSync(target, c); }'),
+      expected: [],
+      currentBuggyOutput: [3],
+    },
+    {
+      // False positive: a named-function header on the write's line is dropped,
+      // so a top-level one-line function's parameter resolves to an earlier
+      // function's variable.
+      shape: "one-line top-level function's parameter resolved into an earlier function",
+      text: ['function other(dir) {', "  const p = path.join(dir, 'STATE.md');", '  return p;', '}', 'function w(p, c) { fs.writeFileSync(p, c); }'].join('\n'),
+      expected: [],
+      currentBuggyOutput: [5],
+    },
+    {
+      // False positive: `x =>` reads as an assignment `x = >…`; past its `{` the
+      // search goes on to the outer `let x`.
+      shape: 'bare arrow parameter shadowing an outer statePath variable',
+      text: W('  let x = statePath;', '  const save = x => {', '    fs.writeFileSync(x, c);', '  };'),
+      expected: [],
+      currentBuggyOutput: [4],
+    },
+    {
+      // False positive: a `for` header's loop-scoped `let` earlier on the write's line is read.
+      shape: "for header's loop-scoped let earlier on the write's line",
+      text: W('  for (let p = statePath; i < 0; i++) n++; fs.writeFileSync(p, c);'),
+      expected: [],
+      currentBuggyOutput: [2],
+    },
+    {
+      // False positive: a block-scoped binding earlier on the write's line is read.
+      shape: "block-scoped sibling binding earlier on the write's line",
+      text: ['function f(p, statePath, c) {', '  if (a) { const p = statePath; use(p); } else { fs.writeFileSync(p, c); }', '}'].join('\n'),
+      expected: [],
+      currentBuggyOutput: [2],
+    },
+    {
+      // False positive: an arrow's own parameter shadows the outer STATE.md variable.
+      shape: 'same-name arrow parameter shadowing an outer STATE.md variable',
+      text: W("  const p = path.join(dir, 'STATE.md');", '  const save = (p) => {', '    fs.writeFileSync(p, c);', '  };'),
+      expected: [],
+      currentBuggyOutput: [4],
+    },
+    {
+      // False positive: arrows are not boundaries, so `b`'s parameter resolves to `a`'s variable.
+      shape: 'sibling arrow body binding the same name',
+      text: ['const a = (dir) => {', "  const p = path.join(dir, 'STATE.md');", '  return p;', '};', 'const b = (p, c) => {', '  fs.writeFileSync(p, c);', '};'].join('\n'),
+      expected: [],
+      currentBuggyOutput: [6],
+    },
+    {
+      // False positive: a target computed from the state file is not the state file.
+      shape: 'target derived from the state file',
+      text: W("  const p = readTarget(path.join(dir, 'STATE.md'));", '  fs.writeFileSync(p, c);'),
+      expected: [],
+      currentBuggyOutput: [3],
+    },
+    {
+      // False positive: `/STATE\.md/` also matches a longer file name.
+      shape: 'a STATE.md.bak literal',
+      text: W("  fs.writeFileSync(path.join(dir, 'STATE.md.bak'), c);"),
+      expected: [],
+      currentBuggyOutput: [2],
+    },
+  ];
+  gapLoop(KNOWN_SCOPE_GAPS, 'line-based scope');
+
+  // The axis matches only the literal text `fs.writeFileSync(`, over
+  // `stripComments` output, which does not track strings or regex literals.
+  const KNOWN_MATCH_GAPS = [
+    {
+      shape: 'wrapped call after a string holding //',
+      text: W("  const u = 'http://x'; fs.writeFileSync(", '    statePath, c);'),
+      expected: [2],
+      currentBuggyOutput: [],
+    },
+    {
+      shape: 'wrapped call after a regex literal holding //',
+      text: W('  const re = /\\//; fs.writeFileSync(', '    statePath, c);'),
+      expected: [2],
+      currentBuggyOutput: [],
+    },
+    {
+      shape: 'the call spelled inside a string literal',
+      text: W('  const s = "fs.writeFileSync(statePath, c)";'),
+      expected: [],
+      currentBuggyOutput: [2],
+    },
+    ...[
+      ['fs.promises.writeFile onto statePath', '  await fs.promises.writeFile(statePath, c);'],
+      ['fs.appendFileSync onto statePath', '  fs.appendFileSync(statePath, c);'],
+      ['fs.renameSync of a temp file onto statePath', '  fs.renameSync(tmp, statePath);'],
+      ['an aliased fs module (nfs.writeFileSync)', '  nfs.writeFileSync(statePath, c);'],
+      ['destructured writeFileSync onto statePath', '  writeFileSync(statePath, c);'],
+    ].map(([shape, body]) => ({ shape, text: W(body), expected: [2], currentBuggyOutput: [] })),
+  ];
+  gapLoop(KNOWN_MATCH_GAPS, 'call match');
+
+  // Names a generated identifier must not take: JS/TS reserved and keyword-like
+  // words, and the names the fixture already uses.
+  const RESERVED = new Set([
+    'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do', 'else',
+    'enum', 'export', 'extends', 'false', 'finally', 'for', 'function', 'if', 'import', 'in', 'instanceof',
+    'new', 'null', 'return', 'super', 'switch', 'this', 'throw', 'true', 'try', 'typeof', 'var', 'void',
+    'while', 'with', 'yield', 'await', 'async', 'static', 'let', 'of', 'undefined', 'implements',
+    'interface', 'package', 'private', 'protected', 'public', 'type', 'as', 'declare',
+    'path', 'fs', 'dir', 'content', 'statePath', 'writer', 'use', 'x', 'unrelated', 'doWork',
+  ]);
+
+  test('property: a write whose target can be STATE.md is reported through typed, let/var, chained, wrapped and shadowed declarations', () => {
+    // Oracle, from the spec rather than the resolver: a write whose target can
+    // be STATE.md must be reported, at its own line; a write whose every
+    // possible target is a known other file must not be. The fixture binds a
+    // chain of 1..MAX_TARGET_RESOLUTION_HOPS declarations ending in
+    // path.join(dir, '<file>'). With `shadow`, a closed block before the write
+    // redeclares the target as ROADMAP.md: out of scope at the write for
+    // `const`/`let`, a possible reassignment for `var`. Either way the target
+    // can still be the chain's value, so STATE.md must still report.
+    // Fail fast when the bound is not exported: an undefined `max` makes
+    // fc.integer generate without limit instead of failing.
+    assert.ok(Number.isInteger(MAX_TARGET_RESOLUTION_HOPS), 'MAX_TARGET_RESOLUTION_HOPS is exported');
+    const fc = require('./helpers/fast-check-setup.cjs');
+    const ident = fc.stringMatching(/^[a-z][a-zA-Z0-9]{0,7}$/).filter((s) => !RESERVED.has(s));
+    const keyword = fc.constantFrom('const', 'let', 'var');
+    const annotation = fc.constantFrom('', ': string', ': string | undefined', ': PathLike', ': Readonly<string>');
+    const depth = fc.integer({ min: 1, max: MAX_TARGET_RESOLUTION_HOPS });
+    const otherFile = fc.constantFrom('ROADMAP.md', 'PLAN.md', 'STATE.json', 'notes.md');
+    const filler = fc.array(fc.constantFrom('  const unrelated = 1;', '', '  // a comment', '  doWork();'), { maxLength: 3 });
+    fc.assert(
+      fc.property(
+        fc.record({ name: ident, kw: keyword, ann: annotation, depth, other: otherFile, fill: filler, shadow: fc.boolean(), wrapped: fc.boolean() }),
+        ({ name, kw, ann, depth: n, other, fill, shadow, wrapped }) => {
+          const v = (k) => `${name}_${k}`;
+          const build = (file) => {
+            const out = ['function writer(dir, content, x) {', ...fill];
+            out.push(`  ${kw} ${v(0)}${ann} = path.join(dir, '${file}');`);
+            for (let k = 1; k < n; k++) out.push(`  ${kw} ${v(k)}${ann} = ${v(k - 1)};`);
+            const target = v(n - 1);
+            if (shadow) out.push('  if (x) {', `    ${kw} ${target}${ann} = path.join(dir, 'ROADMAP.md');`, `    use(${target});`, '  }');
+            const writeLine = out.length + 1;
+            if (wrapped) out.push('  fs.writeFileSync(', `    ${target},`, '    content);');
+            else out.push(`  fs.writeFileSync(${target}, content);`);
+            out.push('}');
+            return { text: out.join('\n'), writeLine };
+          };
+          const hit = build('STATE.md');
+          const found = findRawStateWrites(OTHER_FILE, hit.text);
+          return found.length === 1 && found[0].line === hit.writeLine && findRawStateWrites(OTHER_FILE, build(other).text).length === 0;
+        },
+      ),
+    );
+  });
+
+  test('CLI: --root <synthetic tree> with a wrapped call and a variable target reports both', (t) => {
+    const tmpRoot = createTempDir('state-write-path-drift-guard-5104-');
+    t.after(() => cleanup(tmpRoot));
+
+    const srcDir = path.join(tmpRoot, 'src');
+    fs.mkdirSync(srcDir, { recursive: true });
+    const fixtureContent = [
+      "import * as fs from 'node:fs';",
+      "import * as path from 'node:path';",
+      '',
+      'function wrapped(statePath: string, content: string): void {',
+      '  fs.writeFileSync(',
+      '    statePath,',
+      '    content);',
+      '}',
+      '',
+      'function viaVariable(dir: string, content: string): void {',
+      "  const p: string = path.join(dir, 'STATE.md');",
+      '  fs.writeFileSync(p, content);',
+      '}',
+    ].join('\n');
+    fs.writeFileSync(path.join(srcDir, 'bogus.cts'), fixtureContent, 'utf8');
+
+    const result = runNode([GUARD_PATH, '--root', tmpRoot, '--json'], { cwd: REPO_ROOT, timeoutMs: PROBE_TIMEOUT_MS });
+    assert.strictEqual(result.outcome, 'exited');
+    assert.strictEqual(result.exitCode, 1);
+
+    const body = JSON.parse(result.stdout);
+    assert.strictEqual(body.ok, false);
+    const reported = body.findings
+      .filter((f) => f.file === 'src/bogus.cts' && f.reason === REASON.RAW_STATE_WRITE)
+      .map((f) => f.line);
+    assert.deepStrictEqual(reported, [5, 12]);
+  });
+});
