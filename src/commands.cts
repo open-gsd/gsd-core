@@ -3300,6 +3300,8 @@ async function cmdWebsearch(query: string | undefined, options: WebsearchOptions
               'Accept': 'application/json',
               'X-Subscription-Token': apiKey
             },
+            // never follow redirects: X-Subscription-Token must not leave api.search.brave.com (#5409)
+            redirect: 'manual',
             signal: ac.signal
           }
         );
