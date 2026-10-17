@@ -40,9 +40,6 @@ const COMMAND_MAX_LENGTH = 4096;
 /** Predicate kinds this evaluator recognises (extensible — add to KIND_TABLE). */
 const EVALUATOR_KINDS = Object.freeze(['command-exit-zero', 'artifact-frontmatter-equals']);
 
-/** Placeholders interpolated into a declared command, in addition to sh's own vars. */
-const INTERPOLATION_VAR_NAMES = Object.freeze(['PHASE_NUMBER', 'PHASE_DIR', 'PHASE_REQ_IDS']);
-
 // ─── Types (internal; runtime API is the `export =` block) ────────────────────
 
 interface PredicateContext {
@@ -62,7 +59,7 @@ interface BoundedShellResult {
 }
 
 interface PredicateDeps {
-  runBoundedShell(opts: { command: string; cwd: string; timeoutMs: number }): BoundedShellResult;
+  runBoundedShell(opts: { command: string; cwd: string; timeoutMs: number; env: Record<string, string> }): BoundedShellResult;
   findPhaseArtifact(phaseDir: string, artifactSuffix: string): string | null;
   readFrontmatter(filePath: string): Record<string, unknown>;
 }
@@ -75,17 +72,8 @@ interface PredicateResult {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const INTERPOLATION_RE = /\$\{(PHASE_NUMBER|PHASE_DIR|PHASE_REQ_IDS)\}/g;
-
-/** Replace the three known ${PHASE_*} placeholders with context values (undefined => ''). */
-function interpolate(command: string, ctx: PredicateContext): string {
-  return command.replace(INTERPOLATION_RE, (_whole, name: string): string => {
-    if (name === 'PHASE_NUMBER') return ctx.phaseNumber ?? '';
-    if (name === 'PHASE_DIR') return ctx.phaseDir ?? '';
-    if (name === 'PHASE_REQ_IDS') return ctx.phaseReqIds ?? '';
-    return '';
-  });
-}
+/** Retired GSD spellings collide with shell expansion and must never reach the shell. */
+const LEGACY_CONTEXT_PLACEHOLDER_RE = /\$\{(PHASE_NUMBER|PHASE_DIR|PHASE_REQ_IDS)\}/;
 
 /** Cap a string at COMMAND_MAX_OUTPUT_CHARS so gate messages stay context-bounded. */
 function trimToMax(s: string): string {
@@ -120,13 +108,26 @@ function evaluateCommandExitZero(
     timeoutMs = Math.floor(rawTimeout * 1000);
   }
 
-  const interpolated = interpolate(command, ctx);
-  const res = deps.runBoundedShell({ command: interpolated, cwd: ctx.cwd, timeoutMs });
+  const legacyPlaceholder = LEGACY_CONTEXT_PLACEHOLDER_RE.exec(command);
+  if (legacyPlaceholder) {
+    throw new Error(
+      `command-exit-zero predicate no longer accepts ${legacyPlaceholder[0]}; use "$GSD_GATE_${legacyPlaceholder[1]}" (phase context is passed as environment data)`,
+    );
+  }
+
+  // Only the capability-authored command is shell code. Context reaches the child
+  // as environment data; even shell metacharacters in a value cannot rewrite it.
+  const env = {
+    GSD_GATE_PHASE_NUMBER: ctx.phaseNumber ?? '',
+    GSD_GATE_PHASE_DIR: ctx.phaseDir ?? '',
+    GSD_GATE_PHASE_REQ_IDS: ctx.phaseReqIds ?? '',
+  };
+  const res = deps.runBoundedShell({ command, cwd: ctx.cwd, timeoutMs, env });
 
   if (res.timedOut) {
     return {
       block: true,
-      message: trimToMax(`command timed out after ${Math.round(timeoutMs / 1000)}s: ${res.stderr || interpolated}`),
+      message: trimToMax(`command timed out after ${Math.round(timeoutMs / 1000)}s: ${res.stderr || command}`),
       details: { kind: 'command-exit-zero', timedOut: true, signal: res.signal },
     };
   }
@@ -258,10 +259,8 @@ function evaluatePredicate(predicate: unknown, context: unknown, deps: unknown):
 export = {
   evaluatePredicate,
   evaluateCommandExitZero,
-  interpolate,
   COMMAND_EXIT_ZERO_DEFAULT_TIMEOUT_MS,
   COMMAND_MAX_OUTPUT_CHARS,
   COMMAND_MAX_LENGTH,
   EVALUATOR_KINDS,
-  INTERPOLATION_VAR_NAMES,
 };

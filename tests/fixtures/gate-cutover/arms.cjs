@@ -626,7 +626,7 @@ arm('E9', 'gap-analysis-plan-post-path-escape', 'gap', 'gap-analysis-plan-post',
 const PRED_DIR = '.planning/phases/01-pred';
 arm('E10', 'predicate-command-passes', 'pred', 'predicate', ['--predicate', '{"kind":"command-exit-zero","command":"true"}']);
 arm('E10', 'predicate-command-blocks', 'pred', 'predicate', ['--predicate', '{"kind":"command-exit-zero","command":"echo boom >&2; exit 3"}']);
-arm('E10', 'predicate-command-interpolates-phase-number', 'pred', 'predicate', ['--predicate', '{"kind":"command-exit-zero","command":"test \\"${PHASE_NUMBER}\\" = \\"07\\""}', '--phase-number', '07']);
+arm('E10', 'predicate-command-phase-number-env', 'pred', 'predicate', ['--predicate', '{"kind":"command-exit-zero","command":"test \\"$GSD_GATE_PHASE_NUMBER\\" = \\"07\\""}', '--phase-number', '07']);
 arm('E10', 'predicate-frontmatter-match', 'pred', 'predicate', ['--predicate', '{"kind":"artifact-frontmatter-equals","artifact":"STATUS.md","field":"status","equals":"done"}', '--phase-dir', PRED_DIR]);
 arm('E10', 'predicate-frontmatter-mismatch', 'pred', 'predicate', ['--predicate', '{"kind":"artifact-frontmatter-equals","artifact":"STATUS.md","field":"status","equals":"open"}', '--phase-dir', PRED_DIR]);
 arm('E10', 'predicate-frontmatter-artifact-not-found', 'pred', 'predicate', ['--predicate', '{"kind":"artifact-frontmatter-equals","artifact":"NOPE.md","field":"status","equals":"done"}', '--phase-dir', PRED_DIR]);

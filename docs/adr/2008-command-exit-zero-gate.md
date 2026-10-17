@@ -153,3 +153,63 @@ hiding the mechanism.
 - ADR-0857 (capability system / module decomposition)
 - `src/gate-predicate-evaluator.cts`, `src/check-command-router.cts`
 - Diátaxis docs: `docs/reference/gate-predicates.md`, `docs/how-to/command-exit-zero-gate.md`
+
+## Amendment — 2026-10-14: Phase context is environment data
+
+Issue [#5318](https://github.com/open-gsd/gsd-core/issues/5318) intentionally
+revisits the original **Interpolation** and **Environment** rows above. Textual
+substitution turned filesystem and CLI data into shell code: a phase directory
+containing `$(...)` or backticks executed substitutions even inside double
+quotes, while an apostrophe broke a single-quoted placeholder. The original
+Decision and examples remain the historical record; this amendment governs the
+current command contract.
+
+GSD performs **no textual substitution** in `command-exit-zero` command text.
+The evaluator passes three environment entries to `runBoundedShell`; the
+production binding forwards them to `shell-command-projection.execTool`, which
+merges them over the inherited process environment:
+
+| Environment variable | Gate context | Absent value |
+|---|---|---|
+| `GSD_GATE_PHASE_NUMBER` | `phaseNumber` / `--phase-number` | `''` |
+| `GSD_GATE_PHASE_DIR` | `phaseDir` / `--phase-dir`, resolved absolute path | `''` |
+| `GSD_GATE_PHASE_REQ_IDS` | `phaseReqIds` / `--phase-req-ids` | `''` |
+
+The `GSD_GATE_` namespace distinguishes supplied gate context from ordinary
+user shell variables. Every invocation overrides all three entries, including
+absent values, so inherited values cannot override context or supply a stale
+phase. Unrelated environment entries remain inherited. The names are
+**environment-variable names, not GSD command placeholders**; only the shell
+performs its ordinary expansion. Capability authors pass them as quoted data:
+
+```json
+{
+  "kind": "command-exit-zero",
+  "command": "node checks/pre-ship.js \"$GSD_GATE_PHASE_DIR\" \"$GSD_GATE_PHASE_NUMBER\" \"$GSD_GATE_PHASE_REQ_IDS\"",
+  "timeout": 30
+}
+```
+
+This is a **breaking manifest change**. The old `${PHASE_NUMBER}`,
+`${PHASE_DIR}` and `${PHASE_REQ_IDS}` spellings are rejected as malformed
+command predicates before any subprocess runs. Each diagnostic names the
+matching `"$GSD_GATE_PHASE_NUMBER"`, `"$GSD_GATE_PHASE_DIR"` or
+`"$GSD_GATE_PHASE_REQ_IDS"` replacement. Rejection also applies inside quotes;
+there is no escaping or quoting compatibility mode and no alternative GSD
+placeholder language whose spelling could collide with a shell's syntax.
+A malformed declaration remains a Step-1 check-command failure routed by
+`onError`, rather than a successful negative gate verdict.
+
+The capability-authored command remains trusted `sh -c` code under the original
+opt-in install trust model. This amendment protects **phase context data**; it
+does not sandbox capabilities or restrict commands they deliberately author.
+Project-root cwd, command-length validation, bounded timeouts, output limits,
+result mapping, and the #4354 project confinement of `--phase-dir` are unchanged.
+`timedOut` is taken from the Shell Command Projection Module's `ETIMEDOUT`
+classification; a self-delivered SIGTERM blocks as a non-zero command result
+without claiming a timeout. `artifact-frontmatter-equals` is unchanged.
+
+The current authoring contract is documented in
+`docs/reference/gate-predicates.md` and
+`docs/how-to/command-exit-zero-gate.md`. The evaluator no longer exports its
+retired `interpolate` helper or `INTERPOLATION_VAR_NAMES` list.
