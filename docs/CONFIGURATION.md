@@ -1440,6 +1440,13 @@ a caller error — the gate fails closed with the missing-argument error, the
 same as calling it with no context path at all, rather than silently
 skipping. The phase directory remains a separate positional argument (there
 is no `--phase` flag; the workflow caller passes both positionals).
+A phase-dir argument that names no directory is a caller error too: the gate
+fails closed with `total`/`covered` null and `reason` `"phase directory not
+found"` (nothing is there, e.g. the phase number `01` was passed), `"phase
+path is not a directory"` (it names a file) or `"phase directory unreadable"`
+(it could not be read; the exit status is then UNAVAILABLE, 69). A phase
+directory that holds no PLAN file answers `reason` `"phase directory holds no
+plans"` the same way: zero plans loaded is not zero coverage.
 
 ### How to write decisions the gates accept
 
