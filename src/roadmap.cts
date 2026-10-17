@@ -26,7 +26,7 @@ const { SCOPE } = planningScopeMod;
 type Scope = planningScopeMod.Scope;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserModule = require('./roadmap-parser.cjs');
-const { stripShippedMilestones, extractCurrentMilestone, extractCurrentMilestoneScoped, replaceInCurrentMilestone, listMilestoneHeadings, scanMilestonePhaseIds, collectTablePhaseRows, hasPhaseListingTableHeader } = roadmapParserModule;
+const { stripShippedMilestones, extractCurrentMilestone, extractCurrentMilestoneScoped, replaceInCurrentMilestone, activeScopeStart, listMilestoneHeadings, scanMilestonePhaseIds, collectTablePhaseRows, hasPhaseListingTableHeader } = roadmapParserModule;
 import { tokenizeHeadings } from './markdown-sectionizer.cjs';
 import { escapeCell, findTableWithColumns, updateTableCell } from './markdown-table.cjs';
 import { clampPercent } from './phase-lifecycle.cjs';
@@ -976,6 +976,9 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
       summary_count: p.summary_count,
     }));
 
+  // #5221: unticked checklist entries only (a table-only row has no checkbox) — ship's completeness gate.
+  const uncheckedPhases = [...new Set(checklistOccurrences.filter(o => !o.checked && !isSentinelPhase(o.token, o.bracketId)).map(o => o.token))];
+
   const result = {
     milestones,
     phases,
@@ -1006,6 +1009,7 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
     // #4757: phases whose ROADMAP checkbox disagrees with `disk_status`
     // (`roadmap_complete` vs `disk_status === "complete"`); always an array.
     checkbox_conflict: checkboxConflict,
+    unchecked_phases: uncheckedPhases,
     missing_phase_details: missingDetails.length > 0 ? missingDetails : null,
     // #3184/#3165: distinguishes a genuinely empty milestone (`scope:
     // "complete"`, `phase_count: 0`) from a window that could not be fully
@@ -1088,9 +1092,10 @@ function cmdRoadmapMilestoneScope(cwd: string, raw: boolean): void {
  * Scope a ROADMAP.md content string down to its "Progress table" writable
  * slice, run `edit` against just that slice, then splice the result back into
  * the original content (ADR-2143 §7). Layered scoping:
- *   1. Milestone scope — everything after the LAST `</details>` close tag
- *      (mirrors `replaceInCurrentMilestone`), so a same-numbered phase row in
- *      an archived milestone is never touched.
+ *   1. Milestone scope — `activeScopeStart` (shared with
+ *      `replaceInCurrentMilestone`): past the last `</details>` before the active
+ *      milestone heading, to EOF, so a same-numbered phase row in an archived
+ *      milestone is never touched.
  *   2. Heading scope — within that milestone slice, the `## Progress` heading
  *      section (up to the next `#`/`##` heading) when present, else the whole
  *      milestone slice (mirrors phase-lifecycle.cjs's `deriveProgressFromRoadmap`
@@ -1100,15 +1105,22 @@ function cmdRoadmapMilestoneScope(cwd: string, raw: boolean): void {
  * found within the scoped slice) simply returns its input unchanged, mirroring
  * the prior regex `.replace()`'s no-match-is-a-no-op semantics.
  */
-function editProgressTableSlice(content: string, edit: (scoped: string) => string): string {
-  const lastDetailsClose = content.lastIndexOf('</details>');
-  const milestoneOffset = lastDetailsClose === -1 ? 0 : lastDetailsClose + '</details>'.length;
+function editFromPhaseTable(scoped: string, edit: (scoped: string) => string): string {
+  // #5221: Status/Completed bind to the first table carrying that column; start
+  // at the phase table so an earlier versions table is never the target.
+  const header = scoped.match(/^\|.*\bPhase\b.*\bPlans Complete\b.*$/m);
+  const at = header?.index ?? 0;
+  return scoped.slice(0, at) + edit(scoped.slice(at));
+}
+
+function editProgressTableSlice(content: string, edit: (scoped: string) => string, cwd?: string): string {
+  const milestoneOffset = activeScopeStart(content, cwd);
   const before = content.slice(0, milestoneOffset);
   const milestoneSlice = content.slice(milestoneOffset);
 
   const progressMatch = milestoneSlice.match(/^##[ \t]+Progress\b/im);
   if (!progressMatch || progressMatch.index === undefined) {
-    return before + edit(milestoneSlice);
+    return before + editFromPhaseTable(milestoneSlice, edit);
   }
 
   const headingOffset = progressMatch.index;
@@ -1118,7 +1130,7 @@ function editProgressTableSlice(content: string, edit: (scoped: string) => strin
   const scoped = nextHeading >= 0 ? fromHeading.slice(0, nextHeading) : fromHeading;
   const after = nextHeading >= 0 ? fromHeading.slice(nextHeading) : '';
 
-  return before + beforeHeading + edit(scoped) + after;
+  return before + beforeHeading + editFromPhaseTable(scoped, edit) + after;
 }
 
 function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | undefined, raw: boolean): void {
@@ -1279,10 +1291,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // (post-</details>) region — the same milestone scoping every writer
     // below applies — so the gate asks "does the file carry a writable phase
     // representation" rather than "did some regex fire mid-transform".
-    const gateDetailsClose = originalContent.lastIndexOf('</details>');
-    const gateActiveRegion = gateDetailsClose === -1
-      ? originalContent
-      : originalContent.slice(gateDetailsClose + '</details>'.length);
+    const gateActiveRegion = originalContent.slice(activeScopeStart(originalContent, cwd));
     // Heading target: the exact grammar `planSectionPattern` /
     // `insertRowsPatternA|B` anchor on (an ATX phase heading for this phase).
     const headingTargetFound = new RegExp(phaseHeadingAnchor, 'i').test(gateActiveRegion);
@@ -1363,7 +1372,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       if (completedResult.ok) { text = completedResult.value; tableRowFound = true; }
 
       return text;
-    });
+    }, cwd);
 
     // #4947: a word-prefixed Phase cell (`Phase 68`) is deliberately not a
     // writable table target (#4247 — the read side ignores it too), but when the
@@ -1573,7 +1582,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
         return sectionText;
       }
       return out.value;
-    });
+    }, cwd);
 
     // If complete: check checkbox
     if (isComplete) {
@@ -1581,7 +1590,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
         `(-\\s*\\[)[ ](\\]\\s*.*Phase\\s+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
         'i'
       );
-      roadmapContent = replaceInCurrentMilestone(roadmapContent, checkboxPattern, `$1x$2 (completed ${today})`);
+      roadmapContent = replaceInCurrentMilestone(roadmapContent, checkboxPattern, `$1x$2 (completed ${today})`, cwd);
     }
 
     // Mark completed plan checkboxes (e.g. "- [ ] 50-01-PLAN.md", "- [ ] 50-01:", or "- [ ] **50-01**")
@@ -1610,10 +1619,8 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // block is not counted as "already present" in the active milestone section.
     // (Finding 1 code-review: detection was previously running against the full
     //  roadmapContent, causing archived rows to suppress active-section inserts.)
-    const lastDetailsClose = roadmapContent.lastIndexOf('</details>');
-    const activeRegion = lastDetailsClose === -1
-      ? roadmapContent
-      : roadmapContent.slice(lastDetailsClose + '</details>'.length);
+    const activeStart = activeScopeStart(roadmapContent, cwd);
+    const activeRegion = roadmapContent.slice(activeStart);
 
     // Compute which plan files are MISSING a checkbox row in the ACTIVE region.
     // This handles three cases:
@@ -1680,19 +1687,10 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       // prevent duplicate phase headings in archived sections from receiving rows.
       // replaceInCurrentMilestone only accepts a string replacement, so we
       // perform the scoped replace manually here (same strategy as that helper).
-      // Note: lastDetailsClose was computed above (shared with detection).
       const scopedReplace = (src: string, pat: RegExp) => src.replace(pat, inserter);
-      let withRows: string;
-      if (lastDetailsClose === -1) {
-        // activeRegion === roadmapContent when there are no </details> blocks.
-        const regionA = scopedReplace(activeRegion, insertRowsPatternA);
-        withRows = regionA !== activeRegion ? regionA : scopedReplace(activeRegion, insertRowsPatternB);
-      } else {
-        const beforeDetails = roadmapContent.slice(0, lastDetailsClose + '</details>'.length);
-        const regionA = scopedReplace(activeRegion, insertRowsPatternA);
-        const afterWithRows = regionA !== activeRegion ? regionA : scopedReplace(activeRegion, insertRowsPatternB);
-        withRows = beforeDetails + afterWithRows;
-      }
+      const regionA = scopedReplace(activeRegion, insertRowsPatternA);
+      const afterWithRows = regionA !== activeRegion ? regionA : scopedReplace(activeRegion, insertRowsPatternB);
+      const withRows = roadmapContent.slice(0, activeStart) + afterWithRows;
       if (withRows !== roadmapContent) {
         roadmapContent = withRows;
         // Mark any newly-inserted rows that already have summaries as complete

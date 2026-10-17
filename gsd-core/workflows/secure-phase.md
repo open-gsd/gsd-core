@@ -181,7 +181,7 @@ gsd_run query commit "docs(phase-${PHASE}): add/update security threat verificat
 GSD > PHASE {N} THREAT-SECURE
 threats_open: 0 — no blocking threats remain (threats_open: 0).
 ▶ /gsd:validate-phase {N}    validate test coverage
-▶ /gsd:verify-work {N}       run UAT
+▶ /gsd:verify-work {N}       run UAT; once UAT and verification pass it marks the phase complete (ROADMAP + STATE)
 ```
 
 Display `/clear` reminder.

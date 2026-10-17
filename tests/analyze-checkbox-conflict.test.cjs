@@ -110,6 +110,27 @@ describe('roadmap analyze checkbox_conflict (#4757)', () => {
     assert.strictEqual(out.completed_phases, 1);
   });
 
+  test('#5221: checklist-only Phase 2 is unchecked even when Phase 1 has a detail heading', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n## Milestone: v1.0\n\n- [x] **Phase 1: P1** - item\n- [ ] **Phase 2: P2** - item\n\n### Phase 1: P1\n\n**Goal**: g\n');
+    assert.deepStrictEqual(analyze(tmpDir).unchecked_phases, ['2']);
+  });
+
+  test('#5221: unchecked_phases lists unticked checklist entries regardless of disk; table-only rows are absent', () => {
+    writeProject(tmpDir, [
+      { ticked: false, shape: DISK.NONE },
+      { ticked: false, shape: DISK.VERIFIED },
+      { ticked: true, shape: DISK.VERIFIED },
+    ]);
+    assert.deepStrictEqual(analyze(tmpDir).unchecked_phases, ['1', '2']);
+    const rows = createTempProject();
+    try {
+      fs.writeFileSync(path.join(rows, '.planning', 'ROADMAP.md'),
+        '# Roadmap\n\n## Milestone: v1.0\n\n| Phase | Status |\n|---|---|\n| 1. Alpha | Pending |\n\n### Phase 1: Alpha\n\n**Goal**: g\n');
+      assert.deepStrictEqual(analyze(rows).unchecked_phases, []);
+    } finally { cleanup(rows); }
+  });
+
   test('boundary: zero, one and two conflicts yield arrays of exactly that length', () => {
     const cases = [
       [[{ ticked: true, shape: DISK.VERIFIED }, { ticked: false, shape: DISK.NONE }], 0],

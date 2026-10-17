@@ -1451,19 +1451,14 @@ function replaceInCurrentMilestone(
   content: string,
   pattern: RegExp,
   replacement: string | RoadmapReplacer,
+  cwd?: string,
 ): string {
+  const offset = activeScopeStart(content, cwd);
   const apply = (src: string): string =>
     typeof replacement === 'function'
       ? src.replace(pattern, replacement)
       : src.replace(pattern, replacement);
-  const lastDetailsClose = content.lastIndexOf('</details>');
-  if (lastDetailsClose === -1) {
-    return apply(content);
-  }
-  const offset = lastDetailsClose + '</details>'.length;
-  const before = content.slice(0, offset);
-  const after = content.slice(offset);
-  return before + apply(after);
+  return content.slice(0, offset) + apply(content.slice(offset));
 }
 
 /**
@@ -2390,7 +2385,24 @@ function currentMilestoneRawRanges(
   return { primary: { start: sectionStart, end: sectionEnd }, details };
 }
 
+/**
+ * Offset where the active milestone's writable scope starts: just past the last
+ * `</details>` that closes BEFORE the selected milestone heading, so a backlog
+ * `</details>` AFTER it no longer hides it (#5221) while phase/Progress content
+ * above the heading (#2947 preamble layout) stays in scope. No resolved heading,
+ * or one that is itself closed (stale STATE), uses the last `</details>` anywhere.
+ * The scope runs to EOF either way, so a bottom `## Progress` stays in scope.
+ */
+function activeScopeStart(content: string, cwd?: string): number {
+  const start = currentMilestoneRawRanges(content, cwd)?.primary.start;
+  const open = start !== undefined && !isClosedMilestoneHeading(content.slice(start).split('\n', 1)[0]);
+  const upTo = open ? content.slice(0, start) : content;
+  const lastDetailsClose = upTo.lastIndexOf('</details>');
+  return lastDetailsClose === -1 ? 0 : lastDetailsClose + '</details>'.length;
+}
+
 export = {
+  activeScopeStart,
   stripShippedMilestones,
   extractCurrentMilestone,
   extractCurrentMilestoneScoped,

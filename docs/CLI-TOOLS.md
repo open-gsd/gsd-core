@@ -472,6 +472,8 @@ no checklist entry, has no checkbox to disagree with and is never listed
 | `plan_count` | number | Plans found for the phase |
 | `summary_count` | number | Summaries paired with a plan |
 
+`unchecked_phases` (#5221) lists the numbers of phases whose checklist entry is unticked, whatever the disk says; table-only rows are absent.
+
 The selectors are unchanged: `checkbox_conflict` only reports the
 disagreement. To treat a phase as done despite its disk status, verify it
 (`verify-phase`) so a passing `*-VERIFICATION.md` exists.
