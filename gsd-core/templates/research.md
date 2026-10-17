@@ -217,7 +217,9 @@ What's changed recently:
 <open_questions>
 ## Open Questions
 
-Things that couldn't be fully resolved:
+Things that couldn't be fully resolved. Only the user closes one: never mark a question resolved
+yourself or add a `(RESOLVED)` suffix to this heading. A question is resolved only when it cites a
+`D-NN` decision recorded in CONTEXT.md, as `RESOLVED (D-NN): <ruling>`.
 
 1. **[Question]**
    - What we know: [partial info]
