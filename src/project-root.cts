@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-const FIND_PROJECT_ROOT_MAX_DEPTH = 10;
+export const FIND_PROJECT_ROOT_MAX_DEPTH = 10;
 
 // #4894: an operator-supplied `--project-dir` IS the project root — the
 // dispatcher validates it and skips the ancestor walk-up for `cwd`, but code
