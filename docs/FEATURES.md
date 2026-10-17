@@ -2489,8 +2489,8 @@ The loop overwrites `REVIEW-FIX.md` on every pass and the re-review stops report
 it is fixed, so a finding closed in iteration 1 appears in neither final artifact. The gate
 therefore also reads the per-iteration backups the loop writes (`<NN>-REVIEW-FIX.iterN.md`), newest
 first, so the most recent statement about an ID wins; the backups are removed after the ledger has
-read them, not before. Without this a fully successful multi-iteration run recorded its early fixes
-as `open (not in the current review)` — indistinguishable from a finding that vanished for an
+read them, not before (on degradation they are kept and committed). Without this a fully successful
+multi-iteration run recorded its early fixes as `open (not in the current review)` — indistinguishable from a finding that vanished for an
 unrelated reason, which is the one distinction this ledger exists to make. A finding a fix report
 decided but the current review no longer reports gets a row of its own, carrying that decision and
 marked *(not in the current review)*.

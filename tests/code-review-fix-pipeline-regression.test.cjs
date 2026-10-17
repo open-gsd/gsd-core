@@ -240,6 +240,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
         const script = [
           'set -euo pipefail',
           'AUTO_MODE=true',
+          'COMMIT_DOCS=false',
           'REVIEW_PATH="' + path.join(dir, '01-REVIEW.md') + '"',
           'FIX_REPORT_PATH="' + path.join(dir, '01-REVIEW-FIX.md') + '"',
           fence,
@@ -266,5 +267,70 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     // An unreadable or unparseable review is not evidence of convergence — retain.
     const unknown = drive('');
     assert.strictEqual(unknown.review, true, 'an unparseable status must retain, never remove');
+  });
+
+  test('T6c — #5034: retained backups are COMMITTED when COMMIT_DOCS=true, left alone when false', { skip: !HAS_BASH }, () => {
+    // A non-clean --auto run retains <NN>-REVIEW(-FIX).iterN.md. Untracked, they leave a dirty tree
+    // that blocks the next checkout/worktree op. Execute the shipped fence against a real git repo
+    // with a gsd_run stub that does what `query commit MSG --files F...` does: add + commit.
+    const src = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+    const fence = stepFence(src, 'cleanup_iteration_backups');
+    const git = (dir, ...a) => runHook('-c', ['git "$@"', 'git', ...a], { interpreter: 'bash', cwd: dir, timeoutMs: PROBE_TIMEOUT_MS });
+
+    const drive = (commitDocs, status = 'issues_found') => {
+      const dir = createTempDir('gsd-5034-cleanup-');
+      try {
+        git(dir, 'init', '-q');
+        git(dir, 'config', 'user.email', 't@t');
+        git(dir, 'config', 'user.name', 't');
+        git(dir, 'config', 'commit.gpgsign', 'false');
+        fs.writeFileSync(path.join(dir, '01-REVIEW.md'), ['---', 'status: ' + status, '---'].join('\n'));
+        fs.writeFileSync(path.join(dir, '01-REVIEW-FIX.md'), 'fix');
+        git(dir, 'add', '.');
+        git(dir, 'commit', '-q', '-m', 'seed');
+        fs.writeFileSync(path.join(dir, '01-REVIEW.iter2.md'), 'scratch');
+        fs.writeFileSync(path.join(dir, '01-REVIEW-FIX.iter2.md'), 'scratch');
+        const script = [
+          'set -euo pipefail',
+          'cd "' + dir + '"',
+          'gsd_run() { echo "$*" >> gsd-calls.log; [ "$1 $2" = "query commit" ] || return 1; local msg="$3"; shift 4; git add -- "$@" && git commit -q -m "$msg"; }',
+          'AUTO_MODE=true',
+          'COMMIT_DOCS=' + commitDocs,
+          'PADDED_PHASE=01',
+          'REVIEW_PATH="' + path.join(dir, '01-REVIEW.md') + '"',
+          'FIX_REPORT_PATH="' + path.join(dir, '01-REVIEW-FIX.md') + '"',
+          fence,
+        ].join('\n');
+        const res = runHook('-c', [script], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
+        assert.strictEqual(res.exitCode, 0, 'the cleanup step must never abort: ' + res.stderr);
+        const calls = fs.existsSync(path.join(dir, 'gsd-calls.log')) ? fs.readFileSync(path.join(dir, 'gsd-calls.log'), 'utf8') : '';
+        if (calls) fs.unlinkSync(path.join(dir, 'gsd-calls.log'));
+        return {
+          calls,
+          status: git(dir, 'status', '--porcelain').stdout.trim(),
+          log: git(dir, 'log', '--name-only', '--format=%s').stdout,
+          count: git(dir, 'rev-list', '--count', 'HEAD').stdout.trim(),
+          review: fs.existsSync(path.join(dir, '01-REVIEW.iter2.md')),
+          fix: fs.existsSync(path.join(dir, '01-REVIEW-FIX.iter2.md')),
+        };
+      } finally { cleanup(dir); }
+    };
+
+    const on = drive('true');
+    assert.strictEqual(on.status, '', 'the tree must be clean after the step: ' + on.status);
+    assert.ok(on.review && on.fix, 'backups are retained on disk');
+    assert.match(on.log, /retain code review iteration backups/, 'commit subject');
+    assert.strictEqual(on.count, '2', 'exactly one new commit beyond the seed');
+    assert.match(on.log, /01-REVIEW\.iter2\.md/, 'REVIEW backup recoverable from git');
+    assert.match(on.log, /01-REVIEW-FIX\.iter2\.md/, 'FIX backup recoverable from git');
+
+    const off = drive('false');
+    assert.strictEqual(off.calls, '', 'COMMIT_DOCS=false: .planning is gitignored, no commit attempted');
+    assert.ok(off.review && off.fix, 'backups are retained on disk');
+    assert.notStrictEqual(off.status, '', 'COMMIT_DOCS=false leaves the tree dirty');
+
+    const clean = drive('true', 'clean');
+    assert.strictEqual(clean.calls, '', 'clean: no commit attempted');
+    assert.ok(!clean.review && !clean.fix, 'clean: backups removed');
   });
 });
