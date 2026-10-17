@@ -841,6 +841,7 @@ const {
   _installNativePluginIfDeclared,
   hasExistingSymlinkBetween,
   isSymlinkedDestOptIn,
+  resolveSymlinkedLeafWritePath,
   migrateLegacyDevPreferencesToSkill,
   USER_OWNED_ARTIFACTS,
   _snapshotDir,
@@ -1529,7 +1530,33 @@ function readSettings(settingsPath) {
  * at call time, after module evaluation, so the ordering is safe.
  */
 function writeSettings(settingsPath, settings) {
-  atomicWriteFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf8');
+  atomicWriteFileSync(resolveSettingsWritePath(settingsPath), JSON.stringify(settings, null, 2) + '\n', 'utf8');
+}
+
+/**
+ * The file writeSettings should actually write for `settingsPath` (#5037):
+ * a symlinked settings file is refused unless GSD_ALLOW_SYMLINKED_DEST is
+ * set, and with it the link's real target is written so the link stays in
+ * place. The policy lives in install-engine's resolveSymlinkedLeafWritePath,
+ * shared with the Codex hooks.json writer. The install root is the settings
+ * file's own directory, as the hooks.json writer passes its own.
+ */
+function resolveSettingsWritePath(settingsPath) {
+  return resolveSymlinkedLeafWritePath(
+    path.dirname(path.resolve(settingsPath)),
+    settingsPath,
+    'writeSettings: settings file',
+  );
+}
+
+/**
+ * Throws writeSettings' symlink refusal for `settingsPath` without writing
+ * anything. The #338 migration writes settings.local.json before it rewrites
+ * the shared settings.json, so it checks the shared file first: a refusal
+ * then leaves both files as they were instead of half-migrated.
+ */
+function assertSettingsWriteAllowed(settingsPath) {
+  resolveSettingsWritePath(settingsPath);
 }
 
 // #2875 Part 2 (J8): model-override resolution (readGsdGlobalModelOverrides /
@@ -13471,6 +13498,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
             }
           }
         }
+        assertSettingsWriteAllowed(sharedSettingsPath);
         fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
         writeSettings(settingsPath, localRaw);
 
