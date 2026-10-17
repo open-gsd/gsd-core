@@ -2809,21 +2809,24 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     assert.ok(fs.existsSync(realHooksJson), 'the symlink target must have been written through');
   });
 
-  test('a dangling hooks.json link is replaced by the write, not refused (#5037)', () => {
-    // reconcileCodexHooksJsonEvent only applies the symlink policy when
-    // existsSync sees hooks.json, and existsSync reports false for a dangling
-    // link, so the write replaces it. writeSettings refuses a dangling link
-    // instead. If the two writers are aligned, this expectation changes with them.
-    runCodexInstall(codexHome);
-    const missingTarget = path.join(codexHome, 'missing-hooks.json');
-    fs.unlinkSync(hooksJsonPath(codexHome));
-    fs.symlinkSync(missingTarget, hooksJsonPath(codexHome));
+  // A dangling hooks.json link is refused, never replaced, the same as a
+  // dangling settings.json link (#5037). With the opt-in already set, the
+  // refusal names the missing target instead of asking for the opt-in again.
+  for (const optIn of [false, true]) {
+    test(`a dangling hooks.json link is refused and left in place (GSD_ALLOW_SYMLINKED_DEST=${optIn ? '1' : 'unset'}) (#5037)`, () => {
+      runCodexInstall(codexHome);
+      const missingTarget = path.join(codexHome, 'missing-hooks.json');
+      fs.unlinkSync(hooksJsonPath(codexHome));
+      fs.symlinkSync(missingTarget, hooksJsonPath(codexHome));
+      if (optIn) process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
 
-    assert.doesNotThrow(() => runCodexInstall(codexHome));
+      assert.throws(() => runCodexInstall(codexHome), optIn ? /target does not exist/ : /GSD_ALLOW_SYMLINKED_DEST=1/);
 
-    assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isFile(), 'the dangling link is replaced by a regular hooks.json');
-    assert.strictEqual(fs.existsSync(missingTarget), false, 'nothing is created at the missing target');
-  });
+      assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isSymbolicLink(), 'the dangling link must survive');
+      assert.strictEqual(fs.readlinkSync(hooksJsonPath(codexHome)), missingTarget, 'the link must still point at the same target');
+      assert.strictEqual(fs.existsSync(missingTarget), false, 'nothing may be created at the missing target');
+    });
+  }
 
   test('cleanupOrphanedCodexContextMonitorScript keeps the hooks.json deregistration when script deletion fails', () => {
     runCodexInstall(codexHome);
