@@ -111,6 +111,7 @@ const SCHEMA_DEFAULTS: Record<string, unknown> = {
   'planner.stall_detect_interval_minutes': 5,
   'planner.stall_threshold_minutes': 10,
   'git.create_tag': true,
+  'git.commit_timeout_ms': 30000,
   // #1689: per-plan agent_hint executor routing — default-on. A no-op for plans
   // without an agent_hint field, so existing dispatch is byte-identical.
   'workflow.agent_hint_routing': true,
@@ -1003,6 +1004,12 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
   if (kp === 'git.create_tag') {
     if (typeof parsedValue !== 'boolean') {
       error(`Invalid git.create_tag '${val}'. Must be a boolean (true or false).`);
+    }
+  }
+
+  if (kp === 'git.commit_timeout_ms') {
+    if (typeof parsedValue !== 'number' || !Number.isSafeInteger(parsedValue) || parsedValue <= 0) {
+      error(`Invalid git.commit_timeout_ms '${val}'. Must be a positive integer (milliseconds).`, ERROR_REASON.USAGE);
     }
   }
 

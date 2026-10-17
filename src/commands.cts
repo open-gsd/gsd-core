@@ -2712,7 +2712,8 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
   // #3886: `git commit` runs pre-commit hooks (husky/lint-staged routinely
   // idles ~4s on Windows before any task) — 10s is too tight, and a timeout
   // kill is NOT an ordinary failure. Same band as the push call below.
-  const commitResult = execGit(commitArgs, { cwd, env: commitEnv, timeout: COMMIT_TIMEOUT_MS });
+  const commitTimeout = commitTimeoutMs(config.commit_timeout_ms);
+  const commitResult = execGit(commitArgs, { cwd, env: commitEnv, timeout: commitTimeout });
   if (commitResult.exitCode !== 0) {
     // #3886: a SIGTERM'd git commit is a timeout, not commit_failed — the
     // partial stderr it flushed (often incidental CRLF warnings) is noise,
@@ -2724,7 +2725,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
         hash: null,
         reason: 'commit_timeout',
         timed_out: true,
-        error: commitTimeoutMessage(cwd, commitResult.stderr, commitResult.stdout),
+        error: commitTimeoutMessage(cwd, commitTimeout, commitResult.stderr, commitResult.stdout),
       };
       output(result, raw, 'failed');
       return;
@@ -2907,7 +2908,8 @@ function cmdCommitToSubrepo(cwd: string, message: string | undefined, files: str
     const commitEnvSub: Record<string, string> = {
       GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'diff.ignoreSubmodules', GIT_CONFIG_VALUE_0: 'dirty',
     };
-    const commitResult = execGit(commitArgs, { cwd: repoCwd, timeout: COMMIT_TIMEOUT_MS, env: commitEnvSub });
+    const commitTimeout = commitTimeoutMs(config.commit_timeout_ms);
+    const commitResult = execGit(commitArgs, { cwd: repoCwd, timeout: commitTimeout, env: commitEnvSub });
     if (commitResult.exitCode !== 0) {
       if (isSpawnTimeout(commitResult)) {
         // #3886 (subrepo counterpart): timeout ≠ error; surface the stale-lock
@@ -2918,7 +2920,7 @@ function cmdCommitToSubrepo(cwd: string, message: string | undefined, files: str
           files: repoFiles,
           reason: 'commit_timeout',
           timed_out: true,
-          error: commitTimeoutMessage(repoCwd, commitResult.stderr, commitResult.stdout),
+          error: commitTimeoutMessage(repoCwd, commitTimeout, commitResult.stderr, commitResult.stdout),
         };
         continue;
       }
@@ -3088,14 +3090,15 @@ function cmdPrSubrepo(
   const commitEnvPr: Record<string, string> = {
     GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'diff.ignoreSubmodules', GIT_CONFIG_VALUE_0: 'dirty',
   };
-  const commitResult = execGit(commitArgs, { cwd: repoCwd, timeout: COMMIT_TIMEOUT_MS, env: commitEnvPr });
+  const commitTimeout = commitTimeoutMs(loadConfig(cwd, { persist: false }).commit_timeout_ms);
+  const commitResult = execGit(commitArgs, { cwd: repoCwd, timeout: commitTimeout, env: commitEnvPr });
   if (commitResult.exitCode !== 0) {
     rollback();
     if (isSpawnTimeout(commitResult)) {
       // #3886 (PR-subrepo counterpart): name the timeout and the stale lock
       // instead of echoing the killed hook's partial stderr.
       error(
-        `git commit timed out after ${COMMIT_TIMEOUT_MS / 1000}s in ${repo} (killed mid-hook; ` +
+        `git commit timed out after ${commitTimeout / 1000}s in ${repo} (killed mid-hook; ` +
         `a stale lock may remain at ${resolveIndexLockPath(repoCwd)} — remove it if no git process is running)`,
       );
     }
@@ -4217,14 +4220,13 @@ interface HooksDirResolution {
   reason?: string;
 }
 
-/**
- * #3886: the timeout band for `git commit` — pre-commit hooks (husky +
- * lint-staged idles ~4s on Windows before any task) routinely exceed the 10s
- * plumbing default; 30s is the same band the push call uses. Shared by all
- * three commit sites AND their timeout messages, so the number and the text
- * cannot drift apart.
- */
+/** #3886/#5231: default `git commit` timeout (hooks outlast 10s); `git.commit_timeout_ms` overrides it, shared by all three commit sites and their messages. */
 const COMMIT_TIMEOUT_MS = 30_000;
+
+/** #5231: `git.commit_timeout_ms` if a positive safe integer (spawnSync throws on fractions), else the default. */
+function commitTimeoutMs(configValue: unknown): number {
+  return typeof configValue === 'number' && Number.isSafeInteger(configValue) && configValue > 0 ? configValue : COMMIT_TIMEOUT_MS;
+}
 
 /**
  * #3886: resolve where a killed `git commit` would leave its stale
@@ -4243,9 +4245,9 @@ function resolveIndexLockPath(cwd: string): string {
 }
 
 /** #3886: shared timeout message shape for all three commit sites. */
-function commitTimeoutMessage(cwd: string, stderr: string, stdout: string): string {
+function commitTimeoutMessage(cwd: string, timeoutMs: number, stderr: string, stdout: string): string {
   return (
-    `git commit timed out after ${COMMIT_TIMEOUT_MS / 1000}s (killed mid-hook; a stale lock may remain at ` +
+    `git commit timed out after ${timeoutMs / 1000}s (killed mid-hook; a stale lock may remain at ` +
     `${resolveIndexLockPath(cwd)} — remove it if no git process is running). ` +
     `Partial stderr: ${stderr || stdout || '(none)'}`
   );

@@ -58,7 +58,7 @@ const {
 } = require('./helpers.cjs');
 const { runNode, runHook } = require('./helpers/process-seam.cjs');
 const { gitOrThrow, throwIfFailed } = require('./helpers/git-fixture.cjs');
-const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { GIT_TIMEOUT_MS, SEAM_DEFAULT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // todo complete — containment boundary (#4327)
@@ -926,5 +926,73 @@ describe('#3776: query commit --files reports an empty diff as nothing_to_commit
     assert.strictEqual(output.committed, false);
     assert.strictEqual(output.reason, 'nothing_to_commit',
       'a revert permits partial commits, so the empty-diff guard must still apply');
+  });
+});
+
+// #5231: `git.commit_timeout_ms` (workspace-root config) must reach the sub-repo
+// commit sites too. The config lives ONLY in the workspace root; the sub-repo
+// has none (config is read from the root cwd, not repoCwd).
+describe('#5231: git.commit_timeout_ms reaches commit-to-subrepo and pr-subrepo', () => {
+  const { createTempGitProject } = require('./helpers.cjs');
+  const { spawnSync } = require('node:child_process');
+  const LIB = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib');
+  let rootDir;
+  afterEach(() => { if (rootDir) cleanup(rootDir); rootDir = undefined; });
+
+  function setup(git) {
+    rootDir = createTempGitProject();
+    const cfg = { planning: { sub_repos: ['backend'] } };
+    if (git) cfg.git = git;
+    fs.writeFileSync(path.join(rootDir, '.planning', 'config.json'), JSON.stringify(cfg));
+    const subDir = path.join(rootDir, 'backend');
+    fs.mkdirSync(subDir, { recursive: true });
+    gitOrThrow(['init', '-q', '.'], { cwd: subDir });
+    gitOrThrow(['config', 'user.email', 't@t'], { cwd: subDir });
+    gitOrThrow(['config', 'user.name', 't'], { cwd: subDir });
+    fs.writeFileSync(path.join(subDir, 'seed.js'), '// seed\n');
+    gitOrThrow(['add', 'seed.js'], { cwd: subDir });
+    gitOrThrow(['commit', '-m', 'seed'], { cwd: subDir });
+    fs.writeFileSync(path.join(subDir, 'seed.js'), '// changed\n');
+  }
+
+  // Runs `call` with execGit patched so `git commit` times out; reports the
+  // `timeout` option execGit was handed plus the call's stdout/stderr.
+  function probe(call) {
+    const script = `
+const path = require('path');
+const LIB = ${JSON.stringify(LIB)};
+const projection = require(path.join(LIB, 'shell-command-projection.cjs'));
+const cmds = require(path.join(LIB, 'commands.cjs'));
+const real = projection.execGit;
+let seenTimeout;
+process.on('exit', () => process.stderr.write('\\n__COMMIT_TIMEOUT__' + JSON.stringify(seenTimeout)));
+projection.execGit = (args, opts) => {
+  if (args[0] === 'commit') {
+    seenTimeout = opts && opts.timeout;
+    const e = new Error('spawnSync git ETIMEDOUT');
+    e.code = 'ETIMEDOUT';
+    return { exitCode: 1, stdout: '', stderr: '', signal: 'SIGTERM', error: e };
+  }
+  return real(args, opts);
+};
+try { ${call} } catch (e) { /* error() throws ExitError after writing its message to stderr */ }
+`;
+    const run = spawnSync(process.execPath, ['-e', script], { encoding: 'utf-8', timeout: SEAM_DEFAULT_TIMEOUT_MS });
+    const m = /^__COMMIT_TIMEOUT__(.*)$/m.exec(run.stderr || '');
+    return { stdout: run.stdout, stderr: run.stderr, timeout: m ? JSON.parse(m[1] || 'null') : undefined };
+  }
+
+  test('commit-to-subrepo passes the configured timeout to git commit', () => {
+    setup({ commit_timeout_ms: 60000 });
+    const r = probe(`cmds.cmdCommitToSubrepo(${JSON.stringify(rootDir)}, 'chore: probe', ['backend/seed.js'], false);`);
+    assert.strictEqual(r.timeout, 60000, `stderr: ${r.stderr}`);
+    assert.ok(JSON.parse(r.stdout).repos.backend.error.includes('60s'));
+  });
+
+  test('pr-subrepo passes the configured timeout to git commit and names 60s', () => {
+    setup({ commit_timeout_ms: 60000 });
+    const r = probe(`cmds.cmdPrSubrepo(${JSON.stringify(rootDir)}, 'backend', 'fix-5231-timeout', 'fix: probe', false);`);
+    assert.strictEqual(r.timeout, 60000, `stderr: ${r.stderr}`);
+    assert.ok(r.stderr.includes('timed out after 60s'), `stderr: ${r.stderr}`);
   });
 });
