@@ -11,6 +11,8 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const fc = require('fast-check');
+const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
 const { runGsdTools, createTempDir, createTempProject, cleanup, delay, withIsolatedProcessState, homeSandboxEnv } = require('./helpers.cjs');
 
 // ─── ADR-612 PR-5: phase_id_convention enum validation ──────────────────────
@@ -1023,6 +1025,136 @@ describe('config-set --dry-run (#4444)', () => {
 
     // Still present on disk — the dry-run must not have unset it.
     assert.strictEqual(readConfig(tmpDir).review.models.codex, 'foo');
+  });
+});
+
+// ─── Unsupported config mutation flags (#5286) ───────────────────────────────
+
+describe('#5286: config mutation routes reject unsupported flags before writing', () => {
+  const verbs = [
+    { command: 'config-ensure-section', positionals: [] },
+    { command: 'config-set-model-profile', positionals: ['quality'] },
+    { command: 'migrate-config', positionals: [] },
+  ];
+  // Noncanonical bytes and a real legacy key expose both rewriting and migration.
+  const legacyBytes = '{ "depth" : "comprehensive", "model_profile" : "balanced", "commit_docs" : false }\n';
+
+  function fixture(existing) {
+    const dir = createTempProject('gsd-config-flags-');
+    const configPath = path.join(dir, '.planning', 'config.json');
+    if (existing) fs.writeFileSync(configPath, legacyBytes);
+    return { dir, configPath, before: existing ? fs.readFileSync(configPath) : null };
+  }
+
+  function assertUnchanged({ configPath, before }) {
+    if (before === null) {
+      assert.equal(fs.existsSync(configPath), false, 'unsupported flags must not create config.json');
+    } else {
+      assert.deepEqual(fs.readFileSync(configPath), before, 'unsupported flags must preserve config bytes');
+    }
+  }
+
+  function assertUsage(result, command, flag) {
+    assert.equal(result.success, false, 'an unsupported flag must fail');
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.output, '', 'refusal must not print a success payload');
+    assert.deepEqual(JSON.parse(result.error), {
+      ok: false,
+      reason: ERROR_REASON.USAGE,
+      message: `Unknown flag for ${command}: ${flag}`,
+    });
+  }
+
+  for (const { command, positionals } of verbs) {
+    for (const prefix of [[], ['query']]) {
+      const invocation = [...prefix, command].join(' ');
+      for (const existing of [false, true]) {
+        for (const flag of ['--dry-run', '--bogus-flag']) {
+          test(`${invocation} ${flag} preserves ${existing ? 'existing' : 'absent'} config`, (t) => {
+            const f = fixture(existing);
+            t.after(() => cleanup(f.dir));
+            const result = runGsdTools(
+              [...prefix, command, ...positionals, flag, '--json-errors'],
+              f.dir,
+              homeSandboxEnv(f.dir),
+            );
+            assertUnchanged(f);
+            assertUsage(result, command, flag);
+          });
+
+          if (positionals.length > 0) {
+            test(`${invocation} ${flag} before the profile is a usage error with ${existing ? 'existing' : 'absent'} config`, (t) => {
+              const f = fixture(existing);
+              t.after(() => cleanup(f.dir));
+              const result = runGsdTools(
+                [...prefix, command, flag, ...positionals, '--json-errors'],
+                f.dir,
+                homeSandboxEnv(f.dir),
+              );
+              assertUnchanged(f);
+              assertUsage(result, command, flag);
+            });
+          }
+        }
+      }
+
+      for (const raw of [false, true]) {
+        test(`${invocation} ${raw ? '--raw' : 'without flags'} still performs its mutation`, (t) => {
+          const f = fixture(command === 'migrate-config');
+          t.after(() => cleanup(f.dir));
+          const result = runGsdTools(
+            [...prefix, command, ...(raw ? ['--raw'] : []), ...positionals],
+            f.dir,
+            homeSandboxEnv(f.dir),
+          );
+          assert.ok(result.success, result.error);
+          const config = readConfig(f.dir);
+          if (command === 'config-ensure-section') {
+            assert.equal(config.model_profile, 'balanced');
+            if (!raw) assert.equal(JSON.parse(result.output).created, true);
+          } else if (command === 'config-set-model-profile') {
+            assert.equal(config.model_profile, 'quality');
+            if (!raw) assert.equal(JSON.parse(result.output).updated, true);
+          } else {
+            assert.equal(Object.hasOwn(config, 'depth'), false);
+            assert.equal(config.granularity, 'fine');
+            assert.equal(config.commit_docs, false);
+            assert.notDeepEqual(fs.readFileSync(f.configPath), f.before);
+            if (!raw) assert.equal(JSON.parse(result.output).migrated, true);
+          }
+        });
+      }
+    }
+  }
+
+  test('unknown flag spelling and placement cannot bypass refusal on any of the three routes', async () => {
+    await fc.assert(fc.property(
+      fc.record({
+        suffix: fc.array(fc.constantFrom('a', 'b', 'c', '0', '1', '='), { minLength: 1, maxLength: 12 }),
+        short: fc.boolean(),
+        leading: fc.boolean(),
+        query: fc.boolean(),
+        raw: fc.boolean(),
+        existing: fc.boolean(),
+      }),
+      ({ suffix, short, leading, query, raw, existing }) => {
+        const flag = `${short ? '-' : '--'}unknown-${suffix.join('')}`;
+        for (const { command, positionals } of verbs) {
+          const f = fixture(existing);
+          try {
+            const result = runGsdTools([
+              ...(query ? ['query'] : []), command,
+              ...(leading ? [flag] : []), ...positionals,
+              ...(raw ? ['--raw'] : []), ...(leading ? [] : [flag]), '--json-errors',
+            ], f.dir, homeSandboxEnv(f.dir));
+            assertUnchanged(f);
+            assertUsage(result, command, flag);
+          } finally {
+            cleanup(f.dir);
+          }
+        }
+      },
+    ), { seed: 5286, numRuns: 12 });
   });
 });
 

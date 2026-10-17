@@ -777,7 +777,20 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     cmdGitBaseBranch(cwd, args.slice(2));
   }
 
+  function rejectUnknownConfigMutationFlags(args) {
+    // #5286: these three verbs have no preview handler. Refuse unsupported
+    // flags before dispatch or positional selection so a preview cannot write.
+    // --raw is normally removed by main(); keep it accepted at this boundary.
+    const knownFlags = new Set(['--raw']);
+    for (const arg of args.slice(1)) {
+      if (arg.startsWith('-') && !knownFlags.has(arg)) {
+        error(`Unknown flag for ${args[0]}: ${arg}`, ERROR_REASON.USAGE);
+      }
+    }
+  }
+
   function routeConfigEnsureSection({ args, cwd, raw }) {
+    rejectUnknownConfigMutationFlags(args);
     const handled = _dispatchNonFamily({
       registryCommand: 'config-ensure-section',
       registryArgs: args.slice(1),
@@ -806,6 +819,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeConfigSetModelProfile({ args, cwd, raw }) {
+    rejectUnknownConfigMutationFlags(args);
     const handled = _dispatchNonFamily({
       registryCommand: 'config-set-model-profile',
       registryArgs: args.slice(1),
@@ -854,7 +868,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     config.cmdConfigPath(cwd, raw, workstreamContext);
   }
 
-  async function routeMigrateConfig({ cwd, raw }) {
+  async function routeMigrateConfig({ args, cwd, raw }) {
+    rejectUnknownConfigMutationFlags(args);
     await config.cmdMigrateConfig(cwd, raw);
   }
 

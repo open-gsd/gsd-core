@@ -592,7 +592,16 @@ node gsd-tools.cjs config-get <key>
 
 # Set model profile
 node gsd-tools.cjs config-set-model-profile <profile>
+
+# Migrate legacy config keys to their canonical names
+node gsd-tools.cjs migrate-config
 ```
+
+`config-ensure-section`, `config-set-model-profile`, and `migrate-config` accept
+`--raw` but do not support `--dry-run`. They reject unsupported flags with a
+usage error before writing, including flags before the profile argument. The
+same contract applies with the `query` prefix. `config-set --dry-run` supports
+previewing an individual value change without writing.
 
 ---
 
