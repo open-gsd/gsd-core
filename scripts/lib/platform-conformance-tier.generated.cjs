@@ -148,6 +148,7 @@ module.exports = {
   "tests/hooks-crash-policy.test.cjs",
   "tests/hooks-opt-in.test.cjs",
   "tests/host-integration.test.cjs",
+  "tests/in-tier-sh-pipeline-timing.test.cjs",
   "tests/init-manager.test.cjs",
   "tests/install-minimal-hooks.test.cjs",
   "tests/install-nested-layout.test.cjs",
