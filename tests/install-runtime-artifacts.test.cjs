@@ -5036,6 +5036,28 @@ describe('_computePathPrefix', () => {
     assert.equal(prefix, '/home/u/.config/opencode/');
   });
 
+  test('a sibling directory that merely starts with the home path is NOT under home (#5123)', () => {
+    const prefix = conversion._computePathPrefix({
+      isGlobal: true,
+      isOpencode: false,
+      isWindowsHost: false,
+      resolvedTarget: '/home/u2/cfg',
+      homeDir: '/home/u',
+    });
+    assert.equal(prefix, '/home/u2/cfg/');
+  });
+
+  test('global target equal to home → $HOME/ (#5123)', () => {
+    const prefix = conversion._computePathPrefix({
+      isGlobal: true,
+      isOpencode: false,
+      isWindowsHost: false,
+      resolvedTarget: '/home/u',
+      homeDir: '/home/u',
+    });
+    assert.equal(prefix, '$HOME/');
+  });
+
   test('global target outside home → resolvedTarget/ form', () => {
     const prefix = conversion._computePathPrefix({
       isGlobal: true,
@@ -8447,5 +8469,228 @@ describe('install() global codex — @~/.claude include rewrite (#4667)', () => 
       fallbacks > 0,
       'the _GSD_RUNTIME_ROOT .claude fallback chains must survive the rewrite (must-NOT-rewrite group)'
     );
+  });
+});
+
+// ── #5123 — installed @-includes must resolve to installed files ──────────────
+// Kimi neutralised `~/.claude/gsd-core` to the prose "GSD core", and the Copilot
+// and Antigravity converters hard-code their DEFAULT home, so with `--config-dir`
+// the includes pointed at files that only exist under the config dir. Each case
+// installs through the real CLI as a subprocess and resolves every include
+// against the filesystem, so the assertion is "the file is there", not "the
+// text equals what the converter wrote".
+describe('installed @ includes resolve to installed files (#5123)', () => {
+  const path5123 = path;
+  const created = [];
+
+  function runtimeInstall(runtimeFlag, home, configDir) {
+    const args = [path5123.join(__dirname, '..', 'bin', 'install.js'), runtimeFlag, '--global'];
+    if (configDir) args.push('--config-dir', configDir);
+    const result = __spawnSync4667(process.execPath, args, {
+      cwd: home,
+      env: {
+        ...process.env,
+        ...__isolatedNpmEnv4667(),
+        HOME: home,
+        USERPROFILE: home,
+        GSD_HOME: home,
+        GSD_TEST_MODE: '',
+        NO_UPDATE_NOTIFIER: '1',
+        npm_config_update_notifier: 'false',
+      },
+      encoding: 'utf8',
+      timeout: INSTALL_TIMEOUT_MS,
+    });
+    assert.equal(result.status, 0, `${runtimeFlag} install failed:\n${result.stdout}\n${result.stderr}`);
+  }
+
+  function tempDir(label) {
+    const dir = __createTempDir4667(`gsd-${label}-5123-`);
+    created.push(dir);
+    return dir;
+  }
+
+  // Manifest-tracked .md/.toml artifacts of one install root, CHANGELOG excluded
+  // (the installer's own scope for its rewrite and leak scan).
+  function manifestArtifacts(root) {
+    const manifest = JSON.parse(fs4667.readFileSync(path5123.join(root, 'gsd-file-manifest.json'), 'utf8'));
+    return Object.keys(manifest.files)
+      .filter((rel) => /\.(md|toml)$/.test(rel) && path5123.basename(rel) !== 'CHANGELOG.md')
+      .map((rel) => path5123.join(root, rel))
+      .filter((file) => fs4667.existsSync(file));
+  }
+
+  const INCLUDE_RE = /@((?:~|\$HOME)\/[^\s`"')\]]+?\.md|\/[^\s`"')\]]+?\.md|[A-Za-z]:\/[^\s`"')\]]+?\.md)/g;
+
+  function resolveRef(ref, home) {
+    if (ref.startsWith('~/')) return path5123.join(home, ref.slice(2));
+    if (ref.startsWith('$HOME/')) return path5123.join(home, ref.slice(6));
+    return ref;
+  }
+
+  // Every `@<path>.md` include that targets a gsd-core payload file.
+  function gsdIncludes(files, home) {
+    const out = [];
+    for (const file of files) {
+      const content = fs4667.readFileSync(file, 'utf8');
+      for (const match of content.matchAll(INCLUDE_RE)) {
+        if (!match[1].includes('/gsd-core/')) continue;
+        // The verbatim Claude-form corpus copies under gsd-core/{agents,commands}
+        // keep their `@~/.claude/` includes by design; the installer's leak scan
+        // already reports them. This suite is about the CONVERTED artifacts.
+        if (/^(?:~|\$HOME)\/\.claude\//.test(match[1])) continue;
+        out.push({ file, ref: match[0], resolved: resolveRef(match[1], home) });
+      }
+    }
+    return out;
+  }
+
+  function assertIncludesResolve(files, home, label) {
+    const includes = gsdIncludes(files, home);
+    assert.ok(includes.length > 50, `${label}: expected the install to carry many gsd-core includes, found ${includes.length}`);
+    const missing = includes.filter((inc) => !fs4667.existsSync(inc.resolved));
+    assert.equal(
+      missing.length, 0,
+      `${label}: ${missing.length} of ${includes.length} includes point at missing files, e.g.\n` +
+        missing.slice(0, 5).map((m) => `  ${m.ref}  (in ${path5123.basename(m.file)})`).join('\n'),
+    );
+  }
+
+  after(() => {
+    for (const dir of created) __cleanup4667(dir);
+  });
+
+  for (const [flag, defaultLiteral, label] of [
+    ['--copilot', '@~/.copilot/', 'copilot'],
+    ['--antigravity', '@~/.gemini/antigravity/', 'antigravity'],
+  ]) {
+    describe(`${label} --global --config-dir`, () => {
+      test('a config dir inside HOME: includes resolve under it', () => {
+        const home = tempDir(`${label}-home`);
+        const configDir = path5123.join(home, 'cfg');
+        runtimeInstall(flag, home, configDir);
+        const files = manifestArtifacts(configDir);
+        assertIncludesResolve(files, home, `${label} in-HOME config dir`);
+        const stale = files.filter((f) => fs4667.readFileSync(f, 'utf8').includes(defaultLiteral));
+        assert.equal(stale.length, 0, `files still pointing at the default home ${defaultLiteral}:\n${stale.slice(0, 5).join('\n')}`);
+      });
+
+      test('a config dir outside HOME: includes resolve under it', () => {
+        const home = tempDir(`${label}-home`);
+        const configDir = tempDir(`${label}-cfg`);
+        runtimeInstall(flag, home, configDir);
+        assertIncludesResolve(manifestArtifacts(configDir), home, `${label} outside-HOME config dir`);
+      });
+
+      test('reinstalling into the same config dir changes nothing (idempotent)', () => {
+        const home = tempDir(`${label}-home`);
+        const configDir = path5123.join(home, 'cfg');
+        runtimeInstall(flag, home, configDir);
+        const snapshot = () => manifestArtifacts(configDir).map((f) => `${f}\n${fs4667.readFileSync(f, 'utf8')}`).join('\n\0');
+        const first = snapshot();
+        runtimeInstall(flag, home, configDir);
+        assert.equal(snapshot(), first);
+      });
+    });
+
+    test(`${label} --global without --config-dir keeps the default-home includes`, () => {
+      const home = tempDir(`${label}-home`);
+      runtimeInstall(flag, home, null);
+      const root = (label === 'copilot') ? path5123.join(home, '.copilot') : path5123.join(home, '.gemini', 'antigravity');
+      const files = manifestArtifacts(root);
+      assertIncludesResolve(files, home, `${label} default install`);
+      const kept = files.filter((f) => fs4667.readFileSync(f, 'utf8').includes(defaultLiteral));
+      assert.ok(kept.length > 0, `${label}: the default install must keep ${defaultLiteral} includes unchanged`);
+    });
+  }
+
+  describe('kimi --global', () => {
+    test('no dangling "GSD core/" path survives and the replaced references resolve', () => {
+      const home = tempDir('kimi-home');
+      runtimeInstall('--kimi', home, null);
+      const root = path5123.join(home, '.config', 'agents');
+      const files = manifestArtifacts(root);
+      const dangling = files.filter((f) => /GSD core\/[a-z]/.test(fs4667.readFileSync(f, 'utf8')));
+      assert.equal(dangling.length, 0, `files with a prose "GSD core/" path:\n${dangling.slice(0, 5).join('\n')}`);
+
+      // The references that used to read "GSD core/<dir>/<file>.md" are real paths now.
+      const refRe = /(?:~|\$HOME)\/[^\s`"')\]]*?\/gsd-core\/(?:references|templates|workflows)\/[^\s`"')\]]+?\.md/g;
+      const missing = [];
+      let checked = 0;
+      for (const file of files) {
+        for (const ref of fs4667.readFileSync(file, 'utf8').match(refRe) || []) {
+          if (/\/\.claude\//.test(ref)) continue; // verbatim Claude-form corpus copies, see gsdIncludes
+          checked++;
+          if (!fs4667.existsSync(resolveRef(ref, home))) missing.push(`${ref} (in ${path5123.basename(file)})`);
+        }
+      }
+      assert.ok(checked > 50, `expected the kimi install to reference many gsd-core files, found ${checked}`);
+      assert.deepStrictEqual(missing.slice(0, 5), []);
+    });
+
+    test('the agent prompts reference the installed gsd-core root', () => {
+      const home = tempDir('kimi-home');
+      runtimeInstall('--kimi', home, null);
+      const prompt = fs4667.readFileSync(
+        path5123.join(home, '.config', 'agents', 'agents', 'subagents', 'gsd-executor.md'), 'utf8');
+      assert.ok(/(?:\$HOME|~|\/[^\s]{0,200}?)\/\.config\/agents\/gsd-core\/references\/mandatory-initial-read\.md/.test(prompt),
+        'gsd-executor must reference the installed mandatory-initial-read.md by path');
+    });
+  });
+});
+
+describe('retargetInstalledIncludes (#5123)', () => {
+  const retargetIncludes = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs').retargetInstalledIncludes;
+  const { hostBehaviorsFor } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
+  // The behaviors come from the real descriptors, not from a runtime name.
+  const retarget = (text, runtime, prefix) => retargetIncludes(text, hostBehaviorsFor(runtime), prefix);
+
+  test('copilot: the default-home include becomes the install root', () => {
+    assert.equal(
+      retarget('see @~/.copilot/gsd-core/references/a.md and @$HOME/.copilot/gsd-core/b.md', 'copilot', '/opt/cfg/'),
+      'see @/opt/cfg/gsd-core/references/a.md and @/opt/cfg/gsd-core/b.md',
+    );
+  });
+
+  test('antigravity: the default-home include becomes the install root', () => {
+    assert.equal(
+      retarget('@~/.gemini/antigravity/gsd-core/references/a.md', 'antigravity', '$HOME/cfg/'),
+      '@$HOME/cfg/gsd-core/references/a.md',
+    );
+  });
+
+  test('a default install (prefix is already the default home) is returned byte-identical', () => {
+    const text = '@~/.copilot/gsd-core/references/a.md\n@$HOME/.copilot/gsd-core/b.md\n';
+    assert.equal(retarget(text, 'copilot', '$HOME/.copilot/'), text);
+    const ag = '@~/.gemini/antigravity/gsd-core/references/a.md';
+    assert.equal(retarget(ag, 'antigravity', '$HOME/.gemini/antigravity/'), ag);
+  });
+
+  test('is idempotent', () => {
+    const once = retarget('@~/.copilot/gsd-core/references/a.md', 'copilot', '/opt/cfg/');
+    assert.equal(retarget(once, 'copilot', '/opt/cfg/'), once);
+  });
+
+  test('leaves other text alone: .claude includes, prose mentions, the other runtime home', () => {
+    const text = '@~/.claude/gsd-core/a.md and ~/.copilot prose and @~/.gemini/antigravity/x.md';
+    assert.equal(retarget(text, 'copilot', '/opt/cfg/'), text);
+  });
+
+  test('kimi: "GSD core/<path>" becomes the real path and the unsupported @ is dropped', () => {
+    assert.equal(
+      retarget('Read @GSD core/references/a.md and `GSD core/templates/b.md`', 'kimi', '$HOME/.config/agents/'),
+      'Read $HOME/.config/agents/gsd-core/references/a.md and `$HOME/.config/agents/gsd-core/templates/b.md`',
+    );
+  });
+
+  test('kimi: bare prose "GSD core" and a trailing slash with no path are left alone', () => {
+    const text = 'the GSD core is great; see GSD core/ and GSD core.';
+    assert.equal(retarget(text, 'kimi', '/x/'), text);
+  });
+
+  test('other runtimes and a prefix without a trailing slash are returned unchanged', () => {
+    const text = '@~/.copilot/gsd-core/a.md GSD core/a.md';
+    assert.equal(retarget(text, 'codex', '/x/'), text);
+    assert.equal(retarget(text, 'copilot', '/x'), text);
   });
 });

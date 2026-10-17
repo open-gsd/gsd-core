@@ -1237,6 +1237,60 @@ function describeGoalShapedTitle(description: string): string | null {
 }
 
 /**
+ * Phase numbers the roadmap itself declares — a section header or a roadmap bullet — sentinels
+ * excluded. This is deliberately NOT the allocation set: allocation also counts on-disk directories
+ * and sibling-worktree phases so a new number cannot collide, but a `Depends on:` line has to point
+ * at something a reader of THIS roadmap can find (#5113).
+ */
+function roadmapDeclaredPhaseNums(rawContent: string): number[] {
+  const { regex: headerPattern, phaseNumGroup } = buildPhaseHeadingScanRegex(PHASE_HEADING_BASELINE.LABEL_ONLY);
+  const bulletPattern = /^[ \t]*-[ \t]*\[[^\]]{0,200}\][ \t]*\*{0,2}Phase[ \t]+(\d+)(?=[:.\s*]|$)/gim;
+  const nums = new Set<number>();
+  let m: RegExpExecArray | null;
+  while ((m = headerPattern.exec(rawContent)) !== null) {
+    const num = parseInt(m[phaseNumGroup], 10);
+    if (!isSentinelPhaseId(num)) nums.add(num);
+  }
+  while ((m = bulletPattern.exec(rawContent)) !== null) {
+    const num = parseInt(m[1], 10);
+    if (!isSentinelPhaseId(num)) nums.add(num);
+  }
+  return [...nums];
+}
+
+/**
+ * The `**Depends on:**` line for a freshly added numeric phase: the nearest lower phase the roadmap
+ * declares, or `Nothing` when it declares none. It was `newId - 1` regardless, which named a phase
+ * that exists only on a sibling branch, as an orphan directory, or not at all when numbering has a
+ * gap (#5113). Custom-named phases carry no dependency line.
+ */
+function dependsOnLine(newPhaseId: number | string, declared: readonly number[]): string {
+  if (typeof newPhaseId !== 'number') return '';
+  let nearest: number | null = null;
+  for (const n of declared) if (n < newPhaseId && (nearest === null || n > nearest)) nearest = n;
+  return `\n**Depends on:** ${nearest === null ? 'Nothing' : `Phase ${nearest}`}`;
+}
+
+/**
+ * Splice a phase entry into `rawContent` at `at`, changing nothing else: the blank lines around the
+ * block and its line endings are the block's own, so the surrounding document is published byte for
+ * byte (#5113). `block` is LF text that starts and ends with a newline.
+ */
+function spliceRoadmapBlock(rawContent: string, atOffset: number, block: string): string {
+  const eol = rawContent.includes('\r\n') ? '\r\n' : '\n';
+  // The insertion offset is found by searching for '\n---', which lands between the CR and the LF of
+  // a CRLF pair; splice before the pair instead of through it.
+  const at = rawContent[atOffset - 1] === '\r' && rawContent[atOffset] === '\n' ? atOffset - 1 : atOffset;
+  const before = rawContent.slice(0, at);
+  const after = rawContent.slice(at);
+  const body = block.replace(/^\n+/, '').replace(/\n+$/, '\n').replace(/\n/g, eol);
+  const blankBefore = before === '' || /(?:\r?\n){2}$/.test(before);
+  const lead = blankBefore ? '' : /\n$/.test(before) ? eol : eol + eol;
+  const tail = after === '' || /^\r?\n/.test(after) ? '' : eol;
+  return before + lead + body + tail + after;
+}
+
+/**
  * #3163: compute the byte offset in `rawContent` where a new `### Phase N:`
  * entry should be inserted — at the end of the active phase list, scoped to the
  * CURRENT MILESTONE so the entry can never land before a trailing `---` in
@@ -1485,16 +1539,14 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     platformWriteSync(path.join(dirPath, '.gitkeep'), '');
 
     const dependsOn =
-      config.phase_naming === 'custom'
-        ? ''
-        : `\n**Depends on:** Phase ${typeof _newPhaseId === 'number' ? _newPhaseId - 1 : 'TBD'}`;
+      config.phase_naming === 'custom' ? '' : dependsOnLine(_newPhaseId, roadmapDeclaredPhaseNums(rawContent));
     const phaseEntry =
       `\n### Phase ${_newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${_newPhaseId} to break down)\n`;
 
     const insertAt = phaseEntryInsertOffset(rawContent, cwd);
-    const updatedContent = rawContent.slice(0, insertAt) + phaseEntry + rawContent.slice(insertAt);
+    const updatedContent = spliceRoadmapBlock(rawContent, insertAt, phaseEntry);
 
-    platformWriteSync(roadmapPath, updatedContent);
+    platformWriteSync(roadmapPath, updatedContent, { verbatim: true });
     return { newPhaseId: _newPhaseId, dirName: _dirName };
   });
 
@@ -1610,13 +1662,11 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
       platformEnsureDir(dirPath);
       platformWriteSync(path.join(dirPath, '.gitkeep'), '');
       const dependsOn =
-        config.phase_naming === 'custom'
-          ? ''
-          : `\n**Depends on:** Phase ${typeof newPhaseId === 'number' ? newPhaseId - 1 : 'TBD'}`;
+        config.phase_naming === 'custom' ? '' : dependsOnLine(newPhaseId, roadmapDeclaredPhaseNums(rawContent));
       const phaseEntry =
         `\n### Phase ${newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${newPhaseId} to break down)\n`;
       const insertAt = phaseEntryInsertOffset(rawContent, cwd);
-      rawContent = rawContent.slice(0, insertAt) + phaseEntry + rawContent.slice(insertAt);
+      rawContent = spliceRoadmapBlock(rawContent, insertAt, phaseEntry);
       added.push({
         phase_number: typeof newPhaseId === 'number' ? newPhaseId : String(newPhaseId),
         padded:
@@ -1629,7 +1679,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
         naming_mode: config.phase_naming,
       });
     }
-    platformWriteSync(roadmapPath, rawContent);
+    platformWriteSync(roadmapPath, rawContent, { verbatim: true });
     return added;
   });
   output({ phases: results, count: results.length }, raw);

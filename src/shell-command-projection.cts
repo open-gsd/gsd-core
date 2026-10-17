@@ -1214,8 +1214,23 @@ function _normalizeMd(content: string): string {
   return text;
 }
 
-export function normalizeContent(filePath: string, content: string, opts: { encoding?: BufferEncoding } = {}): { content: string; encoding: BufferEncoding } {
+/**
+ * Options shared by `normalizeContent` and `platformWriteSync`.
+ *
+ * `verbatim` skips normalization: the content is published exactly as given. Normalization is a
+ * WHOLE-DOCUMENT rewrite (blank lines around every heading, CRLF to LF, blank-run collapse), so a
+ * command whose contract is "touch only the block I insert" cannot use it on a document it did not
+ * author line by line (#5113: `phase.add` added a blank line to an unrelated heading). Such a caller
+ * owns the spacing and line endings of what it inserts.
+ */
+export interface PlatformWriteOptions {
+  encoding?: BufferEncoding;
+  verbatim?: boolean;
+}
+
+export function normalizeContent(filePath: string, content: string, opts: PlatformWriteOptions = {}): { content: string; encoding: BufferEncoding } {
   const encoding = opts.encoding ?? 'utf-8';
+  if (opts.verbatim === true) return { content: content ?? '', encoding };
   const isMd = path.extname(filePath).toLowerCase() === '.md';
   let normalized: string;
   if (isMd) {
@@ -1295,7 +1310,7 @@ export function retryRenameSync(fromPath: string, toPath: string): void {
   if (err !== null) throw err;
 }
 
-export function platformWriteSync(filePath: string, content: string, opts: { encoding?: BufferEncoding } = {}): void {
+export function platformWriteSync(filePath: string, content: string, opts: PlatformWriteOptions = {}): void {
   const { content: normalized, encoding } = normalizeContent(filePath, content, opts);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmpPath = filePath + '.tmp.' + process.pid;

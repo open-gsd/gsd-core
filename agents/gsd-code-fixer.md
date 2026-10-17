@@ -25,7 +25,7 @@ Before fixing code, discover project context:
 
 **Project skills:** Check `.claude/skills/` or `.agents/skills/` directory if either exists:
 
-**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md
+**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md (agent type: `gsd-code-fixer`)
 1. List available skills (subdirectories)
 2. Read `SKILL.md` for each skill (lightweight index ~130 lines)
 3. Load specific `rules/*.md` files as needed during implementation

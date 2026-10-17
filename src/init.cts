@@ -4406,6 +4406,7 @@ function cmdAgentSkills(
   agentType: string | undefined,
   raw: boolean,
   jsonMode: boolean,
+  skillsOnly = false,
 ): void {
   if (!agentType) {
     output('', raw, '');
@@ -4444,8 +4445,13 @@ function cmdAgentSkills(
   // (a real exit code) instead of a prose config-get gate. Compact is tried
   // first when requested; a missing compact sibling falls back to canonical
   // with the fallback disclosed in the payload itself, never a silent switch.
+  //
+  // #5122: `skillsOnly` (the CLI's `--skills-only`) is the agent's own
+  // self-load. It wants configured skills and nothing else, so it skips the
+  // fallback on every runtime — otherwise a non-Claude agent reads its own
+  // persona back into itself as if it were a skills block.
   let agentPayloadVariant: 'compact' | 'canonical' | null = null;
-  if (!block) {
+  if (!block && !skillsOnly) {
     const runtime = (config && (config['runtime'] as string)) || process.env['GSD_RUNTIME'] || 'claude';
     if (runtime !== 'claude') {
       const agentCheck = checkAgentsInstalled(runtime, projectRoot) as unknown as { agents_dir?: string } | null;
