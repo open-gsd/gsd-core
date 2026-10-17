@@ -2890,6 +2890,26 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     });
   }
 
+  // Uninstall reaches hooks.json only after removing skills and agents, so a
+  // hooks.json the policy refuses must stop it before the first removal (#5037).
+  for (const layout of ['symlinked', 'dangling']) {
+    test(`uninstall over a ${layout} hooks.json without GSD_ALLOW_SYMLINKED_DEST refuses before removing any skill (#5037)`, () => {
+      runCodexInstall(codexHome);
+      const skillsBefore = fs.readdirSync(codexSkillsRoot(codexHome)).sort();
+      assert.ok(skillsBefore.length > 0, 'setup: the install must have created skills');
+      const target = path.join(codexHome, layout === 'dangling' ? 'missing-hooks.json' : 'real-hooks.json');
+      if (layout === 'symlinked') fs.copyFileSync(hooksJsonPath(codexHome), target);
+      fs.unlinkSync(hooksJsonPath(codexHome));
+      fs.symlinkSync(target, hooksJsonPath(codexHome));
+
+      assert.throws(() => runCodexUninstall(codexHome), /symlink/);
+
+      assert.deepStrictEqual(fs.readdirSync(codexSkillsRoot(codexHome)).sort(), skillsBefore,
+        'no skill may be removed before the refusal');
+      assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isSymbolicLink(), 'hooks.json must still be a symlink');
+    });
+  }
+
   test('cleanupOrphanedCodexContextMonitorScript keeps the hooks.json deregistration when script deletion fails', () => {
     runCodexInstall(codexHome);
     seedPreExisting2586Install(codexHome);
