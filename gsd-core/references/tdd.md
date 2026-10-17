@@ -110,7 +110,7 @@ After completion, create SUMMARY.md with:
 1. Write minimal code to make test pass
 2. No cleverness, no optimization - just make it work
 3. Run test - it MUST pass
-4. Commit: `feat({phase}-{plan}): implement [feature]`
+4. Commit: `feat({phase}-{plan}): implement [feature]` for new behaviour, or `fix({phase}-{plan}): correct [defect]` when the plan corrects a defect
 
 **REFACTOR (if needed):**
 1. Clean up implementation if obvious improvements exist
@@ -287,14 +287,14 @@ When `workflow.tdd_mode` is enabled in config, the RED/GREEN/REFACTOR gate seque
 | Gate | Required | Commit Pattern | Validation |
 |------|----------|---------------|------------|
 | RED | Yes | `test({phase}-{plan}): ...` | Target test exists AND fails before implementation: a complete report in a supported format (RED step 4) from the current run must return `RED_EVIDENCE_OK`, followed by semantic inspection of the planned assertion (RED step 4) |
-| GREEN | Yes | `feat({phase}-{plan}): ...` | Test passes after implementation |
+| GREEN | Yes | `feat({phase}-{plan}): ...` or `fix({phase}-{plan}): ...` | Test passes after implementation |
 | REFACTOR | No | `refactor({phase}-{plan}): ...` | Tests still pass after cleanup |
 
 ### Fail-Fast Rules
 
 1. **Unexpected GREEN in RED phase:** If the test passes before any implementation code is written, STOP. The feature may already exist or the test is wrong. Investigate before proceeding.
 2. **INVALID_RED in RED phase (#3770):** A nonzero exit is not RED by itself. Follow the format-based evidence contract in RED step 4, including reporter reruns and report freshness. An `INVALID_RED` verdict or failed semantic assessment halts GREEN. Unsupported, incomplete, ambiguous, or contradictory evidence cannot authorize implementation.
-3. **Missing RED commit:** If no `test(...)` commit precedes the `feat(...)` commit, the TDD discipline was violated. Flag in SUMMARY.md.
+3. **Missing RED commit:** If no `test(...)` commit precedes the `feat(...)`/`fix(...)` commit, the TDD discipline was violated. Flag in SUMMARY.md.
 4. **REFACTOR breaks tests:** Undo the refactor immediately. Commit was premature — refactor in smaller steps.
 
 ### Executor Gate Validation
@@ -311,7 +311,7 @@ PLAN_N=$((10#${PLAN}))
 # Check for RED gate commit
 git log --oneline -E --grep="^test\((0*${PHASE_N})-(0*${PLAN_N})\):" | head -1
 # Check for GREEN gate commit  
-git log --oneline -E --grep="^feat\((0*${PHASE_N})-(0*${PLAN_N})\):" | head -1
+git log --oneline -E --grep="^(feat|fix)\((0*${PHASE_N})-(0*${PLAN_N})\):" | head -1
 # Check for optional REFACTOR gate commit
 git log --oneline -E --grep="^refactor\((0*${PHASE_N})-(0*${PLAN_N})\):" | head -1
 ```
@@ -342,7 +342,7 @@ TDD Plans: {count} | Gate violations: {count}
 
 ### What the Review Checks
 
-1. **Gate sequence:** Each TDD plan has RED → GREEN commits in order. A plan is scored on its own `test(<plan>):` / `feat(<plan>):` commits, with one exception (#4867): a RED-only probe plan is satisfied by a `feat(...)` commit under a plan that declares it in `depends_on`, directly or through a chain. That is the gap-closure shape (probe plan, then the fix plan that depends on it). The plan's own RED is still required, a plan nothing depends on is scored alone, and the report names the plan that supplied the GREEN (`Plan {id} GREEN is supplied by dependent plan {id}.`).
+1. **Gate sequence:** Each TDD plan has RED → GREEN commits in order. A plan is scored on its own `test(<plan>):` / `feat(<plan>):`/`fix(<plan>):` commits, with one exception (#4867): a RED-only probe plan is satisfied by a `feat(...)` or `fix(...)` commit under a plan that declares it in `depends_on`, directly or through a chain. That is the gap-closure shape (probe plan, then the fix plan that depends on it). The plan's own RED is still required, a plan nothing depends on is scored alone, and the report names the plan that supplied the GREEN (`Plan {id} GREEN is supplied by dependent plan {id}.`).
 2. **Test quality:** RED phase tests fail for the right reason (not import errors or syntax)
 3. **Minimal GREEN:** Implementation is minimal — no premature optimization in GREEN phase
 4. **Refactor discipline:** If REFACTOR commit exists, tests still pass
