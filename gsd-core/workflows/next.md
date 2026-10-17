@@ -271,8 +271,12 @@ If STATE.md shows paused_at:
 Parse the arguments passed to this workflow to detect the plan strategy and build convergence pass-through args:
 
 ```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
 PLAN_STRATEGY="local"
-if echo "$ARGUMENTS" | grep -qE '(^|[[:space:]])\-\-(converge|cross-ai)([[:space:]]|$)'; then
+if echo "$GSD_ARGS" | grep -qE '(^|[[:space:]])\-\-(converge|cross-ai)([[:space:]]|$)'; then
   PLAN_STRATEGY="converge"
 fi
 
@@ -280,14 +284,14 @@ CONVERGENCE_ARGS=""
 # Lane flags derived from the declared roster (#2800/#2272); --all and --text are convergence
 # controls, not reviewer lanes, so they stay literal.
 for REVIEW_FLAG in $(gsd_run review-lane flags) --all --text; do
-  if echo "$ARGUMENTS" | grep -qE "(^|[[:space:]])${REVIEW_FLAG}([[:space:]]|$)"; then
+  if echo "$GSD_ARGS" | grep -qE "(^|[[:space:]])${REVIEW_FLAG}([[:space:]]|$)"; then
     CONVERGENCE_ARGS="${CONVERGENCE_ARGS} ${REVIEW_FLAG}"
   fi
 done
 
 MAX_CYCLES_ARG=""
-if echo "$ARGUMENTS" | grep -qE '\-\-max-cycles\s+[0-9]+'; then
-  MAX_CYCLES_ARG=$(echo "$ARGUMENTS" | grep -oE '\-\-max-cycles\s+[0-9]+' | awk '{print $2}')
+if echo "$GSD_ARGS" | grep -qE '\-\-max-cycles\s+[0-9]+'; then
+  MAX_CYCLES_ARG=$(echo "$GSD_ARGS" | grep -oE '\-\-max-cycles\s+[0-9]+' | awk '{print $2}')
   CONVERGENCE_ARGS="${CONVERGENCE_ARGS} --max-cycles ${MAX_CYCLES_ARG}"
 fi
 ```
