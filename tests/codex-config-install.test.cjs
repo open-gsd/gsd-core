@@ -22,7 +22,9 @@ const path = require('path');
 const os = require('os');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, createTempDir } = require('./helpers.cjs');
+const { INSTALL_SCRIPT, installerEnv } = require('./helpers/install-shared.cjs');
+const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const fc = require('fast-check');
 const { CLAUDE_AGENT_ALIASES: _CLAUDE_AGENT_ALIASES } = require('../gsd-core/bin/lib/model-resolver.cjs');
 const { escapeRegex: _escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
@@ -199,6 +201,65 @@ function _assertNoCodexBareGsdToolsInvocation(content, label) {
 }
 
 // ─── getCodexSkillAdapterHeader ─────────────────────────────────────────────────
+
+describe('#5199: full Codex install followed by config cleanup', () => {
+  function runInstaller(home, args) {
+    const result = runNode([INSTALL_SCRIPT, '--codex', '--global', '--config-dir', home, ...args], {
+      cwd: home,
+      env: installerEnv({ HOME: home, USERPROFILE: home, CODEX_HOME: home }),
+      timeoutMs: INSTALL_TIMEOUT_MS,
+    });
+    throwIfFailed(result, `Codex installer ${args.join(' ')}`);
+    return result;
+  }
+
+  for (const operation of ['uninstall', 'core-profile']) {
+    test(`${operation} preserves user tables appended after a fresh full install`, (t) => {
+      const home = createTempDir('gsd-codex-config-cleanup-');
+      t.after(() => cleanup(home));
+      runInstaller(home, ['--profile=full']);
+      const configPath = path.join(home, 'config.toml');
+      const installed = fs.readFileSync(configPath, 'utf8');
+      assert.ok(installed.includes(_GSD_CODEX_MARKER), 'exercise the marker-bearing full-install path');
+      const userConfig = [
+        '[mcp_servers.example]',
+        'command = "npx"',
+        'args = ["-y", "example-mcp"]',
+        '',
+        '[plugins.example]',
+        'enabled = false',
+        '',
+        '[projects."/tmp/example"]',
+        'trust_level = "trusted"',
+        '',
+        '[marketplaces.example]',
+        'url = "https://example.test/marketplace"',
+        '',
+      ].join('\n');
+      fs.appendFileSync(configPath, '\n' + userConfig);
+      runInstaller(home, operation === 'uninstall' ? ['--uninstall'] : ['--profile=core']);
+      assert.ok(fs.existsSync(configPath), 'user config must keep config.toml alive');
+      const cleaned = fs.readFileSync(configPath, 'utf8');
+      const parsed = _parseTomlToObject(cleaned);
+      const expected = _parseTomlToObject(userConfig);
+      for (const key of Object.keys(expected)) assert.deepStrictEqual(parsed[key], expected[key]);
+      assert.strictEqual(parsed.agents, undefined, 'full-profile agent registrations are removed');
+      assert.ok(!cleaned.includes(_GSD_CODEX_MARKER), 'the old managed marker is removed');
+      assert.ok(cleaned.includes(userConfig.trimEnd()), 'appended user table bytes remain intact');
+      if (operation === 'uninstall') assert.deepStrictEqual(parsed, expected, 'only user config remains');
+    });
+  }
+
+  test('uninstall still deletes a fresh GSD-only config', (t) => {
+    const home = createTempDir('gsd-codex-only-cleanup-');
+    t.after(() => cleanup(home));
+    runInstaller(home, ['--profile=full']);
+    const configPath = path.join(home, 'config.toml');
+    assert.ok(fs.existsSync(configPath));
+    runInstaller(home, ['--uninstall']);
+    assert.strictEqual(fs.existsSync(configPath), false);
+  });
+});
 
 
 

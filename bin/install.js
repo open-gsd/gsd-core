@@ -4567,8 +4567,7 @@ function stripCodexGsdAgentSections(content) {
     // GSD's managed `[agents]` scalar block (ADR-1239 upgrade 2 / #2088 — the
     // `max_depth` dispatch-tuning table). Install purges any pre-existing bare
     // `[agents]` and writes its own, so a known-scalar-only bare `[agents]` is
-    // GSD-owned; strip it on uninstall. (The marker path already removes it via
-    // the marker-to-EOF cut; this covers the no-marker fallback.)
+    // GSD-owned; strip it on uninstall, with or without the managed marker.
     if (!section.array && section.path === 'agents') {
       const body = content.slice(section.headerEnd, section.end);
       return codexBareAgentsHasOnlyKnownScalars(body);
@@ -4597,48 +4596,69 @@ function stripCodexGsdAgentSections(content) {
  */
 function stripGsdFromCodexConfig(content) {
   const eol = detectLineEnding(content);
-  const markerIndex = content.indexOf(GSD_CODEX_MARKER);
-  const codexHooksOwnership = getManagedCodexHooksOwnership(content);
+  const lineRecords = getTomlLineRecords(content);
+  const markerRecord = lineRecords.find((record) =>
+    !record.startsInMultilineString && record.text.trim() === GSD_CODEX_MARKER
+  );
+  const codexHooksOwnership = getManagedCodexHooksOwnership(content, markerRecord);
+  let cleaned = content;
 
-  if (markerIndex !== -1) {
-    // Has GSD marker — remove everything from marker to EOF. First recover the
-    // user's own AgentsToml scalars (max_threads etc.) that install folded into
-    // the managed [agents] block (#2088), so a full install→uninstall cycle
-    // round-trips the user's tuning. GSD-managed max_depth is dropped.
-    const preservedScalars = extractCodexUserAgentsScalars(content.slice(markerIndex));
-    let before = content.substring(0, markerIndex);
-    before = stripCodexHooksFeatureAssignments(before, codexHooksOwnership);
-    // Also strip GSD-injected feature keys above the marker (Case 3 inject)
-    before = before.replace(/^multi_agent\s*=\s*true\s*(?:\r?\n)?/m, '');
-    before = before.replace(/^default_mode_request_user_input\s*=\s*true\s*(?:\r?\n)?/m, '');
-    before = before.replace(/^\[features\]\s*\n(?=\[|$)/m, '');
-    before = before.replace(/^\[agents\]\s*\n(?=\[|$)/m, '');
-    before = before.replace(/^(?:\r?\n)+/, '').trimEnd();
-    if (preservedScalars.length > 0) {
-      before = (before ? before + eol + eol : '') + '[agents]' + eol + preservedScalars.join(eol);
+  if (markerRecord) {
+    // #5199: the marker identifies GSD's block, not ownership of every byte
+    // after it. Preserve both sides and let the uninstall section parser remove
+    // only managed agents, including legacy entries, below.
+    const removalRanges = [{ start: markerRecord.start, end: markerRecord.end + markerRecord.eol.length }];
+    if (codexHooksOwnership) {
+      const ownershipRecord = lineRecords[lineRecords.indexOf(markerRecord) + 1];
+      removalRanges.push({ start: ownershipRecord.start, end: ownershipRecord.end + ownershipRecord.eol.length });
     }
-    if (!before) return null;
-    return before + eol;
+    cleaned = removeContentRanges(content, removalRanges);
   }
 
-  // No marker but may have GSD-injected feature keys
-  let cleaned = content;
   cleaned = stripCodexHooksFeatureAssignments(cleaned, codexHooksOwnership);
-  cleaned = cleaned.replace(/^multi_agent\s*=\s*true\s*(?:\r?\n)?/m, '');
-  cleaned = cleaned.replace(/^default_mode_request_user_input\s*=\s*true\s*(?:\r?\n)?/m, '');
+  // These legacy injected keys belong only to [features]. Identically named
+  // user-table keys and text inside multiline values must survive cleanup.
+  const injectedFeatureRecords = getTomlLineRecords(cleaned).filter((record) => {
+    if (record.startsInMultilineString || record.tableHeader || record.tablePath !== 'features') return false;
+    if (record.keySegments?.length !== 1 ||
+        !['multi_agent', 'default_mode_request_user_input'].includes(record.keySegments[0])) return false;
+    const equalsIndex = findTomlAssignmentEquals(record.text);
+    const commentStart = findTomlCommentStart(record.text);
+    return record.text.slice(equalsIndex + 1, commentStart === -1 ? record.text.length : commentStart).trim() === 'true';
+  });
+  cleaned = removeContentRanges(cleaned, injectedFeatureRecords.map((record) => ({
+    start: record.start, end: findTomlAssignmentBlockEnd(cleaned, record),
+  })));
 
-  // #2088: recover the user's own AgentsToml scalars before the [agents] table is
-  // stripped, so they survive uninstall even in the no-marker fallback path.
-  const preservedScalars = extractCodexUserAgentsScalars(cleaned);
+  // #2088: recover user AgentsToml scalars only when the section parser will
+  // strip their table. A table with unknown user keys survives in place, so
+  // restoring its known scalars would create a second [agents] (#5199).
+  const agentsSection = getTomlTableSections(cleaned).find((section) => !section.array && section.path === 'agents');
+  const stripsAgentsTable = agentsSection && codexBareAgentsHasOnlyKnownScalars(cleaned.slice(agentsSection.headerEnd, agentsSection.end));
+  const preservedScalars = stripsAgentsTable ? extractCodexUserAgentsScalars(cleaned) : [];
+
+  if (markerRecord && agentsSection && !stripsAgentsTable) {
+    // The managed max_depth can coexist with future user tuning keys. Drop only
+    // that assignment, retaining the table and all unknown keys in place.
+    const depthRecords = getTomlLineRecords(cleaned).filter((record) =>
+      !record.startsInMultilineString && !record.tableHeader &&
+      record.start >= agentsSection.headerEnd && record.start < agentsSection.end &&
+      record.keySegments?.length === 1 && record.keySegments[0] === 'max_depth'
+    );
+    cleaned = removeContentRanges(cleaned, depthRecords.map((record) => ({
+      start: record.start, end: findTomlAssignmentBlockEnd(cleaned, record),
+    })));
+  }
 
   // Remove [agents.gsd-*] sections + the managed known-scalar [agents] table.
   cleaned = stripCodexGsdAgentSections(cleaned);
 
-  // Remove [features] section if now empty (only header, no keys before next section)
-  cleaned = cleaned.replace(/^\[features\]\s*\n(?=\[|$)/m, '');
-
-  // Remove [agents] section if now empty
-  cleaned = cleaned.replace(/^\[agents\]\s*\n(?=\[|$)/m, '');
+  // Remove truly empty managed tables, never look-alike headers in user strings.
+  const emptySections = getTomlTableSections(cleaned).filter((section) =>
+    !section.array && ['features', 'agents'].includes(section.path) &&
+    cleaned.slice(section.headerEnd, section.end).trim() === ''
+  );
+  cleaned = removeContentRanges(cleaned, emptySections.map(({ start, end }) => ({ start, end })));
 
   cleaned = cleaned.replace(/^(?:\r?\n)+/, '').trimEnd();
 
@@ -5239,14 +5259,13 @@ function stripCodexHooksFeatureAssignments(content, ownership = null) {
   return removeContentRanges(content, removalRanges);
 }
 
-function getManagedCodexHooksOwnership(content) {
-  const markerIndex = content.indexOf(GSD_CODEX_MARKER);
-  if (markerIndex === -1) {
+function getManagedCodexHooksOwnership(content, markerRecord) {
+  if (!markerRecord) {
     return null;
   }
 
-  const afterMarker = content.slice(markerIndex + GSD_CODEX_MARKER.length);
-  const match = afterMarker.match(/^\r?\n# GSD codex_hooks ownership: (section|root_dotted)\r?\n/);
+  const afterMarker = content.slice(markerRecord.end + markerRecord.eol.length);
+  const match = afterMarker.match(/^# GSD codex_hooks ownership: (section|root_dotted)(?:\r?\n|$)/);
   return match ? match[1] : null;
 }
 
@@ -5694,9 +5713,8 @@ function migrateCodexHooksMapFormat(content) {
     }
   }
 
-  // Insert flat-AoT conversions before the GSD managed marker (if present) so
-  // the migrated user hooks stay in the "user" portion of the file and are not
-  // swept away when stripGsdFromCodexConfig strips from the marker to EOF.
+  // Insert flat-AoT conversions before the GSD managed marker (if present) to
+  // keep migrated user hooks grouped ahead of the managed config block.
   // If no marker exists, append at the end of the file.
   if (flatAotBlocks.length > 0) {
     const insertionText = flatAotBlocks.join('');
