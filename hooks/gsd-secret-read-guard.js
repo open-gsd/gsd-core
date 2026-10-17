@@ -794,50 +794,31 @@ function tokenize(str) {
 // Bash command scan — pass 2: per-segment evaluation
 // ---------------------------------------------------------------------------
 
-// `@file` (curl -d), `--flag=value`, `-Xvalue` → the operand that names the file.
-// A bundled short cluster (`-if.env`) hides the value after more than one
-// flag letter (#5046). The walk visits only `.` positions whose next eight
-// characters spell `.env` or `.secrets` — the only prefixes a secret basename
-// can have — so each position costs O(1) and a dot-dense word cannot make the
-// scan quadratic. The first matching tail wins; `.env.example` / `.envrc` stay
-// allowed. A cluster that names nothing secret keeps the historical
-// two-character strip.
-// The cluster need not start with a letter: `-2if.env` is the same defect with
-// a digit-first cluster, so the guard takes any single-dash word
-// (`/^-[^-]./`) rather than a letter-first one.
-//
-// Limits this walk does NOT close (pinned in tests):
-//   - Expansion: `-if.env*`, `-if.en?`, `-if.env~`, `-if$(echo .env)`,
-//     `-if{.env,x}` stay allowed, matching their unbundled forms.
-//   - Non-file option values: `git commit -am.env` and `head -n1.env` are
-//     new denials (fail-safe). `git log -S.env` was already denied on base.
-function normalizeOperand(text) {
+// Option characters of a bundled short cluster (`-2nif`).
+const CLUSTER_FLAG_CHAR_RE = /[A-Za-z0-9]/;
+
+// True when an operand word names a secret file. `@file` (curl -d) and
+// `--flag=value` are stripped to the value. In a single-dash word
+// (`/^-[^-]./`, so `-2if.env` counts too) the value of a bundled cluster
+// starts right after its run of option characters (#5046): `-if.env` holds
+// `.env`, `-nf=.env` holds `.env` after the `=`. That value is checked as
+// well as the historical two-character strip, so the verdict is never looser
+// than base and costs a fixed number of `namesSecret` calls. Limits are
+// pinned in tests.
+function operandNamesSecret(text) {
   let v = text;
   if (v.startsWith('@')) v = v.slice(1);
   if (v.startsWith('--')) {
     const eq = v.indexOf('=');
     if (eq !== -1) v = v.slice(eq + 1);
-  } else if (/^-[^-]./.test(v)) {
-    // Two gates keep the walk O(1) per position in the tail length, so a
-    // dot-dense word cannot make it quadratic:
-    //   1. only positions that can start a secret name (every accepted name
-    //      begins with `.`), and
-    //   2. at such a position, a bounded prefix test — a secret basename is
-    //      `.env`, `.secrets`, or `.env.<suffix>`, so the tail must begin with
-    //      `.env` or `.secrets` (case-folded) for `namesSecret` to say yes.
-    // `namesSecret` (which lowercases the tail and runs `lastSegment`) is
-    // therefore called at most once per secret-prefix occurrence, not once per
-    // `.` — and the walk itself only ever looks at the next 8 characters.
-    for (let k = 2; k < v.length; k++) {
-      if (v[k] !== '.') continue;
-      const head = v.slice(k, k + 8).toLowerCase();
-      if (!head.startsWith('.env') && !head.startsWith('.secrets')) continue;
-      const tail = v.slice(k);
-      if (namesSecret(tail)) return tail;
-    }
-    v = v.slice(2);
+    return namesSecret(v);
   }
-  return v;
+  if (!/^-[^-]./.test(v)) return namesSecret(v);
+  if (namesSecret(v.slice(2))) return true;
+  let end = 1;
+  while (end < v.length && CLUSTER_FLAG_CHAR_RE.test(v[end])) end++;
+  if (end > 2 && namesSecret(v.slice(end))) return true;
+  return v[end] === '=' && namesSecret(v.slice(end + 1));
 }
 
 const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -1135,7 +1116,7 @@ function findSecretRead(command, depth) {
             const hit = findSecretRead(src, depth + 1);
             if (hit) return hit;
           }
-        } else if (namesSecret(normalizeOperand(w.text))) return w.text;
+        } else if (operandNamesSecret(w.text)) return w.text;
       }
       continue;
     }
@@ -1165,7 +1146,7 @@ function findSecretRead(command, depth) {
     const nameOnly = nameOnlyOperandIndices(base, operands);
     for (let k = 0; k < operands.length; k++) {
       if (nameOnly.has(k)) continue;
-      if (namesSecret(normalizeOperand(operands[k].text))) return operands[k].text;
+      if (operandNamesSecret(operands[k].text)) return operands[k].text;
     }
   }
   return null;
@@ -1327,7 +1308,7 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
   const prevCmd = resolveCommand((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
   if (!prevCmd) return null;
   for (const w of prevCmd.operands) {
-    if (namesSecret(normalizeOperand(w.text))) return w.text;
+    if (operandNamesSecret(w.text)) return w.text;
   }
   return null;
 }
