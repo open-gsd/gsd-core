@@ -264,6 +264,7 @@ module.exports = {
   "tests/retired-artifact-cleanup.test.cjs",
   "tests/review-build-prompt-optional-sections.test.cjs",
   "tests/review-default-reviewers-config.test.cjs",
+  "tests/review-lane-availability.test.cjs",
   "tests/review-lane-invocation.test.cjs",
   "tests/review-lane-runner.test.cjs",
   "tests/review-lane-windows-spawn-resolution.test.cjs",
