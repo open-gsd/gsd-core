@@ -4084,3 +4084,80 @@ describe('roadmap-parser: sectioned ROADMAP with explicit `milestone: null` (#50
     assert.ok(unbound.includes('Phase 1: First'), 'explicit null leaves the whole document, not the v1.1 slice');
   });
 });
+
+// ─── #4998: readStateMilestoneScalar decodes the frontmatter value ────────────
+
+describe('#4998 regression: readStateMilestoneScalar', () => {
+  const { readStateMilestoneScalar } = roadmapParser;
+
+  test('returns the YAML-decoded value, not the on-disk quoted text', () => {
+    const state = '---\nmilestone: "\\"v1.1 — Example\\""\nstatus: executing\n---\n# State\n';
+    assert.strictEqual(readStateMilestoneScalar(state), '"v1.1 — Example"');
+    assert.strictEqual(readStateMilestoneScalar('---\nmilestone: v2.0\n---\n'), 'v2.0');
+    assert.strictEqual(readStateMilestoneScalar('---\nmilestone: 1.0\n---\n'), '1.0', 'FAILSAFE: a number-shaped value stays text');
+  });
+
+  test('falls back to the line read when there is no parseable frontmatter key', () => {
+    assert.strictEqual(readStateMilestoneScalar('# State\nmilestone: v3.0\n'), 'v3.0');
+    assert.strictEqual(readStateMilestoneScalar('# State\n'), null);
+  });
+
+  test('a non-string milestone value falls back to the legacy line read, unchanged', () => {
+    // FAILSAFE yields a sequence/map here, not text; the line read is what
+    // every reader returned before #4998, so that answer is kept.
+    assert.strictEqual(readStateMilestoneScalar('---\nmilestone: [v1, v2]\n---\n'), '[v1, v2]');
+    assert.strictEqual(readStateMilestoneScalar('---\nmilestone: { v: 1 }\n---\n'), '{ v: 1 }');
+  });
+
+  test('a trailing YAML comment is not part of the value', () => {
+    assert.strictEqual(readStateMilestoneScalar('---\nmilestone: v1.0 # note\n---\n'), 'v1.0');
+    assert.strictEqual(readStateMilestoneScalar('---\nmilestone: "v1.0" # note\n---\n'), 'v1.0');
+  });
+
+  // The writer's own escaper (escapeDoubleQuotedScalar) is the encoding the
+  // reader must undo: any value written through it reads back byte-identical,
+  // which is exactly the invariant that stops a layer accruing per write.
+  test('property: any value written through the double-quoted escaper reads back unchanged', () => {
+    const { escapeDoubleQuotedScalar } = require('../gsd-core/bin/lib/frontmatter.cjs');
+    fc.assert(fc.property(fc.string({ unit: 'grapheme', maxLength: 40 }), (value) => {
+      const state = `---\nmilestone: "${escapeDoubleQuotedScalar(value)}"\nstatus: executing\n---\n# State\n`;
+      assert.strictEqual(readStateMilestoneScalar(state), value);
+    }), { seed: 4998, numRuns: 300 });
+  });
+});
+
+// The three readers that consume the scalar, asserted directly rather than
+// only end to end via state.json: a value whose on-disk text differs from its
+// decoded text must still select the v1.1 milestone.
+describe('#4998 regression: milestone call sites read the decoded scalar', () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const ROADMAP = [
+    '# Roadmap', '',
+    '## v1.0 — Old', '',
+    '- [ ] **Phase 1: Old work**', '',
+    '## v1.1 — Next', '',
+    '- [ ] **Phase 2: New work**', '',
+  ].join('\n');
+  const SPELLINGS = ['"v1.1"', 'v1.1 # current milestone', "'v1.1' # quoted and commented"];
+
+  for (const spelling of SPELLINGS) {
+    test(`milestone: ${spelling} → getMilestoneInfo, extractCurrentMilestoneScoped and currentMilestoneRawRanges all select v1.1`, () => {
+      writeRoadmap(tmpDir, ROADMAP);
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), `---\nmilestone: ${spelling}\n---\n# State\n`);
+
+      assert.strictEqual(getMilestoneInfo(tmpDir).value.version, 'v1.1');
+
+      const scoped = roadmapParser.extractCurrentMilestoneScoped(ROADMAP, tmpDir);
+      assert.ok(scoped.value.includes('Phase 2: New work'), 'the v1.1 section is selected');
+      assert.ok(!scoped.value.includes('Phase 1: Old work'), 'the v1.0 section is not');
+
+      const ranges = roadmapParser.currentMilestoneRawRanges(ROADMAP, tmpDir);
+      assert.ok(ranges, 'a versioned active milestone yields ranges');
+      const primary = ROADMAP.slice(ranges.primary.start, ranges.primary.end);
+      assert.ok(primary.includes('Phase 2: New work') && !primary.includes('Phase 1: Old work'));
+    });
+  }
+});

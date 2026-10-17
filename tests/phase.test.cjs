@@ -4421,6 +4421,42 @@ Plans:
     );
   });
 
+  // #4998 Codex review: the seam refuses a value carrying U+2028/U+2029, and
+  // this loop skips a refused field — so a `Depends on` that already carried
+  // one kept its old number: Phase 4 (now 3) depended on itself. A value whose
+  // text from the separator on is unchanged is accepted, so it renumbers.
+  test('#4998: a Depends-on value already carrying U+2028 is still decremented, its tail verbatim', () => {
+    const sep = '\u2028';
+    const roadmap = [
+      '# Roadmap',
+      '',
+      '### Phase 1: First',
+      '**Goal:** Bootstrap',
+      '',
+      '### Phase 2: Removed',
+      '**Goal:** Gone',
+      '',
+      '### Phase 3: Producer',
+      '**Goal:** Produce',
+      '',
+      '### Phase 4: Consumer',
+      '**Goal:** Consume',
+      `**Depends on:** Phase 3${sep}(after approval)`,
+      '',
+    ].join('\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), roadmap);
+    for (const slug of ['01-first', '02-removed', '03-producer', '04-consumer']) {
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', slug), { recursive: true });
+    }
+
+    const result = runGsdTools('phase remove 2 --force', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const updated = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(updated.includes('### Phase 3: Consumer'), updated);
+    assert.ok(updated.includes(`**Depends on:** Phase 2${sep}(after approval)`), `dependency not renumbered:\n${updated}`);
+  });
+
   test('#2245 F3: Progress-ordinal renumber re-escapes an escaped pipe in the Phase cell', () => {
     // The renumber's `newValue` callback builds its replacement from the
     // CURRENT (unescaped) cell value and used to splice it back verbatim —

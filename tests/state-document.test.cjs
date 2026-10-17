@@ -21,7 +21,15 @@ const {
   stateReplaceField,
   stateExtractField,
   stateReplaceFieldWithFallback,
+  editedLineContinuation,
+  stateFieldContinuation,
+  insertMissingSessionFields,
+  readableEditedBoldLabel,
+  FIELD_LINE_BREAK_RE,
+  maskFencedLines,
+  writeOutsideFences,
 } = require('../gsd-core/bin/lib/state-document.cjs');
+const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 describe('stateReplaceField — table branch (characterization, #2880)', () => {
   test('replaces a two-cell row in place', () => {
@@ -2661,5 +2669,343 @@ describe('#4186: normalizeStateStatus anchored status vocabulary — documented 
     // recognizes the whole-field value.
     assert.strictEqual(normalizeStateStatus('Executing Phase 5 — final stretch', null), 'Executing Phase 5 — final stretch');
     assert.strictEqual(normalizeStateStatus('Complete but needs manual QA', null), 'Complete but needs manual QA');
+  });
+});
+
+describe('editedLineContinuation (#4998): the continuation of the line a write changed', () => {
+  const doc = [
+    '## Session', '',
+    'Last session: archived v1.0 and moved',
+    'its files to milestones.',
+    'Stopped at: Phase 2 complete',
+    '| Resume file | None |',
+    'not a continuation of a table cell',
+    '',
+  ].join('\n');
+
+  test('names the wrapped tail of the edited line, located from the edit', () => {
+    const after = stateReplaceField(doc, 'Last session', '2026-10-07');
+    assert.strictEqual(editedLineContinuation(doc, after), 'its files to milestones.');
+  });
+
+  test('a single-line field, an unchanged write, and a table row have none', () => {
+    assert.strictEqual(editedLineContinuation(doc, stateReplaceField(doc, 'Stopped at', 'Phase 3')), null);
+    assert.strictEqual(editedLineContinuation(doc, doc), null);
+    assert.strictEqual(editedLineContinuation(doc, stateReplaceField(doc, 'Resume file', 'x.md')), null);
+  });
+
+  test('a new value that only extends the old one still resolves to the same line', () => {
+    const after = doc.replace('moved\n', 'moved them\n');
+    assert.strictEqual(editedLineContinuation(doc, after), 'its files to milestones.');
+  });
+
+  test('CRLF documents resolve the same continuation', () => {
+    const crlf = doc.replace(/\n/g, '\r\n');
+    const after = stateReplaceField(crlf, 'Last session', '2026-10-07');
+    assert.strictEqual(editedLineContinuation(crlf, after), 'its files to milestones.');
+  });
+});
+
+describe('#4998 review round: single-line writes, colon-outside reads, continuation boundaries', () => {
+  // U+2028/U+2029 included: the readers' `m`-flag anchors start a line there
+  // too (trek-e review 2026-10-10, Major 1). U+0085 is not a JS line
+  // terminator, so it is a plain character to these readers — the control row.
+  test('every stateReplaceField rung refuses a value with a line break (it would forge sibling lines)', () => {
+    for (const value of ['a\nForged: x', 'a\rForged: x', 'a\r\nForged: x', 'a\u2028Forged: x', 'a\u2029Forged: x']) {
+      assert.equal(stateReplaceField('**Status:** old', 'Status', value), null, 'bold');
+      assert.equal(stateReplaceField('Status: old', 'Status', value), null, 'plain');
+      assert.equal(stateReplaceField('| Status | old |', 'Status', value), null, 'table');
+    }
+    // Control: the same rungs still write a single-line value.
+    assert.equal(stateReplaceField('Status: old', 'Status', 'new'), 'Status: new');
+    assert.equal(stateReplaceField('Status: old', 'Status', 'a\u0085b'), 'Status: a\u0085b');
+  });
+
+  test('FIELD_LINE_BREAK_RE is exactly the set of characters a multiline anchor starts a line at', () => {
+    // Ground truth from the engine, not a list: every BMP code point that
+    // `^` under the `m` flag treats as a line start.
+    const engine = [];
+    for (let c = 0; c <= 0xffff; c++) {
+      if (/^x/m.test(`a${String.fromCharCode(c)}x`)) engine.push(c);
+    }
+    const ours = [];
+    for (let c = 0; c <= 0xffff; c++) if (FIELD_LINE_BREAK_RE.test(String.fromCharCode(c))) ours.push(c);
+    assert.deepStrictEqual(ours, engine);
+  });
+
+  test('a forged sibling through U+2028 is not readable after a refused write', () => {
+    const doc = '**Stopped at:** before\n**Resume file:** None';
+    assert.equal(stateReplaceField(doc, 'Stopped at', 'x\u2028**Resume file:** forged'), null);
+    assert.equal(stateExtractField(doc, 'Resume file'), 'None');
+  });
+
+  // The reader is NOT widened to `**Label**:` — that let a fenced example
+  // override a live field (Codex review). The writer respells instead.
+  test('a fenced **Status**: example never overrides the live Status field', () => {
+    const doc = 'Status: Executing\n\n```md\n**Status**: Complete\n```\n';
+    assert.equal(stateExtractField(doc, 'Status'), 'Executing');
+  });
+
+  test('readableEditedBoldLabel respells only the line the write changed', () => {
+    const before = '**Stopped at**: old\n```\n**Stopped at**: example\n```\n**Resume file**: None';
+    const after = '**Stopped at**: new\n```\n**Stopped at**: example\n```\n**Resume file**: None';
+    assert.equal(readableEditedBoldLabel(before, after),
+      '**Stopped at:** new\n```\n**Stopped at**: example\n```\n**Resume file**: None');
+    assert.equal(readableEditedBoldLabel(before, before), before, 'no change, nothing respelled');
+    assert.equal(readableEditedBoldLabel('Status: a', 'Status: b'), 'Status: b', 'plain lines are left alone');
+    assert.equal(readableEditedBoldLabel('**S:** a', '**S:** b'), '**S:** b', 'already readable');
+  });
+
+  // Continuation-run length 0 / 1 / 2: a blank line, end of file or a sibling ends it.
+  for (const [label, doc, expected] of [
+    ['run 0 (blank line)', 'F: a\n\nb', null],
+    ['run 1', 'F: a\nb', 'b'],
+    ['run 2', 'F: a\nb\nc\n\nd', 'b c'],
+  ]) {
+    test(`stateFieldContinuation: ${label}`, () => {
+      assert.equal(stateFieldContinuation(doc, 'F'), expected);
+    });
+  }
+
+  // Indentation boundary for a fence and a sibling field below a field: 0-3
+  // spaces open them, 4 is indented code — every row ends the run. An
+  // indented bullet stays a continuation (fails toward skipping the field).
+  for (const indent of [0, 1, 3, 4]) {
+    const pad = ' '.repeat(indent);
+    test(`a fence indented ${indent} is not a continuation`, () => {
+      assert.equal(stateFieldContinuation(`F: a\n${pad}\`\`\`\nx\n${pad}\`\`\``, 'F'), null);
+      assert.equal(stateFieldContinuation(`F: a\n${pad}~~~\nx`, 'F'), null);
+    });
+    test(`a sibling field indented ${indent} is not a continuation`, () => {
+      assert.equal(stateFieldContinuation(`F: a\n${pad}**G:** b`, 'F'), null);
+      assert.equal(stateFieldContinuation(`F: a\n${pad}G: b`, 'F'), null);
+    });
+  }
+  test('an indented bullet below a field stays its continuation', () => {
+    assert.equal(stateFieldContinuation('F: a\n  - note', 'F'), '- note');
+  });
+
+  // trek-e review 2026-10-10, Minor 5: labels carrying `.`, `(`, `)` or `/`
+  // are siblings, not a wrapped tail. Prose without a label shape still wraps.
+  for (const sibling of ['Phase 3.1 status: ok', 'Next (planned): x', 'Owner/reviewer: me', '**Phase 3.1 status:** ok']) {
+    test(`a sibling field "${sibling}" is not a continuation`, () => {
+      assert.equal(stateFieldContinuation(`F: a\n${sibling}`, 'F'), null);
+    });
+  }
+  test('prose that only contains a colon past a sentence is still a continuation', () => {
+    assert.equal(stateFieldContinuation('F: a\nand then, as noted: more', 'F'), 'and then, as noted: more');
+  });
+
+  // First-diff index around a line start: limit-1 (the newline ending the
+  // previous line), limit (the line's first byte), limit+1.
+  test('editedLineContinuation attributes the edit to the right line at a line boundary', () => {
+    const before = 'A: 1\nmore a\n\nB: 2\nmore b';
+    const bStart = before.indexOf('B: 2');
+    const editAt = (i) => before.slice(0, i) + 'X' + before.slice(i);
+    assert.equal(editedLineContinuation(before, editAt(0)), 'more a', 'index 0 is line A');
+    assert.equal(editedLineContinuation(before, editAt(bStart - 1)), null, 'limit-1 is the blank line above B');
+    assert.equal(editedLineContinuation(before, editAt(bStart)), 'more b', 'limit is line B');
+    assert.equal(editedLineContinuation(before, editAt(bStart + 1)), 'more b', 'limit+1 is line B');
+  });
+
+  test('editedLineContinuation: an edit at byte 0 of a document opening with a blank line is that blank line', () => {
+    assert.equal(editedLineContinuation('\nnext', 'X\nnext'), 'next');
+  });
+
+  // trek-e review 2026-10-10, Minor 6: the edited line is located from the
+  // first differing byte. Property: for any surrounding lines and any pair of
+  // single-line values sharing any prefix or suffix, it is the line written —
+  // its continuation is that field's, and an identical write changes nothing
+  // (so nothing can be orphaned and there is nothing to skip).
+  test('property: editedLineContinuation names the continuation of exactly the line written', () => {
+    const LINE = fc.constantFrom('', 'prose', 'more prose', 'A: 1', '**B:** 2', '| C | 3 |', '```', '- item', 'Zf');
+    const VALUE = fc.stringMatching(/^[a-z ]{0,6}$/);
+    fc.assert(fc.property(fc.array(LINE, { maxLength: 6 }), fc.array(LINE, { maxLength: 6 }), VALUE, VALUE, fc.boolean(),
+      (above, below, oldValue, newValue, crlf) => {
+        const eol = crlf ? '\r\n' : '\n';
+        const doc = (v) => [...above, `Zfield: ${v}`, ...below].join(eol);
+        const before = doc(oldValue);
+        const after = doc(newValue);
+        const expected = oldValue === newValue ? null : stateFieldContinuation(before, 'Zfield');
+        assert.equal(editedLineContinuation(before, after), expected);
+      },
+    ));
+  });
+});
+
+describe('readableEditedBoldLabel (#4998): respells only the line written', () => {
+  // Boundary rows for the one spelling it rewrites.
+  for (const [label, before, after, expected] of [
+    ['colon outside → inside', '**S**: a', '**S**: b', '**S:** b'],
+    ['already readable', '**S:** a', '**S:** b', '**S:** b'],
+    ['indented, indent kept', '  **S**: a', '  **S**: b', '  **S:** b'],
+    ['plain line untouched', 'S: a', 'S: b', 'S: b'],
+    ['no space after the colon', '**S**:a', '**S**:b', '**S:**b'],
+    ['a bold run that is not a label', 'see **this**: a', 'see **this**: b', 'see **this**: b'],
+  ]) {
+    test(label, () => assert.equal(readableEditedBoldLabel(before, after), expected));
+  }
+
+  test('property: every line but the written one is byte-identical, and the written one reads back', () => {
+    const LINE = fc.constantFrom('', 'prose', '**Other**: z', '**Other:** y', 'Other: x', '```', '| T | v |');
+    const VALUE = fc.stringMatching(/^[a-z]{1,5}$/);
+    fc.assert(fc.property(fc.array(LINE, { maxLength: 5 }), fc.array(LINE, { maxLength: 5 }), VALUE, VALUE,
+      fc.constantFrom('**Stopped at**: ', '**Stopped at:** ', 'Stopped at: '),
+      (above, below, oldValue, newValue, label) => {
+        fc.pre(oldValue !== newValue);
+        const doc = (v) => [...above, `${label}${v}`, ...below].join('\n');
+        const out = readableEditedBoldLabel(doc(oldValue), doc(newValue)).split('\n');
+        const expected = doc(newValue).split('\n');
+        assert.equal(out.length, expected.length);
+        for (let i = 0; i < out.length; i++) if (i !== above.length) assert.equal(out[i], expected[i]);
+        assert.equal(stateExtractField(out[above.length], 'Stopped at'), newValue);
+      },
+    ));
+  });
+});
+
+describe('writeOutsideFences / maskFencedLines (#4998): a fenced example is never the field written', () => {
+  const write = (field, value) => (c) => stateReplaceField(c, field, value);
+
+  test('a fenced example line is skipped; the live field after it is the one replaced', () => {
+    const doc = '```\nLast session: example\n```\nLast session: real\n';
+    assert.equal(writeOutsideFences(doc, write('Last session', 'now')), '```\nLast session: example\n```\nLast session: now\n');
+  });
+
+  test('with only a fenced example, the write is a miss (null), not a rewrite of the example', () => {
+    assert.equal(writeOutsideFences('```\nLast session: example\n```\n', write('Last session', 'now')), null);
+  });
+
+  test('no fence: identical to the bare writer, including its null and unchanged returns', () => {
+    for (const doc of ['Last session: a\n', '**Last session:** a', 'nothing here']) {
+      assert.equal(writeOutsideFences(doc, write('Last session', 'b')), stateReplaceField(doc, 'Last session', 'b'));
+    }
+  });
+
+  test('bold and table rungs, an unclosed fence, tilde fences and CRLF', () => {
+    assert.equal(writeOutsideFences('~~~\n**S:** ex\n~~~\n**S:** a', write('S', 'b')), '~~~\n**S:** ex\n~~~\n**S:** b');
+    assert.equal(writeOutsideFences('| S | a |\n```\n| S | ex |', write('S', 'b')), '| S | b |\n```\n| S | ex |');
+    assert.equal(writeOutsideFences('S: a\n```\nS: ex', write('S', 'longer value')), 'S: longer value\n```\nS: ex');
+    assert.equal(writeOutsideFences('```\r\nS: ex\r\n```\r\nS: a\r\n', write('S', 'b')), '```\r\nS: ex\r\n```\r\nS: b\r\n');
+  });
+
+  test('a write whose edit would land on a fenced line is refused (null), never a partial write', () => {
+    const doc = 'S: a\n```\nT: ex\n```';
+    // A writer that edits the masked fence region: the splice cannot be carried back.
+    assert.equal(writeOutsideFences(doc, (m) => m.replace(/\n {5}\n/, '\nT: forged\n')), null);
+  });
+
+  // Codex review: re-masking hid an edit that consumed masked bytes.
+  test('an edit that shortens a masked (fenced) line is refused, even when re-masking would hide it', () => {
+    assert.equal(writeOutsideFences('S: a\n```\nT: ex\n```', (m) => m.replace('\n     \n', '\n    \n')), null);
+  });
+
+  test('an edit to a whitespace-only fenced line is refused too (Codex review round 2)', () => {
+    assert.equal(writeOutsideFences('S: a\n```\n     \n```', (m) => m.replace('\n     \n', '\n    \n')), null);
+  });
+
+  test('stateReplaceFieldInSession never writes a fenced example (#4998, the session writers agree with the readers)', () => {
+    const { stateReplaceFieldInSession } = require('../gsd-core/bin/lib/state-document.cjs');
+    const doc = '## Session\n\n```md\nStopped at: example\n```\nStopped at: real\n';
+    assert.equal(stateReplaceFieldInSession(doc, 'Stopped At', 'Stopped at', 'new'),
+      '## Session\n\n```md\nStopped at: example\n```\nStopped at: new\n');
+    assert.equal(stateReplaceFieldInSession('## Session\n\n```\nStopped at: example\n```\n', 'Stopped At', 'Stopped at', 'new'),
+      '## Session\n\n```\nStopped at: example\n```\n', 'only a fenced example: a miss, content unchanged');
+  });
+
+  test('readableBoldLabels respells `**Label**:` for reading only', () => {
+    const { readableBoldLabels } = require('../gsd-core/bin/lib/state-document.cjs');
+    assert.equal(readableBoldLabels('**Resume file**: plan.md\n  **S**: x\n**T:** y\nsee **this**: z'),
+      '**Resume file:** plan.md\n  **S:** x\n**T:** y\nsee **this**: z');
+  });
+
+  test('maskFencedLines keeps length and line terminators and blanks only fenced lines', () => {
+    const doc = 'a\r\n```\r\nb\r\n```\r\nc';
+    const masked = maskFencedLines(doc);
+    assert.equal(masked.length, doc.length);
+    assert.equal(masked, 'a\r\n   \r\n \r\n   \r\nc');
+  });
+});
+
+describe('insertMissingSessionFields (#4998)', () => {
+  const FIELDS = (ls, sa, rf) => [
+    { label: 'Last session', needed: ls, value: 'V-LS' },
+    { label: 'Stopped at', needed: sa, value: 'V-SA' },
+    { label: 'Resume file', needed: rf, value: 'V-RF' },
+  ];
+
+  test('inserts beside the template-order sibling, plain beside plain, bold beside bold', () => {
+    assert.equal(insertMissingSessionFields('Last session: x\nResume file: y', FIELDS(false, true, false)),
+      'Last session: x\nStopped at: V-SA\nResume file: y');
+    assert.equal(insertMissingSessionFields('**Stopped at:** x', FIELDS(true, false, false)),
+      '**Last session:** V-LS\n**Stopped at:** x');
+  });
+
+  test('with no sibling outside a fence, the field goes at the top in bold', () => {
+    assert.equal(insertMissingSessionFields('prose\n```\nStopped at: example\n```', FIELDS(true, false, false)),
+      '**Last session:** V-LS\nprose\n```\nStopped at: example\n```');
+  });
+
+  test('a CRLF body gets CRLF inserted lines, including after an unterminated last line', () => {
+    assert.equal(insertMissingSessionFields('Last session: a\r\nResume file: b\r\n', FIELDS(false, true, false)),
+      'Last session: a\r\nStopped at: V-SA\r\nResume file: b\r\n');
+    assert.equal(insertMissingSessionFields('Last session: a\r\nnote', FIELDS(false, true, false)),
+      'Last session: a\r\nnote\r\nStopped at: V-SA');
+  });
+
+  // Property: every pre-existing line survives, in order; exactly the needed
+  // fields are added; no added line lands inside a fenced block; each added
+  // line sits where the template order puts it (below the nearest earlier
+  // sibling present, else above the nearest later one, else at the top) —
+  // so "always insert at the top" fails it; and a CRLF body stays CRLF.
+  test('property: keeps every line in order, adds exactly the needed fields, in template position, never inside a fence', () => {
+    const LINE = fc.constantFrom('', 'prose text', 'Last session: a', '**Stopped at:** b', 'Stopped at**: c',
+      'Resume file: d', '```', '~~~', '````md', '  ```', '  - bullet', '    code', '**Other:** z', '## Heading');
+    const ORDER = ['Last session', 'Stopped at', 'Resume file'];
+    const labelOf = (l) => ORDER.findIndex((f) => new RegExp(`^[ \\t]*(?:\\*\\*)?${f}(?::\\*\\*|\\*\\*:|:)(?:\\s|$)`, 'i').test(l));
+    const fencedSet = (lines) => {
+      const set = new Set();
+      for (const b of scanFencedBlocks(lines)) {
+        const end = b.closeLineIdx === -1 ? lines.length - 1 : b.closeLineIdx;
+        for (let i = b.openLineIdx; i <= end; i++) set.add(i);
+      }
+      return set;
+    };
+    fc.assert(fc.property(
+      fc.array(LINE, { maxLength: 14 }), fc.boolean(), fc.boolean(), fc.boolean(), fc.boolean(),
+      (input, ls, sa, rf, crlf) => {
+        // A body with no line break has no style to keep: it reads as LF.
+        const body = input.join(crlf ? '\r\n' : '\n');
+        const eol = body.includes('\r\n') ? '\r\n' : '\n';
+        const out = insertMissingSessionFields(body, FIELDS(ls, sa, rf));
+        if (eol === '\r\n') assert.ok(!/(^|[^\r])\n/.test(out), `bare LF in CRLF output: ${JSON.stringify(out)}`);
+        const lines = out.split(eol);
+        const isAdded = (l) => /V-(LS|SA|RF)$/.test(l);
+        assert.deepStrictEqual(lines.filter((l) => !isAdded(l)), body.split(eol));
+        const added = lines.map((l, i) => [l, i]).filter(([l]) => isAdded(l));
+        assert.equal(added.length, [ls, sa, rf].filter(Boolean).length);
+        const fenced = fencedSet(lines);
+        for (const [, i] of added) assert.ok(!fenced.has(i), `added line ${i} is inside a fence:\n${out}`);
+        // Placement. Fields are inserted in template order, so when field k
+        // goes in, an earlier sibling may be an input line or a field added
+        // just before it; a later sibling can only be an input line.
+        const inLines = body.split(eol);
+        const inFenced = fencedSet(inLines);
+        const kept = lines.map((l, i) => [l, i]).filter(([l]) => !isAdded(l)).map(([, i]) => i); // input index → output index
+        const inputAt = (k) => {
+          const at = inLines.findIndex((l, i) => !inFenced.has(i) && labelOf(l) === k);
+          return at === -1 ? -1 : kept[at];
+        };
+        const outputAt = (k) => lines.findIndex((l, i) => !fenced.has(i) && labelOf(l) === k);
+        for (const [l, i] of added) {
+          const k = ['V-LS', 'V-SA', 'V-RF'].findIndex((v) => l.endsWith(v));
+          const earlier = [...Array(k).keys()].reverse().map(outputAt).find((x) => x !== -1 && x !== i);
+          const later = [...Array(3).keys()].slice(k + 1).map(inputAt).find((x) => x !== -1);
+          if (earlier !== undefined) assert.ok(i > earlier, `${l} must follow its earlier sibling:\n${out}`);
+          else if (later !== undefined) assert.ok(i < later, `${l} must precede its later sibling:\n${out}`);
+          else assert.ok(lines.slice(0, i).every(isAdded), `${l} must be at the top:\n${out}`);
+        }
+      },
+    ));
   });
 });
