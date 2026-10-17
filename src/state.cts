@@ -44,6 +44,10 @@ import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir, planningPaths, resolvePhaseIdConvention } = planningWorkspace;
+// Per-session continuity records + handoff discovery (concurrent sessions
+// sharing one .planning/ — see src/session-store.cts).
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import sessionStore = require('./session-store.cjs');
 import { realClock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
@@ -282,6 +286,35 @@ interface StateAddRoadmapEvolutionOptions {
 interface StateRecordSessionOptions {
   stopped_at?: string;
   resume_file?: string | null;
+  /**
+   * Concurrent-session continuity: when a session id resolves (`--session`
+   * or a runtime env key — see session-store.cts resolveSessionId), the same
+   * fields are ALSO written to `.planning/sessions/<sid>.json`. The STATE.md
+   * `## Session` write is unchanged either way (many callers pin its bytes).
+   */
+  session?: string | null;
+  /** Verbatim role of the calling session (kept on the record until restated). */
+  role?: string | null;
+  /** Filesystem-safe role slug as pause-work.md derives it; defaults to slug(role). */
+  role_id?: string | null;
+}
+
+interface StateSessionResumeOptions {
+  session?: string | null;
+  role?: string | null;
+  role_id?: string | null;
+  /** The routed action, e.g. "execute-phase 3" — recorded as `Stopped at: Session resumed, proceeding to <action>`. */
+  action?: string | null;
+  /** Explicit handoff path to consume (adopting another session's handoff); must live at the .planning/ root. */
+  handoff?: string | null;
+  /** Leave every handoff in place (inspection / dry run of the status repair). */
+  keep_handoff?: boolean;
+}
+
+interface StateSessionsOptions {
+  session?: string | null;
+  role?: string | null;
+  role_id?: string | null;
 }
 
 interface StateSnapshotSession {
@@ -1941,6 +1974,226 @@ function cmdStateResolveBlocker(cwd: string, text: string, raw: boolean): void {
   }
 }
 
+/**
+ * The `state record-session` STATE.md transform, lifted out of
+ * cmdStateRecordSession so `state session-resume` can reuse it verbatim
+ * (concurrent-session continuity; see src/session-store.cts). Pure over
+ * `content`; reports through the caller-owned `updated` array and
+ * `flags.sessionCreated`. Output is byte-identical to the pre-lift closure.
+ */
+function applyRecordSessionTransform(
+  content: string,
+  options: StateRecordSessionOptions,
+  now: string,
+  updated: string[],
+  flags: { sessionCreated: boolean },
+): string {
+  // Update Last session / Last Date
+  let result = stateReplaceField(content, 'Last session', now);
+  if (result) { content = result; updated.push('Last session'); }
+  result = stateReplaceField(content, 'Last Date', now);
+  if (result) { content = result; updated.push('Last Date'); }
+
+  // Update Stopped at
+  // #3374 Variant B: stateReplaceField returns the replaced string on any
+  // label MATCH, including when the value is already the target. Pushing
+  // 'Stopped At' on match alone reported a write that never changed a byte
+  // (and that the #948 no-op guard may then discard entirely), leaving a
+  // stale frontmatter stopped_at undetectable to the caller. Report only on
+  // real change — and track the match separately so an identical value does
+  // not read as "label missing" to the #944 DWIM insertion below (whose
+  // section rewrite would reset an executor-authored resume file to None).
+  let stoppedAtMatched = false;
+  if (options.stopped_at) {
+    result = stateReplaceField(content, 'Stopped At', options.stopped_at);
+    if (!result) result = stateReplaceField(content, 'Stopped at', options.stopped_at);
+    if (result) {
+      stoppedAtMatched = true;
+      if (result !== content) { content = result; updated.push('Stopped At'); }
+    }
+  }
+
+  // Update Resume File — only when the caller explicitly passed a value OR the
+  // existing value is a known template default.  An executor-authored path must
+  // not be silently replaced with 'None' just because --resume-file was omitted
+  // (Knuth invariant: handler-owns-transition-between-known-template-defaults).
+  const resumeFileDefaults = KNOWN_TEMPLATE_DEFAULTS['Resume File'];
+  if (options.resume_file !== undefined && options.resume_file !== null) {
+    // Caller explicitly passed a value — always honour it.
+    result = stateReplaceField(content, 'Resume File', options.resume_file);
+    if (!result) result = stateReplaceField(content, 'Resume file', options.resume_file);
+    if (result) { content = result; updated.push('Resume File'); }
+  } else {
+    // No explicit value — only set 'None' when existing value is also a known default
+    // (i.e. not executor-authored).
+    const newRf = stateReplaceFieldIfTemplate(content, 'Resume File', resumeFileDefaults, 'None');
+    if (newRf !== content) {
+      content = newRf;
+      updated.push('Resume File');
+    } else {
+      // Try alternate capitalisation
+      const newRfAlt = stateReplaceFieldIfTemplate(content, 'Resume file', resumeFileDefaults, 'None');
+      if (newRfAlt !== content) {
+        content = newRfAlt;
+        updated.push('Resume File');
+      }
+    }
+  }
+
+  // Bug #944: DWIM normalize/auto-create — when the caller supplied --stopped-at or
+  // --resume-file but the body lacks the canonical labels (in-place replace
+  // returned a miss), persist the values durably. Mirrors the DWIM pattern used
+  // by add-decision, add-blocker, and record-metric. Never silently drop
+  // caller-supplied values.
+  //
+  // Guard: only act when the caller actually supplied a value. When no
+  // --stopped-at / --resume-file are given and the body already had no session
+  // labels (nothing was updated), we return recorded:false — the existing
+  // behaviour for a no-op call that didn't supply any values.
+  //
+  // Correctness invariant: both buildStateFrontmatter and cmdStateSnapshot read
+  // only the FIRST `## Session` block (via a /##\s*Session\s*\n…/i regex).
+  // If we blindly append a second `## Session` block when one already exists, the
+  // newly-written Stopped at / Resume file end up in the second (invisible) block.
+  // Fix: when a `## Session` heading already exists, normalize THAT block in place
+  // (insert / replace canonical bold-label lines within the existing section).
+  // A `## Session Continuity` heading (bootstrap shape) is handled additively —
+  // missing canonical fields are inserted while the heading and any prose are
+  // preserved (#1101). Only append a brand-new section when NEITHER heading exists.
+  const callerSuppliedValues = !!(options.stopped_at || (options.resume_file !== undefined && options.resume_file !== null));
+  // #3374: keyed on the label MATCH, not on updated[] — a matched-but-
+  // identical value is already persisted on disk and must not trigger the
+  // insertion rewrite below.
+  const needsStoppedAt = options.stopped_at && !stoppedAtMatched;
+  const needsResumeFile = options.resume_file !== undefined && options.resume_file !== null && !updated.includes('Resume File');
+  const needsLastSession = !updated.includes('Last session') && !updated.includes('Last Date');
+
+  if (callerSuppliedValues && (needsStoppedAt || needsResumeFile || needsLastSession)) {
+    const resumeValue = (options.resume_file !== undefined && options.resume_file !== null)
+      ? options.resume_file
+      : 'None';
+    const stoppedAtValue = options.stopped_at || 'None';
+
+    // Determine whether a session heading already exists in the body. The
+    // canonical normalized form is `## Session`; the bootstrap templates
+    // (workstream.cts, gsd2-import.cts, templates/state.md) instead emit
+    // `## Session Continuity`. Treat each separately so we never append a
+    // duplicate section alongside an existing one.
+    const existingCanonicalSession = /^## Session[ \t]*$/im.test(content);
+    const existingSessionContinuity = /^## Session Continuity[ \t]*$/im.test(content);
+
+    // Track whether the chosen branch's rewrite actually matched. The detector
+    // regexes (existingCanonicalSession/existingSessionContinuity) are CRLF-
+    // tolerant ($ under /m treats \r as a line terminator); the writer regexes
+    // below must be too. If a writer regex silently fails to match (line-ending
+    // mismatch, unexpected heading shape, ...), do NOT report success — the
+    // caller would believe fields were persisted that were silently dropped
+    // (#2450). The append branch always sets rewriteMatched=true (it always
+    // mutates content).
+    let rewriteMatched = false;
+
+    if (existingCanonicalSession) {
+      // Normalize in place: replace the ENTIRE BODY of the existing ## Session
+      // section (heading + all content up to the next ## heading or EOF) with
+      // canonical bold-label lines. The negative-lookahead per-line pattern
+      // `(?!^## )[\s\S]` consumes every line that doesn't start with "## ",
+      // which correctly stops at the next section boundary without consuming it.
+      // A trailing blank line is added so the next ## heading keeps its spacing.
+      //
+      // CRLF-tolerant (`\r?\n` after `[ \t]*`): the prior literal `\n` could not
+      // match a CRLF STATE.md (`---\r\n`), silently no-op'ing the replace while
+      // updated.push(...) reported success — #2450. The detector regex on the
+      // line above (`/^## Session[ \t]*$/im`) was already CRLF-tolerant, so the
+      // asymmetry armed the bug.
+      const canonicalReplacement = [
+        '## Session',
+        '',
+        `**Last session:** ${now}`,
+        `**Stopped at:** ${stoppedAtValue}`,
+        `**Resume file:** ${resumeValue}`,
+        '',
+        '',
+      ].join('\n');
+      content = content.replace(
+        /^(## Session[ \t]*\r?\n(?:(?!^## )[\s\S])*)/m,
+        () => {
+          rewriteMatched = true;
+          return canonicalReplacement;
+        },
+      );
+    } else if (existingSessionContinuity) {
+      // #1101: a `## Session Continuity` section already exists (bootstrap
+      // shape). Previously this fell through to the append branch and created
+      // a SECOND `## Session` block — a duplicate. Instead, insert only the
+      // canonical fields that are still missing, right after the heading,
+      // preserving the `## Session Continuity` heading and ALL existing lines
+      // (e.g. prose like "Next recommended action"). Fields already updated in
+      // place above (needs* false) are not re-inserted. A function replacement
+      // is used so `$`-bearing caller values are inserted literally (#3454).
+      //
+      // CRLF-tolerant (`\r?\n`): same #2450 fix as the canonical branch above.
+      const linesToInsert: string[] = [];
+      if (needsLastSession) linesToInsert.push(`**Last session:** ${now}`);
+      if (needsStoppedAt) linesToInsert.push(`**Stopped at:** ${stoppedAtValue}`);
+      if (needsResumeFile) linesToInsert.push(`**Resume file:** ${resumeValue}`);
+      if (linesToInsert.length > 0) {
+        // Case-insensitive to match the `existingSessionContinuity` detection
+        // above (#1101 review F3) — otherwise a lowercase heading would detect
+        // but no-op the insert while still reporting the fields as updated.
+        content = content.replace(
+          /^(## Session Continuity[ \t]*\r?\n)/im,
+          (_m, heading: string) => {
+            rewriteMatched = true;
+            return heading + linesToInsert.join('\n') + '\n';
+          },
+        );
+      }
+      // No `else` branch: if linesToInsert.length === 0 the outer guard at
+      // :1144 (callerSuppliedValues && (needsStoppedAt || needsResumeFile
+      // || needsLastSession)) could not have fired, so this whole block is
+      // unreachable. Leaving `rewriteMatched = false` here is the fail-loud
+      // posture — a future change to the outer guard or needs* computation
+      // that makes this branch reachable will surface as a missing
+      // updated[] entry (silent recorded:false) rather than re-arming #2450.
+    } else {
+      // No session heading exists at all — append a new canonical section.
+      const scaffold = [
+        '',
+        '## Session',
+        '',
+        `**Last session:** ${now}`,
+        `**Stopped at:** ${stoppedAtValue}`,
+        `**Resume file:** ${resumeValue}`,
+        '',
+      ].join('\n');
+      content = content.trimEnd() + '\n' + scaffold;
+      rewriteMatched = true;
+    }
+
+    // #2450 defensive invariant: only report sessionCreated/updated when the
+    // chosen branch's rewrite actually mutated content. Unreachable when the
+    // writer regexes above stay in sync with the CRLF-tolerant detector —
+    // but unreachable-defensive is the right posture for a silent-success
+    // gate. A no-op replace here means a future line-ending or shape drift
+    // between detector and writer; fail to record rather than claim success.
+    //
+    // Scope limitation (not a regression of this fix): the gate covers only
+    // the section-rewrite block. The earlier in-place stateReplaceField
+    // successes at :1081/:1083/:1089/:1101/:1108/:1114 push to `updated`
+    // unconditionally — those represent fields that DID land on disk via
+    // same-line replace (CRLF-agnostic seam), so unconditional push is
+    // correct. The class-defect防御 here is for the INSERT path only.
+    if (rewriteMatched) {
+      flags.sessionCreated = true;
+      if (needsLastSession) updated.push('Last session');
+      if (needsStoppedAt) updated.push('Stopped At');
+      if (needsResumeFile) updated.push('Resume File');
+    }
+  }
+
+  return content;
+}
+
 function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, raw: boolean): void {
   // #4186: a bare invocation is a usage error, not a heartbeat write. The
   // pre-#4186 handler accepted zero arguments and still refreshed
@@ -1959,7 +2212,6 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
 
   const now = realClock.nowIso();
   const updated: string[] = [];
-  let sessionCreated = false;
   const divergedFields: string[] = [];
   // #4763 (1): last-writer-wins stays (the recorded single-slot handoff design),
   // but a displaced record is no longer silent. The pre-write session record is
@@ -1970,228 +2222,34 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
   // transaction's own pre-write snapshot + body by `applyPostSyncPreservation`.
   const preWriteState: StatePreWriteSnapshot = {};
 
+  const flags = { sessionCreated: false };
+  // #4763 (1): capture the pre-write session record inside the transaction. The capture mirrors the
+  // WRITER, not the snapshot reader: stateReplaceField replaces the FIRST
+  // case-insensitive label match anywhere in the document, so the capture is
+  // document-wide too — scoping it to ## Session would miss an archive-section
+  // line the writer actually displaced. Continuation lines join via
+  // stateFieldContinuation (the sanctioned joiner — stateExtractField alone is
+  // first-line-only), so a wrapped multi-line handoff is surfaced whole.
+  const capturePrior = (content: string, fieldName: string): string | undefined => {
+    const first = stateExtractField(content, fieldName);
+    if (first === null) return undefined;
+    const cont = stateFieldContinuation(content, fieldName);
+    return cont ? `${first}
+${cont}` : first;
+  };
   readModifyWriteStateMd(statePath, (content) => {
-    // #4763 (1): read the pre-write session record. The capture mirrors the
-    // WRITER, not the snapshot reader: stateReplaceField replaces the FIRST
-    // case-insensitive label match anywhere in the document, so the capture is
-    // document-wide too — scoping it to ## Session would miss an archive-section
-    // line the writer actually displaced. Continuation lines join via
-    // stateFieldContinuation (the sanctioned joiner — stateExtractField alone is
-    // first-line-only), so a wrapped multi-line handoff is surfaced whole.
-    const capturePrior = (fieldName: string): string | undefined => {
-      const first = stateExtractField(content, fieldName);
-      if (first === null) return undefined;
-      const cont = stateFieldContinuation(content, fieldName);
-      return cont ? `${first}\n${cont}` : first;
-    };
-    priorRecord.stoppedAt = capturePrior('Stopped At');
-    priorRecord.resumeFile = capturePrior('Resume File');
-
-    // Update Last session / Last Date
-    let result = stateReplaceField(content, 'Last session', now);
-    if (result) { content = result; updated.push('Last session'); }
-    result = stateReplaceField(content, 'Last Date', now);
-    if (result) { content = result; updated.push('Last Date'); }
-
-    // Update Stopped at
-    // #3374 Variant B: stateReplaceField returns the replaced string on any
-    // label MATCH, including when the value is already the target. Pushing
-    // 'Stopped At' on match alone reported a write that never changed a byte
-    // (and that the #948 no-op guard may then discard entirely), leaving a
-    // stale frontmatter stopped_at undetectable to the caller. Report only on
-    // real change — and track the match separately so an identical value does
-    // not read as "label missing" to the #944 DWIM insertion below (whose
-    // section rewrite would reset an executor-authored resume file to None).
-    let stoppedAtMatched = false;
-    if (options.stopped_at) {
-      result = stateReplaceField(content, 'Stopped At', options.stopped_at);
-      if (!result) result = stateReplaceField(content, 'Stopped at', options.stopped_at);
-      if (result) {
-        stoppedAtMatched = true;
-        if (result !== content) { content = result; updated.push('Stopped At'); }
-      }
-    }
-
-    // Update Resume File — only when the caller explicitly passed a value OR the
-    // existing value is a known template default.  An executor-authored path must
-    // not be silently replaced with 'None' just because --resume-file was omitted
-    // (Knuth invariant: handler-owns-transition-between-known-template-defaults).
-    const resumeFileDefaults = KNOWN_TEMPLATE_DEFAULTS['Resume File'];
-    if (options.resume_file !== undefined && options.resume_file !== null) {
-      // Caller explicitly passed a value — always honour it.
-      result = stateReplaceField(content, 'Resume File', options.resume_file);
-      if (!result) result = stateReplaceField(content, 'Resume file', options.resume_file);
-      if (result) { content = result; updated.push('Resume File'); }
-    } else {
-      // No explicit value — only set 'None' when existing value is also a known default
-      // (i.e. not executor-authored).
-      const newRf = stateReplaceFieldIfTemplate(content, 'Resume File', resumeFileDefaults, 'None');
-      if (newRf !== content) {
-        content = newRf;
-        updated.push('Resume File');
-      } else {
-        // Try alternate capitalisation
-        const newRfAlt = stateReplaceFieldIfTemplate(content, 'Resume file', resumeFileDefaults, 'None');
-        if (newRfAlt !== content) {
-          content = newRfAlt;
-          updated.push('Resume File');
-        }
-      }
-    }
-
-    // Bug #944: DWIM normalize/auto-create — when the caller supplied --stopped-at or
-    // --resume-file but the body lacks the canonical labels (in-place replace
-    // returned a miss), persist the values durably. Mirrors the DWIM pattern used
-    // by add-decision, add-blocker, and record-metric. Never silently drop
-    // caller-supplied values.
-    //
-    // Guard: only act when the caller actually supplied a value. When no
-    // --stopped-at / --resume-file are given and the body already had no session
-    // labels (nothing was updated), we return recorded:false — the existing
-    // behaviour for a no-op call that didn't supply any values.
-    //
-    // Correctness invariant: both buildStateFrontmatter and cmdStateSnapshot read
-    // only the FIRST `## Session` block (via a /##\s*Session\s*\n…/i regex).
-    // If we blindly append a second `## Session` block when one already exists, the
-    // newly-written Stopped at / Resume file end up in the second (invisible) block.
-    // Fix: when a `## Session` heading already exists, normalize THAT block in place
-    // (insert / replace canonical bold-label lines within the existing section).
-    // A `## Session Continuity` heading (bootstrap shape) is handled additively —
-    // missing canonical fields are inserted while the heading and any prose are
-    // preserved (#1101). Only append a brand-new section when NEITHER heading exists.
-    const callerSuppliedValues = !!(options.stopped_at || (options.resume_file !== undefined && options.resume_file !== null));
-    // #3374: keyed on the label MATCH, not on updated[] — a matched-but-
-    // identical value is already persisted on disk and must not trigger the
-    // insertion rewrite below.
-    const needsStoppedAt = options.stopped_at && !stoppedAtMatched;
-    const needsResumeFile = options.resume_file !== undefined && options.resume_file !== null && !updated.includes('Resume File');
-    const needsLastSession = !updated.includes('Last session') && !updated.includes('Last Date');
-
-    if (callerSuppliedValues && (needsStoppedAt || needsResumeFile || needsLastSession)) {
-      const resumeValue = (options.resume_file !== undefined && options.resume_file !== null)
-        ? options.resume_file
-        : 'None';
-      const stoppedAtValue = options.stopped_at || 'None';
-
-      // Determine whether a session heading already exists in the body. The
-      // canonical normalized form is `## Session`; the bootstrap templates
-      // (workstream.cts, gsd2-import.cts, templates/state.md) instead emit
-      // `## Session Continuity`. Treat each separately so we never append a
-      // duplicate section alongside an existing one.
-      const existingCanonicalSession = /^## Session[ \t]*$/im.test(content);
-      const existingSessionContinuity = /^## Session Continuity[ \t]*$/im.test(content);
-
-      // Track whether the chosen branch's rewrite actually matched. The detector
-      // regexes (existingCanonicalSession/existingSessionContinuity) are CRLF-
-      // tolerant ($ under /m treats \r as a line terminator); the writer regexes
-      // below must be too. If a writer regex silently fails to match (line-ending
-      // mismatch, unexpected heading shape, ...), do NOT report success — the
-      // caller would believe fields were persisted that were silently dropped
-      // (#2450). The append branch always sets rewriteMatched=true (it always
-      // mutates content).
-      let rewriteMatched = false;
-
-      if (existingCanonicalSession) {
-        // Normalize in place: replace the ENTIRE BODY of the existing ## Session
-        // section (heading + all content up to the next ## heading or EOF) with
-        // canonical bold-label lines. The negative-lookahead per-line pattern
-        // `(?!^## )[\s\S]` consumes every line that doesn't start with "## ",
-        // which correctly stops at the next section boundary without consuming it.
-        // A trailing blank line is added so the next ## heading keeps its spacing.
-        //
-        // CRLF-tolerant (`\r?\n` after `[ \t]*`): the prior literal `\n` could not
-        // match a CRLF STATE.md (`---\r\n`), silently no-op'ing the replace while
-        // updated.push(...) reported success — #2450. The detector regex on the
-        // line above (`/^## Session[ \t]*$/im`) was already CRLF-tolerant, so the
-        // asymmetry armed the bug.
-        const canonicalReplacement = [
-          '## Session',
-          '',
-          `**Last session:** ${now}`,
-          `**Stopped at:** ${stoppedAtValue}`,
-          `**Resume file:** ${resumeValue}`,
-          '',
-          '',
-        ].join('\n');
-        content = content.replace(
-          /^(## Session[ \t]*\r?\n(?:(?!^## )[\s\S])*)/m,
-          () => {
-            rewriteMatched = true;
-            return canonicalReplacement;
-          },
-        );
-      } else if (existingSessionContinuity) {
-        // #1101: a `## Session Continuity` section already exists (bootstrap
-        // shape). Previously this fell through to the append branch and created
-        // a SECOND `## Session` block — a duplicate. Instead, insert only the
-        // canonical fields that are still missing, right after the heading,
-        // preserving the `## Session Continuity` heading and ALL existing lines
-        // (e.g. prose like "Next recommended action"). Fields already updated in
-        // place above (needs* false) are not re-inserted. A function replacement
-        // is used so `$`-bearing caller values are inserted literally (#3454).
-        //
-        // CRLF-tolerant (`\r?\n`): same #2450 fix as the canonical branch above.
-        const linesToInsert: string[] = [];
-        if (needsLastSession) linesToInsert.push(`**Last session:** ${now}`);
-        if (needsStoppedAt) linesToInsert.push(`**Stopped at:** ${stoppedAtValue}`);
-        if (needsResumeFile) linesToInsert.push(`**Resume file:** ${resumeValue}`);
-        if (linesToInsert.length > 0) {
-          // Case-insensitive to match the `existingSessionContinuity` detection
-          // above (#1101 review F3) — otherwise a lowercase heading would detect
-          // but no-op the insert while still reporting the fields as updated.
-          content = content.replace(
-            /^(## Session Continuity[ \t]*\r?\n)/im,
-            (_m, heading: string) => {
-              rewriteMatched = true;
-              return heading + linesToInsert.join('\n') + '\n';
-            },
-          );
-        }
-        // No `else` branch: if linesToInsert.length === 0 the outer guard at
-        // :1144 (callerSuppliedValues && (needsStoppedAt || needsResumeFile
-        // || needsLastSession)) could not have fired, so this whole block is
-        // unreachable. Leaving `rewriteMatched = false` here is the fail-loud
-        // posture — a future change to the outer guard or needs* computation
-        // that makes this branch reachable will surface as a missing
-        // updated[] entry (silent recorded:false) rather than re-arming #2450.
-      } else {
-        // No session heading exists at all — append a new canonical section.
-        const scaffold = [
-          '',
-          '## Session',
-          '',
-          `**Last session:** ${now}`,
-          `**Stopped at:** ${stoppedAtValue}`,
-          `**Resume file:** ${resumeValue}`,
-          '',
-        ].join('\n');
-        content = content.trimEnd() + '\n' + scaffold;
-        rewriteMatched = true;
-      }
-
-      // #2450 defensive invariant: only report sessionCreated/updated when the
-      // chosen branch's rewrite actually mutated content. Unreachable when the
-      // writer regexes above stay in sync with the CRLF-tolerant detector —
-      // but unreachable-defensive is the right posture for a silent-success
-      // gate. A no-op replace here means a future line-ending or shape drift
-      // between detector and writer; fail to record rather than claim success.
-      //
-      // Scope limitation (not a regression of this fix): the gate covers only
-      // the section-rewrite block. The earlier in-place stateReplaceField
-      // successes at :1081/:1083/:1089/:1101/:1108/:1114 push to `updated`
-      // unconditionally — those represent fields that DID land on disk via
-      // same-line replace (CRLF-agnostic seam), so unconditional push is
-      // correct. The class-defect防御 here is for the INSERT path only.
-      if (rewriteMatched) {
-        sessionCreated = true;
-        if (needsLastSession) updated.push('Last session');
-        if (needsStoppedAt) updated.push('Stopped At');
-        if (needsResumeFile) updated.push('Resume File');
-      }
-    }
-
-    return content;
+    priorRecord.stoppedAt = capturePrior(content, 'Stopped At');
+    priorRecord.resumeFile = capturePrior(content, 'Resume File');
+    return applyRecordSessionTransform(content, options, now, updated, flags);
   }, cwd, { divergedFields, preWriteState });
+  const sessionCreated = flags.sessionCreated;
+
+  // Concurrent sessions: the STATE.md `## Session` block above is a shared,
+  // last-writer-wins slot. When this call can be attributed to a session,
+  // mirror the same fields into that session's own record so a later resume
+  // (or the statusline) can tell sessions apart. Absent a session id the
+  // output below is byte-identical to the pre-session-store behaviour.
+  const sessionExtras = writeSessionRecordForOptions(cwd, options, now);
 
   // ADR-3408 §8.4 (D4): reconcile this command's own success list against the
   // bytes actually persisted (fix(#3351) generalized) and fold in any field
@@ -2200,7 +2258,7 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
   const reconciledUpdated = reconcileReportedFields(statePath, preWriteState, updated, divergedFields);
 
   if (reconciledUpdated.length > 0) {
-    const result: Record<string, unknown> = { recorded: true, updated: reconciledUpdated };
+    const result: Record<string, unknown> = { recorded: true, updated: reconciledUpdated, ...sessionExtras };
     if (sessionCreated) result['created'] = true;
     // #4763 (1): surface any non-empty prior record the write displaced. Gated
     // on reconciledUpdated (the fields that actually persisted, post-#3957
@@ -2224,6 +2282,10 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
     }
     if (Object.keys(replacedRecord).length > 0) result['replacedRecord'] = replacedRecord;
     output(result, raw, 'true');
+  } else if (sessionExtras) {
+    // STATE.md had nothing to change, but the per-session record was written
+    // — that IS a recorded heartbeat for this session, not a no-op.
+    output({ recorded: true, updated: [], ...sessionExtras }, raw, 'true');
   } else if (updated.length === 0) {
     // Nothing was ever attempted — no --stopped-at/--resume-file supplied
     // and no existing Last session/Last Date/Stopped At/Resume File labels
@@ -2250,6 +2312,201 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
       'state record-session skipped — the matched session field(s) already held the reported value; no bytes changed.',
     );
   }
+}
+
+/**
+ * Shared tail of record-session / session-resume: persist the session-scoped
+ * record when a session id resolves. Returns the output fields to merge, or
+ * null when no session id is known (the legacy single-session shape).
+ */
+function writeSessionRecordForOptions(
+  cwd: string,
+  options: StateRecordSessionOptions,
+  now: string,
+): { session_id: string; session_record: string } | null {
+  const sid = sessionStore.resolveSessionId(options.session);
+  if (!sid) return null;
+  const patch: sessionStore.SessionRecordPatch = { last_session: now };
+  if (options.stopped_at) patch.stopped_at = options.stopped_at;
+  if (options.resume_file !== undefined && options.resume_file !== null) patch.resume_file = options.resume_file;
+  if (options.role !== undefined && options.role !== null && options.role.trim()) patch.role = options.role.trim();
+  const roleId = sessionStore.sanitizeRoleId(options.role_id);
+  if (roleId) patch.role_id = roleId;
+  sessionStore.upsertSessionRecord(cwd, sid, patch, now);
+  return { session_id: sid, session_record: toPosixPath(path.relative(cwd, sessionStore.sessionRecordPath(cwd, sid))) };
+}
+
+/**
+ * Validate an explicit `--handoff` path: it must resolve INSIDE the project's
+ * `.planning/` root and be named like a handoff. Returns the absolute path or
+ * exits through `error`.
+ */
+function resolveExplicitHandoffPath(cwd: string, handoff: string): string {
+  const planningRoot = path.resolve(cwd, '.planning');
+  const abs = path.resolve(cwd, handoff);
+  const rel = path.relative(planningRoot, abs);
+  const inside = rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel) && !rel.includes(path.sep) && !rel.includes('/');
+  if (!inside || !sessionStore.HANDOFF_FILENAME_RE.test(path.basename(abs))) {
+    error(`--handoff must name a HANDOFF*.json file at the .planning/ root: ${handoff}`);
+  }
+  return abs;
+}
+
+/**
+ * `state session-resume` — the "this session is no longer paused" verb.
+ *
+ * Pause is per session and is represented ONLY by the session's handoff file
+ * (`.planning/HANDOFF*.json`, see session-store.cts); the statusline draws
+ * `paused` from that file's presence. Deleting it therefore belongs to the
+ * verb that records "Session resumed" — if the workflow prose deleted it
+ * later, every step in between would still render as paused.
+ *
+ * Also repairs the legacy project-wide `status: paused`: a frontmatter
+ * `status: paused` with NO `Paused At:` line under `## Session` is the
+ * pre-per-session shape (`preserve-when-unchanged` kept it alive forever
+ * because nothing ever rewrote the body `Status:`). It is re-derived from
+ * the body `Status:` and, when that yields a real status, overwritten via
+ * the `authoritativeFm` seam (the only channel that survives
+ * `applyPreserveWhenUnchanged` — see cmdStateUpdate). A hand-written
+ * `Paused At:` line is an explicit pause and is left alone.
+ */
+/** The frontmatter `status` verdict of a session resume — see repairLegacyPausedStatus. */
+type SessionResumeStatus = { before: string | null; after: string | null; cleared: boolean; reason?: string };
+
+/**
+ * Pause is per session (a handoff file), never `status: paused` in STATE.md
+ * — but a pre-role-keyed pause-work wrote exactly that, and it stuck for
+ * every session sharing the file. On resume, when the frontmatter says
+ * `paused` and no explicit `Paused At:` line under `## Session` claims it,
+ * re-derive `status` from the body `Status:` line and put it in
+ * `authoritativeFm` for the write. Anything ambiguous is left as is, with
+ * the reason reported.
+ */
+function repairLegacyPausedStatus(content: string, statePath: string, authoritativeFm: Record<string, unknown>): SessionResumeStatus {
+  const fm = extractFrontmatter(content, statePath) as Record<string, unknown>;
+  const before = typeof fm['status'] === 'string' ? fm['status'] : null;
+  const status: SessionResumeStatus = { before, after: before, cleared: false };
+  if (before !== 'paused') return status;
+  const body = stripFrontmatter(content);
+  const sessionScope = matchSessionSection(body) ?? body;
+  const pausedAt = stateExtractField(sessionScope, 'Paused At');
+  if (pausedAt && pausedAt.trim()) {
+    status.reason = 'explicit Paused At line under ## Session — left as is';
+    return status;
+  }
+  const derived = normalizeStateStatus(stateExtractField(body, 'Status'), null);
+  if (derived === 'paused' || derived === 'unknown') {
+    status.reason = derived === 'unknown'
+      ? 'no body Status: line to re-derive from — left as is'
+      : 'body Status: is itself paused — left as is';
+    return status;
+  }
+  authoritativeFm['status'] = derived;
+  status.after = derived;
+  status.cleared = true;
+  return status;
+}
+
+function cmdStateSessionResume(cwd: string, options: StateSessionResumeOptions, raw: boolean): void {
+  const statePath = planningPaths(cwd).state;
+  if (!fs.existsSync(statePath)) { output({ error: 'STATE.md not found' }, raw, undefined); return; }
+
+  const sid = sessionStore.resolveSessionId(options.session);
+  const roleId = sessionStore.resolveRoleId(cwd, sid, options.role, options.role_id);
+  const self: sessionStore.SessionIdentity = { session_id: sid, role_id: roleId };
+  const explicitHandoff = options.handoff ? resolveExplicitHandoffPath(cwd, options.handoff) : null;
+
+  const action = (options.action ?? '').trim() || 'next action';
+  const stoppedAt = `Session resumed, proceeding to ${action}`;
+  const recordOptions: StateRecordSessionOptions = {
+    stopped_at: stoppedAt,
+    session: sid,
+    role: options.role,
+    role_id: options.role_id,
+  };
+
+  const now = realClock.nowIso();
+  const updated: string[] = [];
+  const divergedFields: string[] = [];
+  const preWriteState: StatePreWriteSnapshot = {};
+  const authoritativeFm: Record<string, unknown> = {};
+  const flags = { sessionCreated: false };
+  const status: SessionResumeStatus = { before: null, after: null, cleared: false };
+
+  readModifyWriteStateMd(statePath, (content) => {
+    Object.assign(status, repairLegacyPausedStatus(content, statePath, authoritativeFm));
+    return applyRecordSessionTransform(content, recordOptions, now, updated, flags);
+  }, cwd, { divergedFields, preWriteState, authoritativeFm });
+
+  // Report what is actually on disk, not what the transform intended: the
+  // #948 no-op guard skips the write (and with it `authoritativeFm`) when the
+  // transform output is byte-identical to the input — only reachable when
+  // `now` already equals the recorded `Last session`, but a reported
+  // `cleared: true` over an unchanged file would be a lie.
+  if (status.cleared) {
+    try {
+      const persisted = extractFrontmatter(platformReadSync(statePath) || '', statePath) as Record<string, unknown>;
+      const onDisk = typeof persisted['status'] === 'string' ? persisted['status'] : null;
+      if (onDisk !== status.after) {
+        status.after = onDisk;
+        status.cleared = false;
+        status.reason = 'STATE.md write was a no-op this call (nothing else changed) — rerun to clear';
+      }
+    } catch {
+      /* unreadable after write — leave the transform's report */
+    }
+  }
+
+  const sessionExtras = writeSessionRecordForOptions(cwd, recordOptions, now);
+  const reconciledUpdated = reconcileReportedFields(statePath, preWriteState, updated, divergedFields);
+
+  // Consume this session's handoff(s). Best-effort: a locked file on Windows
+  // (EBUSY) must not fail the resume — the caller sees the path under
+  // `handoff_error` and the next resume retries.
+  const removed: string[] = [];
+  const errors: string[] = [];
+  if (!options.keep_handoff) {
+    const targets = explicitHandoff
+      ? [explicitHandoff]
+      : sessionStore.ownHandoffs(cwd, self).map((h) => h.path);
+    for (const target of targets) {
+      try {
+        fs.unlinkSync(target);
+        removed.push(toPosixPath(path.relative(cwd, target)));
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT') continue;
+        errors.push(`${toPosixPath(path.relative(cwd, target))}: ${code ?? (e as Error).message}`);
+      }
+    }
+  }
+
+  const result: Record<string, unknown> = {
+    resumed: true,
+    session_id: sid,
+    role_id: roleId,
+    updated: reconciledUpdated,
+    ...(sessionExtras ?? {}),
+    status,
+    handoff_removed: removed,
+  };
+  if (errors.length > 0) result['handoff_error'] = errors;
+  output(result, raw, 'true');
+}
+
+/** `state sessions` — read-only view of every session's handoff / record. */
+function cmdStateSessions(cwd: string, options: StateSessionsOptions, raw: boolean): void {
+  const sid = sessionStore.resolveSessionId(options.session);
+  const roleId = sessionStore.resolveRoleId(cwd, sid, options.role, options.role_id);
+  const self: sessionStore.SessionIdentity = { session_id: sid, role_id: roleId };
+  const sessions = sessionStore.listSessions(cwd, self).map((view) => ({
+    ...view,
+    handoff_path: view.handoff_path ? toPosixPath(path.relative(cwd, view.handoff_path)) : null,
+    continue_here_path: view.continue_here_path ? toPosixPath(path.relative(cwd, view.continue_here_path)) : null,
+    record_path: view.record_path ? toPosixPath(path.relative(cwd, view.record_path)) : null,
+  }));
+  // Always JSON — like `state json`, the payload IS the answer; `--raw` has no scalar projection.
+  output({ self, paused: sessions.some((v) => v.is_self && v.paused), sessions }, raw, undefined);
 }
 
 /**
@@ -7418,6 +7675,8 @@ export = {
   cmdStateAddRoadmapEvolution,
   cmdStateResolveBlocker,
   cmdStateRecordSession,
+  cmdStateSessionResume,
+  cmdStateSessions,
   cmdStateSnapshot,
   cmdStateJson,
   cmdStateBeginPhase,

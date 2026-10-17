@@ -607,6 +607,7 @@
   "gsd-core/workflows/verify-work/steps/automated-ui-verification.md",
   "gsd-core/workflows/verify-work/steps/mvp-uat-framing.md",
   "hooks/gsd-check-update-worker.js",
+  "hooks/gsd-check-update.cmd",
   "hooks/gsd-check-update.js",
   "hooks/managed-hooks-registry.cjs",
   "hooks/package.json",

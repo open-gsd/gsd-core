@@ -43,6 +43,8 @@ interface StateModule {
   cmdStateAddRoadmapEvolution(cwd: string, opts: Record<string, string | boolean | null | undefined>, raw: boolean): void;
   cmdStateResolveBlocker(cwd: string, text: string | null | undefined, raw: boolean): void;
   cmdStateRecordSession(cwd: string, opts: Record<string, string | null | undefined>, raw: boolean): void;
+  cmdStateSessionResume(cwd: string, opts: Record<string, string | boolean | null | undefined>, raw: boolean): void;
+  cmdStateSessions(cwd: string, opts: Record<string, string | null | undefined>, raw: boolean): void;
   cmdStateBeginPhase(cwd: string, phase: string | null | undefined, name: string | null | undefined, plans: number | null, raw: boolean): void;
   cmdSignalWaiting(cwd: string, type: string | null | undefined, question: string | null | undefined, options: string | null | undefined, phase: string | null | undefined, raw: boolean): void;
   cmdSignalResume(cwd: string, raw: boolean): void;
@@ -174,11 +176,37 @@ function routeStateCommand({ state, args, cwd, raw, error }: RouteStateCommandOp
       },
       'resolve-blocker': () => state.cmdStateResolveBlocker(cwd, strArg(parseNamedArgsOrExit(args, { valueFlags: ['text'], positionals: 2 }, error), 'text'), raw),
       'record-session': () => {
-        const a = parseNamedArgsOrExit(args, { valueFlags: ['stopped-at', 'resume-file'], positionals: 2 }, error);
+        const a = parseNamedArgsOrExit(args, { valueFlags: ['stopped-at', 'resume-file', 'session', 'role', 'role-id'], positionals: 2 }, error);
         // Pass resume_file as-is (undefined when --resume-file was not provided) so
         // cmdStateRecordSession can distinguish "caller explicitly passed a value" from
         // "option was not supplied" and apply the template-default-only replacement guard.
-        state.cmdStateRecordSession(cwd, { stopped_at: strArg(a, 'stopped-at'), resume_file: strArg(a, 'resume-file') }, raw);
+        // --session / --role / --role-id: concurrent-session continuity — also
+        // mirror the fields into .planning/sessions/<sid>.json (session-store.cts).
+        state.cmdStateRecordSession(cwd, {
+          stopped_at: strArg(a, 'stopped-at'),
+          resume_file: strArg(a, 'resume-file'),
+          session: strArg(a, 'session'),
+          role: strArg(a, 'role'),
+          role_id: strArg(a, 'role-id'),
+        }, raw);
+      },
+      // Per-session resume: records "Session resumed, proceeding to <action>",
+      // repairs a legacy project-wide `status: paused`, and consumes this
+      // session's HANDOFF*.json (the per-session pause marker).
+      'session-resume': () => {
+        const a = parseNamedArgsOrExit(args, { valueFlags: ['session', 'role', 'role-id', 'action', 'handoff'], booleanFlags: ['keep-handoff'], positionals: 2 }, error);
+        state.cmdStateSessionResume(cwd, {
+          session: strArg(a, 'session'),
+          role: strArg(a, 'role'),
+          role_id: strArg(a, 'role-id'),
+          action: strArg(a, 'action'),
+          handoff: strArg(a, 'handoff'),
+          keep_handoff: a['keep-handoff'] === true,
+        }, raw);
+      },
+      sessions: () => {
+        const a = parseNamedArgsOrExit(args, { valueFlags: ['session', 'role', 'role-id'], positionals: 2 }, error);
+        state.cmdStateSessions(cwd, { session: strArg(a, 'session'), role: strArg(a, 'role'), role_id: strArg(a, 'role-id') }, raw);
       },
       'begin-phase': () => {
         const a = parseNamedArgsOrExit(args, { valueFlags: ['phase', 'name', 'plans'], positionals: 2 }, error);

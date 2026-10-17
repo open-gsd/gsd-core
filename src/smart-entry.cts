@@ -69,6 +69,9 @@ const { warnUnusableInput, UNUSABLE_REASON } = unusableInput;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import verificationMod = require('./verification.cjs');
 const { findVerificationStatusError } = verificationMod;
+// Per-session pause marker (concurrent sessions sharing one .planning/).
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import sessionStore = require('./session-store.cjs');
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -491,7 +494,11 @@ export function detectSignals(cwd: string, now: () => number = Date.now): SmartE
     for (const item of items) blockers.push(item.replace(/^-\s+/, '').trim());
   }
 
-  const paused = Boolean(pausedAtRaw && pausedAtRaw.trim());
+  // Pause is per session: an explicit `Paused At:` line still counts, but the
+  // canonical signal is this session's own handoff file under .planning/
+  // (session-store.cts). Another session's handoff does NOT pause this one.
+  const paused = Boolean(pausedAtRaw && pausedAtRaw.trim())
+    || sessionStore.ownHandoffExists(cwd, sessionStore.resolveSessionId(null));
 
   // Stale = no recorded activity for IDLE_STALE_MS. Used only by idle-stranded.
   // Computed here (with the clock seam) so the pure classify() stays a function

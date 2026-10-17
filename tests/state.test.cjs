@@ -12,7 +12,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { runGsdTools, createTempDir, createTempProject, createTempGitProject, cleanup, captureFdSync } = require('./helpers.cjs');
+const { runGsdTools, createTempDir, createTempProject, createTempGitProject, cleanup, captureFdSync, saveSessionEnv, restoreSessionEnv, clearSessionEnv } = require('./helpers.cjs');
 const { createFixture, seedWorkstream, writeState } = require('./fixtures/index.cjs');
 // ADR-3473 §8.7 (#3872): git-fixture spawns for the state_head rows (10/11)
 // go through the throw-preserving wrapper, never a raw execFileSync.
@@ -21333,7 +21333,19 @@ describe('#3957 (epic #3473 B9): no-op decline reports the real condition', () =
   describe('cmdStateRecordSession', () => {
     let tmpDir;
     const originalNowIso = clockLib.realClock.nowIso;
+    // These rows call the handler IN-PROCESS, so an ambient runtime session id
+    // (CLAUDE_CODE_SESSION_ID when the suite runs inside Claude Code) would
+    // attribute the call to a session and write .planning/sessions/<sid>.json
+    // — a recorded heartbeat, which is exactly not the no-op these rows pin.
+    // Child-process runs are scrubbed by runGsdTools; the in-process path must
+    // scrub itself.
+    let savedSessionEnv;
+    beforeEach(() => {
+      savedSessionEnv = saveSessionEnv();
+      clearSessionEnv();
+    });
     afterEach(() => {
+      restoreSessionEnv(savedSessionEnv);
       clockLib.realClock.nowIso = originalNowIso;
       if (tmpDir) cleanup(tmpDir);
     });

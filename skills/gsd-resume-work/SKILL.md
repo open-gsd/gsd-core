@@ -17,7 +17,7 @@ Restore complete project context and resume work seamlessly from previous sessio
 Routes to the resume-project workflow which handles:
 
 - STATE.md loading (or reconstruction if missing)
-- Checkpoint detection (.continue-here files)
+- Checkpoint detection (.continue-here files, keyed per session/role: `HANDOFF.latest.<role_id>.json` / `HANDOFF.<session_id>.json`; only this session's own handoff is consumed)
 - Incomplete work detection (PLAN without SUMMARY)
 - Status presentation
 - Context-aware next action routing
