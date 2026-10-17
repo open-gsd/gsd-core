@@ -1032,19 +1032,47 @@ function resolveGit(
     throw new Error('integrity pinning is not supported for git sources; pin the commit with #sha:<commit>');
   }
 
-  const cloneDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-cap-git-'));
+  const ref = classifyGitRef(parsed);
+  // Validate AFTER removing typed prefixes: tag:--foo must not bypass parseSpec's
+  // raw leading-dash check. Empty typed pins must not fall back to default HEAD.
+  if (ref.value.startsWith('-')) {
+    throw new Error(`Unsafe git ref (leading dash not allowed): "${parsed.ref}"`);
+  }
+  if (/^(?:tag|sha):$/i.test(ref.value)) {
+    throw new Error(`Invalid git ref: "${parsed.ref}" — typed ref must not be empty`);
+  }
+
+  const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-cap-git-'));
+  const cloneDir = path.join(scratchDir, 'repo');
+  const hooksDir = path.join(scratchDir, 'empty-hooks');
+  const gitConfig = ['-c', `core.hooksPath=${hooksDir}`];
   try {
-    // Clone (copy only — no hooks execute on clone, no npm install).
-    const cloneResult = execGit(['clone', '--depth', '1', '--', parsed.target, cloneDir], { timeout: 60_000 });
+    // Keep hooks outside the cloned tree: an inherited relative core.hooksPath
+    // could otherwise execute a tracked post-checkout hook during clone/checkout.
+    fs.mkdirSync(hooksDir);
+    const cloneResult = execGit([
+      ...gitConfig, 'clone', '--depth', '1',
+      ...(ref.kind === 'none' ? [] : ['--no-checkout']),
+      '--', parsed.target, cloneDir,
+    ], { timeout: 60_000 });
     if (cloneResult.exitCode !== 0) {
       throw new Error(`git clone failed (exit ${cloneResult.exitCode}): ${cloneResult.stderr}`);
     }
 
-    // Optional ref checkout. The ref is a commit-ish (tag/branch/sha), NOT a path,
-    // so it goes BEFORE the `--` pathspec terminator (a leading-dash ref is rejected
-    // at parse time, so it cannot be misread as an option here).
-    if (parsed.ref) {
-      const checkoutResult = execGit(['-C', cloneDir, 'checkout', parsed.ref, '--'], { timeout: 60_000 });
+    if (ref.kind !== 'none') {
+      // The default shallow clone cannot resolve a non-tip pin. Fetch only the
+      // requested target, then checkout FETCH_HEAD rather than a local ref name.
+      // An explicit tag is qualified so a same-named branch cannot replace it.
+      const fetchRef = ref.kind === 'tag' ? `refs/tags/${ref.value}` : ref.value;
+      const fetchResult = execGit([
+        ...gitConfig, '-C', cloneDir, 'fetch', '--depth', '1', '--no-tags', '--', 'origin', fetchRef,
+      ], { timeout: 60_000 });
+      if (fetchResult.exitCode !== 0) {
+        throw new Error(`git fetch "${parsed.ref}" failed (exit ${fetchResult.exitCode}): ${fetchResult.stderr}`);
+      }
+      const checkoutResult = execGit([
+        ...gitConfig, '-C', cloneDir, 'checkout', '--detach', 'FETCH_HEAD', '--',
+      ], { timeout: 60_000 });
       if (checkoutResult.exitCode !== 0) {
         throw new Error(
           `git checkout "${parsed.ref}" failed (exit ${checkoutResult.exitCode}): ${checkoutResult.stderr}`
@@ -1064,7 +1092,7 @@ function resolveGit(
 
     return stageValidated({ sourceDir: cloneDir, id, gsdHome, hostVersion, source: parsed.raw, integrity: null, promote: opts.promote, skipEnginesGate: opts.skipEnginesGate });
   } finally {
-    try { fs.rmSync(cloneDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    try { fs.rmSync(scratchDir, { recursive: true, force: true }); } catch { /* best-effort */ }
   }
 }
 
