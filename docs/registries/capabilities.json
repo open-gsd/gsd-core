@@ -1,1 +1,24 @@
-[]
+[
+  {
+    "id": "markdown-linting",
+    "name": "Markdown Linting",
+    "type": "capability",
+    "repo": "davdittrich/markdown-linting",
+    "description": "Runs rumdl over .planning/, README.md and CLAUDE.md after verify:post, writes a LINT-REPORT.md violation count, and re-measures at ship:pre to advise (never block) /gsd-ship when markdown violations remain.",
+    "author": "Dennis A. V. Dittrich <davdittrich@gmail.com>",
+    "license": "MIT",
+    "enginesGsd": ">=1.6.0",
+    "install": "gsd capability install https://github.com/davdittrich/markdown-linting.git#v0.3.1",
+    "uninstall": "gsd capability remove markdown-linting",
+    "interactions": {
+      "loopExtensionPoints": ["verify:post", "ship:pre"],
+      "hookKinds": ["step", "gate"],
+      "configKeys": ["markdown-linting.enabled", "markdown-linting.ship_gate"],
+      "requires": [],
+      "runtimeCompat": ["all"],
+      "produces": ["LINT-REPORT.md"],
+      "consumes": [".planning/**/*.md", "README.md", "CLAUDE.md"]
+    },
+    "discussion": "https://github.com/open-gsd/gsd-core/discussions/5294"
+  }
+]

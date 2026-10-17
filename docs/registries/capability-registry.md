@@ -6,4 +6,23 @@
 
 _To add your capability, see the [registry README](./README.md)._
 
-_No entries yet — be the first: see [README](./README.md)._
+| Name | What it is | Latest release | GSD compat | Discussion |
+|---|---|---|---|---|
+| [Markdown Linting](https://github.com/davdittrich/markdown-linting) | Runs rumdl over .planning/, README.md and CLAUDE.md after verify:post, writes a LINT-REPORT.md violation count, and re-measures at ship:pre to advise \(never block\) /gsd-ship when markdown violations remain. | ![release](https://img.shields.io/github/v/release/davdittrich/markdown-linting?sort=semver&include_prereleases) | `>=1.6.0` | [discuss](https://github.com/open-gsd/gsd-core/discussions/5294) |
+
+## Markdown Linting
+- **Repository:** https://github.com/davdittrich/markdown-linting — [latest release](https://github.com/davdittrich/markdown-linting/releases/latest)
+- **What it is:** Runs rumdl over .planning/, README.md and CLAUDE.md after verify:post, writes a LINT-REPORT.md violation count, and re-measures at ship:pre to advise \(never block\) /gsd-ship when markdown violations remain.
+- **Author:** Dennis A. V. Dittrich \<davdittrich@gmail.com\>
+- **Every interaction with GSD:** Loop Extension Points: verify:post, ship:pre; hook kinds: step, gate; configKeys: markdown-linting.enabled, markdown-linting.ship\_gate; runtimeCompat: all; produces: LINT-REPORT.md; consumes: .planning/\*\*/\*.md, README.md, CLAUDE.md
+- **Install:**
+```sh
+gsd capability install https://github.com/davdittrich/markdown-linting.git#v0.3.1
+```
+- **Uninstall:**
+```sh
+gsd capability remove markdown-linting
+```
+- **GSD compatibility:** `>=1.6.0`
+- **License:** MIT
+- **Discussion / ranking:** https://github.com/open-gsd/gsd-core/discussions/5294
