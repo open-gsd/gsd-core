@@ -1,1 +1,24 @@
-[]
+[
+  {
+    "id": "ponytail-everywhere",
+    "name": "Ponytail Everywhere",
+    "type": "capability",
+    "repo": "davdittrich/ponytail-everywhere",
+    "description": "Brings lazy-ladder discipline (YAGNI, reuse before writing, stdlib and native features before dependencies, shortest working diff) to GSD as an advisory planner contribution at plan:pre, matching executor and verifier fragments, and a plan-review proportionality checker contribution. An optional Claude Code plugin adds a subagent banner and a pre-expansion check that recommends a smaller route before scope-expanding commands.",
+    "author": "Dennis A. V. Dittrich",
+    "license": "MIT",
+    "enginesGsd": ">=1.13.0",
+    "install": "gsd capability install https://github.com/davdittrich/ponytail-everywhere.git#v0.9.4",
+    "uninstall": "gsd capability remove ponytail",
+    "interactions": {
+      "loopExtensionPoints": ["plan:pre", "execute:wave:pre", "execute:wave:post"],
+      "hookKinds": ["contribution"],
+      "configKeys": ["ponytail.enabled", "ponytail.enforcement", "ponytail.level"],
+      "requires": [],
+      "runtimeCompat": ["all"],
+      "produces": [],
+      "consumes": [".planning/config.json"]
+    },
+    "discussion": "https://github.com/open-gsd/gsd-core/discussions/5292"
+  }
+]
