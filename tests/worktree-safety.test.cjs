@@ -6429,6 +6429,62 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
     assert.ok(fragmentSource.includes('exit 42'), 'canonical fragment must fail closed with exit 42 on base mismatch (#48)');
   });
 
+  test('executor prohibits `git reset --hard` with no exception; the branch check it once exempted has no reset (#5310)', () => {
+    // The exemption named the startup <worktree_branch_check> step, which has been verify-only
+    // since #48: a hard reset in the executor's own prohibited list must not carry a carve-out.
+    const executorSource = read('agents/gsd-executor.md');
+    const lines = executorSource.split(/\r?\n/);
+    const heading = lines.indexOf('**Prohibited commands in worktree context:**');
+    assert.ok(heading >= 0, 'gsd-executor.md must keep its "Prohibited commands in worktree context" list');
+
+    // Group the list into top-level bullets, each with its indented continuation lines.
+    const bullets = [];
+    for (const line of lines.slice(heading + 1)) {
+      if (line.startsWith('- ')) {
+        bullets.push(line);
+      } else if (line.startsWith(' ') && bullets.length > 0) {
+        bullets[bullets.length - 1] += `\n${line}`;
+      } else if (line.trim() !== '') {
+        break;
+      }
+    }
+
+    const resetBullets = bullets.filter((bullet) => bullet.includes('`git reset --hard`'));
+    assert.equal(resetBullets.length, 1, 'the prohibited list must name `git reset --hard` in exactly one bullet');
+    // Pinned rather than scanned for carve-out words: a word list both admits exemptions it does not
+    // name and rejects honest prohibitions ("not allowed, even during startup recovery"). The bullet is
+    // the bare command, optionally with its current note; any other wording is a deliberate edit to this
+    // test.
+    assert.match(
+      resetBullets[0],
+      /^- `git reset --hard`(?: \(no exception: `<worktree_branch_check>` is verify-only, #48\))?$/,
+      `the \`git reset --hard\` prohibition must be unconditional: ${resetBullets[0]}`
+    );
+    // A re-grant elsewhere in the file (a later bullet or paragraph) would bypass the bullet itself.
+    assert.equal(
+      executorSource.split('git reset --hard').length - 1,
+      1,
+      'gsd-executor.md must mention `git reset --hard` only in its prohibition'
+    );
+
+    // The step the old exemption pointed at must still give it nothing to apply to.
+    const fragmentSource = fs.readFileSync(WORKTREE_BRANCH_CHECK_FRAGMENT, 'utf8');
+    assert.ok(fragmentSource.includes('VERIFY-ONLY'), 'canonical fragment must still declare itself VERIFY-ONLY (#48)');
+    assert.ok(!fragmentSource.includes('git reset'), 'canonical fragment must contain no `git reset` in any form (#48)');
+
+    // execute-plan.md, which the orchestrator hands the executor, @-includes git-integration.md as required
+    // reading, so its failure-recovery notes reach the executor too.
+    const executePlan = read('gsd-core/workflows/execute-plan.md');
+    assert.ok(
+      executePlan.includes('@~/.claude/gsd-core/references/git-integration.md'),
+      'execute-plan.md must still include git-integration.md (else move this assertion to its new reading)'
+    );
+    const gitIntegration = read('gsd-core/references/git-integration.md');
+    assert.ok(
+      !gitIntegration.includes('git reset --hard'),
+      'git-integration.md is executor required reading and must not offer `git reset --hard` as recovery (#48, #5310)'
+    );  });
+
   test('remove-workspace fails closed when git worktree remove fails', () => {
     const source = read('gsd-core/workflows/remove-workspace.md');
     const init = source.indexOf('REMOVE_FAILED=false');
