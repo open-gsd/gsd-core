@@ -8,6 +8,7 @@ export const RedEvidenceReason = {
   TargetFailed: 'target_test_failed', Green: 'unexpected_green', Empty: 'zero_tests_discovered',
   NoFailure: 'nonzero_exit_without_test_failure', LoadFailure: 'fixture_or_load_failure',
   NoTarget: 'no_target_test_failure', Invalid: 'invalid_record', Unreadable: 'unreadable_record',
+  BuildFailure: 'build_failure',
 } as const;
 export type RedEvidenceReason = (typeof RedEvidenceReason)[keyof typeof RedEvidenceReason];
 
@@ -17,7 +18,7 @@ export interface RedEvidenceInput {
   command: unknown;
   /** The command's exit code. */
   exitCode: unknown;
-  /** Unmodified TAP, JUnit XML, swift-testing console, or unittest text report produced by the actual run. */
+  /** Unmodified TAP, JUnit XML, swift-testing console, unittest text, or `go test` text report produced by the actual run. */
   output: unknown;
   /**
    * Identity of the target the plan named: the `test('...')` name for
@@ -116,6 +117,9 @@ export function classifyRedEvidence(input: RedEvidenceInput): RedEvidenceResult 
     report_errors: report.issues,
   };
   if (exitCode === 0) return { verdict: RedEvidenceVerdict.Invalid, reason: RedEvidenceReason.Green, evidence };
+  // A package that did not compile or load asserted nothing: refuse it as its own reason, ahead of
+  // the generic unusable-report refusal, because the fix is different (make the test compile).
+  if (report.buildFailed) return { verdict: RedEvidenceVerdict.Invalid, reason: RedEvidenceReason.BuildFailure, evidence };
   if (!report.valid) return { verdict: RedEvidenceVerdict.Invalid, reason: RedEvidenceReason.Invalid, evidence };
   if (report.tests.length === 0) return { verdict: RedEvidenceVerdict.Invalid, reason: RedEvidenceReason.Empty, evidence };
   if (failures.length === 0) return { verdict: RedEvidenceVerdict.Invalid, reason: RedEvidenceReason.NoFailure, evidence };

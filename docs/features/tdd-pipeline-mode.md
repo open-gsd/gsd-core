@@ -21,8 +21,8 @@ group: v1.36.0 Features
 
 `check tdd-red-evidence` selects a parser by the captured report format. Node's
 built-in runner and Vitest (`tap` and `tap-flat`) share the TAP adapter; Maven
-Surefire and Failsafe share the JUnit XML adapter; `swift test` (swift-testing)
-and Python `unittest` text output have their own adapters. The command name does not
+Surefire and Failsafe share the JUnit XML adapter; `swift test` (swift-testing),
+Python `unittest` and `go test` text output have their own adapters. The command name does not
 select or bypass validation. Reports from other producers can use these same
 formats. Unsupported or malformed reports return `INVALID_RED` with
 `evidence.report_errors`; configure a supported reporter before proceeding.
@@ -36,7 +36,8 @@ No runner-specific TAP summary counters are required.
 The gate rejects incomplete plans/documents, bailouts, skipped/TODO/cancelled targets,
 and ambiguous names. Qualify repeated TAP names with their suite path, and
 repeated JUnit class names with their package, and repeated `unittest` methods
-with their `module.Class.method` id. A swift-testing target is its display name
+with their `module.Class.method` id, and a `go test` name that fails in two packages
+with `import/path.TestName`. A swift-testing target is its display name
 or its function name; repeated swift-testing names cannot be qualified and
 block GREEN. Evidence counts are individual
 tests, excluding suite-closing TAP points; a `unittest` method with failing
@@ -44,6 +45,16 @@ subTests or a parameterized swift-testing test counts once. `evidence.matched_te
 persisted `failing_test` identify the target failure rather than an unrelated
 first failure. Report freshness and whether the assertion tests the intended
 behavior still require executor inspection; the parser cannot establish them.
+
+A `go test` package that does not compile or load (`FAIL <pkg> [build failed]` or
+`[setup failed]`) asserted nothing, usually because the test names a symbol that does
+not exist yet. The whole run is refused as `build_failure`, ahead of the generic
+`invalid_record`, even if another package genuinely failed.
+
+Which paths count as test files is one list, `src/tdd-test-files.cts`, shared by the
+behavior-adding check and the RED-commit pathspec in `execute-phase.md` (a test pins the
+two together): `*.test.*`, `*.spec.*`, `tests/` or `test/` and `__tests__/` directories,
+`*_test.go`, `test_*.py`, `*_test.py`, `*_test.exs`, `*_spec.rb` and `*_test.rb`.
 
 The upstream parsers (`tap-parser` and `saxes`) ship as reproducible bundles,
 including license notices, so installed runtimes need no `node_modules`.
