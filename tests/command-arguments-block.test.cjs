@@ -467,8 +467,11 @@ describe('#5143 every shipped statement that reads the typed text is injection-s
     return out;
   }
 
-  const PRELUDE = 'gsd_run() { :; }\n';
-  const EPILOGUE = '\ndeclare -p 2>/dev/null | grep -Ev "^declare -[-a-zA-Z]* (BASH|SHLVL|PWD|OLDPWD|_=|EUID|PPID|UID|GROUPS|HOSTNAME|HOSTTYPE|IFS|MACHTYPE|OSTYPE|PS4|PIPESTATUS|SHELLOPTS|GSD_ARGS|DIRSTACK|COMP)" | sort\n';
+  // Snapshot the variable NAMES before the statement and print only the ones it
+  // created: a blanket `declare -p` also lists shell-internal variables whose
+  // set differs between bash builds (3.2 vs 5.x on macOS runners).
+  const PRELUDE = 'gsd_run() { :; }\n__gsd_before=" $(compgen -v | tr \'\\n\' \' \') "\n';
+  const EPILOGUE = '\nfor __gsd_n in $(compgen -v); do case "$__gsd_before" in *" $__gsd_n "*) ;; *) case "$__gsd_n" in __gsd_*|GSD_ARGS|BASH*|_) ;; *) declare -p "$__gsd_n" 2>/dev/null ;; esac ;; esac; done | sort\n';
 
   const shq = (text) => `'${text.replace(/'/g, `'\\''`)}'`;
 
