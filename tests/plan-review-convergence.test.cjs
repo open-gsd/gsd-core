@@ -89,7 +89,7 @@ function runReviewerFlagsParseBlock(block, args) {
   const stub = 'gsd_run() { node "$GSD_TOOLS_PATH" "$@"; }';
   const script = `${stub}\n${block}\nprintf "%s" "$REVIEWER_FLAGS"`;
   return execFileSync('bash', ['-c', script], {
-    env: { ...process.env, ARGUMENTS: args, GSD_TOOLS_PATH },
+    env: { ...process.env, GSD_ARGS: args, GSD_TOOLS_PATH },
     encoding: 'utf8',
     // NESTED_BASH_GSD_TOOLS_TIMEOUT_MS (30s) covers the nested bash → node →
     // gsd-tools.cjs cold-start chain this helper spawns. 5s was too tight: on
@@ -416,7 +416,7 @@ describe('plan-review-convergence: #2315 respects review.default_reviewers (no-f
       const stub = `gsd_run() { case "$*" in *"config-get review.default_reviewers"*) printf '%s' "$GSD_TEST_DEFAULT_REVIEWERS";; *"review-lane flags"*) node "$GSD_TOOLS_PATH" review-lane flags;; *) return 0;; esac; }`;
       const script = `${stub}\n${parseBlock}\n${resolutionBlock}\nprintf 'REVIEWER_FLAGS=[%s] REVIEWER_DISPLAY=[%s]' "$REVIEWER_FLAGS" "$REVIEWER_DISPLAY"`;
       return execFileSync('bash', ['-c', script], {
-        env: { ...process.env, ARGUMENTS: args, GSD_TEST_DEFAULT_REVIEWERS: defaultReviewers ?? '', GSD_TOOLS_PATH },
+        env: { ...process.env, GSD_ARGS: args, GSD_TEST_DEFAULT_REVIEWERS: defaultReviewers ?? '', GSD_TOOLS_PATH },
         encoding: 'utf8',
         // NESTED_BASH_GSD_TOOLS_TIMEOUT_MS covers the same nested bash → node
         // → gsd-tools.cjs cold-start chain as runReviewerFlagsParseBlock
@@ -474,7 +474,7 @@ describe('plan-review-convergence: #2315 respects review.default_reviewers (no-f
       const stub = `gsd_run() { case "$*" in *"config-get review.default_reviewers"*) printf '%s' "$GSD_TEST_DEFAULT_REVIEWERS";; *"review-lane flags"*) node "$GSD_TOOLS_PATH" review-lane flags;; *) return 0;; esac; }`;
       const script = `${stub}\n${parseBlock}\n${resolutionBlock}\nprintf 'REVIEWER_FLAGS=[%s] REVIEWER_DISPLAY=[%s]' "$REVIEWER_FLAGS" "$REVIEWER_DISPLAY"`;
       return execFileSync('bash', ['-c', script], {
-        env: { ...process.env, ARGUMENTS: args, GSD_TEST_DEFAULT_REVIEWERS: defaultReviewers ?? '', GSD_TOOLS_PATH },
+        env: { ...process.env, GSD_ARGS: args, GSD_TEST_DEFAULT_REVIEWERS: defaultReviewers ?? '', GSD_TOOLS_PATH },
         encoding: 'utf8',
         // NESTED_BASH_GSD_TOOLS_TIMEOUT_MS covers the same nested bash → node
         // → gsd-tools.cjs cold-start chain as runReviewerFlagsParseBlock

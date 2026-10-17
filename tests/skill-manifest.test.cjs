@@ -738,3 +738,108 @@ describe('Namespace router targets resolve to surviving skills', () => {
 });
   });
 }
+
+// #5121: SKILL.md is untrusted repository content. A symlink to /dev/zero aborted the process
+// (V8 out-of-memory) and a FIFO blocked it forever, because skill discovery read each file with
+// an unbounded readFileSync. A SKILL.md that is not a regular file (after following symlinks) or
+// is over the cap is skipped exactly as a missing one is.
+describe('regressions: #5121 skill-manifest bounds the SKILL.md read', () => {
+  const { execFileSync } = require('node:child_process');
+  const { SKILL_FILE_MAX_BYTES } = require('../gsd-core/bin/lib/capability-ledger.cjs');
+  const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  const posixOnly = process.platform === 'win32' ? { skip: 'symlink/FIFO fixtures are POSIX-only' } : {};
+
+  let tmpDir;
+  let homeDir;
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    homeDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'gsd-5121-home-'));
+  });
+  afterEach(() => {
+    cleanup(tmpDir);
+    cleanup(homeDir);
+  });
+
+  // The two layouts reach the read through different code: flat <root>/<name>/SKILL.md, and the
+  // nested <root>/gsd-ns-*/skills/<stem>/SKILL.md.
+  const LAYOUTS = [
+    ['flat', (root, name) => path.join(root, name)],
+    ['nested', (root, name) => path.join(root, 'gsd-ns-x', 'skills', name)],
+  ];
+
+  function manifest() {
+    const result = runGsdTools(['skill-manifest'], tmpDir, { HOME: homeDir, USERPROFILE: homeDir });
+    assert.ok(result.success, `skill-manifest must exit 0: ${result.error || result.output}`);
+    return JSON.parse(result.output);
+  }
+
+  function sized(bytes) {
+    const head = '---\nname: sized\ndescription: d\n---\n';
+    return head + 'x'.repeat(bytes - head.length);
+  }
+
+  for (const [layout, dirFor] of LAYOUTS) {
+    const root = () => path.join(tmpDir, '.claude', 'skills');
+    const place = (name, content) => {
+      const dir = dirFor(root(), name);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'SKILL.md'), content);
+    };
+    const rootEntry = (m) => m.roots.find((r) => r.root === '.claude/skills');
+
+    test(`${layout}: a SKILL.md symlinked to /dev/zero is skipped, valid skills stay`, posixOnly, () => {
+      place('good', '---\nname: good\ndescription: ok\n---\n');
+      const dir = dirFor(root(), 'evil');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.symlinkSync('/dev/zero', path.join(dir, 'SKILL.md'));
+      const m = manifest();
+      assert.deepStrictEqual(m.skills.map((s) => s.name), ['good']);
+      assert.strictEqual(rootEntry(m).skill_count, 1);
+    });
+
+    test(`${layout}: a FIFO SKILL.md is skipped without blocking`, posixOnly, () => {
+      place('good', '---\nname: good\ndescription: ok\n---\n');
+      const dir = dirFor(root(), 'pipe');
+      fs.mkdirSync(dir, { recursive: true });
+      try {
+        execFileSync('mkfifo', [path.join(dir, 'SKILL.md')], { stdio: 'pipe', timeout: PROBE_TIMEOUT_MS });
+      } catch {
+        return; // no mkfifo on this host
+      }
+      const m = manifest();
+      assert.deepStrictEqual(m.skills.map((s) => s.name), ['good']);
+      assert.strictEqual(rootEntry(m).skill_count, 1);
+    });
+
+    test(`${layout}: a symlink to a regular SKILL.md within the cap still loads`, posixOnly, () => {
+      const realDir = path.join(tmpDir, 'real');
+      fs.mkdirSync(realDir, { recursive: true });
+      fs.writeFileSync(path.join(realDir, 'SKILL.md'), '---\nname: linked\ndescription: ok\n---\n');
+      const dir = dirFor(root(), 'linked');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.symlinkSync(path.join(realDir, 'SKILL.md'), path.join(dir, 'SKILL.md'));
+      assert.deepStrictEqual(manifest().skills.map((s) => s.name), ['linked']);
+    });
+
+    for (const [label, bytes, listed] of [
+      ['cap-1', SKILL_FILE_MAX_BYTES - 1, true],
+      ['cap', SKILL_FILE_MAX_BYTES, true],
+      ['cap+1', SKILL_FILE_MAX_BYTES + 1, false],
+    ]) {
+      test(`${layout}: a ${label} byte SKILL.md is ${listed ? 'listed' : 'skipped'}`, () => {
+        place('sized', sized(bytes));
+        const m = manifest();
+        assert.deepStrictEqual(m.skills.map((s) => s.name), listed ? ['sized'] : []);
+        assert.strictEqual(rootEntry(m).skill_count, listed ? 1 : 0);
+      });
+    }
+
+    test(`${layout}: a missing SKILL.md stays silently skipped`, () => {
+      fs.mkdirSync(dirFor(root(), 'empty'), { recursive: true });
+      place('good', '---\nname: good\ndescription: ok\n---\n');
+      const m = manifest();
+      assert.deepStrictEqual(m.skills.map((s) => s.name), ['good']);
+      assert.strictEqual(rootEntry(m).skill_count, 1);
+    });
+  }
+});
