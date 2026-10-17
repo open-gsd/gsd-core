@@ -1640,14 +1640,13 @@ const claudeToOpencodeTools = {
 const claudeToAntigravityTools = {
   // #4705: Antigravity-NATIVE tool names (see src/runtime-artifact-conversion.cts)
   Read: 'view_file',
-  Write: 'write_file',
+  Write: 'write_to_file',
   Edit: 'replace_file_content',
   Bash: 'run_command',
-  Glob: 'glob',
+  Glob: 'find_by_name',
   Grep: 'grep_search',
-  WebSearch: 'google_web_search',
-  WebFetch: 'web_fetch',
-  TodoWrite: 'write_todos',
+  WebSearch: 'search_web',
+  WebFetch: 'read_url_content',
 }
 
 // Tool name mapping from Claude/GSD agents to Kimi CLI module paths.
@@ -1716,13 +1715,16 @@ function convertAntigravityToolName(claudeTool) {
   // built-in tool; the lowercase fallback would emit an invalid
   // 'skill'/'slashcommand' name that fails frontmatter validation
   // (tools.N: Invalid tool name) and aborts the entire agent load (#1394).
+  // TodoWrite: exclude — agy 1.3.5 registers no todo tool, and an unknown name
+  // stops the agent from starting (#5447).
   if (
     claudeTool === 'Task' ||
     claudeTool === 'Agent' ||
     claudeTool === 'AskUserQuestion' ||
     claudeTool === 'ask_user' ||
     claudeTool === 'Skill' ||
-    claudeTool === 'SlashCommand'
+    claudeTool === 'SlashCommand' ||
+    claudeTool === 'TodoWrite'
   ) {
     return null;
   }
@@ -2500,10 +2502,11 @@ function convertClaudeAgentToAntigravityAgent(content, isGlobal = false) {
   const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
   const description = extractFrontmatterField(frontmatter, 'description') || '';
   const color = extractFrontmatterField(frontmatter, 'color');
-  const toolsRaw = extractFrontmatterField(frontmatter, 'tools') || '';
 
-  // Map tools to Antigravity equivalents (reuse existing convertAntigravityToolName)
-  const claudeTools = toolsRaw.split(',').map(t => t.trim()).filter(Boolean);
+  // Map tools to Antigravity equivalents (reuse existing convertAntigravityToolName).
+  // parseFrontmatterTools reads both the inline comma list and the YAML block
+  // list (e.g. agents/gsd-security-auditor.md) (#5447).
+  const claudeTools = parseFrontmatterTools(frontmatter);
   const mappedTools = claudeTools.map(t => convertAntigravityToolName(t)).filter(Boolean);
 
   // #2876: quote description for the same reason as the skill variant.
