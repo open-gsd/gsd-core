@@ -166,6 +166,68 @@ describe('agent-skills command', () => {
     assert.strictEqual(r.ir.block, '');
   });
 
+  // ── #5122: --skills-only makes the agent self-load deterministic ──────────
+  // Without the flag a non-Claude runtime serves the agent's own persona when
+  // nothing is configured (the #2454 fallback), which a self-loading agent
+  // would read back into itself. The flag restricts the answer to configured
+  // skills on every runtime; the orchestrator-side call keeps the fallback.
+  describe('#5122 --skills-only', () => {
+    const PERSONA = '# Local Codex executor\nPersona text a self-load must not re-read.\n';
+
+    function installCodexCompanion() {
+      const agentsDir = path.join(tmpDir, '.codex', 'agents');
+      fs.mkdirSync(agentsDir, { recursive: true });
+      fs.writeFileSync(path.join(agentsDir, 'gsd-executor.md'), PERSONA);
+      markLocalGsdInstall(tmpDir);
+      writeConfig(tmpDir, { runtime: 'codex' });
+    }
+
+    const ENV = () => ({ HOME: tmpDir, USERPROFILE: tmpDir, GSD_RUNTIME: '' });
+
+    test('unconfigured Codex with an installed persona: --skills-only returns an empty block', () => {
+      installCodexCompanion();
+      const withFlag = runAgentSkillsJson(['agent-skills', 'gsd-executor', '--skills-only'], tmpDir, ENV());
+      assert.ok(withFlag.success, `Command failed: ${withFlag.error}`);
+      assert.strictEqual(withFlag.ir.block, '');
+      assert.strictEqual(withFlag.ir.agent_type, 'gsd-executor');
+
+      // Control: the same fixture without the flag still serves the persona,
+      // so the orchestrator-side contract is unchanged.
+      const without = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir, ENV());
+      assert.ok(without.success, `Command failed: ${without.error}`);
+      assert.strictEqual(without.ir.block, PERSONA);
+    });
+
+    test('raw output with --skills-only is empty on Codex when nothing is configured', () => {
+      installCodexCompanion();
+      const raw = runGsdTools(['agent-skills', 'gsd-executor', '--skills-only'], tmpDir, ENV());
+      assert.ok(raw.success, `Command failed: ${raw.error}`);
+      assert.strictEqual(raw.output, '');
+    });
+
+    test('--skills-only still returns configured skills on Codex', () => {
+      installCodexCompanion();
+      const skillDir = path.join(tmpDir, 'skills', 'test-skill');
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Test Skill\n');
+      writeConfig(tmpDir, {
+        runtime: 'codex',
+        agent_skills: { 'gsd-executor': ['skills/test-skill'] },
+      });
+      const r = runAgentSkillsJson(['agent-skills', 'gsd-executor', '--skills-only'], tmpDir, ENV());
+      assert.ok(r.success, `Command failed: ${r.error}`);
+      assert.ok(r.ir.block.includes('test-skill'), 'configured skills must be returned');
+      assert.ok(!r.ir.block.includes('Persona text'), 'the persona must never be mixed in');
+    });
+
+    test('--skills-only does not change the Claude answer', () => {
+      writeConfig(tmpDir, { runtime: 'claude' });
+      const r = runAgentSkillsJson(['agent-skills', 'gsd-executor', '--skills-only'], tmpDir, { GSD_RUNTIME: 'claude' });
+      assert.ok(r.success, `Command failed: ${r.error}`);
+      assert.strictEqual(r.ir.block, '');
+    });
+  });
+
   // ── #4407 (ADR-4139 stream 2): compact/canonical payload selection ────────
   // Same fixture pattern as the Codex-fallback tests immediately above — a real
   // `<runtime>/agents/` directory under a temp project, no mocking of

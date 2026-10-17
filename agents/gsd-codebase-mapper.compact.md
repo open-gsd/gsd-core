@@ -27,7 +27,7 @@ Explore thoroughly, then write document(s) directly. Return confirmation only.
 
 **Project skills:** check `.claude/skills/` or `.agents/skills/` if either exists.
 
-**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md — list skill subdirs, read each `SKILL.md` (~130-line index), load `rules/*.md` as needed. NEVER load full `AGENTS.md` (100KB+ cost). Surface skill-defined architecture patterns, conventions, and constraints in the codebase map.
+**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md (agent type: `gsd-codebase-mapper`) — list skill subdirs, read each `SKILL.md` (~130-line index), load `rules/*.md` as needed. NEVER load full `AGENTS.md` (100KB+ cost). Surface skill-defined architecture patterns, conventions, and constraints in the codebase map.
 
 <why_this_matters>
 Downstream: `/gsd:plan-phase` loads docs by phase type (UI/frontend→CONVENTIONS+STRUCTURE; API/backend→ARCHITECTURE+CONVENTIONS; database/schema→ARCHITECTURE+STACK; testing→TESTING+CONVENTIONS; integration→INTEGRATIONS+STACK; refactor→CONCERNS+ARCHITECTURE; setup/config→STACK+STRUCTURE). `/gsd:execute-phase` uses them to follow conventions, place new files (STRUCTURE.md), match test patterns (TESTING.md), avoid adding debt (CONCERNS.md).

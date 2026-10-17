@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { tryWithinRootLexical } from './security.cjs';
+import { isTestFilePath } from './tdd-test-files.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output, error, ERROR_REASON } = ioMod;
@@ -85,9 +86,7 @@ function isBehaviorAddingTaskContent(content: string): BehaviorAddingResult {
     hasSourceFiles = fileLines.some((file) =>
       !/\.md$/i.test(file) &&
       !/\.json$/i.test(file) &&
-      !/\.test\.[^.]+$/i.test(file) &&
-      !/\.spec\.[^.]+$/i.test(file) &&
-      !/(^|[\\/])tests?[\\/]/i.test(file) &&
+      !isTestFilePath(file) &&
       !/\.(yml|yaml|toml|ini|cfg|conf|properties)$/i.test(file) &&
       !/(^|[\\/])\.env(\..+)?$/i.test(file)
     );
