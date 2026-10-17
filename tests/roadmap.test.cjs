@@ -10,7 +10,9 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup, captureFdSync } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, cleanup, captureFdSync, TOOLS_PATH, TEST_ENV_BASE } = require('./helpers.cjs');
+const processSeam = require('./helpers/process-seam.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 describe('roadmap get-phase command', () => {
@@ -3399,6 +3401,250 @@ Plans:
     const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
     const waveMatches = roadmap.match(/\*\*Wave \d+\*\*/g) || [];
     assert.strictEqual(waveMatches.length, 2, 'exactly 2 wave headers (not doubled)');
+  });
+
+  describe('#5321: re-annotation after replan', () => {
+    const ROADMAP4 = `# Roadmap
+
+### Phase 1: Foundation
+**Goal:** Set up project
+**Plans:** 4 plans
+
+Plans:
+- [ ] 01-01-PLAN.md — One
+- [ ] 01-02-PLAN.md — Two
+- [ ] 01-03-PLAN.md — Three
+- [ ] 01-04-PLAN.md — Four
+
+### Phase 2: Next
+**Goal:** Later
+`;
+    const planPath = (n) => path.join('.planning', 'phases', '01-foundation', `01-0${n}-PLAN.md`);
+    const roadmapFile = () => path.join(tmpDir, '.planning', 'ROADMAP.md');
+    const makeFour = (waves, truths = [[], [], [], []], roadmap = ROADMAP4) => makePlanProject({
+      '.planning/ROADMAP.md': roadmap,
+      ...Object.fromEntries(waves.map((w, i) => [planPath(i + 1), PLAN_TEMPLATE(w, truths[i])])),
+    });
+    const setPlan = (n, wave, truths = []) =>
+      fs.writeFileSync(path.join(tmpDir, planPath(n)), PLAN_TEMPLATE(wave, truths), 'utf-8');
+    const run = () => {
+      const r = runGsdTools('roadmap annotate-dependencies 1', tmpDir);
+      assert.ok(r.success, `Command failed: ${r.error}`);
+      return JSON.parse(r.output);
+    };
+
+    test('replanned wave change is regrouped without duplicate headers', () => {
+      tmpDir = makeFour([1, 2, 3, 3]);
+      run();
+      setPlan(4, 4);
+      const out = run();
+      assert.strictEqual(out.updated, true);
+      const roadmap = fs.readFileSync(roadmapFile(), 'utf-8');
+      assert.strictEqual((roadmap.match(/\*\*Wave \d+\*\*/g) || []).length, 4, 'one header per new wave');
+      assert.ok(
+        roadmap.includes(
+          '**Wave 3** *(blocked on Wave 2 completion)*\n- [ ] 01-03-PLAN.md — Three\n\n' +
+          '**Wave 4** *(blocked on Wave 3 completion)*\n- [ ] 01-04-PLAN.md — Four\n',
+        ),
+        'plans grouped under new waves',
+      );
+      assert.strictEqual((roadmap.match(/### Phase 2: Next/g) || []).length, 1, 'next phase intact');
+      assert.strictEqual(run().updated, false, 'immediate re-run is a no-op');
+      assert.strictEqual(fs.readFileSync(roadmapFile(), 'utf-8'), roadmap);
+    });
+
+    test('immediate re-run is byte-identical and reports updated:false', () => {
+      tmpDir = makeFour([1, 2, 3, 3], [['Shared rule'], ['Shared rule'], [], []]);
+      run();
+      setPlan(4, 4);
+      run();
+      const before = fs.readFileSync(roadmapFile(), 'utf-8');
+      const out = run();
+      assert.strictEqual(out.updated, false);
+      assert.strictEqual(fs.readFileSync(roadmapFile(), 'utf-8'), before);
+    });
+
+    test('collapsing to a single wave removes the old wave headers', () => {
+      tmpDir = makeFour([1, 2, 3, 3]);
+      run();
+      for (const n of [1, 2, 3, 4]) setPlan(n, 1);
+      const out = run();
+      assert.strictEqual(out.updated, true);
+      const roadmap = fs.readFileSync(roadmapFile(), 'utf-8');
+      assert.ok(!/\*\*Wave \d+\*\*/.test(roadmap), 'no wave headers remain');
+      assert.ok(!roadmap.includes('blocked on'), 'no blocked-on notes remain');
+      assert.strictEqual((roadmap.match(/- \[ \] 01-0\d-PLAN\.md/g) || []).length, 4, 'all 4 plans kept');
+      assert.strictEqual(run().updated, false, 'immediate re-run is a no-op');
+      assert.strictEqual(fs.readFileSync(roadmapFile(), 'utf-8'), roadmap);
+    });
+
+    test('CRLF ROADMAP.md re-annotates cleanly (platformWriteSync normalizes .md to LF)', () => {
+      tmpDir = makeFour([1, 2, 3, 3], undefined, ROADMAP4.replace(/\n/g, '\r\n'));
+      run();
+      setPlan(4, 4);
+      run();
+      const roadmap = fs.readFileSync(roadmapFile(), 'utf-8');
+      assert.strictEqual((roadmap.match(/\*\*Wave \d+\*\*/g) || []).length, 4);
+      assert.ok(!roadmap.includes('\r'), 'no stray CR');
+      assert.ok(!roadmap.includes('\n\n\n'), 'no duplicate blank lines');
+    });
+
+    for (const truth of ['[Invariant] x', '[ ] x', '[x] x']) {
+      test(`bracket-leading truth "${truth}" round-trips and stays out of the plan list`, () => {
+        const q = JSON.stringify(truth); // unquoted leading `[` is a YAML flow sequence
+        tmpDir = makeFour([1, 1, 2, 2], [[q], [q], ['Solo A'], ['Solo B']]);
+        run();
+        const first = fs.readFileSync(roadmapFile(), 'utf-8');
+        assert.ok(first.includes(`- ${truth}`), 'constraint bullet emitted');
+        const out = run();
+        assert.strictEqual(out.updated, false);
+        assert.strictEqual(fs.readFileSync(roadmapFile(), 'utf-8'), first);
+        const wave1 = first.split('**Wave 2**')[0];
+        assert.ok(!wave1.includes(`- ${truth}`), 'constraint not injected into Wave 1');
+      });
+    }
+
+    test('prose starting with **Wave N** after the checklist is preserved', () => {
+      const roadmap = ROADMAP4.replace(
+        '- [ ] 01-04-PLAN.md — Four\n',
+        '- [ ] 01-04-PLAN.md — Four\n**Wave 9** is deferred\n',
+      );
+      tmpDir = makeFour([1, 2, 3, 3], undefined, roadmap);
+      run();
+      run();
+      assert.ok(fs.readFileSync(roadmapFile(), 'utf-8').includes('**Wave 9** is deferred'));
+    });
+
+    test('standalone **Wave N** heading followed by prose is preserved', () => {
+      const roadmap = ROADMAP4.replace(
+        '- [ ] 01-04-PLAN.md — Four\n',
+        '- [ ] 01-04-PLAN.md — Four\n**Wave 9**\n\nsome prose\n',
+      );
+      tmpDir = makeFour([1, 2, 3, 3], undefined, roadmap);
+      run();
+      run();
+      assert.ok(fs.readFileSync(roadmapFile(), 'utf-8').includes('**Wave 9**\n\nsome prose'));
+    });
+
+    test('user bullet after a generated constraints block survives re-runs', () => {
+      tmpDir = makeFour([1, 1, 2, 2], [['Shared rule'], ['Shared rule'], ['Solo A'], ['Solo B']]);
+      run();
+      const rp = roadmapFile();
+      fs.writeFileSync(rp, fs.readFileSync(rp, 'utf-8').replace('- Shared rule\n', '- Shared rule\n\n- foo\n'), 'utf-8');
+      run();
+      const first = fs.readFileSync(rp, 'utf-8');
+      assert.ok(first.includes('- Shared rule\n\n- foo\n'), 'user bullet kept after blank separator');
+      const out = run();
+      assert.strictEqual(out.updated, false);
+      assert.strictEqual(fs.readFileSync(rp, 'utf-8'), first);
+    });
+
+    describe('legacy constraints block (no trailing blank line)', () => {
+      const legacy = (truths) => ROADMAP4.replace(
+        '- [ ] 01-04-PLAN.md — Four\n',
+        `- [ ] 01-04-PLAN.md — Four\n\n**Cross-cutting constraints:**\n${truths.map(t => `- ${t}\n`).join('')}`,
+      );
+      test('keeps a user bullet that is not a current shared truth', () => {
+        tmpDir = makeFour([1, 1, 2, 2], [['Shared rule'], ['Shared rule'], ['Solo A'], ['Solo B']],
+          legacy(['Shared rule', 'user note']));
+        run();
+        const first = fs.readFileSync(roadmapFile(), 'utf-8');
+        assert.strictEqual((first.match(/- Shared rule/g) || []).length, 1, 'generated bullet not duplicated');
+        assert.ok(first.includes('- user note'), 'user bullet kept');
+        assert.ok(first.indexOf('- user note') > first.indexOf('- Shared rule'), 'kept after generated block');
+        assert.strictEqual(run().updated, false);
+        assert.strictEqual(fs.readFileSync(roadmapFile(), 'utf-8'), first);
+      });
+      test('keeps a user bullet when no truths are shared any more', () => {
+        tmpDir = makeFour([1, 2, 3, 4], [['A'], ['B'], ['C'], ['D']], legacy(['user note']));
+        run();
+        const first = fs.readFileSync(roadmapFile(), 'utf-8');
+        assert.ok(first.includes('- user note'), 'user bullet kept');
+        assert.ok(!first.includes('**Cross-cutting constraints:**'), 'legacy heading removed');
+        assert.strictEqual(run().updated, false);
+        assert.strictEqual(fs.readFileSync(roadmapFile(), 'utf-8'), first);
+      });
+    });
+
+    test('user "**Cross-cutting constraints:** keep X" header and bullets are preserved', () => {
+      const roadmap = ROADMAP4.replace(
+        '- [ ] 01-04-PLAN.md — Four\n',
+        '- [ ] 01-04-PLAN.md — Four\n**Cross-cutting constraints:** keep X\n- user bullet\n',
+      );
+      tmpDir = makeFour([1, 2, 3, 3], undefined, roadmap);
+      run();
+      const out = fs.readFileSync(roadmapFile(), 'utf-8');
+      assert.ok(out.includes('**Cross-cutting constraints:** keep X\n- user bullet'));
+    });
+
+    test('a cross-cutting constraint no longer shared is removed', () => {
+      tmpDir = makeFour([1, 1, 2, 2], [['Shared rule'], ['Shared rule'], ['Solo A'], ['Solo B']]);
+      run();
+      assert.ok(fs.readFileSync(roadmapFile(), 'utf-8').includes('**Cross-cutting constraints:**'));
+      setPlan(2, 1, ['Different rule']);
+      const out = run();
+      assert.strictEqual(out.updated, true);
+      const roadmap = fs.readFileSync(roadmapFile(), 'utf-8');
+      assert.ok(!roadmap.includes('Cross-cutting constraints'), 'section removed');
+      assert.ok(!roadmap.includes('Shared rule'), 'stale constraint bullet removed');
+      assert.ok(roadmap.includes('### Phase 2: Next'), 'next phase intact');
+    });
+
+    test('user constraints header coexists with a generated block and re-runs are stable', () => {
+      const roadmap = ROADMAP4.replace(
+        '- [ ] 01-04-PLAN.md — Four\n',
+        '- [ ] 01-04-PLAN.md — Four\n\n**Cross-cutting constraints:** keep X\n- user bullet\n',
+      );
+      tmpDir = makeFour([1, 1, 2, 2], [['Shared rule'], ['Shared rule'], ['Solo A'], ['Solo B']], roadmap);
+      run();
+      const first = fs.readFileSync(roadmapFile(), 'utf-8');
+      assert.ok(first.includes('**Cross-cutting constraints:** <!-- gsd:generated -->\n- Shared rule\n'), 'generated block present');
+      assert.ok(first.includes('**Cross-cutting constraints:** keep X\n- user bullet'), 'user content kept');
+      assert.strictEqual(run().updated, false);
+      assert.strictEqual(fs.readFileSync(roadmapFile(), 'utf-8'), first);
+    });
+
+    describe('a checklist row the grammar rejects splits the list', () => {
+      const split = (middle) => ROADMAP4.replace(
+        '- [ ] 01-02-PLAN.md — Two\n',
+        middle,
+      );
+      const annotate = () => {
+        const r = processSeam.runNode([TOOLS_PATH, 'roadmap', 'annotate-dependencies', '1'], {
+          cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: PROBE_TIMEOUT_MS,
+        });
+        assert.strictEqual(r.exitCode, 0, r.stderr);
+        return { out: JSON.parse(r.stdout), stderr: r.stderr };
+      };
+      const cases = {
+        'empty generated wave header': '\n**Wave 2** *(blocked on Wave 1 completion)*\n\n**Wave 3** *(blocked on Wave 2 completion)*\n- [ ] 01-02-PLAN.md — Two\n',
+        'double-space checkbox': '- [  ] 01-02-PLAN.md — Two\n',
+        'asterisk bullet': '* [ ] 01-02-PLAN.md — Two\n',
+      };
+      for (const [name, middle] of Object.entries(cases)) {
+        test(`${name}: file untouched and the skip is reported`, () => {
+          const roadmap = split(middle);
+          tmpDir = makeFour([1, 2, 3, 4], [['A'], ['B'], ['C'], ['D']], roadmap);
+          const { out, stderr } = annotate();
+          assert.strictEqual(out.updated, false);
+          assert.strictEqual(out.skipped, 'unrecognised_checklist_row');
+          assert.strictEqual(fs.readFileSync(roadmapFile(), 'utf-8'), roadmap, 'ROADMAP.md byte-identical');
+          assert.match(stderr, /WARNING: .*01-02-PLAN\.md/, 'warning names the stranded row');
+        });
+      }
+
+      test('a markdown-link bullet after the list does not block annotation', () => {
+        const roadmap = ROADMAP4.replace(
+          '- [ ] 01-04-PLAN.md — Four\n',
+          '- [ ] 01-04-PLAN.md — Four\n- [ADR-12](https://example.com/adr-12)\n',
+        );
+        tmpDir = makeFour([1, 2, 3, 4], [['A'], ['B'], ['C'], ['D']], roadmap);
+        const { out, stderr } = annotate();
+        assert.strictEqual(out.updated, true);
+        assert.strictEqual(stderr, '');
+        assert.ok(fs.readFileSync(roadmapFile(), 'utf-8').includes('- [ADR-12](https://example.com/adr-12)'));
+      });
+    });
   });
 
   test('returns no-op when phase has no plans', () => {
