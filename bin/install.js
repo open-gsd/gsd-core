@@ -8590,6 +8590,17 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
 
   console.log(`  Uninstalling GSD from ${cyan}${runtimeLabel}${reset} at ${cyan}${locationLabel}${reset}\n`);
 
+  // Step 6 rewrites settings.json after every GSD file is gone, so a symlinked
+  // settings.json that writeSettings would refuse (#5037) has to stop the
+  // uninstall here, before the first removal. Refusing at step 6 would leave
+  // settings entries pointing at hooks that were already deleted.
+  assertSettingsWriteAllowed(path.join(targetDir, 'settings.json'));
+  // Codex's hooks.json goes through the same policy at step 1a, after skills,
+  // agents and config.toml are already handled, so it is checked here too.
+  if (hostBehaviorsFor(runtime).tomlConfigInstall) {
+    resolveSymlinkedLeafWritePath(targetDir, path.join(targetDir, 'hooks.json'), 'hooks.json at');
+  }
+
   // #786: AGENTS.md lives at the repo root (outside targetDir) for local Copilot
   // installs, so its cleanup must run even when .github (targetDir) was already
   // removed — i.e. BEFORE the "target directory missing" early-return below.
