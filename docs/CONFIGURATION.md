@@ -834,7 +834,9 @@ Pick by which question you are actually asking:
 | You want | Setting | What you give up |
 |---|---|---|
 | Planning never enters git | `planning.commit_docs: false` | Parallel executor worktrees; planning git history |
-| Planning is versioned locally but never published | `planning.commit_docs: true` + `planning.pr_strict: true` | Nothing — but the working branch itself must not be pushed; publish the generated `-pr` branch |
+| Planning is versioned locally but never published | `planning.commit_docs: true` + `planning.pr_strict: true` | Nothing — but the working branch itself must not be pushed; publish the generated `-pr` branch. Repeat runs replay only commits after the last published tip (see below) |
+
+`/gsd-pr-branch` records the last built tip in `refs/gsd/pr-built/<target>/<working-branch>` (plus the `-pr` tip in `refs/gsd/pr-built-head/<target>/<working-branch>`) and promotes it to `refs/gsd/pr-published/<target>/<working-branch>` once that `-pr` tip is merged, even if the local branch was deleted; a discarded `-pr` branch leaves nothing published, so its commits are replayed. A leftover merged `-pr` branch is replaced; an unmerged one is refused by name with the commands for squash/rebase merges. Rebased branches fall back to the target until re-anchored with `git update-ref <published-ref> <rebased commit equivalent to last published tip>`; reset with `git update-ref -d <published-ref>`. After switching `planning.pr_strict` between runs, reset the marker (`git update-ref -d` on the published ref) so the first replay starts from the target.
 
 The two are independent keys and can be set together, but `pr_strict` is inert when `commit_docs` is `false`: with nothing committed, there is nothing for the PR-branch filter to remove.
 
