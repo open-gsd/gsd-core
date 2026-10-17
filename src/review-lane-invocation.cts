@@ -55,6 +55,7 @@ export const LANE_UNAVAILABLE = Object.freeze({
   PROBE_FAILED: 'probe_failed',
   PROBE_TIMEOUT: 'probe_timeout',
   HOST_UNREACHABLE: 'host_unreachable',
+  HTTP_REDIRECT: 'http_redirect',
   EGRESS_HOST_CHANGED: 'egress_host_changed',
   BUDGET_TOO_SMALL: 'budget_too_small',
   BUDGET_TOOL_FAILED: 'budget_tool_failed',

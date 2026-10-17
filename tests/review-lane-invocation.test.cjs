@@ -506,6 +506,7 @@ describe('reviewer lane invocation — absent-safe and hostile input (ADR-2782 D
       'BUDGET_TOO_SMALL',
       'EGRESS_HOST_CHANGED',
       'HOST_UNREACHABLE',
+      'HTTP_REDIRECT',
       'MALFORMED_LANE',
       'MISSING_BINARY',
       'MISSING_REQUIRED_BINARY',

@@ -1,8 +1,8 @@
 /**
  * Reviewer lane runner — execution, probes, handlers, egress (ADR-2782 Phase 5b, #2799).
  *
- * Every dependency is injected, so these are behavioural tests over the real control flow with no
- * network, no spawn and no clock. Where a filesystem failure is forced it is done by making the
+ * Most tests inject every dependency; #5288 additionally exercises the real CLI HTTP seam against
+ * two loopback servers. Where a filesystem failure is forced it is done by making the
  * injected `writeFile`/`readFile` throw — never by `chmod 0o000`, which root bypasses, silently
  * turning the test into a vacuous pass in root Docker/CI.
  */
@@ -11,7 +11,15 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const http = require('node:http');
+const { execFile } = require('node:child_process');
 const fc = require('fast-check');
+const { createTempDir, cleanup, installSpawnEnv, readFileNormalized, TOOLS_PATH } = require('./helpers.cjs');
+const { GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS, PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
+
+// The test backstop includes fixture setup and server cleanup beyond the bounded CLI invocation.
+const HTTP_CLI_TEST_TIMEOUT_MS = GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS + PROBE_TIMEOUT_MS;
 
 const { REVIEWER_LANES } = require('../gsd-core/bin/lib/review-lane-descriptor.cjs');
 const { resolveLanePlan, resolveLaneEffort, LANE_UNAVAILABLE } = require('../gsd-core/bin/lib/review-lane-invocation.cjs');
@@ -727,6 +735,223 @@ describe('runner — openai-compatible handler', () => {
     const r = await runOpenAiCompatible(p, 'P', d);
     assert.equal(r.review, '');
     assert.ok(r.rawBody.includes('502'));
+  });
+});
+
+describe('#5288 reviewer HTTP redirects', () => {
+  const httpLanes = REVIEWER_LANES.filter((lane) => lane.transport === 'openai-http');
+  const reviewBody = JSON.stringify({ model: 'redirected', choices: [{ message: { content: 'REDIRECT REVIEW' } }] });
+
+  for (const lane of httpLanes) {
+    test(`${lane.slug}: model discovery and chat request manual redirects`, async () => {
+      const calls = [];
+      const d = deps({
+        httpJson: async (url, opts) => {
+          calls.push({ url, opts });
+          return { ok: true, status: 200, body: opts.method === 'GET'
+            ? JSON.stringify({ data: [{ id: 'model' }] })
+            : reviewBody };
+        },
+      });
+      const r = await runOpenAiCompatible(plan(lane.slug), 'SYNTHETIC PROMPT', d);
+      assert.equal(r.review, 'REDIRECT REVIEW');
+      assert.deepStrictEqual(calls.map(({ opts }) => [opts.method, opts.redirect]), [
+        ['GET', 'manual'], ['POST', 'manual'],
+      ]);
+    });
+
+    for (const method of ['GET', 'POST']) {
+      test(`${lane.slug}: every 3xx on ${method} fails without accepting its body`, async () => {
+        for (let status = 300; status < 400; status++) {
+          const p = plan(lane.slug);
+          const calls = [];
+          let gets = 0;
+          const d = deps({
+            files: { [p.promptPath]: 'SYNTHETIC PROMPT' },
+            httpJson: async (url, opts) => {
+              calls.push(opts);
+              // The availability probe is a separate contract owned by #5266/#5278.
+              if (opts.method === 'GET' && ++gets === 1) return { ok: true, status: 200, body: '{}' };
+              return opts.method === method
+                ? { ok: false, status, body: reviewBody }
+                : { ok: true, status: 200, body: '{}' };
+            },
+          });
+          const r = await runLane(p, d, { repoRoot: ROOT });
+          assert.equal(r.ok, false, `${method} ${status} must fail`);
+          assert.equal(r.reason, 'http_redirect');
+          assert.equal(r.stubbed, true);
+          assert.ok(r.detail.includes(`HTTP redirect ${status}`));
+          assert.ok(!d.files[p.reviewPath].includes('REDIRECT REVIEW'));
+          if (method === 'GET') assert.equal(calls.some((opts) => opts.method === 'POST'), false);
+        }
+      });
+    }
+  }
+
+  test('redirect status outranks an arbitrary review-shaped body and ok flag', async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.integer({ min: 300, max: 399 }), fc.string(), fc.boolean(),
+      async (status, content, ok) => {
+        const p = plan('ollama', { 'review.models.ollama': 'pinned' });
+        const r = await runOpenAiCompatible(p, 'SYNTHETIC PROMPT', deps({
+          httpJson: async () => ({ ok, status, body: JSON.stringify({ choices: [{ message: { content } }] }) }),
+        }));
+        assert.equal(r.review, '');
+        assert.equal(r.redirected, true);
+        assert.ok(r.rawBody.includes(`HTTP redirect ${status}`));
+      },
+    ), { seed: 42, numRuns: 100 });
+  });
+
+  test('299 and 400 retain the ordinary non-redirect response contract', async () => {
+    const p = plan('ollama', { 'review.models.ollama': 'pinned' });
+    for (const status of [299, 400]) {
+      const r = await runOpenAiCompatible(p, 'SYNTHETIC PROMPT', deps({
+        httpJson: async () => ({ ok: false, status, body: '{}' }),
+      }));
+      assert.equal(r.redirected, undefined);
+      assert.equal(r.rawBody, '{}');
+    }
+  });
+
+  for (const method of ['GET', 'POST']) {
+    test(`real HTTP seam: ${method} redirect remains a failure if body cancellation rejects`, (t) => {
+      const project = createTempDir('review-http-cancel-');
+      t.after(() => cleanup(project));
+      const runDir = path.join(project, 'run');
+      fs.mkdirSync(runDir);
+      fs.writeFileSync(path.join(runDir, 'gsd-review-prompt.md'), 'SYNTHETIC PROMPT');
+      // Inject only fetch's response stream fault in a child; dispatch still builds the real
+      // RunnerDeps and invokes the actual lane. No global mock can leak into neighboring tests.
+      const child = runNode(['-e', `
+        const [toolsPath, project, runDir, redirectMethod] = process.argv.slice(1);
+        let gets = 0;
+        let cancellations = 0;
+        const calls = [];
+        globalThis.fetch = async (url, opts) => {
+          calls.push(opts.method);
+          const redirect = opts.method === redirectMethod && (redirectMethod !== 'GET' || ++gets > 1);
+          return { ok: !redirect, status: redirect ? 307 : 200,
+            body: { cancel: async () => { cancellations++; throw new Error('stream cancellation failed'); } },
+            text: async () => JSON.stringify(opts.method === 'GET'
+              ? { data: [{ id: 'model' }] }
+              : { choices: [{ message: { content: 'NORMAL REVIEW' } }] }) };
+        };
+        const tools = require(toolsPath);
+        const { captureStdoutSyncWrites } = require(require('node:path').join(require('node:path').dirname(toolsPath), 'lib/io.cjs'));
+        captureStdoutSyncWrites(() => tools.dispatchHostCommand({ command: 'review-lane',
+          args: ['review-lane', 'invoke', '--slug', 'ollama', '--run-dir', runDir, '--repo-root', project],
+          cwd: project, raw: true, error: (message) => { throw new Error(message); },
+        })).then((output) => process.stdout.write(JSON.stringify({ result: JSON.parse(output), cancellations, calls })))
+          .catch((error) => { process.stderr.write(error.stack); process.exitCode = 1; });
+      `, TOOLS_PATH, project, runDir, method], {
+        cwd: project, env: installSpawnEnv(), timeoutMs: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS,
+      });
+      assert.equal(child.outcome, OUTCOME.EXITED, child.stderr);
+      assert.equal(child.exitCode, 0, child.stderr);
+      const observed = JSON.parse(child.stdout);
+      const result = observed.result;
+      assert.equal(observed.cancellations, 1, 'the response cancellation fault must be exercised');
+      assert.equal(result.ok, false);
+      assert.equal(result.reason, 'http_redirect');
+      assert.equal(result.stubbed, true);
+      assert.ok(result.detail.includes('HTTP redirect 307'));
+      assert.deepStrictEqual(observed.calls, method === 'GET' ? ['GET', 'GET'] : ['GET', 'GET', 'POST']);
+    });
+  }
+
+  // Async execFile is necessary here: the sync process seam would block the loopback servers'
+  // event loop while the child waits for their replies. The real child remains timeout-bounded.
+  function invoke(project, runDir) {
+    return new Promise((resolve, reject) => {
+      execFile(process.execPath, [TOOLS_PATH, 'review-lane', 'invoke', '--slug', 'ollama',
+        '--run-dir', runDir, '--repo-root', project, '--raw'], {
+        cwd: project, env: installSpawnEnv(), encoding: 'utf8', timeout: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS,
+      }, (error, stdout, stderr) => {
+        if (error) { reject(new Error(`review-lane invoke failed: ${stderr}`, { cause: error })); return; }
+        resolve(JSON.parse(stdout));
+      });
+    });
+  }
+
+  async function startServer(t, handler) {
+    const server = http.createServer(handler);
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    t.after(() => new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); }));
+    return `http://127.0.0.1:${server.address().port}`;
+  }
+
+  async function loopbackFixture(t, { method, status } = {}) {
+    const project = createTempDir('review-http-redirect-');
+    t.after(() => cleanup(project));
+    const runDir = path.join(project, 'run');
+    fs.mkdirSync(runDir);
+    const prompt = 'SYNTHETIC PRIVATE PLAN #5288';
+    fs.writeFileSync(path.join(runDir, 'gsd-review-prompt.md'), prompt);
+    const targetRequests = [];
+    const target = await startServer(t, (req, res) => {
+      targetRequests.push({ method: req.method, url: req.url });
+      req.resume();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(reviewBody);
+    });
+    const hostRequests = [];
+    let gets = 0;
+    const host = await startServer(t, (req, res) => {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', () => {
+        hostRequests.push({ method: req.method, url: req.url, body });
+        // Redirect only discovery's second GET; do not test the availability probe's policy.
+        const redirect = req.method === method && (method !== 'GET' || ++gets > 1);
+        res.writeHead(redirect ? status : 200, {
+          'Content-Type': 'application/json', ...(redirect ? { Location: `${target}${req.url}` } : {}),
+        });
+        res.end(redirect ? reviewBody : req.method === 'GET'
+          ? JSON.stringify({ data: [{ id: 'model' }] })
+          : JSON.stringify({ model: 'model', choices: [{ message: { content: 'NORMAL REVIEW src/example.cts:1' } }] }));
+      });
+    });
+    fs.mkdirSync(path.join(project, '.planning'));
+    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ review: { ollama_host: host } }));
+    const result = await invoke(project, runDir);
+    return { result, targetRequests, hostRequests, prompt,
+      review: readFileNormalized(path.join(runDir, 'gsd-review-ollama.md')) };
+  }
+
+  for (const method of ['GET', 'POST']) {
+    for (const status of [307, 308]) {
+      test(`real CLI: ${method} ${status} never reaches the redirect target`, { timeout: HTTP_CLI_TEST_TIMEOUT_MS }, async (t) => {
+        const f = await loopbackFixture(t, { method, status });
+        assert.deepStrictEqual(f.targetRequests, []);
+        assert.equal(f.result.ok, false);
+        assert.equal(f.result.reason, 'http_redirect');
+        assert.equal(f.result.stubbed, true);
+        assert.ok(f.result.detail.includes(`HTTP redirect ${status}`));
+        assert.ok(!f.review.includes('REDIRECT REVIEW'));
+        const posts = f.hostRequests.filter((r) => r.method === 'POST');
+        if (method === 'GET') assert.deepStrictEqual(posts, []);
+        else {
+          assert.equal(posts.length, 1);
+          assert.equal(JSON.parse(posts[0].body).messages[0].content, f.prompt);
+        }
+      });
+    }
+  }
+
+  test('real CLI: a non-redirecting host still receives the prompt and returns a review', { timeout: HTTP_CLI_TEST_TIMEOUT_MS }, async (t) => {
+    const f = await loopbackFixture(t);
+    assert.deepStrictEqual(f.targetRequests, []);
+    assert.equal(f.result.ok, true);
+    assert.equal(f.result.stubbed, false);
+    assert.ok(f.review.includes('NORMAL REVIEW'));
+    const posts = f.hostRequests.filter((r) => r.method === 'POST');
+    assert.equal(posts.length, 1);
+    assert.equal(JSON.parse(posts[0].body).messages[0].content, f.prompt);
   });
 });
 

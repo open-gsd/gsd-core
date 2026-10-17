@@ -54,8 +54,11 @@ export interface RunnerDeps {
    * `env` inherits unchanged, and the parent process environment is never mutated either way.
    */
   spawn: (binary: string, argv: string[], opts: { input?: string; timeoutMs: number; env?: Readonly<Record<string, string>> }) => SpawnOutcome;
-  /** Bounded HTTP POST/GET returning the RAW body — never pre-parsed, so errors stay diagnosable. */
-  httpJson: (url: string, opts: { method: 'GET' | 'POST'; body?: string; timeoutMs: number }) =>
+  /**
+   * Bounded HTTP POST/GET returning the RAW body — never pre-parsed, so errors stay diagnosable.
+   * `redirect` is forwarded to fetch; manual 3xx responses return an error with an empty body.
+   */
+  httpJson: (url: string, opts: { method: 'GET' | 'POST'; body?: string; timeoutMs: number; redirect?: 'error' | 'follow' | 'manual' }) =>
     Promise<{ ok: boolean; status: number; body: string; error?: string }>;
   readFile: (p: string) => string;
   writeFile: (p: string, content: string) => void;
@@ -1103,10 +1106,16 @@ export async function runOpenAiCompatible(
   plan: HttpPlan,
   promptText: string,
   deps: RunnerDeps,
-): Promise<{ review: string; rawBody: string; model: ResolvedModel }> {
+): Promise<{ review: string; rawBody: string; model: ResolvedModel; redirected?: boolean }> {
   let model = plan.model;
   if (!model && plan.modelsUrl) {
-    const listed = await deps.httpJson(plan.modelsUrl, { method: 'GET', timeoutMs: 2_000 });
+    const listed = await deps.httpJson(plan.modelsUrl, { method: 'GET', timeoutMs: 2_000, redirect: 'manual' });
+    // ADR-2782 D5 binds egress to the named host. A redirect is not ordinary discovery failure:
+    // falling back would still send the prompt after that host tried to change the destination.
+    if (listed.status >= 300 && listed.status < 400) {
+      return { review: '', rawBody: `HTTP redirect ${listed.status} refused during model discovery`,
+        model: UNRESOLVED_MODEL, redirected: true };
+    }
     if (listed.ok) {
       try {
         const parsed = JSON.parse(listed.body) as { data?: Array<{ id?: unknown }> };
@@ -1121,7 +1130,12 @@ export async function runOpenAiCompatible(
   const requested: ResolvedModel = recordedModel(model, MODEL_SOURCE.REQUESTED);
 
   const body = JSON.stringify({ model, messages: [{ role: 'user', content: promptText }] });
-  const res = await deps.httpJson(plan.url, { method: 'POST', body, timeoutMs: plan.timeoutMs });
+  const res = await deps.httpJson(plan.url, { method: 'POST', body, timeoutMs: plan.timeoutMs, redirect: 'manual' });
+  // Check status before parsing: even valid review JSON on a 3xx is never a review.
+  if (res.status >= 300 && res.status < 400) {
+    return { review: '', rawBody: `HTTP redirect ${res.status} refused during chat completion`,
+      model: requested, redirected: true };
+  }
   if (!res.ok && !res.body) {
     return { review: '', rawBody: res.error ?? `HTTP ${res.status}`, model: requested };
   }
@@ -1279,10 +1293,13 @@ function runSpawnLane(plan: SpawnPlan, deps: RunnerDeps, repoRoot: string): Lane
 
 async function runHttpLane(plan: HttpPlan, deps: RunnerDeps): Promise<LaneRunResult> {
   const promptText = deps.exists(plan.promptPath) ? deps.readFile(plan.promptPath) : '';
-  const { review, rawBody, model } = await runOpenAiCompatible(plan, promptText, deps);
+  const { review, rawBody, model, redirected } = await runOpenAiCompatible(plan, promptText, deps);
   // #3194: same verification on the http path — see runSpawnLane.
   const stamped = plan.evidenceClass !== 'diff-only' ? stampUngroundedReview(review) : review;
   deps.writeFile(plan.errPath, '');
   const { stubbed } = writeReviewOrStub(plan, stamped, deps, rawBody);
+  if (redirected) {
+    return { slug: plan.slug, ok: false, reason: LANE_UNAVAILABLE.HTTP_REDIRECT, detail: rawBody, stubbed, model };
+  }
   return { slug: plan.slug, ok: true, stubbed, model };
 }
