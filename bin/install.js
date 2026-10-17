@@ -13664,10 +13664,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // bare basename so an unrelated user command that merely mentions the same
   // filename can't false-positive into GSD's validated set.
   configuredEntrypoints.push(
-    ...settingsEntrypoints.filter(entry => {
-      const hooksSegment = '/hooks/' + path.basename(entry.scriptPath);
-      return registeredHookCommands.some(command => command.includes(hooksSegment));
-    }),
+    ...selectConfiguredEntrypointsForValidation(settingsEntrypoints, registeredHookCommands),
   );
   const statuslineEntrypoints = settingsEntrypoints.filter(entry => entry.command === statuslineCommand);
   const updateBannerEntrypoints = settingsEntrypoints.filter(entry => entry.command === updateBannerCommand);
@@ -13761,6 +13758,25 @@ function describeEntrypointConsequence(invalidRuntime) {
   if (invalidRuntime === 'codex') return 'reverted: its pre-install snapshot was restored';
   if (ENTRYPOINT_LEFT_UNREVERTED_RUNTIMES.has(invalidRuntime)) return 'NOT reverted: its config file is already written and was left on disk — fix the reported path and rerun install';
   return 'not persisted: this runtime writes its config after this check';
+}
+
+// #5100: select which tracked entrypoints reach the validation gate. A named
+// export (see module.exports) so tests can drive the fresh-vs-upgrade split
+// directly; the install() call site is covered by a child-process test that
+// runs the installer with win32 emulated.
+function selectConfiguredEntrypointsForValidation(settingsEntrypoints, registeredHookCommands) {
+  return (settingsEntrypoints || []).filter(entry => {
+    // A command-less entry never produced a registered command, so the
+    // segment match below can never keep it — but it is exactly the
+    // unresolved-bash entry the gate must see (buildHookCommand pushes it
+    // without a `command` when no Git Bash is found). Exempt it: without this
+    // a fresh install silently drops it (gate passes) while an upgrade keeps
+    // it via the persisted command (gate fails) — same host, opposite
+    // verdicts. Surface it in both cases and let the gate decide loudly.
+    if (entry.command === undefined) return true;
+    const hooksSegment = '/hooks/' + path.basename(entry.scriptPath);
+    return registeredHookCommands.some(command => command.includes(hooksSegment));
+  });
 }
 
 function assertConfiguredEntrypoints(entries) {
@@ -14949,6 +14965,8 @@ module.exports = {
     install,
     installAllRuntimes,
     uninstall,
+    // #5100 — installer entrypoint-selection seam, exported for direct tests
+    selectConfiguredEntrypointsForValidation,
     // #3023 — shared hook bundle directory name, descriptor-driven
     SHARED_HOOKS_DIR_DEFAULT,
     resolveSharedHooksDirName,
