@@ -34,6 +34,21 @@ const { scanPhasePlans } = planScanMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningScopeMod = require('./planning-scope.cjs');
 const { SCOPE } = planningScopeMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planDocumentMod = require('./plan-document.cjs');
+const { parsePlanDocument } = planDocumentMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import taskContentResolutionMod = require('./task-content-resolution.cjs');
+const {
+  resolveTaskContent,
+  loadResolverCapabilities,
+  ResolverAmbiguousError,
+  ResolverFailedError,
+  ResolverTimeoutError,
+  ResolverMalformedOutputError,
+} = taskContentResolutionMod;
+
+type CapabilityLike = Parameters<typeof resolveTaskContent>[0]['capabilities'][number];
 
 // ─── Decision matching ────────────────────────────────────────────────────────
 
@@ -169,6 +184,63 @@ export function extractPlanDesignatedSections(planContent: string | null | undef
   parts.push(bodyParts.join('\n'));
   parts.push(extractXmlTagBodies(cleaned));
   return parts.join('\n\n');
+}
+
+export interface TrackerResolveDeps {
+  loadCapabilities?: (cwd: string) => CapabilityLike[];
+  resolveTaskContentFn?: typeof resolveTaskContent;
+}
+
+/** Extra scannable text per plan (same index) from tracker-resolved task content; '' for plans without `tracker-id=`. */
+export function resolveTrackerBodies(projectDir: string, planContents: string[], deps: TrackerResolveDeps = {}): Observed<string[]> {
+  let capabilities: CapabilityLike[] | null = null;
+  const seen = new Map<string, string[]>();
+  const resolveFn = deps.resolveTaskContentFn ?? resolveTaskContent;
+  const bodies: string[] = [];
+  for (const raw of planContents) {
+    const content = stripCommentsAndFences(raw);
+    if (!/\btracker-id\s*=/i.test(content)) {
+      bodies.push('');
+      continue;
+    }
+    const parts: string[] = [];
+    for (const task of parsePlanDocument(content).tasks) {
+      const trackerId = task.trackerId;
+      if (trackerId === null) continue;
+      const cached = seen.get(trackerId);
+      if (cached) {
+        parts.push(...cached);
+        continue;
+      }
+      if (capabilities === null) {
+        try {
+          capabilities = (deps.loadCapabilities ?? loadResolverCapabilities)(projectDir);
+        } catch (err) {
+          return { kind: 'unreadable', reason: `capability registry unreadable: ${err instanceof Error ? err.message : String(err)}`, span: trackerId };
+        }
+      }
+      try {
+        const result = resolveFn({ trackerId, capabilities });
+        const c = result.kind === 'resolved' ? result.content : null;
+        // Per field: an unclosed fence in one field must not swallow the rest.
+        const texts = c ? [c.action, c.verify, ...c.acceptanceCriteria, ...c.readFirst, c.done].filter((v): v is string => v !== null).map(stripCommentsAndFences) : [];
+        seen.set(trackerId, texts);
+        parts.push(...texts);
+      } catch (err) {
+        if (
+          err instanceof ResolverAmbiguousError ||
+          err instanceof ResolverFailedError ||
+          err instanceof ResolverTimeoutError ||
+          err instanceof ResolverMalformedOutputError
+        ) {
+          return { kind: 'unreadable', reason: `tracker task content unresolved: ${err.message}`, span: trackerId };
+        }
+        throw err;
+      }
+    }
+    bodies.push(parts.join('\n'));
+  }
+  return evidenceFound(bodies);
 }
 
 // ─── Messages ─────────────────────────────────────────────────────────────────
