@@ -1222,15 +1222,13 @@ function resolveCodexHooksJsonDestination(targetDir: string): string {
   // shared with writeSettings (#5037), refuses a symlinked hooks.json unless
   // GSD_ALLOW_SYMLINKED_DEST is set, and with the opt-in returns the link's
   // real target, so the caller's read AND write operate on the file the
-  // user's symlink points at and the link itself stays in place.
-  //
-  // The existsSync gate keeps this writer's existing handling of a dangling
-  // hooks.json link: existsSync reports false for one, so the write replaces
-  // it. writeSettings refuses a dangling link instead; dropping the gate
-  // makes the two writers match.
-  return fs.existsSync(hooksJsonPath)
-    ? _installEngineSymlinkGuard().resolveSymlinkedLeafWritePath(targetDir, hooksJsonPath, 'hooks.json at')
-    : hooksJsonPath;
+  // user's symlink points at and the link itself stays in place. A dangling
+  // hooks.json link is refused rather than replaced, the same as writeSettings.
+  return _installEngineSymlinkGuard().resolveSymlinkedLeafWritePath(
+    targetDir,
+    hooksJsonPath,
+    'hooks.json at',
+  );
 }
 
 function reconcileCodexHooksJsonEvent(targetDir: string, eventName: string, opts: ReconcileCodexOpts = {}): ReconcileResult {
