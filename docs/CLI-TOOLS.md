@@ -1097,6 +1097,11 @@ node gsd-tools.cjs scaffold verification --phase N
 node gsd-tools.cjs scaffold phase-dir --phase N --name "phase name"
 ```
 
+The verification scaffold omits frontmatter `status` until the verifier writes a verdict
+(`passed`, `gaps_found`, or `human_needed`). `verification status` therefore reports the
+fresh scaffold as `missing` and routes to `execute-phase`; phase completion stays blocked
+until verification passes. The UAT scaffold retains its blocking `status: pending`.
+
 ---
 
 ## Init Commands (Compound Context Loading)

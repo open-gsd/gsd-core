@@ -1265,22 +1265,70 @@ describe('scaffold command', () => {
     );
     assert.ok(content.includes('User Acceptance Testing'), 'should have UAT heading');
     assert.ok(content.includes('Test Results'), 'should have test results section');
+
+    const frontmatter = runGsdTools(['frontmatter', 'get', output.path], tmpDir);
+    assert.equal(frontmatter.exitCode, 0, frontmatter.error);
+    assert.equal(JSON.parse(frontmatter.output).status, 'pending');
+
+    const gate = runGsdTools(['phase', 'uat-passed', '3'], tmpDir);
+    assert.equal(gate.exitCode, 1, 'pending UAT remains a negative verdict');
+    const verdict = JSON.parse(gate.output);
+    assert.equal(verdict.passed, false);
+    assert.deepEqual(verdict.uat_files, ['03-UAT.md']);
   });
 
-  test('scaffolds verification file', () => {
-    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '03-api'), { recursive: true });
+  function scaffoldVerification() {
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '03-api');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), '{}');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n## Phases\n\n- [ ] **Phase 3: API**\n\n### Phase 3: API\n**Goal:** Demo\n');
 
-    const result = runGsdTools('scaffold verification --phase 3', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+    const result = runGsdTools(['scaffold', 'verification', '--phase', '3'], tmpDir);
+    assert.equal(result.exitCode, 0, result.error);
+    assert.equal(JSON.parse(result.output).created, true);
+    return phaseDir;
+  }
 
-    const output = JSON.parse(result.output);
-    assert.strictEqual(output.created, true);
+  test('#5202: scaffolded verification reads missing and routes to execute-phase', () => {
+    const phaseDir = scaffoldVerification();
+    const result = runGsdTools(['verification', 'status', phaseDir], tmpDir);
+    assert.equal(result.exitCode, 0, result.error);
+    const status = JSON.parse(result.output);
+    assert.equal(status.status, 'missing');
+    assert.equal(status.route, 'execute-phase');
+    assert.equal(status.next_command, '/gsd-execute-phase 03');
 
-    const content = fs.readFileSync(
-      path.join(tmpDir, '.planning', 'phases', '03-api', '03-VERIFICATION.md'),
-      'utf-8'
-    );
-    assert.ok(content.includes('Goal-Backward Verification'), 'should have verification heading');
+    const frontmatter = runGsdTools(['frontmatter', 'get', path.join(phaseDir, '03-VERIFICATION.md')], tmpDir);
+    assert.equal(frontmatter.exitCode, 0, frontmatter.error);
+    assert.equal(Object.hasOwn(JSON.parse(frontmatter.output), 'status'), false);
+  });
+
+  test('#5202: scaffolded verification gives phase uat-passed a negative verdict without a vocabulary error', () => {
+    scaffoldVerification();
+    const result = runGsdTools(['phase', 'uat-passed', '3', '--require-verification'], tmpDir);
+    assert.equal(result.exitCode, 1, 'unfinished verification must not pass');
+    assert.notEqual(result.output, '', result.error);
+    const verdict = JSON.parse(result.output);
+    assert.equal(verdict.passed, false);
+    assert.equal(verdict.policy.require_verification, true);
+    assert.deepEqual(verdict.verification_files, ['03-VERIFICATION.md']);
+  });
+
+  test('#5202: scaffolded verification blocks phase complete as incomplete without a vocabulary error or writes', () => {
+    scaffoldVerification();
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+    const before = fs.readFileSync(roadmapPath, 'utf8');
+    const result = runGsdTools(['--json-errors', 'phase', 'complete', '3'], tmpDir);
+    assert.equal(result.exitCode, 1, 'unfinished verification must not complete');
+    assert.equal(result.output, '');
+    const envelope = JSON.parse(splitLines(result.error).at(-1));
+    assert.equal(envelope.ok, false);
+    assert.equal(envelope.reason, 'phase_verification_incomplete');
+    assert.equal(fs.readFileSync(roadmapPath, 'utf8'), before);
+    assert.equal(fs.existsSync(path.join(tmpDir, '.planning', 'STATE.md')), false);
+    assert.equal(fs.existsSync(path.join(tmpDir, '.planning', 'state.json')), false);
+    assert.equal(fs.existsSync(path.join(tmpDir, '.planning', '.lock')), false);
   });
 
   test('scaffolds phase directory', () => {
