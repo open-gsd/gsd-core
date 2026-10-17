@@ -22,6 +22,8 @@ import { tokenizeHeadings, withSection } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
 import { deriveProgressFromRoadmap, clampPercent, clampPercentFromFraction, renderProgressBar } from './phase-lifecycle.cjs';
 import { escapeRegex } from './pattern.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseIdMod = require('./phase-id.cjs');
 // #4129: the completion-ratio kernel for the resync-arm ratchet's percent
 // (planning-scope's SCOPE — state-document's own dependency, no cycle here:
 // state-document never imports this module).
@@ -2437,7 +2439,9 @@ function plannedPhaseCore(
   const { existingFm, hasFrontmatter, body: initialBody, reassemble } = beginFrontmatterReassembly(content, deps.sourcePath);
   let body = initialBody;
 
-  const statusDefaults = KNOWN_TEMPLATE_DEFAULTS['Status'];
+  // #5320: a bare pre-plan `Ready` is moved to `Ready to execute` here; nothing
+  // else writes bare Ready, so it is local to this transition.
+  const statusDefaults = [...(KNOWN_TEMPLATE_DEFAULTS['Status'] ?? []), 'Ready'];
   const lastActivityDefaults = KNOWN_TEMPLATE_DEFAULTS['Last Activity'];
 
   // Status — template-aware (preserve executor-authored values).
@@ -2448,10 +2452,12 @@ function plannedPhaseCore(
   }
 
   // Total Plans in Phase — system-derived; always replaced when a count is given.
+  let totalRecorded = false;
   if (intent.planCount !== null && intent.planCount !== undefined) {
     const result = stateReplaceField(body, 'Total Plans in Phase', String(intent.planCount));
     if (result) {
       body = result;
+      totalRecorded = true;
       updated.push('Total Plans in Phase');
     }
   }
@@ -2467,7 +2473,7 @@ function plannedPhaseCore(
   const ladResult = stateReplaceField(
     body,
     'Last Activity Description',
-    `Phase ${intent.phaseNumber} planning complete — ${intent.planCount || '?'} plans ready`,
+    `Phase ${intent.phaseNumber} planning complete — ${intent.planCount ?? '?'} plans ready`,
   );
   if (ladResult) {
     body = ladResult;
@@ -2486,17 +2492,48 @@ function plannedPhaseCore(
   // Phase is system-derived, always replaced (Knuth invariant does not apply);
   // Status / Last activity stay template-aware.
   const beforePos = body;
+  const posSlice = (b: string): string => {
+    const sp = locateCurrentPosition(b);
+    return sp ? b.slice(sp.start, sp.end) : '';
+  };
+  const posBefore = posSlice(beforePos);
+  // #5320: `Plan: A of B in current phase` template shape; advance-plan parses
+  // `N of M` from either spelling (#3784 hybrid for `Current Plan:`). A replan
+  // keeps the recorded leading N and moves only M; anything else starts at 0.
+  // The recorded N carries over only for the SAME phase (`Phase:` leading token).
+  const samePhase = phaseIdMod.phaseKeyFromProse(stateExtractField(posBefore, 'Phase')) === phaseIdMod.phaseKeyFromToken(intent.phaseNumber);
+  const below: { n?: number } = {};
+  const planValue = (name: string): string | undefined => {
+    if (intent.planCount == null) return undefined;
+    const m = samePhase ? PLAN_SHAPE_N_OF_M.exec(stateExtractField(posBefore, name) ?? '') : null;
+    if (m && Number(m[1]) > intent.planCount) below.n = Number(m[1]);
+    return `${m ? m[1] : 0} of ${intent.planCount} in current phase`;
+  };
   body = mutateCurrentPositionForAdvance(
     body,
     {
       phase: `${intent.phaseNumber}${intent.phaseName ? ` (${intent.phaseName})` : ''} — READY TO EXECUTE`,
       status: 'Ready to execute',
       lastActivity: `${today} — Phase ${intent.phaseNumber} planning complete`,
+      plan: planValue('Plan'),
+      currentPlan: planValue('Current Plan'),
     },
     statusDefaults,
     lastActivityDefaults,
   );
   if (body !== beforePos) updated.push('Current Position');
+  const posAfter = posSlice(body);
+  for (const name of ['Plan', 'Current Plan']) {
+    if (stateExtractField(posAfter, name) !== stateExtractField(posBefore, name)) updated.push(name);
+  }
+  // #5320: --plans must land somewhere; the caller fails before any write.
+  if (intent.planCount != null && !totalRecorded
+    && stateExtractField(posBefore, 'Plan') === null && stateExtractField(posBefore, 'Current Plan') === null) {
+    return { content, updated: [], data: { planError: 'state planned-phase: --plans has no line to land on. Add `Plan: 0 TBD in current phase` under `## Current Position` (or a `Total Plans in Phase:` line) and retry.' } };
+  }
+  if (below.n !== undefined) {
+    return { content, updated: [], data: { planError: `state planned-phase: --plans ${intent.planCount} is below the executed plan count ${below.n}.` } };
+  }
 
   // #2400 Bug B: sync progress.total_plans to the frontmatter when a plan count
   // is given. This writes the explicitly-provided count — it is NOT a re-derivation

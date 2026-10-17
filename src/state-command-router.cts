@@ -67,9 +67,9 @@ interface RouteStateCommandOptions {
 
 function routeStateCommand({ state, args, cwd, raw, error }: RouteStateCommandOptions): void {
   const parsePlans = (plans: string | null | undefined): number | null => {
-    const parsedPlans = plans == null ? null : Number.parseInt(plans, 10);
-    if (plans != null && Number.isNaN(parsedPlans)) {
-      error('Invalid --plans value. Expected an integer.');
+    const parsedPlans = plans == null ? null : Number(plans);
+    if (plans != null && !(/^\d+$/.test(plans) && Number.isSafeInteger(parsedPlans))) {
+      error('Invalid --plans value. Expected a non-negative integer.');
       return null;
     }
     return parsedPlans;
