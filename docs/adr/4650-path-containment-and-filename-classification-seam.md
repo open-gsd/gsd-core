@@ -4,6 +4,28 @@
 - **Date:** 2026-09-11
 - **Issue:** [#4650](https://github.com/open-gsd/gsd-core/issues/4650) — Phase 0 of epic [#4636](https://github.com/open-gsd/gsd-core/issues/4636)
 
+## Amendment (2026-10-17): a read-once text input is not a contained resource (#4926)
+
+Decision 3 places containment where external input enters, argv included, and the acceptance
+policy below is "conservative about the **resource**". Both are about paths GSD then touches as a
+resource: paths it writes to, resolves into the project, or persists.
+
+`state add-decision --summary-file` / `--rationale-file`, `state add-blocker --text-file` and
+`state add-roadmap-evolution --note-file` are not that. `readTextArgOrFile` (`src/state.cts`) reads
+the file once and copies its contents into STATE.md. The path is never written, recorded or
+resolved again. Confining it protected nothing: the inline forms (`--summary`, `--rationale`,
+`--text`, `--note`) already accept the same bytes from anywhere, for example
+`--summary "$(cat /tmp/x)"`. It only forced agents to copy scratch files into the project first.
+
+**Decision.** These four flags accept any readable file. A relative path still resolves against the
+project root. A file that cannot be read is refused loudly and USAGE-shaped, as the policy below
+requires. An unconfined path is still hostile input, so the read is bounded: only a regular file of
+at most 256 KiB is read (`readSmallRegularFile`), and a FIFO, a device, a directory or a larger file
+is refused the same way without blocking or being read whole. `assertWithinRoot` and
+`PathAcceptance` are unchanged, and every path that is written, persisted or resolved into the
+project stays contained. A new read-once input that wants the same treatment must meet the same
+test (contents consumed once, path never touched again) and be named here.
+
 ## Context
 
 Three `confirmed-bug` issues were three call sites answering one question that has no shared

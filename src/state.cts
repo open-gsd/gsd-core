@@ -11,10 +11,13 @@ import path from 'node:path';
 import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
-const { output, error, declineNoOp, formatDiagnosticToken } = ioMod;
+const { output, error, declineNoOp, formatDiagnosticToken, ERROR_REASON } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import cliExitModule = require('./cli-exit.cjs');
 const { ExitError } = cliExitModule;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import capabilityLedgerMod = require('./capability-ledger.cjs');
+const { readSmallRegularFile } = capabilityLedgerMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateContract = require('./state-contract.cjs');
 const { publishStateContract } = stateContract;
@@ -615,19 +618,52 @@ function cmdStateGet(cwd: string, section: string | undefined, raw: boolean): vo
   }
 }
 
-function readTextArgOrFile(cwd: string, value: string | undefined, filePath: string | undefined, label: string): string | undefined {
+/**
+ * #4926: cap on a `--<flag>-file` text input. Twice the 128 KiB one argv string
+ * can carry on Linux, so the file form never takes less than the inline form,
+ * and the entry echoed back on stdout stays small.
+ */
+const TEXT_FILE_MAX_BYTES = 256 * 1024;
+
+/**
+ * Resolve a text argument that may instead be supplied as a file (`--<flag>`
+ * or `--<flag>-file`).
+ *
+ * #4926: the file is a read-once INPUT — its contents are copied into
+ * STATE.md and the path itself is never written, recorded, or resolved
+ * again — so it is not a project-write resource and is not confined to the
+ * project root. A scratch file from an agent's temp directory is accepted.
+ * A relative path still resolves against the project root.
+ *
+ * A file that cannot be read is a caller error and goes through the fault
+ * path — stderr, non-zero exit (USAGE), `--json-errors` envelope — rather than
+ * an `{ added: false }` payload at exit 0 that a shell caller gating on `$?`
+ * reads as success while nothing was written.
+ *
+ * An unconfined path is hostile input, so the read goes through
+ * `readSmallRegularFile`: a FIFO, a device (`/dev/zero`, a piped `/dev/stdin`)
+ * or a directory is refused without blocking, and a file over
+ * TEXT_FILE_MAX_BYTES is refused without being read.
+ */
+function readTextArgOrFile(cwd: string, value: string | undefined, filePath: string | undefined, flag: string): string | undefined {
   if (!filePath) return value;
 
-  // Path traversal guard: ensure file resolves within project directory
-  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/unbound-method
-  const { assertWithinRoot, PathAcceptance } = require('./security.cjs') as { assertWithinRoot(filePath: unknown, baseDir: unknown, label?: string | null, policy?: 'relative-only' | 'absolute-inside-root'): string; PathAcceptance: { RelativeOnly: 'relative-only'; AbsoluteInsideRoot: 'absolute-inside-root' } };
-  const contained = assertWithinRoot(filePath, cwd, `${label} path`, PathAcceptance.AbsoluteInsideRoot);
+  const refuse = (why: string | undefined): never => error(
+    `--${flag}-file could not be read: ${formatDiagnosticToken(filePath)}${why ? ` (${why})` : ''}`,
+    ERROR_REASON.USAGE,
+  );
 
+  let content: string | null;
   try {
-    return fs.readFileSync(contained, 'utf-8').trimEnd();
-  } catch {
-    throw new Error(`${label} file not found: ${filePath}`);
+    content = readSmallRegularFile(path.resolve(cwd, filePath), TEXT_FILE_MAX_BYTES);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'EFBIG') return refuse(`larger than ${TEXT_FILE_MAX_BYTES} bytes`);
+    if (code === 'EISDIR' || code === 'ENXIO') return refuse('not a regular file');
+    return refuse(code);
   }
+  if (content === null) return refuse('ENOENT');
+  return content.trimEnd();
 }
 
 function cmdStatePatch(cwd: string, patches: Record<string, string>, raw: boolean): void {
@@ -1581,21 +1617,19 @@ function cmdStateUpdateProgress(cwd: string, raw: boolean): void {
 
 function cmdStateAddDecision(cwd: string, options: StateAddDecisionOptions, raw: boolean): void {
   const statePath = planningPaths(cwd).state;
-  if (!fs.existsSync(statePath)) { output({ error: 'STATE.md not found' }, raw, undefined); return; }
+  // #4926: every refusal from this verb goes through the fault path (non-zero
+  // exit), so a caller gating on `$?` never reads success while nothing was written.
+  if (!fs.existsSync(statePath)) return error('STATE.md not found', ERROR_REASON.USAGE);
 
   const { phase, summary, summary_file, rationale, rationale_file } = options;
-  let summaryText: string | undefined = undefined;
-  let rationaleText = '';
+  const summaryText = readTextArgOrFile(cwd, summary, summary_file, 'summary');
+  // The rationale is optional: blank, inline or file, means "no rationale".
+  const rationaleInput = readTextArgOrFile(cwd, rationale || '', rationale_file, 'rationale') || '';
+  const rationaleText = rationaleInput.trim() ? rationaleInput : '';
 
-  try {
-    summaryText = readTextArgOrFile(cwd, summary, summary_file, 'summary');
-    rationaleText = readTextArgOrFile(cwd, rationale || '', rationale_file, 'rationale') || '';
-  } catch (err) {
-    output({ added: false, reason: (err as Error).message }, raw, 'false');
-    return;
-  }
-
-  if (!summaryText) { output({ error: 'summary required' }, raw, undefined); return; }
+  // A blank inline value is refused the same as a blank file (the file form is
+  // trimEnd()ed by readTextArgOrFile, the inline form is not).
+  if (!summaryText || !summaryText.trim()) return error('summary required — pass a non-blank --summary or --summary-file', ERROR_REASON.USAGE);
 
   // #3231/#3481: `--phase` omitted → resolve from the STATE.md being written, via
   // the canonical ladder `state prune` uses. A decision entry is a permanent
@@ -1666,18 +1700,13 @@ function cmdStateAddDecision(cwd: string, options: StateAddDecisionOptions, raw:
 
 function cmdStateAddBlocker(cwd: string, text: string | StateAddBlockerOptions, raw: boolean): void {
   const statePath = planningPaths(cwd).state;
-  if (!fs.existsSync(statePath)) { output({ error: 'STATE.md not found' }, raw, undefined); return; }
+  // #4926: every refusal from this verb goes through the fault path (non-zero
+  // exit), so a caller gating on `$?` never reads success while nothing was written.
+  if (!fs.existsSync(statePath)) return error('STATE.md not found', ERROR_REASON.USAGE);
   const blockerOptions: StateAddBlockerOptions = typeof text === 'object' && text !== null ? text : { text: text };
-  let blockerText: string | undefined = undefined;
+  const blockerText = readTextArgOrFile(cwd, blockerOptions.text, blockerOptions.text_file, 'text');
 
-  try {
-    blockerText = readTextArgOrFile(cwd, blockerOptions.text, blockerOptions.text_file, 'blocker');
-  } catch (err) {
-    output({ added: false, reason: (err as Error).message }, raw, 'false');
-    return;
-  }
-
-  if (!blockerText) { output({ error: 'text required' }, raw, undefined); return; }
+  if (!blockerText || !blockerText.trim()) return error('text required — pass a non-blank --text or --text-file', ERROR_REASON.USAGE);
 
   const entry = `- ${blockerText}`;
   let _added = false;
@@ -1732,19 +1761,15 @@ function cmdStateAddBlocker(cwd: string, text: string | StateAddBlockerOptions, 
 
 function cmdStateAddRoadmapEvolution(cwd: string, options: StateAddRoadmapEvolutionOptions, raw: boolean): void {
   const statePath = planningPaths(cwd).state;
-  if (!fs.existsSync(statePath)) { output({ error: 'STATE.md not found' }, raw, undefined); return; }
+  // #4926: every refusal from this verb goes through the fault path (non-zero
+  // exit), so a caller gating on `$?` never reads success while nothing was written.
+  if (!fs.existsSync(statePath)) return error('STATE.md not found', ERROR_REASON.USAGE);
 
   const { phase, action, after, note, note_file, urgent } = options;
-  let noteText: string | undefined = undefined;
-  try {
-    noteText = readTextArgOrFile(cwd, note, note_file, 'note');
-  } catch (err) {
-    output({ added: false, reason: (err as Error).message }, raw, 'false');
-    return;
-  }
+  const noteText = readTextArgOrFile(cwd, note, note_file, 'note');
   // Reject missing / empty / whitespace-only notes — an evolution entry with no
   // narrative is meaningless and would corrupt the section with a dangling bullet.
-  if (!noteText || !noteText.trim()) { output({ error: 'note required' }, raw, undefined); return; }
+  if (!noteText || !noteText.trim()) return error('note required — pass a non-blank --note or --note-file', ERROR_REASON.USAGE);
   // Flatten line breaks so the entry is always a single Markdown bullet. The
   // dedupe + rendering contract is line-oriented; a multiline --note-file would
   // otherwise spill continuation lines outside the bullet and defeat dedupe.
