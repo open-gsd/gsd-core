@@ -6,4 +6,23 @@
 
 _To add your capability, see the [registry README](./README.md)._
 
-_No entries yet — be the first: see [README](./README.md)._
+| Name | What it is | Latest release | GSD compat | Discussion |
+|---|---|---|---|---|
+| [SOTA Numerics](https://github.com/davdittrich/sota-numerics) | Advisory steering across the plan, execute, verify and ship lifecycle toward state-of-the-art numerics: internally consistent, project-consistent, unambiguous, complete, efficient, quiet-running, agent-facing code. Adds advisory fragments at plan:pre, execute:wave:pre, execute:wave:post and ship:pre, plus one blocking plan:post gate that requires an Alternatives Considered section with cited, dated alternatives and a Decided by line in every plan. | ![release](https://img.shields.io/github/v/release/davdittrich/sota-numerics?sort=semver&include_prereleases) | `>=1.16.0` | [discuss](https://github.com/open-gsd/gsd-core/discussions/5303) |
+
+## SOTA Numerics
+- **Repository:** https://github.com/davdittrich/sota-numerics — [latest release](https://github.com/davdittrich/sota-numerics/releases/latest)
+- **What it is:** Advisory steering across the plan, execute, verify and ship lifecycle toward state-of-the-art numerics: internally consistent, project-consistent, unambiguous, complete, efficient, quiet-running, agent-facing code. Adds advisory fragments at plan:pre, execute:wave:pre, execute:wave:post and ship:pre, plus one blocking plan:post gate that requires an Alternatives Considered section with cited, dated alternatives and a Decided by line in every plan.
+- **Author:** Dennis A. V. Dittrich
+- **Every interaction with GSD:** Loop Extension Points: plan:pre, plan:post, execute:wave:pre, execute:wave:post, ship:pre; hook kinds: contribution, gate; configKeys: sota-numerics.enabled; runtimeCompat: all
+- **Install:**
+```sh
+gsd capability install https://github.com/davdittrich/sota-numerics.git#v0.2.3
+```
+- **Uninstall:**
+```sh
+gsd capability remove sota-numerics
+```
+- **GSD compatibility:** `>=1.16.0`
+- **License:** MIT
+- **Discussion / ranking:** https://github.com/open-gsd/gsd-core/discussions/5303
