@@ -412,7 +412,7 @@ describe('#5143 every shipped statement that reads the typed text is injection-s
 
   // Grow a statement from a use line until bash accepts it as complete syntax.
   function statementFrom(lines, start) {
-    for (let end = start; end < Math.min(lines.length, start + 14); end++) {
+    for (let end = start; end < Math.min(lines.length, start + 60); end++) {
       const candidate = lines.slice(start, end + 1).join('\n');
       try {
         execFileSync('bash', ['--noprofile', '--norc', '-n'], { input: candidate, stdio: ['pipe', 'pipe', 'pipe'], timeout: PROBE_TIMEOUT_MS });

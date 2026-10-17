@@ -122,8 +122,12 @@ path regardless of `CHUNKED_PARALLEL` — there is nothing to batch.
    plans are overwritten, not skipped (#2762). Unchanged from before this change, applied per entry
    before dispatch rather than immediately before each individual spawn:
    ```bash
+GSD_ARGS_FILE=$(mktemp); cat > "$GSD_ARGS_FILE" <<'GSD_ARGS_END'
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS_TEXT=$(cat "$GSD_ARGS_FILE"); rm -f "$GSD_ARGS_FILE"
    PLAN_FILE="${PHASE_DIR}/${plan_id}-PLAN.md"
-   if [[ -f "$PLAN_FILE" ]] && head -1 "$PLAN_FILE" | grep -q '^---' && [[ "$ARGUMENTS" != *"--reviews"* ]]; then
+   if [[ -f "$PLAN_FILE" ]] && head -1 "$PLAN_FILE" | grep -q '^---' && [[ "$GSD_ARGS_TEXT" != *"--reviews"* ]]; then
      : # resume safety — skip this plan, remove from the batch's runnable set — NOT under --reviews (replan)
    fi
    ```

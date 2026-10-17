@@ -156,8 +156,12 @@ Rules:
 Collect phase artifacts for the review prompt:
 
 ```bash
-PHASE_ARG=$(echo "$ARGUMENTS" | sed -nE 's/.*--phase[[:space:]]+([A-Za-z0-9._-]+).*/\1/p')
-GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+GSD_ARGS_FILE=$(mktemp); cat > "$GSD_ARGS_FILE" <<'GSD_ARGS_END'
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS_TEXT=$(cat "$GSD_ARGS_FILE"); rm -f "$GSD_ARGS_FILE"
+PHASE_ARG=$(echo "$GSD_ARGS_TEXT" | sed -nE 's/.*--phase[[:space:]]+([A-Za-z0-9._-]+).*/\1/p')
+GSD_WS=$(echo " $GSD_ARGS_TEXT" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 INIT=$(gsd_run query init.review ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_ARG}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 

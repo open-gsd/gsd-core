@@ -45,7 +45,11 @@ Load execution context (paths only to minimize orchestrator context):
 @~/.claude/gsd-core/references/gsd-run-resolver.md
 
 ```bash
-GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+GSD_ARGS_FILE=$(mktemp); cat > "$GSD_ARGS_FILE" <<'GSD_ARGS_END'
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS_TEXT=$(cat "$GSD_ARGS_FILE"); rm -f "$GSD_ARGS_FILE"
+GSD_WS=$(echo " $GSD_ARGS_TEXT" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 INIT=$(gsd_run query init.execute-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
