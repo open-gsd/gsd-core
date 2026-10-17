@@ -2287,6 +2287,60 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
       });
     }
   });
+
+  // Uninstall removes GSD's files and only then rewrites settings.json, so it
+  // checks a symlinked settings.json before the first removal. A refusal at
+  // the end would leave settings entries pointing at hooks already deleted.
+  describe('uninstall', () => {
+    for (const optIn of [false, true]) {
+      test(optIn
+        ? 'with GSD_ALLOW_SYMLINKED_DEST=1 uninstall cleans the link target and the link survives'
+        : 'without GSD_ALLOW_SYMLINKED_DEST uninstall refuses before removing any GSD file', (t) => {
+        const root = createTempDir('gsd-5037-uninstall-');
+        t.after(() => cleanup(root));
+        const claudeDir = path.join(root, '.claude');
+        const settingsPath = path.join(claudeDir, 'settings.json');
+        fs.mkdirSync(claudeDir, { recursive: true });
+        fs.writeFileSync(settingsPath, JSON.stringify(USER_SETTINGS, null, 2) + '\n');
+
+        const installed = runInstaller(root, ['--claude', '--global', '--config-dir', claudeDir], { optIn: false });
+        assert.strictEqual(installed.exitCode, 0, `setup install exited ${installed.exitCode}\n${installed.stdout}\n${installed.stderr}`);
+        const gsdCoreDir = path.join(claudeDir, 'gsd-core');
+        assert.ok(fs.existsSync(gsdCoreDir), 'setup: the install must have created gsd-core/');
+
+        // Move the installed settings.json into a dotfiles dir and link it back.
+        const installedSettings = fs.readFileSync(settingsPath, 'utf8');
+        fs.unlinkSync(settingsPath);
+        const targetPath = linkSettings(root, settingsPath, installedSettings);
+        if (!targetPath) {
+          t.skip('symlink creation unsupported on this platform/privilege');
+          return;
+        }
+        assert.ok(hasGsdCheckUpdateHook(JSON.parse(installedSettings)), 'setup: the link target must hold GSD hooks');
+
+        const result = runInstaller(root, ['--claude', '--global', '--uninstall', '--config-dir', claudeDir], { optIn });
+
+        assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+        assert.strictEqual(fs.readlinkSync(settingsPath), targetPath, 'the link must still point at the same target');
+        if (optIn) {
+          assert.strictEqual(result.exitCode, 0, `uninstall exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`);
+          assert.strictEqual(fs.existsSync(gsdCoreDir), false, 'uninstall must remove gsd-core/');
+          const after = JSON.parse(fs.readFileSync(targetPath, 'utf8'));
+          assert.deepStrictEqual(after.env, USER_SETTINGS.env, 'user settings must survive in the link target');
+          assert.strictEqual(hasGsdCheckUpdateHook(after), false, 'GSD hooks must be removed from the link target');
+        } else {
+          // 1, not merely non-zero: a timed-out or killed uninstall reports null.
+          assert.strictEqual(result.exitCode, 1,
+            `a refused settings write must fail the uninstall\n${result.stdout}\n${result.stderr}`);
+          assert.match(result.stderr, SETTINGS_SYMLINK_REFUSAL,
+            'the uninstall must fail on the settings symlink refusal, not on some earlier error');
+          assert.ok(fs.existsSync(gsdCoreDir), 'no GSD file may be removed before the refusal');
+          assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), installedSettings,
+            'the link target must be byte-for-byte unchanged');
+        }
+      });
+    }
+  });
 });
 
 // ─── #1874 F18 — ~/.gsd/defaults.json is machine-global: lock it, write it once ───
