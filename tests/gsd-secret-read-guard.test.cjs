@@ -1078,3 +1078,499 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
     assertAllowed(runHook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: 'notes-claude-agent-gsd-debugger.md' } }), 'read');
   });
 });
+
+describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
+  // String.raw keeps every backslash exactly as the shell would receive it.
+  const R = String.raw;
+
+  describe("ANSI-C reading (bash, zsh): `\\'` does not close a $'…' span", () => {
+    // The plain reading loses everything after the span to a quote that never
+    // closes, so each of these is blocked only if the span ends where bash
+    // ends it — in tokenize, in the `$( )` scanner, and in the heredoc tag.
+    const cases = [
+      [R`echo $'x\'y'; cat .env`, '.env'],
+      [R`git commit -m $'it\'s' && cat .env`, '.env'],
+      [R`x=$(printf $'\''); cat .env`, '.env'],
+      ['cat <<$\'EOF\'\nhi\nEOF\ncat .env', '.env'],
+      ['cat <<$\'E\\x4fF\'\nhi\nEOF\ncat .env', '.env'], // the tag is its decoded value
+      ['y=$(cat <<$\'E\'\nbody\nE\n); cat .env', '.env'],
+      ['echo "$(cat <<$\'E\\\'F\'\nbody\nE\'F\n)"; cat .env', '.env'], // the tag inside "$( )" is `E'F`
+      ['echo "$(cat <<A$\'\\\'B\'C\nbody\nA\'BC\n)"; cat .env', '.env'], // a span in the middle of the tag word
+      ['cat <<A$\'\\x42\'C\nhi\nABC\ncat .env', '.env'],
+      ['echo "$(cat <<\'A\'$\'\\\'B\'Z\nbody\nA\'BZ\n)"; cat .env', '.env'], // a plain quote, then a span, in one tag word
+      ['echo "$(cat <<"A\\\nB"$\'\\\'C\'\nbody\nAB\'C\n)"; cat .env', '.env'], // a line continuation in a double-quoted tag part (bash drops it: tag is `AB\'C`)
+      [R`echo "$(printf $'\'')"; cat .env`, '.env'],
+      [R`diff <(printf $'\'') old; cat .env`, '.env'],
+      [R`echo $$$'x\'y'; cat .env`, '.env'], // `$$` is the PID; the third `$` opens the span
+      [R`echo $$'x\'; cat .env`, '.env'], // `$$'x\'` is the PID and a plain quote that ends at `\'`
+    ];
+    for (const [cmd, expectedPath] of cases) {
+      test(`blocks ${JSON.stringify(cmd)}`, () => {
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: expectedPath });
+      });
+    }
+  });
+
+  describe("a $'…' word is its decoded value (the block names the value bash would open)", () => {
+    // Expected values are what bash 5.2 prints for the same word.
+    const cases = [
+      [R`cat $'.e\x6ev'`, '.env'],
+      [R`cat $'.\145nv'`, '.env'],
+      [R`cat $'.env'`, '.env'],
+      [R`cat $'\U0000002eenv'`, '.env'],
+      [R`cat $'\x{2e}env'`, '.env'],
+      [R`cat $'.env\x2eproduction'`, '.env.production'],
+      [R`cat cfg/$'.e'"n"'v'`, 'cfg/.env'],
+      [R`cat $'it\'s/.env'`, "it's/.env"],
+      [R`cat $'a\tb/.env'`, 'a\tb/.env'],
+      [R`cat $'\xc3\xa9/.env'`, 'é/.env'], // bytes, decoded as UTF-8
+      [R`cat $'.env.\xff'`, '.env.\ufffd'], // a byte that is not UTF-8 is read as U+FFFD
+      [R`cat $'x\xc3/.env'`, 'x\ufffd/.env'], // and never swallows the byte after it
+      [R`cat $'\d/.env'`, R`\d/.env`], // an unknown escape keeps its backslash
+      [R`cat $'.env\0ignored'`, '.env'], // a NUL ends the value
+      [R`cat < $'.e\x6ev'`, '.env'],
+      [R`bash -c $'cat .e\x6ev'`, '.env'],
+      [R`echo $'cat .e\x6ev' | bash`, '.env'],
+      [R`cat $".env"`, '.env'], // bash reads $"…" as "…"
+    ];
+    for (const [cmd, expectedPath] of cases) {
+      test(`blocks ${JSON.stringify(cmd)}`, () => {
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: expectedPath });
+      });
+    }
+  });
+
+  describe('plain reading (dash): `$` is a literal, so each reading hides what the other one runs', () => {
+    // bash and zsh print this as one word; dash, the `sh` of Debian and
+    // Ubuntu, closes the quote at `\'` and runs `cat .env`.
+    const dataInBashReadInDash = R`echo $'x\'; cat .env; echo '\'`;
+
+    test('a command that is data under bash and a read under dash stays blocked', () => {
+      assertBlocked(runHook(bash(dataInBashReadInDash)), dataInBashReadInDash, { tool: 'Bash', path: '.env' });
+    });
+
+    test('the same text as an `sh -c` body is blocked', () => {
+      const cmd = R`sh -c "echo \$'x\\'; cat .env; echo '\\'"`;
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+
+    test("stated cost: a secret name after an escaped quote in a $'…' message stays blocked, as before #5255", () => {
+      // A message under bash; the plain reading sees `.env` as a git operand.
+      const cmd = R`git commit -m $'don\'t cat .env'`;
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  });
+
+  describe('ordinary dollar-quoted words stay allowed', () => {
+    const cases = [
+      R`echo $$'x\'; ls`,
+      R`echo $'hello\tworld'`,
+      R`git commit -m $'it\'s done'`,
+      R`printf '%s\n' $'a\nb' | sort`,
+      R`grep -E 'FAIL$' log.txt | head -20`, // a plain quote that ends in `$`
+      R`IFS=$'\n' read -r first rest`,
+      R`read -r -d $'\0' name < list.txt`,
+      R`echo $'a\0b'`,
+      R`echo $'\xc3\xa9t\xc3\xa9'`,
+      R`grep -P $'\d+\s' notes.txt`,
+      R`echo $"hello"; ls`,
+      'cat <<$\'EOF\'\n.env is only mentioned here\nEOF',
+      // A `\0` span whose neither reading (bash full, zsh truncated) names a
+      // secret stays allowed — the word continuing after the NUL is not itself
+      // the test (#5255 review round 2): `cat $'a\0b'c` is bash `ac`, zsh `a`.
+      R`cat $'a\0b'c`,
+      R`echo $'a\0b'$(printf c)`,
+      R`echo $'a\0'<(printf b)`,
+      R`cat $'x\0'.env`, // bash `x.env`, zsh `x` — neither is a secret name
+      // Line continuations: bash strips `\<newline>` before tokenizing, so
+      // these are ordinary commands, not denials (#5255 review round 4).
+      'echo $\\\n$\'x\\\'; ls', // bash: a PID, a plain-quoted `x\`, then `ls`
+      'echo $\'a\\0\'\\\n; ls', // the continuation adds nothing; `echo a; ls`
+    ];
+    for (const cmd of cases) {
+      test(`allows ${JSON.stringify(cmd)}`, () => {
+        assertAllowed(runHook(bash(cmd)), cmd);
+      });
+    }
+  });
+
+  describe("a $'…' word with no value to check is denied, never waved through", () => {
+    const unterminated = [
+      R`echo $'abc`,
+      R`echo $'abc\'`,
+      R`x=$(echo $'abc); ls`,
+      'cat <<$\'EOF\nhi\nEOF',
+    ];
+    for (const cmd of unterminated) {
+      test(`denies ${JSON.stringify(cmd)} as ansi-c-unterminated`, () => {
+        assertBlocked(runHook(bash(cmd)), cmd, { code: 'ansi-c-unterminated', tool: 'Bash' });
+      });
+    }
+
+    const undecodable = [
+      R`echo $'\ud800'`, // a surrogate: zsh refuses the line
+      R`echo $'\U00110000'`, // past the last code point: zsh refuses the line
+      "cat $'.\u0000env'", // a literal NUL, not an escape: bash drops it and reads `.env`
+    ];
+    for (const cmd of undecodable) {
+      test(`denies ${JSON.stringify(cmd)} as ansi-c-undecodable`, () => {
+        assertBlocked(runHook(bash(cmd)), cmd, { code: 'ansi-c-undecodable', tool: 'Bash' });
+      });
+    }
+
+    // Bytes that are not UTF-8 are a value like any other: bash hands them to
+    // the command, and no protected name holds one.
+    const notUtf8 = [
+      R`echo $'\xff'; ls`,
+      R`echo $'\xc3'; ls`, // a truncated UTF-8 sequence
+      R`printf $'\x89PNG\r\n' > a.png`,
+    ];
+    for (const cmd of notUtf8) {
+      test(`allows ${JSON.stringify(cmd)}`, () => {
+        assertAllowed(runHook(bash(cmd)), cmd);
+      });
+    }
+
+    // A `\0` escape ends the span VALUE but not the word: bash keeps reading the
+    // word, zsh hands a command the argument cut at the NUL. The bash and zsh
+    // readings each check their own value, so a secret under EITHER is a read.
+    const nulTruncation = [
+      [R`cat $'.env\0'x`, '.env'], // zsh reads `.env`; bash reads `.envx`
+      [R`cat $'.env\0'`, '.env'], // both read `.env`
+      ["cat $'.env\\0'\u00a0", '.env'], // a no-break space continues the word; zsh still reads `.env`
+      [R`cat $'.e\x6ev\0'x`, '.env'], // escape-spelled, then NUL-truncated
+      [R`cat dir/$'.env\0'x`, 'dir/.env'], // bash `dir/.envx`, zsh `dir/.env` — the zsh value is the secret
+    ];
+    for (const [cmd, path] of nulTruncation) {
+      test(`blocks ${JSON.stringify(cmd)} on the NUL-truncated reading`, () => {
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path });
+      });
+    }
+
+    test('a megabyte of `$` is read once, not once per character', () => {
+      // A run rescanned from every position is quadratic, and a hook that
+      // runs past its host timeout does not block.
+      const run = '$'.repeat(1024 * 1024 - 'echo ; ls'.length);
+      assertAllowed(runHook(bash(`echo ${run}; ls`)), '1 MiB run of $');
+      const read = '$'.repeat(1024 * 1024 - 'echo ; cat .env'.length);
+      assertBlocked(runHook(bash(`echo ${read}; cat .env`)), '1 MiB run of $, then a read', { tool: 'Bash', path: '.env' });
+    });
+
+    test("an error in the ANSI-C reading does not cost the plain reading's verdict", () => {
+      // Decoded, this body is 12,000 nested `"$( )"`, which overflows the
+      // stack in the `$( )` scanner. Taken literally its quotes stay escaped
+      // and the read after it is seen, as it was before #5255.
+      const depth = 12000;
+      const cmd = "bash -c $'" + R`echo \"$(`.repeat(depth) + ':' + R`)\"`.repeat(depth) + "'; cat .env";
+      assertBlocked(runHook(bash(cmd)), `${depth} nested "$( )" in a $'…' body, then a read`, { tool: 'Bash', path: '.env' });
+    });
+
+    test('the block names the unreadable word', () => {
+      const cmd = R`ls; echo $'abc`;
+      assertBlocked(runHook(bash(cmd)), cmd, { code: 'ansi-c-unterminated', tool: 'Bash', path: R`$'abc` });
+    });
+
+    test('a secret read in the same command is reported as the secret read', () => {
+      const cmd = R`cat .env; echo $'abc`;
+      assertBlocked(runHook(bash(cmd)), cmd, { code: 'secret-read', tool: 'Bash', path: '.env' });
+    });
+  });
+
+  describe('a run of `$` holding line continuations reads as bash joins it (#5255 review round 6, Blocker 1)', () => {
+    // bash removes `\<newline>` before it tokenizes, so `cat $$\<newline> .env`
+    // is `cat $$ .env`. A scanner that resumes on the continuation's newline
+    // reads it as a command separator and `.env` as a bare command word.
+    const cases = [
+      'cat $$\\\n .env',
+      'cat $\\\n$\\\n .env',
+      'cat$$\\\n .env.local', // denied before #5255 (the plain reading), and still
+      'diff <(cat $$\\\n .env) x',
+      'echo "$(cat $$\\\n .env)"',
+      // `$'x\'y'` hides the rest of the line from the plain reading, so these
+      // are denied only if the ANSI-C reading joins the run as bash does.
+      'echo $\'x\\\'y\'; cat $$\\\n .env',
+      'echo $\'x\\\'y\'; echo "$(cat $$\\\n .env)"',
+      'echo $\'x\\\'y\'; cat $\\\n$\\\n$ .env',
+    ];
+    for (const cmd of cases) {
+      test(`blocks ${JSON.stringify(cmd)}`, () => {
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: cmd.includes('.env.local') ? '.env.local' : '.env' });
+      });
+    }
+
+    test('property: any mix of `$` and continuations before a read leaves the read visible', () => {
+      const run = fc.array(fc.constantFrom('$', '\\\n'), { minLength: 1, maxLength: 8 })
+        .filter((parts) => parts.includes('$'))
+        .map((parts) => parts.join(''));
+      const forms = [
+        (r) => `cat ${r} .env`,
+        (r) => `echo "$(cat ${r} .env)"`,
+        (r) => `echo $'x\\'y'; cat ${r} .env`,
+        (r) => `echo $'x\\'y'; diff <(cat ${r} .env) x`,
+      ];
+      fc.assert(fc.property(run, fc.constantFrom(...forms), (r, form) => {
+        const cmd = form(r);
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      }), { seed: 5285, numRuns: 60 });
+    });
+  });
+
+  describe('boundaries (#5255 review round 6, Minor 5)', () => {
+    const LIMIT = 1024 * 1024;
+    // A command of exactly `len` characters: `prefix`, a run of `$`, `suffix`.
+    const sized = (prefix, suffix, len) => `${prefix}${'$'.repeat(len - prefix.length - suffix.length)}${suffix}`;
+
+    for (const [label, prefix] of [['a bare run of `$`', 'echo '], ["a run of `$` after a $'…' word (every reading)", "echo $'x' "]]) {
+      test(`${label}: LIMIT - 1 and LIMIT are scanned, LIMIT + 1 is command-too-large`, () => {
+        for (const len of [LIMIT - 1, LIMIT]) {
+          assertAllowed(runHook(bash(sized(prefix, '; ls', len))), `${label}, ${len} chars`);
+          assertBlocked(runHook(bash(sized(prefix, '; cat .env', len))), `${label}, ${len} chars, then a read`, { tool: 'Bash', path: '.env' });
+        }
+        assertBlocked(runHook(bash(sized(prefix, '; ls', LIMIT + 1))), `${label}, LIMIT + 1`, { code: 'command-too-large', tool: 'Bash' });
+      });
+    }
+
+    // MAX_NESTING_DEPTH is 3: a read inside three nested `"$( )"` is scanned,
+    // a fourth level is not — the same cutoff as the plain reading has.
+    const nest = (inner, n) => (n === 0 ? inner : nest(`echo "$(${inner})"`, n - 1));
+    for (const inner of [R`cat $'.e\x6ev'`, R`echo $'x\'y'; cat .env`, R`cat $'.env.\local'`]) {
+      for (const n of [2, 3]) {
+        test(`blocks ${JSON.stringify(inner)} at nesting depth ${n}`, () => {
+          const cmd = nest(inner, n);
+          assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash' });
+        });
+      }
+      test(`pinned: ${JSON.stringify(inner)} at nesting depth 4 is past MAX_NESTING_DEPTH, as \`cat .env\` is`, () => {
+        const cmd = nest(inner, 4);
+        assertAllowed(runHook(bash(cmd)), cmd);
+        assertAllowed(runHook(bash(nest('cat .env', 4))), 'plain read at depth 4');
+      });
+    }
+  });
+
+  describe("a $'…' span inside ${…} (#5255 review round 6, Major 1)", () => {
+    // `${…}` used to end at its first `}`, which here sits inside the span, so
+    // the rest of the line was read as part of the word.
+    const blocks = [
+      "echo ${x:-$'}'}; cat .env",
+      "echo ${x//$'}'/y}; cat .env",
+      "echo ${x:-$'a}b\\'c'}; cat .env",
+      "y=$(echo ${x:-$'}'}; cat .env)",
+    ];
+    for (const cmd of blocks) {
+      test(`blocks ${JSON.stringify(cmd)}`, () => {
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      });
+    }
+
+    test("allows ${x:-$'}'} followed by an ordinary command", () => {
+      const cmd = "echo ${x:-$'}'}; ls";
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+
+    test('accepted hole, pinned: the text inside ${…} is not scanned (out of scope in the #5255 brief)', () => {
+      // bash reads `.env` here when x is unset; so does `cat ${x:-.env}`,
+      // allowed before #5255 too. The span END is read; the content is not.
+      // A change that starts scanning ${…} content should flip this pin.
+      const cmd = "cat ${x:-$'.e\\x6ev'}";
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  });
+
+  describe("parity: tokenize, the $( ) scanner and the heredoc-tag reader end a $'…' span at the same quote", () => {
+    // Span text is built from pieces whose bash value is known, with exactly
+    // one `\'` among them: the plain reading then always loses the rest of the
+    // command to an open quote, so the read on the last line is seen only if
+    // the scanner under test ends the span at bash's closing quote. The `$( )`
+    // forms sit inside double quotes because a scanner that overran there
+    // would take the closing `"` with it and hide the last line.
+    const PARITY_RUNS = { seed: 5255, numRuns: 25 };
+    const piece = fc.constantFrom(
+      ['a', 'a'], ['Z', 'Z'], ['7', '7'], [' ', ' '], [';', ';'], ['|', '|'], ['(', '('], [')', ')'],
+      ['"', '"'], ['#', '#'], ['<', '<'], ['$', '$'], [R`\\`, '\\'], [R`\x41`, 'A'], [R`\"`, '"'], [R`\t`, '\t'],
+    );
+    const span = fc.tuple(fc.array(piece, { maxLength: 6 }), fc.array(piece, { maxLength: 6 })).map(([before, after]) => {
+      const pieces = [...before, [R`\'`, "'"], ...after];
+      return { raw: pieces.map((p) => p[0]).join(''), value: pieces.map((p) => p[1]).join('') };
+    });
+    const forms = [
+      ['a word', ({ raw }) => `echo $'${raw}'\ncat .env`],
+      ['a word inside "$( )"', ({ raw }) => `echo "$(echo $'${raw}')"\ncat .env`],
+      ['a top-level heredoc tag', ({ raw, value }) => `cat <<$'${raw}'\nbody\n${value}\ncat .env`],
+      ['a heredoc tag inside "$( )"', ({ raw, value }) => `echo "$(cat <<$'${raw}'\nbody\n${value}\n)"\ncat .env`],
+      ['the middle of a heredoc tag inside "$( )"', ({ raw, value }) => `echo "$(cat <<A$'${raw}'Z\nbody\nA${value}Z\n)"\ncat .env`],
+      ['a heredoc tag after a plain-quoted part inside "$( )"', ({ raw, value }) => `echo "$(cat <<'A'$'${raw}'Z\nbody\nA${value}Z\n)"\ncat .env`],
+    ];
+    for (const [label, build] of forms) {
+      test(`property: the read after a span used as ${label} is blocked`, () => {
+        fc.assert(fc.property(span, (s) => {
+          const cmd = build(s);
+          assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+        }), PARITY_RUNS);
+      });
+    }
+  });
+});
+
+describe("regressions: #5255 — zsh's reading of $'…' (review round 6, Major 2)", () => {
+  // zsh is the Bash tool's shell on macOS, and it decodes `$'…'` differently
+  // from bash (zsh 5.9 getkeystring): an unknown escape drops its backslash,
+  // a bare `\x` / `\u` / `\U` is a NUL, `\C-` / `\M-` modify the next byte,
+  // and heredoc tags are decoded too. Each row reads its path under zsh only.
+  // Every row was run in zsh 5.9 (Alpine 3, 2026-10-15): `cat` printed the
+  // file, including the trailing-modifier rows, which the decoder model alone
+  // had derived.
+  const R = String.raw;
+  const zshOnly = [
+    [R`cat $'.env\u'`, '.env'],
+    [R`cat $'.env\x'`, '.env'],
+    [R`cat $'.env\U'`, '.env'],
+    [R`cat $'.env\x{'x`, '.env'], // `\x{` is a NUL to zsh; bash reads `.env\x{x`
+    [R`cat $'.env\C-@'`, '.env'],
+    [R`cat $'.env\M-'`, '.env'], // a trailing `\M-` has no byte to modify; zsh drops it
+    [R`cat $'.env\C-'`, '.env'], // the same for `\C-`
+    [R`cat $'.env\M'`, '.env'], // and without the dash
+    [R`cat $'.env\C'`, '.env'],
+    [R`cat $'.env\M-\C-'`, '.env'], // stacked modifiers with no byte after them
+    [R`cat $'.env\M\C-'`, '.env'],
+    [R`cat $'.env\C-\M-'`, '.env'],
+    [R`cat $'.env\x{4'`, '.env'], // `\x{` is a NUL to zsh whatever follows; bash reads `.env\x04`
+    [R`cat $'.env\x{41'`, '.env'],
+    [R`cat $'.env.\local'`, '.env.local'], // zsh drops an unknown escape's backslash
+  ];
+  for (const [cmd, path] of zshOnly) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path });
+    });
+  }
+
+  test('a heredoc tag zsh decodes differently ends the heredoc on zsh\'s line', () => {
+    // zsh ends this heredoc at `.E` and runs `cat .env`; bash reads on to `\.E`.
+    const cmd = "cat <<$'\\.E'\nbody\n.E\ncat .env\n\\.E";
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  const allows = [
+    R`echo $'\M-a'; ls`, // a meta byte: not UTF-8 under zsh, decoded lossily, never a denial
+    R`grep -P $'\d+\s' notes.txt`,
+    R`echo $'\c'; ls`,
+    R`printf $'\x 41'`,
+    R`cat $'.e\nv'`, // `.e<newline>v` to both shells
+    'cat <<$\'\\.E\'\nbody\n\\.E\nls', // both shells end at a line neither reads `.env` on
+  ];
+  for (const cmd of allows) {
+    test(`allows ${JSON.stringify(cmd)}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+});
+
+describe("decodeAnsiC against bash 5.2 and zsh 5.9 (in-process; review round 6, Minors 3 and 6)", () => {
+  const R = String.raw;
+  const { decodeAnsiC } = require(HOOK_PATH);
+  const oracle = require('./fixtures/ansi-c-decode-oracle.json');
+  const LOSSY = new TextDecoder('utf-8');
+  // What the hook should read for a span: the bytes the shell handed a child,
+  // decoded lossily (null when the shell refused the line). zsh's value is
+  // compared at its first NUL, where a child's argument ends.
+  const expected = (hex) => (hex === null ? null : LOSSY.decode(Buffer.from(hex, 'hex')));
+  const asChild = (v, shell) => (v !== null && shell === 'zsh' && v.includes('\0') ? v.slice(0, v.indexOf('\0')) : v);
+
+  test(`agrees with the committed oracle on all ${oracle.cases.length} spans, both shells`, () => {
+    const misses = [];
+    for (const [raw, bashHex, zshHex] of oracle.cases) {
+      for (const [shell, hex] of [['bash', bashHex], ['zsh', zshHex]]) {
+        const got = asChild(decodeAnsiC(raw, shell), shell);
+        if (got !== expected(hex)) misses.push(`${shell} ${JSON.stringify(raw)}`);
+      }
+    }
+    assert.deepEqual(misses, []);
+  });
+
+  // Each branch the oracle exercises, named, so a mutant in one fails by name.
+  const branches = [
+    // [raw, bash value, zsh value (before the child's NUL cut)]
+    [R`\cA`, '\x01', 'cA'],
+    [R`\c?`, '\x7f', 'c?'],
+    [R`\c\\`, '\x1c', 'c\\'],
+    [R`\x{2e}`, '.', '\0{2e}'],
+    [R`\x{4142}`, 'B', '\0{4142}'],
+    [R`\x{41zz}`, 'Azz}', '\0{41zz}'],
+    [R`\U0000002e`, '.', '.'],
+    [R`\U`, '\\U', '\0'],
+    [R`\u`, '\\u', '\0'],
+    [R`\x`, '\\x', '\0'],
+    [R`\x 4`, '\\x 4', '\x04'],
+    [R`\x-1`, '\\x-1', '\ufffd'],
+    [R`a\0b`, 'a', 'a\0b'],
+    [R`\0101`, '\x081', '\x081'],
+    [R`\777`, '\ufffd', '\ufffd'],
+    [R`x\xc3/`, 'x\ufffd/', 'x\ufffd/'], // a bad byte never swallows the byte after it
+    // bash writes a surrogate or a value past U+10FFFF in the UTF-8 pattern
+    // (ed a0 80; six bytes for 7fffffff) and nothing from 2^31; zsh refuses all
+    // three. Measured against bash 5.2.21 and zsh 5.9.
+    [R`\ud800`, '\ufffd'.repeat(3), null],
+    [R`\U7fffffff`, '\ufffd'.repeat(6), null],
+    [R`\U80000000`, '', null],
+    [R`\.env`, '\\.env', '.env'],
+    [R`\C-@`, '\\C-@', '\0'],
+    [R`\C-a`, '\\C-a', '\x01'],
+    [R`\M-\C-@`, '\\M-\\C-@', '\ufffd'],
+  ];
+  for (const [raw, bash, zsh] of branches) {
+    test(`${JSON.stringify(raw)} is ${JSON.stringify(bash)} to bash and ${JSON.stringify(zsh)} to zsh`, () => {
+      assert.equal(decodeAnsiC(raw, 'bash'), bash);
+      assert.equal(decodeAnsiC(raw, 'zsh'), zsh);
+    });
+  }
+
+  // A string spelled with escapes both shells read the same way decodes back
+  // to itself, in either shell.
+  const PROPERTY_RUNS = { seed: 5285, numRuns: 2000 };
+  const char = fc.integer({ min: 1, max: 0xffff })
+    .filter((c) => c < 0xd800 || c > 0xdfff)
+    .map((c) => String.fromCharCode(c));
+  const hex = (n, w) => n.toString(16).padStart(w, '0');
+  const spell = (ch, form) => {
+    const cp = ch.codePointAt(0);
+    if (form === 0) return ch === '\\' ? '\\\\' : ch === "'" ? "\\'" : ch;
+    if (form === 1) return `\\u${hex(cp, 4)}`;
+    if (form === 2) return `\\U${hex(cp, 8)}`;
+    if (cp < 0x80 && form === 3) return `\\x${hex(cp, 2)}`;
+    if (cp < 0x80) return `\\${cp.toString(8).padStart(3, '0')}`;
+    return `\\u${hex(cp, 4)}`;
+  };
+
+  test('property: an escape-spelled string decodes to itself in bash and zsh', () => {
+    fc.assert(fc.property(fc.array(fc.tuple(char, fc.integer({ min: 0, max: 4 })), { maxLength: 24 }), (parts) => {
+      const value = parts.map(([ch]) => ch).join('');
+      const raw = parts.map(([ch, form]) => spell(ch, form)).join('');
+      assert.equal(decodeAnsiC(raw, 'bash'), value);
+      assert.equal(decodeAnsiC(raw, 'zsh'), value);
+    }), PROPERTY_RUNS);
+  });
+
+  test('property: text with no backslash and no NUL is its own value in both shells', () => {
+    fc.assert(fc.property(fc.string({ unit: 'grapheme', maxLength: 40 }).filter((s) => !s.includes('\\') && !s.includes('\0')), (s) => {
+      assert.equal(decodeAnsiC(s, 'bash'), s);
+      assert.equal(decodeAnsiC(s, 'zsh'), s);
+    }), PROPERTY_RUNS);
+  });
+});
+
+describe('findSecretRead returns one result shape (#5255 review round 6, Nit 3)', () => {
+  const { findSecretRead } = require(HOOK_PATH);
+  const R = String.raw;
+  for (const [cmd, want] of [
+    ['cat .env', { code: 'secret-read', text: '.env' }],
+    ['cat < .env', { code: 'secret-read', text: '.env' }],
+    [R`cat $'.e\x6ev'`, { code: 'secret-read', text: '.env' }],
+    ['find . -name x | xargs cat .env', { code: 'secret-read', text: '.env' }],
+    [R`echo $'abc`, { code: 'ansi-c-unterminated', text: R`$'abc` }],
+    ['ls', null],
+  ]) {
+    test(`${JSON.stringify(cmd)} -> ${JSON.stringify(want)}`, () => {
+      assert.deepEqual(findSecretRead(cmd, 0), want);
+    });
+  }
+});
