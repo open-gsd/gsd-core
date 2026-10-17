@@ -557,4 +557,5 @@ export = {
   countMatchedSummaries,
   findUnsummarizedPlans,
   findOrphanSummaries,
+  summaryCandidates,
 };

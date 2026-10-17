@@ -192,6 +192,24 @@ Verify the work is ready to ship:
    **When every active gate has been processed without a halt:** continue to the next preflight check.
 </step>
 
+<step name="seal_tdd_review">
+Seal TDD review evidence before push (squash merge keeps only the branch tip). No-op without `type: tdd` plans or when `commit_docs` is false:
+
+```bash
+if [ "$(gsd_run query config-get commit_docs --raw --default true)" != false ]; then
+  gsd_run check tdd.review-checkpoint "${PHASE_NUMBER}" --record --raw >/dev/null 2>&1
+  SEAL="${PHASE_DIR}/TDD-REVIEW-SEAL.json"
+  if [ -f "$SEAL" ] && git check-ignore -q "$SEAL"; then
+    echo "WARNING: $SEAL is gitignored; the squash will not carry it." >&2
+  elif [ -n "$(git status --porcelain -- "$SEAL")" ]; then
+    git add "$SEAL"; git commit -m "docs(${PHASE_NUMBER}): seal TDD review evidence" || { echo "ERROR: TDD seal commit failed" >&2; exit 1; }
+  fi
+fi
+```
+
+Commit fails → stop; do not push.
+</step>
+
 <step name="push_branch">
 Push the current branch to remote:
 

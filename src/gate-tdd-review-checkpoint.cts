@@ -25,12 +25,17 @@
  * Argv after the verb: `<phase>` (a number; an unresolvable phase reports zero plans).
  */
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { gateVerdict, gateUnreadable, gateUsageFailure, GATE_FAILURE_CODE } from './gate-verdict.cjs';
 import type { GateResult } from './gate-verdict.cjs';
 import { resolvePhaseDir } from './gate-phase-context.cjs';
-import { readDirEvidence, readPlanSetEvidence, readTextEvidence } from './gate-evidence.cjs';
-import { resolveEvaluationScope } from './gate-evaluation-scope.cjs';
+import { readDirEvidence, readPlanSetEvidence, readTextEvidence, evidenceFound, evidenceFromError, type Evidence } from './gate-evidence.cjs';
+import { resolveEvaluationScope, extractTaskCommitRefs } from './gate-evaluation-scope.cjs';
+import { execGit } from './shell-command-projection.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- core-utils.cjs is an export= CommonJS module
+import coreUtilsMod = require('./core-utils.cjs');
+const { summaryCandidates } = coreUtilsMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatterMod = require('./frontmatter.cjs');
 const { frontmatterKeyHasValue, extractFrontmatter } = frontmatterMod;
@@ -40,7 +45,7 @@ interface TddPlanRow {
   red: boolean;
   green: boolean;
   refactor: boolean;
-  status: 'Pass' | 'FAIL';
+  status: 'Pass' | 'FAIL' | 'NotEvaluable';
   missing: string[];
   /** Plans whose `feat(...)` commit supplied this plan's GREEN through `depends_on` (#4867). */
   greenFrom?: string[];
@@ -94,15 +99,57 @@ function transitiveDependents(planId: string, dependents: ReadonlyMap<string, re
  * touched at least one path (`pathspecs: ['.']`, as the old `git log -- .` lookup did). An
  * unresolvable scope (git unavailable, an id that is not `<phase>-<plan>`) is "no commits".
  */
-function planCommitKinds(projectDir: string, planId: string): ReadonlySet<string> {
+function planCommitKinds(projectDir: string, planId: string): ReadonlyMap<string, string> {
   const scope = resolveEvaluationScope(projectDir, { kind: 'plan', planId }, { pathspecs: ['.'], commitsOnly: true });
-  const kinds = new Set<string>();
+  const kinds = new Map<string, string>();
   for (const commit of scope.commits) {
     const kind = /^([a-z]+)\(/.exec(commit.subject)?.[1];
-    if (kind) kinds.add(kind);
+    if (kind && !kinds.has(kind)) kinds.set(kind, commit.sha);
   }
   return kinds;
 }
+
+const SEAL_FILE = 'TDD-REVIEW-SEAL.json';
+type SealEntry = { red: string; green: string };
+
+const isSha = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{40}$/.test(v);
+
+/** #5354: per-plan RED/GREEN hashes recorded pre-squash; a malformed or unreadable seal credits nothing. */
+function readSeal(phaseDir: string): Record<string, Partial<SealEntry>> {
+  const text = readTextEvidence(path.join(phaseDir, SEAL_FILE));
+  if (text.kind !== 'found') return {};
+  const parsed = parseSeal(text.value);
+  return parsed.kind === 'found' ? parsed.value : {}; // unreadable seal credits nothing: only ever adds credit
+}
+
+function parseSeal(text: string): Evidence<Record<string, Partial<SealEntry>>> {
+  try {
+    const plans = (JSON.parse(text) as { plans?: unknown } | null)?.plans;
+    return evidenceFound(plans !== null && typeof plans === 'object' ? (plans as Record<string, Partial<SealEntry>>) : {});
+  } catch (err) {
+    return evidenceFromError(err, SEAL_FILE);
+  }
+}
+
+/**
+ * #5354: a plan was squashed away when its SUMMARY names task commits and none is reachable from
+ * HEAD (a missing object counts as unreachable). No SUMMARY, no listed hash, or any reachable hash
+ * is an ordinary failure.
+ */
+function summaryCommitsAllUnreachable(projectDir: string, phaseDir: string, planPath: string): boolean {
+  const rel = path.relative(phaseDir, planPath).split(path.sep).join('/');
+  for (const candidate of summaryCandidates(rel)) {
+    const summary = readTextEvidence(path.join(phaseDir, candidate));
+    if (summary.kind !== 'found') continue;
+    const refs = extractTaskCommitRefs(summary.value);
+    return refs.length > 0 && refs.every((id) => {
+      const r = execGit(['merge-base', '--is-ancestor', id, 'HEAD'], { cwd: projectDir });
+      return !r.timedOut && (r.exitCode === 1 || r.exitCode === 128);
+    });
+  }
+  return false;
+}
+
 
 interface UnreadableSource {
   source: string;
@@ -194,25 +241,38 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
 
   // For each TDD plan, extract the plan ID (e.g. "01-02-PLAN.md" → "01-02") and check git log
   const rows: TddPlanRow[] = [];
+  const seal = phaseDir ? readSeal(phaseDir) : {};
+  const evidence: Record<string, SealEntry> = {};
   for (const planPath of tddPlanFiles) {
     const planId = path.basename(planPath, '-PLAN.md');
     const kinds = planCommitKinds(projectDir, planId);
-    const red = kinds.has('test');
+    const sealed = Object.hasOwn(seal, planId) && seal[planId]?.red !== seal[planId]?.green ? seal[planId] : {};
+    const redSha = kinds.get('test') ?? (isSha(sealed.red) ? sealed.red : undefined);
+    const red = redSha !== undefined;
     const refactor = kinds.has('refactor');
 
     // #4867: a RED-only probe plan is satisfied by the GREEN of a plan that (transitively) declares
     // `depends_on` it. Only a real `feat(...)` commit under such a plan counts; the plan's own RED is
     // still required, and a plan nothing depends on is scored on its own commits alone.
     const ownGreen = kinds.has('feat');
+    let greenSha = kinds.get('feat');
     const greenFrom = ownGreen
       ? []
-      : transitiveDependents(planId, dependents).filter((dependentId) => planCommitKinds(projectDir, dependentId).has('feat'));
-    const green = ownGreen || greenFrom.length > 0;
+      : transitiveDependents(planId, dependents).filter((dependentId) => {
+        const sha = planCommitKinds(projectDir, dependentId).get('feat');
+        greenSha ??= sha;
+        return sha !== undefined;
+      });
+    greenSha ??= isSha(sealed.green) ? sealed.green : undefined;
+    const green = greenSha !== undefined;
 
     const missing: string[] = [];
     if (!red) missing.push('RED');
     if (!green) missing.push('GREEN');
-    const status: 'Pass' | 'FAIL' = missing.length === 0 ? 'Pass' : 'FAIL';
+    // #5354: credit incomplete, nothing sealed, and the SUMMARY's task commits are all gone = squashed away.
+    const notEvaluable = missing.length > 0 && Object.keys(sealed).length === 0 && summaryCommitsAllUnreachable(projectDir, phaseDir, planPath);
+    const status: TddPlanRow['status'] = notEvaluable ? 'NotEvaluable' : missing.length === 0 ? 'Pass' : 'FAIL';
+    if (redSha !== undefined && greenSha !== undefined) evidence[planId] = { red: redSha, green: greenSha };
 
     rows.push(greenFrom.length > 0
       ? { planId, red, green, refactor, status, missing, greenFrom }
@@ -222,10 +282,11 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
   const violations = rows.filter(r => r.status === 'FAIL').length;
 
   // Build review table
-  const tableHeader = '| Plan | RED | GREEN | REFACTOR | Status |';
-  const tableDivider = '|------|-----|-------|----------|--------|';
+  const w = Math.max(6, ...rows.map(r => r.status.length));
+  const tableHeader = `| Plan | RED | GREEN | REFACTOR | ${'Status'.padEnd(w)} |`;
+  const tableDivider = `|------|-----|-------|----------|${'-'.repeat(w + 2)}|`;
   const tableRows = rows.map(r =>
-    `| ${r.planId.padEnd(4)} | ${r.red ? ' ✓ ' : ' ✗ '} | ${r.green ? '  ✓  ' : '  ✗  '} | ${r.refactor ? '   ✓    ' : '   —    '} | ${r.status.padEnd(6)} |`,
+    `| ${r.planId.padEnd(4)} | ${r.red ? ' ✓ ' : ' ✗ '} | ${r.green ? '  ✓  ' : '  ✗  '} | ${r.refactor ? '   ✓    ' : '   —    '} | ${r.status.padEnd(w)} |`,
   );
 
   let table = [
@@ -242,6 +303,11 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
     table += `\n\nPlan ${r.planId} GREEN is supplied by dependent plan ${(r.greenFrom ?? []).join(', ')}.`;
   }
 
+  const notEvaluableRows = rows.filter(r => r.status === 'NotEvaluable');
+  for (const r of notEvaluableRows) {
+    table += `\n\nPlan ${r.planId} not evaluable: no reachable gate commits and no ${SEAL_FILE} entry (squashed?); not counted as a violation.`;
+  }
+
   if (violations > 0) {
     table += '\n\n⚠ Gate violations are advisory — review before advancing.';
     for (const r of rows.filter(row => row.status === 'FAIL')) {
@@ -250,10 +316,20 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
     }
   }
 
+  // #5354: --record seals this passing evaluation's evidence so it survives a squash merge.
+  if (violations === 0 && phaseDir && input.args.includes('--record')) {
+    try {
+      fs.writeFileSync(path.join(phaseDir, SEAL_FILE), `${JSON.stringify({ plans: { ...readSeal(phaseDir), ...evidence } }, null, 2)}\n`);
+    } catch (err) {
+      const e = evidenceFromError(err, SEAL_FILE);
+      return unreadableReview(phase, tddPlanFiles.length, [{ source: SEAL_FILE, reason: e.kind === 'unreadable' ? e.reason : String(err) }]);
+    }
+  }
+
   // Uniform gate contract: block = violations > 0. The gate is advisory (blocking:false in
   // capability.json), so block:true only surfaces as a warning, never halts. The human-readable
   // report is carried in `message` (and `table`) for the dispatch's advisory branch.
-  return gateVerdict(violations > 0 ? 'advisory' : 'pass', violations > 0, {
+  return gateVerdict(violations > 0 || notEvaluableRows.length > 0 ? 'advisory' : 'pass', violations > 0, {
     block: violations > 0,
     passed: true,
     tddPlans: tddPlanFiles.length,
