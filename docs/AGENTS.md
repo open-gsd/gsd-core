@@ -239,8 +239,8 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 |----------|-------|
 | **Spawned by** | `/gsd-plan-phase` (verification loop, max 3 iterations) |
 | **Parallelism** | Single instance (iterative) |
-| **Tools** | Read, Bash, Glob, Grep, Skill |
-| **Disallowed Tools** | Write, Edit, MultiEdit |
+| **Tools** | Read, Write, Bash, Glob, Grep, Skill |
+| **Disallowed Tools** | Edit, MultiEdit |
 | **Model (balanced)** | Sonnet |
 | **Color** | Green |
 | **Produces** | PASS/FAIL verdict with specific feedback |
@@ -868,7 +868,7 @@ Twelve additional agents ship under `agents/gsd-*.md` and are used by specialty 
 | planner | ✓ | ✓ | | ✓ | ✓ | ✓ | | ✓ | ✓ |
 | roadmapper | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
 | executor | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | | |
-| plan-checker | ✓ | | | ✓ | ✓ | ✓ | | | |
+| plan-checker | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
 | integration-checker | ✓ | | | ✓ | ✓ | ✓ | | | |
 | ui-checker | ✓ | | | ✓ | ✓ | ✓ | | | |
 | verifier | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
@@ -882,7 +882,7 @@ Twelve additional agents ship under `agents/gsd-*.md` and are used by specialty 
 | security-auditor | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | | |
 
 **Principle of Least Privilege:**
-- Checkers are read-only (no Write/Edit) — they evaluate, never modify
+- Checkers never modify what they check (no Edit); plan-checker's one Write is its stall-watch return receipt (#5182)
 - Researchers have web access — they need current ecosystem information
 - Executors have Edit — they modify code but not web access
 - Mappers have Write — they write analysis documents but not Edit (no code changes)

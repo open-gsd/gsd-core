@@ -221,7 +221,7 @@ GSD는 멀티 에이전트 아키텍처를 사용합니다. 가벼운 오케스�
 |----------|-------|
 | **생성 주체** | `/gsd-plan-phase` (검증 루프, 최대 3회 반복) |
 | **병렬성** | 단일 인스턴스 (반복적) |
-| **도구** | Read, Bash, Glob, Grep |
+| **도구** | Read, Write, Bash, Glob, Grep |
 | **모델 (balanced)** | Sonnet |
 | **색상** | Green |
 | **생성물** | 구체적인 피드백을 포함한 PASS/FAIL 판정 |
@@ -411,7 +411,7 @@ GSD는 멀티 에이전트 아키텍처를 사용합니다. 가벼운 오케스�
 | planner | ✓ | ✓ | | ✓ | ✓ | ✓ | | ✓ | ✓ |
 | roadmapper | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
 | executor | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | | |
-| plan-checker | ✓ | | | ✓ | ✓ | ✓ | | | |
+| plan-checker | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
 | integration-checker | ✓ | | | ✓ | ✓ | ✓ | | | |
 | ui-checker | ✓ | | | ✓ | ✓ | ✓ | | | |
 | verifier | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |

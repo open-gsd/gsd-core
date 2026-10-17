@@ -221,7 +221,7 @@ GSD はマルチエージェントアーキテクチャを採用しており、�
 |------------|-----|
 | **スポーン元** | `/gsd-plan-phase`（検証ループ、最大3回の反復） |
 | **並列数** | 単一インスタンス（反復型） |
-| **ツール** | Read, Bash, Glob, Grep |
+| **ツール** | Read, Write, Bash, Glob, Grep |
 | **モデル (balanced)** | Sonnet |
 | **カラー** | Green |
 | **生成物** | 具体的なフィードバック付きの PASS/FAIL 判定 |
@@ -411,7 +411,7 @@ GSD はマルチエージェントアーキテクチャを採用しており、�
 | planner | ✓ | ✓ | | ✓ | ✓ | ✓ | | ✓ | ✓ |
 | roadmapper | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
 | executor | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | | |
-| plan-checker | ✓ | | | ✓ | ✓ | ✓ | | | |
+| plan-checker | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
 | integration-checker | ✓ | | | ✓ | ✓ | ✓ | | | |
 | ui-checker | ✓ | | | ✓ | ✓ | ✓ | | | |
 | verifier | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
