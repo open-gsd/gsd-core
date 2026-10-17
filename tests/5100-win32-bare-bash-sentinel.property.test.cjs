@@ -8,10 +8,11 @@
  *           -> isWin32BareBashToken(candidate, 'win32') (unexported)
  *
  * The sentinel is a parser-like predicate: `bash` / `bash.exe`, matched
- * case-insensitively, trimmed at the edge, and only when the token carries
- * no path separator. The predicate decides which of two resolvers runs -
- * the Git Bash policy (env GSD_BASH_PATH / ProgramFiles /
- * ProgramFiles(x86) / SystemDrive) or the generic PATH scan. Getting it wrong re-opens #5100 for one spelling.
+ * case-insensitively, trimmed at the edge, and only when the token
+ * carries no path separator. The predicate decides which of two
+ * resolvers runs: the Git Bash policy (env GSD_BASH_PATH /
+ * ProgramFiles / ProgramFiles(x86) / SystemDrive) or the generic PATH
+ * scan. Getting it wrong re-opens #5100 for one spelling.
  *
  * The properties below observe the predicate only through the gate, with
  * the two resolvers rigged to disagree:
@@ -27,13 +28,14 @@
  *   (a) case/extension: over per-character case variants of "bash" times a
  *       set of extensions, the token is the sentinel iff the extension is
  *       absent or ".exe"
- *   (b) separator: prefixing a sentinel-shaped token with any path
- *       separator (POSIX, win32, or a drive letter) makes it an ordinary
+ *   (b) separator: a generated prefix that holds a path separator
+ *       (POSIX or win32) makes a sentinel-shaped token an ordinary
  *       candidate again
  *   (c) platform: the same token is the sentinel on win32 and an ordinary
  *       candidate on every other platform
- *   (d) whitespace: leading/trailing whitespace around a bare token is
- *       trimmed at the edge rather than smuggling the token past the gate
+ *   (d) whitespace: generated leading/trailing whitespace around a bare
+ *       token is trimmed at the edge rather than smuggling the token past
+ *       the gate
  */
 
 const { describe, test } = require('node:test');
@@ -46,6 +48,29 @@ const GSD_5100_WSL_BASH = 'C:\\WINDOWS\\System32\\bash.exe';
 
 // Per-character case of "bash" -> 4 booleans.
 const caseFlags = fc.array(fc.boolean(), { minLength: 4, maxLength: 4 });
+
+// Extensions around the token. Only '' and a case variant of '.exe' keep
+// it the sentinel.
+const EXTENSIONS = ['', '.exe', '.EXE', '.Exe', '.eXe', '.bat', '.sh', '.cmd', '.com', '.bat.exe'];
+const extension = fc.constantFrom(...EXTENSIONS);
+
+function isSentinelExtension(ext) {
+  return ext === '' || ext.toLowerCase() === '.exe';
+}
+
+// A generated prefix that holds at least one path separator: free text,
+// then '/' or a backslash, then free text (covers `/usr/bin/`, `C:\`, UNC roots
+// and anything else the generator finds).
+const separatorPrefix = fc
+  .tuple(fc.string({ maxLength: 12 }), fc.constantFrom('/', '\\'), fc.string({ maxLength: 12 }))
+  .map(([head, sep, tail]) => head + sep + tail);
+
+// Whitespace that String.prototype.trim strips: ASCII blanks, line breaks,
+// NBSP, an em space and the BOM.
+const edgeWhitespace = fc.string({
+  unit: fc.constantFrom(' ', '\t', '\n', '\r', '\v', '\f', '\u00a0', '\u2003', '\ufeff'),
+  maxLength: 6,
+});
 
 function applyCase(flags) {
   return 'bash'.split('').map((ch, i) => (flags[i] ? ch.toUpperCase() : ch)).join('');
@@ -82,10 +107,10 @@ describe('#5100 bare win32 bash sentinel - case and extension', () => {
   test('is the sentinel iff the extension is absent or .exe', () => {
     fc.assert(fc.property(
       caseFlags,
-      fc.constantFrom('', '.exe', '.EXE', '.Exe', '.eXe', '.bat', '.sh', '.cmd', '.com', '.bat.exe'),
+      extension,
       (flags, ext) => {
         const token = applyCase(flags) + ext;
-        const expectedSentinel = ext === '' || ext.toLowerCase() === '.exe';
+        const expectedSentinel = isSentinelExtension(ext);
         assert.equal(
           gateAccepts(token),
           !expectedSentinel,
@@ -99,12 +124,12 @@ describe('#5100 bare win32 bash sentinel - case and extension', () => {
 describe('#5100 bare win32 bash sentinel - separators', () => {
   test('a path separator makes an otherwise sentinel-shaped token an ordinary candidate', () => {
     fc.assert(fc.property(
-      fc.constantFrom('', '/', '\\', 'C:\\', 'D:/', '/usr/bin/', './', 'Git\\', '\\\\server\\share\\'),
+      fc.option(separatorPrefix, { nil: '' }),
       caseFlags,
-      fc.constantFrom('', '.exe', '.bat'),
+      extension,
       (prefix, flags, ext) => {
         const token = prefix + applyCase(flags) + ext;
-        const expectedSentinel = prefix === '' && (ext === '' || ext === '.exe');
+        const expectedSentinel = prefix === '' && isSentinelExtension(ext);
         assert.equal(
           gateAccepts(token),
           !expectedSentinel,
@@ -118,13 +143,13 @@ describe('#5100 bare win32 bash sentinel - separators', () => {
 describe('#5100 bare win32 bash sentinel - surrounding whitespace', () => {
   test('leading/trailing whitespace is trimmed at the edge, not smuggled past the gate', () => {
     fc.assert(fc.property(
-      fc.constantFrom('', ' ', '  ', '\t'),
-      fc.constantFrom('', ' ', '  ', '\t'),
+      edgeWhitespace,
+      edgeWhitespace,
       caseFlags,
-      fc.constantFrom('', '.exe', '.bat'),
+      extension,
       (pre, post, flags, ext) => {
         const token = pre + applyCase(flags) + ext + post;
-        const expectedSentinel = ext === '' || ext.toLowerCase() === '.exe';
+        const expectedSentinel = isSentinelExtension(ext);
         assert.equal(
           gateAccepts(token),
           !expectedSentinel,
