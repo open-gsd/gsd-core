@@ -37,7 +37,7 @@ let installExports;
     process.stdout.write = _origWrite;
   }
 }
-const { readSettings, writeSettings, stripJsonComments } = installExports;
+const { readSettings, writeSettings, stripJsonComments, configureAntigravityPermissions } = installExports;
 
 // ─── tests ───────────────────────────────────────────────────────────────────
 
@@ -535,7 +535,10 @@ describe('writeSettings on a symlinked settings file (#5037)', () => {
       }
       const { settingsPath, targetPath } = layout;
 
-      assert.throws(() => writeSettings(settingsPath, NEXT), /GSD_ALLOW_SYMLINKED_DEST=1/,
+      // With the opt-in already set, asking for it again would not help, so
+      // that refusal names the missing target instead.
+      assert.throws(() => writeSettings(settingsPath, NEXT),
+        optIn ? /target does not exist/ : /GSD_ALLOW_SYMLINKED_DEST=1/,
         'a dangling link must be refused');
 
       assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'the dangling link must survive');
@@ -556,4 +559,39 @@ describe('writeSettings on a symlinked settings file (#5037)', () => {
       assert.deepStrictEqual(fs.readdirSync(dir), ['settings.json'], 'no temp residue');
     });
   }
+
+  // configureAntigravityPermissions saves the Antigravity settings.json through
+  // writeSettings, so it inherits the same refusal and write-through.
+  test('the Antigravity permissions write refuses a symlinked settings.json without the opt-in', (t) => {
+    setOptIn(undefined);
+    const layout = linkedLayout(t);
+    if (!layout) {
+      t.skip('symlink creation unsupported on this platform/privilege');
+      return;
+    }
+    const { configDir, settingsPath, targetPath } = layout;
+
+    assert.throws(() => configureAntigravityPermissions(true, configDir), /GSD_ALLOW_SYMLINKED_DEST=1/);
+
+    assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+    assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), PRIOR, 'the link target must be byte-for-byte unchanged');
+  });
+
+  test('with GSD_ALLOW_SYMLINKED_DEST=1 the Antigravity permissions write lands on the link target', (t) => {
+    setOptIn('1');
+    const layout = linkedLayout(t);
+    if (!layout) {
+      t.skip('symlink creation unsupported on this platform/privilege');
+      return;
+    }
+    const { configDir, settingsPath, targetPath } = layout;
+
+    configureAntigravityPermissions(true, configDir);
+
+    assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+    const after = readSettings(targetPath);
+    assert.deepStrictEqual(after.env, { MY_TOKEN: 'keep-me' }, 'user settings must survive the write-through');
+    assert.ok(Array.isArray(after.permissions && after.permissions.allow) && after.permissions.allow.length > 0,
+      'the Antigravity allow rules must land in the link target');
+  });
 });
