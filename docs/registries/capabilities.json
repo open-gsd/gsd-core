@@ -1,1 +1,24 @@
-[]
+[
+  {
+    "id": "pr-workflow",
+    "name": "PR Workflow",
+    "type": "capability",
+    "repo": "davdittrich/pr-workflow",
+    "description": "Reads the open pull request and its checks for the current branch with gh, writes a PR.md report after each execute wave, and advises (never blocks) at ship:pre when the PR is not green. Fails open: a missing or erroring gh yields an unavailable report instead of a stale pass.",
+    "author": "Dennis A. V. Dittrich",
+    "license": "MIT",
+    "enginesGsd": ">=1.6.0",
+    "install": "gsd capability install https://github.com/davdittrich/pr-workflow.git#v0.1.1",
+    "uninstall": "gsd capability remove pr-workflow",
+    "interactions": {
+      "loopExtensionPoints": ["execute:wave:post", "ship:pre", "ship:post"],
+      "hookKinds": ["step", "gate"],
+      "configKeys": ["pr-workflow.enabled", "pr-workflow.ship_gate"],
+      "requires": [],
+      "runtimeCompat": ["all"],
+      "produces": ["PR.md"],
+      "consumes": []
+    },
+    "discussion": "https://github.com/open-gsd/gsd-core/discussions/5304"
+  }
+]

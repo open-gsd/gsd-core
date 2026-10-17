@@ -6,4 +6,23 @@
 
 _To add your capability, see the [registry README](./README.md)._
 
-_No entries yet — be the first: see [README](./README.md)._
+| Name | What it is | Latest release | GSD compat | Discussion |
+|---|---|---|---|---|
+| [PR Workflow](https://github.com/davdittrich/pr-workflow) | Reads the open pull request and its checks for the current branch with gh, writes a PR.md report after each execute wave, and advises \(never blocks\) at ship:pre when the PR is not green. Fails open: a missing or erroring gh yields an unavailable report instead of a stale pass. | ![release](https://img.shields.io/github/v/release/davdittrich/pr-workflow?sort=semver&include_prereleases) | `>=1.6.0` | [discuss](https://github.com/open-gsd/gsd-core/discussions/5304) |
+
+## PR Workflow
+- **Repository:** https://github.com/davdittrich/pr-workflow — [latest release](https://github.com/davdittrich/pr-workflow/releases/latest)
+- **What it is:** Reads the open pull request and its checks for the current branch with gh, writes a PR.md report after each execute wave, and advises \(never blocks\) at ship:pre when the PR is not green. Fails open: a missing or erroring gh yields an unavailable report instead of a stale pass.
+- **Author:** Dennis A. V. Dittrich
+- **Every interaction with GSD:** Loop Extension Points: execute:wave:post, ship:pre, ship:post; hook kinds: step, gate; configKeys: pr-workflow.enabled, pr-workflow.ship\_gate; runtimeCompat: all; produces: PR.md
+- **Install:**
+```sh
+gsd capability install https://github.com/davdittrich/pr-workflow.git#v0.1.1
+```
+- **Uninstall:**
+```sh
+gsd capability remove pr-workflow
+```
+- **GSD compatibility:** `>=1.6.0`
+- **License:** MIT
+- **Discussion / ranking:** https://github.com/open-gsd/gsd-core/discussions/5304
