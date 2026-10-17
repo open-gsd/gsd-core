@@ -253,3 +253,47 @@ test('#4692 property: unittest failures must all be headed and truncation before
     assertBlocked(output.replace(/failures=(\d+)/, (_, n) => `failures=${Number(n) + 1}`));
   }));
 });
+
+// #5106 — go test. The model is the SET of failing test names; the serialization (verbose or not,
+// one package or several) is independent of the parser, so a parser that mis-reads any of them
+// disagrees with the model rather than with itself.
+const goNames = fc.uniqueArray(fc.constantFrom('TestA', 'TestB', 'TestC', 'TestD', 'TestE', 'TestF'), { minLength: 1, maxLength: 6 });
+const goRun = fc.record({ names: goNames, failMask: fc.array(fc.boolean(), { minLength: 6, maxLength: 6 }), verbose: fc.boolean() });
+
+function goOutput(run) {
+  const rows = run.names.map((name, i) => ({ name, failed: run.failMask[i] }));
+  if (!rows.some(r => r.failed)) rows[0].failed = true;
+  const lines = [];
+  for (const r of rows) {
+    if (run.verbose) lines.push(`=== RUN   ${r.name}`);
+    if (r.failed) lines.push(`--- FAIL: ${r.name} (0.00s)`, '    x_test.go:1: nope');
+    else if (run.verbose) lines.push(`--- PASS: ${r.name} (0.00s)`);
+  }
+  lines.push('FAIL', 'FAIL\texample.com/p\t0.001s', 'FAIL', '');
+  return { output: lines.join('\n'), failed: rows.filter(r => r.failed).map(r => r.name) };
+}
+
+test('property: a go test report yields exactly the failing-name set, verbose or not', () => {
+  fc.assert(fc.property(goRun, (run) => {
+    const { output, failed } = goOutput(run);
+    const report = parseTestReport(output);
+    assert.equal(report.format, 'go-test');
+    assert.equal(report.valid, true, report.issues.join('; '));
+    assert.deepEqual(report.tests.filter(t => t.status === 'failed').map(t => t.name).sort(), [...failed].sort());
+    for (const name of run.names) {
+      const verdict = classifyRedEvidence({ command: 'go test', exitCode: 1, output, targetTest: name }).verdict;
+      assert.equal(verdict, failed.includes(name) ? 'RED_EVIDENCE_OK' : 'INVALID_RED', name);
+    }
+  }));
+});
+
+test('property: arbitrary go-shaped noise never throws and never accepts without a failing target', () => {
+  const noise = fc.array(fc.constantFrom('--- FAIL: TestA (0.00s)', '--- PASS: TestB (0.00s)', 'FAIL', 'ok  \tp\t0.1s', 'FAIL\tp [build failed]', '=== RUN   TestA', 'panic: x', '', '    --- FAIL: TestA/s (0.01s)'), { maxLength: 12 }).map(l => l.join('\n'));
+  fc.assert(fc.property(noise, (output) => {
+    const result = classifyRedEvidence({ command: 'go test', exitCode: 1, output, targetTest: 'TestA' });
+    if (result.verdict === 'RED_EVIDENCE_OK') {
+      assert.ok(result.evidence.failing_tests.includes('TestA'));
+      assert.ok(!/\[build failed\]/.test(output));
+    }
+  }));
+});

@@ -2814,6 +2814,140 @@ describe('phase add allocation vs sibling git worktrees (#3849)', () => {
       cleanup(tmp);
     }
   });
+
+  // #5113 claim 3: `Depends on` was `newId - 1`, but newId is max+1 over sibling-worktree phases too,
+  // so N-1 could be a phase that exists only on another branch.
+  test('#5113: phase add depends on a phase this roadmap has, not a number only a sibling holds', () => {
+    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5113-main-'));
+    activeDirs.push(repoDir);
+    initRepo(repoDir);
+    addSiblingHolding441(repoDir);
+
+    const result = runGsdTools('phase add anything', repoDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).phase_number, 442);
+
+    const roadmap = fs.readFileSync(path.join(repoDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.match(roadmap, /### Phase 442: anything[\s\S]*?\*\*Depends on:\*\* Phase 440\b/);
+    assert.doesNotMatch(roadmap, /Depends on:\*\* Phase 441/, 'Phase 441 exists only on another branch');
+  });
+
+  test('#5113: phase add-batch chains each phase to one that exists, the first to the real predecessor', () => {
+    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5113-batch-'));
+    activeDirs.push(repoDir);
+    initRepo(repoDir);
+    addSiblingHolding441(repoDir);
+
+    const result = runGsdTools(['phase', 'add-batch', '--descriptions', '["First New","Second New"]'], repoDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const roadmap = fs.readFileSync(path.join(repoDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.match(roadmap, /### Phase 442: First New[\s\S]*?\*\*Depends on:\*\* Phase 440\b/);
+    assert.match(roadmap, /### Phase 443: Second New[\s\S]*?\*\*Depends on:\*\* Phase 442\b/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// phase add touches only the block it inserts (#5113)
+//
+// `platformWriteSync` re-normalizes the WHOLE Markdown document on every write. For phase.add
+// that meant an unrelated, pre-existing heading gained a blank line (a `**UI hint**: yes` line
+// directly above a `### Phase` heading), and a CRLF roadmap was rewritten LF. The command's
+// contract is the inserted block and nothing else.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('phase add / add-batch leave the rest of ROADMAP.md byte-identical (#5113)', () => {
+  let tmp;
+  beforeEach(() => { tmp = createTempProject(); });
+  afterEach(() => { cleanup(tmp); });
+
+  const ROADMAP = [
+    '# Roadmap v1.0',
+    '',
+    '### Phase 1: Foundation',
+    '**Goal:** Setup',
+    '**UI hint**: yes',
+    '### Phase 2: Interface',
+    '**Goal:** Build it',
+    '',
+    '---',
+    '',
+  ].join('\n');
+
+  /** The ROADMAP with the inserted `### Phase N:` blocks cut out, to compare with the original. */
+  function withoutInsertedBlocks(text, firstNew) {
+    const lines = text.split('\n');
+    const out = [];
+    let skipping = false;
+    for (const line of lines) {
+      if (new RegExp(`^### Phase (${firstNew.join('|')}):`).test(line)) skipping = true;
+      else if (skipping && (/^---$/.test(line) || /^### /.test(line))) skipping = false;
+      if (!skipping) out.push(line);
+    }
+    return out.join('\n');
+  }
+
+  test('a heading that sits directly under a field line does not gain a blank line', () => {
+    fs.writeFileSync(path.join(tmp, '.planning', 'ROADMAP.md'), ROADMAP);
+    const result = runGsdTools('phase add Third Thing', tmp);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const after = fs.readFileSync(path.join(tmp, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(after.includes('**UI hint**: yes\n### Phase 2: Interface\n'), 'the pre-existing heading spacing must be left as written');
+    assert.ok(after.includes('### Phase 1: Foundation\n**Goal:** Setup\n'), 'a heading directly followed by text must stay that way');
+    assert.ok(after.includes('### Phase 3: Third Thing'), 'the new phase is still inserted');
+    assert.strictEqual(withoutInsertedBlocks(after, ['3']).replace(/\n{2,}---/, '\n---'), ROADMAP.replace(/\n{2,}---/, '\n---'));
+  });
+
+  test('the inserted block itself is still well-formed Markdown', () => {
+    fs.writeFileSync(path.join(tmp, '.planning', 'ROADMAP.md'), ROADMAP);
+    runGsdTools('phase add Third Thing', tmp);
+    const after = fs.readFileSync(path.join(tmp, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.match(after, /\n\n### Phase 3: Third Thing\n\n\*\*Goal:\*\*/, 'a blank line before the heading and one after it');
+    assert.ok(!after.slice(after.indexOf('### Phase 3')).includes('\n\n\n'), 'no run of blank lines');
+    assert.ok(after.endsWith('\n') && !after.endsWith('\n\n'), 'exactly one trailing newline');
+  });
+
+  test('add-batch leaves the rest of the document alone too', () => {
+    fs.writeFileSync(path.join(tmp, '.planning', 'ROADMAP.md'), ROADMAP);
+    const result = runGsdTools(['phase', 'add-batch', '--descriptions', '["Alpha","Beta"]'], tmp);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const after = fs.readFileSync(path.join(tmp, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(after.includes('**UI hint**: yes\n### Phase 2: Interface\n'));
+    assert.ok(after.includes('### Phase 3: Alpha') && after.includes('### Phase 4: Beta'));
+  });
+
+  test('a CRLF roadmap is not rewritten to LF', () => {
+    fs.writeFileSync(path.join(tmp, '.planning', 'ROADMAP.md'), ROADMAP.replace(/\n/g, '\r\n'));
+    const result = runGsdTools('phase add Third Thing', tmp);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const after = fs.readFileSync(path.join(tmp, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(after.includes('### Phase 3: Third Thing'));
+    assert.ok(!after.split('\r\n').join('').includes('\n'), 'every line ending, including the inserted block, stays CRLF');
+  });
+
+  test('Depends on names a phase the roadmap has, or Nothing for the first phase', () => {
+    fs.writeFileSync(path.join(tmp, '.planning', 'ROADMAP.md'), '# Roadmap v1.0\n');
+    assert.ok(runGsdTools('phase add First', tmp).success);
+    assert.match(fs.readFileSync(path.join(tmp, '.planning', 'ROADMAP.md'), 'utf-8'), /\*\*Depends on:\*\* Nothing/);
+  });
+
+  test('a gap in the roadmap numbering depends on the nearest phase that exists', () => {
+    fs.writeFileSync(path.join(tmp, '.planning', 'ROADMAP.md'), '# Roadmap v1.0\n\n### Phase 1: One\n**Goal:** a\n\n### Phase 5: Five\n**Goal:** b\n\n---\n');
+    assert.ok(runGsdTools('phase add Six', tmp).success);
+    const after = fs.readFileSync(path.join(tmp, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.match(after, /### Phase 6: Six[\s\S]*?\*\*Depends on:\*\* Phase 5\b/);
+  });
+
+  test('a number held only by an on-disk directory is not named as the dependency', () => {
+    fs.writeFileSync(path.join(tmp, '.planning', 'ROADMAP.md'), '# Roadmap v1.0\n\n### Phase 1: One\n**Goal:** a\n\n---\n');
+    fs.mkdirSync(path.join(tmp, '.planning', 'phases', '02-orphan'), { recursive: true });
+    const result = runGsdTools('phase add Next', tmp);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).phase_number, 3);
+    const after = fs.readFileSync(path.join(tmp, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.match(after, /### Phase 3: Next[\s\S]*?\*\*Depends on:\*\* Phase 1\b/, 'Phase 2 has a directory but no roadmap section');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

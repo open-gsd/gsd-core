@@ -60,7 +60,7 @@ Continue to verify_docs.
 
 ## § 2 — fix_loop
 
-**Read the work manifest first:** `Read .planning/tmp/docs-work-manifest.json` — identify ALL docs (canonical AND non-canonical) with `claims_failed > 0` from the verification results in `.planning/tmp/verify-*.json`. Both queues are eligible for fixes.
+**Read the work manifest first:** `Read .planning/tmp/docs-work-manifest.json` — identify ALL docs (canonical AND non-canonical) with `claims_failed > 0` from the verification results in `{project_root}/.planning/tmp/verify-*.json`. Both queues are eligible for fixes.
 
 Correct flagged inaccuracies by re-sending failing docs to the doc-writer in fix mode. Per D-06, max 2 iterations. Per D-05, halt immediately on regression.
 
@@ -95,7 +95,7 @@ Correct flagged inaccuracies by re-sending failing docs to the doc-writer in fix
 
 2. After all fix agents complete, re-verify ALL docs (not just the ones that were fixed):
    - Re-run the same verification process as verify_docs step.
-   - Read updated result JSONs from `.planning/tmp/verify-{doc_filename}.json`.
+   - Read updated result JSONs from each doc's `result_path` (`{project_root}/.planning/tmp/verify-{doc_key}.json`).
 
 3. **Regression detection (D-05):**
    For each doc in the new verification_results:
@@ -123,7 +123,7 @@ Fix loop completed ({MAX_FIX_ITERATIONS} iterations). Remaining failures:
 |-------------------|---------------|
 | {doc_path}        | {count}       |
 
-These failures require manual correction. Review the verification output in .planning/tmp/verify-*.json for details.
+These failures require manual correction. Review the verification output in {project_root}/.planning/tmp/verify-*.json for details.
 ```
 
 Continue to scan_for_secrets.
@@ -132,7 +132,7 @@ Continue to scan_for_secrets.
 
 **Reached when `--verify-only` is present in `$ARGUMENTS`.** This is an early-exit step — do not proceed to dispatch, generation, commit, or report steps after this step.
 
-Invoke the gsd-doc-verifier agent in read-only mode for each file in `existing_docs` from the init JSON:
+Invoke the gsd-doc-verifier agent in read-only mode for each file in `existing_docs` from the init JSON. Resolve `DISPATCH_CAPACITY` and compute each doc's `doc_key`/`result_path` as `verify_docs` § Dispatch bound and § Result file contract specify (#5050), and spawn in batches of at most `DISPATCH_CAPACITY`, waiting for a batch to return before starting the next:
 
 1. For each doc in `existing_docs`:
    a. Spawn `gsd-doc-verifier` (or invoke sequentially if Task tool is unavailable), passing `model="{DOC_VERIFIER_MODEL}"` as the Task/Agent call's `model` parameter — not part of the `<verify_assignment>` prompt — so `dynamic_routing`/`model_profile` tiers apply instead of the caller's session model (#3602). Omit the parameter entirely when the value is `"inherit"` or empty (#2517). Each spawn carries:
@@ -140,9 +140,10 @@ Invoke the gsd-doc-verifier agent in read-only mode for each file in `existing_d
       <verify_assignment>
       doc_path: {doc.path}
       project_root: {the project_root field carried in the init JSON}
+      result_path: {this doc's result_path, computed per verify_docs § Result file contract}
       </verify_assignment>
       ```
-   b. Read the result JSON from `.planning/tmp/verify-{doc_filename}.json`.
+   b. Read the result JSON from its `result_path`.
 
 2. Also count VERIFY markers in each doc: grep for `<!-- VERIFY:` in the file content.
 
@@ -174,6 +175,6 @@ To fix failures automatically: /gsd:docs-update (runs generation + fix loop)
 To regenerate all docs from scratch: /gsd:docs-update --force
 ```
 
-Clean up temp files: remove `.planning/tmp/verify-*.json` files.
+Clean up temp files: remove `{project_root}/.planning/tmp/verify-*.json` files.
 
 End workflow — do not proceed to any dispatch, commit, or report steps.

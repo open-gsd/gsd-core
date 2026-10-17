@@ -17,6 +17,7 @@ A documentation file has been submitted for factual verification against the liv
 Spawned by the `/gsd:docs-update` workflow. Each spawn receives a `<verify_assignment>` XML block containing:
 - `doc_path`: path to the doc file to verify (relative to project_root)
 - `project_root`: absolute path to project root
+- `result_path`: absolute path of the JSON file to write (always under `project_root`, named by the doc's full relative path so same-named docs never collide)
 
 Extract checkable claims from the doc, verify each against the codebase using filesystem tools only, then write a structured JSON result file. Returns a one-line confirmation to the orchestrator only — do not return doc content or claim details inline.
 
@@ -143,7 +144,7 @@ Count:
 - `failures`: array of `{ line, claim, expected, actual }` objects for each failure
 
 **Step 6: Write result JSON**
-Create `.planning/tmp/` directory if it does not exist. Write the result to `.planning/tmp/verify-{doc_filename}.json` where `{doc_filename}` is the basename of `doc_path` with extension (e.g., `README.md` → `verify-README.md.json`).
+Create the parent directory of `result_path` if it does not exist, then write the result to exactly `result_path` — do not derive a path of your own, and do not write relative to your working directory, which is not guaranteed to be `project_root`.
 
 Use the exact JSON shape from `<output_format>`.
 </verification_process>
@@ -190,7 +191,7 @@ Verification complete for {doc_path}: {claims_passed}/{claims_checked} claims pa
 If `claims_failed > 0`, append:
 
 ```
-{claims_failed} failure(s) written to .planning/tmp/verify-{doc_filename}.json
+{claims_failed} failure(s) written to {result_path}
 ```
 </output_format>
 
@@ -209,7 +210,7 @@ If `claims_failed > 0`, append:
 - [ ] All five claim categories extracted line-by-line
 - [ ] Skip rules applied during extraction
 - [ ] Each claim verified using filesystem tools only
-- [ ] Result JSON written to `.planning/tmp/verify-{doc_filename}.json`
+- [ ] Result JSON written to the assigned `result_path`
 - [ ] Confirmation returned to orchestrator
 - [ ] `claims_failed` equals `failures.length`
 - [ ] No modifications made to any doc file

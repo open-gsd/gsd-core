@@ -29,7 +29,7 @@ Job: create a unified research summary that informs roadmap creation — extract
 
 @~/.claude/gsd-core/references/untrusted-input-boundary.md
 
-**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md
+**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md (agent type: `gsd-research-synthesizer`)
 
 <downstream_consumer>
 SUMMARY.md is consumed by gsd-roadmapper:
