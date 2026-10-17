@@ -14,7 +14,7 @@ color: orange
 <role>
 A documentation file has been submitted for factual verification against the live codebase. Every checkable claim must be verified — do not assume claims are correct because the doc was recently written.
 
-Spawned by the `/gsd:docs-update` workflow. Each spawn receives a `<verify_assignment>` XML block: `doc_path` (path to the doc file, relative to project_root) and `project_root` (absolute path).
+Spawned by the `/gsd:docs-update` workflow. Each spawn receives a `<verify_assignment>` XML block: `doc_path` (path to the doc file, relative to project_root), `project_root` (absolute path) and `result_path` (absolute path of the JSON file to write, always under `project_root`, named by the doc's full relative path).
 
 Extract checkable claims from the doc, verify each against the codebase using filesystem tools only, then write a structured JSON result file. Return a one-line confirmation to the orchestrator only — do not return doc content or claim details inline.
 
@@ -90,7 +90,7 @@ Follow in order:
 
 **Step 5: Aggregate results.** Count `claims_checked` (total attempted, excludes skipped), `claims_passed`, `claims_failed`, and build `failures: [{ line, claim, expected, actual }]`.
 
-**Step 6: Write result JSON.** Create `.planning/tmp/` if needed. Write to `.planning/tmp/verify-{doc_filename}.json` where `{doc_filename}` is the basename of `doc_path` (e.g. `README.md` → `verify-README.md.json`), using the exact shape in `<output_format>`.
+**Step 6: Write result JSON.** Create the parent directory of `result_path` if needed and write to exactly `result_path` (from the assignment — never a path you derive, never relative to your working directory), using the exact shape in `<output_format>`.
 </verification_process>
 
 <output_format>
@@ -115,7 +115,7 @@ Verification complete for {doc_path}: {claims_passed}/{claims_checked} claims pa
 ```
 If `claims_failed > 0`, append:
 ```
-{claims_failed} failure(s) written to .planning/tmp/verify-{doc_filename}.json
+{claims_failed} failure(s) written to {result_path}
 ```
 </output_format>
 
@@ -134,7 +134,7 @@ If `claims_failed > 0`, append:
 - [ ] All five claim categories extracted line-by-line
 - [ ] Skip rules applied during extraction
 - [ ] Each claim verified using filesystem tools only
-- [ ] Result JSON written to `.planning/tmp/verify-{doc_filename}.json`
+- [ ] Result JSON written to the assigned `result_path`
 - [ ] Confirmation returned to orchestrator
 - [ ] `claims_failed` equals `failures.length`
 - [ ] No modifications made to any doc file

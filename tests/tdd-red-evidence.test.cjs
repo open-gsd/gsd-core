@@ -1108,3 +1108,99 @@ describe('#4970 — Python unittest RED evidence', () => {
     );
   });
 });
+
+// ─── #5106 — `go test` RED evidence ──────────────────────────────────────────
+// `go test` writes plain text, not TAP or XML, so a genuine failing Go test was
+// refused as zero_tests_discovered, and the most common wrong RED in Go — a test
+// naming a symbol that does not exist yet fails to COMPILE, it never asserts —
+// was indistinguishable from "no tests". Both need an answer of their own.
+
+describe('#5106 — go test RED evidence', () => {
+  const PKG = 'example.com/worker/internal/placement';
+  const INPUT = { command: 'go test ./...', exitCode: 1, targetTest: 'TestPlacement', targetFile: 'worker/internal/placement/placement_test.go' };
+
+  const RED = [
+    '--- FAIL: TestPlacement (0.00s)',
+    '    placement_test.go:14: got 2, want 1',
+    'FAIL',
+    `FAIL\t${PKG}\t0.004s`,
+    'FAIL',
+    '',
+  ].join('\n');
+
+  const BUILD_FAILED = [
+    `# ${PKG} [${PKG}.test]`,
+    'internal/placement/placement_test.go:9:12: undefined: Place',
+    `FAIL\t${PKG} [build failed]`,
+    'FAIL',
+    '',
+  ].join('\n');
+
+  test("the issue's literal repro (--- FAIL: TestX, exit 1, target TestX) is RED_EVIDENCE_OK", () => {
+    const result = classifyRedEvidence({ ...INPUT, output: RED });
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK', JSON.stringify(result.evidence));
+    assert.equal(result.reason, 'target_test_failed');
+    assert.equal(result.evidence.format, 'go-test');
+    assert.deepEqual(result.evidence.failing_tests, ['TestPlacement']);
+  });
+
+  test('verbose output with passing siblings and a failing subtest still names the target', () => {
+    const output = [
+      '=== RUN   TestOther', '--- PASS: TestOther (0.00s)',
+      '=== RUN   TestPlacement', '=== RUN   TestPlacement/edge',
+      '    placement_test.go:20: edge case wrong',
+      '    --- FAIL: TestPlacement/edge (0.00s)',
+      '--- FAIL: TestPlacement (0.00s)',
+      'FAIL', `FAIL\t${PKG}\t0.004s`, 'FAIL', '',
+    ].join('\n');
+    assert.equal(classifyRedEvidence({ ...INPUT, output }).verdict, 'RED_EVIDENCE_OK');
+    assert.equal(classifyRedEvidence({ ...INPUT, output, targetTest: 'TestPlacement/edge' }).verdict, 'RED_EVIDENCE_OK');
+  });
+
+  test('output that STARTS with an ok package line is Go output, not TAP', () => {
+    const output = `ok  \texample.com/worker/other\t0.002s\n${RED}`;
+    const result = classifyRedEvidence({ ...INPUT, output });
+    assert.equal(result.evidence.format, 'go-test');
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+  });
+
+  test('a compile failure is refused with its own reason, not accepted and not "zero tests"', () => {
+    const result = classifyRedEvidence({ ...INPUT, output: BUILD_FAILED });
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'build_failure');
+  });
+
+  test('a build failure anywhere in the run is refused even when another package genuinely failed', () => {
+    const result = classifyRedEvidence({ ...INPUT, output: `${RED}${BUILD_FAILED}` });
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'build_failure');
+  });
+
+  test('a package that could not be set up is refused the same way', () => {
+    const output = `FAIL\t${PKG} [setup failed]\nFAIL\n`;
+    assert.equal(classifyRedEvidence({ ...INPUT, output }).reason, 'build_failure');
+  });
+
+  test('exit 0, an unrelated failure and a run with no test results keep their existing refusals', () => {
+    assert.equal(classifyRedEvidence({ ...INPUT, exitCode: 0, output: `ok  \t${PKG}\t0.003s\n` }).reason, 'unexpected_green');
+    assert.equal(classifyRedEvidence({ ...INPUT, output: RED.replace('TestPlacement', 'TestUnrelated') }).reason, 'no_target_test_failure');
+    const panicOnly = `panic: init failed\n\ngoroutine 1 [running]:\nFAIL\t${PKG}\t0.010s\nFAIL\n`;
+    assert.equal(classifyRedEvidence({ ...INPUT, output: panicOnly }).reason, 'zero_tests_discovered');
+  });
+
+  test('a failure with no package summary is a truncated record, not evidence', () => {
+    const result = classifyRedEvidence({ ...INPUT, output: '--- FAIL: TestPlacement (0.00s)\n' });
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'invalid_record');
+  });
+
+  test('the same test name failing in two packages is ambiguous until qualified by package', () => {
+    const output = [
+      '--- FAIL: TestPlacement (0.00s)', 'FAIL', 'FAIL\texample.com/a\t0.001s',
+      '--- FAIL: TestPlacement (0.00s)', 'FAIL', 'FAIL\texample.com/b\t0.001s', 'FAIL', '',
+    ].join('\n');
+    assert.equal(classifyRedEvidence({ ...INPUT, output }).reason, 'no_target_test_failure');
+    const qualified = classifyRedEvidence({ ...INPUT, output, targetTest: 'example.com/a.TestPlacement' });
+    assert.equal(qualified.verdict, 'RED_EVIDENCE_OK');
+  });
+});

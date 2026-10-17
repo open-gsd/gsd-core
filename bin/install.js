@@ -12566,6 +12566,41 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
           }
         }
       }
+      // #5123: the Copilot and Antigravity converters write their DEFAULT home
+      // into `@` includes and Kimi's prompt converter leaves a prose "GSD core/"
+      // path, none of which exist when the payload lives somewhere else. Point
+      // them at the real install root (the same `$HOME/…` / absolute prefix the
+      // other runtimes use). Global installs only: a local install resolves
+      // against its project, which the converters already handle.
+      const includeRetarget = hostBehaviorsFor(runtime);
+      if (isGlobal && (includeRetarget.defaultHomeIncludeRoot || includeRetarget.retargetsGsdCoreProsePath === true)) {
+        const includePrefix = runtimeArtifactConversion._computePathPrefix({
+          isGlobal: true,
+          isOpencode: false,
+          resolvedTarget: targetDir,
+          homeDir: os.homedir(),
+        });
+        for (const relPath of manifestFiles) {
+          const fileName = path.basename(relPath);
+          if (!(fileName.endsWith('.md') || fileName.endsWith('.toml'))) continue;
+          if (fileName === 'CHANGELOG.md') continue;
+          const retargetPath = path.join(targetDir, relPath);
+          let retargetContent;
+          try {
+            retargetContent = fs.readFileSync(retargetPath, 'utf8');
+          } catch (_retargetReadErr) {
+            continue; // inaccessible or missing — never fail the install over this pass
+          }
+          const retargeted = runtimeArtifactConversion.retargetInstalledIncludes(retargetContent, includeRetarget, includePrefix);
+          if (retargeted !== retargetContent) {
+            try {
+              fs.writeFileSync(retargetPath, retargeted);
+            } catch (_retargetWriteErr) {
+              continue;
+            }
+          }
+        }
+      }
       for (const relPath of manifestFiles) {
         const fileName = path.basename(relPath);
         if (!(fileName.endsWith('.md') || fileName.endsWith('.toml'))) continue;

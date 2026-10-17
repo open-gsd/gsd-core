@@ -194,6 +194,7 @@ const capabilities = {
         "effortSurface": "undocumented"
       },
       "hostBehaviors": {
+        "defaultHomeIncludeRoot": ".gemini/antigravity",
         "unsupportedFeatures": [
           "context-warnings"
         ],
@@ -1402,6 +1403,7 @@ const capabilities = {
         "effortSurface": "undocumented"
       },
       "hostBehaviors": {
+        "defaultHomeIncludeRoot": ".copilot",
         "reapplyCommand": "/gsd-update --reapply",
         "agentFileExtension": ".agent.md",
         "skipSharedHooksInstall": true,
@@ -2245,6 +2247,7 @@ const capabilities = {
         "promptFlag": "--prompt"
       },
       "hostBehaviors": {
+        "retargetsGsdCoreProsePath": true,
         "unsupportedFeatures": [
           "context-warnings"
         ],
@@ -5630,6 +5633,7 @@ const runtimes = {
         "effortSurface": "undocumented"
       },
       "hostBehaviors": {
+        "defaultHomeIncludeRoot": ".gemini/antigravity",
         "unsupportedFeatures": [
           "context-warnings"
         ],
@@ -6497,6 +6501,7 @@ const runtimes = {
         "effortSurface": "undocumented"
       },
       "hostBehaviors": {
+        "defaultHomeIncludeRoot": ".copilot",
         "reapplyCommand": "/gsd-update --reapply",
         "agentFileExtension": ".agent.md",
         "skipSharedHooksInstall": true,
@@ -7022,6 +7027,7 @@ const runtimes = {
         "promptFlag": "--prompt"
       },
       "hostBehaviors": {
+        "retargetsGsdCoreProsePath": true,
         "unsupportedFeatures": [
           "context-warnings"
         ],

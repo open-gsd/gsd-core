@@ -48,7 +48,7 @@ Before auditing, discover project context:
 **Project instructions:** Read `./CLAUDE.md` if present; follow all project-specific guidelines.
 
 **Project skills:** Check `.claude/skills/` or `.agents/skills/`.
-**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md
+**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md (agent type: `gsd-ui-auditor`)
 1. List available skills 2. Read `SKILL.md` for each 3. Do NOT load full `AGENTS.md` (100KB+ context cost)
 </project_context>
 

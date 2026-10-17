@@ -3122,8 +3122,13 @@ function computePathPrefix({
   // See DEFECT.WINDOWS-PATH-LEAK-IN-MARKDOWN-CONTENT in CONTEXT.md.
   const posixTarget = posixNormalize(String(resolvedTarget));
   const posixHome = homeDir ? posixNormalize(String(homeDir)) : homeDir;
-  if (isGlobal && posixTarget.startsWith(posixHome) && !isOpencode) {
-    return '$HOME' + posixTarget.slice(posixHome.length) + '/';
+  // #5123: `startsWith` alone treats a SIBLING directory whose name begins with
+  // the home path (`/home/u2/cfg` under `/home/u`) as under home and yields the
+  // broken `$HOMEu2/cfg/`. Require a path boundary.
+  const underHome = typeof posixHome === 'string' && posixHome.length > 0
+    && (posixTarget === posixHome || posixTarget.startsWith(posixHome.endsWith('/') ? posixHome : `${posixHome}/`));
+  if (isGlobal && underHome && !isOpencode) {
+    return '$HOME' + posixTarget.slice(posixHome.length).replace(/^(?!\/)(?=.)/, '/') + '/';
   }
   if (!isGlobal && projectRelative) {
     // An explicit local config dir need not be the descriptor's conventional
@@ -3135,6 +3140,48 @@ function computePathPrefix({
     if (relative) return relative;
   }
   return `${posixTarget}/`;
+}
+
+/**
+ * #5123: retarget an installed artifact's `@` includes to the REAL install root.
+ * Driven by the runtime descriptor's hostBehaviors, never by a runtime name:
+ *
+ * - `defaultHomeIncludeRoot` (Copilot, Antigravity): their converters hard-code
+ *   the DEFAULT home into includes, so with `--config-dir` the payload lives
+ *   elsewhere and `@~/<root>/gsd-core/…` points at nothing. `@~/<root>/` and
+ *   `@$HOME/<root>/` become `@<pathPrefix>`. A default install (pathPrefix is
+ *   already `$HOME/<root>/`) is returned unchanged, so it stays byte-identical.
+ * - `retargetsGsdCoreProsePath` (Kimi): Kimi has no `@` include, so its prompt
+ *   converter turns `~/.claude/gsd-core` into the prose "GSD core", leaving
+ *   `@GSD core/x.md` pointing nowhere. A `GSD core/<path>` reference followed
+ *   by a path segment becomes the real `<pathPrefix>gsd-core/<path>`, with the
+ *   unsupported `@` dropped. Bare prose "GSD core" is not followed by `/`.
+ *
+ * `pathPrefix` is the install root as computePathPrefix derives it
+ * (`$HOME/…/` under HOME, otherwise absolute), with a trailing slash. Pure and
+ * idempotent: a second pass finds none of the literals it rewrites.
+ */
+function retargetInstalledIncludes(
+  content: string,
+  behaviors: { defaultHomeIncludeRoot?: unknown; retargetsGsdCoreProsePath?: unknown } | null | undefined,
+  pathPrefix: string,
+): string {
+  if (typeof content !== 'string' || content.length === 0) return content;
+  if (typeof pathPrefix !== 'string' || !pathPrefix.endsWith('/')) return content;
+  if (!behaviors) return content;
+  let result = content;
+
+  if (behaviors.retargetsGsdCoreProsePath === true) {
+    result = result.replace(/@?GSD core\/(?=[a-z])/g, `${pathPrefix}gsd-core/`);
+  }
+
+  const home = behaviors.defaultHomeIncludeRoot;
+  if (typeof home === 'string' && home.length > 0 && pathPrefix !== `$HOME/${home}/`) {
+    result = result
+      .split(`@~/${home}/`).join(`@${pathPrefix}`)
+      .split(`@$HOME/${home}/`).join(`@${pathPrefix}`);
+  }
+  return result;
 }
 
 /** Return a safe project-relative prefix for a resolved install target. */
@@ -4234,4 +4281,6 @@ export = {
   _negotiatedDispatchIsolation,
   // #1521: canonical non-Claude runtime list for test files and tooling
   NON_CLAUDE_RUNTIMES,
+  // #5123: post-install include retarget (config-dir aware; Kimi prose path)
+  retargetInstalledIncludes,
 };

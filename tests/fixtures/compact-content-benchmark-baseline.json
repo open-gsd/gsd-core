@@ -13,9 +13,9 @@
       "reductionPct": 36.17
     },
     "docs-update": {
-      "offTokens": 14291,
-      "onTokens": 11941,
-      "reductionPct": 16.44
+      "offTokens": 14920,
+      "onTokens": 12468,
+      "reductionPct": 16.43
     },
     "execute-phase": {
       "offTokens": 25127,
@@ -39,8 +39,8 @@
     }
   },
   "aggregate": {
-    "offTokens": 111629,
-    "onTokens": 94150,
+    "offTokens": 112258,
+    "onTokens": 94677,
     "reductionPct": 15.66
   }
 }
