@@ -26,6 +26,8 @@
  * seam is injected so the evaluator is trivially testable without spawning.
  */
 
+import path from 'node:path';
+
 // ─── Public constants ─────────────────────────────────────────────────────────
 
 /** Default command timeout for `command-exit-zero` (30s). Matches execTool default. */
@@ -63,7 +65,8 @@ interface BoundedShellResult {
 
 interface PredicateDeps {
   runBoundedShell(opts: { command: string; cwd: string; timeoutMs: number }): BoundedShellResult;
-  findPhaseArtifact(phaseDir: string, artifactSuffix: string): string | null;
+  /** All distinct matches for the artifact, in any order; `[]` when absent. Entries must be realpaths: the evaluator dedupes by string, so a symlink to one file counts once only if both names resolve to the same path. */
+  findPhaseArtifact(phaseDir: string, artifactSuffix: string): string[];
   readFrontmatter(filePath: string): Record<string, unknown>;
 }
 
@@ -170,8 +173,15 @@ function evaluateArtifactFrontmatterEquals(
     throw new Error('artifact-frontmatter-equals predicate requires an "equals" key');
   }
   const targetDir = isNonEmptyString(ctx.phaseDir) ? ctx.phaseDir : ctx.cwd;
-  const filePath = deps.findPhaseArtifact(targetDir, artifactSuffix);
-  if (!filePath) {
+  // Plain `.sort()` (no locale) so the outcome never depends on directory listing order (#5313).
+  // Set: finders return realpaths, so a symlink to the same file is one artifact, not two.
+  const found: unknown = deps.findPhaseArtifact(targetDir, artifactSuffix);
+  // A pre-#5313 dep returned `string | null`; a silent null -> "not found" block or per-character spread would mislead.
+  if (!Array.isArray(found)) {
+    throw new Error('predicate deps "findPhaseArtifact" must return an array of paths');
+  }
+  const candidates = [...new Set(found as string[])].sort();
+  if (candidates.length === 0) {
     return {
       block: true,
       message: `Artifact matching ${artifactSuffix} not found in ${targetDir}`,
@@ -179,7 +189,17 @@ function evaluateArtifactFrontmatterEquals(
     };
   }
 
-  const fm = deps.readFrontmatter(filePath);
+  // #5313: never pick one of several matches (listing order is OS-dependent); a throw would fail open via onError.
+  if (candidates.length > 1) {
+    const names = candidates.map((c) => path.relative(targetDir, c).split(path.sep).join('/')).join(', ');
+    return {
+      block: true,
+      message: `Multiple artifacts match ${artifactSuffix} in ${targetDir}: ${names}; remove or rename all but one`,
+      details: { kind: 'artifact-frontmatter-equals', ambiguous: true, candidates },
+    };
+  }
+
+  const fm = deps.readFrontmatter(candidates[0]);
 
   const actualValue = fm[field];
   // eslint-disable-next-line @typescript-eslint/no-base-to-string

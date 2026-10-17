@@ -115,6 +115,7 @@ module.exports = {
   "tests/gate-consumer-exit-awareness.test.cjs",
   "tests/gate-decision-coverage-verify-stderr.test.cjs",
   "tests/gate-exit.test.cjs",
+  "tests/gate-predicate.unit.test.cjs",
   "tests/gate-tdd-red-evidence-containment.test.cjs",
   "tests/gate-tdd-review-checkpoint-hardening.test.cjs",
   "tests/gate-tdd-review-checkpoint.unit.test.cjs",
