@@ -24,7 +24,7 @@ that preserves already-committed chunks. Explicitly not `ps aux`, explicitly no 
   for the executor: a SUMMARY-existence plus `git log --since` spot-check (`:742-744`), a
   periodic surveillance loop (`:755-762`) gated on `executor.stall_detect_interval_minutes`
   and `executor.stall_threshold_minutes` (read at `:100-101`; both registered in
-  `SCHEMA_DEFAULTS` at `src/config.cts:89-90`, defaults 5 and 10), and a *continue waiting /
+  `SCHEMA_DEFAULTS` at `src/config-schema-defaults.cts`, defaults 5 and 10), and a *continue waiting /
   kill and retry / kill and switch to inline* recovery triad (`:759-762`) that never
   auto-kills. The proposal's core insight is already the shipped design; what it adds is
   generalization.
@@ -108,6 +108,6 @@ no longer sufficient — not before.
 ## Related
 
 - `gsd-core/workflows/execute-phase.md` — the shipped executor stall-detection pattern
-- `src/config.cts` — `SCHEMA_DEFAULTS`, where `executor.stall_*` keys are registered
+- `src/config-schema-defaults.cts` — `SCHEMA_DEFAULTS`, where `executor.stall_*` keys are registered
 - `docs/reference/host-integration-capability-matrix.md` — per-runtime `hookBus` / `stateIO` surfaces
 - [#2650](https://github.com/open-gsd/gsd-core/issues/2650) — the confirmed defect this was redirected to

@@ -40,6 +40,13 @@ import { CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS, normalizeLegacyKeys, isCo
 import configSchema = require('./config-schema.cjs');
 const { VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS, isCentralConfigKey: _isCentralConfigKeyFn } = configSchema;
 import { KNOWN_RUNTIMES, KNOWN_PROVIDERS, ADAPTIVE_TIER_VALUES } from './model-catalog.cjs';
+// #5096: the resolver's layer read — JSONC for runtime settings, the shared fd-bounded
+// regular-file reader, and the canonical realpath containment comparison.
+import { parseJsonc } from './settings-jsonc.cjs';
+import { isContainedIn } from './security.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import ledgerModule = require('./capability-ledger.cjs');
+const { readSmallRegularFile } = ledgerModule;
 // #3760: the ADR-1411 out-of-band diagnostic seam. loadConfig returns `.config`
 // alone, so an in-band `skipped` record would be unreachable to nearly every
 // caller — "a reason no caller reads is an unreachable field" (ADR-1411).
@@ -589,17 +596,49 @@ interface ConfigResolution {
 }
 
 /**
- * Read + JSON-parse a config file, keeping *absent* distinguishable from
+ * How the Config Value Resolution Module reads a layer (#5096). The format is a
+ * closed choice, not an injected parser, so no caller can bypass the shape check
+ * below. `bounded` opts into a fd-bounded read of a regular file of at most
+ * `maxBytes`; a non-null `containedIn` also refuses a file whose realpath leaves
+ * that directory's realpath (a repository-plantable symlink). The loader's own
+ * reads pass neither, so `loadConfig` is unchanged.
+ */
+interface ConfigFileReadOptions {
+  format?: 'json' | 'jsonc';
+  bounded?: { maxBytes: number; containedIn: string | null };
+}
+
+/** Synthetic errno for a bounded read refused because the file escapes its root. */
+const CONFIG_OUTSIDE_ROOT_CODE = 'EOUTSIDEROOT';
+
+function _readBoundedConfigText(filePath: string, bounds: { maxBytes: number; containedIn: string | null }): string | null {
+  if (bounds.containedIn !== null) {
+    let realFile: string;
+    try {
+      realFile = fs.realpathSync(filePath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+    if (!isContainedIn(realFile, fs.realpathSync(bounds.containedIn))) {
+      throw Object.assign(new Error(`${filePath} resolves outside ${bounds.containedIn}`), { code: CONFIG_OUTSIDE_ROOT_CODE });
+    }
+  }
+  return readSmallRegularFile(filePath, bounds.maxBytes);
+}
+
+/**
+ * Read + parse a config file, keeping *absent* distinguishable from
  * *unusable*. `platformReadSync` returns null on ENOENT and re-throws every
  * other errno, which is the seam that makes this separable at all.
  */
-function _readConfigFile(filePath: string):
+function _readConfigFile(filePath: string, options: ConfigFileReadOptions = {}):
   | { kind: 'ok'; data: Record<string, unknown> }
   | { kind: 'absent' }
   | { kind: 'fault'; fault: ConfigFault } {
   let raw: string | null;
   try {
-    raw = platformReadSync(filePath);
+    raw = options.bounded ? _readBoundedConfigText(filePath, options.bounded) : platformReadSync(filePath);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code ?? 'EUNKNOWN';
     return { kind: 'fault', fault: { reason: CONFIG_REASON.CONFIG_UNREADABLE, path: filePath, code } };
@@ -607,7 +646,7 @@ function _readConfigFile(filePath: string):
   if (raw === null) return { kind: 'absent' };
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = options.format === 'jsonc' ? parseJsonc(raw) : JSON.parse(raw);
   } catch {
     return { kind: 'fault', fault: { reason: CONFIG_REASON.CONFIG_UNPARSEABLE, path: filePath, code: '' } };
   }
@@ -637,7 +676,7 @@ const _warnedUnusableConfig = new Set<string>();
  * is unreachable to almost every consumer, and the user whose config was
  * silently discarded still gets no signal. That was the whole defect in #1880.
  */
-function _warnUnusableConfig(fault: ConfigFault): void {
+function _warnUnusableConfig(fault: ConfigFault, consequence = 'using defaults instead'): void {
   // The NUL separators are load-bearing: without them `path`+`reason`+`code` is bare
   // concatenation and two distinct faults can key alike. They are written as escapes rather
   // than literal 0x00 bytes because a literal NUL makes the whole file binary to file(1) and
@@ -651,7 +690,7 @@ function _warnUnusableConfig(fault: ConfigFault): void {
     ? 'is not valid JSON'
     : `could not be read (${fault.code})`;
   process.stderr.write(
-    `gsd-tools: warning: ${fault.path} ${what} — its settings were NOT applied; using defaults instead\n`,
+    `gsd-tools: warning: ${fault.path} ${what} — its settings were NOT applied; ${consequence}\n`,
   );
 }
 
@@ -1203,6 +1242,8 @@ export = {
   loadConfig,
   loadConfigResolved,
   CONFIG_REASON,
+  _readConfigFile,
+  _warnUnusableConfig,
   _warnedUnusableConfig,
   isGitIgnored,
   CONFIG_DEFAULTS,

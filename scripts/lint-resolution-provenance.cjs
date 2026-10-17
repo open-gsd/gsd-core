@@ -33,6 +33,7 @@ const fs = require('fs');
 const path = require('path');
 const { assertWithinAllowlist } = require('./lib/allowlist-ratchet.cjs');
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
+const { stripComments } = require('./lint-hooks-runtime-build-seam.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const ALLOWLIST_PATH = path.join(__dirname, 'lint-resolution-provenance.allowlist.json');
@@ -65,7 +66,54 @@ const REGISTRY = [
     sourceFile: 'src/config-loader.cts',
     testFile: 'tests/config-loader.test.cjs',
   },
+  {
+    verb: 'config-value-resolver',
+    sourceFile: 'src/config-value-resolver.cts',
+    testFile: 'tests/config-value-resolver.test.cjs',
+  },
 ];
+
+/**
+ * ADR-1411 Decision 1: "who may open a config layer file" and "who may decide
+ * precedence" are the same two modules. The loader's per-layer read and its
+ * unusable-config diagnostic are exported only for the Config Value Resolution
+ * Module, so any other source naming them outside a comment is a second reader.
+ */
+const LAYER_READ_SEAM = Object.freeze({
+  identifiers: ['_readConfigFile', '_warnUnusableConfig'],
+  owners: ['src/config-loader.cts', 'src/config-value-resolver.cts'],
+});
+
+/**
+ * Pure: report every non-owner source that names a layer-read seam identifier
+ * in code. `sources` is `[{ file, text }]` with repo-relative posix paths.
+ */
+function checkLayerReadSeam({ sources, seam = LAYER_READ_SEAM, fail }) {
+  const pattern = new RegExp(`\\b(${seam.identifiers.join('|')})\\b`);
+  let ok = true;
+  for (const { file, text } of sources) {
+    if (seam.owners.includes(file)) continue;
+    const match = pattern.exec(stripComments(text));
+    if (!match) continue;
+    fail(
+      `[resolution-provenance] ${file} uses ${match[1]}, the config loader's internal layer read.\n` +
+        `  Only ${seam.owners.join(' and ')} may open a config layer file (ADR-1411 Decision 1);\n` +
+        `  read a resolution from resolveConfigValue instead.`
+    );
+    ok = false;
+  }
+  return { ok };
+}
+
+function listSources(dir) {
+  const out = [];
+  for (const entry of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+    const rel = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) out.push(...listSources(rel));
+    else if (entry.name.endsWith('.cts')) out.push(rel);
+  }
+  return out;
+}
 
 // Markers that MUST appear in every registered verb's test file.
 const MARKER_CONFIGURED_EMPTY = 'configured_empty';
@@ -184,17 +232,23 @@ function main() {
     fail: (msg) => failures.push(msg),
   });
 
-  if (!ok) {
+  const seam = checkLayerReadSeam({
+    sources: listSources('src').map((file) => ({ file, text: fs.readFileSync(path.join(ROOT, file), 'utf8') })),
+    fail: (msg) => failures.push(msg),
+  });
+
+  if (!ok || !seam.ok) {
     for (const msg of failures) process.stderr.write(`${msg}\n`);
     throw new ExitError(1);
   }
 
   console.log(
-    `ok lint-resolution-provenance: ${REGISTRY.length} registered verb(s), all carry configured_empty + not_configured contract tests`
+    `ok lint-resolution-provenance: ${REGISTRY.length} registered verb(s), all carry configured_empty + not_configured contract tests; ` +
+      `the config layer read stays inside ${LAYER_READ_SEAM.owners.length} owner modules`
   );
 }
 
-module.exports = { checkRegistry, REGISTRY };
+module.exports = { checkRegistry, checkLayerReadSeam, LAYER_READ_SEAM, REGISTRY };
 
 // Only run the CLI check when executed directly, not when imported by tests
 // (keeps the unit tests hermetic — importing checkRegistry must not run main).
