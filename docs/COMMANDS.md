@@ -1552,6 +1552,18 @@ gsd capability remove my-cap --scope project          # Turn the installed overl
 
 ---
 
+### `gsd-tools loop render-hooks`
+Resolve and render the active Capability hooks at a Loop Extension Point. Emits `{ point, activeHooks[], rendered, warnings?, context? }`.
+
+| Flag | Description |
+|------|-------------|
+| `<point>` | Loop Extension Point, e.g. `plan:pre` |
+| `--phase <token>` | Bare phase token (`05`, `07.5`). Adds `context: { phase, phaseDir }`, authoritative for task-local phase; omitted token means no `context` key. No match, ambiguity or foreign `project_code` prefix omits `context` with a warning. |
+| `--phase-dir <dir>` | Optional cross-check against the resolved directory; requires `--phase`. A different directory omits `context` with a warning. Emitted `phaseDir` is always the resolver's. |
+| `--config-dir <path>` | Runtime config directory for surface resolution |
+
+---
+
 ## Brownfield Commands
 
 ### `/gsd-map-codebase`

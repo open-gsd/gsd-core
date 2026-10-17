@@ -2,19 +2,19 @@
   {
     "file": "gsd-core/workflows/execute-phase/steps/verify-phase-goal.md",
     "rule": "L1",
-    "command": "VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)",
+    "command": "VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw --phase \"${PHASE_NUMBER}\")",
     "reason": "#5105/#5118: the shared verification step (execute-phase and verify-work re-verification) dispatches verify:post hooks BEFORE its own verifier and verification.fingerprint call, so gating on --after-fingerprint would be a no-op there by construction, not a defect."
   },
   {
     "file": "gsd-core/workflows/secure-phase.md",
     "rule": "L1",
-    "command": "VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)",
+    "command": "VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw --phase \"${PHASE_NUMBER}\")",
     "reason": "#5105: secure-phase.md's own dispatch is a standalone activation self-check (\"is the secure-phase step active\"), not a post-fingerprint re-dispatch. Gating it would move the secure-phase hook into skippedHooks whenever SECURITY.md already exists, breaking the documented standalone re-audit path."
   },
   {
     "file": "gsd-core/workflows/validate-phase.md",
     "rule": "L1",
-    "command": "VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)",
+    "command": "VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw --phase \"${PHASE_NUMBER}\")",
     "reason": "#5105: validate-phase.md's own dispatch is a standalone activation self-check, symmetric with secure-phase.md's — gating it would break the documented standalone re-audit path when VALIDATION.md already exists."
   },
   {
