@@ -268,3 +268,47 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     assert.strictEqual(unknown.review, true, 'an unparseable status must retain, never remove');
   });
 });
+
+describe('#5019 — --auto re-review keeps the external reviewer lane evidence', () => {
+  const FIX = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+  const REVIEW = fs.readFileSync(path.join(ROOT, 'gsd-core', 'workflows', 'code-review.md'), 'utf8');
+
+  test('fix side: prompt carries the block only if the file and its lane dir exist; cleanup removes both', () => {
+    const loop = stepRegion(FIX, 'auto_iteration_loop');
+    assert.match(loop, /\[ -f "\$LANE_EVIDENCE" \] && \[ -d "\$\(head -n 1 "\$LANE_EVIDENCE"\)" \]/);
+    assert.ok(loop.includes('tail -n +2 "$LANE_EVIDENCE"'));
+    assert.ok(loop.includes('${EXTERNAL_EVIDENCE_BLOCK}<config>'), 'empty block leaves the prompt unchanged');
+    const cleanup = stepRegion(FIX, 'cleanup_iteration_backups');
+    assert.ok(cleanup.includes('rm -rf "$D"') && cleanup.includes('rm -f "$LE"'));
+    assert.strictEqual(FIX.split('lane-evidence removal').length, 3, 'clean-exit and agent-failure exits run the removal');
+  });
+
+  test('commit_review persists the block + keeps the lane dir only for --auto; else unchanged', { skip: !HAS_BASH }, () => {
+    const fence = stepFence(REVIEW, 'commit_review');
+    const drive = (auto, block, stale) => {
+      const dir = createTempDir('gsd-5019-');
+      try {
+        const lanes = path.join(dir, 'lanes'); fs.mkdirSync(lanes);
+        const review = path.join(dir, '01-REVIEW.md');
+        const file = path.join(dir, '01-REVIEW-lane-evidence.md');
+        if (stale) fs.writeFileSync(file, 'stale');
+        const script = [
+          `REVIEW_PATH="${review}"; LANE_RUN_DIR="${lanes}"; COMMIT_DOCS=false`,
+          auto ? 'FIX_AUTO=true' : '',
+          `EXTERNAL_EVIDENCE_BLOCK="${block}"`,
+          fence,
+        ].join('\n');
+        runHook('-c', [script], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
+        return { file: fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null, lanes: fs.existsSync(lanes), lanesPath: lanes };
+      } finally { cleanup(dir); }
+    };
+    const kept = drive(true, '<external_reviewer_evidence>X</external_reviewer_evidence>', false);
+    assert.strictEqual(kept.file, kept.lanesPath + '\n<external_reviewer_evidence>X</external_reviewer_evidence>\n');
+    assert.strictEqual(kept.lanes, true, 'lane dir survives for the re-reviews');
+    const plain = drive(false, '<external_reviewer_evidence>X</external_reviewer_evidence>', false);
+    assert.strictEqual(plain.file, null);
+    assert.strictEqual(plain.lanes, false, 'no --auto: lane dir removed as before');
+    const stale = drive(true, '', true);
+    assert.strictEqual(stale.file, null, 'a stale file is removed when there is no block');
+  });
+});

@@ -826,7 +826,13 @@ After agent completes successfully, verify REVIEW.md was created and has valid s
 # #4209 R5: remove the reviewer-lane run dir now that the agent has read every evidence path it
 # cited (the agent ran to completion before this step, per `dispatch_reviewer_lanes` above) — a
 # no-op when no reviewer lane was dispatched (LANE_RUN_DIR stays unset).
-if [ -n "${LANE_RUN_DIR:-}" ]; then
+# #5019: drop any stale lane-evidence file; an `--auto` run with evidence keeps LANE_RUN_DIR (line 1
+# of the file names it) so code-review-fix.md's re-reviews can read the same cited paths. It
+# removes both when the loop ends.
+rm -f "${REVIEW_PATH%.md}-lane-evidence.md"
+if [ -n "${EXTERNAL_EVIDENCE_BLOCK:-}" ] && [ "${FIX_AUTO:-}" = "true" ] && [ -n "${LANE_RUN_DIR:-}" ]; then
+  printf '%s\n%s\n' "$LANE_RUN_DIR" "$EXTERNAL_EVIDENCE_BLOCK" > "${REVIEW_PATH%.md}-lane-evidence.md"
+elif [ -n "${LANE_RUN_DIR:-}" ]; then
   rm -rf "$LANE_RUN_DIR"
 fi
 
