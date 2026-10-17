@@ -522,9 +522,14 @@ describe('#5143 every shipped statement that reads the typed text is injection-s
     return parts;
   };
 
-  const statements = collectStatements();
+  // The matrix spawns bash per statement. The behavior under test is bash
+  // parsing of the shipped text, identical on every OS, and Windows runners fork
+  // 10-100x slower (this file alone blew the 600 s chunk budget there), so the
+  // matrix runs on the POSIX lanes; the structural guards above run everywhere.
+  const MATRIX = process.platform !== 'win32';
+  const statements = MATRIX ? collectStatements() : [];
 
-  test('statement extraction covers the shipped fences', () => {
+  test('statement extraction covers the shipped fences', { skip: !MATRIX && 'bash-per-statement matrix runs on POSIX lanes only' }, () => {
     assert.ok(statements.length > 100, `expected >100 statements, found ${statements.length}`);
     const unparsable = statements.filter((s) => s.stmt === null);
     assert.deepStrictEqual(unparsable.map((s) => `${s.file}:${s.line}`), [], 'every use must sit in a syntactically complete statement');
