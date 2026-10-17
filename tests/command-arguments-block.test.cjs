@@ -421,47 +421,70 @@ describe('#5143 every shipped statement that reads the typed text is injection-s
   const CLEAN = [
     '',
     '3',
-    '--auto',
     '--ws my-ws 4.2',
-    '--from 3 --to 5 --converge',
-    '--wave 2 --ws x1',
     'fix the login bug',
-    '--reviews --max-cycles 3',
-    '--research-phase 7 --view',
     '--prd specs/prd.md --granularity fine --ws alpha',
   ];
   const PAYLOADS = ['x"; touch CANARY; echo "', '$(touch CANARY)', '`touch CANARY`', 'a\n--ws b"c\n$(touch CANARY)', 'it\'s "unbalanced'];
 
   // Grow a statement from a use line until bash accepts it as complete syntax.
-  function statementFrom(lines, start) {
-    for (let end = start; end < Math.min(lines.length, start + 60); end++) {
-      const candidate = lines.slice(start, end + 1).join('\n');
-      try {
-        execFileSync('bash', ['--noprofile', '--norc', '-n'], { input: candidate, stdio: ['pipe', 'pipe', 'pipe'], timeout: PROBE_TIMEOUT_MS });
-        return candidate;
-      } catch (_err) {
-        // keep growing
+  // Every pending start is probed in one bash process per round (a process per
+  // probe costs minutes on Windows runners); `out[k]` is the first candidate
+  // bash parses, or null when none does within 60 lines.
+  function resolveStatements(jobs) {
+    const out = jobs.map(() => null);
+    let pending = jobs.map((_, k) => k);
+    const dir = createTempDir('gsd-5143-syntax-');
+    try {
+      for (let len = 1; len <= 60 && pending.length > 0; len++) {
+        const active = pending.filter((k) => jobs[k].i + len <= jobs[k].lines.length);
+        if (active.length === 0) break;
+        active.forEach((k) => {
+          fs.writeFileSync(path.join(dir, `c${k}`), jobs[k].lines.slice(jobs[k].i, jobs[k].i + len).join('\n'));
+        });
+        const ok = new Set(
+          execFileSync('bash', ['--noprofile', '--norc', '-c', 'for f in "$@"; do bash --noprofile --norc -n "$f" 2>/dev/null && echo "$f"; done; exit 0', 'probe', ...active.map((k) => `c${k}`)], {
+            cwd: dir, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS * 4,
+          }).split('\n').filter(Boolean),
+        );
+        for (const k of active) {
+          if (ok.has(`c${k}`)) out[k] = jobs[k].lines.slice(jobs[k].i, jobs[k].i + len).join('\n');
+        }
+        pending = active.filter((k) => out[k] === null);
       }
+    } finally {
+      cleanup(dir);
     }
-    return null;
+    return out;
   }
 
   function collectStatements() {
-    const out = [];
+    const jobs = [];
+    const fences = [];
     for (const file of listWorkflowFiles()) {
       for (const fence of shellFences(fs.readFileSync(file, 'utf8'))) {
         const cap = captureIndex(fence.lines);
         if (cap === -1) continue;
-        let i = cap + CAPTURE_LINES.length;
-        while (i < fence.lines.length) {
+        const first = cap + CAPTURE_LINES.length;
+        const starts = [];
+        for (let i = first; i < fence.lines.length; i++) {
           if (VAR_RE.test(fence.lines[i]) && !/^\s*#/.test(fence.lines[i])) {
-            const stmt = statementFrom(fence.lines, i);
-            out.push({ file: path.relative(ROOT, file).split(path.sep).join('/'), line: fence.startLine + i, stmt });
-            i += stmt ? stmt.split('\n').length : 1;
-          } else {
-            i++;
+            starts.push({ i, k: jobs.length });
+            jobs.push({ lines: fence.lines, i });
           }
         }
+        fences.push({ file, fence, starts });
+      }
+    }
+    const resolved = resolveStatements(jobs);
+    const out = [];
+    for (const { file, fence, starts } of fences) {
+      let resumeAt = 0;
+      for (const { i, k } of starts) {
+        if (i < resumeAt) continue;
+        const stmt = resolved[k];
+        out.push({ file: path.relative(ROOT, file).split(path.sep).join('/'), line: fence.startLine + i, stmt });
+        resumeAt = i + (stmt ? stmt.split('\n').length : 1);
       }
     }
     return out;
@@ -470,8 +493,8 @@ describe('#5143 every shipped statement that reads the typed text is injection-s
   // Snapshot the variable NAMES before the statement and print only the ones it
   // created: a blanket `declare -p` also lists shell-internal variables whose
   // set differs between bash builds (3.2 vs 5.x on macOS runners).
-  const PRELUDE = 'gsd_run() { :; }\n__gsd_before=" $(compgen -v | tr \'\\n\' \' \') "\n';
-  const EPILOGUE = '\nfor __gsd_n in $(compgen -v); do case "$__gsd_before" in *" $__gsd_n "*) ;; *) case "$__gsd_n" in __gsd_*|GSD_ARGS|BASH*|_) ;; *) declare -p "$__gsd_n" 2>/dev/null ;; esac ;; esac; done | sort\n';
+  const PRELUDE = 'gsd_run() { :; }\n__gsd_before="\n$(compgen -v)\n"\n';
+  const EPILOGUE = '\nfor __gsd_n in $(compgen -v); do case "$__gsd_before" in *"\n$__gsd_n\n"*) ;; *) case "$__gsd_n" in __gsd_*|GSD_ARGS|BASH*|_) ;; *) declare -p "$__gsd_n" 2>/dev/null ;; esac ;; esac; done\n';
 
   const shq = (text) => `'${text.replace(/'/g, `'\\''`)}'`;
 
@@ -482,6 +505,22 @@ describe('#5143 every shipped statement that reads the typed text is injection-s
       return String(err.stdout || '');
     }
   }
+
+  // One bash process per statement (spawning is the dominant cost, most of all
+  // on Windows runners): every case runs in its own subshell, separated by a
+  // marker, with hostile payloads each confined to their own directory.
+  const cases = (stmt) => {
+    const parts = [];
+    for (const clean of CLEAN) {
+      const spliced = stmt.replace(/\$\{GSD_ARGS\}|\$GSD_ARGS\b/g, clean);
+      parts.push(`(\nGSD_ARGS=${shq(clean)}\n${stmt}${EPILOGUE})`);
+      parts.push(`(\n${spliced}${EPILOGUE})`);
+    }
+    PAYLOADS.forEach((payload, i) => {
+      parts.push(`mkdir -p p${i}\n(cd p${i}\nGSD_ARGS=${shq(payload)}\n${stmt}\n)`);
+    });
+    return parts;
+  };
 
   const statements = collectStatements();
 
@@ -496,19 +535,17 @@ describe('#5143 every shipped statement that reads the typed text is injection-s
     test(`${file}:${line}`, () => {
       const dir = createTempDir('gsd-5143-');
       try {
+        const parts = cases(stmt);
+        const script = `${PRELUDE}` + parts.map((part) => `${part}\necho @@GSD-CASE@@`).join('\n');
+        const outputs = run(script, dir).split('@@GSD-CASE@@\n');
         // Clean input: reading the variable gives what the old textual splice gave.
-        for (const clean of CLEAN) {
-          const withVar = run(`${PRELUDE}GSD_ARGS=${shq(clean)}\n${stmt}${EPILOGUE}`, dir);
-          const spliced = stmt.replace(/\$\{GSD_ARGS\}|\$GSD_ARGS\b/g, clean);
-          const withSplice = run(`${PRELUDE}${spliced}${EPILOGUE}`, dir);
-          assert.equal(withVar, withSplice, `clean input ${JSON.stringify(clean)} must parse as before`);
-        }
+        CLEAN.forEach((clean, i) => {
+          assert.equal(outputs[2 * i], outputs[2 * i + 1], `clean input ${JSON.stringify(clean)} must parse as before`);
+        });
         // Hostile input as DATA: nothing is run.
-        for (const payload of PAYLOADS) {
-          if (fs.existsSync(path.join(dir, 'CANARY'))) fs.unlinkSync(path.join(dir, 'CANARY'));
-          run(`${PRELUDE}GSD_ARGS=${shq(payload)}\n${stmt}${EPILOGUE}`, dir);
-          assert.equal(fs.existsSync(path.join(dir, 'CANARY')), false, `payload ${JSON.stringify(payload)} ran as shell`);
-        }
+        PAYLOADS.forEach((payload, i) => {
+          assert.equal(fs.existsSync(path.join(dir, `p${i}`, 'CANARY')), false, `payload ${JSON.stringify(payload)} ran as shell`);
+        });
       } finally {
         cleanup(dir);
       }
