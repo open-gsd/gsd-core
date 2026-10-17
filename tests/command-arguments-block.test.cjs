@@ -240,13 +240,13 @@ const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const WORKFLOWS_DIR = path.join(ROOT, 'gsd-core', 'workflows');
 const CAPTURE_LINES = [
-  'GSD_ARGS_FILE=$(mktemp); cat > "$GSD_ARGS_FILE" <<\'GSD_ARGS_END\'',
+  "IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true",
   '$ARGUMENTS',
   'GSD_ARGS_END',
-  'GSD_ARGS_TEXT=$(cat "$GSD_ARGS_FILE"); rm -f "$GSD_ARGS_FILE"',
+  "GSD_ARGS=${GSD_ARGS%$'\\n'}",
 ];
 const TOKEN_RE = /\$\{?ARGUMENTS\b/;
-const VAR_RE = /\$\{?GSD_ARGS_TEXT\b/;
+const VAR_RE = /\$\{?GSD_ARGS\b/;
 
 function listWorkflowFiles() {
   const out = [];
@@ -300,7 +300,7 @@ function argumentSpliceViolations(text) {
         violations.push(`${where}: $ARGUMENTS in a shell position: ${line.trim().slice(0, 80)}`);
       }
       if (VAR_RE.test(line) && !inCapture && (cap === -1 || i < cap)) {
-        violations.push(`${where}: $GSD_ARGS_TEXT used before the capture block`);
+        violations.push(`${where}: $GSD_ARGS used before the capture block`);
       }
     });
   }
@@ -337,12 +337,12 @@ describe('#5143 the guard can fail (mutation controls)', () => {
     assert.notDeepEqual(argumentSpliceViolations(fence('gsd_run query x $ARGUMENTS')), []);
   });
   test('flags a variable use that comes before (or without) the capture block', () => {
-    assert.notDeepEqual(argumentSpliceViolations(fence('echo "$GSD_ARGS_TEXT"')), []);
-    assert.notDeepEqual(argumentSpliceViolations(fence('echo "$GSD_ARGS_TEXT"', ...CAPTURE_LINES)), []);
+    assert.notDeepEqual(argumentSpliceViolations(fence('echo "$GSD_ARGS"')), []);
+    assert.notDeepEqual(argumentSpliceViolations(fence('echo "$GSD_ARGS"', ...CAPTURE_LINES)), []);
   });
   test('accepts the capture block followed by variable uses, and comments naming the token', () => {
     assert.deepStrictEqual(
-      argumentSpliceViolations(fence('# the typed text replaces $ARGUMENTS below', ...CAPTURE_LINES, 'echo "$GSD_ARGS_TEXT" | grep -q x')),
+      argumentSpliceViolations(fence('# the typed text replaces $ARGUMENTS below', ...CAPTURE_LINES, 'echo "$GSD_ARGS" | grep -q x')),
       [],
     );
   });
@@ -361,22 +361,44 @@ describe('#5143 the capture block treats hostile text as data (real bash)', () =
     '--from 3 --to 5 && touch CANARY',
   ];
 
-  function runCapture(typed, tail) {
+  // zsh is the macOS default shell; the capture must behave the same there.
+  const SHELLS = ['bash', 'zsh'].filter((sh) => {
+    try {
+      execFileSync(sh, ['--version'], { stdio: 'pipe', timeout: PROBE_TIMEOUT_MS });
+      return true;
+    } catch (_err) {
+      return false;
+    }
+  });
+
+  function runCapture(shell, typed, tail) {
     const dir = createTempDir('gsd-5143-');
     try {
       const script = [...CAPTURE_LINES.map((l) => (l === '$ARGUMENTS' ? typed : l)), tail].join('\n');
-      const stdout = execFileSync('bash', ['--noprofile', '--norc', '-c', script], { cwd: dir, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
+      const args = shell === 'bash' ? ['--noprofile', '--norc', '-c', script] : ['-f', '-c', script];
+      const stdout = execFileSync(shell, args, { cwd: dir, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
       return { stdout, canary: fs.existsSync(path.join(dir, 'CANARY')) };
     } finally {
       cleanup(dir);
     }
   }
 
-  for (const typed of HOSTILE) {
-    test(`round-trips ${JSON.stringify(typed).slice(0, 40)} exactly and runs nothing`, () => {
-      const { stdout, canary } = runCapture(typed, 'printf "%s" "$GSD_ARGS_TEXT"');
-      assert.equal(canary, false, 'the typed text must never run as shell');
-      assert.equal(stdout, typed);
+  test('bash is available (the zsh variants are skipped when zsh is not installed)', () => {
+    assert.ok(SHELLS.includes('bash'));
+  });
+
+  for (const shell of SHELLS) {
+    for (const typed of HOSTILE) {
+      test(`${shell}: round-trips ${JSON.stringify(typed).slice(0, 40)} exactly and runs nothing`, () => {
+        const { stdout, canary } = runCapture(shell, typed, 'printf "%s" "$GSD_ARGS"');
+        assert.equal(canary, false, 'the typed text must never run as shell');
+        assert.equal(stdout, typed);
+      });
+    }
+
+    test(`${shell}: an empty invocation leaves an empty (not newline) value`, () => {
+      const { stdout } = runCapture(shell, '', '[ -z "$GSD_ARGS" ] && printf EMPTY || printf "NOT-EMPTY"');
+      assert.equal(stdout, 'EMPTY');
     });
   }
 
@@ -446,7 +468,7 @@ describe('#5143 every shipped statement that reads the typed text is injection-s
   }
 
   const PRELUDE = 'gsd_run() { :; }\n';
-  const EPILOGUE = '\ndeclare -p 2>/dev/null | grep -Ev "^declare -[-a-zA-Z]* (BASH|SHLVL|PWD|OLDPWD|_=|EUID|PPID|UID|GROUPS|HOSTNAME|HOSTTYPE|IFS|MACHTYPE|OSTYPE|PS4|PIPESTATUS|SHELLOPTS|GSD_ARGS_TEXT|DIRSTACK|COMP)" | sort\n';
+  const EPILOGUE = '\ndeclare -p 2>/dev/null | grep -Ev "^declare -[-a-zA-Z]* (BASH|SHLVL|PWD|OLDPWD|_=|EUID|PPID|UID|GROUPS|HOSTNAME|HOSTTYPE|IFS|MACHTYPE|OSTYPE|PS4|PIPESTATUS|SHELLOPTS|GSD_ARGS|DIRSTACK|COMP)" | sort\n';
 
   const shq = (text) => `'${text.replace(/'/g, `'\\''`)}'`;
 
@@ -473,15 +495,15 @@ describe('#5143 every shipped statement that reads the typed text is injection-s
       try {
         // Clean input: reading the variable gives what the old textual splice gave.
         for (const clean of CLEAN) {
-          const withVar = run(`${PRELUDE}GSD_ARGS_TEXT=${shq(clean)}\n${stmt}${EPILOGUE}`, dir);
-          const spliced = stmt.replace(/\$\{GSD_ARGS_TEXT\}|\$GSD_ARGS_TEXT\b/g, clean);
+          const withVar = run(`${PRELUDE}GSD_ARGS=${shq(clean)}\n${stmt}${EPILOGUE}`, dir);
+          const spliced = stmt.replace(/\$\{GSD_ARGS\}|\$GSD_ARGS\b/g, clean);
           const withSplice = run(`${PRELUDE}${spliced}${EPILOGUE}`, dir);
           assert.equal(withVar, withSplice, `clean input ${JSON.stringify(clean)} must parse as before`);
         }
         // Hostile input as DATA: nothing is run.
         for (const payload of PAYLOADS) {
           if (fs.existsSync(path.join(dir, 'CANARY'))) fs.unlinkSync(path.join(dir, 'CANARY'));
-          run(`${PRELUDE}GSD_ARGS_TEXT=${shq(payload)}\n${stmt}${EPILOGUE}`, dir);
+          run(`${PRELUDE}GSD_ARGS=${shq(payload)}\n${stmt}${EPILOGUE}`, dir);
           assert.equal(fs.existsSync(path.join(dir, 'CANARY')), false, `payload ${JSON.stringify(payload)} ran as shell`);
         }
       } finally {

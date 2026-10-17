@@ -148,11 +148,11 @@ If $ARGUMENTS is a new description (no matching thread file):
 
 1. Generate slug from description:
    ```bash
-GSD_ARGS_FILE=$(mktemp); cat > "$GSD_ARGS_FILE" <<'GSD_ARGS_END'
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
 GSD_ARGS_END
-GSD_ARGS_TEXT=$(cat "$GSD_ARGS_FILE"); rm -f "$GSD_ARGS_FILE"
-   SLUG=$(gsd_run query generate-slug "$GSD_ARGS_TEXT" --raw)
+GSD_ARGS=${GSD_ARGS%$'\n'}
+   SLUG=$(gsd_run query generate-slug "$GSD_ARGS" --raw)
    ```
 
 2. Create the threads directory if needed:
@@ -196,11 +196,11 @@ updated: {today ISO date}
 
 5. Commit:
    ```bash
-GSD_ARGS_FILE=$(mktemp); cat > "$GSD_ARGS_FILE" <<'GSD_ARGS_END'
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
 GSD_ARGS_END
-GSD_ARGS_TEXT=$(cat "$GSD_ARGS_FILE"); rm -f "$GSD_ARGS_FILE"
-   gsd_run query commit "docs: create thread — ${GSD_ARGS_TEXT}" --files ".planning/threads/${SLUG}.md"
+GSD_ARGS=${GSD_ARGS%$'\n'}
+   gsd_run query commit "docs: create thread — ${GSD_ARGS}" --files ".planning/threads/${SLUG}.md"
    ```
 
 6. Report:

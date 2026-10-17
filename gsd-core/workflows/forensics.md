@@ -14,11 +14,11 @@ Only write the forensic report.
 ## Step 1: Get Problem Description
 
 ```bash
-GSD_ARGS_FILE=$(mktemp); cat > "$GSD_ARGS_FILE" <<'GSD_ARGS_END'
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
 GSD_ARGS_END
-GSD_ARGS_TEXT=$(cat "$GSD_ARGS_FILE"); rm -f "$GSD_ARGS_FILE"
-PROBLEM="$GSD_ARGS_TEXT"
+GSD_ARGS=${GSD_ARGS%$'\n'}
+PROBLEM="$GSD_ARGS"
 ```
 
 If `$ARGUMENTS` is empty, ask the user:

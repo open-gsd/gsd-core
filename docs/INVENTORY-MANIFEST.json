@@ -715,6 +715,7 @@
       "new-project/steps/auto-mode-detection.md",
       "new-project/steps/codebase-map-offer.md",
       "plan-phase/steps/adr-ingest-express-path.md",
+      "plan-phase/steps/auto-advance-check.md",
       "plan-phase/steps/chunked-planning-mode.md",
       "plan-phase/steps/closed-phase-gate.md",
       "plan-phase/steps/prd-express-gate.md",

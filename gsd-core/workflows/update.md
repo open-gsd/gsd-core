@@ -99,11 +99,11 @@ Exit.
 Determine the release channel from `$ARGUMENTS`. This selects which npm dist-tag the entire update flow targets — `latest` (stable) by default, or `next` (the RC channel established by ADR #660) when the user opts in with `--next`/`--rc`:
 
 ```bash
-GSD_ARGS_FILE=$(mktemp); cat > "$GSD_ARGS_FILE" <<'GSD_ARGS_END'
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
 GSD_ARGS_END
-GSD_ARGS_TEXT=$(cat "$GSD_ARGS_FILE"); rm -f "$GSD_ARGS_FILE"
-case " $GSD_ARGS_TEXT " in
+GSD_ARGS=${GSD_ARGS%$'\n'}
+case " $GSD_ARGS " in
   *" --next "*|*" --rc "*)
     TAG="next"
     CHANNEL_LABEL="next (RC)"

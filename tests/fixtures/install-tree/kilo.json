@@ -573,6 +573,7 @@
   "gsd-core/workflows/plan-phase.md",
   "gsd-core/workflows/plan-phase/detail/elaboration.md",
   "gsd-core/workflows/plan-phase/steps/adr-ingest-express-path.md",
+  "gsd-core/workflows/plan-phase/steps/auto-advance-check.md",
   "gsd-core/workflows/plan-phase/steps/chunked-planning-mode.md",
   "gsd-core/workflows/plan-phase/steps/closed-phase-gate.md",
   "gsd-core/workflows/plan-phase/steps/prd-express-gate.md",

@@ -25,16 +25,16 @@ Parse `$ARGUMENTS` for the idea summary.
 First, check for an enrich flag:
 
 ```bash
-GSD_ARGS_FILE=$(mktemp); cat > "$GSD_ARGS_FILE" <<'GSD_ARGS_END'
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
 GSD_ARGS_END
-GSD_ARGS_TEXT=$(cat "$GSD_ARGS_FILE"); rm -f "$GSD_ARGS_FILE"
-if echo "$GSD_ARGS_TEXT" | grep -qE '\-\-enrich[[:space:]]+SEED-[0-9]+(-[a-zA-Z0-9]{3})?'; then
+GSD_ARGS=${GSD_ARGS%$'\n'}
+if echo "$GSD_ARGS" | grep -qE '\-\-enrich[[:space:]]+SEED-[0-9]+(-[a-zA-Z0-9]{3})?'; then
   # Anchor on the flag and capture the COMPLETE id — uppercase-tolerant, since
   # the docs display SEED-YYMMDD-XXX. A leftmost `SEED-[0-9]+` would truncate
   # an uppercase or malformed suffix to its date and enrich an arbitrary
   # same-day seed (#4378 review).
-  ENRICH_MATCH=$(echo "$GSD_ARGS_TEXT" | grep -oE '\-\-enrich[[:space:]]+SEED-[0-9]+(-[a-zA-Z0-9]{3})?' | head -1)
+  ENRICH_MATCH=$(echo "$GSD_ARGS" | grep -oE '\-\-enrich[[:space:]]+SEED-[0-9]+(-[a-zA-Z0-9]{3})?' | head -1)
   ENRICH_TARGET=${ENRICH_MATCH##*[[:space:]]}
   SEED_FILE=$(ls .planning/seeds/${ENRICH_TARGET}-*.md 2>/dev/null) || true
   if [ -z "$SEED_FILE" ]; then
@@ -48,8 +48,8 @@ if echo "$GSD_ARGS_TEXT" | grep -qE '\-\-enrich[[:space:]]+SEED-[0-9]+(-[a-zA-Z0
   fi
   # Skip to enrich-seed step — do not prompt for $IDEA
 else
-  if [ -n "$GSD_ARGS_TEXT" ]; then
-    IDEA="$GSD_ARGS_TEXT"
+  if [ -n "$GSD_ARGS" ]; then
+    IDEA="$GSD_ARGS"
   else
     # Ask only when no arguments at all
     # What's the idea? (one sentence)

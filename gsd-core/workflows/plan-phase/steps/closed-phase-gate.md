@@ -5,17 +5,17 @@ The init JSON includes `phase_status` — one of `Pending | Planned | In Progres
 Parse `phase_status` from the init JSON, then:
 
 ```bash
-GSD_ARGS_FILE=$(mktemp); cat > "$GSD_ARGS_FILE" <<'GSD_ARGS_END'
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
 GSD_ARGS_END
-GSD_ARGS_TEXT=$(cat "$GSD_ARGS_FILE"); rm -f "$GSD_ARGS_FILE"
+GSD_ARGS=${GSD_ARGS%$'\n'}
 FORCE_REPLAN=false
-if [[ "$GSD_ARGS_TEXT" =~ (^|[[:space:]])--force([[:space:]]|$) ]]; then
+if [[ "$GSD_ARGS" =~ (^|[[:space:]])--force([[:space:]]|$) ]]; then
   FORCE_REPLAN=true
 fi
 
 if [ "${phase_status}" = "Complete" ]; then
-  if [[ "$GSD_ARGS_TEXT" =~ (^|[[:space:]])--reviews([[:space:]]|$) ]]; then
+  if [[ "$GSD_ARGS" =~ (^|[[:space:]])--reviews([[:space:]]|$) ]]; then
     # --reviews on a closed phase is never legitimate — concerns belong in a
     # new phase or issue against the closed phase's commits.
     cat <<EOF >&2
