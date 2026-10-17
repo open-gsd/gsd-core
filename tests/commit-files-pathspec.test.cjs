@@ -21,6 +21,8 @@ const { spawnSync } = require('child_process');
 const { createTempGitProject, cleanup, runGsdTools } = require('./helpers.cjs');
 const { execFileSync } = require('node:child_process');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { scanFencedBlocks, stripFencedCode, scanInlineCodeSpans } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
 const { GIT_TIMEOUT_MS, PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
@@ -3290,5 +3292,138 @@ cmdCommit(${JSON.stringify(tmpDir)}, 'docs: probe', ['.planning/STATE.md'], fals
     assert.equal(result.committed, false);
     assert.equal(result.reason, 'commit_failed');
     assert.equal(result.timed_out, undefined);
+  });
+});
+
+describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
+  // A bare `git commit -m ...` commits the whole index, sweeping in files other
+  // sessions staged. Prompts must prescribe `git commit -m "..." -- <paths>`.
+  // Scope: fenced blocks and inline code spans only (prose that merely names
+  // the command is not an invocation). A command spans from `git commit` to the
+  // next operator or unquoted newline, so a multi-line -m body is one command.
+  // tokenize() stops at the first unquoted `#`, so comments are stripped per
+  // line first or a later commit in the same block would be hidden.
+  const root = path.join(__dirname, '..');
+  const promptFiles = () => {
+    const out = [];
+    const walk = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (e.name.endsWith('.md')) out.push(path.relative(root, full).split(path.sep).join('/'));
+      }
+    };
+    for (const d of ['agents', 'gsd-core/workflows', 'gsd-core/references']) walk(path.join(root, d));
+    return out.sort();
+  };
+  // commentPortion restarts quote state per line, so a `#` after a newline
+  // inside a quoted message looked like a comment and ate the closing quote.
+  const stripComments = (raw) => {
+    let q = null;
+    return raw.split('\n').map((line) => {
+      let head = '';
+      let rest = line;
+      if (q) {
+        let i = 0;
+        for (; i < line.length; i += 1) {
+          if (line[i] === '\\' && q === '"') i += 1;
+          else if (line[i] === q) break;
+        }
+        if (i >= line.length) return line;
+        head = line.slice(0, i + 1);
+        rest = line.slice(i + 1);
+        q = null;
+      }
+      // After a closing quote the 'x' makes commentPortion see mid-word: a `#`
+      // glued to the quote is literal in the shell.
+      const kept = rest.slice(0, rest.length - commentPortion(head ? 'x' + rest : rest).length);
+      for (let i = 0; i < kept.length; i += 1) {
+        const ch = kept[i];
+        if (q) {
+          if (ch === '\\' && q === '"') i += 1;
+          else if (ch === q) q = null;
+        } else if (ch === '\\') i += 1;
+        else if (ch === '"' || ch === "'") q = ch;
+      }
+      return head + kept;
+    }).join('\n');
+  };
+  // `inline`: a bare `git commit` in a prose code span names the command, it is not an invocation.
+  const unscopedCommits = (raw, inline = false) => {
+    const out = [];
+    const text = stripComments(raw);
+    const toks = tokenize(text);
+    for (let i = 0; i + 1 < toks.length; i += 1) {
+      if (toks[i].op || toks[i].redir || toks[i].value !== 'git' || toks[i + 1].value !== 'commit') continue;
+      const argv = [];
+      let prev = toks[i + 1];
+      for (let j = i + 2; j < toks.length && !toks[j].op; j += 1) {
+        if (/(?<!\\)\n/.test(text.slice(prev.end, toks[j].start))) break;
+        if (!toks[j].redir) argv.push(toks[j].value);
+        prev = toks[j];
+      }
+      const dd = argv.indexOf('--');
+      if ((dd === -1 && (argv.length > 0 || !inline)) || (dd !== -1 && dd === argv.length - 1)) out.push(text.slice(toks[i].start, prev.end));
+    }
+    return out;
+  };
+
+  test('scanner flags unscoped commits and passes scoped ones', () => {
+    assert.equal(unscopedCommits('git commit -m "x"').length, 1);
+    assert.equal(unscopedCommits('# note\ngit commit -m "x"').length, 1);
+    assert.equal(unscopedCommits('git commit -m x --').length, 1);
+    assert.equal(unscopedCommits('git commit -m "x" -- a b').length, 0);
+  });
+
+  test('a bare git commit (editor mode, no args) is unscoped', () => {
+    assert.equal(unscopedCommits('git commit').length, 1);
+    assert.equal(unscopedCommits('git commit', true).length, 0);
+    assert.equal(unscopedCommits('git commit\ngit commit -m "x" -- a').length, 1);
+  });
+
+  test('a # glued to a closing quote is literal, not a comment', () => {
+    assert.equal(unscopedCommits('echo "a\nb"#tag;git commit -m z').length, 1);
+  });
+
+  test('a # inside a multiline quoted message is not a comment', () => {
+    assert.equal(unscopedCommits('git commit -m "first\n# body"\ngit commit -m "later"').length, 2);
+  });
+
+  // Deliberate whole-index commits: a pathspec would break or defeat them.
+  // Key: `<file>: <first line of the command>`.
+  const WHOLE_INDEX_ALLOWLIST = new Map([
+    ['gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "feat: $branch for v[X.Y]"', 'squash merge: commit the merge result'],
+    ['gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "feat: $MILESTONE_BRANCH for v[X.Y]"', 'squash merge: commit the merge result'],
+    [`gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "Merge branch '$branch' for v[X.Y]"`, 'merge commit: git refuses a partial commit mid-merge'],
+    [`gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "Merge branch '$MILESTONE_BRANCH' for v[X.Y]"`, 'merge commit: git refuses a partial commit mid-merge'],
+    ['gsd-core/references/planning-config.md: git commit -m "chore: stop tracking planning docs"', 'commits the index removals: a -- .planning/ pathspec fails after git rm --cached; a staged-paths guard precedes it'],
+    ['gsd-core/workflows/pr-branch.md: git commit -q -C "$HASH"', 'cherry-pick replay: reuses the source commit message over the staged result'],
+    ['gsd-core/workflows/ship.md: git commit --allow-empty -m "chore: trigger CI (recover from ship-note skip-token)"', 'empty commit: no paths by design'],
+    ['gsd-core/workflows/undo.md: git commit -m "revert(${TARGET_PHASE}): undo phase ${TARGET_PHASE} — ${REVERT_REASON}"', 'commits the staged `git revert --no-commit` result'],
+    ['gsd-core/workflows/undo.md: git commit -m "revert(${TARGET_PLAN}): undo plan ${TARGET_PLAN} — ${REVERT_REASON}"', 'commits the staged `git revert --no-commit` result'],
+    ['gsd-core/workflows/undo.md: git commit -m "revert: undo ${N} selected commits — ${REVERT_REASON}"', 'commits the staged `git revert --no-commit` result'],
+  ]);
+
+  test('every git commit with arguments carries a -- pathspec', () => {
+    const offenders = [];
+    const seen = new Set();
+    for (const f of promptFiles()) {
+      const md = fs.readFileSync(path.join(root, f), 'utf8');
+      const lines = splitLines(md);
+      const segments = scanFencedBlocks(lines).map((b) =>
+        [lines.slice(b.openLineIdx + 1, b.closeLineIdx === -1 ? lines.length : b.closeLineIdx).join('\n'), false]);
+      for (const s of scanInlineCodeSpans(stripFencedCode(md).text)) segments.push([s.content, true]);
+      for (const [seg, inline] of segments) {
+        for (const cmd of unscopedCommits(seg, inline)) {
+          const key = `${f}: ${cmd.split('\n')[0]}`;
+          if (WHOLE_INDEX_ALLOWLIST.has(key)) seen.add(key);
+          else offenders.push(key);
+        }
+      }
+    }
+    assert.deepStrictEqual([...WHOLE_INDEX_ALLOWLIST.keys()].filter((k) => !seen.has(k)), [],
+      'stale WHOLE_INDEX_ALLOWLIST entries: remove them');
+    assert.deepStrictEqual(offenders, [],
+      'unscoped `git commit` in shipped prompts sweeps foreign staged files (#5211); append `-- <paths>`');
   });
 });

@@ -155,7 +155,7 @@ gsd_run query verification.append-audit "${PHASE_DIR}/${PADDED_PHASE}-VALIDATION
 
 ```bash
 git add {test_files}
-git commit -m "test(phase-${PHASE}): add Nyquist validation tests"
+git commit -m "test(phase-${PHASE}): add Nyquist validation tests" -- {test_files}
 
 gsd_run query commit "docs(phase-${PHASE}): add/update validation strategy" \
   --files "${PHASE_DIR}/${PADDED_PHASE}-VALIDATION.md"

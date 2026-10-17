@@ -664,7 +664,12 @@ If `section_manifest` is `null` or `"git-tag"` is in its `included` list: read a
 Commit the REQUIREMENTS.md deletion (archive files and ROADMAP.md were already committed in the safety commit in `reorganize_roadmap_and_delete_originals`).
 
 ```bash
-git commit -m "chore: remove REQUIREMENTS.md for v[X.Y] milestone"
+GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+INIT_REORG=$(gsd_run query init.complete-milestone ${GSD_WS:+--ws=${GSD_WS##* }})
+if [[ "$INIT_REORG" == @file:* ]]; then INIT_REORG=$(cat "${INIT_REORG#@file:}"); fi
+_gsd_field() { node -e "const o=JSON.parse(process.argv[1]); const v=o[process.argv[2]]; process.stdout.write(v==null?'':String(v))" "$1" "$2"; }
+REQUIREMENTS_PATH=$(_gsd_field "$INIT_REORG" requirements_path)
+git commit -m "chore: remove REQUIREMENTS.md for v[X.Y] milestone" -- "$REQUIREMENTS_PATH"
 ```
 
 Confirm: "Committed: chore: remove REQUIREMENTS.md for v[X.Y] milestone"

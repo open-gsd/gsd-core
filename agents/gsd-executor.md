@@ -566,8 +566,9 @@ git commit -m "{type}({phase}-{plan}): {concise task description}
 
 - {key change 1}
 - {key change 2}
-"
+" -- {step-2 paths}
 ```
+`--` commits only those paths' working-tree content: list every step-2 path (both old and new path of a rename); `git add` new files first.
 
 **5. Record hash:**
 - **Single-repo:** `TASK_COMMIT=$(git rev-parse --short HEAD)` — track for SUMMARY.
@@ -624,7 +625,7 @@ back, those deletions appear on the main branch, destroying prior-wave work (#20
   touching `refs/stash`:
 
   - **Move WIP off the working tree:** commit it to a throwaway branch you own
-    (e.g. `git checkout -b scratch-/<task>-wip && git add -A && git commit -m "wip"`),
+    (e.g. `git checkout -b scratch-/<task>-wip && git add -A && git commit -m "wip" -- .`),
     then `git checkout <your-worktree-branch>` to return to your task. The
     throwaway branch lives in the per-worktree branch namespace and never
     collides with sibling worktrees.
