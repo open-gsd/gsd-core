@@ -307,10 +307,14 @@ per group of related gaps) using the standard phase chain:
 
 /clear then:
 
-/gsd:phase --insert <N> "Close gap: <REQ-ID> — <description>"
-/gsd:discuss-phase <N>
-/gsd:plan-phase <N>
-/gsd:execute-phase <N>
+/gsd:phase --insert <after-phase> "Close gap: <REQ-ID> — <description>"
+/gsd:discuss-phase <new-phase>
+/gsd:plan-phase <new-phase>
+/gsd:execute-phase <new-phase>
+
+`<after-phase>` is the phase the closure phase goes after. `<new-phase>` is
+the number the insert prints for the phase it creates (e.g. `5.1` after `5`,
+or `5.2` if `5.1` exists), never `<after-phase>`.
 
 For Nyquist-coverage gaps flagged in the table above, prefer running
 `/gsd:validate-phase <N>` for each flagged phase (and `/gsd:secure-phase
@@ -358,10 +362,14 @@ Insert a closure phase using the standard chain:
 
 /clear then:
 
-/gsd:phase --insert <N> "Address tech debt: <area>"
-/gsd:discuss-phase <N>
-/gsd:plan-phase <N>
-/gsd:execute-phase <N>
+/gsd:phase --insert <after-phase> "Address tech debt: <area>"
+/gsd:discuss-phase <new-phase>
+/gsd:plan-phase <new-phase>
+/gsd:execute-phase <new-phase>
+
+`<after-phase>` is the phase the cleanup phase goes after. `<new-phase>` is
+the number the insert prints for the phase it creates (e.g. `5.1` after `5`,
+or `5.2` if `5.1` exists), never `<after-phase>`.
 
 ---
 </offer_next>
