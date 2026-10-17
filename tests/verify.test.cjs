@@ -2704,6 +2704,85 @@ describe('bug-967 verify key-links strict file-path contract', () => {
     );
   });
 });
+
+// ── 7. Doc-contract guard #4946: gsd-planner.md, planner-guidance.md & parity across surfaces ──
+// Markdown prompt files are runtime contracts executed by LLM agents (see CONTRIBUTING exception matrix).
+// No per-line allow-test-rule markers needed since no-source-grep ignores markdown reads.
+describe('bug #4946: planner key_links schema contract and cross-surface parity', () => {
+  test('#4946: agents/gsd-planner.md states that key_links from/to must be relative file paths only', () => {
+    const plannerPath = path.join(__dirname, '..', 'agents', 'gsd-planner.md');
+    assert.ok(fs.existsSync(plannerPath), `gsd-planner.md not found at ${plannerPath}`);
+    const content = fs.readFileSync(plannerPath, 'utf-8');
+
+    assert.match(
+      content,
+      /`from` and `to` MUST be project-relative file paths only/i,
+      'agents/gsd-planner.md must state that key_links from/to must be project-relative file paths only',
+    );
+    assert.match(
+      content,
+      /Never put symbols, functions, or endpoints in `from:` or `to:`/i,
+      'agents/gsd-planner.md must instruct never to put symbols or endpoints in from/to',
+    );
+    assert.match(
+      content,
+      /Symbols, functions, endpoints.*MUST be placed in `via:`/i,
+      'agents/gsd-planner.md must instruct that symbols, endpoints, and details belong in via:',
+    );
+  });
+
+  test('#4946: gsd-core/references/planner-guidance.md carries key_links field schema contract table', () => {
+    const guidancePath = path.join(__dirname, '..', 'gsd-core', 'references', 'planner-guidance.md');
+    assert.ok(fs.existsSync(guidancePath), `planner-guidance.md not found at ${guidancePath}`);
+    const content = fs.readFileSync(guidancePath, 'utf-8');
+
+    assert.ok(
+      content.includes('`key_links[].from`') && content.includes('`key_links[].to`'),
+      'planner-guidance.md must include key_links[].from and key_links[].to in its schema table',
+    );
+    assert.match(
+      content,
+      /relative path from project root.*Describe components or symbols in `via:`/i,
+      'planner-guidance.md must specify relative path from project root for from',
+    );
+    assert.match(
+      content,
+      /`from:` and `to:` MUST be literal, project-relative file paths/i,
+      'planner-guidance.md must specify that from and to must be literal project-relative file paths',
+    );
+    assert.match(
+      content,
+      /Never place functions, symbols.*HTTP endpoints.*in `from:` or `to:`/i,
+      'planner-guidance.md must instruct never to place symbols or endpoints in from/to',
+    );
+    assert.match(
+      content,
+      /All symbols, methods, and endpoints belong in `via:`/i,
+      'planner-guidance.md must explicitly instruct that symbols and endpoints belong in via:',
+    );
+  });
+
+  test('#4946: parity: planner-guidance.md, phase-prompt.md, plan-md.md, and gsd-planner.md agree on key_links contract', () => {
+    const guidanceContent = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'references', 'planner-guidance.md'), 'utf-8');
+    const promptContent = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'templates', 'phase-prompt.md'), 'utf-8');
+    const planDocContent = fs.readFileSync(path.join(__dirname, '..', 'docs', 'reference', 'plan-md.md'), 'utf-8');
+    const plannerContent = fs.readFileSync(path.join(__dirname, '..', 'agents', 'gsd-planner.md'), 'utf-8');
+
+    for (const content of [guidanceContent, promptContent, planDocContent]) {
+      assert.match(content, /Source file \(relative path from project root\)/i);
+      assert.match(content, /Target file \(relative path from project root\)/i);
+    }
+
+    for (const [name, content] of [
+      ['planner-guidance.md', guidanceContent],
+      ['phase-prompt.md', promptContent],
+      ['plan-md.md', planDocContent],
+      ['gsd-planner.md', plannerContent],
+    ]) {
+      assert.match(content, /symbols.*(?:in `?via:`?|belong in `?via:`?|placed in `?via:`?)/i, `${name} must specify symbols belong in via:`);
+    }
+  });
+});
   });
 }
 
