@@ -217,6 +217,7 @@ module.exports = {
   "tests/shared-hooks-dir-resolution.test.cjs",
   "tests/shell-command-projection-dispatch.test.cjs",
   "tests/shipped-reference-cites.test.cjs",
+  "tests/skill-manifest.test.cjs",
   "tests/spawn-liveness-banner.test.cjs",
   "tests/state-document.test.cjs",
   "tests/state-transition.test.cjs",
