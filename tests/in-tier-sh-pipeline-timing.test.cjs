@@ -18,12 +18,25 @@
  * Runs are round-robin with a rotating start, and EVERY run is printed in
  * order so a cold first execution shows up as a first-run outlier rather than
  * being averaged away. The report names no environment variable or value.
+ *
+ * Second test (cold `bash` launch vs temp drive and Defender): the 2026-10-17
+ * failure on `next` (run 39078837680, shard 2/3) was `spawnSync bash ETIMEDOUT`
+ * on the FIRST bash start in tests/nsegment-phase-grammar.test.cjs: 8,443 ms
+ * against a 5,000 ms bound, while the next two identical spawns took ~0.4-0.6 s.
+ * On this runner the checkout is on D: but TEMP/TMP and Git for Windows are on
+ * C:. It times the same `bash` start (script on stdin, as that test does) with
+ * the default TEMP/TMP and with TEMP/TMP moved to the checkout drive, reads
+ * Defender's state (counts only, no paths), and — in CI only — times the same
+ * cells before, during and after a Defender exclusion so cache warmth can be
+ * told apart from the exclusion itself. It asserts nothing.
  */
 
 const { test } = require('node:test');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { cleanup } = require('./helpers.cjs');
 
 const ROUNDS = 6;
 const BOUND_MS = 60_000;
@@ -94,9 +107,94 @@ test('in-tier: time the #4784 sh pipeline and its parts (win32 only; asserts not
     '',
     ...matrix.map(([label], i) => `- ${label}: ${runs[i].join(', ')}`),
   ];
-  const report = lines.join('\n');
+  emit(lines.join('\n'));
+});
+
+function emit(report) {
   process.stdout.write(`\n${report}\n`);
   if (process.env.GITHUB_STEP_SUMMARY) {
     try { fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${report}\n`); } catch { /* summary is best effort */ }
   }
+}
+
+const BASH_ROUNDS = 20;
+const BASH_SCRIPT = 'if [[ "$TEST_INPUT" =~ ^[0-9]+$ ]]; then echo MATCH; else echo NOMATCH; fi';
+const POWERSHELL_BOUND_MS = 30_000;
+
+function timeBash(bin, env) {
+  const started = process.hrtime.bigint();
+  const r = spawnSync(bin, [], { env: { ...env, TEST_INPUT: '6' }, input: BASH_SCRIPT, encoding: 'utf8', timeout: BOUND_MS, windowsHide: true });
+  const ms = Number((process.hrtime.bigint() - started) / 1000000n);
+  return `${ms}${r.error ? '!' + (r.error.code || 'err') : r.status === 0 ? '' : '?' + r.status}`;
+}
+
+function summarize(samples) {
+  const ms = samples.map((s) => parseInt(s, 10)).sort((a, b) => a - b);
+  const at = (p) => ms[Math.min(ms.length - 1, Math.floor(p * ms.length))];
+  return `min ${ms[0]} / median ${at(0.5)} / p90 ${at(0.9)} / max ${ms[ms.length - 1]}`;
+}
+
+function powershell(command) {
+  return spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', timeout: POWERSHELL_BOUND_MS, windowsHide: true });
+}
+
+function quoteList(paths) {
+  return paths.map((p) => `'${p.replace(/'/g, "''")}'`).join(',');
+}
+
+function runPhase(label, variants, rounds) {
+  const samples = variants.map(() => []);
+  for (let round = 0; round < rounds; round++) {
+    for (let k = 0; k < variants.length; k++) {
+      const i = (k + round) % variants.length;
+      samples[i].push(timeBash(variants[i][1], variants[i][2]));
+    }
+  }
+  return [
+    `**${label}** (${rounds} rounds, round-robin, rotating start; every run in order, ms)`,
+    '',
+    ...variants.map(([name], i) => `- ${name}: ${summarize(samples[i])} | ${samples[i].join(', ')}`),
+    '',
+  ];
+}
+
+test('in-tier: time cold bash launches by temp drive and Defender state (win32 only; asserts nothing)', { skip: process.platform !== 'win32' && 'Windows-only' }, () => {
+  const checkoutDrive = path.parse(process.cwd()).root;
+  const probeTmp = fs.mkdtempSync(path.join(process.cwd(), '.tmp-bash-probe-'));
+  const gitBash = ['C:\\Program Files\\Git\\bin\\bash.exe', 'C:\\Program Files\\Git\\usr\\bin\\bash.exe'].find((p) => fs.existsSync(p)) || null;
+  const onCheckoutDrive = { ...process.env, TEMP: probeTmp, TMP: probeTmp };
+  const variants = [
+    ['bash (PATH), default TEMP/TMP', 'bash', process.env],
+    ['bash (PATH), TEMP/TMP on the checkout drive', 'bash', onCheckoutDrive],
+  ];
+  if (gitBash) {
+    variants.push(['bash (absolute), default TEMP/TMP', gitBash, process.env]);
+    variants.push(['bash (absolute), TEMP/TMP on the checkout drive', gitBash, onCheckoutDrive]);
+  }
+  const lines = [
+    '### cold `bash` launch: temp drive and Defender, inside the Windows conformance tier',
+    '',
+    `checkout drive: ${checkoutDrive} ; default temp drive: ${path.parse(os.tmpdir()).root} ; Git bash at: ${gitBash || '(neither standard location)'}`,
+    '',
+  ];
+  try {
+    const status = powershell('$s = Get-MpComputerStatus; "RealTimeProtectionEnabled=$($s.RealTimeProtectionEnabled) IsTamperProtected=$($s.IsTamperProtected) AMRunningMode=$($s.AMRunningMode)"');
+    const prefs = powershell('$p = Get-MpPreference; "ExclusionPath count=$(@($p.ExclusionPath).Count) ExclusionProcess count=$(@($p.ExclusionProcess).Count) DisableRealtimeMonitoring=$($p.DisableRealtimeMonitoring)"');
+    lines.push(`Defender: ${String(status.stdout || status.error || '(no output)').trim()} ; ${String(prefs.stdout || prefs.error || '(no output)').trim()}`, '');
+    lines.push(...runPhase('phase 1: baseline', variants, BASH_ROUNDS));
+    if (process.env.GITHUB_ACTIONS === 'true' && gitBash) {
+      const targets = [path.dirname(path.dirname(gitBash)), probeTmp, os.tmpdir()];
+      const added = powershell(`Add-MpPreference -ExclusionPath ${quoteList(targets)}; 'applied'`);
+      lines.push(`Defender exclusion for the Git directory and both temp directories: ${added.status === 0 ? 'applied' : `failed (status ${added.status}${added.error ? ' ' + (added.error.code || 'err') : ''})`}`, '');
+      lines.push(...runPhase('phase 2: with the Defender exclusion', variants, BASH_ROUNDS));
+      const removed = powershell(`Remove-MpPreference -ExclusionPath ${quoteList(targets)}; 'removed'`);
+      lines.push(`Defender exclusion removed: ${removed.status === 0 ? 'yes' : `failed (status ${removed.status})`}`, '');
+      lines.push(...runPhase('phase 3: baseline again (compare with phase 1 to separate cache warmth from the exclusion)', variants, BASH_ROUNDS));
+    } else {
+      lines.push('Defender exclusion phases skipped (not CI, or Git bash not found).', '');
+    }
+  } finally {
+    cleanup(probeTmp);
+  }
+  emit(lines.join('\n'));
 });
