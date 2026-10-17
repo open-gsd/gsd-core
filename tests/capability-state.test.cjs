@@ -2293,3 +2293,42 @@ describe('regressions: --runtime override bypasses persisted runtime (#2003)', (
     }
   });
 });
+
+// #5121: the installed-runtime dependency manifest reads <configDir>/skills/gsd-*/SKILL.md; a
+// non-regular or oversized file is skipped like a missing one (no stem registered), not read.
+describe('regressions: #5121 _loadInstalledSkillsManifest bounds the SKILL.md read', () => {
+  const { SKILL_FILE_MAX_BYTES } = require('../gsd-core/bin/lib/capability-ledger.cjs');
+  const posixOnly = process.platform === 'win32' ? { skip: 'symlink fixtures are POSIX-only' } : {};
+
+  function withSkill(stem, write, run) {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-5121-'));
+    try {
+      const dir = path.join(configDir, 'skills', `gsd-${stem}`);
+      fs.mkdirSync(dir, { recursive: true });
+      write(path.join(dir, 'SKILL.md'));
+      run(_loadInstalledSkillsManifest(configDir));
+    } finally {
+      cleanup(configDir);
+    }
+  }
+
+  const body = (bytes) => 'requires: [phase]\n'.padEnd(bytes, 'x');
+
+  for (const [label, bytes, registered] of [
+    ['cap-1', SKILL_FILE_MAX_BYTES - 1, true],
+    ['cap', SKILL_FILE_MAX_BYTES, true],
+    ['cap+1', SKILL_FILE_MAX_BYTES + 1, false],
+  ]) {
+    test(`a ${label} byte SKILL.md ${registered ? 'registers its stem' : 'is skipped like a missing one'}`, () => {
+      withSkill('sized', (file) => fs.writeFileSync(file, `---\n${body(bytes - 8)}\n---\n`.slice(0, bytes)), (manifest) => {
+        assert.strictEqual(manifest.has('sized'), registered);
+      });
+    });
+  }
+
+  test('a SKILL.md symlinked to /dev/zero is skipped without reading it', posixOnly, () => {
+    withSkill('evil', (file) => fs.symlinkSync('/dev/zero', file), (manifest) => {
+      assert.strictEqual(manifest.has('evil'), false);
+    });
+  });
+});

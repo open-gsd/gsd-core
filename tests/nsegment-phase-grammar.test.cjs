@@ -549,10 +549,10 @@ describe('#4748 — autonomous.md --from/--to/--only and plan-review-convergence
   const prcText = fs.readFileSync(PLAN_REVIEW_CONVERGENCE, 'utf8');
 
   const sites = [
-    { name: 'autonomous.md --from', pattern: extractGrepPattern(autonomousText, 'FROM_PHASE=$(echo "$ARGUMENTS" | grep -oE'), args: (v) => `--from ${v}`, tail: "| awk '{print $2}'" },
-    { name: 'autonomous.md --to', pattern: extractGrepPattern(autonomousText, 'TO_PHASE=$(echo "$ARGUMENTS" | grep -oE'), args: (v) => `--from 1 --to ${v}`, tail: "| awk '{print $2}'" },
-    { name: 'autonomous.md --only', pattern: extractGrepPattern(autonomousText, 'ONLY_PHASE=$(echo "$ARGUMENTS" | grep -oE'), args: (v) => `--only ${v} --interactive`, tail: "| awk '{print $2}'" },
-    { name: 'plan-review-convergence.md', pattern: extractGrepPattern(prcText, 'PHASE=$(echo "$ARGUMENTS" | grep -oE'), args: (v) => `${v} --codex --max-cycles 3`, tail: '| head -1' },
+    { name: 'autonomous.md --from', pattern: extractGrepPattern(autonomousText, 'FROM_PHASE=$(echo "$GSD_ARGS" | grep -oE'), args: (v) => `--from ${v}`, tail: "| awk '{print $2}'" },
+    { name: 'autonomous.md --to', pattern: extractGrepPattern(autonomousText, 'TO_PHASE=$(echo "$GSD_ARGS" | grep -oE'), args: (v) => `--from 1 --to ${v}`, tail: "| awk '{print $2}'" },
+    { name: 'autonomous.md --only', pattern: extractGrepPattern(autonomousText, 'ONLY_PHASE=$(echo "$GSD_ARGS" | grep -oE'), args: (v) => `--only ${v} --interactive`, tail: "| awk '{print $2}'" },
+    { name: 'plan-review-convergence.md', pattern: extractGrepPattern(prcText, 'PHASE=$(echo "$GSD_ARGS" | grep -oE'), args: (v) => `${v} --codex --max-cycles 3`, tail: '| head -1' },
   ];
 
   function extract(site, v) {
