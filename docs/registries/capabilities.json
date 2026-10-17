@@ -1,1 +1,24 @@
-[]
+[
+  {
+    "id": "beads",
+    "name": "Beads Lifecycle",
+    "type": "capability",
+    "repo": "davdittrich/gsd-beads",
+    "description": "Ties gsd-core's plan, execute, verify and ship lifecycle to Beads (bd) issue tracking: syncs PLAN.md tasks into bd issues under a phase epic, recalls open issues that may touch a phase before planning, closes completed tasks' issues after each wave, writes BEADS.md, and blocks /gsd-ship while blocking_open or diverged is not 0. Needs the bd binary; every step degrades to a no-op with a STATE.md note when bd is missing.",
+    "author": "Dennis A. V. Dittrich",
+    "license": "MIT",
+    "enginesGsd": ">=1.11.0",
+    "install": "gsd capability install https://github.com/davdittrich/gsd-beads.git#v1.9.1",
+    "uninstall": "gsd capability remove beads",
+    "interactions": {
+      "loopExtensionPoints": ["plan:pre", "plan:post", "execute:wave:pre", "execute:wave:post", "verify:post", "ship:pre"],
+      "hookKinds": ["step", "contribution", "gate"],
+      "configKeys": ["beads.enabled", "beads.epic_per", "beads.ship_gate", "beads.sync_mode"],
+      "requires": [],
+      "runtimeCompat": ["all"],
+      "produces": ["BEADS-RECALL.md", "BEADS.md", "PLAN.md"],
+      "consumes": ["BEADS-RECALL.md", "BEADS.md", "CONTEXT.md", "PLAN.md", "UAT.md"]
+    },
+    "discussion": "https://github.com/open-gsd/gsd-core/discussions/5308"
+  }
+]
