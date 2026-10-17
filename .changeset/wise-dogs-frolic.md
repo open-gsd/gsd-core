@@ -1,0 +1,5 @@
+---
+type: Fixed
+pr: 5030
+---
+**`check decision-coverage-plan` no longer reports `covered: 0` when the phase-dir argument is not a directory or holds no plans.** Passing the phase number (e.g. `01`) where the phase directory belongs loaded zero plans, and the gate then listed every decision as uncovered, which looked exactly like a real coverage gap. Both decision-coverage gates now answer `reason: "phase directory not found"` (or `"phase path is not a directory"` when the argument names a file) and name the argument: the plan gate still fails closed, with `total`/`covered` null instead of a measured-looking zero, and the verify gate returns a non-blocking warning with no decision reported not-honored. A phase dir that cannot be read (e.g. `EACCES`) answers `reason: "phase directory unreadable"` with the error code and exits UNAVAILABLE (69) rather than being reported as missing. A phase dir with no PLAN file (for verify, no PLAN or SUMMARY file) answers `reason: "phase directory holds no plans"` the same way. Calling the plan gate with no phase-dir argument behaves as before. (#4939)

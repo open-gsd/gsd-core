@@ -33,6 +33,9 @@ const fc = require('./helpers/fast-check-setup.cjs');
 const { parseDecisions, extractDecisions } = require('../gsd-core/bin/lib/decisions.cjs');
 const { iterateBullets } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { routeCheckCommand } = require('../gsd-core/bin/lib/check-command-router.cjs');
+const { writeMethodFailurePreload } = require('./helpers/fs-failure.cjs');
+const { runTools } = require('./helpers/gsd-tools-cli.cjs');
 
 // ─── Regression #1364: markdown-header fallback ───────────────────────────────
 
@@ -3243,6 +3246,244 @@ describe('#4794: decision-coverage answers an unmeasured shape on could-not-pars
     assert.ok(r.unreadableIds.includes('D4x-01'), `phase-prefixed id must be captured, got: ${JSON.stringify(r.unreadableIds)}`);
     assert.ok(!r.unreadableIds.includes('D-01'), 'the parsed bullet is not unreadable');
   });
+});
+
+// ─── #4939: a phase dir that names no usable plans dir is a caller error, not covered: 0 ──
+
+describe('#4939: decision-coverage answers a caller error for a phase directory that is not found, not a directory, unreadable, or holds no plans', () => {
+  let tmpDir;
+  let phaseDir;
+  let contextPath;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-4939-');
+    phaseDir = path.join(tmpDir, '.planning', 'phases', '01-init');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    writeContextFile(phaseDir, [
+      '# Context',
+      '',
+      '<decisions>',
+      '',
+      '- **D-01: The list shows one row per contact.** Nothing else changes.',
+      '- **D-02: Contacts render as cards.** One pair, one card.',
+      '',
+      '</decisions>',
+    ].join('\n'));
+    writePlanFile(phaseDir, '01', '# Plan\n## Objective\nImplement D-01 and D-02.\n');
+    contextPath = path.join(phaseDir, 'CONTEXT.md');
+  });
+
+  afterEach(() => cleanup(tmpDir));
+
+  test('#4939: control — the phase DIRECTORY measures full coverage', () => {
+    const parsed = JSON.parse(runDecisionCoveragePlan(phaseDir, contextPath, tmpDir).output || '{}');
+    assert.strictEqual(parsed.passed, true, `control must pass, got: ${JSON.stringify(parsed)}`);
+    assert.strictEqual(parsed.covered, 2);
+  });
+
+  test('#4939: plan gate — the phase NUMBER in the phase-dir slot fails closed as a caller error, not covered: 0', () => {
+    // The issue's repro: `check decision-coverage-plan 01 <context>`. The plans
+    // exist and cite both decisions; nothing was scanned because "01" is not a
+    // directory. The gate used to answer covered: 0 with every decision uncovered.
+    const parsed = JSON.parse(runDecisionCoveragePlan('01', contextPath, tmpDir).output || '{}');
+
+    assert.strictEqual(parsed.passed, false, 'the gate must still block');
+    assert.strictEqual(parsed.skipped, false, 'must not be a green skip');
+    assert.strictEqual(parsed.reason, 'phase directory not found', `got: ${JSON.stringify(parsed)}`);
+    assert.strictEqual(parsed.total, null, 'total must be null — nothing was measured');
+    assert.strictEqual(parsed.covered, null, 'covered must be null — nothing was measured');
+    assert.ok(!('uncovered' in parsed), 'uncovered must be OMITTED — the list was never built');
+    assert.ok((parsed.message || '').includes('"01"'), 'the message must name the argument it could not find');
+  });
+
+  test('#4939: verify gate — the phase NUMBER in the phase-dir slot answers a non-blocking caller-error warning', () => {
+    const parsed = JSON.parse(
+      runGsdTools(['query', 'check.decision-coverage-verify', '01', contextPath], tmpDir).output || '{}',
+    );
+
+    assert.strictEqual(parsed.blocking, false, 'verify stays non-blocking');
+    assert.strictEqual(parsed.skipped, false, 'must not be a silent skip');
+    assert.strictEqual(parsed.reason, 'phase directory not found', `got: ${JSON.stringify(parsed)}`);
+    assert.deepStrictEqual(parsed.not_honored, [], 'no decision may be reported not-honored from a scan that never happened');
+    assert.strictEqual(parsed.honored, null, 'honored must be null — nothing was measured');
+    assert.strictEqual(parsed.total, null, 'total must be null — nothing was measured');
+    assert.ok((parsed.message || '').includes('"01"'), 'the message must name the argument it could not find');
+  });
+
+  test('#4939: plan gate — a FILE in the phase-dir slot is the same caller error', () => {
+    // fs.existsSync is true for a file, so the guard must ask for a directory.
+    const parsed = JSON.parse(runDecisionCoveragePlan(contextPath, contextPath, tmpDir).output || '{}');
+
+    assert.strictEqual(parsed.passed, false, 'the gate must still block');
+    assert.strictEqual(parsed.reason, 'phase path is not a directory', `got: ${JSON.stringify(parsed)}`);
+    assert.strictEqual(parsed.covered, null, 'covered must be null — nothing was measured');
+    assert.ok((parsed.message || '').includes('is a file, not a directory'),
+      `the message must say the path is a file, not that it does not exist: ${JSON.stringify(parsed.message)}`);
+  });
+
+  test('#4939: verify gate — control: the phase DIRECTORY measures honored decisions', () => {
+    const parsed = JSON.parse(
+      runGsdTools(['query', 'check.decision-coverage-verify', phaseDir, contextPath], tmpDir).output || '{}',
+    );
+
+    assert.strictEqual(parsed.reason, undefined, `control must not be a caller error, got: ${JSON.stringify(parsed)}`);
+    assert.strictEqual(parsed.total, 2);
+    assert.strictEqual(parsed.honored, 2);
+  });
+
+  test('#4939: verify gate — a FILE in the phase-dir slot is the same caller error', () => {
+    // A verify guard that only asked fs.existsSync would pass a file through.
+    const parsed = JSON.parse(
+      runGsdTools(['query', 'check.decision-coverage-verify', contextPath, contextPath], tmpDir).output || '{}',
+    );
+
+    assert.strictEqual(parsed.blocking, false, 'verify stays non-blocking');
+    assert.strictEqual(parsed.skipped, false, 'must not be a silent skip');
+    assert.strictEqual(parsed.reason, 'phase path is not a directory', `got: ${JSON.stringify(parsed)}`);
+    assert.deepStrictEqual(parsed.not_honored, [], 'no decision may be reported not-honored from a scan that never happened');
+    assert.strictEqual(parsed.honored, null, 'honored must be null — nothing was measured');
+    assert.strictEqual(parsed.total, null, 'total must be null — nothing was measured');
+    assert.ok((parsed.message || '').includes('is a file, not a directory'),
+      `the message must say the path is a file, not that it does not exist: ${JSON.stringify(parsed.message)}`);
+  });
+
+  // A stat failure other than ENOENT/ENOTDIR (a permission or I/O error) must be
+  // named as such, not reported as a missing directory. The failure is injected
+  // in-process by mocking fs.statSync for the phase dir alone, not by removing
+  // permission bits: root bypasses them and Windows ignores them.
+  function runGateWithStatFailure(t, subcommand, code) {
+    const realStatSync = fs.statSync;
+    t.mock.method(fs, 'statSync', (p, ...rest) => {
+      if (typeof p === 'string' && path.resolve(p) === path.resolve(phaseDir)) {
+        const err = new Error(`${code}: injected stat failure, stat '${p}'`);
+        err.code = code;
+        throw err;
+      }
+      return realStatSync.call(fs, p, ...rest);
+    });
+    let captured = '';
+    const realWriteSync = fs.writeSync;
+    t.mock.method(fs, 'writeSync', (fd, ...args) => {
+      if (fd === 1) {
+        const buf = args[0];
+        captured += Buffer.isBuffer(buf) ? buf.toString('utf-8') : String(buf);
+        return Buffer.isBuffer(buf) ? buf.length : Buffer.byteLength(String(buf));
+      }
+      return realWriteSync.call(fs, fd, ...args);
+    });
+    try {
+      routeCheckCommand({ args: ['check', subcommand, phaseDir, contextPath], cwd: tmpDir, raw: false });
+    } finally {
+      t.mock.restoreAll();
+    }
+    return JSON.parse(captured || '{}');
+  }
+
+  test('#4939: plan gate — an ENOENT stat failure is named as a missing directory', (t) => {
+    const parsed = runGateWithStatFailure(t, 'decision-coverage-plan', 'ENOENT');
+
+    assert.strictEqual(parsed.passed, false, 'the gate must still block');
+    assert.strictEqual(parsed.reason, 'phase directory not found', `got: ${JSON.stringify(parsed)}`);
+    assert.strictEqual(parsed.covered, null, 'covered must be null — nothing was measured');
+  });
+
+  test('#4939: verify gate — an ENOENT stat failure is named as a missing directory', (t) => {
+    const parsed = runGateWithStatFailure(t, 'decision-coverage-verify', 'ENOENT');
+
+    assert.strictEqual(parsed.blocking, false, 'verify stays non-blocking');
+    assert.strictEqual(parsed.reason, 'phase directory not found', `got: ${JSON.stringify(parsed)}`);
+    assert.strictEqual(parsed.honored, null, 'honored must be null — nothing was measured');
+    assert.strictEqual(parsed.total, null, 'total must be null — nothing was measured');
+  });
+
+  test('#4939: plan gate — an ENOTDIR stat failure is named as a missing directory', (t) => {
+    const parsed = runGateWithStatFailure(t, 'decision-coverage-plan', 'ENOTDIR');
+
+    assert.strictEqual(parsed.passed, false, 'the gate must still block');
+    assert.strictEqual(parsed.reason, 'phase directory not found', `got: ${JSON.stringify(parsed)}`);
+    assert.strictEqual(parsed.covered, null, 'covered must be null — nothing was measured');
+  });
+
+  test('#4939: verify gate — an ENOTDIR stat failure is named as a missing directory', (t) => {
+    const parsed = runGateWithStatFailure(t, 'decision-coverage-verify', 'ENOTDIR');
+
+    assert.strictEqual(parsed.blocking, false, 'verify stays non-blocking');
+    assert.strictEqual(parsed.reason, 'phase directory not found', `got: ${JSON.stringify(parsed)}`);
+    assert.strictEqual(parsed.honored, null, 'honored must be null — nothing was measured');
+    assert.strictEqual(parsed.total, null, 'total must be null — nothing was measured');
+  });
+
+  test('#4939: plan gate — an EACCES stat failure is named as unreadable, not as a missing directory', (t) => {
+    const parsed = runGateWithStatFailure(t, 'decision-coverage-plan', 'EACCES');
+
+    assert.strictEqual(parsed.passed, false, 'the gate must still block');
+    assert.strictEqual(parsed.reason, 'phase directory unreadable', `got: ${JSON.stringify(parsed)}`);
+    assert.strictEqual(parsed.covered, null, 'covered must be null — nothing was measured');
+    assert.ok((parsed.message || '').includes('could not be read (EACCES)'),
+      `the message must name the stat outcome: ${JSON.stringify(parsed.message)}`);
+    assert.ok(!(parsed.message || '').includes('does not exist'),
+      `a permission failure is not a missing directory: ${JSON.stringify(parsed.message)}`);
+  });
+
+  test('#4939: verify gate — an EACCES stat failure is named as unreadable, not as a missing directory', (t) => {
+    const parsed = runGateWithStatFailure(t, 'decision-coverage-verify', 'EACCES');
+
+    assert.strictEqual(parsed.blocking, false, 'verify stays non-blocking');
+    assert.strictEqual(parsed.reason, 'phase directory unreadable', `got: ${JSON.stringify(parsed)}`);
+    assert.strictEqual(parsed.honored, null, 'honored must be null — nothing was measured');
+    assert.strictEqual(parsed.total, null, 'total must be null — nothing was measured');
+    assert.ok((parsed.message || '').includes('could not be read (EACCES)'),
+      `the message must name the stat outcome: ${JSON.stringify(parsed.message)}`);
+    assert.ok(!(parsed.message || '').includes('does not exist'),
+      `a permission failure is not a missing directory: ${JSON.stringify(parsed.message)}`);
+  });
+
+  // The exit status follows the verdict (#5170): a phase dir the gate could not look at is
+  // UNAVAILABLE (69) through the real CLI, while "not found" and "not a directory" are delivered
+  // caller errors (exit 0, the verdict is read from stdout). The stat failure is injected into the
+  // child process by a `--require` preload; an in-process mock cannot reach it.
+  function runGateCli(subcommand, phaseDirArg, { failStat = false } = {}) {
+    const preload = failStat ? writeMethodFailurePreload(tmpDir, 'statSync', `${path.sep}01-init`) : undefined;
+    const r = runTools(['query', `check.${subcommand}`, phaseDirArg, contextPath], tmpDir, preload === undefined ? {} : { preload });
+    return { exitCode: r.exitCode, parsed: JSON.parse(r.stdout || '{}'), detail: `${r.stdout} ${r.stderr}` };
+  }
+
+  for (const [subcommand, policyHolds] of [
+    ['decision-coverage-plan', (parsed) => assert.strictEqual(parsed.passed, false, 'the plan gate must still block')],
+    ['decision-coverage-verify', (parsed) => assert.strictEqual(parsed.blocking, false, 'verify stays non-blocking')],
+  ]) {
+    test(`#4939: ${subcommand} — an unreadable phase dir exits UNAVAILABLE (69) through the router`, () => {
+      const { exitCode, parsed, detail } = runGateCli(subcommand, phaseDir, { failStat: true });
+
+      assert.strictEqual(parsed.reason, 'phase directory unreadable', `got: ${detail}`);
+      assert.strictEqual(parsed.total, null, 'total must be null — nothing was measured');
+      policyHolds(parsed);
+      assert.strictEqual(exitCode, 69, `"could not look" is never exit 0: ${detail}`);
+    });
+
+    test(`#4939: ${subcommand} — a phase dir that is not there or not a directory is a delivered caller error (exit 0)`, () => {
+      for (const [arg, reason] of [['01', 'phase directory not found'], [contextPath, 'phase path is not a directory']]) {
+        const { exitCode, parsed, detail } = runGateCli(subcommand, arg);
+
+        assert.strictEqual(parsed.reason, reason, `${arg}: got ${detail}`);
+        policyHolds(parsed);
+        assert.strictEqual(exitCode, 0, `${arg}: a delivered caller error is not UNAVAILABLE: ${detail}`);
+      }
+    });
+
+    test(`#4939: ${subcommand} — an existing phase dir that holds no plans is a delivered caller error (exit 0)`, () => {
+      // The directory exists, so the stat guard passes; the scan then loads zero plans,
+      // which must not be reported as a measured covered/honored: 0.
+      const emptyDir = path.join(tmpDir, '.planning', 'phases', '02-empty');
+      fs.mkdirSync(emptyDir, { recursive: true });
+      const { exitCode, parsed, detail } = runGateCli(subcommand, emptyDir);
+
+      assert.strictEqual(parsed.reason, 'phase directory holds no plans', `got: ${detail}`);
+      assert.strictEqual(parsed.total, null, 'total must be null — nothing was measured');
+      policyHolds(parsed);
+      assert.strictEqual(exitCode, 0, `a delivered caller error is not UNAVAILABLE: ${detail}`);
+    });
+  }
 });
 
 // ─── #4906 Phase 3 (#4958, #4793): a second plain-prose colon in a decision title ─

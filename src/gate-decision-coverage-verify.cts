@@ -14,6 +14,7 @@ import { isDecisionCoverageGateEnabled } from './gate-config.cjs';
 import {
   decisionMentioned,
   loadPlanContents,
+  phaseDirProblem,
   loadSummaryContents,
   loadDecisionExtraction,
   readModifiedFilesContent,
@@ -103,12 +104,26 @@ export function evaluateDecisionCoverageVerify(input: { projectDir: string; args
     return gateVerdict('skip', false, { skipped: true, blocking: false, reason: 'no trackable decisions', total: 0, honored: 0, not_honored: [], message: 'No trackable decisions in CONTEXT.md.' });
   }
 
+  // #4939: mirror the plan gate. A phase-dir argument that names no directory
+  // means no plan or summary was scanned, so no decision can be reported
+  // not-honored. Warn (verify stays non-blocking) rather than list every decision.
+  const phaseDirIssue = phaseDir ? phaseDirProblem(phaseDir) : null;
+  if (phaseDirIssue) {
+    const phaseDirResult = { skipped: false, blocking: false, reason: phaseDirIssue.reason, total: null, honored: null, not_honored: [], message: `Decision coverage verify (warning): the phase directory "${args[0]}" ${phaseDirIssue.what}, so no plans or summaries were scanned. ${phaseDirIssue.hint}` };
+    return phaseDirIssue.unreadable ? gateUnreadable(false, phaseDirResult) : gateVerdict('advisory', false, phaseDirResult);
+  }
+
   // Every file the haystack is built from is typed evidence (#5170): one that exists but cannot be
   // read is `unreadable`, never an empty slice of the haystack that makes a decision look unhonored.
   const planContents = loadPlanContents(phaseDir);
   if (planContents.kind === 'unreadable') return unreadableVerify(`${planContents.span ?? phaseDir}: ${planContents.reason}`);
   const summaryParts = loadSummaryContents(phaseDir);
   if (summaryParts.kind === 'unreadable') return unreadableVerify(`${summaryParts.span ?? phaseDir}: ${summaryParts.reason}`);
+  // #4939: mirror the plan gate. A phase directory with no PLAN and no SUMMARY file gave the
+  // verifier nothing to read, which is a caller error, not a phase whose decisions were all missed.
+  if (phaseDir && planContents.value.length === 0 && summaryParts.value.length === 0) {
+    return gateVerdict('advisory', false, { skipped: false, blocking: false, reason: 'phase directory holds no plans', total: null, honored: null, not_honored: [], message: `Decision coverage verify (warning): the phase directory "${args[0]}" holds no PLAN or SUMMARY files, so nothing was scanned. Pass the phase DIRECTORY that holds the plans (e.g. .planning/phases/01-slug), not the phase number.` });
+  }
   const modifiedFiles = readModifiedFilesContent(projectDir, summaryParts.value);
   if (modifiedFiles.kind === 'unreadable') return unreadableVerify(`${modifiedFiles.span ?? 'files_modified'}: ${modifiedFiles.reason}`);
   const haystack = [
