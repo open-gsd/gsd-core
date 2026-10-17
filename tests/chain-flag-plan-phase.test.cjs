@@ -20,6 +20,10 @@ const path = require('path');
 
 describe('plan-phase chain flag preservation (#1620)', () => {
   const planPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-phase.md');
+  // Step 15 (auto-advance) moved to a Read-loaded step file to keep plan-phase.md under its
+  // size cap (#5143); the contract is the union of the two files.
+  const planStepPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-phase', 'steps', 'auto-advance-check.md');
+  const readPlan = () => [planPath, planStepPath].map(p => fs.readFileSync(p, 'utf8')).join('\n');
   const discussPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'discuss-phase.md');
   // After the discuss-phase/modes split (#717), discuss-phase chain logic moved to modes/chain.md.
   const discussChainPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'discuss-phase', 'modes', 'chain.md');
@@ -32,16 +36,16 @@ describe('plan-phase chain flag preservation (#1620)', () => {
   };
 
   test('plan-phase sync-flag guard checks both --auto AND --chain', () => {
-    const content = fs.readFileSync(planPath, 'utf8');
+    const content = readPlan();
     // The guard that clears _auto_chain_active must require BOTH flags to be absent
     assert.ok(
-      content.includes('if [[ ! "$ARGUMENTS" =~ --auto ]] && [[ ! "$ARGUMENTS" =~ --chain ]]; then'),
+      content.includes('if [[ ! "$GSD_ARGS" =~ --auto ]] && [[ ! "$GSD_ARGS" =~ --chain ]]; then'),
       'plan-phase should check for both --auto and --chain before clearing chain flag'
     );
   });
 
   test('plan-phase persists chain flag to config before auto-advancing', () => {
-    const content = fs.readFileSync(planPath, 'utf8');
+    const content = readPlan();
     // Plan-phase must persist the chain flag (config-set workflow._auto_chain_active true)
     assert.ok(
       content.includes('config-set workflow._auto_chain_active true'),
@@ -50,10 +54,10 @@ describe('plan-phase chain flag preservation (#1620)', () => {
   });
 
   test('plan-phase and discuss-phase use the same guard pattern for clearing _auto_chain_active', () => {
-    const planContent = fs.readFileSync(planPath, 'utf8');
+    const planContent = readPlan();
     const discussContent = readDiscuss();
 
-    const guardPattern = 'if [[ ! "$ARGUMENTS" =~ --auto ]] && [[ ! "$ARGUMENTS" =~ --chain ]]; then';
+    const guardPattern = 'if [[ ! "$GSD_ARGS" =~ --auto ]] && [[ ! "$GSD_ARGS" =~ --chain ]]; then';
 
     assert.ok(
       planContent.includes(guardPattern),
@@ -66,7 +70,7 @@ describe('plan-phase chain flag preservation (#1620)', () => {
   });
 
   test('plan-phase auto-advance trigger includes --chain flag', () => {
-    const content = fs.readFileSync(planPath, 'utf8');
+    const content = readPlan();
     // The trigger condition should mention --chain alongside --auto
     assert.ok(
       content.includes('`--auto` or `--chain` flag present OR `AUTO_CHAIN` is true OR `AUTO_CFG` is true'),
@@ -75,7 +79,7 @@ describe('plan-phase chain flag preservation (#1620)', () => {
   });
 
   test('plan-phase parses both --auto and --chain flags', () => {
-    const content = fs.readFileSync(planPath, 'utf8');
+    const content = readPlan();
     assert.ok(
       content.includes('Parse `--auto` and `--chain` flags from $ARGUMENTS'),
       'plan-phase step 15 should parse both --auto and --chain flags'

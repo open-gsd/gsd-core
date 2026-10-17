@@ -28,6 +28,8 @@ import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 // #2322: reuse the existing pure path-containment seam (ADR-1239 Phase C-2)
 // instead of hand-rolling a new traversal check for capability skill stems.
 import { isPathConfined } from './external-descriptor-trust.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- capability-ledger.cjs is an export= CommonJS module
+import capabilityLedger = require('./capability-ledger.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import conversionModule = require('./runtime-artifact-conversion.cjs');
 const {
@@ -762,8 +764,9 @@ function readInstalledCapabilitySkill(stem: string, registry: CapabilityRegistry
     // Refuse to read through a link so an outside file's content cannot be
     // installed as a capability skill (epic #4636).
     if (fs.lstatSync(skillPath).isSymbolicLink()) return null;
-    if (!fs.statSync(skillPath).isFile()) return null;
-    return { capId, content: fs.readFileSync(skillPath, 'utf8') };
+    // #5121: the bounded regular-file read — a FIFO/device/oversized SKILL.md is skipped like a missing one.
+    const content = capabilityLedger.readSkillFile(skillPath);
+    return content === null ? null : { capId, content };
   } catch {
     return null; // missing / unreadable / corrupt entry -> skip
   }
