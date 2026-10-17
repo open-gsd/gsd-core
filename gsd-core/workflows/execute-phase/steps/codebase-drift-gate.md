@@ -66,12 +66,16 @@ First load the mapper agent's skill bundle (the executor's `AGENT_SKILLS`
 from step `init_context` is for `gsd-executor`, not the mapper):
 
 ```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
 # gsd_run is defined by the canonical preamble in the drift-check block above and reused
 # here via the workflow's shared shell scope — defining it once keeps the file compliant
 # with the single-canonical-preamble parity invariant (#619). This block only runs on the
 # `auto-remap` directive, which is always reached after the drift check above has run.
 # #4772: this file is Read, not textually substituted - write the parent command's original argument string in place of $ARGUMENTS so --ws reaches the query.
-GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 AGENT_SKILLS_MAPPER=$(gsd_run query agent-skills gsd-codebase-mapper ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
 
