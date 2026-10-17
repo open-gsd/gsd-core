@@ -2331,7 +2331,9 @@ Save settings as global defaults for future projects:
 
 Every reader and writer of this store resolves its root the same way: `GSD_HOME` when it is set and non-blank, otherwise your home directory. That covers the config loader, the install-time model / tools / effort resolvers, the installer's non-Claude defaults writer, the isolation hooks' runtime fallback, capability staging, and the `/gsd-settings` and `/gsd-new-project` workflows (#5017).
 
-When `/gsd-new-project` creates a new `config.json`, it reads global defaults and merges them as the starting configuration. Per-project settings always override globals.
+When `/gsd-new-project` creates a new `config.json`, it reads global defaults and merges them as the starting configuration. Per-project settings always override globals. Project creation excludes the shared `runtime` key and excludes `resolve_model_ids` only when its global value is `"omit"`: non-Claude installs stamp that value into the shared store, and copying it would suppress Claude profile tiers. Boolean `true`/`false` defaults and any explicit new-project choice, including `"omit"`, are preserved.
+
+Existing project configs are left unchanged. If a project's `resolve_model_ids: "omit"` suppresses Claude tier routing, model resolution emits one warning per project scope per process naming the key and explaining that an older version may have copied it from shared defaults. GSD cannot distinguish a copied value from an intentional one and continues to honor it. To restore tier routing when desired, remove the key or set it to `false` in the project config. Non-Claude runtime resolution keeps its existing behavior.
 
 ### What a global file can and cannot set at runtime
 

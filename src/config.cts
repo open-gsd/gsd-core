@@ -441,12 +441,14 @@ function buildNewProjectConfig(userChoices: Record<string, unknown>): Record<str
   // #2840: `runtime` is host-specific (written by the installer for whichever
   // runtime's install ran last). On a machine with 2+ runtimes, it poisons every
   // new project config — e.g. a Codex install's `runtime:"codex"` leaks into
-  // Claude Code projects, resolving agents to wrong model IDs. `resolve_model_ids`
-  // already has a per-install guard (#2297); `runtime` gets the same treatment
-  // by excluding it from the defaults spread. Projects detect the runtime from
-  // the install path / .gsd-runtime marker, not from a copied config key.
+  // Claude Code projects, resolving agents to wrong model IDs. Shared
+  // `resolve_model_ids:"omit"` must also be excluded (#5329): copying it here
+  // makes the resolver treat it as explicit project intent, bypassing the #2297
+  // shared-defaults guard. Preserve boolean defaults and every explicit choice.
+  // Projects detect the runtime from the install path / .gsd-runtime marker.
   const safeDefaults = { ...userDefaults };
   delete safeDefaults['runtime'];
+  if (safeDefaults['resolve_model_ids'] === 'omit') delete safeDefaults['resolve_model_ids'];
 
   // Three-level deep merge: hardcoded <- userDefaults <- choices
   const config: Record<string, unknown> = {

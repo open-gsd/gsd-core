@@ -64,6 +64,87 @@ function makeTempProject(prefix = 'gsd-model-resolver-test-') {
   return tmpDir;
 }
 
+{
+  const { describe, test, beforeEach, afterEach, mock } = require('node:test');
+  const assert = require('node:assert/strict');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const {
+    createTempDir, cleanup, scrubConfigLocationEnv, homeSandboxEnv,
+    withIsolatedProcessState, resetRuntimeWarningCaches,
+  } = require('./helpers.cjs');
+  const resolver = require('../gsd-core/bin/lib/model-resolver.cjs');
+  const { RUNTIME_PROFILE_MAP } = require('../gsd-core/bin/lib/model-catalog.cjs');
+
+  describe('#5329 — existing Claude project omit diagnostic', () => {
+    let root;
+    let project;
+    let home;
+
+    beforeEach(() => {
+      root = createTempDir('model-project-omit-');
+      project = path.join(root, 'project');
+      home = path.join(root, 'home');
+      fs.mkdirSync(path.join(project, '.planning'), { recursive: true });
+      fs.mkdirSync(home);
+      resetRuntimeWarningCaches();
+    });
+    afterEach(() => { mock.restoreAll(); cleanup(root); });
+
+    function withConfig(config, runtime, fn) {
+      return withIsolatedProcessState(() => {
+        const restore = scrubConfigLocationEnv();
+        Object.assign(process.env, homeSandboxEnv(home), { GSD_HOME: home, GSD_RUNTIME: runtime });
+        const configPath = path.join(project, '.planning', 'config.json');
+        const bytes = JSON.stringify(config, null, 4) + '\n';
+        fs.writeFileSync(configPath, bytes);
+        const writes = [];
+        mock.method(process.stderr, 'write', chunk => { writes.push(String(chunk)); return true; });
+        fn(writes);
+        assert.equal(fs.readFileSync(configPath, 'utf8'), bytes, 'resolution must leave authored or stamped omit byte-identical');
+        restore();
+      });
+    }
+
+    test('Claude honors existing omit and emits one diagnostic across repeated agents', () => {
+      withConfig({ model_profile: 'balanced', resolve_model_ids: 'omit' }, 'claude', writes => {
+        for (const agent of ['gsd-executor', 'gsd-planner', 'gsd-executor']) {
+          assert.equal(resolver.resolveModelInternal(project, agent), '');
+        }
+        assert.equal(writes.length, 1, 'one project warning must cover all omitted agents');
+        const warning = resolver.PROJECT_MODEL_OMIT_WARNING;
+        assert.equal(Object.isFrozen(warning), true);
+        assert.equal(warning.code, 'project_model_omit');
+        assert.equal(warning.key, 'resolve_model_ids');
+        assert.equal(warning.value, 'omit');
+        assert.deepEqual(writes, [warning.message + '\n']);
+      });
+    });
+
+    for (const runtime of ['codex', 'opencode']) {
+      test(`${runtime} preserves its model path and does not emit the Claude omit diagnostic`, () => {
+        withConfig({ resolve_model_ids: 'omit' }, runtime, writes => {
+          assert.equal(resolver.resolveModelInternal(project, 'gsd-executor'), RUNTIME_PROFILE_MAP[runtime].sonnet.model);
+          assert.deepEqual(writes, []);
+        });
+      });
+    }
+
+    for (const config of [
+      { model_profile: 'inherit', resolve_model_ids: 'omit' },
+      { resolve_model_ids: 'omit', model_overrides: { 'gsd-executor': 'sonnet' } },
+      { resolve_model_ids: false },
+    ]) {
+      test(`no omit diagnostic when tier routing is not suppressed: ${JSON.stringify(config)}`, () => {
+        withConfig(config, 'claude', writes => {
+          assert.equal(resolver.resolveModelInternal(project, 'gsd-executor'), config.model_profile === 'inherit' ? '' : 'sonnet');
+          assert.deepEqual(writes, []);
+        });
+      });
+    }
+  });
+}
+
 function writeConfig(tmpDir, obj) {
   const configPath = path.join(tmpDir, '.planning', 'config.json');
   fs.writeFileSync(configPath, JSON.stringify(obj, null, 2), 'utf-8');
