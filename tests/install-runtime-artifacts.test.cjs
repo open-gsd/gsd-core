@@ -997,10 +997,12 @@ for (const __runtime2362 of ['opencode', 'kilo']) {
       // this one capability's SKILL.md path — never chmod 0o000 (root bypasses
       // mode bits; silently zero-coverage under root Docker/CI).
       const skillPath = path.join(gsdHome, '.gsd', 'capabilities', 'my-thing', 'skills', 'my-thing', 'SKILL.md');
-      const origReadFileSync = fs.readFileSync;
-      fs.readFileSync = function injectedReadFileSync(p, ...rest) {
-        if (p === skillPath) throw new Error('injected read failure (#2362 regression test)');
-        return origReadFileSync.call(fs, p, ...rest);
+      // #5121: capability SKILL.md files are read through the bounded fd reader (open -> fstat -> read), so
+      // the failure is injected at the open the reader performs.
+      const origOpenSync = fs.openSync;
+      fs.openSync = function injectedOpenSync(p, ...rest) {
+        if (p === skillPath) throw Object.assign(new Error('injected read failure (#2362 regression test)'), { code: 'EACCES' });
+        return origOpenSync.call(fs, p, ...rest);
       };
       try {
         with2362GsdHome(gsdHome, () => {
@@ -1009,7 +1011,7 @@ for (const __runtime2362 of ['opencode', 'kilo']) {
           }, `installRuntimeArtifacts('${__runtime2362}', ...) must not throw when a registry-referenced capability skill is unreadable`);
         });
       } finally {
-        fs.readFileSync = origReadFileSync;
+        fs.openSync = origOpenSync;
       }
 
       assert.ok(
