@@ -15,9 +15,8 @@
 #      Windows otherwise flashes a console window per Bash call)
 #   1. Stdin payload present and tool_name == "Bash"
 #   2. tool_input.command matches a HEAD-advancing git op (shell-direct or
-#      the exact `gsd-tools query commit` command shape; the SDK command invokes
-#      git internally, so the literal "git commit" substring never appears —
-#      see #3653)
+#      `query commit` via gsd_run, gsd-tools, or gsd-tools.cjs, including a
+#      quoted Node entrypoint after the launcher preamble — see #3653/#5332)
 #   3. Inside a git repo
 #   4. Current branch == default branch (git.base_branch override, else main/master/trunk)
 #   5. .planning/config.json sets graphify.enabled=true AND graphify.auto_update=true
@@ -59,8 +58,7 @@ TOOL_NAME=$(printf '%s\n' "$TOOL_INFO" | sed -n '1p')
 # HEAD-advancing commits as multi-line scripts (`cd /path` then `git add` then
 # `git commit …`); reading only line 2 (`sed -n '2p'`) missed a `git commit`
 # that was not on the first command line and silently no-op'd the rebuild
-# (#1772). Line 2..EOF preserves embedded newlines; the `case` glob below
-# matches the substring anywhere in the multi-line string.
+# (#1772). Line 2..EOF preserves embedded newlines for Gate 2 matching.
 COMMAND=$(printf '%s\n' "$TOOL_INFO" | sed -n '2,$p')
 
 # #2304: Kimi CLI registers this hook with matcher 'Shell' and forwards its
@@ -74,11 +72,14 @@ if [ "$TOOL_NAME" = "Shell" ]; then TOOL_NAME="Bash"; fi
 
 [ "$TOOL_NAME" = "Bash" ] || exit 0
 
-# Gate 2 — HEAD-advancing git op (shell-direct or exact `gsd-tools query commit`)
+# Gate 2 — shell-direct git op or the runtime's exact `query commit` verb.
+# Match quoted .cjs paths as well as the launcher, anywhere in a multiline
+# payload. Blank separators keep tokens on one command line; the verb boundary
+# excludes commit-to-subrepo and other suffixes.
+QUERY_COMMIT_PATTERN="(^|[[:space:]/\"'])(gsd_run|gsd-tools(\.cjs)?)[\"']?[[:blank:]]+query[[:blank:]]+commit([[:space:];&|]|$)"
 case "$COMMAND" in
   *"git commit"*|*"git merge"*|*"git pull"*|*"git rebase --continue"*|*"git cherry-pick"*) ;;
-  *"gsd-tools query commit"|*"gsd-tools query commit "*) ;;
-  *) exit 0 ;;
+  *) [[ "$COMMAND" =~ $QUERY_COMMIT_PATTERN ]] || exit 0 ;;
 esac
 
 # Gate 3 — inside git repo
