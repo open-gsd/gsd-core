@@ -164,7 +164,7 @@ describe('#4777 review Minor — canonical forms against a quoted value', { skip
   const { execFileSync } = require('node:child_process');
 
   function runForm(form, argumentsValue) {
-    const script = `ARGUMENTS='${argumentsValue.replace(/'/g, "'\\''")}'\n${form}\necho -n "$PHASE_ARG"`;
+    const script = `GSD_ARGS='${argumentsValue.replace(/'/g, "'\\''")}'\n${form}\necho -n "$PHASE_ARG"`;
     return execFileSync('bash', ['-c', script], { encoding: 'utf8', timeout: QUICK_SPAWN_TIMEOUT_MS });
   }
 

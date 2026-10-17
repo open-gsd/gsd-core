@@ -428,7 +428,7 @@ describe('#5143 every shipped statement that reads the typed text is injection-s
     'fix the login bug',
     '--reviews --max-cycles 3',
     '--research-phase 7 --view',
-    '--prd docs/prd.md --granularity fine --ws alpha',
+    '--prd specs/prd.md --granularity fine --ws alpha',
   ];
   const PAYLOADS = ['x"; touch CANARY; echo "', '$(touch CANARY)', '`touch CANARY`', 'a\n--ws b"c\n$(touch CANARY)', 'it\'s "unbalanced'];
 
