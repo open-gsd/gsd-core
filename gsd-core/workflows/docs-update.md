@@ -71,6 +71,8 @@ Conditional docs queued: {list or "none"}
 </step>
 
 <step name="build_doc_queue">
+**Skip condition:** If `--verify-only` is present in `$ARGUMENTS`: skip this step, `resolve_modes` and `preservation_check`, and go straight to `verify_only_report` (#5050). That step fact-checks every file in `existing_docs` from the init JSON and never reads the queue, so no question asked here (the gap list, the queue confirmation, the CONTRIBUTING.md confirmation) can change its result — and none of them has a text-mode fallback, so an unattended run would stop on an answer that is discarded.
+
 Assemble the complete doc queue from always-on docs plus conditional docs from classify_project.
 
 **Always-on docs (queued for every project, no exceptions):**
@@ -742,6 +744,21 @@ Extract `canonical_queue` (items with `status: "completed"`) and `review_queue` 
 
 **Skip condition:** If `--verify-only` is present in `$ARGUMENTS`, this step was already handled by `verify_only_report` (early exit). Skip.
 
+**Result file contract (#5050).** The verifier does not choose where its result goes; the orchestrator assigns it. For each doc, compute once:
+
+- `doc_key`: the doc's path relative to `project_root`, `/`-separated, with `%` → `%25` first and then `/` → `%2F` (so `README.md` → `README.md`, `docs/product/README.md` → `docs%2Fproduct%2FREADME.md`). Escaping `%` first makes the key reversible, so two different paths can never share one.
+- `result_path`: `{project_root}/.planning/tmp/verify-{doc_key}.json`, absolute under `project_root`. A subagent's working directory is not guaranteed to be `project_root` (a run inside a `git worktree` is the common case), so every read of a result file and the final cleanup use this same absolute path — never a bare `.planning/tmp/...`.
+
+Pass `result_path` in the verifier's assignment block (the XML below) and read the result back from it.
+
+**Dispatch bound (#5050).** Verifier spawns are bounded by the host's negotiated dispatch capacity, the same query `quick-batch` and chunked planning use, which fails closed to `1` (one at a time) for a host that declares no limit:
+
+```bash
+DISPATCH_CAPACITY=$(gsd_run query dispatch-capacity --raw 2>/dev/null || echo 1)
+```
+
+Spawn the verifiers in batches of at most `DISPATCH_CAPACITY`, and wait for a batch to return before spawning the next, so a runtime with a concurrent-subagent cap never rejects a spawn. This applies to every verifier loop below and to `verify_only_report`.
+
 **Phase 1: Verify canonical docs (generated/updated docs)**
 
 For each doc in `canonical_queue` that was successfully written to disk:
@@ -752,10 +769,11 @@ For each doc in `canonical_queue` that was successfully written to disk:
    <verify_assignment>
    doc_path: {relative path to the doc file, e.g. README.md}
    project_root: {project_root from init JSON}
+   result_path: {project_root}/.planning/tmp/verify-{doc_key}.json
    </verify_assignment>
    ```
 
-2. After the verifier completes, read the result JSON from `.planning/tmp/verify-{doc_filename}.json`.
+2. After the verifier completes, read the result JSON from its `result_path`.
 
 3. Update the manifest: set `status: "verified"` for each canonical doc processed.
 
@@ -766,8 +784,8 @@ This is NOT optional. Every doc in `review_queue` MUST be verified.
 For each doc in `review_queue` from the manifest:
 
 1. Print: `◆ Spawning doc verifier for {doc_path}... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)`
-   Spawn the `gsd-doc-verifier` agent with the same `<verify_assignment>` block as above.
-2. Read the result JSON from `.planning/tmp/verify-{doc_filename}.json`.
+   Spawn the `gsd-doc-verifier` agent with the same assignment block as above (including its `result_path`).
+2. Read the result JSON from its `result_path`.
 3. Update the manifest: set `status: "verified"` for each review_queue doc processed.
 
 Non-canonical docs with failures ARE eligible for the fix_loop. When a non-canonical doc has `claims_failed > 0`, dispatch it to gsd-doc-writer in `fix` mode with the failures array — the writer's fix mode does surgical corrections on specific lines regardless of doc type (no template needed). The writer MUST NOT restructure, rephrase, or reformat any content beyond the failing claims.
@@ -832,7 +850,7 @@ Exact iteration bookkeeping and the regression-halt report wording: `gsd-core/wo
 </step>
 
 <step name="verify_only_report">
-**Reached when `--verify-only` is present in `$ARGUMENTS`** — an early-exit reporting mode: do not proceed to dispatch, generation, commit, or report steps after this step. Spawn `gsd-doc-verifier` (read-only) for every file in `existing_docs`, count `<!-- VERIFY:` markers in each, and present a combined claims-checked/passed/failed/markers table plus a "how to fix" pointer to `/gsd:docs-update` (or `--force` to regenerate everything). Clean up `.planning/tmp/verify-*.json` afterward. End the workflow here.
+**Reached when `--verify-only` is present in `$ARGUMENTS`** — an early-exit reporting mode: do not proceed to dispatch, generation, commit, or report steps after this step. Spawn `gsd-doc-verifier` (read-only) for every file in `existing_docs`, count `<!-- VERIFY:` markers in each, and present a combined claims-checked/passed/failed/markers table plus a "how to fix" pointer to `/gsd:docs-update` (or `--force` to regenerate everything). Clean up `{project_root}/.planning/tmp/verify-*.json` afterward. Compute `doc_key`/`result_path` and bound the spawns exactly as `verify_docs` § Result file contract and § Dispatch bound specify. End the workflow here.
 
 Exact table format and failure-detail wording: `gsd-core/workflows/docs-update/detail/elaboration.md` § 3.
 </step>

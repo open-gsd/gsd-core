@@ -510,3 +510,82 @@ describe('#3135: capture.md correctly routes --backlog to add-backlog workflow',
 
   });
 }
+
+// ─── #5050: --verify-only questions, verifier result location and naming ─────
+
+describe('#5050: docs-update --verify-only and the doc-verifier result files', () => {
+  const read = (...p) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const SPINE = read('gsd-core', 'workflows', 'docs-update.md');
+  const ELAB = read('gsd-core', 'workflows', 'docs-update', 'detail', 'elaboration.md');
+  const VERIFIER = read('agents', 'gsd-doc-verifier.md');
+  const VERIFIER_COMPACT = read('agents', 'gsd-doc-verifier.compact.md');
+  const CONTRACTS = read('gsd-core', 'references', 'agent-contracts.md');
+
+  const stepBody = (src, name) => {
+    const m = src.match(new RegExp(`<step name="${name}"[^>]*>([\\s\\S]*?)</step>`));
+    assert.ok(m, `docs-update.md has no <step name="${name}">`);
+    return m[1];
+  };
+
+  test('build_doc_queue leaves for verify_only_report before it asks anything', () => {
+    const body = stepBody(SPINE, 'build_doc_queue');
+    const skip = body.indexOf('--verify-only');
+    const firstQuestion = body.indexOf('AskUserQuestion');
+    assert.ok(skip !== -1, 'build_doc_queue must name the --verify-only skip');
+    assert.ok(skip < firstQuestion, 'the --verify-only skip must come before the first AskUserQuestion');
+    assert.match(body.slice(skip, firstQuestion), /verify_only_report/, 'the skip must target verify_only_report');
+  });
+
+  test('no step reachable on the --verify-only path before verify_only_report can ask', () => {
+    // build_doc_queue jumps over resolve_modes and preservation_check, so classify_project and
+    // build_doc_queue are the only steps this path runs before the report.
+    for (const name of ['classify_project', 'build_doc_queue']) {
+      const body = stepBody(SPINE, name);
+      const skip = body.indexOf('--verify-only');
+      const q = body.indexOf('AskUserQuestion');
+      if (q !== -1) assert.ok(skip !== -1 && skip < q, `${name} asks a question that --verify-only cannot use`);
+    }
+  });
+
+  test('the verifier is told exactly where to write, and it writes there', () => {
+    for (const [label, src] of [['agent', VERIFIER], ['compact agent', VERIFIER_COMPACT]]) {
+      assert.match(src, /result_path/, `${label} must take result_path from the assignment`);
+      assert.doesNotMatch(src, /\{doc_filename\}/, `${label} still names the basename-keyed result file`);
+      assert.doesNotMatch(src, /basename of `?doc_path/, `${label} still derives the result name from the basename`);
+    }
+  });
+
+  test('every verify_assignment the workflow sends carries an absolute result_path under project_root', () => {
+    const blocks = [...SPINE.matchAll(/<verify_assignment>([\s\S]*?)<\/verify_assignment>/g),
+      ...ELAB.matchAll(/<verify_assignment>([\s\S]*?)<\/verify_assignment>/g)];
+    assert.ok(blocks.length >= 2, 'expected the verify_docs and verify_only_report assignments');
+    for (const [, body] of blocks) {
+      // The spine spells the path out; the detail file points at the spine's contract instead,
+      // because the compact-content partition guard forbids a detail line that repeats a spine line.
+      assert.match(body, /result_path: (\{project_root\}\/\.planning\/tmp\/verify-\{doc_key\}\.json|\{this doc's result_path, computed per verify_docs § Result file contract\})/, `assignment lacks result_path:\n${body}`);
+    }
+  });
+
+  test('result files are keyed by the full relative path, not the basename', () => {
+    for (const [label, src] of [['spine', SPINE], ['elaboration', ELAB], ['contracts', CONTRACTS]]) {
+      assert.doesNotMatch(src, /\{doc_filename\}/, `${label} still reads a basename-keyed result file`);
+    }
+    // The key is defined once, injectively: escape `%` first, then `/`.
+    assert.match(SPINE, /`%` → `%25`/);
+    assert.match(SPINE, /`\/` → `%2F`/);
+  });
+
+  test('every read and the cleanup resolve under project_root, not the working directory', () => {
+    for (const [label, src] of [['spine', SPINE], ['elaboration', ELAB]]) {
+      const bare = src.match(/(?<!\{project_root\}\/)\.planning\/tmp\/verify-[^\s`)]*/g) || [];
+      assert.deepEqual(bare, [], `${label} has verifier result paths that are cwd-relative: ${bare.join(', ')}`);
+    }
+  });
+
+  test('verifier spawns are batched under the negotiated dispatch capacity', () => {
+    for (const [label, src] of [['verify_docs', stepBody(SPINE, 'verify_docs')], ['verify_only_report', ELAB.slice(ELAB.indexOf('## § 3'))]]) {
+      assert.match(src, /dispatch-capacity|Dispatch bound/, `${label} must bound its verifier spawns`);
+    }
+    assert.match(SPINE, /gsd_run query dispatch-capacity --raw 2>\/dev\/null \|\| echo 1/, 'capacity resolution must fail closed to 1');
+  });
+});
