@@ -1,5 +1,4 @@
-// allow-test-rule: source-text-is-the-product #1857
-// Temporary in-tier measurement; asserts no timing (#5489 diagnosis).
+// Temporary in-tier measurement for #5473's Windows test-gate-watch-mode ETIMEDOUT; asserts no timing.
 
 /**
  * Measure, INSIDE the Windows conformance tier, what the #4784 test in
