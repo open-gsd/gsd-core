@@ -11,13 +11,15 @@ const assert = require('node:assert/strict');
 const { Readable } = require('node:stream');
 const fs = require('node:fs');
 const path = require('node:path');
+const childProcess = require('node:child_process');
+const fc = require('./helpers/fast-check-setup.cjs');
 const {
   handleMessage,
   runServer,
   PROTOCOL_VERSION,
   SERVER_NAME,
 } = require('../gsd-core/bin/lib/mcp-server.cjs');
-const { createTempDir, cleanup } = require('./helpers.cjs');
+const { createTempDir, cleanup, runGsdTools, sandboxHome, scrubConfigLocationEnv } = require('./helpers.cjs');
 
 test('initialize: returns protocolVersion + capabilities + serverInfo', () => {
   const res = handleMessage({ jsonrpc: '2.0', id: 1, method: 'initialize' });
@@ -32,6 +34,76 @@ test('tools/list: advertises the 3 interface-point tools', () => {
   const res = handleMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = res.result.tools.map((t) => t.name);
   assert.deepStrictEqual(names.sort(), ['gsd_invoke_command', 'gsd_read_state', 'gsd_write_state']);
+});
+
+test('tools/list: gsd_invoke_command requires only family (#5325)', () => {
+  const res = handleMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+  const invoke = res.result.tools.find((tool) => tool.name === 'gsd_invoke_command');
+  assert.deepEqual(invoke.inputSchema.required, ['family']);
+  assert.equal(invoke.inputSchema.properties.family.type, 'string');
+  assert.equal(invoke.inputSchema.properties.subcommand.type, 'string');
+});
+
+for (const subcommand of [undefined, '']) {
+  test(`tools/call: config-path matches the CLI with ${subcommand === undefined ? 'omitted' : 'empty'} subcommand (#5325)`, (t) => {
+    const dir = createTempDir();
+    t.after(() => cleanup(dir));
+    t.after(scrubConfigLocationEnv());
+    sandboxHome(t, dir);
+    fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+
+    const cli = runGsdTools(['config-path', '--raw', '--json-errors'], dir);
+    assert.equal(cli.success, true, cli.error);
+    assert.equal(cli.output, path.join(dir, '.planning', 'config.json'));
+
+    const args = { family: 'config-path' };
+    if (subcommand !== undefined) args.subcommand = subcommand;
+    const res = handleMessage(
+      { jsonrpc: '2.0', id: 10, method: 'tools/call', params: { name: 'gsd_invoke_command', arguments: args } },
+      { cwd: dir },
+    );
+    assert.notEqual(res.result.isError, true, 'the family-only command must reach the CLI through MCP');
+    assert.equal(res.result.content[0].text.trim(), cli.output);
+  });
+}
+
+test('tools/call: required family is validated before dispatch (#5325)', (t) => {
+  const spawn = t.mock.method(childProcess, 'spawnSync', () => ({ status: 0, stdout: '', stderr: '' }));
+  for (const family of [undefined, '', null, false, 0, [], {}]) {
+    const res = handleMessage({
+      jsonrpc: '2.0', id: 11, method: 'tools/call',
+      params: { name: 'gsd_invoke_command', arguments: { family } },
+    });
+    assert.equal(res.result.isError, true);
+  }
+  assert.equal(spawn.mock.callCount(), 0, 'invalid family must never spawn a command');
+});
+
+test('tools/call: a supplied non-string subcommand never dispatches (#5325 property)', async (t) => {
+  const spawn = t.mock.method(childProcess, 'spawnSync', () => ({ status: 0, stdout: '', stderr: '' }));
+  await fc.assert(fc.property(fc.jsonValue().filter((value) => typeof value !== 'string'), (subcommand) => {
+    const res = handleMessage({
+      jsonrpc: '2.0', id: 12, method: 'tools/call',
+      params: { name: 'gsd_invoke_command', arguments: { family: 'config-path', subcommand } },
+    });
+    assert.equal(res.result.isError, true);
+    assert.equal(spawn.mock.callCount(), 0, 'an optional field must not silently discard a wrong-typed value');
+  }));
+});
+
+test('tools/call: explicit subcommand and positional args still reach the CLI (#5325)', (t) => {
+  const dir = createTempDir();
+  t.after(() => cleanup(dir));
+  t.after(scrubConfigLocationEnv());
+  sandboxHome(t, dir);
+  fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ workflow: { research: false } }));
+  const res = handleMessage(
+    { jsonrpc: '2.0', id: 13, method: 'tools/call', params: { name: 'gsd_invoke_command', arguments: { family: 'query', subcommand: 'config-get', args: ['workflow.research'] } } },
+    { cwd: dir },
+  );
+  assert.notEqual(res.result.isError, true);
+  assert.equal(JSON.parse(res.result.content[0].text), false);
 });
 
 test('tools/call gsd_read_state + gsd_write_state: round-trip through the stateIO seam (point 5)', () => {
