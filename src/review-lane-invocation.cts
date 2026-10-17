@@ -394,6 +394,45 @@ export function fileRefPrompt(promptPath: string, repoRoot: string): string {
   );
 }
 
+/**
+ * Re-point a resolved plan at a different prompt file (`review-lane invoke --prompt-file`, #5049).
+ *
+ * The override carries a budget-trimmed prompt, so it has to land wherever THIS lane actually
+ * reads its prompt, and that differs by channel:
+ *   - `stdin`: the runner streams the file `plan.stdin` names.
+ *   - `argv-file-ref`: the prompt PATH is embedded in a sentence in argv (`fileRefPrompt`), already
+ *     expanded by the time an override can run. Swapping `plan.promptPath` alone changes nothing
+ *     the CLI reads, which is how the override was dropped silently for cursor, antigravity and
+ *     kimi-code.
+ *   - `argv`: the bare path is an argv element.
+ *   - `openai-http`: the runner reads `plan.promptPath`.
+ * Argv elements are matched whole (the file-ref sentence, or the bare path), never by substring,
+ * so an unrelated argument that merely contains the path is left alone. `promptPath` moves with
+ * argv: the antigravity handler re-derives the sentence it swaps from `plan.promptPath` and would
+ * otherwise stop recognising it. A plan that takes no prompt (`none`) is returned unchanged.
+ * Pure: returns a new plan and never mutates the one it is given.
+ */
+export function applyPromptOverride(plan: LanePlan, promptPath: string, repoRoot: string): LanePlan {
+  if (plan.transport !== 'spawn') return { ...plan, promptPath };
+  if (plan.stdin) return { ...plan, stdin: promptPath, promptPath };
+
+  const oldRef = fileRefPrompt(plan.promptPath, repoRoot);
+  const newRef = fileRefPrompt(promptPath, repoRoot);
+  let replaced = false;
+  const argv = plan.argv.map((a) => {
+    if (a === oldRef) {
+      replaced = true;
+      return newRef;
+    }
+    if (a === plan.promptPath) {
+      replaced = true;
+      return promptPath;
+    }
+    return a;
+  });
+  return replaced ? { ...plan, argv, promptPath } : plan;
+}
+
 /** Run-dir artifact paths. POSIX-joined: these are workflow-visible strings, not OS paths. */
 export function artifactPaths(runDir: string, slug: string): {
   promptPath: string;
