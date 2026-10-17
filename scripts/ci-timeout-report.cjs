@@ -646,20 +646,35 @@ const SHARD_BALANCE = Object.freeze({
   since: '2026-09-28T14:17:51Z', // #5097 merge
   minRuns: 10,
   windowRuns: 20,
-  maxMedianGapMs: 120000,
-  // #5029 resharded the lane 3 -> 6. Baselines are the nearest-rank p90 of
-  // job wall-clock over the nine 6-shard runs whose heads carry #5097's
-  // win32 weights (PR #5053: 36785097774, 37024435915, 37031116287,
-  // 37037251805, 37041237415, 37086102648, 37138563782, 37694227292,
-  // 37697717410) — measured, not scaled from the 3-shard values. Those are
-  // pull_request runs; re-derive from `next` push runs once ten exist.
+  // #5029 resharded the lane 3 -> 6. Every figure below is measured over the
+  // twelve 6-shard runs of PR #5053 whose heads carry #5097's win32 weights
+  // (36785097774, 37024435915, 37031116287, 37037251805, 37041237415,
+  // 37086102648, 37138563782, 37694227292, 37697717410, 38647499912,
+  // 38650210804, 38654860178) — not scaled from the 3-shard values. They are
+  // pull_request runs, and `next` has since refreshed tests/test-timings.json,
+  // so re-derive from `next` push runs once `minRuns` of them exist.
+  //
+  // Gap limit. #5101 shipped 120000 (2 min) for ~25-31 min shards. On six
+  // ~12-min shards the measured median gap is 332.5s (5/6 median 1011.5s vs 6/6
+  // 679s), and its cause is not packing weights: a chunk cannot finish before
+  // its longest file, and the tier has single files of 3.5-6.5 min that land
+  // in different chunks of different shards (`install` 384s,
+  // `codex-config-agents` 371s, `verification-status` 219s,
+  // `install-minimal-hooks` 218s on run 37697717410). Regenerating the win32
+  // table does not move that. The limit is the measured gap x 1.5, the same
+  // headroom factor tests/ci-test-job-timeout-budget.test.cjs applies to job
+  // budgets: 332.5 x 1.5 = 498.75s, rounded up to 500s. It still flags a
+  // shard drifting ~3 more minutes away from the rest.
+  maxMedianGapMs: 500000,
+  // Baselines: nearest-rank p90 of job wall-clock per shard (the same
+  // `percentile` this file uses) over those twelve runs.
   baselineShardTotal: 6,
   baselineP90Ms: Object.freeze({
     '1/6': 934000,
-    '2/6': 725000,
-    '3/6': 1129000,
+    '2/6': 742000,
+    '3/6': 998000,
     '4/6': 918000,
-    '5/6': 1095000,
+    '5/6': 1118000,
     '6/6': 791000,
   }),
   issueTitle: 'CI: Windows conformance shard balance regressed',

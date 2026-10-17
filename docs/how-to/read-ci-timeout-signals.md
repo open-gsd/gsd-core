@@ -94,10 +94,14 @@ shard cancelled after it ran (killed at its cap) counts.
 
 **What it checks.**
 
-- The gap between the slowest and fastest shard's median must be at most 2 minutes.
-- No shard's p90 may be above its baseline. Since #5029 sharded the lane six ways: shard 1/6
-  15.6 min, 2/6 12.1 min, 3/6 18.8 min, 4/6 15.3 min, 5/6 18.3 min, 6/6 13.2 min (measured on
-  the PR's nine 6-shard runs; the 3-shard baselines they replace were 30.4 / 34.1 / 36.8 min).
+- The gap between the slowest and fastest shard's median must be at most `maxMedianGapMs`.
+- No shard's p90 may be above its entry in `baselineP90Ms`.
+
+Both values live only in `SHARD_BALANCE`, with the runs they were measured on and the reasoning
+in the comment above them; this page deliberately does not copy them. Since #5029 they describe
+six shards. The gap limit is the measured six-shard gap times 1.5, not the 2 minutes #5101 set
+for three ~30-minute shards: on ~12-minute shards a single long test file moves one shard by
+minutes on its own.
 
 **Where you see it.** Every run writes a table to the `shard-balance` step's summary. A breach, or
 a baseline mismatch, also opens an issue titled **CI: Windows conformance shard balance
@@ -108,7 +112,7 @@ until someone closes it.
 |---|---|---|
 | `insufficient-data` | Fewer than 10 qualifying runs so far, or fewer than two shards have data. | Nothing. It reports once enough `next` pushes land. |
 | `ok` | Both criteria hold. | Nothing. |
-| `breach` | The median gap is over 2 minutes, or a shard's p90 is over its baseline. The issue lists which. | Regenerate the win32 timing table ([Regenerate the win32 timing table](regenerate-the-win32-timing-table.md)). A new heavy conformance file, or a stale table, is the usual cause. If the gap persists with a fresh table, look at per-chunk overhead: the shard with more, smaller chunks pays more process startup. |
+| `breach` | The median gap is over `maxMedianGapMs`, or a shard's p90 is over its baseline. The issue lists which. | First find which kind of cost moved. In the slow shard's log, compare the `run-tests: chunk N/M completed in Xms` lines with a fast shard's. **One chunk far longer than the rest** means a single long test file sets that chunk's wall time (a chunk cannot finish before its longest file), and regenerating the timing table will not help; the fix is splitting that file, or packing that accounts for it. **Every chunk uniformly slower** across the run means a slow runner; wait for more runs. **The shard's chunks are all heavier than another shard's** points at weights: regenerate the win32 timing table ([Regenerate the win32 timing table](regenerate-the-win32-timing-table.md)), since a new heavy conformance file or a stale table mis-prices the split. |
 | `baseline-mismatch` | The newest run's Windows shard count differs from the baseline's (6). The lane was re-sharded. | Measure the new layout and update `baselineShardTotal` and `baselineP90Ms` in `SHARD_BALANCE`. Until then, no gap or p90 verdict is given. A re-shard PR should already fail `tests/ci-timeout-report.test.cjs`, which checks this count against `test.yml`. |
 | `error` | The GitHub API could not be read. The step logs a warning. | Re-run the workflow once the API is reachable. The per-job report step is unaffected. |
 

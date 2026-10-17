@@ -27,7 +27,7 @@ way). Artifacts are kept for 14 days.
 1. Pick one recent, fully completed `Tests` run that ran the conformance jobs: a
    push to `next`, or a `workflow_dispatch` of `test.yml`. Pull-request runs
    skip these jobs unless the change needs the full matrix.
-2. Download the three Windows artifacts:
+2. Download the six Windows artifacts, one per shard:
 
    ```bash
    gh run download <run-id> --repo open-gsd/gsd-core \
@@ -56,7 +56,7 @@ way). Artifacts are kept for 14 days.
 
 ## Why one run
 
-Use all three shards of **one** run. Each shard runs a disjoint slice of the
+Use all six shards of **one** run. Each shard runs a disjoint slice of the
 tier, so together they price every file once. The generator keeps the max for a
 file seen more than once, so mixing runs biases the table toward each file's
 slowest run.
