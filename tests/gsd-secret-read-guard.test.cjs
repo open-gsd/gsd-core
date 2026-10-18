@@ -884,6 +884,20 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
     });
   }
 
+  test('the debugger check reads `((` the same however much read-ahead the secret-read scan used', () => {
+    // One hook run makes two grammar scans: for a secret read, then for a
+    // gsd-debugger spawn. Each reads `((` by reading ahead, within a cap on
+    // the total. A shared cap would let the
+    // first `((` here, read ahead over 600,000 characters by the secret-read
+    // scan, leave the spawn scan none for the second: it would read that
+    // `((` as two subshells, open a pattern list at `case x in y`, and take
+    // the string after the span for commands. The same span alone is allowed.
+    const span = 'echo "$( (( case x in y )) )"; echo "; claude --agent gsd-debugger -p y; "';
+    const longArith = `echo "$( (( ${'1+'.repeat(300000)}1 )) )"; `;
+    assertAllowed(runHook(bash(span)), 'the span alone');
+    assertAllowed(runHook(bash(longArith + span)), 'the span after a long arithmetic read-ahead');
+  });
+
   test('a carriage return inside a pattern word does not end the case: blocks the later arm', () => {
     // `esac\rfoo` is one pattern word, so the case is still open at `x)`.
     const cmd = 'echo "$(case x in esac\rfoo) :;; x) cat .env;; esac)"';
