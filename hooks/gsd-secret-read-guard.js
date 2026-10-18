@@ -468,6 +468,7 @@ function skipQuoted(str, i, ctx) {
   if (ch === "'" || ch === '`') {
     i++;
     while (i < str.length && str[i] !== ch) {
+      readerSteps++;
       i = str[i] === '\n' ? afterNewline(str, i, ctx) : i + 1;
     }
     return i + 1;
@@ -475,6 +476,7 @@ function skipQuoted(str, i, ctx) {
   if (ch === '"') {
     i++;
     while (i < str.length && str[i] !== '"') {
+      readerSteps++;
       if (str[i] === '\\') { i += 2; continue; }
       if (str[i] === '$' && str[i + 1] === '(') { i = readParenClose(str, i + 2, ctx) + 1; continue; }
       if (str[i] === '`') { i = skipQuoted(str, i, ctx); continue; }
@@ -491,6 +493,7 @@ function skipQuoted(str, i, ctx) {
 function findBraceClose(str, i, ctx) {
   descend(ctx);
   while (i < str.length) {
+    readerSteps++;
     const q = skipQuoted(str, i, ctx);
     if (q !== -1) { i = q; continue; }
     if (str[i] === '$' && str[i + 1] === '(') { i = readParenClose(str, i + 2, ctx) + 1; continue; }
@@ -513,6 +516,7 @@ function findPlainParenClose(str, i, words, ctx, pending) {
   let depth = 1;
   let wordStart = true;
   while (i < str.length) {
+    readerSteps++;
     // bash deletes a backslash-newline here too, so a `#` after one starts a word.
     if (words && str[i] === '\\' && str[i + 1] === '\n') { i += 2; continue; }
     const q = skipQuoted(str, i, ctx);
@@ -577,6 +581,10 @@ const PLAIN_RESERVED = new Set(['!', 'if', 'then', 'else', 'elif', 'fi', 'while'
 // scanByGrammar refills it before each scan, so no scan reads `((` with
 // what an earlier one left: one hook run makes several.
 let probeBudget = MAX_COMMAND_LENGTH;
+
+// Iterations of the span readers' loops, summed over the process: the work
+// the tests hold linear in the length of a command (module.exports).
+let readerSteps = 0;
 
 // The readers recurse once per nested `$( )`, `<( )` or `${ }`. Past this many
 // levels of one context they stop, and readSpanClose closes by count. A heredoc tag
@@ -657,6 +665,7 @@ function findParenClose(str, i) {
   let heredocTags = [];
   let j;
   while (i < str.length) {
+    readerSteps++;
     const ch = str[i];
     if (ch === '\\') { i += 2; continue; }
     if (ch === "'") {
@@ -667,6 +676,7 @@ function findParenClose(str, i) {
     if (ch === '"') {
       i++;
       while (i < str.length && str[i] !== '"') {
+        readerSteps++;
         if (str[i] === '\\') { i += 2; continue; }
         if (str[i] === '$' && str[i + 1] === '(') { i = findParenClose(str, i + 2) + 1; continue; }
         if (str[i] === '`') {
@@ -802,6 +812,7 @@ function scanCommandParenClose(str, i, ctx) {
   };
 
   while (i < str.length) {
+    readerSteps++;
     const ch = str[i];
     // bash deletes a backslash-newline before it reads a token, so it is no
     // word and leaves the word around it whole.
@@ -2096,4 +2107,4 @@ if (require.main === module) {
 }
 
 // For in-process tests; the hook itself runs only as the entry script.
-module.exports = { checkBashCommand, MAX_COMMAND_LENGTH, MAX_READER_DEPTH };
+module.exports = { checkBashCommand, readerSteps: () => readerSteps, MAX_COMMAND_LENGTH, MAX_READER_DEPTH };
