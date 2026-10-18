@@ -15,7 +15,14 @@
  *   - `loop-gap`: this process's own timer fired more than LOOP_GAP_MS late
  *     (the whole VM, or at least this process, was not scheduled);
  *   - `probe-slow`: a probe child (the #4784 sh pipeline, or `cmd /c exit`)
- *     took more than PROBE_SLOW_MS, or hit its bound.
+ *     took more than PROBE_SLOW_MS, or hit its bound;
+ *   - `procs`: a snapshot of the live node/sh/bash/cmd/npm/git processes (name,
+ *     parent, age, CPU time so far, and the *.test.cjs names in their
+ *     arguments), taken after either anomaly and every two minutes, so a stall
+ *     can be lined up with what else was running in the chunk. Earlier red
+ *     `next`s (see defaultMaxUnmeasuredPerChunk in scripts/run-tests.cjs) lost
+ *     whole chunks at 600000 ms with zero failing tests; the periodic snapshots
+ *     show which test file a killed chunk was inside and whether it was idle.
  *
  * Timestamps are ISO UTC, the same clock as the lines in the job log, so a
  * failing test's end time minus its duration can be lined up against these
@@ -51,9 +58,27 @@ function formatEvent(at, kind, ms, detail) {
   return `${new Date(at).toISOString()} ${kind} ${ms} ${detail}`;
 }
 
+/**
+ * One compact line for a process snapshot. `rows` are `{pid, ppid, name, born, cpuMs, cmd}`
+ * (born = epoch ms, cmd = the command line). Only what identifies the work is kept: the
+ * process name, its age, its CPU time so far, and the `*.test.cjs` file names in its
+ * arguments (the node:test chunk children carry them). Nothing else from a command line
+ * is reported, because the job environment carries tokens and a report is public.
+ */
+function formatProcs(rows, now) {
+  return rows
+    .map((r) => {
+      const tests = [...new Set(String(r.cmd || '').match(/[\w.-]+\.test\.cjs/g) || [])].slice(0, 3);
+      const age = Math.max(0, Math.round((now - r.born) / 1000));
+      const cpu = Math.round(r.cpuMs / 1000);
+      return `${r.name}#${r.pid}<${r.ppid} age ${age}s cpu ${cpu}s${tests.length ? ` [${tests.join(' ')}]` : ''}`;
+    })
+    .join(' | ');
+}
+
 /** Inverse of formatEvent; null for a line that is not an event. */
 function parseEvent(line) {
-  const m = /^(\d{4}-\d{2}-\d{2}T[\d:.]+Z) (loop-gap|probe-slow) (\d+) (.*)$/.exec(line);
+  const m = /^(\d{4}-\d{2}-\d{2}T[\d:.]+Z) (loop-gap|probe-slow|procs) (\d+) (.*)$/.exec(line);
   if (!m) return null;
   return { at: m[1], kind: m[2], ms: Number(m[3]), detail: m[4] };
 }
@@ -94,11 +119,42 @@ function probe(label, bin, args, onDone) {
   child.on('close', finish);
 }
 
+const PS_PROCS = "Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(node|sh|bash|cmd|npm|git)\\.exe$' } | ForEach-Object { [pscustomobject]@{ pid = $_.ProcessId; ppid = $_.ParentProcessId; name = $_.Name -replace '\\.exe$', ''; born = [int64](([datetime]$_.CreationDate).ToUniversalTime() - [datetime]'1970-01-01').TotalMilliseconds; cpuMs = [int64](($_.KernelModeTime + $_.UserModeTime) / 10000); cmd = $_.CommandLine } } | ConvertTo-Json -Compress";
+const SNAPSHOT_EVERY_MS = 120_000;
+const SNAPSHOT_COOLDOWN_MS = 20_000;
+const SNAPSHOT_BOUND_MS = 30_000;
+
+/** Snapshot the live node/sh/bash/cmd/npm/git processes; calls back with the compact line. */
+function snapshotProcs(onDone) {
+  const started = Date.now();
+  let out = '';
+  const child = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', PS_PROCS], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+  const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* gone */ } }, SNAPSHOT_BOUND_MS);
+  child.stdout.on('data', (d) => { out += d; });
+  child.on('error', () => { clearTimeout(timer); onDone(Date.now() - started, 'snapshot unavailable'); });
+  child.on('close', () => {
+    clearTimeout(timer);
+    let rows = [];
+    try { const parsed = JSON.parse(out); rows = Array.isArray(parsed) ? parsed : [parsed]; } catch { /* no rows */ }
+    onDone(Date.now() - started, rows.length ? `${rows.length} procs: ${formatProcs(rows, Date.now())}` : 'snapshot unavailable');
+  });
+}
+
 function run(dir) {
   const eventsPath = path.join(dir, EVENTS_FILE);
   const record = (at, kind, ms, detail) => {
     try { fs.appendFileSync(eventsPath, `${formatEvent(at, kind, ms, detail)}\n`); } catch { /* dir gone: nothing to do */ }
   };
+  let lastSnapshotAt = 0;
+  let snapshotting = false;
+  const takeSnapshot = (why) => {
+    const now = Date.now();
+    if (snapshotting || now - lastSnapshotAt < SNAPSHOT_COOLDOWN_MS) return;
+    snapshotting = true;
+    lastSnapshotAt = now;
+    snapshotProcs((ms, detail) => { snapshotting = false; record(Date.now(), 'procs', ms, `${why}: ${detail}`); });
+  };
+  const snapshotTimer = setInterval(() => takeSnapshot('periodic'), SNAPSHOT_EVERY_MS);
   const lifetimeEnd = Date.now() + MAX_LIFETIME_MS;
   const probeMs = { sh: [], cmd: [] };
   let probeCount = 0;
@@ -107,7 +163,7 @@ function run(dir) {
   const tick = setInterval(() => {
     const now = Date.now();
     const late = now - last - TICK_MS;
-    if (late > LOOP_GAP_MS) record(now, 'loop-gap', late, `timer fired ${late}ms late`);
+    if (late > LOOP_GAP_MS) { record(now, 'loop-gap', late, `timer fired ${late}ms late`); takeSnapshot('after loop-gap'); }
     last = now;
     if (now > lifetimeEnd || fs.existsSync(path.join(dir, STOP_FILE))) finishRun();
   }, TICK_MS);
@@ -117,6 +173,7 @@ function run(dir) {
     probeMs[label].push(ms);
     if (ms > PROBE_SLOW_MS || timedOut) {
       record(Date.now(), 'probe-slow', ms, `${label} started ${new Date(started).toISOString()}${timedOut ? ' hit the bound' : ''}`);
+      takeSnapshot('after probe-slow');
     }
   };
 
@@ -138,6 +195,7 @@ function run(dir) {
   function finishRun() {
     probing = false;
     clearInterval(tick);
+    clearInterval(snapshotTimer);
     const summary = {
       probes: probeCount,
       sh: { n: probeMs.sh.length, median: percentile(probeMs.sh, 0.5), p99: percentile(probeMs.sh, 0.99), max: percentile(probeMs.sh, 1) },
@@ -199,4 +257,4 @@ if (require.main === module) {
   ({ start, run, report })[mode](path.resolve(dirArg || defaultDir()));
 }
 
-module.exports = { formatEvent, parseEvent, summarizeEvents, percentile, LOOP_GAP_MS, PROBE_SLOW_MS };
+module.exports = { formatEvent, formatProcs, parseEvent, summarizeEvents, percentile, LOOP_GAP_MS, PROBE_SLOW_MS };
