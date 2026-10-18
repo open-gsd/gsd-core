@@ -15,7 +15,7 @@ describe('process snapshots', () => {
     ];
     assert.equal(
       formatProcs(rows, NOW),
-      'node#7132<4040 age 95s cpu 12s [lockfile-cve-audit.test.cjs] | cmd#8800<7132 age 31s cpu 0s',
+      'node#7132<4040 age 95s cpu 12s [lockfile-cve-audit.test.cjs] | cmd#8800<7132 age 31s cpu 0s LINGERING',
     );
   });
 
