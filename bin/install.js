@@ -11743,6 +11743,12 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     // in autocomplete. Cleaning them up fixes the duplication; SKILL.md alone is
     // sufficient for Codex discovery. User-owned dirs are never touched.
     if (hostBehaviorsFor(runtime).cleanupSkillSidecars) {
+      // #5161: no includeWritten here, unlike the count and writeManifest. The
+      // record would add only skills staged from a command (a capability skill
+      // carries the marker, which this predicate already owns). The writer prunes
+      // each of those except gsd-dev-preferences and writes it fresh as a lone
+      // SKILL.md, so it holds no sidecar for this cleanup to remove, and the
+      // cleanup skips gsd-dev-preferences by name (its _userOwnedSkillDirs set).
       cleanupCodexSkillMetadataSidecars(
         _skillsRootDir,
         createSkillDirOwnership(runtime, targetDir, _skillsRootDir, 'gsd-', { includeManifest: false }),
