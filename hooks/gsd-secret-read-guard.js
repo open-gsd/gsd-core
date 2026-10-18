@@ -975,6 +975,17 @@ function consumeHeredocBodies(str, i, tags) {
 function collectSubstitutions(body, nested, ansiC) {
   let i = 0;
   while (i < body.length) {
+    // bash, zsh and dash all pair a `$` run here left to right: in a body
+    // `$$( ' $(cat .env) ' )` is the PID, literal text and a `$(cat .env)`
+    // they run. Under the ANSI-C readings (the `$$(` trigger brings such a
+    // command there) an even run is skipped whole, and an odd run's last `$`
+    // is read below; the plain reading reads the body as before #5255. A
+    // backslash escapes the next character in a body, so `\$` starts no run.
+    if (ansiC && body[i] === '\\') { i += 2; continue; }
+    if (ansiC && body[i] === '$') {
+      const run = dollarRun(body, i);
+      if (run.dollars > 1) { i = run.dollars % 2 === 1 ? run.last : run.end; continue; }
+    }
     if (body[i] === '$' && body[i + 1] === '(') {
       const e = findParenClose(body, i + 2, ansiC);
       nested.push(body.slice(i + 2, e));
