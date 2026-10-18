@@ -108,9 +108,19 @@ node gsd-tools.cjs state update-progress
 node gsd-tools.cjs state add-decision --summary "..." [--phase N] [--rationale "..."]
 # Or from files:
 node gsd-tools.cjs state add-decision --summary-file path [--rationale-file path]
+# Text-file inputs (--summary-file, --rationale-file, --text-file, --note-file) are
+# read once and copied into STATE.md, so any readable regular file of up to 256 KiB is
+# accepted, including one in a temp/scratch directory outside the project; a relative
+# path resolves against the project root. A file that cannot be read, a FIFO, device
+# or directory, a file over 256 KiB, a required field left blank (an empty or
+# whitespace-only --summary, --text or --note, inline or as a file), or a missing
+# STATE.md is refused on stderr with a non-zero exit (reason "usage") and STATE.md is
+# not touched. A blank rationale, inline or file, just means no rationale.
+# (add-decision, add-blocker and add-roadmap-evolution only.)
 
 # Add/resolve blockers
 node gsd-tools.cjs state add-blocker --text "..."
+node gsd-tools.cjs state add-blocker --text-file path
 node gsd-tools.cjs state resolve-blocker --text "..."
 
 # Record session continuity (at least one of --stopped-at / --resume-file is required)

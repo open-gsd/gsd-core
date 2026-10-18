@@ -14,6 +14,12 @@
  *   not spelling" — creates a real symlink via fs.symlinkSync and asserts
  *   readStateHeadFreshness treats the symlinked path as the same repo; symlink
  *   creation/semantics differ under unprivileged Windows (symlink-keyword).
+ * - "<flag> naming a FIFO is refused without blocking" (#4926, one per text-file
+ *   flag) — creates a real FIFO with `mkfifo`; there is no FIFO on Windows
+ *   (process-platform).
+ * - "<flag> naming /dev/zero is refused without reading it" (#4926, one per
+ *   text-file flag) — reads a real POSIX character device; Windows has none
+ *   (process-platform).
  */
 
 const { test, describe } = require('node:test');
@@ -62,4 +68,82 @@ describe('readStateHeadFreshness — property invariants (#2573)', () => {
       'a symlinked project path is the SAME repo — it must resolve, not degrade to unknown');
     assert.strictEqual(r.commits_behind, 0);
   });
+});
+
+describe('#4926 text-file inputs: any readable file is accepted; every refusal exits non-zero', () => {
+  const { beforeEach, afterEach } = require('node:test');
+  const { runGsdTools, cleanup } = require('./helpers.cjs');
+  const { createFixture } = require('./fixtures/index.cjs');
+  const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
+  // A single `mkfifo` call creates the FIFO fixture.
+  const { execFileSync } = require('node:child_process');
+  const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+
+  let tmpDir;
+  let outsideDir;
+  const stateBody = `# Project State
+
+## Decisions
+None yet.
+
+## Blockers
+None
+
+## Roadmap Evolution
+None
+`;
+  const statePath = () => path.join(tmpDir, '.planning', 'STATE.md');
+
+  beforeEach(() => {
+    tmpDir = createFixture();
+    fs.writeFileSync(statePath(), stateBody);
+    outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4926-outside-'));
+  });
+
+  afterEach(() => {
+    cleanup(outsideDir);
+    cleanup(tmpDir);
+  });
+
+  const flags = [
+    { name: 'add-decision --summary-file', argv: (f) => ['state', 'add-decision', '--phase', '3', '--summary-file', f], flag: '--summary-file' },
+    { name: 'add-decision --rationale-file', argv: (f) => ['state', 'add-decision', '--phase', '3', '--summary', 'Chosen', '--rationale-file', f], flag: '--rationale-file' },
+    { name: 'add-blocker --text-file', argv: (f) => ['state', 'add-blocker', '--text-file', f], flag: '--text-file' },
+    { name: 'add-roadmap-evolution --note-file', argv: (f) => ['state', 'add-roadmap-evolution', '--phase', '3', '--note-file', f], flag: '--note-file' },
+  ];
+
+  const assertRefused = (result, flag, why) => {
+    assert.strictEqual(result.exitCode, 1, `refusal must exit non-zero; stdout: ${result.output}`);
+    const envelope = JSON.parse(result.error);
+    assert.strictEqual(envelope.reason, ERROR_REASON.USAGE);
+    assert.ok(envelope.message.startsWith(`${flag} could not be read`), `refusal must name the flag; got: ${envelope.message}`);
+    assert.ok(envelope.message.endsWith(`(${why})`), `refusal must say why; got: ${envelope.message}`);
+    assert.strictEqual(fs.readFileSync(statePath(), 'utf-8'), stateBody, 'STATE.md must be byte-identical after a refusal');
+  };
+
+  for (const f of flags) {
+    // Without the regular-file check, opening a FIFO with no writer blocks
+    // forever and runGsdTools throws on the subprocess timeout.
+    test(`${f.name} naming a FIFO is refused without blocking`, (t) => {
+      if (process.platform === 'win32') {
+        t.skip('no FIFOs on Windows');
+        return;
+      }
+      const fifo = path.join(outsideDir, 'entry.fifo');
+      // Throws when mkfifo fails, so on POSIX this row never passes without a FIFO.
+      execFileSync('mkfifo', [fifo], { stdio: 'ignore', timeout: PROBE_TIMEOUT_MS });
+
+      assertRefused(runGsdTools([...f.argv(fifo), '--json-errors'], tmpDir), f.flag, 'not a regular file');
+    });
+
+    // /dev/zero never reaches EOF: an unbounded read exhausts memory.
+    test(`${f.name} naming /dev/zero is refused without reading it`, (t) => {
+      if (process.platform === 'win32') {
+        t.skip('no /dev/zero on Windows');
+        return;
+      }
+
+      assertRefused(runGsdTools([...f.argv('/dev/zero'), '--json-errors'], tmpDir), f.flag, 'not a regular file');
+    });
+  }
 });

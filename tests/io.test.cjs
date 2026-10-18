@@ -942,11 +942,11 @@ describe('#3912 A3-A5: output({error}) records DEGRADED — shape-exhaustive plu
         // PASS leaves output()'s DEGRADED untouched. So the migrated sites record a declared outcome where
         // they used to record DEGRADED, and the census count falls because of the call shape, not because
         // the error key stopped being recorded.
-        'roadmap.cts': 3, 'state.cts': 27, 'template.cts': 3, 'workstream.cts': 7,  // +1 #3807: advance-plan's ambiguous-position error; +1 #3784: advance-plan's ambiguous-PLAN-position error (two plan spellings, different numbers); +1 #4806: cmdFrontmatterGet's unparseable-frontmatter error
+        'roadmap.cts': 3, 'state.cts': 21, 'template.cts': 3, 'workstream.cts': 7,  // +1 #3807: advance-plan's ambiguous-position error; +1 #3784: advance-plan's ambiguous-PLAN-position error (two plan spellings, different numbers); +1 #4806: cmdFrontmatterGet's unparseable-frontmatter error; -6 #4926: add-decision / add-blocker / add-roadmap-evolution's `STATE.md not found` and `<field> required` refusals moved to the fault path
       },
       `per-file output({error}) census drifted: ${JSON.stringify(perFile)}`,
     );
-    assert.strictEqual(total, 61, `enumerated output({error}) population drifted from the measured 61 (69 - verify.cts's 8 sites that #5170 converted to typed verdicts): got ${total}`);
+    assert.strictEqual(total, 55, `enumerated output({error}) population drifted from the measured 55 (69 - verify.cts's 8 sites that #5170 converted to typed verdicts - #4926's 6 refusals moved to error()): got ${total}`);
   });
 });
 

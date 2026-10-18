@@ -2637,6 +2637,57 @@ describe('websearch command', () => {
     assert.ok(output.error.includes('401'), 'error should include status code');
   });
 
+  for (const status of [301, 302, 303, 307, 308, 399]) {
+    test(`does not follow ${status} redirects (token must not leave Brave)`, async () => {
+      process.env.BRAVE_API_KEY = 'test-key';
+      let calls = 0;
+      let seenRedirect;
+
+      global.fetch = async (_url, init) => {
+        calls++;
+        seenRedirect = init.redirect;
+        return { ok: false, status, headers: new Headers({ location: 'http://other.example/x' }) };
+      };
+
+      await cmdWebsearch('test query', {}, false);
+
+      const output = JSON.parse(captured);
+      assert.strictEqual(seenRedirect, 'manual');
+      assert.strictEqual(output.available, false);
+      assert.strictEqual(output.error, `API error: ${status}`);
+      assert.strictEqual(calls, 1, 'no retry / second request');
+      assert.ok(!('attempts' in output), 'no attempts field');
+    });
+  }
+
+  test('real fetch: token never reaches the redirect target', async () => {
+    process.env.BRAVE_API_KEY = 'test-key';
+    const http = require('node:http');
+    const listen = (srv) => new Promise((r) => srv.listen(0, '127.0.0.1', () => r(srv.address().port)));
+    const tHits = [];
+    let rHits = 0;
+    const T = http.createServer((req, res) => { tHits.push(req.headers['x-subscription-token']); res.end('{}'); });
+    const tPort = await listen(T);
+    const R = http.createServer((req, res) => {
+      rHits++;
+      res.writeHead(307, { Location: `http://127.0.0.1:${tPort}/x` });
+      res.end();
+    });
+    const rPort = await listen(R);
+    try {
+      global.fetch = (_url, init) => origFetch(`http://127.0.0.1:${rPort}/res/v1/web/search`, init);
+      await cmdWebsearch('test query', {}, false);
+      const output = JSON.parse(captured);
+      assert.strictEqual(output.available, false);
+      assert.strictEqual(output.error, 'API error: 307');
+      assert.strictEqual(rHits, 1);
+      assert.deepStrictEqual(tHits, [], 'token must never arrive at redirect target');
+    } finally {
+      R.close();
+      T.close();
+    }
+  });
+
   test('handles network failure', async () => {
     process.env.BRAVE_API_KEY = 'test-key';
 
