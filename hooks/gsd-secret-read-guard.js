@@ -695,6 +695,8 @@ const PLAIN_RESERVED = new Set(['!', 'if', 'then', 'else', 'elif', 'fi', 'while'
 // scan then reads again. This caps the total, and no read-ahead starts inside
 // another, so neither a run of `((` nor a nest of them can make one command
 // quadratic; where it does not read ahead, `((` is read as two subshells.
+// scanByGrammar refills it before each scan, so no scan reads `((` with
+// what an earlier one left: one hook run makes several.
 let probeBudget = MAX_COMMAND_LENGTH;
 
 // Which bash runs the command decides where a span closes, and the hook
@@ -1711,6 +1713,7 @@ function findSecretReadUnderOtherReadings(command) {
 // that can cost nothing they found.
 function scanByGrammar(scan, command) {
   closeByCount = false;
+  probeBudget = MAX_COMMAND_LENGTH;
   try {
     return scan(command, 0);
   } catch (err) {
