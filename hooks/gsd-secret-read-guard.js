@@ -518,13 +518,15 @@ function opensAnsiC(run, str, shell) {
   return str[run.end] === "'" && (shell === 'zsh' ? run.dollars > 0 : run.owned);
 }
 
-// A run of 2+ `$` at `i` inside "…" under zsh's reading, or null. zsh (and
-// dash) pair it left to right there: `"$$("` is the PID and a `(`, so
-// `echo "$$(" ; cat .env` runs the read, and `"$$$(…)"` is the PID and a
-// `$(…)`. bash reads `"$$("` as `$` and a `$(` that never closes, and runs
-// nothing. Returns the PIDs' text and where reading resumes: past an even
-// run, or on an odd run's last `$`, for the `$(` test after it.
-function zshQuotedRun(str, i) {
+// A run of 2+ `$` at `i` inside "…" under the ANSI-C readings, or null.
+// bash, zsh and dash all pair it left to right there: `"$$(x)"` is the PID
+// and `(x)`, and `"$$$(…)"` the PID and a `$(…)`. So the "…" ends at its own
+// `"`: zsh and dash run `echo "$$(" ; cat .env`, and bash, whose expansion of
+// that word fails, drops the rest of its line but runs the next one, so
+// `echo $${"$$("` then a newline and `cat .env` runs the read in bash too.
+// Returns the PIDs' text and where reading resumes: past an even run, or on
+// an odd run's last `$`, for the `$(` test after it.
+function quotedRun(str, i) {
   const run = dollarRun(str, i);
   if (run.dollars < 2) return null;
   const odd = run.dollars % 2 === 1;
@@ -804,8 +806,8 @@ function findParenClose(str, i, ansiC) {
       i++;
       while (i < str.length && str[i] !== '"') {
         if (str[i] === '\\') { i += 2; continue; }
-        const zshRun = ansiC === 'zsh' && str[i] === '$' ? zshQuotedRun(str, i) : null;
-        if (zshRun) { i = zshRun.next; if (str[i] !== '$') continue; }
+        const dqRun = ansiC && str[i] === '$' ? quotedRun(str, i) : null;
+        if (dqRun) { i = dqRun.next; if (str[i] !== '$') continue; }
         if (str[i] === '$' && str[i + 1] === '(') { i = findParenClose(str, i + 2, ansiC) + 1; continue; }
         if (str[i] === '`') {
           const j = str.indexOf('`', i + 1);
@@ -1125,10 +1127,10 @@ function tokenize(str, ansiC) {
           i += 2;
           continue;
         }
-        // zsh pairs a `$` run here; an odd run's last `$` stays (`c` is
-        // still `$` for the branches below).
-        const zshRun = ansiC === 'zsh' && c === '$' ? zshQuotedRun(str, i) : null;
-        if (zshRun) { buf += zshRun.text; i = zshRun.next; if (str[i] !== '$') continue; }
+        // bash and zsh pair a `$` run here; an odd run's last `$` stays (`c`
+        // is still `$` for the branches below).
+        const dqRun = ansiC && c === '$' ? quotedRun(str, i) : null;
+        if (dqRun) { buf += dqRun.text; i = dqRun.next; if (str[i] !== '$') continue; }
         if (str[i] === '$' && str[i + 1] === '(') {
           const e = findParenClose(str, i + 2, ansiC);
           nested.push(str.slice(i + 2, e));

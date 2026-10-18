@@ -1759,12 +1759,17 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       'echo $${x<<EOF}\ncat .env\nEOF',
       'echo $(echo $${x #}; cat .env)',
       'echo $\'x\\\'y\'; echo $${x #}; cat .env', // only zsh's reading sees this one
-      // Inside "…" zsh and dash pair the run too: `"$$("` is the PID and a
-      // `(`, and the line goes on. bash reads `$` and a `$(` that never closes.
+      // Inside "…" every shell pairs the run: `"$$("` is the PID and a `(`,
+      // so the "…" ends at its own `"` and the line goes on (zsh, dash).
       'echo "$$(" ; cat .env',
       'echo "x$$(" ; cat .env',
       'echo "$$$$(" ; cat .env',
       'echo $(echo "$$(" ; cat .env)',
+      // After `$${`, only bash's reading pairs both runs, as dash does: zsh's
+      // reading opens a `${…}` there. dash runs both reads; bash fails the
+      // word at expansion, drops the rest of that line and runs the next.
+      'echo $${"$$(" ; cat .env',
+      'echo $${"$$("\ncat .env',
       // The `<( )` scanner must pair it the same way, or it runs past the `)`
       // and takes `.env` with it (bash and zsh both open the file here).
       'cat <(echo "$$(") .env',
