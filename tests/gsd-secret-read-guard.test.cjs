@@ -36,8 +36,9 @@ const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
 const { QUICK_SPAWN_TIMEOUT_MS, GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-secret-read-guard.js');
-// In process, for the limits the rows below sit on either side of.
-const { checkBashCommand, MAX_COMMAND_LENGTH, MAX_READER_DEPTH } = require(HOOK_PATH);
+// In process: the limits rows below sit on either side of, and the Bash
+// leg with a count of the span readers' work.
+const { checkBashCommand, readerSteps, MAX_COMMAND_LENGTH, MAX_READER_DEPTH } = require(HOOK_PATH);
 
 function runHook(payload, { cwd } = {}) {
   const r = runHookSeam(HOOK_PATH, [], {
@@ -1095,36 +1096,74 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
   });
 
   // Four shapes the readers once took quadratic time on. A hook that outlives
-  // its timeout is skipped by the runtime, which allows the command, so each
-  // has a read in front that must still be blocked within the spawn timeout.
-  test('arithmetic probes behind waiting heredocs are scanned in linear time', () => {
-    // Each `((` is probed on a copy of the heredocs still waiting for a body:
-    // 38,000 of those, then 72,000 probes, just under the command-size cap.
+  // its timeout is skipped by the runtime, which allows the command. None of
+  // them holds a read the counting scans can find: those run first and would
+  // deny it before a reader took a step.
+  //
+  // Two were quadratic in the readers' own loops, so those loops count their
+  // iterations (readerSteps) and the tests below run in process and bound the
+  // count: a few passes over the text, plus the `((` read-ahead cap for each
+  // scan, which is MAX_COMMAND_LENGTH and is refilled per scan. Either old
+  // fault exceeds the bound several times over at these sizes (measured
+  // below); the fixed reader stays well under it.
+  const linearSteps = (cmd) => 16 * cmd.length + 4 * MAX_COMMAND_LENGTH;
+  const scanCounted = (cmd) => {
+    const before = readerSteps();
+    const verdict = checkBashCommand(cmd);
+    return { verdict, steps: readerSteps() - before };
+  };
+
+  test('nested arithmetic probes take reader steps linear in the command', () => {
+    // Every `((` reads ahead to its matching paren. Started inside one
+    // another, each would read the rest of the nest again: 38.7 million steps
+    // for these 8 around a 40,000-character word, eight times the bound,
+    // against 2.7 million with no read-ahead inside another.
+    const cmd = `echo "$( ${'(( $( '.repeat(8)}echo ${'x'.repeat(40000)}${' ) ) ) '.repeat(8)})"`;
+    const { verdict, steps } = scanCounted(cmd);
+    assert.equal(verdict, null);
+    assert.ok(steps <= linearSteps(cmd), `${steps} reader steps for ${cmd.length} characters`);
+  });
+
+  test('a deep nest that paren counting closes early takes reader steps linear in the command', () => {
+    // Past MAX_READER_DEPTH the counter ends each level at the comment's `)`,
+    // and the next `$(` must not start the same climb again: unlatched, these
+    // 10,000 levels take 72 million steps, thirteen times the bound.
+    const cmd = `echo "$(${'# c )\n$( '.repeat(10000)}`;
+    const { verdict, steps } = scanCounted(cmd);
+    assert.equal(verdict, null);
+    assert.ok(steps <= linearSteps(cmd), `${steps} reader steps for ${cmd.length} characters`);
+  });
+
+  test('a read paren counting finds is denied before any grammar reading runs', () => {
+    // The span here runs to the end of the command under the grammar reading,
+    // so a reader that ran first would walk all of it.
+    const cmd = `echo "$(case x in y)"; cat .env; echo ${'x'.repeat(200000)}`;
+    const { verdict, steps } = scanCounted(cmd);
+    assert.deepEqual(verdict, { code: 'secret-read', hit: '.env' });
+    assert.ok(steps < 1000, `${steps} reader steps`);
+  });
+
+  // The other two were quadratic outside any loop: a copy of the waiting
+  // heredocs for each `((` read-ahead, and a flattening of the word being
+  // built at each `@(`. No step count sees either, so these two run the hook
+  // at the size cap, and the spawn timeout (QUICK_SPAWN_TIMEOUT_MS, 10 s) is
+  // their failure signal, as an exemption from the no-elapsed-time rule.
+  // CPU time of the hook on Node 24: 0.6 s and 1.0 s as they stand, 10.8 s
+  // and 18.4 s with the copy or the flattening put back; the first of those
+  // is barely past the timeout, so that test is a weak detector.
+  test('arithmetic probes behind waiting heredocs: blocks the read in the case after them', () => {
+    // 38,000 heredocs waiting for a body, then 72,000 probes, just under the
+    // command-size cap.
     const waiting = ' $(cat <<X)'.repeat(38000);
     const probes = '((1)); '.repeat(72000);
-    const cmd = `cat .env; echo "$(echo${waiting}; ${probes})"\n${'X\n'.repeat(38000)}`;
+    const cmd = `echo "$(echo${waiting}; ${probes}case x in x) cat .env;; esac)"\n${'X\n'.repeat(38000)}`;
     assertBlocked(runHook(bash(cmd)), '72000 probes behind 38000 waiting heredocs', { tool: 'Bash', path: '.env' });
   });
 
-  test('nested arithmetic probes around a long word are scanned in linear time', () => {
-    // Every `((` reads ahead to its matching paren. Started inside one
-    // another, 800 of them would each read the 900,000-character word. (A
-    // deeper nest exhausts the stack first and never gets that far.)
-    const cmd = `cat .env; echo "$( ${'(( $( '.repeat(800)}echo ${'x'.repeat(900000)}${' ) ) ) '.repeat(800)})"`;
-    assertBlocked(runHook(bash(cmd)), '800 nested probes around a long word', { tool: 'Bash', path: '.env' });
-  });
-
-  test('a deep nest that paren counting closes early is scanned in linear time', () => {
-    // The nest exhausts the stack; the counter then ends each level at the
-    // comment's `)`, and the next `$(` must not start the same climb again.
-    const cmd = `cat .env; echo "$(${'# c )\n$( '.repeat(30000)}`;
-    assertBlocked(runHook(bash(cmd)), '30000 nested $( behind comments', { tool: 'Bash', path: '.env' });
-  });
-
-  test('a long word of extended-glob groups is scanned in linear time', () => {
-    // Each `@(` asks what the word ends in. Read from the word as it is being
-    // built, a character at a time, that flattened the whole word every time.
-    const cmd = `cat .env; echo "$(echo ${'a@(x)'.repeat(209000)})"`;
+  test('a long word of extended-glob groups: blocks the read in the case after it', () => {
+    // Each `@(` asks what the word ends in, which must not be read from the
+    // word as it is being built.
+    const cmd = `echo "$(echo ${'a@(x)'.repeat(209000)}; case x in x) cat .env;; esac)"`;
     assertBlocked(runHook(bash(cmd)), '209000 extended-glob groups in one word', { tool: 'Bash', path: '.env' });
   });
 
