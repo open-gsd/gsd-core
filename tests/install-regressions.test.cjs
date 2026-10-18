@@ -2374,6 +2374,7 @@ describe('#1874 F18: ~/.gsd/defaults.json read-modify-write is locked and atomic
 // sufficient — the dir must be a first-party skill, carry the capability-skill marker, or be
 // recorded by the previous install manifest. Anything else is preserved and named in the log.
 describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them', () => {
+  const { installSpawnEnv, sandboxHome, scrubConfigLocationEnv } = require('./helpers.cjs');
   const USER_SKILL = '---\nname: gsd-mine\ndescription: user-owned\n---\nKEEP ME\n';
 
   function seedUserSkills(skillsDir) {
@@ -2397,7 +2398,7 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
     const configDir = path.join(root, '.claude');
     const skillsDir = path.join(configDir, 'skills');
     seedUserSkills(skillsDir);
-    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+    const runOpts = { env: installSpawnEnv({ HOME: root, USERPROFILE: root }), timeoutMs: INSTALL_TIMEOUT_MS };
     const userSkillPath = path.join(skillsDir, 'gsd-mine');
 
     // Run 1 — fresh config dir: the first-time baseline resolves gsd-mine to `keep`.
@@ -2436,7 +2437,7 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
     t.after(() => cleanup(root));
     const configDir = path.join(root, '.claude');
     const skillsDir = path.join(configDir, 'skills');
-    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+    const runOpts = { env: installSpawnEnv({ HOME: root, USERPROFILE: root }), timeoutMs: INSTALL_TIMEOUT_MS };
 
     const r1 = runNode([INSTALL_SCRIPT, '--claude', '--global', '--config-dir', configDir], runOpts);
     assert.strictEqual(r1.exitCode, 0, `install failed: ${r1.stdout}\n${r1.stderr}`);
@@ -2471,7 +2472,7 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
     t.after(() => cleanup(root));
     const configDir = path.join(root, '.claude');
     const devPrefs = path.join(configDir, 'skills', 'gsd-dev-preferences');
-    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+    const runOpts = { env: installSpawnEnv({ HOME: root, USERPROFILE: root }), timeoutMs: INSTALL_TIMEOUT_MS };
     const install = () => {
       const r = runNode([INSTALL_SCRIPT, '--claude', '--global', '--config-dir', configDir], runOpts);
       assert.strictEqual(r.exitCode, 0, `install failed: ${r.stdout}\n${r.stderr}`);
@@ -2501,7 +2502,7 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
   test('gsd-dev-preferences that an old manifest records survives the Hermes flat-root and Claude local stale-skills cleanups', (t) => {
     const root = createTempDir('gsd-5161-devprefs-cleanup-');
     t.after(() => cleanup(root));
-    const runOpts = (cwd) => ({ cwd, env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS });
+    const runOpts = (cwd) => ({ cwd, env: installSpawnEnv({ HOME: root, USERPROFILE: root }), timeoutMs: INSTALL_TIMEOUT_MS });
     const PREFS = '---\nname: gsd-dev-preferences\n---\nPREFS\n';
     // Seed the dir and record it in the manifest, as an install that wrote the old layout would have.
     const seedRecorded = (configDir, skillsDir) => {
@@ -2541,7 +2542,7 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
     t.after(() => cleanup(root));
     const configDir = path.join(root, '.claude');
     const skillsDir = path.join(configDir, 'skills');
-    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+    const runOpts = { env: installSpawnEnv({ HOME: root, USERPROFILE: root }), timeoutMs: INSTALL_TIMEOUT_MS };
 
     const r1 = runNode([INSTALL_SCRIPT, '--claude', '--global', '--config-dir', configDir], runOpts);
     assert.strictEqual(r1.exitCode, 0, `install failed: ${r1.stdout}\n${r1.stderr}`);
@@ -2578,7 +2579,7 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
     fs.mkdirSync(path.join(userDir, 'agents'), { recursive: true });
     fs.writeFileSync(path.join(userDir, 'SKILL.md'), USER_SKILL);
     fs.writeFileSync(path.join(userDir, 'agents', 'openai.yaml'), 'display_name: mine\n');
-    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+    const runOpts = { env: installSpawnEnv({ HOME: root, USERPROFILE: root }), timeoutMs: INSTALL_TIMEOUT_MS };
 
     const r = runNode([INSTALL_SCRIPT, '--codex', '--global', '--config-dir', configDir], runOpts);
     assert.strictEqual(r.exitCode, 0, `codex install failed: ${r.stdout}\n${r.stderr}`);
@@ -2603,7 +2604,7 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
     fs.mkdirSync(path.join(oldSkillsDir, 'gsd-plan-phase'), { recursive: true });
     fs.writeFileSync(path.join(oldSkillsDir, 'gsd-plan-phase', 'SKILL.md'), 'old GSD plan-phase\n');
     seedUserSkills(oldSkillsDir);
-    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+    const runOpts = { env: installSpawnEnv({ HOME: root, USERPROFILE: root }), timeoutMs: INSTALL_TIMEOUT_MS };
 
     const r = runNode([INSTALL_SCRIPT, '--codex', '--global', '--config-dir', configDir], runOpts);
     assert.strictEqual(r.exitCode, 0, `codex install failed: ${r.stdout}\n${r.stderr}`);
@@ -2645,7 +2646,7 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
     fs.writeFileSync(path.join(devinSkillsDir, 'gsd-help', 'SKILL.md'), 'old GSD help\n');
     seedUserSkills(devinSkillsDir);
 
-    const env = { ...process.env, HOME: root, USERPROFILE: root };
+    const env = installSpawnEnv({ HOME: root, USERPROFILE: root });
     delete env.GSD_TEST_MODE;
     const r = runNode([INSTALL_SCRIPT, '--windsurf', '--local'], { cwd: root, env, timeoutMs: INSTALL_TIMEOUT_MS });
     assert.strictEqual(r.exitCode, 0, `windsurf local install failed: ${r.stdout}\n${r.stderr}`);
@@ -2714,7 +2715,7 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
     fs.writeFileSync(path.join(flatDir, 'gsd-mine', 'SKILL.md'), USER_SKILL);
     fs.mkdirSync(path.join(flatDir, 'gsd-help'), { recursive: true });
     fs.writeFileSync(path.join(flatDir, 'gsd-help', 'SKILL.md'), 'old flat GSD help\n');
-    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+    const runOpts = { env: installSpawnEnv({ HOME: root, USERPROFILE: root }), timeoutMs: INSTALL_TIMEOUT_MS };
 
     const r = runNode([INSTALL_SCRIPT, '--hermes', '--global', '--config-dir', configDir], runOpts);
     assert.strictEqual(r.exitCode, 0, `hermes install failed: ${r.stdout}\n${r.stderr}`);
@@ -2779,7 +2780,7 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
     fs.mkdirSync(path.join(skillsDir, 'gsd-help'), { recursive: true });
     fs.writeFileSync(path.join(skillsDir, 'gsd-help', 'SKILL.md'), 'old GSD help\n');
 
-    const env = { ...process.env, HOME: root, USERPROFILE: root };
+    const env = installSpawnEnv({ HOME: root, USERPROFILE: root });
     delete env.GSD_TEST_MODE;
     const r = runNode([INSTALL_SCRIPT, '--claude', '--local'], { cwd: root, env, timeoutMs: INSTALL_TIMEOUT_MS });
     assert.strictEqual(r.exitCode, 0, `local install failed: ${r.stdout}\n${r.stderr}`);
@@ -2826,6 +2827,10 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
     process.chdir(root);
     t.after(() => process.chdir(previousCwd));
     t.after(() => cleanup(root));
+    // In process, so the installer reads this process's env: sandbox HOME and clear every
+    // config-location var (GSD_HOME included), or its defaults.json lands in the runner's home.
+    sandboxHome(t, root);
+    t.after(scrubConfigLocationEnv());
     const configDir = path.join(root, '.claude');
     const userDir = path.join(configDir, 'skills', 'gsd-user-5161');
     fs.mkdirSync(userDir, { recursive: true });
@@ -2849,7 +2854,7 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
     const root = createTempDir('gsd-5161-kimi-marker-');
     t.after(() => cleanup(root));
     const configDir = path.join(root, '.kimi');
-    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+    const runOpts = { env: installSpawnEnv({ HOME: root, USERPROFILE: root }), timeoutMs: INSTALL_TIMEOUT_MS };
 
     const r1 = runNode([INSTALL_SCRIPT, '--kimi', '--global', '--config-dir', configDir], runOpts);
     assert.strictEqual(r1.exitCode, 0, `kimi install failed: ${r1.stdout}\n${r1.stderr}`);
