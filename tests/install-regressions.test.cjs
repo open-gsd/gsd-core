@@ -2815,4 +2815,48 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
     assert.ok(out2.includes(path.join(skillsDir, 'gsd-linked-5161')), 'a kept symlinked user skill is named too');
     assert.ok(fs.existsSync(path.join(skillsDir, 'gsd-mine')), 'the user skill survives the update too');
   });
+
+  // Staging resolves its source with the layout's commands+agents requirement, so a previous manifest
+  // that records every command but no agent is rejected there, and staging takes the corpus a
+  // `.gsd-source` marker names. The two first-party lookups ask for commands only and take the
+  // installed corpus and the package, so neither names the marker corpus's skills. The skills the
+  // install wrote from it are owned only through the written-skill record, which the count and
+  // writeManifest read.
+  test('kimi: an update that stages from a marker corpus counts and records the skills it wrote', (t) => {
+    const root = createTempDir('gsd-5161-kimi-marker-');
+    t.after(() => cleanup(root));
+    const configDir = path.join(root, '.kimi');
+    const runOpts = { env: { ...process.env, HOME: root, USERPROFILE: root }, timeoutMs: INSTALL_TIMEOUT_MS };
+
+    const r1 = runNode([INSTALL_SCRIPT, '--kimi', '--global', '--config-dir', configDir], runOpts);
+    assert.strictEqual(r1.exitCode, 0, `kimi install failed: ${r1.stdout}\n${r1.stderr}`);
+
+    const manifestPath = path.join(configDir, 'gsd-file-manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    for (const key of Object.keys(manifest.files)) {
+      if (key.startsWith('gsd-core/agents/')) delete manifest.files[key];
+    }
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    const markerCommands = path.join(configDir, 'alt-src', 'commands', 'gsd');
+    fs.mkdirSync(markerCommands, { recursive: true });
+    fs.mkdirSync(path.join(configDir, 'alt-src', 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(markerCommands, 'marker-only-5161.md'), '---\nname: marker-only-5161\ndescription: x\n---\nBody\n');
+    fs.writeFileSync(path.join(configDir, 'alt-src', 'agents', 'gsd-planner.md'), '---\nname: gsd-planner\ndescription: x\n---\nBody\n');
+    fs.writeFileSync(path.join(configDir, '.gsd-source'), markerCommands + '\n');
+    const { findInstallSourceRoot } = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
+    assert.strictEqual(findInstallSourceRoot(configDir), path.join(configDir, 'gsd-core', 'commands', 'gsd'),
+      'precondition: a commands-only lookup takes the installed corpus, not the marker one');
+
+    const r2 = runNode([INSTALL_SCRIPT, '--kimi', '--global', '--config-dir', configDir], runOpts);
+    assert.strictEqual(r2.exitCode, 0, `kimi update failed: ${r2.stdout}\n${r2.stderr}`);
+    assert.deepStrictEqual(fs.readdirSync(path.join(configDir, 'skills')).filter((n) => n.startsWith('gsd-')),
+      ['gsd-marker-only-5161'], 'precondition: the update staged from the marker corpus');
+    const reported = (r2.stdout + r2.stderr).match(/Installed (\d+) Kimi skills to skills\//);
+    assert.ok(reported, 'the update reports a skill count');
+    assert.strictEqual(Number(reported[1]), 1, 'the skill the update wrote is counted');
+    const recorded = Object.keys(JSON.parse(fs.readFileSync(manifestPath, 'utf8')).files)
+      .filter((k) => k.startsWith('skills/'));
+    assert.deepStrictEqual(recorded, ['skills/gsd-marker-only-5161/SKILL.md'],
+      'writeManifest records the skill the update wrote');
+  });
 });
