@@ -3826,10 +3826,20 @@ function _applyRuntimeRewritesInner(content, runtime, pathPrefix, isGlobal = fal
       content = content.replace(/~\/\.claude\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
+      // #5501: the bare form too — the launcher's
+      // `${CLAUDE_CONFIG_DIR:-$HOME/.claude}` default has no trailing slash,
+      // so a --config-dir install kept probing `~/.claude/gsd-core`. Guarded
+      // with the same `(?![\w-])` lookahead as copyWithPathReplacement so
+      // `.claude-plugin`, `.claudeignore` and a `.claude-work` prefix the
+      // slash pass just emitted are left alone.
+      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
       // #3133 / #3544: restore @-file-reference lines to the tilde form
       // Claude actually expands — see restoreClaudeGlobalAtRefTilde's doc
       // comment above for why this must be a separate, @-anchored pass.
-      content = restoreClaudeGlobalAtRefTilde(content, pathPrefix);
+      // Handed the normalized prefix (as the agents pipeline is, #3719) so a
+      // bare `@~/.claude` rewritten above is restored as well.
+      content = restoreClaudeGlobalAtRefTilde(content, normalizedPathPrefix);
       content = processAttribution(content, attribution);
       break;
 
