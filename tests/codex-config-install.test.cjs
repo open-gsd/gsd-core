@@ -2606,6 +2606,7 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     cleanupOrphanedCodexContextMonitorScript,
     isGsdOwnedCodexContextMonitorScript,
     hooksJsonReferencesCodexContextMonitor,
+    codexHooksJsonHasManagedHooks,
   } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
 
   let codexHome;
@@ -2828,25 +2829,98 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     });
   }
 
+  const UNINSTALL_HOOK_EVENTS = ['SessionStart', ...CODEX_EXTENDED_HOOK_EVENTS];
+
   // Uninstall reaches hooks.json only after removing skills and agents, so a
-  // hooks.json the policy refuses must stop it before the first removal (#5037).
-  for (const layout of ['symlinked', 'dangling']) {
-    test(`uninstall over a ${layout} hooks.json without GSD_ALLOW_SYMLINKED_DEST refuses before removing any skill (#5037)`, () => {
+  // hooks.json it would write and the policy refuses must stop it before the
+  // first removal (#5037).
+  test('uninstall over a symlinked hooks.json holding GSD hooks without GSD_ALLOW_SYMLINKED_DEST refuses before removing any skill (#5037)', () => {
+    runCodexInstall(codexHome);
+    const skillsBefore = fs.readdirSync(codexSkillsRoot(codexHome)).sort();
+    assert.ok(skillsBefore.length > 0, 'setup: the install must have created skills');
+    const target = path.join(codexHome, 'real-hooks.json');
+    fs.copyFileSync(hooksJsonPath(codexHome), target);
+    assert.ok(codexHooksJsonHasManagedHooks(codexHome, UNINSTALL_HOOK_EVENTS), 'setup: hooks.json must hold GSD hooks');
+    fs.unlinkSync(hooksJsonPath(codexHome));
+    fs.symlinkSync(target, hooksJsonPath(codexHome));
+
+    assert.throws(() => runCodexUninstall(codexHome), /symlink/);
+
+    assert.deepStrictEqual(fs.readdirSync(codexSkillsRoot(codexHome)).sort(), skillsBefore,
+      'no skill may be removed before the refusal');
+    assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isSymbolicLink(), 'hooks.json must still be a symlink');
+  });
+
+  // A hooks.json uninstall has no GSD hook to remove from is never written, so
+  // a link GSD would not write must not block the uninstall (#5037).
+  function assertSkillsRemoved(skillsBefore) {
+    const remaining = fs.existsSync(codexSkillsRoot(codexHome)) ? fs.readdirSync(codexSkillsRoot(codexHome)) : [];
+    assert.deepStrictEqual(skillsBefore.filter((skill) => remaining.includes(skill)), [],
+      'uninstall must remove every GSD skill');
+  }
+
+  test('uninstall over a symlinked hooks.json holding no GSD hooks without GSD_ALLOW_SYMLINKED_DEST succeeds and leaves it untouched (#5037)', () => {
+    runCodexInstall(codexHome);
+    const skillsBefore = fs.readdirSync(codexSkillsRoot(codexHome)).sort();
+    assert.ok(skillsBefore.length > 0, 'setup: the install must have created skills');
+    const target = path.join(codexHome, 'real-hooks.json');
+    // Compact on purpose: any rewrite would reformat it.
+    const before = JSON.stringify({ hooks: { UnrelatedEvent: [{ hooks: [{ type: 'command', command: 'echo unrelated' }] }] } });
+    fs.writeFileSync(target, before, 'utf8');
+    fs.unlinkSync(hooksJsonPath(codexHome));
+    fs.symlinkSync(target, hooksJsonPath(codexHome));
+
+    assert.doesNotThrow(() => runCodexUninstall(codexHome));
+
+    assertSkillsRemoved(skillsBefore);
+    assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isSymbolicLink(), 'hooks.json must still be a symlink');
+    assert.strictEqual(fs.readlinkSync(hooksJsonPath(codexHome)), target, 'the link must still point at the same target');
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), before, 'the link target must be byte-for-byte unchanged');
+  });
+
+  for (const optIn of [false, true]) {
+    test(`uninstall over a dangling hooks.json link succeeds and leaves it in place (GSD_ALLOW_SYMLINKED_DEST=${optIn ? '1' : 'unset'}) (#5037)`, () => {
       runCodexInstall(codexHome);
       const skillsBefore = fs.readdirSync(codexSkillsRoot(codexHome)).sort();
       assert.ok(skillsBefore.length > 0, 'setup: the install must have created skills');
-      const target = path.join(codexHome, layout === 'dangling' ? 'missing-hooks.json' : 'real-hooks.json');
-      if (layout === 'symlinked') fs.copyFileSync(hooksJsonPath(codexHome), target);
+      const missingTarget = path.join(codexHome, 'missing-hooks.json');
       fs.unlinkSync(hooksJsonPath(codexHome));
-      fs.symlinkSync(target, hooksJsonPath(codexHome));
+      fs.symlinkSync(missingTarget, hooksJsonPath(codexHome));
+      if (optIn) process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
 
-      assert.throws(() => runCodexUninstall(codexHome), /symlink/);
+      assert.doesNotThrow(() => runCodexUninstall(codexHome));
 
-      assert.deepStrictEqual(fs.readdirSync(codexSkillsRoot(codexHome)).sort(), skillsBefore,
-        'no skill may be removed before the refusal');
-      assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isSymbolicLink(), 'hooks.json must still be a symlink');
+      assertSkillsRemoved(skillsBefore);
+      assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isSymbolicLink(), 'the dangling link must survive');
+      assert.strictEqual(fs.readlinkSync(hooksJsonPath(codexHome)), missingTarget, 'the link must still point at the same target');
+      assert.strictEqual(fs.existsSync(missingTarget), false, 'nothing may be created at the missing target');
     });
   }
+
+  test('codexHooksJsonHasManagedHooks finds GSD hooks where the removal does, and only there (#5037)', () => {
+    assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, UNINSTALL_HOOK_EVENTS), false, 'no hooks.json');
+    runCodexInstall(codexHome);
+    const installed = readHooksJson(codexHome);
+    assert.ok(Array.isArray(installed.hooks.SessionStart), 'setup: the install must register SessionStart');
+    assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, UNINSTALL_HOOK_EVENTS), true, 'nested GSD hook');
+    assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, ['UnrelatedEvent']), false,
+      'a GSD hook under an event the caller does not remove does not count');
+
+    // The legacy flat shape, which the removal lifts into the nested table.
+    fs.writeFileSync(hooksJsonPath(codexHome), JSON.stringify({ SessionStart: installed.hooks.SessionStart }), 'utf8');
+    assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, UNINSTALL_HOOK_EVENTS), true, 'top-level GSD hook');
+
+    fs.writeFileSync(hooksJsonPath(codexHome), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] } }), 'utf8');
+    assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, UNINSTALL_HOOK_EVENTS), false, 'user hook only');
+
+    fs.writeFileSync(hooksJsonPath(codexHome), '{ not json', 'utf8');
+    assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, UNINSTALL_HOOK_EVENTS), true,
+      'an unparseable file counts, so the removal still reports the parse error');
+
+    fs.unlinkSync(hooksJsonPath(codexHome));
+    fs.symlinkSync(path.join(codexHome, 'missing-hooks.json'), hooksJsonPath(codexHome));
+    assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, UNINSTALL_HOOK_EVENTS), false, 'a dangling link reads as absent');
+  });
 
   test('cleanupOrphanedCodexContextMonitorScript keeps the hooks.json deregistration when script deletion fails', () => {
     runCodexInstall(codexHome);
