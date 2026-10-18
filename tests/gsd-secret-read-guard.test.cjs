@@ -1734,9 +1734,12 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
   });
 
   describe('a run of `$` before `{` or `(` pairs left to right (#5255 review round 7, Major 2)', () => {
-    // bash 5.2 reads `$${` as the PID and a literal `{` and runs the rest of
-    // the line (`echo $${; cat .env` prints the file). Read as a `${` opener
-    // whose `}` never comes, it hid the rest of the line in every reading.
+    // bash 5.2 and dash read `$${` as the PID and a literal `{` and run the
+    // rest of the line (`echo $${; cat .env` prints the file). Read as a `${`
+    // opener whose `}` never comes, it hid the rest of the line. zsh 5.9's
+    // lexer does open a `${…}` there and splits it into PID and text only
+    // when it expands it, so bash's reading pairs the run and zsh's keeps the
+    // brace; a command holding such a run is scanned under both.
     const blocks = [
       'echo $${; cat .env',
       'echo x$${ ; cat .env',
@@ -1745,9 +1748,17 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       'cat $\\\n${; cat .env', // a line continuation inside the run: `$${` to bash
       'echo $(echo $${; cat .env)',
       'echo "$(echo $${; cat .env)"',
-      'echo $\'x\\\'y\'; echo $${; cat .env', // the ANSI-C readings pair the same way
+      'echo $\'x\\\'y\'; echo $${; cat .env', // bash's ANSI-C reading pairs the run too
+      "sh -c 'echo $${; cat .env'", // no dollar-quoting: the run alone brings in bash's reading
       'echo $$${x}; cat .env', // an odd run: the PID, then `${x}`
       'echo $$( ; cat .env', // `$$(` is the PID and a paren (bash rejects the line)
+      // zsh reads the `${…}` whole, so the `#` and `<<` inside it are text and
+      // the read after it runs; bash and dash read a comment or a heredoc.
+      'echo $${x #}; cat .env',
+      'echo $${x:-a #}; cat .env',
+      'echo $${x<<EOF}\ncat .env\nEOF',
+      'echo $(echo $${x #}; cat .env)',
+      'echo $\'x\\\'y\'; echo $${x #}; cat .env', // only zsh's reading sees this one
     ];
     for (const cmd of blocks) {
       test(`blocks ${JSON.stringify(cmd)}`, () => {
@@ -1755,7 +1766,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       });
     }
 
-    for (const cmd of ['echo $${x}; ls', 'echo $$$${x}; ls', 'echo $$$${x}']) {
+    for (const cmd of ['echo $${x}; ls', 'echo $$$${x}; ls', 'echo $$$${x}', 'echo $${x #}; ls']) {
       test(`allows ${JSON.stringify(cmd)}`, () => {
         assertAllowed(runHook(bash(cmd)), cmd);
       });
