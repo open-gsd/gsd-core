@@ -272,6 +272,74 @@ describe('gsd-secret-read-guard: command-valued git config (#5045)', () => {
   });
 });
 
+describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492)', () => {
+  // Oracle: #5492's approved key list. Git runs each value as a command
+  // (git-config(1)); credential.helper only when it starts with `!`.
+  const blocks = [
+    ["git -c sequence.editor='cat .env; true' rebase -i --root", '.env'],
+    ["git -c core.editor='cat .env; true' commit", '.env'],
+    ["git -c core.sshCommand='cat .env #' fetch", '.env'],
+    ["git -c core.fsmonitor='cat .env' status", '.env'],
+    ["git -c gpg.program='cat .env' commit -S", '.env'],
+    ["git -c gpg.ssh.program='cat .env' commit -S", '.env'],
+    ["git -c diff.x.textconv='cat .env #' show --textconv HEAD", '.env'],
+    ["git -c diff.x.command='cat .env' diff", '.env'],
+    ["git -c filter.x.clean='cat .env' add f", '.env'],
+    ["git -c filter.x.smudge='cat .env' checkout f", '.env'],
+    ["git -c filter.x.process='cat .env' checkout f", '.env'],
+    ["git -c merge.x.driver='cat .env' merge b", '.env'],
+    ["git -c credential.helper='!cat .env' fetch", '.env'],
+    // A subsection may itself contain dots (a URL); section and name decide.
+    ["git -c credential.https://example.com.helper='!cat .env' fetch", '.env'],
+    ["git -c Core.SSHCommand='cat .env #' fetch", '.env'],
+    ["git -c DIFF.X.TEXTCONV='cat .env #' show --textconv HEAD", '.env'],
+  ];
+  for (const [cmd, expectedPath] of blocks) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: expectedPath });
+    });
+  }
+
+  const allows = [
+    "git -c core.pager='cat .env' log",
+    "git -c pager.log='cat .env' log",
+    "git -c credential.helper='cat .env' fetch", // no `!`: git runs git credential-<value>
+    'git -c credential.helper=store fetch',
+    'git -c core.editor=vim commit',
+    'git -c core.fsmonitor=true status',
+    "git -c diff.x.textconv='cat README.md' show --textconv HEAD",
+    "git -c filter.x.clean='cat .env.example' add f",
+    "git -c diff.textconv='cat .env' diff", // no subsection: not a textconv key
+    "git -c sequence.editorx='cat .env' rebase -i",
+    "git -c http.extraHeader='cat .env' fetch",
+    'git -c core.autocrlf=true status',
+    "git -c foo='cat .env' status",
+    "echo \"git -c sequence.editor='cat .env' rebase -i\"",
+  ];
+  for (const cmd of allows) {
+    test(`allows ${JSON.stringify(cmd)}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  // Every key shape against every secret form, exhaustively rather than sampled.
+  const KEYS = [
+    ['sequence.editor', ''], ['core.editor', ''], ['core.sshCommand', ''], ['core.fsmonitor', ''],
+    ['gpg.program', ''], ['gpg.x509.program', ''], ['diff.x.textconv', ''], ['diff.x.command', ''],
+    ['filter.x.clean', ''], ['filter.x.smudge', ''], ['filter.x.process', ''], ['merge.x.driver', ''],
+    ['credential.helper', '!'], ['credential.https://example.com.helper', '!'],
+  ];
+  const SECRETS = ['.env', '.env.local', '.secrets', 'config/.env.production'];
+  for (const [key, prefix] of KEYS) {
+    test(`blocks ${key} reading each secret form`, () => {
+      for (const secret of SECRETS) {
+        const cmd = `git -c ${key}='${prefix}cat ${secret}' status`;
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: secret });
+      }
+    });
+  }
+});
+
 describe('gsd-secret-read-guard: Read', () => {
   const blocks = ['.env', '/proj/.env', '.env.local', '/p/.env.production', '.secrets', 'C:\\proj\\.env', '/p/.secrets/',
     // Case-insensitive: these ARE the secret file on macOS/Windows.
