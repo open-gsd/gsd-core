@@ -475,7 +475,7 @@ Read PROJECT.md: core value, current milestone goals, validated requirements (wh
 
 **If `$SELECTED_SEEDS` is non-empty (from step 2.5):** Include selected seed ideas and their "Why This Matters" sections as additional input when defining requirements. Seeds provide user-validated feature ideas that should be incorporated into the requirement categories alongside research findings or conversation-gathered features.
 
-**If research exists:** Read FEATURES.md, extract feature categories.
+**If research ran in Step 8:** If `{dimensions kept}` includes features, read FEATURES.md and extract feature categories; otherwise derive them from the milestone goals and SUMMARY.md. Never read research files left from earlier runs.
 
 Present features by category:
 ```
@@ -485,7 +485,7 @@ Present features by category:
 **Research notes:** [any relevant notes]
 ```
 
-**If no research:** Gather requirements through conversation. Ask: "What are the main things users need to do with [new features]?" Clarify, probe for related capabilities, group into categories.
+**If research was skipped:** Gather requirements through conversation. Ask: "What are the main things users need to do with [new features]?" Clarify, probe for related capabilities, group into categories.
 
 **Scope each category** via AskUserQuestion (multiSelect: true, header max 12 chars):
 - "[Feature 1]" — [brief description]
