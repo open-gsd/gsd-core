@@ -480,8 +480,9 @@ function classifyGrepGlob(glob) {
 // whether a `$` opens that quote. `$$` is the PID and pairs left to right, so
 // only an odd `$` left over owns the quote: `$$'x'` is the PID and a plain
 // 'x', `$$$'x'` is the PID and `$'x'`. That is bash's and dash's pairing;
-// zsh's differs before `'` (opensAnsiC). The same pairing decides `{` and `(`
-// after a run: `$${` is the PID and a `{`, not a `${` opener (tokenize).
+// zsh's differs before `'` (opensAnsiC). bash's pairing also decides `{` and
+// `(` after a run — `$${` is the PID and a `{` — where zsh's lexer opens a
+// `${…}` after any run (tokenize).
 // Callers consume the whole run in one step — a megabyte of `$` is read once,
 // not once per character.
 function dollarRun(str, i) {
@@ -1024,11 +1025,12 @@ function tokenize(str, ansiC) {
   while (i < str.length) {
     const ch = str[i];
 
-    // A run of `$`: dollar-quoting, tested before the plain quote branches
-    // (see the dollar-quoting section above), then the run's pairing.
-    if (ch === '$') {
+    // A run of `$` under an ANSI-C reading: dollar-quoting, tested before the
+    // plain quote branches (see the dollar-quoting section above), then the
+    // run's pairing. The plain reading reads `$` as it did before #5255.
+    if (ansiC && ch === '$') {
       const run = dollarRun(str, i);
-      if (ansiC && run.atQuote) {
+      if (run.atQuote) {
         // The `$` run up to the quote, without its line continuations; the
         // `$` that owns the quote is dropped, the rest is literal word text
         // (zsh's `$$'x'` keeps both: the PID, then the span). A heredoc tag
@@ -1059,16 +1061,17 @@ function tokenize(str, ansiC) {
         i = run.end;
         continue;
       }
-      // Any other run, in every reading (a run before a quote in the plain
-      // reading is left to the quote branches, as before #5255): the run
-      // pairs left to right, so an even run is all PIDs and the `{` or `(`
-      // after it is a literal — bash runs the rest of `echo $${; cat .env`,
-      // where reading the last `$` as a `${` opener hid it to the end of the
-      // line. Only an odd run leaves its last `$` to the `$(` / `${` branches
-      // below; a line continuation after that `$` is the main loop's to strip.
+      // Any other run. bash (and dash) pair it left to right, so an even run
+      // is all PIDs and the `{` or `(` after it is a literal: bash runs the
+      // rest of `echo $${; cat .env`. zsh's lexer instead opens a `${…}` after
+      // the run whatever its length and splits it into PID and text only when
+      // it expands it: zsh runs the read in `echo $${x #}; cat .env`, where
+      // bash and dash read a comment. So only bash's reading pairs; under zsh's
+      // the last `$` goes to the `$(` / `${` branches below, as before. A line
+      // continuation after that `$` is the main loop's to strip.
       if (!run.atQuote && run.dollars > 1) {
         hasWord = true;
-        const odd = run.dollars % 2 === 1;
+        const odd = run.dollars % 2 === 1 || ansiC !== 'bash';
         buf += '$'.repeat(odd ? run.dollars - 1 : run.dollars);
         i = odd ? run.last : run.end;
         continue;
@@ -1553,16 +1556,21 @@ function findSecretReadUnderOtherReadings(command) {
 }
 
 // Returns the block as `{ code, text }` — a secret read (secretRead), or a
-// `$'…'` word with no value to check (tokenize's `unreadable`) — or null. A command holding dollar-quoting
-// is scanned under every reading (see the dollar-quoting section): bash's and
-// zsh's ANSI-C readings first, then the plain one, which is the scan as it was
-// before #5255. A command holding none gets the plain scan alone, so for it
-// the guard is the pre-#5255 guard by construction. "Holding" is tested on the
-// text with its `\<newline>` continuations removed, because bash joins them
-// before it reads a quote: `$\<newline>'x'` is `$'x'`.
+// `$'…'` word with no value to check (tokenize's `unreadable`) — or null. A command holding dollar-quoting,
+// or a run of `$` before `{` or `(` (where bash and zsh read the run
+// differently, tokenize), is scanned under every reading (see the
+// dollar-quoting section): bash's and zsh's readings first, then the plain
+// one, which is the scan as it was before #5255. A command holding neither
+// gets the plain scan alone, so for it the guard is the pre-#5255 guard by
+// construction. "Holding" is tested on the text with its `\<newline>`
+// continuations removed, because bash joins them before it reads a quote:
+// `$\<newline>'x'` is `$'x'`. A run of 2+ `$` before `{` or `(` always ends in
+// `$${` or `$$(`, so a substring test finds it in linear time.
 function findSecretRead(command, depth) {
   const joined = command.includes('\\\n') ? command.replace(/\\\n/g, '') : command;
-  if (!joined.includes("$'") && !joined.includes('$"')) return scanCommand(command, depth, false);
+  if (!joined.includes("$'") && !joined.includes('$"') && !joined.includes('$${') && !joined.includes('$$(')) {
+    return scanCommand(command, depth, false);
+  }
   for (const shell of ANSI_C_SHELLS) {
     let hit = null;
     try {
