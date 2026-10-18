@@ -2340,6 +2340,89 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
         }
       });
     }
+
+    // The check covers only a settings.json uninstall would write. A link
+    // holding no GSD entries, or a dangling one, is never written, so it must
+    // not block the uninstall, with or without the opt-in.
+    function installClaudeGlobal(root) {
+      const claudeDir = path.join(root, '.claude');
+      const installed = runInstaller(root, ['--claude', '--global', '--config-dir', claudeDir], { optIn: false });
+      assert.strictEqual(installed.exitCode, 0, `setup install exited ${installed.exitCode}\n${installed.stdout}\n${installed.stderr}`);
+      const gsdCoreDir = path.join(claudeDir, 'gsd-core');
+      assert.ok(fs.existsSync(gsdCoreDir), 'setup: the install must have created gsd-core/');
+      return { claudeDir, settingsPath: path.join(claudeDir, 'settings.json'), gsdCoreDir };
+    }
+
+    test('without GSD_ALLOW_SYMLINKED_DEST uninstall succeeds over a linked settings.json with no GSD entries and leaves it untouched', (t) => {
+      const root = createTempDir('gsd-5037-uninstall-clean-');
+      t.after(() => cleanup(root));
+      const { claudeDir, settingsPath, gsdCoreDir } = installClaudeGlobal(root);
+      const before = JSON.stringify(USER_SETTINGS, null, 2) + '\n';
+      fs.unlinkSync(settingsPath);
+      const targetPath = linkSettings(root, settingsPath, before);
+      if (!targetPath) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+
+      const result = runInstaller(root, ['--claude', '--global', '--uninstall', '--config-dir', claudeDir], { optIn: false });
+
+      assert.strictEqual(result.exitCode, 0, `uninstall exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`);
+      assert.strictEqual(fs.existsSync(gsdCoreDir), false, 'uninstall must remove gsd-core/');
+      assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+      assert.strictEqual(fs.readlinkSync(settingsPath), targetPath, 'the link must still point at the same target');
+      assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), before, 'the link target must be byte-for-byte unchanged');
+    });
+
+    for (const optIn of [false, true]) {
+      test(`uninstall succeeds over a dangling settings.json link and leaves it in place (GSD_ALLOW_SYMLINKED_DEST=${optIn ? '1' : 'unset'})`, (t) => {
+        const root = createTempDir('gsd-5037-uninstall-dangling-');
+        t.after(() => cleanup(root));
+        const { claudeDir, settingsPath, gsdCoreDir } = installClaudeGlobal(root);
+        const missingTarget = path.join(root, 'dotfiles', 'settings.json');
+        fs.unlinkSync(settingsPath);
+        try {
+          fs.symlinkSync(missingTarget, settingsPath, 'file');
+        } catch {
+          t.skip('symlink creation unsupported on this platform/privilege');
+          return;
+        }
+
+        const result = runInstaller(root, ['--claude', '--global', '--uninstall', '--config-dir', claudeDir], { optIn });
+
+        assert.strictEqual(result.exitCode, 0, `uninstall exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`);
+        assert.strictEqual(fs.existsSync(gsdCoreDir), false, 'uninstall must remove gsd-core/');
+        assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'the dangling link must survive');
+        assert.strictEqual(fs.readlinkSync(settingsPath), missingTarget, 'the link must still point at the same target');
+        assert.strictEqual(fs.existsSync(missingTarget), false, 'nothing may be created at the missing target');
+      });
+    }
+  });
+
+  // uninstall() runs the settings cleanup once silently to decide whether to
+  // check the link, then again for real, so its return value must be exactly
+  // "step 6 would write".
+  describe('stripGsdFromSettings', () => {
+    const { stripGsdFromSettings } = installExports || {};
+    const claudeDir = path.join(path.sep, 'home', 'u', '.claude');
+    const gsdHook = { type: 'command', command: `node ${path.join(claudeDir, 'hooks', 'gsd-check-update.js')}` };
+    const userHook = { type: 'command', command: 'echo mine' };
+
+    test('reports and strips GSD entries, keeping the user hook beside them', () => {
+      const settings = { ...USER_SETTINGS, hooks: { SessionStart: [{ hooks: [gsdHook, userHook] }] } };
+      const lines = [];
+      assert.strictEqual(stripGsdFromSettings(settings, 'claude', claudeDir, (line) => lines.push(line)), true);
+      assert.deepStrictEqual(settings, { ...USER_SETTINGS, hooks: { SessionStart: [{ hooks: [userHook] }] } });
+    });
+
+    test('reports no change and logs nothing for settings without GSD entries', () => {
+      const settings = { ...USER_SETTINGS, hooks: { SessionStart: [{ hooks: [userHook] }] } };
+      const snapshot = JSON.stringify(settings);
+      const lines = [];
+      assert.strictEqual(stripGsdFromSettings(settings, 'claude', claudeDir, (line) => lines.push(line)), false);
+      assert.strictEqual(JSON.stringify(settings), snapshot, 'settings must be left as they were');
+      assert.deepStrictEqual(lines, []);
+    });
   });
 });
 
