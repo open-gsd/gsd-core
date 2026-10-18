@@ -61,7 +61,9 @@ describe('new-milestone Step 8 research decision (#5148)', () => {
     assert.match(body, /Skipping: \{dimension\(s\)\}/);
     assert.match(body, /Never drop one silently/);
     assert.doesNotMatch(workflow, /Spawning 4 researchers|four researchers|Run all 4 researchers|4 parallel agents/i, 'researcher count must not be hardcoded');
-    assert.ok(body.indexOf('Skipping:') < body.indexOf('Spawning {N} researchers'), 'disclosure must precede the spawn banner');
+    const spawn = body.indexOf('subagent_type="gsd-project-researcher"');
+    assert.notEqual(spawn, -1, 'Step 8 must spawn gsd-project-researcher agents');
+    assert.ok(body.indexOf('Skipping: {dimension(s)}') < spawn, 'disclosure must precede the researcher spawn');
   });
 
   test('synthesizer required_reading lists only files written in this run', () => {
