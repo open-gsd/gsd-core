@@ -108,6 +108,12 @@
 //   onto a secret name (`ln -s .env.example l && mv l .env`), so a later
 //   edit of `.env` lands in the link target — a write redirection, the
 //   out-of-scope write class, not a read.)
+//   Git config (#5045, #5492): only `-c` values of the command-valued keys in
+//   scanGitConfig are scanned. Config files, `--config-env` / `GIT_CONFIG_*`
+//   and the `GIT_EDITOR` / `GIT_SEQUENCE_EDITOR` / `GIT_SSH_COMMAND` twins
+//   are not, even as a `VAR=… git` prefix on the same command; nor are keys
+//   outside those sets, or a `credential.helper` program path without `!`.
+//   `core.pager` / `pager.*` are allowed on purpose (no TTY, nothing printed).
 //
 // A second, unrelated contract is enforced on the Bash leg because this is the
 // one hook that already parses EVERY Bash command (#5214): a Bash command that
@@ -243,6 +249,18 @@ const GIT_GLOBAL_FLAGS = new Set([
   '--no-optional-locks', '--no-advice', '--bare',
   '--literal-pathspecs', '--glob-pathspecs', '--noglob-pathspecs', '--icase-pathspecs',
 ]);
+
+// Git config keys whose value git runs as a command (#5045, #5492), by shape:
+// `section.name`, or `section.*.name` for any subsection (see gitConfigShape).
+// `core.pager` / `pager.*` are deliberately absent: with no TTY they print
+// nothing. A BANG key's value is a command only when it starts with `!`;
+// otherwise git runs `git credential-<value>`.
+const GIT_COMMAND_CONFIG_KEYS = new Set([
+  'diff.external', 'sequence.editor', 'core.editor', 'core.sshcommand', 'core.fsmonitor', 'gpg.program',
+  'diff.*.textconv', 'diff.*.command', 'filter.*.clean', 'filter.*.smudge', 'filter.*.process',
+  'gpg.*.program', 'merge.*.driver',
+]);
+const GIT_BANG_COMMAND_CONFIG_KEYS = new Set(['credential.helper', 'credential.*.helper']);
 
 // #4856: `cp`/`mv` write their destination and never print it, so a secret
 // name that is ONLY the destination of a one-source copy or move is a name
@@ -935,10 +953,20 @@ function resolveCommand(words) {
   return { base: lastSegment(words[idx].text).toLowerCase(), operands: words.slice(idx + 1) };
 }
 
+// A lowercased git key reduced to its section and name. The subsection is
+// everything between the first and last dot (it may itself hold dots, as in
+// `credential.https://x.com.helper`), so it collapses to `*`.
+function gitConfigShape(key) {
+  const first = key.indexOf('.');
+  const last = key.lastIndexOf('.');
+  return first === last ? key : `${key.slice(0, first)}.*${key.slice(last)}`;
+}
+
 /**
- * Rescan only the command-valued -c keys selected by #5045. This deliberately
- * does not resolve config files, --config-env/GIT_CONFIG_* values, or other
- * executing keys (diff drivers, filters, credential helpers, ssh, gpg).
+ * Rescan the command-valued -c keys selected by #5045 and #5492 (alias.*=!,
+ * GIT_COMMAND_CONFIG_KEYS, GIT_BANG_COMMAND_CONFIG_KEYS). This deliberately
+ * does not resolve config files, --config-env/GIT_CONFIG_* values, the
+ * GIT_EDITOR-style environment twins, or keys outside those sets.
  * Those are documented gaps, not a promise of complete Git config analysis.
  * Global option values and subcommand arguments are data, not more -c flags.
  */
@@ -948,9 +976,11 @@ function scanGitConfig(operands, depth) {
     if (eq === -1) continue;
     const key = config.slice(0, eq).toLowerCase();
     const value = config.slice(eq + 1);
+    const shape = gitConfigShape(key);
     let script;
     if (key.startsWith('alias.') && value.startsWith('!')) script = value.slice(1);
-    else if (key === 'diff.external') script = value;
+    else if (GIT_BANG_COMMAND_CONFIG_KEYS.has(shape) && value.startsWith('!')) script = value.slice(1);
+    else if (GIT_COMMAND_CONFIG_KEYS.has(shape)) script = value;
     else continue;
     const hit = findSecretRead(script, depth + 1);
     if (hit) return hit;
