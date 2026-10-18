@@ -1735,6 +1735,48 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     });
   });
 
+  describe('a run of `$` before `{` or `(` pairs left to right (#5255 review round 7, Major 2)', () => {
+    // bash 5.2 reads `$${` as the PID and a literal `{` and runs the rest of
+    // the line (`echo $${; cat .env` prints the file). Read as a `${` opener
+    // whose `}` never comes, it hid the rest of the line in every reading.
+    const blocks = [
+      'echo $${; cat .env',
+      'echo x$${ ; cat .env',
+      'echo $${x; cat .env',
+      'echo $$$${; cat .env', // two PIDs, then `{`
+      'cat $\\\n${; cat .env', // a line continuation inside the run: `$${` to bash
+      'echo $(echo $${; cat .env)',
+      'echo "$(echo $${; cat .env)"',
+      'echo $\'x\\\'y\'; echo $${; cat .env', // the ANSI-C readings pair the same way
+      'echo $$${x}; cat .env', // an odd run: the PID, then `${x}`
+      'echo $$( ; cat .env', // `$$(` is the PID and a paren (bash rejects the line)
+    ];
+    for (const cmd of blocks) {
+      test(`blocks ${JSON.stringify(cmd)}`, () => {
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      });
+    }
+
+    for (const cmd of ['echo $${x}; ls', 'echo $$$${x}; ls', 'echo $$$${x}']) {
+      test(`allows ${JSON.stringify(cmd)}`, () => {
+        assertAllowed(runHook(bash(cmd)), cmd);
+      });
+    }
+
+    test('property: a run of any length before `{` leaves a later read visible', () => {
+      // Even runs are PIDs and a literal `{`; odd runs open `${x}`, which closes.
+      const form = fc.tuple(fc.integer({ min: 1, max: 6 }), fc.boolean(), fc.boolean())
+        .map(([n, closes, quoted]) => {
+          const run = '$'.repeat(n);
+          const brace = n % 2 === 1 || closes ? `${run}{x}` : `${run}{`;
+          return quoted ? `echo $'a' ${brace}; cat .env` : `echo ${brace}; cat .env`;
+        });
+      fc.assert(fc.property(form, (cmd) => {
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      }), { seed: 5285, numRuns: 30 });
+    });
+  });
+
   describe('boundaries (#5255 review round 6, Minor 5)', () => {
     const LIMIT = 1024 * 1024;
     // A command of exactly `len` characters: `prefix`, a run of `$`, `suffix`.
