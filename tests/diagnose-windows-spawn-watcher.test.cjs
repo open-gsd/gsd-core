@@ -19,6 +19,19 @@ describe('process snapshots', () => {
     );
   });
 
+  test('formatProcs marks a shell older than 30s as LINGERING, and nothing else', () => {
+    const rows = [
+      { pid: 10, ppid: 1, name: 'sh', born: NOW - 31_000, cpuMs: 0, cmd: 'sh -c x' },
+      { pid: 11, ppid: 1, name: 'bash', born: NOW - 30_000, cpuMs: 0, cmd: 'bash' },
+      { pid: 12, ppid: 1, name: 'cmd', born: NOW - 400_000, cpuMs: 0, cmd: 'cmd' },
+      { pid: 13, ppid: 1, name: 'node', born: NOW - 400_000, cpuMs: 0, cmd: 'node' },
+    ];
+    assert.equal(
+      formatProcs(rows, NOW),
+      'sh#10<1 age 31s cpu 0s LINGERING | bash#11<1 age 30s cpu 0s | cmd#12<1 age 400s cpu 0s LINGERING | node#13<1 age 400s cpu 0s',
+    );
+  });
+
   test('formatProcs never echoes any other part of a command line (a public log must not carry tokens)', () => {
     const rows = [{ pid: 1, ppid: 0, name: 'node', born: NOW, cpuMs: 0, cmd: 'node.exe app.js --token=ghs_SECRETVALUE a.test.cjs' }];
     const line = formatProcs(rows, NOW);

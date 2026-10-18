@@ -64,6 +64,9 @@ function formatEvent(at, kind, ms, detail) {
   return `${new Date(at).toISOString()} ${kind} ${ms} ${detail}`;
 }
 
+const SHELL_NAMES = new Set(['sh', 'bash', 'cmd']);
+const LINGER_AGE_S = 30;
+
 /**
  * One compact line for a process snapshot. `rows` are `{pid, ppid, name, born, cpuMs, cmd}`
  * (born = epoch ms, cmd = the command line). Only what identifies the work is kept: the
@@ -77,7 +80,11 @@ function formatProcs(rows, now) {
       const tests = [...new Set(String(r.cmd || '').match(/[\w.-]+\.test\.cjs/g) || [])].slice(0, 3);
       const age = Math.max(0, Math.round((now - r.born) / 1000));
       const cpu = Math.round(r.cpuMs / 1000);
-      return `${r.name}#${r.pid}<${r.ppid} age ${age}s cpu ${cpu}s${tests.length ? ` [${tests.join(' ')}]` : ''}`;
+      // A shell that outlives every bound the tests set is the signature of a descendant
+      // still holding a spawnSync stdio pipe: node's timer then reports ETIMEDOUT at the
+      // exact bound although the direct child already exited (node src/spawn_sync.cc).
+      const lingering = SHELL_NAMES.has(r.name) && age > LINGER_AGE_S ? ' LINGERING' : '';
+      return `${r.name}#${r.pid}<${r.ppid} age ${age}s cpu ${cpu}s${lingering}${tests.length ? ` [${tests.join(' ')}]` : ''}`;
     })
     .join(' | ');
 }
