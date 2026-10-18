@@ -250,6 +250,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/token-scanner.cjs',
       // #3311: tsc-generated runtime artifact — lint src/milestone-lock.cts, not this.
       'gsd-core/bin/lib/milestone-lock.cjs',
+      // tsc-generated runtime artifact — lint src/session-store.cts, not this.
+      'gsd-core/bin/lib/session-store.cjs',
       'gsd-core/bin/lib/health-diagnostic-types.cjs',
       'gsd-core/bin/lib/health-diagnostic.cjs',
       'gsd-core/bin/lib/health-diagnostic-rules/root-existence.cjs',

@@ -123,6 +123,22 @@ export const STATE_COMMAND_ALIASES: CommandAlias[] = [
     "mutation": true
   },
   {
+    "canonical": "state.session-resume",
+    "aliases": [
+      "state session-resume"
+    ],
+    "subcommand": "session-resume",
+    "mutation": true
+  },
+  {
+    "canonical": "state.sessions",
+    "aliases": [
+      "state sessions"
+    ],
+    "subcommand": "sessions",
+    "mutation": false
+  },
+  {
     "canonical": "state.signal-waiting",
     "aliases": [
       "state signal-waiting"

@@ -158,6 +158,18 @@ describe('state-head freshness properties (#2734)', () => {
             commits_behind: fc.oneof(fc.constant(null), fc.nat({ max: 1000000 })),
             commit_stale: fc.oneof(fc.constant(null), fc.boolean()),
           }),
+          // Per-session pause marker (readHandoffs). Arbitrary junk here must
+          // never throw or produce a malformed separator: null, a string, a
+          // negative/NaN count, a non-boolean self.
+          handoffs: fc.oneof(
+            fc.constant(undefined),
+            fc.constant(null),
+            fc.string(),
+            fc.record({
+              self: fc.oneof(fc.boolean(), fc.string(), fc.constant(null)),
+              others: fc.oneof(fc.integer({ min: -5, max: 50 }), fc.string(), fc.constant(NaN), fc.constant(null)),
+            }),
+          ),
         }),
         (s) => {
           const full = formatGsdStateFull(s);

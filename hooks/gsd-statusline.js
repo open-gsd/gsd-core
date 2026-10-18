@@ -468,6 +468,79 @@ function contextMeter(contextWindow, dir, env = process.env, modelId) {
 }
 
 /**
+ * Per-session pause marker (concurrent sessions sharing one .planning/).
+ *
+ * Pause is not a project-wide STATE.md status any more: a session is paused
+ * iff a handoff file that belongs to it sits at the .planning/ root
+ * (gsd-pause-work writes HANDOFF.json / HANDOFF.<session_id>.json /
+ * HANDOFF.latest.<role_id>.json; resume-work renames a claimed role file to
+ * HANDOFF.claimed.<role_id>.<session_id>.json). Returns
+ *   { self: boolean, others: number }
+ * where `self` means one of those files is THIS session's (by session id, or
+ * by the role recorded in .planning/sessions/<session_id>.json) and `others`
+ * counts the remaining handoffs (other sessions paused in this directory).
+ *
+ * Deliberately inline (fs + path only — no new require; the #3582 build seam
+ * is that this hook loads with nothing but the modules it already imports)
+ * and NEVER throws: any read failure is { self: false, others: 0 }.
+ *
+ * @param {string} planningDir — the PROJECT-ROOT .planning/ (handoffs are not
+ *   workstream-scoped; pause-work writes literal `.planning/`).
+ * @param {string} sessionId — from the hook input; validated here again with
+ *   the same traversal check the context-bridge write uses.
+ */
+function readHandoffs(planningDir, sessionId) {
+  const none = { self: false, others: 0 };
+  try {
+    const sid = (typeof sessionId === 'string' && sessionId.trim() && !/[/\\]|\.\./.test(sessionId)) ? sessionId : null;
+    let roleId = null;
+    if (sid) {
+      try {
+        const rec = JSON.parse(fs.readFileSync(path.join(planningDir, 'sessions', `${sid}.json`), 'utf8'));
+        if (rec && typeof rec.role_id === 'string' && rec.role_id) roleId = rec.role_id;
+      } catch (e) { /* no record — role unknown */ }
+    }
+    let names;
+    try { names = fs.readdirSync(planningDir); } catch (e) { return none; }
+    let self = false;
+    let others = 0;
+    for (const name of names) {
+      const m = /^HANDOFF(?:\.(.+))?\.json$/.exec(name);
+      if (!m) continue;
+      let mine = false;
+      const key = m[1];
+      if (key === undefined) {
+        // Legacy unkeyed file: ours only when its body says so.
+        try {
+          const body = JSON.parse(fs.readFileSync(path.join(planningDir, name), 'utf8'));
+          mine = !!(body && ((sid && body.session_id === sid) || (roleId && body.role_id === roleId)));
+        } catch (e) { mine = false; }
+      } else {
+        const role = /^latest\.(.+)$/.exec(key);
+        const claimed = /^claimed\.([^.]+)\.(.+)$/.exec(key);
+        if (role) mine = !!(roleId && role[1] === roleId);
+        else if (claimed) mine = !!(sid && claimed[2] === sid);
+        else mine = !!(sid && key === sid);
+      }
+      if (mine) self = true; else others += 1;
+    }
+    return { self, others };
+  } catch (e) {
+    return none;
+  }
+}
+
+/** "⏸N" for N>0 other paused sessions, else '' — shared by both formats. */
+function formatOtherHandoffs(handoffs) {
+  const n = handoffs && typeof handoffs === 'object' ? Number(handoffs.others) : 0;
+  return Number.isFinite(n) && n > 0 ? `\u23f8${Math.floor(n)}` : '';
+}
+
+function isOwnHandoff(handoffs) {
+  return !!(handoffs && typeof handoffs === 'object' && handoffs.self === true);
+}
+
+/**
  * Walk up from dir looking for .planning/STATE.md (flat mode). If an ancestor
  * has no flat STATE.md but IS in workstream mode (.planning/workstreams/
  * present — the single-source-of-truth check `listAvailableWorkstreams`
@@ -493,15 +566,19 @@ function contextMeter(contextWindow, dir, env = process.env, modelId) {
  *     (negative space: mirrors flat-mode's own silent pre-STATE.md window)
  *
  * @param {string} dir
- * @param {{ stateFreshness?: boolean }} [opts] — #2734, additive/default-off.
+ * @param {{ stateFreshness?: boolean, sessionId?: string }} [opts] — #2734, additive/default-off.
  *   When true and the resolved state carries a truthy `.stateHead`, attaches
  *   `state.freshness` (deriveStateFreshness) before returning — `current` at
  *   that point is the project root the walk resolved, which is what AC-4's
  *   repo-pinning check needs. Never derived when false or the stamp is
  *   absent, so existing callers (default opts) spend zero extra spawns.
+ *   `sessionId` (a string, possibly empty) attaches `state.handoffs`
+ *   (readHandoffs) to a resolved state — only when the opt is given, so
+ *   callers that omit it get the exact pre-existing object shape.
  */
 function readGsdState(dir, opts = {}) {
   const { stateFreshness = false } = opts;
+  const withHandoffs = typeof opts.sessionId === 'string';
   const home = os.homedir();
   let current = dir;
   for (let i = 0; i < 10; i++) {
@@ -510,6 +587,7 @@ function readGsdState(dir, opts = {}) {
       if (stateFreshness && flatState.stateHead) {
         flatState.freshness = deriveStateFreshness(current, flatState.stateHead);
       }
+      if (withHandoffs) flatState.handoffs = readHandoffs(path.join(current, '.planning'), opts.sessionId);
       return flatState;
     }
 
@@ -527,6 +605,8 @@ function readGsdState(dir, opts = {}) {
       if (wsState !== null && stateFreshness && wsState.stateHead) {
         wsState.freshness = deriveStateFreshness(current, wsState.stateHead);
       }
+      // Handoffs live at the project-root .planning/, not the workstream dir.
+      if (wsState !== null && withHandoffs) wsState.handoffs = readHandoffs(path.join(current, '.planning'), opts.sessionId);
       return wsState;
     }
 
@@ -698,6 +778,12 @@ function formatGsdState(s, opts = {}) {
   // the original "<status> · <phase>" path when none of the new fields apply.
   const phasesStr = (s.nextPhases && s.nextPhases.length > 0) ? s.nextPhases.join('/') : null;
 
+  // Per-session pause (readHandoffs): THIS session's handoff exists → the
+  // status slot reads `paused` (or `paused` is appended after a scene
+  // segment); other sessions' handoffs are counted separately as ⏸N below so
+  // one session's pause never rewrites everyone's status.
+  const own = isOwnHandoff(s.handoffs);
+
   if (s.activePhase) {
     // Scene 1: an orchestrator is mid-flight on this phase.
     // stage = whichever lifecycle status was written by the orchestrator
@@ -705,10 +791,12 @@ function formatGsdState(s, opts = {}) {
     const stage = s.status || '';
     const phase = phaseLabel(s.activePhase);
     parts.push(stage ? `${phase} ${stage}` : phase);
+    if (own) parts.push('paused');
   } else if (s.nextAction && phasesStr) {
     // Scene 2: idle + a recommended next command is visible to the user.
     // Surfaces "what to run next" without the user opening STATE.md.
     parts.push(`next ${s.nextAction} ${phasesStr}`);
+    if (own) parts.push('paused');
   } else if (Number(s.percent) === 100 || (Number(s.totalPhases) > 0 && Number(s.completedPhases) === Number(s.totalPhases))) {
     // Scene 3: milestone complete (every phase done). #3945: the counters are
     // regex-captured STRINGS, so the old `cp && tp && cp === tp` guard fired on
@@ -716,11 +804,13 @@ function formatGsdState(s, opts = {}) {
     // Numeric coercion + a non-empty denominator makes "nothing to measure"
     // stop meaning "everything is done".
     parts.push('milestone complete');
+    if (own) parts.push('paused');
   } else {
     // Backward-compatible default — preserved EXACTLY for STATE.md files that
     // don't carry the new lifecycle fields. Identical output to v1.38.x and
     // earlier so no existing project's status-line changes shape.
-    if (s.status) parts.push(s.status);
+    if (own) parts.push('paused');
+    else if (s.status) parts.push(s.status);
     if (s.phaseNum && s.phaseTotal) {
       const bracketPhase = bracket
         ? renderBracketPhaseDisplay(s.milestone, s.phaseNum, opts.projectCode)
@@ -735,6 +825,10 @@ function formatGsdState(s, opts = {}) {
       parts.push(phase);
     }
   }
+
+  // Other sessions paused in this directory — "⏸N", before the freshness marker.
+  const otherHandoffs = formatOtherHandoffs(s.handoffs);
+  if (otherHandoffs) parts.push(otherHandoffs);
 
   // #2734: STATE.md freshness marker — opt-in, appended last.
   const fresh = formatStateFreshness(s.freshness);
@@ -844,8 +938,15 @@ function formatGsdStateCompact(s, opts = {}) {
   const done = !s.activePhase && (Number(s.percent) === 100 ||
     (Number(s.totalPhases) > 0 && Number(s.completedPhases) === Number(s.totalPhases)));
 
+  // Per-session pause (see formatGsdState): own handoff → PAUSED in the
+  // status slot; other sessions' handoffs → ⏸N.
+  const own = isOwnHandoff(s.handoffs);
+
   if (done) {
     parts.push('complete');
+    if (own) parts.push('PAUSED');
+  } else if (own) {
+    parts.push('PAUSED');
   } else {
     const st = shortGsdStatus(s.status);
     if (st) {
@@ -855,6 +956,9 @@ function formatGsdStateCompact(s, opts = {}) {
       parts.push(`next ${s.nextAction}${phasesStr ? ' ' + phasesStr : ''}`);
     }
   }
+
+  const otherHandoffs = formatOtherHandoffs(s.handoffs);
+  if (otherHandoffs) parts.push(otherHandoffs);
 
   // #2734: STATE.md freshness marker \u2014 opt-in, appended last.
   const fresh = formatStateFreshness(s.freshness);
@@ -1281,7 +1385,7 @@ function runStatusline() {
     // task is in flight the GSD-state segment is not rendered, so spending a
     // freshness git spawn here would spend a subprocess on discarded output.
     if (!task) {
-      const state = readGsdState(dir, { stateFreshness: options.showStateFreshness }) || {};
+      const state = readGsdState(dir, { stateFreshness: options.showStateFreshness, sessionId: session }) || {};
       gsdStateStr = options.stateFormat === 'compact'
         ? formatGsdStateCompact(state, options)
         : formatGsdState(state, options);
@@ -1396,6 +1500,7 @@ module.exports = {
   isAutoCompactDisabled, AUTO_COMPACT_DISABLE_ENV_KEYS, AUTO_COMPACT_ENV_TRUTHY,
   resolveAutoCompactThreshold, contextMeter, SETTINGS_FILE_MAX_BYTES,
   parseAutoCompactWindowEnv, canonicalModelKey, isAutoCompactWindowValue,
+  readHandoffs,
 };
 
 /**
@@ -1436,7 +1541,7 @@ function renderStatusline(data) {
     }
   } catch (e) { /* swallow */ }
 
-  const state = readGsdState(dir, { stateFreshness: options.showStateFreshness }) || {};
+  const state = readGsdState(dir, { stateFreshness: options.showStateFreshness, sessionId: data.session_id || '' }) || {};
   const gsdStateStr = options.stateFormat === 'compact'
     ? formatGsdStateCompact(state, options)
     : formatGsdState(state, options);

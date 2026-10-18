@@ -227,6 +227,23 @@ function criticalStoppedAt(usedPct) {
 }
 
 let input = '';
+/**
+ * argv for the CRITICAL breadcrumb subprocess. Pure so a test can pin the
+ * shape. `sessionId` (already traversal-checked by the caller) is forwarded
+ * as `--session` so the breadcrumb lands in THIS session's continuity
+ * record (.planning/sessions/<sid>.json) as well as the shared STATE.md
+ * `## Session` block — with several sessions on one .planning/, the shared
+ * block is last-writer-wins and would otherwise attribute the exhaustion to
+ * whichever session wrote last.
+ */
+function buildRecordSessionArgv(gsdTools, stoppedAt, sessionId) {
+  const argv = [gsdTools, 'state', 'record-session', '--stopped-at', stoppedAt];
+  if (typeof sessionId === 'string' && sessionId.trim() && !/[/\\]|\.\./.test(sessionId)) {
+    argv.push('--session', sessionId);
+  }
+  return argv;
+}
+
 // Assigned by main(); the handler below clears it. Declared out here rather
 // than inside main() because the handler closes over it.
 let stdinTimeout = null;
@@ -492,7 +509,7 @@ const handleStdinEnd = () => {
         const stoppedAt = criticalStoppedAt(usedPct);
         spawn(
           process.execPath,
-          [gsdTools, 'state', 'record-session', '--stopped-at', stoppedAt],
+          buildRecordSessionArgv(gsdTools, stoppedAt, sessionId),
           { cwd, detached: true, stdio: 'ignore', windowsHide: true }
         ).unref();
         warnData.criticalRecorded = true;
@@ -596,4 +613,5 @@ if (require.main === module) {
 // carrying its own copy of the defaults would stay green if the constants were
 // edited. criticalStoppedAt lets the #4905 test pin the breadcrumb's day
 // without waiting on the detached record-session writer (#3726).
-module.exports = { resolveThresholds, WARNING_THRESHOLD, CRITICAL_THRESHOLD, criticalStoppedAt };
+// buildRecordSessionArgv is exported for the per-session record-session test.
+module.exports = { resolveThresholds, WARNING_THRESHOLD, CRITICAL_THRESHOLD, criticalStoppedAt, buildRecordSessionArgv };
