@@ -1768,6 +1768,12 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       // The `<( )` scanner must pair it the same way, or it runs past the `)`
       // and takes `.env` with it (bash and zsh both open the file here).
       'cat <(echo "$$(") .env',
+      // An unquoted heredoc body: every shell pairs the run, so `( ' ` is
+      // text and the `$(cat .env)` inside the quotes runs (bash, zsh, dash).
+      "cat <<EOF\n$$( ' $(cat .env) ' )\nEOF",
+      "echo \"$(cat <<EOF\n$$( ' $(cat .env) ' )\nEOF\n)\"",
+      "cat <<EOF\n\\$$$( ' $(cat .env) ' )\nEOF", // `\$` is a literal `$`, not part of the run
+      "cat <<EOF\n\\\\\\$$$( ' $(cat .env) ' )\nEOF", // `\\` then `\$`
     ];
     for (const cmd of blocks) {
       test(`blocks ${JSON.stringify(cmd)}`, () => {
@@ -1775,7 +1781,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       });
     }
 
-    for (const cmd of ['echo $${x}; ls', 'echo $$$${x}; ls', 'echo $$$${x}', 'echo $${x #}; ls', 'echo "$$(" ; ls', 'echo "$$$(echo a)"; ls']) {
+    for (const cmd of ['echo $${x}; ls', 'echo $$$${x}; ls', 'echo $$$${x}', 'echo $${x #}; ls', 'echo "$$(" ; ls', 'echo "$$$(echo a)"; ls', 'cat <<EOF\n$$(x) and $$\nEOF']) {
       test(`allows ${JSON.stringify(cmd)}`, () => {
         assertAllowed(runHook(bash(cmd)), cmd);
       });
