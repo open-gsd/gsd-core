@@ -449,7 +449,9 @@ function classifyGrepGlob(glob) {
 //         escape drops its backslash (`$'.env.\local'` is `.env.local`), a
 //         bare `\x` or `\u` is a NUL that cuts the argument (`$'.env\u'` is
 //         `.env`), and it decodes heredoc tags, so a tag can end the heredoc
-//         on a different line; `$"…"` is `$` and `"…"`.
+//         on a different line; `$"…"` is `$` and `"…"`. And a run of `$`
+//         before `'` always ends in a `$'` opener: `$$'x'` is the PID and
+//         `$'x'`, where bash reads the PID and a plain 'x' (opensAnsiC).
 //   plain `$` is a literal and the quote after it a plain one (dash).
 // Each reading hides what another runs:
 //   echo $'x\'y'; cat .env          bash and zsh run `cat .env`; the plain
@@ -477,7 +479,8 @@ function classifyGrepGlob(glob) {
 // index of its last `$`, `atQuote` whether a quote follows, and `owned`
 // whether a `$` opens that quote. `$$` is the PID and pairs left to right, so
 // only an odd `$` left over owns the quote: `$$'x'` is the PID and a plain
-// 'x', `$$$'x'` is the PID and `$'x'`. The same pairing decides `{` and `(`
+// 'x', `$$$'x'` is the PID and `$'x'`. That is bash's and dash's pairing;
+// zsh's differs before `'` (opensAnsiC). The same pairing decides `{` and `(`
 // after a run: `$${` is the PID and a `{`, not a `${` opener (tokenize).
 // Callers consume the whole run in one step — a megabyte of `$` is read once,
 // not once per character.
@@ -506,6 +509,14 @@ function ownsQuote(run, str, shell) {
   return run.owned && (str[run.end] === "'" || shell === 'bash');
 }
 
+// Whether the `'` after the run opens a `$'…'` span under the reading `shell`.
+// bash pairs the run left to right, so only an odd run does. zsh opens one
+// after any run: `$$'\x41'` is the PID and `A`, `$$$$'\x41'` two PIDs and `A`
+// (zsh 5.9), so `echo $$'\''; cat .env` runs the read under zsh.
+function opensAnsiC(run, str, shell) {
+  return str[run.end] === "'" && (shell === 'zsh' ? run.dollars > 0 : run.owned);
+}
+
 // Index of the `'` closing a `$'…'` span whose opening quote is at `i`, or -1
 // when it never closes. A backslash escapes the next character, so `\'` and
 // `\\` never close the span. The one definition of where a span ends, shared
@@ -522,11 +533,11 @@ function ansiCQuoteEnd(str, i) {
 // not scanned (`cat ${x:-.env}` is the `$VAR` gap in the header). A span that
 // never closes leaves the brace to the plain reading's first `}`: bash runs
 // nothing from such a line. -1 when no `}` closes it.
-function ansiCBraceClose(str, i) {
+function ansiCBraceClose(str, i, shell) {
   while (i < str.length && str[i] !== '}') {
     if (str[i] !== '$') { i++; continue; }
     const run = dollarRun(str, i);
-    if (run.owned && str[run.end] === "'") {
+    if (opensAnsiC(run, str, shell)) {
       const end = ansiCQuoteEnd(str, run.end);
       if (end === -1) return str.indexOf('}', i);
       i = end + 1;
@@ -761,7 +772,7 @@ function findParenClose(str, i, ansiC) {
       const run = dollarRun(str, i);
       if (run.atQuote) {
         i = run.end; // a plain quote or `$"…"`: the branches below skip it
-        if (run.owned && str[i] === "'") {
+        if (opensAnsiC(run, str, ansiC)) {
           const end = ansiCQuoteEnd(str, i);
           i = end === -1 ? str.length : end + 1;
         }
@@ -833,9 +844,11 @@ function ansiCTagWord(str, i, shell) {
       i += 2;
     } else if (ch === '$') {
       const run = dollarRun(str, i);
-      tag += '$'.repeat(run.dollars - (ownsQuote(run, str, shell) ? 1 : 0));
+      // A tag is not expanded, so zsh's `$$'EF'` is `$` and the span (`$EF`),
+      // not a PID: the opener takes one `$` under either pairing.
+      tag += '$'.repeat(run.dollars - (ownsQuote(run, str, shell) || opensAnsiC(run, str, shell) ? 1 : 0));
       i = run.end; // at the quote, when there is one: the branches below read it
-      if (run.owned && str[i] === "'") {
+      if (opensAnsiC(run, str, shell)) {
         const end = ansiCQuoteEnd(str, i);
         const raw = str.slice(i + 1, end === -1 ? str.length : end);
         const decoded = decodeAnsiC(raw, shell);
@@ -1017,10 +1030,13 @@ function tokenize(str, ansiC) {
       const run = dollarRun(str, i);
       if (ansiC && run.atQuote) {
         // The `$` run up to the quote, without its line continuations; the
-        // `$` that owns the quote is dropped, the rest is literal word text.
-        const literal = '$'.repeat(run.dollars - (ownsQuote(run, str, ansiC) ? 1 : 0));
+        // `$` that owns the quote is dropped, the rest is literal word text
+        // (zsh's `$$'x'` keeps both: the PID, then the span). A heredoc tag
+        // is not expanded, so there the opener takes one `$` (ansiCTagWord).
+        const opener = ownsQuote(run, str, ansiC) || (expectTag !== null && opensAnsiC(run, str, ansiC));
+        const literal = '$'.repeat(run.dollars - (opener ? 1 : 0));
         if (literal) { hasWord = true; buf += literal; }
-        if (run.owned && str[run.end] === "'") {
+        if (opensAnsiC(run, str, ansiC)) {
           hasWord = true;
           if (quoted === 'none') quoted = 'single';
           const end = ansiCQuoteEnd(str, run.end);
@@ -1119,7 +1135,7 @@ function tokenize(str, ansiC) {
 
     if (ch === '$' && str[i + 1] === '{') {
       hasWord = true;
-      const j = ansiC ? ansiCBraceClose(str, i + 2) : str.indexOf('}', i);
+      const j = ansiC ? ansiCBraceClose(str, i + 2, ansiC) : str.indexOf('}', i);
       const e = j === -1 ? str.length - 1 : j;
       buf += str.slice(i, e + 1);
       i = e + 1;

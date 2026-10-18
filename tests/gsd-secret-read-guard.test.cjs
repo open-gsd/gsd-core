@@ -1522,7 +1522,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       [R`echo "$(printf $'\'')"; cat .env`, '.env'],
       [R`diff <(printf $'\'') old; cat .env`, '.env'],
       [R`echo $$$'x\'y'; cat .env`, '.env'], // `$$` is the PID; the third `$` opens the span
-      [R`echo $$'x\'; cat .env`, '.env'], // `$$'x\'` is the PID and a plain quote that ends at `\'`
+      [R`echo $$'x\'; cat .env`, '.env'], // bash: the PID and a plain quote that ends at `\'` (zsh: an unterminated span)
     ];
     for (const [cmd, expectedPath] of cases) {
       test(`blocks ${JSON.stringify(cmd)}`, () => {
@@ -1583,7 +1583,6 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
 
   describe('ordinary dollar-quoted words stay allowed', () => {
     const cases = [
-      R`echo $$'x\'; ls`,
       R`echo $'hello\tworld'`,
       R`git commit -m $'it\'s done'`,
       R`printf '%s\n' $'a\nb' | sort`,
@@ -1604,7 +1603,6 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       R`cat $'x\0'.env`, // bash `x.env`, zsh `x` — neither is a secret name
       // Line continuations: bash strips `\<newline>` before tokenizing, so
       // these are ordinary commands, not denials (#5255 review round 4).
-      'echo $\\\n$\'x\\\'; ls', // bash: a PID, a plain-quoted `x\`, then `ls`
       'echo $\'a\\0\'\\\n; ls', // the continuation adds nothing; `echo a; ls`
     ];
     for (const cmd of cases) {
@@ -1905,6 +1903,59 @@ describe("regressions: #5255 — zsh's reading of $'…' (review round 6, Major 
       assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path });
     });
   }
+
+  describe("a run of `$` before `'` opens a span under zsh (review round 7, Major 1)", () => {
+    // bash pairs the run left to right: `$$'x'` is the PID and a plain quote.
+    // zsh opens a `$'…'` span after any run (`$$'\x41'` prints the PID and
+    // `A`), so an escaped quote no longer ends it. Every row was run in zsh
+    // 5.9 (Alpine 3, 2026-10-17): the blocked rows printed the file.
+    const blocks = [
+      R`echo $$'\''; cat .env`,
+      "echo $$'\\''a\ncat .env",
+      R`echo x$$'\''; cat .env`,
+      R`echo $$$$'\''; cat .env`,
+      R`cat $$'\'' .env`,
+      "echo ${x:-$$'}'}; cat .env", // the span ends the `${…}` past its `}` under zsh too
+      "cat <<$$'EF'\nbody\n$EF\ncat .env", // a tag is not expanded: zsh's tag is `$EF`, bash's `$$EF`
+      "x=$(cat <<$$'EF'\nbody\n$EF\ncat .env\n)",
+    ];
+    for (const cmd of blocks) {
+      test(`blocks ${JSON.stringify(cmd)}`, () => {
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      });
+    }
+
+    // bash runs `ls` after these (the PID, then a plain-quoted `x\`); zsh
+    // stops at a quote that never closes ("unmatched '") and runs nothing.
+    // The zsh reading has no value to check, so the guard denies, as it does
+    // for every unterminated span.
+    for (const cmd of [R`echo $$'x\'; ls`, 'echo $\\\n$\'x\\\'; ls']) {
+      test(`zsh reading: denies ${JSON.stringify(cmd)} as ansi-c-unterminated (bash would allow it)`, () => {
+        assertBlocked(runHook(bash(cmd)), cmd, { code: 'ansi-c-unterminated', tool: 'Bash' });
+      });
+    }
+
+    for (const cmd of [R`echo $$'x'; ls`, "cat <<$$'EF'\nbody\n$EF\nls", "cat <<$$'EF'\nbody\n$$EF\nls"]) {
+      test(`allows ${JSON.stringify(cmd)}`, () => {
+        assertAllowed(runHook(bash(cmd)), cmd);
+      });
+    }
+
+    test('property: under zsh, a run of 1..4 `$` before an escaped quote leaves the read visible', () => {
+      const run = fc.array(fc.constantFrom('$', '$', '\\\n'), { minLength: 1, maxLength: 6 })
+        .filter((parts) => { const n = parts.filter((p) => p === '$').length; return n >= 1 && n <= 4 && parts[0] === '$'; })
+        .map((parts) => parts.join(''));
+      const forms = [
+        (r) => `echo ${r}'\\''; cat .env`,
+        (r) => `echo "$(echo ${r}'\\'')"; cat .env`,
+        (r) => `echo \${x:-${r}'}'}; cat .env`,
+      ];
+      fc.assert(fc.property(run, fc.constantFrom(...forms), (r, form) => {
+        const cmd = form(r);
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      }), { seed: 5285, numRuns: 40 });
+    });
+  });
 
   test('a heredoc tag zsh decodes differently ends the heredoc on zsh\'s line', () => {
     // zsh ends this heredoc at `.E` and runs `cat .env`; bash reads on to `\.E`.
