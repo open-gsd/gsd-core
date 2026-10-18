@@ -196,6 +196,7 @@ test('in-tier: time cold bash launches by temp drive and Defender state (win32 o
     // The report is emitted BEFORE cleanup can fail, and the probe dir lives on the
     // checkout drive on purpose, which helpers.cjs cleanup() refuses (outside the temp roots).
     emit(lines.join('\n'));
+    // eslint-disable-next-line local/no-raw-rmsync-in-tests -- the probe dir must sit on the checkout drive to be measured, which helpers.cleanup() refuses; a leftover is harmless on an ephemeral runner
     try { fs.rmSync(probeTmp, { recursive: true, force: true }); } catch { /* best effort */ }
   }
 });
