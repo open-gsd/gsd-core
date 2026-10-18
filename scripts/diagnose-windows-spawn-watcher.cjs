@@ -40,6 +40,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 
 const TICK_MS = 250;
 const LOOP_GAP_MS = 750;
@@ -216,6 +217,7 @@ function run(dir) {
   };
 
   let probing = true;
+  let loopTimer = null;
   // Run the two probes one after the other, then wait out the rest of the interval.
   const loop = () => {
     if (!probing) return;
@@ -224,7 +226,7 @@ function run(dir) {
       onProbe(l, ms, to, st, er);
       probe('cmd', 'cmd', ['/c', 'exit', '0'], (l2, ms2, to2, st2, er2) => {
         onProbe(l2, ms2, to2, st2, er2);
-        setTimeout(loop, Math.max(0, PROBE_EVERY_MS - (Date.now() - cycleStart)));
+        loopTimer = setTimeout(loop, Math.max(0, PROBE_EVERY_MS - (Date.now() - cycleStart)));
       });
     });
   };
@@ -234,6 +236,7 @@ function run(dir) {
     probing = false;
     clearInterval(tick);
     clearInterval(snapshotTimer);
+    clearTimeout(loopTimer);
     const summary = {
       probes: probeCount,
       sh: { n: probeMs.sh.length, errors: probeErrors.sh, median: percentile(probeMs.sh, 0.5), p99: percentile(probeMs.sh, 0.99), max: percentile(probeMs.sh, 1) },
@@ -245,7 +248,9 @@ function run(dir) {
       fs.writeFileSync(`${target}.tmp`, JSON.stringify(summary));
       fs.renameSync(`${target}.tmp`, target);
     } catch { /* best effort */ }
-    process.exit(0);
+    // No process.exit (ADR-3889): every timer is cleared above, so the process ends when the
+    // probe or snapshot child still in flight (each bounded) has exited; report has already
+    // been released by the summary file, so nothing waits on this.
   }
 }
 
@@ -292,13 +297,14 @@ function defaultDir() {
   return path.join(process.env.RUNNER_TEMP || require('node:os').tmpdir(), 'spawn-watcher');
 }
 
-if (require.main === module) {
+function main() {
   const [, , mode, dirArg] = process.argv;
   if (!['start', 'run', 'report'].includes(mode)) {
-    process.stderr.write('usage: diagnose-windows-spawn-watcher.cjs start|report [dir]\n');
-    process.exit(2);
+    throw new ExitError(2, 'usage: diagnose-windows-spawn-watcher.cjs start|report [dir]');
   }
   ({ start, run, report })[mode](path.resolve(dirArg || defaultDir()));
 }
+
+if (require.main === module) runMain(main);
 
 module.exports = { formatEvent, formatProcs, parseEvent, summarizeEvents, percentile, LOOP_GAP_MS, PROBE_SLOW_MS };
