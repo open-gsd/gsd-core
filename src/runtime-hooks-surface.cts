@@ -13,6 +13,7 @@
  *   Codex hooks.json: ensureCodexHooksJsonSessionStart, ensureCodexHooksJsonEvent,
  *            reconcileCodexHooksJsonEvent, reconcileCodexHooksJsonSessionStart,
  *            removeCodexHooksJsonEvent, removeCodexHooksJsonSessionStart,
+ *            codexHooksJsonHasManagedHooks,
  *            buildCodexHookWindowsShimIR, buildCodexHookBlock, rewriteLegacyCodexHookBlock
  *   Shared:  buildHookCommand, rewriteLegacyManagedNodeHookCommands
  *
@@ -965,6 +966,21 @@ function _installEngineSymlinkGuard(): InstallEngineSymlinkGuard {
   return mod;
 }
 
+/**
+ * Whether one hook object in a Codex hooks.json event entry is GSD's. The
+ * removal in reconcileCodexHooksJsonEvent and the read-only
+ * codexHooksJsonHasManagedHooks both ask this, so they agree on what a
+ * removal would delete.
+ */
+function isManagedCodexHooksJsonHook(hook: unknown, targetDir: string): boolean {
+  const cmd = hook && typeof hook === 'object' ? (hook as Record<string, unknown>)['command'] : null;
+  return isManagedHookCommand(cmd as string | null | undefined, {
+    surface: 'codex-hooks-json',
+    includeLegacyAliases: true,
+    configDir: targetDir,
+  });
+}
+
 function reconcileCodexHooksJsonEvent(targetDir: string, eventName: string, opts: ReconcileCodexOpts = {}): ReconcileResult {
   const hooksJsonPath = path.join(targetDir, 'hooks.json');
   const managedCommand = typeof opts.managedCommand === 'string' ? opts.managedCommand : null;
@@ -1039,12 +1055,7 @@ function reconcileCodexHooksJsonEvent(targetDir: string, eventName: string, opts
       continue;
     }
     const keptHooks = originalHooks.filter((hook) => {
-      const cmd = hook && typeof hook === 'object' ? (hook as Record<string, unknown>)['command'] : null;
-      const managed = isManagedHookCommand(cmd as string | null | undefined, {
-        surface: 'codex-hooks-json',
-        includeLegacyAliases: true,
-        configDir: targetDir,
-      });
+      const managed = isManagedCodexHooksJsonHook(hook, targetDir);
       if (managed) removedLegacy = true;
       return !managed;
     });
@@ -1279,6 +1290,49 @@ function removeCodexHooksJsonEvent(targetDir: string, eventName: string): Reconc
 
 function removeCodexHooksJsonSessionStart(targetDir: string): ReconcileResult {
   return reconcileCodexHooksJsonSessionStart(targetDir, { managedCommand: null });
+}
+
+/**
+ * Read-only: whether removing `eventNames` from `targetDir`'s hooks.json would
+ * delete a GSD hook. The removal writes hooks.json through the symlink policy
+ * (#5037), which refuses a symlinked file without GSD_ALLOW_SYMLINKED_DEST and
+ * a dangling one either way, so uninstall asks this first and leaves alone a
+ * hooks.json it has nothing to remove from. A dangling link reads as absent.
+ * Entries are found where the removal finds them, under the nested `hooks`
+ * table or as a legacy top-level event array. A file that cannot be read or
+ * parsed counts as holding GSD hooks, so the removal still runs and reports
+ * the parse error as before.
+ */
+function codexHooksJsonHasManagedHooks(targetDir: string, eventNames: readonly string[]): boolean {
+  const hooksJsonPath = path.join(targetDir, 'hooks.json');
+  if (!fs.existsSync(hooksJsonPath)) return false;
+  let parsed: unknown;
+  try {
+    const raw = fs.readFileSync(hooksJsonPath, 'utf8');
+    if (!raw.trim()) return false;
+    parsed = JSON.parse(raw);
+  } catch {
+    return true;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+  const root = parsed as Record<string, unknown>;
+  const nested = root['hooks'] && typeof root['hooks'] === 'object' && !Array.isArray(root['hooks'])
+    ? (root['hooks'] as Record<string, unknown>)
+    : {};
+  for (const eventName of eventNames) {
+    for (const table of [root, nested]) {
+      const entries = table[eventName];
+      if (!Array.isArray(entries)) continue;
+      for (const entry of entries) {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+        const hooks = (entry as Record<string, unknown>)['hooks'];
+        if (Array.isArray(hooks) && hooks.some((hook) => isManagedCodexHooksJsonHook(hook, targetDir))) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -3281,6 +3335,7 @@ export = {
   ensureCodexHooksJsonEvent,
   removeCodexHooksJsonEvent,
   removeCodexHooksJsonSessionStart,
+  codexHooksJsonHasManagedHooks,
   buildCodexHookWindowsShimIR,
   cleanupOrphanedCodexContextMonitorScript,
   isGsdOwnedCodexContextMonitorScript,
