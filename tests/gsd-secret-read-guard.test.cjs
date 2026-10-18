@@ -1759,6 +1759,15 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       'echo $${x<<EOF}\ncat .env\nEOF',
       'echo $(echo $${x #}; cat .env)',
       'echo $\'x\\\'y\'; echo $${x #}; cat .env', // only zsh's reading sees this one
+      // Inside "…" zsh and dash pair the run too: `"$$("` is the PID and a
+      // `(`, and the line goes on. bash reads `$` and a `$(` that never closes.
+      'echo "$$(" ; cat .env',
+      'echo "x$$(" ; cat .env',
+      'echo "$$$$(" ; cat .env',
+      'echo $(echo "$$(" ; cat .env)',
+      // The `<( )` scanner must pair it the same way, or it runs past the `)`
+      // and takes `.env` with it (bash and zsh both open the file here).
+      'cat <(echo "$$(") .env',
     ];
     for (const cmd of blocks) {
       test(`blocks ${JSON.stringify(cmd)}`, () => {
@@ -1766,7 +1775,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       });
     }
 
-    for (const cmd of ['echo $${x}; ls', 'echo $$$${x}; ls', 'echo $$$${x}', 'echo $${x #}; ls']) {
+    for (const cmd of ['echo $${x}; ls', 'echo $$$${x}; ls', 'echo $$$${x}', 'echo $${x #}; ls', 'echo "$$(" ; ls', 'echo "$$$(echo a)"; ls']) {
       test(`allows ${JSON.stringify(cmd)}`, () => {
         assertAllowed(runHook(bash(cmd)), cmd);
       });
