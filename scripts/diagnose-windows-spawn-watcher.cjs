@@ -43,12 +43,17 @@ const { spawn } = require('node:child_process');
 
 const TICK_MS = 250;
 const LOOP_GAP_MS = 750;
-const PROBE_EVERY_MS = 2000;
+// The watcher must not become the load it is looking for: a stall that shows up once in
+// thousands of calls is easy to shift with extra spawn churn, so probes are sparse (one
+// sh and one cmd every 5 s, about 480 pairs over a 40 minute job) and the CIM query,
+// the heavy part, runs every 5 minutes plus at most once a minute after an anomaly.
+const PROBE_EVERY_MS = 5000;
 const PROBE_BOUND_MS = 15_000;
 const PROBE_SLOW_MS = 1500;
 const MAX_LIFETIME_MS = 40 * 60_000;
 const PIPELINE = "printf '%s\\n' x | sed -n 's/x/y/p' | head -1";
 
+const REPORT_WAIT_MS = 20_000;
 const EVENTS_FILE = 'events.log';
 const STOP_FILE = 'stop';
 const SUMMARY_FILE = 'summary.json';
@@ -78,7 +83,7 @@ function formatProcs(rows, now) {
 
 /** Inverse of formatEvent; null for a line that is not an event. */
 function parseEvent(line) {
-  const m = /^(\d{4}-\d{2}-\d{2}T[\d:.]+Z) (loop-gap|probe-slow|procs) (\d+) (.*)$/.exec(line);
+  const m = /^(\d{4}-\d{2}-\d{2}T[\d:.]+Z) (loop-gap|probe-slow|probe-error|procs) (\d+) (.*)$/.exec(line);
   if (!m) return null;
   return { at: m[1], kind: m[2], ms: Number(m[3]), detail: m[4] };
 }
@@ -101,42 +106,69 @@ function percentile(values, p) {
   return sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))];
 }
 
+/**
+ * Run one probe child. `onDone(label, ms, timedOut, started, error)`: `error` is the spawn
+ * error code (or the thrown message) when the probe never ran, else null. A probe that
+ * never ran must not look like a fast success, so callers keep it out of the latencies.
+ */
 function probe(label, bin, args, onDone) {
   const started = Date.now();
   let timedOut = false;
   let settled = false;
-  const finish = () => {
+  let timer = null;
+  const finish = (error) => {
     if (settled) return;
     settled = true;
     clearTimeout(timer);
-    onDone(label, Date.now() - started, timedOut, started);
+    onDone(label, Date.now() - started, timedOut, started, error || null);
   };
-  const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
-  const timer = setTimeout(() => { timedOut = true; try { child.kill('SIGKILL'); } catch { /* gone */ } finish(); }, PROBE_BOUND_MS);
+  let child;
+  try {
+    child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  } catch (e) {
+    finish(`threw ${e && e.code ? e.code : 'error'}`);
+    return;
+  }
+  timer = setTimeout(() => { timedOut = true; try { child.kill('SIGKILL'); } catch { /* gone */ } finish(); }, PROBE_BOUND_MS);
   child.stdout.resume();
   child.stderr.resume();
-  child.on('error', finish);
-  child.on('close', finish);
+  child.on('error', (e) => finish(`spawn ${e && e.code ? e.code : 'error'}`));
+  child.on('close', () => finish());
 }
 
 const PS_PROCS = "Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(node|sh|bash|cmd|npm|git)\\.exe$' } | ForEach-Object { [pscustomobject]@{ pid = $_.ProcessId; ppid = $_.ParentProcessId; name = $_.Name -replace '\\.exe$', ''; born = [int64](([datetime]$_.CreationDate).ToUniversalTime() - [datetime]'1970-01-01').TotalMilliseconds; cpuMs = [int64](($_.KernelModeTime + $_.UserModeTime) / 10000); cmd = $_.CommandLine } } | ConvertTo-Json -Compress";
-const SNAPSHOT_EVERY_MS = 120_000;
-const SNAPSHOT_COOLDOWN_MS = 20_000;
+const SNAPSHOT_EVERY_MS = 300_000;
+const SNAPSHOT_COOLDOWN_MS = 60_000;
 const SNAPSHOT_BOUND_MS = 30_000;
 
 /** Snapshot the live node/sh/bash/cmd/npm/git processes; calls back with the compact line. */
 function snapshotProcs(onDone) {
   const started = Date.now();
   let out = '';
-  const child = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', PS_PROCS], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+  let err = '';
+  let child;
+  try {
+    child = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', PS_PROCS], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  } catch (e) {
+    onDone(Date.now() - started, `snapshot unavailable (threw ${e && e.code ? e.code : 'error'})`);
+    return;
+  }
   const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* gone */ } }, SNAPSHOT_BOUND_MS);
   child.stdout.on('data', (d) => { out += d; });
-  child.on('error', () => { clearTimeout(timer); onDone(Date.now() - started, 'snapshot unavailable'); });
-  child.on('close', () => {
+  // PowerShell's own error text carries no command lines; a short head tells a failure from a timeout.
+  child.stderr.on('data', (d) => { if (err.length < 200) err += d; });
+  child.on('error', (e) => { clearTimeout(timer); onDone(Date.now() - started, `snapshot unavailable (spawn ${e && e.code ? e.code : 'error'})`); });
+  child.on('close', (code, signal) => {
     clearTimeout(timer);
     let rows = [];
     try { const parsed = JSON.parse(out); rows = Array.isArray(parsed) ? parsed : [parsed]; } catch { /* no rows */ }
-    onDone(Date.now() - started, rows.length ? `${rows.length} procs: ${formatProcs(rows, Date.now())}` : 'snapshot unavailable');
+    // The watcher's own process and its probe/snapshot children are not what we are lining up against.
+    rows = rows.filter((r) => r.pid !== process.pid && r.ppid !== process.pid);
+    const why = signal ? `killed ${signal}` : `exit ${code}`;
+    onDone(
+      Date.now() - started,
+      rows.length ? `${rows.length} procs: ${formatProcs(rows, Date.now())}` : `snapshot unavailable (${why}${err ? `: ${err.replace(/\s+/g, ' ').trim().slice(0, 200)}` : ''})`,
+    );
   });
 }
 
@@ -168,7 +200,13 @@ function run(dir) {
     if (now > lifetimeEnd || fs.existsSync(path.join(dir, STOP_FILE))) finishRun();
   }, TICK_MS);
 
-  const onProbe = (label, ms, timedOut, started) => {
+  const probeErrors = { sh: 0, cmd: 0 };
+  const onProbe = (label, ms, timedOut, started, error) => {
+    if (error) {
+      probeErrors[label] += 1;
+      record(Date.now(), 'probe-error', ms, `${label} never ran: ${error}`);
+      return;
+    }
     probeCount += 1;
     probeMs[label].push(ms);
     if (ms > PROBE_SLOW_MS || timedOut) {
@@ -182,10 +220,10 @@ function run(dir) {
   const loop = () => {
     if (!probing) return;
     const cycleStart = Date.now();
-    probe('sh', 'sh', ['-c', PIPELINE], (l, ms, to, st) => {
-      onProbe(l, ms, to, st);
-      probe('cmd', 'cmd', ['/c', 'exit', '0'], (l2, ms2, to2, st2) => {
-        onProbe(l2, ms2, to2, st2);
+    probe('sh', 'sh', ['-c', PIPELINE], (l, ms, to, st, er) => {
+      onProbe(l, ms, to, st, er);
+      probe('cmd', 'cmd', ['/c', 'exit', '0'], (l2, ms2, to2, st2, er2) => {
+        onProbe(l2, ms2, to2, st2, er2);
         setTimeout(loop, Math.max(0, PROBE_EVERY_MS - (Date.now() - cycleStart)));
       });
     });
@@ -198,10 +236,15 @@ function run(dir) {
     clearInterval(snapshotTimer);
     const summary = {
       probes: probeCount,
-      sh: { n: probeMs.sh.length, median: percentile(probeMs.sh, 0.5), p99: percentile(probeMs.sh, 0.99), max: percentile(probeMs.sh, 1) },
-      cmd: { n: probeMs.cmd.length, median: percentile(probeMs.cmd, 0.5), p99: percentile(probeMs.cmd, 0.99), max: percentile(probeMs.cmd, 1) },
+      sh: { n: probeMs.sh.length, errors: probeErrors.sh, median: percentile(probeMs.sh, 0.5), p99: percentile(probeMs.sh, 0.99), max: percentile(probeMs.sh, 1) },
+      cmd: { n: probeMs.cmd.length, errors: probeErrors.cmd, median: percentile(probeMs.cmd, 0.5), p99: percentile(probeMs.cmd, 0.99), max: percentile(probeMs.cmd, 1) },
     };
-    try { fs.writeFileSync(path.join(dir, SUMMARY_FILE), JSON.stringify(summary)); } catch { /* best effort */ }
+    // Write then rename, so report never sees the file before its content has landed.
+    try {
+      const target = path.join(dir, SUMMARY_FILE);
+      fs.writeFileSync(`${target}.tmp`, JSON.stringify(summary));
+      fs.renameSync(`${target}.tmp`, target);
+    } catch { /* best effort */ }
     process.exit(0);
   }
 }
@@ -214,10 +257,11 @@ function start(dir) {
 
 function report(dir) {
   try { fs.writeFileSync(path.join(dir, STOP_FILE), ''); } catch { /* start never ran */ }
-  const deadline = Date.now() + 5000;
+  // The stop file is only seen on the watcher's 250ms tick, so a VM stall longer than this
+  // wait (the very case under study) leaves no summary: say so below instead of "crashed".
+  const deadline = Date.now() + REPORT_WAIT_MS;
   while (!fs.existsSync(path.join(dir, SUMMARY_FILE)) && Date.now() < deadline) {
-    const until = Date.now() + 100;
-    while (Date.now() < until) { /* short busy wait: the watcher needs <1s to flush */ }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
   }
   let events = [];
   try {
@@ -229,8 +273,8 @@ function report(dir) {
     '### #5473 Windows spawn-stall watcher (whole test step, same VM)',
     '',
     summary
-      ? `probes: ${summary.probes} ; sh pipeline median ${summary.sh.median} / p99 ${summary.sh.p99} / max ${summary.sh.max} ms (n=${summary.sh.n}) ; cmd /c exit median ${summary.cmd.median} / p99 ${summary.cmd.p99} / max ${summary.cmd.max} ms (n=${summary.cmd.n})`
-      : 'watcher summary missing: it did not run to a clean stop',
+      ? `probes: ${summary.probes} ; sh pipeline median ${summary.sh.median} / p99 ${summary.sh.p99} / max ${summary.sh.max} ms (n=${summary.sh.n}, never ran ${summary.sh.errors}) ; cmd /c exit median ${summary.cmd.median} / p99 ${summary.cmd.p99} / max ${summary.cmd.max} ms (n=${summary.cmd.n}, never ran ${summary.cmd.errors})`
+      : `watcher summary missing after ${REPORT_WAIT_MS / 1000}s: it either crashed or was stalled past the wait (the events below show which: a stall leaves loop-gap/probe-slow lines up to the last tick)`,
     `events: ${JSON.stringify(summarizeEvents(events))}`,
     '',
     ...events.map((e) => `- ${e.at} ${e.kind} ${e.ms}ms ${e.detail}`),

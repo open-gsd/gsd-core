@@ -32,6 +32,11 @@ describe('process snapshots', () => {
     assert.equal(line, 'node#2<1 age 0s cpu 0s [a.test.cjs b.test.cjs c.test.cjs]');
   });
 
+  test('a probe that never ran is its own event kind, so it cannot pass for a fast success', () => {
+    const line = formatEvent(NOW, 'probe-error', 3, 'cmd never ran: spawn ENOENT');
+    assert.deepEqual(parseEvent(line), { at: '2026-10-18T00:30:00.000Z', kind: 'probe-error', ms: 3, detail: 'cmd never ran: spawn ENOENT' });
+  });
+
   test('a procs event round-trips through formatEvent and parseEvent', () => {
     const line = formatEvent(NOW, 'procs', 1830, 'periodic: 1 procs: node#1<0 age 1s cpu 0s');
     assert.deepEqual(parseEvent(line), { at: '2026-10-18T00:30:00.000Z', kind: 'procs', ms: 1830, detail: 'periodic: 1 procs: node#1<0 age 1s cpu 0s' });
