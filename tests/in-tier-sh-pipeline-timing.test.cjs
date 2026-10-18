@@ -36,7 +36,6 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { cleanup } = require('./helpers.cjs');
 
 const ROUNDS = 6;
 const BOUND_MS = 60_000;
@@ -194,7 +193,9 @@ test('in-tier: time cold bash launches by temp drive and Defender state (win32 o
       lines.push('Defender exclusion phases skipped (not CI, or Git bash not found).', '');
     }
   } finally {
-    cleanup(probeTmp);
+    // The report is emitted BEFORE cleanup can fail, and the probe dir lives on the
+    // checkout drive on purpose, which helpers.cjs cleanup() refuses (outside the temp roots).
+    emit(lines.join('\n'));
+    try { fs.rmSync(probeTmp, { recursive: true, force: true }); } catch { /* best effort */ }
   }
-  emit(lines.join('\n'));
 });
