@@ -477,8 +477,10 @@ function classifyGrepGlob(glob) {
 // index of its last `$`, `atQuote` whether a quote follows, and `owned`
 // whether a `$` opens that quote. `$$` is the PID and pairs left to right, so
 // only an odd `$` left over owns the quote: `$$'x'` is the PID and a plain
-// 'x', `$$$'x'` is the PID and `$'x'`. Callers consume the whole run in one
-// step — a megabyte of `$` is read once, not once per character.
+// 'x', `$$$'x'` is the PID and `$'x'`. The same pairing decides `{` and `(`
+// after a run: `$${` is the PID and a `{`, not a `${` opener (tokenize).
+// Callers consume the whole run in one step — a megabyte of `$` is read once,
+// not once per character.
 function dollarRun(str, i) {
   let end = i;
   let last = i;
@@ -1009,11 +1011,11 @@ function tokenize(str, ansiC) {
   while (i < str.length) {
     const ch = str[i];
 
-    // Dollar-quoting, tested before the plain quote branches (see the
-    // dollar-quoting section above).
-    if (ansiC && ch === '$') {
+    // A run of `$`: dollar-quoting, tested before the plain quote branches
+    // (see the dollar-quoting section above), then the run's pairing.
+    if (ch === '$') {
       const run = dollarRun(str, i);
-      if (run.atQuote) {
+      if (ansiC && run.atQuote) {
         // The `$` run up to the quote, without its line continuations; the
         // `$` that owns the quote is dropped, the rest is literal word text.
         const literal = '$'.repeat(run.dollars - (ownsQuote(run, str, ansiC) ? 1 : 0));
@@ -1041,13 +1043,18 @@ function tokenize(str, ansiC) {
         i = run.end;
         continue;
       }
-      // Any other run: every `$` but the last is a literal, and the last is
-      // read by the `$(` / `${` branches below, exactly as before. A line
-      // continuation after it is the main loop's to strip, as before.
-      if (run.last > i) {
+      // Any other run, in every reading (a run before a quote in the plain
+      // reading is left to the quote branches, as before #5255): the run
+      // pairs left to right, so an even run is all PIDs and the `{` or `(`
+      // after it is a literal — bash runs the rest of `echo $${; cat .env`,
+      // where reading the last `$` as a `${` opener hid it to the end of the
+      // line. Only an odd run leaves its last `$` to the `$(` / `${` branches
+      // below; a line continuation after that `$` is the main loop's to strip.
+      if (!run.atQuote && run.dollars > 1) {
         hasWord = true;
-        buf += '$'.repeat(run.dollars - 1);
-        i = run.last;
+        const odd = run.dollars % 2 === 1;
+        buf += '$'.repeat(odd ? run.dollars - 1 : run.dollars);
+        i = odd ? run.last : run.end;
         continue;
       }
     }
