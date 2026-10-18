@@ -870,6 +870,23 @@ function _removeGsdEntries(destDir: string, kind: any, owns?: (name: string) => 
  */
 const USER_OWNED_SKILL_DIRS: readonly string[] = ['gsd-dev-preferences'];
 
+/** The skill dirs each writer wrote, keyed on the resolved skills dir (recordWrittenSkillDirs). */
+const writtenSkillDirs = new Map<string, Set<string>>();
+
+/**
+ * Record the skill dirs a writer just wrote into `skillsDir`, replacing that
+ * dir's entry. Called only once the write has returned, so a writer that threw
+ * records nothing.
+ */
+function recordWrittenSkillDirs(skillsDir: string, names: Iterable<string>): void {
+  writtenSkillDirs.set(path.resolve(skillsDir), new Set(names));
+}
+
+/** Start an install's record empty, so no earlier install's writes are read. */
+function clearWrittenSkillDirs(): void {
+  writtenSkillDirs.clear();
+}
+
 /**
  * Build the predicate that decides whether a prefix-matching dir in
  * `skillsDir` is GSD-owned (#5161). A prefix match is necessary but NOT
@@ -909,22 +926,6 @@ const USER_OWNED_SKILL_DIRS: readonly string[] = ['gsd-dev-preferences'];
  * they must own what the install wrote. Every prune leaves it unset, so the
  * record never widens what is deleted.
  */
-const writtenSkillDirs = new Map<string, Set<string>>();
-
-/**
- * Record the skill dirs a writer just wrote into `skillsDir`, replacing that
- * dir's entry. Called only once the write has returned, so a writer that threw
- * records nothing.
- */
-function recordWrittenSkillDirs(skillsDir: string, names: Iterable<string>): void {
-  writtenSkillDirs.set(path.resolve(skillsDir), new Set(names));
-}
-
-/** Start an install's record empty, so no earlier install's writes are read. */
-function clearWrittenSkillDirs(): void {
-  writtenSkillDirs.clear();
-}
-
 function createSkillDirOwnership(
   runtime: string,
   configDir: string,
