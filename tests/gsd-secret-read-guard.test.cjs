@@ -1918,6 +1918,10 @@ describe("regressions: #5255 — zsh's reading of $'…' (review round 6, Major 
       "echo ${x:-$$'}'}; cat .env", // the span ends the `${…}` past its `}` under zsh too
       "cat <<$$'EF'\nbody\n$EF\ncat .env", // a tag is not expanded: zsh's tag is `$EF`, bash's `$$EF`
       "x=$(cat <<$$'EF'\nbody\n$EF\ncat .env\n)",
+      // The `$( )` scanner must end the same span and tag, or it runs past the
+      // `)"` and hides the read after it.
+      R`echo "$(echo $$'\'')"; cat .env`,
+      "echo \"$(cat <<$$'EF'\nbody\n$EF\n)\"; cat .env",
     ];
     for (const cmd of blocks) {
       test(`blocks ${JSON.stringify(cmd)}`, () => {
