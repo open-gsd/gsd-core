@@ -2816,6 +2816,29 @@ describe('#5161: install preserves non-GSD-owned gsd-* skill dirs and names them
     assert.ok(fs.existsSync(path.join(skillsDir, 'gsd-mine')), 'the user skill survives the update too');
   });
 
+  // install() clears the written-skill record on entry, whichever path it takes. Claude's local
+  // install never reaches installRuntimeArtifacts, which clears it too, so only install()'s clear
+  // keeps a record an earlier install in the same process left for this skills dir away from
+  // writeManifest.
+  test('local: install() starts its written-skill record empty, so an earlier record cannot own a user dir', (t) => {
+    const root = fs.realpathSync(createTempDir('gsd-5161-record-clear-'));
+    const previousCwd = process.cwd();
+    process.chdir(root);
+    t.after(() => process.chdir(previousCwd));
+    t.after(() => cleanup(root));
+    const configDir = path.join(root, '.claude');
+    const userDir = path.join(configDir, 'skills', 'gsd-user-5161');
+    fs.mkdirSync(userDir, { recursive: true });
+    fs.writeFileSync(path.join(userDir, 'SKILL.md'), USER_SKILL);
+    const { recordWrittenSkillDirs } = require('../gsd-core/bin/lib/install-engine.cjs');
+    recordWrittenSkillDirs(path.join(configDir, 'skills'), ['gsd-user-5161']);   // as an earlier install's write would
+
+    install(false, 'claude');
+    assert.strictEqual(fs.readFileSync(path.join(userDir, 'SKILL.md'), 'utf8'), USER_SKILL, 'the user dir survives');
+    assert.deepStrictEqual(Object.keys(readManifestFiles(configDir)).filter((k) => k.startsWith('skills/gsd-user-5161/')), [],
+      'writeManifest must not record a user dir an earlier install\'s record names');
+  });
+
   // Staging resolves its source with the layout's commands+agents requirement, so a previous manifest
   // that records every command but no agent is rejected there, and staging takes the corpus a
   // `.gsd-source` marker names. The two first-party lookups ask for commands only and take the
