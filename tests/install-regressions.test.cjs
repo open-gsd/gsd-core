@@ -2410,8 +2410,7 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
 
     test('reports and strips GSD entries, keeping the user hook beside them', () => {
       const settings = { ...USER_SETTINGS, hooks: { SessionStart: [{ hooks: [gsdHook, userHook] }] } };
-      const lines = [];
-      assert.strictEqual(stripGsdFromSettings(settings, 'claude', claudeDir, (line) => lines.push(line)), true);
+      assert.strictEqual(stripGsdFromSettings(settings, 'claude', claudeDir, () => {}), true);
       assert.deepStrictEqual(settings, { ...USER_SETTINGS, hooks: { SessionStart: [{ hooks: [userHook] }] } });
     });
 
