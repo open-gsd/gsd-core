@@ -1065,13 +1065,19 @@ describe('install — changeset CLI lands at scripts/changeset/cli.cjs (#935)', 
     // Use the CHANGELOG.md that was installed into gsd-core/ (installed by the installer)
     const changelogPath = path.join(claudeDir, 'gsd-core', 'CHANGELOG.md');
     assert.ok(fs.existsSync(changelogPath), 'CHANGELOG.md must be installed under gsd-core/');
-    // Extract the LATEST release only. The range used to be 0.0.0..9999.0.0, whose --json output
-    // is the whole changelog: ~1.04 MB on the last green `next`, 6.3 KB under spawnSync's 1 MiB
-    // default maxBuffer, and over it after the 1.18.0 release promotion (spawnSync then kills the
-    // child: exit code null, empty stderr). A one-release range keeps the output bounded however
-    // large CHANGELOG.md grows, and still parses the whole file and walks the found-entries path.
-    // --from is exclusive, so the range is (previous, latest].
-    const releases = [...fs.readFileSync(changelogPath, 'utf8').matchAll(/^## \[(\d+\.\d+\.\d+)\]/gm)].map((m) => m[1]);
+    // Extract the LATEST release only. The old range (0.0.0..9999.0.0) made --json emit the whole
+    // changelog, which grows every release, and runNode applies spawnSync's default 1 MiB
+    // maxBuffer: past it spawnSync kills the child (exit code null, empty stderr). A one-release
+    // range keeps the output bounded however large CHANGELOG.md grows, still parses the whole
+    // file, and still walks the found-entries path. --from is exclusive, so the range is
+    // (previous, latest]; the two are picked by semver order, not by heading position.
+    const bySemverDesc = (a, b) => {
+      const [x, y] = [a, b].map((v) => v.split('.').map(Number));
+      return y[0] - x[0] || y[1] - x[1] || y[2] - x[2];
+    };
+    const releases = [...fs.readFileSync(changelogPath, 'utf8').matchAll(/^## \[(\d+\.\d+\.\d+)\]/gm)]
+      .map((m) => m[1])
+      .sort(bySemverDesc);
     assert.ok(releases.length >= 2, 'installed CHANGELOG.md must carry at least two released ## [x.y.z] headings');
     const [latest, previous] = releases;
     const result = runNode(
@@ -1083,11 +1089,19 @@ describe('install — changeset CLI lands at scripts/changeset/cli.cjs (#935)', 
       !result.stderr.includes('MODULE_NOT_FOUND') && !result.stderr.includes('Cannot find module'),
       `installed cli.cjs extract must resolve all modules; stderr=${result.stderr}`,
     );
-    // extract exit code 0 (found entries) or 2 (no entries in range) are both valid;
-    // any other exit code is an error
-    assert.ok(
-      result.exitCode === 0 || result.exitCode === 2,
-      `installed cli.cjs extract must exit 0 or 2; got ${result.exitCode} (outcome=${result.outcome}, signal=${result.signal}, code=${result.code}); stderr=${result.stderr}`,
+    // The range is built from two headings that exist in the file, so extract must FIND the latest
+    // release: exit 2 ("no releases in range") would mean the CLI and this test disagree about the
+    // changelog, which is a regression this test exists to catch, not an acceptable outcome.
+    assert.strictEqual(
+      result.exitCode,
+      0,
+      `installed cli.cjs extract (${previous}, ${latest}] must exit 0; got ${result.exitCode} (outcome=${result.outcome}, signal=${result.signal}, code=${result.code}, stdout bytes=${result.stdout.length}); stderr=${result.stderr}`,
+    );
+    const report = JSON.parse(result.stdout);
+    assert.deepStrictEqual(
+      report.releases.map((r) => r.version),
+      [latest],
+      'the extracted range must contain exactly the latest release',
     );
   });
 
