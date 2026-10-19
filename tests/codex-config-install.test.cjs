@@ -2913,14 +2913,15 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isSymbolicLink(), 'hooks.json must still be a symlink');
   });
 
-  // A hooks.json uninstall has no GSD hook to remove from is never written, so
-  // a link GSD would not write must not block the uninstall (#5037).
+  // Asserts the uninstall removed every skill the install had created.
   function assertSkillsRemoved(skillsBefore) {
     const remaining = fs.existsSync(codexSkillsRoot(codexHome)) ? fs.readdirSync(codexSkillsRoot(codexHome)) : [];
     assert.deepStrictEqual(skillsBefore.filter((skill) => remaining.includes(skill)), [],
       'uninstall must remove every GSD skill');
   }
 
+  // A hooks.json holding no GSD hook for uninstall to remove is never written,
+  // so a link GSD would not write must not block the uninstall (#5037).
   test('uninstall over a symlinked hooks.json holding no GSD hooks without GSD_ALLOW_SYMLINKED_DEST succeeds and leaves it untouched (#5037)', () => {
     runCodexInstall(codexHome);
     const skillsBefore = fs.readdirSync(codexSkillsRoot(codexHome)).sort();
