@@ -305,6 +305,7 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
     "git -c pager.log='cat .env' log",
     "git -c credential.helper='cat .env' fetch", // no `!`: git runs git credential-<value>
     'git -c credential.helper=store fetch',
+    'git -c credential.https://example.com.helper=store fetch',
     'git -c core.editor=vim commit',
     'git -c core.fsmonitor=true status',
     "git -c diff.x.textconv='cat README.md' show --textconv HEAD",
@@ -331,13 +332,82 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
   ];
   const SECRETS = ['.env', '.env.local', '.secrets', 'config/.env.production'];
   for (const [key, prefix] of KEYS) {
-    test(`blocks ${key} reading each secret form`, () => {
-      for (const secret of SECRETS) {
+    for (const secret of SECRETS) {
+      test(`blocks ${key} reading ${secret}`, () => {
         const cmd = `git -c ${key}='${prefix}cat ${secret}' status`;
         assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: secret });
-      }
+      });
+    }
+  }
+
+  // Oracle for the key-shape tests: every key the hook scans by shape
+  // (#5045's diff.external included), written as [section, hasSubsection,
+  // name, needsBang] rows rather than the hook's collapsed-shape strings.
+  // alias.* is #5045's own branch, not a shape, so it stays out.
+  const ROWS = [
+    ['diff', false, 'external', false], ['sequence', false, 'editor', false],
+    ['core', false, 'editor', false], ['core', false, 'sshcommand', false], ['core', false, 'fsmonitor', false],
+    ['gpg', false, 'program', false], ['gpg', true, 'program', false],
+    ['diff', true, 'textconv', false], ['diff', true, 'command', false],
+    ['filter', true, 'clean', false], ['filter', true, 'smudge', false], ['filter', true, 'process', false],
+    ['merge', true, 'driver', false],
+    ['credential', false, 'helper', true], ['credential', true, 'helper', true],
+  ];
+  const expected = (section, sub, name, bang) => ROWS.some(([s, hasSub, n, needsBang]) =>
+    s === section.toLowerCase() && n === name.toLowerCase() && hasSub === (sub !== null) && (bang || !needsBang));
+  const keyOf = (section, sub, name) => (sub === null ? `${section}.${name}` : `${section}.${sub}.${name}`);
+  const check = (section, sub, name, bang) => {
+    const cmd = `git -c ${keyOf(section, sub, name)}='${bang ? '!' : ''}cat .env' status`;
+    const result = runHook(bash(cmd));
+    if (expected(section, sub, name, bang)) assertBlocked(result, cmd, { tool: 'Bash', path: '.env' });
+    else assertAllowed(result, cmd);
+  };
+
+  // Deterministic companion to the property: per row, case never changes the
+  // verdict, and adding/removing the subsection or the `!` lands wherever the
+  // oracle says (gpg.program and credential.helper exist in both forms).
+  for (const [section, hasSub, name, needsBang] of ROWS) {
+    const sub = hasSub ? 'x' : null;
+    test(`key shape ${keyOf(section, sub, name)}: case, subsection and ! variants follow the oracle`, () => {
+      check(section.toUpperCase(), sub, name.toUpperCase(), needsBang);
+      check(section[0].toUpperCase() + section.slice(1), sub, name[0].toUpperCase() + name.slice(1), needsBang);
+      check(section, hasSub ? null : 'x', name, needsBang);
+      if (needsBang) check(section, sub, name, false);
     });
   }
+
+  // The subsection alphabet leaves out `/` and `:`, which would make the -c
+  // word itself look like a secret path to the generic operand check; URL
+  // subsections come from fixed values instead.
+  const SUBSECTION = fc.oneof(
+    fc.string({ unit: fc.constantFrom(...'abxyz019.-'), minLength: 1, maxLength: 8 }),
+    fc.constantFrom('https://example.com', 'https://x.y.z:8443'),
+  );
+  const KEY_PARTS = fc.oneof(
+    fc.constantFrom(...ROWS).chain(([section, hasSub, name]) => fc.record({
+      section: fc.constant(section), sub: hasSub ? SUBSECTION : fc.constant(null), name: fc.constant(name),
+    })),
+    fc.record({
+      section: fc.constantFrom('core', 'diff', 'filter', 'gpg', 'merge', 'credential', 'sequence', 'pager', 'user', 'http'),
+      sub: fc.option(SUBSECTION, { nil: null }),
+      name: fc.constantFrom('editor', 'sshcommand', 'fsmonitor', 'program', 'textconv', 'command', 'clean',
+        'smudge', 'process', 'driver', 'helper', 'external', 'pager', 'name', 'extraheader'),
+    }),
+  ).chain(({ section, sub, name }) => fc.record({
+    section: fc.mixedCase(fc.constant(section)),
+    sub: fc.constant(sub),
+    name: fc.mixedCase(fc.constant(name)),
+    // `!` only where it changes the verdict (credential helpers): on other
+    // keys a leading `!` would be judged by the generic operand check, not
+    // by the key-shape scan this property is about.
+    bang: section === 'credential' ? fc.boolean() : fc.constant(false),
+  }));
+
+  test('property: a git -c key is scanned iff its section, subsection and name match a command-valued key', () => {
+    fc.assert(fc.property(KEY_PARTS, ({ section, sub, name, bang }) => {
+      check(section, sub, name, bang);
+    }), { seed: 5492, numRuns: 40 });
+  });
 });
 
 describe('gsd-secret-read-guard: Read', () => {
