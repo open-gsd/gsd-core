@@ -22,7 +22,10 @@ describe('issue #5165: milestone progress and phase.complete rewind', () => {
   function createTestProject(baseDir) {
     const phasesDir = path.join(baseDir, '.planning', 'phases');
     
-    // Create phase directories
+    // Create phase directories — phases 1-2 are SHIPPED but still on disk
+    // (not archived), which is the scenario that triggers the bug: the
+    // Progress table includes shipped rows, and without milestone-scoping,
+    // deriveProgressFromRoadmap counts them all.
     fs.mkdirSync(path.join(phasesDir, '01-one'), { recursive: true });
     fs.mkdirSync(path.join(phasesDir, '02-two'), { recursive: true });
     fs.mkdirSync(path.join(phasesDir, '03-three'), { recursive: true });
@@ -60,6 +63,10 @@ describe('issue #5165: milestone progress and phase.complete rewind', () => {
 - [ ] **Phase 4: Four** - four
 - [ ] **Phase 04.1: Hotfix** - hotfix (INSERTED)
 - [ ] **Phase 5: Five** - five
+
+#### Phase 5: Five
+**Goal**: five
+**Plans**: TBD
 
 #### Phase 3: Three
 **Goal**: three
@@ -125,7 +132,7 @@ Resume file: None
 `;
     fs.writeFileSync(path.join(baseDir, '.planning', 'STATE.md'), state);
     
-    // Create phase files
+    // Create phase files — all phases including shipped ones (1-2)
     const fm = (phase, plan) => `---\nphase: ${phase}\nplan: ${plan}\n---\n# x\n`;
     fs.writeFileSync(path.join(phasesDir, '01-one', '01-01-PLAN.md'), fm('01', '01'));
     fs.writeFileSync(path.join(phasesDir, '01-one', '01-01-SUMMARY.md'), fm('01', '01'));
@@ -137,6 +144,8 @@ Resume file: None
     fs.writeFileSync(path.join(phasesDir, '04-four', '04-01-SUMMARY.md'), fm('04', '01'));
     
     // Add verification for phases 3 and 4
+    fs.writeFileSync(path.join(phasesDir, '01-one', '01-VERIFICATION.md'), '---\nphase: 01\nstatus: passed\n---\n# Verification\n');
+    fs.writeFileSync(path.join(phasesDir, '02-two', '02-VERIFICATION.md'), '---\nphase: 02\nstatus: passed\n---\n# Verification\n');
     fs.writeFileSync(path.join(phasesDir, '03-three', '03-VERIFICATION.md'), '---\nphase: 03\nstatus: passed\n---\n# Verification\n');
     fs.writeFileSync(path.join(phasesDir, '04-four', '04-VERIFICATION.md'), '---\nphase: 04\nstatus: passed\n---\n# Verification\n');
     

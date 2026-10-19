@@ -21,6 +21,9 @@ import { KNOWN_TEMPLATE_DEFAULTS, toFiniteNumber, computeProgressPercent, fieldC
 import { tokenizeHeadings, withSection } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
 import { deriveProgressFromRoadmap, clampPercent, clampPercentFromFraction, renderProgressBar } from './phase-lifecycle.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
+import phaseIdMod = require('./phase-id.cjs');
+const { comparePhaseNum } = phaseIdMod;
 import { escapeRegex } from './pattern.cjs';
 // #4129: the completion-ratio kernel for the resync-arm ratchet's percent
 // (planning-scope's SCOPE — state-document's own dependency, no cycle here:
@@ -2188,6 +2191,12 @@ function completePhaseCore(
   const today = deps.clock.localToday();
   const nextWording = nextPhaseWording(intent.isLastPhase ? null : intent.nextPhaseDisk ?? null);
 
+  // #5165: extract the current milestone from frontmatter for milestone-scoped
+  // progress counting. Passed to deriveProgressFromRoadmap so the Progress table
+  // is filtered to the current milestone when a Milestone column exists.
+  const existingFm = extractFrontmatter(content, deps.sourcePath) as Record<string, unknown>;
+  const currentMilestone = String(existingFm['milestone'] ?? '').trim() || null;
+
   // Consult the field-classification table for the frontmatter keys this
   // transition touches (same guard beginPhaseCore applies). A missing row is a
   // substrate defect — fail loudly rather than silently re-encoding policy.
@@ -2210,21 +2219,34 @@ function completePhaseCore(
     }
   }
 
-  // #1255: body-field replacements operate on body only (frontmatter stripped),
-  // so the YAML `status:` / `current_phase:` keys cannot shadow the body fields.
+  // #5165: skip the transition when STATE's current phase is already past N.
+  // Re-running `phase.complete` on an already-complete phase must be a no-op
+  // (except timestamps). The guard compares the stored current_phase against
+  // the phase being completed — if STATE has already moved past it, bail out.
   const { body: initialBody, reassemble } = beginFrontmatterReassembly(content, deps.sourcePath);
   let body = initialBody;
+
+  // Early-exit guard: if current_phase > phaseNum, the phase is already complete.
+  // #5165: re-running `phase.complete` on an already-complete phase must be a no-op.
+  const currentPhaseField =
+    stateExtractField(body, 'Current Phase') || stateExtractField(body, 'Phase');
+  const currentPhaseNumMatch = currentPhaseField?.match(/^\s*(\d+(?:\.\d+)?)\s*of/);
+  const currentPhaseNum = currentPhaseNumMatch ? currentPhaseNumMatch[1] : null;
+  if (currentPhaseNum && comparePhaseNum(currentPhaseNum, intent.phaseNum) > 0) {
+    // Phase is already complete — return unchanged.
+    return { content: reassemble(body), updated: [] };
+  }
 
   // Current Phase — preserve the existing `of <total>` shape and the phase name
   // in parens (mirrors phase.cts:1675-1697 byte-for-behaviour).
   const phaseValue = intent.nextPhaseNum || intent.phaseNum;
   const nextPhaseDisplayName = intent.nextPhaseName;
-  const existingPhaseField =
+  const phaseField =
     stateExtractField(body, 'Current Phase') || stateExtractField(body, 'Phase');
   let newPhaseValue = String(phaseValue);
-  if (existingPhaseField) {
-    const totalMatch = existingPhaseField.match(/of\s+(\d+)/);
-    const nameMatch = existingPhaseField.match(/\(([^)]+)\)/);
+  if (phaseField) {
+    const totalMatch = phaseField.match(/of\s+(\d+)/);
+    const nameMatch = phaseField.match(/\(([^)]+)\)/);
     if (totalMatch) {
       const total = totalMatch[1];
       const nameStr = nextPhaseDisplayName
@@ -2345,7 +2367,10 @@ function completePhaseCore(
     let derivedTotalPhases: number | null = null;
     const roadmapContent = deps.roadmapProvider ? deps.roadmapProvider() : null;
     if (roadmapContent) {
-      const derived = deriveProgressFromRoadmap(roadmapContent);
+      // #5165: pass the current milestone so deriveProgressFromRoadmap filters
+      // the Progress table to the current milestone's rows when a Milestone
+      // column exists. This prevents shipped-milestone rows from inflating the counts.
+      const derived = deriveProgressFromRoadmap(roadmapContent, currentMilestone);
       // #4901: completed counters only ratchet up, like the frontmatter twin
       // (applyAuthoritativeProgressSubkeys, completedOnlyRaise). A derivation
       // that lands BELOW the recorded counter read a narrower scope than the

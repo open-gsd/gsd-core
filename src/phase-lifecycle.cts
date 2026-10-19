@@ -85,7 +85,7 @@ export function locateProgressTable(roadmapContent: string): MarkdownTable | nul
  * 5-column milestone-grouped variant that inserts a `Milestone` column ahead
  * of them).
  */
-export function deriveProgressFromRoadmap(roadmapContent: string): RoadmapProgress {
+export function deriveProgressFromRoadmap(roadmapContent: string, milestoneFilter?: string | null): RoadmapProgress {
   let completedPhases: number | null = null;
   let totalPhases: number | null = null;
   let totalPlans: number | null = null;
@@ -104,10 +104,20 @@ export function deriveProgressFromRoadmap(roadmapContent: string): RoadmapProgre
 
     // Data rows only (exclude sentinel phases 0 and 999.x).
     // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
-    const dataRows = allRows.filter((r) => {
+    let dataRows = allRows.filter((r) => {
       const phase = (r['Phase'] ?? '').trim();
       return /^\d/.test(phase) && !isSentinelPhaseId(phase);
     });
+
+    // #5165: when the Progress table has a Milestone column, filter to the
+    // current milestone so shipped-milestone rows don't inflate the counts.
+    // The table's columns array has keys like 'Milestone', 'Phase', etc.
+    // If a 'Milestone' column exists, use it to scope the count.
+    const hasMilestoneColumn = table.columns.includes('Milestone');
+    if (hasMilestoneColumn && milestoneFilter) {
+      dataRows = dataRows.filter((r) => (r['Milestone'] ?? '').trim() === milestoneFilter);
+    }
+
     totalPhases = dataRows.length > 0 ? dataRows.length : null;
 
     // #5060: routed through the Phase Status Module's `parseRoadmapStatusCell`

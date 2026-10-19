@@ -3224,8 +3224,11 @@ function buildStateFrontmatter(
             // — no second ROADMAP parser here. A ROADMAP without a canonical
             // `## Progress` table resolves no table → floor inert (disk count
             // stands), the owner's own answer to "what is countable".
+            // #5165: scope the ROADMAP progress derivation to the stored milestone
+            // so that phases from other milestones (e.g. 04.1 hotfix) don't inflate
+            // the completed count for the current milestone.
             const roadmapCompletedPhases = roadmapScope !== null && safeToUseRoadmapCount && !diskCountsWithheld
-              ? deriveProgressFromRoadmap(roadmapScope).completedPhases
+              ? deriveProgressFromRoadmap(roadmapScope, storedMilestone).completedPhases
               : null;
             const flooredCompletedPhases = roadmapCompletedPhases !== null
               ? Math.max(diskCompletedPhases, roadmapCompletedPhases)

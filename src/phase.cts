@@ -3729,6 +3729,41 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   }
   const phaseInfo = phaseInfoRaw as unknown as Record<string, unknown>;
 
+  // #5165: re-running `phase.complete` on an already-complete phase must be a
+  // no-op. Check the ROADMAP.md checkbox for this phase — if it's already `[x]`,
+  // bail out before any writes.
+  if (fs.existsSync(roadmapPath)) {
+    const roadmapRaw = platformReadSync(roadmapPath) || '';
+    // Match the same checkbox pattern used by mutateMilestonePhase: `- [x] Phase N`
+    const cbPattern = new RegExp(
+      `-\\s*\\[(x| )\\]\\s*(?:\\*\\*|__)\\s*Phase\\s+${phaseNum}(?:\\s*\\([^)\\n]{0,200}\\))?`,
+      'gi',
+    );
+    const cbMatch = cbPattern.exec(roadmapRaw);
+    if (cbMatch && cbMatch[1].toLowerCase() === 'x') {
+      // Phase already complete — return without writing anything.
+      output({
+        completed_phase: phaseNum,
+        phase_name: '',
+        plans_executed: '0/0',
+        next_phase: null,
+        next_phase_name: null,
+        is_last_phase: false,
+        date: today,
+        roadmap_updated: false,
+        state_updated: false,
+        requirements_updated: false,
+        auto_pruned: false,
+        warnings: [],
+        has_warnings: false,
+        verification_stale_check_indeterminate: false,
+        milestone_conflict: null,
+        preservation_warnings: [],
+      }, raw);
+      return;
+    }
+  }
+
   const planCount: number = phaseInfo['plans']
     ? (phaseInfo['plans'] as string[]).length
     : 0;
@@ -4925,6 +4960,10 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
 
       if (fs.existsSync(statePath)) {
         const originalStateContent = platformReadSync(statePath) || '';
+        // #5165: extract the current milestone from STATE.md frontmatter so
+        // post-completion progress derivation is milestone-scoped.
+        const stateFm = frontmatterMod.extractFrontmatter(originalStateContent, statePath) as Record<string, unknown>;
+        const storedMilestone = String(stateFm['milestone'] ?? '').trim() || null;
         let stateContent = originalStateContent;
 
         // ADR-1769 Phase 3: the STATE.md field-update policy (Current Phase
@@ -5026,7 +5065,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           ? extractCurrentMilestone(roadmapContent, cwd)
           : null;
         const postCompletionRoadmapProgress = postCompletionRoadmapScope !== null
-          ? deriveProgressFromRoadmapForIntent(postCompletionRoadmapScope)
+          ? deriveProgressFromRoadmapForIntent(postCompletionRoadmapScope, storedMilestone)
           : null;
         const authoritativeProgress: Record<string, number> | undefined =
           postCompletionRoadmapProgress && postCompletionRoadmapProgress.completedPhases !== null
