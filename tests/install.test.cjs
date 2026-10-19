@@ -1065,8 +1065,17 @@ describe('install — changeset CLI lands at scripts/changeset/cli.cjs (#935)', 
     // Use the CHANGELOG.md that was installed into gsd-core/ (installed by the installer)
     const changelogPath = path.join(claudeDir, 'gsd-core', 'CHANGELOG.md');
     assert.ok(fs.existsSync(changelogPath), 'CHANGELOG.md must be installed under gsd-core/');
+    // Extract the LATEST release only. The range used to be 0.0.0..9999.0.0, whose --json output
+    // is the whole changelog: ~1.04 MB on the last green `next`, 6.3 KB under spawnSync's 1 MiB
+    // default maxBuffer, and over it after the 1.18.0 release promotion (spawnSync then kills the
+    // child: exit code null, empty stderr). A one-release range keeps the output bounded however
+    // large CHANGELOG.md grows, and still parses the whole file and walks the found-entries path.
+    // --from is exclusive, so the range is (previous, latest].
+    const releases = [...fs.readFileSync(changelogPath, 'utf8').matchAll(/^## \[(\d+\.\d+\.\d+)\]/gm)].map((m) => m[1]);
+    assert.ok(releases.length >= 2, 'installed CHANGELOG.md must carry at least two released ## [x.y.z] headings');
+    const [latest, previous] = releases;
     const result = runNode(
-      [cliPath, 'extract', '--from', '0.0.0', '--to', '9999.0.0', '--changelog', changelogPath, '--json'],
+      [cliPath, 'extract', '--from', previous, '--to', latest, '--changelog', changelogPath, '--json'],
       { timeoutMs: PROBE_TIMEOUT_MS },
     );
     // extract must NOT throw a MODULE_NOT_FOUND or Cannot find module error
@@ -1078,7 +1087,7 @@ describe('install — changeset CLI lands at scripts/changeset/cli.cjs (#935)', 
     // any other exit code is an error
     assert.ok(
       result.exitCode === 0 || result.exitCode === 2,
-      `installed cli.cjs extract must exit 0 or 2; got ${result.exitCode}; stderr=${result.stderr}`,
+      `installed cli.cjs extract must exit 0 or 2; got ${result.exitCode} (outcome=${result.outcome}, signal=${result.signal}, code=${result.code}); stderr=${result.stderr}`,
     );
   });
 
