@@ -26,14 +26,17 @@ const path = require('node:path');
 const { _internals } = require('../pi/gsd.cjs');
 const {
   convertClaudeCommandToPiSkill,
-  PI_DISPATCH_CONTRACT,
-  PI_INCLUDE_NOTE,
 } = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runMinimalInstall } = require('./helpers/install-shared.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+
+// Stable markers that open the two blocks every Pi skill carries; asserted as literals so
+// the tests do not import the constants they are checking.
+const CONTRACT_MARKER = '**Pi host constraint (fail closed).**';
+const INCLUDE_MARKER = '**Pi includes.**';
 
 // pi 1.3.0 skills documentation: "descriptions can contain at most 1024".
 const PI_DESCRIPTION_MAX = 1024;
@@ -73,24 +76,24 @@ describe('#5547: convertClaudeCommandToPiSkill', () => {
   });
 
   test('carries the fail-closed dispatch contract exactly once', () => {
-    assert.equal(out.split(PI_DISPATCH_CONTRACT).length - 1, 1);
-    assert.match(PI_DISPATCH_CONTRACT, /Pi has no subagent dispatch API/);
-    assert.match(PI_DISPATCH_CONTRACT, /Never execute the role's work inline as a substitute/);
-    assert.match(PI_DISPATCH_CONTRACT, /issues\/5559/);
+    assert.equal(out.split(CONTRACT_MARKER).length - 1, 1);
+    assert.match(out, /Pi has no subagent dispatch API/);
+    assert.match(out, /Never execute the role's work inline as a substitute/);
+    assert.match(out, /issues\/5559/);
   });
 
   test('the contract names every way a workflow spawns an agent, and handles optional steps', () => {
     for (const phrase of [/Agent\(\.\.\.\)/, /subagent_type/, /subagent spawns/, /named `gsd-\*` role/]) {
-      assert.match(PI_DISPATCH_CONTRACT, phrase);
+      assert.match(out, phrase);
     }
-    assert.match(PI_DISPATCH_CONTRACT, /optional.*offer to skip it and continue/);
-    assert.match(PI_DISPATCH_CONTRACT, /required, stop the run/);
+    assert.match(out, /optional.*offer to skip it and continue/);
+    assert.match(out, /required, stop the run/);
   });
 
   test('tells the agent to read the execution_context files itself, exactly once', () => {
-    assert.equal(out.split(PI_INCLUDE_NOTE).length - 1, 1);
-    assert.match(PI_INCLUDE_NOTE, /does not expand `@path`/);
-    assert.match(PI_INCLUDE_NOTE, /every file listed under `<execution_context>`/);
+    assert.equal(out.split(INCLUDE_MARKER).length - 1, 1);
+    assert.match(out, /does not expand `@path`/);
+    assert.match(out, /every file listed under `<execution_context>`/);
   });
 
   test('keeps the workflow include in the body', () => {
@@ -167,6 +170,17 @@ describe('#5547: convertClaudeCommandToPiSkill', () => {
       const desc = /^description: (.+)$/m.exec(skill)[1];
       assert.ok(JSON.parse(desc).length <= PI_DESCRIPTION_MAX, `${stem}: description too long`);
     }
+  });
+
+  test('no shipped command leaves a /gsd:<cmd> colon-form reference in its skill, description included', () => {
+    const dir = path.join(__dirname, '..', 'commands', 'gsd');
+    const stems = fs.readdirSync(dir).filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3));
+    const left = [];
+    for (const stem of stems) {
+      const skill = convertClaudeCommandToPiSkill(fs.readFileSync(path.join(dir, `${stem}.md`), 'utf8'), `gsd-${stem}`, 'pi', stems);
+      skill.split(/\r?\n/).forEach((line, i) => { if (/(?<![\w/])\/?gsd:[a-z]/.test(line)) left.push(`${stem}:${i + 1}: ${line.trim().slice(0, 80)}`); });
+    }
+    assert.deepEqual(left, []);
   });
 
   test('replaces the $ARGUMENTS placeholder outside code fences only, as a whole word', () => {
@@ -257,17 +271,17 @@ describe('#5547: workflow hand-off decision', () => {
 
   test('nextStepFor names the workflow only for `init <installed workflow>`', (t) => {
     const root = engineWithSkills(t, ['new-project']);
-    assert.match(_internals.nextStepFor('init', 'new-project', [], root), /Next: run \/gsd new-project \(or \/skill:gsd-new-project\)/);
-    assert.equal(_internals.nextStepFor('init', 'plan-phase', [], root), '', 'no skill, no hint');
-    assert.equal(_internals.nextStepFor('state', 'new-project', [], root), '', 'only init is a workflow-init call');
-    assert.equal(_internals.nextStepFor('init', undefined, [], root), '');
+    assert.match(_internals.nextStepFor({ family: 'init', subcommand: 'new-project', args: [] }, root), /Next: run \/gsd new-project \(or \/skill:gsd-new-project\)/);
+    assert.equal(_internals.nextStepFor({ family: 'init', subcommand: 'plan-phase', args: [] }, root), '', 'no skill, no hint');
+    assert.equal(_internals.nextStepFor({ family: 'state', subcommand: 'new-project', args: [] }, root), '', 'only init is a workflow-init call');
+    assert.equal(_internals.nextStepFor({ family: 'init', subcommand: undefined, args: [] }, root), '');
   });
 
   test('nextStepFor maps init workflows whose skill has a different name', (t) => {
     const root = engineWithSkills(t, ['resume-work', 'workspace', 'discuss-phase']);
-    assert.match(_internals.nextStepFor('init', 'resume', [], root), /Next: run \/gsd resume-work \(or \/skill:gsd-resume-work\)/);
-    assert.match(_internals.nextStepFor('init', 'new-workspace', [], root), /\/skill:gsd-workspace\)/);
-    assert.match(_internals.nextStepFor('init', 'discuss-phase-assumptions', [], root), /\/skill:gsd-discuss-phase\)/);
+    assert.match(_internals.nextStepFor({ family: 'init', subcommand: 'resume', args: [] }, root), /Next: run \/gsd resume-work \(or \/skill:gsd-resume-work\)/);
+    assert.match(_internals.nextStepFor({ family: 'init', subcommand: 'new-workspace', args: [] }, root), /\/skill:gsd-workspace\)/);
+    assert.match(_internals.nextStepFor({ family: 'init', subcommand: 'discuss-phase-assumptions', args: [] }, root), /\/skill:gsd-discuss-phase\)/);
   });
 
   test('every hinted init workflow points at a real command file', () => {
@@ -294,10 +308,10 @@ describe('#5547: workflow hand-off decision', () => {
 
   test('nextStepFor carries positional arguments and drops flags', (t) => {
     const root = engineWithSkills(t, ['execute-phase']);
-    const hint = _internals.nextStepFor('init', 'execute-phase', ['3', '--raw', '--json-errors'], root);
+    const hint = _internals.nextStepFor({ family: 'init', subcommand: 'execute-phase', args: ['3', '--raw', '--json-errors'] }, root);
     assert.match(hint, /Next: run \/gsd execute-phase 3 \(or \/skill:gsd-execute-phase 3\) to start/);
     assert.doesNotMatch(hint, /--raw|--json-errors/);
-    assert.doesNotMatch(_internals.nextStepFor('init', 'execute-phase', undefined, root), /execute-phase undefined/);
+    assert.doesNotMatch(_internals.nextStepFor({ family: 'init', subcommand: 'execute-phase', args: undefined }, root), /execute-phase undefined/);
   });
 });
 
@@ -331,7 +345,7 @@ describe('#5547: the installed Pi extension', () => {
     const { configDir } = installedExtension(t);
     const skill = fs.readFileSync(path.join(configDir, 'skills', 'gsd-new-project', 'SKILL.md'), 'utf8');
     assert.match(skill, /^---\r?\nname: gsd-new-project\r?\n/);
-    assert.ok(skill.includes(PI_DISPATCH_CONTRACT));
+    assert.ok(skill.includes(CONTRACT_MARKER) && skill.includes(INCLUDE_MARKER));
   });
 
   // pi's file tools strip a leading `@` and expand `~` (path-utils.js

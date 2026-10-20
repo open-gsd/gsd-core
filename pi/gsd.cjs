@@ -390,12 +390,12 @@ function resolveWorkflowHandoff(rawArgs, engineRoot = ENGINE_ROOT) {
  * is a data call the workflow itself makes, so it keeps returning its JSON; for
  * a human at the prompt that JSON is a dead end, so name the way to run the
  * workflow. Never added to `gsd_invoke`, whose output is parsed by callers.
- * @param {string} family
- * @param {string|undefined} subcommand
+ * @param {{ family: string, subcommand?: string, args?: string[] }} parsed  the tokenized
+ *   `/gsd` call, as returned by parseGsdCommandArgs
  * @param {string} [engineRoot]
  * @returns {string} the line to append, or '' when none applies
  */
-function nextStepFor(family, subcommand, rest = [], engineRoot = ENGINE_ROOT) {
+function nextStepFor({ family, subcommand, args: rest = [] }, engineRoot = ENGINE_ROOT) {
   if (family !== 'init' || typeof subcommand !== 'string') return '';
   if (!Object.prototype.hasOwnProperty.call(PI_WORKFLOW_INIT_COMMANDS, subcommand)) return '';
   const command = PI_WORKFLOW_INIT_COMMANDS[subcommand];
@@ -456,7 +456,7 @@ module.exports = function gsdPiExtension(pi) {
       }
       const result = dispatchGsdCommand({ family, subcommand, args: rest, cwd });
       const text = result.ok
-        ? `${result.stdout}${nextStepFor(family, subcommand, rest)}`
+        ? `${result.stdout}${nextStepFor({ family, subcommand, args: rest })}`
         : `GSD error: ${result.stderr || result.stdout || `dispatch failed (exit ${result.code})`}`;
       if (notify) {
         notify(text, result.ok ? 'info' : 'error');

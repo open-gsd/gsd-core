@@ -764,35 +764,10 @@ const PI_INCLUDE_NOTE =
   'is accepted), then follow the workflow they define.';
 
 /**
- * Convert a Claude command-markdown source into a Pi Agent Skill (#5547).
- *
- * Pi loads `<config>/skills/<name>/SKILL.md` (standard Agent Skills format) and
- * invokes it as `/skill:<name>` — the same format and invocation prefix as Kimi
- * Code, so command references are rewritten through the same helper. The output
- * differs in two ways: the invocation hint names Pi, and the body opens with
- * {@link PI_DISPATCH_CONTRACT} so a workflow that needs a named agent role stops
- * with an explicit message instead of degrading silently.
- *
- * Registered as `convertClaudeCommandToPiSkill` in capabilities/pi/capability.json
- * `artifactLayout` `converter` field.
+ * Pi's own limit: skills.js rejects `description.length > 1024`, and `length` is
+ * UTF-16 code units — so the cap is in code units, not code points (a code-point
+ * cap, as the Cline converter uses, could exceed it for astral characters).
  */
-function convertClaudeCommandToPiSkill(content, skillName, _runtime = null, cmdNames = null) {
-  const { frontmatter, body } = extractFrontmatterAndBody(content);
-  const piSkillName = normalizeKimiSkillName(skillName);
-  const names = cmdNames || readGsdCommandNames();
-  const description = frontmatter
-    ? extractFrontmatterField(frontmatter, 'description') || `Run GSD workflow ${piSkillName}.`
-    : `Run GSD workflow ${piSkillName}.`;
-  const normalizedBody = replaceArgumentsPlaceholderOutsideFences(
-    convertGsdCommandReferencesToKimiSkillInvocations(frontmatter ? body : content, names),
-  );
-
-  // Pi (docs/skills.md): descriptions can contain at most 1024 characters.
-  const cappedDescription = capAtCodeUnits(toSingleLine(description), PI_SKILL_DESCRIPTION_MAX);
-  return `---\nname: ${piSkillName}\ndescription: ${yamlQuote(cappedDescription)}\n---\nInvoke this Pi skill with \`/skill:${piSkillName}\`.\n\n${PI_DISPATCH_CONTRACT}\n\n${PI_INCLUDE_NOTE}\n\n${normalizedBody}`;
-}
-
-/** Pi skill description limit (pi 1.3.0 docs/skills.md: "descriptions can contain at most 1024"). */
 const PI_SKILL_DESCRIPTION_MAX = 1024;
 
 /**
@@ -805,6 +780,47 @@ function capAtCodeUnits(text: string, max: number): string {
   const cut = text.slice(0, max);
   const last = cut.charCodeAt(cut.length - 1);
   return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
+
+// Pi and Kimi Code share the Agent Skills `/skill:<name>` format. These host-neutral
+// names read correctly at the Pi call sites; the Kimi-named originals stay because the
+// Kimi converter is mirrored in bin/install.js under a parity test (#2095).
+const normalizeSkillName = normalizeKimiSkillName;
+const convertGsdCommandReferencesToSkillInvocations = convertGsdCommandReferencesToKimiSkillInvocations;
+
+/**
+ * Convert a Claude command-markdown source into a Pi Agent Skill (#5547).
+ *
+ * Pi loads `<config>/skills/<name>/SKILL.md` (standard Agent Skills format) and
+ * invokes it as `/skill:<name>` — the same format and invocation prefix as Kimi
+ * Code, so command references are rewritten through the same helper. The output
+ * differs in two ways: the invocation hint names Pi, and the body opens with
+ * {@link PI_DISPATCH_CONTRACT} so a workflow that needs a named agent role stops
+ * with an explicit message instead of degrading silently.
+ *
+ * Registered as `convertClaudeCommandToPiSkill` in capabilities/pi/capability.json
+ * `artifactLayout` `converter` field. Unlike the Kimi converters this one is
+ * deliberately NOT mirrored in bin/install.js: the live skills-install path
+ * resolves converters by name through the capability descriptor, so a second copy
+ * would be dead code (the mirror in the Kimi case predates that and is kept only
+ * for its parity test).
+ */
+function convertClaudeCommandToPiSkill(content, skillName, _runtime = null, cmdNames = null) {
+  const { frontmatter, body } = extractFrontmatterAndBody(content);
+  const piSkillName = normalizeSkillName(skillName);
+  const names = cmdNames || readGsdCommandNames();
+  const rawDescription = frontmatter
+    ? extractFrontmatterField(frontmatter, 'description') || `Run GSD workflow ${piSkillName}.`
+    : `Run GSD workflow ${piSkillName}.`;
+  // The description is what Pi's skill picker shows, so a `/gsd:<cmd>` mention in it needs
+  // the same `/skill:` rewrite the body gets (#4324 is the same defect on the Claude path).
+  const description = convertGsdCommandReferencesToSkillInvocations(rawDescription, names);
+  const normalizedBody = replaceArgumentsPlaceholderOutsideFences(
+    convertGsdCommandReferencesToSkillInvocations(frontmatter ? body : content, names),
+  );
+
+  const cappedDescription = capAtCodeUnits(toSingleLine(description), PI_SKILL_DESCRIPTION_MAX);
+  return `---\nname: ${piSkillName}\ndescription: ${yamlQuote(cappedDescription)}\n---\nInvoke this Pi skill with \`/skill:${piSkillName}\`.\n\n${PI_DISPATCH_CONTRACT}\n\n${PI_INCLUDE_NOTE}\n\n${normalizedBody}`;
 }
 
 /**
@@ -4291,8 +4307,6 @@ export = {
   convertClaudeCommandToKimiSkill,
   convertClaudeCommandToKimiCodeSkill,
   convertClaudeCommandToPiSkill,
-  PI_DISPATCH_CONTRACT,
-  PI_INCLUDE_NOTE,
   buildKimiAgentArtifacts,
   convertClaudeToCursorMarkdown,
   convertClaudeCommandToCursorSkill,

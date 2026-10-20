@@ -11837,10 +11837,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     console.log(`  ${green}✓${reset} Cline: commands will be available via .clinerules`);
   } else if (hostBehaviorsFor(runtime).pluginOnlyInstall) {
     // pi (ADR-1239 / #2102 Stage 1): plugin-only install — pi's /gsd command is
-    // registered programmatically by the native extension. NOTE (#5547): pi now
-    // declares a skills artifactLayout, so it takes the `_isSkillsRuntime` branch
-    // above and this branch is reached only if that layout is ever emptied again.
-    // (pi/gsd.cjs →
+    // registered programmatically by the native extension (pi/gsd.cjs →
     // extensions/gsd.js, staged separately below; the dest suffix must be
     // .ts/.js or pi's auto-discovery skips it silently — #2470) and dispatches in-process
     // through the embedded gsd-core command-routing hub. pi has no host-read
@@ -11848,6 +11845,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     // command/ directories), so writing flat gsd-<cmd>.md files here would be
     // dead weight the extension never reads. Skip the flat-commands fallback
     // entirely for pluginOnlyInstall runtimes.
+    // NOTE (#5547): pi now declares a skills artifactLayout, so it takes the
+    // `_isSkillsRuntime` branch above; this branch is reached only if that layout
+    // is ever emptied again.
     console.log(`  ${green}✓${reset} pi: /gsd registered via native extension (no declarative command files)`);
   } else {
     // Claude Code local: flat gsd-<cmd>.md layout — Claude Code registers
@@ -12617,8 +12617,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
         // Windsurf is the exception: its workflow wrappers delegate to the
         // path-rewritten bodies at gsd-core/commands/gsd/ (#1629), so there they
         // ARE host-read artifacts and stay in the scan.
+        const posixRelPath = relPath.replace(/\\/g, '/');
         if (!hostBehaviorsFor(runtime).installsCommandBodiesForWorkflowDelegation
-          && (relPath.startsWith('gsd-core/commands/') || relPath.startsWith('gsd-core/agents/'))) continue;
+          && (posixRelPath.startsWith('gsd-core/commands/') || posixRelPath.startsWith('gsd-core/agents/'))) continue;
         const fullPath = path.join(targetDir, relPath);
         let content;
         try {
