@@ -17418,8 +17418,11 @@ describe('#4972: phase complete warns when an active verify:post audit is missin
   **Milestone Goal:** next
   `;
 
+  // The fixture templates below are indented two spaces to sit inside this block.
+  const dedent = (text) => text.replace(/^ {2}/gm, '');
+
   function roadmapText({ box3 = 'x', box4 = ' ' } = {}) {
-    return `${ROADMAP_HEAD}
+    return dedent(`${ROADMAP_HEAD}
   - [${box3}] **Phase 3: Three** - three${box3 === 'x' ? ' (completed 2026-09-20)' : ''}
   - [${box4}] **Phase 4: Four** - four${box4 === 'x' ? ' (completed 2026-09-25)' : ''}
   - [ ] **Phase 04.1: Hotfix** - hotfix (INSERTED)
@@ -17453,11 +17456,11 @@ describe('#4972: phase complete warns when an active verify:post audit is missin
   | 4. Four | v1.1 | 0/1 | In progress | - |
   | 04.1. Hotfix | v1.1 | 0/0 | Not started | - |
   | 5. Five | v1.1 | 0/0 | Not started | - |
-  `;
+  `);
   }
 
   function stateText({ currentPhase = '4', name = 'Four' } = {}) {
-    return `---
+    return dedent(`---
   gsd_state_version: '1.0'
   milestone: v1.1
   milestone_name: Next
@@ -17486,7 +17489,7 @@ describe('#4972: phase complete warns when an active verify:post audit is missin
   Last session: 2026-10-01T00:00:00.000Z
   Stopped at: Plan 04-01 complete
   Resume file: None
-  `;
+  `);
   }
 
   function gsd(cwd, ...args) {

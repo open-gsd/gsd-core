@@ -555,11 +555,13 @@ describe('#5113: a verbatim write publishes the content exactly as given', () =>
 
     describe('edit-distance cap (limit-1 / limit / limit+1 replaced lines)', () => {
       // Replacing a line is a delete plus an insert: 2 edits. 200 replaced lines
-      // are exactly 400 edits (the cap); 201 are 402.
+      // are exactly 400 edits (the cap); 201 are 402. The replacement is a list item
+      // beside prose: scoped, its edges inherit the prior spacing (no blank line);
+      // whole-document normalization separates every list item from the prose after it.
       const build = (replaced) => {
         const prior = Array.from({ length: 500 }, (_, i) => `Item ${i}`).join('\n') + '\n';
         const lines = prior.split('\n');
-        for (let r = 0; r < replaced; r++) lines[r * 2] = `## Heading ${r}`;
+        for (let r = 0; r < replaced; r++) lines[r * 2] = `- Changed ${r}`;
         return { prior, next: lines.join('\n') };
       };
       for (const [replaced, scoped] of [[199, true], [200, true], [201, false]]) {
