@@ -1806,6 +1806,53 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     });
   });
 
+  describe('dash reading: a run of `$` pairs before `{` and `(`, and every quote is plain (#5255 review round 8, Major 1)', () => {
+    // dash (0.5.12 here; the maintainer's review, macOS /bin/dash) reads `$$` as
+    // the PID and `{` as a literal, as bash does, but has no `$'…'`: in
+    // `echo $${$'\''}'; cat .env` the `$` is a literal and `'\'` and `'}'` are
+    // plain quotes, so dash runs the read. bash's and zsh's readings see
+    // `$'\''` as a quote and the `'` after the `}` as one that never closes;
+    // the plain reading opens a `${…}` at the second `$` and does the same.
+    // Every row prints the file in dash 0.5.12.
+    const blocks = [
+      "echo $${$'\\''}'; cat .env",
+      "echo $${x:-$'\\''' ; cat .env #",
+      "echo $'}'$${$'\\''' ; cat .env #",
+      "echo \"$$(\"x$'\\''${$'\ncat .env",
+      "echo $$$${$'\\''}'; cat .env", // two PIDs, then `{`
+      "echo $(echo $${$'\\''}'; cat .env)",
+      "sh -c \"echo \\$\\${\\$'\\\\''}'; cat .env\"", // the same text as an `sh -c` body
+    ];
+    for (const cmd of blocks) {
+      test(`dash reading: blocks ${JSON.stringify(cmd)}`, () => {
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      });
+    }
+
+    // The same shapes with no read: dash prints text and runs `ls`. The last
+    // one is no read in any shell: dash's `cat` operand is `$.env`, and bash
+    // reads one quoted word. dash's reading keeps the `$` before a quote; if
+    // it dropped it as bash's does, the operand would read as `.env`.
+    for (const cmd of ["echo $${$'\\''}'; ls", "echo $${x:-$'\\''' ; ls #", "echo $'x\\'; cat $'.env'; echo '\\'"]) {
+      test(`dash reading: allows ${JSON.stringify(cmd)}`, () => {
+        assertAllowed(runHook(bash(cmd)), cmd);
+      });
+    }
+
+    test("property: a run of any length before `{`, then `$'\\''`, leaves a later read visible", () => {
+      // An even run is PIDs and a literal `{`; an odd run opens `${x}`, which
+      // closes. Either way dash then reads `$`, `'\'` and `'}'` and runs the
+      // read, for every run length here.
+      const form = fc.integer({ min: 1, max: 6 }).map((n) => {
+        const run = '$'.repeat(n);
+        return `echo ${n % 2 === 1 ? `${run}{x}` : `${run}{`}$'\\''}'; cat .env`;
+      });
+      fc.assert(fc.property(form, (cmd) => {
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      }), { seed: 5285, numRuns: 30 });
+    });
+  });
+
   describe('boundaries (#5255 review round 6, Minor 5)', () => {
     const LIMIT = 1024 * 1024;
     // A command of exactly `len` characters: `prefix`, a run of `$`, `suffix`.
