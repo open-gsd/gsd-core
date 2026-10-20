@@ -120,6 +120,20 @@ test('pi descriptor declares a node runtime for the managed pi 1.3.0 install (#5
   assert.equal(negotiated.effective.dispatch.namedDispatch, false);
 });
 
+test('pi declares an argv effort surface and renders pi --thinking (pi 1.3.0 CLI, #5557)', () => {
+  const { renderEffortArgv, clampEffortForHost } = require('../gsd-core/bin/lib/model-catalog.cjs');
+  assert.equal(PI_AXES.effortSurface, 'argv');
+  assert.equal(negotiateHostCapabilities(PI_AXES).effective.effortSurface, 'argv');
+  assert.deepEqual(renderEffortArgv('pi', 'high', 'argv').argv, ['--thinking', 'high']);
+  // pi accepts minimal natively, so unlike claude/codex it is not clamped up to low.
+  assert.deepEqual(renderEffortArgv('pi', 'minimal', 'argv').argv, ['--thinking', 'minimal']);
+  // `inherit` is never a wire level (#3533 10d); pi's own `off` has no universal counterpart.
+  assert.deepEqual(renderEffortArgv('pi', 'inherit', 'argv').argv, []);
+  assert.equal(clampEffortForHost('pi', 'off'), null);
+  // The axis gate still wins over the table: a non-argv surface renders nothing.
+  assert.deepEqual(renderEffortArgv('pi', 'high', 'none').argv, []);
+});
+
 // -- (2) the binding actually binds session_start/before_agent_start/ -------
 //        session_before_compact (not just declared in host-integration.cts)
 
