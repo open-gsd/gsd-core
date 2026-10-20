@@ -3172,7 +3172,7 @@ const capabilities = {
     "role": "runtime",
     "version": "1.18.0",
     "title": "pi",
-    "description": "pi (pi.dev) — bun-runtime programmatic-CLI; TS ExtensionAPI (registerCommand/registerTool/registerProvider/pi.on); single native-extension file at ~/.pi/agent/extensions/gsd.js (.js, not .cjs — pi's extension auto-discovery accepts only .ts/.js, #2470); no shared-settings hook surface; tier-2 support.",
+    "description": "pi (pi.dev) — node-runtime programmatic-CLI (managed pi 1.3.0 install); TS ExtensionAPI (registerCommand/registerTool/registerProvider/pi.on); single native-extension file at ~/.pi/agent/extensions/gsd.js (.js, not .cjs — pi's extension auto-discovery accepts only .ts/.js, #2470); no shared-settings hook surface; tier-2 support.",
     "tier": "core",
     "requires": [],
     "engines": {
@@ -3223,8 +3223,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "session-log-append",
         "transport": "native-extension",
-        "runtime": "bun",
-        "effortSurface": "undocumented"
+        "runtime": "node",
+        "effortSurface": "argv"
       },
       "hostBehaviors": {
         "nativePlugin": {
@@ -7423,7 +7423,7 @@ const runtimes = {
     "role": "runtime",
     "version": "1.18.0",
     "title": "pi",
-    "description": "pi (pi.dev) — bun-runtime programmatic-CLI; TS ExtensionAPI (registerCommand/registerTool/registerProvider/pi.on); single native-extension file at ~/.pi/agent/extensions/gsd.js (.js, not .cjs — pi's extension auto-discovery accepts only .ts/.js, #2470); no shared-settings hook surface; tier-2 support.",
+    "description": "pi (pi.dev) — node-runtime programmatic-CLI (managed pi 1.3.0 install); TS ExtensionAPI (registerCommand/registerTool/registerProvider/pi.on); single native-extension file at ~/.pi/agent/extensions/gsd.js (.js, not .cjs — pi's extension auto-discovery accepts only .ts/.js, #2470); no shared-settings hook surface; tier-2 support.",
     "tier": "core",
     "requires": [],
     "engines": {
@@ -7474,8 +7474,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "session-log-append",
         "transport": "native-extension",
-        "runtime": "bun",
-        "effortSurface": "undocumented"
+        "runtime": "node",
+        "effortSurface": "argv"
       },
       "hostBehaviors": {
         "nativePlugin": {
