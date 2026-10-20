@@ -54,7 +54,19 @@ function mockPi() {
   };
 }
 
-// -- (1) EXTENSION_EVENT_SURFACES.pi has all 30 events -----------------------
+// -- (1) EXTENSION_EVENT_SURFACES.pi has all 41 pi 1.3.0 events (#5557) -------
+//
+// Source of truth: the `on(event: "...", ...)` overloads in pi 1.3.0's
+// @earendil-works/pi-coding-agent dist/core/extensions/types.d.ts (the host's
+// own declarations; pi.dev's extensions page lists a lossy subset). The 30
+// events #2102 declared are a strict subset; the 11 below were added since.
+
+const PI_130_ADDED_EVENTS = [
+  'agent_before_settle', 'agent_settled', 'before_provider_headers',
+  'cache_warming_decision', 'context_with_system', 'mcp_servers_change',
+  'provider_stream_event', 'session_compact_failed', 'ui_prompt_end',
+  'ui_prompt_start', 'user_bash',
+];
 
 const EXPECTED_PI_EVENTS = [
   'session_start', 'project_trust', 'resources_discover', 'input',
@@ -65,16 +77,47 @@ const EXPECTED_PI_EVENTS = [
   'session_before_switch', 'session_shutdown', 'session_before_fork',
   'session_info_changed', 'session_before_compact', 'session_compact',
   'session_before_tree', 'session_tree', 'thinking_level_select', 'model_select',
+  ...PI_130_ADDED_EVENTS,
 ];
 
-test('pi extension-event surface declares all 30 documented ExtensionAPI events (#2102)', () => {
+test('pi extension-event surface declares exactly the 41 pi 1.3.0 ExtensionAPI events (#5557)', () => {
   const surface = extensionEventSurfaceFor('pi');
   assert.ok(surface, 'pi is a consumed extensionEvents dialect');
-  assert.equal(surface.length, 30, `expected exactly 30 events, got ${surface.length}`);
+  assert.equal(EXPECTED_PI_EVENTS.length, 41, 'fixture itself must hold 41 events (limit)');
+  assert.notEqual(surface.length, 40, 'one event short (limit-1)');
+  assert.notEqual(surface.length, 42, 'one event over (limit+1)');
+  assert.equal(surface.length, 41, `expected exactly 41 events, got ${surface.length}`);
+  assert.equal(new Set(surface).size, surface.length, 'no duplicate events');
   for (const ev of EXPECTED_PI_EVENTS) {
     assert.ok(surface.includes(ev), `expected pi extension-event surface to include "${ev}"`);
   }
   assert.deepEqual([...surface].sort(), [...EXPECTED_PI_EVENTS].sort());
+});
+
+test('pi extension-event surface includes the events added since #2102 (#5557)', () => {
+  const surface = extensionEventSurfaceFor('pi');
+  for (const ev of PI_130_ADDED_EVENTS) {
+    assert.ok(surface.includes(ev), `expected pi extension-event surface to include "${ev}"`);
+  }
+});
+
+test('every event gsdPiExtension binds is declared in the pi extension-event surface (#5557)', () => {
+  const pi = mockPi();
+  gsdPiExtension(pi);
+  const surface = extensionEventSurfaceFor('pi');
+  const bound = Object.keys(pi._recorded.events);
+  assert.ok(bound.length > 0, 'extension binds at least one event');
+  for (const ev of bound) {
+    assert.ok(surface.includes(ev), `pi/gsd.cjs binds "${ev}", which is not in the declared pi surface`);
+  }
+});
+
+test('pi descriptor declares a node runtime for the managed pi 1.3.0 install (#5557)', () => {
+  assert.equal(PI_AXES.runtime, 'node');
+  assert.ok(!/bun/i.test(PI_CAP.description), 'descriptor description must not claim a bun runtime');
+  const negotiated = negotiateHostCapabilities(PI_AXES);
+  assert.equal(negotiated.effective.runtime, 'node');
+  assert.equal(negotiated.effective.dispatch.namedDispatch, false);
 });
 
 // -- (2) the binding actually binds session_start/before_agent_start/ -------
