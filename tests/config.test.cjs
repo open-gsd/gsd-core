@@ -1146,40 +1146,6 @@ describe('config-new-project — refuses what config-set refuses (#5268)', () =>
     assertNothingWritten(dir);
   });
 
-  test('--dry-run leaves the user defaults file unmigrated', () => {
-    const dir = bareDir();
-    const gsdHome = bareDir();
-    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
-    const defaultsBefore = JSON.stringify({ depth: 'quick' });
-    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
-    fs.writeFileSync(defaultsPath, defaultsBefore);
-
-    const result = runGsdTools(['config-new-project', '{}', '--dry-run'], dir, { ...homeSandboxEnv(dir), GSD_HOME: gsdHome });
-
-    assert.ok(result.success, `Command failed: ${result.error}`);
-    assert.strictEqual(JSON.parse(result.output).config.granularity, 'coarse');
-    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), defaultsBefore);
-    assertNothingWritten(dir);
-  });
-
-  test('a payload refused while the config is built leaves the user defaults file unmigrated', () => {
-    const dir = bareDir();
-    const gsdHome = bareDir();
-    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
-    // The choices are valid; the user defaults are not (their contents are
-    // not validated as choices), so the builder's own array check refuses.
-    const defaultsBefore = JSON.stringify({ depth: 'quick', ship: { pr_body_sections: 'not-a-list' } });
-    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
-    fs.writeFileSync(defaultsPath, defaultsBefore);
-
-    const result = runGsdTools(['config-new-project', JSON.stringify({ mode: 'yolo' })], dir, { ...homeSandboxEnv(dir), GSD_HOME: gsdHome });
-
-    assert.strictEqual(result.success, false);
-    assert.match(result.error, /Invalid ship\.pr_body_sections value/);
-    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), defaultsBefore);
-    assertNothingWritten(dir);
-  });
-
   // config-set <key> null clears the key; a null choice leaves it unchosen.
   // Both end with the key at its default, whatever its typed rules require.
   for (const keyPath of ['mode', 'ship.pr_body_sections', 'workflow.research']) {
@@ -1207,6 +1173,9 @@ describe('config-new-project — refuses what config-set refuses (#5268)', () =>
     assertNothingWritten(dir);
   });
 
+  // The other user-defaults rewrite tests spawn the CLI with a separate OS
+  // home, so they live in tests/config.platform.test.cjs. This one runs
+  // in-process and reads only the GSD_HOME it sets.
   test('a creation whose config write fails leaves the user defaults file unmigrated', async (t) => {
     const dir = bareDir();
     const gsdHome = bareDir();
@@ -1229,19 +1198,6 @@ describe('config-new-project — refuses what config-set refuses (#5268)', () =>
     assert.strictEqual(result.ok, false);
     assert.match(result.err, /Failed to write config\.json/);
     assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), defaultsBefore);
-  });
-
-  test('a successful creation migrates the user defaults file', () => {
-    const dir = bareDir();
-    const gsdHome = bareDir();
-    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
-    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
-    fs.writeFileSync(defaultsPath, JSON.stringify({ depth: 'quick' }));
-
-    const result = runGsdTools(['config-new-project', '{}'], dir, { ...homeSandboxEnv(dir), GSD_HOME: gsdHome });
-
-    assert.ok(result.success, `Command failed: ${result.error}`);
-    assert.deepStrictEqual(JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')), { granularity: 'coarse' });
   });
 
   test('--dry-run on an existing config reports already_exists', () => {
