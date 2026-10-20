@@ -1853,6 +1853,64 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     });
   });
 
+  describe('a `$` run opens `$(` past a line continuation inside "…" and a heredoc body (#5255 round 8, found in review of the round)', () => {
+    // bash and dash remove `\<newline>` before they read `$(` inside "…" and
+    // an unquoted heredoc body, so `"$\<newline>(cat .env)"` is
+    // `"$(cat .env)"`; zsh 5.9 does so in a heredoc body only. The scanners
+    // looked only at the character after the `$`, so the read was text;
+    // `next` allows these too. Every row prints the file in dash 0.5.12 and
+    // bash 5.2.
+    const blocks = [
+      'echo "$\\\n(cat .env)"',
+      'echo "$\\\n\\\n(cat .env)"',
+      'echo "x$\\\n(cat .env)y"',
+      'echo "$$$\\\n(cat .env)"', // the PID, then `$(`
+      'cat <<E\n$\\\n(cat .env)\nE',
+      'cat <<E\n$$$\\\n(cat .env)\nE',
+      'echo $(echo "$\\\n(cat .env)")', // the `$( )` scanner reads "…" the same way
+      'echo $\'a\' "$\\\n(cat .env)"',
+      // The `$( )` end finder must open the inner `$(` too: read as text, the
+      // outer `$(` ends at the inner `)` and the `'` after it hides the read.
+      'echo $(echo "$\\\n(echo ")\'")"; cat .env; echo "\'")',
+      // zsh keeps `"$\<newline>("` as text, so under its reading the "…" ends
+      // at its own `"` and the line goes on: zsh runs this read.
+      'echo $\'\\\'\' "$\\\n(" ; cat .env',
+      // A heredoc tag word is not expanded: dash 0.5.12 reads `E"$\<newline>("`
+      // as the tag `E$(`, so the line goes on after it and the body ends at a
+      // line `E$(`.
+      'echo $${ <<E"$\\\n(" ; cat .env\nE',
+      'cat <<E"$\\\n("\nhi\nE$(\ncat .env',
+    ];
+    for (const cmd of blocks) {
+      test(`blocks ${JSON.stringify(cmd)}`, () => {
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      });
+    }
+
+    // None of these opens the file in dash, bash or zsh: `$(ls)` reads
+    // nothing, an even run is PIDs and a literal `(`, and a quoted heredoc
+    // expands nothing. In the `$$'\''` row no reading may open the `$(`
+    // inside "…" where its shell would not, and in the `<<E` row none may
+    // open one in a heredoc tag word: to dash every line after it is body,
+    // since the tag `E$( … $($` never recurs.
+    for (const cmd of ['echo "$\\\n(ls)"', 'echo "$$\\\n(cat .env)"', 'cat <<E\n$$\\\n(cat .env)\nE', "cat <<'E'\n$\\\n(cat .env)\nE", 'echo "a$\\\nb"; ls', 'echo $$\'\\\'\'"$\\\n(cat .env)"\'\\\'', '<<E"$\\\n( cat .env < .env$($"\nE\n; cat .env\nls']) {
+      test(`allows ${JSON.stringify(cmd)}`, () => {
+        assertAllowed(runHook(bash(cmd)), cmd);
+      });
+    }
+
+    test('property: an odd run of `$` and any continuations before `(` opens a `$(` that is scanned', () => {
+      const form = fc.tuple(fc.constantFrom(1, 3, 5), fc.integer({ min: 1, max: 3 }), fc.boolean())
+        .map(([n, k, heredoc]) => {
+          const opener = `${'$'.repeat(n)}${'\\\n'.repeat(k)}(cat .env)`;
+          return heredoc ? `cat <<E\n${opener}\nE` : `echo "${opener}"`;
+        });
+      fc.assert(fc.property(form, (cmd) => {
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      }), { seed: 5285, numRuns: 30 });
+    });
+  });
+
   describe('boundaries (#5255 review round 6, Minor 5)', () => {
     const LIMIT = 1024 * 1024;
     // A command of exactly `len` characters: `prefix`, a run of `$`, `suffix`.
