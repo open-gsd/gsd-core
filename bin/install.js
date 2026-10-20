@@ -4288,8 +4288,8 @@ function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, 
  *   - Returns immediately if skillsDir does not exist (fails open).
  *   - Only touches directories whose names start with "gsd-".
  *   - Skips user-owned dirs (gsd-dev-preferences) — their agents/ content is
- *     never modified, mirroring the same USER_OWNED_SKILL_DIRS guard used by
- *     installOpencodeFamilySkills.
+ *     never modified, by the same USER_OWNED_SKILL_DIRS guard
+ *     installOpencodeFamilySkills uses.
  *   - For each managed gsd-* dir, if agents/openai.yaml exists, deletes it.
  *   - If agents/ is now empty, removes the directory; if it still contains
  *     other files (e.g. user-added content), leaves it in place.
@@ -4301,13 +4301,12 @@ function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, 
  */
 function cleanupCodexSkillMetadataSidecars(skillsDir, owns) {
   if (!fs.existsSync(skillsDir)) return;
-  // Mirror the user-owned list from installOpencodeFamilySkills (#2973).
-  // We MUST skip these dirs — their contents are user-generated and must
-  // never be modified by GSD's install path.
-  const _userOwnedSkillDirs = new Set(['gsd-dev-preferences']);
+  // USER_OWNED_SKILL_DIRS (#2973) is the engine's one list. We MUST skip these
+  // dirs — their contents are user-generated and must never be modified by
+  // GSD's install path.
   for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
     if (!entry.isDirectory() || !entry.name.startsWith('gsd-')) continue;
-    if (_userOwnedSkillDirs.has(entry.name)) continue; // preserve user content
+    if (USER_OWNED_SKILL_DIRS.includes(entry.name)) continue; // preserve user content
     // #5161: install keeps gsd-* dirs GSD does not own; their files are not
     // GSD's sidecars to clean.
     if (owns && !owns(entry.name)) continue;
@@ -4354,14 +4353,13 @@ function cleanupWindsurfLegacyDevinSkills(workspaceDir, owns) {
   const legacySkillsDir = path.join(workspaceDir, '.devin', 'skills');
   if (!fs.existsSync(legacySkillsDir)) return 0;
 
-  // Mirror the user-owned list from cleanupCodexSkillMetadataSidecars (#2973).
-  const _userOwnedSkillDirs = new Set(['gsd-dev-preferences']);
   let removed = 0;
 
   // Decide ownership once, BEFORE deleting: the capability-marker leg reads the
   // dir itself, so asking after a removal would report the removed dir as kept.
+  // USER_OWNED_SKILL_DIRS (#2973) dirs are never candidates.
   const candidates = fs.readdirSync(legacySkillsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && entry.name.startsWith('gsd-') && !_userOwnedSkillDirs.has(entry.name));
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith('gsd-') && !USER_OWNED_SKILL_DIRS.includes(entry.name));
   const notOwned = owns ? candidates.filter((entry) => !owns(entry.name)).map((entry) => entry.name) : [];
 
   for (const entry of candidates) {
@@ -4419,14 +4417,13 @@ function cleanupWindsurfLegacyDevinSkills(workspaceDir, owns) {
 function cleanupMovedSkillsOldLocation(oldSkillsDir, prefix, owns) {
   if (!fs.existsSync(oldSkillsDir)) return 0;
 
-  // Mirror the user-owned list from cleanupCodexSkillMetadataSidecars (#2973).
-  const _userOwnedSkillDirs = new Set(['gsd-dev-preferences']);
   let removed = 0;
 
   // Decide ownership once, BEFORE deleting: the capability-marker leg reads the
   // dir itself, so asking after a removal would report the removed dir as kept.
+  // USER_OWNED_SKILL_DIRS (#2973) dirs are never candidates.
   const candidates = fs.readdirSync(oldSkillsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && entry.name.startsWith(prefix) && !_userOwnedSkillDirs.has(entry.name));
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith(prefix) && !USER_OWNED_SKILL_DIRS.includes(entry.name));
   const notOwned = owns ? candidates.filter((entry) => !owns(entry.name)).map((entry) => entry.name) : [];
 
   for (const entry of candidates) {
@@ -11748,7 +11745,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       // carries the marker, which this predicate already owns). The writer prunes
       // each of those except gsd-dev-preferences and writes it fresh as a lone
       // SKILL.md, so it holds no sidecar for this cleanup to remove, and the
-      // cleanup skips gsd-dev-preferences by name (its _userOwnedSkillDirs set).
+      // cleanup skips gsd-dev-preferences by name (USER_OWNED_SKILL_DIRS).
       cleanupCodexSkillMetadataSidecars(
         _skillsRootDir,
         createSkillDirOwnership(runtime, targetDir, _skillsRootDir, 'gsd-', { includeManifest: false }),
