@@ -28,8 +28,12 @@ const {
   convertClaudeCommandToPiSkill,
   PI_DISPATCH_CONTRACT,
 } = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
-const { createTempDir, cleanup } = require('./helpers.cjs');
+const { createTempDir, cleanup, installSpawnEnv } = require('./helpers.cjs');
 const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { runNode } = require('./helpers/process-seam.cjs');
+const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+
+const INSTALL_SCRIPT = path.join(__dirname, '..', 'bin', 'install.js');
 
 const SAMPLE_COMMAND = [
   '---',
@@ -50,7 +54,7 @@ describe('#5547: convertClaudeCommandToPiSkill', () => {
   const out = convertClaudeCommandToPiSkill(SAMPLE_COMMAND, 'gsd-plan-phase', 'pi', ['plan-phase', 'execute-phase']);
 
   test('emits Agent Skills frontmatter named for the skill directory', () => {
-    assert.match(out, /^---\nname: gsd-plan-phase\n/);
+    assert.match(out, /^---\r?\nname: gsd-plan-phase\r?\n/);
     assert.match(out, /\ndescription: /);
     assert.doesNotMatch(out, /argument-hint:/, 'Pi skills carry only name + description');
   });
@@ -175,7 +179,7 @@ describe('#5547: the installed Pi extension', () => {
   test('installs a SKILL.md per command, carrying the dispatch contract', (t) => {
     const { configDir } = installedExtension(t);
     const skill = fs.readFileSync(path.join(configDir, 'skills', 'gsd-new-project', 'SKILL.md'), 'utf8');
-    assert.match(skill, /^---\nname: gsd-new-project\n/);
+    assert.match(skill, /^---\r?\nname: gsd-new-project\r?\n/);
     assert.ok(skill.includes(PI_DISPATCH_CONTRACT));
   });
 
@@ -213,6 +217,25 @@ describe('#5547: the installed Pi extension', () => {
     await handler('phase list', ctx);
     assert.equal(sent.length, 0);
     assert.equal(notifications.length, 1);
+  });
+
+  test('uninstall removes the gsd skills and leaves a user-owned skill alone', (t) => {
+    const { configDir, root } = runMinimalInstall({ runtime: 'pi', scope: 'global' });
+    t.after(() => cleanup(root));
+    const own = path.join(configDir, 'skills', 'my-own-skill');
+    fs.mkdirSync(own, { recursive: true });
+    fs.writeFileSync(path.join(own, 'SKILL.md'), '---\nname: my-own-skill\ndescription: x\n---\n');
+
+    // The installer's test-mode guard turns a run into a no-op; strip it, as the
+    // shared installer-env helper does for every spawned install.
+    const env = installSpawnEnv({ HOME: root, USERPROFILE: root });
+    delete env.GSD_TEST_MODE;
+    const res = runNode(
+      [INSTALL_SCRIPT, '--pi', '--global', '--config-dir', configDir, '--uninstall'],
+      { env, timeoutMs: INSTALL_TIMEOUT_MS },
+    );
+    assert.equal(res.exitCode, 0, `uninstall failed (outcome=${res.outcome})\n${res.stdout}\n${res.stderr}`);
+    assert.deepEqual(fs.readdirSync(path.join(configDir, 'skills')), ['my-own-skill']);
   });
 
   test('without sendUserMessage the command falls back to its data behavior', async (t) => {
