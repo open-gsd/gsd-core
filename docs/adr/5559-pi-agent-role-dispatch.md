@@ -23,46 +23,66 @@ Facts, each verified against the tree or against Pi 1.3.0 installed locally (`pi
 
 Pi keeps `namedDispatch: false` (the host has no primitive). GSD supplies the dispatch itself.
 
-### 1. Mechanism: child `pi` process, fail closed
+### 1. Mechanism: a child `pi` process per role, fail closed
 
-`pi/gsd.cjs` registers a second tool, **`gsd_dispatch`**, with parameters `{ role: string, task: string }`. Its `execute` resolves the role, spawns a child `pi` process, and returns the child's final assistant text as the tool result. The child is an isolated context window with its own tool allowlist, the same isolation Claude's `Agent` gives.
+`pi/gsd.cjs` registers a second tool, **`gsd_dispatch`**, with parameters `{ role: string, task: string }`. Its `execute` resolves the role, spawns a child `pi` process, and returns the child's final assistant text as the tool result. The child is an isolated context window with its own tool allowlist, the isolation Claude's `Agent` gives.
 
-Argument contract of the spawned child (asserted by test):
+**Child argv (asserted by test), in full:**
 
-- `--mode json -p --no-session`
-- `--append-system-prompt <absolute path to the installed role file>` — the role prompt travels as a file path, never inlined into argv
-- `--tools <comma list from the role's frontmatter>` — an allowlist; a role file without `tools` gets Pi's default set minus `gsd_dispatch`
-- `--model <role model>` only when the role file pins one; otherwise the child inherits Pi's configured default
-- the task text is written to a temp file and passed as an `@file` argument, so a task larger than the Windows argv limit (32,767 characters; chunk at 28K) cannot abort the spawn
-- `env.GSD_PI_DISPATCH_DEPTH` set to parent depth + 1
+| Flag | Why |
+|---|---|
+| `--mode json -p --no-session` | one invocation, structured events, nothing persisted |
+| `--append-system-prompt <absolute path of the role file>` | the role prompt travels as a path, never inlined into argv |
+| `--tools <role frontmatter list>`; a role without `tools` gets `--tools -gsd_dispatch` (Pi's defaults minus the dispatch tool, the only-minus form in `docs/cli.md`) | tool allowlist |
+| `--no-mcp` | `--tools` keeps MCP tools unless an entry starts with `mcp__`, so the allowlist alone is not a restriction; the child gets no MCP |
+| `--no-extensions` | the child must not load `gsd.js` and re-register `gsd_dispatch`, and must not auto-load a hostile repository's `.pi/extensions`. Roles reach `gsd-tools` through `bash`, as on every other host |
+| `--no-approve` | the child never trusts project-local files (`.pi/settings.json`, prompts, skills, extensions) and `-p` can never stall on a trust prompt |
+| `--model <role model>` only when the role file pins one | otherwise the child inherits Pi's default |
+| `@<task file>` | the task text is written to a file and passed as an `@file` argument (Pi resolves it from cwd, so the path is absolute), so a task larger than the Windows argv limit (32,767 characters; chunk at 28K) cannot abort the spawn |
+| env `GSD_PI_DISPATCH_DEPTH` = parent depth + 1 | defense in depth only; the structural cap is that the child has no `gsd_dispatch` (`--no-extensions`) |
 
-Fail-closed rules (each is an error result returned to the model, never a throw, never an inline fallback):
+Context files (`AGENTS.md`, `CLAUDE.md`) still load in the child: Pi loads them independent of project trust (`docs/security.md`), and roles on Claude see them too. This is accepted, not an omission. The child also inherits the parent's full environment, including provider API keys, as any `bash` a role runs would; GSD adds no credential handling and no scrubbing. This is accepted for the same reason a Claude subagent inherits its parent's environment.
 
-1. `role` does not match `^gsd-[a-z0-9-]+$`, or no installed role file with that name exists → `role-unresolved`.
-2. No runnable `pi` executable can be resolved (`process.execPath`-relative CLI, else `PATH`) → `pi-not-found`.
-3. `GSD_PI_DISPATCH_DEPTH` ≥ 1 → `depth-exceeded`. Pi dispatch is flat: `nested: false`, `maxDepth: 1`. A role that itself needs to spawn a role is a workflow defect to surface, as on every other flat host.
-4. The child exceeds the dispatch timeout (default 30 minutes, overridable by `GSD_PI_DISPATCH_TIMEOUT_MS`) → the child is killed, result `timeout`. The spawn is asynchronous (`spawn`, not `spawnSync`) and forwards the tool's abort signal as a kill, so a long role does not block Pi's extension host.
-5. Child exits non-zero, or its final assistant stop reason is `error`/`aborted`/`length` → `child-failed`, with the child's stderr tail.
+**Task file.** Created inside a directory made with `mkdtemp` (mode `0700`, unpredictable name), absolute path, removed in a `finally` after the child exits or is killed. Whether Pi presents an `@file` argument to the model as the user's task was not probed (no credential on the verification machine); it is the first thing the live smoke test checks. If it does not, the task moves to a positional `Task: …` message, which the reference extension uses, with the file retained only above 28K.
+
+**Role resolution.** `gsd_dispatch` resolves a role by listing the single directory `ROLE_DIR = <directory of the running extension file>/../agents` and matching `<role>.md` among the listing's entries, never by joining the caller's string onto a path. It `lstat`-rejects a symlinked role file. The role id must match `^gsd-[a-z0-9-]+$`. `ROLE_DIR` is by construction the `agents/` directory of the install the running extension belongs to: `<configHome>/agents` for a global install, `.pi/agents` for a local one, `<package root>/agents` for the Phase 1b package. It is never searched across scopes or taken from the project's cwd. A project-committed `.pi/agents/gsd-x.md` therefore cannot shadow the user-level role, and, because the installer records a content hash per installed file in its manifest (`writeManifest`), `gsd_dispatch` also verifies the role file's hash against that entry and returns `role-tampered` on mismatch. Phase 2b adds the role files to the manifest `files` map.
+
+**Fail-closed results.** Each is an error result returned to the model, never a throw, never an inline fallback:
+
+| Code | When |
+|---|---|
+| `role-unresolved` | malformed id, role not in `ROLE_DIR`, or role file is a symlink |
+| `role-tampered` | role file hash differs from the install manifest |
+| `pi-not-found` | no runnable `pi` (`process.execPath`-relative CLI, else `PATH`) |
+| `depth-exceeded` | `GSD_PI_DISPATCH_DEPTH` ≥ 1 |
+| `timeout` | child exceeds the dispatch timeout (default 30 minutes, `GSD_PI_DISPATCH_TIMEOUT_MS`) or the tool's abort signal fires |
+| `child-failed` | exit non-zero, or the final assistant message's `stopReason` is `error`, `aborted` or `length` (the three `docs/cli-integration.md` treats as failure) |
+
+**Process control.** The child is started with `spawn` (never `spawnSync`, which would block Pi's extension host) in its own process group on POSIX (`detached: true`). Timeout and abort send `SIGTERM` to the group (`process.kill(-pid)`), then `SIGKILL` after a 5 second grace, so `bash` grandchildren do not outlive the role. On Windows the kill is `taskkill /T /F /PID <pid>`, itself bounded at 10 seconds. A kill that fails is reported inside the `timeout` result, not thrown.
+
+**Output handling.** stdout is parsed incrementally as JSONL and events are discarded as they pass; only the final assistant message text is retained, capped at 1 MiB with a visible truncation marker. stderr is kept as an 8 KiB tail. "Final" means the last assistant `message_end` observed before `agent_settled`; `agent_end` is not used because automatic retry can follow it. A run whose last assistant message is a retried error and whose retry succeeds reports the retry's text.
 
 ### 2. Execution mode: strictly sequential
 
-`maxConcurrency` is declared **1** for Pi. Workflows that dispatch a wave in parallel run it as sequential `gsd_dispatch` calls. Raising it requires evidence that Pi runs tool calls from one assistant turn concurrently and that two children do not contend on credentials or session storage; that evidence is a later amendment, not part of this decision.
+Pi dispatch is flat (a child has no dispatch tool) and sequential: `gsd_dispatch` serializes calls behind a single in-process queue, so a wave the workflow expresses as parallel calls runs one at a time. The concurrency of 1 is a property of the extension, not of the host descriptor (which is unchanged, §5). Raising it needs evidence that Pi runs the tool calls of one assistant turn concurrently and that two children do not contend on credentials; that is a later amendment.
+
+**Nested roles.** Flat dispatch makes a role that itself spawns roles undispatchable. `agents/` contains exactly one: `gsd-debug-session-manager` (its `tools:` list includes `Agent`; it spawns `gsd-debugger`). Decision: the `/gsd-debug` flow is **`unsupported-on-pi`** with the reason "needs nested dispatch; Pi dispatch is flat". Phase 4's parity matrix records that disposition and a test pins it; the installed Pi command prints the reason instead of starting. Nested dispatch (`maxDepth: 2`) is not adopted: the recursion cap would then rest on an env var instead of on the child's lack of the tool.
 
 ### 3. Role prompts install as `agents/gsd-*.md` under the Pi config home
 
-Phase 2b adds `{ kind: "agents", destSubpath: "agents", prefix: "gsd-", nesting: "flat", recursive: false, converter: "convertClaudeAgentToPiAgent" }` to the Pi `artifactLayout`, both scopes, mirroring the Hermes layout. `<configHome>/agents/` is the directory Pi's reference subagent extension already scans, so a user who runs that extension also sees GSD roles, and the `gsd-` prefix keeps them from colliding with user-authored agents. Pi core does not load this directory; only `gsd_dispatch` and the reference extension read it.
+Phase 2b adds `{ kind: "agents", destSubpath: "agents", prefix: "gsd-", nesting: "flat", recursive: false, converter: "convertClaudeAgentToPiAgent" }` to the Pi `artifactLayout`, both scopes, mirroring the Hermes layout. `<configHome>/agents/` is the directory Pi's reference subagent extension already scans, so a user who runs that extension also sees GSD roles; the `gsd-` prefix keeps them from colliding with user-authored agents. Pi core does not load this directory; only `gsd_dispatch` and the reference extension read it.
 
-`convertClaudeAgentToPiAgent` emits `name`, `description`, `tools` (Claude tool names mapped to Pi's lowercase tool names; an unmappable tool is dropped and recorded, never passed through), and the role body with the Pi content-rewrite profile applied. It omits `model` unless the active model profile bakes one.
+`convertClaudeAgentToPiAgent` emits `name`, `description`, `tools` (Claude tool names mapped to Pi's lowercase tool names; an unmappable tool is dropped and recorded, never passed through), and the role body with the Pi content-rewrite profile applied. It omits `model` unless the active model profile bakes one. The `.compact.md` variants are not installed for Pi.
 
-`gsd_dispatch` reads **only** the user-level or the GSD-installed role directory it was installed with. It never reads a project-local `.pi/agents/`: a repository-controlled prompt that runs with shell tools is the trust boundary Pi's own reference extension gates, and GSD does not widen it.
+### 4. Workflow text projects onto `gsd_dispatch`
 
-### 4. Workflow text projects to `gsd_dispatch`, fail closed
+The existing contract in `projectNamedDispatchToStructuralDelegate` (`bin/install.js`) is for a host whose dispatch tool takes the role prompt as an argument: it rewrites `Agent(subagent_type="gsd-x", …)` into `<toolName>(<namedRoleParam>=gsd-x, <promptContentParam>=<resolve the role and load its contents; FAIL CLOSED…>, <structuralRoleParam>="<leaf>")`, leaving the model to load and pass the prompt. Pi's `gsd_dispatch` resolves the prompt itself (§1), so passing contents through the model would be both larger and less safe. Phase 2b therefore adds one field to the projection's `toolConfig`: `rolePromptResolution: 'tool'`. When set, the projection emits only `<namedRoleParam>=<role>` and `<taskParam>=<prompt text>` and omits the contents and structural-role arguments. Output for every other runtime is unchanged and stays byte-identical (the existing Hermes projection tests pin it). Pi's configuration: `toolName: "gsd_dispatch"`, `namedRoleParam: "role"`, `taskParam: "task"`, `supportsPerCallModel: false`, no background parameter, `rolePromptResolution: 'tool'`, `availableRoles` from `_resolveAvailableGsdRoles()`.
 
-The install-time content projection for Pi extends `projectNamedDispatchToStructuralDelegate` with a Pi tool configuration: `toolName: "gsd_dispatch"`, named-role parameter `role`, task parameter `task`, no per-call model parameter (`supportsPerCallModel: false`), no background parameter. Every `Agent(subagent_type="gsd-x", prompt=…)` in an installed workflow becomes `gsd_dispatch(role="gsd-x", task=…)`. The existing fail-closed assertion stays: a workflow that references a role absent from the install fails the install, not at run time.
+The install-time fail-closed seam is the existing `_assertRoleResolvable` (#2284): a workflow that names a `gsd-*` role with no shipped `agents/<role>.md` makes the install throw. Phase 2b keeps that call on the Pi path.
 
 ### 5. Descriptor stays a statement of host facts
 
-`capabilities/pi/capability.json` keeps `namedDispatch: false`, `maxDepth: 0` and `subagentToolkit: "undocumented"`: they describe what Pi itself provides, and Pi provides no subagent primitive. The properties of GSD's own dispatch (flat, depth 1, sequential, timeout) live in the Pi extension and the projection configuration, not in the host axes. `degradationFor('dispatch', …)` therefore continues to return `absent` with the fallback `single-agent inline / SDK sub-session`; this ADR designates the **sub-session** half of that fallback as the realized one and rules out the **inline** half.
+`capabilities/pi/capability.json` keeps `namedDispatch: false`, `maxDepth: 0`, `subagentToolkit: "undocumented"` and `maxConcurrency: "undocumented"`: they describe what Pi itself provides, and Pi provides no subagent primitive. The properties of GSD's own dispatch (flat, sequential, timeout) live in the extension and the projection configuration. `degradationFor('dispatch', …)` therefore continues to return `absent` with the fallback `single-agent inline / SDK sub-session`. That string is descriptive. This ADR designates the **sub-session** half as the realized fallback and rules out the **inline** half; the guard that enforces it is the projection in §4 (an installed Pi workflow never contains an `Agent(` call), and Phase 2b audits the consumers of `degradationFor('dispatch')` and records that none executes the fallback.
 
 ## Rejected alternatives
 
@@ -79,17 +99,18 @@ The install-time content projection for Pi extends `projectNamedDispatchToStruct
 
 - Phase 2b has no remaining design questions: tool name and parameters, child argv, failure codes, depth and timeout, concurrency, install location, converter name and projection config are fixed here.
 - Each dispatch pays a `pi` process start and model session. Waves are sequential on Pi. Both are documented limits, not defects.
-- The child inherits the parent's credentials and working directory through `pi`'s own configuration. GSD adds no credential handling.
+- The child inherits the parent's environment and working directory (§1 records this as accepted). GSD adds no credential handling.
+- `/gsd-debug` is `unsupported-on-pi` until nested dispatch is separately decided (§2).
 - The set of roles installed on Pi equals the set installed for Claude (non-compact agent files). Phase 4's parity matrix pins this.
 
 ## Acceptance (testable)
 
-Phase 2b is accepted when all hold; each is a behavioral test, none inspects source text:
+Phase 2b is accepted when items 1-6 hold; each is a behavioral test, none inspects source text. Item 7 is a live check owned by Phase 4 and does not gate 2b.
 
-1. **Argv contract.** With an injected spawn seam, `gsd_dispatch({role:"gsd-roadmapper", task})` spawns `pi` with exactly the argument set in §1, the role file path (not its contents) after `--append-system-prompt`, the task as an `@file`, and `GSD_PI_DISPATCH_DEPTH=1` in the child env.
-2. **Boundary on task size.** A task of 28,000 − 1, 28,000 and 28,000 + 1 characters spawns identically (argv length does not grow with the task).
-3. **Fail closed.** Unknown role, malformed role id, missing `pi`, depth ≥ 1, timeout, and non-zero child exit each return the named error code and never run the role in-session. A property test over arbitrary role strings asserts only ids matching `^gsd-[a-z0-9-]+$` and present in the install ever reach a spawn.
-4. **Timeout without wall-clock.** The timeout path is driven by `mock.timers`; the child is killed and the abort signal also kills it.
-5. **Projection.** After install for Pi, no installed workflow contains `Agent(` or `subagent_type`; every `gsd_dispatch(role="…")` names a role file present in the Pi install; an install whose workflow names an absent role fails.
-6. **Install parity.** The roles installed for Pi equal the non-compact `agents/*.md` set, and the Pi descriptor's dispatch axes are unchanged (`degradationFor('dispatch', …)` still reports `absent`; the host has no primitive).
-7. **Live.** One `new-project` run through a live Pi session reaches `gsd-research-synthesizer` and `gsd-roadmapper` and writes `.planning/` files (verified in Phase 4, [#5561](https://github.com/open-gsd/gsd-core/issues/5561)).
+1. **Argv contract.** With an injected spawn seam, `gsd_dispatch({role:"gsd-roadmapper", task})` spawns `pi` with exactly the argument set in §1 (including `--no-extensions`, `--no-approve`, `--no-mcp`), the role file path (not its contents) after `--append-system-prompt`, the task as an absolute `@file`, `GSD_PI_DISPATCH_DEPTH=1` in the child env, and a `0700` temp directory that no longer exists after return, kill and failure.
+2. **Boundary on task size.** Tasks of 28,000 - 1, 28,000 and 28,000 + 1 characters spawn with identical argv length.
+3. **Fail closed.** Unknown role, malformed id, symlinked role file, hash mismatch, missing `pi`, depth ≥ 1 and non-zero exit each return the named code and never run the role in-session. A `fast-check` property over arbitrary role strings asserts only ids matching `^gsd-[a-z0-9-]+$` that are present in `ROLE_DIR` ever reach a spawn. A project-committed `<cwd>/.pi/agents/gsd-x.md` is never read when the running extension lives elsewhere.
+4. **Timeout, kill, output bounds.** Driven by `mock.timers` with an injected process seam: timeout and abort send `SIGTERM` to the group then `SIGKILL` after the grace; a child that exits on `SIGTERM` is not sent `SIGKILL`; stdout of N+1 MiB retains at most the cap with the truncation marker; stderr retains the tail. A retried-then-successful run reports the retry's text; `error`, `aborted` and `length` stop reasons map to `child-failed`.
+5. **Projection.** For every Pi-installed workflow and command, `findDispatchCallSpans(content, 'Agent')` returns no span and no `subagent_type=` argument remains; every `gsd_dispatch(role=…)` names a role file present in the Pi install; an install whose workflow names an absent role throws (`_assertRoleResolvable`). Output for hermes, kimi and the other projecting runtimes is byte-identical to before.
+6. **Install parity.** The roles installed for Pi equal the non-compact `agents/*.md` set; the Pi descriptor's dispatch axes are unchanged; `/gsd-debug` is recorded `unsupported-on-pi` with its reason and prints it.
+7. **Live (Phase 4, [#5561](https://github.com/open-gsd/gsd-core/issues/5561)).** One `new-project` run through a live Pi session reaches `gsd-research-synthesizer` and `gsd-roadmapper` and writes `.planning/` files; the same run confirms Pi presents the `@file` task to the child as its task.
