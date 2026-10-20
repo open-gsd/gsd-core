@@ -79,9 +79,10 @@
 //   scans a `<( )` operand; and `find … | xargs cat` infers the upstream
 //   segment's names as the sub-command's read operands.
 //
-// Dollar-quoting (#5255): a command holding `$'…'` or `$"…"`, or a run of `$`
-// before `{` or `(`, is scanned under bash's, zsh's and dash's reading of it,
-// then the scan as it was before #5255, and denied on any; a `$'…'` word with
+// Dollar-quoting (#5255): a command holding `$'…'` or `$"…"`, a run of `$`
+// before `{` or `(`, or a `$` before a line continuation, is scanned under
+// bash's, zsh's and dash's reading of it, then the scan as it was before
+// #5255, and denied on any; a `$'…'` word with
 // no value to check is denied as `ansi-c-unterminated` / `ansi-c-undecodable`.
 // The readings, and what they do not reach, are in "Bash command scan —
 // dollar-quoting" below.
@@ -543,6 +544,20 @@ function quotedRun(str, i) {
   return { text: '$'.repeat(odd ? run.dollars - 1 : run.dollars), next: odd ? run.last : run.end };
 }
 
+// The `$(` a run of `$` at `i` opens inside "…" (`inQuotes`) or an unquoted
+// heredoc body under the reading `shell`, or null: `open` is the index of
+// its `(`, `pids` the text of the PIDs before it. Only an odd run's last `$`
+// opens one, past any line continuations: bash and dash remove
+// `\<newline>` first in both places, so `"$\<newline>(cat .env)"` is
+// `"$(cat .env)"` and runs the read. zsh 5.9 does so in a heredoc body
+// only; inside "…" it keeps `$`, the continuation and `(` as text.
+function runParen(str, i, shell, inQuotes) {
+  if (inQuotes && shell === 'zsh') return null;
+  const run = dollarRun(str, i);
+  if (run.dollars % 2 === 0 || str[run.end] !== '(') return null;
+  return { open: run.end, pids: '$'.repeat(run.dollars - 1) };
+}
+
 // Index of the `'` closing a `$'…'` span whose opening quote is at `i`, or -1
 // when it never closes. A backslash escapes the next character, so `\'` and
 // `\\` never close the span. The one definition of where a span ends, shared
@@ -817,6 +832,8 @@ function findParenClose(str, i, reading) {
       i++;
       while (i < str.length && str[i] !== '"') {
         if (str[i] === '\\') { i += 2; continue; }
+        const paren = reading && str[i] === '$' ? runParen(str, i, reading, true) : null;
+        if (paren) { i = findParenClose(str, paren.open + 1, reading) + 1; continue; }
         const dqRun = reading && str[i] === '$' ? quotedRun(str, i) : null;
         if (dqRun) { i = dqRun.next; if (str[i] !== '$') continue; }
         if (str[i] === '$' && str[i + 1] === '(') { i = findParenClose(str, i + 2, reading) + 1; continue; }
@@ -996,6 +1013,13 @@ function collectSubstitutions(body, nested, reading) {
     // backslash escapes the next character in a body, so `\$` starts no run.
     if (reading && body[i] === '\\') { i += 2; continue; }
     if (reading && body[i] === '$') {
+      const paren = runParen(body, i, reading, false);
+      if (paren) {
+        const e = findParenClose(body, paren.open + 1, reading);
+        nested.push(body.slice(paren.open + 1, e));
+        i = e + 1;
+        continue;
+      }
       const run = dollarRun(body, i);
       if (run.dollars > 1) { i = run.dollars % 2 === 1 ? run.last : run.end; continue; }
     }
@@ -1140,7 +1164,19 @@ function tokenize(str, reading) {
           continue;
         }
         // bash, zsh and dash pair a `$` run here; an odd run's last `$` stays (`c`
-        // is still `$` for the branches below).
+        // is still `$` for the branches below) and opens a `$(` past any line
+        // continuations (runParen). Not under zsh's reading, and not in a
+        // heredoc tag word, which is not expanded: there dash reads
+        // `"$\<newline>("` as the text `$(`.
+        const paren = reading && c === '$' && expectTag === null ? runParen(str, i, reading, true) : null;
+        if (paren) {
+          hasWord = true;
+          buf += paren.pids;
+          const e = findParenClose(str, paren.open + 1, reading);
+          nested.push(str.slice(paren.open + 1, e));
+          i = e + 1;
+          continue;
+        }
         const dqRun = reading && c === '$' ? quotedRun(str, i) : null;
         if (dqRun) { buf += dqRun.text; i = dqRun.next; if (str[i] !== '$') continue; }
         if (str[i] === '$' && str[i + 1] === '(') {
@@ -1609,10 +1645,13 @@ function findSecretReadUnderOtherReadings(command) {
 // construction. "Holding" is tested on the text with its `\<newline>`
 // continuations removed, because bash joins them before it reads a quote:
 // `$\<newline>'x'` is `$'x'`. A run of 2+ `$` before `{` or `(` always ends in
-// `$${` or `$$(`, so a substring test finds it in linear time.
+// `$${` or `$$(`, so a substring test finds it in linear time. So does a `$`
+// whose `(` is past a continuation (runParen): the plain reading misses that
+// `$(` inside "…" and heredoc bodies, so `$\<newline>` brings in the others.
 function findSecretRead(command, depth) {
   const joined = command.includes('\\\n') ? command.replace(/\\\n/g, '') : command;
-  if (!joined.includes("$'") && !joined.includes('$"') && !joined.includes('$${') && !joined.includes('$$(')) {
+  if (!joined.includes("$'") && !joined.includes('$"') && !joined.includes('$${') && !joined.includes('$$(')
+    && !command.includes('$\\\n')) {
     return scanCommand(command, depth, false);
   }
   for (const shell of READINGS) {
