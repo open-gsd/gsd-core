@@ -509,3 +509,34 @@ describe('model-catalog: clampEffortForHost (#3915)', () => {
     assert.equal(clampEffortForHost('claude', 'high'), 'high');
   });
 });
+
+describe('model-catalog: EFFORT_ARGV.pi (#5557)', () => {
+  const PI_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+  test('supports exactly the universal ladder pi 1.3.0 accepts on --thinking', () => {
+    assert.deepEqual([...EFFORT_ARGV.pi.supported].sort(), [...PI_LEVELS].sort());
+    assert.equal(EFFORT_ARGV.pi.supported.size, 6);
+  });
+
+  test('each supported level renders `--thinking <level>` unclamped', () => {
+    for (const level of PI_LEVELS) {
+      assert.deepEqual(EFFORT_ARGV.pi.render(level), ['--thinking', level]);
+      assert.equal(EFFORT_ARGV.pi.clamp(level), level);
+      assert.equal(clampEffortForHost('pi', level), level);
+      assert.deepEqual(renderEffortArgv('pi', level, 'argv'), { argv: ['--thinking', level], value: level, host: 'pi' });
+    }
+  });
+
+  test('levels outside the supported set render nothing', () => {
+    // `off` is pi-only with no universal counterpart; `ultra` is codex policy; the rest are malformed.
+    for (const level of ['off', 'ultra', '', 'HIGH', 'high ', 'inherit', 'high; x', '--model']) {
+      assert.equal(clampEffortForHost('pi', level), null, `level ${JSON.stringify(level)}`);
+      assert.deepEqual(renderEffortArgv('pi', level, 'argv'), { argv: [], value: null, host: 'pi' });
+    }
+  });
+
+  test('the axis gate still wins: a non-argv surface renders nothing for pi', () => {
+    assert.deepEqual(renderEffortArgv('pi', 'high', 'none'), { argv: [], value: null, host: 'pi' });
+    assert.deepEqual(renderEffortArgv('pi', 'high', 'undocumented'), { argv: [], value: null, host: 'pi' });
+  });
+});
