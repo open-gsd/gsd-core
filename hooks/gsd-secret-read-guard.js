@@ -79,8 +79,9 @@
 //   scans a `<( )` operand; and `find … | xargs cat` infers the upstream
 //   segment's names as the sub-command's read operands.
 //
-// Dollar-quoting (#5255): a command holding `$'…'` or `$"…"` is scanned under
-// bash's, zsh's and dash's reading of it and denied on any; a `$'…'` word with
+// Dollar-quoting (#5255): a command holding `$'…'` or `$"…"`, or a run of `$`
+// before `{` or `(`, is scanned under bash's, zsh's and dash's reading of it,
+// then the scan as it was before #5255, and denied on any; a `$'…'` word with
 // no value to check is denied as `ansi-c-unterminated` / `ansi-c-undecodable`.
 // The readings, and what they do not reach, are in "Bash command scan —
 // dollar-quoting" below.
@@ -438,7 +439,7 @@ function classifyGrepGlob(glob) {
 // Bash command scan — dollar-quoting (`$'…'`, `$"…"`)
 // ---------------------------------------------------------------------------
 
-// #5255: dollar-quoting is read three ways, and which one applies depends on
+// #5255: dollar-quoting is read four ways, and which one applies depends on
 // the shell that runs the text, which a hook cannot see (zsh is the Bash
 // tool's shell on macOS; dash is `sh` on Debian and Ubuntu, and so a `sh -c`
 // body there):
@@ -452,16 +453,22 @@ function classifyGrepGlob(glob) {
 //         on a different line; `$"…"` is `$` and `"…"`. And a run of `$`
 //         before `'` always ends in a `$'` opener: `$$'x'` is the PID and
 //         `$'x'`, where bash reads the PID and a plain 'x' (opensAnsiC).
-//   plain `$` is a literal and the quote after it a plain one (dash).
+//   dash  `$` is a literal and the quote after it a plain one, and a run of
+//         `$` pairs left to right as bash's does: `$${` is the PID and a `{`.
+//   plain the scan as it was before #5255: dash's quoting, but a run is not
+//         paired, so `$${` opens a `${…}` at its second `$`.
 // Each reading hides what another runs:
-//   echo $'x\'y'; cat .env          bash and zsh run `cat .env`; the plain
-//                                   reading sees a quote that never closes
+//   echo $'x\'y'; cat .env          bash and zsh run `cat .env`; dash's and the
+//                                   plain reading see a quote that never closes
 //   echo $'x\'; cat .env; echo '\'  dash runs `cat .env`; the ANSI-C readings
 //                                   see one quoted word
-// So a command holding either form is scanned under all three and denied on
+//   echo $${$'\''}'; cat .env       dash runs `cat .env`; the other three see
+//                                   a quote that never closes
+// So a command holding either form is scanned under all four and denied on
 // any (findSecretRead). The plain reading is the scan as it was before #5255,
 // so nothing it denied can become allowed. Every scanner below takes `reading`:
-// false for the plain reading, or the shell whose ANSI-C reading it is doing.
+// false for the plain reading, or the shell whose reading it is doing —
+// 'bash' or 'zsh', which have ANSI-C quoting, or 'dash', which does not.
 // Not reached: the text inside `${…}` is not scanned, so a `$'…'` there is not
 // decoded (the `$VAR` indirection gap in the header) — the ANSI-C readings only
 // end the `${…}` where the shell does, past a `}` inside a span
@@ -506,19 +513,22 @@ function dollarRun(str, i) {
 
 // Whether the run's last `$` belongs to the quote after it, under the reading
 // `shell`: always for `$'…'`, and for `$"…"` only in bash — zsh keeps the `$`.
+// Never under dash's, which has no dollar-quoting.
 function ownsQuote(run, str, shell) {
-  return run.owned && (str[run.end] === "'" || shell === 'bash');
+  return shell !== 'dash' && run.owned && (str[run.end] === "'" || shell === 'bash');
 }
 
 // Whether the `'` after the run opens a `$'…'` span under the reading `shell`.
 // bash pairs the run left to right, so only an odd run does. zsh opens one
 // after any run: `$$'\x41'` is the PID and `A`, `$$$$'\x41'` two PIDs and `A`
-// (zsh 5.9), so `echo $$'\''; cat .env` runs the read under zsh.
+// (zsh 5.9), so `echo $$'\''; cat .env` runs the read under zsh. dash never
+// does.
 function opensAnsiC(run, str, shell) {
-  return str[run.end] === "'" && (shell === 'zsh' ? run.dollars > 0 : run.owned);
+  return str[run.end] === "'" && shell !== 'dash' && (shell === 'zsh' ? run.dollars > 0 : run.owned);
 }
 
-// A run of 2+ `$` at `i` inside "…" under the ANSI-C readings, or null.
+// A run of 2+ `$` at `i` inside "…" under any reading but the plain one, or
+// null.
 // bash, zsh and dash all pair it left to right there: `"$$(x)"` is the PID
 // and `(x)`, and `"$$$(…)"` the PID and a `$(…)`. So the "…" ends at its own
 // `"`: zsh and dash run `echo "$$(" ; cat .env`, and bash, whose expansion of
@@ -564,8 +574,9 @@ function ansiCBraceClose(str, i, shell) {
   return i < str.length ? i : -1;
 }
 
-// The shells whose ANSI-C reading a dollar-quoted command is scanned under.
-const ANSI_C_SHELLS = ['bash', 'zsh'];
+// The readings a command holding dollar-quoting, or a run of `$` before `{`
+// or `(`, is scanned under before the plain one (findSecretRead).
+const READINGS = ['bash', 'zsh', 'dash'];
 
 // Single-character escapes of bash's `$'…'`, as byte values.
 const ANSI_C_ESCAPES = new Map([
@@ -979,8 +990,8 @@ function collectSubstitutions(body, nested, reading) {
   while (i < body.length) {
     // bash, zsh and dash all pair a `$` run here left to right: in a body
     // `$$( ' $(cat .env) ' )` is the PID, literal text and a `$(cat .env)`
-    // they run. Under the ANSI-C readings (the `$$(` trigger brings such a
-    // command there) an even run is skipped whole, and an odd run's last `$`
+    // they run. Under every reading but the plain one (the `$$(` trigger brings
+    // such a command there) an even run is skipped whole, and an odd run's last `$`
     // is read below; the plain reading reads the body as before #5255. A
     // backslash escapes the next character in a body, so `\$` starts no run.
     if (reading && body[i] === '\\') { i += 2; continue; }
@@ -1053,9 +1064,10 @@ function tokenize(str, reading) {
   while (i < str.length) {
     const ch = str[i];
 
-    // A run of `$` under an ANSI-C reading: dollar-quoting, tested before the
-    // plain quote branches (see the dollar-quoting section above), then the
-    // run's pairing. The plain reading reads `$` as it did before #5255.
+    // A run of `$` under any reading but the plain one: dollar-quoting (none
+    // under dash's), tested before the plain quote branches (see the
+    // dollar-quoting section above), then the run's pairing. The plain
+    // reading reads `$` as it did before #5255.
     if (reading && ch === '$') {
       const run = dollarRun(str, i);
       if (run.atQuote) {
@@ -1085,7 +1097,7 @@ function tokenize(str, reading) {
           continue;
         }
         // A plain quote after the PID, or `$"…"` — `"…"` to bash, `$` and
-        // `"…"` to zsh: the quote branches below take it from here.
+        // `"…"` to zsh and dash: the quote branches below take it from here.
         i = run.end;
         continue;
       }
@@ -1094,12 +1106,12 @@ function tokenize(str, reading) {
       // rest of `echo $${; cat .env`. zsh's lexer instead opens a `${…}` after
       // the run whatever its length and splits it into PID and text only when
       // it expands it: zsh runs the read in `echo $${x #}; cat .env`, where
-      // bash and dash read a comment. So only bash's reading pairs; under zsh's
-      // the last `$` goes to the `$(` / `${` branches below, as before. A line
-      // continuation after that `$` is the main loop's to strip.
+      // bash and dash read a comment. So bash's and dash's readings pair; under
+      // zsh's the last `$` goes to the `$(` / `${` branches below, as before. A
+      // line continuation after that `$` is the main loop's to strip.
       if (!run.atQuote && run.dollars > 1) {
         hasWord = true;
-        const odd = run.dollars % 2 === 1 || reading !== 'bash';
+        const odd = run.dollars % 2 === 1 || reading === 'zsh';
         buf += '$'.repeat(odd ? run.dollars - 1 : run.dollars);
         i = odd ? run.last : run.end;
         continue;
@@ -1127,7 +1139,7 @@ function tokenize(str, reading) {
           i += 2;
           continue;
         }
-        // bash and zsh pair a `$` run here; an odd run's last `$` stays (`c`
+        // bash, zsh and dash pair a `$` run here; an odd run's last `$` stays (`c`
         // is still `$` for the branches below).
         const dqRun = reading && c === '$' ? quotedRun(str, i) : null;
         if (dqRun) { buf += dqRun.text; i = dqRun.next; if (str[i] !== '$') continue; }
@@ -1591,8 +1603,8 @@ function findSecretReadUnderOtherReadings(command) {
 // `$'…'` word with no value to check (tokenize's `unreadable`) — or null. A command holding dollar-quoting,
 // or a run of `$` before `{` or `(` (where bash and zsh read the run
 // differently, tokenize), is scanned under every reading (see the
-// dollar-quoting section): bash's and zsh's readings first, then the plain
-// one, which is the scan as it was before #5255. A command holding neither
+// dollar-quoting section): bash's, zsh's and dash's readings first, then the
+// plain one, which is the scan as it was before #5255. A command holding neither
 // gets the plain scan alone, so for it the guard is the pre-#5255 guard by
 // construction. "Holding" is tested on the text with its `\<newline>`
 // continuations removed, because bash joins them before it reads a quote:
@@ -1603,13 +1615,13 @@ function findSecretRead(command, depth) {
   if (!joined.includes("$'") && !joined.includes('$"') && !joined.includes('$${') && !joined.includes('$$(')) {
     return scanCommand(command, depth, false);
   }
-  for (const shell of ANSI_C_SHELLS) {
+  for (const shell of READINGS) {
     let hit = null;
     try {
       hit = scanCommand(command, depth, shell);
     } catch {
-      // An ANSI-C reading decodes text the plain reading takes literally, so
-      // it can reach code the plain one does not — a `bash -c $'…'` body whose
+      // These readings can reach code the plain one does not: an ANSI-C
+      // reading decodes text the plain reading takes literally — a `bash -c $'…'` body whose
       // escaped quotes decode into thousands of nested `"$( )"` overflows the
       // stack in findParenClose. An error here must not cost the plain
       // reading's verdict, which is the one the guard gave before #5255.
@@ -1625,7 +1637,8 @@ function secretRead(text) {
 }
 
 // One reading of `command`: `reading` is false for the plain reading, or the
-// shell ('bash' | 'zsh') whose `$'…'` values an ANSI-C reading uses.
+// shell ('bash' | 'zsh' | 'dash') whose reading it is; an ANSI-C reading
+// (bash's, zsh's) uses that shell's `$'…'` values.
 function scanCommand(command, depth, reading) {
   const { tokens, nested, unreadable } = tokenize(command, reading);
 
