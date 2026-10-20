@@ -27,13 +27,10 @@ const { _internals } = require('../pi/gsd.cjs');
 const {
   convertClaudeCommandToPiSkill,
   PI_DISPATCH_CONTRACT,
+  PI_INCLUDE_NOTE,
 } = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
-const { createTempDir, cleanup, installSpawnEnv } = require('./helpers.cjs');
+const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runMinimalInstall } = require('./helpers/install-shared.cjs');
-const { runNode } = require('./helpers/process-seam.cjs');
-const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-
-const INSTALL_SCRIPT = path.join(__dirname, '..', 'bin', 'install.js');
 
 const SAMPLE_COMMAND = [
   '---',
@@ -74,6 +71,20 @@ describe('#5547: convertClaudeCommandToPiSkill', () => {
     assert.match(PI_DISPATCH_CONTRACT, /Pi has no subagent dispatch API/);
     assert.match(PI_DISPATCH_CONTRACT, /Never execute the role's work inline as a substitute/);
     assert.match(PI_DISPATCH_CONTRACT, /issues\/5559/);
+  });
+
+  test('the contract names every way a workflow spawns an agent, and handles optional steps', () => {
+    for (const phrase of [/Agent\(\.\.\.\)/, /subagent_type/, /subagent spawns/, /named `gsd-\*` role/]) {
+      assert.match(PI_DISPATCH_CONTRACT, phrase);
+    }
+    assert.match(PI_DISPATCH_CONTRACT, /optional.*offer to skip it and continue/);
+    assert.match(PI_DISPATCH_CONTRACT, /required, stop the run/);
+  });
+
+  test('tells the agent to read the execution_context files itself, exactly once', () => {
+    assert.equal(out.split(PI_INCLUDE_NOTE).length - 1, 1);
+    assert.match(PI_INCLUDE_NOTE, /does not expand `@path`/);
+    assert.match(PI_INCLUDE_NOTE, /every file listed under `<execution_context>`/);
   });
 
   test('keeps the workflow include in the body', () => {
@@ -150,10 +161,18 @@ describe('#5547: workflow hand-off decision', () => {
 
   test('nextStepFor names the workflow only for `init <installed workflow>`', (t) => {
     const root = engineWithSkills(t, ['new-project']);
-    assert.match(_internals.nextStepFor('init', 'new-project', root), /Next: run \/gsd new-project \(or \/skill:gsd-new-project\)/);
-    assert.equal(_internals.nextStepFor('init', 'plan-phase', root), '', 'no skill, no hint');
-    assert.equal(_internals.nextStepFor('state', 'new-project', root), '', 'only init is a workflow-init call');
-    assert.equal(_internals.nextStepFor('init', undefined, root), '');
+    assert.match(_internals.nextStepFor('init', 'new-project', [], root), /Next: run \/gsd new-project \(or \/skill:gsd-new-project\)/);
+    assert.equal(_internals.nextStepFor('init', 'plan-phase', [], root), '', 'no skill, no hint');
+    assert.equal(_internals.nextStepFor('state', 'new-project', [], root), '', 'only init is a workflow-init call');
+    assert.equal(_internals.nextStepFor('init', undefined, [], root), '');
+  });
+
+  test('nextStepFor carries positional arguments and drops flags', (t) => {
+    const root = engineWithSkills(t, ['execute-phase']);
+    const hint = _internals.nextStepFor('init', 'execute-phase', ['3', '--raw', '--json-errors'], root);
+    assert.match(hint, /Next: run \/gsd execute-phase 3 \(or \/skill:gsd-execute-phase 3\) to start/);
+    assert.doesNotMatch(hint, /--raw|--json-errors/);
+    assert.doesNotMatch(_internals.nextStepFor('init', 'execute-phase', undefined, root), /execute-phase undefined/);
   });
 });
 
@@ -226,19 +245,13 @@ describe('#5547: the installed Pi extension', () => {
     fs.mkdirSync(own, { recursive: true });
     fs.writeFileSync(path.join(own, 'SKILL.md'), '---\nname: my-own-skill\ndescription: x\n---\n');
 
-    // The installer's test-mode guard turns a run into a no-op; strip it, as the
-    // shared installer-env helper does for every spawned install.
-    const env = installSpawnEnv({ HOME: root, USERPROFILE: root });
-    delete env.GSD_TEST_MODE;
-    const res = runNode(
-      [INSTALL_SCRIPT, '--pi', '--global', '--config-dir', configDir, '--uninstall'],
-      { env, timeoutMs: INSTALL_TIMEOUT_MS },
-    );
-    assert.equal(res.exitCode, 0, `uninstall failed (outcome=${res.outcome})\n${res.stdout}\n${res.stderr}`);
+    // Same helper, same sandbox root, `--uninstall` appended: it asserts the
+    // installer exited 0 and uses the sanitized installer env.
+    runMinimalInstall({ runtime: 'pi', scope: 'global', root, extraArgs: ['--uninstall'] });
     assert.deepEqual(fs.readdirSync(path.join(configDir, 'skills')), ['my-own-skill']);
   });
 
-  test('without sendUserMessage the command falls back to its data behavior', async (t) => {
+  test('without sendUserMessage the command tells the user how to start the skill by hand', async (t) => {
     const { configDir, root } = (() => {
       const r = runMinimalInstall({ runtime: 'pi', scope: 'global' });
       t.after(() => cleanup(r.root));
@@ -249,6 +262,8 @@ describe('#5547: the installed Pi extension', () => {
     ext({ registerCommand(n, d) { commands[n] = d; }, registerTool() {}, on() {} });
     const notifications = [];
     await commands.gsd.handler('new-project', { cwd: root, ui: { notify(m, ty) { notifications.push({ m, ty }); } } });
-    assert.equal(notifications.length, 1, 'degrades to the data dispatcher rather than doing nothing');
+    assert.equal(notifications.length, 1, 'says how to start the workflow rather than doing nothing');
+    assert.match(notifications[0].m, /Run \/skill:gsd-new-project to start/, 'names the skill command, not a data dump');
+    assert.equal(notifications[0].ty, 'info');
   });
 });

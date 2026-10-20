@@ -744,11 +744,24 @@ function convertClaudeCommandToKimiCodeSkill(content, skillName, _runtime = null
  * The real dispatch story is tracked in #5559.
  */
 const PI_DISPATCH_CONTRACT =
-  '**Pi host constraint (fail closed).** Pi has no subagent dispatch API. When a workflow step ' +
-  'says to spawn or dispatch a named agent (an `Agent(...)` call, a `subagent_type`, or a ' +
-  '`gsd-*` role), STOP: tell the user which role that step needs and that Pi cannot dispatch ' +
-  'it yet (tracked in https://github.com/open-gsd/gsd-core/issues/5559). Never execute the ' +
+  '**Pi host constraint (fail closed).** Pi has no subagent dispatch API. Any workflow step that ' +
+  'spawns, delegates or dispatches a subagent — an `Agent(...)` or Task call, a `subagent_type`, ' +
+  '"subagent spawns", or any named `gsd-*` role — cannot run here. When you reach one, STOP that ' +
+  'step: tell the user which role it needs and that Pi cannot dispatch it yet (tracked in ' +
+  'https://github.com/open-gsd/gsd-core/issues/5559). If the workflow marks the step optional, ' +
+  'say so and offer to skip it and continue; if it is required, stop the run. Never execute the ' +
   "role's work inline as a substitute.";
+
+/**
+ * Pi does not expand `@path` includes inside a skill body (only the editor
+ * expands them in a user message), so the workflow files a command lists under
+ * `<execution_context>` are never loaded unless the agent reads them. Pi's file
+ * tools strip a leading `@` and expand `~`, so the listed path works as given.
+ */
+const PI_INCLUDE_NOTE =
+  '**Pi includes.** Pi does not expand `@path` references in a skill. Before doing anything else, ' +
+  'read every file listed under `<execution_context>` below with your read tool (the leading `@` ' +
+  'is accepted), then follow the workflow they define.';
 
 /**
  * Convert a Claude command-markdown source into a Pi Agent Skill (#5547).
@@ -775,7 +788,7 @@ function convertClaudeCommandToPiSkill(content, skillName, _runtime = null, cmdN
     names
   );
 
-  return `---\nname: ${piSkillName}\ndescription: ${yamlQuote(toSingleLine(description))}\n---\nInvoke this Pi skill with \`/skill:${piSkillName}\`.\n\n${PI_DISPATCH_CONTRACT}\n\n${normalizedBody}`;
+  return `---\nname: ${piSkillName}\ndescription: ${yamlQuote(toSingleLine(description))}\n---\nInvoke this Pi skill with \`/skill:${piSkillName}\`.\n\n${PI_DISPATCH_CONTRACT}\n\n${PI_INCLUDE_NOTE}\n\n${normalizedBody}`;
 }
 
 const KIMI_CANONICAL_GSD_AGENT_RE = /^gsd-[a-z0-9-]+$/;
@@ -4227,6 +4240,7 @@ export = {
   convertClaudeCommandToKimiCodeSkill,
   convertClaudeCommandToPiSkill,
   PI_DISPATCH_CONTRACT,
+  PI_INCLUDE_NOTE,
   buildKimiAgentArtifacts,
   convertClaudeToCursorMarkdown,
   convertClaudeCommandToCursorSkill,

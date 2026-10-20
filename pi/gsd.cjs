@@ -364,9 +364,13 @@ function resolveWorkflowHandoff(rawArgs, engineRoot = ENGINE_ROOT) {
  * @param {string} [engineRoot]
  * @returns {string} the line to append, or '' when none applies
  */
-function nextStepFor(family, subcommand, engineRoot = ENGINE_ROOT) {
+function nextStepFor(family, subcommand, rest = [], engineRoot = ENGINE_ROOT) {
   if (family !== 'init' || !hasWorkflowSkill(subcommand, engineRoot)) return '';
-  return `\n\nNext: run /gsd ${subcommand} (or /skill:gsd-${subcommand}) to start the ${subcommand} workflow — this output is only its init data.`;
+  // Positional arguments (a phase number, say) carry over; flags belong to the
+  // init data call and are not guaranteed to mean anything to the workflow.
+  const positional = (Array.isArray(rest) ? rest : []).filter((a) => typeof a === 'string' && !a.startsWith('-'));
+  const tail = positional.length > 0 ? ` ${positional.join(' ')}` : '';
+  return `\n\nNext: run /gsd ${subcommand}${tail} (or /skill:gsd-${subcommand}${tail}) to start the ${subcommand} workflow — this output is only its init data.`;
 }
 
 module.exports = function gsdPiExtension(pi) {
@@ -396,8 +400,14 @@ module.exports = function gsdPiExtension(pi) {
       // printing data. `sendUserMessage` with `expandPromptTemplates` makes Pi
       // expand the `/skill:` command, so the agent follows the installed skill.
       const handoff = resolveWorkflowHandoff(args);
-      if (handoff && typeof pi.sendUserMessage === 'function') {
-        pi.sendUserMessage(handoff.message, { deliverAs: 'followUp', expandPromptTemplates: true });
+      if (handoff) {
+        if (typeof pi.sendUserMessage === 'function') {
+          pi.sendUserMessage(handoff.message, { deliverAs: 'followUp', expandPromptTemplates: true });
+        } else if (notify) {
+          // A host without sendUserMessage cannot be handed off to; say how to
+          // start the workflow by hand rather than running its data command.
+          notify(`This pi host cannot start a skill from /gsd. Run ${handoff.message} to start the ${handoff.skill} workflow.`, 'info');
+        }
         return;
       }
       const { family, subcommand, args: rest } = parseGsdCommandArgs(args);
@@ -412,7 +422,7 @@ module.exports = function gsdPiExtension(pi) {
       }
       const result = dispatchGsdCommand({ family, subcommand, args: rest, cwd });
       const text = result.ok
-        ? `${result.stdout}${nextStepFor(family, subcommand)}`
+        ? `${result.stdout}${nextStepFor(family, subcommand, rest)}`
         : `GSD error: ${result.stderr || result.stdout || `dispatch failed (exit ${result.code})`}`;
       if (notify) {
         notify(text, result.ok ? 'info' : 'error');
