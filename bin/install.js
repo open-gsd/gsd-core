@@ -12609,6 +12609,16 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
         const fileName = path.basename(relPath);
         if (!(fileName.endsWith('.md') || fileName.endsWith('.toml'))) continue;
         if (fileName === 'CHANGELOG.md') continue;
+        // #5547: the Runtime Surface corpus is the package's canonical source
+        // bytes, kept byte-identical so a refresh can restore them
+        // (tests/install-runtime-artifacts.test.cjs); the converted artifacts
+        // are what the host reads. Counting the source form as a "leak" made
+        // every skills-runtime install print a warning about files nothing reads.
+        // Windsurf is the exception: its workflow wrappers delegate to the
+        // path-rewritten bodies at gsd-core/commands/gsd/ (#1629), so there they
+        // ARE host-read artifacts and stay in the scan.
+        if (!hostBehaviorsFor(runtime).installsCommandBodiesForWorkflowDelegation
+          && (relPath.startsWith('gsd-core/commands/') || relPath.startsWith('gsd-core/agents/'))) continue;
         const fullPath = path.join(targetDir, relPath);
         let content;
         try {

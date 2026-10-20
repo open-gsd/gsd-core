@@ -788,12 +788,24 @@ function convertClaudeCommandToPiSkill(content, skillName, _runtime = null, cmdN
   );
 
   // Pi (docs/skills.md): descriptions can contain at most 1024 characters.
-  const cappedDescription = toSingleLine(description).slice(0, PI_SKILL_DESCRIPTION_MAX);
+  const cappedDescription = capAtCodeUnits(toSingleLine(description), PI_SKILL_DESCRIPTION_MAX);
   return `---\nname: ${piSkillName}\ndescription: ${yamlQuote(cappedDescription)}\n---\nInvoke this Pi skill with \`/skill:${piSkillName}\`.\n\n${PI_DISPATCH_CONTRACT}\n\n${PI_INCLUDE_NOTE}\n\n${normalizedBody}`;
 }
 
 /** Pi skill description limit (pi 1.3.0 docs/skills.md: "descriptions can contain at most 1024"). */
 const PI_SKILL_DESCRIPTION_MAX = 1024;
+
+/**
+ * Cut `text` to at most `max` UTF-16 code units without splitting a surrogate
+ * pair: when the cut would leave a lone high surrogate (the first half of an
+ * astral character such as an emoji), drop that half too.
+ */
+function capAtCodeUnits(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const last = cut.charCodeAt(cut.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
 
 /**
  * Claude command bodies carry a `$ARGUMENTS` placeholder that Claude substitutes
@@ -3727,6 +3739,22 @@ function _applyRuntimeRewritesInner(content, runtime, pathPrefix, isGlobal = fal
       // #3133 / #3544: restore @-file-reference lines to the tilde form
       // Claude actually expands — see restoreClaudeGlobalAtRefTilde's doc
       // comment above for why this must be a separate, @-anchored pass.
+      content = restoreClaudeGlobalAtRefTilde(content, pathPrefix);
+      content = processAttribution(content, attribution);
+      break;
+
+    // pi (#5547): a host whose file tools expand `~` but never `$HOME` (so the `@`
+    // include lines must come back out in tilde form, as for claude) AND whose
+    // skills carry bare `~/.claude` / `${CLAUDE_CONFIG_DIR:-$HOME/.claude}` forms
+    // (the gsd-surface skill) that need the negative-lookahead bare rewrites the
+    // claude profile deliberately does not have (it would change claude's bytes).
+    case 'slash-lookahead-tilde-restore':
+      content = content.replace(/~\/\.claude\//g, pathPrefix);
+      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
+      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
+      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\.\/\.claude(?![\w-])/g, `./${dirName}`);
       content = restoreClaudeGlobalAtRefTilde(content, pathPrefix);
       content = processAttribution(content, attribution);
       break;

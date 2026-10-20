@@ -82,7 +82,7 @@
         "source": "pi/gsd.cjs"
       },
       "pluginOnlyInstall": true,
-      "contentRewriteProfile": "slash-tilde-restore",
+      "contentRewriteProfile": "slash-lookahead-tilde-restore",
       "sharedHooksDirName": "gsd-hooks"
     }
   }

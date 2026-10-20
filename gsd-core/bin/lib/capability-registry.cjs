@@ -3251,7 +3251,7 @@ const capabilities = {
           "source": "pi/gsd.cjs"
         },
         "pluginOnlyInstall": true,
-        "contentRewriteProfile": "slash-tilde-restore",
+        "contentRewriteProfile": "slash-lookahead-tilde-restore",
         "sharedHooksDirName": "gsd-hooks"
       }
     }
@@ -7521,7 +7521,7 @@ const runtimes = {
           "source": "pi/gsd.cjs"
         },
         "pluginOnlyInstall": true,
-        "contentRewriteProfile": "slash-tilde-restore",
+        "contentRewriteProfile": "slash-lookahead-tilde-restore",
         "sharedHooksDirName": "gsd-hooks"
       }
     }
