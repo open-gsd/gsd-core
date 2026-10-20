@@ -1145,15 +1145,127 @@ function leadingFrontmatterLineCount(text: string): number {
   return text.slice(0, fence.closingStart).split('\n').length;
 }
 
-function _normalizeMd(content: string): string {
+/**
+ * Largest line-edit distance `matchLines` will search for. A write that changed
+ * more than this many lines is a rewrite, not an edit: it falls back to
+ * whole-document normalization (the pre-#5165 behavior), which also bounds the
+ * diff's time and memory.
+ */
+const MAX_SCOPED_EDIT_DISTANCE = 400;
+
+/**
+ * #5165: align the lines of the document being written (`next`) against the
+ * document it replaces (`prev`). Returns, per `next` line, the index of its
+ * counterpart in `prev` (a longest-common-subsequence match, Myers' O(ND)
+ * greedy diff after trimming the common prefix and suffix), or -1 for a line
+ * the write added or changed. Null when the documents differ by more than
+ * MAX_SCOPED_EDIT_DISTANCE edits.
+ */
+function matchLines(prev: string[], next: string[]): Int32Array | null {
+  const match = new Int32Array(next.length).fill(-1);
+  const common = Math.min(prev.length, next.length);
+  let lo = 0;
+  while (lo < common && prev[lo] === next[lo]) { match[lo] = lo; lo++; }
+  let prevEnd = prev.length;
+  let nextEnd = next.length;
+  while (prevEnd > lo && nextEnd > lo && prev[prevEnd - 1] === next[nextEnd - 1]) {
+    prevEnd--;
+    nextEnd--;
+    match[nextEnd] = prevEnd;
+  }
+  const a = prev.slice(lo, prevEnd);
+  const b = next.slice(lo, nextEnd);
+  const n = a.length;
+  const m = b.length;
+  if (n === 0 || m === 0) return match;
+
+  const max = Math.min(n + m, MAX_SCOPED_EDIT_DISTANCE);
+  const off = max + 1;
+  const v = new Int32Array(2 * max + 3);
+  const trace: Int32Array[] = [];
+  let found = -1;
+  for (let d = 0; d <= max && found < 0; d++) {
+    trace.push(v.slice()); // the furthest-reaching points after d-1 edits
+    for (let k = -d; k <= d; k += 2) {
+      let x = (k === -d || (k !== d && v[off + k - 1] < v[off + k + 1])) ? v[off + k + 1] : v[off + k - 1] + 1;
+      let y = x - k;
+      while (x < n && y < m && a[x] === b[y]) { x++; y++; }
+      v[off + k] = x;
+      if (x >= n && y >= m) { found = d; break; }
+    }
+  }
+  if (found < 0) return null;
+
+  let x = n;
+  let y = m;
+  for (let d = found; d > 0; d--) {
+    const before = trace[d];
+    const k = x - y;
+    const prevK = (k === -d || (k !== d && before[off + k - 1] < before[off + k + 1])) ? k + 1 : k - 1;
+    const prevX = before[off + prevK];
+    const prevY = prevX - prevK;
+    while (x > prevX && y > prevY) { x--; y--; match[lo + y] = lo + x; }
+    x = prevX;
+    y = prevY;
+  }
+  while (x > 0 && y > 0) { x--; y--; match[lo + y] = lo + x; }
+  return match;
+}
+
+/**
+ * #5165: which line junctions (between line i and i+1 of the new document) the
+ * write left alone. A junction is the write's own — and so is normalized — only
+ * when it is wholly inside text the write added. The boundary of an edit that
+ * replaced or deleted lines inherits the surrounding spacing: replacing a line
+ * in place must not add blank lines around it. Pure insertions and the
+ * junctions inside inserted text are normalized exactly as before.
+ */
+function untouchedJunctions(match: Int32Array, prevLength: number): (i: number) => boolean {
+  // For each unmatched line: how many prior lines its run of changed lines replaced.
+  const replaced = new Int32Array(match.length);
+  for (let i = 0; i < match.length; ) {
+    if (match[i] >= 0) { i++; continue; }
+    let end = i;
+    while (end + 1 < match.length && match[end + 1] < 0) end++;
+    const before = i > 0 ? match[i - 1] : -1;
+    const after = end + 1 < match.length ? match[end + 1] : prevLength;
+    const dropped = after - before - 1;
+    for (let j = i; j <= end; j++) replaced[j] = dropped;
+    i = end + 1;
+  }
+  return (i: number): boolean => {
+    const left = match[i] >= 0;
+    const right = match[i + 1] >= 0;
+    if (left && right) return true;
+    if (left) return replaced[i + 1] >= 1;
+    if (right) return replaced[i] >= 1;
+    return false;
+  };
+}
+
+function _normalizeMd(content: string, prior?: string): string {
   if (!content || typeof content !== 'string') return content;
   let text = content.replace(/\r\n/g, '\n');
   const lines = text.split('\n');
+  // #5165: when the document being replaced is known, only the junctions the
+  // write touched are normalized; every other region stays byte-identical.
+  let untouched: ((i: number) => boolean) | null = null;
+  if (typeof prior === 'string' && prior !== '') {
+    const priorLines = prior.replace(/\r\n/g, '\n').split('\n');
+    const match = matchLines(priorLines, lines);
+    if (match) untouched = untouchedJunctions(match, priorLines.length);
+  }
   // The frontmatter block is YAML, not markdown: its lines are published exactly as written.
   // A `# comment` is not a heading, and a blank line inserted into a multi-line quoted scalar
   // or removed from a block scalar changes the value (found while implementing #5105).
   const frontmatterLines = leadingFrontmatterLineCount(text);
   const result: string[] = [];
+  // A separating blank the rules add. In scoped mode (#5165) two rules that fire on
+  // the same junction add ONE blank: the whole-document pass collapses them in its
+  // final blank-run regex, which scoped mode must not apply to runs the write kept.
+  const blank = (): void => {
+    if (untouched === null || result[result.length - 1] !== '') result.push('');
+  };
   const fenceRegex = /^```/;
   const insideFence = new Array<boolean>(lines.length);
   let fenceOpen = false;
@@ -1184,9 +1296,13 @@ function _normalizeMd(content: string): string {
     const prevTrimmed = prev.trimEnd();
     const trimmed = line.trimEnd();
     const isFenceLine = fenceRegex.test(trimmed);
-    if (/^#{1,6}\s/.test(trimmed) && i > 0 && prevTrimmed !== '' && prevTrimmed !== '---') result.push('');
-    if (isFenceLine && i > 0 && prevTrimmed !== '' && !insideFence[i] && (i === 0 || !insideFence[i - 1] || isFenceLine)) {
-      if (i === 0 || !insideFence[i - 1]) result.push('');
+    const keptBefore = untouched !== null && i > 0 && untouched(i - 1);
+    const keptAfter = untouched !== null && i < lines.length - 1 && untouched(i);
+    // A blank-line run is collapsed only where the write made it (#5165).
+    if (untouched !== null && line === '' && result.length > 0 && result[result.length - 1] === '' && !keptBefore) continue;
+    if (/^#{1,6}\s/.test(trimmed) && i > 0 && prevTrimmed !== '' && prevTrimmed !== '---' && !keptBefore) blank();
+    if (isFenceLine && i > 0 && prevTrimmed !== '' && !insideFence[i] && (i === 0 || !insideFence[i - 1] || isFenceLine) && !keptBefore) {
+      if (i === 0 || !insideFence[i - 1]) blank();
     }
     // No "separate a list from a preceding paragraph" rule (#3854, #4725).
     // This pass re-normalizes the ENTIRE document on every .md write, so an
@@ -1198,18 +1314,18 @@ function _normalizeMd(content: string): string {
     // from the after-heading rule below. The after-a-bullet rule at the end
     // of this loop is a different transition (list→prose) and is unaffected.
     result.push(line);
-    if (/^#{1,6}\s/.test(trimmed) && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '') result.push('');
-    if (/^```\s*$/.test(trimmed) && i > 0 && insideFence[i - 1] && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '') result.push('');
-    if (/^(\s*[-*+]\s|\s*\d+\.\s)/.test(line) && i < lines.length - 1) {
+    if (/^#{1,6}\s/.test(trimmed) && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '' && !keptAfter) blank();
+    if (/^```\s*$/.test(trimmed) && i > 0 && insideFence[i - 1] && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '' && !keptAfter) blank();
+    if (/^(\s*[-*+]\s|\s*\d+\.\s)/.test(line) && i < lines.length - 1 && !keptAfter) {
       const next = lines[i + 1];
-      if (next !== undefined && next.trimEnd() !== '' && !/^(\s*[-*+]\s|\s*\d+\.\s)/.test(next) && !/^\s/.test(next)) result.push('');
+      if (next !== undefined && next.trimEnd() !== '' && !/^(\s*[-*+]\s|\s*\d+\.\s)/.test(next) && !/^\s/.test(next)) blank();
     }
   }
   // The frontmatter lines are `result`'s first entries, unchanged; the blank-run collapse
   // applies from the line ending that closes the block onward.
   const head = result.slice(0, frontmatterLines).join('\n');
   text = result.join('\n');
-  text = head + text.slice(head.length).replace(/\n{3,}/g, '\n\n');
+  text = untouched === null ? head + text.slice(head.length).replace(/\n{3,}/g, '\n\n') : text;
   text = text.replace(/\n*$/, '\n');
   return text;
 }
@@ -1226,6 +1342,14 @@ function _normalizeMd(content: string): string {
 export interface PlatformWriteOptions {
   encoding?: BufferEncoding;
   verbatim?: boolean;
+  /**
+   * The Markdown document this write replaces (#5165). When given, normalization
+   * is scoped to what the write changed: lines and junctions identical to `prior`
+   * are published as they were, so a verb that edits one checkbox does not
+   * re-space sections it never touched. `platformWriteSync` fills this from the
+   * destination file. Absent, the whole document is normalized.
+   */
+  prior?: string;
 }
 
 export function normalizeContent(filePath: string, content: string, opts: PlatformWriteOptions = {}): { content: string; encoding: BufferEncoding } {
@@ -1234,7 +1358,7 @@ export function normalizeContent(filePath: string, content: string, opts: Platfo
   const isMd = path.extname(filePath).toLowerCase() === '.md';
   let normalized: string;
   if (isMd) {
-    normalized = _normalizeMd(content);
+    normalized = _normalizeMd(content, opts.prior);
   } else {
     normalized = (content ?? '').replace(/\r\n/g, '\n').replace(/\n*$/, '\n');
   }
@@ -1256,7 +1380,7 @@ export function normalizeContent(filePath: string, content: string, opts: Platfo
  * do not simplify this back to a direct string comparison.
  */
 export function contentChangedAfterNormalize(filePath: string, before: string, after: string): boolean {
-  return normalizeContent(filePath, after).content !== normalizeContent(filePath, before).content;
+  return normalizeContent(filePath, after, { prior: before }).content !== normalizeContent(filePath, before, { prior: before }).content;
 }
 
 // Rename errnos that are transient on Windows: a concurrent reader (or an AV
@@ -1311,7 +1435,16 @@ export function retryRenameSync(fromPath: string, toPath: string): void {
 }
 
 export function platformWriteSync(filePath: string, content: string, opts: PlatformWriteOptions = {}): void {
-  const { content: normalized, encoding } = normalizeContent(filePath, content, opts);
+  // #5165: a Markdown write is scoped to what it changed relative to the file it replaces.
+  let prior = opts.prior;
+  if (prior === undefined && opts.verbatim !== true && path.extname(filePath).toLowerCase() === '.md') {
+    try {
+      prior = fs.readFileSync(filePath, 'utf-8');
+    } catch {
+      prior = undefined; // no prior document (new file or unreadable): normalize it whole
+    }
+  }
+  const { content: normalized, encoding } = normalizeContent(filePath, content, { ...opts, prior });
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmpPath = filePath + '.tmp.' + process.pid;
 

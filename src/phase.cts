@@ -73,7 +73,7 @@ const { stripShippedMilestones, extractCurrentMilestone, currentMilestoneRawRang
 // progress counters the phase-complete transaction passes downstream.
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-lifecycle.cjs is an export= CommonJS module
 import phaseLifecycleMod = require('./phase-lifecycle.cjs');
-const { deriveProgressFromRoadmap: deriveProgressFromRoadmapForIntent, clampPercent: clampPercentForIntent } = phaseLifecycleMod;
+const { deriveProgressFromRoadmap: deriveProgressFromRoadmapForIntent, clampPercent: clampPercentForIntent, milestoneVersionOf } = phaseLifecycleMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
@@ -84,10 +84,10 @@ import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync
 import { parsePlanningDoc, findField, readNode, setFieldValue, serialize } from './planning-document.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
-import { transitionCore } from './state-transition.cjs';
+import { transitionCore, isStatePastPhase } from './state-transition.cjs';
 import { updateTableCell, deleteTableRow, escapeCell } from './markdown-table.cjs';
 // #5060: the Phase Status Module owns the ROADMAP Status-cell token vocabulary.
-import { PHASE_STATUS, toRoadmapStatusCell, phaseStatus } from './phase-status.cjs';
+import { PHASE_STATUS, WIRE_STATUS, parseRoadmapStatusCell, toRoadmapStatusCell, phaseStatus } from './phase-status.cjs';
 import { deleteSection, updateBullet, tokenizeHeadings } from './markdown-sectionizer.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- roadmap.cjs is an export= CommonJS module
 import roadmapMod = require('./roadmap.cjs');
@@ -3729,41 +3729,6 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   }
   const phaseInfo = phaseInfoRaw as unknown as Record<string, unknown>;
 
-  // #5165: re-running `phase.complete` on an already-complete phase must be a
-  // no-op. Check the ROADMAP.md checkbox for this phase — if it's already `[x]`,
-  // bail out before any writes.
-  if (fs.existsSync(roadmapPath)) {
-    const roadmapRaw = platformReadSync(roadmapPath) || '';
-    // Match the same checkbox pattern used by mutateMilestonePhase: `- [x] Phase N`
-    const cbPattern = new RegExp(
-      `-\\s*\\[(x| )\\]\\s*(?:\\*\\*|__)\\s*Phase\\s+${phaseNum}(?:\\s*\\([^)\\n]{0,200}\\))?`,
-      'gi',
-    );
-    const cbMatch = cbPattern.exec(roadmapRaw);
-    if (cbMatch && cbMatch[1].toLowerCase() === 'x') {
-      // Phase already complete — return without writing anything.
-      output({
-        completed_phase: phaseNum,
-        phase_name: '',
-        plans_executed: '0/0',
-        next_phase: null,
-        next_phase_name: null,
-        is_last_phase: false,
-        date: today,
-        roadmap_updated: false,
-        state_updated: false,
-        requirements_updated: false,
-        auto_pruned: false,
-        warnings: [],
-        has_warnings: false,
-        verification_stale_check_indeterminate: false,
-        milestone_conflict: null,
-        preservation_warnings: [],
-      }, raw);
-      return;
-    }
-  }
-
   const planCount: number = phaseInfo['plans']
     ? (phaseInfo['plans'] as string[]).length
     : 0;
@@ -4053,6 +4018,9 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
     const runPhaseCompleteTransaction = () => {
       const writes: WriteSpec[] = [];
       let roadmapContent: string | null = null;
+      // #5165: the phase's checklist box was ALREADY checked in the ROADMAP this
+      // transaction started from (read before any mutation below).
+      let phaseWasAlreadyChecked = false;
 
       if (fs.existsSync(roadmapPath)) {
         const originalRoadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
@@ -4095,6 +4063,14 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           `^[ \\t]*(-\\s*\\[)[ ](\\]\\s*(?:\\*\\*)?\\s*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
           'i',
         );
+
+        // #5165: pre-mutation read of the same checklist line, checked this time.
+        const checkedBoxPattern = new RegExp(
+          `^[ \\t]*(-\\s*\\[)[xX](\\]\\s*(?:\\*\\*)?\\s*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
+        );
+        phaseWasAlreadyChecked = extractCurrentMilestone(originalRoadmapContent, cwd)
+          .split('\n')
+          .some((line) => checkedBoxPattern.test(line));
 
         // Progress table row: update Plans Complete/Status/Completed columns BY
         // COLUMN NAME (handles 4- or 5-column RoadmapProgress tables) via the
@@ -4263,7 +4239,12 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             const plansResult = updateTableCell(text, rowMatch, 'Plans Complete', ` ${summaryCount}/${planCount} `);
             if (plansResult.ok) text = plansResult.value;
 
-            const statusResult = updateTableCell(text, rowMatch, 'Status', ` ${toRoadmapStatusCell(PHASE_STATUS.COMPLETE).padEnd(11)} `);
+            // #5165: a Status cell that already reads Complete is left untouched —
+            // re-padding it rewrote a cell the re-run had no business editing.
+            const statusResult = updateTableCell(text, rowMatch, 'Status', (current) =>
+              parseRoadmapStatusCell(current) === WIRE_STATUS.COMPLETE
+                ? current
+                : ` ${toRoadmapStatusCell(PHASE_STATUS.COMPLETE).padEnd(11)} `);
             if (statusResult.ok) text = statusResult.value;
 
             // Preserve only a valid ISO date (#1161: idempotent; self-heal
@@ -4960,10 +4941,19 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
 
       if (fs.existsSync(statePath)) {
         const originalStateContent = platformReadSync(statePath) || '';
-        // #5165: extract the current milestone from STATE.md frontmatter so
-        // post-completion progress derivation is milestone-scoped.
+        // #5165: the milestone STATE asserts (ROADMAP-bound identity first,
+        // else STATE's own frontmatter) scopes the post-completion progress
+        // derivation to that milestone's Progress-table rows.
         const stateFm = frontmatterMod.extractFrontmatter(originalStateContent, statePath) as Record<string, unknown>;
-        const storedMilestone = String(stateFm['milestone'] ?? '').trim() || null;
+        const storedMilestone = roadmapParserMod.getMilestoneInfo(cwd).value?.version
+          ?? milestoneVersionOf(stateFm['milestone']);
+        // #5165: re-completing a phase that is already complete in ROADMAP.md
+        // while STATE has moved past it is a no-op for STATE's position —
+        // the transition, the metrics row and the authoritative current-phase
+        // pin would all rewind it. A first-time completion (box unchecked, or
+        // STATE not past N, #2028 out-of-order) still transitions.
+        const stateAlreadyPast = phaseWasAlreadyChecked
+          && isStatePastPhase(originalStateContent, phaseNum, statePath);
         let stateContent = originalStateContent;
 
         // ADR-1769 Phase 3: the STATE.md field-update policy (Current Phase
@@ -4979,9 +4969,10 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // NOT go through readModifyWriteStateMd because STATE.md is
         // committed atomically with ROADMAP/REQUIREMENTS, ADR-3408 §8.3 /
         // #3374 / #3469).
-        const nextPhaseDisplayName =
-          phaseDisplayNameFromRoadmap(roadmapContent, nextPhaseNum) ??
-          phaseDisplayNameFromSlug(nextPhaseName);
+        const nextPhaseDisplayName = stateAlreadyPast
+          ? null
+          : phaseDisplayNameFromRoadmap(roadmapContent, nextPhaseNum) ??
+            phaseDisplayNameFromSlug(nextPhaseName);
         // #4824: classify the SELECTED next phase from disk (the same ladder
         // roadmap analyze uses) so the Status / Current Plan / Stopped-at
         // handoff does not say "ready to plan" for a phase already planned or
@@ -5001,7 +4992,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             /* best-effort: an unreadable next phase keeps `Ready to plan` */
           }
         }
-        const completeResult = transitionCore(
+        const completeResult = stateAlreadyPast ? { content: stateContent } : transitionCore(
           stateContent,
           {
             kind: 'completePhase',
@@ -5025,13 +5016,15 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         );
         stateContent = completeResult.content;
 
-        stateContent = updatePerformanceMetricsSection(
-          stateContent,
-          cwd,
-          phaseNum,
-          planCount,
-          summaryCount,
-        );
+        if (!stateAlreadyPast) {
+          stateContent = updatePerformanceMetricsSection(
+            stateContent,
+            cwd,
+            phaseNum,
+            planCount,
+            summaryCount,
+          );
+        }
         // #2736: the transition holds the next phase's exact display name in
         // the intent; pass it as authoritative so the sync's prose
         // re-derivation cannot rewrite current_phase_name to the name's own

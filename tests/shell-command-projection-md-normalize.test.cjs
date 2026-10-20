@@ -393,3 +393,131 @@ describe('#5113: a verbatim write publishes the content exactly as given', () =>
     }
   });
 });
+
+// #5165: normalization is scoped to what a write changed relative to the document it replaces.
+{
+  const { contentChangedAfterNormalize } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
+
+  describe('#5165 scoped Markdown normalization', () => {
+    const lf = (s) => s.replace(/\r\n/g, '\n').replace(/\n*$/, '\n');
+
+    test('untouched regions are published as written: no blank after headings or after a list', () => {
+      const prior = '### Phase 1: One\n**Goal**: one\n- a\n- b\nafter\n';
+      assert.equal(normalizeContent(MD, prior, { prior }).content, prior);
+      assert.notEqual(normalizeContent(MD, prior).content, prior, 'the no-prior pure path still normalizes');
+    });
+
+    test('replacing a line in place adds no blank lines around it', () => {
+      const prior = '#### Phase 4: Four\n**Goal**: four\n  1. it works\n**Plans**: 1 plan\n#### Phase 5: Five\n**Goal**: five\n';
+      const next = prior.replace('**Plans**: 1 plan', '**Plans**: 1/1 plans complete');
+      assert.equal(normalizeContent(MD, next, { prior }).content, next);
+    });
+
+    test('deleting a line leaves its neighbours adjacent', () => {
+      const prior = '### H\ntext\n- a\nmore\n';
+      const next = '### H\n- a\nmore\n';
+      assert.equal(normalizeContent(MD, next, { prior }).content, next);
+    });
+
+    test('an inserted section is still normalized', () => {
+      const prior = 'intro line\n';
+      const next = 'intro line\n## New\ntext\n';
+      assert.equal(normalizeContent(MD, next, { prior }).content, 'intro line\n\n## New\n\ntext\n');
+    });
+
+    test('without a prior the whole document is normalized, byte-identical to before', () => {
+      const doc = '## H\n- a\ntext\n\n\n\nend\n';
+      assert.equal(normalizeContent(MD, doc).content, '## H\n\n- a\n\ntext\n\nend\n');
+      assert.equal(normalizeContent(MD, doc, { prior: '' }).content, normalizeContent(MD, doc).content);
+    });
+
+    test('a CRLF prior and CRLF document publish LF with untouched junctions kept', () => {
+      const prior = '## H\r\ntext\r\n- a\r\nafter\r\n';
+      const next = '## H\r\ntext\r\n- a\r\nafter!\r\n';
+      assert.equal(normalizeContent(MD, next, { prior }).content, '## H\ntext\n- a\nafter!\n');
+    });
+
+    test('frontmatter stays untouched and the body is scoped', () => {
+      const prior = '---\na: 1\n# note\nb: 2\n---\n# Heading\ntext\n';
+      const next = '---\na: 1\n# note\nb: 3\n---\n# Heading\ntext\n';
+      assert.equal(normalizeContent(MD, next, { prior }).content, next);
+    });
+
+    test('a fenced block next to untouched prose is preserved', () => {
+      const prior = 'prose\n```\ncode\n```\nprose2\n';
+      const next = 'prose\n```\ncode!\n```\nprose2\n';
+      assert.equal(normalizeContent(MD, next, { prior }).content, next);
+    });
+
+    test('contentChangedAfterNormalize compares what the scoped write would land', () => {
+      const before = '### H\ntext\n';
+      assert.equal(contentChangedAfterNormalize(MD, before, before), false);
+      assert.equal(contentChangedAfterNormalize(MD, before, '### H\ntext2\n'), true);
+    });
+
+    describe('edit-distance cap (limit-1 / limit / limit+1 replaced lines)', () => {
+      // Replacing a line is a delete plus an insert: 2 edits. 200 replaced lines
+      // are exactly 400 edits (the cap); 201 are 402.
+      const build = (replaced) => {
+        const prior = Array.from({ length: 500 }, (_, i) => `Item ${i}`).join('\n') + '\n';
+        const lines = prior.split('\n');
+        for (let r = 0; r < replaced; r++) lines[r * 2] = `## Heading ${r}`;
+        return { prior, next: lines.join('\n') };
+      };
+      for (const [replaced, scoped] of [[199, true], [200, true], [201, false]]) {
+        test(`${replaced} replaced lines ${scoped ? 'stay scoped' : 'fall back to whole-document normalization'}`, () => {
+          const { prior, next } = build(replaced);
+          const out = normalizeContent(MD, next, { prior }).content;
+          const hasBlank = out.split('\n').slice(0, -1).some((l) => l === '');
+          assert.equal(hasBlank, !scoped);
+        });
+      }
+    });
+
+    // Alphabet: prose, headings, tight list items, fence lines and blank lines.
+    const lineGen = fc.oneof(
+      fc.stringMatching(/^[A-Z][a-z]{1,8}( [a-z]{1,8}){0,3}\.$/),
+      fc.stringMatching(/^#{1,3} [A-Za-z]{1,8}$/),
+      fc.stringMatching(/^[-*] [A-Za-z]{1,8}$/),
+      fc.stringMatching(/^[1-9]\. [A-Za-z]{1,8}$/),
+      fc.constant('```'),
+      fc.constant(''),
+    );
+    const docGen = fc.array(lineGen, { minLength: 1, maxLength: 30 }).map((l) => l.join('\n') + '\n');
+
+    test('property: a document written over itself is published byte-identical', () => {
+      fc.assert(
+        fc.property(docGen, (doc) => {
+          assert.equal(normalizeContent(MD, doc, { prior: doc }).content, lf(doc));
+        }),
+        { seed: 5165, numRuns: 300, endOnFailure: true },
+      );
+    });
+
+    test('property: re-writing a persisted scoped result is a no-op (idempotent)', () => {
+      fc.assert(
+        fc.property(docGen, docGen, (next, prior) => {
+          const once = normalizeContent(MD, next, { prior }).content;
+          assert.equal(normalizeContent(MD, once, { prior: once }).content, once);
+        }),
+        { seed: 51651, numRuns: 300, endOnFailure: true },
+      );
+    });
+
+    test('property: lines shared with the prior keep their spacing', () => {
+      fc.assert(
+        fc.property(docGen, fc.nat({ max: 29 }), fc.stringMatching(/^[A-Z][a-z]{2,8}\.$/), (prior, at, replacement) => {
+          const lines = prior.split('\n');
+          const idx = at % Math.max(1, lines.length - 1);
+          lines[idx] = replacement;
+          const next = lines.join('\n');
+          const out = normalizeContent(MD, next, { prior }).content.split('\n');
+          // Replacing one line in place changes that line only (scoped), up to trailing-newline policy.
+          const expected = lf(next).split('\n');
+          assert.deepEqual(out, expected);
+        }),
+        { seed: 51652, numRuns: 300, endOnFailure: true },
+      );
+    });
+  });
+}

@@ -72,6 +72,24 @@ export function locateProgressTable(roadmapContent: string): MarkdownTable | nul
 }
 
 /**
+ * #5165: a milestone token compared by identity, not spelling — `v1.1`, `V1.1`
+ * and ` 1.1 ` name one milestone. Absent/blank tokens normalize to `''`.
+ */
+export function normalizeMilestoneToken(value: unknown): string {
+  return milestoneVersionOf(value)?.replace(/^v/i, '').toLowerCase() ?? '';
+}
+
+/**
+ * #5165: a STATE.md `milestone:` frontmatter value as a trimmed version string,
+ * or null when it is absent, blank or not scalar text.
+ */
+export function milestoneVersionOf(value: unknown): string | null {
+  if (typeof value !== 'string' && typeof value !== 'number') return null;
+  const text = String(value).trim();
+  return text === '' ? null : text;
+}
+
+/**
  * Derive completed_phases, total_phases, and total_plans from ROADMAP content.
  * Root cause fix for issue #4 — see gen-phase-lifecycle.mjs for full documentation.
  *
@@ -100,23 +118,23 @@ export function deriveProgressFromRoadmap(roadmapContent: string, milestoneFilte
   const table = locateProgressTable(roadmapContent);
 
   if (table) {
-    const allRows = table.rows;
+    // #5165: the milestone-grouped Progress table (templates/roadmap.md) keeps
+    // every milestone's rows, shipped ones included. When the caller names the
+    // milestone and the table carries a `Milestone` column, count only that
+    // milestone's rows. A table without the column (or a caller without a
+    // milestone) keeps the whole-table behavior; a named milestone that matches
+    // no row yields nulls (nothing countable) rather than a foreign count.
+    const wantMilestone = normalizeMilestoneToken(milestoneFilter);
+    const scopedRows = wantMilestone !== '' && table.columns.includes('Milestone')
+      ? table.rows.filter((r) => normalizeMilestoneToken(r['Milestone']) === wantMilestone)
+      : table.rows;
 
     // Data rows only (exclude sentinel phases 0 and 999.x).
     // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
-    let dataRows = allRows.filter((r) => {
+    const dataRows = scopedRows.filter((r) => {
       const phase = (r['Phase'] ?? '').trim();
       return /^\d/.test(phase) && !isSentinelPhaseId(phase);
     });
-
-    // #5165: when the Progress table has a Milestone column, filter to the
-    // current milestone so shipped-milestone rows don't inflate the counts.
-    // The table's columns array has keys like 'Milestone', 'Phase', etc.
-    // If a 'Milestone' column exists, use it to scope the count.
-    const hasMilestoneColumn = table.columns.includes('Milestone');
-    if (hasMilestoneColumn && milestoneFilter) {
-      dataRows = dataRows.filter((r) => (r['Milestone'] ?? '').trim() === milestoneFilter);
-    }
 
     totalPhases = dataRows.length > 0 ? dataRows.length : null;
 
@@ -128,7 +146,7 @@ export function deriveProgressFromRoadmap(roadmapContent: string, milestoneFilte
     completedPhases = completed > 0 ? completed : null;
 
     let totalPlansSum = 0;
-    for (const r of allRows) {
+    for (const r of scopedRows) {
       const cell = (r['Plans Complete'] ?? '').trim();
       const m = /(\d+)\s*\/\s*(\d+)/.exec(cell);
       if (m) totalPlansSum += parseInt(m[2], 10);
