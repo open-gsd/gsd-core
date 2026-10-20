@@ -2,7 +2,7 @@
 
 Run GSD commands such as `new-project` or `plan-phase` from [Pi](https://pi.dev), instead of getting a JSON dump from `/gsd`.
 
-**You need:** GSD installed for Pi (`npx @opengsd/gsd-core@latest --pi --global`, or `--local` for one project) and a restarted Pi session.
+**You need:** GSD installed for Pi (`npx @opengsd/gsd-core@latest --pi --global`, or `--local` for one project), a restarted Pi session, and a model signed in to Pi.
 
 ## Start a workflow
 
@@ -18,22 +18,34 @@ Run GSD commands such as `new-project` or `plan-phase` from [Pi](https://pi.dev)
 
 You can also type `/gsd new-project`. For any command that has an installed skill, `/gsd <command> [arguments]` starts `/skill:gsd-<command> [arguments]` for you.
 
-## What `/gsd` does with each name
+## Get data instead of a workflow
 
-- **Data families** keep their data behavior: the top-level families `gsd-tools.cjs` documents (`init`, `state`, `phase`, `progress`, `config-get`, `verify`, and the rest of the list `/gsd` autocompletes). `gsd_invoke` is unchanged, so scripts keep working.
-- **Every other command name that has an installed skill** — for example `help`, `settings`, `health`, `stats`, `update` — now starts its workflow instead of printing data.
-- **`/gsd init <workflow>`** still returns the init data a workflow consumes. Its output now ends with the line to run the workflow, for example:
+`/gsd` still returns engine data for the scripted families `gsd-tools.cjs` documents (`init`, `state`, `phase`, `progress`, `config-get`, `verify`, and the rest of the list `/gsd` autocompletes), and `gsd_invoke` is unchanged, so scripts keep working. Every other command name that has an installed skill (for example `help`, `settings`, `health`, `stats`, `update`) starts its workflow instead of printing data.
 
-  ```text
-  Next: run /gsd new-project (or /skill:gsd-new-project) to start the new-project workflow — this output is only its init data.
-  ```
+`/gsd init <workflow>` returns the init data a workflow consumes, and its output ends with the line to run the workflow:
+
+```text
+Next: run /gsd new-project (or /skill:gsd-new-project) to start the new-project workflow — this output is only its init data.
+```
 
 ## When a workflow stops at an agent step
 
-Pi has no subagent primitive GSD can dispatch to yet. When a workflow reaches a step that spawns a `gsd-*` agent, the skill tells Pi to stop that step, name the role it needs, and report what was done before it. If the workflow marks the step optional, Pi offers to skip it and continue. It does not run the role itself. This is an instruction the model follows, not something the installer enforces. Work completed before that step (files written, config set) stays in place. Agent dispatch for Pi is tracked in [#5559](https://github.com/open-gsd/gsd-core/issues/5559) and epic [#5556](https://github.com/open-gsd/gsd-core/issues/5556).
+Pi has no subagent primitive GSD can dispatch to yet. When a workflow reaches a step that spawns a `gsd-*` agent, the skill tells Pi to stop that step, name the role it needs, and report what was done before it. It does not run the role itself. This is an instruction the model follows, not something the installer enforces. Work completed before that step (files written, config set) stays in place.
 
-## Check what was installed
+What you can do:
 
-- `ls ~/.pi/agent/skills` (or `.pi/skills` for a project install) lists `gsd-*` directories, each with a `SKILL.md`.
-- If `/skill:gsd-new-project` is not offered in command discovery, restart Pi and check that `enableSkillCommands` is not `false` in your Pi settings. Typing the command by hand still works when it is off.
-- A `--minimal` or `core` install only installs the skills in that profile; `/gsd <command>` for a command without an installed skill is sent to `gsd-tools.cjs` as a data command and reports its error if it does not know the name.
+- If the workflow marks the step optional, Pi offers to skip it. Say yes and the workflow continues.
+- If the step is required, the run stops there. Finish the workflow in a runtime that can dispatch agents (Claude Code, for example); the files written so far are read from `.planning/`, so work started in Pi carries over.
+- Agent dispatch for Pi is tracked in [#5559](https://github.com/open-gsd/gsd-core/issues/5559) and epic [#5556](https://github.com/open-gsd/gsd-core/issues/5556).
+
+## If it does not start
+
+| What you see | Why | What to do |
+|---|---|---|
+| `/skill:gsd-new-project` is not offered when you type `/skill:` | Pi was not restarted after the install, or `enableSkillCommands` is `false` in your Pi settings | Restart Pi. Typing the full command by hand works even when the setting is off. |
+| Right after `/gsd new-project`, Pi says `No API key found for the selected model` | The hand-off sent the skill to the model, and Pi has no credential for it | Sign in with Pi's `/login`, then run the command again. |
+| `/gsd <command>` prints a `GSD error` from the engine | The command has no installed skill (a `--minimal` or `core` install only installs that profile's skills), so it was sent to `gsd-tools.cjs` as a data command | Reinstall without `--minimal`, or run the command from a runtime that has it. |
+| `/gsd <command>` prints `This pi host cannot start a skill from /gsd. Run /skill:gsd-... to start ...` | An older Pi without `sendUserMessage` | Type the printed `/skill:` command. |
+| Pi reports a name collision for `gsd-*` skills | A global and a local install both registered the same skill names; Pi keeps the first it loads | Harmless. Remove one of the two installs to silence it. |
+
+To confirm what was installed, `ls ~/.pi/agent/skills` (or `.pi/skills` for a project install) lists `gsd-*` directories, each with a `SKILL.md`.
