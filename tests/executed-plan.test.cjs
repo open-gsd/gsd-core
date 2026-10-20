@@ -653,15 +653,19 @@ describe('installRuntimeArtifacts — E4: kilo (second family member)', () => {
 });
 
 describe('installRuntimeArtifacts — E5/E7: empty layout + nativePlugin post-step (pi)', () => {
-  test('empty layout returns an empty plan', (t) => {
+  test('pi declares only the skills kind (#5547)', (t) => {
     const configDir = createTempDir('gsd-e5-pi-');
     t.after(() => cleanup(configDir));
     sandboxHome(t, configDir);
 
     const result = installRuntimeArtifacts('pi', configDir, 'global', RESOLVED_CORE);
 
-    assert.ok(Array.isArray(result.kinds), 'E5: kinds must be an array even when layout.kinds is empty');
-    assert.strictEqual(result.kinds.length, 0, 'E5: pi declares an empty artifactLayout — kinds must be [], never undefined');
+    assert.ok(Array.isArray(result.kinds), 'E5: kinds must be an array');
+    assert.deepStrictEqual(
+      result.kinds.map((k) => k.kind),
+      ['skills'],
+      'E5: pi declares a skills-only artifactLayout — no commands or agents kind (no named-dispatch toolkit)',
+    );
   });
 
   test('native plugin post-step is recorded', (t) => {

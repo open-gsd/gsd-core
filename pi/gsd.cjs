@@ -309,6 +309,66 @@ function runHook(hookFile, payload, opts = {}) {
   return { stdout, exitCode, timedOut: !!(result && result.signal === 'SIGTERM') };
 }
 
+// ── workflow hand-off (#5547) ─────────────────────────────────────────────────
+// `/gsd <command>` used to be a data dispatcher only: `/gsd init new-project`
+// printed the init JSON and stopped, because Pi had no entry point that mapped a
+// GSD command to its workflow. The installer now writes each command as a Pi
+// skill (`<config>/skills/gsd-<command>/SKILL.md`, invoked `/skill:gsd-<command>`),
+// so a command that names one of those skills hands off to it instead.
+
+/**
+ * Whether the installed tree carries `skills/gsd-<name>/SKILL.md`. Local to the
+ * config dir the extension was installed into, so a data-only (pre-#5547) tree
+ * or a partial install simply has no hand-off and keeps the data behavior.
+ * @param {string} name  bare command stem, e.g. "new-project"
+ * @param {string} [engineRoot]
+ * @returns {boolean}
+ */
+function hasWorkflowSkill(name, engineRoot = ENGINE_ROOT) {
+  if (typeof name !== 'string' || !/^[a-z0-9][a-z0-9-]*$/.test(name)) return false;
+  try {
+    return fs.statSync(path.join(engineRoot, 'skills', `gsd-${name}`, 'SKILL.md')).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Decide whether `/gsd <family> ...` is a workflow command. The data families
+ * (`init`, `state`, `phase`, ...) keep their scripted data semantics, so
+ * `/gsd phase list` and `gsd_invoke` are unchanged; anything else that names an
+ * installed `gsd-<name>` skill is handed off to it.
+ * @param {string} rawArgs  the raw `/gsd` argument string
+ * @param {string} [engineRoot]
+ * @returns {{ skill: string, message: string } | null}
+ */
+function resolveWorkflowHandoff(rawArgs, engineRoot = ENGINE_ROOT) {
+  const { family } = parseGsdCommandArgs(rawArgs);
+  if (PI_COMMAND_FAMILIES.includes(family)) return null;
+  if (!hasWorkflowSkill(family, engineRoot)) return null;
+  // The remainder is forwarded verbatim (not re-joined from tokens) so quoting
+  // the user typed survives into the skill's argument text.
+  const trimmed = String(rawArgs || '').trim();
+  const remainder = trimmed.slice(trimmed.indexOf(family) + family.length).trim();
+  const skill = `gsd-${family}`;
+  return { skill, message: remainder ? `/skill:${skill} ${remainder}` : `/skill:${skill}` };
+}
+
+/**
+ * The next-step line appended to `/gsd init <workflow>` output. `init <workflow>`
+ * is a data call the workflow itself makes, so it keeps returning its JSON; for
+ * a human at the prompt that JSON is a dead end, so name the way to run the
+ * workflow. Never added to `gsd_invoke`, whose output is parsed by callers.
+ * @param {string} family
+ * @param {string|undefined} subcommand
+ * @param {string} [engineRoot]
+ * @returns {string} the line to append, or '' when none applies
+ */
+function nextStepFor(family, subcommand, engineRoot = ENGINE_ROOT) {
+  if (family !== 'init' || !hasWorkflowSkill(subcommand, engineRoot)) return '';
+  return `\n\nNext: run /gsd ${subcommand} (or /skill:gsd-${subcommand}) to start the ${subcommand} workflow — this output is only its init data.`;
+}
+
 module.exports = function gsdPiExtension(pi) {
   if (!pi || typeof pi !== 'object') {
     throw new TypeError('gsdPiExtension: pi ExtensionAPI is required');
@@ -332,6 +392,14 @@ module.exports = function gsdPiExtension(pi) {
       const notify = (ctx && ctx.ui && typeof ctx.ui.notify === 'function')
         ? (message, type) => ctx.ui.notify(message, type)
         : null;
+      // #5547: a workflow-backed command starts its workflow instead of
+      // printing data. `sendUserMessage` with `expandPromptTemplates` makes Pi
+      // expand the `/skill:` command, so the agent follows the installed skill.
+      const handoff = resolveWorkflowHandoff(args);
+      if (handoff && typeof pi.sendUserMessage === 'function') {
+        pi.sendUserMessage(handoff.message, { deliverAs: 'followUp', expandPromptTemplates: true });
+        return;
+      }
       const { family, subcommand, args: rest } = parseGsdCommandArgs(args);
       let dispatchGsdCommand;
       try {
@@ -344,7 +412,7 @@ module.exports = function gsdPiExtension(pi) {
       }
       const result = dispatchGsdCommand({ family, subcommand, args: rest, cwd });
       const text = result.ok
-        ? result.stdout
+        ? `${result.stdout}${nextStepFor(family, subcommand)}`
         : `GSD error: ${result.stderr || result.stdout || `dispatch failed (exit ${result.code})`}`;
       if (notify) {
         notify(text, result.ok ? 'info' : 'error');
@@ -441,4 +509,7 @@ module.exports._internals = {
   buildBeforeProviderRequestHandler,
   buildGsdInvokeParameters,
   runHook,
+  hasWorkflowSkill,
+  resolveWorkflowHandoff,
+  nextStepFor,
 };

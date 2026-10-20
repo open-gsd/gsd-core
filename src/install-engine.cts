@@ -1662,7 +1662,7 @@ function installOpencodeFamilySkills(
  * (`layout.kinds` → `agentsKindEntry.stage(resolvedProfile, agentCtx)` →
  * `_copyStaged`), rather than forking a second agent-staging pipeline. A
  * runtime/scope whose resolved layout declares no `agents` kind at all
- * (e.g. pi, whose `artifactLayout` is empty for both scopes) is a no-op
+ * (e.g. pi, whose `artifactLayout` is skills-only for both scopes, #5547) is a no-op
  * (`null`) — mirrors `installOpencodeFamilySkills`'s own
  * `if (!skillsKindEntry) return 0` contract.
  *

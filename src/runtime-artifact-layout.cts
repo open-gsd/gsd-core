@@ -1355,6 +1355,8 @@ const TRIGGER_INVOCATION: Readonly<Record<string, (trigger: string) => string>> 
   codex: (trigger) => `$${trigger}`,
   cursor: (trigger) => `${trigger} (mention the skill name)`,
   kimi: (trigger) => `/skill:${trigger}`,
+  // #5547: pi invokes an installed skill as `/skill:<name>`, never `/<name>`.
+  pi: (trigger) => `/skill:${trigger}`,
 };
 
 type AdvertisedNewProject =

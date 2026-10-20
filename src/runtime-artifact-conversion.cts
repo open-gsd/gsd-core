@@ -731,6 +731,53 @@ function convertClaudeCommandToKimiCodeSkill(content, skillName, _runtime = null
   return convertClaudeCommandToKimiSkill(content, skillName, _runtime, cmdNames);
 }
 
+/**
+ * The Pi dispatch contract every installed Pi skill carries (#5547).
+ *
+ * Pi 1.3.0 exposes no subagent API (capabilities/pi/capability.json:
+ * `dispatch.namedDispatch: false`, `maxDepth: 0`), but GSD workflows spawn named
+ * `gsd-*` roles through host-neutral `Agent(...)` calls. A skill that reaches such
+ * a step must therefore stop and say so — never perform the role's work inline as a
+ * substitute, which would silently skip the role's isolation and contract. The
+ * wording mirrors the FAIL CLOSED clause `projectNamedDispatchToStructuralDelegate`
+ * (bin/install.js) emits for hosts that do have a structural-delegate primitive.
+ * The real dispatch story is tracked in #5559.
+ */
+const PI_DISPATCH_CONTRACT =
+  '**Pi host constraint (fail closed).** Pi has no subagent dispatch API. When a workflow step ' +
+  'says to spawn or dispatch a named agent (an `Agent(...)` call, a `subagent_type`, or a ' +
+  '`gsd-*` role), STOP: tell the user which role that step needs and that Pi cannot dispatch ' +
+  'it yet (tracked in https://github.com/open-gsd/gsd-core/issues/5559). Never execute the ' +
+  "role's work inline as a substitute.";
+
+/**
+ * Convert a Claude command-markdown source into a Pi Agent Skill (#5547).
+ *
+ * Pi loads `<config>/skills/<name>/SKILL.md` (standard Agent Skills format) and
+ * invokes it as `/skill:<name>` — the same format and invocation prefix as Kimi
+ * Code, so command references are rewritten through the same helper. The output
+ * differs in two ways: the invocation hint names Pi, and the body opens with
+ * {@link PI_DISPATCH_CONTRACT} so a workflow that needs a named agent role stops
+ * with an explicit message instead of degrading silently.
+ *
+ * Registered as `convertClaudeCommandToPiSkill` in capabilities/pi/capability.json
+ * `artifactLayout` `converter` field.
+ */
+function convertClaudeCommandToPiSkill(content, skillName, _runtime = null, cmdNames = null) {
+  const { frontmatter, body } = extractFrontmatterAndBody(content);
+  const piSkillName = normalizeKimiSkillName(skillName);
+  const names = cmdNames || readGsdCommandNames();
+  const description = frontmatter
+    ? extractFrontmatterField(frontmatter, 'description') || `Run GSD workflow ${piSkillName}.`
+    : `Run GSD workflow ${piSkillName}.`;
+  const normalizedBody = convertGsdCommandReferencesToKimiSkillInvocations(
+    frontmatter ? body : content,
+    names
+  );
+
+  return `---\nname: ${piSkillName}\ndescription: ${yamlQuote(toSingleLine(description))}\n---\nInvoke this Pi skill with \`/skill:${piSkillName}\`.\n\n${PI_DISPATCH_CONTRACT}\n\n${normalizedBody}`;
+}
+
 const KIMI_CANONICAL_GSD_AGENT_RE = /^gsd-[a-z0-9-]+$/;
 
 /** Split a `tools:` comma list without tearing a quoted scalar that contains a literal comma. */
@@ -4178,6 +4225,8 @@ export = {
   resolveSpecRootReference,
   convertClaudeCommandToKimiSkill,
   convertClaudeCommandToKimiCodeSkill,
+  convertClaudeCommandToPiSkill,
+  PI_DISPATCH_CONTRACT,
   buildKimiAgentArtifacts,
   convertClaudeToCursorMarkdown,
   convertClaudeCommandToCursorSkill,

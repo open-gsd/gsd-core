@@ -11837,7 +11837,10 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     console.log(`  ${green}✓${reset} Cline: commands will be available via .clinerules`);
   } else if (hostBehaviorsFor(runtime).pluginOnlyInstall) {
     // pi (ADR-1239 / #2102 Stage 1): plugin-only install — pi's /gsd command is
-    // registered programmatically by the native extension (pi/gsd.cjs →
+    // registered programmatically by the native extension. NOTE (#5547): pi now
+    // declares a skills artifactLayout, so it takes the `_isSkillsRuntime` branch
+    // above and this branch is reached only if that layout is ever emptied again.
+    // (pi/gsd.cjs →
     // extensions/gsd.js, staged separately below; the dest suffix must be
     // .ts/.js or pi's auto-discovery skips it silently — #2470) and dispatches in-process
     // through the embedded gsd-core command-routing hub. pi has no host-read
@@ -11936,13 +11939,14 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   }
 
   // Native-extension/plugin staging for runtimes OUTSIDE the layout-driven
-  // _isSkillsRuntime branch above (ADR-1239 / #2102 Stage 1: pi). OpenCode/Kilo
+  // _isSkillsRuntime branch above (ADR-1239 / #2102 Stage 1). OpenCode/Kilo
   // already get their nativePlugin file from installOpencodeFamilyArtifacts
   // (called inside the _isSkillsRuntime branch, since both declare a non-empty
   // artifactLayout) — guard on `!_isSkillsRuntime` so this standalone call never
-  // double-stages their plugin file. A runtime like pi, whose artifactLayout is
-  // intentionally empty for both scopes (`_isSkillsRuntime` is false), still
-  // needs its declared hostBehaviors.nativePlugin file copied into targetDir.
+  // double-stages their plugin file. pi (#5547) now declares a skills layout, so
+  // its extension is staged by installRuntimeArtifacts' own native-plugin
+  // post-step; this standalone call remains for any runtime that declares a
+  // nativePlugin with an intentionally empty artifactLayout.
   if (!_isSkillsRuntime && hostBehaviorsFor(runtime).nativePlugin) {
     _installNativePluginIfDeclared(runtime, targetDir, hostBehaviorsFor(runtime), src);
   }
@@ -12025,10 +12029,10 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // here explicitly to cover them (install-engine.cts's own doc comment
   // explains why; a regression here was caught by the install-tree golden
   // fixture, tests/fixtures/install-tree/claude-local.json). It is a no-op
-  // for pi: its capability.json declares an EMPTY artifactLayout for both
-  // scopes (programmatic dispatch, no named-dispatch subagent toolkit, no
-  // host-read markdown surface), so the resolved layout has no `agents` kind
-  // to stage and the function returns `null` without writing anything.
+  // for pi: its capability.json declares a skills-only artifactLayout for both
+  // scopes (#5547; programmatic dispatch, no named-dispatch subagent toolkit),
+  // so the resolved layout has no `agents` kind to stage and the function
+  // returns `null` without writing anything.
   if (hostBehaviorsFor(runtime).pluginOnlyInstall) {
     console.log(`  ${green}✓${reset} pi: no subagent files (programmatic dispatch, no named-dispatch toolkit)`);
   } else if (_isSkillsRuntime) {

@@ -57,7 +57,9 @@ const RUNTIME_INSTALL_CONTRACTS = {
   // invisible to OpenCode. commandDirName overrides the flat-command default.
   opencode: { surface: 'flat-command', settings: true, hooksPackageJson: true, commandDirName: 'commands' },
   // #2102 Stage 1/2: pi is a PLUGIN-ONLY install (hostBehaviors.pluginOnlyInstall)
-  // for commands/agents/skills — NO commands/, agents/, or skills/ dir. pi's
+  // for commands/agents — NO commands/ or agents/ dir (#5547 adds skills/: pi
+  // loads `skills/<name>/SKILL.md` natively, so the workflow entry points live
+  // there). Stage 1/2 original wording follows. pi's
   // /gsd command is registered programmatically by the native extension
   // (extensions/gsd.cjs) and dispatches via a bounded subprocess to
   // gsd-tools.cjs; it has no host-read markdown surface. Stage 2 (adversarial-
@@ -362,10 +364,14 @@ function assertFreshInstallContract(runtime, targetDir) {
       false,
       `${runtime} should NOT install an agents/ dir (plugin-only, no named-dispatch toolkit)`
     );
-    assert.equal(
-      fs.existsSync(path.join(targetDir, 'skills')),
-      false,
-      `${runtime} should NOT install a skills/ dir (plugin-only)`
+    // #5547: pi's own skills loader reads `<config>/skills/<name>/SKILL.md`
+    // (invoked as `/skill:<name>`), so the layout installs the GSD workflow
+    // entry points there. This is the surface the extension's `/gsd <command>`
+    // hands off to; without it `/gsd init new-project` ends at a bare JSON dump.
+    assertHasGsdDirectory(targetDir, 'skills');
+    assert.ok(
+      fs.existsSync(path.join(targetDir, 'skills', 'gsd-new-project', 'SKILL.md')),
+      `${runtime} should install skills/gsd-new-project/SKILL.md (#5547)`
     );
   } else if (contract.surface === 'commands-gsd') {
     assert.ok(
