@@ -360,6 +360,8 @@ const PI_WORKFLOW_INIT_COMMANDS = Object.freeze({
 // gsd.js` next to `<cfg>/gsd-core`) has no `pi/package-skills`, so it never
 // enters this mode.
 const PI_ENGINE_ROOT_TOKEN = '__GSD_PI_ENGINE_ROOT__';
+// Characters a package location may contain for its text to be written into skills.
+const SAFE_ENGINE_ROOT = /^[\p{L}\p{N}\p{M}._/:@+ ~()-]+$/u;
 
 function isDirectory(p) {
   try { return fs.statSync(p).isDirectory(); } catch { return false; }
@@ -414,6 +416,12 @@ function renderPackageSkills(engineRoot, cacheRoot) {
     .map((e) => e.name)
     .sort();
   const root = engineRoot.replace(/\\/g, '/');
+  // The root is substituted into shell double quotes (the workflow launcher
+  // preamble) and into `@` include lines the model follows, so only a
+  // conservative path alphabet is rendered; anything else fails open upstream.
+  if (!SAFE_ENGINE_ROOT.test(root)) {
+    throw new Error(`package location contains characters GSD will not write into skill text: ${JSON.stringify(root)}`);
+  }
   const rendered = names.map((name) => [
     name,
     fs.readFileSync(path.join(srcDir, name, 'SKILL.md'), 'utf8').split(PI_ENGINE_ROOT_TOKEN).join(root),
@@ -423,7 +431,14 @@ function renderPackageSkills(engineRoot, cacheRoot) {
   const key = hash.digest('hex').slice(0, 16);
   const finalDir = path.join(cacheRoot, key);
   const skillsDir = path.join(finalDir, 'skills');
-  const complete = (dir) => names.every((name) => isFile(path.join(dir, name, 'SKILL.md')));
+  // A reused directory must hold exactly the rendered bodies as regular files
+  // (not symlinks), so a planted or truncated cache entry is rewritten, not trusted.
+  const complete = (dir) => rendered.every(([name, body]) => {
+    try {
+      const file = path.join(dir, name, 'SKILL.md');
+      return fs.lstatSync(file).isFile() && fs.readFileSync(file, 'utf8') === body;
+    } catch { return false; }
+  });
   if (complete(skillsDir)) return skillsDir;
 
   fs.mkdirSync(cacheRoot, { recursive: true });
@@ -433,6 +448,12 @@ function renderPackageSkills(engineRoot, cacheRoot) {
       fs.mkdirSync(path.join(tmpDir, 'skills', name), { recursive: true });
       fs.writeFileSync(path.join(tmpDir, 'skills', name, 'SKILL.md'), body);
     }
+    // Another session may have finished this very directory while ours was
+    // being written: never delete a complete one out from under its reader.
+    if (complete(skillsDir)) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      return skillsDir;
+    }
     fs.rmSync(finalDir, { recursive: true, force: true });
     fs.renameSync(tmpDir, finalDir);
   } catch (e) {
@@ -441,7 +462,39 @@ function renderPackageSkills(engineRoot, cacheRoot) {
     if (complete(skillsDir)) return skillsDir;
     throw e;
   }
+  pruneRenderCache(cacheRoot, key);
   return skillsDir;
+}
+
+// Rendered directories kept in the cache, the current one included. A new
+// package version or a moved package adds one; older ones are removed oldest
+// first, so the cache stays bounded without deleting what another running
+// session of a recent version still reads.
+const RENDER_CACHE_KEEP = 3;
+
+/**
+ * Remove stale rendered directories and abandoned temp directories. Best
+ * effort: a failure here never affects the render that just succeeded.
+ * @param {string} cacheRoot
+ * @param {string} keepKey  the directory just rendered, never removed
+ * @param {number} [keep]   how many `<hash>` directories to keep in total
+ */
+function pruneRenderCache(cacheRoot, keepKey, keep = RENDER_CACHE_KEEP) {
+  try {
+    const dirs = fs.readdirSync(cacheRoot, { withFileTypes: true }).filter((e) => e.isDirectory());
+    const hashed = dirs
+      .filter((e) => /^[0-9a-f]{16}$/.test(e.name) && e.name !== keepKey)
+      .map((e) => ({ name: e.name, mtime: fs.statSync(path.join(cacheRoot, e.name)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime);
+    for (const old of hashed.slice(Math.max(0, keep - 1))) {
+      fs.rmSync(path.join(cacheRoot, old.name), { recursive: true, force: true });
+    }
+    const hourAgo = Date.now() - 3600000;
+    for (const e of dirs.filter((d) => d.name.startsWith('.tmp-'))) {
+      const dir = path.join(cacheRoot, e.name);
+      if (fs.statSync(dir).mtimeMs < hourAgo) fs.rmSync(dir, { recursive: true, force: true });
+    }
+  } catch { /* best effort */ }
 }
 
 /**
@@ -549,6 +602,15 @@ module.exports = function gsdPiExtension(pi, deps = {}) {
   const engineRoot = (deps && deps.engineRoot) || ENGINE_ROOT;
   const home = (deps && deps.home) || os.homedir();
   let packageRenderError = null;
+  let uiNotify = null;
+  let renderErrorReported = false;
+  // Pi may fire resources_discover before or after session_start; whichever
+  // comes second reports the error, once.
+  const reportRenderError = () => {
+    if (!packageRenderError || renderErrorReported || !uiNotify) return;
+    renderErrorReported = true;
+    uiNotify(`GSD skills could not be prepared: ${packageRenderError.message}`, 'error');
+  };
   if (isPackageLayout(engineRoot)) {
     if (installerLayoutPresent(env, home)) {
       // The installer copy of this extension is already loaded; registering the
@@ -569,6 +631,7 @@ module.exports = function gsdPiExtension(pi, deps = {}) {
         return { skillPaths: [renderPackageSkills(engineRoot, path.join(piAgentDir(env, home), 'gsd-package-cache'))] };
       } catch (e) {
         packageRenderError = e;
+        reportRenderError();
         return undefined; // fail-open: Pi still starts, without the GSD skills
       }
     });
@@ -595,7 +658,15 @@ module.exports = function gsdPiExtension(pi, deps = {}) {
       // #5547: a workflow-backed command starts its workflow instead of
       // printing data. `sendUserMessage` with `expandPromptTemplates` makes Pi
       // expand the `/skill:` command, so the agent follows the installed skill.
-      const handoff = resolveWorkflowHandoff(args);
+      const handoff = resolveWorkflowHandoff(args, engineRoot);
+      if (handoff && packageRenderError) {
+        // The skill was never registered with Pi, so handing off would only
+        // produce an unknown-skill message. Say why instead.
+        if (notify) {
+          notify(`${handoff.skill} is unavailable: GSD skills could not be prepared (${packageRenderError.message}).`, 'error');
+        }
+        return;
+      }
       if (handoff) {
         if (typeof pi.sendUserMessage === 'function') {
           pi.sendUserMessage(handoff.message, { deliverAs: 'followUp', expandPromptTemplates: true });
@@ -618,7 +689,7 @@ module.exports = function gsdPiExtension(pi, deps = {}) {
       }
       const result = dispatchGsdCommand({ family, subcommand, args: rest, cwd });
       const text = result.ok
-        ? `${result.stdout}${nextStepFor({ family, subcommand, args: rest })}`
+        ? `${result.stdout}${nextStepFor({ family, subcommand, args: rest }, engineRoot)}`
         : `GSD error: ${result.stderr || result.stdout || `dispatch failed (exit ${result.code})`}`;
       if (notify) {
         notify(text, result.ok ? 'info' : 'error');
@@ -667,8 +738,9 @@ module.exports = function gsdPiExtension(pi, deps = {}) {
   // session_start → SessionStart-equivalent bootstrap.
   pi.on('session_start', async (event, ctx) => {
     try {
-      if (packageRenderError && ctx && ctx.ui && typeof ctx.ui.notify === 'function') {
-        ctx.ui.notify(`GSD skills could not be prepared: ${packageRenderError.message}`, 'error');
+      if (ctx && ctx.ui && typeof ctx.ui.notify === 'function') {
+        uiNotify = (message, type) => ctx.ui.notify(message, type);
+        reportRenderError();
       }
       const cwd = (ctx && ctx.cwd) || process.cwd();
       runHook('gsd-ensure-canonical-path.js', { hook_event_name: 'SessionStart', cwd }, { cwd });
@@ -724,6 +796,8 @@ module.exports._internals = {
   packageSkillsDir,
   piAgentDir,
   renderPackageSkills,
+  pruneRenderCache,
+  RENDER_CACHE_KEEP,
   activatePackageEnv,
   installerLayoutPresent,
   resolveWorkflowHandoff,

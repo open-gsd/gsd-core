@@ -20,9 +20,13 @@ Install GSD in [Pi](https://pi.dev) with Pi's own package manager instead of the
 
 ## What you get
 
-The package gives the same commands and the same extension as `npx @opengsd/gsd-core --pi`: the extension file is the same `pi/gsd.cjs`, and every skill is the text the installer would write, rendered for the package's location. Nothing is written to `~/.pi/agent/skills` or `~/.pi/agent/extensions`. The skills are rendered into `~/.pi/agent/gsd-package-cache/<id>/skills` at session start (`$PI_CODING_AGENT_DIR/gsd-package-cache/` when you set that variable) and Pi is pointed at that directory. A new package version or a moved package gets its own `<id>`; older ones are left in place and are safe to delete.
+The package gives the same commands and the same extension as `npx @opengsd/gsd-core --pi`: the extension file is the same `pi/gsd.cjs`, and every skill is the text the installer would write, rendered for the package's location. Nothing is written to `~/.pi/agent/skills` or `~/.pi/agent/extensions`. The skills are rendered into `~/.pi/agent/gsd-package-cache/<id>/skills` when Pi discovers resources at startup (`$PI_CODING_AGENT_DIR/gsd-package-cache/` when you set that variable) and Pi is pointed at that directory. A new package version or a moved package gets its own `<id>`; GSD keeps the three newest and removes older ones.
 
 The extension also puts the package's `gsd-core/bin` first on `PATH` for the Pi session, so workflow steps that run `gsd_run` find the engine without a per-runtime config directory.
+
+## What a package install runs
+
+A Pi package runs code with your user's permissions. Installing this one loads the GSD extension (`pi/gsd.cjs`), which starts GSD's engine and hook scripts, not only skills. With `-l`, the declaration lives in the project's `.pi/settings.json` and Pi's project trust prompt is the only gate, so trust a project only when you trust its `.pi/settings.json`. The extension refuses to write a package location that contains shell or markdown metacharacters (anything outside letters, digits and `. _ / : @ + ~ -` and spaces) into skill text; if your package lives in such a directory it shows the "could not be prepared" error below.
 
 ## Do not install both ways
 
@@ -40,7 +44,7 @@ or remove the installer's files with `npx @opengsd/gsd-core --pi --global --unin
 |---|---|---|
 | No `/gsd` command and no `gsd-*` skills after the restart | Pi has not trusted the project (a `-l` install), or the package was not loaded | Run `pi list`; for a project install, trust the project when Pi asks. |
 | Warning: `GSD is installed both as a Pi package and by the gsd-core installer` | Both distribution paths are present | Remove one, as above. |
-| Error: `GSD skills could not be prepared: ...` | Pi's agent directory is read-only or the disk is full, so the skills could not be written to the cache | Make `~/.pi/agent` (or `$PI_CODING_AGENT_DIR`) writable and restart Pi. `/gsd` still works for data commands. |
+| Error: `GSD skills could not be prepared: ...` | The message names the cause: the Pi agent directory is read-only or full, the package's skill templates are missing, or the package location contains characters GSD will not write into skill text | Fix what the message names and restart Pi. Until then `/gsd <workflow>` reports that the skill is unavailable, and `/gsd` data commands still work. |
 | A workflow step says `gsd-tools.cjs not found` | A shell outside the Pi session ran the step | Run workflows from inside Pi; the `PATH` change applies to Pi's own shell. |
 
 Agent steps behave as they do on an installer install: see [Start a GSD workflow from Pi](start-a-gsd-workflow-from-pi.md#when-a-workflow-stops-at-an-agent-step).

@@ -131,7 +131,7 @@
     "prepack": "npm run build:lib",
     "prepare": "npm run build:lib",
     "version": "node scripts/sync-manifest-versions.cjs --stage && node scripts/gen-capability-registry.cjs --write && git add gsd-core/bin/lib/capability-registry.cjs",
-    "prepublishOnly": "npm run build:lib && npm run build:hooks",
+    "prepublishOnly": "npm run build:lib && npm run build:hooks && npm run gen:pi-package-skills",
     "pretest": "npm run build:lib && npm run lint:skill-deps",
     "pretest:coverage": "npm run build:lib && npm run lint:skill-deps",
     "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/ --max-warnings 0",
