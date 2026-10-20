@@ -18,7 +18,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const fc = require('fast-check');
-const { createTempDir, cleanup } = require('./helpers.cjs');
+const { createTempDir, cleanup, installSpawnEnv } = require('./helpers.cjs');
 const { INSTALL_TIMEOUT_MS, GENERATOR_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const REPO = path.resolve(__dirname, '..');
@@ -69,7 +69,8 @@ function installForPi(configDir) {
     encoding: 'utf8',
     timeout: INSTALL_TIMEOUT_MS,
     windowsHide: true,
-    env: { ...process.env, PI_CODING_AGENT_DIR: configDir },
+    // sandboxed HOME: the installer writes GSD's global defaults store under $HOME/.gsd
+    env: installSpawnEnv({ PI_CODING_AGENT_DIR: configDir }),
   });
   assert.equal(res.status, 0, `installer failed: ${(res.stderr || res.stdout || '').slice(-600)}`);
 }
@@ -97,8 +98,10 @@ describe('Pi package: template/installer parity (#5558)', () => {
     assert.ok(installed.length > 0);
     for (const name of installed) {
       const template = fs.readFileSync(path.join(templateDir, name, 'SKILL.md'), 'utf8');
-      const expected = fs.readFileSync(path.join(root, 'skills', name, 'SKILL.md'), 'utf8').replace(/\\/g, '/');
-      assert.equal(renderSkillTemplate(template, root), expected.replace(/\\/g, '/'), `${name} renders to the installer output`);
+      // Only the engine root is normalized (Windows may emit it with backslashes); every
+      // other byte, including regex backslashes in the skill text, is compared as written.
+      const expected = fs.readFileSync(path.join(root, 'skills', name, 'SKILL.md'), 'utf8').split(root).join(root.replace(/\\/g, '/'));
+      assert.equal(renderSkillTemplate(template, root), expected, `${name} renders to the installer output`);
     }
     return { root, installed };
   }

@@ -62,16 +62,25 @@ function renderSkillTemplate(template, engineRoot) {
   return template.split(PI_ENGINE_ROOT_TOKEN).join(toSlash(engineRoot));
 }
 
-/** Run the installer for Pi into a fresh temp dir and return that dir. */
+/**
+ * Run the installer for Pi into a fresh temp dir and return that dir. The run
+ * gets a separate throwaway HOME (removed straight after): the two must differ,
+ * because the installer writes a config dir that equals or sits under HOME as
+ * `~`/`$HOME`-relative paths.
+ */
 function installIntoTemp() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-pi-skills-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-pi-home-'));
   const res = spawnSync(process.execPath, [INSTALLER, '--pi', '--global', '--config-dir', tmp], {
     cwd: ROOT,
     encoding: 'utf8',
     timeout: INSTALL_BOUND_MS,
     windowsHide: true,
-    env: { ...process.env, PI_CODING_AGENT_DIR: tmp },
+    // HOME is redirected too: the installer writes GSD's global defaults store under
+    // $HOME/.gsd, and a generator run must not touch the developer's real one.
+    env: { ...process.env, PI_CODING_AGENT_DIR: tmp, HOME: home, USERPROFILE: home, GSD_HOME: home },
   });
+  fs.rmSync(home, { recursive: true, force: true });
   if (res.status !== 0) {
     fs.rmSync(tmp, { recursive: true, force: true });
     throw new ExitError(
