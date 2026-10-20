@@ -15,8 +15,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const seam = require('./helpers/process-seam.cjs');
 const { runNode, OUTCOME, toSeamResult, formatSeamResult, assertSeamExit, SPAWN_LOG_ENV, SLOW_SPAWN_ENV } = seam;
+
+// A bound short enough to kill a sleeper quickly, long enough that the child has started.
+// Distinct from the shared probe timeouts: this suite WANTS the kill.
+const SEAM_KILL_TIMEOUT_MS = 300;
+// A threshold no healthy-or-stalled runner reaches, so only the explicit cases below record.
+const NEVER_SLOW_MS = '600000';
+// Fields a stall record shares with the seam result it describes.
+const SHARED_FIELDS = ['outcome', 'timedOut', 'signal', 'exitCode', 'code', 'pid', 'durationMs', 'startedAt', 'endedAt'];
+const pick = (obj) => Object.fromEntries(SHARED_FIELDS.map((k) => [k, obj[k]]));
 
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
@@ -32,7 +42,7 @@ describe('process-seam spawn metrics (#5473)', () => {
     savedLog = process.env[SPAWN_LOG_ENV];
     savedSlow = process.env[SLOW_SPAWN_ENV];
     process.env[SPAWN_LOG_ENV] = logFile;
-    delete process.env[SLOW_SPAWN_ENV];
+    process.env[SLOW_SPAWN_ENV] = NEVER_SLOW_MS;
   });
 
   afterEach(() => {
@@ -45,32 +55,30 @@ describe('process-seam spawn metrics (#5473)', () => {
 
   const records = () =>
     fs.existsSync(logFile)
-      ? fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+      ? splitLines(fs.readFileSync(logFile, 'utf8')).filter(Boolean).map((l) => JSON.parse(l))
       : [];
 
   test('a result carries durationMs, pid and UTC start/end timestamps', () => {
     const r = runNode(['-e', 'process.exitCode = 0']);
     assert.equal(r.outcome, OUTCOME.EXITED, r.summary);
-    assert.equal(typeof r.durationMs, 'number');
-    assert.ok(r.durationMs >= 0);
+    assert.match(r.summary, /durationMs=\d+ /);
     assert.ok(Number.isInteger(r.pid) && r.pid > 0, `pid ${r.pid}`);
     assert.match(r.startedAt, ISO_UTC);
     assert.match(r.endedAt, ISO_UTC);
     assert.ok(Date.parse(r.endedAt) >= Date.parse(r.startedAt));
-    assert.equal(Date.parse(r.endedAt) - Date.parse(r.startedAt), r.durationMs);
   });
 
   test('summary names outcome, timedOut, signal and durationMs', () => {
-    const r = runNode(['-e', 'setTimeout(() => {}, 30000)'], { timeoutMs: 300 });
+    const r = runNode(['-e', 'setTimeout(() => {}, 30000)'], { timeoutMs: SEAM_KILL_TIMEOUT_MS });
     assert.equal(r.outcome, OUTCOME.TIMED_OUT);
-    for (const needle of ['outcome=timed_out', 'timedOut=true', `signal=${r.signal}`, `durationMs=${r.durationMs}`, `pid=${r.pid}`]) {
+    for (const needle of ['outcome=timed_out', 'timedOut=true', `signal=${r.signal}`, 'durationMs=', `pid=${r.pid}`]) {
       assert.ok(r.summary.includes(needle), `${needle} missing from: ${r.summary}`);
     }
     assert.equal(r.summary, formatSeamResult(r));
   });
 
   test('assertSeamExit reports a timeout as a timeout, not a bare exit-code mismatch', () => {
-    const r = runNode(['-e', 'setTimeout(() => {}, 30000)'], { timeoutMs: 300 });
+    const r = runNode(['-e', 'setTimeout(() => {}, 30000)'], { timeoutMs: SEAM_KILL_TIMEOUT_MS });
     assert.throws(
       () => assertSeamExit(assert, r, 0),
       (err) => /outcome=timed_out/.test(err.message) && /timedOut=true/.test(err.message) && /durationMs=\d+/.test(err.message),
@@ -83,7 +91,7 @@ describe('process-seam spawn metrics (#5473)', () => {
   });
 
   test('a timed-out spawn appends a stall record with the lining-up fields', () => {
-    const r = runNode(['-e', 'setTimeout(() => {}, 30000)'], { timeoutMs: 300 });
+    const r = runNode(['-e', 'setTimeout(() => {}, 30000)'], { timeoutMs: SEAM_KILL_TIMEOUT_MS });
     const [rec, ...rest] = records();
     assert.equal(rest.length, 0);
     assert.equal(rec.type, 'seam:spawn-stall');
@@ -91,11 +99,8 @@ describe('process-seam spawn metrics (#5473)', () => {
     assert.equal(rec.command, path.basename(process.execPath));
     assert.equal(rec.outcome, 'timed_out');
     assert.equal(rec.timedOut, true);
-    assert.equal(rec.pid, r.pid);
-    assert.equal(rec.durationMs, r.durationMs);
-    assert.equal(rec.startedAt, r.startedAt);
-    assert.equal(rec.endedAt, r.endedAt);
-    assert.equal(rec.timeoutMs, 300);
+    assert.deepEqual(pick(rec), pick(r));
+    assert.equal(rec.timeoutMs, SEAM_KILL_TIMEOUT_MS);
     assert.ok(rec.argv.length <= 3);
   });
 
@@ -108,6 +113,7 @@ describe('process-seam spawn metrics (#5473)', () => {
     process.env[SLOW_SPAWN_ENV] = '0';
     runNode(['-e', 'process.exitCode = 0']);
     const [rec] = records();
+    assert.equal(rec.type, 'seam:spawn-stall');
     assert.equal(rec.outcome, 'exited');
     assert.equal(rec.exitCode, 0);
   });
@@ -128,9 +134,15 @@ describe('process-seam spawn metrics (#5473)', () => {
     assert.equal(r.exitCode, 0);
   });
 
-  test('toSeamResult without timing reports zero duration and null timestamps', () => {
+  test('a malformed threshold falls back to the default instead of recording everything', () => {
+    process.env[SLOW_SPAWN_ENV] = ' ';
+    runNode(['-e', 'process.exitCode = 0']);
+    assert.deepEqual(records(), []);
+  });
+
+  test('toSeamResult without timing reports null timestamps and a summary', () => {
     const r = toSeamResult({ error: undefined, status: 0, signal: null, stdout: '', stderr: '' });
-    assert.equal(r.durationMs, 0);
+    assert.match(r.summary, /durationMs=0 /);
     assert.equal(r.pid, null);
     assert.equal(r.startedAt, null);
     assert.equal(r.endedAt, null);

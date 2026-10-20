@@ -87,6 +87,7 @@ const DEFAULT_SLOW_SPAWN_MS = 2000;
 const SPAWN_RECORD_TYPE = 'seam:spawn-stall';
 const MAX_ARGV_RECORDED = 3;
 const MAX_ARG_CHARS = 80;
+const STDERR_TAIL_CHARS = 4000;
 
 const OUTCOME = Object.freeze({
   EXITED: 'exited',
@@ -140,17 +141,15 @@ function formatSeamResult(r) {
  * timeout is never reported as a bare exit-code mismatch.
  */
 function assertSeamExit(assert, r, expected = 0, extra = '') {
-  assert.ok(
-    r.outcome === OUTCOME.EXITED && r.exitCode === expected,
-    `expected exit ${expected}; got ${formatSeamResult(r)}${extra ? ` — ${extra}` : ''}\nstderr: ${r.stderr}`,
+  if (r.outcome === OUTCOME.EXITED && r.exitCode === expected) return;
+  assert.fail(
+    `expected exit ${expected}; got ${formatSeamResult(r)}${extra ? ` — ${extra}` : ''}\nstderr: ${String(r.stderr).slice(-STDERR_TAIL_CHARS)}`,
   );
 }
 
 function slowThresholdMs() {
-  const n = Number(process.env[SLOW_SPAWN_ENV]);
-  return Number.isFinite(n) && n >= 0 && process.env[SLOW_SPAWN_ENV] !== undefined && process.env[SLOW_SPAWN_ENV] !== ''
-    ? n
-    : DEFAULT_SLOW_SPAWN_MS;
+  const raw = process.env[SLOW_SPAWN_ENV];
+  return typeof raw === 'string' && /^\d+$/.test(raw) ? Number(raw) : DEFAULT_SLOW_SPAWN_MS;
 }
 
 function currentTestFile() {
@@ -162,7 +161,7 @@ function currentTestFile() {
  * Append a stall record for a slow or killed spawn. Best-effort and silent on
  * any failure: this observes the test run, it must never change its outcome.
  * Also echoes a one-line stderr note so the evidence shows beside a failing
- * test even when no log file is configured.
+ * test. Both are skipped when no log file is configured (local runs).
  */
 function recordSpawnIfNoteworthy(command, args, timeoutMs, seamResult) {
   const noteworthy =
@@ -184,13 +183,13 @@ function recordSpawnIfNoteworthy(command, args, timeoutMs, seamResult) {
     startedAt: seamResult.startedAt,
     endedAt: seamResult.endedAt,
   };
+  const logFile = process.env[SPAWN_LOG_ENV];
+  if (!logFile) return;
   try {
     process.stderr.write(`[seam-spawn] ${record.command} ${formatSeamResult(seamResult)}\n`);
   } catch {
     // Observation only.
   }
-  const logFile = process.env[SPAWN_LOG_ENV];
-  if (!logFile) return;
   try {
     fs.appendFileSync(logFile, `${JSON.stringify(record)}\n`);
   } catch {
@@ -201,7 +200,7 @@ function recordSpawnIfNoteworthy(command, args, timeoutMs, seamResult) {
 /**
  * Classify a raw spawnSync() result into the seam's discriminated union.
  *
- * `timing` ({startedAtMs, durationMs}) is supplied by spawnSeam; a result that
+ * `timing` ({startedAtMs, endedAtMs, durationMs}) is supplied by spawnSeam; a result that
  * did not come from a real spawn (the missing-Git-Bash synthesis) omits it and
  * reports `durationMs: 0` with null timestamps.
  */
@@ -250,7 +249,7 @@ function toSeamResult(result, timing) {
     durationMs: timing ? timing.durationMs : 0,
     pid: typeof result.pid === 'number' && result.pid > 0 ? result.pid : null,
     startedAt: timing ? new Date(timing.startedAtMs).toISOString() : null,
-    endedAt: timing ? new Date(timing.startedAtMs + timing.durationMs).toISOString() : null,
+    endedAt: timing ? new Date(timing.endedAtMs).toISOString() : null,
     summary: '',
   };
 }
@@ -303,8 +302,9 @@ function spawnSeam(command, args, options = {}) {
   const startedAtMs = Date.now();
   const t0 = process.hrtime.bigint();
   const result = spawnSync(command, args, spawnOptions);
-  const durationMs = Number((process.hrtime.bigint() - t0) / 1000000n);
-  const seamResult = finishSeamResult(result, { startedAtMs, durationMs });
+  const durationMs = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
+  const endedAtMs = Date.now();
+  const seamResult = finishSeamResult(result, { startedAtMs, endedAtMs, durationMs });
   recordSpawnIfNoteworthy(command, args, timeoutMs, seamResult);
   return seamResult;
 }

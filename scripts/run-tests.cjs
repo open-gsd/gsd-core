@@ -2329,7 +2329,7 @@ async function main() {
           // #5473: lets tests/helpers/process-seam.cjs append a record for any
           // slow or killed spawn to the same jsonl artifact CI already uploads.
           // Absent when no export file is configured, so local runs write nothing.
-          ...(timingExportPath ? { GSD_SEAM_SPAWN_LOG_FILE: timingExportPath } : {}),
+          ...(timingExportPath ? { GSD_SEAM_SPAWN_LOG_FILE: resolve(timingExportPath) } : {}),
         },
         timeoutMs: chunkTimeoutMs,
         graceMs: chunkKillGraceMs,
