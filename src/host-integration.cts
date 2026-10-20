@@ -769,7 +769,7 @@ function hookEventSurfaceFor(hookEvents: unknown): readonly string[] | null {
 // event subset (imperative hosts' extension API). They are not the same thing.
 //
 // Values are documentation-sourced (ADR-1239 §research): OpenCode ~25 plugin
-// events (session/tool/file/permission); pi ~30 fine-grained extension events;
+// events (session/tool/file/permission); pi 41 fine-grained extension events (pi 1.3.0);
 // 'none' = the host exposes no extension surface and the engine owns the bus
 // (VS Code). Declarative hosts (no plugin API) do not set `extensionEvents`.
 // OpenCode's plugin event surface (ADR-1239 §research; ~25 documented events,
@@ -805,11 +805,13 @@ const EXTENSION_EVENT_SURFACES: Readonly<Record<string, readonly string[]>> = Ob
     'pre_gateway_dispatch', 'pre_approval_request',
     'transform_tool_result',
   ]),
-  // #2102 Stage 2 — pi's real ExtensionAPI event vocabulary (~30 fine-grained
-  // extension events; documentation-sourced, ADR-1239 §research). Replaces the
-  // placeholder single-event ['tool_call'] surface — the Stage 1 value only
-  // covered the one event pi/gsd.cjs happened to bind at the time, not the
-  // full declared surface.
+  // pi's real ExtensionAPI event vocabulary: the 41 `on(event: "...")` overloads
+  // declared by pi 1.3.0 (@earendil-works/pi-coding-agent
+  // dist/core/extensions/types.d.ts, sourceCommit 71023aec15, #5557). #2102
+  // Stage 2 declared the first 30 from pi.dev prose; the last 11 on the final
+  // row group were added when the host's own declarations were read. The
+  // pi.dev extensions page lists a lossy subset (it omits session_before_compact,
+  // which pi/gsd.cjs binds), so the type declarations are the source of truth.
   pi: Object.freeze([
     'session_start', 'project_trust', 'resources_discover', 'input',
     'before_agent_start', 'agent_start', 'message_start', 'message_update',
@@ -819,6 +821,11 @@ const EXTENSION_EVENT_SURFACES: Readonly<Record<string, readonly string[]>> = Ob
     'session_before_switch', 'session_shutdown', 'session_before_fork',
     'session_info_changed', 'session_before_compact', 'session_compact',
     'session_before_tree', 'session_tree', 'thinking_level_select', 'model_select',
+    // Added in pi 1.3.0 (#5557):
+    'agent_before_settle', 'agent_settled', 'before_provider_headers',
+    'cache_warming_decision', 'context_with_system', 'mcp_servers_change',
+    'provider_stream_event', 'session_compact_failed', 'ui_prompt_end',
+    'ui_prompt_start', 'user_bash',
   ]),
   none: Object.freeze([]),
 });
