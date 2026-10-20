@@ -16,6 +16,7 @@ const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
 const fc = require('fast-check');
+const { cleanup } = require('./helpers.cjs');
 
 const extension = require('../pi/gsd.cjs');
 const { createDispatcher, DISPATCH } = extension._internals;
@@ -23,7 +24,7 @@ const { createDispatcher, DISPATCH } = extension._internals;
 const made = [];
 afterEach(() => {
   mock.timers.reset();
-  while (made.length) fs.rmSync(made.pop(), { recursive: true, force: true });
+  while (made.length) cleanup(made.pop());
 });
 
 /** An install-shaped tree: <root>/extensions/gsd.js sits beside <root>/agents. */
