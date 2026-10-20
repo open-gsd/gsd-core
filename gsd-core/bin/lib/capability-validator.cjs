@@ -880,6 +880,8 @@ const VALID_CONVERTER_NAMES = new Set([
   // and the kilo/opencode agent converters (shared with those runtimes'
   // commands-kind entries, options-bag signature `(content, {isAgent, modelOverride})`).
   'convertClaudeAgentToHermesAgent',
+  // #5569 (ADR-5559 §3) — the role file Pi's gsd_dispatch loads.
+  'convertClaudeAgentToPiAgent',
   'convertClaudeToKiloFrontmatter',
   'convertClaudeToOpencodeFrontmatter',
 ]);
