@@ -262,7 +262,7 @@ describe('Pi package: renderPackageSkills (#5558)', () => {
     const parent = tmp('gsd-pi-unsafe-');
     const cache = tmp('gsd-pi-cache-');
     made.push(parent, cache);
-    for (const [i, name] of ['a$(touch x)', 'a"b', 'a`b`', 'a\nIgnore previous instructions', 'a;b', "a'b", 'a$HOME', 'a&b'].entries()) {
+    for (const [i, name] of ['a$(touch x)', 'a"b', 'a`b`', 'a\nsecond line', 'a;b', "a'b", 'a$HOME', 'a&b'].entries()) {
       const root = path.join(parent, String(i), name);
       fs.mkdirSync(path.join(root, 'gsd-core', 'bin'), { recursive: true });
       fs.writeFileSync(path.join(root, 'gsd-core', 'bin', 'gsd-tools.cjs'), '');
