@@ -73,7 +73,7 @@ const { stripShippedMilestones, extractCurrentMilestone, currentMilestoneRawRang
 // progress counters the phase-complete transaction passes downstream.
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-lifecycle.cjs is an export= CommonJS module
 import phaseLifecycleMod = require('./phase-lifecycle.cjs');
-const { deriveProgressFromRoadmap: deriveProgressFromRoadmapForIntent, clampPercent: clampPercentForIntent, milestoneVersionOf } = phaseLifecycleMod;
+const { deriveProgressFromRoadmap: deriveProgressFromRoadmapForIntent, clampPercent: clampPercentForIntent, milestoneVersionOf, locateProgressTable, normalizeMilestoneToken } = phaseLifecycleMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
@@ -4018,9 +4018,10 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
     const runPhaseCompleteTransaction = () => {
       const writes: WriteSpec[] = [];
       let roadmapContent: string | null = null;
-      // #5165: the phase's checklist box was ALREADY checked in the ROADMAP this
-      // transaction started from (read before any mutation below).
-      let phaseWasAlreadyChecked = false;
+      // #5165: the phase was ALREADY complete in the ROADMAP this transaction
+      // started from (read before any mutation below): its checklist box was
+      // checked, or its Progress-table row read Complete.
+      let phaseWasAlreadyComplete = false;
 
       if (fs.existsSync(roadmapPath)) {
         const originalRoadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
@@ -4068,7 +4069,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         const checkedBoxPattern = new RegExp(
           `^[ \\t]*(-\\s*\\[)[xX](\\]\\s*(?:\\*\\*)?\\s*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
         );
-        phaseWasAlreadyChecked = extractCurrentMilestone(originalRoadmapContent, cwd)
+        const originalMilestoneScope = extractCurrentMilestone(originalRoadmapContent, cwd);
+        phaseWasAlreadyComplete = originalMilestoneScope
           .split('\n')
           .some((line) => checkedBoxPattern.test(line));
 
@@ -4088,6 +4090,24 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         const phaseCellRe = new RegExp(`^${phaseEscaped}\\.?(?:\\s|$)`, 'i');
         const rowMatch = (row: Record<string, string>): boolean => phaseCellRe.test((row['Phase'] ?? '').trim());
         const dateShape = /^\d{4}-\d{2}-\d{2}$/;
+
+        // #5165: a ROADMAP whose checklist box was never ticked (or has none) but
+        // whose Progress-table row already reads Complete is just as complete. A
+        // milestone-grouped table (a `Milestone` column) is read only for the
+        // milestone ROADMAP binds, so a shipped milestone's same-numbered phase
+        // cannot count.
+        if (!phaseWasAlreadyComplete) {
+          const progressTable = locateProgressTable(originalMilestoneScope);
+          if (progressTable !== null) {
+            const wantMilestone = progressTable.columns.includes('Milestone')
+              ? normalizeMilestoneToken(roadmapParserMod.getMilestoneInfo(cwd).value?.version)
+              : null;
+            phaseWasAlreadyComplete = progressTable.rows.some((row) =>
+              rowMatch(row)
+              && parseRoadmapStatusCell(row['Status']) === WIRE_STATUS.COMPLETE
+              && (wantMilestone === null || (wantMilestone !== '' && normalizeMilestoneToken(row['Milestone']) === wantMilestone)));
+          }
+        }
 
         /**
          * Within `text` (already scoped to one milestone window by the
@@ -4952,7 +4972,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // the transition, the metrics row and the authoritative current-phase
         // pin would all rewind it. A first-time completion (box unchecked, or
         // STATE not past N, #2028 out-of-order) still transitions.
-        const stateAlreadyPast = phaseWasAlreadyChecked
+        const stateAlreadyPast = phaseWasAlreadyComplete
           && isStatePastPhase(originalStateContent, phaseNum, statePath);
         let stateContent = originalStateContent;
 
@@ -5003,6 +5023,9 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             planCount,
             summaryCount,
             nextPhaseDisk,
+            // #5165: the body counter and the frontmatter progress below count the
+            // SAME milestone's Progress rows.
+            milestone: storedMilestone,
           },
           {
             clock: realClock,

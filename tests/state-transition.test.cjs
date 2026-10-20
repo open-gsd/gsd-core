@@ -5108,6 +5108,14 @@ describe('#4945 multiline **Current focus:** is replaced whole', () => {
       assert.equal(isStatePastPhase(bodyState('Phase: 4 of 4 (Four)'), 4), false);
     });
 
+    test('a `Phase N` position names phase N (limit-1, limit, limit+1)', () => {
+      assert.equal(isStatePastPhase(fmState('"Phase 3"'), 4), false);
+      assert.equal(isStatePastPhase(fmState('"Phase 4"'), 4), false);
+      assert.equal(isStatePastPhase(fmState('"Phase 5"'), 4), true);
+      assert.equal(isStatePastPhase(fmState('"phase 5 of 9"'), 4), true);
+      assert.equal(isStatePastPhase(bodyState('Phase: Phase 5 of 9 (Five)'), 4), true);
+    });
+
     test('an absent or unparseable position is not past', () => {
       assert.equal(isStatePastPhase('# S\n', 1), false);
       assert.equal(isStatePastPhase(fmState('"[GSD.02] x"'), 1), false);

@@ -351,6 +351,17 @@ describe('renderProgressBar / progressBarFilledCells (#4294 — the render half 
       assert.equal(normalizeMilestoneToken(undefined), '');
     });
 
+    test('a hand-decorated milestone cell still names its milestone', () => {
+      const expected = { completedPhases: 1, totalPhases: 1, totalPlans: 1 };
+      for (const cell of ['**v1.1**', '`v1.1`', 'v1.1 (current)', '_V1.1_', '1.1 current']) {
+        const md = table([...shipped, ['3. Three', cell, '1/1', 'Complete']]);
+        assert.deepEqual(deriveProgressFromRoadmap(md, 'v1.1'), expected, JSON.stringify(cell));
+        assert.equal(normalizeMilestoneToken(cell), '1.1', JSON.stringify(cell));
+      }
+      // a different milestone with a similar prefix is not the same milestone
+      assert.notEqual(normalizeMilestoneToken('v1.10'), normalizeMilestoneToken('v1.1'));
+    });
+
     test('a milestone that matches no row yields nulls, never a foreign count', () => {
       const md = table([...shipped, ['3. Three', 'v1.1', '1/1', 'Complete']]);
       assert.deepEqual(deriveProgressFromRoadmap(md, 'v9.9'), { completedPhases: null, totalPhases: null, totalPlans: null });

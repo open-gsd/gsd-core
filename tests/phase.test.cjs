@@ -17590,6 +17590,36 @@ describe('#4972: phase complete warns when an active verify:post audit is missin
       }
     });
 
+    test('R2e: a phase complete only in the Progress table (box unchecked) is no-op for STATE when STATE is past it', () => {
+      const roadmap = roadmapText({ box3: ' ' })
+        .replace('| 3. Three | v1.1 | 1/1 | In progress | - |', '| 3. Three | v1.1 | 1/1 | Complete | 2026-09-20 |');
+      assert.match(roadmap, /\| 3\. Three \| v1\.1 \| 1\/1 \| Complete \|/, 'fixture: row reads Complete');
+      assert.match(roadmap, /^- \[ \] \*\*Phase 3: Three\*\*/m, 'fixture: box unchecked');
+      const dir = makeProject({ roadmap });
+      try {
+        const stateBefore = read(dir, 'STATE.md');
+        gsd(dir, 'phase.complete', '3');
+        assert.equal(withoutTimestamps(read(dir, 'STATE.md')), withoutTimestamps(stateBefore));
+        assert.doesNotMatch(read(dir, 'STATE.md'), /^Stopped at: Phase 3 complete/m);
+      } finally {
+        cleanup(dir);
+      }
+    });
+
+    test('R1b: with no milestone in STATE frontmatter the body bar and frontmatter progress still count the ROADMAP milestone', () => {
+      const state = stateText().replace(/^ *milestone: v1\.1\n/m, '');
+      assert.doesNotMatch(state, /^ *milestone: /m, 'fixture: no milestone key');
+      const dir = makeProject({ state });
+      try {
+        gsd(dir, 'phase.complete', '4');
+        const state = read(dir, 'STATE.md');
+        assert.equal(percentOf(state), 50);
+        assert.equal(barOf(state), '[█████░░░░░] 50%', 'body counter and frontmatter percent agree');
+      } finally {
+        cleanup(dir);
+      }
+    });
+
     test('R2: a second consecutive phase.complete is a no-op for STATE and ROADMAP', () => {
       const dir = makeProject();
       try {

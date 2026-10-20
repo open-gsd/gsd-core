@@ -73,10 +73,13 @@ export function locateProgressTable(roadmapContent: string): MarkdownTable | nul
 
 /**
  * #5165: a milestone token compared by identity, not spelling — `v1.1`, `V1.1`
- * and ` 1.1 ` name one milestone. Absent/blank tokens normalize to `''`.
+ * and ` 1.1 ` name one milestone. A hand-decorated Progress cell
+ * (`**v1.1**`, `` `v1.1` ``, `v1.1 (current)`) still names its first
+ * whitespace-separated token. Absent/blank tokens normalize to `''`.
  */
 export function normalizeMilestoneToken(value: unknown): string {
-  return milestoneVersionOf(value)?.replace(/^v/i, '').toLowerCase() ?? '';
+  const first = milestoneVersionOf(value)?.split(/\s+/)[0] ?? '';
+  return first.replace(/^[*_`]+|[*_`]+$/g, '').replace(/^v/i, '').toLowerCase();
 }
 
 /**

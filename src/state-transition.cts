@@ -1223,6 +1223,12 @@ export type StateTransitionIntent =
        * next phase has no directory yet, or the caller did not classify it).
        */
       nextPhaseDisk?: NextPhaseDisk | null;
+      /**
+       * #5165: the milestone the caller resolved (ROADMAP-bound identity first).
+       * Scopes the roadmap-derived progress counters to that milestone's
+       * Progress-table rows; absent, STATE's own `milestone:` frontmatter does.
+       */
+      milestone?: string | null;
     }
   | { kind: 'plannedPhase'; phaseNumber: string | number; phaseName: string | null; planCount: number | null }
   | { kind: 'milestoneSwitch'; version: string; name: string }
@@ -2167,7 +2173,8 @@ export function isStatePastPhase(content: string, phaseNum: string | number, sou
     const body = stripFrontmatter(content);
     raw = stateExtractField(body, 'Current Phase') || stateExtractField(body, 'Phase') || null;
   }
-  const m = raw === null ? null : /^\s*(\d+(?:\.\d+)*)/.exec(raw);
+  // `Phase 4` / `phase 4 of 9` name phase 4 as surely as `4 of 9` does.
+  const m = raw === null ? null : /^\s*(?:phase\s+)?(\d+(?:\.\d+)*)/i.exec(raw);
   if (!m) return false;
   return comparePhaseNum(m[1], String(phaseNum)) > 0;
 }
@@ -2206,6 +2213,7 @@ function completePhaseCore(
     planCount: number;
     summaryCount: number;
     nextPhaseDisk?: NextPhaseDisk | null;
+    milestone?: string | null;
   },
   deps: StateTransitionDeps,
 ): StateTransitionResult {
@@ -2213,9 +2221,12 @@ function completePhaseCore(
   const today = deps.clock.localToday();
   const nextWording = nextPhaseWording(intent.isLastPhase ? null : intent.nextPhaseDisk ?? null);
 
-  // #5165: the milestone STATE asserts scopes the roadmap-derived counters
-  // below to that milestone's Progress-table rows.
-  const currentMilestone = milestoneVersionOf((extractFrontmatter(content, deps.sourcePath) as Record<string, unknown>)['milestone']);
+  // #5165: the milestone the caller resolved (ROADMAP-bound identity first) wins;
+  // else the milestone STATE asserts. It scopes the roadmap-derived counters
+  // below to that milestone's Progress-table rows, the same milestone
+  // `phase complete` scopes its frontmatter progress to.
+  const currentMilestone = milestoneVersionOf(intent.milestone)
+    ?? milestoneVersionOf((extractFrontmatter(content, deps.sourcePath) as Record<string, unknown>)['milestone']);
 
   // Consult the field-classification table for the frontmatter keys this
   // transition touches (same guard beginPhaseCore applies). A missing row is a
