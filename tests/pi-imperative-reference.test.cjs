@@ -48,9 +48,9 @@ test('createImperativeAdapter classifies pi as an imperative host + composes the
 });
 
 test('pi axes classify as the programmatic-cli reference profile', () => {
-  // pi: imperative embedding, bun runtime (NOT sandboxed-web) → programmatic-cli.
-  assert.equal(profileOf({ embeddingMode: 'imperative', runtime: 'bun' }), 'programmatic-cli');
-  assert.notEqual(profileOf({ embeddingMode: 'imperative', runtime: 'bun' }), 'ide');
+  // pi: imperative embedding, node runtime (NOT sandboxed-web) → programmatic-cli.
+  assert.equal(profileOf({ embeddingMode: 'imperative', runtime: 'node' }), 'programmatic-cli');
+  assert.notEqual(profileOf({ embeddingMode: 'imperative', runtime: 'node' }), 'ide');
 });
 
 test('the pi reference host-plugin binds GSD via the ExtensionAPI (command + tool + event)', () => {

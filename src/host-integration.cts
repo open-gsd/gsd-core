@@ -769,7 +769,7 @@ function hookEventSurfaceFor(hookEvents: unknown): readonly string[] | null {
 // event subset (imperative hosts' extension API). They are not the same thing.
 //
 // Values are documentation-sourced (ADR-1239 §research): OpenCode ~25 plugin
-// events (session/tool/file/permission); pi ~30 fine-grained extension events;
+// events (session/tool/file/permission); pi 41 fine-grained extension events (pi 1.3.0);
 // 'none' = the host exposes no extension surface and the engine owns the bus
 // (VS Code). Declarative hosts (no plugin API) do not set `extensionEvents`.
 // OpenCode's plugin event surface (ADR-1239 §research; ~25 documented events,
