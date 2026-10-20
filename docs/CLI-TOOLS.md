@@ -634,8 +634,8 @@ Two differences from `config-set` follow from the input being JSON rather than t
 - A setting that also has per-entry settings under it (`review.max_prompt_tokens_per_reviewer`,
   `agent_tools`) takes an object of those entries, each checked as `config-set` checks that
   entry's own key: for the reviewer budget `{"codex":5000}` is accepted and `{"a":1}` is
-  refused, where `config-set` stores any object given to the setting whole. `review.max_prompt_tokens_per_reviewer` also
-  takes a number for itself.
+  refused, where `config-set` stores any object given to the setting whole.
+  `review.max_prompt_tokens_per_reviewer` also takes a number for itself.
 
 One difference does not: a `null` choice under `__proto__`, `prototype` or `constructor`, for a
 key that is otherwise known (`{"model_overrides":{"constructor":null}}`), is refused by the
