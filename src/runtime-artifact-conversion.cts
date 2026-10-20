@@ -3071,6 +3071,57 @@ function convertClaudeAgentToHermesAgent(content) {
 }
 
 /**
+ * Claude Code tool names that have a Pi equivalent (`pi --tools` takes lowercase built-in names).
+ * Anything else a role lists (WebFetch, Agent, MCP tools, ...) has no Pi built-in and is dropped.
+ */
+const PI_AGENT_TOOL_NAMES: Readonly<Record<string, string>> = Object.freeze({
+  Read: 'read',
+  Write: 'write',
+  Edit: 'edit',
+  Bash: 'bash',
+  Grep: 'grep',
+  Glob: 'find',
+});
+
+/** Split a Claude role's tool list into the Pi tools it maps to and the ones that were dropped. */
+function mapClaudeToolsToPi(tools: string[]): { mapped: string[]; dropped: string[] } {
+  const mapped: string[] = [];
+  const dropped: string[] = [];
+  for (const tool of tools) {
+    const piName = Object.prototype.hasOwnProperty.call(PI_AGENT_TOOL_NAMES, tool) ? PI_AGENT_TOOL_NAMES[tool] : null;
+    if (piName === null) {
+      dropped.push(tool);
+    } else if (!mapped.includes(piName)) {
+      mapped.push(piName);
+    }
+  }
+  return { mapped, dropped };
+}
+
+/**
+ * Convert a Claude Code agent (.md) to the role file Pi's `gsd_dispatch` loads (#5569, ADR-5559 §3):
+ * `name`, `description` and `tools` (Pi names; an unmappable tool is dropped and named in a comment,
+ * never passed through), then the body with the Pi branding rewrites. `model` is omitted so the
+ * child inherits Pi's default, and a role that lists no mappable tool gets no `tools:` line (the
+ * dispatcher then runs it with Pi's defaults minus `gsd_dispatch`).
+ */
+function convertClaudeAgentToPiAgent(content) {
+  const converted = applyAgentBrandingRewrites(content, 'pi');
+  const { frontmatter, body } = extractFrontmatterAndBody(converted);
+  if (!frontmatter) return converted;
+
+  const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
+  const description = extractFrontmatterField(frontmatter, 'description') || '';
+  const { mapped, dropped } = mapClaudeToolsToPi(parseFrontmatterTools(frontmatter));
+
+  let fm = `---\nname: ${yamlIdentifier(name)}\ndescription: ${yamlQuote(toSingleLine(description))}\n`;
+  if (mapped.length > 0) fm += `tools: ${mapped.join(', ')}\n`;
+  if (dropped.length > 0) fm += `# tools with no Pi equivalent, dropped: ${dropped.map(toSingleLine).join(', ')}\n`;
+  fm += '---';
+  return `${fm}\n${body}`;
+}
+
+/**
  * Convert Claude Code agent markdown to Codex agent format.
  * Applies base markdown conversions, then adds a <codex_agent_role> header
  * and cleans up frontmatter (removes tools/color fields).
@@ -4366,6 +4417,8 @@ export = {
   // #2875 Part 2 (J10): Hermes named branding converter, generic underlying
   // transform exported alongside it for direct reuse/testing.
   convertClaudeAgentToHermesAgent,
+  convertClaudeAgentToPiAgent,
+  mapClaudeToolsToPi,
   applyAgentBrandingRewrites,
   // ADR-1239 / #2092 Phase B Upgrade 1: native .qwen/agents/*.md subagent
   // projection — registered by name so convertedAgentsKind's

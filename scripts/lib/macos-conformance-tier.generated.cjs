@@ -163,6 +163,7 @@ module.exports = {
   "tests/phase-status.test.cjs",
   "tests/phase.platform.test.cjs",
   "tests/phase.test.cjs",
+  "tests/pi-dispatch.test.cjs",
   "tests/pi-package.test.cjs",
   "tests/plan-authoring-verification-gaps.test.cjs",
   "tests/plan-count-single-owner.test.cjs",
