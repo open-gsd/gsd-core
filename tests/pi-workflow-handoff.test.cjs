@@ -31,6 +31,11 @@ const {
 } = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { runNode } = require('./helpers/process-seam.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+
+// pi 1.3.0 skills documentation: "descriptions can contain at most 1024".
+const PI_DESCRIPTION_MAX = 1024;
 
 const SAMPLE_COMMAND = [
   '---',
@@ -89,6 +94,33 @@ describe('#5547: convertClaudeCommandToPiSkill', () => {
 
   test('keeps the workflow include in the body', () => {
     assert.match(out, /workflows\/plan-phase\.md/);
+  });
+
+  test('caps the description at Pi\'s 1024-character limit', () => {
+    const long = 'x'.repeat(PI_DESCRIPTION_MAX + 500);
+    const skill = convertClaudeCommandToPiSkill(`---\nname: gsd:x\ndescription: ${long}\n---\nbody\n`, 'gsd-x', 'pi', ['x']);
+    const line = skill.split(/\r?\n/).find((l) => l.startsWith('description: '));
+    assert.ok(JSON.parse(line.slice('description: '.length)).length <= PI_DESCRIPTION_MAX);
+  });
+
+  test('every shipped command converts to a skill within Pi\'s name and description limits', () => {
+    const dir = path.join(__dirname, '..', 'commands', 'gsd');
+    for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.md'))) {
+      const stem = file.slice(0, -3);
+      const skill = convertClaudeCommandToPiSkill(fs.readFileSync(path.join(dir, file), 'utf8'), `gsd-${stem}`, 'pi', [stem]);
+      const name = /^name: (.+)$/m.exec(skill)[1];
+      assert.equal(name, `gsd-${stem}`);
+      assert.ok(name.length <= 64 && /^[a-z0-9]+(-[a-z0-9]+)*$/.test(name), `${name} breaks Pi's name rules`);
+      const desc = /^description: (.+)$/m.exec(skill)[1];
+      assert.ok(JSON.parse(desc).length <= PI_DESCRIPTION_MAX, `${stem}: description too long`);
+    }
+  });
+
+  test('replaces the $ARGUMENTS placeholder outside code fences only, as a whole word', () => {
+    const src = '---\nname: gsd:x\ndescription: d\n---\nUse $ARGUMENTS here and $ARGUMENTS_FOO there.\n```\necho $ARGUMENTS\n```\n';
+    const skill = convertClaudeCommandToPiSkill(src, 'gsd-x', 'pi', ['x']);
+    assert.match(skill, /Use \(the text typed after the skill name\) here and \$ARGUMENTS_FOO there\./);
+    assert.match(skill, /echo \$ARGUMENTS/);
   });
 });
 
@@ -165,6 +197,35 @@ describe('#5547: workflow hand-off decision', () => {
     assert.equal(_internals.nextStepFor('init', 'plan-phase', [], root), '', 'no skill, no hint');
     assert.equal(_internals.nextStepFor('state', 'new-project', [], root), '', 'only init is a workflow-init call');
     assert.equal(_internals.nextStepFor('init', undefined, [], root), '');
+  });
+
+  test('nextStepFor maps init workflows whose skill has a different name', (t) => {
+    const root = engineWithSkills(t, ['resume-work', 'workspace', 'discuss-phase']);
+    assert.match(_internals.nextStepFor('init', 'resume', [], root), /Next: run \/gsd resume-work \(or \/skill:gsd-resume-work\)/);
+    assert.match(_internals.nextStepFor('init', 'new-workspace', [], root), /\/skill:gsd-workspace\)/);
+    assert.match(_internals.nextStepFor('init', 'discuss-phase-assumptions', [], root), /\/skill:gsd-discuss-phase\)/);
+  });
+
+  test('every hinted init workflow points at a real command file', () => {
+    const hinted = _internals.PI_WORKFLOW_INIT_COMMANDS;
+    assert.ok(Object.keys(hinted).length > 0);
+    for (const [init, command] of Object.entries(hinted)) {
+      assert.ok(fs.existsSync(path.join(__dirname, '..', 'commands', 'gsd', `${command}.md`)), `${init} -> ${command} has no command file`);
+    }
+  });
+
+  test('every gsd-tools init workflow is hinted or has a recorded no-skill reason', () => {
+    // These init workflows back no user-facing command of the same purpose.
+    const NO_SKILL = ['phase-op', 'todos', 'milestone-op', 'transition', 'list-workspaces', 'remove-workspace'];
+    const r = runNode([path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs'), 'init'], { timeoutMs: PROBE_TIMEOUT_MS });
+    const listed = /Available: (.+)/.exec(`${r.stdout}\n${r.stderr}`);
+    assert.ok(listed, `could not read the init workflow list (exit ${r.exitCode}, outcome ${r.outcome})\n${r.stderr}`);
+    const inits = listed[1].split(',').map((x) => x.trim());
+    for (const init of inits) {
+      const covered = Object.prototype.hasOwnProperty.call(_internals.PI_WORKFLOW_INIT_COMMANDS, init) || NO_SKILL.includes(init);
+      assert.ok(covered, `init workflow '${init}' has no Pi hint and no recorded no-skill reason`);
+    }
+    for (const init of NO_SKILL) assert.ok(inits.includes(init), `stale no-skill entry '${init}'`);
   });
 
   test('nextStepFor carries positional arguments and drops flags', (t) => {

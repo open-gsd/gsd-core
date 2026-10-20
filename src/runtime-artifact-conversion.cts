@@ -783,12 +783,36 @@ function convertClaudeCommandToPiSkill(content, skillName, _runtime = null, cmdN
   const description = frontmatter
     ? extractFrontmatterField(frontmatter, 'description') || `Run GSD workflow ${piSkillName}.`
     : `Run GSD workflow ${piSkillName}.`;
-  const normalizedBody = convertGsdCommandReferencesToKimiSkillInvocations(
-    frontmatter ? body : content,
-    names
+  const normalizedBody = replaceArgumentsPlaceholderOutsideFences(
+    convertGsdCommandReferencesToKimiSkillInvocations(frontmatter ? body : content, names),
   );
 
-  return `---\nname: ${piSkillName}\ndescription: ${yamlQuote(toSingleLine(description))}\n---\nInvoke this Pi skill with \`/skill:${piSkillName}\`.\n\n${PI_DISPATCH_CONTRACT}\n\n${PI_INCLUDE_NOTE}\n\n${normalizedBody}`;
+  // Pi (docs/skills.md): descriptions can contain at most 1024 characters.
+  const cappedDescription = toSingleLine(description).slice(0, PI_SKILL_DESCRIPTION_MAX);
+  return `---\nname: ${piSkillName}\ndescription: ${yamlQuote(cappedDescription)}\n---\nInvoke this Pi skill with \`/skill:${piSkillName}\`.\n\n${PI_DISPATCH_CONTRACT}\n\n${PI_INCLUDE_NOTE}\n\n${normalizedBody}`;
+}
+
+/** Pi skill description limit (pi 1.3.0 docs/skills.md: "descriptions can contain at most 1024"). */
+const PI_SKILL_DESCRIPTION_MAX = 1024;
+
+/**
+ * Claude command bodies carry a `$ARGUMENTS` placeholder that Claude substitutes
+ * with the user's text. Pi never substitutes it in a skill — it appends the
+ * arguments after the skill body — so a literal `$ARGUMENTS` would reach the
+ * model as an unexplained token. Replace it with a description of what it stands
+ * for. Fenced blocks are left alone (shell examples legitimately use it), and
+ * only the whole word is matched so `$ARGUMENTS_FOO` survives.
+ */
+function replaceArgumentsPlaceholderOutsideFences(body: string): string {
+  const lines = body.split('\n');
+  const fenced = new Set<number>();
+  for (const { openLineIdx, closeLineIdx } of scanFencedBlocks(lines)) {
+    const end = closeLineIdx === -1 ? lines.length - 1 : closeLineIdx;
+    for (let i = openLineIdx; i <= end; i += 1) fenced.add(i);
+  }
+  return lines
+    .map((line, i) => (fenced.has(i) ? line : line.replace(/\$ARGUMENTS(?![A-Za-z0-9_])/g, '(the text typed after the skill name)')))
+    .join('\n');
 }
 
 const KIMI_CANONICAL_GSD_AGENT_RE = /^gsd-[a-z0-9-]+$/;

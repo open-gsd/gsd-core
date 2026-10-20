@@ -316,6 +316,37 @@ function runHook(hookFile, payload, opts = {}) {
 // skill (`<config>/skills/gsd-<command>/SKILL.md`, invoked `/skill:gsd-<command>`),
 // so a command that names one of those skills hands off to it instead.
 
+// `/gsd init <workflow>` is a data call (the init bundle a workflow consumes).
+// This maps each `gsd-tools init` workflow that has a GSD command to the command
+// stem whose skill runs it — most are the same name, a few differ (`resume` ->
+// `resume-work`, `new-workspace` -> `workspace`, ...). tests/pi-workflow-handoff
+// pins every target to a commands/gsd/<name>.md file and every `gsd-tools init`
+// workflow to either an entry here or an explicit no-skill reason.
+const PI_WORKFLOW_INIT_COMMANDS = Object.freeze({
+  'execute-phase': 'execute-phase',
+  'plan-phase': 'plan-phase',
+  'new-project': 'new-project',
+  'new-milestone': 'new-milestone',
+  onboard: 'onboard',
+  quick: 'quick',
+  'quick-batch': 'quick-batch',
+  'ingest-docs': 'ingest-docs',
+  'verify-work': 'verify-work',
+  'code-review': 'code-review',
+  review: 'review',
+  'map-codebase': 'map-codebase',
+  progress: 'progress',
+  manager: 'manager',
+  'complete-milestone': 'complete-milestone',
+  autonomous: 'autonomous',
+  'docs-update': 'docs-update',
+  update: 'update',
+  debug: 'debug',
+  resume: 'resume-work',
+  'discuss-phase-assumptions': 'discuss-phase',
+  'new-workspace': 'workspace',
+});
+
 /**
  * Whether the installed tree carries `skills/gsd-<name>/SKILL.md`. Local to the
  * config dir the extension was installed into, so a data-only (pre-#5547) tree
@@ -365,12 +396,15 @@ function resolveWorkflowHandoff(rawArgs, engineRoot = ENGINE_ROOT) {
  * @returns {string} the line to append, or '' when none applies
  */
 function nextStepFor(family, subcommand, rest = [], engineRoot = ENGINE_ROOT) {
-  if (family !== 'init' || !hasWorkflowSkill(subcommand, engineRoot)) return '';
+  if (family !== 'init' || typeof subcommand !== 'string') return '';
+  if (!Object.prototype.hasOwnProperty.call(PI_WORKFLOW_INIT_COMMANDS, subcommand)) return '';
+  const command = PI_WORKFLOW_INIT_COMMANDS[subcommand];
+  if (!hasWorkflowSkill(command, engineRoot)) return '';
   // Positional arguments (a phase number, say) carry over; flags belong to the
   // init data call and are not guaranteed to mean anything to the workflow.
   const positional = (Array.isArray(rest) ? rest : []).filter((a) => typeof a === 'string' && !a.startsWith('-'));
   const tail = positional.length > 0 ? ` ${positional.join(' ')}` : '';
-  return `\n\nNext: run /gsd ${subcommand}${tail} (or /skill:gsd-${subcommand}${tail}) to start the ${subcommand} workflow — this output is only its init data.`;
+  return `\n\nNext: run /gsd ${command}${tail} (or /skill:gsd-${command}${tail}) to start the ${command} workflow — this output is only its init data.`;
 }
 
 module.exports = function gsdPiExtension(pi) {
@@ -522,4 +556,5 @@ module.exports._internals = {
   hasWorkflowSkill,
   resolveWorkflowHandoff,
   nextStepFor,
+  PI_WORKFLOW_INIT_COMMANDS,
 };
