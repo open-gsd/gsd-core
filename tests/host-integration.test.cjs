@@ -3257,6 +3257,48 @@ describe('#2652 dispatch-site parity — isolation gates on capability, not runt
     }
   });
 
+  // #5126 review, 2026-10-18 Nit 1: the two inline resolvers parse the query's
+  // JSON with `node -e` one-liners copied verbatim between them — the
+  // decision+held pick and the harness-flag pick. The test above pins the
+  // call shape only, so one copy could change (a dropped `^[a-z-]+$` check, a
+  // renamed field) while the other kept the old parser. Pin each pick's body
+  // byte-equal across the two files.
+  test('the inline resolvers parse the query JSON with byte-equal picks', () => {
+    // name -> every `node -e '…'` body piped from that assignment's $( … ).
+    // Backslash continuations are joined first: the harness-flag pick is
+    // split across two lines in both files.
+    const jsonPicks = (rawText) => {
+      const text = rawText.replace(/\\\r?\n[ \t]*/g, ' ');
+      const picks = new Map();
+      for (const m of text.matchAll(/(\w+)=\$\([^\n]*?\|\s*node -e '([^']*)'/g)) {
+        picks.set(m[1], [...(picks.get(m[1]) || []), m[2]]);
+      }
+      return picks;
+    };
+    const files = [
+      'gsd-core/references/dispatch-isolation-gate.md',
+      'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md',
+    ].map(rel => ({ rel, text: fs.readFileSync(path.join(REPO_ROOT, rel), 'utf-8') }));
+    const [a, b] = files.map(({ rel, text }) => ({ rel, picks: jsonPicks(text) }));
+    for (const name of ['_ISOLATION_FIELDS', 'HARNESS_FLAG']) {
+      for (const { rel, picks } of [a, b]) {
+        assert.equal(
+          (picks.get(name) || []).length,
+          1,
+          `${rel}: expected exactly one ${name} JSON pick — none means the extractor stopped seeing it, and the comparison below would pass on nothing`,
+        );
+      }
+      assert.equal(
+        a.picks.get(name)[0],
+        b.picks.get(name)[0],
+        `${name}: the JSON pick in ${a.rel} and ${b.rel} differ — change both, or the two dispatch sites parse the same answer differently`,
+      );
+    }
+    // Discrimination proof: a one-character change to one copy must register.
+    const mutated = jsonPicks(files[0].text.replace('j.held===true', 'j.held==true'));
+    assert.notEqual(mutated.get('_ISOLATION_FIELDS')[0], b.picks.get('_ISOLATION_FIELDS')[0]);
+  });
+
   test('the detector flags every known runtime-gate shape (discrimination proof)', () => {
     // Each of these slipped past the original same-line, single-bracket detector.
     const mutations = {
