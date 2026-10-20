@@ -89,6 +89,12 @@ export interface WriteScope {
   junctionKept(i: number): boolean;
   /** True when line i was added or changed by the write. */
   lineWritten(i: number): boolean;
+  /**
+   * For a line the write changed in place, the index of the prior line it
+   * replaced (run offsets pair up one to one); -1 for an added line, or when the
+   * write replaced fewer prior lines than it wrote.
+   */
+  replacedPriorIndex(i: number): number;
 }
 
 /**
@@ -101,6 +107,7 @@ export interface WriteScope {
 export function writeScope(match: Int32Array, prevLength: number): WriteScope {
   // For each unmatched line: how many prior lines its run of changed lines replaced.
   const replaced = new Int32Array(match.length);
+  const priorIndex = new Int32Array(match.length).fill(-1);
   for (let i = 0; i < match.length; ) {
     if (match[i] >= 0) { i++; continue; }
     let end = i;
@@ -108,7 +115,10 @@ export function writeScope(match: Int32Array, prevLength: number): WriteScope {
     const before = i > 0 ? match[i - 1] : -1;
     const after = end + 1 < match.length ? match[end + 1] : prevLength;
     const dropped = after - before - 1;
-    for (let j = i; j <= end; j++) replaced[j] = dropped;
+    for (let j = i; j <= end; j++) {
+      replaced[j] = dropped;
+      if (j - i < dropped) priorIndex[j] = before + 1 + (j - i);
+    }
     i = end + 1;
   }
   return {
@@ -124,6 +134,9 @@ export function writeScope(match: Int32Array, prevLength: number): WriteScope {
     },
     lineWritten(i: number): boolean {
       return match[i] < 0;
+    },
+    replacedPriorIndex(i: number): number {
+      return priorIndex[i] ?? -1;
     },
   };
 }

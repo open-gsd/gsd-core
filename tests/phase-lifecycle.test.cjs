@@ -353,7 +353,7 @@ describe('renderProgressBar / progressBarFilledCells (#4294 — the render half 
 
     test('a hand-decorated milestone cell still names its milestone', () => {
       const expected = { completedPhases: 1, totalPhases: 1, totalPlans: 1 };
-      for (const cell of ['**v1.1**', '`v1.1`', 'v1.1 (current)', '_V1.1_', '1.1 current']) {
+      for (const cell of ['**v1.1**', '`v1.1`', 'v1.1 (current)', '_V1.1_', '1.1 current', '[v1.1](ROADMAP.md#v11)', 'v1.1:', 'v1.1,', '**v1.1**:']) {
         const md = table([...shipped, ['3. Three', cell, '1/1', 'Complete']]);
         assert.deepEqual(deriveProgressFromRoadmap(md, 'v1.1'), expected, JSON.stringify(cell));
         assert.equal(normalizeMilestoneToken(cell), '1.1', JSON.stringify(cell));

@@ -78,8 +78,10 @@ export function locateProgressTable(roadmapContent: string): MarkdownTable | nul
  * whitespace-separated token. Absent/blank tokens normalize to `''`.
  */
 export function normalizeMilestoneToken(value: unknown): string {
-  const first = milestoneVersionOf(value)?.split(/\s+/)[0] ?? '';
-  return first.replace(/^[*_`]+|[*_`]+$/g, '').replace(/^v/i, '').toLowerCase();
+  // `[v1.1](ROADMAP.md#v11)` names its link text.
+  const unlinked = (milestoneVersionOf(value) ?? '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
+  const first = unlinked.split(/\s+/)[0] ?? '';
+  return first.replace(/^[*_`]+|[*_`:,;]+$/g, '').replace(/^v/i, '').toLowerCase();
 }
 
 /**

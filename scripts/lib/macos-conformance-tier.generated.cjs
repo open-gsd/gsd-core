@@ -217,6 +217,7 @@ module.exports = {
   "tests/settings-jsonc.test.cjs",
   "tests/shared-hooks-dir-resolution.test.cjs",
   "tests/shell-command-projection-dispatch.test.cjs",
+  "tests/shell-command-projection-md-normalize.test.cjs",
   "tests/shipped-reference-cites.test.cjs",
   "tests/skill-manifest.test.cjs",
   "tests/spawn-liveness-banner.test.cjs",

@@ -1158,8 +1158,9 @@ function _normalizeMd(content: string, prior?: string): string {
   // #5165: when the document being replaced is known, only the junctions the
   // write touched are normalized; every other region stays byte-identical.
   let scope: WriteScope | null = null;
+  let priorLines: string[] = [];
   if (typeof prior === 'string' && prior !== '') {
-    const priorLines = prior.replace(/\r\n/g, '\n').split('\n');
+    priorLines = prior.replace(/\r\n/g, '\n').split('\n');
     // A BOM on either first line must not make an unchanged line look rewritten.
     const alignPrior = [withoutBom(priorLines[0]), ...priorLines.slice(1)];
     const alignNext = [withoutBom(lines[0]), ...lines.slice(1)];
@@ -1208,12 +1209,16 @@ function _normalizeMd(content: string, prior?: string): string {
     const trimmed = line.trimEnd();
     const isFenceLine = fenceRegex.test(trimmed);
     // A heading or fence line the write authored brings its own separation, even
-    // where it replaced a prose line in place (#5165).
-    const authoredStructure = scope !== null && scope.lineWritten(i) && (/^#{1,6}\s/.test(trimmed) || isFenceLine);
+    // where it replaced a prose line in place (#5165). One that replaced a heading
+    // or fence (a rename, a renumber) inherits the spacing around it instead.
+    const isStructural = (text: string): boolean => /^#{1,6}\s/.test(text.trimEnd()) || fenceRegex.test(text.trimEnd());
+    const replacedPrior = scope !== null ? scope.replacedPriorIndex(i) : -1;
+    const authoredStructure = scope !== null && scope.lineWritten(i) && isStructural(line)
+      && !(replacedPrior >= 0 && isStructural(priorLines[replacedPrior] ?? ''));
     const keptBefore = scope !== null && !authoredStructure && i > 0 && scope.junctionKept(i - 1);
     const keptAfter = scope !== null && !authoredStructure && i < lines.length - 1 && scope.junctionKept(i);
     // A blank-line run is collapsed only where the write made it (#5165).
-    if (scope !== null && line === ''&& result.length > 0 && result[result.length - 1] === '' && !keptBefore) continue;
+    if (scope !== null && line === '' && result.length > 0 && result[result.length - 1] === '' && !keptBefore) continue;
     if (/^#{1,6}\s/.test(trimmed) && i > 0 && prevTrimmed !== '' && prevTrimmed !== '---' && !keptBefore) blank();
     if (isFenceLine && i > 0 && prevTrimmed !== '' && !insideFence[i] && (i === 0 || !insideFence[i - 1] || isFenceLine) && !keptBefore) {
       if (i === 0 || !insideFence[i - 1]) blank();
@@ -1239,7 +1244,7 @@ function _normalizeMd(content: string, prior?: string): string {
   // applies from the line ending that closes the block onward.
   const head = result.slice(0, frontmatterLines).join('\n');
   text = result.join('\n');
-  text = scope === null ? head +text.slice(head.length).replace(/\n{3,}/g, '\n\n') : text;
+  text = scope === null ? head + text.slice(head.length).replace(/\n{3,}/g, '\n\n') : text;
   text = text.replace(/\n*$/, '\n');
   return text;
 }
@@ -1355,12 +1360,36 @@ export function retryRenameSync(fromPath: string, toPath: string): void {
  */
 const MAX_PRIOR_BYTES = 2 * 1024 * 1024;
 
+/**
+ * The Markdown document a write replaces, or undefined when there is none worth
+ * diffing against: no file, not a regular file (a FIFO or device reports size 0
+ * and would block or never end), unreadable, or larger than MAX_PRIOR_BYTES. The
+ * bound is enforced on the bytes actually read from one open descriptor, so a
+ * file that grows after the check cannot exceed it.
+ */
 function readPriorMarkdown(filePath: string, encoding: BufferEncoding): string | undefined {
+  let fd: number | undefined;
   try {
-    if (fs.statSync(filePath).size > MAX_PRIOR_BYTES) return undefined;
-    return fs.readFileSync(filePath, encoding);
+    // O_NONBLOCK keeps opening a FIFO from waiting for a writer; it is absent on Windows.
+    fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0));
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.size > MAX_PRIOR_BYTES) return undefined;
+    // One byte of headroom: reading it means the file grew past what was measured.
+    const buffer = Buffer.alloc(stat.size + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const read = fs.readSync(fd, buffer, length, buffer.length - length, null);
+      if (read === 0) break;
+      length += read;
+    }
+    if (length > stat.size) return undefined;
+    return buffer.toString(encoding, 0, length);
   } catch {
     return undefined; // no prior document (new file or unreadable): normalize it whole
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch { /* already closed */ }
+    }
   }
 }
 

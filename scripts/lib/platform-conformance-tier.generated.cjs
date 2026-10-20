@@ -298,6 +298,7 @@ module.exports = {
   "tests/sh-hook-paths.test.cjs",
   "tests/shared-hooks-dir-resolution.test.cjs",
   "tests/shell-command-projection-dispatch.test.cjs",
+  "tests/shell-command-projection-md-normalize.test.cjs",
   "tests/shell-command-projection-path-sep.test.cjs",
   "tests/ship-notes-wedged-pr.test.cjs",
   "tests/shipped-reference-cites.test.cjs",

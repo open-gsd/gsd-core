@@ -17615,6 +17615,12 @@ describe('#4972: phase complete warns when an active verify:post audit is missin
         const state = read(dir, 'STATE.md');
         assert.equal(percentOf(state), 50);
         assert.equal(barOf(state), '[█████░░░░░] 50%', 'body counter and frontmatter percent agree');
+        // parity: a later resyncing write resolves the milestone the same way
+        gsd(dir, 'state.record-session', '--stopped-at', 'X', '--resume-file', 'Y');
+        const resynced = read(dir, 'STATE.md');
+        assert.equal(percentOf(resynced), 50);
+        assert.equal(completedOf(resynced), completedOf(state));
+        assert.equal(barOf(resynced), barOf(state));
       } finally {
         cleanup(dir);
       }

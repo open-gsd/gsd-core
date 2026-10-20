@@ -438,6 +438,20 @@ describe('#5113: a verbatim write publishes the content exactly as given', () =>
       assert.equal(normalizeContent(MD, next, { prior }).content, 'intro\n\n```\nbody\n');
     });
 
+    test('renaming a heading in place keeps the tight line after it (the roadmap template shape)', () => {
+      const prior = '#### Phase 5: Five\n**Goal**: five\n**Plans**: TBD\n#### Phase 6: Six\n**Goal**: six\n';
+      const next = prior.replace('Phase 5: Five', 'Phase 5: Five (renamed)');
+      assert.equal(normalizeContent(MD, next, { prior }).content, next);
+      const renumbered = prior.replace('Phase 6: Six', 'Phase 7: Six');
+      assert.equal(normalizeContent(MD, renumbered, { prior }).content, renumbered);
+    });
+
+    test('replacing a fence line with a fence line keeps the spacing around it', () => {
+      const prior = 'intro\n```js\ncode\n```\nafter\n';
+      const next = prior.replace('```js', '```ts');
+      assert.equal(normalizeContent(MD, next, { prior }).content, next);
+    });
+
     test('a BOM on either first line does not make an unchanged document look rewritten', () => {
       const prior = '﻿### Phase 1\n**Goal**: one\n- a\nafter\n';
       for (const next of [prior, prior.slice(1)]) {
@@ -512,6 +526,16 @@ describe('#5113: a verbatim write publishes the content exactly as given', () =>
           });
         });
       }
+
+      test('a destination that is not a regular file is not read as a prior (no hang on a device)', (t) => {
+        if (process.platform === 'win32') return t.skip('no /dev/zero on Windows');
+        withDir((file) => {
+          fs.symlinkSync('/dev/zero', file);
+          platformWriteSync(file, '### H\n- a\ntail line\n');
+          assert.equal(fs.lstatSync(file).isFile(), true, 'the symlink is replaced by the published file');
+          assert.equal(fs.readFileSync(file, 'utf-8'), '### H\n\n- a\n\ntail line\n', 'normalized whole, as a new file');
+        });
+      });
 
       test('a latin1 prior is decoded as latin1, so unchanged lines still match', () => {
         withDir((file) => {
