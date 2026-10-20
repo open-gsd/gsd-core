@@ -64,7 +64,7 @@ export function buildPredicateDeps() {
         timedOut: r.timedOut,
       };
     },
-    findPhaseArtifact(phaseDir: string, artifactSuffix: string): string | null {
+    findPhaseArtifact(phaseDir: string, artifactSuffix: string): string[] {
       // #5170 (ADR-5057 §4): an ABSENT directory or artifact is `none` (the artifact is not there);
       // one that exists but cannot be examined is `unreadable` and THROWS — `evaluateCheckPredicate`
       // maps a throw to the usage failure the dispatch contract routes by `onError`. It is never
@@ -79,7 +79,7 @@ export function buildPredicateDeps() {
       };
       const phaseDirStat = statEvidence(phaseDir);
       if (phaseDirStat.kind === 'unreadable') return unreadable(phaseDir, phaseDirStat.reason);
-      if (phaseDirStat.kind === 'none') return null;
+      if (phaseDirStat.kind === 'none') return [];
       if (
         artifactSuffix === '.' ||
         artifactSuffix === '..' ||
@@ -87,30 +87,27 @@ export function buildPredicateDeps() {
         path.basename(artifactSuffix) !== artifactSuffix ||
         path.win32.basename(artifactSuffix) !== artifactSuffix
       ) {
-        return null;
+        return [];
       }
-      const directContained = tryWithinRoot(artifactSuffix, phaseDir);
-      if (directContained !== null) {
-        const direct = regularFileOrNull(directContained);
-        if (direct !== null) return direct;
-      }
+      // #5313: collect EVERY distinct match; the evaluator fails closed on >1 instead of trusting listing order.
+      const found: string[] = [];
       const planningContained = tryWithinRoot(path.join('.planning', artifactSuffix), phaseDir);
       if (planningContained !== null) {
         const planning = regularFileOrNull(planningContained);
-        if (planning !== null) return planning;
+        if (planning !== null) found.push(planning);
       }
       const listing = readDirEvidence(phaseDir);
       if (listing.kind === 'unreadable') return unreadable(phaseDir, listing.reason);
-      if (listing.kind === 'none') return null;
+      if (listing.kind === 'none') return [];
       for (const f of listing.value) {
         if (f.endsWith('-' + artifactSuffix) || f === artifactSuffix) {
           const candidateContained = tryWithinRoot(f, phaseDir);
           if (candidateContained === null) continue;
           const candidate = regularFileOrNull(candidateContained);
-          if (candidate !== null) return candidate;
+          if (candidate !== null) found.push(candidate);
         }
       }
-      return null;
+      return found;
     },
     readFrontmatter(filePath: string): Record<string, unknown> {
       const content = platformReadSync(filePath);

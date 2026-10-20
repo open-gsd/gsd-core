@@ -6,7 +6,7 @@ const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, cleanup, homeSandboxEnv } = require('./helpers.cjs');
 
 describe('claude_md_path config key', () => {
   let tmpDir;
@@ -54,7 +54,7 @@ describe('claude_md_path config key', () => {
 
   test('buildNewProjectConfig includes claude_md_path default', () => {
     // Use config-new-project which calls buildNewProjectConfig
-    const result = runGsdTools('config-new-project', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('config-new-project', tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `Expected success but got error: ${result.error}`);
 
     const configPath = path.join(tmpDir, '.planning', 'config.json');

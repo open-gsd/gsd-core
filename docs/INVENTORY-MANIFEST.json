@@ -715,6 +715,7 @@
       "new-project/steps/auto-mode-detection.md",
       "new-project/steps/codebase-map-offer.md",
       "plan-phase/steps/adr-ingest-express-path.md",
+      "plan-phase/steps/auto-advance-check.md",
       "plan-phase/steps/chunked-planning-mode.md",
       "plan-phase/steps/closed-phase-gate.md",
       "plan-phase/steps/prd-express-gate.md",
@@ -756,6 +757,7 @@
       "verify-work/detail/elaboration.md"
     ],
     "workflow_templates": [
+      "autonomous/templates/minimal-context.md",
       "discuss-phase/templates/context.md",
       "discuss-phase/templates/discussion-log.md"
     ]

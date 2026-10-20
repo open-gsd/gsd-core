@@ -38,9 +38,18 @@ const espree = require('espree');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { splitLines, joinLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
-const { createTempDir, cleanup, writePackageSourceMarkerFixture } = require('./helpers.cjs');
+const { createTempDir, cleanup, sandboxHome, writePackageSourceMarkerFixture } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+
+function useIsolatedHome(t) {
+  // A Windows temp directory is normally inside the caller's home directory.
+  // Use a sibling fixture so an install into another temp dir takes the
+  // absolute-path branch on every platform.
+  const fixtureHome = createTempDir('gsd-test-home-');
+  sandboxHome(t, fixtureHome);
+  t.after(() => cleanup(fixtureHome));
+}
 
 // Bound the writer subprocess so a regression that hangs the writer
 // (or the dispatcher) cannot deadlock CI (PR #3003 CR feedback).
@@ -536,12 +545,6 @@ function readAllSkillMd(dir) {
 // write to (and an uninstall would mutate) the developer's REAL ~/.agents/skills.
 // Sandbox HOME/USERPROFILE to configDir before resolving the layout or invoking
 // install/uninstall so codex's resolved skills dir is configDir/.agents/skills.
-//
-// #3712: promoted to tests/helpers.cjs, from the byte-identical copy that used to
-// live here. It now also sets the sandbox marker src/real-home-guard.cts needs to
-// stay permissive on hosts with no readable passwd entry.
-const { sandboxHome } = require('./helpers.cjs');
-
 describe('installRuntimeArtifacts — skills runtimes write gsd-prefixed skill dirs', () => {
   for (const runtime of SKILLS_RUNTIMES_LAYOUT) {
     test(`${runtime}: gsd-prefixed skill dirs in skills/`, (t) => {
@@ -997,10 +1000,12 @@ for (const __runtime2362 of ['opencode', 'kilo']) {
       // this one capability's SKILL.md path — never chmod 0o000 (root bypasses
       // mode bits; silently zero-coverage under root Docker/CI).
       const skillPath = path.join(gsdHome, '.gsd', 'capabilities', 'my-thing', 'skills', 'my-thing', 'SKILL.md');
-      const origReadFileSync = fs.readFileSync;
-      fs.readFileSync = function injectedReadFileSync(p, ...rest) {
-        if (p === skillPath) throw new Error('injected read failure (#2362 regression test)');
-        return origReadFileSync.call(fs, p, ...rest);
+      // #5121: capability SKILL.md files are read through the bounded fd reader (open -> fstat -> read), so
+      // the failure is injected at the open the reader performs.
+      const origOpenSync = fs.openSync;
+      fs.openSync = function injectedOpenSync(p, ...rest) {
+        if (p === skillPath) throw Object.assign(new Error('injected read failure (#2362 regression test)'), { code: 'EACCES' });
+        return origOpenSync.call(fs, p, ...rest);
       };
       try {
         with2362GsdHome(gsdHome, () => {
@@ -1009,7 +1014,7 @@ for (const __runtime2362 of ['opencode', 'kilo']) {
           }, `installRuntimeArtifacts('${__runtime2362}', ...) must not throw when a registry-referenced capability skill is unreadable`);
         });
       } finally {
-        fs.readFileSync = origReadFileSync;
+        fs.openSync = origOpenSync;
       }
 
       assert.ok(
@@ -2497,6 +2502,7 @@ describe('_applyRuntimeRewrites — cline custom-dir embedded path (Fix 1)', () 
   test('installRuntimeArtifacts cline with CLINE_CONFIG_DIR custom: SKILL.md embeds custom path', (t) => {
     const configDir = createTempDir('gsd-cline-custom-dir-');
     t.after(() => cleanup(configDir));
+    useIsolatedHome(t);
 
     const MANIFEST_FULL = require('../gsd-core/bin/lib/install-profiles.cjs').loadSkillsManifest(
       path.join(__dirname, '..', 'commands', 'gsd')
@@ -8000,6 +8006,7 @@ describe('installRuntimeArtifacts — G1: void-ignoring caller is unaffected (AC
     const configDirCaptured = createTempDir('gsd-g1-captured-');
     t.after(() => cleanup(configDirIgnored));
     t.after(() => cleanup(configDirCaptured));
+    useIsolatedHome(t);
 
     // Caller A: discards the return value entirely — today's every call site
     // (bin/install.js, both existing adapter test doubles).

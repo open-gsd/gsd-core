@@ -229,7 +229,7 @@ timestamp=$(gsd_run query current-timestamp full --raw)
 
 <step name="commit">
 ```bash
-gsd_run query commit "wip: [context-name] paused at [X]/[Y]" --files [handoff-path] .planning/HANDOFF.json
+gsd_run query commit "docs(pause): [context-name] paused at [X]/[Y]" --files [handoff-path] .planning/HANDOFF.json
 ```
 </step>
 
@@ -246,7 +246,7 @@ Current state:
 - Task: [X] of [Y]
 - Status: [in_progress/blocked]
 - Blockers: [count] ({human_actions_pending count} need human action)
-- Committed as WIP
+- Committed handoff
 
 To resume: /gsd:resume-work
 
@@ -260,6 +260,6 @@ To resume: /gsd:resume-work
 - [ ] .continue-here.md created at correct path for detected context
 - [ ] Required Reading, Anti-Patterns, and Infrastructure State sections filled
 - [ ] Pre-Execution Critique section filled if pausing between design and execution
-- [ ] Committed as WIP
+- [ ] Committed handoff
 - [ ] User knows location and how to resume
 </success_criteria>

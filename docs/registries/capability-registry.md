@@ -6,4 +6,23 @@
 
 _To add your capability, see the [registry README](./README.md)._
 
-_No entries yet — be the first: see [README](./README.md)._
+| Name | What it is | Latest release | GSD compat | Discussion |
+|---|---|---|---|---|
+| [Ponytail Everywhere](https://github.com/davdittrich/ponytail-everywhere) | Brings lazy-ladder discipline \(YAGNI, reuse before writing, stdlib and native features before dependencies, shortest working diff\) to GSD as an advisory planner contribution at plan:pre, matching executor and verifier fragments, and a plan-review proportionality checker contribution. An optional Claude Code plugin adds a subagent banner and a pre-expansion check that recommends a smaller route before scope-expanding commands. | ![release](https://img.shields.io/github/v/release/davdittrich/ponytail-everywhere?sort=semver&include_prereleases) | `>=1.13.0` | [discuss](https://github.com/open-gsd/gsd-core/discussions/5292) |
+
+## Ponytail Everywhere
+- **Repository:** https://github.com/davdittrich/ponytail-everywhere — [latest release](https://github.com/davdittrich/ponytail-everywhere/releases/latest)
+- **What it is:** Brings lazy-ladder discipline \(YAGNI, reuse before writing, stdlib and native features before dependencies, shortest working diff\) to GSD as an advisory planner contribution at plan:pre, matching executor and verifier fragments, and a plan-review proportionality checker contribution. An optional Claude Code plugin adds a subagent banner and a pre-expansion check that recommends a smaller route before scope-expanding commands.
+- **Author:** Dennis A. V. Dittrich
+- **Every interaction with GSD:** Loop Extension Points: plan:pre, execute:wave:pre, execute:wave:post; hook kinds: contribution; configKeys: ponytail.enabled, ponytail.enforcement, ponytail.level; runtimeCompat: all; consumes: .planning/config.json
+- **Install:**
+```sh
+gsd capability install https://github.com/davdittrich/ponytail-everywhere.git#v0.9.4
+```
+- **Uninstall:**
+```sh
+gsd capability remove ponytail
+```
+- **GSD compatibility:** `>=1.13.0`
+- **License:** MIT
+- **Discussion / ranking:** https://github.com/open-gsd/gsd-core/discussions/5292

@@ -317,6 +317,106 @@ const CASES = [
       };
     },
   },
+  {
+    // #4939: mirror of the plan gate. Verify stays advisory, but a phase-dir argument that names no directory
+    // scanned nothing, so no decision may be reported "not honored".
+    id: 'U2o',
+    title: 'phase dir that does not exist -> advisory, reason "phase directory not found", null totals (#4939)',
+    git: true,
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-CONTEXT.md', ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '</decisions>', ''].join('\n'));
+    },
+    args() { return ['1', '.planning/phases/01-x/01-CONTEXT.md']; },
+    outcome: 'advisory',
+    block: false,
+    expected() {
+      return {
+        skipped: false,
+        blocking: false,
+        reason: 'phase directory not found',
+        total: null,
+        honored: null,
+        not_honored: [],
+        message: 'Decision coverage verify (warning): the phase directory "1" does not exist, so no plans or summaries were scanned. Pass the phase DIRECTORY (e.g. .planning/phases/01-slug), not the phase number.',
+      };
+    },
+  },
+  {
+    id: 'U2p',
+    title: 'a FILE in the phase-dir slot -> advisory, reason "phase path is not a directory", null totals (#4939)',
+    git: true,
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-CONTEXT.md', ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '</decisions>', ''].join('\n'));
+    },
+    args() { return ['.planning/phases/01-x/01-CONTEXT.md', '.planning/phases/01-x/01-CONTEXT.md']; },
+    outcome: 'advisory',
+    block: false,
+    expected() {
+      return {
+        skipped: false,
+        blocking: false,
+        reason: 'phase path is not a directory',
+        total: null,
+        honored: null,
+        not_honored: [],
+        message: 'Decision coverage verify (warning): the phase directory ".planning/phases/01-x/01-CONTEXT.md" is a file, not a directory, so no plans or summaries were scanned. Pass the phase DIRECTORY (e.g. .planning/phases/01-slug), not the phase number.',
+      };
+    },
+  },
+  {
+    id: 'U2q',
+    title: 'phase dir whose stat fails with EACCES -> unreadable outcome, reason "phase directory unreadable" (stat failure injected, #4939)',
+    git: true,
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-CONTEXT.md', ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '</decisions>', ''].join('\n'));
+      const real = fs.statSync;
+      fs.statSync = function (p, ...rest) {
+        if (String(p).endsWith('01-x')) {
+          const err = new Error('EACCES: simulated stat failure');
+          err.code = 'EACCES';
+          throw err;
+        }
+        return real.call(fs, p, ...rest);
+      };
+      return function restore() { fs.statSync = real; };
+    },
+    args() { return ['.planning/phases/01-x', '.planning/phases/01-x/01-CONTEXT.md']; },
+    outcome: 'unreadable',
+    block: false,
+    expected() {
+      return {
+        skipped: false,
+        blocking: false,
+        reason: 'phase directory unreadable',
+        total: null,
+        honored: null,
+        not_honored: [],
+        message: 'Decision coverage verify (warning): the phase directory ".planning/phases/01-x" could not be read (EACCES), so no plans or summaries were scanned. Check that the directory is readable.',
+      };
+    },
+  },
+  {
+    id: 'U2r',
+    title: 'phase dir that holds no PLAN or SUMMARY file -> advisory, reason "phase directory holds no plans", null totals (#4939)',
+    git: true,
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-CONTEXT.md', ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '</decisions>', ''].join('\n'));
+    },
+    args() { return ['.planning/phases/01-x', '.planning/phases/01-x/01-CONTEXT.md']; },
+    outcome: 'advisory',
+    block: false,
+    expected() {
+      return {
+        skipped: false,
+        blocking: false,
+        reason: 'phase directory holds no plans',
+        total: null,
+        honored: null,
+        not_honored: [],
+        message: 'Decision coverage verify (warning): the phase directory ".planning/phases/01-x" holds no PLAN or SUMMARY files, so nothing was scanned. Pass the phase DIRECTORY that holds the plans (e.g. .planning/phases/01-slug), not the phase number.',
+      };
+    },
+  },
 ];
 
 function run(c) {

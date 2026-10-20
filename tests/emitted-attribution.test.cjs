@@ -43,6 +43,7 @@ const { cleanup, createTempDir } = require('./helpers.cjs');
 const { BUILD_SCRIPT, buildParityManifest, buildInstallTree, PKG_VERSION } = require('./helpers/install-shared.cjs');
 const {
   resolveChangedPaths,
+  resolveBase,
   resolveAttributionBase,
   resolveAttributionInputs,
   baseRefCandidates,
@@ -63,6 +64,7 @@ const {
   BUILD_TIMEOUT_MS,
   CHUNK_TIMEOUT_CEILING_MS,
 } = require('./helpers/emitted-runtime.cjs');
+const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 
 const { EXPECTED_MANIFEST_COUNT, loadManifests } = require('./helpers/emitted-provenance.cjs');
 // ADR-3942 §6: scripts/lint-emitted-drift-ack.cjs (the legacy JSON-ack-file pre-merge
@@ -1443,17 +1445,17 @@ test('base-ref candidates are ordered most-specific first and de-duplicated', ()
   // pinned rather than left implicit.
   assert.deepEqual(
     baseRefCandidates({ GSD_EMITTED_BASE: 'abc123', GITHUB_BASE_REF: 'next' }),
-    ['abc123', 'origin/next', 'next'],
+    ['abc123', 'origin/next', 'next', 'upstream/next'],
     'an explicit override wins, then the Actions base ref, then the defaults',
   );
   assert.deepEqual(
     baseRefCandidates({ GITHUB_BASE_REF: 'release/1.9' }),
-    ['origin/release/1.9', 'release/1.9', 'origin/next', 'next'],
+    ['origin/release/1.9', 'release/1.9', 'upstream/next', 'origin/next', 'next'],
     'a non-next base ref is honored before falling back',
   );
   assert.deepEqual(
     baseRefCandidates({}),
-    ['origin/next', 'next'],
+    ['upstream/next', 'origin/next', 'next'],
     'with no env, the repo defaults are the only candidates',
   );
   // De-duplication matters: GITHUB_BASE_REF=next must not produce origin/next twice.
@@ -2133,6 +2135,91 @@ function makeForkedRepo(baseAdvance) {
   return { root, forkSha, tipSha };
 }
 
+// The feature starts at upstream's newer tip; the fork's origin stays behind.
+function makeRemoteBaseRepo(t, { origin = true, upstream = true } = {}) {
+  const fixture = makeForkedRepo(1);
+  const { root, forkSha, tipSha } = fixture;
+  t.after(() => cleanup(root));
+  if (origin) gitFixture(root, ['update-ref', 'refs/remotes/origin/next', forkSha]);
+  if (upstream) gitFixture(root, ['update-ref', 'refs/remotes/upstream/next', tipSha]);
+  gitFixture(root, ['checkout', '-q', '-b', 'feature', tipSha]);
+  gitFixture(root, ['branch', '-D', 'next']);
+  return fixture;
+}
+
+test('#5187: an unpinned fork uses upstream/next instead of stale origin/next', (t) => {
+  const { root, tipSha } = makeRemoteBaseRepo(t);
+  assert.deepEqual(resolveBase({}, { cwd: root }), { ref: 'upstream/next', sha: tipSha });
+  assert.deepEqual(resolveAttributionBase({}, { cwd: root }), {
+    ref: 'upstream/next', tipSha, sha: tipSha,
+  });
+});
+
+test('#5187: an origin-only clone still resolves origin/next', (t) => {
+  const { root, forkSha } = makeRemoteBaseRepo(t, { upstream: false });
+  assert.deepEqual(resolveBase({}, { cwd: root }), { ref: 'origin/next', sha: forkSha });
+});
+
+test('#5187: a checkout without base refs keeps the null result', (t) => {
+  const { root } = makeRemoteBaseRepo(t, { origin: false, upstream: false });
+  assert.equal(resolveBase({}, { cwd: root }), null);
+  assert.equal(resolveAttributionBase({}, { cwd: root }), null);
+});
+
+test('#5187: an explicit pin takes precedence over CI and upstream refs', (t) => {
+  const { root, forkSha } = makeRemoteBaseRepo(t);
+  assert.deepEqual(resolveBase({ GSD_EMITTED_BASE: forkSha, GITHUB_BASE_REF: 'next' }, { cwd: root }), {
+    ref: forkSha, sha: forkSha,
+  });
+});
+
+test('#5187: the CI remote base takes precedence over upstream/next', (t) => {
+  const { root, forkSha } = makeRemoteBaseRepo(t);
+  assert.deepEqual(resolveBase({ GITHUB_BASE_REF: 'next' }, { cwd: root }), {
+    ref: 'origin/next', sha: forkSha,
+  });
+});
+
+test('#5187: the CI local base takes precedence over upstream/next', (t) => {
+  const { root, forkSha } = makeRemoteBaseRepo(t, { origin: false });
+  gitFixture(root, ['branch', 'ci-base', forkSha]);
+  assert.deepEqual(resolveBase({ GITHUB_BASE_REF: 'ci-base' }, { cwd: root }), {
+    ref: 'ci-base', sha: forkSha,
+  });
+});
+
+for (const hasBase of [true, false]) {
+  test(`#5187: ${hasBase ? 'failure' : 'skip'} output names the resolved base and GSD_EMITTED_BASE`, (t) => {
+    const { root } = makeRemoteBaseRepo(t, { origin: hasBase, upstream: hasBase });
+    const probe = path.join(root, 'base-output.test.cjs');
+    fs.writeFileSync(probe, `
+      const { test } = require('node:test');
+      const assert = require('node:assert/strict');
+      const { resolveAttributionBase } = require(${JSON.stringify(require.resolve('./helpers/emitted-runtime.cjs'))});
+      test('attribution output probe', (t) => {
+        const base = resolveAttributionBase({}, {
+          cwd: __dirname, diagnostic: (message) => t.diagnostic(message),
+        });
+        if (!base) { t.skip('no base ref resolvable'); return; }
+        assert.fail('forced attribution failure');
+      });
+    `);
+    const env = { ...process.env };
+    delete env.NODE_TEST_CONTEXT;
+    delete env.GSD_RUN_TESTS_LEDGER_FILE;
+    delete env.GSD_RUN_TESTS_EVENTS_FILE;
+    const result = runNode(['--test', '--test-reporter=tap', probe], {
+      cwd: root, timeoutMs: FRESH_FIXTURE_GIT_TIMEOUT_MS,
+      env,
+    });
+    assert.equal(result.outcome, OUTCOME.EXITED);
+    assert.equal(result.exitCode, hasBase ? 1 : 0);
+    assert.match(result.stdout, hasBase ? /resolved base: upstream\/next/ : /resolved base: none/);
+    assert.match(result.stdout, /GSD_EMITTED_BASE=<ref\|sha>/);
+    if (!hasBase) assert.match(result.stdout, /# skipped 1/);
+  });
+}
+
 for (const baseAdvance of [0, 1, 2]) {
   test(`#5008: base advanced ${baseAdvance} commit(s) past the fork — the gate measures from the merge-base`, () => {
     const { root, forkSha, tipSha } = makeForkedRepo(baseAdvance);
@@ -2282,6 +2369,7 @@ test('#5008: every differential input is pinned to the merge-base, never the tip
 // comparing against those would be vacuous.
 
 test('differential attribution over the real tree', { timeout: HEAVY_REAL_TREE_TEST_TIMEOUT_MS }, async (t) => {
+  const resolved = resolveAttributionBase(process.env, { diagnostic: (message) => t.diagnostic(message) });
   if (process.platform === 'win32') {
     // Mirrors the golden harness: install output is platform-specific on Windows
     // (backslash paths), so parity is asserted on macOS + Linux. An explicit t.skip,
@@ -2305,7 +2393,6 @@ test('differential attribution over the real tree', { timeout: HEAVY_REAL_TREE_T
   // a PASS (ADR-2719 §6). Hard-failing instead would make the suite permanently red
   // wherever a base ref cannot exist by construction, which is not a propagation
   // finding — it is a statement about the checkout.
-  const resolved = resolveAttributionBase();
   if (!resolved) {
     t.skip(
       'no base ref resolvable — tried ' + baseRefCandidates().join(', ') +

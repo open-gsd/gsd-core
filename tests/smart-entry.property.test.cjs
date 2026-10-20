@@ -43,9 +43,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const fc = require('./helpers/fast-check-setup.cjs');
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, createTempProject } = require('./helpers.cjs');
 
 const { detectSignals, classifyProject } = require('../gsd-core/bin/lib/smart-entry.cjs');
+const { comparePhaseNum } = require('../gsd-core/bin/lib/phase-id.cjs');
 
 const FIXED_NOW = () => Date.parse('2026-08-01T00:00:00Z');
 const HOUR_MS = 3600 * 1000;
@@ -301,6 +302,47 @@ describe('smart-entry: phase ordinal property (#5228)', () => {
             assert.equal(summary, `Phase ${at + 1} of ${count} — needs a plan`);
           } finally {
             cleanup(dir);
+          }
+        },
+      ),
+    );
+  });
+});
+
+// #4890 applies only when the active roadmap supplies a count. Without one,
+// the issue explicitly requires the original STATE.md pair, even if that pair
+// looks impossible. The generator keeps the current phase outside the table's
+// local 1..total IDs so the ordinal branch cannot hide a mixed-scope fallback.
+describe('smart-entry: mixed-scope summary property (#4890)', () => {
+  test('a global phase beyond the roadmap total is never printed as a raw ratio', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1, max: 12 }),
+        fc.integer({ min: 1, max: 40 }),
+        fc.constantFrom('', 'A', '.1'),
+        fc.constantFrom('planning', 'executing', 'verifying'),
+        fc.nat({ max: 12 }),
+        (total, extra, suffix, status, doneCandidate) => {
+          const phase = `${total + extra}${suffix}`;
+          const done = Math.min(doneCandidate, total - 1);
+          const rows = Array.from({ length: total }, (_, i) =>
+            `| ${i + 1} | 0/1 | ${i < done ? 'Complete' : 'In Progress'} | |`);
+          const dir = createTempProject('gsd-summary-prop-');
+          created.push(dir);
+          fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'),
+            `---\nstatus: ${status}\ncurrent_phase: ${phase}\ntotal_phases: ${total}\n---\n\n# State\n`);
+          fs.writeFileSync(path.join(dir, '.planning', 'ROADMAP.md'), [
+            '# Roadmap', '', '## Milestone v1.0', '', '## Progress', '',
+            '| Phase | Plans Complete | Status | Completed |',
+            '|-------|---------------|--------|-----------|',
+            ...rows,
+          ].join('\n'));
+          const result = classifyProject(dir);
+          assert.equal(result.signals.roadmap_total_phases, total);
+          assert.ok(comparePhaseNum(phase, total) > 0);
+          assert.ok(result.summary.startsWith(`Phase ${phase} (`), result.summary);
+          for (const match of result.summary.matchAll(/\bPhase ([\d.A-Z]+) of (\d+)\b/g)) {
+            assert.ok(comparePhaseNum(match[1], match[2]) <= 0, result.summary);
           }
         },
       ),

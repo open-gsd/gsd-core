@@ -494,7 +494,7 @@ PI_CODING_AGENT_DIR=~/.pi-alt/agent npx @opengsd/gsd-core@latest --pi --global
 
 `PI_CODING_AGENT_DIR` is pi's own upstream override (`getAgentDir()` in pi's `config.ts`) for its global agent directory (`~/.pi/agent` by default) — GSD honors it so the install always lands where pi actually reads ([#3023](https://github.com/open-gsd/gsd-core/issues/3023)). pi also supports a `piConfig.configDir` field (`config.ts`'s `CONFIG_DIR_NAME`) that renames the `.pi` segment, but that field is read from pi's own installed `package.json`, not your project's — it is a white-label/rebranding hook for redistributed pi forks (it sits beside `piConfig.name`, which renames the app itself), not something an end user sets for their own project. GSD's pi descriptor does not target rebranded forks, so `PI_CODING_AGENT_DIR` remains the correct override for a stock pi install.
 
-[pi](https://pi.dev) is a bun-runtime programmatic CLI whose extensions implement pi's own `ExtensionAPI` (`registerCommand`/`registerTool`/`registerProvider`/`pi.on`) rather than a settings-file or slash-markdown surface. GSD ships a single native-extension file:
+[pi](https://pi.dev) is a Node-runtime programmatic CLI (managed pi 1.3.0 install) whose extensions implement pi's own `ExtensionAPI` (`registerCommand`/`registerTool`/`registerProvider`/`pi.on`) rather than a settings-file or slash-markdown surface. GSD ships a single native-extension file:
 
 - **Extension** → `~/.pi/agent/extensions/gsd.js` (global) or `.pi/extensions/gsd.js` (local)
 

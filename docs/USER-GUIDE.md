@@ -450,7 +450,7 @@ cd ~/gsd-workspaces/feature-b
 
 GSD generates markdown files that become LLM system prompts. This means any user-controlled text flowing into planning artifacts is a potential indirect prompt injection vector. v1.27 introduced centralised security hardening:
 
-**Path Traversal Prevention:** All user-supplied file paths (`--text-file`, `--prd`) are validated to resolve within the project directory. macOS `/var` → `/private/var` symlink resolution is handled.
+**Path Traversal Prevention:** User-supplied file paths that GSD writes to or resolves into the project (e.g. `--prd`) are validated to resolve within the project directory. macOS `/var` → `/private/var` symlink resolution is handled. Read-once text inputs whose contents are copied into STATE.md (`--summary-file`, `--rationale-file`, `--text-file`, `--note-file`) are not confined and accept any readable file (#4926).
 
 **Prompt Injection Detection:** The `security.cjs` module scans for known injection patterns in user-supplied text before it enters planning artifacts.
 

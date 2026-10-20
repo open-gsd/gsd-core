@@ -153,7 +153,14 @@ module is the central security utility. It provides:
   or `PathAcceptance.AbsoluteInsideRoot` — and neither relaxes containment: an
   absolute path resolving outside the root is rejected exactly as a traversal is.
   A caller may decide how to degrade on rejection, never whether a path is
-  contained.
+  contained. One class of path is deliberately not contained: a read-once text
+  input, whose contents are copied into STATE.md and whose path is never
+  written or resolved again. Today that is `--summary-file`, `--rationale-file`,
+  `--text-file` and `--note-file`. They accept any readable file, because the
+  inline `--summary` / `--rationale` / `--text` / `--note` forms already accept
+  the same text from anywhere (#4926, ADR-4650 amendment). The read is still
+  bounded: only a regular file of at most 256 KiB is read, so a FIFO, a device
+  or an oversized file is refused instead of hanging or exhausting memory.
 - Prompt injection detection: known injection patterns (role overrides,
   instruction bypasses, system tag injections) are scanned in user-supplied
   text before it enters any planning artifact

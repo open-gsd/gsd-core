@@ -17,6 +17,8 @@ import { collectSection } from './markdown-sectionizer.cjs';
 import io = require('./io.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
 import configLoader = require('./config-loader.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- capability-ledger.cjs is an export= CommonJS module
+import capabilityLedger = require('./capability-ledger.cjs');
 import { findProjectRoot } from './project-root.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- model-resolver.cjs is an export= CommonJS module
 import modelResolver = require('./model-resolver.cjs');
@@ -4775,7 +4777,7 @@ function buildSkillManifest(cwd: string, skillsDir: string | null = null): Skill
       if (!entry.isDirectory()) continue;
 
       const skillMdPath = path.join(rootPath, entry.name, 'SKILL.md');
-      const content = platformReadSync(skillMdPath);
+      const content = capabilityLedger.readSkillFile(skillMdPath);
       if (content !== null) {
         if (pushSkillEntry(`${entry.name}/SKILL.md`, content, skillMdPath)) skillCount++;
       }
@@ -4797,7 +4799,7 @@ function buildSkillManifest(cwd: string, skillsDir: string | null = null): Skill
       for (const nested of nestedEntries) {
         if (!nested.isDirectory()) continue;
         const nestedSkillMd = path.join(nestedSkillsDir, nested.name, 'SKILL.md');
-        const nestedContent = platformReadSync(nestedSkillMd);
+        const nestedContent = capabilityLedger.readSkillFile(nestedSkillMd);
         if (nestedContent === null) continue;
         // Use forward-slash separator explicitly so manifest paths are posix-style
         // on all platforms, matching the flat-layout behaviour above.

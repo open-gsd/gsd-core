@@ -27,6 +27,7 @@ import {
   decisionMentioned,
   extractPlanDesignatedSections,
   loadPlanContents,
+  phaseDirProblem,
   loadDecisionExtraction,
   buildPlanMessage,
 } from './decision-coverage-support.cjs';
@@ -156,8 +157,24 @@ export function evaluateDecisionCoveragePlan(input: { projectDir: string; args: 
     return gateVerdict('skip', false, { passed: true, skipped: true, reason: 'no trackable decisions', total: 0, covered: 0, uncovered: [], message: 'No trackable decisions in CONTEXT.md.' });
   }
 
+  // #4939: a phase-dir argument that was GIVEN but is not a directory is a caller
+  // error like #2770's empty context argument and #4794's non-file context path:
+  // no plan was scanned, so nothing was measured. Fail closed with total/covered
+  // null and `uncovered` omitted. An OMITTED phase dir is left to the scan below —
+  // the #4130 `--context <path>` alone tests pin that as a coverage gap.
+  const phaseDirIssue = phaseDir ? phaseDirProblem(phaseDir) : null;
+  if (phaseDirIssue) {
+    const phaseDirResult = { passed: false, skipped: false, reason: phaseDirIssue.reason, total: null, covered: null, message: `Decision coverage gate: the phase directory "${positionals[0]}" ${phaseDirIssue.what}, so no plans were scanned. ${phaseDirIssue.hint}` };
+    return phaseDirIssue.unreadable ? gateUnreadable(true, phaseDirResult) : gateVerdict('block', true, phaseDirResult);
+  }
+
   const planContents = loadPlanContents(phaseDir);
   if (planContents.kind === 'unreadable') return unreadableDecisionGate(`${planContents.span ?? phaseDir}: ${planContents.reason}`);
+  // #4939: a phase directory that holds no PLAN file is the same caller error: zero plans
+  // loaded is not zero coverage.
+  if (phaseDir && planContents.value.length === 0) {
+    return gateVerdict('block', true, { passed: false, skipped: false, reason: 'phase directory holds no plans', total: null, covered: null, message: `Decision coverage gate: the phase directory "${positionals[0]}" holds no PLAN files, so no plans were scanned. Pass the phase DIRECTORY that holds the plans (e.g. .planning/phases/01-slug), not the phase number.` });
+  }
   const sections = planContents.value.map(extractPlanDesignatedSections);
   const uncovered: UncoveredItem[] = [];
   let covered = 0;

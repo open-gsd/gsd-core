@@ -1042,6 +1042,32 @@ describe('review-lane CLI overlay invocation (#2927, rows 9–10)', () => {
     assert.ok(flagLines.includes('--rev2927flag'), `overlay flag missing from flags output:\n${flags.output}`);
     assert.ok(flagLines.includes('--rev2927alt'), 'second well-formed overlay flag missing (flag array flattened?)');
   });
+
+  test('dispatchStepNamesCanonicalSlugForOverlayAlias (#5359)', () => {
+    // End-to-end pin for the `lanes: mergedLanes` hand-off in gsd-tools: without it the
+    // alias error falls back to "not available on this host" for installed overlay lanes.
+    const home = cliTmpDir('rev5359-home-');
+    const cwd = makeCwd();
+    const src = writeReviewerCapSource('rev5359lane', { flags: ['--rev5359lane', '--rev5359alt'] });
+    const install = runGsdTools(['capability', 'install', src, '--scope', 'global', '--yes', '--raw'], cwd, scopeEnv(home));
+    assert.equal(install.success, true, `install failed: ${install.error || install.output}`);
+
+    const r = runGsdTools(
+      ['review-lane', 'dispatch-step', '--repo-root', cwd, '--depth', 'quick', '--base-sha', 'abc',
+        '--run-dir', cwd, '--cap-id', 'code-review', '--point', 'execute:post',
+        '--explicit', 'rev5359alt', '--raw'],
+      cwd,
+      scopeEnv(home),
+    );
+    assert.equal(r.success, true, `dispatch-step failed: ${r.error || r.output}`);
+    const parsed = JSON.parse(r.output);
+    assert.ok(parsed.selection, `no selection in output (trait inactive?): ${r.output}`);
+    const errors = parsed.selection.errors;
+    assert.ok(
+      errors.includes("explicit reviewer 'rev5359alt' is a flag alias; pass its canonical slug 'rev5359lane'"),
+      errors.join('|'),
+    );
+  });
 });
   });
 }

@@ -187,6 +187,41 @@ describe('resolveReviewerSelection — explicit flags are an assertion (ADR-2782
     assert.deepStrictEqual(r.infos, [], 'the miss must not be downgraded to an info');
   });
 
+  test('an explicit lane flag alias errors naming the canonical slug (#5359)', () => {
+    const r = resolveReviewerSelection({ detected: ['gemini'], explicitFlags: ['agy'] });
+    assert.deepStrictEqual(r.selected, []);
+    const e = errorsMentioning(r, 'agy');
+    assert.strictEqual(e.length, 1);
+    assert.ok(e[0].includes('antigravity'), `expected canonical slug in: ${e[0]}`);
+    assert.ok(!e[0].includes('is not available on this host'), `alias must not read as a missing CLI: ${e[0]}`);
+  });
+
+  test('alias error is exact when the canonical lane is installed (#5359)', () => {
+    const r = resolveReviewerSelection({ detected: ['antigravity'], explicitFlags: ['agy'] });
+    assert.deepStrictEqual(r.selected, []);
+    assert.ok(r.errors.includes("explicit reviewer 'agy' is a flag alias; pass its canonical slug 'antigravity'"), r.errors.join('|'));
+  });
+
+  test('an overlay lane alias resolves via the caller-supplied roster (#5359)', () => {
+    const lanes = [{ slug: 'agy-revisor', flags: ['--agy-revisor', '--revisor'] }];
+    const r = resolveReviewerSelection({ detected: ['agy-revisor'], explicitFlags: ['revisor'], lanes });
+    assert.ok(r.errors.includes("explicit reviewer 'revisor' is a flag alias; pass its canonical slug 'agy-revisor'"), r.errors.join('|'));
+  });
+
+  test('an undetected canonical slug keeps the plain not-available error (#5359)', () => {
+    const r = resolveReviewerSelection({ detected: ['gemini'], explicitFlags: ['antigravity'] });
+    assert.deepStrictEqual(r.errors.filter((e) => e.includes("'antigravity'")), [
+      "explicit reviewer 'antigravity' is not available on this host",
+    ]);
+  });
+
+  test('an unknown explicit name keeps the plain not-available error (#5359)', () => {
+    const r = resolveReviewerSelection({ detected: ['gemini'], explicitFlags: ['nope'] });
+    assert.deepStrictEqual(r.errors.filter((e) => e.includes("'nope'")), [
+      "explicit reviewer 'nope' is not available on this host",
+    ]);
+  });
+
   test('a sole explicit flag that is undetected errors per-slug and in aggregate', () => {
     const r = resolveReviewerSelection({
       detected: ['gemini'],
