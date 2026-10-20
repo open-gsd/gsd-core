@@ -584,6 +584,8 @@ gsd-tools query inspect-dispatch-isolation --json
 
 (`inspect-dispatch-isolation` is the read-only form. The `dispatch-isolation` query is the executor-dispatch resolver: it records its decision to the isolation sentinel as a deliberate side effect, so it is not an inspection command.)
 
+A dispatch step that degrades to sequential execution records `none` with `--force-isolation none`. For ten minutes after that, a plain `dispatch-isolation` query holds the recorded decision and answers `none`, not your runtime's capability, when each non-empty `--phase` or `--plan` it passes equals the one the record carries; an empty value, which the workflows pass when no phase is set, counts as not passed. A query that passes neither holds the record whatever scope it carries; a query that passes a phase or plan the record does not carry, including against a record that carries none, is not held. Its `--json` form marks that answer `held: true`, and gives `held: false` whenever it is not holding. `inspect-dispatch-isolation` is never held, so read it, not `dispatch-isolation`, when a script needs the runtime's own capability.
+
 ## Code Quality Settings
 
 The `code_quality.*` namespace gates optional structural-analysis tooling that augments `/gsd-code-review`. Settings are additive: each tool is independently opt-in and off by default.
