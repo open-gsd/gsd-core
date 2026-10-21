@@ -130,4 +130,19 @@ describe('gsd-path-export SessionStart hook (#5465)', () => {
     const commands = hooks.hooks.SessionStart.flatMap((group) => group.hooks.map((h) => h.command));
     assert.ok(commands.some((c) => c.includes('gsd-path-export.js')), commands.join('\n'));
   });
+
+  test('on Windows the line uses the /c/... form Git Bash sources, never a native drive path', () => {
+    const { shellPath, exportLine } = require('../hooks/gsd-path-export.js');
+    assert.strictEqual(shellPath('C:\\Users\\x\\.claude\\gsd-core\\bin', 'win32'), '/c/Users/x/.claude/gsd-core/bin');
+    assert.strictEqual(shellPath('d:/work/gsd-core/bin', 'win32'), '/d/work/gsd-core/bin');
+    assert.strictEqual(shellPath('/home/x/.claude/gsd-core/bin', 'linux'), '/home/x/.claude/gsd-core/bin');
+    assert.strictEqual(exportLine('C:\\Users\\x\\bin', 'win32'), `export PATH='/c/Users/x/bin':"$PATH"`);
+  });
+
+  test('uninstall and the settings.json migration filter recognize the registered hook as GSD-managed', () => {
+    const { isManagedHookCommand, isManagedHookBasename } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
+    assert.ok(isManagedHookBasename('gsd-path-export.js'));
+    assert.ok(isManagedHookCommand('node "/h/.claude/hooks/gsd-path-export.js"'));
+  });
 });
+

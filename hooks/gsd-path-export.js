@@ -35,9 +35,22 @@ function resolveBinDir(hookDir) {
   }
 }
 
+/**
+ * The directory as the bash that sources $CLAUDE_ENV_FILE spells it. On Windows the env file is
+ * sourced by Git Bash, where `:` separates PATH entries and a drive letter is `/c/...`, which is
+ * also what the resolver snippet writes (it derives the directory from bash's `$GSD_TOOLS`). A
+ * native `C:\Users\x\...` would split at the colon and never resolve.
+ */
+function shellPath(dir, platform = process.platform) {
+  if (platform !== 'win32') return dir;
+  const m = /^([A-Za-z]):[\\/](.*)$/.exec(dir);
+  const rest = (m ? m[2] : dir.replace(/^[\\/]+/, '')).replace(/\\/g, '/');
+  return m ? `/${m[1].toLowerCase()}/${rest}` : dir.replace(/\\/g, '/');
+}
+
 /** The exact line the resolver snippet writes: `export PATH='<dir>':"$PATH"` with `'` escaped. */
-function exportLine(binDir) {
-  return `export PATH='${binDir.replace(/'/g, "'\\''")}':"$PATH"`;
+function exportLine(binDir, platform = process.platform) {
+  return `export PATH='${shellPath(binDir, platform).replace(/'/g, "'\\''")}':"$PATH"`;
 }
 
 /**
@@ -79,4 +92,4 @@ if (require.main === module) {
   allow();
 }
 
-module.exports = { resolveBinDir, exportLine, persistPath };
+module.exports = { resolveBinDir, shellPath, exportLine, persistPath };
