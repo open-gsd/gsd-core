@@ -77,12 +77,13 @@ jobs:
       # the `pull_request_target` event that queued this run, so each step
       # below individually no-ops on that event rather than reading fields it
       # doesn't carry. STEP-level (not job-level, per #1389 — see the final
-      # step's own comment): a job-level `if:` would report `skipped` instead
-      # of `success` for the required "Issue link required" check, which
-      # blocks branch protection just as surely for a merge_group skip as for
-      # a backmerge exemption. Keeping the job itself unconditional (never
-      # skipped as a whole) is what lets every step-level exemption compose
-      # safely under one required check.
+      # step's own comment): the job always runs, so the required "Issue link
+      # required" check always reports `success`, never `skipped`. GitHub counts
+      # a conditionally skipped job as passing
+      # (docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/troubleshooting-required-status-checks),
+      # and the other five merge_group workflows rely on that; this one keeps
+      # the stricter #1389 placement so every step-level exemption composes
+      # under one check that never depends on skip semantics.
       #
       # BASE branch only — the trusted policy source. Never the PR head.
       - name: Check out policy from base branch
@@ -164,9 +165,9 @@ jobs:
 
       - name: Comment and fail if no issue link
         # Step-level (not job-level) so the required "Issue link required" check
-        # still reports SUCCESS rather than a branch-protection-blocking
-        # "skipped" when a PR is exempt. See #1389 — that placement is load
-        # bearing and every exemption added since must preserve it. Also
+        # still reports SUCCESS rather than "skipped" when a PR is exempt. See
+        # #1389 — that placement is kept, and tests/ci-merge-group-wiring.test.cjs
+        # pins it, so every exemption added since must preserve it. Also
         # excludes merge_group directly: `steps.policy` never ran on that
         # event (see its own if: above), so its output is empty/undefined —
         # `!= 'true'` alone would be true for that empty value and wrongly
