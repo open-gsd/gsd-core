@@ -1001,6 +1001,50 @@ export function stripTaggedBlocks(content: string, tagName: string, allowAttribu
   return content.replace(taggedBlockPattern(tagName, caseSensitive ? 'g' : 'gi', allowAttributes), '');
 }
 
+/**
+ * Run `edit` over `content` with every `<tagName>…</tagName>` block hidden from
+ * it, then put the blocks back byte-for-byte (#5543). The blocks are swapped for
+ * one-line placeholder comments, so `edit` sees the rest of the document in its
+ * original order and cannot touch, or be captured by, a block's contents.
+ *
+ * Same hardened block pattern as `stripTaggedBlocks` (exact `<tag>` opener, so
+ * `<details open>` stays visible to `edit`). If `edit` returns a non-string, or
+ * drops a placeholder, the original `content` is returned unchanged rather than
+ * a document with a block missing.
+ */
+export function editOutsideTaggedBlocks(
+  content: string,
+  tagName: string,
+  edit: (outside: string) => string,
+  allowAttributes = false,
+  caseSensitive = false,
+): string {
+  if (typeof content !== 'string' || content.length === 0) return content;
+  if (typeof tagName !== 'string' || tagName.length === 0) return edit(content);
+  const blocks: string[] = [];
+  let nonce = 0;
+  while (content.includes(`<!-- gsd-masked-${tagName}-${nonce}-`)) nonce += 1;
+  const placeholder = (i: number): string => `<!-- gsd-masked-${tagName}-${nonce}-${i} -->`;
+  const masked = content.replace(
+    taggedBlockPattern(tagName, caseSensitive ? 'g' : 'gi', allowAttributes),
+    (block: string) => {
+      blocks.push(block);
+      return placeholder(blocks.length - 1);
+    },
+  );
+  if (blocks.length === 0) return edit(content);
+  const edited = edit(masked);
+  if (typeof edited !== 'string') return content;
+  let restored = edited;
+  for (let i = 0; i < blocks.length; i++) {
+    const marker = placeholder(i);
+    const at = restored.indexOf(marker);
+    if (at === -1 || restored.indexOf(marker, at + marker.length) !== -1) return content;
+    restored = restored.slice(0, at) + blocks[i] + restored.slice(at + marker.length);
+  }
+  return restored;
+}
+
 // ─── replaceSection ───────────────────────────────────────────────────────────
 
 /**

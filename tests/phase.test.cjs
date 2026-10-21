@@ -17811,4 +17811,33 @@ Plans:
     assert.ok(out.includes(SHIPPED), `shipped block was modified:\n${out}`);
     assert.match(out.slice(out.lastIndexOf('</details>')), /- \[x\] 01-01-PLAN\.md/);
   });
+
+  test('an active phase listed BEFORE a trailing shipped block is completed and the block is untouched', () => {
+    seed(ACTIVE.trimStart() + '\n' + SHIPPED, '# State\n');
+    complete();
+    const out = roadmapText();
+    assert.ok(out.endsWith(SHIPPED), `shipped block was modified:\n${out}`);
+    const active = out.slice(0, out.indexOf('<details>'));
+    assert.match(active, /- \[x\] 01-01-PLAN\.md/);
+    assert.match(active, /- \[x\] \*\*Phase 1: New\*\*/);
+  });
+
+  test('a </details> inside a code fence before the active phase does not hide the active phase', () => {
+    const fenced = '```html\n</details>\n```\n';
+    seed(fenced + ACTIVE, '# State\n');
+    complete();
+    const out = roadmapText();
+    assert.ok(out.startsWith(`# Roadmap\n\n${fenced}`), out);
+    assert.match(out, /- \[x\] 01-01-PLAN\.md/);
+    assert.match(out, /- \[x\] \*\*Phase 1: New\*\*/);
+  });
+
+  test('a </details> in prose after the active phase does not hide the active phase', () => {
+    seed(ACTIVE.trimStart() + '\nNote: shipped blocks end with `</details>`.\n', '# State\n');
+    complete();
+    const out = roadmapText();
+    assert.match(out, /- \[x\] 01-01-PLAN\.md/);
+    assert.match(out, /- \[x\] \*\*Phase 1: New\*\*/);
+    assert.ok(out.includes('Note: shipped blocks end with `</details>`.'), out);
+  });
 });

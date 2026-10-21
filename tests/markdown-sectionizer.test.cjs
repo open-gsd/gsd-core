@@ -42,6 +42,7 @@ const {
   updateHeading,
   extractTaggedBlocks,
   stripTaggedBlocks,
+  editOutsideTaggedBlocks,
   replaceSection,
   withSection,
   deleteSection,
@@ -2074,5 +2075,72 @@ describe('updateBullet match receives the physical line index (Phase 13)', () =>
     const content = 'intro\n- [ ] a\n\n- [ ] a\n';
     const out = updateBullet(content, (_t, _raw, idx) => idx === 3, (raw) => raw.replace('[ ]', '[x]'));
     assert.equal(out, 'intro\n- [ ] a\n\n- [x] a\n');
+  });
+});
+
+describe('editOutsideTaggedBlocks (#5543)', () => {
+  const wrap = (s) => `[${s}]`;
+  const seeing = (doc, tag, ...flags) => {
+    let seen = null;
+    editOutsideTaggedBlocks(doc, tag, (s) => { seen = s; return s; }, ...flags);
+    return seen;
+  };
+
+  test('edits only the text outside the blocks and restores the blocks byte-for-byte', () => {
+    const block1 = '<details>\nkeep $1 $& one\n</details>';
+    const block2 = '<details>\nkeep two\n</details>';
+    const out = editOutsideTaggedBlocks(`a\n${block1}\nb\n${block2}\nc`, 'details', wrap);
+    assert.equal(out, `[a\n${block1}\nb\n${block2}\nc]`);
+  });
+
+  test('the edit sees the surrounding text in order, with one placeholder per block', () => {
+    assert.match(
+      seeing('x<details>1</details>y<details>2</details>z', 'details'),
+      /^x<!-- gsd-masked-details-\d+-0 -->y<!-- gsd-masked-details-\d+-1 -->z$/,
+    );
+  });
+
+  test('no block present: the edit runs on the content unchanged', () => {
+    assert.equal(seeing('plain', 'details'), 'plain');
+    assert.equal(editOutsideTaggedBlocks('plain', 'details', wrap), '[plain]');
+  });
+
+  test('an unclosed opener is not a block, so it stays visible to the edit', () => {
+    assert.equal(seeing('<details>open forever', 'details'), '<details>open forever');
+  });
+
+  test('an attributed opener is hidden only when allowAttributes is set', () => {
+    const doc = '<details open>x</details>';
+    assert.equal(seeing(doc, 'details'), doc);
+    assert.match(seeing(doc, 'details', true), /^<!-- gsd-masked-details-\d+-0 -->$/);
+    assert.equal(editOutsideTaggedBlocks(doc, 'details', wrap, true), `[${doc}]`);
+  });
+
+  test('tag matching is case-insensitive by default and exact when caseSensitive is set', () => {
+    const doc = '<details>x</details>';
+    assert.match(seeing(doc, 'DETAILS'), /^<!-- gsd-masked-DETAILS-\d+-0 -->$/);
+    assert.equal(seeing(doc, 'DETAILS', false, true), doc);
+  });
+
+  test('a placeholder-looking string already in the content is never mistaken for a block', () => {
+    const lookalike = '<!-- gsd-masked-details-0-0 -->';
+    const doc = `${lookalike}\n<details>b</details>\ntail`;
+    assert.equal(editOutsideTaggedBlocks(doc, 'details', wrap), `[${doc}]`);
+  });
+
+  test('an edit that drops or duplicates a placeholder returns the original content', () => {
+    const doc = 'a<details>b</details>c';
+    assert.equal(editOutsideTaggedBlocks(doc, 'details', () => 'gone'), doc);
+    assert.equal(editOutsideTaggedBlocks(doc, 'details', (s) => s + s), doc);
+  });
+
+  test('a non-string edit result returns the original content', () => {
+    assert.equal(editOutsideTaggedBlocks('a<details>b</details>', 'details', () => undefined), 'a<details>b</details>');
+  });
+
+  test('empty and non-string input are returned as given; an empty tag name edits the whole content', () => {
+    assert.equal(editOutsideTaggedBlocks('', 'details', wrap), '');
+    assert.equal(editOutsideTaggedBlocks(undefined, 'details', wrap), undefined);
+    assert.equal(editOutsideTaggedBlocks('abc', '', wrap), '[abc]');
   });
 });
