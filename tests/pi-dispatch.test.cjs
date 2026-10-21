@@ -245,7 +245,7 @@ describe('#5569 gsd_dispatch: fail closed', () => {
   test('package layout at a location with unsafe characters is role-unresolved', async () => {
     const tree = packageTree();
     const odd = path.join(tree.root, 'we$ird');
-    fs.mkdirSync(path.dirname(odd), { recursive: true });
+    fs.mkdirSync(odd, { recursive: true });
     fs.renameSync(path.join(tree.root, 'pi'), path.join(odd, 'pi'));
     const { result, calls } = await dispatchOnce({ root: tree.root, extensionDir: path.join(odd, 'pi') }, { role: 'gsd-roadmapper', task: 't' });
     assert.equal(result.code, 'role-unresolved');

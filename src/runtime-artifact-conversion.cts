@@ -3109,7 +3109,7 @@ function mapClaudeToolsToPi(tools: string[]): { mapped: string[]; dropped: strin
   for (const tool of tools) {
     const piName = Object.prototype.hasOwnProperty.call(PI_AGENT_TOOL_NAMES, tool) ? PI_AGENT_TOOL_NAMES[tool] : null;
     if (piName === null) {
-      dropped.push(tool);
+      if (!dropped.includes(tool)) dropped.push(tool);
     } else if (!mapped.includes(piName)) {
       mapped.push(piName);
     }

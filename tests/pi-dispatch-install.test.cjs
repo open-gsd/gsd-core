@@ -20,7 +20,10 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 const path = require('node:path');
 
-const { cleanup } = require('./helpers.cjs');
+const os = require('node:os');
+const { spawnSync } = require('node:child_process');
+const { cleanup, installSpawnEnv } = require('./helpers.cjs');
+const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { _internals } = require('../pi/gsd.cjs');
 const { runMinimalInstall } = require('./helpers/install-shared.cjs');
@@ -38,6 +41,10 @@ const shippedRoles = () =>
   fs.readdirSync(SHIPPED_AGENTS)
     .filter((f) => f.endsWith('.md') && !f.endsWith('.compact.md'))
     .sort();
+
+// Roles a workflow names that are not GSD roles: gsd_dispatch refuses them (role-unresolved), which
+// is the fail-closed outcome. discuss-phase-assumptions asks for the host's generic agent.
+const NON_GSD_ROLES = new Set(['general-purpose']);
 
 const PI_DISPATCH = { namedDispatch: false, nested: false, maxDepth: 0, background: false };
 const piConfig = (roles) =>
@@ -194,7 +201,7 @@ describe('#5569: Agent(...) projection onto gsd_dispatch', () => {
       for (const segment of text.split('gsd_dispatch(').slice(1)) {
         calls += 1;
         const m = /\brole\s*[=:]\s*"([^"{}\n]{1,100})"/.exec(segment);
-        if (m) assert.ok(roles.has(m[1]), `${file} dispatches unknown role ${m[1]}`);
+        if (m) assert.ok(roles.has(m[1]) || NON_GSD_ROLES.has(m[1]), `${file} dispatches unknown role ${m[1]}`);
       }
     }
     assert.ok(calls > 0, 'vacuous: no gsd_dispatch call found in the installed workflows');
@@ -248,8 +255,15 @@ describe('#5569: Pi package ships the converted roles', () => {
   const PKG_ROLES = path.join(REPO, 'pi', 'package-agents');
 
   test('pi/package-agents holds exactly the converted non-compact roles, byte-identical to an install', (t) => {
-    const { configDir, root } = runMinimalInstall({ runtime: 'pi', scope: 'global' });
-    t.after(() => cleanup(root));
+    // Installed outside HOME so the installer prints absolute paths, as the generator's temp install does.
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-pi-roles-'));
+    t.after(() => cleanup(parent));
+    const configDir = path.join(parent, 'cfg');
+    fs.mkdirSync(configDir);
+    const res = spawnSync(process.execPath, [path.join(REPO, 'bin', 'install.js'), '--pi', '--global', '--config-dir', configDir], {
+      cwd: REPO, encoding: 'utf8', timeout: INSTALL_TIMEOUT_MS, windowsHide: true, env: installSpawnEnv({ PI_CODING_AGENT_DIR: configDir }),
+    });
+    assert.equal(res.status, 0, `installer failed: ${(res.stderr || res.stdout || '').slice(-600)}`);
     const shipped = fs.readdirSync(PKG_ROLES).filter((f) => f !== 'manifest.json').sort();
     assert.deepEqual(shipped, shippedRoles());
     for (const f of shipped) {
