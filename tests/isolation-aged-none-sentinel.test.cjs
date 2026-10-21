@@ -1,4 +1,3 @@
-// allow-test-rule: source-text-is-the-product — the per-plan worktree gate is workflow markdown the orchestrator executes
 'use strict';
 
 /**
