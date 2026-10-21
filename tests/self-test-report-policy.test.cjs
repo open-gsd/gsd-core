@@ -69,7 +69,7 @@ describe('isFixPr', () => {
     }
   });
   test('other work is not a fix PR', () => {
-    for (const [headRef, title] of [['chore/x', 'chore: a'], ['feat/x', 'feat: a'], ['docs/x', 'prefix: a'], ['hotfix/x', 'hotfix: a'], [undefined, undefined]]) {
+    for (const [headRef, title] of [['chore/x', 'chore: a'], ['feat/x', 'feat: a'], ['wiki/x', 'prefix: a'], ['hotfix/x', 'hotfix: a'], [undefined, undefined]]) {
       assert.equal(isFixPr({ headRef, title }), false, `${headRef} / ${title}`);
     }
   });
@@ -141,7 +141,7 @@ describe('exemptions', () => {
   });
 
   test('a non-fix PR needs no maintainer list', () => {
-    assert.equal(verdict({ body: '', headRef: 'docs/x', title: 'docs: x', maintainers: null }).reason, REASON.OK_NOT_A_FIX);
+    assert.equal(verdict({ body: '', headRef: 'wiki/x', title: 'docs: x', maintainers: null }).reason, REASON.OK_NOT_A_FIX);
   });
 });
 
