@@ -6332,4 +6332,24 @@ describe('plan-id row boundary (#5542)', () => {
       assert.ok(read().includes(expected), `expected "${expected}" in:\n${read()}`);
     });
   }
+
+  test('a row whose id ends in sentence punctuation still ticks', () => {
+    plan('47-01'); summary('47-01');
+    write(['- [ ] 47-01. Setup']);
+    update();
+    assert.ok(read().includes('- [x] 47-01. Setup'), read());
+  });
+
+  test('phase complete does not flip the row of a superseded plan', () => {
+    plan('47-1', 'status: superseded\n'); plan('47-10'); summary('47-1'); summary('47-10');
+    const old = new Date('2000-01-01T00:00:00Z');
+    for (const id of ['47-1', '47-10']) fs.utimesSync(path.join(phaseDir, `${id}-SUMMARY.md`), old, old);
+    fs.writeFileSync(path.join(phaseDir, '47-VERIFICATION.md'), '---\nstatus: passed\n---\n# Verification\n');
+    write(['- [ ] 47-1-PLAN.md', '- [ ] 47-10-PLAN.md']);
+    const r = runGsdTools('phase complete 47', tmpDir);
+    assert.ok(r.success, `phase complete failed: ${r.error}`);
+    const out = read();
+    assert.match(out, /- \[ \] 47-1-PLAN\.md/);
+    assert.match(out, /- \[x\] 47-10-PLAN\.md/);
+  });
 });

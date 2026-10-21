@@ -4291,6 +4291,11 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             for (const summaryFile of phaseInfoSummaries) {
               const planId = summaryFile.replace('-SUMMARY.md', '').replace('SUMMARY.md', '');
               if (!planId) continue;
+              // #5542: only a summary paired with a live (non-superseded) plan
+              // flips a row — the same pairing rule the counts use.
+              if (!(phaseInfo['plans'] as string[] | undefined ?? []).some(
+                (planFile) => coreUtilsMod.countMatchedSummaries([planFile], [summaryFile]) > 0,
+              )) continue;
               const planEscaped = escapeRegex(planId);
               // ADR-5057 §6 (Phase 13, #5217): the per-plan flip is a bullet
               // mutation, so it goes through `updateBullet` like the phase
