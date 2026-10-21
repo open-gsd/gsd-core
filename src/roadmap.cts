@@ -1286,16 +1286,24 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // Heading target: the exact grammar `planSectionPattern` /
     // `insertRowsPatternA|B` anchor on (an ATX phase heading for this phase).
     const headingTargetFound = new RegExp(phaseHeadingAnchor, 'i').test(gateActiveRegion);
+    // #5545: the phase-checklist bullet grammar, defined ONCE for the writer
+    // (`' '`: tick an unchecked bullet) and the gate probe (`'[ x]'`: any state).
+    // Line-anchored, with only an optional `**` before the label and horizontal
+    // whitespace, so a bullet that merely MENTIONS "Phase N" is not the phase's
+    // bullet and no `\s` can run past the line end (which used to land the
+    // `(completed …)` annotation on the NEXT line). Capture group 1 is the
+    // opening `- [`, group 2 the rest of the line after the box.
+    const phaseChecklistBullet = (box: string): RegExp => new RegExp(
+      `^([ \\t]*-[ \\t]*\\[)${box}(\\][ \\t]*(?:\\*\\*)?[ \\t]*Phase[ \\t]+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s]|$)[^\\n]*)`,
+      'im',
+    );
     // Checklist target: when the phase is complete, its own checklist bullet
     // (`- [ ] **Phase N: …**`) IS a writable phase row — the completion
     // checkbox stamp below updates it. Same grammar as that writer, widened
     // one notch to `[ x]` so an ALREADY-checked bullet still counts as a
     // found target: an idempotent re-run then takes the honest
     // "no changes were needed" decline instead of this refusal.
-    const checklistTargetFound = isComplete && new RegExp(
-      `-\\s*\\[[ x]\\]\\s*.*Phase\\s+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
-      'i',
-    ).test(gateActiveRegion);
+    const checklistTargetFound = isComplete && phaseChecklistBullet('[ x]').test(gateActiveRegion);
     // Table-row target: set by the row-scoped cell updates below.
     let tableRowFound = false;
 
@@ -1577,11 +1585,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
 
     // If complete: check checkbox
     if (isComplete) {
-      const checkboxPattern = new RegExp(
-        `(-\\s*\\[)[ ](\\]\\s*.*Phase\\s+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
-        'i'
-      );
-      roadmapContent = replaceInCurrentMilestone(roadmapContent, checkboxPattern, `$1x$2 (completed ${today})`);
+      roadmapContent = replaceInCurrentMilestone(roadmapContent, phaseChecklistBullet(' '), `$1x$2 (completed ${today})`);
     }
 
     // Mark completed plan checkboxes (e.g. "- [ ] 50-01-PLAN.md", "- [ ] 50-01:", or "- [ ] **50-01**")
