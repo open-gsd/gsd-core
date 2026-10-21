@@ -42,6 +42,7 @@ const SCHEMA_VERSION = 1;
 const TOOLS = new Set(['gsd-test', 'npm-test', 'manual']);
 const SUITE_RESULTS = new Set(['passed', 'failed', 'skipped']);
 const SHA_RE = /^[0-9a-f]{40}$/i;
+const PLACEHOLDER_RE = /^<[^<>]*>$/;
 const EXCERPT_MAX = 2000;
 const SECTION_TITLE = 'self-test report';
 
@@ -57,45 +58,94 @@ function isBotLogin(login) {
 
 /**
  * Find the first fenced ```json block inside the `## Self-test report` section.
- * Fence-aware: a `#` line inside a fence is not a heading. The section ends at
- * the next heading of the same or a higher level.
+ *
+ * - Fence-aware: a `#` line inside a fence is not a heading. A fence may carry
+ *   trailing info after the language (```json title="x"); only its first word
+ *   names the language. A closing fence has no info and is at least as long as
+ *   the opener, with the same character.
+ * - HTML comments are skipped outside fences, so a block hidden in a comment
+ *   (invisible in the rendered PR) is not the report.
+ * - The section ends at the next heading of the same or a higher level.
+ * - The first json block wins.
+ *
  * @returns {{found: boolean, json: string|null}}
  */
+// Lines longer than this are not fence or heading syntax. Capping what the
+// regexes see keeps a crafted line of whitespace from costing more than a bounded
+// amount of work (the body is attacker-controlled); captured JSON keeps its full text.
+const SYNTAX_LINE_MAX = 1000;
+
+/**
+ * ATX heading → {level, text}, parsed without a backtracking regex: a body line
+ * is attacker input and the obvious `^(#+)\s+(.*?)\s*#*\s*$` is cubic on a long
+ * run of spaces. A trailing run of `#` is a closing sequence only when preceded
+ * by whitespace (or the text is only hashes).
+ */
+function parseHeading(line) {
+  const trimmed = line.trim();
+  let level = 0;
+  while (level < trimmed.length && trimmed[level] === '#') level += 1;
+  if (level < 1 || level > 6) return null;
+  if (level >= trimmed.length || !/\s/.test(trimmed[level])) return null;
+  let text = trimmed.slice(level).trim();
+  let end = text.length;
+  while (end > 0 && text[end - 1] === '#') end -= 1;
+  if (end < text.length && (end === 0 || /\s/.test(text[end - 1]))) text = text.slice(0, end).trimEnd();
+  return { level, text: text.replace(/\*\*/g, '').trim().toLowerCase() };
+}
+
 function extractReport(body) {
   const lines = String(body || '').split(/\r?\n/);
   let inFence = false;
-  let fenceMarker = '';
+  let fenceChar = '';
+  let fenceLen = 0;
+  let inComment = false;
   let sectionLevel = 0;
   let capturing = false;
   let captured = [];
 
-  for (const line of lines) {
-    const fence = /^\s*(`{3,}|~{3,})\s*([A-Za-z0-9_-]*)\s*$/.exec(line);
-    if (!inFence && fence) {
-      if (sectionLevel > 0 && !capturing && fence[2].toLowerCase() === 'json') {
-        capturing = true;
-        captured = [];
+  for (const full of lines) {
+    const line = full.length > SYNTAX_LINE_MAX ? full.slice(0, SYNTAX_LINE_MAX) : full;
+    if (!inFence) {
+      if (inComment) {
+        if (line.includes('-->')) inComment = false;
+        continue;
       }
-      inFence = true;
-      fenceMarker = fence[1];
-      continue;
+      const commentAt = line.indexOf('<!--');
+      if (commentAt !== -1 && line.indexOf('-->', commentAt + 4) === -1) {
+        inComment = true;
+        continue;
+      }
     }
-    if (inFence) {
-      if (fence && fence[1][0] === fenceMarker[0] && fence[1].length >= fenceMarker.length && fence[2] === '') {
+
+    if (!inFence) {
+      const open = /^\s*(`{3,}|~{3,})\s*([^\s`]*)(?:\s.*)?$/.exec(line);
+      if (open) {
+        if (sectionLevel > 0 && !capturing && open[2].toLowerCase() === 'json') {
+          capturing = true;
+          captured = [];
+        }
+        inFence = true;
+        fenceChar = open[1][0];
+        fenceLen = open[1].length;
+        continue;
+      }
+    } else {
+      const close = /^\s*(`{3,}|~{3,})\s*$/.exec(line);
+      if (close && close[1][0] === fenceChar && close[1].length >= fenceLen) {
         inFence = false;
         if (capturing) return { found: true, json: captured.join('\n') };
         continue;
       }
-      if (capturing) captured.push(line);
+      if (capturing) captured.push(full);
       continue;
     }
-    const heading = /^\s*(#{1,6})\s+(.*?)\s*#*\s*$/.exec(line);
+
+    const heading = parseHeading(line);
     if (heading) {
-      const level = heading[1].length;
-      const text = heading[2].replace(/\*\*/g, '').trim().toLowerCase();
       if (sectionLevel === 0) {
-        if (text === SECTION_TITLE) sectionLevel = level;
-      } else if (level <= sectionLevel) {
+        if (heading.text === SECTION_TITLE) sectionLevel = heading.level;
+      } else if (heading.level <= sectionLevel) {
         return { found: false, json: null };
       }
     }
@@ -109,6 +159,27 @@ function isNonEmptyString(value) {
 
 function isCount(value) {
   return Number.isInteger(value) && value >= 0;
+}
+
+/** Names of report fields whose string value is still an unfilled `<…>` placeholder. */
+function placeholderFields(report) {
+  const found = [];
+  const check = (name, value) => {
+    if (typeof value === 'string' && PLACEHOLDER_RE.test(value.trim())) found.push(name);
+  };
+  check('head_sha', report.head_sha);
+  check('output_excerpt', report.output_excerpt);
+  if (report.failing_first && typeof report.failing_first === 'object') {
+    check('failing_first.test', report.failing_first.test);
+    check('failing_first.not_applicable_reason', report.failing_first.not_applicable_reason);
+  }
+  if (Array.isArray(report.commands)) report.commands.forEach((c) => check('commands', c));
+  if (report.full_suite && typeof report.full_suite === 'object') check('full_suite.command', report.full_suite.command);
+  if (report.environment && typeof report.environment === 'object') {
+    check('environment.os', report.environment.os);
+    check('environment.node', report.environment.node);
+  }
+  return [...new Set(found)];
 }
 
 /**
@@ -166,6 +237,9 @@ function validateReport(report, headSha) {
     problems.push(`output_excerpt must be a non-empty excerpt of at most ${EXCERPT_MAX} characters`);
   }
 
+  // A value still in `<…>` is the template, not something the submitter filled in.
+  for (const name of placeholderFields(report)) problems.push(`${name} is still the template placeholder; fill it in`);
+
   if (problems.length > 0) return fail(REASON.FAIL_SCHEMA);
 
   // Structurally sound. Now the substantive checks, most informative first.
@@ -177,8 +251,8 @@ function validateReport(report, headSha) {
     problems.push('the failing-first test must fail on the base and pass on your head');
     return fail(REASON.FAIL_NOT_FAILING_FIRST);
   }
-  if (suite.result !== 'passed' || suite.failed !== 0) {
-    problems.push('the full suite must have passed with no failures');
+  if (suite.result !== 'passed' || suite.failed !== 0 || suite.passed < 1) {
+    problems.push('the full suite must have passed, with at least one passing test and no failures');
     return fail(REASON.FAIL_SUITE_NOT_PASSED);
   }
   return { ok: true, reason: REASON.OK_REPORT, problems };
@@ -221,6 +295,19 @@ function evaluateSelfTestReport({ body, headRef, title, authorLogin, headSha, ma
   return validateReport(parsed, headSha);
 }
 
+/** A value from the environment, or from the file named by `<NAME>_FILE` (live reads are too big for env). */
+function fromEnvOrFile(name) {
+  const file = process.env[`${name}_FILE`];
+  if (file) {
+    try {
+      return fs.readFileSync(file, 'utf8');
+    } catch {
+      return undefined;
+    }
+  }
+  return process.env[name] || '';
+}
+
 function main() {
   let maintainersText;
   try {
@@ -230,19 +317,25 @@ function main() {
   }
   const parsed = parseMaintainers(maintainersText);
 
-  const result = evaluateSelfTestReport({
-    body: process.env.PR_BODY || '',
-    headRef: process.env.HEAD_REF || '',
-    title: process.env.PR_TITLE || '',
-    authorLogin: process.env.PR_AUTHOR_LOGIN || '',
-    headSha: process.env.HEAD_SHA || '',
-    maintainers: parsed.ok ? parsed.logins : null,
-  });
+  const body = fromEnvOrFile('PR_BODY');
+  const title = fromEnvOrFile('PR_TITLE');
+
+  const result = body === undefined || title === undefined
+    ? { ok: false, reason: REASON.FAIL_INPUT_INVALID, problems: [] }
+    : evaluateSelfTestReport({
+      body,
+      headRef: process.env.HEAD_REF || '',
+      title,
+      authorLogin: process.env.PR_AUTHOR_LOGIN || '',
+      headSha: process.env.HEAD_SHA || '',
+      maintainers: parsed.ok ? parsed.logins : null,
+    });
 
   process.stdout.write(`${JSON.stringify(result)}\n`);
   for (const problem of result.problems) {
-    // Annotation text is a fixed template plus the validator's own wording; the
-    // PR author controls values, not this string, except head_sha which is hex-checked.
+    // The annotation text is the validator's own wording plus, for a JSON syntax
+    // error, the parser's message (which can echo attacker text): strip newlines
+    // so no extra workflow command can start a line.
     process.stderr.write(`::error::Self-test report: ${problem.replace(/[\r\n]+/g, ' ').slice(0, 300)}\n`);
   }
   if (process.env.GITHUB_OUTPUT) {

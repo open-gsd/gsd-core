@@ -67,14 +67,32 @@ describe('#5612: self-test-report workflow trust boundary', () => {
     }
   });
 
-  test('every PR-controlled value reaches the policy only through env', () => {
+  test('the body, title and head sha are read live, not replayed from the event payload', () => {
+    const read = job.steps.find((step) => step.name === 'Read the current PR state');
+    assert.ok(read, 'the live-read step must exist');
+    assert.equal(read.id, 'pr');
+    assert.equal(read.env.GH_TOKEN, '${{ github.token }}');
+    assert.equal(read.env.REPO, '${{ github.repository }}');
+    assert.equal(read.env.PR_NUMBER, '${{ github.event.pull_request.number }}');
     const evaluate = job.steps.find((step) => step.name === 'Evaluate');
-    assert.equal(evaluate.env.PR_BODY, '${{ github.event.pull_request.body }}');
-    assert.equal(evaluate.env.PR_TITLE, '${{ github.event.pull_request.title }}');
+    assert.equal(evaluate.env.PR_BODY_FILE, '${{ steps.pr.outputs.body_file }}');
+    assert.equal(evaluate.env.PR_TITLE_FILE, '${{ steps.pr.outputs.title_file }}');
+    assert.equal(evaluate.env.HEAD_SHA, '${{ steps.pr.outputs.head_sha }}');
+    assert.equal(evaluate.env.PR_BODY, undefined, 'the stale payload body must not reach the policy');
+    assert.equal(evaluate.env.PR_TITLE, undefined, 'the stale payload title must not reach the policy');
+  });
+
+  test('the remaining payload values (fixed for the life of a PR) reach the policy only through env', () => {
+    const evaluate = job.steps.find((step) => step.name === 'Evaluate');
     assert.equal(evaluate.env.HEAD_REF, '${{ github.event.pull_request.head.ref }}');
     assert.equal(evaluate.env.PR_AUTHOR_LOGIN, '${{ github.event.pull_request.user.login }}');
-    // The head sha is read live, not replayed from the event payload.
-    assert.equal(evaluate.env.HEAD_SHA, '${{ steps.head.outputs.head_sha }}');
+  });
+
+  test('the live-read step writes the body to a file, not to a step output', () => {
+    const read = job.steps.find((step) => step.name === 'Read the current PR state');
+    // A body can be large and multi-line: GITHUB_OUTPUT would need a delimiter and env has size limits.
+    assert.equal(read.run.includes('pr-body.txt'), true);
+    assert.equal(/echo "body=/.test(read.run), false);
   });
 
   test('runs the policy script from the checked-out base, not a PR path', () => {

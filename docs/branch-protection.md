@@ -111,14 +111,28 @@ Such a PR needs a `## Self-test report` section holding a fenced `json` block
 | `environment` | `{os, node}` |
 | `output_excerpt` | the end of the passing run, at most 2000 characters |
 
+**Reading rules.** The first `json` block under the heading is the report. A
+block inside an HTML comment is ignored (it would be invisible in the rendered
+PR). A fence may carry trailing info (`json title="x"`). A value still written
+as `<…>` is the template, not an answer, and fails. `full_suite.result:
+"passed"` needs at least one passing test. `failing_first.not_applicable_reason`
+is accepted for any real sentence, so it is a declaration, not something the
+check can verify.
+
 **What this is and is not.** It checks the report's shape and that it names the
 current head. It does **not** and cannot prove the run happened: a local run
 cannot be attested, and CI on the merge-group commit remains authoritative. The
 report is a head start for the reviewer and a nudge on effort, nothing more. The
 template as shipped does not validate, so leaving it untouched fails the check.
 
-The workflow reads the maintainer list from the base sha, binds every PR value
-to `env:`, and has a read-only token. The check is **advisory**: it is not a
+"Fix PR" is itself author-declared (a `fix/` branch or a `fix` title, and the
+title can be edited), so an outsider can sidestep the check by not calling the
+PR a fix. If this is ever required, derive "fix" from something the author does
+not control, such as the linked issue or a label.
+
+The workflow reads the maintainer list from the base sha, reads the body, title
+and head live from the API (into files, so size is never an issue), passes the
+other PR values through `env:`, and has a read-only token. The check is **advisory**: it is not a
 required context on any ruleset. CI re-running the named failing-first test, and
 generating the report from a `gsd-test` verdict, are possible later steps.
 
