@@ -3,6 +3,17 @@ name: Changeset Required
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  # #5600: `changeset-lint` is a required status check on `next`; a merge
+  # queue requires every required context to also report on `merge_group`, or
+  # the queue deadlocks waiting on a check nothing ever produces.
+  #
+  # #5600: on a `merge_group` event GitHub Actions loads this workflow FILE from
+  # the queue's temporary merge commit (base plus the queued PRs), so a queued
+  # PR that edits this file runs its own version. Safety does not come from the
+  # file's origin: every job or step below is skipped on that event, so nothing
+  # in this file executes there (tests/ci-merge-group-wiring.test.cjs pins it).
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -14,7 +25,13 @@ permissions:
 
 jobs:
   # #3833: no lane runs while the PR has a merge conflict.
+  #
+  # #5600: `merge_group` carries no `pull_request` payload — the changeset was
+  # already validated on the `pull_request` event that queued this run, so
+  # skip rather than reading fields the event doesn't carry. A job skipped by
+  # `if:` still reports Success for required-status-check purposes.
   preflight:
+    if: github.event_name != 'merge_group'
     name: PR mergeability
     uses: ./.github/workflows/pr-mergeable-preflight.yml
     permissions:
@@ -22,6 +39,10 @@ jobs:
       pull-requests: read
 
   changeset-lint:
+    # #5600: same reasoning as `preflight` above — `github.event.pull_request`
+    # and `github.base_ref` are undefined on `merge_group`, and the changeset
+    # was already validated on the `pull_request` event.
+    if: github.event_name != 'merge_group'
     needs: preflight
     runs-on: ubuntu-latest
     steps:

@@ -19,6 +19,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 
 - [Install on your runtime](how-to/install-on-your-runtime.md) — runtime-specific install steps for all 16 supported runtimes
 - [Start a GSD workflow from Pi](how-to/start-a-gsd-workflow-from-pi.md) — run `/skill:gsd-<command>` (or `/gsd <command>`) in Pi instead of getting a JSON dump from `/gsd`
+- [Check that GSD's guards run on Pi](how-to/check-gsd-guards-on-pi.md) — confirm the secret-read guard blocks a `.env` read in Pi and turn on the opt-in hooks
 - [Install GSD as a Pi package](how-to/install-gsd-as-a-pi-package.md) — `pi install npm:@opengsd/gsd-core` instead of the gsd-core installer, with the same commands and extension
 - [Install a minimal GSD and add skills later](how-to/install-minimal-and-add-skills.md) — install only the core skills, then grow the surface with profiles and `/gsd-surface`
 - [Attach a plugin-provided skill to a GSD agent](how-to/attach-a-plugin-skill-to-a-gsd-agent.md) — use the `global:plugin:skill` entry form to load Claude Code plugin skills into agent prompts
@@ -100,6 +101,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [JSON error mode](json-errors.md) — `gsd-tools` failure channels: faults (stderr, exit 1) vs degraded results (stdout, exit 0), and the reason-code taxonomy
 - [Features](FEATURES.md) — complete feature index
 - [Inventory](INVENTORY.md) — installed skills and surface map
+- [Pi hook and lifecycle parity](reference/pi-hook-parity.md) — which GSD hooks run on Pi, the verified Pi event contract, and why each other hook is not bridged
 - [STATE.md schema](reference/state-md.md) — field-by-field reference for `.planning/STATE.md`
 - [CONTEXT.md schema](reference/context-md.md) — field-by-field reference for `.planning/phases/<N>/CONTEXT.md`
 - [PLAN.md schema](reference/plan-md.md) — field-by-field reference for `.planning/phases/<N>/PLAN.md`
