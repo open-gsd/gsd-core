@@ -34,6 +34,20 @@ const { scanPhasePlans } = planScanMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningScopeMod = require('./planning-scope.cjs');
 const { SCOPE } = planningScopeMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planDocumentMod = require('./plan-document.cjs');
+const { parsePlanDocument } = planDocumentMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import taskContentResolutionMod = require('./task-content-resolution.cjs');
+const {
+  resolveTaskContent,
+  splitTrackerId,
+  loadResolverCapabilities,
+  isResolverFailure,
+  contentTexts,
+} = taskContentResolutionMod;
+
+type CapabilityLike = Parameters<typeof resolveTaskContent>[0]['capabilities'][number];
 
 // ─── Decision matching ────────────────────────────────────────────────────────
 
@@ -185,6 +199,79 @@ export function extractPlanDesignatedSections(planContent: string | null | undef
   parts.push(bodyParts.join('\n'));
   parts.push(extractXmlTagBodies(cleaned));
   return parts.join('\n\n');
+}
+
+export interface TrackerResolveDeps {
+  loadCapabilities?: (cwd: string) => CapabilityLike[];
+  resolveTaskContentFn?: typeof resolveTaskContent;
+  /** Test seam: monotonic-ish clock for the aggregate budget. */
+  now?: () => number;
+}
+
+/** Aggregate wall-clock budget for all resolver spawns in one gate run; registry load and each spawn's timeout are inside it (spawn timeouts are clamped to the remainder), so this is the true bound for resolver work. */
+export const TRACKER_RESOLVE_BUDGET_MS = 120_000;
+
+const unreadable = (reason: string, span: string): Observed<never> => ({ kind: 'unreadable', reason, span });
+
+/**
+ * Extra scannable text per plan (same index) from tracker-resolved task content; '' for plans without `tracker-id=`.
+ * `missingResolver` names the first tracker id with no installed resolver: coverage is monotone (a mention anywhere counts), so
+ * that can only cause a false "uncovered" — callers go `unreadable` only when a decision would otherwise be uncovered.
+ */
+export function resolveTrackerBodies(projectDir: string, planContents: string[], deps: TrackerResolveDeps = {}): Observed<{ bodies: string[]; missingResolver: { span: string; reason: string } | null }> {
+  let missingResolver: { span: string; reason: string } | null = null;
+  let capabilities: CapabilityLike[] | null = null;
+  const seen = new Map<string, string[]>();
+  const resolveFn = deps.resolveTaskContentFn ?? resolveTaskContent;
+  const bodies: string[] = [];
+  const now = deps.now ?? (() => performance.now());
+  const startedAt = now();
+  for (const raw of planContents) {
+    const content = stripCommentsAndFences(raw);
+    if (!/\btracker-id\s*=/i.test(content)) {
+      bodies.push('');
+      continue;
+    }
+    const parts: string[] = [];
+    for (const task of parsePlanDocument(content).tasks) {
+      const trackerId = task.trackerId;
+      if (trackerId === null) continue;
+      const cached = seen.get(trackerId);
+      if (cached) {
+        parts.push(...cached);
+        continue;
+      }
+      if (capabilities === null) {
+        try {
+          capabilities = (deps.loadCapabilities ?? loadResolverCapabilities)(projectDir);
+        } catch (err) {
+          return unreadable(`capability registry unreadable: ${err instanceof Error ? err.message : String(err)}`, trackerId);
+        }
+      }
+      // Floor: spawnSync rejects a fractional timeout, and a 0 timeout means unbounded, so a sub-ms remainder is a rejection.
+      const remainingMs = Math.floor(TRACKER_RESOLVE_BUDGET_MS - (now() - startedAt));
+      if (remainingMs <= 0) {
+        return unreadable(`tracker resolution exceeded the ${TRACKER_RESOLVE_BUDGET_MS} ms aggregate budget`, trackerId);
+      }
+      try {
+        const result = resolveFn({ trackerId, capabilities, timeoutOverrideMs: remainingMs });
+        if (result.kind === 'no-resolver') {
+          missingResolver ??= { span: trackerId, reason: `no task-content resolver installed for tracker prefix "${splitTrackerId(trackerId)?.prefix}"` };
+        }
+        // Per field: an unclosed fence in one field must not swallow the rest.
+        const texts = result.kind === 'resolved' ? contentTexts(result.content).map(stripCommentsAndFences) : [];
+        seen.set(trackerId, texts);
+        parts.push(...texts);
+      } catch (err) {
+        if (isResolverFailure(err)) {
+          return unreadable(`tracker task content unresolved: ${err.message}`, trackerId);
+        }
+        throw err;
+      }
+    }
+    bodies.push(parts.join('\n'));
+  }
+  return evidenceFound({ bodies, missingResolver });
 }
 
 // ─── Messages ─────────────────────────────────────────────────────────────────

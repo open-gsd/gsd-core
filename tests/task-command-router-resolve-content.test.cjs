@@ -212,6 +212,26 @@ describe('task resolve-content (rows 17-19)', () => {
     assert.strictEqual(stdout, '', 'resolver failure must never write a JSON {resolved:false} answer to stdout');
   });
 
+  test('hard-halt: an unsafe tracker-id (leading "-") is rejected by the seam with a non-zero exit', (t) => {
+    const dir = createTempDir('gsd-resolve-content-unsafe-');
+    t.after(() => cleanup(dir));
+    writePlan(dir, RESOLVABLE_TASK.replace('test:1', 'test:--flag'));
+    const caps = [{ id: 'fake-tracker', taskContentResolver: { trackerPrefix: 'test', invoke: { binary: 'fake-cli', args: ['show', '{{id}}'], timeoutMs: FAKE_RESOLVER_INVOKE_TIMEOUT_MS } } }];
+    let thrown = null;
+    const stderr = captureStderr(() => {
+      try {
+        routeResolveContent(
+          { args: ['task', 'resolve-content', '--plan', '01-PLAN.md', '--task-id', 'test:--flag'], cwd: dir, raw: true },
+          { loadCapabilities: () => caps },
+        );
+      } catch (err) {
+        thrown = err;
+      }
+    });
+    assert.ok(thrown instanceof ExitError, `expected ExitError, got ${thrown}`);
+    assert.ok(stderr.includes('tracker-id rejected'), stderr);
+  });
+
   test('path traversal: --plan escaping the project root -> USAGE, non-zero exit, no filesystem read', (t) => {
     const dir = createTempDir('gsd-resolve-content-traversal-');
     t.after(() => cleanup(dir));
