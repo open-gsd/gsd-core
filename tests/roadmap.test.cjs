@@ -6300,11 +6300,17 @@ describe('plan-id row boundary (#5542)', () => {
     assert.match(out, /- \[x\] 47-01-PLAN\.md/);
   });
 
-  test('phase complete flips each plan\'s own row when one id prefixes another', () => {
-    plan('47-1'); plan('47-10'); summary('47-1'); summary('47-10');
+  // Both plans summarized (summaries older than the verification report) and
+  // verification passed, so `phase complete 47` is allowed to run.
+  const readyToComplete = (firstPlanFrontmatter = '') => {
+    plan('47-1', firstPlanFrontmatter); plan('47-10'); summary('47-1'); summary('47-10');
     const old = new Date('2000-01-01T00:00:00Z');
     for (const id of ['47-1', '47-10']) fs.utimesSync(path.join(phaseDir, `${id}-SUMMARY.md`), old, old);
     fs.writeFileSync(path.join(phaseDir, '47-VERIFICATION.md'), '---\nstatus: passed\n---\n# Verification\n');
+  };
+
+  test('phase complete flips each plan\'s own row when one id prefixes another', () => {
+    readyToComplete();
     write(['- [ ] 47-10-PLAN.md', '- [ ] 47-1-PLAN.md']);
     const r = runGsdTools('phase complete 47', tmpDir);
     assert.ok(r.success, `phase complete failed: ${r.error}`);
@@ -6317,21 +6323,22 @@ describe('plan-id row boundary (#5542)', () => {
     ['suffix-less with a dash description', '- [ ] 47-1 — desc', '- [x] 47-1 — desc'],
     ['bold', '- [ ] **47-1**', '- [x] **47-1**'],
     ['colon', '- [ ] 47-1: desc', '- [x] 47-1: desc'],
-    ['slugged plan filename', '- [ ] 47-01-scaffold-PLAN.md', '- [x] 47-01-scaffold-PLAN.md'],
   ]) {
     test(`existing row form still ticks: ${label}`, () => {
-      if (label === 'slugged plan filename') {
-        // plan carries a descriptive slug; its summary is named by the bare id
-        fs.writeFileSync(path.join(phaseDir, '47-01-scaffold-PLAN.md'), '---\nphase: foo\nplan: 47-01\nwave: 1\n---\n# Plan\n');
-        summary('47-01');
-      } else {
-        plan('47-1'); summary('47-1');
-      }
+      plan('47-1'); summary('47-1');
       write([row]);
       update();
       assert.ok(read().includes(expected), `expected "${expected}" in:\n${read()}`);
     });
   }
+
+  test('existing row form still ticks: slugged plan filename with a bare-id summary', () => {
+    fs.writeFileSync(path.join(phaseDir, '47-01-scaffold-PLAN.md'), '---\nphase: foo\nplan: 47-01\nwave: 1\n---\n# Plan\n');
+    summary('47-01');
+    write(['- [ ] 47-01-scaffold-PLAN.md']);
+    update();
+    assert.ok(read().includes('- [x] 47-01-scaffold-PLAN.md'), read());
+  });
 
   test('a row whose id ends in sentence punctuation still ticks', () => {
     plan('47-01'); summary('47-01');
@@ -6341,10 +6348,7 @@ describe('plan-id row boundary (#5542)', () => {
   });
 
   test('phase complete does not flip the row of a superseded plan', () => {
-    plan('47-1', 'status: superseded\n'); plan('47-10'); summary('47-1'); summary('47-10');
-    const old = new Date('2000-01-01T00:00:00Z');
-    for (const id of ['47-1', '47-10']) fs.utimesSync(path.join(phaseDir, `${id}-SUMMARY.md`), old, old);
-    fs.writeFileSync(path.join(phaseDir, '47-VERIFICATION.md'), '---\nstatus: passed\n---\n# Verification\n');
+    readyToComplete('status: superseded\n');
     write(['- [ ] 47-1-PLAN.md', '- [ ] 47-10-PLAN.md']);
     const r = runGsdTools('phase complete 47', tmpDir);
     assert.ok(r.success, `phase complete failed: ${r.error}`);

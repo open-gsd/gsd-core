@@ -56,7 +56,7 @@ const {
   PHASE_HEADING_BASELINE,
   buildPhaseHeadingScanRegex,
 } = phaseIdMod;
-import { escapeRegex, PLAN_ID_ROW_BOUNDARY_SOURCE } from './pattern.cjs';
+import { escapeRegex } from './pattern.cjs';
 import { declareGateExit } from './gate-exit.cjs';
 import { gateVerdict } from './gate-verdict.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
@@ -4293,18 +4293,12 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
               if (!planId) continue;
               // #5542: only a summary paired with a live (non-superseded) plan
               // flips a row — the same pairing rule the counts use.
-              if (!(phaseInfo['plans'] as string[] | undefined ?? []).some(
-                (planFile) => coreUtilsMod.countMatchedSummaries([planFile], [summaryFile]) > 0,
-              )) continue;
-              const planEscaped = escapeRegex(planId);
+              if (!coreUtilsMod.summaryPairsWithAnyPlan((phaseInfo['plans'] as string[] | undefined) ?? [], summaryFile)) continue;
               // ADR-5057 §6 (Phase 13, #5217): the per-plan flip is a bullet
               // mutation, so it goes through `updateBullet` like the phase
               // checkbox flip above — first matching bullet only, never a
               // fenced line, never a mid-line occurrence.
-              const planCheckboxPattern = new RegExp(
-                `^(\\s*-\\s*\\[) (\\]\\s*(?:\\*\\*)?${planEscaped}${PLAN_ID_ROW_BOUNDARY_SOURCE}(?:\\*\\*)?)`,
-                'i',
-              );
+              const planCheckboxPattern = coreUtilsMod.planRowPattern(planId, { anchored: true });
               b = updateBullet(
                 b,
                 (_bulletText, rawLine) => planCheckboxPattern.test(rawLine),
