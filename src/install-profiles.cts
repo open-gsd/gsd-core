@@ -989,6 +989,7 @@ function stageAgentsForRuntimeWithConverter(
   converter: (content: string, isGlobal?: boolean, meta?: { agentName: string }) => string,
   isGlobal = false,
   agentCtx?: AgentCtx,
+  excludeSuffixes?: readonly string[],
 ): string {
   if (!installFs().existsSync(srcAgentsDir)) return srcAgentsDir;
 
@@ -1021,6 +1022,7 @@ function stageAgentsForRuntimeWithConverter(
     for (const entry of entries) {
       if (!entry.isFile()) continue;
       if (!entry.name.endsWith('.md')) continue;
+      if (excludeSuffixes && excludeSuffixes.some((s) => entry.name.endsWith(s))) continue;
       // For tiered profiles, gate by agent stem (full filename without extension).
       if (resolvedProfile.skills !== '*') {
         const stem = entry.name.slice(0, -3);

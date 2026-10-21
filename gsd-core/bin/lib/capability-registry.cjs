@@ -3205,6 +3205,9 @@ const capabilities = {
             "prefix": "gsd-",
             "nesting": "flat",
             "recursive": false,
+            "excludeSuffixes": [
+              ".compact.md"
+            ],
             "converter": "convertClaudeAgentToPiAgent"
           }
         ],
@@ -3223,6 +3226,9 @@ const capabilities = {
             "prefix": "gsd-",
             "nesting": "flat",
             "recursive": false,
+            "excludeSuffixes": [
+              ".compact.md"
+            ],
             "converter": "convertClaudeAgentToPiAgent"
           }
         ]
@@ -7491,6 +7497,9 @@ const runtimes = {
             "prefix": "gsd-",
             "nesting": "flat",
             "recursive": false,
+            "excludeSuffixes": [
+              ".compact.md"
+            ],
             "converter": "convertClaudeAgentToPiAgent"
           }
         ],
@@ -7509,6 +7518,9 @@ const runtimes = {
             "prefix": "gsd-",
             "nesting": "flat",
             "recursive": false,
+            "excludeSuffixes": [
+              ".compact.md"
+            ],
             "converter": "convertClaudeAgentToPiAgent"
           }
         ]

@@ -1239,6 +1239,20 @@ function validateArtifactKindEntry(capId, entry, prefix) {
     }
   }
 
+  // excludeSuffixes — optional; filename suffixes the agents staging skips (#5569: Pi omits .compact.md)
+  if (entry.excludeSuffixes !== undefined) {
+    if (!Array.isArray(entry.excludeSuffixes)) {
+      errors.push(ctx + '.excludeSuffixes must be an array of non-empty strings if present');
+    } else {
+      for (let i = 0; i < entry.excludeSuffixes.length; i++) {
+        const s = entry.excludeSuffixes[i];
+        if (typeof s !== 'string' || s.length === 0 || s.includes('/') || s.includes('\\')) {
+          errors.push(ctx + '.excludeSuffixes[' + i + '] must be a non-empty string without path separators');
+        }
+      }
+    }
+  }
+
   // converter — required; must be a string or null (closed ConverterName enum — now enforced in phase 5e)
   if (!Object.prototype.hasOwnProperty.call(entry, 'converter')) {
     errors.push(ctx + '.converter is required (must be a string or null)');

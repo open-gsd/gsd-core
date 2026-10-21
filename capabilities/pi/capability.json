@@ -36,6 +36,9 @@
           "prefix": "gsd-",
           "nesting": "flat",
           "recursive": false,
+          "excludeSuffixes": [
+            ".compact.md"
+          ],
           "converter": "convertClaudeAgentToPiAgent"
         }
       ],
@@ -54,6 +57,9 @@
           "prefix": "gsd-",
           "nesting": "flat",
           "recursive": false,
+          "excludeSuffixes": [
+            ".compact.md"
+          ],
           "converter": "convertClaudeAgentToPiAgent"
         }
       ]
