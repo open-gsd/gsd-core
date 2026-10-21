@@ -666,16 +666,23 @@ const SHARD_BALANCE = Object.freeze({
   // budgets: 332.5 x 1.5 = 498.75s, rounded up to 500s. It still flags a
   // shard drifting ~3 more minutes away from the rest.
   maxMedianGapMs: 500000,
-  // Baselines: nearest-rank p90 of job wall-clock per shard (the same
-  // `percentile` this file uses) over those twelve runs.
+  // Baselines. The measured nearest-rank p90 of job wall-clock per shard (the
+  // same `percentile` this file uses) over those twelve runs is 1/6 934000,
+  // 2/6 742000, 3/6 998000, 4/6 918000, 5/6 1118000, 6/6 791000. Each baseline
+  // is that p90 x 1.25. A baseline equal to one sample's p90 is exceeded by the
+  // p90 of a fresh sample of the same distribution too often (5/6's own twelfth
+  // value, 1155000, is already above 1118000), so the daily check would open a
+  // p90 breach on noise. 1.25 rather than the 1.5 used above keeps the rule a
+  // regression detector: x1.5 would put 5/6 at ~28 min, close to the 30-min
+  // job budget the test-conformance LANE_COSTS entry already enforces.
   baselineShardTotal: 6,
   baselineP90Ms: Object.freeze({
-    '1/6': 934000,
-    '2/6': 742000,
-    '3/6': 998000,
-    '4/6': 918000,
-    '5/6': 1118000,
-    '6/6': 791000,
+    '1/6': 1167500,
+    '2/6': 927500,
+    '3/6': 1247500,
+    '4/6': 1147500,
+    '5/6': 1397500,
+    '6/6': 988750,
   }),
   issueTitle: 'CI: Windows conformance shard balance regressed',
 });
