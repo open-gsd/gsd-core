@@ -1351,10 +1351,15 @@ const DEFAULT_NEW_PROJECT_COMMAND = '/gsd-new-project';
  * trigger exists is decided by the registered surface, not by this table. A
  * runtime absent here is invoked as `/<trigger>`.
  */
+// Agent Skills hosts that start a skill with `/skill:<name>` (kimi; pi, #5547 —
+// pi never accepts a bare `/<name>` for a skill).
+const slashSkillInvocation = (trigger: string): string => `/skill:${trigger}`;
+
 const TRIGGER_INVOCATION: Readonly<Record<string, (trigger: string) => string>> = {
   codex: (trigger) => `$${trigger}`,
   cursor: (trigger) => `${trigger} (mention the skill name)`,
-  kimi: (trigger) => `/skill:${trigger}`,
+  kimi: slashSkillInvocation,
+  pi: slashSkillInvocation,
 };
 
 type AdvertisedNewProject =

@@ -3172,7 +3172,7 @@ const capabilities = {
     "role": "runtime",
     "version": "1.18.0",
     "title": "pi",
-    "description": "pi (pi.dev) — bun-runtime programmatic-CLI; TS ExtensionAPI (registerCommand/registerTool/registerProvider/pi.on); single native-extension file at ~/.pi/agent/extensions/gsd.js (.js, not .cjs — pi's extension auto-discovery accepts only .ts/.js, #2470); no shared-settings hook surface; tier-2 support.",
+    "description": "pi (pi.dev) — node-runtime programmatic-CLI (managed pi 1.3.0 install); TS ExtensionAPI (registerCommand/registerTool/registerProvider/pi.on); single native-extension file at ~/.pi/agent/extensions/gsd.js (.js, not .cjs — pi's extension auto-discovery accepts only .ts/.js, #2470); no shared-settings hook surface; tier-2 support.",
     "tier": "core",
     "requires": [],
     "engines": {
@@ -3190,8 +3190,26 @@ const capabilities = {
       "localConfigDir": ".pi",
       "configFormat": "none",
       "artifactLayout": {
-        "global": [],
-        "local": []
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToPiSkill"
+          }
+        ],
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToPiSkill"
+          }
+        ]
       },
       "triggerPrecedence": [
         "skills",
@@ -3223,8 +3241,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "session-log-append",
         "transport": "native-extension",
-        "runtime": "bun",
-        "effortSurface": "undocumented"
+        "runtime": "node",
+        "effortSurface": "argv"
       },
       "hostBehaviors": {
         "nativePlugin": {
@@ -3233,6 +3251,7 @@ const capabilities = {
           "source": "pi/gsd.cjs"
         },
         "pluginOnlyInstall": true,
+        "contentRewriteProfile": "slash-lookahead-tilde-restore",
         "sharedHooksDirName": "gsd-hooks"
       }
     }
@@ -7423,7 +7442,7 @@ const runtimes = {
     "role": "runtime",
     "version": "1.18.0",
     "title": "pi",
-    "description": "pi (pi.dev) — bun-runtime programmatic-CLI; TS ExtensionAPI (registerCommand/registerTool/registerProvider/pi.on); single native-extension file at ~/.pi/agent/extensions/gsd.js (.js, not .cjs — pi's extension auto-discovery accepts only .ts/.js, #2470); no shared-settings hook surface; tier-2 support.",
+    "description": "pi (pi.dev) — node-runtime programmatic-CLI (managed pi 1.3.0 install); TS ExtensionAPI (registerCommand/registerTool/registerProvider/pi.on); single native-extension file at ~/.pi/agent/extensions/gsd.js (.js, not .cjs — pi's extension auto-discovery accepts only .ts/.js, #2470); no shared-settings hook surface; tier-2 support.",
     "tier": "core",
     "requires": [],
     "engines": {
@@ -7441,8 +7460,26 @@ const runtimes = {
       "localConfigDir": ".pi",
       "configFormat": "none",
       "artifactLayout": {
-        "global": [],
-        "local": []
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToPiSkill"
+          }
+        ],
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToPiSkill"
+          }
+        ]
       },
       "triggerPrecedence": [
         "skills",
@@ -7474,8 +7511,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "session-log-append",
         "transport": "native-extension",
-        "runtime": "bun",
-        "effortSurface": "undocumented"
+        "runtime": "node",
+        "effortSurface": "argv"
       },
       "hostBehaviors": {
         "nativePlugin": {
@@ -7484,6 +7521,7 @@ const runtimes = {
           "source": "pi/gsd.cjs"
         },
         "pluginOnlyInstall": true,
+        "contentRewriteProfile": "slash-lookahead-tilde-restore",
         "sharedHooksDirName": "gsd-hooks"
       }
     }

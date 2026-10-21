@@ -28,7 +28,7 @@ We want the inversion: **GSD is the engine; the host loads it through a stable, 
 Surveyed Claude Code, Codex, OpenCode, **pi** (pi.dev), VS Code, Gemini CLI, Cursor, Cline, Hermes (official docs + local `capabilities/*/capability.json`). Two structural facts dominate:
 
 **(a) Hosts split into two embedding modes.**
-- **Imperative** (a programmatic plugin API): Claude Code (subagents + 30 hook events + MCP + `Agent()` tool), **pi** (TS extensions: `registerCommand`/`registerTool`/`registerProvider` + ~30 fine-grained hooks + `before_provider_request` payload mutation), OpenCode (JS plugins + ~25 events), VS Code (extension host: `vscode.lm`, chat participants, LM tools), Cline (SDK `AgentPlugin` with `beforeTool`).
+- **Imperative** (a programmatic plugin API): Claude Code (subagents + 30 hook events + MCP + `Agent()` tool), **pi** (TS extensions: `registerCommand`/`registerTool`/`registerProvider` + ~30 fine-grained hooks (41 as of pi 1.3.0, #5557) + `before_provider_request` payload mutation), OpenCode (JS plugins + ~25 events), VS Code (extension host: `vscode.lm`, chat participants, LM tools), Cline (SDK `AgentPlugin` with `beforeTool`).
 - **Declarative** (files only, "no in-process extension API"): Gemini CLI (TOML commands + `.md` agents + 10 hook scripts), Cursor (`.mdc`/`.md` + 19 hook events via `hooks.json`), Codex (AGENTS.md prose + `/skills` menu, **no custom slash commands**), Cline-via-rules (`.clinerules` text — the surface GSD uses today, **0 programmatic events**).
 
 → **ADR-1016's projection model *is* the declarative-embedding adapter.** Imperative embedding is the new adapter. Both sit behind one negotiated interface.
@@ -425,7 +425,7 @@ Each phase is its own `approved-*` sub-issue + PR, dependency-ordered, exactly t
 | Host | Mode | Cmd surface | Dispatch | Model | Hook bus (events) | MCP | Runtime |
 |---|---|---|---|---|---|---|---|
 | Claude Code | imperative | slash-file (`gsd:`-ns) | nested fg ∞ / bg depth-5; `Agent()` | passive (per-subagent `model`) | host (30) | yes (bundle) | node |
-| pi (pi.dev) | imperative | slash-programmatic | no named dispatch; SDK sub-session | **active** (providers + `before_provider_request`) | host (~30 fine) | community ext | **bun** |
+| pi (pi.dev) | imperative | slash-programmatic | no named dispatch; SDK sub-session | **active** (providers + `before_provider_request`) | host (~30 fine; 41 as of pi 1.3.0) | native ext (pi 1.3.0 also has first-class MCP, #5557) | **node** (corrected from bun, #5557) |
 | OpenCode | imperative | slash-file | `mode:subagent`/`@`; `subtask` sync | per-agent model | host (~25) | yes | node |
 | VS Code | imperative/**IDE** | palette + chat `/` | DIY `lm` tool-loop | **active** (`vscode.lm`, no system msg) | **engine-owned** (none) | yes (provider) | node / **sandboxed-web** |
 | Codex | declarative | **prose-only** + `/skills` | `max_depth=1` | passive (session-only) | host (10, command-only) | yes | node |

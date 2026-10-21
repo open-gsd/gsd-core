@@ -3224,8 +3224,14 @@ function buildStateFrontmatter(
             // — no second ROADMAP parser here. A ROADMAP without a canonical
             // `## Progress` table resolves no table → floor inert (disk count
             // stands), the owner's own answer to "what is countable".
+            // #5165: the milestone-grouped `## Progress` table keeps every
+            // milestone's rows and sits OUTSIDE any narrower roadmapScope, so the
+            // floor names the milestone STATE asserts (assertedMilestoneVersion —
+            // present on every resync path, unlike the optional storedMilestone
+            // parameter) and the owner counts only that milestone's rows. No row
+            // for it => nulls => the floor is inert and the disk count stands.
             const roadmapCompletedPhases = roadmapScope !== null && safeToUseRoadmapCount && !diskCountsWithheld
-              ? deriveProgressFromRoadmap(roadmapScope).completedPhases
+              ? deriveProgressFromRoadmap(roadmapScope, assertedMilestoneVersion ?? storedMilestone).completedPhases
               : null;
             const flooredCompletedPhases = roadmapCompletedPhases !== null
               ? Math.max(diskCompletedPhases, roadmapCompletedPhases)
@@ -3659,6 +3665,7 @@ function applyAuthoritativeProgressSubkeys(
   let completedMoved = false;
   for (const [subkey, value] of Object.entries(intent)) {
     if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+    if (subkey === 'percent') continue; // composed below, never applied raw (#5165)
     if (!getFieldClassification(`progress.${subkey}`)) continue;
     const isCompletedCounter = subkey === 'completed_phases' || subkey === 'completed_plans';
     if (isCompletedCounter && opts.completedOnlyRaise) {
@@ -3673,10 +3680,24 @@ function applyAuthoritativeProgressSubkeys(
   }
   // percent: applied only when a completed counter moved (coherent with the
   // counters that just landed) or when no percent exists to contradict.
+  // #5165 / ADR-4629 §8.5: `computeProgressPercent` is the one composition
+  // owner (min(plan fraction, phase fraction)) that every resyncing write uses.
+  // When the block carries the counters it needs, the percent is composed by
+  // that owner over the counters just landed, so a later resyncing write
+  // cannot move what this transition wrote. The intent's own percent (a
+  // phase-only fraction) is only the fallback for a block without plan counts.
   const intentPercent = intent['percent'];
   if (typeof intentPercent === 'number' && Number.isFinite(intentPercent) && (completedMoved || toFiniteNumber(base['percent']) === null)) {
-    if (!Object.is(base['percent'], intentPercent)) {
-      base['percent'] = intentPercent;
+    const composed = computeProgressPercent(
+      toFiniteNumber(base['completed_plans']),
+      toFiniteNumber(base['total_plans']),
+      toFiniteNumber(base['completed_phases']),
+      toFiniteNumber(base['total_phases']),
+      SCOPE.COMPLETE,
+    );
+    const nextPercent = composed !== null ? composed : intentPercent;
+    if (!Object.is(base['percent'], nextPercent)) {
+      base['percent'] = nextPercent;
       changed = true;
     }
   }
@@ -5331,8 +5352,9 @@ function verifyStateWriteIntent(
   statePath: string,
   bodyDeltas?: Record<string, { pre: string | null; post: string | null }>,
 ): StateWriteIntentVerification {
-  const pre = normalizeContent(statePath, preContent).content;
-  const post = normalizeContent(statePath, postContent).content;
+  // #5165: the write lands scoped to what it changed (platformWriteSync reads the file it replaces).
+  const pre = normalizeContent(statePath, preContent, { prior: preContent }).content;
+  const post = normalizeContent(statePath, postContent, { prior: preContent }).content;
   const preFm = extractFrontmatter(pre, statePath) as Record<string, unknown>;
   const postFm = extractFrontmatter(post, statePath) as Record<string, unknown>;
   const preBody = stripFrontmatter(pre);
@@ -5545,7 +5567,7 @@ function applyStateWriteIntent(
 
     platformWriteSync(statePath, candidate);
     const reread = platformReadSync(statePath) || '';
-    if (reread !== normalizeContent(statePath, candidate).content) {
+    if (reread !== normalizeContent(statePath, candidate, { prior: pre }).content) {
       return Object.freeze({
         ok: false,
         reasons: Object.freeze([STATE_WRITE_INTENT_FAILURE.REREAD_MISMATCH]),

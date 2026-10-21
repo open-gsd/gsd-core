@@ -500,6 +500,7 @@
       "legacy-cleanup.cjs",
       "loop-host-contract.cjs",
       "loop-resolver.cjs",
+      "markdown-line-diff.cjs",
       "markdown-sectionizer.cjs",
       "markdown-table.cjs",
       "mcp-catalog.cjs",

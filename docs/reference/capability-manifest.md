@@ -215,7 +215,7 @@ Install and hook code does not compare a runtime id to a literal; it reads one o
 
 | Key | Type | Declared by | What it controls |
 |---|---|---|---|
-| `contentRewriteProfile` | string | 14 runtimes | Which path-rewrite profile the content-rewrite engine applies: `slash-own-tilde`, `slash-bare-own-tilde`, `slash-lookahead-own-tilde`, `slash-lookahead-nested-own-devin`, `slash-lookahead-own-derived`, `slash-bare-own-derived`, `slash-bare-own-tilde-bare`, `attribution-only`, `slash-tilde-restore`, `branded-lookahead-own-derived`, `slash-bare`. Omitted: no path rewrites. Hosts that share a body share a profile. |
+| `contentRewriteProfile` | string | 15 runtimes | Which path-rewrite profile the content-rewrite engine applies: `slash-own-tilde`, `slash-bare-own-tilde`, `slash-lookahead-own-tilde`, `slash-lookahead-nested-own-devin`, `slash-lookahead-own-derived`, `slash-bare-own-derived`, `slash-bare-own-tilde-bare`, `attribution-only`, `slash-tilde-restore`, `slash-lookahead-tilde-restore`, `branded-lookahead-own-derived`, `slash-bare`. Omitted: no path rewrites. Hosts that share a body share a profile. |
 | `skipRuntimeDefaultsStamp` | boolean | `claude` | Skip the non-Claude runtime-identity stamp. |
 | `skipCompactAgents` | boolean | `claude` | Do not stage `*.compact.md` agent variants. |
 | `omitBashRunnerOnWindows` | boolean | `claude` | Emit a shell hook as the bare script path on Windows. |

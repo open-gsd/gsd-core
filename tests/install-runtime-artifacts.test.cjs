@@ -290,7 +290,9 @@ describe('installRuntimeArtifacts — durable Runtime Surface corpus (#4132)', (
 
     installRuntimeArtifacts('pi', piDir, 'global', RESOLVED_CORE);
     installRuntimeArtifacts('vscode', vscodeDir, 'global', RESOLVED_CORE);
-    assert.ok(!fs.existsSync(path.join(piDir, 'gsd-core', 'commands')));
+    // #5547: pi declares a skills-only layout, so it needs the commands corpus
+    // (the skills' source) but has no agents kind and therefore no agents corpus.
+    assert.ok(fs.existsSync(path.join(piDir, 'gsd-core', 'commands', 'gsd')));
     assert.ok(!fs.existsSync(path.join(piDir, 'gsd-core', 'agents')));
     assert.ok(!fs.existsSync(path.join(vscodeDir, 'gsd-core', 'commands')));
     assert.ok(!fs.existsSync(path.join(vscodeDir, 'gsd-core', 'agents')));

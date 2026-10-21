@@ -345,6 +345,14 @@ export const EFFORT_ARGV: Record<string, EffortArgvSpec> = {
     supported: new Set(['low', 'medium', 'high', 'xhigh', 'max']),
     clamp: (level: string): string => (level === 'minimal' ? 'low' : level),
   },
+  // Verified against `pi --help` (pi 1.3.0, #5557): `--thinking <level>` — "Set
+  // thinking level: off, minimal, low, medium, high, xhigh, max". `off` is a
+  // pi-only level with no universal counterpart, so it is not in `supported`.
+  pi: {
+    render: (level: string): string[] => ['--thinking', level],
+    supported: new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']),
+    clamp: (level: string): string => level,
+  },
 };
 
 export interface RenderedEffortArgv {
