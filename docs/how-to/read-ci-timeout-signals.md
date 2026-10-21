@@ -101,7 +101,8 @@ Both values live only in `SHARD_BALANCE`, with the runs they were measured on an
 in the comment above them; this page deliberately does not copy them. Since #5029 they describe
 six shards. The gap limit is the measured six-shard gap times 1.5, not the 2 minutes #5101 set
 for three ~30-minute shards: on ~12-minute shards a single long test file moves one shard by
-minutes on its own.
+minutes on its own. Each p90 baseline is the measured p90 times 1.25, so that a fresh sample's
+p90 does not breach on noise alone.
 
 **Where you see it.** Every run writes a table to the `shard-balance` step's summary. A breach, or
 a baseline mismatch, also opens an issue titled **CI: Windows conformance shard balance

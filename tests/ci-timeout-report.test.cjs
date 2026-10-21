@@ -898,8 +898,8 @@ test('SHARD_BALANCE matches the windows shard layout test.yml declares (#5029)',
 
 // #5029: the live gap limit is sized for six ~12-min shards (see the
 // SHARD_BALANCE comment for its measured basis). Boundary-tested against the
-// live config with a 6-shard fixture: the gap exactly at the limit is ok, one
-// millisecond over is a breach. Fixture values are derived from the config
+// live config with a 6-shard fixture: one millisecond under the limit and the
+// gap exactly at it are ok, one millisecond over is a breach. Fixture values are derived from the config
 // (the slow shard is the one with the largest p90 baseline, and every shard
 // stays at or under its baseline) so a re-measured config keeps this test
 // meaningful instead of breaking it.
@@ -916,6 +916,10 @@ test('the live gap limit holds at its boundary on the declared shard layout (#50
   );
 
   const runsWithGap = (gap) => constantRuns(10, keys.map((_, i) => (i === slowIdx ? base + gap : base)));
+  const underLimit = evaluateShardBalance(extractShardSamples(runsWithGap(limit - 1), SHARD_BALANCE), SHARD_BALANCE);
+  assert.equal(underLimit.status, 'ok');
+  assert.equal(underLimit.gapMs, limit - 1);
+
   const atLimit = evaluateShardBalance(extractShardSamples(runsWithGap(limit), SHARD_BALANCE), SHARD_BALANCE);
   assert.equal(atLimit.status, 'ok');
   assert.equal(atLimit.gapMs, limit);
