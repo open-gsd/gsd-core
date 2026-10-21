@@ -6364,3 +6364,80 @@ describe('plan-id row boundary (#5542)', () => {
     assert.match(out, /- \[x\] 47-10-PLAN\.md/);
   });
 });
+
+describe('phase checklist stamp is anchored to the phase\'s own bullet (#5545)', () => {
+  let tmpDir;
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '02-new');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fs.writeFileSync(path.join(phaseDir, '02-01-PLAN.md'), '---\nphase: new\nplan: 02-01\nwave: 1\n---\n# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '02-01-SUMMARY.md'), '---\nphase: new\nplan: 02-01\n---\n# Summary\n');
+    fs.writeFileSync(path.join(phaseDir, '02-VERIFICATION.md'), '---\nphase: new\nstatus: passed\n---\n# Verification\n');
+  });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const write = (lines) => fs.writeFileSync(
+    path.join(tmpDir, '.planning', 'ROADMAP.md'), `# Roadmap\n\n## v2.0\n\n${lines.join('\n')}\n`);
+  const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+  const bullets = () => splitLines(fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf8'))
+    .filter((l) => /^\s*- \[/.test(l));
+  const update = () => {
+    const r = runGsdTools('roadmap update-plan-progress 2', tmpDir);
+    assert.ok(r.success, `update-plan-progress failed: ${r.error}`);
+    return JSON.parse(r.output);
+  };
+
+  test('ticks only the phase\'s own bullet, not a bullet that merely mentions it', () => {
+    write(['- [ ] v1.0 - Phase 1 through Phase 2', '- [ ] **Phase 2: New**']);
+    update();
+    const [mention, own] = bullets();
+    assert.equal(mention, '- [ ] v1.0 - Phase 1 through Phase 2');
+    assert.match(own, /^- \[x\] \*\*Phase 2: New\*\* \(completed \d{4}-\d{2}-\d{2}\)$/);
+  });
+
+  test('the completion annotation stays on its own bullet when the label ends the line', () => {
+    write(['- [ ] Phase 2', '- [ ] Other work']);
+    update();
+    const [own, other] = bullets();
+    assert.match(own, /^- \[x\] Phase 2 \(completed \d{4}-\d{2}-\d{2}\)$/);
+    assert.equal(other, '- [ ] Other work');
+  });
+
+  test('a bullet that only mentions the phase does not satisfy the gate', () => {
+    write(['- [ ] v1.0 - Phase 1 through Phase 2']);
+    const before = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf8');
+    const out = update();
+    assert.equal(out.updated, false);
+    assert.equal(out.reason, 'missing_phase_details');
+    assert.equal(fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf8'), before);
+  });
+
+  for (const [label, bullet] of [
+    ['bold', '- [ ] **Phase 2: New**'],
+    ['plain', '- [ ] Phase 2: New'],
+    ['padded', '- [ ] Phase 02: New'],
+    ['indented', '  - [ ] **Phase 2: New**'],
+  ]) {
+    test(`existing bullet form still ticks: ${label}`, () => {
+      write([bullet]);
+      update();
+      assert.match(bullets()[0], /^\s*- \[x\] .*\(completed \d{4}-\d{2}-\d{2}\)$/);
+    });
+  }
+
+  test('a decimal sub-phase bullet is not matched for its parent phase', () => {
+    write(['- [ ] Phase 2.1: Sub']);
+    const out = update();
+    assert.equal(out.updated, false);
+    assert.equal(bullets()[0], '- [ ] Phase 2.1: Sub');
+  });
+
+  test('an already-checked bullet still counts as a found target', () => {
+    write(['- [x] **Phase 2: New** (completed 2026-01-01)']);
+    const out = update();
+    assert.equal(out.updated, false);
+    assert.notEqual(out.reason, 'missing_phase_details');
+  });
+});
