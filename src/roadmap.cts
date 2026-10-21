@@ -1287,14 +1287,19 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // `insertRowsPatternA|B` anchor on (an ATX phase heading for this phase).
     const headingTargetFound = new RegExp(phaseHeadingAnchor, 'i').test(gateActiveRegion);
     // #5545: the phase-checklist bullet grammar, defined ONCE for the writer
-    // (`' '`: tick an unchecked bullet) and the gate probe (`'[ x]'`: any state).
+    // (an unchecked bullet to tick) and the gate probe (`anyState`).
     // Line-anchored, with only an optional `**` before the label and horizontal
     // whitespace, so a bullet that merely MENTIONS "Phase N" is not the phase's
     // bullet and no `\s` can run past the line end (which used to land the
-    // `(completed …)` annotation on the NEXT line). Capture group 1 is the
-    // opening `- [`, group 2 the rest of the line after the box.
-    const phaseChecklistBullet = (box: string): RegExp => new RegExp(
-      `^([ \\t]*-[ \\t]*\\[)${box}(\\][ \\t]*(?:\\*\\*)?[ \\t]*Phase[ \\t]+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s]|$)[^\\n]*)`,
+    // `(completed …)` annotation on the NEXT line). A decorated bullet (emoji,
+    // blockquote, link) is deliberately NOT the phase's bullet either — the
+    // same narrowing #4965 made for `roadmap analyze`'s checklist reader.
+    // The lookahead only PEEKS (its `\s` may see a newline but consumes none):
+    // the label must be followed by `:`, whitespace or the end of the line, so
+    // `Phase 2.1` / `Phase 20` are not `Phase 2`. Capture group 1 is the opening
+    // `- [`, group 2 the rest of the line after the box.
+    const phaseChecklistBullet = (anyState: boolean): RegExp => new RegExp(
+      `^([ \\t]*-[ \\t]*\\[)${anyState ? '[ x]' : ' '}(\\][ \\t]*(?:\\*\\*)?[ \\t]*Phase[ \\t]+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s]|$)[^\\n]*)`,
       'im',
     );
     // Checklist target: when the phase is complete, its own checklist bullet
@@ -1303,7 +1308,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // one notch to `[ x]` so an ALREADY-checked bullet still counts as a
     // found target: an idempotent re-run then takes the honest
     // "no changes were needed" decline instead of this refusal.
-    const checklistTargetFound = isComplete && phaseChecklistBullet('[ x]').test(gateActiveRegion);
+    const checklistTargetFound = isComplete && phaseChecklistBullet(true).test(gateActiveRegion);
     // Table-row target: set by the row-scoped cell updates below.
     let tableRowFound = false;
 
@@ -1585,7 +1590,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
 
     // If complete: check checkbox
     if (isComplete) {
-      roadmapContent = replaceInCurrentMilestone(roadmapContent, phaseChecklistBullet(' '), `$1x$2 (completed ${today})`);
+      roadmapContent = replaceInCurrentMilestone(roadmapContent, phaseChecklistBullet(false), `$1x$2 (completed ${today})`);
     }
 
     // Mark completed plan checkboxes (e.g. "- [ ] 50-01-PLAN.md", "- [ ] 50-01:", or "- [ ] **50-01**")

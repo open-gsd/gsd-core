@@ -6440,4 +6440,20 @@ describe('phase checklist stamp is anchored to the phase\'s own bullet (#5545)',
     assert.equal(out.updated, false);
     assert.notEqual(out.reason, 'missing_phase_details');
   });
+
+  // Intentional narrowing (the same one #4965 made for `roadmap analyze`'s
+  // checklist reader): only whitespace and one optional `**` may precede the
+  // label, so a decorated bullet is not the phase's own bullet.
+  for (const [label, bullet] of [
+    ['an emoji prefix', '- [ ] \u{1F6A7} **Phase 2: New**'],
+    ['a blockquote marker', '> - [ ] **Phase 2: New**'],
+    ['leading text', '- [ ] 02 - Phase 2: New'],
+  ]) {
+    test(`a bullet with ${label} is not the phase's own bullet (intentional)`, () => {
+      write([bullet]);
+      const out = update();
+      assert.equal(out.updated, false);
+      assert.equal(out.reason, 'missing_phase_details');
+    });
+  }
 });
