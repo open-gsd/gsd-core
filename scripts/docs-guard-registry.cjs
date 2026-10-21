@@ -157,6 +157,7 @@ function assertNoSuiteCollision(tests) {
  * unresolvable read is recorded as `'*'`, never a narrowed guess.
  */
 const DOCS_GUARD_TESTS = {
+  'tests/pi-unsupported-skill-docs.test.cjs': ['docs/how-to/start-a-gsd-workflow-from-pi.md'],
   'tests/adr-15-progress-converge.test.cjs': [
     'docs/COMMANDS.md',
     'docs/how-to/run-phases-autonomously.md',

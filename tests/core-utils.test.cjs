@@ -1494,3 +1494,83 @@ describe('#3883 one-impl-per-rule: slug re-implementation divergence', () => {
     });
   });
 });
+
+describe('#5542 planRowPattern / summaryPairsWithAnyPlan', () => {
+  const tick = (planId, line, opts) => line.replace(coreUtils.planRowPattern(planId, opts), '$1x$2');
+
+  describe('planRowPattern id boundary', () => {
+    for (const [line, ticked] of [
+      ['- [ ] 47-1-PLAN.md', true],
+      ['- [ ] 47-1.md', true],
+      ['- [ ] 47-1', true],
+      ['- [ ] 47-1 — desc', true],
+      ['- [ ] 47-1: desc', true],
+      ['- [ ] 47-1. Setup', true],
+      ['- [ ] 47-1, 47-2', true],
+      ['- [ ] **47-1**', true],
+      ['- [ ] 47-1-scaffold-PLAN.md', true],
+      ['- [ ] 47-10-PLAN.md', false],
+      ['- [ ] 47-1a-PLAN.md', false],
+      ['- [ ] 47-1_x', false],
+      ['- [ ] 47-1.1-PLAN.md', false],
+      ['- [ ] 47-1-2-PLAN.md', false],
+    ]) {
+      test(`${JSON.stringify(line)} ${ticked ? 'ticks' : 'does not tick'} for id 47-1`, () => {
+        assert.strictEqual(tick('47-1', line) !== line, ticked);
+      });
+    }
+
+    test('the id is matched literally, not as a regex', () => {
+      assert.strictEqual(tick('47-01.1', '- [ ] 47-01x1-PLAN.md'), '- [ ] 47-01x1-PLAN.md');
+      assert.strictEqual(tick('47-01.1', '- [ ] 47-01.1-PLAN.md'), '- [x] 47-01.1-PLAN.md');
+    });
+
+    test('matching is case-insensitive', () => {
+      assert.strictEqual(tick('47-01-a', '- [ ] 47-01-A-PLAN.md'), '- [x] 47-01-A-PLAN.md');
+    });
+  });
+
+  describe('planRowPattern box state and anchoring', () => {
+    test('default matches only an unchecked box', () => {
+      assert.strictEqual(tick('47-1', '- [x] 47-1-PLAN.md'), '- [x] 47-1-PLAN.md');
+      assert.strictEqual(coreUtils.planRowPattern('47-1').test('- [x] 47-1-PLAN.md'), false);
+    });
+
+    test('anyState matches either box state and nothing else', () => {
+      const re = coreUtils.planRowPattern('47-1', { anyState: true });
+      assert.strictEqual(re.test('- [ ] 47-1-PLAN.md'), true);
+      assert.strictEqual(re.test('- [x] 47-1-PLAN.md'), true);
+      assert.strictEqual(re.test('- [-] 47-1-PLAN.md'), false);
+    });
+
+    test('anchored pins the row to a line start, unanchored finds it mid-text', () => {
+      assert.strictEqual(coreUtils.planRowPattern('47-1', { anchored: true }).test('  - [ ] 47-1-PLAN.md'), true);
+      assert.strictEqual(coreUtils.planRowPattern('47-1', { anchored: true }).test('see - [ ] 47-1-PLAN.md'), false);
+      assert.strictEqual(coreUtils.planRowPattern('47-1').test('see - [ ] 47-1-PLAN.md'), true);
+    });
+
+    test('groups 1 and 2 reassemble the row around the ticked box', () => {
+      const m = coreUtils.planRowPattern('47-1').exec('- [ ] **47-1**');
+      assert.strictEqual(m[1], '- [');
+      assert.strictEqual(m[2], '] **47-1**');
+    });
+  });
+
+  describe('summaryPairsWithAnyPlan', () => {
+    test('a summary pairs with its own plan only, not a plan whose id it prefixes', () => {
+      assert.strictEqual(coreUtils.summaryPairsWithAnyPlan(['47-1-PLAN.md'], '47-1-SUMMARY.md'), true);
+      assert.strictEqual(coreUtils.summaryPairsWithAnyPlan(['47-10-PLAN.md'], '47-1-SUMMARY.md'), false);
+    });
+
+    test('any one paired plan in the list is enough; an empty list pairs with nothing', () => {
+      assert.strictEqual(coreUtils.summaryPairsWithAnyPlan(['47-10-PLAN.md', '47-1-PLAN.md'], '47-1-SUMMARY.md'), true);
+      assert.strictEqual(coreUtils.summaryPairsWithAnyPlan([], '47-1-SUMMARY.md'), false);
+    });
+
+    test('a slugged plan pairs with the bare-id summary; a nested plan keeps its directory', () => {
+      assert.strictEqual(coreUtils.summaryPairsWithAnyPlan(['47-01-scaffold-PLAN.md'], '47-01-SUMMARY.md'), true);
+      assert.strictEqual(coreUtils.summaryPairsWithAnyPlan(['plans/47-01-PLAN.md'], 'plans/47-01-SUMMARY.md'), true);
+      assert.strictEqual(coreUtils.summaryPairsWithAnyPlan(['plans/47-01-PLAN.md'], '47-01-SUMMARY.md'), false);
+    });
+  });
+});

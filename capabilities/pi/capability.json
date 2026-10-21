@@ -29,6 +29,17 @@
           "nesting": "flat",
           "recursive": false,
           "converter": "convertClaudeCommandToPiSkill"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "excludeSuffixes": [
+            ".compact.md"
+          ],
+          "converter": "convertClaudeAgentToPiAgent"
         }
       ],
       "local": [
@@ -39,6 +50,17 @@
           "nesting": "flat",
           "recursive": false,
           "converter": "convertClaudeCommandToPiSkill"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "excludeSuffixes": [
+            ".compact.md"
+          ],
+          "converter": "convertClaudeAgentToPiAgent"
         }
       ]
     },

@@ -732,25 +732,36 @@ function convertClaudeCommandToKimiCodeSkill(content, skillName, _runtime = null
 }
 
 /**
- * The Pi dispatch contract every installed Pi skill carries (#5547).
+ * The Pi dispatch contract every installed Pi skill carries (#5547, #5569).
  *
- * Pi 1.3.0 exposes no subagent API (capabilities/pi/capability.json:
- * `dispatch.namedDispatch: false`, `maxDepth: 0`), but GSD workflows spawn named
- * `gsd-*` roles through host-neutral `Agent(...)` calls. A skill that reaches such
- * a step must therefore stop and say so — never perform the role's work inline as a
- * substitute, which would silently skip the role's isolation and contract. The
- * wording mirrors the FAIL CLOSED clause `projectNamedDispatchToStructuralDelegate`
- * (bin/install.js) emits for hosts that do have a structural-delegate primitive.
- * The real dispatch story is tracked in #5559.
+ * Pi 1.3.0 exposes no subagent API, so GSD ships its own `gsd_dispatch` tool
+ * (pi/gsd.cjs): it resolves the named `gsd-*` role from the install and runs it as an
+ * isolated child `pi` process, one level deep. Workflow `Agent(...)` calls are projected
+ * onto `gsd_dispatch(role=..., task=...)` at install time. A skill that cannot dispatch
+ * must still stop and say so — never perform the role's work inline as a substitute,
+ * which would silently skip the role's isolation and contract.
  */
 const PI_DISPATCH_CONTRACT =
-  '**Pi host constraint (fail closed).** Pi has no subagent dispatch API. Any workflow step that ' +
-  'spawns, delegates or dispatches a subagent — an `Agent(...)` or Task call, a `subagent_type`, ' +
-  '"subagent spawns", or any named `gsd-*` role — cannot run here. When you reach one, STOP that ' +
-  'step: tell the user which role it needs and that Pi cannot dispatch it yet (tracked in ' +
-  'https://github.com/open-gsd/gsd-core/issues/5559). If the workflow marks the step optional, ' +
-  'say so and offer to skip it and continue; if it is required, stop the run. Never execute the ' +
-  "role's work inline as a substitute.";
+  '**Pi dispatch (fail closed).** Pi has no built-in subagent API; GSD provides the ' +
+  '`gsd_dispatch` tool. Where a workflow step dispatches a named `gsd-*` role, call ' +
+  '`gsd_dispatch` with `role` (the installed role name) and `task` (the full task text). A ' +
+  'workflow that still writes the step as an `Agent(...)` call means the same: its `subagent_type` ' +
+  'is the `role` and its `prompt` is the `task`. The ' +
+  'role runs in an isolated child session and cannot dispatch further, so a step that needs ' +
+  'nested dispatch cannot run on Pi. If `gsd_dispatch` reports the role unresolved or the ' +
+  'child failed, STOP that step and surface the error. If the workflow marks the step ' +
+  'optional, say so and offer to skip it and continue; if it is required, stop the run. ' +
+  "Never execute the role's work inline as a substitute.";
+
+/**
+ * Pi skills that cannot run on Pi, by installed skill name, with the reason the skill
+ * prints instead of starting its workflow (ADR-5559 §2). `/gsd-debug` drives
+ * `gsd-debug-session-manager`, which itself spawns `gsd-debugger`; `gsd_dispatch` is flat
+ * (a child has no dispatch tool), so that nesting cannot be honored.
+ */
+const PI_UNSUPPORTED_SKILLS: Readonly<Record<string, string>> = Object.freeze({
+  'gsd-debug': 'needs nested dispatch; Pi dispatch is flat',
+});
 
 /**
  * Pi does not expand `@path` includes inside a skill body (only the editor
@@ -820,6 +831,14 @@ function convertClaudeCommandToPiSkill(content, skillName, _runtime = null, cmdN
   );
 
   const cappedDescription = capAtCodeUnits(toSingleLine(description), PI_SKILL_DESCRIPTION_MAX);
+  const unsupportedReason = Object.prototype.hasOwnProperty.call(PI_UNSUPPORTED_SKILLS, piSkillName)
+    ? PI_UNSUPPORTED_SKILLS[piSkillName]
+    : null;
+  if (unsupportedReason !== null) {
+    return `---\nname: ${piSkillName}\ndescription: ${yamlQuote(cappedDescription)}\n---\n` +
+      `**Unsupported on Pi.** \`/skill:${piSkillName}\` is unsupported on Pi: ${unsupportedReason}. ` +
+      'Tell the user this and stop. Do not start the workflow and do not perform its steps inline.\n';
+  }
   return `---\nname: ${piSkillName}\ndescription: ${yamlQuote(cappedDescription)}\n---\nInvoke this Pi skill with \`/skill:${piSkillName}\`.\n\n${PI_DISPATCH_CONTRACT}\n\n${PI_INCLUDE_NOTE}\n\n${normalizedBody}`;
 }
 
@@ -3071,6 +3090,61 @@ function convertClaudeAgentToHermesAgent(content) {
 }
 
 /**
+ * Claude Code tool names that have a Pi equivalent (`pi --tools` takes lowercase built-in names).
+ * Anything else a role lists (WebFetch, Agent, MCP tools, ...) has no Pi built-in and is dropped.
+ */
+const PI_AGENT_TOOL_NAMES: Readonly<Record<string, string>> = Object.freeze({
+  Read: 'read',
+  Write: 'write',
+  Edit: 'edit',
+  Bash: 'bash',
+  Grep: 'grep',
+  Glob: 'find',
+});
+
+/** Split a Claude role's tool list into the Pi tools it maps to and the ones that were dropped. */
+function mapClaudeToolsToPi(tools: string[]): { mapped: string[]; dropped: string[] } {
+  const mapped: string[] = [];
+  const dropped: string[] = [];
+  for (const tool of tools) {
+    const piName = Object.prototype.hasOwnProperty.call(PI_AGENT_TOOL_NAMES, tool) ? PI_AGENT_TOOL_NAMES[tool] : null;
+    if (piName === null) {
+      if (!dropped.includes(tool)) dropped.push(tool);
+    } else if (!mapped.includes(piName)) {
+      mapped.push(piName);
+    }
+  }
+  return { mapped, dropped };
+}
+
+/**
+ * Convert a Claude Code agent (.md) to the role file Pi's `gsd_dispatch` loads (#5569, ADR-5559 §3):
+ * `name`, `description` and `tools` (Pi names; an unmappable tool is dropped and named in a comment,
+ * never passed through), then the body with the Pi branding rewrites. `model` is omitted so the
+ * child inherits Pi's default, and a role that lists no mappable tool gets no `tools:` line (the
+ * dispatcher then runs it with Pi's defaults minus `gsd_dispatch`).
+ */
+function convertClaudeAgentToPiAgent(content) {
+  const converted = applyAgentBrandingRewrites(content, 'pi');
+  const { frontmatter, body } = extractFrontmatterAndBody(converted);
+  if (!frontmatter) return converted;
+
+  const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
+  const description = extractFrontmatterField(frontmatter, 'description') || '';
+  const declared = parseFrontmatterTools(frontmatter);
+  const { mapped: mappedTools, dropped } = mapClaudeToolsToPi(declared);
+  // A role that declared tools but none map must not widen to Pi's full default set
+  // (the dispatcher treats an absent `tools:` as "defaults"): fall back to read-only.
+  const mapped = declared.length > 0 && mappedTools.length === 0 ? ['read'] : mappedTools;
+
+  let fm = `---\nname: ${yamlIdentifier(name)}\ndescription: ${yamlQuote(toSingleLine(description))}\n`;
+  if (mapped.length > 0) fm += `tools: ${mapped.join(', ')}\n`;
+  if (dropped.length > 0) fm += `# tools with no Pi equivalent, dropped: ${dropped.map(toSingleLine).join(', ')}\n`;
+  fm += '---';
+  return `${fm}\n${body}`;
+}
+
+/**
  * Convert Claude Code agent markdown to Codex agent format.
  * Applies base markdown conversions, then adds a <codex_agent_role> header
  * and cleans up frontmatter (removes tools/color fields).
@@ -4366,6 +4440,8 @@ export = {
   // #2875 Part 2 (J10): Hermes named branding converter, generic underlying
   // transform exported alongside it for direct reuse/testing.
   convertClaudeAgentToHermesAgent,
+  convertClaudeAgentToPiAgent,
+  mapClaudeToolsToPi,
   applyAgentBrandingRewrites,
   // ADR-1239 / #2092 Phase B Upgrade 1: native .qwen/agents/*.md subagent
   // projection — registered by name so convertedAgentsKind's

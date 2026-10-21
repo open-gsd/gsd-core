@@ -653,7 +653,7 @@ describe('installRuntimeArtifacts — E4: kilo (second family member)', () => {
 });
 
 describe('installRuntimeArtifacts — E5/E7: empty layout + nativePlugin post-step (pi)', () => {
-  test('pi declares only the skills kind (#5547)', (t) => {
+  test('pi declares the skills and agents kinds (#5547, #5569)', (t) => {
     const configDir = createTempDir('gsd-e5-pi-');
     t.after(() => cleanup(configDir));
     sandboxHome(t, configDir);
@@ -663,8 +663,8 @@ describe('installRuntimeArtifacts — E5/E7: empty layout + nativePlugin post-st
     assert.ok(Array.isArray(result.kinds), 'E5: kinds must be an array');
     assert.deepStrictEqual(
       result.kinds.map((k) => k.kind),
-      ['skills'],
-      'E5: pi declares a skills-only artifactLayout — no commands or agents kind (no named-dispatch toolkit)',
+      ['skills', 'agents'],
+      'E5: pi declares skills (workflow entry points) and agents (the roles gsd_dispatch loads) — no commands kind',
     );
   });
 

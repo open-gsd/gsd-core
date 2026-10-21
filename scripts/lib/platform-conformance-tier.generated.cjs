@@ -228,6 +228,8 @@ module.exports = {
   "tests/phase.platform.test.cjs",
   "tests/phase6-capstone-conformance.test.cjs",
   "tests/pi-config-dir-env-override.test.cjs",
+  "tests/pi-dispatch-install.test.cjs",
+  "tests/pi-dispatch.test.cjs",
   "tests/pi-package.test.cjs",
   "tests/plan-count-single-owner.test.cjs",
   "tests/plan-phase-stall-detection.test.cjs",

@@ -6222,3 +6222,145 @@ describe('#4965: roadmap analyze checkbox regex must not read another phase\'s l
       'a ticked line decorated with anything beyond an optional ** must NOT match — this is the deliberate narrowing, not a regression');
   });
 });
+
+/**
+ * #5542: plan-id matching in the ROADMAP plan-checkbox writers must end at a
+ * real id boundary. `47-1` is a different plan from `47-10`, and `01-01` from
+ * `01-01.1`; a superseded plan's summary must tick nothing.
+ */
+function plansRoadmap(rows) {
+  return `# Roadmap
+
+## v1.0
+
+- [ ] **Phase 47: Foo**
+
+### Phase 47: Foo
+**Goal:** x
+**Plans:** 0/2
+Plans:
+${rows.join('\n')}
+`;
+}
+
+describe('plan-id row boundary (#5542)', () => {
+  let tmpDir;
+  let phaseDir;
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    phaseDir = path.join(tmpDir, '.planning', 'phases', '47-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+  });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const plan = (id, extraFrontmatter = '') => fs.writeFileSync(
+    path.join(phaseDir, `${id}-PLAN.md`),
+    `---\nphase: foo\nplan: ${id}\nwave: 1\n${extraFrontmatter}---\n# Plan\n`);
+  const summary = (id) => fs.writeFileSync(
+    path.join(phaseDir, `${id}-SUMMARY.md`), `---\nphase: foo\nplan: ${id}\n---\n# Summary\n`);
+  const write = (rows) => fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), plansRoadmap(rows));
+  const read = () => fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf8');
+  const update = () => {
+    const r = runGsdTools('roadmap update-plan-progress 47', tmpDir);
+    assert.ok(r.success, `update-plan-progress failed: ${r.error}`);
+  };
+
+  test('update-plan-progress ticks only the row of its own plan when one id prefixes another', () => {
+    plan('47-1'); plan('47-10'); summary('47-1');
+    write(['- [ ] 47-10-PLAN.md', '- [ ] 47-1-PLAN.md']);
+    update();
+    const out = read();
+    assert.match(out, /- \[ \] 47-10-PLAN\.md/);
+    assert.match(out, /- \[x\] 47-1-PLAN\.md/);
+  });
+
+  test('listing order does not change which row ticks', () => {
+    plan('47-1'); plan('47-10'); summary('47-1');
+    write(['- [ ] 47-1-PLAN.md', '- [ ] 47-10-PLAN.md']);
+    update();
+    const out = read();
+    assert.match(out, /- \[x\] 47-1-PLAN\.md/);
+    assert.match(out, /- \[ \] 47-10-PLAN\.md/);
+  });
+
+  test('a superseded plan\'s summary ticks no live plan', () => {
+    plan('47-1', 'status: superseded\n'); plan('47-10'); summary('47-1');
+    write(['- [ ] 47-10-PLAN.md']);
+    update();
+    assert.match(read(), /- \[ \] 47-10-PLAN\.md/);
+  });
+
+  test('a dotted sub-id is a distinct plan', () => {
+    plan('47-01'); plan('47-01.1'); summary('47-01');
+    write(['- [ ] 47-01.1-PLAN.md', '- [ ] 47-01-PLAN.md']);
+    update();
+    const out = read();
+    assert.match(out, /- \[ \] 47-01\.1-PLAN\.md/);
+    assert.match(out, /- \[x\] 47-01-PLAN\.md/);
+  });
+
+  // Both plans summarized (summaries older than the verification report) and
+  // verification passed, so `phase complete 47` is allowed to run.
+  const readyToComplete = (firstPlanFrontmatter = '') => {
+    plan('47-1', firstPlanFrontmatter); plan('47-10'); summary('47-1'); summary('47-10');
+    const old = new Date('2000-01-01T00:00:00Z');
+    for (const id of ['47-1', '47-10']) fs.utimesSync(path.join(phaseDir, `${id}-SUMMARY.md`), old, old);
+    fs.writeFileSync(path.join(phaseDir, '47-VERIFICATION.md'), '---\nstatus: passed\n---\n# Verification\n');
+  };
+
+  test('phase complete flips each plan\'s own row when one id prefixes another', () => {
+    readyToComplete();
+    write(['- [ ] 47-10-PLAN.md', '- [ ] 47-1-PLAN.md']);
+    const r = runGsdTools('phase complete 47', tmpDir);
+    assert.ok(r.success, `phase complete failed: ${r.error}`);
+    const out = read();
+    assert.match(out, /- \[x\] 47-10-PLAN\.md/);
+    assert.match(out, /- \[x\] 47-1-PLAN\.md/);
+  });
+
+  for (const [label, row, expected] of [
+    ['suffix-less with a dash description', '- [ ] 47-1 — desc', '- [x] 47-1 — desc'],
+    ['bold', '- [ ] **47-1**', '- [x] **47-1**'],
+    ['colon', '- [ ] 47-1: desc', '- [x] 47-1: desc'],
+  ]) {
+    test(`existing row form still ticks: ${label}`, () => {
+      plan('47-1'); summary('47-1');
+      write([row]);
+      update();
+      assert.ok(read().includes(expected), `expected "${expected}" in:\n${read()}`);
+    });
+  }
+
+  test('existing row form still ticks: slugged plan filename with a bare-id summary', () => {
+    fs.writeFileSync(path.join(phaseDir, '47-01-scaffold-PLAN.md'), '---\nphase: foo\nplan: 47-01\nwave: 1\n---\n# Plan\n');
+    summary('47-01');
+    write(['- [ ] 47-01-scaffold-PLAN.md']);
+    update();
+    assert.ok(read().includes('- [x] 47-01-scaffold-PLAN.md'), read());
+  });
+
+  test('a longer numeric id row does not count as presence of its shorter prefix id', () => {
+    plan('47-01'); plan('47-01-02');
+    write(['- [ ] 47-01-02-PLAN.md - b']);
+    update();
+    assert.match(read(), /- \[ \] 47-01-PLAN\.md/, '47-01 has no row of its own, so one must be inserted');
+  });
+
+  test('a row whose id ends in sentence punctuation still ticks', () => {
+    plan('47-01'); summary('47-01');
+    write(['- [ ] 47-01. Setup']);
+    update();
+    assert.ok(read().includes('- [x] 47-01. Setup'), read());
+  });
+
+  test('phase complete does not flip the row of a superseded plan', () => {
+    readyToComplete('status: superseded\n');
+    write(['- [ ] 47-1-PLAN.md', '- [ ] 47-10-PLAN.md']);
+    const r = runGsdTools('phase complete 47', tmpDir);
+    assert.ok(r.success, `phase complete failed: ${r.error}`);
+    const out = read();
+    assert.match(out, /- \[ \] 47-1-PLAN\.md/);
+    assert.match(out, /- \[x\] 47-10-PLAN\.md/);
+  });
+});

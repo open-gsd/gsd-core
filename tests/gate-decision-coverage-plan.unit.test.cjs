@@ -501,3 +501,274 @@ describe('U1 evaluateDecisionCoveragePlan', () => {
     });
   }
 });
+
+// #5317 — tracker-resolved task content counts as plan surface; resolver failure never passes.
+describe('U2 evaluateDecisionCoveragePlan tracker-id resolution (#5317)', () => {
+  const tcr = require('../gsd-core/bin/lib/task-content-resolution.cjs');
+  const ARGS = ['.planning/phases/01-x', '--context', '.planning/phases/01-x/01-CONTEXT.md'];
+  const CONTEXT = ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '</decisions>', ''].join('\n');
+  const trackerPlan = (body) => ['---', 'phase: 1', '---', '<tasks>', '<task type="auto" tracker-id="beads:X-1">', '<name>t</name>', `<action>${body}</action>`, '</task>', '</tasks>', ''].join('\n');
+  const STUB_ONLY = '<!-- beads: content synced to bd -->';
+  const resolved = (action) => ({ kind: 'resolved', content: { action, verify: null, acceptanceCriteria: [], readFirst: [], done: null } });
+
+  function withProject(plan, stub, fn) {
+    const dir = createTempProject('gate-u2-');
+    try {
+      w(dir, '.planning/phases/01-x/01-CONTEXT.md', CONTEXT);
+      w(dir, '.planning/phases/01-x/01-01-PLAN.md', plan);
+      const calls = [];
+      const deps = { loadCapabilities: () => [], resolveTaskContentFn: (i) => { calls.push(i); return stub(i); } };
+      return fn(() => gate.evaluateDecisionCoveragePlan({ projectDir: dir, args: ARGS, deps }), calls);
+    } finally { cleanup(dir); }
+  }
+
+  test('U2a: stub-only body blocks without resolver content; resolved action D-01 covers', () => {
+    withProject(trackerPlan(STUB_ONLY), () => ({ kind: 'empty' }), (run1) => {
+      const r = run1();
+      assert.equal(r.payload.passed, false);
+      assert.equal(r.block, true);
+    });
+    withProject(trackerPlan(STUB_ONLY), () => resolved('D-01: do it'), (run1, calls) => {
+      const r = run1();
+      assert.equal(r.payload.passed, true);
+      assert.equal(r.payload.total, 1);
+      assert.equal(r.payload.covered, 1);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].trackerId, 'beads:X-1');
+    });
+  });
+
+  const errors = {
+    ambiguous: () => new tcr.ResolverAmbiguousError('beads', ['a', 'b']),
+    failed: () => new tcr.ResolverFailedError('bd', 1, 'boom'),
+    timeout: () => new tcr.ResolverTimeoutError('bd', 1000),
+    malformed: () => new tcr.ResolverMalformedOutputError('bd', 'bad json', '{'),
+  };
+  for (const [name, make] of Object.entries(errors)) {
+    test(`U2b: ${name} resolver error blocks, never passes`, () => {
+      // even with D-01 cited inline, an unresolved tracker body must not certify
+      withProject(trackerPlan('D-01 inline'), () => { throw make(); }, (run1) => {
+        const r = run1();
+        assert.equal(r.payload.passed, false);
+        assert.equal(r.block, true);
+        assert.equal(r.outcome, 'unreadable');
+        assert.match(r.payload.readError, /beads:X-1/);
+      });
+    });
+  }
+
+  for (const kind of ['not-applicable', 'no-resolver', 'empty']) {
+    test(`U2c: ${kind} keeps inline text`, () => {
+      withProject(trackerPlan('Honor D-01 inline'), () => ({ kind }), (run1) => {
+        assert.equal(run1().payload.passed, true);
+      });
+      withProject(trackerPlan(STUB_ONLY), () => ({ kind }), (run1) => {
+        assert.equal(run1().payload.passed, false);
+      });
+    });
+  }
+
+  test('U2d: non-Resolver error propagates', () => {
+    withProject(trackerPlan(STUB_ONLY), () => { throw new TypeError('bug'); }, (run1) => {
+      assert.throws(run1, TypeError);
+    });
+  });
+
+  test('U2e: plan without tracker-id never calls the resolver', () => {
+    const plan = ['---', 'phase: 1', '---', '<objective>Honor D-01</objective>', ''].join('\n');
+    withProject(plan, () => { throw new Error('must not be called'); }, (run1, calls) => {
+      assert.equal(run1().payload.passed, true);
+      assert.equal(calls.length, 0);
+    });
+  });
+
+  function evalPlans(plans, deps) {
+    const dir = createTempProject('gate-u2x-');
+    try {
+      w(dir, '.planning/phases/01-x/01-CONTEXT.md', CONTEXT);
+      plans.forEach((p, i) => w(dir, `.planning/phases/01-x/01-0${i + 1}-PLAN.md`, p));
+      return gate.evaluateDecisionCoveragePlan({ projectDir: dir, args: ARGS, deps });
+    } finally { cleanup(dir); }
+  }
+
+  test('U2f: throwing capability registry -> unreadable, blocks, no throw', () => {
+    const r = evalPlans([trackerPlan(STUB_ONLY)], {
+      loadCapabilities: () => { throw new Error('boom'); },
+      resolveTaskContentFn: () => resolved('D-01: do it'),
+    });
+    assert.equal(r.outcome, 'unreadable');
+    assert.equal(r.block, true);
+    assert.equal(r.payload.passed, false);
+    assert.match(r.payload.readError, /capability registry unreadable/);
+  });
+
+  test('U2g: tracker-id= only in prose or a code fence -> deps never called, same as no deps', () => {
+    const plan = ['---', 'phase: 1', '---', '<objective>Honor D-01</objective>', 'prose tracker-id="beads:X-1" here', '```', '<task tracker-id="beads:X-2">', '```', ''].join('\n');
+    let calls = 0;
+    const deps = { loadCapabilities: () => { calls++; return []; }, resolveTaskContentFn: () => { calls++; return { kind: 'no-resolver' }; } };
+    const withDeps = evalPlans([plan], deps);
+    assert.equal(calls, 0);
+    assert.deepStrictEqual(withDeps, evalPlans([plan], undefined));
+  });
+
+  test('U2h: same trackerId in two plans resolves once', () => {
+    const calls = [];
+    const r = evalPlans([trackerPlan(STUB_ONLY), trackerPlan(STUB_ONLY)], {
+      loadCapabilities: () => [],
+      resolveTaskContentFn: (i) => { calls.push(i); return resolved('D-01: do it'); },
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(r.payload.passed, true);
+  });
+
+  test('U2i: D-01 only inside a fenced block of resolved text does not cover', () => {
+    const r = evalPlans([trackerPlan(STUB_ONLY)], {
+      loadCapabilities: () => [],
+      resolveTaskContentFn: () => resolved('intro\n```\nD-01: fenced\n```\n'),
+    });
+    assert.equal(r.payload.passed, false);
+    assert.equal(r.payload.covered, 0);
+  });
+
+  test('U2j: checkpoint task with tracker-id never reaches the resolver', () => {
+    const plan = ['---', 'phase: 1', '---', '<tasks>', '<task type="checkpoint:human-verify" tracker-id="beads:X-9">', '<name>c</name>', `<action>${STUB_ONLY}</action>`, '</task>', '</tasks>', ''].join('\n');
+    let calls = 0;
+    evalPlans([plan], { loadCapabilities: () => { calls++; return []; }, resolveTaskContentFn: () => { calls++; return resolved('D-01'); } });
+    assert.equal(calls, 0);
+  });
+
+  const stubDeps = (r) => ({ loadCapabilities: () => [], resolveTaskContentFn: () => r });
+  const full = (over) => ({ kind: 'resolved', content: { action: null, verify: null, acceptanceCriteria: [], readFirst: [], done: null, ...over } });
+
+  const FIELDS = {
+    verify: { verify: 'D-01 check' },
+    acceptanceCriteria: { acceptanceCriteria: ['D-01 holds'] },
+    readFirst: { readFirst: ['D-01 notes'] },
+    done: { done: 'D-01 done' },
+  };
+  for (const [field, over] of Object.entries(FIELDS)) {
+    test(`U2k: decision cited only in resolver ${field} counts`, () => {
+      const r = evalPlans([trackerPlan(STUB_ONLY)], stubDeps(full(over)));
+      assert.equal(r.payload.passed, true);
+      assert.equal(r.payload.covered, 1);
+    });
+  }
+
+  test('U2l: multi-plan phase keeps resolver text and inline citations aligned', (t) => {
+    const ctx2 = ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '- **D-02:** Use Redis for the session cache layer', '</decisions>', ''].join('\n');
+    const dir = createTempProject('gate-u2l-');
+    t.after(() => cleanup(dir));
+    w(dir, '.planning/phases/01-x/01-CONTEXT.md', ctx2);
+    w(dir, '.planning/phases/01-x/01-01-PLAN.md', ['---', 'phase: 1', '---', '<objective>Honor D-02</objective>', ''].join('\n'));
+    w(dir, '.planning/phases/01-x/01-02-PLAN.md', trackerPlan(STUB_ONLY));
+    const r = gate.evaluateDecisionCoveragePlan({ projectDir: dir, args: ARGS, deps: stubDeps(resolved('D-01: do it')) });
+    assert.equal(r.payload.total, 2);
+    assert.equal(r.payload.covered, 2);
+    assert.equal(r.payload.passed, true);
+  });
+
+  test('U2p: multi-plan phase fails closed when one plan resolver throws though another plan covers all decisions', () => {
+    const covering = ['---', 'phase: 1', '---', '<objective>Honor D-01</objective>', ''].join('\n');
+    const r = evalPlans([covering, trackerPlan(STUB_ONLY)], { loadCapabilities: () => [], resolveTaskContentFn: () => { throw new tcr.ResolverFailedError('bd', 1, 'boom'); } });
+    assert.equal(r.outcome, 'unreadable');
+    assert.equal(r.block, true);
+  });
+
+  test('U2r: unclosed fence in one resolver field does not swallow later fields', () => {
+    const r = evalPlans([trackerPlan(STUB_ONLY)], stubDeps(full({ action: 'intro\n```\nunclosed', done: 'D-01 done' })));
+    assert.equal(r.payload.passed, true);
+  });
+
+  for (const kind of ['not-applicable', 'no-resolver', 'empty']) {
+    test(`U2m: ${kind} retains inline citation next to a tracker stub task`, () => {
+      const plan = ['---', 'phase: 1', '---', '<objective>Honor D-01</objective>', '<tasks>', '<task type="auto" tracker-id="beads:X-1">', `<action>${STUB_ONLY}</action>`, '</task>', '</tasks>', ''].join('\n');
+      assert.equal(evalPlans([plan], stubDeps({ kind })).payload.passed, true);
+    });
+  }
+
+  test('U2n: case/space variant TRACKER-ID still reaches the resolver', () => {
+    const plan = ['---', 'phase: 1', '---', '<tasks>', '<task type="auto" TRACKER-ID = "beads:X-1">', '<name>t</name>', `<action>${STUB_ONLY}</action>`, '</task>', '</tasks>', ''].join('\n');
+    const calls = [];
+    const r = evalPlans([plan], { loadCapabilities: () => [], resolveTaskContentFn: (i) => { calls.push(i); return resolved('D-01: do it'); } });
+    assert.equal(calls.length, 1);
+    assert.equal(r.payload.passed, true);
+  });
+
+  test('U2o: default loader with no capability for the prefix (first-party beads resolver exists, so use an unknown prefix) -> no-resolver arm, no throw', () => {
+    const inline = ['---', 'phase: 1', '---', '<objective>Honor D-01</objective>', '<tasks>', '<task type="auto" tracker-id="nosuchtracker:X-1">', `<action>${STUB_ONLY}</action>`, '</task>', '</tasks>', ''].join('\n');
+    assert.equal(evalPlans([inline], undefined).payload.passed, true);
+    const r = evalPlans([trackerPlan(STUB_ONLY).replace('beads:X-1', 'nosuchtracker:X-1')], undefined);
+    assert.equal(r.payload.passed, false);
+    assert.equal(r.outcome, 'unreadable');
+    assert.match(r.payload.readError, /no task-content resolver installed for tracker prefix "nosuchtracker"/);
+  });
+
+  test('U2s: no-resolver passes when D-01 is cited inline, goes unreadable only when a decision is uncovered', () => {
+    assert.equal(evalPlans([trackerPlan('Honor D-01 inline')], stubDeps({ kind: 'no-resolver' })).payload.passed, true);
+    const r = evalPlans([trackerPlan(STUB_ONLY)], stubDeps({ kind: 'no-resolver' }));
+    assert.equal(r.outcome, 'unreadable');
+    assert.match(r.payload.readError, /beads/);
+  });
+
+  test('U2t: tracker id "-" or holding control chars is rejected by the seam before any resolver', () => {
+    for (const bad of ['beads:--flag', 'beads: -x', 'beads:X\u0001']) {
+      const r = evalPlans([trackerPlan(STUB_ONLY).replace('beads:X-1', bad)], { loadCapabilities: () => [] });
+      assert.equal(r.outcome, 'unreadable');
+      assert.match(r.payload.readError, /tracker-id rejected/);
+    }
+  });
+
+  test('U2u: aggregate budget exhausted -> unreadable before the next spawn', () => {
+    const two = trackerPlan(STUB_ONLY).replace('beads:X-1', 'beads:A-1');
+    const three = trackerPlan(STUB_ONLY).replace('beads:X-1', 'beads:B-1');
+    const support = require('../gsd-core/bin/lib/decision-coverage-support.cjs');
+    let t = 0, calls = 0;
+    const r = evalPlans([two, three], { now: () => (t += support.TRACKER_RESOLVE_BUDGET_MS * 0.6), loadCapabilities: () => [], resolveTaskContentFn: () => { calls++; return resolved('D-01'); } });
+    assert.equal(calls, 1);
+    assert.equal(r.outcome, 'unreadable');
+    assert.match(r.payload.readError, /aggregate budget/);
+  });
+
+  test('U2w: budget boundary — each spawn is clamped to the remaining budget; elapsed >= budget is rejected', () => {
+    const support = require('../gsd-core/bin/lib/decision-coverage-support.cjs');
+    const B = support.TRACKER_RESOLVE_BUDGET_MS;
+    const plan = trackerPlan(STUB_ONLY);
+    // Fractional rows: performance.now() diffs are sub-ms floats; spawnSync rejects non-integer timeouts and 0 means unbounded.
+    for (const [elapsed, remaining] of [[B - 1.5, 1], [B - 1, 1], [B - 0.5, null], [B, null], [B + 1, null]]) {
+      const ticks = [0, elapsed]; let k = 0;
+      const seen = [];
+      const r = evalPlans([plan], { now: () => ticks[Math.min(k++, 1)], loadCapabilities: () => [], resolveTaskContentFn: (i) => { seen.push(i.timeoutOverrideMs); return resolved('D-01'); } });
+      if (remaining === null) {
+        assert.equal(r.outcome, 'unreadable');
+        assert.deepStrictEqual(seen, []);
+      } else {
+        assert.equal(r.payload.passed, true);
+        assert.deepStrictEqual(seen, [remaining]);
+        assert.ok(Number.isInteger(seen[0]));
+      }
+    }
+  });
+
+  test('U2x: registry load time counts against the aggregate budget', () => {
+    const support = require('../gsd-core/bin/lib/decision-coverage-support.cjs');
+    let t = 0, calls = 0;
+    const r = evalPlans([trackerPlan(STUB_ONLY)], { now: () => t, loadCapabilities: () => { t = support.TRACKER_RESOLVE_BUDGET_MS; return []; }, resolveTaskContentFn: () => { calls++; return resolved('D-01'); } });
+    assert.equal(calls, 0);
+    assert.equal(r.outcome, 'unreadable');
+    assert.match(r.payload.readError, /aggregate budget/);
+  });
+
+  test('U2v: property — one body per plan, \'\' without tracker-id, one resolver call per distinct id', () => {
+    const fc = require('./helpers/fast-check-setup.cjs');
+    const support = require('../gsd-core/bin/lib/decision-coverage-support.cjs');
+    const mk = (id) => id === null ? '<tasks>\n<task type="auto">\n<action>x</action>\n</task>\n</tasks>\n' : trackerPlan(STUB_ONLY).replace('beads:X-1', `beads:${id}`);
+    fc.assert(fc.property(fc.array(fc.option(fc.constantFrom('A-1', 'B-2', 'C-3'), { nil: null }), { maxLength: 8 }), (ids) => {
+      const seen = [];
+      const out = support.resolveTrackerBodies(process.cwd(), ids.map(mk), { loadCapabilities: () => [], resolveTaskContentFn: (i) => { seen.push(i.trackerId); return resolved('D-01'); } });
+      assert.equal(out.kind, 'found');
+      assert.equal(out.value.bodies.length, ids.length);
+      ids.forEach((id, i) => { if (id === null) assert.equal(out.value.bodies[i], ''); else assert.match(out.value.bodies[i], /D-01/); });
+      assert.equal(seen.length, new Set(ids.filter((x) => x !== null)).size);
+    }));
+  });
+});

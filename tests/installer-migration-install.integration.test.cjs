@@ -359,10 +359,16 @@ function assertFreshInstallContract(runtime, targetDir) {
       false,
       `${runtime} should NOT install a commands/ dir (plugin-only, no host-read markdown surface)`
     );
+    // #5569: pi installs the converted role files gsd_dispatch loads (not the compact variants).
     assert.equal(
-      fs.existsSync(path.join(targetDir, 'agents')),
+      fs.existsSync(path.join(targetDir, 'agents', 'gsd-planner.md')),
+      true,
+      `${runtime} should install the gsd-* role files under agents/ (gsd_dispatch resolves roles there)`
+    );
+    assert.equal(
+      fs.existsSync(path.join(targetDir, 'agents', 'gsd-planner.compact.md')),
       false,
-      `${runtime} should NOT install an agents/ dir (plugin-only, no named-dispatch toolkit)`
+      `${runtime} should NOT install compact role variants`
     );
     // #5547: pi's own skills loader reads `<config>/skills/<name>/SKILL.md`
     // (invoked as `/skill:<name>`), so the layout installs the GSD workflow

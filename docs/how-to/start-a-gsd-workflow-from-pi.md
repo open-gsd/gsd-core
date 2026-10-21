@@ -28,15 +28,29 @@ You can also type `/gsd new-project`. For any command that has an installed skil
 Next: run /gsd new-project (or /skill:gsd-new-project) to start the new-project workflow — this output is only its init data.
 ```
 
-## When a workflow stops at an agent step
+## Agent steps on Pi
 
-Pi has no subagent primitive GSD can dispatch to yet. When a workflow reaches a step that spawns a `gsd-*` agent, the skill tells Pi to stop that step, name the role it needs, and report what was done before it. It does not run the role itself. This is an instruction the model follows, not something the installer enforces. Work completed before that step (files written, config set) stays in place.
+Pi has no subagent primitive of its own, so GSD installs one: the `gsd_dispatch` tool. When a workflow reaches a step that spawns a `gsd-*` agent, Pi calls `gsd_dispatch` with the role name and the task text. The installer rewrites each workflow's `Agent(...)` call to this form, and installs the role files under `~/.pi/agent/agents/` (or the project's `.pi/agents/` for a local install). With `pi install npm:@opengsd/gsd-core` the roles ship in the package (`pi/package-agents/`) and are rendered for the package location when a role starts.
 
-What you can do:
+Each dispatch starts a separate `pi` process that runs the role with its own prompt and tools, and returns the role's final answer to the workflow. Dispatches run one at a time, in the order Pi calls them.
 
-- If the workflow marks the step optional, Pi offers to skip it. Say yes and the workflow continues.
-- If the step is required, the run stops there. Finish the workflow in a runtime that can dispatch agents (Claude Code, for example); the files written so far are read from `.planning/`, so work started in Pi carries over.
-- Agent dispatch for Pi is tracked in [#5559](https://github.com/open-gsd/gsd-core/issues/5559) and epic [#5556](https://github.com/open-gsd/gsd-core/issues/5556).
+Limits:
+
+- **One level deep.** A dispatched role has no `gsd_dispatch` tool, so a role cannot spawn another role. `/gsd-debug` needs that (its session manager spawns `gsd-debugger`), so `/skill:gsd-debug` prints "unsupported on Pi: needs nested dispatch; Pi dispatch is flat" and stops. Run `/gsd-debug` in a runtime that can dispatch nested agents; the debug sessions it writes are read from `.planning/`.
+- **No per-call model or background run.** The role uses the model of the Pi session that dispatches it, and a dispatch blocks until the role finishes.
+- **GSD roles only.** The one workflow step that asks for the host's generic `general-purpose` agent (the assumptions mode of `/skill:gsd-discuss-phase`) has no role file, so `gsd_dispatch` refuses it with `role-unresolved` and the skill stops that step.
+- **Installed roles only.** `gsd_dispatch` reads the role from your GSD install, never from the project's `.pi/agents/`, and refuses a role file that no longer matches the install's manifest.
+
+If a dispatch fails, `gsd_dispatch` returns an error result and the skill tells Pi to stop that step and report it; it does not run the role's work itself. The error reads `gsd_dispatch <code>: <message>`:
+
+| Error | Meaning | What to do |
+|---|---|---|
+| `role-unresolved` | The role name is malformed or not in the install | Reinstall GSD for Pi; check the name in the workflow. |
+| `role-tampered` | The installed role file differs from the install manifest | Reinstall GSD for Pi. |
+| `pi-not-found` | `pi` is not on the `PATH` of the Pi session | Make `pi` runnable from the shell Pi was started from. |
+| `depth-exceeded` | A dispatched role tried to dispatch again | Expected on Pi; use a runtime with nested dispatch for that workflow. |
+| `child-failed` | The child `pi` exited non-zero or ended in an error; the message ends with its stderr tail | Read the stderr tail; fix the model sign-in or the task and run the step again. |
+| `timeout` | The role ran past the 30-minute dispatch limit, or Pi cancelled the call, and the role was stopped | Split the task, then run the step again. |
 
 ## If it does not start
 

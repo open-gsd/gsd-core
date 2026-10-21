@@ -588,6 +588,305 @@ function nextStepFor({ family, subcommand, args: rest = [] }, engineRoot = ENGIN
   return `\n\nNext: run /gsd ${command}${tail} (or /skill:gsd-${command}${tail}) to start the ${command} workflow — this output is only its init data.`;
 }
 
+// ── Agent-role dispatch (#5569, ADR-5559) ────────────────────────────────────
+// Pi has no subagent primitive, so GSD supplies one: `gsd_dispatch` runs a `gsd-*` role in an
+// isolated child `pi` process. Everything is fail-closed: every refusal is an error RESULT (never a
+// throw, never an inline fallback that would run the role's work in the orchestrating session).
+// The dispatcher lives in this file because the installer copies exactly one file
+// (extensions/gsd.js); a sibling module would not be installed.
+const DISPATCH = Object.freeze({
+  ROLE_RE: /^gsd-[a-z0-9-]+$/,
+  SAFE_VALUE_RE: /^[A-Za-z0-9_.:/@+][A-Za-z0-9_.:/@+,-]*$/,
+  MAX_DEPTH: 1,
+  TIMEOUT_MS: 30 * 60 * 1000,
+  KILL_GRACE_MS: 5000,
+  TASKKILL_TIMEOUT_MS: 10000,
+  STDOUT_CAP: 1024 * 1024,
+  MAX_LINE: 16 * 1024 * 1024,
+  STDERR_TAIL: 8 * 1024,
+  TRUNCATION_MARKER: '\n[GSD: dispatch output truncated at 1 MiB]',
+  FAILED_STOP_REASONS: Object.freeze(['error', 'aborted', 'length']),
+});
+
+const dispatchFail = (code, message) => ({ ok: false, code, message });
+const errorText = (e) => (e && e.message ? e.message : String(e));
+/** A failed spawn: ENOENT means no runnable pi, anything else is a child failure. */
+const spawnFailure = (e) => (e && e.code === 'ENOENT'
+  ? dispatchFail('pi-not-found', 'No runnable `pi` was found on PATH.')
+  : dispatchFail('child-failed', `Could not start pi: ${errorText(e)}`));
+
+/** `key: value` pairs of a role file's leading frontmatter block (values unquoted, single line). */
+function readRoleFrontmatter(text) {
+  const block = /^---\r?\n([\s\S]*?)\r?\n---/.exec(String(text));
+  const meta = {};
+  if (!block) return meta;
+  for (const line of block[1].split(/\r?\n/)) {
+    const kv = /^(\w+):\s*(.*)$/.exec(line);
+    if (kv) meta[kv[1]] = kv[2].trim().replace(/^(["'])(.*)\1$/, '$2');
+  }
+  return meta;
+}
+
+/**
+ * Resolve a role id to its file in the install this extension belongs to. The role is matched against
+ * a directory LISTING, never joined from the caller's string, so no input can name a path.
+ * @returns {{ ok: true, file: string, meta: object } | { ok: false, code: string, message: string }}
+ */
+function resolveDispatchRole(role, extensionDir) {
+  if (typeof role !== 'string' || !DISPATCH.ROLE_RE.test(role)) {
+    return dispatchFail('role-unresolved', `"${String(role).slice(0, 80)}" is not a GSD role id (gsd-<name>).`);
+  }
+  // Installer layout: <config>/extensions/gsd.js beside <config>/agents and the install manifest.
+  // Package layout (pi install npm:...): <package>/pi/gsd.cjs beside the converted roles and their
+  // manifest, generated into the tarball (ADR-5559 amendment). Both are fixed relative to this file.
+  const inPackage = fs.existsSync(path.join(extensionDir, 'package-agents'));
+  const roleDir = inPackage ? path.join(extensionDir, 'package-agents') : path.join(extensionDir, '..', 'agents');
+  const manifestPath = inPackage ? path.join(roleDir, 'manifest.json') : path.join(extensionDir, '..', 'gsd-file-manifest.json');
+  const manifestKey = inPackage ? `${role}.md` : `agents/${role}.md`;
+  const fileName = `${role}.md`;
+  let listing;
+  try { listing = fs.readdirSync(roleDir); } catch { listing = []; }
+  if (!listing.includes(fileName)) {
+    return dispatchFail('role-unresolved', `${role} is not installed (looked in ${roleDir}).`);
+  }
+  const file = path.join(roleDir, fileName);
+  let bytes;
+  try {
+    if (fs.lstatSync(file).isSymbolicLink()) return dispatchFail('role-unresolved', `${fileName} is a symbolic link.`);
+    bytes = fs.readFileSync(file);
+  } catch (e) {
+    return dispatchFail('role-unresolved', `${fileName} could not be read: ${errorText(e)}`);
+  }
+  // The manifest is required: without it nothing vouches for the bytes that become the child's system prompt.
+  let expected;
+  try { expected = (JSON.parse(fs.readFileSync(manifestPath, 'utf8')).files || {})[manifestKey]; } catch { expected = undefined; }
+  const actual = crypto.createHash('sha256').update(bytes).digest('hex');
+  if (expected !== actual) {
+    return dispatchFail('role-tampered', `${fileName} does not match the install manifest (or the manifest is missing); reinstall GSD to restore it.`);
+  }
+  // A package role is a template: its `@` references carry PI_ENGINE_ROOT_TOKEN for the package location.
+  let text = bytes.toString('utf8');
+  if (inPackage) {
+    const root = path.resolve(extensionDir, '..').replace(/\\/g, '/');
+    if (!SAFE_ENGINE_ROOT.test(root)) {
+      return dispatchFail('role-unresolved', `the package location contains characters GSD will not write into a role: ${JSON.stringify(root)}`);
+    }
+    text = text.split(PI_ENGINE_ROOT_TOKEN).join(root);
+  }
+  return { ok: true, file, bytes: Buffer.from(text, 'utf8'), meta: readRoleFrontmatter(text) };
+}
+
+/** taskkill by absolute path: a bare name on Windows is searched in the spawn cwd (the project) first. */
+function taskkillPath(env) {
+  const root = (env && (env.SystemRoot || env.windir)) || 'C:\\Windows';
+  return path.win32.join(root, 'System32', 'taskkill.exe');
+}
+
+/**
+ * The `pi` to run (ADR-5559 `pi-not-found`): the CLI next to this process's executable if there is
+ * one, else the first `pi` on PATH. On Windows the PATH entries are searched here and an absolute
+ * path is returned, so the project directory (the spawn cwd) is never searched for an executable.
+ * @returns {string|null} null when no runnable pi was found on Windows
+ */
+function resolvePiCommand({ platform, env, execPath, exists }) {
+  const win = platform === 'win32';
+  const pathMod = win ? path.win32 : path.posix;
+  // Windows: only pi.exe. A .cmd shim cannot be spawned without a shell (Node refuses it, CVE-2024-27980).
+  const names = win ? ['pi.exe'] : ['pi'];
+  for (const name of names) {
+    const sibling = pathMod.join(pathMod.dirname(execPath || ''), name);
+    if (execPath && exists(sibling)) return sibling;
+  }
+  if (!win) return 'pi';
+  const dirs = String((env && (env.Path || env.PATH)) || '').split(';').filter((d) => /^[A-Za-z]:[\\/]/.test(d));
+  for (const dir of dirs) {
+    for (const name of names) {
+      const candidate = pathMod.join(dir, name);
+      if (exists(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+/**
+ * The dispatcher. Seams (all optional): `spawn`, `kill`, `env`, `platform`, `extensionDir`, `command`, `execPath`, `exists`.
+ * Calls run strictly one at a time (ADR-5559 section 2).
+ */
+function createDispatcher(deps = {}) {
+  const extensionDir = deps.extensionDir || __dirname;
+  const spawn = deps.spawn || require('child_process').spawn;
+  const killProcess = deps.kill || ((pid, signal) => process.kill(pid, signal));
+  const env = deps.env || process.env;
+  const platform = deps.platform || process.platform;
+  const isWindows = platform === 'win32';
+  const timeoutMs = Number(env.GSD_PI_DISPATCH_TIMEOUT_MS) > 0 ? Number(env.GSD_PI_DISPATCH_TIMEOUT_MS) : DISPATCH.TIMEOUT_MS;
+  let queue = Promise.resolve();
+
+  function terminate(child) {
+    if (isWindows) {
+      const killer = spawn(taskkillPath(env), ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true });
+      const bound = setTimeout(() => { if (killer && typeof killer.kill === 'function') { try { killer.kill(); } catch { /* gone */ } } }, DISPATCH.TASKKILL_TIMEOUT_MS);
+      if (killer && typeof killer.once === 'function') killer.once('exit', () => clearTimeout(bound));
+      return;
+    }
+    try { killProcess(-child.pid, 'SIGTERM'); } catch { /* already gone */ }
+  }
+
+  function runChild(child, signal, finishWith) {
+    let timedOut = false;
+    let closed = false;
+    let escalate = null;
+    let buffered = '';
+    let last = null;
+    let stderrTail = '';
+    let overflow = false;
+
+    const stop = () => {
+      timedOut = true;
+      terminate(child);
+      if (!isWindows) {
+        escalate = setTimeout(() => { if (!closed) { try { killProcess(-child.pid, 'SIGKILL'); } catch { /* gone */ } } }, DISPATCH.KILL_GRACE_MS);
+      }
+    };
+    const deadline = setTimeout(stop, timeoutMs);
+    const onAbort = () => stop();
+    if (signal) {
+      if (signal.aborted) stop(); else signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    const onLine = (line) => {
+      if (!line.trim()) return;
+      let event;
+      try { event = JSON.parse(line); } catch { return; }
+      if (event && event.type === 'message_end' && event.message && event.message.role === 'assistant') {
+        const parts = Array.isArray(event.message.content) ? event.message.content : [];
+        last = {
+          text: parts.filter((p) => p && p.type === 'text' && typeof p.text === 'string').map((p) => p.text).join(''),
+          stopReason: event.message.stopReason,
+        };
+      }
+    };
+    child.stdout.on('data', (chunk) => {
+      buffered += chunk.toString('utf8');
+      let newline;
+      while ((newline = buffered.indexOf('\n')) >= 0) {
+        onLine(buffered.slice(0, newline));
+        buffered = buffered.slice(newline + 1);
+      }
+      if (buffered.length > DISPATCH.MAX_LINE) { overflow = true; buffered = ''; stop(); }
+    });
+    child.stderr.on('data', (chunk) => { stderrTail = (stderrTail + chunk.toString('utf8')).slice(-DISPATCH.STDERR_TAIL); });
+    child.on('error', (e) => {
+      closed = true;
+      clearTimeout(deadline);
+      clearTimeout(escalate);
+      finishWith(spawnFailure(e));
+    });
+    child.on('close', (code) => {
+      if (closed) return;
+      closed = true;
+      clearTimeout(deadline);
+      clearTimeout(escalate);
+      if (signal) signal.removeEventListener('abort', onAbort);
+      if (buffered) onLine(buffered);
+      if (overflow) return finishWith(dispatchFail('child-failed', 'The role produced a single output line larger than 16 MiB.'));
+      if (timedOut) return finishWith(dispatchFail('timeout', `The role did not finish within ${Math.round(timeoutMs / 1000)} s or was cancelled; it was stopped.`));
+      if (code !== 0) return finishWith(dispatchFail('child-failed', `pi exited with code ${code}.${stderrTail ? ` stderr (tail): ${stderrTail}` : ''}`));
+      if (!last) return finishWith(dispatchFail('child-failed', 'pi finished without an assistant message.'));
+      if (DISPATCH.FAILED_STOP_REASONS.includes(last.stopReason)) {
+        return finishWith(dispatchFail('child-failed', `The role's final message stopped with "${last.stopReason}".${stderrTail ? ` stderr (tail): ${stderrTail}` : ''}`));
+      }
+      const text = last.text.length > DISPATCH.STDOUT_CAP ? last.text.slice(0, DISPATCH.STDOUT_CAP) + DISPATCH.TRUNCATION_MARKER : last.text;
+      return finishWith({ ok: true, text });
+    });
+  }
+
+  function runOne(params, ctx) {
+    const p = params && typeof params === 'object' ? params : {};
+    // Unset or empty means top level; any other value must be a plain non-negative integer below the cap.
+    const rawDepth = env.GSD_PI_DISPATCH_DEPTH;
+    const depth = rawDepth === undefined || rawDepth === '' ? 0 : (/^\d{1,6}$/.test(rawDepth) ? Number(rawDepth) : Infinity);
+    if (depth >= DISPATCH.MAX_DEPTH) {
+      return Promise.resolve(dispatchFail('depth-exceeded', 'A dispatched role cannot dispatch another role (Pi dispatch is flat).'));
+    }
+    const resolved = resolveDispatchRole(p.role, extensionDir);
+    if (!resolved.ok) return Promise.resolve(resolved);
+    const roleTools = resolved.meta.tools ? resolved.meta.tools.split(',').map((s) => s.trim()).filter(Boolean).join(',') : '';
+    const tools = roleTools || '-gsd_dispatch';
+    if ((roleTools && !DISPATCH.SAFE_VALUE_RE.test(roleTools)) || (resolved.meta.model && !DISPATCH.SAFE_VALUE_RE.test(resolved.meta.model))) {
+      return Promise.resolve(dispatchFail('role-unresolved', `${p.role} has a tools or model value that is not a plain identifier list.`));
+    }
+    let taskDir;
+    try {
+      taskDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-pi-dispatch-'));
+      fs.chmodSync(taskDir, 0o700);
+    } catch (e) {
+      return Promise.resolve(dispatchFail('child-failed', `Could not create a private task directory: ${errorText(e)}`));
+    }
+    const taskFile = path.join(taskDir, 'task.md');
+    const cleanup = () => { try { fs.rmSync(taskDir, { recursive: true, force: true }); } catch { /* best-effort */ } };
+    // The child reads the role from a copy of the bytes that were just hash-verified, so a swap of
+    // the installed file between the check and the child's start changes nothing.
+    const roleCopy = path.join(taskDir, 'role.md');
+    try {
+      fs.writeFileSync(taskFile, typeof p.task === 'string' ? p.task : '', { mode: 0o600 });
+      fs.writeFileSync(roleCopy, resolved.bytes, { mode: 0o600 });
+    } catch (e) {
+      cleanup();
+      return Promise.resolve(dispatchFail('child-failed', `Could not write the task file: ${errorText(e)}`));
+    }
+    const args = [
+      '--mode', 'json', '-p', '--no-session', '--no-mcp', '--no-extensions', '--no-approve',
+      '--append-system-prompt', roleCopy,
+      ...(resolved.meta.model ? ['--model', resolved.meta.model] : []),
+      '--tools', tools,
+      `@${taskFile}`,
+    ];
+    const childEnv = { ...env, GSD_PI_DISPATCH_DEPTH: String(depth + 1) };
+    return new Promise((resolve) => {
+      const finishWith = (result) => { cleanup(); resolve(result); };
+      let child;
+      try {
+        const command = deps.command || resolvePiCommand({
+          platform, env, execPath: deps.execPath || process.execPath, exists: deps.exists || ((f) => { try { return fs.statSync(f).isFile(); } catch { return false; } }),
+        });
+        if (command === null) {
+          finishWith(dispatchFail('pi-not-found', 'No runnable `pi` was found on PATH.'));
+          return;
+        }
+        child = spawn(command, args, {
+          cwd: (ctx && ctx.cwd) || process.cwd(),
+          env: childEnv,
+          detached: !isWindows,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          windowsHide: true,
+        });
+      } catch (e) {
+        finishWith(spawnFailure(e));
+        return;
+      }
+      runChild(child, ctx && ctx.signal, finishWith);
+    });
+  }
+
+  return {
+    dispatch(params, ctx) {
+      const run = queue.then(() => runOne(params, ctx));
+      queue = run.catch(() => undefined);
+      return run;
+    },
+  };
+}
+
+function buildGsdDispatchParameters() {
+  try {
+    const typebox = require('typebox');
+    const Type = typebox && typebox.Type;
+    if (Type) return Type.Object({ role: Type.String(), task: Type.String() });
+  } catch { /* typebox is not a gsd-core dependency; the JSON-Schema fallback is the normal path */ }
+  return { type: 'object', properties: { role: { type: 'string' }, task: { type: 'string' } }, required: ['role', 'task'] };
+}
+
 /**
  * @param {object} pi  pi ExtensionAPI
  * @param {{ env?: NodeJS.ProcessEnv, engineRoot?: string, home?: string }} [deps]  test seam; Pi passes only `pi`
@@ -724,6 +1023,20 @@ module.exports = function gsdPiExtension(pi, deps = {}) {
     },
   });
 
+  // ── gsd_dispatch tool: run a gsd-* role in an isolated child pi (#5569, ADR-5559) ──
+  const dispatcher = createDispatcher({ extensionDir: __dirname, env });
+  pi.registerTool({
+    name: 'gsd_dispatch',
+    label: 'GSD Dispatch',
+    description: 'Run a GSD agent role (gsd-*) on a task in an isolated child Pi process and return its final message. Dispatch is flat and sequential; a role cannot dispatch another role.',
+    parameters: buildGsdDispatchParameters(),
+    execute: async (toolCallId, params, signal, onUpdate, ctx) => {
+      const result = await dispatcher.dispatch(params, { cwd: (ctx && ctx.cwd) || process.cwd(), signal });
+      if (result.ok) return { content: [{ type: 'text', text: result.text }] };
+      return { content: [{ type: 'text', text: `gsd_dispatch ${result.code}: ${result.message}` }], isError: true };
+    },
+  });
+
   // ── before_provider_request: active-model steering (modelMode: 'active') ──
   // GSD steers pi's EXISTING built-in anthropic models; it does NOT call
   // pi.registerProvider (that would wrongly register a NEW fake provider —
@@ -803,4 +1116,11 @@ module.exports._internals = {
   resolveWorkflowHandoff,
   nextStepFor,
   PI_WORKFLOW_INIT_COMMANDS,
+  DISPATCH,
+  createDispatcher,
+  resolveDispatchRole,
+  readRoleFrontmatter,
+  resolvePiCommand,
+  taskkillPath,
+  buildGsdDispatchParameters,
 };

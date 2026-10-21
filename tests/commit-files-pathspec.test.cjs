@@ -2971,6 +2971,7 @@ describe('workflow call sites declare --files (#2269)', () => {
       'commands',
       'skills',
       'pi/package-skills',
+      'pi/package-agents',
       'docs',
     ];
     const offenders = [];

@@ -3198,6 +3198,17 @@ const capabilities = {
             "nesting": "flat",
             "recursive": false,
             "converter": "convertClaudeCommandToPiSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "excludeSuffixes": [
+              ".compact.md"
+            ],
+            "converter": "convertClaudeAgentToPiAgent"
           }
         ],
         "local": [
@@ -3208,6 +3219,17 @@ const capabilities = {
             "nesting": "flat",
             "recursive": false,
             "converter": "convertClaudeCommandToPiSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "excludeSuffixes": [
+              ".compact.md"
+            ],
+            "converter": "convertClaudeAgentToPiAgent"
           }
         ]
       },
@@ -7468,6 +7490,17 @@ const runtimes = {
             "nesting": "flat",
             "recursive": false,
             "converter": "convertClaudeCommandToPiSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "excludeSuffixes": [
+              ".compact.md"
+            ],
+            "converter": "convertClaudeAgentToPiAgent"
           }
         ],
         "local": [
@@ -7478,6 +7511,17 @@ const runtimes = {
             "nesting": "flat",
             "recursive": false,
             "converter": "convertClaudeCommandToPiSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "excludeSuffixes": [
+              ".compact.md"
+            ],
+            "converter": "convertClaudeAgentToPiAgent"
           }
         ]
       },
