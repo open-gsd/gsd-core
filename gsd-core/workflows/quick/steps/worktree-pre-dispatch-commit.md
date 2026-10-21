@@ -52,14 +52,12 @@ if [ "${USE_WORKTREES}" != "false" ]; then
     QUICK_PLAN_COMMIT=$(git rev-parse HEAD)
   fi
   # #5209: the alternate base is the PLAN commit's immediate parent, read AFTER the
-  # commit attempt so it is right in both orderings — the planner already committed
-  # the plan (QUICK_PLAN_COMMIT is then HEAD, and HEAD itself is the expected base) or
-  # this step just created the commit. Capturing HEAD before the attempt made the two
-  # equal in the planner-committed case, so the alternate was filled empty and a
-  # worktree forked from the plan commit's parent failed the base check with exit 42.
-  # Empty when docs commits are disabled (no docs plan commit exists) and for a root commit.
+  # commit attempt so it holds whether the planner already committed the plan or this
+  # step just did. Empty when docs commits are off and for a root commit.
   if [ "$COMMIT_DOCS" != "false" ]; then
-    QUICK_PLAN_PARENT=$(git rev-parse --verify --quiet "${QUICK_PLAN_COMMIT}^" 2>/dev/null || true)
+    _GSD_PLAN_AT=$(git log -1 --format=%H -- "${QUICK_DIR}/${quick_id}-PLAN.md" 2>/dev/null || true)
+    [ -n "$_GSD_PLAN_AT" ] || _GSD_PLAN_AT="$QUICK_PLAN_COMMIT"
+    QUICK_PLAN_PARENT=$(git rev-parse --verify --quiet "${_GSD_PLAN_AT}^" 2>/dev/null || true)
   fi
 fi
 ```

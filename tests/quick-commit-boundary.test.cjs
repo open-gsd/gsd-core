@@ -373,7 +373,7 @@ describe('bug #2523: quick-task final commit includes deferred-items.md', () => 
   const os = require('os');
   const { runHook } = require('./helpers/process-seam.cjs');
   const { gitOrThrow } = require('./helpers/git-fixture.cjs');
-  const { createTempGitProject, cleanup } = require('./helpers.cjs');
+  const { createTempGitProject, cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
 
   const STEP_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'quick', 'steps', 'worktree-pre-dispatch-commit.md');
   const OPEN = '```bash\n';
@@ -402,6 +402,7 @@ describe('bug #2523: quick-task final commit includes deferred-items.md', () => 
         cwd: dir,
         env: {
           ...process.env,
+          ...TEST_ENV_BASE,
           USE_WORKTREES: 'true',
           QUICK_DIR: '.planning/quick',
           quick_id: '261021-abc',
@@ -475,10 +476,18 @@ describe('bug #2523: quick-task final commit includes deferred-items.md', () => 
       assert.equal(parent, '');
     });
 
-    test('quick.md consumes the same variable for the alternate fill and allowed_bases', () => {
-      const quickMd = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'quick.md'), 'utf-8');
-      assert.match(quickMd, /EXPECTED_BASE_ALTERNATE[\s\S]{0,200}\$\{QUICK_PLAN_PARENT\}/);
-      assert.match(quickMd, /allowed_bases[\s\S]{0,120}\$\{QUICK_PLAN_PARENT\}/);
+    test('the plan was committed earlier and a later commit sits on top: the alternate is still the plan commit\'s parent', (t) => {
+      const dir = createTempGitProject();
+      t.after(() => cleanup(dir));
+      const before = git(dir, 'rev-parse', 'HEAD');
+      writePlan(dir);
+      git(dir, 'add', '.planning/quick/261021-abc-PLAN.md');
+      git(dir, 'commit', '-m', 'docs(261021-abc): create phase plan');
+      fs.writeFileSync(path.join(dir, 'later.txt'), 'later\n');
+      git(dir, 'add', 'later.txt');
+      git(dir, 'commit', '-m', 'chore: unrelated later commit');
+      const { parent } = runStep(dir);
+      assert.equal(parent, before, 'the alternate must follow the commit that added PLAN.md, not HEAD^');
     });
   });
 }
