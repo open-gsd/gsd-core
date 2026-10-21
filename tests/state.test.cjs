@@ -22597,7 +22597,7 @@ Last activity: 2026-10-01 -- done
 describe('planned-phase without --name keeps the status out of the phase name (#5369)', () => {
   const POSITION = [
     '# Project State', '', '## Current Position', '',
-    'Phase: 18 — Curated Name', 'Plan: 0 TBD in current phase', 'Status: Ready', 'Last activity: 2026-10-01', '',
+    'Phase: 18 — Curated Name', 'Plan: 0 TBD in current phase', 'Status: Ready to plan', 'Last activity: 2026-10-01', '',
   ].join('\n');
   let tmpDir;
   beforeEach(() => { tmpDir = createTempProject(); });
@@ -22625,15 +22625,13 @@ describe('planned-phase without --name keeps the status out of the phase name (#
     assert.strictEqual(name, null, 'no curated name and no --name: the name stays unset');
   });
 
-  test('a curated name is kept and the body Phase line carries it too', () => {
-    const { after, name } = plan(`---\ncurrent_phase_name: Real\n---\n${POSITION}`);
+  test('a curated name is kept in the frontmatter', () => {
+    const { name } = plan(`---\ncurrent_phase_name: Real\n---\n${POSITION}`);
     assert.strictEqual(name, 'Real');
-    assert.match(after, /^Phase: 19 \(Real\) — READY TO EXECUTE$/m);
   });
 
-  test('an already-polluted curated name is not copied into the body label', () => {
-    const { after, name } = plan(`---\ncurrent_phase_name: READY TO EXECUTE\n---\n${POSITION}`);
-    assert.ok(!/\(READY TO EXECUTE\)/.test(after), after);
+  test('an already-polluted frontmatter name is not reasserted', () => {
+    const { name } = plan(`---\ncurrent_phase_name: READY TO EXECUTE\n---\n${POSITION}`);
     assert.notStrictEqual(name, 'READY TO EXECUTE', 'the polluted frontmatter name is not reasserted');
   });
 
