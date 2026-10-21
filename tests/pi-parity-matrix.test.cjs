@@ -18,6 +18,7 @@ const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { runMinimalInstall } = require('./helpers/install-shared.cjs');
 const {
+  listWorkflows,
   WORKFLOW_DISPOSITIONS,
   diffSurface,
   namedWorkflows,
@@ -27,7 +28,7 @@ const {
 const { _internals } = require('../pi/gsd.cjs');
 const { PI_UNSUPPORTED_SKILLS } = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
 
-const { PI_HOOK_DISPOSITIONS } = _internals;
+const { PI_HOOK_DISPOSITIONS, PI_PRE_TOOL_HOOKS, PI_POST_TOOL_HOOKS } = _internals;
 const REPO = path.join(__dirname, '..');
 const PARITY_DOC = path.join(REPO, 'docs', 'reference', 'pi-parity-matrix.md');
 const STUB_MARKER = 'is unsupported on Pi:';
@@ -35,6 +36,9 @@ const HOOK_FILE = /\.(js|sh)$/;
 const HOOK_STATUSES = new Set(['bridged', 'unsupported', 'not-applicable', 'internal']);
 
 const listDir = (dir) => fs.readdirSync(dir).sort();
+/** Regular files of a directory; a subdirectory is skipped, never read as a file. */
+const listFiles = (dir) =>
+  fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => e.name).sort();
 const read = (...parts) => fs.readFileSync(path.join(...parts), 'utf8');
 
 describe('#5561: diffSurface goes red on an undisposed Claude surface', () => {
@@ -136,6 +140,26 @@ describe('#5561: Pi parity over the shipped surface', () => {
     assert.deepEqual(skills.filter((n) => !commands.includes(n)), [], 'Pi skills with no Claude command');
   });
 
+  test('the real-tree checks go red when a Claude surface is added without a Pi disposition', () => {
+    assert.ok(PI_UNSUPPORTED_SKILLS && typeof PI_UNSUPPORTED_SKILLS === 'object', 'run `npm run build:lib` first');
+    const skills = piSkills().filter((n) => !isStub(n));
+    assert.deepEqual(
+      diffSurface([...claudeCommands(), 'gsd-brand-new'], skills, PI_UNSUPPORTED_SKILLS).undisposed,
+      ['gsd-brand-new'],
+    );
+    const roles = listDir(path.join(configDir, 'agents'));
+    assert.deepEqual(diffSurface([...roles, 'gsd-brand-new.md'], roles, {}).undisposed, ['gsd-brand-new.md']);
+    assert.deepEqual(
+      diffSurface(['brand-new.md'], [], WORKFLOW_DISPOSITIONS).undisposed,
+      ['brand-new.md'],
+    );
+    const hookFiles = listFiles(path.join(REPO, 'hooks')).filter((f) => HOOK_FILE.test(f));
+    assert.deepEqual(
+      diffSurface([...hookFiles, 'gsd-new-hook.js'], Object.keys(PI_HOOK_DISPOSITIONS), {}).undisposed,
+      ['gsd-new-hook.js'],
+    );
+  });
+
   test('every unsupported Pi skill states its reason', () => {
     for (const [name, reason] of Object.entries(PI_UNSUPPORTED_SKILLS)) {
       assert.ok(reason.length > 0, name);
@@ -144,20 +168,22 @@ describe('#5561: Pi parity over the shipped surface', () => {
   });
 
   test('every shipped workflow is installed and reachable from a runnable Pi skill or role', () => {
-    const shipped = listDir(path.join(REPO, 'gsd-core', 'workflows')).filter((f) => f.endsWith('.md'));
+    const shipped = listWorkflows(path.join(REPO, 'gsd-core', 'workflows'));
     assert.ok(shipped.length > 0, 'vacuous: no workflows shipped');
+    assert.ok(shipped.some((f) => f.includes('/')), 'vacuous: no workflow in a subdirectory');
     const installedDir = path.join(configDir, 'gsd-core', 'workflows');
-    assert.deepEqual(shipped.filter((f) => !fs.existsSync(path.join(installedDir, f))), []);
+    assert.deepEqual(shipped.filter((f) => !fs.existsSync(path.join(installedDir, ...f.split('/')))), []);
 
+    const mdFiles = (dir) => listFiles(dir).filter((f) => f.endsWith('.md'));
     const claudeRoots = [
-      ...listDir(path.join(REPO, 'commands', 'gsd')).map((f) => read(REPO, 'commands', 'gsd', f)),
-      ...listDir(path.join(REPO, 'agents')).map((f) => read(REPO, 'agents', f)),
+      ...mdFiles(path.join(REPO, 'commands', 'gsd')).map((f) => read(REPO, 'commands', 'gsd', f)),
+      ...mdFiles(path.join(REPO, 'agents')).map((f) => read(REPO, 'agents', f)),
     ];
     const piRoots = [
       ...piSkills().filter((n) => !isStub(n)).map(skillBody),
-      ...listDir(path.join(configDir, 'agents')).map((f) => read(configDir, 'agents', f)),
+      ...mdFiles(path.join(configDir, 'agents')).map((f) => read(configDir, 'agents', f)),
     ];
-    const readWorkflow = (name) => read(REPO, 'gsd-core', 'workflows', name);
+    const readWorkflow = (name) => read(REPO, 'gsd-core', 'workflows', ...name.split('/'));
     const onClaude = reachableWorkflows(claudeRoots, shipped, readWorkflow);
     const onPi = reachableWorkflows(piRoots, shipped, readWorkflow);
     assert.ok(onClaude.size > 0 && onPi.size > 0, 'vacuous: nothing reachable');
@@ -187,9 +213,13 @@ describe('#5561: Pi parity over the shipped surface', () => {
       const entries = PI_HOOK_DISPOSITIONS[file] || [];
       assert.ok(entries.some((e) => e.claude === event), `${file} on ${event} has no Pi disposition`);
     }
+    const preFiles = new Set(PI_PRE_TOOL_HOOKS.map((h) => h[0]));
+    const postFiles = new Set(PI_POST_TOOL_HOOKS.map((h) => h[0]));
     for (const [file, entries] of Object.entries(PI_HOOK_DISPOSITIONS)) {
       for (const e of entries) {
         assert.ok(HOOK_STATUSES.has(e.status), `${file}: unknown status ${e.status}`);
+        if (e.status === 'bridged' && e.pi.startsWith('tool_call')) assert.ok(preFiles.has(file), `${file}: bridged on tool_call but not in the bridge`);
+        if (e.status === 'bridged' && e.pi.startsWith('tool_result')) assert.ok(postFiles.has(file), `${file}: bridged on tool_result but not in the bridge`);
         if (e.status !== 'bridged') assert.ok(e.reason && e.reason.length > 0, `${file}: no reason`);
       }
     }

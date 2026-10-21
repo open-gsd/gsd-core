@@ -1,5 +1,8 @@
 'use strict';
 
+const fs = require('node:fs');
+const path = require('node:path');
+
 const { escapeRegex } = require('../../gsd-core/bin/lib/pattern.cjs');
 
 /**
@@ -11,7 +14,7 @@ const { escapeRegex } = require('../../gsd-core/bin/lib/pattern.cjs');
  */
 
 /**
- * Workflows that Claude reaches and Pi does not, by workflow file name, with the reason.
+ * Workflows that Claude reaches and Pi does not, by path relative to gsd-core/workflows, with the reason.
  * `debug.md` is reached only through `/gsd-debug` and `gsd-debug-session-manager`, and the Pi
  * skill for `/gsd-debug` is the unsupported stub (`PI_UNSUPPORTED_SKILLS`).
  */
@@ -36,7 +39,9 @@ function diffSurface(claude, pi, dispositions) {
 }
 
 /**
- * Workflow files named by `text`. A name matches only when it is not the tail of a longer
+ * Workflow files named by `text`. This over-approximates reachability: any mention of a name
+ * counts, including prose and a role whose own skill is unsupported on Pi.
+ * A name matches only when it is not the tail of a longer
  * file name, so `plan-phase.md` is not found inside `ultraplan-phase.md`.
  * @param {string} text
  * @param {Iterable<string>} names
@@ -90,4 +95,23 @@ function registeredHooks(manifest) {
   return pairs;
 }
 
-module.exports = { WORKFLOW_DISPOSITIONS, diffSurface, namedWorkflows, reachableWorkflows, registeredHooks };
+/**
+ * Workflow markdown files under `dir`, recursively, as forward-slash paths relative to `dir`
+ * (`plan-phase/steps/x.md`), sorted. Directories are descended, never read as files.
+ * @param {string} dir
+ * @returns {string[]}
+ */
+function listWorkflows(dir) {
+  const out = [];
+  const walk = (rel) => {
+    for (const e of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) {
+      const next = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(next);
+      else if (e.isFile() && e.name.endsWith('.md')) out.push(next);
+    }
+  };
+  walk('');
+  return out.sort();
+}
+
+module.exports = { listWorkflows, WORKFLOW_DISPOSITIONS, diffSurface, namedWorkflows, reachableWorkflows, registeredHooks };

@@ -7,7 +7,7 @@ What each part of a GSD install becomes on [Pi](https://pi.dev), checked against
 | Surface | Claude Code ships | On Pi | Not available on Pi |
 |---|---|---|---|
 | Commands | 72 | 72 skills, run as `/skill:gsd-<command>` | `/skill:gsd-debug` prints that it is unsupported |
-| Workflows | 109 files (108 workflows and 1 data file) | all installed under the engine root, each reached through a skill | `debug.md`, which only `/gsd-debug` runs |
+| Workflows | 181 workflow files, including those in subdirectories | all installed under the engine root, each reached through a skill | `debug.md`, which only `/gsd-debug` runs |
 | Agent roles | 35 roles and 29 compact variants | 35 roles under `agents/`, run through `gsd_dispatch`; compact variants are not installed | none |
 | Hooks | 28 hook scripts, 8 of them for Cursor or Windsurf only | bridged through `tool_call`, `tool_result`, `session_start`, `before_agent_start` and `session_before_compact` | the hooks listed under [Hooks](#hooks) |
 
@@ -25,7 +25,7 @@ Every `commands/gsd/<name>.md` becomes the Pi skill `gsd-<name>`. A skill whose 
 
 ## Workflows
 
-A workflow is reachable on Pi when a runnable Pi skill, an installed role or another reachable workflow names it. Every workflow Claude Code reaches is also reached on Pi except one. The file in `gsd-core/workflows/` that is not a workflow, `section-manifest.json`, is data read by tools.
+A workflow is reachable on Pi when a runnable Pi skill, an installed role or another reachable workflow names it. Every workflow Claude Code reaches is also reached on Pi except one. The files in `gsd-core/workflows/` that are not Markdown, `section-manifest.json` and the launcher snippet, are not workflows and are not checked.
 
 | Workflow | Disposition | Reason |
 |---|---|---|
@@ -37,7 +37,7 @@ Each non-compact `agents/gsd-*.md` is installed under the Pi config home as a ro
 
 ## Hooks
 
-Every hook script has a recorded Pi disposition, and so does every event and script pair in `hooks/hooks.json`. The hooks that are not bridged:
+Every hook script has a recorded Pi disposition, and so does every event and script pair in `hooks/hooks.json`. The hooks that are not bridged, or only partly (`gsd-context-monitor.js` is bridged on PreCompact and unsupported on its other events):
 
 | Hook | Claude event | Disposition | Reason |
 |---|---|---|---|
