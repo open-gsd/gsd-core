@@ -234,6 +234,11 @@ const ALLOWLIST_OCCURRENCES = new Map([
     { snippet: 'Google (Gemini)', reason: 'model-provider choice, not a GSD runtime' },
     { snippet: 'Committed to Gemini / Google Cloud / Vertex AI', reason: 'the same menu entry\'s description' },
   ]],
+  ['pi/package-agents/gsd-framework-selector.md', [
+    // Generated copy of agents/gsd-framework-selector.md for the Pi package (#5569).
+    { snippet: 'Google (Gemini)', reason: 'model-provider choice, not a GSD runtime' },
+    { snippet: 'Committed to Gemini / Google Cloud / Vertex AI', reason: 'the same menu entry\'s description' },
+  ]],
   ['agents/gsd-framework-selector.compact.md', [
     { snippet: 'Google (Gemini)', reason: 'model-provider choice, not a GSD runtime' },
   ]],
