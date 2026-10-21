@@ -107,14 +107,14 @@ describe('#5569: convertClaudeAgentToPiAgent', () => {
     assert.match(out, /^tools: read, bash$/m);
   });
 
-  test('property: mapped and dropped partition the input, mapped has no duplicates and only Pi names', () => {
-    const PI = new Set(['read', 'write', 'edit', 'bash', 'grep', 'find']);
+  test('property: mapped is the de-duplicated table image of the input, dropped the de-duplicated rest', () => {
+    const TABLE = { Read: 'read', Write: 'write', Edit: 'edit', Bash: 'bash', Grep: 'grep', Glob: 'find' };
+    const uniq = (xs) => [...new Set(xs)];
     fc.assert(
       fc.property(fc.array(fc.constantFrom('Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'Task', 'WebSearch', 'mcp__a__b', 'Skill')), (tools) => {
         const { mapped, dropped } = mapClaudeToolsToPi(tools);
-        return new Set(mapped).size === mapped.length
-          && mapped.every((m) => PI.has(m))
-          && new Set([...mapped.length ? tools.filter((t) => !dropped.includes(t)) : [], ...dropped]).size === new Set(tools).size;
+        assert.deepEqual(mapped, uniq(tools.filter((t) => TABLE[t]).map((t) => TABLE[t])));
+        assert.deepEqual(dropped, uniq(tools.filter((t) => !TABLE[t])));
       }),
       { seed: 5569, numRuns: 200 },
     );

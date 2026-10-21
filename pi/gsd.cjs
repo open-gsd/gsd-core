@@ -691,13 +691,14 @@ function taskkillPath(env) {
 function resolvePiCommand({ platform, env, execPath, exists }) {
   const win = platform === 'win32';
   const pathMod = win ? path.win32 : path.posix;
-  const names = win ? ['pi.exe', 'pi.cmd'] : ['pi'];
+  // Windows: only pi.exe. A .cmd shim cannot be spawned without a shell (Node refuses it, CVE-2024-27980).
+  const names = win ? ['pi.exe'] : ['pi'];
   for (const name of names) {
     const sibling = pathMod.join(pathMod.dirname(execPath || ''), name);
     if (execPath && exists(sibling)) return sibling;
   }
   if (!win) return 'pi';
-  const dirs = String((env && (env.Path || env.PATH)) || '').split(';').filter((d) => d && pathMod.isAbsolute(d));
+  const dirs = String((env && (env.Path || env.PATH)) || '').split(';').filter((d) => /^[A-Za-z]:[\\/]/.test(d));
   for (const dir of dirs) {
     for (const name of names) {
       const candidate = pathMod.join(dir, name);

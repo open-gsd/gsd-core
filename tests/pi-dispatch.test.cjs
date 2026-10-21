@@ -394,6 +394,15 @@ describe('#5569 gsd_dispatch: timeout, kill and output bounds', () => {
     assert.equal(fake.calls.length, 0);
   });
 
+  test('on Windows a .cmd shim and a drive-less, UNC or relative PATH entry are never used', async () => {
+    const present = new Set(['C:\\npm\\pi.cmd', '\\\\srv\\share\\pi.exe', '\\tools\\pi.exe', 'rel\\pi.exe']);
+    const exists = (f) => present.has(f);
+    const env = { Path: 'C:\\npm;\\\\srv\\share;\\tools;rel' };
+    assert.equal(resolvePiCommand({ platform: 'win32', env, execPath: 'C:\\npm\\node.exe', exists }), null);
+    present.add('D:\\bin\\pi.exe');
+    assert.equal(resolvePiCommand({ platform: 'win32', env: { Path: `${env.Path};D:\\bin` }, execPath: 'C:\\npm\\node.exe', exists }), 'D:\\bin\\pi.exe');
+  });
+
   test('taskkill defaults to C:\\Windows\\System32 when no system root is set', () => {
     assert.equal(taskkillPath({}), 'C:\\Windows\\System32\\taskkill.exe');
   });

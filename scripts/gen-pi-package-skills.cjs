@@ -50,7 +50,10 @@ function toSlash(p) {
  * @param {string} root
  */
 function tokenizeSkill(content, root) {
-  const forms = [...new Set([root, toSlash(root)])].sort((a, b) => b.length - a.length);
+  // The installer may print either the path it was given or its symlink-resolved form (/private/var on macOS).
+  let real = root;
+  try { real = fs.realpathSync(root); } catch { /* removed already: only the given form */ }
+  const forms = [...new Set([root, toSlash(root), real, toSlash(real)])].sort((a, b) => b.length - a.length);
   let out = content;
   for (const form of forms) out = out.split(form).join(PI_ENGINE_ROOT_TOKEN);
   return out;
