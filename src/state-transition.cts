@@ -18,7 +18,7 @@
 import frontmatter = require('./frontmatter.cjs');
 import { stateReplaceField, stateExtractField, stateReplaceFieldIfTemplate, stateReplaceFieldWithFallback, stateReplaceFieldInSession, stateCurrentPositionSlice } from './state-document.cjs';
 import { KNOWN_TEMPLATE_DEFAULTS, toFiniteNumber, computeProgressPercent, fieldContinuationEnd } from './state-document.cjs';
-import { tokenizeHeadings, withSection } from './markdown-sectionizer.cjs';
+import { tokenizeHeadings, withSection, maskFences } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
 import { deriveProgressFromRoadmap, milestoneVersionOf, clampPercent, clampPercentFromFraction, renderProgressBar } from './phase-lifecycle.cjs';
 import { escapeRegex } from './pattern.cjs';
@@ -1348,7 +1348,12 @@ function beginPhaseCore(
   // pattern match, not real dataflow, and only recognizes `body = stripFrontmatter(...)` written
   // out at the call site. `stripFrontmatter` is pure and idempotent, so computing it here (in
   // addition to the helper's own internal call) changes nothing observable.
-  let body = stripFrontmatter(content);
+  const sourceBody = stripFrontmatter(content);
+  // #5460: every field write below runs over the body with fenced blocks hidden, so a fenced example
+  // of `Status:` / `Last Activity:` / `Current focus:` above the live line is neither matched nor
+  // rewritten. Without a fence the mask is the identity.
+  const fenceMask = maskFences(sourceBody);
+  let body = fenceMask.masked;
 
   const today = deps.clock.localToday();
 
@@ -1451,7 +1456,10 @@ function beginPhaseCore(
   // intent-first current_phase_name override on a resume — the core just
   // preserved the mid-flight name, and an override would drift frontmatter
   // away from the preserved body value.
-  return { content: reassemble(body), updated, data: { resumed: isAlreadyExecuting } };
+  // A restore that cannot find a placeholder (it cannot, short of a writer bug) leaves the document untouched.
+  const restoredBody = fenceMask.restore(body);
+  if (restoredBody === null) return { content: reassemble(sourceBody), updated: [], data: { resumed: isAlreadyExecuting } };
+  return { content: reassemble(restoredBody), updated, data: { resumed: isAlreadyExecuting } };
 }
 
 // Local frontmatter type aliases matching frontmatter.cts so we can call
@@ -1542,7 +1550,9 @@ function mutateCurrentPositionFirstTime(
 ): string {
   const span = locateCurrentPosition(body);
   if (span === null) return body;
-  let sectionBody = body.slice(span.start, span.end);
+  // #5460: the section's fenced examples are hidden while the live lines are rewritten.
+  const fenceMask = maskFences(body.slice(span.start, span.end));
+  let sectionBody = fenceMask.masked;
 
   // Phase line — inline first, then pipe-table fallback (#1257).
   const phaseLabel = `${intent.phaseNumber}${intent.phaseName ? ` (${intent.phaseName})` : ''} — EXECUTING`;
@@ -1582,8 +1592,10 @@ function mutateCurrentPositionFirstTime(
     if (replaced !== null) sectionBody = replaced;
   }
 
+  const restored = fenceMask.restore(sectionBody);
+  if (restored === null) return body;
   updated.push('Current Position');
-  return body.slice(0, span.start) + sectionBody + body.slice(span.end);
+  return body.slice(0, span.start) + restored + body.slice(span.end);
 }
 
 /**
@@ -1599,7 +1611,8 @@ function mutateCurrentPositionResume(
 ): string {
   const span = locateCurrentPosition(body);
   if (span === null) return body;
-  let sectionBody = body.slice(span.start, span.end);
+  const fenceMask = maskFences(body.slice(span.start, span.end));
+  let sectionBody = fenceMask.masked;
 
   const resumeActivity = `Last activity: ${today} — Phase ${intent.phaseNumber} execution resumed (wave continue)`;
   if (/^Last activity:/im.test(sectionBody)) {
@@ -1616,7 +1629,9 @@ function mutateCurrentPositionResume(
     }
   }
 
-  return body.slice(0, span.start) + sectionBody + body.slice(span.end);
+  const restored = fenceMask.restore(sectionBody);
+  if (restored === null) return body;
+  return body.slice(0, span.start) + restored + body.slice(span.end);
 }
 
 /**
@@ -1733,7 +1748,8 @@ function mutateCurrentPositionForAdvance(
 ): string {
   const span = locateCurrentPosition(content);
   if (span === null) return content;
-  let sectionBody = content.slice(span.start, span.end);
+  const fenceMask = maskFences(content.slice(span.start, span.end));
+  let sectionBody = fenceMask.masked;
   let mutated = false;
 
   // #3395: Phase is always replaced when a caller passes it — system-derived,
@@ -1833,7 +1849,9 @@ function mutateCurrentPositionForAdvance(
   }
 
   if (!mutated) return content;
-  return content.slice(0, span.start) + sectionBody + content.slice(span.end);
+  const restored = fenceMask.restore(sectionBody);
+  if (restored === null) return content;
+  return content.slice(0, span.start) + restored + content.slice(span.end);
 }
 
 // ----------------------------------------------------------------------------
