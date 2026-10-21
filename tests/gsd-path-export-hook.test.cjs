@@ -34,6 +34,8 @@ describe('gsd-path-export SessionStart hook (#5465)', () => {
     fs.mkdirSync(path.join(configDir, 'hooks'), { recursive: true });
     fs.mkdirSync(path.join(configDir, 'gsd-core', 'bin'), { recursive: true });
     fs.copyFileSync(HOOK_SOURCE, path.join(configDir, 'hooks', 'gsd-path-export.js'));
+    // The hook requires ./lib/hook-exit.js; the installer ships hooks/lib/ beside the hooks.
+    fs.cpSync(path.join(__dirname, '..', 'hooks', 'lib'), path.join(configDir, 'hooks', 'lib'), { recursive: true });
     if (withGsdRun) fs.writeFileSync(path.join(configDir, 'gsd-core', 'bin', 'gsd_run'), '#!/bin/sh\n', { mode: 0o755 });
     return configDir;
   };
