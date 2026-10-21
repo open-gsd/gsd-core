@@ -5774,8 +5774,10 @@ describe('#3395: planned-phase refreshes the stale Phase line and persists --nam
     // (state json included) re-reads.
     assert.ok(!currentPositionBlock(stateContent).includes('35.1'),
       `the stale 35.1 phase prose must be refreshed away from ## Current Position; STATE.md was:\n${stateContent}`);
-    assert.ok(/Phase: 35\.3 — READY TO EXECUTE/m.test(stateContent),
-      `Current Position Phase line must read "Phase: 35.3 — READY TO EXECUTE"; STATE.md was:\n${stateContent}`);
+    // #5369: with no --name the label carries the curated frontmatter name, so the body line and the
+    // frontmatter agree on it (the fixture's `current_phase_name` is `unattended-launch-prerequisites`).
+    assert.ok(/Phase: 35\.3 \(unattended-launch-prerequisites\) — READY TO EXECUTE/m.test(stateContent),
+      `Current Position Phase line must read "Phase: 35.3 (unattended-launch-prerequisites) — READY TO EXECUTE"; STATE.md was:\n${stateContent}`);
     // The read path must agree with the write path.
     const json = JSON.parse(runGsdTools(['state', 'json', '--raw'], tmpDir, PINNED_ENV).output);
     assert.strictEqual(json.current_phase, '35.3',
@@ -22625,14 +22627,16 @@ describe('planned-phase without --name keeps the status out of the phase name (#
     assert.strictEqual(name, null, 'no curated name and no --name: the name stays unset');
   });
 
-  test('a curated name is kept in the frontmatter', () => {
-    const { name } = plan(`---\ncurrent_phase_name: Real\n---\n${POSITION}`);
+  test('a curated name is kept in the frontmatter and the body Phase line carries it too', () => {
+    const { after, name } = plan(`---\ncurrent_phase_name: Real\n---\n${POSITION}`);
     assert.strictEqual(name, 'Real');
+    assert.match(after, /^Phase: 19 \(Real\) — READY TO EXECUTE$/m);
   });
 
-  test('an already-polluted frontmatter name is not reasserted', () => {
-    const { name } = plan(`---\ncurrent_phase_name: READY TO EXECUTE\n---\n${POSITION}`);
+  test('an already-polluted frontmatter name is not reasserted or copied into the body label', () => {
+    const { after, name } = plan(`---\ncurrent_phase_name: READY TO EXECUTE\n---\n${POSITION}`);
     assert.notStrictEqual(name, 'READY TO EXECUTE', 'the polluted frontmatter name is not reasserted');
+    assert.ok(!/\(READY TO EXECUTE\)/.test(after), `the status phrase must not be copied into the label:\n${after}`);
   });
 
   test('--name still sets the name', () => {
