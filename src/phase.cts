@@ -4325,7 +4325,16 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
               + roadmapContent.slice(w.end);
           }
         } else {
-          roadmapContent = mutateMilestonePhase(roadmapContent);
+          // #5543: the active milestone could not be resolved (no STATE
+          // `milestone:`, no marker). Writing the whole document would let
+          // `withPhaseSection` pick the first `### Phase N:` in document order,
+          // which can sit inside a shipped `<details>` block. Confine the
+          // fallback to the region after the last closed block — the same
+          // active-region notion `replaceInCurrentMilestone` uses; with no
+          // `</details>` that is the whole document, as before.
+          const lastDetailsClose = roadmapContent.lastIndexOf('</details>');
+          const activeStart = lastDetailsClose === -1 ? 0 : lastDetailsClose + '</details>'.length;
+          roadmapContent = roadmapContent.slice(0, activeStart) + mutateMilestonePhase(roadmapContent.slice(activeStart));
         }
 
         writes.push({
