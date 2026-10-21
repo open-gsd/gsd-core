@@ -657,6 +657,60 @@ function validateEntryShape(e: unknown, i: number): WindowEntry {
   };
 }
 
+/**
+ * #5418: when the frontmatter counts disagree with the parsed entries, the usual
+ * cause is a hand-edited table: a row added to the rendered table (and the counts
+ * bumped to match) while the fenced JSON block, the sole source of entries, was left
+ * behind. Names the row ids the table and the JSON block disagree about so the
+ * counts message does not point at the (correct) frontmatter. Returns '' when there
+ * is nothing to add. Best-effort by design: it runs while a WindowsError is already
+ * on its way out, so it must never throw and replace that error.
+ */
+/** Row ids spelled out in the divergence note; the rest are counted. */
+const ROW_ID_LIST_LIMIT = 20;
+
+function describeTableJsonDivergence(raw: string, entries: WindowEntry[]): string {
+  try {
+    // The hint is the PARSED entry count, not frontmatter total_count: the latter
+    // is the number that is wrong here.
+    const table = extractTableRegion(raw, entries.length);
+    if (table === null) return '';
+    const rowId = (line: string): string => (line.split('|')[1] ?? '').trim();
+    // Ids are positive integers (the JSON side enforces it), so a first cell that is
+    // not one — the `_(none)_` empty-ledger placeholder, a continuation line of a
+    // multi-line description, control characters — is not a row id and is never
+    // echoed into the message.
+    const tableIds = new Set<string>();
+    const tableLines = table.split('\n');
+    for (let i = 2; i < tableLines.length; i++) {
+      if (!tableLines[i].startsWith('|')) continue;
+      const id = rowId(tableLines[i]);
+      if (/^\d{1,15}$/.test(id)) tableIds.add(id);
+    }
+    const jsonIds = new Set(entries.map((e) => String(e.id)));
+    const byNumber = (a: string, b: string): number => Number(a) - Number(b);
+    const list = (ids: string[]): string => {
+      const shown = ids.slice(0, ROW_ID_LIST_LIMIT).join(', ');
+      return ids.length > ROW_ID_LIST_LIMIT ? `${shown} and ${ids.length - ROW_ID_LIST_LIMIT} more` : shown;
+    };
+    const tableOnly = [...tableIds].filter((id) => !jsonIds.has(id)).sort(byNumber);
+    const jsonOnly = [...jsonIds].filter((id) => !tableIds.has(id)).sort(byNumber);
+    const parts: string[] = [];
+    if (tableOnly.length > 0) {
+      parts.push(`row id(s) in the table but not in the fenced JSON block: ${list(tableOnly)}`);
+    }
+    if (jsonOnly.length > 0) {
+      parts.push(`row id(s) in the fenced JSON block but not in the table: ${list(jsonOnly)}`);
+    }
+    if (parts.length === 0) return '';
+    return ` The table and the fenced JSON block disagree (${parts.join('; ')}). The JSON block is the ` +
+      'authoritative entries source: add the missing entries there (or remove the stray table rows) ' +
+      'and keep the frontmatter counts in step with it.';
+  } catch {
+    return '';
+  }
+}
+
 export function parseLedger(raw: string): Ledger {
   const fm = parseFrontmatterStrict(raw);
   if (fm.schema_version !== SCHEMA_VERSION) {
@@ -705,7 +759,8 @@ export function parseLedger(raw: string): Ledger {
       REASON.WINDOWS_LEDGER_MALFORMED,
       `Ledger counts disagree with entries: frontmatter open/waived/fixed/total=` +
         `${ledger.open_count}/${ledger.waived_count}/${ledger.fixed_count}/${ledger.total_count}` +
-        ` but entries yield ${recomputed.open_count}/${recomputed.waived_count}/${recomputed.fixed_count}/${recomputed.total_count}.`,
+        ` but entries yield ${recomputed.open_count}/${recomputed.waived_count}/${recomputed.fixed_count}/${recomputed.total_count}.` +
+        describeTableJsonDivergence(raw, entries),
     );
   }
   return ledger;
