@@ -4547,7 +4547,18 @@ describe('gsd-code-fixer TypeScript Tier-2 check is project-aware (#5213)', () =
       assert.ok(text.includes('| Python | `python -c "import ast; ast.parse(open(\'{file}\').read())"` |'));
       assert.ok(text.includes('| Other | Skip to Tier 1 only |'));
     });
+
+    test(`${name}: the procedure says how to find the config, filter the output and avoid build artifacts`, () => {
+      assert.match(text, /walk up/i, 'no instruction to walk up to the nearest tsconfig');
+      assert.match(text, /-p <config>/, 'the check is not run with -p <config>');
+      assert.match(text, /never `-b`/, 'tsc -b (which writes build artifacts) is not ruled out for the config path');
+      assert.match(text, /only (?:output )?lines (?:that start with|for) `\{file\}`/i, 'the output is not filtered to the edited file');
+    });
   }
+
+  test('the compact variant carries the identical TypeScript check row', () => {
+    assert.equal(typescriptRow(VARIANTS.compact), typescriptRow(VARIANTS.full));
+  });
 
   test('the full agent\'s scoping rule and fallback list use the project-aware form', () => {
     assert.ok(!/If `npx tsc --noEmit \{file\}`/.test(VARIANTS.full), 'the scoping rule still names the positional form');
