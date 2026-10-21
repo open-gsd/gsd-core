@@ -3,7 +3,7 @@
 ## Rulesets
 
 Four ruleset specs live under `.github/rulesets/`. All are committed with
-`enforcement: disabled` and activated in stages via the 3-PR rollout below.
+`enforcement: disabled` and activated in stages via the 4-PR rollout below.
 
 ### `main-protection`
 Targets `~DEFAULT_BRANCH` (main). Enforces:
@@ -35,15 +35,18 @@ to respond. It carries no other rules and **no bypass actors yet**.
 Two things must be settled before it is enforced:
 - **The auto back-merge.** `auto-backmerge.yml` merges `main` into `next` as a
   merge commit so `main` stays an ancestor of `next`. A squash queue would
-  flatten it. Read the `evaluate` logs (below) for this ruleset to see whether
-  the back-merge is caught, then decide the bypass actor from what they show.
+  flatten it. Decide the bypass actor before enforcing. The `evaluate` logs
+  (below) may show whether the back-merge is caught, but whether GitHub
+  evaluates a merge-queue rule in `evaluate` mode at all is unverified, so
+  check the first run and be ready to test the back-merge another way.
 - **The Windows/macOS lane.** Moving it off PR runs is a separate switch, the
   repo variable `GSD_PR_LINUX_ONLY` (#5604). Set it only once the queue is
   enforced; until then Windows and macOS would first run after merge.
 
-**`sync-rulesets.sh` applies every file with one `ENFORCEMENT` value.** Running
-`ENFORCEMENT=active` to activate the other rulesets would activate `next-queue`
-too. To activate only the others, PUT them one at a time with `gh api`, or
+**`sync-rulesets.sh` applies every file with one `ENFORCEMENT` value.** Its
+default run (`ENFORCEMENT=evaluate`) creates `next-queue` in `evaluate` mode,
+and running `ENFORCEMENT=active` to activate the other rulesets would activate
+`next-queue` too. To activate only the others, PUT them one at a time with `gh api`, or
 leave `next-queue` out until you intend to enforce it.
 
 ## 4-PR Rollout Plan
