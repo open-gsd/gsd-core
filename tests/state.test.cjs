@@ -12,6 +12,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { runGsdTools, createTempDir, createTempProject, createTempGitProject, cleanup, captureFdSync } = require('./helpers.cjs');
 const { createFixture, seedWorkstream, writeState } = require('./fixtures/index.cjs');
 // ADR-3473 §8.7 (#3872): git-fixture spawns for the state_head rows (10/11)
@@ -22590,3 +22591,60 @@ Last activity: 2026-10-01 -- done
     assert.match(read(), /^\*\*Current Plan:\*\* 9$/m);
   });
 });
+
+// #5369: `state planned-phase` without --name must never write its own status
+// text ("READY TO EXECUTE") into the phase-name position.
+describe('planned-phase without --name keeps the status out of the phase name (#5369)', () => {
+  const POSITION = [
+    '# Project State', '', '## Current Position', '',
+    'Phase: 18 — Curated Name', 'Plan: 0 TBD in current phase', 'Status: Ready', 'Last activity: 2026-10-01', '',
+  ].join('\n');
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const plan = (stateText, args = '--phase 19 --plans 3') => {
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, stateText);
+    const r = runGsdTools(`query state.planned-phase ${args}`, tmpDir);
+    assert.strictEqual(r.success, true, r.error);
+    const after = fs.readFileSync(statePath, 'utf-8');
+    const lines = splitLines(after);
+    const end = lines.indexOf('---', 1);
+    const nameLine = lines.slice(1, end > 0 ? end : 1).find((l) => l.startsWith('current_phase_name:'));
+    return { after, name: nameLine ? nameLine.slice('current_phase_name:'.length).trim().replace(/^["']|["']$/g, '') : null };
+  };
+
+  test('no frontmatter: current_phase_name is not the status fragment', () => {
+    const { name } = plan(POSITION);
+    assert.notStrictEqual(name, 'READY TO EXECUTE');
+  });
+
+  test('frontmatter without current_phase_name: not the status fragment', () => {
+    const { name } = plan(`---\ncurrent_phase: 18\n---\n${POSITION}`);
+    assert.notStrictEqual(name, 'READY TO EXECUTE');
+  });
+
+  test('a curated name is kept and the body Phase line carries it too', () => {
+    const { after, name } = plan(`---\ncurrent_phase_name: Real\n---\n${POSITION}`);
+    assert.strictEqual(name, 'Real');
+    assert.match(after, /^Phase: 19 \(Real\) — READY TO EXECUTE$/m);
+  });
+
+  test('an already-polluted curated name is not copied into the body label', () => {
+    const { after } = plan(`---\ncurrent_phase_name: READY TO EXECUTE\n---\n${POSITION}`);
+    assert.ok(!/\(READY TO EXECUTE\)/.test(after), after);
+  });
+
+  test('--name still sets the name', () => {
+    const { after, name } = plan(POSITION, '--phase 19 --name Foo --plans 3');
+    assert.strictEqual(name, 'Foo');
+    assert.match(after, /^Phase: 19 \(Foo\) — READY TO EXECUTE$/m);
+  });
+
+  test('the Status line still becomes Ready to execute', () => {
+    const { after } = plan(POSITION);
+    assert.match(after, /^Status: Ready to execute$/m);
+  });
+});
+
