@@ -3131,7 +3131,11 @@ function convertClaudeAgentToPiAgent(content) {
 
   const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
   const description = extractFrontmatterField(frontmatter, 'description') || '';
-  const { mapped, dropped } = mapClaudeToolsToPi(parseFrontmatterTools(frontmatter));
+  const declared = parseFrontmatterTools(frontmatter);
+  const { mapped: mappedTools, dropped } = mapClaudeToolsToPi(declared);
+  // A role that declared tools but none map must not widen to Pi's full default set
+  // (the dispatcher treats an absent `tools:` as "defaults"): fall back to read-only.
+  const mapped = declared.length > 0 && mappedTools.length === 0 ? ['read'] : mappedTools;
 
   let fm = `---\nname: ${yamlIdentifier(name)}\ndescription: ${yamlQuote(toSingleLine(description))}\n`;
   if (mapped.length > 0) fm += `tools: ${mapped.join(', ')}\n`;

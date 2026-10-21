@@ -17,9 +17,12 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const path = require('node:path');
 
 const { cleanup } = require('./helpers.cjs');
+const fc = require('./helpers/fast-check-setup.cjs');
+const { _internals } = require('../pi/gsd.cjs');
 const { runMinimalInstall } = require('./helpers/install-shared.cjs');
 const installBin = require('../bin/install.js');
 const {
@@ -91,6 +94,30 @@ describe('#5569: convertClaudeAgentToPiAgent', () => {
 
   test('content without frontmatter passes through', () => {
     assert.equal(typeof convertClaudeAgentToPiAgent('just text'), 'string');
+  });
+
+  test('a role that declares only unmappable tools falls back to read-only, never to Pi defaults', () => {
+    const out = convertClaudeAgentToPiAgent('---\nname: gsd-x\ndescription: d\ntools: WebSearch, Task\n---\nB\n');
+    assert.match(out, /^tools: read$/m);
+    assert.match(out, /^# tools with no Pi equivalent, dropped: WebSearch, Task$/m);
+  });
+
+  test('a multi-line tools list is mapped like the inline form', () => {
+    const out = convertClaudeAgentToPiAgent('---\nname: gsd-x\ndescription: d\ntools:\n  - Read\n  - Bash\n  - Skill\n---\nB\n');
+    assert.match(out, /^tools: read, bash$/m);
+  });
+
+  test('property: mapped and dropped partition the input, mapped has no duplicates and only Pi names', () => {
+    const PI = new Set(['read', 'write', 'edit', 'bash', 'grep', 'find']);
+    fc.assert(
+      fc.property(fc.array(fc.constantFrom('Read', 'Write', 'Edit', 'Bash', 'Grep', 'Glob', 'Task', 'WebSearch', 'mcp__a__b', 'Skill')), (tools) => {
+        const { mapped, dropped } = mapClaudeToolsToPi(tools);
+        return new Set(mapped).size === mapped.length
+          && mapped.every((m) => PI.has(m))
+          && new Set([...mapped.length ? tools.filter((t) => !dropped.includes(t)) : [], ...dropped]).size === new Set(tools).size;
+      }),
+      { seed: 5569, numRuns: 200 },
+    );
   });
 
   test('mapClaudeToolsToPi maps the six host tools and drops the rest, without duplicates', () => {
@@ -214,6 +241,38 @@ describe('#5569: /gsd-debug is unsupported on Pi', () => {
     t.after(() => cleanup(root));
     const skill = fs.readFileSync(path.join(configDir, 'skills', 'gsd-debug', 'SKILL.md'), 'utf8');
     assert.match(skill, /needs nested dispatch; Pi dispatch is flat/);
+  });
+});
+
+describe('#5569: Pi package ships the converted roles', () => {
+  const PKG_ROLES = path.join(REPO, 'pi', 'package-agents');
+
+  test('pi/package-agents holds exactly the converted non-compact roles, byte-identical to an install', (t) => {
+    const { configDir, root } = runMinimalInstall({ runtime: 'pi', scope: 'global' });
+    t.after(() => cleanup(root));
+    const shipped = fs.readdirSync(PKG_ROLES).filter((f) => f !== 'manifest.json').sort();
+    assert.deepEqual(shipped, shippedRoles());
+    for (const f of shipped) {
+      // A package role is the installer's output with the engine root as a token; rendering it for
+      // the install's own root must reproduce the installed role byte for byte.
+      const rendered = fs.readFileSync(path.join(PKG_ROLES, f), 'utf8').split('__GSD_PI_ENGINE_ROOT__').join(configDir.replace(/\\/g, '/'));
+      assert.equal(rendered, fs.readFileSync(path.join(configDir, 'agents', f), 'utf8'), f);
+    }
+  });
+
+  test('its manifest.json lists the sha256 of every role, and the dispatcher accepts each one', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(PKG_ROLES, 'manifest.json'), 'utf8'));
+    assert.deepEqual(Object.keys(manifest.files).sort(), shippedRoles());
+    for (const [f, hash] of Object.entries(manifest.files)) {
+      assert.equal(crypto.createHash('sha256').update(fs.readFileSync(path.join(PKG_ROLES, f))).digest('hex'), hash, f);
+      const resolved = _internals.resolveDispatchRole(f.replace(/\.md$/, ''), path.join(REPO, 'pi'));
+      assert.equal(resolved.ok, true, `${f}: ${resolved.message}`);
+      assert.ok(!resolved.bytes.toString('utf8').includes('__GSD_PI_ENGINE_ROOT__'), `${f}: the engine root token was not rendered`);
+    }
+  });
+
+  test('every shipped role id matches the dispatcher role pattern (installer/extension parity)', () => {
+    for (const f of shippedRoles()) assert.match(f.replace(/\.md$/, ''), _internals.DISPATCH.ROLE_RE, f);
   });
 });
 

@@ -30,7 +30,7 @@ Next: run /gsd new-project (or /skill:gsd-new-project) to start the new-project 
 
 ## Agent steps on Pi
 
-Pi has no subagent primitive of its own, so GSD installs one: the `gsd_dispatch` tool. When a workflow reaches a step that spawns a `gsd-*` agent, Pi calls `gsd_dispatch` with the role name and the task text. The installer rewrites each workflow's `Agent(...)` call to this form, and installs the role files under `~/.pi/agent/agents/` (or the project's `.pi/agents/` for a local install).
+Pi has no subagent primitive of its own, so GSD installs one: the `gsd_dispatch` tool. When a workflow reaches a step that spawns a `gsd-*` agent, Pi calls `gsd_dispatch` with the role name and the task text. The installer rewrites each workflow's `Agent(...)` call to this form, and installs the role files under `~/.pi/agent/agents/` (or the project's `.pi/agents/` for a local install). With `pi install npm:@opengsd/gsd-core` the roles ship in the package (`pi/package-agents/`) and are rendered for the package location when a role starts.
 
 Each dispatch starts a separate `pi` process that runs the role with its own prompt and tools, and returns the role's final answer to the workflow. Dispatches run one at a time, in the order Pi calls them.
 

@@ -596,7 +596,7 @@ function nextStepFor({ family, subcommand, args: rest = [] }, engineRoot = ENGIN
 // (extensions/gsd.js); a sibling module would not be installed.
 const DISPATCH = Object.freeze({
   ROLE_RE: /^gsd-[a-z0-9-]+$/,
-  SAFE_VALUE_RE: /^[A-Za-z0-9_.:/@+,-]+$/,
+  SAFE_VALUE_RE: /^[A-Za-z0-9_.:/@+][A-Za-z0-9_.:/@+,-]*$/,
   MAX_DEPTH: 1,
   TIMEOUT_MS: 30 * 60 * 1000,
   KILL_GRACE_MS: 5000,
@@ -609,6 +609,11 @@ const DISPATCH = Object.freeze({
 });
 
 const dispatchFail = (code, message) => ({ ok: false, code, message });
+const errorText = (e) => (e && e.message ? e.message : String(e));
+/** A failed spawn: ENOENT means no runnable pi, anything else is a child failure. */
+const spawnFailure = (e) => (e && e.code === 'ENOENT'
+  ? dispatchFail('pi-not-found', 'No runnable `pi` was found on PATH.')
+  : dispatchFail('child-failed', `Could not start pi: ${errorText(e)}`));
 
 /** `key: value` pairs of a role file's leading frontmatter block (values unquoted, single line). */
 function readRoleFrontmatter(text) {
@@ -631,7 +636,13 @@ function resolveDispatchRole(role, extensionDir) {
   if (typeof role !== 'string' || !DISPATCH.ROLE_RE.test(role)) {
     return dispatchFail('role-unresolved', `"${String(role).slice(0, 80)}" is not a GSD role id (gsd-<name>).`);
   }
-  const roleDir = path.join(extensionDir, '..', 'agents');
+  // Installer layout: <config>/extensions/gsd.js beside <config>/agents and the install manifest.
+  // Package layout (pi install npm:...): <package>/pi/gsd.cjs beside the converted roles and their
+  // manifest, generated into the tarball (ADR-5559 amendment). Both are fixed relative to this file.
+  const inPackage = fs.existsSync(path.join(extensionDir, 'package-agents'));
+  const roleDir = inPackage ? path.join(extensionDir, 'package-agents') : path.join(extensionDir, '..', 'agents');
+  const manifestPath = inPackage ? path.join(roleDir, 'manifest.json') : path.join(extensionDir, '..', 'gsd-file-manifest.json');
+  const manifestKey = inPackage ? `${role}.md` : `agents/${role}.md`;
   const fileName = `${role}.md`;
   let listing;
   try { listing = fs.readdirSync(roleDir); } catch { listing = []; }
@@ -644,22 +655,60 @@ function resolveDispatchRole(role, extensionDir) {
     if (fs.lstatSync(file).isSymbolicLink()) return dispatchFail('role-unresolved', `${fileName} is a symbolic link.`);
     bytes = fs.readFileSync(file);
   } catch (e) {
-    return dispatchFail('role-unresolved', `${fileName} could not be read: ${e && e.message ? e.message : e}`);
+    return dispatchFail('role-unresolved', `${fileName} could not be read: ${errorText(e)}`);
   }
-  const manifestPath = path.join(extensionDir, '..', 'gsd-file-manifest.json');
-  if (fs.existsSync(manifestPath)) {
-    let expected;
-    try { expected = (JSON.parse(fs.readFileSync(manifestPath, 'utf8')).files || {})[`agents/${fileName}`]; } catch { expected = undefined; }
-    const actual = crypto.createHash('sha256').update(bytes).digest('hex');
-    if (expected !== actual) {
-      return dispatchFail('role-tampered', `${fileName} does not match the install manifest; reinstall GSD to restore it.`);
+  // The manifest is required: without it nothing vouches for the bytes that become the child's system prompt.
+  let expected;
+  try { expected = (JSON.parse(fs.readFileSync(manifestPath, 'utf8')).files || {})[manifestKey]; } catch { expected = undefined; }
+  const actual = crypto.createHash('sha256').update(bytes).digest('hex');
+  if (expected !== actual) {
+    return dispatchFail('role-tampered', `${fileName} does not match the install manifest (or the manifest is missing); reinstall GSD to restore it.`);
+  }
+  // A package role is a template: its `@` references carry PI_ENGINE_ROOT_TOKEN for the package location.
+  let text = bytes.toString('utf8');
+  if (inPackage) {
+    const root = path.resolve(extensionDir, '..').replace(/\\/g, '/');
+    if (!SAFE_ENGINE_ROOT.test(root)) {
+      return dispatchFail('role-unresolved', `the package location contains characters GSD will not write into a role: ${JSON.stringify(root)}`);
     }
+    text = text.split(PI_ENGINE_ROOT_TOKEN).join(root);
   }
-  return { ok: true, file, meta: readRoleFrontmatter(bytes.toString('utf8')) };
+  return { ok: true, file, bytes: Buffer.from(text, 'utf8'), meta: readRoleFrontmatter(text) };
+}
+
+/** taskkill by absolute path: a bare name on Windows is searched in the spawn cwd (the project) first. */
+function taskkillPath(env) {
+  const root = (env && (env.SystemRoot || env.windir)) || 'C:\\Windows';
+  return path.win32.join(root, 'System32', 'taskkill.exe');
 }
 
 /**
- * The dispatcher. Seams (all optional): `spawn`, `kill`, `env`, `platform`, `extensionDir`, `command`.
+ * The `pi` to run (ADR-5559 `pi-not-found`): the CLI next to this process's executable if there is
+ * one, else the first `pi` on PATH. On Windows the PATH entries are searched here and an absolute
+ * path is returned, so the project directory (the spawn cwd) is never searched for an executable.
+ * @returns {string|null} null when no runnable pi was found on Windows
+ */
+function resolvePiCommand({ platform, env, execPath, exists }) {
+  const win = platform === 'win32';
+  const pathMod = win ? path.win32 : path.posix;
+  const names = win ? ['pi.exe', 'pi.cmd'] : ['pi'];
+  for (const name of names) {
+    const sibling = pathMod.join(pathMod.dirname(execPath || ''), name);
+    if (execPath && exists(sibling)) return sibling;
+  }
+  if (!win) return 'pi';
+  const dirs = String((env && (env.Path || env.PATH)) || '').split(';').filter((d) => d && pathMod.isAbsolute(d));
+  for (const dir of dirs) {
+    for (const name of names) {
+      const candidate = pathMod.join(dir, name);
+      if (exists(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+/**
+ * The dispatcher. Seams (all optional): `spawn`, `kill`, `env`, `platform`, `extensionDir`, `command`, `execPath`, `exists`.
  * Calls run strictly one at a time (ADR-5559 section 2).
  */
 function createDispatcher(deps = {}) {
@@ -674,7 +723,7 @@ function createDispatcher(deps = {}) {
 
   function terminate(child) {
     if (isWindows) {
-      const killer = spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true });
+      const killer = spawn(taskkillPath(env), ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true });
       const bound = setTimeout(() => { if (killer && typeof killer.kill === 'function') { try { killer.kill(); } catch { /* gone */ } } }, DISPATCH.TASKKILL_TIMEOUT_MS);
       if (killer && typeof killer.once === 'function') killer.once('exit', () => clearTimeout(bound));
       return;
@@ -730,9 +779,7 @@ function createDispatcher(deps = {}) {
       closed = true;
       clearTimeout(deadline);
       clearTimeout(escalate);
-      finishWith(e && e.code === 'ENOENT'
-        ? dispatchFail('pi-not-found', 'No runnable `pi` was found on PATH.')
-        : dispatchFail('child-failed', `Could not start pi: ${e && e.message ? e.message : e}`));
+      finishWith(spawnFailure(e));
     });
     child.on('close', (code) => {
       if (closed) return;
@@ -755,14 +802,17 @@ function createDispatcher(deps = {}) {
 
   function runOne(params, ctx) {
     const p = params && typeof params === 'object' ? params : {};
-    const depth = Number.parseInt(env.GSD_PI_DISPATCH_DEPTH || '0', 10);
-    if (Number.isFinite(depth) && depth >= DISPATCH.MAX_DEPTH) {
+    // Unset or empty means top level; any other value must be a plain non-negative integer below the cap.
+    const rawDepth = env.GSD_PI_DISPATCH_DEPTH;
+    const depth = rawDepth === undefined || rawDepth === '' ? 0 : (/^\d{1,6}$/.test(rawDepth) ? Number(rawDepth) : Infinity);
+    if (depth >= DISPATCH.MAX_DEPTH) {
       return Promise.resolve(dispatchFail('depth-exceeded', 'A dispatched role cannot dispatch another role (Pi dispatch is flat).'));
     }
     const resolved = resolveDispatchRole(p.role, extensionDir);
     if (!resolved.ok) return Promise.resolve(resolved);
-    const tools = resolved.meta.tools ? resolved.meta.tools.split(',').map((s) => s.trim()).filter(Boolean).join(',') : '-gsd_dispatch';
-    if (!DISPATCH.SAFE_VALUE_RE.test(tools) || (resolved.meta.model && !DISPATCH.SAFE_VALUE_RE.test(resolved.meta.model))) {
+    const roleTools = resolved.meta.tools ? resolved.meta.tools.split(',').map((s) => s.trim()).filter(Boolean).join(',') : '';
+    const tools = roleTools || '-gsd_dispatch';
+    if ((roleTools && !DISPATCH.SAFE_VALUE_RE.test(roleTools)) || (resolved.meta.model && !DISPATCH.SAFE_VALUE_RE.test(resolved.meta.model))) {
       return Promise.resolve(dispatchFail('role-unresolved', `${p.role} has a tools or model value that is not a plain identifier list.`));
     }
     let taskDir;
@@ -770,29 +820,40 @@ function createDispatcher(deps = {}) {
       taskDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-pi-dispatch-'));
       fs.chmodSync(taskDir, 0o700);
     } catch (e) {
-      return Promise.resolve(dispatchFail('child-failed', `Could not create a private task directory: ${e && e.message ? e.message : e}`));
+      return Promise.resolve(dispatchFail('child-failed', `Could not create a private task directory: ${errorText(e)}`));
     }
     const taskFile = path.join(taskDir, 'task.md');
     const cleanup = () => { try { fs.rmSync(taskDir, { recursive: true, force: true }); } catch { /* best-effort */ } };
+    // The child reads the role from a copy of the bytes that were just hash-verified, so a swap of
+    // the installed file between the check and the child's start changes nothing.
+    const roleCopy = path.join(taskDir, 'role.md');
     try {
       fs.writeFileSync(taskFile, typeof p.task === 'string' ? p.task : '', { mode: 0o600 });
+      fs.writeFileSync(roleCopy, resolved.bytes, { mode: 0o600 });
     } catch (e) {
       cleanup();
-      return Promise.resolve(dispatchFail('child-failed', `Could not write the task file: ${e && e.message ? e.message : e}`));
+      return Promise.resolve(dispatchFail('child-failed', `Could not write the task file: ${errorText(e)}`));
     }
     const args = [
       '--mode', 'json', '-p', '--no-session', '--no-mcp', '--no-extensions', '--no-approve',
-      '--append-system-prompt', resolved.file,
+      '--append-system-prompt', roleCopy,
       ...(resolved.meta.model ? ['--model', resolved.meta.model] : []),
       '--tools', tools,
       `@${taskFile}`,
     ];
-    const childEnv = { ...env, GSD_PI_DISPATCH_DEPTH: String((Number.isFinite(depth) ? depth : 0) + 1) };
+    const childEnv = { ...env, GSD_PI_DISPATCH_DEPTH: String(depth + 1) };
     return new Promise((resolve) => {
       const finishWith = (result) => { cleanup(); resolve(result); };
       let child;
       try {
-        child = spawn(deps.command || 'pi', args, {
+        const command = deps.command || resolvePiCommand({
+          platform, env, execPath: deps.execPath || process.execPath, exists: deps.exists || ((f) => { try { return fs.statSync(f).isFile(); } catch { return false; } }),
+        });
+        if (command === null) {
+          finishWith(dispatchFail('pi-not-found', 'No runnable `pi` was found on PATH.'));
+          return;
+        }
+        child = spawn(command, args, {
           cwd: (ctx && ctx.cwd) || process.cwd(),
           env: childEnv,
           detached: !isWindows,
@@ -800,9 +861,7 @@ function createDispatcher(deps = {}) {
           windowsHide: true,
         });
       } catch (e) {
-        finishWith(e && e.code === 'ENOENT'
-          ? dispatchFail('pi-not-found', 'No runnable `pi` was found on PATH.')
-          : dispatchFail('child-failed', `Could not start pi: ${e && e.message ? e.message : e}`));
+        finishWith(spawnFailure(e));
         return;
       }
       runChild(child, ctx && ctx.signal, finishWith);
@@ -1059,5 +1118,8 @@ module.exports._internals = {
   DISPATCH,
   createDispatcher,
   resolveDispatchRole,
+  readRoleFrontmatter,
+  resolvePiCommand,
+  taskkillPath,
   buildGsdDispatchParameters,
 };

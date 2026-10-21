@@ -19,7 +19,7 @@ const fc = require('fast-check');
 const { cleanup } = require('./helpers.cjs');
 
 const extension = require('../pi/gsd.cjs');
-const { createDispatcher, DISPATCH } = extension._internals;
+const { createDispatcher, DISPATCH, readRoleFrontmatter, resolvePiCommand, taskkillPath } = extension._internals;
 
 const made = [];
 afterEach(() => {
@@ -40,6 +40,21 @@ function installTree({ roles = { 'gsd-roadmapper': '---\nname: gsd-roadmapper\nt
   }
   if (manifest) fs.writeFileSync(path.join(root, 'gsd-file-manifest.json'), JSON.stringify({ files }));
   return { root, extensionDir: path.join(root, 'extensions') };
+}
+
+/** A package-shaped tree: <root>/pi/gsd.cjs beside <root>/pi/package-agents (roles + manifest.json). */
+function packageTree({ roles = { 'gsd-roadmapper': '---\nname: gsd-roadmapper\ntools: read\n---\nRoadmap.\n' }, manifest = true } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-pi-package-'));
+  made.push(root);
+  const dir = path.join(root, 'pi', 'package-agents');
+  fs.mkdirSync(dir, { recursive: true });
+  const files = {};
+  for (const [name, body] of Object.entries(roles)) {
+    fs.writeFileSync(path.join(dir, `${name}.md`), body);
+    files[`${name}.md`] = crypto.createHash('sha256').update(body).digest('hex');
+  }
+  if (manifest) fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ files }));
+  return { root, extensionDir: path.join(root, 'pi') };
 }
 
 /** A fake child `pi`: records how it was spawned and lets the test drive its output. */
@@ -76,6 +91,7 @@ function dispatcherFor(tree, extra = {}) {
     kill: (pid, signal) => kills.push([pid, signal]),
     env: { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'sk-test' },
     platform: 'linux',
+    exists: () => false,
     ...extra,
   });
   return { dispatcher, calls: fake.calls, kills };
@@ -98,8 +114,11 @@ describe('#5569 gsd_dispatch: argv contract', () => {
     await tick();
     assert.equal(calls.length, 1);
     const { args, options, child, taskDirExistedAtSpawn } = calls[0];
-    const roleFile = path.join(tree.root, 'agents', 'gsd-roadmapper.md');
-    assert.deepEqual(args.slice(0, 9), ['--mode', 'json', '-p', '--no-session', '--no-mcp', '--no-extensions', '--no-approve', '--append-system-prompt', roleFile]);
+    assert.deepEqual(args.slice(0, 8), ['--mode', 'json', '-p', '--no-session', '--no-mcp', '--no-extensions', '--no-approve', '--append-system-prompt']);
+    // The child reads a copy of the hash-verified role bytes from the private task directory.
+    const roleCopy = args[8];
+    assert.equal(path.dirname(roleCopy), path.dirname(args[11].slice(1)));
+    assert.equal(fs.readFileSync(roleCopy, 'utf8'), fs.readFileSync(path.join(tree.root, 'agents', 'gsd-roadmapper.md'), 'utf8'));
     assert.deepEqual(args.slice(9, 11), ['--tools', 'read,bash']);
     assert.equal(args.length, 12, 'no other flags: no --model when the role pins none');
     assert.ok(args[11].startsWith('@') && path.isAbsolute(args[11].slice(1)), 'task travels as an absolute @file');
@@ -111,7 +130,7 @@ describe('#5569 gsd_dispatch: argv contract', () => {
     assert.ok(!args.join(' ').includes('Roadmap.'), 'the role prompt is never inlined into argv');
     finish(child, { out: assistant('done') + settled() });
     assert.deepEqual(await pending, { ok: true, text: 'done' });
-    assert.equal(fs.existsSync(path.dirname(args[11].slice(1))), false, 'the task directory is removed after return');
+    assert.equal(fs.existsSync(path.dirname(args[11].slice(1))), false, 'the task directory (and the role copy) is removed after return');
   });
 
   test('the task directory is private (0700)', async (t) => {
@@ -186,14 +205,58 @@ describe('#5569 gsd_dispatch: fail closed', () => {
     assert.equal(calls.length, 0);
   });
 
-  test('a role the manifest does not list is role-tampered; with no manifest at all the hash check is skipped', async () => {
+  test('a role the manifest does not list is role-tampered; so is any role when the manifest is missing or unreadable', async () => {
     const listed = installTree();
     fs.writeFileSync(path.join(listed.root, 'agents', 'gsd-extra.md'), 'x');
     assert.equal((await dispatchOnce(listed, { role: 'gsd-extra', task: 't' })).result.code, 'role-tampered');
     const bare = installTree({ manifest: false });
-    const { result, calls } = await dispatchOnce(bare, { role: 'gsd-roadmapper', task: 't' });
-    assert.equal(calls.length, 1);
-    assert.equal(result.ok, true);
+    const missing = await dispatchOnce(bare, { role: 'gsd-roadmapper', task: 't' });
+    assert.equal(missing.result.code, 'role-tampered');
+    assert.equal(missing.calls.length, 0);
+    const broken = installTree();
+    fs.writeFileSync(path.join(broken.root, 'gsd-file-manifest.json'), '{not json');
+    assert.equal((await dispatchOnce(broken, { role: 'gsd-roadmapper', task: 't' })).result.code, 'role-tampered');
+  });
+
+  test('package layout: roles come from pi/package-agents and are verified against its manifest.json', async () => {
+    const tree = packageTree();
+    const ok = await dispatchOnce(tree, { role: 'gsd-roadmapper', task: 't' });
+    assert.equal(ok.result.ok, true);
+    assert.deepEqual(ok.calls[0].args.slice(ok.calls[0].args.indexOf('--tools'), ok.calls[0].args.indexOf('--tools') + 2), ['--tools', 'read']);
+    fs.appendFileSync(path.join(tree.extensionDir, 'package-agents', 'gsd-roadmapper.md'), 'extra\n');
+    assert.equal((await dispatchOnce(tree, { role: 'gsd-roadmapper', task: 't' })).result.code, 'role-tampered');
+    const noManifest = packageTree({ manifest: false });
+    assert.equal((await dispatchOnce(noManifest, { role: 'gsd-roadmapper', task: 't' })).result.code, 'role-tampered');
+  });
+
+  test('package layout renders the engine root into the role copy the child reads', async () => {
+    const body = '---\nname: gsd-roadmapper\ntools: read\n---\nsee @__GSD_PI_ENGINE_ROOT__/gsd-core/references/x.md\n';
+    const tree = packageTree({ roles: { 'gsd-roadmapper': body } });
+    const { dispatcher, calls } = dispatcherFor(tree);
+    const pending = dispatcher.dispatch({ role: 'gsd-roadmapper', task: 't' }, { cwd: tree.root });
+    await tick();
+    const copy = fs.readFileSync(calls[0].args[8], 'utf8');
+    assert.ok(copy.includes(`@${tree.root.replace(/\\/g, '/')}/gsd-core/references/x.md`));
+    assert.ok(!copy.includes('__GSD_PI_ENGINE_ROOT__'));
+    finish(calls[0].child, { out: assistant('ok') + settled() });
+    await pending;
+  });
+
+  test('package layout at a location with unsafe characters is role-unresolved', async () => {
+    const tree = packageTree();
+    const odd = path.join(tree.root, 'we$ird');
+    fs.mkdirSync(path.dirname(odd), { recursive: true });
+    fs.renameSync(path.join(tree.root, 'pi'), path.join(odd, 'pi'));
+    const { result, calls } = await dispatchOnce({ root: tree.root, extensionDir: path.join(odd, 'pi') }, { role: 'gsd-roadmapper', task: 't' });
+    assert.equal(result.code, 'role-unresolved');
+    assert.equal(calls.length, 0);
+  });
+
+  test('package layout never falls back to a Claude-format agents/ directory beside the package', async () => {
+    const tree = packageTree();
+    fs.mkdirSync(path.join(tree.root, 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(tree.root, 'agents', 'gsd-claude-only.md'), '---\ntools: Read\n---\nx');
+    assert.equal((await dispatchOnce(tree, { role: 'gsd-claude-only', task: 't' })).result.code, 'role-unresolved');
   });
 
   test('a missing pi executable is pi-not-found', async () => {
@@ -203,7 +266,7 @@ describe('#5569 gsd_dispatch: fail closed', () => {
     assert.equal(result.code, 'pi-not-found');
   });
 
-  for (const [depth, allowed] of [['0', true], ['', true], ['1', false], ['2', false], ['7', false]]) {
+  for (const [depth, allowed] of [['0', true], ['', true], ['1', false], ['2', false], ['7', false], ['abc', false], ['-1', false], ['1.5', false], [' 1', false], ['0x1', false], ['1e3', false], ['9999999', false]]) {
     test(`GSD_PI_DISPATCH_DEPTH=${JSON.stringify(depth)} ${allowed ? 'may dispatch' : 'is depth-exceeded and never spawns'}`, async () => {
       const { result, calls } = await dispatchOnce(installTree(), { role: 'gsd-roadmapper', task: 't' }, undefined, { env: { GSD_PI_DISPATCH_DEPTH: depth } });
       assert.equal(result.ok, allowed);
@@ -211,6 +274,15 @@ describe('#5569 gsd_dispatch: fail closed', () => {
         assert.equal(result.code, 'depth-exceeded');
         assert.equal(calls.length, 0);
       }
+    });
+  }
+
+  for (const [label, front] of [['tools with a leading dash', 'tools: -bash'], ['a flag-shaped model', 'model: --evil'], ['tools with a space', 'tools: read bash']]) {
+    test(`a role with ${label} is role-unresolved and never spawns`, async () => {
+      const tree = installTree({ roles: { 'gsd-odd': `---\nname: gsd-odd\n${front}\n---\nbody\n` } });
+      const { result, calls } = await dispatchOnce(tree, { role: 'gsd-odd', task: 't' });
+      assert.equal(result.code, 'role-unresolved');
+      assert.equal(calls.length, 0);
     });
   }
 
@@ -291,20 +363,46 @@ describe('#5569 gsd_dispatch: timeout, kill and output bounds', () => {
     assert.equal((await pending).code, 'timeout');
   });
 
-  test('on Windows the group is taken down with taskkill /T /F', async () => {
+  test('on Windows the group is taken down with an absolute-path taskkill /T /F', async () => {
     mock.timers.enable({ apis: ['setTimeout'] });
     const tree = installTree();
     const fake = fakeSpawn();
-    const dispatcher = createDispatcher({ extensionDir: tree.extensionDir, spawn: fake.spawn, kill: () => assert.fail('no POSIX kill on win32'), env: {}, platform: 'win32' });
+    const piExe = 'C:\\tools\\pi.exe';
+    const dispatcher = createDispatcher({
+      extensionDir: tree.extensionDir, spawn: fake.spawn, kill: () => assert.fail('no POSIX kill on win32'),
+      env: { Path: 'C:\\tools', SystemRoot: 'D:\\Win' }, platform: 'win32', exists: (f) => f === piExe,
+    });
     const pending = dispatcher.dispatch({ role: 'gsd-roadmapper', task: 't' }, { cwd: tree.root });
     await tick();
+    assert.equal(fake.calls[0].command, piExe, 'pi is resolved from PATH to an absolute path, never searched in the project cwd');
     assert.equal(fake.calls[0].options.detached, false);
     mock.timers.tick(DISPATCH.TIMEOUT_MS);
-    const killer = fake.calls.find((c) => c.command === 'taskkill');
+    const killer = fake.calls.find((c) => /taskkill\.exe$/.test(c.command));
     assert.ok(killer, 'taskkill spawned');
+    assert.equal(killer.command, 'D:\\Win\\System32\\taskkill.exe');
     assert.deepEqual(killer.args, ['/T', '/F', '/PID', String(fake.calls[0].child.pid)]);
     finish(fake.calls[0].child, { code: null });
     assert.equal((await pending).code, 'timeout');
+  });
+
+  test('on Windows a pi that is on no absolute PATH entry is pi-not-found, never searched for in the project', async () => {
+    const tree = installTree();
+    const fake = fakeSpawn();
+    const dispatcher = createDispatcher({ extensionDir: tree.extensionDir, spawn: fake.spawn, env: { Path: '.;relative\\dir' }, platform: 'win32', exists: () => false });
+    const result = await dispatcher.dispatch({ role: 'gsd-roadmapper', task: 't' }, { cwd: tree.root });
+    assert.equal(result.code, 'pi-not-found');
+    assert.equal(fake.calls.length, 0);
+  });
+
+  test('taskkill defaults to C:\\Windows\\System32 when no system root is set', () => {
+    assert.equal(taskkillPath({}), 'C:\\Windows\\System32\\taskkill.exe');
+  });
+
+  test('resolvePiCommand prefers the CLI beside the running executable, else PATH', () => {
+    const present = new Set(['/opt/host/pi']);
+    const exists = (f) => present.has(f);
+    assert.equal(resolvePiCommand({ platform: 'linux', env: {}, execPath: '/opt/host/bun', exists }), '/opt/host/pi');
+    assert.equal(resolvePiCommand({ platform: 'linux', env: {}, execPath: '/elsewhere/node', exists }), 'pi');
   });
 
   for (const [label, size, truncated] of [['limit-1', DISPATCH.STDOUT_CAP - 1, false], ['limit', DISPATCH.STDOUT_CAP, false], ['limit+1', DISPATCH.STDOUT_CAP + 1, true]]) {
@@ -326,6 +424,38 @@ describe('#5569 gsd_dispatch: timeout, kill and output bounds', () => {
     assert.match(result.message, /TAIL/);
     assert.ok(result.message.length < DISPATCH.STDERR_TAIL + 500);
   });
+
+  for (const [label, extra] of [['limit-1', -1], ['limit', 0], ['limit+1', 1]]) {
+    test(`stderr of ${label} around the 8 KiB tail keeps exactly the tail`, async () => {
+      const tree = installTree();
+      const { dispatcher, calls } = dispatcherFor(tree);
+      const pending = dispatcher.dispatch({ role: 'gsd-roadmapper', task: 't' }, { cwd: tree.root });
+      await tick();
+      const size = DISPATCH.STDERR_TAIL + extra;
+      finish(calls[0].child, { code: 1, err: `${'a'.repeat(size - 1)}Z` });
+      const result = await pending;
+      const tail = /stderr \(tail\): (.*)$/s.exec(result.message)[1];
+      assert.equal(tail.length, Math.min(size, DISPATCH.STDERR_TAIL));
+      assert.ok(tail.endsWith('Z'));
+    });
+  }
+
+  for (const [label, extra, overflows] of [['limit-1', -1, false], ['limit', 0, false], ['limit+1', 1, true]]) {
+    test(`a single stdout line of ${label} around 16 MiB ${overflows ? 'is child-failed and stops the child' : 'is accepted'}`, async () => {
+      const tree = installTree();
+      const { dispatcher, calls, kills } = dispatcherFor(tree);
+      const pending = dispatcher.dispatch({ role: 'gsd-roadmapper', task: 't' }, { cwd: tree.root });
+      await tick();
+      calls[0].child.stdout.write('x'.repeat(DISPATCH.MAX_LINE + extra));
+      await tick();
+      assert.equal(kills.length > 0, overflows);
+      calls[0].child.stdout.write('\n' + assistant('fine') + settled());
+      finish(calls[0].child, { out: '', code: overflows ? null : 0 });
+      const result = await pending;
+      if (overflows) assert.equal(result.code, 'child-failed');
+      else assert.equal(result.ok, true);
+    });
+  }
 
   test('a retried-then-successful run reports the retry text, not the first attempt', async () => {
     const { result } = await dispatchOnce(installTree(), { role: 'gsd-roadmapper', task: 't' }, assistant('overloaded', 'error') + assistant('the real answer') + settled());
@@ -369,5 +499,21 @@ describe('#5569 gsd_dispatch: sequential queue and tool registration', () => {
     const out = await tools.gsd_dispatch.execute('id', { role: 'not-a-role', task: 't' }, undefined, undefined, { cwd: os.tmpdir() });
     assert.equal(out.isError, true);
     assert.match(out.content[0].text, /role-unresolved/);
+  });
+});
+
+describe('#5569 gsd_dispatch: role frontmatter parser', () => {
+  test('property: never throws, and round-trips simple key/value pairs with LF or CRLF', () => {
+    const key = fc.stringMatching(/^[a-z][a-z0-9_]{0,10}$/);
+    const value = fc.stringMatching(/^[A-Za-z0-9_.,-]{1,20}$/);
+    fc.assert(fc.property(fc.string(), (junk) => { readRoleFrontmatter(junk); return true; }), { seed: 5569, numRuns: 200 });
+    fc.assert(
+      fc.property(fc.uniqueArray(fc.tuple(key, value), { selector: (kv) => kv[0], maxLength: 6 }), fc.constantFrom('\n', '\r\n'), (pairs, eol) => {
+        const text = `---${eol}${pairs.map(([k, v]) => `${k}: ${v}`).join(eol)}${eol}---${eol}body`;
+        const meta = readRoleFrontmatter(text);
+        return pairs.every(([k, v]) => meta[k] === v);
+      }),
+      { seed: 5569, numRuns: 200 },
+    );
   });
 });
