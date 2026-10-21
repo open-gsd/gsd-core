@@ -219,3 +219,27 @@ describe('#4784: Xcode gate construction', () => {
     );
   });
 });
+
+// #5346: the four npm-only fallback sniffs resolve through ONE shared resolver.
+describe('gate fallbacks resolve the package manager through the shared verb (#5346)', () => {
+  const SITES = {
+    'post-merge-gate (build)': [POST_MERGE_GATE, 'resolve-package-manager build', 'npm run build'],
+    'post-merge-gate (test)': [POST_MERGE_GATE, 'resolve-package-manager test', 'npm test'],
+    'regression-gate-run': [REGRESSION_GATE_RUN, 'resolve-package-manager test', 'npm test'],
+    'audit-fix': [AUDIT_FIX, 'resolve-package-manager test', 'npm test'],
+  };
+
+  for (const [label, [file, call, fallback]] of Object.entries(SITES)) {
+    test(`${label}: resolves through "${call}" and keeps the literal "${fallback}" fallback`, () => {
+      const text = fs.readFileSync(file, 'utf-8');
+      assert.ok(text.includes(call), `${label} does not call ${call}`);
+      assert.ok(text.includes(`"${fallback}"`), `${label} lost its literal "${fallback}" fallback`);
+    });
+  }
+
+  test('post-merge-gate: a sniffed build script is logged and workflow.build_command is recommended', () => {
+    const text = fs.readFileSync(POST_MERGE_GATE, 'utf-8');
+    assert.match(text, /workflow\.build_command/);
+    assert.match(text, /running this project's .*build.* script/i);
+  });
+});

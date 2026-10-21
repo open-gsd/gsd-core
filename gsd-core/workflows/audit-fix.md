@@ -128,7 +128,8 @@ if [ -z "$AUDIT_TEST_CMD" ]; then
   elif [ -f "Justfile" ] || [ -f "justfile" ]; then
     AUDIT_TEST_CMD="just test"
   elif [ -f "package.json" ]; then
-    AUDIT_TEST_CMD="npm test"
+    AUDIT_TEST_CMD=$(gsd_run query resolve-package-manager test --cwd . 2>/dev/null || echo "npm test")
+    [ -n "$AUDIT_TEST_CMD" ] || AUDIT_TEST_CMD="npm test"
   elif [ -f "Cargo.toml" ]; then
     AUDIT_TEST_CMD="cargo test"
   elif [ -f "go.mod" ]; then
