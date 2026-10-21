@@ -38,6 +38,7 @@ module.exports = {
   "tests/check-ui-safety-gate.test.cjs",
   "tests/check-update-config-dir.test.cjs",
   "tests/chunked-planning-parallel.test.cjs",
+  "tests/ci-conformance-pr-gating.test.cjs",
   "tests/ci-docs-guard-registry.test.cjs",
   "tests/ci-test-scope.test.cjs",
   "tests/cline-install.test.cjs",
