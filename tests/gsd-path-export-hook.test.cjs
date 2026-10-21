@@ -56,7 +56,8 @@ describe('gsd-path-export SessionStart hook (#5465)', () => {
     const configDir = install();
     const r = run(configDir, { CLAUDE_ENV_FILE: envFile });
     assert.strictEqual(r.status, 0, r.stderr);
-    const bin = fs.realpathSync(path.join(configDir, 'gsd-core', 'bin'));
+    // The hook writes the directory as the shell that sources the file spells it (`/c/...` on Windows).
+    const bin = require('../hooks/gsd-path-export.js').shellPath(fs.realpathSync(path.join(configDir, 'gsd-core', 'bin')));
     assert.strictEqual(fs.readFileSync(envFile, 'utf8'), `export PATH='${bin}':"$PATH"\n`);
   });
 
@@ -107,9 +108,14 @@ describe('gsd-path-export SessionStart hook (#5465)', () => {
     const r = run(configDir, { CLAUDE_ENV_FILE: envFile });
     assert.strictEqual(r.status, 0, r.stderr);
     const line = fs.readFileSync(envFile, 'utf8').trimEnd();
+    const bin = require('../hooks/gsd-path-export.js').shellPath(fs.realpathSync(path.join(configDir, 'gsd-core', 'bin')));
+    if (process.platform === 'win32') {
+      // No POSIX sh on the runner's PATH to execute the line; pin the escaped one-word form instead.
+      assert.strictEqual(line, `export PATH='${bin.replace(/'/g, "'\\''")}':"$PATH"`);
+      return;
+    }
     // Executing the line in a shell must put exactly the bin directory on PATH.
     const shell = spawnSync('sh', ['-c', `${line}; printf %s "$PATH"`], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS, env: { PATH: '/usr/bin:/bin' } });
-    const bin = fs.realpathSync(path.join(configDir, 'gsd-core', 'bin'));
     assert.strictEqual(shell.stdout, `${bin}:/usr/bin:/bin`);
   });
 
