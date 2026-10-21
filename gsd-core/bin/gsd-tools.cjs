@@ -2165,6 +2165,13 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           testCommandNormalizer.cmdNormalizeTestCommand(cwd, args[1]);
   }
 
+  function routeResolvePackageManager({ args, cwd }) {
+    // #5346: the gates' no-configured-command fallback asks here for the
+    // project's package manager (packageManager field, then lockfile, else npm).
+    // args[1] is the script name; --cwd (already parsed into `cwd`) locates package.json.
+    require('./lib/normalize-test-command.cjs').cmdResolvePackageManager(cwd, args[1]);
+  }
+
   function routeDispatchShouldFlatten({ args, cwd, raw, error }) {
     // #1708 / #853: typed query replacing the `RUNTIME === 'codex'` prose rule.
           //
@@ -4833,6 +4840,7 @@ const HOST_COMMAND_ROUTERS = {
     // #3676 (Phase 4, epic #3344): quick-batch coordination verbs.
     'quick-batch': routeQuickBatchCommand,
     'normalize-test-command': routeNormalizeTestCommand,
+    'resolve-package-manager': routeResolvePackageManager,
     'dispatch-should-flatten': routeDispatchShouldFlatten,
     'dispatch-isolation': routeDispatchIsolation,
     'dispatch-capacity': routeDispatchCapacity,
