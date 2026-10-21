@@ -9,6 +9,7 @@ _To add your capability, see the [registry README](./README.md)._
 | Name | What it is | Latest release | GSD compat | Discussion |
 |---|---|---|---|---|
 | [Ponytail Everywhere](https://github.com/davdittrich/ponytail-everywhere) | Brings lazy-ladder discipline \(YAGNI, reuse before writing, stdlib and native features before dependencies, shortest working diff\) to GSD as an advisory planner contribution at plan:pre, matching executor and verifier fragments, and a plan-review proportionality checker contribution. An optional Claude Code plugin adds a subagent banner and a pre-expansion check that recommends a smaller route before scope-expanding commands. | ![release](https://img.shields.io/github/v/release/davdittrich/ponytail-everywhere?sort=semver&include_prereleases) | `>=1.13.0` | [discuss](https://github.com/open-gsd/gsd-core/discussions/5292) |
+| [SOTA Numerics](https://github.com/davdittrich/sota-numerics) | Advisory steering across the plan, execute, verify and ship lifecycle toward state-of-the-art numerics: internally consistent, project-consistent, unambiguous, complete, efficient, quiet-running, agent-facing code. Adds advisory fragments at plan:pre, execute:wave:pre, execute:wave:post and ship:pre, plus one blocking plan:post gate that requires an Alternatives Considered section with cited, dated alternatives and a Decided by line in every plan. | ![release](https://img.shields.io/github/v/release/davdittrich/sota-numerics?sort=semver&include_prereleases) | `>=1.16.0` | [discuss](https://github.com/open-gsd/gsd-core/discussions/5303) |
 
 ## Ponytail Everywhere
 - **Repository:** https://github.com/davdittrich/ponytail-everywhere — [latest release](https://github.com/davdittrich/ponytail-everywhere/releases/latest)
@@ -26,3 +27,20 @@ gsd capability remove ponytail
 - **GSD compatibility:** `>=1.13.0`
 - **License:** MIT
 - **Discussion / ranking:** https://github.com/open-gsd/gsd-core/discussions/5292
+
+## SOTA Numerics
+- **Repository:** https://github.com/davdittrich/sota-numerics — [latest release](https://github.com/davdittrich/sota-numerics/releases/latest)
+- **What it is:** Advisory steering across the plan, execute, verify and ship lifecycle toward state-of-the-art numerics: internally consistent, project-consistent, unambiguous, complete, efficient, quiet-running, agent-facing code. Adds advisory fragments at plan:pre, execute:wave:pre, execute:wave:post and ship:pre, plus one blocking plan:post gate that requires an Alternatives Considered section with cited, dated alternatives and a Decided by line in every plan.
+- **Author:** Dennis A. V. Dittrich
+- **Every interaction with GSD:** Loop Extension Points: plan:pre, plan:post, execute:wave:pre, execute:wave:post, ship:pre; hook kinds: contribution, gate; configKeys: sota-numerics.enabled; runtimeCompat: all
+- **Install:**
+```sh
+gsd capability install https://github.com/davdittrich/sota-numerics.git#v0.2.3
+```
+- **Uninstall:**
+```sh
+gsd capability remove sota-numerics
+```
+- **GSD compatibility:** `>=1.16.0`
+- **License:** MIT
+- **Discussion / ranking:** https://github.com/open-gsd/gsd-core/discussions/5303
