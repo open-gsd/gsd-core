@@ -35,7 +35,7 @@ const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 // Stable markers that open the two blocks every Pi skill carries; asserted as literals so
 // the tests do not import the constants they are checking.
-const CONTRACT_MARKER = '**Pi host constraint (fail closed).**';
+const CONTRACT_MARKER = '**Pi dispatch (fail closed).**';
 const INCLUDE_MARKER = '**Pi includes.**';
 
 // pi 1.3.0 skills documentation: "descriptions can contain at most 1024".
@@ -77,16 +77,15 @@ describe('#5547: convertClaudeCommandToPiSkill', () => {
 
   test('carries the fail-closed dispatch contract exactly once', () => {
     assert.equal(out.split(CONTRACT_MARKER).length - 1, 1);
-    assert.match(out, /Pi has no subagent dispatch API/);
+    assert.match(out, /`gsd_dispatch` tool/);
     assert.match(out, /Never execute the role's work inline as a substitute/);
-    assert.match(out, /issues\/5559/);
   });
 
-  test('the contract names every way a workflow spawns an agent, and handles optional steps', () => {
-    for (const phrase of [/Agent\(\.\.\.\)/, /subagent_type/, /subagent spawns/, /named `gsd-\*` role/]) {
+  test('the contract names the tool arguments, the flat limit, and handles optional steps', () => {
+    for (const phrase of [/`role`/, /`task`/, /Agent\(\.\.\.\)/, /`subagent_type`/, /cannot dispatch further/, /nested dispatch cannot run on Pi/]) {
       assert.match(out, phrase);
     }
-    assert.match(out, /optional.*offer to skip it and continue/);
+    assert.match(out, /optional, say so and offer to skip it and continue/);
     assert.match(out, /required, stop the run/);
   });
 
@@ -196,16 +195,17 @@ describe('#5547: pi descriptor layout', () => {
   const layout = cap.runtime.artifactLayout;
 
   for (const scope of ['global', 'local']) {
-    test(`${scope}: exactly one skills kind, converted for Pi`, () => {
-      assert.deepEqual(layout[scope].map((k) => k.kind), ['skills']);
+    test(`${scope}: a skills kind converted for Pi, then the agents kind (#5569)`, () => {
+      assert.deepEqual(layout[scope].map((k) => k.kind), ['skills', 'agents']);
       assert.equal(layout[scope][0].converter, 'convertClaudeCommandToPiSkill');
       assert.equal(layout[scope][0].prefix, 'gsd-');
       assert.equal(layout[scope][0].destSubpath, 'skills');
     });
   }
 
-  test('still has no agent dispatch (the fail-closed contract depends on it)', () => {
+  test('keeps the host dispatch axes: no native named dispatch (gsd_dispatch is GSD-provided)', () => {
     assert.equal(cap.runtime.hostIntegration.dispatch.namedDispatch, false);
+    assert.equal(cap.runtime.hostIntegration.dispatch.maxDepth, 0);
   });
 });
 

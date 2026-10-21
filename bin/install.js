@@ -3275,6 +3275,12 @@ function _stripCallArgument(spanText, matchStart, matchEnd, { consumeLeadingComm
  */
 function _projectRoleArgument(spanText, matchStart, matchEnd, roleValueExpr, toolConfig, canOrchestrate) {
   const { namedRoleParam, promptContentParam, structuralRoleParam, leafRoleValue } = toolConfig;
+  // #5569: a primitive that resolves the role prompt itself (Pi `gsd_dispatch`)
+  // takes the role name alone — no prompt-content argument, no structural role.
+  // The argument's own separator is left in place.
+  if (toolConfig.rolePromptResolution === 'tool') {
+    return spanText.slice(0, matchStart) + `${namedRoleParam}=${roleValueExpr}` + spanText.slice(matchEnd);
+  }
   const lineStart = spanText.lastIndexOf('\n', matchStart - 1) + 1;
   const startsOwnLine = /^[ \t]*$/.test(spanText.slice(lineStart, matchStart));
 
@@ -3403,6 +3409,20 @@ function _normalizeDispatchCallSpan(spanText, hasBraceWrapper, dispatch, toolCon
         _assertRoleResolvable('', availableRoles, runtime, 'subagent_type');
       }
       text = _projectRoleArgument(text, rm.index, rm.index + rm[0].length, roleValueExpr, toolConfig, canOrchestrate);
+    }
+  }
+
+  // 1b. #5569: a tool-resolved primitive (`rolePromptResolution: 'tool'`) takes
+  //     `role` + `task` only. The task text arrives as `prompt`, so the key is
+  //     renamed; `description` has no counterpart and is dropped.
+  if (toolConfig.rolePromptResolution === 'tool') {
+    const pm = /\bprompt(\s*[=:])/.exec(_maskStringsAndComments(text));
+    if (pm) {
+      text = text.slice(0, pm.index) + toolConfig.taskParam + text.slice(pm.index + 'prompt'.length);
+    }
+    const dm = _callArgValueRe('description').exec(_maskStringsAndComments(text));
+    if (dm) {
+      text = _stripCallArgument(text, dm.index, dm.index + dm[0].length);
     }
   }
 
@@ -3637,6 +3657,15 @@ function projectNamedDispatchToStructuralDelegate(content, dispatch, toolConfig)
     if (namedDispatch) {
       return `The \`${toolName}\` tool IS available in a top-level ${sessionName} session. Always dispatch ${rosterFlat} as separate \`${toolName}()\` calls.`;
     }
+    if (toolConfig.rolePromptResolution === 'tool') {
+      return (
+        `The \`${toolName}\` tool IS available in a top-level ${sessionName} session. It takes a \`${toolConfig.namedRoleParam}\` ` +
+        `(the installed gsd-* role name) and a \`${toolConfig.taskParam}\`, resolves the role prompt from the install itself, and ` +
+        'runs the role in an isolated child session; the child cannot dispatch further. FAIL CLOSED — surface the ' +
+        `tool's error and stop — if it reports the role unresolved; never execute the role inline as a substitute. ` +
+        `Always dispatch ${rosterFlat} as separate \`${toolName}\` calls.`
+      );
+    }
     return (
       `${sessionName} has no \`Agent\` tool. It exposes \`${toolName}\`, which dispatches by structural role — ` +
       'it has no concept of a named subagent identity. GSD projects each named gsd-* role onto this primitive ' +
@@ -3793,6 +3822,31 @@ function convertClaudeToHermesMarkdown(content, ctx) {
 }
 
 // ── End Hermes converters ────────────────────────────────────────────────────
+
+// #5569: Pi projects host-neutral `Agent(...)` calls onto its `gsd_dispatch`
+// tool (pi/gsd.cjs). The tool resolves and verifies the role prompt itself, so
+// the projection only renames the arguments (`rolePromptResolution: 'tool'`).
+const PI_DISPATCH_TOOL_CONFIG = Object.freeze({
+  toolName: 'gsd_dispatch',
+  namedRoleParam: 'role',
+  taskParam: 'task',
+  promptContentParam: 'task',
+  structuralRoleParam: 'role',
+  leafRoleValue: 'leaf',
+  backgroundParam: 'background',
+  supportsPerCallModel: false,
+  rolePromptResolution: 'tool',
+});
+
+function convertClaudeToPiMarkdown(content, ctx) {
+  const runtime = (ctx && ctx.runtime) || 'pi';
+  const dispatch = _hostIntegrationDispatch(runtime);
+  const toolConfig = Object.assign({}, PI_DISPATCH_TOOL_CONFIG, {
+    availableRoles: _resolveAvailableGsdRoles(),
+    runtime,
+  });
+  return projectNamedDispatchToStructuralDelegate(content, dispatch, toolConfig);
+}
 
 function convertSlashCommandsToCodexSkillMentions(content) {
   // Colon-style /gsd: never appears as a filesystem path segment, so no boundary guard is needed (unlike the hyphen-style below).
@@ -7921,6 +7975,10 @@ const RUNTIME_CONTENT_DISPATCH = {
       }
       return content;
     },
+  },
+  pi: {
+    // #5569: `Agent(...)` -> `gsd_dispatch(role=..., task=...)`.
+    md: (content, ctx) => convertClaudeToPiMarkdown(content, ctx),
   },
   hermes: {
     // #2284: brand-swap alone left the false "Agent tool IS available"
@@ -15029,6 +15087,8 @@ module.exports = {
     convertClaudeAgentToClineAgent,
     // #2284 — Hermes named-dispatch → delegate_task projection
     convertClaudeToHermesMarkdown,
+    convertClaudeToPiMarkdown,
+    PI_DISPATCH_TOOL_CONFIG,
     projectNamedDispatchToStructuralDelegate,
     _hostIntegrationDispatch,
     _resolveAvailableGsdRoles,
