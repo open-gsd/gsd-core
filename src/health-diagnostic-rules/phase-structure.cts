@@ -68,6 +68,10 @@ const { extractPhaseToken, normalizePhaseName, comparePhaseNum } = phaseIdMod;
 // #5060: the Phase Status Module owns the status-label ladder.
 import { phaseStatusFromFacts, toDisplayLabel } from '../phase-status.cjs';
 
+// #5291: W030 asks whether a raw report status has a known repair. The lookup is
+// a pure read of a frozen table, so `check` stays free of ambient I/O (§8.1 rule 1).
+import { legacyStatusRepairTarget } from '../verification.cjs';
+
 // ─── W005 — phase directory doesn't follow NN-name format (verify.cts:1893-1902) ─
 
 function checkW005(snapshot: PlanningSnapshot): Diagnostic[] {
@@ -182,10 +186,6 @@ function checkW009(snapshot: PlanningSnapshot): Diagnostic[] {
   }
   return diagnostics;
 }
-
-// `legacyStatusRepairTarget` is a pure lookup over a frozen table, so using it
-// here keeps `check` free of ambient I/O (§8.1 rule 1).
-import { legacyStatusRepairTarget } from '../verification.cjs';
 
 // ─── W030 — verification report status outside the closed set (#5118) ─────
 //

@@ -1480,7 +1480,7 @@ function legacyStatusRepairTarget(raw: unknown): VerifierStatus | null {
 }
 
 type LegacyStatusRepairResult =
-  | { ok: true; from: string; to: VerifierStatus }
+  | { ok: true; from: string; to: VerifierStatus; legacyStatusKept: boolean }
   | { ok: false; reason: string };
 
 /**
@@ -1507,20 +1507,28 @@ function repairLegacyVerificationStatus(filePath: string): LegacyStatusRepairRes
   const fence = locateFrontmatterFence(content);
   if (!fence || !fence.closed) return { ok: false, reason: 'the report has no closed frontmatter' };
   const lines = splitLines(content.slice(fence.openEnd, fence.bodyEnd));
-  const statusAt = lines.findIndex((l) => /^status:/.test(l));
+  // The YAML reader keeps the LAST of duplicate keys, so the line the repair
+  // edits is the last `status:` line — the very value the refusal named. A
+  // trailing comment (`status: pass_with_caveats # x`) is not part of the value.
+  let statusAt = -1;
+  lines.forEach((l, i) => { if (/^status:/.test(l)) statusAt = i; });
   if (statusAt === -1) return { ok: false, reason: 'the report frontmatter has no status' };
-  const raw = lines[statusAt].replace(/^status:\s*/, '').replace(/\s+$/, '').replace(/^(["'])(.*)\1$/, '$2');
+  const raw = lines[statusAt]
+    .replace(/^status:\s*/, '')
+    .replace(/\s+#.*$/, '')
+    .replace(/\s+$/, '')
+    .replace(/^(["'])(.*)\1$/, '$2');
   const to = legacyStatusRepairTarget(raw);
   if (to === null) return { ok: false, reason: `${describeRawStatus(raw)} has no known repair` };
-  const hasLegacy = lines.some((l) => /^legacy_status:/.test(l));
+  const legacyStatusKept = lines.some((l) => /^legacy_status:/.test(l));
   lines[statusAt] = `status: ${to}`;
-  if (!hasLegacy) lines.splice(statusAt + 1, 0, `legacy_status: ${raw}`);
+  if (!legacyStatusKept) lines.splice(statusAt + 1, 0, `legacy_status: ${raw}`);
   platformWriteSync(
     filePath,
     content.slice(0, fence.openEnd) + joinLines(lines, fence.eol) + content.slice(fence.bodyEnd),
     { verbatim: true },
   );
-  return { ok: true, from: raw, to };
+  return { ok: true, from: raw, to, legacyStatusKept };
 }
 
 interface ResolveVerificationFileOptions {

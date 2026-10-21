@@ -342,7 +342,9 @@ function runRepairAction(
       return {
         success: true,
         path: path.relative(cwd, file).split(path.sep).join('/'),
-        detail: `status ${repaired.from} -> ${repaired.to}; original kept as legacy_status`,
+        detail: repaired.legacyStatusKept
+          ? `status ${repaired.from} -> ${repaired.to}; the report's existing legacy_status was left as it was`
+          : `status ${repaired.from} -> ${repaired.to}; original kept as legacy_status`,
       };
     }
 

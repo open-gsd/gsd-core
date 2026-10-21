@@ -2218,6 +2218,24 @@ describe('W030 repairs a known legacy verification status (#5291)', () => {
     assert.strictEqual(JSON.parse(r.output).status, 'passed');
   });
 
+  test('a trailing comment on the status line is not part of the value', () => {
+    seed('---\nphase: 01-alpha\nstatus: pass_with_caveats # flaky\n---\n');
+    assert.strictEqual(w030(healthJson())[0].repairable, true);
+    healthJson(['--repair']);
+    assert.strictEqual(w030(healthJson()).length, 0, 'the repair must clear a commented status line');
+    assert.match(readFileNormalized(report1()), /^status: passed\nlegacy_status: pass_with_caveats\n/m);
+  });
+
+  test('with duplicate status keys the repair edits the one the reader refuses (the last)', () => {
+    seed('---\nphase: 01-alpha\nstatus: gaps_found\nstatus: pass_with_caveats\n---\n');
+    healthJson(['--repair']);
+    assert.strictEqual(w030(healthJson()).length, 0);
+    assert.strictEqual(
+      readFileNormalized(report1()),
+      '---\nphase: 01-alpha\nstatus: gaps_found\nstatus: passed\nlegacy_status: pass_with_caveats\n---\n',
+    );
+  });
+
   for (const raw of ['pending', 'partial', 'something_else']) {
     test(`an unmapped status (${raw}) stays unrepairable and still refuses`, () => {
       seed(`---\nphase: 01-alpha\nstatus: ${raw}\n---\n`);
