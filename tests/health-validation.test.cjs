@@ -2117,7 +2117,7 @@ describe('W024 — STATE.md commit-age freshness advisory (#2573)', () => {
 // KNOWN legacy status to its closed-set equivalent (`pass_with_caveats` ->
 // `passed`), preserving the original in `legacy_status`. The refusal itself stays.
 describe('W030 repairs a known legacy verification status (#5291)', () => {
-  const { createTempGitProject } = require('./helpers.cjs');
+  const { createTempGitProject, readFileNormalized } = require('./helpers.cjs');
   let dir;
   beforeEach(() => { dir = createTempGitProject(); });
   afterEach(() => { cleanup(dir); });
@@ -2186,7 +2186,7 @@ describe('W030 repairs a known legacy verification status (#5291)', () => {
     seed(LEGACY);
     healthJson(['--repair']);
     assert.strictEqual(
-      fs.readFileSync(report1(), 'utf8'),
+      readFileNormalized(report1()),
       '---\nphase: 01-alpha\nstatus: passed\nlegacy_status: pass_with_caveats\n---\n\nCaveat: flaky on CI.\n',
     );
   });
@@ -2194,16 +2194,17 @@ describe('W030 repairs a known legacy verification status (#5291)', () => {
   test('the repair preserves CRLF line endings', () => {
     seed(LEGACY, { eol: '\r\n' });
     healthJson(['--repair']);
-    assert.strictEqual(
-      fs.readFileSync(report1(), 'utf8'),
-      '---\r\nphase: 01-alpha\r\nstatus: passed\r\nlegacy_status: pass_with_caveats\r\n---\r\n\r\nCaveat: flaky on CI.\r\n',
-    );
+    const expectedLf = '---\nphase: 01-alpha\nstatus: passed\nlegacy_status: pass_with_caveats\n---\n\nCaveat: flaky on CI.\n';
+    assert.strictEqual(readFileNormalized(report1()), expectedLf);
+    // Every line ending is still CRLF: the file is exactly one byte longer per line than its LF form.
+    const lineCount = expectedLf.split('\n').length - 1;
+    assert.strictEqual(fs.statSync(report1()).size, Buffer.byteLength(expectedLf) + lineCount);
   });
 
   test('an existing legacy_status is never overwritten', () => {
     seed('---\nphase: 01-alpha\nstatus: pass_with_caveats\nlegacy_status: earlier\n---\n');
     healthJson(['--repair']);
-    const text = fs.readFileSync(report1(), 'utf8');
+    const text = readFileNormalized(report1());
     assert.match(text, /^status: passed$/m);
     assert.match(text, /^legacy_status: earlier$/m);
     assert.ok(!/legacy_status: pass_with_caveats/.test(text));
@@ -2220,10 +2221,10 @@ describe('W030 repairs a known legacy verification status (#5291)', () => {
   for (const raw of ['pending', 'partial', 'something_else']) {
     test(`an unmapped status (${raw}) stays unrepairable and still refuses`, () => {
       seed(`---\nphase: 01-alpha\nstatus: ${raw}\n---\n`);
-      const before = fs.readFileSync(report1(), 'utf8');
+      const before = readFileNormalized(report1());
       assert.strictEqual(w030(healthJson())[0].repairable, false);
       healthJson(['--repair']);
-      assert.strictEqual(fs.readFileSync(report1(), 'utf8'), before, 'an unmapped report must not be touched');
+      assert.strictEqual(readFileNormalized(report1()), before, 'an unmapped report must not be touched');
       const closed = runGsdTools(['phase', 'complete', '2'], dir);
       assert.strictEqual(closed.success, false);
       assert.match(closed.error, /outside the closed set/);

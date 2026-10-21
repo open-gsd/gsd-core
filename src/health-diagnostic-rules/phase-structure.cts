@@ -47,7 +47,7 @@ type PlanningSnapshot = ReturnType<typeof planningSnapshotMod.buildPlanningSnaps
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import healthDiagnosticMod = require('../health-diagnostic-types.cjs');
-const { SEVERITY, adviseRemedy } = healthDiagnosticMod;
+const { SEVERITY, REMEDY_ACTION, REMEDY_RISK, adviseRemedy } = healthDiagnosticMod;
 type Diagnostic = healthDiagnosticMod.Diagnostic;
 type Rule = healthDiagnosticMod.Rule;
 
@@ -183,6 +183,10 @@ function checkW009(snapshot: PlanningSnapshot): Diagnostic[] {
   return diagnostics;
 }
 
+// `legacyStatusRepairTarget` is a pure lookup over a frozen table, so using it
+// here keeps `check` free of ambient I/O (§8.1 rule 1).
+import { legacyStatusRepairTarget } from '../verification.cjs';
+
 // ─── W030 — verification report status outside the closed set (#5118) ─────
 //
 // `isPhaseComplete` absorbs an out-of-set report `status` (its no-throw
@@ -197,13 +201,23 @@ function checkW030(snapshot: PlanningSnapshot): Diagnostic[] {
   for (const phase of snapshot.phases.value) {
     const invalid = phase.verificationStatusError;
     if (!invalid) continue;
+    // #5291: a KNOWN legacy status is repairable (rewritten to its closed-set
+    // equivalent, original kept in `legacy_status`); any other value has no
+    // mapping and keeps the advise-only remedy — it stays refused.
+    const target = legacyStatusRepairTarget(invalid.rawStatus);
     diagnostics.push({
       code: 'W030',
       severity: SEVERITY.WARNING,
       message: `Phase ${phase.dir}: ${invalid.message}`,
-      remedy: adviseRemedy(
-        'Set the report frontmatter `status` to one of passed | gaps_found | human_needed, or delete the report and re-run the phase verification',
-      ),
+      remedy: target === null
+        ? adviseRemedy(
+          'Set the report frontmatter `status` to one of passed | gaps_found | human_needed, or delete the report and re-run the phase verification',
+        )
+        : {
+          action: REMEDY_ACTION.REPAIR_VERIFICATION_STATUS,
+          risk: REMEDY_RISK.NONE,
+          args: { file: invalid.file, from: invalid.rawStatus, to: target },
+        },
     });
   }
   return diagnostics;
@@ -244,7 +258,9 @@ const RULES: Rule[] = [
     code: 'W030',
     severity: SEVERITY.WARNING,
     description: 'Phase verification report status is outside the closed set',
-    repairable: false,
+    // #5291: repairable per finding — a KNOWN legacy status (`pass_with_caveats`)
+    // is rewritten by `--repair`; any other value stays advise-only.
+    repairable: true,
     check: checkW030,
   },
 ];
