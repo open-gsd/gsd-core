@@ -49,6 +49,32 @@ and running `ENFORCEMENT=active` to activate the other rulesets would activate
 `next-queue` too. To activate only the others, PUT them one at a time with `gh api`, or
 leave `next-queue` out until you intend to enforce it.
 
+## Reviewed or maintainer (advisory check, #5607)
+
+`.github/workflows/reviewed-or-maintainer.yml` reports a status context named
+`Reviewed or maintainer`. A PR passes when **either**:
+
+- its author is listed in [`.github/MAINTAINERS`](../.github/MAINTAINERS) (no
+  second reviewer needed), **or**
+- someone other than the author, with `write`, `maintain` or `admin`
+  permission, has an `APPROVED` review as their latest standing review **on the
+  PR's current head commit**.
+
+A stale approval (older head), the author's own review, a read-only reviewer, a
+later dismissal or change request by the same reviewer, a truncated review list
+and an unreadable maintainer file all fail the check. A later plain comment does
+not withdraw an approval. This is why it exists: a ruleset's review count is one
+number for every author, so it cannot say "required unless the author is a
+maintainer", and the sole maintainer cannot approve their own PR, which pushed
+merges onto `--admin`.
+
+The policy and the maintainer list are read from the **base** branch, never the
+PR, so a PR cannot add its own author to `MAINTAINERS`. The check is **advisory**:
+it is not a required context on any ruleset and `next`'s one-review classic
+protection is unchanged. It is promoted only after it has been observed on real
+PRs, because whether a check run created by a `pull_request_review` event
+attaches to the PR head like a `pull_request_target` one is unverified.
+
 ## 4-PR Rollout Plan
 
 | PR | Branch | Action |

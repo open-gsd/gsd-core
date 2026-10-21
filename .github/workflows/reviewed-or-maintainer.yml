@@ -1,0 +1,91 @@
+name: Reviewed or Maintainer
+
+# #5607: advisory check — a PR passes when its author is listed in
+# .github/MAINTAINERS, or when someone else with write access has approved the
+# current head. Not a required context on any ruleset yet; see
+# docs/branch-protection.md ("Reviewed or maintainer").
+#
+# Trust boundary. `pull_request_target` and `pull_request_review` run with the
+# base repository's workflow context, and this job reads untrusted PR data
+# (author, head sha, reviews). So it checks out the BASE sha only, runs only the
+# policy script and maintainer list from that trusted commit, never executes
+# anything from the PR, and binds every PR-controlled value to an env var.
+# tests/reviewed-or-maintainer-workflow.test.cjs pins this.
+#
+# `pull_request_review` is here so a new approval or a dismissal re-evaluates the
+# check. Whether a check run created by that event attaches to the PR head the
+# way a `pull_request_target` one does is UNVERIFIED, which is why this lands
+# advisory.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed]
+  # A merge queue needs every REQUIRED context to report on `merge_group`. This
+  # check is not required yet, but is wired so promoting it later does not
+  # deadlock the queue. On a merge_group event GitHub loads this workflow file
+  # from the queue's temporary merge commit (base plus the queued PRs); safety
+  # does not come from the file's origin: the job is skipped on that event.
+  merge_group:
+    types: [checks_requested]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  reviewed-or-maintainer:
+    name: Reviewed or maintainer
+    if: github.event_name != 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      # BASE sha only: the trusted policy source. Never the PR head.
+      - name: Check out policy from base
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Collect reviews and reviewer permissions
+        id: collect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          reviews_file="$RUNNER_TEMP/reviews.json"
+          roles_file="$RUNNER_TEMP/roles.json"
+
+          # --paginate returns every page or exits non-zero (the step then
+          # fails): there is no silent truncation to guard against.
+          gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews?per_page=100" --jq '.[]' | jq -s '.' > "$reviews_file"
+
+          echo '{}' > "$roles_file"
+          for login in $(jq -r '[.[] | select(.state == "APPROVED") | .user.login] | unique | .[]' "$reviews_file"); do
+            # Logins come from the API, but validate before using one in a URL path.
+            if ! [[ "$login" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?(\[bot\])?$ ]]; then
+              continue
+            fi
+            role="$(gh api "repos/$REPO/collaborators/$login/permission" --jq '.role_name' 2>/dev/null || echo none)"
+            lc="$(printf '%s' "$login" | tr '[:upper:]' '[:lower:]')"
+            jq --arg k "$lc" --arg v "$role" '. + {($k): $v}' "$roles_file" > "$roles_file.tmp"
+            mv "$roles_file.tmp" "$roles_file"
+          done
+
+          echo "reviews_file=$reviews_file" >> "$GITHUB_OUTPUT"
+          echo "roles_file=$roles_file" >> "$GITHUB_OUTPUT"
+
+      - name: Evaluate
+        env:
+          PR_AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REVIEWS_FILE: ${{ steps.collect.outputs.reviews_file }}
+          ROLES_FILE: ${{ steps.collect.outputs.roles_file }}
+          REVIEWS_COMPLETE: 'true'
+        run: node scripts/reviewed-or-maintainer-policy.cjs
