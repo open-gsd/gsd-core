@@ -1588,6 +1588,16 @@ function parentPhaseKey(key: string): string | null {
  * `{ phase: null }` because they do not begin with a phase token. The name
  * extraction (parenthetical or em-dash tail, minus status words) is unchanged.
  */
+/**
+ * True when `value` is the planned-phase writer's own status phrase
+ * (`READY TO EXECUTE`), which can sit in the name position of a `Phase:` line but is
+ * never a phase name (#5369). The one owner of that phrase: the prose parser and the
+ * planned-phase writers both ask here.
+ */
+function isPlannedPhaseStatusPhrase(value: unknown): boolean {
+  return typeof value === 'string' && /^ready to execute$/i.test(value.trim());
+}
+
 function parsePhaseFromProse(value: string | null): { phase: string | null; name: string | null } {
   if (!value) return { phase: null, name: null };
   // Coerce defensively so a non-string caller cannot throw on this canonical
@@ -1618,7 +1628,9 @@ function parsePhaseFromProse(value: string | null): { phase: string | null; name
   // The precedence-decision vocabulary is deliberately broader than the final
   // name-nulling filter below: a dash tail that merely LOOKS like a status
   // annotation should lose to a parenthetical name, without changing which
-  // extracted names are nulled (that set stays the long-standing three).
+  // extracted names are nulled (that set is the long-standing three plus the
+  // planned-phase writer's own `READY TO EXECUTE`, #5369: with no parenthetical
+  // name to prefer it was otherwise harvested as the phase name).
   const STATUS_WORD_RE = /^(?:complete|executing|not started)$/i;
   const STATUSY_TAIL_RE = /^(?:completed?|executing|not started|planning|planned|ready(?:\s+to\s+\S.{0,50})?|done|in progress|blocked|paused|verifying)$/i;
   const dashRaw = dashName?.[1]?.trim() ?? null;
@@ -1630,7 +1642,7 @@ function parsePhaseFromProse(value: string | null): { phase: string | null; name
     // `(Name) — STATUS` shape); with no parenthetical it stays the best guess.
     && !(parenName && /^[A-Z][A-Z0-9_-]*$/.test(dashRaw));
   const rawName = dashIsName ? dashRaw : (parenName?.[1] ?? dashRaw ?? null);
-  const name = rawName && !STATUS_WORD_RE.test(rawName.trim())
+  const name = rawName && !STATUS_WORD_RE.test(rawName.trim()) && !isPlannedPhaseStatusPhrase(rawName)
     ? rawName.trim()
     : null;
   return {
@@ -1802,6 +1814,7 @@ export = {
   phaseKeyFromProse,
   parentPhaseKey,
   parsePhaseFromProse,
+  isPlannedPhaseStatusPhrase,
   stripConfiguredProjectCodePrefix,
   isForeignPrefixedPhaseQuery,
   roadmapPhaseLookupSources,
