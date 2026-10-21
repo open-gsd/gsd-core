@@ -1334,6 +1334,22 @@ function beginPhaseCore(
   intent: { kind: 'beginPhase'; phaseNumber: string | number; phaseName: string | null; planCount: number | null; startPlan?: number | null },
   deps: StateTransitionDeps,
 ): StateTransitionResult {
+  // #5460: every field write runs over the document with fenced blocks hidden, so a fenced example
+  // of `Status:` / `Last Activity:` / `Current focus:` above the live line is neither matched nor
+  // rewritten. Without a fence the mask is the identity. A restore that cannot find its placeholder
+  // (it cannot, short of a writer bug) leaves the document untouched.
+  const fenceMask = maskFences(content);
+  const result = beginPhaseCoreOnMasked(fenceMask.masked, intent, deps);
+  const restored = fenceMask.restore(result.content);
+  if (restored === null) return { content, updated: [], data: result.data };
+  return { ...result, content: restored };
+}
+
+function beginPhaseCoreOnMasked(
+  content: string,
+  intent: { kind: 'beginPhase'; phaseNumber: string | number; phaseName: string | null; planCount: number | null; startPlan?: number | null },
+  deps: StateTransitionDeps,
+): StateTransitionResult {
   const updated: string[] = [];
   // #4945: a re-entry whose earlier plans already have summaries starts at the first plan still to run.
   const startPlan = intent.startPlan && intent.startPlan > 0 ? Math.floor(intent.startPlan) : 1;
@@ -1348,12 +1364,7 @@ function beginPhaseCore(
   // pattern match, not real dataflow, and only recognizes `body = stripFrontmatter(...)` written
   // out at the call site. `stripFrontmatter` is pure and idempotent, so computing it here (in
   // addition to the helper's own internal call) changes nothing observable.
-  const sourceBody = stripFrontmatter(content);
-  // #5460: every field write below runs over the body with fenced blocks hidden, so a fenced example
-  // of `Status:` / `Last Activity:` / `Current focus:` above the live line is neither matched nor
-  // rewritten. Without a fence the mask is the identity.
-  const fenceMask = maskFences(sourceBody);
-  let body = fenceMask.masked;
+  let body = stripFrontmatter(content);
 
   const today = deps.clock.localToday();
 
@@ -1456,10 +1467,7 @@ function beginPhaseCore(
   // intent-first current_phase_name override on a resume — the core just
   // preserved the mid-flight name, and an override would drift frontmatter
   // away from the preserved body value.
-  // A restore that cannot find a placeholder (it cannot, short of a writer bug) leaves the document untouched.
-  const restoredBody = fenceMask.restore(body);
-  if (restoredBody === null) return { content: reassemble(sourceBody), updated: [], data: { resumed: isAlreadyExecuting } };
-  return { content: reassemble(restoredBody), updated, data: { resumed: isAlreadyExecuting } };
+  return { content: reassemble(body), updated, data: { resumed: isAlreadyExecuting } };
 }
 
 // Local frontmatter type aliases matching frontmatter.cts so we can call
