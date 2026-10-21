@@ -20,5 +20,27 @@
       "consumes": [".planning/config.json"]
     },
     "discussion": "https://github.com/open-gsd/gsd-core/discussions/5292"
+  },
+  {
+    "id": "sota-numerics",
+    "name": "SOTA Numerics",
+    "type": "capability",
+    "repo": "davdittrich/sota-numerics",
+    "description": "Advisory steering across the plan, execute, verify and ship lifecycle toward state-of-the-art numerics: internally consistent, project-consistent, unambiguous, complete, efficient, quiet-running, agent-facing code. Adds advisory fragments at plan:pre, execute:wave:pre, execute:wave:post and ship:pre, plus one blocking plan:post gate that requires an Alternatives Considered section with cited, dated alternatives and a Decided by line in every plan.",
+    "author": "Dennis A. V. Dittrich",
+    "license": "MIT",
+    "enginesGsd": ">=1.16.0",
+    "install": "gsd capability install https://github.com/davdittrich/sota-numerics.git#v0.2.3",
+    "uninstall": "gsd capability remove sota-numerics",
+    "interactions": {
+      "loopExtensionPoints": ["plan:pre", "plan:post", "execute:wave:pre", "execute:wave:post", "ship:pre"],
+      "hookKinds": ["contribution", "gate"],
+      "configKeys": ["sota-numerics.enabled"],
+      "requires": [],
+      "runtimeCompat": ["all"],
+      "produces": [],
+      "consumes": []
+    },
+    "discussion": "https://github.com/open-gsd/gsd-core/discussions/5303"
   }
 ]

@@ -3190,8 +3190,26 @@ const capabilities = {
       "localConfigDir": ".pi",
       "configFormat": "none",
       "artifactLayout": {
-        "global": [],
-        "local": []
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToPiSkill"
+          }
+        ],
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToPiSkill"
+          }
+        ]
       },
       "triggerPrecedence": [
         "skills",
@@ -3233,6 +3251,7 @@ const capabilities = {
           "source": "pi/gsd.cjs"
         },
         "pluginOnlyInstall": true,
+        "contentRewriteProfile": "slash-lookahead-tilde-restore",
         "sharedHooksDirName": "gsd-hooks"
       }
     }
@@ -7441,8 +7460,26 @@ const runtimes = {
       "localConfigDir": ".pi",
       "configFormat": "none",
       "artifactLayout": {
-        "global": [],
-        "local": []
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToPiSkill"
+          }
+        ],
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToPiSkill"
+          }
+        ]
       },
       "triggerPrecedence": [
         "skills",
@@ -7484,6 +7521,7 @@ const runtimes = {
           "source": "pi/gsd.cjs"
         },
         "pluginOnlyInstall": true,
+        "contentRewriteProfile": "slash-lookahead-tilde-restore",
         "sharedHooksDirName": "gsd-hooks"
       }
     }

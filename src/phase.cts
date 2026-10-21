@@ -73,7 +73,7 @@ const { stripShippedMilestones, extractCurrentMilestone, currentMilestoneRawRang
 // progress counters the phase-complete transaction passes downstream.
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-lifecycle.cjs is an export= CommonJS module
 import phaseLifecycleMod = require('./phase-lifecycle.cjs');
-const { deriveProgressFromRoadmap: deriveProgressFromRoadmapForIntent, clampPercent: clampPercentForIntent } = phaseLifecycleMod;
+const { deriveProgressFromRoadmap: deriveProgressFromRoadmapForIntent, clampPercent: clampPercentForIntent, milestoneVersionOf, locateProgressTable, normalizeMilestoneToken } = phaseLifecycleMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
@@ -84,10 +84,10 @@ import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync
 import { parsePlanningDoc, findField, readNode, setFieldValue, serialize } from './planning-document.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
-import { transitionCore } from './state-transition.cjs';
+import { transitionCore, isStatePastPhase } from './state-transition.cjs';
 import { updateTableCell, deleteTableRow, escapeCell } from './markdown-table.cjs';
 // #5060: the Phase Status Module owns the ROADMAP Status-cell token vocabulary.
-import { PHASE_STATUS, toRoadmapStatusCell, phaseStatus } from './phase-status.cjs';
+import { PHASE_STATUS, WIRE_STATUS, parseRoadmapStatusCell, toRoadmapStatusCell, phaseStatus } from './phase-status.cjs';
 import { deleteSection, updateBullet, tokenizeHeadings } from './markdown-sectionizer.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- roadmap.cjs is an export= CommonJS module
 import roadmapMod = require('./roadmap.cjs');
@@ -4018,6 +4018,10 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
     const runPhaseCompleteTransaction = () => {
       const writes: WriteSpec[] = [];
       let roadmapContent: string | null = null;
+      // #5165: the phase was ALREADY complete in the ROADMAP this transaction
+      // started from (read before any mutation below): its checklist box was
+      // checked, or its Progress-table row read Complete.
+      let phaseWasAlreadyComplete = false;
 
       if (fs.existsSync(roadmapPath)) {
         const originalRoadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
@@ -4061,6 +4065,15 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           'i',
         );
 
+        // #5165: pre-mutation read of the same checklist line, checked this time.
+        const checkedBoxPattern = new RegExp(
+          `^[ \\t]*(-\\s*\\[)[xX](\\]\\s*(?:\\*\\*)?\\s*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
+        );
+        const originalMilestoneScope = extractCurrentMilestone(originalRoadmapContent, cwd);
+        phaseWasAlreadyComplete = originalMilestoneScope
+          .split('\n')
+          .some((line) => checkedBoxPattern.test(line));
+
         // Progress table row: update Plans Complete/Status/Completed columns BY
         // COLUMN NAME (handles 4- or 5-column RoadmapProgress tables) via the
         // markdown-table seam (ADR-2143 §7) — supersedes the prior ordinal
@@ -4077,6 +4090,24 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         const phaseCellRe = new RegExp(`^${phaseEscaped}\\.?(?:\\s|$)`, 'i');
         const rowMatch = (row: Record<string, string>): boolean => phaseCellRe.test((row['Phase'] ?? '').trim());
         const dateShape = /^\d{4}-\d{2}-\d{2}$/;
+
+        // #5165: a ROADMAP whose checklist box was never ticked (or has none) but
+        // whose Progress-table row already reads Complete is just as complete. A
+        // milestone-grouped table (a `Milestone` column) is read only for the
+        // milestone ROADMAP binds, so a shipped milestone's same-numbered phase
+        // cannot count.
+        if (!phaseWasAlreadyComplete) {
+          const progressTable = locateProgressTable(originalMilestoneScope);
+          if (progressTable !== null) {
+            const wantMilestone = progressTable.columns.includes('Milestone')
+              ? normalizeMilestoneToken(roadmapParserMod.getMilestoneInfo(cwd).value?.version)
+              : null;
+            phaseWasAlreadyComplete = progressTable.rows.some((row) =>
+              rowMatch(row)
+              && parseRoadmapStatusCell(row['Status']) === WIRE_STATUS.COMPLETE
+              && (wantMilestone === null || (wantMilestone !== '' && normalizeMilestoneToken(row['Milestone']) === wantMilestone)));
+          }
+        }
 
         /**
          * Within `text` (already scoped to one milestone window by the
@@ -4228,7 +4259,12 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             const plansResult = updateTableCell(text, rowMatch, 'Plans Complete', ` ${summaryCount}/${planCount} `);
             if (plansResult.ok) text = plansResult.value;
 
-            const statusResult = updateTableCell(text, rowMatch, 'Status', ` ${toRoadmapStatusCell(PHASE_STATUS.COMPLETE).padEnd(11)} `);
+            // #5165: a Status cell that already reads Complete is left untouched —
+            // re-padding it rewrote a cell the re-run had no business editing.
+            const statusResult = updateTableCell(text, rowMatch, 'Status', (current) =>
+              parseRoadmapStatusCell(current) === WIRE_STATUS.COMPLETE
+                ? current
+                : ` ${toRoadmapStatusCell(PHASE_STATUS.COMPLETE).padEnd(11)} `);
             if (statusResult.ok) text = statusResult.value;
 
             // Preserve only a valid ISO date (#1161: idempotent; self-heal
@@ -4925,6 +4961,19 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
 
       if (fs.existsSync(statePath)) {
         const originalStateContent = platformReadSync(statePath) || '';
+        // #5165: the milestone STATE asserts (ROADMAP-bound identity first,
+        // else STATE's own frontmatter) scopes the post-completion progress
+        // derivation to that milestone's Progress-table rows.
+        const stateFm = frontmatterMod.extractFrontmatter(originalStateContent, statePath) as Record<string, unknown>;
+        const storedMilestone = roadmapParserMod.getMilestoneInfo(cwd).value?.version
+          ?? milestoneVersionOf(stateFm['milestone']);
+        // #5165: re-completing a phase that is already complete in ROADMAP.md
+        // while STATE has moved past it is a no-op for STATE's position —
+        // the transition, the metrics row and the authoritative current-phase
+        // pin would all rewind it. A first-time completion (box unchecked, or
+        // STATE not past N, #2028 out-of-order) still transitions.
+        const stateAlreadyPast = phaseWasAlreadyComplete
+          && isStatePastPhase(originalStateContent, phaseNum, statePath);
         let stateContent = originalStateContent;
 
         // ADR-1769 Phase 3: the STATE.md field-update policy (Current Phase
@@ -4940,9 +4989,10 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // NOT go through readModifyWriteStateMd because STATE.md is
         // committed atomically with ROADMAP/REQUIREMENTS, ADR-3408 §8.3 /
         // #3374 / #3469).
-        const nextPhaseDisplayName =
-          phaseDisplayNameFromRoadmap(roadmapContent, nextPhaseNum) ??
-          phaseDisplayNameFromSlug(nextPhaseName);
+        const nextPhaseDisplayName = stateAlreadyPast
+          ? null
+          : phaseDisplayNameFromRoadmap(roadmapContent, nextPhaseNum) ??
+            phaseDisplayNameFromSlug(nextPhaseName);
         // #4824: classify the SELECTED next phase from disk (the same ladder
         // roadmap analyze uses) so the Status / Current Plan / Stopped-at
         // handoff does not say "ready to plan" for a phase already planned or
@@ -4962,7 +5012,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             /* best-effort: an unreadable next phase keeps `Ready to plan` */
           }
         }
-        const completeResult = transitionCore(
+        const completeResult = stateAlreadyPast ? { content: stateContent } : transitionCore(
           stateContent,
           {
             kind: 'completePhase',
@@ -4973,6 +5023,9 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             planCount,
             summaryCount,
             nextPhaseDisk,
+            // #5165: the body counter and the frontmatter progress below count the
+            // SAME milestone's Progress rows.
+            milestone: storedMilestone,
           },
           {
             clock: realClock,
@@ -4986,13 +5039,15 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         );
         stateContent = completeResult.content;
 
-        stateContent = updatePerformanceMetricsSection(
-          stateContent,
-          cwd,
-          phaseNum,
-          planCount,
-          summaryCount,
-        );
+        if (!stateAlreadyPast) {
+          stateContent = updatePerformanceMetricsSection(
+            stateContent,
+            cwd,
+            phaseNum,
+            planCount,
+            summaryCount,
+          );
+        }
         // #2736: the transition holds the next phase's exact display name in
         // the intent; pass it as authoritative so the sync's prose
         // re-derivation cannot rewrite current_phase_name to the name's own
@@ -5026,7 +5081,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           ? extractCurrentMilestone(roadmapContent, cwd)
           : null;
         const postCompletionRoadmapProgress = postCompletionRoadmapScope !== null
-          ? deriveProgressFromRoadmapForIntent(postCompletionRoadmapScope)
+          ? deriveProgressFromRoadmapForIntent(postCompletionRoadmapScope, storedMilestone)
           : null;
         const authoritativeProgress: Record<string, number> | undefined =
           postCompletionRoadmapProgress && postCompletionRoadmapProgress.completedPhases !== null

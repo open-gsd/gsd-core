@@ -11845,6 +11845,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     // command/ directories), so writing flat gsd-<cmd>.md files here would be
     // dead weight the extension never reads. Skip the flat-commands fallback
     // entirely for pluginOnlyInstall runtimes.
+    // NOTE (#5547): pi now declares a skills artifactLayout, so it takes the
+    // `_isSkillsRuntime` branch above; this branch is reached only if that layout
+    // is ever emptied again.
     console.log(`  ${green}✓${reset} pi: /gsd registered via native extension (no declarative command files)`);
   } else {
     // Claude Code local: flat gsd-<cmd>.md layout — Claude Code registers
@@ -11936,13 +11939,14 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   }
 
   // Native-extension/plugin staging for runtimes OUTSIDE the layout-driven
-  // _isSkillsRuntime branch above (ADR-1239 / #2102 Stage 1: pi). OpenCode/Kilo
+  // _isSkillsRuntime branch above (ADR-1239 / #2102 Stage 1). OpenCode/Kilo
   // already get their nativePlugin file from installOpencodeFamilyArtifacts
   // (called inside the _isSkillsRuntime branch, since both declare a non-empty
   // artifactLayout) — guard on `!_isSkillsRuntime` so this standalone call never
-  // double-stages their plugin file. A runtime like pi, whose artifactLayout is
-  // intentionally empty for both scopes (`_isSkillsRuntime` is false), still
-  // needs its declared hostBehaviors.nativePlugin file copied into targetDir.
+  // double-stages their plugin file. pi (#5547) now declares a skills layout, so
+  // its extension is staged by installRuntimeArtifacts' own native-plugin
+  // post-step; this standalone call remains for any runtime that declares a
+  // nativePlugin with an intentionally empty artifactLayout.
   if (!_isSkillsRuntime && hostBehaviorsFor(runtime).nativePlugin) {
     _installNativePluginIfDeclared(runtime, targetDir, hostBehaviorsFor(runtime), src);
   }
@@ -12025,10 +12029,10 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // here explicitly to cover them (install-engine.cts's own doc comment
   // explains why; a regression here was caught by the install-tree golden
   // fixture, tests/fixtures/install-tree/claude-local.json). It is a no-op
-  // for pi: its capability.json declares an EMPTY artifactLayout for both
-  // scopes (programmatic dispatch, no named-dispatch subagent toolkit, no
-  // host-read markdown surface), so the resolved layout has no `agents` kind
-  // to stage and the function returns `null` without writing anything.
+  // for pi: its capability.json declares a skills-only artifactLayout for both
+  // scopes (#5547; programmatic dispatch, no named-dispatch subagent toolkit),
+  // so the resolved layout has no `agents` kind to stage and the function
+  // returns `null` without writing anything.
   if (hostBehaviorsFor(runtime).pluginOnlyInstall) {
     console.log(`  ${green}✓${reset} pi: no subagent files (programmatic dispatch, no named-dispatch toolkit)`);
   } else if (_isSkillsRuntime) {
@@ -12605,6 +12609,17 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
         const fileName = path.basename(relPath);
         if (!(fileName.endsWith('.md') || fileName.endsWith('.toml'))) continue;
         if (fileName === 'CHANGELOG.md') continue;
+        // #5547: the Runtime Surface corpus is the package's canonical source
+        // bytes, kept byte-identical so a refresh can restore them
+        // (tests/install-runtime-artifacts.test.cjs); the converted artifacts
+        // are what the host reads. Counting the source form as a "leak" made
+        // every skills-runtime install print a warning about files nothing reads.
+        // Windsurf is the exception: its workflow wrappers delegate to the
+        // path-rewritten bodies at gsd-core/commands/gsd/ (#1629), so there they
+        // ARE host-read artifacts and stay in the scan.
+        const posixRelPath = relPath.replace(/\\/g, '/');
+        if (!hostBehaviorsFor(runtime).installsCommandBodiesForWorkflowDelegation
+          && (posixRelPath.startsWith('gsd-core/commands/') || posixRelPath.startsWith('gsd-core/agents/'))) continue;
         const fullPath = path.join(targetDir, relPath);
         let content;
         try {

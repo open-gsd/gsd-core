@@ -731,6 +731,118 @@ function convertClaudeCommandToKimiCodeSkill(content, skillName, _runtime = null
   return convertClaudeCommandToKimiSkill(content, skillName, _runtime, cmdNames);
 }
 
+/**
+ * The Pi dispatch contract every installed Pi skill carries (#5547).
+ *
+ * Pi 1.3.0 exposes no subagent API (capabilities/pi/capability.json:
+ * `dispatch.namedDispatch: false`, `maxDepth: 0`), but GSD workflows spawn named
+ * `gsd-*` roles through host-neutral `Agent(...)` calls. A skill that reaches such
+ * a step must therefore stop and say so — never perform the role's work inline as a
+ * substitute, which would silently skip the role's isolation and contract. The
+ * wording mirrors the FAIL CLOSED clause `projectNamedDispatchToStructuralDelegate`
+ * (bin/install.js) emits for hosts that do have a structural-delegate primitive.
+ * The real dispatch story is tracked in #5559.
+ */
+const PI_DISPATCH_CONTRACT =
+  '**Pi host constraint (fail closed).** Pi has no subagent dispatch API. Any workflow step that ' +
+  'spawns, delegates or dispatches a subagent — an `Agent(...)` or Task call, a `subagent_type`, ' +
+  '"subagent spawns", or any named `gsd-*` role — cannot run here. When you reach one, STOP that ' +
+  'step: tell the user which role it needs and that Pi cannot dispatch it yet (tracked in ' +
+  'https://github.com/open-gsd/gsd-core/issues/5559). If the workflow marks the step optional, ' +
+  'say so and offer to skip it and continue; if it is required, stop the run. Never execute the ' +
+  "role's work inline as a substitute.";
+
+/**
+ * Pi does not expand `@path` includes inside a skill body (only the editor
+ * expands them in a user message), so the workflow files a command lists under
+ * `<execution_context>` are never loaded unless the agent reads them. Pi's file
+ * tools strip a leading `@` and expand `~`, so the listed path works as given.
+ */
+const PI_INCLUDE_NOTE =
+  '**Pi includes.** Pi does not expand `@path` references in a skill. Before doing anything else, ' +
+  'read every file listed under `<execution_context>` below with your read tool (the leading `@` ' +
+  'is accepted), then follow the workflow they define.';
+
+/**
+ * Pi's own limit: skills.js rejects `description.length > 1024`, and `length` is
+ * UTF-16 code units — so the cap is in code units, not code points (a code-point
+ * cap, as the Cline converter uses, could exceed it for astral characters).
+ */
+const PI_SKILL_DESCRIPTION_MAX = 1024;
+
+/**
+ * Cut `text` to at most `max` UTF-16 code units without splitting a surrogate
+ * pair: when the cut would leave a lone high surrogate (the first half of an
+ * astral character such as an emoji), drop that half too.
+ */
+function capAtCodeUnits(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const last = cut.charCodeAt(cut.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
+
+// Pi and Kimi Code share the Agent Skills `/skill:<name>` format. These host-neutral
+// names read correctly at the Pi call sites; the Kimi-named originals stay because the
+// Kimi converter is mirrored in bin/install.js under a parity test (#2095).
+const normalizeSkillName = normalizeKimiSkillName;
+const convertGsdCommandReferencesToSkillInvocations = convertGsdCommandReferencesToKimiSkillInvocations;
+
+/**
+ * Convert a Claude command-markdown source into a Pi Agent Skill (#5547).
+ *
+ * Pi loads `<config>/skills/<name>/SKILL.md` (standard Agent Skills format) and
+ * invokes it as `/skill:<name>` — the same format and invocation prefix as Kimi
+ * Code, so command references are rewritten through the same helper. The output
+ * differs in two ways: the invocation hint names Pi, and the body opens with
+ * {@link PI_DISPATCH_CONTRACT} so a workflow that needs a named agent role stops
+ * with an explicit message instead of degrading silently.
+ *
+ * Registered as `convertClaudeCommandToPiSkill` in capabilities/pi/capability.json
+ * `artifactLayout` `converter` field. Unlike the Kimi converters this one is
+ * deliberately NOT mirrored in bin/install.js: the live skills-install path
+ * resolves converters by name through the capability descriptor, so a second copy
+ * would be dead code (the mirror in the Kimi case predates that and is kept only
+ * for its parity test).
+ */
+function convertClaudeCommandToPiSkill(content, skillName, _runtime = null, cmdNames = null) {
+  const { frontmatter, body } = extractFrontmatterAndBody(content);
+  const piSkillName = normalizeSkillName(skillName);
+  const names = cmdNames || readGsdCommandNames();
+  const rawDescription = frontmatter
+    ? extractFrontmatterField(frontmatter, 'description') || `Run GSD workflow ${piSkillName}.`
+    : `Run GSD workflow ${piSkillName}.`;
+  // The description is what Pi's skill picker shows, so a `/gsd:<cmd>` mention in it needs
+  // the same `/skill:` rewrite the body gets (#4324 is the same defect on the Claude path).
+  const description = convertGsdCommandReferencesToSkillInvocations(rawDescription, names);
+  const normalizedBody = replaceArgumentsPlaceholderOutsideFences(
+    convertGsdCommandReferencesToSkillInvocations(frontmatter ? body : content, names),
+  );
+
+  const cappedDescription = capAtCodeUnits(toSingleLine(description), PI_SKILL_DESCRIPTION_MAX);
+  return `---\nname: ${piSkillName}\ndescription: ${yamlQuote(cappedDescription)}\n---\nInvoke this Pi skill with \`/skill:${piSkillName}\`.\n\n${PI_DISPATCH_CONTRACT}\n\n${PI_INCLUDE_NOTE}\n\n${normalizedBody}`;
+}
+
+/**
+ * Claude command bodies carry a `$ARGUMENTS` placeholder that Claude substitutes
+ * with the user's text. Pi never substitutes it in a skill — it appends the
+ * arguments after the skill body — so a literal `$ARGUMENTS` would reach the
+ * model as an unexplained token. Replace it with a description of what it stands
+ * for. Fenced blocks are left alone (shell examples legitimately use it), and
+ * only the whole word is matched so `$ARGUMENTS_FOO` survives.
+ */
+function replaceArgumentsPlaceholderOutsideFences(body: string): string {
+  const lines = body.split('\n');
+  const fenced = new Set<number>();
+  for (const { openLineIdx, closeLineIdx } of scanFencedBlocks(lines)) {
+    const end = closeLineIdx === -1 ? lines.length - 1 : closeLineIdx;
+    for (let i = openLineIdx; i <= end; i += 1) fenced.add(i);
+  }
+  return lines
+    .map((line, i) => (fenced.has(i) ? line : line.replace(/\$ARGUMENTS(?![A-Za-z0-9_])/g, '(the text typed after the skill name)')))
+    .join('\n');
+}
+
 const KIMI_CANONICAL_GSD_AGENT_RE = /^gsd-[a-z0-9-]+$/;
 
 /** Split a `tools:` comma list without tearing a quoted scalar that contains a literal comma. */
@@ -3647,6 +3759,22 @@ function _applyRuntimeRewritesInner(content, runtime, pathPrefix, isGlobal = fal
       content = processAttribution(content, attribution);
       break;
 
+    // pi (#5547): a host whose file tools expand `~` but never `$HOME` (so the `@`
+    // include lines must come back out in tilde form, as for claude) AND whose
+    // skills carry bare `~/.claude` / `${CLAUDE_CONFIG_DIR:-$HOME/.claude}` forms
+    // (the gsd-surface skill) that need the negative-lookahead bare rewrites the
+    // claude profile deliberately does not have (it would change claude's bytes).
+    case 'slash-lookahead-tilde-restore':
+      content = content.replace(/~\/\.claude\//g, pathPrefix);
+      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
+      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
+      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\.\/\.claude(?![\w-])/g, `./${dirName}`);
+      content = restoreClaudeGlobalAtRefTilde(content, pathPrefix);
+      content = processAttribution(content, attribution);
+      break;
+
     // Descriptor-driven brand literals (ADR-1239 / #2092): the qwen/hermes
     // brand VALUES (CLAUDE.md/Claude Code/.claude/ replacements) now read from
     // runtime.hostBehaviors.brandingRewrites instead of hardcoded literals.
@@ -4178,6 +4306,7 @@ export = {
   resolveSpecRootReference,
   convertClaudeCommandToKimiSkill,
   convertClaudeCommandToKimiCodeSkill,
+  convertClaudeCommandToPiSkill,
   buildKimiAgentArtifacts,
   convertClaudeToCursorMarkdown,
   convertClaudeCommandToCursorSkill,

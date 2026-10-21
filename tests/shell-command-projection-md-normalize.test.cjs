@@ -393,3 +393,233 @@ describe('#5113: a verbatim write publishes the content exactly as given', () =>
     }
   });
 });
+
+// #5165: normalization is scoped to what a write changed relative to the document it replaces.
+{
+  const { contentChangedAfterNormalize } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
+
+  describe('#5165 scoped Markdown normalization', () => {
+    const lf = (s) => s.replace(/\r\n/g, '\n').replace(/\n*$/, '\n');
+
+    test('untouched regions are published as written: no blank after headings or after a list', () => {
+      const prior = '### Phase 1: One\n**Goal**: one\n- a\n- b\nafter\n';
+      assert.equal(normalizeContent(MD, prior, { prior }).content, prior);
+      assert.notEqual(normalizeContent(MD, prior).content, prior, 'the no-prior pure path still normalizes');
+    });
+
+    test('replacing a line in place adds no blank lines around it', () => {
+      const prior = '#### Phase 4: Four\n**Goal**: four\n  1. it works\n**Plans**: 1 plan\n#### Phase 5: Five\n**Goal**: five\n';
+      const next = prior.replace('**Plans**: 1 plan', '**Plans**: 1/1 plans complete');
+      assert.equal(normalizeContent(MD, next, { prior }).content, next);
+    });
+
+    test('a deletion that makes two lines newly adjacent re-spaces that junction only', () => {
+      const prior = '### H\ntext\n- a\nmore\n';
+      const next = '### H\n- a\nmore\n';
+      // `### H` and `- a` were not adjacent before: the write made the junction, so the
+      // after-heading rule applies to it. `- a`/`more` was untouched and stays tight.
+      assert.equal(normalizeContent(MD, next, { prior }).content, '### H\n\n- a\nmore\n');
+    });
+
+    test('a deletion between lines that need no separation changes nothing else', () => {
+      const prior = 'one\nstray\ntwo\n- a\nthree\n';
+      assert.equal(normalizeContent(MD, 'one\ntwo\n- a\nthree\n', { prior }).content, 'one\ntwo\n- a\nthree\n');
+    });
+
+    test('a heading that replaces a prose line in place brings its own separation', () => {
+      const prior = 'intro\nStatus line\nbody\n';
+      const next = 'intro\n## Status\nbody\n';
+      assert.equal(normalizeContent(MD, next, { prior }).content, 'intro\n\n## Status\n\nbody\n');
+    });
+
+    test('a fence that replaces a prose line in place brings its own separation', () => {
+      const prior = 'intro\nplaceholder\nbody\n';
+      const next = 'intro\n```\nbody\n';
+      assert.equal(normalizeContent(MD, next, { prior }).content, 'intro\n\n```\nbody\n');
+    });
+
+    test('renaming a heading in place keeps the tight line after it (the roadmap template shape)', () => {
+      const prior = '#### Phase 5: Five\n**Goal**: five\n**Plans**: TBD\n#### Phase 6: Six\n**Goal**: six\n';
+      const next = prior.replace('Phase 5: Five', 'Phase 5: Five (renamed)');
+      assert.equal(normalizeContent(MD, next, { prior }).content, next);
+      const renumbered = prior.replace('Phase 6: Six', 'Phase 7: Six');
+      assert.equal(normalizeContent(MD, renumbered, { prior }).content, renumbered);
+    });
+
+    test('replacing a fence line with a fence line keeps the spacing around it', () => {
+      const prior = 'intro\n```js\ncode\n```\nafter\n';
+      const next = prior.replace('```js', '```ts');
+      assert.equal(normalizeContent(MD, next, { prior }).content, next);
+    });
+
+    test('a BOM on either first line does not make an unchanged document look rewritten', () => {
+      const prior = '﻿### Phase 1\n**Goal**: one\n- a\nafter\n';
+      for (const next of [prior, prior.slice(1)]) {
+        assert.equal(normalizeContent(MD, next, { prior }).content, next);
+      }
+      assert.equal(normalizeContent(MD, prior.slice(1), { prior: prior.slice(1) }).content, prior.slice(1));
+    });
+
+    test('a decorated table cell edit leaves untouched sections tight', () => {
+      const prior = '## Progress\n| Phase | Status |\n|---|---|\n| 1 | Planned |\n### Next\ntext\n';
+      const next = prior.replace('Planned', '**Complete**');
+      assert.equal(normalizeContent(MD, next, { prior }).content, next);
+    });
+
+    test('an inserted section is still normalized', () => {
+      const prior = 'intro line\n';
+      const next = 'intro line\n## New\ntext\n';
+      assert.equal(normalizeContent(MD, next, { prior }).content, 'intro line\n\n## New\n\ntext\n');
+    });
+
+    test('without a prior the whole document is normalized, byte-identical to before', () => {
+      const doc = '## H\n- a\ntext\n\n\n\nend\n';
+      assert.equal(normalizeContent(MD, doc).content, '## H\n\n- a\n\ntext\n\nend\n');
+      assert.equal(normalizeContent(MD, doc, { prior: '' }).content, normalizeContent(MD, doc).content);
+    });
+
+    test('a CRLF prior and CRLF document publish LF with untouched junctions kept', () => {
+      const prior = '## H\r\ntext\r\n- a\r\nafter\r\n';
+      const next = '## H\r\ntext\r\n- a\r\nafter!\r\n';
+      assert.equal(normalizeContent(MD, next, { prior }).content, '## H\ntext\n- a\nafter!\n');
+    });
+
+    test('frontmatter stays untouched and the body is scoped', () => {
+      const prior = '---\na: 1\n# note\nb: 2\n---\n# Heading\ntext\n';
+      const next = '---\na: 1\n# note\nb: 3\n---\n# Heading\ntext\n';
+      assert.equal(normalizeContent(MD, next, { prior }).content, next);
+    });
+
+    test('a fenced block next to untouched prose is preserved', () => {
+      const prior = 'prose\n```\ncode\n```\nprose2\n';
+      const next = 'prose\n```\ncode!\n```\nprose2\n';
+      assert.equal(normalizeContent(MD, next, { prior }).content, next);
+    });
+
+    describe('platformWriteSync reads the prior within bounds and in the caller encoding', () => {
+      const withDir = (fn) => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5165-'));
+        try { fn(path.join(dir, MD)); } finally { cleanup(dir); }
+      };
+      // A tight list (untouched, would be re-spaced if the whole document were normalized),
+      // padded with one-char lines to the requested byte size.
+      const doc = (bytes) => {
+        const head = '### H\n- a\ntail line\n';
+        const pad = Math.max(0, bytes - Buffer.byteLength(head));
+        return head + 'x'.repeat(Math.max(0, pad - 1)) + '\n';
+      };
+
+      const MAX_PRIOR = 2 * 1024 * 1024;
+      for (const [label, bytes, scoped] of [
+        ['limit-1', MAX_PRIOR - 1, true],
+        ['limit', MAX_PRIOR, true],
+        ['limit+1', MAX_PRIOR + 1, false],
+      ]) {
+        test(`a ${label}-byte prior is ${scoped ? 'read: untouched spacing kept' : 'not read: whole document normalized'}`, () => {
+          withDir((file) => {
+            const prior = doc(bytes);
+            assert.equal(Buffer.byteLength(prior), bytes, 'fixture size');
+            fs.writeFileSync(file, prior);
+            platformWriteSync(file, prior.replace('x\n', 'y\n'));
+            const out = fs.readFileSync(file, 'utf-8');
+            assert.equal(out.startsWith('### H\n- a\ntail line\n'), scoped);
+          });
+        });
+      }
+
+      test('a destination that is not a regular file is not read as a prior (no hang on a device)', (t) => {
+        if (process.platform === 'win32') return t.skip('no /dev/zero on Windows');
+        withDir((file) => {
+          fs.symlinkSync('/dev/zero', file);
+          platformWriteSync(file, '### H\n- a\ntail line\n');
+          assert.equal(fs.lstatSync(file).isFile(), true, 'the symlink is replaced by the published file');
+          assert.equal(fs.readFileSync(file, 'utf-8'), '### H\n\n- a\n\ntail line\n', 'normalized whole, as a new file');
+        });
+      });
+
+      test('a latin1 prior is decoded as latin1, so unchanged lines still match', () => {
+        withDir((file) => {
+          const prior = '### Café\n- a\ntail line\n';
+          fs.writeFileSync(file, prior, 'latin1');
+          platformWriteSync(file, prior.replace('tail line', 'tail line!'), { encoding: 'latin1' });
+          assert.equal(fs.readFileSync(file, 'latin1'), '### Café\n- a\ntail line!\n');
+        });
+      });
+    });
+
+    test('contentChangedAfterNormalize compares what the scoped write would land', () => {
+      const before = '### H\ntext\n';
+      assert.equal(contentChangedAfterNormalize(MD, before, before), false);
+      assert.equal(contentChangedAfterNormalize(MD, before, '### H\ntext2\n'), true);
+    });
+
+    describe('edit-distance cap (limit-1 / limit / limit+1 replaced lines)', () => {
+      // Replacing a line is a delete plus an insert: 2 edits. 200 replaced lines
+      // are exactly 400 edits (the cap); 201 are 402. The replacement is a list item
+      // beside prose: scoped, its edges inherit the prior spacing (no blank line);
+      // whole-document normalization separates every list item from the prose after it.
+      const build = (replaced) => {
+        const prior = Array.from({ length: 500 }, (_, i) => `Item ${i}`).join('\n') + '\n';
+        const lines = prior.split('\n');
+        for (let r = 0; r < replaced; r++) lines[r * 2] = `- Changed ${r}`;
+        return { prior, next: lines.join('\n') };
+      };
+      for (const [replaced, scoped] of [[199, true], [200, true], [201, false]]) {
+        test(`${replaced} replaced lines ${scoped ? 'stay scoped' : 'fall back to whole-document normalization'}`, () => {
+          const { prior, next } = build(replaced);
+          const out = normalizeContent(MD, next, { prior }).content;
+          const hasBlank = out.split('\n').slice(0, -1).some((l) => l === '');
+          assert.equal(hasBlank, !scoped);
+        });
+      }
+    });
+
+    // Alphabet: prose, headings, tight list items, fence lines and blank lines.
+    const lineGen = fc.oneof(
+      fc.stringMatching(/^[A-Z][a-z]{1,8}( [a-z]{1,8}){0,3}\.$/),
+      fc.stringMatching(/^#{1,3} [A-Za-z]{1,8}$/),
+      fc.stringMatching(/^[-*] [A-Za-z]{1,8}$/),
+      fc.stringMatching(/^[1-9]\. [A-Za-z]{1,8}$/),
+      fc.constant('```'),
+      fc.constant(''),
+    );
+    const docGen = fc.array(lineGen, { minLength: 1, maxLength: 30 }).map((l) => l.join('\n') + '\n');
+
+    test('property: a document written over itself is published byte-identical', () => {
+      fc.assert(
+        fc.property(docGen, (doc) => {
+          assert.equal(normalizeContent(MD, doc, { prior: doc }).content, lf(doc));
+        }),
+        { seed: 5165, numRuns: 300, endOnFailure: true },
+      );
+    });
+
+    // Writing the same content twice must land the same file. (Re-normalizing the persisted
+    // result against itself would be vacuous: it is property 1 applied to `once`.)
+    test('property: writing the same content again over its own result is a no-op (idempotent)', () => {
+      fc.assert(
+        fc.property(docGen, docGen, (next, prior) => {
+          const once = normalizeContent(MD, next, { prior }).content;
+          assert.equal(normalizeContent(MD, next, { prior: once }).content, once);
+        }),
+        { seed: 51651, numRuns: 300, endOnFailure: true },
+      );
+    });
+
+    test('property: lines shared with the prior keep their spacing', () => {
+      fc.assert(
+        fc.property(docGen, fc.nat({ max: 29 }), fc.stringMatching(/^[A-Z][a-z]{2,8}\.$/), (prior, at, replacement) => {
+          const lines = prior.split('\n');
+          const idx = at % Math.max(1, lines.length - 1);
+          lines[idx] = replacement;
+          const next = lines.join('\n');
+          const out = normalizeContent(MD, next, { prior }).content.split('\n');
+          // Replacing one line in place changes that line only (scoped), up to trailing-newline policy.
+          const expected = lf(next).split('\n');
+          assert.deepEqual(out, expected);
+        }),
+        { seed: 51652, numRuns: 300, endOnFailure: true },
+      );
+    });
+  });
+}
