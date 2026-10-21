@@ -22632,8 +22632,9 @@ describe('planned-phase without --name keeps the status out of the phase name (#
   });
 
   test('an already-polluted curated name is not copied into the body label', () => {
-    const { after } = plan(`---\ncurrent_phase_name: READY TO EXECUTE\n---\n${POSITION}`);
+    const { after, name } = plan(`---\ncurrent_phase_name: READY TO EXECUTE\n---\n${POSITION}`);
     assert.ok(!/\(READY TO EXECUTE\)/.test(after), after);
+    assert.notStrictEqual(name, 'READY TO EXECUTE', 'the polluted frontmatter name is not reasserted');
   });
 
   test('--name still sets the name', () => {

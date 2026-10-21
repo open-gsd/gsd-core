@@ -2531,7 +2531,7 @@ function plannedPhaseCore(
   // fragment a pre-fix write left there is never copied back into the name slot.
   const curatedName = existingFm['current_phase_name'];
   const labelName = intent.phaseName
-    ?? (typeof curatedName === 'string' && curatedName.trim() !== '' && !/^ready to execute$/i.test(curatedName.trim())
+    ?? (typeof curatedName === 'string' && curatedName.trim() !== '' && !phaseIdMod.isPlannedPhaseStatusPhrase(curatedName)
       ? curatedName.trim()
       : null);
   body = mutateCurrentPositionForAdvance(
