@@ -42,6 +42,7 @@ module.exports = {
   "tests/check-update-config-dir.test.cjs",
   "tests/check-update-fail-open.test.cjs",
   "tests/chunked-planning-parallel.test.cjs",
+  "tests/ci-conformance-pr-gating.test.cjs",
   "tests/ci-docs-guard-registry.test.cjs",
   "tests/ci-rebase-check.test.cjs",
   "tests/ci-test-scope.test.cjs",
