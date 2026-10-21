@@ -17727,3 +17727,88 @@ describe('#4972: phase complete warns when an active verify:post audit is missin
   });
 
 }
+
+// #5543: with no resolvable active milestone, `phase complete` must not write
+// into a shipped (archived) <details> block.
+describe('#5543 phase complete confines the unresolved-milestone fallback to the active region', () => {
+  const SHIPPED = `<details>
+<summary>v1.0 (shipped)</summary>
+
+### Phase 1: Old
+
+**Goal:** old
+**Plans:** 1/1
+Plans:
+- [ ] 01-01-PLAN.md
+
+</details>
+`;
+  const ACTIVE = `
+## v2.0 Active
+
+- [ ] **Phase 1: New**
+
+### Phase 1: New
+
+**Goal:** new
+**Plans:** 0/1
+Plans:
+- [ ] 01-01-PLAN.md
+`;
+  let dir;
+  const seed = (roadmap, state) => {
+    fs.mkdirSync(path.join(dir, '.planning', 'phases', '01-new'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.planning', 'config.json'), '{}');
+    fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), state);
+    fs.writeFileSync(path.join(dir, '.planning', 'phases', '01-new', '01-01-PLAN.md'),
+      '---\nphase: new\nplan: 01-01\nwave: 1\n---\n# Plan\n');
+    fs.writeFileSync(path.join(dir, '.planning', 'phases', '01-new', '01-01-SUMMARY.md'),
+      '---\nphase: new\nplan: 01-01\n---\n# Summary\n');
+    fs.writeFileSync(path.join(dir, '.planning', 'phases', '01-new', '01-VERIFICATION.md'),
+      '---\nstatus: passed\n---\n# Verification\n');
+    fs.writeFileSync(path.join(dir, '.planning', 'ROADMAP.md'), `# Roadmap\n\n${roadmap}`);
+  };
+  const roadmapText = () => fs.readFileSync(path.join(dir, '.planning', 'ROADMAP.md'), 'utf8');
+  const complete = () => {
+    const r = runGsdTools('phase complete 1', dir);
+    assert.ok(r.success, `phase complete failed: ${r.error}`);
+  };
+
+  beforeEach(() => { dir = createTempProject(); });
+  afterEach(() => { cleanup(dir); });
+
+  test('ticks the active phase and leaves the shipped <details> block byte-identical', () => {
+    seed(SHIPPED + ACTIVE, '# State\n');
+    complete();
+    const out = roadmapText();
+    assert.ok(out.includes(SHIPPED), `shipped block was modified:\n${out}`);
+    const active = out.slice(out.lastIndexOf('</details>'));
+    assert.match(active, /- \[x\] 01-01-PLAN\.md/);
+    assert.match(active, /- \[x\] \*\*Phase 1: New\*\*/);
+  });
+
+  test('with two shipped blocks only the region after the last one is written', () => {
+    const second = SHIPPED.replace('v1.0', 'v1.5').replace('Phase 1: Old', 'Phase 1: Older');
+    seed(SHIPPED + '\n' + second + ACTIVE, '# State\n');
+    complete();
+    const out = roadmapText();
+    assert.ok(out.includes(SHIPPED) && out.includes(second), `a shipped block was modified:\n${out}`);
+    assert.match(out.slice(out.lastIndexOf('</details>')), /- \[x\] 01-01-PLAN\.md/);
+  });
+
+  test('a sole-milestone ROADMAP without a milestone key still completes its phase', () => {
+    seed(ACTIVE.trimStart(), '# State\n');
+    complete();
+    const out = roadmapText();
+    assert.match(out, /- \[x\] 01-01-PLAN\.md/);
+    assert.match(out, /- \[x\] \*\*Phase 1: New\*\*/);
+  });
+
+  test('a resolvable milestone in STATE.md still scopes to it', () => {
+    seed(SHIPPED + ACTIVE, '---\nmilestone: v2.0\n---\n# State\n');
+    complete();
+    const out = roadmapText();
+    assert.ok(out.includes(SHIPPED), `shipped block was modified:\n${out}`);
+    assert.match(out.slice(out.lastIndexOf('</details>')), /- \[x\] 01-01-PLAN\.md/);
+  });
+});
