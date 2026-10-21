@@ -8,6 +8,22 @@ Source labels: **[M]** measured in this repo, **[D]** GitHub docs (fetched 2026-
 
 ---
 
+## Status and corrections (2026-10-21, end of day)
+
+**Shipped:** #5602 (`merge_group` on the six metadata checks), #5606 (matrix split behind the repo variable `GSD_PR_LINUX_ONLY`, unset), #5608 (`next-queue.json`, committed disabled), #5609 (advisory `Reviewed or maintainer` check + `.github/MAINTAINERS`). #5611 (docs fix for the rule-suites command) is merged. #5614 (advisory `Self-test report` check + fix-template section) is merged. **Applied by the maintainer:** the `next-queue` ruleset, id 25600238, in `evaluate` mode; GitHub accepted every `merge_queue` value as committed. Nothing is enforced; the queue is not on and the variable is unset.
+
+**Corrections to this memo (do not rely on the text below where it conflicts):**
+
+1. **`dismiss-unauthorized-pr-approvals.yml` has no maintainer list.** It uses collaborator roles and a blocked-reviewer set. §6 option B and the §10 risk row said the new check would "read the same maintainer source"; there was none. The list is the new `.github/MAINTAINERS` (initially `trek-e`).
+2. **The evaluate log is not a usable signal here.** The documented command (`.../rulesets/<id>/rule-suites`) is a 404; the real endpoint is repo-level (`GET /repos/{owner}/{repo}/rulesets/rule-suites`) and it returns an empty list for day, week and month, even though the three older rulesets have been in `evaluate` mode for weeks. So Phase 2's exit check "one week of `rule-suites` hits reviewed", and the idea that `evaluate` would reveal whether the back-merge is caught, do not work. Replace them with direct observation: the first real back-merge after the queue is enforced, and the Settings > Rules > Insights page.
+3. **The bypass actor is still undecided.** The `gsd-bot` actor id could not be looked up (no `admin:org` scope), and `GSD_BOT_PR_TOKEN` may be a personal access token, which cannot be a ruleset bypass actor. §4 option A remains unproven.
+4. **The matrix split does depend on the queue.** An earlier version of the plan said it did not. It shipped behind an off-by-default variable for that reason: set `GSD_PR_LINUX_ONLY=true` only on the day the queue is enforced.
+5. **Updating a PR branch re-runs CI.** `next` requires an up-to-date branch, so each "Update branch" costs a full run for changes that rarely interact. Rebase last, immediately before opening the PR; the queue removes this once enforced.
+6. **`Reviewed or maintainer` ships advisory** because on `pull_request_review` for a fork PR the workflow file is loaded from the PR's merge ref. Before it is ever required, evaluate only on `pull_request_target`.
+7. **`sync-rulesets.sh` applies every file with one `ENFORCEMENT` value, from the working tree it is run in.** From a branch without `next-queue.json` it silently skips it; with `ENFORCEMENT=active` it would activate the queue along with the rest.
+
+---
+
 ## 1. TL;DR
 
 1. **Merge method: `SQUASH`.** The train memo rejected squash because it would squash a whole train into one commit. With a queue on `next` there is no train: each queued PR becomes one commit, which is already the repo convention (`docs/branching.md`: "Squash-merge means each PR becomes one commit on `next`") and what `release.yml`'s one-`fix:`-commit-per-fix hotfix pick expects. `REBASE` would land every fix PR as its full commit list (7.0 commits on average [M, train memo §2.2]). `MERGE` breaks the convention.
@@ -53,7 +69,7 @@ Options:
 
 | Option | How | Cost | Verdict |
 |---|---|---|---|
-| **A. Ruleset bypass for the back-merge actor only** | Add one bypass actor (the `gsd-bot` app or a dedicated role) with mode `pull_request`, so only that actor can merge outside the queue | Smallest. Relies on bypass applying to the queue rule: **UNVERIFIED** | **Recommended; verify in `evaluate` first.** |
+| **A. Ruleset bypass for the back-merge actor only** | Add one bypass actor (the `gsd-bot` app or a dedicated role) with mode `pull_request`, so only that actor can merge outside the queue | Smallest. Relies on bypass applying to the queue rule: **UNVERIFIED** | **Recommended, but unproven**: the `evaluate` log cannot verify it here (correction 2); test with the first real back-merge. |
 | B. Back-merge via the queue with method `MERGE` | Needs a separate queue per PR type, which GitHub does not offer: one method per queue | not possible | Rejected |
 | C. Replace the back-merge with a direct fast-forward-style push | Rework of the release machinery | Large; touches the release flow | Out of scope |
 | D. Rebuild #4999's merger workflow | A privileged workflow that merges when green | Exactly what #5001 reverted | Do not |
@@ -104,7 +120,7 @@ If A fails the verification, Phase 3 stops and the queue is not enabled. The cos
 
 Notes [R]:
 1. `check_response_timeout_minutes` is a required integer and is left as a placeholder on purpose; it is the maintainer's call. Input: the p90 green run is 65.4 min. Replace the string before applying; the file is not valid as written.
-2. **Batched queue (decided 2026-10-21).** `max_entries_to_merge: 3`, `min_entries_to_merge: 2`, wait 15 min: the queue holds up to 15 minutes to collect two PRs, never more than three, then runs the full matrix **once** on the group. Per-PR runs are Linux-only and cheap; the expensive Windows and macOS lanes run only on `merge_group` [main memo, decision 2]. Estimated effect: full runs fall from one per PR toward one per 2 to 3 PRs; the numbers are in `main-vs-next-branch-model.md` §4.2 and must be recomputed for batching in Phase 4. Cost: when a group fails, GitHub removes the failing PR and rebuilds the rest [D], so a bad PR costs the group one extra full run, and attribution needs the failing job log. `ALLGREEN` keeps a PR whose own required checks failed out of a group. Raise or lower the size from Phase 4 data. The Rust project batches low-risk PRs for the same reason [X: https://forge.rust-lang.org/release/rollups.html]. How `min_entries_to_merge_wait_minutes` interacts with `max_entries_to_build: 2` is stated only briefly in the docs: **UNVERIFIED**; observe it in `evaluate`.
+2. **Batched queue (decided 2026-10-21).** `max_entries_to_merge: 3`, `min_entries_to_merge: 2`, wait 15 min: the queue holds up to 15 minutes to collect two PRs, never more than three, then runs the full matrix **once** on the group. Per-PR runs are Linux-only and cheap; the expensive Windows and macOS lanes run only on `merge_group` [main memo, decision 2]. Estimated effect: full runs fall from one per PR toward one per 2 to 3 PRs; the numbers are in `main-vs-next-branch-model.md` §4.2 and must be recomputed for batching in Phase 4. Cost: when a group fails, GitHub removes the failing PR and rebuilds the rest [D], so a bad PR costs the group one extra full run, and attribution needs the failing job log. `ALLGREEN` keeps a PR whose own required checks failed out of a group. Raise or lower the size from Phase 4 data. The Rust project batches low-risk PRs for the same reason [X: https://forge.rust-lang.org/release/rollups.html]. How `min_entries_to_merge_wait_minutes` interacts with `max_entries_to_build: 2` is stated only briefly in the docs: **UNVERIFIED**; observe it when the queue is enforced.
 3. `ALLGREEN` means a failing PR never joins a group. `HEADGREEN` would let a failing PR through if the last PR in the group passes [D].
 4. Keep the existing seven required contexts on `next`. The queue does not replace them; it re-runs them on the merge-group commit.
 5. "Require merge queue" is repository-level only, not organization-level [D, available-rules page; carried over from the train memo and not re-fetched here]: **UNVERIFIED** in this pass.
@@ -119,7 +135,7 @@ The pull-request rule already in `main-protection.json` has `required_approving_
 | **B. Count 0 in the ruleset; a required status check enforces it** | New check `Reviewed or maintainer` (pull_request_target, no checkout of PR code): passes when the author is in the maintainer list, otherwise requires an approving review from a different account with write access | **Recommended.** Matches the stated policy exactly and needs no bypass. The maintainer list lives in a file on `next` (initially `trek-e` only). |
 | C. CODEOWNERS with `require_code_owner_review` | Reviews are required from owners; the file must be on the base branch [D] | Does not exempt the owner from needing a second reviewer. Rejected. |
 
-The existing `dismiss-unauthorized-pr-approvals.yml` already exists [M, workflow list]; Option B's check should read the same maintainer source so there is one list. I did not read that file's contents in this pass: **check before building**.
+`dismiss-unauthorized-pr-approvals.yml` exists but has no maintainer list (see correction 1), so Option B reads a new `.github/MAINTAINERS`.
 
 ---
 
@@ -141,7 +157,7 @@ Without a train there is no cutoff, so the report moves from "required before ad
 |---|---|---|---|
 | **0. Baseline** | Record the §2.2 numbers of the train memo as the "before". Add the date range and commands to the PR. | no | numbers saved |
 | **1. Wiring** | PR: `merge_group` trigger on the six metadata workflows, jobs skipped on that event. Nothing else. | no queue yet | a manual test: create a throwaway branch in a fork or test repo, enable a queue there, confirm all seven contexts report |
-| **2. Evaluate** | Add `next-queue.json` in `evaluate`, plus the `Reviewed or maintainer` check in advisory mode and the report format check in advisory mode. Decide the timeout. The matrix split and batch size are decided (§6 note 2). | evaluate only | one week of `rule-suites` hits reviewed (`docs/branch-protection.md`, "Reading evaluate-mode logs"); bypass-on-queue behavior confirmed or refuted for the back-merge actor |
+| **2. Evaluate** | Add `next-queue.json` in `evaluate`, plus the `Reviewed or maintainer` check in advisory mode and the report format check in advisory mode. Decide the timeout. The matrix split and batch size are decided (§6 note 2). | evaluate only | NOT achievable via the evaluate log (correction 2); replaced by observing the first enforced back-merge and the Insights page |
 | **3. Enable** | Set enforcement `active`. Turn rebase merging OFF. Make `Reviewed or maintainer` required. Update `bug-fixer.md` step 6 to `gh pr merge` (adds to the queue; auto-merge if checks are pending [D: https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/merging-a-pull-request-with-a-merge-queue]) and remove the `--admin` path. | yes | back-merge still merges; a deliberately failing PR is ejected without blocking the next |
 | **4. Measure** | After 4 weeks compare with Phase 0: landings-while-open for `fix/` PRs, force-push share, BEHIND count, queue wait time, ejections. | — | decision memo: keep, tune batch size, or revisit the train |
 
@@ -173,7 +189,7 @@ Far smaller than the train version. Line numbers are from the current `~/.claude
 | A flaky test ejects an unrelated PR | Policy stays: no re-run to green. Ejection becomes a visible, attributable event instead of a silent admin merge. Real flake rate was not measurable [train memo §2.4]. |
 | Back-merge breaks | Gated by Phase 2 exit; Phase 3 does not start without a working answer. |
 | Fork PRs show `action_required` for approval before CI runs (42 in the 8-day window [M]) | Unchanged by the queue. Approving the workflow run is still a manual step before a PR can enter the queue. |
-| The maintainer list in `Reviewed or maintainer` grows stale | One file, one owner, and the same source as `dismiss-unauthorized-pr-approvals.yml`. |
+| The maintainer list in `Reviewed or maintainer` grows stale | One file (`.github/MAINTAINERS`), one owner, read from the base sha. |
 
 ## 11. Open items for the maintainer
 
