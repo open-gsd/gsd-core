@@ -100,6 +100,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [JSON error mode](json-errors.md) — `gsd-tools` failure channels: faults (stderr, exit 1) vs degraded results (stdout, exit 0), and the reason-code taxonomy
 - [Features](FEATURES.md) — complete feature index
 - [Inventory](INVENTORY.md) — installed skills and surface map
+- [Pi hook and lifecycle parity](reference/pi-hook-parity.md) — which GSD hooks run on Pi, the verified Pi event contract, and why each other hook is not bridged
 - [STATE.md schema](reference/state-md.md) — field-by-field reference for `.planning/STATE.md`
 - [CONTEXT.md schema](reference/context-md.md) — field-by-field reference for `.planning/phases/<N>/CONTEXT.md`
 - [PLAN.md schema](reference/plan-md.md) — field-by-field reference for `.planning/phases/<N>/PLAN.md`

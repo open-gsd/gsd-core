@@ -230,6 +230,7 @@ module.exports = {
   "tests/pi-config-dir-env-override.test.cjs",
   "tests/pi-dispatch-install.test.cjs",
   "tests/pi-dispatch.test.cjs",
+  "tests/pi-hook-bridge.test.cjs",
   "tests/pi-package.test.cjs",
   "tests/plan-count-single-owner.test.cjs",
   "tests/plan-phase-stall-detection.test.cjs",

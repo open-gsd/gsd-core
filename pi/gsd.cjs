@@ -296,7 +296,7 @@ function runHook(hookFile, payload, opts = {}) {
   const timeout = opts.timeout || 8000;
   let result;
   try {
-    result = spawnSync(process.execPath, [hookPath], {
+    result = spawnSync(hookRuntime(), [hookPath], {
       input: JSON.stringify(payload || {}),
       encoding: 'utf8',
       timeout,
@@ -309,6 +309,256 @@ function runHook(hookFile, payload, opts = {}) {
   const stdout = (result && typeof result.stdout === 'string') ? result.stdout.trim() : '';
   const exitCode = (result && result.status != null) ? result.status : 0;
   return { stdout, exitCode, timedOut: !!(result && result.signal === 'SIGTERM') };
+}
+
+// ── hook bridge: PreToolUse / PostToolUse (#5560) ─────────────────────────────
+// Verified against live Pi 1.3.0 (docs/reference/pi-hook-parity.md): `tool_call` carries
+// { toolName, toolCallId, input } with lowercase tool names; a handler returning
+// { block: true, reason } stops the call and the model sees `reason` as the tool result (no
+// `tool_result` follows); `tool_result` handlers may return { content } to replace the
+// model-facing content. Pi blocks a tool whose `tool_call` handler THROWS, so every handler
+// below catches everything and fails open. The guards stay the hook scripts (no reimplementation).
+
+/** Hook scripts are Node; inside a Bun-hosted Pi `process.execPath` would boot Pi (#4849). */
+function hookRuntime() {
+  const fromEnv = process.env.GSD_HOOK_RUNTIME;
+  if (typeof fromEnv === 'string' && fromEnv.length > 0) return fromEnv;
+  return typeof Bun !== 'undefined' ? 'node' : process.execPath;
+}
+
+/** Pi tool name -> the Claude tool name the hook scripts match on. Tools absent here run no hook. */
+const PI_TOOL_NAME_MAP = Object.freeze({
+  bash: 'Bash', read: 'Read', write: 'Write', edit: 'Edit', grep: 'Grep', find: 'Glob',
+});
+
+/**
+ * Claude-shaped `tool_input` from a Pi tool input. Only well-typed fields are forwarded, so a
+ * malformed input yields a smaller object, never a throw.
+ * @param {string} piTool
+ * @param {unknown} input
+ */
+function mapPiToolInput(piTool, input) {
+  const out = {};
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return out;
+  const str = (v) => (typeof v === 'string' ? v : undefined);
+  if (str(input.path) !== undefined) out.file_path = input.path;
+  if (piTool === 'write' && str(input.content) !== undefined) out.content = input.content;
+  if (piTool === 'edit' && Array.isArray(input.edits)) {
+    const olds = [];
+    const news = [];
+    for (const e of input.edits) {
+      if (e && typeof e === 'object') {
+        if (str(e.oldText) !== undefined) olds.push(e.oldText);
+        if (str(e.newText) !== undefined) news.push(e.newText);
+      }
+    }
+    if (olds.length > 0) out.old_string = olds.join('\n');
+    if (news.length > 0) out.new_string = news.join('\n');
+  }
+  if (piTool === 'bash' && str(input.command) !== undefined) out.command = input.command;
+  if (piTool === 'grep' || piTool === 'find') {
+    if (str(input.pattern) !== undefined) out[piTool === 'grep' ? 'pattern' : 'glob'] = input.pattern;
+    if (piTool === 'grep' && str(input.glob) !== undefined) out.glob = input.glob;
+  }
+  return out;
+}
+
+/** Run a GSD `.sh` hook under bash with the payload on stdin. Fails open like runHook. */
+function runShellHook(hookFile, payload, opts = {}) {
+  const none = { stdout: '', exitCode: 0, timedOut: false };
+  if (!SHARED_HOOKS_DIR) return none;
+  const hookPath = path.join(SHARED_HOOKS_DIR, hookFile);
+  if (!fs.existsSync(hookPath)) return none;
+  let result;
+  try {
+    result = spawnSync(process.env.GSD_HOOK_SHELL || 'bash', [hookPath], {
+      input: JSON.stringify(payload || {}),
+      encoding: 'utf8',
+      timeout: opts.timeout || 15000,
+      cwd: opts.cwd || process.cwd(),
+      windowsHide: true,
+    });
+  } catch {
+    return none;
+  }
+  if (!result || result.error) return none;
+  return {
+    stdout: typeof result.stdout === 'string' ? result.stdout.trim() : '',
+    exitCode: result.status == null ? 0 : result.status,
+    timedOut: result.signal === 'SIGTERM',
+  };
+}
+
+/**
+ * Bound for the two blocking guards that probe git. A hook killed on timeout reports exit 0 (an
+ * allow), so a bound below the guard's own worst case silently disables the gate; read the
+ * guards' budget from the staged hooks/lib so it cannot drift.
+ */
+const PI_GIT_PROBING_GUARDS = new Set(['gsd-worktree-path-guard.js', 'gsd-workflow-guard.js']);
+function gitProbingGuardTimeoutMs() {
+  try {
+    const probe = require(path.join(SHARED_HOOKS_DIR, 'lib', 'git-probe.js'));
+    const worst = probe.BLOCKING_GUARD_MAX_SEQUENTIAL_PROBES * probe.BLOCKING_GUARD_PROBE_TIMEOUT_MS;
+    if (Number.isFinite(worst) && worst > 0) return worst + 5000;
+  } catch { /* partial install: use the fallback */ }
+  return 20000;
+}
+
+/**
+ * Interpret a hook result the way the Claude convention defines it: exit 2 or
+ * `{"decision":"block"}` blocks; `hookSpecificOutput.additionalContext` is an advisory.
+ * @returns {{ block: true, reason: string } | { advisory: string } | null}
+ */
+function interpretHookResult(result) {
+  if (!result) return null;
+  const { stdout, exitCode } = result;
+  if (!stdout && exitCode !== 2) return null;
+  let parsed = null;
+  if (stdout) { try { parsed = JSON.parse(stdout); } catch { /* non-JSON stdout */ } }
+  if (exitCode === 2 || (parsed && parsed.decision === 'block')) {
+    return { block: true, reason: (parsed && typeof parsed.reason === 'string' && parsed.reason) || 'Blocked by GSD hook (no reason provided).' };
+  }
+  const advisory = parsed && parsed.hookSpecificOutput && parsed.hookSpecificOutput.additionalContext;
+  return typeof advisory === 'string' && advisory ? { advisory } : null;
+}
+
+/** [hook file, Claude tools it matches, runner kind, gate]. Order is the order the guards run in. */
+const PI_PRE_TOOL_HOOKS = Object.freeze([
+  ['gsd-prompt-guard.js', ['Write', 'Edit'], 'js', null],
+  ['gsd-read-guard.js', ['Write', 'Edit'], 'js', null],
+  ['gsd-worktree-path-guard.js', ['Write', 'Edit'], 'js', null],
+  ['gsd-write-guard.js', ['Write'], 'js', null],
+  ['gsd-workflow-guard.js', ['Write', 'Edit', 'Bash'], 'js', null],
+  ['gsd-secret-read-guard.js', ['Read', 'Grep', 'Bash'], 'js', null],
+  ['gsd-validate-commit.sh', ['Bash'], 'sh', 'community'],
+]);
+const PI_POST_TOOL_HOOKS = Object.freeze([
+  ['gsd-read-injection-scanner.js', ['Read'], 'js', null],
+  ['gsd-phase-boundary.sh', ['Write', 'Edit'], 'sh', 'community'],
+  ['gsd-graphify-update.sh', ['Bash'], 'sh', 'graphify'],
+]);
+const PI_ADVISORY_QUEUE_MAX = 50;
+
+/**
+ * What each Claude hook becomes on Pi (#5560 acceptance: every hook has a disposition).
+ * status: bridged | unsupported | not-applicable | internal.
+ */
+const PI_HOOK_DISPOSITIONS = Object.freeze({
+  'gsd-ensure-canonical-path.js': [{ claude: 'SessionStart', status: 'bridged', pi: 'session_start' }],
+  'gsd-session-state.sh': [{ claude: 'SessionStart', status: 'bridged', pi: 'before_agent_start (first turn, custom message)' }],
+  'gsd-check-update.js': [{ claude: 'SessionStart', status: 'unsupported', reason: 'its cache is read only by the Claude statusline and update banner; Pi has neither, and Pi installs update through the installer or `pi update`' }],
+  'gsd-check-update-worker.js': [{ claude: null, status: 'internal', reason: 'spawned by gsd-check-update.js' }],
+  'gsd-update-banner.js': [{ claude: 'statusLine', status: 'unsupported', reason: 'renders into the Claude statusline; Pi extensions have no equivalent statusline command' }],
+  'gsd-statusline.js': [{ claude: 'statusLine', status: 'unsupported', reason: 'Claude statusLine command; Pi extensions have no equivalent statusline command' }],
+  'gsd-prompt-guard.js': [{ claude: 'PreToolUse', status: 'bridged', pi: 'tool_call (write, edit)' }],
+  'gsd-read-guard.js': [{ claude: 'PreToolUse', status: 'bridged', pi: 'tool_call (write, edit)' }],
+  'gsd-worktree-path-guard.js': [{ claude: 'PreToolUse', status: 'bridged', pi: 'tool_call (write, edit)' }],
+  'gsd-write-guard.js': [{ claude: 'PreToolUse', status: 'bridged', pi: 'tool_call (write)' }],
+  'gsd-workflow-guard.js': [{ claude: 'PreToolUse', status: 'bridged', pi: 'tool_call (write, edit, bash)' }],
+  'gsd-secret-read-guard.js': [{ claude: 'PreToolUse', status: 'bridged', pi: 'tool_call (read, grep, bash)' }],
+  'gsd-validate-commit.sh': [{ claude: 'PreToolUse', status: 'bridged', pi: 'tool_call (bash), opt-in hooks.community' }],
+  'gsd-agent-isolation-guard.js': [{ claude: 'PreToolUse', status: 'unsupported', reason: 'guards the isolation argument of Claude\'s Agent call; gsd_dispatch has no isolation parameter and a dispatched role runs flat in its own process' }],
+  'gsd-read-injection-scanner.js': [{ claude: 'PostToolUse', status: 'bridged', pi: 'tool_result (read)' }],
+  'gsd-phase-boundary.sh': [{ claude: 'PostToolUse', status: 'bridged', pi: 'tool_result (write, edit), opt-in hooks.community' }],
+  'gsd-graphify-update.sh': [{ claude: 'PostToolUse', status: 'bridged', pi: 'tool_result (bash), opt-in graphify.auto_update' }],
+  'gsd-context-monitor.js': [
+    { claude: 'PreCompact', status: 'bridged', pi: 'session_before_compact' },
+    { claude: 'PostToolUse', status: 'unsupported', reason: 'reads the context metrics the Claude statusline writes; Pi has no statusline to produce them' },
+    { claude: 'SubagentStop', status: 'unsupported', reason: 'same metrics source as PostToolUse, and a dispatched role is a separate process with no extensions' },
+    { claude: 'Stop', status: 'unsupported', reason: 'same metrics source as PostToolUse' },
+  ],
+  'gsd-config-reload.js': [{ claude: 'FileChanged', status: 'unsupported', reason: 'Pi 1.3.0 has no file-change event for extensions' }],
+  'gsd-node-runner.sh': [{ claude: null, status: 'internal', reason: 'portable node resolver for managed Claude hook commands; Pi runs hooks through its own bridge' }],
+  'gsd-cursor-post-tool.js': [{ claude: null, status: 'not-applicable', reason: 'Cursor-specific hook' }],
+  'gsd-cursor-pre-tool.js': [{ claude: null, status: 'not-applicable', reason: 'Cursor-specific hook' }],
+  'gsd-cursor-session-start.js': [{ claude: null, status: 'not-applicable', reason: 'Cursor-specific hook' }],
+  'gsd-cursor-stop.js': [{ claude: null, status: 'not-applicable', reason: 'Cursor-specific hook' }],
+  'gsd-cursor-subagent-start.js': [{ claude: null, status: 'not-applicable', reason: 'Cursor-specific hook' }],
+  'gsd-cursor-subagent-stop.js': [{ claude: null, status: 'not-applicable', reason: 'Cursor-specific hook' }],
+  'gsd-windsurf-pre-command.js': [{ claude: null, status: 'not-applicable', reason: 'Windsurf-specific hook' }],
+  'gsd-windsurf-pre-write.js': [{ claude: null, status: 'not-applicable', reason: 'Windsurf-specific hook' }],
+});
+
+/**
+ * The PreToolUse / PostToolUse bridge. Seams: `runHook`, `runShellHook`, `readConfig(cwd)`, `env`.
+ * Handlers never throw and never block unless a hook explicitly said so.
+ */
+function createHookBridge(deps = {}) {
+  const run = deps.runHook || runHook;
+  const runSh = deps.runShellHook || runShellHook;
+  const readConfig = deps.readConfig || ((cwd) => {
+    try { return JSON.parse(fs.readFileSync(path.join(cwd, '.planning', 'config.json'), 'utf8')); } catch { return null; }
+  });
+  const env = deps.env || process.env;
+  /** @type {Map<string, string[]>} advisories raised before a tool ran, by toolCallId */
+  const pending = new Map();
+
+  const gateOpen = (gate, cwd) => {
+    if (!gate) return true;
+    const config = readConfig(cwd);
+    if (!config) return false;
+    if (gate === 'community') return !!config.hooks && config.hooks.community === true;
+    if (gate === 'graphify') return !env.CI && !!config.graphify && config.graphify.enabled === true && config.graphify.auto_update === true;
+    return false;
+  };
+  const invoke = (table, claudeTool, payload, cwd, onResult) => {
+    for (const [file, tools, kind, gate] of table) {
+      if (!tools.includes(claudeTool) || !gateOpen(gate, cwd)) continue;
+      const opts = { cwd };
+      if (PI_GIT_PROBING_GUARDS.has(file)) opts.timeout = gitProbingGuardTimeoutMs();
+      const outcome = interpretHookResult(kind === 'sh' ? runSh(file, payload, opts) : run(file, payload, opts));
+      if (outcome && onResult(outcome) === 'stop') return;
+    }
+  };
+  const remember = (id, text) => {
+    if (typeof id !== 'string') return;
+    if (!pending.has(id) && pending.size >= PI_ADVISORY_QUEUE_MAX) pending.delete(pending.keys().next().value);
+    const list = pending.get(id) || [];
+    list.push(text);
+    pending.set(id, list);
+  };
+
+  return {
+    pending,
+    onToolCall(event, ctx) {
+      try {
+        const claudeTool = event && PI_TOOL_NAME_MAP[event.toolName];
+        if (!claudeTool) return undefined;
+        const cwd = (ctx && ctx.cwd) || process.cwd();
+        // No session_id: gsd-read-guard treats a non-empty one as a Claude Code session and skips its advisory.
+        const payload = { hook_event_name: 'PreToolUse', cwd, tool_name: claudeTool, tool_input: mapPiToolInput(event.toolName, event.input) };
+        let blocked = null;
+        invoke(PI_PRE_TOOL_HOOKS, claudeTool, payload, cwd, (outcome) => {
+          if (outcome.block) { blocked = outcome; return 'stop'; }
+          remember(event.toolCallId, outcome.advisory);
+          return undefined;
+        });
+        if (blocked) {
+          pending.delete(event.toolCallId); // Pi emits no tool_result for a blocked call
+          return { block: true, reason: blocked.reason };
+        }
+      } catch { /* fail open: a thrown handler would make Pi block the tool */ }
+      return undefined;
+    },
+    onToolResult(event, ctx) {
+      try {
+        if (!event) return undefined;
+        const advisories = pending.get(event.toolCallId) || [];
+        pending.delete(event.toolCallId);
+        const claudeTool = PI_TOOL_NAME_MAP[event.toolName];
+        if (claudeTool) {
+          const cwd = (ctx && ctx.cwd) || process.cwd();
+          const payload = { hook_event_name: 'PostToolUse', cwd, tool_name: claudeTool, tool_input: mapPiToolInput(event.toolName, event.input) };
+          invoke(PI_POST_TOOL_HOOKS, claudeTool, payload, cwd, (outcome) => {
+            // A PostToolUse hook cannot undo the call; a block here is only a message to the model.
+            advisories.push(outcome.block ? outcome.reason : outcome.advisory);
+          });
+        }
+        if (advisories.length === 0 || !Array.isArray(event.content)) return undefined;
+        return { content: [...event.content, ...advisories.map((a) => ({ type: 'text', text: `\n\n[GSD advisory] ${a}` }))] };
+      } catch { return undefined; }
+    },
+  };
 }
 
 // ── workflow hand-off (#5547) ─────────────────────────────────────────────────
@@ -1066,11 +1316,20 @@ module.exports = function gsdPiExtension(pi, deps = {}) {
   // fires as a safe no-op today — wired so a future agent-start-scoped check
   // can attach without a plugin change (mirrors the OpenCode session.idle
   // recognized-but-unused sentinel pattern).
+  let sessionOrientationSent = false;
   pi.on('before_agent_start', async (event, ctx) => {
     try {
       const cwd = (ctx && ctx.cwd) || process.cwd();
       runHook('gsd-workflow-guard.js', { hook_event_name: 'before_agent_start', cwd }, { cwd });
+      // SessionStart orientation (gsd-session-state.sh, opt-in hooks.community): once per session,
+      // delivered as a custom message because Pi's session_start cannot inject context.
+      if (!sessionOrientationSent) {
+        sessionOrientationSent = true;
+        const outcome = interpretHookResult(runShellHook('gsd-session-state.sh', { hook_event_name: 'SessionStart', cwd }, { cwd }));
+        if (outcome && outcome.advisory) return { message: { customType: 'gsd-session-state', content: outcome.advisory, display: false } };
+      }
     } catch { /* fail-open */ }
+    return undefined;
   });
 
   // session_before_compact → PreCompact-equivalent (context-usage bridge).
@@ -1081,13 +1340,10 @@ module.exports = function gsdPiExtension(pi, deps = {}) {
     } catch { /* fail-open */ }
   });
 
-  // tool_call event: lifecycle hook bridge attachment point (kept from the
-  // original cut — the PreToolUse/PostToolUse tool_name/tool_input mapping
-  // is a follow-up once pi's tool_call payload shape is verified against a
-  // live host).
-  pi.on('tool_call', async function () {
-    /* GSD hook bridge attachment point (PreToolUse/PostToolUse mapping). */
-  });
+  // tool_call / tool_result: PreToolUse / PostToolUse bridge (#5560, payload verified on live Pi 1.3.0).
+  const hookBridge = createHookBridge();
+  pi.on('tool_call', async (event, ctx) => hookBridge.onToolCall(event, ctx));
+  pi.on('tool_result', async (event, ctx) => hookBridge.onToolResult(event, ctx));
 };
 
 // Test-only internals (mirrors the OpenCode plugin pattern) — wired to the
@@ -1119,6 +1375,16 @@ module.exports._internals = {
   DISPATCH,
   createDispatcher,
   resolveDispatchRole,
+  hookRuntime,
+  PI_TOOL_NAME_MAP,
+  mapPiToolInput,
+  runShellHook,
+  interpretHookResult,
+  PI_PRE_TOOL_HOOKS,
+  PI_POST_TOOL_HOOKS,
+  PI_ADVISORY_QUEUE_MAX,
+  PI_HOOK_DISPOSITIONS,
+  createHookBridge,
   readRoleFrontmatter,
   resolvePiCommand,
   taskkillPath,
