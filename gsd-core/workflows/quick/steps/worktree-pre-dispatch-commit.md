@@ -16,7 +16,6 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 QUICK_PLAN_PARENT=""
 QUICK_PLAN_COMMIT=""
 if [ "${USE_WORKTREES}" != "false" ]; then
-  QUICK_PLAN_PARENT=$(git rev-parse HEAD)
   COMMIT_DOCS=$(gsd_run query config-get commit_docs --raw 2>/dev/null || echo "true")
   if [ "$COMMIT_DOCS" != "false" ]; then
     # pre-dispatch plan commit — PLAN.md is always in scope. CONTEXT.md/RESEARCH.md
@@ -51,6 +50,16 @@ if [ "${USE_WORKTREES}" != "false" ]; then
   fi
   if [ -z "$QUICK_PLAN_COMMIT" ]; then
     QUICK_PLAN_COMMIT=$(git rev-parse HEAD)
+  fi
+  # #5209: the alternate base is the PLAN commit's immediate parent, read AFTER the
+  # commit attempt so it is right in both orderings — the planner already committed
+  # the plan (QUICK_PLAN_COMMIT is then HEAD, and HEAD itself is the expected base) or
+  # this step just created the commit. Capturing HEAD before the attempt made the two
+  # equal in the planner-committed case, so the alternate was filled empty and a
+  # worktree forked from the plan commit's parent failed the base check with exit 42.
+  # Empty when docs commits are disabled (no docs plan commit exists) and for a root commit.
+  if [ "$COMMIT_DOCS" != "false" ]; then
+    QUICK_PLAN_PARENT=$(git rev-parse --verify --quiet "${QUICK_PLAN_COMMIT}^" 2>/dev/null || true)
   fi
 fi
 ```
