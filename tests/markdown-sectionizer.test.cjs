@@ -43,6 +43,8 @@ const {
   extractTaggedBlocks,
   stripTaggedBlocks,
   editOutsideTaggedBlocks,
+  maskFences,
+  editOutsideFences,
   replaceSection,
   withSection,
   deleteSection,
@@ -2144,3 +2146,73 @@ describe('editOutsideTaggedBlocks (#5543)', () => {
     assert.equal(editOutsideTaggedBlocks('abc', '', wrap), '[abc]');
   });
 });
+
+// ─── maskFences / editOutsideFences (#5460) ───────────────────────────────────
+
+describe('maskFences / editOutsideFences (#5460)', () => {
+  const F = '```';
+  const upper = (text) => text.replace(/^field:.*$/gm, 'field: EDITED');
+
+  test('an edit only reaches lines outside fenced blocks, and the blocks come back verbatim', () => {
+    const content = ['field: a', F, 'field: in-fence', F, 'field: b'].join('\n');
+    assert.equal(editOutsideFences(content, upper), ['field: EDITED', F, 'field: in-fence', F, 'field: EDITED'].join('\n'));
+  });
+
+  test('content with no fence is edited as given', () => {
+    assert.equal(editOutsideFences('field: a\nfield: b', upper), 'field: EDITED\nfield: EDITED');
+  });
+
+  test('an unterminated fence masks to the end of the content', () => {
+    const content = ['field: a', F, 'field: in-fence', 'field: also'].join('\n');
+    assert.equal(editOutsideFences(content, upper), ['field: EDITED', F, 'field: in-fence', 'field: also'].join('\n'));
+  });
+
+  test('tilde fences and several blocks are masked independently', () => {
+    const content = ['~~~', 'field: t', '~~~', 'field: live', F, 'field: c', F].join('\n');
+    assert.equal(editOutsideFences(content, upper), ['~~~', 'field: t', '~~~', 'field: EDITED', F, 'field: c', F].join('\n'));
+  });
+
+  test('CRLF content keeps its terminators', () => {
+    const content = ['field: a', F, 'field: in-fence', F, 'field: b'].join('\r\n');
+    const out = editOutsideFences(content, (t) => t.replace(/^field: a/m, 'field: A'));
+    assert.equal(out, ['field: A', F, 'field: in-fence', F, 'field: b'].join('\r\n'));
+  });
+
+  test('an edit that destroys a placeholder returns the content unchanged (fail closed)', () => {
+    const content = ['field: a', F, 'x', F].join('\n');
+    assert.equal(editOutsideFences(content, () => 'nothing left'), content);
+  });
+
+  test('a non-string edit result returns the content unchanged; non-string input is returned as given', () => {
+    const content = ['a', F, 'b', F].join('\n');
+    assert.equal(editOutsideFences(content, () => undefined), content);
+    assert.equal(editOutsideFences(undefined, upper), undefined);
+    assert.equal(editOutsideFences('', upper), '');
+  });
+
+  test('maskFences exposes the masked text and a restore that round-trips', () => {
+    const content = ['field: a', F, 'field: in-fence', F, 'field: b'].join('\n');
+    const mask = maskFences(content);
+    assert.ok(!mask.masked.includes('in-fence'));
+    assert.equal(mask.restore(mask.masked), content);
+  });
+
+  test('a placeholder-like line already in the content does not confuse the restore', () => {
+    const decoy = '<!-- gsd-masked-fence-0-0 -->';
+    const content = [decoy, F, 'field: in-fence', F, 'field: b'].join('\n');
+    assert.equal(editOutsideFences(content, upper), [decoy, F, 'field: in-fence', F, 'field: EDITED'].join('\n'));
+  });
+
+  test('property: restore(mask(x)) === x for generated documents with fences', () => {
+    const line = fc.oneof(
+      fc.constantFrom('```', '~~~', '````', '```js', '  ```', 'field: x', '# Heading', '', '<!-- gsd-masked-fence-0-0 -->'),
+      fc.string({ maxLength: 12 }).filter((l) => !l.includes('\n')),
+    );
+    fc.assert(fc.property(fc.array(line, { maxLength: 14 }), fc.boolean(), (lines, crlf) => {
+      const content = lines.join(crlf ? '\r\n' : '\n');
+      const mask = maskFences(content);
+      assert.equal(mask.restore(mask.masked), content);
+    }));
+  });
+});
+
