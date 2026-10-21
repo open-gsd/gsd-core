@@ -18,7 +18,7 @@
 import frontmatter = require('./frontmatter.cjs');
 import { stateReplaceField, stateExtractField, stateReplaceFieldIfTemplate, stateReplaceFieldWithFallback, stateReplaceFieldInSession, stateCurrentPositionSlice } from './state-document.cjs';
 import { KNOWN_TEMPLATE_DEFAULTS, toFiniteNumber, computeProgressPercent, fieldContinuationEnd } from './state-document.cjs';
-import { tokenizeHeadings, withSection } from './markdown-sectionizer.cjs';
+import { tokenizeHeadings, withSection, maskFences } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
 import { deriveProgressFromRoadmap, milestoneVersionOf, clampPercent, clampPercentFromFraction, renderProgressBar } from './phase-lifecycle.cjs';
 import { escapeRegex } from './pattern.cjs';
@@ -1279,7 +1279,40 @@ export type StateTransitionResult = {
  * Phases 2–7 add cases for the remaining 9 intent kinds. A missing case is
  * a compile-time error (the function would not return on that path).
  */
+/**
+ * The transitions that rewrite single-line body fields (`Status:`, `Current focus:`, `Plan:` …) with
+ * plain line-anchored patterns. Those patterns match a fenced EXAMPLE of a field as readily as the
+ * live line (#5460), so these run over the document body with fenced blocks hidden.
+ * `milestone*`, `prune` and `rebuild` restructure sections or re-derive the document and are not
+ * field-by-field writers.
+ */
+const FENCE_MASKED_TRANSITIONS: ReadonlySet<StateTransitionIntent['kind']> = new Set([
+  'beginPhase', 'advancePlan', 'completePhase', 'plannedPhase', 'patch', 'update', 'sync',
+]);
+
 export function transitionCore(
+  content: string,
+  intent: StateTransitionIntent,
+  deps: StateTransitionDeps,
+): StateTransitionResult {
+  if (!FENCE_MASKED_TRANSITIONS.has(intent.kind)) return transitionCoreUnmasked(content, intent, deps);
+  // Only the body is masked: a fence opener inside a frontmatter block scalar must not swallow the
+  // closing `---` (the frontmatter is not where the live fields are written).
+  const body = stripFrontmatter(content);
+  if (!content.endsWith(body)) return transitionCoreUnmasked(content, intent, deps);
+  const prefix = content.slice(0, content.length - body.length);
+  const fenceMask = maskFences(body);
+  const result = transitionCoreUnmasked(prefix + fenceMask.masked, intent, deps);
+  const restored = fenceMask.restore(result.content);
+  // Cannot happen short of a writer bug (a transition dropped or duplicated a placeholder line); a
+  // refusal is the one outcome that cannot report a rewrite that did not land.
+  if (restored === null) {
+    throw new Error(`${intent.kind}: fenced code blocks could not be restored after the edit; refusing to write STATE.md`);
+  }
+  return { ...result, content: restored };
+}
+
+function transitionCoreUnmasked(
   content: string,
   intent: StateTransitionIntent,
   deps: StateTransitionDeps,
@@ -1542,7 +1575,9 @@ function mutateCurrentPositionFirstTime(
 ): string {
   const span = locateCurrentPosition(body);
   if (span === null) return body;
-  let sectionBody = body.slice(span.start, span.end);
+  // #5460: the section's fenced examples are hidden while the live lines are rewritten.
+  const fenceMask = maskFences(body.slice(span.start, span.end));
+  let sectionBody = fenceMask.masked;
 
   // Phase line — inline first, then pipe-table fallback (#1257).
   const phaseLabel = `${intent.phaseNumber}${intent.phaseName ? ` (${intent.phaseName})` : ''} — EXECUTING`;
@@ -1582,8 +1617,10 @@ function mutateCurrentPositionFirstTime(
     if (replaced !== null) sectionBody = replaced;
   }
 
+  const restored = fenceMask.restore(sectionBody);
+  if (restored === null) return body;
   updated.push('Current Position');
-  return body.slice(0, span.start) + sectionBody + body.slice(span.end);
+  return body.slice(0, span.start) + restored + body.slice(span.end);
 }
 
 /**
@@ -1599,7 +1636,8 @@ function mutateCurrentPositionResume(
 ): string {
   const span = locateCurrentPosition(body);
   if (span === null) return body;
-  let sectionBody = body.slice(span.start, span.end);
+  const fenceMask = maskFences(body.slice(span.start, span.end));
+  let sectionBody = fenceMask.masked;
 
   const resumeActivity = `Last activity: ${today} — Phase ${intent.phaseNumber} execution resumed (wave continue)`;
   if (/^Last activity:/im.test(sectionBody)) {
@@ -1616,7 +1654,9 @@ function mutateCurrentPositionResume(
     }
   }
 
-  return body.slice(0, span.start) + sectionBody + body.slice(span.end);
+  const restored = fenceMask.restore(sectionBody);
+  if (restored === null) return body;
+  return body.slice(0, span.start) + restored + body.slice(span.end);
 }
 
 /**
@@ -1733,7 +1773,8 @@ function mutateCurrentPositionForAdvance(
 ): string {
   const span = locateCurrentPosition(content);
   if (span === null) return content;
-  let sectionBody = content.slice(span.start, span.end);
+  const fenceMask = maskFences(content.slice(span.start, span.end));
+  let sectionBody = fenceMask.masked;
   let mutated = false;
 
   // #3395: Phase is always replaced when a caller passes it — system-derived,
@@ -1833,7 +1874,9 @@ function mutateCurrentPositionForAdvance(
   }
 
   if (!mutated) return content;
-  return content.slice(0, span.start) + sectionBody + content.slice(span.end);
+  const restored = fenceMask.restore(sectionBody);
+  if (restored === null) return content;
+  return content.slice(0, span.start) + restored + content.slice(span.end);
 }
 
 // ----------------------------------------------------------------------------
