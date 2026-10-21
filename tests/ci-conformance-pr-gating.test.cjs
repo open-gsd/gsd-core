@@ -19,6 +19,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const yaml = require('js-yaml');
 
+const { createTempDir, cleanup } = require('./helpers.cjs');
+const { runHook } = require('./helpers/process-seam.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+
 const WORKFLOW = path.join(__dirname, '..', '.github', 'workflows', 'test.yml');
 const JOB = 'test-conformance';
 
@@ -96,7 +100,9 @@ function evaluate(expr, ctx) {
       take(')');
       assert.equal(t, 'contains', `unsupported function ${t}`);
       const [hay, needle] = args;
-      return Array.isArray(hay) ? hay.includes(needle) : String(hay).includes(String(needle));
+      // GitHub's contains() ignores case, like its comparison operators.
+      const lower = (v) => String(v).toLowerCase();
+      return Array.isArray(hay) ? hay.map(lower).includes(lower(needle)) : lower(hay).includes(lower(needle));
     }
     return lookup(ctx, t);
   }
@@ -185,6 +191,14 @@ describe('#5604: variable on', () => {
     assert.equal(runs({ event: 'pull_request', variable: 'true', labels: ['no-changelog'] }), false);
   });
 
+  test('the label is matched case-insensitively', () => {
+    assert.equal(runs({ event: 'pull_request', variable: 'true', labels: ['Full-Matrix'] }), true);
+  });
+
+  test('the label cannot force the lane when no code changed', () => {
+    assert.equal(runs({ event: 'pull_request', variable: 'true', labels: ['full-matrix'], codeChanged: 'false' }), false);
+  });
+
   test('the label cannot force the lane when the classifier asked for nothing', () => {
     assert.equal(runs({ event: 'pull_request', variable: 'true', labels: ['full-matrix'], fullMatrix: 'false' }), false);
   });
@@ -207,9 +221,50 @@ describe('#5604: variable on', () => {
 });
 
 describe('#5604: the required gate tolerates a skipped lane', () => {
-  test('required-tests still depends on test-conformance and is not skipped with it', () => {
-    const gate = doc.jobs['required-tests'];
+  const gate = doc.jobs['required-tests'];
+  const script = gate.steps.find((step) => typeof step.run === 'string' && step.env).run;
+
+  const greenEnv = {
+    PREFLIGHT_RESULT: 'success',
+    NEXT_HEALTH_RESULT: 'success',
+    CODE_CHANGED: 'true',
+    PRODUCT_CHANGED: 'true',
+    CHANGES_RESULT: 'success',
+    LINT_RESULT: 'success',
+    TEST_RESULT: 'success',
+    TEST_CONFORMANCE_RESULT: 'success',
+    INERT_RESULT: 'skipped',
+    COVERAGE_GATE_RESULT: 'success',
+    QA_LOOP_WALK_RESULT: 'success',
+  };
+
+  function runGate(t, overrides) {
+    const dir = createTempDir('gsd-5604-gate-');
+    t.after(() => cleanup(dir));
+    const file = path.join(dir, 'required-tests.sh');
+    fs.writeFileSync(file, `#!/usr/bin/env bash\n${script}\n`, { mode: 0o755 });
+    return runHook(file, [], {
+      interpreter: 'bash',
+      cwd: dir,
+      env: { PATH: process.env.PATH, ...greenEnv, ...overrides },
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+  }
+
+  test('required-tests depends on test-conformance and is not skipped with it', () => {
     assert.ok(gate.needs.includes(JOB));
     assert.equal(gate.if, 'always()');
+  });
+
+  test('a skipped conformance lane passes the real aggregation script', (t) => {
+    const result = runGate(t, { TEST_CONFORMANCE_RESULT: 'skipped' });
+    assert.equal(result.exitCode, 0, result.stderr);
+  });
+
+  test('a failed conformance lane still fails it', (t) => {
+    for (const bad of ['failure', 'cancelled']) {
+      const result = runGate(t, { TEST_CONFORMANCE_RESULT: bad });
+      assert.equal(result.exitCode, 1, `TEST_CONFORMANCE_RESULT=${bad}`);
+    }
   });
 });
