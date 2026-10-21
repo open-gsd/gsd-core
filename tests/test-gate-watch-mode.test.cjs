@@ -234,7 +234,6 @@ describe('gate fallbacks resolve the package manager through the shared verb (#5
       const text = fs.readFileSync(file, 'utf-8');
       assert.ok(text.includes(call), `${label} does not call ${call}`);
       assert.ok(text.includes(`"${fallback}"`), `${label} lost its literal "${fallback}" fallback`);
-      assert.ok(!text.includes(`="${fallback}"\n`) || text.includes(call), 'the bare npm sniff is still the only path');
     });
   }
 

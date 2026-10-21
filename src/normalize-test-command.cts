@@ -212,12 +212,17 @@ const LOCKFILE_MANAGERS: ReadonlyArray<readonly [string, PackageManager]> = [
 
 // The script name is spliced into a shell command by the caller, so it is
 // restricted to a plain identifier. Anything else is refused (empty output).
-const SCRIPT_NAME = /^[A-Za-z0-9:_-]{1,64}$/;
+const SCRIPT_NAME = /^[A-Za-z0-9_][A-Za-z0-9:_-]{0,63}$/;
+
+// Same bounded-read stance as the rest of this module: a package.json larger
+// than this is not a real manifest, so it is not parsed.
+const MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
 
 function packageManagerFromField(cwd: string): PackageManager | null {
   try {
     const pkgPath = path.join(cwd, 'package.json');
-    if (!fs.statSync(pkgPath).isFile()) return null;
+    const stat = fs.statSync(pkgPath);
+    if (!stat.isFile() || stat.size > MAX_PACKAGE_JSON_BYTES) return null;
     const pkg: unknown = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
     if (typeof pkg !== 'object' || pkg === null) return null;
     const field = (pkg as { packageManager?: unknown }).packageManager;

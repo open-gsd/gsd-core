@@ -223,7 +223,7 @@ describe('resolvePackageManagerCommand: the gate fallback uses the project\'s pa
     assert.strictEqual(resolvePackageManagerCommand('build', path.join(os.tmpdir(), 'gsd-5346-does-not-exist')), 'npm run build');
   });
 
-  for (const bad of ['', 'build; rm -rf /', '$(id)', 'a b', '../x', 'build\nx', 'x'.repeat(65)]) {
+  for (const bad of ['', 'build; rm -rf /', '$(id)', 'a b', '../x', 'build\nx', '-x', 'x'.repeat(65)]) {
     test(`a script name that is not a plain identifier is refused: ${JSON.stringify(bad).slice(0, 30)}`, () => {
       assert.strictEqual(resolvePackageManagerCommand(bad, project({ lockfiles: ['pnpm-lock.yaml'] })), '');
     });
