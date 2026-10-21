@@ -1541,6 +1541,14 @@ describe('canonicalAgentSourceDir (#5496)', () => {
     assert.strictEqual(agentInstallCheck.canonicalAgentSourceDir(root), agents);
   });
 
+  test('a nested dir holding only compact variants is not canonical', () => {
+    const agents = dirWithAgent('agents');
+    const nested = path.join(root, 'gsd-core', 'agents');
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(path.join(nested, 'gsd-executor.compact.md'), 'x');
+    assert.strictEqual(agentInstallCheck.canonicalAgentSourceDir(root), agents);
+  });
+
   test('with neither present it still returns the root-level path (the caller reports nothing found)', () => {
     assert.strictEqual(agentInstallCheck.canonicalAgentSourceDir(root), path.join(root, 'agents'));
   });

@@ -405,7 +405,7 @@ function checkCodexModelPosture(runtime?: string, projectRoot?: string): CodexMo
 function canonicalAgentSourceDir(root: string = path.join(__dirname, '..', '..', '..')): string {
   const nested = path.join(root, 'gsd-core', 'agents');
   try {
-    if (fs.readdirSync(nested).some((entry) => entry.endsWith('.md'))) return nested;
+    if (fs.readdirSync(nested).some((entry) => entry.endsWith('.md') && !entry.endsWith('.compact.md'))) return nested;
   } catch {
     // Absent or unreadable: not this layout.
   }
