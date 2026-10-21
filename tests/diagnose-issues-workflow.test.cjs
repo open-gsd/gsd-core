@@ -1,7 +1,6 @@
-// allow-test-rule: source-text-is-the-product (see #5203)
 // gsd-core/workflows/diagnose-issues.md is shipped prompt content: the text IS
 // what the runtime loads, so the debugger-prompt contract can only be asserted
-// against the text.
+// against the text (#5203).
 
 'use strict';
 
