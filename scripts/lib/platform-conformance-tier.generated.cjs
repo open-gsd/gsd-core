@@ -299,6 +299,7 @@ module.exports = {
   "tests/runtime-launcher-parity.test.cjs",
   "tests/schema-drift.test.cjs",
   "tests/security.test.cjs",
+  "tests/self-test-report-policy.test.cjs",
   "tests/settings-jsonc.test.cjs",
   "tests/sh-hook-paths.test.cjs",
   "tests/shared-hooks-dir-resolution.test.cjs",
