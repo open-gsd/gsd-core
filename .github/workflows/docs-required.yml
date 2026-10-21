@@ -3,6 +3,16 @@ name: Docs Required
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  # #4990: `docs-lint` is a required status check on `next`; a merge queue
+  # requires every required context to also report on `merge_group`, or the
+  # queue deadlocks waiting on a check nothing ever produces.
+  #
+  # #4990 (NIT 13): on a `merge_group` event, GitHub Actions loads this
+  # workflow FILE from the queued merge ref, not from any individual PR's
+  # head — and the jobs below are skipped on that event (see the `if:`
+  # conditions), so no PR-supplied step ever executes here regardless.
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -15,7 +25,13 @@ permissions:
 jobs:
   # #3833: this lane is `npm ci` plus every registered docs-guard test (~210s).
   # None of it means anything against a tree that cannot merge.
+  #
+  # #4990: `merge_group` carries no `pull_request` payload — docs were already
+  # validated on the `pull_request` event that queued this run, so skip
+  # rather than reading fields the event doesn't carry. A job skipped by
+  # `if:` still reports Success for required-status-check purposes.
   preflight:
+    if: github.event_name != 'merge_group'
     name: PR mergeability
     uses: ./.github/workflows/pr-mergeable-preflight.yml
     permissions:
@@ -23,6 +39,10 @@ jobs:
       pull-requests: read
 
   docs-lint:
+    # #4990: same reasoning as `preflight` above — `github.event.pull_request`
+    # and `github.base_ref` are undefined on `merge_group`, and docs were
+    # already validated on the `pull_request` event.
+    if: github.event_name != 'merge_group'
     needs: preflight
     runs-on: ubuntu-latest
     # This job supplies the ALREADY-REQUIRED `docs-lint` context
