@@ -127,12 +127,12 @@ if [ "${USE_WORKTREES_FOR_PLAN:-}" = "false" ]; then
   # single write path to record `none`, scoped to this plan, even though the
   # phase/registry would otherwise resolve harness-worktree.
   gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}" --plan "$plan_id" --force-isolation none >/dev/null 2>&1 || true
-elif [ "${USE_WORKTREES_FOR_PLAN:-}" = "true" ]; then
+elif [ -n "${USE_WORKTREES_FOR_PLAN:-}" ]; then
   # No plan-level override — re-resolve normally, still scoped to this plan,
   # so the sentinel's `plan` field always matches the plan about to dispatch.
   gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}" --plan "$plan_id" >/dev/null 2>&1 || true
 fi
-# Any other value (typically empty: the plan state was lost with an earlier tool call's shell) writes
+# An EMPTY value (the plan state was lost with an earlier tool call's shell) writes
 # nothing, so a recorded phase-level degrade is never re-persisted as harness-worktree (#5479).
 ```
 

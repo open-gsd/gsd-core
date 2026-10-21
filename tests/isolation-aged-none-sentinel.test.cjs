@@ -25,6 +25,7 @@ const { createFixture } = require('./fixtures/index.cjs');
 const {
   SENTINEL_RELATIVE_PATH,
   SENTINEL_STALE_MS,
+  AGED_NONE_MAX_MS,
   agedNoneGovernsDispatch,
 } = require('../hooks/lib/isolation-sentinel.js');
 const guard = require('../hooks/gsd-agent-isolation-guard.js');
@@ -59,6 +60,21 @@ describe('agedNoneGovernsDispatch (#5479)', () => {
     assert.strictEqual(agedNoneGovernsDispatch(sentinel({ phase: null }), dispatchFor('02'), { clock: clockAt(SENTINEL_STALE_MS) }), false);
   });
 
+  test('a plan-scoped none speaks only for its own plan or a plan-less dispatch', () => {
+    const planned = sentinel({ plan: '02-01' });
+    const at = { clock: clockAt(SENTINEL_STALE_MS + 1) };
+    assert.strictEqual(agedNoneGovernsDispatch(planned, { phase: '02', plan: '02-01' }, at), true);
+    assert.strictEqual(agedNoneGovernsDispatch(planned, { phase: '02', plan: null }, at), true);
+    assert.strictEqual(agedNoneGovernsDispatch(planned, { phase: '02', plan: '02-02' }, at), false, 'a different plan of the same phase');
+    assert.strictEqual(agedNoneGovernsDispatch(sentinel(), { phase: '02', plan: '02-02' }, at), true, 'a phase-level record covers every plan');
+  });
+
+  test('a record older than the upper bound governs nothing, one just inside it still does', () => {
+    assert.strictEqual(agedNoneGovernsDispatch(sentinel(), dispatchFor('02'), { clock: clockAt(AGED_NONE_MAX_MS) }), true);
+    assert.strictEqual(agedNoneGovernsDispatch(sentinel(), dispatchFor('02'), { clock: clockAt(AGED_NONE_MAX_MS + 1) }), false);
+    assert.strictEqual(agedNoneGovernsDispatch(sentinel({ writtenAt: 0 }), dispatchFor('02'), { clock: { now: () => Date.now() } }), false, 'an epoch-0 record');
+  });
+
   test('it only ever speaks for a recorded none', () => {
     assert.strictEqual(agedNoneGovernsDispatch(sentinel({ isolation: 'harness-worktree', harnessFlag: 'isolation="worktree"' }), dispatchFor('02'), { clock: clockAt(SENTINEL_STALE_MS) }), false);
     assert.strictEqual(agedNoneGovernsDispatch(sentinel({ isolation: 'orchestrator-worktree' }), dispatchFor('02'), { clock: clockAt(SENTINEL_STALE_MS) }), false);
@@ -90,9 +106,11 @@ describe('an aged none keeps governing its phase in the Claude guard and the Cur
     }
   });
 
-  test('a plan-scoped none for an earlier plan still governs a later plan of the same phase', () => {
+  test('a plan-scoped none governs its own plan but not a later plan of the same phase', () => {
     writeSentinel(project, { isolation: 'none', phase: '02', plan: '02-01' });
-    assert.strictEqual(guardIsolation(SENTINEL_STALE_MS + 1, '02'), 'none');
+    const state = (plan) => guard.resolveIsolationState(project, { clock: clockAt(SENTINEL_STALE_MS + 1), dispatchIds: { phase: '02', plan } }).isolation;
+    assert.strictEqual(state('02-01'), 'none');
+    assert.strictEqual(state('02-02'), 'harness-worktree', 'plan B of the phase must not inherit plan A\'s degrade');
   });
 
   test('another phase, an unknown phase, an aged harness-worktree record and a future-dated none fall back to the registry', () => {
@@ -142,7 +160,7 @@ describe('the per-plan worktree gate never re-persists harness-worktree over a r
 
   test('only an explicit USE_WORKTREES_FOR_PLAN=true re-resolves; a value lost with the shell leaves the recorded decision alone', () => {
     assert.match(recordBlock, /if \[ "\$\{USE_WORKTREES_FOR_PLAN:-\}" = "false" \]/, 'false still forces none for this plan');
-    assert.match(recordBlock, /elif \[ "\$\{USE_WORKTREES_FOR_PLAN:-\}" = "true" \]/, 're-resolve only when the plan state is known to be true');
+    assert.match(recordBlock, /elif \[ -n "\$\{USE_WORKTREES_FOR_PLAN:-\}" \]/, 're-resolve whenever the plan state is known (any non-empty value); an empty one writes nothing');
     const lines = splitLines(recordBlock).map((l) => l.trim());
     lines.forEach((line, i) => {
       if (line !== 'else') return;

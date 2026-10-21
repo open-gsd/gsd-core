@@ -91,6 +91,11 @@ const SENTINEL_RELATIVE_PATH = path.join('.gsd', 'dispatch-isolation-sentinel.js
 // later, unrelated phase.
 const SENTINEL_STALE_MS = 10 * 60 * 1000; // 10 minutes
 
+// #5479: the longest a recorded sequential degrade keeps governing its own phase after the trust
+// window (see agedNoneGovernsDispatch). A single executor run is minutes to a couple of hours; a
+// day is a generous bound that still ends a stale or forged record's authority.
+const AGED_NONE_MAX_MS = 24 * 60 * 60 * 1000;
+
 function sentinelPath(cwd) {
   return path.join(cwd, SENTINEL_RELATIVE_PATH);
 }
@@ -296,16 +301,24 @@ function sentinelAppliesToDispatch(sentinel, dispatchIds) {
  *   - its `written_at` is not in the future (a forged or clock-skewed record is never trusted);
  *   - it carries a phase, the dispatch names a phase, and they are equal (a dispatch whose phase
  *     cannot be established is "cannot compare", which keeps today's fallback, never an allow).
- * The plan is deliberately not compared: a degrade recorded for an earlier plan of the phase still
- * describes the phase. A fresh sentinel is handled by the existing path and never reaches here.
+ * A plan-scoped record speaks only for its own plan (or a plan-less dispatch): a `none` recorded for
+ * a submodule-degraded plan A must not authorize a genuinely isolated plan B of the same phase. The
+ * phase-level degrade (the base-check, the project opt-out) is the record with no plan.
+ *   - it is at most `AGED_NONE_MAX_MS` old: a static record, forged or left by a long-finished run,
+ *     does not govern indefinitely. The normal flow re-records at every phase start and plan gate,
+ *     so a live phase is always far younger.
+ * A fresh sentinel is handled by the existing path and never reaches here.
  *
  * `clock` is the injectable `{ now(): number }` seam `readSentinel` uses.
  */
 function agedNoneGovernsDispatch(sentinel, dispatchIds, { clock = Date } = {}) {
   if (!sentinel || sentinel.present !== true || sentinel.malformed) return false;
   if (sentinel.isolation !== 'none') return false;
-  if (typeof sentinel.writtenAt !== 'number' || clock.now() - sentinel.writtenAt < -5000) return false;
+  if (typeof sentinel.writtenAt !== 'number') return false;
+  const age = clock.now() - sentinel.writtenAt;
+  if (age < -5000 || age > AGED_NONE_MAX_MS) return false;
   if (!sentinel.phase || !dispatchIds || !dispatchIds.phase) return false;
+  if (sentinel.plan && dispatchIds.plan && sentinel.plan !== dispatchIds.plan) return false;
   return sentinel.phase === dispatchIds.phase;
 }
 
@@ -336,6 +349,7 @@ module.exports = {
   VALID_ISOLATION,
   SENTINEL_RELATIVE_PATH,
   SENTINEL_STALE_MS,
+  AGED_NONE_MAX_MS,
   sentinelPath,
   resolveSentinelRoot,
   readSentinel,
