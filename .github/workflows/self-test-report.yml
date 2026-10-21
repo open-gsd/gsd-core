@@ -1,0 +1,81 @@
+name: Self-test Report
+
+# #5612: advisory check — a fix PR from someone who is not listed in
+# .github/MAINTAINERS must carry a `## Self-test report` section with a fenced
+# `json` block recording what they ran, bound to the PR's current head. See
+# docs/branch-protection.md ("Self-test report"). Not a required context on any
+# ruleset.
+#
+# The report is a head start for the reviewer, NOT proof: a local run cannot be
+# attested and CI on the merge-group commit stays authoritative. This job only
+# validates the report's shape and that it names the current head.
+#
+# Trust boundary. The job reads untrusted PR data (title, body, head ref, author).
+# It runs under `pull_request_target`, so the workflow FILE is loaded from the
+# default branch, checks out the BASE sha only, executes only the policy script
+# and reads the maintainer list from that trusted commit, never runs anything
+# from the PR, reads the body, title and head live from the API into files, and
+# passes every other PR-controlled value through an env var.
+# tests/self-test-report-workflow.test.cjs pins this.
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+  # Wired so promoting this to a required context later does not deadlock a merge
+  # queue. On a merge_group event GitHub loads this workflow file from the queue's
+  # temporary merge commit (base plus the queued PRs); safety does not come from
+  # the file's origin: the job is skipped on that event.
+  merge_group:
+    types: [checks_requested]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  self-test-report:
+    name: Self-test report
+    if: github.event_name != 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      # BASE sha only: the trusted policy source. Never the PR head.
+      - name: Check out policy from base
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      # The head sha, body and title are read live: the event payload holds the
+      # values at event time and a re-run replays it, so a push or an edit in
+      # between would let a stale run judge an old body against a new head (or the
+      # reverse). The body goes to a file, not an env var, so its size is never
+      # an issue.
+      - name: Read the current PR state
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          body_file="$RUNNER_TEMP/pr-body.txt"
+          title_file="$RUNNER_TEMP/pr-title.txt"
+          gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.body // ""' > "$body_file"
+          gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.title // ""' > "$title_file"
+          head_sha="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha')"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "body_file=$body_file" >> "$GITHUB_OUTPUT"
+          echo "title_file=$title_file" >> "$GITHUB_OUTPUT"
+
+      - name: Evaluate
+        env:
+          PR_BODY_FILE: ${{ steps.pr.outputs.body_file }}
+          PR_TITLE_FILE: ${{ steps.pr.outputs.title_file }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: node scripts/self-test-report-policy.cjs

@@ -6135,7 +6135,8 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number | null |
     if (!intent.phaseName) {
       const preFm = extractFrontmatter(content, statePath) as Record<string, unknown>;
       const curatedName = preFm['current_phase_name'];
-      if (typeof curatedName === 'string' && curatedName.trim().length > 0) {
+      // #5369: a status fragment a pre-fix write left as the name is not curated; do not reassert it.
+      if (typeof curatedName === 'string' && curatedName.trim().length > 0 && !phaseIdMod.isPlannedPhaseStatusPhrase(curatedName)) {
         rmwOptions.authoritativeFm = { current_phase_name: curatedName };
       }
     }
