@@ -557,11 +557,12 @@ function summaryPairsWithAnyPlan(planFiles: string[], summaryFile: string): bool
 /**
  * #5542: lookahead that ends a plan id inside a ROADMAP checkbox row, so `47-1`
  * never matches the start of `47-10-PLAN.md`. The id ends at `.md` or at any
- * character that is not a word character or a `.` followed by a digit: a dotted
- * sub-id (`01-01.1`) is a distinct plan, not a continuation of `01-01`, while
- * sentence punctuation (`01-01. Setup`) still ends the id.
+ * character that is not a word character or a `.`/`-` followed by a digit: a
+ * dotted sub-id (`01-01.1`) or a longer numeric id (`05-01-02`) is a distinct
+ * plan, not a continuation of `01-01`/`05-01`, while sentence punctuation
+ * (`01-01. Setup`) and a slug (`05-01-scaffold`) still end the id.
  */
-const PLAN_ID_ROW_BOUNDARY_SOURCE = '(?=\\.md|(?!\\w|\\.\\d))';
+const PLAN_ID_ROW_BOUNDARY_SOURCE = '(?=\\.md|(?!\\w|[.-]\\d))';
 
 /**
  * #5542: the checkbox-row regex for one plan id. By default it matches an

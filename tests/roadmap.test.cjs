@@ -6340,6 +6340,13 @@ describe('plan-id row boundary (#5542)', () => {
     assert.ok(read().includes('- [x] 47-01-scaffold-PLAN.md'), read());
   });
 
+  test('a longer numeric id row does not count as presence of its shorter prefix id', () => {
+    plan('47-01'); plan('47-01-02');
+    write(['- [ ] 47-01-02-PLAN.md - b']);
+    update();
+    assert.match(read(), /- \[ \] 47-01-PLAN\.md/, '47-01 has no row of its own, so one must be inserted');
+  });
+
   test('a row whose id ends in sentence punctuation still ticks', () => {
     plan('47-01'); summary('47-01');
     write(['- [ ] 47-01. Setup']);
