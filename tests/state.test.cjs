@@ -22590,3 +22590,66 @@ Last activity: 2026-10-01 -- done
     assert.match(read(), /^\*\*Current Plan:\*\* 9$/m);
   });
 });
+
+// #5460: begin-phase writes the LIVE lines, not a fenced example above them, and a U+2028 inside a
+// wrapped focus does not swallow the next field. The readers treat both as line structure; the
+// writer's regex fast paths used to ignore it.
+describe('begin-phase respects fences and U+2028 line breaks (#5460)', () => {
+  const FENCE = '```';
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const run = (stateText, args = '--phase 2 --name Two --plans 3') => {
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, stateText);
+    const r = runGsdTools(`query state.begin-phase ${args}`, tmpDir);
+    assert.strictEqual(r.success, true, r.error);
+    return fs.readFileSync(statePath, 'utf-8');
+  };
+
+  test('the live Current focus is written, not the fenced example above it', () => {
+    const after = run([
+      '# Project State', '',
+      'Example of the field:', '', FENCE, '**Current focus:** Example focus', FENCE, '',
+      '**Current focus:** Phase 1 — Old', '',
+      '## Current Position', '', 'Phase: 1 — OLD', 'Plan: 1 of 2', 'Status: Ready to plan', 'Last activity: 2026-10-01', '',
+    ].join('\n'));
+    assert.ok(after.includes(`${FENCE}\n**Current focus:** Example focus\n${FENCE}`), `fenced example changed:\n${after}`);
+    assert.match(after, /^\*\*Current focus:\*\* Phase 2 — Two$/m);
+    assert.ok(!after.includes('Phase 1 — Old'), 'the live focus line must have been rewritten');
+  });
+
+  test('the live Current Position lines are written, not a fenced template above them', () => {
+    const template = ['Phase: N (template)', 'Plan: X of Y', 'Status: template status', 'Last activity: template date'];
+    const after = run([
+      '# Project State', '', '## Current Position', '',
+      FENCE, ...template, FENCE, '',
+      'Phase: 1 — OLD', 'Plan: 1 of 2', 'Status: Ready to plan', 'Last activity: 2026-10-01', '',
+    ].join('\n'));
+    assert.ok(after.includes(`${FENCE}\n${template.join('\n')}\n${FENCE}`), `fenced template changed:\n${after}`);
+    assert.match(after, /^Phase: 2 \(Two\) — EXECUTING$/m);
+    assert.match(after, /^Plan: 1 of 3$/m);
+    assert.match(after, /^Status: Executing Phase 2$/m);
+  });
+
+  test('a U+2028 inside a wrapped focus does not delete the next field', () => {
+    const after = run([
+      '# Project State', '',
+      '**Current focus:** Phase 1 — Old', 'wrapped tail\u2028Stopped at: keep me', '',
+      '## Current Position', '', 'Phase: 1 — OLD', 'Plan: 1 of 2', 'Status: Ready to plan', 'Last activity: 2026-10-01', '',
+    ].join('\n'));
+    assert.ok(after.includes('Stopped at: keep me'), `the field after the U+2028 was deleted:\n${after}`);
+    assert.match(after, /^\*\*Current focus:\*\* Phase 2 — Two/m);
+  });
+
+  test('a layout with no fences and no U+2028 is written as before', () => {
+    const after = run([
+      '# Project State', '', '**Current focus:** Phase 1 — Old', '',
+      '## Current Position', '', 'Phase: 1 — OLD', 'Plan: 1 of 2', 'Status: Ready to plan', 'Last activity: 2026-10-01', '',
+    ].join('\n'));
+    assert.match(after, /^\*\*Current focus:\*\* Phase 2 — Two$/m);
+    assert.match(after, /^Phase: 2 \(Two\) — EXECUTING$/m);
+  });
+});
+
