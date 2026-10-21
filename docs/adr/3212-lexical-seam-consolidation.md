@@ -197,3 +197,30 @@ No user-facing command output, file format, or CLI contract changes in any phase
 - [CWE-1333: Inefficient Regular Expression Complexity](https://cwe.mitre.org/data/definitions/1333.html)
 - [Node.js Release Working Group](https://github.com/nodejs/Release) — LTS schedule
 - [CommonMark Spec](https://spec.commonmark.org/) — nested structure is context-free, not regular
+
+## Amendment (2026-10-20): the rejected shim was adopted as the Phase 1 fallback (#3498)
+
+Section 2 above drops the `22` lane from `engines.node` and the matrix, and rejects a
+delegating shim (`RegExp.escape ?? metachar-escape`) for retaining a hand-rolled implementation
+on the path this ADR exists to delete. The Consequences section's Risk paragraph names this as a
+live possibility: "the rejected shim (§2) remains the fallback if that proves wrong."
+
+It proved wrong. #3498 (2026-08-14) reported that `npm run build` broke on Node 22 in the
+`linux-node22` lane of the `gsd-test` remote-runner matrix (`~/.config/gsd-test/config.toml`,
+outside this repo and not updated when Phase 1 landed), because `scripts/gen-loop-host-contract.cjs`
+requires `src/pattern.cts` at build time and `escapeRegex` called the then-unconditional
+`RegExp.escape`. #3499 (`b946051a`) adopted exactly the rejected shim, now living in
+`src/pattern.cts` as the `escapeBuiltin ?? escapeMetachars` fallback, gated on
+`typeof RegExp.escape === 'function'`.
+
+**What this changes.** Node 22 is not fully dropped: `package.json`'s `engines.node` is still
+`>=24.0.0` and no `.github/workflows/test.yml` lane runs Node 22, but the external `gsd-test`
+matrix's `linux-node22` lane is real, still exercises this repo's build, and is kept green by the
+fallback. The single-owner invariant this ADR exists to protect is unaffected — the fallback
+lives inside `src/pattern.cts`, the one file `local/no-adhoc-regex-escape` scopes the escape
+implementation to.
+
+**What this does not change.** `engines.node` stays `>=24.0.0`; no GitHub Actions lane is
+reintroduced; §2's reasoning for preferring the built-in over a permanent hand-rolled
+implementation is unchanged — the fallback exists for one external lane this repo does not
+control, not as a reversal of the Node-floor decision.
