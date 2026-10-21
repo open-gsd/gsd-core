@@ -61,19 +61,30 @@ leave `next-queue` out until you intend to enforce it.
   PR's current head commit**.
 
 A stale approval (older head), the author's own review, a read-only reviewer, a
-later dismissal or change request by the same reviewer, a truncated review list
-and an unreadable maintainer file all fail the check. A later plain comment does
+later dismissal or change request by the same reviewer, an unreadable
+maintainer file, and a failed review listing (the collect step errors, so the
+job fails) all fail the check. A later plain comment does
 not withdraw an approval. This is why it exists: a ruleset's review count is one
 number for every author, so it cannot say "required unless the author is a
 maintainer", and the sole maintainer cannot approve their own PR, which pushed
 merges onto `--admin`.
 
-The policy and the maintainer list are read from the **base** branch, never the
-PR, so a PR cannot add its own author to `MAINTAINERS`. The check is **advisory**:
+The workflow checks out the **base** sha and runs the policy script and reads
+`MAINTAINERS` from there, so a PR cannot add its own author to the list. (The
+workflow *file* is loaded from the default branch on `pull_request_target`, but
+from the PR's merge ref on `pull_request_review`; see the promotion note
+below.) The check is **advisory**:
 it is not a required context on any ruleset and `next`'s one-review classic
 protection is unchanged. It is promoted only after it has been observed on real
 PRs, because whether a check run created by a `pull_request_review` event
 attaches to the PR head like a `pull_request_target` one is unverified.
+
+Apps and bots (for example `github-actions[bot]`) never count as approvers. The
+head commit is read live, not from the event payload. **Before making it
+required:** on `pull_request_review` for a fork PR the workflow file is loaded
+from the PR's merge ref, so a fork author could emit a passing job with this
+name. Evaluate only on `pull_request_target` (re-triggered on review events from
+a base-branch workflow) before requiring it.
 
 ## 4-PR Rollout Plan
 

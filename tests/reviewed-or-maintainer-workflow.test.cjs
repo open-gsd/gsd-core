@@ -72,7 +72,19 @@ describe('#5607: reviewed-or-maintainer workflow trust boundary', () => {
   test('PR-controlled values reach the policy only through env', () => {
     const evaluate = job.steps.find((step) => step.name === 'Evaluate');
     assert.equal(evaluate.env.PR_AUTHOR_LOGIN, '${{ github.event.pull_request.user.login }}');
-    assert.equal(evaluate.env.HEAD_SHA, '${{ github.event.pull_request.head.sha }}');
+    // The head sha is read live in the collect step, not replayed from the event.
+    assert.equal(evaluate.env.HEAD_SHA, '${{ steps.collect.outputs.head_sha }}');
+  });
+
+  test('reviewer bots are never looked up for a role', () => {
+    const collect = job.steps.find((step) => step.name === 'Collect reviews and reviewer permissions');
+    assert.equal(collect.run.includes('[bot]'), true, 'the login filter must exclude bot logins explicitly');
+    assert.equal(collect.run.includes('(\\[bot\\])?$'), false, 'the login filter must not admit a [bot] suffix');
+  });
+
+  test('a failed role lookup is reported, not silently turned into no approval', () => {
+    const collect = job.steps.find((step) => step.name === 'Collect reviews and reviewer permissions');
+    assert.equal(collect.run.includes('::warning::'), true);
   });
 
   test('runs the policy script from the checked-out base, not a PR path', () => {
@@ -80,8 +92,9 @@ describe('#5607: reviewed-or-maintainer workflow trust boundary', () => {
     assert.equal(evaluate.run, 'node scripts/reviewed-or-maintainer-policy.cjs');
   });
 
-  test('queue runs do not share one concurrency group', () => {
+  test('queue runs do not share one concurrency group, and event types do not cancel each other', () => {
     assert.match(doc.concurrency.group, /github\.event\.pull_request\.number \|\| github\.ref/);
+    assert.match(doc.concurrency.group, /github\.event_name/);
   });
 
   test('is not yet a required status check on any committed ruleset', () => {

@@ -70,6 +70,11 @@ function parseMaintainers(text) {
   return { ok: logins.size > 0, logins, invalid };
 }
 
+function isBot(entry) {
+  const user = entry && entry.user;
+  return Boolean(user && (user.type === 'Bot' || /\[bot\]$/i.test(String(user.login || ''))));
+}
+
 function lower(value) {
   return typeof value === 'string' ? value.toLowerCase() : '';
 }
@@ -113,6 +118,9 @@ function evaluateReviewed({ authorLogin, maintainers, reviews, roles, headSha, r
   for (const [login, entry] of standing) {
     if (login === author) continue;
     if (entry.state !== 'APPROVED') continue;
+    // An app or bot (for example github-actions[bot] when Actions may approve
+    // PRs) is not a human review, whatever permission it holds.
+    if (isBot(entry)) continue;
     const role = roles && typeof roles === 'object' ? roles[login] : undefined;
     if (!APPROVER_ROLES.has(role)) continue;
     if (lower(entry.commit_id) === lower(headSha)) return { ok: true, reason: REASON.OK_APPROVED };

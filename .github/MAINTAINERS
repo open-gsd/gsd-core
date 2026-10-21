@@ -5,8 +5,8 @@
 # says "this author's PRs need no second reviewer to satisfy that check". Every
 # other author needs an approving review from someone with write access.
 #
-# The check reads this file from the BASE branch, never from the PR, so a PR
-# cannot add its own author here and approve itself.
+# The check reads this file from the BASE branch (the workflow checks out the
+# base sha), not from the PR, so a PR cannot add its own author here.
 #
 # Initially the sole maintainer while the queue is being trialled.
 trek-e
