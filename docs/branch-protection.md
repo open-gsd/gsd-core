@@ -35,13 +35,17 @@ to respond. It carries no other rules and **no bypass actors yet**.
 Two things must be settled before it is enforced:
 - **The auto back-merge.** `auto-backmerge.yml` merges `main` into `next` as a
   merge commit so `main` stays an ancestor of `next`. A squash queue would
-  flatten it. Decide the bypass actor before enforcing. The `evaluate` logs
-  (below) may show whether the back-merge is caught, but whether GitHub
-  evaluates a merge-queue rule in `evaluate` mode at all is unverified, so
-  check the first run and be ready to test the back-merge another way.
+  flatten it. Decide the bypass actor before enforcing. Do not count on the
+  `evaluate` log to show whether the back-merge is caught: as of 2026-10-21 it
+  returns nothing for this repo (see "Reading evaluate-mode logs"). Test the
+  back-merge directly with the first real one after the queue is enforced.
 - **The Windows/macOS lane.** Moving it off PR runs is a separate switch, the
   repo variable `GSD_PR_LINUX_ONLY` (#5604). Set it only once the queue is
   enforced; until then Windows and macOS would first run after merge.
+
+**Applied 2026-10-21.** The ruleset was created in `evaluate` mode (id
+25600238) and GitHub accepted every `merge_queue` value as committed, so the
+parameter names and ranges are no longer unverified.
 
 **`sync-rulesets.sh` applies every file with one `ENFORCEMENT` value.** Its
 default run (`ENFORCEMENT=evaluate`) creates `next-queue` in `evaluate` mode,
@@ -113,19 +117,40 @@ REPO=open-gsd/gsd-core ENFORCEMENT=disabled bash scripts/sync-rulesets.sh
 The script is idempotent: running it twice with the same `ENFORCEMENT` value
 is a no-op semantically (PUT with identical body).
 
-## Reading evaluate-mode logs
-
-After applying with `evaluate`, check which PRs/pushes would have been blocked:
+**It applies the files in the working tree of the checkout you run it from.**
+From a branch that does not contain a ruleset file it silently skips that
+ruleset (running it on an old branch applied only `main-protection`,
+`release-branches` and `tag-immutability`). Run it from a current checkout of
+`next`, or create a single ruleset without the script:
 
 ```bash
-REPO=open-gsd/gsd-core
-RULESET_ID=$(gh api repos/$REPO/rulesets --jq '.[] | select(.name=="main-protection") | .id')
-gh api repos/$REPO/rulesets/$RULESET_ID/rule-suites
+git show origin/next:.github/rulesets/next-queue.json | jq '.enforcement = "evaluate"' | gh api --method POST repos/open-gsd/gsd-core/rulesets --input -
 ```
 
-Each entry shows the actor, ref, result (`pass`/`fail`), and which rules
-triggered. Use this to validate no legitimate workflows are broken before
-flipping to `active` in PR-3.
+`POST` always creates, so run that once; use `PUT .../rulesets/<id>` to change
+an existing ruleset.
+
+## Reading evaluate-mode logs
+
+After applying with `evaluate`, the repository's rule suites list what each
+ruleset evaluated. The endpoint is repo-level (it is not under a ruleset id):
+
+```bash
+gh api "repos/open-gsd/gsd-core/rulesets/rule-suites?time_period=week&rule_suite_result=all" \
+  --jq '.[] | {id, evaluation_result, ref, rules: [.rule_evaluations[]?.rule_source.name]}'
+```
+
+`time_period` is `hour`, `day`, `week` or `month`; `rule_suite_result` is `pass`,
+`fail`, `bypass` or `all`; `ref` and `actor_name` narrow it. The same data is under
+Settings > Rules > Insights in the web UI.
+
+**An empty result does not mean nothing would be blocked.** On 2026-10-21 this
+returned an empty list for a day, a week and a month even though the three
+older rulesets had been in `evaluate` mode for weeks and many PRs had merged
+into `next`. Either this repository does not record evaluations for these
+rulesets, or they are not visible to the API caller. Do not treat the log as
+the only evidence before flipping a ruleset to `active`: check the Insights page
+too, and plan to observe the first enforced merges directly.
 
 
 ## Test scope detection
