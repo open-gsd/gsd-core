@@ -1279,7 +1279,40 @@ export type StateTransitionResult = {
  * Phases 2–7 add cases for the remaining 9 intent kinds. A missing case is
  * a compile-time error (the function would not return on that path).
  */
+/**
+ * The transitions that rewrite single-line body fields (`Status:`, `Current focus:`, `Plan:` …) with
+ * plain line-anchored patterns. Those patterns match a fenced EXAMPLE of a field as readily as the
+ * live line (#5460), so these run over the document body with fenced blocks hidden.
+ * `milestone*`, `prune` and `rebuild` restructure sections or re-derive the document and are not
+ * field-by-field writers.
+ */
+const FENCE_MASKED_TRANSITIONS: ReadonlySet<StateTransitionIntent['kind']> = new Set([
+  'beginPhase', 'advancePlan', 'completePhase', 'plannedPhase', 'patch', 'update', 'sync',
+]);
+
 export function transitionCore(
+  content: string,
+  intent: StateTransitionIntent,
+  deps: StateTransitionDeps,
+): StateTransitionResult {
+  if (!FENCE_MASKED_TRANSITIONS.has(intent.kind)) return transitionCoreUnmasked(content, intent, deps);
+  // Only the body is masked: a fence opener inside a frontmatter block scalar must not swallow the
+  // closing `---` (the frontmatter is not where the live fields are written).
+  const body = stripFrontmatter(content);
+  if (!content.endsWith(body)) return transitionCoreUnmasked(content, intent, deps);
+  const prefix = content.slice(0, content.length - body.length);
+  const fenceMask = maskFences(body);
+  const result = transitionCoreUnmasked(prefix + fenceMask.masked, intent, deps);
+  const restored = fenceMask.restore(result.content);
+  // Cannot happen short of a writer bug (a transition dropped or duplicated a placeholder line); a
+  // refusal is the one outcome that cannot report a rewrite that did not land.
+  if (restored === null) {
+    throw new Error(`${intent.kind}: fenced code blocks could not be restored after the edit; refusing to write STATE.md`);
+  }
+  return { ...result, content: restored };
+}
+
+function transitionCoreUnmasked(
   content: string,
   intent: StateTransitionIntent,
   deps: StateTransitionDeps,
@@ -1330,22 +1363,6 @@ export function transitionCore(
  * machinery (preserves the #1230 delta heuristic without re-implementing it).
  */
 function beginPhaseCore(
-  content: string,
-  intent: { kind: 'beginPhase'; phaseNumber: string | number; phaseName: string | null; planCount: number | null; startPlan?: number | null },
-  deps: StateTransitionDeps,
-): StateTransitionResult {
-  // #5460: every field write runs over the document with fenced blocks hidden, so a fenced example
-  // of `Status:` / `Last Activity:` / `Current focus:` above the live line is neither matched nor
-  // rewritten. Without a fence the mask is the identity. A restore that cannot find its placeholder
-  // (it cannot, short of a writer bug) leaves the document untouched.
-  const fenceMask = maskFences(content);
-  const result = beginPhaseCoreOnMasked(fenceMask.masked, intent, deps);
-  const restored = fenceMask.restore(result.content);
-  if (restored === null) return { content, updated: [], data: result.data };
-  return { ...result, content: restored };
-}
-
-function beginPhaseCoreOnMasked(
   content: string,
   intent: { kind: 'beginPhase'; phaseNumber: string | number; phaseName: string | null; planCount: number | null; startPlan?: number | null },
   deps: StateTransitionDeps,

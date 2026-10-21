@@ -2202,5 +2202,17 @@ describe('maskFences / editOutsideFences (#5460)', () => {
     const content = [decoy, F, 'field: in-fence', F, 'field: b'].join('\n');
     assert.equal(editOutsideFences(content, upper), [decoy, F, 'field: in-fence', F, 'field: EDITED'].join('\n'));
   });
+
+  test('property: restore(mask(x)) === x for generated documents with fences', () => {
+    const line = fc.oneof(
+      fc.constantFrom('```', '~~~', '````', '```js', '  ```', 'field: x', '# Heading', '', '<!-- gsd-masked-fence-0-0 -->'),
+      fc.string({ maxLength: 12 }).filter((l) => !l.includes('\n')),
+    );
+    fc.assert(fc.property(fc.array(line, { maxLength: 14 }), fc.boolean(), (lines, crlf) => {
+      const content = lines.join(crlf ? '\r\n' : '\n');
+      const mask = maskFences(content);
+      assert.equal(mask.restore(mask.masked), content);
+    }));
+  });
 });
 
