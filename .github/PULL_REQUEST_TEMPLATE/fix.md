@@ -56,6 +56,35 @@ Fixes #
 
 ---
 
+## Self-test report
+
+<!--
+Outside contributors: fill this in AFTER your last push. It records what you ran, bound to your
+final commit, so a reviewer starts from your results. It is a head start, NOT proof: CI re-runs
+everything on the merge-group commit and is authoritative. Maintainers listed in
+.github/MAINTAINERS can leave it as is.
+
+- head_sha: `git rev-parse HEAD`. Push again and it goes stale: update it.
+- failing_first: the regression test failed on the base branch and passes on your head. If a
+  test is not possible, replace the object with {"not_applicable_reason": "why"}.
+- tool: "gsd-test", "npm-test" or "manual".
+-->
+
+```json
+{
+  "schema": 1,
+  "head_sha": "<40-hex sha of your final commit>",
+  "tool": "npm-test",
+  "failing_first": { "test": "tests/your-regression.test.cjs", "fails_on_base": false, "passes_on_head": false },
+  "commands": ["node --test tests/your-regression.test.cjs", "npm test"],
+  "full_suite": { "command": "npm test", "result": "skipped", "passed": 0, "failed": 0 },
+  "environment": { "os": "<your OS and version>", "node": "<node --version>" },
+  "output_excerpt": "<the last lines of the passing run, 2000 characters at most>"
+}
+```
+
+---
+
 ## Checklist
 
 - [ ] Issue linked above with `Fixes #NNN` — **PR will be auto-closed if missing**
