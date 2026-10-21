@@ -1011,6 +1011,11 @@ export function stripTaggedBlocks(content: string, tagName: string, allowAttribu
  * `<details open>` stays visible to `edit`). If `edit` returns a non-string, or
  * drops a placeholder, the original `content` is returned unchanged rather than
  * a document with a block missing.
+ *
+ * Nested blocks are NOT supported, exactly as for `extractTaggedBlocks` and
+ * `stripTaggedBlocks`: the first `</tag>` closes the block. Every ROADMAP reader
+ * that strips shipped milestones shares that grammar, so this writer sees the
+ * same blocks those readers do.
  */
 export function editOutsideTaggedBlocks(
   content: string,
