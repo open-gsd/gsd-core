@@ -43,7 +43,7 @@ AGENT_SKILLS_SYNTHESIZER=$(gsd_run query agent-skills gsd-research-synthesizer)
 AGENT_SKILLS_ROADMAPPER=$(gsd_run query agent-skills gsd-roadmapper)
 ```
 
-Parse JSON for: `researcher_model`, `synthesizer_model`, `roadmapper_model`, `commit_docs`, `project_exists`, `has_codebase_map`, `planning_exists`, `has_existing_code`, `has_package_file`, `is_brownfield`, `needs_codebase_map`, `has_git`, `git_worktree_root`, `in_nested_subdir`, `project_path`, `agents_installed`, `missing_agents`, `agent_runtime`, `agents_dir`, `required_agents`, `required_agents_installed`, `missing_required_agents`, `agent_skill_payloads_available`, `agent_skill_payload_agents`, `requirements_exists`, `init_incomplete`, `requirements_path`, `roadmap_path`, `config_path`, `research_dir`, `response_language`.
+Parse JSON for: `researcher_model`, `synthesizer_model`, `roadmapper_model`, `commit_docs`, `project_exists`, `has_codebase_map`, `planning_exists`, `has_existing_code`, `has_package_file`, `is_brownfield`, `needs_codebase_map`, `has_git`, `git_worktree_root`, `in_nested_subdir`, `project_path`, `agents_installed`, `agents_installed_reason`, `missing_agents`, `agent_runtime`, `agents_dir`, `required_agents`, `required_agents_installed`, `missing_required_agents`, `agent_skill_payloads_available`, `agent_skill_payload_agents`, `requirements_exists`, `init_incomplete`, `requirements_path`, `roadmap_path`, `config_path`, `research_dir`, `response_language`.
 
 **If `response_language` is set:** All user-facing output of this workflow — narration between tool calls, status updates, progress notes, findings, questions, prompts, and explanations — MUST be presented in `{response_language}`. Technical terms, code, file paths, and subagent prompts stay in English — only user-facing output is translated.
 
@@ -72,6 +72,8 @@ with "agent type not found" if `required_agents_installed` is false. Run the ins
 Proceeding without research subagents — roadmap will be generated inline.
 ```
 Skip Steps 6–7 (parallel research and synthesis) and proceed directly to roadmap creation in Step 8.
+
+**If `agents_installed` is null:** GSD could not check agents for this runtime (`agents_installed_reason`). Do not show the warning above. Spawn the first named subagent alone: the first researcher in Step 6, or `gsd-roadmapper` in Step 8 when research is skipped. If it fails with "agent type not found", write the roadmap inline instead of spawning `gsd-roadmapper`; if the failed spawn was the Step 6 researcher, first skip the rest of Step 6 and continue with Step 7. Otherwise spawn the remaining subagents as normal.
 
 **Detect runtime and set instruction file name:**
 

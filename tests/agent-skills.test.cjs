@@ -2287,3 +2287,112 @@ describe('regressions: workflows forward the started workstream to agent-skills 
     });
   });
 });
+
+describe('agent-skills on an UNKNOWN runtime id', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('config.runtime UNKNOWN, no agent_skills: an empty block', () => {
+    writeConfig(tmpDir, { runtime: 'example-host' });
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-planner'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '');
+  });
+
+  test('GSD_RUNTIME UNKNOWN, no agent_skills: an empty block', () => {
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-planner'], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir, GSD_RUNTIME: 'example-host' });
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '');
+  });
+
+  test('a project-relative skill still resolves; a global: skill is skipped with a warning', () => {
+    const skillDir = path.join(tmpDir, 'skills', 'local-skill');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Local Skill\n');
+    writeConfig(tmpDir, {
+      runtime: 'example-host',
+      agent_skills: { 'gsd-planner': ['skills/local-skill', 'global:some-skill'] },
+    });
+
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-planner'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.ok(r.ir.block.includes('skills/local-skill/SKILL.md'), `block must contain the local skill, got: ${r.ir.block}`);
+    assert.ok(!r.ir.block.includes('some-skill'), 'the global: skill must not be included');
+    assert.ok(
+      r.ir.warnings.some((w) => w.includes('does not know runtime "example-host"') && w.includes('global:some-skill')),
+      `warnings must name the UNKNOWN runtime and the skipped skill, got: ${JSON.stringify(r.ir.warnings)}`,
+    );
+  });
+
+  test('GSD_AGENTS_DIR still serves the agent payload fallback for an UNKNOWN runtime id', () => {
+    const agentsDir = path.join(tmpDir, 'host-agents');
+    fs.mkdirSync(agentsDir, { recursive: true });
+    fs.writeFileSync(path.join(agentsDir, 'gsd-planner.md'), '# planner persona\n');
+
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-planner'], tmpDir, {
+      HOME: tmpDir, USERPROFILE: tmpDir, GSD_RUNTIME: 'example-host', GSD_AGENTS_DIR: agentsDir,
+    });
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '# planner persona\n');
+  });
+
+  test('UNKNOWN config.runtime: zero, one and many project-relative skill paths', () => {
+    for (const name of ['a', 'b', 'c']) {
+      fs.mkdirSync(path.join(tmpDir, 'skills', name), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, 'skills', name, 'SKILL.md'), `# ${name}\n`);
+    }
+    for (const paths of [[], ['skills/a'], ['skills/a', 'skills/b', 'skills/c']]) {
+      writeConfig(tmpDir, { runtime: 'example-host', agent_skills: { 'gsd-planner': paths } });
+      const r = runAgentSkillsJson(['agent-skills', 'gsd-planner'], tmpDir);
+      assert.ok(r.success, `${paths.length} paths: ${r.error}`);
+      assert.strictEqual(r.ir.skills_count, paths.length);
+      assert.strictEqual(r.ir.reason, paths.length === 0 ? 'configured_empty' : 'resolved');
+      for (const p of paths) assert.ok(r.ir.block.includes(`${p}/SKILL.md`), `${paths.length} paths: block must include ${p}`);
+      assert.deepStrictEqual(r.ir.warnings, [], `${paths.length} paths: no warnings`);
+      if (paths.length === 0) assert.strictEqual(r.ir.block, '');
+    }
+  });
+
+  test('UNKNOWN config.runtime: a namespaced global: skill is skipped with the Skill-tool warning', () => {
+    writeConfig(tmpDir, { runtime: 'example-host', agent_skills: { 'gsd-planner': ['global:ns:skill'] } });
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-planner'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '');
+    assert.ok(r.ir.warnings.some((w) => w.includes('"global:ns:skill"') && w.includes('runtime "example-host"')),
+      `warnings must name the skipped skill, got: ${JSON.stringify(r.ir.warnings)}`);
+  });
+
+  test('a refusal from a second copy of the error class skips global: skills instead of throwing', (t) => {
+    const runtimeHomes = require('../gsd-core/bin/lib/runtime-homes.cjs');
+    t.mock.method(runtimeHomes, 'getGlobalSkillsBase', () => {
+      throw Object.assign(new Error('second copy'), { name: 'UnknownRuntimeError', code: 'GSD_UNKNOWN_RUNTIME' });
+    });
+    const { buildAgentSkillsBlock } = require('../gsd-core/bin/lib/init.cjs');
+    const diagnostics = { warnings: [] };
+    assert.strictEqual(buildAgentSkillsBlock({ runtime: 'codex', agent_skills: { 'gsd-planner': ['global:some-skill'] } }, 'gsd-planner', tmpDir, diagnostics), '');
+    assert.ok(diagnostics.warnings.some((w) => w.includes('does not know runtime "codex"') && w.includes('global:some-skill')),
+      JSON.stringify(diagnostics.warnings));
+  });
+
+  test('a retired config.runtime: buildAgentSkillsBlock refuses only with skill paths; agent-skills still refuses', (t) => {
+    const { buildAgentSkillsBlock } = require('../gsd-core/bin/lib/init.cjs');
+    const [retired] = require('../gsd-core/bin/lib/runtime-name-policy.cjs').RETIRED_RUNTIME_IDS;
+    assert.strictEqual(buildAgentSkillsBlock({ runtime: retired }, 'gsd-planner', tmpDir), '');
+    assert.strictEqual(buildAgentSkillsBlock({ runtime: retired, agent_skills: { 'gsd-planner': [] } }, 'gsd-planner', tmpDir), '');
+    assert.throws(() => buildAgentSkillsBlock({ runtime: retired, agent_skills: { 'gsd-planner': ['skills/a'] } }, 'gsd-planner', tmpDir),
+      { name: 'RetiredRuntimeError' });
+    writeConfig(tmpDir, { runtime: retired });
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-planner'], tmpDir);
+    assert.strictEqual(r.success, false, 'agent-skills refuses a retired runtime through the payload fallback');
+    const { cmdAgentSkills } = require('../gsd-core/bin/lib/init.cjs');
+    require('./helpers.cjs').sandboxHome(t, tmpDir);
+    assert.throws(() => cmdAgentSkills(tmpDir, 'gsd-planner', false, true), { name: 'RetiredRuntimeError' });
+  });
+});
