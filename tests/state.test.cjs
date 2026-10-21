@@ -22617,12 +22617,12 @@ describe('planned-phase without --name keeps the status out of the phase name (#
 
   test('no frontmatter: current_phase_name is not the status fragment', () => {
     const { name } = plan(POSITION);
-    assert.notStrictEqual(name, 'READY TO EXECUTE');
+    assert.strictEqual(name, null, 'no curated name and no --name: the name stays unset');
   });
 
   test('frontmatter without current_phase_name: not the status fragment', () => {
     const { name } = plan(`---\ncurrent_phase: 18\n---\n${POSITION}`);
-    assert.notStrictEqual(name, 'READY TO EXECUTE');
+    assert.strictEqual(name, null, 'no curated name and no --name: the name stays unset');
   });
 
   test('a curated name is kept and the body Phase line carries it too', () => {
