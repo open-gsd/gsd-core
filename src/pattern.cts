@@ -68,6 +68,15 @@ export function escapeRegex(value: string): string {
 }
 
 /**
+ * Lookahead source that ends a plan id inside a ROADMAP checkbox row (#5542).
+ * Used after `escapeRegex(planId)` so `47-1` never matches the start of
+ * `47-10-PLAN.md`. The id ends at `.md` or at any character that is not a word
+ * character or `.`: a dotted sub-id (`01-01.1`) is a distinct plan, not a
+ * continuation of `01-01`.
+ */
+export const PLAN_ID_ROW_BOUNDARY_SOURCE = '(?=\\.md|(?![\\w.]))';
+
+/**
  * Escape `value` for a POSIX extended regular expression (e.g. `git log --extended-regexp
  * --grep=…`). Always the plain backslash-escape of every ERE metacharacter, never
  * `RegExp.escape`: that built-in writes a leading digit as `\x31`, which ERE does not read as a

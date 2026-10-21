@@ -98,13 +98,13 @@ describe('plan-id row boundary (#5542)', () => {
     ['suffix-less with a dash description', '- [ ] 47-1 — desc', '- [x] 47-1 — desc'],
     ['bold', '- [ ] **47-1**', '- [x] **47-1**'],
     ['colon', '- [ ] 47-1: desc', '- [x] 47-1: desc'],
-    ['slugged plan filename', '- [ ] 47-1-scaffold-PLAN.md', '- [x] 47-1-scaffold-PLAN.md'],
+    ['slugged plan filename', '- [ ] 47-01-scaffold-PLAN.md', '- [x] 47-01-scaffold-PLAN.md'],
   ]) {
     test(`existing row form still ticks: ${label}`, () => {
       if (label === 'slugged plan filename') {
         // plan carries a descriptive slug; its summary is named by the bare id
-        fs.writeFileSync(path.join(phaseDir, '47-1-scaffold-PLAN.md'), '---\nphase: foo\nplan: 47-1\nwave: 1\n---\n# Plan\n');
-        summary('47-1');
+        fs.writeFileSync(path.join(phaseDir, '47-01-scaffold-PLAN.md'), '---\nphase: foo\nplan: 47-01\nwave: 1\n---\n# Plan\n');
+        summary('47-01');
       } else {
         plan('47-1'); summary('47-1');
       }

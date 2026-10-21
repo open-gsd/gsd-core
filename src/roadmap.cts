@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { realClock } from './clock.cjs';
-import { escapeRegex } from './pattern.cjs';
+import { escapeRegex, PLAN_ID_ROW_BOUNDARY_SOURCE } from './pattern.cjs';
 import { splitLines, detectEol, joinLines } from './text-lines.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
@@ -1589,16 +1589,20 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // superseded-filtered set (#2349 via scanPhasePlans) while `summaries` is
     // the raw *-SUMMARY.md listing — a superseded plan can carry a SUMMARY
     // (e.g. `status: halted`), and ticking it read as "executed" right under a
-    // count line that excludes it. The prefix match mirrors the checkbox regex
-    // below (rows match by planId prefix, which the PLAN-01.md naming shape
-    // relies on), so non-superseded plans tick exactly as before.
+    // count line that excludes it. #5542: a summary belongs to a live plan only
+    // by the SAME pairing rule the counts use (`summaryCandidates` via
+    // `countMatchedSummaries`), never by id prefix — a leftover `47-1` summary
+    // must not survive because a live `47-10` plan starts with `47-1`. Rows
+    // match the id up to a boundary (PLAN_ID_ROW_BOUNDARY_SOURCE), so `47-1`
+    // never ticks `47-10-PLAN.md`.
     const tickableSummaries = phaseInfo!.summaries
       .map((summaryFile) => ({ summaryFile, planId: summaryFile.replace('-SUMMARY.md', '').replace('SUMMARY.md', '') }))
-      .filter(({ planId }) => planId !== '' && phaseInfo!.plans.some((planFile) => planFile.startsWith(planId)));
+      .filter(({ summaryFile, planId }) => planId !== ''
+        && phaseInfo!.plans.some((planFile) => coreUtils.countMatchedSummaries([planFile], [summaryFile]) > 0));
     for (const { planId } of tickableSummaries) {
       const planEscaped = escapeRegex(planId);
       const planCheckboxPattern = new RegExp(
-        `(-\\s*\\[) (\\]\\s*(?:\\*\\*)?${planEscaped}(?:\\*\\*)?)`,
+        `(-\\s*\\[) (\\]\\s*(?:\\*\\*)?${planEscaped}${PLAN_ID_ROW_BOUNDARY_SOURCE}(?:\\*\\*)?)`,
         'i'
       );
       roadmapContent = roadmapContent.replace(planCheckboxPattern, '$1x$2');
@@ -1701,7 +1705,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
         for (const { planId } of tickableSummaries) {
           const planEscaped = escapeRegex(planId);
           const planCheckboxPattern = new RegExp(
-            `(-\\s*\\[) (\\]\\s*(?:\\*\\*)?${planEscaped}(?:\\*\\*)?)`,
+            `(-\\s*\\[) (\\]\\s*(?:\\*\\*)?${planEscaped}${PLAN_ID_ROW_BOUNDARY_SOURCE}(?:\\*\\*)?)`,
             'i'
           );
           roadmapContent = roadmapContent.replace(planCheckboxPattern, '$1x$2');

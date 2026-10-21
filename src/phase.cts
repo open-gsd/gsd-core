@@ -56,7 +56,7 @@ const {
   PHASE_HEADING_BASELINE,
   buildPhaseHeadingScanRegex,
 } = phaseIdMod;
-import { escapeRegex } from './pattern.cjs';
+import { escapeRegex, PLAN_ID_ROW_BOUNDARY_SOURCE } from './pattern.cjs';
 import { declareGateExit } from './gate-exit.cjs';
 import { gateVerdict } from './gate-verdict.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
@@ -4297,7 +4297,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
               // checkbox flip above — first matching bullet only, never a
               // fenced line, never a mid-line occurrence.
               const planCheckboxPattern = new RegExp(
-                `^(\\s*-\\s*\\[) (\\]\\s*(?:\\*\\*)?${planEscaped}(?:\\*\\*)?)`,
+                `^(\\s*-\\s*\\[) (\\]\\s*(?:\\*\\*)?${planEscaped}${PLAN_ID_ROW_BOUNDARY_SOURCE}(?:\\*\\*)?)`,
                 'i',
               );
               b = updateBullet(
