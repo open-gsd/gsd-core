@@ -50,7 +50,7 @@ Display:
 Spawn the planner in **outline-only** mode — it must write only the outline manifest, not any
 PLAN.md files:
 
-**Dispatch/wait gate — `PLANNER_STALL_DETECTION_ENABLED`:**
+**Dispatch/wait gate — `PLANNER_STALL_DETECTION_ENABLED` (config key `planner.stall_detection_enabled`, resolved in `stall-detection-helpers`):**
 - **`true` (default):** use `run_in_background=true` in the Agent() call below, then use `gsd_stall_watch` after it.
 
 ```javascript
