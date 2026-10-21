@@ -1618,8 +1618,10 @@ function parsePhaseFromProse(value: string | null): { phase: string | null; name
   // The precedence-decision vocabulary is deliberately broader than the final
   // name-nulling filter below: a dash tail that merely LOOKS like a status
   // annotation should lose to a parenthetical name, without changing which
-  // extracted names are nulled (that set stays the long-standing three).
-  const STATUS_WORD_RE = /^(?:complete|executing|not started)$/i;
+  // extracted names are nulled (that set is the long-standing three plus the
+  // planned-phase writer's own `READY TO EXECUTE`, #5369: with no parenthetical
+  // name to prefer it was otherwise harvested as the phase name).
+  const STATUS_WORD_RE = /^(?:complete|executing|not started|ready to execute)$/i;
   const STATUSY_TAIL_RE = /^(?:completed?|executing|not started|planning|planned|ready(?:\s+to\s+\S.{0,50})?|done|in progress|blocked|paused|verifying)$/i;
   const dashRaw = dashName?.[1]?.trim() ?? null;
   const dashIsName = dashRaw !== null && dashRaw.length > 0

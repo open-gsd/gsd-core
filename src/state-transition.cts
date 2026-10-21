@@ -2526,10 +2526,18 @@ function plannedPhaseCore(
   // Phase is system-derived, always replaced (Knuth invariant does not apply);
   // Status / Last activity stay template-aware.
   const beforePos = body;
+  // #5369: with no --name the label reuses the curated frontmatter name (when
+  // it is a real one) so the body line and the frontmatter agree; a status
+  // fragment a pre-fix write left there is never copied back into the name slot.
+  const curatedName = existingFm['current_phase_name'];
+  const labelName = intent.phaseName
+    ?? (typeof curatedName === 'string' && curatedName.trim() !== '' && !/^ready to execute$/i.test(curatedName.trim())
+      ? curatedName.trim()
+      : null);
   body = mutateCurrentPositionForAdvance(
     body,
     {
-      phase: `${intent.phaseNumber}${intent.phaseName ? ` (${intent.phaseName})` : ''} — READY TO EXECUTE`,
+      phase: `${intent.phaseNumber}${labelName ? ` (${labelName})` : ''} — READY TO EXECUTE`,
       status: 'Ready to execute',
       lastActivity: `${today} — Phase ${intent.phaseNumber} planning complete`,
     },
