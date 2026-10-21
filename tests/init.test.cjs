@@ -3381,8 +3381,12 @@ describe('#2376 — init.* path fields resolve when process cwd differs from --c
     assert.ok(content.includes('Write to: {research_dir}/SUMMARY.md'),
       'research-synthesizer spawn must write to {research_dir}/SUMMARY.md, not a bare literal');
 
+    // #5148: the SUMMARY.md line is kept only when research ran in this run.
     assert.ok(content.includes(
-      '<required_reading>\n- {project_path}\n- {requirements_path}\n- {research_dir}/SUMMARY.md (if exists)\n- {config_path}\n- {milestones_path}\n</required_reading>'
+      'Keep the `{research_dir}/SUMMARY.md` line only if research ran in Step 8'
+    ), 'roadmapper SUMMARY.md line must be conditional on research having run');
+    assert.ok(content.includes(
+      '<required_reading>\n- {project_path}\n- {requirements_path}\n- {research_dir}/SUMMARY.md\n- {config_path}\n- {milestones_path}\n</required_reading>'
     ), 'roadmapper spawn must read from {project_path}/{requirements_path}/{research_dir}/{config_path}/{milestones_path}, not bare .planning literals');
   });
 

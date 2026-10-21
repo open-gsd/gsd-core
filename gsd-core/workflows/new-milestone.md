@@ -331,13 +331,15 @@ with "agent type not found". Run the installer with --global to make agents avai
 
 Proceeding without research subagents — roadmap will be generated inline.
 ```
-Skip the parallel research spawn step and generate the roadmap inline.
+Step 8 then skips research without asking, and the roadmap is generated inline.
 
 <!-- gsd:section id="reset-phase-safety" when="flag:--reset-phase-numbers" -->
 If `section_manifest` is `null` or `"reset-phase-safety"` is in its `included` list: read and execute `gsd-core/workflows/new-milestone/steps/reset-phase-safety.md`. Otherwise skip — do not read the file.
 <!-- /gsd:section -->
 
 ## 8. Research Decision
+
+**If `agents_installed` is false:** do not ask — research needs the researcher subagents. Display `Skipping research — GSD agents not installed (see warning above)` and continue to Step 9 as if the user chose Skip.
 
 Check `research_enabled` from init JSON (loaded from config).
 
@@ -381,12 +383,12 @@ Spawn {N} parallel gsd-project-researcher agents (one per dimension kept). Each 
 
 ```text
 Agent(prompt="
-<research_type>Project Research — {DIMENSION} for [new features].</research_type>
+<research_type>Project Research — {DIMENSION} for this milestone's work.</research_type>
 
 <milestone_context>
-SUBSEQUENT MILESTONE — Adding [target features] to existing app.
+SUBSEQUENT MILESTONE — [target features] (new features and refactors) in an existing app.
 {EXISTING_CONTEXT}
-Focus ONLY on what's needed for the NEW features.
+Focus ONLY on what this milestone's work needs, including the integration points and pitfalls in the existing codebase it couples to or could break.
 </milestone_context>
 
 <question>{QUESTION}</question>
@@ -417,7 +419,7 @@ Use template: ~/.claude/gsd-core/templates/research-project/{FILE}
 | Field | Stack | Features | Architecture | Pitfalls |
 |-------|-------|----------|-------------|----------|
 | EXISTING_CONTEXT | Existing validated capabilities (DO NOT re-research): [from PROJECT.md] | Existing features (already built): [from PROJECT.md] | Existing architecture: [from PROJECT.md or codebase map] | Focus on common mistakes when ADDING these features to existing system |
-| QUESTION | What stack additions/changes are needed for [new features]? | How do [target features] typically work? Expected behavior? | How do [target features] integrate with existing architecture? | Common mistakes when adding [target features] to [domain]? |
+| QUESTION | What stack additions/changes are needed for [target features]? | How do [target features] typically work? Expected behavior? | How do [target features] integrate with existing architecture? | Common mistakes when adding [target features] to [domain]? |
 | CONSUMER | Specific libraries with versions for NEW capabilities, integration points, what NOT to add | Table stakes vs differentiators vs anti-features, complexity noted, dependencies on existing | Integration points, new components, data flow changes, suggested build order | Warning signs, prevention strategy, which phase should address it |
 | GATES | Versions current (verify with Context7), rationale explains WHY, integration considered | Categories clear, complexity noted, dependencies identified | Integration points identified, new vs modified explicit, build order considers deps | Pitfalls specific to adding these features, integration pitfalls covered, prevention actionable |
 | FILE | STACK.md | FEATURES.md | ARCHITECTURE.md | PITFALLS.md |
@@ -553,13 +555,15 @@ gsd_run query commit "docs: define milestone v[X.Y] requirements" --files "$REQU
 - If `--reset-phase-numbers` is active, start at **Phase 1**
 - Otherwise, continue from the previous milestone's last phase number (v1.0 ended at phase 5 → v1.1 starts at phase 6)
 
+Keep the `{research_dir}/SUMMARY.md` line only if research ran in Step 8; otherwise drop it (never a SUMMARY.md left from earlier runs):
+
 ```text
 Agent(prompt="
 <planning_context>
 <required_reading>
 - {project_path}
 - {requirements_path}
-- {research_dir}/SUMMARY.md (if exists)
+- {research_dir}/SUMMARY.md
 - {config_path}
 - {milestones_path}
 </required_reading>
