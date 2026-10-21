@@ -36,15 +36,16 @@ name: Require Issue Link
 on:
   pull_request_target:
     types: [opened, edited, reopened, synchronize]
-  # #4990: `Issue link required` is a required status check on `next`; a
+  # #5600: `Issue link required` is a required status check on `next`; a
   # merge queue requires every required context to also report on
   # `merge_group`, or the queue deadlocks waiting on a check nothing ever
   # produces.
   #
-  # #4990 (NIT 13): on a `merge_group` event, GitHub Actions loads this
-  # workflow FILE from the queued merge ref, not from any individual PR's
-  # head — and the job below is skipped on that event (see its `if:`
-  # condition), so no PR-supplied step ever executes here regardless.
+  # #5600: on a `merge_group` event GitHub Actions loads this workflow FILE from
+  # the queue's temporary merge commit (base plus the queued PRs), so a queued
+  # PR that edits this file runs its own version. Safety does not come from the
+  # file's origin: every job or step below is skipped on that event, so nothing
+  # in this file executes there (tests/ci-merge-group-wiring.test.cjs pins it).
   merge_group:
     types: [checks_requested]
 
@@ -71,7 +72,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      # #4990: `github.event.pull_request` is undefined on `merge_group` (that
+      # #5600: `github.event.pull_request` is undefined on `merge_group` (that
       # event carries no PR payload) — the issue link was already validated on
       # the `pull_request_target` event that queued this run, so each step
       # below individually no-ops on that event rather than reading fields it

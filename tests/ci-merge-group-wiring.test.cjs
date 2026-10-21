@@ -63,8 +63,17 @@ function supplierOf(context, workflows) {
   return matches;
 }
 
+const GUARD = "github.event_name != 'merge_group'";
+
+/**
+ * True only when the expression cannot run on merge_group: the guard is the
+ * whole expression, or one `&&` operand of it. Any `||` could re-open the
+ * event, so an expression containing one is rejected.
+ */
 function guardsMergeGroup(expr) {
-  return typeof expr === 'string' && expr.includes("github.event_name != 'merge_group'");
+  if (typeof expr !== 'string' || expr.includes('||')) return false;
+  const operands = expr.split('&&').map((o) => o.trim());
+  return operands.includes(GUARD);
 }
 
 describe('#5600: required contexts report on merge_group', () => {
@@ -96,6 +105,14 @@ describe('#5600: PR-metadata workflows execute nothing on merge_group', () => {
       const trigger = triggersOf(doc).merge_group;
       assert.deepEqual(trigger?.types, ['checks_requested']);
     });
+
+    if (file === 'require-issue-link.yml') {
+      test(`${file}: the job stays unconditional and each step carries the guard (#1389)`, () => {
+        for (const [id, job] of Object.entries(doc.jobs)) {
+          assert.equal(job.if, undefined, `${file} job "${id}" must not be skipped as a whole`);
+        }
+      });
+    }
 
     test(`${file}: every job or step is skipped on merge_group`, () => {
       // A job skipped by `if:` still reports success for required-check
