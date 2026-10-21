@@ -21,9 +21,10 @@ const WORKFLOWS_DIR = path.join(ROOT, 'gsd-core', 'workflows');
 const TEMPLATES_DIR = path.join(ROOT, 'gsd-core', 'templates');
 const workflow = fs.readFileSync(path.join(WORKFLOWS_DIR, 'diagnose-issues.md'), 'utf-8');
 
-/** The spawn_agents step's inline prompt: from its <objective> to the end of its <debug_file>. */
+/** The spawn_agents step's inline prompt: the <objective> after "fill this prompt" to the end of its <debug_file>. */
 function inlinePrompt(text) {
-  const start = text.indexOf('<objective>');
+  const anchor = text.indexOf('fill this prompt');
+  const start = anchor === -1 ? -1 : text.indexOf('<objective>', anchor);
   const closeTag = '</debug_file>';
   const end = text.indexOf(closeTag, start);
   return start === -1 || end === -1 ? '' : text.slice(start, end + closeTag.length);
@@ -47,6 +48,10 @@ describe('diagnose-issues.md debugger prompt (#5203)', () => {
     for (const placeholder of ['truth', 'expected', 'actual', 'errors', 'reproduction', 'timeline', 'slug']) {
       assert.ok(prompt.includes(`{${placeholder}}`), `inline prompt lacks {${placeholder}}`);
     }
+  });
+
+  test('the debug session file is named {slug}.md everywhere the workflow mentions it', () => {
+    assert.ok(!/DEBUG-\{slug\}/.test(workflow), 'a DEBUG-{slug}.md name contradicts the real .planning/debug/{slug}.md target');
   });
 
   test('the Agent() call passes the inline prompt under one consistent variable name', () => {

@@ -85,7 +85,7 @@ Spawning parallel debug agents to investigate root causes:
 | Delete removes comment | blocker |
 
 Each agent will:
-1. Create DEBUG-{slug}.md with symptoms pre-filled
+1. Create .planning/debug/{slug}.md with symptoms pre-filled
 2. Investigate autonomously (read code, form hypotheses, test)
 3. Return root cause
 
@@ -322,7 +322,7 @@ Agents only diagnose—plan-phase --gaps handles fixes (no fix application).
 - Report incomplete diagnosis
 
 **Agent times out:**
-- Check DEBUG-{slug}.md for partial progress
+- Check .planning/debug/{slug}.md for partial progress
 - Can resume with /gsd:debug
 
 **All agents fail:**
