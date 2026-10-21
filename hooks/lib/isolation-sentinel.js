@@ -281,6 +281,35 @@ function sentinelAppliesToDispatch(sentinel, dispatchIds) {
 }
 
 /**
+ * #5479: does an AGED recorded sequential degrade still govern THIS dispatch?
+ *
+ * The trust window (`SENTINEL_STALE_MS`) exists so a leftover sentinel cannot authorize an unisolated
+ * executor for a LATER, unrelated phase (#3045 F2). It also made the guard forget a legitimate
+ * degrade (the #683/#3060 base-check, the project opt-out) the moment the previous executor ran
+ * longer than the window: the next flag-less dispatch of the SAME phase was denied because the
+ * registry fallback answers "this host CAN isolate" and cannot see the shell-side degrade.
+ *
+ * True only when ALL of these hold, so the aged path can only ever loosen toward `none` for the exact
+ * phase the dispatch itself names:
+ *   - the sentinel is present, well-formed, and records `isolation: 'none'` (an aged
+ *     `harness-worktree`/`orchestrator-worktree` record authorizes nothing);
+ *   - its `written_at` is not in the future (a forged or clock-skewed record is never trusted);
+ *   - it carries a phase, the dispatch names a phase, and they are equal (a dispatch whose phase
+ *     cannot be established is "cannot compare", which keeps today's fallback, never an allow).
+ * The plan is deliberately not compared: a degrade recorded for an earlier plan of the phase still
+ * describes the phase. A fresh sentinel is handled by the existing path and never reaches here.
+ *
+ * `clock` is the injectable `{ now(): number }` seam `readSentinel` uses.
+ */
+function agedNoneGovernsDispatch(sentinel, dispatchIds, { clock = Date } = {}) {
+  if (!sentinel || sentinel.present !== true || sentinel.malformed) return false;
+  if (sentinel.isolation !== 'none') return false;
+  if (typeof sentinel.writtenAt !== 'number' || clock.now() - sentinel.writtenAt < -5000) return false;
+  if (!sentinel.phase || !dispatchIds || !dispatchIds.phase) return false;
+  return sentinel.phase === dispatchIds.phase;
+}
+
+/**
  * #4594 F3: build the structured "a fresh sentinel was present but did not
  * apply to this dispatch" descriptor, mirroring the exact comparison
  * `sentinelAppliesToDispatch` performs. Returns `null` when the sentinel is
@@ -312,5 +341,6 @@ module.exports = {
   readSentinel,
   extractDispatchIdentifiers,
   sentinelAppliesToDispatch,
+  agedNoneGovernsDispatch,
   buildSentinelDiscard,
 };

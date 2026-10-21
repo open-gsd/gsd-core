@@ -49,27 +49,27 @@ describe('agedNoneGovernsDispatch (#5479)', () => {
 
   test('an aged none governs a dispatch for the same phase', () => {
     for (const age of [SENTINEL_STALE_MS, SENTINEL_STALE_MS + 1, 22 * 60 * 1000, 6 * 60 * 60 * 1000]) {
-      assert.strictEqual(agedNoneGovernsDispatch(sentinel(), dispatchFor('02'), clockAt(age)), true, `age ${age}`);
+      assert.strictEqual(agedNoneGovernsDispatch(sentinel(), dispatchFor('02'), { clock: clockAt(age) }), true, `age ${age}`);
     }
   });
 
   test('it does not apply to a different phase, an unknown phase, or a sentinel with no phase', () => {
-    assert.strictEqual(agedNoneGovernsDispatch(sentinel(), dispatchFor('03'), clockAt(SENTINEL_STALE_MS)), false);
-    assert.strictEqual(agedNoneGovernsDispatch(sentinel(), dispatchFor(null), clockAt(SENTINEL_STALE_MS)), false);
-    assert.strictEqual(agedNoneGovernsDispatch(sentinel(), null, clockAt(SENTINEL_STALE_MS)), false);
-    assert.strictEqual(agedNoneGovernsDispatch(sentinel({ phase: null }), dispatchFor('02'), clockAt(SENTINEL_STALE_MS)), false);
+    assert.strictEqual(agedNoneGovernsDispatch(sentinel(), dispatchFor('03'), { clock: clockAt(SENTINEL_STALE_MS) }), false);
+    assert.strictEqual(agedNoneGovernsDispatch(sentinel(), dispatchFor(null), { clock: clockAt(SENTINEL_STALE_MS) }), false);
+    assert.strictEqual(agedNoneGovernsDispatch(sentinel(), null, { clock: clockAt(SENTINEL_STALE_MS) }), false);
+    assert.strictEqual(agedNoneGovernsDispatch(sentinel({ phase: null }), dispatchFor('02'), { clock: clockAt(SENTINEL_STALE_MS) }), false);
   });
 
   test('it only ever speaks for a recorded none', () => {
-    assert.strictEqual(agedNoneGovernsDispatch(sentinel({ isolation: 'harness-worktree', harnessFlag: 'isolation="worktree"' }), dispatchFor('02'), clockAt(SENTINEL_STALE_MS)), false);
-    assert.strictEqual(agedNoneGovernsDispatch(sentinel({ isolation: 'orchestrator-worktree' }), dispatchFor('02'), clockAt(SENTINEL_STALE_MS)), false);
+    assert.strictEqual(agedNoneGovernsDispatch(sentinel({ isolation: 'harness-worktree', harnessFlag: 'isolation="worktree"' }), dispatchFor('02'), { clock: clockAt(SENTINEL_STALE_MS) }), false);
+    assert.strictEqual(agedNoneGovernsDispatch(sentinel({ isolation: 'orchestrator-worktree' }), dispatchFor('02'), { clock: clockAt(SENTINEL_STALE_MS) }), false);
   });
 
   test('a future-dated, malformed or absent record is never trusted', () => {
-    assert.strictEqual(agedNoneGovernsDispatch(sentinel(), dispatchFor('02'), clockAt(-6000)), false);
-    assert.strictEqual(agedNoneGovernsDispatch(sentinel({ malformed: true }), dispatchFor('02'), clockAt(SENTINEL_STALE_MS)), false);
-    assert.strictEqual(agedNoneGovernsDispatch({ present: false }, dispatchFor('02'), clockAt(SENTINEL_STALE_MS)), false);
-    assert.strictEqual(agedNoneGovernsDispatch(null, dispatchFor('02'), clockAt(SENTINEL_STALE_MS)), false);
+    assert.strictEqual(agedNoneGovernsDispatch(sentinel(), dispatchFor('02'), { clock: clockAt(-6000) }), false);
+    assert.strictEqual(agedNoneGovernsDispatch(sentinel({ malformed: true }), dispatchFor('02'), { clock: clockAt(SENTINEL_STALE_MS) }), false);
+    assert.strictEqual(agedNoneGovernsDispatch({ present: false }, dispatchFor('02'), { clock: clockAt(SENTINEL_STALE_MS) }), false);
+    assert.strictEqual(agedNoneGovernsDispatch(null, dispatchFor('02'), { clock: clockAt(SENTINEL_STALE_MS) }), false);
   });
 });
 
