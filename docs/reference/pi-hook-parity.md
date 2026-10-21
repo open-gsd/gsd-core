@@ -18,15 +18,22 @@ Pi inputs the bridge maps to the Claude shape the hook scripts read:
 | `write` | `path`, `content` | `Write` | `file_path`, `content` |
 | `edit` | `path`, `edits[].oldText/newText` | `Edit` | `file_path`, `old_string`, `new_string` (edits joined with newlines) |
 | `read` | `path` | `Read` | `file_path` |
-| `bash` | `command` | `Bash` | `command` |
+| `bash`, `powershell` | `command` | `Bash` | `command` |
 | `grep` | `pattern`, `path`, `glob` | `Grep` | `pattern`, `file_path`, `glob` |
 | `find` | `pattern`, `path` | `Glob` | `glob`, `file_path` |
 
-A tool with no row (for example `ls` or `gsd_dispatch`) runs no hook. Pi's default active tools are `read`, `bash`, `edit` and `write`; `grep` and `find` are covered when you enable them.
+`path` values are sent as absolute paths (a leading `@` is dropped, `~` and relative paths are resolved against the session directory), and any text field is cut at 1 MiB. A tool with no row (for example `ls` or `gsd_dispatch`) runs no hook, and a command you type yourself with `!` is not a model tool call and is not gated. Pi's default active tools are `read`, `bash`, `edit` and `write`; `grep` and `find` are covered when you enable them.
 
-## Fail-open
+## Fail-open, and where it fails closed
 
-Pi blocks a tool whose `tool_call` handler throws, so the bridge never throws. A missing hook script, a spawn error, a timeout, unreadable JSON or an unexpected input all allow the call. A hook blocks only by exiting 2 or printing `{"decision":"block","reason":"..."}`.
+Pi blocks a tool whose `tool_call` handler throws, so the bridge never throws. A missing hook script, a spawn error, unreadable JSON or an unexpected input allow the call; a missing Node or bash is reported once on stderr because that guard did not run. A hook blocks only by exiting 2 or printing `{"decision":"block","reason":"..."}`.
+
+Two cases refuse instead of allowing, because an allow would be a bypass:
+
+- A hook whose output exceeds 8 MiB (a guard echoes the offending path, which a model controls) blocks the call.
+- `gsd-secret-read-guard.js` timing out blocks the call. Any other hook timing out allows it and adds an advisory to the result saying the check did not run.
+
+Hook text that reaches the model (advisories and block reasons) has control characters replaced and is cut at 4000 characters.
 
 ## Disposition of every hook
 
@@ -56,5 +63,6 @@ The table is `PI_HOOK_DISPOSITIONS` in `pi/gsd.cjs`; a test fails if a managed h
 ## Known limits
 
 - A role run by `gsd_dispatch` starts with `--no-extensions` (ADR-5559), so these guards do not run inside a dispatched role.
-- Advisories raised before a tool runs reach the model with that call's result, not before it.
+- Advisories raised before a tool runs reach the model with that call's result, not before it. At most 50 calls hold a pending advisory; under heavy parallel calling the oldest is dropped.
+- The injection scanner receives the read result as `tool_response`; its advisory can quote scanned text, which is why advisories are sanitized and capped.
 - When `GSD_HOOK_RUNTIME` is set the hooks run under it; otherwise they run under the Node that hosts Pi (`node` when Pi runs under Bun).
