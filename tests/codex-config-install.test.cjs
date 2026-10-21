@@ -2905,3 +2905,51 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     );
   });
 });
+
+// #5496: a clean install must pass `validate agents`' sandbox posture. The check derives each role's
+// expected sandbox_mode from the canonical agent definitions; in an installed config dir those are
+// <cfg>/gsd-core/agents, while <cfg>/agents holds the converted copies (no `tools:` declaration), so
+// reading the latter made every workspace-write role look like it should be read-only.
+describe('validate agents against a real fresh Codex install (#5496)', () => {
+  const { spawnSync } = require('node:child_process');
+  const { createTempDir } = require('./helpers.cjs');
+  const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  let codexHome;
+  beforeEach(() => {
+    codexHome = createTempDir('gsd-5496-install-');
+    runCodexInstall(codexHome);
+  });
+  afterEach(() => { cleanup(codexHome); });
+
+  const validateAgents = () => {
+    const tools = path.join(codexHome, 'gsd-core', 'bin', 'gsd-tools.cjs');
+    assert.ok(fs.existsSync(tools), 'the install must ship gsd-tools.cjs');
+    const r = spawnSync(process.execPath, [tools, 'validate', 'agents', '--json'], {
+      cwd: codexHome,
+      encoding: 'utf8',
+      timeout: PROBE_TIMEOUT_MS,
+      env: { ...process.env, GSD_RUNTIME: 'codex', GSD_AGENTS_DIR: path.join(codexHome, 'agents'), CODEX_HOME: codexHome, HOME: codexHome, USERPROFILE: codexHome, GSD_HOME: codexHome },
+    });
+    return JSON.parse(r.stdout);
+  };
+
+  test('a clean install reports no sandbox_posture violations', () => {
+    const out = validateAgents();
+    assert.deepStrictEqual(out.sandbox_posture.violations, []);
+    assert.strictEqual(out.sandbox_posture.ok, true);
+    assert.ok(out.sandbox_posture.checked.length > 0, 'the check must have looked at the generated TOMLs');
+  });
+
+  test('a TOML whose sandbox_mode truly disagrees with its role is still reported', () => {
+    const tomlPath = path.join(codexHome, 'agents', 'gsd-executor.toml');
+    const original = fs.readFileSync(tomlPath, 'utf8');
+    assert.match(original, /^sandbox_mode = "workspace-write"$/m, 'precondition: the executor is workspace-write');
+    fs.writeFileSync(tomlPath, original.replace(/^sandbox_mode = "workspace-write"$/m, 'sandbox_mode = "read-only"'));
+    const out = validateAgents();
+    const hit = out.sandbox_posture.violations.find((v) => v.agent === 'gsd-executor');
+    assert.ok(hit, `expected a gsd-executor violation, got ${JSON.stringify(out.sandbox_posture.violations)}`);
+    assert.strictEqual(hit.expected, 'workspace-write');
+    assert.strictEqual(hit.found, 'read-only');
+  });
+});
+
