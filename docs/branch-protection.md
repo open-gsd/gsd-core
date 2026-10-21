@@ -2,7 +2,7 @@
 
 ## Rulesets
 
-Three ruleset specs live under `.github/rulesets/`. All are committed with
+Four ruleset specs live under `.github/rulesets/`. All are committed with
 `enforcement: disabled` and activated in stages via the 3-PR rollout below.
 
 ### `main-protection`
@@ -22,6 +22,29 @@ are permitted on release/hotfix branches).
 ### `tag-immutability`
 Targets all tags (`~ALL`). Blocks tag updates and deletions — tags are
 immutable once created. Tag creation is unrestricted.
+
+### `next-queue`
+Targets `~DEFAULT_BRANCH`. A GitHub merge queue (#5605): approved, green PRs
+join a queue, up to three are grouped (`ALLGREEN`: a PR with a failing
+required check never joins a group), the full matrix runs once on the group's
+merge commit, and each PR is **squash**-merged as its own commit
+(`merge_method: SQUASH`, matching the one-commit-per-PR convention). The queue
+waits up to 15 minutes to collect two PRs and up to 90 minutes for the checks
+to respond. It carries no other rules and **no bypass actors yet**.
+
+Two things must be settled before it is enforced:
+- **The auto back-merge.** `auto-backmerge.yml` merges `main` into `next` as a
+  merge commit so `main` stays an ancestor of `next`. A squash queue would
+  flatten it. Read the `evaluate` logs (below) for this ruleset to see whether
+  the back-merge is caught, then decide the bypass actor from what they show.
+- **The Windows/macOS lane.** Moving it off PR runs is a separate switch, the
+  repo variable `GSD_PR_LINUX_ONLY` (#5604). Set it only once the queue is
+  enforced; until then Windows and macOS would first run after merge.
+
+**`sync-rulesets.sh` applies every file with one `ENFORCEMENT` value.** Running
+`ENFORCEMENT=active` to activate the other rulesets would activate `next-queue`
+too. To activate only the others, PUT them one at a time with `gh api`, or
+leave `next-queue` out until you intend to enforce it.
 
 ## 4-PR Rollout Plan
 
