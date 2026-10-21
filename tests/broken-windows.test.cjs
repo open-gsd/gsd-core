@@ -2067,7 +2067,7 @@ describe('#5418: parseLedger counts mismatch names the table-only / JSON-only ro
       assert.ok(err instanceof WindowsError);
       assert.equal(err.reason, 'windows_ledger_malformed', 'reason code unchanged');
       assert.match(err.message, /Ledger counts disagree with entries/, 'original message kept');
-      assert.match(err.message, /table[^.]*\b3\b/i, `must name the table-only row id 3: ${err.message}`);
+      assert.match(err.message, /in the table but not in the fenced JSON block: 3\b/, `must name the table-only row id 3: ${err.message}`);
       assert.match(err.message, /JSON block/i, 'must say which source is authoritative');
       return true;
     });
@@ -2083,7 +2083,7 @@ describe('#5418: parseLedger counts mismatch names the table-only / JSON-only ro
     const mismatched = bumpCounts(lines.join('\n'), 1, 1);
     assert.throws(() => parseLedger(mismatched), (err) => {
       assert.equal(err.reason, 'windows_ledger_malformed');
-      assert.match(err.message, /JSON[^.]*\b2\b/i, `must name the JSON-only row id 2: ${err.message}`);
+      assert.match(err.message, /in the fenced JSON block but not in the table: 2\b/, `must name the JSON-only row id 2: ${err.message}`);
       return true;
     });
   });
@@ -2103,6 +2103,16 @@ describe('#5418: parseLedger counts mismatch names the table-only / JSON-only ro
       assert.ok(err instanceof WindowsError);
       assert.equal(err.reason, 'windows_ledger_malformed');
       assert.match(err.message, /Ledger counts disagree with entries/);
+      return true;
+    });
+  });
+
+  test('an empty ledger with a bumped count does not blame the _(none)_ placeholder row', () => {
+    const raw = bumpCounts(renderLedger(emptyLedger(NOW)), 1, 1);
+    assert.throws(() => parseLedger(raw), (err) => {
+      assert.equal(err.reason, 'windows_ledger_malformed');
+      assert.match(err.message, /Ledger counts disagree with entries/);
+      assert.ok(!/_\(none\)_/.test(err.message), `placeholder row must not be named: ${err.message}`);
       return true;
     });
   });
