@@ -2707,7 +2707,7 @@ describe('bug-967 verify key-links strict file-path contract', () => {
 
 // ── 7. Doc-contract guard #4946: gsd-planner.md, planner-guidance.md & parity across surfaces ──
 // Markdown prompt files are runtime contracts executed by LLM agents (see CONTRIBUTING exception matrix).
-// No per-line allow-test-rule markers needed since no-source-grep ignores markdown reads.
+// No per-line allow-test-rule markers needed since no-source-grep ignores markdown reads (CONTRIBUTING.md:867).
 describe('bug #4946: planner key_links schema contract and cross-surface parity', () => {
   test('#4946: agents/gsd-planner.md states that key_links from/to must be relative file paths only', () => {
     const plannerPath = path.join(__dirname, '..', 'agents', 'gsd-planner.md');
@@ -2763,59 +2763,99 @@ describe('bug #4946: planner key_links schema contract and cross-surface parity'
   });
 
   test('#4946: parity: planner-guidance.md, phase-prompt.md, plan-md.md, and gsd-planner.md agree on key_links contract', () => {
-    const surfaces = [
+    const tableSurfaces = [
       ['planner-guidance.md', path.join(__dirname, '..', 'gsd-core', 'references', 'planner-guidance.md')],
       ['phase-prompt.md', path.join(__dirname, '..', 'gsd-core', 'templates', 'phase-prompt.md')],
       ['plan-md.md', path.join(__dirname, '..', 'docs', 'reference', 'plan-md.md')],
-      ['gsd-planner.md', path.join(__dirname, '..', 'agents', 'gsd-planner.md')],
     ];
 
-    const requiredTokens = ['key_links', 'via:'];
-
-    for (const [name, filePath] of surfaces) {
+    for (const [name, filePath] of tableSurfaces) {
       assert.ok(fs.existsSync(filePath), `${name} must exist at ${filePath}`);
       const content = fs.readFileSync(filePath, 'utf-8');
+      const lines = content.split(/\r?\n/);
 
-      for (const token of requiredTokens) {
-        assert.ok(
-          content.includes(token),
-          `${name} must contain required key_links contract token: "${token}"`,
-        );
-      }
-
-      // Discriminating per-surface assertions: endpoints 'from' and 'to' must be project-relative file paths
+      const fromRow = lines.find((l) => /^\|\s*`key_links\[\]\.from`\s*\|/.test(l));
+      assert.ok(fromRow, `${name} must include a field table row for key_links[].from`);
       assert.match(
-        content,
-        /(?:`key_links\[\]\.from`|`from`|from:).*(?:relative path|project-relative)/i,
-        `${name} must specify that key_links "from" is a project-relative file path`,
+        fromRow,
+        /^\|\s*`key_links\[\]\.from`\s*\|.*relative path from project root/i,
+        `${name} key_links[].from row must require relative path from project root`,
       );
       assert.match(
-        content,
-        /(?:`key_links\[\]\.to`|`to`|to:).*(?:relative path|project-relative)/i,
-        `${name} must specify that key_links "to" is a project-relative file path`,
+        fromRow,
+        /via:/i,
+        `${name} key_links[].from row must specify that components/symbols belong in via:`,
       );
 
-      // Both symbols and endpoints must be documented as belonging in via:
+      const toRow = lines.find((l) => /^\|\s*`key_links\[\]\.to`\s*\|/.test(l));
+      assert.ok(toRow, `${name} must include a field table row for key_links[].to`);
       assert.match(
-        content,
-        /(?:symbols?|components?|functions?).*(?:in `?via:`?|belong in `?via:`?|placed in `?via:`?|go in via:)/i,
-        `${name} must specify symbols belong in via:`,
+        toRow,
+        /^\|\s*`key_links\[\]\.to`\s*\|.*relative path from project root/i,
+        `${name} key_links[].to row must require relative path from project root`,
       );
       assert.match(
-        content,
-        /(?:endpoints?|apis?).*(?:in `?via:`?|belong in `?via:`?|placed in `?via:`?|go in via:)/i,
-        `${name} must specify endpoints belong in via:`,
+        toRow,
+        /via:/i,
+        `${name} key_links[].to row must specify that endpoints/modules belong in via:`,
       );
 
-      // Core instruction surfaces must explicitly prohibit symbols/endpoints in from/to
-      if (name === 'planner-guidance.md' || name === 'gsd-planner.md') {
-        assert.match(
-          content,
-          /(?:never (?:put|place) (?:functions, )?symbols.*in `?from:?`? or `?to:?`?|never put symbols, functions, or endpoints in `from:` or `to:`)/i,
-          `${name} must explicitly prohibit symbols and endpoints from being placed in from/to`,
-        );
-      }
+      const viaRow = lines.find((l) => /^\|\s*`key_links\[\]\.via`\s*\|/.test(l));
+      assert.ok(viaRow, `${name} must include a field table row for key_links[].via`);
+      assert.match(
+        viaRow,
+        /endpoint/i,
+        `${name} key_links[].via row must document endpoint names belong in via`,
+      );
+      assert.match(
+        viaRow,
+        /symbol/i,
+        `${name} key_links[].via row must document symbol names belong in via`,
+      );
     }
+
+    // gsd-planner.md prompt contract checks
+    const plannerPath = path.join(__dirname, '..', 'agents', 'gsd-planner.md');
+    assert.ok(fs.existsSync(plannerPath), `gsd-planner.md must exist at ${plannerPath}`);
+    const plannerContent = fs.readFileSync(plannerPath, 'utf-8');
+
+    assert.match(
+      plannerContent,
+      /`from` and `to` MUST be project-relative file paths only/i,
+      'agents/gsd-planner.md must specify relative file paths only for from/to',
+    );
+    assert.match(
+      plannerContent,
+      /Never put symbols, functions, or endpoints in `from:` or `to:`/i,
+      'agents/gsd-planner.md must prohibit symbols, functions, and endpoints in from/to',
+    );
+    assert.match(
+      plannerContent,
+      /Symbols, functions, endpoints.*MUST be placed in `via:`/i,
+      'agents/gsd-planner.md must instruct that symbols and endpoints belong in via:',
+    );
+    assert.match(
+      plannerContent,
+      /key_links:\s*\[\]\s*#.*\(from\/to MUST be project-relative file paths; symbols\/endpoints go in via:\)/,
+      'agents/gsd-planner.md must carry the key_links contract comment on its frontmatter stub',
+    );
+
+    // Negative control: verify that mutating table row content causes assertion failures
+    const dummyBadRow = '| `key_links[].from` | Source file without relative path. |';
+    assert.throws(
+      () => {
+        assert.match(dummyBadRow, /^\|\s*`key_links\[\]\.from`\s*\|.*relative path from project root/i);
+      },
+      (err) => err instanceof assert.AssertionError,
+      'Negative control: row missing "relative path from project root" must fail assertion',
+    );
+    assert.throws(
+      () => {
+        assert.match(dummyBadRow, /via:/i);
+      },
+      (err) => err instanceof assert.AssertionError,
+      'Negative control: row missing "via:" must fail assertion',
+    );
   });
 });
   });
