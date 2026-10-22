@@ -524,18 +524,53 @@ describe('enhancement #4570 config contract — planner stall detection has a ty
       .map((chars) => chars.join(''))
       .filter((value) => !['true', 'false', 'null'].includes(value));
 
-    fc.assert(
-      fc.property(invalidValue, (value) => {
-        const result = runGsdTools(
-          ['config-set', 'planner.stall_detection_enabled', value],
-          tmp,
-          { HOME: tmp, USERPROFILE: tmp },
-        );
-        return result.success === false && fs.readFileSync(configPath, 'utf8') === before;
-      }),
-      { numRuns: 20 },
-    );
+    const rejectedWithoutWrite = fc.property(invalidValue, (value) => {
+      const result = runGsdTools(
+        ['config-set', 'planner.stall_detection_enabled', value],
+        tmp,
+        { HOME: tmp, USERPROFILE: tmp },
+      );
+      return result.success === false && fs.readFileSync(configPath, 'utf8') === before;
+    });
+
+    fc.assert(rejectedWithoutWrite, { numRuns: 20 });
+    // #5507: the seed/path of the run that drew "-h" (a dispatcher help token that exits 0).
+    // A lucky seed hid that for 20 runs at a time, so replay it deterministically.
+    fc.assert(rejectedWithoutWrite, { seed: -1201433058, path: '3', endOnFailure: true });
   });
+
+  // #5507: the dispatcher treats a help token ANYWHERE in argv as a help request (#3019): usage, exit 0, the
+  // command never runs. That is why the property above must not draw those tokens; this states the contract.
+  for (const token of ['-h', '--h', '--help']) {
+    test(`config-set with the dispatcher help token ${token} prints usage and leaves config byte-identical`, (t) => {
+      const tmp = makeProject(t, { planner: { stall_detection_enabled: true }, sentinel: 'preserve' });
+      const configPath = path.join(tmp, '.planning', 'config.json');
+      const before = fs.readFileSync(configPath, 'utf8');
+      const result = runGsdTools(
+        ['config-set', 'planner.stall_detection_enabled', token],
+        tmp,
+        { HOME: tmp, USERPROFILE: tmp },
+      );
+      assert.equal(result.success, true, `${token} is a help request, not a config write: ${result.error}`);
+      assert.match(result.output, /^Usage: gsd-tools/m, 'prints the dispatcher usage');
+      assert.equal(fs.readFileSync(configPath, 'utf8'), before, 'config.json stays byte-identical');
+    });
+  }
+
+  for (const value of ['-v', '--version', '-x', '--x', '-', 'abc', '1', 'yes', '[]']) {
+    test(`config-set with the non-boolean, non-help value ${JSON.stringify(value)} is still rejected without a write`, (t) => {
+      const tmp = makeProject(t, { planner: { stall_detection_enabled: true }, sentinel: 'preserve' });
+      const configPath = path.join(tmp, '.planning', 'config.json');
+      const before = fs.readFileSync(configPath, 'utf8');
+      const result = runGsdTools(
+        ['config-set', 'planner.stall_detection_enabled', value],
+        tmp,
+        { HOME: tmp, USERPROFILE: tmp },
+      );
+      assert.equal(result.success, false, `${JSON.stringify(value)} must be rejected`);
+      assert.equal(fs.readFileSync(configPath, 'utf8'), before, 'config.json stays byte-identical');
+    });
+  }
 
   test('hand-edited non-booleans fail safely to true on both config-get and Config Loader reads', (t) => {
     const tmp = makeProject(t, { planner: { stall_detection_enabled: 'false' } });
