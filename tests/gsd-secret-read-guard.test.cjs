@@ -1262,25 +1262,40 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
     }), PROPERTY_RUNS);
   });
 
-  test('property: no run of words before a `case` hides the command after the span', () => {
-    // Words that end a compound command, start one, or are no command at all:
-    // whatever the grammar-following reading makes of `case` after them, the
-    // paren-counting one closes the span at the pattern.
-    const BEFORE = fc.constantFrom(
-      'if', 'then', 'else', 'elif', 'fi', 'while', 'do', 'done', 'esac', 'time', 'coproc', 'function', '!', '{', '}',
-      '[[', ']]', 'echo', 'x', 'x=1', '>f', ';', '&&', '|', '\n', '\r',
-    );
-    fc.assert(fc.property(fc.array(BEFORE, { maxLength: 6 }), SUBJECT, SECRET, (words, subject, secret) => {
-      const cmd = `echo "$(${[...words, 'case', subject, 'in', 'y'].join(' ')})"; cat ${secret}`;
+  test('property: the word before a `case` decides whether the span ends at its pattern', () => {
+    // A read after the span is blocked by either reading of `case`, so that
+    // half cannot fail on its own; the quoted twin is the half that can. Where
+    // `case` is the reserved word, `y)` is a pattern and the substitution runs
+    // on to the end, so bash reads `cat` as a command and the twin is blocked.
+    // Where it is an ordinary word, `y)` closes the substitution and `cat` is
+    // quoted, so the twin is allowed. The two lists are bash's: each word was
+    // run in front of a `case` that echoes from its arm.
+    const STARTS = fc.array(fc.constantFrom('true;', 'echo a &&', 'false ||', 'x | y;', 'z\n'), { maxLength: 3 });
+    const RESERVED_AFTER = ['', '!', '{', 'time', 'if', 'while', 'until'];
+    const ORDINARY_AFTER = ['echo', 'x', 'x=1', '>f', 'printf'];
+    const BEFORE = fc.constantFrom(...RESERVED_AFTER, ...ORDINARY_AFTER);
+    fc.assert(fc.property(STARTS, BEFORE, SUBJECT, SECRET, (starts, before, subject, secret) => {
+      const span = `echo "$(${[...starts, before, 'case', subject, 'in', 'y'].filter(Boolean).join(' ')})"`;
+      const cmd = `${span}; cat ${secret}`;
       assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: secret });
+      const twin = `${span}; echo "; cat ${secret}; "`;
+      if (RESERVED_AFTER.includes(before)) assertBlocked(runHook(bash(twin)), twin, { tool: 'Bash', path: secret });
+      else assertAllowed(runHook(bash(twin)), twin);
     }), PROPERTY_RUNS);
   });
 
   test('property: the span ends where the case ends — a read after it is blocked, and nothing else is', () => {
+    // One arm holds a lone `"`. Paren counting ends the span at the first
+    // pattern's `)` and reads the rest of the case inside the outer quotes,
+    // where that `"` ends them, so to it the read after the span is quoted: on
+    // most of these shapes only a span that ends at the case's own `)` blocks it.
+    const LONE_QUOTE = fc.constantFrom(`echo '"'`, `printf %s '"'`);
     const benignOnly = caseShape.chain((shape) => fc.tuple(
-      fc.constant(shape), fc.array(BENIGN, { minLength: shape.arms.length, maxLength: shape.arms.length }), SECRET,
+      fc.constant(shape), fc.array(BENIGN, { minLength: shape.arms.length, maxLength: shape.arms.length }),
+      fc.nat({ max: shape.arms.length - 1 }), LONE_QUOTE, SECRET,
     ));
-    fc.assert(fc.property(benignOnly, ([shape, bodies, secret]) => {
+    fc.assert(fc.property(benignOnly, ([shape, benign, at, quote, secret]) => {
+      const bodies = benign.map((b, k) => (k === at ? quote : b));
       const span = `echo "$(${render(shape, bodies)})"`;
       assertAllowed(runHook(bash(`${span}; echo done`)), `${span}; echo done`);
       assertBlocked(runHook(bash(`${span}; cat ${secret}`)), `${span}; cat ${secret}`, { tool: 'Bash', path: secret });
