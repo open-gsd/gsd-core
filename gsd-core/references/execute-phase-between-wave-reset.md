@@ -14,9 +14,9 @@
    `ISOLATION = "harness-worktree"`** (#2652 — keyed on the negotiated isolation model, not the
    runtime name).
 
-   Wave N's `WAVE_WORKTREE_MANIFEST` was consumed by `worktree.cleanup-wave` in step 5.5. It must be
-   unset so wave N+1's step 3 creates a fresh manifest for the new wave's worktrees. Without this,
-   the wave N+1 manifest guard (step 5.5, #3384) blocks on the stale/empty consumed file.
+   Wave N's `WAVE_WORKTREE_MANIFEST` was cleaned up and unlinked by `worktree.cleanup-wave` in step 5.5.
+   It must be unset so wave N+1 derives and creates a fresh manifest for the new wave's worktrees.
+   Without unsetting, the variable retains the old wave's path.
 
    After wave N merges and tracking commits, the orchestrator HEAD has advanced past the commit the
    Claude Code harness may have cached as the worktree fork base at session start. New worktrees
