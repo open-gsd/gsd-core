@@ -52,12 +52,13 @@ const os = require('node:os');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { runHook: runHookSeam, runGit } = require('./helpers/process-seam.cjs');
 const { toLegacyResult, gitOrThrow } = require('./helpers/git-fixture.cjs');
-const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { createTempDir, createTempProject, runGsdTools, cleanup } = require('./helpers.cjs');
+const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS, HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { createTempDir, createTempProject, createTempGitProject, runGsdTools, cleanup } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 const { SENTINEL_RELATIVE_PATH, SENTINEL_STALE_MS, readSentinel } = require('../hooks/lib/isolation-sentinel.js');
 const { REASON_CODE, REASON_INTERPOLATION_MAX_LEN, sanitizeForReason, describeSentinelDiscard } = require('../hooks/lib/isolation-deny-reason.js');
 const { runtimes } = require('../gsd-core/bin/lib/capability-registry.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-agent-isolation-guard.js');
 
@@ -1057,6 +1058,13 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
   test('dispatch sentinel stays ignored in a project without a root ignore rule (#5086)', (t) => {
     const dir = createFixture({ prefix: 'gsd-5086-ignore-', git: true, planning: true, projectDoc: true });
     t.after(() => cleanup(dir));
+    // Give the project a fork base at HEAD. Without one the resolver re-derives
+    // the #683 base-check degrade (`fork-ref-unknown`, #4222) and records `none`;
+    // this test is about the ignore rule, so keep it on the natural capability.
+    const forkBase = runGit(['update-ref', 'refs/remotes/origin/HEAD', 'HEAD'], {
+      cwd: dir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS,
+    });
+    assert.equal(forkBase.exitCode, 0, forkBase.stderr);
     const result = runGsdTools(
       ['query', 'dispatch-isolation', '--raw'], dir,
       { GSD_RUNTIME: 'claude', HOME: dir, USERPROFILE: dir },
@@ -1405,6 +1413,241 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
   });
 });
 
+describe('#4222 — the #683 base-check degrade is re-derived by the resolver, so a plain re-query cannot clobber it', () => {
+  // #4222 — the #683 worktree base-check auto-degrade (HEAD diverged from the
+  // fork base the harness forks worktrees from, origin/HEAD) was decided ONLY
+  // in workflow shell, after the resolve, and recorded via
+  // `--force-isolation none`. Unlike the #3737 opt-out, the resolver did not
+  // re-derive it, so any plain re-query — the orchestrator's own `--json`
+  // harnessFlag read, a subagent's gsd_run traffic — re-persisted
+  // `harness-worktree` over the record and the guard then denied the
+  // sequential dispatch the degrade had mandated.
+  //
+  // Real git, real `origin`: a bare repo stands in for the remote so
+  // origin/HEAD resolves the same way the harness's fork base does. No
+  // network, no mocked execGit — the resolver must reach the same evaluation
+  // the `worktree base-check` subcommand runs.
+  function git(args, cwd) {
+    return gitOrThrow(args, { cwd });
+  }
+
+  function writeClaudeConfig(dir) {
+    fs.writeFileSync(
+      path.join(dir, '.planning', 'config.json'),
+      JSON.stringify({ runtime: 'claude', workflow: { use_worktrees: true } }),
+    );
+  }
+
+  /** A git project whose HEAD is pushed to a local bare `origin`, with origin/HEAD set. */
+  function projectWithOrigin(t, prefix) {
+    const dir = createTempGitProject(prefix);
+    const bare = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}origin-`));
+    t.after(() => {
+      cleanup(dir);
+      cleanup(bare);
+    });
+    git(['init', '--bare'], bare);
+    git(['remote', 'add', 'origin', bare], dir);
+    const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], dir).trim();
+    git(['push', '-u', 'origin', branch], dir);
+    git(['symbolic-ref', 'refs/remotes/origin/HEAD', `refs/remotes/origin/${branch}`], dir);
+    writeClaudeConfig(dir);
+    return { dir, branch };
+  }
+
+  /** Advance local HEAD one commit past origin/HEAD — the #683 divergence. */
+  function diverge(dir) {
+    fs.appendFileSync(path.join(dir, 'README.md'), 'local divergence\n');
+    git(['add', '-A'], dir);
+    git(['commit', '-m', 'local commit not on origin'], dir);
+    assert.notEqual(
+      git(['rev-parse', 'HEAD'], dir).trim(),
+      git(['rev-parse', 'origin/HEAD'], dir).trim(),
+      'precondition: HEAD must differ from origin/HEAD',
+    );
+  }
+
+  const env = (dir) => ({ GSD_RUNTIME: 'claude', HOME: dir, CLAUDE_CONFIG_DIR: path.join(dir, '.claude') });
+
+  test('#4222: HEAD == origin/HEAD — a fresh run records the natural harness-worktree capability (nothing is sticky)', (t) => {
+    const { dir } = projectWithOrigin(t, 'gsd-4222-basecheck-');
+
+    const result = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1'], dir, env(dir));
+    assert.equal(result.success, true, result.error);
+    assert.equal(result.output.trim(), 'harness-worktree');
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'harness-worktree', 'a non-diverged repo must keep the natural capability');
+    assert.equal(sentinel.harness_flag, 'isolation="worktree"');
+    assert.equal(sentinel.phase, '1');
+  });
+
+  test('#4222: HEAD diverged — a plain re-query records none and does not clobber the forced record', (t) => {
+    const { dir } = projectWithOrigin(t, 'gsd-4222-basecheck-');
+    diverge(dir);
+
+    // The workflow's own re-record step after its shell base-check.
+    const forced = runGsdTools(
+      ['query', 'dispatch-isolation', '--raw', '--phase', '1', '--force-isolation', 'none'],
+      dir,
+      env(dir),
+    );
+    assert.equal(forced.success, true, forced.error);
+    assert.equal(forced.output.trim(), 'none');
+    assert.equal(readSentinelRaw(dir).isolation, 'none');
+
+    // The plain re-query that pre-fix flipped the sentinel back to
+    // harness-worktree (#4222 reproduction — the `--json` harnessFlag read).
+    const requery = runGsdTools(['query', 'dispatch-isolation', '--json', '--phase', '1'], dir, env(dir));
+    assert.equal(requery.success, true, requery.error);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'none', '#4222: a plain re-query must not re-persist the host capability over the base-check degrade');
+    assert.equal(sentinel.harness_flag, null);
+    assert.equal(sentinel.phase, '1');
+  });
+
+  test('#4222: HEAD diverged — stdout still reports the host capability (the shell fail-closed guard depends on it)', (t) => {
+    // The degrade is applied to the RECORDED decision only. Every dispatch
+    // site treats an unguarded `none` on stdout as "this runtime declares no
+    // executor-isolation primitive" and exits 1, so the resolver's stdout
+    // contract must not change — the shell still runs its own base-check
+    // and prints the divergence message from it.
+    const { dir } = projectWithOrigin(t, 'gsd-4222-basecheck-');
+    diverge(dir);
+
+    const raw = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1'], dir, env(dir));
+    assert.equal(raw.success, true, raw.error);
+    assert.equal(raw.output.trim(), 'harness-worktree', 'stdout is the capability, not the recorded decision');
+
+    const json = runGsdTools(['query', 'dispatch-isolation', '--json', '--phase', '1'], dir, env(dir));
+    assert.equal(json.success, true, json.error);
+    const parsed = JSON.parse(json.output);
+    assert.equal(parsed.isolation, 'harness-worktree');
+    assert.equal(parsed.harnessFlag, 'isolation="worktree"');
+
+    // ...while the sentinel — the guard's input — carries the degrade from
+    // the very first plain query, with no prior `--force-isolation` record.
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'none');
+    assert.equal(sentinel.harness_flag, null);
+  });
+
+  test('#4222: HEAD diverged — the degrade wins over --force-isolation harness-worktree (mirrors #3737)', (t) => {
+    const { dir } = projectWithOrigin(t, 'gsd-4222-basecheck-');
+    diverge(dir);
+
+    const forced = runGsdTools(
+      ['query', 'dispatch-isolation', '--raw', '--phase', '1', '--force-isolation', 'harness-worktree'],
+      dir,
+      env(dir),
+    );
+    assert.equal(forced.success, true, forced.error);
+    assert.equal(forced.output.trim(), 'harness-worktree', 'stdout honours the force');
+    assert.equal(readSentinelRaw(dir).isolation, 'none', 'the harness would still fork from the diverged base — the record must say none');
+  });
+
+  test('#4222: not sticky — once origin/HEAD catches up to HEAD, a plain re-query records harness-worktree again', (t) => {
+    const { dir, branch } = projectWithOrigin(t, 'gsd-4222-basecheck-');
+    diverge(dir);
+
+    const first = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1'], dir, env(dir));
+    assert.equal(first.success, true, first.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'none', 'precondition: the diverged run recorded none');
+
+    // Push local HEAD to origin so origin/HEAD == HEAD again.
+    git(['push', 'origin', branch], dir);
+    assert.equal(git(['rev-parse', 'HEAD'], dir).trim(), git(['rev-parse', 'origin/HEAD'], dir).trim());
+
+    const second = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1'], dir, env(dir));
+    assert.equal(second.success, true, second.error);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'harness-worktree', 'the evaluation reads live git state — a prior none must not persist');
+    assert.equal(sentinel.harness_flag, 'isolation="worktree"');
+  });
+
+  test('#4222: the resolved mode is threaded into the evaluation — orchestrator-worktree honours worktree.baseRef:"head" (#3659)', (t) => {
+    // In orchestrator-worktree mode GSD itself creates the worktree from the
+    // orchestrator HEAD, so baseRef "head" legitimately suppresses the
+    // divergence check; in harness-worktree mode it never did (#48). The
+    // resolver must pass the mode it resolved, not default to harness.
+    const { dir } = projectWithOrigin(t, 'gsd-4222-basecheck-');
+    diverge(dir);
+    fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.claude', 'settings.local.json'),
+      JSON.stringify({ worktree: { baseRef: 'head' } }),
+    );
+
+    const codex = runGsdTools(
+      ['query', 'dispatch-isolation', '--raw', '--phase', '1'],
+      dir,
+      { ...env(dir), GSD_RUNTIME: 'codex' },
+    );
+    assert.equal(codex.success, true, codex.error);
+    assert.equal(codex.output.trim(), 'orchestrator-worktree', 'precondition: codex resolves to orchestrator-worktree');
+    assert.equal(readSentinelRaw(dir).isolation, 'orchestrator-worktree', 'baseRef "head" suppresses the check where GSD creates the worktree');
+
+    // Since #4588 the Claude Code harness is measured to honour baseRef "head"
+    // too, so with no WorktreeCreate hook the same repo keeps the capability
+    // under harness-worktree (the #48 "harness ignores it" premise is retired).
+    const claude = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1'], dir, env(dir));
+    assert.equal(claude.success, true, claude.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'harness-worktree', 'the harness honours baseRef "head" where no WorktreeCreate hook replaces it (#4588)');
+  });
+
+  test('#4630: a WorktreeCreate hook host re-derives the #4881 interlock — the resolver records none and the CLI base-check agrees', (t) => {
+    // #4881: a WorktreeCreate hook replaces the harness's worktree creation, so
+    // baseRef "head" says nothing about the fork base there and the base-check
+    // compares against origin/HEAD. That interlock is derived from settings the
+    // resolver reads on every call, so it belongs to the shared derivation
+    // (evaluateWorktreeBaseDegradeForCwd), not the CLI wrapper: had it stayed in
+    // cmdWorktreeBaseCheck, this repo would degrade on the CLI and record
+    // harness-worktree from the resolver — the disagreement #4222's extraction
+    // exists to rule out.
+    const { dir } = projectWithOrigin(t, 'gsd-4630-hookhost-');
+    diverge(dir);
+    fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.claude', 'settings.local.json'),
+      JSON.stringify({
+        worktree: { baseRef: 'head' },
+        hooks: { WorktreeCreate: [{ hooks: [{ type: 'command', command: 'true' }] }] },
+      }),
+    );
+
+    const cli = runGsdTools(['query', 'worktree.base-check', '--mode', 'harness-worktree', '--pick', 'reason'], dir, env(dir));
+    assert.equal(cli.success, true, cli.error);
+    assert.equal(cli.output.trim(), 'baseref-head-bypassed-by-hook', 'precondition: the CLI base-check degrades on the hook host');
+
+    const resolved = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1'], dir, env(dir));
+    assert.equal(resolved.success, true, resolved.error);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'none', 'the resolver must reach the same verdict the CLI base-check emits');
+    assert.equal(sentinel.decided_by, 'resolver', 'a settings-derived degrade is re-derivable, so a later plain query re-evaluates it');
+  });
+
+  test('#4222: end-to-end — after a plain re-query on a diverged repo the guard ALLOWS the sequential dispatch', (t) => {
+    const { dir } = projectWithOrigin(t, 'gsd-4222-basecheck-');
+    diverge(dir);
+
+    // The workflow's resolve → shell base-check → `--force-isolation none`
+    // re-record, then the plain `--json` read that clobbered the record
+    // pre-fix (the originating session's first denial).
+    const forced = runGsdTools(
+      ['query', 'dispatch-isolation', '--raw', '--phase', '1', '--force-isolation', 'none'],
+      dir,
+      env(dir),
+    );
+    assert.equal(forced.success, true, forced.error);
+    const requery = runGsdTools(['query', 'dispatch-isolation', '--json', '--phase', '1'], dir, env(dir));
+    assert.equal(requery.success, true, requery.error);
+
+    // The guard fires on the sequential inline Agent() dispatch (no
+    // isolation kwarg) and must NOT deny it (#4222's user-visible symptom).
+    const r = runHook(agentPayload(), dir, { HOME: dir, CLAUDE_CONFIG_DIR: path.join(dir, '.claude') });
+    assert.equal(r.status, 0, `guard denied a sequential dispatch after a plain re-query on a diverged repo: stdout=${r.stdout} stderr=${r.stderr}`);
+  });
+});
+
 describe('#3045 MAJOR — --harness-flag can now accept a bare CLI-flag value (Cursor real registry value + generalized parsing)', () => {
   test('record-dispatch-isolation --harness-flag=--worktree persists the REAL cursor registry value verbatim', (t) => {
     const cursorFlag = runtimes.cursor.runtime.harnessIsolationFlag;
@@ -1507,6 +1750,16 @@ describe('#3045 MINOR — writer/reader sentinel path derivation now agrees for 
     fs.writeFileSync(path.join(mainRepo, 'README.md'), 'placeholder\n');
     git(['add', '-A'], mainRepo);
     git(['commit', '-m', 'initial commit'], mainRepo);
+    // #4222: the resolver now re-derives the #683 base-check for the decision
+    // it records, and a repo with no fork base at all (`fork-ref-unknown`)
+    // legitimately degrades to `none` — the verdict the workflow shell already
+    // reached on this shape. This test is about path derivation, not the
+    // degrade, so give the fixture an origin whose HEAD matches its own and
+    // the natural capability is what gets recorded.
+    git(['remote', 'add', 'origin', mainRepo], mainRepo);
+    git(['fetch', '--quiet', 'origin'], mainRepo);
+    const mainBranch = gitOrThrow(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: mainRepo }).trim();
+    git(['symbolic-ref', 'refs/remotes/origin/HEAD', `refs/remotes/origin/${mainBranch}`], mainRepo);
 
     // .planning/ is created AFTER the commit — uncommitted/untracked, the
     // documented shape where a linked worktree does NOT get its own copy
@@ -1980,5 +2233,872 @@ describe('gsd-agent-isolation-guard.js: #4734 — a non-git project root is neve
     const r = runHook(agentPayload(), project);
     assert.equal(r.status, 2, `stdout: ${r.stdout} stderr: ${r.stderr}`);
     assert.equal(JSON.parse(r.stdout).decision, 'block');
+  });
+});
+
+// #4561 — three dispatch sites compute a degrade the resolver cannot re-derive
+// (the single-agent orchestrator-worktree fallback in
+// references/dispatch-isolation-gate.md, the #2474 per-plan submodule
+// intersection in per-plan-worktree-gate.md, execute-plan.md's Pattern B) and
+// record it with `--force-isolation none`. Pre-fix, ANY later plain query in
+// the same run — the orchestrator's own `--json` harnessFlag read, a
+// subagent's gsd_run traffic, a wave transition — re-persisted the host
+// capability over that record, and the guard denied the sequential dispatch
+// the degrade had mandated. The resolver now HOLDS a fresh, in-scope `none`
+// record on a plain query instead of racing the shell for the file. Every
+// test drives the real CLI (runGsdTools) and reads the sentinel it wrote.
+describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade instead of clobbering it', () => {
+  const env = (dir) => ({ GSD_RUNTIME: 'claude', HOME: dir });
+
+  function shellDegradesToNone(dir, scopeArgs = []) {
+    // The per-plan gate's re-record shape: the shell decided `none` where the
+    // resolver cannot see why, and pushes it through the single write path.
+    const r = runGsdTools(
+      ['query', 'dispatch-isolation', '--raw', ...scopeArgs, '--force-isolation', 'none'],
+      dir,
+      env(dir),
+    );
+    assert.equal(r.success, true, r.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'none', 'precondition: the forced degrade is on disk');
+    return readSentinelRaw(dir).written_at;
+  }
+
+  test('an UNSCOPED plain re-query (a subagent\'s gsd_run traffic) leaves the forced `none` record untouched', (t) => {
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    const writtenAt = shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
+
+    const requery = runGsdTools(['query', 'dispatch-isolation', '--raw'], dir, env(dir));
+    assert.equal(requery.success, true, requery.error);
+
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'none', 'the forced degrade must survive a plain re-query');
+    assert.equal(sentinel.harness_flag, null);
+    assert.equal(sentinel.plan, 'plan-a', 'the record is held as-is — not rewritten with the query\'s (absent) scope');
+    assert.equal(sentinel.phase, '7');
+    assert.equal(sentinel.written_at, writtenAt, 'held means NOT rewritten: the timestamp must not refresh, or a polling re-query could keep a degrade alive forever');
+  });
+
+  test('stdout REPORTS the held `none` — raw prints it, and --json marks it held with no harness flag or exec', (t) => {
+    // #4904 review / the #5254 brief: "the query's stdout reports the held
+    // value". The guard and the workflow read one decision; the dispatch
+    // sites tell a held `none` from a declared one by `held`.
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    const writtenAt = shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
+
+    const raw = runGsdTools(['query', 'dispatch-isolation', '--raw'], dir, env(dir));
+    assert.equal(raw.success, true, raw.error);
+    assert.equal(raw.output.trim(), 'none');
+
+    const json = runGsdTools(['query', 'dispatch-isolation', '--json', '--phase', '7'], dir, env(dir));
+    assert.equal(json.success, true, json.error);
+    const parsed = JSON.parse(json.output);
+    assert.equal(parsed.isolation, 'none');
+    assert.equal(parsed.held, true);
+    assert.equal(parsed.harnessFlag, null, 'a held `none` carries no flag, exactly like a forced one');
+    assert.equal(parsed.exec, null);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'none', 'and the record is still held after both reads');
+    assert.equal(sentinel.written_at, writtenAt, 'reporting the hold writes nothing');
+  });
+
+  test('a query that is NOT holding reports the capability with held:false — a resolver-owned or out-of-scope record is not reported as held', (t) => {
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
+    // A different plan is out of scope, so this query writes rather than holds.
+    const other = runGsdTools(['query', 'dispatch-isolation', '--json', '--phase', '7', '--plan', 'plan-b'], dir, env(dir));
+    assert.equal(other.success, true, other.error);
+    const parsed = JSON.parse(other.output);
+    assert.equal(parsed.isolation, 'harness-worktree');
+    assert.equal(parsed.held, false);
+    assert.equal(parsed.harnessFlag, 'isolation="worktree"');
+  });
+
+  test('the descriptor read (inspect-dispatch-isolation) is never reached by a hold — it answers the host\'s flag while the record stays `none`', (t) => {
+    // executor-isolation-dispatch.md reads harnessFlag/exec from the inspect
+    // verb, because a plan-scoped degrade from step 2.5 is held by any query
+    // that names no plan, and would otherwise null the flag for the wave.
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    const writtenAt = shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
+    const r = runGsdTools(['query', 'inspect-dispatch-isolation', '--json'], dir, env(dir));
+    assert.equal(r.success, true, r.error);
+    const parsed = JSON.parse(r.output);
+    assert.equal(parsed.isolation, 'harness-worktree');
+    assert.equal(parsed.harnessFlag, 'isolation="worktree"');
+    assert.equal(parsed.held, false);
+    assert.equal(readSentinelRaw(dir).written_at, writtenAt, 'and inspection leaves the held record alone');
+  });
+
+  test('a plain re-query naming the SAME phase (execute-phase\'s own resolve) holds a plan-scoped record — an omitted identifier is unconstrained', (t) => {
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
+
+    const r = runGsdTools(['query', 'dispatch-isolation', '--json', '--phase', '7'], dir, env(dir));
+    assert.equal(r.success, true, r.error);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'none');
+    assert.equal(sentinel.plan, 'plan-a');
+  });
+
+  test('a plain re-query naming a DIFFERENT plan still writes — the per-plan gate\'s fresh record for the next plan is not held hostage by the last plan\'s degrade', (t) => {
+    // per-plan-worktree-gate.md: "a plan-level submodule degrade elsewhere in
+    // the wave could leave a stale `none` sentinel that a LATER, genuinely
+    // harness-worktree plan's own dispatch could be misread against."
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
+
+    const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7', '--plan', 'plan-b'], dir, env(dir));
+    assert.equal(r.success, true, r.error);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'harness-worktree');
+    assert.equal(sentinel.harness_flag, 'isolation="worktree"');
+    assert.equal(sentinel.plan, 'plan-b');
+    assert.equal(sentinel.phase, '7');
+  });
+
+  test('a plain query naming a phase over an UNSCOPED `none` record writes — a scoped request is a new record for that scope, not a re-read of somebody else\'s', (t) => {
+    // execute-plan.md's Pattern B records `none` with no identifiers. A later
+    // execute-phase resolve for phase 7 is a different workflow's record.
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    shellDegradesToNone(dir);
+    assert.equal(readSentinelRaw(dir).phase, null);
+
+    const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7'], dir, env(dir));
+    assert.equal(r.success, true, r.error);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'harness-worktree');
+    assert.equal(sentinel.phase, '7');
+  });
+
+  test('a FORCED record always writes — the shell can widen its own degrade back to the capability', (t) => {
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    shellDegradesToNone(dir, ['--phase', '7']);
+
+    const r = runGsdTools(
+      ['query', 'dispatch-isolation', '--raw', '--phase', '7', '--force-isolation', 'harness-worktree'],
+      dir,
+      env(dir),
+    );
+    assert.equal(r.success, true, r.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'harness-worktree');
+  });
+
+  test('a STALE `none` record is not held — a plain query past the reader\'s freshness window records the capability again (nothing is permanently sticky)', (t) => {
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    // A fixed epoch (2001-09-09T01:46:40Z), so the fixture and the assertion
+    // read no clock (RULESET.TESTS.no-timing-assertion). readSentinelAt holds
+    // it fresh only for a now within [epoch - 5 s, epoch + SENTINEL_STALE_MS),
+    // a window in 2001, so it is stale under any clock this suite runs on; and
+    // "rewritten" compares with the fixture's own stamp, not a window around
+    // the host's wall clock.
+    const staleWrittenAt = 1_000_000_000_000;
+    writeSentinel(dir, { isolation: 'none', writtenAt: staleWrittenAt });
+
+    const r = runGsdTools(['query', 'dispatch-isolation', '--raw'], dir, env(dir));
+    assert.equal(r.success, true, r.error);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'harness-worktree');
+    assert.ok(sentinel.written_at > staleWrittenAt, 'freshly rewritten, not the held stale record');
+  });
+
+  test('a MALFORMED sentinel is not held — a plain query overwrites it with a well-formed record', (t) => {
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    fs.mkdirSync(path.dirname(sentinelFile(dir)), { recursive: true });
+    fs.writeFileSync(sentinelFile(dir), '{ this is not valid json');
+
+    const r = runGsdTools(['query', 'dispatch-isolation', '--raw'], dir, env(dir));
+    assert.equal(r.success, true, r.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'harness-worktree');
+  });
+
+  test('a fresh run with NO sentinel records the natural capability exactly as before', (t) => {
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    assert.equal(fs.existsSync(sentinelFile(dir)), false, 'precondition: no sentinel');
+
+    const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7'], dir, env(dir));
+    assert.equal(r.success, true, r.error);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'harness-worktree');
+    assert.equal(sentinel.harness_flag, 'isolation="worktree"');
+  });
+
+  test('END TO END — after the shell\'s degrade and the orchestrator\'s own --json re-query, the guard ALLOWS the sequential dispatch the degrade mandated', (t) => {
+    // The #4222-class failure on a producer #4232 does not reach: pre-fix the
+    // --json re-query flipped the sentinel back to harness-worktree, and this
+    // dispatch — correctly omitting the isolation kwarg — was denied (exit 2).
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
+    const requery = runGsdTools(['query', 'dispatch-isolation', '--json', '--phase', '7'], dir, env(dir));
+    assert.equal(requery.success, true, requery.error);
+
+    const r = runHook(
+      agentPayload({ tool_input: { subagent_type: 'gsd-executor', description: 'Execute plan plan-a of phase 7' } }),
+      dir,
+      { HOME: dir },
+    );
+    assert.equal(r.status, 0, `the degraded dispatch must be allowed — stdout: ${r.stdout} stderr: ${r.stderr}`);
+  });
+
+  test('an EMPTY --phase / --plan argument (the workflows\' `"${PHASE_NUMBER:-}"` expansion) names no scope — the record is held, not treated as a mismatching ""', (t) => {
+    // executor-isolation-dispatch.md passes `--phase "${PHASE_NUMBER:-}"`, which
+    // expands to an EMPTY argument when PHASE_NUMBER is unset. If "" counted as
+    // a named identifier, "" !== held.phase would put every such query out of
+    // scope and the hold would silently never fire on exactly the re-query it
+    // exists for. The existing parser folds "" to null; this pins that.
+    const dir = createTempProject('gsd-4561-hold-');
+    t.after(() => cleanup(dir));
+    shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
+
+    const r1 = runGsdTools(['query', 'dispatch-isolation', '--json', '--phase', ''], dir, env(dir));
+    assert.equal(r1.success, true, r1.error);
+    assert.equal(JSON.parse(r1.output).held, true, 'an empty --phase must not be read as a differing scope');
+    assert.equal(JSON.parse(r1.output).isolation, 'none', 'and the held query answers with the held value');
+    assert.equal(readSentinelRaw(dir).isolation, 'none');
+
+    const r2 = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7', '--plan', ''], dir, env(dir));
+    assert.equal(r2.success, true, r2.error);
+    assert.equal(readSentinelRaw(dir).plan, 'plan-a', 'an empty --plan must not be read as a differing scope');
+  });
+
+  // The shipped `Resolve ISOLATION` blocks, run as a dispatch site runs them.
+  // A held `none` must send the site sequential (no FATAL), and the site must
+  // still re-record it at its OWN scope: the guard reads the record at dispatch
+  // time, and the held one can name another phase/plan or lapse before the
+  // dispatch. A `none` that is NOT held is the host declaring no primitive and
+  // must still fail closed.
+  const GATE_SOURCES = [
+    ['dispatch-isolation-gate.md', path.join(__dirname, '..', 'gsd-core', 'references', 'dispatch-isolation-gate.md')],
+    ['executor-isolation-dispatch.md', path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'executor-isolation-dispatch.md')],
+  ];
+  const NO_BASH = process.platform === 'win32';
+  const TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
+
+  function resolveIsolationBlock(file) {
+    const lines = splitLines(fs.readFileSync(file, 'utf8'));
+    const heading = lines.findIndex((l) => l.startsWith('## Resolve ISOLATION'));
+    assert.notEqual(heading, -1, `${file}: no "## Resolve ISOLATION" heading`);
+    const open = lines.findIndex((l, i) => i > heading && l.trim() === '```bash');
+    const close = lines.findIndex((l, i) => i > open && l.trim() === '```');
+    assert.ok(open !== -1 && close !== -1, `${file}: no bash block under "Resolve ISOLATION"`);
+    // The shim preamble locates gsd-tools on disk; the test supplies gsd_run itself.
+    return lines.slice(open + 1, close).filter((l) => !l.startsWith('_GSD_SHIM_NAME=')).join('\n');
+  }
+
+  function runResolveBlock(dir, file, gsdRunDefinition, extraEnv = {}) {
+    const script = path.join(dir, 'resolve-isolation.sh');
+    fs.writeFileSync(script, [
+      'set -u',
+      gsdRunDefinition,
+      'USE_WORKTREES=true; RUNTIME=claude; PHASE_NUMBER=7',
+      resolveIsolationBlock(file),
+      'printf "ISOLATION=%s\\nUSE_WORKTREES=%s\\n" "$ISOLATION" "$USE_WORKTREES"',
+    ].join('\n'));
+    const childEnv = { ...process.env, GSD_RUNTIME: 'claude', HOME: dir, ...extraEnv };
+    delete childEnv.CLAUDE_ENV_FILE;
+    return runHookSeam(script, [], { interpreter: 'bash', cwd: dir, env: childEnv, timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
+  }
+
+  // The scope each block records at: the gate is unscoped, the executor site names its phase.
+  const SITE_SCOPE = { 'dispatch-isolation-gate.md': null, 'executor-isolation-dispatch.md': '7' };
+  const guardModule = require('../hooks/gsd-agent-isolation-guard.js');
+
+  for (const [name, file] of GATE_SOURCES) {
+    test(`${name}: a HELD none runs sequentially — no FATAL, and re-records none at the site's own scope`, { skip: NO_BASH }, (t) => {
+      const dir = createTempProject('gsd-4904-gate-held-');
+      t.after(() => cleanup(dir));
+      const writtenAt = shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
+      const run = runResolveBlock(dir, file, `gsd_run() { node ${JSON.stringify(TOOLS)} "$@"; }`);
+      assert.equal(run.outcome, 'exited', run.stderr);
+      assert.equal(run.exitCode, 0, `the block failed closed on a held none: ${run.stderr}`);
+      assert.match(run.stdout, /^ISOLATION=none$/m);
+      assert.match(run.stdout, /^USE_WORKTREES=false$/m);
+      assert.match(run.stderr, /held at none/);
+      assert.doesNotMatch(run.stderr, /FATAL/);
+      const sentinel = readSentinelRaw(dir);
+      assert.equal(sentinel.isolation, 'none');
+      assert.equal(sentinel.decided_by, 'caller', 'the re-record ran: it forces the final value');
+      assert.equal(sentinel.plan, null, 'the re-record replaced the held plan-a record with this site\'s scope');
+      assert.equal(sentinel.phase, SITE_SCOPE[name]);
+      assert.ok(sentinel.written_at >= writtenAt, 'the re-record is fresh as of this site, not as of the held record');
+    });
+
+    test(`${name}: re-recording a HELD none keeps its decided_at, so following a hold does not restart it`, { skip: NO_BASH }, (t) => {
+      const dir = createTempProject('gsd-4904-gate-renew-');
+      t.after(() => cleanup(dir));
+      const T0 = 1_000_000_000_000;
+      const pinned = (now) => ({ GSD_TEST_MODE: '1', GSD_NOW_MS: String(now) });
+      const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7', '--force-isolation', 'none'], dir,
+        { GSD_RUNTIME: 'claude', HOME: dir, ...pinned(T0) });
+      assert.equal(r.success, true, r.error);
+      const run = runResolveBlock(dir, file, `gsd_run() { node ${JSON.stringify(TOOLS)} "$@"; }`, pinned(T0 + 60000));
+      assert.equal(run.exitCode, 0, run.stderr);
+      assert.match(run.stderr, /held at none/);
+      const sentinel = readSentinelRaw(dir);
+      assert.equal(sentinel.written_at, T0 + 60000, 'the site re-recorded');
+      assert.equal(sentinel.decided_at, T0, 'and kept the held decision\'s time');
+    });
+
+    // Codex RV6.5 review of #5126: with the re-record skipped, the guard read
+    // the HELD record at dispatch time — a description that parses as another
+    // phase, or the held record lapsing before the dispatch, made it fall back
+    // to the registry and deny the sequential dispatch the hold asked for.
+    test(`${name}: after following a hold, the guard allows the sequential dispatch it leads to`, { skip: NO_BASH }, (t) => {
+      // A git repository: outside one the guard's registry fallback already answers `none`
+      // (#4734), and the deny this test guards against could not happen at all.
+      const dir = createTempGitProject('gsd-4904-gate-held-guard-');
+      t.after(() => cleanup(dir));
+      // A GSD project on a harness-worktree host: without config.json the guard is inert.
+      fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude', workflow: { use_worktrees: true } }));
+      const heldWrittenAt = shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
+      const run = runResolveBlock(dir, file, `gsd_run() { node ${JSON.stringify(TOOLS)} "$@"; }`);
+      assert.equal(run.exitCode, 0, run.stderr);
+      const savedRuntime = process.env.GSD_RUNTIME;
+      process.env.GSD_RUNTIME = 'claude';
+      t.after(() => { if (savedRuntime === undefined) delete process.env.GSD_RUNTIME; else process.env.GSD_RUNTIME = savedRuntime; });
+      const dispatch = (description, nowMs) => guardModule.evaluateDispatch({
+        tool_name: 'Agent', cwd: dir,
+        tool_input: { subagent_type: 'gsd-executor', description, prompt: 'do the work' },
+      }, nowMs === undefined ? {} : { clock: { now: () => nowMs } });
+      // A quick task's description is user text; this one parses as phase 7 — the held record's own phase.
+      assert.equal(dispatch('Execute: fix the crash when we execute plan 01 of phase 7').action, 'allow');
+      if (SITE_SCOPE[name] === null) {
+        // Only the unscoped gate leads to dispatches whose identity can name another phase.
+        assert.equal(dispatch('Execute: fix the crash when we execute plan 02 of phase 8').action, 'allow',
+          'a description naming another phase must not be judged against the held plan-a record');
+      }
+      assert.equal(dispatch('Execute: a quick task', heldWrittenAt + SENTINEL_STALE_MS + 1).action, 'allow',
+        'the dispatch must not lapse with the HELD record\'s ten minutes');
+    });
+
+    test(`${name}: a none that is NOT held is a host with no primitive — still FATAL`, { skip: NO_BASH }, (t) => {
+      const dir = createTempProject('gsd-4904-gate-declared-');
+      t.after(() => cleanup(dir));
+      const answer = JSON.stringify({ runtime: 'claude', isolation: 'none', exec: null, harnessFlag: null, held: false });
+      const run = runResolveBlock(dir, file, `gsd_run() { case "$*" in *"--json"*) printf '%s' '${answer}' ;; *) return 0 ;; esac; }`);
+      assert.equal(run.outcome, 'exited', run.stderr);
+      assert.equal(run.exitCode, 1);
+      assert.match(run.stderr, /declares no executor-isolation primitive/);
+      assert.doesNotMatch(run.stderr, /held at none/);
+    });
+  }
+
+  // RV6.5 review of this round: after a held phase-level answer the per-plan
+  // gate inherits USE_WORKTREES=false and forces a literal `none` for each
+  // plan. Without the held answer's time that write restarted the hold.
+  test('per-plan-worktree-gate.md after a held answer: the plan-scoped record keeps the held decision time', { skip: NO_BASH }, (t) => {
+    const dir = createTempProject('gsd-4904-perplan-renew-');
+    t.after(() => cleanup(dir));
+    const T0 = 1_000_000_000_000;
+    const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7', '--force-isolation', 'none'], dir,
+      { GSD_RUNTIME: 'claude', HOME: dir, GSD_TEST_MODE: '1', GSD_NOW_MS: String(T0) });
+    assert.equal(r.success, true, r.error);
+    const perPlan = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'per-plan-worktree-gate.md');
+    const lines = splitLines(fs.readFileSync(perPlan, 'utf8'));
+    const marker = lines.findIndex((l) => l.includes('if [ "${USE_WORKTREES_FOR_PLAN:-}" = "false" ]; then'));
+    assert.notEqual(marker, -1, 'the per-plan re-record block is where this test expects it');
+    let open = marker; while (open > 0 && lines[open].trim() !== '```bash') open--;
+    let close = marker; while (close < lines.length && lines[close].trim() !== '```') close++;
+    const perPlanBlock = lines.slice(open + 1, close).filter((l) => !l.startsWith('_GSD_SHIM_NAME=')).join('\n');
+    const script = path.join(dir, 'per-plan.sh');
+    fs.writeFileSync(script, [
+      'set -u',
+      `gsd_run() { node ${JSON.stringify(TOOLS)} "$@"; }`,
+      'USE_WORKTREES=true; RUNTIME=claude; PHASE_NUMBER=7',
+      resolveIsolationBlock(GATE_SOURCES[1][1]),
+      'plan_id=plan-a; USE_WORKTREES_FOR_PLAN="$USE_WORKTREES"',
+      perPlanBlock,
+      'printf "USE_WORKTREES_FOR_PLAN=%s\\n" "$USE_WORKTREES_FOR_PLAN"',
+    ].join('\n'));
+    const childEnv = { ...process.env, GSD_RUNTIME: 'claude', HOME: dir, GSD_TEST_MODE: '1', GSD_NOW_MS: String(T0 + 60000) };
+    delete childEnv.CLAUDE_ENV_FILE;
+    const run = runHookSeam(script, [], { interpreter: 'bash', cwd: dir, env: childEnv, timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
+    assert.equal(run.exitCode, 0, run.stderr);
+    assert.match(run.stdout, /^USE_WORKTREES_FOR_PLAN=false$/m);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.plan, 'plan-a', 'the per-plan gate wrote the last record');
+    assert.equal(sentinel.written_at, T0 + 60000);
+    assert.equal(sentinel.decided_at, T0, 'and it kept the held phase decision\'s time');
+  });
+
+  for (const [name, file] of GATE_SOURCES) test(`${name}: with no record the block resolves the live capability and records it`, { skip: NO_BASH }, (t) => {
+    const dir = createTempProject('gsd-4904-gate-live-');
+    t.after(() => cleanup(dir));
+    // The executor block also runs the #683 base-check and the orphan reaper, which need a
+    // git fork base this fixture does not have; stub those two verbs, keep every isolation call real.
+    const run = runResolveBlock(dir, file, `gsd_run() { case "$2" in worktree.base-check) echo false ;; worktree.reap-orphans) : ;; *) node ${JSON.stringify(TOOLS)} "$@" ;; esac; }`);
+    assert.equal(run.outcome, 'exited', run.stderr);
+    assert.equal(run.exitCode, 0, run.stderr);
+    assert.match(run.stdout, /^ISOLATION=harness-worktree$/m);
+    assert.match(run.stdout, /^USE_WORKTREES=true$/m);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'harness-worktree');
+    assert.equal(sentinel.decided_by, 'caller', 'the re-record ran: it forces the final value');
+    assert.equal(sentinel.phase, SITE_SCOPE[name]);
+  });
+
+  // An answer outside the vocabulary is no verdict, held or not — including one carrying a
+  // byte bash drops from a command substitution, which would otherwise arrive as a valid value.
+  for (const answer of [
+    '{"isolation":"harness-\\u0000worktree","held":false}',
+    '{"isolation":"garbage","held":true}',
+  ]) test(`both blocks treat an out-of-vocabulary answer as unresolved: ${answer}`, { skip: NO_BASH }, (t) => {
+    for (const [name, file] of GATE_SOURCES) {
+      const dir = createTempProject('gsd-4904-gate-vocab-');
+      t.after(() => cleanup(dir));
+      const run = runResolveBlock(dir, file, `gsd_run() { case "$*" in *"--json"*) printf '%s' '${answer}' ;; *) return 0 ;; esac; }`);
+      assert.equal(run.exitCode, 1, `${name}: ${run.stdout}`);
+      assert.match(run.stderr, /could not resolve this runtime's executor-isolation capability/, name);
+      assert.doesNotMatch(run.stderr, /held at none/, name);
+    }
+  });
+});
+
+// ─── #4630 ADR Phase 2 — one vocabulary owner, and a recorded decision that
+// says who made it ───────────────────────────────────────────────────────────
+//
+// Carried from closed PRs #4620 (#4561, the vocabulary owner + the hold) and
+// #4232 (#4222, the in-resolver base-check re-derivation). Folded together the
+// two contradict: the degrade #4222 re-derives is written as a fresh, in-scope
+// `none`, which is exactly the shape #4561's hold protects — so the next plain
+// query held the resolver's OWN previous answer and "#4222 reads live git
+// state" quietly stopped being true. The record now states WHO decided, and
+// the hold keys on that instead of on value-plus-freshness.
+describe('#4630 — the isolation record states who decided it, so a re-query knows what it may re-derive', () => {
+  function git(args, cwd) {
+    return gitOrThrow(args, { cwd });
+  }
+  const env = (dir) => ({ GSD_RUNTIME: 'claude', HOME: dir });
+
+  function writeClaudeConfig(dir) {
+    fs.writeFileSync(
+      path.join(dir, '.planning', 'config.json'),
+      JSON.stringify({ runtime: 'claude', workflow: { use_worktrees: true } }),
+    );
+  }
+
+  function divergedProject(t, prefix) {
+    const dir = createTempGitProject(prefix);
+    const bare = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}origin-`));
+    t.after(() => { cleanup(dir); cleanup(bare); });
+    git(['init', '--bare'], bare);
+    git(['remote', 'add', 'origin', bare], dir);
+    const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], dir).trim();
+    git(['push', '-u', 'origin', branch], dir);
+    git(['symbolic-ref', 'refs/remotes/origin/HEAD', `refs/remotes/origin/${branch}`], dir);
+    writeClaudeConfig(dir);
+    fs.appendFileSync(path.join(dir, 'README.md'), 'local divergence\n');
+    git(['add', '-A'], dir);
+    git(['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-m', 'diverge'], dir);
+    return dir;
+  }
+
+  test('a degrade the RESOLVER re-derived is recorded as `resolver` — the provenance that lets a later query re-evaluate it', (t) => {
+    const dir = divergedProject(t, 'gsd-4630-prov-resolver-');
+    const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7'], dir, env(dir));
+    assert.equal(r.success, true, r.error);
+    const rec = readSentinelRaw(dir);
+    assert.equal(rec.isolation, 'none', 'precondition: the diverged repo degraded');
+    assert.equal(rec.decided_by, 'resolver', 'the resolver derived this from live git state');
+  });
+
+  test('a FORCED degrade is recorded as `caller` and a plain re-query holds it — #4561 unchanged', (t) => {
+    const dir = createTempProject('gsd-4630-prov-caller-');
+    t.after(() => cleanup(dir));
+    const forced = runGsdTools(
+      ['query', 'dispatch-isolation', '--raw', '--phase', '7', '--force-isolation', 'none'],
+      dir, env(dir),
+    );
+    assert.equal(forced.success, true, forced.error);
+    assert.equal(readSentinelRaw(dir).decided_by, 'caller', 'a force is the caller\'s decision, not a re-derivation');
+
+    const written = readSentinelRaw(dir).written_at;
+    const requery = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7'], dir, env(dir));
+    assert.equal(requery.success, true, requery.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'none', 'the caller\'s degrade is held');
+    assert.equal(readSentinelRaw(dir).written_at, written, 'held means NOT rewritten');
+  });
+
+  test('record-dispatch-isolation stamps `caller` — the verb the three unrederivable dispatch sites call', (t) => {
+    const dir = createTempProject('gsd-4630-prov-recordverb-');
+    t.after(() => cleanup(dir));
+    const r = runGsdTools(
+      ['record-dispatch-isolation', '--isolation', 'none', '--phase', '7', '--plan', 'plan-a'],
+      dir, env(dir),
+    );
+    assert.equal(r.success, true, r.error);
+    assert.equal(readSentinelRaw(dir).decided_by, 'caller');
+  });
+
+  test('a record with NO provenance (written by a pre-#4630 gsd-tools) is HELD, not clobbered — the default is the safe direction', (t) => {
+    const dir = createTempProject('gsd-4630-prov-legacy-');
+    t.after(() => cleanup(dir));
+    // writeSentinel emits exactly the pre-#4630 shape: no decided_by at all.
+    //
+    // NEGATIVE CONTROL: also GREEN pre-fix, where every fresh in-scope `none`
+    // was held unconditionally — so it does not discriminate this change. It
+    // is kept as a FORWARD guard: it reds if the unknown-provenance default is
+    // ever flipped to `resolver`, which would silently reopen #4222's failure
+    // (the guard refusing a dispatch the degrade mandated) for every record
+    // written by an older gsd-tools still in flight during an upgrade.
+    writeSentinel(dir, { isolation: 'none', phase: '7', plan: 'plan-a' });
+    const raw = readSentinelRaw(dir);
+    assert.equal('decided_by' in raw, false, 'precondition: the fixture really is fieldless');
+
+    const requery = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7'], dir, env(dir));
+    assert.equal(requery.success, true, requery.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'none',
+      'an unknown provenance reads as the caller\'s: holding costs a sequential run, clobbering makes the guard refuse the dispatch');
+  });
+
+  test('#4734 stays the guard\'s: a non-git root records the capability, and the resolver re-derives no base-check degrade there', (t) => {
+    // A non-git root has no HEAD to compare against a fork base, so the base
+    // check has derived nothing. #4734's own guard fallback already allows the
+    // flag-less dispatch; recording `none` here would make the resolver a
+    // second owner of that decision.
+    const dir = createTempProject('gsd-4630-nogit-');
+    t.after(() => cleanup(dir));
+    writeClaudeConfig(dir);
+    const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7'], dir, env(dir));
+    assert.equal(r.success, true, r.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'harness-worktree',
+      'the resolver records the host capability; the non-git degrade belongs to the guard');
+  });
+
+  test('a force the resolver OVERRULES is recorded as `resolver` — the caller asked for harness-worktree, so the base-check `none` is not the caller\'s to hold', (t) => {
+    // The #4222 degrade is applied AFTER --force-isolation (it wins over a
+    // force, mirroring #3737), so a caller forcing `harness-worktree` on a
+    // diverged repo gets `none` recorded. Stamping that `caller` because a
+    // force was APPLIED would let a later plain query hold a degrade the
+    // resolver itself derived, and #4222's "not sticky" would fail on this
+    // path. Provenance names who produced the recorded VALUE: it is the
+    // caller's only when it is what the caller forced.
+    const dir = divergedProject(t, 'gsd-4630-overrule-');
+    const forced = runGsdTools(
+      ['query', 'dispatch-isolation', '--raw', '--phase', '1', '--force-isolation', 'harness-worktree'],
+      dir, env(dir),
+    );
+    assert.equal(forced.success, true, forced.error);
+    const rec = readSentinelRaw(dir);
+    assert.equal(rec.isolation, 'none', 'precondition: the base-check degrade wins over the force');
+    assert.equal(rec.decided_by, 'resolver', 'the caller asked for harness-worktree; the `none` is the resolver\'s');
+
+    const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], dir).trim();
+    git(['push', 'origin', branch], dir);
+    const plain = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1'], dir, env(dir));
+    assert.equal(plain.success, true, plain.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'harness-worktree',
+      'once HEAD catches up, the resolver re-evaluates a degrade it derived itself');
+  });
+
+  test('a caller `none` recorded while the base check ALSO degrades keeps its provenance — the resolver\'s concurrent `none` does not overwrite it', (t) => {
+    // The overlap: a producer the resolver cannot reach (per-plan submodule
+    // gate, Pattern B, the single-agent fallback) forces `none` on a repo
+    // that is ALSO diverged. A plain query then derives `none` itself. If it
+    // writes that `none` as `resolver`, the caller's decision is silently
+    // re-owned, and when HEAD catches up the next plain query records
+    // harness-worktree: #4561's clobber, reintroduced on exactly the repos
+    // where both degrades apply. The hold must be consulted on every plain
+    // query, not only when the resolver would write something other than none.
+    const dir = divergedProject(t, 'gsd-4630-overlap-');
+    const forced = runGsdTools(
+      ['query', 'dispatch-isolation', '--raw', '--phase', '1', '--force-isolation', 'none'],
+      dir, env(dir),
+    );
+    assert.equal(forced.success, true, forced.error);
+    assert.equal(readSentinelRaw(dir).decided_by, 'caller', 'precondition: the forced none is the caller\'s');
+
+    const plainWhileDiverged = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1'], dir, env(dir));
+    assert.equal(plainWhileDiverged.success, true, plainWhileDiverged.error);
+    assert.equal(readSentinelRaw(dir).decided_by, 'caller',
+      'a plain query that re-derives none itself must not re-own the caller\'s record');
+
+    const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], dir).trim();
+    git(['push', 'origin', branch], dir);
+    const plainAfterCatchUp = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1'], dir, env(dir));
+    assert.equal(plainAfterCatchUp.success, true, plainAfterCatchUp.error);
+    const rec = readSentinelRaw(dir);
+    assert.equal(rec.isolation, 'none', 'the caller\'s degrade outlives the divergence: the resolver never owned it');
+    assert.equal(rec.decided_by, 'caller');
+  });
+});
+
+describe('#4561/#4630 — the hold\'s freshness window at both boundaries (readSentinelAt, injected clock)', () => {
+  // heldDegradeRecord (gsd-tools.cjs) holds a record only when readSentinelAt
+  // reports it fresh — its own gate is `held.stale`, passed straight through —
+  // so the window's boundaries live in the reader. The reader's clock is
+  // injectable (RULESET.TESTS.clock-seam), and
+  // these rows drive it at limit-1 / limit / limit+1 on both bounds
+  // (RULESET.TESTS.boundary-coverage): the staleness bound `age >=
+  // SENTINEL_STALE_MS` and the future-skew bound `age < -5000`.
+  const { readSentinelAt } = require('../hooks/lib/isolation-sentinel.js');
+  const WRITTEN_AT = 1_000_000_000_000;
+  const atAge = (age) => ({ now: () => WRITTEN_AT + age });
+  const ROWS = [
+    { age: SENTINEL_STALE_MS - 1, stale: false },
+    { age: SENTINEL_STALE_MS, stale: true },
+    { age: SENTINEL_STALE_MS + 1, stale: true },
+    { age: -4999, stale: false },
+    { age: -5000, stale: false },
+    { age: -5001, stale: true },
+  ];
+  // The three provenance shapes a hold can meet: a pre-#4630 record with no
+  // field (reads as caller), and each explicit producer.
+  const PROVENANCE = [
+    { decided_by: undefined, decidedBy: 'caller' },
+    { decided_by: 'caller', decidedBy: 'caller' },
+    { decided_by: 'resolver', decidedBy: 'resolver' },
+  ];
+
+  let dir;
+  before(() => { dir = createTempProject('gsd-4630-window-'); });
+  after(() => cleanup(dir));
+
+  function writeRecord(decidedBy) {
+    const rec = { isolation: 'none', harness_flag: null, phase: '7', plan: null, written_at: WRITTEN_AT };
+    if (decidedBy !== undefined) rec.decided_by = decidedBy;
+    fs.mkdirSync(path.dirname(sentinelFile(dir)), { recursive: true });
+    fs.writeFileSync(sentinelFile(dir), JSON.stringify(rec));
+  }
+
+  for (const { decided_by, decidedBy } of PROVENANCE) {
+    for (const { age, stale } of ROWS) {
+      test(`decided_by=${decided_by ?? '(absent)'}, age ${age} ms -> ${stale ? 'STALE (never held)' : 'fresh (holdable)'}`, () => {
+        writeRecord(decided_by);
+        const held = readSentinelAt(dir, { clock: atAge(age) });
+        assert.equal(held.present, true);
+        assert.equal(held.malformed, false);
+        assert.equal(held.stale, stale);
+        // The fields the hold gates on after freshness ride through unchanged
+        // at every boundary, so a fresh row is held exactly when it is the
+        // caller's.
+        assert.equal(held.isolation, 'none');
+        assert.equal(held.decidedBy, decidedBy);
+        assert.equal(held.phase, '7');
+        assert.equal(held.writtenAt, WRITTEN_AT);
+      });
+    }
+  }
+});
+
+// #4904 review (trek-e, 2026-10-21, Minor 1): every gate that follows a held
+// `none` re-records it, so the guard has a fresh record at its own dispatch.
+// That re-record used to restart the hold as well, so runs started less than
+// ten minutes apart kept a degrade alive indefinitely and a base-check degrade
+// outlived HEAD catching up. The record now carries `decided_at`; a
+// `--renew-held` re-record keeps it, and the hold lapses ten minutes after it.
+describe('#4904 review — a renewed hold lapses ten minutes after the degrade was decided, however many gates follow it', () => {
+  const { readSentinelAt } = require('../hooks/lib/isolation-sentinel.js');
+  // A fixed epoch for every timestamp, pinned in gsd-tools through the clock
+  // seam (GSD_NOW_MS under GSD_TEST_MODE, #474): no row reads the wall clock.
+  const T0 = 1_000_000_000_000;
+  const env = (dir, now) => ({ GSD_RUNTIME: 'claude', HOME: dir, GSD_TEST_MODE: '1', GSD_NOW_MS: String(now) });
+  const query = (dir, now, args) => {
+    const r = runGsdTools(['query', 'dispatch-isolation', ...args], dir, env(dir, now));
+    assert.equal(r.success, true, r.error);
+    return r;
+  };
+  const writeRecord = (dir, rec) => {
+    fs.mkdirSync(path.dirname(sentinelFile(dir)), { recursive: true });
+    fs.writeFileSync(sentinelFile(dir), JSON.stringify(rec));
+  };
+
+  describe('the reader measures the hold from decided_at and the guard\'s freshness from written_at (injected clock)', () => {
+    let dir;
+    before(() => { dir = createTempProject('gsd-4904-decided-at-'); });
+    after(() => cleanup(dir));
+    // The record was re-recorded one minute before `now`, so the guard reads
+    // it fresh on every row; only the decision's age moves.
+    const ROWS = [
+      { decisionAge: SENTINEL_STALE_MS - 1, holdExpired: false },
+      { decisionAge: SENTINEL_STALE_MS, holdExpired: true },
+      { decisionAge: SENTINEL_STALE_MS + 1, holdExpired: true },
+    ];
+    for (const { decisionAge, holdExpired } of ROWS) {
+      test(`decided ${decisionAge} ms ago, written 60000 ms ago -> hold ${holdExpired ? 'expired' : 'live'}, record fresh`, () => {
+        const now = T0 + SENTINEL_STALE_MS + 1;
+        writeRecord(dir, { isolation: 'none', harness_flag: null, phase: '7', plan: null, decided_by: 'caller', decided_at: now - decisionAge, written_at: now - 60000 });
+        const rec = readSentinelAt(dir, { clock: { now: () => now } });
+        assert.equal(rec.stale, false, 'the guard\'s window is written_at\'s, which the re-record refreshed');
+        assert.equal(rec.holdExpired, holdExpired);
+        assert.equal(rec.decidedAt, now - decisionAge);
+      });
+    }
+
+    for (const [label, decidedAt] of [['absent', undefined], ['not a number', '1000'], ['not finite', null]]) {
+      test(`decided_at ${label} reads as written_at — a record from before the field`, () => {
+        const rec = { isolation: 'none', harness_flag: null, phase: null, plan: null, decided_by: 'caller', written_at: T0 };
+        if (decidedAt !== undefined) rec.decided_at = decidedAt;
+        writeRecord(dir, rec);
+        const read = readSentinelAt(dir, { clock: { now: () => T0 + SENTINEL_STALE_MS - 1 } });
+        assert.equal(read.decidedAt, T0);
+        assert.equal(read.holdExpired, false);
+      });
+    }
+
+    test('a decided_at later than written_at is clamped to written_at, so it cannot extend the hold', () => {
+      writeRecord(dir, { isolation: 'none', harness_flag: null, phase: null, plan: null, decided_by: 'caller', decided_at: T0 + 5 * SENTINEL_STALE_MS, written_at: T0 });
+      const read = readSentinelAt(dir, { clock: { now: () => T0 + SENTINEL_STALE_MS } });
+      assert.equal(read.decidedAt, T0);
+      assert.equal(read.holdExpired, true);
+    });
+  });
+
+  // End to end through gsd-tools: degrade at T0, a following gate renews it
+  // one minute before the window closes, then a plain query at the boundary.
+  // A renewing site passes back the `decidedAt` its own held answer reported.
+  function degradeThenRenew(dir, renewArgs) {
+    query(dir, T0, ['--raw', '--force-isolation', 'none']);
+    const RENEWED_AT = T0 + SENTINEL_STALE_MS - 60000;
+    const answer = JSON.parse(query(dir, RENEWED_AT - 1, ['--json']).output);
+    assert.equal(answer.held, true, 'precondition: the following site saw a held answer');
+    assert.equal(answer.decidedAt, T0, 'and the answer names when that degrade was decided');
+    const args = renewArgs.map((a) => (a === '<decidedAt>' ? String(answer.decidedAt) : a));
+    query(dir, RENEWED_AT, ['--raw', '--force-isolation', 'none', ...args]);
+    return { rec: readSentinelRaw(dir), RENEWED_AT };
+  }
+
+  test('--renew-held <decidedAt> refreshes written_at and records the decision the site followed', (t) => {
+    const dir = createTempProject('gsd-4904-renew-');
+    t.after(() => cleanup(dir));
+    const { rec, RENEWED_AT } = degradeThenRenew(dir, ['--renew-held', '<decidedAt>']);
+    assert.equal(rec.isolation, 'none');
+    assert.equal(rec.decided_by, 'caller');
+    assert.equal(rec.written_at, RENEWED_AT);
+    assert.equal(rec.decided_at, T0);
+  });
+
+  for (const { offset, held } of [
+    { offset: SENTINEL_STALE_MS - 1, held: true },
+    { offset: SENTINEL_STALE_MS, held: false },
+    { offset: SENTINEL_STALE_MS + 1, held: false },
+  ]) {
+    test(`a renewed hold, queried ${offset} ms after the degrade was decided -> ${held ? 'still held' : 'lapsed'}`, (t) => {
+      const dir = createTempProject('gsd-4904-renew-');
+      t.after(() => cleanup(dir));
+      degradeThenRenew(dir, ['--renew-held', '<decidedAt>']);
+      const r = query(dir, T0 + offset, ['--json']);
+      const answer = JSON.parse(r.output);
+      assert.equal(answer.held, held);
+      assert.equal(answer.isolation, held ? 'none' : 'harness-worktree');
+      assert.equal(answer.decidedAt, held ? T0 : null);
+      assert.equal(readSentinelRaw(dir).isolation, held ? 'none' : 'harness-worktree',
+        held ? 'a held query writes nothing' : 'a lapsed hold is replaced like any other expired record');
+    });
+  }
+
+  test('CONTROL: a forced none WITHOUT --renew-held is a new decision, and its own ten minutes are still running', (t) => {
+    const dir = createTempProject('gsd-4904-renew-');
+    t.after(() => cleanup(dir));
+    const { rec, RENEWED_AT } = degradeThenRenew(dir, []);
+    assert.equal(rec.decided_at, RENEWED_AT);
+    const answer = JSON.parse(query(dir, T0 + SENTINEL_STALE_MS, ['--json']).output);
+    assert.equal(answer.held, true, 'without the flag the second write restarted the hold — the behaviour the flag bounds');
+  });
+
+  // RV6.5 review of this round: renewal used to read the time from whatever
+  // caller `none` stood in the file at write time. Another plan's degrade
+  // recorded between a site's held query and its re-record then lent that
+  // site its own, later time, and extended the hold the site had followed.
+  test('the renewal records the decision the site followed, not another plan\'s record written in between', (t) => {
+    const dir = createTempProject('gsd-4904-renew-');
+    t.after(() => cleanup(dir));
+    query(dir, T0, ['--raw', '--phase', '7', '--plan', 'A', '--force-isolation', 'none']);
+    const seen = JSON.parse(query(dir, T0 + 540000, ['--json', '--phase', '7', '--plan', 'A']).output);
+    assert.equal(seen.held, true);
+    query(dir, T0 + 550000, ['--raw', '--phase', '8', '--plan', 'B', '--force-isolation', 'none']);
+    query(dir, T0 + 560000, ['--raw', '--phase', '7', '--plan', 'A', '--force-isolation', 'none', '--renew-held', String(seen.decidedAt)]);
+    assert.equal(readSentinelRaw(dir).decided_at, T0, 'plan A keeps its own decision time, not plan B\'s');
+    const later = JSON.parse(query(dir, T0 + SENTINEL_STALE_MS, ['--json', '--phase', '7', '--plan', 'A']).output);
+    assert.equal(later.held, false, 'so A\'s hold lapses ten minutes after A was decided');
+  });
+
+  for (const [label, value] of [
+    ['missing', undefined], ['negative', '-1'], ['fractional', '1000000000000.5'],
+    ['exponent', '1e12'], ['not a number', 'soon'], ['beyond a safe integer', '99999999999999999'],
+  ]) {
+    test(`--renew-held with a ${label} value is a fresh decision`, (t) => {
+      const dir = createTempProject('gsd-4904-renew-');
+      t.after(() => cleanup(dir));
+      query(dir, T0, ['--raw', '--force-isolation', 'none']);
+      const args = ['--raw', '--force-isolation', 'none', '--renew-held'];
+      if (value !== undefined) args.push(value);
+      query(dir, T0 + 60000, args);
+      assert.equal(readSentinelRaw(dir).decided_at, T0 + 60000);
+    });
+  }
+
+  test('a --renew-held time later than the write is clamped to the write, so it cannot extend a hold', (t) => {
+    const dir = createTempProject('gsd-4904-renew-');
+    t.after(() => cleanup(dir));
+    query(dir, T0, ['--raw', '--force-isolation', 'none', '--renew-held', String(T0 + 5 * SENTINEL_STALE_MS)]);
+    assert.equal(readSentinelRaw(dir).decided_at, T0);
+  });
+
+  test('--renew-held beside a forced capability is ignored — only a forced none renews a hold', (t) => {
+    const dir = createTempProject('gsd-4904-renew-');
+    t.after(() => cleanup(dir));
+    query(dir, T0, ['--raw', '--force-isolation', 'none']);
+    query(dir, T0 + 60000, ['--raw', '--force-isolation', 'harness-worktree', '--renew-held', String(T0)]);
+    const rec = readSentinelRaw(dir);
+    assert.equal(rec.isolation, 'harness-worktree');
+    assert.equal(rec.decided_at, T0 + 60000);
+  });
+
+  test('decidedAt is null on every answer that is not holding, inspect-dispatch-isolation included', (t) => {
+    const dir = createTempProject('gsd-4904-renew-');
+    t.after(() => cleanup(dir));
+    assert.equal(JSON.parse(query(dir, T0, ['--json']).output).decidedAt, null);
+    const r = runGsdTools(['query', 'inspect-dispatch-isolation', '--json'], dir, env(dir, T0));
+    assert.equal(r.success, true, r.error);
+    assert.equal(JSON.parse(r.output).decidedAt, null);
+  });
+
+  // Every shipped site that forces a value after a resolve block can be
+  // following a held none, and one that restarts the hold keeps the chain
+  // alive on its own. The scan covers every forced re-record, not only the
+  // `$ISOLATION` ones: the per-plan gate forces a literal `none` when it
+  // inherits a held USE_WORKTREES=false (RV6.5 review of this round). Three
+  // literal sites are new decisions by construction, each named with why.
+  const FRESH_DECISION_SITES = {
+    // only on an orchestrator-worktree host, which a held answer never is
+    'gsd-core/references/dispatch-isolation-gate.md': /--force-isolation none >\/dev\/null/,
+    // Pattern B segments never run a resolve block; Pattern A's is prose, not a shell line
+    'gsd-core/workflows/execute-plan.md': /--force-isolation none >\/dev\/null/,
+  };
+  test('every shipped forced re-record that can follow a held answer passes back its decidedAt', () => {
+    const roots = [path.join(__dirname, '..', 'gsd-core', 'workflows'), path.join(__dirname, '..', 'gsd-core', 'references')];
+    const sites = [];
+    const walk = (d) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const full = path.join(d, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (e.name.endsWith('.md')) {
+          const rel = path.relative(path.join(__dirname, '..'), full).split(path.sep).join('/');
+          splitLines(fs.readFileSync(full, 'utf8')).forEach((line, i) => {
+            if (/^\s*gsd_run query dispatch-isolation .*--force-isolation /.test(line)) sites.push({ rel, at: `${rel}:${i + 1}`, line });
+          });
+        }
+      }
+    };
+    roots.forEach(walk);
+    const fresh = sites.filter((s) => FRESH_DECISION_SITES[s.rel] && FRESH_DECISION_SITES[s.rel].test(s.line));
+    assert.deepEqual(fresh.map((s) => s.rel).sort(), Object.keys(FRESH_DECISION_SITES).sort(),
+      'each named fresh-decision site is still there, exactly once');
+    const following = sites.filter((s) => !fresh.includes(s));
+    assert.ok(following.length >= 7, `expected the gate's two, executor, per-plan, quick, diagnose-issues and quick-batch; found ${following.length}`);
+    const missing = following.filter((s) => !s.line.includes('${_RENEW_HELD:+--renew-held "$_RENEW_HELD"}'));
+    assert.deepEqual(missing.map((s) => s.at), [], 'a re-record that restarts a held degrade');
   });
 });

@@ -2907,11 +2907,20 @@ describe('#2627 dispatch-isolation CLI route', () => {
   const { throwIfFailed } = require('./helpers/git-fixture.cjs');
   const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
   const GSD_TOOLS = path.join(REPO_ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
+  const { createTempDir } = require('./helpers.cjs');
+  const { before, after } = require('node:test');
+  // Its own cwd, not REPO_ROOT. The query writes the run sentinel into its cwd's
+  // project, and since #4904 a plain query over a fresh caller-recorded `none`
+  // ANSWERS `none`; a developer checkout where GSD ran in the last ten minutes
+  // would otherwise decide what this test reads (and receive its writes).
+  let cwd;
+  before(() => { cwd = createTempDir('gsd-2627-route-'); });
+  after(() => cleanup(cwd));
 
   function query(runtimeId, extraArgs = []) {
     const r = runNode(
       [GSD_TOOLS, 'query', 'dispatch-isolation', ...extraArgs],
-      { cwd: REPO_ROOT, env: { ...process.env, GSD_RUNTIME: runtimeId }, timeoutMs: PROBE_TIMEOUT_MS },
+      { cwd, env: { ...process.env, GSD_RUNTIME: runtimeId }, timeoutMs: PROBE_TIMEOUT_MS },
     );
     throwIfFailed(r, `gsd-tools query dispatch-isolation ${extraArgs.join(' ')}`);
     return r.stdout;
@@ -3197,7 +3206,8 @@ describe('#2652 dispatch-site parity — isolation gates on capability, not runt
     // dispatch sites @-reference the gate and merely re-record a degrade
     // (`--force-isolation …` with no assignment), which carries no verdict of
     // its own — matching those too would flag files that have nothing to fix.
-    const INLINE_RESOLVE = /\w+=\$\(gsd_run query dispatch-isolation --raw/;
+    // --raw or --json: since #4904 the blocks read `held` too, from the --json form.
+    const INLINE_RESOLVE = /\w+=\$\(gsd_run query dispatch-isolation --(?:raw|json)/;
     // Dedupe: SCAN_ROOTS already yields the gate reference, so appending it
     // again made `length >= 2` satisfiable by the gate alone — the executor
     // site could drop out of the predicate entirely and this would still pass.
@@ -3221,13 +3231,17 @@ describe('#2652 dispatch-site parity — isolation gates on capability, not runt
       'the set of files inlining the resolver changed — a new inliner needs the same treatment, and a missing one means the predicate stopped seeing it',
     );
 
-    for (const { rel, text } of inliners) {
+    for (const { rel, text: rawText } of inliners) {
+      // Join backslash continuations first: `$(gsd_run … \<newline> || echo …)`
+      // is the same collapse split across lines, and a per-line pattern misses it.
+      const text = rawText.replace(/\\\r?\n[ \t]*/g, ' ');
       // Any assignment target, not just ISOLATION — `_ISOLATION_RAW=$(… || echo
       // "none")` restores the identical defect while leaving ISOLATION_RESOLVED
       // in the file, so a name-specific pattern passes on a broken block.
       assert.doesNotMatch(
         text,
-        /\w+=\$\(gsd_run query dispatch-isolation --raw[^\n]*\|\|[^\n]*echo/,
+        // Any `||` inside the resolve's own $( … ) — echo, printf, or on the next line.
+        /\w+=\$\(gsd_run query dispatch-isolation --(?:raw|json)[^)]*\|\|/,
         `${rel}: collapses a resolver failure straight to none — that reports "declares no primitive" for a host that simply could not be queried`,
       );
       assert.match(
@@ -3241,6 +3255,97 @@ describe('#2652 dispatch-site parity — isolation gates on capability, not runt
         `${rel}: has no distinct message for the unresolved case, so both outcomes read as a capability verdict`,
       );
     }
+  });
+
+  // #5126 review, 2026-10-18 Nit 1: the two inline resolvers parse the query's
+  // JSON with `node -e` one-liners copied verbatim between them — the
+  // decision+held pick and the harness-flag pick. The test above pins the
+  // call shape only, so one copy could change (a dropped `^[a-z-]+$` check, a
+  // renamed field) while the other kept the old parser. Pin each pick's body
+  // byte-equal across the two files.
+  // name -> every `node -e '…'` body piped from that assignment's $( … ).
+  // Backslash continuations are joined first: the harness-flag pick is
+  // split across two lines in both files.
+  const jsonPicks = (rawText) => {
+    const text = rawText.replace(/\\\r?\n[ \t]*/g, ' ');
+    const picks = new Map();
+    for (const m of text.matchAll(/(\w+)=\$\([^\n]*?\|\s*node -e '([^']*)'/g)) {
+      picks.set(m[1], [...(picks.get(m[1]) || []), m[2]]);
+    }
+    return picks;
+  };
+
+  test('the inline resolvers parse the query JSON with byte-equal picks', () => {
+    const files = [
+      'gsd-core/references/dispatch-isolation-gate.md',
+      'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md',
+    ].map(rel => ({ rel, text: fs.readFileSync(path.join(REPO_ROOT, rel), 'utf-8') }));
+    const [a, b] = files.map(({ rel, text }) => ({ rel, picks: jsonPicks(text) }));
+    for (const name of ['_ISOLATION_FIELDS', 'HARNESS_FLAG']) {
+      for (const { rel, picks } of [a, b]) {
+        assert.equal(
+          (picks.get(name) || []).length,
+          1,
+          `${rel}: expected exactly one ${name} JSON pick — none means the extractor stopped seeing it, and the comparison below would pass on nothing`,
+        );
+      }
+      assert.equal(
+        a.picks.get(name)[0],
+        b.picks.get(name)[0],
+        `${name}: the JSON pick in ${a.rel} and ${b.rel} differ — change both, or the two dispatch sites parse the same answer differently`,
+      );
+    }
+    // Discrimination proof: a one-character change to one copy must register.
+    const mutated = jsonPicks(files[0].text.replace('j.held===true', 'j.held==true'));
+    assert.notEqual(mutated.get('_ISOLATION_FIELDS')[0], b.picks.get('_ISOLATION_FIELDS')[0]);
+  });
+
+  // #5126 review, 2026-10-21 Nit 4: the byte-equality pin above covers the
+  // executor's HARNESS_FLAG pick only by comparison with the gate's copy, and
+  // its EXEC_OK pick by nothing. Run both shipped picks on what the real
+  // `inspect-dispatch-isolation --json` prints for a harness-worktree host
+  // (claude), an orchestrator-worktree host with a target (codex), the same
+  // host with no target (no exec to bind), and an answer that is not JSON.
+  test('the executor\'s HARNESS_FLAG and EXEC_OK picks read the real inspect-dispatch-isolation answer', () => {
+    const { runNode } = require('./helpers/process-seam.cjs');
+    const { throwIfFailed } = require('./helpers/git-fixture.cjs');
+    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+    const GSD_TOOLS = path.join(REPO_ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
+    const rel = 'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md';
+    const picks = jsonPicks(fs.readFileSync(path.join(REPO_ROOT, rel), 'utf-8'));
+    for (const name of ['HARNESS_FLAG', 'EXEC_OK']) {
+      assert.equal((picks.get(name) || []).length, 1, `${rel}: expected exactly one ${name} JSON pick`);
+    }
+    // The answer, as the executor's own call asks for it. inspect records nothing, so REPO_ROOT is safe as cwd.
+    const inspect = (runtimeId, extraArgs = []) => {
+      const r = runNode([GSD_TOOLS, 'query', 'inspect-dispatch-isolation', '--json', ...extraArgs],
+        { cwd: REPO_ROOT, env: { ...process.env, GSD_RUNTIME: runtimeId }, timeoutMs: PROBE_TIMEOUT_MS });
+      throwIfFailed(r, `gsd-tools query inspect-dispatch-isolation ${runtimeId}`);
+      return r.stdout;
+    };
+    const pick = (name, input) => {
+      const r = runNode(['-e', picks.get(name)[0]], { input, timeoutMs: PROBE_TIMEOUT_MS });
+      throwIfFailed(r, `${name} pick`);
+      return r.stdout;
+    };
+    const target = ['--cwd-target', path.join(REPO_ROOT, '.claude', 'worktrees', 'agent-probe'), '--prompt', 'probe'];
+    const claude = inspect('claude');
+    const codexBound = inspect('codex', target);
+    const codexUnbound = inspect('codex');
+    // Preconditions, so a renamed field or a changed descriptor fails here rather than in a pick.
+    assert.equal(JSON.parse(claude).isolation, 'harness-worktree');
+    assert.equal(JSON.parse(codexBound).isolation, 'orchestrator-worktree');
+    assert.ok(JSON.parse(codexBound).exec && JSON.parse(codexBound).exec.command, 'codex resolves an exec for a bound target');
+    assert.equal(JSON.parse(codexUnbound).exec, null);
+
+    assert.equal(pick('HARNESS_FLAG', claude), 'isolation="worktree"');
+    assert.equal(pick('HARNESS_FLAG', codexBound), '', 'a host with no harness flag yields empty, which the block turns into FATAL');
+    assert.equal(pick('HARNESS_FLAG', 'not json'), '');
+
+    assert.equal(pick('EXEC_OK', codexBound), 'true');
+    assert.equal(pick('EXEC_OK', codexUnbound), 'false', 'no target, no exec: the wave must not spawn');
+    assert.equal(pick('EXEC_OK', claude), 'false', 'a harness-worktree answer is not an orchestrator exec');
+    assert.equal(pick('EXEC_OK', 'not json'), 'false');
   });
 
   test('the detector flags every known runtime-gate shape (discrimination proof)', () => {
