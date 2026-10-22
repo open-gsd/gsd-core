@@ -68,7 +68,7 @@ import { parseCodexAgentToml, renderCodexAgentToml, stripModel, stripReasoningEf
 import hostIntegrationMod = require('./host-integration.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
-const { planningDir, planningPaths, todosDir, resolvePhaseIdConvention } = planningWorkspace;
+const { planningDir, planningPaths, planningRoot, todosDir, resolvePhaseIdConvention } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
 const { extractFrontmatter, agentScalarNeedsDoubleQuoting, escapeDoubleQuotedScalar, FRONTMATTER_UNPARSEABLE } = frontmatter;
@@ -78,6 +78,21 @@ const { MODEL_PROFILES, VALID_PHASE_TYPES } = modelProfiles;
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { clampPercent, renderProgressBar } from './phase-lifecycle.cjs';
+
+// #4853: Pathspec exclude pattern and predicates for wave manifests in git operations.
+// Both the git pathspec and JS basename regex require digits after `wave-` and before `-manifest.json`.
+// Derived from the single definition pattern `wave-[0-9]*-manifest.json`.
+const WAVE_MANIFEST_PATHSPEC_EXCLUDE = ':(exclude,glob)**/.planning/**/wave-[0-9]*-manifest.json';
+const WAVE_MANIFEST_BASENAME_RE = /^wave-[0-9].*-manifest\.json$/;
+
+function isWaveManifestPath(filePath: string, cwd: string = process.cwd()): boolean {
+  const resolved = path.resolve(cwd, filePath);
+  const root = planningRoot(cwd);
+  if (!tryWithinRoot(resolved, root, PathAcceptance.AbsoluteInsideRoot)) {
+    return false;
+  }
+  return WAVE_MANIFEST_BASENAME_RE.test(path.basename(resolved));
+}
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planScanMod = require('./plan-scan.cjs');
 const { scanPhasePlans } = planScanMod;
@@ -2190,7 +2205,21 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
   // `.planning/` sweep, which would commit everything under it.
   const removedDeclared = filesRemoved ?? [];
   const explicitFiles = (files && files.length > 0) || removedDeclared.length > 0;
-  const filesToStage = explicitFiles ? (files ?? []) : ['.planning/'];
+  // #4853: wave manifests (.planning/**/wave-*-manifest.json) are ephemeral in-flight
+  // coordination records. Never stage or commit them into git history.
+  // Explicit --files naming a wave manifest are skipped and reported in skipped_files (#4454).
+  const skippedFiles: string[] = [];
+  const inputFiles = explicitFiles ? (files ?? []) : ['.planning/'];
+  const filesToStage: string[] = [];
+  for (const f of inputFiles) {
+    if (isWaveManifestPath(f, cwd)) {
+      if (explicitFiles) {
+        skippedFiles.push(f);
+      }
+      continue;
+    }
+    filesToStage.push(f);
+  }
   const stagedPaths: string[] = [];
   // #2608: a `git add` that fails must abort the commit, not be skipped.
   // #2523 stopped a failed path entering the commit pathspec, but skipping it
@@ -2200,10 +2229,6 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
   // a linked worktree, timeout) was discarded and the operator saw a downstream
   // pathspec error pointing at an innocent file.
   const stagingFailures: Array<{ file: string; error: string; timed_out: boolean }> = [];
-  // #4454: explicit --files paths skipped because they were missing from disk
-  // (the #2014 guard below). Tracked so the caller can tell a partial commit
-  // from a complete one instead of an unqualified `committed: true`.
-  const skippedFiles: string[] = [];
   // Paths already in the index BEFORE this call. On a staging failure the
   // rollback below unstages only what THIS call added — unstaging a path the
   // caller had staged themselves would destroy their work.
@@ -2250,7 +2275,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
         });
       }
     } else {
-      const addResult = execGit(['add', file], { cwd });
+      const addResult = execGit(['add', '--', WAVE_MANIFEST_PATHSPEC_EXCLUDE, file], { cwd });
       // Only record paths that actually staged — a failed `git add` (permissions,
       // out-of-repo edge) must not enter the commit pathspec (#2523). Mirrors
       // cmdCommitToSubrepo's exitCode-gated push.
@@ -2609,13 +2634,13 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
   // failing-closed (drop the content) and failing-open (re-enter #3776) are
   // wrong answers to a question we can just ask directly.
   const assumeUnchangedWouldRecord = (): boolean => {
-    const listed = execGit(['ls-files', '-v', '--', ...stagedPaths.map(asPathspec)], { cwd });
+    const listed = execGit(['ls-files', '-v', '--', WAVE_MANIFEST_PATHSPEC_EXCLUDE, ...stagedPaths.map(asPathspec)], { cwd });
     // Only the TAG is read; the path is deliberately never parsed out — see the
     // `core.quotePath` note above, and the dry run below needs no path anyway.
     if (listed.exitCode === 0
       && !listed.stdout.split('\n').some((line) => /^[a-z] /.test(line))) return false;
     const dryRun = execGit(
-      ['commit', '--dry-run', '--porcelain', '--no-verify', '-m', sanitizedMessage as string, '--', ...stagedPaths.map(asPathspec)],
+      ['commit', '--dry-run', '--porcelain', '--no-verify', '-m', sanitizedMessage as string, '--', WAVE_MANIFEST_PATHSPEC_EXCLUDE, ...stagedPaths.map(asPathspec)],
       { cwd },
     );
     // Only a CONFIRMED "nothing to record" closes the path: rc 1 from a git
@@ -2639,7 +2664,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
     && (stagedPaths.length === 0
       || (!partialCommitRefused
         && execGit(
-          ['diff', '--quiet', '--ignore-submodules=dirty', '--no-textconv', 'HEAD', '--', ...stagedPaths.map(asPathspec)],
+          ['diff', '--quiet', '--ignore-submodules=dirty', '--no-textconv', 'HEAD', '--', WAVE_MANIFEST_PATHSPEC_EXCLUDE, ...stagedPaths.map(asPathspec)],
           { cwd },
         ).exitCode === 0
         && !assumeUnchangedWouldRecord()));
@@ -2672,7 +2697,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
     : ['commit', '-m', sanitizedMessage as string];
   if (noVerify) commitArgs.push('--no-verify');
   if (canScope) {
-    commitArgs.push('--', ...stagedPaths.map(asPathspec));
+    commitArgs.push('--', WAVE_MANIFEST_PATHSPEC_EXCLUDE, ...stagedPaths.map(asPathspec));
   }
   // #3859 follow-up: on git 2.39.5 (confirmed on the CI Linux bench image,
   // ghcr.io/open-gsd/gsd-tester-linux:v1.8.0-node24; NOT reproducible on git
@@ -4394,4 +4419,7 @@ export = {
   cmdCommitDocsGuardEnable,
   cmdCommitDocsGuardDisable,
   _wsParseRetryAfter,
+  WAVE_MANIFEST_PATHSPEC_EXCLUDE,
+  WAVE_MANIFEST_BASENAME_RE,
+  isWaveManifestPath,
 };

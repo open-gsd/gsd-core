@@ -11,7 +11,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execGit as execGitSeam, posixNormalize, type SpawnResultOutput } from './shell-command-projection.cjs';
-import { isContainedIn } from './security.cjs';
+import { isContainedIn, tryWithinRoot, PathAcceptance } from './security.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningWorkspace = require('./planning-workspace.cjs');
+const { planningRoot } = planningWorkspace;
 
 // Default timeout for worktree-related git subprocess calls.
 // 10 s is generous enough for normal git operations on large repos while still
@@ -599,7 +602,12 @@ function normalizeCleanupManifest(manifest: unknown): NormalizedManifestResult {
   const p = parsed as Record<string, unknown> | unknown[] | null;
   const rawEntries = Array.isArray(p)
     ? p
-    : (Array.isArray((p as Record<string, unknown>)?.worktrees) ? (p as Record<string, unknown>).worktrees as unknown[] : []);
+    : (Array.isArray((p as Record<string, unknown>)?.worktrees) ? (p as Record<string, unknown>).worktrees as unknown[] : null);
+
+  if (rawEntries === null) {
+    return { ok: false, reason: 'empty_manifest', entries: [] };
+  }
+
   const seen = new Set<string>();
   const entries: CleanupManifestEntry[] = [];
   for (const raw of rawEntries) {
@@ -611,6 +619,13 @@ function normalizeCleanupManifest(manifest: unknown): NormalizedManifestResult {
     entries.push(entry);
   }
 
+  // #4853: An explicitly empty entries collection (e.g. {"worktrees":[]}) is reconcilable
+  // by cleanup-wave, allowing the ephemeral manifest to be unlinked after an interrupted wave.
+  if (rawEntries.length === 0) {
+    return { ok: true, reason: 'empty_manifest', entries: [] };
+  }
+
+  // When rawEntries had items but all of them were rejected, fail closed.
   if (entries.length === 0) {
     return { ok: false, reason: 'empty_manifest', entries: [] };
   }
@@ -645,7 +660,7 @@ function planWorktreeWaveCleanup(repoRoot: string, manifest: unknown): WaveClean
     repoRoot,
     action: 'cleanup_wave',
     discovery: 'manifest',
-    reason: 'manifest_entries_present',
+    reason: normalized.entries.length === 0 ? 'empty_manifest' : 'manifest_entries_present',
     entries: normalized.entries,
   };
 }
@@ -1201,13 +1216,25 @@ interface WaveCleanupResult {
 function executeWorktreeWaveCleanupPlan(plan: WaveCleanupPlan | null, deps: WorktreeDeps = {}): WaveCleanupResult {
   const execGit = deps.execGit || execGitDefault;
   const entries = Array.isArray(plan?.entries) ? plan.entries : [];
-  if (!plan || plan.action !== 'cleanup_wave' || entries.length === 0) {
+  if (!plan || plan.action !== 'cleanup_wave') {
     return {
       ok: false,
       action: plan ? plan.action : 'skip',
       reason: plan ? (plan.reason || 'missing_entries') : 'missing_plan',
       entries: [],
       pending: entries,
+      warnings: [],
+    };
+  }
+
+  // #4853: an empty manifest wave cleanup plan is a valid no-op reconciliation
+  if (entries.length === 0) {
+    return {
+      ok: true,
+      action: 'cleanup_wave',
+      reason: plan.reason || 'empty_manifest',
+      entries: [],
+      pending: [],
       warnings: [],
     };
   }
@@ -1727,20 +1754,82 @@ function executeWorktreeWaveCleanupPlan(plan: WaveCleanupPlan | null, deps: Work
   };
 }
 
-function cmdWorktreeCleanupWave(cwd: string, args: string[] = []): void {
+function cmdWorktreeCleanupWave(cwd: string, args: string[] = [], deps: Record<string, unknown> = {}): void {
+  const write = (deps.write as ((s: string) => void)) || ((s: string) => process.stdout.write(s));
+  const writeErr = (deps.writeErr as ((s: string) => void)) || ((s: string) => process.stderr.write(s));
+
   const manifestFlagIndex = args.indexOf('--manifest');
   const manifestPath = manifestFlagIndex >= 0 ? args[manifestFlagIndex + 1] : '';
   if (!manifestPath) {
-    process.stderr.write('Usage: worktree cleanup-wave --manifest <path>\n');
+    writeErr('Usage: worktree cleanup-wave --manifest <path>\n');
     process.exitCode = 2;
+    return;
+  }
+
+  const execGit = (deps.execGit as ExecGitFn) || execGitDefault;
+  const resolvedManifestPath = path.resolve(cwd, manifestPath);
+  // #4853: refuse manifests tracked by git to prevent hostile repo exploitation
+  const trackedCheck = execGit(['ls-files', '--error-unmatch', resolvedManifestPath], { cwd });
+  if (gitResultOk(trackedCheck)) {
+    writeErr(`[gsd] worktree.cleanup-wave: refusing to process git-tracked manifest at "${resolvedManifestPath}". Wave manifests must be ephemeral and untracked.\n`);
+    write(`${JSON.stringify({
+      ok: false,
+      reason: 'manifest_tracked_in_git',
+      error: `Manifest "${resolvedManifestPath}" is tracked by git; refusing to process repo-tracked manifest.`,
+    }, null, 2)}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  // Exit code 1 from `git ls-files --error-unmatch` is git's confirmed indication that the file is untracked inside the repo.
+  // Paths outside the repository (e.g. quick.md/quick-batch /tmp/gsd-quick-worktree-* manifests) exit 128 with "is outside repository";
+  // these are inherently outside the git work tree and untracked.
+  // Timeouts, spawn errors, and other non-1 git failures (e.g. "not a git repository") must fail closed.
+  const isOutsideRepo = !trackedCheck.timedOut && !trackedCheck.error && trackedCheck.exitCode === 128 &&
+    /is outside repository/i.test((trackedCheck.stderr || '') + (trackedCheck.stdout || ''));
+
+  if (!isOutsideRepo && (trackedCheck.exitCode !== 1 || trackedCheck.timedOut || trackedCheck.error)) {
+    const errorMsg = trackedCheck.timedOut
+      ? 'git timed out while verifying manifest tracked status'
+      : (trackedCheck.stderr || trackedCheck.stdout || 'git ls-files check failed');
+    writeErr(`[gsd] worktree.cleanup-wave: git error checking manifest at "${resolvedManifestPath}": ${errorMsg}\n`);
+    write(`${JSON.stringify({
+      ok: false,
+      reason: trackedCheck.timedOut ? 'git_timed_out' : 'manifest_check_failed',
+      error: errorMsg,
+    }, null, 2)}\n`);
+    process.exitCode = 1;
+    return;
+  }
+
+  // Symlink rejection & lstat identity check before read
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(resolvedManifestPath);
+  } catch (err) {
+    write(`${JSON.stringify({
+      ok: false,
+      reason: 'manifest_read_failed',
+      error: (err as Error).message,
+    }, null, 2)}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    writeErr(`[gsd] worktree.cleanup-wave: refusing to process non-regular or symlinked manifest at "${resolvedManifestPath}".\n`);
+    write(`${JSON.stringify({
+      ok: false,
+      reason: 'manifest_symlink_refused',
+      error: `Manifest "${resolvedManifestPath}" is a symlink or non-regular file; refusing to process.`,
+    }, null, 2)}\n`);
+    process.exitCode = 1;
     return;
   }
 
   let manifest: string;
   try {
-    manifest = fs.readFileSync(path.resolve(cwd, manifestPath), 'utf8');
+    manifest = fs.readFileSync(resolvedManifestPath, 'utf8');
   } catch (err) {
-    process.stdout.write(`${JSON.stringify({
+    write(`${JSON.stringify({
       ok: false,
       reason: 'manifest_read_failed',
       error: (err as Error).message,
@@ -1751,6 +1840,18 @@ function cmdWorktreeCleanupWave(cwd: string, args: string[] = []): void {
 
   const plan = planWorktreeWaveCleanup(cwd, manifest);
   const result = executeWorktreeWaveCleanupPlan(plan);
+  let manifestUnlinked = false;
+  if (result.ok) {
+    try {
+      const preUnlinkStat = fs.lstatSync(resolvedManifestPath);
+      if (!preUnlinkStat.isSymbolicLink() && preUnlinkStat.isFile()) {
+        fs.unlinkSync(resolvedManifestPath);
+        manifestUnlinked = true;
+      }
+    } catch {
+      // Best-effort cleanup; file may already be unlinked
+    }
+  }
   const response = {
     ok: result.ok,
     plan: {
@@ -1760,8 +1861,9 @@ function cmdWorktreeCleanupWave(cwd: string, args: string[] = []): void {
       entries: plan.entries.length,
     },
     result,
+    manifest_unlinked: manifestUnlinked,
   };
-  process.stdout.write(`${JSON.stringify(response, null, 2)}\n`);
+  write(`${JSON.stringify(response, null, 2)}\n`);
   if (!result.ok) {
     process.exitCode = 1;
   }
@@ -3047,6 +3149,171 @@ function cmdWorktreeWorkerComplete(cwd: string, args: string[] = [], deps: Recor
   write(`${JSON.stringify({ ok: true, alreadyComplete, record }, null, 2)}\n`);
 }
 
+// ─── Durable wave worktree manifests (#4853) ─────────────────────────────────
+// Wave worktree manifests coordinate parallel/isolated executor worktrees
+// during execute-phase. Placing them at a stable, phase-scoped path
+// ({phase_dir}/wave-{N}-manifest.json) rather than a random $TMPDIR file ensures
+// that an interrupted wave (crash, turn end, interrupt) remains reconcilable
+// by subsequent GSD workflow runs (execute-phase pre-dispatch guard, cleanup-wave) or operators.
+
+/**
+ * #4853: Validates and parses a wave number, requiring a positive safe integer.
+ */
+function parseValidWaveNumber(wave: number | string): number {
+  const rawStr = String(wave).trim();
+  const num = typeof wave === 'number' ? wave : Number(rawStr);
+  if (!/^\d+$/.test(rawStr) || !Number.isInteger(num) || !Number.isSafeInteger(num) || num <= 0) {
+    throw new Error(`Invalid wave "${wave}": wave must be a positive integer`);
+  }
+  return num;
+}
+
+/**
+ * #4853: Derives the durable, phase-scoped wave worktree manifest path for a given phase directory and wave.
+ * Schema: `<phaseDir>/wave-<wave>-manifest.json`
+ */
+function resolveWaveManifestPath(phaseDir: string, wave: number | string): string {
+  const num = parseValidWaveNumber(wave);
+  return posixNormalize(path.join(phaseDir, `wave-${num}-manifest.json`));
+}
+
+/**
+ * #4853: Finds all durable wave worktree manifests left in a phase directory (e.g. from an interrupted wave).
+ * Returns sorted file paths in ascending wave order.
+ */
+function findPhaseWaveManifests(
+  phaseDir: string,
+  deps: { existsSync?: (p: string) => boolean; readdirSync?: (p: string) => string[] } = {}
+): string[] {
+  const existsSync = deps.existsSync || fs.existsSync;
+  const readdirSync = deps.readdirSync || fs.readdirSync;
+  try {
+    if (!existsSync(phaseDir)) return [];
+    const files = readdirSync(phaseDir);
+    return files
+      .filter((file) => /^wave-\d+-manifest\.json$/.test(file))
+      .sort((a, b) => {
+        const matchA = a.match(/^wave-(\d+)-manifest\.json$/);
+        const matchB = b.match(/^wave-(\d+)-manifest\.json$/);
+        const numA = matchA ? parseInt(matchA[1], 10) : 0;
+        const numB = matchB ? parseInt(matchB[1], 10) : 0;
+        return numA - numB;
+      })
+      .map((file) => posixNormalize(path.join(phaseDir, file)));
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      return [];
+    }
+    throw err;
+  }
+}
+
+/**
+ * #4853: CLI verb: derive or locate durable wave worktree manifest(s).
+ * Usage: worktree manifest-path (--phase-dir <dir> | --phase <phase-id>) [--wave <n>] [--raw]
+ */
+function cmdWorktreeManifestPath(cwd: string, args: string[] = [], deps: Record<string, unknown> = {}): void {
+  const flag = (name: string): string => {
+    const i = args.indexOf(name);
+    if (i < 0 || i + 1 >= args.length) return '';
+    return args[i + 1];
+  };
+  const isRaw = args.includes('--raw');
+  const write = (deps.write as ((s: string) => void)) || ((s: string) => process.stdout.write(s));
+  const writeErr = (deps.writeErr as ((s: string) => void)) || ((s: string) => process.stderr.write(s));
+
+  let phaseDir = flag('--phase-dir');
+  const phaseArg = flag('--phase');
+  const waveArg = flag('--wave');
+
+  if (!phaseDir && !phaseArg) {
+    writeErr('Usage: worktree manifest-path (--phase-dir <dir> | --phase <phase-id>) [--wave <n>] [--raw]\n');
+    if (!isRaw) {
+      write(`${JSON.stringify({ ok: false, reason: 'missing_phase_arg', error: 'Usage: worktree manifest-path (--phase-dir <dir> | --phase <phase-id>) [--wave <n>] [--raw]' }, null, 2)}\n`);
+    }
+    process.exitCode = 2;
+    return;
+  }
+
+  let waveNum: number | undefined;
+  if (waveArg !== undefined && waveArg !== '') {
+    try {
+      waveNum = parseValidWaveNumber(waveArg);
+    } catch {
+      writeErr(`[gsd] worktree.manifest-path: invalid_wave — wave must be a positive integer, got "${waveArg}"\n`);
+      if (!isRaw) {
+        write(`${JSON.stringify({ ok: false, reason: 'invalid_wave', error: `wave must be a positive integer, got "${waveArg}"` }, null, 2)}\n`);
+      }
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  if (!phaseDir && phaseArg) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- internal circular-safe lazy load
+      const phaseLocator = require('./phase-locator.cjs') as { findPhaseInternal: (cwd: string, phase: unknown) => { directory?: string } | null };
+      const phaseInfo = phaseLocator.findPhaseInternal(cwd, phaseArg);
+      if (phaseInfo && phaseInfo.directory) {
+        phaseDir = path.resolve(cwd, phaseInfo.directory);
+      } else {
+        const hint = `Phase "${phaseArg}" not found under .planning/phases/`;
+        writeErr(`[gsd] worktree.manifest-path: phase_not_found — ${hint}\n`);
+        if (!isRaw) {
+          write(`${JSON.stringify({ ok: false, reason: 'phase_not_found', hint }, null, 2)}\n`);
+        }
+        process.exitCode = 1;
+        return;
+      }
+    } catch (err) {
+      writeErr(`[gsd] worktree.manifest-path: phase_lookup_failed — ${(err as Error).message}\n`);
+      if (!isRaw) {
+        write(`${JSON.stringify({ ok: false, reason: 'phase_lookup_failed', error: (err as Error).message }, null, 2)}\n`);
+      }
+      process.exitCode = 1;
+      return;
+    }
+  } else if (phaseDir) {
+    phaseDir = path.resolve(cwd, phaseDir);
+  }
+
+  const resolvedPhaseDir = posixNormalize(phaseDir);
+  const planningTreeRoot = planningRoot(cwd);
+  const contained = tryWithinRoot(phaseDir, planningTreeRoot, PathAcceptance.AbsoluteInsideRoot);
+  if (!contained) {
+    const errorMsg = `phase_dir must be contained within planning tree (${posixNormalize(planningTreeRoot)}), got "${resolvedPhaseDir}"`;
+    writeErr(`[gsd] worktree.manifest-path: uncontained_phase_dir — ${errorMsg}\n`);
+    if (!isRaw) {
+      write(`${JSON.stringify({ ok: false, reason: 'uncontained_phase_dir', error: errorMsg }, null, 2)}\n`);
+    }
+    process.exitCode = 1;
+    return;
+  }
+  phaseDir = resolvedPhaseDir;
+
+  if (waveNum !== undefined) {
+    const manifestPath = resolveWaveManifestPath(phaseDir, waveNum);
+    if (isRaw) {
+      write(`${manifestPath}\n`);
+    } else {
+      write(`${JSON.stringify({ ok: true, path: manifestPath, phase_dir: phaseDir, wave: waveNum }, null, 2)}\n`);
+    }
+    return;
+  }
+
+  const manifests = findPhaseWaveManifests(phaseDir, {
+    existsSync: deps.existsSync as ((p: string) => boolean) | undefined,
+    readdirSync: deps.readdirSync as ((p: string) => string[]) | undefined,
+  });
+  if (isRaw) {
+    if (manifests.length > 0) {
+      write(`${manifests.join('\n')}\n`);
+    }
+  } else {
+    write(`${JSON.stringify({ ok: true, phase_dir: phaseDir, manifests }, null, 2)}\n`);
+  }
+}
+
 // Unused exports kept for API compatibility
 void parseWorktreeListPaths;
 
@@ -3139,4 +3406,7 @@ export = {
   cmdWorktreeWorkerComplete,
   resolveWorktreeRoot,
   pruneOrphanedWorktrees,
+  resolveWaveManifestPath,
+  findPhaseWaveManifests,
+  cmdWorktreeManifestPath,
 };

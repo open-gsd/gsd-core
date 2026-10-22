@@ -89,6 +89,7 @@ const DOCS_GUARD_EXEMPT_BASELINE = [
   'shipped-reference-cites.test.cjs',
   'state.test.cjs',
   'verification-status.test.cjs',
+  'worktree-cleanup.test.cjs',
   'worktree-safety.test.cjs',
 ];
 
@@ -246,6 +247,7 @@ const DOCS_GUARD_EXEMPT_DOCS_PATHS = {
     'docs/VERIFICATION.md', 'docs/planning', 'docs/planning/phases',
     'docs/planning/phases/01-foo/01-01-PLAN.md', 'docs/planning/phases/01-foo/01-01-SUMMARY.md',
   ],
+  'worktree-cleanup.test.cjs': ['docs/workflow-backend-dispatch.md'],
   'worktree-safety.test.cjs': ['docs/SUMMARY.md'],
 };
 
