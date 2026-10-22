@@ -93,7 +93,9 @@
 // so it is equivalent to no glob; any other alternative is denied when its
 // literal prefix is a prefix of `.env.`/`.secrets` (`.e*`, `.env*`, `.s*`) or
 // when it matches a probe secret name (`*.local`, `*.*`, `*.env*`). More than
-// 64 alternatives is denied as `glob-too-complex` (cheap to retry narrower).
+// 64 alternatives is denied as `glob-too-complex` (cheap to retry narrower),
+// and so is a glob with so many brace groups that expanding them overflows
+// the stack.
 //
 // Documented gaps (none are statically resolvable by a hook, and Claude
 // Code's own 2.1.259 Bash-side enforcement does not resolve them either):
@@ -107,7 +109,8 @@
 //   on plain commands, without arming the compound-`cd` prompt". Writes to
 //   secret files are out of scope (Write/Edit were never gated). Commands
 //   over 1 MiB are denied outright (`command-too-large`) rather than
-//   scanned partially or waved through. (#4639 adds one more, by design: the
+//   scanned partially or waved through, and so is a command whose scan
+//   overflows the stack (`command-too-complex`). (#4639 adds one more, by design: the
 //   value of `--env-file` under a container runtime is exempt, so the
 //   container's own command can print the interpolated environment
 //   (`alpine printenv`, `docker compose config`) — the same exposure class
@@ -134,11 +137,15 @@
 //
 // Triggers on: Read, Grep, Bash tool calls (Kimi: ReadFile, Grep, Shell)
 // Action: BLOCK (decision: 'block', exit 2) — codes secret-read |
-//         glob-too-complex | command-too-large | ansi-c-unterminated |
-//         ansi-c-undecodable | debugger-cli-spawn
+//         glob-too-complex | command-too-large | command-too-complex |
+//         ansi-c-unterminated | ansi-c-undecodable | debugger-cli-spawn
 // No-op: other tools, non-secret targets, hook errors (fail open — a parser
 //        bug in a hook that runs on EVERY Bash call must never brick a
-//        session; the crash policy is declared once below).
+//        session; the crash policy is declared once below). One error is
+//        not a bug but a limit: a Bash command nested deep enough to
+//        overflow the parser's stack is denied as `command-too-complex`
+//        (#5255), because failing open there allows a read the scan had
+//        not yet reached.
 
 'use strict';
 
@@ -474,8 +481,8 @@ function classifyGrepGlob(glob) {
 // decoded (the `$VAR` indirection gap in the header) — the ANSI-C readings only
 // end the `${…}` where the shell does, past a `}` inside a span
 // (ansiCBraceClose). A command nested deeper than MAX_NESTING_DEPTH is not
-// scanned at all, and several thousand levels of `$( )` overflow the parser and
-// fail open, before #5255 as after (bounded by the 1 MiB cap). A heredoc tag
+// scanned at all. Several thousand levels of `$( )` overflow the parser's
+// stack; that fails closed, as `command-too-complex` (findSecretRead). A heredoc tag
 // word inside `$( )` holding a `${…}`, `$(…)`, backtick or bare carriage
 // return is read by the span-unaware path, so its end can differ from the
 // shell's. bash 3.2 (`/bin/bash` on macOS) is not modelled: it has no `\u` /
@@ -1649,6 +1656,31 @@ function findSecretReadUnderOtherReadings(command) {
 // whose `(` is past a continuation (runParen): the plain reading misses that
 // `$(` inside "…" and heredoc bodies, so `$\<newline>` brings in the others.
 function findSecretRead(command, depth) {
+  if (depth > 0) return readEachWay(command, depth);
+  scanUnfinished = false;
+  let hit = null;
+  try {
+    hit = readEachWay(command, 0);
+  } catch (e) {
+    if (!(e instanceof RangeError)) throw e;
+    scanUnfinished = true;
+  }
+  return hit !== null ? hit : (scanUnfinished ? { code: 'command-too-complex', text: '' } : null);
+}
+
+// Set when a reading could not finish: the stack overflowed somewhere in
+// it. Before, the plain reading's overflow reached the hook's fail-open
+// crash policy, and the other readings' overflows were dropped, so past the
+// overflow depth a command the scan had not finished was allowed — and the
+// readings overflow sooner than the scan before #5255 did, so some commands
+// that scan denied were allowed. A read found by any reading is still reported
+// as that read; only a command with no read found and an unfinished reading
+// is denied as `command-too-complex`. findSecretRead resets it per command.
+let scanUnfinished = false;
+
+// findSecretRead below the top level: the readings of `command`, then the
+// plain scan, as described above.
+function readEachWay(command, depth) {
   const joined = command.includes('\\\n') ? command.replace(/\\\n/g, '') : command;
   if (!joined.includes("$'") && !joined.includes('$"') && !joined.includes('$${') && !joined.includes('$$(')
     && !command.includes('$\\\n')) {
@@ -1658,12 +1690,14 @@ function findSecretRead(command, depth) {
     let hit = null;
     try {
       hit = scanCommand(command, depth, shell);
-    } catch {
+    } catch (e) {
       // These readings can reach code the plain one does not: an ANSI-C
       // reading decodes text the plain reading takes literally — a `bash -c $'…'` body whose
       // escaped quotes decode into thousands of nested `"$( )"` overflows the
       // stack in findParenClose. An error here must not cost the plain
-      // reading's verdict, which is the one the guard gave before #5255.
+      // reading's verdict, which is the one the guard gave before #5255; an
+      // overflow still leaves the command unfinished (findSecretRead).
+      if (e instanceof RangeError) scanUnfinished = true;
     }
     if (hit !== null) return hit;
   }
@@ -1964,9 +1998,14 @@ function reasonFor(code, tool, target) {
     return `Secret read guard: this Bash command is over ${MAX_COMMAND_LENGTH} characters and ` +
       'cannot be checked for secret-file reads. Split it into smaller commands.';
   }
+  if (code === 'command-too-complex') {
+    return 'Secret read guard: this Bash command is nested too deeply to be checked for ' +
+      'secret-file reads. Split it into smaller commands.';
+  }
   if (code === 'glob-too-complex') {
     return `Secret read guard: the Grep glob '${target}' expands to more than ${MAX_GLOB_ALTERNATIVES} ` +
-      'alternatives and cannot be checked for secret-file matches. Use a narrower glob.';
+      'alternatives, or holds too many brace groups to expand, and cannot be checked for ' +
+      'secret-file matches. Use a narrower glob.';
   }
   if (code === 'debugger-cli-spawn') {
     return `Debugger spawn guard: this Bash command launches the debugger as a CLI process ('--agent ${target}'). ` +
@@ -2095,6 +2134,8 @@ function main() {
   process.stdin.on('data', chunk => input += chunk);
   process.stdin.on('end', () => {
     clearTimeout(stdinTimeout);
+    let tool = '';
+    let glob = '';
     try {
       const data = normalizeKimiPayload(JSON.parse(input));
 
@@ -2104,7 +2145,7 @@ function main() {
         allow(undefined);
       }
 
-      const tool = bareToolName(data.tool_name);
+      tool = bareToolName(data.tool_name);
       if (tool !== 'Read' && tool !== 'Grep' && tool !== 'Bash') {
         allow(undefined);
       }
@@ -2124,7 +2165,7 @@ function main() {
         const grepPath = typeof data.tool_input.path === 'string' ? data.tool_input.path
           : (typeof data.tool_input.file_path === 'string' ? data.tool_input.file_path : '');
         if (namesSecret(grepPath)) emitBlock('secret-read', tool, grepPath);
-        const glob = typeof data.tool_input.glob === 'string' ? data.tool_input.glob : '';
+        glob = typeof data.tool_input.glob === 'string' ? data.tool_input.glob : '';
         if (glob !== '') {
           const verdict = classifyGrepGlob(glob);
           if (verdict) emitBlock(verdict, tool, glob);
@@ -2141,8 +2182,16 @@ function main() {
       const spawn = findDebuggerCliSpawn(command, 0);
       if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
       allow(undefined);
-    } catch {
-      // Fail open — never block valid tool calls due to hook errors.
+    } catch (e) {
+      // A stack overflow is a limit, not a bug: failing open on it allows a
+      // read the check had not reached. findSecretRead turns its own into
+      // `command-too-complex`; the debugger-spawn scan unwraps `timeout`,
+      // which the secret scan does not, so its tokenizer can overflow on a
+      // body the secret scan never read, and a Grep glob with enough brace
+      // groups overflows the brace expansion. Any other error fails open — never
+      // block valid tool calls due to hook errors.
+      if (e instanceof RangeError && tool === 'Bash') emitBlock('command-too-complex', tool, '');
+      if (e instanceof RangeError && tool === 'Grep') emitBlock('glob-too-complex', tool, glob);
       // ON_CRASH is declared ALLOW at module top (#3911).
       crash(ON_CRASH, undefined);
     }
