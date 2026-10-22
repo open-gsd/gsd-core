@@ -1935,10 +1935,10 @@ function cmdPhaseInsert(
       let insertIdx = bulletLineEnd;
       for (const m of afterBullet.matchAll(bulletRe)) {
         if (!isPhaseTokenWithin(m.groups!.tok, subtreeRoot)) {
-          insertIdx = bulletLineEnd + (m.index as number);
+          insertIdx = bulletLineEnd + m.index;
           break;
         }
-        insertIdx = bulletLineEnd + (m.index as number) + m[0].length;
+        insertIdx = bulletLineEnd + m.index + m[0].length;
       }
 
       updatedContent =
@@ -1996,7 +1996,7 @@ function cmdPhaseInsert(
       let insertIdx = rawContent.length;
       for (const m of afterHeader.matchAll(nextPhaseRe)) {
         if (!isPhaseTokenWithin(m.groups!.tok, subtreeRoot)) {
-          insertIdx = headerIdx + headerMatch![0].length + (m.index as number);
+          insertIdx = headerIdx + headerMatch![0].length + m.index;
           break;
         }
       }
