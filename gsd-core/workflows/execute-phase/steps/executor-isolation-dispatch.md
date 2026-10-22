@@ -34,7 +34,7 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 # exactly as in the gate's own block.
 _ISOLATION_JSON=$(gsd_run query dispatch-isolation --json --phase "${PHASE_NUMBER:-}" 2>/dev/null)
 _ISOLATION_RC=$?
-_ISOLATION_FIELDS=$(printf '%s' "$_ISOLATION_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write((j&&typeof j.isolation==="string"&&/^[a-z-]+$/.test(j.isolation)?j.isolation:"")+" "+(j&&j.held===true?"held":"live"))}catch{process.stdout.write(" live")}})')
+_ISOLATION_FIELDS=$(printf '%s' "$_ISOLATION_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write((j&&typeof j.isolation==="string"&&/^[a-z-]+$/.test(j.isolation)?j.isolation:"")+" "+(j&&j.held===true?"held:"+(Number.isSafeInteger(j.decidedAt)&&j.decidedAt>=0?j.decidedAt:""):"live"))}catch{process.stdout.write(" live")}})')
 _ISOLATION_RAW=${_ISOLATION_FIELDS% *}
 _ISOLATION_HELD=${_ISOLATION_FIELDS##* }
 if [ $_ISOLATION_RC -ne 0 ] || [ -z "$_ISOLATION_RAW" ]; then
@@ -51,9 +51,11 @@ esac
 
 # A HELD `none` is a degrade an earlier step of this run recorded for this phase,
 # not a capability verdict: run the wave sequentially instead of failing closed.
-if [ "$ISOLATION" = "none" ] && [ "$ISOLATION_RESOLVED" = "true" ] && [ "$_ISOLATION_HELD" = "held" ]; then
+_RENEW_HELD=""
+if [ "$ISOLATION" = "none" ] && [ "$ISOLATION_RESOLVED" = "true" ] && [ "${_ISOLATION_HELD%%:*}" = "held" ]; then
   echo "⚠ Dispatch isolation is held at none: an earlier step of this run degraded phase ${PHASE_NUMBER:-} to sequential dispatch within the last 10 minutes. Running its plans sequentially." >&2
   USE_WORKTREES=false
+  _RENEW_HELD="${_ISOLATION_HELD#held:}"
 fi
 
 # Project-level opt-out wins on every host; a host with no primitive fails closed.
@@ -101,8 +103,11 @@ fi
 # fail the wave — the guards' own sentinel-absent fallback is safe, just less
 # precise. A HELD `none` is re-recorded too, for the reason the gate's own
 # block gives: the guard reads the record at dispatch time, and the held one
-# can name another plan or expire before this wave dispatches.
-gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}" --force-isolation "$ISOLATION" >/dev/null 2>&1 || true
+# can name another plan or expire before this wave dispatches. `--renew-held`
+# passes the held answer's `decidedAt`, so this re-record does not restart
+# the hold (dispatch-isolation-gate.md, "A plain re-query reports the held
+# decision").
+gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}" --force-isolation "$ISOLATION" ${_RENEW_HELD:+--renew-held "$_RENEW_HELD"} >/dev/null 2>&1 || true
 ```
 
 `ISOLATION` — not `RUNTIME` — selects how the wave fans out. These three values are the only
