@@ -12,15 +12,21 @@
  * A test pins the workflow's pathspec flags to this array, so the two cannot drift apart again.
  */
 
-/** Git-pathspec spelling. A trailing `/` is a directory, anything else a basename glob. */
+/** Git-pathspec spelling. A `/**` tail is a directory; anything else is a basename glob (optionally behind the `:(glob)` depth prefix). */
 export const TEST_FILE_PATHSPECS = [
-  '*.test.*', '*.spec.*', 'tests/', '__tests__/',
-  '*_test.go', 'test_*.py', '*_test.py', '*_test.exs', '*_spec.rb', '*_test.rb',
+  '*.test.*', '*.spec.*', ':(glob)**/tests/**', ':(glob)**/__tests__/**',
+  '*_test.go', ':(glob)**/test_*.py', '*_test.py', '*_test.exs', '*_spec.rb', '*_test.rb',
 ] as const;
+
+// The `:(glob)` double-star prefix matches at any depth, root included; the matchers below read the bare form.
+const GLOB_DEPTH_PREFIX = ':(glob)**/';
+const DIRECTORY_TAIL = '/**';
+const stripGlobDepthPrefix = (spec: string): string => (spec.startsWith(GLOB_DEPTH_PREFIX) ? spec.slice(GLOB_DEPTH_PREFIX.length) : spec);
+const isDirectorySpec = (spec: string): boolean => stripGlobDepthPrefix(spec).endsWith(DIRECTORY_TAIL);
 
 /** Directory names a `<files>` entry may sit under. `test/` is the singular spelling many projects use. */
 const TEST_DIRECTORY_NAMES: ReadonlySet<string> = new Set([
-  ...TEST_FILE_PATHSPECS.filter((spec) => spec.endsWith('/')).map((spec) => spec.slice(0, -1)),
+  ...TEST_FILE_PATHSPECS.filter(isDirectorySpec).map((spec) => stripGlobDepthPrefix(spec).slice(0, -DIRECTORY_TAIL.length)),
   'test',
 ]);
 
@@ -30,8 +36,8 @@ function escapeRegex(text: string): string {
 
 /** A basename glob where `*` is any run of non-separator characters. */
 const FILE_GLOBS: readonly RegExp[] = TEST_FILE_PATHSPECS
-  .filter((spec) => !spec.endsWith('/'))
-  .map((spec) => new RegExp(`^${spec.split('*').map(escapeRegex).join('[^/]*')}$`, 'i'));
+  .filter((spec) => !isDirectorySpec(spec))
+  .map((spec) => new RegExp(`^${stripGlobDepthPrefix(spec).split('*').map(escapeRegex).join('[^/]*')}$`, 'i'));
 
 /** True when `file` (either separator) is a test file by the shared convention list. */
 export function isTestFilePath(file: string): boolean {

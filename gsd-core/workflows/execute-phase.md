@@ -241,14 +241,13 @@ if [ "$TDD_MODE" = "true" ]; then
     # #5164: the same resolver, scope and milestone bound as safe_resume_gate — anchored,
     # zero-pad tolerant (#4003, #4619, #4748), this branch only. A padded literal grep
     # hard-halted on a correct unpadded RED commit.
-    # #4379: this pathspec IS the gate's definition of "a test file". It was
-    # JS/TS-only, so Go tripped on every task; and `**/` never matches a
-    # root-level path, so a root `foo.test.js` was invisible too. Bare globs
-    # match at every depth. NOT widened to ordinary source — that would make
-    # the gate pass on any in-scope commit. Trade-offs and the Rust gap:
-    # references/tdd.md § Create first test file.
+    # #4379/#5181: this pathspec IS the gate's definition of "a test file". Leading-`*`
+    # globs match at any depth; `:(glob)**/` covers root and nested without `*`
+    # crossing `/` (so `src/test_utils/x.py` is not a test). NOT widened to ordinary
+    # source — that would make the gate pass on any in-scope commit. Rust inline #[test]: references/tdd.md
+    # § Create first test file.
 
-    RED_COMMIT=$(gsd_run check evaluation-scope --plan "${PHASE_NUMBER}-${PLAN_ID}" --commits-only --milestone-bound --max-commits 1 --raw --pathspec "*.test.*" --pathspec "*.spec.*" --pathspec "tests/" --pathspec "__tests__/" --pathspec "*_test.go" --pathspec "test_*.py" --pathspec "*_test.py" --pathspec "*_test.exs" --pathspec "*_spec.rb" --pathspec "*_test.rb" 2>/dev/null) && RED_SCOPE_RC=0 || RED_SCOPE_RC=$?
+    RED_COMMIT=$(gsd_run check evaluation-scope --plan "${PHASE_NUMBER}-${PLAN_ID}" --commits-only --milestone-bound --max-commits 1 --raw --pathspec "*.test.*" --pathspec "*.spec.*" --pathspec ":(glob)**/tests/**" --pathspec ":(glob)**/__tests__/**" --pathspec "*_test.go" --pathspec ":(glob)**/test_*.py" --pathspec "*_test.py" --pathspec "*_test.exs" --pathspec "*_spec.rb" --pathspec "*_test.rb" 2>/dev/null) && RED_SCOPE_RC=0 || RED_SCOPE_RC=$?
     # Exit 69 (UNAVAILABLE) = the scope could not be resolved: that is not "missing RED commit" (#5170).
     if [ "$RED_SCOPE_RC" -ne 0 ]; then echo "TDD GATE UNAVAILABLE: could not resolve the plan's commits for ${PLAN_ID}/${TASK_ID} (evaluation-scope exit ${RED_SCOPE_RC})"; exit 1; fi
     RED_COMMIT=$(printf '%s' "$RED_COMMIT" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const c=JSON.parse(s).commits;process.stdout.write(c.length?c[0].sha.slice(0,10)+' '+c[0].subject:'')}catch{}})")
