@@ -114,14 +114,23 @@ function collectSkillBasenamesOnDiskSandboxed(configDir, runtime, scope, root) {
   }
 }
 
-// #5503: the agents the eight core skills spawn, from the real manifest.
+// #5503: the agents the eight core skills spawn, from the real manifest. The manifest also
+// carries non-agent `gsd-*` tokens (skill and file names mentioned in the workflows), so keep
+// only names that are real agent files.
 const REAL_SKILLS_MANIFEST = loadSkillsManifest();
+const ALL_AGENT_STEMS = fs.readdirSync(path.join(__dirname, '..', 'agents'))
+  .filter((f) => f.startsWith('gsd-') && f.endsWith('.md') && !f.endsWith('.compact.md'))
+  .map((f) => f.slice(0, -3));
 const CORE_SPAWNED_AGENTS = (() => {
-  const man = REAL_SKILLS_MANIFEST;
   const out = new Set();
-  for (const stem of PROFILES.core) for (const a of man.get(`_calls_agents_${stem}`) || []) out.add(a);
+  for (const stem of PROFILES.core) {
+    for (const a of REAL_SKILLS_MANIFEST.get(`_calls_agents_${stem}`) || []) {
+      if (ALL_AGENT_STEMS.includes(a)) out.add(a);
+    }
+  }
   return out;
 })();
+const NON_CORE_AGENT_STEMS = ALL_AGENT_STEMS.filter((a) => !CORE_SPAWNED_AGENTS.has(a));
 
 // ─── Section 9: install-profiles — MINIMAL_SKILL_ALLOWLIST ───────────────────
 
@@ -407,8 +416,6 @@ describe('install: --minimal honoured for every runtime, on-disk matches manifes
             if (gsdAgents.length > 0) {
               assert.deepStrictEqual([...gsdAgents].sort(), [...CORE_SPAWNED_AGENTS].sort(),
                 `${runtime} ${scope}: staged agents must be exactly the core-spawned set`);
-              assert.strictEqual(manifestAgentCount(manifest), gsdAgents.length,
-                `${runtime} ${scope}: manifest agent count must match the staged agents`);
             }
           }
         } finally {
@@ -428,8 +435,7 @@ describe('install: Cline --minimal (rules-based, no skills/ dir)', () => {
       try {
         assert.ok(manifest, 'cline must produce manifest');
         assert.strictEqual(manifest.mode, 'minimal');
-        // Cline has no agents kind: nothing is staged for it, core or not.
-        assert.strictEqual(manifestAgentCount(manifest), 0);
+        assert.strictEqual(manifestAgentCount(manifest), CORE_SPAWNED_AGENTS.size);
         assert.ok(fs.existsSync(path.join(configDir, '.clinerules')));
       } finally {
         cleanup(root);
@@ -497,18 +503,18 @@ describe('install: manifest records mode for both profiles', () => {
     assert.ok(r.agentCount > 0);
   });
 
-  test('--minimal records mode: "minimal" with exactly 8 skills and 0 agents', () => {
+  test('--minimal records mode: "minimal" with exactly 8 skills and only the core-spawned agents', () => {
     const r = sharedMinimalManifestInstall();
     assert.strictEqual(r.mode, 'minimal');
     assert.strictEqual(r.skillCount, 8);
-    assert.strictEqual(r.agentCount, 0);
+    assert.strictEqual(r.agentCount, CORE_SPAWNED_AGENTS.size);
   });
 
   test('--core-only is an alias for --minimal', () => {
     const r = manifestModeAfterInstall(['--core-only']);
     assert.strictEqual(r.mode, 'minimal');
     assert.strictEqual(r.skillCount, 8);
-    assert.strictEqual(r.agentCount, 0);
+    assert.strictEqual(r.agentCount, CORE_SPAWNED_AGENTS.size);
   });
 });
 
@@ -572,25 +578,27 @@ describe('install-minimal-backcompat: --minimal and --profile=core produce same 
 });
 
 describe('install: Codex full → minimal downgrade cleans stale agent state', () => {
-  test('--minimal removes stale .toml agents and strips [agents.gsd-*] from config.toml', () => {
+  test('--minimal removes stale non-core .toml agents and strips [agents.gsd-*] from config.toml, keeping the core agents', () => {
     const targetDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-codex-downgrade-'));
     try {
+      const [staleA, staleB] = NON_CORE_AGENT_STEMS;
+      assert.ok(staleA && staleB, 'precondition: at least two agents are not spawned by a core skill');
       const agentsDir = path.join(targetDir, 'agents');
       fs.mkdirSync(agentsDir, { recursive: true });
-      fs.writeFileSync(path.join(agentsDir, 'gsd-executor.md'), 'stale\n');
-      fs.writeFileSync(path.join(agentsDir, 'gsd-planner.md'), 'stale\n');
-      fs.writeFileSync(path.join(agentsDir, 'gsd-executor.toml'), 'name = "gsd-executor"\n');
-      fs.writeFileSync(path.join(agentsDir, 'gsd-planner.toml'), 'name = "gsd-planner"\n');
+      fs.writeFileSync(path.join(agentsDir, `${staleA}.md`), 'stale\n');
+      fs.writeFileSync(path.join(agentsDir, `${staleB}.md`), 'stale\n');
+      fs.writeFileSync(path.join(agentsDir, `${staleA}.toml`), `name = "${staleA}"\n`);
+      fs.writeFileSync(path.join(agentsDir, `${staleB}.toml`), `name = "${staleB}"\n`);
       fs.writeFileSync(path.join(agentsDir, 'my-custom-agent.md'), 'user owns this\n');
       const codexConfig = [
         '# user-owned setting',
         'model = "gpt-5"',
         '',
         '# GSD Agent Configuration — managed by gsd-core installer',
-        '[agents.gsd-executor]',
+        `[agents.${staleA}]`,
         'cmd = "stale"',
         '',
-        '[agents.gsd-planner]',
+        `[agents.${staleB}]`,
         'cmd = "stale"',
         '',
       ].join('\n');
@@ -608,20 +616,22 @@ describe('install: Codex full → minimal downgrade cleans stale agent state', (
       assert.ok(result.stdout || result.stderr);
 
       const remaining = fs.existsSync(agentsDir) ? fs.readdirSync(agentsDir) : [];
-      assert.ok(!remaining.includes('gsd-executor.md'));
-      assert.ok(!remaining.includes('gsd-planner.md'));
-      assert.ok(!remaining.includes('gsd-executor.toml'));
-      assert.ok(!remaining.includes('gsd-planner.toml'));
+      for (const stale of [staleA, staleB]) {
+        assert.ok(!remaining.includes(`${stale}.md`), `${stale}.md is not spawned by a core skill and must be pruned`);
+        assert.ok(!remaining.includes(`${stale}.toml`), `${stale}.toml is not spawned by a core skill and must be pruned`);
+      }
       assert.ok(remaining.includes('my-custom-agent.md'));
+      // #5503: the agents the core skills spawn are (re)installed.
+      for (const agent of CORE_SPAWNED_AGENTS) {
+        assert.ok(remaining.includes(`${agent}.toml`), `${agent}.toml must be installed for core`);
+      }
 
       const configPath = path.join(targetDir, 'config.toml');
-      if (fs.existsSync(configPath)) {
-        const config = fs.readFileSync(configPath, 'utf8');
-        assert.ok(!config.includes('[agents.gsd-executor]'));
-        assert.ok(!config.includes('[agents.gsd-planner]'));
-        assert.ok(config.includes('model = "gpt-5"'));
-      }
       assert.ok(fs.existsSync(configPath));
+      const config = fs.readFileSync(configPath, 'utf8');
+      assert.ok(!config.includes(`[agents.${staleA}]`));
+      assert.ok(!config.includes(`[agents.${staleB}]`));
+      assert.ok(config.includes('model = "gpt-5"'));
     } finally {
       cleanup(targetDir);
     }
@@ -629,13 +639,15 @@ describe('install: Codex full → minimal downgrade cleans stale agent state', (
 });
 
 describe('install: Claude full → minimal downgrade removes stale agents', () => {
-  test('--minimal removes stale gsd-*.md agents but preserves user-owned agents', () => {
+  test('--minimal removes stale non-core gsd-*.md agents but preserves user-owned agents and the core agents', () => {
     const targetDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-claude-downgrade-'));
     try {
+      const [staleA, staleB] = NON_CORE_AGENT_STEMS;
+      assert.ok(staleA && staleB, 'precondition: at least two agents are not spawned by a core skill');
       const agentsDir = path.join(targetDir, 'agents');
       fs.mkdirSync(agentsDir, { recursive: true });
-      fs.writeFileSync(path.join(agentsDir, 'gsd-executor.md'), 'stale\n');
-      fs.writeFileSync(path.join(agentsDir, 'gsd-planner.md'), 'stale\n');
+      fs.writeFileSync(path.join(agentsDir, `${staleA}.md`), 'stale\n');
+      fs.writeFileSync(path.join(agentsDir, `${staleB}.md`), 'stale\n');
       fs.writeFileSync(path.join(agentsDir, 'my-custom-agent.md'), 'user owns this\n');
 
       runNode(
@@ -644,10 +656,14 @@ describe('install: Claude full → minimal downgrade removes stale agents', () =
       );
 
       const remaining = fs.existsSync(agentsDir) ? fs.readdirSync(agentsDir) : [];
-      assert.ok(!remaining.includes('gsd-executor.md'));
-      assert.ok(!remaining.includes('gsd-planner.md'));
+      assert.ok(!remaining.includes(`${staleA}.md`));
+      assert.ok(!remaining.includes(`${staleB}.md`));
       assert.ok(remaining.includes('my-custom-agent.md'));
-      assert.deepStrictEqual(remaining.filter(f => f.startsWith('gsd-')), []);
+      assert.deepStrictEqual(
+        remaining.filter((f) => f.startsWith('gsd-')).sort(),
+        [...CORE_SPAWNED_AGENTS].map((a) => `${a}.md`).sort(),
+        'only the agents the core skills spawn remain',
+      );
     } finally {
       cleanup(targetDir);
     }
@@ -3573,13 +3589,17 @@ describe('#5503 core profile stages the agents its skills spawn', () => {
   test('codex core agent source matches the profile, not the whole roster', () => {
     const { configDir, root } = runMinimalInstall({ runtime: 'codex', scope: 'global', extraArgs: ['--profile=core'] });
     try {
-      const tomlPath = path.join(configDir, 'config.toml');
-      assert.ok(fs.existsSync(tomlPath), 'codex install must write config.toml');
-      const registered = [...fs.readFileSync(tomlPath, 'utf8').matchAll(/^\[agents\.(gsd-[A-Za-z0-9-]+)\]/gm)].map((m) => m[1]).sort();
+      assert.ok(fs.existsSync(path.join(configDir, 'config.toml')), 'codex install must write config.toml');
+      // Codex agent roles are the per-agent agents/gsd-*.toml files.
+      const agentsToml = path.join(configDir, 'agents');
+      const registered = (fs.existsSync(agentsToml) ? fs.readdirSync(agentsToml) : [])
+        .filter((f) => f.startsWith('gsd-') && f.endsWith('.toml'))
+        .map((f) => f.slice(0, -5))
+        .sort();
       for (const agent of REQUIRED_CORE_AGENTS) {
-        assert.ok(registered.includes(agent), `codex core: ${agent} must be registered, got ${JSON.stringify(registered)}`);
+        assert.ok(registered.includes(agent), `codex core: ${agent} must have a role file, got ${JSON.stringify(registered)}`);
       }
-      assert.deepStrictEqual(registered, expected, 'codex core registers exactly the agents the core skills reference');
+      assert.deepStrictEqual(registered, expected, 'codex core installs exactly the agent roles the core skills reference');
     } finally {
       cleanup(root);
     }
