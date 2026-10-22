@@ -52,7 +52,7 @@ Registro completo em `agents/gsd-*.md`. A coluna "Documento primário" indica se
 | gsd-doc-classifier | Classifica um único documento de planejamento como ADR, PRD, SPEC, DOC ou UNKNOWN; invocado em paralelo para processar o corpus de documentos. | `/gsd-ingest-docs` | advanced stub |
 | gsd-doc-synthesizer | Sintetiza documentos de planejamento classificados em um único contexto consolidado com regras de precedência, detecção de ciclos e relatório de conflitos em três categorias. | `/gsd-ingest-docs` | advanced stub |
 
-**Nota de cobertura.** `docs/AGENTS.md` fornece cartões de função completos para 21 agentes primários, além de stubs concisos para os 12 agentes avançados. O Resumo de Permissões de Ferramenta de Agente nesse arquivo cobre apenas os 21 agentes primários; as listas de ferramentas dos agentes avançados estão capturadas no frontmatter de cada agente em `agents/gsd-*.md`.
+**Nota de cobertura.** `docs/AGENTS.md` fornece cartões de função completos para os agentes primários, além de stubs concisos para os agentes avançados. O Resumo de Permissões de Ferramenta de Agente nesse arquivo cobre apenas os agentes primários; as listas de ferramentas dos agentes avançados estão capturadas no frontmatter de cada agente em `agents/gsd-*.md`.
 
 ---
 

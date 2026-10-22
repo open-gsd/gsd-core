@@ -314,7 +314,7 @@ Orchestrator (workflow .md)
 
 ### 主要 Agent 派生类别
 
-21 个主要 Agent 的概念派生模式分类。完整的 31 个 Agent 权威列表（包括 10 个高级/专用 Agent，如 `gsd-pattern-mapper`、`gsd-code-reviewer`、`gsd-code-fixer`、`gsd-ai-researcher`、`gsd-domain-researcher`、`gsd-eval-planner`、`gsd-eval-auditor`、`gsd-framework-selector`、`gsd-debug-session-manager`、`gsd-intel-updater`），请参阅 [`docs/INVENTORY.md`](INVENTORY.md#agents-31-shipped)。
+主要 Agent 的概念派生模式分类。完整的 Agent 权威列表（包括 高级/专用 Agent，如 `gsd-pattern-mapper`、`gsd-code-reviewer`、`gsd-code-fixer`、`gsd-ai-researcher`、`gsd-domain-researcher`、`gsd-eval-planner`、`gsd-eval-auditor`、`gsd-framework-selector`、`gsd-debug-session-manager`、`gsd-intel-updater`），请参阅 [`docs/INVENTORY.md`](INVENTORY.md#agents)。
 
 
 | 类别             | Agent                                                                                   | 并行性                                                                                    |

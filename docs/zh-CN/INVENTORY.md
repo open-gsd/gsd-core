@@ -52,7 +52,7 @@
 | gsd-doc-classifier | 将单个规划文档分类为 ADR、PRD、SPEC、DOC 或 UNKNOWN；并行生成以处理文档语料库。 | `/gsd-ingest-docs` | advanced stub |
 | gsd-doc-synthesizer | 将已分类的规划文档综合为一个统一上下文，具有优先级规则、循环检测和三桶冲突报告。 | `/gsd-ingest-docs` | advanced stub |
 
-**覆盖说明。** `docs/AGENTS.md` 为 21 个主要代理提供了完整角色卡，并为 12 个高级代理提供了简洁存根。该文件中的代理工具权限摘要仅涵盖主要的 21 个代理；高级代理的工具列表记录在 `agents/gsd-*.md` 中各代理的 frontmatter 里。
+**覆盖说明。** `docs/AGENTS.md` 为主要代理提供了完整角色卡，并为高级代理提供了简洁存根。该文件中的代理工具权限摘要仅涵盖主要代理；高级代理的工具列表记录在 `agents/gsd-*.md` 中各代理的 frontmatter 里。
 
 ---
 

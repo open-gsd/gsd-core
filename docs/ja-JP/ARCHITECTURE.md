@@ -277,7 +277,7 @@ Orchestrator (workflow .md)
 
 ### 主要エージェント生成カテゴリ
 
-21 の主要エージェントの概念的な生成パターン分類。信頼できる 31 エージェントロスター（`gsd-pattern-mapper`、`gsd-code-reviewer`、`gsd-code-fixer`、`gsd-ai-researcher`、`gsd-domain-researcher`、`gsd-eval-planner`、`gsd-eval-auditor`、`gsd-framework-selector`、`gsd-debug-session-manager`、`gsd-intel-updater` などの 10 の高度/専門化エージェントを含む）については、[`docs/INVENTORY.md`](INVENTORY.md#agents-31-shipped) を参照。
+主要エージェントの概念的な生成パターン分類。信頼できるエージェントロスター（`gsd-pattern-mapper`、`gsd-code-reviewer`、`gsd-code-fixer`、`gsd-ai-researcher`、`gsd-domain-researcher`、`gsd-eval-planner`、`gsd-eval-auditor`、`gsd-framework-selector`、`gsd-debug-session-manager`、`gsd-intel-updater` などの 高度/専門化エージェントを含む）については、[`docs/INVENTORY.md`](INVENTORY.md#agents) を参照。
 
 | カテゴリ | エージェント | 並列性 |
 | ---------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |

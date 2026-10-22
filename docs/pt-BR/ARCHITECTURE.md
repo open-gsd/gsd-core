@@ -329,7 +329,7 @@ Orquestrador (workflow .md)
 
 ### Categorias Principais de Criação de Agentes
 
-Taxonomia conceitual de padrões de criação para os 21 agentes primários. Para o roster oficial de 31 agentes (incluindo os 10 agentes avançados/especializados como `gsd-pattern-mapper`, `gsd-code-reviewer`, `gsd-code-fixer`, `gsd-ai-researcher`, `gsd-domain-researcher`, `gsd-eval-planner`, `gsd-eval-auditor`, `gsd-framework-selector`, `gsd-debug-session-manager`, `gsd-intel-updater`), consulte [`docs/INVENTORY.md`](INVENTORY.md#agents-31-shipped).
+Taxonomia conceitual de padrões de criação para os agentes primários. Para o roster oficial de agentes (incluindo os agentes avançados/especializados como `gsd-pattern-mapper`, `gsd-code-reviewer`, `gsd-code-fixer`, `gsd-ai-researcher`, `gsd-domain-researcher`, `gsd-eval-planner`, `gsd-eval-auditor`, `gsd-framework-selector`, `gsd-debug-session-manager`, `gsd-intel-updater`), consulte [`docs/INVENTORY.md`](INVENTORY.md#agents).
 
 
 | Categoria        | Agentes                                                                                 | Paralelismo                                                                               |
