@@ -9,7 +9,7 @@ What each part of a GSD install becomes on [Pi](https://pi.dev), checked against
 | Commands | 72 | 72 skills, run as `/skill:gsd-<command>` | `/skill:gsd-debug` prints that it is unsupported |
 | Workflows | 181 workflow files, including those in subdirectories | all installed under the engine root, each reached through a skill | `debug.md`, which only `/gsd-debug` runs |
 | Agent roles | 35 roles and 29 compact variants | 35 roles under `agents/`, run through `gsd_dispatch`; compact variants are not installed | none |
-| Hooks | 28 hook scripts, 8 of them for Cursor or Windsurf only | bridged through `tool_call`, `tool_result`, `session_start`, `before_agent_start` and `session_before_compact` | the hooks listed under [Hooks](#hooks) |
+| Hooks | 29 hook scripts, 8 of them for Cursor or Windsurf only | bridged through `tool_call`, `tool_result`, `session_start`, `before_agent_start` and `session_before_compact` | the hooks listed under [Hooks](#hooks) |
 
 The counts are the state at the time of writing; the test, not this table, is the authority.
 
@@ -42,6 +42,7 @@ Every hook script has a recorded Pi disposition, and so does every event and scr
 | Hook | Claude event | Disposition | Reason |
 |---|---|---|---|
 | `gsd-check-update.js` | SessionStart | unsupported | its cache is read only by the Claude statusline and update banner; Pi has neither, and Pi installs update through the installer or `pi update` |
+| `gsd-path-export.js` | SessionStart | unsupported | appends to the `$CLAUDE_ENV_FILE` that only Claude Code hands to SessionStart hooks; Pi provides no such file |
 | `gsd-update-banner.js` | statusLine | unsupported | renders into the Claude statusline; Pi extensions have no equivalent statusline command |
 | `gsd-statusline.js` | statusLine | unsupported | Claude statusLine command; Pi extensions have no equivalent statusline command |
 | `gsd-agent-isolation-guard.js` | PreToolUse | unsupported | guards the isolation argument of Claude's Agent call; `gsd_dispatch` has no isolation parameter and a dispatched role runs flat in its own process |
