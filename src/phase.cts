@@ -1768,6 +1768,24 @@ function scanExistingDecimalPhaseNumbers(phasesDir: string, rawContent: string, 
   return decimalSet;
 }
 
+/**
+ * #5599: true when `token` (a heading/bullet phase number such as "13.1.2") is
+ * a STRICT descendant of `ancestor` ("13"). Compared segment-wise so "130" is
+ * not inside "13", and digit segments compare numerically so a zero-padded
+ * "05.1" matches "5".
+ */
+function isPhaseTokenWithin(token: string, ancestor: string): boolean {
+  const t = token.split('.');
+  const a = ancestor.split('.');
+  if (t.length <= a.length) return false;
+  const unpad = (s: string): string => s.replace(/^0+(?=\d)/, '');
+  return a.every((seg, i) => {
+    const other = t[i];
+    if (/^\d+$/.test(seg) && /^\d+$/.test(other)) return unpad(seg) === unpad(other);
+    return seg.toLowerCase() === other.toLowerCase();
+  });
+}
+
 function cmdPhaseInsert(
   cwd: string,
   afterPhase: string,
@@ -1855,6 +1873,12 @@ function cmdPhaseInsert(
       const siblingNextDecimal = siblingDecimalSet.size === 0 ? 1 : Math.max(...siblingDecimalSet) + 1;
       _decimalPhase = `${parentBase}.${siblingNextDecimal}`;
     }
+    // #5599: the family whose subtree the new entry must land at the end of —
+    // the parent for a sibling allocation, the target itself for a nested one.
+    const subtreeRoot =
+      allocation === 'sibling' && lastDotIndex !== -1
+        ? normalizedBase.slice(0, lastDotIndex)
+        : normalizedBase;
     const insertConfig = loadConfig(cwd);
     const projectCode = (insertConfig.project_code as string) || '';
     const pfx = projectCode ? `${projectCode}-` : '';
@@ -1904,13 +1928,17 @@ function cmdPhaseInsert(
       const bulletLineEnd =
         rawContent.indexOf(bulletMatchResult![0]) + bulletMatchResult![0].length;
       const afterBullet = rawContent.slice(bulletLineEnd);
-      const nextBulletMatch = afterBullet.match(/\r?\n-\s*\[[ x]\]\s*(?:\*\*)?Phase\s+\d/i);
-
-      let insertIdx: number;
-      if (nextBulletMatch) {
-        insertIdx = bulletLineEnd + (nextBulletMatch.index as number);
-      } else {
-        insertIdx = bulletLineEnd;
+      // #5599: land after the last bullet inside the allocation family's
+      // subtree, not before the first following bullet of any number (which is
+      // the target's own later decimal child when one exists).
+      const bulletRe = /\r?\n-\s*\[[ x]\]\s*(?:\*\*)?Phase\s+(?<tok>\d[^\s:*]*)[^\r\n]*/gi;
+      let insertIdx = bulletLineEnd;
+      for (const m of afterBullet.matchAll(bulletRe)) {
+        if (!isPhaseTokenWithin(m.groups!.tok, subtreeRoot)) {
+          insertIdx = bulletLineEnd + (m.index as number);
+          break;
+        }
+        insertIdx = bulletLineEnd + (m.index as number) + m[0].length;
       }
 
       updatedContent =
@@ -1958,13 +1986,19 @@ function cmdPhaseInsert(
       // preserved exactly as the prior literal had it — a pre-existing,
       // deliberately-unchanged asymmetry with the other sites in this file.
       const nextPhaseHeadingPrefix = `#{2,4}\\s+${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, insertConvention)}`;
-      const nextPhaseMatch = afterHeader.match(new RegExp(`\\r?\\n${nextPhaseHeadingPrefix}\\d[\\d.]*`, 'i'));
-
-      let insertIdx: number;
-      if (nextPhaseMatch) {
-        insertIdx = headerIdx + headerMatch![0].length + (nextPhaseMatch.index as number);
-      } else {
-        insertIdx = rawContent.length;
+      // #5599: the boundary is the first following heading OUTSIDE the
+      // allocation family's subtree. Taking the first heading of any number
+      // spliced the new section above the target's own later decimal children
+      // (13, 13.2, 13.1, 14); the allocator already guarantees the new number
+      // exceeds every existing descendant, so "after the last descendant" is
+      // the numerically correct position.
+      const nextPhaseRe = new RegExp(`\\r?\\n${nextPhaseHeadingPrefix}(?<tok>\\d[^\\s:]*)`, 'gi');
+      let insertIdx = rawContent.length;
+      for (const m of afterHeader.matchAll(nextPhaseRe)) {
+        if (!isPhaseTokenWithin(m.groups!.tok, subtreeRoot)) {
+          insertIdx = headerIdx + headerMatch![0].length + (m.index as number);
+          break;
+        }
       }
 
       updatedContent =
