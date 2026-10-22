@@ -276,6 +276,27 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
   // Oracle: #5492's approved key list. Git runs each value as a command
   // (git-config(1)). A credential helper runs through the shell with or
   // without a leading `!` (gitcredentials(7), "Custom Helpers").
+  // NEW_ROWS (#5492 review): the rest of the command-valued keys, as
+  // [section, hasSubsection, name, stripsBang]. core.askPass, core.gitProxy
+  // and sendemail.smtpServer exec a program rather than a shell; they are
+  // scanned conservatively anyway. ROWS and KEYS below are built from it.
+  const NEW_ROWS = [
+    ['core', false, 'askpass', false], ['core', false, 'gitproxy', false],
+    ['core', false, 'alternaterefscommand', false], ['uploadpack', false, 'packobjectshook', false],
+    ['gc', false, 'recentobjectshook', false], ['interactive', false, 'difffilter', false],
+    ['imap', false, 'tunnel', false], ['instaweb', false, 'httpd', false],
+    ['difftool', true, 'cmd', false], ['mergetool', true, 'cmd', false], ['browser', true, 'cmd', false],
+    ['man', true, 'cmd', false], ['guitool', true, 'cmd', false],
+    ['trailer', true, 'cmd', false], ['trailer', true, 'command', false],
+    ['gpg', true, 'defaultkeycommand', false], ['tar', true, 'command', false],
+    ['remote', true, 'uploadpack', false], ['remote', true, 'receivepack', false],
+    ['sendemail', false, 'smtpserver', false], ['sendemail', true, 'smtpserver', false],
+    ['sendemail', false, 'sendmailcmd', false], ['sendemail', true, 'sendmailcmd', false],
+    ['sendemail', false, 'tocmd', false], ['sendemail', true, 'tocmd', false],
+    ['sendemail', false, 'cccmd', false], ['sendemail', true, 'cccmd', false],
+    ['sendemail', false, 'headercmd', false], ['sendemail', true, 'headercmd', false],
+    ['submodule', true, 'update', true],
+  ];
   const blocks = [
     ["git -c sequence.editor='cat .env; true' rebase -i --root", '.env'],
     ["git -c core.editor='cat .env; true' commit", '.env'],
@@ -299,6 +320,31 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
     ["git -c credential.helper='cat .env' fetch", '.env'],
     ["git -c Core.SSHCommand='cat .env #' fetch", '.env'],
     ["git -c DIFF.X.TEXTCONV='cat .env #' show --textconv HEAD", '.env'],
+    ["git -c core.askPass='cat .env' fetch", '.env'],
+    ["git -c core.gitProxy='cat .env for example.com' fetch", '.env'],
+    ["git -c core.alternateRefsCommand='cat .env #' fetch", '.env'],
+    ["git -c uploadpack.packObjectsHook='cat .env #' upload-pack .", '.env'],
+    ["git -c gc.recentObjectsHook='cat .env' gc --cruft", '.env'],
+    ["git -c interactive.diffFilter='cat .env #' add -p", '.env'],
+    ["git -c imap.tunnel='cat .env' imap-send", '.env'],
+    ["git -c instaweb.httpd='cat .env' instaweb", '.env'],
+    ["git -c difftool.x.cmd='cat .env #' difftool -t x", '.env'],
+    ["git -c mergetool.x.cmd='cat .env #' mergetool -t x", '.env'],
+    ["git -c browser.x.cmd='cat .env #' web--browse -b x", '.env'],
+    ["git -c man.x.cmd='cat .env #' help -m log", '.env'],
+    ["git -c guitool.x.cmd='cat .env' gui", '.env'],
+    ["git -c trailer.x.cmd='cat .env #' interpret-trailers", '.env'],
+    ["git -c trailer.x.command='cat .env' interpret-trailers", '.env'],
+    ["git -c gpg.ssh.defaultKeyCommand='cat .env' commit -S", '.env'],
+    ["git -c tar.tgz.command='cat .env #' archive --format=tgz HEAD", '.env'],
+    ["git -c remote.origin.uploadpack='cat .env; git-upload-pack' fetch", '.env'],
+    ["git -c remote.origin.receivepack='cat .env; git-receive-pack' push", '.env'],
+    ["git -c sendemail.smtpServer='/bin/cat .env' send-email x.patch", '.env'],
+    ["git -c sendemail.sendmailCmd='cat .env #' send-email x.patch", '.env'],
+    ["git -c sendemail.toCmd='cat .env #' send-email x.patch", '.env'],
+    ["git -c sendemail.work.ccCmd='cat .env #' send-email --identity=work x.patch", '.env'],
+    ["git -c sendemail.headerCmd='cat .env #' send-email x.patch", '.env'],
+    ["git -c submodule.x.update='!cat .env' submodule update", '.env'],
   ];
   for (const [cmd, expectedPath] of blocks) {
     test(`blocks ${JSON.stringify(cmd)}`, () => {
@@ -321,6 +367,12 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
     'git -c core.autocrlf=true status',
     "git -c foo='cat .env' status",
     "echo \"git -c sequence.editor='cat .env' rebase -i\"",
+    'git -c sendemail.smtpServer=smtp.example.com send-email x.patch',
+    'git -c submodule.x.update=rebase submodule update',
+    "git -c difftool.x.path='cat .env' difftool -t x", // a program path, not a command line
+    "git -c remote.origin.url='cat .env' fetch",
+    'git -c core.askPass=/usr/lib/ssh/ssh-askpass fetch',
+    'git -c instaweb.httpd=lighttpd instaweb',
   ];
   for (const cmd of allows) {
     test(`allows ${JSON.stringify(cmd)}`, () => {
@@ -334,6 +386,8 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
     ['gpg.program', ''], ['gpg.x509.program', ''], ['diff.x.textconv', ''], ['diff.x.command', ''],
     ['filter.x.clean', ''], ['filter.x.smudge', ''], ['filter.x.process', ''], ['merge.x.driver', ''],
     ['credential.helper', '!'], ['credential.https://example.com.helper', '!'],
+    ...NEW_ROWS.map(([section, hasSub, name, stripsBang]) =>
+      [hasSub ? `${section}.x.${name}` : `${section}.${name}`, stripsBang ? '!' : '']),
   ];
   const SECRETS = ['.env', '.env.local', '.secrets', 'config/.env.production'];
   for (const [key, prefix] of KEYS) {
@@ -359,6 +413,7 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
     ['filter', true, 'clean', false], ['filter', true, 'smudge', false], ['filter', true, 'process', false],
     ['merge', true, 'driver', false],
     ['credential', false, 'helper', true], ['credential', true, 'helper', true],
+    ...NEW_ROWS,
   ];
   const expected = (section, sub, name) => ROWS.some(([s, hasSub, n]) =>
     s === section.toLowerCase() && n === name.toLowerCase() && hasSub === (sub !== null));
@@ -395,19 +450,24 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
       section: fc.constant(section), sub: hasSub ? SUBSECTION : fc.constant(null), name: fc.constant(name),
     })),
     fc.record({
-      section: fc.constantFrom('core', 'diff', 'filter', 'gpg', 'merge', 'credential', 'sequence', 'pager', 'user', 'http'),
+      section: fc.constantFrom('core', 'diff', 'filter', 'gpg', 'merge', 'credential', 'sequence', 'pager', 'user', 'http',
+        'remote', 'trailer', 'sendemail', 'gc', 'interactive', 'uploadpack', 'difftool', 'mergetool', 'browser', 'man',
+        'guitool', 'imap', 'tar', 'submodule', 'instaweb'),
       sub: fc.option(SUBSECTION, { nil: null }),
       name: fc.constantFrom('editor', 'sshcommand', 'fsmonitor', 'program', 'textconv', 'command', 'clean',
-        'smudge', 'process', 'driver', 'helper', 'external', 'pager', 'name', 'extraheader'),
+        'smudge', 'process', 'driver', 'helper', 'external', 'pager', 'name', 'extraheader',
+        'askpass', 'gitproxy', 'alternaterefscommand', 'packobjectshook', 'recentobjectshook', 'difffilter',
+        'defaultkeycommand', 'cmd', 'uploadpack', 'receivepack', 'sendmailcmd', 'smtpserver', 'tocmd', 'cccmd',
+        'headercmd', 'tunnel', 'update', 'httpd', 'url', 'path'),
     }),
   ).chain(({ section, sub, name }) => fc.record({
     section: fc.mixedCase(fc.constant(section)),
     sub: fc.constant(sub),
     name: fc.mixedCase(fc.constant(name)),
-    // `!` only where the hook strips it (credential helpers): on other keys
+    // `!` only where the hook strips it (credential helpers, submodule update): on other keys
     // a leading `!` would be judged by the generic operand check, not by the
     // key-shape scan this property is about.
-    bang: section === 'credential' ? fc.boolean() : fc.constant(false),
+    bang: section === 'credential' || section === 'submodule' ? fc.boolean() : fc.constant(false),
   }));
 
   test('property: a git -c key is scanned iff its section, subsection and name match a command-valued key', () => {
