@@ -459,6 +459,50 @@ describe('complete-milestone supplies the workstream fact; the PROJECT.md review
     }
   });
 
+  describe('the review gate resolves the manifest itself before the gated section (matrix row F10)', () => {
+    /** Run the workflow's real early gate fence; return the `PROJECT_MD_REVIEW=` line it prints. */
+    function runReviewGate(args) {
+      const lines = splitLines(fs.readFileSync(COMPLETE_MILESTONE_WORKFLOW, 'utf8'));
+      const blocks = scanFencedBlocks(lines).filter((b) => b.closeLineIdx !== -1 && b.infoString.trim().toLowerCase() === 'bash');
+      const block = blocks.find((b) => lines.slice(b.openLineIdx + 1, b.closeLineIdx).join('\n').includes('PROJECT_MD_REVIEW='));
+      assert.ok(block, 'complete-milestone.md must resolve the review gate in its own bash fence');
+      const sectionIdx = lines.findIndex((l) => l.includes(`gsd:section id="${EVOLUTION_REVIEW_ID}"`));
+      assert.ok(block.closeLineIdx < sectionIdx, 'the gate fence must come BEFORE the section it gates, else the manifest is unread when the section runs');
+
+      const script = [
+        'gsd_run() { node "$GSD_TEST_TOOLS" "$@"; }',
+        lines.slice(block.openLineIdx + 1, block.closeLineIdx).join('\n').split('$ARGUMENTS').join(args),
+      ].join('\n');
+      const scriptPath = path.join(tmpDir, 'review-gate-fence.sh');
+      fs.writeFileSync(scriptPath, script);
+      const r = runHook(scriptPath, [], {
+        interpreter: 'bash',
+        cwd: tmpDir,
+        env: { ...process.env, GSD_TEST_TOOLS: GSD_TOOLS },
+        timeoutMs: PROBE_TIMEOUT_MS,
+      });
+      assert.equal(r.outcome, OUTCOME.EXITED, `gate fence must run to completion: ${r.stderr}`);
+      assert.equal(r.exitCode, 0, `gate fence exited non-zero: ${r.stderr}`);
+      return splitLines(r.stdout).find((l) => l.startsWith('PROJECT_MD_REVIEW='));
+    }
+
+    test('--ws skips the review', () => {
+      seedWorkstreamMilestoneProject(tmpDir);
+      assert.equal(runReviewGate('--ws w1'), 'PROJECT_MD_REVIEW=skip');
+    });
+
+    test('flat mode runs the review', () => {
+      seedFlatMilestoneProject(tmpDir);
+      assert.equal(runReviewGate(''), 'PROJECT_MD_REVIEW=run');
+    });
+
+    test('an active-workstream pointer alone skips the review', () => {
+      seedWorkstreamMilestoneProject(tmpDir);
+      writeActiveWorkstreamPointer(tmpDir, 'w1');
+      assert.equal(runReviewGate(''), 'PROJECT_MD_REVIEW=skip');
+    });
+  });
+
   describe('the archive safety commit follows the same manifest', () => {
     const isProjectMd = (p) => p.endsWith('/.planning/PROJECT.md');
 
@@ -487,7 +531,7 @@ describe('complete-milestone supplies the workstream fact; the PROJECT.md review
   });
 
   test('the workflow no longer claims PROJECT.md is workstream-scoped (row F9)', () => {
-    const workflow =fs.readFileSync(COMPLETE_MILESTONE_WORKFLOW, 'utf8');
+    const workflow = fs.readFileSync(COMPLETE_MILESTONE_WORKFLOW, 'utf8');
     assert.ok(
       !/MILESTONES\.md and PROJECT\.md are workstream-scoped/.test(workflow),
       'the false "PROJECT.md is workstream-scoped" sentence must be corrected (it is shared since #4543)',

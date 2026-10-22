@@ -1,6 +1,6 @@
 <purpose>
 
-Mark a shipped version (v1.0, v1.1, v2.0) as complete. Creates historical record in MILESTONES.md, performs full PROJECT.md evolution review, reorganizes ROADMAP.md with milestone groupings, and tags the release in git.
+Mark a shipped version (v1.0, v1.1, v2.0) as complete. Creates historical record in MILESTONES.md, performs the full PROJECT.md evolution review (flat mode only; skipped under `--ws`, because PROJECT.md is shared across workstreams), reorganizes ROADMAP.md with milestone groupings, and tags the release in git.
 
 </purpose>
 
@@ -22,7 +22,7 @@ When a milestone completes:
 2. Archive requirements to `.planning/milestones/v[X.Y]-REQUIREMENTS.md`
 3. Update ROADMAP.md — overwrite in place with milestone grouping (preserve Backlog section)
 4. Safety commit archive files + updated ROADMAP.md, then `git rm REQUIREMENTS.md` (fresh for next milestone)
-5. Perform full PROJECT.md evolution review
+5. Perform full PROJECT.md evolution review (flat mode only — skipped under an active workstream, #5195)
 6. Offer to create next milestone inline
 7. Archive UI artifacts (`*-UI-SPEC.md`, `*-UI-REVIEW.md`) alongside other phase documents
 8. Clean up `.planning/ui-reviews/` screenshot files (binary assets, never archived)
@@ -244,8 +244,21 @@ If additional details are needed (e.g., user-provided "Delivered" summary, git r
 
 </step>
 
+**Resolve the PROJECT.md review gate first.** This is the first `init.complete-milestone` call in the workflow, so the section manifest does not exist before it; reading `section_manifest` without making this call would fall into the fail-open `null` branch below and rewrite the shared PROJECT.md under `--ws` (#5195). `init.complete-milestone` is a pure read, so the later full call in `reorganize_roadmap_and_delete_originals` is unaffected.
+
+```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+INIT_EARLY=$(gsd_run query init.complete-milestone ${GSD_WS:+--ws=${GSD_WS##* }})
+if [[ "$INIT_EARLY" == @file:* ]]; then INIT_EARLY=$(cat "${INIT_EARLY#@file:}"); fi
+node -e "const m=JSON.parse(process.argv[1]).section_manifest; console.log('PROJECT_MD_REVIEW=' + (m==null||m.included.includes('project-md-evolution-review') ? 'run' : 'skip'))" "$INIT_EARLY"
+```
+
 <!-- gsd:section id="project-md-evolution-review" when="state:flat-mode" -->
-If `section_manifest` is `null` or `"project-md-evolution-review"` is in its `included` list: read and execute `gsd-core/workflows/complete-milestone/steps/project-md-evolution-review.md`. Otherwise (a workstream is active) skip — do not read the file; PROJECT.md is shared across workstreams, so a workstream's milestone close never rewrites it (#2308, #5195); proceed to `archive_milestone`.
+If the line above printed `PROJECT_MD_REVIEW=run` (the manifest is `null` or lists `"project-md-evolution-review"` in `included`): read and execute `gsd-core/workflows/complete-milestone/steps/project-md-evolution-review.md`. If it printed `PROJECT_MD_REVIEW=skip` (a workstream is active) — do not read the file; PROJECT.md is shared across workstreams, so a workstream's milestone close never rewrites it (#2308, #5195); proceed to `archive_milestone`.
 <!-- /gsd:section -->
 
 <step name="archive_milestone">
@@ -300,7 +313,7 @@ Verify after a default (archived) completion: `✅ Phase directories archived to
 
 After archival, the AI still handles:
 - Reorganizing ROADMAP.md with milestone grouping (requires judgment) — overwrite in place after extracting Backlog section, with the write-guard's single-use sentinel armed first (a per-step env var cannot reach a hook — see the reorganize step for the sentinel mechanics)
-- Full PROJECT.md evolution review (requires understanding)
+- Full PROJECT.md evolution review (requires understanding; flat mode only — skipped under `--ws`)
 - Safety commit of archive files + updated ROADMAP.md, then `git rm .planning/REQUIREMENTS.md`
 - These are NOT fully delegated because they require AI interpretation of content
 
@@ -595,8 +608,8 @@ Milestone completion is successful when:
 - [ ] Known deferred items count noted in MILESTONES.md entry
 
 - [ ] MILESTONES.md entry created with stats and accomplishments
-- [ ] PROJECT.md full evolution review completed
-- [ ] All shipped requirements moved to Validated in PROJECT.md
+- [ ] PROJECT.md full evolution review completed (flat mode only; skipped under `--ws`)
+- [ ] All shipped requirements moved to Validated in PROJECT.md (flat mode only; skipped under `--ws`)
 - [ ] Key Decisions updated with outcomes
 - [ ] ROADMAP.md Backlog section extracted before rewrite, re-appended after (skipped if absent)
 - [ ] ROADMAP.md reorganized with milestone grouping (overwritten in place, not deleted)
