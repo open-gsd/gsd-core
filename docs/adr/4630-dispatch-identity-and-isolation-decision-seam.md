@@ -181,8 +181,7 @@ The same holds outside `hooks/lib/`. The dispatch sites and diagnostics validate
 output in shell (`case "$ISOLATION" in harness-worktree|orchestrator-worktree|none) ;;`), and shell
 inside workflow markdown cannot import the owner at all. Each such list is pinned to the owner by a
 parity test that discovers the lists by scanning `gsd-core/**/*.md`, so a new copy naming a worktree
-mode is pinned the day
-it lands.
+mode is pinned the day it lands.
 
 A mirror's justification is part of the contract: **do not "clean up" a pinned mirror
 without replacing the reason it exists.**
