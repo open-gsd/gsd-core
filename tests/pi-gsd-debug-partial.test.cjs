@@ -21,15 +21,32 @@ const {
 
 const REPO = path.join(__dirname, '..');
 const REASON = 'needs nested dispatch; Pi dispatch is flat';
+const CONTEXT_OPEN = '<execution_context>';
+const CONTEXT_CLOSE = '</execution_context>';
 const DEBUG_COMMAND = fs.readFileSync(path.join(REPO, 'commands', 'gsd', 'debug.md'), 'utf8');
 const DEBUG_WORKFLOW = fs.readFileSync(path.join(REPO, 'gsd-core', 'workflows', 'debug.md'), 'utf8');
+
+/** The text between the execution_context tags, trimmed; null when the pair is absent. */
+function executionContext(text) {
+  const open = text.indexOf(CONTEXT_OPEN);
+  const close = text.indexOf(CONTEXT_CLOSE);
+  if (open < 0 || close < open) return null;
+  return text.slice(open + CONTEXT_OPEN.length, close).trim();
+}
+
+/** `text` with its execution_context block removed. */
+function withoutExecutionContext(text) {
+  const open = text.indexOf(CONTEXT_OPEN);
+  const close = text.indexOf(CONTEXT_CLOSE);
+  return text.slice(0, open) + text.slice(close + CONTEXT_CLOSE.length);
+}
 
 describe('#5630: the partial-skill table', () => {
   test('gsd-debug is partial, not unsupported, and names the subcommands it runs', () => {
     assert.ok(PI_PARTIAL_SKILLS && typeof PI_PARTIAL_SKILLS === 'object', 'run `npm run build:lib` first');
     assert.deepEqual(Object.keys(PI_PARTIAL_SKILLS), ['gsd-debug']);
     assert.equal(PI_PARTIAL_SKILLS['gsd-debug'].reason, REASON);
-    assert.deepEqual(PI_PARTIAL_SKILLS['gsd-debug'].subcommands, ['list', 'status']);
+    assert.deepEqual([...PI_PARTIAL_SKILLS['gsd-debug'].subcommands], ['list', 'status']);
     assert.equal(Object.prototype.hasOwnProperty.call(PI_UNSUPPORTED_SKILLS, 'gsd-debug'), false);
   });
 
@@ -44,7 +61,8 @@ describe('#5630: the generated gsd-debug skill', () => {
   const skill = convertClaudeCommandToPiSkill(DEBUG_COMMAND, 'gsd-debug');
 
   test('keeps the skill name and a quoted description in its frontmatter', () => {
-    assert.match(skill, /^---\nname: gsd-debug\ndescription: ".+"\n---\n/);
+    assert.ok(skill.startsWith('---\nname: gsd-debug\ndescription: "'));
+    assert.ok(skill.indexOf('"\n---\n') > 0);
   });
 
   test('says which forms run and prints the reason the others do not', () => {
@@ -58,15 +76,19 @@ describe('#5630: the generated gsd-debug skill', () => {
   });
 
   test('lists the workflow under execution_context so Pi reads it', () => {
-    assert.match(skill, /<execution_context>\n@[^\n]*gsd-core\/workflows\/debug\.md\n<\/execution_context>/);
+    const listed = executionContext(skill);
+    assert.ok(
+      listed !== null && listed.startsWith('@') && listed.endsWith('gsd-core/workflows/debug.md'),
+      String(listed),
+    );
   });
 
   test('restricts the run to sections 0, 1a and 1b of the workflow, and forbids dispatch and inline work', () => {
-    assert.match(skill, /section 0/i);
-    assert.match(skill, /section 1a/i);
-    assert.match(skill, /section 1b/i);
-    assert.match(skill, /do not dispatch/i);
-    assert.match(skill, /inline/i);
+    assert.ok(skill.includes('section 0'));
+    assert.ok(skill.includes('section 1a'));
+    assert.ok(skill.includes('section 1b'));
+    assert.ok(skill.includes('Do not dispatch any role'));
+    assert.ok(skill.includes('inline'));
   });
 
   test('does not carry the command body that orchestrates the debugger and the session manager', () => {
@@ -76,8 +98,9 @@ describe('#5630: the generated gsd-debug skill', () => {
   });
 
   test('fails closed to the full stub when the command has no execution_context to read', () => {
-    const noContext = DEBUG_COMMAND.replace(/<execution_context>[\s\S]*?<\/execution_context>/, '');
-    assert.notEqual(noContext, DEBUG_COMMAND, 'vacuous: fixture still has an execution_context');
+    assert.notEqual(executionContext(DEBUG_COMMAND), null, 'vacuous: the command has no execution_context');
+    const noContext = withoutExecutionContext(DEBUG_COMMAND);
+    assert.equal(executionContext(noContext), null, 'vacuous: fixture still has an execution_context');
     const stub = convertClaudeCommandToPiSkill(noContext, 'gsd-debug');
     assert.ok(stub.includes('is unsupported on Pi:'));
     assert.ok(stub.includes(REASON));
@@ -87,9 +110,9 @@ describe('#5630: the generated gsd-debug skill', () => {
 
 describe('#5630: the skill and the workflow name the same sections', () => {
   test('the workflow still has the list and status sections the skill points at', () => {
-    assert.match(DEBUG_WORKFLOW, /^## 0\. Initialize Context$/m);
-    assert.match(DEBUG_WORKFLOW, /^## 1a\. LIST subcommand$/m);
-    assert.match(DEBUG_WORKFLOW, /^## 1b\. STATUS subcommand$/m);
+    for (const heading of ['## 0. Initialize Context', '## 1a. LIST subcommand', '## 1b. STATUS subcommand']) {
+      assert.ok(DEBUG_WORKFLOW.includes(heading), `${heading} missing from the workflow`);
+    }
   });
 
   test('sections 1a and 1b spawn no agent', () => {
@@ -97,7 +120,9 @@ describe('#5630: the skill and the workflow name the same sections', () => {
     const end = DEBUG_WORKFLOW.indexOf('## 1c. CONTINUE subcommand');
     assert.ok(start >= 0 && end > start, 'vacuous: sections not found');
     const listAndStatus = DEBUG_WORKFLOW.slice(start, end);
-    assert.equal(/gsd-debug-session-manager|gsd-debugger|Agent\(|gsd_dispatch/.test(listAndStatus), false);
+    for (const forbidden of ['gsd-debug-session-manager', 'gsd-debugger', 'Agent(', 'gsd_dispatch']) {
+      assert.equal(listAndStatus.includes(forbidden), false, forbidden);
+    }
   });
 });
 
@@ -112,9 +137,9 @@ describe('#5630: the Pi install', () => {
   test('installs the partial skill and the workflow it reads', () => {
     const body = fs.readFileSync(path.join(configDir, 'skills', 'gsd-debug', 'SKILL.md'), 'utf8');
     assert.ok(body.includes('`list`') && body.includes(REASON));
-    const included = /<execution_context>\n@([^\n]+)\n<\/execution_context>/.exec(body);
-    assert.ok(included, 'no execution_context include in the installed skill');
-    assert.ok(included[1].endsWith('gsd-core/workflows/debug.md'), included[1]);
+    const included = executionContext(body);
+    assert.ok(included !== null && included.startsWith('@'), 'no execution_context include in the installed skill');
+    assert.ok(included.endsWith('gsd-core/workflows/debug.md'), included);
     assert.ok(fs.existsSync(path.join(configDir, 'gsd-core', 'workflows', 'debug.md')));
   });
 });

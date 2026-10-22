@@ -100,7 +100,7 @@ The install-time fail-closed seam is the existing `_assertRoleResolvable` (#2284
 - Phase 2b has no remaining design questions: tool name and parameters, child argv, failure codes, depth and timeout, concurrency, install location, converter name and projection config are fixed here.
 - Each dispatch pays a `pi` process start and model session. Waves are sequential on Pi. Both are documented limits, not defects.
 - The child inherits the parent's environment and working directory (§1 records this as accepted). GSD adds no credential handling.
-- `/gsd-debug` is `unsupported-on-pi` until nested dispatch is separately decided (§2).
+- `/gsd-debug` is `unsupported-on-pi` until nested dispatch is separately decided (§2). Amended by #5630: `list` and `status <slug>` run on Pi because they start no agent; the rest stays unsupported.
 - The set of roles installed on Pi equals the set installed for Claude (non-compact agent files). Phase 4's parity matrix pins this.
 
 ## Acceptance (testable)

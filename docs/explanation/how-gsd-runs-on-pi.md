@@ -16,7 +16,7 @@ Claude Code runs hook scripts on tool events. The GSD extension listens for the 
 
 ## What this costs
 
-- A role cannot start another role, so `/gsd-debug`, whose session manager starts a debugger, is installed as a stub that says so.
+- A role cannot start another role, so `/gsd-debug`, whose session manager starts a debugger, runs only `list` and `status <slug>` and says so for every other form.
 - A dispatched role cannot take a per-call model or run in the background.
 - A guard Pi has no event for does not run.
 

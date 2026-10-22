@@ -759,9 +759,52 @@ const PI_DISPATCH_CONTRACT =
  * `gsd-debug-session-manager`, which itself spawns `gsd-debugger`; `gsd_dispatch` is flat
  * (a child has no dispatch tool), so that nesting cannot be honored.
  */
-const PI_UNSUPPORTED_SKILLS: Readonly<Record<string, string>> = Object.freeze({
-  'gsd-debug': 'needs nested dispatch; Pi dispatch is flat',
+const PI_UNSUPPORTED_SKILLS: Readonly<Record<string, string>> = Object.freeze({});
+
+/** A Pi skill that runs only some of its subcommands (#5630). */
+interface PiPartialSkill {
+  /** Why the other forms cannot run; printed by the skill. */
+  readonly reason: string;
+  /** Leading words of the argument text that run; each is the name the skill states. */
+  readonly subcommands: readonly string[];
+}
+
+/**
+ * Pi skills that run a subset of their forms, by installed skill name (#5630). `/gsd-debug`
+ * `list` and `status <slug>` read `.planning/debug/` and spawn no agent (workflow sections
+ * 1a and 1b), so they run on Pi. Every other form drives `gsd-debug-session-manager`, which
+ * itself spawns `gsd-debugger`; `gsd_dispatch` is flat, so that nesting cannot be honored
+ * (ADR-5559 §2). The skill reads the workflow and runs only sections 0, 1a and 1b.
+ */
+const PI_PARTIAL_SKILLS: Readonly<Record<string, PiPartialSkill>> = Object.freeze({
+  'gsd-debug': Object.freeze({
+    reason: 'needs nested dispatch; Pi dispatch is flat',
+    subcommands: Object.freeze(['list', 'status']),
+  }),
 });
+
+const PI_EXECUTION_CONTEXT_RE = /<execution_context>[\s\S]*?<\/execution_context>/;
+
+/**
+ * The body of a partial Pi skill: which forms run, the workflow to read, and the sections of
+ * it to run. Returns null when the command lists no `<execution_context>`: with no workflow to
+ * read the skill falls back to the full stub rather than shipping instructions that point
+ * nowhere.
+ */
+function buildPiPartialSkillBody(skillName: string, partial: PiPartialSkill, commandBody: string): string | null {
+  const context = PI_EXECUTION_CONTEXT_RE.exec(commandBody);
+  if (context === null) return null;
+  const forms = partial.subcommands.map((sub) => (sub === 'status' ? '`status <slug>`' : `\`${sub}\``));
+  return `**Partly supported on Pi.** \`/skill:${skillName}\` runs ${forms.join(' and ')} on Pi. ` +
+    `Every other form cannot run on Pi: ${partial.reason}.\n\n` +
+    'If the text typed after the skill name is exactly `list`, or starts with `status ` followed by a slug, ' +
+    'read the file listed under `<execution_context>` below with your read tool (the leading `@` is ' +
+    'accepted). Run section 0 of that workflow, then only section 1a for `list` or section 1b for ' +
+    '`status`, and stop. For any other text, tell the user the form cannot run on Pi and why, and stop. ' +
+    'Do not dispatch any role, do not start the rest of the workflow, and do not perform the ' +
+    "debugger's steps inline.\n\n" +
+    `${context[0]}\n`;
+}
 
 /**
  * Pi does not expand `@path` includes inside a skill body (only the editor
@@ -834,9 +877,17 @@ function convertClaudeCommandToPiSkill(content, skillName, _runtime = null, cmdN
   const unsupportedReason = Object.prototype.hasOwnProperty.call(PI_UNSUPPORTED_SKILLS, piSkillName)
     ? PI_UNSUPPORTED_SKILLS[piSkillName]
     : null;
-  if (unsupportedReason !== null) {
+  const partial = Object.prototype.hasOwnProperty.call(PI_PARTIAL_SKILLS, piSkillName)
+    ? PI_PARTIAL_SKILLS[piSkillName]
+    : null;
+  const partialBody = partial === null ? null : buildPiPartialSkillBody(piSkillName, partial, normalizedBody);
+  if (partialBody !== null) {
+    return `---\nname: ${piSkillName}\ndescription: ${yamlQuote(cappedDescription)}\n---\n${partialBody}`;
+  }
+  const stubReason = unsupportedReason ?? (partial === null ? null : partial.reason);
+  if (stubReason !== null) {
     return `---\nname: ${piSkillName}\ndescription: ${yamlQuote(cappedDescription)}\n---\n` +
-      `**Unsupported on Pi.** \`/skill:${piSkillName}\` is unsupported on Pi: ${unsupportedReason}. ` +
+      `**Unsupported on Pi.** \`/skill:${piSkillName}\` is unsupported on Pi: ${stubReason}. ` +
       'Tell the user this and stop. Do not start the workflow and do not perform its steps inline.\n';
   }
   return `---\nname: ${piSkillName}\ndescription: ${yamlQuote(cappedDescription)}\n---\nInvoke this Pi skill with \`/skill:${piSkillName}\`.\n\n${PI_DISPATCH_CONTRACT}\n\n${PI_INCLUDE_NOTE}\n\n${normalizedBody}`;
@@ -4422,6 +4473,7 @@ export = {
   convertClaudeCommandToKimiCodeSkill,
   convertClaudeCommandToPiSkill,
   PI_UNSUPPORTED_SKILLS,
+  PI_PARTIAL_SKILLS,
   buildKimiAgentArtifacts,
   convertClaudeToCursorMarkdown,
   convertClaudeCommandToCursorSkill,
