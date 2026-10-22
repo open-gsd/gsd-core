@@ -132,7 +132,7 @@ A phase with 13 plans, two of them `superseded`, then reads `11/11 → complete`
 | `key_links[].from` | string | Source file (relative path from project root). Must be a literal file path — describe components or symbols in `via:`. |
 | `key_links[].to` | string | Target file (relative path from project root). Must be a literal file path — describe endpoints, modules, or APIs in `via:`. |
 | `key_links[].via` | string | Description of how they connect, including any endpoint, component, or symbol name (e.g. `fetch in useEffect — calls /api/feed`, `Prisma query via prisma.message`, `import`). |
-| `key_links[].pattern` | string (optional) | Regex to verify the connection exists in source. |
+| `key_links[].pattern` | string (optional) | Regex to verify the connection exists in source. When omitted, verification requires the `to` path string to appear in `from`. |
 
 ---
 
