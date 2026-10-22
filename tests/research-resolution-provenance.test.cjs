@@ -49,28 +49,94 @@ function span(doc, startHeading, endPattern) {
 }
 
 const dim11 = span(checker, '## Dimension 11: Research Resolution', /\n## Dimension 12\b/);
+// The numbered Process steps, from **Process:** to the first worked example. Each step is
+// joined with its continuation lines and its whitespace collapsed, so a step reads the same
+// whether it is one line, wrapped, or separated from its neighbours by blank lines.
+// Assertions below match invariant tokens within a step, never whole sentences.
+// Any other line in the block (a note after a blank line) is returned as prose of its own.
+function processBlock(dim) {
+  const steps = [];
+  const prose = [];
+  let prevBlank = true;
+  let last = null; // the unit the previous line went to, so a continuation joins it
+  for (const line of splitLines(span(dim, '**Process:**', /\n\*\*Example\b/))) {
+    if (/^\d+\.\s/.test(line)) { steps.push(line); last = steps; }
+    else if (last && line.trim() && (/^\s/.test(line) || !prevBlank)) last[last.length - 1] += ` ${line}`;
+    else if (line.trim()) { prose.push(line); last = prose; }
+    prevBlank = !line.trim();
+  }
+  const norm = (u) => u.replace(/\s+/g, ' ');
+  return { steps: steps.map(norm), prose: prose.map(norm) };
+}
+const steps = processBlock(dim11).steps;
+
+// Every unit of the dimension a model reads: each Process step and note (joined, as above),
+// and outside the Process block each paragraph and each fenced example, joined, so a wrap
+// cannot split one instruction across two units.
+function readingUnits(dim) {
+  const { steps: blockSteps, prose: blockProse } = processBlock(dim);
+  const units = [...blockSteps, ...blockProse];
+  let inFence = false;
+  let current = [];
+  const flush = () => { if (current.length) units.push(current.join(' ').replace(/\s+/g, ' ')); current = []; };
+  for (const line of splitLines(dim.replace(span(dim, '**Process:**', /\n\*\*Example\b/), ''))) {
+    if (line.startsWith('```')) { flush(); inFence = !inFence; continue; }
+    if (!inFence && !line.trim()) { flush(); continue; }
+    current.push(line);
+  }
+  flush();
+  return units;
+}
+// The review's requested guard: no arrow into PASS on anything that names the RESOLVED
+// marker (always written uppercase, so "unresolved" and the lowercase example label do not
+// count). Read per line and per joined unit. Whether prose grants PASS some other way is a
+// reading a text test cannot make; the provenance and BLOCKER tokens below carry the rule.
+const NAMES_MARKER = /\bRESOLVED\b/;
+const ARROW_TO_PASS = /(→|-+>|=+>|—+>|⇒|⟶|⟹|➔|➜|➡|↦)\s*[*`_"'“”‘’]*\s*PASS\b/i;
 
 describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', () => {
-  test('no step passes the dimension on the (RESOLVED) heading suffix', () => {
-    assert.doesNotMatch(dim11, /\(RESOLVED\)`?\s*suffix\s*(→|->)\s*PASS/);
-    assert.match(dim11, /A `\(RESOLVED\)` heading suffix is never evidence/);
+  test('nothing that names RESOLVED has an arrow into PASS, and the suffix is never evidence', () => {
+    for (const text of [...splitLines(dim11), ...readingUnits(dim11)]) {
+      if (NAMES_MARKER.test(text)) assert.doesNotMatch(text, ARROW_TO_PASS, `RESOLVED routed into PASS: ${text}`);
+    }
+    assert.ok(
+      steps.some((s) => s.includes('`(RESOLVED)`') && /never evidence/.test(s)),
+      'a step must say the (RESOLVED) heading suffix is never evidence',
+    );
   });
 
-  test('a resolution counts only when it cites a D-NN that exists in CONTEXT.md', () => {
-    assert.match(dim11, /Only the user closes an open question, recorded as a `D-NN` decision in the phase's CONTEXT\.md/);
-    assert.match(dim11, /confirm that decision exists in CONTEXT\.md and answers the question asked/);
+  test('a resolution counts only when it cites a D-NN that exists in CONTEXT.md and answers the question', () => {
+    assert.match(dim11, /only\s+the\s+user\s+closes/i);
+    assert.ok(
+      steps.some((l) => l.includes('`D-NN`') && l.includes('CONTEXT.md') && /\bexists\b/.test(l) && /\banswers\b/.test(l)),
+      'a step must check that the cited D-NN exists in CONTEXT.md and answers the question',
+    );
   });
 
-  test('blocks an uncited marker, a dangling D-NN, and a non-user authority', () => {
-    assert.match(dim11, /is marked `RESOLVED` \(inline or by the heading suffix\) without citing a `D-NN`/);
-    assert.match(dim11, /cites a `D-NN` that CONTEXT\.md does not contain/);
-    assert.match(dim11, /rests on a plan, a "planning-time disposition", the research itself, or another agent's output/);
+  test('the BLOCKER step names every case: uncited, dangling, irrelevant, non-user authority', () => {
+    const blocker = steps.find((l) => /\bBLOCKER\b/.test(l));
+    assert.ok(blocker, 'Process must carry a BLOCKER step');
+    const cases = {
+      'no resolution': /no resolution/,
+      'marked RESOLVED without a D-NN': /`RESOLVED`[^;]*without citing/,
+      'a D-NN CONTEXT.md lacks': /does not contain/,
+      'a D-NN that decides something else': /decides something else/,
+      'a plan': /\bplan\b/,
+      'a disposition': /disposition/,
+      'the research itself': /research itself/,
+      "another agent's output": /another agent/,
+    };
+    for (const [name, re] of Object.entries(cases)) assert.match(blocker, re, `BLOCKER step omits: ${name}`);
   });
 
   test('the binding required_property carries the relevance condition', () => {
     const props = [...dim11.matchAll(/required_property:\s*"([^"]*)"/g)].map((m) => m[1]);
     assert.ok(props.length >= 1, 'Dimension 11 must carry a required_property example');
-    for (const prop of props) assert.match(prop, /D-NN decision that exists in CONTEXT\.md and answers it/);
+    for (const prop of props) {
+      assert.match(prop, /D-NN/);
+      assert.match(prop, /CONTEXT\.md/);
+      assert.match(prop, /\banswers\b/);
+    }
   });
 
   test('fix_hint routes to recording a user ruling, never to writing the marker', () => {
@@ -84,20 +150,24 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
   });
 
   test('the PASS example cites D-NN on every question; the self-resolved shape is a BLOCKER example', () => {
-    const passIdx = dim11.indexOf('**Example — resolved (PASS');
-    assert.notEqual(passIdx, -1);
-    // The example's body: the lines between its opening and closing fence.
-    const lines = splitLines(dim11.slice(passIdx));
-    const open = lines.findIndex((l) => l.startsWith('```'));
-    const close = lines.findIndex((l, i) => i > open && l.startsWith('```'));
-    assert.ok(open !== -1 && close !== -1, 'the PASS example must be a fenced block');
-    const passLines = lines.slice(open + 1, close);
-    assert.ok(passLines.every((l) => !l.includes('(RESOLVED)')), 'the PASS example must not teach the heading suffix');
-    const items = passLines.filter((l) => /^\d+\./.test(l));
-    assert.ok(items.length >= 1);
-    for (const item of items) assert.match(item, /RESOLVED \(D-\d{2}\):/, `uncited PASS item: ${item}`);
+    // Every PASS example, located by its label's tokens (an **Example label that says PASS
+    // and not BLOCKER), not its wording.
+    const lines = splitLines(dim11);
+    const labels = lines.flatMap((l, i) => (/^\*\*Example\b/.test(l) && /\bPASS\b/.test(l) && !/\bBLOCKER\b/.test(l) ? [i] : []));
+    assert.ok(labels.length >= 1, 'Dimension 11 must carry a PASS example');
+    for (const at of labels) {
+      // The example's body: the lines between its opening and closing fence.
+      const open = lines.findIndex((l, i) => i > at && l.startsWith('```'));
+      const close = lines.findIndex((l, i) => i > open && l.startsWith('```'));
+      assert.ok(open !== -1 && close !== -1, `the PASS example must be a fenced block: ${lines[at]}`);
+      const passLines = lines.slice(open + 1, close);
+      assert.ok(passLines.every((l) => !l.includes('(RESOLVED)')), `a PASS example teaches the heading suffix: ${lines[at]}`);
+      const items = passLines.filter((l) => /^\d+\./.test(l));
+      assert.ok(items.length >= 1, `a PASS example lists no questions: ${lines[at]}`);
+      for (const item of items) assert.match(item, /RESOLVED \(D-\d{2}\):/, `uncited PASS item: ${item}`);
+    }
 
-    assert.match(dim11, /\*\*Example — self-resolved, no decision on record \(BLOCKER\):\*\*/);
+    assert.match(dim11, /^\*\*Example\b[^\n]*self-resolved[^\n]*\bBLOCKER\b/im);
   });
 
   test('success_criteria includes the research resolution check', () => {
@@ -106,7 +176,7 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.ok(item, 'success_criteria must list the research resolution check');
     assert.match(item[0], /`D-NN`/);
     assert.match(item[0], /CONTEXT\.md/);
-    assert.match(item[0], /and answers it/, 'the checklist must carry the body\'s relevance condition');
+    assert.match(item[0], /\banswers\b/, 'the checklist must carry the body\'s relevance condition');
   });
 });
 
