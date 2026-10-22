@@ -63,6 +63,8 @@ const {
 const {
   MINIMAL_SKILL_ALLOWLIST,
   PROFILES,
+  loadSkillsManifest,
+  resolveProfile,
   isMinimalMode,
   shouldInstallSkill,
   stageSkillsForMode,
@@ -111,6 +113,15 @@ function collectSkillBasenamesOnDiskSandboxed(configDir, runtime, scope, root) {
     else process.env.USERPROFILE = savedUserProfile;
   }
 }
+
+// #5503: the agents the eight core skills spawn, from the real manifest.
+const REAL_SKILLS_MANIFEST = loadSkillsManifest();
+const CORE_SPAWNED_AGENTS = (() => {
+  const man = REAL_SKILLS_MANIFEST;
+  const out = new Set();
+  for (const stem of PROFILES.core) for (const a of man.get(`_calls_agents_${stem}`) || []) out.add(a);
+  return out;
+})();
 
 // ─── Section 9: install-profiles — MINIMAL_SKILL_ALLOWLIST ───────────────────
 
@@ -372,7 +383,7 @@ describe('install-profiles: allowlist scope guards', () => {
 describe('install: --minimal honoured for every runtime, on-disk matches manifest', () => {
   for (const runtime of SKILL_RUNTIMES) {
     for (const scope of ['global', 'local']) {
-      test(`${runtime} --${scope} --minimal: mode, skills, zero agents, on-disk matches manifest`, () => {
+      test(`${runtime} --${scope} --minimal: mode, skills, only core-spawned agents, on-disk matches manifest`, () => {
         const { manifest, configDir, root } = runMinimalInstall({ runtime, scope, extraArgs: ['--minimal'] });
         try {
           assert.ok(manifest, `${runtime} ${scope} must produce manifest`);
@@ -381,18 +392,24 @@ describe('install: --minimal honoured for every runtime, on-disk matches manifes
             [...manifestSkillSet(manifest)].sort(),
             [...MINIMAL_SKILL_ALLOWLIST].sort(),
           );
-          assert.strictEqual(manifestAgentCount(manifest), 0);
+          // #5503: core stages only the agents its eight skills spawn (a runtime with no agents
+          // kind still stages none).
+          assert.ok(manifestAgentCount(manifest) <= CORE_SPAWNED_AGENTS.size,
+            `${runtime} ${scope}: at most the core-spawned agents, got ${manifestAgentCount(manifest)}`);
 
           const onDisk = collectSkillBasenamesOnDiskSandboxed(configDir, runtime, scope, root);
           const inManifest = manifestSkillSet(manifest);
           assert.deepStrictEqual([...onDisk].sort(), [...inManifest].sort());
           // Not the shared listAgentFiles() helper: asserts on the INSTALLED
-          // dest dir (must be empty in --minimal mode), not the source roster.
+          // dest dir (only agents the core skills spawn in --minimal mode), not the source roster.
           const agentsDir = path.join(configDir, 'agents');
           if (fs.existsSync(agentsDir)) {
             const gsdAgents = fs.readdirSync(agentsDir)
-              .filter(f => f.startsWith('gsd-') && f.endsWith('.md'));
-            assert.deepStrictEqual(gsdAgents, []);
+              .filter(f => f.startsWith('gsd-') && f.endsWith('.md'))
+              .map(f => f.slice(0, -3));
+            for (const agent of gsdAgents) {
+              assert.ok(CORE_SPAWNED_AGENTS.has(agent), `${agent} is not spawned by a core skill and must not be staged`);
+            }
           }
         } finally {
           cleanup(root);
@@ -404,14 +421,14 @@ describe('install: --minimal honoured for every runtime, on-disk matches manifes
 
 describe('install: Cline --minimal (rules-based, no skills/ dir)', () => {
   for (const scope of ['global', 'local']) {
-    test(`cline --${scope} --minimal: mode=minimal, zero agents, .clinerules present`, () => {
+    test(`cline --${scope} --minimal: mode=minimal, only core-spawned agents, .clinerules present`, () => {
       const { manifest, configDir, root } = runMinimalInstall({
         runtime: 'cline', scope, extraArgs: ['--minimal'],
       });
       try {
         assert.ok(manifest, 'cline must produce manifest');
         assert.strictEqual(manifest.mode, 'minimal');
-        assert.strictEqual(manifestAgentCount(manifest), 0);
+        assert.ok(manifestAgentCount(manifest) <= CORE_SPAWNED_AGENTS.size);
         assert.ok(fs.existsSync(path.join(configDir, '.clinerules')));
       } finally {
         cleanup(root);
@@ -3476,5 +3493,93 @@ describe('bug #3981: blocking-guard timeout budget + migration', () => {
     };
     assert.equal(findTimeout('gsd-read-guard.js'), 5, 'advisory read guard keeps its 5 s budget');
     assert.equal(findTimeout('gsd-context-monitor.js'), 10, 'context monitor keeps its 10 s budget');
+  });
+});
+
+// ─── #5503: a core install stages the agents its skills spawn ────────────────
+
+describe('#5503 core profile stages the agents its skills spawn', () => {
+  // Agents the issue names, spawned by name from the core skills' workflows.
+  const REQUIRED_CORE_AGENTS = [
+    'gsd-roadmapper', 'gsd-planner', 'gsd-plan-checker', 'gsd-phase-researcher', 'gsd-executor', 'gsd-verifier',
+  ];
+  const expected = [...CORE_SPAWNED_AGENTS].sort();
+  const AGENTS_SRC_DIR = path.join(__dirname, '..', 'agents');
+
+  const allAgentStems = () => fs.readdirSync(AGENTS_SRC_DIR)
+    .filter((f) => f.startsWith('gsd-') && f.endsWith('.md') && !f.endsWith('.compact.md'))
+    .map((f) => f.slice(0, -3));
+
+  const installedAgentStems = (configDir) => {
+    const dir = path.join(configDir, 'agents');
+    if (!fs.existsSync(dir)) return [];
+    return fs.readdirSync(dir)
+      .filter((f) => f.startsWith('gsd-') && f.endsWith('.md'))
+      .map((f) => f.slice(0, -3))
+      .sort();
+  };
+
+  test('precondition: the real manifest says the core skills spawn the six named agents', () => {
+    for (const agent of REQUIRED_CORE_AGENTS) {
+      assert.ok(expected.includes(agent), `${agent} must be referenced by a core skill, got ${JSON.stringify(expected)}`);
+    }
+  });
+
+  for (const [label, extraArgs] of [['--profile=core', ['--profile=core']], ['--minimal', ['--minimal']]]) {
+    test(`${label} stages the agents the core skills spawn`, () => {
+      const { manifest: installManifest, configDir, root } = runMinimalInstall({ runtime: 'claude', scope: 'global', extraArgs });
+      try {
+        const installed = installedAgentStems(configDir);
+        for (const agent of REQUIRED_CORE_AGENTS) {
+          assert.ok(installed.includes(agent), `${label}: ${agent} must be installed, got ${JSON.stringify(installed)}`);
+        }
+        assert.deepStrictEqual(installed, expected, `${label}: installed agents must be exactly the agents the core skills reference`);
+        // Independence: closing over the real manifest must not widen the skill set.
+        assert.deepStrictEqual([...manifestSkillSet(installManifest)].sort(), [...PROFILES.core].sort(),
+          `${label}: the core skill set must stay exactly the eight core skills`);
+      } finally {
+        cleanup(root);
+      }
+    });
+
+    test(`${label} stages only the agents its skills reference, not the full roster`, () => {
+      const { configDir, root } = runMinimalInstall({ runtime: 'claude', scope: 'global', extraArgs });
+      try {
+        const installed = new Set(installedAgentStems(configDir));
+        const notReferenced = allAgentStems().filter((a) => !expected.includes(a));
+        for (const agent of notReferenced) {
+          assert.ok(!installed.has(agent), `${label}: ${agent} is not spawned by a core skill and must not be staged`);
+        }
+      } finally {
+        cleanup(root);
+      }
+    });
+  }
+
+  test('codex core agent source matches the profile, not the whole roster', () => {
+    const { configDir, root } = runMinimalInstall({ runtime: 'codex', scope: 'global', extraArgs: ['--profile=core'] });
+    try {
+      const tomlPath = path.join(configDir, 'config.toml');
+      assert.ok(fs.existsSync(tomlPath), 'codex install must write config.toml');
+      const registered = [...fs.readFileSync(tomlPath, 'utf8').matchAll(/^\[agents\.(gsd-[A-Za-z0-9-]+)\]/gm)].map((m) => m[1]).sort();
+      for (const agent of REQUIRED_CORE_AGENTS) {
+        assert.ok(registered.includes(agent), `codex core: ${agent} must be registered, got ${JSON.stringify(registered)}`);
+      }
+      assert.deepStrictEqual(registered, expected, 'codex core registers exactly the agents the core skills reference');
+    } finally {
+      cleanup(root);
+    }
+  });
+
+  test('resolveProfile derives agents from agentManifest without widening the skill set', () => {
+    const resolved = resolveProfile({ modes: ['core'], manifest: new Map(), agentManifest: REAL_SKILLS_MANIFEST });
+    assert.deepStrictEqual([...resolved.skills].sort(), [...PROFILES.core].sort());
+    assert.deepStrictEqual([...resolved.agents].sort(), expected);
+  });
+
+  test('resolveProfile without agentManifest derives agents from the closure manifest exactly as before', () => {
+    assert.equal(resolveProfile({ modes: ['core'], manifest: new Map() }).agents.size, 0, 'the empty-manifest default is unchanged');
+    assert.ok(resolveProfile({ modes: ['standard'], manifest: REAL_SKILLS_MANIFEST }).agents.size > 0,
+      'a tiered profile still derives agents from its own closure');
   });
 });

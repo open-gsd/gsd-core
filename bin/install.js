@@ -11073,8 +11073,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   const _isCoreProfileAlias = _activeProfileName === 'core';
   const _effectiveInstallMode = _isCoreProfileAlias ? 'minimal' : 'full';
   // Load the manifest and compute resolved profile for named profiles.
-  // For --minimal/core: use an empty manifest (core profile has no transitive
-  // deps) to produce a resolvedProfile with the core skill set.  For core/
+  // For --minimal/core: use an empty manifest for the SKILL closure (core profile has no
+  // transitive skill deps) to produce a resolvedProfile with the core skill set; agents
+  // come from the full manifest (#5503, see below).  For core/
   // standard profiles, resolveProfile's `registry` arg IS consulted (via
   // _capabilitySkillsForMode) so tier:core/tier:standard capability skills are
   // unioned in when registered. #2322 correction: for the DEFAULT `full`
@@ -11087,10 +11088,15 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // is passed so an INSTALLED third-party capability (not just a first-party
   // one) is honored on every profile, `full` included (#2322 blocker 2).
   const _commandsDir = path.join(src, 'commands', 'gsd');
-  const _skillsManifest = _isCoreProfileAlias ? new Map() : loadSkillsManifest(_commandsDir);
+  // #5503: the empty manifest only keeps core's SKILL set at the eight core skills (no
+  // `requires:` closure). The agents those skills spawn are still derived from the real
+  // manifest, so a core install can run /gsd-plan-phase and friends.
+  const _fullSkillsManifest = loadSkillsManifest(_commandsDir);
+  const _skillsManifest = _isCoreProfileAlias ? new Map() : _fullSkillsManifest;
   let _resolvedProfile = resolveProfile({
     modes: [_activeProfileName],
     manifest: _skillsManifest,
+    agentManifest: _fullSkillsManifest,
     registry: _installedCapabilityRegistry,
   });
   // Unified staging function: all profiles use stageSkillsForProfile with the
@@ -11099,7 +11105,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     return stageSkillsForProfile(commandsGsdDir, _resolvedProfile);
   }
   function _stageAgents(agentsDir) {
-    if (_isCoreProfileAlias) return agentsDir;
+    // #5503: no core-alias shortcut — Codex gets the same profile-filtered agents as every runtime.
     return stageAgentsForProfile(agentsDir, _resolvedProfile);
   }
   const persistActiveProfileMarker = () => {
