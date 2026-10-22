@@ -796,12 +796,44 @@ gsd_run query state.record-session \
 # Update ROADMAP.md progress for this phase (plan counts, status)
 gsd_run query roadmap.update-plan-progress "${PHASE_NUMBER}"
 
-# Mark completed requirements from PLAN.md frontmatter
-# Extract the `requirements` array from the plan's frontmatter, then mark each complete
-gsd_run query requirements.mark-complete ${REQ_IDS}
+# Locate assigned plan path for ready-ids check; fail closed if not found (#4944)
+PLAN_PATH="${PLAN_PATH:-}"
+if [ -z "$PLAN_PATH" ] || [ ! -f "$PLAN_PATH" ]; then
+  D="${PHASE_DIR:-$(printf '%s' "${INIT:-}" | jq -r '.phase_dir // empty' 2>/dev/null)}"
+  if [ -z "$D" ] || [ ! -d "$D" ]; then
+    echo "WARN: Phase directory not found for plan resolution (${D:-unset})" >&2
+  else
+    P="$PLAN"; case "$P" in *[!0-9]*) ;; *) P=$((10#$P)); [ "$P" -lt 10 ] && P=$(printf "%02d" "$P");; esac
+    C=()
+    for f in "$D/plans/PLAN-${P}.md" "$D/plans/PLAN-${PLAN}.md" "$D/${PHASE}-${P}-"*-PLAN.md "$D/"*"-${P}-PLAN.md" "$D/${PHASE}-${PLAN}-PLAN.md"; do
+      if [ -f "$f" ]; then
+        seen=false
+        for c in "${C[@]}"; do [ "$c" = "$f" ] && seen=true && break; done
+        [ "$seen" = false ] && C+=("$f")
+      fi
+    done
+    if [ "${#C[@]}" -eq 1 ]; then
+      PLAN_PATH="${C[0]}"
+    else
+      PLAN_PATH=""
+      echo "WARN: Could not resolve unambiguous PLAN_PATH in $D (matches: ${#C[@]})" >&2
+    fi
+  fi
+fi
+
+# Mark completed requirements from PLAN.md frontmatter gated on sibling plans (#2388, #4944)
+# Query ready-ids first (without --raw: emits JSON for jq; see #4956) to prevent premature completion of shared requirements.
+# If plan file cannot be resolved, fail closed (skip mark-complete) to prevent false-ready flips.
+if [ -n "$PLAN_PATH" ] && [ -f "$PLAN_PATH" ] && [ -n "$(printf '%s' "${REQ_IDS:-}" | tr -d '[:space:]')" ]; then
+  READY=$(gsd_run query requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS})
+  READY_IDS=$(printf '%s' "$READY" | jq -r '.ready[]' 2>/dev/null | tr '\n' ' ')
+  if [ -n "$(printf '%s' "$READY_IDS" | tr -d '[:space:]')" ]; then
+    gsd_run query requirements.mark-complete ${READY_IDS}
+  fi
+fi
 ```
 
-**Requirement IDs:** Extract from the PLAN.md frontmatter `requirements:` field (e.g., `requirements: [AUTH-01, AUTH-02]`). Pass all IDs to `requirements mark-complete`. If the plan has no requirements field, skip this step.
+**Requirement IDs:** Extract from PLAN.md frontmatter `requirements:` (e.g. `[AUTH-01]`). If absent, skip. Query `requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS}` (JSON without `--raw`; #4956) before `requirements mark-complete`, or skip if `PLAN_PATH` cannot be resolved. Shared requirements stay blocked until all declaring sibling plans complete (#2388, #4944).
 
 **State command behaviors:**
 - `state advance-plan`: Increments Current Plan, detects last-plan edge case, sets status
@@ -810,7 +842,8 @@ gsd_run query requirements.mark-complete ${REQ_IDS}
 - `state add-decision`: Adds to Decisions section, removes placeholders
 - `state record-session`: Updates Last session timestamp and Stopped At fields
 - `roadmap update-plan-progress`: Updates ROADMAP.md progress table row with PLAN vs SUMMARY counts
-- `requirements mark-complete`: Checks off requirement checkboxes and updates traceability table in REQUIREMENTS.md
+- `requirements ready-ids`: Scans sibling plans in the phase directory and returns IDs safe to mark complete (non-shared IDs or shared IDs whose sibling plans all have a SUMMARY)
+- `requirements mark-complete`: Checks off requirement checkboxes and updates traceability table in REQUIREMENTS.md for ready IDs
 
 **Extract decisions from SUMMARY.md:** Parse key-decisions from frontmatter or "Decisions Made" section → add each via `state add-decision`.
 
