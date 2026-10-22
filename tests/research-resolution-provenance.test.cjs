@@ -17,8 +17,9 @@
  *   BLOCKER example.
  * - `<success_criteria>` carries the dimension, so the checklist the agent ends on
  *   includes it.
- * - The researcher's RESEARCH.md template, its return template and
- *   `gsd-core/templates/research.md` forbid self-resolution.
+ * - The researcher and `gsd-core/templates/research.md` forbid self-resolution, and
+ *   state the rule outside the RESEARCH.md template, no part of which carries a
+ *   `RESOLVED` token a model could copy into the file the checker reads.
  *
  * ## What it cannot prove
  *
@@ -109,22 +110,61 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
   });
 });
 
+// The tokens Dimension 11 reads. A rule written inside an output template can be copied
+// into RESEARCH.md along with the template, where the checker would read it as content,
+// so no part of either template may carry them; the rule lives beside the template.
+const GATE_TOKEN = /RESOLVED/;
+
+// The researcher's RESEARCH.md template: the ```markdown fence that opens on the
+// RESEARCH.md title line, up to its closing fence. Returns the fenced body and what follows
+// it inside <output_format>.
+function researchTemplateFence(doc) {
+  const lines = splitLines(doc);
+  const title = lines.findIndex((l, i) => l.startsWith('# Phase [X]:') && lines[i - 1] === '```markdown');
+  assert.notEqual(title, -1, 'missing the RESEARCH.md template fence');
+  // Its closing fence is the last bare fence before </output_format>, so a code block
+  // nested inside the template cannot end it early.
+  const end = lines.findIndex((l, i) => i > title && l.startsWith('</output_format>'));
+  assert.notEqual(end, -1, 'missing </output_format> after the RESEARCH.md template');
+  const close = lines.slice(0, end).lastIndexOf('```');
+  assert.ok(close > title, 'the RESEARCH.md template fence never closes');
+  return { body: lines.slice(title, close).join('\n'), after: lines.slice(close + 1, end).join('\n') };
+}
+
 describe('researcher never resolves its own questions (#5438)', () => {
-  test('the RESEARCH.md template forbids self-resolution and the heading suffix', () => {
-    const tpl = span(researcher, '\n## Open Questions\n', /\n## /);
-    assert.match(tpl, /Never mark a question resolved yourself/);
-    assert.match(tpl, /never add a `\(RESOLVED\)` suffix/);
-    assert.match(tpl, /Never cite a plan, a disposition, or any file that does not\s*\n?>?\s*exist/);
+  const fence = researchTemplateFence(researcher);
+
+  test('no part of the RESEARCH.md template carries a gate token a model could copy', () => {
+    assert.match(fence.body, /\n## Open Questions\n/, 'the template must keep its Open Questions section');
+    assert.doesNotMatch(fence.body, GATE_TOKEN);
+  });
+
+  test('the rule after the RESEARCH.md template forbids self-resolution and the section-heading suffix', () => {
+    const rule = fence.after;
+    assert.match(rule, /never\s+mark\s+a\s+question\s+resolved/i);
+    assert.match(rule, /`\(RESOLVED\)`\s+suffix\s+to\s+the\s+section\s+heading/);
+    assert.match(rule, /RESOLVED \(D-NN\)/);
+    assert.match(rule, /\bplan\b/);
+    assert.match(rule, /\bdisposition\b/);
   });
 
   test('the return template leaves open questions to a user ruling', () => {
     const ret = span(researcher, '\n### Open Questions\n', /\n### /);
-    assert.match(ret, /never marked resolved by you/);
+    assert.doesNotMatch(ret, GATE_TOKEN);
+    assert.match(ret, /user ruling/);
+    assert.match(ret, /never marked resolved/i);
   });
 
-  test('gsd-core/templates/research.md carries the same rule', () => {
-    const tpl = span(researchTemplate, '\n## Open Questions\n', /<\/open_questions>/);
-    assert.match(tpl, /never mark a question resolved\s+yourself/);
-    assert.match(tpl, /`D-NN` decision recorded in CONTEXT\.md/);
+  test('gsd-core/templates/research.md keeps the rule in Guidelines, outside the template', () => {
+    const guidelinesAt = researchTemplate.indexOf('\n## Guidelines\n');
+    assert.notEqual(guidelinesAt, -1, 'missing ## Guidelines');
+    // Everything above Guidelines is the file template and its worked example.
+    assert.match(researchTemplate.slice(0, guidelinesAt), /\n## Open Questions\n/);
+    assert.doesNotMatch(researchTemplate.slice(0, guidelinesAt), GATE_TOKEN);
+    const guide = span(researchTemplate.slice(guidelinesAt), '\n**Open Questions:**\n', /\n\n/);
+    assert.match(guide, /never\s+mark\s+a\s+question\s+resolved/i);
+    assert.match(guide, /`\(RESOLVED\)`\s+suffix\s+to\s+the\s+`## Open Questions`\s+section\s+heading/);
+    assert.match(guide, /`D-NN`/);
+    assert.match(guide, /CONTEXT\.md/);
   });
 });
