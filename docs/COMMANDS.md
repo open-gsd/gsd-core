@@ -474,6 +474,10 @@ Verify milestone met its definition of done.
 
 Archive milestone, tag release.
 
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `--ws <name>` | No | Close a workstream's milestone; skips the shared `PROJECT.md` evolution review and leaves `PROJECT.md` out of the archive commit |
+
 **Prerequisites:** Milestone audit complete (recommended)
 **Produces:** `MILESTONES.md` entry, git tag
 
