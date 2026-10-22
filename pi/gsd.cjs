@@ -511,6 +511,7 @@ const PI_FAIL_CLOSED_ON_TIMEOUT = new Set(['gsd-secret-read-guard.js']);
 const PI_HOOK_DISPOSITIONS = Object.freeze({
   'gsd-ensure-canonical-path.js': [{ claude: 'SessionStart', status: 'bridged', pi: 'session_start' }],
   'gsd-session-state.sh': [{ claude: 'SessionStart', status: 'bridged', pi: 'before_agent_start (first turn, custom message)' }],
+  'gsd-path-export.js': [{ claude: 'SessionStart', status: 'unsupported', reason: 'persists the gsd_run directory through $CLAUDE_ENV_FILE, which Claude Code provides only to SessionStart, Setup, CwdChanged and FileChanged hooks; Pi has no equivalent env file' }],
   'gsd-check-update.js': [{ claude: 'SessionStart', status: 'unsupported', reason: 'its cache is read only by the Claude statusline and update banner; Pi has neither, and Pi installs update through the installer or `pi update`' }],
   'gsd-check-update-worker.js': [{ claude: null, status: 'internal', reason: 'spawned by gsd-check-update.js' }],
   'gsd-update-banner.js': [{ claude: 'statusLine', status: 'unsupported', reason: 'renders into the Claude statusline; Pi extensions have no equivalent statusline command' }],
