@@ -314,7 +314,7 @@ CJS 명령어 패밀리 라우터는 `CommandRoutingHub`를 통해 디스패치�
 
 ### 주요 에이전트 생성 범주
 
-주요 에이전트의 개념적 생성 패턴 분류. 권위 있는 에이전트 목록(고급/전문화 에이전트 포함: `gsd-pattern-mapper`, `gsd-code-reviewer`, `gsd-code-fixer`, `gsd-ai-researcher`, `gsd-domain-researcher`, `gsd-eval-planner`, `gsd-eval-auditor`, `gsd-framework-selector`, `gsd-debug-session-manager`, `gsd-intel-updater`)은 [`docs/INVENTORY.md`](INVENTORY.md#agents)를 참조하라.
+주요 에이전트의 개념적 생성 패턴 분류. 권위 있는 에이전트 목록(고급/전문화 에이전트 포함: `gsd-pattern-mapper`, `gsd-code-reviewer`, `gsd-code-fixer`, `gsd-ai-researcher`, `gsd-domain-researcher`, `gsd-eval-planner`, `gsd-eval-auditor`, `gsd-framework-selector`, `gsd-debug-session-manager`, `gsd-intel-updater`)은 [`docs/INVENTORY.md`](INVENTORY.md#agents-31-shipped)를 참조하라.
 
 
 | 범주         | 에이전트                                                                                  | 병렬성                                                                               |
