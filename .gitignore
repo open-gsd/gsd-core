@@ -119,6 +119,7 @@ build/
 # are the other two) never got a .gitignore entry when their modules moved
 # into src/*.cts, and were also never untracked.
 /gsd-core/bin/lib/api-coverage.cjs
+/gsd-core/bin/lib/args-terminator.cjs
 /gsd-core/bin/lib/assumption-delta.cjs
 /gsd-core/bin/lib/claude-orchestration.cjs
 /gsd-core/bin/lib/claude-orchestration-command-router.cjs

@@ -19,9 +19,11 @@ const { runMinimalInstall } = require('./helpers/install-shared.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
   ARGS_TERMINATOR,
+  ARGS_TERMINATORS,
   ARGS_NONCE_RE,
   generateArgsNonce,
   stampArgsTerminator,
+  stampInstalledContent,
 } = require('../gsd-core/bin/lib/args-terminator.cjs');
 
 const REPO = path.join(__dirname, '..');
@@ -84,6 +86,19 @@ describe('#5637 the terminator stamp', () => {
     assert.equal(body[1], '$ARGUMENTS');
     assert.equal(body[2], `GSD_ARGS_END_${NONCE}`);
     assert.equal(body[3], CAPTURE[3]);
+  });
+
+  test('stamps the quick-batch terminator the same way', () => {
+    const fence = ["gsd_run quick-batch parse-args --raw --stdin <<'GSD_QUICK_BATCH_ARGS_END'", 'text', 'GSD_QUICK_BATCH_ARGS_END'].join('\n');
+    assert.deepEqual(ARGS_TERMINATORS, ['GSD_ARGS_END', 'GSD_QUICK_BATCH_ARGS_END']);
+    assert.equal(
+      stampArgsTerminator(fence, NONCE),
+      fence.replace(/GSD_QUICK_BATCH_ARGS_END/g, `GSD_QUICK_BATCH_ARGS_END_${NONCE}`),
+    );
+  });
+
+  test('a process that is not an installer leaves content canonical', () => {
+    assert.equal(stampInstalledContent(FENCE), FENCE);
   });
 
   test('leaves prose that names the token mid-line alone', () => {
@@ -159,34 +174,59 @@ describe('#5637 typed text that names the terminator (real shells)', () => {
 });
 
 describe('#5637 what an install writes', () => {
-  for (const runtime of ['pi', 'claude']) {
-    test(`${runtime}: every installed workflow carries a stamped terminator and no bare one`, () => {
+  const BARE_RE = /^GSD_(?:QUICK_BATCH_)?ARGS_END\r?$|<<'GSD_(?:QUICK_BATCH_)?ARGS_END'/m;
+  const STAMPED_RE = /^GSD_ARGS_END_[0-9a-f]{32}\r?$/m;
+  // The raw corpus under gsd-core/commands and gsd-core/agents is the re-materialization input and stays canonical.
+  const isCorpus = (rel) => rel.startsWith(`gsd-core${path.sep}commands${path.sep}`) || rel.startsWith(`gsd-core${path.sep}agents${path.sep}`);
+
+  function installedMarkdown(configDir) {
+    const files = [];
+    const walk = (d) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const full = path.join(d, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (e.name.endsWith('.md')) files.push(full);
+      }
+    };
+    walk(configDir);
+    return files.map((file) => ({ file, rel: path.relative(configDir, file) })).filter(({ rel }) => !isCorpus(rel));
+  }
+
+  for (const runtime of ['pi', 'claude', 'opencode']) {
+    test(`${runtime}: no installed workflow, command or skill carries a bare terminator`, () => {
       const { root, configDir } = runMinimalInstall({ runtime, scope: 'global' });
       try {
-        const dir = path.join(configDir, 'gsd-core', 'workflows');
-        const files = [];
-        const walk = (d) => {
-          for (const e of fs.readdirSync(d, { withFileTypes: true })) {
-            const full = path.join(d, e.name);
-            if (e.isDirectory()) walk(full);
-            else if (e.name.endsWith('.md')) files.push(full);
-          }
-        };
-        walk(dir);
-        let withCapture = 0;
-        for (const file of files) {
+        let stamped = 0;
+        for (const { file, rel } of installedMarkdown(configDir)) {
           const text = fs.readFileSync(file, 'utf8');
-          const rel = path.relative(dir, file);
-          assert.equal(/^GSD_ARGS_END\r?$/m.test(text), false, `${rel} still has a bare terminator line`);
-          assert.equal(text.includes("<<'GSD_ARGS_END'"), false, `${rel} still has a bare opener`);
-          if (/^GSD_ARGS_END_[0-9a-f]{32}\r?$/m.test(text)) withCapture++;
+          assert.equal(BARE_RE.test(text), false, `${rel} still has a bare terminator`);
+          if (STAMPED_RE.test(text)) stamped++;
         }
-        assert.ok(withCapture > 50, `expected the capture block in many workflows, found ${withCapture}`);
+        assert.ok(stamped > 50, `expected the capture block in many workflows, found ${stamped}`);
       } finally {
         cleanup(root);
       }
     });
   }
+
+  test('the quick-batch command surface is stamped with its own terminator', () => {
+    const { root, configDir } = runMinimalInstall({ runtime: 'opencode', scope: 'global' });
+    try {
+      const surfaces = installedMarkdown(configDir).filter(({ rel }) => /quick-batch/.test(rel) && !rel.startsWith(`gsd-core${path.sep}workflows`));
+      assert.ok(surfaces.length > 0, 'no quick-batch command or skill was installed');
+      for (const { file, rel } of surfaces) {
+        assert.match(fs.readFileSync(file, 'utf8'), /^GSD_QUICK_BATCH_ARGS_END_[0-9a-f]{32}\r?$/m, rel);
+      }
+    } finally {
+      cleanup(root);
+    }
+  });
+
+  test('generated Pi package skills stay canonical: a build-time nonce would be a constant shared by every user', () => {
+    const text = fs.readFileSync(path.join(REPO, 'pi', 'package-skills', 'gsd-quick-batch', 'SKILL.md'), 'utf8');
+    assert.ok(/^GSD_QUICK_BATCH_ARGS_END\r?$/m.test(text));
+    assert.equal(/ARGS_END_[0-9a-f]{32}/.test(text), false);
+  });
 
   test('one install uses one nonce across its workflows, and two installs use different ones', () => {
     const nonces = [];

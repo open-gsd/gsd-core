@@ -63,6 +63,8 @@ const { composeWorkflow } = require('../gsd-core/bin/lib/workflow-fragments.cjs'
 // #3072: THE shared composition-scope predicate (also consumed by the served
 // MCP catalog, src/mcp-catalog.cts) — see the comment at its call site below.
 const { shouldCompose } = require('../gsd-core/bin/lib/mcp-catalog.cjs');
+// #5637: per-install terminator for the typed-text capture heredoc.
+const { armArgsNonce, stampInstalledContent } = require('../gsd-core/bin/lib/args-terminator.cjs');
 const runtimeArtifactConversion = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
 const { escapeRegex: escapeRegExp } = require('../gsd-core/bin/lib/pattern.cjs');
 // #2873: cross-scope shadow detection — reports (never fails) when a
@@ -8130,6 +8132,8 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
       if (shouldCompose(srcPath)) {
         content = composeWorkflow(content, { sourcePath: srcPath });
       }
+      // #5637: the typed-text capture heredoc ends at a terminator the typed text cannot know.
+      content = stampInstalledContent(content);
 
       content = filterRuntimeNotesForTarget(content, runtime);
 
@@ -15350,6 +15354,9 @@ module.exports = {
 
 // Main logic — only run when not loaded as a module for testing
 if (require.main === module && !process.env.GSD_TEST_MODE) {
+  // #5637: every file this run writes gets the same typed-text heredoc terminator; the next run gets another.
+  // GSD_ARGS_NONCE_OFF=1 is for the generators that bake a static template from an install.
+  if (process.env.GSD_ARGS_NONCE_OFF !== '1') armArgsNonce();
   if (hasDryRun) {
     // --dry-run: preview legacy cleanup and exit without installing.
     if (hasUninstall) {

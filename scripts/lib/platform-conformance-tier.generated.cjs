@@ -11,6 +11,7 @@ module.exports = {
   "tests/antigravity-upgrades.test.cjs",
   "tests/api-coverage-gate-e2e.test.cjs",
   "tests/api-coverage.test.cjs",
+  "tests/args-terminator-nonce.test.cjs",
   "tests/assumption-delta-checkpoint-e2e.test.cjs",
   "tests/assumption-delta.test.cjs",
   "tests/audit-command-cutover.test.cjs",

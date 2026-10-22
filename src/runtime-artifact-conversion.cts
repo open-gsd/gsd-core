@@ -38,6 +38,7 @@ import { posixNormalize } from './shell-command-projection.cjs';
 import frontmatterModule = require('./frontmatter.cjs');
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 import { escapeRegex as escapeRegExp } from './pattern.cjs';
+import { stampInstalledContent } from './args-terminator.cjs';
 import { scanFencedBlocks } from './markdown-sectionizer.cjs';
 // #2870: install-scope.cts is a leaf-tier sibling (imports only
 // runtime-homes.cjs + node builtins, never this module) — no cycle. See the
@@ -3767,6 +3768,8 @@ function withShellDefaultsPreserved(content, rewrite) {
 }
 
 function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false, attribution = undefined) {
+  // #5637: the typed-text capture heredoc ends at a terminator the typed text cannot know.
+  content = stampInstalledContent(content);
   // #4377: with a project-relative prefix, run the whole substitution body
   // with `${VAR:-default}` shell defaults masked out, so the launcher shim
   // keeps its absolute fallbacks. A no-op for the absolute (default) prefix.
