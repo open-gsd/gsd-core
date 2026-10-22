@@ -70,6 +70,9 @@ const {
   escapePosixDoubleQuoted: (value: unknown) => string;
   resolveExecutableBinary: (name: string, opts?: { platform?: string; requireExecutable?: boolean }) => string | null;
 };
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import capabilityLedgerMod = require('./capability-ledger.cjs');
+const { readSmallRegularFile } = capabilityLedgerMod;
 
 // ---------------------------------------------------------------------------
 // Terminal color constants (mirrors install.js for console output parity)
@@ -1293,6 +1296,12 @@ function removeCodexHooksJsonSessionStart(targetDir: string): ReconcileResult {
 }
 
 /**
+ * Largest hooks.json codexHooksJsonHasManagedHooks will read. A real one holds
+ * a few hook entries, so a file this size is not one GSD wrote.
+ */
+const CODEX_HOOKS_JSON_MAX_BYTES = 1024 * 1024;
+
+/**
  * Read-only: whether removing `eventNames` from `targetDir`'s hooks.json would
  * delete a GSD hook. The removal writes hooks.json through the symlink policy
  * (#5037), which refuses a symlinked file without GSD_ALLOW_SYMLINKED_DEST and
@@ -1302,14 +1311,19 @@ function removeCodexHooksJsonSessionStart(targetDir: string): ReconcileResult {
  * table or as a legacy top-level event array. A file that cannot be read or
  * parsed counts as holding GSD hooks, so the removal still runs and reports
  * the parse error as before.
+ *
+ * This read happens before the removal's symlink check, through whatever the
+ * link points at, so it is bounded: a FIFO, a device or a directory is refused
+ * without blocking, and a file over CODEX_HOOKS_JSON_MAX_BYTES is refused
+ * without being read. Both count as unreadable.
  */
 function codexHooksJsonHasManagedHooks(targetDir: string, eventNames: readonly string[]): boolean {
   const hooksJsonPath = path.join(targetDir, 'hooks.json');
   if (!fs.existsSync(hooksJsonPath)) return false;
   let parsed: unknown;
   try {
-    const raw = fs.readFileSync(hooksJsonPath, 'utf8');
-    if (!raw.trim()) return false;
+    const raw = readSmallRegularFile(hooksJsonPath, CODEX_HOOKS_JSON_MAX_BYTES);
+    if (raw === null || !raw.trim()) return false;
     parsed = JSON.parse(raw);
   } catch {
     return true;
@@ -3336,6 +3350,7 @@ export = {
   removeCodexHooksJsonEvent,
   removeCodexHooksJsonSessionStart,
   codexHooksJsonHasManagedHooks,
+  CODEX_HOOKS_JSON_MAX_BYTES,
   buildCodexHookWindowsShimIR,
   cleanupOrphanedCodexContextMonitorScript,
   isGsdOwnedCodexContextMonitorScript,

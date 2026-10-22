@@ -2923,6 +2923,50 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, UNINSTALL_HOOK_EVENTS), false, 'a dangling link reads as absent');
   });
 
+  // The predicate reads hooks.json before the removal's symlink check, through
+  // whatever a link points at, so its read must be bounded (#5037).
+  test('codexHooksJsonHasManagedHooks counts a hooks.json over its size cap as unreadable without parsing it (#5037)', () => {
+    const { CODEX_HOOKS_JSON_MAX_BYTES } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
+    assert.strictEqual(typeof CODEX_HOOKS_JSON_MAX_BYTES, 'number', 'the cap must be exported');
+    // Valid JSON holding only a user hook, so a full parse would answer false.
+    const oversized = {
+      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] },
+      padding: 'x'.repeat(CODEX_HOOKS_JSON_MAX_BYTES),
+    };
+    fs.writeFileSync(hooksJsonPath(codexHome), JSON.stringify(oversized), 'utf8');
+    assert.ok(fs.statSync(hooksJsonPath(codexHome)).size > CODEX_HOOKS_JSON_MAX_BYTES, 'setup: the file must exceed the cap');
+
+    assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, UNINSTALL_HOOK_EVENTS), true,
+      'an oversized file counts as unreadable, so the removal still runs');
+  });
+
+  test('codexHooksJsonHasManagedHooks counts a FIFO hooks.json as unreadable without blocking (#5037)', (t) => {
+    if (process.platform === 'win32') {
+      t.skip('no FIFOs on Windows');
+      return;
+    }
+    const { execFileSync } = require('node:child_process');
+    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+    execFileSync('mkfifo', [hooksJsonPath(codexHome)], { stdio: 'ignore', timeout: PROBE_TIMEOUT_MS });
+    // A blocking open of a FIFO with no writer never returns, so the call runs
+    // in a child process where a regression times out instead of hanging the suite.
+    const probe = [
+      'const surface = require(process.argv[1]);',
+      'const events = JSON.parse(process.argv[3]);',
+      'const hasManagedHooks = surface.codexHooksJsonHasManagedHooks(process.argv[2], events);',
+      'process.stdout.write(JSON.stringify({ hasManagedHooks }));',
+    ].join('\n');
+    const modulePath = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'runtime-hooks-surface.cjs');
+    const result = runNode(['-e', probe, modulePath, codexHome, JSON.stringify(UNINSTALL_HOOK_EVENTS)], {
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assert.strictEqual(result.timedOut, false, 'the read must not block on the FIFO');
+    assert.strictEqual(result.exitCode, 0, result.stderr);
+    assert.deepStrictEqual(JSON.parse(result.stdout), { hasManagedHooks: true },
+      'a FIFO counts as unreadable, so the removal still runs');
+  });
+
   // Uninstall step 1a runs this removal only when the predicate says true, so
   // the two must agree: a GSD hook the predicate misses survives uninstall,
   // and a false positive makes uninstall check and rewrite a file it has
