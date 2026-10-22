@@ -647,6 +647,7 @@
       "gsd-ensure-canonical-path.js",
       "gsd-graphify-update.sh",
       "gsd-node-runner.sh",
+      "gsd-path-export.js",
       "gsd-phase-boundary.sh",
       "gsd-prompt-guard.js",
       "gsd-read-guard.js",

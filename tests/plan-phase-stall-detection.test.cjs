@@ -935,3 +935,40 @@ describe('#2650 follow-up: runBashScript bounds and reports a bash fan-out corre
     assert.equal(after, before, 'a rejected bound must not leak the script temp dir');
   });
 });
+
+// #5451: the stall-detection gate names the config key behind PLANNER_STALL_DETECTION_ENABLED at
+// every point of use, so an orchestrator resolving it never has to guess one (it used to try
+// `workflow.plan_stall_detection` and fail with "Key not found").
+describe('#5451: every stall-detection gate names its config key', () => {
+  const nodeFs = require('node:fs');
+  const nodePath = require('node:path');
+  const WORKFLOWS = nodePath.join(__dirname, '..', 'gsd-core', 'workflows');
+  // Exact gate-heading counts: deleting one must fail, not slip past a `> 0` check.
+  const FILES = [['plan-phase.md', 3], [nodePath.join('plan-phase', 'steps', 'chunked-planning-mode.md'), 1]];
+  const GATE_HEADING = /^\*\*Dispatch\/wait gate — `PLANNER_STALL_DETECTION_ENABLED`.*$/gm;
+
+  for (const [rel, expectedHeadings] of FILES) {
+    test(`${rel}: each dispatch/wait gate heading names planner.stall_detection_enabled and its helper step`, () => {
+      const text = nodeFs.readFileSync(nodePath.join(WORKFLOWS, rel), 'utf-8');
+      const headings = text.match(GATE_HEADING) ?? [];
+      assert.equal(headings.length, expectedHeadings, `${rel} gate heading count`);
+      for (const heading of headings) {
+        assert.ok(heading.includes('planner.stall_detection_enabled'), `gate heading does not name the config key: ${heading}`);
+        assert.ok(heading.includes('plan-phase/steps/stall-detection-helpers.md'), `gate heading does not point at the helper step path: ${heading}`);
+      }
+    });
+  }
+
+  test('the chunked per-plan dispatch gate (8.5.2) also names the key where PLANNER_STALL_DETECTION_ENABLED is first used', () => {
+    const text = nodeFs.readFileSync(nodePath.join(WORKFLOWS, 'plan-phase', 'steps', 'chunked-planning-mode.md'), 'utf-8');
+    const line = require('../gsd-core/bin/lib/text-lines.cjs').splitLines(text).find((l) => l.includes('exactly as today when `PLANNER_STALL_DETECTION_ENABLED`'));
+    assert.ok(line, 'the per-plan dispatch line must still exist');
+    assert.ok(line.includes('planner.stall_detection_enabled'), `per-plan gate does not name the config key: ${line}`);
+  });
+
+  test('the key the headings name is the one the helper step actually resolves', () => {
+    const helper = nodeFs.readFileSync(nodePath.join(WORKFLOWS, 'plan-phase', 'steps', 'stall-detection-helpers.md'), 'utf-8');
+    assert.match(helper, /PLANNER_STALL_DETECTION_ENABLED=.*config-get planner\.stall_detection_enabled/);
+  });
+});
+

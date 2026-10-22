@@ -586,6 +586,7 @@
   "hooks/gsd-ensure-canonical-path.js",
   "hooks/gsd-graphify-update.sh",
   "hooks/gsd-node-runner.sh",
+  "hooks/gsd-path-export.js",
   "hooks/gsd-phase-boundary.sh",
   "hooks/gsd-prompt-guard.js",
   "hooks/gsd-read-guard.js",

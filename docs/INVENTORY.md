@@ -807,6 +807,7 @@ Full listing: `hooks/`.
 | `gsd-write-guard.js` | `PreToolUse` | Hard-blocks a whole-file `Write` that catastrophically shrinks a curated `.planning/` artifact (ROADMAP.md, milestone roadmaps, STATE.md); override via the single-use sentinel `.planning/.gsd-allow-shrink` (workflow steps) or `GSD_ALLOW_PLANNING_SHRINK=1` (interactive) (#2255, fix 3 of #973) |
 | `gsd-secret-read-guard.js` | `PreToolUse` | Hard-blocks Read / Grep / Bash reads of `.env`, `.env.<suffix>` (templates such as `.env.example` exempt) and `.secrets`; replaces the installer-written `Read(.env*)` permission deny rules, which made every `cd DIR && grep …` compound prompt for approval on Claude Code ≥ 2.1.259 (#4221) |
 | `gsd-config-reload.js` | `FileChanged` | Hot-reloads GSD config context when `.planning/config.json` changes mid-session (#770) |
+| `gsd-path-export.js` | `SessionStart` | Appends the installed `gsd-core/bin` directory to `$CLAUDE_ENV_FILE` so a later Bash call resolves `gsd_run` from PATH (#5465); no-op when the variable is unset |
 | `gsd-ensure-canonical-path.js` | `SessionStart` | Symlinks `~/.claude/gsd-core/{bin,contexts,references,templates,workflows}` to the plugin's bundled tree so `@~/.claude/gsd-core/...` includes resolve in marketplace plugin installs; no-op in classic installs, self-heals after `claude plugin update` (#997) |
 | `gsd-session-state.sh` | `SessionStart` | Session-state tracking for shell-based runtimes |
 | `gsd-validate-commit.sh` | `PreToolUse` | Commit validation for conventional-commit enforcement |

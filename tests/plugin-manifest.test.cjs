@@ -748,7 +748,7 @@ describe('D: always-on hook contract drift guard', () => {
     return map;
   }
 
-  test('SessionStart: one no-matcher group with gsd-ensure-canonical-path.js then gsd-check-update.js', () => {
+  test('SessionStart: one no-matcher group with gsd-ensure-canonical-path.js, gsd-path-export.js, then gsd-check-update.js', () => {
     // #997: gsd-ensure-canonical-path.js is wired alongside gsd-check-update.js
     // in the single SessionStart no-matcher group. It must run FIRST so the
     // canonical ~/.claude/gsd-core path (and its @-include targets) exist before
@@ -759,8 +759,8 @@ describe('D: always-on hook contract drift guard', () => {
     // There must be exactly one entry group (key '' = no matcher)
     const noMatcherHooks = groups[''];
     assert.ok(
-      Array.isArray(noMatcherHooks) && noMatcherHooks.length === 2,
-      `SessionStart no-matcher group must contain exactly two hooks; got: ${JSON.stringify(noMatcherHooks)}`
+      Array.isArray(noMatcherHooks) && noMatcherHooks.length === 3,
+      `SessionStart no-matcher group must contain exactly three hooks; got: ${JSON.stringify(noMatcherHooks)}`
     );
     assert.equal(
       noMatcherHooks[0].script, 'gsd-ensure-canonical-path.js',
@@ -770,11 +770,19 @@ describe('D: always-on hook contract drift guard', () => {
       noMatcherHooks[0].timeout, 5,
       'gsd-ensure-canonical-path.js must have a small timeout (5s) — symlink setup is fast'
     );
+    // #5465: persists the gsd-core bin directory on PATH through $CLAUDE_ENV_FILE, which Claude Code
+    // provides to SessionStart hooks only. After the canonical-path bootstrap (it exports the
+    // bundled tree's bin/) and before the background update check.
     assert.equal(
-      noMatcherHooks[1].script, 'gsd-check-update.js',
+      noMatcherHooks[1].script, 'gsd-path-export.js',
+      'gsd-path-export.js must be the second SessionStart hook (#5465)'
+    );
+    assert.equal(noMatcherHooks[1].timeout, 5, 'gsd-path-export.js appends one line; a 5s timeout is ample');
+    assert.equal(
+      noMatcherHooks[2].script, 'gsd-check-update.js',
       'gsd-check-update.js must remain a SessionStart hook'
     );
-    assert.equal(noMatcherHooks[1].timeout, undefined, 'gsd-check-update.js must NOT have a timeout field');
+    assert.equal(noMatcherHooks[2].timeout, undefined, 'gsd-check-update.js must NOT have a timeout field');
   });
 
   test('PreToolUse Write|Edit group: gsd-prompt-guard.js (blocking budget) + gsd-read-guard.js (timeout 5)', () => {

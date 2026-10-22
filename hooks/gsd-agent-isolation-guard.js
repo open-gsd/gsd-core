@@ -71,7 +71,7 @@ if (require.main === module && !process.env.NODE_V8_COVERAGE) {
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { readSentinel, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch, buildSentinelDiscard } = require('./lib/isolation-sentinel.js');
+const { readSentinel, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch, agedNoneGovernsDispatch, buildSentinelDiscard } = require('./lib/isolation-sentinel.js');
 const { REASON_CODE, describeSentinelDiscard } = require('./lib/isolation-deny-reason.js');
 const { HOOK_ON_CRASH, allow, deny, crash } = require('./lib/hook-exit.js');
 
@@ -463,6 +463,16 @@ function resolveIsolationState(cwd, { clock = Date, dispatchIds = null } = {}) {
       ),
       sentinelDiscarded: null,
     };
+  }
+
+  // #5479: a recorded sequential degrade (`none`) for THIS dispatch's phase keeps governing it after the
+  // trust window. Without this, an executor that ran longer than SENTINEL_STALE_MS made the next
+  // flag-less dispatch of the same phase fall back to the registry capability ("this host CAN
+  // isolate") and be denied for a degrade the workflow legitimately recorded. The predicate only
+  // loosens toward `none`, only for the phase the dispatch itself names, never for a future-dated
+  // record (see agedNoneGovernsDispatch).
+  if (sentinel.present && sentinel.stale && agedNoneGovernsDispatch(sentinel, dispatchIds, { clock })) {
+    return { gsdProject: true, isolation: 'none', harnessFlag: null, error: null, sentinelDiscarded: null };
   }
 
   // Sentinel absent, stale, or does not apply to this dispatch (F2 mismatch):
