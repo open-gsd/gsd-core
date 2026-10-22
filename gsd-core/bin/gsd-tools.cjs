@@ -2310,11 +2310,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     //
     // Output:
     //   --raw   → prints exactly harness-worktree | orchestrator-worktree | none
-    //   --json  → prints { runtime, isolation, exec, harnessFlag, held }
+    //   --json  → prints { runtime, isolation, exec, harnessFlag, held, decidedAt }
     //   default → same as --raw
     //
     // `held` is true when a plain query is holding a recorded degrade (#4561,
-    // below); `isolation` is then that degrade's `none`.
+    // below); `isolation` is then that degrade's `none`, and `decidedAt` the
+    // epoch ms it was decided (null whenever `held` is false).
     //
     // `exec` is the resolved orchestratorExec argv/cwd shape, present only for
     // `orchestrator-worktree`. It requires `--cwd-target` (the GSD-created
@@ -2336,7 +2337,10 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // additional context this resolver cannot see (the #2474 per-plan
     // submodule intersection, computed in shell in
     // `per-plan-worktree-gate.md`) override the naturally-resolved mode
-    // while still going through this single write path. Best-effort: a
+    // while still going through this single write path. `--renew-held <ms>`,
+    // beside `--force-isolation none`, marks that write as a dispatch site
+    // following a held degrade rather than deciding a new one, and carries the
+    // held answer's own `decidedAt` (#4904 review). Best-effort: a
     // sentinel write failure here must never fail the wave.
     const decision = resolveDispatchIsolationDecision({ args, cwd });
     const runtimeId = decision.runtimeId;
@@ -2491,9 +2495,24 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // repository caught up. The record is the caller's only when it records
     // exactly what the caller forced.
     const decidedBy = forcedApplied && recordedIsolation === forcedIsolation ? 'caller' : 'resolver';
+    // `--renew-held <ms>` (#4904 review): a dispatch site re-recording the
+    // `none` its own plain query reported as held passes that answer's
+    // `decidedAt`, so the record keeps the decision it followed and the hold
+    // does not outlive the degrade that started it. The value comes from the
+    // answer the site acted on, never from the file at write time: by then the
+    // file can hold another plan's record, whose time is not this hold's.
+    // Honoured only for a caller-owned forced `none` and a non-negative
+    // integer; anything else is a fresh decision. The writer clamps it to the
+    // write time, so it can shorten a hold but never extend one.
+    const renewIdx = args.indexOf('--renew-held');
+    const renewArg = renewIdx !== -1 ? args[renewIdx + 1] : undefined;
+    const decidedAt = decidedBy === 'caller' && recordedIsolation === 'none' &&
+      typeof renewArg === 'string' && /^\d{1,16}$/.test(renewArg) && Number.isSafeInteger(Number(renewArg))
+      ? Number(renewArg)
+      : null;
     if (heldDegrade === null) {
       try {
-        writeDispatchIsolationSentinel(cwd, { isolation: recordedIsolation, harnessFlag: recordedHarnessFlag, phase: phaseArg, plan: planArg, decidedBy });
+        writeDispatchIsolationSentinel(cwd, { isolation: recordedIsolation, harnessFlag: recordedHarnessFlag, phase: phaseArg, plan: planArg, decidedBy, decidedAt });
       } catch {
         // writeDispatchIsolationSentinel already swallows its own errors into
         // a { recorded: false } result; this catch is defense in depth only.
@@ -2507,7 +2526,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       exec = null;
     }
     if (args.indexOf('--json') !== -1) {
-      output({ runtime: runtimeId, isolation, exec, harnessFlag, held }, raw);
+      output({ runtime: runtimeId, isolation, exec, harnessFlag, held, decidedAt: held ? (heldDegrade.decidedAt ?? null) : null }, raw);
     } else {
       process.stdout.write(isolation);
     }
@@ -2993,7 +3012,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       // `held` keeps the JSON shape identical to the recording verb's, so a
       // consumer can switch verbs verbatim. Inspection reads no record, so it
       // never holds one.
-      output({ runtime: runtimeId, isolation, exec, harnessFlag, held: false }, raw);
+      output({ runtime: runtimeId, isolation, exec, harnessFlag, held: false, decidedAt: null }, raw);
     } else {
       process.stdout.write(isolation);
     }
@@ -3009,11 +3028,14 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * per-plan degrade call site and back-compat/tests) share exactly one
    * write implementation. Never throws — returns `{ recorded, path, error? }`.
    */
-  function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null, decidedBy = 'caller' }) {
+  function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null, decidedBy = 'caller', decidedAt = null }) {
     const nodePath = require('path');
     const nodeFs = require('fs');
     const sentinelDir = nodePath.join(cwd, '.gsd');
     const sentinelPath = nodePath.join(sentinelDir, 'dispatch-isolation-sentinel.json');
+    // The clock seam, so a test can pin both timestamps (GSD_NOW_MS, #474).
+    const { realClock } = require('./lib/clock.cjs');
+    const writtenAt = realClock.now();
     const payload = {
       isolation,
       harness_flag: harnessFlag || null,
@@ -3030,7 +3052,14 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       // costs one sequential run, while clobbering one the caller owns makes
       // the guard refuse the dispatch and the work does not run at all.
       decided_by: decidedBy,
-      written_at: Date.now(),
+      // #4904 review — WHEN the decision was first made, so a renewed hold
+      // lapses ten minutes after the degrade itself, not after the last gate
+      // that re-recorded it. A fresh decision is decided as it is written; a
+      // `--renew-held` re-record passes the held record's value through.
+      decided_at: typeof decidedAt === 'number' && Number.isFinite(decidedAt)
+        ? Math.min(decidedAt, writtenAt)
+        : writtenAt,
+      written_at: writtenAt,
     };
     try {
       nodeFs.mkdirSync(sentinelDir, { recursive: true });
@@ -3112,6 +3141,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * shape are judged by the one definition the guard itself applies.
    *
    * Returns the record only when ALL hold: present, fresh, well-formed,
+   * decided less than the freshness window ago (`holdExpired`, measured from
+   * `decided_at`, which a `--renew-held` re-record does not move),
    * `isolation === 'none'`, and every identifier the query names equals the
    * record's (an omitted identifier is unconstrained — see the call site).
    *
@@ -3121,19 +3152,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * the installs that have no guard hook to deny the dispatch.
    */
   function heldDegradeRecord(cwd, { phase, plan }) {
-    let readSentinelAt;
-    try {
-      ({ readSentinelAt } = require('../../hooks/lib/isolation-sentinel.js'));
-    } catch {
-      return null;
-    }
-    let held;
-    try {
-      held = readSentinelAt(cwd);
-    } catch {
-      return null;
-    }
-    if (!held || !held.present || held.stale || held.malformed) return null;
+    const held = readDegradeRecord(cwd);
+    if (!held || !held.present || held.stale || held.holdExpired || held.malformed) return null;
     if (held.isolation !== 'none') return null;
     // #4630 ADR Phase 2. Pre-fix this held ANY fresh in-scope `none`, which
     // made #4222 and #4561 mutually exclusive: the degrade #4222 re-derives is
@@ -3144,6 +3164,24 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     if (phase !== null && phase !== held.phase) return null;
     if (plan !== null && plan !== held.plan) return null;
     return held;
+  }
+
+  // The shared reader at the resolver's own path and clock, or null when the
+  // reader cannot be loaded or throws (see heldDegradeRecord).
+  function readDegradeRecord(cwd) {
+    let readSentinelAt;
+    let realClock;
+    try {
+      ({ readSentinelAt } = require('../../hooks/lib/isolation-sentinel.js'));
+      ({ realClock } = require('./lib/clock.cjs'));
+    } catch {
+      return null;
+    }
+    try {
+      return readSentinelAt(cwd, { clock: realClock });
+    } catch {
+      return null;
+    }
   }
 
   function routeRecordDispatchIsolation({ args, cwd, raw, error }) {

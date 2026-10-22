@@ -32,7 +32,7 @@ read. It requires `gsd_run` to be defined (the standard shim preamble).
 # after that record went stale and answer the host capability instead.
 _ISOLATION_JSON=$(gsd_run query dispatch-isolation --json 2>/dev/null)
 _ISOLATION_RC=$?
-_ISOLATION_FIELDS=$(printf '%s' "$_ISOLATION_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write((j&&typeof j.isolation==="string"&&/^[a-z-]+$/.test(j.isolation)?j.isolation:"")+" "+(j&&j.held===true?"held":"live"))}catch{process.stdout.write(" live")}})')
+_ISOLATION_FIELDS=$(printf '%s' "$_ISOLATION_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write((j&&typeof j.isolation==="string"&&/^[a-z-]+$/.test(j.isolation)?j.isolation:"")+" "+(j&&j.held===true?"held:"+(Number.isSafeInteger(j.decidedAt)&&j.decidedAt>=0?j.decidedAt:""):"live"))}catch{process.stdout.write(" live")}})')
 _ISOLATION_RAW=${_ISOLATION_FIELDS% *}
 _ISOLATION_HELD=${_ISOLATION_FIELDS##* }
 if [ $_ISOLATION_RC -ne 0 ] || [ -z "$_ISOLATION_RAW" ]; then
@@ -50,9 +50,11 @@ esac
 # A HELD `none` is a degrade, not a capability verdict: an earlier step of this
 # run decided sequential dispatch and recorded it. Follow it, the way the
 # opt-out below is followed, instead of reading it as a host with no primitive.
-if [ "$ISOLATION" = "none" ] && [ "$ISOLATION_RESOLVED" = "true" ] && [ "$_ISOLATION_HELD" = "held" ]; then
+_RENEW_HELD=""
+if [ "$ISOLATION" = "none" ] && [ "$ISOLATION_RESOLVED" = "true" ] && [ "${_ISOLATION_HELD%%:*}" = "held" ]; then
   echo "⚠ Dispatch isolation is held at none: an earlier step of this run degraded to sequential dispatch within the last 10 minutes. Running sequentially on the main working tree." >&2
   USE_WORKTREES=false
+  _RENEW_HELD="${_ISOLATION_HELD#held:}"
 fi
 
 # Project-level opt-out wins on every host; a host with no primitive fails closed.
@@ -75,9 +77,10 @@ fi
 # instant of the dispatch, and the held one belongs to the step that wrote it: its
 # phase/plan can disagree with what this site dispatches, and its ten minutes can
 # run out before the dispatch, either of which turns this sequential dispatch into
-# a denied one. The cost is that each gate following a hold renews it, so runs
-# started within ten minutes of each other stay sequential — the safe direction.
-gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" >/dev/null 2>&1 || true
+# a denied one. `--renew-held` passes the held answer's own decision time, so the
+# re-record refreshes the guard's record without restarting the hold: it still
+# lapses ten minutes after the degrade was decided.
+gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" ${_RENEW_HELD:+--renew-held "$_RENEW_HELD"} >/dev/null 2>&1 || true
 ```
 
 | `ISOLATION` | Meaning | What a dispatch site does |
@@ -143,13 +146,16 @@ as a dropped isolation flag and **denies the dispatch with exit 2**. The task do
 unisolated; it does not run at all.
 
 ```bash
-gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" >/dev/null 2>&1 || true
+gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" ${_RENEW_HELD:+--renew-held "$_RENEW_HELD"} >/dev/null 2>&1 || true
 ```
 
 `--force-isolation` pushes the final, shell-computed value through the same single write path
 (`none` also clears the stored `harnessFlag`, since none applies to sequential dispatch). It is
 idempotent and last-write-wins among forced records, so a site that degrades more than once
 simply calls it again — record immediately before dispatch so the sentinel is always fresh.
+`_RENEW_HELD` is set only by the resolve block above, when it followed a held `none`, to that
+answer's `decidedAt`; the expansion then adds `--renew-held <decidedAt>`, so the re-record keeps
+the decision time of the hold this site followed instead of restarting it.
 Best-effort by design: a write failure must never fail the dispatch, since the guards'
 sentinel-absent fallback is safe, just less precise.
 
@@ -158,15 +164,21 @@ with `--force-isolation`, a later plain `query dispatch-isolation` — a subagen
 traffic, a wave transition, another dispatch site's resolve — *holds* that record instead of
 re-persisting the host capability over it, provided it names no different `--phase`/`--plan`
 (an identifier it omits is unconstrained; one it names must match). It also **answers with
-it**: stdout is `none`, and under `--json` `harnessFlag` and `exec` are null and `held` is
-`true`. The resolve block above reads `held` and runs sequentially rather than failing closed,
-then re-records `none` at its own scope like any other final value: the guard judges the
-dispatch against the record present at that instant, and the held one may name another
-phase or plan, or lapse before this site dispatches. The host's descriptors (`harnessFlag`,
+it**: stdout is `none`, and under `--json` `harnessFlag` and `exec` are null, `held` is
+`true` and `decidedAt` is the epoch ms the held degrade was decided. The resolve block above reads `held` and runs sequentially rather than failing closed,
+then re-records `none` at its own scope with `--renew-held <decidedAt>`: the guard judges the dispatch
+against the record present at that instant, and the held one may name another phase or plan,
+or lapse before this site dispatches. The host's descriptors (`harnessFlag`,
 `exec`) are read from `inspect-dispatch-isolation`, which no hold reaches. A forced record
 always writes, a plain query scoped to a *different* plan writes (the per-plan gate's fresh
 record for the next plan), and a record past the reader's freshness window is replaced as
-before; a degrade lapses ten minutes after the last gate that followed it. The re-record is
+before. The record carries `decided_at`, when the degrade was decided, beside `written_at`. A
+`--renew-held <ms>` re-record refreshes `written_at` for the guard and records the `decidedAt` of
+the answer the site followed (never later than the write), and the hold measures its ten minutes
+from `decided_at`. The value comes from the answer, not from the file at write time, which may by
+then hold another plan's record. So a degrade lapses ten minutes after it was
+decided, however many gates follow it, and runs started a few minutes apart do not chain it.
+A forced `none` without `--renew-held` is a new decision and starts its own ten minutes. The re-record is
 still mandatory after any degrade a site decides itself: the resolver cannot compute these
 degrades, it only stops racing you for the file.
 

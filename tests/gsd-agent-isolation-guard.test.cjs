@@ -2496,7 +2496,7 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
     return lines.slice(open + 1, close).filter((l) => !l.startsWith('_GSD_SHIM_NAME=')).join('\n');
   }
 
-  function runResolveBlock(dir, file, gsdRunDefinition) {
+  function runResolveBlock(dir, file, gsdRunDefinition, extraEnv = {}) {
     const script = path.join(dir, 'resolve-isolation.sh');
     fs.writeFileSync(script, [
       'set -u',
@@ -2505,7 +2505,7 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
       resolveIsolationBlock(file),
       'printf "ISOLATION=%s\\nUSE_WORKTREES=%s\\n" "$ISOLATION" "$USE_WORKTREES"',
     ].join('\n'));
-    const childEnv = { ...process.env, GSD_RUNTIME: 'claude', HOME: dir };
+    const childEnv = { ...process.env, GSD_RUNTIME: 'claude', HOME: dir, ...extraEnv };
     delete childEnv.CLAUDE_ENV_FILE;
     return runHookSeam(script, [], { interpreter: 'bash', cwd: dir, env: childEnv, timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
   }
@@ -2532,6 +2532,22 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
       assert.equal(sentinel.plan, null, 'the re-record replaced the held plan-a record with this site\'s scope');
       assert.equal(sentinel.phase, SITE_SCOPE[name]);
       assert.ok(sentinel.written_at >= writtenAt, 'the re-record is fresh as of this site, not as of the held record');
+    });
+
+    test(`${name}: re-recording a HELD none keeps its decided_at, so following a hold does not restart it`, { skip: NO_BASH }, (t) => {
+      const dir = createTempProject('gsd-4904-gate-renew-');
+      t.after(() => cleanup(dir));
+      const T0 = 1_000_000_000_000;
+      const pinned = (now) => ({ GSD_TEST_MODE: '1', GSD_NOW_MS: String(now) });
+      const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7', '--force-isolation', 'none'], dir,
+        { GSD_RUNTIME: 'claude', HOME: dir, ...pinned(T0) });
+      assert.equal(r.success, true, r.error);
+      const run = runResolveBlock(dir, file, `gsd_run() { node ${JSON.stringify(TOOLS)} "$@"; }`, pinned(T0 + 60000));
+      assert.equal(run.exitCode, 0, run.stderr);
+      assert.match(run.stderr, /held at none/);
+      const sentinel = readSentinelRaw(dir);
+      assert.equal(sentinel.written_at, T0 + 60000, 'the site re-recorded');
+      assert.equal(sentinel.decided_at, T0, 'and kept the held decision\'s time');
     });
 
     // Codex RV6.5 review of #5126: with the re-record skipped, the guard read
@@ -2577,6 +2593,44 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
       assert.doesNotMatch(run.stderr, /held at none/);
     });
   }
+
+  // RV6.5 review of this round: after a held phase-level answer the per-plan
+  // gate inherits USE_WORKTREES=false and forces a literal `none` for each
+  // plan. Without the held answer's time that write restarted the hold.
+  test('per-plan-worktree-gate.md after a held answer: the plan-scoped record keeps the held decision time', { skip: NO_BASH }, (t) => {
+    const dir = createTempProject('gsd-4904-perplan-renew-');
+    t.after(() => cleanup(dir));
+    const T0 = 1_000_000_000_000;
+    const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7', '--force-isolation', 'none'], dir,
+      { GSD_RUNTIME: 'claude', HOME: dir, GSD_TEST_MODE: '1', GSD_NOW_MS: String(T0) });
+    assert.equal(r.success, true, r.error);
+    const perPlan = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'per-plan-worktree-gate.md');
+    const lines = splitLines(fs.readFileSync(perPlan, 'utf8'));
+    const marker = lines.findIndex((l) => l.includes('if [ "${USE_WORKTREES_FOR_PLAN:-}" = "false" ]; then'));
+    assert.notEqual(marker, -1, 'the per-plan re-record block is where this test expects it');
+    let open = marker; while (open > 0 && lines[open].trim() !== '```bash') open--;
+    let close = marker; while (close < lines.length && lines[close].trim() !== '```') close++;
+    const perPlanBlock = lines.slice(open + 1, close).filter((l) => !l.startsWith('_GSD_SHIM_NAME=')).join('\n');
+    const script = path.join(dir, 'per-plan.sh');
+    fs.writeFileSync(script, [
+      'set -u',
+      `gsd_run() { node ${JSON.stringify(TOOLS)} "$@"; }`,
+      'USE_WORKTREES=true; RUNTIME=claude; PHASE_NUMBER=7',
+      resolveIsolationBlock(GATE_SOURCES[1][1]),
+      'plan_id=plan-a; USE_WORKTREES_FOR_PLAN="$USE_WORKTREES"',
+      perPlanBlock,
+      'printf "USE_WORKTREES_FOR_PLAN=%s\\n" "$USE_WORKTREES_FOR_PLAN"',
+    ].join('\n'));
+    const childEnv = { ...process.env, GSD_RUNTIME: 'claude', HOME: dir, GSD_TEST_MODE: '1', GSD_NOW_MS: String(T0 + 60000) };
+    delete childEnv.CLAUDE_ENV_FILE;
+    const run = runHookSeam(script, [], { interpreter: 'bash', cwd: dir, env: childEnv, timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
+    assert.equal(run.exitCode, 0, run.stderr);
+    assert.match(run.stdout, /^USE_WORKTREES_FOR_PLAN=false$/m);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.plan, 'plan-a', 'the per-plan gate wrote the last record');
+    assert.equal(sentinel.written_at, T0 + 60000);
+    assert.equal(sentinel.decided_at, T0, 'and it kept the held phase decision\'s time');
+  });
 
   for (const [name, file] of GATE_SOURCES) test(`${name}: with no record the block resolves the live capability and records it`, { skip: NO_BASH }, (t) => {
     const dir = createTempProject('gsd-4904-gate-live-');
@@ -2783,9 +2837,8 @@ describe('#4630 — the isolation record states who decided it, so a re-query kn
 describe('#4561/#4630 — the hold\'s freshness window at both boundaries (readSentinelAt, injected clock)', () => {
   // heldDegradeRecord (gsd-tools.cjs) holds a record only when readSentinelAt
   // reports it fresh — its own gate is `held.stale`, passed straight through —
-  // so the window's boundaries live in the reader. gsd-tools has no clock seam
-  // of its own, so a subprocess fixture near a boundary would race the wall
-  // clock; the reader's clock is injectable (RULESET.TESTS.clock-seam), and
+  // so the window's boundaries live in the reader. The reader's clock is
+  // injectable (RULESET.TESTS.clock-seam), and
   // these rows drive it at limit-1 / limit / limit+1 on both bounds
   // (RULESET.TESTS.boundary-coverage): the staleness bound `age >=
   // SENTINEL_STALE_MS` and the future-skew bound `age < -5000`.
@@ -2837,4 +2890,215 @@ describe('#4561/#4630 — the hold\'s freshness window at both boundaries (readS
       });
     }
   }
+});
+
+// #4904 review (trek-e, 2026-10-21, Minor 1): every gate that follows a held
+// `none` re-records it, so the guard has a fresh record at its own dispatch.
+// That re-record used to restart the hold as well, so runs started less than
+// ten minutes apart kept a degrade alive indefinitely and a base-check degrade
+// outlived HEAD catching up. The record now carries `decided_at`; a
+// `--renew-held` re-record keeps it, and the hold lapses ten minutes after it.
+describe('#4904 review — a renewed hold lapses ten minutes after the degrade was decided, however many gates follow it', () => {
+  const { readSentinelAt } = require('../hooks/lib/isolation-sentinel.js');
+  // A fixed epoch for every timestamp, pinned in gsd-tools through the clock
+  // seam (GSD_NOW_MS under GSD_TEST_MODE, #474): no row reads the wall clock.
+  const T0 = 1_000_000_000_000;
+  const env = (dir, now) => ({ GSD_RUNTIME: 'claude', HOME: dir, GSD_TEST_MODE: '1', GSD_NOW_MS: String(now) });
+  const query = (dir, now, args) => {
+    const r = runGsdTools(['query', 'dispatch-isolation', ...args], dir, env(dir, now));
+    assert.equal(r.success, true, r.error);
+    return r;
+  };
+  const writeRecord = (dir, rec) => {
+    fs.mkdirSync(path.dirname(sentinelFile(dir)), { recursive: true });
+    fs.writeFileSync(sentinelFile(dir), JSON.stringify(rec));
+  };
+
+  describe('the reader measures the hold from decided_at and the guard\'s freshness from written_at (injected clock)', () => {
+    let dir;
+    before(() => { dir = createTempProject('gsd-4904-decided-at-'); });
+    after(() => cleanup(dir));
+    // The record was re-recorded one minute before `now`, so the guard reads
+    // it fresh on every row; only the decision's age moves.
+    const ROWS = [
+      { decisionAge: SENTINEL_STALE_MS - 1, holdExpired: false },
+      { decisionAge: SENTINEL_STALE_MS, holdExpired: true },
+      { decisionAge: SENTINEL_STALE_MS + 1, holdExpired: true },
+    ];
+    for (const { decisionAge, holdExpired } of ROWS) {
+      test(`decided ${decisionAge} ms ago, written 60000 ms ago -> hold ${holdExpired ? 'expired' : 'live'}, record fresh`, () => {
+        const now = T0 + SENTINEL_STALE_MS + 1;
+        writeRecord(dir, { isolation: 'none', harness_flag: null, phase: '7', plan: null, decided_by: 'caller', decided_at: now - decisionAge, written_at: now - 60000 });
+        const rec = readSentinelAt(dir, { clock: { now: () => now } });
+        assert.equal(rec.stale, false, 'the guard\'s window is written_at\'s, which the re-record refreshed');
+        assert.equal(rec.holdExpired, holdExpired);
+        assert.equal(rec.decidedAt, now - decisionAge);
+      });
+    }
+
+    for (const [label, decidedAt] of [['absent', undefined], ['not a number', '1000'], ['not finite', null]]) {
+      test(`decided_at ${label} reads as written_at — a record from before the field`, () => {
+        const rec = { isolation: 'none', harness_flag: null, phase: null, plan: null, decided_by: 'caller', written_at: T0 };
+        if (decidedAt !== undefined) rec.decided_at = decidedAt;
+        writeRecord(dir, rec);
+        const read = readSentinelAt(dir, { clock: { now: () => T0 + SENTINEL_STALE_MS - 1 } });
+        assert.equal(read.decidedAt, T0);
+        assert.equal(read.holdExpired, false);
+      });
+    }
+
+    test('a decided_at later than written_at is clamped to written_at, so it cannot extend the hold', () => {
+      writeRecord(dir, { isolation: 'none', harness_flag: null, phase: null, plan: null, decided_by: 'caller', decided_at: T0 + 5 * SENTINEL_STALE_MS, written_at: T0 });
+      const read = readSentinelAt(dir, { clock: { now: () => T0 + SENTINEL_STALE_MS } });
+      assert.equal(read.decidedAt, T0);
+      assert.equal(read.holdExpired, true);
+    });
+  });
+
+  // End to end through gsd-tools: degrade at T0, a following gate renews it
+  // one minute before the window closes, then a plain query at the boundary.
+  // A renewing site passes back the `decidedAt` its own held answer reported.
+  function degradeThenRenew(dir, renewArgs) {
+    query(dir, T0, ['--raw', '--force-isolation', 'none']);
+    const RENEWED_AT = T0 + SENTINEL_STALE_MS - 60000;
+    const answer = JSON.parse(query(dir, RENEWED_AT - 1, ['--json']).output);
+    assert.equal(answer.held, true, 'precondition: the following site saw a held answer');
+    assert.equal(answer.decidedAt, T0, 'and the answer names when that degrade was decided');
+    const args = renewArgs.map((a) => (a === '<decidedAt>' ? String(answer.decidedAt) : a));
+    query(dir, RENEWED_AT, ['--raw', '--force-isolation', 'none', ...args]);
+    return { rec: readSentinelRaw(dir), RENEWED_AT };
+  }
+
+  test('--renew-held <decidedAt> refreshes written_at and records the decision the site followed', (t) => {
+    const dir = createTempProject('gsd-4904-renew-');
+    t.after(() => cleanup(dir));
+    const { rec, RENEWED_AT } = degradeThenRenew(dir, ['--renew-held', '<decidedAt>']);
+    assert.equal(rec.isolation, 'none');
+    assert.equal(rec.decided_by, 'caller');
+    assert.equal(rec.written_at, RENEWED_AT);
+    assert.equal(rec.decided_at, T0);
+  });
+
+  for (const { offset, held } of [
+    { offset: SENTINEL_STALE_MS - 1, held: true },
+    { offset: SENTINEL_STALE_MS, held: false },
+    { offset: SENTINEL_STALE_MS + 1, held: false },
+  ]) {
+    test(`a renewed hold, queried ${offset} ms after the degrade was decided -> ${held ? 'still held' : 'lapsed'}`, (t) => {
+      const dir = createTempProject('gsd-4904-renew-');
+      t.after(() => cleanup(dir));
+      degradeThenRenew(dir, ['--renew-held', '<decidedAt>']);
+      const r = query(dir, T0 + offset, ['--json']);
+      const answer = JSON.parse(r.output);
+      assert.equal(answer.held, held);
+      assert.equal(answer.isolation, held ? 'none' : 'harness-worktree');
+      assert.equal(answer.decidedAt, held ? T0 : null);
+      assert.equal(readSentinelRaw(dir).isolation, held ? 'none' : 'harness-worktree',
+        held ? 'a held query writes nothing' : 'a lapsed hold is replaced like any other expired record');
+    });
+  }
+
+  test('CONTROL: a forced none WITHOUT --renew-held is a new decision, and its own ten minutes are still running', (t) => {
+    const dir = createTempProject('gsd-4904-renew-');
+    t.after(() => cleanup(dir));
+    const { rec, RENEWED_AT } = degradeThenRenew(dir, []);
+    assert.equal(rec.decided_at, RENEWED_AT);
+    const answer = JSON.parse(query(dir, T0 + SENTINEL_STALE_MS, ['--json']).output);
+    assert.equal(answer.held, true, 'without the flag the second write restarted the hold — the behaviour the flag bounds');
+  });
+
+  // RV6.5 review of this round: renewal used to read the time from whatever
+  // caller `none` stood in the file at write time. Another plan's degrade
+  // recorded between a site's held query and its re-record then lent that
+  // site its own, later time, and extended the hold the site had followed.
+  test('the renewal records the decision the site followed, not another plan\'s record written in between', (t) => {
+    const dir = createTempProject('gsd-4904-renew-');
+    t.after(() => cleanup(dir));
+    query(dir, T0, ['--raw', '--phase', '7', '--plan', 'A', '--force-isolation', 'none']);
+    const seen = JSON.parse(query(dir, T0 + 540000, ['--json', '--phase', '7', '--plan', 'A']).output);
+    assert.equal(seen.held, true);
+    query(dir, T0 + 550000, ['--raw', '--phase', '8', '--plan', 'B', '--force-isolation', 'none']);
+    query(dir, T0 + 560000, ['--raw', '--phase', '7', '--plan', 'A', '--force-isolation', 'none', '--renew-held', String(seen.decidedAt)]);
+    assert.equal(readSentinelRaw(dir).decided_at, T0, 'plan A keeps its own decision time, not plan B\'s');
+    const later = JSON.parse(query(dir, T0 + SENTINEL_STALE_MS, ['--json', '--phase', '7', '--plan', 'A']).output);
+    assert.equal(later.held, false, 'so A\'s hold lapses ten minutes after A was decided');
+  });
+
+  for (const [label, value] of [
+    ['missing', undefined], ['negative', '-1'], ['fractional', '1000000000000.5'],
+    ['exponent', '1e12'], ['not a number', 'soon'], ['beyond a safe integer', '99999999999999999'],
+  ]) {
+    test(`--renew-held with a ${label} value is a fresh decision`, (t) => {
+      const dir = createTempProject('gsd-4904-renew-');
+      t.after(() => cleanup(dir));
+      query(dir, T0, ['--raw', '--force-isolation', 'none']);
+      const args = ['--raw', '--force-isolation', 'none', '--renew-held'];
+      if (value !== undefined) args.push(value);
+      query(dir, T0 + 60000, args);
+      assert.equal(readSentinelRaw(dir).decided_at, T0 + 60000);
+    });
+  }
+
+  test('a --renew-held time later than the write is clamped to the write, so it cannot extend a hold', (t) => {
+    const dir = createTempProject('gsd-4904-renew-');
+    t.after(() => cleanup(dir));
+    query(dir, T0, ['--raw', '--force-isolation', 'none', '--renew-held', String(T0 + 5 * SENTINEL_STALE_MS)]);
+    assert.equal(readSentinelRaw(dir).decided_at, T0);
+  });
+
+  test('--renew-held beside a forced capability is ignored — only a forced none renews a hold', (t) => {
+    const dir = createTempProject('gsd-4904-renew-');
+    t.after(() => cleanup(dir));
+    query(dir, T0, ['--raw', '--force-isolation', 'none']);
+    query(dir, T0 + 60000, ['--raw', '--force-isolation', 'harness-worktree', '--renew-held', String(T0)]);
+    const rec = readSentinelRaw(dir);
+    assert.equal(rec.isolation, 'harness-worktree');
+    assert.equal(rec.decided_at, T0 + 60000);
+  });
+
+  test('decidedAt is null on every answer that is not holding, inspect-dispatch-isolation included', (t) => {
+    const dir = createTempProject('gsd-4904-renew-');
+    t.after(() => cleanup(dir));
+    assert.equal(JSON.parse(query(dir, T0, ['--json']).output).decidedAt, null);
+    const r = runGsdTools(['query', 'inspect-dispatch-isolation', '--json'], dir, env(dir, T0));
+    assert.equal(r.success, true, r.error);
+    assert.equal(JSON.parse(r.output).decidedAt, null);
+  });
+
+  // Every shipped site that forces a value after a resolve block can be
+  // following a held none, and one that restarts the hold keeps the chain
+  // alive on its own. The scan covers every forced re-record, not only the
+  // `$ISOLATION` ones: the per-plan gate forces a literal `none` when it
+  // inherits a held USE_WORKTREES=false (RV6.5 review of this round). Three
+  // literal sites are new decisions by construction, each named with why.
+  const FRESH_DECISION_SITES = {
+    // only on an orchestrator-worktree host, which a held answer never is
+    'gsd-core/references/dispatch-isolation-gate.md': /--force-isolation none >\/dev\/null/,
+    // Pattern B segments never run a resolve block; Pattern A's is prose, not a shell line
+    'gsd-core/workflows/execute-plan.md': /--force-isolation none >\/dev\/null/,
+  };
+  test('every shipped forced re-record that can follow a held answer passes back its decidedAt', () => {
+    const roots = [path.join(__dirname, '..', 'gsd-core', 'workflows'), path.join(__dirname, '..', 'gsd-core', 'references')];
+    const sites = [];
+    const walk = (d) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const full = path.join(d, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (e.name.endsWith('.md')) {
+          const rel = path.relative(path.join(__dirname, '..'), full).split(path.sep).join('/');
+          splitLines(fs.readFileSync(full, 'utf8')).forEach((line, i) => {
+            if (/^\s*gsd_run query dispatch-isolation .*--force-isolation /.test(line)) sites.push({ rel, at: `${rel}:${i + 1}`, line });
+          });
+        }
+      }
+    };
+    roots.forEach(walk);
+    const fresh = sites.filter((s) => FRESH_DECISION_SITES[s.rel] && FRESH_DECISION_SITES[s.rel].test(s.line));
+    assert.deepEqual(fresh.map((s) => s.rel).sort(), Object.keys(FRESH_DECISION_SITES).sort(),
+      'each named fresh-decision site is still there, exactly once');
+    const following = sites.filter((s) => !fresh.includes(s));
+    assert.ok(following.length >= 7, `expected the gate's two, executor, per-plan, quick, diagnose-issues and quick-batch; found ${following.length}`);
+    const missing = following.filter((s) => !s.line.includes('${_RENEW_HELD:+--renew-held "$_RENEW_HELD"}'));
+    assert.deepEqual(missing.map((s) => s.at), [], 'a re-record that restarts a held degrade');
+  });
 });

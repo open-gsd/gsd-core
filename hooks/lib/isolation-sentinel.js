@@ -170,8 +170,8 @@ function resolveSentinelRoot(cwd) {
  * Returns one of:
  *   { present: false }
  *   { present: true, stale: true,  malformed: true }
- *   { present: true, stale: true,  malformed: false, isolation, harnessFlag, phase, plan, writtenAt }
- *   { present: true, stale: false, malformed: false, isolation, harnessFlag, phase, plan, writtenAt }
+ *   { present: true, stale: true,  malformed: false, isolation, harnessFlag, phase, plan, decidedBy, writtenAt, decidedAt, holdExpired }
+ *   { present: true, stale: false, malformed: false, isolation, harnessFlag, phase, plan, decidedBy, writtenAt, decidedAt, holdExpired }
  *
  * A malformed/unparseable sentinel is treated as STALE, never fatal — the
  * caller's conservative fallback path covers both "absent" and "stale"
@@ -238,6 +238,18 @@ function readSentinelAt(root, { clock = Date } = {}) {
   // could have been re-derived costs one sequential run, while clobbering one
   // the caller owns makes the guard refuse the dispatch entirely (#4222).
   const decidedBy = parsed.decided_by === 'resolver' ? 'resolver' : 'caller';
+  // #4904 review: WHEN the decision was first made. A gate that follows a
+  // held `none` re-records it (the guard judges the dispatch against the
+  // record present at that instant), which refreshes `written_at`; the
+  // re-record carries `decided_at` forward unchanged, so the hold below is
+  // bounded by the degrade's own age rather than renewed by every gate that
+  // follows it. Absent or not a finite number reads as `written_at` (a record
+  // from before this field). Never later than `written_at`: no record can
+  // have been decided after it was written, so a larger value cannot extend
+  // the hold.
+  const decidedAt = typeof parsed.decided_at === 'number' && Number.isFinite(parsed.decided_at)
+    ? Math.min(parsed.decided_at, parsed.written_at)
+    : parsed.written_at;
 
   const now = clock.now();
   const age = now - parsed.written_at;
@@ -245,6 +257,10 @@ function readSentinelAt(root, { clock = Date } = {}) {
   // written in the future — never trust it, but still surface the parsed
   // fields so callers can log an actionable reason.
   const stale = age >= SENTINEL_STALE_MS || age < -5000;
+  // The resolver's hold (gsd-tools.cjs `heldDegradeRecord`) lapses on the
+  // same window as `stale`, measured from `decided_at`. The guards keep
+  // reading `stale`, which a re-record refreshes.
+  const holdExpired = stale || now - decidedAt >= SENTINEL_STALE_MS;
 
   return {
     present: true,
@@ -256,6 +272,8 @@ function readSentinelAt(root, { clock = Date } = {}) {
     plan,
     decidedBy,
     writtenAt: parsed.written_at,
+    decidedAt,
+    holdExpired,
   };
 }
 

@@ -139,8 +139,14 @@ and the workflow read one decision rather than two. A dispatch site therefore te
 `none` (follow it: run sequentially) from a host that declares no primitive (fail closed) by
 that field. It still re-records its final `none`, at its own scope: the guard judges a
 dispatch against the record present at that instant, and a held record can name another phase
-or plan, or lapse before the site dispatches. Each gate that follows a hold therefore renews it,
-which errs toward sequential dispatch. The host's *descriptors* — the harness flag and the orchestrator exec — are not
+or plan, or lapse before the site dispatches. That re-record must not renew the hold, or runs
+started less than ten minutes apart keep a degrade alive indefinitely and it outlives the HEAD
+divergence that caused it. So the record also carries `decided_at`, when the degrade was decided.
+A held answer reports its `decidedAt`, and a site re-recording that `none` passes it back as
+`--renew-held <decidedAt>`: the write refreshes `written_at` for the guard and records the
+decision the site followed, and the hold lapses ten minutes after it however many gates follow.
+The time travels with the answer rather than being read from the file at write time, which by
+then can hold another plan's record. A forced `none` without the flag is a new decision. The host's *descriptors* — the harness flag and the orchestrator exec — are not
 decisions and are read from `inspect-dispatch-isolation`, which records nothing and holds
 nothing; read through the deciding query, a degrade recorded for one plan would answer for
 another plan's dispatch.
