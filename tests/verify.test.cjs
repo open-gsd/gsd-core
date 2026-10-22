@@ -2704,34 +2704,46 @@ describe('bug-967 verify key-links strict file-path contract', () => {
     );
   });
 });
+  });
+}
 
 // ── 7. Doc-contract guard #4946: gsd-planner.md, planner-guidance.md & parity across surfaces ──
-// Markdown prompt files are runtime contracts executed by LLM agents (see CONTRIBUTING exception matrix).
-// No per-line allow-test-rule markers needed since no-source-grep ignores markdown reads (CONTRIBUTING.md:867).
+// Markdown prompt files are runtime contracts executed by LLM agents.
+// No per-line allow-test-rule markers needed since eslint-rules/no-source-grep.cjs inspects only .cjs/.cts/.js/.mjs/.mts/.ts source files, not markdown reads.
 describe('bug #4946: planner key_links schema contract and cross-surface parity', () => {
-  test('#4946: agents/gsd-planner.md states that key_links from/to must be relative file paths only', () => {
+  test('#4946: agents/gsd-planner.md states that key_links from/to must be relative file paths only and documents pattern rule', () => {
     const plannerPath = path.join(__dirname, '..', 'agents', 'gsd-planner.md');
     assert.ok(fs.existsSync(plannerPath), `gsd-planner.md not found at ${plannerPath}`);
     const content = fs.readFileSync(plannerPath, 'utf-8');
 
     assert.match(
       content,
-      /`from` and `to` MUST be project-relative file paths only/i,
+      /`from`.*`to`.*relative file path/i,
       'agents/gsd-planner.md must state that key_links from/to must be project-relative file paths only',
     );
     assert.match(
       content,
-      /Never put symbols, functions, or endpoints in `from:` or `to:`/i,
+      /never (?:put|place).*(?:symbols?|endpoints?).*(?:in `from:`|in `to:`)/i,
       'agents/gsd-planner.md must instruct never to put symbols or endpoints in from/to',
     );
     assert.match(
       content,
-      /Symbols, functions, endpoints.*MUST be placed in `via:`/i,
+      /(?:symbols?|endpoints?).*(?:placed in `via:`|belong in `via:`|in `via:`)/i,
       'agents/gsd-planner.md must instruct that symbols, endpoints, and details belong in via:',
+    );
+    assert.match(
+      content,
+      /(?:`to`.*appear.*`from`|specify `pattern`)/i,
+      'agents/gsd-planner.md must document that to must appear in from unless pattern is given',
+    );
+    assert.match(
+      content,
+      /key_links:\s*\[\]\s*#.*\(from\/to MUST be project-relative file paths; symbols\/endpoints go in via:\)/,
+      'agents/gsd-planner.md must carry the key_links contract comment on its frontmatter stub',
     );
   });
 
-  test('#4946: gsd-core/references/planner-guidance.md carries key_links field schema contract table', () => {
+  test('#4946: gsd-core/references/planner-guidance.md carries key_links field schema contract table and pattern rule', () => {
     const guidancePath = path.join(__dirname, '..', 'gsd-core', 'references', 'planner-guidance.md');
     assert.ok(fs.existsSync(guidancePath), `planner-guidance.md not found at ${guidancePath}`);
     const content = fs.readFileSync(guidancePath, 'utf-8');
@@ -2760,18 +2772,21 @@ describe('bug #4946: planner key_links schema contract and cross-surface parity'
       /All symbols, methods, and endpoints belong in `via:`/i,
       'planner-guidance.md must explicitly instruct that symbols and endpoints belong in via:',
     );
+    assert.match(
+      content,
+      /When `pattern` is omitted, `verify key-links` checks that the `to` path string appears in the `from` file/i,
+      'planner-guidance.md must document that verify key-links requires to in from when pattern is omitted',
+    );
   });
 
-  test('#4946: parity: planner-guidance.md, phase-prompt.md, plan-md.md, and gsd-planner.md agree on key_links contract', () => {
+  test('#4946: parity: planner-guidance.md, phase-prompt.md, and plan-md.md agree on key_links contract', () => {
     const tableSurfaces = [
       ['planner-guidance.md', path.join(__dirname, '..', 'gsd-core', 'references', 'planner-guidance.md')],
       ['phase-prompt.md', path.join(__dirname, '..', 'gsd-core', 'templates', 'phase-prompt.md')],
       ['plan-md.md', path.join(__dirname, '..', 'docs', 'reference', 'plan-md.md')],
     ];
 
-    for (const [name, filePath] of tableSurfaces) {
-      assert.ok(fs.existsSync(filePath), `${name} must exist at ${filePath}`);
-      const content = fs.readFileSync(filePath, 'utf-8');
+    function checkTableSurface(name, content) {
       const lines = content.split(/\r?\n/);
 
       const fromRow = lines.find((l) => /^\|\s*`key_links\[\]\.from`\s*\|/.test(l));
@@ -2812,54 +2827,50 @@ describe('bug #4946: planner key_links schema contract and cross-surface parity'
         /symbol/i,
         `${name} key_links[].via row must document symbol names belong in via`,
       );
+
+      const patternRow = lines.find((l) => /^\|\s*`key_links\[\]\.pattern`\s*\|/.test(l));
+      assert.ok(patternRow, `${name} must include a field table row for key_links[].pattern`);
+      assert.match(
+        patternRow,
+        /regex/i,
+        `${name} key_links[].pattern row must document regex verification`,
+      );
+      assert.match(
+        patternRow,
+        /when omitted.*`to`.*`from`/i,
+        `${name} key_links[].pattern row must state the fallback rule that to must appear in from when omitted`,
+      );
     }
 
-    // gsd-planner.md prompt contract checks
-    const plannerPath = path.join(__dirname, '..', 'agents', 'gsd-planner.md');
-    assert.ok(fs.existsSync(plannerPath), `gsd-planner.md must exist at ${plannerPath}`);
-    const plannerContent = fs.readFileSync(plannerPath, 'utf-8');
+    for (const [name, filePath] of tableSurfaces) {
+      assert.ok(fs.existsSync(filePath), `${name} must exist at ${filePath}`);
+      const content = fs.readFileSync(filePath, 'utf-8');
+      checkTableSurface(name, content);
+    }
 
-    assert.match(
-      plannerContent,
-      /`from` and `to` MUST be project-relative file paths only/i,
-      'agents/gsd-planner.md must specify relative file paths only for from/to',
-    );
-    assert.match(
-      plannerContent,
-      /Never put symbols, functions, or endpoints in `from:` or `to:`/i,
-      'agents/gsd-planner.md must prohibit symbols, functions, and endpoints in from/to',
-    );
-    assert.match(
-      plannerContent,
-      /Symbols, functions, endpoints.*MUST be placed in `via:`/i,
-      'agents/gsd-planner.md must instruct that symbols and endpoints belong in via:',
-    );
-    assert.match(
-      plannerContent,
-      /key_links:\s*\[\]\s*#.*\(from\/to MUST be project-relative file paths; symbols\/endpoints go in via:\)/,
-      'agents/gsd-planner.md must carry the key_links contract comment on its frontmatter stub',
-    );
-
-    // Negative control: verify that mutating table row content causes assertion failures
-    const dummyBadRow = '| `key_links[].from` | Source file without relative path. |';
-    assert.throws(
-      () => {
-        assert.match(dummyBadRow, /^\|\s*`key_links\[\]\.from`\s*\|.*relative path from project root/i);
-      },
-      (err) => err instanceof assert.AssertionError,
-      'Negative control: row missing "relative path from project root" must fail assertion',
+    // Negative control: run checkTableSurface over mutated copies of loaded surface content
+    const baseGuidance = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'references', 'planner-guidance.md'), 'utf-8');
+    const mutatedWithoutRelativePath = baseGuidance.replace(
+      'relative path from project root',
+      'arbitrary file path',
     );
     assert.throws(
-      () => {
-        assert.match(dummyBadRow, /via:/i);
-      },
+      () => checkTableSurface('mutated-guidance-no-relative', mutatedWithoutRelativePath),
       (err) => err instanceof assert.AssertionError,
-      'Negative control: row missing "via:" must fail assertion',
+      'Negative control: guidance without relative path requirement must fail checkTableSurface',
+    );
+
+    const mutatedWithoutPatternFallback = baseGuidance.replace(
+      'When omitted, verification requires the `to` path string to appear in `from`.',
+      'Optional parameter.',
+    );
+    assert.throws(
+      () => checkTableSurface('mutated-guidance-no-pattern-fallback', mutatedWithoutPatternFallback),
+      (err) => err instanceof assert.AssertionError,
+      'Negative control: guidance without pattern fallback rule must fail checkTableSurface',
     );
   });
 });
-  });
-}
 
 // ────────────────────────────────────────────────────────────────────────
 // Folded from tests/enh-2446-milestones-drift.test.cjs — consolidation epic #1969 (B3 #1972)
