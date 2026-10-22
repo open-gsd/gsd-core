@@ -367,7 +367,6 @@ function writeActiveWorkstreamPointer(tmpDir, name) {
  * substitutes for `$ARGUMENTS`.
  */
 function runSafetyCommitFence(tmpDir, args) {
-  // allow-test-rule: source-text-is-the-product (#5195)
   const lines = splitLines(fs.readFileSync(COMPLETE_MILESTONE_WORKFLOW, 'utf8'));
   const fences = scanFencedBlocks(lines)
     .filter((b) => b.closeLineIdx !== -1 && b.infoString.trim().toLowerCase() === 'bash')
@@ -488,8 +487,7 @@ describe('complete-milestone supplies the workstream fact; the PROJECT.md review
   });
 
   test('the workflow no longer claims PROJECT.md is workstream-scoped (row F9)', () => {
-    // allow-test-rule: source-text-is-the-product (#5195)
-    const workflow = fs.readFileSync(COMPLETE_MILESTONE_WORKFLOW, 'utf8');
+    const workflow =fs.readFileSync(COMPLETE_MILESTONE_WORKFLOW, 'utf8');
     assert.ok(
       !/MILESTONES\.md and PROJECT\.md are workstream-scoped/.test(workflow),
       'the false "PROJECT.md is workstream-scoped" sentence must be corrected (it is shared since #4543)',
