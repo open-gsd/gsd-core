@@ -392,11 +392,6 @@ describe('install: --minimal honoured for every runtime, on-disk matches manifes
             [...manifestSkillSet(manifest)].sort(),
             [...MINIMAL_SKILL_ALLOWLIST].sort(),
           );
-          // #5503: core stages only the agents its eight skills spawn (a runtime with no agents
-          // kind still stages none).
-          assert.ok(manifestAgentCount(manifest) <= CORE_SPAWNED_AGENTS.size,
-            `${runtime} ${scope}: at most the core-spawned agents, got ${manifestAgentCount(manifest)}`);
-
           const onDisk = collectSkillBasenamesOnDiskSandboxed(configDir, runtime, scope, root);
           const inManifest = manifestSkillSet(manifest);
           assert.deepStrictEqual([...onDisk].sort(), [...inManifest].sort());
@@ -407,8 +402,13 @@ describe('install: --minimal honoured for every runtime, on-disk matches manifes
             const gsdAgents = fs.readdirSync(agentsDir)
               .filter(f => f.startsWith('gsd-') && f.endsWith('.md'))
               .map(f => f.slice(0, -3));
-            for (const agent of gsdAgents) {
-              assert.ok(CORE_SPAWNED_AGENTS.has(agent), `${agent} is not spawned by a core skill and must not be staged`);
+            // #5503: a runtime that stages agents at all stages exactly the ones the eight core
+            // skills spawn: not none (the bug), not the full roster.
+            if (gsdAgents.length > 0) {
+              assert.deepStrictEqual([...gsdAgents].sort(), [...CORE_SPAWNED_AGENTS].sort(),
+                `${runtime} ${scope}: staged agents must be exactly the core-spawned set`);
+              assert.strictEqual(manifestAgentCount(manifest), gsdAgents.length,
+                `${runtime} ${scope}: manifest agent count must match the staged agents`);
             }
           }
         } finally {
@@ -428,7 +428,8 @@ describe('install: Cline --minimal (rules-based, no skills/ dir)', () => {
       try {
         assert.ok(manifest, 'cline must produce manifest');
         assert.strictEqual(manifest.mode, 'minimal');
-        assert.ok(manifestAgentCount(manifest) <= CORE_SPAWNED_AGENTS.size);
+        // Cline has no agents kind: nothing is staged for it, core or not.
+        assert.strictEqual(manifestAgentCount(manifest), 0);
         assert.ok(fs.existsSync(path.join(configDir, '.clinerules')));
       } finally {
         cleanup(root);
@@ -3555,6 +3556,19 @@ describe('#5503 core profile stages the agents its skills spawn', () => {
       }
     });
   }
+
+  test('a full -> core downgrade prunes the non-core agents and keeps the core ones', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5503-downgrade-'));
+    try {
+      const full = runMinimalInstall({ runtime: 'claude', scope: 'global', extraArgs: ['--profile=full'], root });
+      const fullAgents = installedAgentStems(full.configDir);
+      assert.ok(fullAgents.length > expected.length, 'precondition: a full install stages more agents than core');
+      const core = runMinimalInstall({ runtime: 'claude', scope: 'global', extraArgs: ['--profile=core'], root });
+      assert.deepStrictEqual(installedAgentStems(core.configDir), expected, 'the downgrade must leave exactly the core agent set');
+    } finally {
+      cleanup(root);
+    }
+  });
 
   test('codex core agent source matches the profile, not the whole roster', () => {
     const { configDir, root } = runMinimalInstall({ runtime: 'codex', scope: 'global', extraArgs: ['--profile=core'] });
