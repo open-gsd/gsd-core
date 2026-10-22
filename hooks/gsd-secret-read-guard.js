@@ -112,7 +112,9 @@
 //   scanGitConfig are scanned. Config files, `--config-env` / `GIT_CONFIG_*`
 //   and the `GIT_EDITOR` / `GIT_SEQUENCE_EDITOR` / `GIT_SSH_COMMAND` twins
 //   are not, even as a `VAR=… git` prefix on the same command; nor are keys
-//   outside those sets, or a `credential.helper` program path without `!`.
+//   outside those sets, program-path keys (`difftool.<tool>.path` and the
+//   like, `core.hooksPath`) whose script the hook cannot see, or the
+//   `--upload-pack=` / `--receive-pack=` / `--exec=` subcommand options.
 //   `core.pager` / `pager.*` are allowed on purpose (no TTY, nothing printed).
 //
 // A second, unrelated contract is enforced on the Bash leg because this is the
@@ -253,14 +255,26 @@ const GIT_GLOBAL_FLAGS = new Set([
 // Git config keys whose value git runs as a command (#5045, #5492), by shape:
 // `section.name`, or `section.*.name` for any subsection (see gitConfigShape).
 // `core.pager` / `pager.*` are deliberately absent: with no TTY they print
-// nothing. A BANG key's value is a command only when it starts with `!`;
-// otherwise git runs `git credential-<value>`.
+// nothing. `core.askpass`, `core.gitproxy` and `sendemail.smtpserver` exec a
+// program rather than a shell, so a value with arguments never runs; they are
+// scanned conservatively anyway. A BANG key's value runs through the shell
+// with or without a leading `!` (a credential helper's absolute path runs
+// verbatim, any other as `git credential-<value>`; a submodule update without
+// `!` is a fixed mode word), so one `!` is dropped before scanning.
 const GIT_COMMAND_CONFIG_KEYS = new Set([
   'diff.external', 'sequence.editor', 'core.editor', 'core.sshcommand', 'core.fsmonitor', 'gpg.program',
   'diff.*.textconv', 'diff.*.command', 'filter.*.clean', 'filter.*.smudge', 'filter.*.process',
   'gpg.*.program', 'merge.*.driver',
+  'core.askpass', 'core.gitproxy', 'core.alternaterefscommand', 'uploadpack.packobjectshook',
+  'gc.recentobjectshook', 'interactive.difffilter', 'imap.tunnel', 'instaweb.httpd',
+  'difftool.*.cmd', 'mergetool.*.cmd', 'browser.*.cmd', 'man.*.cmd', 'guitool.*.cmd',
+  'trailer.*.cmd', 'trailer.*.command', 'gpg.*.defaultkeycommand', 'tar.*.command',
+  'remote.*.uploadpack', 'remote.*.receivepack',
+  'sendemail.smtpserver', 'sendemail.sendmailcmd', 'sendemail.tocmd', 'sendemail.cccmd', 'sendemail.headercmd',
+  'sendemail.*.smtpserver', 'sendemail.*.sendmailcmd', 'sendemail.*.tocmd', 'sendemail.*.cccmd',
+  'sendemail.*.headercmd',
 ]);
-const GIT_BANG_COMMAND_CONFIG_KEYS = new Set(['credential.helper', 'credential.*.helper']);
+const GIT_BANG_COMMAND_CONFIG_KEYS = new Set(['credential.helper', 'credential.*.helper', 'submodule.*.update']);
 
 // #4856: `cp`/`mv` write their destination and never print it, so a secret
 // name that is ONLY the destination of a one-source copy or move is a name
@@ -966,7 +980,8 @@ function gitConfigShape(key) {
  * Rescan the command-valued -c keys selected by #5045 and #5492 (alias.*=!,
  * GIT_COMMAND_CONFIG_KEYS, GIT_BANG_COMMAND_CONFIG_KEYS). This deliberately
  * does not resolve config files, --config-env/GIT_CONFIG_* values, the
- * GIT_EDITOR-style environment twins, or keys outside those sets.
+ * GIT_EDITOR-style environment twins, program-path keys, or keys outside
+ * those sets.
  * Those are documented gaps, not a promise of complete Git config analysis.
  * Global option values and subcommand arguments are data, not more -c flags.
  */
@@ -979,7 +994,7 @@ function scanGitConfig(operands, depth) {
     const shape = gitConfigShape(key);
     let script;
     if (key.startsWith('alias.') && value.startsWith('!')) script = value.slice(1);
-    else if (GIT_BANG_COMMAND_CONFIG_KEYS.has(shape) && value.startsWith('!')) script = value.slice(1);
+    else if (GIT_BANG_COMMAND_CONFIG_KEYS.has(shape)) script = value.startsWith('!') ? value.slice(1) : value;
     else if (GIT_COMMAND_CONFIG_KEYS.has(shape)) script = value;
     else continue;
     const hit = findSecretRead(script, depth + 1);
