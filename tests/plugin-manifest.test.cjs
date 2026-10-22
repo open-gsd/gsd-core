@@ -47,7 +47,8 @@ const HOOKS_JSON_PATH  = path.join(ROOT, 'hooks', 'hooks.json');
 const CLAUDE_VERSION_PROBE_TIMEOUT_MS = 5000;
 
 // #4860: `claude plugin details` loads the whole plugin tree (72 skills, 64 agents,
-// hooks) before printing, so it is a heavier class of subprocess than the
+// hooks) before printing (#5504: the same bound covers the `claude -p` loader-listing run in
+// the registers-once test), so it is a heavier class of subprocess than the
 // `--version` probe above or PROBE_TIMEOUT_MS; measured at a few seconds locally.
 const CLAUDE_PLUGIN_DETAILS_TIMEOUT_MS = 60000;
 
