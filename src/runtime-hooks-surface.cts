@@ -970,6 +970,13 @@ function _installEngineSymlinkGuard(): InstallEngineSymlinkGuard {
 }
 
 /**
+ * Largest hooks.json reconcileCodexHooksJsonEvent and
+ * codexHooksJsonHasManagedHooks will read. A real one holds a few hook
+ * entries, so a file this size is not one GSD wrote.
+ */
+const CODEX_HOOKS_JSON_MAX_BYTES = 1024 * 1024;
+
+/**
  * Whether one hook object in a Codex hooks.json event entry is GSD's. The
  * removal in reconcileCodexHooksJsonEvent and the read-only
  * codexHooksJsonHasManagedHooks both ask this, so they agree on what a
@@ -1007,9 +1014,21 @@ function reconcileCodexHooksJsonEvent(targetDir: string, eventName: string, opts
   let parsed: Record<string, unknown> = {};
   let currentContent: string | null = null;
   if (fs.existsSync(effectiveHooksJsonPath)) {
-    const raw = fs.readFileSync(effectiveHooksJsonPath, 'utf8');
-    currentContent = raw;
-    if (raw.trim()) {
+    // Bounded like codexHooksJsonHasManagedHooks's read, so a FIFO cannot
+    // block uninstall here and an oversized file is not read whole and then
+    // rewritten. Either is refused with an error naming the file, the same
+    // way an unparseable one is, and the file is left alone. Install reads
+    // hooks.json earlier and unbounded (installer migration 002's readJson
+    // and the pre-install snapshot), so a FIFO still blocks install there.
+    let raw: string | null;
+    try {
+      raw = readSmallRegularFile(effectiveHooksJsonPath, CODEX_HOOKS_JSON_MAX_BYTES);
+    } catch (err) {
+      throw new Error(`hooks.json could not be read: ${err && (err as Error).message ? (err as Error).message : String(err)}`);
+    }
+    // null only when the file vanished after existsSync: treat it as absent.
+    if (raw !== null) currentContent = raw;
+    if (raw !== null && raw.trim()) {
       try {
         parsed = JSON.parse(raw) as Record<string, unknown>;
       } catch (err) {
@@ -1294,12 +1313,6 @@ function removeCodexHooksJsonEvent(targetDir: string, eventName: string): Reconc
 function removeCodexHooksJsonSessionStart(targetDir: string): ReconcileResult {
   return reconcileCodexHooksJsonSessionStart(targetDir, { managedCommand: null });
 }
-
-/**
- * Largest hooks.json codexHooksJsonHasManagedHooks will read. A real one holds
- * a few hook entries, so a file this size is not one GSD wrote.
- */
-const CODEX_HOOKS_JSON_MAX_BYTES = 1024 * 1024;
 
 /**
  * Read-only: whether removing `eventNames` from `targetDir`'s hooks.json would
