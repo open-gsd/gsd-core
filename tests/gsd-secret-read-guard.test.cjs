@@ -1160,26 +1160,28 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
 
   // The other two were quadratic outside any loop: a copy of the waiting
   // heredocs for each `((` read-ahead, and a flattening of the word being
-  // built at each `@(`. No step count sees either, so these two run the hook
-  // at the size cap, and the spawn timeout (QUICK_SPAWN_TIMEOUT_MS, 10 s) is
-  // their failure signal, as an exemption from the no-elapsed-time rule.
-  // CPU time of the hook on Node 24: 0.6 s and 1.0 s as they stand, 10.8 s
-  // and 18.4 s with the copy or the flattening put back; the first of those
-  // is barely past the timeout, so that test is a weak detector.
+  // built at each `@(`. No count sees either: the copy is gone from the code,
+  // so there is nothing left to count, and the flattening happens inside V8.
+  // So no test here detects either being put back (on Node 24 the hook took
+  // 10.8 s and 18.4 s with them, against 0.6 s and 1.0 s without). These two
+  // hold the verdict at the size cap, in process: a throw on either path,
+  // which the hook would turn into an allow, still fails them.
   test('arithmetic probes behind waiting heredocs: blocks the read in the case after them', () => {
     // 38,000 heredocs waiting for a body, then 72,000 probes, just under the
     // command-size cap.
     const waiting = ' $(cat <<X)'.repeat(38000);
     const probes = '((1)); '.repeat(72000);
     const cmd = `echo "$(echo${waiting}; ${probes}case x in x) cat .env;; esac)"\n${'X\n'.repeat(38000)}`;
-    assertBlocked(runHook(bash(cmd)), '72000 probes behind 38000 waiting heredocs', { tool: 'Bash', path: '.env' });
+    assert.ok(cmd.length <= MAX_COMMAND_LENGTH, `${cmd.length} characters`);
+    assert.deepEqual(checkBashCommand(cmd), { code: 'secret-read', hit: '.env' });
   });
 
   test('a long word of extended-glob groups: blocks the read in the case after it', () => {
     // Each `@(` asks what the word ends in, which must not be read from the
     // word as it is being built.
     const cmd = `echo "$(echo ${'a@(x)'.repeat(209000)}; case x in x) cat .env;; esac)"`;
-    assertBlocked(runHook(bash(cmd)), '209000 extended-glob groups in one word', { tool: 'Bash', path: '.env' });
+    assert.ok(cmd.length <= MAX_COMMAND_LENGTH, `${cmd.length} characters`);
+    assert.deepEqual(checkBashCommand(cmd), { code: 'secret-read', hit: '.env' });
   });
 
   const allows = [
