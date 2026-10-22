@@ -28,6 +28,7 @@ PHASE_ARG="${1}"
 GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 INIT=$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_ARG}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
+PHASE_NUMBER=$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_ARG}" --pick phase_number)
 AGENT_SKILLS_FIXER=$(gsd_run query agent-skills gsd-code-fixer ${GSD_WS:+--ws=${GSD_WS##* }})
 AGENT_SKILLS_REVIEWER=$(gsd_run query agent-skills gsd-code-reviewer ${GSD_WS:+--ws=${GSD_WS##* }})
 # #2072: resolve the routed models so model_overrides / models.<phaseType> are honored
@@ -89,7 +90,7 @@ FIX_REPORT_PATH="${PHASE_DIR}/${PADDED_PHASE}-REVIEW-FIX.md"
 Check if code review is active via the capability registry:
 
 ```bash
-EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)
+EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw --phase "${PHASE_NUMBER}" ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
 
 Resolve active step hooks from `EXECUTE_POST_HOOKS_JSON` where `kind == "step"` and `ref.skill == "code-review"`.

@@ -26,6 +26,7 @@ PHASE_ARG=$(echo "$GSD_ARGS" | sed -E 's/--ws[[:space:]]+[A-Za-z0-9._-]+//g' | x
 GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 INIT=$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_ARG}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
+PHASE_NUMBER=$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_ARG}" --pick phase_number)
 AGENT_SKILLS_AUDITOR=$(gsd_run query agent-skills gsd-nyquist-auditor ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
 
@@ -35,7 +36,7 @@ Parse: `phase_dir`, `phase_number`, `phase_name`, `phase_slug`, `padded_phase`.
 
 ```bash
 AUDITOR_MODEL=$(gsd_run query resolve-model gsd-nyquist-auditor --raw)
-VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)
+VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw --phase "${PHASE_NUMBER}" ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
 
 Resolve active step hooks from `VERIFY_POST_HOOKS_JSON` where `kind == "step"` and `ref.skill == "validate-phase"`.

@@ -29,6 +29,8 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 TDD_MODE=${TDD_MODE:-$(gsd_run loop render-hooks execute:post --active-cap tdd)}
 # #4772: this file is Read, not textually substituted - write the parent command's original argument string in place of $ARGUMENTS so --ws reaches the query.
 GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+PHASE_ARG=$(echo "$GSD_ARGS" | sed -E 's/--ws[[:space:]]+[A-Za-z0-9._-]+//g' | xargs)
+PHASE_NUMBER=${PHASE_NUMBER:-$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_ARG}" --pick phase_number)}
 VERIFIER_SKILLS=$(gsd_run query agent-skills gsd-verifier ${GSD_WS:+--ws=${GSD_WS##* }})
 CONTEXT_WINDOW=$(gsd_run query config-get context_window --raw 2>/dev/null || echo "200000")
 PHASE_GOAL=$(gsd_run query roadmap.get-phase "${PHASE_NUMBER}" ${GSD_WS:+--ws} ${GSD_WS:+"${GSD_WS##*[[:space:]]}"} --pick goal)
@@ -42,7 +44,7 @@ fingerprinted yet, and gating on it here would be a no-op by construction (the a
 in `scripts/lint-verify-lifecycle-writes.allowlist.json`).
 
 ```bash
-VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)
+VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw --phase "${PHASE_NUMBER}" ${GSD_WS:+--ws=${GSD_WS##* }})
 SECURITY_FILE=$(ls "${PHASE_DIR}"/*-SECURITY.md 2>/dev/null | head -1)
 ```
 
@@ -69,7 +71,7 @@ If an active secure-phase step hook exists AND SECURITY.md exists: check frontma
 
 **Capability gate:**
 ```bash
-EXECUTE_POST_HOOKS_JSON=${EXECUTE_POST_HOOKS_JSON:-$(gsd_run loop render-hooks execute:post --raw)}
+EXECUTE_POST_HOOKS_JSON=${EXECUTE_POST_HOOKS_JSON:-$(gsd_run loop render-hooks execute:post --raw --phase "${PHASE_NUMBER}" ${GSD_WS:+--ws=${GSD_WS##* }})}
 ```
 
 Dispatch `kind == "step"` hooks per @gsd-core/references/loop-hook-dispatch.md. `ref.skill == "code-review"`:

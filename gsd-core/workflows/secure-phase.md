@@ -26,6 +26,7 @@ PHASE_ARG=$(echo "$GSD_ARGS" | sed -E 's/--ws[[:space:]]+[A-Za-z0-9._-]+//g' | x
 GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 INIT=$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_ARG}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
+PHASE_NUMBER=$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_ARG}" --pick phase_number)
 AGENT_SKILLS_AUDITOR=$(gsd_run query agent-skills gsd-security-auditor ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
 
@@ -35,7 +36,7 @@ Parse: `phase_dir`, `phase_number`, `phase_name`, `phase_slug`, `padded_phase`.
 
 ```bash
 AUDITOR_MODEL=$(gsd_run query resolve-model gsd-security-auditor --raw)
-VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)
+VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw --phase "${PHASE_NUMBER}" ${GSD_WS:+--ws=${GSD_WS##* }})
 SECURITY_ASVS=$(gsd_run query config-get workflow.security_asvs_level --raw 2>/dev/null || echo "1")
 SECURITY_BLOCK_ON=$(gsd_run query config-get workflow.security_block_on --raw 2>/dev/null || echo "high")
 ```
