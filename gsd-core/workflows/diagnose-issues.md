@@ -129,8 +129,9 @@ if [ "$ISOLATION" = "harness-worktree" ]; then
 fi
 
 # Re-record after the base-check degrade, immediately before the spawn below, so the
-# #3045 sentinel matches the dispatch the guard is about to see (#3045).
-gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" >/dev/null 2>&1 || true
+# #3045 sentinel matches the dispatch the guard is about to see (#3045). After a
+# held `none`, `--renew-held` keeps the held decision's `decided_at`.
+gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" ${_RENEW_HELD:+--renew-held "$_RENEW_HELD"} >/dev/null 2>&1 || true
 
 # Model resolution for the debugger spawns below (#3602).
 DEBUGGER_MODEL=$(gsd_run query resolve-model gsd-debugger --raw)

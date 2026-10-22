@@ -16,7 +16,7 @@ if [ "$ISOLATION" = "harness-worktree" ] && [ "${USE_WORKTREES:-true}" != "false
     ISOLATION=none
   fi
 fi
-gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" >/dev/null 2>&1 || true
+gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" ${_RENEW_HELD:+--renew-held "$_RENEW_HELD"} >/dev/null 2>&1 || true
 ```
 
 **Effective concurrency for this MUTATING wave** (`mutating` forces

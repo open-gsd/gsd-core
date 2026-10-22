@@ -415,7 +415,7 @@ fi
 # (`none` also clears the stored harnessFlag, since none applies to sequential
 # dispatch). Best-effort: a write failure here must never fail the task — the
 # guards' own sentinel-absent fallback is safe, just less precise.
-gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" >/dev/null 2>&1 || true
+gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" ${_RENEW_HELD:+--renew-held "$_RENEW_HELD"} >/dev/null 2>&1 || true
 ```
 
 Capture current HEAD before spawning (used for worktree branch check):
