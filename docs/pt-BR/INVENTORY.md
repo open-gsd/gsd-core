@@ -12,7 +12,7 @@ Este é o registro autoritativo de toda superfície do GSD Core entregue. Veja o
 
 ---
 
-## Agentes (33 entregues)
+## Agentes
 
 Registro completo em `agents/gsd-*.md`. A coluna "Documento primário" indica se [`docs/AGENTS.md`](AGENTS.md) apresenta um cartão de função completo (*primary*), um stub resumido na seção "Agentes Avançados e Especializados" (*advanced stub*), ou nenhuma cobertura (*inventory only*).
 
@@ -56,7 +56,7 @@ Registro completo em `agents/gsd-*.md`. A coluna "Documento primário" indica se
 
 ---
 
-## Comandos (67 entregues)
+## Comandos
 
 Registro completo em `commands/gsd/*.md`. Os agrupamentos abaixo espelham a ordem das seções de `docs/COMMANDS.md`; cada linha traz o nome do comando, uma função em uma linha derivada do `description:` do frontmatter do comando e um link para o arquivo-fonte. `tests/command-count-sync.test.cjs` trava a contagem contra o sistema de arquivos.
 
@@ -167,7 +167,7 @@ Esses seis roteadores são entradas apenas descritivas que o modelo seleciona pr
 
 ---
 
-## Workflows (88 entregues)
+## Workflows
 
 Registro completo em `gsd-core/workflows/*.md`. Workflows são orquestradores enxutos que os comandos referenciam internamente; a maioria não é lida diretamente pelos usuários finais. As linhas abaixo mapeiam cada arquivo de workflow para sua função (derivada do bloco `<purpose>`) e, quando aplicável, para o comando que o invoca.
 
@@ -264,7 +264,7 @@ Registro completo em `gsd-core/workflows/*.md`. Workflows são orquestradores en
 
 ---
 
-## Referências (62 entregues)
+## Referências
 
 Registro completo em `gsd-core/references/*.md`. Referências são documentos de conhecimento compartilhado que workflows e agentes `@-reference`. Os agrupamentos abaixo correspondem a [`docs/ARCHITECTURE.md`](ARCHITECTURE.md#references-gsd-corereferencesmd) — clusters principais, de workflow, de modelo de raciocínio e a decomposição modular do planejador.
 
@@ -366,7 +366,7 @@ O agente `gsd-planner` é decomposto em um agente principal mais módulos de ref
 
 ---
 
-## Módulos de CLI (81 entregues)
+## Módulos de CLI
 
 Listagem completa: `gsd-core/bin/lib/*.cjs`.
 
@@ -458,7 +458,7 @@ Listagem completa: `gsd-core/bin/lib/*.cjs`.
 
 ---
 
-## Hooks (14 entregues)
+## Hooks
 
 Listagem completa: `hooks/`.
 

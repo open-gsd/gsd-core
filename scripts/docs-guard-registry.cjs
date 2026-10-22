@@ -324,10 +324,10 @@ const DOCS_GUARD_TESTS = {
   'tests/live-config-guard.test.cjs': ['docs/TESTING-SUITES.md'],
   // #5601: localized INVENTORY coverage notes must state no agent counts.
   'tests/localized-inventory-agent-counts.test.cjs': [
-    'docs/ja-JP/INVENTORY.md',
-    'docs/ko-KR/INVENTORY.md',
-    'docs/pt-BR/INVENTORY.md',
-    'docs/zh-CN/INVENTORY.md',
+    'docs/ja-JP/',
+    'docs/ko-KR/',
+    'docs/pt-BR/',
+    'docs/zh-CN/',
   ],
   // #3726: pins the `milestone complete` synopsis (English + four localized
   // mirrors), the `--confirm` flag row and the guard-override instructions —

@@ -37,3 +37,51 @@ test('every localized INVENTORY has a coverage note that states no agent counts'
     assert.doesNotMatch(prose, /\d/, `${locale}/INVENTORY.md coverage note states a count: ${note}`);
   }
 });
+
+function slugOf(heading) {
+  return heading
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s_-]/gu, '')
+    .replace(/\s/g, '-');
+}
+
+function markdownFiles(dir) {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) return markdownFiles(p);
+    return e.name.endsWith('.md') ? [p] : [];
+  });
+}
+
+test('localized INVENTORY section headings carry no "(N shipped)" count', () => {
+  for (const locale of LOCALES) {
+    const offenders = fs
+      .readFileSync(path.join(DOCS, locale, 'INVENTORY.md'), 'utf8')
+      .split(/\r?\n/)
+      .filter((l) => /^##\s+.+\(\d+[^)]*\)\s*$/.test(l));
+    assert.deepEqual(offenders, [], `${locale}/INVENTORY.md headings carry counts`);
+  }
+});
+
+test('every localized link to its INVENTORY.md#anchor resolves to a heading', () => {
+  for (const locale of LOCALES) {
+    const inventory = path.join(DOCS, locale, 'INVENTORY.md');
+    const slugs = new Set(
+      fs
+        .readFileSync(inventory, 'utf8')
+        .split(/\r?\n/)
+        .filter((l) => /^#{1,6}\s/.test(l))
+        .map((l) => slugOf(l.replace(/^#+\s+/, ''))),
+    );
+    const dead = [];
+    for (const file of markdownFiles(path.join(DOCS, locale))) {
+      const text = fs.readFileSync(file, 'utf8');
+      for (const m of text.matchAll(/((?:\.\.\/|\.\/){0,8}INVENTORY\.md)#([^)\s]{1,200})/g)) {
+        if (path.resolve(path.dirname(file), m[1]) !== inventory) continue;
+        if (!slugs.has(decodeURIComponent(m[2]))) dead.push(`${path.relative(DOCS, file)} -> #${m[2]}`);
+      }
+    }
+    assert.deepEqual(dead, [], `${locale}: links to INVENTORY.md anchors that match no heading`);
+  }
+});

@@ -12,7 +12,7 @@
 
 ---
 
-## エージェント (33 shipped)
+## エージェント
 
 完全な一覧は `agents/gsd-*.md` を参照してください。"Primary doc" 列は [`docs/AGENTS.md`](../AGENTS.md) が完全なロールカードを掲載している場合（*primary*）、"Advanced and Specialized Agents" セクションに短いスタブがある場合（*advanced stub*）、または掲載がない場合（*inventory only*）を示します。
 
@@ -56,7 +56,7 @@
 
 ---
 
-## コマンド (67 shipped)
+## コマンド
 
 完全な一覧は `commands/gsd/*.md` を参照してください。以下のグループ分けは `docs/COMMANDS.md` のセクション順に対応しています。各行にはコマンド名、コマンドのフロントマター `description:` から導出された一行の役割、ソースファイルへのリンクが含まれます。`tests/command-count-sync.test.cjs` がこの数値をファイルシステムに対して固定します。
 
@@ -167,7 +167,7 @@
 
 ---
 
-## ワークフロー (88 shipped)
+## ワークフロー
 
 完全な一覧は `gsd-core/workflows/*.md` を参照してください。ワークフローはコマンドが内部で参照する薄いオーケストレーターです。ほとんどはエンドユーザーが直接読むものではありません。以下の行は各ワークフローファイルをその役割（`<purpose>` ブロックから導出）と、該当する場合はそれを呼び出すコマンドにマッピングします。
 
@@ -264,7 +264,7 @@
 
 ---
 
-## リファレンス (62 shipped)
+## リファレンス
 
 完全な一覧は `gsd-core/references/*.md` を参照してください。リファレンスはワークフローとエージェントが `@-reference` として参照する共有ナレッジドキュメントです。以下のグループ分けは [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md#references-gsd-corereferencesmd) に対応します — コア、ワークフロー、思考モデルクラスター、モジュラープランナー分解。
 
@@ -366,7 +366,7 @@
 
 ---
 
-## CLI モジュール (81 shipped)
+## CLI モジュール
 
 完全な一覧: `gsd-core/bin/lib/*.cjs`。
 
@@ -458,7 +458,7 @@
 
 ---
 
-## フック (14 shipped)
+## フック
 
 完全な一覧: `hooks/`。
 
