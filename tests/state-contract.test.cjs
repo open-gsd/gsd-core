@@ -345,10 +345,10 @@ describe('state contract — call-site wiring (integration, real CLI)', () => {
       '(no recognized labels here)',
     ]);
     const result = runGsdTools(['state', 'planned-phase', '--phase', '3', '--name', 'Polish', '--plans', '1'], tmpDir);
-    assert.ok(result.success, `planned-phase fixture must genuinely succeed: ${result.error}`);
-    const output = JSON.parse(result.output);
-    assert.deepStrictEqual(output.updated, [], 'expected a genuine no-op (zero recognized Current Position labels)');
-    assert.strictEqual(fs.existsSync(statePathOf(tmpDir)), false, 'a no-op transition must not publish state.json');
+    // #5320: with `--plans` and no Plan / Current Plan / Total Plans line to
+    // land on, planned-phase now fails non-zero before any write.
+    assert.strictEqual(result.success, false, 'planned-phase must fail when --plans has no line to land on');
+    assert.strictEqual(fs.existsSync(statePathOf(tmpDir)), false, 'a failed transition must not publish state.json');
   });
 
   test('beginPhaseNoOpDoesNotPublish', (t) => {

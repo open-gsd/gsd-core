@@ -1706,6 +1706,7 @@ type PlanFieldName = 'Plan' | 'Current Plan';
 
 const PLAN_SHAPE_N = /^(\d+)(?:\s.*)?$/;
 const PLAN_SHAPE_N_OF_M = /^(\d+)\s+of\s+(\d+)(?:\s.*)?$/;
+const PLAN_SHAPE_BARE_N = /^\d+$/;
 
 /**
  * Parse a decimal group into a plan number, or `null` if it is not a value we
@@ -2520,7 +2521,9 @@ function plannedPhaseCore(
   const { existingFm, hasFrontmatter, body: initialBody, reassemble } = beginFrontmatterReassembly(content, deps.sourcePath);
   let body = initialBody;
 
-  const statusDefaults = KNOWN_TEMPLATE_DEFAULTS['Status'];
+  // #5320: a bare pre-plan `Ready` is moved to `Ready to execute` here; nothing
+  // else writes bare Ready, so it is local to this transition.
+  const statusDefaults = [...(KNOWN_TEMPLATE_DEFAULTS['Status'] ?? []), 'Ready'];
   const lastActivityDefaults = KNOWN_TEMPLATE_DEFAULTS['Last Activity'];
 
   // Status — template-aware (preserve executor-authored values).
@@ -2531,10 +2534,12 @@ function plannedPhaseCore(
   }
 
   // Total Plans in Phase — system-derived; always replaced when a count is given.
+  let totalRecorded = false;
   if (intent.planCount !== null && intent.planCount !== undefined) {
     const result = stateReplaceField(body, 'Total Plans in Phase', String(intent.planCount));
     if (result) {
       body = result;
+      totalRecorded = true;
       updated.push('Total Plans in Phase');
     }
   }
@@ -2550,7 +2555,7 @@ function plannedPhaseCore(
   const ladResult = stateReplaceField(
     body,
     'Last Activity Description',
-    `Phase ${intent.phaseNumber} planning complete — ${intent.planCount || '?'} plans ready`,
+    `Phase ${intent.phaseNumber} planning complete — ${intent.planCount ?? '?'} plans ready`,
   );
   if (ladResult) {
     body = ladResult;
@@ -2577,17 +2582,68 @@ function plannedPhaseCore(
     ?? (typeof curatedName === 'string' && curatedName.trim() !== '' && !phaseIdMod.isPlannedPhaseStatusPhrase(curatedName)
       ? curatedName.trim()
       : null);
+  const posSlice = (b: string): string => {
+    const sp = locateCurrentPosition(b);
+    return sp ? b.slice(sp.start, sp.end) : '';
+  };
+  const posBefore = posSlice(beforePos);
+  // #5320: `Plan: A of B in current phase` template shape; advance-plan parses
+  // `N of M` from either spelling (#3784 hybrid for `Current Plan:`). A replan
+  // keeps the recorded leading N and moves only M; anything else starts at 0.
+  // The recorded N carries over only for the SAME phase (`Phase:` or `Current Phase:` leading token).
+  // With no body phase line the recorded frontmatter current_phase decides.
+  const bodyPhase = stateExtractField(posBefore, 'Phase') ?? stateExtractField(posBefore, 'Current Phase');
+  const fmPhase = existingFm['current_phase'];
+  const recordedPhase = bodyPhase ?? (typeof fmPhase === 'string' || typeof fmPhase === 'number' ? String(fmPhase) : null);
+  const samePhase = phaseIdMod.phaseKeyFromProse(recordedPhase) === phaseIdMod.phaseKeyFromToken(intent.phaseNumber);
+  // Same-phase `N of M` / bare `N` of a Current Position plan line; null for a different phase.
+  const planMatch = (name: string): RegExpExecArray | null => {
+    const raw = stateExtractField(posBefore, name) ?? '';
+    return samePhase ? (PLAN_SHAPE_N_OF_M.exec(raw) ?? PLAN_SHAPE_N.exec(raw)) : null;
+  };
+  const planValue = (name: string): string | undefined => {
+    if (intent.planCount == null) return undefined;
+    const raw = stateExtractField(posBefore, name) ?? '';
+    const m = planMatch(name);
+    // A bare `N` beside `Total Plans in Phase:` is the legacy pair; the Total line already carries M.
+    // Same phase keeps N; a new phase resets it to 0 in the same bare shape.
+    if (totalRecorded && PLAN_SHAPE_BARE_N.test(raw)) return samePhase ? undefined : '0';
+    return `${m ? m[1] : 0} of ${intent.planCount} in current phase`;
+  };
   body = mutateCurrentPositionForAdvance(
     body,
     {
       phase: `${intent.phaseNumber}${labelName ? ` (${labelName})` : ''} — READY TO EXECUTE`,
       status: 'Ready to execute',
       lastActivity: `${today} — Phase ${intent.phaseNumber} planning complete`,
+      plan: planValue('Plan'),
+      currentPlan: planValue('Current Plan'),
     },
     statusDefaults,
     lastActivityDefaults,
   );
   if (body !== beforePos) updated.push('Current Position');
+  const posAfter = posSlice(body);
+  for (const name of ['Plan', 'Current Plan']) {
+    if (stateExtractField(posAfter, name) !== stateExtractField(posBefore, name)) updated.push(name);
+  }
+  // #5320: --plans must land somewhere; the caller fails before any write.
+  if (intent.planCount != null && !totalRecorded
+    && stateExtractField(posBefore, 'Plan') === null && stateExtractField(posBefore, 'Current Plan') === null) {
+    return { content, updated: [], data: { planError: 'state planned-phase: --plans has no line to land on. Add `Plan: 0 TBD in current phase` under `## Current Position` (or a `Total Plans in Phase:` line) and retry.' } };
+  }
+  // The recorded N is the plan position (beginPhaseCore writes the first plan still to run), so N - 1 plans are done.
+  if (intent.planCount != null) {
+    let executed = 0;
+    for (const name of ['Plan', 'Current Plan']) {
+      const m = planMatch(name);
+      const n = m ? planNumberFrom(m[1]) : null;
+      if (n !== null) executed = Math.max(executed, n - 1);
+    }
+    if (executed > intent.planCount) {
+      return { content, updated: [], data: { planError: `state planned-phase: --plans ${intent.planCount} is below the executed plan count ${executed}.` } };
+    }
+  }
 
   // #2400 Bug B: sync progress.total_plans to the frontmatter when a plan count
   // is given. This writes the explicitly-provided count — it is NOT a re-derivation

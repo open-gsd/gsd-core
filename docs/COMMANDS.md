@@ -2344,10 +2344,10 @@ Record state transition after plan-phase completes (Planned/Ready to execute).
 | Flag | Description |
 |------|-------------|
 | `--phase N` | Phase number that was planned |
-| `--plans N` | Number of plans generated |
+| `--plans N` | Number of plans generated; must be a non-negative integer (also enforced by `state begin-phase --plans`) |
 
-**Prerequisites:** Phase has been planned
-**Produces:** Updated `STATE.md` with post-planning state
+**Prerequisites:** Phase has been planned; STATE.md has a `Plan:` or `Current Plan:` line under `## Current Position`, or a `Total Plans in Phase:` line anywhere
+**Produces:** Updated `STATE.md` with post-planning state. Exits non-zero and writes nothing when `--plans` is invalid, has no such line to land on, or is below the already-executed plan count (the recorded `Plan: N of M` position minus one, since N is the first plan still to run).
 
 ```bash
 node gsd-tools.cjs state planned-phase --phase 3 --plans 2
