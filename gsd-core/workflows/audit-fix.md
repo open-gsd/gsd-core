@@ -154,7 +154,7 @@ fi
 **c. If tests pass** — commit atomically:
 ```bash
 git add {changed_files}
-git commit -m "fix({scope}): resolve {ID} — {description}"
+git commit -m "fix({scope}): resolve {ID} — {description}" -- {changed_files}
 ```
 The commit message **must** include the finding ID (e.g., F-01) for traceability.
 

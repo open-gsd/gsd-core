@@ -94,7 +94,7 @@ git commit -m "feat(08-02): create user registration endpoint
 - POST /auth/register validates email and password
 - Checks for duplicate users
 - Returns JWT token on success
-"
+" -- src/api/auth.ts src/types/user.ts
 
 # TDD task - RED phase
 git add src/__tests__/jwt.test.ts
@@ -103,7 +103,7 @@ git commit -m "test(07-02): add failing test for JWT generation
 - Tests token contains user ID claim
 - Tests token expires in 1 hour
 - Tests signature verification
-"
+" -- src/__tests__/jwt.test.ts
 
 # TDD task - GREEN phase
 git add src/utils/jwt.ts
@@ -112,7 +112,7 @@ git commit -m "feat(07-02): implement JWT generation
 - Uses jose library for signing
 - Includes user ID and expiry claims
 - Signs with HS256 algorithm
-"
+" -- src/utils/jwt.ts
 ```
 
 </format>

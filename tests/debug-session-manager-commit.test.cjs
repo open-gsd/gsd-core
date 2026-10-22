@@ -204,9 +204,10 @@ test('#2568: the in-session fix commit is idempotent', () => {
   // path, which is the standard find_and_fix flow. A bare `git commit` with nothing
   // staged exits non-zero and would abort this step before the summary is returned.
   const body = manager();
-  assert.match(
-    body,
-    /git diff --cached --quiet \|\| git commit/,
+  const line = body.split('\n').find((l) => l.includes('git diff --cached --quiet -- ')) ?? '';
+  const guard = line.indexOf('git diff --cached --quiet -- ');
+  const commit = line.indexOf(' || git commit -m ', guard);
+  assert.ok(guard !== -1 && commit !== -1 && line.indexOf(' -- ', commit + 1) !== -1,
     'the fix-code commit must be guarded on staged content — archive_session may have ' +
       'already committed it, and an unguarded git commit exits non-zero on an empty diff',
   );

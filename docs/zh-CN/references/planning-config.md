@@ -105,8 +105,12 @@ CLI 在内部检查 `commit_docs` 配置和 gitignore 状态 —— 无需手动
 
 3. **已存在的跟踪文件：** 如果 `.planning/` 之前被跟踪：
    ```bash
-   git rm -r --cached .planning/
-   git commit -m "chore: stop tracking planning docs"
+   if git diff --cached --quiet -- ':!.planning'; then
+     git rm -r --cached .planning/
+     git commit -m "chore: stop tracking planning docs"
+   else
+     echo "unrelated staged paths; unstage them first" >&2
+   fi
    ```
 
 4. **分支合并：** 当使用 `branching_strategy: phase` 或 `milestone` 时，`complete-milestone` 工作流在 `commit_docs: false` 时自动从暂存区移除 `.planning/` 文件，然后才进行合并提交。

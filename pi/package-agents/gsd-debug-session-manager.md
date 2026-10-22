@@ -355,7 +355,7 @@ back to Step 3.
    step before the summary is returned:
    ```bash
    git add <files the fix touched>
-   git diff --cached --quiet || git commit -m "fix: {brief description}"
+   git diff --cached --quiet -- <files the fix touched> || git commit -m "fix: {brief description}" -- <files the fix touched>
    ```
 2. **Session doc.** Commit via the CLI, which already gates on `commit_docs` and returns
    `skipped_commit_docs_false` when disabled — call it unconditionally rather than

@@ -21,6 +21,8 @@ const { spawnSync } = require('child_process');
 const { createTempGitProject, cleanup, runGsdTools } = require('./helpers.cjs');
 const { execFileSync } = require('node:child_process');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { scanFencedBlocks, stripFencedCode, scanInlineCodeSpans } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
 const { GIT_TIMEOUT_MS, PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
@@ -3299,5 +3301,271 @@ cmdCommit(${JSON.stringify(tmpDir)}, 'docs: probe', ['.planning/STATE.md'], fals
     assert.equal(result.committed, false);
     assert.equal(result.reason, 'commit_failed');
     assert.equal(result.timed_out, undefined);
+  });
+});
+
+describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
+  // A bare `git commit -m ...` commits the whole index, sweeping in files other
+  // sessions staged. Prompts must prescribe `git commit -m "..." -- <paths>`.
+  // Scope: fenced blocks and inline code spans only (prose that merely names
+  // the command is not an invocation). A command spans from `git commit` to the
+  // next operator or unquoted newline, so a multi-line -m body is one command.
+  // tokenize() stops at the first unquoted `#`, so comments are stripped per
+  // line first or a later commit in the same block would be hidden.
+  const root = path.join(__dirname, '..');
+  const promptFiles = () => {
+    const out = [];
+    const walk = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (e.name.endsWith('.md')) out.push(path.relative(root, full).split(path.sep).join('/'));
+      }
+    };
+    for (const d of ['agents', 'gsd-core/workflows', 'gsd-core/references']) walk(path.join(root, d));
+    return out.sort();
+  };
+  // commentPortion restarts quote state per line, so a `#` after a newline
+  // inside a quoted message looked like a comment and ate the closing quote.
+  const stripComments = (raw) => {
+    let q = null;
+    return raw.split('\n').map((line) => {
+      let head = '';
+      let rest = line;
+      if (q) {
+        let i = 0;
+        for (; i < line.length; i += 1) {
+          if (line[i] === '\\' && q === '"') i += 1;
+          else if (line[i] === q) break;
+        }
+        if (i >= line.length) return line;
+        head = line.slice(0, i + 1);
+        rest = line.slice(i + 1);
+        q = null;
+      }
+      // After a closing quote the 'x' makes commentPortion see mid-word: a `#`
+      // glued to the quote is literal in the shell.
+      const kept = rest.slice(0, rest.length - commentPortion(head ? 'x' + rest : rest).length);
+      for (let i = 0; i < kept.length; i += 1) {
+        const ch = kept[i];
+        if (q) {
+          if (ch === '\\' && q === '"') i += 1;
+          else if (ch === q) q = null;
+        } else if (ch === '\\') i += 1;
+        else if (ch === '"' || ch === "'") q = ch;
+      }
+      return head + kept;
+    }).join('\n');
+  };
+  // `inline`: a bare `git commit` in a prose code span names the command, it is not an invocation.
+  const unscopedCommits = (raw, inline = false) => {
+    const out = [];
+    const text = stripComments(raw);
+    const toks = tokenize(text);
+    for (let i = 0; i + 1 < toks.length; i += 1) {
+      if (toks[i].op || toks[i].redir || toks[i].value !== 'git' || toks[i + 1].value !== 'commit') continue;
+      const argv = [];
+      let prev = toks[i + 1];
+      for (let j = i + 2; j < toks.length && !toks[j].op; j += 1) {
+        if (/(?<!\\)\n/.test(text.slice(prev.end, toks[j].start))) break;
+        if (!toks[j].redir) argv.push(toks[j].value);
+        prev = toks[j];
+      }
+      const dd = argv.indexOf('--');
+      if ((dd === -1 && (argv.length > 0 || !inline)) || (dd !== -1 && dd === argv.length - 1)) out.push(text.slice(toks[i].start, prev.end));
+    }
+    return out;
+  };
+
+  test('scanner flags unscoped commits and passes scoped ones', () => {
+    assert.equal(unscopedCommits('git commit -m "x"').length, 1);
+    assert.equal(unscopedCommits('# note\ngit commit -m "x"').length, 1);
+    assert.equal(unscopedCommits('git commit -m x --').length, 1);
+    assert.equal(unscopedCommits('git commit -m "x" -- a b').length, 0);
+  });
+
+  test('a bare git commit (editor mode, no args) is unscoped', () => {
+    assert.equal(unscopedCommits('git commit').length, 1);
+    assert.equal(unscopedCommits('git commit', true).length, 0);
+    assert.equal(unscopedCommits('git commit\ngit commit -m "x" -- a').length, 1);
+  });
+
+  test('a # glued to a closing quote is literal, not a comment', () => {
+    assert.equal(unscopedCommits('echo "a\nb"#tag;git commit -m z').length, 1);
+  });
+
+  test('a # inside a multiline quoted message is not a comment', () => {
+    assert.equal(unscopedCommits('git commit -m "first\n# body"\ngit commit -m "later"').length, 2);
+  });
+
+  // Deliberate whole-index commits: a pathspec would break or defeat them.
+  // Key: `<file>: <first line of the command>`.
+  const WHOLE_INDEX_ALLOWLIST = new Map([
+    ['gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "feat: $branch for v[X.Y]"', 'squash merge: commit the merge result'],
+    ['gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "feat: $MILESTONE_BRANCH for v[X.Y]"', 'squash merge: commit the merge result'],
+    [`gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "Merge branch '$branch' for v[X.Y]"`, 'merge commit: git refuses a partial commit mid-merge'],
+    [`gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "Merge branch '$MILESTONE_BRANCH' for v[X.Y]"`, 'merge commit: git refuses a partial commit mid-merge'],
+    ['gsd-core/references/planning-config.md: git commit -m "chore: stop tracking planning docs"', 'commits the index removals: a -- .planning/ pathspec fails after git rm --cached; a staged-paths guard precedes it'],
+    ['gsd-core/workflows/pr-branch.md: git commit -q -C "$HASH"', 'cherry-pick replay: reuses the source commit message over the staged result'],
+    ['gsd-core/workflows/ship.md: git commit --allow-empty -m "chore: trigger CI (recover from ship-note skip-token)"', 'empty commit: no paths by design'],
+    ['gsd-core/workflows/undo.md: git commit -m "revert(${TARGET_PHASE}): undo phase ${TARGET_PHASE} — ${REVERT_REASON}"', 'commits the staged `git revert --no-commit` result'],
+    ['gsd-core/workflows/undo.md: git commit -m "revert(${TARGET_PLAN}): undo plan ${TARGET_PLAN} — ${REVERT_REASON}"', 'commits the staged `git revert --no-commit` result'],
+    ['gsd-core/workflows/undo.md: git commit -m "revert: undo ${N} selected commits — ${REVERT_REASON}"', 'commits the staged `git revert --no-commit` result'],
+  ]);
+
+  test('every git commit with arguments carries a -- pathspec', () => {
+    const offenders = [];
+    const seen = new Set();
+    for (const f of promptFiles()) {
+      const md = fs.readFileSync(path.join(root, f), 'utf8');
+      const lines = splitLines(md);
+      const segments = scanFencedBlocks(lines).map((b) =>
+        [lines.slice(b.openLineIdx + 1, b.closeLineIdx === -1 ? lines.length : b.closeLineIdx).join('\n'), false]);
+      for (const s of scanInlineCodeSpans(stripFencedCode(md).text)) segments.push([s.content, true]);
+      for (const [seg, inline] of segments) {
+        for (const cmd of unscopedCommits(seg, inline)) {
+          const key = `${f}: ${cmd.split('\n')[0]}`;
+          if (WHOLE_INDEX_ALLOWLIST.has(key)) seen.add(key);
+          else offenders.push(key);
+        }
+      }
+    }
+    assert.deepStrictEqual([...WHOLE_INDEX_ALLOWLIST.keys()].filter((k) => !seen.has(k)), [],
+      'stale WHOLE_INDEX_ALLOWLIST entries: remove them');
+    assert.deepStrictEqual(offenders, [],
+      'unscoped `git commit` in shipped prompts sweeps foreign staged files (#5211); append `-- <paths>`');
+  });
+
+  test('property: a command is flagged iff it has no non-trailing `--` (any quoting of the message)', () => {
+    const word = fc.stringMatching(/^[a-z0-9._/]{1,8}$/);
+    const msg = fc.oneof(
+      word.map((w) => `"${w} # x"`), word.map((w) => `'${w}'`), word,
+    );
+    fc.assert(fc.property(msg, fc.array(word, { minLength: 1, maxLength: 3 }), (m, paths) => {
+      assert.equal(unscopedCommits(`git commit -m ${m}`).length, 1);
+      assert.equal(unscopedCommits(`git commit -m ${m} -- ${paths.join(' ')}`).length, 0);
+    }), { numRuns: 100 });
+  });
+
+  function initFixtureRepo(t, prefix) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    t.after(() => cleanup(dir));
+    const git = (...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
+    git('init', '-q');
+    git('config', 'user.email', 't@t'); git('config', 'user.name', 't'); git('config', 'commit.gpgsign', 'false');
+    return { dir, git };
+  }
+
+  test('fast.md commit fence (scratch repo): foreign staged file stays staged; commit_docs=false excludes .planning', (t) => {
+    const lines = splitLines(fs.readFileSync(path.join(root, 'gsd-core/workflows/fast.md'), 'utf8'));
+    const commitStep = lines.findIndex((l) => l.includes('<step name="commit">'));
+    const blk = scanFencedBlocks(lines.slice(commitStep)).find((b) => b.infoString === 'bash');
+    assert.ok(blk, 'fast.md commit step has a bash fence');
+    const body = lines.slice(commitStep).slice(blk.openLineIdx + 1, blk.closeLineIdx);
+    // drop the gsd_run resolver line; stub it with the config value under test
+    const fence = body.slice(body.findIndex((l) => l.startsWith('COMMIT_DOCS='))).join('\n');
+    for (const docs of ['true', 'false']) {
+      const { dir, git } = initFixtureRepo(t, 'gsd-5489f-');
+      fs.mkdirSync(path.join(dir, '.planning'));
+      fs.writeFileSync(path.join(dir, 'seed'), 's'); git('add', 'seed'); git('commit', '-q', '-m', 'seed');
+      fs.writeFileSync(path.join(dir, 'code'), 'c');
+      fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), 'p');
+      const run = () => spawnSync('bash', ['-c', `gsd_run() { echo ${docs}; }\n${fence}`], { cwd: dir, encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
+      // dirty index: refuses, commits nothing
+      fs.writeFileSync(path.join(dir, 'stray'), 'x'); git('add', 'stray');
+      assert.equal(run().status, 1, `commit_docs=${docs}: dirty index refused`);
+      assert.equal(Number(git('rev-list', '--count', 'HEAD')), 1);
+      git('reset', '-q', 'stray');
+      const r = run();
+      assert.equal(r.status, 0, r.stderr);
+      const head = git('show', '--name-only', '--format=', 'HEAD').trim().split('\n').sort();
+      assert.deepStrictEqual(head, docs === 'false' ? ['code', 'stray'] : ['.planning/STATE.md', 'code', 'stray']);
+    }
+  });
+  test('executor step-4 single-repo commit (scratch repo): foreign staged file stays staged', (t) => {
+    const lines = splitLines(fs.readFileSync(path.join(root, 'agents/gsd-executor.md'), 'utf8'));
+    const at = lines.findIndex((l) => l.includes('**Otherwise (standard single-repo):**'));
+    assert.notEqual(at, -1, 'executor step 4 single-repo branch exists');
+    const rest = lines.slice(at);
+    const blk = scanFencedBlocks(rest).find((b) => b.infoString === 'bash');
+    const fence = rest.slice(blk.openLineIdx + 1, blk.closeLineIdx).join('\n')
+      .replace('{step-2 paths}', 'src/a.ts src/b.ts');
+    const { dir, git } = initFixtureRepo(t, 'gsd-5489e-');
+    fs.mkdirSync(path.join(dir, 'src'));
+    fs.writeFileSync(path.join(dir, 'src/a.ts'), 'a'); fs.writeFileSync(path.join(dir, 'stray'), 's');
+    git('add', '-A'); git('commit', '-q', '-m', 'seed');
+    fs.writeFileSync(path.join(dir, 'src/a.ts'), 'a2'); fs.writeFileSync(path.join(dir, 'src/b.ts'), 'b');
+    fs.writeFileSync(path.join(dir, 'stray'), 's2');
+    git('add', 'src/a.ts', 'src/b.ts', 'stray');
+    const r = spawnSync('bash', ['-c', fence], { cwd: dir, encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepStrictEqual(git('show', '--name-only', '--format=', 'HEAD').trim().split('\n').sort(), ['src/a.ts', 'src/b.ts']);
+    assert.equal(git('diff', '--cached', '--name-only').trim(), 'stray');
+  });
+  describe('complete-milestone git_commit_milestone fence (scratch repo)', () => {
+    // Read lazily so a missing step fails one test, not the whole file at collection.
+    const fenceOf = () => {
+      const all = splitLines(fs.readFileSync(path.join(root, 'gsd-core/workflows/complete-milestone.md'), 'utf8'));
+      const from = all.findIndex((l) => l.includes('<step name="git_commit_milestone">'));
+      assert.notEqual(from, -1, 'git_commit_milestone step exists');
+      const stepLines = all.slice(from, from + all.slice(from).findIndex((l) => l.includes('</step>')));
+      const blk = scanFencedBlocks(stepLines).find((b) => b.infoString === 'bash');
+      assert.ok(blk, 'git_commit_milestone has a bash fence');
+      return stepLines.slice(blk.openLineIdx + 1, blk.closeLineIdx).join('\n');
+    };
+
+    // Seeds `rm` + a stray, stages the deletions and the stray's edit, then runs the fence from `sub`.
+    function run(rm, sub = '.') {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5489-'));
+      try {
+        const git = (...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
+        git('init', '-q');
+        git('config', 'user.email', 't@t'); git('config', 'user.name', 't'); git('config', 'commit.gpgsign', 'false');
+        for (const f of [...rm, 'stray', path.join(sub, 'keep')]) { fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), 'x'); }
+        git('add', '-A'); git('commit', '-q', '-m', 'seed');
+        for (const f of rm) git('rm', '-q', f);
+        fs.writeFileSync(path.join(dir, 'stray'), 'y'); git('add', 'stray');
+        const r = spawnSync('bash', ['-c', fenceOf()], { cwd: path.join(dir, sub), encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
+        const lines = (s) => s.trim().split('\n').filter(Boolean);
+        return {
+          status: r.status,
+          commits: Number(git('rev-list', '--count', 'HEAD')),
+          head: lines(git('-c', 'core.quotepath=off', 'show', '--name-only', '--format=', 'HEAD')),
+          staged: lines(git('diff', '--cached', '--name-only')),
+        };
+      } finally {
+        cleanup(dir);
+      }
+    }
+
+    test('root layout: commits only the REQUIREMENTS.md deletion, stray stays staged', () => {
+      const r = run(['.planning/REQUIREMENTS.md']);
+      assert.deepStrictEqual([r.status, r.commits, r.head, r.staged], [0, 2, ['.planning/REQUIREMENTS.md'], ['stray']]);
+    });
+
+    test('project nested in a repo subdir (cwd=app/): cwd-relative pathspec still commits', () => {
+      const r = run(['app/.planning/REQUIREMENTS.md'], 'app');
+      assert.deepStrictEqual([r.status, r.commits, r.head, r.staged], [0, 2, ['app/.planning/REQUIREMENTS.md'], ['stray']]);
+    });
+
+    test('non-ASCII directory in the path: git does not quote it, deletion still committed', () => {
+      const r = run(['é/.planning/REQUIREMENTS.md']);
+      assert.deepStrictEqual([r.status, r.commits, r.head, r.staged], [0, 2, ['é/.planning/REQUIREMENTS.md'], ['stray']]);
+    });
+
+    test('two staged REQUIREMENTS.md deletions: refuses, commits nothing', () => {
+      const r = run(['.planning/REQUIREMENTS.md', '.planning/workstreams/ws1/REQUIREMENTS.md']);
+      assert.deepStrictEqual([r.status, r.commits], [1, 1]);
+    });
+
+    test('foreign REQUIREMENTS.md deletion outside .planning/ is never committed', () => {
+      const r = run(['.docs/REQUIREMENTS.md']);
+      assert.deepStrictEqual([r.status, r.commits], [1, 1]);
+    });
+
+    test('zero staged deletions: exits 1, commits nothing', () => {
+      const r = run([]);
+      assert.deepStrictEqual([r.status, r.commits], [1, 1]);
+    });
   });
 });

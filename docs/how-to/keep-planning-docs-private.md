@@ -36,8 +36,12 @@ Because GSD's default is `commit_docs: true`, most existing projects already hav
 in history, which makes this the common case rather than an edge case.
 
 ```bash
-git rm -r --cached .planning/
-git commit -m "chore: stop tracking planning docs"
+if git diff --cached --quiet -- ':!.planning'; then
+  git rm -r --cached .planning/
+  git commit -m "chore: stop tracking planning docs"
+else
+  echo "unrelated staged paths; unstage them first" >&2
+fi
 ```
 
 `--cached` removes the files from the index only — your files on disk are untouched.
