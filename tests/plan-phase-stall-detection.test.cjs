@@ -538,14 +538,15 @@ describe('enhancement #4570 config contract — planner stall detection has a ty
     });
 
     fc.assert(rejectedWithoutWrite, { numRuns: 20 });
-    // #5507: the seed/path of the run that drew "-h" (a dispatcher help token that exits 0).
-    // A lucky seed hid that for 20 runs at a time, so replay it deterministically (one run: the path pins the value).
+    // #5507: the seed/path of the run that drew "-h" (a dispatcher help token that exits 0). Now that the
+    // generator excludes help tokens this draws a different value, so it is a deterministic one-run smoke replay
+    // of that seed, not the regression pin — the fixed help-token examples below are the contract.
     fc.assert(rejectedWithoutWrite, { seed: -1201433058, path: '3', endOnFailure: true, numRuns: 1 });
   });
 
   // #5507: the dispatcher treats a help token ANYWHERE in argv as a help request (#3019): usage, exit 0, the
   // command never runs. That is why the property above must not draw those tokens; this states the contract.
-  for (const token of ['-h', '--h', '--help']) {
+  for (const token of ['-h', '--h', '--help', '-?', '--usage']) {
     test(`config-set with the dispatcher help token ${token} prints usage and leaves config byte-identical`, (t) => {
       const tmp = makeProject(t, { planner: { stall_detection_enabled: true }, sentinel: 'preserve' });
       const configPath = path.join(tmp, '.planning', 'config.json');
