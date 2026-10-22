@@ -410,7 +410,8 @@ describe('install: --minimal honoured for every runtime, on-disk matches manifes
           if (fs.existsSync(agentsDir)) {
             const gsdAgents = fs.readdirSync(agentsDir)
               .filter(f => f.startsWith('gsd-') && f.endsWith('.md'))
-              .map(f => f.slice(0, -3));
+              // Copilot names its agent files gsd-<name>.agent.md.
+              .map(f => f.replace(/(\.agent)?\.md$/, ''));
             // #5503: a runtime that stages agents at all stages exactly the ones the eight core
             // skills spawn: not none (the bug), not the full roster.
             if (gsdAgents.length > 0) {
@@ -3608,7 +3609,9 @@ describe('#5503 core profile stages the agents its skills spawn', () => {
   test('resolveProfile derives agents from agentManifest without widening the skill set', () => {
     const resolved = resolveProfile({ modes: ['core'], manifest: new Map(), agentManifest: REAL_SKILLS_MANIFEST });
     assert.deepStrictEqual([...resolved.skills].sort(), [...PROFILES.core].sort());
-    assert.deepStrictEqual([...resolved.agents].sort(), expected);
+    // resolveProfile reports every gsd-* token the core workflows mention; staging keeps only real agent files.
+    assert.deepStrictEqual([...resolved.agents].filter((a) => ALL_AGENT_STEMS.includes(a)).sort(), expected);
+    for (const agent of expected) assert.ok(resolved.agents.has(agent), `${agent} must be derived from agentManifest`);
   });
 
   test('resolveProfile without agentManifest derives agents from the closure manifest exactly as before', () => {
