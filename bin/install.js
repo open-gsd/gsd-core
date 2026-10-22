@@ -15357,6 +15357,7 @@ if (require.main === module && !process.env.GSD_TEST_MODE) {
   // #5637: every file this run writes gets the same typed-text heredoc terminator; the next run gets another.
   // GSD_ARGS_NONCE_OFF=1 is for the generators that bake a static template from an install.
   if (process.env.GSD_ARGS_NONCE_OFF !== '1') armArgsNonce();
+  else console.warn('  GSD_ARGS_NONCE_OFF=1: the typed-text heredoc terminator is NOT randomized in this install.');
   if (hasDryRun) {
     // --dry-run: preview legacy cleanup and exit without installing.
     if (hasUninstall) {

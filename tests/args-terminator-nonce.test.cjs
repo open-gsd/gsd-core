@@ -17,6 +17,7 @@ const fc = require('fast-check');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runMinimalInstall } = require('./helpers/install-shared.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const {
   ARGS_TERMINATOR,
   ARGS_TERMINATORS,
@@ -134,15 +135,69 @@ describe('#5637 the terminator stamp', () => {
     assert.equal(seen.size, 20);
   });
 
-  test('property: for any nonce no bare terminator line survives and the rest of the text is unchanged', () => {
-    fc.assert(
-      fc.property(fc.stringMatching(/^[0-9a-f]{32}$/), (nonce) => {
-        const out = stampArgsTerminator(FENCE, nonce);
-        assert.equal(out.split('\n').includes('GSD_ARGS_END'), false);
-        assert.equal(out.replace(`GSD_ARGS_END_${nonce}`, 'GSD_ARGS_END').replace(`GSD_ARGS_END_${nonce}`, 'GSD_ARGS_END'), FENCE);
-      }),
-      { numRuns: 50 },
+  test('the nonce is 16 random bytes from the injected source', () => {
+    const asked = [];
+    const nonce = generateArgsNonce((size) => {
+      asked.push(size);
+      return Buffer.alloc(size, 0xab);
+    });
+    assert.deepEqual(asked, [16]);
+    assert.equal(nonce, 'ab'.repeat(16));
+  });
+
+  test('property: only exact terminator lines and quoted openers change, whatever surrounds them', () => {
+    const line = fc.oneof(
+      fc.constantFrom(
+        'GSD_ARGS_END', 'GSD_QUICK_BATCH_ARGS_END',
+        "cmd <<'GSD_ARGS_END' || true", "cmd <<'GSD_QUICK_BATCH_ARGS_END'",
+        ' GSD_ARGS_END', 'GSD_ARGS_END ', '\tGSD_ARGS_END', 'GSD_ARGS_END_ffffffffffffffffffffffffffffffff',
+        'the `GSD_ARGS_END` line ends it', 'NOT_GSD_ARGS_END', 'GSD_ARGS_ENDX', "<<-'GSD_ARGS_END'", '<<GSD_ARGS_END',
+      ),
+      fc.string({ maxLength: 20 }).filter((s) => !s.includes('\n') && !s.includes('\r')),
     );
+    const eol = fc.constantFrom('\n', '\r\n');
+    fc.assert(
+      fc.property(fc.array(fc.tuple(line, eol), { maxLength: 12 }), fc.stringMatching(/^[0-9a-f]{32}$/), (rows, nonce) => {
+        const text = rows.map(([l, e]) => l + e).join('');
+        const out = stampArgsTerminator(text, nonce);
+        const outRows = out.split(/(?<=\n)/);
+        const inRows = text.split(/(?<=\n)/);
+        assert.equal(outRows.length, inRows.length);
+        inRows.forEach((row, i) => {
+          const body = row.replace(/\r?\n$/, '');
+          const tail = row.slice(body.length);
+          const isCloser = body === 'GSD_ARGS_END' || body === 'GSD_QUICK_BATCH_ARGS_END';
+          const expected = isCloser
+            ? `${body}_${nonce}${tail}`
+            : row.replace(/<<'(GSD_ARGS_END|GSD_QUICK_BATCH_ARGS_END)'/g, (_m, t) => `<<'${t}_${nonce}'`);
+          assert.equal(outRows[i], expected, JSON.stringify(row));
+        });
+      }),
+      { numRuns: 100 },
+    );
+  });
+
+  test('the shipped sources open these heredocs only in the one quoted form the stamp recognizes', () => {
+    const roots = [path.join(REPO, 'gsd-core', 'workflows'), path.join(REPO, 'commands', 'gsd')];
+    const files = [];
+    const walk = (d) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const full = path.join(d, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (e.name.endsWith('.md')) files.push(full);
+      }
+    };
+    roots.forEach(walk);
+    let seen = 0;
+    for (const file of files) {
+      splitLines(fs.readFileSync(file, 'utf8')).forEach((l, i) => {
+        const m = /<<[-~]?\s*["']?(GSD_(?:QUICK_BATCH_)?ARGS_END)\b/.exec(l);
+        if (!m) return;
+        seen++;
+        assert.ok(l.includes(`<<'${m[1]}'`), `${path.relative(REPO, file)}:${i + 1} opens ${m[1]} in a form the stamp does not recognize`);
+      });
+    }
+    assert.ok(seen > 50, `vacuous: only ${seen} openers found`);
   });
 });
 
@@ -176,8 +231,8 @@ describe('#5637 typed text that names the terminator (real shells)', () => {
 describe('#5637 what an install writes', () => {
   const BARE_RE = /^GSD_(?:QUICK_BATCH_)?ARGS_END\r?$|<<'GSD_(?:QUICK_BATCH_)?ARGS_END'/m;
   const STAMPED_RE = /^GSD_ARGS_END_[0-9a-f]{32}\r?$/m;
-  // The raw corpus under gsd-core/commands and gsd-core/agents is the re-materialization input and stays canonical.
-  const isCorpus = (rel) => rel.startsWith(`gsd-core${path.sep}commands${path.sep}`) || rel.startsWith(`gsd-core${path.sep}agents${path.sep}`);
+  // The re-materialization corpus under gsd-core/commands carries the install's nonce too, so /gsd-surface keeps it.
+  const isCorpus = () => false;
 
   function installedMarkdown(configDir) {
     const files = [];
@@ -208,6 +263,66 @@ describe('#5637 what an install writes', () => {
       }
     });
   }
+
+  test('opencode local scope: the project-local install is stamped too', () => {
+    const { root, configDir } = runMinimalInstall({ runtime: 'opencode', scope: 'local' });
+    try {
+      let stamped = 0;
+      for (const { file, rel } of installedMarkdown(configDir)) {
+        const text = fs.readFileSync(file, 'utf8');
+        assert.equal(BARE_RE.test(text), false, `${rel} still has a bare terminator`);
+        if (STAMPED_RE.test(text)) stamped++;
+      }
+      assert.ok(stamped > 0, 'nothing was stamped');
+    } finally {
+      cleanup(root);
+    }
+  });
+
+  test('/gsd-surface re-stages commands and skills without dropping the nonce', () => {
+    const { root, configDir } = runMinimalInstall({ runtime: 'opencode', scope: 'global' });
+    try {
+      const lib = path.join(configDir, 'gsd-core', 'bin', 'lib');
+      const script = `
+        const s = require(${JSON.stringify(path.join(lib, 'surface.cjs'))});
+        const L = require(${JSON.stringify(path.join(lib, 'runtime-artifact-layout.cjs'))});
+        const P = require(${JSON.stringify(path.join(lib, 'install-profiles.cjs'))});
+        const C = require(${JSON.stringify(path.join(lib, 'clusters.cjs'))});
+        const layout = L.resolveRuntimeArtifactLayout('opencode', ${JSON.stringify(configDir)}, 'global');
+        const manifest = P.loadSkillsManifest(${JSON.stringify(path.join(configDir, 'gsd-core', 'commands', 'gsd'))});
+        s.applySurface(${JSON.stringify(configDir)}, layout, manifest, C.CLUSTERS);
+      `;
+      execFileSync(process.execPath, ['-e', script], {
+        cwd: root,
+        env: { PATH: process.env.PATH, HOME: root, USERPROFILE: root, GSD_HOME: root },
+        stdio: 'pipe',
+        timeout: PROBE_TIMEOUT_MS * 4,
+      });
+      const surfaces = installedMarkdown(configDir).filter(({ rel }) => /quick-batch/.test(rel) && !rel.startsWith(`gsd-core${path.sep}workflows`));
+      assert.ok(surfaces.length > 0);
+      for (const { file, rel } of surfaces) {
+        const text = fs.readFileSync(file, 'utf8');
+        assert.equal(BARE_RE.test(text), false, `${rel} lost its nonce`);
+        assert.match(text, /GSD_QUICK_BATCH_ARGS_END_[0-9a-f]{32}/, rel);
+      }
+    } finally {
+      cleanup(root);
+    }
+  });
+
+  test('two installs of one tree emit identical normalized manifests', () => {
+    const { buildParityManifest } = require('./helpers/install-shared.cjs');
+    const manifests = [];
+    for (let i = 0; i < 2; i++) {
+      const { root, configDir } = runMinimalInstall({ runtime: 'opencode', scope: 'global' });
+      try {
+        manifests.push(JSON.stringify(buildParityManifest(configDir, root)));
+      } finally {
+        cleanup(root);
+      }
+    }
+    assert.equal(manifests[0], manifests[1]);
+  });
 
   test('the quick-batch command surface is stamped with its own terminator', () => {
     const { root, configDir } = runMinimalInstall({ runtime: 'opencode', scope: 'global' });
