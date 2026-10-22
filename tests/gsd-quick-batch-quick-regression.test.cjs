@@ -72,6 +72,24 @@ function isWorkstreamForwardingSweepLine(sign, body, addedBodies, removedBodies)
   return false;
 }
 
+// #4904 review: the hold-renewal sweep appends the same single expansion to every
+// re-record of a dispatch-isolation decision that can follow a held answer, quick.md's
+// and quick-batch's included. Like the --ws sweep above it is a mechanical propagation,
+// and it is recognized the same way: an added line counts only when stripping the
+// expansion from it yields a removed line, or the reverse.
+const RENEW_HELD_FLAG = ' ${_RENEW_HELD:+--renew-held "$_RENEW_HELD"}';
+function isRenewHeldSweepLine(sign, body, addedBodies, removedBodies) {
+  if (sign === '+' && body.includes(RENEW_HELD_FLAG)) {
+    return removedBodies.has(body.split(RENEW_HELD_FLAG).join(''));
+  }
+  if (sign === '-') {
+    for (const added of addedBodies) {
+      if (added.includes(RENEW_HELD_FLAG) && added.split(RENEW_HELD_FLAG).join('') === body) return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Does this path's diff say anything beyond the shared response-language
  * directive (#2529)?
@@ -104,6 +122,7 @@ function editsBeyondSharedDirective(base, file) {
     if (!/^[+-]/.test(line) || line.startsWith('+++') || line.startsWith('---')) return false;
     const body = line.slice(1).trim();
     if (isWorkstreamForwardingSweepLine(line[0], body, addedBodies, removedBodies)) return false;
+    if (isRenewHeldSweepLine(line[0], body, addedBodies, removedBodies)) return false;
     if (body === '' || body === INLINE_RESPONSE_LANGUAGE_DIRECTIVE) return false;
     if (body === CANONICAL_LAUNCHER_PREAMBLE.trim()) return false;
     if (looksLikeLauncherPreambleLine(body)) return false;
@@ -190,6 +209,22 @@ describe('quick-batch: /gsd:quick command + workflow stay byte-identical (row 48
     // catch; same false-positive class already scoped away twice above (#3730, #2529 round 40).
     const touchedQuickSteps = unexpectedQuickStepChanges(changed, isPhaseWork);
     assert.deepEqual(touchedQuickSteps, [], `unexpected changes under gsd-core/workflows/quick/steps/: ${touchedQuickSteps.join(', ')}`);
+  });
+
+  test('the #4904 hold-renewal carve-out accepts only the expansion appended to an otherwise unchanged line', () => {
+    const before = 'gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" >/dev/null 2>&1 || true';
+    const after = 'gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" ${_RENEW_HELD:+--renew-held "$_RENEW_HELD"} >/dev/null 2>&1 || true';
+    const added = new Set([after]);
+    const removed = new Set([before]);
+    assert.equal(isRenewHeldSweepLine('+', after, added, removed), true, 'the added side of the pair');
+    assert.equal(isRenewHeldSweepLine('-', before, added, removed), true, 'the removed side of the pair');
+    // The flag on a line that was not there before is new content, not the sweep.
+    assert.equal(isRenewHeldSweepLine('+', after, added, new Set()), false);
+    // The flag plus any other change to the line is not the sweep either.
+    const edited = after.replace('--raw', '--json');
+    assert.equal(isRenewHeldSweepLine('+', edited, new Set([edited]), removed), false);
+    // An ordinary quick line is untouched by this carve-out.
+    assert.equal(isRenewHeldSweepLine('+', 'Run the planner once.', new Set(['Run the planner once.']), removed), false);
   });
 
   test('positive control: the #5118 allowance exempts exactly one path; every other quick path in the same branch shape still trips row 48', () => {
