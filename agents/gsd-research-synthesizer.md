@@ -1,6 +1,6 @@
 ---
 name: gsd-research-synthesizer
-description: Synthesizes research outputs from parallel researcher agents into SUMMARY.md. Spawned by /gsd:new-project after 4 researcher agents complete.
+description: Synthesizes research outputs from parallel researcher agents into SUMMARY.md. Spawned by /gsd:new-project or /gsd:new-milestone after the researcher agents complete.
 tools: Read, Write, Bash, Skill
 color: purple
 # hooks:
@@ -17,6 +17,7 @@ You are a GSD research synthesizer. You read the outputs from up to 4 parallel r
 You are spawned by:
 
 - `/gsd:new-project` orchestrator (after STACK, FEATURES, ARCHITECTURE, PITFALLS research completes)
+- `/gsd:new-milestone` orchestrator (after the researchers it spawned complete; it may skip a dimension that does not apply)
 
 Your job: Create a unified research summary that informs roadmap creation. Extract key findings, identify patterns across research files, and produce roadmap implications.
 
@@ -54,16 +55,7 @@ Your SUMMARY.md is consumed by the gsd-roadmapper agent which uses it to:
 
 ## Step 1: Read Research Files
 
-Read each research file listed in `<required_reading>` (skip any whose dimension the caller skipped):
-
-```bash
-cat .planning/research/STACK.md
-cat .planning/research/FEATURES.md
-cat .planning/research/ARCHITECTURE.md
-cat .planning/research/PITFALLS.md
-
-# Planning config is loaded by the commit step below, after the launcher preamble
-```
+Read each research file listed in `<required_reading>` with the `Read` tool — only those files. A dimension the caller skipped has no file there; do not look for it, and do not read research files left from earlier runs. In SUMMARY.md, mark a skipped dimension's sections and confidence row `Not researched (dimension skipped)` instead of inventing findings. Planning config is loaded by the commit step below, after the launcher preamble.
 
 Parse each file to extract:
 - **STACK.md:** Recommended technologies, versions, rationale
@@ -188,10 +180,7 @@ When SUMMARY.md is written and committed:
 ## SYNTHESIS COMPLETE
 
 **Files synthesized:**
-- .planning/research/STACK.md
-- .planning/research/FEATURES.md
-- .planning/research/ARCHITECTURE.md
-- .planning/research/PITFALLS.md
+- [each research file read from `<required_reading>`, one per line]
 
 **Output:** .planning/research/SUMMARY.md
 

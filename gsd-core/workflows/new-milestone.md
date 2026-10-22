@@ -317,7 +317,7 @@ below still need to re-read it (each is its own shell) to resolve
 REQUIREMENTS.md/ROADMAP.md/STATE.md correctly under a workstream. It is
 removed in Step 10, its true last consumer. -->
 
-Extract from init JSON: `researcher_model`, `synthesizer_model`, `roadmapper_model`, `commit_docs`, `research_enabled`, `current_milestone`, `project_exists`, `roadmap_exists`, `latest_completed_milestone`, `phase_dir_count`, `phase_archive_path`, `agents_installed`, `missing_agents`, `project_path`, `roadmap_path`, `requirements_path`, `config_path`, `research_dir`, `milestones_path`, `phases_dir`, `archive_dir`.
+Extract from init JSON: `researcher_model`, `synthesizer_model`, `roadmapper_model`, `commit_docs`, `research_enabled`, `current_milestone`, `project_exists`, `roadmap_exists`, `latest_completed_milestone`, `phase_dir_count`, `phase_archive_path`, `agents_installed`, `missing_agents`, `project_path`, `roadmap_path`, `requirements_path`, `config_path`, `research_dir`, `codebase_map_files`, `milestones_path`, `phases_dir`, `archive_dir`.
 
 **If `agents_installed` is false:** Display a warning before proceeding:
 ```
@@ -374,7 +374,7 @@ Run one researcher per dimension (stack, features, architecture, pitfalls) by de
 mkdir -p .planning/research
 ```
 
-Spawn {N} parallel gsd-project-researcher agents (one per dimension kept). Each uses this template with dimension-specific fields:
+Spawn {N} parallel gsd-project-researcher agents (one per dimension kept). Each uses this template with dimension-specific fields. Fill `{codebase_map_lines}` with one `- {file} (Codebase map)` line per entry in `codebase_map_files` (none when it is empty):
 
 **Common structure for every researcher:**
 <!-- #2517 model-omit-on-inherit -->
@@ -389,12 +389,14 @@ Agent(prompt="
 SUBSEQUENT MILESTONE — [target features] (new features and refactors) in an existing app.
 {EXISTING_CONTEXT}
 Focus ONLY on what this milestone's work needs, including the integration points and pitfalls in the existing codebase it couples to or could break.
+Ground those in the existing code: read the codebase map files listed below when there are any; otherwise inspect the source this work touches.
 </milestone_context>
 
 <question>{QUESTION}</question>
 
 <required_reading>
 - {project_path} (Project context)
+{codebase_map_lines}
 </required_reading>
 
 ${AGENT_SKILLS_RESEARCHER}
@@ -418,10 +420,10 @@ Use template: ~/.claude/gsd-core/templates/research-project/{FILE}
 
 | Field | Stack | Features | Architecture | Pitfalls |
 |-------|-------|----------|-------------|----------|
-| EXISTING_CONTEXT | Existing validated capabilities (DO NOT re-research): [from PROJECT.md] | Existing features (already built): [from PROJECT.md] | Existing architecture: [from PROJECT.md or codebase map] | Focus on common mistakes when ADDING these features to existing system |
-| QUESTION | What stack additions/changes are needed for [target features]? | How do [target features] typically work? Expected behavior? | How do [target features] integrate with existing architecture? | Common mistakes when adding [target features] to [domain]? |
-| CONSUMER | Specific libraries with versions for NEW capabilities, integration points, what NOT to add | Table stakes vs differentiators vs anti-features, complexity noted, dependencies on existing | Integration points, new components, data flow changes, suggested build order | Warning signs, prevention strategy, which phase should address it |
-| GATES | Versions current (verify with Context7), rationale explains WHY, integration considered | Categories clear, complexity noted, dependencies identified | Integration points identified, new vs modified explicit, build order considers deps | Pitfalls specific to adding these features, integration pitfalls covered, prevention actionable |
+| EXISTING_CONTEXT | Existing validated capabilities (DO NOT re-research): [from PROJECT.md] | Existing features and the behavior they must keep through refactors: [from PROJECT.md] | Existing architecture: [from PROJECT.md or codebase map] | Focus on mistakes when making these changes (new features or refactors) to the existing system, and what they could break |
+| QUESTION | What stack additions/changes are needed for [target features]? | How do [target features] typically work? Expected behavior, and what existing behavior must stay? | How do [target features] integrate with or change the existing architecture? What do they couple to? | Common mistakes when making [target features] in [domain]? What in the existing codebase could they break? |
+| CONSUMER | Specific libraries with versions for this milestone's work, integration points, what NOT to add | Table stakes vs differentiators vs anti-features, complexity noted, dependencies on existing | Integration points, new components, data flow changes, suggested build order | Warning signs, prevention strategy, which phase should address it |
+| GATES | Versions current (verify with Context7), rationale explains WHY, integration considered | Categories clear, complexity noted, dependencies identified | Integration points identified, new vs modified explicit, build order considers deps | Pitfalls specific to this milestone's work, integration and breakage pitfalls covered, prevention actionable |
 | FILE | STACK.md | FEATURES.md | ARCHITECTURE.md | PITFALLS.md |
 
 > **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling all researcher Agent() calls above, do NOT read research files or synthesize content independently while the subagents are active. Wait for all researchers to complete before spawning the synthesizer. This prevents duplicate work and wasted context.
@@ -456,7 +458,7 @@ Commit after writing.
 
 This guarantees `gsd-roadmapper` (which lists SUMMARY.md as required reading) never runs against a missing or truncated SUMMARY.md.
 
-Display key findings from SUMMARY.md:
+Display key findings from SUMMARY.md (omit a line whose dimension was skipped — Stack, Features or Pitfalls):
 ```
 ### GSD ► RESEARCH COMPLETE ✓
 
@@ -487,7 +489,7 @@ Present features by category:
 **Research notes:** [any relevant notes]
 ```
 
-**If research was skipped:** Gather requirements through conversation. Ask: "What are the main things users need to do with [new features]?" Clarify, probe for related capabilities, group into categories.
+**If research was skipped:** Gather requirements through conversation. Ask: "What are the main things users need to do with [target features]?" Clarify, probe for related capabilities, group into categories.
 
 **Scope each category** via AskUserQuestion (multiSelect: true, header max 12 chars):
 - "[Feature 1]" — [brief description]

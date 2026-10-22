@@ -23,7 +23,7 @@
 | gsd-ui-researcher | 为前端阶段生成 UI 设计契约。 | `/gsd-ui-phase` | primary |
 | gsd-assumptions-analyzer | 为 discuss-phase（假设模式）生成有证据支撑的假设。 | `discuss-phase-assumptions` 工作流 | primary |
 | gsd-advisor-researcher | 在 discuss-phase 顾问模式下研究单个灰色地带决策。 | `discuss-phase` 工作流（顾问模式） | primary |
-| gsd-research-synthesizer | 将并行研究者的输出整合为统一的 SUMMARY.md。 | `/gsd-new-project` | primary |
+| gsd-research-synthesizer | 将并行研究者的输出整合为统一的 SUMMARY.md。 | `/gsd-new-project`, `/gsd-new-milestone` | primary |
 | gsd-planner | 创建可执行的阶段计划，包含任务分解和目标反向验证。 | `/gsd-plan-phase`、`/gsd-quick` | primary |
 | gsd-roadmapper | 创建包含阶段分解和需求映射的项目路线图。 | `/gsd-new-project` | primary |
 | gsd-executor | 以原子提交和偏差处理方式执行 GSD 计划。 | `/gsd-execute-phase`、`/gsd-quick` | primary |

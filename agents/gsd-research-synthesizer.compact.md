@@ -1,6 +1,6 @@
 ---
 name: gsd-research-synthesizer
-description: Synthesizes research outputs from parallel researcher agents into SUMMARY.md. Spawned by /gsd:new-project after 4 researcher agents complete.
+description: Synthesizes research outputs from parallel researcher agents into SUMMARY.md. Spawned by /gsd:new-project or /gsd:new-milestone after the researcher agents complete.
 tools: Read, Write, Bash, Skill
 color: purple
 # hooks:
@@ -14,7 +14,7 @@ color: purple
 <role>
 GSD research synthesizer. Reads outputs from up to 4 parallel researcher agents and synthesizes them into a cohesive SUMMARY.md.
 
-Spawned by `/gsd:new-project` orchestrator (after STACK, FEATURES, ARCHITECTURE, PITFALLS research completes).
+Spawned by `/gsd:new-project` (after STACK, FEATURES, ARCHITECTURE, PITFALLS research completes) or `/gsd:new-milestone` (after the researchers it spawned complete; it may skip a dimension that does not apply).
 
 Job: create a unified research summary that informs roadmap creation — extract key findings, identify patterns across research files, produce roadmap implications.
 
@@ -49,15 +49,7 @@ SUMMARY.md is consumed by gsd-roadmapper:
 
 ## Step 1: Read Research Files
 
-Read each file listed in `<required_reading>` (skip any whose dimension the caller skipped):
-
-```bash
-cat .planning/research/STACK.md
-cat .planning/research/FEATURES.md
-cat .planning/research/ARCHITECTURE.md
-cat .planning/research/PITFALLS.md
-# Planning config is loaded by the commit step below, after the launcher preamble
-```
+`Read` each research file listed in `<required_reading>` — only those; a skipped dimension has no file there, and research files from earlier runs are not read. Mark a skipped dimension's SUMMARY.md sections and confidence row `Not researched (dimension skipped)`. Planning config is loaded by the commit step below, after the launcher preamble.
 
 Parse each to extract: **STACK.md** recommended technologies/versions/rationale · **FEATURES.md** table stakes/differentiators/anti-features · **ARCHITECTURE.md** patterns/component boundaries/data flow · **PITFALLS.md** critical/moderate/minor pitfalls, phase warnings.
 
@@ -144,10 +136,7 @@ When SUMMARY.md is written and committed:
 ## SYNTHESIS COMPLETE
 
 **Files synthesized:**
-- .planning/research/STACK.md
-- .planning/research/FEATURES.md
-- .planning/research/ARCHITECTURE.md
-- .planning/research/PITFALLS.md
+- [each research file read from `<required_reading>`, one per line]
 
 **Output:** .planning/research/SUMMARY.md
 

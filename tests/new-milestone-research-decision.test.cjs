@@ -10,7 +10,9 @@
  *  5. researchers are briefed on the milestone's work and the existing
  *     codebase, and research is not offered when agents are not installed,
  *  6. Step 10 passes SUMMARY.md to the roadmapper only when research ran,
- *  7. the synthesizer contract does not require all four research files.
+ *  7. the synthesizer contract does not require all four research files,
+ *  8. per-dimension fields and the codebase-map input match that scope, and
+ *     the /gsd-new-milestone command describes it the same way.
  */
 
 const { describe, test } = require('node:test');
@@ -79,6 +81,8 @@ describe('new-milestone Step 8 research decision (#5148)', () => {
     const reading = synth.slice(synth.indexOf('<required_reading>'), synth.indexOf('</required_reading>'));
     assert.match(reading, /\{required_reading_lines\}/);
     assert.match(synth, /intentionally skipped; their absence is expected/, 'synthesizer prompt must say skipped dimensions are expected');
+    assert.match(synth, /Display key findings from SUMMARY\.md \(omit a line whose dimension was skipped/,
+      'RESEARCH COMPLETE must not show findings for a skipped dimension');
     assert.doesNotMatch(reading, /^- \{research_dir\}\/PITFALLS\.md$/m, 'PITFALLS.md must not be unconditional');
   });
 
@@ -90,6 +94,26 @@ describe('new-milestone Step 8 research decision (#5148)', () => {
     assert.doesNotMatch(template, /NEW features|\[new features\]/, 'template must not limit research to new features');
     assert.match(template, /<research_type>[^<]*this milestone's work/);
     assert.match(template, /integration points and pitfalls in the existing codebase/);
+  });
+
+  test('per-dimension fields cover refactors and breakage, not only added features', () => {
+    const table = body.slice(body.indexOf('**Dimension-specific fields:**'), body.indexOf('| FILE |'));
+    assert.match(table, /\| QUESTION \|/, 'dimension table is missing');
+    assert.doesNotMatch(table, /ADDING these features|adding \[target features\]|NEW capabilities|adding these features/,
+      'dimension cells must not limit research to added features');
+    assert.match(table, /What in the existing codebase could they break\?/);
+    assert.match(table, /What do they couple to\?/);
+    assert.doesNotMatch(workflow, /\[new features\]/, 'no step may still say [new features]');
+  });
+
+  test('researchers get the codebase map as an explicit input', () => {
+    assert.match(workflow, /`codebase_map_files`/, 'Step 7 must extract codebase_map_files');
+    const start = body.indexOf('**Common structure for every researcher:**');
+    const template = body.slice(start, body.indexOf('subagent_type="gsd-project-researcher"'));
+    const reading = template.slice(template.indexOf('<required_reading>'), template.indexOf('</required_reading>'));
+    assert.match(reading, /\{codebase_map_lines\}/);
+    assert.match(body.slice(0, start), /Fill `\{codebase_map_lines\}` with one `- \{file\} \(Codebase map\)` line per entry in `codebase_map_files`/);
+    assert.match(template, /otherwise inspect the source this work touches/);
   });
 
   test('without installed agents, research is skipped without asking', () => {
@@ -119,8 +143,22 @@ describe('gsd-research-synthesizer reads only the files it is given (#5148)', ()
       assert.doesNotMatch(agent, /all 4 research files/i);
       assert.match(agent, /^- Read the research files listed in `<required_reading>`/m);
       assert.match(agent, /^- \[ \] Every research file listed in `<required_reading>` read$/m);
+      assert.doesNotMatch(agent, /cat \.planning\/research\/(STACK|FEATURES|ARCHITECTURE|PITFALLS)\.md/,
+        'Step 1 must not read a fixed set of four files');
+      const complete = agent.slice(agent.indexOf('**Files synthesized:**'), agent.indexOf('**Output:**'));
+      assert.doesNotMatch(complete, /STACK\.md|FEATURES\.md|ARCHITECTURE\.md|PITFALLS\.md/,
+        'SYNTHESIS COMPLETE must list the files actually read, not a fixed four');
+      assert.match(agent, /\/gsd:new-milestone/, 'spawned-by must name new-milestone');
     });
   }
+});
+
+describe('/gsd-new-milestone command describes the same research scope (#5148)', () => {
+  test('command file no longer limits research to new features', () => {
+    const command = readFileNormalized(path.join(__dirname, '..', 'commands', 'gsd', 'new-milestone.md'));
+    assert.doesNotMatch(command, /NEW features only/);
+    assert.match(command, /`\.planning\/research\/` — domain research \(optional; the milestone's features and refactors, and what they couple to in the existing codebase\)/);
+  });
 });
 
 describe('new-milestone Step 9 requirements use research from this run (#5148)', () => {
