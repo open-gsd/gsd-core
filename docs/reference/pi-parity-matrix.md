@@ -42,7 +42,7 @@ Every hook script has a recorded Pi disposition, and so does every event and scr
 | Hook | Claude event | Disposition | Reason |
 |---|---|---|---|
 | `gsd-check-update.js` | SessionStart | unsupported | its cache is read only by the Claude statusline and update banner; Pi has neither, and Pi installs update through the installer or `pi update` |
-| `gsd-path-export.js` | SessionStart | unsupported | appends to the `$CLAUDE_ENV_FILE` that only Claude Code hands to SessionStart hooks; Pi provides no such file |
+| `gsd-path-export.js` | SessionStart | unsupported | persists the `gsd_run` directory through `$CLAUDE_ENV_FILE`, which Claude Code provides only to SessionStart, Setup, CwdChanged and FileChanged hooks; Pi has no equivalent env file |
 | `gsd-update-banner.js` | statusLine | unsupported | renders into the Claude statusline; Pi extensions have no equivalent statusline command |
 | `gsd-statusline.js` | statusLine | unsupported | Claude statusLine command; Pi extensions have no equivalent statusline command |
 | `gsd-agent-isolation-guard.js` | PreToolUse | unsupported | guards the isolation argument of Claude's Agent call; `gsd_dispatch` has no isolation parameter and a dispatched role runs flat in its own process |
