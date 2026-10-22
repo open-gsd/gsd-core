@@ -1957,6 +1957,26 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     });
   });
 
+  describe('a command that needs more than the scan budget is denied as command-too-complex (#5255 review round 9, Minor 2)', () => {
+    // Four readings, each rescanning each nested `$( )`, multiply the work: a
+    // megabyte of `$$(` is tokenized about 60 times over, which took seconds
+    // per Bash call. The budget is eight times the length cap, so a command
+    // at the cap still gets every reading (the boundary rows below).
+    const runs = (unit) => unit.repeat(Math.floor((1024 * 1024 - 'echo '.length) / unit.length));
+
+    for (const unit of ['$$(', '$$$(']) {
+      test(`a megabyte of \`${unit}\` is denied once the budget is spent`, () => {
+        assertBlocked(runHook(bash(`echo ${runs(unit)}`)), `1 MiB of ${unit}`, { code: 'command-too-complex', tool: 'Bash', path: '' });
+      });
+    }
+
+    test('in process: the budget is per command', () => {
+      const { findSecretRead } = require(HOOK_PATH);
+      assert.deepEqual(findSecretRead(`echo ${runs('$$(')}`, 0), { code: 'command-too-complex', text: '' });
+      assert.deepEqual(findSecretRead(R`echo $'x'; cat .env`, 0), { code: 'secret-read', text: '.env' });
+    });
+  });
+
   describe('boundaries (#5255 review round 6, Minor 5)', () => {
     const LIMIT = 1024 * 1024;
     // A command of exactly `len` characters: `prefix`, a run of `$`, `suffix`.
