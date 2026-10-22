@@ -794,7 +794,7 @@ gsd_run query state.record-session \
 
 ```bash
 # Update ROADMAP.md progress for this phase (plan counts, status)
-gsd_run query roadmap.update-plan-progress "${PHASE_NUMBER}"
+PROGRESS=$(gsd_run query roadmap.update-plan-progress "${PHASE_NUMBER}") && REASON=$(jq -er '.reason//""' <<<"$PROGRESS") && [ "$REASON" != missing_phase_details ] || { echo "ERROR: no ROADMAP entry for ${PHASE_NUMBER}-${PLAN} (or query failed). STOP: skip this plan's completion steps." >&2; exit 1; }
 
 # Mark completed requirements from PLAN.md frontmatter
 # Extract the `requirements` array from the plan's frontmatter, then mark each complete

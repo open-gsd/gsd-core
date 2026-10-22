@@ -110,6 +110,58 @@ describe('roadmap analyze checkbox_conflict (#4757)', () => {
     assert.strictEqual(out.completed_phases, 1);
   });
 
+  // #5221: roadmap_record — phase number (zero-padding folded per segment) -> whether every ROADMAP
+  // record of it (checklist entry, phase-table Status cell) reads complete. A phase with no record is absent.
+  const record = (roadmap, config) => {
+    if (config) fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify(config));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), roadmap);
+    return analyze(tmpDir).roadmap_record;
+  };
+  const TABLE = '| Phase | Plans Complete | Status | Completed |\n|---|---|---|---|\n';
+
+  test('#5221: roadmap_record reads checklist entries regardless of disk', () => {
+    writeProject(tmpDir, [
+      { ticked: false, shape: DISK.NONE },
+      { ticked: false, shape: DISK.VERIFIED },
+      { ticked: true, shape: DISK.NONE },
+    ]);
+    assert.deepStrictEqual(analyze(tmpDir).roadmap_record, { 1: false, 2: false, 3: true });
+  });
+
+  test('#5221: roadmap_record reads a table-only row by its Status cell; a heading-only phase is absent', () => {
+    const out = record('# Roadmap\n\n## Milestone: v1.0\n\n### Phase 1: A\n\n**Goal**: g\n\n### Phase 4: D\n\n**Goal**: g\n\n## Progress\n\n'
+      + TABLE + '| 01. A | 1/1 | Complete | 2026-01-01 |\n| 2 | 0/1 | Pending | - |\n| 3.02 | 0/1 | In Progress | - |\n');
+    assert.deepStrictEqual(out, { 1: true, 2: false, '3.2': false });
+  });
+
+  test('#5221: a checklist entry and a table row must both read complete', () => {
+    const out = record('# Roadmap\n\n## Milestone: v1.0\n\n- [x] **Phase 1: A**\n- [x] **Phase 2: B**\n\n## Progress\n\n'
+      + TABLE + '| 1 | 1/1 | Complete | 2026-01-01 |\n| 2 | 0/1 | Pending | - |\n');
+    assert.deepStrictEqual(out, { 1: true, 2: false });
+  });
+
+  test('#5221: a phase table that does not parse (ragged row) makes roadmap_record null, never a partial record', () => {
+    const out = record('# Roadmap\n\n## Milestone: v1.0\n\n- [x] **Phase 1: A**\n\n## Progress\n\n'
+      + TABLE + '| 1 | 0/1 | Planned |\n');
+    assert.strictEqual(out, null);
+  });
+
+  test('#5221: a phase table whose Phase/Status headers are not recognised makes roadmap_record null, not checklist-only', () => {
+    const out = record('# Roadmap\n\n## Milestone: v1.0\n\n- [x] **Phase 1: A**\n\n## Progress\n\n'
+      + '| phase | Plans Complete | state | Completed |\n|---|---|---|---|\n| 1 | 0/1 | Not started | - |\n');
+    assert.strictEqual(out, null);
+    // A lowercase table without Plans Complete (e.g. traceability) is not a phase table: no false block.
+    assert.deepStrictEqual(record('# Roadmap\n\n## Milestone: v1.0\n\n- [x] **Phase 1: A**\n\n'
+      + '| Requirement | phase | status |\n|---|---|---|\n| R1 | 1 | Pending |\n'), { 1: true });
+  });
+
+  test('#5221: two brackets sharing token 01 — one unticked keeps 01 incomplete (fails closed)', () => {
+    const roadmap = (a, b) => `# Roadmap\n\n## [GSD.02] v2.0\n\n- [${a}] **[GSD.02] 01: One**\n- [${b}] **[GSD.03] 01: Other**\n\n### [GSD.02] 01: One\n**Goal:** a\n\n### [GSD.03] 01: Other\n**Goal:** b\n`;
+    assert.deepStrictEqual(record(roadmap('x', ' '), { phase_id_convention: 'bracket' }), { 1: false });
+    assert.deepStrictEqual(record(roadmap(' ', 'x'), { phase_id_convention: 'bracket' }), { 1: false });
+    assert.deepStrictEqual(record(roadmap('x', 'x'), { phase_id_convention: 'bracket' }), { 1: true });
+  });
+
   test('boundary: zero, one and two conflicts yield arrays of exactly that length', () => {
     const cases = [
       [[{ ticked: true, shape: DISK.VERIFIED }, { ticked: false, shape: DISK.NONE }], 0],

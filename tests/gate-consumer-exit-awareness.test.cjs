@@ -292,9 +292,26 @@ describe('jq-subset-stub: jq semantics for the filters the extracted blocks use'
     });
   }
 
+  // #5221: the update-plan-progress completion step reads `.reason//""` under -er (measured from real jq 1.8).
+  const REASON = '.reason//""';
+  for (const [doc, printed] of [
+    ['{"updated":true}', ''],
+    ['{"updated":false,"reason":"missing_phase_details"}', 'missing_phase_details'],
+    ['{"reason":null}', ''],
+    ['{"reason":false}', ''],
+    ['{"reason":0}', '0'],
+  ]) {
+    test(`${doc}: -er REASON prints ${JSON.stringify(printed)} and exits 0`, () => {
+      const r = jq(['-er', REASON], doc);
+      assert.equal(r.status, 0);
+      assert.equal(r.stdout, `${printed}\n`);
+    });
+  }
+
   // KNOWN DIVERGENCES from real jq, pinned so they stay deliberate (see the stub's header): none of them is
   // reachable from the gate handler's JSON, and a block that starts to depend on one needs the real jq.
   test('known divergences: empty stdin, a non-object .data and a top-level array', () => {
+    assert.equal(jq(['-er', REASON], '[]').status, 0, '[]: jq errors (exit 5); the stub reads the missing .reason as null');
     assert.equal(jq(['-e', PASSED], '').status, 2, 'jq exits 4 (-e over no output); the stub treats it as invalid JSON');
     for (const doc of ['{"data":"x"}', '{"data":[1]}', '[]']) {
       assert.equal(jq(['-e', PASSED], doc).status, 1, `${doc}: jq errors (exit 5); the stub reads the missing field as null`);
@@ -361,6 +378,55 @@ describe('capture-and-continue consumers: a verdict is read under set -e, the st
       const r = run('', 2);
       assert.equal(r.status, 0, `the capture must not abort: ${r.stderr}`);
       assert.equal(r.stdout, '|2');
+    });
+  }
+});
+
+describe('roadmap.update-plan-progress: only a missing_phase_details decline stops the plan\'s completion step (#5221)', { skip: SKIP }, () => {
+  const marker = 'PROGRESS=$(gsd_run query roadmap.update-plan-progress';
+  for (const [name, file] of [
+    ['gsd-executor', 'agents/gsd-executor.md'],
+    ['execute-plan', EXECUTE_PLAN],
+    ['execute-phase wave tracking', EXECUTE_PHASE],
+  ]) {
+    const run = (stdout, rc) => runBash(span(file, marker, marker), { stdout, rc }, {
+      preamble: ['PHASE=3; PHASE_NUMBER=3; PLAN=01; plan_id=01'],
+      probe: 'echo CONTINUED',
+    });
+
+    test(`${name}: updated true continues`, () => {
+      const r = run('{"updated":true}', 0);
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /CONTINUED/);
+    });
+
+    test(`${name}: an idempotent no-op (updated false, "no changes were needed") continues`, () => {
+      const r = run('{"updated":false,"reason":"no changes were needed"}', 0);
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /CONTINUED/);
+    });
+
+    test(`${name}: missing_phase_details prints an ERROR naming the phase-plan and stops`, () => {
+      const r = run('{"updated":false,"reason":"missing_phase_details"}', 0);
+      assert.equal(r.status, 1);
+      assert.match(r.stderr, /ERROR: .*3-01/);
+      assert.ok(!/CONTINUED/.test(r.stdout));
+    });
+
+    test(`${name}: a failed query (exit 69) stops too`, () => {
+      const r = run('', 69);
+      assert.equal(r.status, 1);
+      assert.match(r.stderr, /ERROR/);
+      assert.ok(!/CONTINUED/.test(r.stdout));
+    });
+
+    test(`${name}: output jq cannot parse (garbage or empty, exit 0) stops`, () => {
+      for (const out of ['not json', '']) {
+        const r = run(out, 0);
+        assert.equal(r.status, 1, `stdout=${JSON.stringify(out)}`);
+        assert.match(r.stderr, /ERROR/);
+        assert.ok(!/CONTINUED/.test(r.stdout));
+      }
     });
   }
 });
