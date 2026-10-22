@@ -110,7 +110,8 @@
 //   secret files are out of scope (Write/Edit were never gated). Commands
 //   over 1 MiB are denied outright (`command-too-large`) rather than
 //   scanned partially or waved through, and so is a command whose scan
-//   overflows the stack (`command-too-complex`). (#4639 adds one more, by design: the
+//   overflows the stack or needs more than eight times that much work
+//   (`command-too-complex`). (#4639 adds one more, by design: the
 //   value of `--env-file` under a container runtime is exempt, so the
 //   container's own command can print the interpolated environment
 //   (`alpine printenv`, `docker compose config`) — the same exposure class
@@ -143,9 +144,9 @@
 //        bug in a hook that runs on EVERY Bash call must never brick a
 //        session; the crash policy is declared once below). One error is
 //        not a bug but a limit: a Bash command nested deep enough to
-//        overflow the parser's stack is denied as `command-too-complex`
-//        (#5255), because failing open there allows a read the scan had
-//        not yet reached.
+//        overflow the parser's stack, or one that needs more than the scan's
+//        work budget, is denied as `command-too-complex` (#5255), because
+//        failing open there allows a read the scan had not yet reached.
 
 'use strict';
 
@@ -161,6 +162,15 @@ const MAX_COMMAND_LENGTH = 1024 * 1024;
 
 // Recursion budget for `$( )` / backtick / `<( )` / nested-shell rescans.
 const MAX_NESTING_DEPTH = 3;
+
+// Work budget for one Bash command, in characters tokenized across every
+// reading and every nested rescan (#5255). Four readings, each rescanning
+// each nested `$( )`, multiply the work: a 1 MiB run of `$$(` is tokenized
+// about 60 times over and took seconds per call. Eight times the length cap
+// lets a 1 MiB command get all four readings and a nested level; the most
+// any of 539,601 real agent commands needed was about 250,000. A command that
+// needs more is denied as `command-too-complex` rather than scanned on.
+const MAX_SCAN_CHARACTERS = 8 * MAX_COMMAND_LENGTH;
 
 // Brace-alternative budget for a Grep glob before it is denied as too complex.
 const MAX_GLOB_ALTERNATIVES = 64;
@@ -1658,18 +1668,19 @@ function findSecretReadUnderOtherReadings(command) {
 function findSecretRead(command, depth) {
   if (depth > 0) return readEachWay(command, depth);
   scanUnfinished = false;
+  scanBudget = MAX_SCAN_CHARACTERS;
   let hit = null;
   try {
     hit = readEachWay(command, 0);
   } catch (e) {
-    if (!(e instanceof RangeError)) throw e;
+    if (!unfinishedBy(e)) throw e;
     scanUnfinished = true;
   }
   return hit !== null ? hit : (scanUnfinished ? { code: 'command-too-complex', text: '' } : null);
 }
 
 // Set when a reading could not finish: the stack overflowed somewhere in
-// it. Before, the plain reading's overflow reached the hook's fail-open
+// it, or the command spent MAX_SCAN_CHARACTERS. Before, the plain reading's overflow reached the hook's fail-open
 // crash policy, and the other readings' overflows were dropped, so past the
 // overflow depth a command the scan had not finished was allowed — and the
 // readings overflow sooner than the scan before #5255 did, so some commands
@@ -1677,6 +1688,17 @@ function findSecretRead(command, depth) {
 // as that read; only a command with no read found and an unfinished reading
 // is denied as `command-too-complex`. findSecretRead resets it per command.
 let scanUnfinished = false;
+
+// What is left of MAX_SCAN_CHARACTERS for the current command; scanCommand
+// throws SCAN_BUDGET_SPENT once it is gone, and every later scan of the
+// command throws at once, so an over-budget command stops in one pass.
+let scanBudget = MAX_SCAN_CHARACTERS;
+const SCAN_BUDGET_SPENT = new Error('secret read guard: scan budget spent');
+
+// Whether `e` means a reading could not finish, rather than a parser bug.
+function unfinishedBy(e) {
+  return e instanceof RangeError || e === SCAN_BUDGET_SPENT;
+}
 
 // findSecretRead below the top level: the readings of `command`, then the
 // plain scan, as described above.
@@ -1696,8 +1718,9 @@ function readEachWay(command, depth) {
       // escaped quotes decode into thousands of nested `"$( )"` overflows the
       // stack in findParenClose. An error here must not cost the plain
       // reading's verdict, which is the one the guard gave before #5255; an
-      // overflow still leaves the command unfinished (findSecretRead).
-      if (e instanceof RangeError) scanUnfinished = true;
+      // overflow, or a spent budget, still leaves the command unfinished
+      // (findSecretRead).
+      if (unfinishedBy(e)) scanUnfinished = true;
     }
     if (hit !== null) return hit;
   }
@@ -1713,6 +1736,8 @@ function secretRead(text) {
 // shell ('bash' | 'zsh' | 'dash') whose reading it is; an ANSI-C reading
 // (bash's, zsh's) uses that shell's `$'…'` values.
 function scanCommand(command, depth, reading) {
+  scanBudget -= command.length;
+  if (scanBudget < 0) throw SCAN_BUDGET_SPENT;
   const { tokens, nested, unreadable } = tokenize(command, reading);
 
   for (const sub of nested) {
@@ -1999,8 +2024,8 @@ function reasonFor(code, tool, target) {
       'cannot be checked for secret-file reads. Split it into smaller commands.';
   }
   if (code === 'command-too-complex') {
-    return 'Secret read guard: this Bash command is nested too deeply to be checked for ' +
-      'secret-file reads. Split it into smaller commands.';
+    return 'Secret read guard: this Bash command is nested too deeply, or takes too much work, ' +
+      'to be checked for secret-file reads. Split it into smaller commands.';
   }
   if (code === 'glob-too-complex') {
     return `Secret read guard: the Grep glob '${target}' expands to more than ${MAX_GLOB_ALTERNATIVES} ` +
