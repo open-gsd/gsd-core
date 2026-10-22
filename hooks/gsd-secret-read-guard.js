@@ -105,13 +105,22 @@
 //   inside scripts the agent executes, and `glob: '*'` reaching a
 //   NON-gitignored `.env`, and a wrapper (or wrapper option taking a
 //   separate value) the WRAPPERS table does not list, or `env -S 'script'` (the split string is skipped as
-//   the option's value). The promise is "no looser than the retired rules
-//   on plain commands, without arming the compound-`cd` prompt". Writes to
-//   secret files are out of scope (Write/Edit were never gated). Commands
-//   over 1 MiB are denied outright (`command-too-large`) rather than
-//   scanned partially or waved through, and so is a command whose scan
-//   overflows the stack or needs more than eight times that much work
-//   (`command-too-complex`). (#4639 adds one more, by design: the
+//   the option's value). Reached through the same gaps and allowed under
+//   every reading, so the decoded-value check (#5255) does not cover them:
+//   a `${…}` default spelled with `$'…'` (`cat ${x:-$'.env'}`,
+//   `cat ${x-$'.e\x6ev'}`), since the text inside `${…}` is not scanned; a
+//   name joined to an expansion (`cat ${x:+a}$'.env'`, `cat .env${}`), the
+//   `$VAR` gap; a heredoc tag holding `${` or starting with `}`
+//   (`<<${;cat .env`, `<<$'E'${; cat .env #`, `<<}; cat .env #`), near
+//   #5523's form C (`<<{`); and zsh's `$((` holding a quote
+//   (`x$(($"));cat .env`, `$((")); cat .env #`), #5523's form I. The tests
+//   pin each as allowed. The promise is "no looser than
+//   the retired rules on plain commands, without arming the compound-`cd`
+//   prompt". Writes to secret files are out of scope (Write/Edit were never
+//   gated). Commands over 1 MiB are denied outright (`command-too-large`)
+//   rather than scanned partially or waved through, and so is a command
+//   whose scan overflows the stack or needs more than eight times that much
+//   work (`command-too-complex`). (#4639 adds one more, by design: the
 //   value of `--env-file` under a container runtime is exempt, so the
 //   container's own command can print the interpolated environment
 //   (`alpine printenv`, `docker compose config`) — the same exposure class
