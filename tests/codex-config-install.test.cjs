@@ -2985,6 +2985,190 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, UNINSTALL_HOOK_EVENTS), false, 'a dangling link reads as absent');
   });
 
+  // Uninstall step 1a runs this removal only when the predicate says true, so
+  // the two must agree: a GSD hook the predicate misses survives uninstall,
+  // and a false positive makes uninstall check and rewrite a file it has
+  // nothing to remove from.
+  //
+  // Every reconcile also canonicalizes the file whatever event it is given:
+  // it lifts legacy top-level event arrays under `hooks` and re-indents.
+  // Uninstall now skips that rewrite when no GSD hook is present, so "the
+  // removal changed the file" is measured against the same input put through
+  // the canonicalization alone, a reconcile of an event no document uses.
+  //
+  // Two shapes are dropped by the removal even when no GSD hook is present,
+  // as part of that same skipped rewrite: an event entry that is not an
+  // object, and a non-array value under a removed event in the nested table.
+  // So they only appear in "mixed" documents, which also get one GSD hook the
+  // removal reaches; GSD-free documents never carry them.
+  test('property: codexHooksJsonHasManagedHooks is true exactly when the uninstall removal deletes from hooks.json (#5037)', () => {
+    const { removeCodexHooksJsonEvent, removeCodexHooksJsonSessionStart } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
+    const CANONICALIZE_ONLY_EVENT = 'GsdCanonicalizeOnly';
+    const EVENT_POOL = [...UNINSTALL_HOOK_EVENTS, 'Notification', 'SessionEnd'];
+    const MANAGED_BASENAMES = [
+      'gsd-check-update.js',
+      'gsd-check-update.cmd',
+      'gsd-context-monitor.js',
+      'gsd-context-monitor.cmd',
+      'gsd-update-check.js',
+    ];
+
+    // Hooks are generated as tags and given real paths per run, since a GSD
+    // command is only recognized under the config dir's own hooks/.
+    const hookArb = fc.oneof(
+      fc.record({ kind: fc.constant('managed'), basename: fc.constantFrom(...MANAGED_BASENAMES), quote: fc.constantFrom('"', "'", '') }),
+      fc.record({ kind: fc.constant('other-config-dir'), basename: fc.constantFrom(...MANAGED_BASENAMES) }),
+      fc.record({ kind: fc.constant('suffixed'), basename: fc.constantFrom(...MANAGED_BASENAMES) }),
+      fc.record({ kind: fc.constant('user'), command: fc.string({ maxLength: 20 }) }),
+      fc.record({ kind: fc.constant('raw'), value: fc.constantFrom(null, 'echo hi', 7, {}, { type: 'command' }, { command: 5 }) }),
+    );
+    const entryArb = fc.oneof(
+      { weight: 4, arbitrary: fc.record({ matcher: fc.constantFrom(undefined, '', 'Bash', '*'), hooks: fc.array(hookArb, { maxLength: 4 }) }) },
+      { weight: 1, arbitrary: fc.constantFrom({ matcher: 'Bash' }, { hooks: 'not-an-array' }) },
+    );
+    const tableArb = fc.array(fc.tuple(fc.constantFrom(...EVENT_POOL), fc.array(entryArb, { maxLength: 3 })), { maxLength: 4 });
+    const docArb = fc.oneof(
+      {
+        weight: 8,
+        arbitrary: fc.record({
+          kind: fc.constant('object'),
+          nested: fc.option(tableArb, { nil: null }),
+          legacy: tableArb,
+          extra: fc.constantFrom(null, { version: 1 }, { Stop: 'not-an-array' }),
+          hooksFirst: fc.boolean(),
+          indent: fc.constantFrom(0, 2, 4),
+        }),
+      },
+      {
+        weight: 3,
+        arbitrary: fc.record({
+          kind: fc.constant('mixed'),
+          nested: tableArb,
+          legacy: tableArb,
+          extra: fc.constant(null),
+          hooksFirst: fc.boolean(),
+          indent: fc.constantFrom(0, 2, 4),
+          junkEntries: fc.array(fc.record({
+            eventName: fc.constantFrom(...EVENT_POOL),
+            value: fc.constantFrom(null, 'text', 7, []),
+            inNested: fc.boolean(),
+          }), { minLength: 1, maxLength: 3 }),
+          junkValues: fc.array(fc.record({
+            eventName: fc.constantFrom(...UNINSTALL_HOOK_EVENTS),
+            value: fc.constantFrom('not-an-array', null, 5, {}),
+          }), { maxLength: 2 }),
+          gsdHook: fc.record({
+            eventName: fc.constantFrom(...UNINSTALL_HOOK_EVENTS),
+            basename: fc.constantFrom(...MANAGED_BASENAMES),
+            inNested: fc.boolean(),
+          }),
+        }),
+      },
+      { weight: 1, arbitrary: fc.record({ kind: fc.constant('text'), text: fc.constantFrom('', '  \n', '{ not json', '{"hooks": {', '[1, 2]', 'null', '"text"', '42') }) },
+      { weight: 1, arbitrary: fc.constant({ kind: 'absent' }) },
+    );
+
+    function materializeHook(hook, dir) {
+      switch (hook.kind) {
+        case 'managed':
+          return { type: 'command', command: `node ${hook.quote}${path.join(dir, 'hooks', hook.basename)}${hook.quote}` };
+        case 'other-config-dir':
+          return { type: 'command', command: `node "${path.join(`${dir}-other`, 'hooks', hook.basename)}"` };
+        case 'suffixed':
+          return { type: 'command', command: `node "${path.join(dir, 'hooks', hook.basename)}.bak"` };
+        case 'user':
+          return { type: 'command', command: hook.command };
+        default:
+          return hook.value;
+      }
+    }
+    function materializeTable(pairs, dir) {
+      return Object.fromEntries(pairs.map(([eventName, entries]) => [
+        eventName,
+        entries.map((entry) => (Array.isArray(entry.hooks)
+          ? { ...entry, hooks: entry.hooks.map((hook) => materializeHook(hook, dir)) }
+          : entry)),
+      ]));
+    }
+    function renderDoc(doc, dir) {
+      if (doc.kind === 'text') return doc.text;
+      const out = {};
+      const nested = doc.nested === null ? null : materializeTable(doc.nested, dir);
+      if (nested && doc.hooksFirst) out.hooks = nested;
+      Object.assign(out, materializeTable(doc.legacy, dir));
+      if (doc.extra) Object.assign(out, doc.extra);
+      if (nested && !doc.hooksFirst) out.hooks = nested;
+      if (doc.kind === 'mixed') addJunkAndGsdHook(doc, out, nested, dir);
+      return doc.indent ? `${JSON.stringify(out, null, doc.indent)}\n` : JSON.stringify(out);
+    }
+    // A mixed document's GSD hook goes in last, into an event array the
+    // removal reads, so no junk value can replace it.
+    function addJunkAndGsdHook(doc, out, nested, dir) {
+      const pushTo = (table, eventName, value) => {
+        if (Array.isArray(table[eventName])) table[eventName].push(value);
+        else table[eventName] = [value];
+      };
+      for (const junk of doc.junkEntries) pushTo(junk.inNested ? nested : out, junk.eventName, junk.value);
+      for (const junk of doc.junkValues) nested[junk.eventName] = junk.value;
+      const gsdEntry = { hooks: [materializeHook({ kind: 'managed', basename: doc.gsdHook.basename, quote: '"' }, dir)] };
+      const nestedValue = nested[doc.gsdHook.eventName];
+      if (doc.gsdHook.inNested && (nestedValue === undefined || Array.isArray(nestedValue))) {
+        pushTo(nested, doc.gsdHook.eventName, gsdEntry);
+      } else {
+        pushTo(out, doc.gsdHook.eventName, gsdEntry);
+      }
+    }
+    const readOrNull = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null);
+
+    const verdicts = new Set();
+    fc.assert(
+      fc.property(docArb, (doc) => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-prop-'));
+        try {
+          const file = hooksJsonPath(dir);
+          const content = doc.kind === 'absent' ? null : renderDoc(doc, dir);
+          const writeInput = () => {
+            if (content !== null) fs.writeFileSync(file, content, 'utf8');
+          };
+
+          writeInput();
+          const predicate = codexHooksJsonHasManagedHooks(dir, UNINSTALL_HOOK_EVENTS);
+          assert.strictEqual(readOrNull(file), content, 'the predicate must not write hooks.json');
+
+          let threw = false;
+          let canonical = null;
+          try {
+            removeCodexHooksJsonEvent(dir, CANONICALIZE_ONLY_EVENT);
+            canonical = readOrNull(file);
+          } catch {
+            threw = true;
+          }
+          writeInput();
+          let removed = null;
+          try {
+            // Uninstall step 1a's removal, in its order.
+            removeCodexHooksJsonSessionStart(dir);
+            for (const eventName of CODEX_EXTENDED_HOOK_EVENTS) removeCodexHooksJsonEvent(dir, eventName);
+            removed = readOrNull(file);
+          } catch {
+            threw = true;
+          }
+
+          // A file the removal cannot parse counts as holding GSD hooks, so
+          // the removal runs and reports the error.
+          const removalDeletes = threw || removed !== canonical;
+          verdicts.add(predicate);
+          assert.strictEqual(predicate, removalDeletes,
+            `input:\n${content}\ncanonicalized only:\n${canonical}\nafter the uninstall removal:\n${removed}`);
+        } finally {
+          cleanup(dir);
+        }
+      }),
+      { seed: 5037, numRuns: 200 },
+    );
+    assert.deepStrictEqual([...verdicts].sort(), [false, true], 'the generated documents must produce both verdicts');
+  });
+
   test('cleanupOrphanedCodexContextMonitorScript keeps the hooks.json deregistration when script deletion fails', () => {
     runCodexInstall(codexHome);
     seedPreExisting2586Install(codexHome);
