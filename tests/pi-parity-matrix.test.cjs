@@ -170,7 +170,9 @@ describe('#5561: Pi parity over the shipped surface', () => {
       assert.ok(reason.length > 0 && subcommands.length > 0, name);
       assert.equal(isStub(name), false, `${name} is partial, not a stub`);
       assert.ok(skillBody(name).includes(reason), `${name} does not print its reason`);
-      for (const sub of subcommands) assert.ok(skillBody(name).includes(`\`${sub}`), `${name} does not name ${sub}`);
+      for (const sub of subcommands) {
+        assert.ok(skillBody(name).includes(`\`${sub.usage}\``), `${name} does not name ${sub.usage}`);
+      }
     }
   });
 
