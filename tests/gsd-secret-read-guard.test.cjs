@@ -1911,6 +1911,52 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     });
   });
 
+  describe('a command the scan cannot finish is denied as command-too-complex (#5255 review round 9, Major 1)', () => {
+    // Each `"$(` opens a level the `$( )` scanner recurses into, so 300,000 of
+    // them overflow the stack at any Node stack size; a few thousand already
+    // do at the default. The overflow used to reach the hook's fail-open
+    // crash policy, which allowed a read the scan had not reached yet.
+    const deep = (n) => '"$('.repeat(n);
+
+    test('a nesting deep enough to overflow the stack is denied, with or without a read before it', () => {
+      for (const [label, cmd] of [['a read, then 300,000 levels', `cat .env; ${deep(300000)}`], ['300,000 levels', `echo ${deep(300000)}`]]) {
+        assertBlocked(runHook(bash(cmd)), label, { code: 'command-too-complex', tool: 'Bash', path: '' });
+      }
+    });
+
+    test('a read before a nesting the scan finishes is still reported as the read', () => {
+      assertBlocked(runHook(bash(`cat .env; ${deep(1000)}`)), 'a read, then 1,000 levels', { tool: 'Bash', path: '.env' });
+    });
+
+    test('an overflow in an ANSI-C reading is denied when no reading finds a read', () => {
+      // The body decodes into 40,000 nested `"$( )"` under bash's and zsh's
+      // readings only (about ten times the depth that overflows at Node's
+      // default stack); the plain and dash readings finish and find nothing.
+      const depth = 40000;
+      const cmd = "bash -c $'" + R`echo \"$(`.repeat(depth) + ':' + R`)\"`.repeat(depth) + "'; ls";
+      assertBlocked(runHook(bash(cmd)), `${depth} nested "$( )" in a $'…' body, no read`, { code: 'command-too-complex', tool: 'Bash', path: '' });
+    });
+
+    test('an overflow in the debugger-spawn scan is denied too', () => {
+      // That scan unwraps `timeout`, which the secret scan does not, so it
+      // tokenizes a body the secret scan never reads; `next` overflowed there
+      // at a greater depth than the #5255 tokenizer does.
+      const cmd = `timeout 5 bash -c 'claude --agent gsd-debugger; echo ${deep(100000)}'`;
+      assertBlocked(runHook(bash(cmd)), 'a debugger spawn, then 100,000 levels', { code: 'command-too-complex', tool: 'Bash', path: '' });
+    });
+
+    test('a Grep glob whose braces overflow the stack is denied as glob-too-complex', () => {
+      const glob = '{}'.repeat(50000) + '.env';
+      assertBlocked(runHook(grep({ glob })), '50,000 `{}`, then .env', { code: 'glob-too-complex', tool: 'Grep', path: glob });
+    });
+
+    test('in process: findSecretRead returns command-too-complex, and the next command is judged on its own', () => {
+      const { findSecretRead } = require(HOOK_PATH);
+      assert.deepEqual(findSecretRead(`echo ${deep(300000)}`, 0), { code: 'command-too-complex', text: '' });
+      assert.equal(findSecretRead('echo ok; ls', 0), null);
+    });
+  });
+
   describe('boundaries (#5255 review round 6, Minor 5)', () => {
     const LIMIT = 1024 * 1024;
     // A command of exactly `len` characters: `prefix`, a run of `$`, `suffix`.
