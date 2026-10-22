@@ -3029,6 +3029,72 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
       'a FIFO counts as unreadable, so the removal still runs');
   });
 
+  // The removal reads hooks.json too, after the predicate sends an unreadable
+  // file its way, so its read is bounded the same way and an unreadable file
+  // is refused loudly rather than read whole or waited on (#5037).
+  test('removeCodexHooksJsonSessionStart refuses an oversized hooks.json and leaves it unchanged (#5037)', () => {
+    const { CODEX_HOOKS_JSON_MAX_BYTES, removeCodexHooksJsonSessionStart } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
+    // Compact on purpose: a full read would re-indent it on the way back out.
+    const before = JSON.stringify({
+      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] },
+      padding: 'x'.repeat(CODEX_HOOKS_JSON_MAX_BYTES),
+    });
+    fs.writeFileSync(hooksJsonPath(codexHome), before, 'utf8');
+
+    assert.throws(() => removeCodexHooksJsonSessionStart(codexHome), /hooks\.json could not be read/);
+    assert.strictEqual(fs.readFileSync(hooksJsonPath(codexHome), 'utf8'), before, 'the file must be left byte-for-byte unchanged');
+  });
+
+  test('removeCodexHooksJsonSessionStart refuses a FIFO hooks.json without blocking (#5037)', (t) => {
+    if (process.platform === 'win32') {
+      t.skip('no FIFOs on Windows');
+      return;
+    }
+    const { execFileSync } = require('node:child_process');
+    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+    execFileSync('mkfifo', [hooksJsonPath(codexHome)], { stdio: 'ignore', timeout: PROBE_TIMEOUT_MS });
+    // Same child-process probe as the predicate's FIFO test, so a blocking
+    // read times out instead of hanging the suite.
+    const probe = [
+      'const surface = require(process.argv[1]);',
+      'let threw = false;',
+      'try {',
+      '  surface.removeCodexHooksJsonSessionStart(process.argv[2]);',
+      '} catch {',
+      '  threw = true;',
+      '}',
+      'process.stdout.write(JSON.stringify({ threw }));',
+    ].join('\n');
+    const modulePath = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'runtime-hooks-surface.cjs');
+    const result = runNode(['-e', probe, modulePath, codexHome], { timeoutMs: PROBE_TIMEOUT_MS });
+
+    assert.strictEqual(result.timedOut, false, 'the read must not block on the FIFO');
+    assert.strictEqual(result.exitCode, 0, result.stderr);
+    assert.deepStrictEqual(JSON.parse(result.stdout), { threw: true }, 'a FIFO is refused with an error');
+    assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isFIFO(), 'the FIFO must be left in place');
+  });
+
+  // Install reaches the reconcile only when GSD manages Codex hooks: a default
+  // install enables the hooks feature in config.toml and ships
+  // gsd-check-update.js. There the oversized file is refused and the
+  // pre-install snapshot is restored (#5037).
+  test('install over an oversized hooks.json refuses, restores config.toml and leaves hooks.json unchanged (#5037)', () => {
+    const { CODEX_HOOKS_JSON_MAX_BYTES } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
+    const configPath = path.join(codexHome, 'config.toml');
+    const configBefore = 'model = "gpt-5"\n';
+    fs.writeFileSync(configPath, configBefore, 'utf8');
+    const hooksJsonBefore = JSON.stringify({
+      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] },
+      padding: 'x'.repeat(CODEX_HOOKS_JSON_MAX_BYTES),
+    });
+    fs.writeFileSync(hooksJsonPath(codexHome), hooksJsonBefore, 'utf8');
+
+    assert.throws(() => runCodexInstall(codexHome), /hooks\.json could not be read/);
+
+    assert.strictEqual(fs.readFileSync(hooksJsonPath(codexHome), 'utf8'), hooksJsonBefore, 'hooks.json must be left byte-for-byte unchanged');
+    assert.strictEqual(fs.readFileSync(configPath, 'utf8'), configBefore, 'the pre-install config.toml must be restored');
+  });
+
   // Uninstall step 1a runs this removal only when the predicate says true, so
   // the two must agree: a GSD hook the predicate misses survives uninstall,
   // and a false positive makes uninstall check and rewrite a file it has
