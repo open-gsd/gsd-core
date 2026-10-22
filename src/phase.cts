@@ -1778,12 +1778,9 @@ function isPhaseTokenWithin(token: string, ancestor: string): boolean {
   const t = token.split('.');
   const a = ancestor.split('.');
   if (t.length <= a.length) return false;
-  const unpad = (s: string): string => s.replace(/^0+(?=\d)/, '');
-  return a.every((seg, i) => {
-    const other = t[i];
-    if (/^\d+$/.test(seg) && /^\d+$/.test(other)) return unpad(seg) === unpad(other);
-    return seg.toLowerCase() === other.toLowerCase();
-  });
+  // Zero padding is not significant ("05" = "5", "03A" = "3A"); case is not either.
+  const canon = (segment: string): string => segment.replace(/^0+(?=\d)/, '').toLowerCase();
+  return a.every((segment, i) => canon(segment) === canon(t[i]));
 }
 
 function cmdPhaseInsert(

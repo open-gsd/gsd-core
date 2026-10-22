@@ -17924,26 +17924,99 @@ describe('phase insert placement (#5599)', () => {
     assert.deepEqual(headingOrder(roadmap), ['13', '13.1', '130']);
   });
 
-  test('enumerated placement: 0..4 existing children, nested and sibling, new heading is last of its family', () => {
-    for (let k = 0; k <= 4; k++) {
-      const children = Array.from({ length: k }, (_, i) => `13.${i + 1}`);
-      const base = headingRoadmap(['13', ...children, '14']);
+  test('bullet-only roadmap: --sibling insert after a mid child lands after the later sibling', () => {
+    const { out, roadmap } = insert(['13.1', 'Gamma', '--sibling'], bulletRoadmap(['13', '13.1', '13.2', '14']));
+    assert.equal(out.phase_number, '13.3');
+    assert.deepEqual(bulletOrder(roadmap), ['13', '13.1', '13.2', '13.3', '14']);
+  });
 
-      const nested = insert(['13', 'N'], base);
-      assert.deepEqual(
-        headingOrder(nested.roadmap),
-        ['13', ...children, nested.out.phase_number, '14'],
-        `nested insert with ${k} existing children`,
+  test('bullet-only roadmap: phase 130 is not a descendant of phase 13', () => {
+    const { out, roadmap } = insert(['13', 'Child'], bulletRoadmap(['13', '130']));
+    assert.equal(out.phase_number, '13.1');
+    assert.deepEqual(bulletOrder(roadmap), ['13', '13.1', '130']);
+  });
+
+  test('bullet-only roadmap: the target is the last bullet and its children run to end of file', () => {
+    const { out, roadmap } = insert(['13', 'Tail'], bulletRoadmap(['12', '13', '13.1', '13.2']));
+    assert.equal(out.phase_number, '13.3');
+    assert.deepEqual(bulletOrder(roadmap), ['12', '13', '13.1', '13.2', '13.3']);
+  });
+
+  test('bold bullets: a new child lands after the existing bold child bullet', () => {
+    const bold = '# Roadmap\n\n- [ ] **Phase 13: A**\n- [ ] **Phase 13.1: B**\n- [ ] **Phase 14: C**\n';
+    const { out, roadmap } = insert(['13', 'Gamma'], bold);
+    assert.equal(out.phase_number, '13.2');
+    assert.deepEqual(
+      [...roadmap.matchAll(/^-\s*\[[ x]\]\s*\*\*Phase\s+(\S+?):/gm)].map((m) => m[1]),
+      ['13', '13.1', '13.2', '14'],
+    );
+  });
+
+  test('zero-padded headings: target 5 treats 05.1 as its child', () => {
+    const { out, roadmap } = insert(['5', 'Gamma'], headingRoadmap(['05', '05.1', '06']));
+    assert.equal(out.phase_number, '05.2');
+    assert.deepEqual(headingOrder(roadmap), ['05', '05.1', '05.2', '06']);
+  });
+
+  test('lettered phase: 3A.1 is a child of 3A', () => {
+    const { out, roadmap } = insert(['3A', 'Gamma'], headingRoadmap(['3A', '3A.1', '4']));
+    assert.equal(out.phase_number, '03A.2');
+    assert.deepEqual(headingOrder(roadmap).map((t) => t.replace(/^0+(?=\d)/, '')), ['3A', '3A.1', '3A.2', '4']);
+  });
+
+  test('CRLF roadmap: placement is the same and no line is split', () => {
+    const crlf = headingRoadmap(['13', '13.1', '14']).replace(/\n/g, '\r\n');
+    const { out, roadmap } = insert(['13', 'Gamma'], crlf);
+    assert.equal(out.phase_number, '13.2');
+    assert.deepEqual(headingOrder(roadmap), ['13', '13.1', '13.2', '14']);
+  });
+
+  test('bracket convention: a new child lands after the bracket-tagged child heading', () => {
+    const dir = createTempProject();
+    try {
+      fs.writeFileSync(
+        path.join(dir, '.planning', 'config.json'),
+        JSON.stringify({ phase_id_convention: 'bracket', project_code: 'GSD' }),
       );
-
-      if (k >= 1) {
-        const sibling = insert(['13.1', 'S', '--sibling'], base);
-        assert.deepEqual(
-          headingOrder(sibling.roadmap),
-          ['13', ...children, sibling.out.phase_number, '14'],
-          `sibling insert with ${k} existing children`,
-        );
-      }
+      const roadmapPath = path.join(dir, '.planning', 'ROADMAP.md');
+      fs.writeFileSync(
+        roadmapPath,
+        '# Roadmap\n\n### [GSD.01] Phase 1: A\n**Goal:** a\n\n### [GSD.01] Phase 1.1: B\n**Goal:** b\n\n### [GSD.01] Phase 2: C\n**Goal:** c\n',
+      );
+      const result = runGsdTools(['phase', 'insert', '1', 'Gamma'], dir);
+      assert.ok(result.success, `phase insert failed: ${result.error}`);
+      const order = [...fs.readFileSync(roadmapPath, 'utf8').matchAll(/^#{2,4}\s+(?:\[[^\]]{1,40}\]\s+)?Phase\s+(\S+?):/gm)].map((m) => m[1]);
+      assert.deepEqual(order, ['1', '1.1', '01.1', '2']);
+    } finally {
+      cleanup(dir);
     }
+  });
+
+  // Placement property: for any number of existing children, either allocation
+  // mode, zero padding on/off and either roadmap style, the inserted entry is the
+  // last member of its family and the following top-level phase stays last.
+  test('property: the new entry is always the last of its family and the next phase stays last', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 0, max: 6 }),
+        fc.boolean(),
+        fc.boolean(),
+        fc.boolean(),
+        (children, sibling, padded, bullets) => {
+          const sibling_ = sibling && children >= 1;
+          const pad = (n) => (padded ? String(n).padStart(2, '0') : String(n));
+          const kids = Array.from({ length: children }, (_, i) => `${pad(5)}.${i + 1}`);
+          const nums = [pad(5), ...kids, pad(6)];
+          const text = bullets ? bulletRoadmap(nums) : headingRoadmap(nums);
+          const args = sibling_ ? [kids[0], 'P', '--sibling'] : [pad(5), 'P'];
+          const { out, roadmap } = insert(args, text);
+          // Zero padding is not significant: compare canonical tokens.
+          const canon = (list) => list.map((t) => t.replace(/(^|\.)0+(?=\d)/g, '$1'));
+          const order = (bullets ? bulletOrder : headingOrder)(roadmap);
+          assert.deepEqual(canon(order), canon([pad(5), ...kids, out.phase_number, pad(6)]));
+        },
+      ),
+      { numRuns: 25 },
+    );
   });
 });
