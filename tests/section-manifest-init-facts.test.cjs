@@ -439,11 +439,13 @@ describe('complete-milestone supplies the workstream fact; the PROJECT.md review
 
   test('git-tag inclusion is independent of the workstream fact (row F4)', () => {
     seedWorkstreamMilestoneProject(tmpDir);
-    writeConfig(tmpDir, { git: { create_tag: true } });
+    // Under --ws the config resolves from the workstream's own planning dir, not the shared root.
+    const writeWsConfig = (config) => fs.writeFileSync(path.join(tmpDir, '.planning', 'workstreams', 'w1', 'config.json'), JSON.stringify(config));
+    writeWsConfig({ git: { create_tag: true } });
     const tagOn = runInitJson(['init', 'complete-milestone', '--ws', 'w1'], tmpDir);
     assert.ok(tagOn.section_manifest.included.includes('git-tag'), 'git-tag follows git.create_tag=true even under --ws');
 
-    writeConfig(tmpDir, { git: { create_tag: false } });
+    writeWsConfig({ git: { create_tag: false } });
     const tagOff = runInitJson(['init', 'complete-milestone', '--ws', 'w1'], tmpDir);
     assert.ok(tagOff.section_manifest.excluded.includes('git-tag'), 'git-tag follows git.create_tag=false under --ws');
     assert.ok(tagOff.section_manifest.excluded.includes(EVOLUTION_REVIEW_ID));
