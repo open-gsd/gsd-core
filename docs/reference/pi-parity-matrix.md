@@ -52,6 +52,26 @@ Every hook script has a recorded Pi disposition, and so does every event and scr
 
 The bridged hooks, the Pi event each one uses and the verified Pi event contract are in [Pi hook and lifecycle parity](pi-hook-parity.md).
 
+## Live verification
+
+`/skill:gsd-new-project --auto @idea.md` was run on Pi 1.3.0 against a local model (`mlx-community/Qwen3.8-27B-bf16` served by `mlx_lm.server`), in an isolated `HOME` and Pi config directory, with GSD installed by `bin/install.js --pi --global`. The project was an empty git repository containing a one-page brief for a Node command-line todo app.
+
+The run produced, in order, the files and commits a Claude install produces:
+
+| Step | Result |
+| --- | --- |
+| Workflow load | The skill read its workflow and includes from the Pi install tree. |
+| Init and config | `.planning/config.json` written and committed (`chore: add project config`). |
+| Project | `.planning/PROJECT.md` written and committed (`docs: initialize project`). |
+| Requirements | `.planning/REQUIREMENTS.md` written and committed (`docs: define v1 requirements`). |
+| Roadmap | `gsd_dispatch(role="gsd-roadmapper")` ran an isolated child `pi` process, which wrote `ROADMAP.md` (one phase, seven of seven requirements mapped, `**Mode:** mvp`) and `STATE.md`, and returned its final message. Committed as `docs: create roadmap (1 phases)`. |
+
+This is a recorded session, not a CI test. Limits of the run:
+
+- The session was split across several Pi invocations. Earlier invocations stopped on the local server, not on GSD: the context window was too small, the model server ran out of Metal memory, and a long prompt prefill outlasted Pi's client timeout. The roadmap step ran last, in a fresh session started with the earlier files in place.
+- `workflow.research` was set to `false` in the project config. With it on, `gsd_dispatch` ran four `gsd-project-researcher` roles one after another (the queue is sequential), and the first two stopped at the 30 minute dispatch timeout on this model with the documented `timeout` error result. That is the tool's fail-closed behavior, observed live; the research files were not produced.
+- A smaller model (`Qwen3-8B`) ran the skill but called `gsd_dispatch` with the skill name as the role. The tool refused with `role-unresolved`, which is the documented error for a role that is not installed.
+
 ## Related
 
 - [How GSD runs on Pi](../explanation/how-gsd-runs-on-pi.md)
