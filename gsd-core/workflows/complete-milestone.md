@@ -244,151 +244,9 @@ If additional details are needed (e.g., user-provided "Delivered" summary, git r
 
 </step>
 
-<step name="evolve_project_full_review">
-
-Full PROJECT.md evolution review at milestone completion.
-
-Read all phase summaries:
-
-```bash
-_SUMMARIES=( .planning/phases/*-*/*-SUMMARY.md )
-if [ -e "${_SUMMARIES[0]}" ]; then cat "${_SUMMARIES[@]}"; fi
-```
-
-**Full review checklist:**
-
-1. **"What This Is" accuracy:**
-   - Compare current description to what was built
-   - Update if product has meaningfully changed
-
-2. **Core Value check:**
-   - Still the right priority? Did shipping reveal a different core value?
-   - Update if the ONE thing has shifted
-
-3. **Business Context check (only if the section is present):**
-   - Skip entirely if PROJECT.md has no `## Business Context` section
-   - Customer, revenue model, and success metric still accurate after shipping?
-   - Update any field that drifted; refresh the linked strategy doc reference if it moved
-
-4. **Requirements audit:**
-
-   **Validated section:**
-   - All Active requirements shipped this milestone → Move to Validated
-   - Format: `- ✓ [Requirement] — v[X.Y]`
-
-   **Active section:**
-   - Remove requirements moved to Validated
-   - Add new requirements for next milestone
-   - Keep unaddressed requirements
-
-   **Out of Scope audit:**
-   - Review each item — reasoning still valid?
-   - Remove irrelevant items
-   - Add requirements invalidated during milestone
-
-5. **Context update:**
-   - Current codebase state (LOC, tech stack)
-   - User feedback themes (if any)
-   - Known issues or technical debt
-
-6. **Key Decisions audit:**
-   - Extract all decisions from milestone phase summaries
-   - Add to Key Decisions table with outcomes
-   - Mark ✓ Good, ⚠️ Revisit, or — Pending
-
-7. **Constraints check:**
-   - Any constraints changed during development? Update as needed
-
-Update PROJECT.md inline. Update "Last updated" footer:
-
-```markdown
----
-*Last updated: [date] after v[X.Y] milestone*
-```
-
-**Example full evolution (v1.0 → v1.1 prep):**
-
-Before:
-
-```markdown
-## What This Is
-
-A real-time collaborative whiteboard for remote teams.
-
-## Core Value
-
-Real-time sync that feels instant.
-
-## Requirements
-
-### Validated
-
-(None yet — ship to validate)
-
-### Active
-
-- [ ] Canvas drawing tools
-- [ ] Real-time sync < 500ms
-- [ ] User authentication
-- [ ] Export to PNG
-
-### Out of Scope
-
-- Mobile app — web-first approach
-- Video chat — use external tools
-```
-
-After v1.0:
-
-```markdown
-## What This Is
-
-A real-time collaborative whiteboard for remote teams with instant sync and drawing tools.
-
-## Core Value
-
-Real-time sync that feels instant.
-
-## Requirements
-
-### Validated
-
-- ✓ Canvas drawing tools — v1.0
-- ✓ Real-time sync < 500ms — v1.0 (achieved 200ms avg)
-- ✓ User authentication — v1.0
-
-### Active
-
-- [ ] Export to PNG
-- [ ] Undo/redo history
-- [ ] Shape tools (rectangles, circles)
-
-### Out of Scope
-
-- Mobile app — web-first approach, PWA works well
-- Video chat — use external tools
-- Offline mode — real-time is core value
-
-## Context
-
-Shipped v1.0 with 2,400 LOC TypeScript.
-Tech stack: Next.js, Supabase, Canvas API.
-Initial user testing showed demand for shape tools.
-```
-
-**Step complete when:**
-
-- [ ] "What This Is" reviewed and updated if needed
-- [ ] Core Value verified as still correct
-- [ ] Business Context checked (or confirmed absent)
-- [ ] All shipped requirements moved to Validated
-- [ ] New requirements added to Active for next milestone
-- [ ] Out of Scope reasoning audited
-- [ ] Context updated with current state
-- [ ] All milestone decisions added to Key Decisions
-- [ ] "Last updated" footer reflects milestone completion
-
-</step>
+<!-- gsd:section id="project-md-evolution-review" when="state:flat-mode" -->
+If `section_manifest` is `null` or `"project-md-evolution-review"` is in its `included` list: read and execute `gsd-core/workflows/complete-milestone/steps/project-md-evolution-review.md`. Otherwise (a workstream is active) skip — do not read the file; PROJECT.md is shared across workstreams, so a workstream's milestone close never rewrites it (#2308, #5195); proceed to `archive_milestone`.
+<!-- /gsd:section -->
 
 <step name="archive_milestone">
 
@@ -535,12 +393,15 @@ ROADMAP_PATH=$(_gsd_field "$INIT_REORG" roadmap_path)
 ARCHIVE_DIR=$(_gsd_field "$INIT_REORG" archive_dir)
 MILESTONES_PATH=$(_gsd_field "$INIT_REORG" milestones_path)
 PROJECT_PATH=$(_gsd_field "$INIT_REORG" project_path)
-gsd_run query commit "chore: archive v[X.Y] milestone files" --files "${ARCHIVE_DIR}/v[X.Y]-ROADMAP.md" "${ARCHIVE_DIR}/v[X.Y]-REQUIREMENTS.md" "${ARCHIVE_DIR}/v[X.Y]-MILESTONE-AUDIT.md" "$MILESTONES_PATH" "$PROJECT_PATH" "$STATE_PATH" "$ROADMAP_PATH"
+# #5195: PROJECT.md is shared across workstreams. Stage it only when init's own section manifest says this run edited it (the evolution review is included in flat mode only) — the same source the review step is gated on, so the two cannot disagree.
+_gsd_has_section() { node -e "const m=JSON.parse(process.argv[1]).section_manifest; process.exit(m==null||m.included.includes(process.argv[2])?0:1)" "$1" "$2"; }
+_gsd_has_section "$INIT_REORG" project-md-evolution-review || PROJECT_PATH=""
+gsd_run query commit "chore: archive v[X.Y] milestone files" --files "${ARCHIVE_DIR}/v[X.Y]-ROADMAP.md" "${ARCHIVE_DIR}/v[X.Y]-REQUIREMENTS.md" "${ARCHIVE_DIR}/v[X.Y]-MILESTONE-AUDIT.md" "$MILESTONES_PATH" ${PROJECT_PATH:+"$PROJECT_PATH"} "$STATE_PATH" "$ROADMAP_PATH"
 ```
 
 This creates a durable checkpoint in git history. If anything fails after this point, the working tree can be reconstructed from git.
 
-MILESTONES.md and PROJECT.md are workstream-scoped the same way STATE.md/ROADMAP.md are (`planningPaths(cwd).planning`/`.project`) — under an active workstream this commits the actual files `milestone complete` wrote, not the root copies.
+MILESTONES.md is workstream-scoped the same way STATE.md/ROADMAP.md are (`planningPaths(cwd).planning`) — under an active workstream this commits the actual files `milestone complete` wrote, not the root copies. PROJECT.md is NOT: it is shared across workstreams, so under an active workstream it is neither reviewed nor staged here (#5195).
 
 **Remove REQUIREMENTS.md via git rm** (preserves history, stages deletion atomically):
 

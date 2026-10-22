@@ -3503,8 +3503,18 @@ function cmdInitCompleteMilestone(
     requirements_path: fs.existsSync(requirementsPath) ? toPosixPath(requirementsPath) : null,
   };
 
+  // #5195: `state:flat-mode` gates the PROJECT.md evolution review. PROJECT.md
+  // is shared across workstreams (the `projectPath` comment above), so a
+  // workstream's milestone close must not rewrite or stage it — the same
+  // decision `cmdInitNewMilestone` applies to its Part A (#2308), resolved from
+  // the same authority (`GSD_WORKSTREAM` env, else the stored pointer) so the
+  // gate cannot disagree with the workstream-scoped paths returned above.
+  // Read-only peek: no self-heal side effect from building a report field (#3579).
+  const workstreamActive = !!(resolveEnvWorkstream() ?? peekActiveWorkstream(cwd));
   result['section_manifest'] = buildSectionManifestField(cwd, null, options, 'complete-milestone', {
     gitCreateTag,
+    workstreamActive,
+    flatMode: !workstreamActive,
   });
 
   output(withProjectRoot(cwd, result), raw);

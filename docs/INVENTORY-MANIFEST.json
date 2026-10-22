@@ -688,6 +688,7 @@
       "code-review/steps/dispatch-fix.md",
       "code-review/steps/structural-pre-pass.md",
       "complete-milestone/steps/git-tag.md",
+      "complete-milestone/steps/project-md-evolution-review.md",
       "discuss-phase-assumptions/steps/auto-advance-dispatch.md",
       "docs-update/steps/dispatch-monorepo-packages.md",
       "execute-phase/steps/code-review-disposition.md",

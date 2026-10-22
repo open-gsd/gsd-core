@@ -41,6 +41,11 @@
     ],
     "complete-milestone": [
       {
+        "id": "project-md-evolution-review",
+        "when": "state:flat-mode",
+        "read": "gsd-core/workflows/complete-milestone/steps/project-md-evolution-review.md"
+      },
+      {
         "id": "git-tag",
         "when": "state:git-create-tag",
         "read": "gsd-core/workflows/complete-milestone/steps/git-tag.md"
