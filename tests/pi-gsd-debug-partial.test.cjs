@@ -26,9 +26,12 @@ const CONTEXT_CLOSE = '</execution_context>';
 const DEBUG_COMMAND = fs.readFileSync(path.join(REPO, 'commands', 'gsd', 'debug.md'), 'utf8');
 const DEBUG_WORKFLOW = fs.readFileSync(path.join(REPO, 'gsd-core', 'workflows', 'debug.md'), 'utf8');
 
-/** The text between the execution_context tags, trimmed; null when the pair is absent. */
+/**
+ * The text of the last execution_context block, trimmed; null when the pair is absent. The last
+ * block, because the skill's own prose names the tag before the block it points at.
+ */
 function executionContext(text) {
-  const open = text.indexOf(CONTEXT_OPEN);
+  const open = text.lastIndexOf(CONTEXT_OPEN);
   const close = text.indexOf(CONTEXT_CLOSE);
   if (open < 0 || close < open) return null;
   return text.slice(open + CONTEXT_OPEN.length, close).trim();
