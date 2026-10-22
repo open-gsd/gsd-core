@@ -520,9 +520,13 @@ describe('enhancement #4570 config contract — planner stall detection has a ty
     const configPath = path.join(tmp, '.planning', 'config.json');
     const before = fs.readFileSync(configPath, 'utf8');
     const printable = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789[]{}._- ';
+    // Dispatcher help tokens (HELP_FLAGS in gsd-tools.cjs, #3019) are a help request wherever they appear in
+    // argv, not a value that reaches config-set; the generator must not draw them (#5507). Pinned by the
+    // fixed examples below. `-v`/`--version` are rejected with a non-zero exit, so they stay in the domain.
+    const helpTokens = ['-h', '--h', '--help', '-?', '--usage'];
     const invalidValue = fc.array(fc.constantFrom(...printable), { minLength: 1, maxLength: 16 })
       .map((chars) => chars.join(''))
-      .filter((value) => !['true', 'false', 'null'].includes(value));
+      .filter((value) => !['true', 'false', 'null', ...helpTokens].includes(value));
 
     const rejectedWithoutWrite = fc.property(invalidValue, (value) => {
       const result = runGsdTools(
@@ -535,8 +539,8 @@ describe('enhancement #4570 config contract — planner stall detection has a ty
 
     fc.assert(rejectedWithoutWrite, { numRuns: 20 });
     // #5507: the seed/path of the run that drew "-h" (a dispatcher help token that exits 0).
-    // A lucky seed hid that for 20 runs at a time, so replay it deterministically.
-    fc.assert(rejectedWithoutWrite, { seed: -1201433058, path: '3', endOnFailure: true });
+    // A lucky seed hid that for 20 runs at a time, so replay it deterministically (one run: the path pins the value).
+    fc.assert(rejectedWithoutWrite, { seed: -1201433058, path: '3', endOnFailure: true, numRuns: 1 });
   });
 
   // #5507: the dispatcher treats a help token ANYWHERE in argv as a help request (#3019): usage, exit 0, the
