@@ -3263,18 +3263,19 @@ describe('#2652 dispatch-site parity — isolation gates on capability, not runt
   // call shape only, so one copy could change (a dropped `^[a-z-]+$` check, a
   // renamed field) while the other kept the old parser. Pin each pick's body
   // byte-equal across the two files.
+  // name -> every `node -e '…'` body piped from that assignment's $( … ).
+  // Backslash continuations are joined first: the harness-flag pick is
+  // split across two lines in both files.
+  const jsonPicks = (rawText) => {
+    const text = rawText.replace(/\\\r?\n[ \t]*/g, ' ');
+    const picks = new Map();
+    for (const m of text.matchAll(/(\w+)=\$\([^\n]*?\|\s*node -e '([^']*)'/g)) {
+      picks.set(m[1], [...(picks.get(m[1]) || []), m[2]]);
+    }
+    return picks;
+  };
+
   test('the inline resolvers parse the query JSON with byte-equal picks', () => {
-    // name -> every `node -e '…'` body piped from that assignment's $( … ).
-    // Backslash continuations are joined first: the harness-flag pick is
-    // split across two lines in both files.
-    const jsonPicks = (rawText) => {
-      const text = rawText.replace(/\\\r?\n[ \t]*/g, ' ');
-      const picks = new Map();
-      for (const m of text.matchAll(/(\w+)=\$\([^\n]*?\|\s*node -e '([^']*)'/g)) {
-        picks.set(m[1], [...(picks.get(m[1]) || []), m[2]]);
-      }
-      return picks;
-    };
     const files = [
       'gsd-core/references/dispatch-isolation-gate.md',
       'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md',
@@ -3297,6 +3298,54 @@ describe('#2652 dispatch-site parity — isolation gates on capability, not runt
     // Discrimination proof: a one-character change to one copy must register.
     const mutated = jsonPicks(files[0].text.replace('j.held===true', 'j.held==true'));
     assert.notEqual(mutated.get('_ISOLATION_FIELDS')[0], b.picks.get('_ISOLATION_FIELDS')[0]);
+  });
+
+  // #5126 review, 2026-10-21 Nit 4: the byte-equality pin above covers the
+  // executor's HARNESS_FLAG pick only by comparison with the gate's copy, and
+  // its EXEC_OK pick by nothing. Run both shipped picks on what the real
+  // `inspect-dispatch-isolation --json` prints for a harness-worktree host
+  // (claude), an orchestrator-worktree host with a target (codex), the same
+  // host with no target (no exec to bind), and an answer that is not JSON.
+  test('the executor\'s HARNESS_FLAG and EXEC_OK picks read the real inspect-dispatch-isolation answer', () => {
+    const { runNode } = require('./helpers/process-seam.cjs');
+    const { throwIfFailed } = require('./helpers/git-fixture.cjs');
+    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+    const GSD_TOOLS = path.join(REPO_ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
+    const rel = 'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md';
+    const picks = jsonPicks(fs.readFileSync(path.join(REPO_ROOT, rel), 'utf-8'));
+    for (const name of ['HARNESS_FLAG', 'EXEC_OK']) {
+      assert.equal((picks.get(name) || []).length, 1, `${rel}: expected exactly one ${name} JSON pick`);
+    }
+    // The answer, as the executor's own call asks for it. inspect records nothing, so REPO_ROOT is safe as cwd.
+    const inspect = (runtimeId, extraArgs = []) => {
+      const r = runNode([GSD_TOOLS, 'query', 'inspect-dispatch-isolation', '--json', ...extraArgs],
+        { cwd: REPO_ROOT, env: { ...process.env, GSD_RUNTIME: runtimeId }, timeoutMs: PROBE_TIMEOUT_MS });
+      throwIfFailed(r, `gsd-tools query inspect-dispatch-isolation ${runtimeId}`);
+      return r.stdout;
+    };
+    const pick = (name, input) => {
+      const r = runNode(['-e', picks.get(name)[0]], { input, timeoutMs: PROBE_TIMEOUT_MS });
+      throwIfFailed(r, `${name} pick`);
+      return r.stdout;
+    };
+    const target = ['--cwd-target', path.join(REPO_ROOT, '.claude', 'worktrees', 'agent-probe'), '--prompt', 'probe'];
+    const claude = inspect('claude');
+    const codexBound = inspect('codex', target);
+    const codexUnbound = inspect('codex');
+    // Preconditions, so a renamed field or a changed descriptor fails here rather than in a pick.
+    assert.equal(JSON.parse(claude).isolation, 'harness-worktree');
+    assert.equal(JSON.parse(codexBound).isolation, 'orchestrator-worktree');
+    assert.ok(JSON.parse(codexBound).exec && JSON.parse(codexBound).exec.command, 'codex resolves an exec for a bound target');
+    assert.equal(JSON.parse(codexUnbound).exec, null);
+
+    assert.equal(pick('HARNESS_FLAG', claude), 'isolation="worktree"');
+    assert.equal(pick('HARNESS_FLAG', codexBound), '', 'a host with no harness flag yields empty, which the block turns into FATAL');
+    assert.equal(pick('HARNESS_FLAG', 'not json'), '');
+
+    assert.equal(pick('EXEC_OK', codexBound), 'true');
+    assert.equal(pick('EXEC_OK', codexUnbound), 'false', 'no target, no exec: the wave must not spawn');
+    assert.equal(pick('EXEC_OK', claude), 'false', 'a harness-worktree answer is not an orchestrator exec');
+    assert.equal(pick('EXEC_OK', 'not json'), 'false');
   });
 
   test('the detector flags every known runtime-gate shape (discrimination proof)', () => {
