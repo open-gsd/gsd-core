@@ -99,12 +99,12 @@
   },
   "overrides": {
     "qs": ">=6.15.2",
-    "body-parser": ">=2.3.0",
+    "body-parser": ">=2.4.0",
     "@hono/node-server": ">=2.0.5",
     "hono": ">=4.13.5"
   },
   "optionalDependencies": {
-    "fallow": "^2.70.0"
+    "fallow": "^3.34.0"
   },
   "scripts": {
     "sync:launcher": "node scripts/sync-runtime-launcher.cjs",
