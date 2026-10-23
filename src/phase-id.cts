@@ -391,6 +391,64 @@ function buildPhaseHeadingScanRegex(baseline: string, convention?: string | null
   return { regex, bracketGroup, phaseNumGroup, phaseNameGroup };
 }
 
+/** One scan over roadmap text: which capture holds the bracket id (null when none) and which the phase number. */
+interface PhaseScan {
+  regex: RegExp;
+  idGroup: number | null;
+  numGroup: number;
+}
+
+/** The milestone integer a bracket id carries (`GSD.02` -> 2). */
+function bracketIdMilestone(bracketId: string): number {
+  return parseInt(bracketId.slice(bracketId.lastIndexOf('.') + 1), 10);
+}
+
+/**
+ * Every scan that answers "which phase numbers does this roadmap text declare" (#5528): section
+ * headings, plus checklist bullets when `withBullets`. A non-bracket convention gets the plain
+ * `Phase N` heading scan and the checkbox-led `Phase N` bullet it always had.
+ *
+ * Under the bracket convention it also gets, beyond `buildPhaseHeadingScanRegex`'s `[ID] NN` and
+ * `[ID] Phase NN` headings: the word-first heading `Phase [ID] NN`; and a bullet whose bracket IS
+ * the id (`- [GSD.02] 03: X`, no checkbox). The checkbox of the other bullet shape may not itself
+ * be a bracket id, or `- [GSD.999] Phase 07` would read `[GSD.999]` as a checkbox and drop the id
+ * that marks it an icebox row. A bullet is one line, so its label uses `[ \t]` where a heading's
+ * uses `\s`.
+ */
+function buildPhaseDeclarationScans(convention?: string | null, withBullets = true): PhaseScan[] {
+  const heading = buildPhaseHeadingScanRegex(PHASE_HEADING_BASELINE.LABEL_ONLY, convention);
+  const scans: PhaseScan[] = [{ regex: heading.regex, idGroup: heading.bracketGroup, numGroup: heading.phaseNumGroup }];
+  const bullet = '^[ \\t]*-[ \\t]*';
+  const tail = '(\\d+)(?=[:.\\s*]|$)';
+  const bracket = convention === 'bracket';
+  const checkbox = `\\[${bracket ? `(?!${BRACKET_ID_SRC}\\])` : ''}[^\\]]{0,200}\\][ \\t]*`;
+  if (!bracket) {
+    if (withBullets) scans.push({ regex: new RegExp(`${bullet}${checkbox}\\*{0,2}Phase[ \\t]+${tail}`, 'gim'), idGroup: null, numGroup: 1 });
+    return scans;
+  }
+  scans.push({ regex: new RegExp(`^ {0,3}#{2,4}\\s*Phase[ \\t]+\\[(${BRACKET_ID_SRC})\\][ \\t]*(${PHASE_NUMBER_TOKEN_SOURCE})${OPTIONAL_PHASE_TAG_SOURCE}\\s*:`, 'gim'), idGroup: 1, numGroup: 2 });
+  if (withBullets) {
+    const label = `(?:\\[(${BRACKET_ID_SRC})\\][ \\t]*(?:Phase[ \\t]+|(?=\\d))|Phase[ \\t]+)`;
+    scans.push({ regex: new RegExp(`${bullet}${checkbox}\\*{0,2}${label}${tail}`, 'gim'), idGroup: 1, numGroup: 2 });
+    // No checkbox to vouch for it: the number needs a `:` or end of line, or `- [GSD.02] 2026 notes` is phase 2026.
+    scans.push({ regex: new RegExp(`${bullet}\\*{0,2}\\[(${BRACKET_ID_SRC})\\][ \\t]*(?:Phase[ \\t]+|(?=\\d))(\\d+)(?=:|[ \\t]*$)`, 'gim'), idGroup: 1, numGroup: 2 });
+  }
+  return scans;
+}
+
+// `CODE.MM-NN-slug` with the phase an integer: a decimal sub-phase (`-05.1-`) or a letter suffix
+// (`-12A-`) is not one, matching how the legacy directory pattern treats `411.1-foo`.
+const BRACKET_DIR_PHASE_RE = new RegExp(`^${BRACKET_PROJECT_CODE_SRC}\\.(${BRACKET_MILESTONE_NUMERIC_SRC})-(\\d+)(?=-|$)`, 'i');
+
+/**
+ * Read a bracket phase directory name. `null`: not a bracket phase directory. Otherwise its milestone
+ * and integer phase, for a caller that scopes numbering to one milestone (#5528).
+ */
+function parseBracketPhaseDir(dirName: string): { milestone: number; phase: number } | null {
+  const m = dirName.match(BRACKET_DIR_PHASE_RE);
+  return m ? { milestone: parseInt(m[1], 10), phase: parseInt(m[2], 10) } : null;
+}
+
 function stripProjectCodePrefix(value: unknown, caseInsensitive = true): string {
   const input = String(value);
   const re = caseInsensitive ? PROJECT_CODE_PREFIX_STRIP_RE_I : PROJECT_CODE_PREFIX_STRIP_RE;
@@ -1785,6 +1843,9 @@ export = {
   PHASE_HEADING_BASELINE,
   phaseHeadingPrefixSrcFor,
   buildPhaseHeadingScanRegex,
+  buildPhaseDeclarationScans,
+  bracketIdMilestone,
+  parseBracketPhaseDir,
   foldBracketId,
   bracketQualifiedKey,
   stripProjectCodePrefix,
