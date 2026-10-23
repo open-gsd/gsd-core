@@ -61,7 +61,7 @@ import { platformReadSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import unusableInputMod = require('./unusable-input.cjs');
 const { UNUSABLE_REASON, warnUnusableInput } = unusableInputMod;
-import { tokenizeHeadings, stripTaggedBlocks, editOutsideTaggedBlocks, withSection, stripFencedCode, collectSection } from './markdown-sectionizer.cjs';
+import { tokenizeHeadings, stripTaggedBlocks, editOutsideTaggedBlocks, withSection, stripFencedCode, collectSection, scanFencedBlocks } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
 import { findTableWithColumns, isDelimiterRow, splitTableRow } from './markdown-table.cjs';
 import type { MarkdownTable } from './markdown-table.cjs';
@@ -1455,27 +1455,106 @@ function extractCurrentMilestone(content: string, cwd?: string, ws?: string | nu
 }
 
 /**
- * Replace a pattern only in the current milestone section of ROADMAP.md.
+ * #5553: hide every archived `<details>` block, and every closed milestone
+ * written as a plain heading section, behind a placeholder; `restore` puts them
+ * back byte-for-byte. Tag case, attributes and archive position
+ * (before OR after the active milestone) do not matter, unlike a "region after
+ * the last `</details>`" cut. A block stays visible only when it wraps the
+ * start of a resolved active milestone range (`<details open>` around the
+ * active milestone); every other block is hidden, whatever its `<summary>`
+ * (none, non-closed, closed), including a collapsed block inside the active
+ * range. That is deliberate for THIS write path only; the read-side
+ * `stripClosedMilestoneDetails` window (#3982/#1341) is unchanged. With no
+ * resolvable active milestone every block is hidden, as the old
+ * last-`</details>` cut did.
  */
-type RoadmapReplacer = (match: string, ...captures: string[]) => string;
-
-function replaceInCurrentMilestone(
-  content: string,
-  pattern: RegExp,
-  replacement: string | RoadmapReplacer,
-): string {
-  const apply = (src: string): string =>
-    typeof replacement === 'function'
-      ? src.replace(pattern, replacement)
-      : src.replace(pattern, replacement);
-  const lastDetailsClose = content.lastIndexOf('</details>');
-  if (lastDetailsClose === -1) {
-    return apply(content);
+function maskArchivedDetails(content: string, cwd: string): { visible: string; restore: (edited: string) => string | null } {
+  if (!/<details\b/i.test(content) && !MILESTONE_CLOSED_MARKER_PATTERN.test(content)) {
+    return { visible: content, restore: (edited) => edited };
   }
-  const offset = lastDetailsClose + '</details>'.length;
-  const before = content.slice(0, offset);
-  const after = content.slice(offset);
-  return before + apply(after);
+  const ranges = currentMilestoneRawRanges(content, cwd);
+  const active = ranges ? [ranges.primary, ...(ranges.details ? [ranges.details] : [])] : [];
+  const blocks: string[] = [];
+  let nonce = 0;
+  while (content.includes(`<!-- gsd-archived-details-${nonce}-`)) nonce += 1;
+  const marker = (i: number): string => `<!-- gsd-archived-details-${nonce}-${i} -->`;
+  // Same-length copy with fenced blocks, inline code spans and HTML comments
+  // blanked (code first: a backticked `<!--` must not open a comment), so a `<details>` mentioned in prose or an example never opens or
+  // closes a block.
+  const lines = content.split('\n');
+  const blank = (t: string): string => t.replace(/[^\r\n]/g, ' ');
+  for (const f of scanFencedBlocks(lines)) {
+    // Review #5616: an unclosed fence is bounded at the next heading, not EOF, so later archives stay visible.
+    let last = f.closeLineIdx;
+    if (last === -1) {
+      last = lines.length - 1;
+      for (let i = f.openLineIdx + 1; i < lines.length; i++) if (/^#{1,6} /.test(lines[i])) { last = i - 1; break; }
+    }
+    for (let i = f.openLineIdx; i <= last; i++) lines[i] = blank(lines[i]);
+  }
+  const scan = lines.join('\n').replace(/`[^`\n]*`/g, blank).replace(/<!--[\s\S]*?(?:-->|$)/g, blank);
+  // Depth-aware: an outer block closes at its own `</details>`, so a nested
+  // collapsed section inside an archive is masked with it.
+  const spans: Array<{ start: number; end: number }> = [];
+  const overlapsActive = (start: number, end: number): boolean =>
+    ranges !== null && active.some((r) => start < r.end && end > r.start);
+  // Block-level tags only: at line start (<=3 spaces, CommonMark) with a bounded
+  // attribute run, so inline/indented mentions never count and a hostile run of
+  // `<details ` cannot go quadratic. shortcut: one tag per line start, so a
+  // second `</details>` on the same line is not seen; upgrade if archives are
+  // ever emitted that way.
+  const tag = /^[ \t]{0,3}(<details\b[^>\n]{0,200}>|<\/details[ \t]*>)/gim;
+  let depth = 0;
+  let start = 0;
+  for (let m = tag.exec(scan); m; m = tag.exec(scan)) {
+    const at = m.index + m[0].length - m[1].length;
+    if (m[1][1] !== '/') {
+      if (depth++ === 0) start = at;
+      continue;
+    }
+    if (depth === 0 || --depth > 0) continue;
+    const end = at + m[1].length;
+    // Only a block wrapping an active heading stays editable; any other block is archive, with or without a closed <summary>.
+    if (active.some((r) => start <= r.start && r.start < end)) continue;
+    spans.push({ start, end });
+  }
+  // A closed milestone written as a plain heading section (no `<details>`) is
+  // archive too. It ends at the next heading of the same or shallower level, so
+  // a following `## Progress` table stays visible.
+  const headingTokens = tokenizeHeadings(content);
+  for (let i = 0; i < headingTokens.length; i++) {
+    const h = headingTokens[i];
+    if (h.level > 3 || /^Phase\s+\S/i.test(h.text)) continue;
+    if (!isClosedMilestoneHeading(h.text) || extractMilestoneHeadingName(h.text) === null) continue;
+    const next = headingTokens.slice(i + 1).find((t) => t.level <= h.level && !/^Phase\s+\S/i.test(t.text));
+    // End before the newline that precedes `next`, so that heading stays at line start.
+    const end = next ? next.offset - (content[next.offset - 2] === '\r' ? 2 : 1) : content.length;
+    if (!overlapsActive(h.offset, end)) spans.push({ start: h.offset, end });
+  }
+  spans.sort((x, y) => x.start - y.start || y.end - x.end);
+  let visible = '';
+  let last = 0;
+  for (const span of spans) {
+    if (span.start < last) {
+      // Nested in an already-masked span: only a partial overlap extends it.
+      if (span.end <= last) continue;
+      span.start = last;
+    }
+    blocks.push(content.slice(span.start, span.end));
+    visible += content.slice(last, span.start) + marker(blocks.length - 1);
+    last = span.end;
+  }
+  visible += content.slice(last);
+  const restore = (edited: string): string | null => {
+    let restored = edited;
+    for (let i = 0; i < blocks.length; i++) {
+      const at = restored.indexOf(marker(i));
+      if (at === -1) return null; // edit dropped a placeholder: caller must refuse rather than lose an archive
+      restored = restored.slice(0, at) + blocks[i] + restored.slice(at + marker(i).length);
+    }
+    return restored;
+  };
+  return { visible, restore };
 }
 
 /**
@@ -2408,7 +2487,7 @@ export = {
   extractCurrentMilestoneScoped,
   isMilestoneShippedInRoadmap,
   isMilestoneBoundedInRoadmap,
-  replaceInCurrentMilestone,
+  maskArchivedDetails,
   getRoadmapPhaseInternal,
   getMilestoneInfo,
   classifyMilestoneScalar,

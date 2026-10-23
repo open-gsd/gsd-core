@@ -6457,3 +6457,154 @@ describe('phase checklist stamp is anchored to the phase\'s own bullet (#5545)',
     });
   }
 });
+
+// #5553: update-plan-progress edits only the active milestone, whatever the
+// archive's tag case / attributes / position relative to it.
+const ACTIVE_REGION_ARCHIVE_BODY = `- [ ] **Phase 1: Old**
+
+### Phase 1: Old
+**Goal:** old
+**Plans:** 0 plans
+
+Plans:
+- [ ] 01-01-PLAN.md
+`;
+const ACTIVE_REGION_ACTIVE_BODY = `## v2.0 Active
+
+- [ ] **Phase 1: A**
+
+### Phase 1: A
+**Goal:** a
+**Plans:** 0 plans
+
+Plans:
+- [ ] 01-01-PLAN.md
+
+## Progress
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 1. A | 0/1 | In Progress | |
+`;
+
+const activeRegionArchive = (open, tag) => `<${tag}${open}>\n<summary>v1.0 ✅ SHIPPED</summary>\n\n${ACTIVE_REGION_ARCHIVE_BODY}\n</${tag}>\n`;
+const NESTED_ARCHIVE = `<details>\n<summary>v1.0 ✅ SHIPPED</summary>\n\n<details>\n<summary>inner</summary>\n\nx\n</details>\n\n${ACTIVE_REGION_ARCHIVE_BODY}\n</details>\n`;
+
+const ACTIVE_REGION_SHAPES = {
+  'control: lowercase archive first': () => `# Roadmap\n\n${activeRegionArchive('', 'details')}\n${ACTIVE_REGION_ACTIVE_BODY}`,
+  'uppercase <DETAILS> archive': () => `# Roadmap\n\n${activeRegionArchive('', 'DETAILS')}\n${ACTIVE_REGION_ACTIVE_BODY}`,
+  '<details open> archive': () => `# Roadmap\n\n${activeRegionArchive(' open', 'details')}\n${ACTIVE_REGION_ACTIVE_BODY}`,
+  'archive after the active section (newest-first)': () => `# Roadmap\n\n${ACTIVE_REGION_ACTIVE_BODY}\n${activeRegionArchive('', 'details')}`,
+  'nested <details> inside the archive': () =>
+    `# Roadmap\n\n${NESTED_ARCHIVE}\n${ACTIVE_REGION_ACTIVE_BODY}`,
+  '<details open> wraps the active milestone': () =>
+    `# Roadmap\n\n${activeRegionArchive('', 'details')}\n<details open>\n<summary>v2.0 🚧 Active</summary>\n\n${ACTIVE_REGION_ACTIVE_BODY}\n</details>\n`,
+};
+
+describe('roadmap update-plan-progress active-region scoping (#5553)', () => {
+  let tmpDir;
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-a');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# summary\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\n---\n# State\n');
+  });
+  afterEach(() => cleanup(tmpDir));
+
+  const ARCHIVE_OF = {
+    'uppercase <DETAILS> archive': activeRegionArchive('', 'DETAILS'),
+    '<details open> archive': activeRegionArchive(' open', 'details'),
+    'nested <details> inside the archive': NESTED_ARCHIVE,
+  };
+  for (const [name, build] of Object.entries(ACTIVE_REGION_SHAPES)) {
+    test(name, () => {
+      const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+      fs.writeFileSync(roadmapPath, build());
+      const result = runGsdTools(['roadmap', 'update-plan-progress', '1'], tmpDir);
+      assert.ok(result.success, result.error);
+      const out = fs.readFileSync(roadmapPath, 'utf-8');
+      assert.ok(out.includes(ARCHIVE_OF[name] ?? activeRegionArchive('', 'details')), `archive (tags included) must be byte-identical:\n${out}`);
+      assert.match(out, /- \[x\] 01-01-PLAN\.md/, 'active plan line ticked');
+      assert.match(out, /\*\*Plans:\*\* 1\/1/, 'active Plans line updated');
+    });
+  }
+
+  const runActiveRegion = (roadmap) => {
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+    fs.writeFileSync(roadmapPath, roadmap);
+    const result = runGsdTools(['roadmap', 'update-plan-progress', '1'], tmpDir);
+    assert.ok(result.success, result.error);
+    return fs.readFileSync(roadmapPath, 'utf-8');
+  };
+
+  test('no resolvable milestone: <details open> archive stays untouched', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nstatus: executing\n---\n# State\n');
+    const out = runActiveRegion(`# Roadmap\n\n${activeRegionArchive(' open', 'details')}\n${ACTIVE_REGION_ACTIVE_BODY}`);
+    assert.ok(out.includes(activeRegionArchive(' open', 'details')), `archive must be byte-identical:\n${out}`);
+    assert.match(out, /- \[x\] 01-01-PLAN\.md/);
+  });
+
+  test('prose mentioning <details> without a close does not unmask later archives', () => {
+    const out = runActiveRegion(`# Roadmap\n\nShipped milestones are collapsed in \`<details>\` blocks.\n\n${activeRegionArchive('', 'details')}\n${ACTIVE_REGION_ACTIVE_BODY}`);
+    assert.ok(out.includes(activeRegionArchive('', 'details')), `archive must be byte-identical:\n${out}`);
+    assert.match(out, /- \[x\] 01-01-PLAN\.md/);
+  });
+
+  test('plain (non-<details>) shipped milestone section stays untouched', () => {
+    const shipped = `## v1.0 ✅ SHIPPED\n\n${ACTIVE_REGION_ARCHIVE_BODY}`;
+    const out = runActiveRegion(`# Roadmap\n\n${shipped}\n${ACTIVE_REGION_ACTIVE_BODY}`);
+    assert.ok(out.includes(ACTIVE_REGION_ARCHIVE_BODY), `shipped section must be byte-identical:\n${out}`);
+    assert.match(out, /- \[x\] 01-01-PLAN\.md/);
+  });
+
+  // Review round 3, Major 1: a plain shipped section followed by `## Progress`
+  // must keep the heading at line start so the Progress scoping survives.
+  test('plain shipped section before ## Progress: decoy table row is not rewritten', () => {
+    const decoy = '### Decoy\n\n| Phase | Plans Complete | Status | Completed |\n|---|---|---|---|\n| 1. A | 0/1 | Not started | |\n';
+    const active = ACTIVE_REGION_ACTIVE_BODY.replace('## Progress', `${decoy}\n## v1.0 ✅ SHIPPED\n\n${ACTIVE_REGION_ARCHIVE_BODY}\n## Progress`);
+    const out = runActiveRegion(`# Roadmap\n\n${active}`);
+    assert.match(out, /\| 1\. A \| 0\/1 \| Not started \| \|/, `decoy row must stay untouched:\n${out}`);
+    assert.match(out, /\| 1\. A \| 1\/1 \| In Progress/, `real Progress row must be updated:\n${out}`);
+    assert.ok(out.includes(`## v1.0 ✅ SHIPPED\n\n${ACTIVE_REGION_ARCHIVE_BODY}`), 'shipped section byte-identical');
+  });
+
+  // Review round 3, Major 2: a `<details>` that is not a real block-level tag
+  // (HTML comment, inline prose, indented code) must not unbalance the scan.
+  const NOT_A_TAG = {
+    'opener inside an HTML comment': '<!--\n<details>\n-->\n',
+    'inline opener in prose': 'Wrap shipped work in <details> tags.\n',
+    'indented (code) opener': '    <details>\n',
+    'closer inside an HTML comment': '<!-- </details> -->\n',
+    'inline-code comment opener': 'Comments start with `<!--`.\n',
+  };
+  for (const [name, snippet] of Object.entries(NOT_A_TAG)) {
+    test(`${name} does not unmask a later archive`, () => {
+      const out = runActiveRegion(`# Roadmap\n\n${snippet}\n${activeRegionArchive('', 'details')}\n${ACTIVE_REGION_ACTIVE_BODY}`);
+      assert.ok(out.includes(activeRegionArchive('', 'details')), `archive must be byte-identical:\n${out}`);
+      assert.match(out, /- \[x\] 01-01-PLAN\.md/);
+    });
+  }
+
+  test('CRLF roadmap: archives byte-identical and Progress row updated', () => {
+    const shipped = `## v1.0 ✅ SHIPPED\n\n${ACTIVE_REGION_ARCHIVE_BODY}`;
+    const active = ACTIVE_REGION_ACTIVE_BODY.replace('## Progress', `${shipped}\n## Progress`);
+    const crlf = (t) => t.replace(/\n/g, '\r\n');
+    const out = runActiveRegion(crlf(`# Roadmap\n\n${activeRegionArchive('', 'details')}\n${active}`));
+    // The platform write seam normalizes CRLF to LF for the whole file, so compare LF forms.
+    assert.ok(out.includes(activeRegionArchive('', 'details')), 'details archive intact');
+    assert.ok(out.includes(shipped), 'plain shipped section intact');
+    assert.match(out, /\| 1\. A \| 1\/1 \| In Progress/);
+  });
+
+  test('re-run with the active section already ticked leaves a trailing archive untouched', () => {
+    const ticked = ACTIVE_REGION_ACTIVE_BODY
+      .replace('- [ ] **Phase 1: A**', '- [x] **Phase 1: A** (completed 2026-01-01)')
+      .replace('**Plans:** 0 plans', '**Plans:** 1/1 plans complete')
+      .replace('- [ ] 01-01-PLAN.md', '- [x] 01-01-PLAN.md')
+      .replace('| 1. A | 0/1 | In Progress | |', '| 1. A | 1/1 | Complete | 2026-01-01 |');
+    const out = runActiveRegion(`# Roadmap\n\n${ticked}\n${activeRegionArchive('', 'details')}`);
+    assert.ok(out.includes(activeRegionArchive('', 'details')), `archive must be byte-identical:\n${out}`);
+  });
+});

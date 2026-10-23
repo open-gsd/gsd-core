@@ -3,7 +3,7 @@
  *
  * Covers the 6 functions extracted from core.cjs per ADR-857 rollout
  * phase 2b (#870): stripShippedMilestones, extractCurrentMilestone,
- * replaceInCurrentMilestone, getRoadmapPhaseInternal, getMilestoneInfo,
+ * getRoadmapPhaseInternal, getMilestoneInfo,
  * getMilestonePhaseFilter.
  *
  * Includes:
@@ -30,7 +30,7 @@ const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
 const {
   stripShippedMilestones,
   extractCurrentMilestone,
-  replaceInCurrentMilestone,
+  maskArchivedDetails,
   getRoadmapPhaseInternal,
   getMilestoneInfo,
   getMilestonePhaseFilter,
@@ -765,28 +765,95 @@ describe('roadmap-parser: extractCurrentMilestone', () => {
   });
 });
 
-// ─── replaceInCurrentMilestone ────────────────────────────────────────────────
+// ─── maskArchivedDetails (#5553) ──────────────────────────────────────────────
 
-describe('roadmap-parser: replaceInCurrentMilestone', () => {
-  test('replaces in content after last </details> when present', () => {
-    const content = '<details>\nold\n</details>\n**Plans:** 0/1 plans';
-    const result = replaceInCurrentMilestone(content, /0\/1 plans/, '1/1 plans complete');
-    assert.ok(result.includes('1/1 plans complete'), 'replacement applied after </details>');
-    assert.ok(result.includes('<details>'), 'details block untouched');
+describe('roadmap-parser: maskArchivedDetails', () => {
+  let tmpDir;
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\n---\n# State\n');
+  });
+  afterEach(() => cleanup(tmpDir));
+
+  const ARCHIVE = '<details>\n<summary>v1.0 ✅ SHIPPED</summary>\n\nold\n</details>';
+  const ACTIVE = '## v2.0 Active\n\nnew\n';
+
+  test('restore of an edit that drops a placeholder reports failure (null), not a silent no-op', () => {
+    const { visible, restore } = maskArchivedDetails(`${ARCHIVE}\n\n${ACTIVE}`, tmpDir);
+    assert.ok(!visible.includes('old'), 'archive hidden');
+    assert.strictEqual(restore(ACTIVE), null);
   });
 
-  test('replaces anywhere when no </details> present', () => {
-    const content = '**Plans:** 0/1 plans';
-    const result = replaceInCurrentMilestone(content, /0\/1 plans/, '1/1 plans complete');
-    assert.strictEqual(result, '**Plans:** 1/1 plans complete');
+  test('restore of an untouched visible text round-trips byte-for-byte', () => {
+    const content = `${ARCHIVE}\n\n${ACTIVE}`;
+    const { visible, restore } = maskArchivedDetails(content, tmpDir);
+    assert.strictEqual(restore(visible), content);
   });
 
-  test('does not replace in shipped sections', () => {
-    const content = '<details>\n**Plans:** 0/1 plans\n</details>\n## v2.0\n**Plans:** 0/1 plans';
-    const result = replaceInCurrentMilestone(content, /0\/1 plans/, '1/1 plans complete');
-    // Only the SECOND occurrence (after </details>) should be replaced
-    assert.ok(result.includes('<details>\n**Plans:** 0/1 plans\n</details>'), 'shipped section unchanged');
-    assert.ok(result.includes('## v2.0\n**Plans:** 1/1 plans complete'), 'current section updated');
+  test('CRLF: a plain shipped section ends before the newline so the next heading stays at line start', () => {
+    const content = `${ACTIVE}\r\n## v1.0 ✅ SHIPPED\r\n\r\nold\r\n\r\n## Progress\r\n\r\nrow\r\n`.replace(/(?<!\r)\n/g, '\r\n');
+    const { visible } = maskArchivedDetails(content, tmpDir);
+    assert.ok(!visible.includes('old'), 'shipped section hidden');
+    assert.match(visible, /\r\n## Progress\r\n/);
+  });
+
+  // Review round 3, Major 2: any <details> block inside the active range that is
+  // not a wrapper around the active heading is archive, whatever its <summary>.
+  for (const [name, head] of Object.entries({
+    'no <summary>': '<details>\n',
+    'non-closed <summary>': '<details>\n<summary>Deferred scope</summary>\n',
+  })) {
+    test(`${name} inside the active range is masked`, () => {
+      const { visible, restore } = maskArchivedDetails(`${ACTIVE}\n${head}old\n</details>\n`, tmpDir);
+      assert.ok(!visible.includes('old'), 'block hidden');
+      assert.ok(visible.includes('new'), 'active text visible');
+      assert.strictEqual(restore(visible), `${ACTIVE}\n${head}old\n</details>\n`);
+    });
+  }
+
+  test('a <details> wrapping the active heading stays visible', () => {
+    const { visible } = maskArchivedDetails(`<details open>\n<summary>v2.0 Active</summary>\n\n${ACTIVE}\n</details>\n`, tmpDir);
+    assert.ok(visible.includes('new'));
+  });
+
+  test('an unclosed fence is bounded at the next heading, so a later archive is still masked', () => {
+    const { visible } = maskArchivedDetails(`# Roadmap\n\n\`\`\`\nstray\n\n## Notes\n\n${ARCHIVE}\n\n${ACTIVE}`, tmpDir);
+    assert.ok(!visible.includes('old'), 'archive after the unclosed fence hidden');
+    assert.ok(visible.includes('new'));
+  });
+
+  test('a hostile run of `<details ` stays linear (ReDoS guard)', () => {
+    const content = `${'<details '.repeat(45000)}\n${ACTIVE}`;
+    const t0 = Date.now();
+    maskArchivedDetails(content, tmpDir);
+    assert.ok(Date.now() - t0 < 2000, `took ${Date.now() - t0}ms`);
+  });
+
+  test('property: restore(visible) round-trips any mix of archives, headings, comments and prose', () => {
+    const piece = fc.constantFrom(
+      '<details>\n<summary>v1.0 ✅ SHIPPED</summary>\n\nold\n</details>\n',
+      '<DETAILS open>\n<summary>v0.9 ARCHIVED</summary>\nx\n</DETAILS>\n',
+      '<details>\n<summary>Deferred</summary>\nx\n</details>\n',
+      '## v1.0 ✅ SHIPPED\n\nold\n',
+      '## v2.0 Active\n\nnew\n',
+      '## Progress\n\n| Phase | Status |\n|---|---|\n| 1. A | x |\n',
+      '<!-- <details> -->\n',
+      'inline <details> mention\n',
+      '    <details>\n',
+      '```\n<details>\n```\n',
+      '</details>\n',
+      '<details>\n',
+      '\n',
+    );
+    const eol = fc.constantFrom('\n', '\r\n');
+    fc.assert(
+      fc.property(fc.array(piece, { maxLength: 8 }), eol, (pieces, nl) => {
+        const content = pieces.join('').replace(/\r?\n/g, nl);
+        const { visible, restore } = maskArchivedDetails(content, tmpDir);
+        return restore(visible) === content;
+      }),
+      { seed: 20260810, numRuns: 300 },
+    );
   });
 });
 
