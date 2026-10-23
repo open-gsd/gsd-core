@@ -1088,19 +1088,173 @@ function isDebuggerAgent(value) {
   return value.slice(value.lastIndexOf(':') + 1) === DEBUGGER_AGENT_NAME;
 }
 
-// `timeout [flags] DURATION cmd …` is not in CMD_PREFIXES because its first
-// operand is a duration, not the command. Returns the command that follows it.
-function unwrapTimeout(cmd) {
-  let { base, operands } = cmd;
-  while (base === 'timeout') {
-    let k = 0;
-    while (k < operands.length && operands[k].text.startsWith('-')) k++;
-    k++; // the DURATION operand
-    const rest = resolveCommand(operands.slice(k));
-    if (!rest) return null;
-    ({ base, operands } = rest);
+// #5514: the wrappers the debugger check looks through, with the options that
+// take a value. `short` lists option letters whose value is the rest of the word
+// or else the next word; `optional` lists letters whose value can only be
+// attached; `long` lists long names whose value follows `=` or else is the next
+// word, and `flags` the other long names, whose value can only follow `=`. Any
+// other `-…` word is a flag with no value. Read from the getopt specs of GNU
+// coreutils env / nice / timeout / nohup, GNU time, sudo 1.9 and OpenBSD doas;
+// all of them stop at the first operand. `timeout` is here and not in
+// CMD_PREFIXES because its first operand is a duration, not the command.
+const LAUNCH_WRAPPERS = new Map([
+  ['sudo', {
+    short: 'aCcDgpRrTtUu',
+    optional: 'h',
+    long: ['auth-type', 'chdir', 'chroot', 'close-from', 'command-timeout', 'group', 'host', 'login-class', 'other-user', 'prompt', 'role', 'type', 'user'],
+    flags: ['askpass', 'background', 'bell', 'edit', 'help', 'list', 'login', 'no-update', 'non-interactive', 'preserve-env', 'preserve-groups', 'remove-timestamp', 'reset-timestamp', 'set-home', 'shell', 'stdin', 'validate', 'version'],
+  }],
+  ['doas', { short: 'aCu', optional: '', long: [], flags: [] }],
+  ['env', {
+    short: 'CSu',
+    optional: '',
+    long: ['chdir', 'split-string', 'unset'],
+    flags: ['block-signal', 'debug', 'default-signal', 'help', 'ignore-environment', 'ignore-signal', 'list-signal-handling', 'null', 'version'],
+  }],
+  ['nice', { short: 'n', optional: '', long: ['adjustment'], flags: ['help', 'version'] }],
+  ['timeout', { short: 'ks', optional: '', long: ['kill-after', 'signal'], flags: ['foreground', 'help', 'preserve-status', 'verbose', 'version'] }],
+  ['time', { short: 'fo', optional: '', long: ['format', 'output', 'output-file'], flags: ['append', 'help', 'portability', 'quiet', 'verbose', 'version'] }],
+  ['command', { short: '', optional: '', long: [], flags: [] }],
+  ['nohup', { short: '', optional: '', long: [], flags: ['help', 'version'] }],
+]);
+
+// The long option `--NAME` stands for, as getopt_long reads it: an exact name,
+// else the one name NAME is a prefix of. A prefix of several value-taking names
+// reads as the first of them: glibc accepts it when they are one option
+// (`--out` for time's `--output` / `--output-file`), and when they are not, the
+// wrapper fails without running anything either way. Null when NAME is
+// ambiguous or unknown.
+function matchLongOption(spec, name) {
+  if (spec.long.includes(name) || spec.flags.includes(name)) return name;
+  const hits = [...spec.long, ...spec.flags].filter((n) => n.startsWith(name));
+  if (hits.length === 1 || (hits.length > 1 && hits.every((n) => spec.long.includes(n)))) return hits[0];
+  return null;
+}
+
+const ENV_S_ESCAPES = { f: '\f', n: '\n', r: '\r', t: '\t', v: '\v' };
+
+// The words `env -S STRING` splits STRING into, by GNU env's rules rather than
+// the shell's: blanks separate outside quotes; single quotes keep everything but
+// `\\` and `\'`; outside them `\_` separates (a space inside double quotes),
+// `\c` ends the string, `\f \n \r \t \v` are those characters and
+// `\" \# \$ \' \\` the character itself; `#` starting a word starts a comment;
+// `${VAR}` is kept as written, since its value is not known here. Where env
+// would reject the string, the words read up to that point are returned.
+function splitEnvString(value) {
+  const words = [];
+  let word = '';
+  let inWord = false;
+  let quote = '';
+  const end = () => {
+    if (inWord) words.push(word);
+    word = '';
+    inWord = false;
+  };
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    if (quote === "'") {
+      if (ch === "'") quote = '';
+      else if (ch === '\\' && (value[i + 1] === '\\' || value[i + 1] === "'")) word += value[++i];
+      else word += ch;
+      continue;
+    }
+    if (ch === '"' || (ch === "'" && quote === '')) {
+      quote = quote === ch ? '' : ch;
+      inWord = true;
+      continue;
+    }
+    if (quote === '' && ' \t\n\v\f\r'.includes(ch)) {
+      end();
+      continue;
+    }
+    if (quote === '' && ch === '#' && !inWord) break;
+    if (ch === '$' && value[i + 1] !== '{') break;
+    if (ch === '\\') {
+      const next = value[++i];
+      if (next === '_' && quote === '') {
+        end();
+        continue;
+      }
+      if (next === '_') word += ' ';
+      else if (next !== undefined && ENV_S_ESCAPES[next]) word += ENV_S_ESCAPES[next];
+      else if (next !== undefined && '"#$\'\\'.includes(next)) word += next;
+      else break; // `\c`, or an escape env rejects
+      inWord = true;
+      continue;
+    }
+    word += ch;
+    inWord = true;
   }
-  return { base, operands };
+  end();
+  return words;
+}
+
+// The command a chain of known wrappers launches: leading `VAR=val` words, each
+// wrapper with its options and their values, `timeout`'s duration, and the
+// `VAR=val` words `env` and `sudo` take before the command. `env -S STRING`
+// splits STRING into words and puts them where the option stood, then goes on
+// reading options, so the split words are spliced in the same way, at most
+// MAX_NESTING_DEPTH times per command (each splice copies the word list). Null
+// when no command remains.
+function resolveLaunchedCommand(words) {
+  let list = words;
+  let idx = 0;
+  let splices = 0;
+  // `env -S`'s value, as words in its place.
+  const splice = (value) => {
+    if (splices >= MAX_NESTING_DEPTH) return;
+    splices++;
+    const split = splitEnvString(value).map((text) => ({ kind: 'word', text, quoted: 'none' }));
+    list = [...list.slice(0, idx), ...split, ...list.slice(idx)];
+  };
+  while (idx < list.length && ASSIGNMENT_RE.test(list[idx].text)) idx++;
+  while (idx < list.length) {
+    const base = lastSegment(list[idx].text).toLowerCase();
+    const spec = LAUNCH_WRAPPERS.get(base);
+    if (!spec) break;
+    idx++;
+    while (idx < list.length) {
+      const text = list[idx].text;
+      if (text === '--') {
+        idx++;
+        break;
+      }
+      if (text === '-' && base === 'env') {
+        idx++; // `env -` is `env -i`
+        continue;
+      }
+      if (!text.startsWith('-') || text === '-') break;
+      idx++;
+      if (text.startsWith('--')) {
+        const eq = text.indexOf('=');
+        const option = matchLongOption(spec, text.slice(2, eq === -1 ? undefined : eq));
+        let value = eq === -1 ? null : text.slice(eq + 1);
+        if (value === null && option !== null && spec.long.includes(option)) {
+          value = idx < list.length ? list[idx].text : null;
+          idx++;
+        }
+        if (base === 'env' && option === 'split-string' && value !== null) splice(value);
+        continue;
+      }
+      for (let c = 1; c < text.length; c++) {
+        if (spec.optional.includes(text[c])) break;
+        if (!spec.short.includes(text[c])) continue;
+        let value = text.slice(c + 1);
+        if (value === '') {
+          value = idx < list.length ? list[idx].text : null;
+          idx++;
+        }
+        if (base === 'env' && text[c] === 'S' && value !== null) splice(value);
+        break;
+      }
+    }
+    if (base === 'timeout') idx++; // the DURATION operand
+    if (base === 'env' || base === 'sudo') {
+      while (idx < list.length && ASSIGNMENT_RE.test(list[idx].text)) idx++;
+    }
+  }
+  if (idx >= list.length) return null;
+  return { base: lastSegment(list[idx].text).toLowerCase(), operands: list.slice(idx + 1) };
 }
 
 // Returns the `--agent` value text of a debugger launch, or null.
@@ -1134,8 +1288,7 @@ function findDebuggerCliSpawn(command, depth) {
     }
     if (!words.length) continue;
 
-    const first = resolveCommand(words);
-    const cmd = first && unwrapTimeout(first);
+    const cmd = resolveLaunchedCommand(words);
     if (!cmd) continue;
     const { base, operands } = cmd;
 
