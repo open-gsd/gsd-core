@@ -166,7 +166,7 @@ project one is reported, since that is the file you are most likely able to fix.
 ## Agent tool grants
 
 `agent_tools` is an opt-in, install-time addition to the tools already declared by shipped
-agents. Put defaults shared by your projects in `~/.gsd/defaults.json` and project-specific
+agents. Put defaults shared by your projects in `$GSD_HOME/.gsd/defaults.json` (`~/.gsd/defaults.json` when `GSD_HOME` is unset) and project-specific
 choices in the nearest `.planning/config.json`:
 
 ```json
@@ -910,6 +910,8 @@ Each element in the array is one of three forms:
 
 **Global personal skills** (`global:<name>`) resolve against the runtime's global skills directory (e.g. `~/.claude/skills/`). Symlink-escape protection applies unless the target is listed in `agent_skills_security.trusted_global_roots`.
 
+**Skill dirs named `gsd-*`.** GSD installs its own skills into that same directory as `gsd-<name>/`, and every install or update replaces the dirs GSD owns: a skill GSD ships, a third-party capability skill GSD staged, or a dir the previous install's `gsd-file-manifest.json` records. A `gsd-*` dir that matches none of those is yours. Install and update leave it in place in the skills directory the runtime reads, and print its path as preserved. Where an install clears the two legacy locations GSD has moved off, Codex's skills dir from before its skills moved to `$HOME/.agents/skills` and Windsurf's `.devin/skills`, it removes a skill GSD ships or a capability skill GSD staged and leaves any other `gsd-*` dir in place, printing its path as preserved (`gsd-dev-preferences` and symlinks there are kept without a message). The manifest does not count there, because its entries cannot tell the old location from the current one. Uninstall still removes `gsd-*` skill dirs whoever owns them. Prefer a name outside the `gsd-` prefix anyway, because a skill GSD later ships under the same name replaces yours on the next update.
+
 **Plugin-provided skills** (`global:<plugin>:<skill>`) follow the namespaced form `seg(:seg)*`, where each segment is one or more alphanumeric characters, underscores, or hyphens joined by single colons (e.g. `global:coderabbit:code-review`). This form is **Claude-only**: on the Claude runtime GSD emits a Skill-tool load directive in the agent's `<agent_skills>` block so the agent loads the skill by name via the Skill tool, and Claude Code resolves the `plugin:skill` namespace. On all other runtimes the entry is skipped with a warning — the plugin/Skill-tool model is specific to Claude Code and has no equivalent elsewhere.
 
 > **Why load by name rather than path?** Claude Code's plugin cache is versioned and ephemeral, so there is no stable filesystem path to `@`-include. Loading by namespaced name via the Skill tool lets Claude Code's own resolver locate the current version of the plugin skill at runtime.
@@ -944,7 +946,7 @@ Skills reach a consumer agent through **two cooperating seams** (dual injection 
 
 1. **Orchestrator-side (primary on Claude Code).** At spawn time, workflows call `gsd-tools query agent-skills <type>` (or legacy `node gsd-tools.cjs agent-skills <type>`) in their bash init and interpolate the resulting `<agent_skills>` block into the `Task()`/`Agent()` prompt. This is established across ~25 workflows.
 
-2. **Agent-side self-load (durable fallback).** Each of the 22 consumer agents also self-loads in its own mandatory init step — it runs `gsd_run query agent-skills <its-type>` and `Read`s every listed `SKILL.md` per [`gsd-core/references/agent-skills-bootstrap.md`](../gsd-core/references/agent-skills-bootstrap.md). This is the path that works on every runtime, including **Cursor**, where `Skill()`-delegated workflow bash init does not reliably execute and `/gsd-autonomous` delegates via flat `Skill()` calls.
+2. **Agent-side self-load (durable fallback).** Each of the 22 consumer agents also self-loads in its own mandatory init step — it runs `gsd_run query agent-skills <its-type> --skills-only` (the type is written into the agent file's body; `--skills-only` skips the persona fallback that non-Claude runtimes get from the plain query, so the agent never re-reads its own persona) and `Read`s every listed `SKILL.md` per [`gsd-core/references/agent-skills-bootstrap.md`](../gsd-core/references/agent-skills-bootstrap.md). This is the path that works on every runtime, including **Cursor**, where `Skill()`-delegated workflow bash init does not reliably execute and `/gsd-autonomous` delegates via flat `Skill()` calls.
 
 **Dedup guard.** If an agent's prompt already contains an `<agent_skills>` block (orchestrator already injected one), the agent skips self-load — so on runtimes where both seams run (Claude Code), the prompt never carries two copies. `query agent-skills` is read-only and idempotent: it exits 0 with an empty block when nothing is configured for the type, so self-load is zero-overhead for unconfigured agents.
 
@@ -1440,6 +1442,13 @@ a caller error — the gate fails closed with the missing-argument error, the
 same as calling it with no context path at all, rather than silently
 skipping. The phase directory remains a separate positional argument (there
 is no `--phase` flag; the workflow caller passes both positionals).
+A phase-dir argument that names no directory is a caller error too: the gate
+fails closed with `total`/`covered` null and `reason` `"phase directory not
+found"` (nothing is there, e.g. the phase number `01` was passed), `"phase
+path is not a directory"` (it names a file) or `"phase directory unreadable"`
+(it could not be read; the exit status is then UNAVAILABLE, 69). A phase
+directory that holds no PLAN file answers `reason` `"phase directory holds no
+plans"` the same way: zero plans loaded is not zero coverage.
 
 ### How to write decisions the gates accept
 
@@ -1587,8 +1596,7 @@ On the Claude runtime, fully-qualified Claude model IDs are honored as explicit 
 
 `model_overrides` can be set in either `.planning/config.json` (per-project)
 or `$GSD_HOME/.gsd/defaults.json` (global). The install-time embedding for
-Codex and OpenCode described below still reads `~/.gsd/defaults.json`
-([#5017](https://github.com/open-gsd/gsd-core/issues/5017)). Per-project entries win on conflict and
+Codex and OpenCode described below reads the same store ([#5017](https://github.com/open-gsd/gsd-core/issues/5017)). Per-project entries win on conflict and
 non-conflicting global entries are preserved, so you can tune a single
 agent's model in one repo without re-setting global defaults. This applies
 uniformly across Claude Code, Codex, OpenCode, Kilo, and the other
@@ -2330,6 +2338,8 @@ Save settings as global defaults for future projects:
 
 **Location:** `$GSD_HOME/.gsd/defaults.json` (`GSD_HOME` defaults to your home directory, so `~/.gsd/defaults.json` when unset)
 
+Every reader and writer of this store resolves its root the same way: `GSD_HOME` when it is set and non-blank, otherwise your home directory. That covers the config loader, the install-time model / tools / effort resolvers, the installer's non-Claude defaults writer, the isolation hooks' runtime fallback, capability staging, and the `/gsd-settings` and `/gsd-new-project` workflows (#5017).
+
 When `/gsd-new-project` creates a new `config.json`, it reads global defaults and merges them as the starting configuration. Per-project settings always override globals.
 
 ### What a global file can and cannot set at runtime
@@ -2345,7 +2355,7 @@ Two different rules apply, and the difference is deliberate ([#3532](https://git
   detects this, instead of failing silently. To apply a global model setting to a project,
   put it in that project's `.planning/config.json`.
 - **`effort` is the exception**: the install-time effort channel always merges
-  `~/.gsd/defaults.json` with the project config (that is how `effort sync` works), so a
+  the global defaults store with the project config (that is how `effort sync` works), so a
   global `effort` block keeps working in projects and does not trigger the warning.
 - **The whole `git.*` namespace is project-scoped and never resolves from the global file**,
   in either directory shape — not `git.base_branch`, not `git.protected_branches`, not

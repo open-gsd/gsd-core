@@ -500,6 +500,7 @@
       "legacy-cleanup.cjs",
       "loop-host-contract.cjs",
       "loop-resolver.cjs",
+      "markdown-line-diff.cjs",
       "markdown-sectionizer.cjs",
       "markdown-table.cjs",
       "mcp-catalog.cjs",
@@ -597,6 +598,7 @@
       "task-command-router.cjs",
       "task-content-resolution.cjs",
       "tdd-red-evidence.cjs",
+      "tdd-test-files.cjs",
       "teams-status.cjs",
       "template.cjs",
       "text-lines.cjs",
@@ -645,6 +647,7 @@
       "gsd-ensure-canonical-path.js",
       "gsd-graphify-update.sh",
       "gsd-node-runner.sh",
+      "gsd-path-export.js",
       "gsd-phase-boundary.sh",
       "gsd-prompt-guard.js",
       "gsd-read-guard.js",
@@ -685,6 +688,7 @@
       "code-review/steps/dispatch-fix.md",
       "code-review/steps/structural-pre-pass.md",
       "complete-milestone/steps/git-tag.md",
+      "complete-milestone/steps/project-md-evolution-review.md",
       "discuss-phase-assumptions/steps/auto-advance-dispatch.md",
       "docs-update/steps/dispatch-monorepo-packages.md",
       "execute-phase/steps/code-review-disposition.md",
@@ -714,6 +718,7 @@
       "new-project/steps/auto-mode-detection.md",
       "new-project/steps/codebase-map-offer.md",
       "plan-phase/steps/adr-ingest-express-path.md",
+      "plan-phase/steps/auto-advance-check.md",
       "plan-phase/steps/chunked-planning-mode.md",
       "plan-phase/steps/closed-phase-gate.md",
       "plan-phase/steps/prd-express-gate.md",
@@ -755,6 +760,7 @@
       "verify-work/detail/elaboration.md"
     ],
     "workflow_templates": [
+      "autonomous/templates/minimal-context.md",
       "discuss-phase/templates/context.md",
       "discuss-phase/templates/discussion-log.md"
     ]

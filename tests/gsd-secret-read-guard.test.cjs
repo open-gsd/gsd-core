@@ -68,6 +68,202 @@ function assertBlocked(r, label, { code = 'secret-read', tool, path: expectedPat
   return out;
 }
 
+describe('gsd-secret-read-guard: command-valued git config (#5045)', () => {
+  // Oracle: #5045 requires the two reported command strings to get the same
+  // secret-read verdict as a direct shell script. Adjacent syntax comes from
+  // git(1)'s -c option, not from the guard's parser or current output.
+  const blocks = [
+    ["git -c alias.x='!cat .env' x", '.env'],
+    ["git -c diff.external='cat .env' diff", '.env'],
+    ["git.exe -c alias.x='!cat .env' x", '.env'],
+    ["GIT.EXE -c diff.external='cat .env' diff", '.env'],
+    ['"C:/Program Files/Git/bin/git.exe" -c alias.x=\'!cat .env\' x', '.env'],
+    ["git --literal-pathspecs -c alias.x='!cat .env' x", '.env'],
+    ["git --glob-pathspecs -c alias.x='!cat .env' x", '.env'],
+    ["git --noglob-pathspecs -c diff.external='cat .env' diff", '.env'],
+    ["git --icase-pathspecs -c diff.external='cat .env' diff", '.env'],
+    ["git --exec-path=. -c alias.x='!cat .env' x", '.env'],
+    ["git --attr-source=HEAD -c diff.external='cat .env' diff", '.env'],
+    ["git --attr-source HEAD -c alias.x='!cat .env' x", '.env'],
+    ["git -c alias.x='!echo safe' show HEAD:.env", 'HEAD:.env'],
+    ["git -c user.name=Example show HEAD:.env", 'HEAD:.env'],
+    ["git -c ALIAS.X='!cat .env' x", '.env'],
+    ["git -c DiFf.ExTeRnAl='cat .env' diff", '.env'],
+    ["git -c alias.x='!cat config/.env.production' x", 'config/.env.production'],
+    ["git -c diff.external='cat .secrets' diff", '.secrets'],
+    ["git -C repo --no-pager -c alias.x='!cat .env' x", '.env'],
+    ["git --git-dir=repo/.git -c diff.external='cat .env' diff", '.env'],
+    ["git --work-tree repo -c alias.x='!cat .env' x", '.env'],
+    ["git --config-env=user.name=GIT_NAME -c alias.x='!cat .env' x", '.env'],
+    ["git -c user.name=Example -c alias.x='!cat .env' x", '.env'],
+    ["git -c alias.x='!echo safe' -c alias.x='!cat .env' x", '.env'],
+    ["git -c alias.x='!echo safe' -c diff.external='cat .env' diff", '.env'],
+    ["git -c alias.x='!echo safe; cat .env' x", '.env'],
+    ["git -c alias.x='!bash -c \"cat .env\"' x", '.env'],
+    ["git -c diff.external='cat < .env' diff", '.env'],
+    // --shallow-file <path> is a hidden git global option (git.c
+    // handle_options); git 2.49 runs the alias behind it.
+    ["git --shallow-file x -c alias.x='!cat .env' x", '.env'],
+    // An option the walker does not know has an unknown arity, so the -c scan
+    // must keep going past it, and past a word that may be its value.
+    ["git --frobnicate -c alias.x='!cat .env' x", '.env'],
+    ["git --frobnicate value -c diff.external='cat .env' diff", '.env'],
+    ["git --frobnicate -c user.name=Example -c alias.x='!cat .env' x", '.env'],
+    // ...while the #4856 pathspec exemption still withdraws behind it.
+    ['git --frobnicate ls-files --error-unmatch .env', '.env'],
+    ["env TRACE=on git -c alias.x='!cat .env' x", '.env'],
+    ["cd repo && git -c alias.x='!cat .env' x", '.env'],
+    ["git -c alias.x='!cat .env' ls-files .env", '.env'],
+    ["git -c diff.external='cat .env' diff\r\n", '.env'],
+  ];
+  for (const [cmd, expectedPath] of blocks) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: expectedPath });
+    });
+  }
+
+  const allows = [
+    'git status',
+    "git -c core.pager='cat .env' log",
+    "git -c user.name='cat .env' log",
+    "git.exe -c user.name='cat .env' log",
+    "git -c diff.externalCommand='cat .env' diff",
+    "git -c aliasx.read='!cat .env' status",
+    "git -c alias.x='status' x",
+    "git -c alias.x='echo .env' x", // no leading !: not a shell script
+    "git -c alias.x='!echo .env' x",
+    "git -c diff.external='echo .env' diff",
+    "git -c alias.x='!cat .env.example' x",
+    "git -c diff.external='cat .env.local.example' diff",
+    "git -c alias.x='!cat README.md' x",
+    "git -c diff.external='cat README.md' diff",
+    'git -c',
+    "git -c '' status",
+    'git -c alias.x status',
+    "git -c alias.x='' x",
+    "git -c diff.external='' diff",
+    "git -C '-calias.x=!cat .env' status",
+    "git --git-dir='-calias.x=!cat .env' status",
+    "git log -c 'alias.x=!cat .env'",
+    // git has no attached -c form: git 2.49 answers "unknown option:
+    // -calias.x=!cat .env" (exit 129) and runs nothing.
+    "git -calias.x='!cat .env' x",
+    "git -cdiff.external='cat .env' diff",
+    "echo \"git -c alias.x='!cat .env' x\"",
+    "echo -c 'alias.x=!cat .env'",
+    "printf '%s' -c 'diff.external=cat .env'",
+    // Unknown leading option: only a command-valued key reading a secret blocks.
+    "git --frobnicate -c user.name='cat .env' log",
+    "git --frobnicate -c alias.x='!echo safe' x",
+  ];
+  for (const cmd of allows) {
+    test(`allows ${JSON.stringify(cmd)}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  // The existing shell scanner documents a depth-3 limit. A Git config
+  // script consumes one frame, exactly like an interpreter's script.
+  for (const [evalFrames, shouldBlock] of [[1, true], [2, true], [3, false]]) {
+    test(`Git config script respects scan-depth boundary: ${evalFrames + 1}`, () => {
+      let script = 'cat .env';
+      for (let k = 0; k < evalFrames; k++) script = 'eval ' + JSON.stringify(script);
+      const cmd = 'git -c alias.x=' + JSON.stringify('!' + script) + ' x';
+      const result = runHook(bash(cmd));
+      if (shouldBlock) assertBlocked(result, cmd, { tool: 'Bash', path: '.env' });
+      else assertAllowed(result, cmd);
+    });
+    test(`Git config behind shells respects scan-depth boundary: ${evalFrames + 1}`, () => {
+      let cmd = "git -c alias.x='!cat .env' x";
+      for (let k = 0; k < evalFrames; k++) cmd = 'eval ' + JSON.stringify(cmd);
+      const result = runHook(bash(cmd));
+      if (shouldBlock) assertBlocked(result, cmd, { tool: 'Bash', path: '.env' });
+      else assertAllowed(result, cmd);
+    });
+  }
+
+  // Independent argv vocabularies, fixed seed, real JSON-stdin hook.
+  // A global option and its value are one fragment so generation preserves
+  // the boundary rather than accidentally treating the value as a command.
+  // Every global option git 2.49 accepts before a subcommand that does not
+  // exit on its own (git(1) plus git.c's hidden --shallow-file), in each
+  // value form git accepts — confirmed by running them in front of an alias.
+  const GLOBAL_FORMS = [
+    '-C repo', '-c user.name=Example', '--exec-path=.',
+    '-p', '--paginate', '-P', '--no-pager',
+    '--no-replace-objects', '--no-lazy-fetch', '--no-optional-locks', '--no-advice', '--bare',
+    '--git-dir=repo/.git', '--git-dir repo/.git', '--work-tree=repo', '--work-tree repo',
+    '--namespace=ns', '--namespace ns',
+    '--config-env=user.name=GIT_NAME', '--config-env user.name=GIT_NAME',
+    '--attr-source=HEAD', '--attr-source HEAD', '--shallow-file x',
+    '--literal-pathspecs', '--glob-pathspecs', '--noglob-pathspecs', '--icase-pathspecs',
+  ];
+  const GLOBALS = fc.array(fc.constantFrom(...GLOBAL_FORMS), { maxLength: 3 });
+
+  // Each form on its own, so no option depends on the sampler drawing it: the
+  // walk must step over it to the subcommand, where log's -c argument is data
+  // and ls-files' pathspec is a name (#4856 parity).
+  for (const form of GLOBAL_FORMS) {
+    test(`global ${JSON.stringify(form)} ends at the subcommand for the -c scan and the pathspec exemption`, () => {
+      const logCmd = `git ${form} log -c 'alias.x=!cat .env'`;
+      assertAllowed(runHook(bash(logCmd)), logCmd);
+      const lsCmd = `git ${form} ls-files --error-unmatch .env`;
+      assertAllowed(runHook(bash(lsCmd)), lsCmd);
+    });
+  }
+  const SECRET = fc.constantFrom('.env', '.env.local', '.secrets', 'config/.env.production');
+  const OPTIONS = { seed: 5045, numRuns: 40 };
+
+  test('property: global option permutations cannot hide a command-valued secret read', () => {
+    fc.assert(fc.property(
+      GLOBALS, SECRET, fc.constantFrom('cat', 'grep KEY'),
+      fc.constantFrom('alias.x', 'diff.external'),
+      (globals, secret, reader, key) => {
+        const script = `${key === 'alias.x' ? '!' : ''}${reader} ${secret}`;
+        const cmd = `git ${globals.join(' ')} -c ${key}='${script}' ${key === 'alias.x' ? 'x' : 'diff'}`;
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: secret });
+      },
+    ), OPTIONS);
+  });
+
+  // An option outside git's vocabulary (a future or mistyped one), with or
+  // without a value word, anywhere among the globals: the -c scan fails closed.
+  const UNKNOWN_GLOBAL = fc.constantFrom('--frobnicate', '--frobnicate value', '--future-opt=x', '-Z');
+  test('property: an unknown global option cannot hide a command-valued secret read', () => {
+    fc.assert(fc.property(
+      GLOBALS, UNKNOWN_GLOBAL, fc.nat(), SECRET, fc.constantFrom('alias.x', 'diff.external'),
+      (globals, unknown, at, secret, key) => {
+        const words = [...globals];
+        words.splice(at % (words.length + 1), 0, unknown);
+        const script = `${key === 'alias.x' ? '!' : ''}cat ${secret}`;
+        const cmd = `git ${words.join(' ')} -c ${key}='${script}' ${key === 'alias.x' ? 'x' : 'diff'}`;
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: secret });
+      },
+    ), OPTIONS);
+  });
+
+  test('property: ordinary config values mentioning secret reads are still data', () => {
+    fc.assert(fc.property(
+      GLOBALS, fc.constantFrom('.env', '.env.local', '.secrets'),
+      fc.constantFrom('core.pager', 'user.name', 'diff.externalCommand'),
+      (globals, secret, key) => {
+        const cmd = `git ${globals.join(' ')} -c ${key}='cat ${secret}' log`;
+        assertAllowed(runHook(bash(cmd)), cmd);
+      },
+    ), OPTIONS);
+  });
+
+  // Parity with #4856: git parses its global options once, whatever follows,
+  // so the same global prefix that cannot hide a -c script must also reach
+  // the name-only pathspec exemption (`git ls-files` prints names only).
+  test('property: the #4856 pathspec exemption walks the same global options', () => {
+    fc.assert(fc.property(GLOBALS, SECRET, (globals, secret) => {
+      const cmd = `git ${globals.join(' ')} ls-files --error-unmatch ${secret}`;
+      assertAllowed(runHook(bash(cmd)), cmd);
+    }), OPTIONS);
+  });
+});
+
 describe('gsd-secret-read-guard: Read', () => {
   const blocks = ['.env', '/proj/.env', '.env.local', '/p/.env.production', '.secrets', 'C:\\proj\\.env', '/p/.secrets/',
     // Case-insensitive: these ARE the secret file on macOS/Windows.

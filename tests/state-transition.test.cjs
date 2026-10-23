@@ -5086,3 +5086,41 @@ describe('#4945 multiline **Current focus:** is replaced whole', () => {
   });
 });
 
+// #5165: is STATE already positioned past a phase being re-completed?
+{
+  const { isStatePastPhase } = require('../gsd-core/bin/lib/state-transition.cjs');
+
+  describe('#5165 isStatePastPhase', () => {
+    const fmState = (phase) => `---\ncurrent_phase: ${phase}\n---\n\n# S\n`;
+    const bodyState = (line) => `# S\n\n## Current Position\n\n${line}\n`;
+
+    test('past only when strictly greater (limit-1, limit, limit+1)', () => {
+      assert.equal(isStatePastPhase(fmState('"3"'), 4), false);
+      assert.equal(isStatePastPhase(fmState('"4"'), 4), false);
+      assert.equal(isStatePastPhase(fmState('"5"'), 4), true);
+    });
+
+    test('zero-padded, dotted and body-only positions compare as phase numbers', () => {
+      assert.equal(isStatePastPhase(fmState('"04"'), 3), true);
+      assert.equal(isStatePastPhase(fmState('"04.1"'), 4), true);
+      assert.equal(isStatePastPhase(fmState('"04.1"'), 5), false);
+      assert.equal(isStatePastPhase(bodyState('Phase: 4 of 4 (Four)'), 3), true);
+      assert.equal(isStatePastPhase(bodyState('Phase: 4 of 4 (Four)'), 4), false);
+    });
+
+    test('a `Phase N` position names phase N (limit-1, limit, limit+1)', () => {
+      assert.equal(isStatePastPhase(fmState('"Phase 3"'), 4), false);
+      assert.equal(isStatePastPhase(fmState('"Phase 4"'), 4), false);
+      assert.equal(isStatePastPhase(fmState('"Phase 5"'), 4), true);
+      assert.equal(isStatePastPhase(fmState('"phase 5 of 9"'), 4), true);
+      assert.equal(isStatePastPhase(bodyState('Phase: Phase 5 of 9 (Five)'), 4), true);
+    });
+
+    test('an absent or unparseable position is not past', () => {
+      assert.equal(isStatePastPhase('# S\n', 1), false);
+      assert.equal(isStatePastPhase(fmState('"[GSD.02] x"'), 1), false);
+      assert.equal(isStatePastPhase(bodyState('Phase: not started'), 1), false);
+    });
+  });
+
+}

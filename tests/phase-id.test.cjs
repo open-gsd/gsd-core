@@ -1683,3 +1683,16 @@ describe('buildPhaseHeadingScanRegex — the heading-scan pattern owner', () => 
     assert.deepEqual(newNums, ['01', '02', '03']);
   });
 });
+
+describe('parsePhaseFromProse: the planned-phase status phrase is not a name (#5369)', () => {
+  test('a bare "READY TO EXECUTE" tail yields no name', () => {
+    assert.deepEqual(phaseId.parsePhaseFromProse('19 — READY TO EXECUTE'), { phase: '19', name: null });
+  });
+  test('the parenthetical name still wins over the status phrase', () => {
+    assert.deepEqual(phaseId.parsePhaseFromProse('19 (Real) — READY TO EXECUTE'), { phase: '19', name: 'Real' });
+  });
+  test('a genuine em-dash name is unaffected', () => {
+    assert.deepEqual(phaseId.parsePhaseFromProse('19 — Ready Set Go'), { phase: '19', name: 'Ready Set Go' });
+  });
+});
+

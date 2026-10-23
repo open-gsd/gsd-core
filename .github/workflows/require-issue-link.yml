@@ -36,6 +36,18 @@ name: Require Issue Link
 on:
   pull_request_target:
     types: [opened, edited, reopened, synchronize]
+  # #5600: `Issue link required` is a required status check on `next`; a
+  # merge queue requires every required context to also report on
+  # `merge_group`, or the queue deadlocks waiting on a check nothing ever
+  # produces.
+  #
+  # #5600: on a `merge_group` event GitHub Actions loads this workflow FILE from
+  # the queue's temporary merge commit (base plus the queued PRs), so a queued
+  # PR that edits this file runs its own version. Safety does not come from the
+  # file's origin: every job or step below is skipped on that event, so nothing
+  # in this file executes there (tests/ci-merge-group-wiring.test.cjs pins it).
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -60,8 +72,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
+      # #5600: `github.event.pull_request` is undefined on `merge_group` (that
+      # event carries no PR payload) — the issue link was already validated on
+      # the `pull_request_target` event that queued this run, so each step
+      # below individually no-ops on that event rather than reading fields it
+      # doesn't carry. STEP-level (not job-level, per #1389 — see the final
+      # step's own comment): the job always runs, so the required "Issue link
+      # required" check always reports `success`, never `skipped`. GitHub counts
+      # a conditionally skipped job as passing
+      # (docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/troubleshooting-required-status-checks),
+      # and the other five merge_group workflows rely on that; this one keeps
+      # the stricter #1389 placement so every step-level exemption composes
+      # under one check that never depends on skip semantics.
+      #
       # BASE branch only — the trusted policy source. Never the PR head.
       - name: Check out policy from base branch
+        if: github.event_name != 'merge_group'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           ref: ${{ github.event.pull_request.base.ref }}
@@ -73,6 +99,7 @@ jobs:
       # they disagree. Without that check a >100-file fork PR could present a
       # falsely tests-only list and forge the follow-up exemption (#3211).
       - name: Get changed files
+        if: github.event_name != 'merge_group'
         id: changed_files
         env:
           GH_TOKEN: ${{ github.token }}
@@ -96,6 +123,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Evaluate issue link
+        if: github.event_name != 'merge_group'
         id: policy
         env:
           # Every PR-controlled value is bound to an env var and read as data —
@@ -137,10 +165,14 @@ jobs:
 
       - name: Comment and fail if no issue link
         # Step-level (not job-level) so the required "Issue link required" check
-        # still reports SUCCESS rather than a branch-protection-blocking
-        # "skipped" when a PR is exempt. See #1389 — that placement is load
-        # bearing and every exemption added since must preserve it.
-        if: steps.policy.outputs.ok != 'true'
+        # still reports SUCCESS rather than "skipped" when a PR is exempt. See
+        # #1389 — that placement is kept, and tests/ci-merge-group-wiring.test.cjs
+        # pins it, so every exemption added since must preserve it. Also
+        # excludes merge_group directly: `steps.policy` never ran on that
+        # event (see its own if: above), so its output is empty/undefined —
+        # `!= 'true'` alone would be true for that empty value and wrongly
+        # fire this step on every merge_group run.
+        if: steps.policy.outputs.ok != 'true' && github.event_name != 'merge_group'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           REASON: ${{ steps.policy.outputs.reason }}

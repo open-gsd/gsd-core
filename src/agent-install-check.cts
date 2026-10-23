@@ -393,8 +393,23 @@ function checkCodexModelPosture(runtime?: string, projectRoot?: string): CodexMo
 // derives its sandbox_mode from actually lives, in every install shape
 // (repo-dev tree or npm-global package, where the package still ships its
 // own agents/ alongside bin/ and gsd-core/).
-function _canonicalAgentSourceDir(): string {
-  return path.join(__dirname, '..', '..', '..', 'agents');
+//
+// #5496: "install-relative" has three shapes. This module compiles to
+// `<root>/gsd-core/bin/lib/`, so `<root>` is three parents up. In the repository
+// and the npm package the canonical sources are `<root>/agents`. In an INSTALLED
+// config dir `<root>/agents` holds the CONVERTED runtime copies (no `tools:`
+// declaration — every role then derived `read-only`, 26 false violations on a
+// clean Codex install) and the canonical sources are `<root>/gsd-core/agents`.
+// Prefer the nested directory when it actually holds agent sources; fall back to
+// `<root>/agents`. `root` is a parameter so each layout is testable.
+function canonicalAgentSourceDir(root: string = path.join(__dirname, '..', '..', '..')): string {
+  const nested = path.join(root, 'gsd-core', 'agents');
+  try {
+    if (fs.readdirSync(nested).some((entry) => entry.endsWith('.md') && !entry.endsWith('.compact.md'))) return nested;
+  } catch {
+    // Absent or unreadable: not this layout.
+  }
+  return path.join(root, 'agents');
 }
 
 /**
@@ -452,7 +467,7 @@ function checkCodexSandboxPosture(runtime?: string, projectRoot?: string): Codex
     };
   }
 
-  const canonicalAgentsDir = _canonicalAgentSourceDir();
+  const canonicalAgentsDir = canonicalAgentSourceDir();
 
   // Same symlink guard as checkCodexModelPosture, same reason (never follow
   // an agents-dir symlink into an arbitrary file's content).
@@ -608,6 +623,7 @@ export = {
   checkAgentsInstalled,
   checkCodexModelPosture,
   checkCodexSandboxPosture,
+  canonicalAgentSourceDir,
   POSTURE_REASON,
   resolveAgentHint,
 };

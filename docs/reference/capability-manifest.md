@@ -215,7 +215,7 @@ Install and hook code does not compare a runtime id to a literal; it reads one o
 
 | Key | Type | Declared by | What it controls |
 |---|---|---|---|
-| `contentRewriteProfile` | string | 14 runtimes | Which path-rewrite profile the content-rewrite engine applies: `slash-own-tilde`, `slash-bare-own-tilde`, `slash-lookahead-own-tilde`, `slash-lookahead-nested-own-devin`, `slash-lookahead-own-derived`, `slash-bare-own-derived`, `slash-bare-own-tilde-bare`, `attribution-only`, `slash-tilde-restore`, `branded-lookahead-own-derived`, `slash-bare`. Omitted: no path rewrites. Hosts that share a body share a profile. |
+| `contentRewriteProfile` | string | 15 runtimes | Which path-rewrite profile the content-rewrite engine applies: `slash-own-tilde`, `slash-bare-own-tilde`, `slash-lookahead-own-tilde`, `slash-lookahead-nested-own-devin`, `slash-lookahead-own-derived`, `slash-bare-own-derived`, `slash-bare-own-tilde-bare`, `attribution-only`, `slash-tilde-restore`, `slash-lookahead-tilde-restore`, `branded-lookahead-own-derived`, `slash-bare`. Omitted: no path rewrites. Hosts that share a body share a profile. |
 | `skipRuntimeDefaultsStamp` | boolean | `claude` | Skip the non-Claude runtime-identity stamp. |
 | `skipCompactAgents` | boolean | `claude` | Do not stage `*.compact.md` agent variants. |
 | `omitBashRunnerOnWindows` | boolean | `claude` | Emit a shell hook as the bare script path on Windows. |
@@ -226,6 +226,8 @@ Install and hook code does not compare a runtime id to a literal; it reads one o
 | `requiresSubagentPair` | boolean | `kimi` | An agent counts as installed only when both its persona YAML and prompt file exist. |
 | `reclaimsKimiLegacyHooksRoot` | boolean | `kimi-code` | Honor `--reclaim-kimi-legacy`. |
 | `rewriteClaudeAtIncludes` | boolean | `codex` | Rewrite `@~/.claude/…` includes in installed files to the Codex root. |
+| `defaultHomeIncludeRoot` | string | `copilot`, `antigravity` | The default-home directory (relative to HOME) the converter writes into `@` includes; a global install into another directory retargets them to the real install root (#5123). |
+| `retargetsGsdCoreProsePath` | boolean | `kimi` | Kimi has no `@` include, so its converter leaves the prose `GSD core/<path>`; a global install turns it into the real installed path (#5123). |
 | `bakesStaticAgentModel`, `bakedAgentFileExtensions` | boolean, string[] | `codex`, `kilo`, `opencode` | The runtime bakes the resolved model into agent files at install time; the stale-bake guard watches the listed extensions. |
 
 The path and label accessors (`getDirName`, `getRuntimeLabel`, `getGlobalConfigHomeFragment`, `getGlobalConfigDir`, `getGlobalSkillsBase`) **refuse** an id that is not registered (`UnknownRuntimeError`) instead of returning Claude Code's values; an empty id is the generic "no runtime" path and keeps its defaults. `hostBehaviorsFor` itself answers `{}` for an unregistered or retired label — no declared behaviors, the generic path — because guard and hook code read it on user-supplied labels.

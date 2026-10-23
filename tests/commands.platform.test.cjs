@@ -37,6 +37,13 @@
  */
 
 const { test, describe, after, beforeEach, afterEach } = require('node:test');
+
+// #5017: pinned GSD_HOME (next to HOME) is put back after each test so it never leaks into the next one.
+const __ORIG_GSD_HOME = process.env.GSD_HOME;
+require('node:test').afterEach(() => {
+  if (__ORIG_GSD_HOME === undefined) delete process.env.GSD_HOME;
+  else process.env.GSD_HOME = __ORIG_GSD_HOME;
+});
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
@@ -615,6 +622,7 @@ Body of the agent.
       const origHome = process.env.HOME;
       const origUserProfile = process.env.USERPROFILE;
       process.env.HOME = tmpHome;
+      process.env.GSD_HOME = tmpHome; // #5017: the defaults store root follows HOME
       process.env.USERPROFILE = tmpHome;
 
       const { cmdEffortSync } = require('../gsd-core/bin/lib/commands.cjs');

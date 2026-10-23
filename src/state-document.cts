@@ -365,6 +365,9 @@ const STATE_SIBLING_FIELD_LINE_RE = /^\*{0,2}[A-Za-z][A-Za-z0-9 _-]*\*{0,2}:{1,2
  * cannot wrap), or is followed by end-of-file, a blank line, Markdown
  * structure, or a sibling field.
  */
+/** The line terminators the STATE.md readers (JS `m`-flag `^`/`$`) treat as a line boundary. */
+const LINE_SEPARATOR_RE = /[\n\u2028\u2029]/;
+
 export function stateFieldContinuation(content: string, fieldName: string): string | null {
   const escaped = escapeRegex(fieldName);
   // Same two single-line grammars stateExtractField uses, in the same order, so
@@ -382,9 +385,11 @@ export function stateFieldContinuation(content: string, fieldName: string): stri
   // before testing for the newline.
   const afterValue = match.index + match[0].length;
   const rest = content.slice(afterValue).replace(/^\r/, '');
-  if (!rest.startsWith('\n')) return null; // end of file: nothing follows
+  // #5460: U+2028 / U+2029 are line starts to the `m`-flag readers (and stop `(.+)`), so they end
+  // the value's line exactly as `\n` does.
+  if (!/^[\n\u2028\u2029]/.test(rest)) return null; // end of file: nothing follows
 
-  const lines = rest.slice(1).split('\n').map((line) => line.replace(/\r$/, ''));
+  const lines = rest.slice(1).split(LINE_SEPARATOR_RE).map((line) => line.replace(/\r$/, ''));
   const continuation = lines.slice(0, continuationLineCount(lines)).map((line) => line.trim());
   return continuation.length ? continuation.join(' ') : null;
 }
@@ -418,9 +423,13 @@ function continuationLineCount(lines: readonly string[]): number {
  */
 export function fieldContinuationEnd(content: string, valueEnd: number): number {
   const tail = content.slice(valueEnd);
-  const first = /^\r?\n/.exec(tail);
+  // #5460: the readers' `m`-flag `^` also starts a line after U+2028 / U+2029, so a continuation
+  // scan that split on `\n` alone swallowed `...tail<U+2028>Stopped at: x` as ONE continuation line
+  // and deleted the sibling field with it. Each separator is one UTF-16 unit, like `\n`, so the
+  // removal arithmetic below is unchanged.
+  const first = /^(?:\r?\n|[\u2028\u2029])/.exec(tail);
   if (!first) return valueEnd;
-  const rawLines = tail.slice(first[0].length).split('\n');
+  const rawLines = tail.slice(first[0].length).split(LINE_SEPARATOR_RE);
   const count = continuationLineCount(rawLines.map((line) => line.replace(/\r$/, '')));
   if (count === 0) return valueEnd;
   let removed = first[0].length + (count - 1);

@@ -328,6 +328,12 @@ const TABLE = [
     allow: () => ({ payload: undefined }),
   },
   {
+    file: 'gsd-path-export.js',
+    stdinTimeoutMs: null, // never reads stdin: it only needs $CLAUDE_ENV_FILE and its own install layout (#5465)
+    declaredOnCrash: null, // no HOOK_ON_CRASH import/usage; every failure path is a silent no-op then allow()
+    allow: () => ({ payload: undefined }),
+  },
+  {
     file: 'gsd-cursor-post-tool.js',
     stdinTimeoutMs: 10000,
     declaredOnCrash: null,

@@ -28,6 +28,8 @@ import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 // #2322: reuse the existing pure path-containment seam (ADR-1239 Phase C-2)
 // instead of hand-rolling a new traversal check for capability skill stems.
 import { isPathConfined } from './external-descriptor-trust.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- capability-ledger.cjs is an export= CommonJS module
+import capabilityLedger = require('./capability-ledger.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import conversionModule = require('./runtime-artifact-conversion.cjs');
 const {
@@ -287,6 +289,11 @@ interface ResolveProfileOpts {
   /** ADR-857 phase 4c: optional capability registry; when present, capability
    *  skills are unioned into the base set for each resolved mode before closure. */
   registry?: CapabilityRegistry;
+  /** #5503: manifest the agent set is derived from (`_calls_agents_<stem>` keys).
+   *  Defaults to `manifest`. The core profile passes an empty `manifest` so its skill set
+   *  is not widened by the `requires:` closure, and the real manifest here so the agents
+   *  its skills spawn are still staged. */
+  agentManifest?: Map<string, string[]>;
 }
 
 /**
@@ -321,7 +328,7 @@ function _capabilitySkillsForMode(mode: string, registry: CapabilityRegistry): s
 /**
  * Resolve a profile (or composed profiles) to a typed result object.
  */
-function resolveProfile({ modes, manifest, _profilesOverride, registry }: ResolveProfileOpts = {}): ResolvedProfile {
+function resolveProfile({ modes, manifest, _profilesOverride, registry, agentManifest }: ResolveProfileOpts = {}): ResolvedProfile {
   const profiles: Record<string, string | readonly string[]> = _profilesOverride || PROFILES;
   const activeModes = (modes && modes.length > 0) ? modes : ['full'];
   const normalizedModes = activeModes
@@ -360,10 +367,13 @@ function resolveProfile({ modes, manifest, _profilesOverride, registry }: Resolv
 
   // Derive agents: union of all agent names referenced in the body text of
   // every skill in unionSkills. Agent names are stored in the manifest under
-  // _calls_agents_<stem> keys (populated by loadSkillsManifest).
+  // _calls_agents_<stem> keys (populated by loadSkillsManifest). #5503: read from
+  // `agentManifest` when given, so a profile that skips the skill closure still
+  // stages the agents its own skills spawn.
+  const agentMan = agentManifest || man;
   const unionAgents = new Set<string>();
   for (const skillStem of unionSkills) {
-    const agentRefs = man.get(`_calls_agents_${skillStem}`) || [];
+    const agentRefs = agentMan.get(`_calls_agents_${skillStem}`) || [];
     for (const agentStem of agentRefs) {
       unionAgents.add(agentStem);
     }
@@ -762,8 +772,9 @@ function readInstalledCapabilitySkill(stem: string, registry: CapabilityRegistry
     // Refuse to read through a link so an outside file's content cannot be
     // installed as a capability skill (epic #4636).
     if (fs.lstatSync(skillPath).isSymbolicLink()) return null;
-    if (!fs.statSync(skillPath).isFile()) return null;
-    return { capId, content: fs.readFileSync(skillPath, 'utf8') };
+    // #5121: the bounded regular-file read — a FIFO/device/oversized SKILL.md is skipped like a missing one.
+    const content = capabilityLedger.readSkillFile(skillPath);
+    return content === null ? null : { capId, content };
   } catch {
     return null; // missing / unreadable / corrupt entry -> skip
   }
@@ -986,6 +997,7 @@ function stageAgentsForRuntimeWithConverter(
   converter: (content: string, isGlobal?: boolean, meta?: { agentName: string }) => string,
   isGlobal = false,
   agentCtx?: AgentCtx,
+  excludeSuffixes?: readonly string[],
 ): string {
   if (!installFs().existsSync(srcAgentsDir)) return srcAgentsDir;
 
@@ -1018,6 +1030,7 @@ function stageAgentsForRuntimeWithConverter(
     for (const entry of entries) {
       if (!entry.isFile()) continue;
       if (!entry.name.endsWith('.md')) continue;
+      if (excludeSuffixes && excludeSuffixes.some((s) => entry.name.endsWith(s))) continue;
       // For tiered profiles, gate by agent stem (full filename without extension).
       if (resolvedProfile.skills !== '*') {
         const stem = entry.name.slice(0, -3);

@@ -12,6 +12,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { runGsdTools, createTempDir, createTempProject, createTempGitProject, cleanup, captureFdSync } = require('./helpers.cjs');
 const { createFixture, seedWorkstream, writeState } = require('./fixtures/index.cjs');
 // ADR-3473 §8.7 (#3872): git-fixture spawns for the state_head rows (10/11)
@@ -698,6 +699,256 @@ None
 
     const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
     assert.match(state, /- Vendor quote updated from \$1\.00 to \$2\.00 pending approval/);
+  });
+
+  // #4926: the text-file flags take a read-once INPUT, so a readable file
+  // anywhere is accepted (it used to be confined to the project root). Every
+  // refusal from these three verbs goes through the fault path: an unreadable
+  // file, a blank required field, a missing STATE.md. They used to print
+  // `{ added: false }` or `{ error }` at exit 0, which a caller gating on `$?`
+  // read as success.
+  describe('#4926 text-file inputs: any readable file is accepted; every refusal exits non-zero', () => {
+    let outsideDir;
+    const stateBody = `# Project State
+
+## Decisions
+None yet.
+
+## Blockers
+None
+
+## Roadmap Evolution
+None
+`;
+    const statePath = () => path.join(tmpDir, '.planning', 'STATE.md');
+
+    beforeEach(() => {
+      fs.writeFileSync(statePath(), stateBody);
+      outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4926-outside-'));
+    });
+
+    afterEach(() => {
+      cleanup(outsideDir);
+    });
+
+    const flags = [
+      { name: 'add-decision --summary-file', argv: (f) => ['state', 'add-decision', '--phase', '3', '--summary-file', f], flag: '--summary-file' },
+      { name: 'add-decision --rationale-file', argv: (f) => ['state', 'add-decision', '--phase', '3', '--summary', 'Chosen', '--rationale-file', f], flag: '--rationale-file' },
+      { name: 'add-blocker --text-file', argv: (f) => ['state', 'add-blocker', '--text-file', f], flag: '--text-file' },
+      { name: 'add-roadmap-evolution --note-file', argv: (f) => ['state', 'add-roadmap-evolution', '--phase', '3', '--note-file', f], flag: '--note-file' },
+    ];
+
+    // Where a scratch file can live relative to the project root.
+    const locations = [
+      { name: 'an unrelated absolute temp path', make: () => path.join(outsideDir, 'entry.md') },
+      { name: 'a sibling directory of the project', make: () => {
+        const siblingDir = path.join(path.dirname(tmpDir), `${path.basename(tmpDir)}-sibling-4926`);
+        fs.mkdirSync(siblingDir, { recursive: true });
+        return path.join(siblingDir, 'entry.md');
+      } },
+      { name: 'the parent directory of the project', make: () => path.join(path.dirname(tmpDir), `gsd-4926-parent-${path.basename(tmpDir)}.md`) },
+    ];
+
+    for (const f of flags) {
+      for (const loc of locations) {
+        test(`${f.name} accepts a readable file in ${loc.name}`, () => {
+          const file = loc.make();
+          fs.writeFileSync(file, 'Scratch entry 4926 $1.00\n');
+          try {
+            const result = runGsdTools(f.argv(file), tmpDir);
+
+            assert.strictEqual(result.exitCode, 0, `Command failed: ${result.error}`);
+            assert.strictEqual(JSON.parse(result.output).added, true);
+            assert.ok(fs.readFileSync(statePath(), 'utf-8').includes('Scratch entry 4926 $1.00'), 'the file contents must reach STATE.md');
+          } finally {
+            cleanup(path.basename(path.dirname(file)).endsWith('-sibling-4926') ? path.dirname(file) : file);
+          }
+        });
+      }
+
+      test(`${f.name} naming a missing file exits 1 with reason usage and leaves STATE.md untouched`, () => {
+        const result = runGsdTools([...f.argv(path.join(outsideDir, 'missing.md')), '--json-errors'], tmpDir);
+
+        assert.strictEqual(result.exitCode, 1, `refusal must exit non-zero; stdout: ${result.output}`);
+        const envelope = JSON.parse(result.error);
+        assert.strictEqual(envelope.ok, false);
+        assert.strictEqual(envelope.reason, ERROR_REASON.USAGE);
+        assert.ok(envelope.message.startsWith(`${f.flag} could not be read`), `refusal must name the flag; got: ${envelope.message}`);
+        assert.strictEqual(fs.readFileSync(statePath(), 'utf-8'), stateBody, 'STATE.md must be byte-identical after a refusal');
+      });
+    }
+
+    // A readable but empty (or whitespace-only) file leaves a required field with
+    // no text. That refusal used to be `{ error: '<field> required' }` at exit 0.
+    const requiredFlags = [
+      { flag: '--summary-file', field: 'summary', argv: (f) => ['state', 'add-decision', '--phase', '3', '--summary-file', f] },
+      { flag: '--text-file', field: 'text', argv: (f) => ['state', 'add-blocker', '--text-file', f] },
+      { flag: '--note-file', field: 'note', argv: (f) => ['state', 'add-roadmap-evolution', '--phase', '3', '--note-file', f] },
+    ];
+    const blankContents = [
+      { name: 'an empty file', content: '' },
+      { name: 'a whitespace-only file', content: '  \n\t\n' },
+    ];
+
+    for (const r of requiredFlags) {
+      for (const blank of blankContents) {
+        test(`${r.flag} naming ${blank.name} exits 1 with reason usage and leaves STATE.md untouched`, () => {
+          const file = path.join(outsideDir, 'blank.md');
+          fs.writeFileSync(file, blank.content);
+
+          const result = runGsdTools([...r.argv(file), '--json-errors'], tmpDir);
+
+          assert.strictEqual(result.exitCode, 1, `refusal must exit non-zero; stdout: ${result.output}`);
+          const envelope = JSON.parse(result.error);
+          assert.strictEqual(envelope.reason, ERROR_REASON.USAGE);
+          assert.ok(envelope.message.startsWith(`${r.field} required`), `got: ${envelope.message}`);
+          assert.strictEqual(fs.readFileSync(statePath(), 'utf-8'), stateBody, 'STATE.md must be byte-identical after a refusal');
+        });
+      }
+    }
+
+    // The inline form of a required field follows the same rule as the file form:
+    // a whitespace-only `--summary` / `--text` used to be written as a blank
+    // bullet at exit 0, while `--note` and every blank file were refused.
+    const requiredInline = [
+      { flag: '--summary', field: 'summary', argv: (v) => ['state', 'add-decision', '--phase', '3', '--summary', v] },
+      { flag: '--text', field: 'text', argv: (v) => ['state', 'add-blocker', '--text', v] },
+      { flag: '--note', field: 'note', argv: (v) => ['state', 'add-roadmap-evolution', '--phase', '3', '--note', v] },
+    ];
+
+    for (const r of requiredInline) {
+      test(`a whitespace-only inline ${r.flag} exits 1 with reason usage and leaves STATE.md untouched`, () => {
+        const result = runGsdTools([...r.argv('  \t '), '--json-errors'], tmpDir);
+
+        assert.strictEqual(result.exitCode, 1, `refusal must exit non-zero; stdout: ${result.output}`);
+        const envelope = JSON.parse(result.error);
+        assert.strictEqual(envelope.reason, ERROR_REASON.USAGE);
+        assert.ok(envelope.message.startsWith(`${r.field} required`), `got: ${envelope.message}`);
+        assert.strictEqual(fs.readFileSync(statePath(), 'utf-8'), stateBody, 'STATE.md must be byte-identical after a refusal');
+      });
+    }
+
+    // The rationale is optional: an empty --rationale-file means "no rationale",
+    // exactly as `--rationale ""` does, so the decision is still written.
+    test('an empty --rationale-file is not a refusal: the decision is written without a rationale', () => {
+      const file = path.join(outsideDir, 'rationale.md');
+      fs.writeFileSync(file, '');
+
+      const result = runGsdTools(['state', 'add-decision', '--phase', '3', '--summary', 'Chosen', '--rationale-file', file], tmpDir);
+
+      assert.strictEqual(result.exitCode, 0, `Command failed: ${result.error}`);
+      assert.deepStrictEqual(JSON.parse(result.output), { added: true, decision: '- [Phase 3]: Chosen' });
+    });
+
+    // Same parity for the optional field: a whitespace-only rationale, inline or
+    // file, is "no rationale" rather than a dangling ` — ` suffix.
+    for (const form of [
+      { name: 'inline --rationale', argv: () => ['--rationale', '  \t '] },
+      { name: '--rationale-file', argv: () => {
+        const file = path.join(outsideDir, 'rationale.md');
+        fs.writeFileSync(file, '  \n\t\n');
+        return ['--rationale-file', file];
+      } },
+    ]) {
+      test(`a whitespace-only ${form.name} writes the decision without a rationale`, () => {
+        const result = runGsdTools(['state', 'add-decision', '--phase', '3', '--summary', 'Chosen', ...form.argv()], tmpDir);
+
+        assert.strictEqual(result.exitCode, 0, `Command failed: ${result.error}`);
+        assert.deepStrictEqual(JSON.parse(result.output), { added: true, decision: '- [Phase 3]: Chosen' });
+      });
+    }
+
+    const verbs = [
+      { name: 'add-decision', argv: ['state', 'add-decision', '--phase', '3', '--summary', 'Chosen'] },
+      { name: 'add-blocker', argv: ['state', 'add-blocker', '--text', 'Blocked'] },
+      { name: 'add-roadmap-evolution', argv: ['state', 'add-roadmap-evolution', '--phase', '3', '--note', 'Moved'] },
+    ];
+
+    for (const v of verbs) {
+      test(`${v.name} with no STATE.md exits 1 with reason usage and creates nothing`, () => {
+        cleanup(statePath());
+
+        const result = runGsdTools([...v.argv, '--json-errors'], tmpDir);
+
+        assert.strictEqual(result.exitCode, 1, `refusal must exit non-zero; stdout: ${result.output}`);
+        const envelope = JSON.parse(result.error);
+        assert.strictEqual(envelope.reason, ERROR_REASON.USAGE);
+        assert.strictEqual(envelope.message, 'STATE.md not found');
+        assert.strictEqual(fs.existsSync(statePath()), false, 'no STATE.md may be created by a refusal');
+      });
+    }
+
+    test('under --exit-contract=v2 a blank required file and a missing STATE.md also project to the USAGE code', () => {
+      const file = path.join(outsideDir, 'blank.md');
+      fs.writeFileSync(file, '');
+      assert.strictEqual(runGsdTools(['state', 'add-blocker', '--text-file', file, '--exit-contract=v2'], tmpDir).exitCode, 64);
+
+      cleanup(statePath());
+      assert.strictEqual(runGsdTools(['state', 'add-blocker', '--text', 'Blocked', '--exit-contract=v2'], tmpDir).exitCode, 64);
+    });
+
+    test('a directory passed as --summary-file is refused the same way', () => {
+      const result = runGsdTools(['state', 'add-decision', '--summary-file', outsideDir, '--json-errors'], tmpDir);
+
+      assert.strictEqual(result.exitCode, 1);
+      assert.strictEqual(JSON.parse(result.error).reason, ERROR_REASON.USAGE);
+      assert.strictEqual(fs.readFileSync(statePath(), 'utf-8'), stateBody);
+    });
+
+    test('under --exit-contract=v2 the refusal projects to the USAGE code, not DEGRADED', () => {
+      const result = runGsdTools(['state', 'add-decision', '--summary-file', path.join(outsideDir, 'missing.md'), '--exit-contract=v2'], tmpDir);
+
+      assert.strictEqual(result.exitCode, 64);
+    });
+
+    test('a relative path still resolves against the project root, not the process cwd', () => {
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'decision.md'), 'Relative entry.\n');
+
+      const result = runGsdTools(['state', 'add-decision', '--phase', '3', '--summary-file', '.planning/decision.md', '--cwd', tmpDir], outsideDir);
+
+      assert.strictEqual(result.exitCode, 0, `Command failed: ${result.error}`);
+      assert.deepStrictEqual(JSON.parse(result.output), { added: true, decision: '- [Phase 3]: Relative entry.' });
+    });
+
+    // An unconfined path is hostile input, so the read is bounded: a file over
+    // the documented 256 KiB cap is refused without being read whole.
+    const TEXT_FILE_MAX_BYTES = 256 * 1024;
+
+    const assertRefused = (result, flag, why) => {
+      assert.strictEqual(result.exitCode, 1, `refusal must exit non-zero; stdout: ${result.output}`);
+      const envelope = JSON.parse(result.error);
+      assert.strictEqual(envelope.reason, ERROR_REASON.USAGE);
+      assert.ok(envelope.message.startsWith(`${flag} could not be read`), `refusal must name the flag; got: ${envelope.message}`);
+      assert.ok(envelope.message.endsWith(`(${why})`), `refusal must say why; got: ${envelope.message}`);
+      assert.strictEqual(fs.readFileSync(statePath(), 'utf-8'), stateBody, 'STATE.md must be byte-identical after a refusal');
+    };
+
+    for (const f of flags) {
+      for (const { name, size } of [
+        { name: 'one byte under the cap', size: TEXT_FILE_MAX_BYTES - 1 },
+        { name: 'exactly the cap', size: TEXT_FILE_MAX_BYTES },
+      ]) {
+        test(`${f.name} accepts a file of ${name}`, () => {
+          const file = path.join(outsideDir, 'entry.md');
+          const text = 'x'.repeat(size);
+          fs.writeFileSync(file, text);
+
+          const result = runGsdTools(f.argv(file), tmpDir);
+
+          assert.strictEqual(result.exitCode, 0, `Command failed: ${result.error}`);
+          assert.strictEqual(JSON.parse(result.output).added, true);
+          assert.ok(fs.readFileSync(statePath(), 'utf-8').includes(text), 'the whole file must reach STATE.md');
+        });
+      }
+
+      test(`${f.name} naming a file one byte over the cap exits 1 with reason usage and leaves STATE.md untouched`, () => {
+        const file = path.join(outsideDir, 'entry.md');
+        fs.writeFileSync(file, 'x'.repeat(TEXT_FILE_MAX_BYTES + 1));
+
+        assertRefused(runGsdTools([...f.argv(file), '--json-errors'], tmpDir), f.flag, `larger than ${TEXT_FILE_MAX_BYTES} bytes`);
+      });
+    }
+    // The FIFO and device rows need a real OS and live in tests/state.platform.test.cjs.
   });
 });
 
@@ -5523,8 +5774,10 @@ describe('#3395: planned-phase refreshes the stale Phase line and persists --nam
     // (state json included) re-reads.
     assert.ok(!currentPositionBlock(stateContent).includes('35.1'),
       `the stale 35.1 phase prose must be refreshed away from ## Current Position; STATE.md was:\n${stateContent}`);
-    assert.ok(/Phase: 35\.3 — READY TO EXECUTE/m.test(stateContent),
-      `Current Position Phase line must read "Phase: 35.3 — READY TO EXECUTE"; STATE.md was:\n${stateContent}`);
+    // #5369: with no --name the label carries the curated frontmatter name, so the body line and the
+    // frontmatter agree on it (the fixture's `current_phase_name` is `unattended-launch-prerequisites`).
+    assert.ok(/Phase: 35\.3 \(unattended-launch-prerequisites\) — READY TO EXECUTE/m.test(stateContent),
+      `Current Position Phase line must read "Phase: 35.3 (unattended-launch-prerequisites) — READY TO EXECUTE"; STATE.md was:\n${stateContent}`);
     // The read path must agree with the write path.
     const json = JSON.parse(runGsdTools(['state', 'json', '--raw'], tmpDir, PINNED_ENV).output);
     assert.strictEqual(json.current_phase, '35.3',
@@ -22338,5 +22591,167 @@ Last activity: 2026-10-01 -- done
     const r = run(19);
     assert.ok(r.success, r.error);
     assert.match(read(), /^\*\*Current Plan:\*\* 9$/m);
+  });
+});
+
+// #5369: `state planned-phase` without --name must never write its own status
+// text ("READY TO EXECUTE") into the phase-name position.
+describe('planned-phase without --name keeps the status out of the phase name (#5369)', () => {
+  const POSITION = [
+    '# Project State', '', '## Current Position', '',
+    'Phase: 18 — Curated Name', 'Plan: 0 TBD in current phase', 'Status: Ready to plan', 'Last activity: 2026-10-01', '',
+  ].join('\n');
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const plan = (stateText, args = '--phase 19 --plans 3') => {
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, stateText);
+    const r = runGsdTools(`query state.planned-phase ${args}`, tmpDir);
+    assert.strictEqual(r.success, true, r.error);
+    const after = fs.readFileSync(statePath, 'utf-8');
+    const lines = splitLines(after);
+    const end = lines.indexOf('---', 1);
+    const nameLine = lines.slice(1, end > 0 ? end : 1).find((l) => l.startsWith('current_phase_name:'));
+    return { after, name: nameLine ? nameLine.slice('current_phase_name:'.length).trim().replace(/^["']|["']$/g, '') : null };
+  };
+
+  test('no frontmatter: current_phase_name is not the status fragment', () => {
+    const { name } = plan(POSITION);
+    assert.strictEqual(name, null, 'no curated name and no --name: the name stays unset');
+  });
+
+  test('frontmatter without current_phase_name: not the status fragment', () => {
+    const { name } = plan(`---\ncurrent_phase: 18\n---\n${POSITION}`);
+    assert.strictEqual(name, null, 'no curated name and no --name: the name stays unset');
+  });
+
+  test('a curated name is kept in the frontmatter and the body Phase line carries it too', () => {
+    const { after, name } = plan(`---\ncurrent_phase_name: Real\n---\n${POSITION}`);
+    assert.strictEqual(name, 'Real');
+    assert.match(after, /^Phase: 19 \(Real\) — READY TO EXECUTE$/m);
+  });
+
+  test('an already-polluted frontmatter name is not reasserted or copied into the body label', () => {
+    const { after, name } = plan(`---\ncurrent_phase_name: READY TO EXECUTE\n---\n${POSITION}`);
+    assert.notStrictEqual(name, 'READY TO EXECUTE', 'the polluted frontmatter name is not reasserted');
+    assert.ok(!/\(READY TO EXECUTE\)/.test(after), `the status phrase must not be copied into the label:\n${after}`);
+  });
+
+  test('--name still sets the name', () => {
+    const { after, name } = plan(POSITION, '--phase 19 --name Foo --plans 3');
+    assert.strictEqual(name, 'Foo');
+    assert.match(after, /^Phase: 19 \(Foo\) — READY TO EXECUTE$/m);
+  });
+
+  test('the Status line still becomes Ready to execute', () => {
+    const { after } = plan(POSITION);
+    assert.match(after, /^Status: Ready to execute$/m);
+  });
+});
+
+// #5460: begin-phase writes the LIVE lines, not a fenced example above them, and a U+2028 inside a
+// wrapped focus does not swallow the next field. The readers treat both as line structure; the
+// writer's regex fast paths used to ignore it.
+describe('begin-phase respects fences and U+2028 line breaks (#5460)', () => {
+  const FENCE = '```';
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const run = (stateText, args = '--phase 2 --name Two --plans 3') => {
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, stateText);
+    const r = runGsdTools(`query state.begin-phase ${args}`, tmpDir);
+    assert.strictEqual(r.success, true, r.error);
+    return fs.readFileSync(statePath, 'utf-8');
+  };
+
+  test('the live Current focus is written, not the fenced example above it', () => {
+    const after = run([
+      '# Project State', '',
+      'Example of the field:', '', FENCE, '**Current focus:** Example focus', FENCE, '',
+      '**Current focus:** Phase 1 — Old', '',
+      '## Current Position', '', 'Phase: 1 — OLD', 'Plan: 1 of 2', 'Status: Ready to plan', 'Last activity: 2026-10-01', '',
+    ].join('\n'));
+    assert.ok(after.includes(`${FENCE}\n**Current focus:** Example focus\n${FENCE}`), `fenced example changed:\n${after}`);
+    assert.match(after, /^\*\*Current focus:\*\* Phase 2 — Two$/m);
+    assert.ok(!after.includes('Phase 1 — Old'), 'the live focus line must have been rewritten');
+  });
+
+  test('the live Current Position lines are written, not a fenced template above them', () => {
+    const template = ['Phase: N (template)', 'Plan: X of Y', 'Status: template status', 'Last activity: template date'];
+    const after = run([
+      '# Project State', '', '## Current Position', '',
+      FENCE, ...template, FENCE, '',
+      'Phase: 1 — OLD', 'Plan: 1 of 2', 'Status: Ready to plan', 'Last activity: 2026-10-01', '',
+    ].join('\n'));
+    assert.ok(after.includes(`${FENCE}\n${template.join('\n')}\n${FENCE}`), `fenced template changed:\n${after}`);
+    assert.match(after, /^Phase: 2 \(Two\) — EXECUTING$/m);
+    assert.match(after, /^Plan: 1 of 3$/m);
+    assert.match(after, /^Status: Executing Phase 2$/m);
+  });
+
+  test('a U+2028 inside a wrapped focus does not delete the next field', () => {
+    const after = run([
+      '# Project State', '',
+      '**Current focus:** Phase 1 — Old', 'wrapped tail\u2028Stopped at: keep me', '',
+      '## Current Position', '', 'Phase: 1 — OLD', 'Plan: 1 of 2', 'Status: Ready to plan', 'Last activity: 2026-10-01', '',
+    ].join('\n'));
+    assert.ok(after.includes('Stopped at: keep me'), `the field after the U+2028 was deleted:\n${after}`);
+    assert.match(after, /^\*\*Current focus:\*\* Phase 2 — Two/m);
+  });
+
+  test('U+2028 as the first terminator and U+2029 later: only the wrapped tail goes, the sibling field stays', () => {
+    const after = run([
+      '# Project State', '',
+      '**Current focus:** Phase 1 — Old\u2028tail one\u2029Stopped at: keep me', '',
+      '## Current Position', '', 'Phase: 1 — OLD', 'Plan: 1 of 2', 'Status: Ready to plan', 'Last activity: 2026-10-01', '',
+    ].join('\n'));
+    assert.ok(after.includes('Stopped at: keep me'), `sibling field lost:\n${after}`);
+    assert.ok(!after.includes('tail one'), `the wrapped tail must be replaced with the value:\n${after}`);
+  });
+
+  test('a fence opener inside a frontmatter block scalar does not stop begin-phase from writing', () => {
+    const after = run([
+      '---', 'gsd_state_version: "1.0"', 'stopped_at: |', '  ```', '  not closed', '---', '',
+      '# Project State', '', '**Current focus:** Phase 1 — Old', '',
+      '## Current Position', '', 'Phase: 1 — OLD', 'Plan: 1 of 2', 'Status: Ready to plan', 'Last activity: 2026-10-01', '',
+    ].join('\n'));
+    assert.match(after, /^Phase: 2 \(Two\) — EXECUTING$/m);
+  });
+
+  test('resume: the live Last activity is rewritten, a fenced example above it is not', () => {
+    const after = run([
+      '# Project State', '',
+      '## Current Position', '', FENCE, 'Last activity: example date', FENCE, '',
+      'Phase: 2 (Two) — EXECUTING', 'Plan: 1 of 3', 'Status: Executing Phase 2', 'Last activity: 2026-10-01 — Phase 2 execution started', '',
+    ].join('\n'));
+    assert.ok(after.includes(`${FENCE}\nLast activity: example date\n${FENCE}`), `fenced example changed:\n${after}`);
+    assert.match(after, /^Last activity: .* — Phase 2 execution resumed \(wave continue\)$/m);
+  });
+
+  test('planned-phase: a fenced Total Plans in Phase example is left alone, the live field is written', () => {
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, [
+      '# Project State', '', FENCE, 'Total Plans in Phase: 9', FENCE, '',
+      'Total Plans in Phase: 0', '',
+      '## Current Position', '', 'Phase: 1 — OLD', 'Plan: 0 of 0', 'Status: Ready to plan', 'Last activity: 2026-10-01', '',
+    ].join('\n'));
+    const r = runGsdTools('query state.planned-phase --phase 2 --name Two --plans 3', tmpDir);
+    assert.strictEqual(r.success, true, r.error);
+    const after = fs.readFileSync(statePath, 'utf-8');
+    assert.ok(after.includes(`${FENCE}\nTotal Plans in Phase: 9\n${FENCE}`), `fenced example changed:\n${after}`);
+    assert.match(after, /^Total Plans in Phase: 3$/m);
+  });
+
+  test('a layout with no fences and no U+2028 is written as before', () => {
+    const after = run([
+      '# Project State', '', '**Current focus:** Phase 1 — Old', '',
+      '## Current Position', '', 'Phase: 1 — OLD', 'Plan: 1 of 2', 'Status: Ready to plan', 'Last activity: 2026-10-01', '',
+    ].join('\n'));
+    assert.match(after, /^\*\*Current focus:\*\* Phase 2 — Two$/m);
+    assert.match(after, /^Phase: 2 \(Two\) — EXECUTING$/m);
   });
 });

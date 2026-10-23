@@ -9,6 +9,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const fc = require('fast-check');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const AGENTS_DIR = path.join(__dirname, '..', 'agents');
 const REFS_DIR = path.join(__dirname, '..', 'gsd-core', 'references');
@@ -123,5 +124,82 @@ describe('agent_skills self-load bootstrap', () => {
       }),
       { numRuns: 60 }
     );
+  });
+});
+
+// ── #5122: the self-load must be runnable, name the agent's own type, and not
+// re-ingest the agent's persona ───────────────────────────────────────────────
+// Every file that carries the bootstrap pointer — canonical agents and their
+// .compact.md siblings, which are what a non-Claude runtime serves — states its
+// own agent type on the pointer line. The type lives in the body because Claude
+// Code never shows frontmatter to a subagent, the Kimi converter drops it, and
+// Codex keeps it in a TOML key. The query itself, the launcher and the
+// per-runtime contract live once, in the bootstrap reference (agent files sit
+// at their size caps and gsd-ui-auditor carries no gsd_run by design).
+function selfLoadFiles() {
+  return fs.readdirSync(AGENTS_DIR)
+    .filter((f) => f.endsWith('.md'))
+    .filter((f) => fs.readFileSync(path.join(AGENTS_DIR, f), 'utf8').includes(BOOTSTRAP_REF));
+}
+
+function agentTypeOf(file) {
+  return file.replace(/\.compact\.md$/, '').replace(/\.md$/, '');
+}
+
+describe('#5122 every self-loading agent states its own type', () => {
+  const files = selfLoadFiles();
+
+  test('the sweep covers canonical agents and compact siblings', () => {
+    assert.ok(files.length >= CONSUMER_AGENTS.length * 2 - 8, `only ${files.length} files found`);
+    for (const name of CONSUMER_AGENTS) {
+      assert.ok(files.includes(`${name}.md`), `${name}.md missing from the sweep`);
+    }
+  });
+
+  for (const file of files) {
+    const type = agentTypeOf(file);
+    test(`${file} names its own type on the bootstrap pointer line`, () => {
+      const content = fs.readFileSync(path.join(AGENTS_DIR, file), 'utf8');
+      const pointer = splitLines(content).filter((l) => l.includes(BOOTSTRAP_REF));
+      assert.strictEqual(pointer.length, 1, `${file} must carry exactly one bootstrap pointer`);
+      assert.ok(pointer[0].includes(`(agent type: \`${type}\`)`),
+        `${file} pointer must state "(agent type: \`${type}\`)": ${pointer[0].slice(0, 160)}`);
+      const fm = /^name:\s*"?([A-Za-z0-9-]{1,64})"?\s*$/m.exec(content);
+      if (fm) assert.strictEqual(fm[1], type, 'frontmatter name must match the stated type');
+    });
+  }
+});
+
+describe('#5122 bootstrap states how to run the self-load and what each runtime returns', () => {
+  const doc = fs.readFileSync(BOOTSTRAP_PATH, 'utf8');
+
+  test('the query takes the stated agent type and --skills-only, and its failure stays visible', () => {
+    const cmd = splitLines(doc).find((l) => l.includes('gsd_run query agent-skills'));
+    assert.ok(cmd, 'bootstrap must carry the query command');
+    assert.ok(cmd.includes('--skills-only'), 'the self-load must pass --skills-only');
+    assert.ok(!cmd.includes('2>/dev/null') && !cmd.includes('|| true'),
+      'stderr and the exit status must stay visible so a failure is not read as "nothing configured"');
+    assert.ok(/agent type/i.test(doc), 'bootstrap must tell the agent to use the type stated in its own file');
+  });
+
+  test('supplies the launcher instead of assuming the agent defines it', () => {
+    assert.ok(doc.includes('gsd-run-resolver.md'), 'bootstrap must point at the shared resolver reference');
+    assert.ok(!/your own init already defines/i.test(doc), 'gsd_run is not defined by every agent init');
+    const resolver = fs.readFileSync(path.join(REFS_DIR, 'gsd-run-resolver.md'), 'utf8');
+    assert.ok(resolver.includes('gsd_run() {'), 'the referenced resolver must define gsd_run');
+  });
+
+  test('documents --skills-only and the per-runtime return contract', () => {
+    assert.ok(doc.includes('--skills-only'), 'bootstrap must tell the agent to pass --skills-only');
+    assert.ok(/non-Claude/.test(doc) && /persona/i.test(doc),
+      'bootstrap must state that a non-Claude runtime returns the agent persona without --skills-only');
+    assert.ok(!/exits 0 with an empty\s+block when nothing is configured for your type/i.test(doc),
+      'the empty-block claim must be scoped to --skills-only');
+  });
+
+  test('does not send the agent to frontmatter it may not be able to see', () => {
+    assert.ok(!/the `name:` value in\s+your frontmatter/i.test(doc));
+    assert.ok(/Claude Code/.test(doc) && /frontmatter/i.test(doc),
+      'bootstrap must explain why the type is not read from frontmatter');
   });
 });

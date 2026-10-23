@@ -762,6 +762,28 @@ export function actionsFor(situation: Situation, s: SmartEntrySignals, runtime =
 
 // ─── Summary line ─────────────────────────────────────────────────────────────
 
+function phaseSummary(s: SmartEntrySignals): string {
+  const phase = s.current_phase;
+  // Preserve the milestone ordinal introduced by #5228 when it is known.
+  const at = phase === null ? -1 : s.milestone_phases.findIndex((id) => comparePhaseNum(id, phase) === 0);
+  if (at >= 0) return `Phase ${at + 1} of ${s.milestone_phases.length}`;
+  const total = s.total_phases;
+  const legacy = `Phase ${phase ?? '?'} of ${total ?? '?'}`;
+  const roadmapTotal = s.roadmap_total_phases;
+  // Keep the recorded pair when roadmap counts are unavailable, or when the
+  // pair can describe a single milestone without changing its existing text.
+  if (phase === null || total === null || roadmapTotal === null || roadmapTotal <= 0
+    || (total === roadmapTotal && comparePhaseNum(phase, total) <= 0)) {
+    return legacy;
+  }
+  // When the recorded pair cannot safely describe this roadmap, label its
+  // counts separately rather than printing a mixed-scope ratio.
+  const roadmapDone = s.roadmap_completed_phases;
+  return roadmapDone === null
+    ? `Phase ${phase} (${roadmapTotal} roadmap phases)`
+    : `Phase ${phase} (${roadmapDone} of ${roadmapTotal} roadmap phases complete)`;
+}
+
 function buildSummary(situation: Situation, s: SmartEntrySignals): string {
   switch (situation) {
     case 'no-project':
@@ -775,7 +797,7 @@ function buildSummary(situation: Situation, s: SmartEntrySignals): string {
     case 'needs-first-phase':
       return 'Project initialized — plan your first phase';
     case 'planning':
-      return `${phasePosition(s)} — needs a plan`;
+      return `${phaseSummary(s)} — needs a plan`;
     case 'executing':
       return progressLine('executing', s);
     case 'verify-pending':
@@ -790,24 +812,10 @@ function buildSummary(situation: Situation, s: SmartEntrySignals): string {
   }
 }
 
-/**
- * "Phase N of M" for the current phase. N is the phase's 1-based position in
- * the current milestone's ordered phase list (#5228), so a milestone that
- * continues the numbering of an earlier one (phases 9-17) reads "Phase 1 of 9",
- * not "Phase 9 of 9". When the phase is not in that list (or the roadmap lists
- * none) the STATE.md figures are printed as recorded.
- */
-function phasePosition(s: SmartEntrySignals): string {
-  const current = s.current_phase;
-  const at = current === null ? -1 : s.milestone_phases.findIndex((id) => comparePhaseNum(id, current) === 0);
-  if (at >= 0) return `Phase ${at + 1} of ${s.milestone_phases.length}`;
-  return `Phase ${s.current_phase ?? '?'} of ${s.total_phases ?? '?'}`;
-}
-
 function progressLine(tail: string, s: SmartEntrySignals): string {
   const parts: string[] = [];
   if (s.current_phase !== null && s.total_phases !== null) {
-    parts.push(phasePosition(s));
+    parts.push(phaseSummary(s));
   } else if (s.current_phase !== null) {
     parts.push(`Phase ${s.current_phase}`);
   }

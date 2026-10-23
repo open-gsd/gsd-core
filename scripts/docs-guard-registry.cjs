@@ -157,6 +157,8 @@ function assertNoSuiteCollision(tests) {
  * unresolvable read is recorded as `'*'`, never a narrowed guess.
  */
 const DOCS_GUARD_TESTS = {
+  'tests/pi-unsupported-skill-docs.test.cjs': ['docs/how-to/start-a-gsd-workflow-from-pi.md'],
+  'tests/pi-parity-matrix.test.cjs': ['docs/reference/pi-parity-matrix.md'],
   'tests/adr-15-progress-converge.test.cjs': [
     'docs/COMMANDS.md',
     'docs/how-to/run-phases-autonomously.md',
@@ -321,6 +323,13 @@ const DOCS_GUARD_TESTS = {
   'tests/inventory-manifest-sync.test.cjs': ['docs/INVENTORY.md', 'docs/INVENTORY-MANIFEST.json'],
   'tests/kilo-upgrades.test.cjs': ['docs/how-to/connect-gsd-mcp-server.md'],
   'tests/live-config-guard.test.cjs': ['docs/TESTING-SUITES.md'],
+  // #5601: localized INVENTORY coverage notes must state no agent counts.
+  'tests/localized-inventory-agent-counts.test.cjs': [
+    'docs/ja-JP/',
+    'docs/ko-KR/',
+    'docs/pt-BR/',
+    'docs/zh-CN/',
+  ],
   // #3726: pins the `milestone complete` synopsis (English + four localized
   // mirrors), the `--confirm` flag row and the guard-override instructions —
   // `type: Fixed` exempts that PR from the docs-required lint, so this is the
@@ -338,6 +347,7 @@ const DOCS_GUARD_TESTS = {
   // (no-pending-3212-markers.test.cjs:37-46), which includes all of docs/ —
   // cannot be resolved to a fixed docs/ path set.
   'tests/no-pending-3212-markers.test.cjs': ['*'],
+  'tests/pause-work-improvements.test.cjs': ['docs/zh-CN/references/git-integration.md'],
   'tests/phase6-capability-docs.test.cjs': ['docs/how-to/develop-a-capability.md', 'docs/README.md'],
   'tests/phase6-review-capabilities.test.cjs': [
     'docs/reference/review-verification-capabilities.md',

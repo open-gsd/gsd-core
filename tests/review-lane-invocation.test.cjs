@@ -19,6 +19,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+const cp = require('node:child_process');
+
 const { cleanup } = require('./helpers.cjs');
 
 const {
@@ -31,8 +33,15 @@ const {
   isEmptyReview,
   normalizeHost,
   fileRefPrompt,
+  applyPromptOverride,
   LANE_UNAVAILABLE,
 } = require('../gsd-core/bin/lib/review-lane-invocation.cjs');
+
+// `review-lane invoke` spawns one shim binary: the same class as feat-2483's invoke test, which
+// preserves this 60s figure under a file-local name rather than folding it into a shared class.
+const INVOKE_TIMEOUT_MS = 60000;
+const REPO_ROOT = path.join(__dirname, '..');
+const TOOLS = path.join(REPO_ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
 
 const RUN = '/run';
 const ROOT = '/repo';
@@ -890,4 +899,117 @@ describe('#4255 — lane effort comes from REVIEW config, never from another age
         `${l.slug}: the recorded effort must match what actually expanded`);
     }
   });
+});
+
+// #5049 — `review-lane invoke --prompt-file` swaps in a budget-trimmed prompt. It reached the two
+// lanes that read the prompt through `stdin` or `plan.promptPath`, but an `argv-file-ref` lane
+// (cursor, antigravity, kimi-code) has the prompt path baked into its argv before the override
+// runs, so the override was dropped without a word and the lane read the untrimmed prompt.
+describe('#5049: --prompt-file reaches every prompt channel', () => {
+  const OVERRIDE = '/run/gsd-review-prompt-trimmed.md';
+  const DEFAULT_PROMPT = `${RUN}/gsd-review-prompt.md`;
+  const lane = (slug) => REVIEWER_LANES.find((l) => l.slug === slug);
+
+  function planOf(l) {
+    const r = resolveLanePlan({
+      lane: l, configGet: () => undefined, runDir: RUN, repoRoot: ROOT, effortArgs: [],
+    });
+    assert.equal(r.ok, true, `${l.slug} failed to resolve`);
+    return r.plan;
+  }
+
+  for (const slug of ['cursor', 'antigravity', 'kimi-code']) {
+    test(`${slug}: the constructed argv names the override, not the default prompt`, () => {
+      const plan = applyPromptOverride(planOf(lane(slug)), OVERRIDE, ROOT);
+      // Assert on argv, not on promptPath: promptPath already changed before the fix, which is
+      // exactly why the bug was silent.
+      assert.ok(plan.argv.includes(fileRefPrompt(OVERRIDE, ROOT)), `${slug}: argv must carry the override prompt text`);
+      assert.ok(!plan.argv.some((a) => String(a).includes(DEFAULT_PROMPT)), `${slug}: argv must not still name the default prompt`);
+      assert.equal(plan.promptPath, OVERRIDE, `${slug}: promptPath stays in step with argv`);
+    });
+  }
+
+  test('a lane whose argv carries the bare prompt path (promptChannel argv) is rewritten too', () => {
+    const synthetic = {
+      ...lane('cursor'),
+      slug: 'argvlane',
+      invoke: { ...lane('cursor').invoke, promptChannel: 'argv', args: ['--prompt', '{{prompt}}'] },
+    };
+    const plan = applyPromptOverride(planOf(synthetic), OVERRIDE, ROOT);
+    assert.deepEqual(plan.argv, ['--prompt', OVERRIDE]);
+    assert.equal(plan.promptPath, OVERRIDE);
+  });
+
+  test('a stdin lane streams the override and an http lane reads it from promptPath', () => {
+    assert.equal(applyPromptOverride(planOf(lane('claude')), OVERRIDE, ROOT).stdin, OVERRIDE);
+    const http = REVIEWER_LANES.find((l) => l.handler === 'openai-compatible');
+    const httpPlan = resolveLanePlan({
+      lane: http, configGet: (k) => (/base_url/i.test(k) ? 'http://localhost:1234' : undefined),
+      runDir: RUN, repoRoot: ROOT, effortArgs: [],
+    });
+    if (httpPlan.ok && httpPlan.plan.transport === 'openai-http') {
+      assert.equal(applyPromptOverride(httpPlan.plan, OVERRIDE, ROOT).promptPath, OVERRIDE);
+    }
+  });
+
+  test('a lane that is fed no prompt is left exactly as resolved', () => {
+    const plan = planOf(lane('coderabbit'));
+    assert.deepEqual(applyPromptOverride(plan, OVERRIDE, ROOT), plan);
+  });
+
+  test('the plan is not mutated in place', () => {
+    const plan = planOf(lane('cursor'));
+    const before = JSON.stringify(plan);
+    applyPromptOverride(plan, OVERRIDE, ROOT);
+    assert.equal(JSON.stringify(plan), before);
+  });
+
+  // The unit tests stop at the pure function. The defect lived in the `review-lane invoke` handler
+  // in gsd-tools.cjs, so this runs the real command against a shim binary that records the argv it
+  // was handed — the only assertion that sees what a lane would actually read.
+  for (const [slug, bin] of [['cursor', 'cursor-agent'], ['kimi-code', 'kimi'], ['antigravity', 'agy']]) {
+    test(
+      `end-to-end: review-lane invoke --prompt-file hands the ${slug} binary the override`,
+      { skip: process.platform === 'win32' ? 'POSIX shim' : false },
+      () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5049-'));
+        try {
+          const binDir = path.join(dir, 'bin');
+          const runDir = path.join(dir, 'run');
+          const seen = path.join(dir, 'seen.txt');
+          fs.mkdirSync(binDir);
+          fs.mkdirSync(runDir);
+          const trimmed = path.join(runDir, `gsd-review-prompt-${slug}.md`);
+          fs.writeFileSync(path.join(runDir, 'gsd-review-prompt.md'), 'full prompt');
+          fs.writeFileSync(trimmed, 'trimmed prompt');
+          fs.writeFileSync(
+            path.join(binDir, bin),
+            // `kimi` and `agy` are capability-probed through `--help`; answer the probe and keep it
+            // out of the recorded argv so only the real invocation is asserted on.
+            `#!/usr/bin/env bash\nif [ "$1" = "--help" ]; then echo "--output-format --add-dir"; exit 0; fi\n` +
+            `printf '%s\\n' "$@" >> "${seen}"\n` +
+            'echo "a review body long enough to clear the empty-output guard."\n',
+            { mode: 0o755 },
+          );
+          cp.spawnSync(
+            process.execPath,
+            [TOOLS, 'review-lane', 'invoke', '--slug', slug, '--run-dir', runDir,
+              '--repo-root', REPO_ROOT, '--prompt-file', trimmed, '--json'],
+            {
+              encoding: 'utf8',
+              timeout: INVOKE_TIMEOUT_MS,
+              killSignal: 'SIGKILL',
+              env: { ...process.env, HOME: dir, USERPROFILE: dir, PATH: `${binDir}${path.delimiter}${process.env.PATH}` },
+            },
+          );
+          assert.ok(fs.existsSync(seen), `the ${bin} shim never ran`);
+          const argv = fs.readFileSync(seen, 'utf8');
+          assert.ok(argv.includes(trimmed), `${slug}: the binary was not handed the trimmed prompt:\n${argv}`);
+          assert.ok(!argv.includes(path.join(runDir, 'gsd-review-prompt.md')), `${slug}: the binary was still pointed at the untrimmed prompt:\n${argv}`);
+        } finally {
+          cleanup(dir);
+        }
+      },
+    );
+  }
 });

@@ -59,8 +59,8 @@
       "minLength": 1
     },
     "commands": {
-      "type": "string",
-      "description": "Path (relative to plugin root) to the commands directory, ending with '/'."
+      "type": ["string", "array"],
+      "description": "Path (relative to plugin root) to the commands directory, ending with '/', or an array of paths. A `commands` key REPLACES Claude Code's default commands/ scan; GSD declares [] so the nested commands/gsd/ is not registered a second time (#5504)."
     },
     "hooks": {
       "type": "string",

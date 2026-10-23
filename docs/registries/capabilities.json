@@ -1,1 +1,90 @@
-[]
+[
+  {
+    "id": "ponytail-everywhere",
+    "name": "Ponytail Everywhere",
+    "type": "capability",
+    "repo": "davdittrich/ponytail-everywhere",
+    "description": "Brings lazy-ladder discipline (YAGNI, reuse before writing, stdlib and native features before dependencies, shortest working diff) to GSD as an advisory planner contribution at plan:pre, matching executor and verifier fragments, and a plan-review proportionality checker contribution. An optional Claude Code plugin adds a subagent banner and a pre-expansion check that recommends a smaller route before scope-expanding commands.",
+    "author": "Dennis A. V. Dittrich",
+    "license": "MIT",
+    "enginesGsd": ">=1.13.0",
+    "install": "gsd capability install https://github.com/davdittrich/ponytail-everywhere.git#v0.9.4",
+    "uninstall": "gsd capability remove ponytail",
+    "interactions": {
+      "loopExtensionPoints": ["plan:pre", "execute:wave:pre", "execute:wave:post"],
+      "hookKinds": ["contribution"],
+      "configKeys": ["ponytail.enabled", "ponytail.enforcement", "ponytail.level"],
+      "requires": [],
+      "runtimeCompat": ["all"],
+      "produces": [],
+      "consumes": [".planning/config.json"]
+    },
+    "discussion": "https://github.com/open-gsd/gsd-core/discussions/5292"
+  },
+  {
+    "id": "sota-numerics",
+    "name": "SOTA Numerics",
+    "type": "capability",
+    "repo": "davdittrich/sota-numerics",
+    "description": "Advisory steering across the plan, execute, verify and ship lifecycle toward state-of-the-art numerics: internally consistent, project-consistent, unambiguous, complete, efficient, quiet-running, agent-facing code. Adds advisory fragments at plan:pre, execute:wave:pre, execute:wave:post and ship:pre, plus one blocking plan:post gate that requires an Alternatives Considered section with cited, dated alternatives and a Decided by line in every plan.",
+    "author": "Dennis A. V. Dittrich",
+    "license": "MIT",
+    "enginesGsd": ">=1.16.0",
+    "install": "gsd capability install https://github.com/davdittrich/sota-numerics.git#v0.2.3",
+    "uninstall": "gsd capability remove sota-numerics",
+    "interactions": {
+      "loopExtensionPoints": ["plan:pre", "plan:post", "execute:wave:pre", "execute:wave:post", "ship:pre"],
+      "hookKinds": ["contribution", "gate"],
+      "configKeys": ["sota-numerics.enabled"],
+      "requires": [],
+      "runtimeCompat": ["all"],
+      "produces": [],
+      "consumes": []
+    },
+    "discussion": "https://github.com/open-gsd/gsd-core/discussions/5303"
+  },
+  {
+    "id": "markdown-linting",
+    "name": "Markdown Linting",
+    "type": "capability",
+    "repo": "davdittrich/markdown-linting",
+    "description": "Runs rumdl over .planning/, README.md and CLAUDE.md after verify:post, writes a LINT-REPORT.md violation count, and re-measures at ship:pre to advise (never block) /gsd-ship when markdown violations remain.",
+    "author": "Dennis A. V. Dittrich <davdittrich@gmail.com>",
+    "license": "MIT",
+    "enginesGsd": ">=1.6.0",
+    "install": "gsd capability install https://github.com/davdittrich/markdown-linting.git#v0.3.1",
+    "uninstall": "gsd capability remove markdown-linting",
+    "interactions": {
+      "loopExtensionPoints": ["verify:post", "ship:pre"],
+      "hookKinds": ["step", "gate"],
+      "configKeys": ["markdown-linting.enabled", "markdown-linting.ship_gate"],
+      "requires": [],
+      "runtimeCompat": ["all"],
+      "produces": ["LINT-REPORT.md"],
+      "consumes": [".planning/**/*.md", "README.md", "CLAUDE.md"]
+    },
+    "discussion": "https://github.com/open-gsd/gsd-core/discussions/5294"
+  },
+  {
+    "id": "pr-workflow",
+    "name": "PR Workflow",
+    "type": "capability",
+    "repo": "davdittrich/pr-workflow",
+    "description": "Reads the open pull request and its checks for the current branch with gh, writes a PR.md report after each execute wave, and advises (never blocks) at ship:pre when the PR is not green. Fails open: a missing or erroring gh yields an unavailable report instead of a stale pass.",
+    "author": "Dennis A. V. Dittrich",
+    "license": "MIT",
+    "enginesGsd": ">=1.6.0",
+    "install": "gsd capability install https://github.com/davdittrich/pr-workflow.git#v0.2.0",
+    "uninstall": "gsd capability remove pr-workflow",
+    "interactions": {
+      "loopExtensionPoints": ["execute:wave:post", "ship:pre", "ship:post"],
+      "hookKinds": ["step", "gate"],
+      "configKeys": ["pr-workflow.enabled", "pr-workflow.ship_gate"],
+      "requires": [],
+      "runtimeCompat": ["all"],
+      "produces": ["PR.md"],
+      "consumes": []
+    },
+    "discussion": "https://github.com/open-gsd/gsd-core/discussions/5304"
+  }
+]

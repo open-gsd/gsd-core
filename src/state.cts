@@ -11,10 +11,13 @@ import path from 'node:path';
 import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
-const { output, error, declineNoOp, formatDiagnosticToken } = ioMod;
+const { output, error, declineNoOp, formatDiagnosticToken, ERROR_REASON } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import cliExitModule = require('./cli-exit.cjs');
 const { ExitError } = cliExitModule;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import capabilityLedgerMod = require('./capability-ledger.cjs');
+const { readSmallRegularFile } = capabilityLedgerMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateContract = require('./state-contract.cjs');
 const { publishStateContract } = stateContract;
@@ -615,19 +618,52 @@ function cmdStateGet(cwd: string, section: string | undefined, raw: boolean): vo
   }
 }
 
-function readTextArgOrFile(cwd: string, value: string | undefined, filePath: string | undefined, label: string): string | undefined {
+/**
+ * #4926: cap on a `--<flag>-file` text input. Twice the 128 KiB one argv string
+ * can carry on Linux, so the file form never takes less than the inline form,
+ * and the entry echoed back on stdout stays small.
+ */
+const TEXT_FILE_MAX_BYTES = 256 * 1024;
+
+/**
+ * Resolve a text argument that may instead be supplied as a file (`--<flag>`
+ * or `--<flag>-file`).
+ *
+ * #4926: the file is a read-once INPUT — its contents are copied into
+ * STATE.md and the path itself is never written, recorded, or resolved
+ * again — so it is not a project-write resource and is not confined to the
+ * project root. A scratch file from an agent's temp directory is accepted.
+ * A relative path still resolves against the project root.
+ *
+ * A file that cannot be read is a caller error and goes through the fault
+ * path — stderr, non-zero exit (USAGE), `--json-errors` envelope — rather than
+ * an `{ added: false }` payload at exit 0 that a shell caller gating on `$?`
+ * reads as success while nothing was written.
+ *
+ * An unconfined path is hostile input, so the read goes through
+ * `readSmallRegularFile`: a FIFO, a device (`/dev/zero`, a piped `/dev/stdin`)
+ * or a directory is refused without blocking, and a file over
+ * TEXT_FILE_MAX_BYTES is refused without being read.
+ */
+function readTextArgOrFile(cwd: string, value: string | undefined, filePath: string | undefined, flag: string): string | undefined {
   if (!filePath) return value;
 
-  // Path traversal guard: ensure file resolves within project directory
-  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/unbound-method
-  const { assertWithinRoot, PathAcceptance } = require('./security.cjs') as { assertWithinRoot(filePath: unknown, baseDir: unknown, label?: string | null, policy?: 'relative-only' | 'absolute-inside-root'): string; PathAcceptance: { RelativeOnly: 'relative-only'; AbsoluteInsideRoot: 'absolute-inside-root' } };
-  const contained = assertWithinRoot(filePath, cwd, `${label} path`, PathAcceptance.AbsoluteInsideRoot);
+  const refuse = (why: string | undefined): never => error(
+    `--${flag}-file could not be read: ${formatDiagnosticToken(filePath)}${why ? ` (${why})` : ''}`,
+    ERROR_REASON.USAGE,
+  );
 
+  let content: string | null;
   try {
-    return fs.readFileSync(contained, 'utf-8').trimEnd();
-  } catch {
-    throw new Error(`${label} file not found: ${filePath}`);
+    content = readSmallRegularFile(path.resolve(cwd, filePath), TEXT_FILE_MAX_BYTES);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'EFBIG') return refuse(`larger than ${TEXT_FILE_MAX_BYTES} bytes`);
+    if (code === 'EISDIR' || code === 'ENXIO') return refuse('not a regular file');
+    return refuse(code);
   }
+  if (content === null) return refuse('ENOENT');
+  return content.trimEnd();
 }
 
 function cmdStatePatch(cwd: string, patches: Record<string, string>, raw: boolean): void {
@@ -1581,21 +1617,19 @@ function cmdStateUpdateProgress(cwd: string, raw: boolean): void {
 
 function cmdStateAddDecision(cwd: string, options: StateAddDecisionOptions, raw: boolean): void {
   const statePath = planningPaths(cwd).state;
-  if (!fs.existsSync(statePath)) { output({ error: 'STATE.md not found' }, raw, undefined); return; }
+  // #4926: every refusal from this verb goes through the fault path (non-zero
+  // exit), so a caller gating on `$?` never reads success while nothing was written.
+  if (!fs.existsSync(statePath)) return error('STATE.md not found', ERROR_REASON.USAGE);
 
   const { phase, summary, summary_file, rationale, rationale_file } = options;
-  let summaryText: string | undefined = undefined;
-  let rationaleText = '';
+  const summaryText = readTextArgOrFile(cwd, summary, summary_file, 'summary');
+  // The rationale is optional: blank, inline or file, means "no rationale".
+  const rationaleInput = readTextArgOrFile(cwd, rationale || '', rationale_file, 'rationale') || '';
+  const rationaleText = rationaleInput.trim() ? rationaleInput : '';
 
-  try {
-    summaryText = readTextArgOrFile(cwd, summary, summary_file, 'summary');
-    rationaleText = readTextArgOrFile(cwd, rationale || '', rationale_file, 'rationale') || '';
-  } catch (err) {
-    output({ added: false, reason: (err as Error).message }, raw, 'false');
-    return;
-  }
-
-  if (!summaryText) { output({ error: 'summary required' }, raw, undefined); return; }
+  // A blank inline value is refused the same as a blank file (the file form is
+  // trimEnd()ed by readTextArgOrFile, the inline form is not).
+  if (!summaryText || !summaryText.trim()) return error('summary required — pass a non-blank --summary or --summary-file', ERROR_REASON.USAGE);
 
   // #3231/#3481: `--phase` omitted → resolve from the STATE.md being written, via
   // the canonical ladder `state prune` uses. A decision entry is a permanent
@@ -1666,18 +1700,13 @@ function cmdStateAddDecision(cwd: string, options: StateAddDecisionOptions, raw:
 
 function cmdStateAddBlocker(cwd: string, text: string | StateAddBlockerOptions, raw: boolean): void {
   const statePath = planningPaths(cwd).state;
-  if (!fs.existsSync(statePath)) { output({ error: 'STATE.md not found' }, raw, undefined); return; }
+  // #4926: every refusal from this verb goes through the fault path (non-zero
+  // exit), so a caller gating on `$?` never reads success while nothing was written.
+  if (!fs.existsSync(statePath)) return error('STATE.md not found', ERROR_REASON.USAGE);
   const blockerOptions: StateAddBlockerOptions = typeof text === 'object' && text !== null ? text : { text: text };
-  let blockerText: string | undefined = undefined;
+  const blockerText = readTextArgOrFile(cwd, blockerOptions.text, blockerOptions.text_file, 'text');
 
-  try {
-    blockerText = readTextArgOrFile(cwd, blockerOptions.text, blockerOptions.text_file, 'blocker');
-  } catch (err) {
-    output({ added: false, reason: (err as Error).message }, raw, 'false');
-    return;
-  }
-
-  if (!blockerText) { output({ error: 'text required' }, raw, undefined); return; }
+  if (!blockerText || !blockerText.trim()) return error('text required — pass a non-blank --text or --text-file', ERROR_REASON.USAGE);
 
   const entry = `- ${blockerText}`;
   let _added = false;
@@ -1732,19 +1761,15 @@ function cmdStateAddBlocker(cwd: string, text: string | StateAddBlockerOptions, 
 
 function cmdStateAddRoadmapEvolution(cwd: string, options: StateAddRoadmapEvolutionOptions, raw: boolean): void {
   const statePath = planningPaths(cwd).state;
-  if (!fs.existsSync(statePath)) { output({ error: 'STATE.md not found' }, raw, undefined); return; }
+  // #4926: every refusal from this verb goes through the fault path (non-zero
+  // exit), so a caller gating on `$?` never reads success while nothing was written.
+  if (!fs.existsSync(statePath)) return error('STATE.md not found', ERROR_REASON.USAGE);
 
   const { phase, action, after, note, note_file, urgent } = options;
-  let noteText: string | undefined = undefined;
-  try {
-    noteText = readTextArgOrFile(cwd, note, note_file, 'note');
-  } catch (err) {
-    output({ added: false, reason: (err as Error).message }, raw, 'false');
-    return;
-  }
+  const noteText = readTextArgOrFile(cwd, note, note_file, 'note');
   // Reject missing / empty / whitespace-only notes — an evolution entry with no
   // narrative is meaningless and would corrupt the section with a dangling bullet.
-  if (!noteText || !noteText.trim()) { output({ error: 'note required' }, raw, undefined); return; }
+  if (!noteText || !noteText.trim()) return error('note required — pass a non-blank --note or --note-file', ERROR_REASON.USAGE);
   // Flatten line breaks so the entry is always a single Markdown bullet. The
   // dedupe + rendering contract is line-oriented; a multiline --note-file would
   // otherwise spill continuation lines outside the bullet and defeat dedupe.
@@ -3199,8 +3224,14 @@ function buildStateFrontmatter(
             // — no second ROADMAP parser here. A ROADMAP without a canonical
             // `## Progress` table resolves no table → floor inert (disk count
             // stands), the owner's own answer to "what is countable".
+            // #5165: the milestone-grouped `## Progress` table keeps every
+            // milestone's rows and sits OUTSIDE any narrower roadmapScope, so the
+            // floor names the milestone STATE asserts (assertedMilestoneVersion —
+            // present on every resync path, unlike the optional storedMilestone
+            // parameter) and the owner counts only that milestone's rows. No row
+            // for it => nulls => the floor is inert and the disk count stands.
             const roadmapCompletedPhases = roadmapScope !== null && safeToUseRoadmapCount && !diskCountsWithheld
-              ? deriveProgressFromRoadmap(roadmapScope).completedPhases
+              ? deriveProgressFromRoadmap(roadmapScope, assertedMilestoneVersion ?? storedMilestone).completedPhases
               : null;
             const flooredCompletedPhases = roadmapCompletedPhases !== null
               ? Math.max(diskCompletedPhases, roadmapCompletedPhases)
@@ -3634,6 +3665,7 @@ function applyAuthoritativeProgressSubkeys(
   let completedMoved = false;
   for (const [subkey, value] of Object.entries(intent)) {
     if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+    if (subkey === 'percent') continue; // composed below, never applied raw (#5165)
     if (!getFieldClassification(`progress.${subkey}`)) continue;
     const isCompletedCounter = subkey === 'completed_phases' || subkey === 'completed_plans';
     if (isCompletedCounter && opts.completedOnlyRaise) {
@@ -3648,10 +3680,24 @@ function applyAuthoritativeProgressSubkeys(
   }
   // percent: applied only when a completed counter moved (coherent with the
   // counters that just landed) or when no percent exists to contradict.
+  // #5165 / ADR-4629 §8.5: `computeProgressPercent` is the one composition
+  // owner (min(plan fraction, phase fraction)) that every resyncing write uses.
+  // When the block carries the counters it needs, the percent is composed by
+  // that owner over the counters just landed, so a later resyncing write
+  // cannot move what this transition wrote. The intent's own percent (a
+  // phase-only fraction) is only the fallback for a block without plan counts.
   const intentPercent = intent['percent'];
   if (typeof intentPercent === 'number' && Number.isFinite(intentPercent) && (completedMoved || toFiniteNumber(base['percent']) === null)) {
-    if (!Object.is(base['percent'], intentPercent)) {
-      base['percent'] = intentPercent;
+    const composed = computeProgressPercent(
+      toFiniteNumber(base['completed_plans']),
+      toFiniteNumber(base['total_plans']),
+      toFiniteNumber(base['completed_phases']),
+      toFiniteNumber(base['total_phases']),
+      SCOPE.COMPLETE,
+    );
+    const nextPercent = composed !== null ? composed : intentPercent;
+    if (!Object.is(base['percent'], nextPercent)) {
+      base['percent'] = nextPercent;
       changed = true;
     }
   }
@@ -5306,8 +5352,9 @@ function verifyStateWriteIntent(
   statePath: string,
   bodyDeltas?: Record<string, { pre: string | null; post: string | null }>,
 ): StateWriteIntentVerification {
-  const pre = normalizeContent(statePath, preContent).content;
-  const post = normalizeContent(statePath, postContent).content;
+  // #5165: the write lands scoped to what it changed (platformWriteSync reads the file it replaces).
+  const pre = normalizeContent(statePath, preContent, { prior: preContent }).content;
+  const post = normalizeContent(statePath, postContent, { prior: preContent }).content;
   const preFm = extractFrontmatter(pre, statePath) as Record<string, unknown>;
   const postFm = extractFrontmatter(post, statePath) as Record<string, unknown>;
   const preBody = stripFrontmatter(pre);
@@ -5520,7 +5567,7 @@ function applyStateWriteIntent(
 
     platformWriteSync(statePath, candidate);
     const reread = platformReadSync(statePath) || '';
-    if (reread !== normalizeContent(statePath, candidate).content) {
+    if (reread !== normalizeContent(statePath, candidate, { prior: pre }).content) {
       return Object.freeze({
         ok: false,
         reasons: Object.freeze([STATE_WRITE_INTENT_FAILURE.REREAD_MISMATCH]),
@@ -6088,7 +6135,8 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number | null |
     if (!intent.phaseName) {
       const preFm = extractFrontmatter(content, statePath) as Record<string, unknown>;
       const curatedName = preFm['current_phase_name'];
-      if (typeof curatedName === 'string' && curatedName.trim().length > 0) {
+      // #5369: a status fragment a pre-fix write left as the name is not curated; do not reassert it.
+      if (typeof curatedName === 'string' && curatedName.trim().length > 0 && !phaseIdMod.isPlannedPhaseStatusPhrase(curatedName)) {
         rmwOptions.authoritativeFm = { current_phase_name: curatedName };
       }
     }

@@ -59,6 +59,10 @@ function runHook(payload, extraEnv = {}) {
   // `USERPROFILE` too so that redirection actually takes effect on Windows
   // instead of silently leaking the real CI runner's profile directory.
   if ('HOME' in extraEnv) env.USERPROFILE = extraEnv.HOME;
+  // #5017: the defaults store root is GSD_HOME when set, and the test runner exports a sandbox
+  // GSD_HOME to every test — so redirecting only HOME no longer redirects the store. A test that
+  // redirects HOME redirects the store with it, unless it names GSD_HOME itself.
+  if ('HOME' in extraEnv && !('GSD_HOME' in extraEnv)) env.GSD_HOME = extraEnv.HOME;
   return toLegacyResult(runNode([HOOK_PATH], {
     input: typeof payload === 'string' ? payload : JSON.stringify(payload),
     cwd: require('node:os').tmpdir(),
@@ -822,6 +826,25 @@ describe('gsd-cursor-subagent-start.js: #3045 MAJOR "Cursor residual false-deny"
       cleanup(home);
     }
   });
+
+  test('#5017: the runtime fallback reads $GSD_HOME/.gsd/defaults.json when GSD_HOME is set, ahead of the home directory', () => {
+    const home = createTempDir('gsd-cs-5017-home-');
+    const gsdHome = createTempDir('gsd-cs-5017-gsdhome-');
+    try {
+      fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+      fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ runtime: 'cursor' }));
+      // The home directory has NO store: only the GSD_HOME one carries the runtime signal.
+      const r = runHook(subagentPayload([unconfiguredProject]), { HOME: home, GSD_HOME: gsdHome });
+      assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+      assert.equal(JSON.parse(r.stdout).permission, 'deny', `GSD_HOME defaults runtime must be enforced, got: ${r.stdout}`);
+      // A blank GSD_HOME falls back to the home directory (which has no store here) -> inert.
+      const blank = runHook(subagentPayload([unconfiguredProject]), { HOME: home, GSD_HOME: '' });
+      assert.equal(JSON.parse(blank.stdout).permission, undefined, `blank GSD_HOME must fall back to HOME, got: ${blank.stdout}`);
+    } finally {
+      cleanup(home);
+      cleanup(gsdHome);
+    }
+  });
 });
 
 describe('gsd-cursor-subagent-start.js: #3045 SECURITY F2 — sentinel bound to phase/plan, mismatch is "no applicable sentinel"', () => {
@@ -954,12 +977,14 @@ describe('gsd-cursor-subagent-start.js: #3566 — per-install .gsd-runtime marke
 
   let savedHome;
   let savedUserProfile;
+  let savedGsdHome;
   let savedGsdRuntime;
   let project; // scaffold-shaped config ({}), per #2840's no-runtime-key template
 
   before(() => {
     savedHome = process.env.HOME;
     savedUserProfile = process.env.USERPROFILE;
+    savedGsdHome = process.env.GSD_HOME;
     savedGsdRuntime = process.env.GSD_RUNTIME;
     project = createTempDir('gsd-cs-3566-');
     fs.mkdirSync(path.join(project, '.planning'), { recursive: true });
@@ -972,6 +997,8 @@ describe('gsd-cursor-subagent-start.js: #3566 — per-install .gsd-runtime marke
     else process.env.HOME = savedHome;
     if (savedUserProfile === undefined) delete process.env.USERPROFILE;
     else process.env.USERPROFILE = savedUserProfile;
+    if (savedGsdHome === undefined) delete process.env.GSD_HOME;
+    else process.env.GSD_HOME = savedGsdHome;
     if (savedGsdRuntime === undefined) delete process.env.GSD_RUNTIME;
     else process.env.GSD_RUNTIME = savedGsdRuntime;
     cursorHookModule._setInstallRuntimeMarkerForTests(null);
@@ -985,6 +1012,7 @@ describe('gsd-cursor-subagent-start.js: #3566 — per-install .gsd-runtime marke
     fs.writeFileSync(path.join(home, '.gsd', 'defaults.json'), JSON.stringify({ runtime: defaultsRuntime }));
     process.env.HOME = home;
     process.env.USERPROFILE = home;
+    process.env.GSD_HOME = home; // #5017: the store root
     t.after(() => cleanup(home));
   }
 

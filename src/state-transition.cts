@@ -18,10 +18,13 @@
 import frontmatter = require('./frontmatter.cjs');
 import { stateReplaceField, stateExtractField, stateReplaceFieldIfTemplate, stateReplaceFieldWithFallback, stateReplaceFieldInSession, stateCurrentPositionSlice } from './state-document.cjs';
 import { KNOWN_TEMPLATE_DEFAULTS, toFiniteNumber, computeProgressPercent, fieldContinuationEnd } from './state-document.cjs';
-import { tokenizeHeadings, withSection } from './markdown-sectionizer.cjs';
+import { tokenizeHeadings, withSection, maskFences } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
-import { deriveProgressFromRoadmap, clampPercent, clampPercentFromFraction, renderProgressBar } from './phase-lifecycle.cjs';
+import { deriveProgressFromRoadmap, milestoneVersionOf, clampPercent, clampPercentFromFraction, renderProgressBar } from './phase-lifecycle.cjs';
 import { escapeRegex } from './pattern.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
+import phaseIdMod = require('./phase-id.cjs');
+const { comparePhaseNum } = phaseIdMod;
 // #4129: the completion-ratio kernel for the resync-arm ratchet's percent
 // (planning-scope's SCOPE — state-document's own dependency, no cycle here:
 // state-document never imports this module).
@@ -1220,6 +1223,12 @@ export type StateTransitionIntent =
        * next phase has no directory yet, or the caller did not classify it).
        */
       nextPhaseDisk?: NextPhaseDisk | null;
+      /**
+       * #5165: the milestone the caller resolved (ROADMAP-bound identity first).
+       * Scopes the roadmap-derived progress counters to that milestone's
+       * Progress-table rows; absent, STATE's own `milestone:` frontmatter does.
+       */
+      milestone?: string | null;
     }
   | { kind: 'plannedPhase'; phaseNumber: string | number; phaseName: string | null; planCount: number | null }
   | { kind: 'milestoneSwitch'; version: string; name: string }
@@ -1270,7 +1279,40 @@ export type StateTransitionResult = {
  * Phases 2–7 add cases for the remaining 9 intent kinds. A missing case is
  * a compile-time error (the function would not return on that path).
  */
+/**
+ * The transitions that rewrite single-line body fields (`Status:`, `Current focus:`, `Plan:` …) with
+ * plain line-anchored patterns. Those patterns match a fenced EXAMPLE of a field as readily as the
+ * live line (#5460), so these run over the document body with fenced blocks hidden.
+ * `milestone*`, `prune` and `rebuild` restructure sections or re-derive the document and are not
+ * field-by-field writers.
+ */
+const FENCE_MASKED_TRANSITIONS: ReadonlySet<StateTransitionIntent['kind']> = new Set([
+  'beginPhase', 'advancePlan', 'completePhase', 'plannedPhase', 'patch', 'update', 'sync',
+]);
+
 export function transitionCore(
+  content: string,
+  intent: StateTransitionIntent,
+  deps: StateTransitionDeps,
+): StateTransitionResult {
+  if (!FENCE_MASKED_TRANSITIONS.has(intent.kind)) return transitionCoreUnmasked(content, intent, deps);
+  // Only the body is masked: a fence opener inside a frontmatter block scalar must not swallow the
+  // closing `---` (the frontmatter is not where the live fields are written).
+  const body = stripFrontmatter(content);
+  if (!content.endsWith(body)) return transitionCoreUnmasked(content, intent, deps);
+  const prefix = content.slice(0, content.length - body.length);
+  const fenceMask = maskFences(body);
+  const result = transitionCoreUnmasked(prefix + fenceMask.masked, intent, deps);
+  const restored = fenceMask.restore(result.content);
+  // Cannot happen short of a writer bug (a transition dropped or duplicated a placeholder line); a
+  // refusal is the one outcome that cannot report a rewrite that did not land.
+  if (restored === null) {
+    throw new Error(`${intent.kind}: fenced code blocks could not be restored after the edit; refusing to write STATE.md`);
+  }
+  return { ...result, content: restored };
+}
+
+function transitionCoreUnmasked(
   content: string,
   intent: StateTransitionIntent,
   deps: StateTransitionDeps,
@@ -1533,7 +1575,9 @@ function mutateCurrentPositionFirstTime(
 ): string {
   const span = locateCurrentPosition(body);
   if (span === null) return body;
-  let sectionBody = body.slice(span.start, span.end);
+  // #5460: the section's fenced examples are hidden while the live lines are rewritten.
+  const fenceMask = maskFences(body.slice(span.start, span.end));
+  let sectionBody = fenceMask.masked;
 
   // Phase line — inline first, then pipe-table fallback (#1257).
   const phaseLabel = `${intent.phaseNumber}${intent.phaseName ? ` (${intent.phaseName})` : ''} — EXECUTING`;
@@ -1573,8 +1617,10 @@ function mutateCurrentPositionFirstTime(
     if (replaced !== null) sectionBody = replaced;
   }
 
+  const restored = fenceMask.restore(sectionBody);
+  if (restored === null) return body;
   updated.push('Current Position');
-  return body.slice(0, span.start) + sectionBody + body.slice(span.end);
+  return body.slice(0, span.start) + restored + body.slice(span.end);
 }
 
 /**
@@ -1590,7 +1636,8 @@ function mutateCurrentPositionResume(
 ): string {
   const span = locateCurrentPosition(body);
   if (span === null) return body;
-  let sectionBody = body.slice(span.start, span.end);
+  const fenceMask = maskFences(body.slice(span.start, span.end));
+  let sectionBody = fenceMask.masked;
 
   const resumeActivity = `Last activity: ${today} — Phase ${intent.phaseNumber} execution resumed (wave continue)`;
   if (/^Last activity:/im.test(sectionBody)) {
@@ -1607,7 +1654,9 @@ function mutateCurrentPositionResume(
     }
   }
 
-  return body.slice(0, span.start) + sectionBody + body.slice(span.end);
+  const restored = fenceMask.restore(sectionBody);
+  if (restored === null) return body;
+  return body.slice(0, span.start) + restored + body.slice(span.end);
 }
 
 /**
@@ -1724,7 +1773,8 @@ function mutateCurrentPositionForAdvance(
 ): string {
   const span = locateCurrentPosition(content);
   if (span === null) return content;
-  let sectionBody = content.slice(span.start, span.end);
+  const fenceMask = maskFences(content.slice(span.start, span.end));
+  let sectionBody = fenceMask.masked;
   let mutated = false;
 
   // #3395: Phase is always replaced when a caller passes it — system-derived,
@@ -1824,7 +1874,9 @@ function mutateCurrentPositionForAdvance(
   }
 
   if (!mutated) return content;
-  return content.slice(0, span.start) + sectionBody + content.slice(span.end);
+  const restored = fenceMask.restore(sectionBody);
+  if (restored === null) return content;
+  return content.slice(0, span.start) + restored + content.slice(span.end);
 }
 
 // ----------------------------------------------------------------------------
@@ -2148,6 +2200,29 @@ function nextPhaseWording(disk: NextPhaseDisk | null): { status: string; current
 }
 
 /**
+ * #5165: is STATE.md already positioned PAST phase `phaseNum`? True when its
+ * current phase (frontmatter `current_phase`, else the body `Current Phase` /
+ * `Phase` field's leading phase token) compares greater than `phaseNum`.
+ * Re-completing a phase STATE has already moved past must not rewind the
+ * position; the caller combines this with "the phase is already complete in
+ * ROADMAP.md" so a first-time out-of-order completion (#2028) still
+ * transitions. An unparseable or absent current phase is "not past".
+ */
+export function isStatePastPhase(content: string, phaseNum: string | number, sourcePath?: string): boolean {
+  const fm = extractFrontmatter(content, sourcePath) as Record<string, unknown>;
+  const fromFm = fm['current_phase'];
+  let raw: string | null = typeof fromFm === 'string' || typeof fromFm === 'number' ? String(fromFm) : null;
+  if (raw === null || raw.trim() === '') {
+    const body = stripFrontmatter(content);
+    raw = stateExtractField(body, 'Current Phase') || stateExtractField(body, 'Phase') || null;
+  }
+  // `Phase 4` / `phase 4 of 9` name phase 4 as surely as `4 of 9` does.
+  const m = raw === null ? null : /^\s*(?:phase\s+)?(\d+(?:\.\d+)*)/i.exec(raw);
+  if (!m) return false;
+  return comparePhaseNum(m[1], String(phaseNum)) > 0;
+}
+
+/**
  * Apply a `completePhase` transition to STATE.md content.
  *
  * Migrates the inline STATE.md transform that lived inside `cmdPhaseComplete`
@@ -2181,12 +2256,20 @@ function completePhaseCore(
     planCount: number;
     summaryCount: number;
     nextPhaseDisk?: NextPhaseDisk | null;
+    milestone?: string | null;
   },
   deps: StateTransitionDeps,
 ): StateTransitionResult {
   const updated: string[] = [];
   const today = deps.clock.localToday();
   const nextWording = nextPhaseWording(intent.isLastPhase ? null : intent.nextPhaseDisk ?? null);
+
+  // #5165: the milestone the caller resolved (ROADMAP-bound identity first) wins;
+  // else the milestone STATE asserts. It scopes the roadmap-derived counters
+  // below to that milestone's Progress-table rows, the same milestone
+  // `phase complete` scopes its frontmatter progress to.
+  const currentMilestone = milestoneVersionOf(intent.milestone)
+    ?? milestoneVersionOf((extractFrontmatter(content, deps.sourcePath) as Record<string, unknown>)['milestone']);
 
   // Consult the field-classification table for the frontmatter keys this
   // transition touches (same guard beginPhaseCore applies). A missing row is a
@@ -2345,7 +2428,7 @@ function completePhaseCore(
     let derivedTotalPhases: number | null = null;
     const roadmapContent = deps.roadmapProvider ? deps.roadmapProvider() : null;
     if (roadmapContent) {
-      const derived = deriveProgressFromRoadmap(roadmapContent);
+      const derived = deriveProgressFromRoadmap(roadmapContent, currentMilestone);
       // #4901: completed counters only ratchet up, like the frontmatter twin
       // (applyAuthoritativeProgressSubkeys, completedOnlyRaise). A derivation
       // that lands BELOW the recorded counter read a narrower scope than the
@@ -2486,10 +2569,18 @@ function plannedPhaseCore(
   // Phase is system-derived, always replaced (Knuth invariant does not apply);
   // Status / Last activity stay template-aware.
   const beforePos = body;
+  // #5369: with no --name the label reuses the curated frontmatter name (when it is a real one), so the
+  // body line and the frontmatter agree on it (the #3834 reassert keeps that name in frontmatter). A
+  // status fragment a pre-fix write left there is never copied back into the name slot.
+  const curatedName = existingFm['current_phase_name'];
+  const labelName = intent.phaseName
+    ?? (typeof curatedName === 'string' && curatedName.trim() !== '' && !phaseIdMod.isPlannedPhaseStatusPhrase(curatedName)
+      ? curatedName.trim()
+      : null);
   body = mutateCurrentPositionForAdvance(
     body,
     {
-      phase: `${intent.phaseNumber}${intent.phaseName ? ` (${intent.phaseName})` : ''} — READY TO EXECUTE`,
+      phase: `${intent.phaseNumber}${labelName ? ` (${labelName})` : ''} — READY TO EXECUTE`,
       status: 'Ready to execute',
       lastActivity: `${today} — Phase ${intent.phaseNumber} planning complete`,
     },

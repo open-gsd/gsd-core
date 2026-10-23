@@ -39,6 +39,27 @@ cleanup_temp_files() {
 }
 trap cleanup_temp_files EXIT
 
+# The first line of $1 (everything before the first newline), matched BYTE-wise.
+#
+# `${1%%$'\n'*}` is a longest-suffix glob match, and on bash 3.2 (macOS's
+# /bin/bash) in a multibyte locale such as en_US.UTF-8 it costs ~3.5 s on a
+# 112KB value (#5473, measured inside the macOS conformance job: the same hook
+# on the same 114750-byte command took ~5.6 s under LC_ALL=en_US.UTF-8 and
+# ~0.55 s under LC_ALL=C, and a trace put 3.5 s of it on this expansion). A
+# newline is the same single byte in every locale, so matching it byte-wise
+# changes no result.
+#
+# ONLY call this inside a command substitution, `SUBJECT=$(gsd_first_line "$MSG")`:
+# the substitution's subshell is what keeps LC_ALL=C from leaking into the rest
+# of the hook, whose regexes and length arithmetic keep the caller's locale. A
+# substitution is a fork with no pipe between two processes, so it keeps the
+# property the pure-expansion form was chosen for (no `head -1` SIGPIPE race
+# under `set -euo pipefail`, #4429); printf is a builtin, so no exec either.
+gsd_first_line() {
+  LC_ALL=C
+  printf '%s' "${1%%$'\n'*}"
+}
+
 # The 10 built-in Conventional Commits types — the SINGLE declaration (#3811
 # review finding: this was previously hand-typed a second time inside the
 # node -e script below, a generative-fix-divergence risk per CLAUDE.md's
@@ -575,18 +596,19 @@ if [ "$CLASSIFY_STATUS" = "0" ]; then
       SUBJECT=$(GIT_CMD_LIB="$HOOK_DIR/lib/git-cmd.js" MSG="$MSG" node -e "
         const {resolveCommitSubject}=require(process.env.GIT_CMD_LIB);
         process.stdout.write(resolveCommitSubject(process.env.MSG));
-      " 2>/dev/null) || SUBJECT="${MSG%%$'\n'*}"
+      " 2>/dev/null) || SUBJECT=$(gsd_first_line "$MSG")
     else
-      # Pure parameter expansion, not `echo "$MSG" | head -1`: that pipeline
+      # Pure parameter expansion (in gsd_first_line), not
+      # `echo "$MSG" | head -1`: that pipeline
       # raced a SIGPIPE under `set -euo pipefail` whenever $MSG had a body
       # (the common case) — `head -1` can close its read end as soon as it
       # has the first line, and if `echo`'s write lands after that close,
       # `echo` dies with signal 13 (exit 141), which is NOT suppressed by
       # `set -e` and aborted the whole hook intermittently (observed in
-      # tests/hooks-opt-in.test.cjs's --fixup=HEAD "round 7" case). Zero
-      # subprocesses here means zero pipe/race surface. Equivalent to
+      # tests/hooks-opt-in.test.cjs's --fixup=HEAD "round 7" case). No pipe
+      # means no race surface. Equivalent to
       # `head -1` for single-line, multi-line, and trailing-newline input.
-      SUBJECT="${MSG%%$'\n'*}"
+      SUBJECT=$(gsd_first_line "$MSG")
     fi
     # Single source of truth for the accepted commit-type list (#3811): the
     # 10 built-ins plus whatever passed the safe-token filter above. Both the

@@ -61,7 +61,7 @@ import { platformReadSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import unusableInputMod = require('./unusable-input.cjs');
 const { UNUSABLE_REASON, warnUnusableInput } = unusableInputMod;
-import { tokenizeHeadings, stripTaggedBlocks, withSection, stripFencedCode, collectSection } from './markdown-sectionizer.cjs';
+import { tokenizeHeadings, stripTaggedBlocks, editOutsideTaggedBlocks, withSection, stripFencedCode, collectSection } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
 import { findTableWithColumns, isDelimiterRow, splitTableRow } from './markdown-table.cjs';
 import type { MarkdownTable } from './markdown-table.cjs';
@@ -89,6 +89,18 @@ function isClosedMilestoneHeading(headingText: string): boolean {
  */
 function stripShippedMilestones(content: string): string {
   return stripTaggedBlocks(content, 'details');
+}
+
+/**
+ * #5543: run `edit` over the ROADMAP with every shipped `<details>` block hidden
+ * and restored byte-for-byte afterwards. For writers whose active milestone
+ * could not be resolved: the first `### Phase N:` in document order must never
+ * be the one inside a shipped block. Layout-independent (the active phase may
+ * sit before or after a shipped block) and, unlike a "region after the last
+ * `</details>`" cut, not fooled by a `</details>` in a fence or inline code.
+ */
+function editOutsideShippedBlocks(content: string, edit: (outside: string) => string): string {
+  return editOutsideTaggedBlocks(content, 'details', edit);
 }
 
 /**
@@ -2403,6 +2415,7 @@ export = {
   getMilestonePhaseFilter,
   currentMilestoneRawRanges,
   withPhaseSection,
+  editOutsideShippedBlocks,
   computeMilestoneSectionEnd,
   locateMilestoneHeadings,
   listMilestoneHeadings,

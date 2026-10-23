@@ -117,7 +117,7 @@ GSD Core 是一个**元提示框架**，位于用户与 AI 编码 Agent（Claude
 - **Copilot：** 斜线命令（连字符形式，`/gsd-command-name`）
 - **Antigravity：** 技能
 
-**命令总数：** 请参阅 [`docs/INVENTORY.md`](INVENTORY.md#commands) 获取权威数量及完整列表。
+**命令总数：** 请参阅 [`docs/INVENTORY.md`](INVENTORY.md#命令) 获取权威数量及完整列表。
 
 #### 两阶段层级路由（v1.40，[#2792](https://github.com/open-gsd/gsd-core/issues/2792)）
 
@@ -139,7 +139,7 @@ GSD Core 是一个**元提示框架**，位于用户与 AI 编码 Agent（Claude
 - 状态更新模式
 - 错误处理与恢复
 
-**工作流总数：** 请参阅 [`docs/INVENTORY.md`](INVENTORY.md#workflows) 获取权威数量及完整列表。
+**工作流总数：** 请参阅 [`docs/INVENTORY.md`](INVENTORY.md#工作流) 获取权威数量及完整列表。
 
 #### 工作流的渐进式披露
 
@@ -168,7 +168,7 @@ GSD Core 是一个**元提示框架**，位于用户与 AI 编码 Agent（Claude
 
 ### 参考文档（`gsd-core/references/*.md`）
 
-工作流和 Agent 通过 `@-reference` 引用的共享知识文档（请参阅 [`docs/INVENTORY.md`](INVENTORY.md#references-41-shipped) 获取权威数量及完整列表）：
+工作流和 Agent 通过 `@-reference` 引用的共享知识文档（请参阅 [`docs/INVENTORY.md`](INVENTORY.md#参考资料) 获取权威数量及完整列表）：
 
 **核心参考：**
 
@@ -251,7 +251,7 @@ GSD Core 是一个**元提示框架**，位于用户与 AI 编码 Agent（Claude
 | `gsd-validate-commit.sh` | `PreToolUse` | 用于规范提交格式执行的提交验证 |
 | `gsd-phase-boundary.sh` | `PostToolUse` | 工作流转换的阶段边界检测 |
 
-请参阅 [`docs/INVENTORY.md`](INVENTORY.md#hooks-11-shipped) 获取权威的 11 个 hook 列表。
+请参阅 [`docs/INVENTORY.md`](INVENTORY.md#钩子) 获取权威的 11 个 hook 列表。
 
 ### 命令路由中枢（`gsd-core/bin/lib/command-routing-hub.cjs`）
 
@@ -259,7 +259,7 @@ CJS 命令族路由器通过 `CommandRoutingHub` 进行调度。中枢拥有不�
 
 ### CLI 工具（`gsd-core/bin/`）
 
-Node.js CLI 工具（`gsd-tools.cjs`），其领域模块分布在 `gsd-core/bin/lib/` 中（请参阅 [`docs/INVENTORY.md`](INVENTORY.md#cli-modules-33-shipped) 获取权威列表）：
+Node.js CLI 工具（`gsd-tools.cjs`），其领域模块分布在 `gsd-core/bin/lib/` 中（请参阅 [`docs/INVENTORY.md`](INVENTORY.md#cli-模块) 获取权威列表）：
 
 
 | 模块                   | 职责                                                                                                |
@@ -314,7 +314,7 @@ Orchestrator (workflow .md)
 
 ### 主要 Agent 派生类别
 
-21 个主要 Agent 的概念派生模式分类。完整的 31 个 Agent 权威列表（包括 10 个高级/专用 Agent，如 `gsd-pattern-mapper`、`gsd-code-reviewer`、`gsd-code-fixer`、`gsd-ai-researcher`、`gsd-domain-researcher`、`gsd-eval-planner`、`gsd-eval-auditor`、`gsd-framework-selector`、`gsd-debug-session-manager`、`gsd-intel-updater`），请参阅 [`docs/INVENTORY.md`](INVENTORY.md#agents-31-shipped)。
+主要 Agent 的概念派生模式分类。完整的 Agent 权威列表（包括高级/专用 Agent，如 `gsd-pattern-mapper`、`gsd-code-reviewer`、`gsd-code-fixer`、`gsd-ai-researcher`、`gsd-domain-researcher`、`gsd-eval-planner`、`gsd-eval-auditor`、`gsd-framework-selector`、`gsd-debug-session-manager`、`gsd-intel-updater`），请参阅 [`docs/INVENTORY.md`](INVENTORY.md#代理)。
 
 
 | 类别             | Agent                                                                                   | 并行性                                                                                    |

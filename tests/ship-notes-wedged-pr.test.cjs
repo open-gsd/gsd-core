@@ -149,20 +149,36 @@ describe('#2783 ship-note recovery decisions use current GitHub state', { skip: 
     );
   });
 
-  test('does not recover when review requirements are the BLOCKED reason', () => {
+  // #4993: a pending review and an empty check set on the head are independent
+  // blockers — approving does not unblock a head that carries no checks — so a
+  // review state must never suppress the recovery.
+  test('recovers a skip-token wedge even while a review is the other blocker', () => {
     for (const review of ['REVIEW_REQUIRED', 'CHANGES_REQUESTED']) {
       const result = runTrackShipping([
         { head: 'current-head', status: 'BLOCKED', checks: 0, review },
       ]);
       assert.strictEqual(
         result.gitCalls.filter(call => call === 'commit').length,
-        0,
-        `${review} must not create an empty CI-recovery commit`,
+        1,
+        `${review} must still create exactly one CI-recovery commit (#4993)`,
       );
     }
   });
 
-  test('still recovers a current BLOCKED head with zero checks and no review gate', () => {
+  test('does not recover when the head already has checks, whatever the review state (#4993)', () => {
+    for (const review of ['REVIEW_REQUIRED', 'CHANGES_REQUESTED', 'APPROVED']) {
+      const result = runTrackShipping([
+        { head: 'current-head', status: 'BLOCKED', checks: 3, review },
+      ]);
+      assert.strictEqual(
+        result.gitCalls.filter(call => call === 'commit').length,
+        0,
+        `${review} with checks on the head is not the skip-token wedge`,
+      );
+    }
+  });
+
+  test('still recovers a current BLOCKED head with zero checks and an approved review', () => {
     const result = runTrackShipping([
       { head: 'current-head', status: 'BLOCKED', checks: 0, review: 'APPROVED' },
     ]);

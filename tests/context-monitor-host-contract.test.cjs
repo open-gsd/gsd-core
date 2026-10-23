@@ -36,7 +36,7 @@ function install(runtime, { home, configDir }) {
     {
       encoding: 'utf-8',
       timeout: INSTALL_TIMEOUT_MS,
-      env: { ...process.env, ...TEST_ENV_BASE, HOME: home, USERPROFILE: home },
+      env: { ...process.env, ...TEST_ENV_BASE, HOME: home, USERPROFILE: home, GSD_HOME: home },
     },
   );
   assert.equal(res.status, 0, `${runtime} install failed:\n${res.stdout}\n${res.stderr}`);

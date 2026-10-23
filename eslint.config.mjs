@@ -173,6 +173,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/tdd-red-evidence.cjs',
       // #4692: tsc-generated — lint the src/report-parser.cts source.
       'gsd-core/bin/lib/report-parser.cjs',
+      'gsd-core/bin/lib/tdd-test-files.cjs',
       // #4984: tsc-generated — lint the src/pr-branch-patterns.cts source.
       'gsd-core/bin/lib/pr-branch-patterns.cjs',
       // #4984: tsc-generated — lint the src/undo-commit-selection.cts source.
@@ -376,6 +377,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/check-command-router.cjs',
       'gsd-core/bin/lib/frontmatter.cjs',
       'gsd-core/bin/lib/frontmatter-fence.cjs',
+      'gsd-core/bin/lib/markdown-line-diff.cjs',
       'gsd-core/bin/lib/frontmatter-splice.cjs',
       'gsd-core/bin/lib/learnings.cjs',
       'gsd-core/bin/lib/gsd2-import.cjs',

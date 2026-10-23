@@ -117,7 +117,7 @@ GSD Core는 사용자와 AI 코딩 에이전트(Claude Code, Kimi CLI, OpenCode,
 - **Copilot:** 슬래시 명령어 (하이픈 형식, `/gsd-command-name`)
 - **Antigravity:** Skills
 
-**전체 명령어 수:** 권위 있는 개수와 전체 목록은 [`docs/INVENTORY.md`](INVENTORY.md#commands)를 참조하라.
+**전체 명령어 수:** 권위 있는 개수와 전체 목록은 [`docs/INVENTORY.md`](INVENTORY.md#명령어)를 참조하라.
 
 #### 2단계 계층적 라우팅 (v1.40, [#2792](https://github.com/open-gsd/gsd-core/issues/2792))
 
@@ -139,7 +139,7 @@ GSD Core는 사용자와 AI 코딩 에이전트(Claude Code, Kimi CLI, OpenCode,
 - 상태 업데이트 패턴
 - 오류 처리 및 복구
 
-**전체 워크플로우 수:** 권위 있는 개수와 전체 목록은 [`docs/INVENTORY.md`](INVENTORY.md#workflows)를 참조하라.
+**전체 워크플로우 수:** 권위 있는 개수와 전체 목록은 [`docs/INVENTORY.md`](INVENTORY.md#워크플로우)를 참조하라.
 
 #### 워크플로우를 위한 점진적 공개
 
@@ -168,7 +168,7 @@ GSD Core는 사용자와 AI 코딩 에이전트(Claude Code, Kimi CLI, OpenCode,
 
 ### References (`gsd-core/references/*.md`)
 
-워크플로우와 에이전트가 `@-reference`하는 공유 지식 문서([`docs/INVENTORY.md`](INVENTORY.md#references-41-shipped)에서 권위 있는 개수와 전체 목록 참조):
+워크플로우와 에이전트가 `@-reference`하는 공유 지식 문서([`docs/INVENTORY.md`](INVENTORY.md#레퍼런스)에서 권위 있는 개수와 전체 목록 참조):
 
 **핵심 레퍼런스:**
 
@@ -251,7 +251,7 @@ GSD 워크플로우에 thinking 클래스 모델(o3, o4-mini, Gemini 2.5 Pro)을
 | `gsd-validate-commit.sh` | `PreToolUse` | 컨벤셔널 커밋 시행을 위한 커밋 검증 |
 | `gsd-phase-boundary.sh` | `PostToolUse` | 워크플로우 전환을 위한 단계 경계 감지 |
 
-권위 있는 11개 훅 목록은 [`docs/INVENTORY.md`](INVENTORY.md#hooks-11-shipped)를 참조하라.
+권위 있는 11개 훅 목록은 [`docs/INVENTORY.md`](INVENTORY.md#훅)를 참조하라.
 
 ### Command Routing Hub (`gsd-core/bin/lib/command-routing-hub.cjs`)
 
@@ -259,7 +259,7 @@ CJS 명령어 패밀리 라우터는 `CommandRoutingHub`를 통해 디스패치�
 
 ### CLI Tools (`gsd-core/bin/`)
 
-`gsd-core/bin/lib/`에 걸쳐 분할된 도메인 모듈을 가진 Node.js CLI 유틸리티(`gsd-tools.cjs`)(권위 있는 목록은 [`docs/INVENTORY.md`](INVENTORY.md#cli-modules-33-shipped) 참조):
+`gsd-core/bin/lib/`에 걸쳐 분할된 도메인 모듈을 가진 Node.js CLI 유틸리티(`gsd-tools.cjs`)(권위 있는 목록은 [`docs/INVENTORY.md`](INVENTORY.md#cli-모듈) 참조):
 
 
 | 모듈                 | 책임                                                                                      |
@@ -314,7 +314,7 @@ CJS 명령어 패밀리 라우터는 `CommandRoutingHub`를 통해 디스패치�
 
 ### 주요 에이전트 생성 범주
 
-21개 주요 에이전트의 개념적 생성 패턴 분류. 권위 있는 31개 에이전트 목록(10개 고급/전문화 에이전트 포함: `gsd-pattern-mapper`, `gsd-code-reviewer`, `gsd-code-fixer`, `gsd-ai-researcher`, `gsd-domain-researcher`, `gsd-eval-planner`, `gsd-eval-auditor`, `gsd-framework-selector`, `gsd-debug-session-manager`, `gsd-intel-updater`)은 [`docs/INVENTORY.md`](INVENTORY.md#agents-31-shipped)를 참조하라.
+주요 에이전트의 개념적 생성 패턴 분류. 권위 있는 에이전트 목록(고급/전문화 에이전트 포함: `gsd-pattern-mapper`, `gsd-code-reviewer`, `gsd-code-fixer`, `gsd-ai-researcher`, `gsd-domain-researcher`, `gsd-eval-planner`, `gsd-eval-auditor`, `gsd-framework-selector`, `gsd-debug-session-manager`, `gsd-intel-updater`)은 [`docs/INVENTORY.md`](INVENTORY.md#에이전트)를 참조하라.
 
 
 | 범주         | 에이전트                                                                                  | 병렬성                                                                               |

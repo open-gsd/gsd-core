@@ -28,7 +28,7 @@ type Scope = planningScopeMod.Scope;
 import roadmapParserModule = require('./roadmap-parser.cjs');
 const { stripShippedMilestones, extractCurrentMilestone, extractCurrentMilestoneScoped, replaceInCurrentMilestone, listMilestoneHeadings, scanMilestonePhaseIds, collectTablePhaseRows, hasPhaseListingTableHeader } = roadmapParserModule;
 import { tokenizeHeadings } from './markdown-sectionizer.cjs';
-import { escapeCell, updateTableCell } from './markdown-table.cjs';
+import { escapeCell, findTableWithColumns, updateTableCell } from './markdown-table.cjs';
 import { clampPercent } from './phase-lifecycle.cjs';
 import { platformWriteSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -1250,6 +1250,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
   // refusal below declines with the analyzer's own `missing_phase_details`
   // vocabulary and leaves ROADMAP.md byte-identical.
   let missingPhaseDetails = false;
+  const warnings: string[] = [];
   withPlanningLock(cwd, () => {
     // #3957 (B9.4): captured BEFORE any transform runs, so the write/report
     // decision below reflects whether the transforms actually changed
@@ -1285,16 +1286,29 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // Heading target: the exact grammar `planSectionPattern` /
     // `insertRowsPatternA|B` anchor on (an ATX phase heading for this phase).
     const headingTargetFound = new RegExp(phaseHeadingAnchor, 'i').test(gateActiveRegion);
+    // #5545: the phase-checklist bullet grammar, defined ONCE for the writer
+    // (an unchecked bullet to tick) and the gate probe (`anyState`).
+    // Line-anchored, with only an optional `**` before the label and horizontal
+    // whitespace, so a bullet that merely MENTIONS "Phase N" is not the phase's
+    // bullet and no `\s` can run past the line end (which used to land the
+    // `(completed …)` annotation on the NEXT line). A decorated bullet (emoji,
+    // blockquote, link) is deliberately NOT the phase's bullet either — the
+    // same narrowing #4965 made for `roadmap analyze`'s checklist reader.
+    // The lookahead only PEEKS (its `\s` may see a newline but consumes none):
+    // the label must be followed by `:`, whitespace or the end of the line, so
+    // `Phase 2.1` / `Phase 20` are not `Phase 2`. Capture group 1 is the opening
+    // `- [`, group 2 the rest of the line after the box.
+    const phaseChecklistBullet = (anyState: boolean): RegExp => new RegExp(
+      `^([ \\t]*-[ \\t]*\\[)${anyState ? '[ x]' : ' '}(\\][ \\t]*(?:\\*\\*)?[ \\t]*Phase[ \\t]+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s]|$)[^\\n]*)`,
+      'im',
+    );
     // Checklist target: when the phase is complete, its own checklist bullet
     // (`- [ ] **Phase N: …**`) IS a writable phase row — the completion
     // checkbox stamp below updates it. Same grammar as that writer, widened
     // one notch to `[ x]` so an ALREADY-checked bullet still counts as a
     // found target: an idempotent re-run then takes the honest
     // "no changes were needed" decline instead of this refusal.
-    const checklistTargetFound = isComplete && new RegExp(
-      `-\\s*\\[[ x]\\]\\s*.*Phase\\s+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
-      'i',
-    ).test(gateActiveRegion);
+    const checklistTargetFound = isComplete && phaseChecklistBullet(true).test(gateActiveRegion);
     // Table-row target: set by the row-scoped cell updates below.
     let tableRowFound = false;
 
@@ -1364,6 +1378,17 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       return text;
     });
 
+    // #4947: a word-prefixed Phase cell (`Phase 68`) is deliberately not a
+    // writable table target (#4247 — the read side ignores it too), but when the
+    // phase's heading section is still written the command reports
+    // `updated: true` and the unwritten Status cell looked like a silent bug.
+    // The row stays byte-identical; the output now says so.
+    const wordPrefixedCellRe = new RegExp(`^Phase\\s+${phasePattern}\\.?(?:\\s|$)`, 'i');
+    const progressTable = tableRowFound ? null : findTableWithColumns(gateActiveRegion, ['Phase', 'Status']);
+    if (progressTable && progressTable.rows.some((row) => wordPrefixedCellRe.test((row['Phase'] ?? '').trim()))) {
+      warnings.push(`Progress table row for phase ${formatDiagnosticToken(String(phaseNum))} was not updated: its Phase cell is word-prefixed ("Phase N"), and only a bare phase number (N or N.) is recognized. Edit that row by hand or rewrite the cell as the bare number.`);
+    }
+
     // Update plan count in phase detail section.
     // Three recognised forms (all tolerated; canonical template uses the first):
     //   `**Plans**: N plans`  — bold word + outer colon (gsd-core/templates/roadmap.md)
@@ -1424,6 +1449,13 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // wording, so it correctly falls through to arm 3 untouched. Kept as a
     // caller-side classifier (NOT seam grammar) reused below against the
     // `boldField` node's own parsed `value`.
+    // #4947: a value that is exactly `TBD` is the planner's own "no plans yet"
+    // marker, not an operator annotation — once plans exist it contradicts the
+    // checklist this verb inserts right under it. `TBD — note` keeps its note
+    // (row 5): on the bold path the note is the node's trailing span, which the
+    // caller checks is empty; on the plain path the note is part of the value,
+    // so the whole-value comparison already excludes it.
+    const isBareTbd = (value: string): boolean => value.trim() === 'TBD';
     const isTemplatePlaceholder = (value: string): boolean => {
       const trimmed = value.trim();
       return /^\[\s*Number of plans\b[\s\S]*\]$/i.test(trimmed);
@@ -1448,6 +1480,34 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     const bareCountPrefixLength = (value: string): number => {
       const m = value.match(/^\d+\s+plans?/i);
       return m ? m[0].length : -1;
+    };
+    // #4947: the pending-plan clause a human or planner glues after the count
+    // (`; 2 gap-closure plans pending (48-18, 48-19)`) is DERIVED from the same
+    // plan/summary facts this verb already computes, so a completed plan left
+    // listed as pending contradicts the count the verb just wrote. The verb
+    // owns that one clause: ids that now have a SUMMARY.md are removed, the
+    // number is recounted, and an emptied clause is dropped. Everything else in
+    // the tail (`in 11 waves`, free prose) stays the operator's — a wave total
+    // does not change when a plan completes. A clause whose ids are not all
+    // plan ids (`(see backlog)`) is not provably derived, so it is left alone.
+    const summarizedPlanIds = new Set(
+      phaseInfo!.summaries
+        .map((summaryFile) => summaryFile.replace('-SUMMARY.md', '').replace('SUMMARY.md', ''))
+        .filter((id) => id !== ''),
+    );
+    const pendingClauseRe = /;[ \t]*(\d+)[ \t]+((?:[\w-]+[ \t]+)*?)plans?[ \t]+pending[ \t]*\(([^()\r\n]*)\)/i;
+    const planIdShape = /^\d+(?:\.\d+)?-\d+(?:\.\d+)?$/;
+    const reconcilePendingClause = (tail: string): string => {
+      const m = pendingClauseRe.exec(tail);
+      if (!m) return tail;
+      const ids = m[3].split(',').map((id) => id.trim());
+      if (ids.length === 0 || !ids.every((id) => planIdShape.test(id))) return tail;
+      const stillPending = ids.filter((id) => !summarizedPlanIds.has(id));
+      if (stillPending.length === ids.length) return tail;
+      const replacement = stillPending.length === 0
+        ? ''
+        : `; ${stillPending.length} ${m[2]}plan${stillPending.length === 1 ? '' : 's'} pending (${stillPending.join(', ')})`;
+      return tail.slice(0, m.index) + replacement + tail.slice(m.index + m[0].length);
     };
     roadmapContent = replaceInCurrentMilestone(roadmapContent, planSectionPattern, (sectionText: string): string => {
       const parsed = parsePlanningDoc(sectionText, 'ROADMAP.md');
@@ -1479,12 +1539,12 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
         const plainFractionLen = fractionCountPrefixLength(plainValue);
         const plainBareLen = bareCountPrefixLength(plainValue);
         const plainCountPrefixLen = plainFractionLen >= 0 ? plainFractionLen : plainBareLen;
-        if (plainCountPrefixLen < 0 && !isTemplatePlaceholder(plainValue)) {
+        if (plainCountPrefixLen < 0 && !isTemplatePlaceholder(plainValue) && !isBareTbd(plainValue)) {
           // Arm 3: freeform prose, TBD, a bracketed human annotation, or an
           // empty value — leave the section exactly as it was.
           return sectionText;
         }
-        const plainSuffix = plainCountPrefixLen >= 0 ? plainValue.slice(plainCountPrefixLen) : '';
+        const plainSuffix = plainCountPrefixLen >= 0 ? reconcilePendingClause(plainValue.slice(plainCountPrefixLen)) : '';
         const newPlainLine = `${indent}Plans:${spacing}${planCountText}${plainSuffix}`;
         const start = plainMatch.index ?? sectionText.indexOf(whole);
         return sectionText.slice(0, start) + newPlainLine + sectionText.slice(start + whole.length);
@@ -1497,7 +1557,11 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       const fractionPrefixLen = fractionCountPrefixLength(currentValue);
       const barePrefixLen = bareCountPrefixLength(currentValue);
       const countPrefixLen = fractionPrefixLen >= 0 ? fractionPrefixLen : barePrefixLen;
-      if (countPrefixLen < 0 && !isTemplatePlaceholder(currentValue)) {
+      const fieldNode = parsed.value.nodes.find((n) => n.id === fieldId);
+      const trailingText = fieldNode && fieldNode.kind === 'boldField'
+        ? parsed.value.source.slice(fieldNode.trailingSpan.start, fieldNode.trailingSpan.end)
+        : '';
+      if (countPrefixLen < 0 && !isTemplatePlaceholder(currentValue) && !(isBareTbd(currentValue) && trailingText.trim() === '')) {
         // Arm 3: freeform prose, TBD, a bracketed human annotation, or an
         // empty value — leave the section exactly as it was.
         return sectionText;
@@ -1508,7 +1572,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       // `setFieldValue`'s valueSpan/trailingSpan split additionally preserves
       // any EM-DASH-separated trailing annotation (#2853) automatically — no
       // separate "preserve trailing" branch needed for that shape.
-      const suffix = countPrefixLen >= 0 ? currentValue.slice(countPrefixLen) : '';
+      const suffix = countPrefixLen >= 0 ? reconcilePendingClause(currentValue.slice(countPrefixLen)) : '';
       const newValueToWrite = planCountText + suffix;
       const staged = setFieldValue(parsed.value, fieldId, newValueToWrite);
       if (!staged.ok) {
@@ -1526,11 +1590,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
 
     // If complete: check checkbox
     if (isComplete) {
-      const checkboxPattern = new RegExp(
-        `(-\\s*\\[)[ ](\\]\\s*.*Phase\\s+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
-        'i'
-      );
-      roadmapContent = replaceInCurrentMilestone(roadmapContent, checkboxPattern, `$1x$2 (completed ${today})`);
+      roadmapContent = replaceInCurrentMilestone(roadmapContent, phaseChecklistBullet(false), `$1x$2 (completed ${today})`);
     }
 
     // Mark completed plan checkboxes (e.g. "- [ ] 50-01-PLAN.md", "- [ ] 50-01:", or "- [ ] **50-01**")
@@ -1538,19 +1598,18 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // superseded-filtered set (#2349 via scanPhasePlans) while `summaries` is
     // the raw *-SUMMARY.md listing — a superseded plan can carry a SUMMARY
     // (e.g. `status: halted`), and ticking it read as "executed" right under a
-    // count line that excludes it. The prefix match mirrors the checkbox regex
-    // below (rows match by planId prefix, which the PLAN-01.md naming shape
-    // relies on), so non-superseded plans tick exactly as before.
+    // count line that excludes it. #5542: a summary belongs to a live plan only
+    // by the SAME pairing rule the counts use (`summaryCandidates` via
+    // `countMatchedSummaries`), never by id prefix — a leftover `47-1` summary
+    // must not survive because a live `47-10` plan starts with `47-1`. Rows
+    // match the id up to a boundary (`planRowPattern`), so `47-1` never ticks
+    // `47-10-PLAN.md`.
     const tickableSummaries = phaseInfo!.summaries
       .map((summaryFile) => ({ summaryFile, planId: summaryFile.replace('-SUMMARY.md', '').replace('SUMMARY.md', '') }))
-      .filter(({ planId }) => planId !== '' && phaseInfo!.plans.some((planFile) => planFile.startsWith(planId)));
+      .filter(({ summaryFile, planId }) => planId !== ''
+        && coreUtils.summaryPairsWithAnyPlan(phaseInfo!.plans, summaryFile));
     for (const { planId } of tickableSummaries) {
-      const planEscaped = escapeRegex(planId);
-      const planCheckboxPattern = new RegExp(
-        `(-\\s*\\[) (\\]\\s*(?:\\*\\*)?${planEscaped}(?:\\*\\*)?)`,
-        'i'
-      );
-      roadmapContent = roadmapContent.replace(planCheckboxPattern, '$1x$2');
+      roadmapContent = roadmapContent.replace(coreUtils.planRowPattern(planId), '$1x$2');
     }
 
     // Compute the active (post-</details>) region offset ONCE.  Both the
@@ -1576,25 +1635,18 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     //
     // #4786: a plan row may be written WITH the `-PLAN.md` suffix (canonical
     // template form) or WITHOUT it (hand-written form: `- [x] 659-01 — desc`).
-    // The tick loop above keys on the bare planId stem with a PREFIX match
-    // (pre-existing, out of scope here), while detection required the full
-    // `-PLAN.md` filename — so every suffix-less row was counted missing and
-    // the insertion fired BESIDE the recognized list — 32 checkbox lines for
-    // 16 plans, exit 0. The stem arm below accepts the bare id only up to a
-    // boundary (whitespace / `:` / dashes / `-PLAN.md` / `.md` / `**` / `)`),
-    // so `5-011` never satisfies `5-01`. Deliberately NOT in the boundary set:
-    // `.` — a dotted sub-id (`5-01.5`) is a real distinct plan, and counting
-    // its row as 5-01's presence would suppress a genuine insertion.
+    // The tick loop above keys on the bare planId stem, while detection required
+    // the full `-PLAN.md` filename — so every suffix-less row was counted
+    // missing and the insertion fired BESIDE the recognized list — 32 checkbox
+    // lines for 16 plans, exit 0. The stem arm below accepts the bare id only
+    // up to the SAME boundary the tick loop uses (`planRowPattern`, #5542), so
+    // `5-011` never satisfies `5-01` and a dotted sub-id (`5-01.5`) is a real
+    // distinct plan whose row does not count as 5-01's presence.
     const missingPlans = phaseInfo!.plans.filter((planFile) => {
       const planEscaped = escapeRegex(planFile);
       if (new RegExp(`-\\s*\\[[x ]\\]\\s*(?:\\*\\*)?${planEscaped}`, 'i').test(activeRegion)) return false;
       const stem = planFile.replace(/-PLAN\.md$/i, '');
-      const stemEscaped = escapeRegex(stem);
-      const stemPresent = new RegExp(
-        `-\\s*\\[[x ]\\]\\s*(?:\\*\\*)?${stemEscaped}(?=$|\\s|:|—|–|-PLAN\\.md|\\.md|\\*\\*|\\))`,
-        'i'
-      ).test(activeRegion);
-      return !stemPresent;
+      return !coreUtils.planRowPattern(stem, { anyState: true }).test(activeRegion);
     });
 
     if (missingPlans.length > 0) {
@@ -1648,12 +1700,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
         // (#4741: same superseded-filtered tick list as the loop above — a
         // pre-existing superseded row must stay unchecked on this path too).
         for (const { planId } of tickableSummaries) {
-          const planEscaped = escapeRegex(planId);
-          const planCheckboxPattern = new RegExp(
-            `(-\\s*\\[) (\\]\\s*(?:\\*\\*)?${planEscaped}(?:\\*\\*)?)`,
-            'i'
-          );
-          roadmapContent = roadmapContent.replace(planCheckboxPattern, '$1x$2');
+          roadmapContent = roadmapContent.replace(coreUtils.planRowPattern(planId), '$1x$2');
         }
       }
     }
@@ -1692,7 +1739,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     verification_stale_check_indeterminate: verificationStaleCheckIndeterminate,
   };
   if (updated) {
-    output({ updated: true, ...computed }, raw, `${summaryCount}/${planCount} ${status}`);
+    output(warnings.length > 0 ? { updated: true, ...computed, warnings } : { updated: true, ...computed }, raw, `${summaryCount}/${planCount} ${status}`);
   } else if (missingPhaseDetails) {
     // #4247: honest refusal — the reason names the real condition (the
     // analyzer's `missing_phase_details` vocabulary), never "already

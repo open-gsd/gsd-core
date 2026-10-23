@@ -24,7 +24,7 @@ const AUDIT_FINDING = Object.freeze({
 // Match `${GSD_HOME}` or `${GSD_HOME:-...}` followed by a /-rooted path
 // ending in .cjs/.js/.sh. The path is captured verbatim (relative to
 // the install root).
-const REF_RE = /\$\{GSD_HOME(?::-[^}]*)?\}\/([A-Za-z0-9_./-]+\.(?:cjs|js|sh))/g;
+const REF_RE = /\$\{GSD_HOME(?::-[^}]*)?\}\/([A-Za-z0-9_./-]+\.(?:cjs|js|sh)(?![A-Za-z0-9_]))/g;
 
 function listWorkflowFiles(dir) {
   if (!fs.existsSync(dir)) return [];

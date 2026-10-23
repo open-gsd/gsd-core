@@ -25,7 +25,7 @@ Before fixing code, discover project context:
 
 **Project skills:** Check `.claude/skills/` or `.agents/skills/` directory if either exists:
 
-**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md
+**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md (agent type: `gsd-code-fixer`)
 1. List available skills (subdirectories)
 2. Read `SKILL.md` for each skill (lightweight index ~130 lines)
 3. Load specific `rules/*.md` files as needed during implementation
@@ -110,13 +110,14 @@ Run syntax/parse check appropriate to file type:
 | Language | Check Command |
 |----------|--------------|
 | JavaScript | `node -c {file}` (syntax check) |
-| TypeScript | `npx tsc --noEmit {file}` (if tsconfig.json exists in project) |
+| TypeScript | Project-aware check only, output filtered to `{file}`: the project's own typecheck (`npm run typecheck` / `tsc -b`) if it exists, else `npx tsc --noEmit -p <nearest tsconfig*.json>` whose `--listFilesOnly` output lists `{file}`; no config includes `{file}` → Tier 1 only. Never pass `{file}` to `tsc` positionally. |
 | Python | `python -c "import ast; ast.parse(open('{file}').read())"` |
 | JSON | `node -e "JSON.parse(require('fs').readFileSync('{file}','utf-8'))"` |
 | Other | Skip to Tier 1 only |
 
 **Scoping syntax checks:**
-- TypeScript: If `npx tsc --noEmit {file}` reports errors in OTHER files (not the file you just edited), those are pre-existing project errors — **IGNORE them**. Only fail if errors reference the specific file you modified.
+- TypeScript: Run the project-aware check from the table above. If it reports errors in OTHER files (not the file you just edited), those are pre-existing project errors — **IGNORE them**. Only fail if errors reference the specific file you modified. A solution-style root `tsconfig.json` (`"files": []` plus `references`) checks no source files and exits 0, so it is NOT a passing check: use a referenced config whose `--listFilesOnly` output includes `{file}`, or fall back to Tier 1.
+- TypeScript procedure: (1) Look for a `typecheck` script in the nearest `package.json` and prefer it. (2) Otherwise start at `{file}`'s directory and walk up to the nearest `tsconfig.json`; if it is solution-style, take each config it references (e.g. `tsconfig.app.json`, `tsconfig.node.json`) and try them in turn. (3) Run from the config's own directory with `npx tsc --noEmit -p <config> --listFilesOnly` and keep the first config whose listing includes `{file}`; if none does, fall back to Tier 1. (4) Run `npx tsc --noEmit -p <config>` (use `-p`, never `-b`, so no build artifacts or `.tsbuildinfo` files are written) and keep only output lines that start with `{file}`'s path as `tsc` prints it relative to that directory. (5) Roll back only for errors on lines you changed; errors you cannot attribute to your edit are pre-existing — fall back to Tier 1 and proceed.
 - JavaScript: `node -c {file}` is reliable for plain .js but NOT for JSX, TypeScript, or ESM with bare specifiers. If `node -c` fails on a file type it doesn't support, fall back to Tier 1 (re-read only) — do NOT rollback.
 - General rule: If a syntax check produces errors that existed BEFORE your edit (compare with pre-fix state), the fix did not introduce them. Proceed to commit.
 
@@ -701,7 +702,7 @@ main checkout after teardown).
 
 **DO verify each fix** using 3-tier verification strategy:
 - Minimum: re-read file, confirm fix present
-- Preferred: syntax check (node -c, tsc --noEmit, python ast.parse, etc.)
+- Preferred: syntax check (node -c, project-aware tsc -p, python ast.parse, etc.)
 - Fallback: accept minimum if no syntax checker available
 
 **DO skip findings that cannot be applied cleanly** — do not force broken fixes. Mark as skipped with clear reason.

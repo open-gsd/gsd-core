@@ -91,6 +91,11 @@ const SENTINEL_RELATIVE_PATH = path.join('.gsd', 'dispatch-isolation-sentinel.js
 // later, unrelated phase.
 const SENTINEL_STALE_MS = 10 * 60 * 1000; // 10 minutes
 
+// #5479: the longest a recorded sequential degrade keeps governing its own phase after the trust
+// window (see agedNoneGovernsDispatch). A single executor run is minutes to a couple of hours; a
+// day is a generous bound that still ends a stale or forged record's authority.
+const AGED_NONE_MAX_MS = 24 * 60 * 60 * 1000;
+
 function sentinelPath(cwd) {
   return path.join(cwd, SENTINEL_RELATIVE_PATH);
 }
@@ -281,6 +286,43 @@ function sentinelAppliesToDispatch(sentinel, dispatchIds) {
 }
 
 /**
+ * #5479: does an AGED recorded sequential degrade still govern THIS dispatch?
+ *
+ * The trust window (`SENTINEL_STALE_MS`) exists so a leftover sentinel cannot authorize an unisolated
+ * executor for a LATER, unrelated phase (#3045 F2). It also made the guard forget a legitimate
+ * degrade (the #683/#3060 base-check, the project opt-out) the moment the previous executor ran
+ * longer than the window: the next flag-less dispatch of the SAME phase was denied because the
+ * registry fallback answers "this host CAN isolate" and cannot see the shell-side degrade.
+ *
+ * True only when ALL of these hold, so the aged path can only ever loosen toward `none` for the exact
+ * phase the dispatch itself names:
+ *   - the sentinel is present, well-formed, and records `isolation: 'none'` (an aged
+ *     `harness-worktree`/`orchestrator-worktree` record authorizes nothing);
+ *   - its `written_at` is not in the future (a forged or clock-skewed record is never trusted);
+ *   - it carries a phase, the dispatch names a phase, and they are equal (a dispatch whose phase
+ *     cannot be established is "cannot compare", which keeps today's fallback, never an allow).
+ * A plan-scoped record speaks only for its own plan (or a plan-less dispatch): a `none` recorded for
+ * a submodule-degraded plan A must not authorize a genuinely isolated plan B of the same phase. The
+ * phase-level degrade (the base-check, the project opt-out) is the record with no plan.
+ *   - it is at most `AGED_NONE_MAX_MS` old: a static record, forged or left by a long-finished run,
+ *     does not govern indefinitely. The normal flow re-records at every phase start and plan gate,
+ *     so a live phase is always far younger.
+ * A fresh sentinel is handled by the existing path and never reaches here.
+ *
+ * `clock` is the injectable `{ now(): number }` seam `readSentinel` uses.
+ */
+function agedNoneGovernsDispatch(sentinel, dispatchIds, { clock = Date } = {}) {
+  if (!sentinel || sentinel.present !== true || sentinel.malformed) return false;
+  if (sentinel.isolation !== 'none') return false;
+  if (typeof sentinel.writtenAt !== 'number') return false;
+  const age = clock.now() - sentinel.writtenAt;
+  if (age < -5000 || age > AGED_NONE_MAX_MS) return false;
+  if (!sentinel.phase || !dispatchIds || !dispatchIds.phase) return false;
+  if (sentinel.plan && dispatchIds.plan && sentinel.plan !== dispatchIds.plan) return false;
+  return sentinel.phase === dispatchIds.phase;
+}
+
+/**
  * #4594 F3: build the structured "a fresh sentinel was present but did not
  * apply to this dispatch" descriptor, mirroring the exact comparison
  * `sentinelAppliesToDispatch` performs. Returns `null` when the sentinel is
@@ -307,10 +349,12 @@ module.exports = {
   VALID_ISOLATION,
   SENTINEL_RELATIVE_PATH,
   SENTINEL_STALE_MS,
+  AGED_NONE_MAX_MS,
   sentinelPath,
   resolveSentinelRoot,
   readSentinel,
   extractDispatchIdentifiers,
   sentinelAppliesToDispatch,
+  agedNoneGovernsDispatch,
   buildSentinelDiscard,
 };

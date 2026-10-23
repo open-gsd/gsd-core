@@ -38,7 +38,7 @@ Read `./CLAUDE.md` if present — follow project guidelines, security requiremen
 
 **Project skills:** check `.claude/skills/` or `.agents/skills/`: list skill subdirectories, read each `SKILL.md` (lightweight index ~130 lines), load specific `rules/*.md` as needed. Do NOT load full `AGENTS.md` files (100KB+ context cost). Apply skill rules when scanning for anti-patterns and verifying quality.
 
-**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md
+**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md (agent type: `gsd-code-reviewer`)
 </project_context>
 
 <review_scope>

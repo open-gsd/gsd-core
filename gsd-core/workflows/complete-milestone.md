@@ -1,6 +1,6 @@
 <purpose>
 
-Mark a shipped version (v1.0, v1.1, v2.0) as complete. Creates historical record in MILESTONES.md, performs full PROJECT.md evolution review, reorganizes ROADMAP.md with milestone groupings, and tags the release in git.
+Mark a shipped version (v1.0, v1.1, v2.0) as complete. Creates historical record in MILESTONES.md, performs the full PROJECT.md evolution review (flat mode only; skipped under `--ws`, because PROJECT.md is shared across workstreams), reorganizes ROADMAP.md with milestone groupings, and tags the release in git.
 
 </purpose>
 
@@ -22,7 +22,7 @@ When a milestone completes:
 2. Archive requirements to `.planning/milestones/v[X.Y]-REQUIREMENTS.md`
 3. Update ROADMAP.md — overwrite in place with milestone grouping (preserve Backlog section)
 4. Safety commit archive files + updated ROADMAP.md, then `git rm REQUIREMENTS.md` (fresh for next milestone)
-5. Perform full PROJECT.md evolution review
+5. Perform full PROJECT.md evolution review (flat mode only — skipped under an active workstream, #5195)
 6. Offer to create next milestone inline
 7. Archive UI artifacts (`*-UI-SPEC.md`, `*-UI-REVIEW.md`) alongside other phase documents
 8. Clean up `.planning/ui-reviews/` screenshot files (binary assets, never archived)
@@ -77,7 +77,11 @@ Exact per-category bash (including the `@file:` large-payload handling, the `tod
 **Use `init.manager` for canonical readiness check:**
 
 ```bash
-GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 INIT_MANAGER=$(gsd_run query init.manager ${GSD_WS:+--ws=${GSD_WS##* }})
 if [[ "$INIT_MANAGER" == @file:* ]]; then INIT_MANAGER=$(cat "${INIT_MANAGER#@file:}"); fi
 ```
@@ -240,151 +244,22 @@ If additional details are needed (e.g., user-provided "Delivered" summary, git r
 
 </step>
 
-<step name="evolve_project_full_review">
-
-Full PROJECT.md evolution review at milestone completion.
-
-Read all phase summaries:
+**Resolve the PROJECT.md review gate first.** This is the first `init.complete-milestone` call in the workflow, so the section manifest does not exist before it; reading `section_manifest` without making this call would fall into the fail-open `null` branch below and rewrite the shared PROJECT.md under `--ws` (#5195). `init.complete-milestone` is a pure read, so the later full call in `reorganize_roadmap_and_delete_originals` is unaffected.
 
 ```bash
-_SUMMARIES=( .planning/phases/*-*/*-SUMMARY.md )
-if [ -e "${_SUMMARIES[0]}" ]; then cat "${_SUMMARIES[@]}"; fi
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+INIT_EARLY=$(gsd_run query init.complete-milestone ${GSD_WS:+--ws=${GSD_WS##* }})
+if [[ "$INIT_EARLY" == @file:* ]]; then INIT_EARLY=$(cat "${INIT_EARLY#@file:}"); fi
+node -e "const m=JSON.parse(process.argv[1]).section_manifest; console.log('PROJECT_MD_REVIEW=' + (m==null||m.included.includes('project-md-evolution-review') ? 'run' : 'skip'))" "$INIT_EARLY"
 ```
 
-**Full review checklist:**
-
-1. **"What This Is" accuracy:**
-   - Compare current description to what was built
-   - Update if product has meaningfully changed
-
-2. **Core Value check:**
-   - Still the right priority? Did shipping reveal a different core value?
-   - Update if the ONE thing has shifted
-
-3. **Business Context check (only if the section is present):**
-   - Skip entirely if PROJECT.md has no `## Business Context` section
-   - Customer, revenue model, and success metric still accurate after shipping?
-   - Update any field that drifted; refresh the linked strategy doc reference if it moved
-
-4. **Requirements audit:**
-
-   **Validated section:**
-   - All Active requirements shipped this milestone → Move to Validated
-   - Format: `- ✓ [Requirement] — v[X.Y]`
-
-   **Active section:**
-   - Remove requirements moved to Validated
-   - Add new requirements for next milestone
-   - Keep unaddressed requirements
-
-   **Out of Scope audit:**
-   - Review each item — reasoning still valid?
-   - Remove irrelevant items
-   - Add requirements invalidated during milestone
-
-5. **Context update:**
-   - Current codebase state (LOC, tech stack)
-   - User feedback themes (if any)
-   - Known issues or technical debt
-
-6. **Key Decisions audit:**
-   - Extract all decisions from milestone phase summaries
-   - Add to Key Decisions table with outcomes
-   - Mark ✓ Good, ⚠️ Revisit, or — Pending
-
-7. **Constraints check:**
-   - Any constraints changed during development? Update as needed
-
-Update PROJECT.md inline. Update "Last updated" footer:
-
-```markdown
----
-*Last updated: [date] after v[X.Y] milestone*
-```
-
-**Example full evolution (v1.0 → v1.1 prep):**
-
-Before:
-
-```markdown
-## What This Is
-
-A real-time collaborative whiteboard for remote teams.
-
-## Core Value
-
-Real-time sync that feels instant.
-
-## Requirements
-
-### Validated
-
-(None yet — ship to validate)
-
-### Active
-
-- [ ] Canvas drawing tools
-- [ ] Real-time sync < 500ms
-- [ ] User authentication
-- [ ] Export to PNG
-
-### Out of Scope
-
-- Mobile app — web-first approach
-- Video chat — use external tools
-```
-
-After v1.0:
-
-```markdown
-## What This Is
-
-A real-time collaborative whiteboard for remote teams with instant sync and drawing tools.
-
-## Core Value
-
-Real-time sync that feels instant.
-
-## Requirements
-
-### Validated
-
-- ✓ Canvas drawing tools — v1.0
-- ✓ Real-time sync < 500ms — v1.0 (achieved 200ms avg)
-- ✓ User authentication — v1.0
-
-### Active
-
-- [ ] Export to PNG
-- [ ] Undo/redo history
-- [ ] Shape tools (rectangles, circles)
-
-### Out of Scope
-
-- Mobile app — web-first approach, PWA works well
-- Video chat — use external tools
-- Offline mode — real-time is core value
-
-## Context
-
-Shipped v1.0 with 2,400 LOC TypeScript.
-Tech stack: Next.js, Supabase, Canvas API.
-Initial user testing showed demand for shape tools.
-```
-
-**Step complete when:**
-
-- [ ] "What This Is" reviewed and updated if needed
-- [ ] Core Value verified as still correct
-- [ ] Business Context checked (or confirmed absent)
-- [ ] All shipped requirements moved to Validated
-- [ ] New requirements added to Active for next milestone
-- [ ] Out of Scope reasoning audited
-- [ ] Context updated with current state
-- [ ] All milestone decisions added to Key Decisions
-- [ ] "Last updated" footer reflects milestone completion
-
-</step>
+<!-- gsd:section id="project-md-evolution-review" when="state:flat-mode" -->
+If the line above printed `PROJECT_MD_REVIEW=run` (the manifest is `null` or lists `"project-md-evolution-review"` in `included`): read and execute `gsd-core/workflows/complete-milestone/steps/project-md-evolution-review.md`. If it printed `PROJECT_MD_REVIEW=skip` (a workstream is active) — do not read the file; PROJECT.md is shared across workstreams, so a workstream's milestone close never rewrites it (#2308, #5195); proceed to `archive_milestone`.
+<!-- /gsd:section -->
 
 <step name="archive_milestone">
 
@@ -438,7 +313,7 @@ Verify after a default (archived) completion: `✅ Phase directories archived to
 
 After archival, the AI still handles:
 - Reorganizing ROADMAP.md with milestone grouping (requires judgment) — overwrite in place after extracting Backlog section, with the write-guard's single-use sentinel armed first (a per-step env var cannot reach a hook — see the reorganize step for the sentinel mechanics)
-- Full PROJECT.md evolution review (requires understanding)
+- Full PROJECT.md evolution review (requires understanding; flat mode only — skipped under `--ws`)
 - Safety commit of archive files + updated ROADMAP.md, then `git rm .planning/REQUIREMENTS.md`
 - These are NOT fully delegated because they require AI interpretation of content
 
@@ -453,7 +328,11 @@ After `milestone complete` has archived, reorganize ROADMAP.md with milestone gr
 Extract the Backlog section from the current ROADMAP.md before making any changes:
 
 ```bash
-GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 INIT_REORG=$(gsd_run query init.complete-milestone ${GSD_WS:+--ws=${GSD_WS##* }})
 if [[ "$INIT_REORG" == @file:* ]]; then INIT_REORG=$(cat "${INIT_REORG#@file:}"); fi
 _gsd_field() { node -e "const o=JSON.parse(process.argv[1]); const v=o[process.argv[2]]; process.stdout.write(v==null?'':String(v))" "$1" "$2"; }
@@ -471,7 +350,11 @@ This rewrite is an *intentional* catastrophic shrink: phase detail was just arch
 1. Arm the sentinel (single-use; the guard checks it is fresh — within 15 minutes — and names exactly this file, then consumes it):
 
 ```bash
-GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 INIT_REORG=$(gsd_run query init.complete-milestone ${GSD_WS:+--ws=${GSD_WS##* }})
 if [[ "$INIT_REORG" == @file:* ]]; then INIT_REORG=$(cat "${INIT_REORG#@file:}"); fi
 _gsd_field() { node -e "const o=JSON.parse(process.argv[1]); const v=o[process.argv[2]]; process.stdout.write(v==null?'':String(v))" "$1" "$2"; }
@@ -510,7 +393,11 @@ Append the extracted Backlog content verbatim to the end of the newly written RO
 **Safety commit — commit archive files BEFORE deleting any originals:**
 
 ```bash
-GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 INIT_REORG=$(gsd_run query init.complete-milestone ${GSD_WS:+--ws=${GSD_WS##* }})
 if [[ "$INIT_REORG" == @file:* ]]; then INIT_REORG=$(cat "${INIT_REORG#@file:}"); fi
 _gsd_field() { node -e "const o=JSON.parse(process.argv[1]); const v=o[process.argv[2]]; process.stdout.write(v==null?'':String(v))" "$1" "$2"; }
@@ -519,17 +406,24 @@ ROADMAP_PATH=$(_gsd_field "$INIT_REORG" roadmap_path)
 ARCHIVE_DIR=$(_gsd_field "$INIT_REORG" archive_dir)
 MILESTONES_PATH=$(_gsd_field "$INIT_REORG" milestones_path)
 PROJECT_PATH=$(_gsd_field "$INIT_REORG" project_path)
-gsd_run query commit "chore: archive v[X.Y] milestone files" --files "${ARCHIVE_DIR}/v[X.Y]-ROADMAP.md" "${ARCHIVE_DIR}/v[X.Y]-REQUIREMENTS.md" "${ARCHIVE_DIR}/v[X.Y]-MILESTONE-AUDIT.md" "$MILESTONES_PATH" "$PROJECT_PATH" "$STATE_PATH" "$ROADMAP_PATH"
+# #5195: PROJECT.md is shared across workstreams. Stage it only when init's own section manifest says this run edited it (the evolution review is included in flat mode only) — the same source the review step is gated on, so the two cannot disagree.
+_gsd_has_section() { node -e "const m=JSON.parse(process.argv[1]).section_manifest; process.exit(m==null||m.included.includes(process.argv[2])?0:1)" "$1" "$2"; }
+_gsd_has_section "$INIT_REORG" project-md-evolution-review || PROJECT_PATH=""
+gsd_run query commit "chore: archive v[X.Y] milestone files" --files "${ARCHIVE_DIR}/v[X.Y]-ROADMAP.md" "${ARCHIVE_DIR}/v[X.Y]-REQUIREMENTS.md" "${ARCHIVE_DIR}/v[X.Y]-MILESTONE-AUDIT.md" "$MILESTONES_PATH" ${PROJECT_PATH:+"$PROJECT_PATH"} "$STATE_PATH" "$ROADMAP_PATH"
 ```
 
 This creates a durable checkpoint in git history. If anything fails after this point, the working tree can be reconstructed from git.
 
-MILESTONES.md and PROJECT.md are workstream-scoped the same way STATE.md/ROADMAP.md are (`planningPaths(cwd).planning`/`.project`) — under an active workstream this commits the actual files `milestone complete` wrote, not the root copies.
+MILESTONES.md is workstream-scoped the same way STATE.md/ROADMAP.md are (`planningPaths(cwd).planning`) — under an active workstream this commits the actual files `milestone complete` wrote, not the root copies. PROJECT.md is NOT: it is shared across workstreams, so under an active workstream it is neither reviewed nor staged here (#5195).
 
 **Remove REQUIREMENTS.md via git rm** (preserves history, stages deletion atomically):
 
 ```bash
-GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 INIT_REORG=$(gsd_run query init.complete-milestone ${GSD_WS:+--ws=${GSD_WS##* }})
 if [[ "$INIT_REORG" == @file:* ]]; then INIT_REORG=$(cat "${INIT_REORG#@file:}"); fi
 _gsd_field() { node -e "const o=JSON.parse(process.argv[1]); const v=o[process.argv[2]]; process.stdout.write(v==null?'':String(v))" "$1" "$2"; }
@@ -714,8 +608,8 @@ Milestone completion is successful when:
 - [ ] Known deferred items count noted in MILESTONES.md entry
 
 - [ ] MILESTONES.md entry created with stats and accomplishments
-- [ ] PROJECT.md full evolution review completed
-- [ ] All shipped requirements moved to Validated in PROJECT.md
+- [ ] PROJECT.md full evolution review completed (flat mode only; skipped under `--ws`)
+- [ ] All shipped requirements moved to Validated in PROJECT.md (flat mode only; skipped under `--ws`)
 - [ ] Key Decisions updated with outcomes
 - [ ] ROADMAP.md Backlog section extracted before rewrite, re-appended after (skipped if absent)
 - [ ] ROADMAP.md reorganized with milestone grouping (overwritten in place, not deleted)

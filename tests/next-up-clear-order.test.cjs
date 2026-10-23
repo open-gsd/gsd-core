@@ -232,8 +232,8 @@ describe('bug #3297: --gaps planning mode projects --gaps-only onto the Next Up 
     // --reviews / --chunked / --research-phase this way; --gaps must too.
     assert.match(
       content,
-      /GAPS_MODE=false[\s\S]*\$ARGUMENTS[\s\S]{0,80}?--gaps[\s\S]{0,40}?GAPS_MODE=true/,
-      'plan-phase.md preamble must set GAPS_MODE from $ARGUMENTS --gaps (so the mode reaches <offer_next>)'
+      /GAPS_MODE=false[\s\S]*\$GSD_ARGS[\s\S]{0,80}?--gaps[\s\S]{0,40}?GAPS_MODE=true/,
+      'plan-phase.md preamble must set GAPS_MODE from the captured arguments ($GSD_ARGS) --gaps (so the mode reaches <offer_next>)'
     );
   });
 

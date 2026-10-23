@@ -15,6 +15,10 @@
  *   instead of the separate OS home (USERPROFILE on Windows). These regressions
  *   are introduced by PR #5015 and live in this platform suite; they were not
  *   part of the upstream config.test.cjs / init.test.cjs platform split.
+ * - #5268 config-new-project (three tests) — the deferred depth -> granularity
+ *   rewrite of the user defaults file must land in $GSD_HOME, not in the OS home
+ *   that HOME and USERPROFILE point at (USERPROFILE on Windows), and only once
+ *   config.json is written.
  * - "detects Brave Search from file-based key" — reads brave_api_key from the
  *   sandboxed home directory, resolved via USERPROFILE on Windows (windows-env-var)
  * - "detects Tavily Search from env var" — asserts TAVILY_API_KEY detection resolved
@@ -56,7 +60,7 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempProject, createTempDir, cleanup } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, createTempDir, cleanup, homeSandboxEnv } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 
 function readConfig(tmpDir) {
@@ -253,6 +257,75 @@ describe('#4976: config-new-project resolves the global-defaults store through G
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     assert.strictEqual(readConfig(tmpDir).model_profile, 'budget');
+  });
+});
+
+// #5268: config-new-project rewrites the user defaults file only after
+// config.json is written. HOME and USERPROFILE point at the project dir and
+// GSD_HOME at a separate store, so a rewrite resolved through the OS home
+// instead of GSD_HOME fails these.
+describe('#5268: config-new-project defers the user-defaults rewrite until config.json is written', () => {
+  let dirs;
+
+  beforeEach(() => { dirs = []; });
+  afterEach(() => { dirs.forEach((dir) => cleanup(dir)); });
+
+  // A bare directory: no .planning/, so a refusal that created anything shows.
+  function bareDir() {
+    const dir = createTempDir();
+    dirs.push(dir);
+    return dir;
+  }
+
+  function assertNothingWritten(dir) {
+    assert.strictEqual(fs.existsSync(path.join(dir, '.planning')), false, '.planning must not be created');
+  }
+
+  test('--dry-run leaves the user defaults file unmigrated', () => {
+    const dir = bareDir();
+    const gsdHome = bareDir();
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    const defaultsBefore = JSON.stringify({ depth: 'quick' });
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.writeFileSync(defaultsPath, defaultsBefore);
+
+    const result = runGsdTools(['config-new-project', '{}', '--dry-run'], dir, { ...homeSandboxEnv(dir), GSD_HOME: gsdHome });
+
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).config.granularity, 'coarse');
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), defaultsBefore);
+    assertNothingWritten(dir);
+  });
+
+  test('a payload refused while the config is built leaves the user defaults file unmigrated', () => {
+    const dir = bareDir();
+    const gsdHome = bareDir();
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    // The choices are valid; the user defaults are not (their contents are
+    // not validated as choices), so the builder's own array check refuses.
+    const defaultsBefore = JSON.stringify({ depth: 'quick', ship: { pr_body_sections: 'not-a-list' } });
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.writeFileSync(defaultsPath, defaultsBefore);
+
+    const result = runGsdTools(['config-new-project', JSON.stringify({ mode: 'yolo' })], dir, { ...homeSandboxEnv(dir), GSD_HOME: gsdHome });
+
+    assert.strictEqual(result.success, false);
+    assert.match(result.error, /Invalid ship\.pr_body_sections value/);
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), defaultsBefore);
+    assertNothingWritten(dir);
+  });
+
+  test('a successful creation migrates the user defaults file', () => {
+    const dir = bareDir();
+    const gsdHome = bareDir();
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.writeFileSync(defaultsPath, JSON.stringify({ depth: 'quick' }));
+
+    const result = runGsdTools(['config-new-project', '{}'], dir, { ...homeSandboxEnv(dir), GSD_HOME: gsdHome });
+
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')), { granularity: 'coarse' });
   });
 });
 

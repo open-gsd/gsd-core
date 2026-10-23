@@ -373,6 +373,11 @@ function homeSandboxEnv(dir) {
   return { HOME: dir, USERPROFILE: dir };
 }
 
+/** Seed project config without reading defaults from the developer's home. */
+function seedConfigSection(dir) {
+  return runGsdTools('config-ensure-section', dir, homeSandboxEnv(dir));
+}
+
 // Create a bare temp directory (no .planning/ structure)
 function createTempDir(prefix = 'gsd-test-') {
   return fs.mkdtempSync(path.join(require('os').tmpdir(), prefix));
@@ -942,6 +947,7 @@ function runNpm(args, options = {}) {
   const isolatedEnv = {
     ...process.env,
     HOME: _npmIsolatedHome,
+    GSD_HOME: _npmIsolatedHome, // #5017: the defaults store root follows HOME
     npm_config_cache: path.join(_npmIsolatedHome, '.npm'),
     npm_config_userconfig: path.join(_npmIsolatedHome, '.npmrc'),
     npm_config_loglevel: 'error',
@@ -1142,12 +1148,10 @@ function restoreWorkstreamEnv() {
  * never receives TEST_ENV_BASE on its own.
  *
  * Blanking config-LOCATION vars is necessary but NOT sufficient here.
- * bin/install.js writes GSD's own user-owned store through os.homedir()
- * DIRECTLY (writeNonClaudeDefaults -> <home>/.gsd/defaults.json, #2834), and
- * os.homedir() consults no GSD variable at all — so nothing in
- * CONFIG_LOCATION_ENV_KEYS can reach it, and blanking GSD_HOME does not reach
- * it either, because a blank GSD_HOME falls back to exactly that homedir().
- * Only a sandboxed HOME/USERPROFILE contains it.
+ * bin/install.js writes GSD's own user-owned store at
+ * <GSD_HOME || homedir>/.gsd/defaults.json (#2834, #5017). A blank GSD_HOME
+ * falls back to os.homedir(), so blanking it does not contain the write; only
+ * a sandboxed HOME/USERPROFILE does.
  *
  * HOME stays deliberately OUT of TEST_ENV_BASE — blanking it would break far
  * more than it fixed — so it is sandboxed per spawn instead, which is the
@@ -1309,7 +1313,7 @@ function withAmbientCapabilityHome(t, prefix, id, point) {
   return home;
 }
 
-module.exports = { runGsdTools, homeSandboxEnv, createTempDir, createTempProject, createTempGitProject, cleanup, tmpRootCandidates, readFileNormalized, readWorkflowCombined, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, absPlanningPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, SESSION_ENV_KEYS, saveSessionEnv, restoreSessionEnv, clearSessionEnv, isolateWorkstreamEnv, restoreWorkstreamEnv, TOOLS_PATH, SESSION_IDENTITY_ENV_KEYS, scrubConfigLocationEnv, installSpawnEnv, installSpawnHome, sandboxHome, writePackageSourceMarkerFixture, writeAmbientCapabilityGate, withAmbientCapabilityHome, TEST_HOME_SANDBOX_MARKER, mockPartialWriteThenThrow, captureFdSync, suppressFdAsync };
+module.exports = { runGsdTools, homeSandboxEnv, seedConfigSection, createTempDir, createTempProject, createTempGitProject, cleanup, tmpRootCandidates, readFileNormalized, readWorkflowCombined, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, absPlanningPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, SESSION_ENV_KEYS, saveSessionEnv, restoreSessionEnv, clearSessionEnv, isolateWorkstreamEnv, restoreWorkstreamEnv, TOOLS_PATH, SESSION_IDENTITY_ENV_KEYS, scrubConfigLocationEnv, installSpawnEnv, installSpawnHome, sandboxHome, writePackageSourceMarkerFixture, writeAmbientCapabilityGate, withAmbientCapabilityHome, TEST_HOME_SANDBOX_MARKER, mockPartialWriteThenThrow, captureFdSync, suppressFdAsync };
 
 // Lazy, for the reason builtLib() is lazy: reading either of these is what
 // forces the built-lib require, so a test file that needs neither can still

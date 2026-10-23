@@ -731,6 +731,137 @@ function convertClaudeCommandToKimiCodeSkill(content, skillName, _runtime = null
   return convertClaudeCommandToKimiSkill(content, skillName, _runtime, cmdNames);
 }
 
+/**
+ * The Pi dispatch contract every installed Pi skill carries (#5547, #5569).
+ *
+ * Pi 1.3.0 exposes no subagent API, so GSD ships its own `gsd_dispatch` tool
+ * (pi/gsd.cjs): it resolves the named `gsd-*` role from the install and runs it as an
+ * isolated child `pi` process, one level deep. Workflow `Agent(...)` calls are projected
+ * onto `gsd_dispatch(role=..., task=...)` at install time. A skill that cannot dispatch
+ * must still stop and say so — never perform the role's work inline as a substitute,
+ * which would silently skip the role's isolation and contract.
+ */
+const PI_DISPATCH_CONTRACT =
+  '**Pi dispatch (fail closed).** Pi has no built-in subagent API; GSD provides the ' +
+  '`gsd_dispatch` tool. Where a workflow step dispatches a named `gsd-*` role, call ' +
+  '`gsd_dispatch` with `role` (the installed role name) and `task` (the full task text). A ' +
+  'workflow that still writes the step as an `Agent(...)` call means the same: its `subagent_type` ' +
+  'is the `role` and its `prompt` is the `task`. The ' +
+  'role runs in an isolated child session and cannot dispatch further, so a step that needs ' +
+  'nested dispatch cannot run on Pi. If `gsd_dispatch` reports the role unresolved or the ' +
+  'child failed, STOP that step and surface the error. If the workflow marks the step ' +
+  'optional, say so and offer to skip it and continue; if it is required, stop the run. ' +
+  "Never execute the role's work inline as a substitute.";
+
+/**
+ * Pi skills that cannot run on Pi, by installed skill name, with the reason the skill
+ * prints instead of starting its workflow (ADR-5559 §2). `/gsd-debug` drives
+ * `gsd-debug-session-manager`, which itself spawns `gsd-debugger`; `gsd_dispatch` is flat
+ * (a child has no dispatch tool), so that nesting cannot be honored.
+ */
+const PI_UNSUPPORTED_SKILLS: Readonly<Record<string, string>> = Object.freeze({
+  'gsd-debug': 'needs nested dispatch; Pi dispatch is flat',
+});
+
+/**
+ * Pi does not expand `@path` includes inside a skill body (only the editor
+ * expands them in a user message), so the workflow files a command lists under
+ * `<execution_context>` are never loaded unless the agent reads them. Pi's file
+ * tools strip a leading `@` and expand `~`, so the listed path works as given.
+ */
+const PI_INCLUDE_NOTE =
+  '**Pi includes.** Pi does not expand `@path` references in a skill. Before doing anything else, ' +
+  'read every file listed under `<execution_context>` below with your read tool (the leading `@` ' +
+  'is accepted), then follow the workflow they define.';
+
+/**
+ * Pi's own limit: skills.js rejects `description.length > 1024`, and `length` is
+ * UTF-16 code units — so the cap is in code units, not code points (a code-point
+ * cap, as the Cline converter uses, could exceed it for astral characters).
+ */
+const PI_SKILL_DESCRIPTION_MAX = 1024;
+
+/**
+ * Cut `text` to at most `max` UTF-16 code units without splitting a surrogate
+ * pair: when the cut would leave a lone high surrogate (the first half of an
+ * astral character such as an emoji), drop that half too.
+ */
+function capAtCodeUnits(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const last = cut.charCodeAt(cut.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
+
+// Pi and Kimi Code share the Agent Skills `/skill:<name>` format. These host-neutral
+// names read correctly at the Pi call sites; the Kimi-named originals stay because the
+// Kimi converter is mirrored in bin/install.js under a parity test (#2095).
+const normalizeSkillName = normalizeKimiSkillName;
+const convertGsdCommandReferencesToSkillInvocations = convertGsdCommandReferencesToKimiSkillInvocations;
+
+/**
+ * Convert a Claude command-markdown source into a Pi Agent Skill (#5547).
+ *
+ * Pi loads `<config>/skills/<name>/SKILL.md` (standard Agent Skills format) and
+ * invokes it as `/skill:<name>` — the same format and invocation prefix as Kimi
+ * Code, so command references are rewritten through the same helper. The output
+ * differs in two ways: the invocation hint names Pi, and the body opens with
+ * {@link PI_DISPATCH_CONTRACT} so a workflow that needs a named agent role stops
+ * with an explicit message instead of degrading silently.
+ *
+ * Registered as `convertClaudeCommandToPiSkill` in capabilities/pi/capability.json
+ * `artifactLayout` `converter` field. Unlike the Kimi converters this one is
+ * deliberately NOT mirrored in bin/install.js: the live skills-install path
+ * resolves converters by name through the capability descriptor, so a second copy
+ * would be dead code (the mirror in the Kimi case predates that and is kept only
+ * for its parity test).
+ */
+function convertClaudeCommandToPiSkill(content, skillName, _runtime = null, cmdNames = null) {
+  const { frontmatter, body } = extractFrontmatterAndBody(content);
+  const piSkillName = normalizeSkillName(skillName);
+  const names = cmdNames || readGsdCommandNames();
+  const rawDescription = frontmatter
+    ? extractFrontmatterField(frontmatter, 'description') || `Run GSD workflow ${piSkillName}.`
+    : `Run GSD workflow ${piSkillName}.`;
+  // The description is what Pi's skill picker shows, so a `/gsd:<cmd>` mention in it needs
+  // the same `/skill:` rewrite the body gets (#4324 is the same defect on the Claude path).
+  const description = convertGsdCommandReferencesToSkillInvocations(rawDescription, names);
+  const normalizedBody = replaceArgumentsPlaceholderOutsideFences(
+    convertGsdCommandReferencesToSkillInvocations(frontmatter ? body : content, names),
+  );
+
+  const cappedDescription = capAtCodeUnits(toSingleLine(description), PI_SKILL_DESCRIPTION_MAX);
+  const unsupportedReason = Object.prototype.hasOwnProperty.call(PI_UNSUPPORTED_SKILLS, piSkillName)
+    ? PI_UNSUPPORTED_SKILLS[piSkillName]
+    : null;
+  if (unsupportedReason !== null) {
+    return `---\nname: ${piSkillName}\ndescription: ${yamlQuote(cappedDescription)}\n---\n` +
+      `**Unsupported on Pi.** \`/skill:${piSkillName}\` is unsupported on Pi: ${unsupportedReason}. ` +
+      'Tell the user this and stop. Do not start the workflow and do not perform its steps inline.\n';
+  }
+  return `---\nname: ${piSkillName}\ndescription: ${yamlQuote(cappedDescription)}\n---\nInvoke this Pi skill with \`/skill:${piSkillName}\`.\n\n${PI_DISPATCH_CONTRACT}\n\n${PI_INCLUDE_NOTE}\n\n${normalizedBody}`;
+}
+
+/**
+ * Claude command bodies carry a `$ARGUMENTS` placeholder that Claude substitutes
+ * with the user's text. Pi never substitutes it in a skill — it appends the
+ * arguments after the skill body — so a literal `$ARGUMENTS` would reach the
+ * model as an unexplained token. Replace it with a description of what it stands
+ * for. Fenced blocks are left alone (shell examples legitimately use it), and
+ * only the whole word is matched so `$ARGUMENTS_FOO` survives.
+ */
+function replaceArgumentsPlaceholderOutsideFences(body: string): string {
+  const lines = body.split('\n');
+  const fenced = new Set<number>();
+  for (const { openLineIdx, closeLineIdx } of scanFencedBlocks(lines)) {
+    const end = closeLineIdx === -1 ? lines.length - 1 : closeLineIdx;
+    for (let i = openLineIdx; i <= end; i += 1) fenced.add(i);
+  }
+  return lines
+    .map((line, i) => (fenced.has(i) ? line : line.replace(/\$ARGUMENTS(?![A-Za-z0-9_])/g, '(the text typed after the skill name)')))
+    .join('\n');
+}
+
 const KIMI_CANONICAL_GSD_AGENT_RE = /^gsd-[a-z0-9-]+$/;
 
 /** Split a `tools:` comma list without tearing a quoted scalar that contains a literal comma. */
@@ -2959,6 +3090,61 @@ function convertClaudeAgentToHermesAgent(content) {
 }
 
 /**
+ * Claude Code tool names that have a Pi equivalent (`pi --tools` takes lowercase built-in names).
+ * Anything else a role lists (WebFetch, Agent, MCP tools, ...) has no Pi built-in and is dropped.
+ */
+const PI_AGENT_TOOL_NAMES: Readonly<Record<string, string>> = Object.freeze({
+  Read: 'read',
+  Write: 'write',
+  Edit: 'edit',
+  Bash: 'bash',
+  Grep: 'grep',
+  Glob: 'find',
+});
+
+/** Split a Claude role's tool list into the Pi tools it maps to and the ones that were dropped. */
+function mapClaudeToolsToPi(tools: string[]): { mapped: string[]; dropped: string[] } {
+  const mapped: string[] = [];
+  const dropped: string[] = [];
+  for (const tool of tools) {
+    const piName = Object.prototype.hasOwnProperty.call(PI_AGENT_TOOL_NAMES, tool) ? PI_AGENT_TOOL_NAMES[tool] : null;
+    if (piName === null) {
+      if (!dropped.includes(tool)) dropped.push(tool);
+    } else if (!mapped.includes(piName)) {
+      mapped.push(piName);
+    }
+  }
+  return { mapped, dropped };
+}
+
+/**
+ * Convert a Claude Code agent (.md) to the role file Pi's `gsd_dispatch` loads (#5569, ADR-5559 §3):
+ * `name`, `description` and `tools` (Pi names; an unmappable tool is dropped and named in a comment,
+ * never passed through), then the body with the Pi branding rewrites. `model` is omitted so the
+ * child inherits Pi's default, and a role that lists no mappable tool gets no `tools:` line (the
+ * dispatcher then runs it with Pi's defaults minus `gsd_dispatch`).
+ */
+function convertClaudeAgentToPiAgent(content) {
+  const converted = applyAgentBrandingRewrites(content, 'pi');
+  const { frontmatter, body } = extractFrontmatterAndBody(converted);
+  if (!frontmatter) return converted;
+
+  const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
+  const description = extractFrontmatterField(frontmatter, 'description') || '';
+  const declared = parseFrontmatterTools(frontmatter);
+  const { mapped: mappedTools, dropped } = mapClaudeToolsToPi(declared);
+  // A role that declared tools but none map must not widen to Pi's full default set
+  // (the dispatcher treats an absent `tools:` as "defaults"): fall back to read-only.
+  const mapped = declared.length > 0 && mappedTools.length === 0 ? ['read'] : mappedTools;
+
+  let fm = `---\nname: ${yamlIdentifier(name)}\ndescription: ${yamlQuote(toSingleLine(description))}\n`;
+  if (mapped.length > 0) fm += `tools: ${mapped.join(', ')}\n`;
+  if (dropped.length > 0) fm += `# tools with no Pi equivalent, dropped: ${dropped.map(toSingleLine).join(', ')}\n`;
+  fm += '---';
+  return `${fm}\n${body}`;
+}
+
+/**
  * Convert Claude Code agent markdown to Codex agent format.
  * Applies base markdown conversions, then adds a <codex_agent_role> header
  * and cleans up frontmatter (removes tools/color fields).
@@ -3122,8 +3308,13 @@ function computePathPrefix({
   // See DEFECT.WINDOWS-PATH-LEAK-IN-MARKDOWN-CONTENT in CONTEXT.md.
   const posixTarget = posixNormalize(String(resolvedTarget));
   const posixHome = homeDir ? posixNormalize(String(homeDir)) : homeDir;
-  if (isGlobal && posixTarget.startsWith(posixHome) && !isOpencode) {
-    return '$HOME' + posixTarget.slice(posixHome.length) + '/';
+  // #5123: `startsWith` alone treats a SIBLING directory whose name begins with
+  // the home path (`/home/u2/cfg` under `/home/u`) as under home and yields the
+  // broken `$HOMEu2/cfg/`. Require a path boundary.
+  const underHome = typeof posixHome === 'string' && posixHome.length > 0
+    && (posixTarget === posixHome || posixTarget.startsWith(posixHome.endsWith('/') ? posixHome : `${posixHome}/`));
+  if (isGlobal && underHome && !isOpencode) {
+    return '$HOME' + posixTarget.slice(posixHome.length).replace(/^(?!\/)(?=.)/, '/') + '/';
   }
   if (!isGlobal && projectRelative) {
     // An explicit local config dir need not be the descriptor's conventional
@@ -3135,6 +3326,48 @@ function computePathPrefix({
     if (relative) return relative;
   }
   return `${posixTarget}/`;
+}
+
+/**
+ * #5123: retarget an installed artifact's `@` includes to the REAL install root.
+ * Driven by the runtime descriptor's hostBehaviors, never by a runtime name:
+ *
+ * - `defaultHomeIncludeRoot` (Copilot, Antigravity): their converters hard-code
+ *   the DEFAULT home into includes, so with `--config-dir` the payload lives
+ *   elsewhere and `@~/<root>/gsd-core/…` points at nothing. `@~/<root>/` and
+ *   `@$HOME/<root>/` become `@<pathPrefix>`. A default install (pathPrefix is
+ *   already `$HOME/<root>/`) is returned unchanged, so it stays byte-identical.
+ * - `retargetsGsdCoreProsePath` (Kimi): Kimi has no `@` include, so its prompt
+ *   converter turns `~/.claude/gsd-core` into the prose "GSD core", leaving
+ *   `@GSD core/x.md` pointing nowhere. A `GSD core/<path>` reference followed
+ *   by a path segment becomes the real `<pathPrefix>gsd-core/<path>`, with the
+ *   unsupported `@` dropped. Bare prose "GSD core" is not followed by `/`.
+ *
+ * `pathPrefix` is the install root as computePathPrefix derives it
+ * (`$HOME/…/` under HOME, otherwise absolute), with a trailing slash. Pure and
+ * idempotent: a second pass finds none of the literals it rewrites.
+ */
+function retargetInstalledIncludes(
+  content: string,
+  behaviors: { defaultHomeIncludeRoot?: unknown; retargetsGsdCoreProsePath?: unknown } | null | undefined,
+  pathPrefix: string,
+): string {
+  if (typeof content !== 'string' || content.length === 0) return content;
+  if (typeof pathPrefix !== 'string' || !pathPrefix.endsWith('/')) return content;
+  if (!behaviors) return content;
+  let result = content;
+
+  if (behaviors.retargetsGsdCoreProsePath === true) {
+    result = result.replace(/@?GSD core\/(?=[a-z])/g, `${pathPrefix}gsd-core/`);
+  }
+
+  const home = behaviors.defaultHomeIncludeRoot;
+  if (typeof home === 'string' && home.length > 0 && pathPrefix !== `$HOME/${home}/`) {
+    result = result
+      .split(`@~/${home}/`).join(`@${pathPrefix}`)
+      .split(`@$HOME/${home}/`).join(`@${pathPrefix}`);
+  }
+  return result;
 }
 
 /** Return a safe project-relative prefix for a resolved install target. */
@@ -3596,6 +3829,22 @@ function _applyRuntimeRewritesInner(content, runtime, pathPrefix, isGlobal = fal
       // #3133 / #3544: restore @-file-reference lines to the tilde form
       // Claude actually expands — see restoreClaudeGlobalAtRefTilde's doc
       // comment above for why this must be a separate, @-anchored pass.
+      content = restoreClaudeGlobalAtRefTilde(content, pathPrefix);
+      content = processAttribution(content, attribution);
+      break;
+
+    // pi (#5547): a host whose file tools expand `~` but never `$HOME` (so the `@`
+    // include lines must come back out in tilde form, as for claude) AND whose
+    // skills carry bare `~/.claude` / `${CLAUDE_CONFIG_DIR:-$HOME/.claude}` forms
+    // (the gsd-surface skill) that need the negative-lookahead bare rewrites the
+    // claude profile deliberately does not have (it would change claude's bytes).
+    case 'slash-lookahead-tilde-restore':
+      content = content.replace(/~\/\.claude\//g, pathPrefix);
+      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
+      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
+      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\.\/\.claude(?![\w-])/g, `./${dirName}`);
       content = restoreClaudeGlobalAtRefTilde(content, pathPrefix);
       content = processAttribution(content, attribution);
       break;
@@ -4131,6 +4380,8 @@ export = {
   resolveSpecRootReference,
   convertClaudeCommandToKimiSkill,
   convertClaudeCommandToKimiCodeSkill,
+  convertClaudeCommandToPiSkill,
+  PI_UNSUPPORTED_SKILLS,
   buildKimiAgentArtifacts,
   convertClaudeToCursorMarkdown,
   convertClaudeCommandToCursorSkill,
@@ -4190,6 +4441,8 @@ export = {
   // #2875 Part 2 (J10): Hermes named branding converter, generic underlying
   // transform exported alongside it for direct reuse/testing.
   convertClaudeAgentToHermesAgent,
+  convertClaudeAgentToPiAgent,
+  mapClaudeToolsToPi,
   applyAgentBrandingRewrites,
   // ADR-1239 / #2092 Phase B Upgrade 1: native .qwen/agents/*.md subagent
   // projection — registered by name so convertedAgentsKind's
@@ -4234,4 +4487,6 @@ export = {
   _negotiatedDispatchIsolation,
   // #1521: canonical non-Claude runtime list for test files and tooling
   NON_CLAUDE_RUNTIMES,
+  // #5123: post-install include retarget (config-dir aware; Kimi prose path)
+  retargetInstalledIncludes,
 };

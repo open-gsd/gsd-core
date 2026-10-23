@@ -307,7 +307,8 @@ function resolveBaseSha(base = 'origin/next') {
  *     explicit `git fetch origin "${BASE_REF}:refs/remotes/origin/${BASE_REF}"` step.
  *
  * `GSD_EMITTED_BASE` lets a lane name the ref (or sha) directly. `GITHUB_BASE_REF` is
- * set by Actions on pull_request events.
+ * set by Actions on pull_request events. Without either, prefer upstream's `next`
+ * over a fork's potentially stale `origin/next`, then the local `next` branch.
  */
 function baseRefCandidates(env = process.env) {
   const candidates = [];
@@ -315,7 +316,7 @@ function baseRefCandidates(env = process.env) {
   if (env.GITHUB_BASE_REF) {
     candidates.push(`origin/${env.GITHUB_BASE_REF}`, env.GITHUB_BASE_REF);
   }
-  candidates.push('origin/next', 'next');
+  candidates.push('upstream/next', 'origin/next', 'next');
   return [...new Set(candidates)];
 }
 
@@ -359,10 +360,20 @@ function resolveBase(env = process.env, { cwd = REPO_ROOT } = {}) {
  * diff needs the same commit, so a silent fallback to the tip would reintroduce the
  * mismatch this exists to close.
  *
+ * @param {object} [env] base-ref environment overrides.
+ * @param {object} [options] resolution and reporting options.
+ * @param {string} [options.cwd] repository to resolve against.
+ * @param {function} [options.diagnostic] receives base context before any checks fail or skip.
  * @returns {{ ref: string, tipSha: string, sha: string } | null} `sha` is the merge-base.
  */
-function resolveAttributionBase(env = process.env, { cwd = REPO_ROOT } = {}) {
+function resolveAttributionBase(env = process.env, { cwd = REPO_ROOT, diagnostic } = {}) {
   const resolved = resolveBase(env, { cwd });
+  if (diagnostic) {
+    diagnostic(
+      `emitted-attribution resolved base: ${resolved ? `${resolved.ref}@${resolved.sha}` : 'none'}; ` +
+      'set GSD_EMITTED_BASE=<ref|sha> to override. Tried: ' + baseRefCandidates(env).join(', '),
+    );
+  }
   if (!resolved) return null;
   let sha;
   try {

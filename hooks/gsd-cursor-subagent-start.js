@@ -70,7 +70,7 @@ const { allow } = require('./lib/hook-exit.js');
 // hooks/lib/cursor-workspace.js. Staged next to these scripts by
 // writeCursorHooksJson so the require always resolves post-install.
 const { resolveStatePath } = require('./lib/cursor-workspace.js');
-const { readSentinel, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch, buildSentinelDiscard } = require('./lib/isolation-sentinel.js');
+const { readSentinel, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch, agedNoneGovernsDispatch, buildSentinelDiscard } = require('./lib/isolation-sentinel.js');
 const { REASON_CODE, describeSentinelDiscard } = require('./lib/isolation-deny-reason.js');
 // #3582: gsd-core/bin/lib/*.cjs (runtime-homes.cjs, worktree-safety.cjs,
 // runtime-name-policy.cjs, capability-registry.cjs — required below, inside
@@ -435,7 +435,8 @@ function resolveFallbackIsolation(root, configPath) {
   }
   if (!runtimeId) {
     try {
-      const defaultsPath = path.join(os.homedir(), '.gsd', 'defaults.json');
+      // #5017: GSD_HOME when set and non-blank, else the home directory — the loader's rule.
+      const defaultsPath = path.join(process.env.GSD_HOME || os.homedir(), '.gsd', 'defaults.json');
       const defaultsParsed = JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
       if (defaultsParsed && typeof defaultsParsed === 'object' && 'runtime' in defaultsParsed) {
         runtimeId = resolveRuntimeNameFromCandidates(defaultsParsed.runtime) || null;
@@ -517,9 +518,13 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
 
   let declaredIsolation;
   try {
+    // #5479: an aged recorded `none` for this dispatch's phase keeps governing it — the same predicate,
+    // and so the same verdicts, as the Claude guard (hooks/gsd-agent-isolation-guard.js).
     declaredIsolation = (sentinel.present && !sentinel.stale && applies)
       ? sentinel.isolation
-      : resolveFallbackIsolation(root, configPath);
+      : (sentinel.present && sentinel.stale && agedNoneGovernsDispatch(sentinel, dispatchIds, { clock }))
+        ? 'none'
+        : resolveFallbackIsolation(root, configPath);
   } catch {
     return {
       action: 'deny',

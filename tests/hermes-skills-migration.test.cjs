@@ -14,6 +14,13 @@
 process.env.GSD_TEST_MODE = '1';
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
+
+// #5017: pinned GSD_HOME (next to HOME) is put back after each test so it never leaks into the next one.
+const __ORIG_GSD_HOME = process.env.GSD_HOME;
+require('node:test').afterEach(() => {
+  if (__ORIG_GSD_HOME === undefined) delete process.env.GSD_HOME;
+  else process.env.GSD_HOME = __ORIG_GSD_HOME;
+});
 const assert = require('node:assert/strict');
 const path = require('path');
 const os = require('os');
@@ -302,6 +309,10 @@ describe('Hermes Agent: installRuntimeArtifacts', () => {
     const staleFlatSkillDir = path.join(configDir, 'skills', 'gsd-old-skill');
     fs.mkdirSync(staleFlatSkillDir, { recursive: true });
     fs.writeFileSync(path.join(staleFlatSkillDir, 'SKILL.md'), 'old');
+    // #5161: a prefix alone no longer proves GSD owns a skill dir. A stale GSD
+    // skill is one a previous install recorded, so record it the way that install would.
+    fs.writeFileSync(path.join(configDir, 'gsd-file-manifest.json'),
+      JSON.stringify({ version: '0.0.0', files: { 'skills/gsd-old-skill/SKILL.md': 'deadbeef' } }));
 
     installRuntimeArtifacts('hermes', configDir, 'global', resolvedProfileFull);
 
@@ -776,6 +787,7 @@ describe('#2284 real disposable-HOME --hermes --global install', () => {
     savedUserProfile = process.env.USERPROFILE;
     savedHermesHome = process.env.HERMES_HOME;
     process.env.HOME = tmpHome;
+    process.env.GSD_HOME = tmpHome; // #5017: the defaults store root follows HOME
     process.env.USERPROFILE = tmpHome;
     process.env.HERMES_HOME = path.join(tmpHome, '.hermes');
   });
@@ -921,6 +933,7 @@ describe('#2284 fail-closed role resolution', () => {
       savedUserProfile = process.env.USERPROFILE;
       savedHermesHome = process.env.HERMES_HOME;
       process.env.HOME = tmpHome;
+      process.env.GSD_HOME = tmpHome; // #5017: the defaults store root follows HOME
       process.env.USERPROFILE = tmpHome;
       process.env.HERMES_HOME = path.join(tmpHome, '.hermes');
       injectedAgentsDir = path.resolve(__dirname, '..', 'agents');

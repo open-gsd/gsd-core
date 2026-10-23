@@ -21,6 +21,14 @@
 process.env.GSD_TEST_MODE = '1';
 
 const { test, describe, before, after } = require('node:test');
+
+// #5017: tests in this file pin GSD_HOME next to HOME (the defaults store root follows GSD_HOME);
+// put the runner's value back after each test so a pinned home never leaks into the next one.
+const __ORIG_GSD_HOME = process.env.GSD_HOME;
+require('node:test').afterEach(() => {
+  if (__ORIG_GSD_HOME === undefined) delete process.env.GSD_HOME;
+  else process.env.GSD_HOME = __ORIG_GSD_HOME;
+});
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -30,9 +38,18 @@ const espree = require('espree');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { splitLines, joinLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
-const { createTempDir, cleanup, writePackageSourceMarkerFixture } = require('./helpers.cjs');
+const { createTempDir, cleanup, sandboxHome, writePackageSourceMarkerFixture } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+
+function useIsolatedHome(t) {
+  // A Windows temp directory is normally inside the caller's home directory.
+  // Use a sibling fixture so an install into another temp dir takes the
+  // absolute-path branch on every platform.
+  const fixtureHome = createTempDir('gsd-test-home-');
+  sandboxHome(t, fixtureHome);
+  t.after(() => cleanup(fixtureHome));
+}
 
 // Bound the writer subprocess so a regression that hangs the writer
 // (or the dispatcher) cannot deadlock CI (PR #3003 CR feedback).
@@ -273,8 +290,10 @@ describe('installRuntimeArtifacts — durable Runtime Surface corpus (#4132)', (
 
     installRuntimeArtifacts('pi', piDir, 'global', RESOLVED_CORE);
     installRuntimeArtifacts('vscode', vscodeDir, 'global', RESOLVED_CORE);
-    assert.ok(!fs.existsSync(path.join(piDir, 'gsd-core', 'commands')));
-    assert.ok(!fs.existsSync(path.join(piDir, 'gsd-core', 'agents')));
+    // #5547/#5569: pi declares skills (the commands corpus is their source) and agents
+    // (the roles gsd_dispatch loads), so it needs both corpora.
+    assert.ok(fs.existsSync(path.join(piDir, 'gsd-core', 'commands', 'gsd')));
+    assert.ok(fs.existsSync(path.join(piDir, 'gsd-core', 'agents')));
     assert.ok(!fs.existsSync(path.join(vscodeDir, 'gsd-core', 'commands')));
     assert.ok(!fs.existsSync(path.join(vscodeDir, 'gsd-core', 'agents')));
   });
@@ -528,12 +547,6 @@ function readAllSkillMd(dir) {
 // write to (and an uninstall would mutate) the developer's REAL ~/.agents/skills.
 // Sandbox HOME/USERPROFILE to configDir before resolving the layout or invoking
 // install/uninstall so codex's resolved skills dir is configDir/.agents/skills.
-//
-// #3712: promoted to tests/helpers.cjs, from the byte-identical copy that used to
-// live here. It now also sets the sandbox marker src/real-home-guard.cts needs to
-// stay permissive on hosts with no readable passwd entry.
-const { sandboxHome } = require('./helpers.cjs');
-
 describe('installRuntimeArtifacts — skills runtimes write gsd-prefixed skill dirs', () => {
   for (const runtime of SKILLS_RUNTIMES_LAYOUT) {
     test(`${runtime}: gsd-prefixed skill dirs in skills/`, (t) => {
@@ -785,7 +798,222 @@ describe('installOpencodeFamilySkills — emits skills/<name>/SKILL.md (#784)', 
       // GSD-managed skills should also be present.
       assert.ok(fs.existsSync(path.join(configDir, 'skills', 'gsd-help', 'SKILL.md')));
     });
+
+    test(`${runtime}: prunes only GSD-owned gsd-* skill dirs and names the rest (#5161)`, (t) => {
+      const configDir = createTempDir(`gsd-oc5161-${runtime}-`);
+      t.after(() => cleanup(configDir));
+      writePackageSourceMarkerFixture(configDir);
+      const skillsDir = path.join(configDir, 'skills');
+      const seed = (name, body, extra = {}) => {
+        fs.mkdirSync(path.join(skillsDir, name), { recursive: true });
+        fs.writeFileSync(path.join(skillsDir, name, 'SKILL.md'), body);
+        for (const [file, content] of Object.entries(extra)) fs.writeFileSync(path.join(skillsDir, name, file), content);
+      };
+      seed('gsd-mine', 'USER\n');                                  // user-owned: no ownership signal
+      seed('gsd-help', 'OLD\n', { 'stale.md': 'stale\n' });       // first-party: replaced
+      seed('gsd-retired-5161', 'OLD\n');                          // manifest-recorded, no longer shipped
+      seed('gsd-cap-orphan-5161', 'CAP\n', { '.gsd-capability-skill': 'some-cap\n' }); // capability marker
+      fs.writeFileSync(path.join(configDir, 'gsd-file-manifest.json'), JSON.stringify({
+        version: '0.0.0', files: { 'skills/gsd-retired-5161/SKILL.md': 'deadbeef' },
+      }));
+
+      const warnings = [];
+      const origWarn = console.warn;
+      console.warn = (...args) => { warnings.push(args.join(' ')); };
+      t.after(() => { console.warn = origWarn; });
+      installOpencodeFamilySkills(runtime, configDir, stageRawCommands(runtime, configDir), `${configDir}/`);
+      console.warn = origWarn;
+
+      assert.strictEqual(fs.readFileSync(path.join(skillsDir, 'gsd-mine', 'SKILL.md'), 'utf8'), 'USER\n',
+        'a gsd-* dir GSD does not own must survive the prune');
+      assert.ok(warnings.some((w) => w.includes(path.join(skillsDir, 'gsd-mine'))),
+        'the preserved dir must be named by path');
+      assert.strictEqual(fs.existsSync(path.join(skillsDir, 'gsd-help', 'stale.md')), false,
+        'a first-party skill dir is still wiped and rewritten');
+      assert.strictEqual(fs.existsSync(path.join(skillsDir, 'gsd-retired-5161')), false,
+        'a manifest-recorded skill is still pruned');
+      assert.strictEqual(fs.existsSync(path.join(skillsDir, 'gsd-cap-orphan-5161')), false,
+        'a marker-carrying capability skill is still pruned');
+      assert.ok(!warnings.some((w) => /gsd-(help|retired-5161|cap-orphan-5161)/.test(w)),
+        'GSD-owned dirs are pruned silently, never reported as preserved');
+    });
   }
+});
+
+// ─── #5161: skill-dir ownership must not depend on which source provider one lookup picks ───
+// Staging resolves its source with the commands+agents requirement; a commands-only lookup can
+// accept a different provider — a `.gsd-source` marker naming a commands-only dir. When ownership
+// read only that root, writeManifest recorded zero GSD skills (driven by review, qwen --local).
+describe('#5161: createSkillDirOwnership first-party set survives a commands-only source marker', () => {
+  const { createSkillDirOwnership: ownership } = require('../gsd-core/bin/lib/install-engine.cjs');
+
+  test('a package first-party skill is owned even when .gsd-source names another commands dir', (t) => {
+    const configDir = createTempDir('gsd-5161-marker-');
+    t.after(() => cleanup(configDir));
+    const otherCommands = path.join(configDir, 'other-src', 'commands', 'gsd');
+    fs.mkdirSync(otherCommands, { recursive: true });
+    fs.writeFileSync(path.join(otherCommands, 'only-here.md'), '---\nname: only-here\n---\n');
+    fs.writeFileSync(path.join(configDir, '.gsd-source'), otherCommands + '\n');
+    const skillsDir = path.join(configDir, 'skills');
+    fs.mkdirSync(skillsDir, { recursive: true });
+
+    const owns = ownership('claude', configDir, skillsDir, 'gsd-', { includeManifest: false });
+    assert.strictEqual(owns('gsd-help'), true, 'a skill the executing package ships must be owned');
+    assert.strictEqual(owns('gsd-only-here'), true, 'a skill the marker-named source ships must be owned');
+    assert.strictEqual(owns('gsd-mine-5161'), false, 'a dir neither corpus ships stays unowned');
+  });
+
+  test('a skill an install wrote from a marker corpus is owned by an includeWritten caller, and only after the write', (t) => {
+    const configDir = createTempDir('gsd-5161-agents-gap-');
+    t.after(() => cleanup(configDir));
+    sandboxHome(t, configDir);
+    // The installed corpus passes a commands-only requirement (its manifest records and hashes every
+    // command) but not commands+agents (it records no agent), so staging an agents-bearing layout
+    // rejects it and takes the `.gsd-source` marker's corpus instead.
+    const installedCommands = path.join(configDir, 'gsd-core', 'commands', 'gsd');
+    fs.mkdirSync(installedCommands, { recursive: true });
+    const installedBody = '---\nname: installed-5161\n---\n';
+    fs.writeFileSync(path.join(installedCommands, 'installed-5161.md'), installedBody);
+    fs.writeFileSync(path.join(configDir, 'gsd-file-manifest.json'), JSON.stringify({
+      files: {
+        'gsd-core/commands/gsd/installed-5161.md': crypto.createHash('sha256').update(installedBody).digest('hex'),
+      },
+    }));
+    const markerCommands = path.join(configDir, 'alt-src', 'commands', 'gsd');
+    fs.mkdirSync(markerCommands, { recursive: true });
+    fs.mkdirSync(path.join(configDir, 'alt-src', 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(markerCommands, 'marker-only-5161.md'), '---\nname: marker-only-5161\n---\n');
+    fs.writeFileSync(path.join(configDir, 'alt-src', 'agents', 'gsd-planner.md'), '---\nname: gsd-planner\n---\n');
+    fs.writeFileSync(path.join(configDir, '.gsd-source'), markerCommands + '\n');
+    const skillsDir = path.join(configDir, 'skills');
+    fs.mkdirSync(skillsDir, { recursive: true });
+
+    const { findInstallSourceRoot } = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
+    assert.strictEqual(findInstallSourceRoot(configDir), installedCommands,
+      'precondition: a commands-only lookup takes the installed corpus, not the marker one');
+    const { clearWrittenSkillDirs } = require('../gsd-core/bin/lib/install-engine.cjs');
+    clearWrittenSkillDirs();
+    const before = ownership('kimi', configDir, skillsDir, 'gsd-', { includeManifest: false, includeWritten: true });
+    assert.strictEqual(before('gsd-marker-only-5161'), false, 'nothing has been written yet, so it owns nothing');
+
+    installRuntimeArtifacts('kimi', configDir, 'global', { name: 'full', skills: '*', agents: '*' });
+    assert.ok(fs.existsSync(path.join(skillsDir, 'gsd-marker-only-5161')), 'precondition: the install wrote the marker corpus skill');
+
+    const owns = ownership('kimi', configDir, skillsDir, 'gsd-', { includeManifest: false, includeWritten: true });
+    assert.strictEqual(owns('gsd-marker-only-5161'), true, 'a skill this install wrote must be owned');
+    assert.strictEqual(owns('gsd-mine-5161'), false, 'a dir no corpus ships stays unowned');
+    // Classified against a config dir no lookup links to the marker corpus, only the record can own it.
+    const unrelated = createTempDir('gsd-5161-unrelated-');
+    t.after(() => cleanup(unrelated));
+    assert.strictEqual(ownership('kimi', unrelated, skillsDir, 'gsd-', { includeManifest: false, includeWritten: true })('gsd-marker-only-5161'), true,
+      'the install recorded the dir it wrote');
+    assert.strictEqual(ownership('kimi', unrelated, skillsDir, 'gsd-', { includeManifest: false })('gsd-marker-only-5161'), false,
+      'a caller that does not opt in (every prune and cleanup) never reads the record');
+  });
+
+  test('installOpencodeFamilySkills records the skill dirs it wrote', (t) => {
+    const configDir = createTempDir('gsd-5161-opencode-written-');
+    t.after(() => cleanup(configDir));
+    writePackageSourceMarkerFixture(configDir);
+    const rawDir = path.join(configDir, 'raw-5161');
+    fs.mkdirSync(rawDir, { recursive: true });
+    fs.writeFileSync(path.join(rawDir, 'written-5161.md'), '---\nname: written-5161\n---\nBody\n');
+    const { clearWrittenSkillDirs } = require('../gsd-core/bin/lib/install-engine.cjs');
+    clearWrittenSkillDirs();
+    installOpencodeFamilySkills('opencode', configDir, rawDir, `${configDir}/`);
+    const skillsDir = path.join(configDir, 'skills');
+    assert.ok(fs.existsSync(path.join(skillsDir, 'gsd-written-5161', 'SKILL.md')), 'precondition: the writer wrote it');
+    const owns = ownership('opencode', configDir, skillsDir, 'gsd-', { includeManifest: false, includeWritten: true });
+    assert.strictEqual(owns('gsd-written-5161'), true, 'a skill dir this writer wrote must be owned');
+    assert.strictEqual(ownership('opencode', configDir, skillsDir, 'gsd-', { includeManifest: false })('gsd-written-5161'), false,
+      'precondition: no first-party lookup reaches the raw dir, so only the record owns it');
+  });
+
+  test('the written-skill record names only written dirs, replaces per dir, resolves its key, and clears', (t) => {
+    const configDir = createTempDir('gsd-5161-record-');
+    t.after(() => cleanup(configDir));
+    const skillsDir = path.join(configDir, 'skills');
+    fs.mkdirSync(skillsDir, { recursive: true });
+    const { recordWrittenSkillDirs, clearWrittenSkillDirs } = require('../gsd-core/bin/lib/install-engine.cjs');
+    const owns = () => ownership('claude', configDir, skillsDir, 'gsd-', { includeManifest: false, includeWritten: true });
+    clearWrittenSkillDirs();
+    recordWrittenSkillDirs(skillsDir + path.sep, ['gsd-a-5161']);
+    assert.strictEqual(owns()('gsd-a-5161'), true, 'a written dir is owned, under a resolved key');
+    assert.strictEqual(owns()('gsd-b-5161'), false, 'a dir the writer did not write is not');
+    recordWrittenSkillDirs(skillsDir, ['gsd-b-5161']);
+    assert.strictEqual(owns()('gsd-a-5161'), false, 'a later write into the same dir replaces its entry');
+    assert.strictEqual(owns()('gsd-b-5161'), true);
+    clearWrittenSkillDirs();
+    assert.strictEqual(owns()('gsd-b-5161'), false, 'clearing empties the record');
+  });
+
+  test('installRuntimeArtifacts starts the written-skill record empty', (t) => {
+    const configDir = createTempDir('gsd-5161-engine-clear-');
+    t.after(() => cleanup(configDir));
+    sandboxHome(t, configDir);
+    const { recordWrittenSkillDirs } = require('../gsd-core/bin/lib/install-engine.cjs');
+    const elsewhere = path.join(configDir, 'earlier-skills');
+    recordWrittenSkillDirs(elsewhere, ['gsd-earlier-5161']);
+    const earlierOwns = () => ownership('claude', configDir, elsewhere, 'gsd-', { includeManifest: false, includeWritten: true })('gsd-earlier-5161');
+    assert.strictEqual(earlierOwns(), true, 'precondition: an earlier install recorded a write');
+    installRuntimeArtifacts('codex', configDir, 'global', RESOLVED_CORE);
+    assert.strictEqual(earlierOwns(), false, 'an earlier install\'s record does not survive into this one');
+  });
+
+  test('a .gsd-source marker naming a root staging refuses (a symlink) owns nothing', (t) => {
+    const configDir = createTempDir('gsd-5161-marker-symlink-');
+    t.after(() => cleanup(configDir));
+    // Unrelated notes reached through a symlink: staging refuses a symlinked root, so nothing in it
+    // can be a corpus this run staged, and a user dir sharing one of its stems must stay unowned.
+    const notes = path.join(configDir, 'notes');
+    fs.mkdirSync(notes, { recursive: true });
+    fs.writeFileSync(path.join(notes, 'user-notes-5161.md'), '# my notes\n');
+    const linked = path.join(configDir, 'linked-src', 'commands');
+    fs.mkdirSync(linked, { recursive: true });
+    fs.symlinkSync(notes, path.join(linked, 'gsd'), 'dir');
+    fs.mkdirSync(path.join(configDir, 'linked-src', 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(configDir, 'linked-src', 'agents', 'gsd-planner.md'), '---\nname: gsd-planner\n---\n');
+    fs.writeFileSync(path.join(configDir, '.gsd-source'), path.join(linked, 'gsd') + '\n');
+    const skillsDir = path.join(configDir, 'skills');
+    fs.mkdirSync(skillsDir, { recursive: true });
+
+    const owns = ownership('kimi', configDir, skillsDir, 'gsd-', { includeManifest: false });
+    assert.strictEqual(owns('gsd-user-notes-5161'), false, 'a stem read through a refused root must not own a user dir');
+    assert.strictEqual(owns('gsd-help'), true, 'precondition: the package corpus is still read');
+  });
+
+  test('a source DIRECTORY named like a command is not a first-party stem', (t) => {
+    const configDir = createTempDir('gsd-5161-srcdir-');
+    t.after(() => cleanup(configDir));
+    const otherCommands = path.join(configDir, 'other-src', 'commands', 'gsd');
+    fs.mkdirSync(path.join(otherCommands, 'phantom-union-5161.md'), { recursive: true });
+    fs.writeFileSync(path.join(otherCommands, 'phantom-union-5161.md', 'notes.txt'), 'not a command\n');
+    fs.writeFileSync(path.join(otherCommands, 'real-5161.md'), '---\nname: real-5161\n---\n');
+    fs.writeFileSync(path.join(configDir, '.gsd-source'), otherCommands + '\n');
+    const owns = ownership('claude', configDir, path.join(configDir, 'skills'), 'gsd-', { includeManifest: false });
+    assert.strictEqual(owns('gsd-real-5161'), true, 'precondition: the marker source was read');
+    assert.strictEqual(owns('gsd-phantom-union-5161'), false, 'only a regular .md file names a first-party stem');
+  });
+
+  test('installOpencodeFamilySkills does not own a raw-dir DIRECTORY named like a command', (t) => {
+    const configDir = createTempDir('gsd-5161-phantom-');
+    t.after(() => cleanup(configDir));
+    writePackageSourceMarkerFixture(configDir);
+    const rawDir = stageRawCommands('opencode', configDir);
+    fs.mkdirSync(path.join(rawDir, 'phantom-5161.md'), { recursive: true });
+    const userDir = path.join(configDir, 'skills', 'gsd-phantom-5161');
+    fs.mkdirSync(userDir, { recursive: true });
+    fs.writeFileSync(path.join(userDir, 'SKILL.md'), 'USER\n');
+
+    const origWarn = console.warn;
+    console.warn = () => {};
+    t.after(() => { console.warn = origWarn; });
+    installOpencodeFamilySkills('opencode', configDir, rawDir, `${configDir}/`);
+    console.warn = origWarn;
+
+    assert.strictEqual(fs.readFileSync(path.join(userDir, 'SKILL.md'), 'utf8'), 'USER\n',
+      'a dir the writer never rewrites must not be pruned as owned');
+  });
 });
 
 // ─── #2362: OpenCode/Kilo combined-family INSTALL path drops the capability
@@ -989,10 +1217,12 @@ for (const __runtime2362 of ['opencode', 'kilo']) {
       // this one capability's SKILL.md path — never chmod 0o000 (root bypasses
       // mode bits; silently zero-coverage under root Docker/CI).
       const skillPath = path.join(gsdHome, '.gsd', 'capabilities', 'my-thing', 'skills', 'my-thing', 'SKILL.md');
-      const origReadFileSync = fs.readFileSync;
-      fs.readFileSync = function injectedReadFileSync(p, ...rest) {
-        if (p === skillPath) throw new Error('injected read failure (#2362 regression test)');
-        return origReadFileSync.call(fs, p, ...rest);
+      // #5121: capability SKILL.md files are read through the bounded fd reader (open -> fstat -> read), so
+      // the failure is injected at the open the reader performs.
+      const origOpenSync = fs.openSync;
+      fs.openSync = function injectedOpenSync(p, ...rest) {
+        if (p === skillPath) throw Object.assign(new Error('injected read failure (#2362 regression test)'), { code: 'EACCES' });
+        return origOpenSync.call(fs, p, ...rest);
       };
       try {
         with2362GsdHome(gsdHome, () => {
@@ -1001,7 +1231,7 @@ for (const __runtime2362 of ['opencode', 'kilo']) {
           }, `installRuntimeArtifacts('${__runtime2362}', ...) must not throw when a registry-referenced capability skill is unreadable`);
         });
       } finally {
-        fs.readFileSync = origReadFileSync;
+        fs.openSync = origOpenSync;
       }
 
       assert.ok(
@@ -2489,6 +2719,7 @@ describe('_applyRuntimeRewrites — cline custom-dir embedded path (Fix 1)', () 
   test('installRuntimeArtifacts cline with CLINE_CONFIG_DIR custom: SKILL.md embeds custom path', (t) => {
     const configDir = createTempDir('gsd-cline-custom-dir-');
     t.after(() => cleanup(configDir));
+    useIsolatedHome(t);
 
     const MANIFEST_FULL = require('../gsd-core/bin/lib/install-profiles.cjs').loadSkillsManifest(
       path.join(__dirname, '..', 'commands', 'gsd')
@@ -3111,6 +3342,7 @@ describe('bug-2794: readGsdRuntimeProfileResolver resolves opencode tier overrid
     origUP = process.env.USERPROFILE;
     process.env.HOME = homeDir;
     process.env.USERPROFILE = homeDir;
+    process.env.GSD_HOME = homeDir; // #5017: the defaults store root follows HOME
   });
 
   afterEach(() => {
@@ -3204,6 +3436,7 @@ describe('#3705: install-time bake honours model_policy', () => {
     origUP = process.env.USERPROFILE;
     process.env.HOME = homeDir;
     process.env.USERPROFILE = homeDir;
+    process.env.GSD_HOME = homeDir; // #5017: the defaults store root follows HOME
   });
 
   afterEach(() => {
@@ -3406,6 +3639,7 @@ describe('bug-2794: OpenCode agent install embeds model_profile_overrides model'
     origCwd = process.cwd();
     process.env.HOME = homeDir;
     process.env.USERPROFILE = homeDir;
+    process.env.GSD_HOME = homeDir; // #5017: the defaults store root follows HOME
     process.chdir(projectDir);
   });
 
@@ -3929,6 +4163,7 @@ function runClaudeGlobalInstall(claudeHome) {
   process.env.CLAUDE_CONFIG_DIR = claudeHome;
   process.env.HOME = isolatedHome;
   process.env.USERPROFILE = isolatedHome;
+  process.env.GSD_HOME = isolatedHome; // #5017: the defaults store root follows HOME
   process.env.GSD_SKIP_STALE_SDK_CHECK = '1';
   process.chdir(REPO_ROOT);
 
@@ -4271,6 +4506,7 @@ function runGlobalInstall(runtime, tmpHome) {
   process.env[envVar] = tmpHome;
   process.env.HOME = isolatedHome;
   process.env.USERPROFILE = isolatedHome;
+  process.env.GSD_HOME = isolatedHome; // #5017: the defaults store root follows HOME
   process.env.GSD_SKIP_STALE_SDK_CHECK = '1';
   process.chdir(REPO_ROOT);
 
@@ -5021,6 +5257,28 @@ describe('_computePathPrefix', () => {
       homeDir: '/home/u',
     });
     assert.equal(prefix, '/home/u/.config/opencode/');
+  });
+
+  test('a sibling directory that merely starts with the home path is NOT under home (#5123)', () => {
+    const prefix = conversion._computePathPrefix({
+      isGlobal: true,
+      isOpencode: false,
+      isWindowsHost: false,
+      resolvedTarget: '/home/u2/cfg',
+      homeDir: '/home/u',
+    });
+    assert.equal(prefix, '/home/u2/cfg/');
+  });
+
+  test('global target equal to home → $HOME/ (#5123)', () => {
+    const prefix = conversion._computePathPrefix({
+      isGlobal: true,
+      isOpencode: false,
+      isWindowsHost: false,
+      resolvedTarget: '/home/u',
+      homeDir: '/home/u',
+    });
+    assert.equal(prefix, '$HOME/');
   });
 
   test('global target outside home → resolvedTarget/ form', () => {
@@ -5799,7 +6057,7 @@ describe('Bug #2973: dev-preferences default writer path is skills/gsd-dev-prefe
         // it -- and the writer under test resolves them env-FIRST. Sandboxing
         // HOME alone let an ambient CLAUDE_CONFIG_DIR win, and the SKILL.md
         // landed in the developer's live config dir instead of tmpHome.
-        env: Object.assign({}, process.env, TEST_ENV_BASE, { HOME: tmpHome, USERPROFILE: tmpHome }),
+        env: Object.assign({}, process.env, TEST_ENV_BASE, { HOME: tmpHome, USERPROFILE: tmpHome, GSD_HOME: tmpHome }),
         encoding: 'utf-8',
         // See WRITER_SUBPROCESS_TIMEOUT_MS's own doc comment (top of file)
         // for the full rationale.
@@ -5911,6 +6169,7 @@ describe('Bug #2911: migrateLegacyDevPreferencesToSkill honors the skills-kind h
     const savedMarker = process.env.GSD_TEST_HOME_SANDBOX;
     process.env.HOME = fakeHome;
     process.env.USERPROFILE = fakeHome;
+    process.env.GSD_HOME = fakeHome; // #5017: the defaults store root follows HOME
     process.env.GSD_TEST_HOME_SANDBOX = fakeHome;
     try {
       return fn();
@@ -7340,7 +7599,7 @@ describe('#2218 cross-scope shadowing', () => {
     // order matters for this fixture (a separate test covers order-independence).
     globalInstallResult = runNode([INSTALL_SCRIPT, '--claude', '--global'], {
       cwd: root,
-      env: installerEnv({ HOME: root, USERPROFILE: root }),
+      env: installerEnv({ HOME: root, USERPROFILE: root, GSD_HOME: root }),
       timeoutMs: INSTALL_TIMEOUT_MS,
     });
     assert.strictEqual(globalInstallResult.exitCode, 0,
@@ -7354,7 +7613,7 @@ describe('#2218 cross-scope shadowing', () => {
     // installer directly instead, with cwd pinned at the project dir.
     localInstallResult = runNode([INSTALL_SCRIPT, '--claude', '--local'], {
       cwd: projectDir,
-      env: installerEnv({ HOME: root, USERPROFILE: root }),
+      env: installerEnv({ HOME: root, USERPROFILE: root, GSD_HOME: root }),
       timeoutMs: INSTALL_TIMEOUT_MS,
     });
     assert.strictEqual(localInstallResult.exitCode, 0,
@@ -7472,7 +7731,7 @@ describe('#2873 C1-C6 — install-time shadow report (spawned installer wiring)'
   function spawnInstall(args, cwd, root, nodeFlags = []) {
     return runNode([...nodeFlags, INSTALL_SCRIPT, ...args], {
       cwd,
-      env: installerEnv({ HOME: root, USERPROFILE: root }),
+      env: installerEnv({ HOME: root, USERPROFILE: root, GSD_HOME: root }),
       timeoutMs: INSTALL_TIMEOUT_MS,
     });
   }
@@ -7742,6 +8001,7 @@ describe('#2873 C1-C6 — install-time shadow report (spawned installer wiring)'
       __prevCwd3543 = process.cwd();
       process.env.HOME = __home3543;
       process.env.USERPROFILE = __home3543;
+      process.env.GSD_HOME = __home3543; // #5017: the defaults store root follows HOME
       process.env.GSD_SKIP_STALE_SDK_CHECK = '1';
       for (const k of __XDG_ENV_3543) delete process.env[k];
       process.chdir(__project3543);
@@ -7963,6 +8223,7 @@ describe('installRuntimeArtifacts — G1: void-ignoring caller is unaffected (AC
     const configDirCaptured = createTempDir('gsd-g1-captured-');
     t.after(() => cleanup(configDirIgnored));
     t.after(() => cleanup(configDirCaptured));
+    useIsolatedHome(t);
 
     // Caller A: discards the return value entirely — today's every call site
     // (bin/install.js, both existing adapter test doubles).
@@ -8346,6 +8607,7 @@ describe('install() global codex — @~/.claude include rewrite (#4667)', () => 
         ...__isolatedNpmEnv4667(),
         HOME: tmpCodexHome,
         USERPROFILE: tmpCodexHome,
+        GSD_HOME: tmpCodexHome,
         GSD_TEST_MODE: '',
         NO_UPDATE_NOTIFIER: '1',
         npm_config_update_notifier: 'false',
@@ -8431,5 +8693,228 @@ describe('install() global codex — @~/.claude include rewrite (#4667)', () => 
       fallbacks > 0,
       'the _GSD_RUNTIME_ROOT .claude fallback chains must survive the rewrite (must-NOT-rewrite group)'
     );
+  });
+});
+
+// ── #5123 — installed @-includes must resolve to installed files ──────────────
+// Kimi neutralised `~/.claude/gsd-core` to the prose "GSD core", and the Copilot
+// and Antigravity converters hard-code their DEFAULT home, so with `--config-dir`
+// the includes pointed at files that only exist under the config dir. Each case
+// installs through the real CLI as a subprocess and resolves every include
+// against the filesystem, so the assertion is "the file is there", not "the
+// text equals what the converter wrote".
+describe('installed @ includes resolve to installed files (#5123)', () => {
+  const path5123 = path;
+  const created = [];
+
+  function runtimeInstall(runtimeFlag, home, configDir) {
+    const args = [path5123.join(__dirname, '..', 'bin', 'install.js'), runtimeFlag, '--global'];
+    if (configDir) args.push('--config-dir', configDir);
+    const result = __spawnSync4667(process.execPath, args, {
+      cwd: home,
+      env: {
+        ...process.env,
+        ...__isolatedNpmEnv4667(),
+        HOME: home,
+        USERPROFILE: home,
+        GSD_HOME: home,
+        GSD_TEST_MODE: '',
+        NO_UPDATE_NOTIFIER: '1',
+        npm_config_update_notifier: 'false',
+      },
+      encoding: 'utf8',
+      timeout: INSTALL_TIMEOUT_MS,
+    });
+    assert.equal(result.status, 0, `${runtimeFlag} install failed:\n${result.stdout}\n${result.stderr}`);
+  }
+
+  function tempDir(label) {
+    const dir = __createTempDir4667(`gsd-${label}-5123-`);
+    created.push(dir);
+    return dir;
+  }
+
+  // Manifest-tracked .md/.toml artifacts of one install root, CHANGELOG excluded
+  // (the installer's own scope for its rewrite and leak scan).
+  function manifestArtifacts(root) {
+    const manifest = JSON.parse(fs4667.readFileSync(path5123.join(root, 'gsd-file-manifest.json'), 'utf8'));
+    return Object.keys(manifest.files)
+      .filter((rel) => /\.(md|toml)$/.test(rel) && path5123.basename(rel) !== 'CHANGELOG.md')
+      .map((rel) => path5123.join(root, rel))
+      .filter((file) => fs4667.existsSync(file));
+  }
+
+  const INCLUDE_RE = /@((?:~|\$HOME)\/[^\s`"')\]]+?\.md|\/[^\s`"')\]]+?\.md|[A-Za-z]:\/[^\s`"')\]]+?\.md)/g;
+
+  function resolveRef(ref, home) {
+    if (ref.startsWith('~/')) return path5123.join(home, ref.slice(2));
+    if (ref.startsWith('$HOME/')) return path5123.join(home, ref.slice(6));
+    return ref;
+  }
+
+  // Every `@<path>.md` include that targets a gsd-core payload file.
+  function gsdIncludes(files, home) {
+    const out = [];
+    for (const file of files) {
+      const content = fs4667.readFileSync(file, 'utf8');
+      for (const match of content.matchAll(INCLUDE_RE)) {
+        if (!match[1].includes('/gsd-core/')) continue;
+        // The verbatim Claude-form corpus copies under gsd-core/{agents,commands}
+        // keep their `@~/.claude/` includes by design; the installer's leak scan
+        // already reports them. This suite is about the CONVERTED artifacts.
+        if (/^(?:~|\$HOME)\/\.claude\//.test(match[1])) continue;
+        out.push({ file, ref: match[0], resolved: resolveRef(match[1], home) });
+      }
+    }
+    return out;
+  }
+
+  function assertIncludesResolve(files, home, label) {
+    const includes = gsdIncludes(files, home);
+    assert.ok(includes.length > 50, `${label}: expected the install to carry many gsd-core includes, found ${includes.length}`);
+    const missing = includes.filter((inc) => !fs4667.existsSync(inc.resolved));
+    assert.equal(
+      missing.length, 0,
+      `${label}: ${missing.length} of ${includes.length} includes point at missing files, e.g.\n` +
+        missing.slice(0, 5).map((m) => `  ${m.ref}  (in ${path5123.basename(m.file)})`).join('\n'),
+    );
+  }
+
+  after(() => {
+    for (const dir of created) __cleanup4667(dir);
+  });
+
+  for (const [flag, defaultLiteral, label] of [
+    ['--copilot', '@~/.copilot/', 'copilot'],
+    ['--antigravity', '@~/.gemini/antigravity/', 'antigravity'],
+  ]) {
+    describe(`${label} --global --config-dir`, () => {
+      test('a config dir inside HOME: includes resolve under it', () => {
+        const home = tempDir(`${label}-home`);
+        const configDir = path5123.join(home, 'cfg');
+        runtimeInstall(flag, home, configDir);
+        const files = manifestArtifacts(configDir);
+        assertIncludesResolve(files, home, `${label} in-HOME config dir`);
+        const stale = files.filter((f) => fs4667.readFileSync(f, 'utf8').includes(defaultLiteral));
+        assert.equal(stale.length, 0, `files still pointing at the default home ${defaultLiteral}:\n${stale.slice(0, 5).join('\n')}`);
+      });
+
+      test('a config dir outside HOME: includes resolve under it', () => {
+        const home = tempDir(`${label}-home`);
+        const configDir = tempDir(`${label}-cfg`);
+        runtimeInstall(flag, home, configDir);
+        assertIncludesResolve(manifestArtifacts(configDir), home, `${label} outside-HOME config dir`);
+      });
+
+      test('reinstalling into the same config dir changes nothing (idempotent)', () => {
+        const home = tempDir(`${label}-home`);
+        const configDir = path5123.join(home, 'cfg');
+        runtimeInstall(flag, home, configDir);
+        const snapshot = () => manifestArtifacts(configDir).map((f) => `${f}\n${fs4667.readFileSync(f, 'utf8')}`).join('\n\0');
+        const first = snapshot();
+        runtimeInstall(flag, home, configDir);
+        assert.equal(snapshot(), first);
+      });
+    });
+
+    test(`${label} --global without --config-dir keeps the default-home includes`, () => {
+      const home = tempDir(`${label}-home`);
+      runtimeInstall(flag, home, null);
+      const root = (label === 'copilot') ? path5123.join(home, '.copilot') : path5123.join(home, '.gemini', 'antigravity');
+      const files = manifestArtifacts(root);
+      assertIncludesResolve(files, home, `${label} default install`);
+      const kept = files.filter((f) => fs4667.readFileSync(f, 'utf8').includes(defaultLiteral));
+      assert.ok(kept.length > 0, `${label}: the default install must keep ${defaultLiteral} includes unchanged`);
+    });
+  }
+
+  describe('kimi --global', () => {
+    test('no dangling "GSD core/" path survives and the replaced references resolve', () => {
+      const home = tempDir('kimi-home');
+      runtimeInstall('--kimi', home, null);
+      const root = path5123.join(home, '.config', 'agents');
+      const files = manifestArtifacts(root);
+      const dangling = files.filter((f) => /GSD core\/[a-z]/.test(fs4667.readFileSync(f, 'utf8')));
+      assert.equal(dangling.length, 0, `files with a prose "GSD core/" path:\n${dangling.slice(0, 5).join('\n')}`);
+
+      // The references that used to read "GSD core/<dir>/<file>.md" are real paths now.
+      const refRe = /(?:~|\$HOME)\/[^\s`"')\]]*?\/gsd-core\/(?:references|templates|workflows)\/[^\s`"')\]]+?\.md/g;
+      const missing = [];
+      let checked = 0;
+      for (const file of files) {
+        for (const ref of fs4667.readFileSync(file, 'utf8').match(refRe) || []) {
+          if (/\/\.claude\//.test(ref)) continue; // verbatim Claude-form corpus copies, see gsdIncludes
+          checked++;
+          if (!fs4667.existsSync(resolveRef(ref, home))) missing.push(`${ref} (in ${path5123.basename(file)})`);
+        }
+      }
+      assert.ok(checked > 50, `expected the kimi install to reference many gsd-core files, found ${checked}`);
+      assert.deepStrictEqual(missing.slice(0, 5), []);
+    });
+
+    test('the agent prompts reference the installed gsd-core root', () => {
+      const home = tempDir('kimi-home');
+      runtimeInstall('--kimi', home, null);
+      const prompt = fs4667.readFileSync(
+        path5123.join(home, '.config', 'agents', 'agents', 'subagents', 'gsd-executor.md'), 'utf8');
+      assert.ok(/(?:\$HOME|~|\/[^\s]{0,200}?)\/\.config\/agents\/gsd-core\/references\/mandatory-initial-read\.md/.test(prompt),
+        'gsd-executor must reference the installed mandatory-initial-read.md by path');
+    });
+  });
+});
+
+describe('retargetInstalledIncludes (#5123)', () => {
+  const retargetIncludes = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs').retargetInstalledIncludes;
+  const { hostBehaviorsFor } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
+  // The behaviors come from the real descriptors, not from a runtime name.
+  const retarget = (text, runtime, prefix) => retargetIncludes(text, hostBehaviorsFor(runtime), prefix);
+
+  test('copilot: the default-home include becomes the install root', () => {
+    assert.equal(
+      retarget('see @~/.copilot/gsd-core/references/a.md and @$HOME/.copilot/gsd-core/b.md', 'copilot', '/opt/cfg/'),
+      'see @/opt/cfg/gsd-core/references/a.md and @/opt/cfg/gsd-core/b.md',
+    );
+  });
+
+  test('antigravity: the default-home include becomes the install root', () => {
+    assert.equal(
+      retarget('@~/.gemini/antigravity/gsd-core/references/a.md', 'antigravity', '$HOME/cfg/'),
+      '@$HOME/cfg/gsd-core/references/a.md',
+    );
+  });
+
+  test('a default install (prefix is already the default home) is returned byte-identical', () => {
+    const text = '@~/.copilot/gsd-core/references/a.md\n@$HOME/.copilot/gsd-core/b.md\n';
+    assert.equal(retarget(text, 'copilot', '$HOME/.copilot/'), text);
+    const ag = '@~/.gemini/antigravity/gsd-core/references/a.md';
+    assert.equal(retarget(ag, 'antigravity', '$HOME/.gemini/antigravity/'), ag);
+  });
+
+  test('is idempotent', () => {
+    const once = retarget('@~/.copilot/gsd-core/references/a.md', 'copilot', '/opt/cfg/');
+    assert.equal(retarget(once, 'copilot', '/opt/cfg/'), once);
+  });
+
+  test('leaves other text alone: .claude includes, prose mentions, the other runtime home', () => {
+    const text = '@~/.claude/gsd-core/a.md and ~/.copilot prose and @~/.gemini/antigravity/x.md';
+    assert.equal(retarget(text, 'copilot', '/opt/cfg/'), text);
+  });
+
+  test('kimi: "GSD core/<path>" becomes the real path and the unsupported @ is dropped', () => {
+    assert.equal(
+      retarget('Read @GSD core/references/a.md and `GSD core/templates/b.md`', 'kimi', '$HOME/.config/agents/'),
+      'Read $HOME/.config/agents/gsd-core/references/a.md and `$HOME/.config/agents/gsd-core/templates/b.md`',
+    );
+  });
+
+  test('kimi: bare prose "GSD core" and a trailing slash with no path are left alone', () => {
+    const text = 'the GSD core is great; see GSD core/ and GSD core.';
+    assert.equal(retarget(text, 'kimi', '/x/'), text);
+  });
+
+  test('other runtimes and a prefix without a trailing slash are returned unchanged', () => {
+    const text = '@~/.copilot/gsd-core/a.md GSD core/a.md';
+    assert.equal(retarget(text, 'codex', '/x/'), text);
+    assert.equal(retarget(text, 'copilot', '/x'), text);
   });
 });

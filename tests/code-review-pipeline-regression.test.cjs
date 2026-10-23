@@ -4511,3 +4511,57 @@ describe('#3829 — the step\'s REVIEW.md lookup resolves a letter-suffixed phas
     }), { numRuns: 25 });
   });
 });
+
+// #5213: gsd-code-fixer's Tier-2 TypeScript check passed the edited file to tsc
+// positionally, which makes tsc ignore tsconfig.json (no jsx / paths / lib), so
+// every .tsx or alias-importing file failed in the very file just edited.
+describe('gsd-code-fixer TypeScript Tier-2 check is project-aware (#5213)', () => {
+  const AGENTS_DIR = path.join(__dirname, '..', 'agents');
+  const VARIANTS = {
+    full: fs.readFileSync(path.join(AGENTS_DIR, 'gsd-code-fixer.md'), 'utf-8'),
+    compact: fs.readFileSync(path.join(AGENTS_DIR, 'gsd-code-fixer.compact.md'), 'utf-8'),
+  };
+  const typescriptRow = (text) => text.split(/\r?\n/).find((l) => l.startsWith('| TypeScript |')) || '';
+
+  for (const [name, text] of Object.entries(VARIANTS)) {
+    test(`${name}: the edited file is never passed to tsc positionally`, () => {
+      assert.ok(!/tsc\s+--noEmit\s+\{file\}/.test(text), 'a positional "tsc --noEmit {file}" check remains');
+      assert.ok(!/tsc\s+--noEmit\s+\S*\.tsx?\b/.test(text), 'a positional tsc file argument remains');
+    });
+
+    test(`${name}: the TypeScript row prefers the project typecheck and a config that includes the file`, () => {
+      const row = typescriptRow(text);
+      assert.notEqual(row, '', 'no TypeScript row in the Tier-2 table');
+      assert.match(row, /typecheck/i, 'the project typecheck script is not preferred');
+      assert.match(row, /--listFilesOnly/, 'config inclusion is not verified with --listFilesOnly');
+      assert.match(row, /Tier 1/i, 'no fallback to Tier 1 when no config includes the file');
+    });
+
+    test(`${name}: a solution-style root config is not treated as passing`, () => {
+      assert.match(text, /solution-style/i);
+      assert.match(text, /"files": \[\]|files: \[\]/);
+    });
+
+    test(`${name}: the other Tier-2 rows are unchanged`, () => {
+      assert.ok(text.includes('| JavaScript | `node -c {file}` (syntax check) |'));
+      assert.ok(text.includes('| Python | `python -c "import ast; ast.parse(open(\'{file}\').read())"` |'));
+      assert.ok(text.includes('| Other | Skip to Tier 1 only |'));
+    });
+
+    test(`${name}: the procedure says how to find the config, filter the output and avoid build artifacts`, () => {
+      assert.match(text, /walk up/i, 'no instruction to walk up to the nearest tsconfig');
+      assert.match(text, /-p <config>/, 'the check is not run with -p <config>');
+      assert.match(text, /never `-b`/, 'tsc -b (which writes build artifacts) is not ruled out for the config path');
+      assert.match(text, /only (?:output )?lines (?:that start with|for) `\{file\}`/i, 'the output is not filtered to the edited file');
+    });
+  }
+
+  test('the compact variant carries the identical TypeScript check row', () => {
+    assert.equal(typescriptRow(VARIANTS.compact), typescriptRow(VARIANTS.full));
+  });
+
+  test('the full agent\'s scoping rule and fallback list use the project-aware form', () => {
+    assert.ok(!/If `npx tsc --noEmit \{file\}`/.test(VARIANTS.full), 'the scoping rule still names the positional form');
+    assert.ok(!/syntax check \(node -c, tsc --noEmit,/.test(VARIANTS.full), 'the fallback list still names bare tsc --noEmit');
+  });
+});

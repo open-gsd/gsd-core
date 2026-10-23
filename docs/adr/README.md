@@ -274,6 +274,7 @@ These govern the system as it stands. Cite these.
 | [ADR-4780](4780-labeled-arguments-block.md) | Command templates label the user's arguments in a standing `&lt;arguments&gt;` block | Accepted | — |
 | [ADR-4910](4910-planning-document-seam.md) | Planning documents are read and written through one parse → mutate → serialize seam | Accepted | — |
 | [ADR-5057](5057-one-owner-per-workflow-verdict.md) | One owner per workflow verdict — phase status, verification, gates, runtime activation, planning writes | Accepted | — |
+| [ADR-5559](5559-pi-agent-role-dispatch.md) | Agent-role dispatch on Pi — a GSD-owned `gsd_dispatch` tool that runs each role in an isolated `pi` child process | Accepted | — |
 
 ### Proposed
 

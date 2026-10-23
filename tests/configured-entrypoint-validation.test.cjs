@@ -6,6 +6,13 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
+// #5017: pinned GSD_HOME (next to HOME) is put back after each test so it never leaks into the next one.
+const __ORIG_GSD_HOME = process.env.GSD_HOME;
+require('node:test').afterEach(() => {
+  if (__ORIG_GSD_HOME === undefined) delete process.env.GSD_HOME;
+  else process.env.GSD_HOME = __ORIG_GSD_HOME;
+});
+
 const helpers = require('./helpers.cjs');
 
 const hooksSurface = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
@@ -22,6 +29,7 @@ function withSandboxedHome(t, prefix, fn) {
   const savedHome = process.env.HOME;
   const savedUserProfile = process.env.USERPROFILE;
   process.env.HOME = root;
+  process.env.GSD_HOME = root; // #5017: the defaults store root follows HOME
   process.env.USERPROFILE = root;
   const restoreConfigLocationEnv = helpers.scrubConfigLocationEnv();
   try {
@@ -56,6 +64,7 @@ test('finishInstall rejects an invalid configured entrypoint before Done output'
   const savedHome = process.env.HOME;
   const savedUserProfile = process.env.USERPROFILE;
   process.env.HOME = root;
+  process.env.GSD_HOME = root; // #5017: the defaults store root follows HOME
   process.env.USERPROFILE = root;
   const restoreConfigLocationEnv = helpers.scrubConfigLocationEnv();
   try {

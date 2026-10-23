@@ -89,6 +89,10 @@ function runHook(payload, cwd, extraEnv = {}) {
   // `USERPROFILE` too so that redirection actually takes effect on Windows
   // instead of silently leaking the real CI runner's profile directory.
   if ('HOME' in extraEnv) env.USERPROFILE = extraEnv.HOME;
+  // #5017: the defaults store root is GSD_HOME when set, and the test runner exports a sandbox
+  // GSD_HOME to every test — so redirecting only HOME no longer redirects the store. A test that
+  // redirects HOME redirects the store with it, unless it names GSD_HOME itself.
+  if ('HOME' in extraEnv && !('GSD_HOME' in extraEnv)) env.GSD_HOME = extraEnv.HOME;
   const r = runHookSeam(HOOK_PATH, [], {
     input: typeof payload === 'string' ? payload : JSON.stringify(payload),
     cwd,
@@ -511,6 +515,21 @@ describe('gsd-agent-isolation-guard.js: #3045 BLOCKER 2 — default-install fail
     assert.equal(JSON.parse(r.stdout).decision, 'block');
   });
 
+  test('#5017: the defaults.json runtime fallback reads $GSD_HOME/.gsd/defaults.json when GSD_HOME is set', (t) => {
+    const home = mkProject('gsd-aig-5017-home-');
+    const gsdHome = mkProject('gsd-aig-5017-gsdhome-');
+    t.after(() => { cleanup(home); cleanup(gsdHome); });
+    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ runtime: 'claude' }));
+
+    // Only the GSD_HOME store names a runtime; the home directory has none.
+    const r = runHook(agentPayload(), unconfiguredHarnessProject, { HOME: home, GSD_HOME: gsdHome });
+    assert.equal(r.status, 2, `stdout: ${r.stdout} stderr: ${r.stderr} — GSD_HOME defaults runtime must be enforced`);
+    // A blank GSD_HOME falls back to the home directory, which has no store -> inert.
+    const blank = runHook(agentPayload(), unconfiguredHarnessProject, { HOME: home, GSD_HOME: '' });
+    assert.equal(blank.status, 0, `stdout: ${blank.stdout} stderr: ${blank.stderr} — blank GSD_HOME must fall back to HOME`);
+  });
+
   test('part B (negative control): a project WITH its own config.json runtime key still wins over defaults.json', (t) => {
     const home = mkProject('gsd-aig-b2-home2-');
     t.after(() => cleanup(home));
@@ -733,6 +752,7 @@ describe('gsd-agent-isolation-guard.js: #3566 — per-install .gsd-runtime marke
 
   let savedHome;
   let savedUserProfile;
+  let savedGsdHome;
   let savedGsdRuntime;
   let markerProject; // scaffold-shaped config ({}), per #2840's no-runtime-key template
 
@@ -749,6 +769,7 @@ describe('gsd-agent-isolation-guard.js: #3566 — per-install .gsd-runtime marke
     }
     process.env.HOME = home;
     process.env.USERPROFILE = home;
+    process.env.GSD_HOME = home; // #5017: the store root
     if (envRuntime === undefined) delete process.env.GSD_RUNTIME;
     else process.env.GSD_RUNTIME = envRuntime;
     t.after(() => {
@@ -765,6 +786,7 @@ describe('gsd-agent-isolation-guard.js: #3566 — per-install .gsd-runtime marke
   before(() => {
     savedHome = process.env.HOME;
     savedUserProfile = process.env.USERPROFILE;
+    savedGsdHome = process.env.GSD_HOME;
     savedGsdRuntime = process.env.GSD_RUNTIME;
     markerProject = mkProject('gsd-aig-3566-');
     // Mirrors gsd-core/templates/config.json exactly: no `runtime` key — the COMMON
@@ -778,6 +800,8 @@ describe('gsd-agent-isolation-guard.js: #3566 — per-install .gsd-runtime marke
     else process.env.HOME = savedHome;
     if (savedUserProfile === undefined) delete process.env.USERPROFILE;
     else process.env.USERPROFILE = savedUserProfile;
+    if (savedGsdHome === undefined) delete process.env.GSD_HOME;
+    else process.env.GSD_HOME = savedGsdHome;
     if (savedGsdRuntime === undefined) delete process.env.GSD_RUNTIME;
     else process.env.GSD_RUNTIME = savedGsdRuntime;
     guardModule._setInstallRuntimeMarkerForTests(null);
@@ -876,6 +900,7 @@ describe('gsd-agent-isolation-guard.js: #3566 — per-install .gsd-runtime marke
     const configPath = path.join(proj, '.planning', 'config.json');
     process.env.HOME = home;
     process.env.USERPROFILE = home;
+    process.env.GSD_HOME = home; // #5017: the store root
     t.after(() => {
       cleanup(proj);
       cleanup(home);

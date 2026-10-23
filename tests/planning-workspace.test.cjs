@@ -440,7 +440,29 @@ const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, homeSandboxEnv, seedConfigSection, createTempDir, createTempProject, cleanup, withIsolatedProcessState } = require('./helpers.cjs');
+
+test('#5039: planning-workspace config seed ignores conflicting ambient defaults', (t) => {
+  const ambientHome = createTempDir('gsd-5039-planning-ambient-');
+  const controlDir = createTempProject('gsd-5039-planning-control-');
+  const seededDir = createTempProject('gsd-5039-planning-seeded-');
+  t.after(() => { cleanup(ambientHome); cleanup(controlDir); cleanup(seededDir); });
+  fs.mkdirSync(path.join(ambientHome, '.gsd'));
+  fs.writeFileSync(path.join(ambientHome, '.gsd', 'defaults.json'),
+    JSON.stringify({ workflow: { post_planning_gaps: false } }));
+
+  const [control, seeded] = withIsolatedProcessState(() => {
+    Object.assign(process.env, homeSandboxEnv(ambientHome));
+    return [runGsdTools('config-ensure-section', controlDir), seedConfigSection(seededDir)];
+  });
+
+  assert.ok(control.success, `Control seed failed: ${control.error}`);
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(controlDir, '.planning', 'config.json'), 'utf-8'))
+    .workflow.post_planning_gaps, false, 'the unsandboxed control must read the ambient default');
+  assert.ok(seeded.success, `Sandboxed seed failed: ${seeded.error}`);
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(seededDir, '.planning', 'config.json'), 'utf-8'))
+    .workflow.post_planning_gaps, true, 'the sandboxed seed must retain the built-in default');
+});
 
 describe('bug #3739 — gap-analysis padded-prefix CONTEXT.md', () => {
   let tmpDir;
@@ -459,7 +481,7 @@ describe('bug #3739 — gap-analysis padded-prefix CONTEXT.md', () => {
   }
 
   function ensureConfig() {
-    const r = runGsdTools('config-ensure-section', tmpDir);
+    const r = seedConfigSection(tmpDir);
     assert.ok(r.success, `config-ensure-section failed: ${r.error}`);
   }
 

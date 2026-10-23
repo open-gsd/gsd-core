@@ -589,7 +589,21 @@ jobs:
   test-conformance:
     name: conformance test (${{ matrix.os }}, ${{ matrix.node-version }}${{ matrix.shard && format(', shard {0}', matrix.shard) || '' }})
     needs: [changes, preflight]
-    if: needs.changes.outputs.code_changed == 'true' && needs.changes.outputs.full_matrix == 'true'
+    # #5604: when the repository variable GSD_PR_LINUX_ONLY is 'true', a
+    # pull_request run skips this lane unless the PR carries the `full-matrix`
+    # label; merge_group, push and workflow_dispatch always run it (the `changes`
+    # job reports full_matrix=true for every non-PR event). The variable is unset
+    # by default, which leaves today's behavior untouched. A maintainer sets it
+    # when the merge queue is enforced, so Windows/macOS are first exercised on the
+    # queue's merge-group commit rather than after merge, and unsets it to roll
+    # back. `required-tests` already accepts this job as skipped. A label applied
+    # after a run started does not re-run it: push a commit or dispatch the branch.
+    if: >-
+      needs.changes.outputs.code_changed == 'true' &&
+      needs.changes.outputs.full_matrix == 'true' &&
+      (github.event_name != 'pull_request' ||
+      vars.GSD_PR_LINUX_ONLY != 'true' ||
+      contains(github.event.pull_request.labels.*.name, 'full-matrix'))
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -701,10 +715,25 @@ jobs:
       # measurements: `node scripts/gen-test-timings.cjs --platform win32
       # <downloaded shard files>` — see docs/TESTING-SUITES.md. The macOS job
       # exports too; no darwin table is committed yet.
+      # #5473 (TEMPORARY): a job-long watcher beside the test step on every
+      # Windows shard, recording UTC-stamped moments when the VM stops making
+      # progress, to line up against the bounded-child ETIMEDOUT reds. Delete
+      # this step, the report step below and scripts/diagnose-windows-spawn-watcher.cjs
+      # once #5473 is resolved.
+      - name: Start spawn-stall watcher (windows)
+        if: matrix.os == 'windows-latest'
+        continue-on-error: true
+        run: node scripts/diagnose-windows-spawn-watcher.cjs start
+
       - name: Run platform-conformance-tier tests
         env:
           RUN_TESTS_TIMING_EVENTS_FILE: ${{ runner.temp }}/test-timings-${{ matrix.os }}-job${{ strategy.job-index }}.jsonl
         run: node scripts/run-tests.cjs --files-from .ci-conformance-tests.txt${{ matrix.shard && format(' --shard {0}', matrix.shard) || '' }}
+
+      - name: Report spawn-stall watcher (windows)
+        if: always() && matrix.os == 'windows-latest'
+        continue-on-error: true
+        run: node scripts/diagnose-windows-spawn-watcher.cjs report
 
       # #5071: `always()` — a red or killed shard's completed files are still
       # real measurements, and a red run is exactly when fresh durations help.

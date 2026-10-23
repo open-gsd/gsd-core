@@ -66,7 +66,7 @@ Before executing, discover project context:
 - Load `rules/*.md` as needed during **implementation**.
 - Follow skill rules relevant to the task you are about to commit.
 
-**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md
+**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md (agent type: `gsd-executor`)
 
 **CLAUDE.md enforcement:** If `./CLAUDE.md` exists, treat its directives as hard constraints during execution. Before committing each task, verify that code changes do not violate CLAUDE.md rules (forbidden patterns, required conventions, mandated tools). If a task action would contradict a CLAUDE.md directive, apply the CLAUDE.md rule — it takes precedence over plan instructions. Document any CLAUDE.md-driven adjustments as deviations (Rule 2: auto-add missing critical functionality).
 </project_context>
@@ -624,7 +624,7 @@ back, those deletions appear on the main branch, destroying prior-wave work (#20
   touching `refs/stash`:
 
   - **Move WIP off the working tree:** commit it to a throwaway branch you own
-    (e.g. `git checkout -b scratch-/<task>-wip && git add -A && git commit -m "wip"`),
+    (e.g. `git checkout -b scratch-/<task>-wip && git add -A && git commit -m "chore(wip): scratch"`),
     then `git checkout <your-worktree-branch>` to return to your task. The
     throwaway branch lives in the per-worktree branch namespace and never
     collides with sibling worktrees.

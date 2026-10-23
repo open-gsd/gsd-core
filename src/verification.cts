@@ -43,7 +43,9 @@ import scanPhasePlans = require('./plan-scan.cjs');
 import coreUtilsMod = require('./core-utils.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-scope.cjs is an export= CommonJS module
 import planningScopeMod = require('./planning-scope.cjs');
-import { execGit } from './shell-command-projection.cjs';
+import { execGit, platformWriteSync } from './shell-command-projection.cjs';
+import { splitLines, joinLines } from './text-lines.cjs';
+import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { isContainedIn, requireSafePath, PathAcceptance } from './security.cjs';
 import { escapeRegex } from './pattern.cjs';
@@ -1458,6 +1460,77 @@ function findVerificationStatusError(
   return null;
 }
 
+/**
+ * #5291: legacy report statuses `validate health --repair` may rewrite, and the
+ * closed-set status each becomes. Deliberately minimal — only the value the
+ * maintainer ruled on (`pass_with_caveats` -> `passed`). Every other status
+ * outside the closed set (`pending`, `partial`, …) has NO mapping: it stays
+ * refused and its W030 stays advise-only (fail closed; only `passed` satisfies
+ * the gate). The original value is preserved in `legacy_status`.
+ */
+const LEGACY_STATUS_REPAIRS: Readonly<Record<string, VerifierStatus>> = Object.freeze({
+  pass_with_caveats: VERIFICATION_STATUS.PASSED,
+});
+
+/** The closed-set status a known legacy `raw` status repairs to, or `null` when it has no mapping. */
+function legacyStatusRepairTarget(raw: unknown): VerifierStatus | null {
+  return typeof raw === 'string' && Object.prototype.hasOwnProperty.call(LEGACY_STATUS_REPAIRS, raw)
+    ? LEGACY_STATUS_REPAIRS[raw]
+    : null;
+}
+
+type LegacyStatusRepairResult =
+  | { ok: true; from: string; to: VerifierStatus; legacyStatusKept: boolean }
+  | { ok: false; reason: string };
+
+/**
+ * #5291: rewrite one report's frontmatter `status:` from a known legacy value
+ * to its closed-set equivalent and record the original as `legacy_status:`
+ * right after it. Touches only those lines — every other byte (body, other
+ * keys, line endings) is preserved — and never overwrites an existing
+ * `legacy_status`. Refuses (writes nothing) for a path that is not a report
+ * contained in its own phase directory, a report with no frontmatter `status`,
+ * and any status without a mapping.
+ */
+function repairLegacyVerificationStatus(filePath: string): LegacyStatusRepairResult {
+  if (!isReportContained(path.dirname(filePath), filePath)) {
+    return { ok: false, reason: 'the report is not contained in its phase directory' };
+  }
+  let content: string;
+  try {
+    content = fs.readFileSync(filePath, 'utf-8');
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+  // The fence owner (`locateFrontmatterFence`) is the one place that knows where
+  // the frontmatter body starts and ends (BOM, CRLF, lenient closing fence).
+  const fence = locateFrontmatterFence(content);
+  if (!fence || !fence.closed) return { ok: false, reason: 'the report has no closed frontmatter' };
+  const lines = splitLines(content.slice(fence.openEnd, fence.bodyEnd));
+  // The YAML reader keeps the LAST of duplicate keys, so the line the repair
+  // edits is the last `status:` line — the very value the refusal named. A
+  // trailing comment (`status: pass_with_caveats # x`) is not part of the value.
+  let statusAt = -1;
+  lines.forEach((l, i) => { if (/^status:/.test(l)) statusAt = i; });
+  if (statusAt === -1) return { ok: false, reason: 'the report frontmatter has no status' };
+  const raw = lines[statusAt]
+    .replace(/^status:\s*/, '')
+    .replace(/\s+#.*$/, '')
+    .replace(/\s+$/, '')
+    .replace(/^(["'])(.*)\1$/, '$2');
+  const to = legacyStatusRepairTarget(raw);
+  if (to === null) return { ok: false, reason: `${describeRawStatus(raw)} has no known repair` };
+  const legacyStatusKept = lines.some((l) => /^legacy_status:/.test(l));
+  lines[statusAt] = `status: ${to}`;
+  if (!legacyStatusKept) lines.splice(statusAt + 1, 0, `legacy_status: ${raw}`);
+  platformWriteSync(
+    filePath,
+    content.slice(0, fence.openEnd) + joinLines(lines, fence.eol) + content.slice(fence.bodyEnd),
+    { verbatim: true },
+  );
+  return { ok: true, from: raw, to, legacyStatusKept };
+}
+
 interface ResolveVerificationFileOptions {
   /**
    * #3473 F2: three OTHER hand-rolled selection sites (`src/commands.cts`'s
@@ -2689,6 +2762,8 @@ const verificationModule = {
   isReportContained,
   routeResult,
   findVerificationStatusError,
+  legacyStatusRepairTarget,
+  repairLegacyVerificationStatus,
   defaultPhaseCleanCommitTimesMs,
   resolvePhaseArtifactFile,
   resolveVerificationFile,

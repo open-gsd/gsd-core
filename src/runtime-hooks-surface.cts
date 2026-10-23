@@ -2565,6 +2565,9 @@ const SETTINGS_JSON_HOOK_ROWS: readonly SettingsJsonHookRow[] = deepFreeze([
   // Guard: only register if the hook file was actually installed (#1754, #1817).
   { file: 'gsd-check-update.js', event: 'SessionStart', command: { opts: 'updateCheckCommand' },
     configuredMessage: 'Configured update check hook', skipLabel: 'update check hook' },
+  // #5465: persists the gsd-core bin directory on PATH through $CLAUDE_ENV_FILE (SessionStart-only).
+  { file: 'gsd-path-export.js', event: 'SessionStart', timeout: 5, command: { build: 'js' },
+    configuredMessage: 'Configured PATH persistence hook', skipLabel: 'PATH persistence hook' },
   { file: 'gsd-context-monitor.js', event: 'post', matcher: 'Bash|Edit|Write|MultiEdit|Agent|Task', timeout: 10,
     command: { opts: 'contextMonitorCommand' },
     configuredMessage: 'Configured context window monitor hook', skipLabel: 'context monitor hook',

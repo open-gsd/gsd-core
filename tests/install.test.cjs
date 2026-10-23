@@ -24,6 +24,14 @@
 process.env.GSD_TEST_MODE = '1';
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
+
+// #5017: tests in this file pin GSD_HOME next to HOME (the defaults store root follows GSD_HOME);
+// put the runner's value back once this file finishes so a pinned home never leaks past it.
+const __ORIG_GSD_HOME = process.env.GSD_HOME;
+require('node:test').after(() => {
+  if (__ORIG_GSD_HOME === undefined) delete process.env.GSD_HOME;
+  else process.env.GSD_HOME = __ORIG_GSD_HOME;
+});
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -163,6 +171,7 @@ describe('getGlobalConfigDir/getConfigDirFromHome — antigravity 2.x layout det
       fs.mkdirSync(path.join(home, '.gemini', 'antigravity-ide'), { recursive: true });
       process.env.HOME = home;
       process.env.USERPROFILE = home;
+      process.env.GSD_HOME = home; // #5017: the defaults store root follows HOME
       assert.strictEqual(
         getGlobalConfigDir('antigravity'),
         path.join(home, '.gemini', 'antigravity-ide'),
@@ -182,6 +191,7 @@ describe('getGlobalConfigDir/getConfigDirFromHome — antigravity 2.x layout det
       fs.mkdirSync(path.join(home, '.gemini', 'antigravity-cli'), { recursive: true });
       process.env.HOME = home;
       process.env.USERPROFILE = home;
+      process.env.GSD_HOME = home; // #5017: the defaults store root follows HOME
       assert.strictEqual(
         getGlobalConfigDir('antigravity'),
         path.join(home, '.gemini', 'antigravity-cli'),
@@ -209,6 +219,7 @@ describe('getGlobalConfigDir/getConfigDirFromHome — antigravity 2.x layout det
     fs.writeFileSync(path.join(home, '.gemini', 'antigravity-cli', 'gsd-core', 'VERSION'), '1.6.0\n');
     process.env.HOME = home;
     process.env.USERPROFILE = home;
+    process.env.GSD_HOME = home; // #5017: the defaults store root follows HOME
     assert.strictEqual(
       getGlobalConfigDir('antigravity'),
       path.join(home, '.gemini', 'antigravity-cli'),
@@ -228,6 +239,7 @@ describe('getGlobalConfigDir/getConfigDirFromHome — antigravity 2.x layout det
     fs.mkdirSync(path.join(home, '.gemini', 'antigravity-cli'), { recursive: true });
     process.env.HOME = home;
     process.env.USERPROFILE = home;
+    process.env.GSD_HOME = home; // #5017: the defaults store root follows HOME
     assert.strictEqual(
       getGlobalConfigDir('antigravity'),
       path.join(home, '.gemini', 'antigravity'),
@@ -344,6 +356,7 @@ describe('getConfigDirFromHome — spot-checks', () => {
     delete process.env.ANTIGRAVITY_CONFIG_DIR;
     process.env.HOME = home;
     process.env.USERPROFILE = home;
+    process.env.GSD_HOME = home; // #5017: the defaults store root follows HOME
     try {
       assert.strictEqual(getConfigDirFromHome('antigravity', false), "'.agents'");
       assert.strictEqual(getConfigDirFromHome('antigravity', true), "'.gemini', 'antigravity'");
@@ -1052,8 +1065,23 @@ describe('install — changeset CLI lands at scripts/changeset/cli.cjs (#935)', 
     // Use the CHANGELOG.md that was installed into gsd-core/ (installed by the installer)
     const changelogPath = path.join(claudeDir, 'gsd-core', 'CHANGELOG.md');
     assert.ok(fs.existsSync(changelogPath), 'CHANGELOG.md must be installed under gsd-core/');
+    // Extract the LATEST release only. The old range (0.0.0..9999.0.0) made --json emit the whole
+    // changelog, which grows every release, and runNode applies spawnSync's default 1 MiB
+    // maxBuffer: past it spawnSync kills the child (exit code null, empty stderr). A one-release
+    // range keeps the output bounded however large CHANGELOG.md grows, still parses the whole
+    // file, and still walks the found-entries path. --from is exclusive, so the range is
+    // (previous, latest]; the two are picked by semver order, not by heading position.
+    const bySemverDesc = (a, b) => {
+      const [x, y] = [a, b].map((v) => v.split('.').map(Number));
+      return y[0] - x[0] || y[1] - x[1] || y[2] - x[2];
+    };
+    const releases = [...fs.readFileSync(changelogPath, 'utf8').matchAll(/^## \[(\d+\.\d+\.\d+)\]/gm)]
+      .map((m) => m[1])
+      .sort(bySemverDesc);
+    assert.ok(releases.length >= 2, 'installed CHANGELOG.md must carry at least two released ## [x.y.z] headings');
+    const [latest, previous] = releases;
     const result = runNode(
-      [cliPath, 'extract', '--from', '0.0.0', '--to', '9999.0.0', '--changelog', changelogPath, '--json'],
+      [cliPath, 'extract', '--from', previous, '--to', latest, '--changelog', changelogPath, '--json'],
       { timeoutMs: PROBE_TIMEOUT_MS },
     );
     // extract must NOT throw a MODULE_NOT_FOUND or Cannot find module error
@@ -1061,11 +1089,19 @@ describe('install — changeset CLI lands at scripts/changeset/cli.cjs (#935)', 
       !result.stderr.includes('MODULE_NOT_FOUND') && !result.stderr.includes('Cannot find module'),
       `installed cli.cjs extract must resolve all modules; stderr=${result.stderr}`,
     );
-    // extract exit code 0 (found entries) or 2 (no entries in range) are both valid;
-    // any other exit code is an error
-    assert.ok(
-      result.exitCode === 0 || result.exitCode === 2,
-      `installed cli.cjs extract must exit 0 or 2; got ${result.exitCode}; stderr=${result.stderr}`,
+    // The range is built from two headings that exist in the file, so extract must FIND the latest
+    // release: exit 2 ("no releases in range") would mean the CLI and this test disagree about the
+    // changelog, which is a regression this test exists to catch, not an acceptable outcome.
+    assert.strictEqual(
+      result.exitCode,
+      0,
+      `installed cli.cjs extract (${previous}, ${latest}] must exit 0; got ${result.exitCode} (outcome=${result.outcome}, signal=${result.signal}, code=${result.code}, stdout bytes=${result.stdout.length}); stderr=${result.stderr}`,
+    );
+    const report = JSON.parse(result.stdout);
+    assert.deepStrictEqual(
+      report.releases.map((r) => r.version),
+      [latest],
+      'the extracted range must contain exactly the latest release',
     );
   });
 
@@ -1345,6 +1381,7 @@ describe('antigravity local install writes to .agents/ canonical dir (#791)', ()
     delete process.env.ANTIGRAVITY_CONFIG_DIR;
     process.env.HOME = homeDir;
     process.env.USERPROFILE = homeDir;
+    process.env.GSD_HOME = homeDir; // #5017: the defaults store root follows HOME
     try {
       const result = install(true, 'antigravity');
       assert.strictEqual(result.runtime, 'antigravity');
@@ -1506,6 +1543,7 @@ describe('windsurf local install writes workflow slash commands (#1615)', () => 
     delete process.env.WINDSURF_CONFIG_DIR;
     process.env.HOME = homeDir;
     process.env.USERPROFILE = homeDir;
+    process.env.GSD_HOME = homeDir; // #5017: the defaults store root follows HOME
     try {
       const result = install(true, 'windsurf');
       assert.strictEqual(result.runtime, 'windsurf');
@@ -1540,6 +1578,7 @@ describe('windsurf local install writes workflow slash commands (#1615)', () => 
     delete process.env.WINDSURF_CONFIG_DIR;
     process.env.HOME = homeDir;
     process.env.USERPROFILE = homeDir;
+    process.env.GSD_HOME = homeDir; // #5017: the defaults store root follows HOME
     try {
       const result = install(true, 'windsurf');
       assert.ok(fs.existsSync(path.join(result.configDir, 'gsd-core', 'workflows', 'update.md')),
@@ -1749,6 +1788,7 @@ function runGlobalInstall767(runtime, tmpHome) {
   process.env[envVar] = tmpHome;
   process.env.HOME = isolatedHome;
   process.env.USERPROFILE = isolatedHome;
+  process.env.GSD_HOME = isolatedHome; // #5017: the defaults store root follows HOME
   process.env.GSD_SKIP_STALE_SDK_CHECK = '1';
   process.chdir(REPO_ROOT_767);
 
@@ -2268,6 +2308,7 @@ describe('bug #2256 — readGsdEffectiveModelOverrides', () => {
     // the real user's home and the fixture is invisible.
     origUserProfile = process.env.USERPROFILE;
     process.env.HOME = homeDir;
+    process.env.GSD_HOME = homeDir; // #5017: the defaults store root follows HOME
     if (isWindows) process.env.USERPROFILE = homeDir;
   });
 
@@ -4327,6 +4368,7 @@ describe('bug #3571: configuration generated manifests resolve in install layout
   test('post-install: install() copies configuration manifests to co-located bin/shared', () => {
     process.env.HOME = tmpRoot;
     process.env.USERPROFILE = tmpRoot;
+    process.env.GSD_HOME = tmpRoot; // #5017: the defaults store root follows HOME
 
     silenceConsole(() => {
       install(true, 'codex');
@@ -4560,6 +4602,7 @@ module.exports = { catalog };
     fs.mkdirSync(claudeDir, { recursive: true });
     process.env.HOME = tmpRoot;
     process.env.USERPROFILE = tmpRoot;
+    process.env.GSD_HOME = tmpRoot; // #5017: the defaults store root follows HOME
 
     // Capture process.exit to prevent the test from being killed.
     const origExit = process.exit;
@@ -4666,6 +4709,7 @@ const __savedUserProfile = process.env.USERPROFILE;
 __foldBefore(() => {
   process.env.HOME = FAKE_HOME;
   process.env.USERPROFILE = FAKE_HOME;
+  process.env.GSD_HOME = FAKE_HOME; // #5017: the defaults store root follows HOME
 });
 __foldAfter(() => {
   if (__savedHome === undefined) delete process.env.HOME;
@@ -4768,6 +4812,7 @@ const __savedUserProfile = process.env.USERPROFILE;
 __foldBefore(() => {
   process.env.HOME = FAKE_HOME;
   process.env.USERPROFILE = FAKE_HOME;
+  process.env.GSD_HOME = FAKE_HOME; // #5017: the defaults store root follows HOME
 });
 __foldAfter(() => {
   if (__savedHome === undefined) delete process.env.HOME;
@@ -7424,7 +7469,7 @@ function installAndRead(runtime) {
   const res = spawnSync(
     process.execPath,
     [INSTALL, `--${runtime}`, '--global', '--config-dir', dir],
-    { encoding: 'utf8', timeout: INSTALL_TIMEOUT_MS, env: { ...process.env, HOME: dir, USERPROFILE: dir } },
+    { encoding: 'utf8', timeout: INSTALL_TIMEOUT_MS, env: { ...process.env, HOME: dir, USERPROFILE: dir, GSD_HOME: dir } },
   );
   assert.strictEqual(res.status, 0, `install --${runtime} failed: ${res.stderr || res.stdout}`);
   const wf = path.join(dir, 'gsd-core', 'workflows', 'execute-phase.md');
@@ -7608,7 +7653,7 @@ test('real install: cursor negotiates --worktree through its own emitted gate an
       // GSD_RUNTIME outranks the config tier in resolveRuntime, so an ambient
       // one in the developer's shell would satisfy this test without the
       // install's own config ever being read. Blank it explicitly.
-      const hermeticEnv = { ...process.env, HOME: dir, USERPROFILE: dir };
+      const hermeticEnv = { ...process.env, HOME: dir, USERPROFILE: dir, GSD_HOME: dir };
       delete hermeticEnv.GSD_RUNTIME;
 
       // Seam again — `runHook` documents `interpreter: 'bash'` for a shell
@@ -7748,6 +7793,7 @@ describe('Bug #2395: finishInstall persists runtime identity for non-Claude runt
   __before(() => {
     process.env.HOME = LOCAL_FAKE_HOME;
     process.env.USERPROFILE = LOCAL_FAKE_HOME;
+    process.env.GSD_HOME = LOCAL_FAKE_HOME; // #5017: the defaults store root follows HOME
   });
   __after(() => {
     if (__savedHome === undefined) delete process.env.HOME;
@@ -8023,6 +8069,7 @@ describe('#607 --dry-run flag: spawned installer exits 0 and mutates nothing', (
           ...process.env,
           HOME: tmpHome,
           USERPROFILE: tmpHome,
+          GSD_HOME: tmpHome,
           // Redirect Claude config dir into isolated tmp home
           CLAUDE_CONFIG_DIR: path.join(tmpHome, '.claude'),
           // Suppress slow stale-SDK npm check
@@ -8101,6 +8148,7 @@ describe('#607 --dry-run flag: spawned installer exits 0 and mutates nothing', (
           ...process.env,
           HOME: tmpHome,
           USERPROFILE: tmpHome,
+          GSD_HOME: tmpHome,
           CLAUDE_CONFIG_DIR: path.join(tmpHome, '.claude'),
           GSD_SKIP_STALE_SDK_CHECK: '1',
           GSD_TEST_MODE: undefined,

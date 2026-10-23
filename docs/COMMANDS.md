@@ -474,6 +474,10 @@ Verify milestone met its definition of done.
 
 Archive milestone, tag release.
 
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `--ws <name>` | No | Scope the milestone to a workstream; skips the shared `PROJECT.md` evolution review and leaves `PROJECT.md` out of the archive commit |
+
 **Prerequisites:** Milestone audit complete (recommended)
 **Produces:** `MILESTONES.md` entry, git tag
 
@@ -1773,6 +1777,8 @@ Review source files changed during a phase for bugs, security vulnerabilities, a
 
 **Optional external reviewer lanes (#4209):** Pass one or more reviewer-lane flags — any flag the roster declares (run `gsd_run review-lane flags` to list them for your installation, e.g. `--codex`, `--agy`) — to have that lane independently review the same already-resolved file scope alongside the internal `gsd-code-reviewer` agent. The prompt sent to each lane carries only the repository root, canonical file paths, review depth, and base SHA — never source file contents — under four fixed prohibitions: no source mutation, no test execution, no background processes, no polling. An external lane's findings are corroborating evidence only: `gsd-code-reviewer` independently re-verifies every claim against the actual source before writing it to `REVIEW.md`, so there is exactly one `REVIEW.md` schema regardless of how many lanes ran. An explicitly requested lane that is unavailable or fails is reported as a warning — it never falls back to a raw provider CLI call. Omitting every reviewer-lane flag (the default) reviews with only the internal agent, unchanged from before #4209. This is distinct from `/gsd-review`, which reviews `PLAN.md` files before execution — see [Set up cross-AI review](how-to/set-up-cross-ai-review.md).
 
+**Reviewer lanes outside a phase:** call `gsd_run review-lane dispatch-step` directly (outside a workflow fence `gsd_run` is not defined; call `node <install>/gsd-core/bin/gsd-tools.cjs` instead), with changed files on stdin and `--repo-root`, `--depth`, `--base-sha`, `--run-dir` (a fresh temp dir; read each lane's `results[].reviewPath` from the JSON before removing it), `--cap-id code-review --point <point>`, `--explicit <slugs>` (all required). The `code-review` capability must be enabled via `workflow.code_review` and active at `<point>`: `execute:post`, or `execute:wave:post` when `workflow.code_review_point` selects it. `--explicit` takes comma-separated canonical slugs, not flag aliases (`antigravity`, not `agy`); flags are space-separated (`--depth quick`). See `commands/gsd/code-review.md` for details.
+
 **Optional structural pre-pass:** Set `code_quality.fallow.enabled` to `true` to run fallow before the agent review. GSD writes `{phase}/FALLOW.json` and embeds a `Structural Findings (fallow)` section in `REVIEW.md`. Configure scope and profile with `code_quality.fallow.scope` and `code_quality.fallow.profile`.
 
 ```bash
@@ -1857,6 +1863,8 @@ Reviewers are prompted to verify the plan's claims against the actual repository
 | `--all` | Include all available reviewers (CLI + local model servers) |
 
 **No `jq`, `curl`, or `timeout` prerequisite.** Reviewer lanes used to shell out to these for JSON parsing, HTTP calls, and wall-clock bounding, which made five lanes unavailable on a stock Windows/Git-Bash host (no `jq`) and left one lane unbounded on stock macOS (no `timeout` or `gtimeout`). GSD now does all three itself, so every lane runs with nothing on your `PATH` but the reviewer's own CLI. A lane that declares an external tool it genuinely needs still reports itself unavailable with an install hint rather than running into an empty review.
+
+**Local-lane availability:** `gsd_run review-lane availability [--selected a,b]` prints one `<slug>:available|missing` line per first-party local OpenAI-compatible lane (`ollama`, `lm_studio`, `llama_cpp`) in roster order. Each lane's host is `review.<lane>_host` if set, else its descriptor default. The probe is a bounded 2s GET `/v1/models`; any HTTP response (including 401, 404, 5xx) counts as `available`, while connection failure or timeout counts as `missing`. The same rule applies when you name a local reviewer explicitly: a server that answers 404 or 5xx is treated as reachable and the run proceeds. Redirects are not followed, and installed third-party lanes are never probed. The `jq` prerequisite is reported separately by the review workflow.
 
 **Unavailable reviewers:** an explicit reviewer flag is an assertion. If you name a reviewer that cannot run on this host — its CLI is not installed, a required external tool is missing, its local server is unreachable, or its egress destination changed (see below) — `/gsd-review` reports an **error** for that reviewer and does not proceed with a reduced set. This holds even when other named reviewers are available: `--codex --qwen` on a host without `qwen` fails rather than silently becoming a Codex-only review.
 

@@ -279,8 +279,30 @@ const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, homeSandboxEnv, seedConfigSection, createTempDir, createTempProject, cleanup, withIsolatedProcessState } = require('./helpers.cjs');
 const { normalizePhaseReqIds } = require('../gsd-core/bin/lib/gap-checker.cjs');
+
+test('#5039: gap-checker config seed ignores conflicting ambient defaults', (t) => {
+  const ambientHome = createTempDir('gsd-5039-checker-ambient-');
+  const controlDir = createTempProject('gsd-5039-checker-control-');
+  const seededDir = createTempProject('gsd-5039-checker-seeded-');
+  t.after(() => { cleanup(ambientHome); cleanup(controlDir); cleanup(seededDir); });
+  fs.mkdirSync(path.join(ambientHome, '.gsd'));
+  fs.writeFileSync(path.join(ambientHome, '.gsd', 'defaults.json'),
+    JSON.stringify({ workflow: { post_planning_gaps: false } }));
+
+  const [control, seeded] = withIsolatedProcessState(() => {
+    Object.assign(process.env, homeSandboxEnv(ambientHome));
+    return [runGsdTools('config-ensure-section', controlDir), seedConfigSection(seededDir)];
+  });
+
+  assert.ok(control.success, `Control seed failed: ${control.error}`);
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(controlDir, '.planning', 'config.json'), 'utf-8'))
+    .workflow.post_planning_gaps, false, 'the unsandboxed control must read the ambient default');
+  assert.ok(seeded.success, `Sandboxed seed failed: ${seeded.error}`);
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(seededDir, '.planning', 'config.json'), 'utf-8'))
+    .workflow.post_planning_gaps, true, 'the sandboxed seed must retain the built-in default');
+});
 
 describe('gap-analysis --phase-req-ids scoping (#447)', () => {
   let tmpDir;
@@ -310,7 +332,7 @@ describe('gap-analysis --phase-req-ids scoping (#447)', () => {
     tmpDir = createTempProject();
     phaseDir = path.join(tmpDir, '.planning', 'phases', '01-test');
     fs.mkdirSync(phaseDir, { recursive: true });
-    const r = runGsdTools('config-ensure-section', tmpDir);
+    const r = seedConfigSection(tmpDir);
     assert.ok(r.success, `config-ensure-section failed: ${r.error}`);
   });
 
@@ -617,7 +639,7 @@ describe('#1269 — gap-analysis --phase-req-ids range (integration)', () => {
     tmpDir = createTempProject();
     phaseDir = path.join(tmpDir, '.planning', 'phases', '01-test');
     fs.mkdirSync(phaseDir, { recursive: true });
-    const r = runGsdTools('config-ensure-section', tmpDir);
+    const r = seedConfigSection(tmpDir);
     assert.ok(r.success, `config-ensure-section failed: ${r.error}`);
   });
 

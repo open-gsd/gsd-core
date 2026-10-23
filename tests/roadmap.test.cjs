@@ -5989,6 +5989,81 @@ describe('#4906 Phase 2: cmdRoadmapUpdatePlanProgress Plans-line seam migration 
     assert.equal(read.value, '1/1 plans complete', 'round-tripped value matches exactly what was computed');
   });
 
+  // #4947: the verb owns the count token AND the pending-plan list it derives
+  // from — a glued tail naming plans that now have SUMMARY files is reconciled;
+  // every other word of the annotation stays the operator's.
+  function addPhase10Plan(planId) {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'phases', '10-test-phase', `${planId}-PLAN.md`), '# Plan\n');
+  }
+
+  test('#4947 row 11: a pending-plan clause naming only now-summarized plans is dropped, the rest of the annotation kept', () => {
+    seedPhase10('**Plans:** 0/1 plans executed in 11 waves; 1 gap-closure plan pending (10-01)');
+    const result = runGsdTools('roadmap update-plan-progress 10', tmpDir);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.equal(plansLineIn(fs.readFileSync(roadmapPath, 'utf-8')), '**Plans:** 1/1 plans complete in 11 waves');
+  });
+
+  test('#4947 row 12: a pending-plan clause keeps the still-pending ids and recounts them', () => {
+    seedPhase10('**Plans:** 0/2 plans executed in 3 waves; 2 gap-closure plans pending (10-01, 10-02)');
+    addPhase10Plan('10-02');
+    const result = runGsdTools('roadmap update-plan-progress 10', tmpDir);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.equal(
+      plansLineIn(fs.readFileSync(roadmapPath, 'utf-8')),
+      '**Plans:** 1/2 plans executed in 3 waves; 1 gap-closure plan pending (10-02)',
+    );
+  });
+
+  test('#4947 row 13: a pending clause naming ids this command cannot match is left untouched', () => {
+    seedPhase10('**Plans:** 0/1 plans executed; 1 follow-up plan pending (see backlog)');
+    const result = runGsdTools('roadmap update-plan-progress 10', tmpDir);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.equal(
+      plansLineIn(fs.readFileSync(roadmapPath, 'utf-8')),
+      '**Plans:** 1/1 plans complete; 1 follow-up plan pending (see backlog)',
+    );
+  });
+
+  test('#4947 row 14: a bare TBD value is replaced with the computed count (annotated TBD stays row 5)', () => {
+    seedPhase10('**Plans**: TBD');
+    const result = runGsdTools('roadmap update-plan-progress 10', tmpDir);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.equal(plansLineIn(fs.readFileSync(roadmapPath, 'utf-8')), '**Plans**: 1/1 plans complete');
+  });
+
+  test('#4947 row 15: inserting the checklist under a TBD Plans line leaves no TBD behind', () => {
+    seedPhase10('**Plans**: TBD', { verified: false });
+    addPhase10Plan('10-02');
+    const result = runGsdTools('roadmap update-plan-progress 10', tmpDir);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    const written = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.ok(!/\bTBD\b/.test(written), 'no TBD placeholder remains');
+    assert.ok(written.includes('**Plans**: 1/2 plans executed\n- [x] 10-01-PLAN.md\n- [ ] 10-02-PLAN.md'), written);
+  });
+
+  test('#4947 row 16: a word-prefixed Progress cell is reported, not silently skipped, when the heading is still written', () => {
+    seedPhase10('**Plans**: 0/1 plans');
+    fs.writeFileSync(
+      roadmapPath,
+      fs.readFileSync(roadmapPath, 'utf-8').replace('| 10 Test Phase |', '| Phase 10 |'),
+    );
+    const result = runGsdTools('roadmap update-plan-progress 10', tmpDir);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.updated, true);
+    assert.ok(Array.isArray(output.warnings) && output.warnings.some((w) => /Progress table/.test(w)),
+      `expected a Progress-table warning, got ${JSON.stringify(output.warnings)}`);
+    assert.ok(fs.readFileSync(roadmapPath, 'utf-8').includes('| Phase 10 | 0/1 | Not started | - |'),
+      'the unrecognized row stays byte-identical (#4247 decision)');
+  });
+
+  test('#4947 row 17: a recognized Progress row produces no warnings', () => {
+    seedPhase10('**Plans**: 0/1 plans');
+    const result = runGsdTools('roadmap update-plan-progress 10', tmpDir);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.equal(JSON.parse(result.output).warnings, undefined);
+  });
+
   test('row 12: the Plans-line migration is CRLF-safe', () => {
     const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
     const annotation = '— crlf annotation';
@@ -6146,4 +6221,239 @@ describe('#4965: roadmap analyze checkbox regex must not read another phase\'s l
     assert.strictEqual(phase(output, '1').roadmap_complete, false,
       'a ticked line decorated with anything beyond an optional ** must NOT match — this is the deliberate narrowing, not a regression');
   });
+});
+
+/**
+ * #5542: plan-id matching in the ROADMAP plan-checkbox writers must end at a
+ * real id boundary. `47-1` is a different plan from `47-10`, and `01-01` from
+ * `01-01.1`; a superseded plan's summary must tick nothing.
+ */
+function plansRoadmap(rows) {
+  return `# Roadmap
+
+## v1.0
+
+- [ ] **Phase 47: Foo**
+
+### Phase 47: Foo
+**Goal:** x
+**Plans:** 0/2
+Plans:
+${rows.join('\n')}
+`;
+}
+
+describe('plan-id row boundary (#5542)', () => {
+  let tmpDir;
+  let phaseDir;
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    phaseDir = path.join(tmpDir, '.planning', 'phases', '47-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+  });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const plan = (id, extraFrontmatter = '') => fs.writeFileSync(
+    path.join(phaseDir, `${id}-PLAN.md`),
+    `---\nphase: foo\nplan: ${id}\nwave: 1\n${extraFrontmatter}---\n# Plan\n`);
+  const summary = (id) => fs.writeFileSync(
+    path.join(phaseDir, `${id}-SUMMARY.md`), `---\nphase: foo\nplan: ${id}\n---\n# Summary\n`);
+  const write = (rows) => fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), plansRoadmap(rows));
+  const read = () => fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf8');
+  const update = () => {
+    const r = runGsdTools('roadmap update-plan-progress 47', tmpDir);
+    assert.ok(r.success, `update-plan-progress failed: ${r.error}`);
+  };
+
+  test('update-plan-progress ticks only the row of its own plan when one id prefixes another', () => {
+    plan('47-1'); plan('47-10'); summary('47-1');
+    write(['- [ ] 47-10-PLAN.md', '- [ ] 47-1-PLAN.md']);
+    update();
+    const out = read();
+    assert.match(out, /- \[ \] 47-10-PLAN\.md/);
+    assert.match(out, /- \[x\] 47-1-PLAN\.md/);
+  });
+
+  test('listing order does not change which row ticks', () => {
+    plan('47-1'); plan('47-10'); summary('47-1');
+    write(['- [ ] 47-1-PLAN.md', '- [ ] 47-10-PLAN.md']);
+    update();
+    const out = read();
+    assert.match(out, /- \[x\] 47-1-PLAN\.md/);
+    assert.match(out, /- \[ \] 47-10-PLAN\.md/);
+  });
+
+  test('a superseded plan\'s summary ticks no live plan', () => {
+    plan('47-1', 'status: superseded\n'); plan('47-10'); summary('47-1');
+    write(['- [ ] 47-10-PLAN.md']);
+    update();
+    assert.match(read(), /- \[ \] 47-10-PLAN\.md/);
+  });
+
+  test('a dotted sub-id is a distinct plan', () => {
+    plan('47-01'); plan('47-01.1'); summary('47-01');
+    write(['- [ ] 47-01.1-PLAN.md', '- [ ] 47-01-PLAN.md']);
+    update();
+    const out = read();
+    assert.match(out, /- \[ \] 47-01\.1-PLAN\.md/);
+    assert.match(out, /- \[x\] 47-01-PLAN\.md/);
+  });
+
+  // Both plans summarized (summaries older than the verification report) and
+  // verification passed, so `phase complete 47` is allowed to run.
+  const readyToComplete = (firstPlanFrontmatter = '') => {
+    plan('47-1', firstPlanFrontmatter); plan('47-10'); summary('47-1'); summary('47-10');
+    const old = new Date('2000-01-01T00:00:00Z');
+    for (const id of ['47-1', '47-10']) fs.utimesSync(path.join(phaseDir, `${id}-SUMMARY.md`), old, old);
+    fs.writeFileSync(path.join(phaseDir, '47-VERIFICATION.md'), '---\nstatus: passed\n---\n# Verification\n');
+  };
+
+  test('phase complete flips each plan\'s own row when one id prefixes another', () => {
+    readyToComplete();
+    write(['- [ ] 47-10-PLAN.md', '- [ ] 47-1-PLAN.md']);
+    const r = runGsdTools('phase complete 47', tmpDir);
+    assert.ok(r.success, `phase complete failed: ${r.error}`);
+    const out = read();
+    assert.match(out, /- \[x\] 47-10-PLAN\.md/);
+    assert.match(out, /- \[x\] 47-1-PLAN\.md/);
+  });
+
+  for (const [label, row, expected] of [
+    ['suffix-less with a dash description', '- [ ] 47-1 — desc', '- [x] 47-1 — desc'],
+    ['bold', '- [ ] **47-1**', '- [x] **47-1**'],
+    ['colon', '- [ ] 47-1: desc', '- [x] 47-1: desc'],
+  ]) {
+    test(`existing row form still ticks: ${label}`, () => {
+      plan('47-1'); summary('47-1');
+      write([row]);
+      update();
+      assert.ok(read().includes(expected), `expected "${expected}" in:\n${read()}`);
+    });
+  }
+
+  test('existing row form still ticks: slugged plan filename with a bare-id summary', () => {
+    fs.writeFileSync(path.join(phaseDir, '47-01-scaffold-PLAN.md'), '---\nphase: foo\nplan: 47-01\nwave: 1\n---\n# Plan\n');
+    summary('47-01');
+    write(['- [ ] 47-01-scaffold-PLAN.md']);
+    update();
+    assert.ok(read().includes('- [x] 47-01-scaffold-PLAN.md'), read());
+  });
+
+  test('a longer numeric id row does not count as presence of its shorter prefix id', () => {
+    plan('47-01'); plan('47-01-02');
+    write(['- [ ] 47-01-02-PLAN.md - b']);
+    update();
+    assert.match(read(), /- \[ \] 47-01-PLAN\.md/, '47-01 has no row of its own, so one must be inserted');
+  });
+
+  test('a row whose id ends in sentence punctuation still ticks', () => {
+    plan('47-01'); summary('47-01');
+    write(['- [ ] 47-01. Setup']);
+    update();
+    assert.ok(read().includes('- [x] 47-01. Setup'), read());
+  });
+
+  test('phase complete does not flip the row of a superseded plan', () => {
+    readyToComplete('status: superseded\n');
+    write(['- [ ] 47-1-PLAN.md', '- [ ] 47-10-PLAN.md']);
+    const r = runGsdTools('phase complete 47', tmpDir);
+    assert.ok(r.success, `phase complete failed: ${r.error}`);
+    const out = read();
+    assert.match(out, /- \[ \] 47-1-PLAN\.md/);
+    assert.match(out, /- \[x\] 47-10-PLAN\.md/);
+  });
+});
+
+describe('phase checklist stamp is anchored to the phase\'s own bullet (#5545)', () => {
+  let tmpDir;
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '02-new');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fs.writeFileSync(path.join(phaseDir, '02-01-PLAN.md'), '---\nphase: new\nplan: 02-01\nwave: 1\n---\n# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '02-01-SUMMARY.md'), '---\nphase: new\nplan: 02-01\n---\n# Summary\n');
+    fs.writeFileSync(path.join(phaseDir, '02-VERIFICATION.md'), '---\nphase: new\nstatus: passed\n---\n# Verification\n');
+  });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const write = (lines) => fs.writeFileSync(
+    path.join(tmpDir, '.planning', 'ROADMAP.md'), `# Roadmap\n\n## v2.0\n\n${lines.join('\n')}\n`);
+  const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+  const bullets = () => splitLines(fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf8'))
+    .filter((l) => /^\s*- \[/.test(l));
+  const update = () => {
+    const r = runGsdTools('roadmap update-plan-progress 2', tmpDir);
+    assert.ok(r.success, `update-plan-progress failed: ${r.error}`);
+    return JSON.parse(r.output);
+  };
+
+  test('ticks only the phase\'s own bullet, not a bullet that merely mentions it', () => {
+    write(['- [ ] v1.0 - Phase 1 through Phase 2', '- [ ] **Phase 2: New**']);
+    update();
+    const [mention, own] = bullets();
+    assert.equal(mention, '- [ ] v1.0 - Phase 1 through Phase 2');
+    assert.match(own, /^- \[x\] \*\*Phase 2: New\*\* \(completed \d{4}-\d{2}-\d{2}\)$/);
+  });
+
+  test('the completion annotation stays on its own bullet when the label ends the line', () => {
+    write(['- [ ] Phase 2', '- [ ] Other work']);
+    update();
+    const [own, other] = bullets();
+    assert.match(own, /^- \[x\] Phase 2 \(completed \d{4}-\d{2}-\d{2}\)$/);
+    assert.equal(other, '- [ ] Other work');
+  });
+
+  test('a bullet that only mentions the phase does not satisfy the gate', () => {
+    write(['- [ ] v1.0 - Phase 1 through Phase 2']);
+    const before = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf8');
+    const out = update();
+    assert.equal(out.updated, false);
+    assert.equal(out.reason, 'missing_phase_details');
+    assert.equal(fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf8'), before);
+  });
+
+  for (const [label, bullet] of [
+    ['bold', '- [ ] **Phase 2: New**'],
+    ['plain', '- [ ] Phase 2: New'],
+    ['padded', '- [ ] Phase 02: New'],
+    ['indented', '  - [ ] **Phase 2: New**'],
+  ]) {
+    test(`existing bullet form still ticks: ${label}`, () => {
+      write([bullet]);
+      update();
+      assert.match(bullets()[0], /^\s*- \[x\] .*\(completed \d{4}-\d{2}-\d{2}\)$/);
+    });
+  }
+
+  test('a decimal sub-phase bullet is not matched for its parent phase', () => {
+    write(['- [ ] Phase 2.1: Sub']);
+    const out = update();
+    assert.equal(out.updated, false);
+    assert.equal(bullets()[0], '- [ ] Phase 2.1: Sub');
+  });
+
+  test('an already-checked bullet still counts as a found target', () => {
+    write(['- [x] **Phase 2: New** (completed 2026-01-01)']);
+    const out = update();
+    assert.equal(out.updated, false);
+    assert.notEqual(out.reason, 'missing_phase_details');
+  });
+
+  // Intentional narrowing (the same one #4965 made for `roadmap analyze`'s
+  // checklist reader): only whitespace and one optional `**` may precede the
+  // label, so a decorated bullet is not the phase's own bullet.
+  for (const [label, bullet] of [
+    ['an emoji prefix', '- [ ] \u{1F6A7} **Phase 2: New**'],
+    ['a blockquote marker', '> - [ ] **Phase 2: New**'],
+    ['leading text', '- [ ] 02 - Phase 2: New'],
+  ]) {
+    test(`a bullet with ${label} is not the phase's own bullet (intentional)`, () => {
+      write([bullet]);
+      const out = update();
+      assert.equal(out.updated, false);
+      assert.equal(out.reason, 'missing_phase_details');
+    });
+  }
 });

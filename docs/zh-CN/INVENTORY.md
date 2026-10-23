@@ -12,7 +12,7 @@
 
 ---
 
-## 代理 (33 shipped)
+## 代理
 
 完整清单位于 `agents/gsd-*.md`。"主要文档"列标注了 [`docs/AGENTS.md`](../AGENTS.md) 是否提供完整角色卡（*primary*）、"高级与专项代理"章节中的简短存根（*advanced stub*），或未覆盖（*inventory only*）。
 
@@ -52,11 +52,11 @@
 | gsd-doc-classifier | 将单个规划文档分类为 ADR、PRD、SPEC、DOC 或 UNKNOWN；并行生成以处理文档语料库。 | `/gsd-ingest-docs` | advanced stub |
 | gsd-doc-synthesizer | 将已分类的规划文档综合为一个统一上下文，具有优先级规则、循环检测和三桶冲突报告。 | `/gsd-ingest-docs` | advanced stub |
 
-**覆盖说明。** `docs/AGENTS.md` 为 21 个主要代理提供了完整角色卡，并为 12 个高级代理提供了简洁存根。该文件中的代理工具权限摘要仅涵盖主要的 21 个代理；高级代理的工具列表记录在 `agents/gsd-*.md` 中各代理的 frontmatter 里。
+**覆盖说明。** `docs/AGENTS.md` 为主要代理提供了完整角色卡，并为高级代理提供了简洁存根。该文件中的代理工具权限摘要仅涵盖主要代理；高级代理的工具列表记录在 `agents/gsd-*.md` 中各代理的 frontmatter 里。
 
 ---
 
-## 命令 (67 shipped)
+## 命令
 
 完整清单位于 `commands/gsd/*.md`。以下分组与 `docs/COMMANDS.md` 的章节顺序一致；每行包含命令名称、从命令 frontmatter `description:` 派生的一行角色描述，以及源文件链接。`tests/command-count-sync.test.cjs` 将数量锁定到文件系统。
 
@@ -167,7 +167,7 @@
 
 ---
 
-## 工作流 (88 shipped)
+## 工作流
 
 完整清单位于 `gsd-core/workflows/*.md`。工作流是命令在内部引用的轻量编排器；大多数不由最终用户直接阅读。以下行将每个工作流文件映射到其角色（来源于 `<purpose>` 块），以及在适用情况下映射到调用它的命令。
 
@@ -264,7 +264,7 @@
 
 ---
 
-## 参考资料 (62 shipped)
+## 参考资料
 
 完整清单位于 `gsd-core/references/*.md`。参考资料是工作流和代理 `@-reference` 的共享知识文档。以下分组与 [`docs/ARCHITECTURE.md`](ARCHITECTURE.md#references-gsd-corereferencesmd) 一致 — 核心、工作流、思维模型集群和模块化规划器分解。
 
@@ -366,7 +366,7 @@
 
 ---
 
-## CLI 模块 (81 shipped)
+## CLI 模块
 
 完整清单：`gsd-core/bin/lib/*.cjs`。
 
@@ -458,7 +458,7 @@
 
 ---
 
-## 钩子 (14 shipped)
+## 钩子
 
 完整清单：`hooks/`。
 

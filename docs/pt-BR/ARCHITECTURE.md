@@ -119,7 +119,7 @@ Pontos de entrada voltados ao usuário. Cada arquivo contém frontmatter YAML (n
 - **Copilot:** Comandos slash (forma com hífen, `/gsd-command-name`)
 - **Antigravity:** Skills
 
-**Total de comandos:** consulte [`docs/INVENTORY.md`](INVENTORY.md#commands) para a contagem oficial e o roster completo.
+**Total de comandos:** consulte [`docs/INVENTORY.md`](INVENTORY.md#comandos) para a contagem oficial e o roster completo.
 
 #### Roteamento hierárquico em dois estágios (v1.40, [#2792](https://github.com/open-gsd/gsd-core/issues/2792))
 
@@ -183,7 +183,7 @@ Definições de agentes especializados com frontmatter especificando:
 
 ### Referências (`gsd-core/references/*.md`)
 
-Documentos de conhecimento compartilhado que workflows e agentes `@-referenciam` (consulte [`docs/INVENTORY.md`](INVENTORY.md#references-41-shipped) para a contagem oficial e o roster completo):
+Documentos de conhecimento compartilhado que workflows e agentes `@-referenciam` (consulte [`docs/INVENTORY.md`](INVENTORY.md#referências) para a contagem oficial e o roster completo):
 
 **Referências principais:**
 
@@ -266,7 +266,7 @@ Hooks de runtime que se integram ao agente de IA anfitrião:
 | `gsd-validate-commit.sh` | `PreToolUse` | Validação de commit para aplicação de commits convencionais |
 | `gsd-phase-boundary.sh` | `PostToolUse` | Detecção de limite de fase para transições de workflow |
 
-Consulte [`docs/INVENTORY.md`](INVENTORY.md#hooks-11-shipped) para o roster oficial de 11 hooks.
+Consulte [`docs/INVENTORY.md`](INVENTORY.md#hooks) para o roster oficial de 11 hooks.
 
 ### Hub de Roteamento de Comandos (`gsd-core/bin/lib/command-routing-hub.cjs`)
 
@@ -274,7 +274,7 @@ Os roteadores de família de comandos CJS despacham através do `CommandRoutingH
 
 ### Ferramentas CLI (`gsd-core/bin/`)
 
-Utilitário CLI Node.js (`gsd-tools.cjs`) com módulos de domínio distribuídos em `gsd-core/bin/lib/` (consulte [`docs/INVENTORY.md`](INVENTORY.md#cli-modules-33-shipped) para o roster oficial):
+Utilitário CLI Node.js (`gsd-tools.cjs`) com módulos de domínio distribuídos em `gsd-core/bin/lib/` (consulte [`docs/INVENTORY.md`](INVENTORY.md#módulos-de-cli) para o roster oficial):
 
 
 | Módulo                 | Responsabilidade                                                                                      |
@@ -329,7 +329,7 @@ Orquestrador (workflow .md)
 
 ### Categorias Principais de Criação de Agentes
 
-Taxonomia conceitual de padrões de criação para os 21 agentes primários. Para o roster oficial de 31 agentes (incluindo os 10 agentes avançados/especializados como `gsd-pattern-mapper`, `gsd-code-reviewer`, `gsd-code-fixer`, `gsd-ai-researcher`, `gsd-domain-researcher`, `gsd-eval-planner`, `gsd-eval-auditor`, `gsd-framework-selector`, `gsd-debug-session-manager`, `gsd-intel-updater`), consulte [`docs/INVENTORY.md`](INVENTORY.md#agents-31-shipped).
+Taxonomia conceitual de padrões de criação para os agentes primários. Para o roster oficial de agentes (incluindo os agentes avançados/especializados como `gsd-pattern-mapper`, `gsd-code-reviewer`, `gsd-code-fixer`, `gsd-ai-researcher`, `gsd-domain-researcher`, `gsd-eval-planner`, `gsd-eval-auditor`, `gsd-framework-selector`, `gsd-debug-session-manager`, `gsd-intel-updater`), consulte [`docs/INVENTORY.md`](INVENTORY.md#agentes).
 
 
 | Categoria        | Agentes                                                                                 | Paralelismo                                                                               |

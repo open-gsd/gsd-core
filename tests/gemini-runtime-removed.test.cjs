@@ -58,7 +58,7 @@ const { convertClaudeAgentToAntigravityAgent } = require('../bin/install.js');
 // touch the real machine. Runtime-config env overrides are stripped so the
 // child resolves config dirs strictly under the temp HOME.
 function runInstaller(args, homeDir) {
-  const env = { ...process.env, HOME: homeDir, USERPROFILE: homeDir, GSD_TEST_MODE: '1' };
+  const env = { ...process.env, HOME: homeDir, USERPROFILE: homeDir, GSD_HOME: homeDir, GSD_TEST_MODE: '1' };
   for (const k of [
     'CLAUDE_CONFIG_DIR', 'GEMINI_CONFIG_DIR', 'ANTIGRAVITY_CONFIG_DIR',
     'XDG_CONFIG_HOME', 'CODEX_CONFIG_DIR', 'OPENCODE_CONFIG_DIR', 'KILO_CONFIG_DIR',
@@ -123,7 +123,7 @@ describe('#1928 --gemini CLI deprecation redirect', () => {
     // exit before it (the dispatch defaults an empty selection to 'claude').
     fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
     fs.writeFileSync(path.join(home, '.claude', 'sentinel.txt'), 'keep me');
-    const env = { ...process.env, HOME: home, USERPROFILE: home };
+    const env = { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home };
     delete env.GSD_TEST_MODE;
     delete env.CLAUDE_CONFIG_DIR;
     const r = spawnSync(process.execPath, [INSTALL_JS, '--gemini', '--uninstall', '--global'], {

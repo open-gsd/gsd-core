@@ -290,6 +290,7 @@ Runtime hooks that integrate with the host AI agent:
 | `gsd-context-monitor.js` | `PostToolUse` / `AfterTool` | Injects agent-facing context warnings at 35%/25% remaining by default (configurable — see [CONFIGURATION.md](CONFIGURATION.md)) |
 | `gsd-check-update.js` | `SessionStart` | Foreground trigger for the background update check |
 | `gsd-ensure-canonical-path.js` | `SessionStart` | For Claude Code plugin installs, symlinks `~/.claude/gsd-core/{bin,contexts,references,templates,workflows}` to the plugin's bundled tree so `@~/.claude/gsd-core/...` includes resolve; runs first in `SessionStart`, no-op in classic installs, self-heals after `claude plugin update` (#997) |
+| `gsd-path-export.js` | `SessionStart` | Appends the installed `gsd-core/bin` directory to `$CLAUDE_ENV_FILE` (provided to SessionStart hooks only) so a later Bash call resolves `gsd_run` from PATH; no-op when the variable is unset |
 | `gsd-check-update-worker.js` | (helper) | Background worker spawned by `gsd-check-update.js`; no direct event registration |
 | `gsd-prompt-guard.js` | `PreToolUse` | Scans `.planning/` writes for prompt injection patterns (advisory) |
 | `gsd-read-injection-scanner.js` | `PostToolUse` | Scans Read tool output for injected instructions in untrusted content |

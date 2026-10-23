@@ -49,6 +49,9 @@ import installProfilesMod = require('./install-profiles.cjs');
 const { readActiveProfile, loadSkillsManifest, resolveProfile, parseRequires, parseCallsAgents, workflowAgentRefs } = installProfilesMod;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+import ledgerMod = require('./capability-ledger.cjs');
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 import surfaceMod = require('./surface.cjs');
 const { resolveSurface } = surfaceMod;
 
@@ -368,14 +371,15 @@ function _loadInstalledSkillsManifest(configDir: string): Map<string, string[]> 
     // SKILL.md must NOT register the stem — otherwise the capability would be
     // wrongly reported surfaced/enabled and a verify:post hook would render
     // for a skill that cannot run.
-    if (!fs.existsSync(skillMdPath)) continue;
-    let content = '';
+    // #5121: bounded read — a missing, non-regular (FIFO/device) or oversized SKILL.md registers no stem.
+    let content: string | null = '';
     try {
-      content = fs.readFileSync(skillMdPath, 'utf8');
+      content = ledgerMod.readSkillFile(skillMdPath);
     } catch {
       // SKILL.md present but unreadable — register with no deps (parity with
       // loadSkillsManifest's readFileSync catch branch).
     }
+    if (content === null) continue;
     // Parse requires: via the SAME shared parser loadSkillsManifest uses, so
     // installed-runtime dependency resolution can never silently diverge from
     // the source-tree path (single source of truth — no duplicated regex).
