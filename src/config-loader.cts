@@ -128,6 +128,67 @@ function _getConfigNested(parsed: Record<string, unknown>, section: string, fiel
   return undefined;
 }
 
+/**
+ * #5470: every key the project-config branch of the loader reads from two
+ * spellings — the flat top-level key and its nested `<section>.<field>` alias.
+ * (With no `.planning/`, the global-defaults branch below projects its own
+ * keys from `~/.gsd/defaults.json` and does not use this table.) The flat key
+ * wins, except for `branching_strategy`, `base_branch` and `sub_repos`:
+ * normalizeLegacyKeys hoists those legacy flat keys under their section first,
+ * and an existing nested value wins there. `_baseConfig` reads them through
+ * this table (`getAliased`); its plain `get` takes one spelling, so the
+ * two-spelling `get(key, nested)` form cannot bypass the table.
+ *
+ * `configGet` says how `config-get` (`src/config.cts`) answers the entry.
+ * `loader`: both spellings print the value the loader resolves, because a
+ * shipped workflow reads the setting through config-get under a spelling the
+ * docs do not write it in. `resolver`: each spelling reads only itself, through
+ * config-get's key resolver, which ADR-5057 (Phase 6, #5139) makes the
+ * authority for gate config; a top-level alias it rejects stays rejected, and
+ * `check auto-mode` answers what config-get answers. `resolvedAt` is where the
+ * loader publishes the value: the flat key, except `max_prompt_tokens`, which
+ * is published under `review`. `parallelization` is a boolean, or an object
+ * whose `enabled` field holds it.
+ */
+const CONFIG_KEY_ALIASES = Object.freeze([
+  { key: 'commit_docs', section: 'planning', field: 'commit_docs', resolvedAt: 'commit_docs', configGet: 'loader' },
+  { key: 'search_gitignored', section: 'planning', field: 'search_gitignored', resolvedAt: 'search_gitignored', configGet: 'loader' },
+  { key: 'sub_repos', section: 'planning', field: 'sub_repos', resolvedAt: 'sub_repos', configGet: 'resolver' },
+  { key: 'pr_strict', section: 'planning', field: 'pr_strict', resolvedAt: 'pr_strict', configGet: 'resolver' },
+  { key: 'branching_strategy', section: 'git', field: 'branching_strategy', resolvedAt: 'branching_strategy', configGet: 'resolver' },
+  { key: 'base_branch', section: 'git', field: 'base_branch', resolvedAt: 'base_branch', configGet: 'resolver' },
+  { key: 'phase_branch_template', section: 'git', field: 'phase_branch_template', resolvedAt: 'phase_branch_template', configGet: 'resolver' },
+  { key: 'milestone_branch_template', section: 'git', field: 'milestone_branch_template', resolvedAt: 'milestone_branch_template', configGet: 'resolver' },
+  { key: 'quick_branch_template', section: 'git', field: 'quick_branch_template', resolvedAt: 'quick_branch_template', configGet: 'resolver' },
+  { key: 'research', section: 'workflow', field: 'research', resolvedAt: 'research', configGet: 'resolver' },
+  { key: 'plan_checker', section: 'workflow', field: 'plan_check', resolvedAt: 'plan_checker', configGet: 'resolver' },
+  { key: 'verifier', section: 'workflow', field: 'verifier', resolvedAt: 'verifier', configGet: 'resolver' },
+  { key: 'nyquist_validation', section: 'workflow', field: 'nyquist_validation', resolvedAt: 'nyquist_validation', configGet: 'resolver' },
+  { key: 'post_planning_gaps', section: 'workflow', field: 'post_planning_gaps', resolvedAt: 'post_planning_gaps', configGet: 'resolver' },
+  { key: 'mvp_mode', section: 'workflow', field: 'mvp_mode', resolvedAt: 'mvp_mode', configGet: 'resolver' },
+  { key: 'text_mode', section: 'workflow', field: 'text_mode', resolvedAt: 'text_mode', configGet: 'resolver' },
+  { key: 'auto_advance', section: 'workflow', field: 'auto_advance', resolvedAt: 'auto_advance', configGet: 'resolver' },
+  { key: '_auto_chain_active', section: 'workflow', field: '_auto_chain_active', resolvedAt: '_auto_chain_active', configGet: 'resolver' },
+  { key: 'subagent_timeout', section: 'workflow', field: 'subagent_timeout', resolvedAt: 'subagent_timeout', configGet: 'resolver' },
+  { key: 'max_prompt_tokens', section: 'review', field: 'max_prompt_tokens', resolvedAt: 'review.max_prompt_tokens', configGet: 'resolver' },
+  { key: 'parallelization', section: 'parallelization', field: 'enabled', resolvedAt: 'parallelization', configGet: 'resolver' },
+] as const);
+
+type ConfigKeyAlias = typeof CONFIG_KEY_ALIASES[number];
+type AliasedConfigKey = ConfigKeyAlias['key'];
+
+/**
+ * The alias entry a `config-get` key path names — by its flat key or by its
+ * `<section>.<field>` spelling — or `undefined` when the loader reads that
+ * path from one spelling only. Its `configGet` field says whether config-get
+ * routes it through the loader.
+ */
+function configKeyAliasFor(keyPath: string): ConfigKeyAlias | undefined {
+  return CONFIG_KEY_ALIASES.find(
+    (alias) => keyPath === alias.key || keyPath === `${alias.section}.${alias.field}`,
+  );
+}
+
 const CONFIG_DEFAULTS = {
   model_profile: _getConfigDefault('model_profile'),
   commit_docs: _getConfigDefault('commit_docs'),
@@ -893,8 +954,9 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
 
     _warnUnknownProfileOverrides(parsed, '.planning/config.json');
 
-    const get = (key: string, nested?: { section: string; field: string }): unknown =>
-      _getConfigValue(parsed, key, nested);
+    // One spelling only: a key read from a second spelling goes through
+    // `getAliased` and CONFIG_KEY_ALIASES, so config-get can answer it (#5470).
+    const get = (key: string): unknown => _getConfigValue(parsed, key);
 
     /**
      * Nested-ONLY read — no top-level fallback (#3648).
@@ -910,8 +972,14 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
     const getNested = (section: string, field: string): unknown =>
       _getConfigNested(parsed, section, field);
 
+    /** Flat-then-nested read of a `CONFIG_KEY_ALIASES` entry (#5470). */
+    const getAliased = (key: AliasedConfigKey): unknown => {
+      const { section, field } = CONFIG_KEY_ALIASES.find((alias) => alias.key === key)!;
+      return _getConfigValue(parsed, key, { section, field });
+    };
+
     const parallelization = (() => {
-      const val = get('parallelization');
+      const val = getAliased('parallelization');
       if (typeof val === 'boolean') return val;
       if (typeof val === 'object' && val !== null && 'enabled' in (val)) return (val as Record<string, unknown>)['enabled'];
       return defaults.parallelization;
@@ -920,42 +988,42 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
     const _baseConfig: Record<string, unknown> = {
       model_profile: get('model_profile') ?? defaults.model_profile,
       commit_docs: (() => {
-        const explicit = get('commit_docs', { section: 'planning', field: 'commit_docs' });
+        const explicit = getAliased('commit_docs');
         if (explicit !== undefined) return explicit;
         if (isGitIgnored(cwd, '.planning/')) return false;
         return defaults.commit_docs;
       })(),
-      search_gitignored: get('search_gitignored', { section: 'planning', field: 'search_gitignored' }) ?? defaults.search_gitignored,
-      branching_strategy: get('branching_strategy', { section: 'git', field: 'branching_strategy' }) ?? defaults.branching_strategy,
-      base_branch: get('base_branch', { section: 'git', field: 'base_branch' }),
+      search_gitignored: getAliased('search_gitignored') ?? defaults.search_gitignored,
+      branching_strategy: getAliased('branching_strategy') ?? defaults.branching_strategy,
+      base_branch: getAliased('base_branch'),
       protected_branches: getNested('git', 'protected_branches'),
       allow_default_branch_commits: getNested('git', 'allow_default_branch_commits'),
       repo_tagging: resolveRepoTagging(getNested('git', 'repo_tagging')),
-      phase_branch_template: get('phase_branch_template', { section: 'git', field: 'phase_branch_template' }) ?? defaults.phase_branch_template,
-      milestone_branch_template: get('milestone_branch_template', { section: 'git', field: 'milestone_branch_template' }) ?? defaults.milestone_branch_template,
-      quick_branch_template: get('quick_branch_template', { section: 'git', field: 'quick_branch_template' }) ?? defaults.quick_branch_template,
-      research: get('research', { section: 'workflow', field: 'research' }) ?? defaults.research,
-      plan_checker: get('plan_checker', { section: 'workflow', field: 'plan_check' }) ?? defaults.plan_checker,
-      verifier: get('verifier', { section: 'workflow', field: 'verifier' }) ?? defaults.verifier,
-      nyquist_validation: get('nyquist_validation', { section: 'workflow', field: 'nyquist_validation' }) ?? defaults.nyquist_validation,
-      post_planning_gaps: get('post_planning_gaps', { section: 'workflow', field: 'post_planning_gaps' }) ?? defaults.post_planning_gaps,
+      phase_branch_template: getAliased('phase_branch_template') ?? defaults.phase_branch_template,
+      milestone_branch_template: getAliased('milestone_branch_template') ?? defaults.milestone_branch_template,
+      quick_branch_template: getAliased('quick_branch_template') ?? defaults.quick_branch_template,
+      research: getAliased('research') ?? defaults.research,
+      plan_checker: getAliased('plan_checker') ?? defaults.plan_checker,
+      verifier: getAliased('verifier') ?? defaults.verifier,
+      nyquist_validation: getAliased('nyquist_validation') ?? defaults.nyquist_validation,
+      post_planning_gaps: getAliased('post_planning_gaps') ?? defaults.post_planning_gaps,
       parallelization,
       brave_search: get('brave_search') ?? defaults.brave_search,
       firecrawl: get('firecrawl') ?? defaults.firecrawl,
       exa_search: get('exa_search') ?? defaults.exa_search,
-      mvp_mode: get('mvp_mode', { section: 'workflow', field: 'mvp_mode' }) ?? false,
+      mvp_mode: getAliased('mvp_mode') ?? false,
       tdd_mode: getNested('workflow', 'tdd_mode') ?? false,
-      text_mode: get('text_mode', { section: 'workflow', field: 'text_mode' }) ?? defaults.text_mode,
-      auto_advance: get('auto_advance', { section: 'workflow', field: 'auto_advance' }) ?? false,
-      _auto_chain_active: get('_auto_chain_active', { section: 'workflow', field: '_auto_chain_active' }) ?? false,
+      text_mode: getAliased('text_mode') ?? defaults.text_mode,
+      auto_advance: getAliased('auto_advance') ?? false,
+      _auto_chain_active: getAliased('_auto_chain_active') ?? false,
       mode: get('mode') ?? 'interactive',
-      sub_repos: get('sub_repos', { section: 'planning', field: 'sub_repos' }) ?? defaults.sub_repos,
-      pr_strict: get('pr_strict', { section: 'planning', field: 'pr_strict' }) ?? defaults.pr_strict,
+      sub_repos: getAliased('sub_repos') ?? defaults.sub_repos,
+      pr_strict: getAliased('pr_strict') ?? defaults.pr_strict,
       resolve_model_ids: get('resolve_model_ids') ?? defaults.resolve_model_ids,
       context_window: get('context_window') ?? defaults.context_window,
       phase_naming: get('phase_naming') ?? defaults.phase_naming,
       project_code: get('project_code') ?? defaults.project_code,
-      subagent_timeout: get('subagent_timeout', { section: 'workflow', field: 'subagent_timeout' }) ?? defaults.subagent_timeout,
+      subagent_timeout: getAliased('subagent_timeout') ?? defaults.subagent_timeout,
       planner_stall_detection_enabled: resolvePlannerStallDetectionEnabled(
         getNested('planner', 'stall_detection_enabled'),
       ),
@@ -990,7 +1058,7 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       // `review.*` per-lane keys the federated overlay below adds land as SIBLINGS
       // on this same object rather than being clobbered by it.
       review: {
-        max_prompt_tokens: get('max_prompt_tokens', { section: 'review', field: 'max_prompt_tokens' }) ?? defaults.max_prompt_tokens,
+        max_prompt_tokens: getAliased('max_prompt_tokens') ?? defaults.max_prompt_tokens,
       },
     };
 
@@ -1217,6 +1285,8 @@ export = {
   _warnedUnusableConfig,
   isGitIgnored,
   CONFIG_DEFAULTS,
+  CONFIG_KEY_ALIASES,
+  configKeyAliasFor,
   _getConfigDefault,
   _getNestedConfigDefault,
   _getConfigValue,

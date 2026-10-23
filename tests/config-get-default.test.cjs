@@ -1534,3 +1534,247 @@ describe('#2702: workstream config-get inherits from root config', () => {
     }
   });
 });
+
+// ─── folded: #5470 loader-aliased keys ───────────────────────────────────────
+/**
+ * #5470: the loader reads 21 keys from two spellings, the flat key and its
+ * nested `<section>.<field>` alias (`CONFIG_KEY_ALIASES` in
+ * src/config-loader.cts), and each entry says how config-get answers it.
+ * `commit_docs` and `search_gitignored` are routed through the loader: both
+ * spellings print the value the runtime resolves. Before the fix config-get
+ * walked the literal path, so `config-get commit_docs` after `config-set
+ * planning.commit_docs false` was "Key not found" and the workflow gates'
+ * `|| echo "true"` fallback committed `.planning/`. The other entries stay on
+ * config-get's key resolver, where ADR-5057 retires top-level aliases, and each
+ * spelling reads only itself. The discovery test derives the alias set from
+ * what the loader does, so a key it starts reading from a second spelling
+ * without a table entry, and so without a classification, fails here.
+ */
+{
+  const { describe, test, beforeEach, afterEach } = require('node:test');
+  const assert = require('node:assert/strict');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const os = require('node:os');
+  const { cleanup, createTempGitProject, captureFdSync } = require('./helpers.cjs');
+  const configCli = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'config.cjs'));
+  const { loadConfig, CONFIG_KEY_ALIASES } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'config-loader.cjs'));
+  const { VALID_CONFIG_KEYS } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'config-schema.cjs'));
+
+  const SENTINEL = 'sentinel-5470';
+  // Every variable that redirects which config the loader reads, or which
+  // global defaults file it falls back to.
+  const SCOPE_VARS = ['GSD_PROJECT', 'GSD_WORKSTREAM', 'GSD_HOME'];
+
+  function readPath(obj, dotted) {
+    return dotted.split('.').reduce((cur, seg) => (cur !== null && typeof cur === 'object' ? cur[seg] : undefined), obj);
+  }
+
+  /** Every path of depth 1 or 2 in `obj` whose value is `value`. */
+  function pathsHolding(obj, value) {
+    const found = [];
+    for (const [k, v] of Object.entries(obj)) {
+      if (v === value) found.push(k);
+      else if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+        for (const [k2, v2] of Object.entries(v)) if (v2 === value) found.push(`${k}.${k2}`);
+      }
+    }
+    return found;
+  }
+
+  describe('#5470: config-get answers each loader-aliased key as its table entry says', () => {
+    let tmpDir;
+    let gsdHome;
+    let savedScope;
+    let silencedStderr;
+
+    beforeEach((t) => {
+      tmpDir = createTempGitProject();
+      gsdHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-home-5470-'));
+      savedScope = SCOPE_VARS.map((name) => [name, process.env[name]]);
+      delete process.env.GSD_PROJECT;
+      delete process.env.GSD_WORKSTREAM;
+      process.env.GSD_HOME = gsdHome;
+      // The loader warns once per unknown top-level key; the discovery tests
+      // write such keys on purpose.
+      silencedStderr = t.mock.method(process.stderr, 'write', () => true);
+    });
+    afterEach(() => {
+      silencedStderr.mock.restore();
+      for (const [name, value] of savedScope) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      cleanup(tmpDir);
+      cleanup(gsdHome);
+    });
+
+    function writeConfig(cfg) {
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify(cfg));
+    }
+
+    function configGet(keyPath, defaultValue) {
+      return captureFdSync(1, () => configCli.cmdConfigGet(tmpDir, keyPath, true, defaultValue)).trim();
+    }
+
+    function runtimeValue(alias) {
+      return readPath(loadConfig(tmpDir, { persist: false }), alias.resolvedAt);
+    }
+
+    test('the table names 21 aliases, each with a distinct flat and nested spelling', () => {
+      assert.equal(CONFIG_KEY_ALIASES.length, 21);
+      const spellings = CONFIG_KEY_ALIASES.flatMap((a) => [a.key, `${a.section}.${a.field}`]);
+      assert.equal(new Set(spellings).size, 42);
+    });
+
+    const ROUTED = CONFIG_KEY_ALIASES.filter((a) => a.configGet === 'loader');
+    const RESOLVER = CONFIG_KEY_ALIASES.filter((a) => a.configGet === 'resolver');
+
+    test('config-get routes commit_docs and search_gitignored through the loader, and no other entry', () => {
+      assert.deepEqual(ROUTED.map((a) => a.key).sort(), ['commit_docs', 'search_gitignored']);
+      assert.equal(ROUTED.length + RESOLVER.length, CONFIG_KEY_ALIASES.length, 'every entry is classified');
+    });
+
+    // The values each entry is written with. The loader keeps only a boolean
+    // for `parallelization`, so it is written with booleans; every other entry
+    // passes a string through unchanged.
+    function probeValues(alias) {
+      return alias.key === 'parallelization'
+        ? { single: false, flat: false, nested: true }
+        : { single: SENTINEL, flat: `${SENTINEL}-flat`, nested: `${SENTINEL}-nested` };
+    }
+
+    for (const alias of ROUTED) {
+      const nestedKey = `${alias.section}.${alias.field}`;
+      const v = probeValues(alias);
+      const placements = {
+        'flat only': [{ [alias.key]: v.single }, [v.single]],
+        'nested only': [{ [alias.section]: { [alias.field]: v.single } }, [v.single]],
+      };
+      // The loader reads the flat key first.
+      placements['both, with different values'] = [
+        { [alias.key]: v.flat, [alias.section]: { [alias.field]: v.nested } },
+        [v.flat],
+      ];
+      for (const [label, [cfg, written]] of Object.entries(placements)) {
+        test(`${alias.key} / ${nestedKey}, ${label}: both spellings read the runtime value`, () => {
+          writeConfig(cfg);
+          const runtime = runtimeValue(alias);
+          // A written value reached the runtime, so the comparison below is
+          // not two reads of a default.
+          assert.ok(written.includes(runtime), `runtime ${alias.resolvedAt} = ${JSON.stringify(runtime)}`);
+          assert.equal(configGet(alias.key), String(runtime));
+          assert.equal(configGet(nestedKey), String(runtime));
+        });
+      }
+
+      test(`${alias.key} / ${nestedKey}, empty config: the runtime value, or the --default when the runtime has none`, () => {
+        writeConfig({});
+        const runtime = runtimeValue(alias);
+        if (runtime === undefined) {
+          assert.equal(configGet(alias.key, 'fallback-5470'), 'fallback-5470');
+          assert.equal(configGet(nestedKey, 'fallback-5470'), 'fallback-5470');
+        } else {
+          assert.equal(configGet(alias.key), String(runtime));
+          assert.equal(configGet(nestedKey), String(runtime));
+          assert.equal(configGet(alias.key, 'fallback-5470'), String(runtime), '--default never outranks a resolved value');
+        }
+      });
+
+      // The literal walk finds a null under one spelling only.
+      for (const [label, cfg] of [
+        ['flat', { [alias.key]: null }],
+        ['nested', { [alias.section]: { [alias.field]: null } }],
+      ]) {
+        test(`${alias.key} / ${nestedKey} written as null (${label}): both spellings print the runtime value`, () => {
+          writeConfig(cfg);
+          const runtime = runtimeValue(alias);
+          assert.notEqual(runtime, undefined);
+          assert.equal(configGet(alias.key, 'fallback-5470'), String(runtime));
+          assert.equal(configGet(nestedKey, 'fallback-5470'), String(runtime));
+        });
+      }
+    }
+
+    // ADR-5057 (Phase 6): config-get's key resolver is the authority for gate
+    // config, and a top-level alias it rejects stays rejected, so `check
+    // auto-mode` answers what config-get answers. A file whose only top-level
+    // key is the setting cannot hold the other spelling (`parallelization`).
+    for (const alias of RESOLVER) {
+      const nestedKey = `${alias.section}.${alias.field}`;
+      const v = probeValues(alias);
+      test(`${alias.key} / ${nestedKey}: left on config-get's resolver, each spelling reads only itself`, () => {
+        writeConfig({ [alias.key]: v.single });
+        assert.equal(configGet(alias.key), String(v.single));
+        if (alias.key !== alias.section) {
+          assert.equal(configGet(nestedKey, 'fallback-5470'), 'fallback-5470');
+          writeConfig({ [alias.section]: { [alias.field]: v.single } });
+          assert.equal(configGet(nestedKey), String(v.single));
+          assert.equal(configGet(alias.key, 'fallback-5470'), 'fallback-5470');
+        }
+      });
+    }
+
+    test('discovery: the settings the loader reads from more than one spelling are exactly the table', () => {
+      // Candidate spellings: every schema key, its last segment as a flat key,
+      // every key the loader publishes (flat and under each section), and the
+      // table's own spellings. The schema list alone misses aliases validated
+      // elsewhere (`workflow.research` is not in VALID_CONFIG_KEYS). This is a
+      // cross-check over known names; a second spelling under a name none of
+      // these produce is kept out by `_baseConfig`'s one-spelling `get`, which
+      // does not compile with a nested alias.
+      const sections = new Set([...VALID_CONFIG_KEYS].filter((k) => k.includes('.')).map((k) => k.split('.')[0]));
+      writeConfig({});
+      const published = Object.keys(loadConfig(tmpDir, { persist: false }));
+      const spellings = new Set();
+      for (const k of VALID_CONFIG_KEYS) {
+        if (k.split('.').length <= 2) spellings.add(k);
+        spellings.add(k.split('.').pop());
+      }
+      for (const k of published) {
+        spellings.add(k);
+        for (const section of sections) spellings.add(`${section}.${k}`);
+      }
+      for (const a of CONFIG_KEY_ALIASES) {
+        spellings.add(a.key);
+        spellings.add(`${a.section}.${a.field}`);
+        sections.add(a.section);
+      }
+      // A section the loader passes through raw echoes whatever is written
+      // into it; a value found there is an echo, not a read.
+      writeConfig(Object.fromEntries([...sections].map((section) => [section, { probe_5470: 1 }])));
+      const loaded = loadConfig(tmpDir, { persist: false });
+      const echoed = new Set([...sections].filter((section) => readPath(loaded, `${section}.probe_5470`) === 1));
+      assert.ok(echoed.has('planning'), 'positive control: the raw planning section is detected as an echo');
+
+      // Probe with a string, a number and both booleans: a read that keeps
+      // only one type (`parallelization` keeps booleans) drops the others
+      // unseen. A boolean counts only where it changed the value from the
+      // empty config's.
+      writeConfig({});
+      const baseline = loadConfig(tmpDir, { persist: false });
+      const readersOf = new Map();
+      for (const spelling of spellings) {
+        const [head, tail] = spelling.split('.');
+        for (const probe of [SENTINEL, 5470.5, true, false]) {
+          if (tail === undefined && sections.has(head) && typeof probe !== 'boolean') continue; // a section, not a setting
+          writeConfig(tail === undefined ? { [head]: probe } : { [head]: { [tail]: probe } });
+          for (const at of pathsHolding(loadConfig(tmpDir, { persist: false }), probe)) {
+            if (at.includes('.') && echoed.has(at.split('.')[0])) continue;
+            if (typeof probe === 'boolean' && readPath(baseline, at) === probe) continue;
+            if (!readersOf.has(at)) readersOf.set(at, new Set());
+            readersOf.get(at).add(spelling);
+          }
+        }
+      }
+      const discovered = [...readersOf]
+        .filter(([, readers]) => readers.size > 1)
+        .map(([at, readers]) => `${at} <- ${[...readers].sort().join(' | ')}`)
+        .sort();
+      const tabled = CONFIG_KEY_ALIASES
+        .map((a) => `${a.resolvedAt} <- ${[a.key, `${a.section}.${a.field}`].sort().join(' | ')}`)
+        .sort();
+      assert.deepEqual(discovered, tabled);
+    });
+  });
+}

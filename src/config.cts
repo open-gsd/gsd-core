@@ -1458,20 +1458,32 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
   // After the error() guard, keyPath is narrowed to string.
   const kp = keyPath!;
 
-  // #5470: `commit_docs` and its documented alias `planning.commit_docs` answer
-  // with the policy the runtime applies, not a literal path walk. The loader
-  // resolves the flat key, then the nested alias, then a gitignored `.planning/`
-  // to false, then the default; the walk below sees only the literal path, so
-  // after `config-set planning.commit_docs false` (the keep-planning-docs-private
-  // how-to) a `config-get commit_docs` read was "Key not found", and every
-  // workflow gate's `|| echo "true"` fallback committed `.planning/`. Same
-  // invariant as #2256: config-get must not disagree with the runtime. The
-  // loader always resolves a value, so `--default` never applies to this key.
-  // `persist: false` because a read must not rewrite config.json (#3648).
-  if (kp === 'commit_docs' || kp === 'planning.commit_docs') {
-    const resolved = configLoader.loadConfig(cwd, { persist: false })['commit_docs'];
-    output(resolved, raw, String(resolved));
-    return;
+  // #5470: `commit_docs` and `search_gitignored` answer, under either
+  // spelling, with the value the runtime resolves, not a literal path walk
+  // (their CONFIG_KEY_ALIASES entries say `configGet: 'loader'`). Shipped
+  // workflows read both through the flat key while the docs write the nested
+  // one, so after `config-set planning.commit_docs false` (the
+  // keep-planning-docs-private how-to) a `config-get commit_docs` read was
+  // "Key not found", and every workflow gate's `|| echo "true"` fallback
+  // committed `.planning/`. The loader also derives values the walk cannot
+  // (a gitignored `.planning/` resolves `commit_docs` to false). Same
+  // invariant as #2256: config-get must not disagree with the runtime. A value
+  // the loader resolves, null included, is printed and `--default` does not
+  // apply. The other loader aliases stay on the walk below, which ADR-5057
+  // makes the authority for gate config. `persist: false` because a read must
+  // not rewrite config.json (#3648).
+  const loaderAlias = configLoader.configKeyAliasFor(kp);
+  if (loaderAlias?.configGet === 'loader') {
+    let resolved: unknown = configLoader.loadConfig(cwd, { persist: false });
+    for (const segment of loaderAlias.resolvedAt.split('.')) {
+      resolved = resolved !== null && typeof resolved === 'object'
+        ? (resolved as Record<string, unknown>)[segment]
+        : undefined;
+    }
+    if (resolved !== undefined) {
+      emitResolvedDefault(kp, resolved, raw);
+      return;
+    }
   }
 
   let config: Record<string, unknown> = {};
