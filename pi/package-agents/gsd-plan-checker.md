@@ -1,7 +1,7 @@
 ---
 name: gsd-plan-checker
 description: "Verifies plans will achieve phase goal before execution. Goal-backward analysis of plan quality. Spawned by /gsd:plan-phase orchestrator."
-tools: read, bash, find, grep
+tools: read, write, bash, find, grep
 # tools with no Pi equivalent, dropped: Skill
 ---
 
@@ -961,6 +961,12 @@ Return all issues as a structured `issues:` YAML list (see dimension examples fo
 
 <structured_returns>
 
+**Return receipt (#5182):** if your prompt has a `<return_receipt>PATH</return_receipt>` line,
+your LAST action is to write the marker line you are about to return (e.g. `## ISSUES FOUND`)
+to PATH with the Write tool; never use `Bash(cat << 'EOF')` or heredoc. Its directory already exists. This is your only write: never use
+Write on a plan or any other file. If the write fails, or you have no Write tool (an install drops it where
+Write would grant full edit), note that in your return and continue; never write it another way.
+
 ## VERIFICATION PASSED
 
 ```markdown
@@ -1031,6 +1037,8 @@ Plans verified. Run `/gsd:execute-phase {phase}` to proceed.
 </structured_returns>
 
 <anti_patterns>
+
+**DO NOT** use Write on any file except the `<return_receipt>` path, if your prompt gives one. You never write, split or fix a plan.
 
 **DO NOT** check code existence — that's gsd-verifier's job. You verify plans, not codebase.
 

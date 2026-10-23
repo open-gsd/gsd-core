@@ -40,6 +40,7 @@ const {
   deriveAgentName: _deriveAgentName,
   applyAgentFrontmatterExtensions: _applyAgentFrontmatterExtensions,
   appendAgentTools: _appendAgentTools,
+  scopeReceiptOnlyWrite: _scopeReceiptOnlyWrite,
 } = conversionModule as {
   applyAgentPathRewrites: (content: string, runtime: string, pathPrefix: string) => string;
   processAttribution: (content: string, attribution: string | null | undefined) => string;
@@ -51,6 +52,7 @@ const {
   deriveAgentName: (fileName: string) => string;
   applyAgentFrontmatterExtensions: (content: string, opts: { runtime: string; agentName: string; targetDir?: string | null }) => string;
   appendAgentTools: (content: string, grants: string[]) => string;
+  scopeReceiptOnlyWrite: (content: string, opts: { runtime: string; agentName: string }) => string;
 };
 
 // #2995 (epic #1671 Phase 6.4): agent bodies join the fragment model. Markers are
@@ -1058,7 +1060,10 @@ function stageAgentsForRuntimeWithConverter(
         content = _applyAgentPathRewrites(content, agentCtx.runtime, agentCtx.pathPrefix);
         // Step 2: attribution
         content = _processAttribution(content, agentCtx.attribution);
-        // Step 3: validated canonical grants, before host conversion.
+        // Step 3: a receipt-only Write is dropped where the host would widen it to full
+        // edit (#5182), then the validated canonical grants, before host conversion. The
+        // grants come second so a Write the user grants in agent_tools is kept.
+        content = _scopeReceiptOnlyWrite(content, { runtime: agentCtx.runtime, agentName });
         content = _appendAgentTools(content, grants);
         // Step 4: converter (runtime-specific frontmatter/body transform)
         content = converter(content, isGlobal, { agentName });
