@@ -471,6 +471,65 @@ function hasExistingSymlinkBetween(
   return false;
 }
 
+/**
+ * Whether a symlink's target is genuinely absent. Only ENOENT and ENOTDIR mean
+ * that: a link loop (ELOOP) or an unreadable directory (EACCES) also fail to
+ * resolve, but saying "the target does not exist" there would be wrong.
+ */
+function linkTargetIsMissing(linkPath: string): boolean {
+  try {
+    installFs().realpathSync(linkPath);
+    return false;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR';
+  }
+}
+
+/**
+ * The path a temp-file-and-rename save (`atomicWriteFileSync`,
+ * `platformWriteSync`) should be handed for `targetPath`, a file under
+ * `installRoot` that may be a user-owned symlink (#5037).
+ *
+ * A rename onto a symlink replaces the link with a plain file, so the user's
+ * real file silently stops receiving changes. A symlinked `targetPath` is
+ * therefore refused unless `GSD_ALLOW_SYMLINKED_DEST` is set, and with the
+ * opt-in the link's real target is returned, so the rename lands there and the
+ * link stays in place. A plain or missing file is returned unchanged. A
+ * dangling link is refused either way (`tryLstat` sees it where `existsSync`
+ * would not), the same as `hasExistingSymlinkBetween` treats one.
+ *
+ * `label` starts the refusal message and names the writer, e.g.
+ * `writeSettings: settings file`. When the opt-in is already set, telling the
+ * user to re-run with it would send them in a circle, so those refusals say
+ * what is actually wrong instead: the link's target is missing, or it resolves
+ * to the install root itself (which `hasExistingSymlinkBetween` always refuses).
+ */
+function resolveSymlinkedLeafWritePath(installRoot: string, targetPath: string, label: string): string {
+  const stat = tryLstat(targetPath);
+  if (!stat || !stat.isSymbolicLink()) return targetPath;
+  const optIn = isSymlinkedDestOptIn();
+  if (hasExistingSymlinkBetween(installRoot, targetPath, { allowOptInFollow: optIn })) {
+    if (optIn && linkTargetIsMissing(targetPath)) {
+      throw new Error(
+        `${label} "${targetPath}" is a symlink whose target does not exist, so it was not written. ` +
+          'Point the link at an existing file or remove it, then re-run.',
+      );
+    }
+    if (optIn) {
+      throw new Error(
+        `${label} "${targetPath}" is a symlink GSD will not follow even with GSD_ALLOW_SYMLINKED_DEST set, ` +
+          `because it resolves to the install root "${installRoot}" itself or cannot be resolved, so it was not written.`,
+      );
+    }
+    throw new Error(
+      `${label} "${targetPath}" is a symlink the install root "${installRoot}" does not trust, so it was not written. ` +
+        'If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.',
+    );
+  }
+  return installFs().realpathSync(targetPath);
+}
+
 // ---------------------------------------------------------------------------
 // User-artifact staging root
 // ---------------------------------------------------------------------------
@@ -2433,6 +2492,7 @@ export = {
   _copyStaged,
   hasExistingSymlinkBetween,
   isSymlinkedDestOptIn,
+  resolveSymlinkedLeafWritePath,
   _resolveUserArtifactStagingRoot,
   _tryResolveUserArtifactStagingRoot,
   migrateLegacyDevPreferencesToSkill,

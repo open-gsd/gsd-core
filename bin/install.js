@@ -841,6 +841,7 @@ const {
   _installNativePluginIfDeclared,
   hasExistingSymlinkBetween,
   isSymlinkedDestOptIn,
+  resolveSymlinkedLeafWritePath,
   migrateLegacyDevPreferencesToSkill,
   USER_OWNED_ARTIFACTS,
   _snapshotDir,
@@ -1402,6 +1403,12 @@ function removeCodexHooksJsonSessionStart(targetDir) {
   return hooksSurface.removeCodexHooksJsonSessionStart(targetDir);
 }
 
+// Whether uninstall's step 1a would remove a GSD hook from hooks.json: the
+// same events it removes, SessionStart plus CODEX_EXTENDED_HOOK_EVENTS.
+function codexHooksJsonHasGsdHooks(targetDir) {
+  return hooksSurface.codexHooksJsonHasManagedHooks(targetDir, ['SessionStart', ...CODEX_EXTENDED_HOOK_EVENTS]);
+}
+
 /**
  * Build a hook command path using forward slashes for cross-platform compatibility.
  * On Windows, $HOME is not expanded by cmd.exe/PowerShell, so we use the actual path.
@@ -1501,8 +1508,11 @@ function stripJsonComments(text) {
  * Supports JSONC (JSON with comments) — many CLI tools allow comments in
  * their settings files, so we strip them before parsing to avoid silent
  * data loss from JSON.parse failures.
+ *
+ * `quiet` skips the malformed-file warning, for a read ahead of the one that
+ * reports it, so the warning is printed once.
  */
-function readSettings(settingsPath) {
+function readSettings(settingsPath, { quiet = false } = {}) {
   if (fs.existsSync(settingsPath)) {
     try {
       const raw = fs.readFileSync(settingsPath, 'utf8');
@@ -1513,7 +1523,7 @@ function readSettings(settingsPath) {
       return parsed === null ? {} : parsed;   // valid JSON null = empty settings, not malformed
     } catch (e) {
       // If even JSONC stripping fails, warn instead of silently returning {}
-      console.warn('  ' + yellow + '⚠' + reset + '  Warning: Could not parse ' + settingsPath + ' — file may be malformed. Existing settings preserved.');
+      if (!quiet) console.warn('  ' + yellow + '⚠' + reset + '  Warning: Could not parse ' + settingsPath + ' — file may be malformed. Existing settings preserved.');
       return null;
     }
   }
@@ -1532,7 +1542,33 @@ function readSettings(settingsPath) {
  * at call time, after module evaluation, so the ordering is safe.
  */
 function writeSettings(settingsPath, settings) {
-  atomicWriteFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf8');
+  atomicWriteFileSync(resolveSettingsWritePath(settingsPath), JSON.stringify(settings, null, 2) + '\n', 'utf8');
+}
+
+/**
+ * The file writeSettings should actually write for `settingsPath` (#5037):
+ * a symlinked settings file is refused unless GSD_ALLOW_SYMLINKED_DEST is
+ * set, and with it the link's real target is written so the link stays in
+ * place. The policy lives in install-engine's resolveSymlinkedLeafWritePath,
+ * shared with the Codex hooks.json writer. The install root is the settings
+ * file's own directory, as the hooks.json writer passes its own.
+ */
+function resolveSettingsWritePath(settingsPath) {
+  return resolveSymlinkedLeafWritePath(
+    path.dirname(path.resolve(settingsPath)),
+    settingsPath,
+    'writeSettings: settings file',
+  );
+}
+
+/**
+ * Throws writeSettings' symlink refusal for `settingsPath` without writing
+ * anything. The #338 migration writes settings.local.json before it rewrites
+ * the shared settings.json, so it checks the shared file first: a refusal
+ * then leaves both files as they were instead of half-migrated.
+ */
+function assertSettingsWriteAllowed(settingsPath) {
+  resolveSettingsWritePath(settingsPath);
 }
 
 // #2875 Part 2 (J8): model-override resolution (readGsdGlobalModelOverrides /
@@ -8527,6 +8563,157 @@ function reclaimKimiHooksRoot(kimiHooksRoot) {
 }
 
 /**
+ * Uninstall step 6's settings.json cleanup, applied in memory to `settings`
+ * for `runtime` installed at `targetDir`. Returns whether anything changed,
+ * which is exactly when step 6 writes the file. Each removal is reported
+ * through `log`. uninstall() also runs it on a throwaway copy with a silent
+ * `log` before its first removal, to check a symlinked settings.json only
+ * when step 6 would write it (#5037). Sharing one function keeps that check
+ * and step 6 from disagreeing about whether a write happens.
+ */
+function stripGsdFromSettings(settings, runtime, targetDir, log) {
+  let settingsModified = false;
+
+  // Remove GSD statusline if it references our hook
+  if (settings.statusLine && settings.statusLine.command &&
+    settings.statusLine.command.includes('gsd-statusline')) {
+    delete settings.statusLine;
+    settingsModified = true;
+    log(`  ${green}✓${reset} Removed GSD statusline from settings`);
+  }
+
+  // Remove GSD hooks from settings — per-hook granularity to preserve
+  // user hooks that share an entry with a GSD hook (#1755 followup).
+  // Includes the 3 Qwen-only events added in #788 (SubagentStop, Stop,
+  // PreCompact, also registered for Claude in #770), the 3 Antigravity-only
+  // events added in #776 (BeforeAgent, AfterAgent, BeforeModel), and the
+  // Claude-only FileChanged event added in #770 — safe to iterate for all
+  // runtimes; installs that don't register these events simply find no
+  // entries and skip.
+  for (const eventName of ['SessionStart', 'PostToolUse', 'AfterTool', 'PreToolUse', 'BeforeTool', 'SubagentStop', 'Stop', 'PreCompact', 'BeforeAgent', 'AfterAgent', 'BeforeModel', 'FileChanged']) {
+    if (settings.hooks && settings.hooks[eventName]) {
+      const before = JSON.stringify(settings.hooks[eventName]);
+      settings.hooks[eventName] = settings.hooks[eventName]
+        .map(entry => {
+          if (!entry || typeof entry !== 'object' || !Array.isArray(entry.hooks)) return entry;
+          // Filter out individual GSD hooks, keep user hooks
+          entry.hooks = entry.hooks.filter((h) => {
+            if (!h || typeof h.command !== 'string') return true;
+            return !isManagedHookCommand(h.command, {
+              surface: 'settings-json',
+            });
+          });
+          return entry.hooks.length > 0 ? entry : null;
+        })
+        .filter(Boolean);
+      if (JSON.stringify(settings.hooks[eventName]) !== before) {
+        settingsModified = true;
+      }
+      if (settings.hooks[eventName].length === 0) {
+        delete settings.hooks[eventName];
+      }
+    }
+  }
+  if (settingsModified) {
+    log(`  ${green}✓${reset} Removed GSD hooks from settings`);
+  }
+
+  // Clean up empty hooks object
+  if (settings.hooks && Object.keys(settings.hooks).length === 0) {
+    delete settings.hooks;
+  }
+
+  // #768 — Remove GSD-owned Claude permissions from settings.json.
+  // Applies only to Claude uninstalls. Filter only the exact GSD-owned entries
+  // to preserve any user-added allow/deny entries.
+  // Uses a local flag to avoid the shared `settingsModified` producing a false
+  // "Removed GSD permissions" message when only hooks/statusline changed.
+  if (hostBehaviorsFor(runtime).permissionsSchema === 'claude' && settings.permissions) {
+    let permissionsModified = false;
+    if (Array.isArray(settings.permissions.allow)) {
+      const before = settings.permissions.allow.length;
+      // #2278 — filter against the union of the current allow-rule forms
+      // AND the retired legacy forms, so uninstall still cleans up
+      // pre-fix installs that still carry the stale `Write(...)` entries.
+      settings.permissions.allow = settings.permissions.allow.filter(
+        (e) => !GSD_CLAUDE_ALLOW_PERMISSIONS.includes(e) && !GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS.includes(e)
+      );
+      if (settings.permissions.allow.length !== before) {
+        permissionsModified = true;
+        // #4221: an array this filter emptied was GSD-only \u2014 remove the
+        // key rather than leave an empty array behind (Antigravity symmetry).
+        if (settings.permissions.allow.length === 0) {
+          delete settings.permissions.allow;
+        }
+      }
+    }
+    if (Array.isArray(settings.permissions.deny)) {
+      const before = settings.permissions.deny.length;
+      // #4221: the deny rules are retired, so this is a legacy-only filter.
+      settings.permissions.deny = settings.permissions.deny.filter(
+        (e) => !GSD_CLAUDE_LEGACY_DENY_PERMISSIONS.includes(e)
+      );
+      if (settings.permissions.deny.length !== before) {
+        permissionsModified = true;
+        if (settings.permissions.deny.length === 0) {
+          delete settings.permissions.deny;
+        }
+      }
+    }
+    if (permissionsModified && Object.keys(settings.permissions).length === 0) {
+      delete settings.permissions;
+    }
+    if (permissionsModified) {
+      settingsModified = true;
+      log(`  ${green}✓${reset} Removed GSD permissions from settings.json`);
+    }
+  }
+
+  // #2096 Phase B Upgrade 1 — Remove GSD-owned Antigravity permissions.allow
+  // rules from settings.json. Symmetric to the Claude branch above: filters
+  // only the exact GSD-owned rule strings (regenerated from the current
+  // configDir) to preserve any user-added allow entries and all deny/ask.
+  if (resolveInstallPlan(runtime).finishPermissionWriter === 'antigravity' && settings.permissions) {
+    let antigravityPermissionsModified = false;
+    if (Array.isArray(settings.permissions.allow)) {
+      const gsdRules = new Set(buildAntigravityAllowRules(targetDir));
+      const before = settings.permissions.allow.length;
+      settings.permissions.allow = settings.permissions.allow.filter((e) => !gsdRules.has(e));
+      if (settings.permissions.allow.length !== before) {
+        antigravityPermissionsModified = true;
+      }
+      if (settings.permissions.allow.length === 0) {
+        delete settings.permissions.allow;
+      }
+    }
+    if (Object.keys(settings.permissions).length === 0) {
+      delete settings.permissions;
+    }
+    if (antigravityPermissionsModified) {
+      settingsModified = true;
+      log(`  ${green}✓${reset} Removed GSD permissions from settings.json`);
+    }
+  }
+
+  // #2097 UPGRADE 3 — Remove the MCP companion entry from settings.json for
+  // runtimes that host MCP there (Augment), symmetric to the mcp_config.json
+  // removal for Antigravity below. Only the GSD-owned mcpServers.gsd key is
+  // removed — any other user-configured MCP servers are preserved.
+  if (hostBehaviorsFor(runtime).mcpCompanion === 'settings-json' &&
+    settings.mcpServers && typeof settings.mcpServers === 'object' &&
+    settings.mcpServers.gsd !== undefined) {
+    delete settings.mcpServers.gsd;
+    if (Object.keys(settings.mcpServers).length === 0) {
+      delete settings.mcpServers;
+    }
+    settingsModified = true;
+    log(`  ${green}✓${reset} Removed GSD MCP companion server from settings.json`);
+  }
+
+  return settingsModified;
+}
+
+/**
  * Uninstall GSD from the specified directory for a specific runtime
  * Removes only GSD-specific files/directories, preserves user content
  * @param {boolean} isGlobal - Whether to uninstall from global or local
@@ -8570,6 +8757,32 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   const runtimeLabel = getRuntimeLabel(runtime);
 
   console.log(`  Uninstalling GSD from ${cyan}${runtimeLabel}${reset} at ${cyan}${locationLabel}${reset}\n`);
+
+  // Step 6 rewrites settings.json after every GSD file is gone, so a symlinked
+  // settings.json that writeSettings would refuse (#5037) has to stop the
+  // uninstall here, before the first removal. Refusing at step 6 would leave
+  // settings entries pointing at hooks that were already deleted. Step 6's
+  // own cleanup runs here on a throwaway copy, and only a settings.json it
+  // would write is checked: one without GSD entries, a dangling link or an
+  // unparseable file is never written, so it must not block the uninstall.
+  const settingsPath = path.join(targetDir, 'settings.json');
+  if (fs.existsSync(settingsPath)) {
+    const settingsPreview = readSettings(settingsPath, { quiet: true });
+    if (settingsPreview !== null && stripGsdFromSettings(settingsPreview, runtime, targetDir, () => {})) {
+      assertSettingsWriteAllowed(settingsPath);
+    }
+  }
+  // Codex's hooks.json goes through the same policy at step 1a, after skills,
+  // agents and config.toml are already handled, so it is checked here too,
+  // and likewise only when step 1a has GSD hooks to remove from it. The
+  // predicate also answers true for a file it cannot read or parse, which
+  // step 1a would then fail on, so the same bounded read and parse run here
+  // and an oversized, non-regular or unparseable hooks.json stops uninstall
+  // before anything is removed.
+  if (hostBehaviorsFor(runtime).tomlConfigInstall && codexHooksJsonHasGsdHooks(targetDir)) {
+    const hooksJsonWritePath = resolveSymlinkedLeafWritePath(targetDir, path.join(targetDir, 'hooks.json'), 'hooks.json at');
+    hooksSurface.readCodexHooksJsonFile(hooksJsonWritePath);
+  }
 
   // #786: AGENTS.md lives at the repo root (outside targetDir) for local Copilot
   // installs, so its cleanup must run even when .github (targetDir) was already
@@ -8698,20 +8911,25 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
       }
     }
 
-    const hooksJsonCleanup = removeCodexHooksJsonSessionStart(targetDir);
-    if (hooksJsonCleanup.changed) {
-      removedCount++;
-      console.log(`  ${green}✓${reset} Removed managed Codex SessionStart hook from hooks.json`);
-    }
-
-    // #772/#2088: remove every managed Codex extended hook-event registration.
-    // Shares CODEX_EXTENDED_HOOK_EVENTS with the install loop — removal set ==
-    // registration set, so no managed event is ever orphaned.
-    for (const eventName of CODEX_EXTENDED_HOOK_EVENTS) {
-      const eventCleanup = removeCodexHooksJsonEvent(targetDir, eventName);
-      if (eventCleanup.changed) {
+    // The removals write hooks.json through the symlink policy (#5037), which
+    // refuses a dangling link even with GSD_ALLOW_SYMLINKED_DEST, so a
+    // hooks.json with no GSD hooks to remove is not touched at all.
+    if (codexHooksJsonHasGsdHooks(targetDir)) {
+      const hooksJsonCleanup = removeCodexHooksJsonSessionStart(targetDir);
+      if (hooksJsonCleanup.changed) {
         removedCount++;
-        console.log(`  ${green}✓${reset} Removed managed Codex ${eventName} hook from hooks.json`);
+        console.log(`  ${green}✓${reset} Removed managed Codex SessionStart hook from hooks.json`);
+      }
+
+      // #772/#2088: remove every managed Codex extended hook-event registration.
+      // Shares CODEX_EXTENDED_HOOK_EVENTS with the install loop — removal set ==
+      // registration set, so no managed event is ever orphaned.
+      for (const eventName of CODEX_EXTENDED_HOOK_EVENTS) {
+        const eventCleanup = removeCodexHooksJsonEvent(targetDir, eventName);
+        if (eventCleanup.changed) {
+          removedCount++;
+          console.log(`  ${green}✓${reset} Removed managed Codex ${eventName} hook from hooks.json`);
+        }
       }
     }
     // #2586: uninstall's own symmetric half of the orphaned-script cleanup —
@@ -9289,152 +9507,13 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   }
 
   // 6. Clean up settings.json (remove GSD hooks and statusline)
-  const settingsPath = path.join(targetDir, 'settings.json');
   if (fs.existsSync(settingsPath)) {
     let settings = readSettings(settingsPath);
     if (settings === null) {
       console.log(`  ${yellow}i${reset} Skipping settings.json cleanup — file could not be parsed`);
       settings = {}; // prevent downstream crashes, but don't write back
     }
-    let settingsModified = false;
-
-    // Remove GSD statusline if it references our hook
-    if (settings.statusLine && settings.statusLine.command &&
-      settings.statusLine.command.includes('gsd-statusline')) {
-      delete settings.statusLine;
-      settingsModified = true;
-      console.log(`  ${green}✓${reset} Removed GSD statusline from settings`);
-    }
-
-    // Remove GSD hooks from settings — per-hook granularity to preserve
-    // user hooks that share an entry with a GSD hook (#1755 followup).
-    // Includes the 3 Qwen-only events added in #788 (SubagentStop, Stop,
-    // PreCompact, also registered for Claude in #770), the 3 Antigravity-only
-    // events added in #776 (BeforeAgent, AfterAgent, BeforeModel), and the
-    // Claude-only FileChanged event added in #770 — safe to iterate for all
-    // runtimes; installs that don't register these events simply find no
-    // entries and skip.
-    for (const eventName of ['SessionStart', 'PostToolUse', 'AfterTool', 'PreToolUse', 'BeforeTool', 'SubagentStop', 'Stop', 'PreCompact', 'BeforeAgent', 'AfterAgent', 'BeforeModel', 'FileChanged']) {
-      if (settings.hooks && settings.hooks[eventName]) {
-        const before = JSON.stringify(settings.hooks[eventName]);
-        settings.hooks[eventName] = settings.hooks[eventName]
-          .map(entry => {
-            if (!entry || typeof entry !== 'object' || !Array.isArray(entry.hooks)) return entry;
-            // Filter out individual GSD hooks, keep user hooks
-            entry.hooks = entry.hooks.filter((h) => {
-              if (!h || typeof h.command !== 'string') return true;
-              return !isManagedHookCommand(h.command, {
-                surface: 'settings-json',
-              });
-            });
-            return entry.hooks.length > 0 ? entry : null;
-          })
-          .filter(Boolean);
-        if (JSON.stringify(settings.hooks[eventName]) !== before) {
-          settingsModified = true;
-        }
-        if (settings.hooks[eventName].length === 0) {
-          delete settings.hooks[eventName];
-        }
-      }
-    }
-    if (settingsModified) {
-      console.log(`  ${green}✓${reset} Removed GSD hooks from settings`);
-    }
-
-    // Clean up empty hooks object
-    if (settings.hooks && Object.keys(settings.hooks).length === 0) {
-      delete settings.hooks;
-    }
-
-    // #768 — Remove GSD-owned Claude permissions from settings.json.
-    // Applies only to Claude uninstalls. Filter only the exact GSD-owned entries
-    // to preserve any user-added allow/deny entries.
-    // Uses a local flag to avoid the shared `settingsModified` producing a false
-    // "Removed GSD permissions" message when only hooks/statusline changed.
-    if (hostBehaviorsFor(runtime).permissionsSchema === 'claude' && settings.permissions) {
-      let permissionsModified = false;
-      if (Array.isArray(settings.permissions.allow)) {
-        const before = settings.permissions.allow.length;
-        // #2278 — filter against the union of the current allow-rule forms
-        // AND the retired legacy forms, so uninstall still cleans up
-        // pre-fix installs that still carry the stale `Write(...)` entries.
-        settings.permissions.allow = settings.permissions.allow.filter(
-          (e) => !GSD_CLAUDE_ALLOW_PERMISSIONS.includes(e) && !GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS.includes(e)
-        );
-        if (settings.permissions.allow.length !== before) {
-          permissionsModified = true;
-          // #4221: an array this filter emptied was GSD-only \u2014 remove the
-          // key rather than leave an empty array behind (Antigravity symmetry).
-          if (settings.permissions.allow.length === 0) {
-            delete settings.permissions.allow;
-          }
-        }
-      }
-      if (Array.isArray(settings.permissions.deny)) {
-        const before = settings.permissions.deny.length;
-        // #4221: the deny rules are retired, so this is a legacy-only filter.
-        settings.permissions.deny = settings.permissions.deny.filter(
-          (e) => !GSD_CLAUDE_LEGACY_DENY_PERMISSIONS.includes(e)
-        );
-        if (settings.permissions.deny.length !== before) {
-          permissionsModified = true;
-          if (settings.permissions.deny.length === 0) {
-            delete settings.permissions.deny;
-          }
-        }
-      }
-      if (permissionsModified && Object.keys(settings.permissions).length === 0) {
-        delete settings.permissions;
-      }
-      if (permissionsModified) {
-        settingsModified = true;
-        console.log(`  ${green}✓${reset} Removed GSD permissions from settings.json`);
-      }
-    }
-
-    // #2096 Phase B Upgrade 1 — Remove GSD-owned Antigravity permissions.allow
-    // rules from settings.json. Symmetric to the Claude branch above: filters
-    // only the exact GSD-owned rule strings (regenerated from the current
-    // configDir) to preserve any user-added allow entries and all deny/ask.
-    if (resolveInstallPlan(runtime).finishPermissionWriter === 'antigravity' && settings.permissions) {
-      let antigravityPermissionsModified = false;
-      if (Array.isArray(settings.permissions.allow)) {
-        const gsdRules = new Set(buildAntigravityAllowRules(targetDir));
-        const before = settings.permissions.allow.length;
-        settings.permissions.allow = settings.permissions.allow.filter((e) => !gsdRules.has(e));
-        if (settings.permissions.allow.length !== before) {
-          antigravityPermissionsModified = true;
-        }
-        if (settings.permissions.allow.length === 0) {
-          delete settings.permissions.allow;
-        }
-      }
-      if (Object.keys(settings.permissions).length === 0) {
-        delete settings.permissions;
-      }
-      if (antigravityPermissionsModified) {
-        settingsModified = true;
-        console.log(`  ${green}✓${reset} Removed GSD permissions from settings.json`);
-      }
-    }
-
-    // #2097 UPGRADE 3 — Remove the MCP companion entry from settings.json for
-    // runtimes that host MCP there (Augment), symmetric to the mcp_config.json
-    // removal for Antigravity below. Only the GSD-owned mcpServers.gsd key is
-    // removed — any other user-configured MCP servers are preserved.
-    if (hostBehaviorsFor(runtime).mcpCompanion === 'settings-json' &&
-      settings.mcpServers && typeof settings.mcpServers === 'object' &&
-      settings.mcpServers.gsd !== undefined) {
-      delete settings.mcpServers.gsd;
-      if (Object.keys(settings.mcpServers).length === 0) {
-        delete settings.mcpServers;
-      }
-      settingsModified = true;
-      console.log(`  ${green}✓${reset} Removed GSD MCP companion server from settings.json`);
-    }
-
-    if (settingsModified) {
+    if (stripGsdFromSettings(settings, runtime, targetDir, console.log)) {
       writeSettings(settingsPath, settings);
       removedCount++;
     }
@@ -13763,6 +13842,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
             }
           }
         }
+        assertSettingsWriteAllowed(sharedSettingsPath);
         fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
         writeSettings(settingsPath, localRaw);
 
@@ -15241,6 +15321,8 @@ module.exports = {
     install,
     installAllRuntimes,
     uninstall,
+    // #5037: uninstall's settings.json cleanup, shared by its pre-check and step 6
+    stripGsdFromSettings,
     // #3023 — shared hook bundle directory name, descriptor-driven
     SHARED_HOOKS_DIR_DEFAULT,
     resolveSharedHooksDirName,
