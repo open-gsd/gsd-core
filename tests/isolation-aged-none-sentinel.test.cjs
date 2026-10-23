@@ -19,7 +19,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { cleanup } = require('./helpers.cjs');
+const os = require('node:os');
+const { spawnSync } = require('node:child_process');
+const { cleanup, readFileNormalized } = require('./helpers.cjs');
+const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 const {
@@ -166,6 +171,158 @@ describe('the per-plan worktree gate never re-persists harness-worktree over a r
       if (line !== 'else') return;
       const next = lines.slice(i + 1).find((l) => l !== '' && !l.startsWith('#'));
       assert.ok(!(next ?? '').includes('dispatch-isolation'), 'no unconditional else branch may write dispatch-isolation');
+    });
+  });
+});
+
+describe('the per-plan worktree gate records the isolation sentinel per dispatch, not per decision (#5516)', () => {
+  const REPO = path.join(__dirname, '..');
+  const GATE_PATH = path.join(REPO, 'gsd-core', 'workflows', 'execute-phase', 'steps', 'per-plan-worktree-gate.md');
+  const EXECUTE_PHASE = path.join(REPO, 'gsd-core', 'workflows', 'execute-phase.md');
+  const gateLines = readFileNormalized(GATE_PATH).split('\n');
+
+  /** The bash fences under the `## ... Part N ...` heading of the gate reference. */
+  function partFences(marker) {
+    const start = gateLines.findIndex((l) => /^##\s/.test(l) && marker.test(l));
+    assert.notEqual(start, -1, `per-plan-worktree-gate.md needs a "## ... ${marker.source}" part: the decision pass and the dispatch-time record are separate steps (#5516)`);
+    let end = gateLines.findIndex((l, i) => i > start && /^##\s/.test(l));
+    if (end === -1) end = gateLines.length;
+    return scanFencedBlocks(gateLines)
+      .filter((b) => b.closeLineIdx !== -1 && (b.infoString || '').trim() === 'bash' && b.openLineIdx > start && b.closeLineIdx < end)
+      .map((b) => gateLines.slice(b.openLineIdx + 1, b.closeLineIdx).join('\n'));
+  }
+
+  let root;
+  let project;
+  before(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5516-'));
+    project = createFixture({ prefix: 'gsd-5516-', planning: true, git: true, projectDoc: false });
+    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude', workflow: { use_worktrees: true } }));
+  });
+  after(() => { cleanup(root); cleanup(project); });
+
+  const env = (extra) => ({
+    ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root, RUNTIME_DIR: REPO.replace(/\\/g, '/'), CLAUDE_ENV_FILE: '', ...extra,
+  });
+
+  // The harness sources the gate's bash fences, and Part 1 extracts plan fields with jq. Skip (never pass
+  // vacuously) where either is missing, and on Windows, where the fences' POSIX path handling is not what
+  // this harness measures; the prose-contract tests below still run there.
+  const probe = (cmd) => { const r = spawnSync(cmd, ['--version'], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS }); return !r.error && r.status === 0; };
+  const harnessSkipReason = () => {
+    if (process.platform === 'win32') return 'bash-fence harness runs on POSIX hosts';
+    if (!probe('bash')) return 'bash is not available';
+    if (!probe('jq')) return 'jq is not available';
+    return null;
+  };
+
+  function runBash(name, script, extra) {
+    const scriptPath = path.join(root, `${name}.sh`);
+    fs.writeFileSync(scriptPath, script);
+    const r = runHook(scriptPath, [], { interpreter: 'bash', cwd: project, env: env(extra), timeoutMs: PROBE_TIMEOUT_MS });
+    assert.equal(r.outcome, OUTCOME.EXITED, `${name}: ${r.stderr}`);
+    assert.equal(r.exitCode, 0, `${name} exited ${r.exitCode}: ${r.stderr}`);
+    return r.stdout;
+  }
+
+  /** Part 1, for ONE plan: the decision. Prints `<plan_id>=<USE_WORKTREES_FOR_PLAN>`. */
+  function decide(planJson, extra) {
+    const script = [`plan_json='${planJson}'`, ...partFences(/Part 1/), 'printf "%s=%s\\n" "$plan_id" "$USE_WORKTREES_FOR_PLAN"'].join('\n');
+    const line = runBash('decide', script, extra).split('\n').find((l) => /^[^=\s]+=(true|false)$/.test(l));
+    assert.ok(line, 'the decision part must leave USE_WORKTREES_FOR_PLAN set for the plan');
+    const [planId, value] = line.split('=');
+    return { planId, value };
+  }
+
+  /** Part 2: the plan-scoped record, from the plan id and the stored decision. */
+  function record({ planId, value }) {
+    const fences = partFences(/Part 2/);
+    assert.equal(fences.length, 1, 'the record part is exactly one fence');
+    runBash('record', [`plan_id='${planId}'`, `USE_WORKTREES_FOR_PLAN='${value}'`, 'PHASE_NUMBER=03', fences[0]].join('\n'), {});
+  }
+
+  const recordedPlan = () => JSON.parse(fs.readFileSync(path.join(project, SENTINEL_RELATIVE_PATH), 'utf8')).plan;
+  const dispatch = (planId, isolated) => guard.evaluateDispatch({
+    tool_name: 'Agent',
+    cwd: project,
+    tool_input: {
+      subagent_type: 'gsd-executor',
+      ...(isolated ? { isolation: 'worktree' } : {}),
+      prompt: `[gsd:dispatch phase="03" plan="${planId}"] go`,
+    },
+  }, {}).action;
+  const planJson = (id, files) => JSON.stringify({ id, files_modified: files });
+
+  test('#683 base-check degrade: a two-plan wave decided up front is dispatched sequentially, each against its own record', (t) => {
+    const skip = harnessSkipReason();
+    if (skip) { t.skip(skip); return; }
+    const wave = ['03-01-api', '03-02-docs'].map((id) => decide(planJson(id, ['src/a.js']), { USE_WORKTREES: 'false', SUBMODULE_PATHS: '' }));
+    assert.deepEqual(wave.map((d) => d.value), ['false', 'false']);
+    for (const d of wave) {
+      record(d);
+      assert.equal(recordedPlan(), d.planId, 'the record at dispatch time names the plan being dispatched');
+      assert.equal(dispatch(d.planId, false), 'allow', `${d.planId}: a flag-less dispatch of a plan decided sequential is allowed`);
+    }
+  });
+
+  test('#2772 submodule degrade: each plan is dispatched on its own stored decision', (t) => {
+    const skip = harnessSkipReason();
+    if (skip) { t.skip(skip); return; }
+    const extra = { USE_WORKTREES: 'true', SUBMODULE_PATHS: 'vendor/lib' };
+    const wave = [decide(planJson('03-01-vendor', ['vendor/lib/x.c']), extra), decide(planJson('03-02-docs', ['lib/y.js']), extra)];
+    assert.deepEqual(wave.map((d) => d.value), ['false', 'true'], 'the submodule plan is sequential, the other keeps worktree isolation');
+    record(wave[0]);
+    assert.equal(recordedPlan(), '03-01-vendor');
+    assert.equal(dispatch('03-01-vendor', false), 'allow');
+    record(wave[1]);
+    assert.equal(recordedPlan(), '03-02-docs');
+    assert.equal(dispatch('03-02-docs', true), 'allow', 'the isolated plan carries isolation="worktree"');
+    assert.equal(dispatch('03-02-docs', false), 'block', 'and is still denied without it: the record did not weaken the guard');
+  });
+
+  test('why the record is per dispatch: recording every plan before the first dispatch leaves the earlier plan denied', (t) => {
+    const skip = harnessSkipReason();
+    if (skip) { t.skip(skip); return; }
+    const wave = ['03-01-api', '03-02-docs'].map((id) => decide(planJson(id, ['src/a.js']), { USE_WORKTREES: 'false', SUBMODULE_PATHS: '' }));
+    for (const d of wave) record(d);
+    assert.equal(recordedPlan(), '03-02-docs', 'the single slot holds the last plan');
+    assert.equal(dispatch('03-01-api', false), 'block', 'the first plan is judged against the last plan\'s record');
+  });
+
+  test('re-running the extraction restores a plan\'s own PLAN_FILES and PLAN_DELETIONS after later plans overwrote them', (t) => {
+    const skip = harnessSkipReason();
+    if (skip) { t.skip(skip); return; }
+    const extraction = partFences(/Part 1/)[0];
+    const json = (id, files, deletions) => JSON.stringify({ id, files_modified: files, files_deleted: deletions });
+    const a = json('03-01-api', ['src/a.js'], ['src/old.js']);
+    const b = json('03-02-docs', ['lib/y.js'], []);
+    const script = [`plan_json='${a}'`, extraction, `plan_json='${b}'`, extraction, `plan_json='${a}'`, extraction, 'printf "%s|%s|%s\\n" "$plan_id" "$PLAN_FILES" "$PLAN_DELETIONS"'].join('\n');
+    assert.equal(runBash('reextract', script, {}).trim().split('\n').pop(), '03-01-api|src/a.js|src/old.js');
+  });
+
+  describe('execute-phase.md places the record at the dispatch point', () => {
+    const lines = readFileNormalized(EXECUTE_PHASE).split('\n');
+    const stepStart = /^\d+(\.\d+)?\.\s+\*\*/;
+    function step(marker) {
+      const from = lines.findIndex((l) => stepStart.test(l) && marker.test(l));
+      assert.notEqual(from, -1, `execute-phase.md has no step matching ${marker}`);
+      let to = lines.findIndex((l, i) => i > from && stepStart.test(l));
+      if (to === -1) to = lines.length;
+      return lines.slice(from, to).join('\n');
+    }
+
+    test('step 2.5 runs the decision part for the whole wave and does not write the record', () => {
+      const body = step(/^2\.5\./);
+      assert.match(body, /Part 1/, 'step 2.5 runs Part 1 (the decision) of the gate');
+      assert.doesNotMatch(body, /Part 2\b[^\n]*\bfor each plan\b/i, 'step 2.5 does not run Part 2 for each plan');
+      assert.match(body, /isolation record is \*\*not written here\*\*/i, 'step 2.5 says the isolation record is not written in the decision pass');
+    });
+
+    test('step 3 re-records the sentinel for the plan being dispatched, from that plan\'s stored decision', () => {
+      const body = step(/Spawn executor agents/);
+      assert.match(body, /Part 2/, 'step 3 runs Part 2 (the plan-scoped record) of the gate');
+      assert.match(body, /stored decision|that plan's own decision/i, 'step 3 reads the dispatched plan\'s stored decision');
+      assert.match(body, /PLAN_FILES[^\n]*PLAN_DELETIONS/, 'step 3 re-extracts PLAN_FILES / PLAN_DELETIONS for the dispatched plan');
     });
   });
 });
