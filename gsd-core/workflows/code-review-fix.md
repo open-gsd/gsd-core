@@ -401,13 +401,14 @@ Key design decisions for --auto (addresses ALL review HIGH concerns):
 1. **Re-review scope**: Uses REVIEW_FILES_ARRAY from original REVIEW.md frontmatter, falling back to full phase scope. Scope is NOT lost between iterations. Uses portable while-read loop (bash 3.2+ compatible, handles spaces in paths).
 2. **Artifact semantics**: REVIEW.md is overwritten by each re-review (latest review state). REVIEW-FIX.md is overwritten by each fixer iteration (latest fix state with iteration count). There is ONE final version of each artifact, not per-iteration copies.
    Backup files (.iterN.md) preserve history for post-mortem analysis if iterations degrade. On successful convergence (#3190) the backups are spent scratch and removed; on degradation (hit MAX_ITERATIONS / fixer failure) they are retained for post-mortem. The removal happens in `cleanup_iteration_backups`, after `record_disposition` has read them — they are the only surviving record of what an earlier iteration fixed, since this artifact keeps one final version rather than per-iteration copies.
-3. **Commit timing**: Fix commits happen per-finding inside the agent. REVIEW-FIX.md is NOT committed until step 7 (after ALL iterations complete). Only ONE docs commit, not one per iteration. In --auto that single commit also stages the converged REVIEW.md alongside REVIEW-FIX.md (#3190), so the two committed artifacts agree — the initial code-review commit held iteration-1 REVIEW.md content, and the --auto re-review loop overwrote it each iteration.
+3. **Commit timing**: Fix commits happen per-finding inside the agent. REVIEW-FIX.md is NOT committed until step 7 (after ALL iterations complete). Only ONE docs commit, not one per iteration. In --auto that single commit also stages the converged REVIEW.md alongside REVIEW-FIX.md (#3190), so the two committed artifacts agree — the initial code-review commit held iteration-1 REVIEW.md content, and the --auto re-review loop overwrote it each iteration. In --auto, REVIEW.md is also committed when the fix report is invalid or missing (#5527); the malformed report is never staged.
 </step>
 
 <step name="commit_fix_report">
 After ALL iterations complete (or single pass in non-auto mode), validate and commit REVIEW-FIX.md:
 
 ```bash
+HAS_STATUS=invalid
 if [ -f "${FIX_REPORT_PATH}" ]; then
   # Validate REVIEW-FIX.md has valid YAML frontmatter with status field
   # #3190: export FIX_REPORT_PATH (the var the body reads), not REVIEW_PATH.
@@ -420,30 +421,41 @@ if [ -f "${FIX_REPORT_PATH}" ]; then
   
   if [ "$HAS_STATUS" = "valid" ]; then
     echo "REVIEW-FIX.md created at ${FIX_REPORT_PATH}"
-    
-    if [ "$COMMIT_DOCS" = "true" ]; then
-      # #3190: --auto's re-review loop overwrote REVIEW.md each iteration
-      # (auto_iteration_loop), but the only prior REVIEW.md commit is the
-      # initial code-review pass (iteration-1 content). Stage the converged
-      # REVIEW.md alongside REVIEW-FIX.md in this single docs commit so the two
-      # committed artifacts agree. Non-auto single-pass runs never rewrite
-      # REVIEW.md, so it is left untouched (guarded on AUTO_MODE).
-      COMMIT_FILES=("${FIX_REPORT_PATH}")
-      if [ "$AUTO_MODE" = "true" ] && [ -f "${REVIEW_PATH}" ]; then
-        COMMIT_FILES+=("${REVIEW_PATH}")
-      fi
-      gsd_run query commit \
-        "docs(${PADDED_PHASE}): add code review fix report" \
-        --files "${COMMIT_FILES[@]}"
-    fi
   else
-    echo "Warning: REVIEW-FIX.md has invalid frontmatter (no status field). Not committing."
+    echo "Warning: REVIEW-FIX.md has invalid frontmatter (no status field). Not committing REVIEW-FIX.md."
     echo "Agent may have produced malformed output. Review manually: ${FIX_REPORT_PATH}"
+    # Only when git sees the report.
+    if [ -n "$(git status --porcelain -- "${FIX_REPORT_PATH}" 2>/dev/null)" ]; then
+      echo "The working tree stays dirty: /gsd:ship will refuse until ${FIX_REPORT_PATH} is fixed and committed, or deleted."
+    fi
   fi
 else
   echo "Warning: REVIEW-FIX.md not found at ${FIX_REPORT_PATH}."
   echo "Agent may have failed before writing report."
   echo "Check git log for any fix(${PADDED_PHASE}) commits that were applied."
+fi
+
+if [ "$COMMIT_DOCS" = "true" ]; then
+  # #3190: --auto's re-review loop overwrote REVIEW.md each iteration
+  # (auto_iteration_loop), but the only prior REVIEW.md commit is the
+  # initial code-review pass (iteration-1 content). Stage the converged
+  # REVIEW.md alongside REVIEW-FIX.md in this single docs commit so, on the valid-report path, the two
+  # committed artifacts agree. Non-auto single-pass runs never rewrite
+  # REVIEW.md, so it is left untouched (guarded on AUTO_MODE).
+  # #5527: stage REVIEW.md even when the fix report is invalid/missing, else the
+  # rewritten tracked REVIEW.md stays dirty. A malformed report is never staged.
+  COMMIT_FILES=()
+  COMMIT_MSG="docs(${PADDED_PHASE}): update code review report"
+  if [ "$HAS_STATUS" = "valid" ]; then
+    COMMIT_FILES+=("${FIX_REPORT_PATH}")
+    COMMIT_MSG="docs(${PADDED_PHASE}): add code review fix report"
+  fi
+  if [ "$AUTO_MODE" = "true" ] && [ -f "${REVIEW_PATH}" ]; then
+    COMMIT_FILES+=("${REVIEW_PATH}")
+  fi
+  if [ "${#COMMIT_FILES[@]}" -gt 0 ]; then
+    gsd_run query commit "$COMMIT_MSG" --files "${COMMIT_FILES[@]}"
+  fi
 fi
 ```
 

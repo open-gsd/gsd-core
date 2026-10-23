@@ -2,7 +2,8 @@
 // The workflow .md IS the product: its embedded bash/node snippets are loaded
 // and executed verbatim by the agent host at runtime. Testing that the deployed
 // commit-fix step exports the env var its own inline `node -e` body reads, and
-// that the docs commit stages the converged REVIEW.md alongside REVIEW-FIX.md,
+// that the docs commit stages the converged REVIEW.md alongside REVIEW-FIX.md
+// (#3190), and alone when the fix report is invalid or missing (#5527),
 // asserts the deployed contract — not an implementation detail. There is no
 // runtime API that exposes these inlined snippets; the text IS the spec.
 //
@@ -17,7 +18,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { runNode, runHook } = require('./helpers/process-seam.cjs');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { PROBE_TIMEOUT_MS, SEAM_DEFAULT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 // Same gate the shipped fences carry everywhere in this suite: bash is not assumed on win32.
 const HAS_BASH = process.platform !== 'win32';
 
@@ -38,7 +39,8 @@ function stepFence(src, name) {
   }
   assert.fail(`step "${name}" carries no bash fence`);
 }
-const { createTempDir, cleanup } = require('./helpers.cjs');
+const { createTempDir, createTempGitProject, cleanup, TOOLS_PATH } = require('./helpers.cjs');
+const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const WORKFLOW_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'code-review-fix.md');
@@ -266,5 +268,107 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     // An unreadable or unparseable review is not evidence of convergence — retain.
     const unknown = drive('');
     assert.strictEqual(unknown.review, true, 'an unparseable status must retain, never remove');
+  });
+
+  // #5527: the converged REVIEW.md must be committed even when the fix report is invalid or
+  // missing, else a tracked rewritten REVIEW.md stays dirty and /gsd-ship refuses. The fence is
+  // EXECUTED with a stub gsd_run that records its argv.
+  test('T7 — commit_fix_report EXECUTED: --auto REVIEW.md committed when fix report is invalid/missing/valid', { skip: !HAS_BASH }, (t) => {
+    const src = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+    const fence = stepFence(src, 'commit_fix_report');
+
+    const drive = ({ report, auto = 'true', docs = 'true' }) => {
+      const dir = createTempDir('gsd-5527-');
+      t.after(() => cleanup(dir));
+      const reviewPath = path.join(dir, '01-REVIEW.md');
+      const fixPath = path.join(dir, '01-REVIEW-FIX.md');
+      const log = path.join(dir, 'argv.log');
+      fs.writeFileSync(reviewPath, '---\nstatus: clean\n---\n');
+      if (report !== null) fs.writeFileSync(fixPath, report);
+      const script = [
+        'set -uo pipefail',
+        'gsd_run() { { printf "%s\\n" "$@"; echo "--"; } >> "' + log + '"; }',
+        'AUTO_MODE=' + auto,
+        'COMMIT_DOCS=' + docs,
+        'PADDED_PHASE=01',
+        'REVIEW_PATH="' + reviewPath + '"',
+        'FIX_REPORT_PATH="' + fixPath + '"',
+        fence,
+      ].join('\n');
+      const res = runHook('-c', [script], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
+      assert.strictEqual(res.exitCode, 0, 'step must not abort: ' + res.stderr);
+      const calls = (fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '').split('--\n').filter(Boolean);
+      assert.ok(calls.length <= 1, 'at most one query commit call');
+      return { argv: calls.length ? calls[0].split('\n') : null, reviewPath, fixPath };
+    };
+
+    // AC1: fix report lacks status => REVIEW.md still committed, the malformed report is not (AC3).
+    const invalid = drive({ report: '---\nfoo: bar\n---\n' });
+    assert.ok(invalid.argv, 'invalid frontmatter in --auto must still commit REVIEW.md');
+    assert.ok(invalid.argv.includes(invalid.reviewPath), 'REVIEW.md staged');
+    assert.ok(!invalid.argv.includes(invalid.fixPath), 'malformed fix report must NOT be staged');
+    assert.ok(invalid.argv.includes('docs(01): update code review report'), 'invalid: report-only message');
+
+    // AC2: fix report absent.
+    const missing = drive({ report: null });
+    assert.ok(missing.argv, 'missing fix report in --auto must still commit REVIEW.md');
+    assert.ok(missing.argv.includes(missing.reviewPath), 'REVIEW.md staged');
+    assert.ok(!missing.argv.includes(missing.fixPath), 'absent fix report must NOT be staged');
+    assert.ok(missing.argv.includes('docs(01): update code review report'), 'missing: report-only message');
+
+    // Valid path unchanged: both staged.
+    const valid = drive({ report: VALID_FIX_REPORT });
+    assert.ok(valid.argv.includes(valid.fixPath) && valid.argv.includes(valid.reviewPath), 'valid: both staged');
+    assert.ok(valid.argv.includes('docs(01): add code review fix report'), 'valid keeps its message');
+
+    // Out of scope stays out: non-auto and COMMIT_DOCS=false commit no REVIEW.md.
+    assert.ok(!drive({ report: '---\nfoo: bar\n---\n', auto: 'false' }).argv, 'non-auto invalid commits nothing');
+    assert.ok(!drive({ report: null, docs: 'false' }).argv, 'COMMIT_DOCS=false commits nothing');
+  });
+
+  // #5527 observable: run the fence against a real repo and the real `query commit`, then read
+  // `git status`. A stubbed argv proves the call, not that REVIEW.md lands or what stays dirty.
+  test('T8 — commit_fix_report EXECUTED against real git: REVIEW.md lands; only a malformed report stays', { skip: !HAS_BASH }, (t) => {
+    const fence = stepFence(fs.readFileSync(WORKFLOW_PATH, 'utf8'), 'commit_fix_report');
+    const git = (cwd, ...args) => gitOrThrow(args, { cwd });
+    const REVIEW = '.planning/01-REVIEW.md';
+    const FIX = '.planning/01-REVIEW-FIX.md';
+
+    const drive = (report, { ignored = false } = {}) => {
+      const dir = createTempGitProject('gsd-5527-');
+      t.after(() => cleanup(dir));
+      if (ignored) fs.writeFileSync(path.join(dir, '.gitignore'), '.planning/\n');
+      fs.writeFileSync(path.join(dir, '.planning', 'config.json'), '{"commit_docs": true}\n');
+      fs.writeFileSync(path.join(dir, REVIEW), '---\nstatus: issues_found\n---\n');
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-q', '-m', 'seed');
+      fs.writeFileSync(path.join(dir, REVIEW), '---\nstatus: clean\n---\n'); // the --auto re-review rewrite
+      fs.writeFileSync(path.join(dir, FIX), report);
+      const script = [
+        'set -uo pipefail',
+        'cd ' + JSON.stringify(dir),
+        'gsd_run() { ' + JSON.stringify(process.execPath) + ' ' + JSON.stringify(TOOLS_PATH) + ' "$@"; }',
+        'AUTO_MODE=true',
+        'COMMIT_DOCS=true',
+        'PADDED_PHASE=01',
+        'REVIEW_PATH=' + REVIEW,
+        'FIX_REPORT_PATH=' + FIX,
+        fence,
+      ].join('\n');
+      const res = runHook('-c', [script], { interpreter: 'bash', timeoutMs: SEAM_DEFAULT_TIMEOUT_MS });
+      assert.strictEqual(res.exitCode, 0, 'step must not abort: ' + res.stderr);
+      return { status: git(dir, 'status', '--porcelain'), stdout: res.stdout };
+    };
+
+    const invalid = drive('---\nfoo: bar\n---\n');
+    assert.match(invalid.stdout, /stays dirty/, 'dirty-tree warning shown when git sees the malformed report');
+    assert.strictEqual(invalid.status.trim(), '?? ' + FIX, 'REVIEW.md committed; only the malformed report remains');
+
+    const ignoredRun = drive('---\nfoo: bar\n---\n', { ignored: true });
+    assert.strictEqual(ignoredRun.status, '', 'gitignored .planning/: tree stays clean');
+    assert.doesNotMatch(ignoredRun.stdout, /stays dirty/, 'no dirty-tree warning when git ignores the report');
+
+    const valid = drive(VALID_FIX_REPORT);
+    assert.strictEqual(valid.status, '', 'valid report: both committed, tree clean');
   });
 });
