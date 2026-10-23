@@ -2051,6 +2051,184 @@ describe('generateCodexConfigBlock', () => {
 // ─── stripGsdFromCodexConfig ────────────────────────────────────────────────────
 
 describe('stripGsdFromCodexConfig', () => {
+  for (const eol of ['\n', '\r\n']) {
+    test(`#5199: preserves user config on both sides of the marker with ${JSON.stringify(eol)} endings`, () => {
+      const before = ['model = "session-model"', '', '[mcp_servers.before]', 'command = "before-mcp"', ''].join(eol);
+      const after = [
+        '[mcp_servers.example]',
+        'command = "npx"',
+        'args = ["-y", "example-mcp"]',
+        '',
+        '[plugins.example]',
+        'enabled = false',
+        '',
+        '[projects."/tmp/example"]',
+        'trust_level = "trusted"',
+        '',
+        '[marketplaces.example]',
+        'url = "https://example.test/marketplace"',
+        '',
+        '[agents.custom]',
+        'description = "user agent"',
+        '',
+      ].join(eol);
+      const managed = [
+        GSD_CODEX_MARKER,
+        '# GSD codex_hooks ownership: section',
+        '[features]',
+        'hooks = true',
+        'multi_agent = true',
+        'default_mode_request_user_input = true',
+        'user_feature = false',
+        '',
+        '[agents]',
+        'max_threads = 7',
+        'job_max_runtime_seconds = 0',
+        'interrupt_message = false',
+        'max_depth = 1',
+        '',
+        '[agents.gsd-executor]',
+        'config_file = "agents/gsd-executor.toml"',
+        '',
+      ].join(eol);
+      const cleaned = stripGsdFromCodexConfig(before + managed + after);
+      assert.ok(cleaned, 'user config must keep the file alive');
+      assert.deepStrictEqual(parseTomlToObject(cleaned), parseTomlToObject([
+        before,
+        '[features]',
+        'user_feature = false',
+        after,
+        '[agents]',
+        'max_threads = 7',
+        'job_max_runtime_seconds = 0',
+        'interrupt_message = false',
+        '',
+      ].join(eol)));
+      assert.ok(cleaned.includes(after.trimEnd()), 'user tables retain their original bytes and ordering');
+      assert.ok(!cleaned.includes(GSD_CODEX_MARKER), 'managed marker is removed');
+      assert.ok(!cleaned.includes('GSD codex_hooks ownership:'), 'ownership line is removed');
+      if (eol === '\r\n') assert.doesNotMatch(cleaned, /(?<!\r)\n/, 'CRLF stays CRLF');
+      assert.strictEqual(stripGsdFromCodexConfig(cleaned), cleaned, 'repeated cleanup is idempotent');
+    });
+  }
+
+  test('#5199: preserves file-scoped user keys after the marker and before the first table', () => {
+    const content = `${GSD_CODEX_MARKER}\nmodel = "user-model"\ncustom = { enabled = false, retries = 0 }\n\n[agents]\nmax_depth = 1\n`;
+    const cleaned = stripGsdFromCodexConfig(content);
+    assert.ok(cleaned, 'user root keys prevent a null return');
+    assert.deepStrictEqual(parseTomlToObject(cleaned), {
+      model: 'user-model', custom: { enabled: false, retries: 0 },
+    });
+  });
+
+  test('#5199: preserves unknown [agents] keys in place without duplicating known tuning scalars', () => {
+    const content = `${GSD_CODEX_MARKER}\n[agents]\nmax_depth = 1\nmax_threads = 7\nfuture_tuning = { enabled = false }\n\n[mcp_servers.user]\ncommand = "keep"\n`;
+    const cleaned = stripGsdFromCodexConfig(content);
+    assert.deepStrictEqual(parseTomlToObject(cleaned), {
+      agents: { max_threads: 7, future_tuning: { enabled: false } },
+      mcp_servers: { user: { command: 'keep' } },
+    });
+    assert.strictEqual(stripGsdFromCodexConfig(cleaned), cleaned, 'a second cleanup keeps one user [agents] table');
+  });
+
+  test('#5199: marker cleanup preserves user [[agents]] entries and strips legacy managed entries', () => {
+    const content = `${GSD_CODEX_MARKER}\n[[agents]]\nname = "gsd-executor"\nconfig_file = "agents/gsd-executor.toml"\n\n[[agents]]\nname = "user-agent"\ndescription = "keep"\n`;
+    const cleaned = stripGsdFromCodexConfig(content);
+    assert.ok(cleaned, 'user agent entries prevent a null return');
+    assert.deepStrictEqual(parseTomlToObject(cleaned), { agents: [{ name: 'user-agent', description: 'keep' }] });
+    assert.strictEqual(stripGsdFromCodexConfig(cleaned), cleaned);
+  });
+
+  test('#5199: marker and legacy feature text inside user values are preserved', () => {
+    const user = [
+      `literal_marker = ${JSON.stringify(GSD_CODEX_MARKER)}`,
+      'notes = """',
+      GSD_CODEX_MARKER,
+      '# GSD codex_hooks ownership: section',
+      'multi_agent = true',
+      'default_mode_request_user_input = true',
+      '[features]',
+      '[agents.gsd-literal]',
+      '"""',
+      '',
+    ].join('\n');
+    const userTable = '[mcp_servers.user]\nmulti_agent = true\ndefault_mode_request_user_input = true\n';
+    const expected = parseTomlToObject(user + userTable);
+    const content = user + 'features.hooks = true\n' + [
+      GSD_CODEX_MARKER,
+      '# GSD codex_hooks ownership: root_dotted',
+      '[agents]',
+      'max_depth = 1',
+      userTable,
+    ].join('\n');
+    const cleaned = stripGsdFromCodexConfig(content);
+    assert.deepStrictEqual(parseTomlToObject(cleaned), expected, 'only the real managed marker and injected features are removed');
+    assert.ok(cleaned.includes(user), 'literal marker and multiline bytes survive');
+    assert.strictEqual(stripGsdFromCodexConfig(cleaned), cleaned);
+    assert.strictEqual(stripGsdFromCodexConfig(user + userTable), user + userTable, 'literal marker text alone does not create a managed block');
+  });
+
+  test('#5199: markerless feature cleanup preserves root and other-table lookalikes', () => {
+    const input = ['multi_agent = true', '[features]', 'multi_agent = true',
+      'default_mode_request_user_input = true', '[user]', 'multi_agent = true',
+      'default_mode_request_user_input = true', ''].join('\n');
+    const output = stripGsdFromCodexConfig(input);
+    assert.deepEqual(parseTomlToObject(output), { multi_agent: true,
+      user: { multi_agent: true, default_mode_request_user_input: true } });
+  });
+
+  test('#5199: property: cleanup conserves arbitrary user tables, tuning and line endings', async () => {
+    const userText = fc.array(fc.constantFrom('a', 'b', ' ', '-', '_', '0', '[', '#', '"', '=', '\\'), { maxLength: 25 }).map((chars) => chars.join(''));
+    await fc.assert(fc.property(
+      fc.constantFrom('\n', '\r\n'),
+      userText,
+      fc.integer({ min: 0, max: 32 }),
+      fc.boolean(),
+      fc.array(fc.tuple(userText, fc.integer(), fc.boolean()), { minLength: 1, maxLength: 6 }),
+      (eol, model, threads, unknownTuning, tables) => {
+        const userTables = tables.map(([value, count, enabled], i) => [
+          `[user."table-${i}"]`,
+          `value = ${JSON.stringify(value)}`,
+          `count = ${count}`,
+          `enabled = ${enabled}`,
+          'multi_agent = true',
+          'default_mode_request_user_input = true',
+          'notes = """',
+          '[agents.gsd-literal]',
+          'max_depth = 42',
+          'multi_agent = true',
+          'default_mode_request_user_input = true',
+          '[features]',
+          '[user.literal]',
+          '"""',
+          '',
+        ].join(eol));
+        const agents = ['[agents]', `max_threads = ${threads}`];
+        if (unknownTuning) agents.push('future_tuning = { enabled = false }');
+        const expected = [`model = ${JSON.stringify(model)}`, agents.join(eol), ...userTables].join(eol);
+        const content = [
+          `model = ${JSON.stringify(model)}`,
+          GSD_CODEX_MARKER,
+          '# GSD codex_hooks ownership: root_dotted',
+          agents.join(eol),
+          'max_depth = 1',
+          '[agents.gsd-executor]',
+          'description = "managed"',
+          ...userTables.flatMap((table, i) => [table, `[agents.gsd-stale-${i}]`, 'description = "managed"']),
+          '',
+        ].join(eol);
+        const cleaned = stripGsdFromCodexConfig(content);
+        assert.ok(cleaned, 'non-empty user tables prevent a null return');
+        assert.deepStrictEqual(parseTomlToObject(cleaned), parseTomlToObject(expected));
+        for (const table of userTables) assert.ok(cleaned.includes(table.trimEnd()), 'user table bytes survive');
+        assert.ok(!cleaned.includes(GSD_CODEX_MARKER));
+        assert.ok(!cleaned.includes('GSD codex_hooks ownership:'));
+        if (eol === '\r\n') assert.doesNotMatch(cleaned, /(?<!\r)\n/);
+        assert.strictEqual(stripGsdFromCodexConfig(cleaned), cleaned, 'cleanup reaches a fixed point');
+      },
+    ), { seed: 5199, numRuns: 100 });
+  });
+
   test('returns null for GSD-only config', () => {
     const content = `${GSD_CODEX_MARKER}\n[features]\nmulti_agent = true\n`;
     const result = stripGsdFromCodexConfig(content);
