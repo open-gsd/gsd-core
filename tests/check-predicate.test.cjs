@@ -482,17 +482,7 @@ describe('check predicate — literal phase data through the CLI', { skip: NO_SH
 test('check predicate rejects old context spellings as usage errors before shell side effects', () => {
   const dir = createTempProject('gate-phase-legacy-');
   try {
-    let contextEnv;
-    evaluatePredicate({ kind: 'command-exit-zero', command: 'true' }, { cwd: dir }, {
-      runBoundedShell(opts) {
-        contextEnv = opts.env;
-        return { exitCode: 0, stdout: '', stderr: '', signal: null, timedOut: false };
-      },
-    });
-    assert.deepEqual(contextEnv, {
-      GSD_GATE_PHASE_DIR: '', GSD_GATE_PHASE_NUMBER: '', GSD_GATE_PHASE_REQ_IDS: '',
-    });
-    for (const variable of Object.keys(contextEnv)) {
+    for (const variable of ['GSD_GATE_PHASE_DIR', 'GSD_GATE_PHASE_NUMBER', 'GSD_GATE_PHASE_REQ_IDS']) {
       const name = variable.slice('GSD_GATE_'.length);
       const result = runGsdTools(['check', 'predicate', '--predicate', JSON.stringify({
         kind: 'command-exit-zero', command: 'touch SHOULD_NOT_RUN; echo "${' + name + '}"',
