@@ -1555,16 +1555,12 @@ describe('#2702: workstream config-get inherits from root config', () => {
   const assert = require('node:assert/strict');
   const fs = require('node:fs');
   const path = require('node:path');
-  const os = require('node:os');
-  const { cleanup, createTempGitProject, captureFdSync } = require('./helpers.cjs');
+  const { cleanup, createTempGitProject, captureFdSync, isolateConfigReadEnv } = require('./helpers.cjs');
   const configCli = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'config.cjs'));
   const { loadConfig, CONFIG_KEY_ALIASES } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'config-loader.cjs'));
   const { VALID_CONFIG_KEYS } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'config-schema.cjs'));
 
   const SENTINEL = 'sentinel-5470';
-  // Every variable that redirects which config the loader reads, or which
-  // global defaults file it falls back to.
-  const SCOPE_VARS = ['GSD_PROJECT', 'GSD_WORKSTREAM', 'GSD_HOME'];
 
   function readPath(obj, dotted) {
     return dotted.split('.').reduce((cur, seg) => (cur !== null && typeof cur === 'object' ? cur[seg] : undefined), obj);
@@ -1584,29 +1580,22 @@ describe('#2702: workstream config-get inherits from root config', () => {
 
   describe('#5470: config-get answers each loader-aliased key as its table entry says', () => {
     let tmpDir;
-    let gsdHome;
-    let savedScope;
+    let isolation;
     let silencedStderr;
 
+    // A value inherited from the developer's shell or git config would point
+    // every case elsewhere: see isolateConfigReadEnv.
     beforeEach((t) => {
+      isolation = isolateConfigReadEnv();
       tmpDir = createTempGitProject();
-      gsdHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-home-5470-'));
-      savedScope = SCOPE_VARS.map((name) => [name, process.env[name]]);
-      delete process.env.GSD_PROJECT;
-      delete process.env.GSD_WORKSTREAM;
-      process.env.GSD_HOME = gsdHome;
       // The loader warns once per unknown top-level key; the discovery tests
       // write such keys on purpose.
       silencedStderr = t.mock.method(process.stderr, 'write', () => true);
     });
     afterEach(() => {
       silencedStderr.mock.restore();
-      for (const [name, value] of savedScope) {
-        if (value === undefined) delete process.env[name];
-        else process.env[name] = value;
-      }
       cleanup(tmpDir);
-      cleanup(gsdHome);
+      isolation.restore();
     });
 
     function writeConfig(cfg) {
