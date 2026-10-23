@@ -1306,9 +1306,8 @@ describe('#3587 per-phase commit_docs override', () => {
   const { describe, test, beforeEach, afterEach } = require('node:test');
   const assert = require('node:assert/strict');
   const fs = require('fs');
-  const os = require('os');
   const path = require('path');
-  const { cleanup, createTempGitProject, captureFdSync, runGsdTools } = require('./helpers.cjs');
+  const { cleanup, createTempGitProject, captureFdSync, runGsdTools, isolateConfigReadEnv } = require('./helpers.cjs');
   const configCli = require('../gsd-core/bin/lib/config.cjs');
   const { loadConfigResolved, CONFIG_REASON } = require('../gsd-core/bin/lib/config-loader.cjs');
 
@@ -1320,27 +1319,18 @@ describe('#3587 per-phase commit_docs override', () => {
   describe('#5470 config-get commit_docs returns the runtime-resolved policy', () => {
     let tmpDir;
     let gsdHome;
-    // GSD_PROJECT and GSD_WORKSTREAM redirect which config.json the loader reads,
-    // and GSD_HOME is where it finds the global defaults file it falls back to
-    // when there is no project config, so a value inherited from the developer's
-    // shell would point every case elsewhere.
-    const SCOPE_VARS = ['GSD_PROJECT', 'GSD_WORKSTREAM', 'GSD_HOME'];
-    let savedScope;
+    let isolation;
 
+    // A value inherited from the developer's shell or git config would point
+    // every case elsewhere: see isolateConfigReadEnv.
     beforeEach(() => {
+      isolation = isolateConfigReadEnv();
+      gsdHome = isolation.gsdHome;
       tmpDir = createTempGitProject();
-      gsdHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-home-5470-'));
-      savedScope = SCOPE_VARS.map((name) => [name, process.env[name]]);
-      for (const name of SCOPE_VARS) delete process.env[name];
-      process.env.GSD_HOME = gsdHome;
     });
     afterEach(() => {
-      for (const [name, value] of savedScope) {
-        if (value === undefined) delete process.env[name];
-        else process.env[name] = value;
-      }
       cleanup(tmpDir);
-      cleanup(gsdHome);
+      isolation.restore();
     });
 
     function configGet(keyPath, defaultValue) {
