@@ -24,7 +24,19 @@
  */
 
 import { createRequire } from 'node:module';
+import { dirname, delimiter } from 'node:path';
+import { fileURLToPath } from 'node:url';
 const _require = createRequire(import.meta.url);
+
+// #4885: the sandbox (tempDirName below) sits INSIDE this checkout, so a git command a
+// mutant runs without its intended `cwd` (worktree-safety shells out to `git reset
+// --merge`, `stash pop`, `worktree remove`) would discover and change THIS repository —
+// a local run applied a parked stash to the working tree this way. Stopping git's
+// repository discovery at the checkout root keeps every such command inside the
+// sandbox, where it finds no repository. Set before the test runners are forked, which
+// inherit it; fixture repos the tests create are unaffected.
+process.env.GIT_CEILING_DIRECTORIES = [dirname(fileURLToPath(import.meta.url)), process.env.GIT_CEILING_DIRECTORIES]
+  .filter(Boolean).join(delimiter);
 // resolveMutationBreak: fail-closed resolver for MUTATION_BREAK env var.
 // undefined → 60 (local backstop); set-but-empty or non-numeric → throws.
 // resolveMutationTestFiles: fail-closed resolver for MUTATION_TEST_FILES env var (#3915).

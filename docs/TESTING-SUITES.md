@@ -548,7 +548,10 @@ OS/runtime lanes adds cost without improving the threshold signal. Note the gate
 deliberate blind spot: it measures
 `gsd-core/bin/lib/*.cjs` only — `scripts/`, `hooks/`, and `bin/` are
 unenforced, and `stryker.config.mjs` additionally excludes ~48% of lib lines
-from mutation testing (see the UNMUTATED list there). Widening either gate is
+from mutation testing (see the UNMUTATED list there). The one hook exception is
+the mutation gate's `isolation-hooks` shard (#4885): `scripts/mutation-matrix.cjs`
+mutates the dispatch-isolation guard hooks and their sentinel library, selected by
+the entry's own `sources` rather than a `src/<module>.cts`. Widening either gate is
 tracked work, not an accident to "fix" silently by raising thresholds.
 
 To inspect the scope locally:

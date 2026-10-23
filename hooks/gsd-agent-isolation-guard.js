@@ -64,14 +64,17 @@
 // for unchanged modules. Only as the entry (a test require() is unaffected),
 // skipped under V8 coverage, optional (Bun stubs it), and never fatal.
 // NODE_DISABLE_COMPILE_CACHE (any value) turns it off.
+// Stryker disable all: runs only when this file is the process entry, and its one effect is
+// V8 compile-cache speed, which no test can observe (equivalent mutants, #4885 review).
 if (require.main === module && !process.env.NODE_V8_COVERAGE) {
   try { require('node:module').enableCompileCache?.(); } catch { /* optimization only */ }
 }
+// Stryker restore all
 
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { readSentinel, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch, agedNoneGovernsDispatch, buildSentinelDiscard } = require('./lib/isolation-sentinel.js');
+const { readSentinel, resolveGuardProject, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch, agedNoneGovernsDispatch, buildSentinelDiscard } = require('./lib/isolation-sentinel.js');
 const { REASON_CODE, describeSentinelDiscard } = require('./lib/isolation-deny-reason.js');
 const { HOOK_ON_CRASH, allow, deny, crash } = require('./lib/hook-exit.js');
 
@@ -410,7 +413,21 @@ function resolveRegistryIsolation(cwd, configPath) {
  * "a mismatch is 'no applicable sentinel', not an allow" (#3045 review).
  */
 function resolveIsolationState(cwd, { clock = Date, dispatchIds = null } = {}) {
-  const configPath = path.join(cwd, '.planning', 'config.json');
+  // #4885: the project-existence check uses the SAME root the sentinel is
+  // read from (and gsd-tools writes to). Checking the raw payload cwd made a
+  // dispatch from a project subdirectory read as "not a GSD project" (inert
+  // allow) before the correctly-resolved sentinel was ever consulted. A root
+  // that could not be resolved for a cwd inside a project fails closed
+  // (#3050), with `unresolved` set so the block names the cause.
+  const project = resolveGuardProject(cwd);
+  if (!project.project) {
+    return { gsdProject: false, isolation: null, harnessFlag: null, error: null, sentinelDiscarded: null, root: null };
+  }
+  if (project.error) {
+    return { gsdProject: true, isolation: null, harnessFlag: null, error: project.error, sentinelDiscarded: null, root: null, unresolved: true };
+  }
+  const root = project.root;
+  const configPath = path.join(root, '.planning', 'config.json');
   let projectExists;
   try {
     fs.accessSync(configPath, fs.constants.F_OK);
@@ -419,20 +436,21 @@ function resolveIsolationState(cwd, { clock = Date, dispatchIds = null } = {}) {
     projectExists = false;
   }
   if (!projectExists) {
-    return { gsdProject: false, isolation: null, harnessFlag: null, error: null, sentinelDiscarded: null };
+    return { gsdProject: false, isolation: null, harnessFlag: null, error: null, sentinelDiscarded: null, root: null };
   }
 
-  const sentinel = readSentinel(cwd, { clock });
+  // #4885: the sentinel is read where gsd-tools writes it (resolveGuardProject).
+  const sentinel = readSentinel(project.sentinelRoot, { clock });
   // Hoisted so the "sentinel was present/fresh but did not apply" case below
   // (#4594 row 15 — Postel's-Law finding) can distinguish itself from
   // "absent"/"stale" without re-deriving applicability.
   const applies = sentinelAppliesToDispatch(sentinel, dispatchIds);
   if (sentinel.present && !sentinel.stale && applies) {
     if (sentinel.isolation !== 'harness-worktree') {
-      return { gsdProject: true, isolation: sentinel.isolation, harnessFlag: null, error: null, sentinelDiscarded: null };
+      return { gsdProject: true, isolation: sentinel.isolation, harnessFlag: null, error: null, sentinelDiscarded: null, root };
     }
     if (sentinel.harnessFlag) {
-      return { gsdProject: true, isolation: 'harness-worktree', harnessFlag: sentinel.harnessFlag, error: null, sentinelDiscarded: null };
+      return { gsdProject: true, isolation: 'harness-worktree', harnessFlag: sentinel.harnessFlag, error: null, sentinelDiscarded: null, root };
     }
     // #3045 BLOCKER 2 fix: the sentinel already PROVED this dispatch requires
     // isolation (it resolved harness-worktree) but carries no usable flag —
@@ -462,6 +480,7 @@ function resolveIsolationState(cwd, { clock = Date, dispatchIds = null } = {}) {
         'cannot verify what parameter the dispatch must carry.'
       ),
       sentinelDiscarded: null,
+      root,
     };
   }
 
@@ -472,7 +491,7 @@ function resolveIsolationState(cwd, { clock = Date, dispatchIds = null } = {}) {
   // loosens toward `none`, only for the phase the dispatch itself names, never for a future-dated
   // record (see agedNoneGovernsDispatch).
   if (sentinel.present && sentinel.stale && agedNoneGovernsDispatch(sentinel, dispatchIds, { clock })) {
-    return { gsdProject: true, isolation: 'none', harnessFlag: null, error: null, sentinelDiscarded: null };
+    return { gsdProject: true, isolation: 'none', harnessFlag: null, error: null, sentinelDiscarded: null, root };
   }
 
   // Sentinel absent, stale, or does not apply to this dispatch (F2 mismatch):
@@ -488,10 +507,10 @@ function resolveIsolationState(cwd, { clock = Date, dispatchIds = null } = {}) {
   const sentinelDiscarded = buildSentinelDiscard(sentinel, dispatchIds);
 
   try {
-    const { isolation, harnessFlag } = resolveRegistryIsolation(cwd, configPath);
-    return { gsdProject: true, isolation, harnessFlag, error: null, sentinelDiscarded };
+    const { isolation, harnessFlag } = resolveRegistryIsolation(root, configPath);
+    return { gsdProject: true, isolation, harnessFlag, error: null, sentinelDiscarded, root };
   } catch (err) {
-    return { gsdProject: true, isolation: null, harnessFlag: null, error: err, sentinelDiscarded };
+    return { gsdProject: true, isolation: null, harnessFlag: null, error: err, sentinelDiscarded, root };
   }
 }
 
@@ -550,8 +569,14 @@ function evaluateDispatch(data, { clock = Date } = {}) {
         `${state.error.message} Refusing to dispatch subagent_type="${subagentType}" until ` +
         `the runtime library is built — a guard that cannot verify must not answer "safe" ` +
         `(#3050).`
+      : state.unresolved
+      ? `Agent isolation guard: '${cwd}' is inside a GSD project, but which project root ` +
+        `governs it could not be resolved (${state.error.message}). Refusing to dispatch ` +
+        `subagent_type="${subagentType}" without being able to verify whether isolation is ` +
+        `required — a guard that cannot verify must not answer "safe" (#3050). Retry from ` +
+        `the project root.`
       : `Agent isolation guard: could not read or resolve this project's dispatch-isolation ` +
-        `configuration ('.planning/config.json' under '${cwd}'). Refusing to dispatch ` +
+        `configuration ('.planning/config.json' under '${state.root}'). Refusing to dispatch ` +
         `subagent_type="${subagentType}" without being able to verify whether isolation is ` +
         `required — a guard that cannot verify must not answer "safe" (#3050). Retry once the ` +
         `project configuration is readable.`;
@@ -577,28 +602,39 @@ function evaluateDispatch(data, { clock = Date } = {}) {
   return { action: 'block', reason, reasonCode: REASON_CODE.HARNESS_FLAG_MISSING, sentinelDiscarded: state.sentinelDiscarded };
 }
 
-/* istanbul ignore next -- stdin adapter, exercised via spawnSync in tests */
-function main() {
+/**
+ * The block payload `main()` writes for one raw stdin string, or `null` when
+ * the dispatch is allowed. Throws on an unparseable payload, which `main()`
+ * turns into its fail-open crash path. Split from `main()` so the payload
+ * shape is testable in-process (#4885 review: mutation coverage).
+ */
+function blockOutputFor(input, { clock = Date } = {}) {
+  const decision = evaluateDispatch(JSON.parse(input), { clock });
+  if (decision.action !== 'block') return null;
+  return {
+    decision: 'block',
+    reason: decision.reason,
+    reason_code: decision.reasonCode,
+    sentinel_discarded: decision.sentinelDiscarded ?? null,
+  };
+}
+
+/**
+ * The stdin adapter. `io` defaults to the real stream and exits; tests pass a
+ * stream and recording exits to drive it in-process (#4885 review).
+ */
+function main(io = { stdin: process.stdin, allow, deny, crash }) {
   let input = '';
-  const stdinTimeout = setTimeout(() => allow(undefined), 3000);
-  process.stdin.setEncoding('utf8');
-  process.stdin.on('data', (chunk) => { input += chunk; });
-  process.stdin.on('end', () => {
+  const stdinTimeout = setTimeout(() => io.allow(undefined), 3000);
+  io.stdin.setEncoding('utf8');
+  io.stdin.on('data', (chunk) => { input += chunk; });
+  io.stdin.on('end', () => {
     clearTimeout(stdinTimeout);
     try {
-      const data = JSON.parse(input);
-      const decision = evaluateDispatch(data);
-      if (decision.action === 'block') {
-        const out = {
-          decision: 'block',
-          reason: decision.reason,
-          reason_code: decision.reasonCode,
-          sentinel_discarded: decision.sentinelDiscarded ?? null,
-        };
-        // Kimi feeds stderr (not stdout) back to the model on exit 2.
-        deny(out, decision.reason);
-      }
-      allow(undefined);
+      const out = blockOutputFor(input);
+      // Kimi feeds stderr (not stdout) back to the model on exit 2.
+      if (out) io.deny(out, out.reason);
+      io.allow(undefined);
     } catch {
       // Silent fail — never block valid tool calls due to hook errors
       // (malformed payload, etc.). This is distinct from resolveIsolationState's
@@ -606,7 +642,7 @@ function main() {
       // covers payload parsing before applicability could even be determined.
       // ON_CRASH is declared ALLOW at module top: this preserves today's
       // exit(0) fail-open behavior exactly (#3911).
-      crash(ON_CRASH, undefined);
+      io.crash(ON_CRASH, undefined);
     }
   });
 }
@@ -616,7 +652,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+  main,
   evaluateDispatch,
+  blockOutputFor,
   resolveIsolationState,
   resolveRuntimeIdentity,
   resolveHarnessFlag,

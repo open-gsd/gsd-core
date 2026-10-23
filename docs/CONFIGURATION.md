@@ -584,6 +584,15 @@ gsd-tools query inspect-dispatch-isolation --json
 
 (`inspect-dispatch-isolation` is the read-only form. The `dispatch-isolation` query is the executor-dispatch resolver: it records its decision to the isolation sentinel as a deliberate side effect, so it is not an inspection command.)
 
+**Which project the isolation guards evaluate.** The Claude and Cursor dispatch guards resolve the dispatch's working directory to the project root `gsd-tools` uses, and read that root's configuration and the isolation sentinel `gsd-tools` recorded there, so a dispatch from a project **subdirectory** — or from inside a linked worktree that has its own `.planning/` or sits inside its main checkout (`.claude/worktrees/agent-*`) — is checked and can be blocked; before #4885 such a dispatch was let through unchecked. A directory with no `.planning/config.json` in it or above it is not a GSD project to the guards and is not checked (no build, no git), as before — this includes a linked worktree elsewhere on disk with no `.planning/` of its own. An independent git repository nested inside a project is not that project's (#2843), unless the project's config claims it (`sub_repos`, `planning.sub_repos`, or legacy `multiRepo: true`): a claimed repository is the workspace's, as it is for `gsd-tools`, and is checked. In a workspace whose config declares `sub_repos` or `multiRepo` (from below `$HOME`, configs at or above it are not consulted, as for `gsd-tools`, which compares a directory with `$HOME` as spelled — so from the canonical path under a symlinked `HOME` they are; a config over 1 MiB counts as declaring), telling a claimed repository from an independent one needs the runtime library, so a dispatch from a nested repository there is blocked with `runtime_build_failed` while the library will not build. When a directory is inside a project but the guard cannot verify which configuration governs it — the runtime library will not build, git times out, the resolved root has a `.planning/` with no `config.json`, or the directory is more than ten levels below the project — the dispatch is blocked rather than allowed.
+
+**Recovering from an unresolved-project block.** Each cause has one way out:
+
+- *The runtime library will not build* (`runtime_build_failed`): fix the build the message names (in a source checkout, `npm run build:lib`), then retry.
+- *git timed out* (`config_unreadable`): retry; if it recurs, check that `git rev-parse --git-common-dir` answers promptly in that directory.
+- *The resolved root has a `.planning/` with no `config.json`* (`config_unreadable`) — for example a worktree under `.claude/worktrees/` whose tracked `.planning/` carries no config: dispatch from the project root, or give that root its own `.planning/config.json`.
+- *More than ten levels below the project* (`config_unreadable`): dispatch from the project root, or from a directory at most ten levels below it.
+
 ## Code Quality Settings
 
 The `code_quality.*` namespace gates optional structural-analysis tooling that augments `/gsd-code-review`. Settings are additive: each tool is independently opt-in and off by default.

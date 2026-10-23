@@ -89,6 +89,8 @@ const DOCS_GUARD_EXEMPT_BASELINE = [
   'shipped-reference-cites.test.cjs',
   'state.test.cjs',
   'verification-status.test.cjs',
+  'worktree-safety-cleanup-manifest.test.cjs',
+  'worktree-safety-wave-cleanup.test.cjs',
   'worktree-safety.test.cjs',
 ];
 
@@ -246,6 +248,11 @@ const DOCS_GUARD_EXEMPT_DOCS_PATHS = {
     'docs/VERIFICATION.md', 'docs/planning', 'docs/planning/phases',
     'docs/planning/phases/01-foo/01-01-PLAN.md', 'docs/planning/phases/01-foo/01-01-SUMMARY.md',
   ],
+  // #4885: docs/a.md and docs/x.md are path inputs to planWaveScopeConformance;
+  // docs/CLI-TOOLS.md is cited in the header comment. Nothing is read from docs/.
+  'worktree-safety-cleanup-manifest.test.cjs': ['docs/CLI-TOOLS.md', 'docs/a.md', 'docs/x.md'],
+  // #4885: docs/other.md is a stubbed `git diff --name-only` output line.
+  'worktree-safety-wave-cleanup.test.cjs': ['docs/other.md'],
   'worktree-safety.test.cjs': ['docs/SUMMARY.md'],
 };
 

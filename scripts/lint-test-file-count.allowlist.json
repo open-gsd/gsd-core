@@ -303,6 +303,19 @@
       ],
       "issue": "5105",
       "justification": "#5105 (Phase 3 of #5056) adds verification-append-audit.test.cjs for the new `verification.append-audit` verb (deny-by-default audit-block append/no-op, #4887) — a distinct concern from verification-status.test.cjs's status/fingerprint suite and verification-overrides.test.cjs's override handling."
+    },
+    "worktree-safety": {
+      "files": [
+        "worktree-safety-cleanup-manifest.test.cjs",
+        "worktree-safety-create.test.cjs",
+        "worktree-safety-planning-root.test.cjs",
+        "worktree-safety-reap.test.cjs",
+        "worktree-safety-wave-cleanup.test.cjs",
+        "worktree-safety-worker-reap.test.cjs",
+        "worktree-safety.test.cjs"
+      ],
+      "issue": "4885",
+      "justification": "#4885 adds worktree-safety to the mutation matrix (maintainer ruling on #5232). Stryker attributes coverage per test FILE and stops at the first failing file in name order, so each in-process concern (wave cleanup, cleanup manifest, create, worker reap, planning root) is its own fast file that sorts before the subprocess-heavy worktree-safety.test.cjs. A mutant then runs only the small files that cover it; folding them into one file makes every covered mutant pay that file's whole runtime, and folding them into worktree-safety.test.cjs restores the multi-hour run this layout measured away (57m43s locally for 2664 mutants). worktree-safety-planning-root.test.cjs holds rows moved out of commands.test.cjs, which sits outside the shard's derived tests."
     }
   }
 }

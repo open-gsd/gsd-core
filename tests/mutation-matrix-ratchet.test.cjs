@@ -122,12 +122,12 @@ describe('mutation-matrix ratchet: per-module minScore in COVERED', () => {
 // ── (c) matrix JSON emitted by the script includes minScore per module ────────
 describe('mutation-matrix ratchet: matrix JSON output includes minScore', () => {
   test('script emits valid JSON with minScore in each matrix include entry', () => {
-    // Use stdin pipe mode: pass every COVERED module's src/*.cts path as
+    // Use stdin pipe mode: pass every COVERED module's shard sources as
     // "changed" files so all modules appear in the matrix output.
-    // computeMatrix() matches `src/<module>.cts` — derive from the module name.
+    // computeMatrix() selects a shard by its sources (`src/<module>.cts` by default).
     const covered = matrix.COVERED || {};
     const moduleNames = Object.keys(covered);
-    const stdinLines = moduleNames.map(name => `src/${name}.cts`).join('\n');
+    const stdinLines = moduleNames.flatMap((name) => matrix.shardSources(name)).join('\n');
 
     const spawnResult = runNode(
       [MATRIX_SCRIPT],
@@ -228,6 +228,11 @@ const RATCHET_BASELINE = {
                                    // `Stryker (state-contract)`: measured 66.25%; floor(66.25)-1.
                                    // Below TARGET_MUTATION_SCORE (80) — ratchet candidate like
                                    // planning-inspect / model-catalog above; raise as tests improve.
+  'isolation-hooks':         87,  // #4885: net-new shard (the isolation guard hooks + sentinel library);
+                                   // CI run 39143208612, job 117721775325: measured 88.31%;
+                                   // floor(88.31)-1.
+  'worktree-safety':         93,  // #4885: net-new shard; CI run 39143208612, job 117721775289:
+                                   // measured 94.67%; floor(94.67)-1.
 };
 
 describe('mutation-matrix ratchet: floor equality enforcement', () => {
@@ -491,7 +496,7 @@ describe('mutation matrix: isolation field removed (#3915)', () => {
   test('every emitted matrix entry has no isolation field but keeps the rest of the contract', () => {
     const covered = matrix.COVERED || {};
     const moduleNames = Object.keys(covered);
-    const stdinLines = moduleNames.map((name) => `src/${name}.cts`).join('\n');
+    const stdinLines = moduleNames.flatMap((name) => matrix.shardSources(name)).join('\n');
 
     const spawnResult = runNode(
       [MATRIX_SCRIPT],
@@ -527,3 +532,37 @@ describe('mutation matrix: isolation field removed (#3915)', () => {
     }
   });
 });
+
+// #4885: an entry outside gsd-core/bin/lib (the isolation hooks) names its own
+// `sources` and `mutate`. A source the workflow's path filter does not list
+// would never start the shard; a shard selected by nothing is dead weight.
+describe('mutation matrix: shard sources reach the workflow', () => {
+  const workflow = fs.readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'mutation.yml'), 'utf8');
+  const listed = (file) => workflow.includes(`- '${file}'`)
+    || (/^src\/[^/]+\.cts$/.test(file) && workflow.includes(`- 'src/**/*.cts'`));
+
+  for (const name of Object.keys(matrix.COVERED)) {
+    test(`${name}: every shard source is in mutation.yml's pull_request paths filter`, () => {
+      for (const source of matrix.shardSources(name)) {
+        assert.ok(listed(source), `${source} (COVERED['${name}']) is not in .github/workflows/mutation.yml's paths filter`);
+      }
+    });
+  }
+
+  test('a changed hook source selects the isolation-hooks shard, mutating the hook files', () => {
+    const entry = matrix.COVERED['isolation-hooks'];
+    assert.ok(entry, 'COVERED has an isolation-hooks entry');
+    for (const source of entry.sources) {
+      assert.deepEqual(matrix.computeMatrix([source]), ['isolation-hooks'], source);
+    }
+    assert.equal(matrix.shardMutate('isolation-hooks'), entry.mutate.join(','));
+    assert.deepEqual(matrix.computeMatrix(['hooks/gsd-statusline.js']), [], 'an unrelated hook selects nothing');
+  });
+
+  test('a lib module is still selected by its src/<name>.cts, and mutates its built artifact', () => {
+    assert.deepEqual(matrix.computeMatrix(['src/worktree-safety.cts']), ['worktree-safety']);
+    assert.equal(matrix.shardMutate('worktree-safety'), 'gsd-core/bin/lib/worktree-safety.cjs');
+    assert.deepEqual(matrix.computeMatrix(['src/lib/worktree-safety.cts']), [], 'nested src/ paths select nothing');
+  });
+});
+

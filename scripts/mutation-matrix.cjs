@@ -271,6 +271,10 @@ function computeModuleTests(moduleName, entry) {
 
 // ── Single source of truth: covered modules ───────────────────────────────────
 // Each entry: { cjs: '<built artifact>', extraTests: [...], excludeTests: [...], minScore: N }
+// An entry that mutates files outside gsd-core/bin/lib (the isolation hooks, #4885)
+// instead declares `mutate: [...]` (the files Stryker mutates) and `sources: [...]` (the
+// changed files that select its shard; default `src/<name>.cts`). Its tests are all
+// `extraTests`: the derivation below only follows requires of gsd-core/bin/lib/<name>.cjs.
 // `tests` is no longer hand-written — computeModuleTests() derives it below
 // from direct `require()`s of the module's artifact (see the derivation-engine
 // header above). extraTests/excludeTests are the two REQUIRED, reasoned escape
@@ -659,6 +663,55 @@ const COVERED = {
     excludeTests: ['state-contract.test.cjs'],
     minScore: 65,
   },
+  // #4885 review (maintainer ruling): the dispatch-isolation guard hooks and the
+  // sentinel library they share, mutated as one shard. Hooks are not built lib
+  // modules, so the entry names its own `mutate` and `sources`, and every test is
+  // an extraTest. Only in-process files are listed: the guard suites
+  // (gsd-agent-isolation-guard.test.cjs, cursor-subagent-isolation.test.cjs) drive
+  // the hooks as subprocesses, which Stryker cannot attribute to a mutant, and
+  // would only add their full runtime to every mutant they happen to cover.
+  // CI mutation run 39143208612, job 117721775325 (#5232, head 8cd2fa9df): 88.31%
+  // (890 killed, 24 timeout, 98 survived, 23 no coverage of 1035 counted). Floor =
+  // floor(88.31) - 1 = 87 per the HOW TO UPDATE procedure above.
+  'isolation-hooks': {
+    mutate: [
+      'hooks/lib/isolation-sentinel.js',
+      'hooks/gsd-agent-isolation-guard.js',
+      'hooks/gsd-cursor-subagent-start.js',
+    ],
+    sources: [
+      'hooks/lib/isolation-sentinel.js',
+      'hooks/gsd-agent-isolation-guard.js',
+      'hooks/gsd-cursor-subagent-start.js',
+    ],
+    extraTests: [
+      'cursor-subagent-isolation.unit.test.cjs',
+      'gsd-agent-isolation-guard.unit.test.cjs',
+      // #5597 (merged into next): in-process rows for agedNoneGovernsDispatch.
+      'isolation-aged-none-sentinel.test.cjs',
+      'isolation-sentinel.test.cjs',
+      'isolation-sentinel.unit.test.cjs',
+    ],
+    minScore: 87,
+    // No timeoutMinutes override: the CI run above finished Stryker in 5m03s (the job in
+    // 5m35s), about a third of the 15-minute default.
+  },
+  // #4885 review (maintainer ruling): worktree-safety owns the resolver gsd-tools and the
+  // isolation hooks share (resolvePlanningWorktreeRoot). Derived: the worktree-safety*.test.cjs
+  // files. extraTests: two in-process files that require the module but sit outside the
+  // naming rule — worktree-worker-log.test.cjs (the worker-record commands, ~240 cjs lines
+  // nothing derived reached) and prune-orphaned-worktrees.test.cjs (pruneOrphanedWorktrees);
+  // about one second each. CI mutation run 39143208612, job 117721775289 (#5232, head
+  // 8cd2fa9df): 94.67% (2517 killed, 5 timeout, 122 survived, 20 no coverage of 2664).
+  // Floor = floor(94.67) - 1 = 93 per the HOW TO UPDATE procedure above.
+  'worktree-safety': {
+    cjs: 'gsd-core/bin/lib/worktree-safety.cjs',
+    extraTests: ['prune-orphaned-worktrees.test.cjs', 'worktree-worker-log.test.cjs'],
+    minScore: 93,
+    // Measured need: the CI run above finished Stryker in 36m11s (the job in 36m52s), past
+    // the 15-minute default. 60 is 1.63x the job's wall time, under the 90% near-cap advisory.
+    timeoutMinutes: 60,
+  },
 };
 
 // Compute the final, derived `tests` array for every COVERED entry. Done once, after the
@@ -736,6 +789,16 @@ function resolveChangedFiles(args) {
 }
 
 // ── Module classification ─────────────────────────────────────────────────────
+/** The changed files that select `name`'s shard: its `sources`, else `src/<name>.cts`. */
+function shardSources(name) {
+  return COVERED[name].sources || [`src/${name}.cts`];
+}
+
+/** What `name`'s shard passes to `stryker run --mutate`: its `mutate` list, else its built artifact. */
+function shardMutate(name) {
+  return COVERED[name].mutate ? COVERED[name].mutate.join(',') : COVERED[name].cjs;
+}
+
 function computeMatrix(changedFiles) {
   // Check for global triggers first — if any hit, include every covered module.
   const allModuleNames = Object.keys(COVERED);
@@ -745,13 +808,12 @@ function computeMatrix(changedFiles) {
     }
   }
 
-  // Otherwise find which modules have their src/*.cts changed.
+  // Otherwise find which modules have a source file changed: src/<module>.cts
+  // (top-level src/, not nested), or a file an entry names in `sources`.
   const changed = new Set();
   for (const f of changedFiles) {
-    // Match src/<module>.cts (top-level src/, not nested)
-    const m = f.match(/^src\/([^/]+)\.cts$/);
-    if (m && COVERED[m[1]]) {
-      changed.add(m[1]);
+    for (const name of allModuleNames) {
+      if (shardSources(name).includes(f)) changed.add(name);
     }
   }
   return [...changed];
@@ -761,7 +823,7 @@ function computeMatrix(changedFiles) {
 function buildResult(moduleNames) {
   const include = moduleNames.map(name => ({
     name,
-    mutate: COVERED[name].cjs,
+    mutate: shardMutate(name),
     tests: COVERED[name].tests.join(' '),
     minScore: COVERED[name].minScore,
     // Per-shard CI job timeout in minutes. Defaults to 15 (the shared per-shard budget);
@@ -962,6 +1024,9 @@ function resolveMutationTestFiles(raw) {
 // The require.main guard prevents main() from running when this file is require()d.
 module.exports = {
   COVERED,
+  shardSources,
+  shardMutate,
+  computeMatrix,
   TARGET_MUTATION_SCORE,
   resolveMutationBreak,
   allCoveredTests,

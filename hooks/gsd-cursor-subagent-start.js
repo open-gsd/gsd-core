@@ -57,9 +57,12 @@
 // for unchanged modules. Only as the entry (a test require() is unaffected),
 // skipped under V8 coverage, optional (Bun stubs it), and never fatal.
 // NODE_DISABLE_COMPILE_CACHE (any value) turns it off.
+// Stryker disable all: runs only when this file is the process entry, and its one effect is
+// V8 compile-cache speed, which no test can observe (equivalent mutants, #4885 review).
 if (require.main === module && !process.env.NODE_V8_COVERAGE) {
   try { require('node:module').enableCompileCache?.(); } catch { /* optimization only */ }
 }
+// Stryker restore all
 
 const fs = require('fs');
 const path = require('path');
@@ -70,7 +73,7 @@ const { allow } = require('./lib/hook-exit.js');
 // hooks/lib/cursor-workspace.js. Staged next to these scripts by
 // writeCursorHooksJson so the require always resolves post-install.
 const { resolveStatePath } = require('./lib/cursor-workspace.js');
-const { readSentinel, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch, agedNoneGovernsDispatch, buildSentinelDiscard } = require('./lib/isolation-sentinel.js');
+const { readSentinel, resolveGuardProject, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch, agedNoneGovernsDispatch, buildSentinelDiscard } = require('./lib/isolation-sentinel.js');
 const { REASON_CODE, describeSentinelDiscard } = require('./lib/isolation-deny-reason.js');
 // #3582: gsd-core/bin/lib/*.cjs (runtime-homes.cjs, worktree-safety.cjs,
 // runtime-name-policy.cjs, capability-registry.cjs — required below, inside
@@ -471,7 +474,33 @@ function resolveFallbackIsolation(root, configPath) {
  * workspace runs the identical check.
  */
 function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds = null, realpath = fs.realpathSync } = {}) {
-  const configPath = path.join(root, '.planning', 'config.json');
+  // #4885: project existence, sentinel, and fallback config all resolve from
+  // the same root gsd-tools writes to, so a workspace root that is a project
+  // SUBDIRECTORY is still evaluated. Isolation evidence below stays on the raw
+  // workspace `root` — it asks where the workspace physically is, not where
+  // its project's `.planning/` lives. A workspace root inside a project whose
+  // governing root could not be resolved fails closed (#3050).
+  const project = resolveGuardProject(root);
+  if (!project.project) return { action: 'allow' };
+  if (project.error) {
+    const isBuildFailure = project.error instanceof RuntimeBuildError;
+    return {
+      action: 'deny',
+      reason: isBuildFailure
+        ? `GSD subagent isolation guard: cannot resolve this project's dispatch-isolation ` +
+          `configuration because the GSD runtime library failed to self-build. ${project.error.message} ` +
+          `Refusing to allow this subagent to spawn until the runtime library is built — a guard ` +
+          `that cannot verify must not answer "safe" (#3050).`
+        : `GSD subagent isolation guard: workspace root "${root}" is inside a GSD project, but which ` +
+          `project root governs it could not be resolved (${project.error.message}). Refusing to allow ` +
+          `this subagent to spawn without being able to verify whether isolation is required — a ` +
+          `guard that cannot verify must not answer "safe" (#3050).`,
+      reasonCode: isBuildFailure ? REASON_CODE.RUNTIME_BUILD_FAILED : REASON_CODE.CONFIG_UNREADABLE,
+      sentinelDiscarded: null,
+    };
+  }
+  const projectRoot = project.root;
+  const configPath = path.join(projectRoot, '.planning', 'config.json');
   let isGsdProject;
   try {
     fs.accessSync(configPath, fs.constants.F_OK);
@@ -512,7 +541,8 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
   // Hoisted (readSentinel never throws) so the "present, fresh, but did not
   // apply" case (#4594 row 15) can be reported on every deny path below
   // instead of silently discarded.
-  const sentinel = readSentinel(root, { clock });
+  // #4885: the sentinel is read where gsd-tools writes it (resolveGuardProject).
+  const sentinel = readSentinel(project.sentinelRoot, { clock });
   const applies = sentinelAppliesToDispatch(sentinel, dispatchIds);
   const sentinelDiscarded = buildSentinelDiscard(sentinel, dispatchIds);
 
@@ -524,13 +554,13 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
       ? sentinel.isolation
       : (sentinel.present && sentinel.stale && agedNoneGovernsDispatch(sentinel, dispatchIds, { clock }))
         ? 'none'
-        : resolveFallbackIsolation(root, configPath);
+        : resolveFallbackIsolation(projectRoot, configPath);
   } catch {
     return {
       action: 'deny',
       reason:
         `GSD subagent isolation guard: could not read or resolve this project's ` +
-        `dispatch-isolation configuration ('.planning/config.json' exists under "${root}"). ` +
+        `dispatch-isolation configuration ('.planning/config.json' exists under "${projectRoot}"). ` +
         `Refusing to allow this subagent to spawn without being able to verify whether ` +
         `isolation is required — a guard that cannot verify must not answer "safe" (#3050). ` +
         `Retry once the project configuration is readable.` +
@@ -593,65 +623,75 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
   };
 }
 
-/* istanbul ignore next -- stdin adapter, exercised via spawnSync in tests */
-function main() {
+/**
+ * The JSON object `main()` writes for one raw stdin string: a deny with the
+ * state reminder riding along, or the reminder alone. Split from `main()` so
+ * the output is testable in-process (#4885 review: mutation coverage).
+ */
+function hookOutputFor(raw, { clock = Date, realpath = fs.realpathSync } = {}) {
+  let data = null;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    data = null;
+  }
+
+  // Resolve the state-reminder context ONCE, up front, so it can ride along
+  // with EITHER outcome below (#3045 MINOR: a deny previously dropped this
+  // reminder entirely — process.stdout.write for the deny branch returned
+  // before the additional_context block ever ran — instead of preserving it
+  // alongside the deny; the subagent still benefits from phase/blocker
+  // context even when its dispatch is refused).
+  let additionalContext = null;
+  try {
+    const statePath = resolveStatePath(raw);
+    const statePresent = fs.existsSync(statePath);
+    additionalContext = statePresent ? MSG_PRESENT : MSG_ABSENT;
+  } catch {
+    additionalContext = null;
+  }
+
+  if (data && typeof data === 'object') {
+    let decision = { action: 'allow' };
+    try {
+      decision = resolveIsolationDecision(data, { clock, realpath });
+    } catch {
+      // Defense in depth only: every verify-and-deny path above has its own
+      // explicit try/catch that resolves to a deny with a distinct reason.
+      // Anything reaching here is an unexpected failure outside those paths
+      // (e.g. malformed workspace_roots entries) — never crash the hook.
+      decision = { action: 'allow' };
+    }
+    if (decision.action === 'deny') {
+      const out = {
+        permission: 'deny',
+        user_message: decision.reason,
+        reason_code: decision.reasonCode,
+        sentinel_discarded: decision.sentinelDiscarded ?? null,
+      };
+      if (additionalContext !== null) out.additional_context = additionalContext;
+      return out;
+    }
+  }
+
+  return additionalContext !== null ? { additional_context: additionalContext } : {};
+}
+
+/**
+ * The stdin adapter. `io` defaults to the real streams; tests pass a stream and
+ * a recording writer to drive it in-process (#4885 review).
+ */
+function main(io = { stdin: process.stdin, write: (s) => process.stdout.write(s), allow }) {
   let raw = '';
   const stdinTimeout = setTimeout(() => {
-    allow(undefined);
+    io.allow(undefined);
   }, 10000);
 
-  process.stdin.setEncoding('utf8');
-  process.stdin.on('data', (chunk) => { raw += chunk; });
-  process.stdin.on('end', () => {
+  io.stdin.setEncoding('utf8');
+  io.stdin.on('data', (chunk) => { raw += chunk; });
+  io.stdin.on('end', () => {
     clearTimeout(stdinTimeout);
-
-    let data = null;
-    try {
-      data = JSON.parse(raw);
-    } catch {
-      data = null;
-    }
-
-    // Resolve the state-reminder context ONCE, up front, so it can ride along
-    // with EITHER outcome below (#3045 MINOR: a deny previously dropped this
-    // reminder entirely — process.stdout.write for the deny branch returned
-    // before the additional_context block ever ran — instead of preserving it
-    // alongside the deny; the subagent still benefits from phase/blocker
-    // context even when its dispatch is refused).
-    let additionalContext = null;
-    try {
-      const statePath = resolveStatePath(raw);
-      const statePresent = fs.existsSync(statePath);
-      additionalContext = statePresent ? MSG_PRESENT : MSG_ABSENT;
-    } catch {
-      additionalContext = null;
-    }
-
-    if (data && typeof data === 'object') {
-      let decision = { action: 'allow' };
-      try {
-        decision = resolveIsolationDecision(data);
-      } catch {
-        // Defense in depth only: every verify-and-deny path above has its own
-        // explicit try/catch that resolves to a deny with a distinct reason.
-        // Anything reaching here is an unexpected failure outside those paths
-        // (e.g. malformed workspace_roots entries) — never crash the hook.
-        decision = { action: 'allow' };
-      }
-      if (decision.action === 'deny') {
-        const out = {
-          permission: 'deny',
-          user_message: decision.reason,
-          reason_code: decision.reasonCode,
-          sentinel_discarded: decision.sentinelDiscarded ?? null,
-        };
-        if (additionalContext !== null) out.additional_context = additionalContext;
-        process.stdout.write(JSON.stringify(out));
-        return;
-      }
-    }
-
-    process.stdout.write(JSON.stringify(additionalContext !== null ? { additional_context: additionalContext } : {}));
+    io.write(JSON.stringify(hookOutputFor(raw)));
   });
 }
 
@@ -664,6 +704,8 @@ if (require.main === module) {
 // per the repo's clock-seam convention, instead of racing real `Date.now()`
 // across a spawned subprocess boundary.
 module.exports = {
+  main,
+  hookOutputFor,
   resolveIsolationDecision,
   evaluateRootIsolation,
   resolveFallbackIsolation,
