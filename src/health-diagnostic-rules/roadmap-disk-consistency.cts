@@ -113,7 +113,7 @@ const { SCOPE } = planningScopeMod;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('../phase-id.cjs');
-const { matchPhaseDirs, normalizePhaseName, extractPhaseToken, isSentinelPhaseId, isSentinelPhaseDir } = phaseIdMod;
+const { matchPhaseDirs, extractPhaseToken, isSentinelPhaseId, isSentinelPhaseDir } = phaseIdMod;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import validateMod = require('../validate.cjs');
@@ -128,7 +128,7 @@ const { phaseVariants } = validateMod;
  * does the roadmap claim, for W007) call this — one matcher, reused, per the
  * file-level comment.
  */
-function dirsForPhase(dirs: string[], phaseId: string, convention: string | null): string[] {
+function dirsForPhase(dirs: string[], phaseId: string, convention: string | null, directoryContext: ReturnType<typeof phaseIdMod.phaseDirectoryContext>): string[] {
   // #612: `convention` reaches BOTH operands of this pairing or it pairs
   // nothing. The phases come from a bracket-aware heading scan and the dirs
   // from a bracket-aware disk scan, so a convention-less selector here leaves
@@ -137,7 +137,7 @@ function dirsForPhase(dirs: string[], phaseId: string, convention: string | null
   // disk" AND every bracket directory reads as unclaimed. `matchPhaseDirs`
   // forwards it to its primary `phaseTokenMatches`; handed nothing it is
   // byte-identical, so no legacy repo's pairing changes.
-  const canonical = matchPhaseDirs(dirs, normalizePhaseName(phaseId), convention).matches;
+  const canonical = matchPhaseDirs(dirs, phaseId, convention, directoryContext).matches;
   if (canonical.length > 0) return canonical;
 
   // Bug 2 (#3309 W006/W007 migration cluster, found while fixing the
@@ -201,6 +201,9 @@ function checkW006(snapshot: PlanningSnapshot): Diagnostic[] {
 
   const dirs = snapshot.allPhaseDirNames.value;
   const convention = snapshot.phaseIdConvention;
+  const directoryContext = snapshot.directoryContext ?? phaseIdMod.phaseDirectoryContext(
+    snapshot.config.value ?? {}, '', snapshot.roadmapDeclaredPhases.value.map(({ phaseId }) => phaseId),
+  );
   const archivedTokens = new Set(snapshot.archivedPhaseTokens.value);
   // No separate scope guard: `roadmapSentinelPhaseTokens` and
   // `roadmapDeclaredPhases` are produced by ONE builder call
@@ -233,7 +236,7 @@ function checkW006(snapshot: PlanningSnapshot): Diagnostic[] {
     // token, never a `{CODE}.{MM}`-qualified id, so a convention argument could
     // not change its result.
     if (sentinelTokens.has(phaseId) || isSentinelPhaseId(phaseId)) continue;
-    if (dirsForPhase(dirs, phaseId, convention).length > 0) continue;
+    if (dirsForPhase(dirs, phaseId, convention, directoryContext).length > 0) continue;
     // Bug 1 (#3309 W006/W007 migration cluster): a phase whose ONLY
     // directory lives under a milestone archive
     // (`.planning/milestones/vX.Y-phases/<phase>/`, shipped OR the current
@@ -264,10 +267,11 @@ function computeClaimedDirs(
   dirs: string[],
   declaredPhases: { phaseId: string; milestone: string | null }[],
   convention: string | null,
+  directoryContext: ReturnType<typeof phaseIdMod.phaseDirectoryContext>,
 ): Set<string> {
   const claimed = new Set<string>();
   for (const { phaseId } of declaredPhases) {
-    for (const dir of dirsForPhase(dirs, phaseId, convention)) claimed.add(dir);
+    for (const dir of dirsForPhase(dirs, phaseId, convention, directoryContext)) claimed.add(dir);
   }
   return claimed;
 }
@@ -278,7 +282,10 @@ function checkW007(snapshot: PlanningSnapshot): Diagnostic[] {
 
   const dirs = snapshot.allPhaseDirNames.value;
   const convention = snapshot.phaseIdConvention;
-  const claimedDirs = computeClaimedDirs(dirs, snapshot.roadmapDeclaredPhases.value, convention);
+  const directoryContext = snapshot.directoryContext ?? phaseIdMod.phaseDirectoryContext(
+    snapshot.config.value ?? {}, '', snapshot.roadmapDeclaredPhases.value.map(({ phaseId }) => phaseId),
+  );
+  const claimedDirs = computeClaimedDirs(dirs, snapshot.roadmapDeclaredPhases.value, convention, directoryContext);
   const diagnostics: Diagnostic[] = [];
 
   for (const dirName of dirs) {

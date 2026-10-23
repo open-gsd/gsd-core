@@ -5,28 +5,46 @@
  * Owns active-phase discovery against the `.planning/phases/` tree
  * (`searchPhaseInDir`, `findPhaseInternal`) and archived-phase-dir
  * enumeration (`getArchivedPhaseDirs`), matching phase ids/tokens against
- * the filesystem. Behaviour is preserved byte-for-behaviour from the prior
- * location; only the module boundary moved. The core.cjs re-export spine
+ * the filesystem. Also owns the silent naming projection and shared writer
+ * tail (preflight, containment, directory creation, identity markers).
+ * The core.cjs re-export spine
  * was retired in epic #1267; callers import phase-locator helpers directly.
  *
- * Dependencies (leaf modules only — no loadConfig):
+ * Dependencies:
  *   - node:fs / node:path (stdlib)
- *   - ./phase-id.cjs       (normalizePhaseName, matchPhaseDirs, phaseNumberForMatch)
+ *   - ./phase-id.cjs       (phaseDirectoryContext, customPhaseQuery, customPhaseDirectoryParts,
+ *                           normalizePhaseName, matchPhaseDirs, phaseNumberForMatch)
  *   - ./core-utils.cjs     (readSubdirectories, getPhaseFileStats, extractCanonicalPlanId, toPosixPath)
  *   - ./planning-workspace.cjs (planningDir)
+ *   - ./config-loader.cjs (CONFIG_DEFAULTS, _deepMergeConfig, _getConfigValue;
+ *                          silent file-selection projection, not loadConfig)
+ *   - ./runtime-homes.cjs (resolveGsdHome)
+ *   - ./frontmatter.cjs / ./plan-dependency-graph.cjs (plan dependency evidence)
+ *   - ./roadmap-parser.cjs / ./planning-scope.cjs (milestone membership/scope)
+ *   - ./io.cjs / ./shell-command-projection.cjs (typed write errors and files)
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
+import type { PhaseDirectoryContext } from './phase-id.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import ioMod = require('./io.cjs');
+const { error, ERROR_REASON } = ioMod;
+import { platformEnsureDir, platformWriteSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdModule = require('./phase-id.cjs');
-const { normalizePhaseName, matchPhaseDirs, phaseNumberForMatch, isSentinelPhaseId, comparePhaseNum } = phaseIdModule;
+const { CUSTOM_PHASE_ID_FILE, phaseDirectoryContext, customPhaseQuery, customPhaseDirectoryParts, normalizePhaseName, matchPhaseDirs, phaseNumberForMatch, isSentinelPhaseId, comparePhaseNum } = phaseIdModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtilsModule = require('./core-utils.cjs');
 const { readSubdirectories, getPhaseFileStats, extractCanonicalPlanId, toPosixPath, findUnsummarizedPlans } = coreUtilsModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
-const { planningDir, planningRoot } = planningWorkspace;
+const { planningDir, planningRoot, resolveEnvWorkstream } = planningWorkspace;
+// Naming readers and writers share the loader's scoped-key precedence and defaults.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import configLoaderModule = require('./config-loader.cjs');
+const { CONFIG_DEFAULTS, _deepMergeConfig, _getConfigValue } = configLoaderModule;
+import { resolveGsdHome } from './runtime-homes.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatterModule = require('./frontmatter.cjs');
 const { extractFrontmatter } = frontmatterModule;
@@ -204,7 +222,160 @@ function listArchiveVersionDirs(cwd: string, wsOverride?: string | null): Archiv
   return out;
 }
 
-function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, convention?: string | null): PhaseSearchResult | null {
+/** Effective naming is a silent projection; roadmap and marker reads are bounded. */
+function phaseDirectoryOptions(cwd: string, config?: Record<string, unknown>, roadmap?: string, ws?: string | null) {
+  // These two flat keys have no legacy aliases and are not inherited from
+  // global defaults by loadConfig. Mirror only its file-selection branches,
+  // reusing its merge, value and default owners without warnings or write-back.
+  // Replace this projection if the loader gains a quiet option; parity tests
+  // guard workstream, project, corrupt-file and global-default precedence.
+  let naming = config;
+  let configError: {path: string; message: string} | undefined;
+  if (naming === undefined) {
+    const readConfig = (file: string): Record<string, unknown> | null => {
+      try {
+        const value: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+        configError = {path: file, message: 'configuration must be a JSON object'};
+        return null;
+      } catch (cause) {
+        if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') configError = {path: file, message: (cause as Error).message};
+        return null;
+      }
+    };
+    const activeWs = ws === undefined ? resolveEnvWorkstream() : ws?.trim() || null;
+    const root = activeWs ? readConfig(path.join(planningRoot(cwd), 'config.json')) : null;
+    const scoped = readConfig(path.join(planningDir(cwd, activeWs), 'config.json'));
+    // A missing/broken workstream with a usable root recurses with ws:null in
+    // loadConfig, including GSD_PROJECT's own config rather than the flat root.
+    const parsed = scoped ? (root ? _deepMergeConfig(root, scoped) : scoped)
+      : root ? readConfig(path.join(planningDir(cwd, null), 'config.json')) : null;
+    naming = {
+      phase_naming: _getConfigValue(parsed ?? {}, 'phase_naming') ?? CONFIG_DEFAULTS.phase_naming,
+      project_code: _getConfigValue(parsed ?? {}, 'project_code') ?? CONFIG_DEFAULTS.project_code,
+    };
+  }
+  const context = phaseDirectoryContext(naming, roadmap ?? '');
+  if (configError) context.configError = configError;
+  if (context.phaseNaming !== 'custom') return context;
+  // Load directory-owned IDs once for this scope, including archive fallback.
+  // Old directories retain known heading hints. Mutations accept a unique
+  // owner and refuse ambiguous candidates before any deletion or rename.
+  context.directoryIdsByRoot = Object.create(null) as Record<string, Record<string, string>>;
+  const unmarkedDirectories: string[] = [];
+  context.unmarkedDirectories = unmarkedDirectories;
+  const roots = [path.join(planningDir(cwd, ws), 'phases'), ...listArchiveVersionDirs(cwd, ws).map(entry => entry.archivePath)];
+  for (const root of roots) {
+    const ids = Object.create(null) as Record<string, string>;
+    context.directoryIdsByRoot[root] = ids;
+    const directories = readSubdirectories(root, true);
+    for (const dir of directories) {
+      let identityFd: number | undefined;
+      try {
+        const markerPath = path.join(root, dir, CUSTOM_PHASE_ID_FILE);
+        const marker = fs.lstatSync(markerPath);
+        if (!marker.isFile() || marker.size > 1024) continue;
+        // Nonblocking/no-follow open also bounds a replacement between lstat and
+        // open; fstat validates the actual descriptor before reading at most 1 KiB.
+        // Windows may omit these flags: lstat/fstat still require a regular file,
+        // but the open is not atomically no-follow there. Adopt Windows no-follow
+        // flags here if Node exposes them; no caller should weaken these checks.
+        identityFd = fs.openSync(markerPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW);
+        const opened = fs.fstatSync(identityFd);
+        if (!opened.isFile() || opened.size > 1024) continue;
+        const buffer = Buffer.alloc(opened.size);
+        const count = fs.readSync(identityFd, buffer, 0, buffer.length, 0);
+        const id = buffer.toString('utf8', 0, count).trim();
+        if (id) {
+          phaseIdModule.phaseDirectoryName(id, '');
+          ids[dir] = id;
+        }
+      } catch { /* An absent or unusable marker supplies no ownership proof. */ }
+      finally { if (identityFd !== undefined) fs.closeSync(identityFd); }
+    }
+    unmarkedDirectories.push(...directories.filter(dir => ids[dir] === undefined));
+  }
+  // Basenames can repeat across milestones with different ID/slug boundaries.
+  // Identity hints span the scope; authoritative records belong to one pool.
+  context.directoryIds = context.directoryIdsByRoot[roots[0]];
+  context.knownIds = [...new Set(Object.values(context.directoryIdsByRoot).flatMap(ids => Object.values(ids)))];
+  if (roadmap !== undefined) return context;
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(path.join(planningDir(cwd, ws), 'ROADMAP.md'), 'r');
+    const buffer = Buffer.alloc(Math.min(fs.fstatSync(fd).size, 1024 * 1024));
+    const count = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    return {...context, roadmap: buffer.toString('utf8', 0, count)};
+  } catch { return context; }
+  finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
+const directoryPoolContexts = new WeakMap<PhaseDirectoryContext, Map<string, PhaseDirectoryContext>>();
+
+/** Select records for this physical pool, reusing its context across queries. */
+function phaseDirectoryContextForRoot(context: PhaseDirectoryContext, root: string) {
+  const ids = context.directoryIdsByRoot?.[root];
+  if (!ids || ids === context.directoryIds) return context;
+  let pools = directoryPoolContexts.get(context);
+  if (!pools) { pools = new Map(); directoryPoolContexts.set(context, pools); }
+  let selected = pools.get(root);
+  if (!selected) { selected = {...context, directoryIds: ids}; pools.set(root, selected); }
+  return selected;
+}
+
+/** Usage guidance for every custom-ID writer, using the resolved naming policy. */
+function customPhaseNamingUsage(cwd: string, context: PhaseDirectoryContext): string | null {
+  if (context.phaseNaming === 'custom') return null;
+  if (context.configError) return `Cannot read phase naming from ${context.configError.path}: ${context.configError.message}. Repair the project config before using a custom ID`;
+  let message = 'phase_naming is not custom for this project; configure phase_naming as "custom" before using a custom ID';
+  try {
+    const defaultsPath = path.join(resolveGsdHome(), '.gsd', 'defaults.json');
+    const defaults = JSON.parse(fs.readFileSync(defaultsPath, 'utf8')) as Record<string, unknown>;
+    if (typeof defaults.phase_naming === 'string' && defaults.phase_naming.toLowerCase() === 'custom' && fs.existsSync(path.join(planningDir(cwd), 'config.json'))) {
+      message += `; project config shadows phase_naming from ${defaultsPath}`;
+    }
+  } catch { /* Missing/unusable defaults do not change effective naming. */ }
+  return message;
+}
+
+type PhaseDirectoryWrite = {id: string; slug: string; directoryId?: string; recordIdentity?: boolean};
+
+/** Preflight the complete write set, then create directories and identity records. */
+function createPhaseDirectories<T extends PhaseDirectoryWrite>(cwd: string, entries: T[], context: PhaseDirectoryContext, gitkeep = true) {
+  const phasesRoot = path.resolve(planningDir(cwd), 'phases');
+  let prepared: (T & {dirName: string; dirPath: string; recordIdentity: boolean})[];
+  try {
+    const recorded = entries.filter(entry => entry.recordIdentity ?? context.phaseNaming === 'custom');
+    if (recorded.length > 0) phaseIdModule.validateCustomPhaseIds(recorded.map(entry => entry.id), context);
+    const pendingPaths = new Set<string>();
+    prepared = entries.map(entry => {
+      // Validate the raw ID before legacy scaffold normalization can discard it.
+      phaseIdModule.phaseDirectoryName(entry.id, '', context.projectCode);
+      const dirName = phaseIdModule.phaseDirectoryName(entry.directoryId ?? entry.id, entry.slug, context.projectCode);
+      const dirPath = path.resolve(phasesRoot, dirName);
+      if (path.dirname(dirPath) !== phasesRoot) error('Phase directory escapes the phases directory', ERROR_REASON.USAGE);
+      if (pendingPaths.has(dirPath) || fs.lstatSync(dirPath, {throwIfNoEntry: false}) !== undefined) {
+        throw new phaseIdModule.PhaseDirectoryNameError(`Phase directory ${dirName} already exists or is claimed by another pending entry; choose a distinct ID or title`, 'collision');
+      }
+      pendingPaths.add(dirPath);
+      return {...entry, dirName, dirPath, recordIdentity: entry.recordIdentity ?? context.phaseNaming === 'custom'};
+    });
+  } catch (cause) {
+    if (cause instanceof phaseIdModule.PhaseDirectoryNameError) {
+      error(cause.message, cause.kind === 'collision' ? ERROR_REASON.PHASE_ID_COLLISION : ERROR_REASON.USAGE);
+    }
+    throw cause;
+  }
+  for (const entry of prepared) {
+    platformEnsureDir(entry.dirPath);
+    if (gitkeep) platformWriteSync(path.join(entry.dirPath, '.gitkeep'), '');
+    if (entry.recordIdentity) platformWriteSync(path.join(entry.dirPath, CUSTOM_PHASE_ID_FILE), entry.id);
+  }
+  return prepared;
+}
+
+function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, convention?: string | null, context: PhaseDirectoryContext = phaseDirectoryContext({})): PhaseSearchResult | null {
+  context = phaseDirectoryContextForRoot(context, baseDir);
   try {
     const dirs = readSubdirectories(baseDir, true);
     // #2528: canonical two-pass selection (exact token match, then the
@@ -212,7 +383,7 @@ function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, 
     // phase-plan-index scans — see phase-id.cts::matchPhaseDirs.
     // #4801: the convention is threaded (optional) so bracket-convention
     // consumers get exact token matching here too.
-    const { matches, usedBareFallback } = matchPhaseDirs(dirs, normalized, convention);
+    const { matches, usedBareFallback } = matchPhaseDirs(dirs, normalized, convention, context);
     if (matches.length === 0) return null;
 
     // #2237: fail loud when multiple directories match the same bare phase
@@ -242,10 +413,12 @@ function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, 
 
     const match = matches[0];
 
-    const phaseToken = phaseNumberForMatch(match, usedBareFallback);
+    const custom = convention === 'bracket' ? null : customPhaseQuery(normalized, context);
+    const parts = custom ? customPhaseDirectoryParts(match, custom) : null;
+    const phaseToken = parts?.id || phaseNumberForMatch(match, usedBareFallback);
     const phaseNumber = phaseToken || normalized;
     const afterToken = match.slice(phaseToken ? phaseToken.length : 0).replace(/^-/, '');
-    const phaseName = afterToken || null;
+    const phaseName = parts?.slug || afterToken || null;
     const phaseDir = path.join(baseDir, match);
     const { plans: unsortedPlans, summaries: unsortedSummaries, hasResearch, hasContext, hasVerification, hasReviews } = getPhaseFileStats(phaseDir);
     const plans = unsortedPlans.sort();
@@ -353,15 +526,18 @@ function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, 
   }
 }
 
-function findPhaseInternal(cwd: string, phase: unknown, convention?: string | null): PhaseSearchResult | null {
+function findPhaseInternal(cwd: string, phase: unknown, convention?: string | null, context?: PhaseDirectoryContext): PhaseSearchResult | null {
   if (!phase) return null;
+  // Existing callers may omit context; multi-phase readers supply one reusable context.
+  context ??= phaseDirectoryOptions(cwd);
 
   const phasesDir = path.join(planningDir(cwd), 'phases');
-  const normalized = normalizePhaseName(phase);
+  const query = typeof phase === 'string' ? phase : normalizePhaseName(phase);
+  const normalized = context?.phaseNaming === 'custom' && convention !== 'bracket' ? query : normalizePhaseName(phase);
 
   const relPhasesDir = toPosixPath(path.relative(cwd, phasesDir));
   // #4801: convention threaded through to the matcher (see searchPhaseInDir).
-  const current = searchPhaseInDir(phasesDir, relPhasesDir, normalized, convention);
+  const current = searchPhaseInDir(phasesDir, relPhasesDir, normalized, convention, context);
   if (current) return current;
 
   // #2855: scope the archived-milestone fallback to the SAME workstream as the
@@ -375,7 +551,7 @@ function findPhaseInternal(cwd: string, phase: unknown, convention?: string | nu
   // getArchivedPhaseDirs via listArchiveVersionDirs (see its doc comment).
   for (const { version, archivePath } of listArchiveVersionDirs(cwd)) {
     const relBase = toPosixPath(path.relative(cwd, archivePath));
-    const result = searchPhaseInDir(archivePath, relBase, normalized, convention);
+    const result = searchPhaseInDir(archivePath, relBase, normalized, convention, context);
     if (result) {
       result.archived = version;
       return result;
@@ -448,10 +624,12 @@ function listMilestonePhaseDirs(
   // Without a cwd there is nothing to scope AGAINST — the caller asked for an
   // unscoped read, which is a real answer (mirrors extractCurrentMilestoneScoped's
   // row 1). Sentinels are still refused: they are never milestone phases.
+  let directoryContext: PhaseDirectoryContext | undefined;
   let inWindow: (dirName: string) => boolean = () => true;
   let scope: Scope = SCOPE.COMPLETE;
   if (cwd) {
-    const filter = getMilestonePhaseFilter(cwd, versionOverride, phaseIdConvention, ws);
+    directoryContext = phaseDirectoryOptions(cwd, undefined, undefined, ws);
+    const filter = getMilestonePhaseFilter(cwd, versionOverride, phaseIdConvention, ws, directoryContext);
     inWindow = filter;
     scope = filter.scope;
   }
@@ -475,7 +653,7 @@ function listMilestonePhaseDirs(
 
   const value = names
     .filter((name) => inWindow(name) && !isSentinelPhaseId(name, phaseIdConvention ?? undefined))
-    .sort((a, b) => comparePhaseNum(a, b));
+    .sort((a, b) => comparePhaseNum(a, b, directoryContext));
 
   return { value, scope };
 }
@@ -591,6 +769,10 @@ function getAllArchivedPhaseDirs(cwd: string): ArchivedPhaseDir[] {
 }
 
 export = {
+  createPhaseDirectories,
+  phaseDirectoryOptions,
+  phaseDirectoryContextForRoot,
+  customPhaseNamingUsage,
   searchPhaseInDir,
   findPhaseInternal,
   getArchivedPhaseDirs,

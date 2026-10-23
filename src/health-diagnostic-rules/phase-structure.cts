@@ -76,8 +76,11 @@ import { legacyStatusRepairTarget } from '../verification.cjs';
 
 function checkW005(snapshot: PlanningSnapshot): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
+  const context = snapshot.directoryContext ?? phaseIdMod.phaseDirectoryContext(snapshot.config.value ?? {}, '', snapshot.roadmapDeclaredPhases.value.map(({phaseId}) => phaseId));
   for (const name of snapshot.phaseDirs.value) {
-    if (!isPhaseDirName(name, snapshot.phaseIdConvention)) {
+    const custom = snapshot.phaseIdConvention === 'bracket' ? null : phaseIdMod.customPhaseQuery(name, context);
+    const owner = custom && phaseIdMod.customDirectoryOwner(name, custom);
+    if (!owner && !isPhaseDirName(name, snapshot.phaseIdConvention)) {
       diagnostics.push({
         code: 'W005',
         severity: SEVERITY.WARNING,

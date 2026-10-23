@@ -17,6 +17,8 @@
  * Argv after the verb: `<phase>`.
  */
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import directoryLocatorMod = require('./phase-locator.cjs');
 import fs from 'node:fs';
 import path from 'node:path';
 import { gateVerdict, gateUnreadable, gateUsageFailure, GATE_FAILURE_CODE } from './gate-verdict.cjs';
@@ -99,7 +101,7 @@ function runContextDriftGate(cwd: string, phaseArg: string): GateVerdict {
 
   // Same phase-directory resolution rule the schema-drift gate uses (#1571, #2528):
   // matchPhaseDirs, never a naive substring test.
-  const phaseDir = resolvePhaseDirByToken(phasesDir, phaseArg);
+  const phaseDir = resolvePhaseDirByToken(phasesDir, phaseArg, directoryLocatorMod.phaseDirectoryOptions(cwd));
   if (!phaseDir) {
     return unresolvable();
   }

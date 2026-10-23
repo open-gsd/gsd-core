@@ -462,6 +462,7 @@ function buildRequirements(
   knownPhaseKeys: Set<string>,
   diagnostics: Diagnostic[],
   planningRoot: string,
+  directoryContext: ReturnType<typeof phaseIdMod.phaseDirectoryContext>,
 ): { rows: RequirementRow[]; scope: Scope } {
   const doc = readDocument(requirementsPath, planningRoot);
   if (!doc.exists) {
@@ -523,7 +524,7 @@ function buildRequirements(
       // here too — it is a FILE-MEMBERSHIP predicate (#3511) for aggregate
       // `*-UAT.md` / `*-VERIFICATION.md` scans, not a phase-identity equality
       // test, and is unreliable for decimal phases.
-      if (!knownPhaseKeys.has(phaseKeyFromToken(token))) {
+      if (!knownPhaseKeys.has(phaseKeyFromToken(token, directoryContext))) {
         diagnostics.push({
           code: INSPECT_DIAGNOSTIC.REQUIREMENT_PHASE_UNKNOWN,
           subject: `${item.id}->${token}`,
@@ -1200,6 +1201,7 @@ function buildPlanningInspectResult(cwd: string): {
   }
 
   const snapshot = buildPlanningSnapshot(cwd);
+  const directoryContext = snapshot.directoryContext;
 
   if (snapshot.milestone.scope !== SCOPE.COMPLETE) {
     diagnostics.push({
@@ -1236,7 +1238,7 @@ function buildPlanningInspectResult(cwd: string): {
   // one phase.
   const checkboxByPhaseKey = new Map<string, boolean>();
   for (const [token, ticked] of Object.entries(checkboxes)) {
-    checkboxByPhaseKey.set(phaseKeyFromToken(token), ticked);
+    checkboxByPhaseKey.set(phaseKeyFromToken(token, directoryContext), ticked);
   }
   const phaseSnapshots = snapshot.phases.value as {
     dir: string;
@@ -1251,7 +1253,7 @@ function buildPlanningInspectResult(cwd: string): {
   // `phaseKeyFromDir`), not a raw regex scrape — this is the set
   // `buildRequirements` below matches Traceability tokens against via
   // `phaseKeyFromToken`.
-  const knownPhaseKeys: Set<string> = new Set(windowed.map((dir) => phaseKeyFromDir(dir)));
+  const knownPhaseKeys: Set<string> = new Set(windowed.map((dir) => phaseKeyFromDir(dir, undefined, directoryContext)));
 
   // Read once, shared across every phase row's goal/dependencies lookup —
   // the same `readDocument` seam every other document read in this module
@@ -1333,8 +1335,8 @@ function buildPlanningInspectResult(cwd: string): {
         route: verification.route,
       },
       roadmap_acceptance: {
-        checkbox: checkboxByPhaseKey.has(phaseKeyFromDir(phase.dir))
-          ? (checkboxByPhaseKey.get(phaseKeyFromDir(phase.dir)) as boolean)
+        checkbox: checkboxByPhaseKey.has(phaseKeyFromDir(phase.dir, undefined, directoryContext))
+          ? (checkboxByPhaseKey.get(phaseKeyFromDir(phase.dir, undefined, directoryContext)) as boolean)
           : null,
         // ADR-3180 §7.4: a ticked checkbox is a human annotation with no
         // machine authority. Stated in the payload so a consumer cannot
@@ -1349,7 +1351,7 @@ function buildPlanningInspectResult(cwd: string): {
     };
   });
 
-  const requirements = buildRequirements(paths.requirements, knownPhaseKeys, diagnostics, paths.planning);
+  const requirements = buildRequirements(paths.requirements, knownPhaseKeys, diagnostics, paths.planning, directoryContext);
 
   const phaseScope = worstScope(
     snapshot.phaseDirs.scope,
