@@ -2851,6 +2851,42 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isSymbolicLink(), 'hooks.json must still be a symlink');
   });
 
+  // A hooks.json the removal cannot read or parse makes step 1a throw, so the
+  // early check reads and parses it the same way before the first removal (#5037).
+  const unreadableHooksJsonCases = [
+    {
+      label: 'an oversized',
+      write: (file) => {
+        const { CODEX_HOOKS_JSON_MAX_BYTES } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
+        fs.writeFileSync(file, JSON.stringify({ padding: 'x'.repeat(CODEX_HOOKS_JSON_MAX_BYTES) }), 'utf8');
+      },
+      error: /hooks\.json could not be read/,
+    },
+    {
+      label: 'an unparseable',
+      write: (file) => fs.writeFileSync(file, '{ not json', 'utf8'),
+      error: /hooks\.json parse failed/,
+    },
+  ];
+  for (const { label, write, error } of unreadableHooksJsonCases) {
+    test(`uninstall over ${label} hooks.json refuses before removing any skill or touching config.toml (#5037)`, () => {
+      runCodexInstall(codexHome);
+      const skillsBefore = fs.readdirSync(codexSkillsRoot(codexHome)).sort();
+      assert.ok(skillsBefore.length > 0, 'setup: the install must have created skills');
+      const configPath = path.join(codexHome, 'config.toml');
+      const configBefore = fs.readFileSync(configPath, 'utf8');
+      write(hooksJsonPath(codexHome));
+      const hooksJsonBefore = fs.readFileSync(hooksJsonPath(codexHome), 'utf8');
+
+      assert.throws(() => runCodexUninstall(codexHome), error);
+
+      assert.deepStrictEqual(fs.readdirSync(codexSkillsRoot(codexHome)).sort(), skillsBefore,
+        'no skill may be removed before the refusal');
+      assert.strictEqual(fs.readFileSync(configPath, 'utf8'), configBefore, 'config.toml must be untouched');
+      assert.strictEqual(fs.readFileSync(hooksJsonPath(codexHome), 'utf8'), hooksJsonBefore, 'hooks.json must be untouched');
+    });
+  }
+
   // Asserts the uninstall removed every skill the install had created.
   function assertSkillsRemoved(skillsBefore) {
     const remaining = fs.existsSync(codexSkillsRoot(codexHome)) ? fs.readdirSync(codexSkillsRoot(codexHome)) : [];
