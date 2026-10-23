@@ -2,7 +2,7 @@
 
 /**
  * #4783: execute-phase checkpoint handling step 6 told the orchestrator to spawn the continuation
- * agent "using continuation-prompt.md template", a file that does not ship. The four placeholders
+ * agent "using continuation-prompt.md template", a file that does not ship. The placeholders
  * the step lists are the whole contract, so the step must state it itself instead of pointing at a
  * missing file. A workflow may not name a `*-prompt.md` template that does not exist in the package.
  */
@@ -32,12 +32,13 @@ describe('#4783 execute-phase continuation spawn does not point at a missing tem
     assert.deepEqual(dangling, [], `execute-phase.md names template file(s) that do not ship: ${dangling.join(', ')}`);
   });
 
-  test('step 6 still states the four continuation placeholders itself', () => {
+  test('step 6 still states the continuation placeholders and the <completed_tasks> tag itself', () => {
     const text = readFileNormalized(EXECUTE);
     const step = /\*\*Spawn continuation agent \(NOT resume\)\*\*[\s\S]*?\n7\. /.exec(text);
     assert.ok(step, 'could not locate the continuation spawn step');
     for (const placeholder of ['{completed_tasks_table}', '{resume_task_number}', '{resume_task_name}', '{user_response}', '{resume_instructions}']) {
       assert.ok(step[0].includes(placeholder), `step 6 must state ${placeholder}`);
     }
+    assert.ok(step[0].includes('<completed_tasks>'), 'step 6 must name the <completed_tasks> tag the executor keys on');
   });
 });
