@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { retryRenameSync } from './shell-command-projection.cjs';
+import { retryRenameSync, scrubGitLocationEnv } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -2261,7 +2261,7 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
   // ── Real run: verify clean working tree ───────────────────────────────────
   let gitStatus: string;
   try {
-    gitStatus = execSync('git status --porcelain', { cwd, encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+    gitStatus = execSync('git status --porcelain', { cwd, encoding: 'utf8', windowsHide: true, timeout: 10_000, env: scrubGitLocationEnv(process.env) });
   } catch (err) {
     throw new Error(`git status failed: ${(err as Error).message}`);
   }

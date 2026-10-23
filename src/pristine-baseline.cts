@@ -25,6 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { scrubGitLocationEnv } from './shell-command-projection.cjs';
 
 /**
  * SHA-256 hex digest of a file's raw bytes. Byte-for-byte the same digest
@@ -141,6 +142,7 @@ export function isCleanRelativePosixPath(relPath: string): boolean {
 export function gitExec(gitDir: string, args: string[]): string {
   return execFileSync('git', args, {
     cwd: gitDir,
+    env: scrubGitLocationEnv(process.env),
     encoding: 'utf8',
     timeout: GIT_SUBPROCESS_TIMEOUT_MS,
     maxBuffer: GIT_MAX_BUFFER_BYTES,

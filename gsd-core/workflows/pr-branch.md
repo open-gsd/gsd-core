@@ -90,6 +90,8 @@ jq dependency). Write dirty repo names to a temp file so the list survives acros
 subsequent command executions:
 
 ```bash
+# #5548: drop inherited repo-location vars (set inside git hooks) so cwd, not GIT_DIR, picks ROOT.
+unset GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_OBJECT_DIRECTORY GIT_DIR GIT_WORK_TREE GIT_IMPLICIT_WORK_TREE GIT_GRAFT_FILE GIT_INDEX_FILE GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE GIT_PREFIX GIT_SHALLOW_FILE GIT_COMMON_DIR
 ROOT=$(git rev-parse --show-toplevel)
 DIRTY_FILE=$(mktemp)
 
@@ -104,6 +106,9 @@ node -e "
   let realRoot;
   try { realRoot = fs.realpathSync(root); } catch (_) { realRoot = path.resolve(root); }
   const out = [];
+  // #5548: inherited repo-location vars (set inside git hooks) would override -C.
+  const gitEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) =>
+    !/^GIT_(ALTERNATE_OBJECT_DIRECTORIES|OBJECT_DIRECTORY|DIR|WORK_TREE|IMPLICIT_WORK_TREE|GRAFT_FILE|INDEX_FILE|NO_REPLACE_OBJECTS|REPLACE_REF_BASE|PREFIX|SHALLOW_FILE|COMMON_DIR)$/i.test(k)));
   for (const r of repos) {
     // Reject before any git invocation: this scan runs on raw config values,
     // ahead of the pr-subrepo seam's own validatePath guard. A traversal,
@@ -117,7 +122,7 @@ node -e "
     if (resolved !== realRoot && !resolved.startsWith(realRoot + path.sep)) continue;
     try {
       const res = execFileSync('git', ['-C', resolved, 'status', '--porcelain'],
-                               { encoding: 'utf8', timeout: 10_000 });
+                               { encoding: 'utf8', timeout: 10_000, env: gitEnv });
       // Exclude untracked-only repos: seam filters ?? lines, so detection must match.
       const tracked = res.split('\n').filter(l => l.length > 0 && !l.startsWith('??'));
       if (tracked.length > 0) out.push(r);

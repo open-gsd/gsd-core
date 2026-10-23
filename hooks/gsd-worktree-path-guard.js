@@ -18,7 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { HOOK_ON_CRASH, allow, deny, crash } = require('./lib/hook-exit.js');
-const { reportIfUndetermined, BLOCKING_GUARD_PROBE_TIMEOUT_MS } = require('./lib/git-probe.js');
+const { reportIfUndetermined, gitEnv, BLOCKING_GUARD_PROBE_TIMEOUT_MS } = require('./lib/git-probe.js');
 
 // This guard's outer catch has always exited 0 (fail open): a path guard that
 // cannot resolve the worktree must not block the user's edit — its whole job
@@ -35,7 +35,7 @@ const ON_CRASH = HOOK_ON_CRASH.ALLOW;
 const SPAWNOPT = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: BLOCKING_GUARD_PROBE_TIMEOUT_MS, windowsHide: true };
 
 function git(args, cwd) {
-  return spawnSync('git', args, { ...SPAWNOPT, cwd });
+  return spawnSync('git', args, { ...SPAWNOPT, cwd, env: gitEnv() });
 }
 
 // Walk up from `start` to find the nearest existing directory.

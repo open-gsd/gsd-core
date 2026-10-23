@@ -31,7 +31,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { allow, deny } = require('./lib/hook-exit.js');
-const { reportIfUndetermined, BLOCKING_GUARD_PROBE_TIMEOUT_MS } = require('./lib/git-probe.js');
+const { reportIfUndetermined, gitEnv, BLOCKING_GUARD_PROBE_TIMEOUT_MS } = require('./lib/git-probe.js');
 
 // #3911 (ADR-3889 Phase 7): the exit(2) call site (block(), below) is
 // migrated to hook-exit.js's deny(undefined, reason) — see
@@ -50,7 +50,7 @@ const { reportIfUndetermined, BLOCKING_GUARD_PROBE_TIMEOUT_MS } = require('./lib
 const SPAWNOPT = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: BLOCKING_GUARD_PROBE_TIMEOUT_MS, windowsHide: true };
 
 function git(args, cwd) {
-  return spawnSync('git', args, { ...SPAWNOPT, cwd });
+  return spawnSync('git', args, { ...SPAWNOPT, cwd, env: gitEnv() });
 }
 
 // Walk up from `start` to find the nearest existing DIRECTORY (not merely an

@@ -87,6 +87,55 @@ describe('execGit', () => {
     const result = execGit(['status', '--porcelain'], { cwd: tmpDir });
     assert.strictEqual(result.exitCode, 0);
   });
+
+  // #5548: cwd selects the repository; inherited location vars must not redirect it.
+  describe('inherited repository-location env (#5548)', () => {
+    const VARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE'];
+    let other, saved;
+    beforeEach(() => {
+      other = createTempGitProject();
+      saved = Object.fromEntries(VARS.map(k => [k, process.env[k]]));
+    });
+    afterEach(() => {
+      for (const k of VARS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+      cleanup(other);
+    });
+    const gitDir = (dir) => fs.realpathSync.native(path.join(dir, '.git'));
+
+    test('GIT_DIR set to another repo does not redirect cwd', () => {
+      process.env.GIT_DIR = gitDir(other);
+      const r = execGit(['rev-parse', '--absolute-git-dir'], { cwd: tmpDir });
+      assert.strictEqual(r.exitCode, 0, r.stderr);
+      assert.strictEqual(fs.realpathSync.native(r.stdout), gitDir(tmpDir));
+    });
+
+    test('GIT_WORK_TREE set to another dir does not redirect cwd', () => {
+      process.env.GIT_WORK_TREE = fs.realpathSync.native(other);
+      const r = execGit(['rev-parse', '--show-toplevel'], { cwd: tmpDir });
+      assert.strictEqual(fs.realpathSync.native(r.stdout), fs.realpathSync.native(tmpDir));
+    });
+
+    test('GIT_INDEX_FILE set to another repo index does not receive cwd staging', () => {
+      process.env.GIT_INDEX_FILE = path.join(gitDir(other), 'index');
+      fs.writeFileSync(path.join(tmpDir, 'f5548.txt'), 'x');
+      assert.strictEqual(execGit(['add', 'f5548.txt'], { cwd: tmpDir }).exitCode, 0);
+      delete process.env.GIT_INDEX_FILE;
+      assert.ok(execGit(['ls-files'], { cwd: tmpDir }).stdout.split('\n').includes('f5548.txt'));
+    });
+
+    test('other env (author) is still inherited', () => {
+      process.env.GIT_AUTHOR_NAME = 'Inherited Author';
+      try {
+        const r = execGit(['var', 'GIT_AUTHOR_IDENT'], { cwd: tmpDir });
+        assert.match(r.stdout, /^Inherited Author /);
+      } finally { delete process.env.GIT_AUTHOR_NAME; }
+    });
+
+    test('explicit opts.env GIT_DIR still wins (opt-out)', () => {
+      const r = execGit(['rev-parse', '--absolute-git-dir'], { cwd: tmpDir, env: { GIT_DIR: gitDir(other) } });
+      assert.strictEqual(fs.realpathSync.native(r.stdout), gitDir(other));
+    });
+  });
 });
 
 // ─── execNpm ─────────────────────────────────────────────────────────────────

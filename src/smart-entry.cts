@@ -32,6 +32,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { scrubGitLocationEnv } from './shell-command-projection.cjs';
 import { collectSection } from './markdown-sectionizer.cjs';
 import { formatGsdSlash, resolveRuntime, runtimeCommand } from './runtime-slash.cjs';
 // #3696: the calendar-validity predicate moved to the STATE.md document module
@@ -298,6 +299,7 @@ function readGitSignals(cwd: string): GitSignals {
     try {
       return execFileSync('git', args, {
         cwd,
+        env: scrubGitLocationEnv(process.env),
         encoding: 'utf-8',
         maxBuffer: 4 * 1024 * 1024,
         windowsHide: true,
