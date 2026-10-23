@@ -14,7 +14,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 
 // Import the exported check function.
-const { checkRegistry } = require('../scripts/lint-resolution-provenance.cjs');
+const { checkRegistry, checkLayerReadSeam, LAYER_READ_SEAM } = require('../scripts/lint-resolution-provenance.cjs');
 
 /**
  * Run checkRegistry with synthetic content injected as testFileContent so
@@ -171,5 +171,36 @@ describe('lint-resolution-provenance: real repo baseline', () => {
       `Real repo baseline failed:\n${failures.join('\n')}`
     );
     assert.ok(ok);
+  });
+});
+
+describe('lint-resolution-provenance: the config layer read has two owners (#5096)', () => {
+  function runSeam(sources) {
+    const failures = [];
+    const { ok } = checkLayerReadSeam({ sources, fail: (msg) => failures.push(msg) });
+    return { ok, failures };
+  }
+
+  test('fail: a non-owner module that destructures or calls the layer read', () => {
+    for (const text of [
+      "const { _readConfigFile } = loader;",
+      "loader._readConfigFile(file, { format: 'json' });",
+      "configLoader._warnUnusableConfig(fault);",
+    ]) {
+      const { ok, failures } = runSeam([{ file: 'src/other.cts', text }]);
+      assert.equal(ok, false, text);
+      assert.equal(failures.length, 1);
+      assert.match(failures[0], /src\/other\.cts uses _(readConfigFile|warnUnusableConfig)/);
+    }
+  });
+
+  test('ok: the two owners, comments and longer identifiers do not trip the guard', () => {
+    const { ok, failures } = runSeam([
+      ...LAYER_READ_SEAM.owners.map((file) => ({ file, text: 'const read = _readConfigFile(file);' })),
+      { file: 'src/configuration.cts', text: '// the shape check in `_readConfigFile`\n/* _warnUnusableConfig */ const x = 1;' },
+      { file: 'src/other.cts', text: 'const my_readConfigFileCopy = 1;' },
+    ]);
+    assert.deepEqual(failures, []);
+    assert.equal(ok, true);
   });
 });

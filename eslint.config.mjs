@@ -99,6 +99,9 @@ export default tseslint.config(
       '.stryker-tmp/**',
       '**/*.generated.cjs',
       // ADR-457: tsc-generated runtime artifact — lint the src/*.cts source, not the emitted .cjs.
+      'gsd-core/bin/lib/config-value-resolver.cjs',
+      'gsd-core/bin/lib/config-schema-defaults.cjs',
+      'gsd-core/bin/lib/settings-jsonc.cjs',
       'gsd-core/bin/lib/claude-orchestration.cjs',
       'gsd-core/bin/lib/claude-orchestration-command-router.cjs',
       'gsd-core/bin/lib/semver-compare.cjs',
