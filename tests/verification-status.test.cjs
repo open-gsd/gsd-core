@@ -1465,7 +1465,7 @@ describe('#4142: opts.convention threads through findStaleVerificationSummary', 
 // cross-phase report cannot satisfy the gate merely by sitting in the bracket
 // phase's directory.
 describe('#4142: phase complete verdict scopes bracket verification reports', () => {
-  const { runGsdTools } = require('./helpers.cjs');
+  const { runGsdTools, homeSandboxEnv } = require('./helpers.cjs');
 
   test('a passed cross-phase stray cannot complete a bracket phase', (t) => {
     const projectDir = createTempGitProject('gsd-4142-phase-complete-');
@@ -1483,6 +1483,7 @@ describe('#4142: phase complete verdict scopes bracket verification reports', ()
     const result = runGsdTools(
       ['--json-errors', 'phase', 'complete', phaseDirName],
       projectDir,
+      homeSandboxEnv(projectDir),
     );
 
     assert.equal(
