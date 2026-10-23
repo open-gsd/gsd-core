@@ -1408,6 +1408,8 @@ describe('#3587 per-phase commit_docs override', () => {
       assert.strictEqual(resolution.degraded, true);
       assert.strictEqual(resolution.reason, CONFIG_REASON.CONFIG_UNPARSEABLE);
       assert.strictEqual(configGet('commit_docs'), String(resolution.config.commit_docs));
+      // The fallback is the built-in default, not merely whatever the loader says.
+      assert.strictEqual(configGet('commit_docs'), 'true');
     });
 
     test('multiRepo: true with detected sub-repos reads false through both keys', () => {
