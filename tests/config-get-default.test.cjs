@@ -1932,7 +1932,12 @@ describe('#6029 acceptance: /gsd-code-review resolve_depth in a project with no 
   const SENTINEL = 'sentinel-5470';
 
   function readPath(obj, dotted) {
-    return dotted.split('.').reduce((cur, seg) => (cur !== null && typeof cur === 'object' ? cur[seg] : undefined), obj);
+    // Own keys only, so a path such as `constructor` reads undefined rather than
+    // a prototype member.
+    return dotted.split('.').reduce(
+      (cur, seg) => (cur !== null && typeof cur === 'object' && Object.hasOwn(cur, seg) ? cur[seg] : undefined),
+      obj,
+    );
   }
 
   /** Every path of depth 1 or 2 in `obj` whose value is `value`. */
