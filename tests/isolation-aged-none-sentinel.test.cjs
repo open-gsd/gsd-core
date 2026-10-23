@@ -20,6 +20,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const os = require('node:os');
+const { spawnSync } = require('node:child_process');
 const { cleanup, readFileNormalized } = require('./helpers.cjs');
 const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -201,8 +202,19 @@ describe('the per-plan worktree gate records the isolation sentinel per dispatch
   after(() => { cleanup(root); cleanup(project); });
 
   const env = (extra) => ({
-    ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root, RUNTIME_DIR: REPO, CLAUDE_ENV_FILE: '', ...extra,
+    ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root, RUNTIME_DIR: REPO.replace(/\\/g, '/'), CLAUDE_ENV_FILE: '', ...extra,
   });
+
+  // The harness sources the gate's bash fences, and Part 1 extracts plan fields with jq. Skip (never pass
+  // vacuously) where either is missing, and on Windows, where the fences' POSIX path handling is not what
+  // this harness measures; the prose-contract tests below still run there.
+  const probe = (cmd) => { const r = spawnSync(cmd, ['--version'], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS }); return !r.error && r.status === 0; };
+  const harnessSkipReason = () => {
+    if (process.platform === 'win32') return 'bash-fence harness runs on POSIX hosts';
+    if (!probe('bash')) return 'bash is not available';
+    if (!probe('jq')) return 'jq is not available';
+    return null;
+  };
 
   function runBash(name, script, extra) {
     const scriptPath = path.join(root, `${name}.sh`);
@@ -241,7 +253,9 @@ describe('the per-plan worktree gate records the isolation sentinel per dispatch
   }, {}).action;
   const planJson = (id, files) => JSON.stringify({ id, files_modified: files });
 
-  test('#683 base-check degrade: a two-plan wave decided up front is dispatched sequentially, each against its own record', () => {
+  test('#683 base-check degrade: a two-plan wave decided up front is dispatched sequentially, each against its own record', (t) => {
+    const skip = harnessSkipReason();
+    if (skip) { t.skip(skip); return; }
     const wave = ['03-01-api', '03-02-docs'].map((id) => decide(planJson(id, ['src/a.js']), { USE_WORKTREES: 'false', SUBMODULE_PATHS: '' }));
     assert.deepEqual(wave.map((d) => d.value), ['false', 'false']);
     for (const d of wave) {
@@ -251,7 +265,9 @@ describe('the per-plan worktree gate records the isolation sentinel per dispatch
     }
   });
 
-  test('#2772 submodule degrade: each plan is dispatched on its own stored decision', () => {
+  test('#2772 submodule degrade: each plan is dispatched on its own stored decision', (t) => {
+    const skip = harnessSkipReason();
+    if (skip) { t.skip(skip); return; }
     const extra = { USE_WORKTREES: 'true', SUBMODULE_PATHS: 'vendor/lib' };
     const wave = [decide(planJson('03-01-vendor', ['vendor/lib/x.c']), extra), decide(planJson('03-02-docs', ['lib/y.js']), extra)];
     assert.deepEqual(wave.map((d) => d.value), ['false', 'true'], 'the submodule plan is sequential, the other keeps worktree isolation');
@@ -264,11 +280,24 @@ describe('the per-plan worktree gate records the isolation sentinel per dispatch
     assert.equal(dispatch('03-02-docs', false), 'block', 'and is still denied without it: the record did not weaken the guard');
   });
 
-  test('why the record is per dispatch: recording every plan before the first dispatch leaves the earlier plan denied', () => {
+  test('why the record is per dispatch: recording every plan before the first dispatch leaves the earlier plan denied', (t) => {
+    const skip = harnessSkipReason();
+    if (skip) { t.skip(skip); return; }
     const wave = ['03-01-api', '03-02-docs'].map((id) => decide(planJson(id, ['src/a.js']), { USE_WORKTREES: 'false', SUBMODULE_PATHS: '' }));
     for (const d of wave) record(d);
     assert.equal(recordedPlan(), '03-02-docs', 'the single slot holds the last plan');
     assert.equal(dispatch('03-01-api', false), 'block', 'the first plan is judged against the last plan\'s record');
+  });
+
+  test('re-running the extraction restores a plan\'s own PLAN_FILES and PLAN_DELETIONS after later plans overwrote them', (t) => {
+    const skip = harnessSkipReason();
+    if (skip) { t.skip(skip); return; }
+    const extraction = partFences(/Part 1/)[0];
+    const json = (id, files, deletions) => JSON.stringify({ id, files_modified: files, files_deleted: deletions });
+    const a = json('03-01-api', ['src/a.js'], ['src/old.js']);
+    const b = json('03-02-docs', ['lib/y.js'], []);
+    const script = [`plan_json='${a}'`, extraction, `plan_json='${b}'`, extraction, `plan_json='${a}'`, extraction, 'printf "%s|%s|%s\\n" "$plan_id" "$PLAN_FILES" "$PLAN_DELETIONS"'].join('\n');
+    assert.equal(runBash('reextract', script, {}).trim().split('\n').pop(), '03-01-api|src/a.js|src/old.js');
   });
 
   describe('execute-phase.md places the record at the dispatch point', () => {
@@ -293,6 +322,7 @@ describe('the per-plan worktree gate records the isolation sentinel per dispatch
       const body = step(/Spawn executor agents/);
       assert.match(body, /Part 2/, 'step 3 runs Part 2 (the plan-scoped record) of the gate');
       assert.match(body, /stored decision|that plan's own decision/i, 'step 3 reads the dispatched plan\'s stored decision');
+      assert.match(body, /PLAN_FILES[^\n]*PLAN_DELETIONS/, 'step 3 re-extracts PLAN_FILES / PLAN_DELETIONS for the dispatched plan');
     });
   });
 });
