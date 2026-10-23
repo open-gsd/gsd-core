@@ -104,7 +104,7 @@ Usage: `/gsd:fast "fix the typo in README"`
 
 Usage: `/gsd:phase "Add admin dashboard"`
 
-**`/gsd:phase --insert <after> <description>`** — Inserts a decimal phase (e.g. 7.1) between existing phases for discovered mid-milestone work.
+**`/gsd:phase --insert <after> [--sibling] <description>`** — Inserts a decimal phase (e.g. 7.1) between existing phases for discovered mid-milestone work. After a decimal phase it nests by default (15.2 -> 15.2.1); `--sibling` joins the parent level (15.3).
 
 Usage: `/gsd:phase --insert 7 "Fix critical auth bug"`
 Result: Creates Phase 7.1

@@ -721,6 +721,7 @@ Toggle at project setup (`/gsd-new-project` asks during workflow preferences) or
 ```bash
 /gsd-phase                  # Append a new phase to the roadmap (default mode)
 /gsd-phase --insert 3       # Insert urgent work between phases 3 and 4
+/gsd-phase --insert 15.2 --sibling "x"  # After a decimal phase: peer 15.3 (default nests as 15.2.1)
 /gsd-phase --remove 7       # Descope phase 7 and renumber
 /gsd-phase --edit 4         # Edit any field of phase 4 in place
 ```

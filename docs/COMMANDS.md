@@ -592,7 +592,8 @@ CRUD for phases in ROADMAP.md — add, insert, remove, or edit phases with a sin
 | Flag | Description |
 |------|-------------|
 | (none) | Append a new integer phase to the end of the current milestone |
-| `--insert <N>` | Insert urgent work as a decimal phase (e.g., 3.1) after phase N |
+| `--insert <N>` | Insert urgent work as a decimal phase (e.g., 3.1) after phase N. After a decimal phase N it nests by default (`15.2` → `15.2.1`) |
+| `--sibling` | With `--insert`, join the parent level instead of nesting (`--insert 15.2 --sibling` → `15.3`) |
 | `--remove <N>` | Remove a future phase and renumber subsequent phases |
 | `--edit <N>` | Edit any field of an existing phase in place |
 | `--force` | Allow editing in-progress or completed phases (used with `--edit`) |

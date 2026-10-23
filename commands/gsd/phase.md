@@ -1,7 +1,7 @@
 ---
 name: gsd:phase
 description: Multi-phase management — add, insert, remove, or edit phases in ROADMAP.md (roadmap phase CRUD)
-argument-hint: "[--insert | --remove | --edit] <phase-name-or-number>"
+argument-hint: "[--insert [--sibling] | --remove | --edit] <phase-name-or-number>"
 allowed-tools:
   - Read
   - Write
@@ -29,7 +29,7 @@ Mode routing:
 | Flag | Action | Workflow |
 |------|--------|----------|
 | (none) | Add new integer phase at end of milestone | add-phase |
-| --insert | Insert decimal phase (e.g., 72.1) after specified phase | insert-phase |
+| --insert | Insert decimal phase (e.g., 72.1) after specified phase; after a decimal phase it nests by default (15.2 -> 15.2.1), `--sibling` joins the parent level (15.3) | insert-phase |
 | --remove | Remove future phase, renumber subsequent | remove-phase |
 | --edit | Edit fields of existing phase in place | edit-phase |
 
@@ -46,7 +46,7 @@ Mode routing:
 Arguments: see the `<arguments>` block above.
 
 Parse the first token of the `<arguments>` block:
-- If it is `--insert`: strip the flag, pass remainder (format: <after-phase-number> <description>) to insert-phase workflow
+- If it is `--insert`: strip the flag, pass remainder (format: <after-phase-number> [--sibling] <description>) to insert-phase workflow
 - If it is `--remove`: strip the flag, pass remainder (phase number) to remove-phase workflow
 - If it is `--edit`: strip the flag, pass remainder (phase-number [--force]) to edit-phase workflow
 - Otherwise: pass all of the `<arguments>` block (phase description) to add-phase workflow

@@ -12,12 +12,17 @@ Read all files referenced by the invoking prompt's execution_context before star
 
 <step name="parse_arguments">
 Parse the command arguments:
-- First argument: integer phase number to insert after
+- First argument: phase number to insert after (integer or decimal)
+- `--sibling` (optional, anywhere after the first argument): `sibling = true`; it is a flag, never part of the description
 - Remaining arguments: phase description
 
 Example: `/gsd:phase --insert 72 Fix critical auth bug`
 -> after = 72
 -> description = "Fix critical auth bug"
+
+Allocation: inserting after an integer phase creates the next decimal (72.1). Inserting after a decimal phase nests by default (`--insert 15.2 "x"` -> 15.2.1); add `--sibling` to join the parent level instead (`--insert 15.2 --sibling "x"` -> 15.3). A top-level after-phase with `--sibling` falls back to nested.
+
+Set `sibling_flag="--sibling"` when the flag was given, else `sibling_flag=""`.
 
 If arguments missing:
 
@@ -29,7 +34,7 @@ Example: /gsd:phase --insert 72 Fix critical auth bug
 
 Exit.
 
-Validate first argument is an integer.
+Validate first argument is a phase number (integer or decimal).
 </step>
 
 <step name="init_context">
@@ -57,12 +62,12 @@ Exit.
 **Delegate the phase insertion to `gsd_run query phase.insert`:**
 
 ```bash
-RESULT=$(gsd_run query phase.insert "${after_phase}" "${description}")
+RESULT=$(gsd_run query phase.insert "${after_phase}" "${description}" ${sibling_flag:+"$sibling_flag"})
 ```
 
 The CLI handles:
 - Verifying target phase exists in ROADMAP.md
-- Calculating next decimal phase number (checking existing decimals on disk)
+- Calculating next decimal phase number (checking existing decimals on disk; nested by default, parent level with `--sibling`)
 - Generating slug from description
 - Creating the phase directory (`.planning/phases/{N.M}-{slug}/`)
 - Inserting the phase entry into ROADMAP.md after the target phase with (INSERTED) marker
