@@ -3262,6 +3262,27 @@ describe('#2376 — init.* path fields resolve when process cwd differs from --c
     }
   });
 
+  test('init new-milestone emits codebase_map_files: absolute paths of the map files present, [] without a map (#5148)', () => {
+    const before = runGsdTools(['init', 'new-milestone', '--cwd', projectDir], decoyDir);
+    assert.ok(before.success, `Command failed: ${before.error}`);
+    assert.deepEqual(JSON.parse(before.output).codebase_map_files, []);
+
+    const codebaseDir = path.join(projectDir, '.planning', 'codebase');
+    fs.mkdirSync(codebaseDir, { recursive: true });
+    fs.writeFileSync(path.join(codebaseDir, 'ARCHITECTURE.md'), '# Architecture\n');
+    fs.writeFileSync(path.join(codebaseDir, 'STACK.md'), '# Stack\n');
+    fs.writeFileSync(path.join(codebaseDir, 'notes.md'), '# not a map file\n');
+
+    const result = runGsdTools(['init', 'new-milestone', '--cwd', projectDir], decoyDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const files = JSON.parse(result.output).codebase_map_files;
+    assert.deepEqual(files.map((f) => path.basename(f)).sort(), ['ARCHITECTURE.md', 'STACK.md']);
+    for (const file of files) {
+      assert.ok(path.isAbsolute(file), `codebase_map_files entries must be absolute, got: "${file}"`);
+      assert.ok(fs.existsSync(file), `codebase_map_files entry must resolve to the real file: "${file}"`);
+    }
+  });
+
   test('init ingest-docs emits absolute requirements_path/roadmap_path/state_path/intel_dir/conflicts_path (previously absent)', () => {
     fs.writeFileSync(path.join(projectDir, '.planning', 'REQUIREMENTS.md'), '# Requirements\n');
     fs.writeFileSync(path.join(projectDir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
@@ -3368,14 +3389,25 @@ describe('#2376 — init.* path fields resolve when process cwd differs from --c
     const wfPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'new-milestone.md');
     const content = fs.readFileSync(wfPath, 'utf8');
 
+    // #5148: the synthesizer reads only the files written in this run, so its
+    // required_reading is filled from a directive whose lines are built from {research_dir}.
     assert.ok(content.includes(
-      '<required_reading>\n- {research_dir}/STACK.md\n- {research_dir}/FEATURES.md\n- {research_dir}/ARCHITECTURE.md\n- {research_dir}/PITFALLS.md\n</required_reading>'
-    ), 'research-synthesizer spawn must read from {research_dir}, not bare .planning/research/*.md literals');
+      'Fill `{required_reading_lines}` with one `- {research_dir}/{FILE}` line per file'
+    ), 'research-synthesizer required_reading lines must be built from {research_dir}, not bare .planning/research/*.md literals');
+    assert.ok(content.includes(
+      '<required_reading>\n{required_reading_lines}\n</required_reading>'
+    ), 'research-synthesizer spawn must read the {required_reading_lines} built from {research_dir}');
+    assert.doesNotMatch(content, /\.planning\/research\/(STACK|FEATURES|ARCHITECTURE|PITFALLS)\.md/,
+      'new-milestone.md must not reference bare .planning/research/<dimension>.md literals');
     assert.ok(content.includes('Write to: {research_dir}/SUMMARY.md'),
       'research-synthesizer spawn must write to {research_dir}/SUMMARY.md, not a bare literal');
 
+    // #5148: the SUMMARY.md line is kept only when research ran in this run.
     assert.ok(content.includes(
-      '<required_reading>\n- {project_path}\n- {requirements_path}\n- {research_dir}/SUMMARY.md (if exists)\n- {config_path}\n- {milestones_path}\n</required_reading>'
+      'Keep the `{research_dir}/SUMMARY.md` line only if research ran in Step 8'
+    ), 'roadmapper SUMMARY.md line must be conditional on research having run');
+    assert.ok(content.includes(
+      '<required_reading>\n- {project_path}\n- {requirements_path}\n- {research_dir}/SUMMARY.md\n- {config_path}\n- {milestones_path}\n</required_reading>'
     ), 'roadmapper spawn must read from {project_path}/{requirements_path}/{research_dir}/{config_path}/{milestones_path}, not bare .planning literals');
   });
 

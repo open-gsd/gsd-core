@@ -150,7 +150,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 
 | Property | Value |
 |----------|-------|
-| **Spawned by** | `/gsd-new-project` (after 4 researchers complete) |
+| **Spawned by** | `/gsd-new-project`, `/gsd-new-milestone` (after the researchers complete) |
 | **Parallelism** | Single instance (sequential after researchers) |
 | **Tools** | Read, Write, Bash, Skill |
 | **Model (balanced)** | Sonnet |

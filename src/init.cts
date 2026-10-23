@@ -1685,6 +1685,12 @@ function cmdInitNewMilestone(cwd: string, raw: boolean, options: Record<string, 
     // ADR-governed, tested contract.
     config_path: toPosixPath(path.join(planningDir(cwd), 'config.json')),
     research_dir: toPosixPath(path.join(planningRoot(cwd), 'research')),
+    // #5148: new-milestone.md's Step 8 researchers read the existing codebase
+    // map when one exists — absolute paths of the map files present, scoped
+    // like listCodebaseMapFiles (planningDir); empty when there is no map.
+    codebase_map_files: listCodebaseMapFiles(cwd).map((file) =>
+      toPosixPath(path.join(planningDir(cwd), 'codebase', file)),
+    ),
     milestones_path: toPosixPath(path.join(planningDir(cwd), 'MILESTONES.md')),
     // #4456: new-milestone.md's Step 6 stages the phase-archive move
     // (`git add .planning/milestones/ .planning/phases/`) — both
