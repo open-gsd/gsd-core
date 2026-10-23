@@ -1406,10 +1406,22 @@ describe('workflow call sites declare --files (#2269)', () => {
   const hasScopedFiles = (line) => {
     const all = tokenize(line);
     const cut = all.findIndex((t) => t.op);
-    const tokens = (cut === -1 ? all : all.slice(0, cut)).filter((t) => !t.redir).map((t) => t.value);
-    const filesIndex = tokens.indexOf('--files');
-    if (filesIndex === -1) return false;
-    return tokens.slice(filesIndex + 1).some((t) => !t.startsWith('--'));
+    const segment = (cut === -1 ? all : all.slice(0, cut)).filter((t) => !t.redir);
+    const tokens = segment.map((t) => t.value);
+    // #4208: on `commit`, `--files` and `--files-removed` are two path lists,
+    // each running to the NEXT list flag (routeCommit's collectListFlagValues);
+    // a deletion-only call that declares `--files-removed <paths>` is scoped,
+    // while a bare `--files` or `--files-removed` still has no value and fails.
+    // `commit-to-subrepo` has no second list: its `--files` slices to the end.
+    const isNotSubrepo = tokens.slice(Math.max(segment.findIndex(isGsdBinary), 0)).find((t) => COMMIT_TOKENS.has(t)) !== 'commit-to-subrepo';
+    const listFlags = isNotSubrepo ? ['--files', '--files-removed'] : [];
+    return (isNotSubrepo ? listFlags : ['--files']).some((flag) => tokens.some((t, i) => {
+      if (t !== flag) return false;
+      for (let j = i + 1; j < tokens.length && !listFlags.includes(tokens[j]); j += 1) {
+        if (!tokens[j].startsWith('--')) return true;
+      }
+      return false;
+    }));
   };
 
   // Usage-synopsis notation is documentation OF the CLI, never a call TO it:
@@ -1867,6 +1879,12 @@ describe('workflow call sites declare --files (#2269)', () => {
     assert.strictEqual(hasScopedFiles("gsd_run query commit 'docs: plan' --files .planning/PLAN.md"), true);
     // Unquoted messages reach the same cmdCommit and must behave identically.
     assert.strictEqual(hasScopedFiles('gsd_run query commit plan --files'), false);
+    // #4208: --files-removed is a declared scope on `commit` only, and needs a value.
+    assert.strictEqual(hasScopedFiles('gsd_run query commit plan --files-removed a.md'), true);
+    assert.strictEqual(hasScopedFiles('gsd_run query commit plan --files-removed'), false);
+    assert.strictEqual(hasScopedFiles('gsd_run query commit plan --files --files-removed a.md'), true);
+    assert.strictEqual(hasScopedFiles('gsd_run query commit plan --files-removed --files'), false);
+    assert.strictEqual(hasScopedFiles('gsd_run query commit-to-subrepo plan --files-removed a.md'), false);
     assert.strictEqual(hasScopedFiles('gsd_run query commit plan --files .planning/PLAN.md'), true);
 
     // The tokenizer's two backslash-escape branches, hand-pinned — an escaped
