@@ -42,6 +42,7 @@ module.exports = {
   "tests/ci-docs-guard-registry.test.cjs",
   "tests/ci-test-scope.test.cjs",
   "tests/cline-install.test.cjs",
+  "tests/code-review-fix-pipeline-regression.test.cjs",
   "tests/code-review-pipeline-regression.test.cjs",
   "tests/codex-config-agents.test.cjs",
   "tests/codex-config-hooks.test.cjs",

@@ -496,6 +496,7 @@
       "intel.cjs",
       "io.cjs",
       "jsonc-edit.cjs",
+      "lane-evidence.cjs",
       "learnings.cjs",
       "legacy-cleanup.cjs",
       "loop-host-contract.cjs",

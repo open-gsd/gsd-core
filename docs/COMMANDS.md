@@ -2370,6 +2370,26 @@ node gsd-tools.cjs state complete-phase --phase 3
 
 ---
 
+### `lane-evidence-clear`
+
+Remove the external-reviewer lane evidence that `/gsd-code-review` persists beside `REVIEW.md`
+(`<review>-lane-evidence.md`) together with the scratch lane directory it names. `code-review` calls it at
+`check_empty_scope` (clearing a previous run's stale evidence) and from `commit_review` unless an `--auto` run
+keeps the evidence for the fixer loop; `code-review-fix` calls it at every exit after `REVIEW_PATH` is computed
+(its phase-validation exits precede that, and a nonexistent phase has no evidence to remove). The guard exists in one place (#5019).
+
+**Prerequisites:** none — it reads no project state and needs no resolvable project root
+**Produces:** nothing on stdout; exit 0 whether or not there was anything to remove
+
+```bash
+gsd_run lane-evidence-clear "$REVIEW_PATH"
+```
+
+Line 1 of the evidence file is data, not a path: only a 6-character alphanumeric value names a
+`$TMPDIR/gsd-review-lanes-<suffix>` directory, and a symlinked directory is skipped.
+
+---
+
 ### `runtime-identity`
 
 Report the package coordinates of the `gsd-tools` that is executing. Used by the runtime

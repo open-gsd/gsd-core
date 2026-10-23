@@ -328,6 +328,7 @@ const template = require('./lib/template.cjs');
 const milestone = require('./lib/milestone.cjs');
 const commands = require('./lib/commands.cjs');
 const runtimeIdentity = require('./lib/runtime-identity.cjs');
+const laneEvidence = require('./lib/lane-evidence.cjs');
 const init = require('./lib/init.cjs');
 const frontmatter = require('./lib/frontmatter.cjs');
 const workstream = require('./lib/workstream.cjs');
@@ -1386,6 +1387,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // launcher preamble spawns it once per workflow run, so SDK bridge startup
     // would be a per-run tax on every workflow.
     runtimeIdentity.cmdRuntimeIdentity(raw);
+  }
+
+  function routeLaneEvidenceClear({ args, error }) {
+    // #5019: one owner for the lane-evidence removal fence (was six inline bash copies).
+    laneEvidence.cmdLaneEvidenceClear(args[1], error);
   }
 
   function routeSkillsRoot({ args, raw, error }) {
@@ -4856,6 +4862,7 @@ const HOST_COMMAND_ROUTERS = {
     'generate-slug': routeGenerateSlug,
     'current-timestamp': routeCurrentTimestamp,
     'runtime-identity': routeRuntimeIdentity,
+    'lane-evidence-clear': routeLaneEvidenceClear,
     'project-instruction-file': routeProjectInstructionFile,
     'list-todos': routeListTodos,
     'list-seeds': routeListSeeds,
@@ -5174,7 +5181,7 @@ const TOP_LEVEL_USAGE = 'Usage: gsd-tools <command> [args] [--raw] [--pick <fiel
   'config-ensure-section, config-get, config-new-project, config-path, config-set, migrate-config, normalize-test-command, resolve-package-manager, ' +
   'context-predicates, current-timestamp, detect-custom-files, docs-init, drift-guard, effort, extract-messages, find-phase, ' +
   'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
-  'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +
+  'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, lane-evidence-clear, ' +
   'capability, classify-confidence, git, learnings, list-seeds, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, planning, profile-questionnaire, ' +
   'profile-sample, progress, project-instruction-file, prompt-budget, quick-batch, quick-tasks-append, quick-tasks-migrate, requirements, research-plan, research-store, resolve-granularity, resolve-model, restore-custom-files, roadmap, runtime-identity, scaffold, smart-entry, state, ' +
   'config-set-model-profile, dispatch-capacity, dispatch-isolation, dispatch-should-flatten, inspect-dispatch-isolation, record-dispatch-isolation, estimate-calibrate, estimate-calibration, estimate-check, resolve-agent, resolve-dispatch-type, ' +
@@ -5210,6 +5217,8 @@ const SKIP_ROOT_RESOLUTION = new Set([
   // It is probed from whatever cwd a workflow happens to be in — including
   // outside any project — so it must never require a resolvable project root.
   'runtime-identity',
+  // #5019: removes files named by its argument; reads no project state.
+  'lane-evidence-clear',
   // #2844: verify-summary was previously skipped, leaving relative file-claim
   // paths resolved against the raw process.cwd() — invoking from a subdirectory
   // manufactured "missing files" on an otherwise-correct SUMMARY. It now goes
