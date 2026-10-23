@@ -348,6 +348,7 @@ module.exports = {
   "tests/workstream.test.cjs",
   "tests/worktree-cleanup.test.cjs",
   "tests/worktree-safety.test.cjs",
+  "tests/worktree-subdir-effective-root-4885.test.cjs",
   "tests/worktree.test.cjs",
   ],
 };
