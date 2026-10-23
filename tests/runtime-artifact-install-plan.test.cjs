@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { createRuntimeArtifactInstallPlan } = require('../gsd-core/bin/lib/runtime-artifact-install-plan.cjs');
+const { createRuntimeArtifactInstallPlan, createRuntimeArtifactUninstallPlan } = require('../gsd-core/bin/lib/runtime-artifact-install-plan.cjs');
 const { cleanup } = require('./helpers.cjs');
 
 function kind(name, destSubpath, stagedDir, calls) {
@@ -167,5 +167,27 @@ describe('createRuntimeArtifactInstallPlan', () => {
     assert.ok(fs.existsSync(path.join(result.plan.items[0].sourceDir, 'help.md')));
     assert.deepStrictEqual(result.plan.cleanupDirs, [result.plan.items[0].sourceDir]);
     for (const dir of result.plan.cleanupDirs) cleanup(dir);
+  });
+});
+
+
+describe('#5179 uninstall plan install roots', () => {
+  test('an empty-string home falls back to configDir', () => {
+    const configDir = path.join(os.tmpdir(), 'gsd-uninstall-plan-config');
+    const plan = createRuntimeArtifactUninstallPlan({
+      runtime: 'claude', configDir, scope: 'local',
+      kinds: [{ kind: 'agents', home: '', destSubpath: 'agents' }],
+    });
+    assert.deepStrictEqual(plan.items, [{ kind: 'agents', destDir: path.join(configDir, 'agents') }]);
+  });
+
+  test('a valid home keeps its alternate destination', () => {
+    const configDir = path.join(os.tmpdir(), 'gsd-uninstall-plan-config');
+    const alternateHome = path.join(os.tmpdir(), 'gsd-uninstall-plan-alternate');
+    const plan = createRuntimeArtifactUninstallPlan({
+      runtime: 'claude', configDir, scope: 'local',
+      kinds: [{ kind: 'agents', home: alternateHome, destSubpath: 'agents' }],
+    });
+    assert.deepStrictEqual(plan.items, [{ kind: 'agents', destDir: path.join(alternateHome, 'agents') }]);
   });
 });
