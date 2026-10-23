@@ -1486,7 +1486,7 @@ every other registered hook at this point).
 # named-query gate:
 GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_DIR}" "${PHASE_REQ_IDS}" --raw) && CHECK_EXIT=0 || CHECK_EXIT=$?
 ```
-OR, for a generic `predicate` gate (ADR-2008 / #2008), inline the predicate as compact JSON (note the `--phase-dir`/`--phase-req-ids` flags feed `${PHASE_DIR}`/`${PHASE_REQ_IDS}` interpolation):
+OR, for a generic `predicate` gate (ADR-2008 / #2008), inline the predicate as compact JSON (note the `--phase-dir`/`--phase-number`/`--phase-req-ids` flags feed `${PHASE_DIR}`/`${PHASE_NUMBER}`/`${PHASE_REQ_IDS}` interpolation):
 ```bash
 GATE_RESULT=$(gsd_run check predicate --predicate '<hook.check.predicate as JSON>' --phase-dir "${PHASE_DIR}" --phase-number "${PHASE_NUMBER}" --phase-req-ids "${PHASE_REQ_IDS}" --raw) && CHECK_EXIT=0 || CHECK_EXIT=$?
 ```
