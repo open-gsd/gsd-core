@@ -18,13 +18,16 @@ const path = require('node:path');
 
 const { runNode, formatSeamResult } = require('./helpers/process-seam.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { createTempDir, cleanup, writeAmbientCapabilityGate, TEST_HOME_SANDBOX_MARKER } = require('./helpers.cjs');
+const {
+  createTempDir, cleanup, writeAmbientCapabilityGate, installSpawnEnv, TEST_HOME_SANDBOX_MARKER,
+} = require('./helpers.cjs');
 
-// [file, --test-name-pattern]. The #4142 describe is the one verification-status
-// test that parses gsd-tools stderr as JSON; the adr857 file is run whole.
+// The #4142 describe is the one verification-status test that parses gsd-tools
+// stderr as JSON (the #5118 helper skips leading non-JSON lines, and the other
+// suites read stdout); the adr857 file is run whole.
 const TARGETS = [
-  ['verification-status.test.cjs', '#4142'],
-  ['adr857-core-without-capabilities.test.cjs', null],
+  { file: 'verification-status.test.cjs', namePattern: '#4142' },
+  { file: 'adr857-core-without-capabilities.test.cjs', namePattern: null },
 ];
 
 const homes = [];
@@ -44,32 +47,40 @@ function makeHome({ populated }) {
   return home;
 }
 
-function runTargetUnderHome([file, pattern], home) {
-  const env = { ...process.env, HOME: home, USERPROFILE: home, [TEST_HOME_SANDBOX_MARKER]: home };
-  delete env.NODE_TEST_CONTEXT;
-  delete env.GSD_HOME;
+function runTargetUnderHome({ file, namePattern }, home) {
+  // installSpawnEnv scrubs the config-location keys; the marker names the redirected
+  // home for src/real-home-guard.cts on hosts with no readable passwd entry.
+  const env = installSpawnEnv({ HOME: home, USERPROFILE: home, [TEST_HOME_SANDBOX_MARKER]: home });
+  delete env.NODE_TEST_CONTEXT; // run as a root test process, not a subtest of this one
   const args = ['--test', '--test-reporter=tap'];
-  if (pattern) args.push(`--test-name-pattern=${pattern}`);
+  if (namePattern) args.push(`--test-name-pattern=${namePattern}`);
   args.push(path.join(__dirname, file));
   const result = runNode(args, { cwd: path.join(__dirname, '..'), env, timeoutMs: INSTALL_TIMEOUT_MS });
   const count = (label) => {
-    const m = new RegExp(`^# ${label} (\\d+)$`, 'm').exec(result.stdout);
+    const m = new RegExp(`^# ${label} (\\d+)\\r?$`, 'm').exec(result.stdout);
     return m ? Number(m[1]) : null;
   };
   return { result, pass: count('pass'), fail: count('fail') };
 }
 
+// The empty-home run is the control for both tests of a target; run it once.
+const emptyRuns = new Map();
+function emptyHomeRun(target) {
+  if (!emptyRuns.has(target.file)) emptyRuns.set(target.file, runTargetUnderHome(target, makeHome({ populated: false })));
+  return emptyRuns.get(target.file);
+}
+
 describe('#5594 test files are hermetic against the host HOME', () => {
   for (const target of TARGETS) {
-    const [file] = target;
+    const { file } = target;
     test(`${file} passes with an empty home (control)`, () => {
-      const run = runTargetUnderHome(target, makeHome({ populated: false }));
+      const run = emptyHomeRun(target);
       assert.equal(run.fail, 0, `${formatSeamResult(run.result)}\n${run.result.stdout.slice(-3000)}`);
       assert.ok(run.pass > 0, `${file}: no tests executed`);
     });
 
     test(`${file} gives the same result with a defaults file and a user capability in HOME`, () => {
-      const empty = runTargetUnderHome(target, makeHome({ populated: false }));
+      const empty = emptyHomeRun(target);
       const populated = runTargetUnderHome(target, makeHome({ populated: true }));
       assert.equal(populated.fail, 0, `${formatSeamResult(populated.result)}\n${populated.result.stdout.slice(-3000)}`);
       assert.equal(populated.pass, empty.pass, `${file}: pass count differs between empty and populated home`);

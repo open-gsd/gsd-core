@@ -1470,6 +1470,9 @@ describe('#4142: phase complete verdict scopes bracket verification reports', ()
   test('a passed cross-phase stray cannot complete a bracket phase', (t) => {
     const projectDir = createTempGitProject('gsd-4142-phase-complete-');
     t.after(() => cleanup(projectDir));
+    // An empty home: the child must not read the developer's ~/.gsd (#5594).
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4142-home-'));
+    t.after(() => cleanup(home));
 
     fs.writeFileSync(
       path.join(projectDir, '.planning', 'config.json'),
@@ -1483,7 +1486,7 @@ describe('#4142: phase complete verdict scopes bracket verification reports', ()
     const result = runGsdTools(
       ['--json-errors', 'phase', 'complete', phaseDirName],
       projectDir,
-      homeSandboxEnv(projectDir),
+      homeSandboxEnv(home),
     );
 
     assert.equal(
