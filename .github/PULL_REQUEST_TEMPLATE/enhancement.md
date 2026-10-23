@@ -1,8 +1,8 @@
 ## Enhancement PR
 
 > **Using the wrong template?**
-> — Bug fix: use [fix.md](?template=fix.md)
-> — New feature: use [feature.md](?template=feature.md)
+> — Bug fix: use [fix.md](https://github.com/open-gsd/gsd-core/blob/next/.github/PULL_REQUEST_TEMPLATE/fix.md)
+> — New feature: use [feature.md](https://github.com/open-gsd/gsd-core/blob/next/.github/PULL_REQUEST_TEMPLATE/feature.md)
 
 ---
 
@@ -70,7 +70,7 @@ Closes #
 
 > CI enforces this — `lint:docs` fails any PR with an `Added` / `Changed` / `Deprecated` / `Removed`
 > changeset fragment that does not also touch at least one file under `docs/`.
-> See [CONTRIBUTING.md → Documentation Updates](../../CONTRIBUTING.md#documentation-updates-update-the-relevant-docs).
+> See [CONTRIBUTING.md → Documentation Updates](https://github.com/open-gsd/gsd-core/blob/next/CONTRIBUTING.md#documentation-updates--update-the-relevant-docs).
 
 - [ ] Updated the relevant file(s) under `docs/` to reflect this change
   - Behavior or output change → `docs/USER-GUIDE.md` and/or `docs/COMMANDS.md`

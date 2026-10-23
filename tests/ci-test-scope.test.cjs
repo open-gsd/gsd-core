@@ -26,6 +26,34 @@ function scopeFor(files) {
 }
 
 describe('ci-test-scope.cjs', () => {
+  test('PR templates and CONTRIBUTING.md select the template-link guard (#5427)', () => {
+    for (const f of ['.github/pull_request_template.md', '.github/PULL_REQUEST_TEMPLATE/feature.md', 'CONTRIBUTING.md']) {
+      const r = scopeFor([f]);
+      assert.ok(r.targeted_tests.includes('tests/pr-template-links.test.cjs'), f);
+      assert.strictEqual(r.code_changed, true, f);
+      assert.strictEqual(r.product_changed, false, f);
+      assert.strictEqual(r.full_matrix, false, f);
+    }
+  });
+
+  test('template-link doc + coarse-matching docs run only the template-link tests (#5427)', () => {
+    const only = scopeFor(['CONTRIBUTING.md']).targeted_tests;
+    const r = scopeFor(['CONTRIBUTING.md', 'docs/installer-migrations.md']);
+    assert.deepStrictEqual(r.targeted_tests, only);
+    assert.strictEqual(r.code_changed, true);
+    assert.strictEqual(r.full_matrix, false);
+  });
+
+  test('non-template docs and issue templates do not select the template-link guard (#5427)', () => {
+    for (const f of [
+      'docs/usage.md', '.github/ISSUE_TEMPLATE/bug_report.yml',
+      // near-miss names: prefix/exact-match boundary of isTemplateLinkDoc
+      '.github/PULL_REQUEST_TEMPLATES/x.md', '.github/pull_request_template.md.bak', 'CONTRIBUTING.mdx',
+    ]) {
+      assert.ok(!scopeFor([f]).targeted_tests.includes('tests/pr-template-links.test.cjs'), f);
+    }
+  });
+
   test('docs-only changes: code_changed is false, product_changed false (skip matrix entirely)', () => {
     const result = scopeFor(['docs/usage.md']);
     assert.strictEqual(result.code_changed, false,

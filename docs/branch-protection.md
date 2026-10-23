@@ -239,6 +239,14 @@ tsconfig*.json
 .github/rulesets/**
 ```
 
+These are also code-touching but lightweight (test-inert) paths:
+
+```
+CONTRIBUTING.md
+.github/pull_request_template.md
+.github/PULL_REQUEST_TEMPLATE/**
+```
+
 This list should stay aligned with changeset/docs policy where those gates care
 about the same user-facing surfaces.
 

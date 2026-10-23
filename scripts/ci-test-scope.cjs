@@ -69,6 +69,11 @@ const WORKFLOW_LINT_TESTS = [
   'tests/lint-pr-check-project-dir.test.cjs',
 ];
 
+// PR templates + CONTRIBUTING.md (the anchor target) are docs, but their links are guarded by a test:
+// they count as a lightweight code change (like inert CI) so that test is selected.
+const isTemplateLinkDoc = filePath => filePath === 'CONTRIBUTING.md' ||
+  filePath === '.github/pull_request_template.md' || filePath.startsWith('.github/PULL_REQUEST_TEMPLATE/');
+
 const RULES = [
   {
     name: 'workflow automation',
@@ -202,6 +207,11 @@ const RULES = [
       'tests/precommit-alias-drift-hook.test.cjs',
       'tests/prepush-enterprise-email-hook.test.cjs',
     ],
+  },
+  {
+    name: 'PR template links (#5427)',
+    match: isTemplateLinkDoc,
+    tests: ['tests/pr-template-links.test.cjs'],
   },
   {
     name: 'changeset tooling',
@@ -547,9 +557,12 @@ function reachesConformanceTierOrSeam(file, deps = {}) {
 // the real, committed generated file.
 function classify(files, reachabilityDeps = {}) {
   const targeted = new Set();
+  // Tests pulled in by plain docs via coarse content rules (e.g. docs/installer-migrations.md
+  // matching the installer rule); dropped when only lightweight changes accompany them.
+  const docTargeted = new Set();
   const reasons = [];
   let productOrPipelineChanged = false; // product/pipeline code (excludes docs)
-  let inertCiChanged = false;           // inert workflow files
+  let lightweightChanged = false;       // inert workflow files / PR-template docs
   let fullMatrix = false;
 
   for (const file of files) {
@@ -576,9 +589,9 @@ function classify(files, reachabilityDeps = {}) {
       productOrPipelineChanged = true;
     }
 
-    // Inert workflow files set a lightweight signal.
-    if (isInertCi(file)) {
-      inertCiChanged = true;
+    // Inert workflow files and PR-template docs set a lightweight signal.
+    if (isInertCi(file) || isTemplateLinkDoc(file)) {
+      lightweightChanged = true;
     }
 
     if (file.startsWith('tests/') && file.endsWith('.test.cjs')) {
@@ -614,9 +627,10 @@ function classify(files, reachabilityDeps = {}) {
       reasons.push(`${file}: reachability classifier definition changed`);
     }
 
+    const plainDoc = !isInertCi(file) && !isTemplateLinkDoc(file) && (file.startsWith('docs/') || file.endsWith('.md'));
     for (const rule of RULES) {
       if (rule.match(file)) {
-        addAll(targeted, rule.tests);
+        addAll(plainDoc ? docTargeted : targeted, rule.tests);
         reasons.push(`${file}: ${rule.name}`);
         if (rule.fullMatrix) fullMatrix = true;
         // #4641: a rule that pulls in a test file matching a Windows-sensitive
@@ -660,9 +674,11 @@ function classify(files, reachabilityDeps = {}) {
   ]);
   for (const f of SCOPED_LANE_EXCLUDE) { targeted.delete(f); }
 
-  // code_changed: true when product/pipeline OR inert CI changed.
+  if (!lightweightChanged || productOrPipelineChanged) addAll(targeted, [...docTargeted]);
+
+  // code_changed: true when product/pipeline OR lightweight (inert CI, PR-template doc) changed.
   // Docs-only PRs (neither flag set) get code_changed=false → full matrix skip.
-  const codeChanged = productOrPipelineChanged || inertCiChanged;
+  const codeChanged = productOrPipelineChanged || lightweightChanged;
 
   const targetedTests = existingTests([...targeted].sort());
 
@@ -672,8 +688,8 @@ function classify(files, reachabilityDeps = {}) {
     targetedTests.push('unit');
   }
 
-  // Inert-CI-only: full_matrix must be false (override any RULES that fired).
-  if (inertCiChanged && !productOrPipelineChanged) {
+  // Inert-CI / PR-template-only: full_matrix must be false (override any RULES that fired).
+  if (lightweightChanged && !productOrPipelineChanged) {
     fullMatrix = false;
   }
 

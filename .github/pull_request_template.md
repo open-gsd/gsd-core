@@ -6,9 +6,9 @@ Select the template that matches your PR:
 
 | PR Type | When to use | Template link |
 |---------|-------------|---------------|
-| **Fix** | Correcting a bug, crash, or behavior that doesn't match documentation | [Use fix template](?template=PULL_REQUEST_TEMPLATE/fix.md) |
-| **Enhancement** | Improving an existing feature — better output, expanded edge cases, performance | [Use enhancement template](?template=PULL_REQUEST_TEMPLATE/enhancement.md) |
-| **Feature** | Adding something new — new command, workflow, concept, or integration | [Use feature template](?template=PULL_REQUEST_TEMPLATE/feature.md) |
+| **Fix** | Correcting a bug, crash, or behavior that doesn't match documentation | [Use fix template](https://github.com/open-gsd/gsd-core/blob/next/.github/PULL_REQUEST_TEMPLATE/fix.md) |
+| **Enhancement** | Improving an existing feature — better output, expanded edge cases, performance | [Use enhancement template](https://github.com/open-gsd/gsd-core/blob/next/.github/PULL_REQUEST_TEMPLATE/enhancement.md) |
+| **Feature** | Adding something new — new command, workflow, concept, or integration | [Use feature template](https://github.com/open-gsd/gsd-core/blob/next/.github/PULL_REQUEST_TEMPLATE/feature.md) |
 
 ---
 
@@ -29,9 +29,9 @@ For **features**: the linked issue must have the `approved-feature` label before
 
 PRs that arrive without a labeled, approved issue are closed without review.
 
-> **No draft PRs.** Draft PRs are automatically closed. Only open a PR when your code is complete, tests pass, and the correct template is used. See [CONTRIBUTING.md](../CONTRIBUTING.md).
+> **No draft PRs.** Draft PRs are automatically closed. Only open a PR when your code is complete, tests pass, and the correct template is used. See [CONTRIBUTING.md](https://github.com/open-gsd/gsd-core/blob/next/CONTRIBUTING.md).
 
-See [CONTRIBUTING.md](../CONTRIBUTING.md) for the full process.
+See [CONTRIBUTING.md](https://github.com/open-gsd/gsd-core/blob/next/CONTRIBUTING.md) for the full process.
 
 ---
 
