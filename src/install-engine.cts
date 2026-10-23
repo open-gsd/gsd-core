@@ -52,6 +52,7 @@ import userArtifactStaging = require('./user-artifact-staging.cjs');
 // module-level doc comment on `isGlobalScope` for why the projection is
 // centralized rather than eliminated).
 import { isGlobalScope, type InstallScope } from './install-scope.cjs';
+import { stampInstalledContent } from './args-terminator.cjs';
 
 const { processAttribution } = runtimeArtifactConversion;
 // resolveRuntimeArtifactLayout: accessed via module ref (not destructured) so
@@ -264,7 +265,8 @@ function applyOpencodeFamilyPathPrefix(content: string, runtime: string, pathPre
   content = content.replace(/\.\/\.claude\//g, `./${getDirName(runtime)}/`);
   content = content.replace(/~\/\.opencode\//g, pathPrefix);
   content = content.replace(/~\/\.kilo\//g, pathPrefix);
-  return content;
+  // #5637: the typed-text capture heredoc ends at a terminator the typed text cannot know.
+  return stampInstalledContent(content);
 }
 
 /**

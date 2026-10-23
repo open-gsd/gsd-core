@@ -8486,7 +8486,9 @@ describe('#4377: --relative-includes emits project-relative @ includes for a loc
           .split(`${absRoot}/.claude/`).join('.claude/')
           .split(`${absRoot}/.claude`).join('.claude');
       }
-      if (normalized !== rel.get(name)) mismatched.push({ name, normalized, actual: rel.get(name) });
+      // #5637: each install stamps its own random heredoc terminator; fold it back to the canonical token.
+      const foldNonce = (text) => text.replace(/\b(GSD_(?:QUICK_BATCH_)?ARGS_END)_[0-9a-f]{32}\b/g, '$1');
+      if (foldNonce(normalized) !== foldNonce(rel.get(name))) mismatched.push({ name, normalized, actual: rel.get(name) });
     }
     // Report the FIRST divergence as text, not just a list of filenames. A
     // bare file list says a difference exists somewhere in 236 files and

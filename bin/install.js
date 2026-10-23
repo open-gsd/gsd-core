@@ -63,6 +63,8 @@ const { composeWorkflow } = require('../gsd-core/bin/lib/workflow-fragments.cjs'
 // #3072: THE shared composition-scope predicate (also consumed by the served
 // MCP catalog, src/mcp-catalog.cts) — see the comment at its call site below.
 const { shouldCompose } = require('../gsd-core/bin/lib/mcp-catalog.cjs');
+// #5637: per-install terminator for the typed-text capture heredoc.
+const { armArgsNonce, disarmArgsNonce, stampInstalledContent } =require('../gsd-core/bin/lib/args-terminator.cjs');
 const runtimeArtifactConversion = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
 const { escapeRegex: escapeRegExp } = require('../gsd-core/bin/lib/pattern.cjs');
 // #2873: cross-scope shadow detection — reports (never fails) when a
@@ -8138,6 +8140,8 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
       if (shouldCompose(srcPath)) {
         content = composeWorkflow(content, { sourcePath: srcPath });
       }
+      // #5637: the typed-text capture heredoc ends at a terminator the typed text cannot know.
+      content = stampInstalledContent(content);
 
       content = filterRuntimeNotesForTarget(content, runtime);
 
@@ -11108,6 +11112,16 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     : hostBehaviorsFor(runtime).localTargetIsProjectRoot
       ? process.cwd()
       : path.join(process.cwd(), dirName);
+
+  // #5637: this install's typed-text heredoc terminator: the directory's existing nonce on a
+  // reinstall (so it changes nothing), a fresh one otherwise.
+  if (process.env.GSD_ARGS_NONCE_OFF !== '1') {
+    // Only a global install reuses its nonce; a project-local dir may be a committed clone.
+    armArgsNonce(targetDir, isGlobal);
+  } else {
+    disarmArgsNonce();
+    console.warn('  GSD_ARGS_NONCE_OFF=1: the typed-text heredoc terminator is NOT randomized in this install.');
+  }
 
   // #5161: this install's record of the skill dirs it writes starts empty,
   // whichever install path it takes.

@@ -36,7 +36,7 @@ Each dispatch starts a separate `pi` process that runs the role with its own pro
 
 Limits:
 
-- **One level deep.** A dispatched role has no `gsd_dispatch` tool, so a role cannot spawn another role. `/gsd-debug` needs that (its session manager spawns `gsd-debugger`), so `/skill:gsd-debug` prints "unsupported on Pi: needs nested dispatch; Pi dispatch is flat" and stops. Run `/gsd-debug` in a runtime that can dispatch nested agents; the debug sessions it writes are read from `.planning/`.
+- **One level deep.** A dispatched role has no `gsd_dispatch` tool, so a role cannot spawn another role. `/gsd-debug` needs that (its session manager spawns `gsd-debugger`), so only `/skill:gsd-debug list` and `/skill:gsd-debug status <slug>`, which start no agent, run on Pi. Every other form prints that it cannot run on Pi (needs nested dispatch; Pi dispatch is flat) and stops. Run `/gsd-debug` in a runtime that can dispatch nested agents to start or continue a session; `list` and `status` read the sessions it writes from `.planning/debug/`.
 - **No per-call model or background run.** The role uses the model of the Pi session that dispatches it, and a dispatch blocks until the role finishes.
 - **GSD roles only.** The one workflow step that asks for the host's generic `general-purpose` agent (the assumptions mode of `/skill:gsd-discuss-phase`) has no role file, so `gsd_dispatch` refuses it with `role-unresolved` and the skill stops that step.
 - **Installed roles only.** `gsd_dispatch` reads the role from your GSD install, never from the project's `.pi/agents/`, and refuses a role file that no longer matches the install's manifest.

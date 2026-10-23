@@ -189,6 +189,7 @@ export default tseslint.config(
       // issue #1953: tsc-generated runtime artifact — lint the src/refactor-trigger-command-router.cts source.
       'gsd-core/bin/lib/refactor-trigger-command-router.cjs',
       'gsd-core/bin/lib/api-coverage.cjs',
+      'gsd-core/bin/lib/args-terminator.cjs',
       'gsd-core/bin/lib/artifacts.cjs',
       'gsd-core/bin/lib/assumption-delta.cjs',
       'gsd-core/bin/lib/state-transition.cjs',

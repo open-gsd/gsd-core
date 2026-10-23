@@ -355,6 +355,7 @@
       "agent-command-router.cjs",
       "agent-install-check.cjs",
       "api-coverage.cjs",
+      "args-terminator.cjs",
       "artifacts.cjs",
       "assumption-delta.cjs",
       "audit-command-router.cjs",

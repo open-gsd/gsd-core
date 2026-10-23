@@ -16,6 +16,7 @@ module.exports = {
   "tests/agent-skills.test.cjs",
   "tests/api-coverage-gate-e2e.test.cjs",
   "tests/api-coverage.test.cjs",
+  "tests/args-terminator-nonce.test.cjs",
   "tests/ask-user-questions-fallback.test.cjs",
   "tests/audit-command-cutover.test.cjs",
   "tests/broken-windows.test.cjs",
