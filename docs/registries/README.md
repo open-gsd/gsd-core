@@ -235,12 +235,13 @@ A `role: "runtime"` capability that also carries a `reviewer` body (a host that 
 
 Registration is a **documentation PR**, per [CONTRIBUTING.md → Documentation Updates](../../CONTRIBUTING.md#documentation-updates--update-the-relevant-docs):
 
-1. **Fork** the repository.
-2. **Open the entry's Discussion** in this repository's `EoS Registry` Discussions category (the category's scope and format are described under [Ranking + comments](#ranking--comments)). Copy the thread's URL: it fills the entry's required `discussion` field, so the thread must exist *before* the PR is opened.
-3. **Edit** `docs/registries/capabilities.json` (Capability Registry), `docs/registries/eos.json` (EoS Registry), or `docs/registries/reviewers.json` (Reviewer Lane Registry) and append exactly one entry matching the [schema](#entry-schema) above.
-4. **Run `npm run gen:registry`** to regenerate the corresponding `docs/registries/capability-registry.md`, `docs/registries/eos-registry.md`, or `docs/registries/reviewer-registry.md`. Commit both the JSON source and the regenerated markdown.
-5. **Open a PR** from a `docs/<issue#>-<slug>` branch (see CONTRIBUTING.md branch-naming conventions) using the [registry-entry PR template](../../.github/PULL_REQUEST_TEMPLATE/registry-entry.md).
-6. A maintainer reviews and merges. The only gate is whether the entry is a real, linkable solution with all required fields present — not a quality judgment (see [Non-endorsement stance](#non-endorsement-stance)).
+1. **Open an issue for the change** ([new issue](https://github.com/open-gsd/gsd-core/issues/new/choose) — choose Feature Request or Enhancement, not Documentation Issue) and wait for a maintainer to apply `approved-feature` or `approved-enhancement` (the gate also accepts `confirmed-bug`). External PRs without a closing link to an approved issue are auto-closed.
+2. **Fork** the repository.
+3. **Open the entry's Discussion** in this repository's `EoS Registry` Discussions category (the category's scope and format are described under [Ranking + comments](#ranking--comments)). Copy the thread's URL: it fills the entry's required `discussion` field, so the thread must exist *before* the PR is opened.
+4. **Edit** `docs/registries/capabilities.json` (Capability Registry), `docs/registries/eos.json` (EoS Registry), or `docs/registries/reviewers.json` (Reviewer Lane Registry) and append exactly one entry matching the [schema](#entry-schema) above.
+5. **Run `npm run gen:registry`** to regenerate the corresponding `docs/registries/capability-registry.md`, `docs/registries/eos-registry.md`, or `docs/registries/reviewer-registry.md`. Commit both the JSON source and the regenerated markdown.
+6. **Open a PR** from a `docs/<issue#>-<slug>` branch (`<issue#>` = the approved issue; see CONTRIBUTING.md branch-naming conventions) using the [registry-entry PR template](../../.github/PULL_REQUEST_TEMPLATE/registry-entry.md) (`?template=registry-entry.md` on the compare URL). Title `docs(#<issue#>): summary`; body `Closes #<issue#>` (`Refs` does not satisfy the gate). Add a `.changeset/` fragment typed `Added` — `docs` titles are omitted from release notes, the fragment is what lists the entry.
+7. A maintainer reviews and merges. The only gate is whether the entry is a real, linkable solution with all required fields present — not a quality judgment (see [Non-endorsement stance](#non-endorsement-stance)).
 
 **One entry = one PR.** Do not bundle multiple registry additions, updates, or removals into a single PR.
 
