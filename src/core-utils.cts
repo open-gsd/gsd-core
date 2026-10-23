@@ -597,4 +597,5 @@ export = {
   findOrphanSummaries,
   summaryPairsWithAnyPlan,
   planRowPattern,
+  summaryCandidates,
 };

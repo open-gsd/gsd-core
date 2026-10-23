@@ -189,7 +189,31 @@ Verify the work is ready to ship:
    - **`blocking == false`** (advisory) → never halts. If `block == true` or the result carries a non-empty message, print `⚠ {hook.capId} advisory: {message}`, then continue.
    - **`blocking == true` and `block == false`** → continue silently.
 
-   **Step dispatch** (unless a blocking gate halted): `kind == "step"` per @gsd-core/references/loop-hook-dispatch.md; honor `consumes` (skip the hook if a consumed artifact is absent) and treat `onError: halt` as `skip` with a warning, since steps never block ship. ⚠ Validate `ref.command` and `ref.agent` (against `^[A-Za-z0-9][A-Za-z0-9._-]*$`) in-context before any shell use or dispatch; skip a hook that fails. Then continue to the `push_branch` step.
+   **Step dispatch** (unless a blocking gate halted): `kind == "step"` per @gsd-core/references/loop-hook-dispatch.md; honor `consumes` (skip the hook if a consumed artifact is absent) and treat `onError: halt` as `skip` with a warning, since steps never block ship. ⚠ Validate `ref.command` and `ref.agent` (against `^[A-Za-z0-9][A-Za-z0-9._-]*$`) in-context before any shell use or dispatch; skip a hook that fails. Then continue to the `seal_tdd_review` step.
+</step>
+
+<step name="seal_tdd_review">
+Seal TDD review evidence before push (squash merge keeps only the branch tip). No-op without `type: tdd` plans; with `commit_docs` false it only warns:
+
+```bash
+if [ "$(gsd_run query config-get commit_docs --raw 2>/dev/null || echo "true")" != false ]; then
+  SEAL="${PHASE_DIR}/TDD-REVIEW-SEAL.json"
+  OUT=$(gsd_run check tdd.review-checkpoint "${PHASE_NUMBER}" --record --pick tddPlans) && REC=0 || REC=$?
+  if [ "$REC" != 0 ]; then
+    echo "WARNING: TDD review could not record the seal; nothing was committed." >&2
+  elif [ ! -f "$SEAL" ]; then
+    case "$OUT" in 0) ;; *) echo "WARNING: no $SEAL (TDD review failed or was not evaluable); the squash will lose RED/GREEN credit." >&2 ;; esac
+  elif git check-ignore -q "$SEAL"; then
+    echo "WARNING: $SEAL is gitignored; the squash will not carry it." >&2
+  elif [ -n "$(git status --porcelain -- "$SEAL")" ]; then
+    git add "$SEAL"; git commit -m "docs(${PHASE_NUMBER}): seal TDD review evidence" -- "$SEAL" || { echo "ERROR: TDD seal commit failed" >&2; exit 1; }
+  fi
+else
+  case "$(gsd_run check tdd.review-checkpoint "${PHASE_NUMBER}" --pick tddPlans 2>/dev/null)" in 0) ;; *) echo "WARNING: commit_docs is false, so no TDD review seal was written; the squash will lose RED/GREEN credit." >&2 ;; esac
+fi
+```
+
+Commit fails → stop; do not push. Then continue to the `push_branch` step.
 </step>
 
 <step name="push_branch">
