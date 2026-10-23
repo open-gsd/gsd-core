@@ -8766,9 +8766,14 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   }
   // Codex's hooks.json goes through the same policy at step 1a, after skills,
   // agents and config.toml are already handled, so it is checked here too,
-  // and likewise only when step 1a has GSD hooks to remove from it.
+  // and likewise only when step 1a has GSD hooks to remove from it. The
+  // predicate also answers true for a file it cannot read or parse, which
+  // step 1a would then fail on, so the same bounded read and parse run here
+  // and an oversized, non-regular or unparseable hooks.json stops uninstall
+  // before anything is removed.
   if (hostBehaviorsFor(runtime).tomlConfigInstall && codexHooksJsonHasGsdHooks(targetDir)) {
-    resolveSymlinkedLeafWritePath(targetDir, path.join(targetDir, 'hooks.json'), 'hooks.json at');
+    const hooksJsonWritePath = resolveSymlinkedLeafWritePath(targetDir, path.join(targetDir, 'hooks.json'), 'hooks.json at');
+    hooksSurface.readCodexHooksJsonFile(hooksJsonWritePath);
   }
 
   // #786: AGENTS.md lives at the repo root (outside targetDir) for local Copilot
