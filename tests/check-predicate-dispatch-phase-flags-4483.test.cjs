@@ -17,16 +17,19 @@ const { readFileNormalized } = require('./helpers.cjs');
 const WF = path.join(__dirname, '..', 'gsd-core', 'workflows');
 
 // [label, file parts, flag -> the live variable it must carry]. These are the values each file holds at
-// its dispatch; verify-work.md holds only PHASE_DIR there (PHASE_NUMBER is first assigned after its
-// verify:pre dispatch and PHASE_REQ_IDS is never assigned), and ship.md never assigns PHASE_REQ_IDS.
+// its dispatch; verify-work.md holds PHASE_DIR and, as lowercase `phase_number`, the number there (PHASE_REQ_IDS is
+// never assigned), and ship.md never assigns PHASE_REQ_IDS.
 const DIR = ['--phase-dir', '${PHASE_DIR}'];
 const NUM = ['--phase-number', '${PHASE_NUMBER}'];
 const REQ = ['--phase-req-ids', '${PHASE_REQ_IDS}'];
+// verify-work.md's initialize step holds the init fields as lowercase shell variables (#5289).
+const NUM_LC = ['--phase-number', '${phase_number}'];
 const DISPATCHES = [
   ['execute:post (verify-phase-goal)', ['execute-phase', 'steps', 'verify-phase-goal.md'], [DIR, NUM]],
   ['plan-phase gate dispatch', ['plan-phase.md'], [DIR, NUM, REQ]],
   ['ship gate dispatch', ['ship.md'], [DIR, NUM]],
-  ['verify-work verify:pre dispatch', ['verify-work.md'], [DIR]],
+  ['verify-work verify:pre dispatch', ['verify-work.md'], [DIR, NUM_LC]],
+  ['execute:wave:post (wave-post-gate-hooks)', ['execute-phase', 'steps', 'wave-post-gate-hooks.md'], [DIR, NUM]],
 ];
 
 const dispatchLines = (text) => text.split('\n').filter((l) => l.includes('gsd_run check predicate'));
