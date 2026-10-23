@@ -70,7 +70,8 @@ function installForPi(configDir) {
     timeout: INSTALL_TIMEOUT_MS,
     windowsHide: true,
     // sandboxed HOME: the installer writes GSD's global defaults store under $HOME/.gsd
-    env: installSpawnEnv({ PI_CODING_AGENT_DIR: configDir }),
+    // The templates ship canonical, so the installer output they are compared with is unstamped (#5637).
+    env: installSpawnEnv({ PI_CODING_AGENT_DIR: configDir, GSD_ARGS_NONCE_OFF: '1' }),
   });
   assert.equal(res.status, 0, `installer failed: ${(res.stderr || res.stdout || '').slice(-600)}`);
 }

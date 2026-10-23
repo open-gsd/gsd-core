@@ -232,8 +232,9 @@ describe('#5637 typed text that names the terminator (real shells)', () => {
 describe('#5637 what an install writes', () => {
   const BARE_RE = /^GSD_(?:QUICK_BATCH_)?ARGS_END\r?$|<<'GSD_(?:QUICK_BATCH_)?ARGS_END'/m;
   const STAMPED_RE = /^GSD_ARGS_END_[0-9a-f]{32}\r?$/m;
-  // The re-materialization corpus under gsd-core/commands carries the install's nonce too, so /gsd-surface keeps it.
-  const isCorpus = () => false;
+  // The raw corpus under gsd-core/commands and gsd-core/agents is hash-verified against the install manifest
+  // before /gsd-surface trusts it, so it stays canonical; /gsd-surface re-stamps what it re-stages.
+  const isCorpus = (rel) => rel.startsWith(`gsd-core${path.sep}commands${path.sep}`) || rel.startsWith(`gsd-core${path.sep}agents${path.sep}`);
 
   function installedMarkdown(configDir) {
     const files = [];

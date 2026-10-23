@@ -175,20 +175,6 @@ function syncRuntimeSurfaceCorpus(source: string, destination: string, configDir
   installFs().cpSync(source, destination, { recursive: true });
 }
 
-/** Stamp the armed typed-text terminator into every `.md` under `root`; a no-op when no nonce is armed. */
-function stampCorpusTree(root: string): void {
-  for (const entry of installFs().readdirSync(root, { withFileTypes: true })) {
-    const full = path.join(root, entry.name);
-    if (entry.isDirectory()) {
-      stampCorpusTree(full);
-    } else if (entry.isFile() && entry.name.endsWith('.md')) {
-      const before = installFs().readFileSync(full, 'utf8');
-      const after = stampInstalledContent(before);
-      if (after !== before) installFs().writeFileSync(full, after);
-    }
-  }
-}
-
 /**
  * Provision the raw, installation-owned input needed to re-materialize a
  * global Runtime Surface after the executing package tree disappears.
@@ -216,9 +202,6 @@ function provisionRuntimeSurfaceCorpus(
     const source = runtimeArtifactLayout.findInstallSourceRoot();
     const destination = path.join(corpusRoot, 'commands', 'gsd');
     syncRuntimeSurfaceCorpus(source, destination, configDir, 'gsd-core/commands/gsd/');
-    // #5637: /gsd-surface re-stages commands and skills from this corpus in a process that never
-    // armed a nonce, so the corpus carries the install's terminator for the re-stage to keep.
-    stampCorpusTree(destination);
   }
   if (required.has('agents')) {
     const source = path.join(executingPackageRoot(), 'agents');
