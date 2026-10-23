@@ -842,16 +842,17 @@ describe('bug #3678 — executor must respect commit_docs:false', () => {
 const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const fc = require('./helpers/fast-check-setup.cjs');
-const { cleanup, createTempGitProject, captureFdSync } = require('./helpers.cjs');
+const { cleanup, createTempGitProject, captureFdSync, runGsdTools } = require('./helpers.cjs');
 const { seedPhase } = require('./fixtures/index.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const commands = require('../gsd-core/bin/lib/commands.cjs');
 const configCli = require('../gsd-core/bin/lib/config.cjs');
-const { loadConfigResolved, CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/config-loader.cjs');
+const { loadConfigResolved, CONFIG_DEFAULTS, CONFIG_REASON } = require('../gsd-core/bin/lib/config-loader.cjs');
 const io = require('../gsd-core/bin/lib/io.cjs');
 const { ExitError } = require('../gsd-core/bin/lib/cli-exit.cjs');
 const { PHASE_NUMBER_TOKEN_SOURCE } = require('../gsd-core/bin/lib/phase-id.cjs');
@@ -1302,15 +1303,20 @@ describe('#3587 per-phase commit_docs override', () => {
  */
 describe('#5470 config-get commit_docs returns the runtime-resolved policy', () => {
   let tmpDir;
-  // Both variables redirect which config.json the loader reads, so a value
-  // inherited from the developer's shell would point every case elsewhere.
-  const SCOPE_VARS = ['GSD_PROJECT', 'GSD_WORKSTREAM'];
+  let gsdHome;
+  // GSD_PROJECT and GSD_WORKSTREAM redirect which config.json the loader reads,
+  // and GSD_HOME is where it finds the global defaults file it falls back to
+  // when there is no project config, so a value inherited from the developer's
+  // shell would point every case elsewhere.
+  const SCOPE_VARS = ['GSD_PROJECT', 'GSD_WORKSTREAM', 'GSD_HOME'];
   let savedScope;
 
   beforeEach(() => {
     tmpDir = createTempGitProject();
+    gsdHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-home-5470-'));
     savedScope = SCOPE_VARS.map((name) => [name, process.env[name]]);
     for (const name of SCOPE_VARS) delete process.env[name];
+    process.env.GSD_HOME = gsdHome;
   });
   afterEach(() => {
     for (const [name, value] of savedScope) {
@@ -1318,6 +1324,7 @@ describe('#5470 config-get commit_docs returns the runtime-resolved policy', () 
       else process.env[name] = value;
     }
     cleanup(tmpDir);
+    cleanup(gsdHome);
   });
 
   function configGet(keyPath, defaultValue) {
@@ -1360,6 +1367,68 @@ describe('#5470 config-get commit_docs returns the runtime-resolved policy', () 
   test('--default never outranks the resolved policy', () => {
     writeConfig(tmpDir, { planning: { commit_docs: false } });
     assert.strictEqual(configGet('commit_docs', 'true'), 'false');
+  });
+
+  // The loader always resolves commit_docs, so config-get now answers in states
+  // where the literal walk failed. Each such state is pinned to the value the
+  // runtime resolves in it.
+  function runtimeCommitDocs() {
+    return loadConfigResolved(tmpDir, { workstream: null, persist: false }).config.commit_docs;
+  }
+
+  test('with no .planning/ directory, both keys read the default rather than "No config.json"', () => {
+    cleanup(path.join(tmpDir, '.planning'));
+    assert.strictEqual(runtimeCommitDocs(), true);
+    assert.strictEqual(configGet('commit_docs'), 'true');
+    assert.strictEqual(configGet('planning.commit_docs'), 'true');
+  });
+
+  test('with no project config, the global defaults file is what reads back', () => {
+    cleanup(path.join(tmpDir, '.planning'));
+    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ commit_docs: false }));
+    assert.strictEqual(runtimeCommitDocs(), false);
+    assert.strictEqual(configGet('commit_docs'), 'false');
+  });
+
+  test('an unparseable config.json reads the loader fallback, which the loader reports as degraded', (t) => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), '{ not json');
+    // The loader warns on stderr that the file was not applied.
+    t.mock.method(process.stderr, 'write', () => true);
+    const resolution = loadConfigResolved(tmpDir, { workstream: null, persist: false });
+    assert.strictEqual(resolution.degraded, true);
+    assert.strictEqual(resolution.reason, CONFIG_REASON.CONFIG_UNPARSEABLE);
+    assert.strictEqual(configGet('commit_docs'), String(resolution.config.commit_docs));
+  });
+
+  test('multiRepo: true with detected sub-repos reads false through both keys', () => {
+    for (const name of ['app', 'lib']) fs.mkdirSync(path.join(tmpDir, name, '.git'), { recursive: true });
+    writeConfig(tmpDir, { multiRepo: true });
+    assert.strictEqual(runtimeCommitDocs(), false);
+    assert.strictEqual(configGet('commit_docs'), 'false');
+    assert.strictEqual(configGet('planning.commit_docs'), 'false');
+  });
+
+  test('commit_docs written as null prints the runtime null through both keys, as the flat key did', () => {
+    writeConfig(tmpDir, { commit_docs: null });
+    assert.strictEqual(runtimeCommitDocs(), null);
+    assert.strictEqual(configGet('commit_docs'), 'null');
+    assert.strictEqual(configGet('planning.commit_docs'), 'null');
+  });
+
+  test('without --raw, both keys print the resolved value as JSON', () => {
+    writeConfig(tmpDir, { planning: { commit_docs: false } });
+    for (const key of ['commit_docs', 'planning.commit_docs']) {
+      const out = captureFdWrite(1, () => configCli.cmdConfigGet(tmpDir, key, false, undefined));
+      assert.strictEqual(JSON.parse(out), false, key);
+    }
+  });
+
+  test('the CLI exits 0 with the resolved value where the literal walk exited 1', () => {
+    writeConfig(tmpDir, { planning: { commit_docs: false } });
+    const result = runGsdTools(['query', 'config-get', 'commit_docs', '--raw'], tmpDir, { GSD_HOME: gsdHome });
+    assert.strictEqual(result.exitCode, 0);
+    assert.strictEqual(result.output.trim(), 'false');
   });
 
   // Every combination of the chain's three inputs. Each case gets a fresh
