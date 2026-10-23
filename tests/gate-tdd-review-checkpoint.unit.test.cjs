@@ -105,7 +105,7 @@ const CASES = [
         passed: true,
         tddPlans: 1,
         violations: 1,
-        table: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 1\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✗  |   ✗   |    —     | FAIL   |\n\n⚠ Gate violations are advisory — review before advancing.\n  Plan 01-01 missing: RED, GREEN gate commit(s).\n  Expected commit pattern: test(01-01): ... → feat(01-01): ...',
+        table: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 1\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✗  |   ✗   |    —     | FAIL   |\n\n⚠ Gate violations are advisory — review before advancing.\n  Plan 01-01 missing: RED, GREEN gate commit(s).\n  Expected commit pattern: test(01-01): ... → feat(01-01): ... or fix(01-01): ...',
         rows: [
           {
             planId: '01-01',
@@ -119,7 +119,7 @@ const CASES = [
             ],
           },
         ],
-        message: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 1\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✗  |   ✗   |    —     | FAIL   |\n\n⚠ Gate violations are advisory — review before advancing.\n  Plan 01-01 missing: RED, GREEN gate commit(s).\n  Expected commit pattern: test(01-01): ... → feat(01-01): ...',
+        message: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 1\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✗  |   ✗   |    —     | FAIL   |\n\n⚠ Gate violations are advisory — review before advancing.\n  Plan 01-01 missing: RED, GREEN gate commit(s).\n  Expected commit pattern: test(01-01): ... → feat(01-01): ... or fix(01-01): ...',
       };
     },
   },
@@ -164,6 +164,59 @@ const CASES = [
     },
   },
   {
+    id: 'U5k',
+    title: 'RED + fix GREEN (plan corrects a defect) -> Pass row, no violations (#5274)',
+    git: true,
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-01-PLAN.md', ['---', 'phase: 1', 'plan: 1', 'type: tdd', '---', '# Plan', ''].join('\n'));
+      h.w(dir, 'red.txt', 'r');
+      h.git(dir, 'add', '-A');
+      h.git(dir, 'commit', '-m', 'test(01-01): red');
+      h.w(dir, 'green.txt', 'g');
+      h.git(dir, 'add', '-A');
+      h.git(dir, 'commit', '-m', 'fix(01-01): green');
+    },
+    args() { return ['1']; },
+    outcome: 'pass',
+    block: false,
+    expected() {
+      return {
+        block: false,
+        passed: true,
+        tddPlans: 1,
+        violations: 0,
+        table: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 0\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✓  |   ✓   |    —     | Pass   |',
+        rows: [{ planId: '01-01', red: true, green: true, refactor: false, status: 'Pass', missing: [] }],
+        message: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 0\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✓  |   ✓   |    —     | Pass   |',
+      };
+    },
+  },
+  {
+    id: 'U5l',
+    title: 'fix GREEN alone -> FAIL row missing RED (#5274)',
+    git: true,
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-01-PLAN.md', ['---', 'phase: 1', 'plan: 1', 'type: tdd', '---', '# Plan', ''].join('\n'));
+      h.w(dir, 'green.txt', 'g');
+      h.git(dir, 'add', '-A');
+      h.git(dir, 'commit', '-m', 'fix(01-01): green');
+    },
+    args() { return ['1']; },
+    outcome: 'advisory',
+    block: true,
+    expected() {
+      return {
+        block: true,
+        passed: true,
+        tddPlans: 1,
+        violations: 1,
+        table: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 1\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✗  |   ✓   |    —     | FAIL   |\n\n⚠ Gate violations are advisory — review before advancing.\n  Plan 01-01 missing: RED gate commit(s).\n  Expected commit pattern: test(01-01): ... → feat(01-01): ... or fix(01-01): ...',
+        rows: [{ planId: '01-01', red: false, green: true, refactor: false, status: 'FAIL', missing: ['RED'] }],
+        message: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 1\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✗  |   ✓   |    —     | FAIL   |\n\n⚠ Gate violations are advisory — review before advancing.\n  Plan 01-01 missing: RED gate commit(s).\n  Expected commit pattern: test(01-01): ... → feat(01-01): ... or fix(01-01): ...',
+      };
+    },
+  },
+  {
     id: 'U5e',
     title: 'RED only -> FAIL row missing GREEN',
     git: true,
@@ -182,7 +235,7 @@ const CASES = [
         passed: true,
         tddPlans: 1,
         violations: 1,
-        table: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 1\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✓  |   ✗   |    —     | FAIL   |\n\n⚠ Gate violations are advisory — review before advancing.\n  Plan 01-01 missing: GREEN gate commit(s).\n  Expected commit pattern: test(01-01): ... → feat(01-01): ...',
+        table: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 1\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✓  |   ✗   |    —     | FAIL   |\n\n⚠ Gate violations are advisory — review before advancing.\n  Plan 01-01 missing: GREEN gate commit(s).\n  Expected commit pattern: test(01-01): ... → feat(01-01): ... or fix(01-01): ...',
         rows: [
           {
             planId: '01-01',
@@ -195,7 +248,7 @@ const CASES = [
             ],
           },
         ],
-        message: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 1\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✓  |   ✗   |    —     | FAIL   |\n\n⚠ Gate violations are advisory — review before advancing.\n  Plan 01-01 missing: GREEN gate commit(s).\n  Expected commit pattern: test(01-01): ... → feat(01-01): ...',
+        message: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 1\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✓  |   ✗   |    —     | FAIL   |\n\n⚠ Gate violations are advisory — review before advancing.\n  Plan 01-01 missing: GREEN gate commit(s).\n  Expected commit pattern: test(01-01): ... → feat(01-01): ... or fix(01-01): ...',
       };
     },
   },

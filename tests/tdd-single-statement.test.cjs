@@ -218,7 +218,8 @@ describe('#3990 — one statement of the cycle', () => {
     const tdd = read('gsd-core/references/tdd.md');
     assert.ok(/## Red-Green-Refactor Cycle/.test(tdd),
       'tdd.md carries the canonical Red-Green-Refactor Cycle section');
-    assert.ok(/Commit: `test\(\{phase\}-\{plan\}\)/.test(tdd) && /Commit: `feat\(\{phase\}-\{plan\}\)/.test(tdd),
+    assert.ok(/Commit: `test\(\{phase\}-\{plan\}\)/.test(tdd) && /Commit: `feat\(\{phase\}-\{plan\}\)/.test(tdd)
+      && /Commit: `feat\(\{phase\}-\{plan\}\)[^\n]{0,200}or `fix\(\{phase\}-\{plan\}\)/.test(tdd),
       'the canonical section carries the commit-scope contract');
   });
 

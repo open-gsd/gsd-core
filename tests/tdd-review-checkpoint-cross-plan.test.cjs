@@ -18,6 +18,7 @@ const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { createTempGitProject, cleanup } = require('./helpers.cjs');
 
 const gate = require('../gsd-core/bin/lib/gate-tdd-review-checkpoint.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 function write(dir, rel, content) {
   const p = path.join(dir, rel);
@@ -72,6 +73,37 @@ describe('#4867 TDD review pairs RED and GREEN across depends_on', () => {
     assert.equal(payload.block, false);
     assert.deepEqual(rowOf(payload, '01-20').greenFrom, ['01-21']);
     assert.match(payload.table, /01-20 GREEN is supplied by dependent plan 01-21/);
+  });
+
+  test('a dependent plan\'s fix commit supplies the GREEN too (#5274)', () => {
+    const payload = review((dir) => {
+      plan(dir, '01-x', '01-20', { type: 'tdd' });
+      plan(dir, '01-x', '01-21', { type: 'execute', dependsOn: ['01-20'] });
+      commit(dir, 'test(01-20): RED probe');
+      commit(dir, 'fix(01-21): GREEN fix');
+    });
+    assert.equal(rowOf(payload, '01-20').status, 'Pass');
+    assert.deepEqual(rowOf(payload, '01-20').greenFrom, ['01-21']);
+  });
+
+  test('a dependent plan with only a non-GREEN commit leaves the probe plan FAIL (#5274 control)', () => {
+    const payload = review((dir) => {
+      plan(dir, '01-x', '01-20', { type: 'tdd' });
+      plan(dir, '01-x', '01-21', { type: 'execute', dependsOn: ['01-20'] });
+      commit(dir, 'test(01-20): RED probe');
+      commit(dir, 'docs(01-21): not a GREEN');
+    });
+    assert.equal(rowOf(payload, '01-20').status, 'FAIL');
+  });
+
+  test('tdd.md executor GREEN grep accepts exactly the gate\'s GREEN types (#5274)', () => {
+    const md = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'references', 'tdd.md'), 'utf8');
+    const line = splitLines(md).find((l) => /--grep="\^\(feat\|fix\)/.test(l));
+    assert.ok(line, 'GREEN grep line present in tdd.md');
+    const pattern = /--grep="([^"]{1,300})"/.exec(line)[1].replace('${PHASE_N}', '3').replace('${PLAN_N}', '17');
+    const re = new RegExp(pattern);
+    for (const type of ['feat', 'fix']) assert.ok(re.test(`${type}(03-17): x`), `${type} is GREEN`);
+    for (const type of ['test', 'refactor', 'chore', 'docs']) assert.ok(!re.test(`${type}(03-17): x`), `${type} is not GREEN`);
   });
 
   test('works for a decimal phase such as 01.1 (the reported shape)', () => {

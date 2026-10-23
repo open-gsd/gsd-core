@@ -4,7 +4,7 @@
  * direct console/stdout/stderr write (ESLint-enforced).
  *
  * End-of-phase advisory check: scans `type: tdd` plans for RED/GREEN/REFACTOR gate-sequence
- * compliance (`test(<plan>):` / `feat(<plan>):` / `refactor(<plan>):` commits) and builds a review
+ * compliance (`test(<plan>):` / `feat(<plan>):` or `fix(<plan>):` / `refactor(<plan>):` commits) and builds a review
  * table. `passed` is always true (advisory — never truly blocks); `block` is `violations > 0` so
  * the host loop can read one uniform field.
  *
@@ -18,7 +18,7 @@
  *
  * Cross-plan GREEN (#4867): a gap closure is planned as a RED-only probe plan plus the plan that
  * `depends_on` it and carries the fix. A `type: tdd` plan with its own RED but no GREEN is credited
- * with a `feat(...)` commit under any plan that lists it in `depends_on`, directly or through a
+ * with a `feat(...)` or `fix(...)` commit under any plan that lists it in `depends_on`, directly or through a
  * chain; the row carries `greenFrom` and the report names the supplier. Its own RED is still
  * required, and a plan nothing depends on is scored on its own commits alone.
  *
@@ -42,7 +42,7 @@ interface TddPlanRow {
   refactor: boolean;
   status: 'Pass' | 'FAIL';
   missing: string[];
-  /** Plans whose `feat(...)` commit supplied this plan's GREEN through `depends_on` (#4867). */
+  /** Plans whose `feat(...)` or `fix(...)` commit supplied this plan's GREEN through `depends_on` (#4867). */
   greenFrom?: string[];
 }
 
@@ -103,6 +103,9 @@ function planCommitKinds(projectDir: string, planId: string): ReadonlySet<string
   }
   return kinds;
 }
+
+/** GREEN is a `feat` or a `fix` commit (#5274); `refactor`/`chore`/`docs` never satisfy it. */
+const isGreen = (kinds: ReadonlySet<string>): boolean => kinds.has('feat') || kinds.has('fix');
 
 interface UnreadableSource {
   source: string;
@@ -201,12 +204,12 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
     const refactor = kinds.has('refactor');
 
     // #4867: a RED-only probe plan is satisfied by the GREEN of a plan that (transitively) declares
-    // `depends_on` it. Only a real `feat(...)` commit under such a plan counts; the plan's own RED is
+    // `depends_on` it. Only a real `feat(...)`/`fix(...)` commit under such a plan counts; the plan's own RED is
     // still required, and a plan nothing depends on is scored on its own commits alone.
-    const ownGreen = kinds.has('feat');
+    const ownGreen = isGreen(kinds);
     const greenFrom = ownGreen
       ? []
-      : transitiveDependents(planId, dependents).filter((dependentId) => planCommitKinds(projectDir, dependentId).has('feat'));
+      : transitiveDependents(planId, dependents).filter((dependentId) => isGreen(planCommitKinds(projectDir, dependentId)));
     const green = ownGreen || greenFrom.length > 0;
 
     const missing: string[] = [];
@@ -246,7 +249,7 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
     table += '\n\n⚠ Gate violations are advisory — review before advancing.';
     for (const r of rows.filter(row => row.status === 'FAIL')) {
       table += `\n  Plan ${r.planId} missing: ${r.missing.join(', ')} gate commit(s).`;
-      table += `\n  Expected commit pattern: test(${r.planId}): ... → feat(${r.planId}): ...`;
+      table += `\n  Expected commit pattern: test(${r.planId}): ... → feat(${r.planId}): ... or fix(${r.planId}): ...`;
     }
   }
 
