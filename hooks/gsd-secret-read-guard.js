@@ -769,17 +769,31 @@ function tokenize(str) {
 // Bash command scan — pass 2: per-segment evaluation
 // ---------------------------------------------------------------------------
 
-// `@file` (curl -d), `--flag=value`, `-Xvalue` → the operand that names the file.
-function normalizeOperand(text) {
+// Option characters of a bundled short cluster (`-2nif`).
+const CLUSTER_FLAG_CHAR_RE = /[A-Za-z0-9]/;
+
+// True when an operand word names a secret file. `@file` (curl -d) and
+// `--flag=value` are stripped to the value. In a single-dash word
+// (`/^-[^-]./`, so `-2if.env` counts too) the value of a bundled cluster
+// starts right after its run of option characters (#5046): `-if.env` holds
+// `.env`, `-nf=.env` holds `.env` after the `=`. That value is checked as
+// well as the historical two-character strip, so the verdict is never looser
+// than base and costs a fixed number of `namesSecret` calls. Limits are
+// pinned in tests.
+function operandNamesSecret(text) {
   let v = text;
   if (v.startsWith('@')) v = v.slice(1);
   if (v.startsWith('--')) {
     const eq = v.indexOf('=');
     if (eq !== -1) v = v.slice(eq + 1);
-  } else if (/^-[A-Za-z]./.test(v)) {
-    v = v.slice(2);
+    return namesSecret(v);
   }
-  return v;
+  if (!/^-[^-]./.test(v)) return namesSecret(v);
+  if (namesSecret(v.slice(2))) return true;
+  let end = 1;
+  while (end < v.length && CLUSTER_FLAG_CHAR_RE.test(v[end])) end++;
+  if (end > 2 && namesSecret(v.slice(end))) return true;
+  return v[end] === '=' && namesSecret(v.slice(end + 1));
 }
 
 const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -1040,7 +1054,7 @@ function findSecretRead(command, depth) {
             const hit = findSecretRead(src, depth + 1);
             if (hit) return hit;
           }
-        } else if (namesSecret(normalizeOperand(w.text))) return w.text;
+        } else if (operandNamesSecret(w.text)) return w.text;
       }
       continue;
     }
@@ -1070,7 +1084,7 @@ function findSecretRead(command, depth) {
     const nameOnly = nameOnlyOperandIndices(base, operands);
     for (let k = 0; k < operands.length; k++) {
       if (nameOnly.has(k)) continue;
-      if (namesSecret(normalizeOperand(operands[k].text))) return operands[k].text;
+      if (operandNamesSecret(operands[k].text)) return operands[k].text;
     }
   }
   return null;
@@ -1248,7 +1262,7 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
   const prevCmd = resolveCommand((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
   if (!prevCmd) return null;
   for (const w of prevCmd.operands) {
-    if (namesSecret(normalizeOperand(w.text))) return w.text;
+    if (operandNamesSecret(w.text)) return w.text;
   }
   return null;
 }
