@@ -57,6 +57,7 @@ const {
   TEST_ENV_BASE,
 } = require('./helpers.cjs');
 const { runNode, runHook } = require('./helpers/process-seam.cjs');
+const { runWithTimedOutCommit } = require('./helpers/commit-timeout-probe.cjs');
 const { gitOrThrow, throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -926,5 +927,77 @@ describe('#3776: query commit --files reports an empty diff as nothing_to_commit
     assert.strictEqual(output.committed, false);
     assert.strictEqual(output.reason, 'nothing_to_commit',
       'a revert permits partial commits, so the empty-diff guard must still apply');
+  });
+});
+
+// #5231: `git.commit_timeout_ms` (workspace-root config) must reach the sub-repo
+// commit sites too. The config lives ONLY in the workspace root; the sub-repo
+// has none (config is read from the root cwd, not repoCwd).
+describe('#5231: git.commit_timeout_ms reaches commit-to-subrepo and pr-subrepo', () => {
+  const { createTempGitProject } = require('./helpers.cjs');
+  let rootDir;
+  afterEach(() => { if (rootDir) cleanup(rootDir); rootDir = undefined; });
+
+  function setup(git) {
+    rootDir = createTempGitProject();
+    const cfg = { planning: { sub_repos: ['backend'] } };
+    if (git) cfg.git = git;
+    fs.writeFileSync(path.join(rootDir, '.planning', 'config.json'), JSON.stringify(cfg));
+    const subDir = path.join(rootDir, 'backend');
+    fs.mkdirSync(subDir, { recursive: true });
+    gitOrThrow(['init', '-q', '.'], { cwd: subDir });
+    gitOrThrow(['config', 'user.email', 't@t'], { cwd: subDir });
+    gitOrThrow(['config', 'user.name', 't'], { cwd: subDir });
+    fs.writeFileSync(path.join(subDir, 'seed.js'), '// seed\n');
+    gitOrThrow(['add', 'seed.js'], { cwd: subDir });
+    gitOrThrow(['commit', '-m', 'seed'], { cwd: subDir });
+    fs.writeFileSync(path.join(subDir, 'seed.js'), '// changed\n');
+  }
+
+  test('commit-to-subrepo passes the configured timeout to git commit', () => {
+    setup({ commit_timeout_ms: 60000 });
+    const r = runWithTimedOutCommit(`cmds.cmdCommitToSubrepo(${JSON.stringify(rootDir)}, 'chore: probe', ['backend/seed.js'], false);`);
+    assert.strictEqual(r.timeout, 60000, `stderr: ${r.stderr}`);
+    assert.ok(JSON.parse(r.stdout).repos.backend.error.includes('60s'));
+  });
+
+  const FALLBACK_CASES = [['unset', undefined], ['0', { commit_timeout_ms: 0 }], ['"abc"', { commit_timeout_ms: 'abc' }],
+    ['1500.5', { commit_timeout_ms: 1500.5 }], ['ceiling+1', { commit_timeout_ms: 3600001 }]];
+  for (const [label, git] of FALLBACK_CASES) {
+    test(`commit-to-subrepo falls back to 30s when git.commit_timeout_ms is ${label}`, () => {
+      setup(git);
+      const r = runWithTimedOutCommit(`cmds.cmdCommitToSubrepo(${JSON.stringify(rootDir)}, 'chore: probe', ['backend/seed.js'], false);`);
+      assert.strictEqual(r.timeout, 30000);
+    });
+    test(`pr-subrepo falls back to 30s when git.commit_timeout_ms is ${label}`, () => {
+      setup(git);
+      const r = runWithTimedOutCommit(`cmds.cmdPrSubrepo(${JSON.stringify(rootDir)}, 'backend', 'fix-5231-default', 'fix: probe', false);`);
+      assert.strictEqual(r.timeout, 30000);
+      assert.ok(r.stderr.includes('timed out after 30s'), `stderr: ${r.stderr}`);
+    });
+  }
+
+  test('probe: a call that never reaches git commit reports a null timeout, not a parse error', () => {
+    const r = runWithTimedOutCommit('1 + 1;');
+    assert.strictEqual(r.timeout, null);
+  });
+
+  test('probe: a non-ExitError thrown by the call surfaces in stderr with a non-zero status', () => {
+    const r = runWithTimedOutCommit("throw new Error('boom-5231');");
+    assert.notStrictEqual(r.status, 0);
+    assert.ok(r.stderr.includes('boom-5231'), `stderr: ${r.stderr}`);
+  });
+
+  test('pr-subrepo accepts the 3600000 ceiling', () => {
+    setup({ commit_timeout_ms: 3600000 });
+    const r = runWithTimedOutCommit(`cmds.cmdPrSubrepo(${JSON.stringify(rootDir)}, 'backend', 'fix-5231-ceiling', 'fix: probe', false);`);
+    assert.strictEqual(r.timeout, 3600000, `stderr: ${r.stderr}`);
+  });
+
+  test('pr-subrepo passes the configured timeout to git commit and names 60s', () => {
+    setup({ commit_timeout_ms: 60000 });
+    const r = runWithTimedOutCommit(`cmds.cmdPrSubrepo(${JSON.stringify(rootDir)}, 'backend', 'fix-5231-timeout', 'fix: probe', false);`);
+    assert.strictEqual(r.timeout, 60000, `stderr: ${r.stderr}`);
+    assert.ok(r.stderr.includes('timed out after 60s'), `stderr: ${r.stderr}`);
   });
 });

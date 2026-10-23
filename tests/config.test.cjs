@@ -11,8 +11,9 @@ const { test, describe, before, after, beforeEach, afterEach } = require('node:t
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempDir, createTempProject, cleanup, delay, withIsolatedProcessState, homeSandboxEnv, mockPartialWriteThenThrow, suppressFdAsync } = require('./helpers.cjs');
+const { TOOLS_PATH, runGsdTools, createTempDir, createTempProject, cleanup, delay, withIsolatedProcessState, homeSandboxEnv, mockPartialWriteThenThrow, suppressFdAsync } = require('./helpers.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
+const { runNode } = require('./helpers/process-seam.cjs');
 const configLib = require('../gsd-core/bin/lib/config.cjs');
 const { ExitError } = require('../gsd-core/bin/lib/cli-exit.cjs');
 
@@ -2600,6 +2601,66 @@ const WORKFLOW_PATH = path.join(
   'workflows',
   'complete-milestone.md',
 );
+
+describe('#5231: git.commit_timeout_ms config key', () => {
+  test('fresh project: config-get returns the 30000 default', (t) => {
+    const tmpDir = createTempProject('gsd-5231-default-');
+    t.after(() => cleanup(tmpDir));
+    const r = runGsdTools(['config-get', 'git.commit_timeout_ms'], tmpDir, homeSandboxEnv(tmpDir));
+    assert.ok(r.success, `config-get failed:\n${r.error}`);
+    assert.strictEqual(r.output.trim(), '30000');
+  });
+
+  test('config-set stores accepted values as numbers and leaves the file untouched on rejected ones', (t) => {
+    const tmpDir = createTempProject('gsd-5231-');
+    t.after(() => cleanup(tmpDir));
+    const env = homeSandboxEnv(tmpDir);
+    const stored = () => JSON.parse(fs.readFileSync(path.join(tmpDir, '.planning', 'config.json'), 'utf8')).git.commit_timeout_ms;
+    // [value, accepted?] — 0/1/2 around the floor, ceiling-1/ceiling/ceiling+1 (3600000), then non-integers and non-numbers.
+    const cases = [['60000', true], ['1', true], ['0', false], ['2', true], ['3599999', true], ['3600000', true],
+      ['3600001', false], ['9007199254740991', false], ['9007199254740992', false], ['-1', false], ['abc', false], ['1500.5', false]];
+    let last;
+    for (const [value, ok] of cases) {
+      const r = runGsdTools(['config-set', 'git.commit_timeout_ms', value], tmpDir, env);
+      if (ok) {
+        assert.ok(r.success, `'${value}' should be accepted:\n${r.error}`);
+        last = Number(value);
+      } else {
+        assert.ok(!r.success, `'${value}' should be rejected`);
+        assert.match(r.error, /positive integer/);
+      }
+      assert.strictEqual(stored(), last, `after '${value}' the stored value must be the last accepted number`);
+      assert.strictEqual(typeof stored(), 'number');
+    }
+    assert.strictEqual(runGsdTools(['config-get', 'git.commit_timeout_ms'], tmpDir, env).output.trim(), '3600000');
+  });
+
+  test('config-get keeps stdout raw but warns on stderr when a hand-edited value falls back to the default', (t) => {
+    const tmpDir = createTempProject('gsd-5231-handedit-');
+    t.after(() => cleanup(tmpDir));
+    const cfgPath = path.join(tmpDir, '.planning', 'config.json');
+    fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+    fs.writeFileSync(cfgPath, JSON.stringify({ git: { commit_timeout_ms: 0 } }));
+    const r = runNode([TOOLS_PATH, 'config-get', 'git.commit_timeout_ms'], { cwd: tmpDir, env: homeSandboxEnv(tmpDir) });
+    assert.strictEqual(r.exitCode, 0, r.stderr);
+    assert.strictEqual(r.stdout.trim(), '0');
+    assert.match(r.stderr, /git\.commit_timeout_ms.*0.*30000/);
+  });
+
+  for (const [label, rootVal, warns] of [['invalid', 0, true], ['valid', 5000, false]]) {
+    test(`config-get warns=${warns} for a ${label} value inherited from root by a workstream with no config`, (t) => {
+      const tmpDir = createTempProject('gsd-5231-inherit-');
+      t.after(() => cleanup(tmpDir));
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({ git: { commit_timeout_ms: rootVal } }));
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'ws'), { recursive: true });
+      const r = runNode([TOOLS_PATH, 'config-get', 'git.commit_timeout_ms'], { cwd: tmpDir, env: { ...homeSandboxEnv(tmpDir), GSD_WORKSTREAM: 'ws' } });
+      assert.strictEqual(r.exitCode, 0, r.stderr);
+      assert.strictEqual(r.stdout.trim(), String(rootVal));
+      if (warns) assert.match(r.stderr, /git\.commit_timeout_ms.*0.*30000/);
+      else assert.doesNotMatch(r.stderr, /commit_timeout_ms/);
+    });
+  }
+});
 
 describe('#3086: git.create_tag config key', () => {
   test('A. fresh project: config-get git.create_tag returns true (default)', (t) => {

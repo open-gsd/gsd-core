@@ -31,6 +31,7 @@ const { VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS, isValidConfigKey, getCapability
 import { isSecretKey, maskIfSecret, maskSecret } from './secrets.cjs';
 import { normalizeConfiguredDefaultReviewers, INSTANCE_NAME_PATTERN, KNOWN_REVIEWER_SLUGS } from './review-reviewer-selection.cjs';
 import { migrateOnDisk } from './configuration.cjs';
+import { COMMIT_TIMEOUT_DEFAULT_MS, COMMIT_TIMEOUT_MAX_MS, isValidCommitTimeoutMs } from './git-commit-timeout.cjs';
 // #3760: the ADR-1411 out-of-band diagnostic. It lives here rather than inside
 // `migrateOnDisk` because `configuration.cjs` must stay loadable from an install
 // layout holding only itself plus its manifests (#3571) — see the note at the top
@@ -111,6 +112,7 @@ const SCHEMA_DEFAULTS: Record<string, unknown> = {
   'planner.stall_detect_interval_minutes': 5,
   'planner.stall_threshold_minutes': 10,
   'git.create_tag': true,
+  'git.commit_timeout_ms': COMMIT_TIMEOUT_DEFAULT_MS,
   // #1689: per-plan agent_hint executor routing — default-on. A no-op for plans
   // without an agent_hint field, so existing dispatch is byte-identical.
   'workflow.agent_hint_routing': true,
@@ -189,6 +191,13 @@ function resolveSchemaDefault(cwd: string, kp: string): { found: boolean; value:
     }
   }
   return { found: false, value: undefined };
+}
+
+/** #5231: stdout stays the stored value; tell the user when the SDK will ignore it. */
+function warnInvalidCommitTimeout(kp: string, value: unknown): void {
+  if (kp === 'git.commit_timeout_ms' && !isValidCommitTimeoutMs(value)) {
+    process.stderr.write(`warning: git.commit_timeout_ms ${JSON.stringify(value)} is invalid; ${COMMIT_TIMEOUT_DEFAULT_MS} is used instead\n`);
+  }
 }
 
 /**
@@ -1262,6 +1271,12 @@ function validateConfigValue(cwd: string, kp: string, parsedValue: unknown, val:
     }
   }
 
+  if (kp === 'git.commit_timeout_ms') {
+    if (!isValidCommitTimeoutMs(parsedValue)) {
+      error(`Invalid git.commit_timeout_ms '${val}'. Must be a positive integer (milliseconds) up to ${COMMIT_TIMEOUT_MAX_MS}.`, ERROR_REASON.USAGE);
+    }
+  }
+
   if (kp === 'git.protected_branches') {
     if (!isValidProtectedBranches(parsedValue)) {
       error(`Invalid git.protected_branches '${val}'. Must be a non-empty array of non-empty branch names.`);
@@ -1459,7 +1474,7 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
       // --default). Only when root also misses do --default / schema default apply.
       // (When no workstream is active, resolveFromRootConfig is a no-op: same file.)
       const rootVal = resolveFromRootConfig(cwd, kp);
-      if (rootVal.found) { emitResolvedDefault(kp, rootVal.value, raw); return; }
+      if (rootVal.found) { warnInvalidCommitTimeout(kp, rootVal.value); emitResolvedDefault(kp, rootVal.value, raw); return; }
       if (hasDefault) { emitResolvedDefault(kp, defaultValue, raw); return; }
       const sd = resolveSchemaDefault(cwd, kp);
       if (sd.found) { emitResolvedDefault(kp, sd.value, raw); return; }
@@ -1486,7 +1501,7 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
     if (current === undefined || current === null || typeof current !== 'object') {
       // #2702: root-config inheritance before --default / schema default (see above).
       const rootVal = resolveFromRootConfig(cwd, kp);
-      if (rootVal.found) { emitResolvedDefault(kp, rootVal.value, raw); return; }
+      if (rootVal.found) { warnInvalidCommitTimeout(kp, rootVal.value); emitResolvedDefault(kp, rootVal.value, raw); return; }
       if (hasDefault) { emitResolvedDefault(kp, defaultValue, raw); return; }
       const sd = resolveSchemaDefault(cwd, kp);
       if (sd.found) { emitResolvedDefault(kp, sd.value, raw); return; }
@@ -1509,7 +1524,7 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
   if (current === undefined) {
     // #2702: root-config inheritance before --default / schema default (see above).
     const rootVal = resolveFromRootConfig(cwd, kp);
-    if (rootVal.found) { emitResolvedDefault(kp, rootVal.value, raw); return; }
+    if (rootVal.found) { warnInvalidCommitTimeout(kp, rootVal.value); emitResolvedDefault(kp, rootVal.value, raw); return; }
     if (hasDefault) { emitResolvedDefault(kp, defaultValue, raw); return; }
     const sd = resolveSchemaDefault(cwd, kp);
     if (sd.found) { emitResolvedDefault(kp, sd.value, raw); return; }
@@ -1519,6 +1534,8 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
   if (kp === 'planner.stall_detection_enabled') {
     current = resolvePlannerStallDetectionEnabled(current);
   }
+  // #5231: stdout stays the stored value; tell the user when the SDK will ignore it.
+  warnInvalidCommitTimeout(kp, current);
 
   // Never echo plaintext for sensitive keys via config-get. Plaintext lives
   // in config.json on disk; the CLI surface always shows the masked form.

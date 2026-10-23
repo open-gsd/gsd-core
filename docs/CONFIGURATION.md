@@ -104,6 +104,7 @@ GSD stores project settings in `.planning/config.json`. Created during `/gsd-new
   "git": {
     "branching_strategy": "none",
     "create_tag": true,
+    "commit_timeout_ms": 30000,
     "phase_branch_template": "gsd/phase-{phase}-{slug}",
     "milestone_branch_template": "gsd/{milestone}-{slug}",
     "quick_branch_template": null
@@ -1266,6 +1267,7 @@ All four fields are **optional and additive** — STATE.md files without them ke
 | `git.protected_branches` | array of non-empty strings | (none) | Optional additional shared branches that should trigger protected-branch warnings alongside the resolved base branch |
 | `git.allow_default_branch_commits` | boolean | `false` | Escape hatch (#3819): when `true`, the executor's pre-commit guard no longer refuses to commit on the resolved default branch. Explicitly configured `git.protected_branches` names are still enforced. |
 | `git.create_tag` | boolean | `true` | Create a git tag (`v[X.Y]`) on milestone completion. Set to `false` for projects with their own release flow |
+| `git.commit_timeout_ms` | integer (ms), 1–3600000 | `30000` | Timeout for each SDK `git commit` that runs hooks (commit, commit-to-subrepo, pr-subrepo). Raise it when a pre-commit hook legitimately takes longer than 30 s (see [how-to](how-to/raise-the-commit-timeout-for-slow-hooks.md)); on timeout the commit is killed but the hook process may keep running. `config-set` rejects values outside the range; a hand-edited value that is non-numeric, fractional, `0`, negative, or above `3600000` (one hour) falls back to `30000` |
 | `git.phase_branch_template` | string | `gsd/phase-{phase}-{slug}` | Branch name template for phase strategy |
 | `git.milestone_branch_template` | string | `gsd/{milestone}-{slug}` | Branch name template for milestone strategy |
 | `git.quick_branch_template` | string or null | `null` | Optional branch name template for `/gsd-quick` tasks |
