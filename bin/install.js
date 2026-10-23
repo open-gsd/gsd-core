@@ -11105,6 +11105,10 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       ? process.cwd()
       : path.join(process.cwd(), dirName);
 
+  // #5637: this install's typed-text heredoc terminator: the directory's existing nonce on a
+  // reinstall (so it changes nothing), a fresh one otherwise.
+  if (process.env.GSD_ARGS_NONCE_OFF !== '1') armArgsNonce(targetDir);
+
   // #5161: this install's record of the skill dirs it writes starts empty,
   // whichever install path it takes.
   installEngine.clearWrittenSkillDirs();
@@ -15355,9 +15359,9 @@ module.exports = {
 // Main logic — only run when not loaded as a module for testing
 if (require.main === module && !process.env.GSD_TEST_MODE) {
   // #5637: every file this run writes gets the same typed-text heredoc terminator; the next run gets another.
-  // GSD_ARGS_NONCE_OFF=1 is for the generators that bake a static template from an install.
-  if (process.env.GSD_ARGS_NONCE_OFF !== '1') armArgsNonce();
-  else console.warn('  GSD_ARGS_NONCE_OFF=1: the typed-text heredoc terminator is NOT randomized in this install.');
+  // GSD_ARGS_NONCE_OFF=1 is for the generators that bake a static template from an install; each
+  // install() arms its own nonce for its config dir.
+  if (process.env.GSD_ARGS_NONCE_OFF === '1') console.warn('  GSD_ARGS_NONCE_OFF=1: the typed-text heredoc terminator is NOT randomized in this install.');
   if (hasDryRun) {
     // --dry-run: preview legacy cleanup and exit without installing.
     if (hasUninstall) {

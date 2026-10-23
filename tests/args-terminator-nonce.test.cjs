@@ -25,6 +25,7 @@ const {
   generateArgsNonce,
   stampArgsTerminator,
   stampInstalledContent,
+  readInstalledNonce,
 } = require('../gsd-core/bin/lib/args-terminator.cjs');
 
 const REPO = path.join(__dirname, '..');
@@ -307,6 +308,37 @@ describe('#5637 what an install writes', () => {
       }
     } finally {
       cleanup(root);
+    }
+  });
+
+  test('reinstalling into the same config dir keeps its nonce and changes no byte', () => {
+    const first = runMinimalInstall({ runtime: 'pi', scope: 'global' });
+    try {
+      const read = () => installedMarkdown(first.configDir).map(({ file, rel }) => `${rel}\n${fs.readFileSync(file, 'utf8')}`).join('\n\0');
+      const before = read();
+      runMinimalInstall({ runtime: 'pi', scope: 'global', root: first.root });
+      assert.ok(before.length > 0);
+      assert.equal(read() === before, true, 'a reinstall rewrote installed files');
+      assert.equal(readInstalledNonce(first.configDir), /GSD_ARGS_END_([0-9a-f]{32})/.exec(before)[1]);
+    } finally {
+      cleanup(first.root);
+    }
+  });
+
+  test('readInstalledNonce reads nothing from a directory with no install, a non-hex nonce or a short one', () => {
+    const dir = createTempDir('gsd-5637-');
+    try {
+      assert.equal(readInstalledNonce(dir), null);
+      const wf = path.join(dir, 'gsd-core', 'workflows');
+      fs.mkdirSync(wf, { recursive: true });
+      for (const bad of ['GSD_ARGS_END_' + 'g'.repeat(32), 'GSD_ARGS_END_' + NONCE.slice(1), 'GSD_ARGS_END_' + NONCE + '0']) {
+        fs.writeFileSync(path.join(wf, 'a.md'), `${bad}\n`);
+        assert.equal(readInstalledNonce(dir), null, bad);
+      }
+      fs.writeFileSync(path.join(wf, 'a.md'), `GSD_ARGS_END_${NONCE}\n`);
+      assert.equal(readInstalledNonce(dir), NONCE);
+    } finally {
+      cleanup(dir);
     }
   });
 

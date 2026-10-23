@@ -16,6 +16,8 @@
  */
 
 import { randomBytes as nodeRandomBytes } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 /** The canonical terminators the shipped workflows and commands carry. */
 export const ARGS_TERMINATORS: readonly string[] = Object.freeze(['GSD_ARGS_END', 'GSD_QUICK_BATCH_ARGS_END']);
@@ -52,13 +54,35 @@ export function stampArgsTerminator(content: string, nonce: string): string {
 
 let armedNonce: string | null = null;
 
+const INSTALLED_NONCE_RE = /^GSD_ARGS_END_([0-9a-f]{32})\r?$/m;
+
 /**
- * Arm stamping for this process: an installer calls this once before it writes anything, so every
- * file the install writes carries the same nonce and two installs carry different ones. Generators
- * and tests never arm it, so the committed generated skills stay canonical and deterministic.
+ * The nonce a previous install left in `configDir`, read from the first installed workflow that
+ * carries one; null when there is none or the directory cannot be read.
  */
-export function armArgsNonce(): string {
-  if (armedNonce === null) armedNonce = generateArgsNonce();
+export function readInstalledNonce(configDir: string): string | null {
+  try {
+    const dir = join(configDir, 'gsd-core', 'workflows');
+    for (const name of readdirSync(dir).sort()) {
+      if (!name.endsWith('.md')) continue;
+      const match = INSTALLED_NONCE_RE.exec(readFileSync(join(dir, name), 'utf8'));
+      if (match) return match[1];
+    }
+  } catch {
+    // No previous install to read; the caller mints a fresh nonce.
+  }
+  return null;
+}
+
+/**
+ * Arm stamping for the install into `configDir`, before it writes anything. A reinstall into the
+ * same directory keeps that directory's nonce, so reinstalling changes nothing; a new directory
+ * gets a fresh one. Generators and tests never arm it, so the committed generated skills stay
+ * canonical and deterministic.
+ */
+export function armArgsNonce(configDir?: string): string {
+  const prior = configDir === undefined ? null : readInstalledNonce(configDir);
+  armedNonce = prior ?? generateArgsNonce();
   return armedNonce;
 }
 
