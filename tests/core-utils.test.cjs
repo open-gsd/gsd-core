@@ -1574,3 +1574,25 @@ describe('#5542 planRowPattern / summaryPairsWithAnyPlan', () => {
     });
   });
 });
+
+describe('#5483 tickAnchoredPlanRow', () => {
+  const tick = (text, id = '01-PLAN.md') => coreUtils.tickAnchoredPlanRow(text, id);
+
+  test('ticks only the first matching row', () => {
+    assert.strictEqual(tick('- [ ] 01-PLAN.md\n- [ ] 01-PLAN.md\n'), '- [x] 01-PLAN.md\n- [ ] 01-PLAN.md\n');
+  });
+
+  test('ticks a row on the last line with no trailing newline', () => {
+    assert.strictEqual(tick('a\n- [ ] 01-PLAN.md'), 'a\n- [x] 01-PLAN.md');
+  });
+
+  test('never ticks a fenced line, a mid-line occurrence, or a "-[ ]" non-bullet', () => {
+    for (const text of ['```\n- [ ] 01-PLAN.md\n```\n', 'see - [ ] 01-PLAN.md\n', '-[ ] 01-PLAN.md\n']) {
+      assert.strictEqual(tick(text), text);
+    }
+  });
+
+  test('plan id ends at a boundary: 01-1 does not tick 01-10', () => {
+    assert.strictEqual(tick('- [ ] 01-10-PLAN.md\n', '01-1'), '- [ ] 01-10-PLAN.md\n');
+  });
+});

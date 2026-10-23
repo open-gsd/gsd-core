@@ -92,12 +92,14 @@ function stripShippedMilestones(content: string): string {
 }
 
 /**
- * #5543: run `edit` over the ROADMAP with every shipped `<details>` block hidden
+ * #5543: run `edit` over the ROADMAP with every `<details>` block hidden
  * and restored byte-for-byte afterwards. For writers whose active milestone
  * could not be resolved: the first `### Phase N:` in document order must never
  * be the one inside a shipped block. Layout-independent (the active phase may
  * sit before or after a shipped block) and, unlike a "region after the last
  * `</details>`" cut, not fooled by a `</details>` in a fence or inline code.
+ * Every `<details>` block counts as shipped: there is no summary check, so a
+ * non-milestone notes block is masked too.
  */
 function editOutsideShippedBlocks(content: string, edit: (outside: string) => string): string {
   return editOutsideTaggedBlocks(content, 'details', edit);
@@ -1455,30 +1457,6 @@ function extractCurrentMilestone(content: string, cwd?: string, ws?: string | nu
 }
 
 /**
- * Replace a pattern only in the current milestone section of ROADMAP.md.
- */
-type RoadmapReplacer = (match: string, ...captures: string[]) => string;
-
-function replaceInCurrentMilestone(
-  content: string,
-  pattern: RegExp,
-  replacement: string | RoadmapReplacer,
-): string {
-  const apply = (src: string): string =>
-    typeof replacement === 'function'
-      ? src.replace(pattern, replacement)
-      : src.replace(pattern, replacement);
-  const lastDetailsClose = content.lastIndexOf('</details>');
-  if (lastDetailsClose === -1) {
-    return apply(content);
-  }
-  const offset = lastDetailsClose + '</details>'.length;
-  const before = content.slice(0, offset);
-  const after = content.slice(offset);
-  return before + apply(after);
-}
-
-/**
  * Resolve a single phase's detail-section heading (`### Phase N: …`, any level
  * 1–6, via the #2121 phase-id source) and run `edit` against ONLY that
  * section's body. Delegates to `withSection` (markdown-sectionizer.cjs), so a
@@ -2323,25 +2301,26 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
  * Details section) — both consume the same `locateMilestoneHeadings` /
  * `computeMilestoneSectionEnd` owner (#3184), so there is no separate copy to
  * keep in sync. Returns null when there is no versioned active milestone;
- * callers then fall back to whole-content mutation (the prior behaviour).
+ * callers then fall back to the shipped-block-masked whole content
+ * (`editOutsideShippedBlocks`) via `editCurrentMilestone`, or to unscoped
+ * whole-content handling where they call this directly (`phase.cts`
+ * `phaseEntryInsertOffset`).
  *
- * #2761 (round-2 review, Minor 3 — latent, currently harmless): this function
- * consumes #3184's shared owners, but it does not pass the bracket-specific
- * B1/B2 boundary predicate and still has no bracket-fallback SELECTION branch:
- * it returns null when the version-string owner finds nothing, unlike
- * `extractCurrentMilestoneScoped`. The read owner can therefore scope a
- * bracket ROADMAP this write-range consumer still calls unscoped. Probed and
- * confirmed harmless TODAY: this
- * function's single consumer (`mutateMilestonePhase`, src/phase.cts) falls
- * back to whole-content mutation when it returns null, and every mutation
- * inside that caller is still `Phase`-labelled-only (not bracket-widened) per
- * the changeset's own "READ-path opt-in until the migrator and write path
- * land" — so a bracket ROADMAP's checkbox/heading patterns never match inside
- * that fallback and nothing is mutated cross-milestone. The moment the write
- * path is widened (PR-3+), this divergence becomes live: the whole-content
- * fallback would become a cross-milestone writer, which is exactly what this
- * note exists to prevent. Bracket-widen this function in lockstep with the
- * write path landing, not before.
+ * #2761 (round-2 review, Minor 3): this function consumes #3184's shared
+ * owners, but it does not pass the bracket-specific B1/B2 boundary predicate and
+ * still has no bracket-fallback SELECTION branch: it returns null when the
+ * version-string owner finds nothing, unlike `extractCurrentMilestoneScoped`.
+ * The read owner can therefore scope a bracket ROADMAP this write-range
+ * consumer still calls unscoped. Consumers: `editCurrentMilestone` (`phase
+ * complete`'s `mutateMilestonePhase`, `roadmap update-plan-progress`) and
+ * `phase.cts` `phaseEntryInsertOffset`. On the null path `editCurrentMilestone`
+ * edits the ROADMAP with every `<details>` block masked, so no writer reaches
+ * into a shipped block; but a bracket ROADMAP's other milestone sections stay
+ * editable by a `Phase`-labelled pattern. That is harmless only while every
+ * mutation stays `Phase`-labelled (not bracket-widened), per the changeset's
+ * "READ-path opt-in until the migrator and write path land". The moment a
+ * writer is bracket-widened (PR-3+), this divergence becomes live: bracket-widen
+ * this function in lockstep with that writer, not before.
  */
 function currentMilestoneRawRanges(
   content: string,
@@ -2402,13 +2381,61 @@ function currentMilestoneRawRanges(
   return { primary: { start: sectionStart, end: sectionEnd }, details };
 }
 
+/**
+ * Run `edit` over the current milestone's raw window(s) from
+ * `currentMilestoneRawRanges`, or, when no milestone resolves, over the whole
+ * ROADMAP with every `<details>` block hidden (#5543; `editOutsideShippedBlocks`
+ * masks all of them, it does not check a summary for a shipped marker).
+ * `edit` is called once per window, in document order, with each window's own
+ * `<details>` blocks masked the same way. The one milestone
+ * scoping for per-phase writers (`phase complete`, `roadmap
+ * update-plan-progress` #5483), so neither cuts at the last `</details>`.
+ */
+function editCurrentMilestone(content: string, cwd: string | undefined, edit: (text: string) => string): string {
+  const ranges = currentMilestoneRawRanges(content, cwd);
+  const masked = (text: string): string => editOutsideShippedBlocks(text, edit);
+  if (!ranges) return masked(content);
+  const windows = [ranges.primary, ranges.details]
+    .filter((w): w is { start: number; end: number } => w !== null)
+    .sort((a, b) => a.start - b.start);
+  // Edit in document order (so a "first window wins" caller means the primary
+  // one), then splice last-first so an earlier window's offsets are not
+  // shifted by a length-changing mutation in a later window.
+  // Each window hides its own `<details>` blocks, as the null path does: a block
+  // inside the window is never the active phase's section.
+  const edited = windows.map((w) => masked(content.slice(w.start, w.end)));
+  return windows.reduceRight((acc, w, i) => acc.slice(0, w.start) + edited[i] + acc.slice(w.end), content);
+}
+
+/**
+ * [start,end) of the rows nested under a phase's checklist bullet: from the
+ * line after `bullet` (a match of the caller's bullet pattern in `text`) up to a
+ * blank line, a shallower line, or a line matching `nextPhaseBullet`. Empty when
+ * the bullet is the last line with no trailing newline.
+ */
+function checklistBulletExtent(
+  text: string,
+  bullet: RegExpExecArray,
+  nextPhaseBullet: RegExp,
+): { start: number; end: number } {
+  const depth = bullet[1].search(/\S/);
+  const start = text.indexOf('\n', bullet.index) + 1;
+  let end = start;
+  while (start > 0 && end < text.length) {
+    const next = text.indexOf('\n', end);
+    const line = text.slice(end, next === -1 ? text.length : next);
+    if (line.trim() === '' || line.search(/\S/) < depth || nextPhaseBullet.test(line)) break;
+    end = next === -1 ? text.length : next + 1;
+  }
+  return { start, end };
+}
+
 export = {
   stripShippedMilestones,
   extractCurrentMilestone,
   extractCurrentMilestoneScoped,
   isMilestoneShippedInRoadmap,
   isMilestoneBoundedInRoadmap,
-  replaceInCurrentMilestone,
   getRoadmapPhaseInternal,
   getMilestoneInfo,
   classifyMilestoneScalar,
@@ -2416,6 +2443,8 @@ export = {
   currentMilestoneRawRanges,
   withPhaseSection,
   editOutsideShippedBlocks,
+  editCurrentMilestone,
+  checklistBulletExtent,
   computeMilestoneSectionEnd,
   locateMilestoneHeadings,
   listMilestoneHeadings,

@@ -67,7 +67,7 @@ import planningScopeMod = require('./planning-scope.cjs');
 const { SCOPE } = planningScopeMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- roadmap-parser.cjs is an export= CommonJS module
 import roadmapParserMod = require('./roadmap-parser.cjs');
-const { stripShippedMilestones, extractCurrentMilestone, currentMilestoneRawRanges, withPhaseSection, editOutsideShippedBlocks, findMilestoneScopeHeadingLines } = roadmapParserMod;
+const { stripShippedMilestones, extractCurrentMilestone, currentMilestoneRawRanges, withPhaseSection, editCurrentMilestone, findMilestoneScopeHeadingLines } = roadmapParserMod;
 // #4129: the single owner of "count the ROADMAP's milestone Complete rows"
 // (pure computation, no I/O — no cycle on this path) for the intent-first
 // progress counters the phase-complete transaction passes downstream.
@@ -4326,43 +4326,17 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
               // flips a row — the same pairing rule the counts use.
               if (!coreUtilsMod.summaryPairsWithAnyPlan((phaseInfo['plans'] as string[] | undefined) ?? [], summaryFile)) continue;
               // ADR-5057 §6 (Phase 13, #5217): the per-plan flip is a bullet
-              // mutation, so it goes through `updateBullet` like the phase
+              // mutation (`updateBullet` inside the helper) like the phase
               // checkbox flip above — first matching bullet only, never a
               // fenced line, never a mid-line occurrence.
-              const planCheckboxPattern = coreUtilsMod.planRowPattern(planId, { anchored: true });
-              b = updateBullet(
-                b,
-                (_bulletText, rawLine) => planCheckboxPattern.test(rawLine),
-                (rawLine) => rawLine.replace(planCheckboxPattern, '$1x$2'),
-              );
+              b = coreUtilsMod.tickAnchoredPlanRow(b, planId);
             }
             return b;
           });
           return s;
         };
 
-        const milestoneRanges = currentMilestoneRawRanges(roadmapContent, cwd);
-        if (milestoneRanges) {
-          // Splice later windows first so an earlier window's offsets are not
-          // shifted by a length-changing mutation in a later window.
-          const windows = [milestoneRanges.details, milestoneRanges.primary]
-            .filter((w): w is { start: number; end: number } => w !== null)
-            .sort((a, b) => b.start - a.start);
-          for (const w of windows) {
-            roadmapContent =
-              roadmapContent.slice(0, w.start)
-              + mutateMilestonePhase(roadmapContent.slice(w.start, w.end))
-              + roadmapContent.slice(w.end);
-          }
-        } else {
-          // #5543: the active milestone could not be resolved (no STATE
-          // `milestone:`, no marker). Writing the whole document would let
-          // `withPhaseSection` pick the first `### Phase N:` in document order,
-          // which can sit inside a shipped `<details>` block. Hide the shipped
-          // blocks from the mutation and restore them untouched; a ROADMAP with
-          // no shipped block is mutated whole, as before.
-          roadmapContent = editOutsideShippedBlocks(roadmapContent, mutateMilestonePhase);
-        }
+        roadmapContent = editCurrentMilestone(roadmapContent, cwd, mutateMilestonePhase);
 
         writes.push({
           filePath: roadmapPath,

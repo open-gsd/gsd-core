@@ -17822,6 +17822,15 @@ Plans:
     assert.match(active, /- \[x\] \*\*Phase 1: New\*\*/);
   });
 
+  test('a <details> block inside the resolved milestone window is left untouched (#5483 shared editCurrentMilestone)', () => {
+    const inside = ACTIVE.replace('\n### Phase 1: New', `\n${SHIPPED}\n### Phase 1: New`);
+    seed(inside, '---\nmilestone: v2.0\n---\n# State\n');
+    complete();
+    const out = roadmapText();
+    assert.ok(out.includes(SHIPPED), `block inside the window was modified:\n${out}`);
+    assert.match(out.slice(out.lastIndexOf('</details>')), /- \[x\] 01-01-PLAN\.md/);
+  });
+
   test('a </details> inside a code fence before the active phase does not hide the active phase', () => {
     const fenced = '```html\n</details>\n```\n';
     seed(fenced + ACTIVE, '# State\n');
