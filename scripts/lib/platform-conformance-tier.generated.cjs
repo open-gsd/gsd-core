@@ -173,6 +173,7 @@ module.exports = {
   "tests/intel.test.cjs",
   "tests/inventory-nested-families.test.cjs",
   "tests/io.test.cjs",
+  "tests/isolation-aged-none-sentinel.test.cjs",
   "tests/isolation-sentinel.test.cjs",
   "tests/kilo-upgrades.test.cjs",
   "tests/kimi-agent-converter.test.cjs",
