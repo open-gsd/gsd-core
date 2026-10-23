@@ -13,7 +13,7 @@
  *   Codex hooks.json: ensureCodexHooksJsonSessionStart, ensureCodexHooksJsonEvent,
  *            reconcileCodexHooksJsonEvent, reconcileCodexHooksJsonSessionStart,
  *            removeCodexHooksJsonEvent, removeCodexHooksJsonSessionStart,
- *            codexHooksJsonHasManagedHooks,
+ *            codexHooksJsonHasManagedHooks, readCodexHooksJsonFile,
  *            buildCodexHookWindowsShimIR, buildCodexHookBlock, rewriteLegacyCodexHookBlock
  *   Shared:  buildHookCommand, rewriteLegacyManagedNodeHookCommands
  *
@@ -991,6 +991,39 @@ function isManagedCodexHooksJsonHook(hook: unknown, targetDir: string): boolean 
   });
 }
 
+/**
+ * Read and parse the hooks.json at `filePath` (already resolved through the
+ * symlink policy) the way reconcileCodexHooksJsonEvent does. Uninstall calls
+ * it before its first removal too, so a file the reconcile would fail on stops
+ * uninstall while every GSD file is still in place.
+ *
+ * Returns `{ content: null, parsed: {} }` for an absent file and `parsed: {}`
+ * for a blank one; `parsed` is otherwise whatever JSON.parse returned. The
+ * read is bounded like codexHooksJsonHasManagedHooks's, so a FIFO cannot block
+ * uninstall here and an oversized file is not read whole and then rewritten.
+ * Either throws "hooks.json could not be read", and unparseable content throws
+ * "hooks.json parse failed"; the file is left alone. Install reads hooks.json
+ * earlier and unbounded (installer migration 002's readJson and the
+ * pre-install snapshot), so a FIFO still blocks install there.
+ */
+function readCodexHooksJsonFile(filePath: string): { content: string | null; parsed: unknown } {
+  if (!fs.existsSync(filePath)) return { content: null, parsed: {} };
+  let raw: string | null;
+  try {
+    raw = readSmallRegularFile(filePath, CODEX_HOOKS_JSON_MAX_BYTES);
+  } catch (err) {
+    throw new Error(`hooks.json could not be read: ${err && (err as Error).message ? (err as Error).message : String(err)}`);
+  }
+  // null only when the file vanished after existsSync: treat it as absent.
+  if (raw === null) return { content: null, parsed: {} };
+  if (!raw.trim()) return { content: raw, parsed: {} };
+  try {
+    return { content: raw, parsed: JSON.parse(raw) as unknown };
+  } catch (err) {
+    throw new Error(`hooks.json parse failed: ${err && (err as Error).message ? (err as Error).message : String(err)}`);
+  }
+}
+
 function reconcileCodexHooksJsonEvent(targetDir: string, eventName: string, opts: ReconcileCodexOpts = {}): ReconcileResult {
   const hooksJsonPath = path.join(targetDir, 'hooks.json');
   const managedCommand = typeof opts.managedCommand === 'string' ? opts.managedCommand : null;
@@ -1011,31 +1044,9 @@ function reconcileCodexHooksJsonEvent(targetDir: string, eventName: string, opts
     hooksJsonPath,
     'hooks.json at',
   );
-  let parsed: Record<string, unknown> = {};
-  let currentContent: string | null = null;
-  if (fs.existsSync(effectiveHooksJsonPath)) {
-    // Bounded like codexHooksJsonHasManagedHooks's read, so a FIFO cannot
-    // block uninstall here and an oversized file is not read whole and then
-    // rewritten. Either is refused with an error naming the file, the same
-    // way an unparseable one is, and the file is left alone. Install reads
-    // hooks.json earlier and unbounded (installer migration 002's readJson
-    // and the pre-install snapshot), so a FIFO still blocks install there.
-    let raw: string | null;
-    try {
-      raw = readSmallRegularFile(effectiveHooksJsonPath, CODEX_HOOKS_JSON_MAX_BYTES);
-    } catch (err) {
-      throw new Error(`hooks.json could not be read: ${err && (err as Error).message ? (err as Error).message : String(err)}`);
-    }
-    // null only when the file vanished after existsSync: treat it as absent.
-    if (raw !== null) currentContent = raw;
-    if (raw !== null && raw.trim()) {
-      try {
-        parsed = JSON.parse(raw) as Record<string, unknown>;
-      } catch (err) {
-        throw new Error(`hooks.json parse failed: ${err && (err as Error).message ? (err as Error).message : String(err)}`);
-      }
-    }
-  }
+  const read = readCodexHooksJsonFile(effectiveHooksJsonPath);
+  const currentContent = read.content;
+  let parsed = read.parsed as Record<string, unknown>;
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) parsed = {};
 
   const usesNestedHooksObject =
@@ -3363,6 +3374,7 @@ export = {
   removeCodexHooksJsonEvent,
   removeCodexHooksJsonSessionStart,
   codexHooksJsonHasManagedHooks,
+  readCodexHooksJsonFile,
   CODEX_HOOKS_JSON_MAX_BYTES,
   buildCodexHookWindowsShimIR,
   cleanupOrphanedCodexContextMonitorScript,
