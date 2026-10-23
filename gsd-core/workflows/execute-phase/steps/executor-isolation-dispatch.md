@@ -135,8 +135,8 @@ Read the flag once before dispatching; it is descriptor data, never hardcoded pe
 # `inspect-dispatch-isolation`. The re-record above already wrote it into the
 # sentinel with the mode (#3045: a forced `harness-worktree` keeps the host's
 # flag), so this read records nothing. A plain `query dispatch-isolation`
-# here would hold a per-plan degrade step 2.5 recorded for another plan of
-# this wave and answer `none` with no flag (#4904), stopping the whole wave.
+# here would hold a per-plan degrade already recorded for another plan of
+# this run and answer `none` with no flag (#4904), stopping the whole wave.
 HARNESS_FLAG=$(gsd_run query inspect-dispatch-isolation --json 2>/dev/null \
   | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(j&&j.harnessFlag?j.harnessFlag:"")}catch{process.stdout.write("")}})')
 [ -n "$HARNESS_FLAG" ] || { echo "FATAL: runtime declares dispatch.isolation=harness-worktree but no harnessIsolationFlag — refusing to dispatch executors that would believe they are isolated." >&2; exit 1; }

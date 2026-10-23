@@ -2360,7 +2360,7 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
 
   test('the descriptor read (inspect-dispatch-isolation) is never reached by a hold — it answers the host\'s flag while the record stays `none`', (t) => {
     // executor-isolation-dispatch.md reads harnessFlag/exec from the inspect
-    // verb, because a plan-scoped degrade from step 2.5 is held by any query
+    // verb, because another plan's plan-scoped degrade is held by any query
     // that names no plan, and would otherwise null the flag for the wave.
     const dir = createTempProject('gsd-4561-hold-');
     t.after(() => cleanup(dir));
