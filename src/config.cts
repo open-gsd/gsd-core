@@ -1474,12 +1474,7 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
   // not rewrite config.json (#3648).
   const loaderAlias = configLoader.configKeyAliasFor(kp);
   if (loaderAlias?.configGet === 'loader') {
-    let resolved: unknown = configLoader.loadConfig(cwd, { persist: false });
-    for (const segment of loaderAlias.resolvedAt.split('.')) {
-      resolved = resolved !== null && typeof resolved === 'object'
-        ? (resolved as Record<string, unknown>)[segment]
-        : undefined;
-    }
+    const resolved = configLoader.readResolvedAlias(configLoader.loadConfig(cwd, { persist: false }), loaderAlias);
     if (resolved !== undefined) {
       emitResolvedDefault(kp, resolved, raw);
       return;

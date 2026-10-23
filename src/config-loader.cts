@@ -189,6 +189,21 @@ function configKeyAliasFor(keyPath: string): ConfigKeyAlias | undefined {
   );
 }
 
+/**
+ * The value a resolved config (`loadConfig`'s result) holds for an alias entry,
+ * read at the entry's `resolvedAt` path. A stored `null` is returned as `null`;
+ * `undefined` means the resolved config has no value there.
+ */
+function readResolvedAlias(config: Record<string, unknown>, alias: ConfigKeyAlias): unknown {
+  let value: unknown = config;
+  for (const segment of alias.resolvedAt.split('.')) {
+    value = value !== null && typeof value === 'object'
+      ? (value as Record<string, unknown>)[segment]
+      : undefined;
+  }
+  return value;
+}
+
 const CONFIG_DEFAULTS = {
   model_profile: _getConfigDefault('model_profile'),
   commit_docs: _getConfigDefault('commit_docs'),
@@ -1287,6 +1302,7 @@ export = {
   CONFIG_DEFAULTS,
   CONFIG_KEY_ALIASES,
   configKeyAliasFor,
+  readResolvedAlias,
   _getConfigDefault,
   _getNestedConfigDefault,
   _getConfigValue,
