@@ -164,6 +164,7 @@ module.exports = {
   "tests/install-runtime-artifacts.test.cjs",
   "tests/install-write-confinement.test.cjs",
   "tests/install.test.cjs",
+  "tests/installer-first-install-user-skill-5522.test.cjs",
   "tests/installer-migration-antigravity-retire-confighome-artifacts.test.cjs",
   "tests/installer-migration-config-root-marker.test.cjs",
   "tests/installer-migration-pi-retire-hooks-dir.test.cjs",
@@ -347,6 +348,7 @@ module.exports = {
   "tests/workstream.test.cjs",
   "tests/worktree-cleanup.test.cjs",
   "tests/worktree-safety.test.cjs",
+  "tests/worktree-subdir-effective-root-4885.test.cjs",
   "tests/worktree.test.cjs",
   ],
 };

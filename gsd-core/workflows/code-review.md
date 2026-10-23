@@ -125,12 +125,25 @@ If FILES_OVERRIDE is set (from --files flag):
 ```bash
 if [ -n "$FILES_OVERRIDE" ]; then
   REVIEW_FILES=()
-  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+  # #5519: compare the repository root and each resolved path in ONE form. On Windows Git Bash,
+  # `git rev-parse --show-toplevel` (a native program) reports a mixed path (C:/Users/..) while
+  # GNU `realpath` reports an MSYS POSIX path (/c/Users/..); the two never share a prefix, so
+  # every entry looked "outside". `cygpath -m` exists exactly where the forms differ and maps both
+  # to the mixed form; elsewhere the value passes through unchanged.
+  _gsd_norm_path() {
+    if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
+  }
+  REPO_ROOT=$(_gsd_norm_path "$(git rev-parse --show-toplevel 2>/dev/null)")
   
   for file_path in "${FILES_ARRAY[@]}"; do
-    # Security: validate path is within repository (prevent path traversal)
-    ABS_PATH=$(realpath -m "${file_path}" 2>/dev/null || echo "${file_path}")
-    if [[ "$ABS_PATH" != "$REPO_ROOT"* ]]; then
+    # Security: validate path is within repository (prevent path traversal). Compare on a path
+    # boundary: the root itself or anything under "<root>/" — a sibling such as "<root>-other"
+    # shares the prefix but is not inside.
+    ABS_PATH=$(_gsd_norm_path "$(realpath -m "${file_path}" 2>/dev/null || echo "${file_path}")")
+    # Fail closed on two shapes that cannot be trusted: an empty root (git failed, so nothing can be
+    # "inside" it) and a path that still holds ".." segments (a resolved path never does, so it was
+    # not resolved — no GNU realpath).
+    if [ -z "$REPO_ROOT" ] || [[ "$ABS_PATH" == */../* || "$ABS_PATH" == */.. ]] || [[ "$ABS_PATH" != "$REPO_ROOT" && "$ABS_PATH" != "$REPO_ROOT"/* ]]; then
       echo "Error: File path outside repository, skipping: ${file_path}"
       continue
     fi
@@ -943,6 +956,11 @@ grep -A 3 "^### CR-\|^### BL-\|^### WR-" "${REVIEW_PATH}" | head -n 12
 **Windows:** This workflow uses bash features (arrays, process substitution). On Windows, it requires
 Git Bash or WSL. Native PowerShell is not supported. The CI matrix (Ubuntu/macOS/Windows)
 runs under Git Bash on Windows runners, which provides bash compatibility.
+The `--files` containment check compares the repository root with each resolved path, and Git Bash
+reports them in different forms (`git rev-parse` returns `C:/Users/...`, GNU `realpath` returns
+`/c/Users/...`), so both are normalized with `cygpath -m` (shipped with Git Bash) before the
+comparison. Relative paths and absolute paths in either form are accepted when they are inside the
+repository (#5519).
 
 **macOS:** macOS ships with bash 3.2 (GPL licensing). This workflow does NOT use `mapfile` (bash 4+
 only) — all array construction uses portable `while IFS= read -r` loops compatible with bash 3.2.

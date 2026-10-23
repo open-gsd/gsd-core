@@ -75,6 +75,7 @@ registry, not hardcoded here.
 ```bash
 VERIFY_PRE_HOOKS_JSON=$(gsd_run loop render-hooks verify:pre --raw)
 PHASE_DIR=$(printf '%s' "$INIT" | jq -r '.phase_dir // empty')
+PHASE_NUMBER=$(printf '%s' "$INIT" | jq -r '.phase_number // empty')
 ```
 
 Read the `activeHooks` array from `VERIFY_PRE_HOOKS_JSON` in-context (do NOT pipe through a shell parser).
@@ -92,7 +93,7 @@ Record the union of `produces` artefact names declared by the active step entrie
 Resolve active gate hooks from `VERIFY_PRE_HOOKS_JSON` where `kind == "gate"`.
 For each active gate hook, run its declared check (a `check.query` gate runs
 `gsd_run check ${hook.check.query} "${PHASE_DIR}" --raw`; a `predicate` gate
-runs `gsd_run check predicate --predicate '<hook.check.predicate as JSON>' --phase-dir "${PHASE_DIR}" --raw`):
+runs `gsd_run check predicate --predicate '<hook.check.predicate as JSON>' --phase-dir "${PHASE_DIR}" --phase-number "${PHASE_NUMBER}" --raw`):
 
 ```bash
 GATE_RESULT=$(gsd_run check "${hook_check_query}" "${PHASE_DIR}" --raw) && CHECK_EXIT=0 || CHECK_EXIT=$?
@@ -799,7 +800,7 @@ Spawn gsd-plan-checker against the fix plans (iteration_count starts at 1), mode
 > **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling Agent() above, stop working on this task immediately. Do not read more files, edit code, or run tests related to this task while the subagent is active. Wait for the subagent to return its result. This prevents duplicate work, conflicting edits, and wasted context. Only resume when the subagent result is available.
 
 On return:
-- **VERIFICATION PASSED:** Proceed to `present_ready`
+- **VERIFICATION PASSED:** If the return lists an entry whose severity is BLOCKER or WARNING, in the YAML issues block or listed in prose (a mention such as "no warnings" or a zero count is not an entry), handle it as ISSUES FOUND below, counting the prose entries as BLOCKER/WARNING entries; the sentinel never decides alone, and an entry with a missing or unrecognized severity counts as a BLOCKER (#5578). Otherwise proceed to `present_ready`
 - **ISSUES FOUND:** Count BLOCKER + WARNING entries in the YAML issues block; an entry whose severity is missing or unrecognized counts as a BLOCKER (fail closed). If zero — every entry is explicitly INFO — display `ℹ advisory — {dimension}: {description}` per entry and proceed to `present_ready`; INFO is advisory and never enters the loop (#3724). Otherwise proceed to `revision_loop`
 
 Exact Agent() prompt fields: `gsd-core/workflows/verify-work/detail/elaboration.md` § 2.
