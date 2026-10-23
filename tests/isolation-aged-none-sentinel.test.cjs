@@ -286,7 +286,7 @@ describe('the per-plan worktree gate records the isolation sentinel per dispatch
       const body = step(/^2\.5\./);
       assert.match(body, /Part 1/, 'step 2.5 runs Part 1 (the decision) of the gate');
       assert.doesNotMatch(body, /Part 2\b[^\n]*\bfor each plan\b/i, 'step 2.5 does not run Part 2 for each plan');
-      assert.match(body, /not written here|written (in|at) step 3|immediately before/i, 'step 2.5 says the isolation record is written at dispatch');
+      assert.match(body, /isolation record is \*\*not written here\*\*/i, 'step 2.5 says the isolation record is not written in the decision pass');
     });
 
     test('step 3 re-records the sentinel for the plan being dispatched, from that plan\'s stored decision', () => {
