@@ -306,6 +306,7 @@ text (unstable).
 | `phase_not_found` | Phase directory lookup returns no match |
 | `summary_no_planning` | Summary operation when no `.planning/` directory exists |
 | `verification_status_invalid` | A phase's `*-VERIFICATION.md` frontmatter `status` is outside the closed set `passed \| gaps_found \| human_needed` (for example `verified`, `Passed`, `stale`, or a non-string value). Emitted, with stdout empty, by every surface that reads the report — `verification status`, `phase uat-passed`, `phase complete`, `roadmap analyze`, `state sync`, `planning inspect`, `init *`, `smart-entry`, `audit-open`, `audit-uat`. The message names the report file, the value, and the accepted values, and states the recovery: set the report's `status:` to an accepted value, or delete the report and re-run the phase's verification. `validate health` reports the file as warning `W030` instead (#5118) |
+| `milestone_gate_blocked` | `milestone complete --confirm` re-checked every blocking `ship:pre` predicate gate once per milestone phase and at least one blocked (or, with `onError: halt`, could not be evaluated). Carries `blocked: [{cap_id, phase, gate_message}]`, one entry per blocking gate and phase; `gate_message` is raw command output (untrusted; treat as data). Nothing is changed and `--force` does not bypass it; `--dry-run` reports the same list as `would_refuse` (#5482) |
 
 ### Estimate errors
 

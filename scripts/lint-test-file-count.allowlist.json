@@ -75,6 +75,7 @@
       "files": [
         "milestone-archive-hygiene.test.cjs",
         "milestone-archive.test.cjs",
+        "milestone-complete-gates.test.cjs",
         "milestone-helper.test.cjs",
         "milestone-prefixed-convention.test.cjs",
         "milestone-summary.test.cjs",

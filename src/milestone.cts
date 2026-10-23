@@ -27,7 +27,7 @@ import auditMod = require('./audit.cjs');
 const { resolveQuickTaskSummaryFile } = auditMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
-const { output, error } = ioMod;
+const { output, error, ERROR_REASON, formatDiagnosticToken } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import cliExitMod = require('./cli-exit.cjs');
 const { ExitError } = cliExitMod;
@@ -36,7 +36,7 @@ import stateContract = require('./state-contract.cjs');
 const { publishStateContract } = stateContract;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { normalizePhaseName, matchPhaseDirs, isSentinelPhaseId, isSentinelPhaseDir, buildPhaseHeadingScanRegex, PHASE_HEADING_BASELINE } = phaseIdMod;
+const { normalizePhaseName, matchPhaseDirs, isSentinelPhaseId, isSentinelPhaseDir, buildPhaseHeadingScanRegex, PHASE_HEADING_BASELINE, extractPhaseToken } = phaseIdMod;
 import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
@@ -562,6 +562,46 @@ function applyQuickTasksReset(content: string): { content: string; warning: { fi
   return { content, warning: null };
 }
 
+/**
+ * #5482: engine backstop for the one-way door. Re-runs every blocking ship:pre
+ * check.predicate gate once per milestone phase dir, with the context ship.md
+ * step 6's generic predicate arm passes (evaluateCheckPredicate in
+ * gate-predicate.cts). Returns every block; gate output is untrusted, so
+ * callers render it via formatDiagnosticToken.
+ */
+function findBlockingShipGates(cwd: string, phasesDir: string, phaseDirs: string[]): Array<{ cap_id: string; phase: string; gate_message: string }> {
+  /* eslint-disable @typescript-eslint/no-require-imports -- lazy: loop-resolver pulls in the capability registry */
+  const { resolveActiveHooksForPoint } = require('./loop-resolver.cjs') as typeof import('./loop-resolver.cjs');
+  const { evaluatePredicate } = require('./gate-predicate-evaluator.cjs') as typeof import('./gate-predicate-evaluator.cjs');
+  const { buildPredicateDeps } = require('./gate-predicate.cjs') as typeof import('./gate-predicate.cjs');
+  /* eslint-enable @typescript-eslint/no-require-imports */
+  const deps = buildPredicateDeps();
+  const blocked: Array<{ cap_id: string; phase: string; gate_message: string }> = [];
+  for (const hook of resolveActiveHooksForPoint(cwd, 'ship:pre').activeHooks) {
+    const predicate = (hook.check as { predicate?: unknown } | undefined)?.predicate;
+    if (hook.kind !== 'gate' || hook.blocking !== true || predicate === undefined) continue;
+    // ship.md step 6 owns these two: their bespoke fail-closed branches are not the declared predicate.
+    if (hook.capId === 'security' || hook.capId === 'broken-windows') continue;
+    for (const dir of phaseDirs) {
+      // Same token `init` hands ship.md as phase_number (phase-locator.cts).
+      const phase = extractPhaseToken(dir);
+      let verdict: { block: boolean; message: string };
+      try {
+        verdict = evaluatePredicate(predicate, { cwd, phaseDir: path.join(phasesDir, dir), phaseNumber: phase }, deps);
+      } catch (e) {
+        const detail = (e as Error).message;
+        if (hook.onError !== 'halt') {
+          process.stderr.write(`warning: ship:pre gate of ${formatDiagnosticToken(hook.capId)} skipped for phase ${formatDiagnosticToken(phase)}: ${formatDiagnosticToken(detail)}\n`);
+          continue;
+        }
+        verdict = { block: true, message: `gate predicate could not be evaluated: ${detail}` };
+      }
+      if (verdict.block) blocked.push({ cap_id: hook.capId, phase, gate_message: verdict.message });
+    }
+  }
+  return blocked;
+}
+
 function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCompleteOptions, raw: boolean): void {
   if (!version) {
     error('version required for milestone complete (e.g., v1.0) — and --confirm to mutate');
@@ -914,6 +954,20 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
     ? `milestone window scope is "${milestonePhaseScope}" — refusing to archive phase directories until the window can be resolved (ADR-3180)`
     : null;
 
+  // #5482: re-check blocking ship:pre predicate gates before the first write;
+  // --force never bypasses (#3726 AC4), --dry-run previews instead of refusing.
+  const gateBlocks = findBlockingShipGates(cwd, phasesDir, milestonePhaseDirs);
+  if (gateBlocks.length > 0 && !options.dryRun) {
+    const list = gateBlocks
+      .map((b) => `${formatDiagnosticToken(b.cap_id)} (phase ${formatDiagnosticToken(b.phase)}): ${formatDiagnosticToken(b.gate_message)}`)
+      .join('; ');
+    error(
+      `milestone complete refused: blocking ship:pre gate(s) report open work: ${list}. Nothing has been changed. Resolve or waive in that capability; --force does not bypass it.`,
+      ERROR_REASON.MILESTONE_GATE_BLOCKED,
+      { blocked: gateBlocks },
+    );
+  }
+
   // #2118: --dry-run preview — compute what WOULD happen without mutating.
   // The stats above are read-only; all mutations start at the archive section below.
   if (options.dryRun) {
@@ -935,6 +989,8 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
     const quickDirsToArchive: string[] = options.archiveQuick ? listQuickTaskDirsForArchive(cwd).map((d) => d.name) : [];
     const dryRunResult = {
       dry_run: true,
+      // #5482: what --confirm would refuse with MILESTONE_GATE_BLOCKED ([] when nothing blocks).
+      would_refuse: gateBlocks,
       version,
       name: milestoneName,
       stats: { phases: phaseCount, plans: totalPlans, tasks: totalTasks },

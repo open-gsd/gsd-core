@@ -125,6 +125,13 @@ dispatches the evaluator automatically — no further wiring needed.
 gsd_run loop render-hooks ship:pre --raw
 ```
 
+A blocking `ship:pre` predicate gate also guards the milestone close:
+`milestone complete --confirm` re-checks it once per milestone phase (with
+`${PHASE_NUMBER}`/`${PHASE_DIR}` set to that phase) and refuses while it
+blocks; `--force` does not bypass it, and `--dry-run` lists what would refuse.
+Your command therefore runs again at close, once per phase, so keep it
+read-only and idempotent.
+
 ## Gotchas
 
 - **Backgrounded children escape the timeout.** `command: "sleep 100 &"` returns
@@ -133,8 +140,9 @@ gsd_run loop render-hooks ship:pre --raw
   children. (ADR-2008, documented limitation.)
 - **`sh` must be on PATH.** On Windows without git-bash/WSL, the gate fails
   closed (exit 127). This matches the runtime's existing bash dependency.
-- **Output is trimmed.** Only the last 2000 chars of stderr/stdout surface in
-  the gate `message`. Emit a concise diagnostic; don't rely on grepping long
+- **Output is trimmed at the head.** The gate `message` is `command exited N: `
+  followed by stderr (stdout if stderr is empty), cut at its first 2000 chars, so the
+  prefix counts toward the cap; exit 0 surfaces none. Emit a concise diagnostic; don't rely on grepping long
   output downstream.
 - **Env is inherited.** The command sees the full GSD process environment. Do
   not put secrets in the command string; read them from env or a file like any
