@@ -298,7 +298,7 @@ describe('#5637 what an install writes', () => {
         stdio: 'pipe',
         timeout: PROBE_TIMEOUT_MS * 4,
       });
-      const surfaces = installedMarkdown(configDir).filter(({ rel }) => /quick-batch/.test(rel) && !rel.startsWith(`gsd-core${path.sep}workflows`));
+      const surfaces = installedMarkdown(configDir).filter(({ rel }) => /(?:^|[\\/])(?:commands|skills)[\\/].*quick-batch/.test(rel));
       assert.ok(surfaces.length > 0);
       for (const { file, rel } of surfaces) {
         const text = fs.readFileSync(file, 'utf8');
@@ -327,7 +327,7 @@ describe('#5637 what an install writes', () => {
   test('the quick-batch command surface is stamped with its own terminator', () => {
     const { root, configDir } = runMinimalInstall({ runtime: 'opencode', scope: 'global' });
     try {
-      const surfaces = installedMarkdown(configDir).filter(({ rel }) => /quick-batch/.test(rel) && !rel.startsWith(`gsd-core${path.sep}workflows`));
+      const surfaces = installedMarkdown(configDir).filter(({ rel }) => /(?:^|[\\/])(?:commands|skills)[\\/].*quick-batch/.test(rel));
       assert.ok(surfaces.length > 0, 'no quick-batch command or skill was installed');
       for (const { file, rel } of surfaces) {
         assert.match(fs.readFileSync(file, 'utf8'), /^GSD_QUICK_BATCH_ARGS_END_[0-9a-f]{32}\r?$/m, rel);
