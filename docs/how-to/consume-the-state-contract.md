@@ -199,10 +199,19 @@ checkbox list is used instead, and a checkbox can only say complete or not — t
 in-progress phase is identified from `STATE.md`. Regenerating the progress table
 resolves most disagreements.
 
-**Should I commit `state.json`?** Your call. GSD does not add it to
-`.gitignore`. It is a derived cache — safe to delete, regenerated at the next
-boundary — so committing it mostly creates merge noise. If you keep `.planning/`
-out of your repo entirely, see
+**Should I commit `state.json`?** No. The first boundary command in each clone
+adds `/<prefix>state.json` (e.g. `/.planning/state.json`) to `.git/info/exclude`,
+so an untracked copy never shows in `git status`. An exclude cannot hide a file
+that is already tracked, so a copy you committed before stays modified after
+every boundary and `/gsd-ship` refuses the dirty tree. GSD never changes your
+index; `/gsd-health` (`validate health`) reports such a copy as warning `W031`
+with the exact command for the paths it found, e.g.
+`git rm --cached --ignore-unmatch -- .planning/state.json`
+(or `.planning/workstreams/<name>/state.json`). Run it once and commit the
+removal; the file stays on disk, rerunning it is a no-op, and `--repair` never
+runs it for you. Teammates who pull that commit lose their copy, which the next
+boundary regenerates. With `planning.commit_docs` false (or `.planning/` already ignored) GSD does not touch `.git/info/exclude`.
+If you keep `.planning/` out of your repo entirely, see
 [Keep planning docs out of a shared repo](keep-planning-docs-private.md).
 
 ## Related

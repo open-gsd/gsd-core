@@ -310,6 +310,31 @@ function checkW029(snapshot: PlanningSnapshot): Diagnostic[] {
   ];
 }
 
+// ─── W031 — derived state.json still tracked by git (#5505 Case B) ──────────
+//
+// publishStateContract rewrites state.json at every boundary command and lists
+// it in .git/info/exclude, but an exclude cannot hide a tracked file: a copy
+// committed earlier is left modified, so /gsd-ship's clean-tree preflight
+// refuses. ADVISE-only, like W029: GSD never untracks files for you. The fix
+// uses --ignore-unmatch so rerunning it is a no-op.
+
+function checkW031(snapshot: PlanningSnapshot): Diagnostic[] {
+  const paths = snapshot.stateJsonTracked;
+  if (!paths || paths.length === 0) return [];
+  // POSIX single-quote any path the shell would split or expand, so the command pastes as-is.
+  const args = paths.map((p) => (/^[\w./-]+$/.test(p) ? p : `'${p.replace(/'/g, `'\\''`)}'`)).join(' ');
+  return [
+    {
+      code: 'W031',
+      severity: SEVERITY.WARNING,
+      message: `${paths.join(', ')} is tracked by git, but it is a derived cache rewritten at every boundary command — the tracked copy stays modified and /gsd-ship refuses the dirty tree`,
+      remedy: adviseRemedy(
+        `Run \`git rm --cached --ignore-unmatch -- ${args}\` once and commit the removal; the file stays on disk and GSD's .git/info/exclude entry keeps it ignored from then on`,
+      ),
+    },
+  ];
+}
+
 // ─── Exports ────────────────────────────────────────────────────────────────
 
 const RULES: Rule[] = [
@@ -372,6 +397,13 @@ const RULES: Rule[] = [
     description: '.planning/ matches a gitignore rule but is still tracked by git (gitignore has no effect on already-tracked files)',
     repairable: false,
     check: checkW029,
+  },
+  {
+    code: 'W031',
+    severity: SEVERITY.WARNING,
+    description: 'Derived .planning/state.json is tracked by git, so each boundary command leaves it modified',
+    repairable: false,
+    check: checkW031,
   },
 ];
 

@@ -49,7 +49,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { createTempProject, createTempDir, cleanup, runGsdTools } = require('./helpers.cjs');
+const { createTempProject, createTempGitProject, createTempDir, cleanup, runGsdTools } = require('./helpers.cjs');
+const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 
 const { STATE_CONTRACT_VERSION } = require('../gsd-core/bin/lib/state-contract.cjs');
 
@@ -444,5 +445,88 @@ describe('state contract — call-site wiring (integration, real CLI)', () => {
     const second = runGsdTools(['phase', 'complete', '1'], tmpDir);
     assert.ok(second.success, `second (no-op) phase complete call must genuinely succeed: ${second.error}`);
     assert.strictEqual(fs.existsSync(statePathOf(tmpDir)), false, 'the second, no-op phase complete call must not publish state.json');
+  });
+});
+
+// #5505: state.json is a derived cache — publishing it must never dirty the tree.
+describe('state.json never dirties the tree (#5505)', () => {
+  const git = (cwd, ...args) => gitOrThrow(args, { cwd });
+  const BEGIN = ['state', 'begin-phase', '--phase', '2', '--name', 'Hardening', '--plans', '2'];
+  const STATE_MD = '# Project State\n\n**Current Phase:** 2\n**Current Phase Name:** Hardening\n**Total Phases:** 3\n**Current Plan:** 0\n**Total Plans in Phase:** 0\n**Status:** Ready to plan\n**Last Activity:** 2024-01-01\n';
+
+  // Seeds a committed repo, runs one boundary command, returns paths.
+  function boundary(t, { wsName, preTracked } = {}) {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    const dir = wsName ? path.join(tmpDir, '.planning', 'workstreams', wsName) : path.join(tmpDir, '.planning');
+    fs.mkdirSync(dir, { recursive: true });
+    const rel = path.relative(tmpDir, dir).split(path.sep).join('/');
+    fs.writeFileSync(path.join(dir, 'STATE.md'), STATE_MD);
+    fs.writeFileSync(path.join(tmpDir, '.gitignore'), 'milestone.lock\n'); // unrelated lock artifact, out of #5505 scope
+    if (preTracked) fs.writeFileSync(path.join(dir, 'state.json'), '{}\n');
+    git(tmpDir, 'add', '-A');
+    git(tmpDir, 'commit', '-q', '-m', 'seed');
+    const r = runGsdTools(wsName ? [...BEGIN, '--ws', wsName] : BEGIN, tmpDir);
+    assert.ok(r.success, `boundary command must succeed: ${r.error}`);
+    assert.ok(fs.existsSync(path.join(dir, 'state.json')), 'state.json published');
+    return { tmpDir, rel };
+  }
+
+  test('fresh state.json is ignored and the scoped final commit leaves a clean tree', (t) => {
+    const { tmpDir, rel } = boundary(t);
+    git(tmpDir, 'check-ignore', '-q', `${rel}/state.json`);
+    const c = runGsdTools(['commit', 'docs: final', '--files', `${rel}/STATE.md`], tmpDir);
+    assert.ok(c.success, `scoped commit must succeed: ${c.error}`);
+    assert.strictEqual(git(tmpDir, 'status', '--porcelain'), '');
+  });
+
+  test('pre-tracked state.json stays committable, and the documented untrack keeps later boundaries clean', (t) => {
+    const { tmpDir, rel } = boundary(t, { preTracked: true });
+    // GSD never edits the index, so `commit --files` on the tracked copy still stages it.
+    const c = runGsdTools(['commit', 'docs: state', '--files', `${rel}/state.json`], tmpDir);
+    assert.ok(c.success, `commit of the tracked copy must succeed: ${c.error}`);
+    // The one-time untrack from the how-to; the exclude then hides every later publish.
+    git(tmpDir, 'rm', '-q', '--cached', `${rel}/state.json`);
+    git(tmpDir, 'commit', '-q', '-m', 'untrack');
+    const r = runGsdTools(BEGIN, tmpDir);
+    assert.ok(r.success, `boundary command must succeed: ${r.error}`);
+    assert.strictEqual(git(tmpDir, 'status', '--porcelain', '--', `${rel}/state.json`), '');
+  });
+
+  test('Case B: health W031 names a tracked state.json a boundary left modified; its advised untrack is idempotent and keeps later boundaries clean', (t) => {
+    const { tmpDir, rel } = boundary(t, { wsName: 'ws1', preTracked: true });
+    const p = `${rel}/state.json`;
+    assert.match(git(tmpDir, 'status', '--porcelain', '--', p), /M .*state\.json/, 'the boundary left the tracked copy modified');
+    const w031 = () => JSON.parse(runGsdTools(['validate', 'health'], tmpDir).output).warnings.find((w) => w.code === 'W031');
+    const warning = w031();
+    assert.ok(warning, 'validate health must report W031');
+    const cmd = /`(git rm [^`]+)`/.exec(warning.fix)[1];
+    assert.strictEqual(cmd, `git rm --cached --ignore-unmatch -- ${p}`);
+    // Run the advised command twice: the migration is idempotent (the rerun exits 0), and the file stays on disk.
+    git(tmpDir, ...cmd.split(' ').slice(1));
+    git(tmpDir, ...cmd.split(' ').slice(1));
+    assert.ok(fs.existsSync(path.join(tmpDir, p)), 'untracking keeps the file on disk');
+    git(tmpDir, 'commit', '-q', '-m', 'untrack');
+    const r = runGsdTools([...BEGIN, '--ws', 'ws1'], tmpDir);
+    assert.ok(r.success, `boundary command must succeed: ${r.error}`);
+    assert.strictEqual(git(tmpDir, 'status', '--porcelain', '--', p), '');
+    assert.strictEqual(w031(), undefined, 'W031 clears once untracked');
+  });
+
+  test('commit --files on an untracked, ignored state.json skips it and still commits the rest', (t) => {
+    const { tmpDir, rel } = boundary(t);
+    fs.appendFileSync(path.join(tmpDir, rel, 'STATE.md'), '\nedited\n');
+    const c = runGsdTools(['commit', 'docs: mixed', '--files', `${rel}/state.json`, `${rel}/STATE.md`], tmpDir);
+    assert.ok(c.success, `commit must not abort on the ignored path: ${c.error}`);
+    const out = JSON.parse(c.output);
+    assert.strictEqual(out.committed, true);
+    assert.deepStrictEqual(out.skipped_files, [`${rel}/state.json`]);
+    assert.strictEqual(git(tmpDir, 'status', '--porcelain'), '');
+  });
+
+  test('workstream state.json is ignored', (t) => {
+    const { tmpDir, rel } = boundary(t, { wsName: 'ws1' });
+    git(tmpDir, 'check-ignore', '-q', `${rel}/state.json`);
+    assert.strictEqual(git(tmpDir, 'status', '--porcelain', '--', `${rel}/state.json`), '');
   });
 });

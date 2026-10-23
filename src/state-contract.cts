@@ -39,7 +39,9 @@
  * contract/40-design.md`): a `--watch` mode, a reader API inside gsd-core, a
  * diff/event stream, a config toggle, milestone-scoping of `phases[]`. This
  * module answers "where is this project right now" and nothing else — a
- * request for document *contents* belongs to `planning.inspect`.
+ * request for document *contents* belongs to `planning.inspect`. (Its one side
+ * effect beyond the snapshot: `excludeStateJson` keeps state.json out of git via
+ * `.git/info/exclude`, REQ-SC-04.)
  *
  * REQUIRE-CYCLE HAZARD (the single most important implementation
  * constraint). `src/state.cts` imports THIS module, and `src/smart-entry.cts`
@@ -72,6 +74,7 @@ import fs from 'node:fs';
 // documented `state.cjs -> state-contract.cjs -> smart-entry.cjs -> state.cjs`
 // require cycle the file header warns about.
 import { WIRE_STATUS, parseRoadmapStatusCell } from './phase-status.cjs';
+import { splitLines } from './text-lines.cjs';
 
 // ─── Public wire vocabulary ────────────────────────────────────────────────
 
@@ -132,6 +135,7 @@ interface Owners {
   planningPaths: typeof import('./planning-workspace.cjs')['planningPaths'];
   platformReadSync: typeof import('./shell-command-projection.cjs')['platformReadSync'];
   platformWriteSync: typeof import('./shell-command-projection.cjs')['platformWriteSync'];
+  execGit: typeof import('./shell-command-projection.cjs')['execGit'];
   locateProgressTable: typeof import('./phase-lifecycle.cjs')['locateProgressTable'];
   isSentinelPhaseId: typeof import('./phase-id.cjs')['isSentinelPhaseId'];
   parsePhaseFromProse: typeof import('./phase-id.cjs')['parsePhaseFromProse'];
@@ -169,6 +173,7 @@ function owners(): Owners {
     planningPaths: planningWorkspaceMod.planningPaths,
     platformReadSync: shellCommandProjectionMod.platformReadSync,
     platformWriteSync: shellCommandProjectionMod.platformWriteSync,
+    execGit: shellCommandProjectionMod.execGit,
     locateProgressTable: phaseLifecycleMod.locateProgressTable,
     isSentinelPhaseId: phaseIdMod.isSentinelPhaseId,
     parsePhaseFromProse: phaseIdMod.parsePhaseFromProse,
@@ -355,6 +360,31 @@ export function buildStateContract(cwd: string, deps?: StateContractDeps): State
 }
 
 /**
+ * state.json is a derived cache (#5505): ignore it via the repo-local
+ * info/exclude (never a tracked file). A copy already tracked is left alone;
+ * migrating it is the user's call. Best-effort; callers swallow throws.
+ */
+function excludeStateJson(planningDir: string, execGit: Owners['execGit']): void {
+  // gitignore cannot express a newline in a pattern, and git's line output could not be split.
+  if (/[\r\n]/.test(planningDir)) return;
+  // cwd must pick the repo: drop inherited repository-location variables (e.g. inside a git hook).
+  const env = { GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined, GIT_COMMON_DIR: undefined };
+  // Short bound: this runs on every boundary command's hot path.
+  // The prefix goes last: stdout is trimmed, and a non-empty prefix ends in `/`, so only an
+  // empty prefix (planning dir is the git root) loses its line; a leading space survives.
+  const revParse = execGit(['rev-parse', '--git-path', 'info/exclude', '--show-prefix'], { cwd: planningDir, env, timeout: 5_000 });
+  const [excludeRel, prefix = ''] = splitLines(String(revParse.stdout));
+  if (revParse.exitCode !== 0 || !excludeRel) return;
+  const exclude = path.resolve(planningDir, excludeRel);
+  // Escape gitignore metacharacters in the directory prefix.
+  const entry = `/${prefix.replace(/[\\*?[]/g, '\\$&')}state.json`;
+  const existing = fs.existsSync(exclude) ? fs.readFileSync(exclude, 'utf8') : '';
+  if (splitLines(existing).includes(entry)) return;
+  fs.mkdirSync(path.dirname(exclude), { recursive: true });
+  fs.appendFileSync(exclude, (existing && !existing.endsWith('\n') ? '\n' : '') + entry + '\n');
+}
+
+/**
  * Publish the state-contract snapshot to `<planning>/state.json`. NEVER
  * throws — for any input, ever (acceptance criterion 3: the parent boundary
  * command's exit code and stdout must be unchanged whatever happens here).
@@ -373,7 +403,7 @@ export function buildStateContract(cwd: string, deps?: StateContractDeps): State
  */
 export function publishStateContract(cwd: string, deps?: StateContractDeps): { published: boolean; reason: string } {
   try {
-    const { planningPaths, platformWriteSync } = owners();
+    const { planningPaths, platformWriteSync, execGit } = owners();
     // Resolve the planning root BEFORE anything else. A resolution failure
     // (invalid GSD_WORKSTREAM/GSD_PROJECT segment — the #2245 shape) means no
     // write was ever attempted, so it must map to `no_planning_dir`, not
@@ -396,6 +426,16 @@ export function publishStateContract(cwd: string, deps?: StateContractDeps): { p
       platformWriteSync(statePath, JSON.stringify(snapshot, null, 2) + '\n');
     } catch {
       return { published: false, reason: PUBLISH_REASON.WRITE_FAILED };
+    }
+
+    try {
+      // commit_docs false (explicit, or .planning already ignored) means the user keeps
+      // planning out of git: leave the enclosing repo's exclude alone.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { loadConfig } = require('./config-loader.cjs') as typeof import('./config-loader.cjs');
+      if (loadConfig(cwd).commit_docs !== false) excludeStateJson(path.dirname(statePath), execGit);
+    } catch {
+      // REQ-SC-04: ignoring is optional; never perturb the publish result.
     }
 
     return { published: true, reason: PUBLISH_REASON.PUBLISHED };

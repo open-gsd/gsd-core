@@ -1223,6 +1223,145 @@ describe('state contract — write mechanics', () => {
   });
 });
 
+// ─── 14b. Git-ignore of the derived cache (#5505) ─────────────────────────────
+
+describe('state contract — state.json is git-ignored via info/exclude (#5505)', () => {
+  const { createTempGitProject } = require('./helpers.cjs');
+  const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+  const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+  const git = (cwd, ...args) => gitOrThrow(args, { cwd });
+  const excludeOf = (cwd) => path.resolve(cwd, git(cwd, 'rev-parse', '--git-path', 'info/exclude').trim());
+  const lines = (f) => splitLines(fs.readFileSync(f, 'utf8'));
+
+  test('isIdempotentEvenOnACrlfExclude', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    publishStateContract(tmpDir, fixedDeps());
+    const exclude = excludeOf(tmpDir);
+    fs.writeFileSync(exclude, fs.readFileSync(exclude, 'utf8').replace(/\r?\n/g, '\r\n'));
+    publishStateContract(tmpDir, fixedDeps());
+    assert.strictEqual(lines(exclude).filter((l) => l === '/.planning/state.json').length, 1);
+  });
+
+  test('linkedWorktreeWritesTheCommonExclude', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    const wt = path.join(tmpDir, 'linked');
+    git(tmpDir, 'worktree', 'add', '-q', '-b', 'wt', wt);
+    fs.mkdirSync(planningDirOf(wt), { recursive: true });
+    publishStateContract(wt, fixedDeps());
+    assert.ok(lines(excludeOf(tmpDir)).includes('/.planning/state.json'));
+    git(wt, 'check-ignore', '-q', '.planning/state.json');
+  });
+
+  test('globCharsInThePrefixAreEscaped', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    // The entry is always `/<prefix>state.json`, so only in-pattern metacharacters
+    // can reach it; a leading `#`/`!` or trailing space cannot occur.
+    // Windows forbids backslash, `*` and `?` in file names.
+    const meta = fc.constantFrom(...(process.platform === 'win32' ? [] : ['\\', '*', '?']), '[', ']', 'a', 'b');
+    const names = fc.array(meta, { minLength: 1, maxLength: 6 }).map((cs) => `d${cs.join('')}`);
+    fc.assert(fc.property(names, (name) => {
+      const sub = path.join(tmpDir, name);
+      fs.mkdirSync(planningDirOf(sub), { recursive: true });
+      publishStateContract(sub, fixedDeps());
+      git(tmpDir, 'check-ignore', '-q', `${name}/.planning/state.json`);
+      // An escaped entry matches only its own directory, never a glob sibling.
+      assert.throws(() => git(tmpDir, 'check-ignore', '-q', 'dX/.planning/state.json'));
+    }), { seed: 5505, numRuns: 15 });
+  });
+
+  test('aLeadingSpaceInThePrefixSurvivesGitOutputTrimming', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    const sub = path.join(tmpDir, ' notes');
+    fs.mkdirSync(planningDirOf(sub), { recursive: true });
+    publishStateContract(sub, fixedDeps());
+    git(tmpDir, 'check-ignore', '-q', ' notes/.planning/state.json');
+  });
+
+  test('aNewlineInThePlanningPathWritesNoEntry', { skip: process.platform === 'win32' }, (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    const exclude = excludeOf(tmpDir);
+    const before = fs.readFileSync(exclude, 'utf8');
+    const sub = path.join(tmpDir, 'a\nb');
+    fs.mkdirSync(planningDirOf(sub), { recursive: true });
+    assert.strictEqual(publishStateContract(sub, fixedDeps()).published, true);
+    // gitignore cannot express a newline in a pattern: skip rather than write a truncated entry.
+    assert.strictEqual(fs.readFileSync(exclude, 'utf8'), before);
+  });
+
+  test('ignoresInheritedGitDirEnv', (t) => {
+    const tmpDir = createTempGitProject();
+    const other = createTempGitProject();
+    const prior = process.env.GIT_DIR;
+    t.after(() => {
+      if (prior === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = prior;
+      cleanup(tmpDir); cleanup(other);
+    });
+    const before = fs.readFileSync(excludeOf(other), 'utf8');
+    process.env.GIT_DIR = path.join(other, '.git');
+    publishStateContract(tmpDir, fixedDeps());
+    if (prior === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = prior;
+    assert.ok(lines(excludeOf(tmpDir)).includes('/.planning/state.json'));
+    assert.strictEqual(fs.readFileSync(excludeOf(other), 'utf8'), before);
+  });
+
+  test('anExcludeFailureStillPublishes', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    const exclude = excludeOf(tmpDir);
+    fs.unlinkSync(exclude);
+    fs.mkdirSync(exclude, { recursive: true });
+    assert.strictEqual(publishStateContract(tmpDir, fixedDeps()).published, true);
+    // No partial write: the blocking directory is left as it was, empty.
+    assert.deepStrictEqual(fs.readdirSync(exclude), []);
+    assert.strictEqual(fs.existsSync(statePathOf(tmpDir)), true);
+  });
+
+  test('aNonGitProjectPublishesWithoutCreatingDotGit', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    assert.strictEqual(publishStateContract(tmpDir, fixedDeps()).published, true);
+    assert.ok(!fs.existsSync(path.join(tmpDir, '.git')));
+  });
+
+  test('planningRootIsTheGitRoot', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const planning = planningDirOf(tmpDir);
+    git(planning, 'init', '-q');
+    publishStateContract(tmpDir, fixedDeps());
+    assert.ok(lines(excludeOf(planning)).includes('/state.json'));
+    git(planning, 'check-ignore', '-q', 'state.json');
+  });
+
+  test('commitDocsFalseLeavesTheEnclosingRepoAlone', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    fs.writeFileSync(path.join(planningDirOf(tmpDir), 'config.json'), JSON.stringify({ planning: { commit_docs: false } }));
+    const exclude = excludeOf(tmpDir);
+    const before = fs.readFileSync(exclude, 'utf8');
+    assert.strictEqual(publishStateContract(tmpDir, fixedDeps()).published, true);
+    assert.strictEqual(fs.readFileSync(exclude, 'utf8'), before);
+  });
+
+  test('preTrackedCopyIsLeftTrackedAndStageable', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    fs.writeFileSync(statePathOf(tmpDir), '{}\n');
+    git(tmpDir, 'add', '-f', '.planning/state.json');
+    git(tmpDir, 'commit', '-q', '-m', 'track');
+    publishStateContract(tmpDir, fixedDeps());
+    // The index is never touched: migrating a tracked copy is the user's call.
+    assert.match(git(tmpDir, 'ls-files', '-v', '--', '.planning/state.json'), /^H \.planning\/state\.json$/m);
+    git(tmpDir, 'add', '--', '.planning/state.json');
+    assert.match(git(tmpDir, 'status', '--porcelain'), /^M {2}\.planning\/state\.json$/m);
+  });
+});
+
 // ─── 15. Property-based (fast-check, seeded + bounded) ────────────────────────
 
 describe('state contract — property-based', () => {

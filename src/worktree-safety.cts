@@ -51,7 +51,7 @@ type ExecGitFn = typeof execGitSeam;
  * passthrough. Tests inject mocks via deps.execGit using the same
  * (args, opts) shape — see worktree-safety-policy.test.cjs.
  */
-function execGitDefault(args: string[], opts: { cwd?: string; env?: Record<string, string>; timeout?: number } = {}): GitResult {
+function execGitDefault(args: Parameters<ExecGitFn>[0], opts: Parameters<ExecGitFn>[1] = {}): GitResult {
   return execGitSeam(args, { ...opts, timeout: opts.timeout ?? DEFAULT_GIT_TIMEOUT_MS });
 }
 

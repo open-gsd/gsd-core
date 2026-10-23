@@ -661,10 +661,10 @@ function _spawnResult(result: { error?: NodeJS.ErrnoException | null; status?: n
   };
 }
 
-export function execGit(args: string[], opts: { cwd?: string; env?: Record<string, string>; timeout?: number } = {}): SpawnResultOutput {
+export function execGit(args: string[], opts: { cwd?: string; env?: Record<string, string | undefined>; timeout?: number } = {}): SpawnResultOutput {
   // Non-interactive defaults: a hung credential prompt or terminal-input
   // probe must surface as a timeout, not block the tool forever. Callers
-  // can override via opts.env.
+  // can override via opts.env; an `undefined` value drops the variable.
   const env = {
     ...process.env,
     GIT_TERMINAL_PROMPT: '0',

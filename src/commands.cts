@@ -2256,6 +2256,11 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
       // cmdCommitToSubrepo's exitCode-gated push.
       if (addResult.exitCode === 0) {
         stagedPaths.push(file);
+      } else if (explicitFiles && execGit(['check-ignore', '-q', '--', file], { cwd }).exitCode === 0) {
+        // #5505: an untracked, ignored path (e.g. the derived .planning/state.json)
+        // cannot stage; like a missing file it is skipped and recorded, not a failure.
+        // check-ignore exits 0 only for ignored UNTRACKED paths, so a tracked file still fails closed.
+        skippedFiles.push(file);
       } else {
         stagingFailures.push({
           file,

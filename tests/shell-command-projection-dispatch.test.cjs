@@ -87,6 +87,16 @@ describe('execGit', () => {
     const result = execGit(['status', '--porcelain'], { cwd: tmpDir });
     assert.strictEqual(result.exitCode, 0);
   });
+
+  test('an undefined env value drops the inherited variable', (t) => {
+    const prior = process.env.GIT_DIR;
+    t.after(() => { if (prior === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = prior; });
+    process.env.GIT_DIR = path.join(tmpDir, 'no-such-git-dir');
+    assert.notStrictEqual(execGit(['rev-parse', '--git-dir'], { cwd: tmpDir }).exitCode, 0);
+    const result = execGit(['rev-parse', '--git-dir'], { cwd: tmpDir, env: { GIT_DIR: undefined } });
+    assert.strictEqual(result.exitCode, 0);
+    assert.strictEqual(result.stdout, '.git');
+  });
 });
 
 // ─── execNpm ─────────────────────────────────────────────────────────────────
