@@ -646,12 +646,43 @@ const SHARD_BALANCE = Object.freeze({
   since: '2026-09-28T14:17:51Z', // #5097 merge
   minRuns: 10,
   windowRuns: 20,
-  maxMedianGapMs: 120000,
-  baselineShardTotal: 3,
+  // #5029 resharded the lane 3 -> 6. Every figure below is measured over the
+  // twelve 6-shard runs of PR #5053 whose heads carry #5097's win32 weights
+  // (36785097774, 37024435915, 37031116287, 37037251805, 37041237415,
+  // 37086102648, 37138563782, 37694227292, 37697717410, 38647499912,
+  // 38650210804, 38654860178) — not scaled from the 3-shard values. They are
+  // pull_request runs, and `next` has since refreshed tests/test-timings.json,
+  // so re-derive from `next` push runs once `minRuns` of them exist.
+  //
+  // Gap limit. #5101 shipped 120000 (2 min) for ~25-31 min shards. On six
+  // ~12-min shards the measured median gap is 332.5s (5/6 median 1011.5s vs 6/6
+  // 679s), and its cause is not packing weights: a chunk cannot finish before
+  // its longest file, and the tier has single files of 3.5-6.5 min that land
+  // in different chunks of different shards (`install` 384s,
+  // `codex-config-agents` 371s, `verification-status` 219s,
+  // `install-minimal-hooks` 218s on run 37697717410). Regenerating the win32
+  // table does not move that. The limit is the measured gap x 1.5, the same
+  // headroom factor tests/ci-test-job-timeout-budget.test.cjs applies to job
+  // budgets: 332.5 x 1.5 = 498.75s, rounded up to 500s. It still flags a
+  // shard drifting ~3 more minutes away from the rest.
+  maxMedianGapMs: 500000,
+  // Baselines. The measured nearest-rank p90 of job wall-clock per shard (the
+  // same `percentile` this file uses) over those twelve runs is 1/6 934000,
+  // 2/6 742000, 3/6 998000, 4/6 918000, 5/6 1118000, 6/6 791000. Each baseline
+  // is that p90 x 1.25. A baseline equal to one sample's p90 is exceeded by the
+  // p90 of a fresh sample of the same distribution too often (5/6's own twelfth
+  // value, 1155000, is already above 1118000), so the daily check would open a
+  // p90 breach on noise. 1.25 rather than the 1.5 used above keeps the rule a
+  // regression detector: x1.5 would put 5/6 at ~28 min, close to the 30-min
+  // job budget the test-conformance LANE_COSTS entry already enforces.
+  baselineShardTotal: 6,
   baselineP90Ms: Object.freeze({
-    '1/3': 1824000,
-    '2/3': 2046000,
-    '3/3': 2208000,
+    '1/6': 1167500,
+    '2/6': 927500,
+    '3/6': 1247500,
+    '4/6': 1147500,
+    '5/6': 1397500,
+    '6/6': 988750,
   }),
   issueTitle: 'CI: Windows conformance shard balance regressed',
 });
