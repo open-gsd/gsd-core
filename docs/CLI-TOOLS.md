@@ -196,7 +196,8 @@ node gsd-tools.cjs phase-plan-index <phase>
 # List phases with filtering
 node gsd-tools.cjs phases list [--type planned|executed|all] [--phase N] [--include-archived]
 
-# Archive (or, with --force, permanently delete) every current phase directory —
+# Archive every current phase directory under .planning/milestones/<label>-phases/;
+# --force skips only the uncommitted-changes guard, it never deletes —
 # used by /gsd-new-milestone before roadmapping the next cycle
 node gsd-tools.cjs phases clear [--confirm] [--force] [--archive-version <version>]
 ```
@@ -214,12 +215,21 @@ sentinel and out-of-window directories.
 
 ### `phases clear` and sentinel directories
 
-`phases clear` moves (or, with `--force` and no prior archive, permanently
-deletes) every phase directory under `.planning/phases/` except sentinels. It
-now excludes both `999.*` (backlog) and `0-*` (pre-milestone) directories via
-the same canonical sentinel predicate `phases list` uses — previously its own
-regex excluded `999` but not `0`, so a `0-*` directory could be destroyed on
-this irreversible path.
+`phases clear` moves every phase directory under `.planning/phases/`
+(except sentinels) into the milestone archive at
+`.planning/milestones/<label>-phases/` (under an active workstream or
+project, the same layout below that planning root). Sentinel directories —
+`999.*` (backlog) and `0-*` (pre-milestone) — are excluded via the same
+canonical sentinel predicate `phases list` uses, and stay in
+`.planning/phases/`. `--force` only skips the uncommitted-changes guard; it
+never deletes.
+
+The two refusals carry a typed reason under `--json-errors`:
+`phases_clear_confirm_required` (no `--confirm`; the envelope adds
+`phase_dirs` and `archive_root`) and `phases_clear_uncommitted_changes`
+(the #1447 guard; the envelope adds `uncommitted_changes` and
+`archive_root`). `archive_root` is the archive directory relative to the
+working directory, for example `.planning/milestones`.
 
 ### `find-phase` plan/summary counts (live vs physical)
 

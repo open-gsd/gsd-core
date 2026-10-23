@@ -642,7 +642,11 @@ describe('regressions', () => {
       // #5118 legitimately added a 27th code — VERIFICATION_STATUS_INVALID —
       // for a *-VERIFICATION.md status outside the closed VerificationStatus
       // set (ADR-5057 Phase 4), the same kind of documented growth.
-      assert.strictEqual(seen.reasonCount, 27, 'ERROR_REASON must keep all 27 members (26 + #5118 VERIFICATION_STATUS_INVALID)');
+      //
+      // #5270 legitimately added a 28th and 29th code — PHASES_CLEAR_CONFIRM_REQUIRED
+      // and PHASES_CLEAR_UNCOMMITTED_CHANGES — for the two `phases clear`
+      // refusals, the same kind of documented growth.
+      assert.strictEqual(seen.reasonCount, 29, 'ERROR_REASON must keep all 29 members (27 + #5270 PHASES_CLEAR_*)');
       assert.ok(
         seen.keys.includes('SDK_FAIL_FAST'),
         `ERROR_REASON must still include SDK_FAIL_FAST, got: ${JSON.stringify(seen.keys)}`,

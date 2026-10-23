@@ -4,6 +4,7 @@ const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { routePhasesCommand } = require('../gsd-core/bin/lib/phases-command-router.cjs');
+const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
 
 // These tests exercise router dispatch with a deterministic runtime context.
 let _prevWorkstream;
@@ -94,13 +95,13 @@ describe('phases-command-router', () => {
 /**
  * Regression tests for bug #1826
  *
- * `phases clear` must require an explicit --confirm flag before deleting any
+ * `phases clear` must require an explicit --confirm flag before archiving any
  * phase directories. Without it, any accidental or hallucinated invocation
- * wipes the entire .planning/phases/ tree with no warning.
+ * moves the entire .planning/phases/ tree into the milestone archive with no warning.
  *
  * Rules:
  *   - Phase dirs present + no --confirm → non-zero exit, clear error message
- *   - Phase dirs present + --confirm    → deletes, exits 0, reports count
+ *   - Phase dirs present + --confirm    → archives, exits 0, reports count
  *   - No phase dirs + no --confirm      → exits 0, cleared=0 (nothing to guard)
  */
 
@@ -136,20 +137,19 @@ describe('bug #1826: phases clear --confirm guard', () => {
     fs.mkdirSync(path.join(phasesDir, '01-foundation'), { recursive: true });
     fs.mkdirSync(path.join(phasesDir, '02-api'), { recursive: true });
 
-    const result = runGsdTools(['phases', 'clear'], tmpDir);
+    const result = runGsdTools(['--json-errors', 'phases', 'clear'], tmpDir);
 
     assert.ok(!result.success, 'should exit non-zero when dirs exist and --confirm absent');
-    assert.ok(
-      result.error.includes('--confirm'),
-      `error message must mention --confirm; got: ${result.error}`
-    );
+    const envelope = JSON.parse(result.error);
+    assert.strictEqual(envelope.ok, false);
+    assert.strictEqual(envelope.reason, ERROR_REASON.PHASES_CLEAR_CONFIRM_REQUIRED);
 
     // Dirs must be untouched
-    assert.ok(fs.existsSync(path.join(phasesDir, '01-foundation')), 'dirs must not be deleted');
-    assert.ok(fs.existsSync(path.join(phasesDir, '02-api')), 'dirs must not be deleted');
+    assert.ok(fs.existsSync(path.join(phasesDir, '01-foundation')), 'dirs must not be archived away');
+    assert.ok(fs.existsSync(path.join(phasesDir, '02-api')), 'dirs must not be archived away');
   });
 
-  test('phases clear --confirm deletes dirs and reports count', () => {
+  test('phases clear --confirm archives dirs and reports count', () => {
     const phasesDir = path.join(tmpDir, '.planning', 'phases');
     fs.mkdirSync(path.join(phasesDir, '01-foundation'), { recursive: true });
     fs.mkdirSync(path.join(phasesDir, '02-api'), { recursive: true });
