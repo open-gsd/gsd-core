@@ -90,9 +90,15 @@ function interpolate(command: string, ctx: PredicateContext): string {
   });
 }
 
-/** Cap a string at COMMAND_MAX_OUTPUT_CHARS so gate messages stay context-bounded. */
-function trimToMax(s: string): string {
-  return s.length > COMMAND_MAX_OUTPUT_CHARS ? s.slice(0, COMMAND_MAX_OUTPUT_CHARS) : s;
+/** `prefix` + the TAIL of `output`, capped at COMMAND_MAX_OUTPUT_CHARS in total (errors land last; ADR-2008). */
+function prefixedTail(prefix: string, output: string): string {
+  const budget = COMMAND_MAX_OUTPUT_CHARS - prefix.length;
+  // slice(-0) returns the whole string, so a non-positive budget must not reach it.
+  if (budget <= 0) return prefix;
+  let tail = output.slice(-budget);
+  // The cut counts UTF-16 units; drop a low surrogate it orphaned (renders as U+FFFD in JSON).
+  if (output.length > budget && /^[\uDC00-\uDFFF]/.test(tail)) tail = tail.slice(1);
+  return prefix + tail;
 }
 
 function isNonEmptyString(v: unknown): v is string {
@@ -127,9 +133,13 @@ function evaluateCommandExitZero(
   const res = deps.runBoundedShell({ command: interpolated, cwd: ctx.cwd, timeoutMs });
 
   if (res.timedOut) {
+    const prefix = `command timed out after ${Math.round(timeoutMs / 1000)}s: `;
     return {
       block: true,
-      message: trimToMax(`command timed out after ${Math.round(timeoutMs / 1000)}s: ${res.stderr || interpolated}`),
+      // The command's head (program name, leading args) identifies it; only stderr is tail-capped.
+      message: res.stderr
+        ? prefixedTail(prefix, res.stderr)
+        : prefix + interpolated.slice(0, COMMAND_MAX_OUTPUT_CHARS - prefix.length),
       details: { kind: 'command-exit-zero', timedOut: true, signal: res.signal },
     };
   }
@@ -144,11 +154,10 @@ function evaluateCommandExitZero(
 
   // Non-zero (incl. null exit from a signal kill) => block. Surface code + stderr/stdout tail.
   const code = res.exitCode === null ? '<none>' : String(res.exitCode);
-  const tail = trimToMax(res.stderr || res.stdout || '');
-  const message = tail ? `command exited ${code}: ${tail}` : `command exited ${code}`;
+  const output = res.stderr || res.stdout || '';
   return {
     block: true,
-    message: trimToMax(message),
+    message: output ? prefixedTail(`command exited ${code}: `, output) : `command exited ${code}`,
     details: { kind: 'command-exit-zero', exitCode: res.exitCode, signal: res.signal },
   };
 }
