@@ -1143,6 +1143,89 @@ function restoreWorkstreamEnv() {
   else process.env.GSD_PROJECT = _origGsdProject;
 }
 
+/** Sets each [name, value] pair on process.env, deleting the undefined ones. */
+function _restoreEnvPairs(saved) {
+  for (const [name, value] of saved) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+}
+
+/**
+ * Gives git a configuration of its own, for a test whose answer depends on what
+ * git ignores. The config loader runs `git check-ignore` to decide
+ * `commit_docs`, so a developer whose git setup ignores `.planning` would
+ * otherwise see every fixture's `.planning/` as gitignored (#5470). Call it
+ * BEFORE creating the fixture repo, so templates cannot seed its exclude file.
+ *
+ * - Every GIT_* variable is cleared: GIT_CONFIG_PARAMETERS and
+ *   GIT_CONFIG_COUNT/KEY_n/VALUE_n inject config, and GIT_DIR and GIT_WORK_TREE
+ *   point git at another repository.
+ * - GIT_TEMPLATE_DIR names an empty directory, because `git init` otherwise
+ *   copies the installation's default template, whose `info/exclude` a
+ *   developer-owned git install can carry `.planning` in.
+ * - GIT_CONFIG_GLOBAL names a config written here and GIT_CONFIG_NOSYSTEM drops
+ *   the system one. That config sets `core.excludesFile` to an empty file,
+ *   because without it git still reads its default global ignore file,
+ *   `$XDG_CONFIG_HOME/git/ignore` (or `~/.config/git/ignore`).
+ * - Both are real files rather than /dev/null, which Windows does not have. The
+ *   path is quoted, with `\`, `"`, newline, tab and backspace escaped, so no
+ *   character a TMPDIR can hold changes what git reads.
+ *
+ * execGit and runGsdTools pass process.env to git, so this covers in-process
+ * reads and CLI spawns alike. It does not cover a `git` on PATH that is itself a
+ * wrapper adding `-c` options. Returns a restore function, which puts back every
+ * GIT_* variable exactly as it was and removes any a test added.
+ */
+function isolateGitConfigEnv() {
+  // Case-insensitive: Windows env names are, and keep the spelling they were set with.
+  const gitVars = () => Object.keys(process.env).filter((name) => name.toUpperCase().startsWith('GIT_'));
+  const saved = gitVars().map((name) => [name, process.env[name]]);
+  for (const [name] of saved) delete process.env[name];
+  // Absolute: git runs from the fixture's cwd, where a relative TMPDIR names nothing.
+  const dir = path.resolve(createTempDir('gsd-gitconfig-'));
+  const file = path.join(dir, 'global.gitconfig');
+  const ignoreFile = path.join(dir, 'global.gitignore');
+  fs.writeFileSync(ignoreFile, '');
+  const quoted = ignoreFile.replace(/[\\"\n\t\b]/g, (c) => ({ '\\': '\\\\', '"': '\\"', '\n': '\\n', '\t': '\\t', '\b': '\\b' })[c]);
+  fs.writeFileSync(file, `[core]\n\texcludesFile = "${quoted}"\n`);
+  const templateDir = path.join(dir, 'template');
+  fs.mkdirSync(templateDir);
+  process.env.GIT_CONFIG_GLOBAL = file;
+  process.env.GIT_TEMPLATE_DIR = templateDir;
+  process.env.GIT_CONFIG_NOSYSTEM = '1';
+  return () => {
+    for (const name of gitVars()) delete process.env[name];
+    _restoreEnvPairs(saved);
+    cleanup(dir);
+  };
+}
+
+/**
+ * Isolates a config read from the developer's environment, for a test that
+ * asserts what the config loader resolves. Clears GSD_PROJECT and
+ * GSD_WORKSTREAM, which redirect which config.json the loader reads, points
+ * GSD_HOME at a fresh directory, where the loader finds the global defaults file
+ * it falls back to, and isolates git's config (isolateGitConfigEnv). Returns
+ * `{ gsdHome, restore }`; call restore() in the matching afterEach.
+ */
+function isolateConfigReadEnv() {
+  const saved = ['GSD_PROJECT', 'GSD_WORKSTREAM', 'GSD_HOME'].map((name) => [name, process.env[name]]);
+  const restoreGitConfig = isolateGitConfigEnv();
+  const gsdHome = path.resolve(createTempDir('gsd-home-'));
+  delete process.env.GSD_PROJECT;
+  delete process.env.GSD_WORKSTREAM;
+  process.env.GSD_HOME = gsdHome;
+  return {
+    gsdHome,
+    restore() {
+      _restoreEnvPairs(saved);
+      restoreGitConfig();
+      cleanup(gsdHome);
+    },
+  };
+}
+
 /**
  * #3156: env for a RAW installer spawn — one that bypasses runGsdTools and so
  * never receives TEST_ENV_BASE on its own.
@@ -1313,7 +1396,7 @@ function withAmbientCapabilityHome(t, prefix, id, point) {
   return home;
 }
 
-module.exports = { runGsdTools, homeSandboxEnv, seedConfigSection, createTempDir, createTempProject, createTempGitProject, cleanup, tmpRootCandidates, readFileNormalized, readWorkflowCombined, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, absPlanningPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, SESSION_ENV_KEYS, saveSessionEnv, restoreSessionEnv, clearSessionEnv, isolateWorkstreamEnv, restoreWorkstreamEnv, TOOLS_PATH, SESSION_IDENTITY_ENV_KEYS, scrubConfigLocationEnv, installSpawnEnv, installSpawnHome, sandboxHome, writePackageSourceMarkerFixture, writeAmbientCapabilityGate, withAmbientCapabilityHome, TEST_HOME_SANDBOX_MARKER, mockPartialWriteThenThrow, captureFdSync, suppressFdAsync };
+module.exports = { runGsdTools, homeSandboxEnv, seedConfigSection, createTempDir, createTempProject, createTempGitProject, cleanup, tmpRootCandidates, readFileNormalized, readWorkflowCombined, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, absPlanningPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, SESSION_ENV_KEYS, saveSessionEnv, restoreSessionEnv, clearSessionEnv, isolateWorkstreamEnv, restoreWorkstreamEnv, isolateGitConfigEnv, isolateConfigReadEnv, TOOLS_PATH, SESSION_IDENTITY_ENV_KEYS, scrubConfigLocationEnv, installSpawnEnv, installSpawnHome, sandboxHome, writePackageSourceMarkerFixture, writeAmbientCapabilityGate, withAmbientCapabilityHome, TEST_HOME_SANDBOX_MARKER, mockPartialWriteThenThrow, captureFdSync, suppressFdAsync };
 
 // Lazy, for the reason builtLib() is lazy: reading either of these is what
 // forces the built-lib require, so a test file that needs neither can still

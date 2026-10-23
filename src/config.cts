@@ -1448,6 +1448,29 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
   // After the error() guard, keyPath is narrowed to string.
   const kp = keyPath!;
 
+  // #5470: `commit_docs` and `search_gitignored` answer, under either
+  // spelling, with the value the runtime resolves, not a literal path walk
+  // (their CONFIG_KEY_ALIASES entries say `configGet: 'loader'`). Shipped
+  // workflows read both through the flat key while the docs write the nested
+  // one, so after `config-set planning.commit_docs false` (the
+  // keep-planning-docs-private how-to) a `config-get commit_docs` read was
+  // "Key not found", and every workflow gate's `|| echo "true"` fallback
+  // committed `.planning/`. The loader also derives values the walk cannot
+  // (a gitignored `.planning/` resolves `commit_docs` to false). Same
+  // invariant as #2256: config-get must not disagree with the runtime. A value
+  // the loader resolves, null included, is printed and `--default` does not
+  // apply. The other loader aliases stay on the walk below, which ADR-5057
+  // makes the authority for gate config. `persist: false` because a read must
+  // not rewrite config.json (#3648).
+  const loaderAlias = configLoader.configKeyAliasFor(kp);
+  if (loaderAlias?.configGet === 'loader') {
+    const resolved = configLoader.readResolvedAlias(configLoader.loadConfig(cwd, { persist: false }), loaderAlias);
+    if (resolved !== undefined) {
+      emitResolvedDefault(kp, resolved, raw);
+      return;
+    }
+  }
+
   let config: Record<string, unknown> = {};
   try {
     if (fs.existsSync(configPath)) {
