@@ -290,7 +290,7 @@ describe('the per-plan worktree gate records the isolation sentinel per dispatch
     });
 
     test('step 3 re-records the sentinel for the plan being dispatched, from that plan\'s stored decision', () => {
-      const body = step(/^3\./);
+      const body = step(/Spawn executor agents/);
       assert.match(body, /Part 2/, 'step 3 runs Part 2 (the plan-scoped record) of the gate');
       assert.match(body, /stored decision|that plan's own decision/i, 'step 3 reads the dispatched plan\'s stored decision');
     });
