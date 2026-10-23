@@ -17,8 +17,8 @@ const { readFileNormalized } = require('./helpers.cjs');
 const WF = path.join(__dirname, '..', 'gsd-core', 'workflows');
 
 // [label, file parts, flag -> the live variable it must carry]. These are the values each file holds at
-// its dispatch; verify-work.md holds only PHASE_DIR there (PHASE_NUMBER is first assigned after its
-// verify:pre dispatch and PHASE_REQ_IDS is never assigned), and ship.md never assigns PHASE_REQ_IDS.
+// its dispatch; verify-work.md's verify:pre fence assigns PHASE_DIR and PHASE_NUMBER itself (PHASE_REQ_IDS is
+// never assigned), and ship.md never assigns PHASE_REQ_IDS.
 const DIR = ['--phase-dir', '${PHASE_DIR}'];
 const NUM = ['--phase-number', '${PHASE_NUMBER}'];
 const REQ = ['--phase-req-ids', '${PHASE_REQ_IDS}'];
@@ -26,7 +26,8 @@ const DISPATCHES = [
   ['execute:post (verify-phase-goal)', ['execute-phase', 'steps', 'verify-phase-goal.md'], [DIR, NUM]],
   ['plan-phase gate dispatch', ['plan-phase.md'], [DIR, NUM, REQ]],
   ['ship gate dispatch', ['ship.md'], [DIR, NUM]],
-  ['verify-work verify:pre dispatch', ['verify-work.md'], [DIR]],
+  ['verify-work verify:pre dispatch', ['verify-work.md'], [DIR, NUM]],
+  ['execute:wave:post (wave-post-gate-hooks)', ['execute-phase', 'steps', 'wave-post-gate-hooks.md'], [DIR, NUM]],
 ];
 
 const dispatchLines = (text) => text.split('\n').filter((l) => l.includes('gsd_run check predicate'));
@@ -57,5 +58,13 @@ describe('#4483 check predicate dispatch passes every PHASE_* value the workflow
     };
     walk(WF, '');
     assert.deepEqual(unlisted, [], 'a new check predicate dispatch site must be added to DISPATCHES with the values it holds');
+  });
+
+  test('verify-work.md assigns PHASE_DIR and PHASE_NUMBER in the verify:pre fence before dispatching with them (#5289)', () => {
+    const text = readFileNormalized(path.join(WF, 'verify-work.md'));
+    const dispatchAt = text.indexOf('gsd_run check predicate');
+    const fence = text.slice(text.lastIndexOf('```bash', dispatchAt), dispatchAt);
+    assert.ok(/PHASE_DIR=\$\(/.test(fence) || text.indexOf('PHASE_DIR=$(') < dispatchAt, 'PHASE_DIR must be assigned before the dispatch');
+    assert.ok(text.indexOf("PHASE_NUMBER=$(printf '%s' \"$INIT\"") !== -1 && text.indexOf("PHASE_NUMBER=$(printf '%s' \"$INIT\"") < dispatchAt, 'PHASE_NUMBER must be assigned from the init JSON before the dispatch');
   });
 });

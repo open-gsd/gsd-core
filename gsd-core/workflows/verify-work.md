@@ -75,6 +75,7 @@ registry, not hardcoded here.
 ```bash
 VERIFY_PRE_HOOKS_JSON=$(gsd_run loop render-hooks verify:pre --raw)
 PHASE_DIR=$(printf '%s' "$INIT" | jq -r '.phase_dir // empty')
+PHASE_NUMBER=$(printf '%s' "$INIT" | jq -r '.phase_number // empty')
 ```
 
 Read the `activeHooks` array from `VERIFY_PRE_HOOKS_JSON` in-context (do NOT pipe through a shell parser).
@@ -92,7 +93,7 @@ Record the union of `produces` artefact names declared by the active step entrie
 Resolve active gate hooks from `VERIFY_PRE_HOOKS_JSON` where `kind == "gate"`.
 For each active gate hook, run its declared check (a `check.query` gate runs
 `gsd_run check ${hook.check.query} "${PHASE_DIR}" --raw`; a `predicate` gate
-runs `gsd_run check predicate --predicate '<hook.check.predicate as JSON>' --phase-dir "${PHASE_DIR}" --raw`):
+runs `gsd_run check predicate --predicate '<hook.check.predicate as JSON>' --phase-dir "${PHASE_DIR}" --phase-number "${PHASE_NUMBER}" --raw`):
 
 ```bash
 GATE_RESULT=$(gsd_run check "${hook_check_query}" "${PHASE_DIR}" --raw) && CHECK_EXIT=0 || CHECK_EXIT=$?
