@@ -1961,7 +1961,8 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     // Four readings, each rescanning each nested `$( )`, multiply the work: a
     // megabyte of `$$(` is tokenized about 60 times over, which took seconds
     // per Bash call. The budget is eight times the length cap, so a command
-    // at the cap still gets every reading (the boundary rows below).
+    // at the cap still gets every reading (the length-cap rows under
+    // 'boundaries'); the budget's own boundary is the last test here.
     const runs = (unit) => unit.repeat(Math.floor((1024 * 1024 - 'echo '.length) / unit.length));
 
     for (const unit of ['$$(', '$$$(']) {
@@ -1974,6 +1975,41 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       const { findSecretRead } = require(HOOK_PATH);
       assert.deepEqual(findSecretRead(`echo ${runs('$$(')}`, 0), { code: 'command-too-complex', text: '' });
       assert.deepEqual(findSecretRead(R`echo $'x'; cat .env`, 0), { code: 'secret-read', text: '.env' });
+    });
+
+    test('in process: work up to the budget is scanned, and one character past it is command-too-complex', () => {
+      // A command holding `$'…'` is scanned four times (bash's, zsh's and
+      // dash's readings, then the plain one), and each scan rescans each
+      // `$( )` it reads, so the two-level nest costs 4 × (command + both
+      // nested bodies) and each padding character 4 more. The trailing
+      // `"$$(echo c…)"` is read as a `$( )` by the plain reading alone (the
+      // others pair `$$` as the PID), so its body is charged once, which
+      // steps the total by 1 and lands it on budget - 1, budget and
+      // budget + 1. If another reading starts extracting it, the rows move
+      // and fail. The padding is U+1F600: two UTF-16 units (what the budget
+      // and the length cap count), one code point and four UTF-8 bytes, so a
+      // budget charged in either of the other units fails the rows too. Each
+      // padding character costs 4 × 2.
+      const { findSecretRead } = require(HOOK_PATH);
+      const BUDGET = 8 * 1024 * 1024;
+      const PAD = '\u{1F600}';
+      const spending = (work) => {
+        const inner2 = `echo ${'a'.repeat(699000)}`;
+        const inner1 = `echo "$(${inner2})"`;
+        for (let m = 1; m <= 8; m++) {
+          const once = `echo ${'c'.repeat(m)}`;
+          const head = `echo $'x' "$(${inner1})" "$$(${once})" `;
+          const rest = work - 4 * (head.length + inner1.length + inner2.length) - once.length;
+          if (rest >= 0 && rest % (4 * PAD.length) === 0) return head + PAD.repeat(rest / (4 * PAD.length));
+        }
+        throw new Error(`no padding reaches ${work}`);
+      };
+      for (const [label, work] of [['budget - 1', BUDGET - 1], ['budget', BUDGET]]) {
+        const cmd = spending(work);
+        assert.ok(cmd.length <= 1024 * 1024, `${label}: under the length cap`);
+        assert.equal(findSecretRead(cmd, 0), null, label);
+      }
+      assert.deepEqual(findSecretRead(spending(BUDGET + 1), 0), { code: 'command-too-complex', text: '' }, 'budget + 1');
     });
   });
 
