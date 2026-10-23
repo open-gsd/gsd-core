@@ -147,12 +147,14 @@ First build the executor prompt. It is the **same prompt text the harness path's
 Assign the composed prompt to a shell variable so it can be passed as one argument:
 
 ```bash
-# Compose the executor prompt for THIS plan. Single-quoted multi-line
-# assignment (NOT a heredoc): these blocks are indented inside the workflow,
-# and a heredoc terminator must sit at column 0 — `<<-` strips only tabs, not
-# the leading spaces, so a heredoc here would never terminate. Single quotes
-# also stop the shell expanding anything in the prompt body — the prompt MUST
-# contain no single-quote character.
+# Compose the executor prompt for THIS plan. QUOTED-heredoc assignment (#5531):
+# the delimiter is quoted, so the shell expands and parses nothing in the body.
+# Every substituted or inlined text (the ${AGENT_SKILLS} value, the role
+# definition, the execute-plan/summary/checkpoints files) therefore reaches the
+# prompt byte-for-byte whatever quote characters it holds — apostrophes in a
+# persona must NEVER be escaped or stripped. Keep the opening line and the
+# GSD_EXECUTOR_PROMPT_EOF terminator at column 0, exactly as written, and never
+# let embedded text contain a line equal to that terminator.
 #
 # ORCHESTRATOR BUILD-TIME EMBEDS (do these BEFORE the spawn, in order):
 #   1. Inline each file listed in <execution_context> verbatim, in order.
@@ -187,7 +189,8 @@ if [ $_TDD_APPLICABLE_RC -ne 0 ]; then
 fi
 TDD_APPLICABLE="$_TDD_APPLICABLE_RAW"
 
-EXECUTOR_PROMPT='<objective>
+IFS= read -r -d '' EXECUTOR_PROMPT <<'GSD_EXECUTOR_PROMPT_EOF' || true
+<objective>
 Execute plan {plan_number} of phase {phase_number}-{phase_name}.
 [gsd:dispatch phase="{phase_number}" plan="{plan_id}"]
 Commit each task atomically. Create SUMMARY.md.
@@ -253,7 +256,8 @@ ${AGENT_SKILLS}
       Never force-stage gitignored planning artifacts: git add -f on
       .planning paths is forbidden. An intentional skip is a success path.
 - [ ] No modifications to shared orchestrator artifacts (the orchestrator handles all post-wave shared-file writes)
-</success_criteria>'
+</success_criteria>
+GSD_EXECUTOR_PROMPT_EOF
 [ -n "$EXECUTOR_PROMPT" ] || { echo "FATAL: executor prompt is empty for plan {plan_number}." >&2; exit 1; }
 # #3637 fail-closed verification. Two classes of check:
 #   (a) template completeness — the prompt must carry the required-reading
@@ -290,11 +294,17 @@ printf '%s' "$EXECUTOR_PROMPT" | grep -q '\${TDD_APPLICABLE' && {
 }
 ```
 
-The prompt body must contain no single-quote character, since the assignment above is single-quoted; keep apostrophes out of it when editing.
+The prompt is a quoted heredoc, so apostrophes and any other quote characters are safe in the template and in every spliced embed; do not escape them. `read -d ''` exits non-zero at end of input by design (hence `|| true`); the empty-prompt check on the next line is the gate. If the terminator is not matched exactly (indented, CRLF, or repeated inside an embed), the heredoc runs to the end of the block and swallows the checks above, so the guard that opens the next block — outside the heredoc — halts on any prompt that does not end at `</success_criteria>`.
 
 Then create the worktree and resolve the spawn:
 
 ```bash
+# Unterminated-heredoc guard (#5531): the template ends at </success_criteria>.
+case "$EXECUTOR_PROMPT" in
+  *'</success_criteria>'|*'</success_criteria>'$'\n') ;;
+  *) echo "FATAL: executor prompt for plan {plan_number} was not terminated at GSD_EXECUTOR_PROMPT_EOF (indented, CRLF, or an embed contained the terminator line) — the verification above did not run. Halting." >&2; exit 1 ;;
+esac
+
 # 1. Create the worktree. Bounded, manifest-recorded, fail-closed, and
 #    root-confined by the verb itself — never hand-roll `git worktree add`.
 AGENT_ID="agent-p{plan_number}-$(date -u +%s)"

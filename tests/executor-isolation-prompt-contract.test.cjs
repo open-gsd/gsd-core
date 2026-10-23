@@ -21,6 +21,11 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { createTempDir, cleanup } = require('./helpers.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const fc = require('fast-check');
+const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const FRAGMENT = path.join(
   __dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'executor-isolation-dispatch.md',
@@ -28,12 +33,18 @@ const FRAGMENT = path.join(
 // allow-test-rule: source-text-is-the-product the dispatch fragment is runtime-loaded workflow text (#3637)
 const content = fs.readFileSync(FRAGMENT, 'utf8');
 
-/** The EXECUTOR_PROMPT single-quoted assignment body. */
+const ASSIGN = "IFS= read -r -d '' EXECUTOR_PROMPT <<'GSD_EXECUTOR_PROMPT_EOF' || true";
+const TERMINATOR = '\nGSD_EXECUTOR_PROMPT_EOF\n';
+
+/** The EXECUTOR_PROMPT quoted-heredoc assignment: full statement, and its body. */
+function promptAssignment() {
+  const start = content.indexOf(ASSIGN);
+  const end = content.indexOf(TERMINATOR, start);
+  assert.ok(start !== -1 && end !== -1, 'EXECUTOR_PROMPT quoted-heredoc assignment must exist');
+  return content.slice(start, end + TERMINATOR.length);
+}
 function promptBody() {
-  const start = content.indexOf("EXECUTOR_PROMPT='<objective>");
-  const end = content.indexOf("</success_criteria>'", start);
-  assert.ok(start !== -1 && end !== -1, 'EXECUTOR_PROMPT assignment must exist');
-  return content.slice(start, end);
+  return promptAssignment().slice(ASSIGN.length);
 }
 
 test('#3637: the executor prompt carries the required-reading contract with the explicit plan path', () => {
@@ -122,9 +133,82 @@ test('#3637: the persona rides the prompt (${AGENT_SKILLS}), same as the harness
   assert.match(promptBody(), /\$\{AGENT_SKILLS\}/, 'the gsd-executor persona variable must be spliced into the prompt');
 });
 
-test('#3637: the prompt body contains no single-quote character (single-quoted assignment)', () => {
-  const body = promptBody();
-  const startQuote = body.indexOf("'");
-  const rest = body.slice(startQuote + 1);
-  assert.ok(!rest.includes("'"), 'the prompt body must be free of apostrophes or the shell assignment breaks');
+test('#5531: apostrophe-bearing spliced content reaches the prompt byte-for-byte', () => {
+  // Evaluate the documented assignment in bash after the orchestrator's textual
+  // ${AGENT_SKILLS} substitution. A persona has apostrophes ("user's vision").
+  const persona = "<persona>\nthe user's vision; it doesn't '$(echo pwned)' `id` \"q\" \\ end\n</persona>";
+  const stmt = promptAssignment().replace('${AGENT_SKILLS}', () => persona);
+  const dir = createTempDir('gsd-5531-');
+  const script = path.join(dir, 'compose.sh');
+  fs.writeFileSync(script, stmt + '\nprintf "%s" "$EXECUTOR_PROMPT"');
+  const r = runHook(script, [], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
+  cleanup(dir);
+  assert.equal(r.outcome, OUTCOME.EXITED, r.stderr);
+  assert.equal(r.exitCode, 0, r.stderr);
+  assert.ok(r.stdout.includes(persona), 'the spliced persona must appear verbatim in the prompt');
+  assert.ok(r.stdout.startsWith('<objective>'), 'the template must be intact');
+  assert.ok(r.stdout.includes('</success_criteria>'), 'the template must be complete');
+  assert.ok(!r.stdout.includes("pwned'"), 'spliced text must not be executed');
+});
+
+// The documented guard that opens the second bash block: it must run outside the
+// heredoc, because an unterminated heredoc swallows everything after it.
+function promptGuard() {
+  const lines = splitLines(content);
+  const start = lines.findIndex((l) => l.startsWith('# Unterminated-heredoc guard'));
+  const end = start < 0 ? -1 : lines.indexOf('esac', start);
+  assert.ok(end > start, 'the unterminated-heredoc guard must exist in the post-compose block');
+  return lines.slice(start, end + 1).join('\n') + '\n';
+}
+
+/** Run the real assignment as its own block (sourced, so an unterminated heredoc ends at the block's EOF), then the guard as the next block. */
+function composeThenGuard(agentSkills, { mutate = (x) => x, strict = false } = {}) {
+  const dir = createTempDir('gsd-5531-');
+  fs.writeFileSync(path.join(dir, 'block1.sh'), mutate(promptAssignment().replace('${AGENT_SKILLS}', () => agentSkills)));
+  const script = path.join(dir, 'compose.sh');
+  fs.writeFileSync(
+    script,
+    (strict ? 'set -euo pipefail\n' : '') + `. "${dir}/block1.sh"\n` + promptGuard() + '\nprintf "%s" "$EXECUTOR_PROMPT"',
+  );
+  const r = runHook(script, [], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
+  cleanup(dir);
+  return r;
+}
+
+test('#5531: a terminator that is indented or CRLF fails closed (the heredoc must not swallow the gate)', () => {
+  for (const [name, mutate] of [
+    ['indented', (x) => x.replace('\nGSD_EXECUTOR_PROMPT_EOF\n', '\n  GSD_EXECUTOR_PROMPT_EOF\n')],
+    ['CRLF', (x) => x.replace('\nGSD_EXECUTOR_PROMPT_EOF\n', '\nGSD_EXECUTOR_PROMPT_EOF\r\n')],
+  ]) {
+    // Observed in PR #5617 CI: Git Bash on windows-latest exits 0 for the CR terminator (mechanism unproven); Linux/macOS still assert.
+    if (name === 'CRLF' && process.platform === 'win32') continue;
+    const r = composeThenGuard('x', { mutate });
+    assert.equal(r.outcome, OUTCOME.EXITED, r.stderr);
+    assert.notEqual(r.exitCode, 0, `${name} terminator must halt, not dispatch`);
+    assert.match(r.stderr, /FATAL/, `${name}: halt must be loud`);
+  }
+});
+
+test('#5531: an embed containing the terminator line is caught by the guard (documented hazard)', () => {
+  const r = composeThenGuard('before\nGSD_EXECUTOR_PROMPT_EOF\ntrue\ntrue');
+  assert.notEqual(r.exitCode, 0, 'a truncated prompt must halt');
+  assert.match(r.stderr, /FATAL/);
+});
+
+test('#5531: well-formed compose passes the guard under set -euo pipefail', () => {
+  const r = composeThenGuard("the user's 'vision'", { strict: true });
+  assert.equal(r.exitCode, 0, r.stderr);
+  assert.ok(r.stdout.includes("the user's 'vision'"));
+});
+
+test('#5531: any printable embed (role file, skills, summary text) passes through byte-for-byte', () => {
+  const line = fc.string({ unit: 'grapheme-ascii', maxLength: 40 }).filter((l) => l !== 'GSD_EXECUTOR_PROMPT_EOF');
+  fc.assert(
+    fc.property(fc.array(line, { maxLength: 6 }), (lines) => {
+      const embed = lines.join('\n');
+      const r = composeThenGuard(embed, { strict: true });
+      return r.exitCode === 0 && r.stdout.includes(embed);
+    }),
+    { numRuns: 20 },
+  );
 });
