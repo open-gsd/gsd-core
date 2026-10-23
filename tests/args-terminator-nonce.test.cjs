@@ -15,7 +15,7 @@ const { execFileSync } = require('node:child_process');
 const fc = require('fast-check');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
-const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { runMinimalInstall, RUNTIME_META } = require('./helpers/install-shared.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const {
@@ -29,6 +29,7 @@ const {
 } = require('../gsd-core/bin/lib/args-terminator.cjs');
 
 const REPO = path.join(__dirname, '..');
+const RUNTIME_NAMES = Object.keys(RUNTIME_META);
 const NONCE = '0123456789abcdef0123456789abcdef';
 const CAPTURE = [
   "IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true",
@@ -326,6 +327,27 @@ describe('#5637 what an install writes', () => {
     }
   });
 
+  test('readInstalledNonce skips a directory, a symlink and an oversized file, and still finds the nonce after them', () => {
+    const dir = createTempDir('gsd-5637-');
+    try {
+      const wf = path.join(dir, 'gsd-core', 'workflows');
+      fs.mkdirSync(path.join(wf, '0.md'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'outside.md'), `GSD_ARGS_END_${'e'.repeat(32)}\n`);
+      try {
+        fs.symlinkSync(path.join(dir, 'outside.md'), path.join(wf, '1-link.md'));
+      } catch (err) {
+        // A runner without symlink rights still proves the directory and size cases.
+        if (err.code !== 'EPERM' && err.code !== 'EACCES') throw err;
+      }
+      fs.writeFileSync(path.join(wf, '2-big.md'), `${'x'.repeat(2 * 1024 * 1024 + 1)}\nGSD_ARGS_END_${'d'.repeat(32)}\n`);
+      assert.equal(readInstalledNonce(dir), null, 'nothing valid yet');
+      fs.writeFileSync(path.join(wf, '3-ok.md'), `GSD_ARGS_END_${NONCE}\n`);
+      assert.equal(readInstalledNonce(dir), NONCE);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   test('readInstalledNonce reads nothing from a directory with no install, a non-hex nonce or a short one', () => {
     const dir = createTempDir('gsd-5637-');
     try {
@@ -343,19 +365,55 @@ describe('#5637 what an install writes', () => {
     }
   });
 
-  test('two installs of one tree emit identical normalized manifests', () => {
+  test('two installs carry different nonces yet emit identical normalized manifests', () => {
     const { buildParityManifest } = require('./helpers/install-shared.cjs');
     const manifests = [];
+    const nonces = [];
     for (let i = 0; i < 2; i++) {
       const { root, configDir } = runMinimalInstall({ runtime: 'opencode', scope: 'global' });
       try {
+        nonces.push(readInstalledNonce(configDir));
         manifests.push(JSON.stringify(buildParityManifest(configDir, root)));
       } finally {
         cleanup(root);
       }
     }
+    assert.ok(nonces[0] !== null && nonces[1] !== null, 'both installs must be stamped');
+    assert.notEqual(nonces[0], nonces[1]);
     assert.equal(manifests[0], manifests[1]);
   });
+
+  test('a project-local install does not adopt a nonce planted in the project', () => {
+    const root = createTempDir('gsd-5637-local-');
+    try {
+      const planted = path.join(root, '.opencode', 'gsd-core', 'workflows');
+      fs.mkdirSync(planted, { recursive: true });
+      fs.writeFileSync(path.join(planted, '000-planted.md'), `GSD_ARGS_END_${NONCE}\n`);
+      const { configDir } = runMinimalInstall({ runtime: 'opencode', scope: 'local', root });
+      const nonce = readInstalledNonce(configDir);
+      assert.ok(nonce !== null);
+      assert.notEqual(nonce, NONCE);
+    } finally {
+      cleanup(root);
+    }
+  });
+
+  for (const runtime of RUNTIME_NAMES) {
+    test(`${runtime}: a global install stamps its workflows, commands and skills and leaves none bare`, () => {
+      const { root, configDir } = runMinimalInstall({ runtime, scope: 'global' });
+      try {
+        let stamped = 0;
+        for (const { file, rel } of installedMarkdown(configDir)) {
+          const text = fs.readFileSync(file, 'utf8');
+          assert.equal(BARE_RE.test(text), false, `${rel} still has a bare terminator`);
+          if (STAMPED_RE.test(text)) stamped++;
+        }
+        assert.ok(stamped > 0, `${runtime}: nothing was stamped`);
+      } finally {
+        cleanup(root);
+      }
+    });
+  }
 
   test('the quick-batch command surface is stamped with its own terminator', () => {
     const { root, configDir } = runMinimalInstall({ runtime: 'opencode', scope: 'global' });

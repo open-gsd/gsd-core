@@ -70,8 +70,7 @@ function installForPi(configDir) {
     timeout: INSTALL_TIMEOUT_MS,
     windowsHide: true,
     // sandboxed HOME: the installer writes GSD's global defaults store under $HOME/.gsd
-    // The templates ship canonical, so the installer output they are compared with is unstamped (#5637).
-    env: installSpawnEnv({ PI_CODING_AGENT_DIR: configDir, GSD_ARGS_NONCE_OFF: '1' }),
+    env: installSpawnEnv({ PI_CODING_AGENT_DIR: configDir }),
   });
   assert.equal(res.status, 0, `installer failed: ${(res.stderr || res.stdout || '').slice(-600)}`);
 }
@@ -101,7 +100,11 @@ describe('Pi package: template/installer parity (#5558)', () => {
       const template = fs.readFileSync(path.join(templateDir, name, 'SKILL.md'), 'utf8');
       // Only the engine root is normalized (Windows may emit it with backslashes); every
       // other byte, including regex backslashes in the skill text, is compared as written.
-      const expected = fs.readFileSync(path.join(root, 'skills', name, 'SKILL.md'), 'utf8').split(root).join(root.replace(/\\/g, '/'));
+      // The installer stamps its own random heredoc terminator (#5637) and the shipped template
+      // keeps the canonical token, so the installer's nonce is folded back before comparing.
+      const expected = fs.readFileSync(path.join(root, 'skills', name, 'SKILL.md'), 'utf8')
+        .split(root).join(root.replace(/\\/g, '/'))
+        .replace(/\b(GSD_(?:QUICK_BATCH_)?ARGS_END)_[0-9a-f]{32}\b/g, '$1');
       assert.equal(renderSkillTemplate(template, root), expected, `${name} renders to the installer output`);
     }
     return { root, installed };

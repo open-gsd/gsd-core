@@ -16,7 +16,7 @@
  */
 
 import { randomBytes as nodeRandomBytes } from 'node:crypto';
-import { readdirSync, readFileSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /** The canonical terminators the shipped workflows and commands carry. */
@@ -56,34 +56,56 @@ let armedNonce: string | null = null;
 
 const INSTALLED_NONCE_RE = /^GSD_ARGS_END_([0-9a-f]{32})\r?$/m;
 
+/** A workflow is tens of KiB; anything near this is not one, and is not read. */
+const MAX_WORKFLOW_BYTES = 2 * 1024 * 1024;
+
 /**
  * The nonce a previous install left in `configDir`, read from the first installed workflow that
- * carries one; null when there is none or the directory cannot be read.
+ * carries one; null when there is none. Entries that are not regular files (a directory, a FIFO,
+ * a symlink) and files over MAX_WORKFLOW_BYTES are skipped, and one unreadable entry does not end
+ * the scan.
  */
 export function readInstalledNonce(configDir: string): string | null {
+  let dir: string;
+  let names: string[];
   try {
-    const dir = join(configDir, 'gsd-core', 'workflows');
-    for (const name of readdirSync(dir).sort()) {
-      if (!name.endsWith('.md')) continue;
-      const match = INSTALLED_NONCE_RE.exec(readFileSync(join(dir, name), 'utf8'));
-      if (match) return match[1];
-    }
+    dir = join(configDir, 'gsd-core', 'workflows');
+    names = readdirSync(dir).sort();
   } catch {
-    // No previous install to read; the caller mints a fresh nonce.
+    return null;
+  }
+  for (const name of names) {
+    if (!name.endsWith('.md')) continue;
+    try {
+      const full = join(dir, name);
+      const stat = lstatSync(full);
+      if (!stat.isFile() || stat.size > MAX_WORKFLOW_BYTES) continue;
+      const match = INSTALLED_NONCE_RE.exec(readFileSync(full, 'utf8'));
+      if (match) return match[1];
+    } catch {
+      // This entry is unreadable; the next one may still carry the nonce.
+    }
   }
   return null;
 }
 
 /**
- * Arm stamping for the install into `configDir`, before it writes anything. A reinstall into the
- * same directory keeps that directory's nonce, so reinstalling changes nothing; a new directory
- * gets a fresh one. Generators and tests never arm it, so the committed generated skills stay
- * canonical and deterministic.
+ * Arm stamping for the install into `configDir`, before it writes anything. When `reuse` is true
+ * the directory's installed nonce is kept, so a reinstall changes nothing; otherwise, or when
+ * there is none, a fresh one is minted. Only a global install (a directory under the user's home,
+ * which a cloned repository cannot seed) may reuse: a project-local directory is often committed,
+ * and a nonce planted there would be adopted. Generators never arm it, so the committed generated
+ * skills stay canonical and deterministic.
  */
-export function armArgsNonce(configDir?: string): string {
-  const prior = configDir === undefined ? null : readInstalledNonce(configDir);
+export function armArgsNonce(configDir?: string, reuse = false): string {
+  const prior = reuse && configDir !== undefined ? readInstalledNonce(configDir) : null;
   armedNonce = prior ?? generateArgsNonce();
   return armedNonce;
+}
+
+/** Stop stamping: the process is no longer writing for an install that has a nonce. */
+export function disarmArgsNonce(): void {
+  armedNonce = null;
 }
 
 /** `content` stamped with the armed nonce, or untouched when this process is not an installer. */
