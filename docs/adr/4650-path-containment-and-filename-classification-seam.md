@@ -243,3 +243,7 @@ predicate.
   [#4580](https://github.com/open-gsd/gsd-core/issues/4580)
 - [ADR-1703](1703-portability-enforcement-architecture.md) — the precedent this epic follows:
   replace hand-rolled mechanisms with an AST ESLint rule, seeded and drained
+
+## Amendment — 2026-10-22: command gate environment context
+
+ADR-2008's #5318 amendment supersedes the interpolation wording above: command predicates receive the contained context path as `GSD_GATE_PHASE_DIR` environment data. The containment boundary is unchanged.
