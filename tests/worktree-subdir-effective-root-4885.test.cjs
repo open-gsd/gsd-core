@@ -15,10 +15,11 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
+const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { resolveWorktreeContext } = require('../gsd-core/bin/lib/worktree-safety.cjs');
 
 function git(cwd, args) {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  const r = spawnSync('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
   assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
   return r.stdout.trim();
 }
@@ -58,7 +59,7 @@ describe('#4885 effective root from a subdirectory of a linked worktree', () => 
   });
 
   test('a linked worktree with NO .planning anywhere still remaps to the main checkout (the intended design)', () => {
-    fs.rmSync(path.join(wt, '.planning'), { recursive: true, force: true });
+    cleanup(path.join(wt, '.planning'));
     const sub = path.join(wt, 'src');
     fs.mkdirSync(sub, { recursive: true });
     const r = resolveWorktreeContext(sub);
@@ -79,7 +80,7 @@ describe('#4885 effective root from a subdirectory of a linked worktree', () => 
     fs.appendFileSync(path.join(wt, '.planning', 'STATE.md'), 'more\n');
     const mainBefore = git(main, ['rev-parse', 'HEAD']);
     const tools = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
-    const r = spawnSync(process.execPath, [tools, 'commit', 'docs: state', '--files', '.planning/STATE.md'], { cwd: sub, encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [tools, 'commit', 'docs: state', '--files', '.planning/STATE.md'], { cwd: sub, encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
     assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
     assert.equal(git(main, ['rev-parse', 'HEAD']), mainBefore, 'the main checkout must not receive the commit');
     assert.equal(git(wt, ['log', '-1', '--format=%s']), 'docs: state', 'the worktree receives the commit');
