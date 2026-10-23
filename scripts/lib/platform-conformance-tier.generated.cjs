@@ -138,6 +138,7 @@ module.exports = {
   "tests/gsd-check-update-worker-atomic-cache.test.cjs",
   "tests/gsd-check-update-worker-platform-gate.test.cjs",
   "tests/gsd-mcp-server-bin.test.cjs",
+  "tests/gsd-mcp-server.test.cjs",
   "tests/gsd-path-export-hook.test.cjs",
   "tests/gsd-statusline.test.cjs",
   "tests/gsd-validate-commit-crash-policy.test.cjs",
