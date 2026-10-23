@@ -72,4 +72,16 @@ describe('#4885 effective root from a subdirectory of a linked worktree', () => 
     const r = resolveWorktreeContext(sub);
     assert.equal(r.reason, 'main_worktree');
   });
+
+  test('gsd-tools commit run from the subdirectory lands in the worktree, not the main checkout', () => {
+    const sub = path.join(wt, 'src', 'deep');
+    fs.mkdirSync(sub, { recursive: true });
+    fs.appendFileSync(path.join(wt, '.planning', 'STATE.md'), 'more\n');
+    const mainBefore = git(main, ['rev-parse', 'HEAD']);
+    const tools = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
+    const r = spawnSync(process.execPath, [tools, 'commit', 'docs: state', '--files', '.planning/STATE.md'], { cwd: sub, encoding: 'utf8' });
+    assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+    assert.equal(git(main, ['rev-parse', 'HEAD']), mainBefore, 'the main checkout must not receive the commit');
+    assert.equal(git(wt, ['log', '-1', '--format=%s']), 'docs: state', 'the worktree receives the commit');
+  });
 });
