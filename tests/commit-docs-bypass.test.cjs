@@ -844,7 +844,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const fc = require('./helpers/fast-check-setup.cjs');
-const { cleanup, createTempGitProject, captureFdSync } = require('./helpers.cjs');
+const { cleanup, createTempGitProject, captureFdSync, isolateGitConfigEnv } = require('./helpers.cjs');
 const { seedPhase } = require('./fixtures/index.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -918,9 +918,12 @@ function runConfigSetExpectError(tmpDir, keyPath, value) {
 
 describe('#3587 per-phase commit_docs override', () => {
   let tmpDir;
+  let restoreGitConfig;
 
-  beforeEach(() => { tmpDir = createTempGitProject(); });
-  afterEach(() => cleanup(tmpDir));
+  // A global core.excludesFile that lists `.planning` would gitignore every
+  // fixture's `.planning/` and turn C3's and D3's commits into skips.
+  beforeEach(() => { restoreGitConfig = isolateGitConfigEnv(); tmpDir = createTempGitProject(); });
+  afterEach(() => { cleanup(tmpDir); restoreGitConfig(); });
 
   // ── A: registration — the key must actually exist ──────────────────────
   describe('A: registration', () => {
