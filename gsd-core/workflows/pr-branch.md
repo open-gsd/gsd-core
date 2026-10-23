@@ -30,15 +30,100 @@ CURRENT_BRANCH=$(git branch --show-current)
 TARGET=${1:-$(gsd_run query git.base-branch)}
 ```
 
-Check preconditions:
+Check preconditions. The bash blocks of this step and of the later steps share variables (`CURRENT_BRANCH`, `TARGET`, `BASE`, `PR_BRANCH`, `*_REF`, `refkey`, `shq`, `pr_merged`); run them all in one shell session, in order:
 - Must be on a feature branch (not main/master)
 - Must have commits ahead of target
 - Working tree must be clean
 
 ```bash
-AHEAD=$(git rev-list --count "$TARGET".."$CURRENT_BRANCH" 2>/dev/null)
+# Resolve the filter mode from config. A non-zero exit or an unset key means the default
+# mode; only the literal string `true` selects strict.
+PR_STRICT=$(gsd_run query config-get planning.pr_strict --raw 2>/dev/null)
+if [ "$PR_STRICT" = "true" ]; then PR_MODE="strict"; else PR_MODE="default"; PR_STRICT="false"; fi
+
+PR_BRANCH="${CURRENT_BRANCH}-pr"
+TIP=$(git rev-parse "$CURRENT_BRANCH")
+# Keyed by mode: strict skips commits default publishes, so one mode's marker is wrong for the other.
+# refkey STR — one ref component: "/" and "%" encoded, so no ref is a directory prefix of another
+# (a "feat" and a "feat/sub" branch, or target "origin"+"main/x" vs "origin/main"+"x", cannot collide).
+refkey() { printf %s "$1" | sed -e 's/%/%25/g' -e 's|/|%2F|g'; }
+REF_KEY="$PR_MODE/$(refkey "$TARGET")/$(refkey "$CURRENT_BRANCH")"
+MARKER_REF="refs/gsd/pr-published/$REF_KEY"
+PENDING_REF="refs/gsd/pr-built/$REF_KEY"
+PR_TIP_REF="refs/gsd/pr-built-head/$REF_KEY"
+PR_BRANCH_TIP=$(git rev-parse -q --verify "refs/heads/$PR_BRANCH")
+# gh --base value: TARGET without its leading remote name (any configured remote, not only origin).
+PR_BASE=$TARGET
+for _r in $(git remote); do [ "${TARGET#"$_r"/}" != "$TARGET" ] && { PR_BASE=${TARGET#"$_r"/}; break; }; done
+
+# shq STR — STR shell-quoted for the recovery commands printed below (branch names may hold ; $ ( ) & `).
+shq() { case "$1" in ''|*[!A-Za-z0-9._/@%+=:,-]*) printf "'%s'" "$(printf %s "$1" | sed "s/'/'\\\\''/g")" ;; *) printf %s "$1" ;; esac; }
+
+# pr_merged TIP — TIP is in $TARGET: an ancestor, or (squash/rebase merge) $TARGET holds TIP's
+# content for every path TIP changed since it forked from $TARGET, or (once $TARGET has since
+# edited those paths) GitHub reports a PR for $PR_BRANCH merged into the target whose head was TIP.
+pr_merged() {
+  local _sha _fork _g _b _t
+  _b=
+  _t=
+  command -v timeout >/dev/null 2>&1 && _b="timeout 10" # bounds the local git calls too; without it they run unbounded
+  # $(printf '%s' "$_b") splits into prefix words under bash and zsh alike (gsd-core#4109: a bare $_b does not under zsh)
+  # shellcheck disable=SC2046
+  {
+    $(printf '%s' "$_b") git merge-base --is-ancestor "$1" "$TARGET" 2>/dev/null && return 0
+    _sha=$($(printf '%s' "$_b") git rev-parse -q --verify "$1") || return 1
+    if _fork=$($(printf '%s' "$_b") git merge-base "$_sha" "$TARGET" 2>/dev/null) && [ -n "$($(printf '%s' "$_b") git diff --name-only --no-renames "$_fork" "$_sha")" ] &&
+      $(printf '%s' "$_b") git diff --name-only --no-renames -z "$_fork" "$_sha" | xargs -0 $(printf '%s' "$_b") git --literal-pathspecs diff --quiet "$_sha" "$TARGET" --; then
+      return 0
+    fi
+  }
+  # Unprovable offline stays "not merged" (fail-safe): gh missing, unauthenticated, offline,
+  # slower than 10s, or an executable gh with no `timeout` to bound it (stock macOS). Base-filtered:
+  # markers are keyed per target ($PR_BASE).
+  _g=$(command -v gh) || return 1
+  case $_g in /*) command -v timeout >/dev/null 2>&1 || return 1; _t="timeout 10" ;; esac
+  # shellcheck disable=SC2046
+  $(printf '%s' "$_t") gh pr list --state merged --head "$PR_BRANCH" --base "$PR_BASE" --json headRefOid --jq '.[].headRefOid' 2>/dev/null | grep -qx "$_sha"
+}
+
+# The last build counts as published only once its -pr tip (PR_TIP_REF) is merged, even if
+# the local -pr branch was since deleted; an unmerged build whose -pr branch is gone was
+# discarded, so its commits must be replayed.
+PENDING_TIP=$(git rev-parse -q --verify "$PENDING_REF")
+# One verdict for the leftover -pr branch (each lookup may call gh); the refusal below reads it.
+PR_BRANCH_MERGED=
+[ -n "$PR_BRANCH_TIP" ] && pr_merged "$PR_BRANCH_TIP" && PR_BRANCH_MERGED=1
+# Forgetting a pending build removes both refs; DISCARD_PENDING is the same pair as a printed recovery command.
+drop_pending() { git update-ref -d "$PENDING_REF"; git update-ref -d "$PR_TIP_REF" 2>/dev/null; }
+DISCARD_PENDING="git update-ref -d $(shq "$PENDING_REF") && git update-ref -d $(shq "$PR_TIP_REF")"
+if [ -n "$PENDING_TIP" ]; then
+  # The recorded built tip must itself be merged. The leftover branch's verdict stands in for it only
+  # while that branch is still the built tip: a -pr reset to the target or edited since says nothing about the build.
+  PR_BUILT_TIP=$(git rev-parse -q --verify "$PR_TIP_REF")
+  BUILT_MERGED=
+  if [ "$PR_BUILT_TIP" = "$PR_BRANCH_TIP" ]; then BUILT_MERGED=$PR_BRANCH_MERGED; else pr_merged "$PR_TIP_REF" && BUILT_MERGED=1; fi
+  if [ -n "$BUILT_MERGED" ]; then
+    git update-ref "$MARKER_REF" "$PENDING_TIP" && drop_pending
+  elif [ -z "$PR_BRANCH_TIP" ]; then
+    drop_pending
+    echo "WARNING: dropped the pending build $PENDING_TIP: $PR_BRANCH is gone and its tip is not merged into $TARGET, so its commits will be replayed. If it was squash/rebase merged and $TARGET changed those files since, re-anchor: git update-ref $(shq "$MARKER_REF") $PENDING_TIP" >&2
+  fi
+fi
+
+# BASE bounds every commit range below: the last published tip when still an ancestor
+# (repeat publish picks only new commits), else $TARGET.
+BASE="$TARGET"
+MARKER_TIP=$(git rev-parse -q --verify "$MARKER_REF")
+if [ -n "$MARKER_TIP" ]; then
+  if git merge-base --is-ancestor "$MARKER_TIP" "$CURRENT_BRANCH"; then
+    BASE="$MARKER_TIP"
+  else
+    echo "WARNING: $MARKER_REF is not an ancestor of $CURRENT_BRANCH (history rewritten); using $TARGET as base. Re-anchor: git update-ref $(shq "$MARKER_REF") <rebased commit equivalent to last published tip>" >&2
+  fi
+fi
+AHEAD=$(git rev-list --count "$CURRENT_BRANCH" --not "$BASE" "$TARGET" 2>/dev/null)
 if [ "$AHEAD" = "0" ]; then
-  echo "No commits ahead of $TARGET — nothing to filter."
+  echo "No commits ahead of $BASE — nothing to filter."
   exit 0
 fi
 
@@ -53,14 +138,19 @@ if [ -n "$DIRTY" ]; then
   echo "$DIRTY" >&2
   exit 1
 fi
-```
 
-Resolve the filter mode from config. A non-zero exit or an unset key means the default
-mode; only the literal string `true` selects strict.
-
-```bash
-PR_STRICT=$(gsd_run query config-get planning.pr_strict --raw 2>/dev/null)
-if [ "$PR_STRICT" = "true" ]; then PR_MODE="strict"; else PR_MODE="default"; PR_STRICT="false"; fi
+# A leftover -pr branch is reset only when already merged. Refuse here, before handle_sub_repos
+# pushes branches and opens PRs, so a refused run has no outward effects.
+if [ -n "$PR_BRANCH_TIP" ] && [ -z "$PR_BRANCH_MERGED" ]; then
+  echo "$PR_BRANCH exists and is not merged into $TARGET. Choose one, then re-run:" >&2
+  if git rev-parse -q --verify "$PENDING_REF" >/dev/null; then
+    echo "  merged by squash/rebase: git update-ref $(shq "$MARKER_REF") \$(git rev-parse $(shq "$PENDING_REF")) && git branch -D $(shq "$PR_BRANCH") && $DISCARD_PENDING" >&2
+    echo "  discard: git branch -D $(shq "$PR_BRANCH") && $DISCARD_PENDING" >&2
+  else
+    echo "  discard: git branch -D $(shq "$PR_BRANCH")" >&2
+  fi
+  exit 1
+fi
 ```
 
 Display:
@@ -234,8 +324,10 @@ After processing all selected sub-repos, remove the temp file and continue to
 Classify commits:
 
 ```bash
-# Get all commits ahead of target
-git log --oneline "$TARGET".."$CURRENT_BRANCH" --no-merges
+# Get all commits ahead of the base: these are the only candidates to pick
+git log --oneline --no-merges "$CURRENT_BRANCH" --not "$BASE" "$TARGET"
+# Default pick list, oldest first; drop commits classified as skip.
+INCLUDED_COMMITS=$(git rev-list --reverse --no-merges "$CURRENT_BRANCH" --not "$BASE" "$TARGET")
 ```
 
 **Canonical path declarations.** These three lines are the single source of truth for the
@@ -353,10 +445,12 @@ Mixed planning commits: {N} ({included — structural + transient/other, plannin
 
 <step name="create_pr_branch">
 ```bash
-PR_BRANCH="${CURRENT_BRANCH}-pr"
-
-# Create PR branch from target
-git checkout -b "$PR_BRANCH" "$TARGET"
+# Create PR branch from target. A leftover branch here is merged (an unmerged one was refused in the preconditions).
+if [ -n "$PR_BRANCH_TIP" ]; then
+  git checkout -q -B "$PR_BRANCH" "$TARGET" || { echo "could not create $PR_BRANCH from $TARGET" >&2; exit 1; }
+else
+  git checkout -b "$PR_BRANCH" "$TARGET" || { echo "could not create $PR_BRANCH from $TARGET" >&2; exit 1; }
+fi
 ```
 
 Cherry-pick the included commits, in order, filtering `$FILTER_PATHS` out of each one.
@@ -472,7 +566,7 @@ UNMERGED_PATHS_EOF
     else
       # Never claim a restore that did not happen — say exactly where they are.
       echo "Could not return to $CURRENT_BRANCH; you are still on $PR_BRANCH." >&2
-      echo "Run: git checkout $CURRENT_BRANCH && git branch -D $PR_BRANCH" >&2
+      echo "Run: git checkout $(shq "$CURRENT_BRANCH") && git branch -D $(shq "$PR_BRANCH")" >&2
     fi
     echo "Resolve the conflict against $TARGET, then re-run /gsd:pr-branch." >&2
     exit 1
@@ -530,6 +624,15 @@ value means the PR branch would DELETE planning files the target branch tracks
 (`git diff --name-status --no-renames "$TARGET".."$PR_BRANCH" | grep "^D" | grep "\.planning/"` lists
 them). That is data loss, not filtering — report it, do not tell the user to push, and
 rebuild the branch.
+
+When both gates pass, record the built tip as pending (`$TIP`, never HEAD) and the `$PR_BRANCH` tip
+beside it; the next run promotes pending to published once that tip is merged. A failed write warns; it never aborts:
+
+```bash
+if [ "$FORBIDDEN" = 0 ] && [ "$PLANNING_DELETIONS" = 0 ]; then
+  git update-ref "$PR_TIP_REF" "$(git rev-parse "$PR_BRANCH")" && git update-ref "$PENDING_REF" "$TIP" || echo "WARNING: could not record $PENDING_REF; next run will replay commits." >&2
+fi
+```
 
 Display results:
 ```

@@ -2738,6 +2738,9 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       'set -u',
       'TARGET=main',
       'PR_BRANCH=pr',
+      'TIP=HEAD',
+      'PENDING_REF=refs/gsd/pr-built/strict/main/feature',
+      'PR_TIP_REF=refs/gsd/pr-built-head/strict/main/feature',
       'FORBIDDEN_RE="^\\.planning/(phases|quick|research|threads|todos|debug|seeds|codebase|ui-reviews)/"',
       'STRUCTURAL_RE="^\\.planning/(STATE|ROADMAP|MILESTONES|PROJECT|REQUIREMENTS)\\.md$|^\\.planning/milestones/"',
       verifyBash,
@@ -2776,6 +2779,9 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       'set -u',
       'TARGET=main',
       'PR_BRANCH=pr',
+      'TIP=HEAD',
+      'PENDING_REF=refs/gsd/pr-built/strict/main/feature',
+      'PR_TIP_REF=refs/gsd/pr-built-head/strict/main/feature',
       'FORBIDDEN_RE="^\\.planning/(phases|quick|research|threads|todos|debug|seeds|codebase|ui-reviews)/"',
       'STRUCTURAL_RE="^\\.planning/(STATE|ROADMAP|MILESTONES|PROJECT|REQUIREMENTS)\\.md$|^\\.planning/milestones/"',
       verifyBash,
@@ -2824,6 +2830,8 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       'set -u',
       `CURRENT_BRANCH=feature`,
       'TARGET=main',
+      'PR_BRANCH=feature-pr',
+      'PR_BRANCH_TIP=',
       `INCLUDED_COMMITS="${hash}"`,
       // Newline-joined (#4605) — the shipped consumption loop is
       // `while IFS= read -r P; do ... done <<FILTER_PATHS_EOF`, which reads
@@ -2879,6 +2887,8 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       'set -u',
       'CURRENT_BRANCH=feature',
       'TARGET=main',
+      'PR_BRANCH=feature-pr',
+      'PR_BRANCH_TIP=',
       `INCLUDED_COMMITS="${hash}"`,
       // See the sibling #3720 test above: newline-joined, matching the shipped
       // `while IFS= read -r P ... <<FILTER_PATHS_EOF` consumption loop (#4605).

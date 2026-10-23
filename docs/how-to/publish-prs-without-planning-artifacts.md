@@ -60,6 +60,9 @@ git push origin <your-branch>-pr
 gh pr create --base main --head <your-branch>-pr
 ```
 
+Run it again after more commits: each run picks only the commits since the last `-pr` branch that
+was merged into the target, so earlier rounds are not replayed. A plain merge always counts; a squash or rebase merge counts when the target still holds the `-pr` content, or when `gh` confirms the merged PR (that proof needs `gh` and, on stock macOS, a `timeout` binary). It records that point in `refs/gsd/*`, per mode and target.
+
 Requirements before it will run:
 
 - **A clean working tree.** Uncommitted changes are rejected up front. Commit or stash first.
@@ -85,6 +88,8 @@ allowed population.
 | `Mode: strict` … `forbidden 0` | The guarantee held. | Push the `-pr` branch. |
 | `Mode: default` | `planning.pr_strict` did not resolve to `true`. | Re-run step 2; the key is read from the project's `.planning/config.json`, so check you are in the right project root. |
 | `forbidden` greater than `0` | The filter did not remove everything it promised. | Do **not** push. This is a bug — report it with the listed paths. |
+| `<branch>-pr exists and is not merged into <target>` | The previous `-pr` branch is not merged yet (or was squash/rebase merged, the target changed those files since, and `gh` could not confirm the merged PR). | Pick one of the two printed commands: re-anchor if it was merged, or discard it. Then re-run. |
+| `WARNING: dropped the pending build` | The previous `-pr` branch is gone and its merge could not be proven (no matching merged PR from `gh`, which is queried only when it is available and a `timeout` binary can bound it), so its commits will be replayed. | If it was squash/rebase merged, this run has already replayed the commits (or halted on a conflict, which also deletes the partial `-pr`: then only re-anchor and re-run): run the printed `git update-ref` to re-anchor, discard the rebuilt `-pr` if one exists (`git branch -D`) and remove the stale `PENDING_REF` and `PR_TIP_REF` refs (`git update-ref -d refs/gsd/pr-built/<key>`, `git update-ref -d refs/gsd/pr-built-head/<key>`), and re-run. |
 | `Conflict outside the .planning/ filter` | A real content conflict between your commits and the target branch. | Resolve it on your working branch, then re-run `/gsd-pr-branch`. |
 | `Working tree has uncommitted changes` | Step 4's precondition failed. | Commit or stash, then re-run. |
 | `No commits ahead of <target>` | There is nothing to filter. | Not an error — you have not committed anything yet, or the target is wrong. |
