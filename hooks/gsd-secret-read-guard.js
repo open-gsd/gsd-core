@@ -175,10 +175,23 @@ const MAX_NESTING_DEPTH = 3;
 // Work budget for one Bash command, in characters tokenized across every
 // reading and every nested rescan (#5255). Four readings, each rescanning
 // each nested `$( )`, multiply the work: a 1 MiB run of `$$(` is tokenized
-// about 60 times over and took seconds per call. Eight times the length cap
-// lets a 1 MiB command get all four readings and a nested level; the most
-// any of 539,601 real agent commands needed was about 250,000. A command that
-// needs more is denied as `command-too-complex` rather than scanned on.
+// about 60 times over and took seconds per call. A command holding a reading
+// trigger (`$'`, `$"`, `$${`, `$$(`, `$\<newline>`; readEachWay) is scanned
+// four times, and a nested body it rescans (`$( )`, backticks, `<( )`,
+// `eval`, `bash -c`, a heredoc or here-string fed to a shell) that holds one
+// is scanned four times under each of those. Eight times the length cap lets
+// a 1 MiB command get all four readings and a nested level that holds no
+// trigger. Through `$( )`, backticks, `<( )`, `eval` or `bash -c`, each
+// triggering level multiplies its text's cost by 4: text inside one reaches
+// the budget at about 420,000 characters (`git commit -m "$(cat <<'EOF' …`
+// with a `$'\t'` in the message: 419,445 is scanned, 419,446 is not), inside
+// two at about 100,000 and inside three, the nesting cap, at about 24,700. A
+// `$( )` in a heredoc fed to a shell is rescanned both as a nested body and
+// as part of the heredoc's script, so that shape reaches it sooner: one level
+// at 83,903, two at 8,456. The most work any of 539,601 real agent commands
+// needed was about 250,000 characters. A command that needs more is denied as
+// `command-too-complex` rather than scanned on. Characters here, and in
+// MAX_COMMAND_LENGTH, are UTF-16 code units (`String.length`).
 const MAX_SCAN_CHARACTERS = 8 * MAX_COMMAND_LENGTH;
 
 // Brace-alternative budget for a Grep glob before it is denied as too complex.
