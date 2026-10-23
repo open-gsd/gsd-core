@@ -270,6 +270,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/config-schema.cjs',
       'gsd-core/bin/lib/model-profiles.cjs',
       'gsd-core/bin/lib/model-resolver.cjs',
+      'gsd-core/bin/lib/model-escalation.cjs',
       'gsd-core/bin/lib/loop-resolver.cjs',
       'gsd-core/bin/lib/capability-state.cjs',
       'gsd-core/bin/lib/capability-activation.cjs',

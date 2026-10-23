@@ -311,6 +311,15 @@ with the guard enabled, a Bash call that trips an internal error is blocked
 even when it was not a force-add; that is the conservative direction for the
 one hard block this hook owns.
 
+**Runtime hook: `gsd-agent-isolation-guard.js` — model check.** The
+`hooks.agent_model_guard` check (Claude Code only) is advisory,
+defence-in-depth: it warns by default and denies only when set to `"deny"`.
+The legitimate-escalation record `.gsd/model-escalation-<agent>.json`
+is unauthenticated, so any orchestrator that passes the same model within its
+10-minute window in the same session is allowed (when the runtime exposes a session id); it is a
+single slot per agent type, and nothing clears it before it expires. The check fails open on any inability to
+verify, so it is not a security boundary.
+
 ---
 
 ## Layer 3 — Repository and dependency integrity

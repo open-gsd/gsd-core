@@ -94,10 +94,10 @@ describe('agedNoneGovernsDispatch (#5479)', () => {
 });
 
 describe('an aged none keeps governing its phase in the Claude guard and the Cursor hook (#5479)', () => {
-  let project; // runtime claude: the registry fallback resolves harness-worktree
+  let project; // runtime claude: the registry fallback resolves harness-worktree; the #5328 model guard is off so evaluateDispatch's verdict is the isolation one
   before(() => {
     project = createFixture({ prefix: 'gsd-5479-', planning: true, git: true, projectDoc: false });
-    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude', hooks: { agent_model_guard: false } }));
   });
   after(() => { cleanup(project); });
 
