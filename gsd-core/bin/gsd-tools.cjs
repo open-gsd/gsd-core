@@ -1747,13 +1747,19 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           }
           if (res.status >= 300 && res.status < 400) {
             res.body?.cancel().catch(() => {});
-            let target = 'an unknown host';
-            try { target = new URL(res.headers.get('location') || '', url).host || target; } catch { /* unparseable Location */ }
+            const location = res.headers.get('location');
+            let target = 'without a Location header';
+            if (location) {
+              target = 'to an unparseable Location';
+              try { target = `to ${new URL(location, url).host}`; } catch { /* keep the unparseable wording */ }
+            }
+            // Host and path only: a configured URL may carry credentials that must not reach a review file.
+            const asked = (() => { try { const u = new URL(url); return `${u.host}${u.pathname}`; } catch { return 'the configured URL'; } })();
             return {
               ok: false,
               status: res.status,
               body: '',
-              error: `${url} answered HTTP ${res.status}, redirecting to ${target}. The lane does not follow redirects; configure the final URL as the lane's host.`,
+              error: `${asked} answered HTTP ${res.status}, redirecting ${target}. The lane does not follow redirects; configure the final URL as the lane's host.`,
             };
           }
           return { ok: res.ok, status: res.status, body: await res.text() };

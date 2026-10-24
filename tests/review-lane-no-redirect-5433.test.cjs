@@ -89,7 +89,7 @@ describe('openai-http execution requests never follow a redirect (#5433)', () =>
     });
   }
 
-  test('a redirect on model discovery never reaches the redirect target; the completions request still runs against the configured host', async () => {
+  test('a redirect on model discovery is a lane failure naming the Location host; nothing reaches the target and no completions request is sent', async () => {
     const target = await open((req, res) => { res.statusCode = 200; res.end(COMPLETION); });
     const configured = await open((req, res) => {
       if (req.method === 'GET' && req.url === '/v1/models') {
@@ -103,7 +103,18 @@ describe('openai-http execution requests never follow a redirect (#5433)', () =>
     });
     const { review } = await invokeLane(configured.url);
     assert.deepEqual(target.requests, [], 'the redirect target must never be requested');
-    assert.match(review, /REVIEW-FROM-CONFIGURED-HOST/);
+    assert.ok(review.includes(target.host), `the failure must name the Location host ${target.host}:\n${review}`);
+    assert.ok(!configured.requests.some((r) => r.startsWith('POST ')), 'the prompt must not be sent once discovery was redirected');
+    assert.ok(!review.includes('REVIEW-FROM-CONFIGURED-HOST'));
+  });
+
+  test('a 3xx without a Location header is a lane failure that says so', async () => {
+    const bare = await open((req, res) => {
+      res.statusCode = req.method === 'POST' ? 308 : 200;
+      res.end(req.method === 'POST' ? '' : '{}');
+    });
+    const { review } = await invokeLane(bare.url);
+    assert.ok(review.includes('without a Location header'), review);
   });
 
   test('a non-redirect response behaves as before', async () => {
