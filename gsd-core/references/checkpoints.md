@@ -32,6 +32,8 @@ The gate spans two layers, and both must honor it. `gsd-executor` refuses to aut
 
 > **Default mode (#3309): `workflow.human_verify_mode = end-of-phase`.** New projects do NOT halt mid-flight at *planner-emitted* `checkpoint:human-verify` tasks. (The executor-synthesized **tracer feedback gate** is the one runtime checkpoint this mode also governs, with its own precedence chain — see "Tracer feedback gate (#3299)" below.) The planner suppresses those task emissions and embeds the verification details into the relevant `auto` task's `<verify><human-check>` block; the verifier harvests every `<verify><human-check>` at end-of-phase (Step 8) and consolidates them into the existing `human_needed` → `{phase_num}-UAT.md` flow in `workflows/execute-phase.md`. The user reviews everything in one batch.
 >
+> **What the mode does and does not enforce at runtime.** `end-of-phase` is enforced by the *planner* (it does not emit these tasks) and by the *verifier* (it harvests the `<human-check>` blocks). The *executor* does not filter checkpoints: a `checkpoint:human-verify` task that is nonetheless present in a plan — hand-authored, imported, or written while the mode was `mid-flight` — is handled like any other checkpoint, and golden rule 5 applies at both layers. `gsd-executor` auto-approves it without stopping when `AUTO_CFG` is true (its auto-mode checkpoint behavior); otherwise it stops and returns the checkpoint, and `execute-phase`'s `checkpoint_handling` auto-approves it in its auto-mode branch when `AUTO_MODE` is true, or presents it to the user. The executor reads the mode only for the one checkpoint it synthesizes itself, the tracer feedback gate below.
+>
 > **Why this is the default:** every mid-flight halt costs a full executor cold-start (CLAUDE.md, MEMORY.md, STATE.md, plan re-read on respawn) because subagent context is discarded across the pause. A plan with N human-verify checkpoints pays the cold-start cost N+1 times — measured at "tens of thousands of tokens" per round-trip on real projects.
 >
 > Set `workflow.human_verify_mode = mid-flight` in `.planning/config.json` to opt back into the pre-#3309 behavior of halting at every checkpoint. `checkpoint:decision` and `checkpoint:human-action` are unaffected by either value — those gate the work itself, not post-hoc verification.
@@ -123,6 +125,15 @@ Evaluate the rows **in order** and take the first that matches — they are a pr
 | 5 | Interactive, `mid-flight` | any | STOP → `checkpoint:human-verify` |
 
 **Carve-outs — the #3299 auto-continue (row 3) applies ONLY when all three hold:** the run is interactive, the mode is `end-of-phase`, and the tracer's `<verify>` contains only `<automated>`. Anything else STOPs or falls to the pre-existing auto-mode branch. HALT-on-failure is unconditional in rows 2 and 3 alike: a failing tracer never becomes an approvable checkpoint and never proceeds to expansion, because layering expansion onto a broken slice is the failure this gate exists to prevent.
+
+**Worked outcomes, by row.** *HALT* means the executor surfaces a deviation and starts no expansion task; the user cannot approve past it. *STOP* means the executor returns a `checkpoint:human-verify` for the user.
+
+1. A tracer carrying `gate="blocking-human"` → STOP, even under `--auto`; it is never auto-continued.
+2. Auto mode, tracer `<verify>` is `<automated>npm test</automated>` → re-run; failing → HALT; passing → log `⚡ Tracer verified end-to-end — expanding` and continue.
+   Auto mode, `<verify>` holds `<automated>` plus a `<human-check>` → the same: row 2 takes any `<verify>`, so an auto run does not stop for the `<human-check>` the way row 4 does.
+3. Interactive, `end-of-phase`, `<verify>` is only `<automated>npm test</automated>` → re-run; failing → HALT; passing → continue to expansion with no checkpoint.
+4. Interactive, `end-of-phase`, `<verify>` holds `<automated>` plus a `<human-check>` → STOP.
+5. Interactive, `mid-flight`, any `<verify>` → STOP.
 
 Row 1 is deliberately **not** scoped to interactive runs. Golden rule 6 above states that `gate="blocking-human"` stops for a human in *every* mode including auto-mode, and a precedence chain that let an autonomous run continue past it would make this file assert two incompatible rules about the same gate. No planner emits `gate` on a `type="tracer"` task today, but `src/verify.cts` parses only `type` and does not consult `gate` on non-checkpoint tasks, so a hand-authored, imported, or externally-generated `PLAN.md` can carry it and validate — unreachable by our planner is not unreachable.
 

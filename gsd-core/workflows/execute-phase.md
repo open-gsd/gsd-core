@@ -1094,7 +1094,7 @@ Read auto-advance config (chain flag OR user preference — same boolean as `che
 AUTO_MODE=$(gsd_run query check auto-mode --pick active 2>/dev/null)
 ```
 
-When executor returns a checkpoint AND `AUTO_MODE` is `true`:
+When executor returns a checkpoint AND `AUTO_MODE` is `true` (spawn prompt: `execute-phase/steps/checkpoint-continuation-prompt.md`):
 - **human-verify** → Auto-spawn continuation agent with `{user_response}` = `"approved"`. Log `⚡ Auto-approved checkpoint`. **Except `blocking-human`.**
 - **decision** → `auto_select` present: auto-spawn with `{user_response}` = that option, log `⚡ Auto-selected: [option]`. Absent: present to user (#4095). **Except `blocking-human`.**
 - **human-action** → Present to user (existing behavior below). Auth gates cannot be automated.
@@ -1118,7 +1118,7 @@ When executor returns a checkpoint AND `AUTO_MODE` is `true`:
    [Awaiting section from agent return]
    ```
 5. User responds: "approved"/"done" | issue description | decision selection
-6. **Spawn continuation agent (NOT resume)** with a prompt built from these placeholders (there is no separate template file; this list is the contract):
+6. **Spawn continuation agent (NOT resume)** — read and execute `execute-phase/steps/checkpoint-continuation-prompt.md` (#4783). Its substitution contract includes:
    - `{completed_tasks_table}`: From checkpoint return, wrapped in a `<completed_tasks>` tag (the executor's continuation handling keys on it)
    - `{resume_task_number}` + `{resume_task_name}`: Current task
    - `{user_response}`: What user provided
@@ -1128,7 +1128,7 @@ When executor returns a checkpoint AND `AUTO_MODE` is `true`:
 
 **Why fresh agent, not resume:** Resume relies on internal serialization that breaks with parallel tool calls. Fresh agents with explicit state are more reliable.
 
-**Checkpoints in parallel waves:** Agent pauses and returns while other parallel agents may complete. Present checkpoint, spawn continuation, wait for all before next wave.
+**Checkpoints in parallel waves:** Agent pauses and returns while other parallel agents may complete. Present checkpoint, spawn continuation (prompt: `execute-phase/steps/checkpoint-continuation-prompt.md`), wait for all before next wave.
 </step>
 
 <step name="aggregate_results">
