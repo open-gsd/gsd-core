@@ -16,6 +16,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { createTempDir, cleanup } = require('./helpers.cjs');
+const { STAGED_HOOK_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const HOOKS_DIST = path.join(ROOT, 'hooks', 'dist');
@@ -68,6 +69,7 @@ function runHookDirect(script, payload, cwd) {
     input: JSON.stringify(payload),
     encoding: 'utf8',
     cwd,
+    timeout: STAGED_HOOK_SCRIPT_TIMEOUT_MS,
     windowsHide: true,
   });
   let parsed = null;
