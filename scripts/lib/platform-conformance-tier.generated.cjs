@@ -333,6 +333,7 @@ module.exports = {
   "tests/unusable-input.test.cjs",
   "tests/update-custom-backup.test.cjs",
   "tests/user-artifact-staging.test.cjs",
+  "tests/user-home-isolation-5594.test.cjs",
   "tests/verification-append-audit.test.cjs",
   "tests/verification-status.test.cjs",
   "tests/verify-archive-dirs-live-path.test.cjs",
