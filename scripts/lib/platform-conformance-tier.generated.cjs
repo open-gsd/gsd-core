@@ -208,6 +208,7 @@ module.exports = {
   "tests/no-unbounded-spawn.test.cjs",
   "tests/no-unguarded-nonportable-exec.rule.test.cjs",
   "tests/node-compile-cache.test.cjs",
+  "tests/npm-audit-baseline-safe-directory-5659.test.cjs",
   "tests/npm-audit-baseline.test.cjs",
   "tests/npm-integrity-gate.test.cjs",
   "tests/nsegment-phase-grammar.test.cjs",
