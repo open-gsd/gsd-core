@@ -6089,14 +6089,18 @@ describe('init: the phase SPEC (#5629)', () => {
   }
 
   test('every consumer resolves the phase SPEC through the same predicate (#5629)', () => {
+    // [files in the phase directory, the one file every consumer must call the phase SPEC]
     const scenarios = [
-      ['03-SPEC.md'],
-      ['03-UI-SPEC.md', '03-SPEC.md', '03-AI-SPEC.md'],
-      ['03-UI-SPEC.md'],
-      ['03-AI-SPEC.md'],
-      ['03-SPEC.md.bak', '03-NOTES.md'],
+      [['03-SPEC.md'], '03-SPEC.md'],
+      [['03-UI-SPEC.md', '03-SPEC.md', '03-AI-SPEC.md'], '03-SPEC.md'],
+      [['03-UI-SPEC.md'], null],
+      [['03-AI-SPEC.md'], null],
+      [['03-SPEC.md.bak', '03-NOTES.md'], null],
+      // a misfiled cross-phase SPEC sorts first but belongs to phase 02
+      [['02-SPEC.md', '03-SPEC.md'], '03-SPEC.md'],
+      [['02-SPEC.md'], null],
     ];
-    for (const names of scenarios) {
+    for (const [names, expected] of scenarios) {
       cleanup(tmpDir);
       tmpDir = fs.realpathSync(createFixture());
       seedSpecs(names);
@@ -6104,7 +6108,7 @@ describe('init: the phase SPEC (#5629)', () => {
       const old = new Date(Date.now() - 3_600_000);
       for (const n of names) fs.utimesSync(path.join(phaseDir, n), old, old);
       fs.writeFileSync(path.join(phaseDir, '03-CONTEXT.md'), '# Context\n');
-      const expected = findPhaseSpecIn(fs.readdirSync(phaseDir));
+      assert.equal(findPhaseSpecIn(fs.readdirSync(phaseDir).filter((f) => f.startsWith('03-'))), expected, 'the predicate agrees with the scenario');
 
       for (const verb of INIT_VERBS) {
         const out = initPayload(verb);

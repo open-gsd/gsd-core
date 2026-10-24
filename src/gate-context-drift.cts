@@ -29,7 +29,10 @@ import { resolvePhaseDirByToken } from './gate-phase-context.cjs';
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- verification.cjs is an export= CommonJS module
 import verificationMod = require('./verification.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
+import phaseIdMod = require('./phase-id.cjs');
 
+const { scopeToPhase } = phaseIdMod;
 const { planningDir, isPhaseSpecFile, findPhaseSpecIn } = planningWorkspace;
 const { defaultPhaseCleanCommitTimesMs } = verificationMod;
 
@@ -115,7 +118,8 @@ function runContextDriftGate(cwd: string, phaseArg: string): GateVerdict {
   const patternsFile = phaseFiles.find((f) => f.endsWith('-PATTERNS.md'));
   const validationFile = phaseFiles.find((f) => f.endsWith('-VALIDATION.md'));
   // #5629: the shared phase-SPEC predicate (the init payloads' `has_spec` / `spec_path` use the same one).
-  const specFile = findPhaseSpecIn(phaseFiles);
+  // Scoped to this phase's own artifacts, as init scopes it, so a misfiled `02-SPEC.md` agrees in both.
+  const specFile = findPhaseSpecIn(scopeToPhase(phaseFiles, path.basename(phaseDir)));
   const upstreamFiles = [researchFile, patternsFile, validationFile, specFile].filter(
     (f): f is string => !!f,
   );

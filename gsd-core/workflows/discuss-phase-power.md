@@ -273,6 +273,7 @@ Process all answered questions from the JSON file and generate CONTEXT.md.
 
 5. Write CONTEXT.md using the standard context template format:
    - `<spec_lock>` section immediately after `<domain>` when `spec_loaded = true` (template: `discuss-phase/templates/context.md`); do NOT copy SPEC.md requirements into `<decisions>`
+   - the SPEC.md file in `<canonical_refs>` with the note "Locked requirements — MUST read before planning" when `spec_loaded = true`
    - `<decisions>` section with all answered questions grouped by section
    - `<deferred_ideas>` section for unanswered questions (carry forward for future discussion)
    - `<specifics>` section for any chat_more content that adds nuance

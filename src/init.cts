@@ -263,7 +263,9 @@ function phaseSpecFacts(phaseDirAbs: string | null): { has_spec: boolean; spec_p
   } catch {
     return { has_spec: false };
   }
-  const spec = findPhaseSpecIn(files);
+  // Scoped to THIS phase's own artifacts first (#3511), like the sibling artifact lookups: a misfiled
+  // `02-SPEC.md` in phase 03's directory must not win (the context-drift gate scopes the same way).
+  const spec = findPhaseSpecIn(scopeToPhase(files, path.basename(phaseDirAbs)));
   return spec ? { has_spec: true, spec_path: toPosixPath(path.join(phaseDirAbs, spec)) } : { has_spec: false };
 }
 

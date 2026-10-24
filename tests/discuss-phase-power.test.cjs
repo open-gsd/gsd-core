@@ -281,6 +281,13 @@ describe('discuss-phase modes honour the phase SPEC (#5629)', () => {
     return src.slice(start, src.indexOf('</step>', start) + '</step>'.length);
   };
 
+  // The text where each flow decides WHAT to discuss: the HOW-only restriction must live there.
+  const howRegion = (mode, src) => {
+    if (mode === 'default') return src.slice(src.indexOf('2b. **SPEC.md awareness**'), src.indexOf('3. **Gray areas**'));
+    if (mode === 'assumptions') return src.slice(src.indexOf('Agent(subagent_type="gsd-assumptions-analyzer"'), src.indexOf('${AGENT_SKILLS_ANALYZER}\n""")'));
+    return stepBody(src, 'analyze');
+  };
+
   test('every discuss mode carries the SPEC contract (#5629)', () => {
     for (const [mode, rel] of Object.entries(FLOWS)) {
       const src = readSrc(rel);
@@ -290,7 +297,9 @@ describe('discuss-phase modes honour the phase SPEC (#5629)', () => {
       assert.ok(step.includes('spec_loaded = true'), `${mode}: check_spec sets spec_loaded`);
       assert.ok(/locked_requirements/.test(step), `${mode}: check_spec stores the locked requirements`);
       assert.ok(src.includes('<spec_lock>'), `${mode}: the CONTEXT.md it writes carries <spec_lock>`);
-      assert.ok(/HOW/.test(src) && /WHAT/.test(src), `${mode}: names the HOW-only restriction (WHAT is already locked)`);
+      assert.ok(/Locked requirements — MUST read before planning/.test(src), `${mode}: the SPEC is listed in canonical_refs`);
+      const how = howRegion(mode, src);
+      assert.ok(how && /\bHOW\b/.test(how) && /\bWHAT\b/.test(how), `${mode}: the step that picks what to discuss restricts it to HOW (WHAT is already locked)`);
     }
     const bodies = Object.values(FLOWS).map((rel) => stepBody(readSrc(rel), 'check_spec'));
     assert.strictEqual(bodies[1], bodies[0], 'assumptions check_spec matches the default flow exactly (single source of truth)');
@@ -315,7 +324,18 @@ describe('discuss-phase modes honour the phase SPEC (#5629)', () => {
     assert.ok(/HOW/.test(prompt), 'the analyzer is told to form assumptions about HOW only');
   });
 
-  test('no workflow carries its own SPEC glob (#5629)', () => {
+  test('no workflow globs for the phase SPEC itself (#5629)', () => {
+    const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = path.join(dir, e.name);
+      return e.isDirectory() ? walk(p) : (p.endsWith('.md') ? [p] : []);
+    });
+    const offenders = walk(path.join(__dirname, '..', 'gsd-core', 'workflows'))
+      .filter((p) => /\bls\b[^\n]*\*-SPEC\.md/.test(fs.readFileSync(p, 'utf8')))
+      .map((p) => path.relative(path.join(__dirname, '..'), p));
+    assert.deepStrictEqual(offenders, [], 'workflows read has_spec / spec_path from init instead of an ls over *-SPEC.md');
+  });
+
+  test('discuss-phase and plan-phase read the SPEC from init (#5629)', () => {
     const discuss = readSrc(FLOWS.default);
     assert.ok(!/ls \$\{phase_dir\}\/\*-SPEC\.md/.test(discuss), 'discuss-phase.md reads has_spec / spec_path from init instead of its own ls');
     const plan = readSrc('gsd-core/workflows/plan-phase.md');
