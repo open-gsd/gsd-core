@@ -41,10 +41,6 @@
  * classifier (#4692): `evidence` gains `matched_test`, `format` and
  * `report_errors`, and `record.failing_test` names only the matched target.
  * Verdicts, reasons, stderr and exit codes are unchanged.
- *
- * `tdd-review-checkpoint-red-only` and `-mixed-violation` were re-captured for #5275: a FAIL row
- * gains `reason` (`missing_commits` for these two; `green_before_red` is the new order verdict).
- * Verdicts, tables, stderr and exit codes are unchanged.
  */
 
 const { describe, test, after } = require('node:test');

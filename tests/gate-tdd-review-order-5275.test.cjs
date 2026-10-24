@@ -84,11 +84,11 @@ describe('#5275 RED must precede GREEN by ancestry', () => {
 
   test('a missing RED or GREEN keeps its existing reason, distinct from the order violation', () => {
     withProject(ONE, (d) => { commit(d, 'test(01-01): red only'); }, (out) => {
-      assert.equal(out.rows[0].reason, 'missing_commits');
+      assert.equal(out.rows[0].reason, undefined, 'a missing commit is told by missing, not by a reason');
       assert.deepEqual(out.rows[0].missing, ['GREEN']);
     });
     withProject(ONE, (d) => { commit(d, 'feat(01-01): green only'); }, (out) => {
-      assert.equal(out.rows[0].reason, 'missing_commits');
+      assert.equal(out.rows[0].reason, undefined, 'a missing commit is told by missing, not by a reason');
       assert.deepEqual(out.rows[0].missing, ['RED']);
     });
   });

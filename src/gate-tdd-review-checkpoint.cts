@@ -42,14 +42,13 @@ interface TddPlanRow {
   refactor: boolean;
   status: 'Pass' | 'FAIL';
   missing: string[];
-  /** Why a FAIL row failed (#5275): a commit kind is missing, or no GREEN follows a RED. Absent on a pass. */
+  /** Set only on an order violation (#5275): both commit kinds exist but no GREEN follows a RED. A missing commit is told by `missing`. */
   reason?: TddRowReason;
   /** Plans whose `feat(...)` commit supplied this plan's GREEN through `depends_on` (#4867). */
   greenFrom?: string[];
 }
 
 export const TDD_ROW_REASON = {
-  MISSING_COMMITS: 'missing_commits',
   GREEN_BEFORE_RED: 'green_before_red',
 } as const;
 type TddRowReason = (typeof TDD_ROW_REASON)[keyof typeof TDD_ROW_REASON];
@@ -258,10 +257,11 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
     if (!red) missing.push('RED');
     if (!anyGreenCommit) missing.push('GREEN');
     const status: 'Pass' | 'FAIL' = missing.length === 0 && green ? 'Pass' : 'FAIL';
-    // Both commit kinds exist but no GREEN follows a RED: its own reason, not a "missing" one.
-    const reason: TddRowReason | undefined = status === 'Pass'
-      ? undefined
-      : missing.length > 0 ? TDD_ROW_REASON.MISSING_COMMITS : TDD_ROW_REASON.GREEN_BEFORE_RED;
+    // Both commit kinds exist but no GREEN follows a RED: its own reason. A row that fails for a
+    // missing commit keeps the exact shape it always had (`missing` already says why).
+    const reason: TddRowReason | undefined = status === 'FAIL' && missing.length === 0
+      ? TDD_ROW_REASON.GREEN_BEFORE_RED
+      : undefined;
 
     rows.push({
       planId, red, green, refactor, status, missing,
