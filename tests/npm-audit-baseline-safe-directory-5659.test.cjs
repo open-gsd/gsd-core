@@ -23,6 +23,8 @@ const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { resolveBaselineRef, extractBaselineTree, explainNoBaseline } = require('../scripts/npm-audit-baseline.cjs');
 
 const REPO = path.join(path.sep, 'work');
+// git compares safe.directory against its forward-slash path, also on Windows.
+const forwardSlash = (p) => String(p).replace(/\\/g, '/');
 const PKG = '{"name":"fixture","version":"1.0.0"}\n';
 const LOCK = '{"name":"fixture","lockfileVersion":3,"packages":{}}\n';
 
@@ -38,7 +40,7 @@ function ownershipRefusingGit({ knownRefs = ['origin/next'], honorOverride = tru
       overrides.push(rest[1]);
       rest = rest.slice(2);
     }
-    const trusted = honorOverride && overrides.includes(`safe.directory=${options.cwd}`);
+    const trusted = honorOverride && overrides.includes(`safe.directory=${forwardSlash(options.cwd)}`);
     if (!trusted) {
       throw Object.assign(new Error('git failed'), {
         status: 128,
@@ -47,6 +49,7 @@ function ownershipRefusingGit({ knownRefs = ['origin/next'], honorOverride = tru
     }
     const [sub, ...tail] = rest;
     if (sub === 'rev-parse') {
+      if (tail[0] === '--git-dir') return '.git\n';
       const ref = tail[tail.length - 1];
       if (knownRefs.includes(ref)) return `${'a'.repeat(40)}\n`;
       throw Object.assign(new Error('unknown revision'), { status: 128, stderr: `fatal: Needed a single revision` });
@@ -97,7 +100,7 @@ describe('#5659 the audit baseline resolves in a checkout owned by another uid',
     if (dir) t.after(() => cleanup(dir));
     assert.ok(git.calls.length > 0);
     for (const call of git.calls) {
-      assert.deepEqual(call.args.slice(0, 2), ['-c', `safe.directory=${REPO}`], `${call.args.join(' ')}: override comes first`);
+      assert.deepEqual(call.args.slice(0, 2), ['-c', `safe.directory=${forwardSlash(REPO)}`], `${call.args.join(' ')}: override comes first`);
       assert.ok(!call.args.some((a) => /safe\.directory=\*/.test(a)), 'never a wildcard');
     }
   });

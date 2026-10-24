@@ -261,7 +261,28 @@ function runInstalledTreeAudit(cwd, opts = {}) {
  * checkout being audited. Same precedent as scripts/lint-compiled-artifact-sync.cjs.
  */
 function safeDirectoryArgs(repoRoot) {
-  return ['-c', `safe.directory=${repoRoot}`];
+  // git compares safe.directory against its forward-slash path, also on Windows.
+  return ['-c', `safe.directory=${String(repoRoot).replace(/\\/g, '/')}`];
+}
+
+/**
+ * One line saying why no baseline resolved (#5659), for the integrity gate's zero-tolerance message.
+ * Without it a git refusal (ownership, a missing git, a broken checkout) is indistinguishable from a
+ * checkout that simply has no `origin/next`, which is how the ownership problem hid. Only the first
+ * line git printed is kept.
+ */
+function explainNoBaseline(repoRoot, { execFileSyncImpl = execFileSync } = {}) {
+  try {
+    execFileSyncImpl('git', [...safeDirectoryArgs(repoRoot), 'rev-parse', '--git-dir'], {
+      cwd: repoRoot,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    const detail = String((error && (error.stderr || error.message)) || '').trim().split(/\r?\n/)[0];
+    return `git could not read ${repoRoot}${detail ? `: ${detail}` : ''}`;
+  }
+  return 'no baseline ref (origin/next, next) resolved, or it lacks package.json / package-lock.json';
 }
 
 /**
@@ -378,6 +399,7 @@ module.exports = {
   runNpmAuditWithRetry,
   extractBaselineTree,
   resolveBaselineRef,
+  explainNoBaseline,
   isTimeoutKill,
   buildTimeoutKillError,
   sleepSyncMs,
