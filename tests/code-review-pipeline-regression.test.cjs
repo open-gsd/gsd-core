@@ -4613,7 +4613,7 @@ describe('#5640 helper modules resolve from the installed runtime', { skip: !HAS
   let installHome;
   let emptyHome;
   let projectDir;
-  const minimalPath = [path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter);
+  let minimalPath;
 
   function before_() {
     sandbox = createTempDir('gsd-5640-');
@@ -4623,6 +4623,11 @@ describe('#5640 helper modules resolve from the installed runtime', { skip: !HAS
     fs.cpSync(path.join(ROOT, 'gsd-core', 'bin', 'lib'), lib, { recursive: true });
     fs.copyFileSync(path.join(ROOT, 'gsd-core', 'bin', 'gsd_run'), path.join(installHome, '.claude', 'gsd-core', 'bin', 'gsd_run'));
     emptyHome = path.join(sandbox, 'empty-home');
+    // node comes through a private bin dir: the directory holding the real node may also hold a global gsd_run.
+    const toolBin = path.join(sandbox, 'tool-bin');
+    fs.mkdirSync(toolBin, { recursive: true });
+    fs.symlinkSync(process.execPath, path.join(toolBin, 'node'));
+    minimalPath = [toolBin, '/usr/bin', '/bin'].join(path.delimiter);
     fs.mkdirSync(emptyHome, { recursive: true });
     projectDir = path.join(sandbox, 'project');
     fs.mkdirSync(projectDir, { recursive: true });
