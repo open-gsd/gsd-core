@@ -2522,19 +2522,24 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // because the harness would fork the worktree from the diverged base
     // regardless of what the caller asked for.
     //
-    // A PLAN-SCOPED write (`--plan`) does not re-derive it. The base check is
-    // decided once per run, at the phase-level resolve, and a degrade there
-    // resets USE_WORKTREES for the whole run, so every plan then takes the
-    // per-plan gate's forced-`none` branch. A plan reaches the gate's plain
-    // re-record only when that resolve did not degrade, and the record it
-    // writes is the per-plan decision the guard holds the dispatch to. HEAD
-    // moving mid-run (a wave merged back) would otherwise record `none` for a
-    // plan decided `true`, and the guard would allow the flag-less spawn of a
-    // plan meant to be isolated. A flagged spawn on that diverged base is
-    // still stopped by the spawn-time branch check (`exit 42`).
+    // A PLAN-SCOPED write does not re-derive it: any query that carries
+    // `--plan`, even with an empty value. The base check is decided once per
+    // run, at the phase-level resolve, and a degrade there resets
+    // USE_WORKTREES for the whole run, so every plan then takes the per-plan
+    // gate's forced-`none` branch. A plan reaches the gate's plain re-record
+    // only when that resolve did not degrade, and the record it writes is the
+    // per-plan decision the guard holds the dispatch to. HEAD moving mid-run (a
+    // wave merged back) would otherwise record `none` for a plan decided
+    // `true`, and the guard would allow the flag-less spawn of a plan meant to
+    // be isolated. The flag, not its value, is the test: an empty `$plan_id`
+    // (lost with an earlier tool call's shell) would otherwise re-derive into
+    // a `none` that names no plan, which the guard applies to every plan of
+    // the phase. Where the harness forks from origin/HEAD, a flagged spawn on
+    // that diverged base is still stopped by the spawn-time branch check
+    // (`exit 42`).
     let recordedIsolation = isolation;
     let recordedHarnessFlag = harnessFlag;
-    if (recordedIsolation !== 'none' && planArg === null && baseCheckDegrades(cwd, recordedIsolation)) {
+    if (recordedIsolation !== 'none' && planIdx === -1 && baseCheckDegrades(cwd, recordedIsolation)) {
       recordedIsolation = 'none';
       recordedHarnessFlag = null;
     }
@@ -2577,8 +2582,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // host's descriptors (`harnessFlag`, `exec`) from the sentinel-free
     // `inspect-dispatch-isolation`, which no hold reaches. The #4222
     // base-check degrade above stays sentinel-only: it is re-derived from
-    // live git state on every call, and the shell computes the same check
-    // itself.
+    // live git state on every call that names no plan, and the shell
+    // computes the same check itself.
     //
     // The reader is the guards' own (hooks/lib/isolation-sentinel.js), so
     // "fresh and well-formed" here is byte-for-byte what the guard will
