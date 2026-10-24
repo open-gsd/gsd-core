@@ -6,7 +6,7 @@
 - **Absorbs:** [#4222](https://github.com/open-gsd/gsd-core/issues/4222), [#4561](https://github.com/open-gsd/gsd-core/issues/4561), [#4594](https://github.com/open-gsd/gsd-core/issues/4594) — three `confirmed-bug` issues that are the same missing owner reported at two ends of one wire
 - **Framed by:** [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) (host-integration interface — agent dispatch is interface point 2)
 - **Pattern copied from:** [ADR-2121](2121-phase-identifier-parsing-consolidation.md) (phase-identifier consolidation: seam + migration + anti-divergence guard). This ADR reuses its phase-token grammar and its drift-lint shape deliberately.
-- **Amended:** 2026-09-29 by Phase 2 ([#4904](https://github.com/open-gsd/gsd-core/issues/4904)) — Decision 2 defines the `IsolationDecision`'s provenance field, `decided_by` (`resolver` | `caller`, absent reads as `caller`), and states which decisions a re-query holds. Without it, Decision 2's hold and #4232's re-derivation cannot both be true. See *The record states who decided it* under Decision 2. Decision 3 gains the workflow-shell validity lists as a second class of pinned copy.
+- **Amended:** 2026-09-29 by Phase 2 ([#4904](https://github.com/open-gsd/gsd-core/issues/4904)) — Decision 2 defines the `IsolationDecision`'s provenance field, `decided_by` (`resolver` | `caller`, absent reads as `caller`), and states which decisions a re-query holds. Without it, Decision 2's hold and #4232's re-derivation cannot both be true. See *The record states who decided it* under Decision 2, and *A plan-scoped write does not re-derive the base check* for where that re-derivation stops. Decision 3 gains the workflow-shell validity lists as a second class of pinned copy.
 - **Scope note:** unlike ADR-2121, this ADR does **not** land as a code-free Phase 0. It ships alongside Phase 1's implementation because the epic's phase sub-issues could not be created in the session that executed it; the decisions below were nonetheless fixed before that implementation was written, and Phases 2 and 3 execute against this file.
 
 ## Context
@@ -164,6 +164,20 @@ HEAD to compare against a fork base, so the base check has re-derived nothing th
 that verdict is recomputed on every call. The resolver does not record it as a degrade; the
 guard's #4734 fallback keeps owning it. The indeterminate `head-unresolvable` degrade is
 still recorded, because failing closed on an indeterminate answer is #3050's rule.
+
+**A plan-scoped write does not re-derive the base check.** A query that names a `--plan`
+records the per-plan decision, and the base check is not one: execute-phase decides it once,
+at the phase-level resolve, and a degrade there turns worktrees off for the whole run, so
+every plan then records a forced `none`. A plan reaches the per-plan gate's plain re-record
+only when that resolve did not degrade. Re-deriving there reads a HEAD that the run itself
+has moved: once a wave merges back, HEAD is ahead of the fork base, and the record of a
+later plan decided `true` would say `none`, so the guard would allow a dispatch of that plan
+without its harness flag. A flagged dispatch on that base is still stopped by the
+worktree branch check's `exit 42`, as it is without this decision. Every query that names no
+plan, whether at phase level or unscoped, still re-derives the base check. The cost is a rule
+a future caller must know: a new plan-scoped plain query records the host capability, and if
+it needs the base check, it runs that check in shell and forces the result, as the per-plan
+gate does for its submodule degrade.
 
 ### Decision 3 — a copy that must exist is pinned by a parity test, never merely tolerated
 
