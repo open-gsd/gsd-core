@@ -2523,20 +2523,22 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // regardless of what the caller asked for.
     //
     // A PLAN-SCOPED write does not re-derive it: any query that carries
-    // `--plan`, even with an empty value. The base check is decided once per
-    // run, at the phase-level resolve, and a degrade there resets
-    // USE_WORKTREES for the whole run, so every plan then takes the per-plan
-    // gate's forced-`none` branch. A plan reaches the gate's plain re-record
-    // only when that resolve did not degrade, and the record it writes is the
-    // per-plan decision the guard holds the dispatch to. HEAD moving mid-run (a
-    // wave merged back) would otherwise record `none` for a plan decided
-    // `true`, and the guard would allow the flag-less spawn of a plan meant to
-    // be isolated. The flag, not its value, is the test: an empty `$plan_id`
-    // (lost with an earlier tool call's shell) would otherwise re-derive into
-    // a `none` that names no plan, which the guard applies to every plan of
-    // the phase. Where the harness forks from origin/HEAD, a flagged spawn on
-    // that diverged base is still stopped by the spawn-time branch check
-    // (`exit 42`).
+    // `--plan`, even with an empty value. Execute-phase takes the base check
+    // at the phase-level resolve and again between waves (#1369), and a
+    // degrade at either turns worktrees off for the rest of the run, so every
+    // later plan takes the per-plan gate's forced-`none` branch. A plan reaches
+    // the gate's plain re-record only when neither degraded, and the record it
+    // writes is the per-plan decision the guard holds the dispatch to. HEAD can
+    // still move after that decision: a sequential plan of a mixed wave commits
+    // on the main tree before a worktree plan of the same wave dispatches, or a
+    // wave merges back while the between-wave check did not run. Re-deriving
+    // here would then record `none` for a plan decided `true`, and the guard
+    // would allow the flag-less spawn of a plan meant to be isolated. The flag,
+    // not its value, is the test: an empty `$plan_id` (lost with an earlier
+    // tool call's shell) would otherwise re-derive into a `none` that names no
+    // plan, which the guard applies to every plan of the phase. Where the
+    // harness forks from origin/HEAD, a flagged spawn on that diverged base is
+    // still stopped by the spawn-time branch check (`exit 42`).
     let recordedIsolation = isolation;
     let recordedHarnessFlag = harnessFlag;
     if (recordedIsolation !== 'none' && planIdx === -1 && baseCheckDegrades(cwd, recordedIsolation)) {

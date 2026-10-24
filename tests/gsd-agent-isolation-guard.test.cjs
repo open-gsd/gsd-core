@@ -1648,9 +1648,10 @@ describe('#4222 — the #683 base-check degrade is re-derived by the resolver, s
   });
 
   test('#4222: a PLAN-SCOPED plain re-record does not re-derive the base check — HEAD moving mid-run keeps the plan on harness-worktree', (t) => {
-    // The run's base check is decided at the phase-level resolve. Wave 1
-    // merging back moves HEAD past origin/HEAD; the per-plan gate's plain
-    // re-record for a wave-2 plan decided `true` must still record the
+    // The run's base check is taken at the phase-level resolve (and between
+    // waves, #1369). HEAD can still move after a plan was decided `true`: in a
+    // mixed wave a sequential plan commits on the main tree first. The per-plan
+    // gate's plain re-record for the worktree plan must still record the
     // capability, or the guard allows that plan's flag-less spawn.
     const { dir } = projectWithOrigin(t, 'gsd-4222-planscope-');
     const hookEnv = { HOME: dir, CLAUDE_CONFIG_DIR: path.join(dir, '.claude') };
