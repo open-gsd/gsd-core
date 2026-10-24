@@ -977,6 +977,27 @@ function _installEngineSymlinkGuard(): InstallEngineSymlinkGuard {
 const CODEX_HOOKS_JSON_MAX_BYTES = 1024 * 1024;
 
 /**
+ * Why readCodexHooksJsonFile refused a hooks.json, set as the thrown error's
+ * `code` (#5037). Tests (and any caller that needs to) tell the refusals apart
+ * by this code; the message is for the user and may be reworded. The error that
+ * caused the refusal is kept as `cause`.
+ */
+const CODEX_HOOKS_JSON_READ_FAILURE = Object.freeze({
+  /** Over CODEX_HOOKS_JSON_MAX_BYTES, not a regular file, or the read failed. */
+  UNREADABLE: 'CODEX_HOOKS_JSON_UNREADABLE',
+  /** Read, but not valid JSON. */
+  UNPARSEABLE: 'CODEX_HOOKS_JSON_UNPARSEABLE',
+});
+
+type CodexHooksJsonReadFailureCode = (typeof CODEX_HOOKS_JSON_READ_FAILURE)[keyof typeof CODEX_HOOKS_JSON_READ_FAILURE];
+
+function codexHooksJsonReadFailure(code: CodexHooksJsonReadFailureCode, message: string, cause: unknown): Error & { code: string } {
+  const err = new Error(message, { cause }) as Error & { code: string };
+  err.code = code;
+  return err;
+}
+
+/**
  * Whether one hook object in a Codex hooks.json event entry is GSD's. The
  * removal in reconcileCodexHooksJsonEvent and the read-only
  * codexHooksJsonHasManagedHooks both ask this, so they agree on what a
@@ -1001,10 +1022,11 @@ function isManagedCodexHooksJsonHook(hook: unknown, targetDir: string): boolean 
  * for a blank one; `parsed` is otherwise whatever JSON.parse returned. The
  * read is bounded like codexHooksJsonHasManagedHooks's, so a FIFO cannot block
  * uninstall here and an oversized file is not read whole and then rewritten.
- * Either throws "hooks.json could not be read", and unparseable content throws
- * "hooks.json parse failed"; the file is left alone. Install reads hooks.json
- * earlier and unbounded (installer migration 002's readJson and the
- * pre-install snapshot), so a FIFO still blocks install there.
+ * Either throws "hooks.json could not be read" (code
+ * `CODEX_HOOKS_JSON_READ_FAILURE.UNREADABLE`), and unparseable content throws
+ * "hooks.json parse failed" (`UNPARSEABLE`); the file is left alone. Install
+ * reads hooks.json earlier and unbounded (installer migration 002's readJson
+ * and the pre-install snapshot), so a FIFO still blocks install there.
  */
 function readCodexHooksJsonFile(filePath: string): { content: string | null; parsed: unknown } {
   if (!fs.existsSync(filePath)) return { content: null, parsed: {} };
@@ -1012,7 +1034,11 @@ function readCodexHooksJsonFile(filePath: string): { content: string | null; par
   try {
     raw = readSmallRegularFile(filePath, CODEX_HOOKS_JSON_MAX_BYTES);
   } catch (err) {
-    throw new Error(`hooks.json could not be read: ${err && (err as Error).message ? (err as Error).message : String(err)}`);
+    throw codexHooksJsonReadFailure(
+      CODEX_HOOKS_JSON_READ_FAILURE.UNREADABLE,
+      `hooks.json could not be read: ${err && (err as Error).message ? (err as Error).message : String(err)}`,
+      err,
+    );
   }
   // null only when the file vanished after existsSync: treat it as absent.
   if (raw === null) return { content: null, parsed: {} };
@@ -1020,7 +1046,11 @@ function readCodexHooksJsonFile(filePath: string): { content: string | null; par
   try {
     return { content: raw, parsed: JSON.parse(raw) as unknown };
   } catch (err) {
-    throw new Error(`hooks.json parse failed: ${err && (err as Error).message ? (err as Error).message : String(err)}`);
+    throw codexHooksJsonReadFailure(
+      CODEX_HOOKS_JSON_READ_FAILURE.UNPARSEABLE,
+      `hooks.json parse failed: ${err && (err as Error).message ? (err as Error).message : String(err)}`,
+      err,
+    );
   }
 }
 
@@ -3376,6 +3406,7 @@ export = {
   codexHooksJsonHasManagedHooks,
   readCodexHooksJsonFile,
   CODEX_HOOKS_JSON_MAX_BYTES,
+  CODEX_HOOKS_JSON_READ_FAILURE,
   buildCodexHookWindowsShimIR,
   cleanupOrphanedCodexContextMonitorScript,
   isGsdOwnedCodexContextMonitorScript,

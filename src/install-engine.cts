@@ -487,6 +487,28 @@ function linkTargetIsMissing(linkPath: string): boolean {
 }
 
 /**
+ * Why `resolveSymlinkedLeafWritePath` refused a file, set as the thrown
+ * error's `code` (#5037). Tests (and any caller that needs to) tell the
+ * refusals apart by this code; the message is for the user and may be reworded.
+ */
+const SYMLINKED_LEAF_REFUSAL = Object.freeze({
+  /** A symlink the install root does not trust, and no opt-in. */
+  NOT_TRUSTED: 'SYMLINKED_LEAF_NOT_TRUSTED',
+  /** The opt-in is set, but the link's target does not exist. */
+  TARGET_MISSING: 'SYMLINKED_LEAF_TARGET_MISSING',
+  /** The opt-in is set, but the link resolves to the install root itself or cannot be resolved. */
+  NOT_FOLLOWABLE: 'SYMLINKED_LEAF_NOT_FOLLOWABLE',
+});
+
+type SymlinkedLeafRefusalCode = (typeof SYMLINKED_LEAF_REFUSAL)[keyof typeof SYMLINKED_LEAF_REFUSAL];
+
+function symlinkedLeafRefusal(code: SymlinkedLeafRefusalCode, message: string): Error & { code: string } {
+  const err = new Error(message) as Error & { code: string };
+  err.code = code;
+  return err;
+}
+
+/**
  * The path a temp-file-and-rename save (`atomicWriteFileSync`,
  * `platformWriteSync`) should be handed for `targetPath`, a file under
  * `installRoot` that may be a user-owned symlink (#5037).
@@ -504,6 +526,7 @@ function linkTargetIsMissing(linkPath: string): boolean {
  * user to re-run with it would send them in a circle, so those refusals say
  * what is actually wrong instead: the link's target is missing, or it resolves
  * to the install root itself (which `hasExistingSymlinkBetween` always refuses).
+ * Each refusal carries a `SYMLINKED_LEAF_REFUSAL` code.
  */
 function resolveSymlinkedLeafWritePath(installRoot: string, targetPath: string, label: string): string {
   const stat = tryLstat(targetPath);
@@ -511,18 +534,21 @@ function resolveSymlinkedLeafWritePath(installRoot: string, targetPath: string, 
   const optIn = isSymlinkedDestOptIn();
   if (hasExistingSymlinkBetween(installRoot, targetPath, { allowOptInFollow: optIn })) {
     if (optIn && linkTargetIsMissing(targetPath)) {
-      throw new Error(
+      throw symlinkedLeafRefusal(
+        SYMLINKED_LEAF_REFUSAL.TARGET_MISSING,
         `${label} "${targetPath}" is a symlink whose target does not exist, so it was not written. ` +
           'Point the link at an existing file or remove it, then re-run.',
       );
     }
     if (optIn) {
-      throw new Error(
+      throw symlinkedLeafRefusal(
+        SYMLINKED_LEAF_REFUSAL.NOT_FOLLOWABLE,
         `${label} "${targetPath}" is a symlink GSD will not follow even with GSD_ALLOW_SYMLINKED_DEST set, ` +
           `because it resolves to the install root "${installRoot}" itself or cannot be resolved, so it was not written.`,
       );
     }
-    throw new Error(
+    throw symlinkedLeafRefusal(
+      SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED,
       `${label} "${targetPath}" is a symlink the install root "${installRoot}" does not trust, so it was not written. ` +
         'If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.',
     );
@@ -2493,6 +2519,7 @@ export = {
   hasExistingSymlinkBetween,
   isSymlinkedDestOptIn,
   resolveSymlinkedLeafWritePath,
+  SYMLINKED_LEAF_REFUSAL,
   _resolveUserArtifactStagingRoot,
   _tryResolveUserArtifactStagingRoot,
   migrateLegacyDevPreferencesToSkill,
