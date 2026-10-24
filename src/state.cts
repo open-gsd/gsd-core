@@ -1089,7 +1089,7 @@ function cmdStateAdvancePlan(cwd: string, raw: boolean): void {
     // silently absorbed.
     const body = stripFrontmatter(content);
     const positionScope = matchCurrentPositionSection(body) ?? body;
-    const positionPhase = parseProsePhaseField(stateExtractField(positionScope, 'Phase')).phase;
+    const positionPhase = parseProsePhaseField(stateExtractField(positionScope, 'Phase'), resolvePhaseIdConvention(cwd)).phase;
     // #4093: a Current Position section with ZERO labeled fields has no
     // `Phase:` line either; frontmatter `current_phase` is the documented
     // survivor of body drift (the reporter's document still carried it, and
@@ -4297,9 +4297,10 @@ function applyPostSyncPreservation(
   transformedContent: string,
   syncedContent: string,
   statePath: string,
-  // #5626: the project's phase-id convention, resolved by the caller from its cwd (null: unset).
-  phaseIdConvention: string | null,
   options: StatePreservationOptions,
+  // #5626: the project's phase-id convention, resolved by the caller from its cwd (null: unset). Trailing and
+  // optional so `options` stays the fifth parameter the options guard and its callers rely on.
+  phaseIdConvention: string | null = null,
 ): string {
   assertStatePreservationOptions(options, 'applyPostSyncPreservation');
   const { resync, authoritativeFm, deriveProgressKeys, divergedFields, explicitProgressField, preWriteState } = options;
@@ -4616,8 +4617,8 @@ function syncAndPreserveStateMd(
     transformedContent,
     synced,
     statePath,
-    cwd ? resolvePhaseIdConvention(cwd) : null,
     options,
+    cwd ? resolvePhaseIdConvention(cwd) : null,
   );
 }
 
