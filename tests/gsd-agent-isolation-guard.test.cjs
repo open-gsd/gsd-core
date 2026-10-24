@@ -1646,6 +1646,40 @@ describe('#4222 — the #683 base-check degrade is re-derived by the resolver, s
     const r = runHook(agentPayload(), dir, { HOME: dir, CLAUDE_CONFIG_DIR: path.join(dir, '.claude') });
     assert.equal(r.status, 0, `guard denied a sequential dispatch after a plain re-query on a diverged repo: stdout=${r.stdout} stderr=${r.stderr}`);
   });
+
+  test('#4222: a PLAN-SCOPED plain re-record does not re-derive the base check — HEAD moving mid-run keeps the plan on harness-worktree', (t) => {
+    // The run's base check is decided at the phase-level resolve. Wave 1
+    // merging back moves HEAD past origin/HEAD; the per-plan gate's plain
+    // re-record for a wave-2 plan decided `true` must still record the
+    // capability, or the guard allows that plan's flag-less spawn.
+    const { dir } = projectWithOrigin(t, 'gsd-4222-planscope-');
+    const hookEnv = { HOME: dir, CLAUDE_CONFIG_DIR: path.join(dir, '.claude') };
+    const dispatch = (plan) => agentPayload({
+      tool_input: { subagent_type: 'gsd-executor', prompt: `[gsd:dispatch phase="1" plan="${plan}"] Execute the plan.` },
+    });
+
+    const phase = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1'], dir, env(dir));
+    assert.equal(phase.success, true, phase.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'harness-worktree', 'precondition: the phase-level resolve did not degrade');
+
+    diverge(dir);
+    const phaseAgain = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1'], dir, env(dir));
+    assert.equal(phaseAgain.success, true, phaseAgain.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'none', 'control: a query naming no plan still re-derives the degrade on the moved HEAD');
+
+    const plan = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1', '--plan', '01-02'], dir, env(dir));
+    assert.equal(plan.success, true, plan.error);
+    assert.equal(plan.output.trim(), 'harness-worktree');
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'harness-worktree', 'the plan-scoped record keeps the per-plan decision');
+    assert.equal(sentinel.harness_flag, 'isolation="worktree"');
+    assert.equal(sentinel.plan, '01-02');
+    assert.equal(sentinel.decided_by, 'resolver');
+
+    const flagless = runHook(dispatch('01-02'), dir, hookEnv);
+    assert.equal(flagless.status, 2, `the guard must refuse the flag-less spawn of a plan decided harness-worktree: stdout=${flagless.stdout} stderr=${flagless.stderr}`);
+    assert.equal(JSON.parse(flagless.stdout).decision, 'block');
+  });
 });
 
 describe('#3045 MAJOR — --harness-flag can now accept a bare CLI-flag value (Cursor real registry value + generalized parsing)', () => {
