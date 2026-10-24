@@ -269,7 +269,7 @@ const ROADMAP_CHECKLIST = [
 const STATE_MD = [
   '---', 'milestone: v3.0', 'current_phase: 3-01', 'status: planning', '---', '',
   '# Project State', '', '## Current Position', '',
-  'Phase: 3-01 (Create layer) — READY TO EXECUTE', 'Status: Executing', '',
+  'Phase: 3-01 (Create layer) — READY TO EXECUTE', 'Status: Executing', 'Total Plans in Phase: 5', '',
 ].join('\n');
 
 describe('#5626 milestone-prefixed M-NN phase ids', () => {
@@ -279,7 +279,10 @@ describe('#5626 milestone-prefixed M-NN phase ids', () => {
 
   function writeProject({ roadmap, convention = MP }) {
     const planning = path.join(projectDir, '.planning');
-    fs.mkdirSync(path.join(planning, 'phases', '3-01-create-layer'), { recursive: true });
+    const phaseDir = path.join(planning, 'phases', '3-01-create-layer');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '3-01-01-PLAN.md'), '# plan\n');
+    fs.writeFileSync(path.join(phaseDir, '3-01-01-SUMMARY.md'), '# summary\n');
     fs.writeFileSync(path.join(planning, 'config.json'), JSON.stringify(convention === null ? {} : { phase_id_convention: convention }));
     fs.writeFileSync(path.join(planning, 'ROADMAP.md'), roadmap);
     fs.writeFileSync(path.join(planning, 'STATE.md'), STATE_MD);
