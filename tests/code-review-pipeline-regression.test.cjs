@@ -4615,8 +4615,9 @@ describe('#5640 helper modules resolve from the installed runtime', { skip: !HAS
   let projectDir;
   let minimalPath;
 
-  function before_() {
+  function before_(t) {
     sandbox = createTempDir('gsd-5640-');
+    t.after(() => cleanup(sandbox));
     installHome = path.join(sandbox, 'home');
     const lib = path.join(installHome, '.claude', 'gsd-core', 'bin', 'lib');
     fs.mkdirSync(path.dirname(lib), { recursive: true });
@@ -4634,8 +4635,8 @@ describe('#5640 helper modules resolve from the installed runtime', { skip: !HAS
   }
 
   /** Run a resolver block (then print the directory it exported) in the sandboxed project. */
-  function runBlock(block, env, extra = '') {
-    const script = block.text + '\nprintf "%s" "$GSD_LIB_DIR"\n' + extra;
+  function runBlock(block, env, extra = '', prefix = '') {
+    const script = prefix + block.text + '\nprintf "%s" "$GSD_LIB_DIR"\n' + extra;
     const result = runHook('-c', [script], {
       interpreter: 'bash',
       cwd: projectDir,
@@ -4657,36 +4658,32 @@ describe('#5640 helper modules resolve from the installed runtime', { skip: !HAS
     }
   });
 
-  test('a global install resolves from the default home, for every site (#5640)', () => {
-    before_();
-    try {
+  test('a global install resolves from the default home, for every site (#5640)', (t) => {
+    before_(t);
+    {
       for (const site of RESOLVER_SITES) {
         const r = runBlock(resolverFor(site), { HOME: installHome });
         assert.equal(r.status, 0, site.module + ': ' + r.stderr);
         assert.equal(r.stdout, installedLib(), site.module);
       }
-    } finally {
-      cleanup(sandbox);
     }
   });
 
-  test('/gsd-code-review N --fix parses from a global install (#5640)', () => {
-    before_();
-    try {
+  test('/gsd-code-review N --fix parses from a global install (#5640)', (t) => {
+    before_(t);
+    {
       const site = RESOLVER_SITES[0];
       const read = "\nnode -e \"const { parseCodeReviewFlags } = require(require('path').join(process.env.GSD_LIB_DIR, 'code-review-flags.cjs')); process.stdout.write(JSON.stringify(parseCodeReviewFlags(process.argv.slice(1))));\" -- 03 --fix";
       const r = runBlock(resolverFor(site), { HOME: installHome }, '\necho\n' + read.trimStart());
       assert.equal(r.status, 0, r.stderr);
       const flags = JSON.parse(r.stdout.slice(r.stdout.indexOf('\n') + 1));
       assert.equal(flags.fix, true, 'the --fix flag reaches the review');
-    } finally {
-      cleanup(sandbox);
     }
   });
 
-  test('the gsd_run shim on PATH locates the install, through a symlink too (#5640)', () => {
-    before_();
-    try {
+  test('the gsd_run shim on PATH locates the install, through a symlink too (#5640)', (t) => {
+    before_(t);
+    {
       const binDir = path.join(installHome, '.claude', 'gsd-core', 'bin');
       const linkDir = path.join(sandbox, 'links');
       fs.mkdirSync(linkDir, { recursive: true });
@@ -4696,37 +4693,31 @@ describe('#5640 helper modules resolve from the installed runtime', { skip: !HAS
         assert.equal(r.status, 0, r.stderr);
         assert.equal(fs.realpathSync(r.stdout), fs.realpathSync(installedLib()), 'resolved through ' + onPath);
       }
-    } finally {
-      cleanup(sandbox);
     }
   });
 
-  test('a local install resolves from RUNTIME_DIR (#5640)', () => {
-    before_();
-    try {
+  test('a local install resolves from RUNTIME_DIR (#5640)', (t) => {
+    before_(t);
+    {
       const r = runBlock(resolverFor(RESOLVER_SITES[1]), { RUNTIME_DIR: path.join(installHome, '.claude') });
       assert.equal(r.status, 0, r.stderr);
       assert.equal(r.stdout, installedLib());
-    } finally {
-      cleanup(sandbox);
     }
   });
 
-  test('GSD_TOOLS set in the block is the first candidate (#5640)', () => {
-    before_();
-    try {
+  test('GSD_TOOLS set in the block is the first candidate (#5640)', (t) => {
+    before_(t);
+    {
       const tools = path.join(installHome, '.claude', 'gsd-core', 'bin', 'gsd-tools.cjs');
       const r = runBlock(resolverFor(RESOLVER_SITES[0]), { GSD_TOOLS: tools });
       assert.equal(r.status, 0, r.stderr);
       assert.equal(r.stdout, installedLib());
-    } finally {
-      cleanup(sandbox);
     }
   });
 
-  test('a missing runtime names the searched locations (#5640)', () => {
-    before_();
-    try {
+  test('a missing runtime names the searched locations (#5640)', (t) => {
+    before_(t);
+    {
       for (const site of RESOLVER_SITES) {
         const r = runBlock(resolverFor(site), {});
         const home = path.join(emptyHome, '.claude', 'gsd-core', 'bin', 'lib');
@@ -4736,9 +4727,29 @@ describe('#5640 helper modules resolve from the installed runtime', { skip: !HAS
         if (site.fatal) assert.notEqual(r.status, 0, site.module + ': a miss stops the step');
         else assert.equal(r.status, 0, site.module + ': the fallow normalizer warns and keeps its raw-report fallback');
       }
-    } finally {
-      cleanup(sandbox);
     }
+  });
+
+  test('a local install under .claude or .codex resolves from the project root (#5640)', (t) => {
+    before_(t);
+    for (const dir of ['.claude', '.codex']) {
+      const root = path.join(sandbox, 'local-' + dir.slice(1));
+      fs.mkdirSync(path.join(root, dir, 'gsd-core', 'bin'), { recursive: true });
+      fs.symlinkSync(installedLib(), path.join(root, dir, 'gsd-core', 'bin', 'lib'));
+      const r = runBlock(resolverFor(RESOLVER_SITES[1]), { RUNTIME_DIR: root });
+      assert.equal(r.status, 0, dir + ': ' + r.stderr);
+      assert.equal(r.stdout, path.join(root, dir, 'gsd-core', 'bin', 'lib'), dir);
+    }
+  });
+
+  test('a gsd_run shell function is not read as a path (#5640)', (t) => {
+    before_(t);
+    // command -v prints a function's bare name; its dirname is ".", which would make ./lib a candidate.
+    fs.mkdirSync(path.join(projectDir, 'lib'));
+    fs.writeFileSync(path.join(projectDir, 'lib', 'code-review-depth.cjs'), '');
+    const r = runBlock(resolverFor(RESOLVER_SITES[1]), {}, '', 'gsd_run() { :; }\n');
+    assert.notEqual(r.status, 0, 'a lone ./lib must not satisfy the resolver');
+    assert.equal(r.stdout, '');
   });
 
   test('every site carries the same resolver (#5640)', () => {
