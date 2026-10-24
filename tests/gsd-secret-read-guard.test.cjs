@@ -281,11 +281,22 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
   // absolute path, or shell metacharacters; a plain word runs as
   // `git credential-<word>` (gitcredentials(7), "Custom Helpers"). A
   // submodule update is a script only with `!`; otherwise it is a mode word.
-  // NEW_ROWS (#5492 review): the rest of the command-valued keys, as
-  // [section, hasSubsection, name, bangOnly]. core.askPass, core.gitProxy
-  // and sendemail.smtpServer exec a program rather than a shell; they are
-  // scanned conservatively anyway. ROWS and KEYS below are built from it.
-  const NEW_ROWS = [
+  // ROWS is the oracle: every key the hook scans by shape (#5045's
+  // diff.external included), as [section, hasSubsection, name, bangOnly]
+  // rows rather than the hook's collapsed-shape strings. A bangOnly key
+  // blocks a `cat .env` value only behind a leading `!`; credential helpers'
+  // path and metacharacter forms are rows in `blocks`, not in this oracle.
+  // core.askPass, core.gitProxy and sendemail.smtpServer exec a program
+  // rather than a shell; they are scanned conservatively anyway. alias.* is
+  // #5045's own branch, not a shape, so it stays out.
+  const ROWS = [
+    ['diff', false, 'external', false], ['sequence', false, 'editor', false],
+    ['core', false, 'editor', false], ['core', false, 'sshcommand', false], ['core', false, 'fsmonitor', false],
+    ['gpg', false, 'program', false], ['gpg', true, 'program', false],
+    ['diff', true, 'textconv', false], ['diff', true, 'command', false],
+    ['filter', true, 'clean', false], ['filter', true, 'smudge', false], ['filter', true, 'process', false],
+    ['merge', true, 'driver', false],
+    ['credential', false, 'helper', true], ['credential', true, 'helper', true],
     ['core', false, 'askpass', false], ['core', false, 'gitproxy', false],
     ['core', false, 'alternaterefscommand', false], ['uploadpack', false, 'packobjectshook', false],
     ['gc', false, 'recentobjectshook', false], ['interactive', false, 'difffilter', false],
@@ -323,6 +334,9 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
     // metacharacter runs a command.
     ["git -c credential.helper='/bin/cat .env' fetch", '.env'],
     ["git -c credential.helper='x; cat .env' fetch", '.env'],
+    ["git -c credential.helper='x $(cat .env)' fetch", '.env'],
+    ["git -c credential.helper='x `cat .env`' fetch", '.env'],
+    ["git -c credential.https://example.com.helper='/bin/cat .env' fetch", '.env'],
     ["git -c Core.SSHCommand='cat .env #' fetch", '.env'],
     ["git -c DIFF.X.TEXTCONV='cat .env #' show --textconv HEAD", '.env'],
     ["git -c core.askPass='cat .env' fetch", '.env'],
@@ -350,6 +364,20 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
     ["git -c sendemail.work.ccCmd='cat .env #' send-email --identity=work x.patch", '.env'],
     ["git -c sendemail.headerCmd='cat .env #' send-email x.patch", '.env'],
     ["git -c submodule.x.update='!cat .env' submodule update", '.env'],
+    // A plain alias may carry its own -c (git applies the alias's leading
+    // options), so it is scanned as the git command it expands to.
+    ["git -c alias.x='-c core.fsmonitor=\"cat .env\" status' x", '.env'],
+    ["git -c alias.x='-c sequence.editor=\"cat .env\" rebase -i' x", '.env'],
+    ["git -c alias.x='-c credential.helper=\"!cat .env\" fetch' x", '.env'],
+    ["git -c Alias.X='-c core.fsmonitor=\"cat .env\" status' x", '.env'],
+    ["git -c alias.a='-c alias.b=\"-c core.fsmonitor=\\\"cat .env\\\" status\" b' a", '.env'],
+    ["git -c alias.x='log -p -- .env' x", '.env'],
+    // Git splits an alias on whitespace and quotes only: `;`, `|`, `&` and a
+    // newline are ordinary characters inside a word, not command boundaries.
+    ["git -c alias.x='-c user.name=x; -c core.fsmonitor=\"cat .env\" status' x", '.env'],
+    ["git -c alias.x='-c user.name=x| -c core.fsmonitor=\"cat .env\" status' x", '.env'],
+    ["git -c alias.x='-c user.name=x& -c core.fsmonitor=\"cat .env\" status' x", '.env'],
+    ["git -c alias.x='-c user.name=x\n-c core.fsmonitor=\"cat .env\" status' x", '.env'],
   ];
   for (const [cmd, expectedPath] of blocks) {
     test(`blocks ${JSON.stringify(cmd)}`, () => {
@@ -381,6 +409,15 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
     "git -c remote.origin.url='cat .env' fetch",
     'git -c core.askPass=/usr/lib/ssh/ssh-askpass fetch',
     'git -c instaweb.httpd=lighttpd instaweb',
+    // A stripped `!` leaves `echo .env`, which prints a name, not contents.
+    "git -c credential.helper='!echo .env' fetch",
+    "git -c submodule.x.update='!echo .env' submodule update",
+    'git -c alias.st=status st',
+    "git -c alias.lg='log --oneline' lg",
+    "git -c alias.x='-c credential.helper=store fetch' x",
+    "git -c alias.x='-c user.name=x; status' x",
+    // One word to git (`cat .env`), so no `.env` operand.
+    "git -c alias.x='-c user.name=cat\\ .env status' x",
   ];
   for (const cmd of allows) {
     test(`allows ${JSON.stringify(cmd)}`, () => {
@@ -390,12 +427,9 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
 
   // Every key shape against every secret form, exhaustively rather than sampled.
   const KEYS = [
-    ['sequence.editor', ''], ['core.editor', ''], ['core.sshCommand', ''], ['core.fsmonitor', ''],
-    ['gpg.program', ''], ['gpg.x509.program', ''], ['diff.x.textconv', ''], ['diff.x.command', ''],
-    ['filter.x.clean', ''], ['filter.x.smudge', ''], ['filter.x.process', ''], ['merge.x.driver', ''],
-    ['credential.helper', '!'], ['credential.https://example.com.helper', '!'],
-    ...NEW_ROWS.map(([section, hasSub, name, bangOnly]) =>
+    ...ROWS.map(([section, hasSub, name, bangOnly]) =>
       [hasSub ? `${section}.x.${name}` : `${section}.${name}`, bangOnly ? '!' : '']),
+    ['gpg.x509.program', ''], ['credential.https://example.com.helper', '!'],
   ];
   const SECRETS = ['.env', '.env.local', '.secrets', 'config/.env.production'];
   for (const [key, prefix] of KEYS) {
@@ -407,23 +441,6 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
     }
   }
 
-  // Oracle for the key-shape tests: every key the hook scans by shape
-  // (#5045's diff.external included), written as [section, hasSubsection,
-  // name, bangOnly] rows rather than the hook's collapsed-shape strings.
-  // A bangOnly key blocks a `cat .env` value only behind a leading `!`
-  // (credential helpers' path and metacharacter forms are covered by rows
-  // above, not by this oracle).
-  // alias.* is #5045's own branch, not a shape, so it stays out.
-  const ROWS = [
-    ['diff', false, 'external', false], ['sequence', false, 'editor', false],
-    ['core', false, 'editor', false], ['core', false, 'sshcommand', false], ['core', false, 'fsmonitor', false],
-    ['gpg', false, 'program', false], ['gpg', true, 'program', false],
-    ['diff', true, 'textconv', false], ['diff', true, 'command', false],
-    ['filter', true, 'clean', false], ['filter', true, 'smudge', false], ['filter', true, 'process', false],
-    ['merge', true, 'driver', false],
-    ['credential', false, 'helper', true], ['credential', true, 'helper', true],
-    ...NEW_ROWS,
-  ];
   const expected = (section, sub, name, bang) => ROWS.some(([s, hasSub, n, bangOnly]) =>
     s === section.toLowerCase() && n === name.toLowerCase() && hasSub === (sub !== null) && (bang || !bangOnly));
   const keyOf = (section, sub, name) => (sub === null ? `${section}.${name}` : `${section}.${sub}.${name}`);
@@ -447,6 +464,33 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
     });
   }
 
+  // Vocabulary for the property and the exhaustive allow batches: every
+  // section and name in ROWS plus decoys that sit next to them.
+  const SECTIONS = ['core', 'diff', 'filter', 'gpg', 'merge', 'credential', 'sequence', 'pager', 'user', 'http',
+    'remote', 'trailer', 'sendemail', 'gc', 'interactive', 'uploadpack', 'difftool', 'mergetool', 'browser', 'man',
+    'guitool', 'imap', 'tar', 'submodule', 'instaweb'];
+  const NAMES = ['editor', 'sshcommand', 'fsmonitor', 'program', 'textconv', 'command', 'clean',
+    'smudge', 'process', 'driver', 'helper', 'external', 'pager', 'name', 'extraheader',
+    'askpass', 'gitproxy', 'alternaterefscommand', 'packobjectshook', 'recentobjectshook', 'difffilter',
+    'defaultkeycommand', 'cmd', 'uploadpack', 'receivepack', 'sendmailcmd', 'smtpserver', 'tocmd', 'cccmd',
+    'headercmd', 'tunnel', 'update', 'httpd', 'url', 'path', 'vcs', 'binary', 'smtpuser', 'log'];
+
+  // Every vocabulary key the oracle does not list must stay allowed, so an
+  // over-broad key set fails here; one hook run per section and form, since
+  // the hook reads every -c. lastSegment splits only on `/` and `\`, so a
+  // `sec.x.name=cat .env` word never looks like a secret path itself.
+  for (const section of SECTIONS) {
+    for (const sub of [null, 'x']) {
+      const names = NAMES.filter((name) => !expected(section, sub, name, false));
+      test(`allows every non-command ${keyOf(section, sub, '<name>')} key`, () => {
+        const cmd = `git ${names.map((name) => `-c ${keyOf(section, sub, name)}='cat .env'`).join(' ')} status`;
+        const result = runHook(bash(cmd));
+        if (result.status !== 0) for (const name of names) check(section, sub, name, false); // names the culprit
+        assertAllowed(result, cmd);
+      });
+    }
+  }
+
   // The subsection alphabet leaves out `/` and `:`, which would make the -c
   // word itself look like a secret path to the generic operand check; URL
   // subsections come from fixed values instead.
@@ -459,15 +503,9 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
       section: fc.constant(section), sub: hasSub ? SUBSECTION : fc.constant(null), name: fc.constant(name),
     })),
     fc.record({
-      section: fc.constantFrom('core', 'diff', 'filter', 'gpg', 'merge', 'credential', 'sequence', 'pager', 'user', 'http',
-        'remote', 'trailer', 'sendemail', 'gc', 'interactive', 'uploadpack', 'difftool', 'mergetool', 'browser', 'man',
-        'guitool', 'imap', 'tar', 'submodule', 'instaweb'),
+      section: fc.constantFrom(...SECTIONS),
       sub: fc.option(SUBSECTION, { nil: null }),
-      name: fc.constantFrom('editor', 'sshcommand', 'fsmonitor', 'program', 'textconv', 'command', 'clean',
-        'smudge', 'process', 'driver', 'helper', 'external', 'pager', 'name', 'extraheader',
-        'askpass', 'gitproxy', 'alternaterefscommand', 'packobjectshook', 'recentobjectshook', 'difffilter',
-        'defaultkeycommand', 'cmd', 'uploadpack', 'receivepack', 'sendmailcmd', 'smtpserver', 'tocmd', 'cccmd',
-        'headercmd', 'tunnel', 'update', 'httpd', 'url', 'path'),
+      name: fc.constantFrom(...NAMES),
     }),
   ).chain(({ section, sub, name }) => fc.record({
     section: fc.mixedCase(fc.constant(section)),
