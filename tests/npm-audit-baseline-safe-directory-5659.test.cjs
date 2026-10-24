@@ -20,7 +20,7 @@ const { execFileSync } = require('node:child_process');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
-const { resolveBaselineRef, extractBaselineTree } = require('../scripts/npm-audit-baseline.cjs');
+const { resolveBaselineRef, extractBaselineTree, explainNoBaseline } = require('../scripts/npm-audit-baseline.cjs');
 
 const REPO = path.join(path.sep, 'work');
 const PKG = '{"name":"fixture","version":"1.0.0"}\n';
@@ -111,6 +111,22 @@ describe('#5659 the audit baseline resolves in a checkout owned by another uid',
   test('a ref that does not exist still yields no baseline tree', () => {
     const git = ownershipRefusingGit({ knownRefs: [] });
     assert.equal(extractBaselineTree('origin/next', REPO, '', { execFileSyncImpl: git.impl }), null);
+  });
+});
+
+describe('#5659 a missing baseline says why (the zero-tolerance fallback is not silent)', () => {
+  test('git refusing the checkout is named, with the first line git printed', () => {
+    const git = ownershipRefusingGit({ honorOverride: false });
+    const why = explainNoBaseline(REPO, { execFileSyncImpl: git.impl });
+    assert.match(why, /git could not read/i);
+    assert.match(why, /dubious ownership/);
+  });
+
+  test('no origin/next or next ref is named as a missing ref, not as a git failure', () => {
+    const git = ownershipRefusingGit({ knownRefs: [] });
+    const why = explainNoBaseline(REPO, { execFileSyncImpl: git.impl });
+    assert.match(why, /no baseline ref/i);
+    assert.doesNotMatch(why, /git could not read/i);
   });
 });
 
