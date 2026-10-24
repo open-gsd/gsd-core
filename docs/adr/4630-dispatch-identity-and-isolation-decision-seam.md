@@ -166,26 +166,30 @@ guard's #4734 fallback keeps owning it. The indeterminate `head-unresolvable` de
 still recorded, because failing closed on an indeterminate answer is #3050's rule.
 
 **A plan-scoped write does not re-derive the base check.** A query that carries `--plan`,
-even with an empty value, records the per-plan decision, and the base check is not one:
-execute-phase decides it once, at the phase-level resolve, and a degrade there turns worktrees
-off for the whole run, so every plan then records a forced `none`. A plan reaches the per-plan
-gate's plain re-record only when that resolve did not degrade. Re-deriving there reads a HEAD
-that the run itself has moved: once a wave merges back, HEAD is ahead of the fork base, and
-the record of a later plan decided `true` would say `none`, so the guard would allow a
-dispatch of that plan without its harness flag. The flag rather than its value is the test,
-because an empty `$plan_id` (lost with an earlier tool call's shell) would otherwise record a
-`none` that names no plan, and the guard applies that to every plan of the phase. Where the
-harness forks from `origin/HEAD`, a flagged dispatch on that base is still stopped by the
-worktree branch check's `exit 42`, as it is without this decision. Every query that names no
-plan, whether at phase level or unscoped, still re-derives the base check. The residual is
-that query's own: one made mid-run, after a wave merged, records `none` for the phase or the
-run, and until the next record the guard reads it for every plan. Each shipped site that
-makes such a query forces its own decision in the same block, and the per-plan gate re-records
-before each dispatch, so no shipped flow dispatches against it. The cost is a rule a future
-caller must know: a new plan-scoped plain query records what the resolver derives without the
-base check (the host capability, or `none` under the `use_worktrees` opt-out), and a hold
-still applies to it. If it needs the base check, it runs that check in shell and forces the
-result, as the per-plan gate does for its submodule degrade.
+even with an empty value, records the per-plan decision, and the base check is not one.
+Execute-phase takes it at the phase-level resolve and again between waves (#1369), and a
+degrade at either turns worktrees off for the rest of the run, so every later plan records a
+forced `none`. A plan reaches the per-plan gate's plain re-record only when neither degraded.
+HEAD can still move after that plan was decided: in a mixed wave a sequential plan commits on
+the main tree before a worktree plan of the same wave dispatches, and a wave can merge back
+while the between-wave check did not run. Re-deriving there would record `none` for a plan
+decided `true`, so the guard would allow a dispatch of that plan without its harness flag.
+The flag rather than its value is the test, because an empty `$plan_id` (lost with an earlier
+tool call's shell) would otherwise record a `none` that names no plan, which the guard applies
+to every plan of the phase. The #4561 hold reads the same empty value as no scope; the two
+answer different questions, which scope a held record must match and whether this write is a
+plan's record. Where the harness forks from `origin/HEAD`, a flagged dispatch on that base is
+still stopped by the worktree branch check's `exit 42`, as it is without this decision. Every
+query that names no plan, at phase level or unscoped, still re-derives the base check. Its
+residual is its own: one made mid-run after HEAD moved records `none` for the phase or the run,
+and until the next record the guard reads it for every plan. No shipped flow dispatches against
+it while its shell state is intact: execute-phase makes no such query after its resolve and
+runs the base check itself between waves, and the one-shot flows (quick, quick-batch,
+diagnose-issues, execute-plan) run the same check in shell and force its result before they
+dispatch. The cost is a rule a future caller must know: a new plan-scoped plain query records
+what the resolver derives without the base check (the host capability, or `none` under the
+`use_worktrees` opt-out), and a hold still applies to it. If it needs the base check, it runs
+that check in shell and forces the result, as the per-plan gate does for its submodule degrade.
 
 ### Decision 3 — a copy that must exist is pinned by a parity test, never merely tolerated
 
