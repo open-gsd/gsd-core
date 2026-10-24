@@ -122,6 +122,7 @@ module.exports = {
   "tests/gate-tdd-red-evidence-containment.test.cjs",
   "tests/gate-tdd-review-checkpoint-hardening.test.cjs",
   "tests/gate-tdd-review-checkpoint.unit.test.cjs",
+  "tests/gate-tdd-review-order-5275.test.cjs",
   "tests/gate-ui-plan.unit.test.cjs",
   "tests/gate-ui-safety.unit.test.cjs",
   "tests/gate-verify-command-paths.unit.test.cjs",
