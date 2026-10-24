@@ -463,6 +463,7 @@
   "gsd-core/workflows/execute-phase/steps/worktree-base-check.md",
   "gsd-core/workflows/execute-phase/steps/worktree-recovery-policy.md",
   "gsd-core/workflows/execute-plan.md",
+  "gsd-core/workflows/execute-plan/steps/record-completion-time.md",
   "gsd-core/workflows/explore.md",
   "gsd-core/workflows/extract-learnings.md",
   "gsd-core/workflows/fast.md",

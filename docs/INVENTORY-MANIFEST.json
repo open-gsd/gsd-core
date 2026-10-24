@@ -712,6 +712,7 @@
       "execute-phase/steps/wave-post-gate-hooks.md",
       "execute-phase/steps/worktree-base-check.md",
       "execute-phase/steps/worktree-recovery-policy.md",
+      "execute-plan/steps/record-completion-time.md",
       "new-milestone/steps/project-md-milestone-write.md",
       "new-milestone/steps/reset-phase-safety.md",
       "new-project/steps/auto-mode-config.md",

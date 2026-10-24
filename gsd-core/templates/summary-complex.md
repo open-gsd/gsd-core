@@ -23,7 +23,7 @@ patterns-established:
 #   Add live `coverage:` entries (id/description/verification[]/human_judgment[/rationale]) to enable
 #   deterministic UAT routing in verify-work; OMIT for legacy prose-only SUMMARYs. When coverage is
 #   uncertain, default human_judgment: true with a rationale — never auto-skip the human.
-duration: Xmin
+duration: 42 min
 completed: YYYY-MM-DD
 status: complete
 ---

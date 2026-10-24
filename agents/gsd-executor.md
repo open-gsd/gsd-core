@@ -102,9 +102,12 @@ Parse: frontmatter (phase, plan, type, autonomous, wave, depends_on), objective,
 </step>
 
 <step name="record_start_time">
+Fresh: overwrite timing. Continuation (`<completed_tasks>`): skip and retain the start (#5212).
 ```bash
-PLAN_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-PLAN_START_EPOCH=$(date +%s)
+TIMING_KEY=$(printf '%s\0%s' "{phase}" "{plan}" | git hash-object --stdin) || exit 1
+TIMING_FILE=$(git rev-parse --git-path "gsd-plan-timing-$TIMING_KEY") || exit 1
+rm -f -- "$TIMING_FILE.result"
+printf '%s\n' "$(date +%s)" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" > "$TIMING_FILE"
 ```
 </step>
 
@@ -642,6 +645,25 @@ To inspect what is untracked vs. genuinely new, use `git status --short` and eva
 file individually. If a file appears untracked but is not part of your task, leave it alone.
 </destructive_git_prohibition>
 
+<step name="record_completion_time">
+After verification, before SUMMARY; rerun after more work to refresh completion.
+```bash
+TIMING_KEY=$(printf '%s\0%s' "{phase}" "{plan}" | git hash-object --stdin) || exit 1
+TIMING_FILE=$(git rev-parse --git-path "gsd-plan-timing-$TIMING_KEY") || exit 1
+{ read -r PLAN_START_EPOCH; read -r PLAN_START_TIME; } < "$TIMING_FILE" || exit 1
+[[ "$PLAN_START_EPOCH" =~ ^[0-9]+$ ]] || exit 1
+PLAN_END_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+DURATION_MIN=$(( ($(date +%s) - PLAN_START_EPOCH) / 60 ))
+if [[ $DURATION_MIN -ge 60 ]]; then
+  DURATION="$(( DURATION_MIN / 60 ))h $(( DURATION_MIN % 60 ))m"
+else
+  DURATION="${DURATION_MIN} min"
+fi
+printf '%s\n' "$PLAN_START_TIME" "$PLAN_END_TIME" "$DURATION" > "$TIMING_FILE.result"
+printf '{"duration":"%s","started":"%s","completed":"%s"}\n' "$DURATION" "$PLAN_START_TIME" "$PLAN_END_TIME"
+```
+</step>
+
 <summary_creation>
 After all tasks complete, create `{phase}-{plan}-SUMMARY.md` at `.planning/phases/XX-name/`.
 
@@ -663,6 +685,8 @@ This file is the canonical output of this step. The orchestrator reads `.plannin
 **Use template:** @~/.claude/gsd-core/templates/summary.md
 
 **Frontmatter:** phase, plan, subsystem, tags, dependency graph (requires/provides/affects), tech-stack (added/patterns), key-files (created/modified), decisions, metrics (duration, completed date), status (`status: complete` — required so the audit-open scanner recognises the summary as done), and `actuals` (#2632).
+
+**Duration:** copy `record_completion_time`'s printed `duration` to SUMMARY `metrics.duration` and the completion report. State rereads the same result; never estimate (`~` or free text).
 
 **`actuals` (required when the plan carried an `estimate`):** record what the phase ACTUALLY cost, on the SAME scale the estimate used — `estimateTokens` (chars/4) over the realized diff, NOT a harness token count. Mixing scales measures the measurement methods, not the miss.
 ```yaml
@@ -769,15 +793,15 @@ Do NOT skip. Do NOT proceed to state updates if self-check fails.
 After SUMMARY.md, update STATE.md using `gsd-tools query` state handlers (named flags):
 
 ```bash
-# Advance plan counter (handles edge cases automatically)
+# Resolve first; a bad result must leave STATE untouched.
+TIMING_KEY=$(printf '%s\0%s' "{phase}" "{plan}" | git hash-object --stdin) || exit 1
+TIMING_FILE=$(git rev-parse --git-path "gsd-plan-timing-$TIMING_KEY") || exit 1
+DURATION=$(tail -n 1 "$TIMING_FILE.result") || exit 1
+
 gsd_run query state.advance-plan
-
-# Recalculate progress bar from disk state
 gsd_run query state.update-progress
-
-# Record execution metrics (phase, plan, duration, tasks, files)
 gsd_run query state.record-metric \
-  --phase "${PHASE}" --plan "${PLAN}" --duration "${DURATION}" \
+  --phase "{phase}" --plan "{plan}" --duration "${DURATION}" \
   --tasks "${TASK_COUNT}" --files "${FILE_COUNT}"
 
 # Add decisions (extract from SUMMARY.md key-decisions)
@@ -861,6 +885,15 @@ content via `git add -f .planning/...` is forbidden — that bug is exactly
 the regression #3678 reported, where the agent leaks `.planning/` artifacts
 into the user's project history.
 </final_commit>
+
+<plan_timing_cleanup>
+On successful close-out remove markers; retain them for checkpoint/failure continuation.
+```bash
+TIMING_KEY=$(printf '%s\0%s' "{phase}" "{plan}" | git hash-object --stdin) || exit 1
+TIMING_FILE=$(git rev-parse --git-path "gsd-plan-timing-$TIMING_KEY") || exit 1
+rm -f -- "$TIMING_FILE" "$TIMING_FILE.result"
+```
+</plan_timing_cleanup>
 
 <completion_format>
 ```markdown

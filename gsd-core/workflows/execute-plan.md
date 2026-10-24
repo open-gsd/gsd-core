@@ -87,9 +87,14 @@ Present plan identification, wait for confirmation.
 </step>
 
 <step name="record_start_time">
+This step starts a fresh workflow invocation: overwrite any abandoned marker from an
+earlier attempt and discard its cached result. Checkpoint continuation inside this invocation
+resumes after this step and therefore keeps the original start (#5212).
 ```bash
-PLAN_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-PLAN_START_EPOCH=$(date +%s)
+TIMING_KEY=$(printf '%s\0%s' "{phase}" "{plan}" | git hash-object --stdin) || exit 1
+TIMING_FILE=$(git rev-parse --git-path "gsd-plan-timing-$TIMING_KEY") || exit 1
+rm -f -- "$TIMING_FILE.result"
+printf '%s\n' "$(date +%s)" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" > "$TIMING_FILE"
 ```
 </step>
 
@@ -384,21 +389,7 @@ If `NODE_REPAIR` is `false` OR repair returns ESCALATE: STOP. Present: "Verifica
 </step>
 
 <step name="record_completion_time">
-```bash
-PLAN_END_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-PLAN_END_EPOCH=$(date +%s)
-
-DURATION_SEC=$(( PLAN_END_EPOCH - PLAN_START_EPOCH ))
-DURATION_MIN=$(( DURATION_SEC / 60 ))
-
-if [[ $DURATION_MIN -ge 60 ]]; then
-  HRS=$(( DURATION_MIN / 60 ))
-  MIN=$(( DURATION_MIN % 60 ))
-  DURATION="${HRS}h ${MIN}m"
-else
-  DURATION="${DURATION_MIN} min"
-fi
-```
+After verification, before SUMMARY: read and execute `gsd-core/workflows/execute-plan/steps/record-completion-time.md`; rerun it after more work.
 </step>
 
 <step name="generate_user_setup">
@@ -417,7 +408,9 @@ execute-phase.md step 5.5).
 
 Create `{phase}-{plan}-SUMMARY.md` at `.planning/phases/XX-name/`. Use the template at `~/.claude/gsd-core/templates/summary.md` (or `summary.compact.md` — same `compact-content-gate.md` resolution as the USER-SETUP template above).
 
-**Frontmatter:** phase, plan, subsystem, tags | requires/provides/affects | tech-stack.added/patterns | key-files.created/modified | key-decisions | requirements-completed (**MUST** copy `requirements` array from PLAN.md frontmatter verbatim) | duration ($DURATION), completed ($PLAN_END_TIME date).
+**Frontmatter:** phase, plan, subsystem, tags | requires/provides/affects | tech-stack.added/patterns | key-files.created/modified | key-decisions | requirements-completed (**MUST** copy `requirements` array from PLAN.md frontmatter verbatim) | duration and completion timestamp printed by `record_completion_time`.
+
+Use `record_completion_time`'s printed `duration` verbatim in SUMMARY and the completion report; never estimate (`~` or free text). Its cached result supplies the identical state metric in a fresh shell.
 
 **Coverage block (#1602):** Populate the `coverage:` frontmatter block — one entry per shipped deliverable (the structured form of each `## Accomplishments` bullet). For each deliverable, aggregate the task-level `<verify>` results and tests:
 - A task whose `<verify>` command passed or whose matching test passed → a `verification` entry with `kind` + `ref` (`tests/path#name`, Playwright screenshot ref, or command) + `status: pass`, and `human_judgment: false`.
@@ -446,6 +439,12 @@ IS_WORKTREE=$([ -f .git ] && echo "true" || echo "false")
 
 # Skip in parallel mode — orchestrator handles STATE.md centrally
 if [ "$IS_WORKTREE" != "true" ]; then
+  # Resolve the metric before the first STATE mutation. A missing/corrupt
+  # result must not leave STATE.md half-updated.
+  TIMING_KEY=$(printf '%s\0%s' "{phase}" "{plan}" | git hash-object --stdin) || exit 1
+  TIMING_FILE=$(git rev-parse --git-path "gsd-plan-timing-$TIMING_KEY") || exit 1
+  DURATION=$(tail -n 1 "$TIMING_FILE.result") || exit 1
+
   # Advance plan counter (handles last-plan edge case)
   gsd_run query state.advance-plan
 
@@ -454,7 +453,7 @@ if [ "$IS_WORKTREE" != "true" ]; then
 
   # Record execution metrics
   gsd_run query state.record-metric \
-    --phase "${PHASE}" --plan "${PLAN}" --duration "${DURATION}" \
+    --phase "{phase}" --plan "{plan}" --duration "${DURATION}" \
     --tasks "${TASK_COUNT}" --files "${FILE_COUNT}"
 fi
 ```
@@ -567,6 +566,15 @@ Update only structural changes: new src/ dir → STRUCTURE.md | deps → STACK.m
 
 ```bash
 gsd_run query commit "" --files .planning/codebase/*.md --amend
+```
+</step>
+
+<step name="clear_plan_timing">
+After successful close-out (including intentional metadata skips), remove the markers. Retain them on checkpoints or failures for continuation.
+```bash
+TIMING_KEY=$(printf '%s\0%s' "{phase}" "{plan}" | git hash-object --stdin) || exit 1
+TIMING_FILE=$(git rev-parse --git-path "gsd-plan-timing-$TIMING_KEY") || exit 1
+rm -f -- "$TIMING_FILE" "$TIMING_FILE.result"
 ```
 </step>
 
