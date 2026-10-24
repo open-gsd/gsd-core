@@ -82,7 +82,7 @@ ANALYZER_MODEL=$(gsd_run query resolve-model gsd-assumptions-analyzer --raw)
 
 Parse JSON for: `commit_docs`, `phase_found`, `phase_dir`, `phase_number`, `phase_name`,
 `phase_slug`, `padded_phase`, `has_research`, `has_context`, `has_plans`, `has_verification`,
-`plan_count`, `roadmap_exists`, `planning_exists`.
+`plan_count`, `roadmap_exists`, `planning_exists`, `has_spec`, `spec_path`.
 
 **If `phase_found` is false:**
 ```
@@ -92,7 +92,7 @@ Use /gsd:progress to see available phases.
 ```
 Exit workflow.
 
-**If `phase_found` is true:** Continue to check_existing.
+**If `phase_found` is true:** Continue to check_spec.
 
 **Auto mode** — If `--auto` is present in ARGUMENTS:
 - In `check_existing`: auto-select "Update it" (if context exists) or continue without prompting
@@ -100,6 +100,21 @@ Exit workflow.
 - In `correct_assumptions`: auto-select recommended option for each correction
 - Log each auto-selected choice inline
 - After completion, auto-advance to plan-phase
+</step>
+
+<step name="check_spec">
+Check whether the phase has a SPEC.md (from the spec-phase workflow). SPEC.md locks requirements before implementation decisions. Init already resolved it: use `has_spec` and `spec_path`, which come from one shared definition of "the phase SPEC" (a plain `*-SPEC.md`, never `*-AI-SPEC.md` or `*-UI-SPEC.md`). Do not glob for it.
+
+**If `has_spec` is true:**
+1. Read the SPEC.md file at `spec_path`.
+2. Count requirements (numbered items in `## Requirements`).
+3. Display: `Found SPEC.md — {N} requirements locked. Focusing on implementation decisions.`
+4. Set `spec_loaded = true`.
+5. Store requirements, boundaries, and acceptance criteria as `<locked_requirements>` — these flow directly into CONTEXT.md without re-asking.
+
+**If `has_spec` is false:** Continue with `spec_loaded = false`.
+
+**Note:** `*-AI-SPEC.md` (from the ai-integration-phase workflow) and `*-UI-SPEC.md` (from the ui-phase workflow) are different artifacts and never count as the phase SPEC.
 </step>
 
 <step name="check_existing">
@@ -280,6 +295,7 @@ Phase goal: {roadmap_description}
 Prior decisions: {prior_decisions_summary}
 Codebase scout hints: {codebase_context_summary}
 Calibration: {calibration_tier}
+Locked requirements (already answered by SPEC.md; omit this line when spec_loaded = false): {locked_requirements}
 
 Your job:
 1. Read ROADMAP.md phase {PHASE} description
@@ -287,6 +303,7 @@ Your job:
 3. Glob/Grep for files related to: {phase_relevant_terms}
 4. Read 5-15 most relevant source files
 5. Return structured assumptions
+6. When locked requirements are given, treat them as decided: form assumptions about HOW to implement them only, never about WHAT to build or WHY
 
 ## Output Format
 
@@ -437,6 +454,7 @@ Map assumptions to CONTEXT.md sections:
 - Areas where all assumptions were Confident → marked as locked decisions
 - Areas with corrections → include user's chosen alternative as the decision
 - Folded todos → included in `<decisions>` under "### Folded Todos"
+- When `spec_loaded = true`: add `<spec_lock>` immediately after `<domain>`, add the SPEC.md file to `<canonical_refs>` with the note "Locked requirements — MUST read before planning", and do NOT copy SPEC.md requirements into `<decisions>` (agents read SPEC.md directly); `<decisions>` holds only the HOW decisions from this discussion
 
 ```markdown
 # Phase {PHASE}: {phase_name} - Context
@@ -449,6 +467,19 @@ Map assumptions to CONTEXT.md sections:
 
 {Domain boundary from ROADMAP.md — clear statement of scope anchor}
 </domain>
+
+[If spec_loaded = true, insert this section:]
+<spec_lock>
+## Requirements (locked via SPEC.md)
+
+**{N} requirements are locked.** See `{padded_phase}-SPEC.md` for full requirements, boundaries, and acceptance criteria.
+
+Downstream agents MUST read `{padded_phase}-SPEC.md` before planning or implementing. Requirements are not duplicated here.
+
+**In scope (from SPEC.md):** [copy the "In scope" bullet list from SPEC.md Boundaries]
+**Out of scope (from SPEC.md):** [copy the "Out of scope" bullet list from SPEC.md Boundaries]
+
+</spec_lock>
 
 <decisions>
 ## Implementation Decisions

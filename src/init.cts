@@ -136,6 +136,7 @@ const {
   diagnoseUnresolvedActiveWorkstream,
   describeUnresolvedWorkstreamReason,
   findContextMdIn,
+  findPhaseSpecIn,
   resolvePhaseIdConvention,
   worktreesOptedOut,
 } = planningWorkspace;
@@ -245,6 +246,27 @@ function resolvePhaseDisplayName(
   return (roadmapPhase?.['phase_name'] as string | undefined)
     || (phaseInfo?.['phase_name'] as string | undefined)
     || null;
+}
+
+/**
+ * #5629: the phase SPEC as init facts, for every init payload a SPEC-consuming workflow parses
+ * (discuss-phase via `phase-op`, discuss-phase-assumptions, plan-phase). `has_spec` is always present;
+ * `spec_path` (absolute, posix) only when a plain `NN-SPEC.md` exists. One predicate (`findPhaseSpecIn`, shared
+ * with the context-drift gate) decides, so a UI-SPEC or AI-SPEC is never mistaken for the requirements lock and
+ * no workflow globs for it. A phase with no directory yet, or one that cannot be read, has no SPEC.
+ */
+function phaseSpecFacts(phaseDirAbs: string | null): { has_spec: boolean; spec_path?: string } {
+  if (!phaseDirAbs) return { has_spec: false };
+  let files: string[];
+  try {
+    files = fs.readdirSync(phaseDirAbs);
+  } catch {
+    return { has_spec: false };
+  }
+  // Scoped to THIS phase's own artifacts first (#3511), like the sibling artifact lookups: a misfiled
+  // `02-SPEC.md` in phase 03's directory must not win (the context-drift gate scopes the same way).
+  const spec = findPhaseSpecIn(scopeToPhase(files, path.basename(phaseDirAbs)));
+  return spec ? { has_spec: true, spec_path: toPosixPath(path.join(phaseDirAbs, spec)) } : { has_spec: false };
 }
 
 /**
@@ -1343,6 +1365,9 @@ function cmdInitPlanPhase(
     roadmap_path: fs.existsSync(roadmapPath) ? toPosixPath(roadmapPath) : null,
     requirements_path: fs.existsSync(requirementsPath) ? toPosixPath(requirementsPath) : null,
 
+    // #5629: the phase SPEC (plan-phase lifts its Edge Coverage from it; no workflow globs for it).
+    ...phaseSpecFacts(phaseInfo?.['directory'] ? path.join(cwd, phaseInfo['directory'] as string) : null),
+
     patterns_path: null,
   };
 
@@ -2279,6 +2304,9 @@ function cmdInitDiscussPhaseAssumptions(
 
     roadmap_exists: fs.existsSync(path.join(planningDir(cwd), 'ROADMAP.md')),
     planning_exists: fs.existsSync(planningDir(cwd)),
+
+    // #5629: the phase SPEC, so assumptions mode honours it like the default flow does.
+    ...phaseSpecFacts(phaseDir ? path.join(cwd, phaseDir) : null),
   };
 
   // #2994 (Phase 6.3): additive, optional field — degrades to null, never throws.
@@ -2427,6 +2455,9 @@ function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
     state_path: fs.existsSync(statePath) ? toPosixPath(statePath) : null,
     roadmap_path: fs.existsSync(roadmapPath) ? toPosixPath(roadmapPath) : null,
     requirements_path: fs.existsSync(requirementsPath) ? toPosixPath(requirementsPath) : null,
+
+    // #5629: the phase SPEC (discuss-phase reads it from here; no workflow globs for it).
+    ...phaseSpecFacts(phaseDir ? path.join(cwd, phaseDir) : null),
   };
 
   if (phaseInfo?.['directory']) {
