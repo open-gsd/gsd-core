@@ -1730,13 +1730,19 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       },
       httpJson: async (url, opts) => {
         try {
+          const redirect = opts.probe ? 'manual' : (opts.redirect ?? 'manual');
           const res = await fetch(url, {
             method: opts.method,
             headers: opts.body ? { 'Content-Type': 'application/json' } : undefined,
             body: opts.body,
-            redirect: opts.probe ? 'manual' : undefined,
+            redirect,
             signal: AbortSignal.timeout(opts.timeoutMs),
           });
+          if (redirect === 'manual' && res.status >= 300 && res.status < 400) {
+            // Cleanup is best-effort; a stream fault must not erase the known redirect status.
+            try { await res.body?.cancel(); } catch { /* retain the redirect refusal */ }
+            return { ok: false, status: res.status, body: '', error: `HTTP redirect ${res.status} refused` };
+          }
           // probe:true marks a reachability probe (returns status only, body ''): never follow redirects, and the status line is the answer, so do not
           // let a stalled body turn a replying server into `missing`.
           if (opts.probe) {

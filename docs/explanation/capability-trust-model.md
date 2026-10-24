@@ -128,6 +128,12 @@ SHA-pinned manifest. Consent therefore binds the **resolved host**, not merely
 the config key, so that a later edit redirecting a consented lane to a different
 destination is detectable rather than silent.
 
+Model discovery and chat completion requests do not follow HTTP redirects. Every
+3xx response fails the lane with an HTTP redirect diagnostic, even when its body
+looks like a valid review. A redirected model listing stops before any chat POST;
+the runner writes a diagnostic stub instead of accepting a review. Configure the
+final destination directly in the lane's host setting.
+
 SLSA provenance (the `provenance` field in `capability.json`) provides a
 machine-checkable link from a capability bundle back to a specific commit in a
 specific source repository. GSD emits provenance for first-party capabilities

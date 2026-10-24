@@ -546,8 +546,10 @@ review: it keeps its "failed or returned empty output" header (#2494/#2605/#2794
 
 A lane that will not run reports a typed reason rather than an empty file — `missing_binary`,
 `probe_failed`, `probe_timeout`, `missing_required_binary`, `host_unreachable`,
-`egress_host_changed`, `unknown_handler`, `budget_too_small`. **`egress_host_changed` means the lane
-was consented to send plans to one destination and `.planning/config.json` now names another; it is
+`egress_host_changed`, `http_redirect`, `unknown_handler`, `budget_too_small`.
+`http_redirect` means the configured host answered a 3xx; configure the final host explicitly before
+retrying. **`egress_host_changed` means the lane was consented to send plans to one destination and
+`.planning/config.json` now names another; it is
 blocked, not silently redirected** (ADR-2782 D5).
 
 Display progress:
