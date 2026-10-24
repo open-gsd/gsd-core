@@ -104,6 +104,21 @@
 //   onto a secret name (`ln -s .env.example l && mv l .env`), so a later
 //   edit of `.env` lands in the link target — a write redirection, the
 //   out-of-scope write class, not a read.)
+//   Git config (#5045, #5492): only `-c` values of the command-valued keys in
+//   scanGitConfig are scanned (a plain alias as the git command it expands
+//   to, within the nesting limit). Config files, `--config-env` /
+//   `GIT_CONFIG_*` and the `GIT_EDITOR` / `GIT_SEQUENCE_EDITOR` /
+//   `GIT_SSH_COMMAND` twins are not, even as a `VAR=… git` prefix on the
+//   same command; nor are program-path keys (`difftool.<tool>.path` and the
+//   like, `core.hooksPath`) whose script the hook cannot see.
+//   `core.pager` / `pager.*` are allowed on purpose (no TTY, nothing printed).
+//   Deliberate scope limits (visible on the command line, not parsed): other
+//   keys, including `protocol.ext.allow` with an `ext::` URL; a read inside a
+//   quoted argument of a scanned command (`core.sshCommand='ssh -o
+//   ProxyCommand="cat .env"'`); the `--upload-pack` / `--receive-pack` /
+//   `--exec` subcommand options, `git rebase --exec` / `-x` and `git
+//   submodule foreach`; and a key naming a file git reads and may quote in
+//   an error (`blame.ignoreRevsFile=.env`).
 //
 // A second, unrelated contract is enforced on the Bash leg because this is the
 // one hook that already parses EVERY Bash command (#5214): a Bash command that
@@ -218,6 +233,38 @@ const GIT_GLOBAL_FLAGS = new Set([
   '--no-optional-locks', '--no-advice', '--bare',
   '--literal-pathspecs', '--glob-pathspecs', '--noglob-pathspecs', '--icase-pathspecs',
 ]);
+
+// Git config keys whose value git runs as a command (#5045, #5492), by shape:
+// `section.name`, or `section.*.name` for any subsection (see gitConfigShape).
+// `core.pager` / `pager.*` are deliberately absent: with no TTY they print
+// nothing. `core.askpass`, `core.gitproxy` and `sendemail.smtpserver` exec a
+// program rather than a shell, so a value with arguments never runs; they are
+// scanned conservatively anyway. A submodule update is a script only behind a
+// leading `!` (otherwise it is a mode word). A credential helper is a script
+// behind `!`, and also when it is an absolute path or holds shell
+// metacharacters: git runs any other value as `git credential-<value>`
+// through the shell, where a plain word only names a helper
+// (gitcredentials(7)). The built-in `store` helper is the exception: it reads
+// the file it is given, and `git credential fill` prints a URL line from it.
+const GIT_COMMAND_CONFIG_KEYS = new Set([
+  'diff.external', 'sequence.editor', 'core.editor', 'core.sshcommand', 'core.fsmonitor', 'gpg.program',
+  'diff.*.textconv', 'diff.*.command', 'filter.*.clean', 'filter.*.smudge', 'filter.*.process',
+  'gpg.*.program', 'merge.*.driver',
+  'core.askpass', 'core.gitproxy', 'core.alternaterefscommand', 'uploadpack.packobjectshook',
+  'gc.recentobjectshook', 'interactive.difffilter', 'imap.tunnel', 'instaweb.httpd',
+  'difftool.*.cmd', 'mergetool.*.cmd', 'browser.*.cmd', 'man.*.cmd', 'guitool.*.cmd',
+  'trailer.*.cmd', 'trailer.*.command', 'gpg.*.defaultkeycommand', 'tar.*.command',
+  'remote.*.uploadpack', 'remote.*.receivepack',
+  'sendemail.smtpserver', 'sendemail.sendmailcmd', 'sendemail.tocmd', 'sendemail.cccmd', 'sendemail.headercmd',
+  'sendemail.*.smtpserver', 'sendemail.*.sendmailcmd', 'sendemail.*.tocmd', 'sendemail.*.cccmd',
+  'sendemail.*.headercmd',
+]);
+const GIT_BANG_COMMAND_CONFIG_KEYS = new Set(['submodule.*.update']);
+const GIT_CREDENTIAL_HELPER_KEYS = new Set(['credential.helper', 'credential.*.helper']);
+const ABSOLUTE_PATH_RE = /^(?:[A-Za-z]:)?[\\/]/;
+// What can start a second command, substitute output or redirect.
+const SHELL_CONTROL_RE = /[;&|<>()$`\n]/;
+const STORE_HELPER_RE = /^store(?:\s|$)/;
 
 // #4856: `cp`/`mv` write their destination and never print it, so a secret
 // name that is ONLY the destination of a one-source copy or move is a name
@@ -806,10 +853,56 @@ function resolveCommand(words) {
   return { base: lastSegment(words[idx].text).toLowerCase(), operands: words.slice(idx + 1) };
 }
 
+// A lowercased git key reduced to its section and name. The subsection is
+// everything between the first and last dot (it may itself hold dots, as in
+// `credential.https://x.com.helper`), so it collapses to `*`.
+function gitConfigShape(key) {
+  const first = key.indexOf('.');
+  const last = key.lastIndexOf('.');
+  return first === last ? key : `${key.slice(0, first)}.*${key.slice(last)}`;
+}
+
+// An alias value split into words the way git's split_cmdline (alias.c)
+// does: whitespace separates, quotes group, and a backslash outside single
+// quotes escapes the next character. `;`, `|` and `&` are ordinary
+// characters. null for an unclosed quote or a trailing backslash, which git
+// rejects without running anything.
+function splitGitAlias(value) {
+  const words = [];
+  let word = null;
+  let quote = null;
+  for (let i = 0; i < value.length; i++) {
+    let c = value[i];
+    if (!quote && /\s/.test(c)) {
+      if (word !== null) words.push(word);
+      word = null;
+      continue;
+    }
+    if (word === null) word = '';
+    if (!quote && (c === "'" || c === '"')) quote = c;
+    else if (c === quote) quote = null;
+    else {
+      if (c === '\\' && quote !== "'") {
+        if (++i === value.length) return null;
+        c = value[i];
+      }
+      word += c;
+    }
+  }
+  if (quote) return null;
+  if (word !== null) words.push(word);
+  return words;
+}
+
 /**
- * Rescan only the command-valued -c keys selected by #5045. This deliberately
- * does not resolve config files, --config-env/GIT_CONFIG_* values, or other
- * executing keys (diff drivers, filters, credential helpers, ssh, gpg).
+ * Rescan the command-valued -c keys selected by #5045 and #5492 (alias.*,
+ * GIT_COMMAND_CONFIG_KEYS, GIT_BANG_COMMAND_CONFIG_KEYS, credential helpers).
+ * A plain alias is rescanned as the git command it expands to, so a -c it
+ * carries is checked like one on the command line (any `alias.` key, even a
+ * subsectioned one git ignores). This deliberately
+ * does not resolve config files, --config-env/GIT_CONFIG_* values, the
+ * GIT_EDITOR-style environment twins, program-path keys, or keys outside
+ * those sets.
  * Those are documented gaps, not a promise of complete Git config analysis.
  * Global option values and subcommand arguments are data, not more -c flags.
  */
@@ -819,10 +912,21 @@ function scanGitConfig(operands, depth) {
     if (eq === -1) continue;
     const key = config.slice(0, eq).toLowerCase();
     const value = config.slice(eq + 1);
+    const shape = gitConfigShape(key);
     let script;
-    if (key.startsWith('alias.') && value.startsWith('!')) script = value.slice(1);
-    else if (key === 'diff.external') script = value;
-    else continue;
+    if (key.startsWith('alias.')) {
+      if (value.startsWith('!')) script = value.slice(1);
+      else {
+        const words = splitGitAlias(value);
+        if (!words) continue;
+        script = ['git', ...words.map((w) => `'${w.replaceAll("'", "'\\''")}'`)].join(' ');
+      }
+    } else if (GIT_COMMAND_CONFIG_KEYS.has(shape)) script = value;
+    else if (value.startsWith('!') && (GIT_BANG_COMMAND_CONFIG_KEYS.has(shape) || GIT_CREDENTIAL_HELPER_KEYS.has(shape))) {
+      script = value.slice(1);
+    } else if (GIT_CREDENTIAL_HELPER_KEYS.has(shape) && (ABSOLUTE_PATH_RE.test(value) || SHELL_CONTROL_RE.test(value) || STORE_HELPER_RE.test(value))) {
+      script = value;
+    } else continue;
     const hit = findSecretRead(script, depth + 1);
     if (hit) return hit;
   }
