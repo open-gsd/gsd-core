@@ -123,6 +123,10 @@ describe('gsd-secret-read-guard: command-valued git config (#5045)', () => {
     ["cd repo && git -c alias.x='!cat .env' x", '.env'],
     ["git -c alias.x='!cat .env' ls-files .env", '.env'],
     ["git -c diff.external='cat .env' diff\r\n", '.env'],
+    // #5492: a plain alias is scanned as the git command it expands to, so
+    // `git echo .env` names a secret operand (git itself rejects `echo`; an
+    // accepted over-block).
+    ["git -c alias.x='echo .env' x", '.env'],
   ];
   for (const [cmd, expectedPath] of blocks) {
     test(`blocks ${JSON.stringify(cmd)}`, () => {
@@ -138,7 +142,6 @@ describe('gsd-secret-read-guard: command-valued git config (#5045)', () => {
     "git -c diff.externalCommand='cat .env' diff",
     "git -c aliasx.read='!cat .env' status",
     "git -c alias.x='status' x",
-    "git -c alias.x='echo .env' x", // no leading !: not a shell script
     "git -c alias.x='!echo .env' x",
     "git -c diff.external='echo .env' diff",
     "git -c alias.x='!cat .env.example' x",
@@ -274,10 +277,12 @@ describe('gsd-secret-read-guard: command-valued git config (#5045)', () => {
 
 describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492)', () => {
   // Oracle: #5492's approved key list. Git runs each value as a command
-  // (git-config(1)). A credential helper runs through the shell with or
-  // without a leading `!` (gitcredentials(7), "Custom Helpers").
+  // (git-config(1)). A credential helper is a script with a leading `!`, an
+  // absolute path, or shell metacharacters; a plain word runs as
+  // `git credential-<word>` (gitcredentials(7), "Custom Helpers"). A
+  // submodule update is a script only with `!`; otherwise it is a mode word.
   // NEW_ROWS (#5492 review): the rest of the command-valued keys, as
-  // [section, hasSubsection, name, stripsBang]. core.askPass, core.gitProxy
+  // [section, hasSubsection, name, bangOnly]. core.askPass, core.gitProxy
   // and sendemail.smtpServer exec a program rather than a shell; they are
   // scanned conservatively anyway. ROWS and KEYS below are built from it.
   const NEW_ROWS = [
@@ -314,10 +319,10 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
     // A subsection may itself contain dots (a URL); section and name decide.
     ["git -c credential.https://example.com.helper='!cat .env' fetch", '.env'],
     // Without `!`, an absolute helper runs verbatim and any other helper as
-    // `git credential-<value>`, both through the shell.
+    // `git credential-<value>` through the shell, so a path or a shell
+    // metacharacter runs a command.
     ["git -c credential.helper='/bin/cat .env' fetch", '.env'],
     ["git -c credential.helper='x; cat .env' fetch", '.env'],
-    ["git -c credential.helper='cat .env' fetch", '.env'],
     ["git -c Core.SSHCommand='cat .env #' fetch", '.env'],
     ["git -c DIFF.X.TEXTCONV='cat .env #' show --textconv HEAD", '.env'],
     ["git -c core.askPass='cat .env' fetch", '.env'],
@@ -356,6 +361,8 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
     "git -c core.pager='cat .env' log",
     "git -c pager.log='cat .env' log",
     'git -c credential.helper=store fetch',
+    // A plain word only names a helper: git runs `git credential-cat .env`.
+    "git -c credential.helper='cat .env' fetch",
     'git -c credential.https://example.com.helper=store fetch',
     'git -c core.editor=vim commit',
     'git -c core.fsmonitor=true status',
@@ -369,6 +376,7 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
     "echo \"git -c sequence.editor='cat .env' rebase -i\"",
     'git -c sendemail.smtpServer=smtp.example.com send-email x.patch',
     'git -c submodule.x.update=rebase submodule update',
+    "git -c submodule.x.update='cat .env' submodule update", // a mode word, not a command
     "git -c difftool.x.path='cat .env' difftool -t x", // a program path, not a command line
     "git -c remote.origin.url='cat .env' fetch",
     'git -c core.askPass=/usr/lib/ssh/ssh-askpass fetch',
@@ -386,8 +394,8 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
     ['gpg.program', ''], ['gpg.x509.program', ''], ['diff.x.textconv', ''], ['diff.x.command', ''],
     ['filter.x.clean', ''], ['filter.x.smudge', ''], ['filter.x.process', ''], ['merge.x.driver', ''],
     ['credential.helper', '!'], ['credential.https://example.com.helper', '!'],
-    ...NEW_ROWS.map(([section, hasSub, name, stripsBang]) =>
-      [hasSub ? `${section}.x.${name}` : `${section}.${name}`, stripsBang ? '!' : '']),
+    ...NEW_ROWS.map(([section, hasSub, name, bangOnly]) =>
+      [hasSub ? `${section}.x.${name}` : `${section}.${name}`, bangOnly ? '!' : '']),
   ];
   const SECRETS = ['.env', '.env.local', '.secrets', 'config/.env.production'];
   for (const [key, prefix] of KEYS) {
@@ -401,9 +409,10 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
 
   // Oracle for the key-shape tests: every key the hook scans by shape
   // (#5045's diff.external included), written as [section, hasSubsection,
-  // name, stripsBang] rows rather than the hook's collapsed-shape strings.
-  // A stripsBang key is scanned after dropping one leading `!`, so it
-  // blocks with or without it.
+  // name, bangOnly] rows rather than the hook's collapsed-shape strings.
+  // A bangOnly key blocks a `cat .env` value only behind a leading `!`
+  // (credential helpers' path and metacharacter forms are covered by rows
+  // above, not by this oracle).
   // alias.* is #5045's own branch, not a shape, so it stays out.
   const ROWS = [
     ['diff', false, 'external', false], ['sequence', false, 'editor', false],
@@ -415,26 +424,26 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
     ['credential', false, 'helper', true], ['credential', true, 'helper', true],
     ...NEW_ROWS,
   ];
-  const expected = (section, sub, name) => ROWS.some(([s, hasSub, n]) =>
-    s === section.toLowerCase() && n === name.toLowerCase() && hasSub === (sub !== null));
+  const expected = (section, sub, name, bang) => ROWS.some(([s, hasSub, n, bangOnly]) =>
+    s === section.toLowerCase() && n === name.toLowerCase() && hasSub === (sub !== null) && (bang || !bangOnly));
   const keyOf = (section, sub, name) => (sub === null ? `${section}.${name}` : `${section}.${sub}.${name}`);
   const check = (section, sub, name, bang) => {
     const cmd = `git -c ${keyOf(section, sub, name)}='${bang ? '!' : ''}cat .env' status`;
     const result = runHook(bash(cmd));
-    if (expected(section, sub, name)) assertBlocked(result, cmd, { tool: 'Bash', path: '.env' });
+    if (expected(section, sub, name, bang)) assertBlocked(result, cmd, { tool: 'Bash', path: '.env' });
     else assertAllowed(result, cmd);
   };
 
   // Deterministic companion to the property: per row, case never changes the
   // verdict, and adding/removing the subsection or the `!` lands wherever the
   // oracle says (gpg.program and credential.helper exist in both forms).
-  for (const [section, hasSub, name, stripsBang] of ROWS) {
+  for (const [section, hasSub, name, bangOnly] of ROWS) {
     const sub = hasSub ? 'x' : null;
     test(`key shape ${keyOf(section, sub, name)}: case, subsection and ! variants follow the oracle`, () => {
-      check(section.toUpperCase(), sub, name.toUpperCase(), stripsBang);
-      check(section[0].toUpperCase() + section.slice(1), sub, name[0].toUpperCase() + name.slice(1), stripsBang);
-      check(section, hasSub ? null : 'x', name, stripsBang);
-      if (stripsBang) check(section, sub, name, false);
+      check(section.toUpperCase(), sub, name.toUpperCase(), bangOnly);
+      check(section[0].toUpperCase() + section.slice(1), sub, name[0].toUpperCase() + name.slice(1), bangOnly);
+      check(section, hasSub ? null : 'x', name, bangOnly);
+      if (bangOnly) check(section, sub, name, false);
     });
   }
 
@@ -464,7 +473,7 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
     section: fc.mixedCase(fc.constant(section)),
     sub: fc.constant(sub),
     name: fc.mixedCase(fc.constant(name)),
-    // `!` only where the hook strips it (credential helpers, submodule update): on other keys
+    // `!` only on bangOnly keys (credential helpers, submodule update): on other keys
     // a leading `!` would be judged by the generic operand check, not by the
     // key-shape scan this property is about.
     bang: section === 'credential' || section === 'submodule' ? fc.boolean() : fc.constant(false),
