@@ -2977,22 +2977,41 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     assert.strictEqual(new Set(Object.values(CODEX_HOOKS_JSON_READ_FAILURE)).size, 2, 'each code must be distinct');
   });
 
+  // hooks.json text of exactly `bytes` bytes: `doc` plus a padding key sized to
+  // fill the rest. Compact on purpose, so a rewrite would show as a change.
+  function hooksJsonOfSize(doc, bytes) {
+    const fill = bytes - Buffer.byteLength(JSON.stringify({ ...doc, padding: '' }));
+    assert.ok(fill >= 0, 'setup: the document must fit in the requested size');
+    return JSON.stringify({ ...doc, padding: 'x'.repeat(fill) });
+  }
+
+  const USER_HOOK_ENTRY = { hooks: [{ type: 'command', command: 'echo mine' }] };
+
+  // Both bounded reads refuse only a file larger than the cap, so the tests
+  // below sit at the cap and one byte either side of it.
+  const SIZE_CAP_CASES = [
+    { label: 'one byte under the size cap', delta: -1, readable: true },
+    { label: 'exactly the size cap', delta: 0, readable: true },
+    { label: 'one byte over the size cap', delta: 1, readable: false },
+  ];
+
   // The predicate reads hooks.json before the removal's symlink check, through
   // whatever a link points at, so its read must be bounded (#5037).
-  test('codexHooksJsonHasManagedHooks counts a hooks.json over its size cap as unreadable without parsing it (#5037)', () => {
-    const { CODEX_HOOKS_JSON_MAX_BYTES } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
-    assert.strictEqual(typeof CODEX_HOOKS_JSON_MAX_BYTES, 'number', 'the cap must be exported');
-    // Valid JSON holding only a user hook, so a full parse would answer false.
-    const oversized = {
-      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] },
-      padding: 'x'.repeat(CODEX_HOOKS_JSON_MAX_BYTES),
-    };
-    fs.writeFileSync(hooksJsonPath(codexHome), JSON.stringify(oversized), 'utf8');
-    assert.ok(fs.statSync(hooksJsonPath(codexHome)).size > CODEX_HOOKS_JSON_MAX_BYTES, 'setup: the file must exceed the cap');
+  for (const { label, delta, readable } of SIZE_CAP_CASES) {
+    test(`codexHooksJsonHasManagedHooks on a hooks.json ${label} ${readable ? 'parses it' : 'counts it as unreadable without parsing it'} (#5037)`, () => {
+      const { CODEX_HOOKS_JSON_MAX_BYTES } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
+      assert.strictEqual(typeof CODEX_HOOKS_JSON_MAX_BYTES, 'number', 'the cap must be exported');
+      const size = CODEX_HOOKS_JSON_MAX_BYTES + delta;
+      // Valid JSON holding only a user hook, so a full parse answers false.
+      fs.writeFileSync(hooksJsonPath(codexHome), hooksJsonOfSize({ hooks: { SessionStart: [USER_HOOK_ENTRY] } }, size), 'utf8');
+      assert.strictEqual(fs.statSync(hooksJsonPath(codexHome)).size, size, 'setup: the file must be exactly the case size');
 
-    assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, UNINSTALL_HOOK_EVENTS), true,
-      'an oversized file counts as unreadable, so the removal still runs');
-  });
+      assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, UNINSTALL_HOOK_EVENTS), !readable,
+        readable
+          ? 'a file within the cap is read, and a user hook alone does not count'
+          : 'an oversized file counts as unreadable, so the removal still runs');
+    });
+  }
 
   test('codexHooksJsonHasManagedHooks counts a FIFO hooks.json as unreadable without blocking (#5037)', (t) => {
     if (process.platform === 'win32') {
@@ -3024,18 +3043,26 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
   // The removal reads hooks.json too, after the predicate sends an unreadable
   // file its way, so its read is bounded the same way and an unreadable file
   // is refused loudly rather than read whole or waited on (#5037).
-  test('removeCodexHooksJsonSessionStart refuses an oversized hooks.json and leaves it unchanged (#5037)', () => {
-    const { CODEX_HOOKS_JSON_MAX_BYTES, removeCodexHooksJsonSessionStart } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
-    // Compact on purpose: a full read would re-indent it on the way back out.
-    const before = JSON.stringify({
-      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] },
-      padding: 'x'.repeat(CODEX_HOOKS_JSON_MAX_BYTES),
-    });
-    fs.writeFileSync(hooksJsonPath(codexHome), before, 'utf8');
+  for (const { label, delta, readable } of SIZE_CAP_CASES) {
+    test(`removeCodexHooksJsonSessionStart on a hooks.json ${label} ${readable ? 'removes the GSD hook and keeps the user one' : 'refuses it and leaves it unchanged'} (#5037)`, () => {
+      const { CODEX_HOOKS_JSON_MAX_BYTES, removeCodexHooksJsonSessionStart } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
+      const size = CODEX_HOOKS_JSON_MAX_BYTES + delta;
+      const gsdHookEntry = { hooks: [{ type: 'command', command: `node "${path.join(codexHome, 'hooks', 'gsd-check-update.js')}"` }] };
+      const before = hooksJsonOfSize({ hooks: { SessionStart: [gsdHookEntry, USER_HOOK_ENTRY] } }, size);
+      fs.writeFileSync(hooksJsonPath(codexHome), before, 'utf8');
+      assert.strictEqual(fs.statSync(hooksJsonPath(codexHome)).size, size, 'setup: the file must be exactly the case size');
 
-    assert.throws(() => removeCodexHooksJsonSessionStart(codexHome), { code: CODEX_HOOKS_JSON_READ_FAILURE.UNREADABLE });
-    assert.strictEqual(fs.readFileSync(hooksJsonPath(codexHome), 'utf8'), before, 'the file must be left byte-for-byte unchanged');
-  });
+      if (readable) {
+        assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, ['SessionStart']), true, 'setup: the file must hold a GSD hook');
+        removeCodexHooksJsonSessionStart(codexHome);
+        assert.deepStrictEqual(readHooksJson(codexHome).hooks.SessionStart, [USER_HOOK_ENTRY],
+          'the GSD hook must be removed and the user hook kept');
+      } else {
+        assert.throws(() => removeCodexHooksJsonSessionStart(codexHome), { code: CODEX_HOOKS_JSON_READ_FAILURE.UNREADABLE });
+        assert.strictEqual(fs.readFileSync(hooksJsonPath(codexHome), 'utf8'), before, 'the file must be left byte-for-byte unchanged');
+      }
+    });
+  }
 
   test('removeCodexHooksJsonSessionStart refuses a FIFO hooks.json without blocking (#5037)', (t) => {
     if (process.platform === 'win32') {
