@@ -193,14 +193,54 @@ unchanged:
    which this path skips). When ANY plan in the wave has `use_worktree` not `false`:
 
    ```bash
-   if [ -z "${WAVE_WORKTREE_MANIFEST:-}" ]; then
-     M=$(mktemp "${TMPDIR:-/tmp}/gsd-worktree-wave-XXXXXX") && mv "$M" "$M.json" && WAVE_WORKTREE_MANIFEST="$M.json" || exit 1  # XXXXXX must be path-final on BSD/macOS (#1520)
-     # Persist the dispatch-time orchestrator worktree root so wave-cleanup pins back
-     # to the orchestrator's OWN worktree (#630), exactly as inline dispatch does.
-     ORCH_ROOT=$(git rev-parse --show-toplevel)
-     ORCH_ROOT="$ORCH_ROOT" MANIFEST="$WAVE_WORKTREE_MANIFEST" node -e 'const fs=require("fs");fs.writeFileSync(process.env.MANIFEST,JSON.stringify({orchestrator_root:process.env.ORCH_ROOT||null,worktrees:[]})+"\n")'
-     export WAVE_WORKTREE_MANIFEST
-   fi
+    if [ "${USE_WORKTREES:-true}" != "false" ] && [ "${USE_WORKTREES_FOR_PLAN:-true}" != "false" ] && [ -z "${WAVE_WORKTREE_MANIFEST:-}" ]; then
+      _PA="${PHASE_NUMBER:-}"; [ -z "$_PA" ] && [ -n "${PHASE_DIR:-}" ] && { _PD="${PHASE_DIR//\\//}"; _PD="${_PD%/}"; _PA="${_PD##*/}"; }
+      _INDEX=""; [ -n "$_PA" ] && _INDEX=$(gsd_run query phase-plan-index "$_PA" 2>/dev/null || true)
+      WAVE_NUM=$(CURRENT_WAVE="${CURRENT_WAVE:-}" INDEX="$_INDEX" node -e '
+const cw=(process.env.CURRENT_WAVE||"").trim();let wave=cw&&cw!=="{N}"?cw:"",pw="";
+try{const idx=JSON.parse(process.env.INDEX||"{}");if(idx?.plans?.length){
+  if(wave&&idx.plans.some(p=>String(p.wave)===wave&&!p.has_summary))pw=wave;
+  else{const inc=idx.plans.find(p=>!p.has_summary);if(inc?.wave!=null)pw=String(inc.wave);}
+}}catch{}
+if(!wave)wave=pw;else if(pw&&wave!==pw){console.error("FATAL: CURRENT_WAVE ("+wave+") disagrees with phase plan wave ("+pw+")");process.exit(1);}
+if(!wave||!/^[1-9]\d*$/.test(wave)){console.error("FATAL: cannot resolve wave number before worktree dispatch");process.exit(1);}
+process.stdout.write(wave);
+') || exit 1
+      _MP_FLAG=""; _MP_VAL=""
+      if [ -n "${PHASE_DIR:-}" ]; then _MP_FLAG="--phase-dir"; _MP_VAL="$PHASE_DIR";
+      elif [ -n "${PHASE_NUMBER:-}" ]; then _MP_FLAG="--phase"; _MP_VAL="$PHASE_NUMBER";
+      else echo "FATAL: neither PHASE_DIR nor PHASE_NUMBER is set before worktree dispatch" >&2; exit 1; fi
+      WAVE_WORKTREE_MANIFEST=$(gsd_run query worktree.manifest-path "$_MP_FLAG" "$_MP_VAL" --wave "$WAVE_NUM" --raw) || exit 1
+      if [ -z "$WAVE_WORKTREE_MANIFEST" ] || ! node -e 'const p=require("path");process.exit(process.argv[1]&&p.isAbsolute(process.argv[1])?0:1)' "$WAVE_WORKTREE_MANIFEST"; then
+        echo "FATAL: worktree.manifest-path returned non-absolute or empty path: '$WAVE_WORKTREE_MANIFEST'" >&2
+        exit 1
+      fi
+      EXISTING_MANIFESTS=$(gsd_run query worktree.manifest-path "$_MP_FLAG" "$_MP_VAL" --raw) || exit 1
+      if [ -n "$EXISTING_MANIFESTS" ]; then
+        while IFS= read -r m; do
+          [ -z "$m" ] && continue
+          if git ls-files --error-unmatch "$m" >/dev/null 2>&1; then
+            echo "FATAL: wave manifest at $m is tracked by git." >&2
+            echo "Wave manifests must be ephemeral and untracked. Untrack it before proceeding:" >&2
+            echo "    git rm --cached \"$m\"" >&2
+            exit 1
+          fi
+          if [ -f "$m" ]; then
+            echo "BLOCKED: pre-existing wave manifest found at $m from an earlier/interrupted run." >&2
+            echo "Refusing to overwrite in-flight wave record. Reconcile first with:" >&2
+            echo "    gsd_run query worktree.cleanup-wave --manifest \"$m\"" >&2
+            exit 1
+          fi
+        done <<< "$EXISTING_MANIFESTS"
+      fi
+      # Persist the dispatch-time orchestrator worktree root so wave-cleanup can pin back to the
+      # orchestrator's OWN worktree — NOT `git worktree list`'s first entry (always the main
+      # checkout), which pins a non-primary (per-phase lane) orchestrator off its branch (#630).
+      # Dispatch runs from the orchestrator's lane, so show-toplevel here is the correct root.
+      ORCH_ROOT=$(git rev-parse --show-toplevel)
+      ORCH_ROOT="$ORCH_ROOT" MANIFEST="$WAVE_WORKTREE_MANIFEST" node -e 'const fs=require("fs");fs.writeFileSync(process.env.MANIFEST,JSON.stringify({orchestrator_root:process.env.ORCH_ROOT||null,worktrees:[]})+"\n",{flag:"wx"})' || exit 1
+      export WAVE_WORKTREE_MANIFEST
+    fi
    ```
 
 2. **Invoke the Workflow tool with the emitted script and
