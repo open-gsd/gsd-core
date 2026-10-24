@@ -13522,11 +13522,13 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       // console.warn, leaving the install to print "Done!" with no Codex
       // hooks configured — same defect class as finding 1, different layer.
       // Restore the pre-install snapshot and rethrow so the outer install
-      // pipeline aborts.
+      // pipeline aborts. The original error rides along as `cause`, so a
+      // caller can still tell which failure it was by its code (#5037).
       restoreCodexSnapshot();
       const wrapped = new Error(
         `Codex hook configuration failed (pre-write): ${e && e.message ? e.message : String(e)}. ` +
-          `Restored ${preWriteBackup !== null ? 'pre-install backup' : 'empty state'}.`
+          `Restored ${preWriteBackup !== null ? 'pre-install backup' : 'empty state'}.`,
+        { cause: e }
       );
       console.error(`  ${red}✗${reset} ${wrapped.message}`);
       throw wrapped;
