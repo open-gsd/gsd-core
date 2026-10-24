@@ -14,6 +14,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const fc = require('./helpers/fast-check-setup.cjs');
 
 const { cleanup } = require('./helpers.cjs');
 
@@ -822,6 +823,46 @@ describe('raw config.json override paths (FIX 4)', () => {
 // ─── 8. Renderer tests ────────────────────────────────────────────────────────
 
 describe('renderLoopHooks', () => {
+  test('skill step renders the invocable id while preserving the bare registry ref', () => {
+    const registry = makeRegistry({
+      point: 'plan:post',
+      steps: [{ capId: 'tracker', point: 'plan:post', ref: { skill: 'beads-sync' } }],
+    });
+    const resolved = resolveLoopHooks({ point: 'plan:post', registry, config: {} });
+
+    assert.strictEqual(renderLoopHooks(resolved), '### Step 1: skill:gsd-beads-sync (tracker)');
+    assert.deepEqual(resolved.activeHooks[0].ref, { skill: 'beads-sync' });
+    assert.deepEqual(registry.byLoopPoint['plan:post'].steps[0].ref, { skill: 'beads-sync' });
+  });
+
+  test('skill prefix projection is deterministic and does not mutate any hook refs', async () => {
+    await fc.assert(fc.property(
+      fc.constantFrom(...CANONICAL_POINTS),
+      fc.array(fc.stringMatching(/^[a-z][a-z0-9-]{0,39}$/), { minLength: 1, maxLength: 8 }),
+      (point, skills) => {
+        const steps = skills.map((skill, index) => ({ capId: `cap-${index}`, point, ref: { skill } }));
+        steps.push(
+          { capId: 'agent-cap', point, ref: { agent: 'gsd-phase-researcher' } },
+          { capId: 'command-cap', point, ref: { command: 'tracker sync' } },
+        );
+        const registry = makeRegistry({ point, steps });
+        const registryBefore = structuredClone(registry);
+        const resolved = resolveLoopHooks({ point, registry, config: {} });
+        const resolvedBefore = structuredClone(resolved);
+        const expected = [
+          ...skills.map((skill, index) => `### Step ${index + 1}: skill:gsd-${skill} (cap-${index})`),
+          `### Step ${skills.length + 1}: agent:gsd-phase-researcher (agent-cap)`,
+          `### Step ${skills.length + 2}: {"command":"tracker sync"} (command-cap)`,
+        ].join('\n\n');
+
+        assert.strictEqual(renderLoopHooks(resolved), expected);
+        assert.strictEqual(renderLoopHooks(resolved), expected);
+        assert.deepEqual(resolved, resolvedBefore);
+        assert.deepEqual(registry, registryBefore);
+      },
+    ));
+  });
+
   test('step hook renders skill ref, capId, produces, consumes', () => {
     const resolved = {
       point: 'plan:pre',
@@ -837,7 +878,7 @@ describe('renderLoopHooks', () => {
     };
     const rendered = renderLoopHooks(resolved);
     assert.match(rendered, /Step 1/);
-    assert.match(rendered, /skill:ui-phase/);
+    assert.match(rendered, /skill:gsd-ui-phase/);
     assert.match(rendered, /\(ui\)/);
     assert.match(rendered, /UI-SPEC\.md/);
     assert.match(rendered, /CONTEXT\.md/);
@@ -968,6 +1009,26 @@ const ROOT = path.resolve(__dirname, '..');
 const GSD_TOOLS = path.join(ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
 
 describe('cmdLoopRenderHooks end-to-end (via gsd-tools)', () => {
+  test('CLI exposes the invocable skill id in rendered text and a bare ref in both JSON modes', () => {
+    const envelopes = [];
+    for (const flags of [[], ['--raw']]) {
+      const result = runNode(
+        [GSD_TOOLS, 'loop', 'render-hooks', 'plan:pre', '--cwd', tmpProjectDir, ...flags],
+        { cwd: ROOT, timeoutMs: PROBE_TIMEOUT_MS },
+      );
+      assert.strictEqual(result.exitCode, 0, 'Expected exit 0. stderr: ' + result.stderr);
+      const envelope = JSON.parse(result.stdout.trim());
+      const uiStep = envelope.activeHooks.find(h => h.capId === 'ui' && h.kind === 'step');
+      assert.ok(uiStep, 'Expected the UI skill step in activeHooks');
+      assert.deepEqual(uiStep.ref, { skill: 'ui-phase' });
+      assert.ok(envelope.rendered.includes('skill:gsd-ui-phase (ui)'));
+      assert.ok(!envelope.rendered.includes('skill:ui-phase (ui)'));
+      envelopes.push(envelope);
+    }
+    assert.deepEqual(envelopes[0].activeHooks, envelopes[1].activeHooks);
+    assert.strictEqual(envelopes[0].rendered, envelopes[1].rendered);
+  });
+
   test('loop render-hooks plan:pre returns JSON envelope with ui-phase step active', () => {
     const result = runNode(
       [GSD_TOOLS, 'loop', 'render-hooks', 'plan:pre', '--cwd', tmpProjectDir],

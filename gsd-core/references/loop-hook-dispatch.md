@@ -33,7 +33,9 @@ Inject `fragment.inline` verbatim into the context for the role named in `into`
 
 Dispatch the referenced unit. Exactly one of `ref.skill`, `ref.agent`, or `ref.command` is set.
 
-- `ref.skill` present → dispatch via the Skill tool with skill id `gsd-<ref.skill>`.
+- `ref.skill` present → keep `activeHooks[].ref.skill` bare and dispatch it as
+  `Skill(skill="gsd-" + ref.skill)`. The rendered `### Step N: skill:gsd-<name>` heading already
+  displays that prefixed id; never apply another prefix to the rendered heading text.
 - `ref.agent` present → dispatch via the Agent tool with `subagent_type` = `ref.agent`.
   Before dispatching an agent, print the canonical liveness banner so users know silence
   is expected and do not kill a healthy agent:

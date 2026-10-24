@@ -263,7 +263,7 @@ describe('execute:post render-hooks — typed envelope resolution', () => {
 
     // Step 1 code-review heading must appear first
     assert.ok(
-      rendered.includes('### Step 1: skill:code-review (code-review)'),
+      rendered.includes('### Step 1: skill:gsd-code-review (code-review)'),
       `rendered must start with Step 1 heading. got: ${rendered.slice(0, 200)}`
     );
     // produces and consumes in step section
