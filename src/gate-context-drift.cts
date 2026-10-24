@@ -30,7 +30,7 @@ import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- verification.cjs is an export= CommonJS module
 import verificationMod = require('./verification.cjs');
 
-const { planningDir } = planningWorkspace;
+const { planningDir, isPhaseSpecFile, findPhaseSpecIn } = planningWorkspace;
 const { defaultPhaseCleanCommitTimesMs } = verificationMod;
 
 interface ContextDriftEntry {
@@ -57,11 +57,7 @@ function buildContextDriftMessage(staleArtifacts: string[], phaseArg: string, pr
   if (staleArtifacts.some((f) => f.endsWith('-PATTERNS.md'))) {
     parts.push(`Regenerate patterns: delete the PATTERNS.md file, then re-run ${runtimeCommand(projectDir, 'plan-phase')}.`);
   }
-  if (
-    staleArtifacts.some(
-      (f) => f.endsWith('-VALIDATION.md') || (f.endsWith('-SPEC.md') && !f.endsWith('-AI-SPEC.md') && !f.endsWith('-UI-SPEC.md')),
-    )
-  ) {
+  if (staleArtifacts.some((f) => f.endsWith('-VALIDATION.md') || isPhaseSpecFile(f))) {
     parts.push('Regenerate or manually reconcile VALIDATION.md / SPEC.md against the current decisions.');
   }
   parts.push('Do not hand-inject the newer decisions into a prompt as a substitute for regenerating — that carries the staleness forward.');
@@ -118,9 +114,8 @@ function runContextDriftGate(cwd: string, phaseArg: string): GateVerdict {
   const researchFile = phaseFiles.find((f) => f.endsWith('-RESEARCH.md'));
   const patternsFile = phaseFiles.find((f) => f.endsWith('-PATTERNS.md'));
   const validationFile = phaseFiles.find((f) => f.endsWith('-VALIDATION.md'));
-  const specFile = phaseFiles.find(
-    (f) => f.endsWith('-SPEC.md') && !f.endsWith('-AI-SPEC.md') && !f.endsWith('-UI-SPEC.md'),
-  );
+  // #5629: the shared phase-SPEC predicate (the init payloads' `has_spec` / `spec_path` use the same one).
+  const specFile = findPhaseSpecIn(phaseFiles);
   const upstreamFiles = [researchFile, patternsFile, validationFile, specFile].filter(
     (f): f is string => !!f,
   );
