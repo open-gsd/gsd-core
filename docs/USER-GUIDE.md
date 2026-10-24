@@ -469,7 +469,7 @@ Git configuration supplied through `-c key=value` is also checked for the keys w
 - Transport and hooks: `remote.<name>.uploadpack` / `receivepack`, `core.alternateRefsCommand`, `uploadpack.packObjectsHook`, `gc.recentObjectsHook`, `imap.tunnel`, `instaweb.httpd`.
 - Tools: the `cmd` of `difftool`, `mergetool`, `browser`, `man`, `guitool` and `trailer` tools, and `trailer.<key>.command`.
 - Mail: `sendemail.sendmailCmd` / `toCmd` / `ccCmd` / `headerCmd` (also per identity).
-- Credential helpers (`credential.helper` / `credential.<url>.helper`): scanned when the value starts with `!`, is an absolute path, or contains shell metacharacters (`;`, `&`, `|`, `<`, `>`, `(`, `)`, `$`, a backtick, a newline). A plain word such as `cat .env` is allowed: Git runs it as `git credential-cat .env`, which only names a helper.
+- Credential helpers (`credential.helper` / `credential.<url>.helper`): scanned when the value starts with `!`, is an absolute path, or contains shell metacharacters (`;`, `&`, `|`, `<`, `>`, `(`, `)`, `$`, a backtick, a newline). A plain word such as `cat .env` is allowed: Git runs it as `git credential-cat .env`, which only names a helper. The built-in `store` helper is scanned too, since it reads the file it is given (`credential.helper='store --file .env'` is blocked).
 - Submodule updates: `submodule.<name>.update` values starting with `!` (any other value is a mode word).
 - Program-valued keys: `core.askPass`, `core.gitProxy` and `sendemail.smtpServer` name a program that Git runs without a shell; they are scanned conservatively too.
 
