@@ -2600,7 +2600,10 @@ describe('ADR-1769 #1796: applyStatePreservation — table-driven post-sync cons
     // Disk scan now counts 54 summaries. The curated completed_plans (50) must
     // ratchet UP to the derived value (54), not stay pinned at 50 — otherwise
     // completed_plans < total_plans forever even though every plan is summarized.
-    const curated = { progress: { total_plans: 54, completed_plans: 50, total_phases: 2, completed_phases: 1, percent: 93 } };
+    // One phase, all of whose plans are summarized: the phase fraction is 1/1, so the written percent
+    // is the plan fraction alone. (The fixture used to say 1 of 2 phases beside a derived 100%, a block
+    // that no counters produce; #5619 makes percent follow the counters written.)
+    const curated = { progress: { total_plans: 54, completed_plans: 50, total_phases: 1, completed_phases: 1, percent: 93 } };
     const r = applyStatePreservation({
       transaction: openStateTransaction({
         snapshot: curated,
@@ -2608,7 +2611,7 @@ describe('ADR-1769 #1796: applyStatePreservation — table-driven post-sync cons
         deriveProgressKeys: true,
         ...untouched,
       }),
-      postFm: { progress: { total_plans: 54, completed_plans: 54, total_phases: 2, completed_phases: 1, percent: 100 } },
+      postFm: { progress: { total_plans: 54, completed_plans: 54, total_phases: 1, completed_phases: 1, percent: 100 } },
     });
     assert.equal(r.postFm.progress.total_plans, 54, 'total_plans takes derived value');
     assert.equal(r.postFm.progress.completed_plans, 54,
@@ -5263,6 +5266,7 @@ describe('state.planned-phase progress merge on string-valued frontmatter (#5619
           assert.equal(toFiniteNumber(written.completed_plans), Math.max(storedDone, derivedDone));
           assert.equal(toFiniteNumber(written.percent), percentOf(written));
         }),
+      { seed: 5619, numRuns: 200 }, // deterministic and bounded (CONTRIBUTING: property tests pin the seed)
     );
   });
 });
