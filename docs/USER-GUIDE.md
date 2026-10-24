@@ -142,6 +142,25 @@ See [Your first project](tutorials/your-first-project.md).
 
 For onboarding an existing codebase before starting a new milestone, run `/gsd-onboard` or see [Onboarding an existing codebase](tutorials/onboarding-an-existing-codebase.md).
 
+### The implicit first milestone
+
+`/gsd-new-project` does not register a milestone. On a fresh project there is no
+`MILESTONES.md`, no `milestone:` value in `STATE.md`, and no version token in
+`ROADMAP.md` — by design (ADR-3180 §7.2 rule 5): a ROADMAP with no version token
+has no milestone identity, and the runtime must not invent one.
+
+The first milestone is therefore **implicit**: it is "everything between
+`/gsd-new-project` and the first `/gsd-complete-milestone <version>`". Its
+identity — version, name, dates — is recorded only at close time, from the
+version you pass to `/gsd-complete-milestone`. There is no start-registration
+step to look for, and none is needed; `/gsd-new-milestone` (the cycle opener)
+exists only from the second milestone onward, where it reads the previous
+version from `MILESTONES.md`.
+
+Until the first close, tooling that reports a current milestone (for example
+`gsd_run query init.manager` on a fresh project) reports `current_milestone:
+null` — this is the documented state, not data loss.
+
 **Relevant flags at a glance:**
 
 | Flag | Command | When to use |
@@ -1121,7 +1140,7 @@ To disable parallel execution entirely: `/gsd-settings` → set `parallelization
   ROADMAP.md              # Phase breakdown with status tracking
   STATE.md                # Decisions, blockers, session memory
   config.json             # Workflow configuration
-  MILESTONES.md           # Completed milestone archive
+  MILESTONES.md           # Completed milestone archive (absent until the first /gsd-complete-milestone — see "The implicit first milestone")
   HANDOFF.json            # Structured session handoff (from /gsd-pause-work)
   research/               # Domain research from /gsd-new-project
   reports/                # Session reports (from /gsd-pause-work --report)

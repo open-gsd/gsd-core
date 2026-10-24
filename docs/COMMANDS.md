@@ -51,6 +51,8 @@ Initialize a new project with deep context gathering.
 **Prerequisites:** No existing `.planning/PROJECT.md`
 **Produces:** `PROJECT.md`, `REQUIREMENTS.md`, `ROADMAP.md`, `STATE.md`, `config.json`, `research/`, `CLAUDE.md`
 
+> **Note:** the first milestone is implicit. No milestone identity is recorded at project start — no `MILESTONES.md`, no `milestone:` in `STATE.md` (ADR-3180 §7.2 rule 5). The version and name are decided at the first `/gsd-complete-milestone <version>`. See [The implicit first milestone](USER-GUIDE.md#the-implicit-first-milestone).
+
 ```bash
 /gsd-new-project                    # Interactive mode
 /gsd-new-project --auto @prd.md     # Auto-extract from PRD
@@ -480,6 +482,8 @@ Archive milestone, tag release.
 
 **Prerequisites:** Milestone audit complete (recommended)
 **Produces:** `MILESTONES.md` entry, git tag
+
+> **Note:** for the project's first milestone this command is also the identity *registration* — the version and name come from the argument you pass, because nothing recorded them at `/gsd-new-project` time ([the first milestone is implicit](USER-GUIDE.md#the-implicit-first-milestone)). From the second milestone onward, `/gsd-new-milestone` records the identity at cycle start instead.
 
 ```bash
 /gsd-complete-milestone
