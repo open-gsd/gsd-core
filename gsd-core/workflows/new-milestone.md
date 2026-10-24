@@ -317,7 +317,7 @@ below still need to re-read it (each is its own shell) to resolve
 REQUIREMENTS.md/ROADMAP.md/STATE.md correctly under a workstream. It is
 removed in Step 10, its true last consumer. -->
 
-Extract from init JSON: `researcher_model`, `synthesizer_model`, `roadmapper_model`, `commit_docs`, `research_enabled`, `current_milestone`, `project_exists`, `roadmap_exists`, `latest_completed_milestone`, `phase_dir_count`, `phase_archive_path`, `agents_installed`, `missing_agents`, `project_path`, `roadmap_path`, `requirements_path`, `config_path`, `research_dir`, `codebase_map_files`, `milestones_path`, `phases_dir`, `archive_dir`.
+Extract from init JSON: `researcher_model`, `synthesizer_model`, `roadmapper_model`, `commit_docs`, `research_enabled`, `current_milestone`, `project_exists`, `roadmap_exists`, `latest_completed_milestone`, `phase_dir_count`, `phase_archive_path`, `agents_installed`, `missing_agents`, `project_path`, `roadmap_path`, `requirements_path`, `config_path`, `research_dir`, `milestones_path`, `phases_dir`, `archive_dir`.
 
 **If `agents_installed` is false:** Display a warning before proceeding:
 ```
@@ -374,7 +374,7 @@ Run one researcher per dimension (stack, features, architecture, pitfalls) by de
 mkdir -p .planning/research
 ```
 
-Spawn {N} parallel gsd-project-researcher agents (one per dimension kept). Each uses this template with dimension-specific fields. Fill `{codebase_map_lines}` with one `- {file} (Codebase map)` line per entry in `codebase_map_files` (none when it is empty):
+Spawn {N} parallel gsd-project-researcher agents (one per dimension kept). Each uses this template with dimension-specific fields:
 
 **Common structure for every researcher:**
 <!-- #2517 model-omit-on-inherit -->
@@ -389,14 +389,13 @@ Agent(prompt="
 SUBSEQUENT MILESTONE — [target features] (new features and refactors) in an existing app.
 {EXISTING_CONTEXT}
 Focus ONLY on what this milestone's work needs, including the integration points and pitfalls in the existing codebase it couples to or could break.
-Ground those in the existing code: read the codebase map files listed below when there are any; otherwise inspect the source this work touches.
+Ground those in the existing code: read the codebase map from `/gsd-map-codebase` when the project has one; otherwise inspect the source this work touches.
 </milestone_context>
 
 <question>{QUESTION}</question>
 
 <required_reading>
 - {project_path} (Project context)
-{codebase_map_lines}
 </required_reading>
 
 ${AGENT_SKILLS_RESEARCHER}

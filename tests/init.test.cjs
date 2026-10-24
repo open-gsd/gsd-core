@@ -3262,27 +3262,6 @@ describe('#2376 — init.* path fields resolve when process cwd differs from --c
     }
   });
 
-  test('init new-milestone emits codebase_map_files: absolute paths of the map files present, [] without a map (#5148)', () => {
-    const before = runGsdTools(['init', 'new-milestone', '--cwd', projectDir], decoyDir);
-    assert.ok(before.success, `Command failed: ${before.error}`);
-    assert.deepEqual(JSON.parse(before.output).codebase_map_files, []);
-
-    const codebaseDir = path.join(projectDir, '.planning', 'codebase');
-    fs.mkdirSync(codebaseDir, { recursive: true });
-    fs.writeFileSync(path.join(codebaseDir, 'ARCHITECTURE.md'), '# Architecture\n');
-    fs.writeFileSync(path.join(codebaseDir, 'STACK.md'), '# Stack\n');
-    fs.writeFileSync(path.join(codebaseDir, 'notes.md'), '# not a map file\n');
-
-    const result = runGsdTools(['init', 'new-milestone', '--cwd', projectDir], decoyDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
-    const files = JSON.parse(result.output).codebase_map_files;
-    assert.deepEqual(files.map((f) => path.basename(f)).sort(), ['ARCHITECTURE.md', 'STACK.md']);
-    for (const file of files) {
-      assert.ok(path.isAbsolute(file), `codebase_map_files entries must be absolute, got: "${file}"`);
-      assert.ok(fs.existsSync(file), `codebase_map_files entry must resolve to the real file: "${file}"`);
-    }
-  });
-
   test('init ingest-docs emits absolute requirements_path/roadmap_path/state_path/intel_dir/conflicts_path (previously absent)', () => {
     fs.writeFileSync(path.join(projectDir, '.planning', 'REQUIREMENTS.md'), '# Requirements\n');
     fs.writeFileSync(path.join(projectDir, '.planning', 'ROADMAP.md'), '# Roadmap\n');

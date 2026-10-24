@@ -11,7 +11,7 @@
  *     codebase, and research is not offered when agents are not installed,
  *  6. Step 10 passes SUMMARY.md to the roadmapper only when research ran,
  *  7. the synthesizer contract does not require all four research files,
- *  8. per-dimension fields and the codebase-map input match that scope, and
+ *  8. per-dimension fields and the codebase-map instruction match that scope, and
  *     the /gsd-new-milestone command describes it the same way.
  */
 
@@ -106,14 +106,13 @@ describe('new-milestone Step 8 research decision (#5148)', () => {
     assert.doesNotMatch(workflow, /\[new features\]/, 'no step may still say [new features]');
   });
 
-  test('researchers get the codebase map as an explicit input', () => {
-    assert.match(workflow, /`codebase_map_files`/, 'Step 7 must extract codebase_map_files');
+  test('researchers are told to read the codebase map, within the workflow text only', () => {
     const start = body.indexOf('**Common structure for every researcher:**');
     const template = body.slice(start, body.indexOf('subagent_type="gsd-project-researcher"'));
-    const reading = template.slice(template.indexOf('<required_reading>'), template.indexOf('</required_reading>'));
-    assert.match(reading, /\{codebase_map_lines\}/);
-    assert.match(body.slice(0, start), /Fill `\{codebase_map_lines\}` with one `- \{file\} \(Codebase map\)` line per entry in `codebase_map_files`/);
-    assert.match(template, /otherwise inspect the source this work touches/);
+    const context = template.slice(template.indexOf('<milestone_context>'), template.indexOf('</milestone_context>'));
+    assert.match(context, /read the codebase map from `\/gsd-map-codebase` when the project has one; otherwise inspect the source this work touches/);
+    assert.doesNotMatch(workflow, /codebase_map_files|\{codebase_map_lines\}/,
+      'the approved scope is new-milestone.md only; no new init field feeds the researchers');
   });
 
   test('without installed agents, research is skipped without asking', () => {
