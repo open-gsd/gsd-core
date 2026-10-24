@@ -116,6 +116,7 @@ module.exports = {
   "tests/gap-checker.property.test.cjs",
   "tests/gate-api-coverage-verify-pre-escape.test.cjs",
   "tests/gate-consumer-exit-awareness.test.cjs",
+  "tests/gate-contained-path-symlinked-planning.test.cjs",
   "tests/gate-decision-coverage-verify-stderr.test.cjs",
   "tests/gate-exit.test.cjs",
   "tests/gate-predicate.unit.test.cjs",
