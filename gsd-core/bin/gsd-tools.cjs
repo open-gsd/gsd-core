@@ -1734,14 +1734,33 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             method: opts.method,
             headers: opts.body ? { 'Content-Type': 'application/json' } : undefined,
             body: opts.body,
-            redirect: opts.probe ? 'manual' : undefined,
+            // Never follow a redirect: the egress check compares the CONFIGURED host, so a
+            // followed redirect would send the review prompt to a host the user never named (#5433).
+            redirect: 'manual',
             signal: AbortSignal.timeout(opts.timeoutMs),
           });
-          // probe:true marks a reachability probe (returns status only, body ''): never follow redirects, and the status line is the answer, so do not
+          // probe:true marks a reachability probe (returns status only, body ''): the status line is the answer, so do not
           // let a stalled body turn a replying server into `missing`.
           if (opts.probe) {
             res.body?.cancel().catch(() => {});
             return { ok: res.ok, status: res.status, body: '' };
+          }
+          if (res.status >= 300 && res.status < 400) {
+            res.body?.cancel().catch(() => {});
+            const location = res.headers.get('location');
+            let target = 'without a Location header';
+            if (location) {
+              target = 'to an unparseable Location';
+              try { target = `to ${new URL(location, url).host}`; } catch { /* keep the unparseable wording */ }
+            }
+            // Host and path only: a configured URL may carry credentials that must not reach a review file.
+            const asked = (() => { try { const u = new URL(url); return `${u.host}${u.pathname}`; } catch { return 'the configured URL'; } })();
+            return {
+              ok: false,
+              status: res.status,
+              body: '',
+              error: `${asked} answered HTTP ${res.status}, redirecting ${target}. The lane does not follow redirects; configure the final URL as the lane's host.`,
+            };
           }
           return { ok: res.ok, status: res.status, body: await res.text() };
         } catch (e) {

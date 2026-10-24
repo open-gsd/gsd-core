@@ -1339,3 +1339,94 @@ describe('state contract — independence', () => {
     assert.deepStrictEqual(bThenA[0], aThenB[1]);
   });
 });
+
+// ─── milestone-prefixed phase ids (#5626) ───────────────────────────────────────
+//
+// Under phase_id_convention: milestone-prefixed the phase id is the whole `M-NN` ("3-01"). The number capture of
+// both phase sources (the Progress table cell and the `## Phases` checklist bullet) takes one optional `-NN`
+// segment under that convention only; every other convention keeps the dotted-only capture.
+
+describe('state contract — milestone-prefixed phase ids (#5626)', () => {
+  const MP = 'milestone-prefixed';
+
+  function writeConvention(cwd, convention) {
+    writeFile(cwd, '.planning/config.json', JSON.stringify(convention === null ? {} : { phase_id_convention: convention }));
+  }
+
+  const TABLE_ROWS = [
+    { Phase: '3-01. Create layer', 'Plans Complete': '0/1', Status: 'Planned', Completed: '-' },
+    { Phase: '10-12: Many digits', 'Plans Complete': '0/1', Status: 'Not started', Completed: '-' },
+    { Phase: '3-1 Short tail', 'Plans Complete': '0/1', Status: 'Not started', Completed: '-' },
+    { Phase: '3-01.1 Dotted tail', 'Plans Complete': '0/1', Status: 'Not started', Completed: '-' },
+    { Phase: '2.1 Hardening', 'Plans Complete': '0/1', Status: 'Not started', Completed: '-' },
+    { Phase: '4. Plain', 'Plans Complete': '0/1', Status: 'Complete', Completed: '2025-01-01' },
+  ];
+
+  test('keepsMNNIdsAndNamesFromTheProgressTableUnderMilestonePrefixed', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    writeConvention(tmpDir, MP);
+    writeProgressRoadmap(tmpDir, TABLE_ROWS);
+    const phases = buildStateContract(tmpDir, fixedDeps()).phases;
+    assert.deepStrictEqual(phases.map((p) => p.number), ['3-01', '10-12', '3-1', '3-01.1', '2.1', '4']);
+    assert.deepStrictEqual(phases.map((p) => p.name), ['Create layer', 'Many digits', 'Short tail', 'Dotted tail', 'Hardening', 'Plain']);
+  });
+
+  test('readsTheSameProgressTableAsALeadingIntegerUnderEveryOtherConvention', (t) => {
+    for (const convention of [null, 'bracket', 'milestone-prefixed-not']) {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      writeConvention(tmpDir, convention);
+      writeProgressRoadmap(tmpDir, TABLE_ROWS);
+      const numbers = buildStateContract(tmpDir, fixedDeps()).phases.map((p) => p.number);
+      assert.deepStrictEqual(numbers, ['3', '10', '3', '3', '2.1', '4'], String(convention));
+    }
+  });
+
+  function writeChecklistProject(cwd, convention) {
+    writeConvention(cwd, convention);
+    writeRoadmap(cwd, [
+      '# Roadmap', '', '## Phases', '',
+      '- [ ] **Phase 3-01: Create layer**',
+      '- [x] **Phase 10-12: Many digits**',
+      '- [ ] **Phase 3-1: Short tail**',
+      '- [ ] **Phase 2.1: Hardening**',
+      '- [ ] **Phase 4: Plain**',
+      '',
+    ]);
+    writeState(cwd, ['current_phase: 3-01'], ['# Project State', '']);
+  }
+
+  test('keepsMNNIdsFromTheChecklistAndFlagsTheCurrentPhaseUnderMilestonePrefixed', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    writeChecklistProject(tmpDir, MP);
+    const phases = buildStateContract(tmpDir, fixedDeps()).phases;
+    assert.deepStrictEqual(phases.map((p) => p.number), ['3-01', '10-12', '3-1', '2.1', '4']);
+    assert.deepStrictEqual(phases.map((p) => p.name), ['Create layer', 'Many digits', 'Short tail', 'Hardening', 'Plain']);
+    assert.deepStrictEqual(
+      phases.map((p) => p.status),
+      [PHASE_STATUS.IN_PROGRESS, PHASE_STATUS.COMPLETE, PHASE_STATUS.PENDING, PHASE_STATUS.PENDING, PHASE_STATUS.PENDING],
+      'only the current phase (3-01) is in progress',
+    );
+  });
+
+  test('readsTheChecklistAsALeadingIntegerUnderEveryOtherConvention', (t) => {
+    for (const convention of [null, 'bracket', 'milestone-prefixed-not']) {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      writeChecklistProject(tmpDir, convention);
+      const numbers = buildStateContract(tmpDir, fixedDeps()).phases.map((p) => p.number);
+      assert.deepStrictEqual(numbers, ['3', '10', '3', '2.1', '4'], String(convention));
+    }
+  });
+
+  test('anUnreadableConfigFallsBackToTheLeadingIntegerReading', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    writeFile(tmpDir, '.planning/config.json', '{ not json');
+    writeProgressRoadmap(tmpDir, TABLE_ROWS);
+    const numbers = buildStateContract(tmpDir, fixedDeps()).phases.map((p) => p.number);
+    assert.deepStrictEqual(numbers, ['3', '10', '3', '3', '2.1', '4']);
+  });
+});

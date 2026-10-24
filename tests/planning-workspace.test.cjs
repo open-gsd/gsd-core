@@ -963,3 +963,26 @@ describe('#4975: readScopedConfigValue agrees with config-get on every ladder sh
     assert.notEqual(resolveDispatchLogger(tmpDir), undefined, 'the workstream inherits the root audit opt-in');
   });
 });
+
+// #5629: "the phase SPEC" is one predicate (a plain `NN-SPEC.md`), shared by the init payloads, the discuss and
+// plan-phase workflows (through those payloads) and the context-drift gate.
+describe('planning-workspace: the phase SPEC predicate (#5629)', () => {
+  const { isPhaseSpecFile, findPhaseSpecIn } = planningWorkspaceDirect;
+
+  test('isPhaseSpecFile accepts only a plain phase SPEC (#5629)', () => {
+    assert.equal(isPhaseSpecFile('03-SPEC.md'), true);
+    assert.equal(isPhaseSpecFile('03-1-SPEC.md'), true);
+    for (const name of ['03-AI-SPEC.md', '03-UI-SPEC.md', '03-SPEC.md.bak', '03-SPEC.txt', 'SPEC.md', '03-CONTEXT.md', '']) {
+      assert.equal(isPhaseSpecFile(name), false, name || '(empty)');
+    }
+  });
+
+  test('findPhaseSpecIn is order-independent and null without a plain SPEC (#5629)', () => {
+    const files = ['03-UI-SPEC.md', '03-CONTEXT.md', '03-b-SPEC.md', '03-AI-SPEC.md', '03-a-SPEC.md'];
+    assert.equal(findPhaseSpecIn(files), '03-a-SPEC.md');
+    assert.equal(findPhaseSpecIn(files.slice().reverse()), '03-a-SPEC.md');
+    assert.deepEqual(files, ['03-UI-SPEC.md', '03-CONTEXT.md', '03-b-SPEC.md', '03-AI-SPEC.md', '03-a-SPEC.md'], 'the input is not reordered');
+    assert.equal(findPhaseSpecIn(['03-UI-SPEC.md', '03-AI-SPEC.md']), null);
+    assert.equal(findPhaseSpecIn([]), null);
+  });
+});
