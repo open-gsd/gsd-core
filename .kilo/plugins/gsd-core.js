@@ -360,7 +360,7 @@ function handleHookResult(hookResult, output) {
     throw new Error(reason);
   }
 
-  // Advisory: inject additionalContext into metadata + log
+  // Advisory: inject additionalContext into metadata
   const advisory =
     parsed &&
     parsed.hookSpecificOutput &&
@@ -377,8 +377,7 @@ function handleHookResult(hookResult, output) {
       }
       output.metadata._gsdAdvisory.push(advisory);
     }
-    // Best-effort visibility when metadata isn't surfaced to the model
-    console.error(advisory);
+    // Not written to stderr: the OpenCode TUI draws a plugin's stderr over the prompt input (#5648).
   }
 }
 

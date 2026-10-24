@@ -212,6 +212,7 @@ module.exports = {
   "tests/npm-integrity-gate.test.cjs",
   "tests/nsegment-phase-grammar.test.cjs",
   "tests/onboard-command.test.cjs",
+  "tests/opencode-advisory-stderr.test.cjs",
   "tests/opencode-command-dir-plural.test.cjs",
   "tests/opencode-config-jsonc.test.cjs",
   "tests/opencode-generations.smoke.test.cjs",
