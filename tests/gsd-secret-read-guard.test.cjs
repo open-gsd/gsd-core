@@ -337,6 +337,10 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
     ["git -c credential.helper='x $(cat .env)' fetch", '.env'],
     ["git -c credential.helper='x `cat .env`' fetch", '.env'],
     ["git -c credential.https://example.com.helper='/bin/cat .env' fetch", '.env'],
+    // git's built-in `store` helper reads the file it is given, and
+    // `git credential fill` prints a URL line from it.
+    ["git -c credential.helper='store --file .env' credential fill", '.env'],
+    ["git -c credential.helper='store --file=.env' credential fill", '--file=.env'],
     ["git -c Core.SSHCommand='cat .env #' fetch", '.env'],
     ["git -c DIFF.X.TEXTCONV='cat .env #' show --textconv HEAD", '.env'],
     ["git -c core.askPass='cat .env' fetch", '.env'],
@@ -391,6 +395,7 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
     'git -c credential.helper=store fetch',
     // A plain word only names a helper: git runs `git credential-cat .env`.
     "git -c credential.helper='cat .env' fetch",
+    "git -c credential.helper='store --file ~/.git-credentials' fetch",
     'git -c credential.https://example.com.helper=store fetch',
     'git -c core.editor=vim commit',
     'git -c core.fsmonitor=true status',
