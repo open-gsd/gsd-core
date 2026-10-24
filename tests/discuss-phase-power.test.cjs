@@ -267,6 +267,8 @@ test('discuss-phase-assumptions answer_validation matches the parent canonical c
 // assumptions mode and --power (dispatched past check_spec) never read it, so CONTEXT.md could lock decisions
 // that contradict it. The SPEC is now an init fact (`has_spec` / `spec_path`, one shared predicate) and each
 // flow carries the same check_spec step; this parity test fails if any mode drops it.
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+
 describe('discuss-phase modes honour the phase SPEC (#5629)', () => {
   const readSrc = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
   const FLOWS = {
@@ -330,7 +332,7 @@ describe('discuss-phase modes honour the phase SPEC (#5629)', () => {
       return e.isDirectory() ? walk(p) : (p.endsWith('.md') ? [p] : []);
     });
     const offenders = walk(path.join(__dirname, '..', 'gsd-core', 'workflows'))
-      .filter((p) => /\bls\b[^\n]*\*-SPEC\.md/.test(fs.readFileSync(p, 'utf8')))
+      .filter((p) => splitLines(fs.readFileSync(p, 'utf8')).some((line) => /\bls\b/.test(line) && line.includes('*-SPEC.md')))
       .map((p) => path.relative(path.join(__dirname, '..'), p));
     assert.deepStrictEqual(offenders, [], 'workflows read has_spec / spec_path from init instead of an ls over *-SPEC.md');
   });
