@@ -4572,18 +4572,18 @@ describe('gsd-code-fixer TypeScript Tier-2 check is project-aware (#5213)', () =
 // code-review/steps/structural-pre-pass.md (fallow binary) loaded their helpers with a cwd-relative
 // require('./gsd-core/bin/lib/X.cjs'). In a global install no ./gsd-core exists in the project, so --fix,
 // --all, --auto, --depth and --files were dropped silently, the depth step halted, and plan-coverage JSON
-// came out empty. Each such step now carries a resolver block between '# gsd:resolve-lib begin <module>' and
-// '# gsd:resolve-lib end'; these tests run those blocks, as shipped, in sandboxed installs.
+// came out empty. Each such step now carries a resolver block between '# gsd-resolve-lib begin <module>' and
+// '# gsd-resolve-lib end'; these tests run those blocks, as shipped, in sandboxed installs.
 
 const RESOLVER_SITES = [
   { file: WORKFLOW_PATH, module: 'code-review-flags.cjs', fatal: true },
   { file: WORKFLOW_PATH, module: 'code-review-depth.cjs', fatal: true },
   { file: WORKFLOW_PATH, module: 'fallow-runner.cjs', fatal: false },
   { file: path.join(ROOT, 'gsd-core', 'workflows', 'review.md'), module: 'pattern.cjs', fatal: true },
-  { file: PRE_PASS_STEP_PATH, module: 'fallow-runner.cjs', fatal: true },
+  { file: PRE_PASS_STEP_PATH, module: 'fallow-runner.cjs', fatal: true, shim: false },
 ];
-const RESOLVER_BEGIN = '# gsd:resolve-lib begin ';
-const RESOLVER_END = '# gsd:resolve-lib end';
+const RESOLVER_BEGIN = '# gsd-resolve-lib begin ';
+const RESOLVER_END = '# gsd-resolve-lib end';
 
 /** Every resolver block in one workflow file, in file order: { module, text }. */
 function resolverBlocks(file) {
@@ -4753,11 +4753,14 @@ describe('#5640 helper modules resolve from the installed runtime', { skip: !HAS
   });
 
   test('every site carries the same resolver (#5640)', () => {
+    // A site without the gsd_run candidate (its file's launcher line comes after this block) compares with the
+    // shim lines and the shim candidate removed from every site.
     const shape = (site) => resolverFor(site).text
       .split(site.module).join('<module>')
       .split('\n')
-      .filter((line) => !line.startsWith('if [ -z "$GSD_LIB_DIR" ]'))
       .map((line) => line.trim())
+      .filter((line) => !line.startsWith('if [ -z "$GSD_LIB_DIR" ]') && !line.includes('gsd_run'))
+      .map((line) => line.split(' "$_gsd_gr"').join(''))
       .join('\n');
     const shapes = RESOLVER_SITES.map(shape);
     for (const s of shapes) assert.equal(s, shapes[0], 'a site drifted from the shared resolver');

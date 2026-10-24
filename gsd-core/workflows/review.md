@@ -656,7 +656,7 @@ done
 # Rewrapped through unquoted command substitution (gsd-core#4109): a bare
 # `$DISPATCH_SLUGS` word-splits under bash but not zsh, collapsing every
 # slug onto one iteration there whenever 2+ reviewers were selected.
-# gsd:resolve-lib begin pattern.cjs (#5640): load helpers from the installed runtime, not the cwd
+# gsd-resolve-lib begin pattern.cjs (#5640): load helpers from the installed runtime, not the cwd
 _gsd_lib_probe="pattern.cjs"
 _gsd_rt="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 _gsd_gr="$(command -v gsd_run 2>/dev/null || true)"
@@ -667,7 +667,7 @@ _gsd_pick() { for _gsd_d; do if [ -n "$_gsd_d" ] && [ -f "$_gsd_d/$_gsd_lib_prob
 _gsd_pick "${GSD_TOOLS:+${GSD_TOOLS%/*}/lib}" "$_gsd_rt/gsd-core/bin/lib" "$_gsd_rt/.claude/gsd-core/bin/lib" "$_gsd_rt/.codex/gsd-core/bin/lib" "$_gsd_gr" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/gsd-core/bin/lib" "${CODEX_HOME:-$HOME/.codex}/gsd-core/bin/lib" || true
 if [ -z "$GSD_LIB_DIR" ]; then echo "ERROR: pattern.cjs not found in the GSD runtime. Looked in: ${GSD_TOOLS:+${GSD_TOOLS%/*}/lib, }${_gsd_rt}/gsd-core/bin/lib (and its .claude and .codex forms), ${_gsd_gr:-next to gsd_run (not on PATH)}, ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/gsd-core/bin/lib, ${CODEX_HOME:-$HOME/.codex}/gsd-core/bin/lib. Reinstall: npx -y @opengsd/gsd-core@latest --claude --local" >&2; exit 1; fi
 export GSD_LIB_DIR
-# gsd:resolve-lib end
+# gsd-resolve-lib end
 for SLUG in $(printf '%s' "$DISPATCH_SLUGS"); do
   [ "$SLUG" = "coderabbit" ] && continue
   REVIEW_FILE="$RUN_DIR/gsd-review-$SLUG.md"
