@@ -482,7 +482,7 @@ For each artifact: "What must be CONNECTED for this to function?"
 "Where is this most likely to break?" Key links = critical connections where breakage causes cascading failures.
 - `from` and `to` MUST be project-relative file paths only. Never put symbols, functions, or endpoints in `from:` or `to:`.
 - Symbols, functions, endpoints, and narrative details MUST be placed in `via:` (e.g. `via: "fetch in useEffect — calls /api/feed"`).
-- Verification requires `to` to appear as text in the `from` file, or a specific `pattern` regex to match either file. If `from` does not mention the `to` path literal, specify `pattern`.
+- Verification requires `to` to appear as text in the `from` file, or a specific `pattern` regex to match either file. Set `pattern` unless you know `from` will contain the `to` path string.
 
 See @~/.claude/gsd-core/references/planner-guidance.md for a worked example and the `must_haves` YAML format.
 
