@@ -1680,6 +1680,22 @@ describe('#4222 — the #683 base-check degrade is re-derived by the resolver, s
     assert.equal(flagless.status, 2, `the guard must refuse the flag-less spawn of a plan decided harness-worktree: stdout=${flagless.stdout} stderr=${flagless.stderr}`);
     assert.equal(JSON.parse(flagless.stdout).decision, 'block');
   });
+
+  test('#4222: an EMPTY --plan value (the per-plan gate\'s `"$plan_id"` after a lost shell) is still a plan-scoped write — no `none` for the whole phase', (t) => {
+    const { dir } = projectWithOrigin(t, 'gsd-4222-planscope-');
+    diverge(dir);
+
+    const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1', '--plan', ''], dir, env(dir));
+    assert.equal(r.success, true, r.error);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'harness-worktree', 'the flag, not its value, makes the write plan-scoped');
+    assert.equal(sentinel.plan, null, 'the empty value still names no plan in the record');
+
+    const flagless = runHook(agentPayload({
+      tool_input: { subagent_type: 'gsd-executor', prompt: '[gsd:dispatch phase="1" plan="01-03"] Execute the plan.' },
+    }), dir, { HOME: dir, CLAUDE_CONFIG_DIR: path.join(dir, '.claude') });
+    assert.equal(flagless.status, 2, `a phase-scoped none would let every plan of the phase spawn flag-less: stdout=${flagless.stdout} stderr=${flagless.stderr}`);
+  });
 });
 
 describe('#3045 MAJOR — --harness-flag can now accept a bare CLI-flag value (Cursor real registry value + generalized parsing)', () => {
