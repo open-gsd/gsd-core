@@ -17,6 +17,7 @@ const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { createTempGitProject, cleanup } = require('./helpers.cjs');
 
 const { evaluateTddReviewCheckpoint } = require('../gsd-core/bin/lib/gate-tdd-review-checkpoint.cjs');
+const { commitIsAncestor } = require('../gsd-core/bin/lib/gate-evaluation-scope.cjs');
 
 function git(dir, env, ...args) {
   return execFileSync(
@@ -26,9 +27,10 @@ function git(dir, env, ...args) {
   );
 }
 
+let commitCounter = 0;
 /** A commit that touches a file of its own (the gate scopes `git log` to `-- .`). */
 function commit(dir, message, env = {}) {
-  const file = `c-${Math.random().toString(36).slice(2)}.txt`;
+  const file = `c-${commitCounter++}.txt`;
   fs.writeFileSync(path.join(dir, file), `${message}\n`);
   git(dir, env, 'add', '-A');
   git(dir, env, 'commit', '-m', message);
@@ -72,7 +74,11 @@ describe('#5275 RED must precede GREEN by ancestry', () => {
       assert.equal(row.status, 'FAIL');
       assert.equal(row.reason, 'green_before_red');
       assert.deepEqual(row.missing, [], 'both commits exist: nothing is missing, the order is wrong');
-      assert.match(out.table, /GREEN.*before.*RED|precedes/i);
+      assert.ok(
+        out.table.includes('Plan 01-01 GREEN precedes RED: no feat(...) commit descends from a test(...) commit.'),
+        out.table,
+      );
+      assert.ok(!out.table.includes('missing:'), 'an order violation is not reported as a missing commit');
     });
   });
 
@@ -159,5 +165,28 @@ describe('#5275 RED must precede GREEN by ancestry', () => {
       assert.equal(out.rows[0].status, 'FAIL');
       assert.equal(out.rows[0].reason, 'green_before_red');
     });
+  });
+});
+
+describe('#5275 commitIsAncestor maps git answers to true / false / null', () => {
+  const answer = (exitCode, extra = {}) => () => ({ exitCode, stdout: '', stderr: '', timedOut: false, ...extra });
+  const ask = (runner, sha = 'a'.repeat(40), of = 'b'.repeat(40)) => commitIsAncestor(process.cwd(), sha, of, runner);
+
+  test('exit 0 is an ancestor, exit 1 is not', () => {
+    assert.equal(ask(answer(0)), true);
+    assert.equal(ask(answer(1)), false);
+  });
+
+  test('a git that cannot answer (bad object, timeout, missing git) is null, never false', () => {
+    assert.equal(ask(answer(128)), null);
+    assert.equal(ask(answer(null, { timedOut: true })), null);
+    assert.equal(ask(answer(127)), null);
+  });
+
+  test('an argument that could read as an option is refused without asking git', () => {
+    let asked = false;
+    const runner = () => { asked = true; return { exitCode: 0, stdout: '', stderr: '', timedOut: false }; };
+    assert.equal(ask(runner, '--all'), null);
+    assert.equal(asked, false);
   });
 });
