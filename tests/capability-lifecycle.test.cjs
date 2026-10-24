@@ -1917,8 +1917,8 @@ test('finding-2: an OVERSIZED lock body is treated as unparseable (no pid) and N
 });
 
 // Revert-fails: drop the startTime field from the lock body written by acquireLock → the body has no
-// `startTime` key, so this assertion (startTime present + equals the cached self start-time when
-// obtainable, else null) fails on the missing key.
+// `startTime` key, so this assertion (startTime present + equals the start-time the injected probe
+// reported for this process) fails on the missing key.
 test('finding-1: acquireLock records hostname + pid + token + startTime in the lockfile body', (t) => {
   // The start time comes from the injectable probe, never a live one: on Windows the live probe is a
   // PowerShell launch whose cold start can time out under load, which made this test (and `next`) red.
@@ -1948,6 +1948,19 @@ test('finding-1: an unobtainable self start-time is recorded as null (the key st
   const parsed = JSON.parse(fs.readFileSync(handle.path, 'utf8'));
   assert.ok('startTime' in parsed, 'lock body must record a startTime key');
   assert.strictEqual(parsed.startTime, null, 'an unobtainable start-time is recorded as null, not an error');
+  lifecycle.releaseLock(handle);
+});
+
+// The default (non-injected) path still records this process's real start-time. POSIX only: there the
+// probe is a /proc read or `ps`, not the PowerShell launch whose cold start made the old form of this
+// assertion depend on timing on Windows.
+test('finding-1: with the real probe, acquireLock records a non-null start-time on POSIX', { skip: process.platform === 'win32' }, () => {
+  lifecycle._resetLockProbes();
+  const handle = lifecycle.acquireLock(runtime());
+  assert.ok(handle, 'acquireLock must succeed on a fresh dir');
+  const parsed = JSON.parse(fs.readFileSync(handle.path, 'utf8'));
+  assert.strictEqual(typeof parsed.startTime, 'string', 'the real probe must yield a start-time string');
+  assert.ok(parsed.startTime.length > 0);
   lifecycle.releaseLock(handle);
 });
 
