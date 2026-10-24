@@ -4759,7 +4759,8 @@ describe('#5640 helper modules resolve from the installed runtime', { skip: !HAS
       .split(site.module).join('<module>')
       .split('\n')
       .map((line) => line.trim())
-      .filter((line) => !line.startsWith('if [ -z "$GSD_LIB_DIR" ]') && !line.includes('gsd_run'))
+      .filter((line) => !line.startsWith('if [ -z "$GSD_LIB_DIR" ]'))
+      .filter((line) => !/^(_gsd_gr=|case "\$_gsd_gr"|\[ -n "\$_gsd_gr" \])/.test(line))
       .map((line) => line.split(' "$_gsd_gr"').join(''))
       .join('\n');
     const shapes = RESOLVER_SITES.map(shape);
