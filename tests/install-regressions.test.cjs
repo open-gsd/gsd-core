@@ -2158,21 +2158,31 @@ describe('#1874 F6 adjacent: malformed settings.local.json does not crash the in
 
 describe('#5037: the installer never replaces a symlinked settings.json', () => {
   const USER_SETTINGS = { env: { MY_TOKEN: 'keep-me' } };
+  const { SYMLINKED_LEAF_REFUSAL } = require('../gsd-core/bin/lib/install-engine.cjs');
+  const UNCAUGHT_ERROR_RECORDER = path.join(__dirname, 'helpers', 'uncaught-error-code-recorder-preload.cjs');
 
-  // The settings writer's own refusal. Exit code 1 and an untouched link alone
-  // would also hold for an install that failed earlier for an unrelated reason,
-  // so the refusal cases require this message, which also names the opt-in.
-  const SETTINGS_SYMLINK_REFUSAL =
-    /writeSettings: settings file "[^"]*settings\.json" is a symlink the install root "[^"]*" does not trust[^\n]*re-run with GSD_ALLOW_SYMLINKED_DEST=1/;
-
+  // The installer exits through an uncaught error, so the preload records that
+  // error's code. Exit code 1 and an untouched link alone would also hold for
+  // an install that failed earlier for an unrelated reason, so the refusal
+  // cases also require the settings writer's own refusal code.
   function runInstaller(root, args, { optIn }) {
+    // A fresh name per run, so an earlier run's record can never be read back.
+    const recordFile = path.join(root, `uncaught-error-${crypto.randomUUID()}.json`);
     const env = installSpawnEnv({
       HOME: root,
       USERPROFILE: root,
+      GSD_UNCAUGHT_ERROR_RECORD_FILE: recordFile,
       ...(optIn ? { GSD_ALLOW_SYMLINKED_DEST: '1' } : {}),
     });
     delete env.GSD_TEST_MODE;
-    return runNode([INSTALL_SCRIPT, ...args], { cwd: root, env, timeoutMs: SCOPED_INSTALL_TIMEOUT_MS });
+    const result = runNode(['--require', UNCAUGHT_ERROR_RECORDER, INSTALL_SCRIPT, ...args], {
+      cwd: root,
+      env,
+      timeoutMs: SCOPED_INSTALL_TIMEOUT_MS,
+    });
+    // null when the run ended without an uncaught error.
+    const errorCode = fs.existsSync(recordFile) ? JSON.parse(fs.readFileSync(recordFile, 'utf8')).code : null;
+    return { ...result, errorCode };
   }
 
   // Writes `content` to <root>/dotfiles/settings.json and links `linkPath` to it.
@@ -2227,8 +2237,8 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
           // 1, not merely non-zero: a timed-out or killed installer reports null.
           assert.strictEqual(result.exitCode, 1,
             `a refused settings write must fail the install\n${result.stdout}\n${result.stderr}`);
-          assert.match(result.stderr, SETTINGS_SYMLINK_REFUSAL,
-            'the install must fail on the settings symlink refusal, not on some earlier error');
+          assert.strictEqual(result.errorCode, SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED,
+            `the install must fail on the settings symlink refusal, not on some earlier error\n${result.stderr}`);
           assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), before, 'the link target must be byte-for-byte unchanged');
         }
       });
@@ -2278,8 +2288,8 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
           // 1, not merely non-zero: a timed-out or killed installer reports null.
           assert.strictEqual(result.exitCode, 1,
             `a refused settings write must fail the install\n${result.stdout}\n${result.stderr}`);
-          assert.match(result.stderr, SETTINGS_SYMLINK_REFUSAL,
-            'the install must fail on the settings symlink refusal, not on some earlier error');
+          assert.strictEqual(result.errorCode, SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED,
+            `the install must fail on the settings symlink refusal, not on some earlier error\n${result.stderr}`);
           assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), sharedBefore, 'the link target must be byte-for-byte unchanged');
           assert.strictEqual(fs.readFileSync(localSettingsPath, 'utf8'), localBefore,
             'settings.local.json must not be half-migrated when the shared write is refused');
@@ -2332,8 +2342,8 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
           // 1, not merely non-zero: a timed-out or killed uninstall reports null.
           assert.strictEqual(result.exitCode, 1,
             `a refused settings write must fail the uninstall\n${result.stdout}\n${result.stderr}`);
-          assert.match(result.stderr, SETTINGS_SYMLINK_REFUSAL,
-            'the uninstall must fail on the settings symlink refusal, not on some earlier error');
+          assert.strictEqual(result.errorCode, SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED,
+            `the uninstall must fail on the settings symlink refusal, not on some earlier error\n${result.stderr}`);
           assert.ok(fs.existsSync(gsdCoreDir), 'no GSD file may be removed before the refusal');
           assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), installedSettings,
             'the link target must be byte-for-byte unchanged');

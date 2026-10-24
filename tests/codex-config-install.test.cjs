@@ -2607,7 +2607,9 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     isGsdOwnedCodexContextMonitorScript,
     hooksJsonReferencesCodexContextMonitor,
     codexHooksJsonHasManagedHooks,
+    CODEX_HOOKS_JSON_READ_FAILURE,
   } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
+  const { SYMLINKED_LEAF_REFUSAL } = require('../gsd-core/bin/lib/install-engine.cjs');
 
   let codexHome;
 
@@ -2627,6 +2629,15 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
   function readHooksJson(home) {
     const raw = fs.readFileSync(hooksJsonPath(home), 'utf8');
     return JSON.parse(raw);
+  }
+
+  // A Codex install rethrows a refused hook configuration wrapped in a
+  // "pre-write" error that keeps the refusal as its `cause`.
+  function assertCodexInstallRefused(code) {
+    assert.throws(() => runCodexInstall(codexHome), (err) => {
+      assert.strictEqual(err.cause && err.cause.code, code, `unexpected install error: ${err.message}`);
+      return true;
+    });
   }
 
   function monitorScriptPath(home) {
@@ -2788,7 +2799,7 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     fs.unlinkSync(hooksJsonPath(codexHome));
     fs.symlinkSync(realHooksJson, hooksJsonPath(codexHome));
 
-    assert.throws(() => runCodexInstall(codexHome), /symlink/i);
+    assertCodexInstallRefused(SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED);
 
     assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isSymbolicLink(),
       'the symlink itself must survive an aborted install — never replaced by a plain file');
@@ -2873,8 +2884,9 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
   });
 
   // A dangling hooks.json link is refused, never replaced, the same as a
-  // dangling settings.json link (#5037). With the opt-in already set, the
-  // refusal names the missing target instead of asking for the opt-in again.
+  // dangling settings.json link (#5037). With the opt-in already set, asking
+  // for it again would not help, so that refusal is TARGET_MISSING rather than
+  // NOT_TRUSTED.
   for (const optIn of [false, true]) {
     test(`a dangling hooks.json link is refused and left in place (GSD_ALLOW_SYMLINKED_DEST=${optIn ? '1' : 'unset'}) (#5037)`, () => {
       runCodexInstall(codexHome);
@@ -2883,7 +2895,7 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
       fs.symlinkSync(missingTarget, hooksJsonPath(codexHome));
       if (optIn) process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
 
-      assert.throws(() => runCodexInstall(codexHome), optIn ? /target does not exist/ : /GSD_ALLOW_SYMLINKED_DEST=1/);
+      assertCodexInstallRefused(optIn ? SYMLINKED_LEAF_REFUSAL.TARGET_MISSING : SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED);
 
       assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isSymbolicLink(), 'the dangling link must survive');
       assert.strictEqual(fs.readlinkSync(hooksJsonPath(codexHome)), missingTarget, 'the link must still point at the same target');
@@ -2906,7 +2918,7 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     fs.unlinkSync(hooksJsonPath(codexHome));
     fs.symlinkSync(target, hooksJsonPath(codexHome));
 
-    assert.throws(() => runCodexUninstall(codexHome), /symlink/);
+    assert.throws(() => runCodexUninstall(codexHome), { code: SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED });
 
     assert.deepStrictEqual(fs.readdirSync(codexSkillsRoot(codexHome)).sort(), skillsBefore,
       'no skill may be removed before the refusal');
@@ -2922,12 +2934,12 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
         const { CODEX_HOOKS_JSON_MAX_BYTES } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
         fs.writeFileSync(file, JSON.stringify({ padding: 'x'.repeat(CODEX_HOOKS_JSON_MAX_BYTES) }), 'utf8');
       },
-      error: /hooks\.json could not be read/,
+      error: { code: CODEX_HOOKS_JSON_READ_FAILURE.UNREADABLE },
     },
     {
       label: 'an unparseable',
       write: (file) => fs.writeFileSync(file, '{ not json', 'utf8'),
-      error: /hooks\.json parse failed/,
+      error: { code: CODEX_HOOKS_JSON_READ_FAILURE.UNPARSEABLE },
     },
   ];
   for (const { label, write, error } of unreadableHooksJsonCases) {
@@ -3021,6 +3033,12 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, UNINSTALL_HOOK_EVENTS), false, 'a dangling link reads as absent');
   });
 
+  test('CODEX_HOOKS_JSON_READ_FAILURE is frozen and holds exactly the two read failures (#5037)', () => {
+    assert.ok(Object.isFrozen(CODEX_HOOKS_JSON_READ_FAILURE), 'the codes must be frozen');
+    assert.deepStrictEqual(Object.keys(CODEX_HOOKS_JSON_READ_FAILURE).sort(), ['UNPARSEABLE', 'UNREADABLE']);
+    assert.strictEqual(new Set(Object.values(CODEX_HOOKS_JSON_READ_FAILURE)).size, 2, 'each code must be distinct');
+  });
+
   // The predicate reads hooks.json before the removal's symlink check, through
   // whatever a link points at, so its read must be bounded (#5037).
   test('codexHooksJsonHasManagedHooks counts a hooks.json over its size cap as unreadable without parsing it (#5037)', () => {
@@ -3077,7 +3095,7 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     });
     fs.writeFileSync(hooksJsonPath(codexHome), before, 'utf8');
 
-    assert.throws(() => removeCodexHooksJsonSessionStart(codexHome), /hooks\.json could not be read/);
+    assert.throws(() => removeCodexHooksJsonSessionStart(codexHome), { code: CODEX_HOOKS_JSON_READ_FAILURE.UNREADABLE });
     assert.strictEqual(fs.readFileSync(hooksJsonPath(codexHome), 'utf8'), before, 'the file must be left byte-for-byte unchanged');
   });
 
@@ -3093,20 +3111,21 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     // read times out instead of hanging the suite.
     const probe = [
       'const surface = require(process.argv[1]);',
-      'let threw = false;',
+      'let code = null;',
       'try {',
       '  surface.removeCodexHooksJsonSessionStart(process.argv[2]);',
-      '} catch {',
-      '  threw = true;',
+      '} catch (err) {',
+      '  code = err.code;',
       '}',
-      'process.stdout.write(JSON.stringify({ threw }));',
+      'process.stdout.write(JSON.stringify({ code }));',
     ].join('\n');
     const modulePath = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'runtime-hooks-surface.cjs');
     const result = runNode(['-e', probe, modulePath, codexHome], { timeoutMs: PROBE_TIMEOUT_MS });
 
     assert.strictEqual(result.timedOut, false, 'the read must not block on the FIFO');
     assert.strictEqual(result.exitCode, 0, result.stderr);
-    assert.deepStrictEqual(JSON.parse(result.stdout), { threw: true }, 'a FIFO is refused with an error');
+    assert.deepStrictEqual(JSON.parse(result.stdout), { code: CODEX_HOOKS_JSON_READ_FAILURE.UNREADABLE },
+      'a FIFO is refused as unreadable');
     assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isFIFO(), 'the FIFO must be left in place');
   });
 
@@ -3125,7 +3144,7 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     });
     fs.writeFileSync(hooksJsonPath(codexHome), hooksJsonBefore, 'utf8');
 
-    assert.throws(() => runCodexInstall(codexHome), /hooks\.json could not be read/);
+    assertCodexInstallRefused(CODEX_HOOKS_JSON_READ_FAILURE.UNREADABLE);
 
     assert.strictEqual(fs.readFileSync(hooksJsonPath(codexHome), 'utf8'), hooksJsonBefore, 'hooks.json must be left byte-for-byte unchanged');
     assert.strictEqual(fs.readFileSync(configPath, 'utf8'), configBefore, 'the pre-install config.toml must be restored');
