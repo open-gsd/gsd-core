@@ -269,7 +269,8 @@ const GIT_GLOBAL_FLAGS = new Set([
 // behind `!`, and also when it is an absolute path or holds shell
 // metacharacters: git runs any other value as `git credential-<value>`
 // through the shell, where a plain word only names a helper
-// (gitcredentials(7)).
+// (gitcredentials(7)). The built-in `store` helper is the exception: it reads
+// the file it is given, and `git credential fill` prints a URL line from it.
 const GIT_COMMAND_CONFIG_KEYS = new Set([
   'diff.external', 'sequence.editor', 'core.editor', 'core.sshcommand', 'core.fsmonitor', 'gpg.program',
   'diff.*.textconv', 'diff.*.command', 'filter.*.clean', 'filter.*.smudge', 'filter.*.process',
@@ -288,6 +289,7 @@ const GIT_CREDENTIAL_HELPER_KEYS = new Set(['credential.helper', 'credential.*.h
 const ABSOLUTE_PATH_RE = /^(?:[A-Za-z]:)?[\\/]/;
 // What can start a second command, substitute output or redirect.
 const SHELL_CONTROL_RE = /[;&|<>()$`\n]/;
+const STORE_HELPER_RE = /^store(?:\s|$)/;
 
 // #4856: `cp`/`mv` write their destination and never print it, so a secret
 // name that is ONLY the destination of a one-source copy or move is a name
@@ -1051,7 +1053,7 @@ function scanGitConfig(operands, depth) {
     } else if (GIT_COMMAND_CONFIG_KEYS.has(shape)) script = value;
     else if (value.startsWith('!') && (GIT_BANG_COMMAND_CONFIG_KEYS.has(shape) || GIT_CREDENTIAL_HELPER_KEYS.has(shape))) {
       script = value.slice(1);
-    } else if (GIT_CREDENTIAL_HELPER_KEYS.has(shape) && (ABSOLUTE_PATH_RE.test(value) || SHELL_CONTROL_RE.test(value))) {
+    } else if (GIT_CREDENTIAL_HELPER_KEYS.has(shape) && (ABSOLUTE_PATH_RE.test(value) || SHELL_CONTROL_RE.test(value) || STORE_HELPER_RE.test(value))) {
       script = value;
     } else continue;
     const hit = findSecretRead(script, depth + 1);
