@@ -135,6 +135,7 @@ interface Owners {
   locateProgressTable: typeof import('./phase-lifecycle.cjs')['locateProgressTable'];
   isSentinelPhaseId: typeof import('./phase-id.cjs')['isSentinelPhaseId'];
   parsePhaseFromProse: typeof import('./phase-id.cjs')['parsePhaseFromProse'];
+  resolvePhaseIdConvention: typeof import('./planning-workspace.cjs')['resolvePhaseIdConvention'];
   getMilestoneInfo: typeof import('./roadmap-parser.cjs')['getMilestoneInfo'];
   collectSection: typeof import('./markdown-sectionizer.cjs')['collectSection'];
   stateFieldValue: typeof import('./state-document.cjs')['stateFieldValue'];
@@ -172,6 +173,7 @@ function owners(): Owners {
     locateProgressTable: phaseLifecycleMod.locateProgressTable,
     isSentinelPhaseId: phaseIdMod.isSentinelPhaseId,
     parsePhaseFromProse: phaseIdMod.parsePhaseFromProse,
+    resolvePhaseIdConvention: planningWorkspaceMod.resolvePhaseIdConvention,
     getMilestoneInfo: roadmapParserMod.getMilestoneInfo,
     collectSection: markdownSectionizerMod.collectSection,
     stateFieldValue: stateDocumentMod.stateFieldValue,
@@ -200,16 +202,33 @@ function buildMilestone(cwd: string): string | null {
 
 const PHASE_CELL_RE = /^(\d+(?:\.\d+)*)\s*[.:)–—-]?\s*(.*)$/;
 
+// #5626: under `milestone-prefixed` the phase id is the whole `M-NN` (`3-01`), so the number capture takes
+// one optional `-NN` segment. Chosen by the convention value alone: every other convention keeps the
+// dotted-only capture above, and the `\d+-\d+` shape stays an ordinary leading integer there.
+const MILESTONE_PREFIXED = 'milestone-prefixed';
+const PHASE_CELL_MILESTONE_RE = /^(\d+(?:-\d+)?(?:\.\d+)*)\s*[.:)–—-]?\s*(.*)$/;
+
+/** The project's `phase_id_convention` (null when unset or unreadable), through its one owner. */
+function phaseIdConventionOf(cwd: string): string | null {
+  try {
+    return owners().resolvePhaseIdConvention(cwd);
+  } catch {
+    return null;
+  }
+}
+
 function phasesFromProgressTable(
   table: { columns: string[]; rows: Record<string, string>[] },
+  convention: string | null,
 ): StateContractPhase[] {
   const { isSentinelPhaseId } = owners();
   const phases: StateContractPhase[] = [];
+  const cellRe = convention === MILESTONE_PREFIXED ? PHASE_CELL_MILESTONE_RE : PHASE_CELL_RE;
   for (const row of table.rows) {
     const cell = (row['Phase'] ?? '').trim();
     if (!/^\d/.test(cell)) continue; // stray note row, no leading digit
     if (isSentinelPhaseId(cell)) continue; // phase 0 / 999.x sentinels
-    const m = PHASE_CELL_RE.exec(cell);
+    const m = cellRe.exec(cell);
     const number = m ? m[1] : cell;
     const name = m && m[2].trim().length > 0 ? m[2].trim() : null;
     phases.push({ number, name, status: parseRoadmapStatusCell(row['Status']) });
@@ -221,6 +240,8 @@ function phasesFromProgressTable(
 
 // `- [x] **Phase 1: Foundation**` / `- [ ] **Phase 2.1: Hardening**`.
 const PHASE_BULLET_RE = /^[ \t]*[-*][ \t]+\[([ xX])\][ \t]+\*\*Phase[ \t]+(\d+(?:\.\d+)*)[ \t]*:?[ \t]*([^*\n]*)\*\*/gm;
+// #5626: the same bullet under `milestone-prefixed`: the number capture takes one optional `-NN` segment.
+const PHASE_BULLET_MILESTONE_RE = /^[ \t]*[-*][ \t]+\[([ xX])\][ \t]+\*\*Phase[ \t]+(\d+(?:-\d+)?(?:\.\d+)*)[ \t]*:?[ \t]*([^*\n]*)\*\*/gm;
 
 /**
  * STATE.md's current phase, via the same frontmatter-then-body chain
@@ -229,7 +250,7 @@ const PHASE_BULLET_RE = /^[ \t]*[-*][ \t]+\[([ xX])\][ \t]+\*\*Phase[ \t]+(\d+(?
  * phase as unknown so every unchecked bullet is PENDING rather than
  * IN_PROGRESS by a guess.
  */
-function currentPhaseFromState(statePath: string): string | null {
+function currentPhaseFromState(statePath: string, convention: string | null): string | null {
   const { platformReadSync, extractFrontmatter, stripFrontmatter, stateFieldValue, parsePhaseFromProse } = owners();
   try {
     const raw = platformReadSync(statePath);
@@ -238,7 +259,7 @@ function currentPhaseFromState(statePath: string): string | null {
     const body = stripFrontmatter(raw);
     const { value } = stateFieldValue(fm, body, 'current_phase', 'Current Phase');
     if (!value) return null;
-    return parsePhaseFromProse(value).phase;
+    return parsePhaseFromProse(value, convention).phase;
   } catch {
     return null;
   }
@@ -254,15 +275,21 @@ function currentPhaseFromState(statePath: string): string | null {
  * `**Phase N` anchor inside `PHASE_BULLET_RE` is the second layer of that
  * defence — a plan bullet's text never starts with `**Phase`.
  */
-function phasesFromChecklist(roadmapContent: string, cwd: string, statePath: string): StateContractPhase[] {
+function phasesFromChecklist(
+  roadmapContent: string,
+  cwd: string,
+  statePath: string,
+  convention: string | null,
+): StateContractPhase[] {
   const { collectSection, isSentinelPhaseId } = owners();
   const section = collectSection(roadmapContent, (h) => /^phases$/i.test(h.text.trim()));
   if (!section) return [];
 
-  const currentPhase = currentPhaseFromState(statePath);
+  const currentPhase = currentPhaseFromState(statePath, convention);
   const phases: StateContractPhase[] = [];
   let match: RegExpExecArray | null;
-  const pattern = new RegExp(PHASE_BULLET_RE.source, PHASE_BULLET_RE.flags);
+  const bulletRe = convention === MILESTONE_PREFIXED ? PHASE_BULLET_MILESTONE_RE : PHASE_BULLET_RE;
+  const pattern = new RegExp(bulletRe.source, bulletRe.flags);
   while ((match = pattern.exec(section.body)) !== null) {
     const checked = match[1] === 'x' || match[1] === 'X';
     const number = match[2];
@@ -283,9 +310,10 @@ function buildPhases(cwd: string, paths: { roadmap: string; state: string }): St
     if (content === null) return [];
     if (content.charCodeAt(0) === 0xfeff) content = content.slice(1); // strip leading BOM
 
+    const convention = phaseIdConventionOf(cwd);
     const table = locateProgressTable(content);
-    if (table) return phasesFromProgressTable(table);
-    return phasesFromChecklist(content, cwd, paths.state);
+    if (table) return phasesFromProgressTable(table, convention);
+    return phasesFromChecklist(content, cwd, paths.state, convention);
   } catch {
     return [];
   }
