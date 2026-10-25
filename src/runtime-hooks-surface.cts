@@ -3392,9 +3392,10 @@ export = {
   resolveBashExecutable,
   resolveBashRunner,
   NODE_RUNNER_RESOLVER_HOOK,
-  // #5100: the installer reads the sentinel off the tracked entry it wrote,
-  // so the literal it matches on comes from here rather than being spelled a
-  // second time in bin/install.js.
+  // #5100: the literal the writer records for an unresolved Git Bash and the
+  // gate resolves through the Git Bash policy. Exported so a consumer that
+  // needs to recognise that entry imports it rather than respelling it;
+  // bin/install.js keys on the entry having no command instead.
   UNRESOLVED_BASH_SENTINEL,
 
   // Atomic write seam (shared with bin/install.js so all writes participate
