@@ -1077,6 +1077,65 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
   test('a non-Bash tool with the same text is never inspected', () => {
     assertAllowed(runHook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: 'notes-claude-agent-gsd-debugger.md' } }), 'read');
   });
+
+  // #5628: the `timeout DURATION` unwrap used to copy the remaining word list
+  // twice per wrapper, so cost grew with the square of the wrapper count.
+  const MAX_COMMAND_BYTES = 1024 * 1024;
+  const TAIL = 'claude --agent gsd-debugger';
+  const padded = (bytes) => 'timeout 1 '.repeat(Math.floor((bytes - TAIL.length) / 10)) + TAIL;
+  // A kill bound, not an elapsed-time assertion: a linear walk finishes in well
+  // under a second at 1 MiB, the quadratic one took ~20 s on a developer
+  // machine and far longer on loaded hosts (OpenCode/Kilo kill a hook at 8 s).
+  const LINEAR_WALK_KILL_BOUND_MS = 15000;
+
+  test('blocks: 1 MiB of leading timeout wrappers finishes inside the hook budget', () => {
+    const r = runHookSeam(HOOK_PATH, [], {
+      input: JSON.stringify(bash(padded(MAX_COMMAND_BYTES - 1))),
+      env: { ...process.env },
+      timeoutMs: LINEAR_WALK_KILL_BOUND_MS,
+    });
+    assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, '1 MiB padded', { code: 'debugger-cli-spawn', tool: 'Bash' });
+  });
+
+  test('a command at and past the size cap is still denied', () => {
+    for (const bytes of [MAX_COMMAND_BYTES, MAX_COMMAND_BYTES + 1]) {
+      const r = runHookSeam(HOOK_PATH, [], {
+        input: JSON.stringify(bash(padded(bytes) + ' '.repeat(Math.max(0, bytes - padded(bytes).length)))),
+        env: { ...process.env },
+        timeoutMs: LINEAR_WALK_KILL_BOUND_MS,
+      });
+      assert.equal(r.exitCode, 2, `${bytes} bytes: expected block`);
+    }
+  });
+
+  test('blocks: stacked timeouts', () => {
+    assertBlocked(runHook(bash('timeout 1 timeout 1 claude --agent gsd-debugger')), 'stacked', { code: 'debugger-cli-spawn' });
+  });
+
+  test('blocks: timeout interleaved with prefix wrappers and flags', () => {
+    assertBlocked(
+      runHook(bash('sudo timeout 1 env X=1 timeout -k 5 2 claude --agent=gsd-debugger')),
+      'interleaved',
+      { code: 'debugger-cli-spawn' },
+    );
+  });
+
+  for (const command of ['timeout 1 timeout', 'timeout', 'timeout 1', 'timeout -s', 'timeout 1 timeout 1 claude --agent gsd-executor']) {
+    test(`allows: timeout wrappers that never reach the debugger (${command})`, () => {
+      assertAllowed(runHook(bash(command)), command);
+    });
+  }
+
+  test('property: stacked timeout wrappers only change the verdict through the final agent', () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 0, max: 40 }), fc.boolean(), (depth, isDebugger) => {
+        const agent = isDebugger ? 'gsd-debugger' : 'gsd-executor';
+        const r = runHook(bash(`${'timeout 1 '.repeat(depth)}claude --agent ${agent}`));
+        return isDebugger ? r.status === 2 : r.status === 0;
+      }),
+      { numRuns: 12 },
+    );
+  });
 });
 
 describe('gsd-secret-read-guard: nested shell behind a wrapper with flags (#5627)', () => {
