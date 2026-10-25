@@ -89,11 +89,21 @@ test('tools/call: explicit null subcommand is a type error without dispatch (#53
   assert.equal(spawn.mock.callCount(), 0);
 });
 
+test('tools/call: spawn guard positive control intercepts a valid dispatch (#5325)', (t) => {
+  const spawn = t.mock.method(childProcess, 'spawnSync', () => ({ status: 0, stdout: '', stderr: '' }));
+  const res = handleMessage({
+    jsonrpc: '2.0', id: 14, method: 'tools/call',
+    params: { name: 'gsd_invoke_command', arguments: { family: 'config-path' } },
+  });
+  assert.notEqual(res.result.isError, true);
+  assert.equal(spawn.mock.callCount(), 1, 'the mock must observe a valid command dispatch');
+});
+
 test('tools/call: a supplied non-string subcommand never dispatches (#5325 property)', async (t) => {
   const spawn = t.mock.method(childProcess, 'spawnSync', () => ({ status: 0, stdout: '', stderr: '' }));
   await fc.assert(fc.property(fc.jsonValue().filter((value) => typeof value !== 'string'), (subcommand) => {
     const res = handleMessage({
-      jsonrpc: '2.0', id: 12, method: 'tools/call',
+      jsonrpc: '2.0', id: 15, method: 'tools/call',
       params: { name: 'gsd_invoke_command', arguments: { family: 'config-path', subcommand } },
     });
     assert.equal(res.result.isError, true);
