@@ -556,7 +556,7 @@ test('a NON-entrypoint finalize failure leaves an already-successful Codex insta
     // Kilo's throws, so the reversed rollback loop does reach Codex's entry —
     // but with a non-entrypoint error it must take the installer-migrations-only
     // closure, not restoreCodexSnapshot. A configured-entrypoint validation
-    // failure is the only trigger docs/how-to/update-gsd.md documents for
+    // failure is the only trigger the update-gsd how-to documents for
     // reverting a runtime install that otherwise succeeded; un-installing (on
     // update, downgrading) Codex because an unrelated runtime hit EACCES would
     // contradict the "Done!" the user has already been shown.
