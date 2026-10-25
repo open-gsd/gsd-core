@@ -324,7 +324,7 @@ test('row 10c — a heading indented up to 3 spaces is still a heading (CommonMa
 });
 
 test('row 10d — a cell that is a link wrapping a code span is a row', () => {
-  // docs/INVENTORY.md already writes file references as [`docs/AGENTS.md`](AGENTS.md)
+  // docs/INVENTORY.md already writes file references as [`docs/reference/agents.md`](reference/agents.md)
   // in prose. The first contributor who writes a FAMILY ROW that way gets an
   // inexplicable red on a row that plainly documents the file.
   const text = emptySections({

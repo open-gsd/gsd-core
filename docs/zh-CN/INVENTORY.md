@@ -1,6 +1,6 @@
 # GSD 已发布功能清单
 
-> 所有已发布 GSD 功能面的权威目录：命令、代理、工作流、参考资料、CLI 模块和钩子。当广义文档（AGENTS.md、COMMANDS.md、ARCHITECTURE.md、CLI-TOOLS.md）与文件系统不一致时，以本文件及代码库目录树为准。
+> 所有已发布 GSD 功能面的权威目录：命令、代理、工作流、参考资料、CLI 模块和钩子。当广义文档（reference/agents.md、COMMANDS.md、ARCHITECTURE.md、CLI-TOOLS.md）与文件系统不一致时，以本文件及代码库目录树为准。
 
 ## 使用说明
 
@@ -14,7 +14,7 @@
 
 ## 代理
 
-完整清单位于 `agents/gsd-*.md`。"主要文档"列标注了 [`docs/AGENTS.md`](../AGENTS.md) 是否提供完整角色卡（*primary*）、"高级与专项代理"章节中的简短存根（*advanced stub*），或未覆盖（*inventory only*）。
+完整清单位于 `agents/gsd-*.md`。"主要文档"列标注了 [`docs/reference/agents.md`](../reference/agents.md) 是否提供完整角色卡（*primary*）、"高级与专项代理"章节中的简短存根（*advanced stub*），或未覆盖（*inventory only*）。
 
 | 代理 | 角色（一行描述） | 由谁启动 | 主要文档 |
 |------|----------------|----------|----------|
@@ -52,7 +52,7 @@
 | gsd-doc-classifier | 将单个规划文档分类为 ADR、PRD、SPEC、DOC 或 UNKNOWN；并行生成以处理文档语料库。 | `/gsd-ingest-docs` | advanced stub |
 | gsd-doc-synthesizer | 将已分类的规划文档综合为一个统一上下文，具有优先级规则、循环检测和三桶冲突报告。 | `/gsd-ingest-docs` | advanced stub |
 
-**覆盖说明。** `docs/AGENTS.md` 为主要代理提供了完整角色卡，并为高级代理提供了简洁存根。该文件中的代理工具权限摘要仅涵盖主要代理；高级代理的工具列表记录在 `agents/gsd-*.md` 中各代理的 frontmatter 里。
+**覆盖说明。** `docs/reference/agents.md` 为主要代理提供了完整角色卡，并为高级代理提供了简洁存根。该文件中的代理工具权限摘要仅涵盖主要代理；高级代理的工具列表记录在 `agents/gsd-*.md` 中各代理的 frontmatter 里。
 
 ---
 
@@ -488,7 +488,7 @@
 
 - 当新的命令、代理、工作流、参考资料、CLI 模块或钩子发布时，请在发布前更新此处对应的章节。
 - `tests/` 下的漂移守卫测试（参见上方的"使用说明"）断言每个已发布文件都在此清单中列举。未在此处有对应行的新文件将导致 CI 失败。
-- 当文件系统与 `docs/ARCHITECTURE.md` 的数量或精选子集文档（例如 `docs/AGENTS.md` 的主要名册）不一致时，本文件为准。
+- 当文件系统与 `docs/ARCHITECTURE.md` 的数量或精选子集文档（例如 `docs/reference/agents.md` 的主要名册）不一致时，本文件为准。
 
 ## 相关资料
 

@@ -268,7 +268,7 @@ ADR-857 (the capability system + the `loop render-hooks` resolver + the workflow
 1. `capabilities/mempalace/capability.json` (above).
 2. `node scripts/gen-capability-registry.cjs --write` → regenerates `capability-registry.cjs` (do not hand-edit).
 3. Add `commands/gsd/mempalace-recall.md`, `commands/gsd/mempalace-capture.md`.
-4. Add `agents/gsd-mempalace-curator.md` (+ ripple to `scripts/research-profiles.cjs`/`docs/AGENTS.md` only if it's a research-profile agent — the curator is not, so likely n/a).
+4. Add `agents/gsd-mempalace-curator.md` (+ ripple to `scripts/research-profiles.cjs`/`docs/reference/agents.md` only if it's a research-profile agent — the curator is not, so likely n/a).
 5. Add `capabilities/mempalace/fragments/recall-discuss.md` + `fragments/capture-problems.md`.
 6. Config keys: new ⇒ federated automatically; **no** `loadConfig` whitelist edit.
 7. Confirm `id: mempalace` does **not** collide with a `CLUSTERS` key in `src/clusters.cts` (HARD consistency gate) — if it does, match exactly or rename.

@@ -76,7 +76,7 @@ Closes #
   - Behavior or output change → `docs/USER-GUIDE.md` and/or `docs/COMMANDS.md`
   - Configuration / schema change → `docs/CONFIGURATION.md`
   - Architectural change → `docs/ARCHITECTURE.md` and/or `docs/adr/`
-  - Agent or skill change → `docs/AGENTS.md`
+  - Agent or skill change → `docs/reference/agents.md`
 - [ ] All `docs/` content added in this PR is written in English
 - [ ] If genuinely no user-facing docs impact (infrastructure / internal refactor / test-only),
       apply the `no-docs` label **or** add `<!-- docs-exempt: <reason> -->` inside each

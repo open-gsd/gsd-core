@@ -122,7 +122,7 @@ const DOCS_GUARD_EXEMPT_DOCS_PATHS = {
   // reads that (or any) docs/ file.
   'capability-validator-task-content-resolver.test.cjs': ['docs/adr/3646-per-task-content-resolution-seam.md'],
   'ci-docs-guard-registry.test.cjs': [
-    'docs/AGENTS.md', 'docs/COMMANDS.md', 'docs/INVENTORY.md', 'docs/a.md', 'docs/adr',
+    'docs/reference/agents.md', 'docs/COMMANDS.md', 'docs/INVENTORY.md', 'docs/a.md', 'docs/adr',
     'docs/adr/0001-example.md', 'docs/adrenaline.md', 'docs/bar.md', 'docs/foo.md', 'docs/how-to/foo.md',
     'docs/how-to/some-unrelated-guide.md', 'docs/how-to/x.md', 'docs/some-unrelated-file.md',
     'docs/totally-unrelated.md',

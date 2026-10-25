@@ -927,7 +927,7 @@ const REMEDIES = Object.freeze({
   legacy_read_tag:
     'replace <files_to_read> with <required_reading> (#3423 standardized on the gate tag)',
   read_tag_gate_missing:
-    "add the <required_reading> MUST-Read gate clause to this agent's instructions (see docs/AGENTS.md)",
+    "add the <required_reading> MUST-Read gate clause to this agent's instructions (see docs/reference/agents.md)",
   unmatched_consumer_token:
     'declare the producing agent and marker in the registry, or remove the dispatch — nothing emits this token',
   unresolved_reference_include:
