@@ -657,13 +657,15 @@ describe('regressions: #5551 milestone.lock stays out of git status', () => {
   const { execFileSync } = require('node:child_process');
   const ENTRY = '/.planning/milestone.lock';
 
-  const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf-8' });
+  const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+  const git = (cwd, ...args) =>
+    execFileSync('git', args, { cwd, encoding: 'utf-8', timeout: LOOP_HOOK_POINT_CLI_TIMEOUT_MS });
   const status = (cwd) => git(cwd, 'status', '--porcelain', '--untracked-files=all');
   const excludeFile = (cwd) => path.resolve(cwd, git(cwd, 'rev-parse', '--git-path', 'info/exclude').trim());
   const entries = (cwd) =>
-    (fs.existsSync(excludeFile(cwd)) ? fs.readFileSync(excludeFile(cwd), 'utf-8') : '')
-      .split('\n')
-      .filter((l) => l === ENTRY);
+    splitLines(fs.existsSync(excludeFile(cwd)) ? fs.readFileSync(excludeFile(cwd), 'utf-8') : '').filter(
+      (l) => l === ENTRY,
+    );
   const begin = (cwd, phase = '1') =>
     runGsdTools(['state', 'begin-phase', '--phase', phase, '--name', 'setup', '--plans', '4'], cwd, {
       ...SESSION_A,
@@ -699,7 +701,7 @@ describe('regressions: #5551 milestone.lock stays out of git status', () => {
     fs.mkdirSync(path.dirname(excludeFile(tmpDir)), { recursive: true });
     fs.writeFileSync(excludeFile(tmpDir), '*.keep-me');
     assert.ok(begin(tmpDir).success);
-    const lines = fs.readFileSync(excludeFile(tmpDir), 'utf-8').split('\n');
+    const lines = splitLines(fs.readFileSync(excludeFile(tmpDir), 'utf-8'));
     assert.ok(lines.includes('*.keep-me'), `pre-existing line lost: ${JSON.stringify(lines)}`);
     assert.ok(lines.includes(ENTRY));
   });
@@ -724,8 +726,7 @@ describe('regressions: #5551 milestone.lock stays out of git status', () => {
   });
 
   test('a linked worktree writes the entry to the shared exclude and hides the claim', () => {
-    const linked = fs.mkdtempSync(path.join(path.dirname(tmpDir), 'gsd-linked-'));
-    fs.rmSync(linked, { recursive: true });
+    const linked = path.join(path.dirname(tmpDir), `gsd-linked-5551-${process.pid}`);
     try {
       git(tmpDir, 'worktree', 'add', '-q', '-b', 'linked-5551', linked);
       fs.mkdirSync(path.join(linked, '.planning'), { recursive: true });
@@ -745,7 +746,7 @@ describe('regressions: #5551 milestone.lock stays out of git status', () => {
     assert.ok(begin(sub).success);
     assert.doesNotMatch(status(tmpDir), /milestone\.lock/);
     assert.ok(
-      fs.readFileSync(excludeFile(tmpDir), 'utf-8').split('\n').includes('/we\\[ir]d\\*dir/.planning/milestone.lock'),
+      splitLines(fs.readFileSync(excludeFile(tmpDir), 'utf-8')).includes('/we\\[ir]d\\*dir/.planning/milestone.lock'),
     );
   });
 });
