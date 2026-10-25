@@ -1238,9 +1238,10 @@ describe('gsd-secret-read-guard: nested shell behind a wrapper with flags (#5627
 });
 
 describe('gsd-secret-read-guard: bundled short-flag clusters (#5046)', () => {
-  // operandNamesSecret is the parser: for a single-dash word it walks tails of
-  // the cluster and stops at the first tail that names a secret. A digit-first
-  // cluster (`grep -2if.env pat f`) takes the same walk as a letter-first one.
+  // operandNamesSecret is the parser: for a single-dash word it checks the
+  // value after the run of option characters, in addition to the historical
+  // two-character strip. A digit-first cluster (`grep -2if.env pat f`) is read
+  // the same way as a letter-first one.
   //
   // The prefix vocabulary is drawn from real short options, never read back from
   // the hook's own tables, and covers both first-character classes: letters, a
@@ -1270,10 +1271,9 @@ describe('gsd-secret-read-guard: bundled short-flag clusters (#5046)', () => {
     }), PROPERTY_RUNS);
   });
 
-  // Boundary cases the generated clusters cannot reach: the operand sits at
-  // k=2 (one flag char), k=3 (two) and len-1 (nothing after it), and a cluster
-  // with no secret-bearing tail keeps the historical strip. One test per row,
-  // so a failing row names itself.
+  // Boundary cases the generated clusters cannot reach: the value follows one
+  // option character, two, or three, and a cluster with no secret-bearing value
+  // keeps the historical strip. One test per row, so a failing row names itself.
   for (const cluster of ['-2.env', '-1.env', '-i.env', '-if.env', '-2if.env', '-nif.env', '-2nif.env']) {
     test(`cluster boundary: grep ${cluster} reaches the secret name`, () => {
       const cmd = `grep ${cluster} pat f`;
@@ -1313,6 +1313,24 @@ describe('gsd-secret-read-guard: bundled short-flag clusters (#5046)', () => {
     ['head -n1.env', '-n1.env'],
   ]) {
     test(`a secret-named option value is blocked (new denial): ${cmd}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path });
+    });
+  }
+
+  // Documented fail-safe false positive (#5046): the run of option characters
+  // also swallows the leading letters and digits of a value, so the check sees
+  // only the trailing `.env` and a non-secret name such as `app.env` is denied
+  // here although `cat app.env` is allowed. A cluster is lexically ambiguous
+  // (`-fapp.env` is option `f` with file `app.env`), and reading it as a file
+  // would reopen the bypass, so the class is pinned rather than narrowed.
+  for (const [cmd, path] of [
+    ['grep -fapp.env pat f', '-fapp.env'],
+    ['grep -fprod.env pat f', '-fprod.env'],
+    ['grep -ofoo.env pat f', '-ofoo.env'],
+    ['git log -Sconfig.env', '-Sconfig.env'],
+    ['sort -k2.env f', '-k2.env'],
+  ]) {
+    test(`an alphanumeric-leading value ending in a secret name is blocked (documented class): ${cmd}`, () => {
       assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path });
     });
   }
@@ -1391,7 +1409,9 @@ describe('gsd-secret-read-guard: bundled short-flag clusters (#5046)', () => {
 
   // The bundled verdict equals the verdict for the same value given unbundled
   // (`cat <value>`), for random option runs and values built from the
-  // `.env` / `.envrc` / `.secrets` look-alikes with a random terminal.
+  // `.env` / `.envrc` / `.secrets` look-alikes with a random terminal. Values
+  // never start with a letter or digit (LEAD_UNIT), so the documented
+  // alphanumeric-leading divergence above is outside this property's scope.
   const FLAG_RUN = fc.array(fc.constantFrom('i', 'n', 'f', 'v', '2', '1', 'A'), { minLength: 1, maxLength: 4 })
     .map((l) => l.join(''));
   const LEAD_UNIT = fc.constantFrom('.env', '.envrc', '.ENVRC', '.secrets.bak', '.env.example', '.secretsx', '/', '.');
@@ -1415,5 +1435,4 @@ describe('gsd-secret-read-guard: bundled short-flag clusters (#5046)', () => {
       },
     ), PROPERTY_RUNS);
   });
-
 });

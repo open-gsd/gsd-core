@@ -803,8 +803,10 @@ const CLUSTER_FLAG_CHAR_RE = /[A-Za-z0-9]/;
 // starts right after its run of option characters (#5046): `-if.env` holds
 // `.env`, `-nf=.env` holds `.env` after the `=`. That value is checked as
 // well as the historical two-character strip, so the verdict is never looser
-// than base and costs a fixed number of `namesSecret` calls. Limits are
-// pinned in tests.
+// than base and costs a fixed number of `namesSecret` calls (at most three,
+// whatever the word's length). The option run also swallows a value's leading
+// letters and digits, so `-fapp.env` is denied although `cat app.env` is not:
+// a fail-safe false positive, pinned in tests.
 function operandNamesSecret(text) {
   let v = text;
   if (v.startsWith('@')) v = v.slice(1);
