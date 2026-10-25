@@ -140,7 +140,6 @@ describe('key registered everywhere git.create_tag is (row 21)', () => {
   const readJson = (...segments) => JSON.parse(fs.readFileSync(path.join(ROOT, ...segments), 'utf8'));
 
   test('schema manifest, defaults manifest and template agree on the key and default', () => {
-    // allow-test-rule: runtime-contract-is-the-product
     const schema = readJson('gsd-core', 'bin', 'shared', 'config-schema.manifest.json');
     const keyLists = Object.values(schema).filter(Array.isArray);
     assert.ok(keyLists.some((list) => list.includes('git.create_tag') && list.includes('git.repo_tagging')),

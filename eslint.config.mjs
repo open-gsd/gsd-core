@@ -372,6 +372,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/commands.cjs',
       'gsd-core/bin/lib/state.cjs',
       'gsd-core/bin/lib/milestone.cjs',
+      // #5706: tsc-generated runtime artifact — lint src/milestone-release-map.cts, not this.
+      'gsd-core/bin/lib/milestone-release-map.cjs',
       'gsd-core/bin/lib/phase.cjs',
       'gsd-core/bin/lib/verify.cjs',
       'gsd-core/bin/lib/init.cjs',

@@ -751,6 +751,29 @@ function detectGitCreateTag(cwd: string): boolean {
 }
 
 /**
+ * `git.repo_tagging` ground truth (#5706, epic #3628): the milestone tagging
+ * mode exposed to `complete-milestone.md`. Only the documented `per_repo`
+ * opts in; an absent key or any other stored value reads as the default
+ * `single` (today's behavior), matching `loadConfig`'s resolution.
+ */
+function detectRepoTagging(cwd: string): 'single' | 'per_repo' {
+  return readConfigJsonValue(cwd, ['git', 'repo_tagging']) === 'per_repo' ? 'per_repo' : 'single';
+}
+
+/**
+ * The configured `planning.sub_repos` (#5706): an array of non-empty repo
+ * names, possibly empty. A legacy top-level `sub_repos` is honored when the
+ * nested key is absent, the same flat-then-nested order `loadConfig` applies.
+ * Non-string members are dropped; any degraded read yields `[]`.
+ */
+function detectSubRepos(cwd: string): string[] {
+  const nested = readConfigJsonValue(cwd, ['planning', 'sub_repos']);
+  const raw = nested !== undefined ? nested : readConfigJsonValue(cwd, ['sub_repos']);
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((name): name is string => typeof name === 'string' && name.trim() !== '');
+}
+
+/**
  * `state:phase-mvp-mode` ground truth (design doc §Behavior table: ROADMAP.md
  * `**Mode:** mvp` for the CURRENT phase). Bounded, non-throwing — an absent
  * `phaseNumber`, an absent ROADMAP.md, an absent phase heading, or a phase
@@ -3532,6 +3555,10 @@ function cmdInitCompleteMilestone(
     milestones_path: fs.existsSync(milestonesPath) ? toPosixPath(milestonesPath) : null,
     project_path: fs.existsSync(projectPath) ? toPosixPath(projectPath) : null,
     requirements_path: fs.existsSync(requirementsPath) ? toPosixPath(requirementsPath) : null,
+    // #5706 (epic #3628): the repositories configured for this project and the
+    // milestone tagging mode, so the workflow reads both from one init call.
+    sub_repos: detectSubRepos(cwd),
+    repo_tagging: detectRepoTagging(cwd),
   };
 
   // #5195: `state:flat-mode` gates the PROJECT.md evolution review. PROJECT.md

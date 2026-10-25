@@ -85,6 +85,10 @@
  *     [--no-archive-phases]          Skip moving phase dirs to milestones/vX.Y-phases/ (archived by default)
  *     [--archive-quick]              Move .planning/quick/* dirs to milestones/vX.Y-quick/ + reset the
  *                                    Quick Tasks Completed table (#2142; opt-in, default OFF)
+ *     [--release-map <file>]         Archive a per-repository release map (JSON array of
+ *                                    {repo, release, reference, environment, status, tag}) as
+ *                                    milestones/vX.Y-RELEASE-MAP.json and record it in MILESTONES.md
+ *                                    (#5706; validated before any write, absent = unchanged)
  *
  *   milestone archive-quick <version>  Move .planning/quick/* dirs to milestones/vX.Y-quick/ + reset the
  *                                      Quick Tasks Completed table, WITHOUT the milestone complete close-out
@@ -3217,7 +3221,18 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // --dry-run) the command refuses before touching anything. Distinct
             // from --force, which bypasses the narrow scope guards only.
             const confirm = args.includes('--confirm');
-            milestone.cmdMilestoneComplete(cwd, args[2], { name: milestoneName, archivePhases, force, dryRun, archiveQuick, confirm }, raw);
+            // #5706 (epic #3628): optional caller-supplied release map file.
+            // A flag with no usable value fails loud rather than being dropped.
+            let releaseMap = null;
+            const releaseMapIdx = args.indexOf('--release-map');
+            if (releaseMapIdx !== -1) {
+              const releaseMapValue = args[releaseMapIdx + 1];
+              if (typeof releaseMapValue !== 'string' || releaseMapValue.startsWith('--') || releaseMapValue.trim() === '') {
+                error('--release-map requires a file path (a JSON array of release-map entries)');
+              }
+              releaseMap = releaseMapValue;
+            }
+            milestone.cmdMilestoneComplete(cwd, args[2], { name: milestoneName, archivePhases, force, dryRun, archiveQuick, confirm, releaseMap }, raw);
           } else if (subcommand === 'archive-quick') {
             // #2142 escalation: narrow archival-only entry point (does NOT
             // touch ROADMAP/REQUIREMENTS/MILESTONES.md, runs no completion

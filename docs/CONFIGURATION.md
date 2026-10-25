@@ -104,6 +104,7 @@ GSD stores project settings in `.planning/config.json`. Created during `/gsd-new
   "git": {
     "branching_strategy": "none",
     "create_tag": true,
+    "repo_tagging": "single",
     "phase_branch_template": "gsd/phase-{phase}-{slug}",
     "milestone_branch_template": "gsd/{milestone}-{slug}",
     "quick_branch_template": null
@@ -1266,9 +1267,35 @@ All four fields are **optional and additive** — STATE.md files without them ke
 | `git.protected_branches` | array of non-empty strings | (none) | Optional additional shared branches that should trigger protected-branch warnings alongside the resolved base branch |
 | `git.allow_default_branch_commits` | boolean | `false` | Escape hatch (#3819): when `true`, the executor's pre-commit guard no longer refuses to commit on the resolved default branch. Explicitly configured `git.protected_branches` names are still enforced. |
 | `git.create_tag` | boolean | `true` | Create a git tag (`v[X.Y]`) on milestone completion. Set to `false` for projects with their own release flow |
+| `git.repo_tagging` | enum | `single` | Milestone tagging mode (#5706): `single` or `per_repo`. `single` is the existing behavior. `per_repo` opts a multi-repo project into recording one release per configured repository (see [Per-repository release mapping](#per-repository-release-mapping)). Independent of `git.create_tag`; `git.create_tag: false` with `per_repo` records the map and creates no tags. An invalid value in a hand-edited `config.json` reads as `single` |
 | `git.phase_branch_template` | string | `gsd/phase-{phase}-{slug}` | Branch name template for phase strategy |
 | `git.milestone_branch_template` | string | `gsd/{milestone}-{slug}` | Branch name template for milestone strategy |
 | `git.quick_branch_template` | string or null | `null` | Optional branch name template for `/gsd-quick` tasks |
+
+### Per-repository release mapping
+
+A multi-repository project can record which release each repository shipped for a milestone. The
+record is a release map: a JSON array supplied to `milestone complete <version> --release-map <file>`
+and archived by value. `git.repo_tagging` selects the tagging mode; `init complete-milestone` exposes
+it as `repo_tagging` next to `sub_repos` (the configured repositories, possibly empty).
+
+Each release map entry has these fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `repo` | string | Repository name. Required, non-blank, unique within the map. Treated as data, never as a path |
+| `release` | string or null | The repository's release version or tag |
+| `reference` | string or null | A commit SHA or pull request reference |
+| `environment` | string or null | Target environment, free text (for example `production`, `development`, `npm`) |
+| `status` | enum | Required. Release map statuses: `released`, `deployed`, `unreleased` |
+| `tag` | enum | Required. Release map tag states: `created`, `already_tagged`, `skipped`, `none` |
+
+Every string field is limited to 200 characters and a map to 256 entries. Unknown fields are rejected.
+An entry is archived as recorded: it is never filtered against `planning.sub_repos`, so a repository
+that is skipped, unreleased, or no longer configured stays in the map. The archive keeps the raw
+values in `.planning/milestones/<version>-RELEASE-MAP.json` (`{ "version", "entries" }`), and the
+MILESTONES.md entry gains a **Release mapping:** table with the values escaped for markdown. A
+milestone archived without a map is unaffected.
 
 ### Protected Branch Warnings
 

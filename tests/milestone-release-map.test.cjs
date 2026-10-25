@@ -231,19 +231,16 @@ describe('parity: enums, docs and glossary (row 19)', () => {
   }
 
   test('statuses and tag states match docs/CONFIGURATION.md', () => {
-    // allow-test-rule: docs-parity
     assert.deepEqual(listedValues(docs, 'Release map statuses').sort(), [...RELEASE_MAP_STATUSES].sort());
     assert.deepEqual(listedValues(docs, 'Release map tag states').sort(), [...RELEASE_MAP_TAG_STATES].sort());
   });
 
   test('statuses and tag states match the CONTEXT.md glossary entry', () => {
-    // allow-test-rule: docs-parity
     assert.deepEqual(listedValues(context, 'Release map statuses').sort(), [...RELEASE_MAP_STATUSES].sort());
     assert.deepEqual(listedValues(context, 'Release map tag states').sort(), [...RELEASE_MAP_TAG_STATES].sort());
   });
 
   test('the repo_tagging enum in the schema manifest key list and defaults manifest agree', () => {
-    // allow-test-rule: runtime-contract-is-the-product
     const defaults = JSON.parse(fs.readFileSync(path.join(ROOT, 'gsd-core', 'bin', 'shared', 'config-defaults.manifest.json'), 'utf8'));
     assert.equal(defaults.git.repo_tagging, 'single');
   });
