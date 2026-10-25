@@ -376,75 +376,38 @@ describe('roadmap-upgrade clean-tree failure reports its cause (#5048)', () => {
     return thrown;
   }
 
-  test('a timed-out status says so, with the bound it exceeded', (t) => {
-    const err = Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' });
-    const thrown = statusFailureThrows(t, { status: null, stdout: '', stderr: '', signal: 'SIGTERM', error: err });
-    assert.match(thrown.message, /^git status failed: git status timed out after 10000 ms$/);
-  });
-
-  // #5048 review (Minor 3): the bound above is reported, not asserted. These
-  // rows pin WHERE the boundary sits: the number in the message must be the
-  // timeout the seam was actually given, and a spawn that finished inside that
-  // bound must fall through to the clean-tree check rather than report a
-  // timeout it did not hit. spawnSync is modelled with its own real contract —
-  // elapsed >= the `timeout` it was handed is what produces ETIMEDOUT — so the
-  // stub reads the option rather than restating 10000.
-  describe('the reported bound is the bound the seam was given (#5048)', () => {
-    const STATUS_TIMEOUT_MS = 10_000;
-
-    /** Drive applyMigration with spawnSync answering on elapsed-vs-timeout. */
-    function runAtElapsed(t, elapsedMs) {
-      const childProcess = require('node:child_process');
-      const dir = createTempDir('m3-boundary-');
-      t.after(() => {
-        childProcess.spawnSync = realSpawnSync;
-        cleanup(dir);
-      });
-      const realSpawnSync = childProcess.spawnSync;
-      let passedTimeout;
-      childProcess.spawnSync = (_cmd, _args, opts) => {
-        passedTimeout = opts.timeout;
-        if (elapsedMs >= opts.timeout) {
-          return {
-            status: null,
-            stdout: '',
-            stderr: '',
-            signal: 'SIGTERM',
-            error: Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' }),
-          };
-        }
-        // Under the bound: a dirty tree, which is the next gate's own verdict
-        // and therefore proves the timeout branch did NOT fire.
-        return { status: 0, stdout: ' M tracked.txt\n', stderr: '', signal: null, error: null };
+  // #5048 review (Minor 8): production never compares elapsed time against the
+  // bound, so a stub that models spawnSync's own timeout contract only tests the
+  // stub. What carries information is that the bound handed to git is the bound
+  // the message names.
+  test('a timed-out status says so, and names the bound the seam handed to git', (t) => {
+    const childProcess = require('node:child_process');
+    const dir = createTempDir('m3-status-bound-');
+    const realSpawnSync = childProcess.spawnSync;
+    let passedTimeout;
+    t.after(() => {
+      childProcess.spawnSync = realSpawnSync;
+      cleanup(dir);
+    });
+    childProcess.spawnSync = (_cmd, _args, opts) => {
+      passedTimeout = opts.timeout;
+      return {
+        status: null,
+        stdout: '',
+        stderr: '',
+        signal: 'SIGTERM',
+        error: Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' }),
       };
-      let thrown;
-      try {
-        applyMigration(dir, EMPTY_PLAN, { dryRun: false });
-      } catch (err) {
-        thrown = err;
-      }
-      assert.ok(thrown, 'applyMigration resolved despite a failing git status');
-      return { message: thrown.message, passedTimeout };
+    };
+    let thrown;
+    try {
+      applyMigration(dir, EMPTY_PLAN, { dryRun: false });
+    } catch (err) {
+      thrown = err;
     }
-
-    test('limit - 1: under the bound, the dirty-tree check answers, not a timeout', (t) => {
-      const { message, passedTimeout } = runAtElapsed(t, STATUS_TIMEOUT_MS - 1);
-      assert.equal(passedTimeout, STATUS_TIMEOUT_MS);
-      assert.match(message, /^Working tree is dirty\./);
-    });
-
-    test('limit: at the bound, the timeout names that same bound', (t) => {
-      const { message, passedTimeout } = runAtElapsed(t, STATUS_TIMEOUT_MS);
-      assert.equal(passedTimeout, STATUS_TIMEOUT_MS);
-      assert.match(message, new RegExp(`^git status failed: git status timed out after ${STATUS_TIMEOUT_MS} ms$`));
-    });
-
-    test('limit + 1: past the bound, still the configured bound, never an elapsed figure', (t) => {
-      const { message, passedTimeout } = runAtElapsed(t, STATUS_TIMEOUT_MS + 1);
-      assert.equal(passedTimeout, STATUS_TIMEOUT_MS);
-      assert.match(message, new RegExp(`^git status failed: git status timed out after ${STATUS_TIMEOUT_MS} ms$`));
-      assert.doesNotMatch(message, new RegExp(`${STATUS_TIMEOUT_MS + 1} ms`), 'the reported bound must be the configured one, not the elapsed time');
-    });
+    assert.ok(thrown, 'applyMigration resolved despite a failing git status');
+    assert.match(thrown.message, /^git status failed: git status timed out after 10000 ms$/);
+    assert.equal(String(passedTimeout), /after (\d+) ms/.exec(thrown.message)[1], 'the reported bound must be the one handed to git');
   });
 
   test('a signalled status names the signal instead of reporting exit 1', (t) => {

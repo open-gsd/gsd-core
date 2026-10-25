@@ -584,6 +584,29 @@ describe('#5048 a real repo shows the variable changes what git does', () => {
       );
     }
 
+    // #5048 review (Major 2): the held-lock case below also cannot write the
+    // index WITHOUT the fix, so it cannot fail on base. This one drives the
+    // production render against the stale-index repo with no lock in the way:
+    // without GIT_OPTIONAL_LOCKS=0 git refreshes and rewrites .git/index, which
+    // is exactly the write that contends with a real commit.
+    test('production readGitStatus leaves a stat-stale index byte-identical', () => {
+      const dir = staleIndexRepo();
+      try {
+        const { readGitStatus } = require('../hooks/gsd-statusline.js');
+        const before = digestIndex(dir);
+        for (let i = 0; i < RENDERS; i++) {
+          const out = readGitStatus(dir);
+          assert.ok(typeof out === 'string' && out.includes('# branch.head '), `render ${i + 1} did not report the branch`);
+        }
+        assert.equal(
+          digestIndex(dir), before,
+          `${RENDERS} production renders rewrote .git/index, so each one took the optional index lock`,
+        );
+      } finally {
+        helpers.cleanup(dir);
+      }
+    });
+
     test('the reads skip the lock and the writer still gets it', () => {
       const dir = staleIndexRepo();
       try {
@@ -647,6 +670,75 @@ describe('#5048 a real repo shows the variable changes what git does', () => {
         helpers.cleanup(dir);
       }
     });
+  });
+
+  // #5048 review (Minor 11): the owner has direct tests, not only seam probes.
+  describe('readOnlyGitEnv', () => {
+    const { readOnlyGitEnv } = require('../gsd-core/bin/lib/read-only-git-env.cjs');
+
+    test('sets GIT_OPTIONAL_LOCKS to 0 and keeps the rest of the environment', () => {
+      const env = readOnlyGitEnv({ PATH: '/bin', HOME: '/home/x' });
+      assert.deepEqual(env, { PATH: '/bin', HOME: '/home/x', GIT_OPTIONAL_LOCKS: '0' });
+    });
+
+    test('overrides a base value of GIT_OPTIONAL_LOCKS', () => {
+      assert.equal(readOnlyGitEnv({ GIT_OPTIONAL_LOCKS: '1' }).GIT_OPTIONAL_LOCKS, '0');
+    });
+
+    test('drops undefined-valued keys, which spawn() rejects', () => {
+      const env = readOnlyGitEnv({ KEEP: 'yes', GONE: undefined });
+      assert.equal('GONE' in env, false);
+      assert.equal(env.KEEP, 'yes');
+    });
+
+    test('returns a fresh object and never mutates its base', () => {
+      const base = { A: '1' };
+      const first = readOnlyGitEnv(base);
+      const second = readOnlyGitEnv(base);
+      assert.notEqual(first, second);
+      assert.deepEqual(base, { A: '1' });
+    });
+
+    test('reads process.env at call time, not at load time', () => {
+      const key = 'GSD_5048_PROBE';
+      process.env[key] = 'late';
+      try {
+        assert.equal(readOnlyGitEnv()[key], 'late');
+      } finally {
+        delete process.env[key];
+      }
+    });
+  });
+
+  // #5048 review (Major 3): a raw plugin-marketplace or git-clone install has no
+  // compiled gsd-core/bin/lib/*.cjs. The two blocking guards must keep running
+  // (and not throw at load) when read-only-git-env.cjs is absent.
+  describe('guard hooks without the compiled read-only-git-env artifact', () => {
+    for (const [hook, payload] of [
+      ['gsd-worktree-path-guard.js', { tool_name: 'Write', tool_input: {} }],
+      ['gsd-windsurf-pre-write.js', { tool_info: { file_path: '' } }],
+    ]) {
+      test(`${hook} loads and allows a no-op payload with the artifact absent`, () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5048-raw-'));
+        try {
+          const hooksDir = path.join(root, 'hooks');
+          fs.mkdirSync(hooksDir);
+          fs.cpSync(path.join(__dirname, '..', 'hooks', 'lib'), path.join(hooksDir, 'lib'), { recursive: true });
+          fs.copyFileSync(path.join(__dirname, '..', 'hooks', hook), path.join(hooksDir, hook));
+          assert.equal(fs.existsSync(path.join(root, 'gsd-core')), false, 'the fixture must have no gsd-core tree');
+          const result = childProcess.spawnSync(process.execPath, [path.join(hooksDir, hook)], {
+            input: JSON.stringify(payload),
+            cwd: root,
+            encoding: 'utf8',
+            timeout: REAL_REPO_GIT_TIMEOUT_MS,
+          });
+          assert.equal(result.status, 0, `${hook} did not load without the artifact: ${result.stderr}`);
+          assert.doesNotMatch(result.stderr, /Cannot find module/);
+        } finally {
+          helpers.cleanup(root);
+        }
+      });
+    }
   });
 
 });

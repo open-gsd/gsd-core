@@ -228,6 +228,7 @@ build/
 /gsd-core/bin/lib/pattern.cjs
 /gsd-core/bin/lib/text-lines.cjs
 /gsd-core/bin/lib/token-scanner.cjs
+/gsd-core/bin/lib/read-only-git-env.cjs
 /gsd-core/bin/lib/health-diagnostic-types.cjs
 /gsd-core/bin/lib/health-diagnostic.cjs
 /gsd-core/bin/lib/health-diagnostic-rules/root-existence.cjs

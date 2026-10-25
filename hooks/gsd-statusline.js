@@ -889,16 +889,14 @@ function compactModelName(name) {
 // are a fixed array, and the workspace dir is passed via -C. Fails silently
 // (segment absent) outside a repo, without git, or on timeout.
 
-// #5048: the stat-cache cost of the read below is what this bound buys. With
-// GIT_OPTIONAL_LOCKS=0 the spawn no longer writes the refreshed index back, so
-// the only work left on the hot path is lstat() per tracked path — no object
-// read for unchanged blobs. Measured on a 40k-file tree that is ~35 ms of stat
-// calls against a warm stat cache and ~180 ms cold, so 1500 ms leaves >8x
-// headroom for a cold cache on a large repo while still bounding a hung
-// network filesystem. Raising it would widen the window in which a stalled
-// render holds the terminal; lowering it would start dropping the git segment
-// on large repos. Exported so the test can pin the bound instead of restating
-// the literal (which is how the constant and its assertion drifted before).
+// #5048: bound for the `git status` spawn below. With GIT_OPTIONAL_LOCKS=0 the
+// spawn no longer writes the refreshed index back, so what is left is reading
+// the index and stat-ing the tracked paths. The bound keeps a hung network
+// filesystem from stalling a render for long while leaving room for a cold stat
+// cache on a large repo. The figure was chosen, not measured: time
+// `git status --porcelain=v2 --branch` on a large tree with a cold cache before
+// changing it. Exported so the test can pin the bound instead of restating the
+// literal (which is how the constant and its assertion drifted before).
 const GIT_STATUS_TIMEOUT_MS = 1500;
 
 /**
@@ -1029,7 +1027,7 @@ function isValidStateHeadStamp(raw) {
  */
 function readStateHeadCommits(root, stamp) {
   try {
-    return childProcess.execFileSync('git',
+    return childProcess.execFileSync('git', // allow-index-refresh: rev-list walks the commit graph and never opens the index
       ['-C', root, 'rev-list', '--left-right', '--count', `${stamp}...HEAD`],
       { encoding: 'utf8', timeout: STATE_FRESHNESS_GIT_TIMEOUT_MS,
         stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });

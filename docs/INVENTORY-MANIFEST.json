@@ -554,6 +554,7 @@
       "quick-batch-command-router.cjs",
       "quick-batch-dispatch.cjs",
       "quick-batch.cjs",
+      "read-only-git-env.cjs",
       "real-home-guard.cjs",
       "refactor-trigger-command-router.cjs",
       "report-parser.cjs",

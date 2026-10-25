@@ -47,7 +47,19 @@ const SPAWNOPT = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeou
 // rule hooks/lib/git-cmd.js follows for token-scanner). It is read per spawn,
 // not snapshotted at load, so the two guards behave identically.
 // Parity: tests/git-optional-locks-parity.test.cjs.
-const { readOnlyGitEnv } = require('../gsd-core/bin/lib/read-only-git-env.cjs');
+// A raw plugin-marketplace or git-clone install never ran `npm run build:lib`
+// (#3582), so the compiled owner can be absent. This guard only runs
+// `git rev-parse`, which never opens the index, so the unmodified environment
+// loses nothing; requiring the artifact unguarded would throw at load and the
+// containment guard would silently stop running.
+let readOnlyGitEnv = () => process.env;
+try {
+  const { ensureRuntimeBuild } = require('../gsd-core/bin/ensure-runtime-build.cjs');
+  ensureRuntimeBuild();
+  ({ readOnlyGitEnv } = require('../gsd-core/bin/lib/read-only-git-env.cjs'));
+} catch {
+  // artifact absent and not buildable: keep the inert fallback above
+}
 
 function git(args, cwd) {
   return spawnSync('git', args, { ...SPAWNOPT, cwd, env: readOnlyGitEnv() });
