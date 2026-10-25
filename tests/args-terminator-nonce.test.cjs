@@ -226,7 +226,7 @@ describe('#5637 typed text that names the terminator (real shells)', () => {
         assert.equal(canary, false, 'the typed text must never run as shell');
         // MSYS bash on Windows drops a carriage return while reading the heredoc; the canary check above
         // is what proves the forged terminator did not run, so only the CR comparison is relaxed there.
-        assert.equal(stdout, process.platform === 'win32' ? typed.replace(/\r/g, '') : typed);
+        assert.equal(stdout, process.platform === 'win32' && shell === 'bash' ? typed.replace(/\r/g, '') : typed);
       });
     }
   }
