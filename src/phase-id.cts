@@ -1598,12 +1598,21 @@ function isPlannedPhaseStatusPhrase(value: unknown): boolean {
   return typeof value === 'string' && /^ready to execute$/i.test(value.trim());
 }
 
-function parsePhaseFromProse(value: string | null): { phase: string | null; name: string | null } {
+// The leading phase id of a prose field. #5626: under `milestone-prefixed` the id is the whole `M-NN`
+// (`3-01`), so the number capture takes one optional `-NN` segment; every other convention (and an absent
+// one) keeps the dotted-only capture, where `3-01` reads as phase `3` exactly as before.
+const PHASE_PROSE_RE = /^\s*(?:Phase\s+)?(?:[A-Z][A-Z0-9_]*-)?(\d+[A-Z]?(?:\.\d+)*)\b/i;
+const PHASE_PROSE_MILESTONE_PREFIXED_RE = /^\s*(?:Phase\s+)?(?:[A-Z][A-Z0-9_]*-)?(\d+(?:-\d+)?[A-Z]?(?:\.\d+)*)\b/i;
+
+function parsePhaseFromProse(
+  value: string | null,
+  convention?: string | null,
+): { phase: string | null; name: string | null } {
   if (!value) return { phase: null, name: null };
   // Coerce defensively so a non-string caller cannot throw on this canonical
   // surface (mirrors the sibling #2121 functions' String(...) handling).
   const str = String(value);
-  const phaseMatch = str.match(/^\s*(?:Phase\s+)?(?:[A-Z][A-Z0-9_]*-)?(\d+[A-Z]?(?:\.\d+)*)\b/i);
+  const phaseMatch = str.match(convention === 'milestone-prefixed' ? PHASE_PROSE_MILESTONE_PREFIXED_RE : PHASE_PROSE_RE);
   // The name-extraction quantifiers are length-bounded so a crafted long
   // unterminated run (many `(` or `—`) in an untrusted STATE.md field value
   // cannot drive O(n^2) regex backtracking (CPU-exhaustion DoS). A real phase

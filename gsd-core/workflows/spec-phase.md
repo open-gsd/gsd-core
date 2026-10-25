@@ -61,7 +61,7 @@ INIT=$(gsd_run init phase-op "${PHASE}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
-Parse JSON for: `phase_found`, `phase_dir`, `phase_number`, `phase_name`, `phase_slug`, `padded_phase`, `state_path`, `requirements_path`, `roadmap_path`, `planning_path`, `response_language`, `commit_docs`.
+Parse JSON for: `phase_found`, `phase_dir`, `phase_number`, `phase_name`, `phase_slug`, `padded_phase`, `state_path`, `requirements_path`, `roadmap_path`, `planning_path`, `has_spec`, `spec_path`, `response_language`, `commit_docs`.
 
 **If `response_language` is set:** All user-facing text in this workflow — narration between tool calls, status updates, progress notes, findings, questions, and report prose — MUST be in `{response_language}`. Technical terms, code, and file paths stay in English.
 
@@ -72,12 +72,9 @@ Use /gsd:progress to see available phases.
 ```
 Exit.
 
-**Check for existing SPEC.md:**
-```bash
-ls ${phase_dir}/*-SPEC.md 2>/dev/null | grep -v AI-SPEC | head -1 || true
-```
+**Check for existing SPEC.md:** use `has_spec` and `spec_path` from init (one shared definition of the phase SPEC: a plain `*-SPEC.md`, never `*-AI-SPEC.md` or `*-UI-SPEC.md`). Do not glob for it.
 
-If SPEC.md already exists:
+If `has_spec` is true:
 
 **If `--auto`:** Auto-select "Skip" — leave the existing SPEC.md unchanged and exit with the same
 message the interactive "Skip" prints. Log: `[auto] SPEC.md exists — reusing as-is.` An unattended

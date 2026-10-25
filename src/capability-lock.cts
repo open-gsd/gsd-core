@@ -263,9 +263,18 @@ let _selfProbeAttempts = 0;
 function selfStartTime(): string | null {
   if (_selfStartTime === null && _selfProbeAttempts < SELF_PROBE_ATTEMPTS) {
     _selfProbeAttempts++;
-    _selfStartTime = getProcessStartTime(process.pid);
+    // Through the same injectable probe the steal path uses, so the value acquireLock records and the
+    // value a test pins are one source (a hard-wired live probe made the recorded value depend on
+    // PowerShell's cold start, which turned `next` red on a Windows runner).
+    _selfStartTime = _lockProbes.getProcessStartTime(process.pid);
   }
   return _selfStartTime;
+}
+
+/** Forget the cached self start-time and its attempt count (the probe it came from was just replaced). */
+function resetSelfStartTime(): void {
+  _selfStartTime = null;
+  _selfProbeAttempts = 0;
 }
 
 /** Serialize the lockfile body: JSON carrying the owner token, pid, hostname, start-time, ts. */
@@ -584,10 +593,14 @@ export = {
   // isPidAlive / getProcessStartTime so the start-time liveness branches are exercised without real pids.
   _setLockProbes(probes: Partial<{ isPidAlive: (pid: number) => boolean; getProcessStartTime: (pid: number) => string | null }>): void {
     if (typeof probes.isPidAlive === 'function') _lockProbes.isPidAlive = probes.isPidAlive;
-    if (typeof probes.getProcessStartTime === 'function') _lockProbes.getProcessStartTime = probes.getProcessStartTime;
+    if (typeof probes.getProcessStartTime === 'function') {
+      _lockProbes.getProcessStartTime = probes.getProcessStartTime;
+      resetSelfStartTime();
+    }
   },
   _resetLockProbes(): void {
     _lockProbes.isPidAlive = _realIsPidAlive;
     _lockProbes.getProcessStartTime = getProcessStartTime;
+    resetSelfStartTime();
   },
 };

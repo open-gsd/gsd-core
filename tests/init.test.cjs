@@ -6044,3 +6044,81 @@ describe('#4683 review repairs — fence blindness and deterministic ordering', 
     ], 'claiming-plan lists must be sorted, never readdir order');
   });
 });
+
+// #5629: the phase SPEC is one fact, resolved by one predicate (planning-workspace `findPhaseSpecIn`) and
+// reported on every init payload the SPEC-consuming workflows parse, so no workflow globs for it itself.
+describe('init: the phase SPEC (#5629)', () => {
+  const { findPhaseSpecIn } = require('../gsd-core/bin/lib/planning-workspace.cjs');
+  const INIT_VERBS = ['phase-op', 'plan-phase', 'discuss-phase-assumptions'];
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = fs.realpathSync(createFixture());
+  });
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function seedSpecs(names) {
+    seedPhase(tmpDir, '03-api', Object.fromEntries(names.map((n) => [n, '# SPEC\n'])));
+  }
+  function initPayload(verb) {
+    const result = runGsdTools(`init ${verb} 03`, tmpDir);
+    assert.ok(result.success, `init ${verb} failed: ${result.error}`);
+    return JSON.parse(result.output);
+  }
+
+  for (const verb of INIT_VERBS) {
+    test(`init ${verb} reports the phase SPEC (#5629)`, () => {
+      seedSpecs(['03-SPEC.md', '03-UI-SPEC.md', '03-AI-SPEC.md']);
+      const out = initPayload(verb);
+      assert.equal(out.has_spec, true);
+      assert.equal(out.spec_path, absPlanningPath(tmpDir, 'phases', '03-api', '03-SPEC.md'));
+    });
+
+    test(`init ${verb} does not treat a UI-SPEC or AI-SPEC as the phase SPEC (#5629)`, () => {
+      for (const names of [['03-UI-SPEC.md'], ['03-AI-SPEC.md'], ['03-UI-SPEC.md', '03-AI-SPEC.md'], []]) {
+        cleanup(tmpDir);
+        tmpDir = fs.realpathSync(createFixture());
+        seedSpecs(names);
+        const out = initPayload(verb);
+        assert.equal(out.has_spec, false, names.join(',') || '(none)');
+        assert.equal(out.spec_path ?? null, null, names.join(',') || '(none)');
+      }
+    });
+  }
+
+  test('every consumer resolves the phase SPEC through the same predicate (#5629)', () => {
+    // [files in the phase directory, the one file every consumer must call the phase SPEC]
+    const scenarios = [
+      [['03-SPEC.md'], '03-SPEC.md'],
+      [['03-UI-SPEC.md', '03-SPEC.md', '03-AI-SPEC.md'], '03-SPEC.md'],
+      [['03-UI-SPEC.md'], null],
+      [['03-AI-SPEC.md'], null],
+      [['03-SPEC.md.bak', '03-NOTES.md'], null],
+      // a misfiled cross-phase SPEC sorts first but belongs to phase 02
+      [['02-SPEC.md', '03-SPEC.md'], '03-SPEC.md'],
+      [['02-SPEC.md'], null],
+    ];
+    for (const [names, expected] of scenarios) {
+      cleanup(tmpDir);
+      tmpDir = fs.realpathSync(createFixture());
+      seedSpecs(names);
+      const phaseDir = path.join(tmpDir, '.planning', 'phases', '03-api');
+      const old = new Date(Date.now() - 3_600_000);
+      for (const n of names) fs.utimesSync(path.join(phaseDir, n), old, old);
+      fs.writeFileSync(path.join(phaseDir, '03-CONTEXT.md'), '# Context\n');
+      assert.equal(findPhaseSpecIn(fs.readdirSync(phaseDir).filter((f) => f.startsWith('03-'))), expected, 'the predicate agrees with the scenario');
+
+      for (const verb of INIT_VERBS) {
+        const out = initPayload(verb);
+        assert.equal(out.has_spec, expected !== null, `${verb}: ${names.join(',')}`);
+        assert.equal(out.spec_path ? path.basename(out.spec_path) : null, expected, `${verb}: ${names.join(',')}`);
+      }
+      const drift = runGsdTools('verify context-drift 03', tmpDir);
+      assert.ok(drift.success, `verify context-drift failed: ${drift.error}`);
+      const stale = JSON.parse(drift.output).stale_artifacts;
+      assert.deepEqual(stale, expected === null ? [] : [expected], `context-drift gate: ${names.join(',')}`);
+    }
+  });
+});

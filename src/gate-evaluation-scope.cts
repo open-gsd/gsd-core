@@ -260,6 +260,21 @@ function isAncestor(git: Git, sha: string, of: string): boolean {
   return gitOrNo(git, ['merge-base', '--is-ancestor', sha, of]) !== null;
 }
 
+/**
+ * Whether commit `sha` is an ancestor of commit `of` (#5275): ancestry, never log position or commit
+ * date, so a history merged from worktree branches is judged by what it descends from. `null` means
+ * git could not answer (missing, hung, a bad object): the caller must not read that as "no".
+ */
+export function commitIsAncestor(projectDir: string, sha: string, of: string, execGit?: GitRunner): boolean | null {
+  if (!isSafeRefArgument(sha) || !isSafeRefArgument(of)) return null;
+  try {
+    return isAncestor(makeGit(projectDir, execGit ?? execGitSeam), sha, of);
+  } catch (error) {
+    if (error instanceof ScopeUnreadable) return null;
+    throw error;
+  }
+}
+
 // ─── The resolver ─────────────────────────────────────────────────────────────
 
 function emptyScope(unit: ScopeUnit): EvaluationScope {

@@ -1089,7 +1089,7 @@ function cmdStateAdvancePlan(cwd: string, raw: boolean): void {
     // silently absorbed.
     const body = stripFrontmatter(content);
     const positionScope = matchCurrentPositionSection(body) ?? body;
-    const positionPhase = parseProsePhaseField(stateExtractField(positionScope, 'Phase')).phase;
+    const positionPhase = parseProsePhaseField(stateExtractField(positionScope, 'Phase'), resolvePhaseIdConvention(cwd)).phase;
     // #4093: a Current Position section with ZERO labeled fields has no
     // `Phase:` line either; frontmatter `current_phase` is the documented
     // survivor of body drift (the reporter's document still carried it, and
@@ -1642,7 +1642,7 @@ function cmdStateAddDecision(cwd: string, options: StateAddDecisionOptions, raw:
   if (!phaseId) {
     const rawState = fs.readFileSync(statePath, 'utf-8');
     const fm = extractFrontmatter(rawState, statePath) as Record<string, unknown>;
-    phaseId = resolveCurrentPhaseId(fm, stripFrontmatter(rawState)) ?? undefined;
+    phaseId = resolveCurrentPhaseId(fm, stripFrontmatter(rawState), resolvePhaseIdConvention(cwd)) ?? undefined;
   }
 
   const entry = `- [Phase ${phaseId || '?'}]: ${summaryText}${rationaleText ? ` — ${rationaleText}` : ''}`;
@@ -1790,7 +1790,7 @@ function cmdStateAddRoadmapEvolution(cwd: string, options: StateAddRoadmapEvolut
   if (!phaseId) {
     const rawState = fs.readFileSync(statePath, 'utf-8');
     const fm = extractFrontmatter(rawState, statePath) as Record<string, unknown>;
-    phaseId = resolveCurrentPhaseId(fm, stripFrontmatter(rawState)) ?? undefined;
+    phaseId = resolveCurrentPhaseId(fm, stripFrontmatter(rawState), resolvePhaseIdConvention(cwd)) ?? undefined;
   }
 
   const entry = `- Phase ${phaseId || '?'} ${actionText}${afterText}: ${flatNote}${urgentText}`;
@@ -2366,17 +2366,21 @@ function preferNewerLastActivity(
   }
 }
 
-function parseProsePhaseField(value: string | null): { phase: string | null; name: string | null } {
+function parseProsePhaseField(
+  value: string | null,
+  convention?: string | null,
+): { phase: string | null; name: string | null } {
   // #2121 Phase 2 (#2125): delegate to the canonical anchored parser so this
   // module holds no independent prose phase-id regex. Drives #2111 — the
   // anchored parser returns { phase: null } for a "Milestone vX.Y complete"
   // body line (the old unanchored regex mined the minor-version digit, e.g.
   // v0.5 -> "5"), so syncStateFrontmatter's #905 guard preserves the real
   // current_phase instead of clobbering it.
-  return parsePhaseFromProse(value);
+  // #5626: under `milestone-prefixed` the id is the whole `M-NN`; the convention comes from its owner.
+  return parsePhaseFromProse(value, convention);
 }
 
-function resolveStatePhase(fm: Record<string, unknown>, body: string): {
+function resolveStatePhase(fm: Record<string, unknown>, body: string, convention?: string | null): {
   phase: string | null;
   name: string | null;
   sources: {
@@ -2390,11 +2394,11 @@ function resolveStatePhase(fm: Record<string, unknown>, body: string): {
   const legacyRaw = stateFieldValue(fm, currentPositionScope, null, 'Current Phase').value;
   const currentPositionRaw = stateFieldValue(fm, currentPositionScope, null, 'Phase').value;
   const sources = {
-    frontmatter: parseProsePhaseField(frontmatterRaw).phase,
-    legacy_current_phase: parseProsePhaseField(legacyRaw).phase,
-    current_position_phase: parseProsePhaseField(currentPositionRaw).phase,
+    frontmatter: parseProsePhaseField(frontmatterRaw, convention).phase,
+    legacy_current_phase: parseProsePhaseField(legacyRaw, convention).phase,
+    current_position_phase: parseProsePhaseField(currentPositionRaw, convention).phase,
   };
-  const prosePhase = parseProsePhaseField(currentPositionRaw);
+  const prosePhase = parseProsePhaseField(currentPositionRaw, convention);
   return {
     phase: sources.frontmatter ?? sources.legacy_current_phase ?? sources.current_position_phase,
     name: stateFieldValue(fm, body, 'current_phase_name', null).value
@@ -2450,10 +2454,10 @@ function resolveStatePhase(fm: Record<string, unknown>, body: string): {
  * Reconcile the two only by giving `resolveStatePhase` an explicit scope
  * parameter — never by pointing this at it and dropping the difference.
  */
-function resolveCurrentPhaseId(fm: Record<string, unknown>, body: string): string | null {
+function resolveCurrentPhaseId(fm: Record<string, unknown>, body: string, convention?: string | null): string | null {
   const positionSection = sliceCurrentPositionSection(body);
   const prosePhase =
-    positionSection !== null ? parseProsePhaseField(stateFieldValue(fm, positionSection, null, 'Phase').value).phase : null;
+    positionSection !== null ? parseProsePhaseField(stateFieldValue(fm, positionSection, null, 'Phase').value, convention).phase : null;
   return stateFieldValue(fm, body, 'current_phase', 'Current Phase').value ?? prosePhase;
 }
 
@@ -2496,7 +2500,7 @@ function cmdStateSnapshot(cwd: string, raw: boolean): void {
   // so it is scopeable exactly like Stopped At under ## Session. Fall back to
   // full-body search only when no ## Current Position section exists, so files
   // with no section heading keep their current behaviour.
-  const resolvedPhase = resolveStatePhase(fm, body);
+  const resolvedPhase = resolveStatePhase(fm, body, resolvePhaseIdConvention(cwd));
   const currentPhase = resolvedPhase.phase;
   const currentPhaseName = resolvedPhase.name;
   const totalPhasesRaw = stateFieldValue(fm, body, 'total_phases', 'Total Phases').value;
@@ -2941,7 +2945,10 @@ function buildStateFrontmatter(
   // section overwrites current_phase here, and the next read surfaces it. Fall
   // back to full-body search when no ## Current Position section exists.
   const currentPositionScope = matchCurrentPositionSection(bodyContent) ?? bodyContent;
-  const prosePhase = parseProsePhaseField(stateExtractField(currentPositionScope, 'Phase'));
+  const prosePhase = parseProsePhaseField(
+    stateExtractField(currentPositionScope, 'Phase'),
+    cwd ? resolvePhaseIdConvention(cwd) : null,
+  );
   const currentPhase = stateExtractField(bodyContent, 'Current Phase') ?? prosePhase.phase;
   const currentPhaseName = stateExtractField(bodyContent, 'Current Phase Name') ?? prosePhase.name;
   const currentPlan = stateExtractField(bodyContent, 'Current Plan');
@@ -4291,6 +4298,9 @@ function applyPostSyncPreservation(
   syncedContent: string,
   statePath: string,
   options: StatePreservationOptions,
+  // #5626: the project's phase-id convention, resolved by the caller from its cwd (null: unset). Trailing and
+  // optional so `options` stays the fifth parameter the options guard and its callers rely on.
+  phaseIdConvention: string | null = null,
 ): string {
   assertStatePreservationOptions(options, 'applyPostSyncPreservation');
   const { resync, authoritativeFm, deriveProgressKeys, divergedFields, explicitProgressField, preWriteState } = options;
@@ -4353,7 +4363,7 @@ function applyPostSyncPreservation(
   const preCurrentPositionScope = matchCurrentPositionSection(preBody) ?? preBody;
   const preBodyCurrentPlan = stateExtractField(preBody, 'Current Plan');
   const preBodyCurrentPhase = stateExtractField(preBody, 'Current Phase')
-    ?? parseProsePhaseField(stateExtractField(preCurrentPositionScope, 'Phase')).phase;
+    ?? parseProsePhaseField(stateExtractField(preCurrentPositionScope, 'Phase'), phaseIdConvention).phase;
   const preBodyPausedAt = stateExtractField(preSessionScope, 'Paused At');
   const preBodyLastActivityRaw = stateExtractField(preBody, 'Last Activity')
     ?? stateExtractField(preBody, 'Last activity');
@@ -4380,7 +4390,7 @@ function applyPostSyncPreservation(
   const postCurrentPositionScope = matchCurrentPositionSection(postBody) ?? postBody;
   const postBodyCurrentPlan = stateExtractField(postBody, 'Current Plan');
   const postBodyCurrentPhase = stateExtractField(postBody, 'Current Phase')
-    ?? parseProsePhaseField(stateExtractField(postCurrentPositionScope, 'Phase')).phase;
+    ?? parseProsePhaseField(stateExtractField(postCurrentPositionScope, 'Phase'), phaseIdConvention).phase;
   const postBodyPausedAt = stateExtractField(postSessionScope, 'Paused At');
   const postBodyLastActivityRaw = stateExtractField(postBody, 'Last Activity')
     ?? stateExtractField(postBody, 'Last activity');
@@ -4608,6 +4618,7 @@ function syncAndPreserveStateMd(
     synced,
     statePath,
     options,
+    cwd ? resolvePhaseIdConvention(cwd) : null,
   );
 }
 
@@ -5645,7 +5656,7 @@ function cmdStateJson(cwd: string, raw: boolean): void {
     const bodyPausedAt = stateExtractField(sessionScope, 'Paused At');
     const bodyPhaseSource = stateExtractField(body, 'Phase');
     const bodyCurrentPhase = stateExtractField(body, 'Current Phase')
-      ?? parseProsePhaseField(stateExtractField(positionScope, 'Phase')).phase;
+      ?? parseProsePhaseField(stateExtractField(positionScope, 'Phase'), resolvePhaseIdConvention(cwd)).phase;
     const bodyCurrentPlan = stateExtractField(body, 'Current Plan');
     const bodyStatus = stateExtractField(body, 'Status');
     // #3836: mirrors applyPostSyncPreservation's own derivation (state.cts
@@ -6376,7 +6387,7 @@ function cmdStateValidate(cwd: string, raw: boolean, opts: { strict?: boolean } 
   const scope: planningScopeMod.Scope = initialScope;
 
   const status = stateFieldValue(fm, body, 'status', 'Status').value || '';
-  const resolvedPhase = resolveStatePhase(fm, body);
+  const resolvedPhase = resolveStatePhase(fm, body, resolvePhaseIdConvention(cwd));
   const currentPhase = resolvedPhase.phase;
   const totalPlansRaw = stateFieldValue(fm, body, 'total_plans_in_phase', 'Total Plans in Phase').value;
   const totalPlansInPhase = totalPlansRaw ? parseInt(totalPlansRaw, 10) : null;
@@ -6905,7 +6916,7 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): v
   const body = stripFrontmatter(rawState);
   // Prune needs an integer cutoff, so it parses the resolved id itself; a
   // non-numeric or absent id lands on 0 and prune bails, as before.
-  const currentPhase = parseInt(String(resolveCurrentPhaseId(fm, body)), 10) || 0;
+  const currentPhase = parseInt(String(resolveCurrentPhaseId(fm, body, resolvePhaseIdConvention(cwd))), 10) || 0;
   const cutoff = currentPhase - keepRecent;
 
   if (cutoff <= 0) {

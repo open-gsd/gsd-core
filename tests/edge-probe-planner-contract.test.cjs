@@ -69,10 +69,12 @@ test('RR-01: plan-phase.md resolves phase *-SPEC.md (excluding AI/UI variants) i
   // Assert the canonical SPEC_FILE resolution form is present.
   // new RegExp used so that \$ and \( are treated as literal dollar-sign and open-paren
   // (JS regex literals interpret \$ as end-anchor and \( as group open).
+  // #5629: the phase SPEC is an init fact (one shared predicate: plain *-SPEC.md, never the AI/UI variants),
+  // so plan-phase reads it from its init payload instead of globbing.
   assert.match(
     content,
-    new RegExp('SPEC_FILE=\\$\\(ls "\\$\\{[A-Z_]*PHASE_DIR[A-Z_]*\\}"[/][*]-SPEC\\.md'),
-    'plan-phase.md must resolve SPEC_FILE using ls "${...PHASE_DIR...}"/*-SPEC.md pattern'
+    new RegExp('SPEC_PATH=\\$\\(_gsd_field "\\$INIT" spec_path\\)'),
+    'plan-phase.md must resolve SPEC_PATH from the init payload spec_path'
   );
 
   // Assert {SPEC_PATH} token appears in the planner files_to_read block
@@ -113,7 +115,7 @@ function extractSection(content, heading) {
 test('RR-01 reachability: SPEC_FILE resolution is NOT gated inside the AI-SPEC artifact section', () => {
   const content = readPlanPhase();
   const aiSpecSection = extractSection(content, '## 4.5. Resolve AI-SPEC Artifact');
-  const specResolution = new RegExp('SPEC_FILE=\\$\\(ls "\\$\\{[A-Z_]*PHASE_DIR[A-Z_]*\\}"[/][*]-SPEC\\.md');
+  const specResolution = new RegExp('SPEC_PATH=\\$\\(_gsd_field "\\$INIT" spec_path\\)');
   assert.ok(aiSpecSection.length > 0, 'sanity: the §4.5 AI-SPEC artifact section must exist to scope this test');
   assert.doesNotMatch(
     aiSpecSection,
