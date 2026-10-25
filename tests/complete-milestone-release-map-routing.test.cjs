@@ -341,7 +341,7 @@ describe('shared enumerations', () => {
 describe('push confirmation', () => {
   test('every push command is repository-scoped and tag-scoped', () => {
     const text = read(RELEASE_MAP_STEP);
-    const pushLines = text.split('\n').filter((l) => /\bgit\b.*\bpush\b/.test(l) && !/^\s*(#|>|-\s)/.test(l.trim()) && l.trim().startsWith('git'));
+    const pushLines = text.split('\n').filter((l) => /\bgit\b.*\bpush\b/.test(l) && !l.includes('remote get-url') &&!/^\s*(#|>|-\s)/.test(l.trim()) && l.trim().startsWith('git'));
     assert.ok(pushLines.length >= 1, 'the step must show the push command');
     for (const line of pushLines) {
       assert.match(line.trim(), /^git -C "\$\{?\w+\}?" push -- "\$\{?\w+\}?" "refs\/tags\/\$\{?\w+\}?"$/, line);
