@@ -240,9 +240,12 @@ describe('parity: enums, docs and glossary (row 19)', () => {
     assert.deepEqual(listedValues(context, 'Release map tag states').sort(), [...RELEASE_MAP_TAG_STATES].sort());
   });
 
-  test('the repo_tagging enum in the schema manifest key list and defaults manifest agree', () => {
+  test('the repo_tagging default in the defaults manifest is single and docs/CONFIGURATION.md lists both modes', () => {
     const defaults = JSON.parse(fs.readFileSync(path.join(ROOT, 'gsd-core', 'bin', 'shared', 'config-defaults.manifest.json'), 'utf8'));
     assert.equal(defaults.git.repo_tagging, 'single');
+    const rowMatch = /^[^\r\n]{0,2000}`git\.repo_tagging`[^\r\n]{0,2000}$/m.exec(docs);
+    assert.ok(rowMatch, 'docs/CONFIGURATION.md must carry a git.repo_tagging row');
+    assert.ok(rowMatch[0].includes('`single`') && rowMatch[0].includes('`per_repo`'), 'the row must list both modes');
   });
 });
 
