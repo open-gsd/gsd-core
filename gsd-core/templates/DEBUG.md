@@ -33,6 +33,8 @@ tdd_mode: false
 tdd_phase: none | green
 resume_count: 0
 awaiting: none | [header of the return whose question is open]
+question: none | [checkpoint type and the full question text shown to the user]
+last_next_action: [next_action seen before the last re-dispatch]
 
 ## Symptoms
 <!-- Written during gathering, then immutable -->
@@ -90,7 +92,7 @@ files_changed: []
 **Session Loop:**
 - Owned by the checkpoint loop that drives `gsd-debugger`; on Pi that loop is the top-level session, which holds no state in memory between turns (#5638)
 - OVERWRITE on each dispatch and each wait; the debugger never edits it and `## Current Focus` rewrites never touch it
-- Fields: goal, tdd_mode, tdd_phase, resume_count, awaiting
+- Fields: goal, tdd_mode, tdd_phase, resume_count, awaiting, question, last_next_action
 
 **Symptoms:**
 - Written during initial gathering phase
