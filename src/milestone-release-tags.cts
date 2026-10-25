@@ -333,7 +333,8 @@ function runPreflight(
     let isOwnWorkTree = false;
     if (top.exitCode === 0) {
       try {
-        isOwnWorkTree = fs.realpathSync(top.stdout) === fs.realpathSync(dir);
+        // `.native` expands Windows 8.3 short names (RUNNER~1) the way git's long-form path does.
+        isOwnWorkTree = fs.realpathSync.native(top.stdout) === fs.realpathSync.native(dir);
       } catch {
         isOwnWorkTree = false;
       }
