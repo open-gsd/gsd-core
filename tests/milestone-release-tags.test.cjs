@@ -732,6 +732,9 @@ describe('release tags: review-found edge cases', () => {
       const res = createReleaseTags(root, entries);
       assert.equal(res.ok, false);
       assert.ok(res.errors.some((e) => e.reason === 'duplicate_entry'));
+      // The repo result must show the error in either order, never `skipped`.
+      assert.equal(res.repos.api.status, 'error');
+      assert.equal(res.repos.api.reason, 'duplicate_entry');
       assert.equal(tagExists(path.join(root, 'api'), 'v1'), false);
     }
   });
@@ -798,7 +801,7 @@ describe('release tags: reason-code parity (row 24)', () => {
   test('exported reason codes equal the codes CONTEXT.md lists', () => {
     assert.ok(Object.isFrozen(RELEASE_TAG_REASONS));
     const context = fs.readFileSync(CONTEXT_PATH, 'utf-8');
-    const section =context.split(/^### /m).find((s) => s.startsWith('Release Tags Module'));
+    const section = context.split(/^### /m).find((s) => s.startsWith('Release Tags Module'));
     assert.ok(section, 'CONTEXT.md must carry a "Release Tags Module" glossary entry');
     const m = /Reason codes \(closed set\): ([^;]{1,500});/.exec(section);
     assert.ok(m, 'glossary entry must list "Reason codes (closed set): ...;"');

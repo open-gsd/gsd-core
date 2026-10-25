@@ -277,7 +277,9 @@ function runPreflight(
         result.errors.push({ repo, reason: 'duplicate_entry' });
       } else {
         seen.add(skipKey);
-        result.repos[repo] = { status: 'skipped' };
+        // When the repo also has a tag entry, that entry records the duplicate_entry error
+        // under the same key; writing `skipped` here would overwrite it order-dependently.
+        if ((perRepo.get(repo) ?? 0) === 0) result.repos[repo] = { status: 'skipped' };
       }
       continue;
     }
