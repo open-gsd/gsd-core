@@ -2,6 +2,8 @@
 
 Per-repository release mapping (#3628, ADR-3628). Runs only when the init JSON has `repo_tagging` set to `per_repo` AND a non-empty `sub_repos` list. A GSD milestone version names planned work; each repository has its own release version, so no `v[X.Y]` tag is created in the current directory on this path.
 
+This file is read twice: Part 1 from `archive_milestone`, Part 2 from `push_release_tags`.
+
 Text mode: when `TEXT_MODE` is active, replace every `AskUserQuestion` with a numbered plain-text list.
 
 Working directory for the two JSON files: `RELEASE_MAP_DIR="${TMPDIR:-/tmp}/gsd-release-map-v[X.Y]"`, created with `mkdir -p "$RELEASE_MAP_DIR"`; the map file is `"$RELEASE_MAP_DIR/release-map.json"`. Shell state does not persist between commands, so re-derive these paths in every command that uses them. Write both JSON files with the Write tool; never build them with `echo`, a heredoc or any shell interpolation of the answers.

@@ -130,10 +130,10 @@ function releaseMapFrom(entries, applyResult) {
   }));
 }
 
-// ─── workflow wiring (matrix 1, 2) ──────────────────────────────────────────
+// ─── workflow wiring ──────────────────────────────────────────
 
-describe('workflow wiring (rows 1, 2)', () => {
-  test('the spine routes the per-repository path to a step file that exists (row 1)', () => {
+describe('workflow wiring', () => {
+  test('the spine routes the per-repository path to a step file that exists', () => {
     const spine = read(SPINE);
     const refs = [...spine.matchAll(/gsd-core\/workflows\/complete-milestone\/steps\/([a-z-]+\.md)/g)].map((m) => m[1]);
     assert.ok(refs.includes('release-map.md'), 'spine must reference steps/release-map.md');
@@ -147,7 +147,7 @@ describe('workflow wiring (rows 1, 2)', () => {
     assert.match(spine, /sub_repos/);
   });
 
-  test('the single-repository git-tag section is still wired and still prompts once (row 2)', () => {
+  test('the single-repository git-tag section is still wired and still prompts once', () => {
     const spine = read(SPINE);
     assert.ok(spine.includes('<!-- gsd:section id="git-tag" when="state:git-create-tag" -->'));
     assert.ok(spine.includes('steps/git-tag.md'));
@@ -155,9 +155,9 @@ describe('workflow wiring (rows 1, 2)', () => {
   });
 });
 
-// ─── end-to-end flow (matrix 3-10) ──────────────────────────────────────────
+// ─── end-to-end flow ──────────────────────────────────────────
 
-describe('per-repository completion flow (rows 3-10)', () => {
+describe('per-repository completion flow', () => {
   const entries = [
     { repo: 'api', release: 'v5.78.0', reference: 'PR #412', environment: 'production', status: 'released', tagRequest: 'create' },
     { repo: 'web', release: null, reference: null, environment: 'development', status: 'unreleased', tagRequest: 'skip' },
@@ -168,7 +168,7 @@ describe('per-repository completion flow (rows 3-10)', () => {
       e.tagRequest === 'skip' ? { repo: e.repo, tag: 'unused', skip: true } : { repo: e.repo, tag: e.release },
     );
 
-  test('mixed tagged / skipped / untagged repos archive as recorded (row 3)', (t) => {
+  test('mixed tagged / skipped / untagged repos archive as recorded', (t) => {
     const { root, shas } = makeProject(t, ['api', 'web', 'lib']);
     const tagsFile = writeJson(root, 'tags.json', tagRequests(entries));
 
@@ -196,7 +196,7 @@ describe('per-repository completion flow (rows 3-10)', () => {
     assert.equal(archived.map[1].release, null, 'an unreleased repository keeps no invented version');
   });
 
-  test('apply never pushes: a bare remote stays empty (row 4)', (t) => {
+  test('apply never pushes: a bare remote stays empty', (t) => {
     const { root } = makeProject(t, ['api']);
     const remote = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-relmap-remote-')));
     t.after(() => cleanup(remote));
@@ -210,7 +210,7 @@ describe('per-repository completion flow (rows 3-10)', () => {
     assert.equal(git(path.join(root, 'api'), 'ls-remote', '--tags', 'origin'), '');
   });
 
-  test('retry is idempotent and the archive accepts already_tagged (row 5)', (t) => {
+  test('retry is idempotent and the archive accepts already_tagged', (t) => {
     const { root } = makeProject(t, ['api']);
     const only = [entries[0]];
     const tagsFile = writeJson(root, 'tags.json', tagRequests(only));
@@ -227,7 +227,7 @@ describe('per-repository completion flow (rows 3-10)', () => {
     assert.equal(archived.map[0].tag, 'already_tagged');
   });
 
-  test('a tag conflict in one repository writes nothing in any repository (row 6)', (t) => {
+  test('a tag conflict in one repository writes nothing in any repository', (t) => {
     const { root } = makeProject(t, ['api', 'lib']);
     git(path.join(root, 'api'), 'tag', 'v1.0.0');
     commit(path.join(root, 'api'), 'moved.txt');
@@ -244,7 +244,7 @@ describe('per-repository completion flow (rows 3-10)', () => {
     assert.deepEqual(tagNames(path.join(root, 'lib')), []);
   });
 
-  test('invalid repository paths are refused before any write (row 7)', (t) => {
+  test('invalid repository paths are refused before any write', (t) => {
     const { root } = makeProject(t, ['api']);
     for (const bad of ['../outside', path.resolve(root, 'api'), 'api/../../x']) {
       const tagsFile = writeJson(root, 'tags.json', [{ repo: 'api', tag: 'v1.0.0' }, { repo: bad, tag: 'v9.9.9' }]);
@@ -255,7 +255,7 @@ describe('per-repository completion flow (rows 3-10)', () => {
     }
   });
 
-  test('a detached HEAD in a sub-repository is tagged at the detached commit (row 8)', (t) => {
+  test('a detached HEAD in a sub-repository is tagged at the detached commit', (t) => {
     const { root, shas } = makeProject(t, ['api']);
     const api = path.join(root, 'api');
     commit(api, 'second.txt');
@@ -266,7 +266,7 @@ describe('per-repository completion flow (rows 3-10)', () => {
     assert.equal(git(api, 'rev-list', '-n', '1', 'v0.1.0'), shas.api);
   });
 
-  test('tags land in the sub-repositories whatever the invoking directory (row 9)', (t) => {
+  test('tags land in the sub-repositories whatever the invoking directory', (t) => {
     const { root } = makeProject(t, ['api', 'web']);
     const tagsFile = writeJson(root, 'tags.json', [{ repo: 'api', tag: 'v1.0.0' }, { repo: 'web', tag: 'v2.0.0' }]);
     const res = runCli(path.join(root, 'web'), ['milestone', 'release-tags', '--map', tagsFile]);
@@ -275,7 +275,7 @@ describe('per-repository completion flow (rows 3-10)', () => {
     assert.deepEqual(tagNames(path.join(root, 'web')), ['v2.0.0']);
   });
 
-  test('git.create_tag false records the map with every tag state none and creates no tags (row 10)', (t) => {
+  test('git.create_tag false records the map with every tag state none and creates no tags', (t) => {
     const { root } = makeProject(t, ['api', 'web'], { createTag: false });
     const noTags = entries.slice(0, 2).map((e) => ({ ...e, tagRequest: 'none' }));
     const mapFile = writeJson(root, 'release-map.json', releaseMapFrom(noTags, { repos: {} }));
@@ -287,10 +287,33 @@ describe('per-repository completion flow (rows 3-10)', () => {
   });
 });
 
-// ─── parity (matrix 11, 12) ─────────────────────────────────────────────────
+// ─── parity ─────────────────────────────────────────────────
 
-describe('shared enumerations (rows 11, 12)', () => {
-  test('every success status the tag verb reports is a valid map tag state (row 11)', (t) => {
+describe('limits the workflow tells the user about (validated before any tag is written)', () => {
+  const dryRun = (root, map) => {
+    const file = writeJson(root, 'release-map.json', map);
+    return runCli(root, ['milestone', 'complete', 'v1.0', '--dry-run', '--release-map', file]);
+  };
+  const one = (overrides = {}) => ({ repo: 'api', release: 'v1', reference: null, environment: null, status: 'released', tag: 'created', ...overrides });
+
+  test('a text field is accepted at 200 characters and refused at 201 (limit and limit+1)', (t) => {
+    const { root } = makeProject(t, []);
+    assert.equal(dryRun(root, [one({ release: 'v'.repeat(199) })]).status, 0, '199');
+    assert.equal(dryRun(root, [one({ release: 'v'.repeat(200) })]).status, 0, '200');
+    assert.notEqual(dryRun(root, [one({ release: 'v'.repeat(201) })]).status, 0, '201');
+  });
+
+  test('a map is accepted at 256 entries and refused at 257', (t) => {
+    const { root } = makeProject(t, []);
+    const entries = (n) => Array.from({ length: n }, (_, i) => one({ repo: `r${i}`, release: null, status: 'unreleased', tag: 'none' }));
+    assert.equal(dryRun(root, entries(255)).status, 0, '255');
+    assert.equal(dryRun(root, entries(256)).status, 0, '256');
+    assert.notEqual(dryRun(root, entries(257)).status, 0, '257');
+  });
+});
+
+describe('shared enumerations', () => {
+  test('every success status the tag verb reports is a valid map tag state', (t) => {
     const { root } = makeProject(t, ['api', 'web']);
     const tagsFile = writeJson(root, 'tags.json', [{ repo: 'api', tag: 'v1.0.0' }, { repo: 'web', tag: 'x', skip: true }]);
     const first = parse(runCli(root, ['milestone', 'release-tags', '--map', tagsFile]));
@@ -303,7 +326,7 @@ describe('shared enumerations (rows 11, 12)', () => {
     assert.ok(RELEASE_MAP_TAG_STATES.includes('none'));
   });
 
-  test('the step file and the how-to name every release map status and tag state (row 12)', () => {
+  test('the step file and the how-to name every release map status and tag state', () => {
     for (const file of [RELEASE_MAP_STEP, HOW_TO]) {
       const text = read(file);
       for (const value of [...RELEASE_MAP_STATUSES, ...RELEASE_MAP_TAG_STATES]) {
@@ -313,10 +336,10 @@ describe('shared enumerations (rows 11, 12)', () => {
   });
 });
 
-// ─── push confirmation (matrix 13, 14) ──────────────────────────────────────
+// ─── push confirmation ──────────────────────────────────────
 
-describe('push confirmation (rows 13, 14)', () => {
-  test('every push command is repository-scoped and tag-scoped (row 13)', () => {
+describe('push confirmation', () => {
+  test('every push command is repository-scoped and tag-scoped', () => {
     const text = read(RELEASE_MAP_STEP);
     const pushLines = text.split('\n').filter((l) => /\bgit\b.*\bpush\b/.test(l) && !/^\s*(#|>|-\s)/.test(l.trim()) && l.trim().startsWith('git'));
     assert.ok(pushLines.length >= 1, 'the step must show the push command');
@@ -328,7 +351,7 @@ describe('push confirmation (rows 13, 14)', () => {
     }
   });
 
-  test('the confirmation names the repository and the remote, and the default is no push (row 14)', () => {
+  test('the confirmation names the repository and the remote, and the default is no push', () => {
     const text = read(RELEASE_MAP_STEP);
     assert.match(text, /Push tag `?<tag>`? from `?<repo>`? to remote `?<remote>`? \(<url>\)\? \(y\/n\)/);
     assert.match(text, /default[^.\n]*no push|nothing is pushed by default/i);
@@ -337,13 +360,13 @@ describe('push confirmation (rows 13, 14)', () => {
     assert.match(text, /credentials removed/);
   });
 
-  test('every milestone complete call in the spine carries the release map when per-repo tagging is on (row 17)', () => {
+  test('every milestone complete call in the spine carries the release map when per-repo tagging is on', () => {
     const spine = read(SPINE);
     assert.match(spine, /EVERY `milestone complete` call below \(including the `--no-archive-phases` form\)/);
     assert.match(spine, /same `--release-map` argument/);
   });
 
-  test('the single-repository tag section is skipped for per-repo tagging, and the push step follows it (row 18)', () => {
+  test('the single-repository tag section is skipped for per-repo tagging, and the push step follows it', () => {
     const spine = read(SPINE);
     const section = spine.indexOf('<!-- gsd:section id="git-tag"');
     const skip = spine.indexOf('If `PER_REPO_TAGGING` is `true`, skip this section');
@@ -354,15 +377,15 @@ describe('push confirmation (rows 13, 14)', () => {
   });
 });
 
-// ─── docs (matrix 15, 16) ───────────────────────────────────────────────────
+// ─── docs ───────────────────────────────────────────────────
 
-describe('documentation and reference rule (rows 15, 16)', () => {
-  test('the how-to is indexed and states that a milestone version may differ from repository release versions (row 15)', () => {
+describe('documentation and reference rule', () => {
+  test('the how-to is indexed and states that a milestone version may differ from repository release versions', () => {
     assert.ok(read(DOCS_README).includes('how-to/tag-a-multi-repo-milestone.md'));
     assert.match(read(HOW_TO), /milestone version[^.]*\b(may|can) differ[^.]*repository release version/i);
   });
 
-  test('the documented hex-reference rule accepts 7 and 40 characters and rejects 6 and 41 (row 16)', () => {
+  test('the documented hex-reference rule accepts 7 and 40 characters and rejects 6 and 41', () => {
     const m = read(RELEASE_MAP_STEP).match(/`(\^\[0-9a-f\]\{7,40\}\$)`/);
     assert.ok(m, 'release-map.md must state the hex reference rule');
     // allow-adhoc-regex-escape: the pattern under test is a regex taken verbatim from the step file
@@ -386,18 +409,18 @@ describe('documentation and reference rule (rows 15, 16)', () => {
     );
   });
 
-  test('the documented release-name rule keeps shell metacharacters and option-like names out of a push (row 19)', () => {
+  test('the documented release-name rule keeps shell metacharacters and option-like names out of a push', () => {
     const m = read(RELEASE_MAP_STEP).match(/`(\^\[A-Za-z0-9\]\[A-Za-z0-9\._\+-\]\{0,199\}\$)`/);
     assert.ok(m, 'release-map.md must state the release-name rule');
     // allow-adhoc-regex-escape: the pattern under test is a regex taken verbatim from the step file
     const re = new RegExp(m[1]);
-    for (const ok of ['v5.78.0', '2.14.1-rc.1', 'v1+build.5', 'a', 'a'.repeat(200)]) assert.equal(re.test(ok), true, ok);
+    for (const ok of ['v5.78.0', '2.14.1-rc.1', 'v1+build.5', 'a', 'a'.repeat(199), 'a'.repeat(200)]) assert.equal(re.test(ok), true, ok);
     for (const bad of ['', '-x', '.hidden', 'v1$(id)', 'v1;id', 'v1"x', 'v1 x', 'v1:x', 'a/b', 'v1\n', 'a'.repeat(201)]) {
       assert.equal(re.test(bad), false, JSON.stringify(bad));
     }
   });
 
-  test('per_repo with no configured sub-repositories exposes both facts the routing predicate needs (row 20)', (t) => {
+  test('per_repo with no configured sub-repositories exposes both facts the routing predicate needs', (t) => {
     const { root } = makeProject(t, []);
     const res = runCli(root, ['query', 'init.complete-milestone']);
     assert.equal(res.status, 0, res.stderr);
