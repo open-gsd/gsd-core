@@ -99,7 +99,8 @@ string) for family-only commands such as `config-path` or `current-timestamp`:
 { "name": "gsd_invoke_command", "arguments": { "family": "config-path" } }
 ```
 
-When supplied, `subcommand` must be a string; explicit JSON `null` is rejected (omit the field to invoke a family-only command); commands that require one keep
+When supplied, `subcommand` must be a string; explicit JSON `null` is rejected
+(omit the field to invoke a family-only command). Commands that require one keep
 their existing CLI validation.
 
 ## 4. Browse the catalog (resources and prompts)
