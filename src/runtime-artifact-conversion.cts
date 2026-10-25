@@ -3571,7 +3571,10 @@ function _stampNonClaudeRuntimeDefaults(content: string, runtime: string): strin
 function restoreClaudeGlobalAtRefTilde(content, pathPrefix) {
   if (typeof pathPrefix !== 'string' || !pathPrefix.startsWith('$HOME')) return content;
   const tildeEquivalent = '~' + pathPrefix.slice('$HOME'.length);
-  const atRefRe = new RegExp(`(?<!["'])@${escapeRegExp(pathPrefix)}`, 'g');
+  // A prefix handed over without its trailing slash (the normalized form) must
+  // not match the start of a look-alike such as `@$HOME/.claude-plugin/x`.
+  const boundary = pathPrefix.endsWith('/') ? '' : '(?![\\w-]|\\.\\w)';
+  const atRefRe = new RegExp(`(?<!["'])@${escapeRegExp(pathPrefix)}${boundary}`, 'g');
   // Function replacement, not a string. A string replacement treats `$&` and the
   // backtick-dollar form in the SUBSTITUTION as special patterns, so a --config-dir
   // containing either corrupts output: `$HOME/.cl$&ude/` yielded
@@ -3696,6 +3699,20 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false, a
     );
   }
   return _applyRuntimeRewritesInner(content, runtime, pathPrefix, isGlobal, attribution);
+}
+
+/**
+ * #5501: rewrite `~/.claude` and `$HOME/.claude` in one pass. `pathPrefix` (with
+ * its trailing slash) replaces the slash form; `normalizedPathPrefix` replaces the
+ * bare form, guarded so `.claude-plugin`, `.claudeignore` and `.claude.json` keep
+ * their bytes. A function replacement, never a string: a string replacement
+ * interprets `$&` in a config dir, and a single pass never rescans text it emitted.
+ */
+function rewriteClaudeHomeForms(content: string, pathPrefix: string, normalizedPathPrefix: string): string {
+  return content.replace(
+    /(?:~|\$HOME)\/\.claude(\/|(?![\w-]|\.\w))/g,
+    (_match: string, tail: string) => (tail === '/' ? pathPrefix : normalizedPathPrefix),
+  );
 }
 
 function _applyRuntimeRewritesInner(content, runtime, pathPrefix, isGlobal = false, attribution = undefined) {
@@ -3823,22 +3840,19 @@ function _applyRuntimeRewritesInner(content, runtime, pathPrefix, isGlobal = fal
     // paths) whose commands install with `converter: null` — this pass is their
     // only chance to receive runtime-correct paths, including the tilde restore.
     case 'slash-tilde-restore':
-      content = content.replace(/~\/\.claude\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
+      // #5501: the slash AND bare forms in ONE pass. The launcher default
+      // `${CLAUDE_CONFIG_DIR:-$HOME/.claude}` has no trailing slash, so a slash-only
+      // rewrite left a --config-dir install probing `~/.claude/gsd-core`. One
+      // combined pass (not slash then bare) so a prefix the pass emits is never
+      // rescanned: a config dir nested under `~/.claude` or named `.claude.d` would
+      // otherwise be rewritten again.
+      content = rewriteClaudeHomeForms(content, pathPrefix, normalizedPathPrefix);
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      // #5501: the bare form too — the launcher's
-      // `${CLAUDE_CONFIG_DIR:-$HOME/.claude}` default has no trailing slash,
-      // so a --config-dir install kept probing `~/.claude/gsd-core`. Guarded
-      // with the same `(?![\w-])` lookahead as copyWithPathReplacement so
-      // `.claude-plugin`, `.claudeignore` and a `.claude-work` prefix the
-      // slash pass just emitted are left alone.
-      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
       // #3133 / #3544: restore @-file-reference lines to the tilde form
       // Claude actually expands — see restoreClaudeGlobalAtRefTilde's doc
-      // comment above for why this must be a separate, @-anchored pass.
-      // Handed the normalized prefix (as the agents pipeline is, #3719) so a
-      // bare `@~/.claude` rewritten above is restored as well.
+      // comment above for why this must be a separate, @-anchored pass. Handed
+      // the normalized prefix (as the agents pipeline is, #3719) so a bare
+      // `@~/.claude` rewritten above is restored as well.
       content = restoreClaudeGlobalAtRefTilde(content, normalizedPathPrefix);
       content = processAttribution(content, attribution);
       break;

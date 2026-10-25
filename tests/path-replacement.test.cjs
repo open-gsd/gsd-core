@@ -1075,6 +1075,71 @@ describe('#5501: Claude skill/command bodies rewrite the bare ~/.claude and $HOM
     const out = _applyRuntimeRewrites(launcherDefault, 'claude', '$HOME/.claude/', true, undefined);
     assert.strictEqual(out, launcherDefault);
   });
+
+  // #5501 review (F1): the slash pass used to emit the prefix and the bare pass then
+  // re-matched the `.claude` inside it, so a config dir nested under `~/.claude`
+  // (or one named `.claude.d`) was rewritten again. One pass rewrites each source
+  // occurrence exactly once.
+  test('a config dir nested under ~/.claude is not re-matched', () => {
+    const src = 'cat ~/.claude/gsd-core/x; echo "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"\n';
+    const out = _applyRuntimeRewrites(src, 'claude', '$HOME/.claude/profiles/work/', true, undefined);
+    assert.strictEqual(
+      out,
+      'cat $HOME/.claude/profiles/work/gsd-core/x; echo "${CLAUDE_CONFIG_DIR:-$HOME/.claude/profiles/work}"\n',
+    );
+  });
+
+  test('a config dir whose name starts .claude. is not re-matched', () => {
+    const out = _applyRuntimeRewrites('cat ~/.claude/gsd-core/x\n', 'claude', '$HOME/.claude.d/', true, undefined);
+    assert.strictEqual(out, 'cat $HOME/.claude.d/gsd-core/x\n');
+  });
+
+  // #5501 review (F6): a string replacement interprets `$&`; the prefix is emitted verbatim.
+  test('a config dir containing $& is emitted verbatim', () => {
+    const out = _applyRuntimeRewrites('ls ~/.claude ~/.claude/x\n', 'claude', '$HOME/.cl$&ude/', true, undefined);
+    assert.strictEqual(out, 'ls $HOME/.cl$&ude $HOME/.cl$&ude/x\n');
+  });
+
+  test('.claude.json and .claude.d style names keep their bytes', () => {
+    const src = 'read ~/.claude.json and $HOME/.claude.d/x\n';
+    assert.strictEqual(_applyRuntimeRewrites(src, 'claude', '$HOME/.claude-work/', true, undefined), src);
+  });
+
+  // #5501 review (F7): handing the restore the normalized prefix must not turn a
+  // look-alike @-ref on a default install into the tilde form.
+  test('a look-alike @-ref keeps its bytes on a default install', () => {
+    const src = '@$HOME/.claude-plugin/x\n@$HOME/.claudeignore\n';
+    assert.strictEqual(_applyRuntimeRewrites(src, 'claude', '$HOME/.claude/', true, undefined), src);
+  });
+
+  test('property: each home form is rewritten once and everything else keeps its bytes', () => {
+    const fc = require('fast-check');
+    const PREFIXES = [
+      '$HOME/.claude-work/', '$HOME/.claude/profiles/work/', '$HOME/.claude.d/',
+      '/opt/gsd/cfg/', '$HOME/.cl$&ude/', '$HOME/.claude/',
+    ];
+    // [source token, expected output given (prefix, prefix without trailing slash)]
+    const TOKENS = [
+      ['~/.claude/gsd-core/x', (p) => `${p}gsd-core/x`],
+      ['$HOME/.claude/gsd-core/x', (p) => `${p}gsd-core/x`],
+      ['~/.claude', (_p, n) => n],
+      ['$HOME/.claude', (_p, n) => n],
+      ['~/.claude-plugin/x', () => '~/.claude-plugin/x'],
+      ['$HOME/.claudeignore', () => '$HOME/.claudeignore'],
+      ['~/.claude.json', () => '~/.claude.json'],
+      ['plain text', () => 'plain text'],
+    ];
+    fc.assert(fc.property(
+      fc.constantFrom(...PREFIXES),
+      fc.array(fc.integer({ min: 0, max: TOKENS.length - 1 }), { minLength: 1, maxLength: 12 }),
+      (prefix, picks) => {
+        const normalized = prefix.replace(/\/$/, '');
+        const src = picks.map((i) => TOKENS[i][0]).join('\n');
+        const expected = picks.map((i) => TOKENS[i][1](prefix, normalized)).join('\n');
+        assert.strictEqual(_applyRuntimeRewrites(src, 'claude', prefix, true, undefined), expected);
+      },
+    ), { seed: 5501, numRuns: 100 });
+  });
 });
 
 describe('#5501: spawned installer — --config-dir skills find gsd-tools under the install path', () => {
