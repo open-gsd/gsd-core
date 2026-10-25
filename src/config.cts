@@ -89,12 +89,12 @@ const SHIP_PR_BODY_TEMPLATE_TOKENS = new Set([
 ]);
 const SHIP_PR_BODY_SOURCE_RE = /^(ROADMAP|PLAN|SUMMARY|VERIFICATION|STATE|REQUIREMENTS|CONTEXT)\.md\s+##\s+[^\r\n#][^\r\n]*$/;
 
-// ADR-612 PR-5: configuration accepts every convention the runtime can read.
-// Keep this distinct from roadmap-upgrade's supported target set: sequential
-// is valid project configuration but is not a migration destination.
 /** Allowed values of `git.repo_tagging` (#5706): `single` is the default. */
 const VALID_REPO_TAGGING_MODES: readonly string[] = Object.freeze(['single', 'per_repo']);
 
+// ADR-612 PR-5: configuration accepts every convention the runtime can read.
+// Keep this distinct from roadmap-upgrade's supported target set: sequential
+// is valid project configuration but is not a migration destination.
 const VALID_PHASE_ID_CONVENTIONS: readonly string[] = Object.freeze([
   'sequential',
   'milestone-prefixed',
