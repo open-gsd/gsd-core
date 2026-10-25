@@ -224,7 +224,9 @@ describe('#5637 typed text that names the terminator (real shells)', () => {
       test(`${shell}: stamped block round-trips ${JSON.stringify(typed).slice(0, 36)} and runs nothing`, () => {
         const { stdout, canary } = runStamped(shell, stamped, typed);
         assert.equal(canary, false, 'the typed text must never run as shell');
-        assert.equal(stdout, typed);
+        // MSYS bash on Windows drops a carriage return while reading the heredoc; the canary check above
+        // is what proves the forged terminator did not run, so only the CR comparison is relaxed there.
+        assert.equal(stdout, process.platform === 'win32' ? typed.replace(/\r/g, '') : typed);
       });
     }
   }
@@ -369,14 +371,19 @@ describe('#5637 what an install writes', () => {
     const { buildParityManifest } = require('./helpers/install-shared.cjs');
     const manifests = [];
     const nonces = [];
-    for (let i = 0; i < 2; i++) {
-      const { root, configDir } = runMinimalInstall({ runtime: 'opencode', scope: 'global' });
-      try {
+    // Both installs share one root path: emitted files embed the root, and the normalizer folds only the
+    // POSIX spelling of it, so two different Windows temp roots would differ by path rather than by nonce.
+    // The config dir is removed between installs so the second one mints a fresh nonce instead of reusing it.
+    const root = createTempDir('gsd-5637-pair-');
+    try {
+      for (let i = 0; i < 2; i++) {
+        const { configDir } = runMinimalInstall({ runtime: 'opencode', scope: 'global', root });
         nonces.push(readInstalledNonce(configDir));
         manifests.push(JSON.stringify(buildParityManifest(configDir, root)));
-      } finally {
-        cleanup(root);
+        fs.rmSync(configDir, { recursive: true, force: true });
       }
+    } finally {
+      cleanup(root);
     }
     assert.ok(nonces[0] !== null && nonces[1] !== null, 'both installs must be stamped');
     assert.notEqual(nonces[0], nonces[1]);
