@@ -430,6 +430,20 @@ function classifyGrepGlob(glob) {
 // Bash command scan — pass 1: tokenizer
 // ---------------------------------------------------------------------------
 
+// Which reading of a heredoc the scan is making (#5513). The guard scans a command that
+// opens a heredoc under every reading below and denies if any of them finds a secret read
+// (see findSecretReadUnderOtherReadings), so a change of reading can add a denial but
+// never remove one.
+//  - heredocBodiesSkippedInSpans: bash 5 skips the bodies of heredocs opened inside a
+//    `$( )` span when it looks for the closing `)`; bash 3.2.57 (still `/bin/bash` on
+//    macOS) does not, so a `)` on a body line closes the substitution and the rest of
+//    that line runs as the OUTER command.
+//  - heredocTagsAsWords: an unquoted tag is a bash word (a CR and a substitution belong
+//    to it). false is the earlier reading, where the tag stopped at any whitespace and at
+//    `(`: kept as a reading so nothing the guard denied before is allowed now.
+let heredocBodiesSkippedInSpans = true;
+let heredocTagsAsWords = true;
+
 // Index of the `)` closing a `$(` / `<(` / `>(` opened just before `i`, or
 // str.length when unterminated. Quote- and heredoc-aware so a `)` inside a
 // quoted string or a heredoc body never closes the span early.
@@ -464,7 +478,7 @@ function findParenClose(str, i) {
       i = j === -1 ? str.length : j + 1;
       continue;
     }
-    if (ch === '<' && str[i + 1] === '<' && str[i + 2] !== '<') {
+    if (heredocBodiesSkippedInSpans && ch === '<' && str[i + 1] === '<' && str[i + 2] !== '<') {
       const tag = readHeredocTag(str, i + 2);
       heredocTags.push(tag);
       i = tag.end;
@@ -500,7 +514,34 @@ function readHeredocTag(str, i) {
     i = j === -1 ? str.length : j + 1;
   } else {
     if (str[i] === '\\') { quoted = true; i++; }
-    while (i < str.length && !/[\s;&|<>()]/.test(str[i])) tag += str[i++];
+    // #5513: an unquoted tag is a bash WORD. It ends only at a metacharacter (space, tab,
+    // newline, `;&|<>()`): a carriage return is not one, so `EOF` + CR is the tag and the
+    // CRLF terminator line matches it; and a substitution inside the word belongs to it,
+    // taken literally (`E$(x)F` waits for the line `E$(x)F`).
+    while (i < str.length && !(heredocTagsAsWords ? /[ \t\n;&|<>()]/ : /[\s;&|<>()]/).test(str[i])) {
+      if (!heredocTagsAsWords) { tag += str[i++]; continue; }
+      if (str[i] === '$' && str[i + 1] === '(') {
+        const e = findParenClose(str, i + 2);
+        tag += str.slice(i, e + 1);
+        i = e + 1;
+        continue;
+      }
+      if (str[i] === '$' && str[i + 1] === '{') {
+        const j = str.indexOf('}', i);
+        const e = j === -1 ? str.length - 1 : j;
+        tag += str.slice(i, e + 1);
+        i = e + 1;
+        continue;
+      }
+      if (str[i] === '`') {
+        const j = str.indexOf('`', i + 1);
+        const e = j === -1 ? str.length - 1 : j;
+        tag += str.slice(i, e + 1);
+        i = e + 1;
+        continue;
+      }
+      tag += str[i++];
+    }
   }
   return { tag, quoted, stripTabs, end: i };
 }
@@ -646,6 +687,7 @@ function tokenize(str) {
       hasWord = true;
       const e = findParenClose(str, i + 2);
       nested.push(str.slice(i + 2, e));
+      if (expectTag && heredocTagsAsWords) buf += str.slice(i, e + 1); // #5513: the tag is taken literally
       i = e + 1;
       continue;
     }
@@ -664,6 +706,7 @@ function tokenize(str) {
       const j = str.indexOf('`', i + 1);
       const e = j === -1 ? str.length : j;
       nested.push(str.slice(i + 1, e));
+      if (expectTag && heredocTagsAsWords) buf += str.slice(i, e + 1); // #5513: the tag is taken literally
       i = e + 1;
       continue;
     }
@@ -695,6 +738,14 @@ function tokenize(str) {
         heredocs = [];
         i = r.end;
       }
+      continue;
+    }
+
+    // #5513: a CR is not a bash metacharacter, so inside a heredoc tag it is part of the word
+    // (a CRLF command's terminator line is `EOF` + CR).
+    if (ch === '\r' && expectTag && hasWord && heredocTagsAsWords) {
+      buf += ch;
+      i++;
       continue;
     }
 
@@ -1038,6 +1089,26 @@ function precedingOp(s, bySeg, sepAfter) {
     if (text !== undefined && !GROUPING_SEPS.has(text)) op = text; // last non-grouping wins
   }
   return { op, prevSeg: p };
+}
+
+// #5513: the same scan under the other readings of a heredoc: bash 3.2.57's `$( )` span
+// (bodies not skipped) and the earlier tag reading (tag ends at any whitespace). Only a
+// command that opens a heredoc can read differently, so the extra passes are skipped for
+// every other command.
+function findSecretReadUnderOtherReadings(command) {
+  if (!command.includes('<<')) return null;
+  for (const [bodiesSkipped, tagsAsWords] of [[false, true], [true, false]]) {
+    heredocBodiesSkippedInSpans = bodiesSkipped;
+    heredocTagsAsWords = tagsAsWords;
+    try {
+      const hit = findSecretRead(command, 0);
+      if (hit) return hit;
+    } finally {
+      heredocBodiesSkippedInSpans = true;
+      heredocTagsAsWords = true;
+    }
+  }
+  return null;
 }
 
 // Returns the offending token text, or null.
@@ -1485,7 +1556,7 @@ process.stdin.on('end', () => {
     const command = typeof data.tool_input.command === 'string' ? data.tool_input.command : '';
     if (command === '') allow(undefined);
     if (command.length > MAX_COMMAND_LENGTH) emitBlock('command-too-large', tool, '');
-    const hit = findSecretRead(command, 0);
+    const hit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
     if (hit !== null) emitBlock('secret-read', tool, hit);
     const spawn = findDebuggerCliSpawn(command, 0);
     if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);

@@ -225,11 +225,22 @@ describe('#5569: Agent(...) projection onto gsd_dispatch', () => {
   });
 });
 
-describe('#5569: /gsd-debug is unsupported on Pi', () => {
+describe('#5569, #5630: /gsd-debug on Pi', () => {
   const COMMAND = '---\nname: gsd:debug\ndescription: Debug an issue\n---\n<execution_context>\n@~/.claude/gsd-core/workflows/debug.md\n</execution_context>\n';
+  const COMMAND_WITHOUT_CONTEXT = '---\nname: gsd:debug\ndescription: Debug an issue\n---\nbody\n';
 
-  test('the converted skill prints the reason and does not carry the workflow include', () => {
+  test('with a workflow to read, the converted skill is partial: it names the workflow and prints the reason', () => {
     const out = convertClaudeCommandToPiSkill(COMMAND, 'gsd-debug');
+    assert.match(out, /^---\r?\nname: gsd-debug\r?\n/);
+    assert.match(out, /Partly supported on Pi/);
+    assert.match(out, /needs nested dispatch; Pi dispatch is flat/);
+    assert.match(out, /Do not dispatch any role/);
+    assert.match(out, /debug\.md/);
+    assert.doesNotMatch(out, /is unsupported on Pi:/);
+  });
+
+  test('with no workflow to read, the converted skill is the full stub and does not carry a workflow include', () => {
+    const out = convertClaudeCommandToPiSkill(COMMAND_WITHOUT_CONTEXT, 'gsd-debug');
     assert.match(out, /^---\r?\nname: gsd-debug\r?\n/);
     assert.match(out, /unsupported on Pi: needs nested dispatch; Pi dispatch is flat/);
     assert.match(out, /Do not start the workflow/);
@@ -243,10 +254,11 @@ describe('#5569: /gsd-debug is unsupported on Pi', () => {
     assert.match(out, /\*\*Pi dispatch \(fail closed\)\.\*\*/);
   });
 
-  test('the installed gsd-debug skill is the unsupported stub', (t) => {
+  test('the installed gsd-debug skill is the partial skill', (t) => {
     const { configDir, root } = runMinimalInstall({ runtime: 'pi', scope: 'global' });
     t.after(() => cleanup(root));
     const skill = fs.readFileSync(path.join(configDir, 'skills', 'gsd-debug', 'SKILL.md'), 'utf8');
+    assert.match(skill, /Partly supported on Pi/);
     assert.match(skill, /needs nested dispatch; Pi dispatch is flat/);
   });
 });

@@ -3174,11 +3174,17 @@ describe('Bug #3362 / #3413: Windows hook commands are runtime-aware', () => {
 
   test('Antigravity portable install: .js hook command also stays shell-neutral on Windows (seam inert after gemini removal)', () => {
     const home = require('node:os').homedir().replace(/\\/g, '/');
+    // #5100: a win32 portable JS hook emits nothing unless the Git Bash
+    // policy finds bash. This case is about the PowerShell seam, so inject
+    // a discovered Git Bash instead of depending on the host PATH.
     const cmd = buildHookCommand(`${home}/.gemini/antigravity`, 'gsd-check-update.js', {
       portableHooks: true,
       platform: 'win32',
       runtime: 'antigravity',
+      env: { ProgramFiles: 'C:\\Program Files' },
+      existsSync: (candidate) => candidate === 'C:\\Program Files\\Git\\bin\\bash.exe',
     });
+    assert.equal(typeof cmd, 'string');
     assert.ok(!cmd.startsWith('& '), `Antigravity hook command must not use PowerShell call operator: ${cmd}`);
     assert.equal(parseHookCommand(cmd).hookPath, '$HOME/.gemini/antigravity/hooks/gsd-check-update.js');
   });
@@ -8486,7 +8492,9 @@ describe('#4377: --relative-includes emits project-relative @ includes for a loc
           .split(`${absRoot}/.claude/`).join('.claude/')
           .split(`${absRoot}/.claude`).join('.claude');
       }
-      if (normalized !== rel.get(name)) mismatched.push({ name, normalized, actual: rel.get(name) });
+      // #5637: each install stamps its own random heredoc terminator; fold it back to the canonical token.
+      const foldNonce = (text) => text.replace(/\b(GSD_(?:QUICK_BATCH_)?ARGS_END)_[0-9a-f]{32}\b/g, '$1');
+      if (foldNonce(normalized) !== foldNonce(rel.get(name))) mismatched.push({ name, normalized, actual: rel.get(name) });
     }
     // Report the FIRST divergence as text, not just a list of filenames. A
     // bare file list says a difference exists somewhere in 236 files and

@@ -175,6 +175,9 @@ const DOCS_GUARD_TESTS = {
   // artifact registry (reads docs/FEATURES.md around the extract-learnings
   // entry).
   'tests/learnings.test.cjs': ['docs/FEATURES.md'],
+  // #5706: pins the release map statuses / tag states in docs/CONFIGURATION.md
+  // against the milestone-release-map module's exported enums.
+  'tests/milestone-release-map.test.cjs': ['docs/CONFIGURATION.md'],
   'tests/analyze-dependencies.test.cjs': ['docs/COMMANDS.md'],
   'tests/auto-select-attribute.test.cjs': ['docs/reference/plan-md.md'],
   'tests/autonomous-converge.test.cjs': [

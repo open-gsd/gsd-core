@@ -119,6 +119,7 @@ build/
 # are the other two) never got a .gitignore entry when their modules moved
 # into src/*.cts, and were also never untracked.
 /gsd-core/bin/lib/api-coverage.cjs
+/gsd-core/bin/lib/args-terminator.cjs
 /gsd-core/bin/lib/assumption-delta.cjs
 /gsd-core/bin/lib/claude-orchestration.cjs
 /gsd-core/bin/lib/claude-orchestration-command-router.cjs
@@ -228,6 +229,7 @@ build/
 /gsd-core/bin/lib/pattern.cjs
 /gsd-core/bin/lib/text-lines.cjs
 /gsd-core/bin/lib/token-scanner.cjs
+/gsd-core/bin/lib/read-only-git-env.cjs
 /gsd-core/bin/lib/health-diagnostic-types.cjs
 /gsd-core/bin/lib/health-diagnostic.cjs
 /gsd-core/bin/lib/health-diagnostic-rules/root-existence.cjs
@@ -340,6 +342,8 @@ build/
 /gsd-core/bin/lib/state.cjs
 /gsd-core/bin/lib/milestone.cjs
 /gsd-core/bin/lib/milestone-release-tags.cjs
+# #5706: new module (milestone release map) — emitted artifact, never edited.
+/gsd-core/bin/lib/milestone-release-map.cjs
 /gsd-core/bin/lib/phase.cjs
 /gsd-core/bin/lib/verify.cjs
 /gsd-core/bin/lib/init.cjs

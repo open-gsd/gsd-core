@@ -1436,3 +1436,65 @@ describe('gsd-secret-read-guard: bundled short-flag clusters (#5046)', () => {
     ), PROPERTY_RUNS);
   });
 });
+
+describe('gsd-secret-read-guard: heredoc inside a command substitution (#5513)', () => {
+  // Each command below is a real read in bash: the heredoc tag or body is read by the
+  // guard differently than by the shell, so the `$( )` span used to end in the wrong
+  // place and the `cat .env` after it was scanned as data. `\n` is a newline, `\r` a CR.
+  const DENIED = [
+    ['a tag containing a substitution', 'echo "$(cat <<E$(x)F\nx\nE$(x)F\n)"; cat .env'],
+    ['a tag followed by a carriage return', 'echo "$(cat <<EOF\r\nx\nEOF\r\n)"; cat .env'],
+    ['a `)` in the body (bash 3.2 closes the substitution there)', 'echo "$(cat <<EOF\n)"; cat .env; "\nEOF\n)"'],
+    ['a backtick substitution in the tag', 'echo "$(cat <<E`x`F\nx\nE`x`F\n)"; cat .env'],
+    ['a ${...} expansion in the tag', 'echo "$(cat <<E${x}F\nx\nE${x}F\n)"; cat .env'],
+  ];
+  for (const [label, cmd] of DENIED) {
+    test(`denies the read after ${label}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  // The same commands with `echo ok` in place of the read run no read and stay allowed.
+  const ALLOWED_TWINS = [
+    ['a tag containing a substitution', 'echo "$(cat <<E$(x)F\nx\nE$(x)F\n)"; echo ok'],
+    ['a tag followed by a carriage return', 'echo "$(cat <<EOF\r\nx\nEOF\r\n)"; echo ok'],
+    ['a `)` in the body', 'echo "$(cat <<EOF\n)"; echo ok; "\nEOF\n)"'],
+  ];
+  for (const [label, cmd] of ALLOWED_TWINS) {
+    test(`allows the twin with no read after ${label}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  // Controls: the read-as-data forms stay data, and the ordinary commit-message heredoc
+  // (LF and CRLF) is not affected by either reading.
+  for (const [label, cmd] of [
+    ['a read written inside a heredoc body', 'cat <<EOF\ncat .env\nEOF'],
+    ['a read inside a CRLF heredoc body', 'cat <<EOF\r\ncat .env\r\nEOF\r\n'],
+    ['a read inside a heredoc whose tag holds a substitution', 'cat <<E$(x)F\ncat .env\nE$(x)F'],
+    ['a git commit heredoc', 'git commit -m "$(cat <<\'EOF\'\nfix: handle the empty case\n\nBody line (with parens).\nEOF\n)"'],
+    ['a CRLF git commit heredoc', 'git commit -m "$(cat <<\'EOF\'\r\nfix: x\r\nEOF\r\n)"'],
+  ]) {
+    test(`still allows ${label}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  // The earlier tag reading is kept as a reading: with a CR on the opening line and an LF-only
+  // terminator, bash never terminates the heredoc (no read runs), but this command was denied
+  // before and stays denied, so a change of reading never removes a denial.
+  test('a read after a mixed-line-ending heredoc stays denied', () => {
+    const cmd = 'cat <<EOF\r\nx\nEOF\ncat .env';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  test('a read after a top-level CRLF heredoc is denied', () => {
+    const cmd = 'cat <<EOF\r\ndata\r\nEOF\r\ncat .env';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  test('a read after a top-level heredoc whose tag holds a substitution is denied', () => {
+    const cmd = 'cat <<E$(x)F\ndata\nE$(x)F\ncat .env';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+});

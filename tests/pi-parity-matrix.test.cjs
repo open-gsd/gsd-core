@@ -26,7 +26,7 @@ const {
   registeredHooks,
 } = require('./helpers/pi-parity.cjs');
 const { _internals } = require('../pi/gsd.cjs');
-const { PI_UNSUPPORTED_SKILLS } = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
+const { PI_UNSUPPORTED_SKILLS, PI_PARTIAL_SKILLS } = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
 
 const { PI_HOOK_DISPOSITIONS, PI_PRE_TOOL_HOOKS, PI_POST_TOOL_HOOKS } = _internals;
 const REPO = path.join(__dirname, '..');
@@ -160,10 +160,19 @@ describe('#5561: Pi parity over the shipped surface', () => {
     );
   });
 
-  test('every unsupported Pi skill states its reason', () => {
+  test('every unsupported or partial Pi skill states its reason', () => {
     for (const [name, reason] of Object.entries(PI_UNSUPPORTED_SKILLS)) {
       assert.ok(reason.length > 0, name);
       assert.ok(skillBody(name).includes(reason), `${name} does not print its reason`);
+    }
+    assert.ok(Object.keys(PI_PARTIAL_SKILLS).length > 0, 'vacuous: no partial skill recorded');
+    for (const [name, { reason, subcommands }] of Object.entries(PI_PARTIAL_SKILLS)) {
+      assert.ok(reason.length > 0 && subcommands.length > 0, name);
+      assert.equal(isStub(name), false, `${name} is partial, not a stub`);
+      assert.ok(skillBody(name).includes(reason), `${name} does not print its reason`);
+      for (const sub of subcommands) {
+        assert.ok(skillBody(name).includes(`\`${sub.usage}\``), `${name} does not name ${sub.usage}`);
+      }
     }
   });
 
@@ -228,6 +237,10 @@ describe('#5561: Pi parity over the shipped surface', () => {
   test('the reference page lists every unsupported skill, ledgered workflow and non-bridged hook', () => {
     const doc = read(PARITY_DOC);
     for (const [name, reason] of Object.entries(PI_UNSUPPORTED_SKILLS)) {
+      assert.ok(doc.includes(`/skill:${name}`), `${name} missing from the page`);
+      assert.ok(doc.includes(reason), `${name} reason missing from the page`);
+    }
+    for (const [name, { reason }] of Object.entries(PI_PARTIAL_SKILLS)) {
       assert.ok(doc.includes(`/skill:${name}`), `${name} missing from the page`);
       assert.ok(doc.includes(reason), `${name} reason missing from the page`);
     }

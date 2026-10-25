@@ -477,12 +477,15 @@ function collectNormalizedEmittedFiles(configDir, root, opts, callerName) {
     // WITHOUT also masking a genuine content change to an unrelated bare semver
     // literal that happens to equal pkgVersion (#2891; see normalizeVersionStamps'
     // own doc comment for the blind-replace failure modes this replaced).
+    // #5637: every install stamps its own random typed-text heredoc terminator
+    // (`GSD_ARGS_END_<32 hex>`); fold it back to the canonical token so two installs of one tree
+    // still hash identically and only a real content change shows as a diff.
     const normalized = normalizeVersionStamps(
       content.toString('utf8')
         .split(realRoot).join('<HOME>')
         .split(root).join('<HOME>'),
       pkgVersion,
-    );
+    ).replace(/\b(GSD_(?:QUICK_BATCH_)?ARGS_END)_[0-9a-f]{32}\b/g, '$1');
     unsorted[rel] = normalized;
   }
 

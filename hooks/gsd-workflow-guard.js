@@ -81,7 +81,7 @@ function forceGitAddCwds(command, defaultCwd) {
 }
 
 function currentBranch(cwd) {
-  const result = spawnSync('git', ['branch', '--show-current'], {
+  const result = spawnSync('git', ['branch', '--show-current'], { // allow-index-refresh: reads HEAD only, never opens the index
     cwd,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],

@@ -6,6 +6,7 @@
 
 module.exports = {
   MACOS_CONFORMANCE_TIER_FILES: [
+  "tests/5100-win32-bare-bash-sentinel.property.test.cjs",
   "tests/active-workstream-store.unit.test.cjs",
   "tests/adr-612-bracket-phase-counting.test.cjs",
   "tests/adr-index-gate.test.cjs",
@@ -16,6 +17,7 @@ module.exports = {
   "tests/agent-skills.test.cjs",
   "tests/api-coverage-gate-e2e.test.cjs",
   "tests/api-coverage.test.cjs",
+  "tests/args-terminator-nonce.test.cjs",
   "tests/ask-user-questions-fallback.test.cjs",
   "tests/audit-command-cutover.test.cjs",
   "tests/broken-windows.test.cjs",

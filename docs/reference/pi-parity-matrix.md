@@ -6,8 +6,8 @@ What each part of a GSD install becomes on [Pi](https://pi.dev), checked against
 
 | Surface | Claude Code ships | On Pi | Not available on Pi |
 |---|---|---|---|
-| Commands | 72 | 72 skills, run as `/skill:gsd-<command>` | `/skill:gsd-debug` prints that it is unsupported |
-| Workflows | 181 workflow files, including those in subdirectories | all installed under the engine root, each reached through a skill | `debug.md`, which only `/gsd-debug` runs |
+| Commands | 72 | 72 skills, run as `/skill:gsd-<command>` | `/skill:gsd-debug` runs `list` and `status <slug>` only; every other form prints that it cannot run |
+| Workflows | 181 workflow files, including those in subdirectories | all installed under the engine root, each reached through a skill | none |
 | Agent roles | 35 roles and 29 compact variants | 35 roles under `agents/`, run through `gsd_dispatch`; compact variants are not installed | none |
 | Hooks | 29 hook scripts, 8 of them for Cursor or Windsurf only | bridged through `tool_call`, `tool_result`, `session_start`, `before_agent_start` and `session_before_compact` | the hooks listed under [Hooks](#hooks) |
 
@@ -17,19 +17,17 @@ The counts are the state at the time of writing; the test, not this table, is th
 
 Every `commands/gsd/<name>.md` becomes the Pi skill `gsd-<name>`. A skill whose workflow cannot run on Pi is installed as a stub that prints its reason and stops, so the command is still discoverable instead of missing.
 
-| Pi skill | Disposition | Reason |
-|---|---|---|
-| `/skill:gsd-debug` | unsupported-on-pi | needs nested dispatch; Pi dispatch is flat |
+| Pi skill | Disposition | Runs on Pi | Reason the rest does not |
+|---|---|---|---|
+| `/skill:gsd-debug` | partial-on-pi | `list` and `status <slug>` | needs nested dispatch; Pi dispatch is flat |
 
-`gsd_dispatch` runs a role in a child `pi` process that has no dispatch tool of its own, so a role cannot start another role. `/gsd-debug` runs a session manager that starts `gsd-debugger`, which is a second level.
+`gsd_dispatch` runs a role in a child `pi` process that has no dispatch tool of its own, so a role cannot start another role. `/gsd-debug` runs a session manager that starts `gsd-debugger`, which is a second level. `list` and `status <slug>` read `.planning/debug/` and start no agent, so the skill runs them and prints the reason for every other form. No command is installed as a full stub today.
 
 ## Workflows
 
-A workflow is reachable on Pi when a runnable Pi skill, an installed role or another reachable workflow names it. Every workflow Claude Code reaches is also reached on Pi except one. The files in `gsd-core/workflows/` that are not Markdown, `section-manifest.json` and the launcher snippet, are not workflows and are not checked.
+A workflow is reachable on Pi when a runnable Pi skill, an installed role or another reachable workflow names it. Every workflow Claude Code reaches is also reached on Pi. The files in `gsd-core/workflows/` that are not Markdown, `section-manifest.json` and the launcher snippet, are not workflows and are not checked.
 
-| Workflow | Disposition | Reason |
-|---|---|---|
-| `debug.md` | unsupported-on-pi | only `/skill:gsd-debug` runs it, and that skill is unsupported on Pi: needs nested dispatch; Pi dispatch is flat |
+No workflow carries a disposition: `debug.md` is reached by the partial `/skill:gsd-debug`.
 
 ## Agent roles
 
