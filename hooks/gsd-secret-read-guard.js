@@ -2272,8 +2272,9 @@ function reasonFor(code, tool, target) {
       'cannot be checked for secret-file reads. Split it into smaller commands.';
   }
   if (code === 'command-too-complex') {
-    return 'Secret read guard: this Bash command is nested too deeply, or takes too much work, ' +
-      'to be checked for secret-file reads. Split it into smaller commands.';
+    return 'Secret read guard: this Bash command is nested deep enough to overflow the parser, or ' +
+      'needs more work than the scan allows, so it cannot be checked for secret-file reads. ' +
+      'Split it into smaller commands.';
   }
   if (code === 'glob-too-complex') {
     return `Secret read guard: the Grep glob '${target}' expands to more than ${MAX_GLOB_ALTERNATIVES} ` +
