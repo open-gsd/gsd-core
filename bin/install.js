@@ -6562,19 +6562,15 @@ function splitTopLevelKeys(content) {
  * GSD_ALLOW_SYMLINKED_DEST the symlink is intentional: resolve it and write the
  * file it points at, leaving the link itself alone. Without the opt-in the path is
  * returned unchanged (the install-root symlink guard refuses such a layout before
- * any write). A dangling link resolves to where it points, so the first write
- * creates the target.
+ * any write), and so does a dangling link (the guard cannot resolve it), so only a
+ * link whose target exists reaches the resolution below.
  */
 function resolveSymlinkWriteTarget(filePath) {
   if (!isSymlinkedDestOptIn()) return filePath;
   let stat;
   try { stat = fs.lstatSync(filePath); } catch (_) { return filePath; }
   if (!stat.isSymbolicLink()) return filePath;
-  try {
-    return fs.realpathSync(filePath);
-  } catch (_) {
-    return path.resolve(path.dirname(filePath), fs.readlinkSync(filePath));
-  }
+  try { return fs.realpathSync(filePath); } catch (_) { return filePath; }
 }
 
 function mergeCodexConfig(configPath, gsdBlock) {

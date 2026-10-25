@@ -2837,7 +2837,9 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
       assert.match(target, /\[agents[.\]]/, 'the merged GSD agent block is in the target');
     });
 
-    test('with GSD_ALLOW_SYMLINKED_DEST=1 a dangling link is written through, creating its target', () => {
+    // A dangling link is refused by the install-root guard even with the opt-in (it
+    // cannot resolve the link), so no config write is reached and the link is kept.
+    test('with GSD_ALLOW_SYMLINKED_DEST=1 a dangling link is refused and left as it was', () => {
       runCodexInstall(codexHome);
       const realConfig = path.join(codexHome, 'dotfiles', 'codex.toml');
       fs.mkdirSync(path.dirname(realConfig), { recursive: true });
@@ -2845,10 +2847,10 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
       fs.symlinkSync(realConfig, configTomlPath());
       process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
 
-      assert.doesNotThrow(() => runCodexInstall(codexHome));
+      assert.throws(() => runCodexInstall(codexHome), /symlink/i);
 
-      assert.ok(fs.lstatSync(configTomlPath()).isSymbolicLink(), 'config.toml must still be a symlink');
-      assert.match(fs.readFileSync(realConfig, 'utf8'), /\[agents[.\]]/);
+      assert.ok(fs.lstatSync(configTomlPath()).isSymbolicLink(), 'the link must survive a refused install');
+      assert.ok(!fs.existsSync(realConfig), 'no target was created');
     });
 
     test('without the opt-in the install refuses and neither the link nor its target changes', () => {
