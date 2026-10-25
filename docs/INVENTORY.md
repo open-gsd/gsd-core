@@ -648,6 +648,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `mcp-server.cjs` | Minimal MCP server exposing the command surface and state IO to any MCP host (#1681) |
 | `health-diagnostic-rules/milestone-archive-hygiene.cjs` | Health-diagnostic rules: milestone archive + root hygiene checks (W018, W019), ported behavior-preserving from `cmdValidateHealth` (ADR-3180 §8.2/§8.3/§8.5, Phase 11, #3309) |
 | `milestone.cjs` | Milestone archival, requirements marking |
+| `milestone-release-map.cjs` | Release-map schema for `milestone complete --release-map` (compiled from `src/milestone-release-map.cts`, gitignored, #5706): validates the per-repository release record (release, reference, environment, status, tag), renders the escaped `**Release mapping:**` table for MILESTONES.md, and serializes the archive `<version>-RELEASE-MAP.json` by recorded value |
 | `model-adapter.cjs` | Abstracts model routing — passive tier-based selection or active host-supplied resolution (#1680) |
 | `model-catalog.cjs` | CJS adapter over the shared model catalog JSON; exports canonical runtime tier defaults, agent profile maps, alias maps, and routing metadata for all CLI consumers |
 | `model-profiles.cjs` | Backward-compatible profile helpers derived from `model-catalog.cjs`; no longer owns its own model table |

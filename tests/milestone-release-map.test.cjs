@@ -265,7 +265,9 @@ describe('properties (rows 17, 18)', () => {
 
   test('fc: validate -> JSON roundtrip is identity and render keeps one row per entry', () => {
     fc.assert(
-      fc.property(mapArb, (map) => {
+      fc.property(mapArb, (generated) => {
+        // fast-check builds records with a null prototype; deepEqual compares prototypes.
+        const map = generated.map((e) => ({ ...e }));
         const validated = validateReleaseMap(map);
         assert.equal(validated.ok, true);
         assert.deepEqual(validated.map, map);
