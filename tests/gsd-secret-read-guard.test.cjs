@@ -1083,10 +1083,12 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
   const MAX_COMMAND_BYTES = 1024 * 1024;
   const TAIL = 'claude --agent gsd-debugger';
   const padded = (bytes) => 'timeout 1 '.repeat(Math.floor((bytes - TAIL.length) / 10)) + TAIL;
-  // A kill bound, not an elapsed-time assertion: a linear walk finishes in well
-  // under a second at 1 MiB, the quadratic one took ~20 s on a developer
-  // machine and far longer on loaded hosts (OpenCode/Kilo kill a hook at 8 s).
-  const LINEAR_WALK_KILL_BOUND_MS = 15000;
+  // A kill bound, not an elapsed-time assertion: a linear walk finishes in
+  // ~0.2 s at 1 MiB, the quadratic one took 6 s on a fast machine (triage) and
+  // ~20 s on a slower one, and OpenCode/Kilo kill a hook at 8 s. This bound sits
+  // below every quadratic measurement and ~20x above the linear one, so a fast
+  // host cannot pass pre-fix; the shared probe norm is too loose for that.
+  const LINEAR_WALK_KILL_BOUND_MS = 4000;
 
   test('blocks: 1 MiB of leading timeout wrappers finishes inside the hook budget', () => {
     const r = runHookSeam(HOOK_PATH, [], {
@@ -1097,16 +1099,18 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
     assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, '1 MiB padded', { code: 'debugger-cli-spawn', tool: 'Bash' });
   });
 
-  test('a command at and past the size cap is still denied', () => {
-    for (const bytes of [MAX_COMMAND_BYTES, MAX_COMMAND_BYTES + 1]) {
+  // limit: still scanned (debugger verdict); limit+1: denied unscanned by the cap.
+  for (const [bytes, code] of [[MAX_COMMAND_BYTES, 'debugger-cli-spawn'], [MAX_COMMAND_BYTES + 1, 'command-too-large']]) {
+    test(`a ${bytes}-byte command is denied as ${code}`, () => {
+      const base = padded(bytes);
       const r = runHookSeam(HOOK_PATH, [], {
-        input: JSON.stringify(bash(padded(bytes) + ' '.repeat(Math.max(0, bytes - padded(bytes).length)))),
+        input: JSON.stringify(bash(base + ' '.repeat(bytes - base.length))),
         env: { ...process.env },
         timeoutMs: LINEAR_WALK_KILL_BOUND_MS,
       });
-      assert.equal(r.exitCode, 2, `${bytes} bytes: expected block`);
-    }
-  });
+      assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, `${bytes} bytes`, { code });
+    });
+  }
 
   test('blocks: stacked timeouts', () => {
     assertBlocked(runHook(bash('timeout 1 timeout 1 claude --agent gsd-debugger')), 'stacked', { code: 'debugger-cli-spawn' });
