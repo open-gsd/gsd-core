@@ -342,14 +342,17 @@ function _resolveCommandsGsdDir(): string {
  * Only directories whose names start with gsd- are included so user-created
  * skills (without the gsd- prefix) are not accidentally pulled in.
  *
- * The requires: field is parsed via the shared parseRequires helper (the same
- * parser loadSkillsManifest uses), so the two paths cannot drift.
+ * Dependencies use the same parseRequires, parseCallsAgents, and
+ * workflowAgentRefs helpers as loadSkillsManifest. Workflow references resolve
+ * against this runtime's own gsd-core/workflows tree, including its fragments,
+ * so a custom config directory never borrows another installation's agents.
  *
  * Returns an empty Map when the skills dir does not exist.
  */
 function _loadInstalledSkillsManifest(configDir: string): Map<string, string[]> {
   const manifest = new Map<string, string[]>();
   const skillsDir = path.join(configDir, 'skills');
+  const workflowsDir = path.join(configDir, 'gsd-core', 'workflows');
   if (!fs.existsSync(skillsDir)) return manifest;
   let entries: fs.Dirent[];
   try {
@@ -384,12 +387,15 @@ function _loadInstalledSkillsManifest(configDir: string): Map<string, string[]> 
     // installed-runtime dependency resolution can never silently diverge from
     // the source-tree path (single source of truth — no duplicated regex).
     manifest.set(stem, content ? parseRequires(content) : []);
-    // Mirror loadSkillsManifest's Map shape: it always sets a companion
-    // `_calls_agents_<stem>` key. Installed SKILL.md bodies carry no
-    // recoverable agent-call refs, so [] (the no-agents case) keeps the two
-    // manifest shapes identical and prevents undefined-vs-[] drift for any
-    // consumer that reads the agent-refs companion key.
-    manifest.set(`_calls_agents_${stem}`, []);
+    // Installed skills delegate to workflows just as source commands do.
+    // Preserve their agent closure so surface materialization only prunes
+    // agents no retained skill requires (#5356).
+    manifest.set(`_calls_agents_${stem}`, [
+      ...new Set([
+        ...parseCallsAgents(content),
+        ...workflowAgentRefs(content, workflowsDir),
+      ]),
+    ]);
   }
   return manifest;
 }

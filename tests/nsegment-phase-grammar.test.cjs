@@ -22,8 +22,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
-const TIMEOUT = 5000;
+// Each spawn runs a bash that pipes through grep/awk: a shell fan-out, not a single short probe. A fixed
+// 5 s bound returned '' on a loaded macOS runner (the push run on next at 60176b8ab8 went red on
+// `23.1.2 extracts 23.1.2`, took 5007 ms) and failed the base-health gate for every queued PR.
+const TIMEOUT = HOOK_FANOUT_TIMEOUT_MS;
 
 const CODE_REVIEW = path.join(__dirname, '..', 'gsd-core', 'workflows', 'code-review.md');
 const CODE_REVIEW_FIX = path.join(__dirname, '..', 'gsd-core', 'workflows', 'code-review-fix.md');

@@ -253,6 +253,39 @@ function runInstalledTreeAudit(cwd, opts = {}) {
 }
 
 /**
+ * `-c safe.directory=<repoRoot>` for the baseline's git calls (#5659). On the gsd-test bench the
+ * checkout is owned by a different uid than the one running the tests, so git refuses every command
+ * ("detected dubious ownership") and the baseline silently resolved to nothing, which sent the
+ * integrity tests to their zero-tolerance fallback. git honors `safe.directory` from the command line
+ * only; scoping it to the audited repo root (never `*`, never global config) trusts exactly the
+ * checkout being audited. Same precedent as scripts/lint-compiled-artifact-sync.cjs.
+ */
+function safeDirectoryArgs(repoRoot) {
+  // git compares safe.directory against its forward-slash path, also on Windows.
+  return ['-c', `safe.directory=${String(repoRoot).replace(/\\/g, '/')}`];
+}
+
+/**
+ * One line saying why no baseline resolved (#5659), for the integrity gate's zero-tolerance message.
+ * Without it a git refusal (ownership, a missing git, a broken checkout) is indistinguishable from a
+ * checkout that simply has no `origin/next`, which is how the ownership problem hid. Only the first
+ * line git printed is kept.
+ */
+function explainNoBaseline(repoRoot, { execFileSyncImpl = execFileSync } = {}) {
+  try {
+    execFileSyncImpl('git', [...safeDirectoryArgs(repoRoot), 'rev-parse', '--git-dir'], {
+      cwd: repoRoot,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    const detail = String((error && (error.stderr || error.message)) || '').trim().split(/\r?\n/)[0];
+    return `git could not read ${repoRoot}${detail ? `: ${detail}` : ''}`;
+  }
+  return 'no baseline ref (origin/next, next) resolved, or it lacks package.json / package-lock.json';
+}
+
+/**
  * Extracts package.json + package-lock.json (optionally under `subdir`,
  * e.g. 'sdk') from `ref` at git object level into a fresh temp directory --
  * no working-tree checkout, no `node_modules` install. Returns the temp
@@ -260,17 +293,17 @@ function runInstalledTreeAudit(cwd, opts = {}) {
  * clone that never fetched it) or either file is absent at that ref --
  * callers treat `null` as "no baseline available", not an error.
  */
-function extractBaselineTree(ref, repoRoot, subdir = '') {
+function extractBaselineTree(ref, repoRoot, subdir = '', { execFileSyncImpl = execFileSync } = {}) {
   const rel = (name) => (subdir ? path.posix.join(subdir, name) : name);
   let pkgJson;
   let lockJson;
   try {
-    pkgJson = execFileSync('git', ['show', `${ref}:${rel('package.json')}`], {
+    pkgJson = execFileSyncImpl('git', [...safeDirectoryArgs(repoRoot), 'show', `${ref}:${rel('package.json')}`], {
       cwd: repoRoot,
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],
     });
-    lockJson = execFileSync('git', ['show', `${ref}:${rel('package-lock.json')}`], {
+    lockJson = execFileSyncImpl('git', [...safeDirectoryArgs(repoRoot), 'show', `${ref}:${rel('package-lock.json')}`], {
       cwd: repoRoot,
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],
@@ -322,12 +355,12 @@ const NULL_SHA = '0000000000000000000000000000000000000000';
  * Returns '' if none resolve -- callers fall back to strict zero-tolerance
  * rather than silently skipping the gate.
  */
-function resolveBaselineRef(repoRoot) {
+function resolveBaselineRef(repoRoot, { execFileSyncImpl = execFileSync } = {}) {
   if (process.env.AUDIT_BASELINE_REF) return process.env.AUDIT_BASELINE_REF;
   if (process.env.GITHUB_BASE_REF) return `origin/${process.env.GITHUB_BASE_REF}`;
   if (process.env.GITHUB_EVENT_NAME === 'push') {
     try {
-      const parent = execFileSync('git', ['rev-parse', '--verify', 'HEAD~1'], {
+      const parent = execFileSyncImpl('git', [...safeDirectoryArgs(repoRoot), 'rev-parse', '--verify', 'HEAD~1'], {
         cwd: repoRoot,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore'],
@@ -338,7 +371,7 @@ function resolveBaselineRef(repoRoot) {
     }
   }
   try {
-    execFileSync('git', ['rev-parse', '--verify', 'origin/next'], {
+    execFileSyncImpl('git', [...safeDirectoryArgs(repoRoot), 'rev-parse', '--verify', 'origin/next'], {
       cwd: repoRoot,
       stdio: 'ignore',
     });
@@ -347,7 +380,7 @@ function resolveBaselineRef(repoRoot) {
     // fall through to a plain local branch
   }
   try {
-    execFileSync('git', ['rev-parse', '--verify', 'next'], {
+    execFileSyncImpl('git', [...safeDirectoryArgs(repoRoot), 'rev-parse', '--verify', 'next'], {
       cwd: repoRoot,
       stdio: 'ignore',
     });
@@ -366,6 +399,7 @@ module.exports = {
   runNpmAuditWithRetry,
   extractBaselineTree,
   resolveBaselineRef,
+  explainNoBaseline,
   isTimeoutKill,
   buildTimeoutKillError,
   sleepSyncMs,
