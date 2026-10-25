@@ -740,13 +740,14 @@ describe('regressions: #5551 milestone.lock stays out of git status', () => {
   });
 
   test('a planning directory below the repo root gets an anchored, escaped entry', () => {
-    const sub = path.join(tmpDir, 'we[ir]d*dir');
+    // `[` is the gitignore metacharacter that is also a legal filename character on Windows.
+    const sub = path.join(tmpDir, 'we[ir]d#dir');
     fs.mkdirSync(path.join(sub, '.planning'), { recursive: true });
     fs.writeFileSync(path.join(sub, '.planning', 'STATE.md'), BEGIN_PHASE_STATE_MD);
     assert.ok(begin(sub).success);
     assert.doesNotMatch(status(tmpDir), /milestone\.lock/);
     assert.ok(
-      splitLines(fs.readFileSync(excludeFile(tmpDir), 'utf-8')).includes('/we\\[ir]d\\*dir/.planning/milestone.lock'),
+      splitLines(fs.readFileSync(excludeFile(tmpDir), 'utf-8')).includes('/we\\[ir]d#dir/.planning/milestone.lock'),
     );
   });
 });
