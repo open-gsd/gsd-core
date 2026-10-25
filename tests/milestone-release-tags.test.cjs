@@ -16,6 +16,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const fc = require('fast-check');
+const { cleanup } = require('./helpers.cjs');
 const { GIT_FIXTURE_TIMEOUT_MS, GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const TOOLS_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
@@ -82,7 +83,7 @@ function writeConfig(root, subRepos) {
 /** A project root with the named sub-repos initialised as git repos. */
 function makeProject(t, repoNames, { init = true } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-reltags-')));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => cleanup(root));
   const shas = {};
   for (const name of repoNames) {
     if (init) shas[name] = initRepo(path.join(root, name));
@@ -279,8 +280,8 @@ describe('release tags: preflight rejections (rows 3-6, 8, 10, 11, 17)', () => {
 
   test('rejects missing and non-git repos (row 5)', (t) => {
     const { root } = makeProject(t, ['gone', 'plain', 'okrepo']);
-    fs.rmSync(path.join(root, 'gone'), { recursive: true, force: true });
-    fs.rmSync(path.join(root, 'plain', '.git'), { recursive: true, force: true });
+    cleanup(path.join(root, 'gone'));
+    cleanup(path.join(root, 'plain', '.git'));
     const res = createReleaseTags(root, [
       { repo: 'gone', tag: 'v1' },
       { repo: 'plain', tag: 'v1' },
@@ -382,7 +383,7 @@ describe('release tags: preflight rejections (rows 3-6, 8, 10, 11, 17)', () => {
 
   test('errors without sub_repos (row 17)', (t) => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-reltags-')));
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    t.after(() => cleanup(root));
     writeConfig(root, []);
     initRepo(path.join(root, 'api'));
     const exec = countingGit();
@@ -429,7 +430,7 @@ describe('release tags: partial failure and retry (rows 13, 14)', () => {
     ];
     const first = createReleaseTags(root, map);
     assert.equal(first.ok, false);
-    fs.rmSync(blocker, { recursive: true, force: true });
+    cleanup(blocker);
     const second = createReleaseTags(root, map);
     assert.equal(second.ok, true);
     assert.equal(second.repos.api.status, 'already_tagged');
@@ -530,7 +531,7 @@ describe('release tags: request size and shape (row 20)', () => {
   function bigProject(t) {
     const names = Array.from({ length: MAX_RELEASE_TAG_ENTRIES + 1 }, (_, i) => `r${i}`);
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-reltags-')));
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    t.after(() => cleanup(root));
     writeConfig(root, names);
     return { root, names };
   }
@@ -614,7 +615,7 @@ describe('release tags: invariant property (row 21)', () => {
             }
             return true;
           } finally {
-            fs.rmSync(root, { recursive: true, force: true });
+            cleanup(root);
           }
         },
       ),
@@ -695,10 +696,9 @@ describe('release tags: CLI verb (row 22)', () => {
 describe('release tags: reason-code parity (row 24)', () => {
   test('exported reason codes equal the codes CONTEXT.md lists', () => {
     assert.ok(Object.isFrozen(RELEASE_TAG_REASONS));
-    const context = fs.readFileSync(CONTEXT_PATH, 'utf-8'); // allow-test-rule: CONTEXT.md is a prose glossary document, not source
-    const section = context.split(/^### /m).find((s) => s.startsWith('Release Tags Module'));
+    const context = fs.readFileSync(CONTEXT_PATH, 'utf-8');    const section = context.split(/^### /m).find((s) => s.startsWith('Release Tags Module'));
     assert.ok(section, 'CONTEXT.md must carry a "Release Tags Module" glossary entry');
-    const m = /Reason codes \(closed set\): ([^;]+);/.exec(section);
+    const m = /Reason codes \(closed set\): ([^;]{1,500});/.exec(section);
     assert.ok(m, 'glossary entry must list "Reason codes (closed set): ...;"');
     const documented = m[1].split(',').map((s) => s.trim().replace(/`/g, '')).filter(Boolean);
     assert.deepEqual([...documented].sort(), [...RELEASE_TAG_REASONS].sort());
