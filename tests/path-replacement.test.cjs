@@ -1107,6 +1107,11 @@ describe('#5501: Claude skill/command bodies rewrite the bare ~/.claude and $HOM
 
   // #5501 review (F7): handing the restore the normalized prefix must not turn a
   // look-alike @-ref on a default install into the tilde form.
+  test('bare prose keeps its bytes on a default install', () => {
+    const src = 'see ~/.claude and $HOME/.claude for details\n';
+    assert.strictEqual(_applyRuntimeRewrites(src, 'claude', '$HOME/.claude/', true, undefined), src);
+  });
+
   test('a look-alike @-ref keeps its bytes on a default install', () => {
     const src = '@$HOME/.claude-plugin/x\n@$HOME/.claudeignore\n';
     assert.strictEqual(_applyRuntimeRewrites(src, 'claude', '$HOME/.claude/', true, undefined), src);
@@ -1122,7 +1127,8 @@ describe('#5501: Claude skill/command bodies rewrite the bare ~/.claude and $HOM
     const TOKENS = [
       ['~/.claude/gsd-core/x', (p) => `${p}gsd-core/x`],
       ['$HOME/.claude/gsd-core/x', (p) => `${p}gsd-core/x`],
-      ['~/.claude', (_p, n) => n],
+      // a default install keeps the bare spelling it was written with
+      ['~/.claude', (_p, n) => (n === '$HOME/.claude' ? '~/.claude' : n)],
       ['$HOME/.claude', (_p, n) => n],
       ['~/.claude-plugin/x', () => '~/.claude-plugin/x'],
       ['$HOME/.claudeignore', () => '$HOME/.claudeignore'],
