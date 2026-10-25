@@ -1209,6 +1209,9 @@ node gsd-tools.cjs milestone complete <version> (--confirm | --dry-run) [--name 
 # Archive .planning/quick/* into milestones/<version>-quick/ WITHOUT the milestone complete close-out (#2142)
 node gsd-tools.cjs milestone archive-quick <version> [--dry-run]
 
+# Preflight, then create annotated release tags per sub-repo (#5705)
+node gsd-tools.cjs milestone release-tags --map <file.json> [--dry-run]
+
 # Mark requirements as complete
 node gsd-tools.cjs requirements mark-complete <ids>
 # Accepts: REQ-01,REQ-02 or REQ-01 REQ-02 or [REQ-01, REQ-02]
@@ -1242,6 +1245,16 @@ A narrower sibling of `milestone complete --archive-quick`, for callers that nee
 It moves every directory under `.planning/quick/` into `.planning/milestones/<version>-quick/`, (re)writes that archive directory's `README.md` index, and clears STATE.md's `### Quick Tasks Completed` table rows — the same move/index/reset logic `milestone complete --archive-quick` uses. Unlike `milestone complete`, it never archives `ROADMAP.md`/`REQUIREMENTS.md`, never writes a `MILESTONES.md` entry, and runs neither the unstarted-phase guard nor the milestone-window refusal — so, unlike `milestone complete --archive-quick`, it can be safely re-run against an already-completed milestone. JSON result: `{ version, archived, entries, archive_dir, state_updated, warnings }`.
 
 `milestone archive-quick` is a second subcommand of `milestone` (alongside `complete`) — it is not a separate top-level command.
+
+**`milestone release-tags` (#5705)**
+
+Creates one annotated git tag per repository listed in `sub_repos`. `--map` points at a JSON file (at most 1 MiB) holding an array of at most 256 entries: `{ "repo": "api", "tag": "v1.2.0", "ref": "HEAD", "message": "...", "skip": false }`. `repo` must be listed in `sub_repos` (a leading `./` and trailing `/` are ignored; absolute paths, `..` segments and backslash variants are rejected). `ref` defaults to `HEAD`; `message` defaults to the tag name; `skip: true` reports the repo as skipped without touching it.
+
+Every entry is validated before the first tag is written, so a predictable failure creates nothing anywhere. A tag that already exists at the requested commit is reported `already_tagged` (re-running the same map is safe); a tag at a different commit is a `tag_conflict` and is never overwritten. `--dry-run` runs the validation only and reports `would_create`. Nothing is pushed.
+
+Tag creation is not transactional across repositories. If a write fails after earlier ones succeeded, the remaining repositories are still attempted, `created` lists every `repo:tag` already written, and the command exits non-zero; re-run the same map to retry only the failed ones.
+
+JSON result: `{ ok, phase, repos, created, errors }`. `phase` is `preflight` (validation failed), `dry_run` or `apply`. `repos` is keyed by repo path (`repo:tag` when one repo receives two tags); each value has `status` (`created`, `already_tagged`, `skipped`, `would_create`, `failed`, `error`) plus `tag`, `commit`, and on failure `reason`, `error`, `existing_commit`, `requested_commit`. Reason codes: `no_sub_repos`, `invalid_request`, `too_many_entries`, `repo_not_configured`, `repo_path_invalid`, `repo_missing`, `not_a_git_repo`, `tag_invalid`, `ref_unresolved`, `tag_conflict`, `duplicate_entry`, `git_timeout`, `tag_create_failed`.
 
 ---
 

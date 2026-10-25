@@ -86,6 +86,10 @@
  *     [--archive-quick]              Move .planning/quick/* dirs to milestones/vX.Y-quick/ + reset the
  *                                    Quick Tasks Completed table (#2142; opt-in, default OFF)
  *
+ *   milestone release-tags --map <file.json> [--dry-run]
+ *                                      Preflight, then create annotated tags per sub-repo from a JSON array of
+ *                                      {repo, tag, ref?, message?, skip?}; never pushes, never overwrites (#5705)
+ *
  *   milestone archive-quick <version>  Move .planning/quick/* dirs to milestones/vX.Y-quick/ + reset the
  *                                      Quick Tasks Completed table, WITHOUT the milestone complete close-out
  *                                      (no ROADMAP/REQUIREMENTS/MILESTONES.md writes, no completion guards);
@@ -326,6 +330,7 @@ const config = require('./lib/config.cjs');
 const estimateCli = require('./lib/estimate-cli.cjs');
 const template = require('./lib/template.cjs');
 const milestone = require('./lib/milestone.cjs');
+const milestoneReleaseTags = require('./lib/milestone-release-tags.cjs');
 const commands = require('./lib/commands.cjs');
 const runtimeIdentity = require('./lib/runtime-identity.cjs');
 const init = require('./lib/init.cjs');
@@ -3225,8 +3230,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // unlike `milestone complete --archive-quick`.
             const dryRun = args.includes('--dry-run');
             milestone.cmdQuickArchive(cwd, args[2], { dryRun }, raw);
+          } else if (subcommand === 'release-tags') {
+            // #5705 (epic #3628 Phase 1): repository-scoped annotated release tags.
+            milestoneReleaseTags.cmdMilestoneReleaseTags(cwd, args, raw);
           } else {
-            error('Unknown milestone subcommand. Available: complete, archive-quick', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+            error('Unknown milestone subcommand. Available: complete, archive-quick, release-tags', ERROR_REASON.SDK_UNKNOWN_COMMAND);
           }
   }
 

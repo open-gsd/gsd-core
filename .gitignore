@@ -339,6 +339,7 @@ build/
 /gsd-core/bin/lib/commands.cjs
 /gsd-core/bin/lib/state.cjs
 /gsd-core/bin/lib/milestone.cjs
+/gsd-core/bin/lib/milestone-release-tags.cjs
 /gsd-core/bin/lib/phase.cjs
 /gsd-core/bin/lib/verify.cjs
 /gsd-core/bin/lib/init.cjs
