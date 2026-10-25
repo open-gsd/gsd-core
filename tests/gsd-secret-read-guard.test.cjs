@@ -1078,3 +1078,73 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
     assertAllowed(runHook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: 'notes-claude-agent-gsd-debugger.md' } }), 'read');
   });
 });
+
+describe('gsd-secret-read-guard: nested shell behind a wrapper with flags (#5627)', () => {
+  // Oracle: the wrappers' own man pages (timeout(1), nice(1), env(1),
+  // command(1p), stdbuf(1), setsid(1), exec, sudo(8), doas(1)) say each runs
+  // the trailing command; a read inside `bash -c` behind them must get the
+  // same verdict as the flagless `nice bash -c 'cat .env'` (already blocked).
+  const S = "bash -c 'cat .env'";
+  const wrappers = [
+    'timeout 5', 'timeout -s KILL 5', 'timeout --signal=KILL --kill-after=2 5', 'timeout --foreground 5',
+    'nice -n 5', 'nice -5', 'nice -n5', 'nice --adjustment=5', 'nice --adjustment 5',
+    'env -i', 'env -u HOME', 'env -C /tmp', 'env -i A=1', 'env --', 'env -0',
+    'command -p', 'command --', 'time -p', 'time -f %e',
+    'stdbuf -oL', 'stdbuf -i0 -oL -eL', 'stdbuf --output=L', 'setsid', 'setsid -w', 'exec', 'exec -a name',
+    'nohup', 'sudo -u root', 'sudo -E', 'sudo --', 'sudo -u root -g wheel', 'doas -u root',
+    'nice -n 5 timeout -s KILL 5 env -i', 'sudo -n timeout 5 nohup',
+  ];
+  for (const w of wrappers) {
+    test(`blocks ${w} bash -c`, () => {
+      assertBlocked(runHook(bash(`${w} ${S}`)), w, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  const otherRoutes = [
+    "timeout 5 bash <<'EOF'\ncat .env\nEOF",
+    "nice -n 5 bash <<< 'cat .env'",
+    'echo cat .env | nice -n 5 bash',
+    "timeout 5 eval 'cat .env'",
+    'echo .env | timeout 5 xargs cat',
+    "nice -n 5 git -c alias.x='!cat .env' x",
+  ];
+  for (const cmd of otherRoutes) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  const allows = [
+    "timeout 5 bash -c 'echo hi'",
+    "nice -n 5 bash -c 'cat README.md'",
+    "env -i bash -c 'cat .env.example'",
+    'timeout 5 ls',
+    'timeout 5',
+    'nice -n 5',
+    'env -i',
+    'time -p cat README.md',
+  ];
+  for (const cmd of allows) {
+    test(`allows ${JSON.stringify(cmd)}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  test('the debugger-spawn check still sees through timeout flags', () => {
+    assertBlocked(
+      runHook(bash('timeout -s KILL 600 claude --agent gsd-debugger -p hi')),
+      'timeout flags', { code: 'debugger-cli-spawn', tool: 'Bash' },
+    );
+  });
+
+  test('property: any wrapper stack in front of bash -c "cat .env" is blocked', () => {
+    const wrapper = fc.constantFrom(...wrappers.filter((w) => !w.includes(' timeout ') && !w.includes(' env ')));
+    fc.assert(
+      fc.property(fc.array(wrapper, { minLength: 1, maxLength: 3 }), (stack) => {
+        const r = runHook(bash(`${stack.join(' ')} ${S}`));
+        return r.status === 2;
+      }),
+      { numRuns: 25 },
+    );
+  });
+});
