@@ -193,6 +193,7 @@ module.exports = {
   "tests/mcp-catalog.property.test.cjs",
   "tests/mcp-catalog.test.cjs",
   "tests/milestone-archive.test.cjs",
+  "tests/milestone-lock.test.cjs",
   "tests/milestone-window-single-owner.test.cjs",
   "tests/milestone.test.cjs",
   "tests/model-resolver.test.cjs",
