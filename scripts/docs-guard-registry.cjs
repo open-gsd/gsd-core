@@ -204,6 +204,7 @@ const DOCS_GUARD_TESTS = {
   // files without re-deriving the scan's own file-discovery logic.
   'tests/commit-files-pathspec.test.cjs': ['*'],
   'tests/compact-content-4139.test.cjs': ['docs/CONFIGURATION.md'],
+  'tests/complete-milestone-release-map-routing.test.cjs': ['docs/README.md', 'docs/how-to/tag-a-multi-repo-milestone.md'],
   'tests/config-field-docs.test.cjs': ['docs/CONFIGURATION.md'],
   'tests/config.test.cjs': ['docs/CONFIGURATION.md'],
   // #4974: doc/workflow content-parity checks read docs/CONFIGURATION.md's

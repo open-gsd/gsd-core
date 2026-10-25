@@ -70,6 +70,7 @@ module.exports = {
   "tests/commit-files-pathspec.test.cjs",
   "tests/commonjs-marker.test.cjs",
   "tests/compact-content-4139.test.cjs",
+  "tests/complete-milestone-release-map-routing.test.cjs",
   "tests/completion-ratio-scope-withholding.test.cjs",
   "tests/config-defaults-runtime-exclusion.test.cjs",
   "tests/config-get-default.test.cjs",

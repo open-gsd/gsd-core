@@ -19,6 +19,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 
+const fc = require('fast-check');
 const { cleanup } = require('./helpers.cjs');
 const { GIT_FIXTURE_TIMEOUT_MS, GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
@@ -320,7 +321,7 @@ describe('push confirmation (rows 13, 14)', () => {
     const pushLines = text.split('\n').filter((l) => /\bgit\b.*\bpush\b/.test(l) && !/^\s*(#|>|-\s)/.test(l.trim()) && l.trim().startsWith('git'));
     assert.ok(pushLines.length >= 1, 'the step must show the push command');
     for (const line of pushLines) {
-      assert.match(line.trim(), /^git -C "\$\{?\w+\}?" push "\$\{?\w+\}?" "refs\/tags\/\$\{?\w+\}?"$/, line);
+      assert.match(line.trim(), /^git -C "\$\{?\w+\}?" push -- "\$\{?\w+\}?" "refs\/tags\/\$\{?\w+\}?"$/, line);
     }
     for (const forbidden of ['--all', '--tags', '--follow-tags', '--force', '--mirror', '--delete', ' -f ']) {
       assert.ok(!text.includes(forbidden), `release-map.md must not mention ${forbidden}`);
@@ -331,7 +332,25 @@ describe('push confirmation (rows 13, 14)', () => {
     const text = read(RELEASE_MAP_STEP);
     assert.match(text, /Push tag `?<tag>`? from `?<repo>`? to remote `?<remote>`? \(<url>\)\? \(y\/n\)/);
     assert.match(text, /default[^.\n]*no push|nothing is pushed by default/i);
-    assert.match(text, /git -C "\$REPO" remote get-url/);
+    // The URL shown is the one the push goes to (a configured pushurl differs from the fetch URL).
+    assert.match(text, /git -C "\$REPO" remote get-url --push /);
+    assert.match(text, /credentials removed/);
+  });
+
+  test('every milestone complete call in the spine carries the release map when per-repo tagging is on (row 17)', () => {
+    const spine = read(SPINE);
+    assert.match(spine, /EVERY `milestone complete` call below \(including the `--no-archive-phases` form\)/);
+    assert.match(spine, /same `--release-map` argument/);
+  });
+
+  test('the single-repository tag section is skipped for per-repo tagging, and the push step follows it (row 18)', () => {
+    const spine = read(SPINE);
+    const section = spine.indexOf('<!-- gsd:section id="git-tag"');
+    const skip = spine.indexOf('If `PER_REPO_TAGGING` is `true`, skip this section');
+    const push = spine.indexOf('<step name="push_release_tags">');
+    const commitStep = spine.indexOf('<step name="git_commit_milestone">');
+    assert.ok(section >= 0 && skip > section, 'the skip sentence must sit inside the git-tag section');
+    assert.ok(push > skip && commitStep > push, 'push_release_tags must follow the git-tag section and precede git_commit_milestone');
   });
 });
 
@@ -353,5 +372,37 @@ describe('documentation and reference rule (rows 15, 16)', () => {
     assert.equal(re.test('a'.repeat(40)), true);
     assert.equal(re.test('a'.repeat(41)), false);
     assert.equal(re.test('PR #412'), false);
+    assert.equal(re.test('abc1234\n'), false, 'a trailing newline must not slip through `$`');
+    fc.assert(
+      fc.property(
+        fc.array(fc.constantFrom(...'0123456789abcdef'), { minLength: 7, maxLength: 40 }).map((a) => a.join('')),
+        (s) => re.test(s),
+      ),
+      { seed: 5707, numRuns: 200 },
+    );
+    fc.assert(
+      fc.property(fc.string({ minLength: 1, maxLength: 40 }).filter((s) => !/^[0-9a-f]{7,40}$/.test(s)), (s) => !re.test(s)),
+      { seed: 5707, numRuns: 200 },
+    );
+  });
+
+  test('the documented release-name rule keeps shell metacharacters and option-like names out of a push (row 19)', () => {
+    const m = read(RELEASE_MAP_STEP).match(/`(\^\[A-Za-z0-9\]\[A-Za-z0-9\._\+-\]\{0,199\}\$)`/);
+    assert.ok(m, 'release-map.md must state the release-name rule');
+    // allow-adhoc-regex-escape: the pattern under test is a regex taken verbatim from the step file
+    const re = new RegExp(m[1]);
+    for (const ok of ['v5.78.0', '2.14.1-rc.1', 'v1+build.5', 'a', 'a'.repeat(200)]) assert.equal(re.test(ok), true, ok);
+    for (const bad of ['', '-x', '.hidden', 'v1$(id)', 'v1;id', 'v1"x', 'v1 x', 'v1:x', 'a/b', 'v1\n', 'a'.repeat(201)]) {
+      assert.equal(re.test(bad), false, JSON.stringify(bad));
+    }
+  });
+
+  test('per_repo with no configured sub-repositories exposes both facts the routing predicate needs (row 20)', (t) => {
+    const { root } = makeProject(t, []);
+    const res = runCli(root, ['query', 'init.complete-milestone']);
+    assert.equal(res.status, 0, res.stderr);
+    const init = JSON.parse(res.stdout);
+    assert.equal(init.repo_tagging, 'per_repo');
+    assert.deepEqual(init.sub_repos, []);
   });
 });

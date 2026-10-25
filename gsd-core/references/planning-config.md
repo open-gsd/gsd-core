@@ -35,7 +35,7 @@ Configuration options for `.planning/` directory behavior.
 | `git.base_branch` | `null` (auto-detect) | Target branch for PRs and merges (e.g. `"master"`, `"develop"`). When `null`, auto-detects from `git symbolic-ref refs/remotes/origin/HEAD`, falling back to `"main"`. |
 | `git.protected_branches` | (none) | Optional array of non-empty strings naming additional shared branches that should trigger protected-branch warnings |
 | `git.create_tag` | `true` | Create git tags on milestone completion |
-| `git.repo_tagging` | `"single"` | Milestone tagging mode: `"single"` (existing behavior) or `"per_repo"` (record one release per configured repository) |
+| `git.repo_tagging` | `"single"` | Milestone tagging mode: `"single"` (existing behavior) or `"per_repo"` (record one release per configured repository; each tag is pushed only after a per-repository confirmation) |
 | `git.phase_branch_template` | `"gsd/phase-{phase}-{slug}"` | Branch template for phase strategy |
 | `git.milestone_branch_template` | `"gsd/{milestone}-{slug}"` | Branch template for milestone strategy |
 | `git.quick_branch_template` | `null` | Optional branch template for quick-task runs |

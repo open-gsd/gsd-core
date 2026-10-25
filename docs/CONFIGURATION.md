@@ -1297,6 +1297,14 @@ values in `.planning/milestones/<version>-RELEASE-MAP.json` (`{ "version", "entr
 MILESTONES.md entry gains a **Release mapping:** table with the values escaped for markdown. A
 milestone archived without a map is unaffected.
 
+A GSD milestone version names planned work in `.planning/`; it may differ from every repository's
+release version, and the repositories need not share one sequence. With `git.repo_tagging: per_repo`
+and a non-empty `sub_repos`, `/gsd-complete-milestone` collects the map, checks every requested tag
+before creating any, creates the tags (`milestone release-tags`), archives the map, and asks a
+separate question per repository, naming the repository and its remote, before pushing a tag.
+Nothing is pushed by default. See
+[How to tag a multi-repository milestone](how-to/tag-a-multi-repo-milestone.md).
+
 ### Protected Branch Warnings
 
 `git.protected_branches` is optional and has no persisted default. When the field is absent,

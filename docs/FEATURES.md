@@ -202,6 +202,7 @@
   - [Stated Failing Direction](#167-stated-failing-direction)
   - [Runtime Identity](#168-runtime-identity)
   - [Context Drift Gate](#3348-context-drift-gate)
+  - [Per-Repository Release Mapping](#3628-per-repository-release-mapping)
   - ["Failure Is a Value" — Strict Argv Rejection and the `--pick` Absence Contract](#3884-failure-is-a-value--strict-argv-rejection-and-the---pick-absence-contract)
   - [No Silent Swallow, No Verdict From Dropped Data](#3885-no-silent-swallow-no-verdict-from-dropped-data)
   - [Runtime Marker Resolution, Derived Codex Sandbox, and In-Phase Short-Form Dependencies](#3897-runtime-marker-resolution-derived-codex-sandbox-and-in-phase-short-form-dependencies)
@@ -4069,6 +4070,30 @@ phase's `CONTEXT.md` after that artifact was derived from it. Deterministic — 
 time (falling back to mtime for uncommitted edits), no model call. Sibling to the existing
 codebase-drift and schema-drift gates in the `drift` capability. Configure with
 `workflow.context_drift_precheck` (on/off) and `workflow.context_drift_action` (`warn`/`block`).
+
+---
+
+### 3628. Per-Repository Release Mapping
+
+**Command:** `/gsd-complete-milestone`
+
+**Config key:** `git.repo_tagging` (`single` default, `per_repo`)
+
+**Purpose:** A milestone that ships across several independently versioned repositories cannot be described by one `v[X.Y]` tag. A GSD milestone version names planned work in `.planning/`; each repository has its own release version, and some repositories may not be released at all. This feature records what each repository actually released against the milestone ([ADR-3628](adr/3628-milestone-release-mapping.md), epic #3628).
+
+**Behavior:** With `git.repo_tagging: per_repo` and a non-empty `planning.sub_repos`, milestone completion collects one release map entry per repository (status, release, reference, environment, tag choice), checks every requested tag before writing anything, shows one consolidated confirmation, creates the local annotated tags with `milestone release-tags`, and archives the map with `milestone complete --release-map`. No shared tag is created in the current directory on this path. Skipped and unreleased repositories stay in the archived map without receiving a tag.
+
+**Push:** Nothing is pushed by default. Each repository's tag is a separate confirmation naming the repository, the tag, the remote and its URL; a decline or failed push affects that repository only.
+
+**Compatibility:** `single` keeps the existing step unchanged, and `git.create_tag` keeps its meaning. With `per_repo`, `git.create_tag: false` still records the map and creates no tags. Archives without a map continue to parse.
+
+**Requirements:**
+- REQ-RELEASE-MAP-01: Tags MUST NOT be created before every requested tag has passed preflight.
+- REQ-RELEASE-MAP-02: An existing tag at a different commit MUST NOT be overwritten.
+- REQ-RELEASE-MAP-03: No tag MAY be pushed without a confirmation that names the repository and the remote.
+- REQ-RELEASE-MAP-04: The archived map MUST be stored by recorded value, not derived from `planning.sub_repos` at read time.
+
+**Reference:** [How to tag a multi-repository milestone](how-to/tag-a-multi-repo-milestone.md) · [Configuration Reference](CONFIGURATION.md#per-repository-release-mapping) · [CLI tools](CLI-TOOLS.md)
 
 ---
 
