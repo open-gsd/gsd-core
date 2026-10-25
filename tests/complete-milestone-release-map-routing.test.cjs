@@ -1,0 +1,357 @@
+'use strict';
+
+/**
+ * Per-repository milestone completion flow (#5707, phase 3 of epic #3628).
+ *
+ * Drives the verbs the workflow calls (`milestone release-tags`, then
+ * `milestone complete --release-map`) in the order
+ * `gsd-core/workflows/complete-milestone/steps/release-map.md` documents, against
+ * real temporary git repositories. The workflow files are read as data to resolve
+ * their references and to pin the shared enumerations; nothing here greps source.
+ */
+
+process.env.GSD_TEST_MODE = '1';
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { execFileSync, spawnSync } = require('node:child_process');
+
+const { cleanup } = require('./helpers.cjs');
+const { GIT_FIXTURE_TIMEOUT_MS, GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const {
+  RELEASE_MAP_STATUSES,
+  RELEASE_MAP_TAG_STATES,
+  readArchivedReleaseMap,
+} = require('../gsd-core/bin/lib/milestone-release-map.cjs');
+
+const ROOT = path.join(__dirname, '..');
+const TOOLS_PATH = path.join(ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
+const SPINE = path.join(ROOT, 'gsd-core', 'workflows', 'complete-milestone.md');
+const GIT_TAG_STEP = path.join(ROOT, 'gsd-core', 'workflows', 'complete-milestone', 'steps', 'git-tag.md');
+const RELEASE_MAP_STEP = path.join(ROOT, 'gsd-core', 'workflows', 'complete-milestone', 'steps', 'release-map.md');
+const HOW_TO = path.join(ROOT, 'docs', 'how-to', 'tag-a-multi-repo-milestone.md');
+const DOCS_README = path.join(ROOT, 'docs', 'README.md');
+
+const read = (p) => fs.readFileSync(p, 'utf8');
+
+// ─── helpers ────────────────────────────────────────────────────────────────
+
+function git(dir, ...args) {
+  return execFileSync('git', args, {
+    cwd: dir,
+    encoding: 'utf-8',
+    timeout: GIT_FIXTURE_TIMEOUT_MS,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+}
+
+function commit(dir, name) {
+  fs.writeFileSync(path.join(dir, name), `${name}\n`);
+  git(dir, 'add', name);
+  git(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', name);
+  return git(dir, 'rev-parse', 'HEAD');
+}
+
+function initRepo(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  git(dir, 'init', '-q');
+  git(dir, 'config', 'commit.gpgsign', 'false');
+  git(dir, 'config', 'tag.gpgsign', 'false');
+  git(dir, 'config', 'user.name', 't');
+  git(dir, 'config', 'user.email', 't@t');
+  return commit(dir, 'a.txt');
+}
+
+function tagNames(dir) {
+  const out = git(dir, 'tag', '--list');
+  return out === '' ? [] : out.split('\n');
+}
+
+function runCli(cwd, args) {
+  const r = spawnSync(process.execPath, [TOOLS_PATH, ...args], {
+    cwd,
+    encoding: 'utf-8',
+    timeout: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GSD_TEST_MODE: '1' },
+  });
+  return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
+}
+
+/** A GSD project root with initialised sub-repos and one completable phase. */
+function makeProject(t, repoNames, { createTag = true } = {}) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-relmap-flow-')));
+  t.after(() => cleanup(root));
+  const shas = {};
+  for (const name of repoNames) shas[name] = initRepo(path.join(root, name));
+  const planning = path.join(root, '.planning');
+  fs.mkdirSync(path.join(planning, 'phases', '01-foundation'), { recursive: true });
+  fs.writeFileSync(
+    path.join(planning, 'config.json'),
+    JSON.stringify({ sub_repos: repoNames, git: { repo_tagging: 'per_repo', create_tag: createTag } }),
+  );
+  fs.writeFileSync(path.join(planning, 'ROADMAP.md'), '# Roadmap\n\n### Phase 1: Foundation\n**Goal:** Setup\n');
+  fs.writeFileSync(path.join(planning, 'STATE.md'), '---\nmilestone: v1.0\nstatus: executing\n---\n\n# State\n\n## Current Position\n\nPhase: 1\n');
+  fs.writeFileSync(path.join(planning, 'phases', '01-foundation', '01-01-PLAN.md'), '# Plan\n');
+  fs.writeFileSync(path.join(planning, 'phases', '01-foundation', '01-01-SUMMARY.md'), '---\none-liner: Shipped\n---\n# Summary\n');
+  return { root, shas };
+}
+
+function writeJson(root, name, value) {
+  const p = path.join(root, name);
+  fs.writeFileSync(p, JSON.stringify(value));
+  return p;
+}
+
+const parse = (r) => JSON.parse(r.stdout);
+
+/**
+ * The mapping rule release-map.md documents: a tagged entry records the verb's
+ * per-repository status; a skipped entry records `skipped`; an entry with no
+ * tag request records `none`.
+ */
+function tagStateFor(entry, applyResult) {
+  if (entry.tagRequest === 'skip') return 'skipped';
+  if (entry.tagRequest === 'none') return 'none';
+  return applyResult.repos[entry.repo].status;
+}
+
+function releaseMapFrom(entries, applyResult) {
+  return entries.map((e) => ({
+    repo: e.repo,
+    release: e.release,
+    reference: e.reference,
+    environment: e.environment,
+    status: e.status,
+    tag: tagStateFor(e, applyResult),
+  }));
+}
+
+// ─── workflow wiring (matrix 1, 2) ──────────────────────────────────────────
+
+describe('workflow wiring (rows 1, 2)', () => {
+  test('the spine routes the per-repository path to a step file that exists (row 1)', () => {
+    const spine = read(SPINE);
+    const refs = [...spine.matchAll(/gsd-core\/workflows\/complete-milestone\/steps\/([a-z-]+\.md)/g)].map((m) => m[1]);
+    assert.ok(refs.includes('release-map.md'), 'spine must reference steps/release-map.md');
+    for (const ref of new Set(refs)) {
+      assert.ok(
+        fs.existsSync(path.join(ROOT, 'gsd-core', 'workflows', 'complete-milestone', 'steps', ref)),
+        `spine references steps/${ref} but it does not exist`,
+      );
+    }
+    assert.match(spine, /repo_tagging/);
+    assert.match(spine, /sub_repos/);
+  });
+
+  test('the single-repository git-tag section is still wired and still prompts once (row 2)', () => {
+    const spine = read(SPINE);
+    assert.ok(spine.includes('<!-- gsd:section id="git-tag" when="state:git-create-tag" -->'));
+    assert.ok(spine.includes('steps/git-tag.md'));
+    assert.ok(read(GIT_TAG_STEP).includes('Push tag to remote? (y/n)'));
+  });
+});
+
+// ─── end-to-end flow (matrix 3-10) ──────────────────────────────────────────
+
+describe('per-repository completion flow (rows 3-10)', () => {
+  const entries = [
+    { repo: 'api', release: 'v5.78.0', reference: 'PR #412', environment: 'production', status: 'released', tagRequest: 'create' },
+    { repo: 'web', release: null, reference: null, environment: 'development', status: 'unreleased', tagRequest: 'skip' },
+    { repo: 'lib', release: 'v2.14.1', reference: 'PR #91', environment: 'npm', status: 'released', tagRequest: 'none' },
+  ];
+  const tagRequests = (list) =>
+    list.filter((e) => e.tagRequest !== 'none').map((e) =>
+      e.tagRequest === 'skip' ? { repo: e.repo, tag: 'unused', skip: true } : { repo: e.repo, tag: e.release },
+    );
+
+  test('mixed tagged / skipped / untagged repos archive as recorded (row 3)', (t) => {
+    const { root, shas } = makeProject(t, ['api', 'web', 'lib']);
+    const tagsFile = writeJson(root, 'tags.json', tagRequests(entries));
+
+    const dry = parse(runCli(root, ['milestone', 'release-tags', '--map', tagsFile, '--dry-run']));
+    assert.equal(dry.ok, true);
+    assert.equal(dry.phase, 'dry_run');
+    assert.deepEqual(tagNames(path.join(root, 'api')), [], 'dry-run writes nothing');
+
+    const applied = runCli(root, ['milestone', 'release-tags', '--map', tagsFile]);
+    assert.equal(applied.status, 0, applied.stderr);
+    const result = parse(applied);
+    assert.deepEqual(result.created, ['api:v5.78.0']);
+    assert.deepEqual(tagNames(path.join(root, 'api')), ['v5.78.0']);
+    assert.deepEqual(tagNames(path.join(root, 'web')), []);
+    assert.deepEqual(tagNames(path.join(root, 'lib')), []);
+    assert.equal(git(path.join(root, 'api'), 'rev-list', '-n', '1', 'v5.78.0'), shas.api);
+
+    const mapFile = writeJson(root, 'release-map.json', releaseMapFrom(entries, result));
+    const done = runCli(root, ['milestone', 'complete', 'v1.0', '--name', 'Read API', '--confirm', '--release-map', mapFile]);
+    assert.equal(done.status, 0, done.stderr);
+
+    const archived = readArchivedReleaseMap(path.join(root, '.planning', 'milestones'), 'v1.0');
+    assert.equal(archived.ok, true);
+    assert.deepEqual(archived.map.map((e) => [e.repo, e.tag]), [['api', 'created'], ['web', 'skipped'], ['lib', 'none']]);
+    assert.equal(archived.map[1].release, null, 'an unreleased repository keeps no invented version');
+  });
+
+  test('apply never pushes: a bare remote stays empty (row 4)', (t) => {
+    const { root } = makeProject(t, ['api']);
+    const remote = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-relmap-remote-')));
+    t.after(() => cleanup(remote));
+    git(remote, 'init', '-q', '--bare');
+    git(path.join(root, 'api'), 'remote', 'add', 'origin', remote);
+
+    const tagsFile = writeJson(root, 'tags.json', [{ repo: 'api', tag: 'v1.0.0' }]);
+    assert.equal(runCli(root, ['milestone', 'release-tags', '--map', tagsFile]).status, 0);
+    assert.deepEqual(tagNames(path.join(root, 'api')), ['v1.0.0']);
+    assert.equal(git(remote, 'tag', '--list'), '', 'the remote must hold no tag');
+    assert.equal(git(path.join(root, 'api'), 'ls-remote', '--tags', 'origin'), '');
+  });
+
+  test('retry is idempotent and the archive accepts already_tagged (row 5)', (t) => {
+    const { root } = makeProject(t, ['api']);
+    const only = [entries[0]];
+    const tagsFile = writeJson(root, 'tags.json', tagRequests(only));
+    assert.deepEqual(parse(runCli(root, ['milestone', 'release-tags', '--map', tagsFile])).created, ['api:v5.78.0']);
+
+    const retry = parse(runCli(root, ['milestone', 'release-tags', '--map', tagsFile]));
+    assert.equal(retry.ok, true);
+    assert.equal(retry.repos.api.status, 'already_tagged');
+    assert.deepEqual(retry.created, []);
+
+    const mapFile = writeJson(root, 'release-map.json', releaseMapFrom(only, retry));
+    assert.equal(runCli(root, ['milestone', 'complete', 'v1.0', '--confirm', '--release-map', mapFile]).status, 0);
+    const archived = readArchivedReleaseMap(path.join(root, '.planning', 'milestones'), 'v1.0');
+    assert.equal(archived.map[0].tag, 'already_tagged');
+  });
+
+  test('a tag conflict in one repository writes nothing in any repository (row 6)', (t) => {
+    const { root } = makeProject(t, ['api', 'lib']);
+    git(path.join(root, 'api'), 'tag', 'v1.0.0');
+    commit(path.join(root, 'api'), 'moved.txt');
+    const tagsFile = writeJson(root, 'tags.json', [
+      { repo: 'api', tag: 'v1.0.0' },
+      { repo: 'lib', tag: 'v2.0.0' },
+    ]);
+    const res = runCli(root, ['milestone', 'release-tags', '--map', tagsFile]);
+    assert.notEqual(res.status, 0);
+    const out = parse(res);
+    assert.equal(out.ok, false);
+    assert.equal(out.phase, 'preflight');
+    assert.ok(out.errors.some((e) => e.reason === 'tag_conflict'));
+    assert.deepEqual(tagNames(path.join(root, 'lib')), []);
+  });
+
+  test('invalid repository paths are refused before any write (row 7)', (t) => {
+    const { root } = makeProject(t, ['api']);
+    for (const bad of ['../outside', path.resolve(root, 'api'), 'api/../../x']) {
+      const tagsFile = writeJson(root, 'tags.json', [{ repo: 'api', tag: 'v1.0.0' }, { repo: bad, tag: 'v9.9.9' }]);
+      const res = runCli(root, ['milestone', 'release-tags', '--map', tagsFile]);
+      assert.notEqual(res.status, 0, bad);
+      assert.equal(parse(res).ok, false, bad);
+      assert.deepEqual(tagNames(path.join(root, 'api')), [], `${bad}: nothing written`);
+    }
+  });
+
+  test('a detached HEAD in a sub-repository is tagged at the detached commit (row 8)', (t) => {
+    const { root, shas } = makeProject(t, ['api']);
+    const api = path.join(root, 'api');
+    commit(api, 'second.txt');
+    git(api, 'checkout', '-q', '--detach', shas.api);
+    const tagsFile = writeJson(root, 'tags.json', [{ repo: 'api', tag: 'v0.1.0' }]);
+    const res = runCli(root, ['milestone', 'release-tags', '--map', tagsFile]);
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(git(api, 'rev-list', '-n', '1', 'v0.1.0'), shas.api);
+  });
+
+  test('tags land in the sub-repositories whatever the invoking directory (row 9)', (t) => {
+    const { root } = makeProject(t, ['api', 'web']);
+    const tagsFile = writeJson(root, 'tags.json', [{ repo: 'api', tag: 'v1.0.0' }, { repo: 'web', tag: 'v2.0.0' }]);
+    const res = runCli(path.join(root, 'web'), ['milestone', 'release-tags', '--map', tagsFile]);
+    assert.equal(res.status, 0, res.stderr);
+    assert.deepEqual(tagNames(path.join(root, 'api')), ['v1.0.0']);
+    assert.deepEqual(tagNames(path.join(root, 'web')), ['v2.0.0']);
+  });
+
+  test('git.create_tag false records the map with every tag state none and creates no tags (row 10)', (t) => {
+    const { root } = makeProject(t, ['api', 'web'], { createTag: false });
+    const noTags = entries.slice(0, 2).map((e) => ({ ...e, tagRequest: 'none' }));
+    const mapFile = writeJson(root, 'release-map.json', releaseMapFrom(noTags, { repos: {} }));
+    assert.equal(runCli(root, ['milestone', 'complete', 'v1.0', '--confirm', '--release-map', mapFile]).status, 0);
+    const archived = readArchivedReleaseMap(path.join(root, '.planning', 'milestones'), 'v1.0');
+    assert.deepEqual(archived.map.map((e) => e.tag), ['none', 'none']);
+    assert.deepEqual(tagNames(path.join(root, 'api')), []);
+    assert.deepEqual(tagNames(path.join(root, 'web')), []);
+  });
+});
+
+// ─── parity (matrix 11, 12) ─────────────────────────────────────────────────
+
+describe('shared enumerations (rows 11, 12)', () => {
+  test('every success status the tag verb reports is a valid map tag state (row 11)', (t) => {
+    const { root } = makeProject(t, ['api', 'web']);
+    const tagsFile = writeJson(root, 'tags.json', [{ repo: 'api', tag: 'v1.0.0' }, { repo: 'web', tag: 'x', skip: true }]);
+    const first = parse(runCli(root, ['milestone', 'release-tags', '--map', tagsFile]));
+    const second = parse(runCli(root, ['milestone', 'release-tags', '--map', tagsFile]));
+    const observed = new Set([...Object.values(first.repos), ...Object.values(second.repos)].map((r) => r.status));
+    assert.deepEqual([...observed].sort(), ['already_tagged', 'created', 'skipped']);
+    for (const status of observed) {
+      assert.ok(RELEASE_MAP_TAG_STATES.includes(status), `${status} must be a release map tag state`);
+    }
+    assert.ok(RELEASE_MAP_TAG_STATES.includes('none'));
+  });
+
+  test('the step file and the how-to name every release map status and tag state (row 12)', () => {
+    for (const file of [RELEASE_MAP_STEP, HOW_TO]) {
+      const text = read(file);
+      for (const value of [...RELEASE_MAP_STATUSES, ...RELEASE_MAP_TAG_STATES]) {
+        assert.match(text, new RegExp(`\`${value}\``), `${path.basename(file)} must document \`${value}\``);
+      }
+    }
+  });
+});
+
+// ─── push confirmation (matrix 13, 14) ──────────────────────────────────────
+
+describe('push confirmation (rows 13, 14)', () => {
+  test('every push command is repository-scoped and tag-scoped (row 13)', () => {
+    const text = read(RELEASE_MAP_STEP);
+    const pushLines = text.split('\n').filter((l) => /\bgit\b.*\bpush\b/.test(l) && !/^\s*(#|>|-\s)/.test(l.trim()) && l.trim().startsWith('git'));
+    assert.ok(pushLines.length >= 1, 'the step must show the push command');
+    for (const line of pushLines) {
+      assert.match(line.trim(), /^git -C "\$\{?\w+\}?" push "\$\{?\w+\}?" "refs\/tags\/\$\{?\w+\}?"$/, line);
+    }
+    for (const forbidden of ['--all', '--tags', '--follow-tags', '--force', '--mirror', '--delete', ' -f ']) {
+      assert.ok(!text.includes(forbidden), `release-map.md must not mention ${forbidden}`);
+    }
+  });
+
+  test('the confirmation names the repository and the remote, and the default is no push (row 14)', () => {
+    const text = read(RELEASE_MAP_STEP);
+    assert.match(text, /Push tag `?<tag>`? from `?<repo>`? to remote `?<remote>`? \(<url>\)\? \(y\/n\)/);
+    assert.match(text, /default[^.\n]*no push|nothing is pushed by default/i);
+    assert.match(text, /git -C "\$REPO" remote get-url/);
+  });
+});
+
+// ─── docs (matrix 15, 16) ───────────────────────────────────────────────────
+
+describe('documentation and reference rule (rows 15, 16)', () => {
+  test('the how-to is indexed and states that a milestone version may differ from repository release versions (row 15)', () => {
+    assert.ok(read(DOCS_README).includes('how-to/tag-a-multi-repo-milestone.md'));
+    assert.match(read(HOW_TO), /milestone version[^.]*\b(may|can) differ[^.]*repository release version/i);
+  });
+
+  test('the documented hex-reference rule accepts 7 and 40 characters and rejects 6 and 41 (row 16)', () => {
+    const m = read(RELEASE_MAP_STEP).match(/`(\^\[0-9a-f\]\{7,40\}\$)`/);
+    assert.ok(m, 'release-map.md must state the hex reference rule');
+    // allow-adhoc-regex-escape: the pattern under test is a regex taken verbatim from the step file
+    const re = new RegExp(m[1]);
+    assert.equal(re.test('a'.repeat(6)), false);
+    assert.equal(re.test('a'.repeat(7)), true);
+    assert.equal(re.test('a'.repeat(40)), true);
+    assert.equal(re.test('a'.repeat(41)), false);
+    assert.equal(re.test('PR #412'), false);
+  });
+});
