@@ -92,8 +92,8 @@
 //   (`cat .e*`), interpreter one-liners (`python -c "open('.env')"`), a piped
 //   script from a non-echo source (`cat gen.sh | bash`, `curl … | sh`), reads
 //   inside scripts the agent executes, and `glob: '*'` reaching a
-//   NON-gitignored `.env`, and a wrapper whose value-less option the WRAPPERS
-//   table does not know, or `env -S 'script'` (the split string is skipped as
+//   NON-gitignored `.env`, and a wrapper (or wrapper option taking a
+//   separate value) the WRAPPERS table does not list, or `env -S 'script'` (the split string is skipped as
 //   the option's value). The promise is "no looser than the retired rules
 //   on plain commands, without arming the compound-`cd` prompt". Writes to
 //   secret files are out of scope (Write/Edit were never gated). Commands
