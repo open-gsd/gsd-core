@@ -8,7 +8,7 @@
  * Closes: #1461
  */
 
-const { test, describe } = require('node:test');
+const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
@@ -37,7 +37,7 @@ let installExports;
     process.stdout.write = _origWrite;
   }
 }
-const { readSettings, writeSettings, stripJsonComments } = installExports;
+const { readSettings, writeSettings, stripJsonComments, configureAntigravityPermissions } = installExports;
 
 // ─── tests ───────────────────────────────────────────────────────────────────
 
@@ -432,5 +432,167 @@ describe('writeSettings durability (#1874 F5)', () => {
         'the settings file must be untouched when every temp path is squatted');
       for (const link of planted) fs.unlinkSync(link);
     });
+  });
+});
+
+// ─── writeSettings on a symlinked settings file (#5037) ──────────────────────
+//
+// Dotfiles setups link settings.json to a file kept elsewhere. The temp+rename
+// write above replaces such a link with a plain file, after which the link's
+// target silently stops receiving changes. The writer now follows the policy
+// of the Codex hooks.json writer: refuse a symlinked settings file unless
+// GSD_ALLOW_SYMLINKED_DEST is set, and with it write through to the target.
+
+describe('writeSettings on a symlinked settings file (#5037)', () => {
+
+  const PRIOR = JSON.stringify({ env: { MY_TOKEN: 'keep-me' } }, null, 2) + '\n';
+  const NEXT = { hooks: { SessionStart: [] }, env: { MY_TOKEN: 'keep-me' } };
+  const { SYMLINKED_LEAF_REFUSAL } = require('../gsd-core/bin/lib/install-engine.cjs');
+
+  let savedOptIn;
+
+  beforeEach(() => {
+    savedOptIn = process.env.GSD_ALLOW_SYMLINKED_DEST;
+  });
+
+  afterEach(() => {
+    if (savedOptIn === undefined) delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+    else process.env.GSD_ALLOW_SYMLINKED_DEST = savedOptIn;
+  });
+
+  function setOptIn(value) {
+    if (value === undefined) delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+    else process.env.GSD_ALLOW_SYMLINKED_DEST = value;
+  }
+
+  // A config dir whose settings.json links to a file in a separate dotfiles
+  // dir. Returns null when this platform or account cannot create symlinks.
+  function linkedLayout(t, { targetExists = true } = {}) {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-config-'));
+    const dotfilesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-dotfiles-'));
+    t.after(() => {
+      cleanup(configDir);
+      cleanup(dotfilesDir);
+    });
+    const settingsPath = path.join(configDir, 'settings.json');
+    const targetPath = path.join(dotfilesDir, 'settings.json');
+    if (targetExists) fs.writeFileSync(targetPath, PRIOR);
+    try {
+      fs.symlinkSync(targetPath, settingsPath, 'file');
+    } catch {
+      return null;
+    }
+    return { configDir, dotfilesDir, settingsPath, targetPath };
+  }
+
+  test('without the opt-in the write is refused as an untrusted symlink, and nothing changes', (t) => {
+    setOptIn(undefined);
+    const layout = linkedLayout(t);
+    if (!layout) {
+      t.skip('symlink creation unsupported on this platform/privilege');
+      return;
+    }
+    const { configDir, dotfilesDir, settingsPath, targetPath } = layout;
+
+    assert.throws(() => writeSettings(settingsPath, NEXT), { code: SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED });
+
+    assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+    assert.strictEqual(fs.readlinkSync(settingsPath), targetPath, 'the link must still point at the same target');
+    assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), PRIOR, 'the link target must be byte-for-byte unchanged');
+    assert.deepStrictEqual(fs.readdirSync(configDir), ['settings.json'], 'no temp residue beside the link');
+    assert.deepStrictEqual(fs.readdirSync(dotfilesDir), ['settings.json'], 'no temp residue beside the target');
+  });
+
+  test('with GSD_ALLOW_SYMLINKED_DEST=1 the write lands on the target and the link stays a link', (t) => {
+    setOptIn('1');
+    const layout = linkedLayout(t);
+    if (!layout) {
+      t.skip('symlink creation unsupported on this platform/privilege');
+      return;
+    }
+    const { configDir, dotfilesDir, settingsPath, targetPath } = layout;
+
+    writeSettings(settingsPath, NEXT);
+
+    assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'settings.json must still be a symlink, not a plain file');
+    assert.strictEqual(fs.readlinkSync(settingsPath), targetPath, 'the link must still point at the same target');
+    assert.ok(fs.lstatSync(targetPath).isFile(), 'the target must still be a regular file');
+    assert.deepStrictEqual(readSettings(targetPath), NEXT, 'the new settings must land in the link target');
+    assert.deepStrictEqual(fs.readdirSync(configDir), ['settings.json'], 'no temp residue beside the link');
+    assert.deepStrictEqual(fs.readdirSync(dotfilesDir), ['settings.json'], 'no temp residue beside the target');
+  });
+
+  // One test per opt-in state, so each test builds one layout and registers
+  // one cleanup.
+  for (const optIn of [undefined, '1']) {
+    const mode = `GSD_ALLOW_SYMLINKED_DEST=${optIn ?? 'unset'}`;
+
+    test(`a dangling settings.json link is refused, never replaced (${mode})`, (t) => {
+      setOptIn(optIn);
+      const layout = linkedLayout(t, { targetExists: false });
+      if (!layout) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      const { settingsPath, targetPath } = layout;
+
+      // With the opt-in already set, asking for it again would not help, so
+      // that refusal is TARGET_MISSING rather than NOT_TRUSTED.
+      assert.throws(() => writeSettings(settingsPath, NEXT),
+        { code: optIn ? SYMLINKED_LEAF_REFUSAL.TARGET_MISSING : SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED },
+        'a dangling link must be refused');
+
+      assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'the dangling link must survive');
+      assert.strictEqual(fs.existsSync(targetPath), false, 'nothing may be created at the missing target');
+    });
+
+    test(`a plain settings.json is written in place (${mode})`, (t) => {
+      setOptIn(optIn);
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-plain-'));
+      t.after(() => cleanup(dir));
+      const settingsPath = path.join(dir, 'settings.json');
+      fs.writeFileSync(settingsPath, PRIOR);
+
+      writeSettings(settingsPath, NEXT);
+
+      assert.ok(fs.lstatSync(settingsPath).isFile(), 'a plain settings.json must stay a regular file');
+      assert.deepStrictEqual(readSettings(settingsPath), NEXT, 'the plain file must receive the write');
+      assert.deepStrictEqual(fs.readdirSync(dir), ['settings.json'], 'no temp residue');
+    });
+  }
+
+  // configureAntigravityPermissions saves the Antigravity settings.json through
+  // writeSettings, so it inherits the same refusal and write-through.
+  test('the Antigravity permissions write refuses a symlinked settings.json without the opt-in', (t) => {
+    setOptIn(undefined);
+    const layout = linkedLayout(t);
+    if (!layout) {
+      t.skip('symlink creation unsupported on this platform/privilege');
+      return;
+    }
+    const { configDir, settingsPath, targetPath } = layout;
+
+    assert.throws(() => configureAntigravityPermissions(true, configDir), { code: SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED });
+
+    assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+    assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), PRIOR, 'the link target must be byte-for-byte unchanged');
+  });
+
+  test('with GSD_ALLOW_SYMLINKED_DEST=1 the Antigravity permissions write lands on the link target', (t) => {
+    setOptIn('1');
+    const layout = linkedLayout(t);
+    if (!layout) {
+      t.skip('symlink creation unsupported on this platform/privilege');
+      return;
+    }
+    const { configDir, settingsPath, targetPath } = layout;
+
+    configureAntigravityPermissions(true, configDir);
+
+    assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+    const after = readSettings(targetPath);
+    assert.deepStrictEqual(after.env, { MY_TOKEN: 'keep-me' }, 'user settings must survive the write-through');
+    assert.ok(Array.isArray(after.permissions && after.permissions.allow) && after.permissions.allow.length > 0,
+      'the Antigravity allow rules must land in the link target');
   });
 });

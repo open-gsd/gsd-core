@@ -2606,7 +2606,10 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     cleanupOrphanedCodexContextMonitorScript,
     isGsdOwnedCodexContextMonitorScript,
     hooksJsonReferencesCodexContextMonitor,
+    codexHooksJsonHasManagedHooks,
+    CODEX_HOOKS_JSON_READ_FAILURE,
   } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
+  const { SYMLINKED_LEAF_REFUSAL } = require('../gsd-core/bin/lib/install-engine.cjs');
 
   let codexHome;
 
@@ -2626,6 +2629,15 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
   function readHooksJson(home) {
     const raw = fs.readFileSync(hooksJsonPath(home), 'utf8');
     return JSON.parse(raw);
+  }
+
+  // A Codex install rethrows a refused hook configuration wrapped in a
+  // "pre-write" error that keeps the refusal as its `cause`.
+  function assertCodexInstallRefused(code) {
+    assert.throws(() => runCodexInstall(codexHome), (err) => {
+      assert.strictEqual(err.cause && err.cause.code, code, `unexpected install error: ${err.message}`);
+      return true;
+    });
   }
 
   function monitorScriptPath(home) {
@@ -2787,7 +2799,7 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     fs.unlinkSync(hooksJsonPath(codexHome));
     fs.symlinkSync(realHooksJson, hooksJsonPath(codexHome));
 
-    assert.throws(() => runCodexInstall(codexHome), /symlink/i);
+    assertCodexInstallRefused(SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED);
 
     assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isSymbolicLink(),
       'the symlink itself must survive an aborted install — never replaced by a plain file');
@@ -2807,6 +2819,484 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
 
     assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isSymbolicLink(), 'still a symlink afterward');
     assert.ok(fs.existsSync(realHooksJson), 'the symlink target must have been written through');
+  });
+
+  // A dangling hooks.json link is refused, never replaced, the same as a
+  // dangling settings.json link (#5037). With the opt-in already set, asking
+  // for it again would not help, so that refusal is TARGET_MISSING rather than
+  // NOT_TRUSTED.
+  for (const optIn of [false, true]) {
+    test(`a dangling hooks.json link is refused and left in place (GSD_ALLOW_SYMLINKED_DEST=${optIn ? '1' : 'unset'}) (#5037)`, () => {
+      runCodexInstall(codexHome);
+      const missingTarget = path.join(codexHome, 'missing-hooks.json');
+      fs.unlinkSync(hooksJsonPath(codexHome));
+      fs.symlinkSync(missingTarget, hooksJsonPath(codexHome));
+      if (optIn) process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
+
+      assertCodexInstallRefused(optIn ? SYMLINKED_LEAF_REFUSAL.TARGET_MISSING : SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED);
+
+      assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isSymbolicLink(), 'the dangling link must survive');
+      assert.strictEqual(fs.readlinkSync(hooksJsonPath(codexHome)), missingTarget, 'the link must still point at the same target');
+      assert.strictEqual(fs.existsSync(missingTarget), false, 'nothing may be created at the missing target');
+    });
+  }
+
+  const UNINSTALL_HOOK_EVENTS = ['SessionStart', ...CODEX_EXTENDED_HOOK_EVENTS];
+
+  // Uninstall reaches hooks.json only after removing skills and agents, so a
+  // hooks.json it would write and the policy refuses must stop it before the
+  // first removal (#5037).
+  test('uninstall over a symlinked hooks.json holding GSD hooks without GSD_ALLOW_SYMLINKED_DEST refuses before removing any skill (#5037)', () => {
+    runCodexInstall(codexHome);
+    const skillsBefore = fs.readdirSync(codexSkillsRoot(codexHome)).sort();
+    assert.ok(skillsBefore.length > 0, 'setup: the install must have created skills');
+    const target = path.join(codexHome, 'real-hooks.json');
+    fs.copyFileSync(hooksJsonPath(codexHome), target);
+    assert.ok(codexHooksJsonHasManagedHooks(codexHome, UNINSTALL_HOOK_EVENTS), 'setup: hooks.json must hold GSD hooks');
+    fs.unlinkSync(hooksJsonPath(codexHome));
+    fs.symlinkSync(target, hooksJsonPath(codexHome));
+
+    assert.throws(() => runCodexUninstall(codexHome), { code: SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED });
+
+    assert.deepStrictEqual(fs.readdirSync(codexSkillsRoot(codexHome)).sort(), skillsBefore,
+      'no skill may be removed before the refusal');
+    assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isSymbolicLink(), 'hooks.json must still be a symlink');
+  });
+
+  // A hooks.json the removal cannot read or parse makes step 1a throw, so the
+  // early check reads and parses it the same way before the first removal (#5037).
+  const unreadableHooksJsonCases = [
+    {
+      label: 'an oversized',
+      write: (file) => {
+        const { CODEX_HOOKS_JSON_MAX_BYTES } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
+        fs.writeFileSync(file, JSON.stringify({ padding: 'x'.repeat(CODEX_HOOKS_JSON_MAX_BYTES) }), 'utf8');
+      },
+      error: { code: CODEX_HOOKS_JSON_READ_FAILURE.UNREADABLE },
+    },
+    {
+      label: 'an unparseable',
+      write: (file) => fs.writeFileSync(file, '{ not json', 'utf8'),
+      error: { code: CODEX_HOOKS_JSON_READ_FAILURE.UNPARSEABLE },
+    },
+  ];
+  for (const { label, write, error } of unreadableHooksJsonCases) {
+    test(`uninstall over ${label} hooks.json refuses before removing any skill or touching config.toml (#5037)`, () => {
+      runCodexInstall(codexHome);
+      const skillsBefore = fs.readdirSync(codexSkillsRoot(codexHome)).sort();
+      assert.ok(skillsBefore.length > 0, 'setup: the install must have created skills');
+      const configPath = path.join(codexHome, 'config.toml');
+      const configBefore = fs.readFileSync(configPath, 'utf8');
+      write(hooksJsonPath(codexHome));
+      const hooksJsonBefore = fs.readFileSync(hooksJsonPath(codexHome), 'utf8');
+
+      assert.throws(() => runCodexUninstall(codexHome), error);
+
+      assert.deepStrictEqual(fs.readdirSync(codexSkillsRoot(codexHome)).sort(), skillsBefore,
+        'no skill may be removed before the refusal');
+      assert.strictEqual(fs.readFileSync(configPath, 'utf8'), configBefore, 'config.toml must be untouched');
+      assert.strictEqual(fs.readFileSync(hooksJsonPath(codexHome), 'utf8'), hooksJsonBefore, 'hooks.json must be untouched');
+    });
+  }
+
+  // Asserts the uninstall removed every skill the install had created.
+  function assertSkillsRemoved(skillsBefore) {
+    const remaining = fs.existsSync(codexSkillsRoot(codexHome)) ? fs.readdirSync(codexSkillsRoot(codexHome)) : [];
+    assert.deepStrictEqual(skillsBefore.filter((skill) => remaining.includes(skill)), [],
+      'uninstall must remove every GSD skill');
+  }
+
+  // A hooks.json holding no GSD hook for uninstall to remove is never written,
+  // so a link GSD would not write must not block the uninstall (#5037).
+  test('uninstall over a symlinked hooks.json holding no GSD hooks without GSD_ALLOW_SYMLINKED_DEST succeeds and leaves it untouched (#5037)', () => {
+    runCodexInstall(codexHome);
+    const skillsBefore = fs.readdirSync(codexSkillsRoot(codexHome)).sort();
+    assert.ok(skillsBefore.length > 0, 'setup: the install must have created skills');
+    const target = path.join(codexHome, 'real-hooks.json');
+    // Compact on purpose: any rewrite would reformat it.
+    const before = JSON.stringify({ hooks: { UnrelatedEvent: [{ hooks: [{ type: 'command', command: 'echo unrelated' }] }] } });
+    fs.writeFileSync(target, before, 'utf8');
+    fs.unlinkSync(hooksJsonPath(codexHome));
+    fs.symlinkSync(target, hooksJsonPath(codexHome));
+
+    assert.doesNotThrow(() => runCodexUninstall(codexHome));
+
+    assertSkillsRemoved(skillsBefore);
+    assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isSymbolicLink(), 'hooks.json must still be a symlink');
+    assert.strictEqual(fs.readlinkSync(hooksJsonPath(codexHome)), target, 'the link must still point at the same target');
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), before, 'the link target must be byte-for-byte unchanged');
+  });
+
+  for (const optIn of [false, true]) {
+    test(`uninstall over a dangling hooks.json link succeeds and leaves it in place (GSD_ALLOW_SYMLINKED_DEST=${optIn ? '1' : 'unset'}) (#5037)`, () => {
+      runCodexInstall(codexHome);
+      const skillsBefore = fs.readdirSync(codexSkillsRoot(codexHome)).sort();
+      assert.ok(skillsBefore.length > 0, 'setup: the install must have created skills');
+      const missingTarget = path.join(codexHome, 'missing-hooks.json');
+      fs.unlinkSync(hooksJsonPath(codexHome));
+      fs.symlinkSync(missingTarget, hooksJsonPath(codexHome));
+      if (optIn) process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
+
+      assert.doesNotThrow(() => runCodexUninstall(codexHome));
+
+      assertSkillsRemoved(skillsBefore);
+      assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isSymbolicLink(), 'the dangling link must survive');
+      assert.strictEqual(fs.readlinkSync(hooksJsonPath(codexHome)), missingTarget, 'the link must still point at the same target');
+      assert.strictEqual(fs.existsSync(missingTarget), false, 'nothing may be created at the missing target');
+    });
+  }
+
+  test('codexHooksJsonHasManagedHooks finds GSD hooks where the removal does, and only there (#5037)', () => {
+    assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, UNINSTALL_HOOK_EVENTS), false, 'no hooks.json');
+    runCodexInstall(codexHome);
+    const installed = readHooksJson(codexHome);
+    assert.ok(Array.isArray(installed.hooks.SessionStart), 'setup: the install must register SessionStart');
+    assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, UNINSTALL_HOOK_EVENTS), true, 'nested GSD hook');
+    assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, ['UnrelatedEvent']), false,
+      'a GSD hook under an event the caller does not remove does not count');
+
+    // The legacy flat shape, which the removal lifts into the nested table.
+    fs.writeFileSync(hooksJsonPath(codexHome), JSON.stringify({ SessionStart: installed.hooks.SessionStart }), 'utf8');
+    assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, UNINSTALL_HOOK_EVENTS), true, 'top-level GSD hook');
+
+    fs.writeFileSync(hooksJsonPath(codexHome), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] } }), 'utf8');
+    assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, UNINSTALL_HOOK_EVENTS), false, 'user hook only');
+
+    fs.writeFileSync(hooksJsonPath(codexHome), '{ not json', 'utf8');
+    assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, UNINSTALL_HOOK_EVENTS), true,
+      'an unparseable file counts, so the removal still reports the parse error');
+
+    fs.unlinkSync(hooksJsonPath(codexHome));
+    fs.symlinkSync(path.join(codexHome, 'missing-hooks.json'), hooksJsonPath(codexHome));
+    assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, UNINSTALL_HOOK_EVENTS), false, 'a dangling link reads as absent');
+  });
+
+  test('CODEX_HOOKS_JSON_READ_FAILURE is frozen and holds exactly the two read failures (#5037)', () => {
+    assert.ok(Object.isFrozen(CODEX_HOOKS_JSON_READ_FAILURE), 'the codes must be frozen');
+    assert.deepStrictEqual(Object.keys(CODEX_HOOKS_JSON_READ_FAILURE).sort(), ['UNPARSEABLE', 'UNREADABLE']);
+    assert.strictEqual(new Set(Object.values(CODEX_HOOKS_JSON_READ_FAILURE)).size, 2, 'each code must be distinct');
+  });
+
+  // hooks.json text of exactly `bytes` bytes: `doc` plus a padding key sized to
+  // fill the rest. Compact on purpose, so a rewrite would show as a change.
+  function hooksJsonOfSize(doc, bytes) {
+    const fill = bytes - Buffer.byteLength(JSON.stringify({ ...doc, padding: '' }));
+    assert.ok(fill >= 0, 'setup: the document must fit in the requested size');
+    return JSON.stringify({ ...doc, padding: 'x'.repeat(fill) });
+  }
+
+  const USER_HOOK_ENTRY = { hooks: [{ type: 'command', command: 'echo mine' }] };
+
+  // Both bounded reads refuse only a file larger than the cap, so the tests
+  // below sit at the cap and one byte either side of it.
+  const SIZE_CAP_CASES = [
+    { label: 'one byte under the size cap', delta: -1, readable: true },
+    { label: 'exactly the size cap', delta: 0, readable: true },
+    { label: 'one byte over the size cap', delta: 1, readable: false },
+  ];
+
+  // The predicate reads hooks.json before the removal's symlink check, through
+  // whatever a link points at, so its read must be bounded (#5037).
+  for (const { label, delta, readable } of SIZE_CAP_CASES) {
+    test(`codexHooksJsonHasManagedHooks on a hooks.json ${label} ${readable ? 'parses it' : 'counts it as unreadable without parsing it'} (#5037)`, () => {
+      const { CODEX_HOOKS_JSON_MAX_BYTES } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
+      assert.strictEqual(typeof CODEX_HOOKS_JSON_MAX_BYTES, 'number', 'the cap must be exported');
+      const size = CODEX_HOOKS_JSON_MAX_BYTES + delta;
+      // Valid JSON holding only a user hook, so a full parse answers false.
+      fs.writeFileSync(hooksJsonPath(codexHome), hooksJsonOfSize({ hooks: { SessionStart: [USER_HOOK_ENTRY] } }, size), 'utf8');
+      assert.strictEqual(fs.statSync(hooksJsonPath(codexHome)).size, size, 'setup: the file must be exactly the case size');
+
+      assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, UNINSTALL_HOOK_EVENTS), !readable,
+        readable
+          ? 'a file within the cap is read, and a user hook alone does not count'
+          : 'an oversized file counts as unreadable, so the removal still runs');
+    });
+  }
+
+  test('codexHooksJsonHasManagedHooks counts a FIFO hooks.json as unreadable without blocking (#5037)', (t) => {
+    if (process.platform === 'win32') {
+      t.skip('no FIFOs on Windows');
+      return;
+    }
+    const { execFileSync } = require('node:child_process');
+    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+    execFileSync('mkfifo', [hooksJsonPath(codexHome)], { stdio: 'ignore', timeout: PROBE_TIMEOUT_MS });
+    // A blocking open of a FIFO with no writer never returns, so the call runs
+    // in a child process where a regression times out instead of hanging the suite.
+    const probe = [
+      'const surface = require(process.argv[1]);',
+      'const events = JSON.parse(process.argv[3]);',
+      'const hasManagedHooks = surface.codexHooksJsonHasManagedHooks(process.argv[2], events);',
+      'process.stdout.write(JSON.stringify({ hasManagedHooks }));',
+    ].join('\n');
+    const modulePath = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'runtime-hooks-surface.cjs');
+    const result = runNode(['-e', probe, modulePath, codexHome, JSON.stringify(UNINSTALL_HOOK_EVENTS)], {
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assert.strictEqual(result.timedOut, false, 'the read must not block on the FIFO');
+    assert.strictEqual(result.exitCode, 0, result.stderr);
+    assert.deepStrictEqual(JSON.parse(result.stdout), { hasManagedHooks: true },
+      'a FIFO counts as unreadable, so the removal still runs');
+  });
+
+  // The removal reads hooks.json too, after the predicate sends an unreadable
+  // file its way, so its read is bounded the same way and an unreadable file
+  // is refused loudly rather than read whole or waited on (#5037).
+  for (const { label, delta, readable } of SIZE_CAP_CASES) {
+    test(`removeCodexHooksJsonSessionStart on a hooks.json ${label} ${readable ? 'removes the GSD hook and keeps the user one' : 'refuses it and leaves it unchanged'} (#5037)`, () => {
+      const { CODEX_HOOKS_JSON_MAX_BYTES, removeCodexHooksJsonSessionStart } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
+      const size = CODEX_HOOKS_JSON_MAX_BYTES + delta;
+      const gsdHookEntry = { hooks: [{ type: 'command', command: `node "${path.join(codexHome, 'hooks', 'gsd-check-update.js')}"` }] };
+      const before = hooksJsonOfSize({ hooks: { SessionStart: [gsdHookEntry, USER_HOOK_ENTRY] } }, size);
+      fs.writeFileSync(hooksJsonPath(codexHome), before, 'utf8');
+      assert.strictEqual(fs.statSync(hooksJsonPath(codexHome)).size, size, 'setup: the file must be exactly the case size');
+
+      if (readable) {
+        assert.strictEqual(codexHooksJsonHasManagedHooks(codexHome, ['SessionStart']), true, 'setup: the file must hold a GSD hook');
+        removeCodexHooksJsonSessionStart(codexHome);
+        assert.deepStrictEqual(readHooksJson(codexHome).hooks.SessionStart, [USER_HOOK_ENTRY],
+          'the GSD hook must be removed and the user hook kept');
+      } else {
+        assert.throws(() => removeCodexHooksJsonSessionStart(codexHome), { code: CODEX_HOOKS_JSON_READ_FAILURE.UNREADABLE });
+        assert.strictEqual(fs.readFileSync(hooksJsonPath(codexHome), 'utf8'), before, 'the file must be left byte-for-byte unchanged');
+      }
+    });
+  }
+
+  test('removeCodexHooksJsonSessionStart refuses a FIFO hooks.json without blocking (#5037)', (t) => {
+    if (process.platform === 'win32') {
+      t.skip('no FIFOs on Windows');
+      return;
+    }
+    const { execFileSync } = require('node:child_process');
+    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+    execFileSync('mkfifo', [hooksJsonPath(codexHome)], { stdio: 'ignore', timeout: PROBE_TIMEOUT_MS });
+    // Same child-process probe as the predicate's FIFO test, so a blocking
+    // read times out instead of hanging the suite.
+    const probe = [
+      'const surface = require(process.argv[1]);',
+      'let code = null;',
+      'try {',
+      '  surface.removeCodexHooksJsonSessionStart(process.argv[2]);',
+      '} catch (err) {',
+      '  code = err.code;',
+      '}',
+      'process.stdout.write(JSON.stringify({ code }));',
+    ].join('\n');
+    const modulePath = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'runtime-hooks-surface.cjs');
+    const result = runNode(['-e', probe, modulePath, codexHome], { timeoutMs: PROBE_TIMEOUT_MS });
+
+    assert.strictEqual(result.timedOut, false, 'the read must not block on the FIFO');
+    assert.strictEqual(result.exitCode, 0, result.stderr);
+    assert.deepStrictEqual(JSON.parse(result.stdout), { code: CODEX_HOOKS_JSON_READ_FAILURE.UNREADABLE },
+      'a FIFO is refused as unreadable');
+    assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isFIFO(), 'the FIFO must be left in place');
+  });
+
+  // Install reaches the reconcile only when GSD manages Codex hooks: a default
+  // install enables the hooks feature in config.toml and ships
+  // gsd-check-update.js. There the oversized file is refused and the
+  // pre-install snapshot is restored (#5037).
+  test('install over an oversized hooks.json refuses, restores config.toml and leaves hooks.json unchanged (#5037)', () => {
+    const { CODEX_HOOKS_JSON_MAX_BYTES } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
+    const configPath = path.join(codexHome, 'config.toml');
+    const configBefore = 'model = "gpt-5"\n';
+    fs.writeFileSync(configPath, configBefore, 'utf8');
+    const hooksJsonBefore = JSON.stringify({
+      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] },
+      padding: 'x'.repeat(CODEX_HOOKS_JSON_MAX_BYTES),
+    });
+    fs.writeFileSync(hooksJsonPath(codexHome), hooksJsonBefore, 'utf8');
+
+    assertCodexInstallRefused(CODEX_HOOKS_JSON_READ_FAILURE.UNREADABLE);
+
+    assert.strictEqual(fs.readFileSync(hooksJsonPath(codexHome), 'utf8'), hooksJsonBefore, 'hooks.json must be left byte-for-byte unchanged');
+    assert.strictEqual(fs.readFileSync(configPath, 'utf8'), configBefore, 'the pre-install config.toml must be restored');
+  });
+
+  // Uninstall step 1a runs this removal only when the predicate says true, so
+  // the two must agree: a GSD hook the predicate misses survives uninstall,
+  // and a false positive makes uninstall check and rewrite a file it has
+  // nothing to remove from.
+  //
+  // Every reconcile also canonicalizes the file whatever event it is given:
+  // it lifts legacy top-level event arrays under `hooks` and re-indents.
+  // Uninstall now skips that rewrite when no GSD hook is present, so "the
+  // removal changed the file" is measured against the same input put through
+  // the canonicalization alone, a reconcile of an event no document uses.
+  //
+  // Two shapes are dropped by the removal even when no GSD hook is present,
+  // as part of that same skipped rewrite: an event entry that is not an
+  // object, and a non-array value under a removed event in the nested table.
+  // So they only appear in "mixed" documents, which also get one GSD hook the
+  // removal reaches; GSD-free documents never carry them.
+  test('property: codexHooksJsonHasManagedHooks is true exactly when the uninstall removal deletes from hooks.json (#5037)', () => {
+    const { removeCodexHooksJsonEvent, removeCodexHooksJsonSessionStart } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
+    const CANONICALIZE_ONLY_EVENT = 'GsdCanonicalizeOnly';
+    const EVENT_POOL = [...UNINSTALL_HOOK_EVENTS, 'Notification', 'SessionEnd'];
+    const MANAGED_BASENAMES = [
+      'gsd-check-update.js',
+      'gsd-check-update.cmd',
+      'gsd-context-monitor.js',
+      'gsd-context-monitor.cmd',
+      'gsd-update-check.js',
+    ];
+
+    // Hooks are generated as tags and given real paths per run, since a GSD
+    // command is only recognized under the config dir's own hooks/.
+    const hookArb = fc.oneof(
+      fc.record({ kind: fc.constant('managed'), basename: fc.constantFrom(...MANAGED_BASENAMES), quote: fc.constantFrom('"', "'", '') }),
+      fc.record({ kind: fc.constant('other-config-dir'), basename: fc.constantFrom(...MANAGED_BASENAMES) }),
+      fc.record({ kind: fc.constant('suffixed'), basename: fc.constantFrom(...MANAGED_BASENAMES) }),
+      fc.record({ kind: fc.constant('user'), command: fc.string({ maxLength: 20 }) }),
+      fc.record({ kind: fc.constant('raw'), value: fc.constantFrom(null, 'echo hi', 7, {}, { type: 'command' }, { command: 5 }) }),
+    );
+    const entryArb = fc.oneof(
+      { weight: 4, arbitrary: fc.record({ matcher: fc.constantFrom(undefined, '', 'Bash', '*'), hooks: fc.array(hookArb, { maxLength: 4 }) }) },
+      { weight: 1, arbitrary: fc.constantFrom({ matcher: 'Bash' }, { hooks: 'not-an-array' }) },
+    );
+    const tableArb = fc.array(fc.tuple(fc.constantFrom(...EVENT_POOL), fc.array(entryArb, { maxLength: 3 })), { maxLength: 4 });
+    const docArb = fc.oneof(
+      {
+        weight: 8,
+        arbitrary: fc.record({
+          kind: fc.constant('object'),
+          nested: fc.option(tableArb, { nil: null }),
+          legacy: tableArb,
+          extra: fc.constantFrom(null, { version: 1 }, { Stop: 'not-an-array' }),
+          hooksFirst: fc.boolean(),
+          indent: fc.constantFrom(0, 2, 4),
+        }),
+      },
+      {
+        weight: 3,
+        arbitrary: fc.record({
+          kind: fc.constant('mixed'),
+          nested: tableArb,
+          legacy: tableArb,
+          extra: fc.constant(null),
+          hooksFirst: fc.boolean(),
+          indent: fc.constantFrom(0, 2, 4),
+          junkEntries: fc.array(fc.record({
+            eventName: fc.constantFrom(...EVENT_POOL),
+            value: fc.constantFrom(null, 'text', 7, []),
+            inNested: fc.boolean(),
+          }), { minLength: 1, maxLength: 3 }),
+          junkValues: fc.array(fc.record({
+            eventName: fc.constantFrom(...UNINSTALL_HOOK_EVENTS),
+            value: fc.constantFrom('not-an-array', null, 5, {}),
+          }), { maxLength: 2 }),
+          gsdHook: fc.record({
+            eventName: fc.constantFrom(...UNINSTALL_HOOK_EVENTS),
+            basename: fc.constantFrom(...MANAGED_BASENAMES),
+            inNested: fc.boolean(),
+          }),
+        }),
+      },
+      { weight: 1, arbitrary: fc.record({ kind: fc.constant('text'), text: fc.constantFrom('', '  \n', '{ not json', '{"hooks": {', '[1, 2]', 'null', '"text"', '42') }) },
+      { weight: 1, arbitrary: fc.constant({ kind: 'absent' }) },
+    );
+
+    function materializeHook(hook, dir) {
+      switch (hook.kind) {
+        case 'managed':
+          return { type: 'command', command: `node ${hook.quote}${path.join(dir, 'hooks', hook.basename)}${hook.quote}` };
+        case 'other-config-dir':
+          return { type: 'command', command: `node "${path.join(`${dir}-other`, 'hooks', hook.basename)}"` };
+        case 'suffixed':
+          return { type: 'command', command: `node "${path.join(dir, 'hooks', hook.basename)}.bak"` };
+        case 'user':
+          return { type: 'command', command: hook.command };
+        default:
+          return hook.value;
+      }
+    }
+    function materializeTable(pairs, dir) {
+      return Object.fromEntries(pairs.map(([eventName, entries]) => [
+        eventName,
+        entries.map((entry) => (Array.isArray(entry.hooks)
+          ? { ...entry, hooks: entry.hooks.map((hook) => materializeHook(hook, dir)) }
+          : entry)),
+      ]));
+    }
+    function renderDoc(doc, dir) {
+      if (doc.kind === 'text') return doc.text;
+      const out = {};
+      const nested = doc.nested === null ? null : materializeTable(doc.nested, dir);
+      if (nested && doc.hooksFirst) out.hooks = nested;
+      Object.assign(out, materializeTable(doc.legacy, dir));
+      if (doc.extra) Object.assign(out, doc.extra);
+      if (nested && !doc.hooksFirst) out.hooks = nested;
+      if (doc.kind === 'mixed') addJunkAndGsdHook(doc, out, nested, dir);
+      return doc.indent ? `${JSON.stringify(out, null, doc.indent)}\n` : JSON.stringify(out);
+    }
+    // A mixed document's GSD hook goes in last, into an event array the
+    // removal reads, so no junk value can replace it.
+    function addJunkAndGsdHook(doc, out, nested, dir) {
+      const pushTo = (table, eventName, value) => {
+        if (Array.isArray(table[eventName])) table[eventName].push(value);
+        else table[eventName] = [value];
+      };
+      for (const junk of doc.junkEntries) pushTo(junk.inNested ? nested : out, junk.eventName, junk.value);
+      for (const junk of doc.junkValues) nested[junk.eventName] = junk.value;
+      const gsdEntry = { hooks: [materializeHook({ kind: 'managed', basename: doc.gsdHook.basename, quote: '"' }, dir)] };
+      const nestedValue = nested[doc.gsdHook.eventName];
+      if (doc.gsdHook.inNested && (nestedValue === undefined || Array.isArray(nestedValue))) {
+        pushTo(nested, doc.gsdHook.eventName, gsdEntry);
+      } else {
+        pushTo(out, doc.gsdHook.eventName, gsdEntry);
+      }
+    }
+    const readOrNull = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null);
+
+    const verdicts = new Set();
+    fc.assert(
+      fc.property(docArb, (doc) => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-prop-'));
+        try {
+          const file = hooksJsonPath(dir);
+          const content = doc.kind === 'absent' ? null : renderDoc(doc, dir);
+          const writeInput = () => {
+            if (content !== null) fs.writeFileSync(file, content, 'utf8');
+          };
+
+          writeInput();
+          const predicate = codexHooksJsonHasManagedHooks(dir, UNINSTALL_HOOK_EVENTS);
+          assert.strictEqual(readOrNull(file), content, 'the predicate must not write hooks.json');
+
+          let threw = false;
+          let canonical = null;
+          try {
+            removeCodexHooksJsonEvent(dir, CANONICALIZE_ONLY_EVENT);
+            canonical = readOrNull(file);
+          } catch {
+            threw = true;
+          }
+          writeInput();
+          let removed = null;
+          try {
+            // Uninstall step 1a's removal, in its order.
+            removeCodexHooksJsonSessionStart(dir);
+            for (const eventName of CODEX_EXTENDED_HOOK_EVENTS) removeCodexHooksJsonEvent(dir, eventName);
+            removed = readOrNull(file);
+          } catch {
+            threw = true;
+          }
+
+          // A file the removal cannot parse counts as holding GSD hooks, so
+          // the removal runs and reports the error.
+          const removalDeletes = threw || removed !== canonical;
+          verdicts.add(predicate);
+          assert.strictEqual(predicate, removalDeletes,
+            `input:\n${content}\ncanonicalized only:\n${canonical}\nafter the uninstall removal:\n${removed}`);
+        } finally {
+          cleanup(dir);
+        }
+      }),
+      { seed: 5037, numRuns: 200 },
+    );
+    assert.deepStrictEqual([...verdicts].sort(), [false, true], 'the generated documents must produce both verdicts');
   });
 
   test('cleanupOrphanedCodexContextMonitorScript keeps the hooks.json deregistration when script deletion fails', () => {

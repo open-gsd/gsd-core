@@ -13,6 +13,7 @@
  *   Codex hooks.json: ensureCodexHooksJsonSessionStart, ensureCodexHooksJsonEvent,
  *            reconcileCodexHooksJsonEvent, reconcileCodexHooksJsonSessionStart,
  *            removeCodexHooksJsonEvent, removeCodexHooksJsonSessionStart,
+ *            codexHooksJsonHasManagedHooks, readCodexHooksJsonFile,
  *            buildCodexHookWindowsShimIR, buildCodexHookBlock, rewriteLegacyCodexHookBlock
  *   Shared:  buildHookCommand, rewriteLegacyManagedNodeHookCommands
  *
@@ -69,6 +70,9 @@ const {
   escapePosixDoubleQuoted: (value: unknown) => string;
   resolveExecutableBinary: (name: string, opts?: { platform?: string; requireExecutable?: boolean }) => string | null;
 };
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import capabilityLedgerMod = require('./capability-ledger.cjs');
+const { readSmallRegularFile } = capabilityLedgerMod;
 
 // ---------------------------------------------------------------------------
 // Terminal color constants (mirrors install.js for console output parity)
@@ -949,20 +953,105 @@ interface ReconcileResult {
 }
 
 /**
- * Lazily require install-engine.cjs's `hasExistingSymlinkBetween` /
- * `isSymlinkedDestOptIn` — mirrors user-artifact-staging.cts's
- * `_installEngineSymlinkGuard` (same call-time-require rationale: avoid a
- * static circular require between install-engine.cts and this module).
+ * Lazily require install-engine.cjs's `resolveSymlinkedLeafWritePath`, which
+ * applies the `hasExistingSymlinkBetween` / `isSymlinkedDestOptIn` policy to a
+ * single file. Mirrors user-artifact-staging.cts's `_installEngineSymlinkGuard`
+ * (same call-time-require rationale: avoid a static circular require between
+ * install-engine.cts and this module).
  */
 interface InstallEngineSymlinkGuard {
-  hasExistingSymlinkBetween: (root: string, fullPath: string, options?: { allowOptInFollow?: boolean }) => boolean;
-  isSymlinkedDestOptIn: () => boolean;
+  resolveSymlinkedLeafWritePath: (installRoot: string, targetPath: string, label: string) => string;
 }
 
 function _installEngineSymlinkGuard(): InstallEngineSymlinkGuard {
   // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
   const mod: InstallEngineSymlinkGuard = require('./install-engine.cjs');
   return mod;
+}
+
+/**
+ * Largest hooks.json reconcileCodexHooksJsonEvent and
+ * codexHooksJsonHasManagedHooks will read. A real one holds a few hook
+ * entries, so a file this size is not one GSD wrote.
+ */
+const CODEX_HOOKS_JSON_MAX_BYTES = 1024 * 1024;
+
+/**
+ * Why readCodexHooksJsonFile refused a hooks.json, set as the thrown error's
+ * `code` (#5037). Tests (and any caller that needs to) tell the refusals apart
+ * by this code; the message is for the user and may be reworded. The error that
+ * caused the refusal is kept as `cause`.
+ */
+const CODEX_HOOKS_JSON_READ_FAILURE = Object.freeze({
+  /** Over CODEX_HOOKS_JSON_MAX_BYTES, not a regular file, or the read failed. */
+  UNREADABLE: 'CODEX_HOOKS_JSON_UNREADABLE',
+  /** Read, but not valid JSON. */
+  UNPARSEABLE: 'CODEX_HOOKS_JSON_UNPARSEABLE',
+});
+
+type CodexHooksJsonReadFailureCode = (typeof CODEX_HOOKS_JSON_READ_FAILURE)[keyof typeof CODEX_HOOKS_JSON_READ_FAILURE];
+
+function codexHooksJsonReadFailure(code: CodexHooksJsonReadFailureCode, message: string, cause: unknown): Error & { code: string } {
+  const err = new Error(message, { cause }) as Error & { code: string };
+  err.code = code;
+  return err;
+}
+
+/**
+ * Whether one hook object in a Codex hooks.json event entry is GSD's. The
+ * removal in reconcileCodexHooksJsonEvent and the read-only
+ * codexHooksJsonHasManagedHooks both ask this, so they agree on what a
+ * removal would delete.
+ */
+function isManagedCodexHooksJsonHook(hook: unknown, targetDir: string): boolean {
+  const cmd = hook && typeof hook === 'object' ? (hook as Record<string, unknown>)['command'] : null;
+  return isManagedHookCommand(cmd as string | null | undefined, {
+    surface: 'codex-hooks-json',
+    includeLegacyAliases: true,
+    configDir: targetDir,
+  });
+}
+
+/**
+ * Read and parse the hooks.json at `filePath` (already resolved through the
+ * symlink policy) the way reconcileCodexHooksJsonEvent does. Uninstall calls
+ * it before its first removal too, so a file the reconcile would fail on stops
+ * uninstall while every GSD file is still in place.
+ *
+ * Returns `{ content: null, parsed: {} }` for an absent file and `parsed: {}`
+ * for a blank one; `parsed` is otherwise whatever JSON.parse returned. The
+ * read is bounded like codexHooksJsonHasManagedHooks's, so a FIFO cannot block
+ * uninstall here and an oversized file is not read whole and then rewritten.
+ * Either throws "hooks.json could not be read" (code
+ * `CODEX_HOOKS_JSON_READ_FAILURE.UNREADABLE`), and unparseable content throws
+ * "hooks.json parse failed" (`UNPARSEABLE`); the file is left alone. Install
+ * reads hooks.json earlier and unbounded (installer migration 002's readJson
+ * and the pre-install snapshot), so a FIFO still blocks install there.
+ */
+function readCodexHooksJsonFile(filePath: string): { content: string | null; parsed: unknown } {
+  if (!fs.existsSync(filePath)) return { content: null, parsed: {} };
+  let raw: string | null;
+  try {
+    raw = readSmallRegularFile(filePath, CODEX_HOOKS_JSON_MAX_BYTES);
+  } catch (err) {
+    throw codexHooksJsonReadFailure(
+      CODEX_HOOKS_JSON_READ_FAILURE.UNREADABLE,
+      `hooks.json could not be read: ${err && (err as Error).message ? (err as Error).message : String(err)}`,
+      err,
+    );
+  }
+  // null only when the file vanished after existsSync: treat it as absent.
+  if (raw === null) return { content: null, parsed: {} };
+  if (!raw.trim()) return { content: raw, parsed: {} };
+  try {
+    return { content: raw, parsed: JSON.parse(raw) as unknown };
+  } catch (err) {
+    throw codexHooksJsonReadFailure(
+      CODEX_HOOKS_JSON_READ_FAILURE.UNPARSEABLE,
+      `hooks.json parse failed: ${err && (err as Error).message ? (err as Error).message : String(err)}`,
+      err,
+    );
+  }
 }
 
 function reconcileCodexHooksJsonEvent(targetDir: string, eventName: string, opts: ReconcileCodexOpts = {}): ReconcileResult {
@@ -972,53 +1061,22 @@ function reconcileCodexHooksJsonEvent(targetDir: string, eventName: string, opts
   const matcher = typeof opts.matcher === 'string' ? opts.matcher : undefined;
   const timeout = typeof opts.timeout === 'number' ? opts.timeout : undefined;
   // #2586 Major 2: every Codex hooks.json writer funnels through this one
-  // function, and atomicWriteFileSync's final step is a rename(2) onto
-  // `hooksJsonPath` — which, when that path is a symlink, REPLACES the
-  // symlink with a plain file rather than writing through it. Refuse (with
-  // the same GSD_ALLOW_SYMLINKED_DEST opt-in every other install call site
-  // honors) before reading or writing, so a symlinked hooks.json is neither
-  // silently destroyed nor left the caller no escape hatch.
-  const symlinkGuard = _installEngineSymlinkGuard();
-  // The path this function actually reads/writes. Defaults to the nominal
-  // hooks.json path; reassigned below to the symlink's real target when the
-  // opt-in is active, so the write lands on the file the user's symlink
-  // points at instead of clobbering the symlink itself (see note below).
-  let effectiveHooksJsonPath = hooksJsonPath;
-  if (fs.existsSync(hooksJsonPath) && fs.lstatSync(hooksJsonPath).isSymbolicLink()) {
-    if (
-      symlinkGuard.hasExistingSymlinkBetween(targetDir, hooksJsonPath, {
-        allowOptInFollow: symlinkGuard.isSymlinkedDestOptIn(),
-      })
-    ) {
-      throw new Error(
-        `hooks.json at "${hooksJsonPath}" contains a symlink the install root "${targetDir}" does not trust — ` +
-          'refusing to read or write it. If this is an intentional user-owned symlink layout, re-run with ' +
-          'GSD_ALLOW_SYMLINKED_DEST=1.',
-      );
-    }
-    // hasExistingSymlinkBetween returned false only because the opt-in is
-    // active (a symlinked leaf always trips it otherwise) — so this IS a
-    // symlink and we are cleared to follow it. atomicWriteFileSync's final
-    // step is a rename(2) onto its target, which REPLACES an existing
-    // symlink at that path rather than writing through it; resolving to the
-    // real path here makes the read AND the write operate on the symlink's
-    // target, leaving the symlink itself untouched, matching what "follow"
-    // is supposed to mean.
-    effectiveHooksJsonPath = fs.realpathSync(hooksJsonPath);
-  }
-  let parsed: Record<string, unknown> = {};
-  let currentContent: string | null = null;
-  if (fs.existsSync(effectiveHooksJsonPath)) {
-    const raw = fs.readFileSync(effectiveHooksJsonPath, 'utf8');
-    currentContent = raw;
-    if (raw.trim()) {
-      try {
-        parsed = JSON.parse(raw) as Record<string, unknown>;
-      } catch (err) {
-        throw new Error(`hooks.json parse failed: ${err && (err as Error).message ? (err as Error).message : String(err)}`);
-      }
-    }
-  }
+  // function, and atomicWriteFileSync's final step is a rename(2) onto its
+  // target, which replaces a symlink at that path with a plain file instead
+  // of writing through it. install-engine's resolveSymlinkedLeafWritePath,
+  // shared with writeSettings (#5037), refuses a symlinked hooks.json unless
+  // GSD_ALLOW_SYMLINKED_DEST is set, and with the opt-in returns the link's
+  // real target, so the read AND the write below operate on the file the
+  // user's symlink points at and the link itself stays in place. A dangling
+  // hooks.json link is refused rather than replaced, the same as writeSettings.
+  const effectiveHooksJsonPath = _installEngineSymlinkGuard().resolveSymlinkedLeafWritePath(
+    targetDir,
+    hooksJsonPath,
+    'hooks.json at',
+  );
+  const read = readCodexHooksJsonFile(effectiveHooksJsonPath);
+  const currentContent = read.content;
+  let parsed = read.parsed as Record<string, unknown>;
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) parsed = {};
 
   const usesNestedHooksObject =
@@ -1060,12 +1118,7 @@ function reconcileCodexHooksJsonEvent(targetDir: string, eventName: string, opts
       continue;
     }
     const keptHooks = originalHooks.filter((hook) => {
-      const cmd = hook && typeof hook === 'object' ? (hook as Record<string, unknown>)['command'] : null;
-      const managed = isManagedHookCommand(cmd as string | null | undefined, {
-        surface: 'codex-hooks-json',
-        includeLegacyAliases: true,
-        configDir: targetDir,
-      });
+      const managed = isManagedCodexHooksJsonHook(hook, targetDir);
       if (managed) removedLegacy = true;
       return !managed;
     });
@@ -1300,6 +1353,54 @@ function removeCodexHooksJsonEvent(targetDir: string, eventName: string): Reconc
 
 function removeCodexHooksJsonSessionStart(targetDir: string): ReconcileResult {
   return reconcileCodexHooksJsonSessionStart(targetDir, { managedCommand: null });
+}
+
+/**
+ * Read-only: whether removing `eventNames` from `targetDir`'s hooks.json would
+ * delete a GSD hook. The removal writes hooks.json through the symlink policy
+ * (#5037), which refuses a symlinked file without GSD_ALLOW_SYMLINKED_DEST and
+ * a dangling one either way, so uninstall asks this first and leaves alone a
+ * hooks.json it has nothing to remove from. A dangling link reads as absent.
+ * Entries are found where the removal finds them, under the nested `hooks`
+ * table or as a legacy top-level event array. A file that cannot be read or
+ * parsed counts as holding GSD hooks, so the removal still runs and reports
+ * the parse error as before.
+ *
+ * This read happens before the removal's symlink check, through whatever the
+ * link points at, so it is bounded: a FIFO, a device or a directory is refused
+ * without blocking, and a file over CODEX_HOOKS_JSON_MAX_BYTES is refused
+ * without being read. Both count as unreadable.
+ */
+function codexHooksJsonHasManagedHooks(targetDir: string, eventNames: readonly string[]): boolean {
+  const hooksJsonPath = path.join(targetDir, 'hooks.json');
+  if (!fs.existsSync(hooksJsonPath)) return false;
+  let parsed: unknown;
+  try {
+    const raw = readSmallRegularFile(hooksJsonPath, CODEX_HOOKS_JSON_MAX_BYTES);
+    if (raw === null || !raw.trim()) return false;
+    parsed = JSON.parse(raw);
+  } catch {
+    return true;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+  const root = parsed as Record<string, unknown>;
+  const nested = root['hooks'] && typeof root['hooks'] === 'object' && !Array.isArray(root['hooks'])
+    ? (root['hooks'] as Record<string, unknown>)
+    : {};
+  for (const eventName of eventNames) {
+    for (const table of [root, nested]) {
+      const entries = table[eventName];
+      if (!Array.isArray(entries)) continue;
+      for (const entry of entries) {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+        const hooks = (entry as Record<string, unknown>)['hooks'];
+        if (Array.isArray(hooks) && hooks.some((hook) => isManagedCodexHooksJsonHook(hook, targetDir))) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -3302,6 +3403,10 @@ export = {
   ensureCodexHooksJsonEvent,
   removeCodexHooksJsonEvent,
   removeCodexHooksJsonSessionStart,
+  codexHooksJsonHasManagedHooks,
+  readCodexHooksJsonFile,
+  CODEX_HOOKS_JSON_MAX_BYTES,
+  CODEX_HOOKS_JSON_READ_FAILURE,
   buildCodexHookWindowsShimIR,
   cleanupOrphanedCodexContextMonitorScript,
   isGsdOwnedCodexContextMonitorScript,
