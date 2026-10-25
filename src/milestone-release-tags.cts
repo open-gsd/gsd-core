@@ -132,6 +132,7 @@ interface PlannedTag {
   tag: string;
   message: string;
   commit: string;
+  detached?: boolean;
 }
 
 interface PreflightOutcome {
@@ -420,6 +421,7 @@ function runPreflight(
       tag,
       message: entry.message === undefined || entry.message === '' ? tag : entry.message,
       commit,
+      ...(detached ? { detached: true } : {}),
     });
   }
 
@@ -462,7 +464,12 @@ export function createReleaseTags(
       { cwd: plan.dir, timeout },
     );
     if (r.exitCode === 0) {
-      result.repos[plan.key] = { status: 'created', tag: plan.tag, commit: plan.commit };
+      result.repos[plan.key] = {
+        status: 'created',
+        tag: plan.tag,
+        commit: plan.commit,
+        ...(plan.detached ? { detached_head: true } : {}),
+      };
       result.created.push(`${plan.repo}:${plan.tag}`);
       continue;
     }

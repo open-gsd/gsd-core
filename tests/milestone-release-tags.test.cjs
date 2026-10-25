@@ -246,16 +246,18 @@ describe('release tags: creation (rows 1, 2, 7, 9, 12, 16)', () => {
 describe('release tags: preflight rejections (rows 3-6, 8, 10, 11, 17)', () => {
   test('rejects unconfigured repo, writes nothing (row 3)', (t) => {
     const { root } = makeProject(t, ['api']);
-    initRepo(path.join(root, 'stray'));
+    // loadConfig auto-syncs sub_repos with first-level git directories, so a repo only
+    // counts as unconfigured when it is nested deeper than the project root's children.
+    initRepo(path.join(root, 'nested', 'stray'));
     const res = createReleaseTags(root, [
       { repo: 'api', tag: 'v1.0.0' },
-      { repo: 'stray', tag: 'v1.0.0' },
+      { repo: 'nested/stray', tag: 'v1.0.0' },
     ]);
     assert.equal(res.ok, false);
     assert.equal(res.phase, 'preflight');
-    assert.ok(res.errors.some((e) => e.repo === 'stray' && e.reason === 'repo_not_configured'));
+    assert.ok(res.errors.some((e) => e.repo === 'nested/stray' && e.reason === 'repo_not_configured'));
     assert.equal(tagExists(path.join(root, 'api'), 'v1.0.0'), false);
-    assert.equal(tagExists(path.join(root, 'stray'), 'v1.0.0'), false);
+    assert.equal(tagExists(path.join(root, 'nested', 'stray'), 'v1.0.0'), false);
     assert.deepEqual(res.created, []);
   });
 
@@ -278,7 +280,7 @@ describe('release tags: preflight rejections (rows 3-6, 8, 10, 11, 17)', () => {
     }
   });
 
-  test('rejects missing and non-git repos (row 5)', (t) => {
+  test('a deleted repo and one that lost its .git are unconfigured after the config sync (row 5)', (t) => {
     const { root } = makeProject(t, ['gone', 'plain', 'okrepo']);
     cleanup(path.join(root, 'gone'));
     cleanup(path.join(root, 'plain', '.git'));
@@ -288,8 +290,34 @@ describe('release tags: preflight rejections (rows 3-6, 8, 10, 11, 17)', () => {
       { repo: 'okrepo', tag: 'v1' },
     ]);
     assert.equal(res.ok, false);
-    assert.equal(res.repos.gone.reason, 'repo_missing');
-    assert.equal(res.repos.plain.reason, 'not_a_git_repo');
+    // loadConfig drops a deleted directory, and a directory that lost its .git, from
+    // sub_repos, so both are unconfigured rather than "missing" / "not a git repo".
+    assert.equal(res.repos.gone.reason, 'repo_not_configured');
+    assert.equal(res.repos.plain.reason, 'repo_not_configured');
+    assert.equal(tagExists(path.join(root, 'okrepo'), 'v1'), false);
+  });
+
+  test('a configured repo whose directory vanishes after config load is repo_missing (row 5)', (t) => {
+    const { root } = makeProject(t, ['ghost', 'okrepo']);
+    const original = fs.statSync;
+    t.after(() => { fs.statSync = original; });
+    fs.statSync = function patched(p, ...rest) {
+      if (String(p).endsWith(`${path.sep}ghost`)) {
+        throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' });
+      }
+      return original.call(this, p, ...rest);
+    };
+    let res;
+    try {
+      res = createReleaseTags(root, [
+        { repo: 'ghost', tag: 'v1' },
+        { repo: 'okrepo', tag: 'v1' },
+      ]);
+    } finally {
+      fs.statSync = original;
+    }
+    assert.equal(res.ok, false);
+    assert.equal(res.repos.ghost.reason, 'repo_missing');
     assert.equal(tagExists(path.join(root, 'okrepo'), 'v1'), false);
   });
 
