@@ -1480,6 +1480,14 @@ describe('gsd-secret-read-guard: heredoc inside a command substitution (#5513)',
     });
   }
 
+  // The earlier tag reading is kept as a reading: with a CR on the opening line and an LF-only
+  // terminator, bash never terminates the heredoc (no read runs), but this command was denied
+  // before and stays denied, so a change of reading never removes a denial.
+  test('a read after a mixed-line-ending heredoc stays denied', () => {
+    const cmd = 'cat <<EOF\r\nx\nEOF\ncat .env';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
   test('a read after a top-level CRLF heredoc is denied', () => {
     const cmd = 'cat <<EOF\r\ndata\r\nEOF\r\ncat .env';
     assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
