@@ -857,15 +857,23 @@ function skipWrapperArgs(words, start, spec) {
 // wrappers with their own options (`sudo -u root`, `env -i VAR=x`,
 // `timeout -s KILL 5`, `nice -n 5`, …), or null when nothing but prefixes remain.
 function resolveCommand(words) {
-  let idx = 0;
+  const idx = commandIndexFrom(words, 0);
+  if (idx === -1) return null;
+  return { base: lastSegment(words[idx].text).toLowerCase(), operands: words.slice(idx + 1) };
+}
+
+// Index of the command word at or after `start` (skipping the same leading
+// assignments and prefix wrappers), or -1 when nothing but prefixes remain.
+// Copies nothing, so a caller walking many wrappers stays linear (#5628).
+function commandIndexFrom(words, start) {
+  let idx = start;
   while (idx < words.length && ASSIGNMENT_RE.test(words[idx].text)) idx++;
   while (idx < words.length) {
     const spec = WRAPPERS.get(lastSegment(words[idx].text).toLowerCase());
     if (!spec) break;
     idx = skipWrapperArgs(words, idx + 1, spec);
   }
-  if (idx >= words.length) return null;
-  return { base: lastSegment(words[idx].text).toLowerCase(), operands: words.slice(idx + 1) };
+  return idx >= words.length ? -1 : idx;
 }
 
 /**

@@ -1114,7 +1114,7 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
 
   test('blocks: timeout interleaved with prefix wrappers and flags', () => {
     assertBlocked(
-      runHook(bash('sudo timeout 1 env X=1 timeout -k 5 2 claude --agent=gsd-debugger')),
+      runHook(bash('sudo timeout 1 env X=1 timeout --foreground 2 claude --agent=gsd-debugger')),
       'interleaved',
       { code: 'debugger-cli-spawn' },
     );
