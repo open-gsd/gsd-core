@@ -6,7 +6,7 @@ What each part of a GSD install becomes on [Pi](https://pi.dev), checked against
 
 | Surface | Claude Code ships | On Pi | Not available on Pi |
 |---|---|---|---|
-| Commands | 72 | 72 skills, run as `/skill:gsd-<command>` | `/skill:gsd-debug` runs `list` and `status <slug>` only; every other form prints that it cannot run |
+| Commands | 72 | 72 skills, run as `/skill:gsd-<command>` | none; `/skill:gsd-debug` is adapted, see [Commands](#commands) |
 | Workflows | 181 workflow files, including those in subdirectories | all installed under the engine root, each reached through a skill | none |
 | Agent roles | 35 roles and 29 compact variants | 35 roles under `agents/`, run through `gsd_dispatch`; compact variants are not installed | none |
 | Hooks | 29 hook scripts, 8 of them for Cursor or Windsurf only | bridged through `tool_call`, `tool_result`, `session_start`, `before_agent_start` and `session_before_compact` | the hooks listed under [Hooks](#hooks) |
@@ -17,17 +17,17 @@ The counts are the state at the time of writing; the test, not this table, is th
 
 Every `commands/gsd/<name>.md` becomes the Pi skill `gsd-<name>`. A skill whose workflow cannot run on Pi is installed as a stub that prints its reason and stops, so the command is still discoverable instead of missing.
 
-| Pi skill | Disposition | Runs on Pi | Reason the rest does not |
+| Pi skill | Disposition | Runs on Pi | What differs from Claude |
 |---|---|---|---|
-| `/skill:gsd-debug` | partial-on-pi | `list` and `status <slug>` | needs nested dispatch; Pi dispatch is flat |
+| `/skill:gsd-debug` | adapted-on-pi | `list`, `status <slug>`, `continue <slug>`, a new session and `--diagnose` | the checkpoint loop runs in the top-level session instead of in `gsd-debug-session-manager`; specialist skill review is not run |
 
-`gsd_dispatch` runs a role in a child `pi` process that has no dispatch tool of its own, so a role cannot start another role. `/gsd-debug` runs a session manager that starts `gsd-debugger`, which is a second level. `list` and `status <slug>` read `.planning/debug/` and start no agent, so the skill runs them and prints the reason for every other form. No command is installed as a full stub today.
+`gsd_dispatch` runs a role in a child `pi` process that has no dispatch tool of its own, so a role cannot start another role. On Claude, `/gsd-debug` runs a session manager (`gsd-debug-session-manager`) that starts `gsd-debugger`, which is a second level. On Pi the skill never dispatches the session manager: the top-level session runs the manager's return-classification loop and dispatches `gsd-debugger` at the one level Pi allows. The loop handles the same six returns as the manager (`ROOT CAUSE FOUND`, `TDD CHECKPOINT`, `DEBUG COMPLETE`, `CHECKPOINT REACHED`, `INVESTIGATION INCONCLUSIVE`, `FIX REJECTED BY GUARDRAIL`), keeps its state (`goal`, `tdd_mode`, `tdd_phase`, `resume_count`, `awaiting`) in the `## Session Loop` section of `.planning/debug/<slug>.md`, and asks its questions as plain text. `--diagnose` ends at the Root Cause Report. No command is installed as a full stub today; a command that lists no workflow to read falls back to one.
 
 ## Workflows
 
 A workflow is reachable on Pi when a runnable Pi skill, an installed role or another reachable workflow names it. Every workflow Claude Code reaches is also reached on Pi. The files in `gsd-core/workflows/` that are not Markdown, `section-manifest.json` and the launcher snippet, are not workflows and are not checked.
 
-No workflow carries a disposition: `debug.md` is reached by the partial `/skill:gsd-debug`.
+No workflow carries a disposition: `debug.md` is reached by the adapted `/skill:gsd-debug`.
 
 ## Agent roles
 
