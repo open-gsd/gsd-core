@@ -259,7 +259,10 @@ export function planSubjectPattern(planId: string, projectCode: string | null = 
   if (prefix !== null) {
     const stripped = planId.slice(prefix.length);
     const coded = phasePlanPattern(stripped);
-    const planShaped = coded !== null || /^\d/.test(stripped);
+    // The only remainder `phasePlanPattern` cannot split is the N-segment milestone shape
+    // (`01-02-03`), so require that whole shape: a bare `1`, `01-` or a trailing dash would
+    // otherwise widen the optional group onto `feat(1):`.
+    const planShaped = coded !== null || /^\d[0-9A-Za-z.]*(-[0-9A-Za-z.]+){2,}$/.test(stripped);
     if (!planShaped) return qualifiedPlanSubjectPattern(escapeEre(planId));
     return qualifiedPlanSubjectPattern(coded ?? escapeEre(stripped), projectCode);
   }

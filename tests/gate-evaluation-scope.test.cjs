@@ -433,6 +433,13 @@ describe('resolveEvaluationScope — plan and quick units', () => {
       const pattern = planSubjectPattern(planId, 'PRJ');
       assert.ok(!new RegExp(pattern).test(subject), `${planId} must not match ${subject}`);
     }
+    // A hyphenated code leaves a remainder the phase/plan split cannot parse; only the full
+    // N-segment shape may take the optional group, never a bare number or a dangling dash.
+    for (const planId of ['AUTH-X-1', 'AUTH-X-01-', 'AUTH-X-01-01-']) {
+      const pattern = planSubjectPattern(planId, 'AUTH-X');
+      assert.ok(!new RegExp(pattern).test('feat(1): another plan'), `${planId} must not match a bare feat(1):`);
+      assert.ok(!new RegExp(pattern).test('feat(01-): another plan'), `${planId} must not match a bare feat(01-):`);
+    }
     // The shapes that legitimately take the group are unchanged by the narrowing.
     assert.equal(planSubjectPattern('PRJ-01-01', 'PRJ'), '^[a-z]+\\((PRJ-)?0*1-0*1\\)!?:');
     assert.equal(planSubjectPattern('PRJ-01-02-03', 'PRJ'), '^[a-z]+\\((PRJ-)?01-02-03\\)!?:',
@@ -872,7 +879,7 @@ describe('check evaluation-scope — the CLI surface for a coded plan id (#5271)
       'the gate outcome for the empty coded scope is advisory, not pass');
   });
 
-  test('an out-of-grammar configured code leaves the coded id LITERAL at the CLI', () => {
+  test('a differently-cased id than the configured code stays LITERAL at the CLI', () => {
     const repo = codedRepo();
     write(repo.dir, '.planning/config.json', JSON.stringify({ project_code: 'prj' }));
     repo.git('add', '.');
