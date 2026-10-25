@@ -71,6 +71,23 @@ This is a recorded session, not a CI test. Limits of the run:
 - `workflow.research` was set to `false` in the project config. With it on, `gsd_dispatch` ran four `gsd-project-researcher` roles one after another (the queue is sequential), and the first two stopped at the 30 minute dispatch timeout on this model with the documented `timeout` error result. That is the tool's fail-closed behavior, observed live; the research files were not produced.
 - A smaller model (`Qwen3-8B`) ran the skill but called `gsd_dispatch` with the skill name as the role. The tool refused with `role-unresolved`, which is the documented error for a role that is not installed.
 
+## Live verification: `/skill:gsd-debug`
+
+`/skill:gsd-debug` was run on Pi 1.3.0 against the same local model (`mlx-community/Qwen3.8-27B-bf16`), in an isolated Pi config directory with GSD installed by `bin/install.js --pi --global`, on a three-file Node project whose `mean([])` returns `NaN`. The model server was started from inside Pi with `/mlx-last`. Each Pi invocation was a non-interactive `pi -p` turn that continued the previous session.
+
+| Turn | Input | Result |
+| --- | --- | --- |
+| 1 | `/skill:gsd-debug --diagnose` with the five symptom fields | Routed to the new-session form, printed the five fields as a plain-text prompt and ended the turn. |
+| 2 | `1` (confirm) | Created `.planning/debug/mean-empty-array-nan.md`, dispatched `gsd-debugger` once with `gsd_dispatch`, received `ROOT CAUSE FOUND`, printed the Root Cause Report with no fix offered, and committed the session file. |
+| 3 | `/skill:gsd-debug continue mean-empty-array-nan` | Reset `goal` to `find_and_fix` and `resume_count` to 0 in `## Session Loop`, dispatched `gsd-debugger`, received `CHECKPOINT REACHED` (human-verify) after the debugger applied a guard and a regression test, wrote `awaiting` and the full `question` to the file, and ended the turn. |
+| 4 | `confirmed fixed` | Dispatched the continuation, archived the session to `.planning/debug/resolved/`, and committed the fix and the session file. |
+
+Limits of the run:
+
+- The dispatched child runs with `--no-extensions`, so the extension-provided model provider was not visible to it and the first dispatch returned `gsd_dispatch child-failed ... No API key found for the selected model`. The skill stopped, printed that error and left the session file in place, as specified. The run then used a static `mlx-local` provider in the Pi `models.json` for the same server, which the child can read.
+- The loop state is written by the model, not by code. In one earlier run the model recorded `resume_count: 1` while it reported no re-dispatches.
+- This is a recorded session, not a CI test.
+
 ## Related
 
 - [How GSD runs on Pi](../explanation/how-gsd-runs-on-pi.md)
