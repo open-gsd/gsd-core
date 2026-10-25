@@ -127,8 +127,14 @@ describe('execGit', () => {
     test('the env inherits the parent environment', () => {
       // A minimal env would drop PATH, HOME and the user's git config, so the
       // assertion is over the whole inherited surface, not one key.
+      //
+      // The keys execGit sets on purpose are not inherited and are asserted by the
+      // sibling rows: a parent that already carries one (the Windows runner sets
+      // GCM_INTERACTIVE=Never) must not turn the intended override into a failure.
+      const OVERRIDDEN_ON_PURPOSE = new Set(['GIT_OPTIONAL_LOCKS', 'GIT_TERMINAL_PROMPT', 'GCM_INTERACTIVE']);
       const captured = captureGitSpawnOptions();
       for (const key of Object.keys(process.env)) {
+        if (OVERRIDDEN_ON_PURPOSE.has(key.toUpperCase())) continue;
         assert.deepEqual(
           captured.options.env[key], process.env[key],
           `env must inherit ${key} from the parent process`);
