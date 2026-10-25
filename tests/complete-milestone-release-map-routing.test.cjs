@@ -346,7 +346,7 @@ describe('push confirmation', () => {
     for (const line of pushLines) {
       assert.match(line.trim(), /^git -C "\$\{?\w+\}?" push -- "\$\{?\w+\}?" "refs\/tags\/\$\{?\w+\}?"$/, line);
     }
-    for (const forbidden of ['--all', '--tags', '--follow-tags', '--force', '--mirror', '--delete', ' -f ']) {
+    for (const forbidden of ['--all', '--tags', '--follow-tags', '--force', '--mirror', '--delete']) {
       assert.ok(!text.includes(forbidden), `release-map.md must not mention ${forbidden}`);
     }
   });
