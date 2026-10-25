@@ -108,6 +108,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [PLAN.md schema](reference/plan-md.md) — field-by-field reference for `.planning/phases/<N>/PLAN.md`
 - [Planning artifacts](reference/planning-artifacts.md) — all `.planning/` files and their roles
 - [Review and verification capabilities](reference/review-verification-capabilities.md) — code review, security, and Nyquist capability ownership and hook contracts
+- [Agent reference](reference/agents.md) — role cards, tools and constraints for every shipped GSD agent
 - [Gate predicates](reference/gate-predicates.md) — canonical specification of the phase-gate predicate vocabulary
 - [Capability matrix](reference/capability-matrix.md) — generated catalogue of every capability's role, tier, extension points, hook kinds, and `engines.gsd`
 - [Exit code reference](reference/exit-codes.md) — generated catalogue of every registered process exit code, its name, meaning, and owning module, plus the reserved bands and the v1/v2 exit contract
