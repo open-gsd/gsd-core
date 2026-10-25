@@ -380,7 +380,7 @@ describe('#5637 what an install writes', () => {
         const { configDir } = runMinimalInstall({ runtime: 'opencode', scope: 'global', root });
         nonces.push(readInstalledNonce(configDir));
         manifests.push(JSON.stringify(buildParityManifest(configDir, root)));
-        fs.rmSync(configDir, { recursive: true, force: true });
+        cleanup(configDir);
       }
     } finally {
       cleanup(root);
