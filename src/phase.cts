@@ -1386,7 +1386,7 @@ function assertDescriptionPreservesMilestoneScope(cwd: string, description: stri
 function collectSiblingWorktreePhaseNums(cwd: string, used: Set<number>): void {
   let porcelain: string;
   try {
-    porcelain = execFileSync('git', ['worktree', 'list', '--porcelain'], { // allow-index-refresh: lists worktrees from .git metadata, never opens the index
+    porcelain = execFileSync('git', ['worktree', 'list', '--porcelain'], {
       cwd,
       encoding: 'utf-8',
       // Same subprocess band as the other git call sites (smart-entry, check-command-router):
@@ -1394,7 +1394,7 @@ function collectSiblingWorktreePhaseNums(cwd: string, used: Set<number>): void {
       timeout: 10_000,
       windowsHide: true,
       maxBuffer: 4 * 1024 * 1024,
-    });
+    }); // allow-index-refresh: lists worktrees from .git metadata, never opens the index
   } catch {
     return; // not a git repo / git unavailable — unchanged behavior
   }

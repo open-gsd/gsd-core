@@ -419,6 +419,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/model-adapter.cjs',
       'gsd-core/bin/lib/hook-bus.cjs',
       'gsd-core/bin/lib/state-io.cjs',
+      // #5048: tsc-generated runtime artifact — lint the src/read-only-git-env.cts source.
+      'gsd-core/bin/lib/read-only-git-env.cjs',
       'gsd-core/bin/lib/external-descriptor-trust.cjs',
       'gsd-core/bin/lib/mcp-server.cjs',
       // #3072: tsc-generated runtime artifact — lint the src/mcp-catalog.cts source.

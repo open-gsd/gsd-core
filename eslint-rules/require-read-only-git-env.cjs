@@ -66,9 +66,12 @@ function propertyKeyName(prop) {
 }
 
 function valueCallsReadOnlyGitEnv(value, sourceCode) {
-  return sourceCode
-    .getTokens(value)
-    .some((token) => token.type === 'Identifier' && token.value === 'readOnlyGitEnv');
+  const tokens = sourceCode.getTokens(value);
+  return tokens.some((token, i) => token.type === 'Identifier'
+    && token.value === 'readOnlyGitEnv'
+    && tokens[i + 1] !== undefined
+    && tokens[i + 1].type === 'Punctuator'
+    && tokens[i + 1].value === '(');
 }
 
 // `env` given as a plain variable (`const env = { ...readOnlyGitEnv(), ... }`

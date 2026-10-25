@@ -4286,6 +4286,7 @@ describe('require-read-only-git-env (#5048)', () => {
         { filename: 'src/x.cts', code: "const env = { ...process.env }; spawnSync('git', args, { env });", errors: [{ messageId: 'requireReadOnlyGitEnv' }] },
         { filename: 'hooks/x.js', code: "childProcess.spawnSync('git', ['status'], {});", errors: [{ messageId: 'requireReadOnlyGitEnv' }] },
         { filename: 'src/x.cts', code: "spawnSync('git.exe', ['status'], {});", errors: [{ messageId: 'requireReadOnlyGitEnv' }] },
+        { filename: 'src/x.cts', code: "spawnSync('git', ['status'], { env: readOnlyGitEnv });", errors: [{ messageId: 'requireReadOnlyGitEnv' }] },
         { filename: 'src/x.cts', code: "spawnSync('git', ['status'], {}); // allow-index-refresh:", errors: [{ messageId: 'requireReadOnlyGitEnv' }] },
       ],
     });
