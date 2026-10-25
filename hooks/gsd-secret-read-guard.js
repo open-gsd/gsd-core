@@ -56,7 +56,9 @@
 //   EOF)"` — is never operand-checked, so prose mentioning `.env` is safe.
 //   pass 2 groups tokens by segment and evaluates each on its own:
 //   input redirect targets (`<`, `N<`) are always checked; the command word is
-//   located past `sudo`/`env VAR=x`/`nohup`-style prefixes; a closed set of
+//   located past wrapper prefixes AND their own options (`sudo -u U`,
+//   `env -i VAR=x`, `timeout -s KILL 5`, `nice -n 5`, `stdbuf -oL`, `exec`;
+//   see WRAPPERS, #5627); a closed set of
 //   NON-READING commands (test/[/ls/stat/rm/touch/echo/…) exempts that
 //   segment's operands — `[ -f .env ]` and `ls .env*` are existence checks
 //   GSD's own agents run — while `cp`/`mv`/`ln`/`git` are deliberately NOT
@@ -90,7 +92,9 @@
 //   (`cat .e*`), interpreter one-liners (`python -c "open('.env')"`), a piped
 //   script from a non-echo source (`cat gen.sh | bash`, `curl … | sh`), reads
 //   inside scripts the agent executes, and `glob: '*'` reaching a
-//   NON-gitignored `.env`. The promise is "no looser than the retired rules
+//   NON-gitignored `.env`, and a wrapper whose value-less option the WRAPPERS
+//   table does not know, or `env -S 'script'` (the split string is skipped as
+//   the option's value). The promise is "no looser than the retired rules
 //   on plain commands, without arming the compound-`cd` prompt". Writes to
 //   secret files are out of scope (Write/Edit were never gated). Commands
 //   over 1 MiB are denied outright (`command-too-large`) rather than
@@ -148,8 +152,29 @@ const MAX_GLOB_ALTERNATIVES = 64;
 const NON_SECRET_ENV_SUFFIXES = new Set(['example', 'sample', 'template', 'dist']);
 
 // Command-prefix wrappers to look through when locating the command word at
-// the head of a segment (same set as hooks/gsd-windsurf-pre-command.js).
-const CMD_PREFIXES = new Set(['sudo', 'env', 'command', 'nice', 'nohup', 'time', 'doas']);
+// the head of a segment (#5627). Each wrapper runs the words that follow its
+// own options, so the table records what resolveCommand must step over:
+//   short    letters of short options that take a value (`-n 5`, `-n5`)
+//   long     long options that take a SEPARATE value word (`--adjustment 5`);
+//            `--opt=value` is one word and needs no entry
+//   assigns  leading `VAR=value` words belong to the wrapper (env)
+//   operands positional words after the options (timeout's DURATION)
+// Taken from sudo(8), doas(1), env(1), nice(1), time(1), timeout(1),
+// stdbuf(1), setsid(1) and bash's `command`/`exec`. A wrong entry fails open
+// (the option's value becomes the command word), so keep it to the man pages.
+const WRAPPERS = new Map([
+  ['sudo', { short: 'CDghpRrTtUu', long: ['--close-from', '--chdir', '--group', '--host', '--prompt', '--chroot', '--role', '--command-timeout', '--type', '--other-user', '--user'] }],
+  ['doas', { short: 'Cu' }],
+  ['env', { short: 'uCSa', long: ['--unset', '--chdir', '--split-string', '--argv0'], assigns: true }],
+  ['nice', { short: 'n', long: ['--adjustment'] }],
+  ['nohup', {}],
+  ['command', {}],
+  ['time', { short: 'fo', long: ['--format', '--output'] }],
+  ['timeout', { short: 'sk', long: ['--signal', '--kill-after'], operands: 1 }],
+  ['stdbuf', { short: 'ioe', long: ['--input', '--output', '--error'] }],
+  ['setsid', {}],
+  ['exec', { short: 'a' }],
+]);
 
 // Commands whose ordinary operands are file NAMES, never file CONTENTS. A
 // closed set on purpose: anything not listed is assumed to read.
@@ -789,18 +814,52 @@ const DASH_C_RE = /^-[A-Za-z]*c$/;
 
 const GROUPING_SEPS = new Set(['(', ')', '{', '}']);
 
+// How many words the option `word` occupies for wrapper `spec`: 2 when it
+// takes a separate value word, else 1.
+function wrapperOptionWidth(word, spec) {
+  if (word.startsWith('--')) {
+    if (word.includes('=')) return 1;
+    // getopt_long accepts any unambiguous prefix (`--adj 5`).
+    return word.length > 2 && (spec.long || []).some((l) => l.startsWith(word)) ? 2 : 1;
+  }
+  const valued = spec.short || '';
+  for (let i = 1; i < word.length; i++) {
+    if (valued.includes(word[i])) return i === word.length - 1 ? 2 : 1; // `-n5` carries its value
+  }
+  return 1;
+}
+
+// Index of the first word after a wrapper's own options, assignments and
+// positional operands (`-n 5`, `-i A=1`, `-s KILL 5`, `--`).
+function skipWrapperArgs(words, start, spec) {
+  let idx = start;
+  let optionsEnded = false;
+  while (idx < words.length) {
+    const text = words[idx].text;
+    if (spec.assigns && ASSIGNMENT_RE.test(text)) {
+      idx++;
+    } else if (!optionsEnded && text === '--') {
+      optionsEnded = true;
+      idx++;
+    } else if (!optionsEnded && text.length > 1 && text.startsWith('-')) {
+      idx += wrapperOptionWidth(text, spec);
+    } else {
+      break;
+    }
+  }
+  return Math.min(idx + (spec.operands || 0), words.length);
+}
+
 // Command base + operands after leading `VAR=val` assignments and prefix
-// wrappers (`sudo`, `env VAR=x`, …), or null when nothing but prefixes remain.
+// wrappers with their own options (`sudo -u root`, `env -i VAR=x`,
+// `timeout -s KILL 5`, `nice -n 5`, …), or null when nothing but prefixes remain.
 function resolveCommand(words) {
   let idx = 0;
   while (idx < words.length && ASSIGNMENT_RE.test(words[idx].text)) idx++;
   while (idx < words.length) {
-    const base = lastSegment(words[idx].text).toLowerCase();
-    if (!CMD_PREFIXES.has(base)) break;
-    idx++;
-    if (base === 'env') {
-      while (idx < words.length && ASSIGNMENT_RE.test(words[idx].text)) idx++;
-    }
+    const spec = WRAPPERS.get(lastSegment(words[idx].text).toLowerCase());
+    if (!spec) break;
+    idx = skipWrapperArgs(words, idx + 1, spec);
   }
   if (idx >= words.length) return null;
   return { base: lastSegment(words[idx].text).toLowerCase(), operands: words.slice(idx + 1) };
@@ -1088,21 +1147,6 @@ function isDebuggerAgent(value) {
   return value.slice(value.lastIndexOf(':') + 1) === DEBUGGER_AGENT_NAME;
 }
 
-// `timeout [flags] DURATION cmd …` is not in CMD_PREFIXES because its first
-// operand is a duration, not the command. Returns the command that follows it.
-function unwrapTimeout(cmd) {
-  let { base, operands } = cmd;
-  while (base === 'timeout') {
-    let k = 0;
-    while (k < operands.length && operands[k].text.startsWith('-')) k++;
-    k++; // the DURATION operand
-    const rest = resolveCommand(operands.slice(k));
-    if (!rest) return null;
-    ({ base, operands } = rest);
-  }
-  return { base, operands };
-}
-
 // Returns the `--agent` value text of a debugger launch, or null.
 function findDebuggerCliSpawn(command, depth) {
   const { tokens, nested } = tokenize(command);
@@ -1134,8 +1178,7 @@ function findDebuggerCliSpawn(command, depth) {
     }
     if (!words.length) continue;
 
-    const first = resolveCommand(words);
-    const cmd = first && unwrapTimeout(first);
+    const cmd = resolveCommand(words);
     if (!cmd) continue;
     const { base, operands } = cmd;
 
