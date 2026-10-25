@@ -499,8 +499,10 @@ function classifyGrepGlob(glob) {
 //         bare `\x` or `\u` is a NUL that cuts the argument (`$'.env\u'` is
 //         `.env`), and it decodes heredoc tags, so a tag can end the heredoc
 //         on a different line; `$"…"` is `$` and `"…"`. And a run of `$`
-//         before `'` always ends in a `$'` opener: `$$'x'` is the PID and
-//         `$'x'`, where bash reads the PID and a plain 'x' (opensAnsiC).
+//         before `'` always ends in a `$'` opener: `$$'x'` is the PID and a
+//         span, where bash reads the PID and a plain 'x' (opensAnsiC); after
+//         an even run only `\\` and `\'` are escapes in it, though the zsh
+//         reading decodes it in full (opensAnsiC).
 //   dash  `$` is a literal and the quote after it a plain one, and a run of
 //         `$` pairs left to right as bash's does: `$${` is the PID and a `{`.
 //   plain the scan as it was before #5255: dash's quoting, but a run is not
@@ -573,9 +575,12 @@ function ownsQuote(run, str, shell) {
 
 // Whether the `'` after the run opens a `$'…'` span under the reading `shell`.
 // bash pairs the run left to right, so only an odd run does. zsh opens one
-// after any run: `$$'\x41'` is the PID and `A`, `$$$$'\x41'` two PIDs and `A`
-// (zsh 5.9), so `echo $$'\''; cat .env` runs the read under zsh. dash never
-// does.
+// after any run, so `echo $$'\''; cat .env` runs the read under zsh, but after
+// an even run it takes only `\\` and `\'` as escapes: `$$'\x41'` is the PID
+// and `\x41`, `$$$'\x41'` the PID and `A` (zsh 5.9; a heredoc tag after an
+// even run is decoded in full). The zsh reading decodes the span in full
+// there too: the bash reading takes the same text as a plain quote, whose
+// value is zsh's but for those two escapes. dash never does.
 function opensAnsiC(run, str, shell) {
   return str[run.end] === "'" && shell !== 'dash' && (shell === 'zsh' ? run.dollars > 0 : run.owned);
 }
