@@ -6554,7 +6554,32 @@ function splitTopLevelKeys(content) {
   return { topLevel: content.trim(), rest: '' };
 }
 
+/**
+ * #5301: the path a config write must target. atomicWriteFileSync ends in a
+ * rename(2) onto its destination, which REPLACES a symlink at that path rather than
+ * writing through it, so a dotfiles-managed `config.toml -> ~/dotfiles/codex.toml`
+ * became a plain file and the user's copy never saw the merge. With
+ * GSD_ALLOW_SYMLINKED_DEST the symlink is intentional: resolve it and write the
+ * file it points at, leaving the link itself alone. Without the opt-in the path is
+ * returned unchanged (the install-root symlink guard refuses such a layout before
+ * any write). A dangling link resolves to where it points, so the first write
+ * creates the target.
+ */
+function resolveSymlinkWriteTarget(filePath) {
+  if (!isSymlinkedDestOptIn()) return filePath;
+  let stat;
+  try { stat = fs.lstatSync(filePath); } catch (_) { return filePath; }
+  if (!stat.isSymbolicLink()) return filePath;
+  try {
+    return fs.realpathSync(filePath);
+  } catch (_) {
+    return path.resolve(path.dirname(filePath), fs.readlinkSync(filePath));
+  }
+}
+
 function mergeCodexConfig(configPath, gsdBlock) {
+  // #5301: both write sites below land on the symlink's target, never replace the link.
+  configPath = resolveSymlinkWriteTarget(configPath);
   // Case 1: No config.toml — create fresh
   if (!fs.existsSync(configPath)) {
     atomicWriteFileSync(configPath, gsdBlock + '\n');
@@ -13350,7 +13375,8 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       // existing config; the snapshot restore below is a second line of
       // defense if even the rename fails.
       try {
-        atomicWriteFileSync(configPath, configContent, 'utf-8');
+        // #5301: write through an opted-in symlink instead of replacing it.
+        atomicWriteFileSync(resolveSymlinkWriteTarget(configPath), configContent, 'utf-8');
       } catch (writeErr) {
         // #2760 CR4 finding 1 — write failure must be loud and fatal. Wrap
         // with a `post-write` prefix the outer catch recognises so install
