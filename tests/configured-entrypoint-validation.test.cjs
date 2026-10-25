@@ -841,6 +841,12 @@ test('#5100 installer surfaces command-less unresolved-bash entries on fresh and
 // GSD_TEST_MODE keeps it off the interactive main() block.
 const GSD_5100_WIN32_INSTALL_PROBE = `
 Object.defineProperty(process, 'platform', { value: 'win32' });
+// Host-independent: a real Windows host carries a real Git Bash, and blanking the discovery
+// env vars is spelling-sensitive there (ProgramFiles / PROGRAMFILES). Make no bash.exe exist
+// for this probe, whatever the host has, so the 'no Git Bash found' host is the one under test.
+const nodeFs = require('node:fs');
+const realExistsSync = nodeFs.existsSync;
+nodeFs.existsSync = (p) => (/[\\\\/]bash\\.exe$/i.test(String(p)) ? false : realExistsSync(p));
 const path = require('node:path');
 const { install } = require(path.join(process.env.PROBE_REPO, 'bin', 'install.js'));
 const result = install(true, 'claude');
