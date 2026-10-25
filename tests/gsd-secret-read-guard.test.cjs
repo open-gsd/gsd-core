@@ -1088,7 +1088,7 @@ describe('gsd-secret-read-guard: nested shell behind a wrapper with flags (#5627
   const wrappers = [
     'timeout 5', 'timeout -s KILL 5', 'timeout --signal=KILL --kill-after=2 5', 'timeout --foreground 5',
     'nice -n 5', 'nice -5', 'nice -n5', 'nice --adjustment=5', 'nice --adjustment 5',
-    'env -i', 'env -u HOME', 'env -C /tmp', 'env -i A=1', 'env --', 'env -0',
+    'timeout 5 --', 'timeout -- 5', 'env -P /usr/bin', 'env -i', 'env -u HOME', 'env -C /tmp', 'env -i A=1', 'env --', 'env -0',
     'command -p', 'command --', 'time -p', 'time -f %e',
     'stdbuf -oL', 'stdbuf -i0 -oL -eL', 'stdbuf --output=L', 'setsid', 'setsid -w', 'exec', 'exec -a name',
     'nohup', 'sudo -u root', 'sudo -E', 'sudo --', 'sudo -u root -g wheel', 'doas -u root',

@@ -165,7 +165,7 @@ const NON_SECRET_ENV_SUFFIXES = new Set(['example', 'sample', 'template', 'dist'
 const WRAPPERS = new Map([
   ['sudo', { short: 'CDghpRrTtUu', long: ['--close-from', '--chdir', '--group', '--host', '--prompt', '--chroot', '--role', '--command-timeout', '--type', '--other-user', '--user'] }],
   ['doas', { short: 'Cu' }],
-  ['env', { short: 'uCSa', long: ['--unset', '--chdir', '--split-string', '--argv0'], assigns: true }],
+  ['env', { short: 'uCSaP', long: ['--unset', '--chdir', '--split-string', '--argv0'], assigns: true }],
   ['nice', { short: 'n', long: ['--adjustment'] }],
   ['nohup', {}],
   ['command', {}],
@@ -847,7 +847,10 @@ function skipWrapperArgs(words, start, spec) {
       break;
     }
   }
-  return Math.min(idx + (spec.operands || 0), words.length);
+  if (!spec.operands) return idx;
+  idx = Math.min(idx + spec.operands, words.length);
+  // `timeout 5 -- cmd`: some getopt builds still accept `--` after DURATION.
+  return idx < words.length && words[idx].text === '--' ? idx + 1 : idx;
 }
 
 // Command base + operands after leading `VAR=val` assignments and prefix
