@@ -693,10 +693,84 @@ describe('release tags: CLI verb (row 22)', () => {
   });
 });
 
+describe('release tags: review-found edge cases', () => {
+  test('a skip entry and a tag entry for the same repo conflict in either order, writing nothing', (t) => {
+    const { root } = makeProject(t, ['api']);
+    const orders = [
+      [{ repo: 'api', tag: 'v1' }, { repo: 'api', skip: true }],
+      [{ repo: 'api', skip: true }, { repo: 'api', tag: 'v1' }],
+    ];
+    for (const entries of orders) {
+      const res = createReleaseTags(root, entries);
+      assert.equal(res.ok, false);
+      assert.ok(res.errors.some((e) => e.reason === 'duplicate_entry'));
+      assert.equal(tagExists(path.join(root, 'api'), 'v1'), false);
+    }
+  });
+
+  test('a repo with no commits (unborn HEAD) is rejected as ref_unresolved', (t) => {
+    const { root } = makeProject(t, ['api'], { init: false });
+    const dir = path.join(root, 'api');
+    fs.mkdirSync(dir, { recursive: true });
+    git(dir, 'init', '-q');
+    const res = preflightReleaseTags(root, [{ repo: 'api', tag: 'v1' }]);
+    assert.equal(res.ok, false);
+    assert.equal(res.errors[0].reason, 'ref_unresolved');
+    assert.equal(git(dir, 'tag', '-l'), '');
+  });
+
+  test('an existing lightweight tag at the same commit is already_tagged', (t) => {
+    const { root, shas } = makeProject(t, ['api']);
+    git(path.join(root, 'api'), 'tag', 'v1');
+    const res = createReleaseTags(root, [{ repo: 'api', tag: 'v1' }]);
+    assert.equal(res.ok, true);
+    assert.equal(res.repos.api.status, 'already_tagged');
+    assert.equal(res.repos.api.commit, shas.api);
+    assert.deepEqual(res.created, []);
+  });
+
+  test('a sub-repo that is a symlink to a repo outside the project root is rejected', (t) => {
+    const { root } = makeProject(t, []);
+    const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-reltags-out-')));
+    t.after(() => cleanup(outside));
+    initRepo(outside);
+    try {
+      fs.symlinkSync(outside, path.join(root, 'ext'), 'dir');
+    } catch (e) {
+      t.skip(`symlinks unavailable on this platform: ${e.code}`);
+      return;
+    }
+    writeConfig(root, ['ext']);
+    const res = createReleaseTags(root, [{ repo: 'ext', tag: 'v1' }]);
+    assert.equal(res.ok, false);
+    assert.equal(res.errors[0].reason, 'repo_path_invalid');
+    assert.equal(git(outside, 'tag', '-l'), '');
+  });
+
+  test('a relative --map resolves against the shell working directory', (t) => {
+    const { root } = makeProject(t, ['api']);
+    const deep = path.join(root, 'deep');
+    fs.mkdirSync(deep);
+    writeMap(root, [{ repo: 'api', tag: 'vrel' }]);
+    const res = runCli(deep, ['milestone', 'release-tags', '--map', '../map.json']);
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(JSON.parse(res.stdout).ok, true);
+    assert.equal(tagExists(path.join(root, 'api'), 'vrel'), true);
+  });
+
+  test('a --map that is a directory is refused', (t) => {
+    const { root } = makeProject(t, ['api']);
+    const res = runCli(root, ['milestone', 'release-tags', '--map', root]);
+    assert.notEqual(res.status, 0);
+    assert.equal(git(path.join(root, 'api'), 'tag', '-l'), '');
+  });
+});
+
 describe('release tags: reason-code parity (row 24)', () => {
   test('exported reason codes equal the codes CONTEXT.md lists', () => {
     assert.ok(Object.isFrozen(RELEASE_TAG_REASONS));
-    const context = fs.readFileSync(CONTEXT_PATH, 'utf-8');    const section = context.split(/^### /m).find((s) => s.startsWith('Release Tags Module'));
+    const context = fs.readFileSync(CONTEXT_PATH, 'utf-8');
+    const section =context.split(/^### /m).find((s) => s.startsWith('Release Tags Module'));
     assert.ok(section, 'CONTEXT.md must carry a "Release Tags Module" glossary entry');
     const m = /Reason codes \(closed set\): ([^;]{1,500});/.exec(section);
     assert.ok(m, 'glossary entry must list "Reason codes (closed set): ...;"');

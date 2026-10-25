@@ -137,6 +137,7 @@ module.exports = {
   "tests/markdown-sectionizer.test.cjs",
   "tests/mcp-catalog.test.cjs",
   "tests/milestone-archive.test.cjs",
+  "tests/milestone-release-tags.test.cjs",
   "tests/milestone-window-single-owner.test.cjs",
   "tests/model-catalog.unit.test.cjs",
   "tests/model-resolver.test.cjs",

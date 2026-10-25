@@ -253,6 +253,13 @@ function runPreflight(
     perRepo.set(k, (perRepo.get(k) ?? 0) + 1);
   }
 
+  // A repo given both a skip entry and a tag entry is contradictory; the check is
+  // order-independent so preflight never reports `skipped` for a repo that gets tagged.
+  const skippedRepos = new Set<string>();
+  for (const entry of list) {
+    if (entry.skip === true) skippedRepos.add(normalizeRepoPath(entry.repo) ?? entry.repo);
+  }
+
   const result = newResult(phase);
   const plans: PlannedTag[] = [];
   const seen = new Set<string>();
@@ -283,6 +290,10 @@ function runPreflight(
       result.errors.push({ repo, tag, reason, ...(extra.error ? { error: extra.error } : {}) });
     };
 
+    if (skippedRepos.has(repo)) {
+      fail('duplicate_entry', { error: 'repo has both a skip entry and a tag entry' });
+      continue;
+    }
     if (normalized === null || tryWithinRoot(normalized, cwd) === null) {
       fail('repo_path_invalid', { error: 'repo path must be relative and stay inside the project root' });
       continue;
@@ -482,15 +493,31 @@ export function cmdMilestoneReleaseTags(cwd: string, args: string[], raw: boolea
     error('--map <path-to-json-file> required for milestone release-tags', ERROR_REASON.USAGE);
     return;
   }
-  const mapPath = path.resolve(cwd, mapArg);
+  // A relative --map is relative to the shell's working directory, not the project root.
+  const mapPath = path.resolve(process.cwd(), mapArg);
 
+  let mapStat: fs.Stats | null = null;
+  let statError = '';
+  try {
+    mapStat = fs.statSync(mapPath);
+  } catch (e) {
+    statError = e instanceof Error ? e.message : String(e);
+  }
+  if (mapStat === null) {
+    error(`cannot read --map file: ${statError}`, ERROR_REASON.USAGE);
+    return;
+  }
+  // A FIFO or device reports size 0 and would bypass the size cap on read.
+  if (!mapStat.isFile()) {
+    error('--map must be a regular file', ERROR_REASON.USAGE);
+    return;
+  }
+  if (mapStat.size > MAX_MAP_FILE_BYTES) {
+    error(`--map file exceeds ${MAX_MAP_FILE_BYTES} byte limit (got ${mapStat.size})`, ERROR_REASON.USAGE);
+    return;
+  }
   let text = '';
   try {
-    const size = fs.statSync(mapPath).size;
-    if (size > MAX_MAP_FILE_BYTES) {
-      error(`--map file exceeds ${MAX_MAP_FILE_BYTES} byte limit (got ${size})`, ERROR_REASON.USAGE);
-      return;
-    }
     text = fs.readFileSync(mapPath, 'utf-8');
   } catch (e) {
     error(`cannot read --map file: ${e instanceof Error ? e.message : String(e)}`, ERROR_REASON.USAGE);
