@@ -2345,9 +2345,10 @@ describe("regressions: #5255 — zsh's reading of $'…' (review round 6, Major 
 
   describe("a run of `$` before `'` opens a span under zsh (review round 7, Major 1)", () => {
     // bash pairs the run left to right: `$$'x'` is the PID and a plain quote.
-    // zsh opens a `$'…'` span after any run (`$$'\x41'` prints the PID and
-    // `A`), so an escaped quote no longer ends it. Every row was run in zsh
-    // 5.9 (Alpine 3, 2026-10-17): the blocked rows printed the file.
+    // zsh opens a `$'…'` span after any run, so an escaped quote no longer
+    // ends it; after an even run only `\\` and `\'` are escapes in it
+    // (`$$'\x41'` prints the PID and `\x41`). Every row was run in zsh 5.9
+    // (Alpine 3, 2026-10-17): the blocked rows printed the file.
     const blocks = [
       R`echo $$'\''; cat .env`,
       "echo $$'\\''a\ncat .env",
