@@ -363,6 +363,23 @@ describe('release tags: preflight rejections (rows 3-6, 8, 10, 11, 17)', () => {
     assert.equal(tagExists(path.join(root, 'api'), 'v1.0.0'), false);
   });
 
+  test('one repo may receive two different tags, keyed repo:tag (row 11 negative space)', (t) => {
+    const { root, shas } = makeProject(t, ['api', 'web']);
+    const res = createReleaseTags(root, [
+      { repo: 'api', tag: 'v1.0.0' },
+      { repo: 'api', tag: 'stable' },
+      { repo: 'web', tag: 'v2.0.0' },
+    ]);
+    assert.equal(res.ok, true);
+    assert.equal(res.repos['api:v1.0.0'].status, 'created');
+    assert.equal(res.repos['api:stable'].status, 'created');
+    assert.equal(res.repos['api:stable'].commit, shas.api);
+    assert.equal(res.repos.web.status, 'created');
+    assert.deepEqual([...res.created].sort(), ['api:stable', 'api:v1.0.0', 'web:v2.0.0']);
+    assert.equal(tagExists(path.join(root, 'api'), 'v1.0.0'), true);
+    assert.equal(tagExists(path.join(root, 'api'), 'stable'), true);
+  });
+
   test('errors without sub_repos (row 17)', (t) => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-reltags-')));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
