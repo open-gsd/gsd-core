@@ -112,8 +112,14 @@
 //   name joined to an expansion (`cat ${x:+a}$'.env'`, `cat .env${}`), the
 //   `$VAR` gap; a heredoc tag holding `${` or starting with `}`
 //   (`<<${;cat .env`, `<<$'E'${; cat .env #`, `<<}; cat .env #`), near
-//   #5523's form C (`<<{`); and zsh's `$((` holding a quote
-//   (`x$(($"));cat .env`, `$((")); cat .env #`), #5523's form I. The tests
+//   #5523's form C (`<<{`); zsh's `$((` holding a quote
+//   (`x$(($"));cat .env`, `$((")); cat .env #`), #5523's form I; and zsh's
+//   `$[ … ]` arithmetic, in which a `'` is not a quote, inside `${…}`
+//   (`echo ${x+$[ } ' ]}; cat $'.env' #'`), the same form; and a line
+//   continuation inside a `${` or its name within "…", which dash removes
+//   first, so the dash reading misses its pattern operator and takes a `'`
+//   after it as text where dash takes a quote
+//   (`echo "${x\<newline>%'"'$${y}'}" $'\'; cat .env #'`). The tests
 //   pin each as allowed. The promise is "no looser than
 //   the retired rules on plain commands, without arming the compound-`cd`
 //   prompt". Writes to secret files are out of scope (Write/Edit were never
@@ -190,7 +196,9 @@ const MAX_NESTING_DEPTH = 3;
 // as part of the heredoc's script, so that shape reaches it sooner: one level
 // at 83,903, two at 8,456. The most work any of 539,601 real agent commands
 // needed was about 250,000 characters. A command that needs more is denied as
-// `command-too-complex` rather than scanned on. Characters here, and in
+// `command-too-complex` rather than scanned on. readAsBefore's second look
+// at a command the readings finished has a budget of its own, and is denied
+// the same way when it spends it. Characters here, and in
 // MAX_COMMAND_LENGTH, are UTF-16 code units (`String.length`).
 const MAX_SCAN_CHARACTERS = 8 * MAX_COMMAND_LENGTH;
 
@@ -509,12 +517,17 @@ function classifyGrepGlob(glob) {
 // so nothing it denied can become allowed. Every scanner below takes `reading`:
 // false for the plain reading, or the shell whose reading it is doing —
 // 'bash' or 'zsh', which have ANSI-C quoting, or 'dash', which does not.
-// Not reached: the text inside `${…}` is not scanned, so a `$'…'` there is not
-// decoded (the `$VAR` indirection gap in the header) — the ANSI-C readings only
-// end the `${…}` where the shell does, past a `}` inside a span
-// (ansiCBraceClose). A command nested deeper than MAX_NESTING_DEPTH is not
-// scanned at all. Several thousand levels of `$( )` overflow the parser's
-// stack; that fails closed, as `command-too-complex` (findSecretRead). A heredoc tag
+// Not reached: the word text inside `${…}` is not scanned, so a `$'…'` there is
+// not decoded (the `$VAR` indirection gap in the header) — the readings other
+// than the plain one read a `${…}` on past a `}` inside a quote, a span, a
+// `$( )`, `<( )` or backticks, also within "…", and once it closes scan the
+// commands of those last three (ansiCBraceClose); they also end a `$( )`
+// past a comment in it (findParenClose). Where the shell's grammar outruns
+// them they can end one later than the shell does, so the scan as it was
+// before #5255's review round 10 is run again, and its verdict stands
+// (readAsBefore). A command nested deeper than
+// MAX_NESTING_DEPTH is not scanned at all. Several thousand levels of `$( )`
+// overflow the parser's stack; that fails closed, as `command-too-complex` (findSecretRead). A heredoc tag
 // word inside `$( )` holding a `${…}`, `$(…)`, backtick or bare carriage
 // return is read by the span-unaware path, so its end can differ from the
 // shell's. bash 3.2 (`/bin/bash` on macOS) is not modelled: it has no `\u` /
@@ -607,13 +620,76 @@ function ansiCQuoteEnd(str, i) {
   return i < str.length ? i : -1;
 }
 
-// Index of the `}` closing a `${` opened just before `i`, under the ANSI-C
-// reading: the first `}` outside a `$'…'` span, so `${x:-$'}'}` ends where
-// bash ends it. Only the span END is read — the text inside `${…}` is still
-// not scanned (`cat ${x:-.env}` is the `$VAR` gap in the header). A span that
-// never closes leaves the brace to the plain reading's first `}`: bash runs
-// nothing from such a line. -1 when no `}` closes it.
-function ansiCBraceClose(str, i, shell) {
+// Index of the `}` closing a `${` opened just before `i`, under the reading
+// `shell`, or -1 when none does. `inDq` is set for a `${…}` inside "…". The
+// shells read quoting inside `${…}`, so a `}` inside "…", a `$( )`, `<( )`
+// or backticks, or after a backslash, does not end it, nor one inside '…' or
+// a `$'…'` span: the `'` closing a plain quote opens no span, so `${x#'$'}`
+// ends at its own `}` and `cat $'.env'` after it is read. Within "…" a `'`
+// is a quote to bash, to dash only after a pattern operator (`#`, `##`, `%`,
+// `%%`), and text to zsh: `"${x:-'}'}"` ends at the first `}` in dash and
+// zsh, where bash reads on (bracePatternOp). A `${` inside is read the same
+// way, by its own operator, and a `$(` opens a substitution, each after a run
+// of `$` paired as the reading pairs one (tokenize), except that zsh opens a
+// `${` after any run outside "…". bash also skips a `<( )` or `>( )` within
+// "…" whole, and can run it there. The commands of each `$( )`, `<( )` and
+// backtick span inside go to `nested`, when given: the shell runs them when
+// it expands the `${…}` (`echo ${x:-`cat .env`}`); tokenize keeps them only
+// when the `${…}` closes. The rest of its text is not scanned
+// (`cat ${x:-.env}` is the `$VAR` gap in the header). The shell runs nothing
+// from a line whose `${` never closes, and one reading's shell can fail where
+// another's runs (dash has no `$'…'`), so tokenize then ends the `${…}` at
+// its first `}`, as the plain reading does, rather than read the rest of the
+// line as its text: a read after it is seen.
+function ansiCBraceClose(str, i, shell, nested, inDq) {
+  if (asBefore) return ansiCBraceCloseBefore(str, i, shell);
+  const quotes = !inDq || shell === 'bash' || (shell === 'dash' && bracePatternOp(str, i));
+  const span = (from, to) => { if (nested) nested.push(str.slice(from, to)); return to + 1; };
+  while (i < str.length) {
+    const ch = str[i];
+    if (ch === '}') {
+      return i;
+    } else if (ch === '\\') {
+      i += 2;
+    } else if ((ch === "'" && quotes) || ch === '`') {
+      const j = str.indexOf(ch, i + 1);
+      if (j === -1) return -1;
+      i = ch === '`' ? span(i + 1, j) : j + 1;
+    } else if (ch === '"') {
+      const j = doubleQuoteEnd(str, i + 1, shell, nested);
+      if (j >= str.length) return -1;
+      i = j + 1;
+    } else if ((ch === '<' || ch === '>') && str[i + 1] === '(' && (!inDq || shell === 'bash')) {
+      const e = findParenClose(str, i + 2, shell);
+      if (e >= str.length) return -1;
+      i = span(i + 2, e);
+    } else if (ch !== '$') {
+      i++;
+    } else {
+      const run = dollarRun(str, i);
+      if (quotes && opensAnsiC(run, str, shell)) {
+        const end = ansiCQuoteEnd(str, run.end);
+        if (end === -1) return -1;
+        i = end + 1;
+      } else if (run.dollars % 2 === 1 && str[run.end] === '(') {
+        const e = findParenClose(str, run.end + 1, shell);
+        if (e >= str.length) return -1;
+        i = span(run.end + 1, e);
+      } else if ((run.dollars % 2 === 1 || (shell === 'zsh' && !inDq)) && str[run.end] === '{') {
+        const e = ansiCBraceClose(str, run.end + 1, shell, nested, inDq);
+        if (e === -1) return -1;
+        i = e + 1;
+      } else {
+        i = run.end; // a quote or `$"…"` after the run: the branches above read it
+      }
+    }
+  }
+  return -1;
+}
+
+// ansiCBraceClose as it was before #5255's review round 10, for readAsBefore:
+// it skips only `$'…'` spans, and a span that never closes ends at the next `}`.
+function ansiCBraceCloseBefore(str, i, shell) {
   while (i < str.length && str[i] !== '}') {
     if (str[i] !== '$') { i++; continue; }
     const run = dollarRun(str, i);
@@ -627,6 +703,16 @@ function ansiCBraceClose(str, i, shell) {
   }
   return i < str.length ? i : -1;
 }
+
+// Whether the `${…}` whose text starts at `i` removes a pattern: its name
+// (dash has no arrays, so no subscript), then `#` or `%` (`${x#…}`,
+// `${x%%…}`; `${#x}` is a length).
+function bracePatternOp(str, i) {
+  BRACE_NAME.lastIndex = i;
+  const m = BRACE_NAME.exec(str);
+  return m !== null && (str[i + m[0].length] === '#' || str[i + m[0].length] === '%');
+}
+const BRACE_NAME = /[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-]/y;
 
 // The readings a command holding dollar-quoting, or a run of `$` before `{`
 // or `(`, is scanned under before the plain one (findSecretRead).
@@ -845,6 +931,14 @@ let heredocTagsAsWords = true;
 // quoted string or a heredoc body never closes the span early.
 function findParenClose(str, i, reading) {
   let depth = 1;
+  // The depth inside which the scan is in arithmetic (`$((`, `((`), where a
+  // `#` starts no comment; 0 outside it.
+  let arith = str[i] === '(' ? 1 : 0;
+  // For each `(` open inside, whether it opens a word part (`$(`, `<(`,
+  // `>(`), after whose `)` the word goes on, or an operator (`( … )`), after
+  // whose `)` a `#` starts a comment; and the last operator `)` closed.
+  const parts = [];
+  let operatorClose = -1;
   let heredocTags = [];
   while (i < str.length) {
     const ch = str[i];
@@ -859,8 +953,29 @@ function findParenClose(str, i, reading) {
         }
         continue;
       }
+      // A `${…}` or `$[ … ]` holds no comment, and a `(` or `)` in it is
+      // text: it ends where its reader ends it, after a run of `$` paired as
+      // the reading pairs one (bash and zsh have `$[`, dash does not).
+      if (!asBefore && (run.dollars % 2 === 1 || reading === 'zsh') && str[run.end] === '{') {
+        const j = ansiCBraceClose(str, run.end + 1, reading, null, false);
+        if (j !== -1) { i = j + 1; continue; }
+      }
+      if (!asBefore && reading !== 'dash' && run.dollars % 2 === 1 && str[run.end] === '[') {
+        const j = bracketClose(str, run.end + 1);
+        if (j !== -1) { i = j + 1; continue; }
+      }
       // Any other run: only its last `$` can open `$(`, read below as before.
       if (run.last > i) { i = run.last; continue; }
+    }
+    // A `#` that starts a word starts a comment, whose `(` or `)` the shell
+    // does not count: `$(: # (`, newline, `)` ends at that `)`. So does one
+    // after the `)` of an operator (`(echo a)#`), but not one after the `)` of
+    // a word part (`$(echo a)#` is one word), nor in arithmetic, nor after a
+    // line continuation, which the shell removes first (`a\<newline>#` is `a#`).
+    if (reading && !asBefore && ch === '#' && !arith && startsWord(str, i, operatorClose)) {
+      const j = str.indexOf('\n', i);
+      i = j === -1 ? str.length : j;
+      continue;
     }
     if (ch === "'") {
       const j = str.indexOf("'", i + 1);
@@ -868,22 +983,7 @@ function findParenClose(str, i, reading) {
       continue;
     }
     if (ch === '"') {
-      i++;
-      while (i < str.length && str[i] !== '"') {
-        if (str[i] === '\\') { i += 2; continue; }
-        const paren = reading && str[i] === '$' ? runParen(str, i, reading, true) : null;
-        if (paren) { i = findParenClose(str, paren.open + 1, reading) + 1; continue; }
-        const dqRun = reading && str[i] === '$' ? quotedRun(str, i) : null;
-        if (dqRun) { i = dqRun.next; if (str[i] !== '$') continue; }
-        if (str[i] === '$' && str[i + 1] === '(') { i = findParenClose(str, i + 2, reading) + 1; continue; }
-        if (str[i] === '`') {
-          const j = str.indexOf('`', i + 1);
-          i = j === -1 ? str.length : j + 1;
-          continue;
-        }
-        i++;
-      }
-      i++;
+      i = doubleQuoteEnd(str, i + 1, reading) + 1;
       continue;
     }
     if (ch === '`') {
@@ -902,14 +1002,76 @@ function findParenClose(str, i, reading) {
       heredocTags = [];
       continue;
     }
-    if (ch === '(') depth++;
-    else if (ch === ')') {
+    if (ch === '(') {
+      depth++;
+      const before = charBefore(str, i);
+      parts.push(before !== '' && '$<>'.includes(before));
+      if (!arith && str[i + 1] === '(') arith = depth;
+    } else if (ch === ')') {
       depth--;
+      if (parts.pop() === false) operatorClose = i;
+      if (arith > depth) arith = 0;
       if (depth === 0) return i;
     }
     i++;
   }
   return str.length;
+}
+
+// Index of the `]` closing a `$[` whose text starts at `i`, nested `[ ]`
+// counted, or -1 when none does.
+function bracketClose(str, i) {
+  let depth = 1;
+  for (; i < str.length; i++) {
+    if (str[i] === '[') depth++;
+    else if (str[i] === ']' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+// The character before `i`, line continuations aside (`$\<newline>(` is
+// `$(`), or '' at the start.
+function charBefore(str, i) {
+  let p = i - 1;
+  while (p >= 1 && str[p] === '\n' && str[p - 1] === '\\') p -= 2;
+  return p < 0 ? '' : str[p];
+}
+
+// Whether a `#` at `i` begins a word: it follows a blank, a newline, one of
+// `;&|(<>`, or the operator `)` at `operatorClose`, line continuations before
+// it aside.
+function startsWord(str, i, operatorClose) {
+  let p = i - 1;
+  while (p >= 1 && str[p] === '\n' && str[p - 1] === '\\') p -= 2;
+  return p < 0 || p === operatorClose || ' \t\n;&|(<>'.includes(str[p]);
+}
+
+// Index of the `"` closing a "…" whose text starts at `i`, or str.length
+// when it never closes: a `"` inside a `$( )` or backticks, or after a
+// backslash, does not close it, nor, under any reading but the plain one,
+// one inside a `${…}` (`"${x:-"a"}"`). Shared by findParenClose and
+// ansiCBraceClose, which also passes `nested` for the commands of those spans.
+function doubleQuoteEnd(str, i, reading, nested) {
+  const span = (from, to) => { if (nested) nested.push(str.slice(from, to)); return to + 1; };
+  while (i < str.length && str[i] !== '"') {
+    if (str[i] === '\\') { i += 2; continue; }
+    const paren = reading && str[i] === '$' ? runParen(str, i, reading, true) : null;
+    if (paren) { i = span(paren.open + 1, findParenClose(str, paren.open + 1, reading)); continue; }
+    const dqRun = reading && str[i] === '$' ? quotedRun(str, i) : null;
+    if (dqRun) { i = dqRun.next; if (str[i] !== '$') continue; }
+    if (reading && !asBefore && str[i] === '$' && str[i + 1] === '{') {
+      const j = ansiCBraceClose(str, i + 2, reading, nested, true);
+      if (j !== -1) { i = j + 1; continue; }
+    }
+    if (str[i] === '$' && str[i + 1] === '(') { i = span(i + 2, findParenClose(str, i + 2, reading)); continue; }
+    if (str[i] === '`') {
+      const j = str.indexOf('`', i + 1);
+      i = span(i + 1, j === -1 ? str.length : j);
+      continue;
+    }
+    i++;
+  }
+  return Math.min(i, str.length);
 }
 
 // A heredoc tag word that holds a `$'…'` span, read whole the way tokenize
@@ -1218,6 +1380,18 @@ function tokenize(str, reading) {
         }
         const dqRun = reading && c === '$' ? quotedRun(str, i) : null;
         if (dqRun) { buf += dqRun.text; i = dqRun.next; if (str[i] !== '$') continue; }
+        // A "…" inside a `${…}` inside "…" does not end the outer one
+        // (ansiCBraceClose). A heredoc tag word is not expanded.
+        if (reading && !asBefore && str[i] === '$' && str[i + 1] === '{' && expectTag === null) {
+          const inner = [];
+          const j = ansiCBraceClose(str, i + 2, reading, inner, true);
+          if (j !== -1) {
+            for (const cmd of inner) nested.push(cmd);
+            buf += str.slice(i, j + 1);
+            i = j + 1;
+            continue;
+          }
+        }
         if (str[i] === '$' && str[i + 1] === '(') {
           const e = findParenClose(str, i + 2, reading);
           nested.push(str.slice(i + 2, e));
@@ -1257,8 +1431,11 @@ function tokenize(str, reading) {
 
     if (ch === '$' && str[i + 1] === '{') {
       hasWord = true;
-      const j = reading ? ansiCBraceClose(str, i + 2, reading) : str.indexOf('}', i);
-      const e = j === -1 ? str.length - 1 : j;
+      const inner = [];
+      const j = reading ? ansiCBraceClose(str, i + 2, reading, inner, false) : str.indexOf('}', i);
+      if (j !== -1) for (const cmd of inner) nested.push(cmd);
+      const k = j === -1 && reading && !asBefore ? str.indexOf('}', i) : j;
+      const e = k === -1 ? str.length - 1 : k;
       buf += str.slice(i, e + 1);
       i = e + 1;
       continue;
@@ -1690,6 +1867,49 @@ function findSecretReadUnderOtherReadings(command) {
 function findSecretRead(command, depth) {
   if (depth > 0) return readEachWay(command, depth);
   scanUnfinished = false;
+  readingsRan = false;
+  scanBudget = MAX_SCAN_CHARACTERS;
+  let hit = null;
+  let failure = null;
+  try {
+    hit = readEachWay(command, 0);
+  } catch (e) {
+    if (unfinishedBy(e)) scanUnfinished = true;
+    else failure = e;
+  }
+  // A parser error in the plain reading is the hook's crash (fail open, see
+  // header), but only after the scan before this round has had its say, and
+  // a scan that could not finish is still denied.
+  const unfinished = scanUnfinished;
+  if (hit === null && readingsRan && (!unfinished || failure !== null)) hit = readAsBefore(command);
+  if (hit !== null) return hit;
+  if (unfinished || scanUnfinished) return { code: 'command-too-complex', text: '' };
+  if (failure !== null) throw failure;
+  return null;
+}
+
+// Set when readEachWay ran the readings on `command` or a body it rescans.
+let readingsRan = false;
+
+// Set while readAsBefore runs: ansiCBraceClose, findParenClose,
+// doubleQuoteEnd and tokenize then read a `${…}`, a "…" and a `$( )` as they
+// did before #5255's review round 10.
+let asBefore = false;
+
+// The scan of `command` as it was before #5255's review round 10, at every
+// depth, and its verdict, whatever it is. Those rounds end a `${…}` and a
+// `$( )` where the shell does far more often, but where the shell's grammar
+// outruns them (a `#` inside a `${…}` or `$[ ]` inside a `$( )`, a `case`
+// pattern's `)`) they can end one later than the shell and miss a read the
+// scan before them found by ending it early. So nothing that scan blocked is
+// allowed: findSecretRead runs it again on a command the readings found
+// nothing in, and blocks on what it blocks. It has a budget of its own, and
+// fails closed as it did (`command-too-complex`). A command the readings
+// could not finish is denied anyway, so it is not read again; nor is one no
+// reading reached, which that scan read exactly as the plain one did.
+function readAsBefore(command) {
+  asBefore = true;
+  scanUnfinished = false;
   scanBudget = MAX_SCAN_CHARACTERS;
   let hit = null;
   try {
@@ -1697,8 +1917,10 @@ function findSecretRead(command, depth) {
   } catch (e) {
     if (!unfinishedBy(e)) throw e;
     scanUnfinished = true;
+  } finally {
+    asBefore = false;
   }
-  return hit !== null ? hit : (scanUnfinished ? { code: 'command-too-complex', text: '' } : null);
+  return hit;
 }
 
 // Set when a reading could not finish: the stack overflowed somewhere in
@@ -1725,11 +1947,8 @@ function unfinishedBy(e) {
 // findSecretRead below the top level: the readings of `command`, then the
 // plain scan, as described above.
 function readEachWay(command, depth) {
-  const joined = command.includes('\\\n') ? command.replace(/\\\n/g, '') : command;
-  if (!joined.includes("$'") && !joined.includes('$"') && !joined.includes('$${') && !joined.includes('$$(')
-    && !command.includes('$\\\n')) {
-    return scanCommand(command, depth, false);
-  }
+  if (!readsEachWay(command)) return scanCommand(command, depth, false);
+  readingsRan = true;
   for (const shell of READINGS) {
     let hit = null;
     try {
@@ -1747,6 +1966,13 @@ function readEachWay(command, depth) {
     if (hit !== null) return hit;
   }
   return scanCommand(command, depth, false);
+}
+
+// Whether `command` holds a form the readings are for (findSecretRead).
+function readsEachWay(command) {
+  const joined = command.includes('\\\n') ? command.replace(/\\\n/g, '') : command;
+  return joined.includes("$'") || joined.includes('$"') || joined.includes('$${') || joined.includes('$$(')
+    || command.includes('$\\\n');
 }
 
 // A Bash block for a read of the secret file `text` names.
