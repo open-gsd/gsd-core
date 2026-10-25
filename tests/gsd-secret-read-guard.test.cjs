@@ -2021,6 +2021,8 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       "cat ${x:+a}$'.env'", 'cat .env${}',
       '<<${;cat .env', "<<$'E'${; cat .env #", '<<}; cat .env #',
       'x$(($"));cat .env', '$((")); cat .env #',
+      "echo ${x+$[ } ' ]}; cat $'.env' #'",
+      "echo \"${x\\\n%'\"'$${y}'}\" $'\\'; cat .env #'",
     ];
     for (const cmd of shapes) {
       test(`allowed: ${JSON.stringify(cmd)}`, () => {
@@ -2089,10 +2091,188 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
 
     test('accepted hole, pinned: the text inside ${…} is not scanned (out of scope in the #5255 brief)', () => {
       // bash reads `.env` here when x is unset; so does `cat ${x:-.env}`,
-      // allowed before #5255 too. The span END is read; the content is not.
-      // A change that starts scanning ${…} content should flip this pin.
+      // allowed before #5255 too. The END is read, and the `$( )` and backtick
+      // commands inside (below); the word text is not. A change that starts
+      // scanning that text should flip this pin.
       const cmd = "cat ${x:-$'.e\\x6ev'}";
       assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  });
+
+  describe('${…} is read past its quotes, spans and substitutions (#5255 review round 10, Minor 1)', () => {
+    // The ${…} reader skipped only `$'…'` spans, so the `'` closing a plain
+    // `'$'` opened a span that ran on to the next `'`, no `}` closed the ${…},
+    // and the rest of the line was read as its text. Plain strings, not R``:
+    // `${` would interpolate. Every blocked row read the file in a real shell
+    // (2026-10-24): bash 5.2 and zsh 5.9 unless marked, dash 0.5.12 where
+    // marked. Rows marked "head blocked" were blocked before this round too;
+    // the rest were allowed.
+    const blocks = [
+      "echo ${x#'$'}; cat $'.env'", // the review's two rows
+      "echo ${x:-'$'}; cat $'.e\\x6ev'",
+      "echo ${x:-\"$'\"}; cat $'.env'",
+      "echo ${x:-\\$'\\'}; cat $'.env' #'",
+      "echo ${x:-`echo '$'`}; cat $'.env'",
+      "echo ${x:-$(echo '$')}; cat $'.env'",
+      "echo ${x:-${y:-'$'}}; cat $'.env'",
+      "echo ${x:-${y} #}; cat $'.env'", // `#` starts no comment inside ${…}
+      "echo ${x:-\\'}; cat $'.env'; echo '}'", // an escaped quote opens no quote; head blocked
+      // A `$( )` or backtick command inside ${…} runs when the shell expands it.
+      "echo $'a' ${x:-`cat .env`}", // also dash
+      "echo $'a' ${x:-\"$(cat .env)\"}", // also dash
+      "echo $'a' ${x:-$(cat .env)}", // also dash
+      "cat $'a' ${x:-<(cat .env)}", // bash only
+      "echo $'a' ${x:-\"`cat .env`\"}", // also dash
+      "echo $'a' ${x:-$(cat .env)\"${y:-\"'\"}\"}", // also dash
+      // A "…" inside a ${…} inside "…" does not end the outer "…".
+      "echo ${x:-\"${y:-\"'\"}\"}; cat $'.env' #'",
+      "echo ${x#\"${y#\"'\"}\"}; cat $'.env' #'",
+      "echo \"${x:-\"'\"}\"; cat $'.env' #'\"",
+      "echo \"${x#\"'\"}\"; cat $'.env' #'\"",
+      // Within "…" a `'` inside ${…} is text to zsh, and to dash except after
+      // a pattern operator; a `$'` there is text to zsh.
+      "echo \"${x:-'}\"; cat $'.env' #'\"", // zsh only; head blocked
+      "echo \"${x:-$'}\"; cat $'.env' #'\"", // zsh only; head blocked
+      "echo \"${x:-$'}\"; cat $'.e\\x6ev' #'\"}\"}\"", // zsh only; head blocked
+      "echo \"${x%'\"'$${y}'}\" $'\\'; cat .env #'", // dash only
+      "echo \"${10%'\"'$${y}'}\" $'\\'; cat .env #'", // dash only: a positional parameter's pattern
+      "echo $'a' \"${x##\"'\"$'\\'}\"; cat $'.env' #'", // zsh only
+      "echo \"${?%'\"'$${y}'}\" $'\\'; cat .env #'", // dash only: a special parameter's pattern
+      // bash skips a `<( )` within "…" whole; to zsh and dash it is text.
+      "echo \"${x%<(echo })\"'\"}\"; cat $'.env'", // bash only
+      "echo \"${x:-<(echo }\"; cat $'.env'; echo \")}\"", // zsh only; head blocked
+      // A `#` that starts a word in a `$( )` starts a comment, and so does one
+      // after the `)` of a subshell or `(( ))`, line continuations aside; one
+      // after the `)` of a `$( )`, `$(( ))` or `<( )`, which goes on with the
+      // word, after a line continuation, or in arithmetic does not.
+      "echo ${x:-$(: # (\n)} # )\ncat $'.env' # }", // head blocked
+      "echo $(#)'\n); cat $'.env' #'",
+      "echo ${x:-$( (echo a)# (\n)}\ncase a in a) : ;; esac; cat $'.env' #}", // head blocked
+      "( echo ${x:-$( (echo a)# (\n)}\n)\ncat $'.env' #}", // head blocked
+      "echo ${x:-$( ((1))# (\n)}\ncase a in a) : ;; esac; cat $'.env' #}", // head blocked
+      "echo \"${x:-$( ((1))# (\n)}\"; cat $'.env'",
+      "echo ${x:-$( (echo a)\\\n# (\n)}\ncase a in a) : ;; esac; cat $'.env' #}", // head blocked
+      "( echo ${x:-$(echo $(echo a)#)}\n)\ncat $'.env' #}", // head blocked
+      "( echo ${x:-$(echo $((1))#)}\n)\ncat $'.env' #}", // head blocked
+      "( echo ${x:-$(echo <(:)#)}\n)\ncat $'.env' #}", // head blocked
+      "( echo ${x:-$(echo a\\\n#)}\n)\ncat $'.env' #}", // head blocked
+      "x=1; echo ${x:-$(( #))}\ncase a in a) : ;; esac; case b in b) : ;; esac; cat $'.env' #}", // head blocked
+      "echo ${x//$(( #))\"}\"}; cat $'.env'", // zsh only
+      "echo \"$(echo ${x##\"}\"\"$'\"$(echo })})\"; cat $'.e\\x6ev'", // bash only; head blocked
+      "x=1; echo ${x:-$(echo $(( #)))}\ncase a in a) : ;; esac; case b in b) : ;; esac; case c in c) : ;; esac; cat $'.env' #}", // head blocked
+      "echo ${x:-$(echo $((1)); : # (\n)}\ncase a in a) : ;; esac; cat $'.env' #}", // head blocked
+      // A `${…}` or `$[ ]` inside a `$( )` is read whole, so a `#` in it starts
+      // no comment. After a `$'` the scan before this round took as never
+      // closing, only these readings see the read.
+      "echo ${x-'}''$'}; echo ${a:-$(echo ${x:- #})}\ncase b in b) : ;; esac; cat $'.env' #}",
+      "echo ${x-'}''$'}; echo ${a:-$(echo $[ 1 #])}\ncase b in b) : ;; esac; cat $'.env' #}",
+      // zsh opens a ${ after any run of `$`, but not within "…".
+      "echo ${x:-$${y} #}; cat $'.env'", // zsh only
+      "echo \"${x:-$${y}\"; cat $'.env\\u'; echo \"}\"", // zsh only; head blocked
+      // Where the shell's grammar outruns the readings (a `#` inside a `${…}`
+      // or `$[ ]` inside a `$( )`, a `case` pattern's `)`, zsh's `$((`
+      // holding a subshell), they can end a `$( )` later than the shell does;
+      // the readings as they were before this round still see these reads.
+      "echo ${a:-$(echo ${x:- #})}\ncase b in b) : ;; esac; cat $'.env' #}", // head blocked
+      "echo ${a:-$(echo $[ 1 #])}\ncase b in b) : ;; esac; cat $'.env' #}", // head blocked
+      "echo ${x:-$(case a in a) : # '\n;; esac)}; cat $'.env' #'}", // head blocked
+      "echo \"$(echo ${x:- #})\"; cat $'.env' #\"\n)", // head blocked
+      "echo ${x:-$((echo a) # (\n)}\ncase a in a) : ;; esac; cat $'.env' #}", // zsh only; head blocked
+      // The scan before this round is run again on a command the readings find
+      // nothing in, at every depth: a body `bash -c` or `eval` rescans, or a
+      // heredoc tag zsh decodes in full after `$$`.
+      "bash -c 'echo ${a:-$(echo ${x:- #})}\ncase b in b) : ;; esac; cat '\\$\\'.env\\'' #}'", // bash and dash; head blocked
+      "eval 'echo ${a:-$(echo ${x:- #})}\ncase b in b) : ;; esac; cat '\\$\\'.env\\'' #}'", // head blocked
+      "cat <<$$'E\\x41'\n$EA\ncat $'.env'\n$E\\x41\n$$E\\x41", // zsh only; head blocked
+      "bash -c 'shopt -s extglob\necho ${a:-$(echo @(#x) )}; cat '\\$\\'.env\\'' #\n))}'", // bash and dash; head blocked
+    ];
+    for (const cmd of blocks) {
+      test(`blocks ${JSON.stringify(cmd)}`, () => {
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      });
+    }
+
+    // Each runs `ls` in a real shell (2026-10-24). bash, zsh and dash run it
+    // after the first and third. dash, which has no `$'…'`, fails on the
+    // second, fourth and fifth, where bash and zsh run it: a ${…} one reading
+    // cannot close ends at its first `}`, never in a denial, and the commands
+    // inside it are scanned only when it closes (in the fourth and fifth the
+    // `$( )` and backticks are text inside a `$'…'` span). bash fails on the
+    // last, where zsh and dash run it and print the `<( )` as text.
+    for (const cmd of [
+      "echo ${x#'$'}; ls", "echo a${x:-$'\\''}; ls", "echo $'a' ${x:-$(echo b)}; ls",
+      "echo ${x:-$'\\'$(cat .env)\\''}; ls", "echo a${x:-$'\\'`cat .env`\\''}; ls",
+      "echo \"${x:-<(cat .env)$'}\"; ls #'\"",
+    ]) {
+      test(`allows ${JSON.stringify(cmd)}`, () => {
+        assertAllowed(runHook(bash(cmd)), cmd);
+      });
+    }
+
+    test('the scan before this round is run again, and its verdict stands: blocks `echo ${x-\'}\'\'$\'}; ls`', () => {
+      // bash, zsh and dash all run `ls` here, but the scan before this round
+      // took the `$'` as never closing and blocked it, so it stays blocked.
+      const cmd = "echo ${x-'}''$'}; ls";
+      assertBlocked(runHook(bash(cmd)), cmd, { code: 'ansi-c-unterminated', tool: 'Bash' });
+    });
+
+    test('in process: the second look keeps its verdict when it spends its own budget', () => {
+      // The readings take `${x:-\}; bash -c $'…'; echo }` as one word and
+      // finish. The scan before this round ends it at the escaped `}`,
+      // rescans the decoded `bash -c` script, and spends the budget, so the
+      // command is denied as that scan denied it.
+      const { findSecretRead } = require(HOOK_PATH);
+      const script = 'echo \\x24(echo \\x24(echo \\x24(echo \\x24\\x27a\\x27 ' + 'A'.repeat(150000) + ')))';
+      const cmd = "echo ${x:-\\}; bash -c $'" + script + "'; echo }";
+      assert.deepEqual(findSecretRead(cmd, 0), { code: 'command-too-complex', text: '' });
+    });
+
+    test('in process: the second look keeps its verdict when its plain scan spends its budget', () => {
+      // As above, but the earlier readings finish just under the budget and
+      // the scan's plain reading spends the rest; bash reads the file.
+      const { findSecretRead } = require(HOOK_PATH);
+      const script = 'echo \\x24(echo \\x24(echo \\x24(echo \\x24\\x27a\\x27 ' + 'A'.repeat(30000) + ')))';
+      const cmd = "echo ${x:-\\}; bash -c $'" + script + "'; echo " + 'B'.repeat(800000) + " } >/dev/null; cat ${y:-.env}";
+      assert.deepEqual(findSecretRead(cmd, 0), { code: 'command-too-complex', text: '' });
+    });
+
+    test('a command with no dollar-quoting is read as before: the plain reading takes no comment in a `$( )`', () => {
+      // No shell reads the file here (each prints the `<( )` as text), and the
+      // scan before this PR blocks it too: only the readings take `# (` as a
+      // comment, and this command reaches none of them.
+      const cmd = "echo \"${x:-$(: # (\n)<(cat .env)}\"";
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+
+    test('allows a PID before `(` inside ${…}: no shell runs it as a `$( )`', () => {
+      // bash prints the PID and `(cat .env)`; dash too; zsh refuses the line.
+      const cmd = "echo $'a' ${x:-$$(cat .env)}; ls";
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+
+    test('in process: a ${…} holding 130,000 backtick spans is scanned, not command-too-complex', () => {
+      const { findSecretRead } = require(HOOK_PATH);
+      assert.equal(findSecretRead(`echo $'a' \${x+${'``'.repeat(130000)}}; ls`, 0), null);
+    });
+
+    test('fail-closed, pinned: a ${…} no reading closes is read on from its first `}`, not swallowed', () => {
+      // bash, zsh and dash all refuse this line, so nothing runs; the readings
+      // decode the name only past the escaped `}`. Swallowing the tail would
+      // allow what the scan before this fix blocked.
+      const cmd = "echo ${x:-\\}; cat $'.e\\x6ev'";
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+
+    test('property: a ${…} body of pieces the shell closes leaves the read after it visible', () => {
+      const { findSecretRead } = require(HOOK_PATH);
+      // Each piece is closed in bash, zsh and dash, and holds a `$`, `'` or `}`
+      // a reader that skips only `$'…'` spans misreads. All 3,768 commands of
+      // one to three pieces read the file in bash 5.2 (2026-10-24).
+      const piece = fc.constantFrom("'$'", "'}'", '"}"', '"$"', '\\}', '\\$', "$'}'", '$(echo })', '`echo }`', "${y:-'}'}", '"$(echo \'}\')"', 'a');
+      fc.assert(fc.property(fc.array(piece, { minLength: 1, maxLength: 3 }), fc.constantFrom(':-', '#'), (body, op) => {
+        const cmd = `echo \${x${op}${body.join('')}}; cat $'.env'`;
+        assert.deepEqual(findSecretRead(cmd, 0), { code: 'secret-read', text: '.env' }, cmd);
+      }), { seed: 5285, numRuns: 300 });
     });
   });
 
