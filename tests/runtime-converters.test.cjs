@@ -2761,15 +2761,69 @@ describe('#5447 — Antigravity agent tools start in agy 1.3.5', () => {
     assert.doesNotMatch(result, /- - /, 'block-list items must not collapse into a nested entry');
   });
 
-  test('the shipped block-list agents keep every tool (#5447)', () => {
-    for (const agent of ['gsd-security-auditor', 'gsd-nyquist-auditor']) {
+  // The agy vocabulary, spelled out here rather than read back from the converter,
+  // so a table edit cannot silently reshape what this asserts.
+  const AGY = {
+    Read: 'view_file', Write: 'write_to_file', Edit: 'replace_file_content', Bash: 'run_command',
+    Glob: 'find_by_name', Grep: 'grep_search', WebSearch: 'search_web', WebFetch: 'read_url_content',
+  };
+  const DROPPED = new Set(['TodoWrite', 'Skill', 'Task', 'Agent', 'AskUserQuestion', 'SlashCommand']);
+  const expectedTools = (names) => names.filter((n) => !DROPPED.has(n)).map((n) => AGY[n] || n.toLowerCase());
+  const toolsOf = (converted) => {
+    const lines = converted.split(/\r?\n/);
+    const at = lines.indexOf('tools:');
+    const out = [];
+    for (let i = at + 1; at !== -1 && i < lines.length && lines[i].startsWith('- '); i++) out.push(lines[i].slice(2));
+    return out;
+  };
+
+  test('the shipped block-list agents keep every tool, exactly (#5447)', () => {
+    const expected = {
+      'gsd-security-auditor': ['view_file', 'run_command', 'find_by_name', 'grep_search'],
+      'gsd-nyquist-auditor': ['view_file', 'write_to_file', 'replace_file_content', 'run_command', 'find_by_name', 'grep_search'],
+    };
+    for (const agent of Object.keys(expected)) {
       const source = fs.readFileSync(path.join(__dirname, '..', 'agents', `${agent}.md`), 'utf8');
-      const result = convertClaudeAgentToAntigravityAgent(source);
-      const fm = result.slice(0, result.indexOf('\n---', 3));
-      const tools = fm.split('\n').filter((l) => l.startsWith('- ')).map((l) => l.slice(2));
-      assert.ok(tools.length > 1, `${agent} must keep more than one tool, got ${JSON.stringify(tools)}`);
-      assert.ok(tools.includes('view_file') && tools.includes('run_command'), `${agent} keeps Read and Bash`);
-      assert.ok(!tools.some((t) => t.startsWith('- ')), `${agent} has no nested entries`);
+      assert.deepStrictEqual(toolsOf(convertClaudeAgentToAntigravityAgent(source)), expected[agent], agent);
+    }
+  });
+
+  test('a CRLF block-list tools field converts like the LF form (#5447)', () => {
+    const lines = ['---', 'name: e', 'description: d', 'tools:', '  - Read', '  - Glob', '  - TodoWrite', '---', '', 'body'];
+    const lf = convertClaudeAgentToAntigravityAgent(lines.join('\n'));
+    const crlf = convertClaudeAgentToAntigravityAgent(lines.join('\r\n'));
+    assert.deepStrictEqual(toolsOf(crlf), ['view_file', 'find_by_name']);
+    assert.deepStrictEqual(toolsOf(crlf), toolsOf(lf));
+  });
+
+  test('property: inline and block forms of one tools list convert identically, to registered names (#5447)', () => {
+    const fc = require('fast-check');
+    const VOCAB = ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'TodoWrite', 'Skill', 'Task', 'NotebookEdit'];
+    fc.assert(fc.property(fc.uniqueArray(fc.constantFrom(...VOCAB), { minLength: 1, maxLength: VOCAB.length }), (names) => {
+      const inline = `---\nname: e\ndescription: d\ntools: ${names.join(', ')}\n---\n\nbody`;
+      const block = `---\nname: e\ndescription: d\ntools:\n${names.map((n) => `  - ${n}`).join('\n')}\n---\n\nbody`;
+      const want = expectedTools(names);
+      assert.deepStrictEqual(toolsOf(convertClaudeAgentToAntigravityAgent(inline)), want);
+      assert.deepStrictEqual(toolsOf(convertClaudeAgentToAntigravityAgent(block)), want);
+    }), { seed: 5447, numRuns: 100 });
+  });
+
+  // #5447 review (Finding 2): bin/install.js carries its own copy of the converter.
+  // Quoted entries and `#` comments were read differently by its tools parser than by
+  // the compiled module's, so the installed agent depended on which path ran.
+  test('bin/install.js and the compiled module convert quoted and commented tools identically (#5447)', () => {
+    const compiled = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
+    const fixtures = [
+      '---\nname: e\ndescription: d\ntools: "Read", \'Glob\', Grep\n---\n\nbody',
+      '---\nname: e\ndescription: d\ntools:\n  - "Read"\n  - \'Bash\'\n  - Grep\n---\n\nbody',
+      '---\nname: e\ndescription: d\ntools: Read, Glob # note\n---\n\nbody',
+    ];
+    for (const source of fixtures) {
+      assert.strictEqual(
+        convertClaudeAgentToAntigravityAgent(source),
+        compiled.convertClaudeAgentToAntigravityAgent(source),
+        JSON.stringify(source),
+      );
     }
   });
 });

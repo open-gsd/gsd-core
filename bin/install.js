@@ -2161,43 +2161,11 @@ function parseKimiAgentSource(source) {
   };
 }
 
+// #5447: the tools list is read by the compiled module's parser (quoted entries,
+// `#` comments, inline and block lists), the one the runtime pipeline uses, so this
+// copy of the Antigravity and Kimi converters cannot diverge from it.
 function parseFrontmatterTools(frontmatter) {
-  if (!frontmatter) return [];
-  const lines = frontmatter.split(/\r?\n/);
-  const tools = [];
-  let collecting = false;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    if (collecting) {
-      if (trimmed.startsWith('- ')) {
-        tools.push(trimmed.slice(2).trim());
-        continue;
-      }
-      collecting = false;
-    }
-
-    if (trimmed === 'tools:' || trimmed === 'allowed-tools:') {
-      collecting = true;
-      continue;
-    }
-
-    if (trimmed.startsWith('tools:') || trimmed.startsWith('allowed-tools:')) {
-      const value = trimmed.slice(trimmed.indexOf(':') + 1).trim();
-      if (value) {
-        for (const tool of value.split(',')) {
-          const name = tool.trim();
-          if (name) tools.push(name);
-        }
-      } else {
-        collecting = true;
-      }
-    }
-  }
-
-  return tools;
+  return runtimeArtifactConversion.parseFrontmatterTools(frontmatter);
 }
 
 function addKimiAgentDiagnostic(diagnostics, code, message, value, source = null) {

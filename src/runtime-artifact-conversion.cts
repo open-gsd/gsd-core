@@ -4437,6 +4437,7 @@ export = {
   convertAntigravityToolName,
   convertClaudeAgentToCopilotAgent,
   convertClaudeAgentToAntigravityAgent,
+  parseFrontmatterTools,
   convertClaudeAgentToCursorAgent,
   convertClaudeAgentToWindsurfAgent,
   convertClaudeAgentToAugmentAgent,
