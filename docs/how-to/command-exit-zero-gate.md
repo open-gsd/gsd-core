@@ -125,6 +125,13 @@ dispatches the evaluator automatically — no further wiring needed.
 gsd_run loop render-hooks ship:pre --raw
 ```
 
+A blocking `ship:pre` predicate gate (except `security` and `broken-windows`, which `ship.md` enforces itself) also guards the milestone close:
+`milestone complete --confirm` re-checks it once per milestone phase (with
+`${PHASE_NUMBER}`/`${PHASE_DIR}` set to that phase) and refuses while it
+blocks; `--force` does not bypass it, and `--dry-run` runs it too to list what would refuse.
+Your command therefore runs again at close, once per phase, so keep it
+read-only and idempotent.
+
 ## Gotchas
 
 - **Backgrounded children escape the timeout.** `command: "sleep 100 &"` returns
