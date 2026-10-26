@@ -1634,7 +1634,9 @@ function maskArchivedDetails(content: string, cwd: string): { visible: string; r
   if (!/<details\b/i.test(content) && !MILESTONE_CLOSED_MARKER_PATTERN.test(content)) {
     return { visible: content, restore: (edited) => edited, hiddenInActive: '', ambiguous: false, activeRange: null };
   }
-  const ranges = currentMilestoneRawRanges(content, cwd);
+  const resolved = currentMilestoneRawRanges(content, cwd);
+  // A stale STATE can name a milestone whose own heading is closed (all headings closed): nothing is active, so everything shipped stays masked.
+  const ranges = resolved && !isClosedMilestoneHeading(content.slice(resolved.primary.start).split('\n', 1)[0]) ? resolved : null;
   const active = ranges ? [ranges.primary, ...(ranges.details ? [ranges.details] : [])] : [];
   const { spans, inActive, ambiguous } = scanArchiveSpans(content, active);
   const blocks: string[] = [];
