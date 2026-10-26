@@ -2052,7 +2052,7 @@ function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | u
     };
     if (stranded) {
       warn(
-        `skipped — unrecognised checklist row "${formatDiagnosticToken(stranded.trim())}" splits the Plans list of phase `,
+        `skipped — unrecognised checklist row ${formatDiagnosticToken(stranded.trim())} splits the Plans list of phase `,
         '.\n',
       );
       skipped = 'unrecognised_checklist_row';

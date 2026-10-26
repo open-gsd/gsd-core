@@ -4142,6 +4142,13 @@ Plans:
         });
       }
 
+      test('the skip warning quotes the stranded row once', () => {
+        tmpDir = makeFour([1, 2, 3, 4], [['A'], ['B'], ['C'], ['D']], split(cases['double-space checkbox']));
+        const { stderr } = annotate();
+        assert.ok(stderr.includes('unrecognised checklist row "- [  ] 01-02-PLAN.md'), stderr);
+        assert.ok(!stderr.includes('""'), `row is double-quoted: ${stderr}`);
+      });
+
       test('a hand-written checklist bullet after a dropped generated block stays out of the Plans list', () => {
         const roadmap = ROADMAP_GEN_HAND_BULLET;
         tmpDir = makeFour([1, 2, 3, 3], [['A'], ['B'], ['C'], ['D']], roadmap);
