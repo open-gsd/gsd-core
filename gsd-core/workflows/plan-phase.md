@@ -1441,7 +1441,7 @@ This step is derived entirely from existing PLAN frontmatter — no extra LLM pa
 gsd_run query roadmap.annotate-dependencies "${PHASE_NUMBER}"
 ```
 
-This operation is idempotent: if wave headers or cross-cutting constraints already exist in the ROADMAP phase section, the command returns without modifying the file. Skip this step if `plan_count` is 0.
+Skip this step if `plan_count` is 0. Re-running regenerates the annotation from current PLAN frontmatter; an unchanged result writes nothing, and an unrecognised checklist row leaves ROADMAP.md untouched and reports `skipped: "unrecognised_checklist_row"`. The `**Cross-cutting constraints:**` header line ends in an HTML-comment marker; that block is machine-owned and the bullets directly under it are regenerated. Put hand-written bullets after a blank line. Bullets kept from a block written before the marker existed are reported as `stale_legacy_constraints`.
 
 ## 13d. Commit Plans if commit_docs is true
 
