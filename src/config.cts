@@ -31,6 +31,7 @@ const { VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS, isValidConfigKey, getCapability
 import { isSecretKey, maskIfSecret, maskSecret } from './secrets.cjs';
 import { normalizeConfiguredDefaultReviewers, INSTANCE_NAME_PATTERN, KNOWN_REVIEWER_SLUGS } from './review-reviewer-selection.cjs';
 import { migrateOnDisk } from './configuration.cjs';
+import { COMMIT_TIMEOUT_DEFAULT_MS, COMMIT_TIMEOUT_MAX_MS, isValidCommitTimeoutMs } from './git-commit-timeout.cjs';
 // #3760: the ADR-1411 out-of-band diagnostic. It lives here rather than inside
 // `migrateOnDisk` because `configuration.cjs` must stay loadable from an install
 // layout holding only itself plus its manifests (#3571) — see the note at the top
@@ -114,6 +115,7 @@ const SCHEMA_DEFAULTS: Record<string, unknown> = {
   'planner.stall_detect_interval_minutes': 5,
   'planner.stall_threshold_minutes': 10,
   'git.create_tag': true,
+  'git.commit_timeout_ms': COMMIT_TIMEOUT_DEFAULT_MS,
   // #5706 (epic #3628): per-repository milestone tagging mode. `single` is
   // exactly the pre-existing behavior; `per_repo` is opt-in.
   'git.repo_tagging': 'single',
@@ -1269,6 +1271,11 @@ function validateConfigValue(cwd: string, kp: string, parsedValue: unknown, val:
     }
   }
 
+  if (kp === 'git.commit_timeout_ms') {
+    if (!isValidCommitTimeoutMs(parsedValue)) {
+      error(`Invalid git.commit_timeout_ms '${val}'. Must be a positive integer (milliseconds) up to ${COMMIT_TIMEOUT_MAX_MS}.`, ERROR_REASON.USAGE);
+    }
+  }
   // #5706 (epic #3628): per-repository milestone tagging mode, enum only.
   if (kp === 'git.repo_tagging') assertEnumValue(parsedValue, val, VALID_REPO_TAGGING_MODES, 'git.repo_tagging');
 
@@ -1529,7 +1536,6 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
   if (kp === 'planner.stall_detection_enabled') {
     current = resolvePlannerStallDetectionEnabled(current);
   }
-
   // Never echo plaintext for sensitive keys via config-get. Plaintext lives
   // in config.json on disk; the CLI surface always shows the masked form.
   if (isSecretKey(kp)) {
