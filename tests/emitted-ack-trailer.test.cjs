@@ -53,7 +53,7 @@ const {
   parseAckTrailers,
   renderAckTrailer,
 } = require('./helpers/emitted-diff.cjs');
-const { readAckTrailers } = require('./helpers/emitted-runtime.cjs');
+const { readAckTrailers, isReleaseMergeSubject } = require('./helpers/emitted-runtime.cjs');
 
 // Mirrors emitted-diff.cjs's (unexported) RESERVED_ACK_KEYS — 40-design.md's "Trailer
 // key is __proto__ / constructor / prototype" row is explicitly carried over verbatim
@@ -737,6 +737,56 @@ describe('real fixture reads via readAckTrailers', () => {
       assert.match(r.errors[0], /ambiguous|conflict/i);
     },
   );
+
+  test(
+    'a release merge whose own final paragraph is an ack trailer is skipped too, so it cannot clash with another commit — #5734',
+    (t) => {
+      const dir = makeTempRepo('gsd-ack-trailer-5734-tail-');
+      withCleanup(t, dir);
+      commitMessage(dir, 'base\n\nno trailer\n');
+      const baseSha = headSha(dir);
+      commitMessage(
+        dir,
+        `fix(#9005): grows a workflow\n\n${trailerLine(ACK_TRAILER_GROWTH, 'plan-phase.md', 'reason A')}\n`,
+      );
+      // A plain (non-squash) release merge: git's own trailer pass sees this final
+      // paragraph, so the skip has to hold on that pass as well as the buried one.
+      commitMessage(
+        dir,
+        `chore: merge release v1.19.0 to main (#5729)\n\n${trailerLine(ACK_TRAILER_GROWTH, 'plan-phase.md', 'reason B')}\n`,
+      );
+      const r = readAckTrailers({ baseRef: baseSha, headRef: 'HEAD', cwd: dir });
+      assert.deepEqual(r.errors, []);
+      assert.equal(r.growth.get('plan-phase.md')?.reason, 'reason A', 'only the ordinary commit\'s ack survives');
+    },
+  );
+
+  describe('isReleaseMergeSubject — #5734', () => {
+    for (const subject of [
+      'chore: merge release v1.19.0 to main (#5729)',
+      'chore: merge release v1.19.0 to main',
+      'chore: merge release v1.19.1 to main (#6001)',
+      'chore: merge release v1.20.0-rc.1 to main (#6002)',
+      '  chore: merge release v1.19.0 to main (#5729)  ',
+    ]) {
+      test(`matches ${JSON.stringify(subject)}`, () => {
+        assert.equal(isReleaseMergeSubject(subject), true);
+      });
+    }
+    for (const subject of [
+      'chore: merge release v1.19 to main',
+      'chore: merge release v1.19.0 to main extra',
+      'chore: merge release v1.19.0 to main (#5729) and more',
+      'chore: merge release 1.19.0 to main',
+      'fix(#1): chore: merge release v1.19.0 to main',
+      'chore: merge release v1.19.0 to next',
+      '',
+    ]) {
+      test(`does not match ${JSON.stringify(subject)}`, () => {
+        assert.equal(isReleaseMergeSubject(subject), false);
+      });
+    }
+  });
 
   test(
     'an ordinary commit with markdown bullets but no squash suffix finds nothing — #4454 (no false positive)',

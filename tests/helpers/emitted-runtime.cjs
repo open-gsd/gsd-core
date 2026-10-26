@@ -910,6 +910,15 @@ function isReleaseMergeSubject(subject) {
   return RELEASE_MERGE_SUBJECT_RE.test(String(subject).trim());
 }
 
+/**
+ * The subject of a raw `%B` body the way `%s` renders it: the first paragraph with its
+ * line breaks folded to spaces, so the `%s` pass and the `%B` pass classify one commit
+ * identically even for a wrapped subject.
+ */
+function subjectOfBody(body) {
+  return body.split('\n\n', 1)[0].replace(/\n/g, ' ');
+}
+
 // Record/field/value separators for the `git log --format` trailer extraction below.
 // ASCII control characters (RS/US/GS) so they can never collide with real trailer
 // content, following the precedent at gsd-core/workflows/ship.md:312 (`%x1f`/`%x1e` for
@@ -1019,7 +1028,7 @@ function readAckTrailers({ baseRef, headRef = 'HEAD', cwd = REPO_ROOT, timeoutMs
   }
   const bodyRecords = rawBodies.replace(/\r/g, '').split(ACK_TRAILER_RECORD_SEP).slice(1);
   for (const body of bodyRecords) {
-    if (isReleaseMergeSubject(body.split('\n', 1)[0])) continue;
+    if (isReleaseMergeSubject(subjectOfBody(body))) continue;
     const recovered = extractSquashBuriedTrailers(body, { cwd, timeoutMs });
     hashValues.push(...recovered.hash);
     growthValues.push(...recovered.growth);
@@ -1076,6 +1085,7 @@ function resolveAttributionInputs(attributionBase, {
 
 module.exports = {
   REPO_ROOT,
+  isReleaseMergeSubject,
   FIXTURE_SUBDIR,
   MANIFEST_FAMILIES,
   MINIMUM_MANIFEST_FAMILIES,
