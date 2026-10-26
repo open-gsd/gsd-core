@@ -11,7 +11,9 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, cleanup, captureFdSync } = require('./helpers.cjs');
-const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const { scanFencedBlocks, tokenizeHeadings, collectSection, iterateBullets } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const { splitTableRow, isDelimiterRow } = require('../gsd-core/bin/lib/markdown-table.cjs');
+const { extractPhaseFieldMultiline } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
 
 describe('roadmap get-phase command', () => {
   let tmpDir;
@@ -6456,4 +6458,314 @@ describe('phase checklist stamp is anchored to the phase\'s own bullet (#5545)',
       assert.equal(out.reason, 'missing_phase_details');
     });
   }
+});
+
+// #5553: update-plan-progress edits only the active milestone, whatever the
+// archive's tag case / attributes / position relative to it.
+const ACTIVE_REGION_ARCHIVE_BODY = `- [ ] **Phase 1: Old**
+
+### Phase 1: Old
+**Goal:** old
+**Plans:** 0 plans
+
+Plans:
+- [ ] 01-01-PLAN.md
+`;
+const ACTIVE_REGION_ACTIVE_BODY = `## v2.0 Active
+
+- [ ] **Phase 1: A**
+
+### Phase 1: A
+**Goal:** a
+**Plans:** 0 plans
+
+Plans:
+- [ ] 01-01-PLAN.md
+
+## Progress
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 1. A | 0/1 | In Progress | |
+`;
+
+const activeRegionArchive = (open, tag) => `<${tag}${open}>\n<summary>v1.0 ✅ SHIPPED</summary>\n\n${ACTIVE_REGION_ARCHIVE_BODY}\n</${tag}>\n`;
+const NESTED_ARCHIVE = `<details>\n<summary>v1.0 ✅ SHIPPED</summary>\n\n<details>\n<summary>inner</summary>\n\nx\n</details>\n\n${ACTIVE_REGION_ARCHIVE_BODY}\n</details>\n`;
+
+const ACTIVE_REGION_SHAPES = {
+  'control: lowercase archive first': () => `# Roadmap\n\n${activeRegionArchive('', 'details')}\n${ACTIVE_REGION_ACTIVE_BODY}`,
+  'uppercase <DETAILS> archive': () => `# Roadmap\n\n${activeRegionArchive('', 'DETAILS')}\n${ACTIVE_REGION_ACTIVE_BODY}`,
+  '<details open> archive': () => `# Roadmap\n\n${activeRegionArchive(' open', 'details')}\n${ACTIVE_REGION_ACTIVE_BODY}`,
+  'archive after the active section (newest-first)': () => `# Roadmap\n\n${ACTIVE_REGION_ACTIVE_BODY}\n${activeRegionArchive('', 'details')}`,
+  'nested <details> inside the archive': () =>
+    `# Roadmap\n\n${NESTED_ARCHIVE}\n${ACTIVE_REGION_ACTIVE_BODY}`,
+  '<details open> wraps the active milestone': () =>
+    `# Roadmap\n\n${activeRegionArchive('', 'details')}\n<details open>\n<summary>v2.0 🚧 Active</summary>\n\n${ACTIVE_REGION_ACTIVE_BODY}\n</details>\n`,
+};
+
+describe('roadmap update-plan-progress active-region scoping (#5553)', () => {
+  let tmpDir;
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-a');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# summary\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\n---\n# State\n');
+  });
+  afterEach(() => cleanup(tmpDir));
+
+  // Typed view of a ROADMAP.md: tag stream, heading texts, per-phase Plans field
+  // and checkbox bullets, and table rows as cell arrays (never rendered text).
+  const roadmapView = (text) => {
+    const phases = {};
+    for (const h of tokenizeHeadings(text)) {
+      if (!/^Phase \d/.test(h.text)) continue;
+      const { body } = collectSection(text, (x) => x.line === h.line);
+      phases[h.text] = { plans: extractPhaseFieldMultiline(body, 'Plans'), bullets: iterateBullets(body).map((b) => [b.checked, b.text]) };
+    }
+    return {
+      tags: [...text.matchAll(/<\/?details\b[^>]*>/gi)].map((m) => m[0]),
+      headings: tokenizeHeadings(text).map((h) => h.text),
+      phases,
+      rows: text.split('\n').filter((l) => l.trim().startsWith('|')).map(splitTableRow).filter((c) => !isDelimiterRow(c)),
+    };
+  };
+  const TICKED_PLAN = [[true, '01-01-PLAN.md']];
+  const assertArchiveIntact = (input, out) => {
+    const before = roadmapView(input.replace(/\r\n/g, '\n'));
+    const after = roadmapView(out);
+    assert.deepEqual(after.tags, before.tags, 'archive tags unchanged');
+    assert.deepEqual(after.headings, before.headings, 'headings unchanged');
+    assert.deepEqual(after.phases['Phase 1: Old'], before.phases['Phase 1: Old'], 'archived phase untouched');
+  };
+  const assertActiveTicked = (out) => {
+    const view = roadmapView(out);
+    assert.deepEqual(view.phases['Phase 1: A'], { plans: '1/1 plans executed', bullets: TICKED_PLAN });
+    assert.deepEqual(view.rows.filter((r) => r[0] === '1. A' && r[2] === 'In Progress'), [['1. A', '1/1', 'In Progress', '']]);
+  };
+
+  for (const [name, build] of Object.entries(ACTIVE_REGION_SHAPES)) {
+    test(name, () => {
+      const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+      const input = build();
+      fs.writeFileSync(roadmapPath, input);
+      const result = runGsdTools(['roadmap', 'update-plan-progress', '1'], tmpDir);
+      assert.ok(result.success, result.error);
+      assert.strictEqual(JSON.parse(result.output).updated, true);
+      const out = fs.readFileSync(roadmapPath, 'utf-8');
+      assertArchiveIntact(input, out);
+      assertActiveTicked(out);
+    });
+  }
+
+  const runActiveRegion = (roadmap) => {
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+    fs.writeFileSync(roadmapPath, roadmap);
+    const result = runGsdTools(['roadmap', 'update-plan-progress', '1'], tmpDir);
+    assert.ok(result.success, result.error);
+    return fs.readFileSync(roadmapPath, 'utf-8');
+  };
+
+  test('no resolvable milestone: <details open> archive stays untouched', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nstatus: executing\n---\n# State\n');
+    const input = `# Roadmap\n\n${activeRegionArchive(' open', 'details')}\n${ACTIVE_REGION_ACTIVE_BODY}`;
+    const out = runActiveRegion(input);
+    assertArchiveIntact(input, out);
+    assert.deepEqual(roadmapView(out).phases['Phase 1: A'].bullets, TICKED_PLAN);
+  });
+
+  test('prose mentioning <details> without a close does not unmask later archives', () => {
+    const input = `# Roadmap\n\nShipped milestones are collapsed in \`<details>\` blocks.\n\n${activeRegionArchive('', 'details')}\n${ACTIVE_REGION_ACTIVE_BODY}`;
+    const out = runActiveRegion(input);
+    assertArchiveIntact(input, out);
+    assert.deepEqual(roadmapView(out).phases['Phase 1: A'].bullets, TICKED_PLAN);
+  });
+
+  test('plain (non-<details>) shipped milestone section stays untouched', () => {
+    const shipped = `## v1.0 ✅ SHIPPED\n\n${ACTIVE_REGION_ARCHIVE_BODY}`;
+    const input = `# Roadmap\n\n${shipped}\n${ACTIVE_REGION_ACTIVE_BODY}`;
+    const out = runActiveRegion(input);
+    assertArchiveIntact(input, out);
+    assert.deepEqual(roadmapView(out).phases['Phase 1: A'].bullets, TICKED_PLAN);
+  });
+
+  // A plain shipped section followed by `## Progress`
+  // must keep the heading at line start so the Progress scoping survives.
+  test('plain shipped section before ## Progress: decoy table row is not rewritten', () => {
+    const decoy = '### Decoy\n\n| Phase | Plans Complete | Status | Completed |\n|---|---|---|---|\n| 1. A | 0/1 | Not started | |\n';
+    const active = ACTIVE_REGION_ACTIVE_BODY.replace('## Progress', `${decoy}\n## v1.0 ✅ SHIPPED\n\n${ACTIVE_REGION_ARCHIVE_BODY}\n## Progress`);
+    const input = `# Roadmap\n\n${active}`;
+    const out = runActiveRegion(input);
+    assert.deepEqual(roadmapView(out).rows.filter((r) => r[0] === '1. A'), [
+      ['1. A', '0/1', 'Not started', ''],
+      ['1. A', '1/1', 'In Progress', ''],
+    ]);
+    assertArchiveIntact(input, out);
+  });
+
+  // A `<details>` that is not a real block-level tag (HTML comment, inline
+  // prose, indented code) or a stray one must not unbalance the scan.
+  const NOT_A_TAG = {
+    'opener inside an HTML comment': '<!--\n<details>\n-->\n',
+    'inline opener in prose': 'Wrap shipped work in <details> tags.\n',
+    'indented (code) opener': '    <details>\n',
+    'closer inside an HTML comment': '<!-- </details> -->\n',
+    'inline-code comment opener': 'Comments start with `<!--`.\n',
+    'unterminated comment opener in prose': 'Note: use <!-- to start comments.\n',
+    'stray unmatched opener': '<details>\nstray\n',
+  };
+  for (const [name, snippet] of Object.entries(NOT_A_TAG)) {
+    test(`${name} does not unmask a later archive`, () => {
+      const input = `# Roadmap\n\n${snippet}\n${activeRegionArchive('', 'details')}\n${ACTIVE_REGION_ACTIVE_BODY}`;
+      const out = runActiveRegion(input);
+      assertArchiveIntact(input, out);
+      assert.deepEqual(roadmapView(out).phases['Phase 1: A'].bullets, TICKED_PLAN);
+    });
+  }
+
+  test('CRLF roadmap: archives intact and Progress row updated', () => {
+    const shipped = `## v1.0 ✅ SHIPPED\n\n${ACTIVE_REGION_ARCHIVE_BODY}`;
+    const active = ACTIVE_REGION_ACTIVE_BODY.replace('## Progress', `${shipped}\n## Progress`);
+    const input = `# Roadmap\n\n${activeRegionArchive('', 'details')}\n${active}`;
+    // The platform write seam normalizes CRLF to LF for the whole file, so compare against the LF view.
+    const out = runActiveRegion(input.replace(/\n/g, '\r\n'));
+    assertArchiveIntact(input, out);
+    assert.deepEqual(roadmapView(out).rows.filter((r) => r[0] === '1. A'), [['1. A', '1/1', 'In Progress', '']]);
+  });
+
+  test('re-run with the active section already ticked leaves a trailing archive untouched', () => {
+    const ticked = ACTIVE_REGION_ACTIVE_BODY
+      .replace('- [ ] **Phase 1: A**', '- [x] **Phase 1: A** (completed 2026-01-01)')
+      .replace('**Plans:** 0 plans', '**Plans:** 1/1 plans complete')
+      .replace('- [ ] 01-01-PLAN.md', '- [x] 01-01-PLAN.md')
+      .replace('| 1. A | 0/1 | In Progress | |', '| 1. A | 1/1 | Complete | 2026-01-01 |');
+    const input = `# Roadmap\n\n${ticked}\n${activeRegionArchive('', 'details')}`;
+    assertArchiveIntact(input, runActiveRegion(input));
+  });
+
+  test('an archive nested in a <details open> wrapper around the active milestone stays untouched', () => {
+    const wrapper = `<details open>\n<summary>v2.0 Active</summary>\n\n${activeRegionArchive('', 'details')}\n${ACTIVE_REGION_ACTIVE_BODY}</details>\n`;
+    const input = `# Roadmap\n\n${wrapper}`;
+    const out = runActiveRegion(input);
+    assertArchiveIntact(input, out);
+    assert.deepEqual(roadmapView(out).phases['Phase 1: A'].bullets, TICKED_PLAN);
+  });
+
+  test('a collapsed Plans list in the active milestone gets no duplicate rows', () => {
+    const collapsed = ACTIVE_REGION_ACTIVE_BODY.replace('Plans:\n- [ ] 01-01-PLAN.md\n', 'Plans:\n<details>\n<summary>Plans</summary>\n\n- [ ] 01-01-PLAN.md\n</details>\n');
+    const { phases } = roadmapView(runActiveRegion(`# Roadmap\n\n${activeRegionArchive('', 'details')}\n${collapsed}`));
+    assert.deepEqual(phases['Phase 1: Old'].bullets, [[false, '01-01-PLAN.md']], 'archived row untouched');
+    assert.deepEqual(phases['Phase 1: A'].bullets.map((b) => b[1]), ['01-01-PLAN.md'], 'one active row, no inserted duplicate');
+  });
+
+  // Active phase with an empty Plans list and a Progress row, used by the shapes below.
+  const EMPTY_PLANS_ACTIVE = ACTIVE_REGION_ACTIVE_BODY.replace('Plans:\n- [ ] 01-01-PLAN.md\n', 'Plans:\n');
+  const PROGRESS = ACTIVE_REGION_ACTIVE_BODY.slice(ACTIVE_REGION_ACTIVE_BODY.indexOf('## Progress'));
+
+  test('an archive after the active section does not hide the active phase from plan-row insertion', () => {
+    const out = runActiveRegion(`# Roadmap\n\n${EMPTY_PLANS_ACTIVE}\n${activeRegionArchive('', 'details')}`);
+    assert.deepEqual(roadmapView(out).phases['Phase 1: A'].bullets, TICKED_PLAN);
+    assert.deepEqual(roadmapView(out).phases['Phase 1: Old'].bullets, [[false, '01-01-PLAN.md']], 'archived row untouched');
+  });
+
+  test('a closed-marker heading carrying the active version is part of the active milestone (not an archive)', () => {
+    const before = runActiveRegion(`# Roadmap\n\n## v2.0 Active\n\n## v2.0 Notes ✅\n\nnotes\n\n### Phase 1: A\n**Plans:** 0 plans\n\nPlans:\n- [ ] 01-01-PLAN.md\n\n${PROGRESS}`);
+    assertActiveTicked(before);
+    const after = runActiveRegion(`# Roadmap\n\n## v2.0 Active\n\n### Phase 1: A\n**Plans:** 0 plans\n\nPlans:\n\n## v2.0 Part 2 ✅\n\nPlans:\n- [ ] 01-01-PLAN.md\n\n${PROGRESS}`);
+    assert.deepEqual(roadmapView(after).phases['Phase 1: A'].plans, '1/1 plans executed');
+    assert.strictEqual((after.match(/01-01-PLAN\.md/g) ?? []).length, 1, 'no duplicate plan row');
+  });
+
+  test('a shipped plain section with its own ## Progress leaves that table alone', () => {
+    const shipped = '## v1.0 ✅ SHIPPED\n\n### Phase 1: Old\n**Plans:** 0 plans\n\n## Progress\n\n| Phase | Plans Complete | Status | Completed |\n|---|---|---|---|\n| 1. Old | 0/1 | In Progress | |\n';
+    const input = `# Roadmap\n\n${shipped}\n${ACTIVE_REGION_ACTIVE_BODY}`;
+    const out = runActiveRegion(input);
+    assert.deepEqual(roadmapView(out).rows.filter((r) => r[0].startsWith('1.')), [['1. Old', '0/1', 'In Progress', ''], ['1. A', '1/1', 'In Progress', '']]);
+    assert.deepEqual(roadmapView(out).phases['Phase 1: Old'], roadmapView(input).phases['Phase 1: Old']);
+  });
+
+  // Unpaired <details> tags hide where an archive ends: decline, never a half-edit.
+  const AMBIGUOUS = {
+    'a stray opener inside an <details open> wrapper around the active milestone': () =>
+      `# Roadmap\n\n<details open>\n<summary>v2.0 Active</summary>\n\n${EMPTY_PLANS_ACTIVE.replace('Plans:\n', '<details>\nPlans:\n- [ ] 01-01-PLAN.md\n')}</details>\n`,
+    'an archive opener that is never closed': () =>
+      `# Roadmap\n\n<details>\n<summary>v1.0 ✅ SHIPPED</summary>\n\n${ACTIVE_REGION_ARCHIVE_BODY}\n${ACTIVE_REGION_ACTIVE_BODY}`,
+    'an archive whose closer is indented four spaces': () =>
+      `# Roadmap\n\n<details>\n<summary>v1.0 ✅ SHIPPED</summary>\n\n${ACTIVE_REGION_ARCHIVE_BODY}\n    </details>\n\n${ACTIVE_REGION_ACTIVE_BODY}`,
+  };
+  for (const [name, build] of Object.entries(AMBIGUOUS)) {
+    test(`${name} is declined and ROADMAP.md is untouched`, () => {
+      const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+      const input = build();
+      fs.writeFileSync(roadmapPath, input);
+      const result = runGsdTools(['roadmap', 'update-plan-progress', '1'], tmpDir);
+      assert.ok(result.success, result.error);
+      assert.strictEqual(JSON.parse(result.output).reason, 'archive_structure_ambiguous');
+      assert.strictEqual(fs.readFileSync(roadmapPath, 'utf-8'), input);
+    });
+  }
+
+  test('a one-line archive cannot hide a phase, so it neither blocks nor changes the edit', () => {
+    const input = `# Roadmap\n\n<details><summary>v1.0 ✅ SHIPPED</summary> old notes </details>\n\n${ACTIVE_REGION_ACTIVE_BODY}`;
+    const out = runActiveRegion(input);
+    assert.ok(out.includes('<details><summary>v1.0 ✅ SHIPPED</summary> old notes </details>'));
+    assertActiveTicked(out);
+  });
+
+  // A collapsed block in the active range that holds the Progress table is not hidden:
+  // the row is updated together with the plan ticks (never `updated: true` over a stale row).
+  test('a Progress table inside a collapsed active-range block is updated with the plan tick', () => {
+    const collapsed = ACTIVE_REGION_ACTIVE_BODY.replace('## Progress', '<details>\n<summary>Progress</summary>\n\n## Progress').replace(/\n$/, '\n</details>\n');
+    const out = runActiveRegion(`# Roadmap\n\n${collapsed}`);
+    assert.deepEqual(roadmapView(out).phases['Phase 1: A'].bullets, TICKED_PLAN);
+    assert.deepEqual(roadmapView(out).rows.filter((r) => r[0] === '1. A'), [['1. A', '1/1', 'In Progress', '']]);
+  });
+
+  // Archive shapes the tag scan used to miss: each must leave the archive intact and tick the active milestone.
+  const MISSED_SHAPES = {
+    'blockquoted archive': `> <details>\n> <summary>v1.0 ✅ SHIPPED</summary>\n>\n${ACTIVE_REGION_ARCHIVE_BODY.replace(/^/gm, '> ')}\n> </details>\n`,
+    'one-line archive holding a plan row': '<details><summary>v1.0 ✅ SHIPPED</summary> Plans: - [ ] 01-01-PLAN.md </details>\n',
+    'plain shipped section at heading level 4': `#### v1.0 ✅ SHIPPED\n\n${ACTIVE_REGION_ARCHIVE_BODY}`,
+  };
+  for (const [name, archive] of Object.entries(MISSED_SHAPES)) {
+    test(`${name} stays untouched`, () => {
+      const input = `# Roadmap\n\n${archive}\n${ACTIVE_REGION_ACTIVE_BODY}`;
+      const out = runActiveRegion(input);
+      assert.deepEqual(roadmapView(out).phases['Phase 1: Old'], roadmapView(input).phases['Phase 1: Old']);
+      assert.strictEqual(out.slice(0, out.indexOf('## v2.0 Active')), input.slice(0, input.indexOf('## v2.0 Active')), 'everything above the active milestone is byte-identical');
+      assertActiveTicked(out);
+    });
+  }
+
+  test('a plan filename containing a guessable archive marker cannot relocate the archive', { skip: process.platform === 'win32' }, () => {
+    const hostile = '01-02-<!-- gsd-archived-details-0-0 -->-PLAN.md';
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'phases', '01-a', hostile), '# Plan\n');
+    const input = `# Roadmap\n\n${activeRegionArchive('', 'details')}\n${ACTIVE_REGION_ACTIVE_BODY}`;
+    const out = runActiveRegion(input);
+    assertArchiveIntact(input, out);
+    const { headings } = roadmapView(out);
+    assert.ok(headings.indexOf('Phase 1: Old') < headings.indexOf('v2.0 Active'), 'archive stays above the active milestone');
+  });
+
+  // The decline arm is only reachable when an edit loses a placeholder; stub the
+  // masker (called through the module object, so it can be replaced) to hand back
+  // a visible text with its marker already gone.
+  test('an edit that loses an archive placeholder is declined as archive_placeholder_lost and ROADMAP.md is untouched', (t) => {
+    const parserMod = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'roadmap-parser.cjs'));
+    const roadmapMod = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'roadmap.cjs'));
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+    fs.writeFileSync(roadmapPath, `# Roadmap\n\n${activeRegionArchive('', 'details')}\n${ACTIVE_REGION_ACTIVE_BODY}`);
+    const before = fs.readFileSync(roadmapPath);
+    const real = parserMod.maskArchivedDetails;
+    t.mock.method(parserMod, 'maskArchivedDetails', (content, cwd) => {
+      const masked = real(content, cwd);
+      return { ...masked, visible: masked.visible.replace(/<!-- gsd-archived-details-\S+ -->/, '') };
+    });
+    t.mock.method(process.stderr, 'write', () => true);
+    const out = JSON.parse(captureFdSync(1, () => roadmapMod.cmdRoadmapUpdatePlanProgress(tmpDir, '1', false)));
+    assert.strictEqual(out.updated, false);
+    assert.strictEqual(out.reason, 'archive_placeholder_lost');
+    assert.ok(fs.readFileSync(roadmapPath).equals(before), 'ROADMAP.md byte-identical');
+  });
 });

@@ -18,6 +18,7 @@
  *   - ./markdown-table.cjs (findTableWithColumns)
  */
 
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { escapeRegex } from './pattern.cjs';
@@ -61,7 +62,7 @@ import { platformReadSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import unusableInputMod = require('./unusable-input.cjs');
 const { UNUSABLE_REASON, warnUnusableInput } = unusableInputMod;
-import { tokenizeHeadings, stripTaggedBlocks, editOutsideTaggedBlocks, withSection, stripFencedCode, collectSection } from './markdown-sectionizer.cjs';
+import { tokenizeHeadings, stripTaggedBlocks, editOutsideTaggedBlocks, withSection, stripFencedCode, collectSection, scanFencedBlocks, scanInlineCodeSpans } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
 import { findTableWithColumns, isDelimiterRow, splitTableRow } from './markdown-table.cjs';
 import type { MarkdownTable } from './markdown-table.cjs';
@@ -1455,27 +1456,235 @@ function extractCurrentMilestone(content: string, cwd?: string, ws?: string | nu
 }
 
 /**
- * Replace a pattern only in the current milestone section of ROADMAP.md.
+ * Same-length copy of `s` with HTML comments blanked. An unterminated `<!--`, or
+ * one whose `-->` lies beyond the next heading, is bounded at the end of its own
+ * line so a prose mention never hides later archives. Linear: `-->` and heading
+ * lookups are cached while they stay ahead of the cursor.
  */
-type RoadmapReplacer = (match: string, ...captures: string[]) => string;
-
-function replaceInCurrentMilestone(
-  content: string,
-  pattern: RegExp,
-  replacement: string | RoadmapReplacer,
-): string {
-  const apply = (src: string): string =>
-    typeof replacement === 'function'
-      ? src.replace(pattern, replacement)
-      : src.replace(pattern, replacement);
-  const lastDetailsClose = content.lastIndexOf('</details>');
-  if (lastDetailsClose === -1) {
-    return apply(content);
+function blankComments(s: string): string {
+  const heading = /\n#{1,6} /g;
+  let out = '';
+  let i = 0;
+  let close = 0;
+  let head = -2; // -2: heading not looked up yet (-1 means none ahead); offset 0 must still trigger the first lookup
+  for (let o = s.indexOf('<!--'); o !== -1; o = s.indexOf('<!--', i)) {
+    if (close !== -1 && close < o + 4) close = s.indexOf('-->', o + 4);
+    if (head !== -1 && head < o) {
+      heading.lastIndex = o;
+      const m = heading.exec(s);
+      head = m ? m.index : -1;
+    }
+    let end: number;
+    if (close !== -1 && (head === -1 || close < head)) end = close + 3;
+    else {
+      end = s.indexOf('\n', o);
+      if (end === -1) end = s.length;
+    }
+    out += s.slice(i, o) + s.slice(o, end).replace(/[^\r\n]/g, ' ');
+    i = end;
   }
-  const offset = lastDetailsClose + '</details>'.length;
-  const before = content.slice(0, offset);
-  const after = content.slice(offset);
-  return before + apply(after);
+  return out + s.slice(i);
+}
+
+const VERSION_TOKEN = /v\d+(?:\.\d+)+(?:[-.][A-Za-z0-9]+)*/i;
+
+/** Same-length copy of `content` with fenced blocks, inline code spans and HTML comments blanked. */
+function blankCodeAndComments(content: string): string {
+  // Same-length copy with fenced blocks, inline code spans and HTML comments
+  // blanked (code first: a backticked `<!--` must not open a comment), so a `<details>` mentioned in prose or an example never opens or
+  // closes a block.
+  const lines = content.split('\n');
+  const blank = (t: string): string => t.replace(/[^\r\n]/g, ' ');
+  for (const f of scanFencedBlocks(lines)) {
+    // An unclosed fence is bounded at the next heading, not EOF, so later archives stay visible.
+    let last = f.closeLineIdx;
+    if (last === -1) {
+      last = lines.length - 1;
+      for (let i = f.openLineIdx + 1; i < lines.length; i++) if (/^#{1,6} /.test(lines[i])) { last = i - 1; break; }
+    }
+    for (let i = f.openLineIdx; i <= last; i++) lines[i] = blank(lines[i]);
+  }
+  const joined = lines.join('\n');
+  let codeBlanked = '';
+  let at = 0;
+  for (const sp of scanInlineCodeSpans(joined)) {
+    codeBlanked += joined.slice(at, sp.start) + blank(joined.slice(sp.start, sp.end));
+    at = sp.end;
+  }
+  return blankComments(codeBlanked + joined.slice(at));
+}
+
+/**
+ * A closed milestone written as a plain heading section (no `<details>`) is archive too; the
+ * active milestone's own `## v2.0 Part 2 ✅` sections are not.
+ */
+function plainClosedSections(content: string, overlapsActive: (start: number, end: number) => boolean, activeVersion: string | undefined): Array<{ start: number; end: number }> {
+  // A closed milestone written as a plain heading section (no `<details>`) is
+  // archive too. It ends at the next heading of the same or shallower level, so
+  // a following `## Progress` table stays visible.
+  const headingTokens = tokenizeHeadings(content);
+  const spans: Array<{ start: number; end: number }> = [];
+  for (let i = 0; i < headingTokens.length; i++) {
+    const h = headingTokens[i];
+    if (/^Phase\s+\S/i.test(h.text)) continue;
+    if (!isClosedMilestoneHeading(h.text) || extractMilestoneHeadingName(h.text) === null) continue;
+    let next: (typeof headingTokens)[number] | undefined;
+    for (let j = i + 1; j < headingTokens.length && !next; j++) {
+      const t = headingTokens[j];
+      if (t.level <= h.level && !/^Phase\s+\S/i.test(t.text)) next = t;
+    }
+    // End before the newline that precedes `next`, so that heading stays at line start.
+    const end = next ? next.offset - (content[next.offset - 2] === '\r' ? 2 : 1) : content.length;
+    if (!overlapsActive(h.offset, end) && !(activeVersion && h.text.match(VERSION_TOKEN)?.[0].toLowerCase() === activeVersion)) spans.push({ start: h.offset, end });
+  }
+  return spans;
+}
+
+/**
+ * #5553: locate every archive span in `content` (`<details>` blocks and plain closed-milestone
+ * sections) that does not wrap the active milestone; `inActive` is the subset overlapping it.
+ */
+function scanArchiveSpans(content: string, active: Array<{ start: number; end: number }>): { spans: Array<{ start: number; end: number }>; inActive: Array<{ start: number; end: number }>; ambiguous: boolean } {
+  const activeVersion = active.length > 0 ? content.slice(active[0].start, active[0].start + 300).split('\n', 1)[0].match(VERSION_TOKEN)?.[0].toLowerCase() : undefined;
+  // A block whose own <summary> marks a closed milestone is an archive wherever it sits.
+  const closedSummary = (at: number): boolean => {
+    const m = /^<details\b[^>]{0,200}>[\s>]*<summary[^>]{0,200}>([^<]{0,300})<\/summary>/i.exec(content.slice(at, at + 800));
+    return m !== null && isClosedMilestoneHeading(m[1]);
+  };
+  const scan = blankCodeAndComments(content);
+  // Depth-aware: an outer block closes at its own `</details>`, so a nested
+  // collapsed section inside an archive is masked with it.
+  const spans: Array<{ start: number; end: number }> = [];
+  const inActive: Array<{ start: number; end: number }> = [];
+  const overlapsActive = (start: number, end: number): boolean =>
+    active.some((r) => start < r.end && end > r.start);
+  // Block-level tags only: a tag at line start (<=3 spaces, optionally inside a
+  // blockquote `>` prefix) starts the scan of its line, and further tags on that
+  // same line (a one-line `<details>...</details>`) count with it. Inline or
+  // indented mentions elsewhere never count, and the bounded attribute run keeps
+  // a hostile run of `<details ` linear.
+  const lineStart = /^[ \t]{0,3}(?:>[ \t]{0,3})*(?=<\/?details\b)/gim;
+  const anyTag = /<details\b[^>]{0,200}>|<\/details[ \t]*>/gi;
+  const tags: Array<{ at: number; len: number; closer: boolean }> = [];
+  for (let l = lineStart.exec(scan); l; l = lineStart.exec(scan)) {
+    const from = l.index + l[0].length;
+    const nl = scan.indexOf('\n', from);
+    const lineEnd = nl === -1 ? scan.length : nl;
+    anyTag.lastIndex = from;
+    for (let t = anyTag.exec(scan); t && t.index < lineEnd; t = anyTag.exec(scan)) {
+      tags.push({ at: t.index, len: t[0].length, closer: t[0][1] === '/' });
+    }
+    lineStart.lastIndex = Math.max(lineStart.lastIndex, lineEnd);
+  }
+  // Stack pairing: every closer matches its nearest opener, so each closed pair is
+  // evaluated on its own (a nested archive inside an active wrapper is masked) and
+  // an unmatched opener or closer is ignored instead of disabling later masking.
+  const openers: number[] = [];
+  const kept: Array<{ start: number; end: number }> = [];
+  let paired = false;
+  let strayCloser = false;
+  for (const tag of tags) {
+    if (!tag.closer) {
+      openers.push(tag.at);
+      continue;
+    }
+    const start = openers.pop();
+    if (start === undefined) {
+      // A closer with nothing to pair after an earlier pair closed: that pair may have swallowed this block's own opener.
+      if (paired) strayCloser = true;
+      continue;
+    }
+    paired = true;
+    const end = tag.at + tag.len;
+    // Only a block wrapping an active heading stays editable; any other block is archive, with or without a closed <summary>.
+    if (active.some((r) => start <= r.start && r.start < end)) continue;
+    const inRange = overlapsActive(start, end) && !closedSummary(start);
+    // A collapsed block of the active range that holds the Progress table stays editable, so the row moves with the plan ticks.
+    if (inRange && /^#{1,2}[ \t]+Progress\b/im.test(scan.slice(start, end))) { kept.push({ start, end }); continue; }
+    spans.push({ start, end });
+    if (inRange) inActive.push({ start, end });
+  }
+  // An opener left unpaired makes the structure ambiguous when it either opens a
+  // closed-summary archive that does not close on its own line (its extent is unknown) or precedes a masked
+  // block in the active range (it may be that block's real wrapper, with the
+  // stray tag inside). A harmless stray opener is ignored.
+  const eol = (o: number): number => { const e = content.indexOf('\n', o); return e === -1 ? content.length : e; };
+  const ambiguous = strayCloser || openers.some((o) => closedSummary(o) && !/<\/details/i.test(content.slice(o, eol(o)))) || (openers.length > 0 && [...inActive, ...kept].some((r) => r.start > openers[0]));
+  spans.push(...plainClosedSections(content, overlapsActive, activeVersion));
+  return { spans, inActive, ambiguous };
+}
+
+/**
+ * #5553: hide every archived `<details>` block, and every closed milestone
+ * written as a plain heading section, behind a placeholder; `restore` puts them
+ * back unchanged. Tag case, attributes and archive position
+ * (before OR after the active milestone) do not matter, unlike a "region after
+ * the last `</details>`" cut. A block stays visible only when it wraps the
+ * start of a resolved active milestone range (`<details open>` around the
+ * active milestone); every other block is hidden, whatever its `<summary>`
+ * (none, non-closed, closed), including a collapsed block inside the active
+ * range. That is deliberate for THIS write path only; the read-side
+ * `stripClosedMilestoneDetails` window (#3982/#1341) is unchanged. With no
+ * resolvable active milestone every block is hidden, as the old
+ * last-`</details>` cut did. `ambiguous` flags unpaired tags that hide where an
+ * archive ends (the caller declines); `activeRange` is the active milestone's
+ * range in `visible` coordinates.
+ */
+function maskArchivedDetails(content: string, cwd: string): { visible: string; restore: (edited: string) => string | null; hiddenInActive: string; ambiguous: boolean; activeRange: { start: number; end: number } | null } {
+  if (!/<details\b/i.test(content) && !MILESTONE_CLOSED_MARKER_PATTERN.test(content)) {
+    return { visible: content, restore: (edited) => edited, hiddenInActive: '', ambiguous: false, activeRange: null };
+  }
+  const ranges = currentMilestoneRawRanges(content, cwd);
+  const active = ranges ? [ranges.primary, ...(ranges.details ? [ranges.details] : [])] : [];
+  const { spans, inActive, ambiguous } = scanArchiveSpans(content, active);
+  const blocks: string[] = [];
+  // Unguessable per call: a plan filename or any other edited-in text cannot forge a marker.
+  const nonce = randomBytes(8).toString('hex');
+  const marker = (i: number): string => `<!-- gsd-archived-details-${nonce}-${i} -->`;
+  spans.sort((x, y) => x.start - y.start || y.end - x.end);
+  let visible = '';
+  let last = 0;
+  const hidden: Array<{ start: number; end: number; vis: number; len: number }> = [];
+  for (const span of spans) {
+    if (span.start < last) {
+      // Nested in an already-masked span: only a partial overlap extends it.
+      if (span.end <= last) continue;
+      span.start = last;
+    }
+    blocks.push(content.slice(span.start, span.end));
+    visible += content.slice(last, span.start);
+    const m = marker(blocks.length - 1);
+    hidden.push({ start: span.start, end: span.end, vis: visible.length, len: m.length });
+    visible += m;
+    last = span.end;
+  }
+  visible += content.slice(last);
+  // One pass, so a hostile ROADMAP with thousands of blocks stays linear.
+  const markerRe = new RegExp(`<!-- gsd-archived-details-${nonce}-(\\d+) -->`, 'g');
+  const restore = (edited: string): string | null => {
+    const seen = new Array<number>(blocks.length).fill(0);
+    let bad = false;
+    const restored = edited.replace(markerRe, (m, i: string) => {
+      const n = Number(i);
+      if (n >= blocks.length || seen[n]++ > 0) { bad = true; return m; }
+      return blocks[n];
+    });
+    // edit dropped or duplicated a placeholder: caller must refuse rather than lose or misplace an archive
+    return bad || seen.includes(0) ? null : restored;
+  };
+  // Blocks hidden inside the active range stay unticked, but their rows still count as present.
+  const hiddenInActive = inActive.map((r) => content.slice(r.start, r.end)).join('\n');
+  // Original offset -> offset in `visible`.
+  const toVisible = (p: number): number => {
+    let h: (typeof hidden)[number] | undefined;
+    for (const x of hidden) { if (x.start < p) h = x; else break; }
+    if (!h) return p;
+    return p >= h.end ? h.vis + h.len + (p - h.end) : h.vis;
+  };
+  const activeRange = active.length > 0
+    ? { start: toVisible(Math.min(...active.map((r) => r.start))), end: toVisible(Math.max(...active.map((r) => r.end))) }
+    : null;
+  return { visible, restore, hiddenInActive, ambiguous, activeRange };
 }
 
 /**
@@ -2408,7 +2617,7 @@ export = {
   extractCurrentMilestoneScoped,
   isMilestoneShippedInRoadmap,
   isMilestoneBoundedInRoadmap,
-  replaceInCurrentMilestone,
+  maskArchivedDetails,
   getRoadmapPhaseInternal,
   getMilestoneInfo,
   classifyMilestoneScalar,
