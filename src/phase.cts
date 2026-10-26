@@ -1338,15 +1338,17 @@ function recordNewPhase(raw: string, cwd: string, id: string | number, descripti
   const last = bullets.at(-1);
   if (last) return { content: spliceAfter(raw, start + last.index + last[0].length, eol, entry), entry: kind };
   let wrote = false;
-  const content = editProgressTableSlice(raw, (scoped: string) => {
+  const archived = roadmapParserMod.maskArchivedDetails(raw, cwd);
+  const edited = editProgressTableSlice(archived.visible, (scoped: string) => {
     if (findPhaseTableHeader(scoped) === -1) return scoped;
     const cell: Record<string, string> = { Phase: `${id}. ${description}`, 'Plans Complete': '0/0', Status: 'Not started' };
     const r = insertTableRow(scoped, (col) => cell[col]);
     if (!r.ok) return scoped;
     wrote = true;
     return r.value;
-  }, cwd);
-  return wrote ? { content, entry: 'progress_table' } : { content: raw, entry: 'none' };
+  }, archived.activeRange);
+  const content = wrote && !archived.ambiguous ? archived.restore(edited) : null;
+  return content !== null ? { content, entry: 'progress_table' } : { content: raw, entry: 'none' };
 }
 
 /**
