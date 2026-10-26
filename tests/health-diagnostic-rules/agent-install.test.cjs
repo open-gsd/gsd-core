@@ -51,6 +51,7 @@ const { SCOPE } = require('../../gsd-core/bin/lib/planning-scope.cjs');
 const { PACKAGE_NAME } = require('../../gsd-core/bin/lib/package-identity.cjs');
 const { MODEL_PROFILES } = require('../../gsd-core/bin/lib/model-profiles.cjs');
 const EXPECTED_AGENTS = Object.keys(MODEL_PROFILES);
+const { AGENTS_INSTALLED_REASON } = require('../../gsd-core/bin/lib/agent-install-check.cjs');
 
 const { RULES } = require('../../gsd-core/bin/lib/health-diagnostic-rules/agent-install.cjs');
 const rule = RULES.find((r) => r.code === 'W010');
@@ -255,6 +256,58 @@ describe('agent-install rule (W010)', () => {
           incomplete_agents: [],
           agents_dir: '',
           agent_runtime: 'claude',
+        },
+      },
+    };
+    assert.deepStrictEqual(rule.check(snapshot), []);
+  });
+
+  test('an UNKNOWN runtime id: the real snapshot is UNREADABLE and the rule is silent', (t) => {
+    const cwd = createTempDir('gsd-unknown-w010-');
+    t.after(() => cleanup(cwd));
+    const saved = { runtime: process.env['GSD_RUNTIME'], agentsDir: process.env['GSD_AGENTS_DIR'] };
+    process.env['GSD_RUNTIME'] = 'example-host';
+    delete process.env['GSD_AGENTS_DIR'];
+    t.after(() => {
+      for (const [key, value] of [['GSD_RUNTIME', saved.runtime], ['GSD_AGENTS_DIR', saved.agentsDir]]) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+
+    const snap = buildPlanningSnapshot(cwd);
+    assert.strictEqual(snap.agentInstall.scope, SCOPE.UNREADABLE);
+    assert.strictEqual(snap.agentInstall.value.reason, AGENTS_INSTALLED_REASON.UNKNOWN_RUNTIME);
+    assert.deepStrictEqual(rule.check(snap), []);
+  });
+
+  test('a scan that throws reports agents_installed null, the same as an UNKNOWN id', (t) => {
+    const cwd = createTempDir('gsd-scan-throws-');
+    t.after(() => cleanup(cwd));
+    const saved = process.env['GSD_RUNTIME'];
+    // A retired runtime id makes checkAgentsInstalled throw RetiredRuntimeError.
+    process.env['GSD_RUNTIME'] = [...require('../../gsd-core/bin/lib/runtime-name-policy.cjs').RETIRED_RUNTIME_IDS][0];
+    t.after(() => {
+      if (saved === undefined) delete process.env['GSD_RUNTIME'];
+      else process.env['GSD_RUNTIME'] = saved;
+    });
+
+    const snap = buildPlanningSnapshot(cwd);
+    assert.strictEqual(snap.agentInstall.scope, SCOPE.UNREADABLE);
+    assert.strictEqual(snap.agentInstall.value.agents_installed, null);
+  });
+
+  test('agents_installed null is silent even outside UNREADABLE', () => {
+    const snapshot = {
+      agentInstall: {
+        scope: SCOPE.COMPLETE,
+        value: {
+          agents_installed: null,
+          missing_agents: [],
+          installed_agents: [],
+          incomplete_agents: [],
+          agents_dir: '',
+          agent_runtime: 'example-host',
         },
       },
     };

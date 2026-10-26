@@ -8,7 +8,7 @@
 node gsd-tools.cjs init plan-phase 1 --raw
 ```
 
-The JSON carries `agent_runtime`, plus the `agents_dir` / `agents_installed` / `missing_agents` triple derived from it. For the config key itself, see [`runtime`](../CONFIGURATION.md#runtime-aware-profiles-2517).
+The JSON carries `agent_runtime`, plus the `agents_dir` / `agents_installed` / `missing_agents` fields derived from it. For an UNKNOWN runtime id (one GSD does not know, for example an EoS host integration's), the agents check could not run: `agents_installed` is `null` and `agents_installed_reason` is `unknown_runtime`. `agents_dir` and `missing_agents` are then empty, which does not mean no agents are missing. A retired runtime id still refuses. For the config key itself, see [`runtime`](../CONFIGURATION.md#runtime-aware-profiles-2517).
 
 ---
 

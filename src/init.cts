@@ -48,6 +48,7 @@ import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { resolveReportedRuntime } from './host-runtime-detection.cjs';
 import { tryWithinRoot, loadTrustedGlobalRoots, PathAcceptance } from './security.cjs';
 import { getGlobalSkillDir, getGlobalSkillDisplayPath, getGlobalSkillsBase, getGlobalConfigDir } from './runtime-homes.cjs';
+import type { UnknownRuntimeError } from './runtime-name-policy.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
 import frontmatterMod = require('./frontmatter.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- verification.cjs is an export= CommonJS module
@@ -424,9 +425,10 @@ function withProjectRoot(cwd: string, result: Record<string, unknown>): Record<s
   const activeRuntime = resolveReportedRuntime(cwd);
   const agentStatus = checkAgentsInstalled(activeRuntime, cwd);
   result['agents_installed'] = agentStatus.agents_installed;
+  if (agentStatus.reason) result['agents_installed_reason'] = agentStatus.reason;
   result['missing_agents'] = agentStatus.missing_agents;
   result['agents_dir'] = agentStatus.agents_dir;
-  result['agent_runtime'] = agentStatus.agent_runtime;
+  result['agent_runtime'] = agentInstallCheck.reportedRuntimeId(agentStatus.agent_runtime);
   const config = loadConfig(cwd);
   if (config.response_language) {
     result['response_language'] = config.response_language;
@@ -4317,7 +4319,6 @@ function buildAgentSkillsBlock(
   };
 
   const runtime = (config && (config['runtime'] as string)) || 'claude';
-  const globalSkillsBase = getGlobalSkillsBase(runtime);
 
   if (!config || !config['agent_skills'] || !agentType) return '';
 
@@ -4332,6 +4333,17 @@ function buildAgentSkillsBlock(
     return '';
   }
   if (skillPaths.length === 0) return '';
+
+  let globalSkillsBase: string | null;
+  let runtimeUnknown = false;
+  try {
+    globalSkillsBase = getGlobalSkillsBase(runtime);
+  } catch (err) {
+    if ((err as Partial<UnknownRuntimeError> | null)?.code !== 'GSD_UNKNOWN_RUNTIME') throw err;
+    globalSkillsBase = null;
+    runtimeUnknown = true;
+  }
+  const shownRuntime = agentInstallCheck.reportedRuntimeId(runtime);
 
   // Hoist trusted roots computation before the loop: loadTrustedGlobalRoots does
   // realpathSync I/O and should run at most once per call, not once per failing skill.
@@ -4372,7 +4384,7 @@ function buildAgentSkillsBlock(
           validEntries.push({ kind: 'directive', name: skillName });
         } else {
           warn(
-            `[agent-skills] WARNING: Plugin-namespaced skill "global:${skillName}" requires a Skill-tool-capable runtime (claude) — skipping on runtime "${runtime}"\n`,
+            `[agent-skills] WARNING: Plugin-namespaced skill "global:${skillName}" requires a Skill-tool-capable runtime (claude) — skipping on runtime "${shownRuntime}"\n`,
           );
         }
         continue;
@@ -4380,7 +4392,9 @@ function buildAgentSkillsBlock(
       // Non-namespaced bare name: attempt filesystem resolution as before.
       if (globalSkillsBase === null) {
         warn(
-          `[agent-skills] WARNING: Runtime "${runtime}" does not use a skills directory — "global:${skillName}" is not supported on this runtime\n`,
+          runtimeUnknown
+            ? `[agent-skills] WARNING: GSD does not know runtime "${shownRuntime}", so it cannot locate its global skills directory — skipping "global:${skillName}"\n`
+            : `[agent-skills] WARNING: Runtime "${shownRuntime}" does not use a skills directory — "global:${skillName}" is not supported on this runtime\n`,
         );
         continue;
       }

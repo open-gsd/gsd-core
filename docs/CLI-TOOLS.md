@@ -1191,6 +1191,8 @@ node gsd-tools.cjs init execute-phase <phase> --ws <name>
 node gsd-tools.cjs init plan-phase <phase> --ws <name>
 ```
 
+**Agents check:** `docs-init` and every init bundle except `init list-workspaces` carry `agents_installed` and `missing_agents` (the init bundles also `agents_dir` and `agent_runtime`); `validate agents` reports the same check as `agents_found`, `missing` and `agents_dir`. For an UNKNOWN runtime id without `GSD_AGENTS_DIR`, the check cannot run: `agents_installed` (or `agents_found`) is `null`, `agents_installed_reason` (or `agents_found_reason`) is `unknown_runtime`, and the agent lists and `agents_dir` are empty, which does not mean that no agent is missing. With or without `GSD_AGENTS_DIR`, `agent_runtime` shows at most the first 64 characters of the runtime id, with control characters escaped. The reason keys are present only when the check could not run.
+
 **Large payload handling:** When output exceeds ~50KB, the CLI writes to a temp file and returns `@file:/tmp/gsd-init-XXXXX.json`. Workflows check for the `@file:` prefix and read from disk:
 
 ```bash
@@ -1280,7 +1282,7 @@ The `--json` flag returns a typed IR object suitable for structured consumption 
 | `agent_type` | `string` | The agent type that was queried. |
 | `block` | `string` | The `<agent_skills>` XML block, or `""` when empty. |
 | `skills_count` | `number` | Number of skill paths configured for this agent type. |
-| `warnings` | `string[]` | Per-path warnings for skills that were skipped (missing `SKILL.md`, unsafe path, etc.). Empty when all configured paths resolved. |
+| `warnings` | `string[]` | Per-path warnings for skills that were skipped (missing `SKILL.md`, unsafe path, etc.; for an UNKNOWN runtime id, every bare `global:` skill; namespaced `global:` skills are skipped on every runtime except claude). A warning shows at most the first 64 characters of the runtime id, with control characters escaped. Empty when all configured paths resolved. |
 | `configured` | `boolean` | `true` when the agent type appears in `agent_skills` in the config; `false` when the key is absent entirely. |
 | `reason` | `string` | Resolution reason: `"resolved"` (block non-empty), `"not_configured"` (agent not in `agent_skills` — silent), `"configured_empty"` (configured but paths list is empty — emits stderr WARNING), `"configured_unresolved"` (configured with paths but all failed to resolve — emits stderr WARNING). |
 | `source` | `string` | Config provenance: `"root"` (`.planning/config.json`), `"workstream"` (workstream-scoped config), `"global-defaults"` (`~/.gsd/defaults.json`), `"builtin-defaults"` (no project config). |

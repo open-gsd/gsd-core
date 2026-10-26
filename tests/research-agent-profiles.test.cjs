@@ -385,6 +385,7 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const NEW_PROJECT_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'new-project.md');
 const NEW_MILESTONE_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'new-milestone.md');
@@ -425,16 +426,10 @@ describe('gsd-project-researcher agent registration (#2419)', () => {
     );
   });
 
-  test('new-project.md reports required-agent and skill-payload diagnostics separately', () => {
+  test('new-project.md shows which runtime and agents directory were checked', () => {
     const content = fs.readFileSync(NEW_PROJECT_PATH, 'utf-8');
-    assert.ok(content.includes('required_agents_installed'),
-      'new-project.md must parse required_agents_installed from init JSON');
-    assert.ok(content.includes('missing_required_agents'),
-      'new-project.md must report missing required new-project agents separately');
-    assert.ok(content.includes('agent_skill_payloads_available'),
-      'new-project.md must distinguish skill payload availability from agent definitions');
-    assert.ok(content.includes('agents_dir'),
-      'new-project.md must show which agents directory was checked');
+    assert.ok(content.includes('{agent_runtime}'), 'new-project.md must show which runtime was checked');
+    assert.ok(content.includes('{agents_dir}'), 'new-project.md must show which agents directory was checked');
   });
 
   test('new-milestone.md parses agents_installed from init JSON', () => {
@@ -455,6 +450,38 @@ describe('gsd-project-researcher agent registration (#2419)', () => {
       ),
       'new-milestone.md must warn the user when agents are not installed (agents_installed is false)'
     );
+  });
+
+  const CONTINUES_WITH_STEP_7 = /\b(?:continue|proceed)\w*\s+(?:with|to)\s+Step 7\b/i;
+  for (const [label, file] of [['new-project.md', NEW_PROJECT_PATH], ['new-milestone.md', NEW_MILESTONE_PATH]]) {
+    test(`${label} parses agents_installed_reason and, when agents_installed is null, probes one named spawn before the inline fallback`, () => {
+      const lines = splitLines(fs.readFileSync(file, 'utf-8'));
+      const parseList = lines.find((line) => /^(Parse JSON for|Extract from init JSON):/.test(line) && line.includes('`agents_installed`'));
+      assert.ok(parseList && parseList.includes('`agents_installed_reason`'), `${label} must parse agents_installed_reason from the init JSON`);
+      const branch = lines.find((line) => line.startsWith('**If `agents_installed` is null:**'));
+      assert.ok(branch, `${label} must have an agents_installed null branch`);
+      assert.match(branch, /first named subagent/i, `${label}: the null branch must probe one spawn first`);
+      assert.match(branch, /`gsd-roadmapper`.*research is skipped/, `${label}: the probe must cover a run without research`);
+      assert.match(branch, /agent type not found/, `${label}: the null branch must name the rejection that triggers the fallback`);
+      assert.match(branch, /write the roadmap inline/i, `${label}: the fallback must be the inline roadmap`);
+      if (label === 'new-project.md') assert.match(branch, CONTINUES_WITH_STEP_7, 'new-project.md: the fallback must keep Step 7 (Define Requirements)');
+    });
+
+    test(`${label}: the roadmap revision step covers a roadmap written inline`, () => {
+      const respawns = splitLines(fs.readFileSync(file, 'utf-8')).filter((line) => /re-spawn roadmapper/i.test(line));
+      assert.ok(respawns.length > 0, `${label} must have a roadmap revision step`);
+      for (const line of respawns) assert.match(line, /\brevise\b.*\binline\b/i, `${label}: the revision step must cover a roadmap written inline: ${line}`);
+    });
+  }
+
+  test('new-project.md: the agents_installed false branch keeps Step 7 (Define Requirements)', () => {
+    const lines = splitLines(fs.readFileSync(NEW_PROJECT_PATH, 'utf-8'));
+    const start = lines.findIndex((line) => line.startsWith('**If `agents_installed` is false:**'));
+    const end = lines.findIndex((line, i) => i > start && line.startsWith('**If `agents_installed` is null:**'));
+    assert.ok(start >= 0 && end > start, 'new-project.md must have the false branch before the null branch');
+    const skip = lines.slice(start, end).find((line) => /^Skip\b/.test(line));
+    assert.ok(skip, 'the false branch must say which steps to skip');
+    assert.match(skip, CONTINUES_WITH_STEP_7, `the false branch must keep Step 7: ${skip}`);
   });
 
   test('new-project.md lists gsd-project-researcher in available_agent_types', () => {

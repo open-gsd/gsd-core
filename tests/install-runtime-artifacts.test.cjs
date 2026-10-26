@@ -5143,6 +5143,27 @@ describe('getDirName (relocated to runtime-name-policy)', () => {
   });
 });
 
+describe('install and uninstall on an UNKNOWN runtime id', () => {
+  test('refuse the id and write nothing', (t) => {
+    const { install, uninstall } = require('../bin/install.js');
+    const { scrubConfigLocationEnv } = require('./helpers.cjs');
+    const unknownId = 'example-host';
+    const tmpDir = createTempDir('gsd-unknown-install-');
+    const previousCwd = process.cwd();
+    process.chdir(tmpDir);
+    sandboxHome(t, tmpDir);
+    const restoreConfigLocationEnv = scrubConfigLocationEnv();
+    t.after(() => {
+      restoreConfigLocationEnv();
+      process.chdir(previousCwd);
+      cleanup(tmpDir);
+    });
+    assert.throws(() => install(false, unknownId), (err) => err instanceof TypeError && /unknown runtime/i.test(err.message) && err.message.includes(unknownId));
+    assert.throws(() => uninstall(false, unknownId), { code: 'GSD_UNKNOWN_RUNTIME' });
+    assert.deepStrictEqual(fs.readdirSync(tmpDir), []);
+  });
+});
+
 // ── Slice B: processAttribution relocated to runtime-artifact-conversion ───────
 describe('processAttribution (relocated to runtime-artifact-conversion)', () => {
   test('null removes the Co-Authored-By line and its preceding blank line', () => {

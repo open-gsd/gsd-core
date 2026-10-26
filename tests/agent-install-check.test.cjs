@@ -20,6 +20,7 @@ const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const fc = require('fast-check');
 const { createTempDir, cleanup, captureFdSync } = require('./helpers.cjs');
 
 const AGENT_INSTALL_CHECK_PATH = path.join(
@@ -31,7 +32,9 @@ const RUNTIME_HOMES_PATH = path.join(
 
 const agentInstallCheck = require(AGENT_INSTALL_CHECK_PATH);
 const { getGlobalConfigDir } = require(RUNTIME_HOMES_PATH);
-const { getDirName } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'runtime-name-policy.cjs'));
+const runtimeNamePolicy = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'runtime-name-policy.cjs'));
+const { getDirName } = runtimeNamePolicy;
+const { runtimes: REGISTRY_RUNTIMES } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'capability-registry.cjs'));
 
 // Get EXPECTED_AGENTS from model-profiles (same source of truth)
 const MODEL_PROFILES = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'model-profiles.cjs')).MODEL_PROFILES;
@@ -495,6 +498,114 @@ describe('checkAgentsInstalled', () => {
     // GSD_AGENTS_DIR overrides, so agents_dir = our tmp path
     assert.strictEqual(result.agents_dir, agentsDir);
     assert.strictEqual(result.agent_runtime, 'cursor');
+  });
+});
+
+describe('checkAgentsInstalled on an UNKNOWN runtime id', () => {
+  const { AGENTS_INSTALLED_REASON } = agentInstallCheck;
+  // A runtime without a config home throws a different error from getGlobalConfigDir.
+  const REGISTERED = Object.entries(REGISTRY_RUNTIMES)
+    .filter(([, d]) => d.runtime?.configHome?.kind !== 'none')
+    .map(([id]) => id);
+  const RETIRED = [...runtimeNamePolicy.RETIRED_RUNTIME_IDS];
+  const NEAR_MISSES = REGISTERED.flatMap((id) => [id.toUpperCase(), `${id}-cli`]);
+  const LEGACY = [...runtimeNamePolicy.LEGACY_NON_REGISTRY_RUNTIME_IDS];
+  const classified = (s) => [s, runtimeNamePolicy.canonicalizeRuntimeName(s)].some((id) => id !== null
+    && (Object.hasOwn(REGISTRY_RUNTIMES, id) || LEGACY.includes(id) || runtimeNamePolicy.isRetiredRuntimeId(id)));
+  const assertReported = (id) => {
+    const result = agentInstallCheck.checkAgentsInstalled(id);
+    assert.strictEqual(result.reason, AGENTS_INSTALLED_REASON.UNKNOWN_RUNTIME, `${JSON.stringify(id)} is reported`);
+    assert.strictEqual(result.agents_installed, null, `${JSON.stringify(id)} could not be checked`);
+  };
+  let savedAgentsDir;
+
+  beforeEach(() => {
+    savedAgentsDir = process.env['GSD_AGENTS_DIR'];
+    delete process.env['GSD_AGENTS_DIR'];
+  });
+
+  afterEach(() => {
+    if (savedAgentsDir === undefined) delete process.env['GSD_AGENTS_DIR'];
+    else process.env['GSD_AGENTS_DIR'] = savedAgentsDir;
+  });
+
+  test('control: example-host is refused by the path accessors', () => {
+    assert.throws(() => getDirName('example-host'), { name: 'UnknownRuntimeError' });
+  });
+
+  test('an UNKNOWN id reports that the check could not run: agents_installed null, reason unknown_runtime', () => {
+    assert.deepStrictEqual(agentInstallCheck.checkAgentsInstalled('example-host', process.cwd()), {
+      agents_installed: null,
+      missing_agents: [],
+      installed_agents: [],
+      incomplete_agents: [],
+      agents_dir: '',
+      agent_runtime: 'example-host',
+      reason: AGENTS_INSTALLED_REASON.UNKNOWN_RUNTIME,
+    });
+  });
+
+  test('GSD_AGENTS_DIR still names the agents dir for an UNKNOWN id', (t) => {
+    const tmpDir = createTempDir('gsd-agent-check-unknown-');
+    t.after(() => cleanup(tmpDir));
+    const agentsDir = path.join(tmpDir, 'agents');
+    fs.mkdirSync(agentsDir, { recursive: true });
+    for (const agent of EXPECTED_AGENTS) fs.writeFileSync(path.join(agentsDir, `${agent}.md`), `# ${agent}\n`);
+    process.env['GSD_AGENTS_DIR'] = agentsDir;
+
+    const result = agentInstallCheck.checkAgentsInstalled('example-host');
+    assert.strictEqual(result.agents_installed, true);
+    assert.strictEqual(result.agents_dir, agentsDir);
+    assert.strictEqual(result.reason, undefined);
+  });
+
+  test('every retired id keeps its refusal', () => {
+    assert.ok(RETIRED.length > 0, 'the policy carries at least one retired id');
+    for (const retired of RETIRED) {
+      assert.throws(() => agentInstallCheck.checkAgentsInstalled(retired), { name: 'RetiredRuntimeError' }, retired);
+    }
+  });
+
+  test('every KNOWN id scans without a reason, every near-miss is reported', () => {
+    for (const id of [...REGISTERED, ...LEGACY]) {
+      const result = agentInstallCheck.checkAgentsInstalled(id);
+      assert.strictEqual(result.reason, undefined, `${id} is scanned`);
+      assert.strictEqual(typeof result.agents_installed, 'boolean', `${id} gets a real answer`);
+    }
+    const nearMisses = NEAR_MISSES.filter((s) => !classified(s));
+    assert.ok(nearMisses.length > 0, 'near-misses remain after filtering');
+    for (const id of nearMisses) assertReported(id);
+  });
+
+  test('an alias or padded form of a KNOWN id never throws: it is scanned or reported', () => {
+    for (const id of ['CLAUDE', 'codex-cli', ' claude ']) {
+      const result = agentInstallCheck.checkAgentsInstalled(id);
+      if (result.agents_installed === null) assert.strictEqual(result.reason, AGENTS_INSTALLED_REASON.UNKNOWN_RUNTIME, `${JSON.stringify(id)} is reported`);
+      else assert.strictEqual(typeof result.agents_installed, 'boolean', `${JSON.stringify(id)} is scanned`);
+    }
+  });
+
+  test('property: an arbitrary string that names no runtime is reported', () => {
+    fc.assert(
+      fc.property(fc.string({ minLength: 1, maxLength: 40 }).filter((s) => !classified(s)), assertReported),
+      { seed: 1729, numRuns: 300 },
+    );
+  });
+
+  test('a refusal from a second copy of the error class is still reported', (t) => {
+    const runtimeHomes = require(RUNTIME_HOMES_PATH);
+    t.mock.method(runtimeHomes, 'getGlobalConfigDir', () => {
+      throw Object.assign(new Error('second copy'), { name: 'UnknownRuntimeError', code: 'GSD_UNKNOWN_RUNTIME' });
+    });
+    const result = agentInstallCheck.checkAgentsInstalled('codex');
+    assert.strictEqual(result.agents_installed, null);
+    assert.strictEqual(result.reason, AGENTS_INSTALLED_REASON.UNKNOWN_RUNTIME);
+  });
+
+  test('Object.keys(AGENTS_INSTALLED_REASON).sort() is locked', () => {
+    assert.deepStrictEqual(Object.keys(AGENTS_INSTALLED_REASON).sort(), ['UNKNOWN_RUNTIME']);
+    assert.strictEqual(AGENTS_INSTALLED_REASON.UNKNOWN_RUNTIME, 'unknown_runtime');
+    assert.ok(Object.isFrozen(AGENTS_INSTALLED_REASON));
   });
 });
 

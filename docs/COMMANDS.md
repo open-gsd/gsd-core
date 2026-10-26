@@ -2154,7 +2154,7 @@ Only the targeted lines are removed. Line endings, BOM, key order, comments, bla
 Check that the GSD agents are installed for the active runtime — and, on Codex, that the installed `.toml` files satisfy the passive model posture and the derived sandbox posture.
 
 **Prerequisites:** GSD installed for a runtime
-**Produces:** Installed / missing / incomplete agent lists, plus `codex_posture` and `sandbox_posture` reports
+**Produces:** Installed / missing / incomplete agent lists, plus `codex_posture` and `sandbox_posture` reports. For an UNKNOWN runtime id without `GSD_AGENTS_DIR`, the check cannot run: `agents_found` is `null`, `agents_found_reason` is `unknown_runtime`, and the lists and `agents_dir` are empty, which does not mean that no agent is missing.
 
 ```bash
 node gsd-tools.cjs validate agents
