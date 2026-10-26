@@ -94,6 +94,7 @@ module.exports = {
   "tests/gen-context-index.test.cjs",
   "tests/gen-section-manifest.test.cjs",
   "tests/git-base-branch.test.cjs",
+  "tests/git-location-env-scrub.test.cjs",
   "tests/graphify-query.test.cjs",
   "tests/graphify-visualization.test.cjs",
   "tests/gsd-agent-isolation-guard.test.cjs",

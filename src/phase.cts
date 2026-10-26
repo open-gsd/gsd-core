@@ -80,7 +80,7 @@ import planningWorkspace = require('./planning-workspace.cjs');
 import frontmatterMod = require('./frontmatter.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- state.cjs is an export= CommonJS module
 import stateMod = require('./state.cjs');
-import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync, contentChangedAfterNormalize } from './shell-command-projection.cjs';
+import { scrubGitLocationEnv, platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync, contentChangedAfterNormalize } from './shell-command-projection.cjs';
 import { parsePlanningDoc, findField, readNode, setFieldValue, serialize } from './planning-document.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
@@ -1388,6 +1388,7 @@ function collectSiblingWorktreePhaseNums(cwd: string, used: Set<number>): void {
   try {
     porcelain = execFileSync('git', ['worktree', 'list', '--porcelain'], {
       cwd,
+      env: scrubGitLocationEnv(process.env),
       encoding: 'utf-8',
       // Same subprocess band as the other git call sites (smart-entry, check-command-router):
       // inside the 5-30s git window, hidden console window on Windows, bounded buffer.
