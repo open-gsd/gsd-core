@@ -10279,20 +10279,31 @@ ${creationBash}
       }
     });
 
-    test('init.execute-phase parsing safely ignores hostile shell characters in phase_dir (Blocker 1)', () => {
+    test('init.execute-phase parsing safely ignores hostile shell characters in phase_dir (Blocker 1)', (t) => {
+      if (process.platform === 'win32') {
+        t.skip('bash script execution test is POSIX-specific');
+        return;
+      }
       // Direct variable capture via process.env prevents shell expansion of command substitutions
-      const hostileDir = '$(touch /tmp/hostile-marker)';
-      const initJson = JSON.stringify({ phase_dir: hostileDir, phase_number: 1 });
-      const script = `
+      const markerPath = path.join(os.tmpdir(), `hostile-marker-${Date.now()}`);
+      try {
+        const hostileDir = `$(touch ${markerPath})`;
+        const initJson = JSON.stringify({ phase_dir: hostileDir, phase_number: 1 });
+        const script = `
 INIT='${initJson}'
 PHASE_DIR=$(INIT="$INIT" node -e 'try{const j=JSON.parse(process.env.INIT);if(j&&j.phase_dir)process.stdout.write(String(j.phase_dir))}catch{}')
 PHASE_NUMBER=$(INIT="$INIT" node -e 'try{const j=JSON.parse(process.env.INIT);if(j&&j.phase_number!=null)process.stdout.write(String(j.phase_number))}catch{}')
 printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
 `;
-      const res = childProcess.spawnSync('bash', ['-c', script], { stdio: 'pipe' });
-      assert.equal(res.status, 0);
-      assert.equal(res.stdout.toString(), `${hostileDir}|1`);
-      assert.equal(fs.existsSync('/tmp/hostile-marker'), false, 'hostile shell payload must never execute');
+        const res = childProcess.spawnSync('bash', ['-c', script], { stdio: 'pipe', timeout: SUBPROCESS_TIMEOUT_MS });
+        assert.equal(res.status, 0);
+        assert.equal(res.stdout.toString(), `${hostileDir}|1`);
+        assert.equal(fs.existsSync(markerPath), false, 'hostile shell payload must never execute');
+      } finally {
+        if (fs.existsSync(markerPath)) {
+          fs.unlinkSync(markerPath);
+        }
+      }
     });
 
     test('cleanup-wave fails closed when empty manifest is reconciled but unmanifested agent worktrees exist (Major 3)', () => {
@@ -10388,7 +10399,7 @@ printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
           'stash', 'push', '-u', '-m', 'test-post-wave-hook', '--',
           ':(exclude,glob)**/.planning/**/wave-[1-9]-manifest.json',
           ':(exclude,glob)**/.planning/**/wave-[1-9][0-9]*-manifest.json',
-        ], { cwd: repoDir, stdio: 'pipe' });
+        ], { cwd: repoDir, stdio: 'pipe', timeout: SUBPROCESS_TIMEOUT_MS });
 
         assert.equal(stashRes.status, 0);
         // Manifest must remain on disk untouched

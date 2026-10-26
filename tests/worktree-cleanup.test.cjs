@@ -2358,7 +2358,7 @@ ${creationBash}
     gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: root });
 
     const commandsMod = require('../gsd-core/bin/lib/commands.cjs');
-    const { isWaveManifestPath, WAVE_MANIFEST_PATHSPEC_EXCLUDE } = commandsMod;
+    const { isWaveManifestPath } = commandsMod;
 
     const manifestUnderPlanning = path.join(root, '.planning', 'wave-1-manifest.json');
     const manifestUnderPhase = path.join(root, '.planning', 'phases', '01-foo', 'wave-2-manifest.json');
