@@ -492,6 +492,8 @@ unresolvable conflict escalates rather than deadlocking.
 gsd_run state planned-phase --phase "${PHASE}" --name "${phase_name}" --plans "${PLAN_COUNT}"
 ```
 
+Fails non-zero, writing nothing, when STATE.md has no `Plan:` or `Current Plan:` line under `## Current Position` and no `Total Plans in Phase:` line anywhere in the file. On failure: if the error names a missing line, add `Plan: 0 TBD in current phase` under `## Current Position` and re-run; if it says `below the executed plan count` or the `--plans` value is invalid, stop and surface the error (do not add a line or re-run).
+
 Display:
 ```text
 ### GSD ► CONVERGENCE COMPLETE ✓
