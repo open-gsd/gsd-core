@@ -1839,8 +1839,14 @@ function cmdWorktreeCleanupWave(cwd: string, args: string[] = [], deps: Record<s
     } catch {
       realParent = path.dirname(resolvedManifestPath);
     }
-    const rel = path.relative(repoTopLevel, path.join(realParent, path.basename(resolvedManifestPath)));
-    return Boolean(!rel || rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel));
+    const realManifestTarget = path.join(realParent, path.basename(resolvedManifestPath));
+    let realRepoTopLevel: string;
+    try {
+      realRepoTopLevel = fs.realpathSync(repoTopLevel);
+    } catch {
+      realRepoTopLevel = repoTopLevel;
+    }
+    return !isContainedIn(realManifestTarget, realRepoTopLevel);
   })() : false;
 
   const trackedCheck = execGit(['ls-files', '--error-unmatch', resolvedManifestPath], {
