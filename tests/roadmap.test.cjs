@@ -3015,11 +3015,11 @@ describe('#5483: update-plan-progress ticks only the active milestone row', () =
     assert.deepStrictEqual(tickedInActive(written), ['01-01-PLAN.md']);
   });
 
-  test('no archived milestone: a phase section or plan row inside a notes/wrapper <details> still ticks', () => {
+  test('no archived milestone: a phase section or plan row inside a collapsed <details> is masked with the other blocks (#5553 owns which regions are editable)', () => {
     const wrapped = setupPhase(1, `# ROADMAP\n\n<details>\n<summary>Phase 1 details</summary>\n\n### Phase 1: One\n\nPlans:\n- [ ] 01-01-PLAN.md\n\n</details>\n${TABLE}`, P1, S1);
-    assert.deepStrictEqual(planRows(wrapped).map((b) => b.checked), [true]);
+    assert.deepStrictEqual(planRows(wrapped).map((b) => b.checked), [false]);
     const nested = setupPhase(1, `# ROADMAP\n\n### Phase 1: One\n\n<details>\n<summary>Plans</summary>\n\n- [ ] 01-01-PLAN.md\n\n</details>\n${TABLE}`, P1, S1);
-    assert.deepStrictEqual(planRows(nested).map((b) => b.checked), [true]);
+    assert.deepStrictEqual(planRows(nested).map((b) => b.checked), [false]);
   });
 
   test('unresolved milestone: a notes <details> nested in a shipped block keeps the whole shipped block untouched', () => {
