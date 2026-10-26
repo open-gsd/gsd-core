@@ -2848,6 +2848,390 @@ describe('phase add allocation vs sibling git worktrees (#3849)', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// phase add / add-batch under phase_id_convention: bracket (#5528)
+//
+// The allocation scans counted only plain `Phase N` lines, so a roadmap whose only phase is
+// `[GSD.02] 01` yielded a second phase numbered 1. Under the bracket convention every
+// representation (heading, checklist bullet, directory) of an existing phase must block reuse.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('phase add / add-batch count bracket phases under phase_id_convention bracket (#5528)', () => {
+  let tmp;
+  beforeEach(() => { tmp = createTempProject('gsd-5528-'); });
+  afterEach(() => { cleanup(tmp); });
+
+  function setup(roadmapLines, { convention = 'bracket', dirs = [], milestone = 'v2.0' } = {}) {
+    cleanup(tmp); // a fresh project per call: earlier `phase add` runs left phase directories behind
+    tmp = createTempProject('gsd-5528-');
+    const planning = path.join(tmp, '.planning');
+    fs.mkdirSync(path.join(planning, 'phases'), { recursive: true });
+    fs.writeFileSync(path.join(planning, 'config.json'), JSON.stringify(convention ? { phase_id_convention: convention } : {}));
+    fs.writeFileSync(path.join(planning, 'STATE.md'), `---\n${milestone ? `milestone: ${milestone}\n` : ''}---\n# State\n`);
+    fs.writeFileSync(path.join(planning, 'ROADMAP.md'), roadmapLines.join('\n'));
+    for (const d of dirs) fs.mkdirSync(path.join(planning, 'phases', d));
+    return planning;
+  }
+  // Typed read-back through the CLI (roadmap get-phase), not a pattern match on ROADMAP.md.
+  const roadmapPhase = (num) => JSON.parse(runGsdTools(['roadmap', 'get-phase', String(num)], tmp).output);
+  const dependsOn = (num) => roadmapPhase(num).section.match(/\*\*Depends on:\*\* ([^\n]+)/)?.[1];
+  // The command's job is to WRITE the phase, not only to echo a number: its directory and heading.
+  function assertWritten(num, slug = 'new-thing', title = 'New thing') {
+    const nn = String(num).padStart(2, '0');
+    assert.ok(fs.existsSync(path.join(tmp, '.planning', 'phases', `${nn}-${slug}`)), `phases/${nn}-${slug} created`);
+    const found = roadmapPhase(num);
+    assert.ok(found.found && found.phase_name === title, `ROADMAP.md gains "### Phase ${num}: ${title}"`);
+  }
+  // A git repo at tmp plus one detached sibling worktree of it (removed with the test).
+  function addSiblingWorktree(t, prefix) {
+    const git = (args, cwd) => gitOrThrow(args, { cwd, timeoutMs: GIT_TIMEOUT_MS });
+    git(['init', '-b', 'main'], tmp);
+    git(['config', 'user.email', 'test@example.com'], tmp);
+    git(['config', 'user.name', 'Test'], tmp);
+    git(['add', '-A'], tmp);
+    git(['commit', '-m', 'init', '--allow-empty'], tmp);
+    const sibling = createTempProject(prefix);
+    cleanup(sibling); // `git worktree add` needs a path that does not exist yet
+    t.after(() => cleanup(sibling)); // the worktree's git metadata lives in tmp, which afterEach removes
+    git(['worktree', 'add', '--detach', sibling, 'HEAD'], tmp);
+    return sibling;
+  }
+
+  test('issue repro: bracket phase blocks reuse; Depends on names the bracket predecessor', () => {
+    setup([
+      '# Roadmap', '', '## Milestone v2.0', '', '- [ ] **[GSD.02] 01: Existing**', '',
+      '### [GSD.02] 01: Existing', '', '**Goal:** x', '',
+    ]);
+    const result = runGsdTools('phase add "New thing" --raw', tmp);
+    assert.ok(result.success, result.error);
+    assert.strictEqual(result.output.trim(), '02');
+    assertWritten(2);
+    assert.strictEqual(dependsOn(2), 'Phase 1');
+  });
+
+  test('a bracket phase found only as a canonical heading blocks reuse of its number', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '### [GSD.02] 07: Heading only', '', '**Goal:** x', '']);
+    const result = runGsdTools('phase add "New thing" --raw', tmp);
+    assert.ok(result.success, result.error);
+    assert.strictEqual(result.output.trim(), '08');
+    assertWritten(8);
+  });
+
+  test('a bracket phase found only as a checklist bullet blocks reuse of its number', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '- [ ] **[GSD.02] 03: Bullet only**', '']);
+    const result = runGsdTools('phase add "New thing" --raw', tmp);
+    assert.ok(result.success, result.error);
+    assert.strictEqual(result.output.trim(), '04');
+    assertWritten(4);
+  });
+
+  test('a bracket phase found only as an on-disk directory blocks reuse of its number', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', ''], { dirs: ['GSD.02-05-orphan'] });
+    const result = runGsdTools('phase add "New thing" --raw', tmp);
+    assert.ok(result.success, result.error);
+    assert.strictEqual(result.output.trim(), '06');
+    assertWritten(6);
+  });
+
+  test('a bracket sentinel (icebox) milestone phase does not count', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '### [GSD.999] 07: Icebox', '', '**Goal:** y', '',
+      '### [GSD.02] 01: Real', '', '**Goal:** x', '']);
+    const result = runGsdTools('phase add "New thing" --raw', tmp);
+    assert.ok(result.success, result.error);
+    assert.strictEqual(result.output.trim(), '02');
+    assertWritten(2);
+  });
+
+  test('a lowercase sentinel dir and a malformed bracket dir do not reserve numbers', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', ''], { dirs: ['gsd.999-07-icebox', 'GSD.02-12A-hotfix', 'GSD.02-03-real'] });
+    const result = runGsdTools('phase add "New thing" --raw', tmp);
+    assert.ok(result.success, result.error);
+    assert.strictEqual(result.output.trim(), '04');
+    assertWritten(4);
+  });
+
+  test('a bullet label does not span lines: "- [ ] Phase" above a digit-leading line reserves nothing', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '- [ ] Phase', '12 items', '']);
+    const result = runGsdTools('phase add "New thing" --raw', tmp);
+    assert.ok(result.success, result.error);
+    assert.strictEqual(result.output.trim(), '01');
+    assertWritten(1);
+  });
+
+  test('a checkbox-less bracket bullet blocks reuse of its number', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '- [GSD.02] 03: No checkbox', '']);
+    const result = runGsdTools('phase add "New thing" --raw', tmp);
+    assert.ok(result.success, result.error);
+    assert.strictEqual(result.output.trim(), '04');
+    assertWritten(4);
+  });
+
+  test('a bracket directory held only by a sibling worktree blocks reuse of its number', (t) => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '']);
+    const sibling = addSiblingWorktree(t, 'gsd-5528-sib-');
+    fs.mkdirSync(path.join(sibling, '.planning', 'phases', 'GSD.02-09-elsewhere'), { recursive: true });
+    const result = runGsdTools('phase add "New thing" --raw', tmp);
+    assert.ok(result.success, result.error);
+    assert.strictEqual(result.output.trim(), '10');
+    assertWritten(10);
+  });
+
+  test('a plain prose bullet "- Phase 2 ..." is not a phase under bracket', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '- [ ] **[GSD.02] 01: Real**', '- Phase 2 of the rollout covers X', '']);
+    const result = runGsdTools('phase add "New thing" --raw', tmp);
+    assert.ok(result.success, result.error);
+    assert.strictEqual(result.output.trim(), '02');
+    assertWritten(2);
+  });
+
+  test('a labeled icebox bullet "- [GSD.999] Phase 07" does not reserve 7', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '- [ ] **[GSD.02] 01: Real**', '- [GSD.999] Phase 07: Icebox', '']);
+    const result = runGsdTools('phase add "New thing" --raw', tmp);
+    assert.ok(result.success, result.error);
+    assert.strictEqual(result.output.trim(), '02');
+    assertWritten(2);
+  });
+
+  test('a "### Phase [GSD.02] 01:" heading with no bullet blocks reuse of its number', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '### Phase [GSD.02] 01: Heading only', '', '**Goal:** x', '']);
+    const result = runGsdTools('phase add "New thing" --raw', tmp);
+    assert.ok(result.success, result.error);
+    assert.strictEqual(result.output.trim(), '02');
+    assertWritten(2);
+  });
+
+  test('a bracket decimal sub-phase dir "GSD.02-05.1-x" reserves no integer', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', ''], { dirs: ['GSD.02-05.1-sub', 'GSD.02-03-real'] });
+    const result = runGsdTools('phase add "New thing" --raw', tmp);
+    assert.ok(result.success, result.error);
+    assert.strictEqual(result.output.trim(), '04');
+    assertWritten(4);
+  });
+
+  test('a bracket heading held only by a sibling worktree ROADMAP blocks reuse of its number', (t) => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '']);
+    const sibling = addSiblingWorktree(t, 'gsd-5528-sibrm-');
+    fs.writeFileSync(
+      path.join(sibling, '.planning', 'ROADMAP.md'),
+      ['# Roadmap', '', '## Milestone v2.0', '', '### [GSD.02] 09: Elsewhere', '', '**Goal:** x', ''].join('\n')
+    );
+    const result = runGsdTools('phase add "New thing" --raw', tmp);
+    assert.ok(result.success, result.error);
+    assert.strictEqual(result.output.trim(), '10');
+    assertWritten(10);
+  });
+
+  test('plain and bracket phases are counted together', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '### Phase 3: Plain', '', '### [GSD.02] 05: Bracket', '']);
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '06');
+    assertWritten(6);
+  });
+
+  test('a bracket phase below a plain one does not lower the next number', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '### Phase 7: Plain', '', '### [GSD.02] 02: Bracket', '']);
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '08');
+    assertWritten(8);
+  });
+
+  test('a decimal bracket heading [GSD.02] 03.1 and a letter-suffixed 03A each reserve their integer', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '### [GSD.02] 03.1: Decimal', '']);
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '04');
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '### [GSD.02] 05A: Lettered', '']);
+    assert.strictEqual(runGsdTools('phase add "Another" --raw', tmp).output.trim(), '06');
+  });
+
+  test('a shipped milestone block does not feed the active milestone numbering', () => {
+    setup(['# Roadmap', '', '## Milestone v1.0 (shipped)', '', '### [GSD.01] 12: Old', '', '## Milestone v2.0', '', '### [GSD.02] 03: Current', '']);
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '04');
+    assertWritten(4);
+  });
+
+  test('a leftover directory from another milestone is not counted (numbering is per milestone)', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '### [GSD.02] 03: Current', ''], { dirs: ['GSD.01-12-finished', 'GSD.02-03-current'] });
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '04');
+    assertWritten(4);
+  });
+
+  test('a sibling worktree phase from another milestone is not counted', (t) => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '']);
+    const sibling = addSiblingWorktree(t, 'gsd-5528-sibms-');
+    fs.mkdirSync(path.join(sibling, '.planning', 'phases', 'GSD.01-40-old'), { recursive: true });
+    fs.writeFileSync(path.join(sibling, '.planning', 'ROADMAP.md'), ['# Roadmap', '', '### [GSD.01] 41: Old', ''].join('\n'));
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '01');
+  });
+
+  test('Depends on names a phase of the active milestone, not an archived one (the number came from a directory)', () => {
+    setup(['# Roadmap', '', '## Milestone v1.0 (shipped)', '', '### [GSD.01] 04: Old', '', '## Milestone v2.0', '', '### [GSD.02] 01: Current', ''], { dirs: ['GSD.02-05-held'] });
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '06');
+    assert.strictEqual(dependsOn(6), 'Phase 1');
+  });
+
+  test('a prose heading "## Phase [GSD.02] 12 notes" (no colon) is not a phase', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '### [GSD.02] 01: Real', '', '## Phase [GSD.02] 12 notes', '']);
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '02');
+  });
+
+  test('a version in roadmap prose is not mistaken for the milestone (its directories still count)', () => {
+    setup(['# Roadmap', '', 'Requires Node v18.0 or newer.', '', '### [GSD.02] 01: A', '', '### [GSD.02] 02: B', '', '### [GSD.02] 03: C', '', '### [GSD.02] 04: D', ''],
+      { milestone: null, dirs: ['GSD.02-05-wip'] });
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '06');
+    assertWritten(6);
+  });
+
+  test('with no milestone resolved, every milestone counts (an over-count, never a reuse)', () => {
+    setup(['# Roadmap', '', '### [GSD.02] 01: A', ''], { milestone: null, dirs: ['GSD.01-12-old'] });
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '13');
+  });
+
+  test('Depends on skips a plain heading in a shipped milestone block', () => {
+    setup(['# Roadmap', '', '## Milestone v1.0 (shipped)', '', '### Phase 4: Old', '', '## Milestone v2.0', '', '### [GSD.02] 01: Current', ''], { dirs: ['GSD.02-05-held'] });
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '06');
+    assert.strictEqual(dependsOn(6), 'Phase 1');
+  });
+
+  test('a STATE milestone whose number no bracket id carries does not hide that id\'s directories (v1.0 STATE, [GSD.02] ids)', () => {
+    setup(['# Roadmap', '', '### [GSD.02] 01: Current', ''], { milestone: 'v1.0', dirs: ['GSD.02-05-held'] });
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '06');
+    setup(['# Roadmap', '', '### [GSD.02] 01: Current', ''], { milestone: 'v1.0', dirs: ['GSD.02-05-held'] });
+    const batch = runGsdTools(['phase', 'add-batch', '--descriptions', '["A","B"]'], tmp);
+    assert.deepStrictEqual(JSON.parse(batch.output).phases.map((p) => p.phase_number), [6, 7]);
+  });
+
+  test('Depends on names the active milestone section, not an archived one, when the bracket milestone is unresolved (STATE v1.0, [GSD.02] ids)', () => {
+    const rm = ['# Roadmap', '', '## Milestone v1.0', '', '### [GSD.02] 01: Current', '', '## Milestone v0.9 (shipped)', '', '### [GSD.01] 04: Old', ''];
+    setup(rm, { milestone: 'v1.0', dirs: ['GSD.02-05-held'] });
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '06');
+    assert.strictEqual(dependsOn(6), 'Phase 1');
+    setup(rm, { milestone: 'v1.0', dirs: ['GSD.02-05-held'] });
+    runGsdTools(['phase', 'add-batch', '--descriptions', '["A","B"]'], tmp);
+    assert.deepStrictEqual([dependsOn(6), dependsOn(7)], ['Phase 1', 'Phase 6']);
+  });
+
+  test('a no-checkbox prose bullet "- [GSD.02] 2026 release notes" is not a phase', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '- [GSD.02] 01: Real', '- [GSD.02] 2026 release notes', '']);
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '02');
+  });
+
+  test('phase 999 inside an ordinary milestone is a sentinel, in a heading and in a directory', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '### [GSD.02] 01: Real', '', '### [GSD.02] 999: Backlog', ''], { dirs: ['GSD.02-999-parked'] });
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '02');
+  });
+
+  test('checkbox length boundary: 199 and 200 characters still count, 201 does not (limit-1/limit/limit+1)', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '', `- [${'x'.repeat(200)}] **[GSD.02] 05: At the limit**`, '']);
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '06');
+    setup(['# Roadmap', '', '## Milestone v2.0', '', `- [${'x'.repeat(199)}] **[GSD.02] 05: Below the limit**`, '']);
+    assert.strictEqual(runGsdTools('phase add "Below" --raw', tmp).output.trim(), '06');
+    setup(['# Roadmap', '', '## Milestone v2.0', '', `- [${'x'.repeat(201)}] **[GSD.02] 05: Over the limit**`, '']);
+    assert.strictEqual(runGsdTools('phase add "Another" --raw', tmp).output.trim(), '01');
+  });
+
+  test('an absurd-length phase number reserves nothing and allocation steps past the 999 sentinel (Postel, parity with legacy)', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '', `### [GSD.02] ${'9'.repeat(24)}: Absurd`, '']);
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '01');
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '- [ ] **[GSD.02] 998: Near the sentinel**', '']);
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '1000');
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '- [ ] **[GSD.02] 997: Near the sentinel**', '']);
+    const batch = runGsdTools(['phase', 'add-batch', '--descriptions', '["A","B"]'], tmp);
+    assert.deepStrictEqual(JSON.parse(batch.output).phases.map((p) => p.phase_number), [998, 1000]);
+  });
+
+  test('legacy (non-bracket) roadmaps step past the 999 sentinel too', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '### Phase 998: Near the sentinel', ''], { convention: null });
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '1000');
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '### Phase 997: Near the sentinel', ''], { convention: null });
+    const batch = runGsdTools(['phase', 'add-batch', '--descriptions', '["A","B"]'], tmp);
+    assert.deepStrictEqual(JSON.parse(batch.output).phases.map((p) => p.phase_number), [998, 1000]);
+  });
+
+  for (const line of ['- **[GSD.02] 05**', '- [GSD.02] 05 - Name', '### [GSD.02] 05 - Name', '1. [ ] **[GSD.02] 05: Name**']) {
+    test(`the spelling "${line}" reserves its number (Postel)`, () => {
+      setup(['# Roadmap', '', '## Milestone v2.0', '', line, '']);
+      assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '06');
+    });
+  }
+
+  test('property: whatever mix of heading and bullet bracket phases exists, the next number is max+1', () => {
+    const fc = require('fast-check');
+    fc.assert(
+      fc.property(fc.uniqueArray(fc.integer({ min: 1, max: 60 }), { minLength: 1, maxLength: 5 }), fc.boolean(), (nums, asBullets) => {
+        const nn = (n) => String(n).padStart(2, '0');
+        setup(['# Roadmap', '', '## Milestone v2.0', '',
+          ...nums.map((n) => (asBullets ? `- [ ] **[GSD.02] ${nn(n)}: P${n}**` : `### [GSD.02] ${nn(n)}: P${n}`)), '']);
+        return runGsdTools('phase add "New thing" --raw', tmp).output.trim() === nn(Math.max(...nums) + 1);
+      }),
+      { numRuns: 20, seed: 5528 },
+    );
+  });
+
+  test('add-batch counts a bracket directory with no heading', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', ''], { dirs: ['GSD.02-04-orphan'] });
+    const result = runGsdTools(['phase', 'add-batch', '--descriptions', '["A","B"]'], tmp);
+    assert.ok(result.success, result.error);
+    const nums = JSON.parse(result.output).phases.map((p) => p.phase_number);
+    assert.deepStrictEqual(nums, [5, 6]);
+  });
+
+  test('add-batch allocates consecutive free numbers after the bracket phases', () => {
+    setup([
+      '# Roadmap', '', '## Milestone v2.0', '', '- [ ] **[GSD.02] 01: Existing**', '',
+      '### Phase [GSD.02] 01: Existing', '', '**Goal:** x', '',
+    ]);
+    const result = runGsdTools(['phase', 'add-batch', '--descriptions', '["First New","Second New"]'], tmp);
+    assert.ok(result.success, result.error);
+    assert.deepStrictEqual([dependsOn(2), dependsOn(3)], ['Phase 1', 'Phase 2']);
+  });
+
+  test('a bracket checklist bullet held only by a sibling worktree ROADMAP blocks reuse of its number (gsd-core-xh86)', (t) => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '']);
+    const sibling = addSiblingWorktree(t, 'gsd-5528-sibbl-');
+    fs.writeFileSync(path.join(sibling, '.planning', 'ROADMAP.md'), ['# Roadmap', '', '## Milestone v2.0', '', '- [ ] **[GSD.02] 50: Elsewhere**', ''].join('\n'));
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '51');
+    assertWritten(51);
+  });
+
+  test('a milestone-prefixed repo does not count a bracket-looking heading or bullet (gsd-core-ddu6)', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '- [ ] **[GSD.02] 05: Existing**', '', '### [GSD.02] 05: Existing', '', '**Goal:** x', ''], { convention: 'milestone-prefixed' });
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '01');
+    assertWritten(1);
+  });
+
+  test('a milestone: line in the STATE.md body is not the STATE milestone (gsd-core-55s4)', () => {
+    const planning = setup(['# Roadmap', '', '## Milestone v2.0', ''], { milestone: null, dirs: ['GSD.01-12-old'] });
+    fs.writeFileSync(path.join(planning, 'STATE.md'), '---\n---\n# State\nmilestone: v2.0\n');
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '13');
+  });
+
+  test('a letter-suffixed bullet and a word-first bullet each reserve their integer (gsd-core-2m7k)', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '- [ ] [GSD.02] 12A: Lettered', '']);
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '13');
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '- [ ] Phase [GSD.02] 07: Word first', '']);
+    assert.strictEqual(runGsdTools('phase add "Another" --raw', tmp).output.trim(), '08');
+  });
+
+  test('non-bracket repo: a bracket-looking heading is still not counted (byte-identical to before)', () => {
+    setup(['# Roadmap', '', '## Milestone v2.0', '', '- [ ] **[GSD.02] 01: Existing**', '', '### [GSD.02] 01: Existing', '', '**Goal:** x', ''], { convention: null });
+    const result = runGsdTools('phase add "New thing" --raw', tmp);
+    assert.ok(result.success, result.error);
+    assert.strictEqual(result.output.trim(), '01');
+    assertWritten(1);
+  });
+
+  // #5528 acceptance criterion 4: a non-bracket repo's `Depends on` still reads the whole roadmap,
+  // archived milestones included, exactly as before the bracket scoping existed.
+  for (const convention of [null, 'sequential', 'milestone-prefixed']) {
+    test(`non-bracket (${convention}): Depends on still names a phase from a shipped milestone block`, () => {
+      const rm = ['# Roadmap', '', '## Milestone v1.0 (shipped)', '', '### Phase 4: Old', '', '## Milestone v2.0', ''];
+      setup(rm, { convention, dirs: ['05-held'] });
+      assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '06');
+      assert.strictEqual(dependsOn(6), 'Phase 4');
+      setup(rm, { convention, dirs: ['05-held'] });
+      runGsdTools(['phase', 'add-batch', '--descriptions', '["A","B"]'], tmp);
+      assert.deepStrictEqual([dependsOn(6), dependsOn(7)], ['Phase 4', 'Phase 6']);
+    });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // phase add touches only the block it inserts (#5113)
 //
 // `platformWriteSync` re-normalizes the WHOLE Markdown document on every write. For phase.add

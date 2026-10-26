@@ -54,7 +54,10 @@ const {
   PHASE_NUMBER_TOKEN_SOURCE,
   phaseHeadingPrefixSrcFor,
   PHASE_HEADING_BASELINE,
-  buildPhaseHeadingScanRegex,
+  buildPhaseDeclarationScans,
+  bracketIdMilestone,
+  parseBracketPhaseDir,
+  isSentinelPhaseDir,
 } = phaseIdMod;
 import { escapeRegex } from './pattern.cjs';
 import { declareGateExit } from './gate-exit.cjs';
@@ -1236,26 +1239,111 @@ function describeGoalShapedTitle(description: string): string | null {
   );
 }
 
+/** What bracket-aware phase scans need: the resolved convention and the active milestone integer (null = every milestone). */
+interface PhaseScope {
+  convention: string | null;
+  milestone: number | null;
+}
+
 /**
  * Phase numbers the roadmap itself declares — a section header or a roadmap bullet — sentinels
  * excluded. This is deliberately NOT the allocation set: allocation also counts on-disk directories
  * and sibling-worktree phases so a new number cannot collide, but a `Depends on:` line has to point
  * at something a reader of THIS roadmap can find (#5113).
  */
-function roadmapDeclaredPhaseNums(rawContent: string): number[] {
-  const { regex: headerPattern, phaseNumGroup } = buildPhaseHeadingScanRegex(PHASE_HEADING_BASELINE.LABEL_ONLY);
-  const bulletPattern = /^[ \t]*-[ \t]*\[[^\]]{0,200}\][ \t]*\*{0,2}Phase[ \t]+(\d+)(?=[:.\s*]|$)/gim;
+function roadmapDeclaredPhaseNums(rawContent: string, scope: PhaseScope, withBullets = true): number[] {
+  const { convention, milestone: onlyMilestone } = scope;
+  // #5528: under the bracket convention `[CODE.MM] NN` forms are phases too (the scans live in the
+  // phase-id owner). A bracket id carries its milestone: an icebox `[GSD.999] NN` row is a sentinel
+  // whatever NN is, and `onlyMilestone` drops phases of any other milestone (numbering restarts there).
   const nums = new Set<number>();
-  let m: RegExpExecArray | null;
-  while ((m = headerPattern.exec(rawContent)) !== null) {
-    const num = parseInt(m[phaseNumGroup], 10);
-    if (!isSentinelPhaseId(num)) nums.add(num);
-  }
-  while ((m = bulletPattern.exec(rawContent)) !== null) {
-    const num = parseInt(m[1], 10);
-    if (!isSentinelPhaseId(num)) nums.add(num);
+  for (const { regex, idGroup, numGroup } of buildPhaseDeclarationScans(convention, withBullets)) {
+    let m: RegExpExecArray | null;
+    while ((m = regex.exec(rawContent)) !== null) {
+      const num = parseInt(m[numGroup], 10);
+      if (!Number.isSafeInteger(num)) continue; // a 24-digit run parses to 1e24; max+1 of it is not a phase number
+      const id = idGroup !== null && m[idGroup] ? m[idGroup].toUpperCase() : null;
+      if (id) {
+        // 999 is a backlog number in any milestone, as in the legacy scans.
+        if (isSentinelPhaseId(id, 'bracket') || isSentinelPhaseId(num, 'bracket') || (onlyMilestone !== null && bracketIdMilestone(id) !== onlyMilestone)) continue;
+      } else if (isSentinelPhaseId(num)) continue;
+      nums.add(num);
+    }
   }
   return [...nums];
+}
+
+/**
+ * The phase number an on-disk phase directory holds, or null for a sentinel, another milestone's
+ * bracket directory (`onlyMilestone`), or a non-phase name. Under the bracket convention
+ * `GSD.02-05-slug` holds 5 (#5528); every other name keeps the `[PROJECT-]NN-slug` reading.
+ */
+function dirPhaseNum(entry: string, { convention, milestone: onlyMilestone }: PhaseScope): number | null {
+  const bracketDir = convention === 'bracket' ? parseBracketPhaseDir(entry) : null;
+  if (bracketDir) {
+    const skip = isSentinelPhaseDir(entry.toUpperCase()) || isSentinelPhaseId(bracketDir.phase, 'bracket') || (onlyMilestone !== null && bracketDir.milestone !== onlyMilestone);
+    return skip || !Number.isSafeInteger(bracketDir.phase) ? null : bracketDir.phase;
+  }
+  const match = entry.match(/^(?:[A-Z][A-Z0-9]*-)?(\d+)-/);
+  if (!match) return null;
+  const num = parseInt(match[1], 10);
+  return !Number.isSafeInteger(num) || isSentinelPhaseId(num) ? null : num;
+}
+
+/**
+ * The milestone integer bracket numbering is scoped to: the active milestone's `vN`, or null when it
+ * cannot be trusted. Null counts every milestone, which can only skip a number, never reuse one.
+ * Bracket ids restart per milestone, so a finished milestone's `GSD.01-12-x` must not push milestone 2
+ * to 13. `getMilestoneInfo` may return a prose `vN.M` ("requires Node v18.0"), so the version is:
+ * - trusted when an id in the current milestone's text (`content`) carries that number;
+ * - else trusted only if STATE.md's frontmatter names it and no id in `content` carries another;
+ * - else null.
+ * Known gap: a stale STATE `v1.0` over a section with no tagged ids is trusted, so `GSD.02-05-x` is
+ * dropped (unreachable in normal flow).
+ */
+function activeBracketMilestone(cwd: string, convention: string | null, content: string): number | null {
+  if (convention !== 'bracket') return null;
+  const version = roadmapParserMod.getMilestoneInfo(cwd).value?.version;
+  const m = typeof version === 'string' ? version.match(/^v?(\d+)/i) : null;
+  const milestone = m ? parseInt(m[1], 10) : null;
+  if (milestone === null) return null;
+  const tagged = taggedBracketMilestones(convention, content);
+  if (tagged.has(milestone)) return milestone;
+  // STATE.md naming the milestone is first-hand, but only while no id contradicts it: ids of
+  // another MM mean STATE's `vN` is not the number these directories carry (`v1.0` over `[GSD.02]`).
+  return tagged.size === 0 && stateMilestone(cwd) === milestone ? milestone : null;
+}
+
+/** The milestone numbers carried by the bracket ids declared in `content`. */
+function taggedBracketMilestones(convention: string, content: string): Set<number> {
+  const found = new Set<number>();
+  for (const { regex, idGroup } of buildPhaseDeclarationScans(convention)) {
+    if (idGroup === null) continue;
+    let hit: RegExpExecArray | null;
+    while ((hit = regex.exec(content)) !== null) {
+      if (hit[idGroup]) found.add(bracketIdMilestone(hit[idGroup].toUpperCase()));
+    }
+  }
+  return found;
+}
+
+/** The milestone integer STATE.md's frontmatter names, or null (no STATE.md, no key, no number). */
+function stateMilestone(cwd: string): number | null {
+  try {
+    const state = fs.readFileSync(path.join(planningDir(cwd), 'STATE.md'), 'utf-8');
+    const fm = frontmatterMod.extractFrontmatter(state).milestone;
+    const declared = typeof fm === 'string' ? fm.match(/^v?(\d+)/i) : null;
+    return declared ? parseInt(declared[1], 10) : null;
+  } catch { return null; }
+}
+
+/** Add the phase number of every phase directory under `phasesDir` to `used` (a missing dir adds nothing). */
+function collectPhaseDirNums(phasesDir: string, scope: PhaseScope, used: Set<number>): void {
+  if (!fs.existsSync(phasesDir)) return;
+  for (const entry of fs.readdirSync(phasesDir)) {
+    const num = dirPhaseNum(entry, scope);
+    if (num !== null) used.add(num);
+  }
 }
 
 /**
@@ -1269,6 +1357,16 @@ function dependsOnLine(newPhaseId: number | string, declared: readonly number[])
   let nearest: number | null = null;
   for (const n of declared) if (n < newPhaseId && (nearest === null || n > nearest)) nearest = n;
   return `\n**Depends on:** ${nearest === null ? 'Nothing' : `Phase ${nearest}`}`;
+}
+
+/**
+ * `dependsOnLine` over the roadmap's declared phases. Bracket ids restart per milestone, so under
+ * the bracket convention only the active milestone's text counts and an archived milestone's phase is
+ * never named; every other convention reads the whole roadmap, as it did before #5528.
+ */
+function dependsOnFor(newPhaseId: number | string, rawContent: string, cwd: string, convention: string | null): string {
+  const text = convention === 'bracket' ? extractCurrentMilestone(rawContent, cwd) : rawContent;
+  return dependsOnLine(newPhaseId, roadmapDeclaredPhaseNums(text, { convention, milestone: null }));
 }
 
 /**
@@ -1380,10 +1478,14 @@ function assertDescriptionPreservesMilestoneScope(cwd: string, description: stri
  * allocation then behaves exactly as it did before this horizon existed.
  * A sibling that simply lacks the active workstream's directory is the same
  * fail-open case: it contributes nothing. Sentinels reuse the canonical
- * `isSentinelPhaseId`; the dir pattern is the same one the on-disk scan uses,
- * so decimal sub-phases (`411.1-foo`) are correctly not integers.
+ * `isSentinelPhaseId` (`isSentinelPhaseDir` for bracket dirs); the dir pattern is the same one the
+ * on-disk scan uses, so decimal sub-phases (`411.1-foo`, `GSD.02-05.1-foo`) are correctly not integers.
  */
-function collectSiblingWorktreePhaseNums(cwd: string, used: Set<number>): void {
+function collectSiblingWorktreePhaseNums(
+  cwd: string,
+  used: Set<number>,
+  scope: PhaseScope,
+): void {
   let porcelain: string;
   try {
     porcelain = execFileSync('git', ['worktree', 'list', '--porcelain'], {
@@ -1405,43 +1507,46 @@ function collectSiblingWorktreePhaseNums(cwd: string, used: Set<number>): void {
   // try/catch below still keeps any resolution failure fail-open.
   const ws = process.env['GSD_WORKSTREAM'] ?? null;
   const siblingPlanningDir = (wt: string): string => planningDir(wt, ws);
-  const dirNumPattern = /^(?:[A-Z][A-Z0-9]*-)?(\d+)-/;
-  // Same header shape the allocators scan locally (#1729 tag tolerance).
-  // #5007 (Phase 6 / ADR-4910 §8): migrated onto buildPhaseHeadingScanRegex
-  // (src/phase-id.cjs), the shared "which phases exist in this content" scan
-  // owner. LABEL_ONLY baseline with no convention argument reproduces the
-  // prior literal `Phase\s+` (no bracket tolerance) byte-for-byte — this is a
-  // counter, matching the LABEL_ONLY docstring guidance exactly, so it is
-  // deliberately NOT widened onto the bracket grammar the way the real-heading
-  // readers (getRoadmapModeForPhase, phaseDisplayNameFromRoadmap) are.
-  const { regex: headerPattern, phaseNumGroup } =
-    buildPhaseHeadingScanRegex(PHASE_HEADING_BASELINE.LABEL_ONLY);
   for (const line of porcelain.split('\n')) {
     if (!line.startsWith('worktree ')) continue;
     const wt = line.slice('worktree '.length).trim();
     if (!wt || path.resolve(wt) === path.resolve(cwd)) continue;
     try {
-      for (const entry of fs.readdirSync(path.join(siblingPlanningDir(wt), 'phases'))) {
-        const match = entry.match(dirNumPattern);
-        if (!match) continue;
-        const num = parseInt(match[1], 10);
-        if (!isSentinelPhaseId(num)) used.add(num);
-      }
+      collectPhaseDirNums(path.join(siblingPlanningDir(wt), 'phases'), scope, used);
     } catch {
       /* worktree has no .planning (or no copy of this scope) — normal, contributes nothing */
     }
     try {
       const content = fs.readFileSync(path.join(siblingPlanningDir(wt), 'ROADMAP.md'), 'utf-8');
-      let m: RegExpExecArray | null;
-      headerPattern.lastIndex = 0;
-      while ((m = headerPattern.exec(content)) !== null) {
-        const num = parseInt(m[phaseNumGroup], 10);
-        if (!isSentinelPhaseId(num)) used.add(num);
-      }
+      // Headers only for non-bracket repos, as before #5528 (#3849); under bracket the checklist bullet
+      // is a declaration too, so a sibling's bullet-only phase still blocks reuse.
+      for (const num of roadmapDeclaredPhaseNums(content, scope, scope.convention === 'bracket')) used.add(num);
     } catch {
       /* no roadmap in that worktree (or scope) — normal, contributes nothing */
     }
   }
+}
+
+/** The highest used number (a loop, not `Math.max(...set)`, which overflows the argument limit on a large set). */
+function maxPhaseNum(used: Iterable<number>): number {
+  let max = 0;
+  for (const n of used) if (n > max) max = n;
+  return max;
+}
+
+/** The number after `max`, stepping past the backlog sentinel (999) so allocation never lands on one. */
+function nextPhaseNum(max: number): number {
+  let n = max + 1;
+  while (isSentinelPhaseId(n)) n += 1;
+  return n;
+}
+
+/** Phase numbers already taken: the current milestone's text, phase directories, sibling worktrees (#1229, #3849, #5528). */
+function collectUsedPhaseNums(cwd: string, content: string, scope: PhaseScope): Set<number> {
+  const used = new Set(roadmapDeclaredPhaseNums(content, { convention: scope.convention, milestone: null }));
+  collectPhaseDirNums(path.join(planningDir(cwd), 'phases'), scope, used);
+  collectSiblingWorktreePhaseNums(cwd, used, scope);
+  return used;
 }
 
 function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: string): void {
@@ -1451,6 +1556,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
   assertDescriptionPreservesMilestoneScope(cwd, description, 'phase add');
 
   const config = loadConfig(cwd);
+  const convention = resolvePhaseIdConvention(cwd);
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
   if (!fs.existsSync(roadmapPath)) {
     error('ROADMAP.md not found');
@@ -1461,6 +1567,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
   const { newPhaseId, dirName } = withPlanningLock(cwd, () => {
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
     const content = extractCurrentMilestone(rawContent, cwd);
+    const scope: PhaseScope = { convention, milestone: activeBracketMilestone(cwd, convention, content) };
 
     const projectCode = (config.project_code as string) || '';
     const prefix = projectCode ? `${projectCode}-` : '';
@@ -1473,62 +1580,13 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
       if (!_newPhaseId) error('--id required when phase_naming is "custom"');
       _dirName = `${prefix}${_newPhaseId}-${slug}`;
     } else {
-      // Collect all phase numbers visible in the current-milestone content.
-      // Three sources are scanned so that a phase in ANY representation
-      // (section header, roadmap bullet, or on-disk directory) is counted:
-
-      // 1) Section headers: ### Phase N: / ## Phase N: / #### Phase N:
-      // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-      // #5007 (Phase 6 / ADR-4910 §8): migrated onto buildPhaseHeadingScanRegex
-      // (src/phase-id.cjs) with the LABEL_ONLY baseline and no convention
-      // argument — a counter site, matching phase-id.cts's own LABEL_ONLY
-      // docstring guidance, reproducing the prior `Phase\s+` literal (no
-      // bracket tolerance) byte-for-byte. See collectSiblingWorktreePhaseNums
-      // (above) for the identical migration on the same regex shape.
-      const { regex: headerPattern, phaseNumGroup } =
-        buildPhaseHeadingScanRegex(PHASE_HEADING_BASELINE.LABEL_ONLY);
-      // 2) Roadmap bullet entries: - [ ] **Phase N: ...** (all checkbox variants)
-      // The lookahead accepts colon, decimal-dot, whitespace, bold-close asterisk,
-      // or end-of-line so titleless forms ("- [ ] **Phase 11**", "- [ ] Phase 11")
-      // are counted and cannot collide with a freshly-added phase. (#1229)
-      const bulletPattern = /^[ \t]*-[ \t]*\[[^\]]{0,200}\][ \t]*\*{0,2}Phase[ \t]+(\d+)(?=[:.\s*]|$)/gim;
-
-      const usedPhaseNums = new Set<number>();
-      let m: RegExpExecArray | null;
-
-      while ((m = headerPattern.exec(content)) !== null) {
-        const num = parseInt(m[phaseNumGroup], 10);
-        // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
-        if (!isSentinelPhaseId(num)) usedPhaseNums.add(num);
-      }
-      while ((m = bulletPattern.exec(content)) !== null) {
-        const num = parseInt(m[1], 10);
-        // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
-        if (!isSentinelPhaseId(num)) usedPhaseNums.add(num);
-      }
-
-      // 3) On-disk phase directories (e.g. phases/11-foo/ with no header yet)
-      const phasesOnDisk = path.join(planningDir(cwd), 'phases');
-      if (fs.existsSync(phasesOnDisk)) {
-        const dirNumPattern = /^(?:[A-Z][A-Z0-9]*-)?(\d+)-/;
-        for (const entry of fs.readdirSync(phasesOnDisk)) {
-          const match = entry.match(dirNumPattern);
-          if (!match) continue;
-          const num = parseInt(match[1], 10);
-          // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
-          if (!isSentinelPhaseId(num)) usedPhaseNums.add(num);
-        }
-      }
-
-      // phase.add appends after the highest *used* number. Collecting numbers from
-      // section headers, roadmap bullets, AND on-disk dirs above is what prevents the
-      // #1229 collision (a bullet-only Phase N is now counted), so max+1 cannot reuse
-      // an existing number.
-      // 4) Sibling git worktrees (#3849) — same max+1, wider horizon: a number
-      // taken on another branch is still taken.
-      collectSiblingWorktreePhaseNums(cwd, usedPhaseNums);
-      const maxUsed = usedPhaseNums.size > 0 ? Math.max(...usedPhaseNums) : 0;
-      _newPhaseId = maxUsed + 1;
+      // Collect all phase numbers visible in the current-milestone content. Three sources are
+      // scanned so a phase in ANY representation (section header, roadmap bullet, or on-disk
+      // directory) is counted: a bullet-only Phase N must not collide with a fresh one (#1229),
+      // and under the bracket convention `[CODE.MM] NN` forms count in all three (#5528).
+      // Header/bullet scans are #1729 pre-colon-tag tolerant and #3185 sentinel-filtered.
+      const usedPhaseNums = collectUsedPhaseNums(cwd, content, scope);
+      _newPhaseId = nextPhaseNum(maxPhaseNum(usedPhaseNums));
       const paddedNum = String(_newPhaseId).padStart(2, '0');
       _dirName = `${prefix}${paddedNum}-${slug}`;
     }
@@ -1539,7 +1597,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     platformWriteSync(path.join(dirPath, '.gitkeep'), '');
 
     const dependsOn =
-      config.phase_naming === 'custom' ? '' : dependsOnLine(_newPhaseId, roadmapDeclaredPhaseNums(rawContent));
+      config.phase_naming === 'custom' ? '' : dependsOnFor(_newPhaseId, rawContent, cwd, convention);
     const phaseEntry =
       `\n### Phase ${_newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${_newPhaseId} to break down)\n`;
 
@@ -1591,6 +1649,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
     assertDescriptionPreservesMilestoneScope(cwd, description, 'phase add-batch');
   }
   const config = loadConfig(cwd);
+  const convention = resolvePhaseIdConvention(cwd);
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
   if (!fs.existsSync(roadmapPath)) {
     error('ROADMAP.md not found');
@@ -1601,49 +1660,12 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
   const results = withPlanningLock(cwd, () => {
     let rawContent = fs.readFileSync(roadmapPath, 'utf-8');
     const content = extractCurrentMilestone(rawContent, cwd);
+    const scope: PhaseScope = { convention, milestone: activeBracketMilestone(cwd, convention, content) };
     let maxPhase = 0;
     if (config.phase_naming !== 'custom') {
-      // Same three cwd-scoped sources as cmdPhaseAdd (#1229): headers, roadmap
-      // bullets, on-disk dirs. The bullet scan was missing here — a bullet-only
-      // `Phase N` row was invisible to batch allocation (#3849 secondary).
-      // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-      // #5007 (Phase 6 / ADR-4910 §8): migrated onto buildPhaseHeadingScanRegex
-      // (src/phase-id.cjs) with the LABEL_ONLY baseline and no convention
-      // argument — same counter-site migration as cmdPhaseAdd's identical
-      // regex above.
-      const { regex: phasePattern, phaseNumGroup } =
-        buildPhaseHeadingScanRegex(PHASE_HEADING_BASELINE.LABEL_ONLY);
-      const bulletPattern = /^[ \t]*-[ \t]*\[[^\]]{0,200}\][ \t]*\*{0,2}Phase[ \t]+(\d+)(?=[:.\s*]|$)/gim;
-      let m: RegExpExecArray | null;
-      while ((m = phasePattern.exec(content)) !== null) {
-        const num = parseInt(m[phaseNumGroup], 10);
-        // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
-        if (isSentinelPhaseId(num)) continue;
-        if (num > maxPhase) maxPhase = num;
-      }
-      while ((m = bulletPattern.exec(content)) !== null) {
-        const num = parseInt(m[1], 10);
-        if (isSentinelPhaseId(num)) continue;
-        if (num > maxPhase) maxPhase = num;
-      }
-      const phasesOnDisk = path.join(planningDir(cwd), 'phases');
-      if (fs.existsSync(phasesOnDisk)) {
-        const dirNumPattern = /^(?:[A-Z][A-Z0-9]*-)?(\d+)-/;
-        for (const entry of fs.readdirSync(phasesOnDisk)) {
-          const match = entry.match(dirNumPattern);
-          if (!match) continue;
-          const num = parseInt(match[1], 10);
-          // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
-          if (isSentinelPhaseId(num)) continue;
-          if (num > maxPhase) maxPhase = num;
-        }
-      }
-      // 4) Sibling git worktrees (#3849) — same max+1, wider horizon.
-      const siblingNums = new Set<number>();
-      collectSiblingWorktreePhaseNums(cwd, siblingNums);
-      for (const num of siblingNums) {
-        if (num > maxPhase) maxPhase = num;
-      }
+      // Same three cwd-scoped sources as cmdPhaseAdd (#1229, #5528): headers, roadmap bullets,
+      // on-disk dirs, then sibling worktrees (#3849) — same max+1, wider horizon.
+      maxPhase = maxPhaseNum(collectUsedPhaseNums(cwd, content, scope));
     }
     const added: Record<string, unknown>[] = [];
     for (const description of descriptions) {
@@ -1654,7 +1676,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
         newPhaseId = slug.toUpperCase();
         dirName = `${prefix}${newPhaseId}-${slug}`;
       } else {
-        maxPhase += 1;
+        maxPhase = nextPhaseNum(maxPhase);
         newPhaseId = maxPhase;
         dirName = `${prefix}${String(newPhaseId).padStart(2, '0')}-${slug}`;
       }
@@ -1662,7 +1684,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
       platformEnsureDir(dirPath);
       platformWriteSync(path.join(dirPath, '.gitkeep'), '');
       const dependsOn =
-        config.phase_naming === 'custom' ? '' : dependsOnLine(newPhaseId, roadmapDeclaredPhaseNums(rawContent));
+        config.phase_naming === 'custom' ? '' : dependsOnFor(newPhaseId, rawContent, cwd, convention);
       const phaseEntry =
         `\n### Phase ${newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${newPhaseId} to break down)\n`;
       const insertAt = phaseEntryInsertOffset(rawContent, cwd);
