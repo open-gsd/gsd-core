@@ -273,6 +273,8 @@ AskUserQuestion: "Archive completed quick tasks into this milestone too?" with o
 
 If "Yes": set `ARCHIVE_QUICK_FLAG="--archive-quick"`. If "Skip" (or `.planning/quick/` is empty): set `ARCHIVE_QUICK_FLAG=""`.
 
+**Per-repository release mapping (opt-in, #3628).** Set `PER_REPO_TAGGING=true` only when `INIT_EARLY` has `repo_tagging` equal to `per_repo` AND a non-empty `sub_repos`; otherwise it is `false` and this paragraph changes nothing. Shell state does not persist between commands, so later steps recompute it from their own `init.complete-milestone` JSON (`INIT_REORG`). When `true`, read and execute `gsd-core/workflows/complete-milestone/steps/release-map.md` Part 1 now (collect, validate, one consolidated confirmation, create the tags, record the outcome in `release-map.json`), and append `--release-map "${TMPDIR:-/tmp}/gsd-release-map-v[X.Y]/release-map.json"` to EVERY `milestone complete` call below (including the `--no-archive-phases` form); when `false`, append nothing. A GSD milestone version may differ from every repository's release version.
+
 **Delegate archival to `gsd_run query milestone.complete`:**
 
 ```bash
@@ -308,6 +310,8 @@ If the user explicitly wants to keep phase directories in place as raw execution
 ```bash
 gsd_run query milestone complete v[X.Y] --no-archive-phases --confirm
 ```
+
+(When `PER_REPO_TAGGING` is `true`, this form takes the same `--release-map` argument.)
 
 Verify after a default (archived) completion: `✅ Phase directories archived to .planning/milestones/v[X.Y]-phases/`
 
@@ -530,8 +534,14 @@ Exact bash for each of the four options (squash, history-preserving merge, delet
 </step>
 
 <!-- gsd:section id="git-tag" when="state:git-create-tag" -->
-If `section_manifest` is `null` or `"git-tag"` is in its `included` list: read and execute `gsd-core/workflows/complete-milestone/steps/git-tag.md`. Otherwise skip — do not read the file; proceed to `git_commit_milestone`.
+If `PER_REPO_TAGGING` is `true`, skip this section: the per-repository tags were created in `archive_milestone`, and no `v[X.Y]` tag is created in the current directory. Otherwise, if `section_manifest` is `null` or `"git-tag"` is in its `included` list: read and execute `gsd-core/workflows/complete-milestone/steps/git-tag.md`. Otherwise skip — do not read the file; proceed to `git_commit_milestone`.
 <!-- /gsd:section -->
+
+<step name="push_release_tags">
+
+Recompute `PER_REPO_TAGGING` and `git_create_tag` from the latest `init.complete-milestone` JSON (`INIT_REORG`). If `PER_REPO_TAGGING` is `true` and `git_create_tag` is not `false`: read and execute `gsd-core/workflows/complete-milestone/steps/release-map.md` Part 2 (a separate push confirmation per repository naming the repository and its remote; nothing is pushed by default). Otherwise skip this step.
+
+</step>
 
 <step name="git_commit_milestone">
 
@@ -542,6 +552,8 @@ git commit -m "chore: remove REQUIREMENTS.md for v[X.Y] milestone"
 ```
 
 Confirm: "Committed: chore: remove REQUIREMENTS.md for v[X.Y] milestone"
+
+When `PER_REPO_TAGGING` was `true`, remove the scratch directory: `rm -rf "${TMPDIR:-/tmp}/gsd-release-map-v[X.Y]"` (the archived copy lives in `.planning/milestones/`).
 
 </step>
 
@@ -618,7 +630,8 @@ Milestone completion is successful when:
 - [ ] Safety commit made (archive files + updated ROADMAP.md) BEFORE deleting REQUIREMENTS.md
 - [ ] REQUIREMENTS.md removed via `git rm` (fresh for next milestone, history preserved)
 - [ ] STATE.md updated with fresh project reference
-- [ ] Git tag created (v[X.Y]) (if `git.create_tag` enabled)
+- [ ] Git tag created (v[X.Y]) (if `git.create_tag` enabled and `PER_REPO_TAGGING` is not `true`)
+- [ ] Release map archived and per-repository tags created (if `PER_REPO_TAGGING` is `true`); no tag pushed without a per-repository confirmation
 - [ ] Milestone commit made (includes archive files and deletion)
 - [ ] Requirements completion checked against REQUIREMENTS.md traceability table
 - [ ] Incomplete requirements surfaced with proceed/audit/abort options

@@ -658,13 +658,11 @@ UI-SPEC.md (단계별) ───────────────────
 | 계획 | `gsd-planner` | 감사 테이블 읽기; `[ASSUMED]` 또는 `[SUS]` 설치 작업 전에 `checkpoint:human-verify` 삽입; `<threat_model>`에 `T-{phase}-SC` STRIDE 공급망 행 추가 |
 | 실행 | `gsd-executor` | RULE 3은 패키지 설치를 자동 수정 범위에서 제외; 실패한 설치는 체크포인트로 표시되며 절대 자동 대체하지 않음 |
 
-**클레임 출처 통합:** WebSearch를 통해 발견된 패키지 이름은 `npm view` 결과와 관계없이 `[ASSUMED]`(not `[VERIFIED]`)로 태그된다. 이는 설치 경계에서 출처 태그를 하드 게이트로 시행하여 기존 `[ASSUMED]` / `[VERIFIED]` / `[CITED]` 출처 시스템을 확장한다 — `[ASSUMED]`는 항상 PLAN.md에 `checkpoint:human-verify`를 생성한다.
+**클레임 출처 통합:** WebSearch를 통해 발견된 패키지 이름은 레지스트리 API 판정과 관계없이 `[ASSUMED]`(not `[VERIFIED]`)로 태그된다. 이는 설치 경계에서 출처 태그를 하드 게이트로 시행하여 기존 `[ASSUMED]` / `[VERIFIED]` / `[CITED]` 출처 시스템을 확장한다 — `[ASSUMED]`는 항상 PLAN.md에 `checkpoint:human-verify`를 생성한다.
 
-**생태계 커버리지:** 리서처는 단일 일반 검사 대신 레지스트리별 검증 명령을 사용한다 — `npm view` (Node), `pip index versions` (Python), `cargo search` (Rust). 이는 2025년 USENIX 연구에 문서화된 ~9% 비율의 교차 생태계 환각을 잡는다.
+**생태계 커버리지:** 게이트는 단일 일반 검사 대신 각 생태계의 레지스트리 API에서 신호를 직접 조회한다 — `registry.npmjs.org` + `api.npmjs.org/downloads` (Node), `pypi.org/pypi/<pkg>/json` (Python), crates.io API (Rust). 이는 2025년 USENIX 연구에 문서화된 ~9% 비율의 교차 생태계 환각을 잡는다.
 
-**정상적인 성능 저하:** `slopcheck`를 사용할 수 없으면 모든 추천 패키지가 `[ASSUMED]`로 태그되고 체크포인트로 게이트가 걸린다. 리서치와 계획은 진행된다; 시스템은 누락된 도구 의존성으로 인해 절대 하드 실패하지 않는다.
-
-**외부 의존성:** `slopcheck` (MIT, pip 설치 가능). 유지 관리가 중단되면 `[ASSUMED]`-게이트 폴백이 사람 체크포인트 커버리지를 유지한다.
+**정상적인 성능 저하:** 각 레지스트리 어댑터는 조회 실패 시 예외를 던지지 않고 null 신호로 성능이 저하된다; 누락된 신호는 패키지를 `[SUS]`로 만들며, `[SUS]`는 `[ASSUMED]`와 동일한 `checkpoint:human-verify` 체크포인트로 게이트가 걸린다. 리서치와 계획은 진행된다; 시스템은 네트워크나 도구 장애로 인해 절대 하드 실패하지 않는다. `slopcheck`은 선택적 escalate-only 어댑터로, 판정을 상향만 할 수 있고 하향할 수 없으며 설치-또는-성능 저하 게이트가 아니다. 출하되는 어떤 구성도 이를 연결하지 않는다.
 
 ---
 

@@ -22,6 +22,7 @@
   "git": {
     "branching_strategy": "none",
     "create_tag": true,
+    "repo_tagging": "single",
     "base_branch": null,
     "phase_branch_template": "gsd/phase-{phase}-{slug}",
     "milestone_branch_template": "gsd/{milestone}-{slug}",

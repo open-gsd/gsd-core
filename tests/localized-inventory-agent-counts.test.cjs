@@ -3,7 +3,7 @@
 /**
  * #5601: the localized INVENTORY "coverage note" and the localized
  * multi-agent-orchestration / ARCHITECTURE cross-references hard-coded agent
- * counts that drifted from docs/AGENTS.md. The English docs/INVENTORY.md
+ * counts that drifted from docs/reference/agents.md. The English docs/INVENTORY.md
  * states none, so the localized pages must not either.
  */
 
@@ -22,7 +22,7 @@ function coverageNote(locale) {
   const text = fs.readFileSync(path.join(DOCS, locale, 'INVENTORY.md'), 'utf8');
   return text
     .split(/\r?\n/)
-    .find((l) => l.includes('`docs/AGENTS.md`') && l.includes('`agents/gsd-*.md`'));
+    .find((l) => l.includes('`docs/reference/agents.md`') && l.includes('`agents/gsd-*.md`'));
 }
 
 test('localized INVENTORY pages exist to be checked', () => {

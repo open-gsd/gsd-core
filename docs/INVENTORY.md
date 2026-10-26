@@ -1,6 +1,6 @@
 # GSD Shipped Surface Inventory
 
-> Authoritative roster of every shipped GSD surface: commands, agents, workflows, references, CLI modules, and hooks. Where the broad docs (AGENTS.md, COMMANDS.md, ARCHITECTURE.md, CLI-TOOLS.md) diverge from the filesystem, treat this file and the repository tree itself as the source of truth.
+> Authoritative roster of every shipped GSD surface: commands, agents, workflows, references, CLI modules, and hooks. Where the broad docs (reference/agents.md, COMMANDS.md, ARCHITECTURE.md, CLI-TOOLS.md) diverge from the filesystem, treat this file and the repository tree itself as the source of truth.
 
 ## How To Use This File
 
@@ -14,7 +14,7 @@ This is the authoritative roster of every shipped GSD Core surface. See the [doc
 
 ## Agents
 
-Full roster at `agents/gsd-*.md`. The "Primary doc" column flags whether [`docs/AGENTS.md`](AGENTS.md) carries a full role card (*primary*), a short stub in the "Advanced and Specialized Agents" section (*advanced stub*), or no coverage (*inventory only*).
+Full roster at `agents/gsd-*.md`. The "Primary doc" column flags whether [`docs/reference/agents.md`](reference/agents.md) carries a full role card (*primary*), a short stub in the "Advanced and Specialized Agents" section (*advanced stub*), or no coverage (*inventory only*).
 
 | Agent | Role (one line) | Spawned by | Primary doc |
 |-------|-----------------|------------|-------------|
@@ -90,7 +90,7 @@ One `.compact.md` sibling per agent above, same directory, same stem — ADR-413
 | gsd-doc-synthesizer.compact | Token-minimized rewrite of `gsd-doc-synthesizer`'s persona, served instead of the canonical file by the seam described above. | `gsd_run query agent-skills` CLI seam (non-Claude persona fallback only) | inventory only |
 | gsd-mempalace-curator.compact | Token-minimized rewrite of `gsd-mempalace-curator`'s persona, served instead of the canonical file by the seam described above. | `gsd_run query agent-skills` CLI seam (non-Claude persona fallback only) | inventory only |
 
-**Coverage note.** `docs/AGENTS.md` gives full role cards for the primary agents plus concise stubs for the advanced agents. The Agent Tool Permissions Summary in that file covers only the primary agents; the advanced agents' tool lists are captured in their per-agent frontmatter in `agents/gsd-*.md`.
+**Coverage note.** `docs/reference/agents.md` gives full role cards for the primary agents plus concise stubs for the advanced agents. The Agent Tool Permissions Summary in that file covers only the primary agents; the advanced agents' tool lists are captured in their per-agent frontmatter in `agents/gsd-*.md`.
 
 ---
 
@@ -510,6 +510,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `agent-install-check.cjs` | Agent-installation probe — owns `getAgentsDir` and `checkAgentsInstalled`, the single resolution the health-diagnostic agent-install rule consumes (ADR-857, #1268) |
 | `health-diagnostic-rules/agent-install.cjs` | Health-diagnostic rule: agent-installation-completeness check (W010) — the single `checkAgentsInstalled` call site's four mutually exclusive conditions, ported behavior-preserving from `cmdValidateHealth` (ADR-3180 §8.2/§8.3/§8.5, Phase 11, #3309) |
 | `api-coverage.cjs` | API-coverage detector + matrix validator (#1562, #2365) — pure `detectApiIntegration` (fail-closed: same-clause verb+noun signal + `<Service> API/SDK` surface naming a real service; strips fenced code, inline code, and path-shaped tokens; external hosts count, first-party route paths do not) and `validateCoverageMatrix`/`parseCoverageMatrix`/`renderCoverageMatrix` for the COVERAGE.md artifact (incl. the `No external API integration: <reason>` declaration); STDIN CLI (`echo "$SCOPE" \| node .../api-coverage.cjs [--json]`, exit 0=detected/1=none/NO_INPUT=empty-or-whitespace-only stdin/UNAVAILABLE=stdin read failed — registry codes, ADR-3889 Phase 3, #3907); consumed by the `ai-integration` capability's `plan:pre` contribution and blocking `verify:pre` gate (`check api-coverage.verify-pre`) |
+| `args-terminator.cjs` | Per-install nonce for the typed-text capture heredoc terminators (`GSD_ARGS_END`, `GSD_QUICK_BATCH_ARGS_END`): `stampArgsTerminator` rewrites them to `<TOKEN>_<32 hex>`, `armArgsNonce` makes an installer process stamp every file it writes (#5637) |
 | `artifacts.cjs` | Canonical artifact registry — known `.planning/` root file names; used by `gsd-health` W019 lint |
 | `assumption-delta.cjs` | Detects identity-model assumption transitions in phase text for discuss-phase assumptions mode (#1561); STDIN CLI (`echo "$PHASE_SECTION" \| node .../assumption-delta.cjs [--json]`, exit 0=detected/1=none/NO_INPUT=empty-or-whitespace-only stdin/UNAVAILABLE=stdin read failed — registry codes, ADR-3889 Phase 3, #3907) |
 | `audit-command-router.cjs` | ADR-959 capability command router for `gsd-tools audit-uat` and `gsd-tools audit-open` — extracted from hardcoded cases in `gsd-tools.cjs`; dispatches to `uat.cjs:cmdAuditUat` and `audit.cjs:{auditOpenArtifacts,formatAuditReport}`; phase 4d-impl-3 |
@@ -530,6 +531,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `capability-writer.cjs` | Capability State Writer (ADR-1213) — write-side inverse of the resolver; projects desired per-capability enabled/gates onto surface + config substrates, then re-resolves (assert-and-report); exports `setCapabilityState` and I/O handler `cmdCapabilitySet`; command surface: `gsd-tools capability set <id> [--on\|--off] [--gate <key>=<true\|false>]` |
 | `check-auto-mode.cjs` | `check auto-mode` state reader (compiled from `src/check-auto-mode.cts`, gitignored; #5139) — `readAutoModeState(projectDir)` → `{active, source, auto_chain_active, auto_advance}`, read NESTED-ONLY (`workflow.auto_advance`, `workflow._auto_chain_active`) through the same reader as the gates, so it answers what `config-get` answers; the router formats it |
 | `check-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools check` |
+| `read-only-git-env.cjs` | `readOnlyGitEnv` — the single owner of the read-only git env block (`GIT_OPTIONAL_LOCKS=0`); every read-only git spawn takes its `env` from it so a statusline render cannot contend for `.git/index.lock` (compiled from `src/read-only-git-env.cts`, gitignored; #5048) |
 | `tdd-red-evidence.cjs` | Format-independent RED-evidence policy (#3770, #4692, compiled from `src/tdd-red-evidence.cts`): requires a complete supported report and a matching target failure, preserves the matching test in the evidence record, and rejects ambiguous targets. |
 | `report-parser.cjs` | Test-report adapters (#4692, compiled from `src/report-parser.cts`): normalize Node/Vitest TAP, Surefire/Failsafe JUnit XML, swift-testing console, Python `unittest` and `go test` text into individual results with identities, groups, statuses, and report validity. |
 | `tdd-test-files.cjs` | The single definition of "a test file" for the TDD gate (#5106, compiled from `src/tdd-test-files.cts`): `TEST_FILE_PATHSPECS` is the list the RED-commit pathspec in `execute-phase.md` passes to `evaluation-scope`, and `isTestFilePath` applies the same list to a task's `<files>` for `task.is-behavior-adding`. A test pins the workflow's pathspec flags to the array so the two cannot drift. |
@@ -648,6 +650,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `mcp-server.cjs` | Minimal MCP server exposing the command surface and state IO to any MCP host (#1681) |
 | `health-diagnostic-rules/milestone-archive-hygiene.cjs` | Health-diagnostic rules: milestone archive + root hygiene checks (W018, W019), ported behavior-preserving from `cmdValidateHealth` (ADR-3180 §8.2/§8.3/§8.5, Phase 11, #3309) |
 | `milestone.cjs` | Milestone archival, requirements marking |
+| `milestone-release-map.cjs` | Release-map schema for `milestone complete --release-map` (compiled from `src/milestone-release-map.cts`, gitignored, #5706): validates the per-repository release record (release, reference, environment, status, tag), renders the escaped `**Release mapping:**` table for MILESTONES.md, and serializes the archive `<version>-RELEASE-MAP.json` by recorded value |
 | `model-adapter.cjs` | Abstracts model routing — passive tier-based selection or active host-supplied resolution (#1680) |
 | `model-catalog.cjs` | CJS adapter over the shared model catalog JSON; exports canonical runtime tier defaults, agent profile maps, alias maps, and routing metadata for all CLI consumers |
 | `model-profiles.cjs` | Backward-compatible profile helpers derived from `model-catalog.cjs`; no longer owns its own model table |
@@ -737,6 +740,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `state.cjs` | STATE.md parsing, updating, progression, metrics |
 | `state-document.cjs` | Pure STATE.md field extraction, replacement, status normalization, and progress calculation transforms |
 | `milestone-lock.cjs` | Milestone lock (compiled from `src/milestone-lock.cts`, gitignored) — advisory (phase, session id) claim over STATE.md's single Current Position slot: `.planning/milestone.lock` claim IO, liveness (TTL + heartbeat), conflict detection, and the shared stderr warning; consumed by `state.begin-phase` / `state.advance-plan` / `phase.complete` so parallel phases in one working tree get a visible conflict instead of silently overwriting each other (#3311) |
+| `git-info-exclude.cjs` | Git info/exclude helper (compiled from `src/git-info-exclude.cts`, gitignored) — `excludeFromGit(dir, filename)` appends an anchored, escaped, idempotent entry to the enclosing repo's `info/exclude` so a machine-local file GSD writes under `.planning/` does not dirty `git status`; best-effort, never throws, leaves a tracked copy alone; used by the milestone claim write (#5551) |
 | `surface.cjs` | Runtime surface module — manages the runtime enable/disable surface state independently of the install-time profile marker (ADR-0011 Phase 2) |
 | `task-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools task`; `resolve-content` subcommand resolves a task's `tracker-id` via `task-content-resolution.cjs` (ADR-3646, #3970) |
 | `task-content-resolution.cjs` | Resolves a task's `tracker-id` to external-tracker content via a capability-declared `taskContentResolver` and a bounded subprocess call; hard-halts on ambiguous/failed/timeout/malformed/unsafe-id resolution; `loadResolverCapabilities` loads the installed resolver capabilities for callers such as the decision-coverage gates (compiled from `src/task-content-resolution.cts`, gitignored) (ADR-3646, #3970) |
@@ -744,6 +748,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `template.cjs` | Template selection and filling with variable substitution |
 | `text-lines.cjs` | Line-terminator handling seam — `splitLines`/`normalizeEol`/`detectEol`/`joinLines`, the sole owner of `\r?\n` splitting and CRLF normalization; closes #3360's split-then-match fix in `frontmatter.cjs` (ADR-3212 §3, epic #3212 Phase 2, #3413) |
 | `token-scanner.cjs` | Tokenizer-first seam for stateful grammars — `tokenizeShellLike` (quote-aware shell tokenizer, the primitive `hooks/lib/git-cmd.js` migrated onto) and `indentWidth` (bullet-nesting depth, closes #3169's cross-reference-vs-declaration false positive in `decisions.cts`) (ADR-3212 §4, epic #3212 Phase 3, #3414) |
+| `milestone-release-tags.cjs` | `preflightReleaseTags` / `createReleaseTags` / `cmdMilestoneReleaseTags` — repository-scoped annotated release tags for `milestone release-tags` (compiled from `src/milestone-release-tags.cts`, gitignored; #5705, epic #3628 Phase 1): preflights every `sub_repos` entry (path containment, work-tree check, tag name, ref, existing tag) before the first write, never overwrites or pushes, and reports partial failures with the list of tags already written |
 | `undo-commit-selection.cjs` | `selectCommitsByDeclaredScope` — structural commit-scope selection for `/gsd-undo` (compiled from `src/undo-commit-selection.cts`, gitignored; #4906 Phase 5, closes #4661): unwraps a `fixup!`/`squash!`/`Revert "..."` wrapper, parses the remainder through `conventional-title.cjs`'s `HEADER_RE`, and compares the parsed scope by exact string equality against a `validatePhaseNumber`-validated target id — never a regex match against raw commit text |
 | `normalize-test-command.cjs` | Normalizes a resolved test command to a one-shot form so a watch-mode runner (vitest/jest) cannot hang a verification gate (#1857); shared by all three live test-command gates (regression, post-merge, audit-fix) |
 | `uat.cjs` | UAT file parsing, verification debt tracking, audit-uat support |
@@ -831,7 +836,7 @@ Shared modules a hook `require()`s relative to its own `__dirname`; not separate
 
 - When a new command, agent, workflow, reference, CLI module, or hook ships, update the corresponding section here before the release is cut.
 - The drift-guard tests under `tests/` (see "How To Use This File" above) assert that every shipped file in the six flat families — agents, commands, workflows, references, CLI modules, hooks — is enumerated in this inventory. A new file in one of those without a matching row here will fail CI. Workflow `steps/` and `modes/` sub-files are the deliberate exception; see "Workflow Sub-Files" above.
-- When the filesystem diverges from `docs/ARCHITECTURE.md` counts or from curated-subset docs (e.g. `docs/AGENTS.md`'s primary roster), this file is the source of truth.
+- When the filesystem diverges from `docs/ARCHITECTURE.md` counts or from curated-subset docs (e.g. `docs/reference/agents.md`'s primary roster), this file is the source of truth.
 
 ## Related
 

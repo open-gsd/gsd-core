@@ -33,6 +33,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { platformWriteSync, posixNormalize } from './shell-command-projection.cjs';
 import { hostBehaviorsFor } from './runtime-name-policy.cjs';
+import { armArgsNonce, disarmArgsNonce, readInstalledNonce } from './args-terminator.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import installProfiles = require('./install-profiles.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -390,6 +391,12 @@ function applySurface(runtimeConfigDir: string, layout: Layout, manifest: Map<st
   if (path.resolve(runtimeConfigDir) !== path.resolve(layout.configDir)) {
     throw new TypeError('applySurface runtimeConfigDir must match layout.configDir');
   }
+  // #5637: re-staged commands and skills keep the typed-text terminator nonce the install wrote,
+  // when it wrote one; this process is not an installer, so nothing armed it.
+  // A directory with no nonce (an install from before this change) is re-staged canonical, and a
+  // nonce armed earlier in this process for another directory is not carried over.
+  if (readInstalledNonce(layout.configDir) !== null) armArgsNonce(layout.configDir, true);
+  else disarmArgsNonce();
   // #3712: the dest selection below prefers `kind.home` over layout.configDir and
   // then hands it to the destructive _syncGsdDir, so surface apply is a third
   // escape route into the developer's real home alongside install/uninstall.

@@ -38,6 +38,13 @@ const { publishStateContract } = stateContract;
 import phaseIdMod = require('./phase-id.cjs');
 const { normalizePhaseName, matchPhaseDirs, isSentinelPhaseId, isSentinelPhaseDir, buildPhaseHeadingScanRegex, PHASE_HEADING_BASELINE } = phaseIdMod;
 import { escapeRegex } from './pattern.cjs';
+import {
+  loadReleaseMapFile,
+  renderReleaseMapMarkdown,
+  releaseMapArchivePath,
+  serializeReleaseMapArchive,
+  type ReleaseMapEntry,
+} from './milestone-release-map.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
 const {
@@ -97,6 +104,12 @@ interface MilestoneCompleteOptions {
   // that Skip/absent must preserve today's behavior. Do NOT mirror
   // archivePhases' inverted `--no-archive-phases` shape.
   archiveQuick?: boolean;
+  // #5706 (epic #3628): path to a JSON release map (an array of
+  // `{repo, release, reference, environment, status, tag}` entries) supplied by
+  // the caller. Validated before the first write, archived as
+  // `<version>-RELEASE-MAP.json` and rendered into the MILESTONES.md entry.
+  // Absent, the command's output and on-disk effects are unchanged.
+  releaseMap?: string | null;
 }
 
 /**
@@ -609,6 +622,40 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   const phasesDir = planningPaths(cwd).phases;
   const today = realClock.localToday();
   const milestoneName = options.name || version;
+
+  // #5706 (epic #3628): validate the caller-supplied release map BEFORE any
+  // read-for-decision or write below, so a bad map leaves the tree untouched
+  // (no archive directory, no MILESTONES.md or STATE.md change). An archived
+  // map is a recorded value: a differing map for an already-archived version is
+  // refused rather than silently overwritten; an identical one is left as is.
+  let releaseMap: ReleaseMapEntry[] | null = null;
+  let releaseMapFile: string | null = null;
+  let releaseMapNeedsWrite = false;
+  if (typeof options.releaseMap === 'string') {
+    const loaded = loadReleaseMapFile(path.resolve(cwd, options.releaseMap));
+    if (!loaded.ok) {
+      error(`milestone complete: invalid --release-map — nothing has been changed.\n${loaded.errors.map((e) => `  - ${e}`).join('\n')}`);
+    } else {
+      releaseMap = loaded.map;
+      releaseMapFile = releaseMapArchivePath(archiveDir, version);
+      const serialized = serializeReleaseMapArchive(version, releaseMap);
+      let existingText: string | null = null;
+      try {
+        existingText = fs.readFileSync(releaseMapFile, 'utf-8');
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+          error(`milestone complete: ${path.basename(releaseMapFile)} already exists and cannot be read — nothing has been changed.`);
+        }
+      }
+      if (existingText !== null && existingText !== serialized) {
+        error(`milestone complete: ${path.basename(releaseMapFile)} already exists with a different release map; the archived map is a recorded value and is not overwritten — nothing has been changed.`);
+      }
+      releaseMapNeedsWrite = existingText === null;
+    }
+  }
+  const releaseMapReport = releaseMap && releaseMapFile
+    ? { path: path.relative(cwd, releaseMapFile).split(path.sep).join('/'), entries: releaseMap.length }
+    : null;
   // ADR-3408 §8.5 / #3469: "liberal but visible" — when the write-seam
   // composition's preservation stage restores a curated frontmatter value
   // over a disagreeing freshly-derived one, that divergence is surfaced
@@ -953,6 +1000,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
         phases_archive_skipped: phasesArchiveSkippedForScope,
         phases_archive_skip_reason: phasesArchiveSkipReason,
         quick: quickDirsToArchive,
+        ...(releaseMapReport ? { release_map: { target: releaseMapReport.path, entries: releaseMapReport.entries } } : {}),
       },
       would_update: {
         milestones_md: path.relative(cwd, milestonesPath).split(path.sep).join('/'),
@@ -981,6 +1029,11 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   // committed to mutating.
   platformEnsureDir(archiveDir);
 
+  // #5706: archive the validated release map by recorded value.
+  if (releaseMap && releaseMapFile && releaseMapNeedsWrite) {
+    platformWriteSync(releaseMapFile, serializeReleaseMapArchive(version, releaseMap));
+  }
+
   // Archive ROADMAP.md
   if (fs.existsSync(roadmapPath)) {
     const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
@@ -1008,7 +1061,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
 
   // Create/append MILESTONES.md entry
   const accomplishmentsList = accomplishments.map((a) => `- ${a}`).join('\n');
-  const milestoneEntry = `## ${version} ${milestoneName} (Shipped: ${today})\n\n**Phases completed:** ${phaseCount} phases, ${totalPlans} plans, ${totalTasks} tasks\n\n**Key accomplishments:**\n${accomplishmentsList || '- (none recorded)'}\n\n---\n\n`;
+  const milestoneEntry = `## ${version} ${milestoneName} (Shipped: ${today})\n\n**Phases completed:** ${phaseCount} phases, ${totalPlans} plans, ${totalTasks} tasks\n\n**Key accomplishments:**\n${accomplishmentsList || '- (none recorded)'}\n\n${releaseMap ? `${renderReleaseMapMarkdown(releaseMap)}\n` : ''}---\n\n`;
 
   // #3685: mirror requirementsUpdated's diff-tracking contract — the result
   // below used to report `milestones_updated: true` hardcoded, never
@@ -1279,6 +1332,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
     milestones_updated: milestonesUpdated,
     state_updated: stateUpdated,
     preservation_warnings: preservationWarnings,
+    ...(releaseMapReport ? { release_map: releaseMapReport } : {}),
   };
 
   output(result, raw);

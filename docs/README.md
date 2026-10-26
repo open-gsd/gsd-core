@@ -24,6 +24,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Install a minimal GSD and add skills later](how-to/install-minimal-and-add-skills.md) — install only the core skills, then grow the surface with profiles and `/gsd-surface`
 - [Attach a plugin-provided skill to a GSD agent](how-to/attach-a-plugin-skill-to-a-gsd-agent.md) — use the `global:plugin:skill` entry form to load Claude Code plugin skills into agent prompts
 - [Discuss a phase](how-to/discuss-a-phase.md) — capture implementation decisions before planning begins
+- [Tag a multi-repository milestone](how-to/tag-a-multi-repo-milestone.md) — record each repository's own release against a milestone, create per-repository tags, and decide repository by repository what to push
 - [Resolve edge-coverage findings](how-to/resolve-edge-coverage-findings.md) — turn the spec phase's surfaced domain-boundary edges into covered, dismissed, or backstopped spec decisions
 - [Probe edges in a non-English project](how-to/probe-edges-in-a-non-english-project.md) — get real edge coverage on a spec written in another language, and tell "no edges here" apart from "the probe could not read it"
 - [Resolve prohibition findings](how-to/resolve-prohibition-findings.md) — turn the spec phase's surfaced must-NOT constraints into resolved, dismissed, or deferred spec decisions
@@ -108,6 +109,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [PLAN.md schema](reference/plan-md.md) — field-by-field reference for `.planning/phases/<N>/PLAN.md`
 - [Planning artifacts](reference/planning-artifacts.md) — all `.planning/` files and their roles
 - [Review and verification capabilities](reference/review-verification-capabilities.md) — code review, security, and Nyquist capability ownership and hook contracts
+- [Agent reference](reference/agents.md) — role cards, tools and constraints for every shipped GSD agent
 - [Gate predicates](reference/gate-predicates.md) — canonical specification of the phase-gate predicate vocabulary
 - [Capability matrix](reference/capability-matrix.md) — generated catalogue of every capability's role, tier, extension points, hook kinds, and `engines.gsd`
 - [Exit code reference](reference/exit-codes.md) — generated catalogue of every registered process exit code, its name, meaning, and owning module, plus the reserved bands and the v1/v2 exit contract

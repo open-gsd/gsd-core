@@ -50,6 +50,8 @@ GSD はプロジェクト設定を `.planning/config.json` に保存します。
   },
   "git": {
     "branching_strategy": "none",
+    "create_tag": true,
+    "repo_tagging": "single",
     "phase_branch_template": "gsd/phase-{phase}-{slug}",
     "milestone_branch_template": "gsd/{milestone}-{slug}",
     "quick_branch_template": null
@@ -161,9 +163,30 @@ GSD はプロジェクト設定を `.planning/config.json` に保存します。
 | 設定 | 型 | デフォルト | 説明 |
 |------|-----|-----------|------|
 | `git.branching_strategy` | enum | `none` | `none`、`phase`、または `milestone` |
+| `git.create_tag` | boolean | `true` | マイルストーン完了時に git タグ（`v[X.Y]`）を作成します。独自のリリースフローを持つプロジェクトでは `false` に設定します |
+| `git.repo_tagging` | enum | `single` | マイルストーンのタグ付けモード（#5706）：`single` または `per_repo`。`single` は既存の動作です。`per_repo` は、マルチリポジトリのプロジェクトで設定済みのリポジトリごとに 1 つのリリースを記録するようにします（下記「リポジトリごとのリリースマッピング」を参照）。`git.create_tag` とは独立しており、`per_repo` で `git.create_tag: false` の場合はマップを記録しますがタグは作成しません。手動編集した `config.json` の無効な値は `single` として読み込まれます |
 | `git.phase_branch_template` | string | `gsd/phase-{phase}-{slug}` | phase 戦略のブランチ名テンプレート |
 | `git.milestone_branch_template` | string | `gsd/{milestone}-{slug}` | milestone 戦略のブランチ名テンプレート |
 | `git.quick_branch_template` | string or null | `null` | `/gsd-quick` タスク用のオプションのブランチ名テンプレート |
+
+### リポジトリごとのリリースマッピング
+
+マルチリポジトリのプロジェクトでは、マイルストーンごとに各リポジトリが実際にどのリリースを公開したかを記録できます。この記録がリリースマップ（release map）で、`milestone complete <version> --release-map <file>` に渡す JSON 配列であり、記録された値のままアーカイブされます。`git.repo_tagging` がタグ付けモードを選択します。`init complete-milestone` はこれを `repo_tagging` として、`sub_repos`（設定済みのリポジトリ。空の場合もあります）と並べて公開します。
+
+リリースマップの各エントリには次のフィールドがあります：
+
+| フィールド | 型 | 説明 |
+|-----------|-----|------|
+| `repo` | string | リポジトリ名。必須、空白不可、マップ内で一意。データとして扱われ、パスとしては決して扱われません |
+| `release` | string or null | そのリポジトリのリリースバージョンまたはタグ |
+| `reference` | string or null | コミット SHA またはプルリクエストへの参照 |
+| `environment` | string or null | 対象環境（自由記述。例：`production`、`development`、`npm`） |
+| `status` | enum | 必須。リリースマップのステータス：`released`、`deployed`、`unreleased` |
+| `tag` | enum | 必須。リリースマップのタグ状態：`created`、`already_tagged`、`skipped`、`none` |
+
+文字列フィールドはそれぞれ 200 文字まで、マップは 256 エントリまでに制限されます。未知のフィールドは拒否されます。エントリは記録されたとおりにアーカイブされ、`planning.sub_repos` でフィルタされることはないため、スキップされた、未リリースの、またはすでに設定から外れたリポジトリもマップに残ります。アーカイブは生の値を `.planning/milestones/<version>-RELEASE-MAP.json`（`{ "version", "entries" }`）に保存し、MILESTONES.md のエントリには、値を markdown 用にエスケープした **Release mapping:** テーブルが追加されます。マップなしでアーカイブされたマイルストーンには影響しません。
+
+GSD のマイルストーンバージョンは `.planning/` 内の計画された作業を指す名前であり、どのリポジトリのリリースバージョンとも異なってかまいません。また、各リポジトリが同じバージョン体系を共有する必要もありません。`git.repo_tagging: per_repo` かつ `sub_repos` が空でない場合、`/gsd-complete-milestone` はマップを収集し、要求されたすべてのタグを作成前に検査し、タグを作成（`milestone release-tags`）し、マップをアーカイブして、タグをプッシュする前にリポジトリごとに別々の質問（リポジトリとそのリモートを明示）を行います。デフォルトでは何もプッシュされません。[マルチリポジトリのマイルストーンにタグを付ける方法](../how-to/tag-a-multi-repo-milestone.md)を参照してください。
 
 ### 戦略の比較
 

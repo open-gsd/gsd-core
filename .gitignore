@@ -108,6 +108,8 @@ build/
 /gsd-core/bin/lib/markdown-sectionizer.cjs
 # #3311: new module (milestone lock) — emitted artifact, never edited.
 /gsd-core/bin/lib/milestone-lock.cjs
+# #5551: new module (git info/exclude helper) — emitted artifact, never edited.
+/gsd-core/bin/lib/git-info-exclude.cjs
 # #2657: these two (markdown-table.cjs, write-set.cjs) already had the
 # pattern below since #2248, but stayed tracked because `git rm --cached`
 # was never run — same untracking fix as the seven lines that follow.
@@ -117,6 +119,7 @@ build/
 # are the other two) never got a .gitignore entry when their modules moved
 # into src/*.cts, and were also never untracked.
 /gsd-core/bin/lib/api-coverage.cjs
+/gsd-core/bin/lib/args-terminator.cjs
 /gsd-core/bin/lib/assumption-delta.cjs
 /gsd-core/bin/lib/claude-orchestration.cjs
 /gsd-core/bin/lib/claude-orchestration-command-router.cjs
@@ -226,6 +229,7 @@ build/
 /gsd-core/bin/lib/pattern.cjs
 /gsd-core/bin/lib/text-lines.cjs
 /gsd-core/bin/lib/token-scanner.cjs
+/gsd-core/bin/lib/read-only-git-env.cjs
 /gsd-core/bin/lib/health-diagnostic-types.cjs
 /gsd-core/bin/lib/health-diagnostic.cjs
 /gsd-core/bin/lib/health-diagnostic-rules/root-existence.cjs
@@ -337,6 +341,9 @@ build/
 /gsd-core/bin/lib/commands.cjs
 /gsd-core/bin/lib/state.cjs
 /gsd-core/bin/lib/milestone.cjs
+/gsd-core/bin/lib/milestone-release-tags.cjs
+# #5706: new module (milestone release map) — emitted artifact, never edited.
+/gsd-core/bin/lib/milestone-release-map.cjs
 /gsd-core/bin/lib/phase.cjs
 /gsd-core/bin/lib/verify.cjs
 /gsd-core/bin/lib/init.cjs

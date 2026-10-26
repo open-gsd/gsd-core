@@ -119,14 +119,14 @@ describe('docs-guard registry (scripts/docs-guard-registry.cjs)', () => {
 // edge.
 describe('docs-guard selector (scripts/select-docs-guards.cjs)', () => {
   const REGISTRY = {
-    'tests/exact-reader.test.cjs': ['docs/AGENTS.md'],
+    'tests/exact-reader.test.cjs': ['docs/reference/agents.md'],
     'tests/dir-reader.test.cjs': ['docs/adr/'],
     'tests/wildcard-reader.test.cjs': ['*'],
   };
 
   test('exact-file match selects only that guard', () => {
     assert.deepStrictEqual(
-      selectDocsGuards(['docs/AGENTS.md'], REGISTRY),
+      selectDocsGuards(['docs/reference/agents.md'], REGISTRY),
       ['tests/exact-reader.test.cjs', 'tests/wildcard-reader.test.cjs'].sort(),
     );
   });
@@ -155,7 +155,7 @@ describe('docs-guard selector (scripts/select-docs-guards.cjs)', () => {
   });
 
   test('a changed docs file no guard reads yields an empty selection (minus the wildcard)', () => {
-    const registryNoWildcard = { 'tests/exact-reader.test.cjs': ['docs/AGENTS.md'] };
+    const registryNoWildcard = { 'tests/exact-reader.test.cjs': ['docs/reference/agents.md'] };
     assert.deepStrictEqual(selectDocsGuards(['docs/totally-unrelated.md'], registryNoWildcard), []);
   });
 
@@ -170,14 +170,14 @@ describe('docs-guard selector (scripts/select-docs-guards.cjs)', () => {
     assert.ok(selected.includes('tests/inventory-headings-countfree.test.cjs'), `got: ${JSON.stringify(selected)}`);
   });
 
-  test('changing docs/AGENTS.md selects tests/install.test.cjs', () => {
-    const selected = selectDocsGuards(['docs/AGENTS.md'], DOCS_GUARD_TESTS);
+  test('changing docs/reference/agents.md selects tests/install.test.cjs', () => {
+    const selected = selectDocsGuards(['docs/reference/agents.md'], DOCS_GUARD_TESTS);
     assert.ok(selected.includes('tests/install.test.cjs'), `got: ${JSON.stringify(selected)}`);
   });
 
   // The whole point of the maintainer's decision: an unrelated docs change
   // must NOT select tests/install.test.cjs (7840 lines) just because that
-  // file happens to also read docs/AGENTS.md.
+  // file happens to also read docs/reference/agents.md.
   test('changing an unrelated docs file does NOT select tests/install.test.cjs', () => {
     const selected = selectDocsGuards(['docs/how-to/some-unrelated-guide.md'], DOCS_GUARD_TESTS);
     assert.ok(!selected.includes('tests/install.test.cjs'), `got: ${JSON.stringify(selected)}`);

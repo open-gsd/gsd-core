@@ -1,6 +1,6 @@
 # GSD 출시된 표면 인벤토리
 
-> 출시된 모든 GSD 표면의 공식 목록: 명령어, 에이전트, 워크플로우, 레퍼런스, CLI 모듈, 훅. 광범위 문서(AGENTS.md, COMMANDS.md, ARCHITECTURE.md, CLI-TOOLS.md)와 파일시스템이 다를 경우, 이 파일과 저장소 트리를 진실의 원천으로 취급합니다.
+> 출시된 모든 GSD 표면의 공식 목록: 명령어, 에이전트, 워크플로우, 레퍼런스, CLI 모듈, 훅. 광범위 문서(reference/agents.md, COMMANDS.md, ARCHITECTURE.md, CLI-TOOLS.md)와 파일시스템이 다를 경우, 이 파일과 저장소 트리를 진실의 원천으로 취급합니다.
 
 ## 이 파일 사용 방법
 
@@ -14,7 +14,7 @@
 
 ## 에이전트
 
-전체 목록은 `agents/gsd-*.md`에 있습니다. "주요 문서" 열은 [`docs/AGENTS.md`](AGENTS.md)에서 전체 역할 카드(*primary*), "고급 및 특수 에이전트" 섹션의 짧은 스텁(*advanced stub*), 또는 다루지 않음(*inventory only*)을 표시합니다.
+전체 목록은 `agents/gsd-*.md`에 있습니다. "주요 문서" 열은 [`docs/reference/agents.md`](reference/agents.md)에서 전체 역할 카드(*primary*), "고급 및 특수 에이전트" 섹션의 짧은 스텁(*advanced stub*), 또는 다루지 않음(*inventory only*)을 표시합니다.
 
 | 에이전트 | 역할 (한 줄) | 생성자 | 주요 문서 |
 |-------|-----------------|------------|-------------|
@@ -52,7 +52,7 @@
 | gsd-doc-classifier | 단일 계획 문서를 ADR, PRD, SPEC, DOC, UNKNOWN으로 분류; 병렬로 생성되어 문서 코퍼스 처리. | `/gsd-ingest-docs` | advanced stub |
 | gsd-doc-synthesizer | 분류된 계획 문서를 우선순위 규칙, 순환 감지, 세 버킷 충돌 보고서로 단일 통합 컨텍스트로 합성. | `/gsd-ingest-docs` | advanced stub |
 
-**커버리지 참고.** `docs/AGENTS.md`는 주요 에이전트에 대한 전체 역할 카드와 고급 에이전트에 대한 간결한 스텁을 제공합니다. 해당 파일의 에이전트 도구 권한 요약은 주요 에이전트만 다루며; 고급 에이전트의 도구 목록은 `agents/gsd-*.md`의 에이전트별 프론트매터에 기록됩니다.
+**커버리지 참고.** `docs/reference/agents.md`는 주요 에이전트에 대한 전체 역할 카드와 고급 에이전트에 대한 간결한 스텁을 제공합니다. 해당 파일의 에이전트 도구 권한 요약은 주요 에이전트만 다루며; 고급 에이전트의 도구 목록은 `agents/gsd-*.md`의 에이전트별 프론트매터에 기록됩니다.
 
 ---
 
@@ -488,7 +488,7 @@
 
 - 새 명령어, 에이전트, 워크플로우, 레퍼런스, CLI 모듈, 또는 훅이 출시될 때, 릴리스가 잘리기 전에 해당 섹션을 여기에 업데이트하세요.
 - `tests/` 아래의 드리프트 가드 테스트(위의 "이 파일 사용 방법" 참조)는 출시된 모든 파일이 이 인벤토리에 열거되어 있음을 어설트합니다. 일치하는 행이 없는 새 파일은 CI를 실패시킵니다.
-- 파일시스템이 `docs/ARCHITECTURE.md` 수량 또는 엄선된 하위 집합 문서(예: `docs/AGENTS.md`의 주요 목록)와 다를 경우, 이 파일이 진실의 원천입니다.
+- 파일시스템이 `docs/ARCHITECTURE.md` 수량 또는 엄선된 하위 집합 문서(예: `docs/reference/agents.md`의 주요 목록)와 다를 경우, 이 파일이 진실의 원천입니다.
 
 ## 관련 문서
 

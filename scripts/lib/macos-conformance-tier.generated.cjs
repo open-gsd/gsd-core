@@ -6,6 +6,7 @@
 
 module.exports = {
   MACOS_CONFORMANCE_TIER_FILES: [
+  "tests/5100-win32-bare-bash-sentinel.property.test.cjs",
   "tests/active-workstream-store.unit.test.cjs",
   "tests/adr-612-bracket-phase-counting.test.cjs",
   "tests/adr-index-gate.test.cjs",
@@ -16,6 +17,7 @@ module.exports = {
   "tests/agent-skills.test.cjs",
   "tests/api-coverage-gate-e2e.test.cjs",
   "tests/api-coverage.test.cjs",
+  "tests/args-terminator-nonce.test.cjs",
   "tests/ask-user-questions-fallback.test.cjs",
   "tests/audit-command-cutover.test.cjs",
   "tests/broken-windows.test.cjs",
@@ -83,6 +85,7 @@ module.exports = {
   "tests/gap-checker.property.test.cjs",
   "tests/gate-api-coverage-verify-pre-escape.test.cjs",
   "tests/gate-codebase-drift.unit.test.cjs",
+  "tests/gate-evaluation-scope.test.cjs",
   "tests/gate-predicate.unit.test.cjs",
   "tests/gate-tdd-red-evidence-containment.test.cjs",
   "tests/gate-ui-plan.unit.test.cjs",
@@ -136,6 +139,7 @@ module.exports = {
   "tests/markdown-sectionizer.test.cjs",
   "tests/mcp-catalog.test.cjs",
   "tests/milestone-archive.test.cjs",
+  "tests/milestone-release-tags.test.cjs",
   "tests/milestone-window-single-owner.test.cjs",
   "tests/model-catalog.unit.test.cjs",
   "tests/model-resolver.test.cjs",
