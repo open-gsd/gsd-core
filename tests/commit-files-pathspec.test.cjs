@@ -3566,6 +3566,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
         const lines = (s) => s.trim().split('\n').filter(Boolean);
         return {
           status: r.exitCode,
+          stderr: r.stderr,
           commits: Number(git('rev-list', '--count', 'HEAD')),
           head: lines(git('-c', 'core.quotepath=off', 'show', '--name-only', '--format=', 'HEAD')),
           staged: lines(git('diff', '--cached', '--name-only')),
@@ -3608,6 +3609,8 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     test('zero staged deletions: exits 1, commits nothing', () => {
       const r = run([]);
       assert.deepStrictEqual([r.status, r.commits], [1, 1]);
+      assert.match(r.stderr, /no staged .*deletion: nothing to commit/);
+      assert.doesNotMatch(r.stderr, /expected exactly one/);
     });
   });
 });
