@@ -3358,19 +3358,33 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       return head + kept;
     }).join('\n');
   };
+  // `git -C <dir> -c k=v commit`: global options sit between `git` and `commit`.
+  const GIT_OPT_WITH_ARG = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path']);
   // `inline`: a bare `git commit` in a prose code span names the command, it is not an invocation.
+  // An `echo`/`printf` word that holds `git ... commit` (recovery advice) is scanned as a script; other quoted prose is not.
   const unscopedCommits = (raw, inline = false) => {
     const out = [];
     const text = stripComments(raw);
     const toks = tokenize(text);
-    for (let i = 0; i + 1 < toks.length; i += 1) {
-      if (toks[i].op || toks[i].redir || toks[i].value !== 'git' || toks[i + 1].value !== 'commit') continue;
+    let skipTo = -1;
+    for (let i = 0; i < toks.length; i += 1) {
+      if (i <= skipTo || toks[i].op || toks[i].redir) continue;
+      if (toks[i].value !== 'git') {
+        let k = i - 1;
+        while (k >= 0 && !toks[k].op) k -= 1;
+        if (['echo', 'printf'].includes(toks[k + 1].value) && /\bgit\b[^\n]*\bcommit\b/.test(toks[i].value)) out.push(...unscopedCommits(toks[i].value, inline));
+        continue;
+      }
+      let c = i + 1;
+      while (c < toks.length && !toks[c].op && !toks[c].redir && toks[c].value.startsWith('-')) c += GIT_OPT_WITH_ARG.has(toks[c].value) ? 2 : 1;
+      if (c >= toks.length || toks[c].op || toks[c].value !== 'commit') continue;
       const argv = [];
-      let prev = toks[i + 1];
-      for (let j = i + 2; j < toks.length && !toks[j].op; j += 1) {
+      let prev = toks[c];
+      for (let j = c + 1; j < toks.length && !toks[j].op; j += 1) {
         if (/(?<!\\)\n/.test(text.slice(prev.end, toks[j].start))) break;
         if (!toks[j].redir) argv.push(toks[j].value);
         prev = toks[j];
+        skipTo = j;
       }
       const dd = argv.indexOf('--');
       if ((dd === -1 && (argv.length > 0 || !inline)) || (dd !== -1 && dd === argv.length - 1)) out.push(text.slice(toks[i].start, prev.end));
@@ -3383,6 +3397,21 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     assert.equal(unscopedCommits('# note\ngit commit -m "x"').length, 1);
     assert.equal(unscopedCommits('git commit -m x --').length, 1);
     assert.equal(unscopedCommits('git commit -m "x" -- a b').length, 0);
+  });
+
+  test('git -C / -c global options do not hide a commit', () => {
+    assert.equal(unscopedCommits('git -C sub commit -m x').length, 1);
+    assert.equal(unscopedCommits('git -c user.name=t -C sub commit -m x').length, 1);
+    assert.equal(unscopedCommits('git --no-pager commit -m x').length, 1);
+    assert.equal(unscopedCommits('git -C sub commit -m x -- a').length, 0);
+    assert.equal(unscopedCommits('git -c k=v log -1').length, 0);
+  });
+
+  test('a commit inside a quoted string (echoed advice) is scanned too', () => {
+    assert.equal(unscopedCommits(`echo "  1. git add -A && git commit -m 'x'   # note" >&2`).length, 1);
+    assert.equal(unscopedCommits(`echo "  1. git add -A && git commit -m 'x' -- a"`).length, 0);
+    assert.equal(unscopedCommits(`echo 'git -C d commit -m x'`).length, 1);
+    assert.equal(unscopedCommits(`git commit -m "fix: scope git commit calls" -- a`).length, 0);
   });
 
   test('a bare git commit (editor mode, no args) is unscoped', () => {
