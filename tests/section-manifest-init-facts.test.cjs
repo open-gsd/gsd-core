@@ -31,6 +31,10 @@ const path = require('path');
 
 const { runGsdTools, cleanup, createTempDir, createTempProject } = require('./helpers.cjs');
 const { seedPhase } = require('./fixtures/index.cjs');
+const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 function writeConfig(tmpDir, config) {
   fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
@@ -316,5 +320,223 @@ describe('flag value shapes drive section_manifest by truthiness, not semantic v
     assert.ok(result.success, `a unicode/very-long --prd value must not crash the command: ${result.error}`);
     const output = JSON.parse(result.output);
     assert.ok(output.section_manifest.included.includes('prd-express-gate'));
+  });
+});
+
+// ─── Group F: complete-milestone workstream fact — #5195 ──────────────────
+//
+// `/gsd-complete-milestone --ws <name>` used to run the full PROJECT.md
+// evolution review and stage PROJECT.md in the archive safety commit even
+// though PROJECT.md is the ONE planning file shared across a project's
+// workstreams (#4543). `init.complete-milestone` now supplies the
+// `state:flat-mode` fact (as `init.new-milestone` has since #2308) so the
+// review is a manifest section that only a flat-mode run includes, and the
+// safety commit derives its file list from that same manifest.
+
+const GSD_TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
+const COMPLETE_MILESTONE_WORKFLOW = path.join(__dirname, '..', 'gsd-core', 'workflows', 'complete-milestone.md');
+const EVOLUTION_REVIEW_ID = 'project-md-evolution-review';
+
+/** Root planning tree (flat mode): shared PROJECT.md plus the per-scope files. */
+function seedFlatMilestoneProject(tmpDir) {
+  const planning = path.join(tmpDir, '.planning');
+  fs.writeFileSync(path.join(planning, 'PROJECT.md'), '# Shared Project\n');
+  fs.writeFileSync(path.join(planning, 'STATE.md'), '---\ncurrent_phase: 1\n---\n# State\n');
+  fs.writeFileSync(path.join(planning, 'ROADMAP.md'), '# Roadmap\n');
+  fs.writeFileSync(path.join(planning, 'MILESTONES.md'), '# Milestones\n');
+}
+
+/** Flat tree plus a workstream `w1` with its OWN state/roadmap/milestones (PROJECT.md stays shared). */
+function seedWorkstreamMilestoneProject(tmpDir) {
+  seedFlatMilestoneProject(tmpDir);
+  const ws = path.join(tmpDir, '.planning', 'workstreams', 'w1');
+  fs.mkdirSync(ws, { recursive: true });
+  fs.writeFileSync(path.join(ws, 'STATE.md'), '---\ncurrent_phase: 1\n---\n# State\n');
+  fs.writeFileSync(path.join(ws, 'ROADMAP.md'), '# Roadmap\n');
+  fs.writeFileSync(path.join(ws, 'MILESTONES.md'), '# Milestones\n');
+}
+
+function writeActiveWorkstreamPointer(tmpDir, name) {
+  fs.writeFileSync(path.join(tmpDir, '.planning', 'active-workstream'), name);
+}
+
+/**
+ * Run the workflow's real archive safety-commit fence under bash, with the
+ * `commit` seam intercepted so the `--files` list it WOULD stage is recorded.
+ * `init.complete-milestone` is the real CLI. `args` is what the runtime
+ * substitutes for `$ARGUMENTS`.
+ */
+function runSafetyCommitFence(tmpDir, args) {
+  const lines = splitLines(fs.readFileSync(COMPLETE_MILESTONE_WORKFLOW, 'utf8'));
+  const fences = scanFencedBlocks(lines)
+    .filter((b) => b.closeLineIdx !== -1 && b.infoString.trim().toLowerCase() === 'bash')
+    .map((b) => lines.slice(b.openLineIdx + 1, b.closeLineIdx).join('\n'));
+  const fence = fences.find((f) => f.includes('chore: archive v[X.Y] milestone files'));
+  assert.ok(fence, 'the archive safety-commit fence must exist in complete-milestone.md');
+
+  const recordFile = path.join(tmpDir, 'commit-args.txt');
+  const script = [
+    'gsd_run() {',
+    '  if [ "$1" = "query" ] && [ "$2" = "commit" ]; then',
+    '    shift 2; printf "%s\\n" "$@" > "$GSD_TEST_COMMIT_ARGS"; return 0',
+    '  fi',
+    '  node "$GSD_TEST_TOOLS" "$@"',
+    '}',
+    fence.split('$ARGUMENTS').join(args),
+  ].join('\n');
+  const scriptPath = path.join(tmpDir, 'safety-commit-fence.sh');
+  fs.writeFileSync(scriptPath, script);
+
+  const r = runHook(scriptPath, [], {
+    interpreter: 'bash',
+    cwd: tmpDir,
+    env: { ...process.env, GSD_TEST_TOOLS: GSD_TOOLS, GSD_TEST_COMMIT_ARGS: recordFile },
+    timeoutMs: PROBE_TIMEOUT_MS,
+  });
+  assert.equal(r.outcome, OUTCOME.EXITED, `fence must run to completion: ${r.stderr}`);
+  assert.equal(r.exitCode, 0, `fence exited non-zero: ${r.stderr}`);
+  const recorded = splitLines(fs.readFileSync(recordFile, 'utf8')).filter(Boolean);
+  const filesAt = recorded.indexOf('--files');
+  assert.notEqual(filesAt, -1, 'the commit call must declare --files');
+  return recorded.slice(filesAt + 1);
+}
+
+describe('complete-milestone supplies the workstream fact; the PROJECT.md review is flat-mode only — #5195, matrix §F', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('section-manifest-f-');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('--ws excludes the PROJECT.md evolution review (row F1, the issue repro)', () => {
+    seedWorkstreamMilestoneProject(tmpDir);
+    const output = runInitJson(['init', 'complete-milestone', '--ws', 'w1'], tmpDir);
+    assert.ok(output.section_manifest.excluded.includes(EVOLUTION_REVIEW_ID), 'the shared PROJECT.md review must be excluded under --ws');
+    assert.ok(!output.section_manifest.included.includes(EVOLUTION_REVIEW_ID));
+    assert.ok(
+      !output.section_manifest.read.some((p) => p.endsWith('project-md-evolution-review.md')),
+      'the review step file must not be handed to the runtime under --ws',
+    );
+  });
+
+  test('flat mode includes the PROJECT.md evolution review (row F2, unchanged behavior)', () => {
+    seedFlatMilestoneProject(tmpDir);
+    const output = runInitJson(['init', 'complete-milestone'], tmpDir);
+    assert.ok(output.section_manifest.included.includes(EVOLUTION_REVIEW_ID));
+    assert.ok(!output.section_manifest.excluded.includes(EVOLUTION_REVIEW_ID));
+  });
+
+  test('an active-workstream pointer alone (no --ws) excludes the review (row F3)', () => {
+    seedWorkstreamMilestoneProject(tmpDir);
+    writeActiveWorkstreamPointer(tmpDir, 'w1');
+    const output = runInitJson(['init', 'complete-milestone'], tmpDir);
+    assert.ok(output.section_manifest.excluded.includes(EVOLUTION_REVIEW_ID));
+  });
+
+  test('git-tag inclusion is independent of the workstream fact (row F4)', () => {
+    seedWorkstreamMilestoneProject(tmpDir);
+    // Under --ws the config resolves from the workstream's own planning dir, not the shared root.
+    const writeWsConfig = (config) => fs.writeFileSync(path.join(tmpDir, '.planning', 'workstreams', 'w1', 'config.json'), JSON.stringify(config));
+    writeWsConfig({ git: { create_tag: true } });
+    const tagOn = runInitJson(['init', 'complete-milestone', '--ws', 'w1'], tmpDir);
+    assert.ok(tagOn.section_manifest.included.includes('git-tag'), 'git-tag follows git.create_tag=true even under --ws');
+
+    writeWsConfig({ git: { create_tag: false } });
+    const tagOff = runInitJson(['init', 'complete-milestone', '--ws', 'w1'], tmpDir);
+    assert.ok(tagOff.section_manifest.excluded.includes('git-tag'), 'git-tag follows git.create_tag=false under --ws');
+    assert.ok(tagOff.section_manifest.excluded.includes(EVOLUTION_REVIEW_ID));
+  });
+
+  test('project_path remains the shared root PROJECT.md under --ws (row F5, contract unchanged)', () => {
+    seedWorkstreamMilestoneProject(tmpDir);
+    const output = runInitJson(['init', 'complete-milestone', '--ws', 'w1'], tmpDir);
+    assert.ok(output.project_path.endsWith('/.planning/PROJECT.md'), `project_path must stay the shared root file, got ${output.project_path}`);
+    assert.ok(!output.project_path.includes('/workstreams/'));
+    for (const key of ['state_path', 'roadmap_path', 'archive_dir', 'milestones_path']) {
+      assert.ok(output[key].includes('/.planning/workstreams/w1/'), `${key} must stay workstream-scoped, got ${output[key]}`);
+    }
+  });
+
+  describe('the review gate resolves the manifest itself before the gated section (matrix row F10)', () => {
+    /** Run the workflow's real early gate fence; return the `PROJECT_MD_REVIEW=` line it prints. */
+    function runReviewGate(args) {
+      const lines = splitLines(fs.readFileSync(COMPLETE_MILESTONE_WORKFLOW, 'utf8'));
+      const blocks = scanFencedBlocks(lines).filter((b) => b.closeLineIdx !== -1 && b.infoString.trim().toLowerCase() === 'bash');
+      const block = blocks.find((b) => lines.slice(b.openLineIdx + 1, b.closeLineIdx).join('\n').includes('PROJECT_MD_REVIEW='));
+      assert.ok(block, 'complete-milestone.md must resolve the review gate in its own bash fence');
+      const sectionIdx = lines.findIndex((l) => l.includes(`gsd:section id="${EVOLUTION_REVIEW_ID}"`));
+      assert.ok(block.closeLineIdx < sectionIdx, 'the gate fence must come BEFORE the section it gates, else the manifest is unread when the section runs');
+
+      const script = [
+        'gsd_run() { node "$GSD_TEST_TOOLS" "$@"; }',
+        lines.slice(block.openLineIdx + 1, block.closeLineIdx).join('\n').split('$ARGUMENTS').join(args),
+      ].join('\n');
+      const scriptPath = path.join(tmpDir, 'review-gate-fence.sh');
+      fs.writeFileSync(scriptPath, script);
+      const r = runHook(scriptPath, [], {
+        interpreter: 'bash',
+        cwd: tmpDir,
+        env: { ...process.env, GSD_TEST_TOOLS: GSD_TOOLS },
+        timeoutMs: PROBE_TIMEOUT_MS,
+      });
+      assert.equal(r.outcome, OUTCOME.EXITED, `gate fence must run to completion: ${r.stderr}`);
+      assert.equal(r.exitCode, 0, `gate fence exited non-zero: ${r.stderr}`);
+      return splitLines(r.stdout).find((l) => l.startsWith('PROJECT_MD_REVIEW='));
+    }
+
+    test('--ws skips the review', () => {
+      seedWorkstreamMilestoneProject(tmpDir);
+      assert.equal(runReviewGate('--ws w1'), 'PROJECT_MD_REVIEW=skip');
+    });
+
+    test('flat mode runs the review', () => {
+      seedFlatMilestoneProject(tmpDir);
+      assert.equal(runReviewGate(''), 'PROJECT_MD_REVIEW=run');
+    });
+
+    test('an active-workstream pointer alone skips the review', () => {
+      seedWorkstreamMilestoneProject(tmpDir);
+      writeActiveWorkstreamPointer(tmpDir, 'w1');
+      assert.equal(runReviewGate(''), 'PROJECT_MD_REVIEW=skip');
+    });
+  });
+
+  describe('the archive safety commit follows the same manifest', () => {
+    const isProjectMd = (p) => p.endsWith('/.planning/PROJECT.md');
+
+    test('under --ws it does not stage the shared PROJECT.md (row F6)', () => {
+      seedWorkstreamMilestoneProject(tmpDir);
+      const files = runSafetyCommitFence(tmpDir, '--ws w1');
+      assert.equal(files.filter(isProjectMd).length, 0, `PROJECT.md must not be staged under --ws, got ${JSON.stringify(files)}`);
+      assert.ok(files.some((p) => p.endsWith('/.planning/workstreams/w1/STATE.md')), 'workstream STATE.md still staged');
+      assert.ok(files.some((p) => p.endsWith('/.planning/workstreams/w1/ROADMAP.md')), 'workstream ROADMAP.md still staged');
+      assert.ok(files.some((p) => p.endsWith('/.planning/workstreams/w1/MILESTONES.md')), 'workstream MILESTONES.md still staged');
+    });
+
+    test('in flat mode it still stages PROJECT.md (row F7)', () => {
+      seedFlatMilestoneProject(tmpDir);
+      const files = runSafetyCommitFence(tmpDir, '');
+      assert.equal(files.filter(isProjectMd).length, 1, `PROJECT.md must be staged exactly once in flat mode, got ${JSON.stringify(files)}`);
+    });
+
+    test('it follows init\'s workstream resolution, not its own argument parse (row F8)', () => {
+      seedWorkstreamMilestoneProject(tmpDir);
+      writeActiveWorkstreamPointer(tmpDir, 'w1');
+      const files = runSafetyCommitFence(tmpDir, '');
+      assert.ok(files.some((p) => p.endsWith('/.planning/workstreams/w1/STATE.md')), 'precondition: paths resolved under the pointed workstream');
+      assert.equal(files.filter(isProjectMd).length, 0, 'the pointer-resolved workstream must exclude PROJECT.md even though the fence saw no --ws');
+    });
+  });
+
+  test('the workflow no longer claims PROJECT.md is workstream-scoped (row F9)', () => {
+    const workflow = fs.readFileSync(COMPLETE_MILESTONE_WORKFLOW, 'utf8');
+    assert.ok(
+      !/MILESTONES\.md and PROJECT\.md are workstream-scoped/.test(workflow),
+      'the false "PROJECT.md is workstream-scoped" sentence must be corrected (it is shared since #4543)',
+    );
   });
 });

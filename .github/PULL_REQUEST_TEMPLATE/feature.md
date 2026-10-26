@@ -98,7 +98,7 @@ Closes #
   - New workflow or behavior → `docs/USER-GUIDE.md`
   - Configuration / schema change → `docs/CONFIGURATION.md`
   - Architectural change → `docs/ARCHITECTURE.md` and/or `docs/adr/`
-  - Agent or skill change → `docs/AGENTS.md`
+  - Agent or skill change → `docs/reference/agents.md`
 - [ ] All `docs/` content added in this PR is written in English
   (translated READMEs `README.pt-BR.md` / `README.zh-CN.md` / `README.ja-JP.md` / `README.ko-KR.md`
   are community-maintained and do not need to be updated in this PR)

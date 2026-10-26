@@ -106,3 +106,22 @@ until someone closes it.
 
 The check never fails the workflow and never changes how shards are packed; it only reports.
 Closing the tracking issue after a fix is up to you. A later breach opens a new one.
+
+## Line a failing test up against the spawn-stall watcher (#5473)
+
+A bounded child that runs to its timeout used to fail as `null !== 0`. Every spawn made through
+`tests/helpers/process-seam.cjs` now records when it started, how long it took and its pid, and a
+slow or killed spawn leaves a line in the uploaded `test-timings-<os>-job<n>` artifact.
+
+1. Open the artifact's `.jsonl` and find lines with `"type":"seam:spawn-stall"`. A spawn is
+   recorded when it took 2 s or longer (`GSD_SEAM_SLOW_SPAWN_MS` changes the bound) or was killed.
+2. Read `file` (the test file), `command` and `argv` (first three arguments), `outcome`
+   (`timed_out`, `killed`, `exited`), `signal`, `durationMs`, `timeoutMs`, `pid`, and the UTC
+   `startedAt`/`endedAt`.
+3. Compare `startedAt`..`endedAt` with that shard's `spawn-stall watcher` section in the job log
+   (also UTC). A loop gap or slow probe inside the window means the VM stalled. None means only the
+   child hung. The pid lets you match a process the watcher snapshotted.
+4. `gen-test-timings.cjs` ignores these lines; they do not affect the timing tables.
+
+Tests that assert on a seam result can use `assertSeamExit(assert, result, 0)`, which names the
+outcome, signal and duration in its failure message, or put `result.summary` in their own message.

@@ -32,7 +32,7 @@ A minimal install gives you the eight skills needed to run the core phase loop:
 - `update`
 - `surface`
 
-No sub-agents are installed, and the skill-description tokens the model carries at cold start drop to roughly 130, against roughly 1,200 for a full install. The chosen profile is recorded in the `.gsd-profile` marker in your runtime config directory and is reapplied automatically every time you run `/gsd-update`, so you stay minimal across upgrades until you decide otherwise.
+Only the sub-agents those eight skills spawn are installed (the roadmapper, phase researcher, planner, plan checker, executor and verifier among them), so the core loop can run; the skill-description tokens the model carries at cold start drop to roughly 130, against roughly 1,200 for a full install. The chosen profile is recorded in the `.gsd-profile` marker in your runtime config directory and is reapplied automatically every time you run `/gsd-update`, so you stay minimal across upgrades until you decide otherwise.
 
 > Do not combine `--minimal` with `--profile=` — the installer treats that as a conflict and exits.
 
@@ -44,7 +44,7 @@ If `core` is too small, pick a wider profile instead. Pass it with `--profile=<n
 
 | Profile | What you get | Approx. description tokens |
 |---------|--------------|--------------------------|
-| `core` | The eight core-loop skills above. No agents. | ~130 desc tokens |
+| `core` | The eight core-loop skills above, plus only the sub-agents those skills spawn. | ~130 desc tokens |
 | `standard` | Everything in `core` plus brownfield onboarding (`onboard`), common management skills — `review`, `config`, `progress`, `resume-work`, `pause-work`, `workspace` — and the sub-agents those skills need. | ~700 desc tokens |
 | `full` | Every skill and every sub-agent. This is the default when you pass no profile flag. | ~1,200 desc tokens |
 

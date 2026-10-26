@@ -32,8 +32,20 @@ PHASE_ARG="${1}"
 # logic (e.g., --all and --auto imply --fix). Resolved BEFORE the init call below so
 # the section-manifest gate forwards the RESOLVED (post-implication) fix decision, not
 # just a literal --fix token check.
+# gsd-resolve-lib begin code-review-flags.cjs (#5640): load helpers from the installed runtime, not the cwd
+_gsd_lib_probe="code-review-flags.cjs"
+_gsd_rt="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+_gsd_gr="$(command -v gsd_run 2>/dev/null || true)"
+case "$_gsd_gr" in /*) ;; *) _gsd_gr="" ;; esac # a gsd_run shell function prints its bare name: not a path
+[ -n "$_gsd_gr" ] && _gsd_gr="$(dirname "$(node -p "require('fs').realpathSync(process.argv[1])" "$_gsd_gr" 2>/dev/null || echo "$_gsd_gr")")/lib"
+GSD_LIB_DIR=""
+_gsd_pick() { for _gsd_d; do if [ -n "$_gsd_d" ] && [ -f "$_gsd_d/$_gsd_lib_probe" ]; then GSD_LIB_DIR="$_gsd_d"; return 0; fi; done; return 1; }
+_gsd_pick "${GSD_TOOLS:+${GSD_TOOLS%/*}/lib}" "$_gsd_rt/gsd-core/bin/lib" "$_gsd_rt/.claude/gsd-core/bin/lib" "$_gsd_rt/.codex/gsd-core/bin/lib" "$_gsd_gr" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/gsd-core/bin/lib" "${CODEX_HOME:-$HOME/.codex}/gsd-core/bin/lib" || true
+if [ -z "$GSD_LIB_DIR" ]; then echo "ERROR: code-review-flags.cjs not found in the GSD runtime. Looked in: ${GSD_TOOLS:+${GSD_TOOLS%/*}/lib, }${_gsd_rt}/gsd-core/bin/lib (and its .claude and .codex forms), ${_gsd_gr:-next to gsd_run (not on PATH)}, ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/gsd-core/bin/lib, ${CODEX_HOME:-$HOME/.codex}/gsd-core/bin/lib. Reinstall: npx -y @opengsd/gsd-core@latest --claude --local" >&2; exit 1; fi
+export GSD_LIB_DIR
+# gsd-resolve-lib end
 FLAGS_JSON=$(node -e "
-  const { parseCodeReviewFlags } = require('./gsd-core/bin/lib/code-review-flags.cjs');
+  const { parseCodeReviewFlags } = require(require('path').join(process.env.GSD_LIB_DIR, 'code-review-flags.cjs'));
   const flags = parseCodeReviewFlags(process.argv.slice(1));
   process.stdout.write(JSON.stringify(flags));
 " -- "$@" 2>/dev/null)
@@ -125,12 +137,25 @@ If FILES_OVERRIDE is set (from --files flag):
 ```bash
 if [ -n "$FILES_OVERRIDE" ]; then
   REVIEW_FILES=()
-  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+  # #5519: compare the repository root and each resolved path in ONE form. On Windows Git Bash,
+  # `git rev-parse --show-toplevel` (a native program) reports a mixed path (C:/Users/..) while
+  # GNU `realpath` reports an MSYS POSIX path (/c/Users/..); the two never share a prefix, so
+  # every entry looked "outside". `cygpath -m` exists exactly where the forms differ and maps both
+  # to the mixed form; elsewhere the value passes through unchanged.
+  _gsd_norm_path() {
+    if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
+  }
+  REPO_ROOT=$(_gsd_norm_path "$(git rev-parse --show-toplevel 2>/dev/null)")
   
   for file_path in "${FILES_ARRAY[@]}"; do
-    # Security: validate path is within repository (prevent path traversal)
-    ABS_PATH=$(realpath -m "${file_path}" 2>/dev/null || echo "${file_path}")
-    if [[ "$ABS_PATH" != "$REPO_ROOT"* ]]; then
+    # Security: validate path is within repository (prevent path traversal). Compare on a path
+    # boundary: the root itself or anything under "<root>/" — a sibling such as "<root>-other"
+    # shares the prefix but is not inside.
+    ABS_PATH=$(_gsd_norm_path "$(realpath -m "${file_path}" 2>/dev/null || echo "${file_path}")")
+    # Fail closed on two shapes that cannot be trusted: an empty root (git failed, so nothing can be
+    # "inside" it) and a path that still holds ".." segments (a resolved path never does, so it was
+    # not resolved — no GNU realpath).
+    if [ -z "$REPO_ROOT" ] || [[ "$ABS_PATH" == */../* || "$ABS_PATH" == */.. ]] || [[ "$ABS_PATH" != "$REPO_ROOT" && "$ABS_PATH" != "$REPO_ROOT"/* ]]; then
       echo "Error: File path outside repository, skipping: ${file_path}"
       continue
     fi
@@ -437,8 +462,20 @@ DEPTH_PAYLOAD=$(printf '%s\n' "${REVIEW_FILES[@]}" | FLAG_DEPTH="$DEPTH_OVERRIDE
   }));
 ")
 
+# gsd-resolve-lib begin code-review-depth.cjs (#5640): load helpers from the installed runtime, not the cwd
+_gsd_lib_probe="code-review-depth.cjs"
+_gsd_rt="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+_gsd_gr="$(command -v gsd_run 2>/dev/null || true)"
+case "$_gsd_gr" in /*) ;; *) _gsd_gr="" ;; esac # a gsd_run shell function prints its bare name: not a path
+[ -n "$_gsd_gr" ] && _gsd_gr="$(dirname "$(node -p "require('fs').realpathSync(process.argv[1])" "$_gsd_gr" 2>/dev/null || echo "$_gsd_gr")")/lib"
+GSD_LIB_DIR=""
+_gsd_pick() { for _gsd_d; do if [ -n "$_gsd_d" ] && [ -f "$_gsd_d/$_gsd_lib_probe" ]; then GSD_LIB_DIR="$_gsd_d"; return 0; fi; done; return 1; }
+_gsd_pick "${GSD_TOOLS:+${GSD_TOOLS%/*}/lib}" "$_gsd_rt/gsd-core/bin/lib" "$_gsd_rt/.claude/gsd-core/bin/lib" "$_gsd_rt/.codex/gsd-core/bin/lib" "$_gsd_gr" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/gsd-core/bin/lib" "${CODEX_HOME:-$HOME/.codex}/gsd-core/bin/lib" || true
+if [ -z "$GSD_LIB_DIR" ]; then echo "ERROR: code-review-depth.cjs not found in the GSD runtime. Looked in: ${GSD_TOOLS:+${GSD_TOOLS%/*}/lib, }${_gsd_rt}/gsd-core/bin/lib (and its .claude and .codex forms), ${_gsd_gr:-next to gsd_run (not on PATH)}, ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/gsd-core/bin/lib, ${CODEX_HOME:-$HOME/.codex}/gsd-core/bin/lib. Reinstall: npx -y @opengsd/gsd-core@latest --claude --local" >&2; exit 1; fi
+export GSD_LIB_DIR
+# gsd-resolve-lib end
 DEPTH_JSON=$(echo "$DEPTH_PAYLOAD" | node -e "
-  const { resolveCodeReviewDepth } = require('./gsd-core/bin/lib/code-review-depth.cjs');
+  const { resolveCodeReviewDepth } = require(require('path').join(process.env.GSD_LIB_DIR, 'code-review-depth.cjs'));
   const input = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf-8'));
   process.stdout.write(JSON.stringify(resolveCodeReviewDepth(input)));
 ")
@@ -737,9 +774,21 @@ if [ -n "$FALLOW_JSON_PATH" ] && [ -f "$FALLOW_JSON_PATH" ]; then
   # Normalize fallow's raw report into the compact {summary, findings[]} contract
   # the reviewer consumes (real fallow schema -> normalized findings).
   FALLOW_NORMALIZED_PATH="${PHASE_DIR}/FALLOW-normalized.json"
+  # gsd-resolve-lib begin fallow-runner.cjs (#5640): load helpers from the installed runtime, not the cwd
+  _gsd_lib_probe="fallow-runner.cjs"
+  _gsd_rt="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+  _gsd_gr="$(command -v gsd_run 2>/dev/null || true)"
+  case "$_gsd_gr" in /*) ;; *) _gsd_gr="" ;; esac # a gsd_run shell function prints its bare name: not a path
+  [ -n "$_gsd_gr" ] && _gsd_gr="$(dirname "$(node -p "require('fs').realpathSync(process.argv[1])" "$_gsd_gr" 2>/dev/null || echo "$_gsd_gr")")/lib"
+  GSD_LIB_DIR=""
+  _gsd_pick() { for _gsd_d; do if [ -n "$_gsd_d" ] && [ -f "$_gsd_d/$_gsd_lib_probe" ]; then GSD_LIB_DIR="$_gsd_d"; return 0; fi; done; return 1; }
+  _gsd_pick "${GSD_TOOLS:+${GSD_TOOLS%/*}/lib}" "$_gsd_rt/gsd-core/bin/lib" "$_gsd_rt/.claude/gsd-core/bin/lib" "$_gsd_rt/.codex/gsd-core/bin/lib" "$_gsd_gr" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/gsd-core/bin/lib" "${CODEX_HOME:-$HOME/.codex}/gsd-core/bin/lib" || true
+  if [ -z "$GSD_LIB_DIR" ]; then echo "ERROR: fallow-runner.cjs not found in the GSD runtime (looked in ${_gsd_rt}/gsd-core/bin/lib (and its .claude and .codex forms), ${_gsd_gr:-next to gsd_run (not on PATH)}, ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/gsd-core/bin/lib, ${CODEX_HOME:-$HOME/.codex}/gsd-core/bin/lib); continuing without it." >&2; fi
+  export GSD_LIB_DIR
+  # gsd-resolve-lib end
   FALLOW_SRC="$FALLOW_JSON_PATH" FALLOW_OUT="$FALLOW_NORMALIZED_PATH" node -e "
     const fs = require('fs');
-    const { normalizeFallowReportFile } = require('./gsd-core/bin/lib/fallow-runner.cjs');
+    const { normalizeFallowReportFile } = require(require('path').join(process.env.GSD_LIB_DIR, 'fallow-runner.cjs'));
     const n = normalizeFallowReportFile(process.env.FALLOW_SRC);
     fs.writeFileSync(process.env.FALLOW_OUT, JSON.stringify(n, null, 2));
   " 2>/dev/null && FALLOW_EMBED_PATH="$FALLOW_NORMALIZED_PATH" || FALLOW_EMBED_PATH="$FALLOW_JSON_PATH"
@@ -943,6 +992,11 @@ grep -A 3 "^### CR-\|^### BL-\|^### WR-" "${REVIEW_PATH}" | head -n 12
 **Windows:** This workflow uses bash features (arrays, process substitution). On Windows, it requires
 Git Bash or WSL. Native PowerShell is not supported. The CI matrix (Ubuntu/macOS/Windows)
 runs under Git Bash on Windows runners, which provides bash compatibility.
+The `--files` containment check compares the repository root with each resolved path, and Git Bash
+reports them in different forms (`git rev-parse` returns `C:/Users/...`, GNU `realpath` returns
+`/c/Users/...`), so both are normalized with `cygpath -m` (shipped with Git Bash) before the
+comparison. Relative paths and absolute paths in either form are accepted when they are inside the
+repository (#5519).
 
 **macOS:** macOS ships with bash 3.2 (GPL licensing). This workflow does NOT use `mapfile` (bash 4+
 only) — all array construction uses portable `while IFS= read -r` loops compatible with bash 3.2.

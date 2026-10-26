@@ -190,7 +190,7 @@ Quando o pesquisador recomenda pacotes externos, executa `gsd-tools query packag
 - `[SUS]` — pacote sinalizado; o planejador insere `checkpoint:human-verify` antes da tarefa de instalação
 - `[OK]` — pacote aprovado; nenhum checkpoint adicionado
 
-Pacotes obtidos via WebSearch são marcados como `[ASSUMED]` (não `[VERIFIED]`) e tratados da mesma forma que `[SUS]` — recebem um checkpoint humano antes da instalação. Se `slopcheck` não puder ser instalado, cada pacote recomendado é marcado como `[ASSUMED]` e bloqueado.
+Pacotes obtidos via WebSearch são marcados como `[ASSUMED]` (não `[VERIFIED]`) e tratados da mesma forma que `[SUS]` — recebem um checkpoint humano antes da instalação. Uma consulta de registro com falha degrada para `[SUS]` em vez de lançar exceção, portanto o pacote é bloqueado, não aceito silenciosamente. `slopcheck` é um adaptador opcional que só escala veredictos e que nenhuma configuração distribuída ativa; ele não é necessário para o portão funcionar.
 
 Consulte o [Portão de Legitimidade de Pacotes no Guia do Usuário](USER-GUIDE.md#package-legitimacy-gate-v1421) para o formato completo do checkpoint, tabela de veredictos e solução de problemas.
 

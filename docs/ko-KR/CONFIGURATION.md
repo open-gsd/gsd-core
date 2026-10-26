@@ -50,6 +50,8 @@ GSD는 프로젝트 설정을 `.planning/config.json`에 저장합니다. `/gsd-
   },
   "git": {
     "branching_strategy": "none",
+    "create_tag": true,
+    "repo_tagging": "single",
     "phase_branch_template": "gsd/phase-{phase}-{slug}",
     "milestone_branch_template": "gsd/{milestone}-{slug}",
     "quick_branch_template": null
@@ -161,9 +163,30 @@ GSD는 프로젝트 설정을 `.planning/config.json`에 저장합니다. `/gsd-
 | 설정 | 타입 | 기본값 | 설명 |
 |------|------|--------|------|
 | `git.branching_strategy` | enum | `none` | `none`, `phase`, 또는 `milestone` |
+| `git.create_tag` | boolean | `true` | 마일스톤 완료 시 git 태그(`v[X.Y]`)를 생성합니다. 자체 릴리스 흐름이 있는 프로젝트에서는 `false`로 설정하세요 |
+| `git.repo_tagging` | enum | `single` | 마일스톤 태깅 모드(#5706): `single` 또는 `per_repo`. `single`은 기존 동작입니다. `per_repo`는 멀티 레포지토리 프로젝트가 설정된 레포지토리마다 하나의 릴리스를 기록하도록 합니다(아래 "레포지토리별 릴리스 매핑" 절 참조). `git.create_tag`와는 독립적이며, `per_repo`에서 `git.create_tag: false`이면 맵을 기록하되 태그는 생성하지 않습니다. 직접 편집한 `config.json`의 잘못된 값은 `single`로 읽습니다 |
 | `git.phase_branch_template` | string | `gsd/phase-{phase}-{slug}` | phase 전략의 브랜치 이름 템플릿 |
 | `git.milestone_branch_template` | string | `gsd/{milestone}-{slug}` | milestone 전략의 브랜치 이름 템플릿 |
 | `git.quick_branch_template` | string 또는 null | `null` | `/gsd-quick` 태스크를 위한 선택적 브랜치 이름 템플릿 |
+
+### 레포지토리별 릴리스 매핑
+
+멀티 레포지토리 프로젝트는 마일스톤마다 각 레포지토리가 실제로 어떤 릴리스를 배포했는지 기록할 수 있습니다. 이 기록이 릴리스 맵(release map)이며, `milestone complete <version> --release-map <file>`에 전달하는 JSON 배열로, 기록된 값 그대로 아카이브됩니다. `git.repo_tagging`이 태깅 모드를 선택하며, `init complete-milestone`은 이를 `repo_tagging`으로 `sub_repos`(설정된 레포지토리, 비어 있을 수 있음)와 함께 노출합니다.
+
+릴리스 맵의 각 항목에는 다음 필드가 있습니다:
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| `repo` | string | 레포지토리 이름. 필수이며 공백일 수 없고 맵 안에서 고유해야 합니다. 데이터로 취급되며 경로로는 절대 취급되지 않습니다 |
+| `release` | string 또는 null | 해당 레포지토리의 릴리스 버전 또는 태그 |
+| `reference` | string 또는 null | 커밋 SHA 또는 풀 리퀘스트 참조 |
+| `environment` | string 또는 null | 대상 환경, 자유 텍스트(예: `production`, `development`, `npm`) |
+| `status` | enum | 필수. 릴리스 맵 상태: `released`, `deployed`, `unreleased` |
+| `tag` | enum | 필수. 릴리스 맵 태그 상태: `created`, `already_tagged`, `skipped`, `none` |
+
+문자열 필드는 각각 200자, 맵은 256개 항목으로 제한됩니다. 알 수 없는 필드는 거부됩니다. 항목은 기록된 그대로 아카이브되며 `planning.sub_repos`로 걸러지지 않으므로, 건너뛰었거나 릴리스되지 않았거나 더 이상 설정에 없는 레포지토리도 맵에 남습니다. 아카이브는 원본 값을 `.planning/milestones/<version>-RELEASE-MAP.json`(`{ "version", "entries" }`)에 보관하고, MILESTONES.md 항목에는 값을 markdown용으로 이스케이프한 **Release mapping:** 표가 추가됩니다. 맵 없이 아카이브된 마일스톤은 영향을 받지 않습니다.
+
+GSD 마일스톤 버전은 `.planning/`의 계획된 작업을 가리키는 이름이며, 어느 레포지토리의 릴리스 버전과도 다를 수 있고, 레포지토리들이 하나의 버전 체계를 공유할 필요도 없습니다. `git.repo_tagging: per_repo`이고 `sub_repos`가 비어 있지 않으면, `/gsd-complete-milestone`은 맵을 수집하고, 요청된 모든 태그를 하나라도 생성하기 전에 검사하며, 태그를 생성(`milestone release-tags`)하고 맵을 아카이브한 뒤, 태그를 푸시하기 전에 레포지토리마다 별도의 질문(레포지토리와 해당 리모트를 명시)을 합니다. 기본적으로 아무것도 푸시되지 않습니다. [멀티 레포지토리 마일스톤에 태그 지정하기](../how-to/tag-a-multi-repo-milestone.md)를 참조하세요.
 
 ### 전략 비교
 

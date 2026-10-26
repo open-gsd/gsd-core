@@ -27,7 +27,12 @@ from the tracker at execution time instead of reading it inline out of `PLAN.md`
   A resolver that is declared but fails — tracker unreachable, id not found, timeout, malformed
   JSON — makes `task resolve-content` itself **exit non-zero**, which `execute-plan.md` treats as
   a **hard halt**: stop, surface the tracker-id/prefix/stderr, never fall back to stale
-  `PLAN.md` content.
+  `PLAN.md` content. An unsafe id (leading `-` or control characters) is rejected the same way, before any resolver is spawned.
+- **Decision-coverage gates also resolve tracker-held bodies.** `check decision-coverage-plan` and
+  `check decision-coverage-verify` resolve each `tracker-id` task through the same seam and count
+  the resolved `action`/`verify`/`acceptance_criteria`/`read_first`/`done` text as plan text. A
+  declared resolver that fails, times out or returns ambiguous/malformed output blocks the plan
+  gate and reports the verify gate unreadable. Plans without `tracker-id` are unchanged.
 - `execute:task` is a new dispatch shape below wave granularity, deliberately **not** one of the
   12 existing loop extension points (`discuss:pre` … `ship:post`) and not routed through
   `gsd_run loop render-hooks <point>` / `activeHooks`. It exists because the existing

@@ -136,6 +136,7 @@ const {
   diagnoseUnresolvedActiveWorkstream,
   describeUnresolvedWorkstreamReason,
   findContextMdIn,
+  findPhaseSpecIn,
   resolvePhaseIdConvention,
   worktreesOptedOut,
 } = planningWorkspace;
@@ -245,6 +246,27 @@ function resolvePhaseDisplayName(
   return (roadmapPhase?.['phase_name'] as string | undefined)
     || (phaseInfo?.['phase_name'] as string | undefined)
     || null;
+}
+
+/**
+ * #5629: the phase SPEC as init facts, for every init payload a SPEC-consuming workflow parses
+ * (discuss-phase via `phase-op`, discuss-phase-assumptions, plan-phase). `has_spec` is always present;
+ * `spec_path` (absolute, posix) only when a plain `NN-SPEC.md` exists. One predicate (`findPhaseSpecIn`, shared
+ * with the context-drift gate) decides, so a UI-SPEC or AI-SPEC is never mistaken for the requirements lock and
+ * no workflow globs for it. A phase with no directory yet, or one that cannot be read, has no SPEC.
+ */
+function phaseSpecFacts(phaseDirAbs: string | null): { has_spec: boolean; spec_path?: string } {
+  if (!phaseDirAbs) return { has_spec: false };
+  let files: string[];
+  try {
+    files = fs.readdirSync(phaseDirAbs);
+  } catch {
+    return { has_spec: false };
+  }
+  // Scoped to THIS phase's own artifacts first (#3511), like the sibling artifact lookups: a misfiled
+  // `02-SPEC.md` in phase 03's directory must not win (the context-drift gate scopes the same way).
+  const spec = findPhaseSpecIn(scopeToPhase(files, path.basename(phaseDirAbs)));
+  return spec ? { has_spec: true, spec_path: toPosixPath(path.join(phaseDirAbs, spec)) } : { has_spec: false };
 }
 
 /**
@@ -726,6 +748,29 @@ function detectFallowConfig(cwd: string): {
  */
 function detectGitCreateTag(cwd: string): boolean {
   return readConfigJsonValue(cwd, ['git', 'create_tag']) !== false;
+}
+
+/**
+ * `git.repo_tagging` ground truth (#5706, epic #3628): the milestone tagging
+ * mode exposed to `complete-milestone.md`. Only the documented `per_repo`
+ * opts in; an absent key or any other stored value reads as the default
+ * `single` (today's behavior), matching `loadConfig`'s resolution.
+ */
+function detectRepoTagging(cwd: string): 'single' | 'per_repo' {
+  return readConfigJsonValue(cwd, ['git', 'repo_tagging']) === 'per_repo' ? 'per_repo' : 'single';
+}
+
+/**
+ * The configured `planning.sub_repos` (#5706): an array of non-empty repo
+ * names, possibly empty. A legacy top-level `sub_repos` is honored when the
+ * nested key is absent, the same flat-then-nested order `loadConfig` applies.
+ * Non-string members are dropped; any degraded read yields `[]`.
+ */
+function detectSubRepos(cwd: string): string[] {
+  const nested = readConfigJsonValue(cwd, ['planning', 'sub_repos']);
+  const raw = nested !== undefined ? nested : readConfigJsonValue(cwd, ['sub_repos']);
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((name): name is string => typeof name === 'string' && name.trim() !== '');
 }
 
 /**
@@ -1342,6 +1387,9 @@ function cmdInitPlanPhase(
     state_path: fs.existsSync(statePath) ? toPosixPath(statePath) : null,
     roadmap_path: fs.existsSync(roadmapPath) ? toPosixPath(roadmapPath) : null,
     requirements_path: fs.existsSync(requirementsPath) ? toPosixPath(requirementsPath) : null,
+
+    // #5629: the phase SPEC (plan-phase lifts its Edge Coverage from it; no workflow globs for it).
+    ...phaseSpecFacts(phaseInfo?.['directory'] ? path.join(cwd, phaseInfo['directory'] as string) : null),
 
     patterns_path: null,
   };
@@ -2279,6 +2327,9 @@ function cmdInitDiscussPhaseAssumptions(
 
     roadmap_exists: fs.existsSync(path.join(planningDir(cwd), 'ROADMAP.md')),
     planning_exists: fs.existsSync(planningDir(cwd)),
+
+    // #5629: the phase SPEC, so assumptions mode honours it like the default flow does.
+    ...phaseSpecFacts(phaseDir ? path.join(cwd, phaseDir) : null),
   };
 
   // #2994 (Phase 6.3): additive, optional field — degrades to null, never throws.
@@ -2427,6 +2478,9 @@ function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
     state_path: fs.existsSync(statePath) ? toPosixPath(statePath) : null,
     roadmap_path: fs.existsSync(roadmapPath) ? toPosixPath(roadmapPath) : null,
     requirements_path: fs.existsSync(requirementsPath) ? toPosixPath(requirementsPath) : null,
+
+    // #5629: the phase SPEC (discuss-phase reads it from here; no workflow globs for it).
+    ...phaseSpecFacts(phaseDir ? path.join(cwd, phaseDir) : null),
   };
 
   if (phaseInfo?.['directory']) {
@@ -3501,10 +3555,24 @@ function cmdInitCompleteMilestone(
     milestones_path: fs.existsSync(milestonesPath) ? toPosixPath(milestonesPath) : null,
     project_path: fs.existsSync(projectPath) ? toPosixPath(projectPath) : null,
     requirements_path: fs.existsSync(requirementsPath) ? toPosixPath(requirementsPath) : null,
+    // #5706 (epic #3628): the repositories configured for this project and the
+    // milestone tagging mode, so the workflow reads both from one init call.
+    sub_repos: detectSubRepos(cwd),
+    repo_tagging: detectRepoTagging(cwd),
   };
 
+  // #5195: `state:flat-mode` gates the PROJECT.md evolution review. PROJECT.md
+  // is shared across workstreams (the `projectPath` comment above), so a
+  // workstream's milestone close must not rewrite or stage it — the same
+  // decision `cmdInitNewMilestone` applies to its Part A (#2308), resolved from
+  // the same authority (`GSD_WORKSTREAM` env, else the stored pointer) so the
+  // gate cannot disagree with the workstream-scoped paths returned above.
+  // Read-only peek: no self-heal side effect from building a report field (#3579).
+  const workstreamActive = !!(resolveEnvWorkstream() ?? peekActiveWorkstream(cwd));
   result['section_manifest'] = buildSectionManifestField(cwd, null, options, 'complete-milestone', {
     gitCreateTag,
+    workstreamActive,
+    flatMode: !workstreamActive,
   });
 
   output(withProjectRoot(cwd, result), raw);

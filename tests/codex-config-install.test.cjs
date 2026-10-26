@@ -2809,6 +2809,68 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     assert.ok(fs.existsSync(realHooksJson), 'the symlink target must have been written through');
   });
 
+  // #5301: config.toml is written twice per install (the agent-block merge, then the
+  // validated rewrite). Both ended in a rename onto the link path, which replaced a
+  // dotfiles-managed symlink with a plain file.
+  describe('a symlinked config.toml (#5301)', () => {
+    const configTomlPath = () => path.join(codexHome, 'config.toml');
+
+    function symlinkConfigToml(userContent) {
+      runCodexInstall(codexHome);
+      const realConfig = path.join(codexHome, 'dotfiles-codex.toml');
+      fs.writeFileSync(realConfig, userContent);
+      fs.unlinkSync(configTomlPath());
+      fs.symlinkSync(realConfig, configTomlPath());
+      return realConfig;
+    }
+
+    test('with GSD_ALLOW_SYMLINKED_DEST=1 the merged config lands in the link target and the link stays', () => {
+      const realConfig = symlinkConfigToml('model = "gpt-5"\n');
+      process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
+
+      assert.doesNotThrow(() => runCodexInstall(codexHome));
+
+      assert.ok(fs.lstatSync(configTomlPath()).isSymbolicLink(), 'config.toml must still be a symlink');
+      assert.strictEqual(fs.realpathSync(configTomlPath()), fs.realpathSync(realConfig));
+      const target = fs.readFileSync(realConfig, 'utf8');
+      assert.match(target, /model = "gpt-5"/, 'the user\'s original keys survive in the target');
+      assert.match(target, /\[agents[.\]]/, 'the merged GSD agent block is in the target');
+    });
+
+    // A dangling link is refused by the install-root guard even with the opt-in (it
+    // cannot resolve the link), so no config write is reached and the link is kept.
+    test('with GSD_ALLOW_SYMLINKED_DEST=1 a dangling link is refused and left as it was', () => {
+      runCodexInstall(codexHome);
+      const realConfig = path.join(codexHome, 'dotfiles', 'codex.toml');
+      fs.mkdirSync(path.dirname(realConfig), { recursive: true });
+      fs.unlinkSync(configTomlPath());
+      fs.symlinkSync(realConfig, configTomlPath());
+      process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
+
+      assert.throws(() => runCodexInstall(codexHome), /symlink/i);
+
+      assert.ok(fs.lstatSync(configTomlPath()).isSymbolicLink(), 'the link must survive a refused install');
+      assert.ok(!fs.existsSync(realConfig), 'no target was created');
+    });
+
+    test('without the opt-in the install refuses and neither the link nor its target changes', () => {
+      const realConfig = symlinkConfigToml('model = "gpt-5"\n');
+      const before = fs.readFileSync(realConfig, 'utf8');
+
+      assert.throws(() => runCodexInstall(codexHome), /symlink/i);
+
+      assert.ok(fs.lstatSync(configTomlPath()).isSymbolicLink(), 'the link must survive a refused install');
+      assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), before, 'the target must be unchanged');
+    });
+
+    test('a regular config.toml is still replaced atomically as a regular file', () => {
+      runCodexInstall(codexHome);
+      runCodexInstall(codexHome);
+      assert.ok(!fs.lstatSync(configTomlPath()).isSymbolicLink());
+      assert.match(fs.readFileSync(configTomlPath(), 'utf8'), /\[agents[.\]]/);
+    });
+  });
+
   test('cleanupOrphanedCodexContextMonitorScript keeps the hooks.json deregistration when script deletion fails', () => {
     runCodexInstall(codexHome);
     seedPreExisting2586Install(codexHome);
@@ -2905,3 +2967,51 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     );
   });
 });
+
+// #5496: a clean install must pass `validate agents`' sandbox posture. The check derives each role's
+// expected sandbox_mode from the canonical agent definitions; in an installed config dir those are
+// <cfg>/gsd-core/agents, while <cfg>/agents holds the converted copies (no `tools:` declaration), so
+// reading the latter made every workspace-write role look like it should be read-only.
+describe('validate agents against a real fresh Codex install (#5496)', () => {
+  const { spawnSync } = require('node:child_process');
+  const { createTempDir } = require('./helpers.cjs');
+  const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  let codexHome;
+  beforeEach(() => {
+    codexHome = createTempDir('gsd-5496-install-');
+    runCodexInstall(codexHome);
+  });
+  afterEach(() => { cleanup(codexHome); });
+
+  const validateAgents = () => {
+    const tools = path.join(codexHome, 'gsd-core', 'bin', 'gsd-tools.cjs');
+    assert.ok(fs.existsSync(tools), 'the install must ship gsd-tools.cjs');
+    const r = spawnSync(process.execPath, [tools, 'validate', 'agents', '--json'], {
+      cwd: codexHome,
+      encoding: 'utf8',
+      timeout: PROBE_TIMEOUT_MS,
+      env: { ...process.env, GSD_RUNTIME: 'codex', GSD_AGENTS_DIR: path.join(codexHome, 'agents'), CODEX_HOME: codexHome, HOME: codexHome, USERPROFILE: codexHome, GSD_HOME: codexHome },
+    });
+    return JSON.parse(r.stdout);
+  };
+
+  test('a clean install reports no sandbox_posture violations', () => {
+    const out = validateAgents();
+    assert.deepStrictEqual(out.sandbox_posture.violations, []);
+    assert.strictEqual(out.sandbox_posture.ok, true);
+    assert.ok(out.sandbox_posture.checked.length > 0, 'the check must have looked at the generated TOMLs');
+  });
+
+  test('a TOML whose sandbox_mode truly disagrees with its role is still reported', () => {
+    const tomlPath = path.join(codexHome, 'agents', 'gsd-executor.toml');
+    const original = fs.readFileSync(tomlPath, 'utf8');
+    assert.match(original, /^sandbox_mode = "workspace-write"$/m, 'precondition: the executor is workspace-write');
+    fs.writeFileSync(tomlPath, original.replace(/^sandbox_mode = "workspace-write"$/m, 'sandbox_mode = "read-only"'));
+    const out = validateAgents();
+    const hit = out.sandbox_posture.violations.find((v) => v.agent === 'gsd-executor');
+    assert.ok(hit, `expected a gsd-executor violation, got ${JSON.stringify(out.sandbox_posture.violations)}`);
+    assert.strictEqual(hit.expected, 'workspace-write');
+    assert.strictEqual(hit.found, 'read-only');
+  });
+});
+

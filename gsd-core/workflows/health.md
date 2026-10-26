@@ -249,7 +249,7 @@ Report final status.
 | W027 | warning | Stale git worktree (not modified in a long time) | No |
 | W028 | warning | A GSD-owned install scope shadows another on this machine | No |
 | W029 | warning | .planning/ matches a gitignore rule but is still tracked by git (gitignore has no effect on already-tracked files) | No |
-| W030 | warning | Phase verification report status is outside the closed set | No |
+| W030 | warning | Phase verification report status is outside the closed set | Yes (known legacy statuses only) |
 | I001 | info | Plan without SUMMARY (may be in progress) | No |
 | I010 | info | Resolved CWD reported alongside the E010 home-directory guard | No |
 
@@ -266,6 +266,7 @@ Note: this table is **generated** — do not hand-edit it. It is produced by `no
 | addNyquistKey | Add workflow.nyquist_validation: true to config.json | None — matches existing default |
 | addAiIntegrationPhaseKey | Add workflow.ai_integration_phase: true to config.json | None — matches existing default |
 | backfillMilestones | Synthesize missing MILESTONES.md entries from `.planning/milestones/vX.Y-ROADMAP.md` snapshots | None — additive only; triggered by `--backfill` flag |
+| repairVerificationStatus | Rewrite a known legacy verification `status` (`pass_with_caveats`) to `passed`, keeping the original as `legacy_status` | None — only the `status` line changes; unknown statuses are never touched |
 
 **Not repairable (too risky):**
 - PROJECT.md, ROADMAP.md content

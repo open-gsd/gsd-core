@@ -42,7 +42,7 @@ It should **not** in the first pass:
 - Replace `MINIMAL_SKILL_ALLOWLIST` Object.freeze constant with `PROFILES` Object.freeze map of profile-name → base skill set.
 - Replace `isMinimalMode(mode)` with `resolveProfile(mode)` returning a typed `{name, skills: Set, agents: Set}` after transitive-closure computation.
 - Replace `shouldInstallSkill(name, mode)` with `shouldInstallSkill(name, resolvedProfile)`.
-- Replace `stageSkillsForMode(srcDir, mode)` with `stageSkillsForProfile(srcDir, resolvedProfile)`. Add a sibling `stageAgentsForProfile` since this module now owns agent staging too (current `--minimal` skips agents wholesale; tiered profiles need finer control).
+- Replace `stageSkillsForMode(srcDir, mode)` with `stageSkillsForProfile(srcDir, resolvedProfile)`. Add a sibling `stageAgentsForProfile` since this module now owns agent staging too (current `--minimal` skips agents wholesale; tiered profiles need finer control). *Update (#5503): the core profile no longer skips agents wholesale — it stages exactly the agents its eight skills spawn, while its skill set stays unchanged.*
 - Keep the existing exit-cleanup machinery (`STAGED_DIRS`, `ensureExitCleanup`) unchanged — the bug surface it covers is the same.
 
 ### `bin/install.js`

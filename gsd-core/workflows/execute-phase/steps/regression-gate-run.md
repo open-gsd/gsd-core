@@ -29,7 +29,8 @@ if [ -z "$REG_TEST_CMD" ]; then
   elif [ -f "Justfile" ] || [ -f "justfile" ]; then
     REG_TEST_CMD="just test"
   elif [ -f "package.json" ]; then
-    REG_TEST_CMD="npm test"
+    REG_TEST_CMD=$(gsd_run query resolve-package-manager test --cwd . 2>/dev/null || echo "npm test")
+    [ -n "$REG_TEST_CMD" ] || REG_TEST_CMD="npm test"
   elif [ -f "Cargo.toml" ]; then
     REG_TEST_CMD="cargo test"
   elif [ -f "go.mod" ]; then

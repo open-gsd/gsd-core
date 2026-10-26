@@ -360,3 +360,134 @@ describe('bug #2523: quick-task final commit includes deferred-items.md', () => 
     });
   });
 }
+
+// #5209: the shipped step-5.6 shell must record the plan commit's immediate
+// parent as QUICK_PLAN_PARENT in BOTH orderings (planner already committed the
+// plan / step 5.6 creates the commit). It is the value the worktree branch
+// guard accepts as the alternate base and that quick.md lists in allowed_bases.
+{
+  const { describe, test } = require('node:test');
+  const assert = require('node:assert/strict');
+  const fs = require('fs');
+  const path = require('path');
+  const os = require('os');
+  const { runHook } = require('./helpers/process-seam.cjs');
+  const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+  const { createTempGitProject, cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
+
+  const STEP_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'quick', 'steps', 'worktree-pre-dispatch-commit.md');
+  const OPEN = '```bash\n';
+
+  /** The step's runnable bash, minus the gsd-tools resolver preamble (replaced by a stub). */
+  function stepScript() {
+    const md = fs.readFileSync(STEP_PATH, 'utf-8');
+    const start = md.indexOf(OPEN) + OPEN.length;
+    const body = md.slice(start, md.indexOf('\n```', start));
+    return body.slice(body.indexOf('QUICK_PLAN_PARENT=""'));
+  }
+
+  /** Run the step in `dir`; returns { parent, commit } as the script left them. */
+  function runStep(dir, { commitDocs = 'true' } = {}) {
+    const script = [
+      'set -u',
+      'gsd_run() { case "$*" in *config-get\\ commit_docs*) echo "$STUB_COMMIT_DOCS";; *config-get\\ workflow.worktree_skip_hooks*) echo "true";; esac; }',
+      stepScript(),
+      'printf "PARENT=%s\\nCOMMIT=%s\\n" "${QUICK_PLAN_PARENT}" "${QUICK_PLAN_COMMIT}"',
+    ].join('\n');
+    const file = path.join(os.tmpdir(), `gsd-5209-${process.pid}-${Date.now()}.sh`);
+    fs.writeFileSync(file, script);
+    try {
+      const r = runHook(file, [], {
+        interpreter: 'bash',
+        cwd: dir,
+        env: {
+          ...process.env,
+          ...TEST_ENV_BASE,
+          USE_WORKTREES: 'true',
+          QUICK_DIR: '.planning/quick',
+          quick_id: '261021-abc',
+          DISCUSS_MODE: 'false',
+          RESEARCH_MODE: 'false',
+          DESCRIPTION: 'fix thing',
+          STUB_COMMIT_DOCS: commitDocs,
+        },
+      });
+      assert.equal(r.exitCode, 0, `step 5.6 script failed: ${r.stderr}`);
+      // The step also prints git/info chatter; read only the two marker lines.
+      const lines = r.stdout.split(/\r?\n/);
+      const pick = (key) => (lines.find((l) => l.startsWith(`${key}=`)) || `${key}=`).slice(key.length + 1);
+      return { parent: pick('PARENT'), commit: pick('COMMIT') };
+    } finally {
+      cleanup(file);
+    }
+  }
+
+  const git = (dir, ...args) => gitOrThrow(args, { cwd: dir }).trim();
+  const writePlan = (dir) => {
+    fs.mkdirSync(path.join(dir, '.planning', 'quick'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.planning', 'quick', '261021-abc-PLAN.md'), '# Plan\n');
+  };
+
+  describe('quick step 5.6 records the plan commit\'s parent as QUICK_PLAN_PARENT (#5209)', () => {
+    test('planner-committed plan: the alternate is the plan commit\'s parent and differs from HEAD', (t) => {
+      const dir = createTempGitProject();
+      t.after(() => cleanup(dir));
+      const before = git(dir, 'rev-parse', 'HEAD');
+      writePlan(dir);
+      git(dir, 'add', '.planning/quick/261021-abc-PLAN.md');
+      git(dir, 'commit', '-m', 'docs(261021-abc): create phase plan');
+      const head = git(dir, 'rev-parse', 'HEAD');
+      const { parent, commit } = runStep(dir);
+      assert.equal(commit, head, 'the plan commit is HEAD');
+      assert.equal(parent, before, 'the alternate must be the plan commit\'s immediate parent');
+      assert.notEqual(parent, head);
+    });
+
+    test('pre-dispatch-created plan commit: the alternate is that commit\'s parent', (t) => {
+      const dir = createTempGitProject();
+      t.after(() => cleanup(dir));
+      const before = git(dir, 'rev-parse', 'HEAD');
+      writePlan(dir);
+      const { parent, commit } = runStep(dir);
+      assert.equal(git(dir, 'rev-parse', 'HEAD'), commit, 'step 5.6 created the plan commit');
+      assert.notEqual(commit, before);
+      assert.equal(parent, before);
+    });
+
+    test('docs commits disabled: the alternate stays empty', (t) => {
+      const dir = createTempGitProject();
+      t.after(() => cleanup(dir));
+      writePlan(dir);
+      const { parent } = runStep(dir, { commitDocs: 'false' });
+      assert.equal(parent, '');
+    });
+
+    test('a root plan commit yields an empty alternate without failing the step', (t) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5209-root-'));
+      t.after(() => cleanup(dir));
+      git(dir, 'init', '-q');
+      git(dir, 'config', 'user.email', 't@example.com');
+      git(dir, 'config', 'user.name', 'T');
+      writePlan(dir);
+      git(dir, 'add', '.planning/quick/261021-abc-PLAN.md');
+      git(dir, 'commit', '-q', '-m', 'docs(261021-abc): create phase plan');
+      const { parent, commit } = runStep(dir);
+      assert.equal(commit, git(dir, 'rev-parse', 'HEAD'));
+      assert.equal(parent, '');
+    });
+
+    test('the plan was committed earlier and a later commit sits on top: the alternate is still the plan commit\'s parent', (t) => {
+      const dir = createTempGitProject();
+      t.after(() => cleanup(dir));
+      const before = git(dir, 'rev-parse', 'HEAD');
+      writePlan(dir);
+      git(dir, 'add', '.planning/quick/261021-abc-PLAN.md');
+      git(dir, 'commit', '-m', 'docs(261021-abc): create phase plan');
+      fs.writeFileSync(path.join(dir, 'later.txt'), 'later\n');
+      git(dir, 'add', 'later.txt');
+      git(dir, 'commit', '-m', 'chore: unrelated later commit');
+      const { parent } = runStep(dir);
+      assert.equal(parent, before, 'the alternate must follow the commit that added PLAN.md, not HEAD^');
+    });
+  });
+}

@@ -22,7 +22,7 @@
  */
 
 /**
- * @param {string} changedPath - a single changed docs/ path (e.g. 'docs/AGENTS.md').
+ * @param {string} changedPath - a single changed docs/ path (e.g. 'docs/reference/agents.md').
  * @param {string} pattern - one entry from a registry value array.
  * @returns {boolean}
  */

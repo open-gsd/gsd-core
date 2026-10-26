@@ -45,6 +45,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 
 // Resolve the GSD engine tree (the dir holding gsd-core/ + hooks/).
@@ -276,6 +278,29 @@ function buildBeforeProviderRequestHandler({ tier = 'sonnet' } = {}) {
   };
 }
 
+/** Largest hook stdout kept. A guard echoes the offending path, which a model controls. */
+const HOOK_MAX_BUFFER = 8 * 1024 * 1024;
+const warnedHookFailures = new Set();
+
+/**
+ * A hook that overflowed its output buffer produced a verdict we cannot read: refuse the call
+ * (exit 2) rather than let a payload sized to overflow the buffer read as an allow. Any other
+ * spawn failure (no runtime, EPERM) fails open, but loudly once, because the guard did not run.
+ * @returns {{ stdout: string, exitCode: number, timedOut: boolean } | null}
+ */
+function hookSpawnFailure(result, hookFile) {
+  const err = result && result.error;
+  if (!err || err.code === 'ETIMEDOUT') return null;
+  if (err.code === 'ENOBUFS') {
+    return { stdout: JSON.stringify({ decision: 'block', reason: `${hookFile} produced more output than GSD will read, so the call is refused.` }), exitCode: 2, timedOut: false };
+  }
+  if (!warnedHookFailures.has(hookFile)) {
+    warnedHookFailures.add(hookFile);
+    console.error(`[gsd-core] cannot run hook ${hookFile} (${err.code || err.message}) — that guard is NOT enforced.`);
+  }
+  return { stdout: '', exitCode: 0, timedOut: false };
+}
+
 /**
  * Bounded subprocess bridge to GSD's Claude Code hook scripts. Mirrors
  * .opencode/plugins/gsd-core.js's `runHook` (SUBPROCESS-REUSE): spawns
@@ -294,24 +319,953 @@ function runHook(hookFile, payload, opts = {}) {
   const timeout = opts.timeout || 8000;
   let result;
   try {
-    result = spawnSync(process.execPath, [hookPath], {
+    result = spawnSync(hookRuntime(), [hookPath], {
       input: JSON.stringify(payload || {}),
       encoding: 'utf8',
       timeout,
+      maxBuffer: HOOK_MAX_BUFFER,
       cwd: opts.cwd || process.cwd(),
       windowsHide: true,
     });
   } catch {
     return { stdout: '', exitCode: 0, timedOut: false };
   }
+  const failure = hookSpawnFailure(result, hookFile);
+  if (failure) return failure;
   const stdout = (result && typeof result.stdout === 'string') ? result.stdout.trim() : '';
   const exitCode = (result && result.status != null) ? result.status : 0;
   return { stdout, exitCode, timedOut: !!(result && result.signal === 'SIGTERM') };
 }
 
-module.exports = function gsdPiExtension(pi) {
+// ── hook bridge: PreToolUse / PostToolUse (#5560) ─────────────────────────────
+// Verified against live Pi 1.3.0 (docs/reference/pi-hook-parity.md): `tool_call` carries
+// { toolName, toolCallId, input } with lowercase tool names; a handler returning
+// { block: true, reason } stops the call and the model sees `reason` as the tool result (no
+// `tool_result` follows); `tool_result` handlers may return { content } to replace the
+// model-facing content. Pi blocks a tool whose `tool_call` handler THROWS, so every handler
+// below catches everything and fails open. The guards stay the hook scripts (no reimplementation).
+
+/** Hook scripts are Node; inside a Bun-hosted Pi `process.execPath` would boot Pi (#4849). */
+function hookRuntime() {
+  const fromEnv = process.env.GSD_HOOK_RUNTIME;
+  if (typeof fromEnv === 'string' && fromEnv.length > 0) return fromEnv;
+  return typeof Bun !== 'undefined' ? (resolveWinExe('node') || 'node') : process.execPath;
+}
+
+/**
+ * On Windows a bare executable name is searched in the spawn cwd (the project) first, so a hostile
+ * repo could plant `bash.exe`. Resolve it to an absolute path from drive-letter PATH entries instead.
+ * Returns null off Windows or when nothing is found (the caller falls back to the bare name).
+ */
+function resolveWinExe(name, env = process.env, platform = process.platform, exists = (f) => { try { return fs.statSync(f).isFile(); } catch { return false; } }) {
+  if (platform !== 'win32') return null;
+  const dirs = String(env.Path || env.PATH || '').split(';').filter((d) => /^[A-Za-z]:[\\/]/.test(d));
+  for (const dir of dirs) {
+    const candidate = path.win32.join(dir, `${name}.exe`);
+    if (exists(candidate)) return candidate;
+  }
+  return null;
+}
+
+const PI_FIELD_MAX_CHARS = 1024 * 1024;
+const hasOwn = (o, k) => typeof k === 'string' && Object.prototype.hasOwnProperty.call(o, k);
+
+/** Pi's file tools strip a leading `@` and expand `~`; the hooks see the absolute path Claude would send. */
+function resolvePiPath(p, cwd) {
+  let v = p.startsWith('@') ? p.slice(1) : p;
+  if (v === '~' || v.startsWith('~/') || v.startsWith('~\\')) v = path.join(os.homedir(), v.slice(1));
+  return typeof cwd === 'string' && cwd ? path.resolve(cwd, v) : v;
+}
+
+/** Pi tool name -> the Claude tool name the hook scripts match on. Tools absent here run no hook. */
+const PI_TOOL_NAME_MAP = Object.freeze({
+  bash: 'Bash', powershell: 'Bash', read: 'Read', write: 'Write', edit: 'Edit', grep: 'Grep', find: 'Glob',
+});
+
+/**
+ * Claude-shaped `tool_input` from a Pi tool input. Only well-typed fields are forwarded, so a
+ * malformed input yields a smaller object, never a throw.
+ * @param {string} piTool
+ * @param {unknown} input
+ */
+function mapPiToolInput(piTool, input, cwd) {
+  const out = {};
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return out;
+  // Forwarded text is capped: a model can pad a field to push a guard past its timeout.
+  const str = (v) => (typeof v === 'string' ? v.slice(0, PI_FIELD_MAX_CHARS) : undefined);
+  if (str(input.path) !== undefined) out.file_path = resolvePiPath(input.path, cwd);
+  if (piTool === 'write' && str(input.content) !== undefined) out.content = str(input.content);
+  if (piTool === 'edit' && Array.isArray(input.edits)) {
+    const olds = [];
+    const news = [];
+    for (const e of input.edits) {
+      if (e && typeof e === 'object') {
+        if (str(e.oldText) !== undefined) olds.push(str(e.oldText));
+        if (str(e.newText) !== undefined) news.push(str(e.newText));
+      }
+    }
+    if (olds.length > 0) out.old_string = olds.join('\n').slice(0, PI_FIELD_MAX_CHARS);
+    if (news.length > 0) out.new_string = news.join('\n').slice(0, PI_FIELD_MAX_CHARS);
+  }
+  if ((piTool === 'bash' || piTool === 'powershell') && str(input.command) !== undefined) out.command = str(input.command);
+  if (piTool === 'grep' || piTool === 'find') {
+    if (str(input.pattern) !== undefined) out[piTool === 'grep' ? 'pattern' : 'glob'] = str(input.pattern);
+    if (piTool === 'grep' && str(input.glob) !== undefined) out.glob = str(input.glob);
+  }
+  return out;
+}
+
+/** Run a GSD `.sh` hook under bash with the payload on stdin. Fails open like runHook. */
+function runShellHook(hookFile, payload, opts = {}) {
+  const none = { stdout: '', exitCode: 0, timedOut: false };
+  if (!SHARED_HOOKS_DIR) return none;
+  const hookPath = path.join(SHARED_HOOKS_DIR, hookFile);
+  if (!fs.existsSync(hookPath)) return none;
+  let result;
+  try {
+    result = spawnSync(process.env.GSD_HOOK_SHELL || resolveWinExe('bash') || 'bash', [hookPath], {
+      input: JSON.stringify(payload || {}),
+      encoding: 'utf8',
+      timeout: opts.timeout || 15000,
+      maxBuffer: HOOK_MAX_BUFFER,
+      cwd: opts.cwd || process.cwd(),
+      windowsHide: true,
+    });
+  } catch {
+    return none;
+  }
+  if (!result) return none;
+  const failure = hookSpawnFailure(result, hookFile);
+  if (failure) return failure;
+  if (result.error) return { stdout: '', exitCode: 0, timedOut: true };
+  return {
+    stdout: typeof result.stdout === 'string' ? result.stdout.trim() : '',
+    exitCode: result.status == null ? 0 : result.status,
+    timedOut: result.signal === 'SIGTERM',
+  };
+}
+
+/**
+ * Bound for the two blocking guards that probe git. A hook killed on timeout reports exit 0 (an
+ * allow), so a bound below the guard's own worst case silently disables the gate; read the
+ * guards' budget from the staged hooks/lib so it cannot drift.
+ */
+const PI_GIT_PROBING_GUARDS = new Set(['gsd-worktree-path-guard.js', 'gsd-workflow-guard.js']);
+function gitProbingGuardTimeoutMs() {
+  try {
+    const probe = require(path.join(SHARED_HOOKS_DIR, 'lib', 'git-probe.js'));
+    const worst = probe.BLOCKING_GUARD_MAX_SEQUENTIAL_PROBES * probe.BLOCKING_GUARD_PROBE_TIMEOUT_MS;
+    if (Number.isFinite(worst) && worst > 0) return worst + 5000;
+  } catch { /* partial install: use the fallback */ }
+  return 20000;
+}
+
+/**
+ * Interpret a hook result the way the Claude convention defines it: exit 2 or
+ * `{"decision":"block"}` blocks; `hookSpecificOutput.additionalContext` is an advisory.
+ * @returns {{ block: true, reason: string } | { advisory: string } | null}
+ */
+function interpretHookResult(result) {
+  if (!result) return null;
+  const { stdout, exitCode } = result;
+  if (!stdout && exitCode !== 2) return null;
+  let parsed = null;
+  if (stdout) { try { parsed = JSON.parse(stdout); } catch { /* non-JSON stdout */ } }
+  if (exitCode === 2 || (parsed && parsed.decision === 'block')) {
+    return { block: true, reason: (parsed && typeof parsed.reason === 'string' && parsed.reason) || 'Blocked by GSD hook (no reason provided).' };
+  }
+  const advisory = parsed && parsed.hookSpecificOutput && parsed.hookSpecificOutput.additionalContext;
+  return typeof advisory === 'string' && advisory ? { advisory } : null;
+}
+
+/** [hook file, Claude tools it matches, runner kind, gate]. Order is the order the guards run in. */
+const PI_PRE_TOOL_HOOKS = Object.freeze([
+  ['gsd-prompt-guard.js', ['Write', 'Edit'], 'js', null],
+  ['gsd-read-guard.js', ['Write', 'Edit'], 'js', null],
+  ['gsd-worktree-path-guard.js', ['Write', 'Edit'], 'js', null],
+  ['gsd-write-guard.js', ['Write'], 'js', null],
+  ['gsd-workflow-guard.js', ['Write', 'Edit', 'Bash'], 'js', null],
+  ['gsd-secret-read-guard.js', ['Read', 'Grep', 'Bash'], 'js', null],
+  ['gsd-validate-commit.sh', ['Bash'], 'sh', 'community'],
+]);
+const PI_POST_TOOL_HOOKS = Object.freeze([
+  ['gsd-read-injection-scanner.js', ['Read'], 'js', null],
+  ['gsd-phase-boundary.sh', ['Write', 'Edit'], 'sh', 'community'],
+  ['gsd-graphify-update.sh', ['Bash'], 'sh', 'graphify'],
+]);
+const PI_ADVISORY_QUEUE_MAX = 50;
+const PI_ADVISORY_MAX_CHARS = 4000;
+/** Hook output can echo repo- or model-controlled text (paths, scanned content): cap it and strip control characters. */
+function sanitizeAdvisory(text) {
+  // eslint-disable-next-line no-control-regex
+  return String(text).replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, ' ').slice(0, PI_ADVISORY_MAX_CHARS);
+}
+const PI_CONFIG_MAX_BYTES = 1024 * 1024;
+/** Blocking guards that must not read a timeout as an allow (they never probe git, so a timeout is not their normal worst case). */
+const PI_FAIL_CLOSED_ON_TIMEOUT = new Set(['gsd-secret-read-guard.js']);
+
+/**
+ * What each Claude hook becomes on Pi (#5560 acceptance: every hook has a disposition).
+ * status: bridged | unsupported | not-applicable | internal.
+ */
+const PI_HOOK_DISPOSITIONS = Object.freeze({
+  'gsd-ensure-canonical-path.js': [{ claude: 'SessionStart', status: 'bridged', pi: 'session_start' }],
+  'gsd-session-state.sh': [{ claude: 'SessionStart', status: 'bridged', pi: 'before_agent_start (first turn, custom message)' }],
+  'gsd-path-export.js': [{ claude: 'SessionStart', status: 'unsupported', reason: 'persists the gsd_run directory through $CLAUDE_ENV_FILE, which Claude Code provides only to SessionStart, Setup, CwdChanged and FileChanged hooks; Pi has no equivalent env file' }],
+  'gsd-check-update.js': [{ claude: 'SessionStart', status: 'unsupported', reason: 'its cache is read only by the Claude statusline and update banner; Pi has neither, and Pi installs update through the installer or `pi update`' }],
+  'gsd-check-update-worker.js': [{ claude: null, status: 'internal', reason: 'spawned by gsd-check-update.js' }],
+  'gsd-update-banner.js': [{ claude: 'statusLine', status: 'unsupported', reason: 'renders into the Claude statusline; Pi extensions have no equivalent statusline command' }],
+  'gsd-statusline.js': [{ claude: 'statusLine', status: 'unsupported', reason: 'Claude statusLine command; Pi extensions have no equivalent statusline command' }],
+  'gsd-prompt-guard.js': [{ claude: 'PreToolUse', status: 'bridged', pi: 'tool_call (write, edit)' }],
+  'gsd-read-guard.js': [{ claude: 'PreToolUse', status: 'bridged', pi: 'tool_call (write, edit)' }],
+  'gsd-worktree-path-guard.js': [{ claude: 'PreToolUse', status: 'bridged', pi: 'tool_call (write, edit)' }],
+  'gsd-write-guard.js': [{ claude: 'PreToolUse', status: 'bridged', pi: 'tool_call (write)' }],
+  'gsd-workflow-guard.js': [{ claude: 'PreToolUse', status: 'bridged', pi: 'tool_call (write, edit, bash)' }],
+  'gsd-secret-read-guard.js': [{ claude: 'PreToolUse', status: 'bridged', pi: 'tool_call (read, grep, bash)' }],
+  'gsd-validate-commit.sh': [{ claude: 'PreToolUse', status: 'bridged', pi: 'tool_call (bash), opt-in hooks.community' }],
+  'gsd-agent-isolation-guard.js': [{ claude: 'PreToolUse', status: 'unsupported', reason: 'guards the isolation argument of Claude\'s Agent call; gsd_dispatch has no isolation parameter and a dispatched role runs flat in its own process' }],
+  'gsd-read-injection-scanner.js': [{ claude: 'PostToolUse', status: 'bridged', pi: 'tool_result (read)' }],
+  'gsd-phase-boundary.sh': [{ claude: 'PostToolUse', status: 'bridged', pi: 'tool_result (write, edit), opt-in hooks.community' }],
+  'gsd-graphify-update.sh': [{ claude: 'PostToolUse', status: 'bridged', pi: 'tool_result (bash), opt-in graphify.auto_update' }],
+  'gsd-context-monitor.js': [
+    { claude: 'PreCompact', status: 'bridged', pi: 'session_before_compact' },
+    { claude: 'PostToolUse', status: 'unsupported', reason: 'reads the context metrics the Claude statusline writes; Pi has no statusline to produce them' },
+    { claude: 'SubagentStop', status: 'unsupported', reason: 'same metrics source as PostToolUse, and a dispatched role is a separate process with no extensions' },
+    { claude: 'Stop', status: 'unsupported', reason: 'same metrics source as PostToolUse' },
+  ],
+  'gsd-config-reload.js': [{ claude: 'FileChanged', status: 'unsupported', reason: 'Pi 1.3.0 has no file-change event for extensions' }],
+  'gsd-node-runner.sh': [{ claude: null, status: 'internal', reason: 'portable node resolver for managed Claude hook commands; Pi runs hooks through its own bridge' }],
+  'gsd-cursor-post-tool.js': [{ claude: null, status: 'not-applicable', reason: 'Cursor-specific hook' }],
+  'gsd-cursor-pre-tool.js': [{ claude: null, status: 'not-applicable', reason: 'Cursor-specific hook' }],
+  'gsd-cursor-session-start.js': [{ claude: null, status: 'not-applicable', reason: 'Cursor-specific hook' }],
+  'gsd-cursor-stop.js': [{ claude: null, status: 'not-applicable', reason: 'Cursor-specific hook' }],
+  'gsd-cursor-subagent-start.js': [{ claude: null, status: 'not-applicable', reason: 'Cursor-specific hook' }],
+  'gsd-cursor-subagent-stop.js': [{ claude: null, status: 'not-applicable', reason: 'Cursor-specific hook' }],
+  'gsd-windsurf-pre-command.js': [{ claude: null, status: 'not-applicable', reason: 'Windsurf-specific hook' }],
+  'gsd-windsurf-pre-write.js': [{ claude: null, status: 'not-applicable', reason: 'Windsurf-specific hook' }],
+});
+
+/**
+ * The PreToolUse / PostToolUse bridge. Seams: `runHook`, `runShellHook`, `readConfig(cwd)`, `env`.
+ * Handlers never throw and never block unless a hook explicitly said so.
+ */
+function createHookBridge(deps = {}) {
+  const run = deps.runHook || runHook;
+  const runSh = deps.runShellHook || runShellHook;
+  const readConfig = deps.readConfig || ((cwd) => {
+    try {
+      const file = path.join(cwd, '.planning', 'config.json');
+      const st = fs.lstatSync(file);
+      if (!st.isFile() || st.size > PI_CONFIG_MAX_BYTES) return null;
+      return JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch { return null; }
+  });
+  const env = deps.env || process.env;
+  /** @type {Map<string, string[]>} advisories raised before a tool ran, by toolCallId */
+  const pending = new Map();
+
+  let configMemo = null;
+  const gateOpen = (gate, cwd) => {
+    if (!gate) return true;
+    if (!configMemo || configMemo.cwd !== cwd) configMemo = { cwd, value: readConfig(cwd) };
+    const config = configMemo.value;
+    if (!config) return false;
+    if (gate === 'community') return !!config.hooks && config.hooks.community === true;
+    if (gate === 'graphify') return !env.CI && !!config.graphify && config.graphify.enabled === true && config.graphify.auto_update === true;
+    return false;
+  };
+  const invoke = (table, claudeTool, payload, cwd, onResult) => {
+    configMemo = null; // one config read per event
+    for (const [file, tools, kind, gate] of table) {
+      if (!tools.includes(claudeTool) || !gateOpen(gate, cwd)) continue;
+      const opts = { cwd };
+      if (PI_GIT_PROBING_GUARDS.has(file)) opts.timeout = gitProbingGuardTimeoutMs();
+      const raw = kind === 'sh' ? runSh(file, payload, opts) : run(file, payload, opts);
+      let outcome = interpretHookResult(raw);
+      if (raw && raw.timedOut) {
+        // A killed hook reports exit 0, which would read as an allow. Say so, and fail closed where the guard is cheap.
+        outcome = PI_FAIL_CLOSED_ON_TIMEOUT.has(file)
+          ? { block: true, reason: `${file} timed out, so the call is refused.` }
+          : { advisory: `${file} timed out and its check did not run.` };
+      }
+      if (outcome && onResult(outcome) === 'stop') return;
+    }
+  };
+  const remember = (id, text) => {
+    if (typeof id !== 'string') return;
+    text = sanitizeAdvisory(text);
+    if (!pending.has(id) && pending.size >= PI_ADVISORY_QUEUE_MAX) pending.delete(pending.keys().next().value);
+    const list = pending.get(id) || [];
+    list.push(text);
+    pending.set(id, list);
+  };
+
+  return {
+    pending,
+    onToolCall(event, ctx) {
+      try {
+        const claudeTool = event && hasOwn(PI_TOOL_NAME_MAP, event.toolName) ? PI_TOOL_NAME_MAP[event.toolName] : undefined;
+        if (!claudeTool) return undefined;
+        const cwd = (ctx && ctx.cwd) || process.cwd();
+        // No session_id: gsd-read-guard treats a non-empty one as a Claude Code session and skips its advisory.
+        const payload = { hook_event_name: 'PreToolUse', cwd, tool_name: claudeTool, tool_input: mapPiToolInput(event.toolName, event.input, cwd) };
+        let blocked = null;
+        invoke(PI_PRE_TOOL_HOOKS, claudeTool, payload, cwd, (outcome) => {
+          if (outcome.block) { blocked = outcome; return 'stop'; }
+          remember(event.toolCallId, outcome.advisory);
+          return undefined;
+        });
+        if (blocked) {
+          pending.delete(event.toolCallId); // Pi emits no tool_result for a blocked call
+          return { block: true, reason: sanitizeAdvisory(blocked.reason) };
+        }
+      } catch { /* fail open: a thrown handler would make Pi block the tool */ }
+      return undefined;
+    },
+    onToolResult(event, ctx) {
+      try {
+        if (!event) return undefined;
+        const advisories = pending.get(event.toolCallId) || [];
+        pending.delete(event.toolCallId);
+        const claudeTool = hasOwn(PI_TOOL_NAME_MAP, event.toolName) ? PI_TOOL_NAME_MAP[event.toolName] : undefined;
+        if (claudeTool) {
+          const cwd = (ctx && ctx.cwd) || process.cwd();
+          const payload = { hook_event_name: 'PostToolUse', cwd, tool_name: claudeTool, tool_input: mapPiToolInput(event.toolName, event.input, cwd), tool_response: { content: event.content } };
+          invoke(PI_POST_TOOL_HOOKS, claudeTool, payload, cwd, (outcome) => {
+            // A PostToolUse hook cannot undo the call; a block here is only a message to the model.
+            advisories.push(sanitizeAdvisory(outcome.block ? outcome.reason : outcome.advisory));
+          });
+        }
+        if (advisories.length === 0 || !Array.isArray(event.content)) return undefined;
+        return { content: [...event.content, ...advisories.map((a) => ({ type: 'text', text: `\n\n[GSD advisory] ${a}` }))] };
+      } catch { return undefined; }
+    },
+  };
+}
+
+// ── workflow hand-off (#5547) ─────────────────────────────────────────────────
+// `/gsd <command>` used to be a data dispatcher only: `/gsd init new-project`
+// printed the init JSON and stopped, because Pi had no entry point that mapped a
+// GSD command to its workflow. The installer now writes each command as a Pi
+// skill (`<config>/skills/gsd-<command>/SKILL.md`, invoked `/skill:gsd-<command>`),
+// so a command that names one of those skills hands off to it instead.
+
+// `/gsd init <workflow>` is a data call (the init bundle a workflow consumes).
+// This maps each `gsd-tools init` workflow that has a GSD command to the command
+// stem whose skill runs it — most are the same name, a few differ (`resume` ->
+// `resume-work`, `new-workspace` -> `workspace`, ...). tests/pi-workflow-handoff
+// pins every target to a commands/gsd/<name>.md file and every `gsd-tools init`
+// workflow to either an entry here or an explicit no-skill reason.
+const PI_WORKFLOW_INIT_COMMANDS = Object.freeze({
+  'execute-phase': 'execute-phase',
+  'plan-phase': 'plan-phase',
+  'new-project': 'new-project',
+  'new-milestone': 'new-milestone',
+  onboard: 'onboard',
+  quick: 'quick',
+  'quick-batch': 'quick-batch',
+  'ingest-docs': 'ingest-docs',
+  'verify-work': 'verify-work',
+  'code-review': 'code-review',
+  review: 'review',
+  'map-codebase': 'map-codebase',
+  progress: 'progress',
+  manager: 'manager',
+  'complete-milestone': 'complete-milestone',
+  autonomous: 'autonomous',
+  'docs-update': 'docs-update',
+  update: 'update',
+  debug: 'debug',
+  resume: 'resume-work',
+  'discuss-phase-assumptions': 'discuss-phase',
+  'new-workspace': 'workspace',
+});
+
+// ── Pi package layout (#5558) ───────────────────────────────────────────────
+// `pi install npm:@opengsd/gsd-core` loads THIS file straight out of the npm
+// package (manifest `pi.extensions`). There, the engine tree is the package
+// root and Pi's skills are not installed anywhere: they ship as templates under
+// `pi/package-skills/` (generated by scripts/gen-pi-package-skills.cjs from the
+// installer's own output, with the engine root replaced by a token) and are
+// rendered with the real package location into a cache directory that
+// `resources_discover` hands to Pi. The installer layout (`<cfg>/extensions/
+// gsd.js` next to `<cfg>/gsd-core`) has no `pi/package-skills`, so it never
+// enters this mode.
+const PI_ENGINE_ROOT_TOKEN = '__GSD_PI_ENGINE_ROOT__';
+// Characters a package location may contain for its text to be written into skills.
+const SAFE_ENGINE_ROOT = /^[\p{L}\p{N}\p{M}._/:@+ ~()-]+$/u;
+
+function isDirectory(p) {
+  try { return fs.statSync(p).isDirectory(); } catch { return false; }
+}
+
+function isFile(p) {
+  try { return fs.statSync(p).isFile(); } catch { return false; }
+}
+
+/** @param {string} engineRoot @returns {string} */
+function packageSkillsDir(engineRoot) {
+  return path.join(engineRoot, 'pi', 'package-skills');
+}
+
+/**
+ * True when the extension runs out of the Pi package: the skill templates and
+ * the engine entry point are both present under the engine root.
+ * @param {string} [engineRoot]
+ * @returns {boolean}
+ */
+function isPackageLayout(engineRoot = ENGINE_ROOT) {
+  return isDirectory(packageSkillsDir(engineRoot))
+    && isFile(path.join(engineRoot, 'gsd-core', 'bin', 'gsd-tools.cjs'));
+}
+
+/**
+ * Pi's agent directory: `PI_CODING_AGENT_DIR` when set, else `~/.pi/agent`.
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {string} [home]
+ * @returns {string}
+ */
+function piAgentDir(env = process.env, home = os.homedir()) {
+  const configured = env && typeof env.PI_CODING_AGENT_DIR === 'string' ? env.PI_CODING_AGENT_DIR : '';
+  return configured ? path.resolve(configured) : path.join(home, '.pi', 'agent');
+}
+
+/**
+ * Render the package's skill templates for `engineRoot` into
+ * `<cacheRoot>/<key>/skills` and return that directory. `key` hashes the engine
+ * root and every rendered body, so a moved package or a changed template gets
+ * its own directory and a complete directory is reused. Written to a temp
+ * directory and renamed into place, so a concurrent session never sees a
+ * half-written tree. Throws on an fs failure; the caller degrades.
+ * @param {string} engineRoot
+ * @param {string} cacheRoot
+ * @returns {string}
+ */
+function renderPackageSkills(engineRoot, cacheRoot) {
+  const srcDir = packageSkillsDir(engineRoot);
+  const names = fs.readdirSync(srcDir, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && /^gsd-[a-z0-9-]+$/.test(e.name))
+    .map((e) => e.name)
+    .sort();
+  const root = engineRoot.replace(/\\/g, '/');
+  // The root is substituted into shell double quotes (the workflow launcher
+  // preamble) and into `@` include lines the model follows, so only a
+  // conservative path alphabet is rendered; anything else fails open upstream.
+  if (!SAFE_ENGINE_ROOT.test(root)) {
+    throw new Error(`package location contains characters GSD will not write into skill text: ${JSON.stringify(root)}`);
+  }
+  const rendered = names.map((name) => [
+    name,
+    fs.readFileSync(path.join(srcDir, name, 'SKILL.md'), 'utf8').split(PI_ENGINE_ROOT_TOKEN).join(root),
+  ]);
+  const hash = crypto.createHash('sha256').update(`${root}\0`);
+  for (const [name, body] of rendered) hash.update(`${name}\0${body}\0`);
+  const key = hash.digest('hex').slice(0, 16);
+  const finalDir = path.join(cacheRoot, key);
+  const skillsDir = path.join(finalDir, 'skills');
+  // A reused directory must hold exactly the rendered bodies as regular files
+  // (not symlinks), so a planted or truncated cache entry is rewritten, not trusted.
+  const complete = (dir) => rendered.every(([name, body]) => {
+    try {
+      const file = path.join(dir, name, 'SKILL.md');
+      return fs.lstatSync(file).isFile() && fs.readFileSync(file, 'utf8') === body;
+    } catch { return false; }
+  });
+  if (complete(skillsDir)) return skillsDir;
+
+  fs.mkdirSync(cacheRoot, { recursive: true });
+  const tmpDir = fs.mkdtempSync(path.join(cacheRoot, '.tmp-'));
+  try {
+    for (const [name, body] of rendered) {
+      fs.mkdirSync(path.join(tmpDir, 'skills', name), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, 'skills', name, 'SKILL.md'), body);
+    }
+    // Another session may have finished this very directory while ours was
+    // being written: never delete a complete one out from under its reader.
+    if (complete(skillsDir)) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      return skillsDir;
+    }
+    fs.rmSync(finalDir, { recursive: true, force: true });
+    fs.renameSync(tmpDir, finalDir);
+  } catch (e) {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    // A concurrent session may have completed the same directory first.
+    if (complete(skillsDir)) return skillsDir;
+    throw e;
+  }
+  pruneRenderCache(cacheRoot, key);
+  return skillsDir;
+}
+
+// Rendered directories kept in the cache, the current one included. A new
+// package version or a moved package adds one; older ones are removed oldest
+// first, so the cache stays bounded without deleting what another running
+// session of a recent version still reads.
+const RENDER_CACHE_KEEP = 3;
+
+/**
+ * Remove stale rendered directories and abandoned temp directories. Best
+ * effort: a failure here never affects the render that just succeeded.
+ * @param {string} cacheRoot
+ * @param {string} keepKey  the directory just rendered, never removed
+ * @param {number} [keep]   how many `<hash>` directories to keep in total
+ */
+function pruneRenderCache(cacheRoot, keepKey, keep = RENDER_CACHE_KEEP) {
+  try {
+    const dirs = fs.readdirSync(cacheRoot, { withFileTypes: true }).filter((e) => e.isDirectory());
+    const hashed = dirs
+      .filter((e) => /^[0-9a-f]{16}$/.test(e.name) && e.name !== keepKey)
+      .map((e) => ({ name: e.name, mtime: fs.statSync(path.join(cacheRoot, e.name)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime);
+    for (const old of hashed.slice(Math.max(0, keep - 1))) {
+      fs.rmSync(path.join(cacheRoot, old.name), { recursive: true, force: true });
+    }
+    const hourAgo = Date.now() - 3600000;
+    for (const e of dirs.filter((d) => d.name.startsWith('.tmp-'))) {
+      const dir = path.join(cacheRoot, e.name);
+      if (fs.statSync(dir).mtimeMs < hourAgo) fs.rmSync(dir, { recursive: true, force: true });
+    }
+  } catch { /* best effort */ }
+}
+
+/**
+ * Put the package's `gsd-core/bin` first on PATH so the workflow launcher's
+ * identity-proving `gsd_run` fallback resolves without a per-runtime config home.
+ * @param {NodeJS.ProcessEnv} env
+ * @param {string} engineRoot
+ * @returns {boolean} true when PATH changed
+ */
+function activatePackageEnv(env, engineRoot) {
+  const bin = path.join(engineRoot, 'gsd-core', 'bin');
+  const parts = String(env.PATH || '').split(path.delimiter).filter(Boolean);
+  if (parts.includes(bin)) return false;
+  env.PATH = [bin, ...parts].join(path.delimiter);
+  return true;
+}
+
+/**
+ * Whether the installer-layout extension is also installed, in which case the
+ * package stands down: two copies would register `/gsd` and every `gsd-*` skill twice.
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {string} [home]
+ * @returns {boolean}
+ */
+function installerLayoutPresent(env = process.env, home = os.homedir()) {
+  return isFile(path.join(piAgentDir(env, home), 'extensions', 'gsd.js'));
+}
+
+/**
+ * Whether the installed tree carries `skills/gsd-<name>/SKILL.md`. Local to the
+ * config dir the extension was installed into, so a data-only (pre-#5547) tree
+ * or a partial install simply has no hand-off and keeps the data behavior.
+ * @param {string} name  bare command stem, e.g. "new-project"
+ * @param {string} [engineRoot]
+ * @returns {boolean}
+ */
+function hasWorkflowSkill(name, engineRoot = ENGINE_ROOT) {
+  if (typeof name !== 'string' || !/^[a-z0-9][a-z0-9-]*$/.test(name)) return false;
+  try {
+    // In the Pi package layout `<root>/skills` is the Claude plugin's skill
+    // directory, not Pi's; the package's Pi skills are the rendered templates.
+    const skillsDir = isPackageLayout(engineRoot)
+      ? packageSkillsDir(engineRoot)
+      : path.join(engineRoot, 'skills');
+    return fs.statSync(path.join(skillsDir, `gsd-${name}`, 'SKILL.md')).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Decide whether `/gsd <family> ...` is a workflow command. The data families
+ * (`init`, `state`, `phase`, ...) keep their scripted data semantics, so
+ * `/gsd phase list` and `gsd_invoke` are unchanged; anything else that names an
+ * installed `gsd-<name>` skill is handed off to it.
+ * @param {string} rawArgs  the raw `/gsd` argument string
+ * @param {string} [engineRoot]
+ * @returns {{ skill: string, message: string } | null}
+ */
+function resolveWorkflowHandoff(rawArgs, engineRoot = ENGINE_ROOT) {
+  const { family } = parseGsdCommandArgs(rawArgs);
+  if (PI_COMMAND_FAMILIES.includes(family)) return null;
+  if (!hasWorkflowSkill(family, engineRoot)) return null;
+  // The remainder is forwarded verbatim (not re-joined from tokens) so quoting
+  // the user typed survives into the skill's argument text.
+  const trimmed = String(rawArgs || '').trim();
+  const remainder = trimmed.slice(trimmed.indexOf(family) + family.length).trim();
+  const skill = `gsd-${family}`;
+  return { skill, message: remainder ? `/skill:${skill} ${remainder}` : `/skill:${skill}` };
+}
+
+/**
+ * The next-step line appended to `/gsd init <workflow>` output. `init <workflow>`
+ * is a data call the workflow itself makes, so it keeps returning its JSON; for
+ * a human at the prompt that JSON is a dead end, so name the way to run the
+ * workflow. Never added to `gsd_invoke`, whose output is parsed by callers.
+ * @param {{ family: string, subcommand?: string, args?: string[] }} parsed  the tokenized
+ *   `/gsd` call, as returned by parseGsdCommandArgs
+ * @param {string} [engineRoot]
+ * @returns {string} the line to append, or '' when none applies
+ */
+function nextStepFor({ family, subcommand, args: rest = [] }, engineRoot = ENGINE_ROOT) {
+  if (family !== 'init' || typeof subcommand !== 'string') return '';
+  if (!Object.prototype.hasOwnProperty.call(PI_WORKFLOW_INIT_COMMANDS, subcommand)) return '';
+  const command = PI_WORKFLOW_INIT_COMMANDS[subcommand];
+  if (!hasWorkflowSkill(command, engineRoot)) return '';
+  // Positional arguments (a phase number, say) carry over; flags belong to the
+  // init data call and are not guaranteed to mean anything to the workflow.
+  const positional = (Array.isArray(rest) ? rest : []).filter((a) => typeof a === 'string' && !a.startsWith('-'));
+  const tail = positional.length > 0 ? ` ${positional.join(' ')}` : '';
+  return `\n\nNext: run /gsd ${command}${tail} (or /skill:gsd-${command}${tail}) to start the ${command} workflow — this output is only its init data.`;
+}
+
+// ── Agent-role dispatch (#5569, ADR-5559) ────────────────────────────────────
+// Pi has no subagent primitive, so GSD supplies one: `gsd_dispatch` runs a `gsd-*` role in an
+// isolated child `pi` process. Everything is fail-closed: every refusal is an error RESULT (never a
+// throw, never an inline fallback that would run the role's work in the orchestrating session).
+// The dispatcher lives in this file because the installer copies exactly one file
+// (extensions/gsd.js); a sibling module would not be installed.
+const DISPATCH = Object.freeze({
+  ROLE_RE: /^gsd-[a-z0-9-]+$/,
+  SAFE_VALUE_RE: /^[A-Za-z0-9_.:/@+][A-Za-z0-9_.:/@+,-]*$/,
+  MAX_DEPTH: 1,
+  TIMEOUT_MS: 30 * 60 * 1000,
+  KILL_GRACE_MS: 5000,
+  TASKKILL_TIMEOUT_MS: 10000,
+  STDOUT_CAP: 1024 * 1024,
+  MAX_LINE: 16 * 1024 * 1024,
+  STDERR_TAIL: 8 * 1024,
+  TRUNCATION_MARKER: '\n[GSD: dispatch output truncated at 1 MiB]',
+  FAILED_STOP_REASONS: Object.freeze(['error', 'aborted', 'length']),
+});
+
+const dispatchFail = (code, message) => ({ ok: false, code, message });
+const errorText = (e) => (e && e.message ? e.message : String(e));
+/** A failed spawn: ENOENT means no runnable pi, anything else is a child failure. */
+const spawnFailure = (e) => (e && e.code === 'ENOENT'
+  ? dispatchFail('pi-not-found', 'No runnable `pi` was found on PATH.')
+  : dispatchFail('child-failed', `Could not start pi: ${errorText(e)}`));
+
+/** `key: value` pairs of a role file's leading frontmatter block (values unquoted, single line). */
+function readRoleFrontmatter(text) {
+  const block = /^---\r?\n([\s\S]*?)\r?\n---/.exec(String(text));
+  const meta = {};
+  if (!block) return meta;
+  for (const line of block[1].split(/\r?\n/)) {
+    const kv = /^(\w+):\s*(.*)$/.exec(line);
+    if (kv) meta[kv[1]] = kv[2].trim().replace(/^(["'])(.*)\1$/, '$2');
+  }
+  return meta;
+}
+
+/**
+ * Resolve a role id to its file in the install this extension belongs to. The role is matched against
+ * a directory LISTING, never joined from the caller's string, so no input can name a path.
+ * @returns {{ ok: true, file: string, meta: object } | { ok: false, code: string, message: string }}
+ */
+function resolveDispatchRole(role, extensionDir) {
+  if (typeof role !== 'string' || !DISPATCH.ROLE_RE.test(role)) {
+    return dispatchFail('role-unresolved', `"${String(role).slice(0, 80)}" is not a GSD role id (gsd-<name>).`);
+  }
+  // Installer layout: <config>/extensions/gsd.js beside <config>/agents and the install manifest.
+  // Package layout (pi install npm:...): <package>/pi/gsd.cjs beside the converted roles and their
+  // manifest, generated into the tarball (ADR-5559 amendment). Both are fixed relative to this file.
+  const inPackage = fs.existsSync(path.join(extensionDir, 'package-agents'));
+  const roleDir = inPackage ? path.join(extensionDir, 'package-agents') : path.join(extensionDir, '..', 'agents');
+  const manifestPath = inPackage ? path.join(roleDir, 'manifest.json') : path.join(extensionDir, '..', 'gsd-file-manifest.json');
+  const manifestKey = inPackage ? `${role}.md` : `agents/${role}.md`;
+  const fileName = `${role}.md`;
+  let listing;
+  try { listing = fs.readdirSync(roleDir); } catch { listing = []; }
+  if (!listing.includes(fileName)) {
+    return dispatchFail('role-unresolved', `${role} is not installed (looked in ${roleDir}).`);
+  }
+  const file = path.join(roleDir, fileName);
+  let bytes;
+  try {
+    if (fs.lstatSync(file).isSymbolicLink()) return dispatchFail('role-unresolved', `${fileName} is a symbolic link.`);
+    bytes = fs.readFileSync(file);
+  } catch (e) {
+    return dispatchFail('role-unresolved', `${fileName} could not be read: ${errorText(e)}`);
+  }
+  // The manifest is required: without it nothing vouches for the bytes that become the child's system prompt.
+  let expected;
+  try { expected = (JSON.parse(fs.readFileSync(manifestPath, 'utf8')).files || {})[manifestKey]; } catch { expected = undefined; }
+  const actual = crypto.createHash('sha256').update(bytes).digest('hex');
+  if (expected !== actual) {
+    return dispatchFail('role-tampered', `${fileName} does not match the install manifest (or the manifest is missing); reinstall GSD to restore it.`);
+  }
+  // A package role is a template: its `@` references carry PI_ENGINE_ROOT_TOKEN for the package location.
+  let text = bytes.toString('utf8');
+  if (inPackage) {
+    const root = path.resolve(extensionDir, '..').replace(/\\/g, '/');
+    if (!SAFE_ENGINE_ROOT.test(root)) {
+      return dispatchFail('role-unresolved', `the package location contains characters GSD will not write into a role: ${JSON.stringify(root)}`);
+    }
+    text = text.split(PI_ENGINE_ROOT_TOKEN).join(root);
+  }
+  return { ok: true, file, bytes: Buffer.from(text, 'utf8'), meta: readRoleFrontmatter(text) };
+}
+
+/** taskkill by absolute path: a bare name on Windows is searched in the spawn cwd (the project) first. */
+function taskkillPath(env) {
+  const root = (env && (env.SystemRoot || env.windir)) || 'C:\\Windows';
+  return path.win32.join(root, 'System32', 'taskkill.exe');
+}
+
+/**
+ * The `pi` to run (ADR-5559 `pi-not-found`): the CLI next to this process's executable if there is
+ * one, else the first `pi` on PATH. On Windows the PATH entries are searched here and an absolute
+ * path is returned, so the project directory (the spawn cwd) is never searched for an executable.
+ * @returns {string|null} null when no runnable pi was found on Windows
+ */
+function resolvePiCommand({ platform, env, execPath, exists }) {
+  const win = platform === 'win32';
+  const pathMod = win ? path.win32 : path.posix;
+  // Windows: only pi.exe. A .cmd shim cannot be spawned without a shell (Node refuses it, CVE-2024-27980).
+  const names = win ? ['pi.exe'] : ['pi'];
+  for (const name of names) {
+    const sibling = pathMod.join(pathMod.dirname(execPath || ''), name);
+    if (execPath && exists(sibling)) return sibling;
+  }
+  if (!win) return 'pi';
+  const dirs = String((env && (env.Path || env.PATH)) || '').split(';').filter((d) => /^[A-Za-z]:[\\/]/.test(d));
+  for (const dir of dirs) {
+    for (const name of names) {
+      const candidate = pathMod.join(dir, name);
+      if (exists(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+/**
+ * The dispatcher. Seams (all optional): `spawn`, `kill`, `env`, `platform`, `extensionDir`, `command`, `execPath`, `exists`.
+ * Calls run strictly one at a time (ADR-5559 section 2).
+ */
+function createDispatcher(deps = {}) {
+  const extensionDir = deps.extensionDir || __dirname;
+  const spawn = deps.spawn || require('child_process').spawn;
+  const killProcess = deps.kill || ((pid, signal) => process.kill(pid, signal));
+  const env = deps.env || process.env;
+  const platform = deps.platform || process.platform;
+  const isWindows = platform === 'win32';
+  const timeoutMs = Number(env.GSD_PI_DISPATCH_TIMEOUT_MS) > 0 ? Number(env.GSD_PI_DISPATCH_TIMEOUT_MS) : DISPATCH.TIMEOUT_MS;
+  let queue = Promise.resolve();
+
+  function terminate(child) {
+    if (isWindows) {
+      const killer = spawn(taskkillPath(env), ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true });
+      const bound = setTimeout(() => { if (killer && typeof killer.kill === 'function') { try { killer.kill(); } catch { /* gone */ } } }, DISPATCH.TASKKILL_TIMEOUT_MS);
+      if (killer && typeof killer.once === 'function') killer.once('exit', () => clearTimeout(bound));
+      return;
+    }
+    try { killProcess(-child.pid, 'SIGTERM'); } catch { /* already gone */ }
+  }
+
+  function runChild(child, signal, finishWith) {
+    let timedOut = false;
+    let closed = false;
+    let escalate = null;
+    let buffered = '';
+    let last = null;
+    let stderrTail = '';
+    let overflow = false;
+
+    const stop = () => {
+      timedOut = true;
+      terminate(child);
+      if (!isWindows) {
+        escalate = setTimeout(() => { if (!closed) { try { killProcess(-child.pid, 'SIGKILL'); } catch { /* gone */ } } }, DISPATCH.KILL_GRACE_MS);
+      }
+    };
+    const deadline = setTimeout(stop, timeoutMs);
+    const onAbort = () => stop();
+    if (signal) {
+      if (signal.aborted) stop(); else signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    const onLine = (line) => {
+      if (!line.trim()) return;
+      let event;
+      try { event = JSON.parse(line); } catch { return; }
+      if (event && event.type === 'message_end' && event.message && event.message.role === 'assistant') {
+        const parts = Array.isArray(event.message.content) ? event.message.content : [];
+        last = {
+          text: parts.filter((p) => p && p.type === 'text' && typeof p.text === 'string').map((p) => p.text).join(''),
+          stopReason: event.message.stopReason,
+        };
+      }
+    };
+    child.stdout.on('data', (chunk) => {
+      buffered += chunk.toString('utf8');
+      let newline;
+      while ((newline = buffered.indexOf('\n')) >= 0) {
+        onLine(buffered.slice(0, newline));
+        buffered = buffered.slice(newline + 1);
+      }
+      if (buffered.length > DISPATCH.MAX_LINE) { overflow = true; buffered = ''; stop(); }
+    });
+    child.stderr.on('data', (chunk) => { stderrTail = (stderrTail + chunk.toString('utf8')).slice(-DISPATCH.STDERR_TAIL); });
+    child.on('error', (e) => {
+      closed = true;
+      clearTimeout(deadline);
+      clearTimeout(escalate);
+      finishWith(spawnFailure(e));
+    });
+    child.on('close', (code) => {
+      if (closed) return;
+      closed = true;
+      clearTimeout(deadline);
+      clearTimeout(escalate);
+      if (signal) signal.removeEventListener('abort', onAbort);
+      if (buffered) onLine(buffered);
+      if (overflow) return finishWith(dispatchFail('child-failed', 'The role produced a single output line larger than 16 MiB.'));
+      if (timedOut) return finishWith(dispatchFail('timeout', `The role did not finish within ${Math.round(timeoutMs / 1000)} s or was cancelled; it was stopped.`));
+      if (code !== 0) return finishWith(dispatchFail('child-failed', `pi exited with code ${code}.${stderrTail ? ` stderr (tail): ${stderrTail}` : ''}`));
+      if (!last) return finishWith(dispatchFail('child-failed', 'pi finished without an assistant message.'));
+      if (DISPATCH.FAILED_STOP_REASONS.includes(last.stopReason)) {
+        return finishWith(dispatchFail('child-failed', `The role's final message stopped with "${last.stopReason}".${stderrTail ? ` stderr (tail): ${stderrTail}` : ''}`));
+      }
+      const text = last.text.length > DISPATCH.STDOUT_CAP ? last.text.slice(0, DISPATCH.STDOUT_CAP) + DISPATCH.TRUNCATION_MARKER : last.text;
+      return finishWith({ ok: true, text });
+    });
+  }
+
+  function runOne(params, ctx) {
+    const p = params && typeof params === 'object' ? params : {};
+    // Unset or empty means top level; any other value must be a plain non-negative integer below the cap.
+    const rawDepth = env.GSD_PI_DISPATCH_DEPTH;
+    const depth = rawDepth === undefined || rawDepth === '' ? 0 : (/^\d{1,6}$/.test(rawDepth) ? Number(rawDepth) : Infinity);
+    if (depth >= DISPATCH.MAX_DEPTH) {
+      return Promise.resolve(dispatchFail('depth-exceeded', 'A dispatched role cannot dispatch another role (Pi dispatch is flat).'));
+    }
+    const resolved = resolveDispatchRole(p.role, extensionDir);
+    if (!resolved.ok) return Promise.resolve(resolved);
+    const roleTools = resolved.meta.tools ? resolved.meta.tools.split(',').map((s) => s.trim()).filter(Boolean).join(',') : '';
+    const tools = roleTools || '-gsd_dispatch';
+    if ((roleTools && !DISPATCH.SAFE_VALUE_RE.test(roleTools)) || (resolved.meta.model && !DISPATCH.SAFE_VALUE_RE.test(resolved.meta.model))) {
+      return Promise.resolve(dispatchFail('role-unresolved', `${p.role} has a tools or model value that is not a plain identifier list.`));
+    }
+    let taskDir;
+    try {
+      taskDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-pi-dispatch-'));
+      fs.chmodSync(taskDir, 0o700);
+    } catch (e) {
+      return Promise.resolve(dispatchFail('child-failed', `Could not create a private task directory: ${errorText(e)}`));
+    }
+    const taskFile = path.join(taskDir, 'task.md');
+    const cleanup = () => { try { fs.rmSync(taskDir, { recursive: true, force: true }); } catch { /* best-effort */ } };
+    // The child reads the role from a copy of the bytes that were just hash-verified, so a swap of
+    // the installed file between the check and the child's start changes nothing.
+    const roleCopy = path.join(taskDir, 'role.md');
+    try {
+      fs.writeFileSync(taskFile, typeof p.task === 'string' ? p.task : '', { mode: 0o600 });
+      fs.writeFileSync(roleCopy, resolved.bytes, { mode: 0o600 });
+    } catch (e) {
+      cleanup();
+      return Promise.resolve(dispatchFail('child-failed', `Could not write the task file: ${errorText(e)}`));
+    }
+    const args = [
+      '--mode', 'json', '-p', '--no-session', '--no-mcp', '--no-extensions', '--no-approve',
+      '--append-system-prompt', roleCopy,
+      ...(resolved.meta.model ? ['--model', resolved.meta.model] : []),
+      '--tools', tools,
+      `@${taskFile}`,
+    ];
+    const childEnv = { ...env, GSD_PI_DISPATCH_DEPTH: String(depth + 1) };
+    return new Promise((resolve) => {
+      const finishWith = (result) => { cleanup(); resolve(result); };
+      let child;
+      try {
+        const command = deps.command || resolvePiCommand({
+          platform, env, execPath: deps.execPath || process.execPath, exists: deps.exists || ((f) => { try { return fs.statSync(f).isFile(); } catch { return false; } }),
+        });
+        if (command === null) {
+          finishWith(dispatchFail('pi-not-found', 'No runnable `pi` was found on PATH.'));
+          return;
+        }
+        child = spawn(command, args, {
+          cwd: (ctx && ctx.cwd) || process.cwd(),
+          env: childEnv,
+          detached: !isWindows,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          windowsHide: true,
+        });
+      } catch (e) {
+        finishWith(spawnFailure(e));
+        return;
+      }
+      runChild(child, ctx && ctx.signal, finishWith);
+    });
+  }
+
+  return {
+    dispatch(params, ctx) {
+      const run = queue.then(() => runOne(params, ctx));
+      queue = run.catch(() => undefined);
+      return run;
+    },
+  };
+}
+
+function buildGsdDispatchParameters() {
+  try {
+    const typebox = require('typebox');
+    const Type = typebox && typebox.Type;
+    if (Type) return Type.Object({ role: Type.String(), task: Type.String() });
+  } catch { /* typebox is not a gsd-core dependency; the JSON-Schema fallback is the normal path */ }
+  return { type: 'object', properties: { role: { type: 'string' }, task: { type: 'string' } }, required: ['role', 'task'] };
+}
+
+/**
+ * @param {object} pi  pi ExtensionAPI
+ * @param {{ env?: NodeJS.ProcessEnv, engineRoot?: string, home?: string }} [deps]  test seam; Pi passes only `pi`
+ */
+module.exports = function gsdPiExtension(pi, deps = {}) {
   if (!pi || typeof pi !== 'object') {
     throw new TypeError('gsdPiExtension: pi ExtensionAPI is required');
+  }
+
+  // ── Pi package mode (#5558) ──────────────────────────────────────────────
+  const env = (deps && deps.env) || process.env;
+  const engineRoot = (deps && deps.engineRoot) || ENGINE_ROOT;
+  const home = (deps && deps.home) || os.homedir();
+  let packageRenderError = null;
+  let uiNotify = null;
+  let renderErrorReported = false;
+  // Pi may fire resources_discover before or after session_start; whichever
+  // comes second reports the error, once.
+  const reportRenderError = () => {
+    if (!packageRenderError || renderErrorReported || !uiNotify) return;
+    renderErrorReported = true;
+    uiNotify(`GSD skills could not be prepared: ${packageRenderError.message}`, 'error');
+  };
+  if (isPackageLayout(engineRoot)) {
+    if (installerLayoutPresent(env, home)) {
+      // The installer copy of this extension is already loaded; registering the
+      // package copy too would duplicate /gsd and every gsd-* skill.
+      pi.on('session_start', async (event, ctx) => {
+        if (ctx && ctx.ui && typeof ctx.ui.notify === 'function') {
+          ctx.ui.notify(
+            'GSD is installed both as a Pi package and by the gsd-core installer. The package copy is inactive; remove one of the two (pi remove npm:@opengsd/gsd-core, or the installer files under the Pi agent directory).',
+            'warning',
+          );
+        }
+      });
+      return;
+    }
+    activatePackageEnv(env, engineRoot);
+    pi.on('resources_discover', () => {
+      try {
+        return { skillPaths: [renderPackageSkills(engineRoot, path.join(piAgentDir(env, home), 'gsd-package-cache'))] };
+      } catch (e) {
+        packageRenderError = e;
+        reportRenderError();
+        return undefined; // fail-open: Pi still starts, without the GSD skills
+      }
+    });
   }
 
   // ── /gsd command: dispatch through gsd-tools.cjs (subprocess-reuse) ──────
@@ -332,6 +1286,28 @@ module.exports = function gsdPiExtension(pi) {
       const notify = (ctx && ctx.ui && typeof ctx.ui.notify === 'function')
         ? (message, type) => ctx.ui.notify(message, type)
         : null;
+      // #5547: a workflow-backed command starts its workflow instead of
+      // printing data. `sendUserMessage` with `expandPromptTemplates` makes Pi
+      // expand the `/skill:` command, so the agent follows the installed skill.
+      const handoff = resolveWorkflowHandoff(args, engineRoot);
+      if (handoff && packageRenderError) {
+        // The skill was never registered with Pi, so handing off would only
+        // produce an unknown-skill message. Say why instead.
+        if (notify) {
+          notify(`${handoff.skill} is unavailable: GSD skills could not be prepared (${packageRenderError.message}).`, 'error');
+        }
+        return;
+      }
+      if (handoff) {
+        if (typeof pi.sendUserMessage === 'function') {
+          pi.sendUserMessage(handoff.message, { deliverAs: 'followUp', expandPromptTemplates: true });
+        } else if (notify) {
+          // A host without sendUserMessage cannot be handed off to; say how to
+          // start the workflow by hand rather than running its data command.
+          notify(`This pi host cannot start a skill from /gsd. Run ${handoff.message} to start the ${handoff.skill} workflow.`, 'info');
+        }
+        return;
+      }
       const { family, subcommand, args: rest } = parseGsdCommandArgs(args);
       let dispatchGsdCommand;
       try {
@@ -344,7 +1320,7 @@ module.exports = function gsdPiExtension(pi) {
       }
       const result = dispatchGsdCommand({ family, subcommand, args: rest, cwd });
       const text = result.ok
-        ? result.stdout
+        ? `${result.stdout}${nextStepFor({ family, subcommand, args: rest }, engineRoot)}`
         : `GSD error: ${result.stderr || result.stdout || `dispatch failed (exit ${result.code})`}`;
       if (notify) {
         notify(text, result.ok ? 'info' : 'error');
@@ -379,6 +1355,20 @@ module.exports = function gsdPiExtension(pi) {
     },
   });
 
+  // ── gsd_dispatch tool: run a gsd-* role in an isolated child pi (#5569, ADR-5559) ──
+  const dispatcher = createDispatcher({ extensionDir: __dirname, env });
+  pi.registerTool({
+    name: 'gsd_dispatch',
+    label: 'GSD Dispatch',
+    description: 'Run a GSD agent role (gsd-*) on a task in an isolated child Pi process and return its final message. Dispatch is flat and sequential; a role cannot dispatch another role.',
+    parameters: buildGsdDispatchParameters(),
+    execute: async (toolCallId, params, signal, onUpdate, ctx) => {
+      const result = await dispatcher.dispatch(params, { cwd: (ctx && ctx.cwd) || process.cwd(), signal });
+      if (result.ok) return { content: [{ type: 'text', text: result.text }] };
+      return { content: [{ type: 'text', text: `gsd_dispatch ${result.code}: ${result.message}` }], isError: true };
+    },
+  });
+
   // ── before_provider_request: active-model steering (modelMode: 'active') ──
   // GSD steers pi's EXISTING built-in anthropic models; it does NOT call
   // pi.registerProvider (that would wrongly register a NEW fake provider —
@@ -393,6 +1383,10 @@ module.exports = function gsdPiExtension(pi) {
   // session_start → SessionStart-equivalent bootstrap.
   pi.on('session_start', async (event, ctx) => {
     try {
+      if (ctx && ctx.ui && typeof ctx.ui.notify === 'function') {
+        uiNotify = (message, type) => ctx.ui.notify(message, type);
+        reportRenderError();
+      }
       const cwd = (ctx && ctx.cwd) || process.cwd();
       runHook('gsd-ensure-canonical-path.js', { hook_event_name: 'SessionStart', cwd }, { cwd });
     } catch { /* fail-open */ }
@@ -404,11 +1398,20 @@ module.exports = function gsdPiExtension(pi) {
   // fires as a safe no-op today — wired so a future agent-start-scoped check
   // can attach without a plugin change (mirrors the OpenCode session.idle
   // recognized-but-unused sentinel pattern).
+  let sessionOrientationSent = false;
   pi.on('before_agent_start', async (event, ctx) => {
     try {
       const cwd = (ctx && ctx.cwd) || process.cwd();
       runHook('gsd-workflow-guard.js', { hook_event_name: 'before_agent_start', cwd }, { cwd });
+      // SessionStart orientation (gsd-session-state.sh, opt-in hooks.community): once per session,
+      // delivered as a custom message because Pi's session_start cannot inject context.
+      if (!sessionOrientationSent) {
+        sessionOrientationSent = true;
+        const outcome = interpretHookResult(runShellHook('gsd-session-state.sh', { hook_event_name: 'SessionStart', cwd }, { cwd }));
+        if (outcome && outcome.advisory) return { message: { customType: 'gsd-session-state', content: sanitizeAdvisory(outcome.advisory), display: true } };
+      }
     } catch { /* fail-open */ }
+    return undefined;
   });
 
   // session_before_compact → PreCompact-equivalent (context-usage bridge).
@@ -419,13 +1422,10 @@ module.exports = function gsdPiExtension(pi) {
     } catch { /* fail-open */ }
   });
 
-  // tool_call event: lifecycle hook bridge attachment point (kept from the
-  // original cut — the PreToolUse/PostToolUse tool_name/tool_input mapping
-  // is a follow-up once pi's tool_call payload shape is verified against a
-  // live host).
-  pi.on('tool_call', async function () {
-    /* GSD hook bridge attachment point (PreToolUse/PostToolUse mapping). */
-  });
+  // tool_call / tool_result: PreToolUse / PostToolUse bridge (#5560, payload verified on live Pi 1.3.0).
+  const hookBridge = createHookBridge();
+  pi.on('tool_call', async (event, ctx) => hookBridge.onToolCall(event, ctx));
+  pi.on('tool_result', async (event, ctx) => hookBridge.onToolResult(event, ctx));
 };
 
 // Test-only internals (mirrors the OpenCode plugin pattern) — wired to the
@@ -441,4 +1441,41 @@ module.exports._internals = {
   buildBeforeProviderRequestHandler,
   buildGsdInvokeParameters,
   runHook,
+  hasWorkflowSkill,
+  PI_ENGINE_ROOT_TOKEN,
+  isPackageLayout,
+  packageSkillsDir,
+  piAgentDir,
+  renderPackageSkills,
+  pruneRenderCache,
+  RENDER_CACHE_KEEP,
+  activatePackageEnv,
+  installerLayoutPresent,
+  resolveWorkflowHandoff,
+  nextStepFor,
+  PI_WORKFLOW_INIT_COMMANDS,
+  DISPATCH,
+  createDispatcher,
+  resolveDispatchRole,
+  hookRuntime,
+  PI_TOOL_NAME_MAP,
+  mapPiToolInput,
+  runShellHook,
+  interpretHookResult,
+  PI_PRE_TOOL_HOOKS,
+  PI_POST_TOOL_HOOKS,
+  PI_ADVISORY_QUEUE_MAX,
+  PI_ADVISORY_MAX_CHARS,
+  PI_FIELD_MAX_CHARS,
+  sanitizeAdvisory,
+  resolvePiPath,
+  resolveWinExe,
+  hookSpawnFailure,
+  HOOK_MAX_BUFFER,
+  PI_HOOK_DISPOSITIONS,
+  createHookBridge,
+  readRoleFrontmatter,
+  resolvePiCommand,
+  taskkillPath,
+  buildGsdDispatchParameters,
 };

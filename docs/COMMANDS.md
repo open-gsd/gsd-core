@@ -474,6 +474,10 @@ Verify milestone met its definition of done.
 
 Archive milestone, tag release.
 
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `--ws <name>` | No | Scope the milestone to a workstream; skips the shared `PROJECT.md` evolution review and leaves `PROJECT.md` out of the archive commit |
+
 **Prerequisites:** Milestone audit complete (recommended)
 **Produces:** `MILESTONES.md` entry, git tag
 
@@ -1859,6 +1863,8 @@ Reviewers are prompted to verify the plan's claims against the actual repository
 | `--all` | Include all available reviewers (CLI + local model servers) |
 
 **No `jq`, `curl`, or `timeout` prerequisite.** Reviewer lanes used to shell out to these for JSON parsing, HTTP calls, and wall-clock bounding, which made five lanes unavailable on a stock Windows/Git-Bash host (no `jq`) and left one lane unbounded on stock macOS (no `timeout` or `gtimeout`). GSD now does all three itself, so every lane runs with nothing on your `PATH` but the reviewer's own CLI. A lane that declares an external tool it genuinely needs still reports itself unavailable with an install hint rather than running into an empty review.
+
+**Local-lane availability:** `gsd_run review-lane availability [--selected a,b]` prints one `<slug>:available|missing` line per first-party local OpenAI-compatible lane (`ollama`, `lm_studio`, `llama_cpp`) in roster order. Each lane's host is `review.<lane>_host` if set, else its descriptor default. The probe is a bounded 2s GET `/v1/models`; any HTTP response (including 401, 404, 5xx) counts as `available`, while connection failure or timeout counts as `missing`. The same rule applies when you name a local reviewer explicitly: a server that answers 404 or 5xx is treated as reachable and the run proceeds. Redirects are not followed, and installed third-party lanes are never probed. The `jq` prerequisite is reported separately by the review workflow.
 
 **Unavailable reviewers:** an explicit reviewer flag is an assertion. If you name a reviewer that cannot run on this host — its CLI is not installed, a required external tool is missing, its local server is unreachable, or its egress destination changed (see below) — `/gsd-review` reports an **error** for that reviewer and does not proceed with a reduced set. This holds even when other named reviewers are available: `--codex --qwen` on a host without `qwen` fails rather than silently becoming a Codex-only review.
 

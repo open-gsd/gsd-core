@@ -1065,8 +1065,23 @@ describe('install — changeset CLI lands at scripts/changeset/cli.cjs (#935)', 
     // Use the CHANGELOG.md that was installed into gsd-core/ (installed by the installer)
     const changelogPath = path.join(claudeDir, 'gsd-core', 'CHANGELOG.md');
     assert.ok(fs.existsSync(changelogPath), 'CHANGELOG.md must be installed under gsd-core/');
+    // Extract the LATEST release only. The old range (0.0.0..9999.0.0) made --json emit the whole
+    // changelog, which grows every release, and runNode applies spawnSync's default 1 MiB
+    // maxBuffer: past it spawnSync kills the child (exit code null, empty stderr). A one-release
+    // range keeps the output bounded however large CHANGELOG.md grows, still parses the whole
+    // file, and still walks the found-entries path. --from is exclusive, so the range is
+    // (previous, latest]; the two are picked by semver order, not by heading position.
+    const bySemverDesc = (a, b) => {
+      const [x, y] = [a, b].map((v) => v.split('.').map(Number));
+      return y[0] - x[0] || y[1] - x[1] || y[2] - x[2];
+    };
+    const releases = [...fs.readFileSync(changelogPath, 'utf8').matchAll(/^## \[(\d+\.\d+\.\d+)\]/gm)]
+      .map((m) => m[1])
+      .sort(bySemverDesc);
+    assert.ok(releases.length >= 2, 'installed CHANGELOG.md must carry at least two released ## [x.y.z] headings');
+    const [latest, previous] = releases;
     const result = runNode(
-      [cliPath, 'extract', '--from', '0.0.0', '--to', '9999.0.0', '--changelog', changelogPath, '--json'],
+      [cliPath, 'extract', '--from', previous, '--to', latest, '--changelog', changelogPath, '--json'],
       { timeoutMs: PROBE_TIMEOUT_MS },
     );
     // extract must NOT throw a MODULE_NOT_FOUND or Cannot find module error
@@ -1074,11 +1089,19 @@ describe('install — changeset CLI lands at scripts/changeset/cli.cjs (#935)', 
       !result.stderr.includes('MODULE_NOT_FOUND') && !result.stderr.includes('Cannot find module'),
       `installed cli.cjs extract must resolve all modules; stderr=${result.stderr}`,
     );
-    // extract exit code 0 (found entries) or 2 (no entries in range) are both valid;
-    // any other exit code is an error
-    assert.ok(
-      result.exitCode === 0 || result.exitCode === 2,
-      `installed cli.cjs extract must exit 0 or 2; got ${result.exitCode}; stderr=${result.stderr}`,
+    // The range is built from two headings that exist in the file, so extract must FIND the latest
+    // release: exit 2 ("no releases in range") would mean the CLI and this test disagree about the
+    // changelog, which is a regression this test exists to catch, not an acceptable outcome.
+    assert.strictEqual(
+      result.exitCode,
+      0,
+      `installed cli.cjs extract (${previous}, ${latest}] must exit 0; got ${result.exitCode} (outcome=${result.outcome}, signal=${result.signal}, code=${result.code}, stdout bytes=${result.stdout.length}); stderr=${result.stderr}`,
+    );
+    const report = JSON.parse(result.stdout);
+    assert.deepStrictEqual(
+      report.releases.map((r) => r.version),
+      [latest],
+      'the extracted range must contain exactly the latest release',
     );
   });
 
@@ -1705,7 +1728,7 @@ describe('cleanupWindsurfLegacyDevinSkills — removes pre-#1615 skill artifacts
 //   3. Negative: gsd-nyquist-auditor has NO disallowedTools key (legitimately writes+edits).
 //   4. Cross-runtime no-leak: Qwen-installed read-only agents do NOT contain disallowedTools.
 //   5. Source purity: source agents/*.md must not contain disallowedTools (inject-only).
-//   6. Parity: docs/AGENTS.md "Disallowed Tools" rows match READONLY_AGENT_DISALLOWED_TOOLS.
+//   6. Parity: docs/reference/agents.md "Disallowed Tools" rows match READONLY_AGENT_DISALLOWED_TOOLS.
 //      (DEFECT.GENERATIVE-FIX guard)
 
 // #767 — must mirror READONLY_AGENT_DISALLOWED_TOOLS in bin/install.js.
@@ -1725,7 +1748,7 @@ const GROUP_B_767 = ['gsd-verifier', 'gsd-doc-verifier', 'gsd-eval-auditor', 'gs
 
 const REPO_ROOT_767 = path.resolve(__dirname, '..');
 const SOURCE_AGENTS_DIR_767 = path.join(REPO_ROOT_767, 'agents');
-const AGENTS_DOC_PATH_767 = path.join(REPO_ROOT_767, 'docs', 'AGENTS.md');
+const AGENTS_DOC_PATH_767 = path.join(REPO_ROOT_767, 'docs', 'reference', 'agents.md');
 
 function readFrontmatterText(mdPath) {
   const content = fs.readFileSync(mdPath, 'utf8');
@@ -1903,14 +1926,14 @@ describe('#767 Source purity: source agents/*.md must not contain disallowedTool
   }
 });
 
-describe('#767 Parity: docs/AGENTS.md "Disallowed Tools" rows match READONLY_AGENT_DISALLOWED_TOOLS', () => {
+describe('#767 Parity: docs/reference/agents.md "Disallowed Tools" rows match READONLY_AGENT_DISALLOWED_TOOLS', () => {
   const agentsDoc = fs.readFileSync(AGENTS_DOC_PATH_767, 'utf8');
 
   for (const [agent, expectedTools] of Object.entries(READONLY_AGENT_DISALLOWED_TOOLS_767)) {
-    test(`docs/AGENTS.md has matching Disallowed Tools row for ${agent}`, () => {
+    test(`docs/reference/agents.md has matching Disallowed Tools row for ${agent}`, () => {
       const agentHeaderIdx = agentsDoc.indexOf(`### ${agent}`);
       assert.ok(agentHeaderIdx !== -1,
-        `docs/AGENTS.md must contain a ### ${agent} section`);
+        `docs/reference/agents.md must contain a ### ${agent} section`);
 
       const nextSectionIdx = agentsDoc.indexOf('\n### ', agentHeaderIdx + 1);
       const sectionEnd = nextSectionIdx === -1 ? agentsDoc.length : nextSectionIdx;
@@ -1919,11 +1942,11 @@ describe('#767 Parity: docs/AGENTS.md "Disallowed Tools" rows match READONLY_AGE
       const table = findTableWithColumns(section, ['Property', 'Value']);
       const row = table && table.rows.find((r) => r.Property === '**Disallowed Tools**');
       assert.ok(row,
-        `docs/AGENTS.md section for ${agent} must have a "Disallowed Tools" table row`);
+        `docs/reference/agents.md section for ${agent} must have a "Disallowed Tools" table row`);
 
       const docTools = row.Value.trim();
       assert.equal(docTools, expectedTools,
-        `docs/AGENTS.md "Disallowed Tools" for ${agent} must be "${expectedTools}" but got "${docTools}"`);
+        `docs/reference/agents.md "Disallowed Tools" for ${agent} must be "${expectedTools}" but got "${docTools}"`);
     });
   }
 });
@@ -3151,11 +3174,17 @@ describe('Bug #3362 / #3413: Windows hook commands are runtime-aware', () => {
 
   test('Antigravity portable install: .js hook command also stays shell-neutral on Windows (seam inert after gemini removal)', () => {
     const home = require('node:os').homedir().replace(/\\/g, '/');
+    // #5100: a win32 portable JS hook emits nothing unless the Git Bash
+    // policy finds bash. This case is about the PowerShell seam, so inject
+    // a discovered Git Bash instead of depending on the host PATH.
     const cmd = buildHookCommand(`${home}/.gemini/antigravity`, 'gsd-check-update.js', {
       portableHooks: true,
       platform: 'win32',
       runtime: 'antigravity',
+      env: { ProgramFiles: 'C:\\Program Files' },
+      existsSync: (candidate) => candidate === 'C:\\Program Files\\Git\\bin\\bash.exe',
     });
+    assert.equal(typeof cmd, 'string');
     assert.ok(!cmd.startsWith('& '), `Antigravity hook command must not use PowerShell call operator: ${cmd}`);
     assert.equal(parseHookCommand(cmd).hookPath, '$HOME/.gemini/antigravity/hooks/gsd-check-update.js');
   });
@@ -8463,7 +8492,9 @@ describe('#4377: --relative-includes emits project-relative @ includes for a loc
           .split(`${absRoot}/.claude/`).join('.claude/')
           .split(`${absRoot}/.claude`).join('.claude');
       }
-      if (normalized !== rel.get(name)) mismatched.push({ name, normalized, actual: rel.get(name) });
+      // #5637: each install stamps its own random heredoc terminator; fold it back to the canonical token.
+      const foldNonce = (text) => text.replace(/\b(GSD_(?:QUICK_BATCH_)?ARGS_END)_[0-9a-f]{32}\b/g, '$1');
+      if (foldNonce(normalized) !== foldNonce(rel.get(name))) mismatched.push({ name, normalized, actual: rel.get(name) });
     }
     // Report the FIRST divergence as text, not just a list of filenames. A
     // bare file list says a difference exists somewhere in 236 files and

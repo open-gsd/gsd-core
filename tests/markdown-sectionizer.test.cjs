@@ -42,6 +42,9 @@ const {
   updateHeading,
   extractTaggedBlocks,
   stripTaggedBlocks,
+  editOutsideTaggedBlocks,
+  maskFences,
+  editOutsideFences,
   replaceSection,
   withSection,
   deleteSection,
@@ -2076,3 +2079,140 @@ describe('updateBullet match receives the physical line index (Phase 13)', () =>
     assert.equal(out, 'intro\n- [ ] a\n\n- [x] a\n');
   });
 });
+
+describe('editOutsideTaggedBlocks (#5543)', () => {
+  const wrap = (s) => `[${s}]`;
+  const seeing = (doc, tag, ...flags) => {
+    let seen = null;
+    editOutsideTaggedBlocks(doc, tag, (s) => { seen = s; return s; }, ...flags);
+    return seen;
+  };
+
+  test('edits only the text outside the blocks and restores the blocks byte-for-byte', () => {
+    const block1 = '<details>\nkeep $1 $& one\n</details>';
+    const block2 = '<details>\nkeep two\n</details>';
+    const out = editOutsideTaggedBlocks(`a\n${block1}\nb\n${block2}\nc`, 'details', wrap);
+    assert.equal(out, `[a\n${block1}\nb\n${block2}\nc]`);
+  });
+
+  test('the edit sees the surrounding text in order, with one placeholder per block', () => {
+    assert.match(
+      seeing('x<details>1</details>y<details>2</details>z', 'details'),
+      /^x<!-- gsd-masked-details-\d+-0 -->y<!-- gsd-masked-details-\d+-1 -->z$/,
+    );
+  });
+
+  test('no block present: the edit runs on the content unchanged', () => {
+    assert.equal(seeing('plain', 'details'), 'plain');
+    assert.equal(editOutsideTaggedBlocks('plain', 'details', wrap), '[plain]');
+  });
+
+  test('an unclosed opener is not a block, so it stays visible to the edit', () => {
+    assert.equal(seeing('<details>open forever', 'details'), '<details>open forever');
+  });
+
+  test('an attributed opener is hidden only when allowAttributes is set', () => {
+    const doc = '<details open>x</details>';
+    assert.equal(seeing(doc, 'details'), doc);
+    assert.match(seeing(doc, 'details', true), /^<!-- gsd-masked-details-\d+-0 -->$/);
+    assert.equal(editOutsideTaggedBlocks(doc, 'details', wrap, true), `[${doc}]`);
+  });
+
+  test('tag matching is case-insensitive by default and exact when caseSensitive is set', () => {
+    const doc = '<details>x</details>';
+    assert.match(seeing(doc, 'DETAILS'), /^<!-- gsd-masked-DETAILS-\d+-0 -->$/);
+    assert.equal(seeing(doc, 'DETAILS', false, true), doc);
+  });
+
+  test('a placeholder-looking string already in the content is never mistaken for a block', () => {
+    const lookalike = '<!-- gsd-masked-details-0-0 -->';
+    const doc = `${lookalike}\n<details>b</details>\ntail`;
+    assert.equal(editOutsideTaggedBlocks(doc, 'details', wrap), `[${doc}]`);
+  });
+
+  test('an edit that drops or duplicates a placeholder returns the original content', () => {
+    const doc = 'a<details>b</details>c';
+    assert.equal(editOutsideTaggedBlocks(doc, 'details', () => 'gone'), doc);
+    assert.equal(editOutsideTaggedBlocks(doc, 'details', (s) => s + s), doc);
+  });
+
+  test('a non-string edit result returns the original content', () => {
+    assert.equal(editOutsideTaggedBlocks('a<details>b</details>', 'details', () => undefined), 'a<details>b</details>');
+  });
+
+  test('empty and non-string input are returned as given; an empty tag name edits the whole content', () => {
+    assert.equal(editOutsideTaggedBlocks('', 'details', wrap), '');
+    assert.equal(editOutsideTaggedBlocks(undefined, 'details', wrap), undefined);
+    assert.equal(editOutsideTaggedBlocks('abc', '', wrap), '[abc]');
+  });
+});
+
+// ─── maskFences / editOutsideFences (#5460) ───────────────────────────────────
+
+describe('maskFences / editOutsideFences (#5460)', () => {
+  const F = '```';
+  const upper = (text) => text.replace(/^field:.*$/gm, 'field: EDITED');
+
+  test('an edit only reaches lines outside fenced blocks, and the blocks come back verbatim', () => {
+    const content = ['field: a', F, 'field: in-fence', F, 'field: b'].join('\n');
+    assert.equal(editOutsideFences(content, upper), ['field: EDITED', F, 'field: in-fence', F, 'field: EDITED'].join('\n'));
+  });
+
+  test('content with no fence is edited as given', () => {
+    assert.equal(editOutsideFences('field: a\nfield: b', upper), 'field: EDITED\nfield: EDITED');
+  });
+
+  test('an unterminated fence masks to the end of the content', () => {
+    const content = ['field: a', F, 'field: in-fence', 'field: also'].join('\n');
+    assert.equal(editOutsideFences(content, upper), ['field: EDITED', F, 'field: in-fence', 'field: also'].join('\n'));
+  });
+
+  test('tilde fences and several blocks are masked independently', () => {
+    const content = ['~~~', 'field: t', '~~~', 'field: live', F, 'field: c', F].join('\n');
+    assert.equal(editOutsideFences(content, upper), ['~~~', 'field: t', '~~~', 'field: EDITED', F, 'field: c', F].join('\n'));
+  });
+
+  test('CRLF content keeps its terminators', () => {
+    const content = ['field: a', F, 'field: in-fence', F, 'field: b'].join('\r\n');
+    const out = editOutsideFences(content, (t) => t.replace(/^field: a/m, 'field: A'));
+    assert.equal(out, ['field: A', F, 'field: in-fence', F, 'field: b'].join('\r\n'));
+  });
+
+  test('an edit that destroys a placeholder returns the content unchanged (fail closed)', () => {
+    const content = ['field: a', F, 'x', F].join('\n');
+    assert.equal(editOutsideFences(content, () => 'nothing left'), content);
+  });
+
+  test('a non-string edit result returns the content unchanged; non-string input is returned as given', () => {
+    const content = ['a', F, 'b', F].join('\n');
+    assert.equal(editOutsideFences(content, () => undefined), content);
+    assert.equal(editOutsideFences(undefined, upper), undefined);
+    assert.equal(editOutsideFences('', upper), '');
+  });
+
+  test('maskFences exposes the masked text and a restore that round-trips', () => {
+    const content = ['field: a', F, 'field: in-fence', F, 'field: b'].join('\n');
+    const mask = maskFences(content);
+    assert.ok(!mask.masked.includes('in-fence'));
+    assert.equal(mask.restore(mask.masked), content);
+  });
+
+  test('a placeholder-like line already in the content does not confuse the restore', () => {
+    const decoy = '<!-- gsd-masked-fence-0-0 -->';
+    const content = [decoy, F, 'field: in-fence', F, 'field: b'].join('\n');
+    assert.equal(editOutsideFences(content, upper), [decoy, F, 'field: in-fence', F, 'field: EDITED'].join('\n'));
+  });
+
+  test('property: restore(mask(x)) === x for generated documents with fences', () => {
+    const line = fc.oneof(
+      fc.constantFrom('```', '~~~', '````', '```js', '  ```', 'field: x', '# Heading', '', '<!-- gsd-masked-fence-0-0 -->'),
+      fc.string({ maxLength: 12 }).filter((l) => !l.includes('\n')),
+    );
+    fc.assert(fc.property(fc.array(line, { maxLength: 14 }), fc.boolean(), (lines, crlf) => {
+      const content = lines.join(crlf ? '\r\n' : '\n');
+      const mask = maskFences(content);
+      assert.equal(mask.restore(mask.masked), content);
+    }));
+  });
+});
+

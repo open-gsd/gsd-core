@@ -23,6 +23,7 @@ const registry = require(path.join(ROOT, 'gsd-core/bin/lib/runtime-config-adapte
 
 const JS_HOOKS = [
   'gsd-check-update.js',
+  'gsd-path-export.js',
   'gsd-context-monitor.js',
   'gsd-prompt-guard.js',
   'gsd-read-guard.js',

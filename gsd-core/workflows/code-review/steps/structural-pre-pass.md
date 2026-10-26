@@ -2,8 +2,17 @@ When `FALLOW_ENABLED=true`:
 
 1) Resolve binary via `node_modules/.bin/fallow` first, then PATH.
 ```bash
+# gsd-resolve-lib begin fallow-runner.cjs (#5640): load helpers from the installed runtime, not the cwd
+_gsd_lib_probe="fallow-runner.cjs"
+_gsd_rt="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+GSD_LIB_DIR=""
+_gsd_pick() { for _gsd_d; do if [ -n "$_gsd_d" ] && [ -f "$_gsd_d/$_gsd_lib_probe" ]; then GSD_LIB_DIR="$_gsd_d"; return 0; fi; done; return 1; }
+_gsd_pick "${GSD_TOOLS:+${GSD_TOOLS%/*}/lib}" "$_gsd_rt/gsd-core/bin/lib" "$_gsd_rt/.claude/gsd-core/bin/lib" "$_gsd_rt/.codex/gsd-core/bin/lib" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/gsd-core/bin/lib" "${CODEX_HOME:-$HOME/.codex}/gsd-core/bin/lib" || true
+if [ -z "$GSD_LIB_DIR" ]; then echo "ERROR: fallow-runner.cjs not found in the GSD runtime. Looked in: ${GSD_TOOLS:+${GSD_TOOLS%/*}/lib, }${_gsd_rt}/gsd-core/bin/lib (and its .claude and .codex forms), ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/gsd-core/bin/lib, ${CODEX_HOME:-$HOME/.codex}/gsd-core/bin/lib. Reinstall: npx -y @opengsd/gsd-core@latest --claude --local" >&2; exit 1; fi
+export GSD_LIB_DIR
+# gsd-resolve-lib end
 FALLOW_BIN=$(FALLOW_CWD="$(pwd)" node -e "
-const { resolveFallowBinary } = require('./gsd-core/bin/lib/fallow-runner.cjs');
+const { resolveFallowBinary } = require(require('path').join(process.env.GSD_LIB_DIR, 'fallow-runner.cjs'));
 const resolved = resolveFallowBinary({ cwd: process.env.FALLOW_CWD });
 if (resolved) process.stdout.write(resolved);
 ")

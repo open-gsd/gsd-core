@@ -161,6 +161,18 @@ test('row 7: ambiguous prefix registration throws, never silently picks one', ()
   );
 });
 
+test('row 8z: unsafe id (leading "-" or control char) throws before any spawn', () => {
+  for (const id of ['beads:--flag', 'beads: -x', 'beads:X\u0001']) {
+    let spawned = 0;
+    const execFn = () => { spawned++; return { status: 0, stdout: '{}', stderr: '' }; };
+    assert.throws(
+      () => resolveTaskContent({ trackerId: id, capabilities: [beadsCapability()], execFn }),
+      m.ResolverUnsafeIdError,
+    );
+    assert.equal(spawned, 0);
+  }
+});
+
 test('row 8: non-empty description resolves true with mapped content', () => {
   const execFn = () => ({
     status: 0,
@@ -197,6 +209,15 @@ test('row 9b: whitespace-only description resolves empty', () => {
   const result = resolveTaskContent({ trackerId: 'beads:GSD-42', capabilities: [beadsCapability()], execFn });
   assert.deepStrictEqual(result, { kind: TASK_CONTENT_RESULT.EMPTY });
 });
+
+for (const description of [' ', null]) {
+  test(`row 9c: blank description (${JSON.stringify(description)}) with other fields set still resolves bare empty`, () => {
+    const body = { description, verify: 'run tests', acceptance_criteria: ['a'], done: 'D-01 done' };
+    const execFn = () => ({ status: 0, stdout: JSON.stringify(body), stderr: '' });
+    const result = resolveTaskContent({ trackerId: 'beads:GSD-42', capabilities: [beadsCapability()], execFn });
+    assert.deepStrictEqual(result, { kind: TASK_CONTENT_RESULT.EMPTY });
+  });
+}
 
 test('row 10: absent description resolves empty, same as empty string', () => {
   const execFn = () => ({ status: 0, stdout: JSON.stringify({}), stderr: '' });
@@ -237,6 +258,17 @@ test('row 12: resolver exceeding timeoutMs throws ResolverTimeoutError (simulate
       return true;
     },
   );
+});
+
+test('row 12b: timeoutOverrideMs caps the declared timeoutMs, never raises it', () => {
+  const seen = [];
+  const execFn = (_b, _a, o) => { seen.push(o.timeout); return { status: 0, stdout: '{}', stderr: '' }; };
+  const run = (timeoutOverrideMs) => resolveTaskContent({ trackerId: 'beads:GSD-42', capabilities: [beadsCapability()], timeoutOverrideMs, execFn });
+  run(1);
+  run(TASK_RESOLVER_INVOKE_TIMEOUT_MS + 1);
+  run(2.5); // spawnSync throws ERR_OUT_OF_RANGE on a non-integer timeout
+  assert.deepStrictEqual(seen, [1, TASK_RESOLVER_INVOKE_TIMEOUT_MS, 2]);
+  assert.ok(seen.every(Number.isInteger));
 });
 
 test('row 13: malformed JSON stdout throws, is not conflated with empty content', () => {

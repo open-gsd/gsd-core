@@ -179,6 +179,7 @@ const EXPECTED_CONVERTER_NAME_BY_RUNTIME = {
   hermes: 'convertClaudeAgentToHermesAgent',
   kilo: 'convertClaudeToKiloFrontmatter',
   opencode: 'convertClaudeToOpencodeFrontmatter',
+  pi: 'convertClaudeAgentToPiAgent',
 };
 
 /** Converter functions callable by name — bin/install.js still owns
@@ -188,6 +189,7 @@ const NAMED_CONVERTERS = {
   convertClaudeAgentToClineAgent: installBin.convertClaudeAgentToClineAgent,
   convertClaudeAgentToCodexAgent: installBin.convertClaudeAgentToCodexAgent,
   convertClaudeAgentToHermesAgent: runtimeArtifactConversion.convertClaudeAgentToHermesAgent,
+  convertClaudeAgentToPiAgent: runtimeArtifactConversion.convertClaudeAgentToPiAgent,
   convertClaudeToKiloFrontmatter: installBin.convertClaudeToKiloFrontmatter,
   convertClaudeToOpencodeFrontmatter: installBin.convertClaudeToOpencodeFrontmatter,
 };
@@ -297,6 +299,7 @@ const RUNTIME_SCOPE_PAIRS = [
   ['hermes', 'global'], ['hermes', 'local'],
   ['kilo', 'global'], ['kilo', 'local'],
   ['opencode', 'global'], ['opencode', 'local'],
+  ['pi', 'global'], ['pi', 'local'],
   ['kimi-code', 'global'], ['kimi-code', 'local'],
 ];
 

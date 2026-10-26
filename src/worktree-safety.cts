@@ -255,7 +255,29 @@ function resolveWorktreeContext(cwd: string, deps: WorktreeDeps = {}): WorktreeC
     };
   }
 
-  return resolveWorktreeLinkage(cwd, deps);
+  const linkage = resolveWorktreeLinkage(cwd, deps);
+  if (linkage.reason !== 'linked_worktree') return linkage;
+
+  // #4885: from a SUBDIRECTORY of a LINKED worktree the cwd has no .planning of its own, but the
+  // worktree's own top-level may. That checkout is the project the caller means; remapping to the
+  // main checkout would make `commit` and every planning write land in the wrong repository. A linked
+  // worktree with no .planning anywhere still remaps to the main checkout, and the main checkout's own
+  // subdirectories are untouched.
+  const execGit = deps.execGit || execGitDefault;
+  const top = execGit(['rev-parse', '--show-toplevel'], { cwd });
+  const topText = String(top.stdout || '').trim();
+  if (!top.timedOut && top.exitCode === 0 && topText !== '') {
+    const topLevel = path.resolve(cwd, topText);
+    if (existsSync(path.join(topLevel, '.planning'))) {
+      return {
+        effectiveRoot: topLevel,
+        mode: 'current_directory',
+        reason: 'has_local_planning',
+      };
+    }
+  }
+
+  return linkage;
 }
 
 interface WorktreePrunePlan {

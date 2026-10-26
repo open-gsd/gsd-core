@@ -682,7 +682,8 @@ const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 const SHELL_INTERPOLATED_QUERY = /gsd_run check \$\{hook\.check\.query\}/;
 // The charset a query must be validated against before it may be run. Stated ONCE, in the
 // reference — restating it at five sites would be the drift this PR just repaired.
-const VALIDATION_CHARSET = /\^\[a-z\]\[a-z0-9-\]\*\( \[a-z\]\[a-z0-9-\]\*\)\*\$/;
+// #5647: applied to the dot-normalized value (tests/gate-query-validation-5647.test.cjs pins the behavior).
+const VALIDATION_CHARSET = /\^\[a-z\]\[a-z0-9\]\*\(-\[a-z0-9\]\+\)\*\( \[a-z\]\[a-z0-9\]\*\(-\[a-z0-9\]\+\)\*\)\*\$/;
 // The per-site mandate: every dispatch site must tell an executing agent to validate BEFORE
 // it reaches a shell, and where the rule lives.
 const VALIDATE_MANDATE = /Validate `check` before shell use/;
@@ -755,6 +756,13 @@ describe('capability gate dispatch — manifest input is validated before shell 
         body.search(VALIDATE_MANDATE) < body.search(SHELL_INTERPOLATED_QUERY),
         `${name} states the validation mandate only AFTER the interpolation it is supposed to ` +
         'guard; an executing agent reads top-down and would run the command first.',
+      );
+      // #5647: the registry's query ids are dotted; the value validated must be the value passed.
+      assert.match(
+        body,
+        /write the dot-normalized query/,
+        `${name} must tell an executing agent to write the dot-normalized query where it shows ` +
+        '${hook.check.query}, or the value it validates is not the value it passes.',
       );
     });
   }

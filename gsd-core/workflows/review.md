@@ -27,18 +27,9 @@ command -v cursor-agent >/dev/null 2>&1 && echo "cursor:available" || echo "curs
 command -v agy >/dev/null 2>&1 && echo "antigravity:available" || echo "antigravity:missing"
 command -v kimi >/dev/null 2>&1 && echo "kimi-code:available" || echo "kimi-code:missing"
 
-# Check local model servers (OpenAI-compatible HTTP API — no CLI binary required)
-OLLAMA_HOST=$(gsd_run query config-get review.ollama_host --raw 2>/dev/null || echo "")
-if [ -z "$OLLAMA_HOST" ] || [ "$OLLAMA_HOST" = "null" ]; then OLLAMA_HOST="http://localhost:11434"; fi
-curl -s --max-time 2 "${OLLAMA_HOST}/v1/models" >/dev/null 2>&1 && echo "ollama:available" || echo "ollama:missing"
-
-LM_STUDIO_HOST=$(gsd_run query config-get review.lm_studio_host --raw 2>/dev/null || echo "")
-if [ -z "$LM_STUDIO_HOST" ] || [ "$LM_STUDIO_HOST" = "null" ]; then LM_STUDIO_HOST="http://localhost:1234"; fi
-curl -s --max-time 2 "${LM_STUDIO_HOST}/v1/models" >/dev/null 2>&1 && echo "lm_studio:available" || echo "lm_studio:missing"
-
-LLAMA_CPP_HOST=$(gsd_run query config-get review.llama_cpp_host --raw 2>/dev/null || echo "")
-if [ -z "$LLAMA_CPP_HOST" ] || [ "$LLAMA_CPP_HOST" = "null" ]; then LLAMA_CPP_HOST="http://localhost:8080"; fi
-curl -s --max-time 2 "${LLAMA_CPP_HOST}/v1/models" >/dev/null 2>&1 && echo "llama_cpp:available" || echo "llama_cpp:missing"
+# Check local model servers (OpenAI-compatible HTTP API — no CLI binary required);
+# hosts and defaults come from each lane's descriptor
+gsd_run review-lane availability || { echo "WARNING: review-lane availability failed or is unsupported by this gsd-tools; treating local lanes as missing" >&2; printf 'ollama:missing\nlm_studio:missing\nllama_cpp:missing\n'; }
 
 # jq prerequisite (#2589). The config/model/budget lookups in this workflow no
 # longer need jq — they use the native --raw/--pick flags. But the lanes listed
@@ -665,6 +656,18 @@ done
 # Rewrapped through unquoted command substitution (gsd-core#4109): a bare
 # `$DISPATCH_SLUGS` word-splits under bash but not zsh, collapsing every
 # slug onto one iteration there whenever 2+ reviewers were selected.
+# gsd-resolve-lib begin pattern.cjs (#5640): load helpers from the installed runtime, not the cwd
+_gsd_lib_probe="pattern.cjs"
+_gsd_rt="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+_gsd_gr="$(command -v gsd_run 2>/dev/null || true)"
+case "$_gsd_gr" in /*) ;; *) _gsd_gr="" ;; esac # a gsd_run shell function prints its bare name: not a path
+[ -n "$_gsd_gr" ] && _gsd_gr="$(dirname "$(node -p "require('fs').realpathSync(process.argv[1])" "$_gsd_gr" 2>/dev/null || echo "$_gsd_gr")")/lib"
+GSD_LIB_DIR=""
+_gsd_pick() { for _gsd_d; do if [ -n "$_gsd_d" ] && [ -f "$_gsd_d/$_gsd_lib_probe" ]; then GSD_LIB_DIR="$_gsd_d"; return 0; fi; done; return 1; }
+_gsd_pick "${GSD_TOOLS:+${GSD_TOOLS%/*}/lib}" "$_gsd_rt/gsd-core/bin/lib" "$_gsd_rt/.claude/gsd-core/bin/lib" "$_gsd_rt/.codex/gsd-core/bin/lib" "$_gsd_gr" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/gsd-core/bin/lib" "${CODEX_HOME:-$HOME/.codex}/gsd-core/bin/lib" || true
+if [ -z "$GSD_LIB_DIR" ]; then echo "ERROR: pattern.cjs not found in the GSD runtime. Looked in: ${GSD_TOOLS:+${GSD_TOOLS%/*}/lib, }${_gsd_rt}/gsd-core/bin/lib (and its .claude and .codex forms), ${_gsd_gr:-next to gsd_run (not on PATH)}, ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/gsd-core/bin/lib, ${CODEX_HOME:-$HOME/.codex}/gsd-core/bin/lib. Reinstall: npx -y @opengsd/gsd-core@latest --claude --local" >&2; exit 1; fi
+export GSD_LIB_DIR
+# gsd-resolve-lib end
 for SLUG in $(printf '%s' "$DISPATCH_SLUGS"); do
   [ "$SLUG" = "coderabbit" ] && continue
   REVIEW_FILE="$RUN_DIR/gsd-review-$SLUG.md"
@@ -675,7 +678,7 @@ for SLUG in $(printf '%s' "$DISPATCH_SLUGS"); do
 
   node -e '
     const fs = require("fs");
-    const { escapeRegex } = require("./gsd-core/bin/lib/pattern.cjs");
+    const { escapeRegex } = require(require("path").join(process.env.GSD_LIB_DIR, "pattern.cjs"));
     const manifest = fs.readFileSync(process.argv[1], "utf8");
     const review = fs.readFileSync(process.argv[2], "utf8");
     const ids = manifest.split("\n")

@@ -5,7 +5,7 @@
     "1"
   ],
   "fixture": "ui",
-  "stdout": "{\n  \"frontend\": true,\n  \"hasUiFiles\": true,\n  \"hasUiSpec\": false,\n  \"block\": true,\n  \"message\": \"UI files changed in this wave but no UI-SPEC.md exists for Phase 1. Run /gsd-ui-phase 1 to generate the design contract before continuing.\",\n  \"scopeStatus\": \"degraded\",\n  \"scopeReason\": \"no-summary\"\n}",
+  "stdout": "{\n  \"frontend\": true,\n  \"hasUiFiles\": true,\n  \"hasFrontendEvidence\": true,\n  \"hasUiSpec\": false,\n  \"block\": true,\n  \"message\": \"UI files changed in this wave but no UI-SPEC.md exists for Phase 1. Run /gsd-ui-phase 1 to generate the design contract before continuing.\",\n  \"scopeStatus\": \"degraded\",\n  \"scopeReason\": \"no-summary\"\n}",
   "stderr": "",
   "exitCode": 0
 }

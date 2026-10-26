@@ -73,12 +73,12 @@ After applying each fix:
 | Language | Check Command |
 |----------|--------------|
 | JavaScript | `node -c {file}` (syntax check) |
-| TypeScript | `npx tsc --noEmit {file}` (if tsconfig.json exists) |
+| TypeScript | Project-aware check only, output filtered to `{file}`: the project's own typecheck (`npm run typecheck` / `tsc -b`) if it exists, else `npx tsc --noEmit -p <nearest tsconfig*.json>` whose `--listFilesOnly` output lists `{file}`; no config includes `{file}` → Tier 1 only. Never pass `{file}` to `tsc` positionally. |
 | Python | `python -c "import ast; ast.parse(open('{file}').read())"` |
 | JSON | `node -e "JSON.parse(require('fs').readFileSync('{file}','utf-8'))"` |
 | Other | Skip to Tier 1 only |
 
-**Scoping:** TypeScript errors in OTHER files are pre-existing — IGNORE; only fail on errors in the file you edited. `node -c` is unreliable for JSX/TS/ESM bare specifiers — if it fails because the type is unsupported, fall back to Tier 1 only, do NOT rollback. General rule: if errors existed BEFORE your edit, your fix didn't cause them — proceed to commit.
+**Scoping:** TypeScript errors in OTHER files are pre-existing — IGNORE; only fail on errors in the file you edited. A solution-style root `tsconfig.json` (`"files": []` plus `references`) checks no source files and exits 0 — NOT a passing check; use a referenced config whose `--listFilesOnly` lists `{file}`, or fall back to Tier 1. TypeScript procedure: prefer a `typecheck` script in the nearest `package.json`; else walk up from `{file}` to the nearest `tsconfig.json` (solution-style: try each referenced config in turn), run from that config's directory `npx tsc --noEmit -p <config> --listFilesOnly` and keep the first config listing `{file}` (none → Tier 1), then `npx tsc --noEmit -p <config>` (never `-b`: no build artifacts) keeping only output lines for `{file}`; roll back only for errors on lines you changed, otherwise treat as pre-existing and proceed. `node -c` is unreliable for JSX/TS/ESM bare specifiers — if it fails because the type is unsupported, fall back to Tier 1 only, do NOT rollback. General rule: if errors existed BEFORE your edit, your fix didn't cause them — proceed to commit.
 
 - Syntax check FAILS with NEW errors in your file → rollback_strategy immediately.
 - FAILS with pre-existing errors only → proceed to commit.

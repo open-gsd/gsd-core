@@ -50,7 +50,7 @@ Display:
 Spawn the planner in **outline-only** mode — it must write only the outline manifest, not any
 PLAN.md files:
 
-**Dispatch/wait gate — `PLANNER_STALL_DETECTION_ENABLED`:**
+**Dispatch/wait gate — `PLANNER_STALL_DETECTION_ENABLED` (config key `planner.stall_detection_enabled`, resolved in `plan-phase/steps/stall-detection-helpers.md`):**
 - **`true` (default):** use `run_in_background=true` in the Agent() call below, then use `gsd_stall_watch` after it.
 
 ```javascript
@@ -146,7 +146,7 @@ GSD_ARGS=${GSD_ARGS%$'\n'}
 4. Spawn the planner in **single-plan** mode — it must write exactly one PLAN.md file. The prompt
    is unchanged per plan; what changes is whether the runnable set's Agent() calls are issued one
    at a time (serial) or together in one message (concurrent, every call still carrying
-   `run_in_background=true` exactly as today when `PLANNER_STALL_DETECTION_ENABLED` is `true`
+   `run_in_background=true` exactly as today when `PLANNER_STALL_DETECTION_ENABLED` (config key `planner.stall_detection_enabled`) is `true`
    (default)):
    ```javascript
    Agent(

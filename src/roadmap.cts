@@ -1286,16 +1286,29 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // Heading target: the exact grammar `planSectionPattern` /
     // `insertRowsPatternA|B` anchor on (an ATX phase heading for this phase).
     const headingTargetFound = new RegExp(phaseHeadingAnchor, 'i').test(gateActiveRegion);
+    // #5545: the phase-checklist bullet grammar, defined ONCE for the writer
+    // (an unchecked bullet to tick) and the gate probe (`anyState`).
+    // Line-anchored, with only an optional `**` before the label and horizontal
+    // whitespace, so a bullet that merely MENTIONS "Phase N" is not the phase's
+    // bullet and no `\s` can run past the line end (which used to land the
+    // `(completed …)` annotation on the NEXT line). A decorated bullet (emoji,
+    // blockquote, link) is deliberately NOT the phase's bullet either — the
+    // same narrowing #4965 made for `roadmap analyze`'s checklist reader.
+    // The lookahead only PEEKS (its `\s` may see a newline but consumes none):
+    // the label must be followed by `:`, whitespace or the end of the line, so
+    // `Phase 2.1` / `Phase 20` are not `Phase 2`. Capture group 1 is the opening
+    // `- [`, group 2 the rest of the line after the box.
+    const phaseChecklistBullet = (anyState: boolean): RegExp => new RegExp(
+      `^([ \\t]*-[ \\t]*\\[)${anyState ? '[ x]' : ' '}(\\][ \\t]*(?:\\*\\*)?[ \\t]*Phase[ \\t]+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s]|$)[^\\n]*)`,
+      'im',
+    );
     // Checklist target: when the phase is complete, its own checklist bullet
     // (`- [ ] **Phase N: …**`) IS a writable phase row — the completion
     // checkbox stamp below updates it. Same grammar as that writer, widened
     // one notch to `[ x]` so an ALREADY-checked bullet still counts as a
     // found target: an idempotent re-run then takes the honest
     // "no changes were needed" decline instead of this refusal.
-    const checklistTargetFound = isComplete && new RegExp(
-      `-\\s*\\[[ x]\\]\\s*.*Phase\\s+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
-      'i',
-    ).test(gateActiveRegion);
+    const checklistTargetFound = isComplete && phaseChecklistBullet(true).test(gateActiveRegion);
     // Table-row target: set by the row-scoped cell updates below.
     let tableRowFound = false;
 
@@ -1577,11 +1590,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
 
     // If complete: check checkbox
     if (isComplete) {
-      const checkboxPattern = new RegExp(
-        `(-\\s*\\[)[ ](\\]\\s*.*Phase\\s+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
-        'i'
-      );
-      roadmapContent = replaceInCurrentMilestone(roadmapContent, checkboxPattern, `$1x$2 (completed ${today})`);
+      roadmapContent = replaceInCurrentMilestone(roadmapContent, phaseChecklistBullet(false), `$1x$2 (completed ${today})`);
     }
 
     // Mark completed plan checkboxes (e.g. "- [ ] 50-01-PLAN.md", "- [ ] 50-01:", or "- [ ] **50-01**")
@@ -1589,19 +1598,18 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // superseded-filtered set (#2349 via scanPhasePlans) while `summaries` is
     // the raw *-SUMMARY.md listing — a superseded plan can carry a SUMMARY
     // (e.g. `status: halted`), and ticking it read as "executed" right under a
-    // count line that excludes it. The prefix match mirrors the checkbox regex
-    // below (rows match by planId prefix, which the PLAN-01.md naming shape
-    // relies on), so non-superseded plans tick exactly as before.
+    // count line that excludes it. #5542: a summary belongs to a live plan only
+    // by the SAME pairing rule the counts use (`summaryCandidates` via
+    // `countMatchedSummaries`), never by id prefix — a leftover `47-1` summary
+    // must not survive because a live `47-10` plan starts with `47-1`. Rows
+    // match the id up to a boundary (`planRowPattern`), so `47-1` never ticks
+    // `47-10-PLAN.md`.
     const tickableSummaries = phaseInfo!.summaries
       .map((summaryFile) => ({ summaryFile, planId: summaryFile.replace('-SUMMARY.md', '').replace('SUMMARY.md', '') }))
-      .filter(({ planId }) => planId !== '' && phaseInfo!.plans.some((planFile) => planFile.startsWith(planId)));
+      .filter(({ summaryFile, planId }) => planId !== ''
+        && coreUtils.summaryPairsWithAnyPlan(phaseInfo!.plans, summaryFile));
     for (const { planId } of tickableSummaries) {
-      const planEscaped = escapeRegex(planId);
-      const planCheckboxPattern = new RegExp(
-        `(-\\s*\\[) (\\]\\s*(?:\\*\\*)?${planEscaped}(?:\\*\\*)?)`,
-        'i'
-      );
-      roadmapContent = roadmapContent.replace(planCheckboxPattern, '$1x$2');
+      roadmapContent = roadmapContent.replace(coreUtils.planRowPattern(planId), '$1x$2');
     }
 
     // Compute the active (post-</details>) region offset ONCE.  Both the
@@ -1627,25 +1635,18 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     //
     // #4786: a plan row may be written WITH the `-PLAN.md` suffix (canonical
     // template form) or WITHOUT it (hand-written form: `- [x] 659-01 — desc`).
-    // The tick loop above keys on the bare planId stem with a PREFIX match
-    // (pre-existing, out of scope here), while detection required the full
-    // `-PLAN.md` filename — so every suffix-less row was counted missing and
-    // the insertion fired BESIDE the recognized list — 32 checkbox lines for
-    // 16 plans, exit 0. The stem arm below accepts the bare id only up to a
-    // boundary (whitespace / `:` / dashes / `-PLAN.md` / `.md` / `**` / `)`),
-    // so `5-011` never satisfies `5-01`. Deliberately NOT in the boundary set:
-    // `.` — a dotted sub-id (`5-01.5`) is a real distinct plan, and counting
-    // its row as 5-01's presence would suppress a genuine insertion.
+    // The tick loop above keys on the bare planId stem, while detection required
+    // the full `-PLAN.md` filename — so every suffix-less row was counted
+    // missing and the insertion fired BESIDE the recognized list — 32 checkbox
+    // lines for 16 plans, exit 0. The stem arm below accepts the bare id only
+    // up to the SAME boundary the tick loop uses (`planRowPattern`, #5542), so
+    // `5-011` never satisfies `5-01` and a dotted sub-id (`5-01.5`) is a real
+    // distinct plan whose row does not count as 5-01's presence.
     const missingPlans = phaseInfo!.plans.filter((planFile) => {
       const planEscaped = escapeRegex(planFile);
       if (new RegExp(`-\\s*\\[[x ]\\]\\s*(?:\\*\\*)?${planEscaped}`, 'i').test(activeRegion)) return false;
       const stem = planFile.replace(/-PLAN\.md$/i, '');
-      const stemEscaped = escapeRegex(stem);
-      const stemPresent = new RegExp(
-        `-\\s*\\[[x ]\\]\\s*(?:\\*\\*)?${stemEscaped}(?=$|\\s|:|—|–|-PLAN\\.md|\\.md|\\*\\*|\\))`,
-        'i'
-      ).test(activeRegion);
-      return !stemPresent;
+      return !coreUtils.planRowPattern(stem, { anyState: true }).test(activeRegion);
     });
 
     if (missingPlans.length > 0) {
@@ -1699,12 +1700,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
         // (#4741: same superseded-filtered tick list as the loop above — a
         // pre-existing superseded row must stay unchecked on this path too).
         for (const { planId } of tickableSummaries) {
-          const planEscaped = escapeRegex(planId);
-          const planCheckboxPattern = new RegExp(
-            `(-\\s*\\[) (\\]\\s*(?:\\*\\*)?${planEscaped}(?:\\*\\*)?)`,
-            'i'
-          );
-          roadmapContent = roadmapContent.replace(planCheckboxPattern, '$1x$2');
+          roadmapContent = roadmapContent.replace(coreUtils.planRowPattern(planId), '$1x$2');
         }
       }
     }

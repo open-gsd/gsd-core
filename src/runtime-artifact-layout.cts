@@ -622,6 +622,7 @@ function convertedAgentsKind(
   configDir: string,
   sourceContext: SourceResolutionContext,
   scope: 'local' | 'global',
+  excludeSuffixes?: string[],
 ): ArtifactKind {
   return {
     kind: 'agents',
@@ -702,6 +703,7 @@ function convertedAgentsKind(
         converter,
         isGlobalScope(scope),
         agentCtx?.runtime ? agentCtx : undefined,
+        excludeSuffixes,
       );
     },
   };
@@ -918,6 +920,8 @@ interface ArtifactKindDescriptor {
    *  (e.g. ".agents" for codex skills → $HOME/.agents/skills). When absent,
    *  the kind installs under the runtime's normal configDir. */
   home?: string;
+  /** Agent filename suffixes the agents staging skips (e.g. ".compact.md"). */
+  excludeSuffixes?: string[];
 }
 
 interface ArtifactLayoutDescriptor {
@@ -955,7 +959,7 @@ function dispatchKindEntry(entry: ArtifactKindDescriptor, runtime: string, confi
     case 'agents':
       result = converter == null
         ? agentsKind(destSubpath, prefix, configDir, sourceContext)
-        : convertedAgentsKind(destSubpath, prefix, converter, configDir, sourceContext, scope);
+        : convertedAgentsKind(destSubpath, prefix, converter, configDir, sourceContext, scope, entry.excludeSuffixes);
       break;
 
     case 'skills':
@@ -1351,10 +1355,15 @@ const DEFAULT_NEW_PROJECT_COMMAND = '/gsd-new-project';
  * trigger exists is decided by the registered surface, not by this table. A
  * runtime absent here is invoked as `/<trigger>`.
  */
+// Agent Skills hosts that start a skill with `/skill:<name>` (kimi; pi, #5547 —
+// pi never accepts a bare `/<name>` for a skill).
+const slashSkillInvocation = (trigger: string): string => `/skill:${trigger}`;
+
 const TRIGGER_INVOCATION: Readonly<Record<string, (trigger: string) => string>> = {
   codex: (trigger) => `$${trigger}`,
   cursor: (trigger) => `${trigger} (mention the skill name)`,
-  kimi: (trigger) => `/skill:${trigger}`,
+  kimi: slashSkillInvocation,
+  pi: slashSkillInvocation,
 };
 
 type AdvertisedNewProject =

@@ -316,7 +316,7 @@ git log --oneline -E --grep="^feat\((0*${PHASE_N})-(0*${PLAN_N})\):" | head -1
 git log --oneline -E --grep="^refactor\((0*${PHASE_N})-(0*${PLAN_N})\):" | head -1
 ```
 
-If RED or GREEN gate commits are missing, add a `## TDD Gate Compliance` section to SUMMARY.md with the violation details.
+If RED or GREEN gate commits are missing, or no GREEN commit follows a RED commit (#5275), add a `## TDD Gate Compliance` section to SUMMARY.md with the violation details.
 </gate_enforcement>
 
 <end_of_phase_review>
@@ -342,7 +342,7 @@ TDD Plans: {count} | Gate violations: {count}
 
 ### What the Review Checks
 
-1. **Gate sequence:** Each TDD plan has RED → GREEN commits in order. A plan is scored on its own `test(<plan>):` / `feat(<plan>):` commits, with one exception (#4867): a RED-only probe plan is satisfied by a `feat(...)` commit under a plan that declares it in `depends_on`, directly or through a chain. That is the gap-closure shape (probe plan, then the fix plan that depends on it). The plan's own RED is still required, a plan nothing depends on is scored alone, and the report names the plan that supplied the GREEN (`Plan {id} GREEN is supplied by dependent plan {id}.`).
+1. **Gate sequence:** Each TDD plan has RED → GREEN commits in order (#5275). Order is commit ancestry, not log position or commit date: a GREEN counts only when it descends from a RED commit of the plan, so a history merged from worktree branches is judged by what each commit descends from. A plan with both commit kinds but no GREEN after a RED fails with `reason: green_before_red` and the line `Plan {id} GREEN precedes RED: no feat(...) commit descends from a test(...) commit.`, distinct from the `missing` row for a plan without a RED or GREEN commit. If git cannot answer the ancestry question, the GREEN keeps its credit rather than becoming a violation. A plan is scored on its own `test(<plan>):` / `feat(<plan>):` commits, with one exception (#4867): a RED-only probe plan is satisfied by a `feat(...)` commit under a plan that declares it in `depends_on`, directly or through a chain. That is the gap-closure shape (probe plan, then the fix plan that depends on it). The plan's own RED is still required, a plan nothing depends on is scored alone, and the report names the plan that supplied the GREEN (`Plan {id} GREEN is supplied by dependent plan {id}.`).
 2. **Test quality:** RED phase tests fail for the right reason (not import errors or syntax)
 3. **Minimal GREEN:** Implementation is minimal — no premature optimization in GREEN phase
 4. **Refactor discipline:** If REFACTOR commit exists, tests still pass

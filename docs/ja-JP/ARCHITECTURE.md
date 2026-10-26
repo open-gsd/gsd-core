@@ -114,7 +114,7 @@ GSD Core は、ユーザーと AI コーディングエージェント（Claude 
 - **Copilot:** スラッシュコマンド（ハイフン形式、`/gsd-command-name`）
 - **Antigravity:** スキル
 
-**コマンド総数:** 信頼できる数と完全なロスターについては [`docs/INVENTORY.md`](INVENTORY.md#commands) を参照。
+**コマンド総数:** 信頼できる数と完全なロスターについては [`docs/INVENTORY.md`](INVENTORY.md#コマンド) を参照。
 
 #### 2 段階の階層的ルーティング（v1.40、[#2792](https://github.com/open-gsd/gsd-core/issues/2792)）
 
@@ -134,7 +134,7 @@ eager なスキルリストはターンごとの 2 つの主要コストの一�
 - 状態更新パターン
 - エラーハンドリングとリカバリー
 
-**ワークフロー総数:** 信頼できる数と完全なロスターについては [`docs/INVENTORY.md`](INVENTORY.md#workflows) を参照。
+**ワークフロー総数:** 信頼できる数と完全なロスターについては [`docs/INVENTORY.md`](INVENTORY.md#ワークフロー) を参照。
 
 #### ワークフローのプログレッシブディスクロージャー
 
@@ -159,7 +159,7 @@ eager なスキルリストはターンごとの 2 つの主要コストの一�
 
 ### リファレンス（`gsd-core/references/*.md`）
 
-ワークフローとエージェントが `@-reference` で参照する共有知識ドキュメント（信頼できる数と完全なロスターについては [`docs/INVENTORY.md`](INVENTORY.md#references-41-shipped) を参照）：
+ワークフローとエージェントが `@-reference` で参照する共有知識ドキュメント（信頼できる数と完全なロスターについては [`docs/INVENTORY.md`](INVENTORY.md#リファレンス) を参照）：
 
 **コアリファレンス：**
 
@@ -224,7 +224,7 @@ CJS コマンドファミリールーターは `CommandRoutingHub` を通じて�
 
 ### CLI ツール（`gsd-core/bin/`）
 
-`gsd-core/bin/lib/` にドメインモジュールが分割された Node.js CLI ユーティリティ（`gsd-tools.cjs`）（信頼できるロスターについては [`docs/INVENTORY.md`](INVENTORY.md#cli-modules-33-shipped) を参照）：
+`gsd-core/bin/lib/` にドメインモジュールが分割された Node.js CLI ユーティリティ（`gsd-tools.cjs`）（信頼できるロスターについては [`docs/INVENTORY.md`](INVENTORY.md#cli-モジュール) を参照）：
 
 | モジュール | 責務 |
 | ---------------------- | --------------------------------------------------------------------------------------------------- |
@@ -277,7 +277,7 @@ Orchestrator (workflow .md)
 
 ### 主要エージェント生成カテゴリ
 
-21 の主要エージェントの概念的な生成パターン分類。信頼できる 31 エージェントロスター（`gsd-pattern-mapper`、`gsd-code-reviewer`、`gsd-code-fixer`、`gsd-ai-researcher`、`gsd-domain-researcher`、`gsd-eval-planner`、`gsd-eval-auditor`、`gsd-framework-selector`、`gsd-debug-session-manager`、`gsd-intel-updater` などの 10 の高度/専門化エージェントを含む）については、[`docs/INVENTORY.md`](INVENTORY.md#agents-31-shipped) を参照。
+主要エージェントの概念的な生成パターン分類。信頼できるエージェントロスター（`gsd-pattern-mapper`、`gsd-code-reviewer`、`gsd-code-fixer`、`gsd-ai-researcher`、`gsd-domain-researcher`、`gsd-eval-planner`、`gsd-eval-auditor`、`gsd-framework-selector`、`gsd-debug-session-manager`、`gsd-intel-updater` などの高度/専門化エージェントを含む）については、[`docs/INVENTORY.md`](INVENTORY.md#エージェント) を参照。
 
 | カテゴリ | エージェント | 並列性 |
 | ---------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |

@@ -17,15 +17,11 @@ const { output, error, ERROR_REASON } = ioMod;
 import planDocumentMod = require('./plan-document.cjs');
 const { parsePlanDocument } = planDocumentMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import capabilityLoaderMod = require('./capability-loader.cjs');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 import taskContentResolutionMod = require('./task-content-resolution.cjs');
 const {
   resolveTaskContent,
-  ResolverAmbiguousError,
-  ResolverFailedError,
-  ResolverTimeoutError,
-  ResolverMalformedOutputError,
+  loadResolverCapabilities,
+  isResolverFailure,
 } = taskContentResolutionMod;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -109,22 +105,6 @@ function isBehaviorAddingTaskContent(content: string): BehaviorAddingResult {
   };
 }
 
-/**
- * Default (production) capability loader for `resolve-content`: the merged
- * first-party + validated-installed-overlay registry (ADR-1244 D2), the
- * established runtime read path for "installed capabilities including
- * third-party" — as opposed to `capability-loader.cts`'s heavier build-time
- * validation entry points or the static `capability-registry.cjs` alone
- * (first-party only, would miss a third-party capability's
- * `taskContentResolver` declaration entirely).
- */
-function defaultLoadCapabilities(cwd: string): CapabilityLike[] {
-  const registry = capabilityLoaderMod.loadRegistry({ includeInstalled: true, cwd }) as {
-    capabilities?: Record<string, CapabilityLike>;
-  };
-  return Object.values(registry.capabilities ?? {});
-}
-
 function parseResolveContentArgs(args: string[]): { plan: string | null; taskId: string | null } {
   let plan: string | null = null;
   let taskId: string | null = null;
@@ -145,12 +125,10 @@ function parseResolveContentArgs(args: string[]): { plan: string | null; taskId:
  * (ADR-3646 Decision 2). Resolves one task's content from the external
  * tracker its `tracker-id` attribute names, via `task-content-resolution.cts`.
  *
- * HARD-HALT CONTRACT: a thrown `ResolverAmbiguousError` / `ResolverFailedError`
- * / `ResolverTimeoutError` / `ResolverMalformedOutputError` from
+ * HARD-HALT CONTRACT: a thrown resolver failure (`isResolverFailure`) from
  * `resolveTaskContent` is turned into this CLI's own non-zero exit via
  * `error()` — never swallowed into a `{resolved: false}` JSON answer. Any
- * other thrown error is not one of the four documented resolver-error
- * classes and is allowed to propagate uncaught.
+ * other thrown error is not a documented resolver-error class and is allowed to propagate uncaught.
  */
 function routeResolveContent(
   { args, cwd, raw }: RouteTaskCommandOptions,
@@ -185,7 +163,7 @@ function routeResolveContent(
     return;
   }
 
-  const loadCapabilities = deps.loadCapabilities ?? defaultLoadCapabilities;
+  const loadCapabilities = deps.loadCapabilities ?? loadResolverCapabilities;
   const capabilities = loadCapabilities(projectRoot);
   const resolveFn = deps.resolveTaskContentFn ?? resolveTaskContent;
 
@@ -193,13 +171,8 @@ function routeResolveContent(
   try {
     result = resolveFn({ trackerId: task.trackerId, capabilities });
   } catch (err) {
-    if (
-      err instanceof ResolverAmbiguousError ||
-      err instanceof ResolverFailedError ||
-      err instanceof ResolverTimeoutError ||
-      err instanceof ResolverMalformedOutputError
-    ) {
-      error((err as Error).message, ERROR_REASON.UNKNOWN);
+    if (isResolverFailure(err)) {
+      error(err.message, ERROR_REASON.UNKNOWN);
       return;
     }
     throw err;

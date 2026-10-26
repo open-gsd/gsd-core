@@ -4511,3 +4511,259 @@ describe('#3829 — the step\'s REVIEW.md lookup resolves a letter-suffixed phas
     }), { numRuns: 25 });
   });
 });
+
+// #5213: gsd-code-fixer's Tier-2 TypeScript check passed the edited file to tsc
+// positionally, which makes tsc ignore tsconfig.json (no jsx / paths / lib), so
+// every .tsx or alias-importing file failed in the very file just edited.
+describe('gsd-code-fixer TypeScript Tier-2 check is project-aware (#5213)', () => {
+  const AGENTS_DIR = path.join(__dirname, '..', 'agents');
+  const VARIANTS = {
+    full: fs.readFileSync(path.join(AGENTS_DIR, 'gsd-code-fixer.md'), 'utf-8'),
+    compact: fs.readFileSync(path.join(AGENTS_DIR, 'gsd-code-fixer.compact.md'), 'utf-8'),
+  };
+  const typescriptRow = (text) => text.split(/\r?\n/).find((l) => l.startsWith('| TypeScript |')) || '';
+
+  for (const [name, text] of Object.entries(VARIANTS)) {
+    test(`${name}: the edited file is never passed to tsc positionally`, () => {
+      assert.ok(!/tsc\s+--noEmit\s+\{file\}/.test(text), 'a positional "tsc --noEmit {file}" check remains');
+      assert.ok(!/tsc\s+--noEmit\s+\S*\.tsx?\b/.test(text), 'a positional tsc file argument remains');
+    });
+
+    test(`${name}: the TypeScript row prefers the project typecheck and a config that includes the file`, () => {
+      const row = typescriptRow(text);
+      assert.notEqual(row, '', 'no TypeScript row in the Tier-2 table');
+      assert.match(row, /typecheck/i, 'the project typecheck script is not preferred');
+      assert.match(row, /--listFilesOnly/, 'config inclusion is not verified with --listFilesOnly');
+      assert.match(row, /Tier 1/i, 'no fallback to Tier 1 when no config includes the file');
+    });
+
+    test(`${name}: a solution-style root config is not treated as passing`, () => {
+      assert.match(text, /solution-style/i);
+      assert.match(text, /"files": \[\]|files: \[\]/);
+    });
+
+    test(`${name}: the other Tier-2 rows are unchanged`, () => {
+      assert.ok(text.includes('| JavaScript | `node -c {file}` (syntax check) |'));
+      assert.ok(text.includes('| Python | `python -c "import ast; ast.parse(open(\'{file}\').read())"` |'));
+      assert.ok(text.includes('| Other | Skip to Tier 1 only |'));
+    });
+
+    test(`${name}: the procedure says how to find the config, filter the output and avoid build artifacts`, () => {
+      assert.match(text, /walk up/i, 'no instruction to walk up to the nearest tsconfig');
+      assert.match(text, /-p <config>/, 'the check is not run with -p <config>');
+      assert.match(text, /never `-b`/, 'tsc -b (which writes build artifacts) is not ruled out for the config path');
+      assert.match(text, /only (?:output )?lines (?:that start with|for) `\{file\}`/i, 'the output is not filtered to the edited file');
+    });
+  }
+
+  test('the compact variant carries the identical TypeScript check row', () => {
+    assert.equal(typescriptRow(VARIANTS.compact), typescriptRow(VARIANTS.full));
+  });
+
+  test('the full agent\'s scoping rule and fallback list use the project-aware form', () => {
+    assert.ok(!/If `npx tsc --noEmit \{file\}`/.test(VARIANTS.full), 'the scoping rule still names the positional form');
+    assert.ok(!/syntax check \(node -c, tsc --noEmit,/.test(VARIANTS.full), 'the fallback list still names bare tsc --noEmit');
+  });
+});
+
+// ─── #5640: helper modules resolve from the installed runtime, not the cwd ───────────────────────────────
+//
+// code-review.md (flags, depth, fallow normalizer), review.md (plan-coverage pattern helper) and
+// code-review/steps/structural-pre-pass.md (fallow binary) loaded their helpers with a cwd-relative
+// require('./gsd-core/bin/lib/X.cjs'). In a global install no ./gsd-core exists in the project, so --fix,
+// --all, --auto, --depth and --files were dropped silently, the depth step halted, and plan-coverage JSON
+// came out empty. Each such step now carries a resolver block between '# gsd-resolve-lib begin <module>' and
+// '# gsd-resolve-lib end'; these tests run those blocks, as shipped, in sandboxed installs.
+
+const RESOLVER_SITES = [
+  { file: WORKFLOW_PATH, module: 'code-review-flags.cjs', fatal: true },
+  { file: WORKFLOW_PATH, module: 'code-review-depth.cjs', fatal: true },
+  { file: WORKFLOW_PATH, module: 'fallow-runner.cjs', fatal: false },
+  { file: path.join(ROOT, 'gsd-core', 'workflows', 'review.md'), module: 'pattern.cjs', fatal: true },
+  { file: PRE_PASS_STEP_PATH, module: 'fallow-runner.cjs', fatal: true, shim: false },
+];
+const RESOLVER_BEGIN = '# gsd-resolve-lib begin ';
+const RESOLVER_END = '# gsd-resolve-lib end';
+
+/** Every resolver block in one workflow file, in file order: { module, text }. */
+function resolverBlocks(file) {
+  const src = fs.readFileSync(file, 'utf8');
+  const blocks = [];
+  let from = src.indexOf(RESOLVER_BEGIN);
+  while (from !== -1) {
+    const lineEnd = src.indexOf('\n', from);
+    const header = src.slice(from + RESOLVER_BEGIN.length, lineEnd);
+    const module = header.split(' ')[0];
+    const end = src.indexOf(RESOLVER_END, lineEnd);
+    blocks.push({ module, text: src.slice(from, end + RESOLVER_END.length) });
+    from = src.indexOf(RESOLVER_BEGIN, end);
+  }
+  return blocks;
+}
+
+/** The block a site names, with the file's blocks matched in the order RESOLVER_SITES lists them. */
+function resolverFor(site) {
+  const siblings = RESOLVER_SITES.filter((s) => s.file === site.file);
+  const blocks = resolverBlocks(site.file);
+  return blocks[siblings.indexOf(site)];
+}
+
+describe('#5640 helper modules resolve from the installed runtime', { skip: !HAS_BASH }, () => {
+  let sandbox;
+  let installHome;
+  let emptyHome;
+  let projectDir;
+  let minimalPath;
+
+  function before_(t) {
+    sandbox = createTempDir('gsd-5640-');
+    t.after(() => cleanup(sandbox));
+    installHome = path.join(sandbox, 'home');
+    const lib = path.join(installHome, '.claude', 'gsd-core', 'bin', 'lib');
+    fs.mkdirSync(path.dirname(lib), { recursive: true });
+    fs.cpSync(path.join(ROOT, 'gsd-core', 'bin', 'lib'), lib, { recursive: true });
+    fs.copyFileSync(path.join(ROOT, 'gsd-core', 'bin', 'gsd_run'), path.join(installHome, '.claude', 'gsd-core', 'bin', 'gsd_run'));
+    emptyHome = path.join(sandbox, 'empty-home');
+    // node comes through a private bin dir: the directory holding the real node may also hold a global gsd_run.
+    const toolBin = path.join(sandbox, 'tool-bin');
+    fs.mkdirSync(toolBin, { recursive: true });
+    fs.symlinkSync(process.execPath, path.join(toolBin, 'node'));
+    minimalPath = [toolBin, '/usr/bin', '/bin'].join(path.delimiter);
+    fs.mkdirSync(emptyHome, { recursive: true });
+    projectDir = path.join(sandbox, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+  }
+
+  /** Run a resolver block (then print the directory it exported) in the sandboxed project. */
+  function runBlock(block, env, extra = '', prefix = '') {
+    const script = prefix + block.text + '\nprintf "%s" "$GSD_LIB_DIR"\n' + extra;
+    const result = runHook('-c', [script], {
+      interpreter: 'bash',
+      cwd: projectDir,
+      env: { PATH: minimalPath, HOME: emptyHome, ...env },
+      timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
+    });
+    return toLegacyResult(result);
+  }
+
+  const installedLib = () => path.join(installHome, '.claude', 'gsd-core', 'bin', 'lib');
+
+  test('every helper-loading step resolves its module through the resolver (#5640)', () => {
+    for (const site of RESOLVER_SITES) {
+      const blocks = resolverBlocks(site.file).map((b) => b.module);
+      assert.ok(blocks.includes(site.module), path.basename(site.file) + ' must carry a resolver block for ' + site.module);
+      const src = fs.readFileSync(site.file, 'utf8');
+      assert.equal(src.includes("require('./gsd-core/bin/lib"), false, path.basename(site.file) + ' still requires a helper relative to the cwd');
+      assert.equal(src.includes('require("./gsd-core/bin/lib'), false, path.basename(site.file) + ' still requires a helper relative to the cwd');
+    }
+  });
+
+  test('a global install resolves from the default home, for every site (#5640)', (t) => {
+    before_(t);
+    {
+      for (const site of RESOLVER_SITES) {
+        const r = runBlock(resolverFor(site), { HOME: installHome });
+        assert.equal(r.status, 0, site.module + ': ' + r.stderr);
+        assert.equal(r.stdout, installedLib(), site.module);
+      }
+    }
+  });
+
+  test('/gsd-code-review N --fix parses from a global install (#5640)', (t) => {
+    before_(t);
+    {
+      const site = RESOLVER_SITES[0];
+      const read = "\nnode -e \"const { parseCodeReviewFlags } = require(require('path').join(process.env.GSD_LIB_DIR, 'code-review-flags.cjs')); process.stdout.write(JSON.stringify(parseCodeReviewFlags(process.argv.slice(1))));\" -- 03 --fix";
+      const r = runBlock(resolverFor(site), { HOME: installHome }, '\necho\n' + read.trimStart());
+      assert.equal(r.status, 0, r.stderr);
+      const flags = JSON.parse(r.stdout.slice(r.stdout.indexOf('\n') + 1));
+      assert.equal(flags.fix, true, 'the --fix flag reaches the review');
+    }
+  });
+
+  test('the gsd_run shim on PATH locates the install, through a symlink too (#5640)', (t) => {
+    before_(t);
+    {
+      const binDir = path.join(installHome, '.claude', 'gsd-core', 'bin');
+      const linkDir = path.join(sandbox, 'links');
+      fs.mkdirSync(linkDir, { recursive: true });
+      fs.symlinkSync(path.join(binDir, 'gsd_run'), path.join(linkDir, 'gsd_run'));
+      for (const onPath of [binDir, linkDir]) {
+        const r = runBlock(resolverFor(RESOLVER_SITES[1]), { PATH: onPath + path.delimiter + minimalPath });
+        assert.equal(r.status, 0, r.stderr);
+        assert.equal(fs.realpathSync(r.stdout), fs.realpathSync(installedLib()), 'resolved through ' + onPath);
+      }
+    }
+  });
+
+  test('a local install resolves from RUNTIME_DIR (#5640)', (t) => {
+    before_(t);
+    {
+      const r = runBlock(resolverFor(RESOLVER_SITES[1]), { RUNTIME_DIR: path.join(installHome, '.claude') });
+      assert.equal(r.status, 0, r.stderr);
+      assert.equal(r.stdout, installedLib());
+    }
+  });
+
+  test('GSD_TOOLS set in the block is the first candidate (#5640)', (t) => {
+    before_(t);
+    {
+      const tools = path.join(installHome, '.claude', 'gsd-core', 'bin', 'gsd-tools.cjs');
+      const r = runBlock(resolverFor(RESOLVER_SITES[0]), { GSD_TOOLS: tools });
+      assert.equal(r.status, 0, r.stderr);
+      assert.equal(r.stdout, installedLib());
+    }
+  });
+
+  test('a missing runtime names the searched locations (#5640)', (t) => {
+    before_(t);
+    {
+      for (const site of RESOLVER_SITES) {
+        const r = runBlock(resolverFor(site), {});
+        const home = path.join(emptyHome, '.claude', 'gsd-core', 'bin', 'lib');
+        assert.equal(r.stderr.includes(home), true, site.module + ': the error names ' + home + ', got ' + r.stderr);
+        assert.equal(r.stderr.includes(site.module), true, 'the error names the missing module');
+        assert.equal(r.stdout, '', 'nothing is exported for a miss');
+        if (site.fatal) assert.notEqual(r.status, 0, site.module + ': a miss stops the step');
+        else assert.equal(r.status, 0, site.module + ': the fallow normalizer warns and keeps its raw-report fallback');
+      }
+    }
+  });
+
+  test('a local install under .claude or .codex resolves from the project root (#5640)', (t) => {
+    before_(t);
+    for (const dir of ['.claude', '.codex']) {
+      const root = path.join(sandbox, 'local-' + dir.slice(1));
+      fs.mkdirSync(path.join(root, dir, 'gsd-core', 'bin'), { recursive: true });
+      fs.symlinkSync(installedLib(), path.join(root, dir, 'gsd-core', 'bin', 'lib'));
+      const r = runBlock(resolverFor(RESOLVER_SITES[1]), { RUNTIME_DIR: root });
+      assert.equal(r.status, 0, dir + ': ' + r.stderr);
+      assert.equal(r.stdout, path.join(root, dir, 'gsd-core', 'bin', 'lib'), dir);
+    }
+  });
+
+  test('a gsd_run shell function is not read as a path (#5640)', (t) => {
+    before_(t);
+    // command -v prints a function's bare name; its dirname is ".", which would make ./lib a candidate.
+    fs.mkdirSync(path.join(projectDir, 'lib'));
+    fs.writeFileSync(path.join(projectDir, 'lib', 'code-review-depth.cjs'), '');
+    const r = runBlock(resolverFor(RESOLVER_SITES[1]), {}, '', 'gsd_run() { :; }\n');
+    assert.notEqual(r.status, 0, 'a lone ./lib must not satisfy the resolver');
+    assert.equal(r.stdout, '');
+  });
+
+  test('every site carries the same resolver (#5640)', () => {
+    // A site without the gsd_run candidate (its file's launcher line comes after this block) compares with the
+    // shim lines and the shim candidate removed from every site.
+    const shape = (site) => resolverFor(site).text
+      .split(site.module).join('<module>')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => !line.startsWith('if [ -z "$GSD_LIB_DIR" ]'))
+      .filter((line) => !/^(_gsd_gr=|case "\$_gsd_gr"|\[ -n "\$_gsd_gr" \])/.test(line))
+      .map((line) => line.split(' "$_gsd_gr"').join(''))
+      .join('\n');
+    const shapes = RESOLVER_SITES.map(shape);
+    for (const s of shapes) assert.equal(s, shapes[0], 'a site drifted from the shared resolver');
+  });
+});

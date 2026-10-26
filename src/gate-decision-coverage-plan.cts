@@ -29,9 +29,10 @@ import {
   loadPlanContents,
   phaseDirProblem,
   loadDecisionExtraction,
+  resolveTrackerBodies,
   buildPlanMessage,
 } from './decision-coverage-support.cjs';
-import type { UncoveredItem } from './decision-coverage-support.cjs';
+import type { TrackerResolveDeps, UncoveredItem } from './decision-coverage-support.cjs';
 
 /**
  * The verdict when CONTEXT.md or a plan could not be read. The blocking policy is unchanged
@@ -55,7 +56,7 @@ function contextMissingSkip(): GateResult {
   return gateVerdict('skip', false, { passed: true, skipped: true, reason: 'CONTEXT.md missing', total: 0, covered: 0, uncovered: [], message: 'No CONTEXT.md - nothing to check.' });
 }
 
-export function evaluateDecisionCoveragePlan(input: { projectDir: string; args: readonly string[] }): GateResult {
+export function evaluateDecisionCoveragePlan(input: { projectDir: string; args: readonly string[]; deps?: TrackerResolveDeps }): GateResult {
   const { projectDir, args } = input;
   // Partition the argv AFTER the verb so flag tokens and their values never land in a
   // positional slot.
@@ -175,7 +176,9 @@ export function evaluateDecisionCoveragePlan(input: { projectDir: string; args: 
   if (phaseDir && planContents.value.length === 0) {
     return gateVerdict('block', true, { passed: false, skipped: false, reason: 'phase directory holds no plans', total: null, covered: null, message: `Decision coverage gate: the phase directory "${positionals[0]}" holds no PLAN files, so no plans were scanned. Pass the phase DIRECTORY that holds the plans (e.g. .planning/phases/01-slug), not the phase number.` });
   }
-  const sections = planContents.value.map(extractPlanDesignatedSections);
+  const tracker = resolveTrackerBodies(projectDir, planContents.value, input.deps);
+  if (tracker.kind === 'unreadable') return unreadableDecisionGate(`${tracker.span}: ${tracker.reason}`);
+  const sections = planContents.value.map((c, i) => extractPlanDesignatedSections(c) + (tracker.value.bodies[i] ? '\n' + tracker.value.bodies[i] : ''));
   const uncovered: UncoveredItem[] = [];
   let covered = 0;
   for (const decision of decisions) {
@@ -183,6 +186,7 @@ export function evaluateDecisionCoveragePlan(input: { projectDir: string; args: 
     else uncovered.push({ id: decision.id, text: decision.text, category: decision.category });
   }
 
+  if (uncovered.length > 0 && tracker.value.missingResolver) return unreadableDecisionGate(`${tracker.value.missingResolver.span}: ${tracker.value.missingResolver.reason}`);
   const passed = uncovered.length === 0;
   return gateVerdict(passed ? 'pass' : 'block', !passed, {
     passed,

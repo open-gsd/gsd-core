@@ -66,6 +66,7 @@ const CASES = [
       return {
         frontend: true,
         hasUiFiles: true,
+        hasFrontendEvidence: true,
         hasUiSpec: false,
         block: true,
         message: 'UI files changed in this wave but no UI-SPEC.md exists for Phase 1. Run /gsd-ui-phase 1 to generate the design contract before continuing.',
@@ -93,6 +94,7 @@ const CASES = [
       return {
         frontend: true,
         hasUiFiles: true,
+        hasFrontendEvidence: true,
         hasUiSpec: true,
         block: false,
         scopeStatus: 'degraded',
@@ -118,6 +120,7 @@ const CASES = [
       return {
         frontend: true,
         hasUiFiles: false,
+        hasFrontendEvidence: false,
         hasUiSpec: false,
         block: false,
         scopeStatus: 'degraded',
@@ -143,6 +146,7 @@ const CASES = [
       return {
         frontend: false,
         hasUiFiles: true,
+        hasFrontendEvidence: false,
         hasUiSpec: false,
         block: false,
         scopeStatus: 'degraded',
@@ -166,6 +170,7 @@ const CASES = [
       return {
         frontend: false,
         hasUiFiles: false,
+        hasFrontendEvidence: false,
         hasUiSpec: false,
         block: false,
         phaseLookupFailed: true,
@@ -187,6 +192,7 @@ const CASES = [
       return {
         frontend: true,
         hasUiFiles: false,
+        hasFrontendEvidence: false,
         hasUiSpec: false,
         block: false,
         scopeStatus: 'unresolvable',

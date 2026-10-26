@@ -5,7 +5,7 @@
     "2"
   ],
   "fixture": "ui",
-  "stdout": "{\n  \"frontend\": false,\n  \"hasUiFiles\": true,\n  \"hasUiSpec\": false,\n  \"block\": false,\n  \"scopeStatus\": \"degraded\",\n  \"scopeReason\": \"no-summary\"\n}",
+  "stdout": "{\n  \"frontend\": false,\n  \"hasUiFiles\": true,\n  \"hasFrontendEvidence\": false,\n  \"hasUiSpec\": false,\n  \"block\": false,\n  \"scopeStatus\": \"degraded\",\n  \"scopeReason\": \"no-summary\"\n}",
   "stderr": "",
   "exitCode": 0
 }

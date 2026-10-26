@@ -6,8 +6,8 @@
  * Tests the `computeUiSafetyGate` pure function exported from check-command-router.cjs.
  * Uses in-memory tmpdir fixtures — no real CLI subprocess needed.
  *
- * Return shape: { frontend: bool, hasUiFiles: bool, hasUiSpec: bool, block: bool, message?: string }
- * Invariant: block = frontend && hasUiFiles && !hasUiSpec
+ * Return shape: { frontend: bool, hasUiFiles: bool, hasFrontendEvidence: bool, hasUiSpec: bool, block: bool, message?: string }
+ * Invariant: block = frontend && hasUiFiles && hasFrontendEvidence && !hasUiSpec (#5646)
  *
  * Per RULESET.TESTS.boundary-coverage: exercises all branches:
  *   (a) frontend + UI files changed + no spec → block:true
@@ -93,16 +93,17 @@ describe('computeUiSafetyGate — ui.safety-gate check logic (#1168)', () => {
   });
 
   describe('return shape', () => {
-    test('result has required keys: frontend, hasUiFiles, hasUiSpec, block', () => {
+    test('result has required keys: frontend, hasUiFiles, hasFrontendEvidence, hasUiSpec, block', () => {
       const result = computeUiSafetyGate(nonFrontend.tmpDir, '1');
       assert.ok(typeof result === 'object' && result !== null, 'result must be an object');
       assert.ok(typeof result.frontend === 'boolean', 'frontend must be boolean');
       assert.ok(typeof result.hasUiFiles === 'boolean', 'hasUiFiles must be boolean');
+      assert.ok(typeof result.hasFrontendEvidence === 'boolean', 'hasFrontendEvidence must be boolean');
       assert.ok(typeof result.hasUiSpec === 'boolean', 'hasUiSpec must be boolean');
       assert.ok(typeof result.block === 'boolean', 'block must be boolean');
     });
 
-    test('block invariant: block === frontend && hasUiFiles && !hasUiSpec for all scenarios', () => {
+    test('block invariant: block === frontend && hasUiFiles && hasFrontendEvidence && !hasUiSpec for all scenarios', () => {
       for (const [label, { tmpDir }] of [
         ['frontendNoSpec', frontendNoSpec],
         ['frontendWithSpec', frontendWithSpec],
@@ -111,8 +112,8 @@ describe('computeUiSafetyGate — ui.safety-gate check logic (#1168)', () => {
         const r = computeUiSafetyGate(tmpDir, '1');
         assert.strictEqual(
           r.block,
-          r.frontend && r.hasUiFiles && !r.hasUiSpec,
-          `${label}: block invariant violated — frontend=${r.frontend} hasUiFiles=${r.hasUiFiles} hasUiSpec=${r.hasUiSpec} block=${r.block}`,
+          r.frontend && r.hasUiFiles && r.hasFrontendEvidence && !r.hasUiSpec,
+          `${label}: block invariant violated — frontend=${r.frontend} hasUiFiles=${r.hasUiFiles} hasFrontendEvidence=${r.hasFrontendEvidence} hasUiSpec=${r.hasUiSpec} block=${r.block}`,
         );
       }
     });
