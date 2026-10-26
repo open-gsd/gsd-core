@@ -3150,13 +3150,14 @@ describe('phase add / add-batch count bracket phases under phase_id_convention b
     });
   }
 
-  test('property: whatever mix of heading and bullet bracket phases exists, the next number is max+1', () => {
+  test('property: whatever mix of heading, bullet and directory bracket phases exists, the next number is max+1', () => {
     const fc = require('fast-check');
     fc.assert(
-      fc.property(fc.uniqueArray(fc.integer({ min: 1, max: 60 }), { minLength: 1, maxLength: 5 }), fc.boolean(), (nums, asBullets) => {
+      fc.property(fc.uniqueArray(fc.integer({ min: 1, max: 60 }), { minLength: 1, maxLength: 5 }), fc.constantFrom('heading', 'bullet', 'directory'), (nums, form) => {
         const nn = (n) => String(n).padStart(2, '0');
-        setup(['# Roadmap', '', '## Milestone v2.0', '',
-          ...nums.map((n) => (asBullets ? `- [ ] **[GSD.02] ${nn(n)}: P${n}**` : `### [GSD.02] ${nn(n)}: P${n}`)), '']);
+        const lines = form === 'directory' ? [] : nums.map((n) => (form === 'bullet' ? `- [ ] **[GSD.02] ${nn(n)}: P${n}**` : `### [GSD.02] ${nn(n)}: P${n}`));
+        const dirs = form === 'directory' ? nums.map((n) => `GSD.02-${nn(n)}-held`) : [];
+        setup(['# Roadmap', '', '## Milestone v2.0', '', ...lines, ''], { dirs });
         return runGsdTools('phase add "New thing" --raw', tmp).output.trim() === nn(Math.max(...nums) + 1);
       }),
       { numRuns: 20, seed: 5528 },

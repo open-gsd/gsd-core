@@ -1723,7 +1723,16 @@ describe('bracket phase declarations agree across heading, bullet and directory 
             const hits = declared(text);
             assert.ok(hits.length > 0 && hits.every(([i, num]) => i === id && num === n), text);
           }
-          assert.deepStrictEqual(phaseId.parseBracketPhaseDir(`${id}-${nn}-slug`), { milestone: mm, phase: n });
+          // The heading owner (`buildPhaseHeadingScanRegex`) read on its own agrees with the declaration scans it feeds.
+          const heading = phaseId.buildPhaseHeadingScanRegex(phaseId.PHASE_HEADING_BASELINE.LABEL_ONLY, 'bracket');
+          const hm = heading.regex.exec(`### [${id}] ${nn}: x`);
+          heading.regex.lastIndex = 0;
+          assert.ok(hm, `heading scan reads ### [${id}] ${nn}`);
+          assert.strictEqual(hm[heading.bracketGroup].toUpperCase(), id);
+          assert.strictEqual(parseInt(hm[heading.phaseNumGroup], 10), n);
+          // ...and the directory reader names the same milestone and phase as the id it was spelled from.
+          const dir = phaseId.parseBracketPhaseDir(`${id}-${nn}-slug`);
+          assert.deepStrictEqual(dir, { milestone: mm, phase: n });
         },
       ),
       { numRuns: 100, seed: 5528 },
