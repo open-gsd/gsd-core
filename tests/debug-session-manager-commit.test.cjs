@@ -211,6 +211,11 @@ test('#2568: the in-session fix commit is idempotent', () => {
     'the fix-code commit must be guarded on staged content — archive_session may have ' +
       'already committed it, and an unguarded git commit exits non-zero on an empty diff',
   );
+  // #5211: guard and commit must name the SAME paths, or the guard tests different files than the commit records.
+  const guardPaths = line.slice(guard + 'git diff --cached --quiet -- '.length, line.indexOf(' || ', guard));
+  const commitPaths = line.slice(line.indexOf(' -- ', commit) + 4);
+  assert.ok(guardPaths.length > 0 && guardPaths === commitPaths,
+    `guard and commit must carry the same pathspec, got ${JSON.stringify(guardPaths)} vs ${JSON.stringify(commitPaths)}`);
 });
 
 // ── The commit_docs gate the whole fix relies on — behavioral, not assumed ──
