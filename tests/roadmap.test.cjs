@@ -6688,7 +6688,7 @@ describe('roadmap update-plan-progress active-region scoping (#5553)', () => {
   // Unpaired <details> tags hide where an archive ends: decline, never a half-edit.
   const AMBIGUOUS = {
     'a stray opener inside an <details open> wrapper around the active milestone': () =>
-      `# Roadmap\n\n<details open>\n<summary>v2.0 Active</summary>\n\n${EMPTY_PLANS_ACTIVE.replace('Plans:\n', '<details>\nPlans:\n- [ ] 01-01-PLAN.md\n').replace('## Progress', '## Progress')}</details>\n`,
+      `# Roadmap\n\n<details open>\n<summary>v2.0 Active</summary>\n\n${EMPTY_PLANS_ACTIVE.replace('Plans:\n', '<details>\nPlans:\n- [ ] 01-01-PLAN.md\n')}</details>\n`,
     'an archive opener that is never closed': () =>
       `# Roadmap\n\n<details>\n<summary>v1.0 ✅ SHIPPED</summary>\n\n${ACTIVE_REGION_ARCHIVE_BODY}\n${ACTIVE_REGION_ACTIVE_BODY}`,
     'an archive whose closer is indented four spaces': () =>
