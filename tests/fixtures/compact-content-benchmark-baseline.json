@@ -8,9 +8,9 @@
   "label": "PROXY-TOKENIZER DELTA — gpt-tokenizer is a stand-in; Anthropic publishes no tokenizer for Claude 3+. The on/off COMPARISON is exact under this pinned tokenizer; absolute counts are not Claude's real token counts.",
   "splits": {
     "complete-milestone": {
-      "offTokens": 14378,
-      "onTokens": 9416,
-      "reductionPct": 34.51
+      "offTokens": 14443,
+      "onTokens": 9481,
+      "reductionPct": 34.36
     },
     "docs-update": {
       "offTokens": 14961,
@@ -18,8 +18,8 @@
       "reductionPct": 16.39
     },
     "execute-phase": {
-      "offTokens": 25532,
-      "onTokens": 23264,
+      "offTokens": 25536,
+      "onTokens": 23268,
       "reductionPct": 8.88
     },
     "new-project": {
@@ -39,8 +39,8 @@
     }
   },
   "aggregate": {
-    "offTokens": 113726,
-    "onTokens": 96105,
-    "reductionPct": 15.49
+    "offTokens": 113795,
+    "onTokens": 96174,
+    "reductionPct": 15.48
   }
 }
