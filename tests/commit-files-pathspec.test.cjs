@@ -3472,6 +3472,20 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       assert.deepStrictEqual(head, docs === 'false' ? ['code', 'stray'] : ['.planning/STATE.md', 'code', 'stray']);
     }
   });
+  test('fast.md commit fence from a repo subdir: stages and commits only the current directory', (t) => {
+    const lines = bashFenceAfter('gsd-core/workflows/fast.md', '<step name="commit">');
+    const body = lines.slice(lines.findIndex((l) => l.startsWith('COMMIT_DOCS='))).join('\n');
+    const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489s-');
+    fs.mkdirSync(path.join(dir, 'app')); fs.mkdirSync(path.join(dir, 'other'));
+    fs.writeFileSync(path.join(dir, 'app/code'), 'a'); fs.writeFileSync(path.join(dir, 'other/o'), 'o');
+    git('add', '-A'); git('commit', '-q', '-m', 'seed');
+    fs.writeFileSync(path.join(dir, 'app/code'), 'a2'); fs.writeFileSync(path.join(dir, 'other/o'), 'o2');
+    const r = runFence(dir, `gsd_run() { echo false; }\n${body}`, path.join(dir, 'app'));
+    assert.equal(r.exitCode, 0, r.stderr);
+    assert.deepStrictEqual(git('show', '--name-only', '--format=', 'HEAD').trim().split('\n'), ['app/code']);
+    assert.equal(git('diff', '--cached', '--name-only').trim(), '');
+    assert.equal(git('diff', '--name-only').trim(), 'other/o');
+  });
   test('executor step-4 single-repo commit (scratch repo): foreign staged file stays staged', (t) => {
     const fence = bashFenceAfter('agents/gsd-executor.md', '**Otherwise (standard single-repo):**').join('\n')
       .replace('":(literal){step-2 path}" ...', '":(literal)src/a.ts" ":(literal)src/[b].ts"');
