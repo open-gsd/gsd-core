@@ -1,6 +1,6 @@
 ---
 type: Changed
-pr: 0
+pr: 5756
 ---
 
 **Custom phase IDs resolve safely and consistently** — creation records the exact ID in `.phase-id`, preserving ownership through roadmap edits and archival. Recorded IDs take precedence over full directory basenames; basename lookup remains available when no recorded ID owns the query. Lifecycle, init, progress and health readers share custom-aware identities and roadmap order. Markerless directories with one known owner remain supported; ambiguous mutations refuse with candidates and a marker repair path. (#5186)
