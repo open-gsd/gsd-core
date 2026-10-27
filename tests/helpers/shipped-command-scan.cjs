@@ -427,7 +427,6 @@ module.exports = {
   declaredReasonFor,
   isDeclared,
   isUntrackedDeclaration,
-  GIT_VALUE_FLAGS,
   isGit,
   gitSubcommandIdx,
   unscopedGitCommits,
