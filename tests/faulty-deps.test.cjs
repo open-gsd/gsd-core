@@ -58,12 +58,17 @@ describe('A. execGit normalization (#3071)', () => {
   });
 
   test('2. every exec* result carries timedOut', () => {
+    // #5498: this test is about the SHAPE of the result, not how fast a real
+    // npm starts. `timedOut` is true only when the child outlives the seam's
+    // default bound, so asserting `=== false` on a real `npm --version` failed on
+    // a slow Windows runner (15 063 ms against the 15 000 ms default) with no
+    // fault in the code under test. Whether the field is a boolean is what
+    // matters; the timeout behaviour itself is pinned deterministically by
+    // tests 3 and 4 (ENOENT and a 1 ms bound).
     const npmResult = execNpm(['--version']);
     const toolResult = execTool(process.execPath, ['--version']);
     assert.strictEqual(typeof npmResult.timedOut, 'boolean');
-    assert.strictEqual(npmResult.timedOut, false);
     assert.strictEqual(typeof toolResult.timedOut, 'boolean');
-    assert.strictEqual(toolResult.timedOut, false);
   });
 
   test('3. ENOENT path still sets timedOut:false', () => {
