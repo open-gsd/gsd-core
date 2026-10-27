@@ -338,6 +338,75 @@ const shellDashCPayloads = (str) => {
   return payloads;
 };
 
+// commentPortion restarts quote state per line, so a `#` after a newline
+// inside a quoted message looked like a comment and ate the closing quote.
+const stripComments = (raw) => {
+  let q = null;
+  return raw.split('\n').map((line) => {
+    let head = '';
+    let rest = line;
+    if (q) {
+      let i = 0;
+      for (; i < line.length; i += 1) {
+        if (line[i] === '\\' && q === '"') i += 1;
+        else if (line[i] === q) break;
+      }
+      if (i >= line.length) return line;
+      head = line.slice(0, i + 1);
+      rest = line.slice(i + 1);
+      q = null;
+    }
+    // After a closing quote the 'x' makes commentPortion see mid-word: a `#`
+    // glued to the quote is literal in the shell.
+    const kept = rest.slice(0, rest.length - commentPortion(head ? 'x' + rest : rest).length);
+    for (let i = 0; i < kept.length; i += 1) {
+      const ch = kept[i];
+      if (q) {
+        if (ch === '\\' && q === '"') i += 1;
+        else if (ch === q) q = null;
+      } else if (ch === '\\') i += 1;
+      else if (ch === '"' || ch === "'") q = ch;
+    }
+    return head + kept;
+  }).join('\n');
+};
+
+// Global git options whose SEPARATE next token is their value (`git -C <dir> -c k=v commit`).
+const GIT_VALUE_FLAGS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace']);
+const isGit = (t) => { const b = bareCommandName(t); return b === 'git' || /\/git$/.test(b); };
+// `inline`: a bare `git commit` in a prose code span names the command, it is not an invocation.
+// An `echo`/`printf` word that holds `git ... commit` (recovery advice) is scanned as a script; other quoted prose is not.
+const unscopedGitCommits = (raw, inline = false) => {
+  const out = [];
+  const text = stripComments(raw);
+  const toks = tokenize(text);
+  let skipTo = -1;
+  for (let i = 0; i < toks.length; i += 1) {
+    if (i <= skipTo || toks[i].op || toks[i].redir) continue;
+    if (!isGit(toks[i])) {
+      let k = i - 1;
+      while (k >= 0 && !toks[k].op) k -= 1;
+      if (['echo', 'printf'].includes(toks[k + 1].value) && /\bgit\b[^\n]*\bcommit\b/.test(toks[i].value)) out.push(...unscopedGitCommits(toks[i].value, inline));
+      continue;
+    }
+    let c = i + 1;
+    while (c < toks.length && !toks[c].op && !toks[c].redir && toks[c].value.startsWith('-')) c += GIT_VALUE_FLAGS.has(toks[c].value) ? 2 : 1;
+    if (c >= toks.length || toks[c].op || toks[c].value !== 'commit') continue;
+    const argv = [];
+    let prev = toks[c];
+    for (let j = c + 1; j < toks.length && !toks[j].op; j += 1) {
+      if (/(?<!\\)\n/.test(text.slice(prev.end, toks[j].start))) break;
+      if (!toks[j].redir) argv.push(toks[j].value);
+      prev = toks[j];
+      skipTo = j;
+    }
+    const dd = argv.indexOf('--');
+    if ((dd === -1 && (argv.length > 0 || !inline)) || (dd !== -1 && dd === argv.length - 1)) out.push(text.slice(toks[i].start, prev.end));
+  }
+  for (const ln of text.split('\n')) for (const p of shellDashCPayloads(ln)) out.push(...unscopedGitCommits(p, inline));
+  return out;
+};
+
 module.exports = {
   bareCommandName,
   tokenize,
@@ -349,4 +418,7 @@ module.exports = {
   declaredReasonFor,
   isDeclared,
   isUntrackedDeclaration,
+  GIT_VALUE_FLAGS,
+  stripComments,
+  unscopedGitCommits,
 };

@@ -29,6 +29,7 @@ const fc = require('fast-check');
 const {
   hasReachingGitAdd, scanText, scanRepo, SCAN_ROOTS,
 } = require('./helpers/planning-add-guard.cjs');
+const { unscopedGitCommits } = require('./helpers/shipped-command-scan.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 
@@ -143,6 +144,16 @@ describe('commit_docs bypass guard (#1783, repo-wide per #3585)', () => {
 
     test('B8: # git add -A (a shell comment) is NOT an invocation', () => {
       assert.strictEqual(hasReachingGitAdd('# git add -A'), false);
+    });
+
+    test('B9: git prefixes: add guard and commit scanner agree', () => {
+      for (const pre of ['git', 'git -C d', 'git -c k=v', 'git --no-pager', '/usr/bin/git']) {
+        assert.equal(hasReachingGitAdd(`${pre} add -A`), true);
+        assert.equal(unscopedGitCommits(`${pre} commit -m x`).length, 1);
+      }
+      assert.equal(unscopedGitCommits('V=$(git commit -m x)').length, 1);
+      assert.equal(unscopedGitCommits('cd x\nbash -c "git commit -m x"').length, 1);
+      assert.equal(unscopedGitCommits("bash -c 'git commit -m x'").length, 1);
     });
   });
 

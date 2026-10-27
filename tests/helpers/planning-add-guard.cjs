@@ -60,7 +60,7 @@
 const fs = require('fs');
 const path = require('path');
 const {
-  tokenize, bareCommandName, shellDashCPayloads, isDeclared, isUntrackedDeclaration,
+  tokenize, bareCommandName, shellDashCPayloads, isDeclared, isUntrackedDeclaration, GIT_VALUE_FLAGS,
 } = require('./shipped-command-scan.cjs');
 
 // A fenced code block opens/closes on a line whose TRIMMED form starts with
@@ -190,7 +190,6 @@ const classifySegment = ({ tokens, src }) => {
   // their value in the same token and need no extra consumption; an explicit
   // set (rather than "consume the token after every flag") is what keeps
   // `git --no-pager add -A` from swallowing `add` as `--no-pager`'s value.
-  const GIT_VALUE_FLAGS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace']);
   let addIdx = -1;
   for (let i = ci + 1; i < tokens.length; i += 1) {
     if (tokens[i].redir) continue;

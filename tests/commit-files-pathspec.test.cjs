@@ -28,8 +28,9 @@ const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { GIT_TIMEOUT_MS, PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
   bareCommandName, tokenize, shellDashCPayloads, commentPortion,
-  ISSUE_REF_RE, declarationReason, isDeclared, isUntrackedDeclaration,
+  ISSUE_REF_RE, declarationReason, isDeclared, isUntrackedDeclaration, unscopedGitCommits,
 } = require('./helpers/shipped-command-scan.cjs');
+const { SCAN_ROOTS } = require('./helpers/planning-add-guard.cjs');
 
 describe('commit --files: pathspec honors declared scope (#2112)', () => {
   let tmpDir;
@@ -3323,109 +3324,43 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
         else if (e.name.endsWith('.md')) out.push(path.relative(root, full).split(path.sep).join('/'));
       }
     };
-    for (const d of ['agents', 'gsd-core/workflows', 'gsd-core/references', 'pi/package-skills', 'pi/package-agents']) walk(path.join(root, d));
+    for (const d of [...SCAN_ROOTS, 'pi/package-skills', 'pi/package-agents']) if (fs.existsSync(path.join(root, d))) walk(path.join(root, d));
     return out.sort();
   };
-  // commentPortion restarts quote state per line, so a `#` after a newline
-  // inside a quoted message looked like a comment and ate the closing quote.
-  const stripComments = (raw) => {
-    let q = null;
-    return raw.split('\n').map((line) => {
-      let head = '';
-      let rest = line;
-      if (q) {
-        let i = 0;
-        for (; i < line.length; i += 1) {
-          if (line[i] === '\\' && q === '"') i += 1;
-          else if (line[i] === q) break;
-        }
-        if (i >= line.length) return line;
-        head = line.slice(0, i + 1);
-        rest = line.slice(i + 1);
-        q = null;
-      }
-      // After a closing quote the 'x' makes commentPortion see mid-word: a `#`
-      // glued to the quote is literal in the shell.
-      const kept = rest.slice(0, rest.length - commentPortion(head ? 'x' + rest : rest).length);
-      for (let i = 0; i < kept.length; i += 1) {
-        const ch = kept[i];
-        if (q) {
-          if (ch === '\\' && q === '"') i += 1;
-          else if (ch === q) q = null;
-        } else if (ch === '\\') i += 1;
-        else if (ch === '"' || ch === "'") q = ch;
-      }
-      return head + kept;
-    }).join('\n');
-  };
-  // `git -C <dir> -c k=v commit`: global options sit between `git` and `commit`.
-  const GIT_OPT_WITH_ARG = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path']);
-  // `inline`: a bare `git commit` in a prose code span names the command, it is not an invocation.
-  // An `echo`/`printf` word that holds `git ... commit` (recovery advice) is scanned as a script; other quoted prose is not.
-  const unscopedCommits = (raw, inline = false) => {
-    const out = [];
-    const text = stripComments(raw);
-    const toks = tokenize(text);
-    let skipTo = -1;
-    for (let i = 0; i < toks.length; i += 1) {
-      if (i <= skipTo || toks[i].op || toks[i].redir) continue;
-      if (toks[i].value !== 'git') {
-        let k = i - 1;
-        while (k >= 0 && !toks[k].op) k -= 1;
-        if (['echo', 'printf'].includes(toks[k + 1].value) && /\bgit\b[^\n]*\bcommit\b/.test(toks[i].value)) out.push(...unscopedCommits(toks[i].value, inline));
-        continue;
-      }
-      let c = i + 1;
-      while (c < toks.length && !toks[c].op && !toks[c].redir && toks[c].value.startsWith('-')) c += GIT_OPT_WITH_ARG.has(toks[c].value) ? 2 : 1;
-      if (c >= toks.length || toks[c].op || toks[c].value !== 'commit') continue;
-      const argv = [];
-      let prev = toks[c];
-      for (let j = c + 1; j < toks.length && !toks[j].op; j += 1) {
-        if (/(?<!\\)\n/.test(text.slice(prev.end, toks[j].start))) break;
-        if (!toks[j].redir) argv.push(toks[j].value);
-        prev = toks[j];
-        skipTo = j;
-      }
-      const dd = argv.indexOf('--');
-      if ((dd === -1 && (argv.length > 0 || !inline)) || (dd !== -1 && dd === argv.length - 1)) out.push(text.slice(toks[i].start, prev.end));
-    }
-    return out;
-  };
-
   test('scanner flags unscoped commits and passes scoped ones', () => {
-    assert.equal(unscopedCommits('git commit -m "x"').length, 1);
-    assert.equal(unscopedCommits('# note\ngit commit -m "x"').length, 1);
-    assert.equal(unscopedCommits('git commit -m x --').length, 1);
-    assert.equal(unscopedCommits('git commit -m "x" -- a b').length, 0);
+    assert.equal(unscopedGitCommits('git commit -m "x"').length, 1);
+    assert.equal(unscopedGitCommits('# note\ngit commit -m "x"').length, 1);
+    assert.equal(unscopedGitCommits('git commit -m x --').length, 1);
+    assert.equal(unscopedGitCommits('git commit -m "x" -- a b').length, 0);
   });
 
   test('git -C / -c global options do not hide a commit', () => {
-    assert.equal(unscopedCommits('git -C sub commit -m x').length, 1);
-    assert.equal(unscopedCommits('git -c user.name=t -C sub commit -m x').length, 1);
-    assert.equal(unscopedCommits('git --no-pager commit -m x').length, 1);
-    assert.equal(unscopedCommits('git -C sub commit -m x -- a').length, 0);
-    assert.equal(unscopedCommits('git -c k=v log -1').length, 0);
+    assert.equal(unscopedGitCommits('git -C sub commit -m x').length, 1);
+    assert.equal(unscopedGitCommits('git -c user.name=t -C sub commit -m x').length, 1);
+    assert.equal(unscopedGitCommits('git --no-pager commit -m x').length, 1);
+    assert.equal(unscopedGitCommits('git -C sub commit -m x -- a').length, 0);
+    assert.equal(unscopedGitCommits('git -c k=v log -1').length, 0);
   });
 
   test('a commit inside a quoted string (echoed advice) is scanned too', () => {
-    assert.equal(unscopedCommits(`echo "  1. git add -A && git commit -m 'x'   # note" >&2`).length, 1);
-    assert.equal(unscopedCommits(`echo "  1. git add -A && git commit -m 'x' -- a"`).length, 0);
-    assert.equal(unscopedCommits(`echo 'git -C d commit -m x'`).length, 1);
-    assert.equal(unscopedCommits(`git commit -m "fix: scope git commit calls" -- a`).length, 0);
+    assert.equal(unscopedGitCommits(`echo "  1. git add -A && git commit -m 'x'   # note" >&2`).length, 1);
+    assert.equal(unscopedGitCommits(`echo "  1. git add -A && git commit -m 'x' -- a"`).length, 0);
+    assert.equal(unscopedGitCommits(`echo 'git -C d commit -m x'`).length, 1);
+    assert.equal(unscopedGitCommits(`git commit -m "fix: scope git commit calls" -- a`).length, 0);
   });
 
   test('a bare git commit (editor mode, no args) is unscoped', () => {
-    assert.equal(unscopedCommits('git commit').length, 1);
-    assert.equal(unscopedCommits('git commit', true).length, 0);
-    assert.equal(unscopedCommits('git commit\ngit commit -m "x" -- a').length, 1);
+    assert.equal(unscopedGitCommits('git commit').length, 1);
+    assert.equal(unscopedGitCommits('git commit', true).length, 0);
+    assert.equal(unscopedGitCommits('git commit\ngit commit -m "x" -- a').length, 1);
   });
 
   test('a # glued to a closing quote is literal, not a comment', () => {
-    assert.equal(unscopedCommits('echo "a\nb"#tag;git commit -m z').length, 1);
+    assert.equal(unscopedGitCommits('echo "a\nb"#tag;git commit -m z').length, 1);
   });
 
   test('a # inside a multiline quoted message is not a comment', () => {
-    assert.equal(unscopedCommits('git commit -m "first\n# body"\ngit commit -m "later"').length, 2);
+    assert.equal(unscopedGitCommits('git commit -m "first\n# body"\ngit commit -m "later"').length, 2);
   });
 
   // Deliberate whole-index commits: a pathspec would break or defeat them.
@@ -3453,7 +3388,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
         [lines.slice(b.openLineIdx + 1, b.closeLineIdx === -1 ? lines.length : b.closeLineIdx).join('\n'), false]);
       for (const s of scanInlineCodeSpans(stripFencedCode(md).text)) segments.push([s.content, true]);
       for (const [seg, inline] of segments) {
-        for (const cmd of unscopedCommits(seg, inline)) {
+        for (const cmd of unscopedGitCommits(seg, inline)) {
           const key = `${f}: ${cmd.split('\n')[0]}`;
           if (WHOLE_INDEX_ALLOWLIST.has(key)) seen.add(key);
           else offenders.push(key);
@@ -3466,14 +3401,23 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       'unscoped `git commit` in shipped prompts sweeps foreign staged files (#5211); append `-- <paths>`');
   });
 
+  const word = fc.stringMatching(/^[a-z0-9._/]{1,8}$/);
+  const msg = fc.oneof(
+    word.map((w) => `"${w} # x"`), word.map((w) => `'${w}'`), word, word.map((w) => `"${w} -- x"`),
+  );
+
   test('property: a command is flagged iff it has no non-trailing `--` (any quoting of the message)', () => {
-    const word = fc.stringMatching(/^[a-z0-9._/]{1,8}$/);
-    const msg = fc.oneof(
-      word.map((w) => `"${w} # x"`), word.map((w) => `'${w}'`), word,
-    );
     fc.assert(fc.property(msg, fc.array(word, { minLength: 1, maxLength: 3 }), (m, paths) => {
-      assert.equal(unscopedCommits(`git commit -m ${m}`).length, 1);
-      assert.equal(unscopedCommits(`git commit -m ${m} -- ${paths.join(' ')}`).length, 0);
+      assert.equal(unscopedGitCommits(`git commit -m ${m}`).length, 1);
+      assert.equal(unscopedGitCommits(`git commit -m ${m} -- ${paths.join(' ')}`).length, 0);
+    }), { seed: 5211, numRuns: 100 });
+  });
+
+  test('property: prefix invariance: unscopedGitCommits counts one commit for every git prefix and zero once a pathspec follows', () => {
+    const prefix = fc.constantFrom('git', 'git -C d', 'git -c k=v', 'git --no-pager', '/usr/bin/git');
+    fc.assert(fc.property(prefix, msg, fc.array(word, { minLength: 0, maxLength: 3 }), (pre, m, paths) => {
+      const cmd = `${pre} commit -m ${m}${paths.length ? ` -- ${paths.join(' ')}` : ''}`;
+      assert.equal(unscopedGitCommits(cmd).length, paths.length === 0 ? 1 : 0);
     }), { seed: 5211, numRuns: 100 });
   });
 
