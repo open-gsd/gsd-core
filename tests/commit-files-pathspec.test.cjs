@@ -3486,6 +3486,21 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     assert.equal(git('diff', '--cached', '--name-only').trim(), '');
     assert.equal(git('diff', '--name-only').trim(), 'other/o');
   });
+  test('stop-tracking recipe carries the same four fragments in all five docs', () => {
+    const frags = ["git diff --cached --quiet -- ':!.planning'", 'git rm -r --cached .planning/',
+      'git commit -m "chore: stop tracking planning docs"', 'unrelated staged paths; unstage them first'];
+    for (const f of ['gsd-core/references/planning-config.md', 'docs/how-to/keep-planning-docs-private.md', 'docs/zh-CN/references/planning-config.md',
+      'docs/ja-JP/CONFIGURATION.md', 'docs/ko-KR/CONFIGURATION.md']) {
+      const md = fs.readFileSync(path.join(root, f), 'utf8');
+      for (const frag of frags) assert.ok(md.includes(frag), `${f}: ${frag}`);
+    }
+  });
+
+  test('W029 sample blocks equal the base text', () => {
+    for (const f of ['docs/CONFIGURATION.md', 'docs/how-to/keep-planning-docs-private.md']) {
+      assert.ok(fs.readFileSync(path.join(root, f), 'utf8').includes('Fix: git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"'), f);
+    }
+  });
   test('executor step-4 single-repo commit (scratch repo): foreign staged file stays staged', (t) => {
     const fence = bashFenceAfter('agents/gsd-executor.md', '**Otherwise (standard single-repo):**').join('\n')
       .replace('":(literal){step-2 path}" ...', '":(literal)src/a.ts" ":(literal)src/[b].ts"');

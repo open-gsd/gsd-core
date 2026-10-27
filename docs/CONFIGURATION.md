@@ -737,7 +737,7 @@ the edge case.
 
 ```
 W029  .planning/ is gitignored but N file(s) are still tracked by git
-      Fix: git diff --cached --quiet -- ':!.planning' && git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"
+      Fix: git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"
 ```
 
 The warning is advisory. GSD never untracks files for you — `--repair` deliberately will not act on
