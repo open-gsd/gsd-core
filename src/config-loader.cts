@@ -241,7 +241,7 @@ function isGitIgnored(cwd: string, targetPath: string, env?: Record<string, stri
   // CRLF .gitignore with blank lines falsely reports a trailing-slash path
   // (e.g. `.planning/`) as ignored. Normalizing here protects every call site.
   const normalized = targetPath.replace(/\/+$/, '');
-  const key = cwd + '::' + normalized + (env ? '::env' : '');
+  const key = cwd + '::' + normalized + (env ? '::env:' + JSON.stringify(Object.entries(env).sort()) : '');
   if (_gitIgnoredCache.has(key)) return _gitIgnoredCache.get(key)!;
   // --no-index checks .gitignore rules regardless of whether the file is tracked.
   const result = execGit(['check-ignore', '-q', '--no-index', '--', normalized], { cwd, env });
