@@ -3461,7 +3461,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       fs.writeFileSync(path.join(dir, 'code'), 'c');
       fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), 'p');
       const run = () => runFence(dir, `gsd_run() { echo ${docs}; }\n${fence}`);
-      fs.writeFileSync(path.join(dir, 'stray'), 'x');
+      fs.writeFileSync(path.join(dir, 'stray'), 'x'); git('add', 'stray');
       const r = run();
       assert.equal(r.exitCode, 0, r.stderr);
       const head = git('show', '--name-only', '--format=', 'HEAD').trim().split('\n').sort();
