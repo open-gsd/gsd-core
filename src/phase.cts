@@ -1448,7 +1448,7 @@ const spliceAfter = (raw: string, at: number, eol: string, line: string): string
  * phase `after`'s own entries, else before the first later entry); with no checklist, a `N. desc | Not started` progress-table row;
  * with neither, nothing. Entries inside an open <details> (shipped blocks) are not the checklist.
  */
-function recordNewPhase(raw: string, cwd: string, id: string | number, description: string, after?: string): { content: string; entry: 'checklist' | 'progress_table' | 'none' } {
+function recordNewPhase(raw: string, cwd: string, id: string | number, description: string, after?: string, label?: string): { content: string; entry: 'checklist' | 'progress_table' | 'none' } {
   const start = activeScopeStart(raw, cwd);
   // End at the active milestone's section so a later planned milestone's checklist is never the target.
   const end = currentMilestoneRawRanges(raw, cwd)?.primary.end;
@@ -1459,7 +1459,8 @@ function recordNewPhase(raw: string, cwd: string, id: string | number, descripti
   const entryRe = new RegExp(`^[ \\t]*${entrySrc}[^\\r\\n]*`, 'gim');
   const bullets = [...scope.matchAll(entryRe)].filter((m) => !insideOpenDetails(scope, m.index));
   const eol = raw.includes('\r\n') ? '\r\n' : '\n';
-  const entry = `- [ ] **Phase ${id}: ${description}**`;
+  // A bracket writer records its entry in the bracket spelling it used for the heading (`[CK.02] 02`).
+  const entry = `- [ ] **${label ?? `Phase ${id}`}: ${description}**`;
   // An id past CUSTOM_PHASE_ID_SRC's cap is written but not readable by analyze: report that, not 'checklist'.
   const kind = new RegExp(`^${entrySrc}`).test(entry) ? 'checklist' : 'none';
   if (after !== undefined) {
@@ -2049,7 +2050,8 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     }
 
     const insertAt = phaseEntryInsertOffset(rawContent, cwd, convention);
-    const recorded = recordNewPhase(spliceRoadmapBlock(rawContent, insertAt, phaseEntry), cwd, _newPhaseId, description);
+    const recorded = recordNewPhase(spliceRoadmapBlock(rawContent, insertAt, phaseEntry), cwd, _newPhaseId, description, undefined,
+      bracketContext && typeof _newPhaseId === 'number' ? renderPhaseId(bracketPhaseId(bracketContext, _newPhaseId)) : undefined);
 
     platformWriteSync(roadmapPath, recorded.content, { verbatim: true });
     return { newPhaseId: _newPhaseId, dirName: _dirName, roadmapEntry: recorded.entry };
@@ -2187,7 +2189,8 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
           `\n### Phase ${newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${newPhaseId} to break down)\n`;
       }
       const insertAt = phaseEntryInsertOffset(rawContent, cwd, convention);
-      const recorded = recordNewPhase(spliceRoadmapBlock(rawContent, insertAt, phaseEntry), cwd, newPhaseId, description);
+      const recorded = recordNewPhase(spliceRoadmapBlock(rawContent, insertAt, phaseEntry), cwd, newPhaseId, description, undefined,
+        bracketContext && typeof newPhaseId === 'number' ? renderPhaseId(bracketPhaseId(bracketContext, newPhaseId)) : undefined);
       rawContent = recorded.content;
       added.push({
         roadmap_entry: recorded.entry,
@@ -2813,7 +2816,7 @@ function cmdPhaseInsert(
       }
 
       ({ content: updatedContent, entry: roadmapEntry } = recordNewPhase(
-        rawContent.slice(0, insertIdx) + phaseEntry + rawContent.slice(insertIdx), cwd, _decimalPhase, description, afterPhase));
+        rawContent.slice(0, insertIdx) + phaseEntry + rawContent.slice(insertIdx), cwd, _decimalPhase, description, afterPhase, bracketId ? renderPhaseId(bracketId) : undefined));
     }
 
     // #4304: every validation above — the pre-flight heading

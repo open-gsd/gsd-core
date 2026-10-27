@@ -266,9 +266,10 @@ describe('ship preflight: roadmap completeness gate (#5221)', { skip: SKIP }, ()
 
     test('bracket-tagged checklist: phase add writes its entry into that checklist', () => {
       const { out, roadmap } = addTo('# Roadmap\n\n## [GSD.02] v2.0\n\n- [x] **[GSD.02] 01: One**\n\n### [GSD.02] 01: One\n**Goal:** a\n',
-        { phase_id_convention: 'bracket' }, ['phase', 'add', 'Two']);
+        { phase_id_convention: 'bracket', project_code: 'GSD' }, ['phase', 'add', 'Two']);
       assert.equal(out.roadmap_entry, 'checklist');
-      assert.match(roadmap, /- \[x\] \*\*\[GSD\.02\] 01: One\*\*\n- \[ \] \*\*Phase \d+: Two\*\*\n/);
+      // A bracket writer records its checklist entry in the same bracket spelling as the heading it writes.
+      assert.match(roadmap, /- \[x\] \*\*\[GSD\.02\] 01: One\*\*\n- \[ \] \*\*\[GSD\.02\] 02: Two\*\*\n/);
     });
 
     test('phase insert after a phase with no checklist entry lands before the first later entry, not at the end', () => {
