@@ -357,7 +357,9 @@ test('syncViaPr — both merge calls capture stderr so a failure carries its own
 });
 
 test('defaultRun — stderr is on err.stderr only when it is piped (why syncViaPr pipes it) (#5746)', () => {
-  const script = 'process.stderr.write("Changes must be made through the merge queue"); process.exit(1);';
+  // The phrase is assembled at runtime: execFileSync's message embeds the full command line,
+  // so a literal in the script would put the phrase in err.message and defeat the assertion.
+  const script = 'process.stderr.write(["merge", "queue"].join(" ")); process.exit(1);';
   const piped = (() => {
     try { defaultRun(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'pipe'] }); } catch (err) { return err; }
     return null;
