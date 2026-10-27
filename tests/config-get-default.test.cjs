@@ -1967,9 +1967,9 @@ describe('#6029 acceptance: /gsd-code-review resolve_depth in a project with no 
       silencedStderr = t.mock.method(process.stderr, 'write', () => true);
     });
     afterEach(() => {
+      isolation.restore();
       silencedStderr.mock.restore();
       cleanup(tmpDir);
-      isolation.restore();
     });
 
     function writeConfig(cfg) {
