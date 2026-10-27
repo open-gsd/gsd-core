@@ -3516,6 +3516,14 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     assert.equal(md.includes('/gsd:fast'), false);
   });
 
+  test('WIP and recovery examples that use -- . say they run from the worktree root', () => {
+    for (const f of ['gsd-core/workflows/execute-phase.md', 'agents/gsd-executor.md', 'pi/package-agents/gsd-executor.md']) {
+      const hits = fs.readFileSync(path.join(root, f), 'utf8').split('\n').filter((l) => /git add -A( --)? \.?.*git commit .* -- \./.test(l));
+      assert.ok(hits.length > 0, f);
+      for (const l of hits) assert.ok(l.includes("# from THIS worktree's root"), `${f}: ${l}`);
+    }
+  });
+
   test('executor step-4 single-repo commit (scratch repo): foreign staged file stays staged', (t) => {
     const fence = bashFenceAfter('agents/gsd-executor.md', '**Otherwise (standard single-repo):**').join('\n')
       .replace('":(literal){step-2 path}" ...', '":(literal)src/a.ts" ":(literal)src/[b].ts"');
