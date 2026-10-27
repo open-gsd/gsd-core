@@ -3501,6 +3501,15 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       assert.ok(fs.readFileSync(path.join(root, f), 'utf8').includes('Fix: git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"'), f);
     }
   });
+  test('git-integration.md commit examples quote every path as :(literal)', () => {
+    for (const f of ['gsd-core/references/git-integration.md', 'docs/zh-CN/references/git-integration.md']) {
+      const md = fs.readFileSync(path.join(root, f), 'utf8');
+      const tails = [...md.matchAll(/^" -- (.+)$/gm)].map((m) => m[1]);
+      assert.equal(tails.length, 3, f);
+      for (const t of tails) assert.match(t, /^(":\(literal\)[^" ]+" ?)+$/, `${f}: ${t}`);
+    }
+  });
+
   test('executor step-4 single-repo commit (scratch repo): foreign staged file stays staged', (t) => {
     const fence = bashFenceAfter('agents/gsd-executor.md', '**Otherwise (standard single-repo):**').join('\n')
       .replace('":(literal){step-2 path}" ...', '":(literal)src/a.ts" ":(literal)src/[b].ts"');
