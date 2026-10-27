@@ -28,9 +28,9 @@ const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { GIT_TIMEOUT_MS, PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
   bareCommandName, tokenize, shellDashCPayloads, commentPortion,
-  ISSUE_REF_RE, declarationReason, isDeclared, isUntrackedDeclaration, unscopedGitCommits,
+  ISSUE_REF_RE, declarationReason, isDeclared, isUntrackedDeclaration, unscopedGitCommits, GIT_PREFIX_SPELLINGS,
 } = require('./helpers/shipped-command-scan.cjs');
-const { SCAN_ROOTS } = require('./helpers/planning-add-guard.cjs');
+const { SCAN_ROOTS, listScanFiles } = require('./helpers/planning-add-guard.cjs');
 
 describe('commit --files: pathspec honors declared scope (#2112)', () => {
   let tmpDir;
@@ -3315,23 +3315,18 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   // tokenize() stops at the first unquoted `#`, so comments are stripped per
   // line first or a later commit in the same block would be hidden.
   const root = path.join(__dirname, '..');
-  const promptFiles = () => {
-    const out = [];
-    const walk = (dir) => {
-      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-        const full = path.join(dir, e.name);
-        if (e.isDirectory()) walk(full);
-        else if (e.name.endsWith('.md')) out.push(path.relative(root, full).split(path.sep).join('/'));
-      }
-    };
-    for (const d of [...SCAN_ROOTS, 'pi/package-skills', 'pi/package-agents']) if (fs.existsSync(path.join(root, d))) walk(path.join(root, d));
-    return out.sort();
-  };
+  const promptFiles = () => listScanFiles(root, [...SCAN_ROOTS, 'pi/package-skills', 'pi/package-agents']).sort();
   test('scanner flags unscoped commits and passes scoped ones', () => {
     assert.equal(unscopedGitCommits('git commit -m "x"').length, 1);
     assert.equal(unscopedGitCommits('# note\ngit commit -m "x"').length, 1);
     assert.equal(unscopedGitCommits('git commit -m x --').length, 1);
     assert.equal(unscopedGitCommits('git commit -m "x" -- a b').length, 0);
+  });
+
+  test('scanner flags whole-tree pathspecs and echo after a redirection; accepts --pathspec-from-file', () => {
+    for (const c of ['git commit -m x -- .', 'git commit -m x -- ./', 'git commit -m x -- :/', 'git commit -m x -- ":(top)"', 'git commit -m x -- ":(literal)."', "git commit -m x -- . ':!.planning'", "git commit -m x -- ':!.planning'", 'git commit -m x -- a .']) assert.equal(unscopedGitCommits(c).length, 1, c);
+    assert.equal(unscopedGitCommits('>&2 echo "git commit -m x"').length, 1);
+    assert.equal(unscopedGitCommits('git commit -m x --pathspec-from-file=list.txt').length, 0);
   });
 
   test('git -C / -c global options do not hide a commit', () => {
@@ -3370,6 +3365,9 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     ['gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "feat: $MILESTONE_BRANCH for v[X.Y]"', 'squash merge: commit the merge result'],
     [`gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "Merge branch '$branch' for v[X.Y]"`, 'merge commit: git refuses a partial commit mid-merge'],
     [`gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "Merge branch '$MILESTONE_BRANCH' for v[X.Y]"`, 'merge commit: git refuses a partial commit mid-merge'],
+    ['agents/gsd-executor.md: git commit -m "chore(wip): scratch" -- .', 'whole worktree by design: run from the worktree root (D3)'],
+    ['pi/package-agents/gsd-executor.md: git commit -m "chore(wip): scratch" -- .', 'whole worktree by design: run from the worktree root (D3)'],
+    ["gsd-core/workflows/execute-phase.md: git commit -m 'chore(recover): recover worktree state' -- .", 'whole worktree by design: run from the worktree root (D3)'],
     ['gsd-core/references/planning-config.md: git commit -m "chore: stop tracking planning docs"', 'commits the index removals: a -- .planning/ pathspec fails after git rm --cached; a staged-paths guard precedes it'],
     ['gsd-core/workflows/pr-branch.md: git commit -q -C "$HASH"', 'cherry-pick replay: reuses the source commit message over the staged result'],
     ['gsd-core/workflows/ship.md: git commit --allow-empty -m "chore: trigger CI (recover from ship-note skip-token)"', 'empty commit: no paths by design'],
@@ -3401,20 +3399,13 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       'unscoped `git commit` in shipped prompts sweeps foreign staged files (#5211); append `-- <paths>`');
   });
 
-  const word = fc.stringMatching(/^[a-z0-9._/]{1,8}$/);
+  const word = fc.stringMatching(/^[a-z0-9][a-z0-9._/]{0,7}$/);
   const msg = fc.oneof(
     word.map((w) => `"${w} # x"`), word.map((w) => `'${w}'`), word, word.map((w) => `"${w} -- x"`),
   );
 
-  test('property: a command is flagged iff it has no non-trailing `--` (any quoting of the message)', () => {
-    fc.assert(fc.property(msg, fc.array(word, { minLength: 1, maxLength: 3 }), (m, paths) => {
-      assert.equal(unscopedGitCommits(`git commit -m ${m}`).length, 1);
-      assert.equal(unscopedGitCommits(`git commit -m ${m} -- ${paths.join(' ')}`).length, 0);
-    }), { seed: 5211, numRuns: 100 });
-  });
-
   test('property: prefix invariance: unscopedGitCommits counts one commit for every git prefix and zero once a pathspec follows', () => {
-    const prefix = fc.constantFrom('git', 'git -C d', 'git -c k=v', 'git --no-pager', '/usr/bin/git', 'git 2>/dev/null');
+    const prefix = fc.constantFrom(...GIT_PREFIX_SPELLINGS);
     fc.assert(fc.property(prefix, msg, fc.array(word, { minLength: 0, maxLength: 3 }), (pre, m, paths) => {
       const cmd = `${pre} commit -m ${m}${paths.length ? ` -- ${paths.join(' ')}` : ''}`;
       assert.equal(unscopedGitCommits(cmd).length, paths.length === 0 ? 1 : 0);

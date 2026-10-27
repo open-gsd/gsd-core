@@ -351,21 +351,20 @@ const SCAN_ROOTS = [
   'skills',
 ];
 
+const listScanFiles = (repoRoot, roots = SCAN_ROOTS) => roots.flatMap((root) => {
+  const rootDir = path.join(repoRoot, root);
+  if (!fs.existsSync(rootDir)) return [];
+  return fs.readdirSync(rootDir, { recursive: true }).map(String).filter((f) => f.endsWith('.md')).map((f) => `${root}/${f.split(path.sep).join('/')}`);
+});
+
 const scanRepo = (repoRoot, roots = SCAN_ROOTS) => {
   const offenders = [];
   const untracked = [];
-  for (const root of roots) {
-    const rootDir = path.join(repoRoot, root);
-    if (!fs.existsSync(rootDir)) continue;
-    const mdFiles = fs.readdirSync(rootDir, { recursive: true }).filter((f) => String(f).endsWith('.md'));
-    for (const file of mdFiles) {
-      const normalized = String(file).split(path.sep).join('/');
-      const label = `${root}/${normalized}`;
-      const text = fs.readFileSync(path.join(rootDir, String(file)), 'utf-8');
-      const result = scanText(label, text);
-      offenders.push(...result.offenders);
-      untracked.push(...result.untracked);
-    }
+  for (const label of listScanFiles(repoRoot, roots)) {
+    const text = fs.readFileSync(path.join(repoRoot, label), 'utf-8');
+    const result = scanText(label, text);
+    offenders.push(...result.offenders);
+    untracked.push(...result.untracked);
   }
   return { offenders, untracked };
 };
@@ -374,5 +373,6 @@ module.exports = {
   hasReachingGitAdd,
   scanText,
   scanRepo,
+  listScanFiles,
   SCAN_ROOTS,
 };

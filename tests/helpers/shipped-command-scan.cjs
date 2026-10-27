@@ -14,6 +14,8 @@
  * scan and do not generalize to other guards.
  */
 
+const { skipToSubcommand } = require('../../hooks/lib/git-cmd.js');
+
 // 443 live substitution sites are `VAR=$(gsd_run …)`. That is the majority
 // and it is the wrong generalisation — the remaining six are neither, and
 // they are live today:
@@ -185,9 +187,10 @@ const tokenize = (str) => {
 // backslash escapes the space, so the shell keeps `docs: #` as ONE word and
 // `#` is literal — while a preceded-by-whitespace test reads it as a comment.
 // The scan would then exempt a line the runtime still executes unscoped.
-const commentPortion = (line) => {
-  let quote = null;
-  let started = false;
+// One pass over a line: { cut: index of the comment `#` or -1, quote: the quote still open at the end }. `quote0` is a quote opened on an earlier line.
+const scanLine = (line, quote0 = null) => {
+  let quote = quote0;
+  let started = quote0 !== null;
   for (let i = 0; i < line.length; i += 1) {
     const ch = line[i];
     if (quote) {
@@ -198,12 +201,13 @@ const commentPortion = (line) => {
     if (ch === '\\' && i + 1 < line.length) { started = true; i += 1; continue; }
     if (ch === '"' || ch === "'") { started = true; quote = ch; continue; }
     if (/\s/.test(ch)) { started = false; continue; }
-    if (ch === '#' && !started) return line.slice(i);
+    if (ch === '#' && !started) return { cut: i, quote: null };
     if (ch === '>' || ch === '<' || ch === ';' || ch === '|' || ch === '&') { started = false; continue; }
     started = true;
   }
-  return '';
+  return { cut: -1, quote };
 };
+const commentPortion = (line) => { const { cut } = scanLine(line); return cut === -1 ? '' : line.slice(cut); };
 
 // The explicit opt-out for content that shows the defect ON PURPOSE. A
 // wrong-example is otherwise indistinguishable from a regression — which is
@@ -338,52 +342,23 @@ const shellDashCPayloads = (str) => {
   return payloads;
 };
 
-// commentPortion restarts quote state per line, so a `#` after a newline
-// inside a quoted message looked like a comment and ate the closing quote.
 const stripComments = (raw) => {
   let q = null;
-  return raw.split('\n').map((line) => {
-    let head = '';
-    let rest = line;
-    if (q) {
-      let i = 0;
-      for (; i < line.length; i += 1) {
-        if (line[i] === '\\' && q === '"') i += 1;
-        else if (line[i] === q) break;
-      }
-      if (i >= line.length) return line;
-      head = line.slice(0, i + 1);
-      rest = line.slice(i + 1);
-      q = null;
-    }
-    // After a closing quote the 'x' makes commentPortion see mid-word: a `#`
-    // glued to the quote is literal in the shell.
-    const kept = rest.slice(0, rest.length - commentPortion(head ? 'x' + rest : rest).length);
-    for (let i = 0; i < kept.length; i += 1) {
-      const ch = kept[i];
-      if (q) {
-        if (ch === '\\' && q === '"') i += 1;
-        else if (ch === q) q = null;
-      } else if (ch === '\\') i += 1;
-      else if (ch === '"' || ch === "'") q = ch;
-    }
-    return head + kept;
-  }).join('\n');
+  return raw.split('\n').map((line) => { const r = scanLine(line, q); q = r.quote; return r.cut === -1 ? line : line.slice(0, r.cut); }).join('\n');
 };
 
-// Global git options whose SEPARATE next token is their value (`git -C <dir> -c k=v commit`).
-const GIT_VALUE_FLAGS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace']);
 const isGit = (t) => { const b = bareCommandName(t); return b === 'git' || /\/git$/.test(b); };
-// Index of the git subcommand after the git word at `gi`: skips redirections and global flags (a value flag also skips its separate value); -1 when there is none.
+// Index of the git subcommand after the git word at `gi`, through the hook's walker (hooks/lib/git-cmd.js owns the global-option sets); redirections are skipped; -1 when there is none.
 const gitSubcommandIdx = (toks, gi) => {
-  let c = gi + 1;
-  while (c < toks.length && !toks[c].op) {
-    if (toks[c].redir) { c += 1; continue; }
-    if (!toks[c].value.startsWith('-')) return c;
-    c += GIT_VALUE_FLAGS.has(toks[c].value) ? 2 : 1;
-  }
-  return -1;
+  const at = [];
+  for (let c = gi; c < toks.length && !toks[c].op; c += 1) if (!toks[c].redir) at.push(c);
+  const words = at.map((c) => toks[c].value);
+  words[0] = 'git';
+  const sub = skipToSubcommand(words);
+  return sub === -1 || sub >= at.length ? -1 : at[sub];
 };
+const isWholeTree = (a) => /^(?::\((?:top|literal|glob)[^)]*\)|:\/)?(?:\.\/*|\*+|\/?)$/.test(a);
+const isExcludeMagic = (a) => a.startsWith(':!') || a.startsWith(':^') || a.startsWith(':(exclude)');
 // `inline`: a bare `git commit` in a prose code span names the command, it is not an invocation.
 // An `echo`/`printf` word that holds `git ... commit` (recovery advice) is scanned as a script; other quoted prose is not.
 const unscopedGitCommits = (raw, inline = false) => {
@@ -396,7 +371,9 @@ const unscopedGitCommits = (raw, inline = false) => {
     if (!isGit(toks[i])) {
       let k = i - 1;
       while (k >= 0 && !toks[k].op) k -= 1;
-      if (['echo', 'printf'].includes(toks[k + 1].value) && /\bgit\b[^\n]*\bcommit\b/.test(toks[i].value)) out.push(...unscopedGitCommits(toks[i].value, inline));
+      let w = k + 1;
+      while (toks[w] && (toks[w].redir || toks[w].value === '{')) w += 1;
+      if (['echo', 'printf'].includes(toks[w]?.value) && /\bgit\b[^\n]*\bcommit\b/.test(toks[i].value)) out.push(...unscopedGitCommits(toks[i].value, inline));
       continue;
     }
     const c = gitSubcommandIdx(toks, i);
@@ -410,11 +387,17 @@ const unscopedGitCommits = (raw, inline = false) => {
       skipTo = j;
     }
     const dd = argv.indexOf('--');
-    if ((dd === -1 && (argv.length > 0 || !inline)) || (dd !== -1 && dd === argv.length - 1)) out.push(text.slice(toks[i].start, prev.end));
+    const spec = dd === -1 ? [] : argv.slice(dd + 1).filter((a) => !isExcludeMagic(a));
+    const wholeTree = dd !== -1 && dd < argv.length - 1 && (spec.length === 0 || spec.some(isWholeTree));
+    const fromFile = argv.some((a) => a === '--pathspec-from-file' || a.startsWith('--pathspec-from-file='));
+    if ((dd === -1 && !fromFile && (argv.length > 0 || !inline)) || (dd !== -1 && dd === argv.length - 1) || wholeTree) out.push(text.slice(toks[i].start, prev.end));
   }
   for (const ln of text.split('\n')) for (const p of shellDashCPayloads(ln)) out.push(...unscopedGitCommits(p, inline));
   return out;
 };
+
+// The git prefixes the scanner and the hook walker both resolve (property and parity tests loop over them).
+const GIT_PREFIX_SPELLINGS = ['git', 'git -C d', 'git -c k=v', 'git --no-pager', '/usr/bin/git', 'git 2>/dev/null', 'git --super-prefix p'];
 
 module.exports = {
   bareCommandName,
@@ -430,4 +413,5 @@ module.exports = {
   isGit,
   gitSubcommandIdx,
   unscopedGitCommits,
+  GIT_PREFIX_SPELLINGS,
 };
