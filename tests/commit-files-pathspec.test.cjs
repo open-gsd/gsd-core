@@ -3559,9 +3559,9 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       assert.deepStrictEqual([r.status, r.commits], [1, 1]);
     });
 
-    test('zero staged deletions: exits 1, commits nothing', () => {
+    test('zero staged deletions: exits 0, commits nothing', () => {
       const r = run([]);
-      assert.deepStrictEqual([r.status, r.commits], [1, 1]);
+      assert.deepStrictEqual([r.status, r.commits], [0, 1]);
       assert.match(r.stderr, /no staged .*deletion: nothing to commit/);
       assert.doesNotMatch(r.stderr, /expected exactly one/);
     });
