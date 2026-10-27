@@ -1643,7 +1643,7 @@ function readerResolvableBracketDirectoryPhaseNumber(
   return matches.includes(dir) ? phase : null;
 }
 
-function addBracketRoadmapPhaseNumbers(content: string, used: Set<number>): void {
+function addBracketRoadmapPhaseNumbers(content: string, used: Set<number>, context?: BracketWriteContext): void {
   for (const token of scanMilestonePhaseIds(content, 'bracket')) {
     const leading = String(token).split('.')[0];
     if (/^\d+$/.test(leading)) used.add(Number(leading));
@@ -1651,7 +1651,16 @@ function addBracketRoadmapPhaseNumbers(content: string, used: Set<number>): void
   // #5528: a phase declared only as a checklist bullet (`- [ ] **[GSD.02] 05: x**`, with or without a
   // checkbox, letter-suffixed or word-first) is invisible to the heading scan above but still owns its
   // number. The bracket declaration scans see it; an id of another milestone only over-counts.
-  for (const num of roadmapDeclaredPhaseNums(content, { convention: 'bracket', milestone: null })) used.add(num);
+  if (!context) return;
+  const active = `${context.project}.${context.milestone}`.toUpperCase();
+  for (const { regex, idGroup, numGroup } of buildPhaseDeclarationScans('bracket')) {
+    if (idGroup === null) continue;
+    let hit: RegExpExecArray | null;
+    while ((hit = regex.exec(content)) !== null) {
+      const num = parseInt(hit[numGroup], 10);
+      if (hit[idGroup].toUpperCase() === active && Number.isSafeInteger(num) && !isSentinelPhaseId(num)) used.add(num);
+    }
+  }
 }
 
 function collectBracketPhaseNumbers(
@@ -1660,7 +1669,7 @@ function collectBracketPhaseNumbers(
   context: BracketWriteContext,
 ): Set<number> {
   const used = new Set<number>();
-  addBracketRoadmapPhaseNumbers(roadmapContent, used);
+  addBracketRoadmapPhaseNumbers(roadmapContent, used, context);
   for (const dir of readSubdirectories(phasesDir, true)) {
     const phase = readerResolvableBracketDirectoryPhaseNumber(dir, context);
     if (phase !== null) used.add(phase);
@@ -1750,7 +1759,7 @@ function collectSiblingWorktreePhaseNums(
           && siblingProject.trim() === bracketContext.project
           && milestoneToken(siblingVersion) === bracketContext.milestone
         ) {
-          addBracketRoadmapPhaseNumbers(extractCurrentMilestone(content, wt), used);
+          addBracketRoadmapPhaseNumbers(extractCurrentMilestone(content, wt), used, bracketContext);
         }
         continue;
       }
