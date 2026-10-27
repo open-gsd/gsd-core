@@ -3483,12 +3483,16 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     assert.equal(git('diff', '--name-only').trim(), 'other/o');
   });
   test('stop-tracking recipe carries the same four fragments in all six docs', () => {
+    const norm = (t) => t.replace(/&&|;/g, ' ').replace(/\s+/g, ' ');
+    const recipe = 'if git diff --cached --quiet -- \':!.planning\'; then git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"; else echo "unrelated staged paths; unstage them first" >&2; fi';
     const frags = ["git diff --cached --quiet -- ':!.planning'", 'git rm -r --cached .planning/',
       'git commit -m "chore: stop tracking planning docs"', 'unrelated staged paths; unstage them first'];
     for (const f of ['gsd-core/references/planning-config.md', 'docs/how-to/keep-planning-docs-private.md', 'docs/CONFIGURATION.md', 'docs/zh-CN/references/planning-config.md',
       'docs/ja-JP/CONFIGURATION.md', 'docs/ko-KR/CONFIGURATION.md']) {
       const md = fs.readFileSync(path.join(root, f), 'utf8');
       for (const frag of frags) assert.ok(md.includes(frag), `${f}: ${frag}`);
+      assert.ok(norm(md).includes(norm(recipe)), `${f}: recipe order`);
+      if (['docs/how-to/keep-planning-docs-private.md', 'docs/CONFIGURATION.md'].includes(f)) assert.ok(md.includes('Run `git rm -r --cached .planning/` to untrack it'), `${f}: W029 remedy`);
     }
   });
   test('stop-tracking recipe (scratch repo): a staged foreign file refuses it; a clean index untracks .planning', (t) => {

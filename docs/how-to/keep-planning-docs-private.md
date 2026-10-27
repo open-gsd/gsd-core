@@ -75,9 +75,11 @@ gsd-tools validate health
 A clean result means you are done. If you skipped step 3, you will see:
 
 ```
-W029  .planning/ is gitignored but N file(s) are still tracked by git
-      Fix: if git diff --cached --quiet -- ':!.planning'; then git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"; else echo "unrelated staged paths; unstage them first" >&2; fi
+W029  .planning/ matches a gitignore rule but is still tracked by git — .gitignore has no effect on already-tracked files, so staging keeps picking them up
+      Run `git rm -r --cached .planning/` to untrack it (the ignore rule then takes effect); this does not delete the files on disk
 ```
+
+Run the guarded form from step 3 instead of the bare command: it refuses while unrelated paths are staged.
 
 `W029` is advisory. GSD will not untrack files for you, and `--repair` deliberately does not act on
 it — removing files from the index is destructive and the timing is yours.
