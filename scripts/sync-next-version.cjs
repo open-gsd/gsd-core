@@ -56,6 +56,9 @@ function applyVersion(version, { run = defaultRun } = {}) {
 // What `gh pr merge --admin` says when the base branch is behind a merge-queue ruleset.
 const MERGE_QUEUE_REJECTION_RE = /merge queue/i;
 
+// stdin ignored, stdout and stderr captured so a failed `gh` call carries its own text.
+const PIPED_STDERR = ['ignore', 'pipe', 'pipe'];
+
 /** Full PR-based sync to the `next` branch. Returns 'noop' | 'synced' | 'queued' (enqueued, not yet merged). */
 function syncViaPr(version, { run = defaultRun } = {}) {
   if (!isReleaseVersion(version)) {
@@ -104,19 +107,27 @@ function syncViaPr(version, { run = defaultRun } = {}) {
     /* labels are best-effort; admin-merge below still lands the PR */
   }
   try {
-    run('gh', ['pr', 'merge', '--admin', '--merge', prNum], { timeout: 60000 });
+    // stderr is piped, not inherited: with the default 'inherit' the GitHub text goes
+    // to the terminal and err.stderr is null, so the classification below would only
+    // ever see "Command failed: gh pr merge ..." (#5746).
+    run('gh', ['pr', 'merge', '--admin', '--merge', prNum], { timeout: 60000, stdio: PIPED_STDERR });
   } catch (err) {
     const msg = String((err && (err.stderr || err.message)) || '');
-    if (MERGE_QUEUE_REJECTION_RE.test(msg)) {
+    // tolerate "already merged" first: a PR that is already merged must not be enqueued
+    if (/already merged|not mergeable|Merged/i.test(msg)) {
+      /* fall through to the success report */
+    } else if (MERGE_QUEUE_REJECTION_RE.test(msg)) {
       // #5746: `next` is governed by a merge-queue ruleset, which --admin cannot bypass.
       // Enqueue instead; the queue chooses the merge strategy, so no --merge here. A
       // failed enqueue is a real failure and propagates.
-      run('gh', ['pr', 'merge', '--auto', prNum], { timeout: 60000 });
+      run('gh', ['pr', 'merge', '--auto', prNum], { timeout: 60000, stdio: PIPED_STDERR });
       process.stdout.write(`queued sync of next -> ${version} via PR #${prNum}\n`);
       return 'queued';
+    } else {
+      // piped stderr is no longer visible on its own; surface it before rethrowing
+      if (err && err.stderr) process.stderr.write(String(err.stderr));
+      throw err;
     }
-    // tolerate "already merged"; rethrow anything else
-    if (!/already merged|not mergeable|Merged/i.test(msg)) throw err;
   }
   process.stdout.write(`synced next -> ${version} via PR #${prNum}\n`);
   return 'synced';
@@ -142,4 +153,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { isReleaseVersion, versionFromPackageJson, applyVersion, syncViaPr, main };
+module.exports = { isReleaseVersion, versionFromPackageJson, applyVersion, syncViaPr, main, defaultRun };
