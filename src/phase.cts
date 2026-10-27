@@ -1648,6 +1648,10 @@ function addBracketRoadmapPhaseNumbers(content: string, used: Set<number>): void
     const leading = String(token).split('.')[0];
     if (/^\d+$/.test(leading)) used.add(Number(leading));
   }
+  // #5528: a phase declared only as a checklist bullet (`- [ ] **[GSD.02] 05: x**`, with or without a
+  // checkbox, letter-suffixed or word-first) is invisible to the heading scan above but still owns its
+  // number. The bracket declaration scans see it; an id of another milestone only over-counts.
+  for (const num of roadmapDeclaredPhaseNums(content, { convention: 'bracket', milestone: null })) used.add(num);
 }
 
 function collectBracketPhaseNumbers(
