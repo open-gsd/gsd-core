@@ -17822,6 +17822,18 @@ Plans:
     assert.match(active, /- \[x\] \*\*Phase 1: New\*\*/);
   });
 
+  test('a <details> block inside the resolved milestone window is left untouched (#5483 shared editCurrentMilestone)', () => {
+    const inside = ACTIVE.replace('\n### Phase 1: New', `\n${SHIPPED}\n### Phase 1: New`);
+    seed(inside, '---\nmilestone: v2.0\n---\n# State\n');
+    complete();
+    const out = roadmapText();
+    const sectionizer = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+    assert.deepStrictEqual(sectionizer.extractTaggedBlocks(out, 'details'), sectionizer.extractTaggedBlocks(inside, 'details'));
+    const planRows = (text) => sectionizer.iterateBullets(text).filter((b) => b.text.startsWith('01-01-PLAN.md'));
+    assert.deepStrictEqual(planRows(sectionizer.extractTaggedBlocks(out, 'details').join('\n')).map((b) => b.checked), [false]);
+    assert.deepStrictEqual(planRows(sectionizer.stripTaggedBlocks(out, 'details')).map((b) => b.checked), [true]);
+  });
+
   test('a </details> inside a code fence before the active phase does not hide the active phase', () => {
     const fenced = '```html\n</details>\n```\n';
     seed(fenced + ACTIVE, '# State\n');
