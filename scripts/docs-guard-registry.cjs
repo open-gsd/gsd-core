@@ -163,6 +163,7 @@ const DOCS_GUARD_TESTS = {
     'docs/COMMANDS.md',
     'docs/how-to/run-phases-autonomously.md',
   ],
+  'tests/adr-612-bracket-new-project-config.test.cjs': ['docs/CONFIGURATION.md'],
   // Walks docs/adr/ as a directory (builds/reads docs/adr/README.md and
   // fixture ADRs throughout) and separately reads docs/contributor-standards.md.
   'tests/adr-index-gate.test.cjs': ['docs/adr/', 'docs/contributor-standards.md'],

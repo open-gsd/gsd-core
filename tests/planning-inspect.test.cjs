@@ -1740,6 +1740,46 @@ describe('planning inspect — per-phase goal and dependency evidence', () => {
     assert.strictEqual(billing.dependencies.scope, 'complete');
   });
 
+  test('keeps merge-base dependency token bytes under every non-bracket convention', (t) => {
+    const cases = [
+      ['Phase 1a', ['1']],
+      ['Phase 1A', ['1A']],
+      ['Phase 1, Phase 2', ['1', '2']],
+      ['Phases 1-3', ['1', '3']],
+    ];
+    for (const convention of [null, 'sequential', 'milestone-prefixed']) {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      writeFile(
+        tmpDir,
+        '.planning/config.json',
+        JSON.stringify({ project_code: null, phase_id_convention: convention }, null, 2) + '\n',
+      );
+      writeState(tmpDir, ["gsd_state_version: '1.0'", 'status: planning', 'milestone: v1.0']);
+      const phaseDir = phaseDirOf(tmpDir, slugPhaseDirName('9', 'Reader'));
+      fs.mkdirSync(phaseDir, { recursive: true });
+
+      for (const [dependsOn, expected] of cases) {
+        writeRoadmap(tmpDir, [
+          '## v1.0 Current 🚧',
+          '',
+          '### Phase 9: Reader',
+          '',
+          `**Depends on:** ${dependsOn}`,
+          '',
+        ]);
+        const payload = parseInspect(tmpDir);
+        const phase = payload.phases.find((row) => row.dir === '09-reader');
+        assert.ok(phase, `${String(convention)}: ${dependsOn}`);
+        assert.deepStrictEqual(
+          phase.dependencies.value,
+          expected,
+          `${String(convention)}: ${dependsOn}`,
+        );
+      }
+    }
+  });
+
   test('reportsNoDependsOnLineAsAnEmptyArrayNotADegradedScope', (t) => {
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
