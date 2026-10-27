@@ -26,7 +26,7 @@ const { SCOPE } = planningScopeMod;
 type Scope = planningScopeMod.Scope;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserModule = require('./roadmap-parser.cjs');
-const { stripShippedMilestones, extractCurrentMilestone, extractCurrentMilestoneScoped, listMilestoneHeadings, scanMilestonePhaseIds, collectTablePhaseRows, hasPhaseListingTableHeader } = roadmapParserModule;
+const { stripShippedMilestones, extractCurrentMilestone, extractCurrentMilestoneScoped, checklistBulletExtent, withPhaseSection, listMilestoneHeadings, scanMilestonePhaseIds, collectTablePhaseRows, hasPhaseListingTableHeader } = roadmapParserModule;
 import { tokenizeHeadings } from './markdown-sectionizer.cjs';
 import { escapeCell, findTableWithColumns, parseMarkdownTable, updateTableCell } from './markdown-table.cjs';
 import { clampPercent, normalizeMilestoneToken } from './phase-lifecycle.cjs';
@@ -1699,11 +1699,78 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       .map((summaryFile) => ({ summaryFile, planId: summaryFile.replace('-SUMMARY.md', '').replace('SUMMARY.md', '') }))
       .filter(({ summaryFile, planId }) => planId !== ''
         && coreUtils.summaryPairsWithAnyPlan(phaseInfo!.plans, summaryFile));
-    // Archived blocks are already hidden (maskArchivedDetails), so the first matching row is the active one.
-    const tickPlanRows = (): void => {
-      for (const { planId } of tickableSummaries) roadmapContent = roadmapContent.replace(coreUtils.planRowPattern(planId), '$1x$2');
+    // #5483: a plan's row is ticked only in THIS phase's own scopes (its detail
+    // section, then the rows under its checklist bullet, as `phase complete` does).
+    // A scope that was located but holds no row ticks nothing, so a sibling phase's
+    // same-named row is never touched; only a phase with neither scope falls back
+    // to the first row outside every phase bullet's rows. Archived blocks are
+    // already hidden by maskArchivedDetails (#5553), which owns which regions are editable.
+    const editPhaseScopes = (text: string, edit: (scope: string) => string, levelBounded = false): string => {
+      let out = withPhaseSection(text, phaseNum, edit, levelBounded);
+      const bullet = phaseChecklistBullet(true).exec(out);
+      if (bullet) {
+        const { start, end } = checklistBulletExtent(out, bullet);
+        out = out.slice(0, start) + edit(out.slice(start, end)) + out.slice(end);
+      }
+      return out;
     };
-    tickPlanRows();
+    // Read-only view of the scopes `editPhaseScopes` edits: the non-empty text of each.
+    const readPhaseScopes = (text: string, levelBounded = false): string[] => {
+      const scopes: string[] = [];
+      editPhaseScopes(text, (scope) => { if (scope.trim() !== '') scopes.push(scope); return scope; }, levelBounded);
+      return scopes;
+    };
+    // Decided once on the pre-insertion text: insertion only adds rows under an existing section.
+    const phaseScopes = readPhaseScopes(roadmapContent, true);
+    const located = phaseScopes.length > 0;
+    // Same-length copy of `text` with every phase's detail section and checklist-bullet rows blanked: what is
+    // left is "unowned" text (e.g. rows under a non-phase heading inside the active milestone), which belongs to no sibling phase.
+    const unownedText = (text: string): string => {
+      const spans: Array<[number, number]> = [];
+      const heads = tokenizeHeadings(text);
+      heads.forEach((h, i) => {
+        if (/^Phase\b/i.test(h.text.replace(/^\[[^\]]*\]\s*/, ''))) spans.push([h.offset, heads[i + 1]?.offset ?? text.length]);
+      });
+      for (const b of text.matchAll(/^([ \t]*)-[ \t]*\[[ xX]\][ \t]*(?:\*\*[ \t]*)?Phase[ \t][^\n]*$/gim)) spans.push([b.index, checklistBulletExtent(text, b).end]);
+      let out = text;
+      for (const [a, z] of spans) out = out.slice(0, a) + out.slice(a, z).replace(/[^\r\n]/g, ' ') + out.slice(z);
+      return out;
+    };
+    const tickUnowned = (text: string, planId: string): string => {
+      const blank = unownedText(text);
+      const ticked = coreUtils.tickAnchoredPlanRow(blank, planId);
+      if (ticked === blank) return text;
+      let out = '';
+      for (let i = 0; i < text.length; i++) out += ticked[i] !== blank[i] ? ticked[i] : text[i];
+      return out;
+    };
+    const fallbackTicked = new Set<string>();
+    const tickPlanRow = (text: string, planId: string): string => {
+      // levelBounded: a row under the phase's own `#### Plans` sub-heading ticks too.
+      const out = editPhaseScopes(text, (scope) => coreUtils.tickAnchoredPlanRow(scope, planId), true);
+      if (out !== text) return out;
+      // A located scope without the row: a row no sibling phase owns (under a non-phase heading) is still this phase's.
+      if (located) return tickUnowned(text, planId);
+      if (fallbackTicked.has(planId)) return out;
+      // First row outside every phase bullet's rows: one nested under a sibling's bullet is that sibling's.
+      let ticked = text;
+      let from = 0;
+      for (const b of text.matchAll(/^([ \t]*)-[ \t]*\[[ xX]\][ \t]*(?:\*\*[ \t]*)?Phase[ \t][^\n]*$/gim)) {
+        const { start, end } = checklistBulletExtent(text, b);
+        const seg = text.slice(from, start);
+        const t = coreUtils.tickAnchoredPlanRow(seg, planId);
+        if (t !== seg) { ticked = text.slice(0, from) + t + text.slice(start); break; }
+        from = end;
+      }
+      if (ticked === text) {
+        const tail = coreUtils.tickAnchoredPlanRow(text.slice(from), planId);
+        if (tail !== text.slice(from)) ticked = text.slice(0, from) + tail;
+      }
+      if (ticked !== text) fallbackTicked.add(planId);
+      return ticked;
+    };
+    const tickPlanRows = (text: string): string => tickableSummaries.reduce((acc, { planId }) => tickPlanRow(acc, planId), text);
+    roadmapContent = tickPlanRows(roadmapContent);
 
     // Detection reads presentRows (the archive-masked text plus rows hidden in
     // collapsed blocks of the active range); insertion edits the masked text only.
@@ -1731,12 +1798,19 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // `5-011` never satisfies `5-01` and a dotted sub-id (`5-01.5`) is a real
     // distinct plan whose row does not count as 5-01's presence.
     // Rows inside a collapsed block of the active range are hidden from edits but still present.
-    const presentRows = `${roadmapContent}\n${archived.hiddenInActive}`;
+    // #5483: presence is judged in THIS phase's own scopes (plus rows hidden in collapsed active blocks), so a
+    // sibling phase's same-named un-prefixed row never makes a plan look present; a phase with no scope reads the whole text.
+    const presentRows = located
+      ? `${readPhaseScopes(roadmapContent, true).join('\n')}\n${archived.hiddenInActive}`
+      : `${roadmapContent}\n${archived.hiddenInActive}`;
+    const unownedNow = located ? unownedText(roadmapContent) : '';
+    const hasUnownedAny = (planFile: string, stem: string): boolean =>
+      new RegExp(`-\\s*\\[[x ]\\]\\s*(?:\\*\\*)?${escapeRegex(planFile)}`, 'i').test(unownedNow) || coreUtils.planRowPattern(stem, { anyState: true }).test(unownedNow);
     const missingPlans = phaseInfo!.plans.filter((planFile) => {
       const planEscaped = escapeRegex(planFile);
       if (new RegExp(`-\\s*\\[[x ]\\]\\s*(?:\\*\\*)?${planEscaped}`, 'i').test(presentRows)) return false;
       const stem = planFile.replace(/-PLAN\.md$/i, '');
-      return !coreUtils.planRowPattern(stem, { anyState: true }).test(presentRows);
+      return !coreUtils.planRowPattern(stem, { anyState: true }).test(presentRows) && !(located && hasUnownedAny(planFile, stem));
     });
 
     if (missingPlans.length > 0) {
@@ -1776,7 +1850,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
         // Mark any newly-inserted rows that already have summaries as complete
         // (#4741: same superseded-filtered tick list as the loop above — a
         // pre-existing superseded row must stay unchecked on this path too).
-        tickPlanRows();
+        roadmapContent = tickPlanRows(roadmapContent);
       }
     }
 

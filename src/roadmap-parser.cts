@@ -62,7 +62,7 @@ import { platformReadSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import unusableInputMod = require('./unusable-input.cjs');
 const { UNUSABLE_REASON, warnUnusableInput } = unusableInputMod;
-import { tokenizeHeadings, stripTaggedBlocks, editOutsideTaggedBlocks, withSection, stripFencedCode, collectSection, scanFencedBlocks, scanInlineCodeSpans } from './markdown-sectionizer.cjs';
+import { tokenizeHeadings, stripTaggedBlocks, withSection, stripFencedCode, collectSection, scanFencedBlocks, scanInlineCodeSpans } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
 import { findTableWithColumns, isDelimiterRow, splitTableRow } from './markdown-table.cjs';
 import type { MarkdownTable } from './markdown-table.cjs';
@@ -86,6 +86,21 @@ function isClosedMilestoneHeading(headingText: string): boolean {
 }
 
 /**
+ * Is this `<details>` block a CLOSED milestone? One test for the read-side strip
+ * and the write-side mask. The `<summary>` is read with inline tags removed
+ * (`<b>v1.0</b> ✅`); a milestone-shaped summary (version token or "milestone")
+ * that says "Complete(d)" counts too. No `<summary>` means not closed.
+ */
+function isClosedMilestoneBlock(block: string): boolean {
+  const summary = block.match(/<summary[^>]*>([\s\S]{0,1000}?)<\/summary>/i);
+  if (!summary) return false;
+  const text = summary[1].replace(/<[^>]{0,200}>/g, '');
+  return isClosedMilestoneHeading(text)
+    || (/\bcomplete(?:d)?\b/i.test(text) && /\bv\d+(?:\.\d+)*\b|\bmilestone\b/i.test(text)
+      && !MILESTONE_ACTIVE_MARKER_PATTERN.test(text));
+}
+
+/**
  * Strip shipped milestone content wrapped in <details> blocks.
  */
 function stripShippedMilestones(content: string): string {
@@ -93,15 +108,68 @@ function stripShippedMilestones(content: string): string {
 }
 
 /**
- * #5543: run `edit` over the ROADMAP with every shipped `<details>` block hidden
- * and restored byte-for-byte afterwards. For writers whose active milestone
- * could not be resolved: the first `### Phase N:` in document order must never
- * be the one inside a shipped block. Layout-independent (the active phase may
- * sit before or after a shipped block) and, unlike a "region after the last
- * `</details>`" cut, not fooled by a `</details>` in a fence or inline code.
+ * #5543: hide every CLOSED-milestone `<details>` block (`<details>` opener, a
+ * `<summary>` that `isClosedMilestoneHeading` reads as shipped/archived, the
+ * #3982 test) behind a placeholder comment; `restore` puts them back
+ * byte-for-byte, or returns null when `edited` lost or duplicated a placeholder.
+ * For writers whose first `### Phase N:` in document order must never sit in a
+ * shipped block. Other `<details>` (notes, a phase wrapper, an active
+ * milestone's collapsed block) stay visible, so a roadmap with no archived
+ * milestone is edited as before. Blocks are matched by depth, so a notes
+ * `<details>` nested inside a shipped one stays inside it (the flat
+ * `taggedBlockPattern` closes at the inner `</details>`). An unmatched
+ * opener (prose, a fence) wraps nothing, so a later shipped block is still
+ * masked. Fences are not parsed, as in every ROADMAP `<details>` reader here.
  */
+function maskShippedBlocks(content: string): { masked: string; restore: (edited: string) => string | null } {
+  const blocks: string[] = [];
+  let nonce = 0;
+  while (content.includes(`<!-- gsd-masked-shipped-${nonce}-`)) nonce += 1;
+  const placeholder = (i: number): string => `<!-- gsd-masked-shipped-${nonce}-${i} -->`;
+  const tags = /<details(?:\s[^>]{0,1000})?>|<\/details>/gi;
+  // Matched pairs by stack; an unmatched opener (prose, a fence) never closes, so it
+  // wraps nothing and a later block is still found. `outer` keeps only the pairs not
+  // nested in another matched pair.
+  const open: number[] = [];
+  const outer: Array<[number, number]> = [];
+  for (let m = tags.exec(content); m !== null; m = tags.exec(content)) {
+    if (m[0][1] !== '/') open.push(m.index);
+    else if (open.length > 0) {
+      const start = open.pop()!;
+      while (outer.length > 0 && outer[outer.length - 1][0] >= start) outer.pop();
+      outer.push([start, m.index + m[0].length]);
+    }
+  }
+  let masked = '';
+  let copied = 0;
+  for (const [start, end] of outer) {
+    const block = content.slice(start, end);
+    if (block.startsWith('<details>') && isClosedMilestoneBlock(block)) {
+      masked += content.slice(copied, start) + placeholder(blocks.length);
+      blocks.push(block);
+      copied = end;
+    }
+  }
+  masked += content.slice(copied);
+  return {
+    masked,
+    restore(edited) {
+      let restored = edited;
+      for (let i = 0; i < blocks.length; i++) {
+        const marker = placeholder(i);
+        const at = restored.indexOf(marker);
+        if (at === -1 || restored.indexOf(marker, at + marker.length) !== -1) return null;
+        restored = restored.slice(0, at) + blocks[i] + restored.slice(at + marker.length);
+      }
+      return restored;
+    },
+  };
+}
+
 function editOutsideShippedBlocks(content: string, edit: (outside: string) => string): string {
-  return editOutsideTaggedBlocks(content, 'details', edit);
+  const { masked, restore } = maskShippedBlocks(content);
+  const edited = edit(masked);
+  return (typeof edited === 'string' ? restore(edited) : null) ?? content;
 }
 
 /**
@@ -112,11 +180,7 @@ function editOutsideShippedBlocks(content: string, edit: (outside: string) => st
  * reproduce the phase_count: 0 class of #557/#2947.
  */
 function stripClosedMilestoneDetails(content: string): string {
-  return content.replace(/<details\b[^>]*>[\s\S]*?<\/details>/gi, (block) => {
-    const summaryMatch = block.match(/<summary[^>]*>([^<]*)<\/summary>/i);
-    if (!summaryMatch) return block;
-    return isClosedMilestoneHeading(summaryMatch[1]) ? '' : block;
-  });
+  return content.replace(/<details\b[^>]*>[\s\S]*?<\/details>/gi, (block) => (isClosedMilestoneBlock(block) ? '' : block));
 }
 
 /**
@@ -1721,15 +1785,26 @@ function maskArchivedDetails(content: string, cwd: string): { visible: string; r
  * phase-heading level, so a level-bounded stop could fold a deeper sibling
  * heading (e.g. a `####` phase following a `###` phase) into this phase's
  * body and let `edit` reach into it.
+ *
+ * `levelBounded: true` instead keeps the phase's own non-phase `####` sub-sections
+ * (a plan list under a sub-heading) in the body, still ending at the next heading
+ * that opens another phase, of any level. Serves the presence check and the
+ * plan-row tick writer.
  */
 function withPhaseSection(
   content: string,
   phaseId: unknown,
   edit: (body: string) => string,
+  levelBounded = false,
 ): string {
   const src = phaseMarkdownRegexSource(phaseId);
   const headingRe = new RegExp(`^\\s*(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+${src}(?=[\\s:(]|$)`, 'i');
-  return withSection(content, (h: HeadingToken) => headingRe.test(h.text), edit, { levelBounded: false });
+  // levelBounded runs to the next same-or-higher heading, so cut at a deeper phase heading too.
+  const ownBody = !levelBounded ? edit : (body: string): string => {
+    const cut = body.search(/^#{1,6}[ \t]+(?:\[[^\]\n]{1,200}\][ \t]*)?Phase\s+\S/m);
+    return cut === -1 ? edit(body) : edit(body.slice(0, cut)) + body.slice(cut);
+  };
+  return withSection(content, (h: HeadingToken) => headingRe.test(h.text), ownBody, { levelBounded });
 }
 
 // ─── Roadmap phase lookup ─────────────────────────────────────────────────────
@@ -2534,25 +2609,26 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
  * Details section) — both consume the same `locateMilestoneHeadings` /
  * `computeMilestoneSectionEnd` owner (#3184), so there is no separate copy to
  * keep in sync. Returns null when there is no versioned active milestone;
- * callers then fall back to whole-content mutation (the prior behaviour).
+ * callers then fall back to the shipped-block-masked whole content
+ * (`editOutsideShippedBlocks`) via `editCurrentMilestone`, or to unscoped
+ * whole-content handling where they call this directly (`phase.cts`
+ * `phaseEntryInsertOffset`).
  *
- * #2761 (round-2 review, Minor 3 — latent, currently harmless): this function
- * consumes #3184's shared owners, but it does not pass the bracket-specific
- * B1/B2 boundary predicate and still has no bracket-fallback SELECTION branch:
- * it returns null when the version-string owner finds nothing, unlike
- * `extractCurrentMilestoneScoped`. The read owner can therefore scope a
- * bracket ROADMAP this write-range consumer still calls unscoped. Probed and
- * confirmed harmless TODAY: this
- * function's single consumer (`mutateMilestonePhase`, src/phase.cts) falls
- * back to whole-content mutation when it returns null, and every mutation
- * inside that caller is still `Phase`-labelled-only (not bracket-widened) per
- * the changeset's own "READ-path opt-in until the migrator and write path
- * land" — so a bracket ROADMAP's checkbox/heading patterns never match inside
- * that fallback and nothing is mutated cross-milestone. The moment the write
- * path is widened (PR-3+), this divergence becomes live: the whole-content
- * fallback would become a cross-milestone writer, which is exactly what this
- * note exists to prevent. Bracket-widen this function in lockstep with the
- * write path landing, not before.
+ * #2761 (round-2 review, Minor 3): this function consumes #3184's shared
+ * owners, but it does not pass the bracket-specific B1/B2 boundary predicate and
+ * still has no bracket-fallback SELECTION branch: it returns null when the
+ * version-string owner finds nothing, unlike `extractCurrentMilestoneScoped`.
+ * The read owner can therefore scope a bracket ROADMAP this write-range
+ * consumer still calls unscoped. Consumers: `editCurrentMilestone` (`phase
+ * complete`'s `mutateMilestonePhase`, `roadmap update-plan-progress`) and
+ * `phase.cts` `phaseEntryInsertOffset`. On the null path `editCurrentMilestone`
+ * edits the ROADMAP with closed-milestone `<details>` blocks masked, so no writer reaches
+ * into a shipped block; but a bracket ROADMAP's other milestone sections stay
+ * editable by a `Phase`-labelled pattern. That is harmless only while every
+ * mutation stays `Phase`-labelled (not bracket-widened), per the changeset's
+ * "READ-path opt-in until the migrator and write path land". The moment a
+ * writer is bracket-widened (PR-3+), this divergence becomes live: bracket-widen
+ * this function in lockstep with that writer, not before.
  */
 function currentMilestoneRawRanges(
   content: string,
@@ -2679,6 +2755,80 @@ function activeScopeStart(content: string, cwd?: string): number {
   return activeScope(content, cwd).start;
 }
 
+/** [start,end) windows of the current milestone, document order; the whole ROADMAP when none resolves. */
+function currentMilestoneWindows(content: string, cwd: string | undefined): Array<{ start: number; end: number }> {
+  const ranges = currentMilestoneRawRanges(content, cwd);
+  if (!ranges) return [{ start: 0, end: content.length }];
+  // `details` always starts at or after `primary.end` (see `currentMilestoneRawRanges`),
+  // so this is document order: a "first window wins" caller means the primary one.
+  return [ranges.primary, ranges.details].filter((w): w is { start: number; end: number } => w !== null);
+}
+
+/**
+ * Read-only counterpart of `editCurrentMilestone`: the text of each window,
+ * with closed-milestone `<details>` blocks hidden exactly as the writers see it.
+ */
+function readCurrentMilestone(content: string, cwd: string | undefined): string[] {
+  return currentMilestoneWindows(content, cwd).map((w) => maskShippedBlocks(content.slice(w.start, w.end)).masked);
+}
+
+/**
+ * Run `edit` over the current milestone's raw window(s) from
+ * `currentMilestoneRawRanges`, or, when no milestone resolves, over the whole
+ * ROADMAP, each with closed-milestone `<details>` blocks hidden (#5543;
+ * `editOutsideShippedBlocks`: a notes or phase-wrapper block stays editable).
+ * `edit` is called once per window, in document order. The one milestone
+ * scoping for per-phase writers (`phase complete`, `roadmap
+ * update-plan-progress` #5483), so neither cuts at the last `</details>`.
+ */
+function editCurrentMilestone(content: string, cwd: string | undefined, edit: (text: string) => string): string {
+  const windows = currentMilestoneWindows(content, cwd);
+  const edited = windows.map((w) => editOutsideShippedBlocks(content.slice(w.start, w.end), edit));
+  // Splice last-first so an earlier window's offsets are not shifted by a
+  // length-changing mutation in a later window.
+  return windows.reduceRight((acc, w, i) => acc.slice(0, w.start) + edited[i] + acc.slice(w.end), content);
+}
+
+/**
+ * The checklist bullet of the phase whose number matches `phasePattern`
+ * (`- [ ] **Phase N: …**`), as the one grammar shared by the Plans-count /
+ * completion stamp and the plan-row ticks. `anyState` also matches a checked box.
+ * Group 1 is the opening `- [`, group 2 the rest of the line after the box.
+ * `(?:\*\*[ \t]*)?` rather than `[ \t]*` then `**` then `[ \t]*`, which would
+ * backtrack quadratically on a long blank run.
+ */
+function phaseChecklistBullet(phasePattern: string, anyState: boolean): RegExp {
+  return new RegExp(
+    `^([ \\t]*-[ \\t]*\\[)${anyState ? '[ x]' : ' '}(\\][ \\t]*(?:\\*\\*[ \\t]*)?Phase[ \\t]+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s]|$)[^\\n]*)`,
+    'im',
+  );
+}
+
+/** A checklist bullet of ANY phase: ends the rows nested under the previous one. */
+const ANY_PHASE_BULLET = /^[ \t]*-[ \t]*\[[ xX]\][ \t]*(?:\*\*[ \t]*)?Phase[ \t]/i;
+
+/**
+ * [start,end) of the rows nested under a phase's checklist bullet: from the
+ * line after `bullet` (a match of `phaseChecklistBullet` in `text`) up to a
+ * blank line, a shallower line, or the next phase's bullet. Empty when the
+ * bullet is the last line with no trailing newline.
+ */
+function checklistBulletExtent(
+  text: string,
+  bullet: RegExpExecArray,
+): { start: number; end: number } {
+  const depth = bullet[1].search(/\S/);
+  const start = text.indexOf('\n', bullet.index) + 1;
+  let end = start;
+  while (start > 0 && end < text.length) {
+    const next = text.indexOf('\n', end);
+    const line = text.slice(end, next === -1 ? text.length : next);
+    if (line.trim() === '' || line.search(/\S/) < depth || ANY_PHASE_BULLET.test(line)) break;
+    end = next === -1 ? text.length : next + 1;
+  }
+  return { start, end };
+}
+
 export = {
   activeScope,
   activeScopeStart,
@@ -2695,6 +2845,10 @@ export = {
   currentMilestoneRawRanges,
   withPhaseSection,
   editOutsideShippedBlocks,
+  editCurrentMilestone,
+  readCurrentMilestone,
+  phaseChecklistBullet,
+  checklistBulletExtent,
   computeMilestoneSectionEnd,
   locateMilestoneHeadings,
   listMilestoneHeadings,

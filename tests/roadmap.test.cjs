@@ -2679,6 +2679,367 @@ describe('regressions: insert missing plan rows (#1163) — adversarial: partial
 });
 
 
+describe('#5483: update-plan-progress ticks only the active milestone row', () => {
+  let tmpDir;
+  let roadmapPath;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-5483-');
+    roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  const ARCHIVED = [
+    '<details>',
+    '<summary>v0.9 - shipped</summary>',
+    '',
+    '### Phase 1: test phase',
+    '',
+    'Plans:',
+    '- [ ] 01-01-PLAN.md',
+    '',
+    '</details>',
+    '',
+  ].join('\n');
+
+  // Structured readers over the product's sectionizer; no rendered-text matching.
+  const sectionizer = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+  const tickedPlanRows = (text) => sectionizer.iterateBullets(text)
+    .filter((b) => b.checked === true)
+    .map((b) => /^(?:\*\*)?(\d+-\d+-PLAN\.md)/.exec(b.text)?.[1])
+    .filter(Boolean);
+  const archivedBlocks = (text) => sectionizer.extractTaggedBlocks(text, 'details');
+  const tickedInArchived = (text) => tickedPlanRows(archivedBlocks(text).join('\n'));
+  const tickedInActive = (text) => tickedPlanRows(sectionizer.stripTaggedBlocks(text, 'details'));
+  const P1 = ['01-01-PLAN.md'];
+  const S1 = ['01-01-SUMMARY.md'];
+
+  const assertArchivedUntouched = (input, written) =>
+    assert.deepStrictEqual(archivedBlocks(written), archivedBlocks(input));
+
+  test('archived and active rows share a plan id: active ticked, archived byte-identical', () => {
+    const active = '## Milestone v1.0\n\n### Phase 1: test phase\n\nPlans:\n- [ ] 01-01-PLAN.md\n';
+    const input = `# ROADMAP\n\n${ARCHIVED}${active}`;
+    const written = setupPhase(1, input, P1, S1);
+    assertArchivedUntouched(input, written);
+    assert.deepStrictEqual(tickedInArchived(written), []);
+    assert.deepStrictEqual(tickedInActive(written), ['01-01-PLAN.md']);
+  });
+
+  test('plan row under a #### sub-heading of the phase section is present: no duplicate row inserted', () => {
+    const active = '## Milestone v1.0\n\n### Phase 1: test phase\n\nPlans:\n\n#### Plan list\n\n- [ ] 01-01-PLAN.md\n';
+    const written = setupPhase(1, `# ROADMAP\n\n${active}`, P1, S1);
+    const rows = sectionizer.iterateBullets(written).filter((b) => b.text.startsWith('01-01-PLAN.md'));
+    assert.deepStrictEqual(rows.map((b) => b.checked), [true]);
+  });
+
+  test('verb-inserted active row is ticked exactly once, archived row untouched', () => {
+    const active = '## Milestone v1.0\n\n### Phase 1: test phase\n\nPlans:\n';
+    const input = `# ROADMAP\n\n${ARCHIVED}${active}`;
+    const written = setupPhase(1, input, P1, S1);
+    assertArchivedUntouched(input, written);
+    assert.deepStrictEqual(tickedInArchived(written), []);
+    assert.deepStrictEqual(tickedInActive(written), ['01-01-PLAN.md']);
+  });
+
+  test('plan id only in archived milestone: ticked nowhere, archived byte-identical', () => {
+    // Active phase has no `Plans:` anchor, so nothing can be inserted there.
+    const active = '## Milestone v1.0\n\n### Phase 1: test phase\n\nNo plan list yet.\n';
+    const input = `# ROADMAP\n\n${ARCHIVED}${active}`;
+    const written = setupPhase(1, input, P1, S1);
+    assertArchivedUntouched(input, written);
+    assert.deepStrictEqual(tickedPlanRows(written), []);
+  });
+
+  function setupPhase(n, roadmap, plans = ['01-PLAN.md'], summaries = ['01-SUMMARY.md'], verified = false) {
+    fs.writeFileSync(roadmapPath, roadmap);
+    const dir = createPhaseWithPlans(tmpDir, String(n), plans);
+    for (const f of summaries) fs.writeFileSync(path.join(dir, f), '# Summary\n');
+    // A passed verification makes the phase complete, which stamps its checklist bullet. Written after the
+    // summaries: a summary newer than the verification marks the phase stale, and macOS/Windows mtimes are finer than Linux's.
+    if (verified) fs.writeFileSync(path.join(dir, `0${n}-VERIFICATION.md`), '---\nstatus: passed\n---\n# Verification\n');
+    const result = runGsdTools(['roadmap', 'update-plan-progress', String(n)], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    return fs.readFileSync(roadmapPath, 'utf-8');
+  }
+  const setupPhase2 = (roadmap) => setupPhase(2, roadmap);
+  // A Progress table is the write gate's phase representation for layouts without a phase heading.
+  const TABLE = '\n## Progress\n\n| Phase | Plans Complete | Status | Completed |\n|-------|---------------|--------|-----------|\n| 1. One | 0/1 | Planned |  |\n| 2. Two | 0/2 | Planned |  |\n';
+  const TWO = ['01-PLAN.md', '02-PLAN.md'];
+
+  test('un-prefixed plan names: updating phase 2 ticks only phase 2 row (existing-row loop)', () => {
+    const p1 = '### Phase 1: first\n\nPlans:\n- [ ] 01-PLAN.md\n\n';
+    const p2 = '### Phase 2: test phase\n\nPlans:\n- [ ] 01-PLAN.md\n';
+    const written = setupPhase2(`# ROADMAP\n\n## Milestone v1.0\n\n${p1}${p2}`);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [false, true]);
+  });
+
+  test('post-insert tick stays inside phase 2 section', () => {
+    // `01.5-PLAN.md` is not 01's presence (dotted sub-id) so 01 is inserted, but the
+    // prefix-matching tick would hit it first in file order without section scoping.
+    const p1 = '### Phase 1: first\n\nPlans:\n- [ ] 01.5-PLAN.md\n\n';
+    const p2 = '### Phase 2: test phase\n\nPlans:\n';
+    const written = setupPhase2(`# ROADMAP\n\n## Milestone v1.0\n\n${p1}${p2}`);
+    assert.deepStrictEqual(sectionizer.iterateBullets(written).map((b) => [b.text, b.checked]), [['01.5-PLAN.md', false], ['01-PLAN.md', true]]);
+  });
+
+  test('phase 2 section located without its row: sibling phase 1 same-id row stays unticked', () => {
+    const p1 = '### Phase 1: first\n\nPlans:\n- [ ] 01-PLAN.md\n\n';
+    const written = setupPhase(2, `# ROADMAP\n\n## Milestone v1.0\n\n${p1}### Phase 2: test phase\n\nNo plan list yet.\n${TABLE}`);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [false]);
+  });
+
+  test('detail section with empty Plans: plus flat checklist rows: no duplicate row, checklist row ticked', () => {
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n- [ ] **Phase 1: One**\n- [ ] 01-01-PLAN.md\n\n### Phase 1: One\n\nPlans:\n${TABLE}`, ['01-01-PLAN.md'], ['01-01-SUMMARY.md']);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [true]);
+  });
+
+  test('checklist bullet without rows: sibling phase nested same-id row stays unticked', () => {
+    const written = setupPhase(2, `# ROADMAP\n\n## Milestone v1.0\n\n- [ ] **Phase 1: One**\n  - [ ] 01-PLAN.md\n- [ ] **Phase 2: Two**\n${TABLE}`);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [false]);
+  });
+
+  test('a <details> block after the active milestone does not disable ticking', () => {
+    const active = '## Milestone v1.0\n\n### Phase 1: test phase\n\nPlans:\n- [ ] 01-01-PLAN.md\n\n';
+    const notes = '<details>\n<summary>Notes</summary>\n\nlater\n\n</details>\n';
+    const table = '## Progress\n\n| Phase | Plans Complete | Status | Completed |\n|-------|---------------|--------|-----------|\n| 1. test phase | 0/1 | Planned |  |\n\n';
+    // The Progress table after the notes block is the write gate's target.
+    const input = `# ROADMAP\n\n${ARCHIVED}${active}${notes}\n${table}`;
+    const written = setupPhase(1, input, P1, S1);
+    assertArchivedUntouched(input, written);
+    assert.deepStrictEqual(tickedInArchived(written), []);
+    assert.deepStrictEqual(tickedInActive(written), ['01-01-PLAN.md']);
+  });
+
+  test('CRLF roadmap: only the active row is ticked', () => {
+    // Line-ending normalization is the write seam's job; compare EOL-folded text.
+    const active = '## Milestone v1.0\n\n### Phase 1: test phase\n\nPlans:\n- [ ] 01-01-PLAN.md\n';
+    const input = `# ROADMAP\n\n${ARCHIVED}${active}`;
+    const written = setupPhase(1, input.replace(/\n/g, '\r\n'), P1, S1).replace(/\r\n/g, '\n');
+    assertArchivedUntouched(input, written);
+    assert.deepStrictEqual(tickedInArchived(written), []);
+    assert.deepStrictEqual(tickedInActive(written), ['01-01-PLAN.md']);
+  });
+
+  test('phase 1 vs 10 vs 1.1 headings: updating phase 1 ticks only phase 1', () => {
+    const sec = (n) => `### Phase ${n}: p${n}\n\nPlans:\n- [ ] 01-PLAN.md\n\n`;
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n${sec('10')}${sec('1.1')}${sec('1')}`);
+    // File order: phase 10, 1.1, 1.
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [false, false, true]);
+  });
+
+  // Owns temp-dir creation and cleanup so test bodies need no try/finally.
+  const withTempProject = (prefix, fn) => {
+    const dir = createTempProject(prefix);
+    try {
+      return fn(dir);
+    } finally {
+      cleanup(dir);
+    }
+  };
+
+  test('property: in any section order, only the updated phase\'s un-prefixed row is ticked', () => {
+    const fc = require('./helpers/fast-check-setup.cjs');
+    const sec = (n) => `### Phase ${n}: p${n}\n\nPlans:\n- [ ] 01-PLAN.md\n\n`;
+    fc.assert(fc.property(
+      fc.shuffledSubarray(['1', '2', '10', '1.1'], { minLength: 4, maxLength: 4 }),
+      fc.constantFrom('1', '2', '10'),
+      (order, target) => withTempProject('gsd-5483-prop-', (dir) => {
+        fs.writeFileSync(path.join(dir, '.planning', 'ROADMAP.md'), `# ROADMAP\n\n## Milestone v1.0\n\n${order.map(sec).join('')}`);
+        const phaseDir = createPhaseWithPlans(dir, target, ['01-PLAN.md']);
+        fs.writeFileSync(path.join(phaseDir, '01-SUMMARY.md'), '# Summary\n');
+        const result = runGsdTools(['roadmap', 'update-plan-progress', target], dir);
+        assert.ok(result.success, `Command failed: ${result.error}`);
+        const written = fs.readFileSync(path.join(dir, '.planning', 'ROADMAP.md'), 'utf-8');
+        // One row per section, in file order: exactly the target's is ticked.
+        assert.deepStrictEqual(planRows(written).map((b) => b.checked), order.map((n) => n === target), `order ${order} target ${target}`);
+      }),
+    ), { numRuns: 12 });
+  });
+
+  test('nested checklist: updating phase 2 leaves phase 1 nested row unticked', () => {
+    const written = setupPhase(2, `# ROADMAP\n\n## Milestone v1.0\n\n- [ ] **Phase 1: One**\n  - [ ] 01-PLAN.md\n  - [ ] 02-PLAN.md\n- [ ] **Phase 2: Two**\n  - [ ] 01-PLAN.md\n  - [ ] 02-PLAN.md\n${TABLE}`, TWO);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [false, false, true, false]);
+  });
+
+  test('milestone bullet mentioning "Phase 2" does not anchor phase 2 scope', () => {
+    const written = setupPhase(2, `# ROADMAP\n\n## Milestone v1.0\n\n- [ ] **v1.0 Milestone** - Phase 1 through Phase 2\n  - [ ] **Phase 1: One**\n    - [ ] 01-PLAN.md\n    - [ ] 02-PLAN.md\n  - [ ] **Phase 2: Two**\n    - [ ] 01-PLAN.md\n    - [ ] 02-PLAN.md\n${TABLE}`, TWO);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [false, false, true, false]);
+  });
+
+  test('bullet cross-referencing "Phase 1" listed first does not anchor phase 1 scope', () => {
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n- [ ] **Phase 2: Two** - builds on Phase 1 output\n  - [ ] 01-PLAN.md\n  - [ ] 02-PLAN.md\n- [ ] **Phase 1: One**\n  - [ ] 01-PLAN.md\n  - [ ] 02-PLAN.md\n${TABLE}`, TWO);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [false, false, true, false]);
+  });
+
+  test('rows under a #### sub-heading belong to the phase and tick (no-archive roadmaps behave as before)', () => {
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n### Phase 1: One\n\n#### Plans\n- [ ] 01-01-PLAN.md\n${TABLE}`, ['01-01-PLAN.md'], ['01-01-SUMMARY.md']);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [true]);
+  });
+
+  test('phase marked only by a bold paragraph still ticks via active-milestone fallback', () => {
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n**Phase 1: One**\n\n- [ ] 01-01-PLAN.md\n${TABLE}`, ['01-01-PLAN.md'], ['01-01-SUMMARY.md']);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [true]);
+  });
+
+  test('unscoped fallback ticks only the first matching row, not a later same-named row', () => {
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n**Phase 1: One**\n\n- [ ] 01-PLAN.md\n\n**Phase 2: Two**\n\n- [ ] 01-PLAN.md\n${TABLE}`);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [true, false]);
+  });
+
+  test('a deeper sibling phase heading ends the phase scope: its same-id row stays unticked', () => {
+    const written = setupPhase(1, '# ROADMAP\n\n## Milestone v1.0\n\n### Phase 1: One\n\nPlans:\n- [x] 01-01-PLAN.md\n\n#### Phase 1.1: Sub\n\nPlans:\n- [ ] 01-01-PLAN.md\n', P1, S1);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [true, false]);
+  });
+
+  test('an empty checklist-bullet extent does not count as located: the first matching row still ticks', () => {
+    const written = setupPhase(1, '# ROADMAP\n\n## Milestone v1.0\n\n- [ ] **Phase 1: One**\n- [ ] **Phase 2: Two**\n\n### Notes\n\nPlans:\n- [ ] 01-01-PLAN.md\n', P1, S1, true);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [true]);
+  });
+
+  test('flat checklist with unindented plan rows ticks the rows under the phase bullet', () => {
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n- [ ] **Phase 1: One**\n- [ ] 01-01-PLAN.md\n${TABLE}`, ['01-01-PLAN.md'], ['01-01-SUMMARY.md']);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [true]);
+  });
+
+  test('a non-milestone <details> notes block with no Progress table after it still ticks the active row', () => {
+    const active = '## Milestone v1.0\n\n### Phase 1: test phase\n\nPlans:\n- [ ] 01-01-PLAN.md\n\n';
+    const notes = '<details>\n<summary>Notes</summary>\n\nlater\n\n</details>\n';
+    const written = setupPhase(1, `# ROADMAP\n\n${active}${notes}`, P1, S1);
+    assert.deepStrictEqual(tickedPlanRows(written), ['01-01-PLAN.md']);
+  });
+
+  test('primary window and (Phase Details) window: phase 2 in the details window ticks, phase 1 row stays unticked', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+    const roadmap = '# ROADMAP\n\n## Milestone v1.0\n\n- [ ] **Phase 1: One**\n  - [ ] 01-PLAN.md\n\n'
+      + '## Milestone v1.0 (Phase Details)\n\n### Phase 2: Two\n\nPlans:\n- [ ] 02-01-PLAN.md\n';
+    const written = setupPhase(2, roadmap, ['02-01-PLAN.md'], ['02-01-SUMMARY.md']);
+    assert.deepStrictEqual(tickedPlanRows(written), ['02-01-PLAN.md']);
+  });
+
+  const NOTES = '\n<details>\n<summary>Notes</summary>\n\nlater\n\n</details>\n';
+  const planRows = (text) => sectionizer.iterateBullets(text).filter((b) => /^(?:\*\*)?\d+(?:-\d+)?-PLAN\.md/.test(b.text));
+  const plansFieldValue = (text) => {
+    const planning = require('../gsd-core/bin/lib/planning-document.cjs');
+    const doc = planning.parsePlanningDoc(text, 'ROADMAP.md').value;
+    return planning.readNode(doc, planning.findField(doc, 'Plans')).value;
+  };
+  const phaseBulletChecked = (text, n) =>
+    sectionizer.iterateBullets(text).find((b) => b.text.startsWith(`**Phase ${n}`))?.checked;
+
+  test('Plans count is written when a non-milestone <details> block follows the active phase', () => {
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n### Phase 1: One\n\n**Plans**: 0/1 plans executed\n\nPlans:\n- [ ] 01-01-PLAN.md\n${NOTES}`, P1, S1);
+    assert.strictEqual(plansFieldValue(written).split(/\s/)[0], '1/1');
+  });
+
+  test('phase checklist bullet before a non-milestone <details> block is ticked', () => {
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n- [ ] **Phase 1: One**\n${NOTES}${TABLE}`, P1, S1, true);
+    assert.strictEqual(phaseBulletChecked(written, 1), true);
+  });
+
+  test('unscoped fallback never ticks a row in a shipped (non-details) milestone, before or after the active one', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+    const shipped = (v) => `## ✅ ${v} - shipped\n\n**Phase 1: One**\n\n- [ ] 01-PLAN.md\n\n`;
+    const active = '## 🚧 v1.0 - Active\n\n**Phase 1: One**\n\n- [ ] 01-PLAN.md\n\n';
+    const details = `<details>\n<summary>v0.7 - shipped</summary>\n\n**Phase 1: One**\n\n- [ ] 01-PLAN.md\n\n</details>\n\n`;
+    for (const doc of [`${shipped('v0.8')}${active}${shipped('v0.9')}`, `${details}${active}`]) {
+      const written = setupPhase(1, `# ROADMAP\n\n${doc}${TABLE}`);
+      assert.deepStrictEqual(planRows(written).map((b) => b.checked).filter(Boolean), [true]);
+    }
+  });
+
+  test('unscoped fallback decides once across the primary and (Phase Details) windows', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+    const row = '**Phase 1: One**\n\n- [ ] 01-PLAN.md\n\n';
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n${row}## Milestone v1.0 (Phase Details)\n\n${row}${TABLE}`);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [true, false]);
+  });
+
+  test('a phase present in both the primary and (Phase Details) windows gets its missing row inserted once', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+    const sec = '### Phase 1: One\n\nPlans:\n\n';
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n${sec}## Milestone v1.0 (Phase Details)\n\n${sec}${TABLE}`, P1, S1);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [true]);
+  });
+
+  // Progress-table cells of the row whose Phase cell starts with `n.`.
+  const progressRow = (text, n) => {
+    const row = require('../gsd-core/bin/lib/markdown-table.cjs')
+      .findTableWithColumns(text, ['Phase', 'Plans Complete']).rows
+      .find((r) => r['Phase'].startsWith(`${n}.`));
+    return [row['Phase'], row['Plans Complete']];
+  };
+
+  test('Progress table before a non-milestone <details> notes block is still written', () => {
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n### Phase 1: One\n\nPlans:\n- [ ] 01-01-PLAN.md\n${TABLE}${NOTES}`, P1, S1);
+    assert.deepStrictEqual(progressRow(written, 1).slice(0, 2), ['1. One', '1/1']);
+  });
+
+  test('Progress table in a resolved milestone window before a notes block is still written', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n### Phase 1: One\n\nPlans:\n- [ ] 01-01-PLAN.md\n${TABLE}${NOTES}`, P1, S1);
+    assert.deepStrictEqual(progressRow(written, 1).slice(0, 2), ['1. One', '1/1']);
+  });
+
+  test('Progress table after a planned milestone heading is still written (template layout)', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n### Phase 1: One\n\nPlans:\n- [ ] 01-01-PLAN.md\n\n## Milestone v2.0 (planned)\n\nLater.\n${TABLE}`, P1, S1);
+    assert.deepStrictEqual(progressRow(written, 1).slice(0, 2), ['1. One', '1/1']);
+  });
+
+  test('Progress table before the active milestone heading is still written', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+    const written = setupPhase(1, `# ROADMAP\n${TABLE}\n## Milestone v1.0\n\n### Phase 1: One\n\nPlans:\n- [ ] 01-01-PLAN.md\n`, P1, S1);
+    assert.deepStrictEqual(progressRow(written, 1).slice(0, 2), ['1. One', '1/1']);
+  });
+
+  test('sibling phase carrying the same un-prefixed row does not make the phase look present', () => {
+    const p1 = '### Phase 1: first\n\nPlans:\n- [ ] 01-PLAN.md\n\n';
+    const written = setupPhase(2, `# ROADMAP\n\n## Milestone v1.0\n\n${p1}### Phase 2: test phase\n\nPlans:\n${TABLE}`);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [false, true]);
+  });
+
+  test('a row in both the detail section and the phase checklist bullet is ticked in both', () => {
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n- [ ] **Phase 1: One**\n  - [ ] 01-01-PLAN.md\n\n### Phase 1: One\n\nPlans:\n- [ ] 01-01-PLAN.md\n${TABLE}`, P1, S1);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [true, true]);
+  });
+
+  test('a <details> block inside the active milestone window is not edited', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+    const input = `# ROADMAP\n\n## Milestone v1.0\n\n${ARCHIVED}### Phase 1: One\n\nPlans:\n- [ ] 01-01-PLAN.md\n${TABLE}`;
+    const written = setupPhase(1, input, P1, S1);
+    assertArchivedUntouched(input, written);
+    assert.deepStrictEqual(tickedInActive(written), ['01-01-PLAN.md']);
+  });
+
+  test('no archived milestone: a phase section or plan row inside a collapsed <details> is masked with the other blocks (#5553 owns which regions are editable)', () => {
+    const wrapped = setupPhase(1, `# ROADMAP\n\n<details>\n<summary>Phase 1 details</summary>\n\n### Phase 1: One\n\nPlans:\n- [ ] 01-01-PLAN.md\n\n</details>\n${TABLE}`, P1, S1);
+    assert.deepStrictEqual(planRows(wrapped).map((b) => b.checked), [false]);
+    const nested = setupPhase(1, `# ROADMAP\n\n### Phase 1: One\n\n<details>\n<summary>Plans</summary>\n\n- [ ] 01-01-PLAN.md\n\n</details>\n${TABLE}`, P1, S1);
+    assert.deepStrictEqual(planRows(nested).map((b) => b.checked), [false]);
+  });
+
+  test('unresolved milestone: a notes <details> nested in a shipped block keeps the whole shipped block untouched', () => {
+    const shipped = '<details>\n<summary>v0.9 - shipped</summary>\n\n<details>\n<summary>Notes</summary>\n\nlater\n\n</details>\n\n### Phase 2: Old\n\nPlans: 1/1\n- [ ] 02-01-PLAN.md\n\n</details>\n';
+    const active = '### Phase 2: Two\n\nPlans: 0/2\n- [ ] 02-01-PLAN.md\n- [ ] 02-02-PLAN.md\n';
+    const input = `# ROADMAP\n\n${shipped}\n${active}${TABLE}`;
+    const written = setupPhase(2, input, ['02-01-PLAN.md', '02-02-PLAN.md'], ['02-01-SUMMARY.md', '02-02-SUMMARY.md']);
+    // The tagged-block helpers do not nest, so compare the whole shipped prefix.
+    const head = `# ROADMAP\n\n${shipped}`;
+    assert.strictEqual(written.slice(0, head.length), head);
+    assert.deepStrictEqual(planRows(written.slice(head.length)).map((b) => b.checked), [true, true]);
+  });
+
+  test('a "-[ ]" row (no space after the dash) is not a bullet and stays unticked, as in phase complete', () => {
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n### Phase 1: One\n\nPlans:\n-[ ] 01-01-PLAN.md\n${TABLE}`, P1, S1);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), []);
+  });
+});
+
+
 // ────────────────────────────────────────────────────────────────────────
 // Folded from tests/bug-2661-roadmap-sync-parallel.test.cjs — consolidation epic #1969 (B2 #1971)
 // ────────────────────────────────────────────────────────────────────────

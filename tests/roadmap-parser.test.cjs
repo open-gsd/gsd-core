@@ -36,6 +36,9 @@ const {
   getMilestonePhaseFilter,
   isMilestoneShippedInRoadmap,
   withPhaseSection,
+  editCurrentMilestone,
+  phaseChecklistBullet,
+  checklistBulletExtent,
 } = roadmapParser;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -4358,5 +4361,140 @@ describe('roadmap-parser: sectioned ROADMAP with explicit `milestone: null` (#50
     const unbound = extractCurrentMilestone(sectioned, tmpDir);
     assert.ok(!bound.includes('Phase 1: First'), 'control narrows to v1.1');
     assert.ok(unbound.includes('Phase 1: First'), 'explicit null leaves the whole document, not the v1.1 slice');
+  });
+});
+
+describe('#5483 checklistBulletExtent', () => {
+  const rows = (text) => {
+    const { start, end } = checklistBulletExtent(text, phaseChecklistBullet('1', true).exec(text));
+    return text.slice(start, end);
+  };
+
+  test('EOF without a trailing newline: the last row is included', () => {
+    assert.strictEqual(rows('- [ ] **Phase 1: A**\n  - [ ] a\n  - [ ] b'), '  - [ ] a\n  - [ ] b');
+  });
+
+  test('bullet is the last line with no newline: empty extent', () => {
+    assert.strictEqual(rows('- [ ] **Phase 1: A**'), '');
+  });
+
+  test('depth boundary: deeper and equal-depth lines are in, shallower stops', () => {
+    assert.strictEqual(rows('  - [ ] **Phase 1: A**\n    deeper\n  equal\n shallower\n  after\n'), '    deeper\n  equal\n');
+  });
+
+  test('a blank line ends the extent', () => {
+    assert.strictEqual(rows('- [ ] **Phase 1: A**\n- [ ] a\n\n- [ ] b\n'), '- [ ] a\n');
+  });
+
+  test('the next phase bullet ends the extent', () => {
+    assert.strictEqual(rows('- [ ] **Phase 1: A**\n  - [ ] a\n- [ ] **Phase 2: B**\n  - [ ] b\n'), '  - [ ] a\n');
+  });
+});
+
+describe('#5483 withPhaseSection levelBounded', () => {
+  test('keeps a non-phase #### sub-heading but stops at a deeper phase heading', () => {
+    const doc = '### Phase 1: A\n#### Plans\nrow\n#### Phase 1.1: B\nother\n';
+    const seen = [];
+    withPhaseSection(doc, '1', (body) => { seen.push(body); return body; }, true);
+    assert.deepStrictEqual(seen, ['#### Plans\nrow\n']);
+  });
+});
+
+describe('#5483 maskShippedBlocks edge cases', () => {
+  const { editOutsideShippedBlocks } = roadmapParser;
+  const blank = (doc) => editOutsideShippedBlocks(doc, (t) => t.replace(/X/g, 'Y'));
+  const closed = (summary) => `<details>\n<summary>${summary}</summary>\nX\n</details>\n`;
+
+  test('a lone unmatched <details> opener does not stop a later closed block being masked', () => {
+    assert.strictEqual(blank(`collapse milestones in <details>\nX\n${closed('v1.0 SHIPPED')}`),
+      `collapse milestones in <details>\nY\n${closed('v1.0 SHIPPED')}`);
+  });
+
+  test('closed milestone summaries without a marker word or with inline HTML are masked', () => {
+    for (const s of ['v1.0 MVP (Phases 1-4) — Complete', '<b>v1.0</b> ✅']) {
+      assert.strictEqual(blank(closed(s)), closed(s), s);
+    }
+  });
+
+  test('an active milestone or notes block stays editable', () => {
+    for (const s of ['v2.0 — in progress', 'Notes']) {
+      assert.strictEqual(blank(closed(s)), closed(s).replace('X', 'Y'), s);
+    }
+  });
+});
+
+describe('#5483 editCurrentMilestone', () => {
+  const DETAILS = '<details>\n<summary>v0.8 shipped</summary>\nX\n</details>\n';
+  let dir;
+  beforeEach(() => { dir = createTempProject(); });
+  afterEach(() => { cleanup(dir); });
+
+  test('no milestone resolves: one call over the whole document, <details> blocks restored byte-for-byte', () => {
+    const doc = `A X\n${DETAILS}B X\n`;
+    const calls = [];
+    const out = editCurrentMilestone(doc, dir, (t) => { calls.push(t); return t.replace(/X/g, 'Y'); });
+    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(out, `A Y\n${DETAILS}B Y\n`);
+  });
+
+  test('no milestone resolves: a notes <details> block and a nested notes block inside a shipped one', () => {
+    const NOTES = '<details>\n<summary>Notes</summary>\nX\n</details>\n';
+    // Outer shipped block holding an inner notes block: the whole outer block stays hidden.
+    const NESTED = '<details>\n<summary>v0.8 shipped</summary>\n<details>\n<summary>Notes</summary>\nX\n</details>\nX\n</details>\n';
+    const out = editCurrentMilestone(`A X\n${NOTES}${NESTED}B X\n`, dir, (t) => t.replace(/X/g, 'Y'));
+    assert.strictEqual(out, `A Y\n${NOTES.replace('X', 'Y')}${NESTED}B Y\n`);
+  });
+
+  test('resolved milestone: windows edited in document order, length-changing edits splice correctly, outside untouched', () => {
+    fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+    const doc = '# R\n\n## Milestone v1.0\n\nX\n\n## Milestone v0.9\n\nX\n\n## Milestone v1.0 (Phase Details)\n\nX\n';
+    let n = 0;
+    const out = editCurrentMilestone(doc, dir, (t) => t.replace('X', `W${++n}${'!'.repeat(n * 5)}`));
+    assert.strictEqual(n, 2);
+    assert.strictEqual(out, '# R\n\n## Milestone v1.0\n\nW1!!!!!\n\n## Milestone v0.9\n\nX\n\n## Milestone v1.0 (Phase Details)\n\nW2!!!!!!!!!!\n');
+  });
+
+  test('resolved milestone: a <details> block inside the window is hidden from edit and restored', () => {
+    fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+    const doc = `## Milestone v1.0\n\nX\n${DETAILS}`;
+    const out = editCurrentMilestone(doc, dir, (t) => t.replace(/X/g, 'Y'));
+    assert.strictEqual(out, `## Milestone v1.0\n\nY\n${DETAILS}`);
+  });
+});
+
+describe('#5483 scoping properties', () => {
+  const fc = require('./helpers/fast-check-setup.cjs');
+  const { extractTaggedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+  const DETAILS = '<details>\n<summary>v0.8 shipped</summary>\nX\n</details>\n';
+  const CHUNKS = ['# R\n\n', '## Milestone v1.0\n\nX\n\n', '## Milestone v0.9\n\nX\n\n', '## Milestone v1.0 (Phase Details)\n\nX\n\n', DETAILS, 'X\n'];
+  const docs = fc.array(fc.constantFrom(...CHUNKS), { maxLength: 8 }).map((c) => c.join(''));
+  let dir;
+  beforeEach(() => {
+    dir = createTempProject();
+    fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+  });
+  afterEach(() => { cleanup(dir); });
+
+  test('editCurrentMilestone: an identity edit returns the input; <details> blocks survive any edit byte-for-byte', () => {
+    fc.assert(fc.property(docs, (doc) => {
+      assert.strictEqual(editCurrentMilestone(doc, dir, (t) => t), doc);
+      const out = editCurrentMilestone(doc, dir, (t) => t.replace(/X/g, 'YYY'));
+      assert.deepStrictEqual(extractTaggedBlocks(out, 'details'), extractTaggedBlocks(doc, 'details'));
+    }), { numRuns: 100 });
+  });
+
+  test('checklistBulletExtent: the extent starts after the bullet line and holds only nested, non-blank, non-phase lines', () => {
+    const LINES = ['  - [ ] a', '    deeper', '', '- [ ] **Phase 2: B**', 'shallow', '  - [x] b'];
+    fc.assert(fc.property(fc.array(fc.constantFrom(...LINES), { maxLength: 6 }), fc.boolean(), (tail, trailingNewline) => {
+      const head = '- [ ] **Phase 1: A**';
+      const text = [head, ...tail].join('\n') + (trailingNewline ? '\n' : '');
+      const { start, end } = checklistBulletExtent(text, phaseChecklistBullet('1', true).exec(text));
+      assert.ok(start <= end && end <= text.length);
+      if (text.includes('\n')) assert.strictEqual(start, head.length + 1);
+      const extent = text.slice(start, end);
+      for (const line of extent.split('\n').filter((l, i, a) => i < a.length - 1 || l !== '')) {
+        assert.ok(line.trim() !== '' && !/Phase/.test(line), `unexpected extent line ${JSON.stringify(line)}`);
+      }
+    }), { numRuns: 100 });
   });
 });
