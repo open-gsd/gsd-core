@@ -4458,12 +4458,13 @@ function injectDisallowedToolsFrontmatter(content: string, disallowedValue: stri
 
 // #767 — Read-only verifier/auditor agents get a Claude-Code disallowedTools deny-list.
 // Group A (pure read-only) deny Write,Edit,MultiEdit. Group B report-writers Write one
-// output file so they deny only Edit,MultiEdit. gsd-nyquist-auditor is intentionally
+// output file so they deny only Edit,MultiEdit (gsd-plan-checker joins them: its one
+// write is the plan-phase stall-watch return receipt, #5182). gsd-nyquist-auditor is intentionally
 // excluded (it legitimately uses Write AND Edit to create/patch test files). Relocated
 // verbatim from bin/install.js (#2875 Part 2) — single source of truth for both the
 // inline loop (which now requires this export) and the descriptor pipeline.
 const READONLY_AGENT_DISALLOWED_TOOLS: Record<string, string> = {
-  'gsd-plan-checker': 'Write, Edit, MultiEdit',
+  'gsd-plan-checker': 'Edit, MultiEdit',
   'gsd-integration-checker': 'Write, Edit, MultiEdit',
   'gsd-ui-checker': 'Write, Edit, MultiEdit',
   'gsd-verifier': 'Edit, MultiEdit',
@@ -4471,6 +4472,68 @@ const READONLY_AGENT_DISALLOWED_TOOLS: Record<string, string> = {
   'gsd-eval-auditor': 'Edit, MultiEdit',
   'gsd-ui-auditor': 'Edit, MultiEdit',
 };
+
+// #5182 — agents that declare Write for ONE file only: gsd-plan-checker writes its
+// plan-phase stall-watch return receipt and nothing else. A host whose agent tool map
+// sends Write and Edit to the same permission cannot grant that one write without
+// granting full edit, so there the agent keeps its read-only posture: Write is removed
+// from its `tools:` before conversion and no receipt is written on that host (the watch
+// ends on the completion result or as stalled; stall-detection-helpers.md). Keyed by
+// runtime to the map that runtime's agent converter uses (descriptor converters
+// convertClaudeToOpencodeFrontmatter, convertClaudeToKiloFrontmatter,
+// convertClaudeAgentToCopilotAgent), and decided by comparing the two entries, so a map
+// that later separates Write from Edit gives the receipt back with no change here.
+const RECEIPT_ONLY_WRITE_AGENTS: ReadonlySet<string> = new Set(['gsd-plan-checker']);
+const AGENT_TOOL_PERMISSION_MAPS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  opencode: claudeToOpencodePermission,
+  kilo: claudeToKiloAgentPermissions,
+  copilot: claudeToCopilotTools,
+};
+
+/** True when `runtime`'s agent tool map grants Write and Edit as one permission. */
+function hostMergesWriteIntoEdit(runtime: string): boolean {
+  if (!Object.prototype.hasOwnProperty.call(AGENT_TOOL_PERMISSION_MAPS, runtime)) return false;
+  const map = AGENT_TOOL_PERMISSION_MAPS[runtime];
+  return typeof map.Write === 'string' && map.Write === map.Edit;
+}
+
+/**
+ * Remove one tool from an agent's `tools:` frontmatter (inline comma list or block list).
+ * Any other shape (a quoted scalar or a flow sequence) is returned unchanged; the shipped
+ * receipt-only agents use the inline form, and an install test pins the emitted result.
+ */
+function removeAgentTool(content: string, tool: string): string {
+  const fence = locateFrontmatterFence(content);
+  if (!fence?.closed) return content;
+  const eol = fence.eol;
+  const lines = content.slice(0, fence.closingStart).split(eol);
+  const at = lines.findIndex((line) => /^tools:/.test(line));
+  if (at === -1) return content;
+  const value = lines[at].replace(/^tools:[ \t]*/, '');
+  const commentAt = value.search(/(^|[ \t])#/);
+  const list = (commentAt === -1 ? value : value.slice(0, commentAt)).trim();
+  if (list) {
+    if (/^["'[]/.test(list)) return content;
+    const kept = list.split(',').map((t) => t.trim()).filter((t) => t && t !== tool);
+    lines[at] = `tools: ${kept.join(', ')}${commentAt === -1 ? '' : ` ${value.slice(commentAt).trim()}`}`;
+  } else {
+    for (let i = at + 1; i < lines.length && /^[ \t]*-[ \t]/.test(lines[i]);) {
+      if (decodeToolScalar(lines[i].replace(/^[ \t]*-[ \t]+/, '')) === tool) lines.splice(i, 1);
+      else i += 1;
+    }
+  }
+  return lines.join(eol) + content.slice(fence.closingStart);
+}
+
+/**
+ * Pre-converter step (ADR-1235 §1 descriptor boundary, before the user's agent_tools
+ * grants are appended, so a grant the user configures is never removed): drop a
+ * receipt-only agent's Write on a host that would widen it to full edit (#5182).
+ */
+function scopeReceiptOnlyWrite(content: string, { runtime, agentName }: { runtime: string; agentName: string }): string {
+  if (!RECEIPT_ONLY_WRITE_AGENTS.has(agentName) || !hostMergesWriteIntoEdit(runtime)) return content;
+  return removeAgentTool(content, 'Write');
+}
 
 /**
  * Post-converter frontmatter-extensions step (#2875 Part 2 / ADR-1235 §1
@@ -4673,6 +4736,9 @@ export = {
   injectEffortFrontmatter,
   injectDisallowedToolsFrontmatter,
   READONLY_AGENT_DISALLOWED_TOOLS,
+  RECEIPT_ONLY_WRITE_AGENTS,
+  hostMergesWriteIntoEdit,
+  scopeReceiptOnlyWrite,
   applyAgentFrontmatterExtensions,
   _computePathPrefix: computePathPrefix,
   _withShellDefaultsPreserved: withShellDefaultsPreserved,

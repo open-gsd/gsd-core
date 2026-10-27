@@ -105,7 +105,7 @@ When `CONTEXT_WINDOW >= 500000`, the planner prompt includes the 3 most recent p
 
 **#2401 — `prior_verify_commands` is NOT part of that enrichment and is never gated on `CONTEXT_WINDOW`.** It is a handful of one-line `<automated>` commands harvested from the nearest prior phase that had any; the payload is tiny and its absence at 200k is exactly what made the planner re-invent a verify command and author an unrunnable path. Surface it at every context window.
 
-Parse JSON for: `researcher_model`, `planner_model`, `checker_model`, `research_enabled`, `plan_checker_enabled`, `nyquist_validation_enabled`, `commit_docs`, `text_mode`, `phase_found`, `phase_dir`, `phase_number`, `phase_name`, `phase_slug`, `padded_phase`, `has_research`, `has_context`, `has_reviews`, `has_plans`, `plan_count`, `phase_status` (#3569), `planning_exists`, `roadmap_exists`, `phase_req_ids`, `response_language`, `granularity`, `prior_verify_commands` (#2401 — array of `{phase, plan, task, command}`, possibly empty; emitted at every context window), `threat_id_duplicates` + `threat_id_duplicate_count` (#4683 — cross-plan threat-ID collisions; consumed at step 5.55).
+Parse JSON for: `researcher_model`, `planner_model`, `checker_model`, `research_enabled`, `plan_checker_enabled`, `nyquist_validation_enabled`, `commit_docs`, `text_mode`, `phase_found`, `phase_dir`, `project_root` (`PROJECT_ROOT`), `phase_number`, `phase_name`, `phase_slug`, `padded_phase`, `has_research`, `has_context`, `has_reviews`, `has_plans`, `plan_count`, `phase_status` (#3569), `planning_exists`, `roadmap_exists`, `phase_req_ids`, `response_language`, `granularity`, `prior_verify_commands` (#2401 — array of `{phase, plan, task, command}`, possibly empty; emitted at every context window), `threat_id_duplicates` + `threat_id_duplicate_count` (#4683 — cross-plan threat-ID collisions; consumed at step 5.55).
 
 **#2517:** omit the `model=` param from an `Agent()` call when its `researcher`/`planner`/`checker`_model is `"inherit"` or empty — passing `model=""` 404s on non-Claude runtimes; omitting inherits the orchestrator model (mirrors execute-phase).
 
@@ -745,7 +745,7 @@ prohibition recall in the planner). Pass `$COVERAGE` and `$SPECLESS_FALLBACK_DIS
 ## 7.99. Bounded Stall-Detection Helpers (#2650)
 
 Read+execute `gsd-core/workflows/plan-phase/steps/stall-detection-helpers.md` (defines
-`gsd_stall_should_recover`/`gsd_stall_watch`, and how `{outputFile}` below is bound;
+watch helpers; pre-dispatch, `{receipt}` = `gsd_receipt_path "${PHASE_DIR}" <spawn> "${PROJECT_ROOT}"`;
 independent of the teams-status guard above, AC2).
 
 ## 8. Spawn gsd-planner Agent
@@ -956,6 +956,7 @@ Every task MUST include these fields — they are NOT optional:
 - [ ] Every SPEC ## Prohibitions resolved item is represented in a plan's must_haves.prohibitions (no silent drops)
 </quality_gate>
 <!-- gsd:protected:end -->
+<return_receipt>{receipt}</return_receipt>
 ```
 
 **If `CHUNKED_MODE` is `false` (default):** Spawn the planner as a single long-lived Agent:
@@ -973,7 +974,7 @@ Agent(
 )
 ```
 
-**ORCHESTRATOR RULE — ALL RUNTIMES (when `PLANNER_STALL_DETECTION_ENABLED` is `true`):** `TS=$(date +%s)`; repeat `PLANNER_STALL_RESULT=$(gsd_stall_watch "$TS" "{outputFile}" "${PHASE_DIR}"'/*-PLAN.md' "## PLANNING COMPLETE" "## PHASE SPLIT RECOMMENDED" "## ⚠ Source Audit" "## CHECKPOINT REACHED" "## PLANNING INCONCLUSIVE")` while waiting/active — `marker_received` -> step 9; `stalled` -> 9a.
+**ORCHESTRATOR RULE — ALL RUNTIMES (when `PLANNER_STALL_DETECTION_ENABLED` is `true`):** (`planner`) `TS=$(date +%s)`; repeat `PLANNER_STALL_RESULT=$(gsd_stall_watch "$TS" "{receipt}" "${PHASE_DIR}"'/*-PLAN.md' "## PLANNING COMPLETE" "## PHASE SPLIT RECOMMENDED" "## ⚠ Source Audit" "## CHECKPOINT REACHED" "## PLANNING INCONCLUSIVE")` while waiting/active — `marker_received` -> step 9; `stalled` -> 9a; after routing any result (stalled/Retry too): `rm -f "{receipt}"`.
 
 - **`false`:** issue the same Agent() call but omit `run_in_background`; await its ordinary runtime-native completion and pass the real returned result to step 9. Skip `gsd_stall_watch` entirely. This is not fire-and-forget; empty, truncated, or unrecognized returns still use step 9a.
 
@@ -1097,6 +1098,7 @@ If an actionable finding remains only in REVIEWS.md and would be invisible to /g
 - ## VERIFICATION PASSED — all checks pass
 - ## ISSUES FOUND — structured issue list
 </expected_output>
+<return_receipt>{receipt}</return_receipt>
 ```
 
 ```
@@ -1112,14 +1114,14 @@ Agent(
 **Dispatch/wait gate — `PLANNER_STALL_DETECTION_ENABLED` (config key `planner.stall_detection_enabled`, resolved in `plan-phase/steps/stall-detection-helpers.md`):**
 - **`true` (default):** use `run_in_background=true` in the Agent() call above, then use `gsd_stall_watch` below.
 
-**ORCHESTRATOR RULE — ALL RUNTIMES (when `PLANNER_STALL_DETECTION_ENABLED` is `true`):** `TS=$(date +%s)`; repeat `CHECKER_STALL_RESULT=$(gsd_stall_watch "$TS" "{outputFile}" "${PHASE_DIR}"'/*-PLAN.md' "## VERIFICATION PASSED" "## ISSUES FOUND")` while waiting/active.
+**ORCHESTRATOR RULE — ALL RUNTIMES (when `PLANNER_STALL_DETECTION_ENABLED` is `true`):** (`checker`) `TS=$(date +%s)`; repeat `CHECKER_STALL_RESULT=$(gsd_stall_watch "$TS" "{receipt}" "${PHASE_DIR}"'/*-PLAN.md' "## VERIFICATION PASSED" "## ISSUES FOUND")` while waiting/active; after routing any result (stalled/Retry too): `rm -f "{receipt}"`.
 
 - **`false`:** issue the same Agent() call but omit `run_in_background`; await its ordinary runtime-native completion and pass the real returned result to step 11. Skip `gsd_stall_watch` entirely. Treat a recognized returned marker exactly like `marker_received`; empty, truncated, or unrecognized returns still use step 11a.
 
 ## 11. Handle Checker Return
 
-- **`marker_received` + `## VERIFICATION PASSED`:** If the return lists an entry whose severity is BLOCKER or WARNING, in the YAML issues block or listed in prose (a mention such as "no warnings" or a zero count is not an entry), treat it as `## ISSUES FOUND` instead: display issues, check iteration count, proceed to step 12, which counts those prose entries as BLOCKER/WARNING entries (the no-YAML-block shortcut there does not apply). The sentinel never decides alone, and an entry with a missing or unrecognized severity counts as a BLOCKER (#5578). Otherwise display confirmation, proceed to step 13.
-- **`marker_received` + `## ISSUES FOUND`:** Display issues, check iteration count, proceed to step 12.
+- **`marker_received` + `## VERIFICATION PASSED`:** If the return lists an entry whose severity is BLOCKER or WARNING, in the YAML issues block or listed in prose (a mention such as "no warnings" or a zero count is not an entry), treat it as `## ISSUES FOUND` instead: display issues, check iteration count, proceed to step 12, which counts those prose entries as BLOCKER/WARNING entries (the no-YAML-block shortcut there does not apply). The sentinel never decides alone, and an entry with a missing or unrecognized severity counts as a BLOCKER (#5578). Otherwise display confirmation, proceed to step 13 (receipt only, no body by the next cycle: 11a).
+- **`marker_received` + `## ISSUES FOUND`:** Display issues, check iteration count, proceed to step 12 (no issue list: 11a).
 - **`stalled`:** Automatically surface 11a's recovery choice (Accept verification / Retry checker / Stop) — no manual interrupt needed.
 - **Empty / truncated / no recognized marker:** → Filesystem fallback (step 11a).
 
@@ -1194,6 +1196,7 @@ the alternatives rather than applying or working around it. Full contract:
 
 Do NOT replan from scratch unless fundamental. Return what changed.
 </instructions>
+<return_receipt>{receipt}</return_receipt>
 ```
 
 ```
@@ -1209,7 +1212,7 @@ Agent(
 **Dispatch/wait gate — `PLANNER_STALL_DETECTION_ENABLED` (config key `planner.stall_detection_enabled`, resolved in `plan-phase/steps/stall-detection-helpers.md`):**
 - **`true` (default):** use `run_in_background=true` in the Agent() call above, then use `gsd_stall_watch` below.
 
-**ORCHESTRATOR RULE — ALL RUNTIMES (when `PLANNER_STALL_DETECTION_ENABLED` is `true`):** (7.99; no marker, mtimes only) `TS=$(date +%s)`; repeat `PLANNER_STALL_RESULT=$(gsd_stall_watch "$TS" "{outputFile}" "${PHASE_DIR}"'/*-PLAN.md')` while waiting/active — `stalled` -> 1) Accept as revised, to step 13, 2) Retry, 3) Stop.
+**ORCHESTRATOR RULE — ALL RUNTIMES (when `PLANNER_STALL_DETECTION_ENABLED` is `true`):** (`revision`) `TS=$(date +%s)`; repeat `PLANNER_STALL_RESULT=$(gsd_stall_watch "$TS" "{receipt}" "${PHASE_DIR}"'/*-PLAN.md' "## REVISION COMPLETE" "## REVISION_CONFLICT")` while waiting/active — `marker_received` -> below; `stalled` -> 1) Accept as revised, to step 13, 2) Retry, 3) Stop; after routing any result (stalled/Retry too): `rm -f "{receipt}"`.
 
 - **`false`:** issue the same Agent() call but omit `run_in_background`; await its ordinary runtime-native completion and pass the real returned result into the existing revision-return handling. Skip `gsd_stall_watch` entirely; an empty, truncated, or unrecognized result keeps the existing filesystem fallback.
 

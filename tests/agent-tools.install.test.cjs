@@ -333,12 +333,117 @@ test('every installable runtime accepts a configured MCP grant without crashing 
 
 test('Codex grants do not widen the generated TOML sandbox (#4032)', (t) => {
   const install = installRuntime(t, 'codex', {
-    defaults: { agent_tools: { 'gsd-plan-checker': ['Write'] } },
+    defaults: { agent_tools: { 'gsd-integration-checker': ['Write'] } },
   });
-  const toml = fs.readFileSync(path.join(install.configDir, 'agents', 'gsd-plan-checker.toml'), 'utf8');
+  const toml = fs.readFileSync(path.join(install.configDir, 'agents', 'gsd-integration-checker.toml'), 'utf8');
   assert.match(toml, /^sandbox_mode = "read-only"$/m);
   assert.doesNotMatch(toml, /Write/,
     'Codex tool availability is inherited from the parent session, not encoded in agent TOML');
+});
+
+// #5182: gsd-plan-checker declares Write for its stall-watch return receipt only. OpenCode,
+// Kilo and Copilot map Write and Edit to one `edit` permission, so there the installer drops
+// that Write and the checker keeps its read-only posture; every other host keeps Write.
+function checkerEditPosture(runtime, artifact) {
+  if (runtime === 'copilot') {
+    const tools = /^tools: \[(.*)\]$/m.exec(artifact);
+    assert.ok(tools, 'the Copilot checker carries a tools array');
+    return tools[1].split(',').map((s) => s.trim().replace(/^'|'$/g, '')).includes('edit') ? 'allow' : 'deny';
+  }
+  const edit = /^ {2}edit: (allow|deny)$/m.exec(artifact);
+  // OpenCode emits denials only, so an absent `edit:` entry leaves edit allowed.
+  return edit ? edit[1] : 'allow';
+}
+
+test('the plan-checker receipt Write is dropped where the host merges Write into edit (#5182)', (t) => {
+  let ran = 0;
+  for (const runtime of ['opencode', 'kilo', 'copilot']) {
+    for (const scope of ['local', 'global']) {
+      const install = installRuntime(t, runtime, { scope });
+      // The host's own agents/ directory: a global install also ships the raw source
+      // agents under <config>/gsd-core/agents/, which no host loads as an agent definition.
+      const hostAgents = path.join(install.configDir, 'agents');
+      assert.ok(emittedAgentArtifacts(install, 'gsd-plan-checker', hostAgents).every((artifact) => checkerEditPosture(runtime, artifact) === 'deny'),
+        `${runtime} (${scope}): the checker must not hold edit`);
+      // Control: the same install still grants edit to an agent that declares Write.
+      assert.ok(emittedAgentArtifacts(install, 'gsd-verifier', hostAgents).some((artifact) => checkerEditPosture(runtime, artifact) === 'allow'),
+        `${runtime} (${scope}): control, gsd-verifier declares Write and keeps edit`);
+      ran += 1;
+    }
+  }
+  assert.equal(ran, 6);
+  // Hosts with a separate write tool keep the receipt Write.
+  const claude = installClaude(t).agent('gsd-plan-checker');
+  assert.ok(parseTools(claude).includes('Write'), 'claude: the checker keeps Write');
+  assert.match(claude, /^disallowedTools: Edit, MultiEdit$/m, 'claude: Edit and MultiEdit stay denied');
+});
+
+test('a Write the user grants the plan-checker in agent_tools is kept on a merging host (#5182)', (t) => {
+  const install = installRuntime(t, 'kilo', { defaults: { agent_tools: { 'gsd-plan-checker': ['Write'] } } });
+  const artifacts = emittedAgentArtifacts(install, 'gsd-plan-checker');
+  assert.ok(artifacts.some((artifact) => checkerEditPosture('kilo', artifact) === 'allow'),
+    'a configured grant is appended after the receipt-only scoping, so it survives');
+});
+
+// The runtime -> map table must agree with what each host's real agent converter emits,
+// so a host added later whose converter merges Write into edit cannot slip past the
+// table: a converter merges them iff `Read, Write` and `Read, Edit` convert identically
+// while differing from `Read` alone (a converter that emits no tool restriction at all
+// leaves every tool granted either way and has nothing to scope).
+test('exactly the hosts whose agent converter merges Write into edit drop the receipt Write (#5182)', () => {
+  const conversion = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
+  const capabilitiesDir = path.join(REPO_ROOT, 'capabilities');
+  const agent = (tools) => `---\nname: gsd-probe\ndescription: d\ntools: ${tools}\n---\n\nBody.\n`;
+  const table = [];
+  const observed = [];
+  let converters = 0;
+  for (const name of fs.readdirSync(capabilitiesDir).sort()) {
+    const file = path.join(capabilitiesDir, name, 'capability.json');
+    if (!fs.existsSync(file)) continue;
+    if (conversion.hostMergesWriteIntoEdit(name)) table.push(name);
+    const names = new Set();
+    (function walk(node) {
+      if (!node || typeof node !== 'object') return;
+      if (node.kind === 'agents' && typeof node.converter === 'string') names.add(node.converter);
+      for (const key of Object.keys(node)) walk(node[key]);
+    })(JSON.parse(fs.readFileSync(file, 'utf8')));
+    for (const converterName of names) {
+      const convert = conversion[converterName];
+      assert.equal(typeof convert, 'function', `${name}: descriptor converter ${converterName} is exported`);
+      const run = (tools) => (/Frontmatter$/.test(converterName) ? convert(agent(tools), { isAgent: true }) : convert(agent(tools), false));
+      const write = run('Read, Write');
+      converters += 1;
+      if (write === run('Read, Edit') && write !== run('Read')) observed.push(name);
+    }
+  }
+  assert.ok(converters > 10, `the descriptor agent converters were exercised (${converters})`);
+  assert.deepStrictEqual(table, observed, 'the scoping table names exactly the hosts whose converter merges Write into edit');
+  assert.deepStrictEqual(table, ['copilot', 'kilo', 'opencode']);
+  assert.equal(conversion.hostMergesWriteIntoEdit('__proto__'), false);
+  assert.equal(conversion.hostMergesWriteIntoEdit('constructor'), false);
+  assert.deepStrictEqual([...conversion.RECEIPT_ONLY_WRITE_AGENTS], ['gsd-plan-checker']);
+});
+
+test('receipt-only Write removal handles inline, commented and block tools lists, and nothing else (#5182)', () => {
+  const { scopeReceiptOnlyWrite } = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
+  const on = { runtime: 'kilo', agentName: 'gsd-plan-checker' };
+  const cases = [
+    ['---\nname: a\ntools: Read, Write, Bash\n---\nWrite body\n', '---\nname: a\ntools: Read, Bash\n---\nWrite body\n'],
+    ['---\r\ntools: Write, Read # note\r\n---\r\nb', '---\r\ntools: Read # note\r\n---\r\nb'],
+    ['---\ntools:\n  - Read\n  - Write\n  - "Write"\n  - Bash\ncolor: x\n---\n', '---\ntools:\n  - Read\n  - Bash\ncolor: x\n---\n'],
+    ['---\ntools: Read, WriteFile\n---\n', '---\ntools: Read, WriteFile\n---\n'],
+    ['---\ntools: [Read, Write]\n---\n', '---\ntools: [Read, Write]\n---\n'],
+    ['no frontmatter tools: Write\n', 'no frontmatter tools: Write\n'],
+  ];
+  let ran = 0;
+  for (const [input, expected] of cases) {
+    assert.equal(scopeReceiptOnlyWrite(input, on), expected, JSON.stringify(input));
+    ran += 1;
+  }
+  assert.equal(ran, cases.length);
+  const inline = cases[0][0];
+  assert.equal(scopeReceiptOnlyWrite(inline, { runtime: 'claude', agentName: 'gsd-plan-checker' }), inline, 'a host with a separate Write keeps it');
+  assert.equal(scopeReceiptOnlyWrite(inline, { runtime: 'kilo', agentName: 'gsd-verifier' }), inline, 'only receipt-only agents are scoped');
 });
 
 test('hostile values fail closed while inline Claude tools remain valid tokens (#4032)', (t) => {
