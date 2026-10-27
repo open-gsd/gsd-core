@@ -61,9 +61,13 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 # fast writes no planning artifacts (its own guardrails forbid PLAN.md/SUMMARY.md).
 # commit_docs=false: stage cwd minus .planning/; otherwise stage all of cwd.
 COMMIT_DOCS=$(gsd_run query config-get commit_docs --raw 2>/dev/null || echo "true")
-if [ "$COMMIT_DOCS" = "false" ]; then PATHSPEC=(. ':!.planning'); else PATHSPEC=(.); fi
-git add -A -- "${PATHSPEC[@]}"
-git commit -m "fix: {concise description of what changed}" -- "${PATHSPEC[@]}"
+if [ "$COMMIT_DOCS" = "false" ]; then
+  git add -A -- . ':!.planning'
+  git commit -m "fix: {concise description of what changed}" -- . ':!.planning'
+else
+  git add -A -- .
+  git commit -m "fix: {concise description of what changed}" -- .
+fi
 ```
 
 Use conventional commit format: `fix:`, `feat:`, `docs:`, `chore:`, `refactor:` as appropriate.
