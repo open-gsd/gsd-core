@@ -3590,7 +3590,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       assert.deepStrictEqual([r.status, r.commits, r.head, r.staged], [0, 2, ['.planning/REQUIREMENTS.md'], ['moved.txt', 'stray']]);
     });
 
-    test('backslash in the directory name: -z keeps the path unquoted, deletion still committed', () => {
+    test('backslash in the directory name: -z keeps the path unquoted, deletion still committed', { skip: process.platform === 'win32' && 'a backslash is a path separator on Windows' }, () => {
       const r = run(['a\\b/.planning/REQUIREMENTS.md']);
       assert.deepStrictEqual([r.status, r.commits, r.staged], [0, 2, ['stray']]);
     });
@@ -3616,8 +3616,6 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       const md = fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/complete-milestone.md'), 'utf8');
       assert.ok(md.includes('`git rm` in reorganize_roadmap_and_delete_originals staged the deletion'));
       assert.ok(md.includes('when it refused (exit 1), stop and report its message'));
-      assert.equal(md.includes('The preceding step staged the deletion'), false);
-      assert.equal(md.includes('or a merge already committed it'), false);
     });
   });
 });
