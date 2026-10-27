@@ -23090,7 +23090,7 @@ describe('#4998 regression: record-session leaves a wrapped field whole and inse
   // Major 1: the section detector shares the tokenizer the writers and readers
   // use, so a heading they accept is never answered with a second section.
   for (const heading of ['##  Session', '##\tSession', '## Session ##', ' ## Session']) {
-    test(`(Major 1) "${heading.replace('\t', '\\t')}" is the session section: no second one is appended`, () => {
+    test(`(Major 1) "${heading.replaceAll('\t', '\\t')}" is the session section: no second one is appended`, () => {
       fs.writeFileSync(statePath(), ['---', 'status: planning', '---', '', '# S', '', heading, '',
         'Last session: 2026-01-01', 'Resume file: None', ''].join('\n'));
       const { json } = recordSession('--stopped-at', 'z');
