@@ -1994,13 +1994,15 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
   }
   assertDescriptionPreservesMilestoneScope(cwd, description, 'phase add');
 
-  const config = loadConfig(cwd);
   const convention = resolvePhaseIdConvention(cwd);
+  // The naming projection reads config silently, so a corrupt project config is
+  // reported as `config_parse_failed` before the loader's own diagnostics run.
   const naming = phaseDirectoryOptions(cwd, undefined, '');
   if (customId != null && convention !== 'bracket') {
     const usage = phaseLocatorMod.customPhaseNamingUsage(cwd, naming);
     if (usage) error(usage, naming.configError ? ERROR_REASON.CONFIG_PARSE_FAILED : ERROR_REASON.PHASE_NAMING_NOT_CUSTOM);
   }
+  const config = loadConfig(cwd);
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
   if (!fs.existsSync(roadmapPath)) {
     error('ROADMAP.md not found');

@@ -17851,9 +17851,11 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
       fs.mkdirSync(bracketDir, { recursive: true });
       const located = require('../gsd-core/bin/lib/phase-locator.cjs').findPhaseInternal(cwd, 'GSD.02-05', 'bracket');
       assert.equal(located.directory, '.planning/phases/GSD.02-05-setup');
-      assert.equal(located.phase_number, 'GSD.02-05-setup');
-      assert.equal(located.phase_name, null);
-      assert.equal(located.phase_slug, null);
+      // An explicit bracket lookup shapes the result with the bracket grammar
+      // (#4304), even when the project's naming is custom.
+      assert.equal(located.phase_number, '05');
+      assert.equal(located.phase_name, 'setup');
+      assert.equal(located.phase_slug, 'setup');
     } finally { cleanup(cwd); }
   });
 
