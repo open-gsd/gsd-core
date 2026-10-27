@@ -198,7 +198,12 @@ const MAX_NESTING_DEPTH = 3;
 // needed was about 250,000 characters. A command that needs more is denied as
 // `command-too-complex` rather than scanned on. readAsBefore's second look
 // at a command the readings finished has a budget of its own, and is denied
-// the same way when it spends it. Characters here, and in
+// the same way when it spends it. A command holding `<<` (a heredoc, or a
+// here-string or a shift) that is not denied is scanned again under each of
+// #5513's two other heredoc readings (findSecretReadUnderOtherReadings), each
+// pass a full findSecretRead with these budgets of its own, so it can take up
+// to three times all of the above; the figures above are per pass.
+// Characters here, and in
 // MAX_COMMAND_LENGTH, are UTF-16 code units (`String.length`).
 const MAX_SCAN_CHARACTERS = 8 * MAX_COMMAND_LENGTH;
 
