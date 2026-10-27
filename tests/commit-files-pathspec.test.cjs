@@ -3510,6 +3510,12 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     }
   });
 
+  test('changeset names the stop-tracking exception, the by-design whole-index commits and /gsd-fast', () => {
+    const md = fs.readFileSync(path.join(root, '.changeset/merry-deer-caper.md'), 'utf8');
+    for (const frag of ['the stop-tracking commit stays whole-index behind a staged-paths guard', 'stay whole-index by design', '`/gsd-fast`']) assert.ok(md.includes(frag), frag);
+    assert.equal(md.includes('/gsd:fast'), false);
+  });
+
   test('executor step-4 single-repo commit (scratch repo): foreign staged file stays staged', (t) => {
     const fence = bashFenceAfter('agents/gsd-executor.md', '**Otherwise (standard single-repo):**').join('\n')
       .replace('":(literal){step-2 path}" ...', '":(literal)src/a.ts" ":(literal)src/[b].ts"');
