@@ -246,3 +246,64 @@ test('syncViaPr — rethrows when git diff fails for a non-diff reason', () => {
     'should rethrow the real error',
   );
 });
+
+// ---------------------------------------------------------------------------
+// J. syncViaPr — a merge-queue base rejects --admin; enqueue instead (#5746)
+// ---------------------------------------------------------------------------
+
+/**
+ * A `run` seam for the post-push half of the sync: the PR already exists, so only the
+ * `gh pr merge` calls matter. `mergeResults` maps a merge flag (`--admin` / `--auto`) to
+ * what that call does: an Error to throw, or a string to return.
+ */
+function makeMergeRun(mergeResults) {
+  const calls = [];
+  function run(cmd, args) {
+    calls.push({ cmd, args: [...args] });
+    if (cmd === 'git' && args[0] === 'show') return '{"version":"1.4.0"}';
+    if (cmd === 'git' && args[0] === 'diff') throw Object.assign(new Error('diff'), { status: 1 });
+    if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') return 'https://github.com/o/r/pull/777\n';
+    if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'merge') {
+      const flag = args.includes('--admin') ? '--admin' : '--auto';
+      const outcome = mergeResults[flag];
+      if (outcome instanceof Error) throw outcome;
+      return outcome ?? '';
+    }
+    return '';
+  }
+  run.calls = calls;
+  return run;
+}
+
+const MERGE_QUEUE_REJECTION = new Error(
+  'GraphQL: Repository rule violations found\n\nChanges must be made through the merge queue\n\n (mergePullRequest)',
+);
+
+const mergeCalls = (run) => run.calls.filter((c) => c.cmd === 'gh' && c.args[0] === 'pr' && c.args[1] === 'merge');
+
+test('syncViaPr — enqueues with --auto when the base requires the merge queue (#5746)', () => {
+  const run = makeMergeRun({ '--admin': MERGE_QUEUE_REJECTION });
+  const result = syncViaPr('1.5.0', { run });
+  assert.equal(result, 'queued');
+  const merges = mergeCalls(run);
+  assert.equal(merges.length, 2, 'one --admin attempt, then one --auto enqueue');
+  assert.ok(merges[0].args.includes('--admin'));
+  assert.deepEqual(merges[1].args, ['pr', 'merge', '--auto', '777'], 'the queue picks the strategy, so no --merge');
+});
+
+test('syncViaPr — a failed --auto enqueue is not swallowed (#5746)', () => {
+  const run = makeMergeRun({ '--admin': MERGE_QUEUE_REJECTION, '--auto': new Error('auto-merge is not allowed for this repository') });
+  assert.throws(() => syncViaPr('1.5.0', { run }), /auto-merge is not allowed/);
+});
+
+test('syncViaPr — an unrelated merge failure is rethrown and does not fall back to --auto (#5746)', () => {
+  const run = makeMergeRun({ '--admin': new Error('HTTP 500: internal error') });
+  assert.throws(() => syncViaPr('1.5.0', { run }), /HTTP 500/);
+  assert.equal(mergeCalls(run).length, 1, 'no enqueue after a failure that is not the merge-queue rule');
+});
+
+test('syncViaPr — an already-merged PR is still tolerated and does not enqueue (#5746)', () => {
+  const run = makeMergeRun({ '--admin': new Error('Pull request #777 is already merged') });
+  assert.equal(syncViaPr('1.5.0', { run }), 'synced');
+  assert.equal(mergeCalls(run).length, 1);
+});
