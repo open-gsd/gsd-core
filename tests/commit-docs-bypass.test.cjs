@@ -923,7 +923,10 @@ describe('#3587 per-phase commit_docs override', () => {
   // A global core.excludesFile that lists `.planning` would gitignore every
   // fixture's `.planning/` and turn C3's and D3's commits into skips.
   beforeEach(() => { restoreGitConfig = isolateGitConfigEnv(); tmpDir = createTempGitProject(); });
-  afterEach(() => { cleanup(tmpDir); restoreGitConfig(); });
+  // Restore first: restoreGitConfig() puts every GIT_* variable back before it
+  // removes anything, so a cleanup that throws cannot leave later suites on the
+  // isolated git config.
+  afterEach(() => { restoreGitConfig(); cleanup(tmpDir); });
 
   // ── A: registration — the key must actually exist ──────────────────────
   describe('A: registration', () => {
@@ -1332,8 +1335,8 @@ describe('#3587 per-phase commit_docs override', () => {
       tmpDir = createTempGitProject();
     });
     afterEach(() => {
-      cleanup(tmpDir);
       isolation.restore();
+      cleanup(tmpDir);
     });
 
     function configGet(keyPath, defaultValue) {
