@@ -18,7 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { HOOK_ON_CRASH, allow, deny, crash } = require('./lib/hook-exit.js');
-const { reportIfUndetermined, BLOCKING_GUARD_PROBE_TIMEOUT_MS } = require('./lib/git-probe.js');
+const { reportIfUndetermined, gitEnv, BLOCKING_GUARD_PROBE_TIMEOUT_MS } = require('./lib/git-probe.js');
 
 // This guard's outer catch has always exited 0 (fail open): a path guard that
 // cannot resolve the worktree must not block the user's edit — its whole job
@@ -49,10 +49,10 @@ const SPAWNOPT = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeou
 // Parity: tests/git-optional-locks-parity.test.cjs.
 // A raw plugin-marketplace or git-clone install never ran `npm run build:lib`
 // (#3582), so the compiled owner can be absent. This guard only runs
-// `git rev-parse`, which never opens the index, so the unmodified environment
+// `git rev-parse`, which never opens the index, so the scrubbed gitEnv() base
 // loses nothing; requiring the artifact unguarded would throw at load and the
 // containment guard would silently stop running.
-let readOnlyGitEnv = () => process.env;
+let readOnlyGitEnv = (base = process.env) => base;
 try {
   const { ensureRuntimeBuild } = require('../gsd-core/bin/ensure-runtime-build.cjs');
   ensureRuntimeBuild();
@@ -62,7 +62,7 @@ try {
 }
 
 function git(args, cwd) {
-  return spawnSync('git', args, { ...SPAWNOPT, cwd, env: readOnlyGitEnv() });
+  return spawnSync('git', args, { ...SPAWNOPT, cwd, env: readOnlyGitEnv(gitEnv()) });
 }
 
 // Walk up from `start` to find the nearest existing directory.

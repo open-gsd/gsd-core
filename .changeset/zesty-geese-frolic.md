@@ -1,0 +1,5 @@
+---
+type: Fixed
+pr: 5735
+---
+**Completed phases are now recorded complete in ROADMAP.md, and `/gsd:ship` refuses one that is not** — a backlog `</details>` after the active milestone no longer hides it from the roadmap writers and a shipped `<details>` block below it is never written (a second `update-plan-progress` run cannot tick the archived phase), `update-plan-progress` and `phase complete` write Status/Completed to the phase table (the one table `roadmap analyze` reads, picked by one case-insensitive Phase + Plans header) instead of an earlier versions table, the executor flows stop when `update-plan-progress` declines (`missing_phase_details`; the executor now writes ROADMAP before STATE.md, so a decline leaves STATE unmoved), and ship blocks a phase whose checklist entry or progress-table row does not read complete or that has no such record; `phase add`/`add-batch`/`insert` now write that record (a checklist entry, else a progress-table row) so a tool-created phase, including a `phase_naming: custom` id, can ship (#5221).

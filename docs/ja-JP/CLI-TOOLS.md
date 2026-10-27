@@ -111,6 +111,9 @@ node gsd-tools.cjs phase add <description>
 
 # 既存フェーズの後に小数フェーズを挿入
 node gsd-tools.cjs phase insert <after> <description>
+# add, add-batch and insert also write the phase's ROADMAP record (#5221): a checklist entry
+# after the active checklist, else a progress-table row, else no readable record; the output's
+# roadmap_entry says which ("checklist" | "progress_table" | "none")
 
 # フェーズを削除し、後続を振り直し
 node gsd-tools.cjs phase remove <phase> [--force]
@@ -137,6 +140,8 @@ node gsd-tools.cjs roadmap get-phase <phase>
 
 # ディスク状態を含む完全なロードマップ解析
 node gsd-tools.cjs roadmap analyze
+# roadmap_record (#5221): phase number -> true when every ROADMAP record of it (checklist entry, progress-table Status) reads complete;
+# absent when unrecorded, null when the phase table is unreadable. /gsd-ship ships only a true phase.
 
 # ディスクからプログレステーブル行を更新
 node gsd-tools.cjs roadmap update-plan-progress <N>

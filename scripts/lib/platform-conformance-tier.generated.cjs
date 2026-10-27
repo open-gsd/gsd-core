@@ -134,6 +134,7 @@ module.exports = {
   "tests/gen-health-docs.test.cjs",
   "tests/gen-section-manifest.test.cjs",
   "tests/git-base-branch.test.cjs",
+  "tests/git-location-env-scrub.test.cjs",
   "tests/git-optional-locks-parity.test.cjs",
   "tests/golden-install-tree.test.cjs",
   "tests/graphify-graph-path.test.cjs",

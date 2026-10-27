@@ -81,6 +81,12 @@ case "$COMMAND" in
   *) exit 0 ;;
 esac
 
+# #5548: inherited repo-location vars (GIT_DIR, GIT_INDEX_FILE, ...) would override
+# cwd for every git call below. Drop git's own list minus the config-injection vars.
+for v in $(git rev-parse --local-env-vars 2>/dev/null); do
+  case "$v" in GIT_CONFIG|GIT_CONFIG_PARAMETERS|GIT_CONFIG_COUNT) ;; *) unset "$v" ;; esac
+done
+
 # Gate 3 — inside git repo
 git rev-parse --git-dir >/dev/null 2>&1 || exit 0
 

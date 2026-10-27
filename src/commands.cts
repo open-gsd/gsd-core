@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { normalizeEol } from './text-lines.cjs';
-import { execGit, platformWriteSync, platformReadSync, platformEnsureDir, isSpawnTimeout, retryRenameSync } from './shell-command-projection.cjs';
+import { execGit, GIT_LOCATION_ENV_VARS, platformWriteSync, platformReadSync, platformEnsureDir, isSpawnTimeout, retryRenameSync } from './shell-command-projection.cjs';
 import { escapeRegex } from './pattern.cjs';
 import { locateFrontmatterFence, type LocateFrontmatterFenceOptions } from './frontmatter-fence.cjs';
 import { requireSafePath, sanitizeForDisplay, tryWithinRoot, assertWithinRoot, PathAcceptance } from './security.cjs';
@@ -4120,7 +4120,12 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
 function cmdCheckCommit(cwd: string, raw: boolean): void {
   const config = loadConfig(cwd);
 
-  const stagedResult = execGit(['diff', '--cached', '--name-only', '-z'], { cwd });
+  // #5548: execGit scrubs the repo-location vars, but inside the pre-commit hook git sets them
+  // (GIT_DIR/GIT_WORK_TREE of an explicit --git-dir commit, GIT_INDEX_FILE of a `-a` / `<path>`
+  // commit) to name the repo being committed: hand them back or the guard finds no repo and allows.
+  const hookEnv: Record<string, string> = {};
+  for (const k of GIT_LOCATION_ENV_VARS) if (process.env[k] !== undefined) hookEnv[k] = process.env[k]!;
+  const stagedResult = execGit(['diff', '--cached', '--name-only', '-z'], { cwd, env: hookEnv });
   if (stagedResult.exitCode === 0) {
     const files = stagedResult.stdout.split('\0').filter(Boolean);
     const planningFiles = files.filter(f => f.startsWith('.planning/'));
@@ -4129,7 +4134,7 @@ function cmdCheckCommit(cwd: string, raw: boolean): void {
       const policy = resolveCommitDocsPolicy(
         config,
         detectPhaseNumberFromFiles(planningFiles),
-        () => isGitIgnored(cwd, '.planning'),
+        () => isGitIgnored(cwd, '.planning', hookEnv),
       );
       if (!policy.resolved) {
         error(

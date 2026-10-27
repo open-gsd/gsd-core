@@ -28,8 +28,8 @@ type Scope = planningScopeMod.Scope;
 import roadmapParserModule = require('./roadmap-parser.cjs');
 const { stripShippedMilestones, extractCurrentMilestone, extractCurrentMilestoneScoped, checklistBulletExtent, withPhaseSection, listMilestoneHeadings, scanMilestonePhaseIds, collectTablePhaseRows, hasPhaseListingTableHeader } = roadmapParserModule;
 import { tokenizeHeadings } from './markdown-sectionizer.cjs';
-import { escapeCell, findTableWithColumns, updateTableCell } from './markdown-table.cjs';
-import { clampPercent } from './phase-lifecycle.cjs';
+import { escapeCell, findTableWithColumns, parseMarkdownTable, updateTableCell } from './markdown-table.cjs';
+import { clampPercent, normalizeMilestoneToken } from './phase-lifecycle.cjs';
 import { platformWriteSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -54,7 +54,7 @@ const { isPhaseComplete, failOnVerificationStatusError, firstStatusError } = ver
 // seam, mirroring phase.cts's already-migrated `writePlansField` site.
 import { parsePlanningDoc, findField, readNode, setFieldValue, serialize } from './planning-document.cjs';
 // #5060: the Phase Status Module owns the ladder; roadmap.cts is a consumer.
-import { phaseStatus, phaseStatusFromFacts, toDiskStatus, toRoadmapStatusCell, matchRoadmapStatusCell, ROADMAP_STATUS_TOKEN, DISK_STATUS } from './phase-status.cjs';
+import { phaseStatus, phaseStatusFromFacts, toDiskStatus, toRoadmapStatusCell, matchRoadmapStatusCell, parseRoadmapStatusCell, ROADMAP_STATUS_TOKEN, DISK_STATUS, WIRE_STATUS } from './phase-status.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -808,7 +808,9 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
   // phase-id-owner: uses the [.-] (dot-or-dash) separator variant, not the canonical dot-only token; a swap to PHASE_NUMBER_TOKEN_SOURCE would drop hyphenated phase-id matches.
   // #3036: widen to accept non-numeric-leading ids (same widening as the detail-heading pattern above).
   // phase-id-owner: uses the [.-] (dot-or-dash) separator variant, not the canonical dot-only token; a swap to PHASE_NUMBER_TOKEN_SOURCE would drop hyphenated phase-id matches.
-  const checklistPattern = new RegExp(`-\\s*\\[[ x]\\]\\s*\\*\\*${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, convention, true)}([A-Za-z]?\\d+[A-Z]?(?:[.-]\\d+)*)`, 'gi');
+  let customIds = false;
+  try { customIds = loadConfigForScope(cwd)['phase_naming'] === 'custom'; } catch { /* unreadable config: numeric ids only */ }
+  const checklistPattern = new RegExp(checklistEntrySrc(convention, true, customIds), 'gi');
   // #2761 M1: an OCCURRENCE list keyed by `occurrenceKey`, not a token->bracket
   // map. The map was first-wins on the bare token, so of two checklist entries
   // sharing a token across brackets the FIRST one's bracket id classified BOTH:
@@ -976,6 +978,46 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
       summary_count: p.summary_count,
     }));
 
+  // #5221: ship's completeness gate. Phase number (zero-padding folded per segment, as ship.md's `n`)
+  // -> true only when EVERY record of it reads complete: each checklist entry (any bracket — a shared
+  // token fails closed) and the phase-table Status cell. Absent = no record. The table is read from the
+  // exact slice `update-plan-progress` writes (editProgressTableSlice), so reader and writer agree.
+  const roadmapRecord: Record<string, boolean> = {};
+  const fold = (token: string, done: boolean): void => {
+    const k = foldPhaseId(token);
+    roadmapRecord[k] = (roadmapRecord[k] ?? true) && done;
+  };
+  for (const o of checklistOccurrences) if (!isSentinelPhase(o.token, o.bracketId)) fold(o.token, o.checked);
+  // phase_naming: custom ids (`- [ ] **Phase AUTH: …**`, as phase add writes them) are records too.
+  const isCustomId = (t: string): boolean => customIds && !/^[A-Za-z]?\d/.test(t);
+  if (customIds) {
+    for (const m of effectiveContent.matchAll(new RegExp(checklistEntrySrc(convention, false, true), 'gi'))) {
+      if (isCustomId(m[1])) fold(m[1], /\[x\]/i.test(m[0]));
+    }
+  }
+  // A phase table that does not parse (e.g. a ragged row) makes the record unknown: null, so ship stops.
+  let tableUnreadable = false;
+  const archivedForRecord = roadmapParserModule.maskArchivedDetails(rawContent, cwd);
+  editProgressTableSlice(archivedForRecord.visible, (scoped) => {
+    // Same table the writer picks (findPhaseTableHeader); a slice without a Plans column keeps the whole-slice Phase + Status scan.
+    const planned = findPhaseTableHeader(scoped);
+    const header = planned !== -1 ? planned : scoped.search(/^[ \t]*(?=.*\|[ \t]*Phase[ \t]*\|)(?=.*\|[ \t]*Status[ \t]*\|)\|.*$/m);
+    if (header === -1) return scoped;
+    const table = parseMarkdownTable(scoped.slice(header));
+    // A phase table whose Phase/Status headers are not recognised (other case or wording) is unknown: null, so ship stops.
+    if (!table.ok || !table.value.columns.includes('Phase') || !table.value.columns.includes('Status')) { tableUnreadable = true; return scoped; }
+    const wantMilestone = table.value.columns.includes('Milestone')
+      ? normalizeMilestoneToken(roadmapParserModule.getMilestoneInfo(cwd).value?.version)
+      : null;
+    for (const r of table.value.rows) {
+      if (wantMilestone !== null && (wantMilestone === '' || normalizeMilestoneToken(r['Milestone']) !== wantMilestone)) continue;
+      const cell = (r['Phase'] ?? '').trim();
+      const token = cell.match(/^[A-Za-z]?\d\S*?(?=\.?(?:\s|$))/)?.[0] ?? cell.match(new RegExp(`^${CUSTOM_PHASE_ID_SRC}?(?=\\.?(?:\\s|$))`))?.[0];
+      if (token && (/^[A-Za-z]?\d/.test(token) ? !isSentinelPhase(token) : isCustomId(token))) fold(token, parseRoadmapStatusCell(r['Status']) === WIRE_STATUS.COMPLETE);
+    }
+    return scoped;
+  }, archivedForRecord.activeRange);
+
   const result = {
     milestones,
     phases,
@@ -1006,6 +1048,7 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
     // #4757: phases whose ROADMAP checkbox disagrees with `disk_status`
     // (`roadmap_complete` vs `disk_status === "complete"`); always an array.
     checkbox_conflict: checkboxConflict,
+    roadmap_record: tableUnreadable ? null : roadmapRecord,
     missing_phase_details: missingDetails.length > 0 ? missingDetails : null,
     // #3184/#3165: distinguishes a genuinely empty milestone (`scope:
     // "complete"`, `phase_count: 0`) from a window that could not be fully
@@ -1084,6 +1127,54 @@ function cmdRoadmapMilestoneScope(cwd: string, raw: boolean): void {
 
 // ─── cmdRoadmapUpdatePlanProgress ─────────────────────────────────────────────
 
+/** #5221: phase-id fold (leading zeros stripped per segment) keying roadmap_record; ship.md's jq `def n` folds identically (pinned by a test). */
+function foldPhaseId(token: string): string {
+  return token.split('.').map((s) => s.replace(/^0+(?=\d)/, '')).join('.');
+}
+
+/** #5221: whether offset `idx` of `text` sits inside a bare <details> block (an open-attribute wrapper is the active milestone, not shipped) that has not closed. */
+function insideOpenDetails(text: string, idx: number): boolean {
+  const prior = text.slice(0, idx).toLowerCase();
+  return prior.lastIndexOf('<details>') > prior.lastIndexOf('</details>');
+}
+
+/** #5221: a `phase_naming: custom` id (`Phase AUTH:`). */
+const CUSTOM_PHASE_ID_SRC = '[A-Za-z][\\w-]{0,63}';
+
+/**
+ * #5221: source of a `- [ ] **Phase N:` checklist entry, the one shape `roadmap analyze` reads and
+ * phase add/insert anchor on. Token is the last group; `custom` also admits a custom id before `:`.
+ */
+function checklistEntrySrc(convention: string | null | undefined, capturing = false, custom = false): string {
+  // phase-id-owner: uses [.-] (dot-or-dash) separator variant, not the canonical dot-only token; swapping to PHASE_NUMBER_TOKEN_SOURCE would drop hyphenated phase-id matches.
+  const numeric = '[A-Za-z]?\\d+[A-Z]?(?:[.-]\\d+)*';
+  // numeric must end at a word edge, else `P1-setup` matches as `P1` before the custom alternative is tried.
+  const token = custom ? `(?:${numeric}(?![\\w-])|${CUSTOM_PHASE_ID_SRC}(?=:))` : numeric;
+  return `-\\s*\\[[ x]\\]\\s*\\*\\*${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, convention, capturing)}(${token})`;
+}
+
+/**
+ * #5221: offset of the phase table's header row — the first table row whose cells
+ * name `Phase` and `Plans Complete` (or `Plans`), compared case-insensitively. The one
+ * predicate `editFromPhaseTable` (writer) and `roadmap analyze`'s `roadmap_record` (reader)
+ * both pick the table by, so they never disagree on which table is the phase table. -1: none.
+ */
+function findPhaseTableHeader(text: string): number {
+  for (const m of text.matchAll(/^[ \t]*\|.*$/gm)) {
+    const cells = m[0].split('|').map((c) => c.trim().toLowerCase());
+    if (cells.includes('phase') && (cells.includes('plans complete') || cells.includes('plans'))) return m.index;
+  }
+  return -1;
+}
+
+function editFromPhaseTable(scoped: string, edit: (scoped: string) => string): string {
+  // #5221: Status/Completed bind to the first table carrying that column; start
+  // at the phase table so an earlier versions table is never the target. A Progress
+  // slice with no Plans column at all keeps the whole-slice scan.
+  const at = Math.max(findPhaseTableHeader(scoped), 0);
+  return scoped.slice(0, at) + edit(scoped.slice(at));
+}
+
 /**
  * Scope a ROADMAP.md content string down to its "Progress table" writable
  * slice, run `edit` against just that slice, then splice the result back into
@@ -1106,7 +1197,7 @@ function editProgressTableSlice(content: string, edit: (scoped: string) => strin
   const all = [...content.matchAll(/^##[ \t]+Progress\b/gim)];
   const progressMatch = all.find((m) => active !== null && m.index >= active.start && m.index < active.end) ?? all[0];
   if (!progressMatch || progressMatch.index === undefined) {
-    return edit(content);
+    return editFromPhaseTable(content, edit);
   }
 
   const headingOffset = progressMatch.index;
@@ -1116,7 +1207,7 @@ function editProgressTableSlice(content: string, edit: (scoped: string) => strin
   const scoped = nextHeading >= 0 ? fromHeading.slice(0, nextHeading) : fromHeading;
   const after = nextHeading >= 0 ? fromHeading.slice(nextHeading) : '';
 
-  return beforeHeading + edit(scoped) + after;
+  return beforeHeading + editFromPhaseTable(scoped, edit) + after;
 }
 
 function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | undefined, raw: boolean): void {
@@ -1299,7 +1390,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // `Phase 2.1` / `Phase 20` are not `Phase 2`. Capture group 1 is the opening
     // `- [`, group 2 the rest of the line after the box.
     const phaseChecklistBullet = (anyState: boolean): RegExp => new RegExp(
-      `^([ \\t]*-[ \\t]*\\[)${anyState ? '[ x]' : ' '}(\\][ \\t]*(?:\\*\\*)?[ \\t]*Phase[ \\t]+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s]|$)[^\\n]*)`,
+      `^([ \\t]*-[ \\t]*\\[)${anyState ? '[ x]' : ' '}(\\][ \\t]*(?:\\*\\*)?[ \\t]*Phase[ \\t]+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s]|$)[^\\r\\n]*)`,
       'im',
     );
     // Checklist target: when the phase is complete, its own checklist bullet
@@ -2117,4 +2208,10 @@ export = {
   cmdRoadmapUpdatePlanProgress,
   cmdRoadmapAnnotateDependencies,
   buildPhaseHeadingRegex,
+  editFromPhaseTable,
+  findPhaseTableHeader,
+  editProgressTableSlice,
+  foldPhaseId,
+  insideOpenDetails,
+  checklistEntrySrc,
 };
