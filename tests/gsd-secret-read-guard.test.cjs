@@ -1497,6 +1497,21 @@ describe('gsd-secret-read-guard: heredoc inside a command substitution (#5513)',
     const cmd = 'cat <<E$(x)F\ndata\nE$(x)F\ncat .env';
     assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
   });
+
+  // The same tags in a command that also holds dollar-quoting, so the #5255 readings scan it
+  // too: the tag's substitution is then ended under each reading, not only the plain one.
+  for (const [label, cmd] of [
+    ['a top-level tag holding a substitution', "echo $'a'; cat <<E$(x)F\ndata\nE$(x)F\ncat .env"],
+    ['a tag holding a substitution inside a $( )', "echo $'a'; echo \"$(cat <<E$(x)F\nx\nE$(x)F\n)\"; cat .env"],
+  ]) {
+    test(`with dollar-quoting, denies the read after ${label}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+  test('with dollar-quoting, still allows a read inside a heredoc whose tag holds a substitution', () => {
+    const cmd = "echo $'a'; cat <<E$(x)F\ncat .env\nE$(x)F";
+    assertAllowed(runHook(bash(cmd)), cmd);
+  });
 });
 
 describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
