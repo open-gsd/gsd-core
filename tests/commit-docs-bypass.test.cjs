@@ -146,8 +146,8 @@ describe('commit_docs bypass guard (#1783, repo-wide per #3585)', () => {
       assert.strictEqual(hasReachingGitAdd('# git add -A'), false);
     });
 
-    test('B9: git prefixes: add guard and commit scanner agree', () => {
-      for (const pre of ['git', 'git -C d', 'git -c k=v', 'git --no-pager', '/usr/bin/git']) {
+    test('B10: git prefixes: add guard and commit scanner agree', () => {
+      for (const pre of ['git', 'git -C d', 'git -c k=v', 'git --no-pager', '/usr/bin/git', 'git 2>/dev/null']) {
         assert.equal(hasReachingGitAdd(`${pre} add -A`), true);
         assert.equal(unscopedGitCommits(`${pre} commit -m x`).length, 1);
       }

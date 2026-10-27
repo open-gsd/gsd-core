@@ -10,9 +10,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { runGsdTools, createTempGitProject, cleanup } = require('./helpers.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const MANAGER = path.join(ROOT, 'agents', 'gsd-debug-session-manager.md');
+const COMPACT = path.join(ROOT, 'agents', 'gsd-debug-session-manager.compact.md');
 const DEBUGGER = path.join(ROOT, 'agents', 'gsd-debugger.md');
 
 const manager = () => fs.readFileSync(MANAGER, 'utf8');
@@ -199,12 +201,12 @@ test('#2568: the commit call is covered by the single canonical preamble', () =>
   );
 });
 
-test('#2568: the in-session fix commit is idempotent', () => {
+for (const file of [MANAGER, COMPACT]) test(`#2568: the in-session fix commit is idempotent (${path.basename(file)})`, () => {
   // gsd-debugger.md's archive_session already commits the fix on the confirmed-checkpoint
   // path, which is the standard find_and_fix flow. A bare `git commit` with nothing
   // staged exits non-zero and would abort this step before the summary is returned.
-  const body = manager();
-  const line = body.split('\n').find((l) => l.includes('git diff --cached --quiet -- ')) ?? '';
+  const body = fs.readFileSync(file, 'utf8');
+  const line = splitLines(body).find((l) => l.includes('git diff --cached --quiet -- ')) ?? '';
   const guard = line.indexOf('git diff --cached --quiet -- ');
   const commit = line.indexOf(' || git commit -m ', guard);
   assert.ok(guard !== -1 && commit !== -1 && line.indexOf(' -- ', commit + 1) !== -1,

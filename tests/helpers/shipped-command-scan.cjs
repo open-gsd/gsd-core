@@ -374,6 +374,16 @@ const stripComments = (raw) => {
 // Global git options whose SEPARATE next token is their value (`git -C <dir> -c k=v commit`).
 const GIT_VALUE_FLAGS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace']);
 const isGit = (t) => { const b = bareCommandName(t); return b === 'git' || /\/git$/.test(b); };
+// Index of the git subcommand after the git word at `gi`: skips redirections and global flags (a value flag also skips its separate value); -1 when there is none.
+const gitSubcommandIdx = (toks, gi) => {
+  let c = gi + 1;
+  while (c < toks.length && !toks[c].op) {
+    if (toks[c].redir) { c += 1; continue; }
+    if (!toks[c].value.startsWith('-')) return c;
+    c += GIT_VALUE_FLAGS.has(toks[c].value) ? 2 : 1;
+  }
+  return -1;
+};
 // `inline`: a bare `git commit` in a prose code span names the command, it is not an invocation.
 // An `echo`/`printf` word that holds `git ... commit` (recovery advice) is scanned as a script; other quoted prose is not.
 const unscopedGitCommits = (raw, inline = false) => {
@@ -389,9 +399,8 @@ const unscopedGitCommits = (raw, inline = false) => {
       if (['echo', 'printf'].includes(toks[k + 1].value) && /\bgit\b[^\n]*\bcommit\b/.test(toks[i].value)) out.push(...unscopedGitCommits(toks[i].value, inline));
       continue;
     }
-    let c = i + 1;
-    while (c < toks.length && !toks[c].op && !toks[c].redir && toks[c].value.startsWith('-')) c += GIT_VALUE_FLAGS.has(toks[c].value) ? 2 : 1;
-    if (c >= toks.length || toks[c].op || toks[c].value !== 'commit') continue;
+    const c = gitSubcommandIdx(toks, i);
+    if (c === -1 || toks[c].value !== 'commit') continue;
     const argv = [];
     let prev = toks[c];
     for (let j = c + 1; j < toks.length && !toks[j].op; j += 1) {
@@ -419,6 +428,7 @@ module.exports = {
   isDeclared,
   isUntrackedDeclaration,
   GIT_VALUE_FLAGS,
-  stripComments,
+  isGit,
+  gitSubcommandIdx,
   unscopedGitCommits,
 };
