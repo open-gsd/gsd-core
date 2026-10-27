@@ -62,11 +62,9 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 # commit_docs=false: stage cwd minus .planning/; otherwise stage all of cwd.
 COMMIT_DOCS=$(gsd_run query config-get commit_docs --raw 2>/dev/null || echo "true")
 if [ "$COMMIT_DOCS" = "false" ]; then
-  git diff --cached --quiet -- ':!.planning' || { echo "index not clean: unstage unrelated paths first" >&2; exit 1; }
   git add -A -- . ':!.planning'
   git commit -m "fix: {concise description of what changed}" -- . ':!.planning'
 else
-  git diff --cached --quiet || { echo "index not clean: unstage unrelated paths first" >&2; exit 1; }
   git add -A -- .
   git commit -m "fix: {concise description of what changed}" -- .
 fi

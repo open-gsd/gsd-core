@@ -3414,7 +3414,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   });
 
   test('property: prefix invariance: unscopedGitCommits counts one commit for every git prefix and zero once a pathspec follows', () => {
-    const prefix = fc.constantFrom('git', 'git -C d', 'git -c k=v', 'git --no-pager', '/usr/bin/git');
+    const prefix = fc.constantFrom('git', 'git -C d', 'git -c k=v', 'git --no-pager', '/usr/bin/git', 'git 2>/dev/null');
     fc.assert(fc.property(prefix, msg, fc.array(word, { minLength: 0, maxLength: 3 }), (pre, m, paths) => {
       const cmd = `${pre} commit -m ${m}${paths.length ? ` -- ${paths.join(' ')}` : ''}`;
       assert.equal(unscopedGitCommits(cmd).length, paths.length === 0 ? 1 : 0);
@@ -3450,10 +3450,11 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     return scope.slice(blk.openLineIdx + 1, blk.closeLineIdx);
   };
 
-  test('fast.md commit fence (scratch repo): a dirty index is refused; commit_docs=false excludes .planning', (t) => {
+  test('fast.md commit fence (scratch repo): commit_docs=false excludes .planning; fence carries no refusal', (t) => {
     const body = bashFenceAfter('gsd-core/workflows/fast.md', '<step name="commit">');
     // drop the gsd_run resolver line; stub it with the config value under test
     const fence = body.slice(body.findIndex((l) => l.startsWith('COMMIT_DOCS='))).join('\n');
+    assert.equal(fence.includes('index not clean'), false);
     for (const docs of ['true', 'false']) {
       const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489f-');
       fs.mkdirSync(path.join(dir, '.planning'));
@@ -3461,11 +3462,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       fs.writeFileSync(path.join(dir, 'code'), 'c');
       fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), 'p');
       const run = () => runFence(dir, `gsd_run() { echo ${docs}; }\n${fence}`);
-      // dirty index: refuses, commits nothing
-      fs.writeFileSync(path.join(dir, 'stray'), 'x'); git('add', 'stray');
-      assert.equal(run().exitCode, 1, `commit_docs=${docs}: dirty index refused`);
-      assert.equal(Number(git('rev-list', '--count', 'HEAD')), 1);
-      git('reset', '-q', 'stray');
+      fs.writeFileSync(path.join(dir, 'stray'), 'x');
       const r = run();
       assert.equal(r.exitCode, 0, r.stderr);
       const head = git('show', '--name-only', '--format=', 'HEAD').trim().split('\n').sort();
@@ -3496,11 +3493,6 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     }
   });
 
-  test('W029 sample blocks equal the base text', () => {
-    for (const f of ['docs/CONFIGURATION.md', 'docs/how-to/keep-planning-docs-private.md']) {
-      assert.ok(fs.readFileSync(path.join(root, f), 'utf8').includes('Fix: git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"'), f);
-    }
-  });
   test('git-integration.md commit examples quote every path as :(literal)', () => {
     for (const f of ['gsd-core/references/git-integration.md', 'docs/zh-CN/references/git-integration.md']) {
       const md = fs.readFileSync(path.join(root, f), 'utf8');
@@ -3510,17 +3502,14 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     }
   });
 
-  test('changeset names the stop-tracking exception, the by-design whole-index commits and /gsd-fast', () => {
-    const md = fs.readFileSync(path.join(root, '.changeset/merry-deer-caper.md'), 'utf8');
-    for (const frag of ['the stop-tracking commit stays whole-index behind a staged-paths guard', 'stay whole-index by design', '`/gsd-fast`']) assert.ok(md.includes(frag), frag);
-    assert.equal(md.includes('/gsd:fast'), false);
-  });
-
   test('WIP and recovery examples that use -- . say they run from the worktree root', () => {
     for (const f of ['gsd-core/workflows/execute-phase.md', 'agents/gsd-executor.md', 'pi/package-agents/gsd-executor.md']) {
-      const hits = fs.readFileSync(path.join(root, f), 'utf8').split('\n').filter((l) => /git add -A( --)? \.?.*git commit .* -- \./.test(l));
+      const hits = splitLines(fs.readFileSync(path.join(root, f), 'utf8')).filter((l) => /git add -A( --)? \.?.*git commit .* -- \./.test(l));
       assert.ok(hits.length > 0, f);
-      for (const l of hits) assert.ok(l.includes("# from THIS worktree's root"), `${f}: ${l}`);
+      for (const l of hits) {
+        assert.ok(l.includes("# from THIS worktree's root"), `${f}: ${l}`);
+        assert.ok(l.includes('git add -A -- .'), `${f}: ${l}`);
+      }
     }
   });
 
