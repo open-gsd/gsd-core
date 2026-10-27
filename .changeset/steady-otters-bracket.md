@@ -1,6 +1,6 @@
 ---
 type: Changed
-pr: 4773
+pr: 5747
 ---
 **Bracket projects now write bracket phase ids** — on `phase_id_convention: "bracket"`, the phase and state writers emit `[CODE.MM] NN` identities instead of legacy ones (#4304):
 - `phase add`, `add-batch` and `insert` write `### [CK.02] 02: Name` headings and `CK.02-02-name` directories in the active milestone; a supplied `--id` or `phase_naming: "custom"` is refused until #5067.

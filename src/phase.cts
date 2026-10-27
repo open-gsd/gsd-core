@@ -68,7 +68,6 @@ const {
   BRACKET_DIR_PREFIX_SRC,
   tokenizePhaseDependencyReferences,
   foldBracketId,
-  buildPhaseHeadingScanRegex,
 } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdDisplayMod = require('./phase-id-display.cjs');
@@ -1399,58 +1398,17 @@ function dirPhaseNum(entry: string, { convention, milestone: onlyMilestone }: Ph
   return !Number.isSafeInteger(num) || isSentinelPhaseId(num) ? null : num;
 }
 
-/**
- * The milestone integer bracket numbering is scoped to: the active milestone's `vN`, or null when it
- * cannot be trusted. Null counts every milestone, which can only skip a number, never reuse one.
- * Bracket ids restart per milestone, so a finished milestone's `GSD.01-12-x` must not push milestone 2
- * to 13. `getMilestoneInfo` may return a prose `vN.M` ("requires Node v18.0"), so the version is:
- * - trusted when an id in the current milestone's text (`content`) carries that number;
- * - else trusted only if STATE.md's frontmatter names it and no id in `content` carries another;
- * - else null.
- * Known gap: a stale STATE `v1.0` over a section with no tagged ids is trusted, so `GSD.02-05-x` is
- * dropped (unreachable in normal flow).
- */
-function activeBracketMilestone(cwd: string, convention: string | null, content: string): number | null {
-  if (convention !== 'bracket') return null;
-  const version = roadmapParserMod.getMilestoneInfo(cwd).value?.version;
-  const m = typeof version === 'string' ? version.match(/^v?(\d+)/i) : null;
-  const milestone = m ? parseInt(m[1], 10) : null;
-  if (milestone === null) return null;
-  const tagged = taggedBracketMilestones(convention, content);
-  if (tagged.has(milestone)) return milestone;
-  // STATE.md naming the milestone is first-hand, but only while no id contradicts it: ids of
-  // another MM mean STATE's `vN` is not the number these directories carry (`v1.0` over `[GSD.02]`).
-  return tagged.size === 0 && stateMilestone(cwd) === milestone ? milestone : null;
-}
-
-/** The milestone numbers carried by the bracket ids declared in `content`. */
-function taggedBracketMilestones(convention: string, content: string): Set<number> {
-  const found = new Set<number>();
-  for (const { regex, idGroup } of buildPhaseDeclarationScans(convention)) {
-    if (idGroup === null) continue;
-    let hit: RegExpExecArray | null;
-    while ((hit = regex.exec(content)) !== null) {
-      if (hit[idGroup]) found.add(bracketIdMilestone(hit[idGroup].toUpperCase()));
-    }
-  }
-  return found;
-}
-
-/** The milestone integer STATE.md's frontmatter names, or null (no STATE.md, no key, no number). */
-function stateMilestone(cwd: string): number | null {
-  try {
-    const state = fs.readFileSync(path.join(planningDir(cwd), 'STATE.md'), 'utf-8');
-    const fm = frontmatterMod.extractFrontmatter(state).milestone;
-    const declared = typeof fm === 'string' ? fm.match(/^v?(\d+)/i) : null;
-    return declared ? parseInt(declared[1], 10) : null;
-  } catch { return null; }
-}
-
 /** Add the phase number of every phase directory under `phasesDir` to `used` (a missing dir adds nothing). */
-function collectPhaseDirNums(phasesDir: string, scope: PhaseScope, used: Set<number>): void {
+function collectPhaseDirNums(
+  phasesDir: string,
+  scope: PhaseScope,
+  used: Set<number>,
+  bracketContext?: BracketWriteContext,
+): void {
   if (!fs.existsSync(phasesDir)) return;
   for (const entry of fs.readdirSync(phasesDir)) {
-    const num = dirPhaseNum(entry, scope);
+    // A bracket writer reserves the directories its reader resolves (#4304), not the legacy reading.
+    const num = bracketContext ? readerResolvableBracketDirectoryPhaseNumber(entry, bracketContext) : dirPhaseNum(entry, scope);
     if (num !== null) used.add(num);
   }
 }
@@ -1771,14 +1729,7 @@ function collectSiblingWorktreePhaseNums(
     const wt = line.slice('worktree '.length).trim();
     if (!wt || path.resolve(wt) === path.resolve(cwd)) continue;
     try {
-      if (bracketContext) {
-        for (const entry of fs.readdirSync(path.join(siblingPlanningDir(wt), 'phases'))) {
-          const phase = readerResolvableBracketDirectoryPhaseNumber(entry, bracketContext);
-          if (phase !== null) used.add(phase);
-        }
-      } else {
-        collectPhaseDirNums(path.join(siblingPlanningDir(wt), 'phases'), scope, used);
-      }
+      collectPhaseDirNums(path.join(siblingPlanningDir(wt), 'phases'), scope, used, bracketContext);
     } catch {
       /* worktree has no .planning (or no copy of this scope) — normal, contributes nothing */
     }
@@ -1997,7 +1948,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
     if (bracketContext) assertBracketAddWindowLocated(rawContent, cwd, bracketContext, 'phase add');
     const content = extractCurrentMilestone(rawContent, cwd);
-    const scope: PhaseScope = { convention, milestone: activeBracketMilestone(cwd, convention, content) };
+    const scope: PhaseScope = { convention, milestone: null };
 
     const projectCode = (config.project_code as string) || '';
     const prefix = projectCode ? `${projectCode}-` : '';
@@ -2119,7 +2070,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
     let rawContent = fs.readFileSync(roadmapPath, 'utf-8');
     if (bracketContext) assertBracketAddWindowLocated(rawContent, cwd, bracketContext, 'phase add-batch');
     const content = extractCurrentMilestone(rawContent, cwd);
-    const scope: PhaseScope = { convention, milestone: activeBracketMilestone(cwd, convention, content) };
+    const scope: PhaseScope = { convention, milestone: null };
     let maxPhase = 0;
     if (bracketContext) {
       const used = collectBracketPhaseNumbers(
