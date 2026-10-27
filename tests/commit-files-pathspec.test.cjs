@@ -3438,12 +3438,20 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     return runHook(file, [], { interpreter: 'bash', cwd, timeoutMs: GIT_TIMEOUT_MS });
   }
 
-  test('fast.md commit fence (scratch repo): foreign staged file stays staged; commit_docs=false excludes .planning', (t) => {
-    const lines = splitLines(fs.readFileSync(path.join(root, 'gsd-core/workflows/fast.md'), 'utf8'));
-    const commitStep = lines.findIndex((l) => l.includes('<step name="commit">'));
-    const blk = scanFencedBlocks(lines.slice(commitStep)).find((b) => b.infoString === 'bash');
-    assert.ok(blk, 'fast.md commit step has a bash fence');
-    const body = lines.slice(commitStep).slice(blk.openLineIdx + 1, blk.closeLineIdx);
+  // Body of the first bash fence at or after `marker` in `rel`; `bounded` stops the search at the step's `</step>`.
+  const bashFenceAfter = (rel, marker, bounded = false) => {
+    const all = splitLines(fs.readFileSync(path.join(root, rel), 'utf8'));
+    const from = all.findIndex((l) => l.includes(marker));
+    assert.notEqual(from, -1, `${rel}: ${marker} exists`);
+    const rest = all.slice(from);
+    const scope = bounded ? rest.slice(0, rest.findIndex((l) => l.includes('</step>'))) : rest;
+    const blk = scanFencedBlocks(scope).find((b) => b.infoString === 'bash');
+    assert.ok(blk, `${rel}: bash fence after ${marker}`);
+    return scope.slice(blk.openLineIdx + 1, blk.closeLineIdx);
+  };
+
+  test('fast.md commit fence (scratch repo): a dirty index is refused; commit_docs=false excludes .planning', (t) => {
+    const body = bashFenceAfter('gsd-core/workflows/fast.md', '<step name="commit">');
     // drop the gsd_run resolver line; stub it with the config value under test
     const fence = body.slice(body.findIndex((l) => l.startsWith('COMMIT_DOCS='))).join('\n');
     for (const docs of ['true', 'false']) {
@@ -3465,12 +3473,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     }
   });
   test('executor step-4 single-repo commit (scratch repo): foreign staged file stays staged', (t) => {
-    const lines = splitLines(fs.readFileSync(path.join(root, 'agents/gsd-executor.md'), 'utf8'));
-    const at = lines.findIndex((l) => l.includes('**Otherwise (standard single-repo):**'));
-    assert.notEqual(at, -1, 'executor step 4 single-repo branch exists');
-    const rest = lines.slice(at);
-    const blk = scanFencedBlocks(rest).find((b) => b.infoString === 'bash');
-    const fence = rest.slice(blk.openLineIdx + 1, blk.closeLineIdx).join('\n')
+    const fence = bashFenceAfter('agents/gsd-executor.md', '**Otherwise (standard single-repo):**').join('\n')
       .replace('":(literal){step-2 path}" ...', '":(literal)src/a.ts" ":(literal)src/[b].ts"');
     const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489e-');
     fs.mkdirSync(path.join(dir, 'src'));
@@ -3486,15 +3489,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   });
   describe('complete-milestone git_commit_milestone fence (scratch repo)', () => {
     // Read lazily so a missing step fails one test, not the whole file at collection.
-    const fenceOf = () => {
-      const all = splitLines(fs.readFileSync(path.join(root, 'gsd-core/workflows/complete-milestone.md'), 'utf8'));
-      const from = all.findIndex((l) => l.includes('<step name="git_commit_milestone">'));
-      assert.notEqual(from, -1, 'git_commit_milestone step exists');
-      const stepLines = all.slice(from, from + all.slice(from).findIndex((l) => l.includes('</step>')));
-      const blk = scanFencedBlocks(stepLines).find((b) => b.infoString === 'bash');
-      assert.ok(blk, 'git_commit_milestone has a bash fence');
-      return stepLines.slice(blk.openLineIdx + 1, blk.closeLineIdx).join('\n');
-    };
+    const fenceOf = () => bashFenceAfter('gsd-core/workflows/complete-milestone.md', '<step name="git_commit_milestone">', true).join('\n');
 
     // Seeds `rm` + a stray, stages the deletions and the stray's edit, then runs the fence from `sub`.
     function run(rm, sub = '.', stageMore = () => {}) {
