@@ -3450,7 +3450,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     return scope.slice(blk.openLineIdx + 1, blk.closeLineIdx);
   };
 
-  test('fast.md commit fence (scratch repo): commit_docs=false excludes .planning', (t) => {
+  test('fast.md commit fence (scratch repo): commit_docs=true commits .planning, commit_docs=false excludes it', (t) => {
     const body = bashFenceAfter('gsd-core/workflows/fast.md', '<step name="commit">');
     // drop the gsd_run resolver line; stub it with the config value under test
     const fence = body.slice(body.findIndex((l) => l.startsWith('COMMIT_DOCS='))).join('\n');
