@@ -2013,6 +2013,16 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       });
     }
 
+    // #5285 round review: each operand's last segment was cut with `/[\\/]+$/`, quadratic in
+    // a run of separators, and each reading checks each operand again at each `$( )` level
+    // that holds dollar-quoting, so a read after two such levels around a 200,000-separator
+    // operand outlasted the hook's timeout. Without the linear cut this row outlasts the spawn
+    // timeout and fails on the verdict.
+    test('a read after two dollar-quoted `$( )` levels around a 200,000-separator operand is still named', () => {
+      const cmd = `cat $(cat $(cat ${'/'.repeat(200000)}x $'a') $'a') .env`;
+      assertBlocked(runHook(bash(cmd)), 'read after a long separator run', { tool: 'Bash', path: '.env' });
+    });
+
     test('in process: the budget is per command', () => {
       const { findSecretRead } = require(HOOK_PATH);
       assert.deepEqual(findSecretRead(`echo ${runs('$$(')}`, 0), { code: 'command-too-complex', text: '' });
