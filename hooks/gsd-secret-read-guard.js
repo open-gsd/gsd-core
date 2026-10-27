@@ -650,7 +650,10 @@ function ansiCBraceClose(str, i, shell, nested, inDq) {
   if (asBefore) return ansiCBraceCloseBefore(str, i, shell);
   const quotes = !inDq || shell === 'bash' || (shell === 'dash' && bracePatternOp(str, i));
   const span = (from, to) => { if (nested) nested.push(str.slice(from, to)); return to + 1; };
+  let read = i;
   while (i < str.length) {
+    chargeReader(i + 1 - read);
+    read = i + 1;
     const ch = str[i];
     if (ch === '}') {
       return i;
@@ -658,15 +661,15 @@ function ansiCBraceClose(str, i, shell, nested, inDq) {
       i += 2;
     } else if ((ch === "'" && quotes) || ch === '`') {
       const j = str.indexOf(ch, i + 1);
-      if (j === -1) return -1;
+      if (j === -1) return unclosed(str, read);
       i = ch === '`' ? span(i + 1, j) : j + 1;
     } else if (ch === '"') {
       const j = doubleQuoteEnd(str, i + 1, shell, nested);
-      if (j >= str.length) return -1;
+      if (j >= str.length) return unclosed(str, read);
       i = j + 1;
     } else if ((ch === '<' || ch === '>') && str[i + 1] === '(' && (!inDq || shell === 'bash')) {
       const e = findParenClose(str, i + 2, shell);
-      if (e >= str.length) return -1;
+      if (e >= str.length) return unclosed(str, read);
       i = span(i + 2, e);
     } else if (ch !== '$') {
       i++;
@@ -674,22 +677,22 @@ function ansiCBraceClose(str, i, shell, nested, inDq) {
       const run = dollarRun(str, i);
       if (quotes && opensAnsiC(run, str, shell)) {
         const end = ansiCQuoteEnd(str, run.end);
-        if (end === -1) return -1;
+        if (end === -1) return unclosed(str, read);
         i = end + 1;
       } else if (run.dollars % 2 === 1 && str[run.end] === '(') {
         const e = findParenClose(str, run.end + 1, shell);
-        if (e >= str.length) return -1;
+        if (e >= str.length) return unclosed(str, read);
         i = span(run.end + 1, e);
       } else if ((run.dollars % 2 === 1 || (shell === 'zsh' && !inDq)) && str[run.end] === '{') {
         const e = ansiCBraceClose(str, run.end + 1, shell, nested, inDq);
-        if (e === -1) return -1;
+        if (e === -1) return unclosed(str, read);
         i = e + 1;
       } else {
         i = run.end; // a quote or `$"…"` after the run: the branches above read it
       }
     }
   }
-  return -1;
+  return unclosed(str, read);
 }
 
 // ansiCBraceClose as it was before #5255's review round 10, for readAsBefore:
@@ -945,7 +948,12 @@ function findParenClose(str, i, reading) {
   const parts = [];
   let operatorClose = -1;
   let heredocTags = [];
+  let read = i;
   while (i < str.length) {
+    if (reading) {
+      chargeReader(i + 1 - read);
+      read = i + 1;
+    }
     const ch = str[i];
     if (ch === '\\') { i += 2; continue; }
     if (reading && ch === '$') {
@@ -1020,14 +1028,18 @@ function findParenClose(str, i, reading) {
     }
     i++;
   }
+  if (reading) chargeReader(str.length - read);
   return str.length;
 }
 
 // Index of the `]` closing a `$[` whose text starts at `i`, nested `[ ]`
-// counted, or -1 when none does.
+// counted, or -1 when none does. Only findParenClose under a reading calls
+// it, and on -1 goes on one character, so each step is charged to
+// readerSteps: unclosed `$[` would otherwise each read to the end.
 function bracketClose(str, i) {
   let depth = 1;
   for (; i < str.length; i++) {
+    chargeReader(1);
     if (str[i] === '[') depth++;
     else if (str[i] === ']' && --depth === 0) return i;
   }
@@ -1058,7 +1070,12 @@ function startsWord(str, i, operatorClose) {
 // ansiCBraceClose, which also passes `nested` for the commands of those spans.
 function doubleQuoteEnd(str, i, reading, nested) {
   const span = (from, to) => { if (nested) nested.push(str.slice(from, to)); return to + 1; };
+  let read = i;
   while (i < str.length && str[i] !== '"') {
+    if (reading) {
+      chargeReader(i + 1 - read);
+      read = i + 1;
+    }
     if (str[i] === '\\') { i += 2; continue; }
     const paren = reading && str[i] === '$' ? runParen(str, i, reading, true) : null;
     if (paren) { i = span(paren.open + 1, findParenClose(str, paren.open + 1, reading)); continue; }
@@ -1076,6 +1093,7 @@ function doubleQuoteEnd(str, i, reading, nested) {
     }
     i++;
   }
+  if (reading) chargeReader(Math.min(i + 1, str.length) - read);
   return Math.min(i, str.length);
 }
 
@@ -1874,6 +1892,7 @@ function findSecretRead(command, depth) {
   scanUnfinished = false;
   readingsRan = false;
   scanBudget = MAX_SCAN_CHARACTERS;
+  readerSteps = MAX_SCAN_CHARACTERS;
   let hit = null;
   let failure = null;
   try {
@@ -1916,6 +1935,7 @@ function readAsBefore(command) {
   asBefore = true;
   scanUnfinished = false;
   scanBudget = MAX_SCAN_CHARACTERS;
+  readerSteps = MAX_SCAN_CHARACTERS;
   let hit = null;
   try {
     hit = readEachWay(command, 0);
@@ -1942,6 +1962,48 @@ let scanUnfinished = false;
 // throws SCAN_BUDGET_SPENT once it is gone, and every later scan of the
 // command throws at once, so an over-budget command stops in one pass.
 let scanBudget = MAX_SCAN_CHARACTERS;
+
+// What is left of the characters the readings' readers (ansiCBraceClose,
+// bracketClose, and findParenClose and doubleQuoteEnd under a reading) may
+// pass in one findSecretRead pass, reset with scanBudget. They call each
+// other, and when a `${`, `$(` or `$[` inside does not close, the one that
+// called it goes on through the text after it and reads it again: so each
+// `${$(` or `${"${` doubled their work (with `cat .env` on the line before,
+// thirty `${$(` took 36 to 135 s to scan, depending on the host, and a few
+// more outlast the hook's 120 s timeout, which lets the command run), and
+// text after each unclosed `${$(` or `${"}`, or a
+// run of unclosed `$[`, made it quadratic. scanBudget charges only
+// scanCommand, which never saw that work. So each reader charges by distance,
+// not by step: every character between where it last charged and where it now
+// stands, however it got there (a helper's jump over a run of `$`, a quote, a
+// `$'…'` span, a heredoc, a nested reader's span), and on a `${` that does not
+// close, the rest of the string (unclosed). bracketClose, which only steps,
+// charges each step. A span a nested reader passed is charged again by the
+// reader that jumps over it, so one reader's charge covers another's. Spending
+// this throws SCAN_BUDGET_SPENT too, so the reading is unfinished: the read on
+// the line before is still named by the plain reading (unless the readings
+// also spent scanBudget, which stops the plain reading too), and an
+// unfinished command with no read found is denied as `command-too-complex`.
+// The plain reading reads as before and charges nothing. The most one pass
+// over any of 600,000 real agent commands passes is 18,936, and a commit
+// message at MAX_SCAN_CHARACTERS's 419,445-character boundary 1.3 to 1.5
+// million, depending on its text, so this moves none of those commands'
+// verdicts and none of MAX_SCAN_CHARACTERS's figures.
+let readerSteps = MAX_SCAN_CHARACTERS;
+
+// Charges `n` characters read to readerSteps.
+function chargeReader(n) {
+  if (n <= 0) return;
+  readerSteps -= n;
+  if (readerSteps < 0) throw SCAN_BUDGET_SPENT;
+}
+
+// A reader's -1 for a `${` that does not close: the text from `read` to the
+// end of `str`, which the reader or one it called has read, is charged.
+function unclosed(str, read) {
+  chargeReader(str.length - read);
+  return -1;
+}
 const SCAN_BUDGET_SPENT = new Error('secret read guard: scan budget spent');
 
 // Whether `e` means a reading could not finish, rather than a parser bug.

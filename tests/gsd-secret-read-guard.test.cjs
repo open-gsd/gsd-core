@@ -1986,6 +1986,33 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       });
     }
 
+    // #5285 round review: each `${$(` that does not close doubled the dollar-quoting readings'
+    // work, and a few dozen outran the hook's timeout, which lets the command run; so does
+    // each `${"${`. Text after each unclosed `${$(` or `${"}` (plain, a run of `$`, heredocs),
+    // or a run of unclosed `$[` in a `$( )`, makes the work quadratic. The readers now charge
+    // every character they pass to a step budget of their own. Without it these rows outlast
+    // the spawn timeout and fail on the verdict.
+    for (const [label, unclosed] of [
+      ['200 unclosed `${$(`', '${$('.repeat(200)],
+      ['200 unclosed `${"${`', '${"${'.repeat(200)],
+      ['40 unclosed `${$(`, each before 2,000 characters', `\${$(${'x'.repeat(2000)}`.repeat(40)],
+      ['150 unclosed `${$(`, each before 2,000 `$`', `\${$(${'$'.repeat(2000)}`.repeat(150)],
+      ['500 unclosed `${$(`, each before a heredoc', `\${$( <<E\n${'a\n'.repeat(1000)}E\n`.repeat(500)],
+      ['60 unclosed `${"}`, each before 2,000 characters', `\${"}${'x'.repeat(2000)}`.repeat(60)],
+      ['50 unclosed `${"}`, each before 2,000 `$`', `\${"}${'$'.repeat(2000)}`.repeat(50)],
+      ['200,000 unclosed `$[` in a `$( )`', `$( ${'$['.repeat(200000)}`],
+      ['50 unclosed `$(${`, each before 2,000 `)`', `$(\${${')'.repeat(2000)}`.repeat(50)],
+    ]) {
+      test(`a read on the line before ${label} is still named`, () => {
+        const cmd = `cat .env\necho $'a'; ${unclosed}`;
+        assertBlocked(runHook(bash(cmd)), `read, then ${label}`, { tool: 'Bash', path: '.env' });
+      });
+      test(`a read only the dollar-quoting readings decode, before ${label}, is denied as command-too-complex`, () => {
+        const cmd = `cat $'.e\\x6ev'\n${unclosed}`;
+        assertBlocked(runHook(bash(cmd)), `decoded read, then ${label}`, { code: 'command-too-complex', tool: 'Bash', path: '' });
+      });
+    }
+
     test('in process: the budget is per command', () => {
       const { findSecretRead } = require(HOOK_PATH);
       assert.deepEqual(findSecretRead(`echo ${runs('$$(')}`, 0), { code: 'command-too-complex', text: '' });
