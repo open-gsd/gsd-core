@@ -517,7 +517,8 @@ function buildPhaseDeclarationScans(convention?: string | null, withBullets = tr
     scans.push({ regex: new RegExp(`${bullet}\\*{0,2}\\[(${BRACKET_ID_SRC})\\][ \\t]*(?:Phase[ \\t]+|(?=\\d))(\\d+)(?=[A-Za-z]?(?::|\\*{0,2}[ \\t]*$|[ \\t]+[-\u2013\u2014][ \\t]))`, 'gim'), idGroup: 1, numGroup: 2 });
   }
   // A dash-separated heading (`### [GSD.02] 05 - Name`) is outside the colon grammar the readers share, but still a declaration.
-  scans.push({ regex: new RegExp(`^ {0,3}#{2,4}\\s*\\[(${BRACKET_ID_SRC})\\][ \\t]*(\\d+)(?=[A-Za-z]?[ \\t]+[-\u2013\u2014][ \\t])`, 'gim'), idGroup: 1, numGroup: 2 });
+  // `###`/`####` only: a `##` milestone heading (`## [CK.02] 2 - Foundation`) names the milestone, not a phase.
+  scans.push({ regex: new RegExp(`^ {0,3}#{3,4}\\s*\\[(${BRACKET_ID_SRC})\\][ \\t]*(\\d+)(?=[A-Za-z]?[ \\t]+[-\u2013\u2014][ \\t])`, 'gim'), idGroup: 1, numGroup: 2 });
   return scans;
 }
 
