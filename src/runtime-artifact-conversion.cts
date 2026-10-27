@@ -902,7 +902,7 @@ function buildPiLoopSkillBody(skillName: string, loop: PiLoopSkill, commandBody:
     '5. If `gsd_dispatch` returns an error, stop: print `gsd_dispatch <code>: <message>`, leave the debug file as it is, and tell the user ' +
     `\`/skill:${skillName} continue <slug>\` resumes it. Do not commit on a stop.\n\n` +
     '**Finish.** For a terminal return, or a stop the user chose, commit as the session manager does: stage only the files the fix touched, write the commit message ("fix: " and a one-line description) to a file with your write tool, and run ' +
-    '`git diff --cached --quiet -- <files fix touched> || git commit -F "<message file>" -- <files fix touched>`; never place text derived from the user, the debug file or a role return inside a shell-quoted string. ' +
+    '`git diff --cached --quiet -- ":(literal)<file fix touched>" ... || git commit -F "<message file>" -- ":(literal)<file fix touched>" ...`; never place text derived from the user, the debug file or a role return inside a shell-quoted string. ' +
     'Then commit the session file with `gsd_run query commit`: `"docs(debug): resolve <slug> session" --files {debug_dir}/resolved/<slug>.md` when the debugger archived it, ' +
     'otherwise (Plan fix, Manual fix, `--diagnose`, abandoned) `"docs(debug): checkpoint <slug> session" --files {debug_dir}/<slug>.md`, in the same bash call as the section 0 preamble so `gsd_run` is defined. ' +
     'Then print the compact summary: Session, Root Cause, Fix, Cycles, TDD, Specialist review: none, Prevention, and for a stop `Status: ABANDONED`. ' +
