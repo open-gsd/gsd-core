@@ -199,3 +199,25 @@ test('phase locator: findPhaseInternal and searchPhaseInDir resolve numeric phas
     assert.equal(locator.findPhaseInternal(cwd, '9'), null);
   } finally { cleanup(cwd); }
 });
+
+// ── Pre-PR review of the integration: shipped ids and bracket projects ──────
+test('custom writers: an id declared only in a shipped milestone can be reused', () => {
+  const roadmap = '# Roadmap\n\n- ✅ **v1.0 Old** - shipped\n- 🚧 **v2.0 New** - in progress\n\n<details>\n<summary>✅ v1.0 Old - SHIPPED 2026-01-01</summary>\n\n### Phase SETUP: Setup\n**Goal:** a\n\n</details>\n\n## v2.0 New\n\n### Phase OTHER: Other\n**Goal:** b\n';
+  const cwd = fixture(null, 'custom', roadmap);
+  try {
+    fs.writeFileSync(path.join(cwd, '.planning/STATE.md'), '---\nmilestone: v2.0\n---\n# State\n');
+    assert.equal(run(cwd, ['phase', 'add', 'Setup again', '--id', 'SETUP']).phase_number, 'SETUP');
+  } finally { cleanup(cwd); }
+});
+test('bracket convention: a stray .phase-id does not hide a bracket directory under custom naming', () => {
+  const cwd = fixture(null, 'custom', '# Roadmap\n\n## v2.0 Milestone\n\n### [CK.02] 01: One\n');
+  try {
+    fs.writeFileSync(path.join(cwd, '.planning/config.json'), JSON.stringify({phase_id_convention: 'bracket', project_code: 'CK', phase_naming: 'custom'}));
+    fs.writeFileSync(path.join(cwd, '.planning/STATE.md'), '---\nmilestone: v2.0\n---\n# State\n');
+    const dir = path.join(cwd, '.planning/phases/CK.02-01-one');
+    fs.mkdirSync(dir);
+    assert.equal(run(cwd, ['find-phase', '1']).found, true);
+    fs.writeFileSync(path.join(dir, '.phase-id'), 'X');
+    assert.equal(run(cwd, ['find-phase', '1']).found, true);
+  } finally { cleanup(cwd); }
+});

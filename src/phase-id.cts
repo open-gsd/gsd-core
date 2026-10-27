@@ -2019,7 +2019,7 @@ function matchPhaseDirs(
   // A complete basename names that physical directory when no record owns the
   // query. Custom projects only: a numeric project with `01` and `01-foo` must
   // still reach the #2237 ambiguity refusal for the bare token `01`.
-  if (context.phaseNaming === 'custom') {
+  if (context.phaseNaming === 'custom' && convention !== 'bracket') {
     const directoryMatches = dirs.filter(dir => dir === query);
     if (directoryMatches.length > 0) return {matches: directoryMatches, usedBareFallback: false};
   }
@@ -2028,7 +2028,7 @@ function matchPhaseDirs(
   const normalized = convention === 'bracket' ? query : normalizePhaseName(query);
   // Recorded directories never enter legacy token or bare-number fallback for
   // another query. Keep those compatibility passes for unmarked directories.
-  if (context.phaseNaming === 'custom') {
+  if (context.phaseNaming === 'custom' && convention !== 'bracket') {
     dirs = dirs.filter(dir => context.directoryIds?.[dir] === undefined
       || (custom !== null && customPhaseDirectoryParts(dir, custom) !== null));
   }

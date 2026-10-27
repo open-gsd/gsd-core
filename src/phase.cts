@@ -2048,7 +2048,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
       [{dirName: _dirName}] = phaseLocatorMod.createPhaseDirectories(cwd, [{
         id: String(_newPhaseId), slug,
         directoryId: typeof _newPhaseId === 'number' ? String(_newPhaseId).padStart(2, '0') : _newPhaseId,
-      }], {...naming, roadmap: rawContent});
+      }], {...naming, roadmap: content});
     }
 
     let phaseEntry: string;
@@ -2194,7 +2194,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
       const prepared = phaseLocatorMod.createPhaseDirectories(cwd, validated.map(item => ({
         id: String(item.newPhaseId), slug: item.slug,
         directoryId: typeof item.newPhaseId === 'number' ? String(item.newPhaseId).padStart(2, '0') : item.newPhaseId,
-      })), {...naming, roadmap: rawContent});
+      })), {...naming, roadmap: content});
       prepared.forEach((entry, index) => { validated[index].dirName = entry.dirName; });
     }
 
