@@ -1180,8 +1180,6 @@ function _restoreEnvPairs(saved) {
 function isolateGitConfigEnv() {
   // Case-insensitive: Windows env names are, and keep the spelling they were set with.
   const gitVars = () => Object.keys(process.env).filter((name) => name.toUpperCase().startsWith('GIT_'));
-  const saved = gitVars().map((name) => [name, process.env[name]]);
-  for (const [name] of saved) delete process.env[name];
   // Absolute: git runs from the fixture's cwd, where a relative TMPDIR names nothing.
   const dir = path.resolve(createTempDir('gsd-gitconfig-'));
   const file = path.join(dir, 'global.gitconfig');
@@ -1191,6 +1189,10 @@ function isolateGitConfigEnv() {
   fs.writeFileSync(file, `[core]\n\texcludesFile = "${quoted}"\n`);
   const templateDir = path.join(dir, 'template');
   fs.mkdirSync(templateDir);
+  // The environment changes only after every step that can throw, so a failed
+  // setup leaves it as it was rather than isolated with no restore function.
+  const saved = gitVars().map((name) => [name, process.env[name]]);
+  for (const [name] of saved) delete process.env[name];
   process.env.GIT_CONFIG_GLOBAL = file;
   process.env.GIT_TEMPLATE_DIR = templateDir;
   process.env.GIT_CONFIG_NOSYSTEM = '1';
@@ -1211,8 +1213,9 @@ function isolateGitConfigEnv() {
  */
 function isolateConfigReadEnv() {
   const saved = ['GSD_PROJECT', 'GSD_WORKSTREAM', 'GSD_HOME'].map((name) => [name, process.env[name]]);
-  const restoreGitConfig = isolateGitConfigEnv();
+  // Allocated before any isolation: a throw here must not leave git isolated.
   const gsdHome = path.resolve(createTempDir('gsd-home-'));
+  const restoreGitConfig = isolateGitConfigEnv();
   delete process.env.GSD_PROJECT;
   delete process.env.GSD_WORKSTREAM;
   process.env.GSD_HOME = gsdHome;
