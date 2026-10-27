@@ -3611,5 +3611,13 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       assert.match(r.stderr, /no staged .*deletion: nothing to commit/);
       assert.doesNotMatch(r.stderr, /expected exactly one/);
     });
+
+    test('the step prose names the staging step and covers commit, skip and refusal', () => {
+      const md = fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/complete-milestone.md'), 'utf8');
+      assert.ok(md.includes('`git rm` in reorganize_roadmap_and_delete_originals staged the deletion'));
+      assert.ok(md.includes('when it refused (exit 1), stop and report its message'));
+      assert.equal(md.includes('The preceding step staged the deletion'), false);
+      assert.equal(md.includes('or a merge already committed it'), false);
+    });
   });
 });
