@@ -14,8 +14,6 @@
  * scan and do not generalize to other guards.
  */
 
-const { skipToSubcommand } = require('../../hooks/lib/git-cmd.js');
-
 // 443 live substitution sites are `VAR=$(gsd_run …)`. That is the majority
 // and it is the wrong generalisation — the remaining six are neither, and
 // they are live today:
@@ -348,14 +346,16 @@ const stripComments = (raw) => {
 };
 
 const isGit = (t) => { const b = bareCommandName(t); return b === 'git' || /\/git$/.test(b); };
-// Index of the git subcommand after the git word at `gi`, through the hook's walker (hooks/lib/git-cmd.js owns the global-option sets); redirections are skipped; -1 when there is none.
+const GIT_VALUE_FLAGS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--super-prefix']);
+// Index of the git subcommand after the git word at `gi`: redirections are skipped, a value option skips its separate value, every other `-option` is skipped (a safety guard fails closed: an option it does not know must not hide the subcommand); -1 when there is none.
 const gitSubcommandIdx = (toks, gi) => {
-  const at = [];
-  for (let c = gi; c < toks.length && !toks[c].op; c += 1) if (!toks[c].redir) at.push(c);
-  const words = at.map((c) => toks[c].value);
-  words[0] = 'git';
-  const sub = skipToSubcommand(words);
-  return sub === -1 || sub >= at.length ? -1 : at[sub];
+  let c = gi + 1;
+  while (c < toks.length && !toks[c].op) {
+    if (toks[c].redir) { c += 1; continue; }
+    if (!toks[c].value.startsWith('-')) return c;
+    c += GIT_VALUE_FLAGS.has(toks[c].value) ? 2 : 1;
+  }
+  return -1;
 };
 const isWholeTree = (a) => /^(?::\((?:top|literal|glob)[^)]*\)|:\/)?(?:\.\/*|\*+|\/?)$/.test(a);
 const isExcludeMagic = (a) => a.startsWith(':!') || a.startsWith(':^') || a.startsWith(':(exclude)');
@@ -396,8 +396,8 @@ const unscopedGitCommits = (raw, inline = false) => {
   return out;
 };
 
-// The git prefixes the scanner and the hook walker both resolve (property and parity tests loop over them).
-const GIT_PREFIX_SPELLINGS = ['git', 'git -C d', 'git -c k=v', 'git --no-pager', '/usr/bin/git', 'git 2>/dev/null', 'git --super-prefix p'];
+// The git prefixes the scanner resolves; the hook walker resolves all of them except --no-advice, --config-env and --attr-source (round-1 objection 2).
+const GIT_PREFIX_SPELLINGS = ['git', 'git -C d', 'git -c k=v', 'git --no-pager', '/usr/bin/git', 'git 2>/dev/null', 'git --super-prefix p', 'git --no-advice', 'git --config-env=k=V', 'git --attr-source=HEAD'];
 
 module.exports = {
   bareCommandName,
