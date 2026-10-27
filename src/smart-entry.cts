@@ -32,6 +32,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import type { PhaseDirectoryContext } from './phase-id.cjs';
 import { collectSection } from './markdown-sectionizer.cjs';
 import { readOnlyGitEnv } from './read-only-git-env.cjs';
 import { formatGsdSlash, resolveRuntime, runtimeCommand } from './runtime-slash.cjs';
@@ -59,13 +60,13 @@ import stateDocument = require('./state-document.cjs');
 const { stateFieldValue } = stateDocument;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseId = require('./phase-id.cjs');
-const { comparePhaseNum, extractPhaseToken, parsePhaseFromProse, stripProjectCodePrefix } = phaseId;
+const { comparePhaseNum, extractPhaseToken, customPhaseQuery, customDirectoryOwner, parsePhaseFromProse, stripProjectCodePrefix } = phaseId;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateMod = require('./state.cjs');
 const { readStateHeadFreshness } = stateMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
-const { resolvePhaseDirectoryLookup, matchPhaseDirsForLookup } = phaseLocatorMod;
+const { phaseDirectoryOptions, resolvePhaseDirectoryLookup, matchPhaseDirsForLookup } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import unusableInput = require('./unusable-input.cjs');
 const { warnUnusableInput, UNUSABLE_REASON } = unusableInput;
@@ -336,9 +337,9 @@ function readGitSignals(cwd: string): GitSignals {
   return { has_git: true, dirty, unpushed };
 }
 
-/** Leading numeric phase token from a STATE.md scalar or body `Phase:` value. */
-function phaseTokenFromState(raw: string | null): string | null {
-  return parsePhaseFromProse(raw).phase;
+/** Phase identity from a STATE.md scalar or body `Phase:` value, honoring custom naming when a context is supplied. */
+function phaseTokenFromState(raw: string | null, context?: PhaseDirectoryContext): string | null {
+  return parsePhaseFromProse(raw, undefined, context).phase;
 }
 
 /**
@@ -352,22 +353,27 @@ function detectVerifyFailed(cwd: string, currentPhaseRaw: string | null): boolea
   // #4304: both the directory admission scan and the later selector must read
   // the same current-checkout grammar. Bracket is the only opt-in widening.
   const convention = resolvePhaseIdConvention(cwd) === 'bracket' ? 'bracket' : undefined;
+  const directoryContext = phaseDirectoryOptions(cwd);
   let entries: string[] = [];
   try {
     entries = fs.readdirSync(phasesDir)
-      .map((name) => ({ name, phaseToken: phaseTokenFromDirName(name, convention) }))
+      .map((name) => {
+        const custom = customPhaseQuery(name, directoryContext);
+        const parts = custom && customDirectoryOwner(name, custom);
+        return { name, phaseToken: parts ? parts.id : phaseTokenFromDirName(name, convention) };
+      })
       .filter((entry): entry is { name: string; phaseToken: string } => entry.phaseToken !== null)
-      .sort((a, b) => comparePhaseNum(a.phaseToken, b.phaseToken) || a.name.localeCompare(b.name))
+      .sort((a, b) => comparePhaseNum(a.phaseToken, b.phaseToken, directoryContext) || a.name.localeCompare(b.name))
       .map((entry) => entry.name);
   } catch {
     return false;
   }
   if (entries.length === 0) return false;
 
-  const phaseToken = phaseTokenFromState(currentPhaseRaw);
+  const phaseToken = phaseTokenFromState(currentPhaseRaw, directoryContext);
   let targetDir: string | undefined;
   if (phaseToken) {
-    const lookup = resolvePhaseDirectoryLookup(cwd, phaseToken);
+    const lookup = resolvePhaseDirectoryLookup(cwd, phaseToken, undefined, directoryContext);
     // #2528: the fourth directory-resolution site, and the one where a miss is
     // silent — a phase whose directory cannot be found reports "not failed",
     // which reads identically to a healthy phase. It must therefore apply the
@@ -376,7 +382,7 @@ function detectVerifyFailed(cwd: string, currentPhaseRaw: string | null): boolea
     // surfaces its own failed verification. `entries` is already sorted, and
     // `matchPhaseDirs` filters without reordering, so taking the first match
     // preserves the previous `.find()` selection exactly.
-    const { matches } = matchPhaseDirsForLookup(entries, lookup);
+    const { matches } = matchPhaseDirsForLookup(entries, lookup, undefined, directoryContext);
     targetDir = matches[0];
     if (!targetDir) return false;
   } else {

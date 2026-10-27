@@ -13,6 +13,7 @@
  * The tolerant `readIfExists` reader is deleted; a gate reads through `gate-evidence.cts`.
  */
 
+import type { PhaseDirectoryContext } from './phase-id.cjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { tryWithinRoot, PathAcceptance } from './security.cjs';
@@ -32,7 +33,7 @@ import planningWorkspaceMod = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspaceMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
-const { findPhaseInternal, resolvePhaseDirectoryLookup, matchPhaseDirsForLookup } = phaseLocatorMod;
+const { phaseDirectoryOptions, findPhaseInternal, resolvePhaseDirectoryLookup, matchPhaseDirsForLookup } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapModule = require('./roadmap.cjs');
 const { getRoadmapPhaseWithFallback } = roadmapModule;
@@ -76,7 +77,7 @@ export function unresolvableProbeVerdict(readError: string): UnreadableVerdict {
 export function resolvePhaseDir(projectDir: string, phase: string): Evidence<string> {
   let result: ReturnType<typeof findPhaseInternal> | string;
   try {
-    result = findPhaseInternal(projectDir, phase);
+    result = findPhaseInternal(projectDir, phase, undefined, phaseDirectoryOptions(projectDir));
   } catch (err) {
     return evidenceFromError<string>(err, `phase ${phase}`);
   }
@@ -105,13 +106,18 @@ export function resolvePhaseDir(projectDir: string, phase: string): Evidence<str
  * `resolvePhaseDir` would widen what those gates inspect, so the two stay apart and each states its
  * scope. Throws when `phasesDir` cannot be listed; both callers sit inside their non-blocking catch.
  */
-export function resolvePhaseDirByToken(cwd: string, phasesDir: string, phaseArg: string): string | null {
-  const lookup = resolvePhaseDirectoryLookup(cwd, phaseArg);
+export function resolvePhaseDirByToken(
+  cwd: string,
+  phasesDir: string,
+  phaseArg: string,
+  directoryContext: PhaseDirectoryContext = phaseDirectoryOptions(cwd),
+): string | null {
+  const lookup = resolvePhaseDirectoryLookup(cwd, phaseArg, undefined, directoryContext);
   const dirEntries = fs.readdirSync(phasesDir, { withFileTypes: true });
   const dirNames = dirEntries.filter((e) => e.isDirectory()).map((e) => e.name);
   // #4304: both drift gates resolve a directory in the current checkout.
   // Bracket is the only opt-in grammar; all other conventions remain legacy.
-  const matched = matchPhaseDirsForLookup(dirNames, lookup).matches[0];
+  const matched = matchPhaseDirsForLookup(dirNames, lookup, undefined, directoryContext).matches[0];
   if (matched) return path.join(phasesDir, matched);
   const contained = tryWithinRoot(phaseArg, phasesDir);
   if (contained !== null && statEvidence(contained).kind === 'found') return contained;

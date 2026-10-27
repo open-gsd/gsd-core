@@ -920,6 +920,7 @@ function hasPhaseListingTableHeader(content: string): boolean {
 function scanMilestonePhaseIdSets(
   window: string,
   convention: string | null | undefined,
+  context?: ReturnType<typeof phaseIdModule.phaseDirectoryContext>,
 ): { ids: Set<string>; qualifiedIds: Set<string> } {
   const ids = new Set<string>();
   const qualifiedIds = new Set<string>();
@@ -932,7 +933,7 @@ function scanMilestonePhaseIdSets(
   const capturing = convention === 'bracket';
   const bracketGroups = capturing ? 1 : 0;
   const phaseHeadingPattern = new RegExp(
-    `^${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.ANY_BRACKET, convention, capturing)}([\\w][\\w.-]*)(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:`,
+    `^${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.ANY_BRACKET, convention, capturing)}(${context?.phaseNaming === 'custom' && convention !== 'bracket' ? phaseIdModule.phaseScanTokenSource(context) : '[\\w][\\w.-]*'})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:`,
     'i',
   );
   for (const h of tokenizeHeadings(window)) {
@@ -2494,7 +2495,7 @@ type MilestonePhaseFilter = ((dirName: string) => boolean) & {
  *   resolution exactly, including its `GSD_WORKSTREAM` env fallback — every
  *   pre-#2562 call site is unaffected.
  */
-function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, phaseIdConvention?: string | null, ws?: string | null): MilestonePhaseFilter {
+function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, phaseIdConvention?: string | null, ws?: string | null, context?: ReturnType<typeof phaseIdModule.phaseDirectoryContext>): MilestonePhaseFilter {
   const milestonePhaseNums = new Set<string>();
   // #612: the milestone-QUALIFIED form (`{CODE}.{MM}-{PP}`) of each in-scope
   // bracket heading, kept in its OWN set — deliberately not in
@@ -2597,7 +2598,7 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
     // #3262 remains the single owner of the phase-set scan. #612 extends its
     // return with qualified bracket ids rather than restoring the superseded
     // inline duplicate this commit was originally written against.
-    const scanned = scanMilestonePhaseIdSets(roadmap, headingConvention);
+    const scanned = scanMilestonePhaseIdSets(roadmap, headingConvention, context);
     for (const id of scanned.ids) milestonePhaseNums.add(id);
     for (const qualified of scanned.qualifiedIds) milestoneQualifiedIds.add(qualified);
   } catch {
@@ -2657,7 +2658,11 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
     // phase-id-owner: the [A-Za-z] letter class does real case handling here — this regex carries NO /i flag; kept literal, not source-byte-equal to the canonical PHASE_NUMBER_TOKEN_SOURCE.
     : /^0*(\d+[A-Za-z]?(?:\.\d+)*)/;
 
+  const customKeys = context?.phaseNaming === 'custom' && headingConvention !== 'bracket'
+    ? new Set([...milestonePhaseNums].map(id => phaseIdModule.phaseKeyFromToken(id, context))) : null;
+
   function isDirInMilestone(dirName: string): boolean {
+    if (customKeys) return customKeys.has(phaseIdModule.phaseKeyFromDir(dirName, headingConvention, context));
     // #612: the DIR side of this filter, selected by the same convention the
     // heading side selected. Without it the heading scan's new bracket reach was
     // half a fix: `milestonePhaseNums` became non-empty, so the pass-all degrade

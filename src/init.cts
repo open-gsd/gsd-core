@@ -101,7 +101,7 @@ const { output, error, ERROR_REASON, formatDiagnosticToken } = io;
 const { loadConfig, loadConfigResolved } = configLoader;
 const { resolveModelInternal, resolveGranularityInternal, assertValidGranularityOverride } = modelResolver;
 const {
-  findPhaseInternal, listMilestonePhaseDirs, listAllPhaseDirs,
+  phaseDirectoryOptions, findPhaseInternal, listMilestonePhaseDirs, listAllPhaseDirs,
 } = phaseLocator;
 const {
   getRoadmapPhaseInternal,
@@ -112,6 +112,12 @@ const {
 const { pathExistsInternal, generateSlugInternal, toPosixPath } = coreUtils;
 const {
   comparePhaseNum,
+  phaseDirectoryName,
+  customPhaseQuery,
+  customDirectoryOwner,
+  phaseScanTokenSource,
+  phaseKeyFromToken,
+  phaseDirectoryContext,
   normalizePhaseName,
   stripProjectCodePrefix,
   PHASE_NUMBER_TOKEN_SOURCE,
@@ -202,8 +208,9 @@ function guardedFindPhase(
   cwd: string,
   phase: string,
   projectCode: unknown,
+  phaseNaming: unknown,
 ): Record<string, unknown> | null {
-  let phaseInfo = findPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+  let phaseInfo = findPhaseInternal(cwd, phase, undefined, phaseDirectoryOptions(cwd, { phase_naming: phaseNaming, project_code: projectCode })) as unknown as Record<string, unknown> | null;
   if (isForeignPrefixedPhaseQuery(phase, projectCode) && !phaseInfoMatchesExactPrefix(phaseInfo, phase)) {
     phaseInfo = null;
   }
@@ -1068,7 +1075,7 @@ function cmdInitExecutePhase(
   }
 
   const config = loadConfig(cwd);
-  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code, config.phase_naming);
   // #3216: getMilestoneInfo now returns a ScopedResult — `.value` carries the
   // MilestoneInfo (or null on any non-COMPLETE scope). NOT display-only: when
   // `branching_strategy === 'milestone'`, `milestone['version']`/`['name']`
@@ -1274,7 +1281,7 @@ function cmdInitPlanPhase(
 
   const config = loadConfig(cwd);
   // #2056/#2104: foreign-prefixed queries must not collapse to numeric phases.
-  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code, config.phase_naming);
   const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
   phaseInfo = applyRoadmapFallback(phaseInfo, roadmapPhase, (rp) => {
     const phaseName = rp['phase_name'] as string | null;
@@ -1309,12 +1316,16 @@ function cmdInitPlanPhase(
   const phaseNamePlan = resolvePhaseDisplayName(phaseInfo, roadmapPhase);
   const rawProjectCodePlan = (config.project_code as string) || '';
   let expectedPhaseDirPlan: string | null = null;
-  if (!phaseDirPlan && phaseNumberPlan && phaseNamePlan) {
+  const namingContextPlan = phaseDirectoryContext(config);
+  const customNamingPlan = customPhaseQuery(phase, namingContextPlan) !== null;
+  if ((!phaseDirPlan || customNamingPlan) && phaseNumberPlan && phaseNamePlan) {
     const paddedNum = normalizePhaseName(phaseNumberPlan);
-    const slug = (generateSlugInternal(phaseNamePlan) || '').substring(0, 60);
+    const expectedName = (roadmapPhase?.['phase_name'] as string | undefined) || phaseNamePlan;
+    const slug = (generateSlugInternal(expectedName) || '').substring(0, 60);
     if (slug) {
-      const prefix = rawProjectCodePlan ? `${rawProjectCodePlan}-` : '';
-      const dirName = `${prefix}${paddedNum}-${slug}`;
+      const dirName = phaseDirectoryName(
+        customPhaseQuery(phaseNumberPlan, namingContextPlan) ? phaseNumberPlan : paddedNum, slug, rawProjectCodePlan,
+      );
       // #2376: absolute — see comment on phase_dir below.
       expectedPhaseDirPlan = toPosixPath(path.join(planningPaths(cwd).phases, dirName));
     }
@@ -2007,7 +2018,7 @@ function cmdInitVerifyWork(cwd: string, phase: string, raw: boolean): void {
 
   const config = loadConfig(cwd);
   const _slashRuntime = resolveRuntime(cwd);
-  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code, config.phase_naming);
   const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
   phaseInfo = applyRoadmapFallback(phaseInfo, roadmapPhase, (rp) => {
     const phaseName = rp['phase_name'] as string | null;
@@ -2137,7 +2148,7 @@ function cmdInitCodeReview(
   options: Record<string, unknown> = {},
 ): void {
   const config = loadConfig(cwd);
-  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code, config.phase_naming);
   const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
   phaseInfo = applyRoadmapFallback(phaseInfo, roadmapPhase, (rp) => {
     const rpName = rp['phase_name'] as string | null;
@@ -2216,7 +2227,7 @@ function cmdInitReview(
   options: Record<string, unknown> = {},
 ): void {
   const config = loadConfig(cwd);
-  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code, config.phase_naming);
   const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
   phaseInfo = applyRoadmapFallback(phaseInfo, roadmapPhase, (rp) => ({
     found: true,
@@ -2287,7 +2298,7 @@ function cmdInitDiscussPhaseAssumptions(
   options: Record<string, unknown> = {},
 ): void {
   const config = loadConfig(cwd);
-  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code, config.phase_naming);
   const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
   phaseInfo = applyRoadmapFallback(phaseInfo, roadmapPhase, (rp) => {
     const rpName = rp['phase_name'] as string | null;
@@ -2354,7 +2365,7 @@ function cmdInitDiscussPhaseAssumptions(
 
 function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
   const config = loadConfig(cwd);
-  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code, config.phase_naming);
 
   // #2237: surface ambiguous phase-directory collisions instead of silently
   // taking the first match when unrelated projects share a .planning/phases/ tree.
@@ -3018,6 +3029,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   }
   const rawContent = fs.readFileSync(paths.roadmap, 'utf-8');
   const content = extractCurrentMilestone(rawContent, cwd);
+  const directoryContext = phaseDirectoryOptions(cwd, config, rawContent);
 
   // #3185 (ADR-3180 Decision 1): "which phase directories belong to the
   // CURRENT milestone" is the scoped question listMilestonePhaseDirs owns —
@@ -3034,7 +3046,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   // phase's own (first) checkbox; anchoring alone does not fully close that
   // "last-match-wins" composition defect.
   for (const line of content.split(/\r?\n/)) {
-    const checkbox = parsePhaseChecklistLine(line, phaseIdConvention);
+    const checkbox = parsePhaseChecklistLine(line, phaseIdConvention, directoryContext);
     if (checkbox && !_checkboxStates.has(checkbox.phaseToken)) {
       _checkboxStates.set(checkbox.phaseToken, checkbox.checked);
     }
@@ -3042,7 +3054,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
 
   // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
   const phasePattern = new RegExp(
-    `#{2,4}\\s*${phaseHeadingPrefix}(${PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n]+)`,
+    `#{2,4}\\s*${phaseHeadingPrefix}(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n]+)`,
     'gi',
   );
   const phases: Record<string, unknown>[] = [];
@@ -3069,7 +3081,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     const sectionStart = match.index;
     const restOfContent = content.slice(sectionStart);
     const nextHeader = restOfContent.match(new RegExp(
-      `\\n#{2,4}\\s+${phaseHeadingPrefixNoCapture}\\d[\\d.]*`,
+      `\\n#{2,4}\\s+${phaseHeadingPrefixNoCapture}${phaseScanTokenSource(directoryContext)}`,
       'i',
     ));
     const sectionEnd = nextHeader
@@ -3113,7 +3125,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
       // of reporting no_directory/phase_complete:false. Five other init
       // commands already route through this same primitive; this was the
       // holdout private copy (#4793-family declared-owner drift).
-      const located = findPhaseInternal(cwd, phaseNum, phaseIdConvention) as unknown as Record<string, unknown> | null;
+      const located = findPhaseInternal(cwd, phaseNum, phaseIdConvention, directoryContext) as unknown as Record<string, unknown> | null;
       const dirMatch = located && located['found']
         ? path.posix.basename(String(located['directory']))
         : null;
@@ -3941,6 +3953,7 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
   }
 
   const phasesDir = path.join(planningDir(cwd), 'phases');
+  const directoryContext = phaseDirectoryOptions(cwd, config);
   const phases: Record<string, unknown>[] = [];
   let currentPhase: Record<string, unknown> | null = null;
   let nextPhase: Record<string, unknown> | null = null;
@@ -3958,7 +3971,7 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
     // buildPhaseHeadingScanRegex (phase-id.cts) so this scan also recognizes
     // bracket-convention headings instead of hand-rolling a literal `Phase\s+`.
     const { regex: headingPattern, phaseNumGroup: hNumGroup, phaseNameGroup: hNameGroup } = buildPhaseHeadingScanRegex(
-      PHASE_HEADING_BASELINE.ANY_BRACKET, progressConvention,
+      PHASE_HEADING_BASELINE.ANY_BRACKET, progressConvention, directoryContext,
     );
     let hm: RegExpExecArray | null;
     while ((hm = headingPattern.exec(roadmapContent)) !== null) {
@@ -3992,7 +4005,7 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
     // matched (by absorbing the bracket text). This does NOT migrate the site
     // onto phaseHeadingPrefixSrcFor / the bracket convention — that stays
     // out of scope per the comment above (#4984 revert, pinned census).
-    const cbPattern = new RegExp(`^[ \\t]*-[ \\t]*\\[(x| )\\][ \\t]*(?:\\*\\*)?(?:\\[[^\\]\\n]{0,200}\\]\\s*)?Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`, 'gim');
+    const cbPattern = new RegExp(`^[ \\t]*-[ \\t]*\\[(x| )\\][ \\t]*(?:\\*\\*)?(?:\\[[^\\]\\n]{0,200}\\]\\s*)?Phase\\s+(${phaseScanTokenSource(directoryContext)})[:\\s]`, 'gim');
     let cbm: RegExpExecArray | null;
     while ((cbm = cbPattern.exec(roadmapContent)) !== null) {
       const cbKey = cbm[2];
@@ -4016,10 +4029,12 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
     const dirs = listMilestonePhaseDirs(phasesDir, { cwd }).value;
 
     for (const dir of dirs) {
-      const dirMatch = dir.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i'));
-      const phaseNumber = dirMatch ? dirMatch[1] : dir;
-      const phaseName = dirMatch && dirMatch[2] ? dirMatch[2] : null;
-      seenPhaseNums.add(phaseNumber.replace(/^0+/, '') || '0');
+      const dirMatch = dir.match(new RegExp(`^(${phaseScanTokenSource(directoryContext)})-?(.*)`, 'i'));
+      const query = customPhaseQuery(dir, directoryContext);
+      const owner = query && customDirectoryOwner(dir, query);
+      const phaseNumber = owner ? owner.id : dirMatch ? dirMatch[1] : dir;
+      const phaseName = owner ? owner.slug : dirMatch && dirMatch[2] ? dirMatch[2] : null;
+      seenPhaseNums.add((phaseKeyFromToken(phaseNumber, directoryContext) ?? phaseNumber).toLowerCase());
 
       const phasePath = path.join(phasesDir, dir);
       const phaseFiles = fs.readdirSync(phasePath);
@@ -4081,7 +4096,7 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
   }
 
   for (const [num, name] of roadmapPhaseNames) {
-    const stripped = num.replace(/^0+/, '') || '0';
+    const stripped = (phaseKeyFromToken(num, directoryContext) ?? num).toLowerCase();
     if (!seenPhaseNums.has(stripped)) {
       const checkboxComplete =
         roadmapCheckboxStates.get(num) === true ||
@@ -4121,7 +4136,7 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
     }
   }
 
-  phases.sort((a, b) => comparePhaseNum(a['number'], b['number']));
+  phases.sort((a, b) => comparePhaseNum(a['number'], b['number'], directoryContext));
 
   // #3581: the frontier is ROADMAP ORDER, not artifact presence. The disk loop
   // above could claim nextPhase from a stray out-of-order artifact directory

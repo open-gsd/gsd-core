@@ -462,6 +462,7 @@ function buildRequirements(
   knownPhaseKeys: Set<string>,
   diagnostics: Diagnostic[],
   planningRoot: string,
+  directoryContext: ReturnType<typeof phaseIdMod.phaseDirectoryContext>,
 ): { rows: RequirementRow[]; scope: Scope } {
   const doc = readDocument(requirementsPath, planningRoot);
   if (!doc.exists) {
@@ -523,7 +524,7 @@ function buildRequirements(
       // here too — it is a FILE-MEMBERSHIP predicate (#3511) for aggregate
       // `*-UAT.md` / `*-VERIFICATION.md` scans, not a phase-identity equality
       // test, and is unreliable for decimal phases.
-      if (!knownPhaseKeys.has(phaseKeyFromToken(token))) {
+      if (!knownPhaseKeys.has(phaseKeyFromToken(token, directoryContext))) {
         diagnostics.push({
           code: INSPECT_DIAGNOSTIC.REQUIREMENT_PHASE_UNKNOWN,
           subject: `${item.id}->${token}`,
@@ -1081,10 +1082,10 @@ function extractDependencyTokens(sectionBody: string, phaseIdConvention: string 
  * sibling phase whose TITLE merely mentions this phase's number is never
  * hijacked.
  */
-function findPhaseRoadmapSection(cwd: string, roadmapText: string, phaseId: string): string | null {
+function findPhaseRoadmapSection(cwd: string, roadmapText: string, phaseId: string, directoryContext: phaseIdMod.PhaseDirectoryContext): string | null {
   const scoped = extractCurrentMilestone(roadmapText, cwd);
   const headingRe = new RegExp(
-    `^(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+${phaseMarkdownRegexSource(phaseId)}(?=[\\s:(]|$)`,
+    `^(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+${phaseMarkdownRegexSource(phaseId, directoryContext)}(?=[\\s:(]|$)`,
     'i',
   );
   const section = collectSection(scoped, (h) => headingRe.test(h.text));
@@ -1119,6 +1120,7 @@ function buildPhaseGoalAndDependencies(
   phaseDirLabel: string,
   phaseIdConvention: string | null,
   diagnostics: Diagnostic[],
+  directoryContext: phaseIdMod.PhaseDirectoryContext,
 ): { goal: ScopedText; dependencies: ScopedTextList } {
   if (!roadmapDoc.readable || roadmapDoc.text === null) {
     diagnostics.push({
@@ -1142,7 +1144,7 @@ function buildPhaseGoalAndDependencies(
       dependencies: { value: [], scope: SCOPE.UNSCOPED },
     };
   }
-  const sectionBody = findPhaseRoadmapSection(cwd, roadmapDoc.text, phaseId);
+  const sectionBody = findPhaseRoadmapSection(cwd, roadmapDoc.text, phaseId, directoryContext);
   if (sectionBody === null) {
     diagnostics.push({
       code: INSPECT_DIAGNOSTIC.ROADMAP_UNSCOPED,
@@ -1191,6 +1193,7 @@ function buildPlanningInspectResult(cwd: string): {
   }
 
   const snapshot = buildPlanningSnapshot(cwd);
+  const directoryContext = snapshot.directoryContext;
 
   if (snapshot.milestone.scope !== SCOPE.COMPLETE) {
     diagnostics.push({
@@ -1227,7 +1230,7 @@ function buildPlanningInspectResult(cwd: string): {
   // one phase.
   const checkboxByPhaseKey = new Map<string, boolean>();
   for (const [token, ticked] of Object.entries(checkboxes)) {
-    checkboxByPhaseKey.set(phaseKeyFromToken(token), ticked);
+    checkboxByPhaseKey.set(phaseKeyFromToken(token, directoryContext), ticked);
   }
   const phaseSnapshots = snapshot.phases.value as {
     dir: string;
@@ -1242,7 +1245,7 @@ function buildPlanningInspectResult(cwd: string): {
   // `phaseKeyFromDir`), not a raw regex scrape — this is the set
   // `buildRequirements` below matches Traceability tokens against via
   // `phaseKeyFromToken`.
-  const knownPhaseKeys: Set<string> = new Set(windowed.map((dir) => phaseKeyFromDir(dir)));
+  const knownPhaseKeys: Set<string> = new Set(windowed.map((dir) => phaseKeyFromDir(dir, undefined, directoryContext)));
 
   // Read once, shared across every phase row's goal/dependencies lookup —
   // the same `readDocument` seam every other document read in this module
@@ -1287,7 +1290,9 @@ function buildPlanningInspectResult(cwd: string): {
     }
 
     const token = /^(\d+(?:\.\d+)*)/.exec(phase.dir);
-    const phaseId = token ? token[1] : null;
+    const custom = phaseIdMod.customPhaseQuery(phase.dir, directoryContext);
+    const owner = custom && phaseIdMod.customPhaseDirectoryParts(phase.dir, custom);
+    const phaseId = owner ? owner.id : token ? token[1] : null;
     const { goal, dependencies } = buildPhaseGoalAndDependencies(
       cwd,
       roadmapDoc,
@@ -1295,6 +1300,7 @@ function buildPlanningInspectResult(cwd: string): {
       phase.dir,
       phaseIdConvention,
       diagnostics,
+      directoryContext,
     );
 
     // `uat.foldScope`, NOT `uat.scope` (#3078 round-8). The two currently
@@ -1331,8 +1337,8 @@ function buildPlanningInspectResult(cwd: string): {
         route: verification.route,
       },
       roadmap_acceptance: {
-        checkbox: checkboxByPhaseKey.has(phaseKeyFromDir(phase.dir))
-          ? (checkboxByPhaseKey.get(phaseKeyFromDir(phase.dir)) as boolean)
+        checkbox: checkboxByPhaseKey.has(phaseKeyFromDir(phase.dir, undefined, directoryContext))
+          ? (checkboxByPhaseKey.get(phaseKeyFromDir(phase.dir, undefined, directoryContext)) as boolean)
           : null,
         // ADR-3180 §7.4: a ticked checkbox is a human annotation with no
         // machine authority. Stated in the payload so a consumer cannot
@@ -1347,7 +1353,7 @@ function buildPlanningInspectResult(cwd: string): {
     };
   });
 
-  const requirements = buildRequirements(paths.requirements, knownPhaseKeys, diagnostics, paths.planning);
+  const requirements = buildRequirements(paths.requirements, knownPhaseKeys, diagnostics, paths.planning, directoryContext);
 
   const phaseScope = worstScope(
     snapshot.phaseDirs.scope,

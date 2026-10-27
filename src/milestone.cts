@@ -64,7 +64,7 @@ import planScanMod = require('./plan-scan.cjs');
 const { scanPhasePlans } = planScanMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
 import phaseLocatorMod = require('./phase-locator.cjs');
-const { listMilestonePhaseDirs, resolvePhaseDirectoryLookup, matchPhaseDirsForLookup } = phaseLocatorMod;
+const { phaseDirectoryOptions, listMilestonePhaseDirs, resolvePhaseDirectoryLookup, matchPhaseDirsForLookup } = phaseLocatorMod;
 const { planningPaths, resolvePhaseIdConvention } = planningWorkspace;
 const { extractFrontmatter } = frontmatterMod;
 // ADR-3408 §8.3 / #3469: `writeStateMd` gets sync and NO preservation — the
@@ -682,7 +682,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   // `platformEnsureDir(archiveDir)` below — a refused run (scope not COMPLETE,
   // no --force) must be a true no-op on disk, and creating the archive
   // directory first left an empty directory behind even on refusal.
-  const isDirInMilestone = getMilestonePhaseFilter(cwd, version);
+  const isDirInMilestone = getMilestonePhaseFilter(cwd, version, undefined, undefined, phaseDirectoryOptions(cwd));
   if (isDirInMilestone.missingExplicitVersion) {
     error(`no phases found for milestone ${version} in ROADMAP.md`);
   }
@@ -797,8 +797,9 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
       // properly-scaffolded bracket phase reads as disk_status: 'no_directory'
       // — turning a real bracket project's own phases into false "ROADMAP
       // lists N unstarted phase(s)" failures on `milestone complete`.
+      const directoryContext = phaseDirectoryOptions(cwd, undefined, scopedContent);
       const { regex: phasePattern, phaseNumGroup } = buildPhaseHeadingScanRegex(
-        PHASE_HEADING_BASELINE.ANY_BRACKET, phaseConvention,
+        PHASE_HEADING_BASELINE.ANY_BRACKET, phaseConvention, directoryContext,
       );
       const noDirectoryPhases: string[] = [];
       let pm: RegExpExecArray | null;
@@ -821,14 +822,14 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
         // the #1445 /^999/ progress filters). (#1580)
         // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this local check already covered both 0 and 999; now delegates to the single canonical owner.
         if (isSentinelPhaseId(phaseNum)) continue;
-        const lookup = resolvePhaseDirectoryLookup(cwd, phaseNum);
+        const lookup = resolvePhaseDirectoryLookup(cwd, phaseNum, undefined, directoryContext);
         // A phase has disk_status: 'no_directory' when no phase directory
         // with a matching token exists on disk. Use the same matchPhaseDirs
         // owner that roadmap.analyze uses to avoid false positives on decimal
         // (2.1) and letter-suffix (12A) phase IDs. (#2528) Under #4304 the
         // current checkout's bracket convention and migration-window legacy
         // fallback are both owned by the shared lookup adapter.
-        const hasDirectory = matchPhaseDirsForLookup(phaseDirEntries, lookup).matches.length > 0;
+        const hasDirectory = matchPhaseDirsForLookup(phaseDirEntries, lookup, undefined, directoryContext).matches.length > 0;
         if (!hasDirectory) {
           noDirectoryPhases.push(phaseNum);
         }

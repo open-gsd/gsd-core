@@ -16,6 +16,7 @@
  *   This file provides the CJS (sync) implementations of those handlers.
  */
 
+import type { PhaseDirectoryContext } from './phase-id.cjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -47,8 +48,14 @@ const {
   phaseMarkdownRegexSource,
   comparePhaseNum,
   matchPhaseDirs,
+  phaseLookupQuery,
   phaseNumberForMatch,
   phaseKeyFromDir,
+  customPhaseDirectoryParts,
+  customDirectoryOwner,
+  phaseScanTokenSource,
+  CUSTOM_PHASE_ID_FILE,
+  isCustomPhaseId,
   isSentinelPhaseId,
   scopeToPhase,
   parsePhaseId,
@@ -78,7 +85,7 @@ import { gateVerdict } from './gate-verdict.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
 import phaseLocatorMod = require('./phase-locator.cjs');
 const {
-  findPhaseInternal, getArchivedPhaseDirs, listMilestonePhaseDirs, listAllPhaseDirs,
+  phaseDirectoryOptions, findPhaseInternal, getArchivedPhaseDirs, listMilestonePhaseDirs, listAllPhaseDirs,
   resolvePhaseDirectoryLookup, matchPhaseDirsForLookup,
 } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-scope.cjs is an export= CommonJS module
@@ -126,7 +133,7 @@ import planningWorkspace = require('./planning-workspace.cjs');
 import frontmatterMod = require('./frontmatter.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- state.cjs is an export= CommonJS module
 import stateMod = require('./state.cjs');
-import { scrubGitLocationEnv, platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync, contentChangedAfterNormalize } from './shell-command-projection.cjs';
+import { scrubGitLocationEnv, platformEnsureDir, platformWriteSync, platformReadSync, retryRenameSync, contentChangedAfterNormalize } from './shell-command-projection.cjs';
 import { parsePlanningDoc, findField, readNode, setFieldValue, serialize } from './planning-document.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
@@ -312,13 +319,14 @@ function cmdPhasesList(cwd: string, options: PhaseListOptions, raw: boolean): vo
     if (phase) {
       // LOOKUP (b): search the physical set, plus archived when asked.
       const lookupPool = [...readSubdirectories(phasesDir, true), ...archivedLabels];
-      const lookup = resolvePhaseDirectoryLookup(cwd, phase);
+      const directoryContext = phaseDirectoryOptions(cwd);
+      const lookup = resolvePhaseDirectoryLookup(cwd, phase, undefined, directoryContext);
       // The pool is #3185's (physical set + archived); the matcher is this
       // PR's. `dirs` is deliberately not read here: on this base it is not
       // assigned until the branch below picks a match. Under bracket, the
       // active project+milestone identity wins before migration-window legacy
       // names; differently-qualified historical dirs are never first-picked.
-      const { matches } = matchPhaseDirsForLookup(lookupPool, lookup);
+      const { matches } = matchPhaseDirsForLookup(lookupPool, lookup, undefined, directoryContext);
       const match = matches[0];
       if (!match) {
         output({ files: [], count: 0, phase_dir: null, error: 'Phase not found' }, raw, '');
@@ -331,7 +339,8 @@ function cmdPhasesList(cwd: string, options: PhaseListOptions, raw: boolean): vo
       const enumerated = listMilestonePhaseDirs(phasesDir, { cwd });
       phaseScope = enumerated.scope;
       dirs = [...enumerated.value, ...archivedLabels];
-      dirs.sort((a, b) => comparePhaseNum(a, b));
+      const directoryContext = phaseDirectoryOptions(cwd);
+      dirs.sort((a, b) => comparePhaseNum(a, b, directoryContext));
     }
 
     if (type) {
@@ -429,7 +438,7 @@ function cmdPhaseNextDecimal(cwd: string, basePhase: string, raw: boolean): void
     if (fs.existsSync(phasesDir)) {
       const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
       const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
-      baseExists = matchPhaseDirs(dirs, normalized, convention, lookup.bracketContext).matches.length > 0;
+      baseExists = matchPhaseDirs(dirs, normalized, convention, lookup.bracketContext, phaseDirectoryOptions(cwd)).matches.length > 0;
     }
 
     const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
@@ -631,7 +640,8 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
   }
 
   const planBase = planningDir(cwd);
-  const lookup = resolvePhaseDirectoryLookup(cwd, phase);
+  const directoryContext = phaseDirectoryOptions(cwd);
+  const lookup = resolvePhaseDirectoryLookup(cwd, phase, undefined, directoryContext);
   const { normalized, convention } = lookup;
   const notFound = {
     found: false,
@@ -673,12 +683,14 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
   );
 
   for (const searchDir of searchDirs) {
+    const searchContext = phaseLocatorMod.phaseDirectoryContextForRoot(directoryContext, searchDir);
+    const custom = phaseIdMod.customPhaseQuery(phase, searchContext);
     try {
       const entries = fs.readdirSync(searchDir, { withFileTypes: true });
       const dirs = entries
         .filter((e) => e.isDirectory())
         .map((e) => e.name)
-        .sort((a, b) => comparePhaseNum(a, b));
+        .sort((a, b) => comparePhaseNum(a, b, searchContext));
 
       // #2237: fail loud when multiple directories match the same bare phase
       // number — prevents cross-project file writes when unrelated projects
@@ -690,6 +702,7 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
         dirs,
         lookup,
         searchDir === flatPhasesDir ? undefined : null,
+        searchContext,
       );
       if (matches.length === 0) continue;
       if (matches.length > 1) {
@@ -709,10 +722,11 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
         : match.match(
           new RegExp(`^${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i')
         ) || match.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i'));
+      const customParts = custom ? customPhaseDirectoryParts(match, custom) : null;
       const phaseNumber = isBracketDirectory
         ? phaseNumberForMatch(match, usedBareFallback, convention)
-        : dirMatch ? dirMatch[1] : normalized;
-      let phaseName = dirMatch && dirMatch[2] ? dirMatch[2] : null;
+        : customParts?.id || (dirMatch ? dirMatch[1] : normalized);
+      let phaseName = customParts?.slug || (dirMatch && dirMatch[2] ? dirMatch[2] : null);
       if (isBracketDirectory) {
         const id = parsePhaseId(match);
         const idToken = `${id.phase}${id.subphase ? `.${id.subphase}` : ''}`;
@@ -964,7 +978,8 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
   }
 
   const phasesDir = path.join(planningDir(cwd), 'phases');
-  const lookup = resolvePhaseDirectoryLookup(cwd, phase);
+  const directoryContext = phaseDirectoryOptions(cwd);
+  const lookup = resolvePhaseDirectoryLookup(cwd, phase, undefined, directoryContext);
   const { normalized } = lookup;
 
   let phaseDir: string | null = null;
@@ -975,12 +990,12 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
     const dirs = entries
       .filter((e) => e.isDirectory())
       .map((e) => e.name)
-      .sort((a, b) => comparePhaseNum(a, b));
+      .sort((a, b) => comparePhaseNum(a, b, directoryContext));
     // #2528: selection delegates to the canonical two-pass matcher shared with
     // the locator and the find-phase scan (this site previously first-matched
     // with `.find()` and had no multi-match guard — the #2237 fail-loud rule
     // now applies here too, so the three resolution paths cannot disagree).
-    const { matches } = matchPhaseDirsForLookup(dirs, lookup);
+    const { matches } = matchPhaseDirsForLookup(dirs, lookup, undefined, directoryContext);
     if (matches.length > 1) {
       ambiguousMatches = matches;
     } else if (matches.length === 1) {
@@ -1981,6 +1996,11 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
 
   const config = loadConfig(cwd);
   const convention = resolvePhaseIdConvention(cwd);
+  const naming = phaseDirectoryOptions(cwd, undefined, '');
+  if (customId != null && convention !== 'bracket') {
+    const usage = phaseLocatorMod.customPhaseNamingUsage(cwd, naming);
+    if (usage) error(usage, naming.configError ? ERROR_REASON.CONFIG_PARSE_FAILED : ERROR_REASON.PHASE_NAMING_NOT_CUSTOM);
+  }
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
   if (!fs.existsSync(roadmapPath)) {
     error('ROADMAP.md not found');
@@ -1995,22 +2015,18 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     if (bracketContext) assertBracketAddWindowLocated(rawContent, cwd, bracketContext, 'phase add');
     const content = extractCurrentMilestone(rawContent, cwd);
 
-    const projectCode = (config.project_code as string) || '';
-    const prefix = projectCode ? `${projectCode}-` : '';
-
     let _newPhaseId: number | string;
-    let _dirName: string;
 
+    let _dirName = '';
     if (bracketContext) {
       const phasesOnDisk = path.join(planningDir(cwd), 'phases');
       const usedPhaseNums = collectBracketPhaseNumbers(content, phasesOnDisk, bracketContext);
       collectSiblingWorktreePhaseNums(cwd, usedPhaseNums, bracketContext);
       _newPhaseId = nextPhaseNum(maxPhaseNum(usedPhaseNums));
       _dirName = bracketDirNameOrRefuse(bracketPhaseId(bracketContext, _newPhaseId), slug, description);
-    } else if (customId || config.phase_naming === 'custom') {
+    } else if (naming.phaseNaming === 'custom') {
       _newPhaseId = customId || slug.toUpperCase();
       if (!_newPhaseId) error('--id required when phase_naming is "custom"');
-      _dirName = `${prefix}${_newPhaseId}-${slug}`;
     } else {
       // Collect all phase numbers visible in the current-milestone content. Three sources are
       // scanned so a phase in ANY representation (section header, roadmap bullet, or on-disk
@@ -2019,18 +2035,19 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
       // Header/bullet scans are #1729 pre-colon-tag tolerant and #3185 sentinel-filtered.
       const usedPhaseNums = collectUsedPhaseNums(cwd, content);
       _newPhaseId = nextPhaseNum(maxPhaseNum(usedPhaseNums));
-      const paddedNum = String(_newPhaseId).padStart(2, '0');
-      _dirName = `${prefix}${paddedNum}-${slug}`;
     }
-
-    const dirPath = path.join(planningDir(cwd), 'phases', _dirName);
 
     if (bracketContext) {
+      const dirPath = path.join(planningDir(cwd), 'phases', _dirName);
       assertPhaseDirectoryDestinationSafe(path.dirname(dirPath), _dirName, 'create');
+      platformEnsureDir(dirPath);
+      platformWriteSync(path.join(dirPath, '.gitkeep'), '');
+    } else {
+      [{dirName: _dirName}] = phaseLocatorMod.createPhaseDirectories(cwd, [{
+        id: String(_newPhaseId), slug,
+        directoryId: typeof _newPhaseId === 'number' ? String(_newPhaseId).padStart(2, '0') : _newPhaseId,
+      }], {...naming, roadmap: rawContent});
     }
-
-    platformEnsureDir(dirPath);
-    platformWriteSync(path.join(dirPath, '.gitkeep'), '');
 
     let phaseEntry: string;
     if (bracketContext && typeof _newPhaseId === 'number') {
@@ -2044,7 +2061,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
         `\n### ${display}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${id.phase} to break down)\n`;
     } else {
       const dependsOn =
-        config.phase_naming === 'custom' ? '' : dependsOnFor(_newPhaseId, rawContent);
+        naming.phaseNaming === 'custom' ? '' : dependsOnFor(_newPhaseId, rawContent);
       phaseEntry =
         `\n### Phase ${_newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${_newPhaseId} to break down)\n`;
     }
@@ -2068,7 +2085,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     directory: toPosixPath(
       path.join(path.relative(cwd, planningDir(cwd)), 'phases', dirName),
     ),
-    naming_mode: config.phase_naming,
+    naming_mode: naming.phaseNaming,
     roadmap_entry: roadmapEntry,
   };
   if (titleWarning) result['warning'] = titleWarning;
@@ -2100,12 +2117,14 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
   }
   const config = loadConfig(cwd);
   const convention = resolvePhaseIdConvention(cwd);
+  const naming = phaseDirectoryOptions(cwd, undefined, '');
+  if (descriptions.includes('--id') && convention !== 'bracket') {
+    error(phaseLocatorMod.customPhaseNamingUsage(cwd, naming) ?? '--id is not supported by phase add-batch', naming.phaseNaming === 'custom' ? ERROR_REASON.USAGE : naming.configError ? ERROR_REASON.CONFIG_PARSE_FAILED : ERROR_REASON.PHASE_NAMING_NOT_CUSTOM);
+  }
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
   if (!fs.existsSync(roadmapPath)) {
     error('ROADMAP.md not found');
   }
-  const projectCode = (config.project_code as string) || '';
-  const prefix = projectCode ? `${projectCode}-` : '';
   if (convention === 'bracket') assertBracketGeneratedIdentity('phase add-batch', config);
   const bracketContext = convention === 'bracket' ? bracketWriteContext(cwd, config) : null;
 
@@ -2122,7 +2141,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
       );
       collectSiblingWorktreePhaseNums(cwd, used, bracketContext);
       maxPhase = maxPhaseNum(used);
-    } else if (config.phase_naming !== 'custom') {
+    } else if (naming.phaseNaming !== 'custom') {
       // Same three cwd-scoped sources as cmdPhaseAdd (#1229, #5528): headers, roadmap bullets,
       // on-disk dirs, then sibling worktrees (#3849) — same max+1, wider horizon.
       maxPhase = maxPhaseNum(collectUsedPhaseNums(cwd, content));
@@ -2147,13 +2166,13 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
         maxPhase = nextPhaseNum(maxPhase);
         newPhaseId = maxPhase;
         dirName = bracketDirNameOrRefuse(bracketPhaseId(bracketContext, newPhaseId), slug, description);
-      } else if (config.phase_naming === 'custom') {
+      } else if (naming.phaseNaming === 'custom') {
         newPhaseId = slug.toUpperCase();
-        dirName = `${prefix}${newPhaseId}-${slug}`;
+        dirName = '';
       } else {
         maxPhase = nextPhaseNum(maxPhase);
         newPhaseId = maxPhase;
-        dirName = `${prefix}${String(newPhaseId).padStart(2, '0')}-${slug}`;
+        dirName = '';
       }
       validated.push({ description, slug, newPhaseId, dirName });
     }
@@ -2167,11 +2186,23 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
       }
     }
 
+    if (!bracketContext) {
+      // One preflight over the whole batch (identity collisions, occupied
+      // targets, containment) before the first directory is created.
+      const prepared = phaseLocatorMod.createPhaseDirectories(cwd, validated.map(item => ({
+        id: String(item.newPhaseId), slug: item.slug,
+        directoryId: typeof item.newPhaseId === 'number' ? String(item.newPhaseId).padStart(2, '0') : item.newPhaseId,
+      })), {...naming, roadmap: rawContent});
+      prepared.forEach((entry, index) => { validated[index].dirName = entry.dirName; });
+    }
+
     const added: Record<string, unknown>[] = [];
     for (const { description, slug, newPhaseId, dirName } of validated) {
-      const dirPath = path.join(planningDir(cwd), 'phases', dirName);
-      platformEnsureDir(dirPath);
-      platformWriteSync(path.join(dirPath, '.gitkeep'), '');
+      if (bracketContext) {
+        const dirPath = path.join(planningDir(cwd), 'phases', dirName);
+        platformEnsureDir(dirPath);
+        platformWriteSync(path.join(dirPath, '.gitkeep'), '');
+      }
       let phaseEntry: string;
       if (bracketContext && typeof newPhaseId === 'number') {
         const id = bracketPhaseId(bracketContext, newPhaseId);
@@ -2184,7 +2215,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
           `\n### ${renderPhaseId(id)}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${id.phase} to break down)\n`;
       } else {
         const dependsOn =
-          config.phase_naming === 'custom' ? '' : dependsOnFor(newPhaseId, rawContent);
+          naming.phaseNaming === 'custom' ? '' : dependsOnFor(newPhaseId, rawContent);
         phaseEntry =
           `\n### Phase ${newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${newPhaseId} to break down)\n`;
       }
@@ -2202,7 +2233,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
         directory: toPosixPath(
           path.join(path.relative(cwd, planningDir(cwd)), 'phases', dirName),
         ),
-        naming_mode: config.phase_naming,
+        naming_mode: naming.phaseNaming,
       });
     }
     platformWriteSync(roadmapPath, rawContent, { verbatim: true });
@@ -2657,17 +2688,24 @@ function cmdPhaseInsert(
       allocation === 'sibling' && lastDotIndex !== -1
         ? normalizedBase.slice(0, lastDotIndex)
         : normalizedBase;
-    const projectCode = (insertConfig.project_code as string) || '';
-    const pfx = projectCode ? `${projectCode}-` : '';
+    const insertNaming = phaseDirectoryOptions(cwd, undefined, rawContent);
     // #4304: route the bracket directory-name allocation
     // through the SAME bracketDirNameOrRefuse wrapper `phase add`/`phase
     // add-batch` already use, instead of a raw `toDir` call —
     // an empty or all-digit slug now refuses cleanly through error(...)
     // before any mutation, matching their wording, instead of an uncaught
     // "toDir: slug sanitizes to empty" throw.
-    const _dirName = bracketId
-      ? bracketDirNameOrRefuse(bracketId, slug, description)
-      : `${pfx}${_decimalPhase}-${slug}`;
+    let _dirName: string;
+    if (bracketId) {
+      _dirName = bracketDirNameOrRefuse(bracketId, slug, description);
+    } else {
+      // An inserted child inherits its parent's identity policy: legacy numeric
+      // families must still renumber together when their parent moves.
+      [{dirName: _dirName}] = phaseLocatorMod.createPhaseDirectories(cwd, [{
+        id: _decimalPhase, slug,
+        recordIdentity: phaseIdMod.customPhaseQuery(afterPhase, insertNaming) !== null,
+      }], insertNaming);
+    }
     const dirPath = path.join(planningDir(cwd), 'phases', _dirName);
 
     let updatedContent: string;
@@ -2872,16 +2910,30 @@ interface RenameIntInfo {
   slug: string;
 }
 
-function renameDecimalPhases(
-  phasesDir: string,
-  baseInt: number,
-  removedDecimal: number,
-): { renamedDirs: { from: string; to: string }[]; renamedFiles: { from: string; to: string }[] } {
-  const renamedDirs: { from: string; to: string }[] = [];
-  const renamedFiles: { from: string; to: string }[] = [];
+/** Refuse every ambiguous owner before deletion or the first sibling rename. */
+function assertUnambiguousCustomDirectories(dirs: string[], context: PhaseDirectoryContext): void {
+  for (const dir of dirs) {
+    const candidates = phaseIdMod.customDirectoryCandidates(dir, context);
+    if (candidates.length > 1) {
+      error(`Ambiguous custom phase directory ${dir}; candidates: ${candidates.join(', ')}. Refusing removal or rename without ${CUSTOM_PHASE_ID_FILE}. Write the owning ID into ${dir}/${CUSTOM_PHASE_ID_FILE} and retry`, ERROR_REASON.AMBIGUOUS_PHASE_OWNER, {candidates, marker_path: toPosixPath(path.join(dir, CUSTOM_PHASE_ID_FILE))});
+    }
+  }
+}
+
+/**
+ * Directories a numeric removal renumbers. The renamers and the `phase remove`
+ * preflight both read this one selector, so the set the preflight refuses on is
+ * the set the renamers would touch. A directory a record or a unique known id
+ * owns is a stable custom identity and is never renumbered; an ambiguous
+ * markerless one stays selected so the caller refuses before any write.
+ */
+function renameEligible(dirs: string[], context: PhaseDirectoryContext): string[] {
+  return dirs.filter(dir => phaseIdMod.customDirectoryCandidates(dir, context).length !== 1);
+}
+
+function selectDecimalRenames(dirs: string[], baseInt: number, removedDecimal: number, context: PhaseDirectoryContext): RenameDirInfo[] {
   const decPattern = new RegExp(`^(0*${baseInt})\\.(\\d+)-(.+)$`);
-  const dirs = readSubdirectories(phasesDir, true);
-  const toRename: RenameDirInfo[] = dirs
+  return renameEligible(dirs, context)
     .map((dir) => {
       const m = dir.match(decPattern);
       return m
@@ -2890,7 +2942,42 @@ function renameDecimalPhases(
     })
     .filter((item): item is RenameDirInfo => item !== null && item.oldDecimal > removedDecimal)
     .sort((a, b) => b.oldDecimal - a.oldDecimal);
+}
 
+function selectIntegerRenames(dirs: string[], removedInt: number, context: PhaseDirectoryContext): RenameIntInfo[] {
+  return renameEligible(dirs, context)
+    .map((dir) => {
+      const m = dir.match(/^(\d+)([A-Z])?(?:\.(\d+))?-(.+)$/i);
+      if (!m) return null;
+      const dirInt = parseInt(m[1], 10);
+      // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
+      return dirInt > removedInt && !isSentinelPhaseId(dirInt)
+        ? {
+            dir,
+            oldInt: dirInt,
+            letter: m[2] ? m[2].toUpperCase() : '',
+            decimal: m[3] ? parseInt(m[3], 10) : null,
+            slug: m[4],
+          }
+        : null;
+    })
+    .filter((item): item is RenameIntInfo => item !== null)
+    .sort((a, b) =>
+      a.oldInt !== b.oldInt ? b.oldInt - a.oldInt : (b.decimal || 0) - (a.decimal || 0),
+    );
+}
+
+function renameDecimalPhases(
+  phasesDir: string,
+  baseInt: number,
+  removedDecimal: number,
+  context: PhaseDirectoryContext,
+): { renamedDirs: { from: string; to: string }[]; renamedFiles: { from: string; to: string }[] } {
+  const renamedDirs: { from: string; to: string }[] = [];
+  const renamedFiles: { from: string; to: string }[] = [];
+  const toRename = selectDecimalRenames(readSubdirectories(phasesDir, true), baseInt, removedDecimal, context);
+
+  assertUnambiguousCustomDirectories(toRename.map(item => item.dir), context);
   for (const item of toRename) {
     const newDecimal = item.oldDecimal - 1;
     const oldPhaseId = `${baseInt}.${item.oldDecimal}`;
@@ -2937,6 +3024,7 @@ function findOrphanedDisplacementName(dir: string, fileName: string): string | n
 function renameIntegerPhases(
   phasesDir: string,
   removedInt: number,
+  context: PhaseDirectoryContext,
 ): {
   renamedDirs: { from: string; to: string }[];
   renamedFiles: { from: string; to: string }[];
@@ -2945,28 +3033,9 @@ function renameIntegerPhases(
   const renamedDirs: { from: string; to: string }[] = [];
   const renamedFiles: { from: string; to: string }[] = [];
   const renamedFileCollisions: { from: string; to: string; displaced_to: string | null }[] = [];
-  const dirs = readSubdirectories(phasesDir, true);
-  const toRename: RenameIntInfo[] = dirs
-    .map((dir) => {
-      const m = dir.match(/^(\d+)([A-Z])?(?:\.(\d+))?-(.+)$/i);
-      if (!m) return null;
-      const dirInt = parseInt(m[1], 10);
-      // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
-      return dirInt > removedInt && !isSentinelPhaseId(dirInt)
-        ? {
-            dir,
-            oldInt: dirInt,
-            letter: m[2] ? m[2].toUpperCase() : '',
-            decimal: m[3] ? parseInt(m[3], 10) : null,
-            slug: m[4],
-          }
-        : null;
-    })
-    .filter((item): item is RenameIntInfo => item !== null)
-    .sort((a, b) =>
-      a.oldInt !== b.oldInt ? b.oldInt - a.oldInt : (b.decimal || 0) - (a.decimal || 0),
-    );
+  const toRename = selectIntegerRenames(readSubdirectories(phasesDir, true), removedInt, context);
 
+  assertUnambiguousCustomDirectories(toRename.map(item => item.dir), context);
   for (const item of toRename) {
     const newInt = item.oldInt - 1;
     const newPadded = String(newInt).padStart(2, '0');
@@ -3117,6 +3186,8 @@ function updateRoadmapAfterPhaseRemoval(
   isDecimal: boolean,
   removedInt: number,
   cwd: string,
+  customTarget: boolean,
+  stableIds: ReadonlySet<string>,
 ): boolean {
   return withPlanningLock(cwd, () => {
     const originalContent = fs.readFileSync(roadmapPath, 'utf-8');
@@ -3129,7 +3200,9 @@ function updateRoadmapAfterPhaseRemoval(
     // makes the token padding-insensitive in both directions without widening
     // to other ids: the token stays anchored between `Phase\s+`/line-start and
     // `:`/whitespace/end, so `0*2` still never matches `Phase 12:`.
-    const padTolerant = `0*${escaped}`;
+    const padTolerant = customTarget ? escaped : `0*${escaped}`;
+    const stableIdentity = (id: string): boolean =>
+      stableIds.has((isCustomPhaseId(id) ? id : normalizePhaseName(id)).toLowerCase());
 
     // SECTION-DELETION (not a section-body edit) — removes the phase's ENTIRE
     // detail section INCLUDING its own heading line. Migrated onto deleteSection
@@ -3181,6 +3254,9 @@ function updateRoadmapAfterPhaseRemoval(
 
       const matchRemovedProgressRow = (row: Record<string, string>): boolean => {
         const firstCellRaw = (Object.values(row)[0] ?? '').trim();
+        if (customTarget) {
+          return new RegExp(`^${escaped}\\.?(?:\\s|$)`, 'i').test(firstCellRaw);
+        }
         if (isDecimal) {
           return new RegExp(`^${padTolerant}\\.?(?:\\s|$)`, 'i').test(firstCellRaw);
         }
@@ -3195,7 +3271,7 @@ function updateRoadmapAfterPhaseRemoval(
       }
     }
 
-    if (!isDecimal) {
+    if (!isDecimal && !customTarget) {
       // #1729: fold an optional pre-colon ( ) tag into the suffix capture so it
       // is re-emitted verbatim — a tagged later phase still gets renumbered.
       // #5007 (Phase 6 / ADR-4910 §8): composes phaseHeadingPrefixSrcFor
@@ -3227,12 +3303,12 @@ function updateRoadmapAfterPhaseRemoval(
           'gi',
         ),
         (_match, prefix: string, num: string, suffix: string) =>
-          `${prefix}${decrementRoadmapPhaseToken(num, removedInt)}${suffix}`,
+          `${prefix}${stableIdentity(num) ? num : decrementRoadmapPhaseToken(num, removedInt)}${suffix}`,
       );
       content = content.replace(
         /(-\s*\[[ x]\]\s*.*?Phase\s+)(\d+)(\s*:|\s+)/gi,
         (_match, prefix: string, num: string, suffix: string) =>
-          `${prefix}${decrementRoadmapPhaseNumber(num, removedInt)}${suffix}`,
+          `${prefix}${stableIdentity(num) ? num : decrementRoadmapPhaseNumber(num, removedInt)}${suffix}`,
       );
       // ORDINAL-RENUMBER — CELL EDIT (not row-deletion) — migrated onto
       // updateTableCell (ADR-2143 §7, sibling of the deleteTableRow scoping
@@ -3296,7 +3372,7 @@ function updateRoadmapAfterPhaseRemoval(
             (row, index) => {
               if (processedOrdinalRows.has(index)) return false;
               const m = phaseCellShapeRe.exec(row['Phase'] ?? '');
-              if (!m) return false;
+              if (!m || stableIdentity(m[1])) return false;
               const num = parseInt(m[1], 10);
               // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
               if (!Number.isInteger(num) || num <= removedInt || isSentinelPhaseId(num)) return false;
@@ -3329,7 +3405,7 @@ function updateRoadmapAfterPhaseRemoval(
       content = content.replace(
         /(?<![0-9-])(\d{2})-(\d{2})(?=(?:(?:-[A-Za-z][A-Za-z0-9-]*)?-(?:PLAN|SUMMARY)\.md)|(?![0-9-]))/g,
         (_match, phaseNum: string, planNum: string) =>
-          `${decrementRoadmapPaddedPhaseNumber(phaseNum, removedInt)}-${planNum}`,
+          `${stableIdentity(phaseNum) ? phaseNum : decrementRoadmapPaddedPhaseNumber(phaseNum, removedInt)}-${planNum}`,
       );
       // #5007 (Phase 6 / ADR-4910): migrated the "Depends on" bold-field
       // decrement off two hand-rolled regexes — one per bold-placement
@@ -3365,7 +3441,7 @@ function updateRoadmapAfterPhaseRemoval(
           if (!depMatch) continue;
           const [wholeMatch, prefix, num] = depMatch;
           const newValue =
-            `${prefix}${decrementRoadmapPhaseToken(num, removedInt)}` + currentRead.value.slice(wholeMatch.length);
+            `${prefix}${stableIdentity(num) ? num : decrementRoadmapPhaseToken(num, removedInt)}` + currentRead.value.slice(wholeMatch.length);
           if (newValue === currentRead.value) continue;
           const staged = setFieldValue(dependsOnDoc, fieldId, newValue);
           if (staged.ok) dependsOnDoc = staged.value;
@@ -5123,10 +5199,13 @@ function cmdPhaseRemove(
   const candidateDirs = removeContext
     ? bracketIdsInContext(phasesDir, removeContext).map(({ dir }) => dir)
     : subdirs;
+  const directoryContext = phaseDirectoryOptions(cwd);
   let { matches: phaseDirMatches } = matchPhaseDirs(
     candidateDirs,
-    normalized,
+    removeConvention === 'bracket' ? normalized : phaseLookupQuery(targetPhase, directoryContext),
     removeConvention === 'bracket' ? 'bracket' : undefined,
+    undefined,
+    directoryContext,
   );
   if (removeContext && requestedSlug !== undefined) {
     phaseDirMatches = phaseDirMatches.filter((dir) =>
@@ -5135,6 +5214,19 @@ function cmdPhaseRemove(
       error(`Cannot remove ${targetPhase}: its slug does not exactly match a directory for phase ${normalized}.`, ERROR_REASON.USAGE);
     }
   }
+  const uniqueCustomTarget = phaseDirMatches.length === 1
+    && phaseIdMod.customDirectoryCandidates(phaseDirMatches[0], directoryContext).length === 1;
+  const mutationCandidates = subdirs.filter(dir => {
+    const owners = phaseIdMod.customDirectoryCandidates(dir, directoryContext);
+    // A unique proven target excludes siblings whose longer declared owner
+    // wins resolution. Unresolved/ambiguous queries retain the full refusal.
+    return dir === targetPhase || (owners.includes(targetPhase) && (!uniqueCustomTarget || dir === phaseDirMatches[0]));
+  });
+  // The numeric renumbering set comes from the renamers' own selector.
+  const renumbered = removeContext || isCustomPhaseId(targetPhase) ? [] : (isDecimal
+    ? selectDecimalRenames(subdirs, parseInt(normalized.split('.')[0], 10), parseInt(normalized.split('.')[1], 10), directoryContext)
+    : selectIntegerRenames(subdirs, parseInt(normalized, 10), directoryContext)).map(item => item.dir);
+  assertUnambiguousCustomDirectories([...new Set([...mutationCandidates, ...renumbered])], directoryContext);
   if (phaseDirMatches.length > 1) {
     output(
       {
@@ -5157,6 +5249,11 @@ function cmdPhaseRemove(
     return;
   }
   const targetDir = phaseDirMatches[0] || null;
+  const customTarget = targetDir !== null && (directoryContext.directoryIds?.[targetDir] !== undefined
+    || phaseIdMod.customDirectoryCandidates(targetDir, directoryContext).length > 0);
+  const stableIds = new Set(subdirs.flatMap(dir => phaseIdMod.customDirectoryCandidates(dir, directoryContext))
+    .map(id => (isCustomPhaseId(id) ? id : normalizePhaseName(id)).toLowerCase()));
+
 
   const roadmapContentBeforeRemoval = removeContext ? fs.readFileSync(roadmapPath, 'utf-8') : null;
   if (removeContext) {
@@ -5402,16 +5499,17 @@ function cmdPhaseRemove(
       renamedDirs = renamed.renamedDirs;
       renamedFiles = renamed.renamedFiles;
       renamedFileCollisions = renamed.renamedFileCollisions;
-    } else if (isDecimal) {
+    } else if (!customTarget && isDecimal) {
       const renamed = renameDecimalPhases(
         phasesDir,
         parseInt(normalized.split('.')[0], 10),
         parseInt(normalized.split('.')[1], 10),
+        directoryContext,
       );
       renamedDirs = renamed.renamedDirs;
       renamedFiles = renamed.renamedFiles;
-    } else {
-      const renamed = renameIntegerPhases(phasesDir, parseInt(normalized, 10));
+    } else if (!customTarget) {
+      const renamed = renameIntegerPhases(phasesDir, parseInt(normalized, 10), directoryContext);
       renamedDirs = renamed.renamedDirs;
       renamedFiles = renamed.renamedFiles;
       renamedFileCollisions = renamed.renamedFileCollisions;
@@ -5444,10 +5542,14 @@ function cmdPhaseRemove(
     ? bracketRoadmapRewrite.updated
     : updateRoadmapAfterPhaseRemoval(
       roadmapPath,
-      targetPhase,
+      directoryContext.directoryIds?.[targetDir ?? '']
+        ?? (targetDir ? phaseIdMod.customDirectoryCandidates(targetDir, directoryContext)[0] : undefined)
+        ?? targetPhase,
       isDecimal,
       parseInt(normalized, 10),
       cwd,
+      customTarget,
+      stableIds,
     );
 
   const statePath = path.join(planningDir(cwd), 'STATE.md');
@@ -6459,6 +6561,7 @@ function auditArtifactWarnings(cwd: string, phaseFullDir: string): string[] {
 }
 
 function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
+  const directoryContext = phaseDirectoryOptions(cwd);
   if (!phaseNum) {
     error('phase number required for phase complete');
   }
@@ -6505,7 +6608,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   const phasesDir = path.join(planningDir(cwd), 'phases');
   const today = realClock.localToday();
 
-  const phaseInfoRaw = findPhaseInternal(cwd, phaseNum);
+  const phaseInfoRaw = findPhaseInternal(cwd, phaseNum, undefined, directoryContext);
   if (!phaseInfoRaw) {
     error(`Phase ${phaseNum} not found`);
   }
@@ -6809,7 +6912,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         const originalRoadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
         roadmapContent = originalRoadmapContent;
 
-        const phaseEscaped = phaseMarkdownRegexSource(phaseNum);
+        const phaseEscaped = phaseMarkdownRegexSource(phaseNum, directoryContext);
         // #2067: the gap between `]` and `Phase N` must allow only whitespace /
         // markdown bold emphasis — NOT greedy `.*`. A greedy gap matched a later
         // phase whose description merely mentioned the completed phase number,
@@ -7103,7 +7206,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
 
         const reqPath = path.join(planningDir(cwd), 'REQUIREMENTS.md');
         if (fs.existsSync(reqPath)) {
-          const phaseEsc = phaseMarkdownRegexSource(phaseNum);
+          const phaseEsc = phaseMarkdownRegexSource(phaseNum, directoryContext);
           const currentMilestoneRoadmap = extractCurrentMilestone(roadmapContent, cwd);
           // #5007 (Phase 6 / ADR-4910 §8): this site captures the entire
           // section BODY through to the next heading (via its own
@@ -7484,18 +7587,20 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
       // comparePhaseNum-based so `02` and `2` dedupe. With no ROADMAP.md (or no
       // parseable rows) the set is empty and the scans behave exactly as
       // before.
+      // Custom IDs use declared roadmap order; the numeric-minimum comments
+      // below describe the unchanged legacy cascade.
       const roadmapCompleteNums: string[] = [];
       if (roadmapContent !== null) {
         try {
           const milestoneForComplete = extractCurrentMilestone(roadmapContent, cwd);
           const completePattern = new RegExp(
-            `-\\s*\\[[xX]\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})`,
+            `-\\s*\\[[xX]\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})`,
             'gi'
           );
           let cm: RegExpExecArray | null;
           while ((cm = completePattern.exec(milestoneForComplete)) !== null) {
             if (isSentinelPhaseId(cm[1])) continue;
-            if (!roadmapCompleteNums.some((n) => comparePhaseNum(cm![1], n) === 0)) {
+            if (!roadmapCompleteNums.some((n) => comparePhaseNum(cm![1], n, directoryContext) === 0)) {
               roadmapCompleteNums.push(cm[1]);
             }
           }
@@ -7505,7 +7610,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         }
       }
       const isCompletePhaseNum = (num: string): boolean =>
-        roadmapCompleteNums.some((n) => comparePhaseNum(num, n) === 0);
+        roadmapCompleteNums.some((n) => comparePhaseNum(num, n, directoryContext) === 0);
 
       try {
         // #3185 (ADR-3180 Decision 1): "which phase directories belong to
@@ -7518,7 +7623,9 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         const dirs = listMilestonePhaseDirs(phasesDir, { cwd }).value;
 
         for (const dir of dirs) {
-          const dm = dir.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i'));
+          const custom = phaseIdMod.customPhaseQuery(dir, directoryContext);
+          const owner = custom && customDirectoryOwner(dir, custom);
+          const dm = owner ? [dir, owner.id, owner.slug] : dir.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i'));
           if (dm) {
             // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
             if (isSentinelPhaseId(dm[1])) continue;
@@ -7530,8 +7637,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             // correct today — but that makes this scan's correctness depend on an
             // upstream sort nothing here states. Selecting the minimum explicitly costs
             // one comparison and removes the hidden coupling.
-            if (comparePhaseNum(dm[1], phaseNum) > 0
-              && (diskNextNum === null || comparePhaseNum(dm[1], diskNextNum) < 0)) {
+            if (comparePhaseNum(dm[1], phaseNum, directoryContext) > 0
+              && (diskNextNum === null || comparePhaseNum(dm[1], diskNextNum, directoryContext) < 0)) {
               diskNextNum = dm[1];
               diskNextName = dm[2] || null;
             }
@@ -7580,8 +7687,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // accepts. The two branches keep separate capture groups, normalized
           // just below the loop.
           const phasePattern = new RegExp(
-            `(?:#{2,4}\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n*]+)` +
-            `|-\\s*\\[[ xX]\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+))`,
+            `(?:#{2,4}\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n*]+)` +
+            `|-\\s*\\[[ xX]\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+))`,
             'gi'
           );
           let pm: RegExpExecArray | null;
@@ -7612,8 +7719,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             // Phase NUMBERS define sequence here, exactly as `comparePhaseNum` does for
             // the disk scan and for #2028's lowest-outstanding override; the roadmap
             // defines which phases EXIST and which milestone they belong to.
-            if (comparePhaseNum(pmNum, phaseNum) > 0
-              && (roadmapNextNum === null || comparePhaseNum(pmNum, roadmapNextNum) < 0)) {
+            if (comparePhaseNum(pmNum, phaseNum, directoryContext) > 0
+              && (roadmapNextNum === null || comparePhaseNum(pmNum, roadmapNextNum, directoryContext) < 0)) {
               roadmapNextNum = pmNum;
               roadmapNextName = pmName
                 .replace(/\(INSERTED\)/i, '')
@@ -7638,7 +7745,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // and the roadmap mean the same phase" cannot drift from "N is above the
         // one just completed". `02` and `2` compare equal, which is the whole
         // point — they are the same phase spelled two ways.
-        const diskAgrees = diskNextNum !== null && comparePhaseNum(diskNextNum, roadmapNextNum) === 0;
+        const diskAgrees = diskNextNum !== null && comparePhaseNum(diskNextNum, roadmapNextNum, directoryContext) === 0;
         nextPhaseNum = diskAgrees ? diskNextNum : roadmapNextNum;
         nextPhaseName = diskAgrees ? diskNextName : roadmapNextName;
         isLastPhase = false;
@@ -7683,7 +7790,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // rows and could not correct an out-of-order completion on the same
           // mixed-grammar roadmaps that broke stage 2.
           const cbPattern = new RegExp(
-            `-\\s*\\[(x| )\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+)`,
+            `-\\s*\\[(x| )\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+)`,
             'gi'
           );
           let cbm: RegExpExecArray | null;
@@ -7697,8 +7804,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             // isSentinelPhaseId covers both sentinel ranges (SENTINEL_RANGES = [0, 999]); a
             // real lower-numbered outstanding phase (e.g. Phase 9) is NOT a sentinel and is
             // still selected, preserving #2028's out-of-order-completion behavior.
-            if (!isChecked && !isSentinelPhaseId(cbm[2]) && comparePhaseNum(cbm[2], phaseNum) < 0) {
-              if (lowestOutstanding === null || comparePhaseNum(cbm[2], lowestOutstanding.num) < 0) {
+            if (!isChecked && !isSentinelPhaseId(cbm[2]) && comparePhaseNum(cbm[2], phaseNum, directoryContext) < 0) {
+              if (lowestOutstanding === null || comparePhaseNum(cbm[2], lowestOutstanding.num, directoryContext) < 0) {
                 lowestOutstanding = {
                   num: cbm[2],
                   name: cbm[3].replace(/\(INSERTED\)/i, '').trim().toLowerCase().replace(/\s+/g, '-'),
@@ -7762,7 +7869,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         let nextPhaseDisk: { status: ReturnType<typeof phaseStatus>['value']['status']; planCount: number; summaryCount: number } | null = null;
         if (nextPhaseNum && !isLastPhase) {
           try {
-            const nextInfo = findPhaseInternal(cwd, nextPhaseNum) as unknown as { found?: boolean; directory?: string } | null;
+            const nextInfo = findPhaseInternal(cwd, nextPhaseNum, undefined, directoryContext) as unknown as { found?: boolean; directory?: string } | null;
             if (nextInfo && nextInfo.found && nextInfo.directory) {
               const { value } = phaseStatus(path.join(cwd, nextInfo.directory), {
                 convention: resolvePhaseIdConvention(cwd),
@@ -8019,7 +8126,7 @@ function cmdPhaseUatPassed(
     error('phase number required for phase uat-passed');
   }
 
-  const phaseInfoRaw = findPhaseInternal(cwd, phaseNum!);
+  const phaseInfoRaw = findPhaseInternal(cwd, phaseNum!, undefined, phaseDirectoryOptions(cwd));
   if (!phaseInfoRaw) {
     error(`Phase ${phaseNum} not found`);
   }
@@ -8046,7 +8153,7 @@ function cmdPhaseListPlans(cwd: string, phaseNum: string | undefined, raw: boole
     error('phase number required for phase list-plans');
   }
 
-  const phaseInfo = findPhaseInternal(cwd, phaseNum!);
+  const phaseInfo = findPhaseInternal(cwd, phaseNum!, undefined, phaseDirectoryOptions(cwd));
   if (!phaseInfo) {
     output({ phase: phaseNum, plan_count: 0, has_plans: false, plans: [], phase_dir: null }, raw);
     return;

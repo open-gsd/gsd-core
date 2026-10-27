@@ -248,7 +248,7 @@ derived from the shipped agent declaration.
 | `claude_md_path` | string | any file path | `./.claude/CLAUDE.md` | Custom output path for the generated CLAUDE.md file. Useful for monorepos or projects that need CLAUDE.md in a non-root location. Defaults to `./.claude/CLAUDE.md` — a valid project-scoped memory location that keeps GSD-generated content from polluting a hand-crafted repo-root `CLAUDE.md` ([#1098](https://github.com/open-gsd/gsd-core/issues/1098)). An existing file without GSD markers is never overwritten unless `--force` is passed. Default changed from `./CLAUDE.md` in v1.5. Added in v1.36 |
 | `claude_md_assembly.mode` | enum | `embed`, `link` | `embed` | Controls how managed sections are written into CLAUDE.md. `embed` (default) inlines content between GSD markers. `link` writes `@.planning/<source-path>` instead — Claude Code expands the reference at runtime, reducing CLAUDE.md size by ~65% on typical projects. `link` only applies to sections that have a real source file; `workflow` and fallback sections always embed. Per-block overrides: `claude_md_assembly.blocks.<section>` (e.g. `claude_md_assembly.blocks.architecture: link`). Added in v1.38 |
 | `context` | string | any text | (none) | Custom context string injected into every agent prompt for the project. Use to provide persistent project-specific guidance (e.g., coding conventions, team practices) that every agent should be aware of |
-| `phase_naming` | string | any string | (none) | Custom prefix for phase directory names. When set, overrides the auto-generated phase slug (e.g., `"feature"` produces `feature-01-setup/` instead of the roadmap-derived slug) |
+| `phase_naming` | string | `"sequential"`, `"custom"` | `"sequential"` | Directory naming policy. `"custom"` (case-insensitive) enables explicit phase IDs; see [custom phase directories](#custom-phase-directories). Other values retain numeric allocation. |
 | `brave_search` | boolean | `true`/`false` | auto-detected | Override auto-detection of Brave Search API availability. When unset, GSD checks for `BRAVE_API_KEY` env var or `$GSD_HOME/.gsd/brave_api_key` file |
 | `firecrawl` | boolean | `true`/`false` | auto-detected | Override auto-detection of Firecrawl API availability. When unset, GSD checks for `FIRECRAWL_API_KEY` env var or `$GSD_HOME/.gsd/firecrawl_api_key` file |
 | `exa_search` | boolean | `true`/`false` | auto-detected | Override auto-detection of Exa Search API availability. When unset, GSD checks for `EXA_API_KEY` env var or `$GSD_HOME/.gsd/exa_api_key` file |
@@ -257,6 +257,48 @@ derived from the shipped agent declaration.
 | `perplexity` | boolean | `true`/`false` | auto-detected | Override auto-detection of Perplexity API availability. When unset, GSD checks for `PERPLEXITY_API_KEY` env var or `$GSD_HOME/.gsd/perplexity_api_key` file |
 | `jina` | boolean | `true`/`false` | `true` | Override auto-detection of Jina API availability. Jina is a terminal fallback in the docs waterfall and defaults to available (`true`); GSD checks for `JINA_API_KEY` env var or `$GSD_HOME/.gsd/jina_api_key` file when an explicit override is needed |
 | `search_gitignored` | boolean | `true`/`false` | `false` | Legacy top-level alias for `planning.search_gitignored`. Prefer the namespaced form; this alias is accepted for backward compatibility |
+
+### Custom phase directories
+
+Set `"phase_naming": "custom"` to create phases with explicit identities:
+
+```json
+{ "phase_naming": "custom", "project_code": "CCM" }
+```
+
+`gsd-tools phase add "Product boundary" --id PRODUCT-BOUNDARY` creates
+`.planning/phases/CCM-PRODUCT-BOUNDARY-product-boundary/`. The optional
+`project_code` prefixes the directory; pass the ID without that prefix.
+Add-batch derives custom IDs from its descriptions. Creation validates the
+whole batch before writing any directories or updating the roadmap.
+
+Custom IDs must be nonempty and contain no whitespace, colons, path separators,
+`..` or NUL, and cannot start with `[`. IDs equivalent to an existing recorded
+ID, roadmap declaration or another ID in the batch are refused, including case
+and numeric-padding aliases. Prefix pairs such as `SETUP` and `SETUP-2` are
+allowed when their directory-owned markers establish separate identities.
+IDs in the readers' reserved backlog and icebox ranges are also refused
+(for example `0`, `0.5`, `00-00` and `999`); those phases would be hidden from
+ordinary phase listings. Digit-leading IDs such as `2FA` and `7B` remain valid.
+
+New custom directories contain a regular UTF-8 `.phase-id` file with the exact
+ID, without the project prefix or slug. Readers use that record even after
+roadmap edits or archival. Existing markerless custom directories continue to
+resolve and can be removed when exactly one known owner matches. An ambiguous
+removal or rename refuses and names the candidates; write the correct owning ID
+into that directory's `.phase-id` to resolve the ambiguity. Read-only lookups
+never refuse: when a markerless directory could belong to overlapping IDs such as
+`SETUP` and `SETUP-2`, the longest declared ID that prefixes the directory name
+owns it. Put the exact owning ID, without the project prefix or title slug, in
+the directory's `.phase-id` to pin it. Numeric phases
+without custom identity records, including their inserted decimal children,
+retain numeric renumbering.
+
+`phase add --id` returns a usage error unless effective `phase_naming` is custom;
+previously it wrote a directory that readers could not resolve. A project config
+shadows global defaults, including when that project config is `{}`. Set custom
+naming in the effective project config rather than relying on a shadowed global
+default. A corrupt project config reports its parse failure instead.
 
 > **Note:** `granularity` was renamed from `depth` in v1.22.3. Existing configs are auto-migrated.
 

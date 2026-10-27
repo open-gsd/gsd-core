@@ -63,7 +63,7 @@ const { isPhaseDirName } = validateMod;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('../phase-id.cjs');
-const { extractPhaseToken, normalizePhaseName, comparePhaseNum } = phaseIdMod;
+const { extractPhaseToken, normalizePhaseName, phaseKeyFromDir, comparePhaseNum } = phaseIdMod;
 
 // #5060: the Phase Status Module owns the status-label ladder.
 import { phaseStatusFromFacts, toDisplayLabel } from '../phase-status.cjs';
@@ -76,8 +76,11 @@ import { legacyStatusRepairTarget } from '../verification.cjs';
 
 function checkW005(snapshot: PlanningSnapshot): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
+  const context = snapshot.directoryContext ?? phaseIdMod.phaseDirectoryContext(snapshot.config.value ?? {}, '', snapshot.roadmapDeclaredPhases.value.map(({phaseId}) => phaseId));
   for (const name of snapshot.phaseDirs.value) {
-    if (!isPhaseDirName(name, snapshot.phaseIdConvention)) {
+    const custom = snapshot.phaseIdConvention === 'bracket' ? null : phaseIdMod.customPhaseQuery(name, context);
+    const owner = custom && phaseIdMod.customDirectoryOwner(name, custom);
+    if (!owner && !isPhaseDirName(name, snapshot.phaseIdConvention)) {
       diagnostics.push({
         code: 'W005',
         severity: SEVERITY.WARNING,
@@ -91,18 +94,19 @@ function checkW005(snapshot: PlanningSnapshot): Diagnostic[] {
 
 // ─── W023 — phase directories collide on normalized key (verify.cts:1904-1950) ─
 //
-// Groups `snapshot.phaseDirs.value` by `normalizePhaseName(extractPhaseToken(name))`
-// — the exact same two owners (`phase-id.cjs`) the original `verify.cts:1917-1918`
-// call site uses, relocated verbatim rather than reimplemented. Sorted with
-// `comparePhaseNum` + a `localeCompare` tiebreak, mirroring
+// Groups directories by the canonical identity owner, preserving recorded
+// custom IDs instead of collapsing their shared token prefixes. Sorted with
+// contextual `comparePhaseNum` + a `localeCompare` tiebreak, mirroring
 // `verify.cts:1930-1932`'s deterministic-output rationale. See the file-level
 // comment for the disclosed "described" fidelity reduction.
 
 function checkW023(snapshot: PlanningSnapshot): Diagnostic[] {
+  const context = snapshot.directoryContext;
   const groups = new Map<string, string[]>();
   for (const name of snapshot.phaseDirs.value) {
-    const token = extractPhaseToken(name);
-    const key = normalizePhaseName(token);
+    const key = context?.phaseNaming === 'custom'
+      ? phaseKeyFromDir(name, undefined, context)
+      : normalizePhaseName(extractPhaseToken(name));
     const list = groups.get(key);
     if (list) list.push(name);
     else groups.set(key, [name]);
@@ -115,7 +119,7 @@ function checkW023(snapshot: PlanningSnapshot): Diagnostic[] {
     if (dirs.length < 2) continue;
     const described = dirs
       .slice()
-      .sort((a, b) => comparePhaseNum(a, b) || String(a).localeCompare(String(b)))
+      .sort((a, b) => comparePhaseNum(a, b, context) || String(a).localeCompare(String(b)))
       .map((d) => {
         const phase = phaseByDir.get(d);
         const plans = phase ? phase.planCount : 0;
