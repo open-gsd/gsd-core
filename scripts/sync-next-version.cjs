@@ -59,6 +59,12 @@ const MERGE_QUEUE_REJECTION_RE = /merge queue/i;
 // stdin ignored, stdout and stderr captured so a failed `gh` call carries its own text.
 const PIPED_STDERR = ['ignore', 'pipe', 'pipe'];
 
+/** Piped stderr is not visible on its own: write it out, then rethrow. */
+function rethrowWithStderr(err) {
+  if (err && err.stderr) process.stderr.write(String(err.stderr));
+  throw err;
+}
+
 /** Full PR-based sync to the `next` branch. Returns 'noop' | 'synced' | 'queued' (enqueued, not yet merged). */
 function syncViaPr(version, { run = defaultRun } = {}) {
   if (!isReleaseVersion(version)) {
@@ -113,20 +119,23 @@ function syncViaPr(version, { run = defaultRun } = {}) {
     run('gh', ['pr', 'merge', '--admin', '--merge', prNum], { timeout: 60000, stdio: PIPED_STDERR });
   } catch (err) {
     const msg = String((err && (err.stderr || err.message)) || '');
-    // tolerate "already merged" first: a PR that is already merged must not be enqueued
-    if (/already merged|not mergeable|Merged/i.test(msg)) {
-      /* fall through to the success report */
+    if (/already merged/i.test(msg)) {
+      // a PR that is already merged must never be enqueued
     } else if (MERGE_QUEUE_REJECTION_RE.test(msg)) {
       // #5746: `next` is governed by a merge-queue ruleset, which --admin cannot bypass.
       // Enqueue instead; the queue chooses the merge strategy, so no --merge here. A
-      // failed enqueue is a real failure and propagates.
-      run('gh', ['pr', 'merge', '--auto', prNum], { timeout: 60000, stdio: PIPED_STDERR });
+      // failed enqueue is a real failure: its text is surfaced and it propagates.
+      try {
+        run('gh', ['pr', 'merge', '--auto', prNum], { timeout: 60000, stdio: PIPED_STDERR });
+      } catch (enqueueErr) {
+        rethrowWithStderr(enqueueErr);
+      }
       process.stdout.write(`queued sync of next -> ${version} via PR #${prNum}\n`);
       return 'queued';
-    } else {
-      // piped stderr is no longer visible on its own; surface it before rethrowing
-      if (err && err.stderr) process.stderr.write(String(err.stderr));
-      throw err;
+    } else if (!/not mergeable|Merged/i.test(msg)) {
+      // the older tolerance, kept after the queue rule so a queue rejection that happens
+      // to mention "mergeable" is not mistaken for success
+      rethrowWithStderr(err);
     }
   }
   process.stdout.write(`synced next -> ${version} via PR #${prNum}\n`);

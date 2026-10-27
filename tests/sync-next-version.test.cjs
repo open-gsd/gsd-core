@@ -331,6 +331,23 @@ test('syncViaPr — a message naming both the queue and an already-merged PR doe
   assert.equal(mergeCalls(run).length, 1, 'already merged wins: --auto must not run on a merged PR');
 });
 
+test('syncViaPr — a queue rejection that also says "not mergeable" still enqueues (#5746)', () => {
+  const run = makeMergeRun({
+    '--admin': ghFailure('Pull request is not mergeable: Changes must be made through the merge queue'),
+  });
+  assert.equal(syncViaPr('1.5.0', { run }), 'queued');
+  assert.deepEqual(mergeCalls(run)[1].args, ['pr', 'merge', '--auto', '777']);
+});
+
+test('syncViaPr — the stderr of a failed enqueue is written out before the error propagates (#5746)', (t) => {
+  const failure = ghFailure('auto-merge is not enabled for this repository');
+  const run = makeMergeRun({ '--admin': MERGE_QUEUE_REJECTION, '--auto': failure });
+  const written = [];
+  t.mock.method(process.stderr, 'write', (chunk) => { written.push(String(chunk)); return true; });
+  assert.throws(() => syncViaPr('1.5.0', { run }), (err) => err === failure);
+  assert.ok(written.some((s) => s.includes('auto-merge is not enabled')), 'the GitHub reason must reach the log');
+});
+
 test('syncViaPr — both merge calls capture stderr so a failure carries its own text (#5746)', () => {
   const run = makeMergeRun({ '--admin': MERGE_QUEUE_REJECTION });
   syncViaPr('1.5.0', { run });
