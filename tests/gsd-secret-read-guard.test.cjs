@@ -1053,6 +1053,54 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
     ['inside bash -c', "bash -c 'claude --agent gsd-debugger -p hi'"],
     ['inside eval', 'eval "claude --agent gsd-debugger -p hi"'],
     ['piped', 'echo go | claude --agent gsd-debugger -p'],
+    // #5514: a wrapper's own options, and their values, are not the command.
+    ['behind timeout -k 5 10', 'timeout -k 5 10 claude --agent gsd-debugger -p hi'],
+    ['behind timeout -s KILL 10', 'timeout -s KILL 10 claude --agent gsd-debugger -p hi'],
+    ['behind env -i', 'env -i PATH="$PATH" claude --agent gsd-debugger -p hi'],
+    ['behind env -u HOME', 'env -u HOME claude --agent gsd-debugger -p hi'],
+    ['behind nice -n 5', 'nice -n 5 claude --agent gsd-debugger -p hi'],
+    ['behind sudo -u me', 'sudo -u me claude --agent gsd-debugger -p hi'],
+    ['behind sudo -E', 'sudo -E claude --agent gsd-debugger -p hi'],
+    ['behind timeout --signal KILL 10', 'timeout --signal KILL 10 claude --agent gsd-debugger -p hi'],
+    ['behind a long option prefix (timeout --sig KILL 10)', 'timeout --sig KILL 10 claude --agent gsd-debugger -p hi'],
+    ['behind an attached value (nice -n5)', 'nice -n5 claude --agent gsd-debugger -p hi'],
+    ['behind a legacy niceness (nice -5)', 'nice -5 claude --agent gsd-debugger -p hi'],
+    ['behind combined short options (env -iu HOME)', 'env -iu HOME claude --agent gsd-debugger -p hi'],
+    ['behind combined short options (sudo -Eu me)', 'sudo -Eu me claude --agent gsd-debugger -p hi'],
+    ['behind sudo --user me', 'sudo --user me claude --agent gsd-debugger -p hi'],
+    ['behind sudo --user=me', 'sudo --user=me claude --agent gsd-debugger -p hi'],
+    ['behind env --ignore-environment', 'env --ignore-environment PATH="$PATH" claude --agent gsd-debugger -p hi'],
+    ['behind env -C /tmp', 'env -C /tmp claude --agent gsd-debugger -p hi'],
+    ['behind a -- end of options', 'sudo -u me -- claude --agent gsd-debugger -p hi'],
+    ['behind doas -u me', 'doas -u me claude --agent gsd-debugger -p hi'],
+    ['behind command -p', 'command -p claude --agent gsd-debugger -p hi'],
+    ['in an env -S string', "env -S 'claude --agent gsd-debugger -p hi'"],
+    ['in an attached env -S string', "env -S'claude --agent gsd-debugger -p hi'"],
+    ['in env --split-string=', "env --split-string='claude --agent gsd-debugger -p hi'"],
+    ['split between an env -S string and the words after it', "env -S 'claude --agent' gsd-debugger -p hi"],
+    ['the agent flag after an env -S string that names only the binary', 'env -S "claude" --agent gsd-debugger -p hi'],
+    ['env options inside an env -S string', "env -S '-i claude' --agent gsd-debugger -p hi"],
+    ['an env -S string split by \\_', "env -S 'claude\\_--agent\\_gsd-debugger\\_-p\\_hi'"],
+    ['a quoted script after an env -S string', "env -S 'bash -c' 'claude --agent gsd-debugger -p hi'"],
+    // env reads an -S string by its own rules, not the shell's.
+    ['an env -S string cut short by \\c', "env -S 'claude --agent gsd-debugger\\c ignored' -p hi"],
+    ['an env -S string whose \\c ends the binary name', "env -S 'claude\\c' --agent gsd-debugger -p hi"],
+    ["an escaped quote inside an env -S string's single quotes", `env -S "claude -p 'it\\\\'s' --agent gsd-debugger"`],
+    ['a backtick in an env -S string', "env -S 'claude -p `hi --agent gsd-debugger'"],
+    ['a << in an env -S string', "env -S 'claude -p << --agent gsd-debugger'"],
+    ['vertical tabs between the words of an env -S string', "env -S 'claude\v--agent\vgsd-debugger\v-p\vhi'"],
+    ['a launch after a deeply nested env -S chain', `env ${'-S'.repeat(20000)}x; claude --agent gsd-debugger -p hi`],
+    ['behind sudo --host', 'sudo --host myhost claude --agent gsd-debugger -p hi'],
+    ['behind a chain of wrappers with options', 'timeout -k 5 10 nice -n 5 env -i PATH="$PATH" claude --agent gsd-debugger -p hi'],
+    // The wrapper options #5627 reads, pinned for the launch too.
+    ['behind env -P', 'env -P /usr/bin claude --agent gsd-debugger -p hi'],
+    ['behind env -a', 'env -a name claude --agent gsd-debugger -p hi'],
+    ['behind env --argv0', 'env --argv0 name claude --agent gsd-debugger -p hi'],
+    ['behind stdbuf -oL', 'stdbuf -oL claude --agent gsd-debugger -p hi'],
+    ['behind setsid', 'setsid claude --agent gsd-debugger -p hi'],
+    ['behind exec', 'exec claude --agent gsd-debugger -p hi'],
+    ['behind exec -a', 'exec -a name claude --agent gsd-debugger -p hi'],
+    ['behind timeout 5 --', 'timeout 5 -- claude --agent gsd-debugger -p hi'],
   ];
 
   for (const [label, command] of DEBUGGER_BLOCKS) {
@@ -1073,6 +1121,16 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
     ['the name in a heredoc body', "cat <<'EOF'\nclaude --agent gsd-debugger\nEOF"],
     ['a different binary that ends in claude', 'myclaude --agent gsd-debugger -p hi'],
     ['the gsd-tools model lookup the manager really runs', 'gsd_run query resolve-model gsd-debugger'],
+    // #5514: the same wrappers in front of anything but a debugger launch.
+    ['another agent behind timeout -k 5 10', 'timeout -k 5 10 claude --agent gsd-planner -p hi'],
+    ['another agent behind env -i', 'env -i PATH="$PATH" claude --agent gsd-planner -p hi'],
+    ['another agent behind sudo -u me', 'sudo -u me claude --agent gsd-planner -p hi'],
+    ['another agent in an env -S string', "env -S 'claude --agent gsd-planner -p hi'"],
+    ['the launch text as an argument behind nice -n 5', 'nice -n 5 echo claude --agent gsd-debugger'],
+    ['a value that names the binary (env -u claude)', 'env -u claude printenv'],
+    // env runs a program named `claude<TAB>--agent<TAB>gsd-debugger`: an escaped tab is part of the word.
+    ['escaped tabs inside one env -S word', "env -S 'claude\\t--agent\\tgsd-debugger'"],
+    ['a comment in an env -S string', "env -S '#claude --agent gsd-debugger'"],
   ];
 
   for (const [label, command] of DEBUGGER_ALLOWS) {
@@ -1181,6 +1239,8 @@ describe('gsd-secret-read-guard: nested shell behind a wrapper with flags (#5627
     'stdbuf -oL', 'stdbuf -i0 -oL -eL', 'stdbuf --output=L', 'setsid', 'setsid -w', 'exec', 'exec -a name',
     'nohup', 'sudo -u root', 'sudo -E', 'sudo --', 'sudo -u root -g wheel', 'doas -u root',
     'nice -n 5 timeout -s KILL 5 env -i', 'sudo -n timeout 5 nohup',
+    // #5514: the command line inside an env -S string.
+    "env -S 'nice -n 5'", "env -S'timeout 5'", "env --split-string='sudo -u root'", "env -iS 'stdbuf -oL'",
   ];
   for (const w of wrappers) {
     test(`blocks ${w} bash -c`, () => {
@@ -1233,6 +1293,279 @@ describe('gsd-secret-read-guard: nested shell behind a wrapper with flags (#5627
         return r.status === 2;
       }),
       { numRuns: 25 },
+    );
+  });
+});
+
+// #5514: `env -S STRING` splits STRING into words by env's own rules and reads them in
+// the option's place, so the command env runs, and what it reads, can sit inside the
+// string. Every check that locates a command word reads it there. The string is also
+// read as before #5514, skipped as the option's value, and either reading's hit denies.
+describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', () => {
+  const LAUNCH = 'claude --agent gsd-debugger -p hi';
+  // A word as env -S reads it inside double quotes, and `inner` behind `depth` levels of
+  // env -S, quoted the way a shell user writes it (single quotes outermost).
+  const envQuote = (s) => `"${s.replace(/[\\"]/g, (m) => `\\${m}`)}"`;
+  const nested = (inner, depth) => {
+    let s = inner;
+    for (let d = 1; d < depth; d++) s = `env -S ${envQuote(s)}`;
+    return `env -S '${s}'`;
+  };
+
+  const SECRET_READS = [
+    ['a read in the string', "env -S 'cat .env'"],
+    ['a read in an attached string', "env -S'cat .env'"],
+    ['a read in --split-string=', "env --split-string='cat .env'"],
+    ['the file named after the string', "env -S 'cat' .env"],
+    ['a bundled -iS', "env -iS 'cat' .env"],
+    ['a shell script in the string', `env -S "bash -c 'cat .env'"`],
+    ['a wrapper with options in the string', "env -S 'sudo -u root cat' .env"],
+  ];
+  for (const [label, command] of SECRET_READS) {
+    test(`blocks: ${label}`, () => {
+      assertBlocked(runHook(bash(command)), label, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  const ALLOWS = [
+    ['a template name in the string', "env -S 'cat .env.example'"],
+    ['an existence check in the string', "env -S 'ls -la .env'"],
+    ['a benign string', "env -S 'echo hi' there"],
+  ];
+  for (const [label, command] of ALLOWS) {
+    test(`allows: ${label}`, () => {
+      assertAllowed(runHook(bash(command)), label);
+    });
+  }
+
+  // Reads reached through the escapes env decodes (`\t \' \\ \" \_ \c \n \$ \# \f \r \v`),
+  // in the quoting each label names. Each row loses its read under at least one way of
+  // getting its escape wrong (stopping at it, keeping the backslash, separating where env
+  // does not), not under every way: `cat .e\nv` reaches the file once bash drops the
+  // backslash, which happens only if env decoded `\\` to one backslash, while `echo \f;
+  // cat .env` still reads with the backslash kept. The KEPT rows hold the kept-backslash
+  // mistake for the escapes whose other rows still read with it kept.
+  const ESCAPE_READS = [
+    ['\\t, bare', String.raw`env -S 'bash -c cat\t.env'`],
+    ["\\', bare", String.raw`env -S "bash -c cat\\t\\'.env\\'"`],
+    ["\\\\ inside single quotes", String.raw`env -S "bash -c 'cat .e\\\\nv'"`],
+    ['\\\\ inside double quotes', String.raw`env -S 'bash -c "cat .e\\nv"'`],
+    ['\\" inside double quotes', String.raw`env -S 'bash -c "cat \".env\""'`],
+    ["\\' inside single quotes", String.raw`env -S "bash -c 'cat .e\\'\\'nv'"`],
+    ['\\_ inside double quotes', String.raw`env -S 'bash -c "cat\_.env"'`],
+    ['\\n, bare', String.raw`env -S 'bash -c :\ncat\t.env'`],
+    ['\\$, bare', String.raw`env -S 'bash -c echo\t\$;cat\t.env'`],
+    ['\\#, bare', String.raw`env -S 'bash -c echo\tx\#;cat\t.env'`],
+    // \f \r \v are not blanks to bash, so each sits in an echo argument ahead of the read:
+    // a split that stops at the escape drops the read with it.
+    ['\\f, bare', String.raw`env -S 'bash -c echo\t\f;cat\t.env'`],
+    ['\\r, bare', String.raw`env -S 'bash -c echo\t\r;cat\t.env'`],
+    ['\\v, bare', String.raw`env -S 'bash -c echo\t\v;cat\t.env'`],
+    ['\\_, bare', String.raw`env -S 'bash\_-c\_"cat .env"'`],
+    ['\\c, bare', String.raw`env -S 'cat .env\c ignored'`],
+    ['\\\\, bare', String.raw`env -S 'bash -c cat\t.e\\nv'`],
+    ['\\", bare', String.raw`env -S 'bash -c cat\t\".env\"'`],
+    ['\\t inside double quotes', String.raw`env -S 'bash -c "cat\t.env"'`],
+    ['\\n inside double quotes', String.raw`env -S 'bash -c ":\ncat .env"'`],
+    ['\\f inside double quotes', String.raw`env -S 'bash -c "echo \f;cat .env"'`],
+    ['\\r inside double quotes', String.raw`env -S 'bash -c "echo \r;cat .env"'`],
+    ['\\v inside double quotes', String.raw`env -S 'bash -c "echo \v;cat .env"'`],
+    ['\\$ inside double quotes', String.raw`env -S 'bash -c "echo \$;cat .env"'`],
+    ['\\# inside double quotes', String.raw`env -S 'bash -c "echo x\#;cat .env"'`],
+    ["\\' inside double quotes", String.raw`env -S "bash -c \"cat\t\'.env\'\""`],
+    // KEPT: the decoded character is what makes the read. A blank splits the inner
+    // string; `"$(` is a substitution only once `\$` is decoded; `#` starts a comment
+    // that hides `<<X` only once `\#` is decoded. (`\c` inside double quotes is not
+    // here: env rejects the string and runs nothing.)
+    ...['n', 'f', 'r', 'v'].flatMap((e) => [
+      [`\\${e}, bare, KEPT`, `env -S 'env -S cat\\${e}.env'`],
+      [`\\${e} inside double quotes, KEPT`, `env -S 'env -S "cat\\${e}.env"'`],
+    ]),
+    ['\\$, bare, KEPT', String.raw`env -S 'bash -c echo\t\"\$(cat\t.env)\"'`],
+    ['\\$ inside double quotes, KEPT', String.raw`env -S 'bash -c "echo \"\$(cat .env)\""'`],
+    ['\\#, bare, KEPT', String.raw`env -S 'bash -c echo\t\#<<X\ncat\t.env'`],
+    ['\\# inside double quotes, KEPT', String.raw`env -S 'bash -c "echo \#<<X\ncat .env"'`],
+    // `\_` is a space inside double quotes, not a word break: split there, the script
+    // is `true;` and `cat .env` becomes bash's $0.
+    ['\\_ inside double quotes, not a separator', String.raw`env -S 'bash -c "true;\_cat .env"'`],
+    // A word made only of an escape is still a word: drop it and `-u` takes `cat`.
+    ['\\#, a word of escapes only', String.raw`env -S 'env -u \# cat .env'`],
+  ];
+  for (const [label, command] of ESCAPE_READS) {
+    test(`blocks: a read that needs env to decode ${label}`, () => {
+      assertBlocked(runHook(bash(command)), label, { tool: 'Bash' });
+    });
+  }
+
+  // Reads that depend on env's split rules other than its escapes. Each row loses its
+  // read when the split gets its rule wrong in one direction, the one its label names:
+  // `${VAR}` ending the string rather than kept as a word; `#` taken as a comment inside
+  // a word, or not taken as one at a word's start; repeated blanks making an empty word;
+  // an empty quoted word dropped; a `'` inside double quotes opening a quote; a raw blank
+  // not separating; a prefix of `--split-string` not taken as the option.
+  const SPLIT_READS = [
+    ['${VAR} before the read', "env -S 'cat ${HOME} .env'"],
+    ['a # inside a word', "env -S 'cat a#b .env'"],
+    ['a # starting a word', "env -S 'bash -c #' 'cat .env'"],
+    ["a ' inside double quotes", String.raw`env -S "bash -c \"echo 'a' ; cat .env;true\""`],
+    ['two blanks before a bash -c script', `env -S 'bash -c  "cat .env"'`],
+    ['an empty quoted option value', `env -S 'time -f "" cat .env'`],
+    ...[['newline', '\n'], ['tab', '\t'], ['form feed', '\f'], ['carriage return', '\r'], ['vertical tab', '\v']].map(
+      ([name, ch]) => [`a raw ${name} between words`, `env -S 'cat${ch}.env'`]),
+    ...['--s', '--sp', '--split'].map((name) => [`${name}, a prefix of --split-string`, `env ${name} 'cat .env'`]),
+    ['--split-s=, a prefix with =', "env --split-s='cat .env'"],
+  ];
+  for (const [label, command] of SPLIT_READS) {
+    test(`blocks: a read that needs env's split rule for ${label}`, () => {
+      assertBlocked(runHook(bash(command)), label, { tool: 'Bash' });
+    });
+  }
+
+  // env runs `echo` here, so nothing is read or launched; the reading from before
+  // #5514 skips the string and still denies, and splitting must not remove that. With
+  // `X=--`, env expands `${X}` to `--` and runs what follows, which only the reading
+  // that skips the string sees. Each spelling of the option is its own row.
+  const SPLIT_SPELLINGS = [(s) => `-S '${s}'`, (s) => `-S'${s}'`, (s) => `--split-string '${s}'`, (s) => `--split-string='${s}'`, (s) => `--s '${s}'`];
+  for (const spell of SPLIT_SPELLINGS) {
+    test(`a denial from the reading before #5514 is kept: env ${spell('…')}`, () => {
+      assertBlocked(runHook(bash(`env ${spell('echo')} cat .env`)), 'secret', { tool: 'Bash', path: '.env' });
+      assertBlocked(runHook(bash(`env ${spell('echo')} ${LAUNCH}`)), 'launch', { code: 'debugger-cli-spawn' });
+      assertBlocked(runHook(bash(`X=-- env ${spell('${X}')} bash -c 'cat .env'`)), 'X secret', { tool: 'Bash', path: '.env' });
+      assertBlocked(runHook(bash(`X=-- env ${spell('${X}')} ${LAUNCH}`)), 'X launch', { code: 'debugger-cli-spawn' });
+    });
+  }
+
+  // The #5513 script bash 3.2 reads (its `$( )` closes at the `)` in the heredoc body),
+  // behind an option only the reading that skips the string sees: both readings at once.
+  test('the reading before #5514 keeps the bash 3.2 heredoc reading', () => {
+    const script = 'echo "$(cat <<EOF\n)"; cat .env; "\nEOF\n)"';
+    for (const spell of SPLIT_SPELLINGS) {
+      assertBlocked(runHook(bash(`X=-- env ${spell('${X}')} bash -c '${script}'`)), spell('…'), { tool: 'Bash', path: '.env' });
+    }
+  });
+
+  // A `VAR=value` and option-like words split out of the string, and a `-S` after env's
+  // options have ended: each of these reads the file, and each is denied.
+  test('assignments and option-like words around a split string', () => {
+    for (const cmd of ["env -S 'PATH=.' - .env", 'env -- - -S .env', `env -S 'A=1 -x=1 bash -c "cat .env"'`]) {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    }
+  });
+
+  // A string the split cannot decode (`${VAR}` in it) leaves words the split reading
+  // takes for the command; the reading that skips the string goes on to the command
+  // written out after it, and its hit denies.
+  test('an undecodable string: the reading that skips it reaches the command after it', () => {
+    for (const s of ['bash${X} -c "cat .env"', '${SHELL} -c "cat .env"']) {
+      const cmd = `env -S '${s}' A=1 -i bash -c 'cat .env'`;
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    }
+    assertBlocked(runHook(bash(`env -S 'bash\${X} -c "${LAUNCH}"' A=1 -i bash -c '${LAUNCH}'`)), 'launch', { code: 'debugger-cli-spawn' });
+    assertBlocked(runHook(bash(`env -S 'cl\${X}aude' A=1 -u Q ${LAUNCH}`)), 'launch -u', { code: 'debugger-cli-spawn' });
+  });
+
+  test('two assignments before the command', () => {
+    assertBlocked(runHook(bash("A=1 B=2 bash -c 'cat .env'")), 'bash -c', { path: '.env' });
+    assertBlocked(runHook(bash("A=1 B=2 env -S 'cat .env'")), 'env -S', { path: '.env' });
+    assertBlocked(runHook(bash(`A=1 B=2 ${LAUNCH}`)), 'launch', { code: 'debugger-cli-spawn' });
+  });
+
+  test('four env -S strings in a row reach the launch', () => {
+    assertBlocked(runHook(bash(`env -S 'env' -S 'env' -S 'env' -S '${LAUNCH}'`)), 'four', { code: 'debugger-cli-spawn' });
+  });
+
+  // MAX_NESTING_DEPTH (3) bounds a string split out of a split string: limit-1 and limit
+  // are read, limit+1 is denied unread. GNU env runs all three (checked on coreutils 9.4).
+  for (const depth of [2, 3]) {
+    test(`nesting depth ${depth}: the string is read`, () => {
+      assertBlocked(runHook(bash(nested(LAUNCH, depth))), `launch ${depth}`, { code: 'debugger-cli-spawn' });
+      assertBlocked(runHook(bash(nested('cat .env', depth))), `read ${depth}`, { path: '.env' });
+      assertAllowed(runHook(bash(nested('ls', depth))), `ls ${depth}`);
+    });
+  }
+  test('nesting depth 4: denied as split-string-too-deep, whatever the string holds', () => {
+    for (const inner of [LAUNCH, 'cat .env', 'ls']) {
+      const out = assertBlocked(runHook(bash(nested(inner, 4))), inner, { code: 'split-string-too-deep', tool: 'Bash' });
+      assert.match(out.reason, /env -S/);
+    }
+  });
+
+  // A hang backstop, not a speed assertion: each string is pushed onto a stack, never
+  // spliced into a copy of the word list, so 1 MiB of strings stays linear. The child
+  // drops the inherited coverage hook, which slows a spawned hook several times over.
+  const TAIL = 'claude --agent gsd-debugger';
+  const fill = (unit) => unit.repeat(Math.floor((1024 * 1024 - 1 - TAIL.length) / unit.length)) + TAIL;
+  const LARGE = [
+    ['chained env -S wrappers', fill("env -S 'env' "), 'debugger-cli-spawn'],
+    ['one env with many -S strings', `env ${fill("-S 'env' ")}`, 'debugger-cli-spawn'],
+    ['one long string before the launch', `env -S '${'a '.repeat(500000)}' ${TAIL}`, 'debugger-cli-spawn'],
+  ];
+  for (const [label, command, code] of LARGE) {
+    test(`blocks: ${label}, 1 MiB`, () => {
+      const r = runHookSeam(HOOK_PATH, [], {
+        input: JSON.stringify(bash(command)),
+        env: { ...process.env, NODE_V8_COVERAGE: '' },
+        timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
+      });
+      assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, label, { code });
+    });
+  }
+
+  // Splitting is a parser: the same words get the same verdict whether env splits them
+  // out of a string or the shell passes them as words, unless the reading before #5514
+  // (the string skipped, `env REST`) denies on its own.
+  test('property: env -S words read as if written out, or as the string skipped', () => {
+    // The words: env options and assignments, an optional wrapper, then a launch, a read,
+    // or a command that does neither. The `bash -c` reads hold a quote, a backslash or a
+    // TAB, so most of their spellings carry an escape the split must decode; the
+    // ESCAPE_READS and SPLIT_READS rows above each target one escape or split rule.
+    const OPTIONS = fc.array(fc.constantFrom(['-i'], ['FOO=1'], ['-u', 'HOME']), { maxLength: 2 }).map((o) => o.flat());
+    const WRAPPER = fc.constantFrom([], ['nice', '-n', '5'], ['sudo', '-u', 'me'], ['timeout', '5']);
+    const CORE = fc.constantFrom(
+      ['claude', '--agent', 'gsd-debugger', '-p', 'x y'], ['claude', '--agent=gsd-debugger'], ['cat', '.env'],
+      ['bash', '-c', "cat '.env'"], ['bash', '-c', 'cat ".env"'], ['bash', '-c', 'cat \\.env'], ['bash', '-c', 'cat\t.env'],
+      ['claude', '--agent', 'gsd-executor'], ['ls', '.env'], ['cat', '.env.example'],
+      ['echo', '#x', 'a"b', 'a\\b'], ['printf', "it's", '$x', 'tab\there'],
+    );
+    const WORDS = fc.tuple(OPTIONS, WRAPPER, CORE).map(([o, w, c]) => [...o, ...w, ...c]);
+    // One env -S spelling per word: double quotes, single quotes, or bare with env's
+    // escapes, and words joined by a space, a tab or env's `\_`. A bare word cannot hold
+    // a space (`\_` outside quotes separates words), so such a word is double-quoted.
+    const ESCAPES = { '\t': '\\t', '"': '\\"', '\\': '\\\\', '#': '\\#', $: '\\$', "'": "\\'" };
+    const SPELL = {
+      double: (w) => `"${w.replace(/[\\"$]/g, (m) => `\\${m}`)}"`,
+      single: (w) => `'${w.replace(/[\\']/g, (m) => `\\${m}`)}'`,
+      bare: (w) => (w.includes(' ') ? SPELL.double(w) : [...w].map((ch) => ESCAPES[ch] || ch).join('')),
+    };
+    const SPELLINGS = fc.array(fc.tuple(fc.constantFrom('double', 'single', 'bare'), fc.constantFrom(' ', '\t', '\\_')), { minLength: 12, maxLength: 12 });
+    const shellQuote = (s) => `'${s.replace(/'/g, "'\\''")}'`;
+    const REST = ['', '', '.env', '--agent gsd-debugger', LAUNCH];
+    let splitDecides = 0;
+    fc.assert(
+      fc.property(WORDS, SPELLINGS, fc.constantFrom(...REST), (words, spellings, rest) => {
+        const denied = (command) => runHook(bash(command)).status === 2;
+        const string = words.map((w, k) => (k ? spellings[k][1] : '') + SPELL[spellings[k][0]](w)).join('');
+        const split = denied(`env -S ${shellQuote(string)} ${rest}`);
+        const written = denied(`env ${words.map(shellQuote).join(' ')} ${rest}`);
+        const skipped = denied(`env ${rest}`);
+        if (written && !skipped) splitDecides++;
+        return split === (written || skipped);
+      }),
+      { ...PROPERTY_RUNS, numRuns: 40 },
+    );
+    // Not vacuous: in enough runs only the split string can deny, since the reading
+    // that skips it allows.
+    assert.ok(splitDecides >= 10, `only ${splitDecides} of 40 runs were decided by the split string`);
+  });
+
+  test('property: nested strings are read up to MAX_NESTING_DEPTH and denied past it', () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 6 }), fc.constantFrom(LAUNCH, 'cat .env', 'ls'), (depth, inner) => {
+        const r = runHook(bash(nested(inner, depth)));
+        if (depth > 3) return r.status === 2 && JSON.parse(r.stdout).code === 'split-string-too-deep';
+        return inner === 'ls' ? r.status === 0 : r.status === 2;
+      }),
+      { ...PROPERTY_RUNS, numRuns: 20 },
     );
   });
 });
