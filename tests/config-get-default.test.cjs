@@ -1598,9 +1598,9 @@ describe('#2702: workstream config-get inherits from root config', () => {
       silencedStderr = t.mock.method(process.stderr, 'write', () => true);
     });
     afterEach(() => {
+      isolation.restore();
       silencedStderr.mock.restore();
       cleanup(tmpDir);
-      isolation.restore();
     });
 
     function writeConfig(cfg) {
