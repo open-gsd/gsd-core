@@ -662,6 +662,9 @@ function _spawnResult(result: { error?: NodeJS.ErrnoException | null; status?: n
   };
 }
 
+// #5548: owned by read-only-git-env.cts (its default base is scrubbed); re-exported for callers.
+export { GIT_LOCATION_ENV_VARS, scrubGitLocationEnv } from './read-only-git-env.cjs';
+
 export function execGit(args: string[], opts: { cwd?: string; env?: Record<string, string>; timeout?: number } = {}): SpawnResultOutput {
   // Non-interactive defaults: a hung credential prompt or terminal-input
   // probe must surface as a timeout, not block the tool forever. Callers

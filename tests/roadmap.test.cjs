@@ -6821,6 +6821,549 @@ describe('phase checklist stamp is anchored to the phase\'s own bullet (#5545)',
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// #5221 — active-milestone scope must not be "text after the LAST </details>"
+// (a backlog <details> AFTER the active milestone), and the Status/Completed
+// writes must hit the phase table, not an earlier versions table.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('#5221: roadmap update-plan-progress — active milestone scope and phase-table targeting', () => {
+  let tmpDir;
+  let roadmapPath;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-5221-roadmap-');
+    roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  const SHIPPED = [
+    '<details>',
+    '<summary>✅ v1.0 Shipped</summary>',
+    '',
+    '### Phase 68: Old Scheduler',
+    '**Plans**: 3 plans',
+    '- [ ] **Phase 68: Old Scheduler**',
+    '',
+    '| Phase | Plans Complete | Status | Completed |',
+    '|-------|----------------|--------|-----------|',
+    '| 68 | 0/3 | Planned | - |',
+    '</details>',
+    '',
+  ];
+  const ACTIVE = [
+    '## v2.0 Active',
+    '',
+    '- [ ] **Phase 68: Scheduler** - ship it',
+    '',
+    '### Phase 68: Scheduler',
+    '**Goal**: schedule',
+    '**Plans**: 0/5 plans executed',
+    '',
+    '## Progress',
+    '',
+    '| Phase | Plans Complete | Status | Completed |',
+    '|-------|----------------|--------|-----------|',
+    '| 68 | 0/5 | Planned | - |',
+    '',
+  ];
+  const BACKLOG = [
+    '## Backlog',
+    '<details>',
+    '<summary>Ideas</summary>',
+    'later',
+    '</details>',
+    '',
+  ];
+
+  function seed(lines, { state = true, complete = false } = {}) {
+    if (state) fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    const roadmap = lines.join('\n');
+    const p68 = seedPhase68WithPlans(tmpDir, { roadmap });
+    if (complete) {
+      for (const n of ['01', '03', '04', '05']) fs.writeFileSync(path.join(p68, `68-${n}-SUMMARY.md`), '# S\n');
+      fs.writeFileSync(path.join(p68, '68-VERIFICATION.md'), '---\nstatus: passed\n---\n# V\n');
+    }
+    return roadmap;
+  }
+
+  // The writer re-spaces blank lines file-wide, so assert the shipped rows, not raw bytes.
+  function assertShippedUntouched(out) {
+    assert.ok(out.includes('- [ ] **Phase 68: Old Scheduler**'), 'shipped checkbox untouched');
+    assert.ok(out.includes('| 68 | 0/3 | Planned | - |'), 'shipped table row untouched');
+    assert.ok(out.includes('**Plans**: 3 plans'), 'shipped Plans line untouched');
+  }
+
+  function run() {
+    const result = runGsdTools('roadmap update-plan-progress 68', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    return JSON.parse(result.output);
+  }
+
+  test('backlog </details> after the active milestone does not hide it', () => {
+    seed([...SHIPPED, ...ACTIVE, ...BACKLOG], { complete: true });
+    const output = run();
+    assert.strictEqual(output.updated, true, JSON.stringify(output));
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.match(out, /- \[x\] \*\*Phase 68: Scheduler\*\* - ship it/);
+    assert.match(out, /\*\*Plans\*\*: 5\/5 plans complete/);
+    assert.match(out, /\| 68 \| 5\/5 \| Complete\s+\| \d{4}-\d{2}-\d{2} \|/);
+    // same-numbered phase inside the shipped <details> is untouched
+    assertShippedUntouched(out);
+    assert.ok(out.includes('<summary>Ideas</summary>\nlater\n</details>'), 'backlog untouched');
+  });
+
+  test('active milestone first, shipped <details> with a same-numbered phase below it', () => {
+    seed([...ACTIVE, ...SHIPPED], { complete: true });
+    assert.strictEqual(run().updated, true);
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.match(out, /- \[x\] \*\*Phase 68: Scheduler\*\* - ship it/);
+    assert.match(out, /\| 68 \| 5\/5 \| Complete\s+\| \d{4}-\d{2}-\d{2} \|/);
+    assertShippedUntouched(out);
+  });
+
+  test('property: activeScopeStart ignores backlog </details> after the active heading and excludes every shipped block before it', () => {
+    const fc = require('fast-check');
+    const { activeScopeStart } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    const build = (k, m) => [...Array(k).fill(SHIPPED).flat(), ...ACTIVE, ...Array(m).fill(BACKLOG).flat()].join('\n');
+    fc.assert(fc.property(fc.nat({ max: 3 }), fc.nat({ max: 3 }), (k, m) => {
+      const content = build(k, m);
+      const at = activeScopeStart(content, tmpDir);
+      assert.strictEqual(at, activeScopeStart(build(k, 0), tmpDir), 'backlog blocks after the heading never move the start');
+      const scope = content.slice(at);
+      assert.ok(scope.trimStart().startsWith('## v2.0 Active'), `scope starts at the active milestone (k=${k})`);
+      assert.ok(!scope.includes('Old Scheduler'), 'no shipped block is in scope');
+    }), { numRuns: 16, seed: 5221 });
+  });
+
+  test('activeScopeStart without a resolvable heading ignores a backlog <details> between the active phases and a later backlog entry', () => {
+    const { activeScopeStart } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+    const content = ['# Roadmap', '<details>', '<summary>shipped</summary>', '- [x] **Phase 1: Old**', '</details>', '',
+      '- [ ] **Phase 2: Active**', '- [ ] **Phase 3: Active**', '',
+      '<details>', '<summary>Backlog A</summary>', '- [ ] **Phase 999.1: A**', '</details>',
+      '<details>', '<summary>Backlog B</summary>', '- [ ] **Phase 999.2: B**', '</details>'].join('\n');
+    const scope = content.slice(activeScopeStart(content, tmpDir));
+    assert.ok(scope.includes('Phase 2: Active'), 'active phases stay in scope');
+    assert.ok(!scope.includes('Phase 1: Old'), 'shipped block stays out');
+  });
+
+  test('a Plans-headed Progress table directly above a shipped <details> does not leak into the shipped table', () => {
+    const active = ACTIVE.map((l) => l.replace('| Phase | Plans Complete |', '| Phase | Plans |'));
+    seed([...active, ...SHIPPED], { complete: true });
+    assert.strictEqual(run().updated, true);
+    assertShippedUntouched(fs.readFileSync(roadmapPath, 'utf-8'));
+  });
+
+  test('an active milestone wrapped in <details open> is found', () => {
+    seed(['<details open>', '<summary>v2.0 Active</summary>', '', ...ACTIVE, '</details>', ''], { complete: true });
+    const output = run();
+    assert.notStrictEqual(output.reason, 'missing_phase_details', JSON.stringify(output));
+    const a = runGsdTools('roadmap analyze', tmpDir);
+    assert.ok(a.success, a.error);
+    assert.notStrictEqual(JSON.parse(a.output).roadmap_record['68'], undefined);
+  });
+
+  test('milestone-grouped progress table: the record follows the STATE.md milestone', () => {
+    fs.writeFileSync(roadmapPath, [
+      '# Roadmap', '', '## v2.0 Active', '', '### Phase 1: Foo', '**Goal**: foo', '',
+      '## Progress', '',
+      '| Phase | Milestone | Plans Complete | Status | Completed |',
+      '|-------|-----------|----------------|--------|-----------|',
+      '| 1 | v1.0 | 1/1 | Complete | 2026-01-01 |',
+      '| 1 | v2.0 | 0/1 | Not started | - |',
+      '',
+    ].join('\n'));
+    const record = (milestone) => {
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), `---\nmilestone: ${milestone}\n---\n`);
+      const a = runGsdTools('roadmap analyze', tmpDir);
+      assert.ok(a.success, a.error);
+      return JSON.parse(a.output).roadmap_record['1'];
+    };
+    assert.strictEqual(record('v2.0'), false);
+    assert.strictEqual(record('v1.0'), true);
+  });
+
+  test('no resolvable milestone and a backlog <details> below the active phases: still updates', () => {
+    seed([...ACTIVE, ...BACKLOG], { state: false, complete: true });
+    const output = run();
+    assert.strictEqual(output.updated, true, JSON.stringify(output));
+  });
+
+  test('checklist-only active milestone (no Progress table) above a shipped <details>: shipped row untouched, record complete', () => {
+    seed([...ACTIVE.slice(0, 8), ...SHIPPED], { complete: true });
+    assert.strictEqual(run().updated, true);
+    assertShippedUntouched(fs.readFileSync(roadmapPath, 'utf-8'));
+    const a = runGsdTools('roadmap analyze', tmpDir);
+    assert.ok(a.success, a.error);
+    assert.strictEqual(JSON.parse(a.output).roadmap_record['68'], true);
+  });
+
+  test('a ## Progress inside a shipped <details> below a Progress-less active milestone is neither written nor read', () => {
+    const shippedRow = '| 68. Old | 3/3 | Planned | - |';
+    seed([
+      ...ACTIVE.slice(0, 8),
+      '<details>',
+      '<summary>✅ v1.0 Shipped</summary>',
+      '',
+      '## v1.0 Old',
+      '',
+      '## Progress',
+      '',
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|----------------|--------|-----------|',
+      shippedRow,
+      '</details>',
+      '',
+    ], { complete: true });
+    run();
+    assert.ok(fs.readFileSync(roadmapPath, 'utf-8').includes(shippedRow), 'shipped Progress row untouched');
+    const a = runGsdTools('roadmap analyze', tmpDir);
+    assert.ok(a.success, a.error);
+    assert.strictEqual(JSON.parse(a.output).roadmap_record['68'], true, 'the shipped Planned row is not the record');
+  });
+
+  test('versions table above the phase table: execute -> verify -> phase complete -> analyze reads the phase row Complete', () => {
+    const versions = [
+      '| Jira version | Phases | Status | Completed |',
+      '|--------------|--------|--------|-----------|',
+      '| 2.0 | 68 | Open | - |',
+      '',
+    ];
+    seed([...ACTIVE.slice(0, 10), ...versions, ...ACTIVE.slice(10)], { state: false });
+    const p68 = path.join(tmpDir, '.planning', 'phases', '68-scheduler');
+    for (const n of ['01', '03', '04', '05']) fs.writeFileSync(path.join(p68, `68-${n}-SUMMARY.md`), '# S\n');
+    run();
+    fs.writeFileSync(path.join(p68, '68-VERIFICATION.md'), '---\nstatus: passed\n---\n# V\n');
+    const c = runGsdTools('phase complete 68', tmpDir);
+    assert.ok(c.success, c.error);
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.ok(out.includes(versions.join('\n')), 'versions table untouched');
+    assert.match(out, /\| 68 \| 5\/5 \| Complete\s+\| \d{4}-\d{2}-\d{2} \|/);
+    const a = runGsdTools('roadmap analyze', tmpDir);
+    assert.ok(a.success, a.error);
+    assert.strictEqual(JSON.parse(a.output).roadmap_record['68'], true);
+  });
+
+  test('one </details> (shipped only) behaves as before', () => {
+    seed([...SHIPPED, ...ACTIVE], { complete: true });
+    assert.strictEqual(run().updated, true);
+    assertShippedUntouched(fs.readFileSync(roadmapPath, 'utf-8'));
+  });
+
+  test('zero </details> with STATE milestone still writes', () => {
+    seed([...ACTIVE, ...BACKLOG.slice(0, 1)], { complete: true });
+    assert.strictEqual(run().updated, true);
+  });
+
+  test('flat roadmap with no STATE writes', () => {
+    seed([...ACTIVE], { state: false, complete: true });
+    assert.strictEqual(run().updated, true);
+    assert.match(fs.readFileSync(roadmapPath, 'utf-8'), /\| 68 \| 5\/5 \| Complete/);
+  });
+
+  test('templates/roadmap.md layout (Progress at the bottom) with a backlog </details> after the active milestone', () => {
+    seed([
+      ...SHIPPED,
+      '## v2.0 Active',
+      '',
+      '### Phase 68: Scheduler',
+      '**Goal**: schedule',
+      '**Plans**: [Number of plans]',
+      '',
+      'Plans:',
+      '- [ ] 68-01: first',
+      '',
+      '## Backlog',
+      '<details>',
+      '<summary>Ideas</summary>',
+      '</details>',
+      '',
+      '## Progress',
+      '',
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|----------------|--------|-----------|',
+      '| 68 | 0/5 | Planned | - |',
+      '',
+    ], { complete: true });
+    assert.strictEqual(run().updated, true);
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.match(out, /\*\*Plans\*\*: 5\/5 plans complete/);
+    assert.match(out, /\| 68 \| 5\/5 \| Complete/);
+  });
+
+  test('A2: a versions table above the phase table is byte-identical; the phase table gets Status/Completed', () => {
+    const versions = [
+      '| Jira version | Phases | Status | Completed |',
+      '|--------------|--------|--------|-----------|',
+      '| 2.0 | 68 | Open | - |',
+      '',
+    ];
+    const lines = [...ACTIVE.slice(0, 10), ...versions, ...ACTIVE.slice(10)];
+    seed(lines, { state: false, complete: true });
+    assert.strictEqual(run().updated, true);
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.ok(out.includes(versions.join('\n')), 'versions table untouched');
+    assert.match(out, /\| 68 \| 5\/5 \| Complete\s+\| \d{4}-\d{2}-\d{2} \|/);
+  });
+
+  const DONE_ROW = /\| 68 \| 5\/5 \| Complete\s+\| \d{4}-\d{2}-\d{2} \|/;
+
+  test('R1: phase section + Progress table ABOVE the active milestone heading (below the last shipped </details>) stay writable', () => {
+    seed([
+      ...SHIPPED,
+      '### Phase 68: Scheduler',
+      '**Plans**: 0/5 plans executed',
+      '',
+      '## Progress',
+      '',
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|----------------|--------|-----------|',
+      '| 68 | 0/5 | Planned | - |',
+      '',
+      '## v2.0 Active',
+      '',
+      ...BACKLOG,
+    ], { complete: true });
+    assert.strictEqual(run().updated, true);
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.match(out, DONE_ROW);
+    assert.match(out, /\*\*Plans\*\*: 5\/5 plans complete/);
+    assertShippedUntouched(out);
+  });
+
+  test('R2b: stale STATE naming a shipped milestone (all headings closed) never writes into the shipped rows', () => {
+    fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+    const roadmap = [
+      '<details>',
+      '<summary>✅ v1.0 Shipped</summary>',
+      '',
+      '## ✅ v1.0 Shipped',
+      '### Phase 68: Old Scheduler',
+      '**Plans**: 3 plans',
+      '- [ ] **Phase 68: Old Scheduler**',
+      '',
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|----------------|--------|-----------|',
+      '| 68 | 0/3 | Planned | - |',
+      '</details>',
+      '',
+      ...ACTIVE,
+    ].join('\n');
+    const p68 = seedPhase68WithPlans(tmpDir, { roadmap });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+    for (const n of ['01', '03', '04', '05']) fs.writeFileSync(path.join(p68, `68-${n}-SUMMARY.md`), '# S\n');
+    fs.writeFileSync(path.join(p68, '68-VERIFICATION.md'), '---\nstatus: passed\n---\n# V\n');
+    run();
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assertShippedUntouched(out);
+    assert.match(out, DONE_ROW);
+  });
+
+  test('R2c: Progress table without a "Plans Complete" header falls back to the whole slice (pre-#5221 behaviour)', () => {
+    seed([
+      ...ACTIVE.slice(0, 9),
+      '| Phase | Plans | Status | Completed |',
+      '|-------|-------|--------|-----------|',
+      '| 68 | 0/5 | Planned | - |',
+      '',
+    ], { state: false, complete: true });
+    run();
+    assert.match(fs.readFileSync(roadmapPath, 'utf-8'), /\| 68 \| 0\/5 \| Complete\s+\| \d{4}-\d{2}-\d{2} \|/);
+  });
+
+  test('R2d: a second phase table further down is not bound; the first (active) table is', () => {
+    const second = [
+      '### Notes',
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|----------------|--------|-----------|',
+      '| 68 | 0/9 | Planned | - |',
+      '',
+    ];
+    seed([...ACTIVE, ...second], { state: false, complete: true });
+    assert.strictEqual(run().updated, true);
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.match(out, DONE_ROW);
+    assert.ok(out.includes('| 68 | 0/9 | Planned | - |'), 'second table untouched');
+  });
+
+  // ── review round: a shipped block below the active milestone, one phase-table predicate, command parity ──
+
+  const SHIPPED_WITH_PLANS = [
+    '<details>',
+    '<summary>✅ v1.0 Shipped</summary>',
+    '',
+    '### Phase 68: Old Scheduler',
+    '**Plans**: 3 plans',
+    '- [ ] **Phase 68: Old Scheduler**',
+    '',
+    'Plans:',
+    '- [ ] 68-01-PLAN.md',
+    '- [ ] 68-03-PLAN.md',
+    '',
+    '| Phase | Plans Complete | Status | Completed |',
+    '|-------|----------------|--------|-----------|',
+    '| 68 | 0/3 | Planned | - |',
+    '</details>',
+    '',
+  ];
+  const nonBlank = (text) => text.split('\n').filter((l) => l.trim() !== '');
+  // Every <details>...</details> span as its non-blank lines, and the text outside them.
+  const splitDetails = (text) => {
+    const blocks = [];
+    let rest = '';
+    let at = 0;
+    for (;;) {
+      const open = text.indexOf('<details>', at);
+      const close = open === -1 ? -1 : text.indexOf('</details>', open);
+      if (close === -1) break;
+      rest += text.slice(at, open);
+      blocks.push(nonBlank(text.slice(open, close + '</details>'.length)));
+      at = close + '</details>'.length;
+    }
+    return { blocks, rest: rest + text.slice(at) };
+  };
+  const detailsBlocks = (text) => splitDetails(text).blocks;
+  const phase68Cells = (text) => {
+    const row = text.split('\n').find((l) => /^\|\s*68\s*\|/.test(l) && !l.includes('0/3'));
+    assert.ok(row, 'active phase 68 table row present');
+    return row.split('|').slice(1, -1).map((c) => c.trim());
+  };
+
+  for (const resolved of [true, false]) {
+    test(`a second run never reaches the shipped block below the active milestone (STATE milestone ${resolved ? 'resolved' : 'absent'})`, () => {
+      seed([...ACTIVE, ...SHIPPED_WITH_PLANS], { state: resolved, complete: true });
+      const before = detailsBlocks(fs.readFileSync(roadmapPath, 'utf-8'));
+      const first = run();
+      assert.strictEqual(first.updated, true, JSON.stringify(first));
+      const afterFirst = fs.readFileSync(roadmapPath, 'utf-8');
+      assert.deepStrictEqual(detailsBlocks(afterFirst), before, 'first run leaves the shipped block alone');
+      run();
+      const afterSecond = fs.readFileSync(roadmapPath, 'utf-8');
+      assert.deepStrictEqual(detailsBlocks(afterSecond), before, 'second run leaves the shipped block alone');
+      assert.deepStrictEqual(nonBlank(afterSecond), nonBlank(afterFirst), 'second run is idempotent');
+    });
+  }
+
+  test('activeScope: the scope ends at the first bare <details> below the active heading, in any tag case', () => {
+    const { activeScope } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    const below = [...ACTIVE, '<DETAILS>', '<summary>old</summary>', '- [ ] **Phase 68: Old**', '</DETAILS>', ''].join('\n');
+    const a = activeScope(below, tmpDir);
+    assert.strictEqual(a.end, below.indexOf('<DETAILS>'));
+    assert.ok(!below.slice(a.start, a.end).includes('Old'));
+    const above = ['<DETAILS>', '<summary>old</summary>', '</DETAILS>', ...ACTIVE].join('\n');
+    const b = activeScope(above, tmpDir);
+    assert.strictEqual(above.slice(b.start).trimStart().split('\n', 1)[0], '## v2.0 Active');
+    assert.strictEqual(b.end, above.length);
+  });
+
+  test('activeScope: an unclosed <details> before the active milestone cannot be told from a wrapper, so the scope starts at 0 (documented fail-open)', () => {
+    const { activeScope } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    const content = ['<details>', '<summary>v1.0</summary>', '', ...ACTIVE].join('\n');
+    assert.strictEqual(activeScope(content, tmpDir).start, 0);
+  });
+
+  test('property: no number of shipped blocks below the active milestone enters its writable scope', () => {
+    const fc = require('fast-check');
+    const { activeScope } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fc.assert(fc.property(fc.nat({ max: 3 }), fc.nat({ max: 3 }), fc.boolean(), (above, below, upper) => {
+      const tag = (t) => (upper ? t.toUpperCase() : t);
+      const block = SHIPPED.map((l) => (l === '<details>' ? tag(l) : l === '</details>' ? tag(l) : l));
+      const content = [...Array(above).fill(block).flat(), ...ACTIVE, ...Array(below).fill(block).flat()].join('\n');
+      const { start, end } = activeScope(content, tmpDir);
+      const scope = content.slice(start, end);
+      assert.ok(!scope.includes('Old Scheduler'), `above=${above} below=${below}`);
+      assert.ok(scope.includes('## v2.0 Active'));
+    }), { numRuns: 24, seed: 5221 });
+  });
+
+  const VERSIONS_THEN_PHASE_TABLE = (header) => [
+    ...ACTIVE.slice(0, 8),
+    '## Status',
+    '',
+    '| Release | Phase | Status | Completed |',
+    '|---------|-------|--------|-----------|',
+    '| 2.0 | 68 | Open | - |',
+    '',
+    header,
+    '|-------|-------|--------|-----------|',
+    '| 68 | 0/5 | Planned | - |',
+    '',
+  ];
+
+  test('a "Phase | Plans | Status" table below a versions table with Phase and Status columns is the one written', () => {
+    seed(VERSIONS_THEN_PHASE_TABLE('| Phase | Plans | Status | Completed |'), { state: false, complete: true });
+    run();
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.ok(nonBlank(out).includes('| 2.0 | 68 | Open | - |'), 'versions row untouched');
+    assert.strictEqual(phase68Cells(out)[2], 'Complete');
+  });
+
+  test('a lowercase phase-table header is neither written nor read as a record: roadmap_record is null', () => {
+    const lines = VERSIONS_THEN_PHASE_TABLE('| phase | plans complete | status | completed |');
+    seed(lines, { state: false, complete: true });
+    run();
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.ok(nonBlank(out).includes('| 68 | 0/5 | Planned | - |'), 'lowercase table row untouched');
+    assert.ok(nonBlank(out).includes('| 2.0 | 68 | Open | - |'), 'versions row untouched');
+    const a = runGsdTools('roadmap analyze', tmpDir);
+    assert.ok(a.success, a.error);
+    assert.strictEqual(JSON.parse(a.output).roadmap_record, null);
+  });
+
+  const PARITY_LAYOUTS = {
+    'shipped block above': () => [...SHIPPED, ...ACTIVE],
+    'shipped block below': () => [...ACTIVE, ...SHIPPED],
+    'backlog block below': () => [...SHIPPED, ...ACTIVE, ...BACKLOG],
+    'shipped and backlog blocks around the active milestone': () => [...SHIPPED, ...ACTIVE, ...BACKLOG, ...SHIPPED],
+  };
+  for (const [name, build] of Object.entries(PARITY_LAYOUTS)) {
+    test(`parity (${name}): phase complete and update-plan-progress change the same cells and nothing else`, () => {
+      const outcomes = {};
+      for (const [label, command] of [['phase complete', 'phase complete 68'], ['update-plan-progress', 'roadmap update-plan-progress 68']]) {
+        seed(build(), { complete: true });
+        const before = fs.readFileSync(roadmapPath, 'utf-8');
+        const result = runGsdTools(command, tmpDir);
+        assert.ok(result.success, `${label}: ${result.error}`);
+        const out = fs.readFileSync(roadmapPath, 'utf-8');
+        assert.deepStrictEqual(detailsBlocks(out), detailsBlocks(before), `${label}: every <details> block untouched`);
+        const sectioned = nonBlank(splitDetails(out).rest);
+        outcomes[label] = {
+          bullet: sectioned.find((l) => /^- \[[ x]\] \*\*Phase 68: Scheduler\*\*/.test(l))?.slice(0, 5),
+          row: phase68Cells(out).slice(0, 3),
+        };
+      }
+      assert.deepStrictEqual(outcomes['phase complete'], outcomes['update-plan-progress']);
+      assert.deepStrictEqual(outcomes['update-plan-progress'], { bullet: '- [x]', row: ['68', '5/5', 'Complete'] });
+    });
+  }
+
+  test('a collapsible note between two phases of the active milestone does not end the writable scope', () => {
+    const second = ['### Phase 69: Second', '**Plans**: 0/1 plans executed', '', 'Plans:', '- [ ] 69-01-PLAN.md', ''];
+    seed([...ACTIVE.slice(0, 8), '<details>', '<summary>Notes</summary>', 'design note', '</details>', '', ...second, ...ACTIVE.slice(8)], { complete: true });
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '69-second'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'phases', '69-second', '69-01-PLAN.md'), '# P\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'phases', '69-second', '69-01-SUMMARY.md'), '# S\n');
+    const r = runGsdTools('roadmap update-plan-progress 69', tmpDir);
+    assert.ok(r.success, r.error);
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.ok(nonBlank(out).includes('- [x] 69-01-PLAN.md'), 'phase 69 plan row ticked past the note');
+  });
+
+  test('a shipped <details> block in upper case below the active milestone is not written by the table slice', () => {
+    const upper = SHIPPED_WITH_PLANS.map((l) => l.replace('<details>', '<DETAILS>').replace('</details>', '</DETAILS>'));
+    seed([...ACTIVE.slice(0, 8), ...upper], { state: false, complete: true });
+    run();
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.ok(nonBlank(out).includes('| 68 | 0/3 | Planned | - |'), 'shipped table row untouched');
+  });
+});
+
 // #5553: update-plan-progress edits only the active milestone, whatever the
 // archive's tag case / attributes / position relative to it.
 const ACTIVE_REGION_ARCHIVE_BODY = `- [ ] **Phase 1: Old**
