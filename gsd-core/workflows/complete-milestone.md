@@ -551,10 +551,10 @@ Commit the REQUIREMENTS.md deletion (archive files and ROADMAP.md were already c
 # The preceding step staged the deletion; read the path back from the index (init reports null once the file is gone).
 # --relative: cwd-relative paths, matching the `git commit --` pathspec below (project may sit in a repo subdir).
 # --no-renames: a staged add with identical content turns the deletion into a rename entry that --diff-filter=D hides.
-# core.quotepath=off keeps non-ASCII paths unquoted for the grep; `:(literal)` stops glob characters in the path expanding.
-ANY=$(git -c core.quotepath=off diff --cached --name-only --relative --no-renames --diff-filter=D | grep -E '(^|/)REQUIREMENTS\.md$')
+# -z prints raw paths (git quotes non-ASCII, backslash and quote characters otherwise); `:(literal)` stops glob characters in the path expanding.
+ANY=$(git diff --cached --name-only -z --relative --no-renames --diff-filter=D | tr '\0' '\n' | grep -E '(^|/)REQUIREMENTS\.md$')
 REQUIREMENTS_PATH=$(printf '%s\n' "$ANY" | grep -E '(^|/)\.planning/(.*/)?REQUIREMENTS\.md$')
-[ -n "$ANY" ] || { echo "no staged REQUIREMENTS.md deletion: nothing to commit here (expected when commit_docs=false or .planning is gitignored)" >&2; exit 0; }
+[ -n "$ANY" ] || { echo "no staged REQUIREMENTS.md deletion: nothing to commit here (expected when commit_docs=false, .planning is gitignored, or a merge already committed it)" >&2; exit 0; }
 [ -n "$REQUIREMENTS_PATH" ] || { echo "staged REQUIREMENTS.md deletion is outside .planning/: not committing it: $ANY" >&2; exit 1; }
 [ "$(printf '%s\n' "$REQUIREMENTS_PATH" | wc -l)" -eq 1 ] || { echo "expected exactly one staged .planning REQUIREMENTS.md deletion, found: $REQUIREMENTS_PATH" >&2; exit 1; }
 git commit -m "chore: remove REQUIREMENTS.md for v[X.Y] milestone" -- ":(literal)$REQUIREMENTS_PATH"
