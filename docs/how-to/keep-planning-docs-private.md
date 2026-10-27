@@ -75,8 +75,8 @@ gsd-tools validate health
 A clean result means you are done. If you skipped step 3, you will see:
 
 ```
-W029  .planning/ matches a gitignore rule but is still tracked by git — .gitignore has no effect on already-tracked files, so staging keeps picking them up
-      Run `git rm -r --cached .planning/` to untrack it (the ignore rule then takes effect); this does not delete the files on disk
+- [W029] .planning/ matches a gitignore rule but is still tracked by git — .gitignore has no effect on already-tracked files, so staging keeps picking them up
+  Fix: Run `git rm -r --cached .planning/` to untrack it (the ignore rule then takes effect); this does not delete the files on disk
 ```
 
 Run the guarded form from step 3 instead of the bare command: it refuses while unrelated paths are staged.

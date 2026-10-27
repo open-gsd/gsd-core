@@ -3485,7 +3485,10 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       const md = fs.readFileSync(path.join(root, f), 'utf8');
       for (const frag of frags) assert.ok(md.includes(frag), `${f}: ${frag}`);
       assert.ok(norm(md).includes(norm(recipe)), `${f}: recipe order`);
-      if (['docs/how-to/keep-planning-docs-private.md', 'docs/CONFIGURATION.md'].includes(f)) assert.ok(md.includes('Run `git rm -r --cached .planning/` to untrack it'), `${f}: W029 remedy`);
+      if (['docs/how-to/keep-planning-docs-private.md', 'docs/CONFIGURATION.md'].includes(f)) {
+        assert.ok(md.includes('- [W029] .planning/ matches a gitignore rule but is still tracked by git'), `${f}: W029 message`);
+        assert.ok(md.includes('Fix: Run `git rm -r --cached .planning/` to untrack it'), `${f}: W029 remedy`);
+      }
     }
   });
   test('stop-tracking recipe (scratch repo): a staged foreign file refuses it; a clean index untracks .planning', (t) => {

@@ -736,8 +736,8 @@ the edge case.
 `/gsd-health` reports this contradiction as **`W029`**:
 
 ```
-W029  .planning/ matches a gitignore rule but is still tracked by git — .gitignore has no effect on already-tracked files, so staging keeps picking them up
-      Run `git rm -r --cached .planning/` to untrack it (the ignore rule then takes effect); this does not delete the files on disk
+- [W029] .planning/ matches a gitignore rule but is still tracked by git — .gitignore has no effect on already-tracked files, so staging keeps picking them up
+  Fix: Run `git rm -r --cached .planning/` to untrack it (the ignore rule then takes effect); this does not delete the files on disk
 ```
 
 The guarded form refuses while unrelated paths are staged:
