@@ -2792,6 +2792,15 @@ describe('#4998 review round: single-line writes, colon-outside reads, continuat
       assert.equal(editedLineContinuation('F: a\n' + pad + '## Notes', 'F: b\n' + pad + '## Notes'), null);
     });
   }
+  // Isolated review: an empty heading, a blockquote and a thematic break open with 0-3 spaces too.
+  for (const indent of [0, 1, 3, 4]) {
+    const pad = ' '.repeat(indent);
+    for (const [name, line] of [['an empty heading', '##'], ['a blockquote', '> quoted'], ['a thematic break', '---']]) {
+      test(`${name} indented ${indent} is not a continuation`, () => {
+        assert.equal(stateFieldContinuation(`F: a\n${pad}${line}\nx`, 'F'), null);
+      });
+    }
+  }
   test('an indented line that only starts with a hash is still a continuation', () => {
     assert.equal(stateFieldContinuation('F: a\n  #hashtag tail', 'F'), '#hashtag tail');
   });

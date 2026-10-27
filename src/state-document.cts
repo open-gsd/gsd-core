@@ -328,9 +328,10 @@ export function isRealCalendarDate(year: number, month: number, day: number): bo
  * HTML block, and a setext underline (`===`, which the `[-*_]{3,}` rule does not
  * cover — it only knows `-`, `*` and `_`).
  *
- * #4998: a fence or an ATX heading opens with up to three leading spaces, as
- * Markdown allows — an indented fence or ` ## Notes` directly below a field was
- * read as its continuation, so record-session skipped a field that does not wrap. Four spaces or a tab is
+ * #4998: a fence, an ATX heading (an empty `##` included), a blockquote or a
+ * thematic break opens with up to three leading spaces, as Markdown allows —
+ * such a line directly below a field was read as its continuation, so
+ * record-session skipped a field that does not wrap. Four spaces or a tab is
  * the indented-code arm. Other indented structure (an indented bullet) stays a
  * continuation on purpose: it fails toward skipping the field, never toward
  * splitting a note from the field it annotates.
@@ -339,7 +340,7 @@ export function isRealCalendarDate(year: number, month: number, day: number): bo
 // regex literal opens a template string for the source scanners in
 // scripts/ (lint-state-field-drift), which then misread the rest of the file.
 const MD_STRUCTURE_LINE_RE =
-  /^(?:\||>| {0,3}(?:#{1,6}\s|\x60{3}|~~~)|[-*_]{3,}\s*$|=+\s*$|[-*+]\s|\d+[.)]\s|\[[^\]]+\]:|<|(?: {4}|\t))/;
+  /^(?:\||>| {0,3}(?:#{1,6}(?:\s|$)|\x60{3}|~~~|>|[-*_]{3,}\s*$)|[-*_]{3,}\s*$|=+\s*$|[-*+]\s|\d+[.)]\s|\[[^\]]+\]:|<|(?: {4}|\t))/;
 
 /**
  * A setext heading's underline — `===` or `---` on its own line. The line ABOVE
