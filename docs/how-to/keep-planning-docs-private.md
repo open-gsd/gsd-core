@@ -76,7 +76,7 @@ A clean result means you are done. If you skipped step 3, you will see:
 
 ```
 W029  .planning/ is gitignored but N file(s) are still tracked by git
-      Fix: git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"
+      Fix: if git diff --cached --quiet -- ':!.planning'; then git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"; else echo "unrelated staged paths; unstage them first" >&2; fi
 ```
 
 `W029` is advisory. GSD will not untrack files for you, and `--repair` deliberately does not act on

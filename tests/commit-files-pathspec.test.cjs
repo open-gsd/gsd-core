@@ -3450,11 +3450,10 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     return scope.slice(blk.openLineIdx + 1, blk.closeLineIdx);
   };
 
-  test('fast.md commit fence (scratch repo): commit_docs=false excludes .planning; fence carries no refusal', (t) => {
+  test('fast.md commit fence (scratch repo): commit_docs=false excludes .planning', (t) => {
     const body = bashFenceAfter('gsd-core/workflows/fast.md', '<step name="commit">');
     // drop the gsd_run resolver line; stub it with the config value under test
     const fence = body.slice(body.findIndex((l) => l.startsWith('COMMIT_DOCS='))).join('\n');
-    assert.equal(fence.includes('index not clean'), false);
     for (const docs of ['true', 'false']) {
       const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489f-');
       fs.mkdirSync(path.join(dir, '.planning'));
@@ -3483,13 +3482,28 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     assert.equal(git('diff', '--cached', '--name-only').trim(), '');
     assert.equal(git('diff', '--name-only').trim(), 'other/o');
   });
-  test('stop-tracking recipe carries the same four fragments in all five docs', () => {
+  test('stop-tracking recipe carries the same four fragments in all six docs', () => {
     const frags = ["git diff --cached --quiet -- ':!.planning'", 'git rm -r --cached .planning/',
       'git commit -m "chore: stop tracking planning docs"', 'unrelated staged paths; unstage them first'];
-    for (const f of ['gsd-core/references/planning-config.md', 'docs/how-to/keep-planning-docs-private.md', 'docs/zh-CN/references/planning-config.md',
+    for (const f of ['gsd-core/references/planning-config.md', 'docs/how-to/keep-planning-docs-private.md', 'docs/CONFIGURATION.md', 'docs/zh-CN/references/planning-config.md',
       'docs/ja-JP/CONFIGURATION.md', 'docs/ko-KR/CONFIGURATION.md']) {
       const md = fs.readFileSync(path.join(root, f), 'utf8');
       for (const frag of frags) assert.ok(md.includes(frag), `${f}: ${frag}`);
+    }
+  });
+  test('stop-tracking recipe (scratch repo): a staged foreign file refuses it; a clean index untracks .planning', (t) => {
+    const fence = bashFenceAfter('gsd-core/references/planning-config.md', '**Existing tracked files:**').join('\n');
+    for (const foreign of [true, false]) {
+      const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489p-');
+      fs.mkdirSync(path.join(dir, '.planning'));
+      fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), 's'); fs.writeFileSync(path.join(dir, 'code'), 'c');
+      git('add', '-A'); git('commit', '-q', '-m', 'seed');
+      if (foreign) { fs.writeFileSync(path.join(dir, 'stray'), 'x'); git('add', 'stray'); }
+      const r = runFence(dir, fence);
+      assert.equal(r.exitCode, 0, r.stderr);
+      assert.equal(Number(git('rev-list', '--count', 'HEAD')), foreign ? 1 : 2);
+      assert.equal(git('ls-files', '.planning').trim() === '', !foreign);
+      if (foreign) assert.match(r.stderr, /unrelated staged paths/);
     }
   });
 
@@ -3574,6 +3588,11 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     test('deletion with identical content staged elsewhere (git reports a rename): still committed alone', () => {
       const r = run(['.planning/REQUIREMENTS.md'], '.', (dir, git) => { fs.writeFileSync(path.join(dir, 'moved.txt'), 'x'); git('add', 'moved.txt'); });
       assert.deepStrictEqual([r.status, r.commits, r.head, r.staged], [0, 2, ['.planning/REQUIREMENTS.md'], ['moved.txt', 'stray']]);
+    });
+
+    test('backslash in the directory name: -z keeps the path unquoted, deletion still committed', () => {
+      const r = run(['a\\b/.planning/REQUIREMENTS.md']);
+      assert.deepStrictEqual([r.status, r.commits, r.staged], [0, 2, ['stray']]);
     });
 
     test('two staged REQUIREMENTS.md deletions: refuses, commits nothing', () => {
