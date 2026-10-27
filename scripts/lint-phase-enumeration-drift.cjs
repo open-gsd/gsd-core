@@ -191,6 +191,10 @@
  *     WHOLE ROADMAP (not milestone-scoped) for existing `2.N` ids — an id
  *     collision it must avoid can come from any milestone, so it needs the
  *     physical set, matching the CREATE-adjacent exemption category.
+ *   - `src/phase.cts` `collectPhaseDirNums` (#5528): the allocators' one on-disk scan,
+ *     run over the cwd's phases dir (cmdPhaseAdd/cmdPhaseAddBatch) and a sibling worktree's
+ *     (collectSiblingWorktreePhaseNums). It builds the set of USED phase numbers across
+ *     checkouts, not a milestone-scoped list, so listMilestonePhaseDirs cannot serve it.
  *   - `src/phase.cts` `cmdPhasePlanIndex`: resolves ONE caller-supplied
  *     `phase` id to its directory — a single-phase LOCATION lookup, not an
  *     enumeration of the current milestone's phase set.
@@ -316,10 +320,10 @@ const FUNCTION_SCOPED_EXEMPTIONS = new Map([
   [path.join('src', 'gate-phase-context.cts'), new Set(['resolvePhaseDirByToken'])],
   [path.join('src', 'init.cts'), new Set(['detectHasPriorPhases', 'detectUiPhaseActive'])],
   [path.join('src', 'milestone.cts'), new Set(['archivePhaseDirectories', 'cmdMilestoneComplete', 'cmdPhasesClear'])],
-  // #3849: collectSiblingWorktreePhaseNums reads a SIBLING worktree's phases dir —
-  // a different checkout listMilestonePhaseDirs (cwd-scoped) cannot serve; the
-  // allocators' own on-disk scans stay unexempted.
-  [path.join('src', 'phase.cts'), new Set(['cmdPhasesList', 'cmdPhaseNextDecimal', 'cmdPhasePlanIndex', 'cmdPhaseInsert', 'renameDecimalPhases', 'renameIntegerPhases', 'collectSiblingWorktreePhaseNums'])],
+  // #3849/#5528: collectPhaseDirNums is the allocators' one on-disk scan (the cwd's phases dir for
+  // cmdPhaseAdd/cmdPhaseAddBatch, a sibling worktree's for collectSiblingWorktreePhaseNums). It is a
+  // used-NUMBER roster across checkouts, not the milestone-scoped list listMilestonePhaseDirs serves.
+  [path.join('src', 'phase.cts'), new Set(['cmdPhasesList', 'cmdPhaseNextDecimal', 'cmdPhasePlanIndex', 'cmdPhaseInsert', 'renameDecimalPhases', 'renameIntegerPhases', 'collectPhaseDirNums'])],
   [path.join('src', 'audit.cts'), new Set(['listAuditPhaseTargets'])],
   [path.join('src', 'commands.cts'), new Set(['cmdHistoryDigest'])],
   [path.join('src', 'state.cts'), new Set(['cmdStateValidate', 'cmdStateSync', 'cmdStateRebuild', 'countRoadmapPhaseHeadings'])],

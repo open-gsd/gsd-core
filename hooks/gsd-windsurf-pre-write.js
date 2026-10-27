@@ -31,7 +31,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { allow, deny } = require('./lib/hook-exit.js');
-const { reportIfUndetermined, BLOCKING_GUARD_PROBE_TIMEOUT_MS } = require('./lib/git-probe.js');
+const { reportIfUndetermined, gitEnv, BLOCKING_GUARD_PROBE_TIMEOUT_MS } = require('./lib/git-probe.js');
 
 // #3911 (ADR-3889 Phase 7): the exit(2) call site (block(), below) is
 // migrated to hook-exit.js's deny(undefined, reason) — see
@@ -64,10 +64,10 @@ const SPAWNOPT = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeou
 // Parity: tests/git-optional-locks-parity.test.cjs.
 // A raw plugin-marketplace or git-clone install never ran `npm run build:lib`
 // (#3582), so the compiled owner can be absent. This guard only runs
-// `git rev-parse`, which never opens the index, so the unmodified environment
+// `git rev-parse`, which never opens the index, so the scrubbed gitEnv() base
 // loses nothing; requiring the artifact unguarded would throw at load and the
 // containment guard would silently stop running.
-let readOnlyGitEnv = () => process.env;
+let readOnlyGitEnv = (base = process.env) => base;
 try {
   const { ensureRuntimeBuild } = require('../gsd-core/bin/ensure-runtime-build.cjs');
   ensureRuntimeBuild();
@@ -77,7 +77,7 @@ try {
 }
 
 function git(args, cwd) {
-  return spawnSync('git', args, { ...SPAWNOPT, cwd, env: readOnlyGitEnv() });
+  return spawnSync('git', args, { ...SPAWNOPT, cwd, env: readOnlyGitEnv(gitEnv()) });
 }
 
 // Walk up from `start` to find the nearest existing DIRECTORY (not merely an

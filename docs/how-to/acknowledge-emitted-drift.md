@@ -63,7 +63,7 @@ Use `Emitted-Drift-Ack-Hash:` instead if the fragment's key contained a `/`. A f
 | The failure says | What it means | What to do |
 |---|---|---|
 | an acknowledgment nothing consumed | you declared a key, but no delta matched it | remove the trailer, or correct the key to name the ripple you actually made — the message names which space it was declared in |
-| a key was declared twice with different reasons | two commits in your range declare the same key and disagree | keep one. Identical repeats are deduplicated silently; conflicting ones are ambiguous and refused |
+| a key was declared twice with different reasons | two commits in your range declare the same key and disagree | keep one. Identical repeats are deduplicated silently; conflicting ones are ambiguous and refused. The release → `main` merge commit (`chore: merge release v<version> to main`) is never read, so a release back-merge PR does not trip this on acknowledgments its commits already had checked |
 | an invalid key | your key contains whitespace, `<`, or `>` | you probably pasted a placeholder from documentation. Use the real path or filename |
 | the range is structurally uncomputable | the checkout has no common ancestor — typically a shallow clone | this is a CI configuration problem, not something a trailer fixes. The gate fails loudly here rather than reading your branch as having no acknowledgments |
 | a new file over the size cap | `NEW_FILE_CAP` is deliberately **not** acknowledgeable | extract content instead — lazily, via `gsd-core/references/`. An eager `@`-import shrinks the file without shrinking loaded context, which games the guard while making the real cost worse |

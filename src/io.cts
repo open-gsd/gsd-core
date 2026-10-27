@@ -355,6 +355,9 @@ const ERROR_REASON = Object.freeze({
   SDK_MISSING_ARG: 'sdk_missing_arg',
   // workflow / phase
   PHASE_NOT_FOUND: 'phase_not_found',
+  PHASE_ID_COLLISION: 'phase_id_collision',
+  AMBIGUOUS_PHASE_OWNER: 'ambiguous_phase_owner',
+  PHASE_NAMING_NOT_CUSTOM: 'phase_naming_not_custom',
   PHASE_VERIFICATION_INCOMPLETE: 'phase_verification_incomplete',
   PHASE_PLAN_COVERAGE_INCOMPLETE: 'phase_plan_coverage_incomplete',
   SUMMARY_NO_PLANNING: 'summary_no_planning',
@@ -501,6 +504,9 @@ const REASON_TO_OUTCOME: Readonly<Record<string, string>> = Object.freeze({
   [ERROR_REASON.SDK_MISSING_ARG]: 'USAGE',
   [ERROR_REASON.GRAPHIFY_INVALID_QUERY]: 'USAGE',
   [ERROR_REASON.USAGE]: 'USAGE',
+  [ERROR_REASON.PHASE_ID_COLLISION]: 'USAGE',
+  [ERROR_REASON.AMBIGUOUS_PHASE_OWNER]: 'USAGE',
+  [ERROR_REASON.PHASE_NAMING_NOT_CUSTOM]: 'USAGE',
 
   // A specific, named thing does not exist / nothing was there to find —
   // genuine, known emptiness rather than a broken prerequisite.

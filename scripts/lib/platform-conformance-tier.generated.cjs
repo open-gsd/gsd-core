@@ -4,6 +4,9 @@
 module.exports = {
   CONFORMANCE_TIER_FILES: [
   "tests/5100-win32-bare-bash-sentinel.property.test.cjs",
+  "tests/adr-612-bracket-new-project-config.test.cjs",
+  "tests/adr-612-bracket-phase-remove.test.cjs",
+  "tests/adr-612-bracket-write-path.test.cjs",
   "tests/adr-index-gate.test.cjs",
   "tests/adr857-core-without-capabilities.test.cjs",
   "tests/agent-install-check.test.cjs",
@@ -86,6 +89,7 @@ module.exports = {
   "tests/cursor-hook-workspace-roots.test.cjs",
   "tests/cursor-hooks.test.cjs",
   "tests/cursor-subagent-isolation.test.cjs",
+  "tests/custom-phase-readers.test.cjs",
   "tests/debug-session-management.test.cjs",
   "tests/defaults-json-fallback.test.cjs",
   "tests/diagnose-windows-spawn-watcher.test.cjs",
@@ -134,6 +138,7 @@ module.exports = {
   "tests/gen-health-docs.test.cjs",
   "tests/gen-section-manifest.test.cjs",
   "tests/git-base-branch.test.cjs",
+  "tests/git-location-env-scrub.test.cjs",
   "tests/git-optional-locks-parity.test.cjs",
   "tests/golden-install-tree.test.cjs",
   "tests/graphify-graph-path.test.cjs",
@@ -327,6 +332,7 @@ module.exports = {
   "tests/shipped-reference-cites.test.cjs",
   "tests/skill-manifest.test.cjs",
   "tests/slug-derivation-drift-guard.test.cjs",
+  "tests/smart-entry.unit.test.cjs",
   "tests/state-todos-render.test.cjs",
   "tests/state.platform.test.cjs",
   "tests/subject-first-line.platform.test.cjs",

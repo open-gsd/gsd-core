@@ -623,6 +623,8 @@ claude --dangerously-skip-permissions
 /gsd-pause-work --report         # Generate session summary
 ```
 
+`/gsd-ship` also reads the phase's ROADMAP.md record before it opens a PR: the phase must read complete there (checklist entry and progress-table Status), and `jq` must be installed. A phase that is unticked, has no entry, or sits in a progress table that cannot be read is refused with `PHASE_NOT_COMPLETE`, `PHASE_NOT_RECORDED` or `ROADMAP_TABLE_UNREADABLE`; `/gsd-verify-work` completes the phase. Details: [COMMANDS.md](COMMANDS.md#gsd-ship).
+
 > [!CAUTION]
 > **The permissions flag is optional.** It skips per-file confirmation while
 > GSD's sub-agents read and write files. Use it only in low-stakes or

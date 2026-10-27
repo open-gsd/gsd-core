@@ -98,7 +98,7 @@ function runContextDriftGate(cwd: string, phaseArg: string): GateVerdict {
 
   // Same phase-directory resolution rule the schema-drift gate uses (#1571, #2528):
   // matchPhaseDirs, never a naive substring test.
-  const phaseDir = resolvePhaseDirByToken(phasesDir, phaseArg);
+  const phaseDir = resolvePhaseDirByToken(cwd, phasesDir, phaseArg);
   if (!phaseDir) {
     return unresolvable();
   }

@@ -111,6 +111,9 @@ node gsd-tools.cjs phase add <description>
 
 # 在现有阶段后插入小数阶段
 node gsd-tools.cjs phase insert <after> <description>
+# add, add-batch and insert also write the phase's ROADMAP record (#5221): a checklist entry
+# after the active checklist, else a progress-table row, else no readable record; the output's
+# roadmap_entry says which ("checklist" | "progress_table" | "none")
 
 # 移除阶段，对后续阶段重新编号
 node gsd-tools.cjs phase remove <phase> [--force]
@@ -137,6 +140,8 @@ node gsd-tools.cjs roadmap get-phase <phase>
 
 # 带磁盘状态的完整路线图解析
 node gsd-tools.cjs roadmap analyze
+# roadmap_record (#5221): phase number -> true when every ROADMAP record of it (checklist entry, progress-table Status) reads complete;
+# absent when unrecorded, null when the phase table is unreadable. /gsd-ship ships only a true phase.
 
 # 从磁盘更新进度表行
 node gsd-tools.cjs roadmap update-plan-progress <N>

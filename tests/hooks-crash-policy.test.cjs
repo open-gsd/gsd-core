@@ -543,9 +543,10 @@ describe('hooks-crash-policy: #3911 git-probe timeout forced via a stub git -> a
     }
   });
 
-  // Every affected hook resolves 'git' with NO explicit `env` override on its
-  // own spawnSync call (see hooks/*.js's `SPAWNOPT`/`currentBranch`), so it
-  // inherits the HOOK PROCESS's own `process.env.PATH` — which is exactly the
+  // Every affected hook resolves 'git' with `env: gitEnv()` on its own
+  // spawnSync call (see hooks/*.js's `SPAWNOPT`/`currentBranch`) — process.env
+  // minus the repo-location vars (#5548) — so it inherits the HOOK PROCESS's own
+  // `process.env.PATH` unchanged — which is exactly the
   // `env` this test hands the hook via runHook()/baseEnv(). Setting PATH to
   // ONLY the stub dir guarantees the hook's internal git spawn resolves to
   // the stub, not a real git binary that might legitimately be fast.
@@ -595,8 +596,8 @@ describe('hooks-crash-policy: #3911 git-probe timeout forced via a stub git -> a
       const r = runHook(c.file, {
         payload,
         cwd,
-        // The stub dir must resolve FIRST (git() calls carry no explicit `env`
-        // override, so they inherit this exact PATH) — but the stub script
+        // The stub dir must resolve FIRST (git() calls pass `env: gitEnv()`,
+        // which keeps this exact PATH) — but the stub script
         // itself still needs a working `sh`/`sleep`, so the real PATH is
         // appended after it, never before (a real `git` earlier in PATH would
         // defeat the stub entirely).

@@ -58,11 +58,37 @@ describe('A. execGit normalization (#3071)', () => {
   });
 
   test('2. every exec* result carries timedOut', () => {
+    // #5498: this test is about the SHAPE of the result, not how fast a real
+    // npm starts. `timedOut` is true only when the child outlives the seam's
+    // default bound, so asserting `=== false` on a real `npm --version` failed on
+    // a slow Windows runner (15 063 ms against the 15 000 ms default) with no
+    // fault in the code under test. Whether the field is a boolean is what
+    // matters; the field's value is pinned deterministically by test 2b
+    // (a completed mocked spawn), test 3 (ENOENT) and test 4 (a 1 ms bound).
     const npmResult = execNpm(['--version']);
     const toolResult = execTool(process.execPath, ['--version']);
     assert.strictEqual(typeof npmResult.timedOut, 'boolean');
-    assert.strictEqual(npmResult.timedOut, false);
     assert.strictEqual(typeof toolResult.timedOut, 'boolean');
+  });
+
+  test('2b. a completed execNpm/execTool call reports timedOut:false (mocked spawn, speed-independent)', (t) => {
+    // Replaces the `=== false` half of test 2 deterministically: a spawn that
+    // finished (status 0, no ETIMEDOUT error) must never be reported as a
+    // timeout by either wrapper, whatever speed the runner starts npm at.
+    mock.method(childProcess, 'spawnSync', () => ({
+      status: 0,
+      stdout: '1.0.0\n',
+      stderr: '',
+      signal: null,
+      error: null,
+    }));
+    t.after(() => mock.restoreAll());
+
+    const npmResult = execNpm(['--version']);
+    const toolResult = execTool(process.execPath, ['--version']);
+    assert.strictEqual(npmResult.exitCode, 0);
+    assert.strictEqual(npmResult.timedOut, false);
+    assert.strictEqual(toolResult.exitCode, 0);
     assert.strictEqual(toolResult.timedOut, false);
   });
 
