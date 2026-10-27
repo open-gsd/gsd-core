@@ -39,8 +39,8 @@
     }
   },
   "aggregate": {
-    "offTokens": 113601,
-    "onTokens": 95980,
-    "reductionPct": 15.51
+    "offTokens": 113676,
+    "onTokens": 96055,
+    "reductionPct": 15.5
   }
 }
