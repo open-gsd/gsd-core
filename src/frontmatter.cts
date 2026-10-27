@@ -866,6 +866,17 @@ function frontmatterListEntries(content: string, key: string): unknown[] | null 
  * no closed, parseable frontmatter mapping or the key is not an own key of it.
  */
 function rawFrontmatterField(content: string, key: string): { value: unknown } | null {
+  const mapping = rawFrontmatterMapping(content);
+  if (!mapping || !Object.prototype.hasOwnProperty.call(mapping, key)) return null;
+  return { value: mapping[key] };
+}
+
+/**
+ * The top-level frontmatter mapping VERBATIM, off `rawFrontmatterField`'s guarded parse path.
+ * Null when the document has no closed, parseable frontmatter mapping — so a caller can tell
+ * "parsed, without that key" (#4998 review) from "no usable frontmatter".
+ */
+function rawFrontmatterMapping(content: string): Record<string, unknown> | null {
   const found = frontmatterRegion(content);
   if (!found || !found.terminated) return null;
 
@@ -880,8 +891,7 @@ function rawFrontmatterField(content: string, key: string): { value: unknown } |
     return null;
   }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  if (!Object.prototype.hasOwnProperty.call(raw, key)) return null;
-  return { value: (raw as Record<string, unknown>)[key] };
+  return raw as Record<string, unknown>;
 }
 
 /**
@@ -949,6 +959,13 @@ function scalarNeedsDoubleQuoting(s: string): boolean {
   // escapeDoubleQuotedScalar path (which already emits the \uD800 escape) fixes the
   // round-trip.
   if (/[\uD800-\uDFFF]/.test(s)) return true;
+  // #4998: U+2028/U+2029 are not YAML line breaks, so a bare one round-trips
+  // through js-yaml, but every line-anchored reader of a planning document
+  // (`^key:\s*(.+)` with the `m` flag) ends the line there and reads only the
+  // part before it. (A value holding `:` was already quoted by the callers, so
+  // no key could be forged this way.) The quoted path escapes them (`\L`,
+  // `\P`), which no such reader splits on.
+  if (/[\u2028\u2029]/.test(s)) return true;
   return false;
 }
 
@@ -1738,6 +1755,7 @@ export = {
   // parse path — the decision-coverage gates read `must_haves`/`truths`/`objective` and the
   // SUMMARY `files_modified` list through it instead of a hand-rolled `^key:` scan / regex.
   rawFrontmatterField,
+  rawFrontmatterMapping,
   // #5139: one key's block as unparsed text, for a citation scan that must survive frontmatter
   // the YAML parser refuses.
   frontmatterKeyBlockText,

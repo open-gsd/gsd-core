@@ -60,6 +60,9 @@ import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir, resolvePhaseIdConvention } = planningWorkspace;
 import { platformReadSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+import frontmatterMod = require('./frontmatter.cjs');
+const { rawFrontmatterMapping } = frontmatterMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 import unusableInputMod = require('./unusable-input.cjs');
 const { UNUSABLE_REASON, warnUnusableInput } = unusableInputMod;
 import { tokenizeHeadings, stripTaggedBlocks, withSection, stripFencedCode, collectSection, scanFencedBlocks, scanInlineCodeSpans } from './markdown-sectionizer.cjs';
@@ -1081,6 +1084,27 @@ function classifyMilestoneScalar(raw: string | null | undefined): { explicitNull
 }
 
 /**
+ * #4998: STATE.md's `milestone:` scalar as the frontmatter parser DECODES it.
+ * The raw `^milestone:` line read captured the on-disk YAML text — quotes and
+ * escapes included — and that text was re-serialized as the value, adding one
+ * escape layer per `state.*` write. Falls back to the legacy line read only
+ * when there is no parseable frontmatter, or its `milestone` is not text. One
+ * that parses without a `milestone` key names none: a `milestone:` line further
+ * down (a fenced example) is not one (#4998 review, Minor 5).
+ */
+function readStateMilestoneScalar(stateRaw: string): string | null {
+  const fm = rawFrontmatterMapping(stateRaw);
+  if (fm) {
+    if (!Object.prototype.hasOwnProperty.call(fm, 'milestone')) return null;
+    if (typeof fm['milestone'] === 'string') return fm['milestone'];
+    // A non-string value keeps the pre-#4998 line read, which finds this
+    // frontmatter line first.
+  }
+  const m = stateRaw.match(/^milestone:\s*(.+)/m);
+  return m ? m[1] : null;
+}
+
+/**
  * Extract the current milestone section from ROADMAP.md by positive lookup,
  * carrying a `scope` discriminator (ADR-3180 Decision 2) alongside the value.
  *
@@ -1120,9 +1144,9 @@ function extractCurrentMilestoneScoped(content: string, cwd?: string, ws?: strin
     const statePath = path.join(planningDir(cwd, ws), 'STATE.md');
     const stateRaw = platformReadSync(statePath);
     if (stateRaw !== null) {
-      const milestoneMatch = stateRaw.match(/^milestone:\s*(.+)/m);
-      if (milestoneMatch) {
-        const classified = classifyMilestoneScalar(milestoneMatch[1]);
+      const milestoneScalar = readStateMilestoneScalar(stateRaw);
+      if (milestoneScalar !== null) {
+        const classified = classifyMilestoneScalar(milestoneScalar);
         version = classified.version;
         stateAssertsNoMilestone = classified.explicitNull;
       }
@@ -2180,9 +2204,9 @@ function getMilestoneInfo(cwd?: string): { value: MilestoneInfo | null; scope: S
         const statePath = path.join(planningDir(cwd), 'STATE.md');
         const stateRaw = platformReadSync(statePath);
         if (stateRaw !== null) {
-          const m = stateRaw.match(/^milestone:\s*(.+)/m);
-          if (m) {
-            const classified = classifyMilestoneScalar(m[1]);
+          const milestoneScalar = readStateMilestoneScalar(stateRaw);
+          if (milestoneScalar !== null) {
+            const classified = classifyMilestoneScalar(milestoneScalar);
             explicitlyNoMilestone = classified.explicitNull;
             stateVersion = classified.version;
           }
@@ -2642,9 +2666,9 @@ function currentMilestoneRawRanges(
     const statePath = path.join(planningDir(cwd), 'STATE.md');
     const stateRaw = platformReadSync(statePath);
     if (stateRaw !== null) {
-      const milestoneMatch = stateRaw.match(/^milestone:\s*(.+)/m);
-      if (milestoneMatch) {
-        const classified = classifyMilestoneScalar(milestoneMatch[1]);
+      const milestoneScalar = readStateMilestoneScalar(stateRaw);
+      if (milestoneScalar !== null) {
+        const classified = classifyMilestoneScalar(milestoneScalar);
         version = classified.version;
         stateAssertsNoMilestone = classified.explicitNull;
       }
@@ -2841,6 +2865,7 @@ export = {
   getRoadmapPhaseInternal,
   getMilestoneInfo,
   classifyMilestoneScalar,
+  readStateMilestoneScalar,
   getMilestonePhaseFilter,
   currentMilestoneRawRanges,
   withPhaseSection,

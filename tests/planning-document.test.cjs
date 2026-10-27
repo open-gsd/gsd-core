@@ -716,6 +716,47 @@ describe('row 29: setFieldValue refuses a value carrying a line break', () => {
     assert.strictEqual(result.ok, false);
   });
 
+  // #4998 review 2026-10-14 Major 1: a multiline-anchor reader (state-document's
+  // `m`-flag regexes) starts a line at U+2028/U+2029 too, so either one would
+  // forge `**Owner:**` exactly as `\n` does.
+  for (const [name, sep] of [['U+2028', '\u2028'], ['U+2029', '\u2029']]) {
+    test(`a value containing ${name} is refused and the document is untouched`, () => {
+      const doc = parseOk(source);
+      const result = setFieldValue(doc, findField(doc, 'Plans'), `1/1${sep}**Owner:** mallory`);
+      assert.strictEqual(result.ok, false);
+      assert.match(result.reason, /line break/);
+      assert.strictEqual(serialize(doc).value, source);
+    });
+  }
+
+  // #4998 Codex review: a separator the field ALREADY carries may stay when
+  // everything from it on is unchanged (phase renumbering rewrites only the
+  // text before it); any other placement is still refused.
+  test('an existing U+2028 tail is kept through a rewrite of the text before it; any other change to it is refused', () => {
+    const ls = String.fromCharCode(0x2028);
+    const ps = String.fromCharCode(0x2029);
+    const withTail = ['---', 'title: Fixture', '---', '', `**Depends on:** Phase 3${ls}(after approval)`, ''].join('\n');
+    const doc = parseOk(withTail);
+    const id = findField(doc, 'Depends on');
+    const kept = setFieldValue(doc, id, `Phase 2${ls}(after approval)`);
+    assert.strictEqual(kept.ok, true, JSON.stringify(kept));
+    assert.strictEqual(serialize(kept.value).value, withTail.replace('Phase 3', 'Phase 2'));
+    for (const value of [
+      `Phase 2${ls}(changed)`,
+      `Phase 2${ls}(after approval)${ls}**Owner:** mallory`,
+      `Phase 2${ps}(after approval)`,
+      `Phase 2${ls}(after approval)\n**Owner:** mallory`,
+      `Phase${ls}2${ls}(after approval)`,
+    ]) {
+      assert.strictEqual(setFieldValue(doc, id, value).ok, false, JSON.stringify(value));
+    }
+  });
+
+  test('the seam and state-document refuse one line-break set: the same constant', () => {
+    const stateDocument = require('../gsd-core/bin/lib/state-document.cjs');
+    assert.strictEqual(stateDocument.FIELD_LINE_BREAK_RE, mod.FIELD_LINE_BREAK_RE);
+  });
+
   test('the negative proof: a refused write leaves the original document untouched', () => {
     const doc = parseOk(source);
     const id = findField(doc, 'Plans');
@@ -1074,6 +1115,11 @@ describe('replaceProse: verbatim cross-reference rewrite through the seam', () =
     assert.strictEqual(replaceProse(doc, '', 'x').ok, false);
     assert.strictEqual(replaceProse(doc, 'a\nb', 'x').ok, false);
     assert.strictEqual(replaceProse(doc, 'text', 'x\ny').ok, false);
+    // #4998 review 2026-10-14 Major 1: U+2028/U+2029 are line breaks to the readers.
+    for (const sep of ['\u2028', '\u2029']) {
+      assert.strictEqual(replaceProse(doc, `a${sep}b`, 'x').ok, false);
+      assert.strictEqual(replaceProse(doc, 'text', `x${sep}**Status:** completed`).ok, false);
+    }
     const staged = setFieldValue(doc, findField(doc, 'Plans'), 'b');
     assert.strictEqual(staged.ok, true);
     assert.strictEqual(replaceProse(staged.value, 'text', 'x').ok, false);

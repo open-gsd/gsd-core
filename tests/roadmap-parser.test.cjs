@@ -4364,6 +4364,102 @@ describe('roadmap-parser: sectioned ROADMAP with explicit `milestone: null` (#50
   });
 });
 
+// ─── #4998: readStateMilestoneScalar decodes the frontmatter value ────────────
+
+describe('#4998 regression: readStateMilestoneScalar', () => {
+  const { readStateMilestoneScalar } = roadmapParser;
+
+  test('returns the YAML-decoded value, not the on-disk quoted text', () => {
+    const state = '---\nmilestone: "\\"v1.1 — Example\\""\nstatus: executing\n---\n# State\n';
+    assert.strictEqual(readStateMilestoneScalar(state), '"v1.1 — Example"');
+    assert.strictEqual(readStateMilestoneScalar('---\nmilestone: v2.0\n---\n'), 'v2.0');
+    assert.strictEqual(readStateMilestoneScalar('---\nmilestone: 1.0\n---\n'), '1.0', 'FAILSAFE: a number-shaped value stays text');
+  });
+
+  test('falls back to the line read when there is no parseable frontmatter key', () => {
+    assert.strictEqual(readStateMilestoneScalar('# State\nmilestone: v3.0\n'), 'v3.0');
+    assert.strictEqual(readStateMilestoneScalar('# State\n'), null);
+  });
+
+  test('a non-string milestone value falls back to the legacy line read, unchanged', () => {
+    // FAILSAFE yields a sequence/map here, not text; the line read is what
+    // every reader returned before #4998, so that answer is kept.
+    assert.strictEqual(readStateMilestoneScalar('---\nmilestone: [v1, v2]\n---\n'), '[v1, v2]');
+    assert.strictEqual(readStateMilestoneScalar('---\nmilestone: { v: 1 }\n---\n'), '{ v: 1 }');
+  });
+
+  // trek-e review 5638530738 (Minor 5): a frontmatter that parses and names no
+  // milestone names none — a `milestone:` line in the body (here, a fenced
+  // example) is not read in its place.
+  test('a parsed frontmatter with no milestone key names none, whatever the body holds', () => {
+    const state = '---\nstatus: executing\n---\n# State\n\n```yaml\nmilestone: v9.9\n```\n';
+    assert.strictEqual(readStateMilestoneScalar(state), null);
+    assert.strictEqual(readStateMilestoneScalar('---\nmilestone: v1.0\n---\n```\nmilestone: v9.9\n```\n'), 'v1.0');
+    assert.strictEqual(readStateMilestoneScalar('---\nstatus: [oops\n---\nmilestone: v2.0\n'), 'v2.0', 'unparseable: the legacy read');
+  });
+
+  test('a trailing YAML comment is not part of the value', () => {
+    assert.strictEqual(readStateMilestoneScalar('---\nmilestone: v1.0 # note\n---\n'), 'v1.0');
+    assert.strictEqual(readStateMilestoneScalar('---\nmilestone: "v1.0" # note\n---\n'), 'v1.0');
+  });
+
+  // The writer's own escaper (escapeDoubleQuotedScalar) is the encoding the
+  // reader must undo: any value written through it reads back byte-identical,
+  // which is exactly the invariant that stops a layer accruing per write.
+  test('property: any value written through the double-quoted escaper reads back unchanged', () => {
+    const { escapeDoubleQuotedScalar } = require('../gsd-core/bin/lib/frontmatter.cjs');
+    fc.assert(fc.property(fc.string({ unit: 'grapheme', maxLength: 40 }), (value) => {
+      const state = `---\nmilestone: "${escapeDoubleQuotedScalar(value)}"\nstatus: executing\n---\n# State\n`;
+      assert.strictEqual(readStateMilestoneScalar(state), value);
+    }), { seed: 4998, numRuns: 300 });
+  });
+});
+
+// The three readers that consume the scalar, asserted directly rather than
+// only end to end via state.json: a value whose on-disk text differs from its
+// decoded text must still select the v1.1 milestone.
+describe('#4998 regression: milestone call sites read the decoded scalar', () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const ROADMAP = [
+    '# Roadmap', '',
+    '## v1.0 — Old', '',
+    '- [ ] **Phase 1: Old work**', '',
+    '## v1.1 — Next', '',
+    '- [ ] **Phase 2: New work**', '',
+  ].join('\n');
+  const SPELLINGS = ['"v1.1"', 'v1.1 # current milestone', "'v1.1' # quoted and commented"];
+
+  for (const spelling of SPELLINGS) {
+    test(`milestone: ${spelling} → getMilestoneInfo, extractCurrentMilestoneScoped and currentMilestoneRawRanges all select v1.1`, () => {
+      writeRoadmap(tmpDir, ROADMAP);
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), `---\nmilestone: ${spelling}\n---\n# State\n`);
+
+      assert.strictEqual(getMilestoneInfo(tmpDir).value.version, 'v1.1');
+
+      const scoped = roadmapParser.extractCurrentMilestoneScoped(ROADMAP, tmpDir);
+      assert.ok(scoped.value.includes('Phase 2: New work'), 'the v1.1 section is selected');
+      assert.ok(!scoped.value.includes('Phase 1: Old work'), 'the v1.0 section is not');
+
+      const ranges = roadmapParser.currentMilestoneRawRanges(ROADMAP, tmpDir);
+      assert.ok(ranges, 'a versioned active milestone yields ranges');
+      const primary = ROADMAP.slice(ranges.primary.start, ranges.primary.end);
+      assert.ok(primary.includes('Phase 2: New work') && !primary.includes('Phase 1: Old work'));
+    });
+  }
+
+  // trek-e review 5638530738 (Minor 5): `init milestone-op` returned v9.9 here.
+  test('a fenced milestone example below a frontmatter with no milestone key is never selected', () => {
+    writeRoadmap(tmpDir, `${ROADMAP}\n## v9.9 — Example\n\n- [ ] **Phase 9: Example**\n`);
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'),
+      '---\nstatus: executing\n---\n# State\n\n```yaml\nmilestone: v9.9\n```\n');
+    const info = getMilestoneInfo(tmpDir).value;
+    assert.notStrictEqual(info && info.version, 'v9.9');
+  });
+});
+
 describe('#5483 checklistBulletExtent', () => {
   const rows = (text) => {
     const { start, end } = checklistBulletExtent(text, phaseChecklistBullet('1', true).exec(text));
