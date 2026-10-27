@@ -312,6 +312,14 @@ export const FRONTMATTER_BODY_SOURCE: Readonly<Record<string, readonly string[]>
 const SESSION_SCOPED_KEYS: ReadonlySet<string> = new Set(['stopped_at', 'paused_at']);
 
 /**
+ * #4998 review: the `## Session` fields with no frontmatter key. `state-snapshot`
+ * reads them from the session section only, with fenced blocks blanked, so
+ * `state update` / `state patch` write them there too — never a fenced example
+ * above the live line, and never an archive section's copy.
+ */
+const SESSION_BODY_FIELDS: ReadonlySet<string> = new Set(['resume file', 'last session', 'last date']);
+
+/**
  * The `(primary, fallback)` label pair for a session-scoped frontmatter KEY.
  */
 function sessionLabelsForKey(key: string): { primary: string; fallback: string | null } | null {
@@ -322,7 +330,8 @@ function sessionLabelsForKey(key: string): { primary: string; fallback: string |
 
 /**
  * The same pair, resolved from a BODY LABEL the caller named (`Stopped At`,
- * `Stopped at`, `Paused At`). `null` for anything else.
+ * `Stopped at`, `Paused At`, or a SESSION_BODY_FIELDS label as named). `null`
+ * for anything else.
  *
  * Deliberately does NOT accept a frontmatter key. An earlier cut resolved both
  * spellings through one function and used it for the write, which made
@@ -333,7 +342,13 @@ function sessionLabelsForKey(key: string): { primary: string; fallback: string |
  */
 function sessionLabelsForBodyField(field: string): { primary: string; fallback: string | null } | null {
   const key = frontmatterKeyForBodyField(field);
-  return key === null ? null : sessionLabelsForKey(key);
+  if (key !== null) return sessionLabelsForKey(key);
+  return SESSION_BODY_FIELDS.has(field.trim().toLowerCase()) ? { primary: field, fallback: null } : null;
+}
+
+/** #4998 review: whether `state update` / `state patch` write the body field `field` inside the session section. */
+export function isSessionScopedBodyField(field: string): boolean {
+  return sessionLabelsForBodyField(field) !== null;
 }
 
 /**
@@ -2962,7 +2977,19 @@ function patchCore(
     // `^field:` pattern — e.g. `status` matching both the frontmatter key
     // and a `Status:` body line). Frontmatter is only consulted when the
     // body has no match for this key.
-    const replaced = stateReplaceField(body, field, value);
+    // #4998: a session field is written the way `state update` writes it —
+    // inside the session section, never a fenced example there — so the
+    // patch agrees with the session readers the frontmatter sync uses.
+    const sessionWriteLabels = sessionLabelsForBodyField(field);
+    let replaced: string | null;
+    if (sessionWriteLabels) {
+      const inSession = stateReplaceFieldInSession(body, sessionWriteLabels.primary, sessionWriteLabels.fallback, value);
+      // Unchanged is a miss only when the field is absent: one already holding
+      // the value matched (#4488), as stateReplaceField reports it.
+      replaced = inSession !== body || sessionSourceExists(body, sessionWriteLabels) ? inSession : null;
+    } else {
+      replaced = stateReplaceField(body, field, value);
+    }
     if (replaced !== null) {
       body = replaced;
       updated.push(field);
@@ -3037,10 +3064,10 @@ function updateCore(
   const sessionWriteLabels = sessionLabelsForBodyField(intent.field);
   let result: string | null;
   if (sessionWriteLabels) {
-    // Replace-only by contract: unchanged content means the field is not in the
-    // session section, which is a miss, not a write.
+    // Replace-only by contract: the session writer never inserts a missing field.
     const replaced = stateReplaceFieldInSession(body, sessionWriteLabels.primary, sessionWriteLabels.fallback, intent.value);
-    result = replaced === body ? null : replaced;
+    // A field already holding the value matched; unchanged with no field is the miss (#4488).
+    result = replaced !== body || sessionSourceExists(body, sessionWriteLabels) ? replaced : null;
   } else {
     result = stateReplaceField(body, intent.field, intent.value);
   }
