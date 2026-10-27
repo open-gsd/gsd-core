@@ -1,6 +1,6 @@
 # ADR-3180: Planning Semantic Model — Single Owner per Derivation
 
-- **Status:** Accepted. Phase 0 shipped this file alone; Amendment 4 (2026-08-08) adds Decision 7 — the normative behavior contract — and lands the guards and the completion-ratio consolidation described there.
+- **Status:** Accepted. Phase 0 shipped this file alone; Amendment 4 (2026-08-08) adds Decision 7 — the normative behavior contract — and lands the guards and the completion-ratio consolidation described there. Amendment 10 (2026-10-18) records the one machine reader of the ROADMAP record that §7.4 now admits: `/gsd-ship`'s refuse-only preflight.
 - **Date:** 2026-08-07
 - **Issue:** [#3180](https://github.com/open-gsd/gsd-core/issues/3180) is the **scope authority** (`epic` + `approved-enhancement` + `type: chore`), which is why this ADR carries its number. [#3182](https://github.com/open-gsd/gsd-core/issues/3182) is the Phase-0 tracking sub-issue this PR closes — the epic stays open until the final phase merges. This follows [ADR-3128](3128-adaptive-runtime-evidence.md), whose filename likewise tracks its scope-authority issue while its PR referenced a separate docs sub-issue.
 - **Supersedes:** nothing
@@ -1360,3 +1360,18 @@ elsewhere in this ADR (e.g. the `unusable-input.cts` glossary entry's `#1881` no
 project that never ran `state.init` legitimately has no STATE.md yet, and that is a non-answer, not
 corruption. Recorded as the intended reading rather than a gap, since it is symmetric with how every
 other §7 owner already treats absence vs. unreadable.
+
+### Amendment 10 — 2026-10-18: ship preflight may read the ROADMAP record, only to refuse (#5221)
+
+§7.4 rule 1 says a ticked ROADMAP checkbox has no machine authority. #5221 adds one machine reader,
+and this amendment records its limits so the reader is decided rather than implied.
+
+- **Reader.** `/gsd-ship`'s preflight step 1a reads `roadmap analyze`'s `roadmap_record` (the checklist
+  checkbox and the progress-table Status of the phase).
+- **Refuse only.** Step 1 has already required the disk verdict (`verification.status` = `passed`). Step 1a
+  can only block a phase whose record does not read complete, or that has no record. It never grants
+  completion, and no completion verdict anywhere consults the record.
+- **Why.** The record catches a completion that was never written back to ROADMAP.md, the #5221 failure.
+  Keying the check on disk status instead would repeat step 1 and let that failure through.
+
+The disk-strict rule of §7.4 is otherwise unchanged: the disk verdict stays the only completion authority.
