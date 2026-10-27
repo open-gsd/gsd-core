@@ -1698,10 +1698,10 @@ describe('parsePhaseFromProse: the planned-phase status phrase is not a name (#5
 
 
 // ─── bracket phase-number grammar parity (#5528) ─────────────────────────────
-// The bracket grammar lives in three owners: the heading scan, the bullet scans
-// (buildPhaseDeclarationScans) and the directory reader (parseBracketPhaseDir).
-// One generated phase must read back identically through all of them.
-describe('bracket phase declarations agree across heading, bullet and directory (#5528)', () => {
+// The bracket roadmap grammar lives in two owners: the heading scan and the declaration scans
+// (buildPhaseDeclarationScans) built on it. One generated phase must read back identically through
+// both. Directories are covered end to end by the allocation property in tests/phase.test.cjs.
+describe('bracket phase declarations agree across heading and bullet spellings (#5528)', () => {
   const declared = (text) => {
     const out = [];
     for (const { regex, idGroup, numGroup } of phaseId.buildPhaseDeclarationScans('bracket')) {
@@ -1730,12 +1730,16 @@ describe('bracket phase declarations agree across heading, bullet and directory 
           assert.ok(hm, `heading scan reads ### [${id}] ${nn}`);
           assert.strictEqual(hm[heading.bracketGroup].toUpperCase(), id);
           assert.strictEqual(parseInt(hm[heading.phaseNumGroup], 10), n);
-          // ...and the directory reader names the same milestone and phase as the id it was spelled from.
-          const dir = phaseId.parseBracketPhaseDir(`${id}-${nn}-slug`);
-          assert.deepStrictEqual(dir, { milestone: mm, phase: n });
+          // ...and a dash-separated `###` heading reads back the same id and number.
+          assert.ok(declared(`### [${id}] ${nn} - x`).some(([i, num]) => i === id && num === n), `### [${id}] ${nn} - x`);
         },
       ),
       { numRuns: 100, seed: 5528 },
     );
+  });
+
+  test('a ## milestone heading with a dash is a milestone, not a phase', () => {
+    assert.deepStrictEqual(declared('## [CK.02] 2 - Foundation'), []);
+    assert.deepStrictEqual(declared('## [CK.02] 2 — Foundation'), []);
   });
 });

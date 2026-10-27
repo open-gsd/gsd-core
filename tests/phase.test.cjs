@@ -3048,6 +3048,18 @@ describe('phase add / add-batch allocation: non-bracket repos are unchanged, bra
     assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '01');
   });
 
+  test('bracket: a legacy "- [ ] Phase 5:" bullet in a bracket roadmap reserves its number and does not crash', () => {
+    bracketSetup([...BRACKET_ROADMAP, '- [ ] Phase 5: legacy bullet', '']);
+    const result = runGsdTools('phase add "New thing" --raw', tmp);
+    assert.ok(result.success, result.error);
+    assert.strictEqual(result.output.trim(), '06');
+  });
+
+  test('bracket: a "## [GSD.02] 2 - Foundation" milestone heading reserves no phase number', () => {
+    bracketSetup(['# Roadmap', '', '## [GSD.02] 2 - Foundation', '']);
+    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '01');
+  });
+
   test('bracket: add-batch allocates consecutive numbers after a directory-only phase', () => {
     bracketSetup(BRACKET_ROADMAP, { dirs: ['GSD.02-04-orphan'] });
     const result = runGsdTools(['phase', 'add-batch', '--descriptions', '["A","B"]'], tmp);

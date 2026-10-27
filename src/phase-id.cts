@@ -474,11 +474,6 @@ interface PhaseScan {
   numGroup: number;
 }
 
-/** The milestone integer a bracket id carries (`GSD.02` -> 2). */
-function bracketIdMilestone(bracketId: string): number {
-  return parseInt(bracketId.slice(bracketId.lastIndexOf('.') + 1), 10);
-}
-
 /**
  * Every scan that answers "which phase numbers does this roadmap text declare" (#5528): section
  * headings, plus checklist bullets when `withBullets`. A non-bracket convention gets the plain
@@ -520,19 +515,6 @@ function buildPhaseDeclarationScans(convention?: string | null, withBullets = tr
   // `###`/`####` only: a `##` milestone heading (`## [CK.02] 2 - Foundation`) names the milestone, not a phase.
   scans.push({ regex: new RegExp(`^ {0,3}#{3,4}\\s*\\[(${BRACKET_ID_SRC})\\][ \\t]*(\\d+)(?=[A-Za-z]?[ \\t]+[-\u2013\u2014][ \\t])`, 'gim'), idGroup: 1, numGroup: 2 });
   return scans;
-}
-
-// `CODE.MM-NN-slug` with the phase an integer: a decimal sub-phase (`-05.1-`) or a letter suffix
-// (`-12A-`) is not one, matching how the legacy directory pattern treats `411.1-foo`.
-const BRACKET_DIR_PHASE_RE = new RegExp(`^${BRACKET_PROJECT_CODE_SRC}\\.(${BRACKET_MILESTONE_NUMERIC_SRC})-(\\d+)(?=-|$)`, 'i');
-
-/**
- * Read a bracket phase directory name. `null`: not a bracket phase directory. Otherwise its milestone
- * and integer phase, for a caller that scopes numbering to one milestone (#5528).
- */
-function parseBracketPhaseDir(dirName: string): { milestone: number; phase: number } | null {
-  const m = dirName.match(BRACKET_DIR_PHASE_RE);
-  return m ? { milestone: parseInt(m[1], 10), phase: parseInt(m[2], 10) } : null;
 }
 
 function stripProjectCodePrefix(value: unknown, caseInsensitive = true): string {
@@ -2107,8 +2089,6 @@ export = {
   bracketQualifiedIntroSrcFor,
   buildPhaseHeadingScanRegex,
   buildPhaseDeclarationScans,
-  bracketIdMilestone,
-  parseBracketPhaseDir,
   foldBracketId,
   bracketQualifiedKey,
   stripProjectCodePrefix,
