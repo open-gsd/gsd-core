@@ -346,6 +346,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/quick-batch-dispatch.cjs',
       'gsd-core/bin/lib/quick-batch-command-router.cjs',
       'gsd-core/bin/lib/roadmap-parser.cjs',
+      'gsd-core/bin/lib/roadmap-progress.cjs',
       'gsd-core/bin/lib/drift.cjs',
       'gsd-core/bin/lib/cjs-command-router-adapter.cjs',
       'gsd-core/bin/lib/phase-command-router.cjs',
