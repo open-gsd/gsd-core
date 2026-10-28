@@ -27,7 +27,7 @@ import { stateFieldValue } from './state-document.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
 import frontmatterMod = require('./frontmatter.cjs');
 const { extractFrontmatter, stripFrontmatter } = frontmatterMod;
-import { findTableWithColumns } from './markdown-table.cjs';
+import { locateRoadmapProgress } from './roadmap-progress.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- verification.cjs is an export= CommonJS module
 import verificationMod = require('./verification.cjs');
 const { isPhaseComplete, isVerificationStatus, VERIFICATION_STATUS } = verificationMod;
@@ -149,11 +149,14 @@ function parseRoadmapProgressRows(content: string, directoryContext: ReturnType<
   // probing that column first would pick a flat table appearing earlier in the
   // document over a milestone-grouped one later — every row would come back
   // unattributed and be treated as current-milestone, silently over-including.
-  const table = findTableWithColumns(content, ['Phase', 'Milestone'])
-    ?? findTableWithColumns(content, ['Phase', 'Plans Complete']);
-  if (!table) return [];
+  // #5761: the roadmap-progress owner picks the table (heading-scoped, so a
+  // decoy table elsewhere cannot be mistaken for it); this reader only supplies
+  // the probe order.
+  const { rows: tableRows } = locateRoadmapProgress(content, {
+    columns: [['Phase', 'Milestone'], ['Phase', 'Plans Complete']],
+  });
   const rows: RoadmapProgressRow[] = [];
-  for (const row of table.rows) {
+  for (const row of tableRows) {
     const key = phaseKeyFromProse(row['Phase'], directoryContext);
     if (key === null) continue;
     const cell = (row['Milestone'] ?? '').trim();

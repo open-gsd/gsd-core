@@ -33,6 +33,7 @@
  *     core-utils.cts's own getPhaseFileStats/plan-scan.cjs seam.
  */
 
+import { isBoxCharChecked, phaseEntryRegExp } from './phase-entry-grammar.cjs';
 import { escapeRegex } from './pattern.cjs';
 import { tokenizeHeadings } from './markdown-sectionizer.cjs';
 
@@ -425,15 +426,16 @@ function parsePhaseChecklistLine(
     convention,
     capturesBracketId,
   );
-  const pattern = new RegExp(
-    `^[ \\t]*-[ \\t]*\\[([xX ])\\][ \\t]*(?:\\*\\*)?${intro}(${context ? phaseScanTokenSource(context) : PHASE_NUMBER_TOKEN_SOURCE})`
+  const pattern = phaseEntryRegExp(
+    `${intro}(${context ? phaseScanTokenSource(context) : PHASE_NUMBER_TOKEN_SOURCE})`
       + `${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s])`,
     'i',
+    { state: 'captured' },
   );
   const match = pattern.exec(line);
   if (!match) return null;
   return {
-    checked: match[1].toLowerCase() === 'x',
+    checked: isBoxCharChecked(match[1]),
     bracketId: capturesBracketId ? match[2] : undefined,
     phaseToken: capturesBracketId ? match[3] : match[2],
   };

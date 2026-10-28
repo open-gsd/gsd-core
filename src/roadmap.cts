@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { realClock } from './clock.cjs';
 import { escapeRegex } from './pattern.cjs';
+import { PHASE_ENTRY_BOLD_CLOSE_SRC, isBoxCharChecked, isPhaseEntryChecked, phaseEntryPrefixSrc, phaseEntryRegExp } from './phase-entry-grammar.cjs';
 import { splitLines, detectEol, joinLines } from './text-lines.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
@@ -33,7 +34,8 @@ import roadmapParserModule = require('./roadmap-parser.cjs');
 const { stripShippedMilestones, extractCurrentMilestone, extractCurrentMilestoneScoped, checklistBulletExtent, withPhaseSection, listMilestoneHeadings, scanMilestonePhaseIds, collectTablePhaseRows, hasPhaseListingTableHeader } = roadmapParserModule;
 import { tokenizeHeadings } from './markdown-sectionizer.cjs';
 import { escapeCell, findTableWithColumns, parseMarkdownTable, updateTableCell } from './markdown-table.cjs';
-import { clampPercent, normalizeMilestoneToken } from './phase-lifecycle.cjs';
+import { clampPercent } from './phase-lifecycle.cjs';
+import { normalizeMilestoneToken } from './roadmap-progress.cjs';
 import { platformWriteSync, contentChangedAfterNormalize } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -210,9 +212,10 @@ function searchPhaseInContent(content: string, escapedPhase: string, phaseNum: s
     // Fallback: check if phase exists in summary list but missing detail section
     // A BARE `Phase\s+` at base — takes the label-only baseline, so a bracket
     // repo gains the bracket-ID form and nothing else.
-    const checklistPattern = new RegExp(
-      `-\\s*\\[[ x]\\]\\s*\\*\\*${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, convention)}${escapedPhase}${OPTIONAL_PHASE_TAG_SOURCE}:\\s*([^*]+)\\*\\*`,
-      'i'
+    const checklistPattern = phaseEntryRegExp(
+      `${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, convention)}${escapedPhase}${OPTIONAL_PHASE_TAG_SOURCE}:\\s*([^*]+?)${PHASE_ENTRY_BOLD_CLOSE_SRC}`,
+      'i',
+      { bold: 'required' },
     );
     const checklistMatch = content.match(checklistPattern);
 
@@ -634,9 +637,9 @@ function collectAnalyzePhases(
     // checkbox — no passing `*-VERIFICATION.md`, plans outstanding — now
     // reports incomplete; this is the deliberate Tier-2 break (ADR-3180 §7.4
     // Decision 3).
-    const checkboxPattern = new RegExp(`^[ \\t]*-[ \\t]*\\[(x| )\\][ \\t]*(?:\\*\\*)?${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, convention)}${phaseMarkdownRegexSource(phaseNum, directoryContext)}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`, 'im');
+    const checkboxPattern = phaseEntryRegExp(`${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, convention)}${phaseMarkdownRegexSource(phaseNum, directoryContext)}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`, 'im', { state: 'captured' });
     const checkboxMatch = content.match(checkboxPattern);
-    const roadmapComplete = checkboxMatch ? checkboxMatch[1] === 'x' : false;
+    const roadmapComplete = checkboxMatch ? isBoxCharChecked(checkboxMatch[1]) : false;
 
     const headingPhase: AnalyzePhase = {
       number: phaseNum,
@@ -817,7 +820,7 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
   // #3036: widen to accept non-numeric-leading ids (same widening as the detail-heading pattern above).
   // phase-id-owner: uses the [.-] (dot-or-dash) separator variant, not the canonical dot-only token; a swap to PHASE_NUMBER_TOKEN_SOURCE would drop hyphenated phase-id matches.
   const customIds = directoryContext.phaseNaming === 'custom' && convention !== 'bracket';
-  const checklistPattern = new RegExp(checklistEntrySrc(convention, true, customIds), 'gi');
+  const checklistPattern = new RegExp(checklistEntrySrc(convention, true, customIds), 'gim');
   // #2761 M1: an OCCURRENCE list keyed by `occurrenceKey`, not a token->bracket
   // map. The map was first-wins on the bare token, so of two checklist entries
   // sharing a token across brackets the FIRST one's bracket id classified BOTH:
@@ -839,7 +842,7 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
     // `checklistPattern` — adding one would shift every downstream `1 + G` /
     // `G` index this loop and `missingDetails` below already depend on.
     // Reading it off the full match text instead is index-safe.
-    checklistOccurrences.push({ token, bracketId, checked: /\[x\]/i.test(checklistMatch[0]) });
+    checklistOccurrences.push({ token, bracketId, checked: isPhaseEntryChecked(checklistMatch[0]) });
   }
 
   // #4899: `collectAnalyzePhases` only recognises `### Phase N:` headings and
@@ -998,8 +1001,8 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
   // phase_naming: custom ids (`- [ ] **Phase AUTH: …**`, as phase add writes them) are records too.
   const isCustomId = (t: string): boolean => customIds && !/^[A-Za-z]?\d/.test(t);
   if (customIds) {
-    for (const m of effectiveContent.matchAll(new RegExp(checklistEntrySrc(convention, false, true), 'gi'))) {
-      if (isCustomId(m[1])) fold(m[1], /\[x\]/i.test(m[0]));
+    for (const m of effectiveContent.matchAll(new RegExp(checklistEntrySrc(convention, false, true), 'gim'))) {
+      if (isCustomId(m[1])) fold(m[1], isPhaseEntryChecked(m[0]));
     }
   }
   // A phase table that does not parse (e.g. a ragged row) makes the record unknown: null, so ship stops.
@@ -1157,7 +1160,7 @@ function checklistEntrySrc(convention: string | null | undefined, capturing = fa
   const numeric = '[A-Za-z]?\\d+[A-Z]?(?:[.-]\\d+)*';
   // numeric must end at a word edge, else `P1-setup` matches as `P1` before the custom alternative is tried.
   const token = custom ? `(?:${numeric}(?![\\w-])|${CUSTOM_PHASE_ID_SRC}(?=:))` : numeric;
-  return `-\\s*\\[[ x]\\]\\s*\\*\\*${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, convention, capturing)}(${token})`;
+  return `${phaseEntryPrefixSrc({ bold: 'required' })}${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, convention, capturing)}(${token})`;
 }
 
 /**
