@@ -59,6 +59,7 @@ Parse current values (default to `true` if not present):
 - `graphify.auto_update` — opt-in: auto-rebuild graph after main HEAD advances (#3347) (default: `false`)
 - `model_profile` — which model each agent uses (default: `balanced`)
 - `git.branching_strategy` — branching approach (default: `"none"`)
+- `git.repo_tagging` — milestone tagging mode: `"single"` (one `v[X.Y]` tag, default) or `"per_repo"` (record a release map and tag each `planning.sub_repos` repository separately; set via `gsd_run query config-set git.repo_tagging per_repo`, #3628)
 - `workflow.use_worktrees` — whether parallel executor agents run in worktree isolation (honored when the runtime declares a `dispatch.isolation` primitive — `harness-worktree` or `orchestrator-worktree`; runtimes declaring `none` default it to `false` and fail closed on an explicit `true` — #1521, #2486, #2584)
 - `workflow.compact_content` — load token-minimized instruction variants where they exist, trading rarely-needed elaboration for a smaller always-loaded instruction window (default: false if absent; #4139)
 - `model_policy.provider` — provider slug for model policy (default: `null`; known values: anthropic, openai, google, qwen; set via /gsd:config --advanced)

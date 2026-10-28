@@ -249,6 +249,17 @@ describe('smart-entry: priority ordering', () => {
     assert.equal(result.signals.verify_failed, true);
   });
 
+  test('verify-failed survives a dangling symlink beside a numeric phase', () => {
+    const dir = track(makeProject({
+      state: state({ status: 'executing', total_phases: 1, current_phase: 1 }),
+      roadmap: true,
+      verifyFail: true,
+    }));
+    fs.writeFileSync(path.join(dir, '.planning/config.json'), JSON.stringify({phase_naming: 'sequential'}));
+    fs.symlinkSync(path.join(dir, 'missing'), path.join(dir, '.planning/phases/00-dangling'), 'dir');
+    assert.equal(classifyProject(dir).signals.verify_failed, true);
+  });
+
   test('verify-failed ignores failure in a higher phase when state is on an earlier phase', () => {
     const dir = track(makeProject({
       state: state({ status: 'executing', total_phases: 10, current_phase: 2 }),

@@ -37,7 +37,7 @@ PR's actually-changed `docs/` paths to the subset of `DOCS_GUARD_TESTS` that rea
 a one-line typo fix in one doc does not pay for every other registered guard. Each registry entry
 is an array of patterns, and a pattern is one of three kinds:
 
-- **Exact path** — `'docs/AGENTS.md'` matches that file only.
+- **Exact path** — `'docs/reference/agents.md'` matches that file only.
 - **Trailing-slash directory prefix** — `'docs/adr/'` matches any changed path beneath it
   (`docs/adr/README.md`, `docs/adr/1703-....md`, …). The trailing slash is load-bearing: a changed
   path is compared with `startsWith('docs/adr/')`, so `docs/adrenaline.md` does **not** match

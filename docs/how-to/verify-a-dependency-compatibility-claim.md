@@ -95,4 +95,4 @@ The failure this rule exists to prevent, from the report that prompted it ([#295
 
 - [`/gsd-plan-phase`](../COMMANDS.md#gsd-plan-phase) — the two sibling provenance rules: package-name legitimacy, and in-repo value citation
 - [Discuss a phase](discuss-a-phase.md) — where an `[ASSUMED]` claim reaches its confirmation checkpoint
-- [gsd-phase-researcher](../AGENTS.md#gsd-phase-researcher) — the agent that applies the rule
+- [gsd-phase-researcher](../reference/agents.md#gsd-phase-researcher) — the agent that applies the rule

@@ -47,6 +47,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { realClock } from './clock.cjs';
+import { excludeFromGit } from './git-info-exclude.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- active-workstream-store.cjs is an export= CommonJS module
@@ -132,7 +133,13 @@ function readClaim(cwd: string): MilestoneClaim | null {
 
 function writeClaim(cwd: string, claim: MilestoneClaim): void {
   ensureClaimDir(cwd);
-  fs.writeFileSync(milestoneLockPath(cwd), JSON.stringify(claim, null, 2) + '\n');
+  const lockPath = milestoneLockPath(cwd);
+  fs.writeFileSync(lockPath, JSON.stringify(claim, null, 2) + '\n');
+  // #5551: the claim is per-machine state, never project content. Keep it out
+  // of `git status` (the ship preflight refuses a dirty tree). Every write, not
+  // only the first, so a claim file that predates this fix is covered too; the
+  // helper is idempotent and best-effort.
+  excludeFromGit(path.dirname(lockPath), MILESTONE_LOCK_FILENAME);
 }
 
 // planningWorkspace.planningDir targets .planning (or the workstream-scoped

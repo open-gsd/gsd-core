@@ -16,6 +16,7 @@
  *   This file provides the CJS (sync) implementations of those handlers.
  */
 
+import type { PhaseDirectoryContext } from './phase-id.cjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -47,51 +48,107 @@ const {
   phaseMarkdownRegexSource,
   comparePhaseNum,
   matchPhaseDirs,
+  phaseLookupQuery,
+  phaseNumberForMatch,
+  phaseKeyFromDir,
+  customPhaseDirectoryParts,
+  customDirectoryOwner,
+  phaseScanTokenSource,
+  CUSTOM_PHASE_ID_FILE,
+  isCustomPhaseId,
   isSentinelPhaseId,
   scopeToPhase,
+  parsePhaseId,
+  renderPhaseId,
+  renderMilestoneId,
+  toDir,
+  phaseHeadingPrefixSrcFor,
+  parsePhaseChecklistLine,
+  PHASE_HEADING_BASELINE,
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
   OPTIONAL_PHASE_TAG_SOURCE,
   PHASE_NUMBER_TOKEN_SOURCE,
-  phaseHeadingPrefixSrcFor,
-  PHASE_HEADING_BASELINE,
-  buildPhaseHeadingScanRegex,
+  buildPhaseDeclarationScans,
+  BRACKET_DIR_PREFIX_SRC,
+  tokenizePhaseDependencyReferences,
+  foldBracketId,
 } = phaseIdMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseIdDisplayMod = require('./phase-id-display.cjs');
+// #4304: reuse the Phase Id Display Module's milestone/phase
+// numeric canonicalization instead of re-deriving it here — see
+// bracketWriteContext/bracketPhaseId below.
+const { milestoneToken, phaseToken } = phaseIdDisplayMod;
+import { isBoxCharChecked, isPhaseEntryChecked, phaseEntryPrefixSrc, phaseEntryRegExp } from './phase-entry-grammar.cjs';
 import { escapeRegex } from './pattern.cjs';
 import { declareGateExit } from './gate-exit.cjs';
 import { gateVerdict } from './gate-verdict.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
 import phaseLocatorMod = require('./phase-locator.cjs');
-const { findPhaseInternal, getArchivedPhaseDirs, listMilestonePhaseDirs, listAllPhaseDirs } = phaseLocatorMod;
+const {
+  phaseDirectoryOptions, findPhaseInternal, getArchivedPhaseDirs, listMilestonePhaseDirs, listAllPhaseDirs,
+  resolvePhaseDirectoryLookup, matchPhaseDirsForLookup,
+} = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-scope.cjs is an export= CommonJS module
 import planningScopeMod = require('./planning-scope.cjs');
 const { SCOPE } = planningScopeMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- roadmap-parser.cjs is an export= CommonJS module
 import roadmapParserMod = require('./roadmap-parser.cjs');
-const { stripShippedMilestones, extractCurrentMilestone, currentMilestoneRawRanges, withPhaseSection, editOutsideShippedBlocks, findMilestoneScopeHeadingLines } = roadmapParserMod;
+const {
+  stripShippedMilestones,
+  extractCurrentMilestone,
+  currentMilestoneRawRanges,
+  withPhaseSection,
+  editCurrentMilestone,
+  findMilestoneScopeHeadingLines,
+  getMilestoneInfo,
+  scanMilestonePhaseIds,
+  // #4304: every recognized milestone heading in the document,
+  // not just the active one — see bracketProgressSectionOwnedByOtherMilestone.
+  listMilestoneHeadings,
+  selectMilestoneHeading,
+  // #4304: the SAME bracket milestone-boundary grammar the
+  // window locator uses (bracketAwareMilestoneSection), reused so the
+  // marker set below recognizes a version-less bracket milestone heading
+  // too, not only a version-token one.
+  isBracketMilestoneBoundary,
+  // #4304: the SAME closed/shipped-heading predicate
+  // currentMilestoneRawRanges uses, reused so the pre-mutation window guard
+  // (bracketOwnedLineOutsideActiveWindow) can recognize an archived section
+  // instead of a re-typed copy of MILESTONE_CLOSED_MARKER_PATTERN.
+  isClosedMilestoneHeading,
+  isClosedMilestoneDetails,
+  isRecognizedMilestoneHeading,
+  isPhaseEntryHeading,
+  activeScopeStart,
+} = roadmapParserMod;
 // #4129: the single owner of "count the ROADMAP's milestone Complete rows"
 // (pure computation, no I/O — no cycle on this path) for the intent-first
 // progress counters the phase-complete transaction passes downstream.
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-lifecycle.cjs is an export= CommonJS module
 import phaseLifecycleMod = require('./phase-lifecycle.cjs');
-const { deriveProgressFromRoadmap: deriveProgressFromRoadmapForIntent, clampPercent: clampPercentForIntent, milestoneVersionOf, locateProgressTable, normalizeMilestoneToken } = phaseLifecycleMod;
+const { deriveProgressFromRoadmap: deriveProgressFromRoadmapForIntent, clampPercent: clampPercentForIntent } = phaseLifecycleMod;
+// #5761: the Progress table locator and milestone-identity helpers live in their one owner.
+import { locateRoadmapProgress, milestoneVersionOf, normalizeMilestoneToken } from './roadmap-progress.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
 import frontmatterMod = require('./frontmatter.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- state.cjs is an export= CommonJS module
 import stateMod = require('./state.cjs');
-import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync, contentChangedAfterNormalize } from './shell-command-projection.cjs';
+import { scrubGitLocationEnv, platformEnsureDir, platformWriteSync, platformReadSync, retryRenameSync, contentChangedAfterNormalize } from './shell-command-projection.cjs';
 import { parsePlanningDoc, findField, readNode, setFieldValue, serialize } from './planning-document.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { transitionCore, isStatePastPhase } from './state-transition.cjs';
-import { updateTableCell, deleteTableRow, escapeCell } from './markdown-table.cjs';
+import { updateTableCell, deleteTableRow, escapeCell, splitTableRow, insertTableRow } from './markdown-table.cjs';
+import { deleteSection, updateBullet, tokenizeHeadings, scanFencedBlocks, type HeadingToken } from './markdown-sectionizer.cjs';
+import { PathAcceptance, tryWithinRoot } from './security.cjs';
 // #5060: the Phase Status Module owns the ROADMAP Status-cell token vocabulary.
 import { PHASE_STATUS, WIRE_STATUS, parseRoadmapStatusCell, toRoadmapStatusCell, phaseStatus } from './phase-status.cjs';
-import { deleteSection, updateBullet, tokenizeHeadings } from './markdown-sectionizer.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- roadmap.cjs is an export= CommonJS module
 import roadmapMod = require('./roadmap.cjs');
-const { buildPhaseHeadingRegex } = roadmapMod;
+const { buildPhaseHeadingRegex, editFromPhaseTable, findPhaseTableHeader, editProgressTableSlice, foldPhaseId, insideOpenDetails, checklistEntrySrc } = roadmapMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- uat-predicate.cjs is an export= CommonJS module
 import uatPredicate = require('./uat-predicate.cjs');
 const { evaluateUatPassed } = uatPredicate;
@@ -128,6 +185,11 @@ const {
   withStateLock,
   updatePerformanceMetricsSection,
 } = stateMod;
+
+// #4304: matchPhaseDirs admits legacy directories under bracket mode for
+// migration compatibility. Only a directory carrying the owner grammar's
+// bracket prefix may enter bracket-only result parsing.
+const BRACKET_DIRECTORY_PREFIX_RE = new RegExp(`^${BRACKET_DIR_PREFIX_SRC}`);
 
 // Any .md file with PLAN anywhere in the basename — diagnostic net
 const PLAN_OUTLINE_RE = /-PLAN-OUTLINE\.md$/i;
@@ -260,11 +322,14 @@ function cmdPhasesList(cwd: string, options: PhaseListOptions, raw: boolean): vo
     if (phase) {
       // LOOKUP (b): search the physical set, plus archived when asked.
       const lookupPool = [...readSubdirectories(phasesDir, true), ...archivedLabels];
-      const normalized = normalizePhaseName(phase);
+      const directoryContext = phaseDirectoryOptions(cwd);
+      const lookup = resolvePhaseDirectoryLookup(cwd, phase, undefined, directoryContext);
       // The pool is #3185's (physical set + archived); the matcher is this
       // PR's. `dirs` is deliberately not read here: on this base it is not
-      // assigned until the branch below picks a match.
-      const { matches } = matchPhaseDirs(lookupPool, normalized);
+      // assigned until the branch below picks a match. Under bracket, the
+      // active project+milestone identity wins before migration-window legacy
+      // names; differently-qualified historical dirs are never first-picked.
+      const { matches } = matchPhaseDirsForLookup(lookupPool, lookup, undefined, directoryContext);
       const match = matches[0];
       if (!match) {
         output({ files: [], count: 0, phase_dir: null, error: 'Phase not found' }, raw, '');
@@ -277,7 +342,8 @@ function cmdPhasesList(cwd: string, options: PhaseListOptions, raw: boolean): vo
       const enumerated = listMilestonePhaseDirs(phasesDir, { cwd });
       phaseScope = enumerated.scope;
       dirs = [...enumerated.value, ...archivedLabels];
-      dirs.sort((a, b) => comparePhaseNum(a, b));
+      const directoryContext = phaseDirectoryOptions(cwd);
+      dirs.sort((a, b) => comparePhaseNum(a, b, directoryContext));
     }
 
     if (type) {
@@ -343,47 +409,77 @@ function cmdPhasesList(cwd: string, options: PhaseListOptions, raw: boolean): vo
 
 function cmdPhaseNextDecimal(cwd: string, basePhase: string, raw: boolean): void {
   const phasesDir = path.join(planningDir(cwd), 'phases');
-  const normalized = normalizePhaseName(basePhase);
+  const lookup = resolvePhaseDirectoryLookup(cwd, basePhase);
+  const normalized = lookup.normalized;
+  // #4304: base existence and decimal-child inventory must resolve through
+  // the same convention. The former was bracket-aware while
+  // the latter still called the legacy-only scanner, proposing an occupied
+  // bracket sub-phase. Legacy conventions retain their historical call and
+  // output spelling byte-for-byte.
+  const convention = resolvePhaseIdConvention(cwd) === 'bracket' ? 'bracket' : undefined;
+  const bracketContext = convention === 'bracket'
+    ? bracketWriteContext(cwd, loadConfig(cwd))
+    : null;
 
   try {
     let baseExists = false;
     const decimalSet = new Set<number>();
+    const bracketScanMeta = { bracketSpellingFound: false };
+    const scanDecimals = (roadmapContent: string): void => {
+      const found = bracketContext
+        ? scanExistingBracketDecimalPhaseNumbers(
+          phasesDir,
+          roadmapContent ? extractCurrentMilestone(roadmapContent, cwd) : '',
+          normalized,
+          bracketContext,
+          bracketScanMeta,
+        )
+        : scanExistingDecimalPhaseNumbers(phasesDir, roadmapContent, normalized);
+      for (const n of found) decimalSet.add(n);
+    };
 
     if (fs.existsSync(phasesDir)) {
       const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
       const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
-      baseExists = matchPhaseDirs(dirs, normalized).matches.length > 0;
+      baseExists = matchPhaseDirs(dirs, normalized, convention, lookup.bracketContext, phaseDirectoryOptions(cwd)).matches.length > 0;
     }
 
     const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
     if (fs.existsSync(roadmapPath)) {
       try {
         const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
-        for (const n of scanExistingDecimalPhaseNumbers(phasesDir, roadmapContent, normalized)) {
-          decimalSet.add(n);
-        }
+        scanDecimals(roadmapContent);
       } catch {
         // ROADMAP.md read failure is non-fatal — fall back to the directory-only
         // scan (empty rawContent) so on-disk decimal directories are still counted.
-        for (const n of scanExistingDecimalPhaseNumbers(phasesDir, '', normalized)) {
-          decimalSet.add(n);
-        }
+        scanDecimals('');
       }
     } else {
-      for (const n of scanExistingDecimalPhaseNumbers(phasesDir, '', normalized)) {
-        decimalSet.add(n);
-      }
+      scanDecimals('');
     }
 
+    // add-backlog still asks for parent 999 and writes legacy CK-999.x
+    // directories. Preserve that upstream output only when the sentinel
+    // parent is legacy-only; a real bracket-spelled parent keeps canonical
+    // two-digit sub-tokens like every other bracket parent.
+    const renderCanonicalBracket = bracketContext !== null
+      && !(Number(normalized) === 999 && !bracketScanMeta.bracketSpellingFound);
     const existingDecimals = Array.from(decimalSet)
       .sort((a, b) => a - b)
-      .map((n) => `${normalized}.${n}`);
+      .map((n) => renderCanonicalBracket
+        ? bracketArtifactToken(bracketPhaseId(bracketContext, normalized, n))
+        : `${normalized}.${n}`);
 
     let nextDecimal: string;
     if (decimalSet.size === 0) {
-      nextDecimal = `${normalized}.1`;
+      nextDecimal = renderCanonicalBracket
+        ? bracketArtifactToken(bracketPhaseId(bracketContext, normalized, 1))
+        : `${normalized}.1`;
     } else {
-      nextDecimal = `${normalized}.${Math.max(...decimalSet) + 1}`;
+      const next = maxPhaseNum(decimalSet) + 1;
+      nextDecimal = renderCanonicalBracket
+        ? bracketArtifactToken(bracketPhaseId(bracketContext, normalized, next))
+        : `${normalized}.${next}`;
     }
 
     output(
@@ -409,6 +505,13 @@ function getRoadmapModeForPhase(cwd: string, phaseNum: string): string | null {
   const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
   const milestoneContent = extractCurrentMilestone(rawContent, cwd);
   const fullContent = stripShippedMilestones(rawContent);
+  const convention = resolvePhaseIdConvention(cwd);
+  // LABEL_ONLY preserves the legacy `Phase N:` reader while adding the
+  // opted-in bracket heading alternative for both the target and its boundary.
+  const headingIntro = phaseHeadingPrefixSrcFor(
+    PHASE_HEADING_BASELINE.LABEL_ONLY,
+    convention,
+  );
   const escapedPhase = phaseMarkdownRegexSource(phaseNum);
   // #5007 (Phase 6 / ADR-4910 §8): buildPhaseHeadingRegex (src/roadmap.cts) is
   // anchored `^...$` with no 'm' flag — it is designed to test ONE
@@ -417,7 +520,7 @@ function getRoadmapModeForPhase(cwd: string, phaseNum: string): string | null {
   // through tokenizeHeadings first is therefore required here, not a pure
   // regex-literal swap (the design doc's "direct swap" plan does not hold
   // once the anchor is accounted for).
-  const phaseHeader = buildPhaseHeadingRegex(escapedPhase);
+  const phaseHeader = buildPhaseHeadingRegex(escapedPhase, convention);
 
   for (const content of [milestoneContent, fullContent]) {
     const heading = tokenizeHeadings(content).find((h) => phaseHeader.test(h.text));
@@ -428,7 +531,9 @@ function getRoadmapModeForPhase(cwd: string, phaseNum: string): string | null {
 
     const sectionStart = heading.offset;
     const rest = content.slice(sectionStart);
-    const nextHeader = rest.slice(headerMatchLength).match(/\n#{2,4}\s+Phase\s+\S/i);
+    const nextHeader = rest.slice(headerMatchLength).match(
+      new RegExp(`\\n#{2,4}\\s+${headingIntro}\\S`, 'i'),
+    );
     const sectionEnd = nextHeader
       ? sectionStart + headerMatchLength + (nextHeader.index as number)
       : content.length;
@@ -538,7 +643,9 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
   }
 
   const planBase = planningDir(cwd);
-  const normalized = normalizePhaseName(phase);
+  const directoryContext = phaseDirectoryOptions(cwd);
+  const lookup = resolvePhaseDirectoryLookup(cwd, phase, undefined, directoryContext);
+  const { normalized, convention } = lookup;
   const notFound = {
     found: false,
     directory: null,
@@ -579,12 +686,14 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
   );
 
   for (const searchDir of searchDirs) {
+    const searchContext = phaseLocatorMod.phaseDirectoryContextForRoot(directoryContext, searchDir);
+    const custom = phaseIdMod.customPhaseQuery(phase, searchContext);
     try {
       const entries = fs.readdirSync(searchDir, { withFileTypes: true });
       const dirs = entries
         .filter((e) => e.isDirectory())
         .map((e) => e.name)
-        .sort((a, b) => comparePhaseNum(a, b));
+        .sort((a, b) => comparePhaseNum(a, b, searchContext));
 
       // #2237: fail loud when multiple directories match the same bare phase
       // number — prevents cross-project file writes when unrelated projects
@@ -592,7 +701,12 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
       // #2528: selection delegates to the canonical two-pass matcher (exact
       // token match, then the bare-integer leading-digit-run fallback) shared
       // with the locator and the phase-plan-index scan.
-      const { matches } = matchPhaseDirs(dirs, normalized);
+      const { matches, usedBareFallback } = matchPhaseDirsForLookup(
+        dirs,
+        lookup,
+        searchDir === flatPhasesDir ? undefined : null,
+        searchContext,
+      );
       if (matches.length === 0) continue;
       if (matches.length > 1) {
         output({
@@ -604,12 +718,23 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
       }
       const match = matches[0];
 
-      const dirMatch =
-        match.match(
+      const isBracketDirectory = convention === 'bracket'
+        && BRACKET_DIRECTORY_PREFIX_RE.test(foldBracketId(match));
+      const dirMatch = isBracketDirectory
+        ? null
+        : match.match(
           new RegExp(`^${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i')
         ) || match.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i'));
-      const phaseNumber = dirMatch ? dirMatch[1] : normalized;
-      const phaseName = dirMatch && dirMatch[2] ? dirMatch[2] : null;
+      const customParts = custom ? customPhaseDirectoryParts(match, custom) : null;
+      const phaseNumber = isBracketDirectory
+        ? phaseNumberForMatch(match, usedBareFallback, convention)
+        : customParts?.id || (dirMatch ? dirMatch[1] : normalized);
+      let phaseName = customParts?.slug || (dirMatch && dirMatch[2] ? dirMatch[2] : null);
+      if (isBracketDirectory) {
+        const id = parsePhaseId(match);
+        const idToken = `${id.phase}${id.subphase ? `.${id.subphase}` : ''}`;
+        phaseName = match.slice(`${id.project}.${id.milestone}-${idToken}`.length).replace(/^-/, '') || null;
+      }
 
       const phaseDir = path.join(searchDir, match);
       const phaseFiles = fs.readdirSync(phaseDir);
@@ -856,7 +981,9 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
   }
 
   const phasesDir = path.join(planningDir(cwd), 'phases');
-  const normalized = normalizePhaseName(phase);
+  const directoryContext = phaseDirectoryOptions(cwd);
+  const lookup = resolvePhaseDirectoryLookup(cwd, phase, undefined, directoryContext);
+  const { normalized } = lookup;
 
   let phaseDir: string | null = null;
   let phaseDirName: string | null = null;
@@ -866,12 +993,12 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
     const dirs = entries
       .filter((e) => e.isDirectory())
       .map((e) => e.name)
-      .sort((a, b) => comparePhaseNum(a, b));
+      .sort((a, b) => comparePhaseNum(a, b, directoryContext));
     // #2528: selection delegates to the canonical two-pass matcher shared with
     // the locator and the find-phase scan (this site previously first-matched
     // with `.find()` and had no multi-match guard — the #2237 fail-loud rule
     // now applies here too, so the three resolution paths cannot disagree).
-    const { matches } = matchPhaseDirs(dirs, normalized);
+    const { matches } = matchPhaseDirsForLookup(dirs, lookup, undefined, directoryContext);
     if (matches.length > 1) {
       ambiguousMatches = matches;
     } else if (matches.length === 1) {
@@ -1242,20 +1369,40 @@ function describeGoalShapedTitle(description: string): string | null {
  * and sibling-worktree phases so a new number cannot collide, but a `Depends on:` line has to point
  * at something a reader of THIS roadmap can find (#5113).
  */
-function roadmapDeclaredPhaseNums(rawContent: string): number[] {
-  const { regex: headerPattern, phaseNumGroup } = buildPhaseHeadingScanRegex(PHASE_HEADING_BASELINE.LABEL_ONLY);
-  const bulletPattern = /^[ \t]*-[ \t]*\[[^\]]{0,200}\][ \t]*\*{0,2}Phase[ \t]+(\d+)(?=[:.\s*]|$)/gim;
+function roadmapDeclaredPhaseNums(rawContent: string, withBullets = true): number[] {
   const nums = new Set<number>();
-  let m: RegExpExecArray | null;
-  while ((m = headerPattern.exec(rawContent)) !== null) {
-    const num = parseInt(m[phaseNumGroup], 10);
-    if (!isSentinelPhaseId(num)) nums.add(num);
-  }
-  while ((m = bulletPattern.exec(rawContent)) !== null) {
-    const num = parseInt(m[1], 10);
-    if (!isSentinelPhaseId(num)) nums.add(num);
+  for (const { regex, numGroup } of buildPhaseDeclarationScans(null, withBullets)) {
+    let m: RegExpExecArray | null;
+    while ((m = regex.exec(rawContent)) !== null) {
+      const num = parseInt(m[numGroup], 10);
+      if (!Number.isSafeInteger(num)) continue; // a 24-digit run parses to 1e24; max+1 of it is not a phase number
+      if (isSentinelPhaseId(num)) continue;
+      nums.add(num);
+    }
   }
   return [...nums];
+}
+
+/** The phase number an on-disk `[PROJECT-]NN-slug` directory holds, or null for a sentinel or a non-phase name. */
+function dirPhaseNum(entry: string): number | null {
+  const match = entry.match(/^(?:[A-Z][A-Z0-9]*-)?(\d+)-/);
+  if (!match) return null;
+  const num = parseInt(match[1], 10);
+  return !Number.isSafeInteger(num) || isSentinelPhaseId(num) ? null : num;
+}
+
+/** Add the phase number of every phase directory under `phasesDir` to `used` (a missing dir adds nothing). */
+function collectPhaseDirNums(
+  phasesDir: string,
+  used: Set<number>,
+  bracketContext?: BracketWriteContext,
+): void {
+  if (!fs.existsSync(phasesDir)) return;
+  for (const entry of fs.readdirSync(phasesDir)) {
+    // A bracket writer reserves the directories its reader resolves (#4304), not the legacy reading.
+    const num = bracketContext ? readerResolvableBracketDirectoryPhaseNumber(entry, bracketContext) : dirPhaseNum(entry);
+    if (num !== null) used.add(num);
+  }
 }
 
 /**
@@ -1264,11 +1411,20 @@ function roadmapDeclaredPhaseNums(rawContent: string): number[] {
  * that exists only on a sibling branch, as an orphan directory, or not at all when numbering has a
  * gap (#5113). Custom-named phases carry no dependency line.
  */
-function dependsOnLine(newPhaseId: number | string, declared: readonly number[]): string {
+function dependsOnLine(
+  newPhaseId: number | string,
+  declared: readonly number[],
+  renderDependency: (phase: number) => string = (phase) => `Phase ${phase}`,
+): string {
   if (typeof newPhaseId !== 'number') return '';
   let nearest: number | null = null;
   for (const n of declared) if (n < newPhaseId && (nearest === null || n > nearest)) nearest = n;
-  return `\n**Depends on:** ${nearest === null ? 'Nothing' : `Phase ${nearest}`}`;
+  return `\n**Depends on:** ${nearest === null ? 'Nothing' : renderDependency(nearest)}`;
+}
+
+/** `dependsOnLine` over the roadmap's declared phases: the whole roadmap, as it was before #5528. */
+function dependsOnFor(newPhaseId: number | string, rawContent: string): string {
+  return dependsOnLine(newPhaseId, roadmapDeclaredPhaseNums(rawContent));
 }
 
 /**
@@ -1290,6 +1446,68 @@ function spliceRoadmapBlock(rawContent: string, atOffset: number, block: string)
   return before + lead + body + tail + after;
 }
 
+/** Segment-wise numeric order of two folded phase ids; a non-numeric segment never orders after. */
+function comparePhaseIds(a: string, b: string): number {
+  const x = a.split('.').map(Number);
+  const y = b.split('.').map(Number);
+  for (let n = 0; n < Math.max(x.length, y.length); n++) {
+    const d = (x[n] ?? -1) - (y[n] ?? -1);
+    if (Number.isNaN(d)) return -1;
+    if (d) return d;
+  }
+  return 0;
+}
+
+const spliceAfter = (raw: string, at: number, eol: string, line: string): string => `${raw.slice(0, at)}${eol}${line}${raw.slice(at)}`;
+
+/**
+ * #5221: give a tool-created phase a ROADMAP record, so ship's fail-closed gate can read it.
+ * Writes `- [ ] **Phase N: desc**` after the active milestone's checklist (for an insert: after
+ * phase `after`'s own entries, else before the first later entry); with no checklist, a `N. desc | Not started` progress-table row;
+ * with neither, nothing. Entries inside an open <details> (shipped blocks) are not the checklist.
+ */
+function recordNewPhase(raw: string, cwd: string, id: string | number, description: string, after?: string, label?: string): { content: string; entry: 'checklist' | 'progress_table' | 'none' } {
+  const start = activeScopeStart(raw, cwd);
+  // End at the active milestone's section so a later planned milestone's checklist is never the target.
+  const end = currentMilestoneRawRanges(raw, cwd)?.primary.end;
+  const scope = raw.slice(start, end !== undefined && end > start ? end : undefined);
+  let custom = false;
+  try { custom = loadConfig(cwd).phase_naming === 'custom'; } catch { /* unreadable config: numeric ids only */ }
+  const entrySrc = checklistEntrySrc(resolvePhaseIdConvention(cwd), false, custom);
+  const entryRe = new RegExp(`^[ \\t]*${entrySrc}[^\\r\\n]*`, 'gim');
+  const bullets = [...scope.matchAll(entryRe)].filter((m) => !insideOpenDetails(scope, m.index));
+  const eol = raw.includes('\r\n') ? '\r\n' : '\n';
+  // A bracket writer records its entry in the bracket spelling it used for the heading (`[CK.02] 02`).
+  const entry = `- [ ] **${label ?? `Phase ${id}`}: ${description}**`;
+  // An id past CUSTOM_PHASE_ID_SRC's cap is written but not readable by analyze: report that, not 'checklist'.
+  const kind = new RegExp(`^${entrySrc}`).test(entry) ? 'checklist' : 'none';
+  if (after !== undefined) {
+    const anchor = foldPhaseId(after);
+    const own = bullets.filter((m) => foldPhaseId(m[1]) === anchor || foldPhaseId(m[1]).startsWith(`${anchor}.`)).at(-1);
+    // Anchor phase has no entry: go before the first numerically later entry, so the checklist stays ordered.
+    const later = own ? undefined : bullets.find((m) => comparePhaseIds(foldPhaseId(m[1]), anchor) > 0);
+    if (later) {
+      const at = start + later.index;
+      return { content: `${raw.slice(0, at)}${entry}${eol}${raw.slice(at)}`, entry: kind };
+    }
+    if (own) return { content: spliceAfter(raw, start + own.index + own[0].length, eol, entry), entry: kind };
+  }
+  const last = bullets.at(-1);
+  if (last) return { content: spliceAfter(raw, start + last.index + last[0].length, eol, entry), entry: kind };
+  let wrote = false;
+  const archived = roadmapParserMod.maskArchivedDetails(raw, cwd);
+  const edited = editProgressTableSlice(archived.visible, (scoped: string) => {
+    if (findPhaseTableHeader(scoped) === -1) return scoped;
+    const cell: Record<string, string> = { Phase: `${id}. ${description}`, 'Plans Complete': '0/0', Status: 'Not started' };
+    const r = insertTableRow(scoped, (col) => cell[col]);
+    if (!r.ok) return scoped;
+    wrote = true;
+    return r.value;
+  }, archived.activeRange);
+  const content = wrote && !archived.ambiguous ? archived.restore(edited) : null;
+  return content !== null ? { content, entry: 'progress_table' } : { content: raw, entry: 'none' };
+}
+
 /**
  * #3163: compute the byte offset in `rawContent` where a new `### Phase N:`
  * entry should be inserted — at the end of the active phase list, scoped to the
@@ -1299,9 +1517,17 @@ function spliceRoadmapBlock(rawContent: string, atOffset: number, block: string)
  * STATE.md `milestone:` and no in-progress `🚧`/`🔄` marker), fall back to the
  * legacy whole-file lastIndexOf('\n---') so simple no-milestone roadmaps keep
  * their existing behavior.
+ *
+ * #4304: `phaseIdConvention` is threaded through to
+ * `currentMilestoneRawRanges` so a version-less bracket milestone heading
+ * (`## [CK.02] Current`) is still offset-scoped — omitting it here silently
+ * degraded to the legacy-only search, which finds nothing for that heading
+ * shape and falls back to whole-document insertion, landing `phase add` /
+ * `add-batch` outside the active milestone. Optional and additive: every
+ * pre-existing non-bracket caller passes nothing and compiles byte-identically.
  */
-function phaseEntryInsertOffset(rawContent: string, cwd: string): number {
-  const ranges = currentMilestoneRawRanges(rawContent, cwd);
+function phaseEntryInsertOffset(rawContent: string, cwd: string, phaseIdConvention?: string | null): number {
+  const ranges = currentMilestoneRawRanges(rawContent, cwd, phaseIdConvention);
   if (!ranges) {
     const legacy = rawContent.lastIndexOf('\n---');
     return legacy > 0 ? legacy : rawContent.length;
@@ -1355,14 +1581,166 @@ function assertDescriptionPreservesMilestoneScope(cwd: string, description: stri
   );
 }
 
+type BracketWriteContext = {
+  project: string;
+  milestone: string;
+};
+
+/**
+ * Resolve the write identity shared by add/insert/remove. Convention selection
+ * happens at the caller and is the sole branch gate; project/milestone checks
+ * here validate the identity after that branch has already been selected.
+ */
+function bracketWriteContext(cwd: string, config: Record<string, unknown>): BracketWriteContext {
+  const project = typeof config['project_code'] === 'string' ? config['project_code'].trim() : '';
+  if (!project) {
+    error('phase_id_convention is "bracket" but project_code is missing in .planning/config.json');
+  }
+
+  const milestoneInfo = getMilestoneInfo(cwd) as {
+    value?: { version?: string } | null;
+  };
+  const version = milestoneInfo.value?.version ?? '';
+  const milestone = milestoneToken(version);
+  if (milestone === null) {
+    error('phase_id_convention is "bracket" but the active milestone cannot be resolved');
+  }
+
+  return { project, milestone: milestone! };
+}
+
+function bracketPhaseId(
+  context: BracketWriteContext,
+  phase: unknown,
+  subphase?: unknown,
+): { project: string; milestone: string; phase: string; subphase?: string } {
+  const phaseTok = phaseToken(phase);
+  if (phaseTok === null) {
+    error(`phase ${String(phase)} cannot be rendered by the bracket convention`);
+  }
+  const id: { project: string; milestone: string; phase: string; subphase?: string } = {
+    project: context.project,
+    milestone: context.milestone,
+    phase: phaseTok!,
+  };
+  if (subphase !== undefined) {
+    const subphaseTok = phaseToken(subphase);
+    if (subphaseTok === null) {
+      error(`phase ${String(phase)} subphase ${JSON.stringify(subphase)} cannot be rendered by the bracket convention`);
+    }
+    id.subphase = subphaseTok!;
+  }
+  return id;
+}
+
+/** The owner-rendered bare token used by plan/summary artifact filenames. */
+function bracketArtifactToken(id: { project: string; milestone: string; phase: string; subphase?: string }): string {
+  return renderPhaseId(id).split('] ')[1];
+}
+
+/** The directory-name prefix `toDir` emits for this identity, ahead of the slug. */
+function bracketDirPrefix(id: { project: string; milestone: string; phase: string; subphase?: string }): string {
+  const probeSlug = 'phase-slug-probe';
+  return toDir(id, probeSlug).slice(0, -probeSlug.length);
+}
+
+function bracketDirSlug(
+  dirName: string,
+  id: { project: string; milestone: string; phase: string; subphase?: string },
+): string | null {
+  const prefix = bracketDirPrefix(id);
+  return dirName.startsWith(prefix) ? dirName.slice(prefix.length) : null;
+}
+
+function bracketIdsInContext(
+  phasesDir: string,
+  context: BracketWriteContext,
+): Array<{ dir: string; id: { project: string; milestone: string; phase: string; subphase?: string }; slug: string }> {
+  const found: Array<{ dir: string; id: { project: string; milestone: string; phase: string; subphase?: string }; slug: string }> = [];
+  for (const dir of readSubdirectories(phasesDir, true)) {
+    try {
+      const id = parsePhaseId(dir) as { project: string; milestone: string; phase: string; subphase?: string };
+      if (id.project !== context.project || id.milestone !== context.milestone) continue;
+      const slug = bracketDirSlug(dir, id);
+      if (slug) found.push({ dir, id, slug });
+    } catch {
+      // A bracket writer shares the directory with migration-window legacy
+      // names. Names outside the canonical bracket grammar do not allocate an
+      // identity in this branch.
+    }
+  }
+  return found;
+}
+
+/**
+ * Return the top-level phase number when the active bracket reader resolves
+ * this one directory. The reader prefers an exact project+milestone bracket
+ * identity, falls back to migration-window legacy spellings, and excludes a
+ * qualified directory owned by another milestone. Allocation must reserve
+ * that same universe or a newly emitted bracket directory can shadow work the
+ * reader resolved immediately before the write.
+ */
+function readerResolvableBracketDirectoryPhaseNumber(
+  dir: string,
+  context: BracketWriteContext,
+): number | null {
+  const phaseKey = phaseKeyFromDir(dir, 'bracket');
+  if (!/^\d+$/.test(phaseKey)) return null;
+  const phase = Number(phaseKey);
+  if (!Number.isSafeInteger(phase) || isSentinelPhaseId(phase)) return null;
+  const { matches } = matchPhaseDirs([dir], phaseKey, 'bracket', context);
+  return matches.includes(dir) ? phase : null;
+}
+
+function addBracketRoadmapPhaseNumbers(content: string, used: Set<number>, context?: BracketWriteContext): void {
+  for (const token of scanMilestonePhaseIds(content, 'bracket')) {
+    const leading = String(token).split('.')[0];
+    if (/^\d+$/.test(leading)) used.add(Number(leading));
+  }
+  // #5528: a phase declared only as a checklist bullet (`- [ ] **[GSD.02] 05: x**`, with or without a
+  // checkbox, letter-suffixed or word-first) is invisible to the heading scan above but still owns its
+  // number. The bracket declaration scans see it; an id of another milestone only over-counts.
+  if (!context) return;
+  const active = `${context.project}.${context.milestone}`.toUpperCase();
+  for (const { regex, idGroup, numGroup } of buildPhaseDeclarationScans('bracket')) {
+    if (idGroup === null) continue;
+    let hit: RegExpExecArray | null;
+    while ((hit = regex.exec(content)) !== null) {
+      const num = parseInt(hit[numGroup], 10);
+      if (!Number.isSafeInteger(num) || isSentinelPhaseId(num)) continue;
+      // A legacy `- [x] Phase 5: x` bullet (migration window) carries no bracket id: it still owns its number.
+      if (!hit[idGroup] || hit[idGroup].toUpperCase() === active) used.add(num);
+    }
+  }
+}
+
+function collectBracketPhaseNumbers(
+  roadmapContent: string,
+  phasesDir: string,
+  context: BracketWriteContext,
+): Set<number> {
+  const used = new Set<number>();
+  addBracketRoadmapPhaseNumbers(roadmapContent, used, context);
+  for (const dir of readSubdirectories(phasesDir, true)) {
+    const phase = readerResolvableBracketDirectoryPhaseNumber(dir, context);
+    if (phase !== null) used.add(phase);
+  }
+  used.delete(0);
+  used.delete(999);
+  return used;
+}
+
 /**
  * #3849 — widen "used phase numbers" beyond this checkout. Every sibling git
  * worktree carries its own `.planning/` on its own branch, so a phase minted
  * there is invisible to the cwd-scoped sources (headers, bullets, on-disk
- * dirs). Scan each sibling's phase-directory names (cheap — dir names alone
- * caught the real incident) and its WHOLE ROADMAP.md headers (a row can exist
- * before any directory does; milestone-scoping is wrong here because a number
- * used under any milestone on another branch is still taken).
+ * dirs). Legacy identities scan each sibling's phase-directory names and whole
+ * ROADMAP because their phase number has no milestone qualifier. Bracket ids
+ * reserve the same reader-resolvable union used locally: exact identities for
+ * the active project+milestone, migration-window legacy directory spellings,
+ * and accepted ROADMAP spellings when the sibling is on that same bracket
+ * identity. Each writer creates its directory in the same planning lock as its
+ * ROADMAP entry.
  *
  * #4225 — the horizon must track the ALLOCATION scope. When the allocation is
  * workstream-scoped (`--ws`/`GSD_WORKSTREAM`, resolved into the env before
@@ -1380,21 +1758,26 @@ function assertDescriptionPreservesMilestoneScope(cwd: string, description: stri
  * allocation then behaves exactly as it did before this horizon existed.
  * A sibling that simply lacks the active workstream's directory is the same
  * fail-open case: it contributes nothing. Sentinels reuse the canonical
- * `isSentinelPhaseId`; the dir pattern is the same one the on-disk scan uses,
- * so decimal sub-phases (`411.1-foo`) are correctly not integers.
+ * `isSentinelPhaseId` (`isSentinelPhaseDir` for bracket dirs); the dir pattern is the same one the
+ * on-disk scan uses, so decimal sub-phases (`411.1-foo`, `GSD.02-05.1-foo`) are correctly not integers.
  */
-function collectSiblingWorktreePhaseNums(cwd: string, used: Set<number>): void {
+function collectSiblingWorktreePhaseNums(
+  cwd: string,
+  used: Set<number>,
+  bracketContext?: BracketWriteContext,
+): void {
   let porcelain: string;
   try {
     porcelain = execFileSync('git', ['worktree', 'list', '--porcelain'], {
       cwd,
+      env: scrubGitLocationEnv(process.env),
       encoding: 'utf-8',
       // Same subprocess band as the other git call sites (smart-entry, check-command-router):
       // inside the 5-30s git window, hidden console window on Windows, bounded buffer.
       timeout: 10_000,
       windowsHide: true,
       maxBuffer: 4 * 1024 * 1024,
-    });
+    }); // allow-index-refresh: lists worktrees from .git metadata, never opens the index
   } catch {
     return; // not a git repo / git unavailable — unchanged behavior
   }
@@ -1405,43 +1788,207 @@ function collectSiblingWorktreePhaseNums(cwd: string, used: Set<number>): void {
   // try/catch below still keeps any resolution failure fail-open.
   const ws = process.env['GSD_WORKSTREAM'] ?? null;
   const siblingPlanningDir = (wt: string): string => planningDir(wt, ws);
-  const dirNumPattern = /^(?:[A-Z][A-Z0-9]*-)?(\d+)-/;
-  // Same header shape the allocators scan locally (#1729 tag tolerance).
-  // #5007 (Phase 6 / ADR-4910 §8): migrated onto buildPhaseHeadingScanRegex
-  // (src/phase-id.cjs), the shared "which phases exist in this content" scan
-  // owner. LABEL_ONLY baseline with no convention argument reproduces the
-  // prior literal `Phase\s+` (no bracket tolerance) byte-for-byte — this is a
-  // counter, matching the LABEL_ONLY docstring guidance exactly, so it is
-  // deliberately NOT widened onto the bracket grammar the way the real-heading
-  // readers (getRoadmapModeForPhase, phaseDisplayNameFromRoadmap) are.
-  const { regex: headerPattern, phaseNumGroup } =
-    buildPhaseHeadingScanRegex(PHASE_HEADING_BASELINE.LABEL_ONLY);
   for (const line of porcelain.split('\n')) {
     if (!line.startsWith('worktree ')) continue;
     const wt = line.slice('worktree '.length).trim();
     if (!wt || path.resolve(wt) === path.resolve(cwd)) continue;
     try {
-      for (const entry of fs.readdirSync(path.join(siblingPlanningDir(wt), 'phases'))) {
-        const match = entry.match(dirNumPattern);
-        if (!match) continue;
-        const num = parseInt(match[1], 10);
-        if (!isSentinelPhaseId(num)) used.add(num);
-      }
+      collectPhaseDirNums(path.join(siblingPlanningDir(wt), 'phases'), used, bracketContext);
     } catch {
       /* worktree has no .planning (or no copy of this scope) — normal, contributes nothing */
     }
     try {
       const content = fs.readFileSync(path.join(siblingPlanningDir(wt), 'ROADMAP.md'), 'utf-8');
-      let m: RegExpExecArray | null;
-      headerPattern.lastIndex = 0;
-      while ((m = headerPattern.exec(content)) !== null) {
-        const num = parseInt(m[phaseNumGroup], 10);
-        if (!isSentinelPhaseId(num)) used.add(num);
+      if (bracketContext) {
+        // Resolved without `bracketWriteContext`, whose `error()` writes to
+        // stderr before throwing: a sibling with no project code or no
+        // resolvable milestone simply contributes nothing.
+        const siblingProject = loadConfig(wt)['project_code'];
+        const siblingVersion = (getMilestoneInfo(wt) as { value?: { version?: string } | null }).value?.version ?? '';
+        if (
+          typeof siblingProject === 'string'
+          && siblingProject.trim() === bracketContext.project
+          && milestoneToken(siblingVersion) === bracketContext.milestone
+        ) {
+          addBracketRoadmapPhaseNumbers(extractCurrentMilestone(content, wt), used, bracketContext);
+        }
+        continue;
       }
+      // Headers only for non-bracket repos, as before #5528 (#3849).
+      for (const num of roadmapDeclaredPhaseNums(content, false)) used.add(num);
     } catch {
       /* no roadmap in that worktree (or scope) — normal, contributes nothing */
     }
   }
+}
+
+/** The highest used number (a loop, not `Math.max(...set)`, which overflows the argument limit on a large set). */
+function maxPhaseNum(used: Iterable<number>): number {
+  let max = 0;
+  for (const n of used) if (n > max) max = n;
+  return max;
+}
+
+/** The number after `max`, stepping past the backlog sentinel (999) so allocation never lands on one. */
+function nextPhaseNum(max: number): number {
+  let n = max + 1;
+  while (isSentinelPhaseId(n)) n += 1;
+  return n;
+}
+
+/** Phase numbers already taken: the current milestone's text, phase directories, sibling worktrees (#1229, #3849, #5528). */
+function collectUsedPhaseNums(cwd: string, content: string): Set<number> {
+  const used = new Set(roadmapDeclaredPhaseNums(content));
+  collectPhaseDirNums(path.join(planningDir(cwd), 'phases'), used);
+  collectSiblingWorktreePhaseNums(cwd, used);
+  return used;
+}
+
+/**
+ * #4304: `toDir` throws a raw `Error` for a description whose
+ * slug sanitizes to empty (e.g. a description that transliterates to
+ * nothing) or is all-digit. An uncaught throw from inside a mutation loop
+ * is worse than a refusal — it can leave earlier iterations' directories
+ * already created with no clean error surface. This wraps that one call so
+ * every bracket phase-directory allocation refuses through `error(...)`
+ * (clean stderr message, controlled exit) instead of crashing.
+ */
+function bracketDirNameOrRefuse(
+  id: { project: string; milestone: string; phase: string; subphase?: string },
+  slug: string,
+  description: string,
+): string {
+  try {
+    return toDir(id, slug);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return error(`Cannot create a phase directory for "${description}": ${msg}`);
+  }
+}
+
+/**
+ * #4304: fail closed before a bracket writer creates or renames into a phase
+ * directory. Allocation intentionally ignores symlink entries, so the exact
+ * destination must be checked with lstat (including dangling links) before a
+ * recursive mkdir or child write can follow it. The canonical containment
+ * predicate then resolves the existing path, or its nearest existing parent,
+ * so a destination reached through a symlinked ancestor cannot escape the
+ * planning phases directory either. A pre-pass supplies simulated occupancy
+ * after deletion and earlier renames; the rename loop checks the live disk.
+ */
+function assertPhaseDirectoryDestinationSafe(
+  phasesDir: string,
+  dirName: string,
+  operation: 'create' | 'renumber into',
+  occupiedNames?: ReadonlySet<string>,
+): void {
+  const destination = path.join(phasesDir, dirName);
+  let stat: fs.Stats | null = null;
+  try {
+    stat = fs.lstatSync(destination);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT') {
+      error(`Cannot ${operation} phase directory "${dirName}": unable to inspect the destination (${code ?? 'unknown error'})`);
+    }
+  }
+  if (stat?.isSymbolicLink()) {
+    error(`Cannot ${operation} phase directory "${dirName}": the destination is a symbolic link`);
+  }
+  const destinationOccupied = occupiedNames
+    ? occupiedNames.has(dirName) || (stat !== null && !stat.isDirectory())
+    : stat !== null;
+  if (operation === 'renumber into' && destinationOccupied) {
+    error(`Cannot ${operation} phase directory "${dirName}": the destination already exists`);
+  }
+  if (tryWithinRoot(destination, phasesDir, PathAcceptance.AbsoluteInsideRoot) === null) {
+    error(`Cannot ${operation} phase directory "${dirName}": the destination resolves outside the planning phases directory`);
+  }
+}
+
+/**
+ * #4304: the bracket writers mint every identity from the milestone's own
+ * numbering. A caller-supplied `--id` or `phase_naming: "custom"` has no
+ * bracket write semantics yet: #5067 owns their precedence (a supplied id is
+ * validated against the resolved convention, "custom" keeps bypassing
+ * generation). Until it lands, refuse before any write rather than discard
+ * the id or override the naming mode.
+ */
+function assertBracketGeneratedIdentity(
+  command: string,
+  config: Record<string, unknown>,
+  customId?: string | null,
+): void {
+  if (customId) {
+    error(
+      `${command}: --id ${JSON.stringify(customId)} is not supported under phase_id_convention "bracket"; ` +
+        'bracket phase identities are generated from the active milestone. ' +
+        'Custom id precedence under the bracket convention lands with #5067.',
+    );
+  }
+  if (config['phase_naming'] === 'custom') {
+    error(
+      `${command}: phase_naming "custom" is not supported under phase_id_convention "bracket"; ` +
+        'bracket phase identities are generated from the active milestone. ' +
+        'Custom naming precedence under the bracket convention lands with #5067.',
+    );
+  }
+}
+
+/**
+ * #4304: refuse a bracket `phase add` / `add-batch` whose located milestone
+ * window is a decoy. A non-milestone heading carrying the active version
+ * token ahead of the real milestone heading (`## Goals for v2.0` before
+ * `## [CK.02] v2.0 Current`) is where the read side locates the window, so
+ * the new entry would land in the decoy section, outside every reader's view
+ * of the milestone. The window is accepted when its own heading carries the
+ * active bracket qualifier; otherwise a live (unfenced, not historical)
+ * milestone heading elsewhere that carries both the active qualifier and the
+ * active version token is the real one, and the writer refuses before any
+ * write, naming both lines. Read-side window selection is unchanged.
+ */
+function assertBracketAddWindowLocated(
+  rawContent: string,
+  cwd: string,
+  context: BracketWriteContext,
+  command: string,
+): void {
+  const ranges = currentMilestoneRawRanges(rawContent, cwd, 'bracket');
+  if (!ranges) return;
+  const lineAt = (offset: number): string => {
+    const end = rawContent.indexOf('\n', offset);
+    return rawContent.slice(offset, end === -1 ? rawContent.length : end).replace(/\r$/, '');
+  };
+  const qualifierRe = new RegExp(
+    `^\\[${escapeRegex(context.project)}\\.${escapeRegex(context.milestone)}\\]`,
+    'i',
+  );
+  const windowHeading = lineAt(ranges.primary.start);
+  if (qualifierRe.test(windowHeading.replace(/^#+[ \t]*/, ''))) return;
+
+  const version = String((getMilestoneInfo(cwd) as { value?: { version?: string } | null }).value?.version ?? '');
+  if (!version) return;
+  const versionRe = new RegExp(`(?<![\\w.])v?${escapeRegex(version.replace(/^v/i, ''))}(?![\\w.-])`, 'i');
+  const historicalLineStarts = archivedOrClosedMilestoneLineStarts(rawContent);
+  const insideWindow = (offset: number): boolean =>
+    (offset >= ranges.primary.start && offset < ranges.primary.end)
+    || Boolean(ranges.details && offset >= ranges.details.start && offset < ranges.details.end);
+  const realHeading = tokenizeHeadings(rawContent).find((heading) =>
+    !insideWindow(heading.offset)
+    && !historicalLineStarts.has(heading.offset)
+    && rawContent[heading.offset] === '#'
+    && isRecognizedMilestoneHeading(heading.text, heading.level)
+    && qualifierRe.test(heading.text.trim())
+    && versionRe.test(heading.text));
+  if (!realHeading) return;
+  const lineNumber = (offset: number): number => rawContent.slice(0, offset).split('\n').length;
+  error(
+    `${command}: the active milestone window was located at ROADMAP.md line ${lineNumber(ranges.primary.start)} `
+      + `(${JSON.stringify(windowHeading.trim())}), but the milestone heading for ${renderMilestoneId(context)} `
+      + `${version} is at line ${lineNumber(realHeading.offset)} (${JSON.stringify(lineAt(realHeading.offset).trim())}). `
+      + 'Writing the new phase there would place it outside the milestone. Rename or remove the earlier heading '
+      + 'so it no longer carries the active version token, then retry.',
+  );
 }
 
 function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: string): void {
@@ -1450,6 +1997,14 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
   }
   assertDescriptionPreservesMilestoneScope(cwd, description, 'phase add');
 
+  const convention = resolvePhaseIdConvention(cwd);
+  // The naming projection reads config silently, so a corrupt project config is
+  // reported as `config_parse_failed` before the loader's own diagnostics run.
+  const naming = phaseDirectoryOptions(cwd, undefined, '');
+  if (customId != null && convention !== 'bracket') {
+    const usage = phaseLocatorMod.customPhaseNamingUsage(cwd, naming);
+    if (usage) error(usage, naming.configError ? ERROR_REASON.CONFIG_PARSE_FAILED : ERROR_REASON.PHASE_NAMING_NOT_CUSTOM);
+  }
   const config = loadConfig(cwd);
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
   if (!fs.existsSync(roadmapPath)) {
@@ -1457,97 +2012,71 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
   }
 
   const slug = generateSlugInternal(description) || '';
+  if (convention === 'bracket') assertBracketGeneratedIdentity('phase add', config, customId);
+  const bracketContext = convention === 'bracket' ? bracketWriteContext(cwd, config) : null;
 
-  const { newPhaseId, dirName } = withPlanningLock(cwd, () => {
+  const { newPhaseId, dirName, roadmapEntry } = withPlanningLock(cwd, () => {
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
+    if (bracketContext) assertBracketAddWindowLocated(rawContent, cwd, bracketContext, 'phase add');
     const content = extractCurrentMilestone(rawContent, cwd);
 
-    const projectCode = (config.project_code as string) || '';
-    const prefix = projectCode ? `${projectCode}-` : '';
-
     let _newPhaseId: number | string;
-    let _dirName: string;
 
-    if (customId || config.phase_naming === 'custom') {
+    let _dirName = '';
+    if (bracketContext) {
+      const phasesOnDisk = path.join(planningDir(cwd), 'phases');
+      const usedPhaseNums = collectBracketPhaseNumbers(content, phasesOnDisk, bracketContext);
+      collectSiblingWorktreePhaseNums(cwd, usedPhaseNums, bracketContext);
+      _newPhaseId = nextPhaseNum(maxPhaseNum(usedPhaseNums));
+      _dirName = bracketDirNameOrRefuse(bracketPhaseId(bracketContext, _newPhaseId), slug, description);
+    } else if (naming.phaseNaming === 'custom') {
       _newPhaseId = customId || slug.toUpperCase();
       if (!_newPhaseId) error('--id required when phase_naming is "custom"');
-      _dirName = `${prefix}${_newPhaseId}-${slug}`;
     } else {
-      // Collect all phase numbers visible in the current-milestone content.
-      // Three sources are scanned so that a phase in ANY representation
-      // (section header, roadmap bullet, or on-disk directory) is counted:
-
-      // 1) Section headers: ### Phase N: / ## Phase N: / #### Phase N:
-      // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-      // #5007 (Phase 6 / ADR-4910 §8): migrated onto buildPhaseHeadingScanRegex
-      // (src/phase-id.cjs) with the LABEL_ONLY baseline and no convention
-      // argument — a counter site, matching phase-id.cts's own LABEL_ONLY
-      // docstring guidance, reproducing the prior `Phase\s+` literal (no
-      // bracket tolerance) byte-for-byte. See collectSiblingWorktreePhaseNums
-      // (above) for the identical migration on the same regex shape.
-      const { regex: headerPattern, phaseNumGroup } =
-        buildPhaseHeadingScanRegex(PHASE_HEADING_BASELINE.LABEL_ONLY);
-      // 2) Roadmap bullet entries: - [ ] **Phase N: ...** (all checkbox variants)
-      // The lookahead accepts colon, decimal-dot, whitespace, bold-close asterisk,
-      // or end-of-line so titleless forms ("- [ ] **Phase 11**", "- [ ] Phase 11")
-      // are counted and cannot collide with a freshly-added phase. (#1229)
-      const bulletPattern = /^[ \t]*-[ \t]*\[[^\]]{0,200}\][ \t]*\*{0,2}Phase[ \t]+(\d+)(?=[:.\s*]|$)/gim;
-
-      const usedPhaseNums = new Set<number>();
-      let m: RegExpExecArray | null;
-
-      while ((m = headerPattern.exec(content)) !== null) {
-        const num = parseInt(m[phaseNumGroup], 10);
-        // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
-        if (!isSentinelPhaseId(num)) usedPhaseNums.add(num);
-      }
-      while ((m = bulletPattern.exec(content)) !== null) {
-        const num = parseInt(m[1], 10);
-        // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
-        if (!isSentinelPhaseId(num)) usedPhaseNums.add(num);
-      }
-
-      // 3) On-disk phase directories (e.g. phases/11-foo/ with no header yet)
-      const phasesOnDisk = path.join(planningDir(cwd), 'phases');
-      if (fs.existsSync(phasesOnDisk)) {
-        const dirNumPattern = /^(?:[A-Z][A-Z0-9]*-)?(\d+)-/;
-        for (const entry of fs.readdirSync(phasesOnDisk)) {
-          const match = entry.match(dirNumPattern);
-          if (!match) continue;
-          const num = parseInt(match[1], 10);
-          // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
-          if (!isSentinelPhaseId(num)) usedPhaseNums.add(num);
-        }
-      }
-
-      // phase.add appends after the highest *used* number. Collecting numbers from
-      // section headers, roadmap bullets, AND on-disk dirs above is what prevents the
-      // #1229 collision (a bullet-only Phase N is now counted), so max+1 cannot reuse
-      // an existing number.
-      // 4) Sibling git worktrees (#3849) — same max+1, wider horizon: a number
-      // taken on another branch is still taken.
-      collectSiblingWorktreePhaseNums(cwd, usedPhaseNums);
-      const maxUsed = usedPhaseNums.size > 0 ? Math.max(...usedPhaseNums) : 0;
-      _newPhaseId = maxUsed + 1;
-      const paddedNum = String(_newPhaseId).padStart(2, '0');
-      _dirName = `${prefix}${paddedNum}-${slug}`;
+      // Collect all phase numbers visible in the current-milestone content. Three sources are
+      // scanned so a phase in ANY representation (section header, roadmap bullet, or on-disk
+      // directory) is counted: a bullet-only Phase N must not collide with a fresh one (#1229),
+      // and under the bracket convention `[CODE.MM] NN` forms count in all three (#5528).
+      // Header/bullet scans are #1729 pre-colon-tag tolerant and #3185 sentinel-filtered.
+      const usedPhaseNums = collectUsedPhaseNums(cwd, content);
+      _newPhaseId = nextPhaseNum(maxPhaseNum(usedPhaseNums));
     }
 
-    const dirPath = path.join(planningDir(cwd), 'phases', _dirName);
+    if (bracketContext) {
+      const dirPath = path.join(planningDir(cwd), 'phases', _dirName);
+      assertPhaseDirectoryDestinationSafe(path.dirname(dirPath), _dirName, 'create');
+      platformEnsureDir(dirPath);
+      platformWriteSync(path.join(dirPath, '.gitkeep'), '');
+    } else {
+      [{dirName: _dirName}] = phaseLocatorMod.createPhaseDirectories(cwd, [{
+        id: String(_newPhaseId), slug,
+        directoryId: typeof _newPhaseId === 'number' ? String(_newPhaseId).padStart(2, '0') : _newPhaseId,
+      }], {...naming, roadmap: content});
+    }
 
-    platformEnsureDir(dirPath);
-    platformWriteSync(path.join(dirPath, '.gitkeep'), '');
+    let phaseEntry: string;
+    if (bracketContext && typeof _newPhaseId === 'number') {
+      const id = bracketPhaseId(bracketContext, _newPhaseId);
+      const display = renderPhaseId(id);
+      const declared = new Set<number>();
+      addBracketRoadmapPhaseNumbers(content, declared);
+      const dependsOn = dependsOnLine(_newPhaseId, [...declared],
+        (phase) => renderPhaseId(bracketPhaseId(bracketContext, phase)));
+      phaseEntry =
+        `\n### ${display}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${id.phase} to break down)\n`;
+    } else {
+      const dependsOn =
+        naming.phaseNaming === 'custom' ? '' : dependsOnFor(_newPhaseId, rawContent);
+      phaseEntry =
+        `\n### Phase ${_newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${_newPhaseId} to break down)\n`;
+    }
 
-    const dependsOn =
-      config.phase_naming === 'custom' ? '' : dependsOnLine(_newPhaseId, roadmapDeclaredPhaseNums(rawContent));
-    const phaseEntry =
-      `\n### Phase ${_newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${_newPhaseId} to break down)\n`;
+    const insertAt = phaseEntryInsertOffset(rawContent, cwd, convention);
+    const recorded = recordNewPhase(spliceRoadmapBlock(rawContent, insertAt, phaseEntry), cwd, _newPhaseId, description, undefined,
+      bracketContext && typeof _newPhaseId === 'number' ? renderPhaseId(bracketPhaseId(bracketContext, _newPhaseId)) : undefined);
 
-    const insertAt = phaseEntryInsertOffset(rawContent, cwd);
-    const updatedContent = spliceRoadmapBlock(rawContent, insertAt, phaseEntry);
-
-    platformWriteSync(roadmapPath, updatedContent, { verbatim: true });
-    return { newPhaseId: _newPhaseId, dirName: _dirName };
+    platformWriteSync(roadmapPath, recorded.content, { verbatim: true });
+    return { newPhaseId: _newPhaseId, dirName: _dirName, roadmapEntry: recorded.entry };
   });
 
   const titleWarning = describeGoalShapedTitle(description);
@@ -1561,7 +2090,8 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     directory: toPosixPath(
       path.join(path.relative(cwd, planningDir(cwd)), 'phases', dirName),
     ),
-    naming_mode: config.phase_naming,
+    naming_mode: naming.phaseNaming,
+    roadmap_entry: roadmapEntry,
   };
   if (titleWarning) result['warning'] = titleWarning;
 
@@ -1591,83 +2121,115 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
     assertDescriptionPreservesMilestoneScope(cwd, description, 'phase add-batch');
   }
   const config = loadConfig(cwd);
+  const convention = resolvePhaseIdConvention(cwd);
+  const naming = phaseDirectoryOptions(cwd, undefined, '');
+  if (descriptions.includes('--id') && convention !== 'bracket') {
+    error(phaseLocatorMod.customPhaseNamingUsage(cwd, naming) ?? '--id is not supported by phase add-batch', naming.phaseNaming === 'custom' ? ERROR_REASON.USAGE : naming.configError ? ERROR_REASON.CONFIG_PARSE_FAILED : ERROR_REASON.PHASE_NAMING_NOT_CUSTOM);
+  }
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
   if (!fs.existsSync(roadmapPath)) {
     error('ROADMAP.md not found');
   }
-  const projectCode = (config.project_code as string) || '';
-  const prefix = projectCode ? `${projectCode}-` : '';
+  if (convention === 'bracket') assertBracketGeneratedIdentity('phase add-batch', config);
+  const bracketContext = convention === 'bracket' ? bracketWriteContext(cwd, config) : null;
 
   const results = withPlanningLock(cwd, () => {
     let rawContent = fs.readFileSync(roadmapPath, 'utf-8');
+    if (bracketContext) assertBracketAddWindowLocated(rawContent, cwd, bracketContext, 'phase add-batch');
     const content = extractCurrentMilestone(rawContent, cwd);
     let maxPhase = 0;
-    if (config.phase_naming !== 'custom') {
-      // Same three cwd-scoped sources as cmdPhaseAdd (#1229): headers, roadmap
-      // bullets, on-disk dirs. The bullet scan was missing here — a bullet-only
-      // `Phase N` row was invisible to batch allocation (#3849 secondary).
-      // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-      // #5007 (Phase 6 / ADR-4910 §8): migrated onto buildPhaseHeadingScanRegex
-      // (src/phase-id.cjs) with the LABEL_ONLY baseline and no convention
-      // argument — same counter-site migration as cmdPhaseAdd's identical
-      // regex above.
-      const { regex: phasePattern, phaseNumGroup } =
-        buildPhaseHeadingScanRegex(PHASE_HEADING_BASELINE.LABEL_ONLY);
-      const bulletPattern = /^[ \t]*-[ \t]*\[[^\]]{0,200}\][ \t]*\*{0,2}Phase[ \t]+(\d+)(?=[:.\s*]|$)/gim;
-      let m: RegExpExecArray | null;
-      while ((m = phasePattern.exec(content)) !== null) {
-        const num = parseInt(m[phaseNumGroup], 10);
-        // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
-        if (isSentinelPhaseId(num)) continue;
-        if (num > maxPhase) maxPhase = num;
-      }
-      while ((m = bulletPattern.exec(content)) !== null) {
-        const num = parseInt(m[1], 10);
-        if (isSentinelPhaseId(num)) continue;
-        if (num > maxPhase) maxPhase = num;
-      }
-      const phasesOnDisk = path.join(planningDir(cwd), 'phases');
-      if (fs.existsSync(phasesOnDisk)) {
-        const dirNumPattern = /^(?:[A-Z][A-Z0-9]*-)?(\d+)-/;
-        for (const entry of fs.readdirSync(phasesOnDisk)) {
-          const match = entry.match(dirNumPattern);
-          if (!match) continue;
-          const num = parseInt(match[1], 10);
-          // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
-          if (isSentinelPhaseId(num)) continue;
-          if (num > maxPhase) maxPhase = num;
-        }
-      }
-      // 4) Sibling git worktrees (#3849) — same max+1, wider horizon.
-      const siblingNums = new Set<number>();
-      collectSiblingWorktreePhaseNums(cwd, siblingNums);
-      for (const num of siblingNums) {
-        if (num > maxPhase) maxPhase = num;
-      }
+    if (bracketContext) {
+      const used = collectBracketPhaseNumbers(
+        content,
+        path.join(planningDir(cwd), 'phases'),
+        bracketContext,
+      );
+      collectSiblingWorktreePhaseNums(cwd, used, bracketContext);
+      maxPhase = maxPhaseNum(used);
+    } else if (naming.phaseNaming !== 'custom') {
+      // Same three cwd-scoped sources as cmdPhaseAdd (#1229, #5528): headers, roadmap bullets,
+      // on-disk dirs, then sibling worktrees (#3849) — same max+1, wider horizon.
+      maxPhase = maxPhaseNum(collectUsedPhaseNums(cwd, content));
     }
-    const added: Record<string, unknown>[] = [];
+    // #4304: compute and validate every item's slug/dirName
+    // BEFORE the first `platformEnsureDir` — a bracket `toDir` failure
+    // (e.g. a description that sanitizes to an empty slug) must refuse the
+    // whole batch with zero directories created, not throw mid-loop after
+    // earlier items already created theirs. This first pass touches no
+    // disk.
+    const validated: {
+      description: string;
+      slug: string;
+      newPhaseId: number | string;
+      dirName: string;
+    }[] = [];
     for (const description of descriptions) {
       const slug = generateSlugInternal(description) || '';
       let newPhaseId: number | string;
       let dirName: string;
-      if (config.phase_naming === 'custom') {
-        newPhaseId = slug.toUpperCase();
-        dirName = `${prefix}${newPhaseId}-${slug}`;
-      } else {
-        maxPhase += 1;
+      if (bracketContext) {
+        maxPhase = nextPhaseNum(maxPhase);
         newPhaseId = maxPhase;
-        dirName = `${prefix}${String(newPhaseId).padStart(2, '0')}-${slug}`;
+        dirName = bracketDirNameOrRefuse(bracketPhaseId(bracketContext, newPhaseId), slug, description);
+      } else if (naming.phaseNaming === 'custom') {
+        newPhaseId = slug.toUpperCase();
+        dirName = '';
+      } else {
+        maxPhase = nextPhaseNum(maxPhase);
+        newPhaseId = maxPhase;
+        dirName = '';
       }
-      const dirPath = path.join(planningDir(cwd), 'phases', dirName);
-      platformEnsureDir(dirPath);
-      platformWriteSync(path.join(dirPath, '.gitkeep'), '');
-      const dependsOn =
-        config.phase_naming === 'custom' ? '' : dependsOnLine(newPhaseId, roadmapDeclaredPhaseNums(rawContent));
-      const phaseEntry =
-        `\n### Phase ${newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${newPhaseId} to break down)\n`;
-      const insertAt = phaseEntryInsertOffset(rawContent, cwd);
-      rawContent = spliceRoadmapBlock(rawContent, insertAt, phaseEntry);
+      validated.push({ description, slug, newPhaseId, dirName });
+    }
+
+    // Batch creation is all-or-nothing: validate every bracket destination
+    // before the first directory or ROADMAP byte is written.
+    if (bracketContext) {
+      const phasesDir = path.join(planningDir(cwd), 'phases');
+      for (const { dirName } of validated) {
+        assertPhaseDirectoryDestinationSafe(phasesDir, dirName, 'create');
+      }
+    }
+
+    if (!bracketContext) {
+      // One preflight over the whole batch (identity collisions, occupied
+      // targets, containment) before the first directory is created.
+      const prepared = phaseLocatorMod.createPhaseDirectories(cwd, validated.map(item => ({
+        id: String(item.newPhaseId), slug: item.slug,
+        directoryId: typeof item.newPhaseId === 'number' ? String(item.newPhaseId).padStart(2, '0') : item.newPhaseId,
+      })), {...naming, roadmap: content});
+      prepared.forEach((entry, index) => { validated[index].dirName = entry.dirName; });
+    }
+
+    const added: Record<string, unknown>[] = [];
+    for (const { description, slug, newPhaseId, dirName } of validated) {
+      if (bracketContext) {
+        const dirPath = path.join(planningDir(cwd), 'phases', dirName);
+        platformEnsureDir(dirPath);
+        platformWriteSync(path.join(dirPath, '.gitkeep'), '');
+      }
+      let phaseEntry: string;
+      if (bracketContext && typeof newPhaseId === 'number') {
+        const id = bracketPhaseId(bracketContext, newPhaseId);
+        const declared = new Set<number>();
+        // rawContent includes earlier batch items, which become prerequisites.
+        addBracketRoadmapPhaseNumbers(extractCurrentMilestone(rawContent, cwd), declared);
+        const dependsOn = dependsOnLine(newPhaseId, [...declared],
+          (phase) => renderPhaseId(bracketPhaseId(bracketContext, phase)));
+        phaseEntry =
+          `\n### ${renderPhaseId(id)}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${id.phase} to break down)\n`;
+      } else {
+        const dependsOn =
+          naming.phaseNaming === 'custom' ? '' : dependsOnFor(newPhaseId, rawContent);
+        phaseEntry =
+          `\n### Phase ${newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${newPhaseId} to break down)\n`;
+      }
+      const insertAt = phaseEntryInsertOffset(rawContent, cwd, convention);
+      const recorded = recordNewPhase(spliceRoadmapBlock(rawContent, insertAt, phaseEntry), cwd, newPhaseId, description, undefined,
+        bracketContext && typeof newPhaseId === 'number' ? renderPhaseId(bracketPhaseId(bracketContext, newPhaseId)) : undefined);
+      rawContent = recorded.content;
       added.push({
+        roadmap_entry: recorded.entry,
         phase_number: typeof newPhaseId === 'number' ? newPhaseId : String(newPhaseId),
         padded:
           typeof newPhaseId === 'number' ? String(newPhaseId).padStart(2, '0') : String(newPhaseId),
@@ -1676,7 +2238,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
         directory: toPosixPath(
           path.join(path.relative(cwd, planningDir(cwd)), 'phases', dirName),
         ),
-        naming_mode: config.phase_naming,
+        naming_mode: naming.phaseNaming,
       });
     }
     platformWriteSync(roadmapPath, rawContent, { verbatim: true });
@@ -1756,8 +2318,8 @@ function scanExistingDecimalPhaseNumbers(phasesDir: string, rawContent: string, 
     decimalSet.add(parseInt(rmMatch[1], 10));
   }
 
-  const checklistDecimalPattern = new RegExp(
-    `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?Phase\\s+${phaseMarkdownRegexSource(base)}\\.(\\d+)${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
+  const checklistDecimalPattern = phaseEntryRegExp(
+    `Phase\\s+${phaseMarkdownRegexSource(base)}\\.(\\d+)${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
     'gi',
   );
   let clMatch: RegExpExecArray | null;
@@ -1766,6 +2328,199 @@ function scanExistingDecimalPhaseNumbers(phasesDir: string, rawContent: string, 
   }
 
   return decimalSet;
+}
+
+function scanExistingBracketDecimalPhaseNumbers(
+  phasesDir: string,
+  roadmapContent: string,
+  base: string,
+  context: BracketWriteContext,
+  meta?: { bracketSpellingFound: boolean },
+): Set<number> {
+  // A bracket repository can be mid-migration, and add-backlog deliberately
+  // remains a legacy sentinel writer. Inventory is therefore the UNION of
+  // the legacy spellings and the canonical bracket spellings that readers
+  // accept. Do not route the 999 parent exclusively through
+  // scanMilestonePhaseIds: that reader intentionally excludes the icebox
+  // range for milestone counting, while allocation must include it.
+  const decimalSet = scanExistingDecimalPhaseNumbers(phasesDir, roadmapContent, base);
+  for (const token of scanMilestonePhaseIds(roadmapContent, 'bracket')) {
+    const [phase, subphase, extra] = String(token).split('.');
+    if (!extra && Number(phase) === Number(base) && /^\d+$/.test(subphase ?? '')) {
+      decimalSet.add(Number(subphase));
+    }
+  }
+  for (const { id } of bracketIdsInContext(phasesDir, context)) {
+    if (Number(id.phase) !== Number(base)) continue;
+    if (meta) meta.bracketSpellingFound = true;
+    if (id.subphase) decimalSet.add(Number(id.subphase));
+  }
+
+  const intro = phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.ANY_BRACKET, 'bracket', true);
+  const entryPattern = new RegExp(
+    `^${intro}(${PHASE_NUMBER_TOKEN_SOURCE})${OPTIONAL_PHASE_TAG_SOURCE}[ \\t]*:`,
+    'i',
+  );
+  const addRoadmapToken = (bracketId: string | undefined, token: string): void => {
+    const [phase, subphase, extra] = token.split('.');
+    if (extra || Number(phase) !== Number(base) || !/^\d+$/.test(subphase ?? '')) return;
+    if (bracketId) {
+      if (foldBracketId(bracketId) !== foldBracketId(`${context.project}.${context.milestone}`)) return;
+      if (meta) meta.bracketSpellingFound = true;
+    }
+    decimalSet.add(Number(subphase));
+  };
+
+  // tokenizeHeadings is the fence-aware reader surface and, unlike the
+  // milestone membership scanner, retains sentinel headings for this
+  // allocation-specific inventory.
+  for (const heading of tokenizeHeadings(roadmapContent)) {
+    if (heading.level < 2 || heading.level > 4) continue;
+    const match = entryPattern.exec(heading.text);
+    if (match) addRoadmapToken(match[1], match[2]);
+  }
+
+  // The manager accepts bracket checklist rows without requiring a detail
+  // heading. Match that same phase-intro grammar here so ROADMAP-only children
+  // still reserve their number. Fenced examples are documentation, not live
+  // inventory.
+  const fencedLines = fencedRoadmapLineNumbers(roadmapContent);
+  for (const [index, line] of roadmapContent.split('\n').entries()) {
+    if (fencedLines.has(index + 1)) continue;
+    const checklist = parsePhaseChecklistLine(line.replace(/\r$/, ''), 'bracket');
+    if (checklist) addRoadmapToken(checklist.bracketId, checklist.phaseToken);
+  }
+  return decimalSet;
+}
+
+/**
+ * #4304: the ONE bracket-argument canonicalization `phase
+ * remove` and `phase insert` both need, extracted from cmdPhaseRemove's own
+ * canonicalization so insert accepts every form remove does instead of maintaining a
+ * second, narrower copy that could silently disagree with it. A bare token
+ * (`2`, `02`, `002`) canonicalizes through phase-id-display's `phaseToken`
+ * adapter; a qualified/display token (`CK.02-02`, `[CK.02] 02`) canonicalizes
+ * through phase-id.cts's strict `parsePhaseId`, refusing before any mutation
+ * when it names a different milestone. `actionVerb` (e.g. "remove", "insert
+ * after") only varies the refusal wording.
+ */
+function canonicalizeBracketPhaseArgument(
+  context: BracketWriteContext,
+  targetPhase: string,
+  actionVerb: string,
+): { normalized: string; isDecimal: boolean; slug?: string } {
+  const isQualified = targetPhase.startsWith('[') || targetPhase.includes('-');
+  if (isQualified) {
+    let qualifiedId: ReturnType<typeof parsePhaseId> | null = null;
+    try {
+      if (targetPhase.startsWith('[')) {
+        const close = targetPhase.indexOf(']');
+        // The owned-line reader canonicalizes numeric segments via phaseToken
+        // before strict identity parsing; CLI display ids use that same owner.
+        qualifiedId = phaseIdFromOwnedParts(targetPhase.slice(1, close), targetPhase.slice(close + 1).trim());
+      } else {
+        qualifiedId = parsePhaseId(targetPhase);
+      }
+    } catch {
+      return error(`Phase ${targetPhase} cannot be resolved to a bracket phase number`, ERROR_REASON.USAGE);
+    }
+    if (qualifiedId === null) {
+      return error(`Phase ${targetPhase} cannot be resolved to a bracket phase number`, ERROR_REASON.USAGE);
+    }
+    if (qualifiedId.project !== context.project || qualifiedId.milestone !== context.milestone) {
+      error(
+        `Phase ${targetPhase} belongs to milestone [${qualifiedId.project}.${qualifiedId.milestone}], `
+        + `but the active milestone is [${context.project}.${context.milestone}]. `
+        + `Refusing to ${actionVerb} a phase outside the active milestone.`,
+      );
+    }
+    const isDecimal = qualifiedId.subphase !== undefined;
+    const prefix = bracketDirPrefix(qualifiedId);
+    const slug = targetPhase.startsWith(prefix) ? targetPhase.slice(prefix.length) : undefined;
+    return { normalized: isDecimal ? `${qualifiedId.phase}.${qualifiedId.subphase}` : qualifiedId.phase, isDecimal, slug };
+  }
+  const canonicalToken = phaseToken(targetPhase);
+  if (canonicalToken === null) {
+    error(`Phase ${targetPhase} cannot be resolved to a bracket phase number`);
+    return { normalized: '', isDecimal: false };
+  }
+  return { normalized: canonicalToken, isDecimal: canonicalToken.includes('.') };
+}
+
+/**
+ * Select `phase insert`'s bracket target from the reader-owned active ranges.
+ * A raw range may still contain a shipped `<details>` archive, so range
+ * membership alone is not evidence that a same-numbered heading is live.
+ * Reuse bracket removal's historical-section classifier and owned-line parser:
+ * the latter derives its bracket intro from phase-id.cts's exported read
+ * grammar, then `sameBracketPhaseId` qualifies project, milestone, and the
+ * canonical phase number together. The insertion boundary comes from the same
+ * fence-aware heading tokens, never a raw next-heading regex. A fenced block
+ * that contains a phase-heading example is kept byte-identical and begins a
+ * protected boundary, so the live inserted heading lands before the example
+ * instead of inside its fence. No bare-number fallback exists here.
+ */
+function activeBracketInsertHeading(
+  content: string,
+  targetId: BracketRoadmapPhaseId,
+  ranges: ReturnType<typeof currentMilestoneRawRanges>,
+): { start: number; length: number; insertAt: number } | null {
+  if (!ranges) return null;
+  const historicalLineStarts = archivedOrClosedMilestoneLineStarts(content);
+  const fencedLineNumbers = fencedRoadmapLineNumbers(content);
+  const searchRanges = [ranges.primary, ...(ranges.details ? [ranges.details] : [])];
+  const lines = splitRoadmapLineRecords(content);
+  const lineByStart = new Map(lines.map((line) => [line.start, line]));
+  const headings = tokenizeHeadings(content);
+  const rawLines = content.split('\n');
+  const protectedFenceStarts = scanFencedBlocks(rawLines)
+    .filter((block) => {
+      const lastIndex = block.closeLineIdx === -1 ? rawLines.length - 1 : block.closeLineIdx;
+      for (let index = block.openLineIdx + 1; index < lastIndex; index++) {
+        if (classifyBracketOwnedLine(rawLines[index].replace(/\r$/, '')).kind === 'heading') return true;
+      }
+      return false;
+    })
+    .map((block) => lines[block.openLineIdx]?.start)
+    .filter((start): start is number => start !== undefined);
+  for (const range of searchRanges) {
+    const liveHeadings = headings.filter(
+      (heading) => heading.offset >= range.start
+        && heading.offset < range.end
+        && !historicalLineStarts.has(heading.offset),
+    );
+    for (let headingIndex = 0; headingIndex < liveHeadings.length; headingIndex++) {
+      const heading = liveHeadings[headingIndex];
+      const line = lineByStart.get(heading.offset);
+      if (!line || fencedLineNumbers.has(line.lineNumber)) continue;
+      const owned = classifyBracketOwnedLine(line.text);
+      if (owned.kind !== 'heading' || !owned.id || !sameBracketPhaseId(owned.id, targetId)) continue;
+
+      let insertAt = range.end;
+      for (const nextHeading of liveHeadings.slice(headingIndex + 1)) {
+        const nextLine = lineByStart.get(nextHeading.offset);
+        if (!nextLine) continue;
+        const nextOwned = classifyBracketOwnedLine(nextLine.text);
+        if (nextOwned.kind !== 'heading') continue;
+        // #5599: bracket ids have one subphase level, so both nested and
+        // sibling allocations append after this phase's existing children.
+        if (nextOwned.id
+          && nextOwned.id.project === targetId.project
+          && nextOwned.id.milestone === targetId.milestone
+          && isPhaseTokenWithin(bracketArtifactToken(nextOwned.id), targetId.phase)) continue;
+        insertAt = nextHeading.offset;
+        break;
+      }
+      for (const fenceStart of protectedFenceStarts) {
+        if (fenceStart > heading.offset && fenceStart < insertAt) insertAt = fenceStart;
+      }
+      for (const historicalStart of historicalLineStarts) {
+        if (historicalStart > heading.offset && historicalStart < insertAt) insertAt = historicalStart;
+      }
+      return { start: line.start, length: line.text.length + line.eol.length, insertAt };
+    }
+  }
+  return null;
 }
 
 /**
@@ -1801,27 +2556,63 @@ function cmdPhaseInsert(
   }
 
   const slug = generateSlugInternal(description) || '';
+  const insertConfig = loadConfig(cwd);
+  const convention = resolvePhaseIdConvention(cwd);
+  const bracketContext = convention === 'bracket' ? bracketWriteContext(cwd, insertConfig) : null;
 
-  const { decimalPhase, dirName } = withPlanningLock(cwd, () => {
+  const { decimalPhase, dirName, roadmapEntry } = withPlanningLock(cwd, () => {
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
     const content = extractCurrentMilestone(rawContent, cwd);
 
-    const normalizedAfter = normalizePhaseName(afterPhase);
+    // #4304: canonicalize a bracket argument
+    // through the SAME adapter `phase remove` uses
+    // (canonicalizeBracketPhaseArgument) instead of the legacy
+    // normalizePhaseName, which pads only the phase's FIRST segment ("1.1"
+    // -> "01.1", never matching the bracket-canonical "01.01" heading) and
+    // never accepted a qualified/display form ("CK.02-02", "[CK.02] 02") at
+    // all. Every other convention keeps its untouched normalizePhaseName
+    // behavior.
+    let normalizedAfter: string;
+    if (bracketContext) {
+      normalizedAfter = canonicalizeBracketPhaseArgument(bracketContext, afterPhase, 'insert after').normalized;
+    } else {
+      normalizedAfter = normalizePhaseName(afterPhase);
+    }
+    // #4304: a bracket id supports at most one decimal level
+    // (phase.subphase). Nesting one level deeper under an already-decimal
+    // afterPhase would produce a three-level id no bracket function can
+    // represent — bracketPhaseId/toDir would otherwise throw uncaught deep
+    // inside directory/heading computation instead of refusing cleanly,
+    // before any mutation. Sibling allocation is unaffected: it joins
+    // afterPhase's PARENT level, which is always representable.
+    if (bracketContext && allocation === 'nested' && normalizedAfter.includes('.')) {
+      error(
+        `Cannot insert a nested sub-phase under phase ${normalizedAfter}: bracket phase ids support at most one decimal level. Use --sibling, or insert after the parent phase instead.`,
+      );
+    }
     const afterPhaseEscaped = phaseMarkdownRegexSource(normalizedAfter);
     const insertConvention = resolvePhaseIdConvention(cwd);
-    // #5007 (Phase 6 / ADR-4910 §8): buildPhaseHeadingRegex (src/roadmap.cts)
-    // is anchored `^...$` with no 'm' flag — designed to test ONE
-    // already-tokenized heading LINE, not to `.test()` against multi-line
-    // `content` directly (the design doc's "no anchoring change needed"
-    // claim for this site does not hold once the anchor is accounted for —
-    // same discrepancy as getRoadmapModeForPhase and phaseDisplayNameFromRoadmap
-    // above/below). Routed through tokenizeHeadings, mirroring
-    // searchPhaseInContent's own usage.
+    const headingIntro = phaseHeadingPrefixSrcFor(
+      PHASE_HEADING_BASELINE.LABEL_ONLY,
+      insertConvention,
+    );
     const targetPattern = buildPhaseHeadingRegex(afterPhaseEscaped, insertConvention);
-    const headingMatch = tokenizeHeadings(content).some((h) => targetPattern.test(h.text));
+    const bracketSectionRanges = bracketContext
+      ? currentMilestoneRawRanges(rawContent, cwd, 'bracket')
+      : null;
+    const [targetPhase, targetSubphase] = normalizedAfter.split('.');
+    const bracketTargetId = bracketContext
+      ? bracketPhaseId(bracketContext, targetPhase, targetSubphase)
+      : null;
+    const bracketHeading = bracketTargetId
+      ? activeBracketInsertHeading(rawContent, bracketTargetId, bracketSectionRanges)
+      : null;
+    const headingMatch = bracketContext
+      ? bracketHeading !== null
+      : tokenizeHeadings(content).some((h) => targetPattern.test(h.text));
 
-    const bulletPattern = new RegExp(
-      `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
+    const bulletPattern = phaseEntryRegExp(
+      `${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
       'i',
     );
     // #5007 (Phase 6 / ADR-4910 §8): a pure "does ANY phase heading exist"
@@ -1837,11 +2628,21 @@ function cmdPhaseInsert(
       'i',
     );
     const roadmapHasHeadingPhases = anyHeadingPattern.test(content);
-    const isBulletStyle = !headingMatch && bulletPattern.test(content) && !roadmapHasHeadingPhases;
+    // #4304: bracket identities live in headings only, so a bracket ROADMAP never takes the legacy bullet-insertion branch — a bullet-only bracket ROADMAP falls through to the checklist-refusal path below instead.
+    const isBulletStyle = !bracketContext && !headingMatch && bulletPattern.test(content) && !roadmapHasHeadingPhases;
+
+    if (bracketContext && !bracketHeading) {
+      const searchedRanges = bracketSectionRanges?.details
+        ? 'primary and Phase Details ranges'
+        : 'primary range';
+      error(
+        `Could not find live ${renderPhaseId(bracketTargetId!)} heading in the active milestone window (${searchedRanges})`,
+      );
+    }
 
     if (!headingMatch && !isBulletStyle) {
-      const checklistPattern = new RegExp(
-        `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
+      const checklistPattern = phaseEntryRegExp(
+        `${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
         'i',
       );
       if (checklistPattern.test(content)) {
@@ -1853,11 +2654,19 @@ function cmdPhaseInsert(
     }
 
     const phasesDir = path.join(planningDir(cwd), 'phases');
-    const normalizedBase = normalizePhaseName(afterPhase);
-    const decimalSet = scanExistingDecimalPhaseNumbers(phasesDir, rawContent, normalizedBase);
+    // #4304: reuse the SAME canonicalization computed above
+    // (phaseToken on bracket, normalizePhaseName otherwise) rather than a
+    // second, independent normalizePhaseName(afterPhase) call that would
+    // silently disagree with it on bracket.
+    const normalizedBase = normalizedAfter;
+    const decimalSet = bracketContext
+      ? scanExistingBracketDecimalPhaseNumbers(phasesDir, content, normalizedBase, bracketContext)
+      : scanExistingDecimalPhaseNumbers(phasesDir, rawContent, normalizedBase);
 
     const nextDecimal = decimalSet.size === 0 ? 1 : Math.max(...decimalSet) + 1;
-    let _decimalPhase = `${normalizedBase}.${nextDecimal}`;
+    let selectedBase = normalizedBase;
+    let selectedNextDecimal = nextDecimal;
+    let _decimalPhase = `${selectedBase}.${selectedNextDecimal}`;
 
     // #4569: sibling allocation joins afterPhase's PARENT level instead of nesting
     // one level deeper under afterPhase itself. A top-level phase (no existing
@@ -1866,31 +2675,52 @@ function cmdPhaseInsert(
     const lastDotIndex = normalizedBase.lastIndexOf('.');
     if (allocation === 'sibling' && lastDotIndex !== -1) {
       const parentBase = normalizedBase.slice(0, lastDotIndex);
-      const siblingDecimalSet = scanExistingDecimalPhaseNumbers(phasesDir, rawContent, parentBase);
+      const siblingDecimalSet = bracketContext
+        ? scanExistingBracketDecimalPhaseNumbers(phasesDir, content, parentBase, bracketContext)
+        : scanExistingDecimalPhaseNumbers(phasesDir, rawContent, parentBase);
       const siblingNextDecimal = siblingDecimalSet.size === 0 ? 1 : Math.max(...siblingDecimalSet) + 1;
+      selectedBase = parentBase;
+      selectedNextDecimal = siblingNextDecimal;
       _decimalPhase = `${parentBase}.${siblingNextDecimal}`;
     }
+    const bracketId = bracketContext
+      ? bracketPhaseId(bracketContext, selectedBase, selectedNextDecimal)
+      : null;
+    if (bracketId) _decimalPhase = bracketArtifactToken(bracketId);
     // #5599: the family whose subtree the new entry must land at the end of —
     // the parent for a sibling allocation, the target itself for a nested one.
     const subtreeRoot =
       allocation === 'sibling' && lastDotIndex !== -1
         ? normalizedBase.slice(0, lastDotIndex)
         : normalizedBase;
-    const insertConfig = loadConfig(cwd);
-    const projectCode = (insertConfig.project_code as string) || '';
-    const pfx = projectCode ? `${projectCode}-` : '';
-    const _dirName = `${pfx}${_decimalPhase}-${slug}`;
+    const insertNaming = phaseDirectoryOptions(cwd, undefined, rawContent);
+    // #4304: route the bracket directory-name allocation
+    // through the SAME bracketDirNameOrRefuse wrapper `phase add`/`phase
+    // add-batch` already use, instead of a raw `toDir` call —
+    // an empty or all-digit slug now refuses cleanly through error(...)
+    // before any mutation, matching their wording, instead of an uncaught
+    // "toDir: slug sanitizes to empty" throw.
+    let _dirName: string;
+    if (bracketId) {
+      _dirName = bracketDirNameOrRefuse(bracketId, slug, description);
+    } else {
+      // An inserted child inherits its parent's identity policy: legacy numeric
+      // families must still renumber together when their parent moves.
+      [{dirName: _dirName}] = phaseLocatorMod.createPhaseDirectories(cwd, [{
+        id: _decimalPhase, slug,
+        recordIdentity: phaseIdMod.customPhaseQuery(afterPhase, insertNaming) !== null,
+      }], insertNaming);
+    }
     const dirPath = path.join(planningDir(cwd), 'phases', _dirName);
 
-    platformEnsureDir(dirPath);
-    platformWriteSync(path.join(dirPath, '.gitkeep'), '');
-
     let updatedContent: string;
+    let roadmapEntry: 'checklist' | 'progress_table' | 'none';
 
     if (isBulletStyle) {
-      const boldBulletPattern = new RegExp(
-        `-\\s*\\[[ x]\\]\\s*\\*\\*Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}:`,
+      const boldBulletPattern = phaseEntryRegExp(
+        `Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}:`,
         'i',
+        { bold: 'required' },
       );
       const useBold = boldBulletPattern.test(content);
       const phaseLabel = useBold
@@ -1904,6 +2734,8 @@ function cmdPhaseInsert(
       // templating it via detectEol(rawContent) was inert dead code. '\n'
       // matches what platformWriteSync enforces anyway.
       const bulletEntry = `\n- [ ] ${phaseLabel}`;
+      // A non-bold bullet is not an entry `roadmap analyze` reads (checklistEntrySrc needs `**`).
+      roadmapEntry = new RegExp(checklistEntrySrc(insertConvention, false, true), 'm').test(bulletEntry) ? 'checklist' : 'none';
 
       // #3413: was `[^\n]*`, which on CRLF content swallows the line's
       // trailing \r into the match, shifting bulletLineEnd to land BETWEEN
@@ -1913,8 +2745,8 @@ function cmdPhaseInsert(
       // .md targets regardless). Widening to [^\r\n]* stops the match at the
       // true line-content boundary so bulletLineEnd lands cleanly before the
       // terminator.
-      const targetBulletPattern = new RegExp(
-        `(-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\r\\n]*)`,
+      const targetBulletPattern = phaseEntryRegExp(
+        `Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\r\\n]*`,
         'i',
       );
       const bulletMatchResult = rawContent.match(targetBulletPattern);
@@ -1928,7 +2760,7 @@ function cmdPhaseInsert(
       // #5599: land after the last bullet inside the allocation family's
       // subtree, not before the first following bullet of any number (which is
       // the target's own later decimal child when one exists).
-      const bulletRe = /\r?\n-\s*\[[ x]\]\s*(?:\*\*)?Phase\s+(?<tok>\d[^\s:*]*)[^\r\n]*/gi;
+      const bulletRe = new RegExp(`\\r?\\n${phaseEntryPrefixSrc()}Phase\\s+(?<tok>\\d[^\\s:*]*)[^\\r\\n]*`, 'gim');
       let insertIdx = bulletLineEnd;
       for (const m of afterBullet.matchAll(bulletRe)) {
         if (!isPhaseTokenWithin(m.groups!.tok, subtreeRoot)) {
@@ -1941,8 +2773,14 @@ function cmdPhaseInsert(
       updatedContent =
         rawContent.slice(0, insertIdx) + bulletEntry + rawContent.slice(insertIdx);
     } else {
+      const headingId = bracketId ? renderPhaseId(bracketId) : `Phase ${_decimalPhase}`;
+      let dependsId = `Phase ${afterPhase}`;
+      if (bracketContext) {
+        const [dependsPhase, dependsSubphase] = normalizedBase.split('.');
+        dependsId = renderPhaseId(bracketPhaseId(bracketContext, dependsPhase, dependsSubphase));
+      }
       const phaseEntry =
-        `\n### Phase ${_decimalPhase}: ${description} (INSERTED)\n\n**Goal:** [Urgent work - to be planned]\n**Requirements**: TBD\n**Depends on:** Phase ${afterPhase}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${_decimalPhase} to break down)\n`;
+        `\n### ${headingId}: ${description} (INSERTED)\n\n**Goal:** [Urgent work - to be planned]\n**Requirements**: TBD\n**Depends on:** ${dependsId}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${_decimalPhase} to break down)\n`;
 
       // #5007 (Phase 6 / ADR-4910 §8): this site needs the WHOLE matched
       // heading line plus its trailing newline (for splicing the new entry
@@ -1956,54 +2794,92 @@ function cmdPhaseInsert(
         `(#{2,4}\\s*${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, insertConvention)}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}:[^\\n]*\\n)`,
         'i',
       );
-      const headerMatch = rawContent.match(headerPattern);
-      if (!headerMatch) {
-        error(`Could not find Phase ${afterPhase} header`);
-      }
+      // #4304: bracket insertion is located by `activeBracketInsertHeading`
+      // above, which requires all three ownership facts together: the line is
+      // inside the reader-owned active window, is not historical under the
+      // shared remove/guard classifier, and parses to the active bracket
+      // identity plus canonical target number through the exported read
+      // grammar. This closes the raw-range hole where an archived `[CK.01]
+      // 01` inside `[CK.02]`'s primary bytes won a bare-number search. The
+      // legacy path below keeps its whole-document pattern byte-for-behavior.
+      //
+      // #4304: the pre-flight headingMatch check above ran
+      // against extractCurrentMilestone's content, which (for a bracket
+      // repo) merges the primary section with a later "(Phase Details)"
+      // section carrying the same milestone identity — so it can pass even
+      // when the target's own detail heading lives ONLY in that Phase
+      // Details range, separated from primary by an unrelated sibling
+      // milestone. Search the SAME two raw ranges bracket removal
+      // discovers (primary, then details) instead of primary alone, so a
+      // heading the pre-flight check can see is also found here.
+      const headerSearchRanges = bracketSectionRanges
+        ? [
+          bracketSectionRanges.primary,
+          ...(bracketSectionRanges.details ? [bracketSectionRanges.details] : []),
+        ]
+        : [{ start: 0, end: rawContent.length }];
 
-      const headerIdx = rawContent.indexOf(headerMatch![0]);
-      const afterHeader = rawContent.slice(headerIdx + headerMatch![0].length);
-      // #5007 (Phase 6 / ADR-4910 §8): this next-phase-boundary lookup was NOT
-      // one of the 15 originally-marked grandfathered sites, but it hand-rolls
-      // the identical `#{2,4}...Phase\s+` heading-marker shape and sits right
-      // next to headerPattern above, which this same commit series just
-      // widened (via insertConvention) to recognize a bracket-tagged target
-      // heading. Left bracket-blind, this regex would silently defeat that
-      // widening: under the bracket convention a freshly-recognized
-      // bracket-tagged target could still fail to find the NEXT heading as a
-      // boundary (`[CODE.MM] Phase N+1:` never matches a bare `Phase\s+`
-      // literal), so the newly inserted entry falls through to the
-      // rawContent.length branch and lands appended at end-of-file instead of
-      // directly after the target section. Found while migrating the
-      // neighboring sites, not deferred: this is the same defect class the
-      // whole Phase 6 effort exists to drain, just an unmarked instance of it.
-      // Composed with the SAME baseline/convention as headerPattern above so
-      // target-discovery and next-boundary-discovery agree. The base
-      // `#{2,4}\s+` (mandatory whitespace after the hashes, not `\s*`) is
-      // preserved exactly as the prior literal had it — a pre-existing,
-      // deliberately-unchanged asymmetry with the other sites in this file.
-      const nextPhaseHeadingPrefix = `#{2,4}\\s+${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, insertConvention)}`;
-      // #5599: the boundary is the first following heading OUTSIDE the
-      // allocation family's subtree. Taking the first heading of any number
-      // spliced the new section above the target's own later decimal children
-      // (13, 13.2, 13.1, 14); the allocator already guarantees the new number
-      // exceeds every existing descendant, so "after the last descendant" is
-      // the numerically correct position.
-      const nextPhaseRe = new RegExp(`\\r?\\n${nextPhaseHeadingPrefix}(?<tok>\\d[^\\s:]*)`, 'gi');
-      let insertIdx = rawContent.length;
-      for (const m of afterHeader.matchAll(nextPhaseRe)) {
-        if (!isPhaseTokenWithin(m.groups!.tok, subtreeRoot)) {
-          insertIdx = headerIdx + headerMatch![0].length + m.index;
-          break;
+      let searchStart = bracketHeading?.start ?? headerSearchRanges[0].start;
+      let searchEnd = bracketHeading?.insertAt ?? headerSearchRanges[0].end;
+      let headerLength = bracketHeading?.length ?? 0;
+      if (!bracketHeading) {
+        let headerMatch: RegExpMatchArray | null = null;
+        for (const range of headerSearchRanges) {
+          const searchWindow = rawContent.slice(range.start, range.end);
+          const match = searchWindow.match(headerPattern);
+          if (match) {
+            headerMatch = match;
+            searchStart = range.start + (match.index as number);
+            searchEnd = range.end;
+            headerLength = match[0].length;
+            break;
+          }
+        }
+        if (!headerMatch) {
+          error(`Could not find Phase ${afterPhase} header`);
         }
       }
 
-      updatedContent =
-        rawContent.slice(0, insertIdx) + phaseEntry + rawContent.slice(insertIdx);
+      const headerIdx = searchStart;
+      let insertIdx = bracketHeading?.insertAt ?? searchEnd;
+      if (!bracketHeading) {
+        const afterHeader = rawContent.slice(headerIdx + headerLength, searchEnd);
+        const nextPhaseHeadingPrefix = `#{2,4}\\s+${phaseHeadingPrefixSrcFor(
+          PHASE_HEADING_BASELINE.LABEL_ONLY,
+          insertConvention,
+        )}`;
+        // #5599: legacy insertion lands after the allocation family's entire
+        // subtree; bracket insertion keeps its fence-aware, milestone-scoped boundary.
+        const nextPhaseRe = new RegExp(`\\r?\\n${nextPhaseHeadingPrefix}(?<tok>\\d[^\\s:]*)`, 'gi');
+        for (const m of afterHeader.matchAll(nextPhaseRe)) {
+          if (!isPhaseTokenWithin(m.groups!.tok, subtreeRoot)) {
+            insertIdx = headerIdx + headerLength + m.index;
+            break;
+          }
+        }
+      }
+
+      ({ content: updatedContent, entry: roadmapEntry } = recordNewPhase(
+        rawContent.slice(0, insertIdx) + phaseEntry + rawContent.slice(insertIdx), cwd, _decimalPhase, description, afterPhase, bracketId ? renderPhaseId(bracketId) : undefined));
     }
 
-    platformWriteSync(roadmapPath, updatedContent);
-    return { decimalPhase: _decimalPhase, dirName: _dirName };
+    // #4304: every validation above — the pre-flight heading
+    // check, the header/bullet-line search, and computing `updatedContent`
+    // — must succeed (or `error()` out, which never returns) before the new
+    // phase's directory is created. A failing insert now leaves `.planning`
+    // byte-identical.
+    if (bracketId) {
+      assertPhaseDirectoryDestinationSafe(path.dirname(dirPath), _dirName, 'create');
+    }
+    platformEnsureDir(dirPath);
+    platformWriteSync(path.join(dirPath, '.gitkeep'), '');
+
+    platformWriteSync(
+      roadmapPath,
+      updatedContent,
+      bracketContext ? { preserveFencedMarkdownStructure: true } : undefined,
+    );
+    return { decimalPhase: _decimalPhase, dirName: _dirName, roadmapEntry };
   });
 
   const result = {
@@ -2014,6 +2890,7 @@ function cmdPhaseInsert(
     directory: toPosixPath(
       path.join(path.relative(cwd, planningDir(cwd)), 'phases', dirName),
     ),
+    roadmap_entry: roadmapEntry,
   };
 
   output(result, raw, decimalPhase);
@@ -2039,16 +2916,30 @@ interface RenameIntInfo {
   slug: string;
 }
 
-function renameDecimalPhases(
-  phasesDir: string,
-  baseInt: number,
-  removedDecimal: number,
-): { renamedDirs: { from: string; to: string }[]; renamedFiles: { from: string; to: string }[] } {
-  const renamedDirs: { from: string; to: string }[] = [];
-  const renamedFiles: { from: string; to: string }[] = [];
+/** Refuse every ambiguous owner before deletion or the first sibling rename. */
+function assertUnambiguousCustomDirectories(dirs: string[], context: PhaseDirectoryContext): void {
+  for (const dir of dirs) {
+    const candidates = phaseIdMod.customDirectoryCandidates(dir, context);
+    if (candidates.length > 1) {
+      error(`Ambiguous custom phase directory ${dir}; candidates: ${candidates.join(', ')}. Refusing removal or rename without ${CUSTOM_PHASE_ID_FILE}. Write the owning ID into ${dir}/${CUSTOM_PHASE_ID_FILE} and retry`, ERROR_REASON.AMBIGUOUS_PHASE_OWNER, {candidates, marker_path: toPosixPath(path.join(dir, CUSTOM_PHASE_ID_FILE))});
+    }
+  }
+}
+
+/**
+ * Directories a numeric removal renumbers. The renamers and the `phase remove`
+ * preflight both read this one selector, so the set the preflight refuses on is
+ * the set the renamers would touch. A directory a record or a unique known id
+ * owns is a stable custom identity and is never renumbered; an ambiguous
+ * markerless one stays selected so the caller refuses before any write.
+ */
+function renameEligible(dirs: string[], context: PhaseDirectoryContext): string[] {
+  return dirs.filter(dir => phaseIdMod.customDirectoryCandidates(dir, context).length !== 1);
+}
+
+function selectDecimalRenames(dirs: string[], baseInt: number, removedDecimal: number, context: PhaseDirectoryContext): RenameDirInfo[] {
   const decPattern = new RegExp(`^(0*${baseInt})\\.(\\d+)-(.+)$`);
-  const dirs = readSubdirectories(phasesDir, true);
-  const toRename: RenameDirInfo[] = dirs
+  return renameEligible(dirs, context)
     .map((dir) => {
       const m = dir.match(decPattern);
       return m
@@ -2057,7 +2948,42 @@ function renameDecimalPhases(
     })
     .filter((item): item is RenameDirInfo => item !== null && item.oldDecimal > removedDecimal)
     .sort((a, b) => b.oldDecimal - a.oldDecimal);
+}
 
+function selectIntegerRenames(dirs: string[], removedInt: number, context: PhaseDirectoryContext): RenameIntInfo[] {
+  return renameEligible(dirs, context)
+    .map((dir) => {
+      const m = dir.match(/^(\d+)([A-Z])?(?:\.(\d+))?-(.+)$/i);
+      if (!m) return null;
+      const dirInt = parseInt(m[1], 10);
+      // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
+      return dirInt > removedInt && !isSentinelPhaseId(dirInt)
+        ? {
+            dir,
+            oldInt: dirInt,
+            letter: m[2] ? m[2].toUpperCase() : '',
+            decimal: m[3] ? parseInt(m[3], 10) : null,
+            slug: m[4],
+          }
+        : null;
+    })
+    .filter((item): item is RenameIntInfo => item !== null)
+    .sort((a, b) =>
+      a.oldInt !== b.oldInt ? b.oldInt - a.oldInt : (b.decimal || 0) - (a.decimal || 0),
+    );
+}
+
+function renameDecimalPhases(
+  phasesDir: string,
+  baseInt: number,
+  removedDecimal: number,
+  context: PhaseDirectoryContext,
+): { renamedDirs: { from: string; to: string }[]; renamedFiles: { from: string; to: string }[] } {
+  const renamedDirs: { from: string; to: string }[] = [];
+  const renamedFiles: { from: string; to: string }[] = [];
+  const toRename = selectDecimalRenames(readSubdirectories(phasesDir, true), baseInt, removedDecimal, context);
+
+  assertUnambiguousCustomDirectories(toRename.map(item => item.dir), context);
   for (const item of toRename) {
     const newDecimal = item.oldDecimal - 1;
     const oldPhaseId = `${baseInt}.${item.oldDecimal}`;
@@ -2104,6 +3030,7 @@ function findOrphanedDisplacementName(dir: string, fileName: string): string | n
 function renameIntegerPhases(
   phasesDir: string,
   removedInt: number,
+  context: PhaseDirectoryContext,
 ): {
   renamedDirs: { from: string; to: string }[];
   renamedFiles: { from: string; to: string }[];
@@ -2112,28 +3039,9 @@ function renameIntegerPhases(
   const renamedDirs: { from: string; to: string }[] = [];
   const renamedFiles: { from: string; to: string }[] = [];
   const renamedFileCollisions: { from: string; to: string; displaced_to: string | null }[] = [];
-  const dirs = readSubdirectories(phasesDir, true);
-  const toRename: RenameIntInfo[] = dirs
-    .map((dir) => {
-      const m = dir.match(/^(\d+)([A-Z])?(?:\.(\d+))?-(.+)$/i);
-      if (!m) return null;
-      const dirInt = parseInt(m[1], 10);
-      // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
-      return dirInt > removedInt && !isSentinelPhaseId(dirInt)
-        ? {
-            dir,
-            oldInt: dirInt,
-            letter: m[2] ? m[2].toUpperCase() : '',
-            decimal: m[3] ? parseInt(m[3], 10) : null,
-            slug: m[4],
-          }
-        : null;
-    })
-    .filter((item): item is RenameIntInfo => item !== null)
-    .sort((a, b) =>
-      a.oldInt !== b.oldInt ? b.oldInt - a.oldInt : (b.decimal || 0) - (a.decimal || 0),
-    );
+  const toRename = selectIntegerRenames(readSubdirectories(phasesDir, true), removedInt, context);
 
+  assertUnambiguousCustomDirectories(toRename.map(item => item.dir), context);
   for (const item of toRename) {
     const newInt = item.oldInt - 1;
     const newPadded = String(newInt).padStart(2, '0');
@@ -2284,6 +3192,8 @@ function updateRoadmapAfterPhaseRemoval(
   isDecimal: boolean,
   removedInt: number,
   cwd: string,
+  customTarget: boolean,
+  stableIds: ReadonlySet<string>,
 ): boolean {
   return withPlanningLock(cwd, () => {
     const originalContent = fs.readFileSync(roadmapPath, 'utf-8');
@@ -2296,7 +3206,9 @@ function updateRoadmapAfterPhaseRemoval(
     // makes the token padding-insensitive in both directions without widening
     // to other ids: the token stays anchored between `Phase\s+`/line-start and
     // `:`/whitespace/end, so `0*2` still never matches `Phase 12:`.
-    const padTolerant = `0*${escaped}`;
+    const padTolerant = customTarget ? escaped : `0*${escaped}`;
+    const stableIdentity = (id: string): boolean =>
+      stableIds.has((isCustomPhaseId(id) ? id : normalizePhaseName(id)).toLowerCase());
 
     // SECTION-DELETION (not a section-body edit) — removes the phase's ENTIRE
     // detail section INCLUDING its own heading line. Migrated onto deleteSection
@@ -2348,6 +3260,9 @@ function updateRoadmapAfterPhaseRemoval(
 
       const matchRemovedProgressRow = (row: Record<string, string>): boolean => {
         const firstCellRaw = (Object.values(row)[0] ?? '').trim();
+        if (customTarget) {
+          return new RegExp(`^${escaped}\\.?(?:\\s|$)`, 'i').test(firstCellRaw);
+        }
         if (isDecimal) {
           return new RegExp(`^${padTolerant}\\.?(?:\\s|$)`, 'i').test(firstCellRaw);
         }
@@ -2362,7 +3277,7 @@ function updateRoadmapAfterPhaseRemoval(
       }
     }
 
-    if (!isDecimal) {
+    if (!isDecimal && !customTarget) {
       // #1729: fold an optional pre-colon ( ) tag into the suffix capture so it
       // is re-emitted verbatim — a tagged later phase still gets renumbered.
       // #5007 (Phase 6 / ADR-4910 §8): composes phaseHeadingPrefixSrcFor
@@ -2394,12 +3309,12 @@ function updateRoadmapAfterPhaseRemoval(
           'gi',
         ),
         (_match, prefix: string, num: string, suffix: string) =>
-          `${prefix}${decrementRoadmapPhaseToken(num, removedInt)}${suffix}`,
+          `${prefix}${stableIdentity(num) ? num : decrementRoadmapPhaseToken(num, removedInt)}${suffix}`,
       );
       content = content.replace(
         /(-\s*\[[ x]\]\s*.*?Phase\s+)(\d+)(\s*:|\s+)/gi,
         (_match, prefix: string, num: string, suffix: string) =>
-          `${prefix}${decrementRoadmapPhaseNumber(num, removedInt)}${suffix}`,
+          `${prefix}${stableIdentity(num) ? num : decrementRoadmapPhaseNumber(num, removedInt)}${suffix}`,
       );
       // ORDINAL-RENUMBER — CELL EDIT (not row-deletion) — migrated onto
       // updateTableCell (ADR-2143 §7, sibling of the deleteTableRow scoping
@@ -2463,7 +3378,7 @@ function updateRoadmapAfterPhaseRemoval(
             (row, index) => {
               if (processedOrdinalRows.has(index)) return false;
               const m = phaseCellShapeRe.exec(row['Phase'] ?? '');
-              if (!m) return false;
+              if (!m || stableIdentity(m[1])) return false;
               const num = parseInt(m[1], 10);
               // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
               if (!Number.isInteger(num) || num <= removedInt || isSentinelPhaseId(num)) return false;
@@ -2496,7 +3411,7 @@ function updateRoadmapAfterPhaseRemoval(
       content = content.replace(
         /(?<![0-9-])(\d{2})-(\d{2})(?=(?:(?:-[A-Za-z][A-Za-z0-9-]*)?-(?:PLAN|SUMMARY)\.md)|(?![0-9-]))/g,
         (_match, phaseNum: string, planNum: string) =>
-          `${decrementRoadmapPaddedPhaseNumber(phaseNum, removedInt)}-${planNum}`,
+          `${stableIdentity(phaseNum) ? phaseNum : decrementRoadmapPaddedPhaseNumber(phaseNum, removedInt)}-${planNum}`,
       );
       // #5007 (Phase 6 / ADR-4910): migrated the "Depends on" bold-field
       // decrement off two hand-rolled regexes — one per bold-placement
@@ -2532,7 +3447,7 @@ function updateRoadmapAfterPhaseRemoval(
           if (!depMatch) continue;
           const [wholeMatch, prefix, num] = depMatch;
           const newValue =
-            `${prefix}${decrementRoadmapPhaseToken(num, removedInt)}` + currentRead.value.slice(wholeMatch.length);
+            `${prefix}${stableIdentity(num) ? num : decrementRoadmapPhaseToken(num, removedInt)}` + currentRead.value.slice(wholeMatch.length);
           if (newValue === currentRead.value) continue;
           const staged = setFieldValue(dependsOnDoc, fieldId, newValue);
           if (staged.ok) dependsOnDoc = staged.value;
@@ -2587,6 +3502,1652 @@ function insertStateBodyFieldAtTop(content: string, fieldLine: string): string {
   return fieldLine + (firstNewline > 0 && content[firstNewline - 1] === '\r' ? '\r\n' : '\n') + content;
 }
 
+function renameBracketArtifactFiles(
+  phaseDir: string,
+  oldId: { project: string; milestone: string; phase: string; subphase?: string },
+  newId: { project: string; milestone: string; phase: string; subphase?: string },
+  renamedFiles: { from: string; to: string }[],
+  renamedFileCollisions: { from: string; to: string; displaced_to: string | null }[],
+): void {
+  const oldToken = bracketArtifactToken(oldId);
+  const newToken = bracketArtifactToken(newId);
+  for (const file of fs.readdirSync(phaseDir)) {
+    if (!file.startsWith(oldToken) || !/^(?:[-.]|$)/.test(file.slice(oldToken.length))) continue;
+    const newFileName = newToken + file.slice(oldToken.length);
+    const source = path.join(phaseDir, file);
+    const destination = path.join(phaseDir, newFileName);
+    if (fs.existsSync(destination)) {
+      const displaced = findOrphanedDisplacementName(phaseDir, newFileName);
+      if (!displaced) {
+        renamedFileCollisions.push({ from: file, to: newFileName, displaced_to: null });
+        continue;
+      }
+      retryRenameSync(destination, path.join(phaseDir, displaced));
+      renamedFileCollisions.push({ from: file, to: newFileName, displaced_to: displaced });
+    }
+    retryRenameSync(source, destination);
+    renamedFiles.push({ from: file, to: newFileName });
+  }
+}
+
+type BracketRoadmapPhaseId = ReturnType<typeof parsePhaseId>;
+type BracketRenumberMapping = { oldId: BracketRoadmapPhaseId; newId: BracketRoadmapPhaseId };
+
+/**
+ * #4304: the ONE identity mapping shared by the disk rename
+ * (renameBracketPhases, below) and the ROADMAP rewrite
+ * (updateRoadmapAfterBracketPhaseRemoval) — disk and ROADMAP can never
+ * disagree because both consume this same computation instead of each
+ * deriving its own. Identities are collected from the same directory scan
+ * renameBracketPhases uses to find rename candidates, unioned with every
+ * heading/checklist/progress line inside the active milestone's own ranges
+ * (primary + Phase Details): a phase can exist in ROADMAP with no directory
+ * yet, or on disk with no matching ROADMAP line, and either source alone
+ * can miss a decimal sub-phase identity. Both sources are canonical bracket
+ * spellings only; cmdPhaseRemove refuses before any mutation while a legacy
+ * spelling resolves to an identity this mapping deletes, moves, or lands on
+ * (legacySpellingsEntangledWithBracketRemoval). Integer removal maps every phase
+ * N > removed to N-1 (a sub-phase's own number is unchanged); sub-phase
+ * removal maps every sub-phase S > removed within the target phase to S-1.
+ * The result is sorted ascending by phase, then subphase (a bare phase before
+ * its own sub-phases), so applying every entry to the same line in sequence
+ * never re-matches a value an earlier entry just wrote: each entry's new
+ * value is one below its old value, and every entry that could still hold
+ * that value as its old value has already run. Bare and sub-phase entries
+ * are independent of each other because the rewriters never match a bare
+ * id inside a longer sub-phase id (`03` inside `03.01`).
+ */
+function computeBracketRenumberMapping(
+  phasesDir: string,
+  roadmapContent: string,
+  ranges: ReturnType<typeof currentMilestoneRawRanges>,
+  context: BracketWriteContext,
+  removedInt: number,
+  removedSubphase: number | undefined,
+): BracketRenumberMapping[] {
+  const identities = new Map<string, { phase: number; subphase?: number }>();
+  const record = (phase: number, subphase?: number): void => {
+    identities.set(`${phase}.${subphase ?? ''}`, { phase, subphase });
+  };
+
+  for (const { id } of bracketIdsInContext(phasesDir, context)) {
+    record(Number(id.phase), id.subphase === undefined ? undefined : Number(id.subphase));
+  }
+  const historicalLineStarts = archivedOrClosedMilestoneLineStarts(roadmapContent);
+  const fencedLineNumbers = fencedRoadmapLineNumbers(roadmapContent);
+  for (const line of splitRoadmapLineRecords(roadmapContent)) {
+    if (!lineStartsInActiveMilestone(line.start, ranges)) continue;
+    if (historicalLineStarts.has(line.start) || fencedLineNumbers.has(line.lineNumber)) continue;
+    const { id } = classifyBracketOwnedLine(line.text);
+    if (!id || id.project !== context.project || id.milestone !== context.milestone) continue;
+    record(Number(id.phase), id.subphase === undefined ? undefined : Number(id.subphase));
+  }
+
+  const filtered = [...identities.values()].filter(({ phase, subphase }) => {
+    if (removedSubphase !== undefined) {
+      return phase === removedInt && subphase !== undefined && subphase > removedSubphase;
+    }
+    return phase > removedInt && !isSentinelPhaseId(phase);
+  });
+
+  filtered.sort((a, b) => (a.phase - b.phase) || ((a.subphase ?? 0) - (b.subphase ?? 0)));
+
+  return filtered.map(({ phase, subphase }) => ({
+    oldId: bracketPhaseId(context, phase, subphase),
+    newId: removedSubphase !== undefined
+      ? bracketPhaseId(context, phase, (subphase as number) - 1)
+      : bracketPhaseId(context, phase - 1, subphase),
+  }));
+}
+
+/**
+ * CommonMark fence exclusion shared by bracket removal's inventory and
+ * pre-mutation ownership guard. A fenced heading/checklist is documentation,
+ * never evidence about the live phase tree. Unclosed fences own through EOF.
+ */
+function fencedRoadmapLineNumbers(content: string): Set<number> {
+  const fenced = new Set<number>();
+  const rawLines = content.split('\n');
+  for (const block of scanFencedBlocks(rawLines)) {
+    const lastIndex = block.closeLineIdx === -1 ? rawLines.length - 1 : block.closeLineIdx;
+    for (let index = block.openLineIdx; index <= lastIndex; index++) {
+      fenced.add(index + 1);
+    }
+  }
+  return fenced;
+}
+
+type RoadmapDetailsTag = {
+  offset: number;
+  end: number;
+  lineStart: number;
+  closing: boolean;
+  depthBefore: number;
+  depthAfter: number;
+};
+
+type RoadmapDetailsBlock = {
+  start: number;
+  end: number;
+  startLine: number;
+  endLine: number;
+  text: string;
+};
+
+/**
+ * #4304: single fence-aware details-container tracker for bracket writers.
+ * Every real tag carries its nesting depth before and after the tag, and every
+ * matched block spans its own opening through the corresponding close. A
+ * nested close therefore cannot terminate its enclosing block. Unclosed
+ * blocks still contribute depth to the tag stream so deletion stays bounded.
+ */
+function trackRoadmapDetails(content: string): {
+  tags: RoadmapDetailsTag[];
+  blocks: RoadmapDetailsBlock[];
+} {
+  const lines = splitRoadmapLineRecords(content);
+  const fencedLineNumbers = fencedRoadmapLineNumbers(content);
+  const tags: RoadmapDetailsTag[] = [];
+  const blocks: RoadmapDetailsBlock[] = [];
+  const stack: RoadmapDetailsTag[] = [];
+  const detailsTagRe = /<\/?details\b[^>]*>/gi;
+  let lineIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = detailsTagRe.exec(content)) !== null) {
+    while (lineIndex + 1 < lines.length && lines[lineIndex + 1].start <= match.index) lineIndex += 1;
+    const line = lines[lineIndex];
+    if (!line || fencedLineNumbers.has(line.lineNumber)) continue;
+
+    const closing = /^<\/details\b/i.test(match[0]);
+    const depthBefore = stack.length;
+    let opening: RoadmapDetailsTag | undefined;
+    if (closing) opening = stack.pop();
+    const tag: RoadmapDetailsTag = {
+      offset: match.index,
+      end: match.index + match[0].length,
+      lineStart: line.start,
+      closing,
+      depthBefore,
+      depthAfter: stack.length + (closing ? 0 : 1),
+    };
+    if (!closing) stack.push(tag);
+    tags.push(tag);
+
+    if (opening) {
+      blocks.push({
+        start: opening.offset,
+        end: tag.end,
+        startLine: opening.lineStart,
+        endLine: tag.lineStart,
+        text: content.slice(opening.offset, tag.end),
+      });
+    }
+  }
+  return { tags, blocks };
+}
+
+/**
+ * #4304: does the bracket phase about to be removed (an
+ * INTEGER phase, never a subphase itself — `phase remove NN.SS` is a
+ * different, unaffected path) still have its own sub-phases?
+ * `computeBracketRenumberMapping`'s own filter only ever maps
+ * `phase > removedInt` — the removed phase's OWN sub-phases (`phase ===
+ * removedInt`) are never mapped, deleted, or reported — so removing an
+ * integer phase that still has sub-phases left them orphaned on disk and
+ * in ROADMAP while the NEXT phase's sub-phases renumbered onto the SAME
+ * identities, manufacturing duplicates. Scans the two sources
+ * computeBracketRenumberMapping unions (the canonical directory scan, and
+ * every heading/checklist/progress line outside CommonMark fences and inside
+ * the active milestone's own ranges), plus the legacy-spelled child
+ * directories the active reader resolves, which the mapping never
+ * inventories. A child spelled either way refuses here; a legacy spelling of
+ * any other identity the removal moves is refused by
+ * legacySpellingsEntangledWithBracketRemoval.
+ */
+function bracketPhaseOwnSubphases(
+  phasesDir: string,
+  roadmapContent: string,
+  ranges: ReturnType<typeof currentMilestoneRawRanges>,
+  context: BracketWriteContext,
+  targetInt: number,
+): BracketRoadmapPhaseId[] {
+  const bySubphase = new Map<number, BracketRoadmapPhaseId>();
+  const record = (phase: number, subphase?: number): void => {
+    if (phase === targetInt && subphase !== undefined) {
+      bySubphase.set(subphase, bracketPhaseId(context, phase, subphase));
+    }
+  };
+  for (const { id } of bracketIdsInContext(phasesDir, context)) {
+    record(Number(id.phase), id.subphase === undefined ? undefined : Number(id.subphase));
+  }
+  // #4304: bracketIdsInContext skips names outside the
+  // canonical bracket grammar, but the reader also resolves migration-window
+  // legacy children such as `CK-02.1-child`, and the allocator already
+  // reserves them (readerResolvableBracketDirectoryPhaseNumber). Inventory
+  // that same universe the same way: take each directory's own key and keep
+  // a sub-phase of the target only when the active bracket reader resolves
+  // that directory for that key. `record` dedupes canonical children.
+  for (const dir of readSubdirectories(phasesDir, true)) {
+    const [phasePart, subphasePart, ...rest] = phaseKeyFromDir(dir, 'bracket').split('.');
+    if (rest.length > 0 || subphasePart === undefined) continue;
+    if (!/^\d+$/.test(phasePart) || !/^\d+$/.test(subphasePart)) continue;
+    if (Number(phasePart) !== targetInt) continue;
+    const key = `${phasePart}.${subphasePart}`;
+    if (!matchPhaseDirs([dir], key, 'bracket', context).matches.includes(dir)) continue;
+    record(targetInt, Number(subphasePart));
+  }
+  const roadmapLines = splitRoadmapLineRecords(roadmapContent);
+  const fencedLineNumbers = fencedRoadmapLineNumbers(roadmapContent);
+  const historicalLineStarts = archivedOrClosedMilestoneLineStarts(roadmapContent);
+  for (const line of roadmapLines) {
+    if (!lineStartsInActiveMilestone(line.start, ranges)) continue;
+    if (fencedLineNumbers.has(line.lineNumber) || historicalLineStarts.has(line.start)) continue;
+    const { id } = classifyBracketOwnedLine(line.text);
+    if (!id || id.project !== context.project || id.milestone !== context.milestone) continue;
+    record(Number(id.phase), id.subphase === undefined ? undefined : Number(id.subphase));
+  }
+  return [...bySubphase.keys()].sort((a, b) => a - b).map((s) => bySubphase.get(s)!);
+}
+
+/**
+ * #4304: identify ROADMAP lines owned by historical milestone sections.
+ * A `<details>` block is historical only when the roadmap reader's own
+ * closed-summary classifier says it is; an active collapsed phase list stays
+ * live. Outside details, a reader-recognized CLOSED/ARCHIVED/SHIPPED milestone
+ * heading owns the section through the next reader-recognized milestone
+ * heading at the same or shallower level. Headings come from tokenizeHeadings,
+ * so fenced examples are neither historical markers nor section resets.
+ * Recognition is imported from the window locator's milestone-vs-phase
+ * grammar before the marker predicate is applied, so an ordinary phase title
+ * containing FAILED or ✅ never opens or resets a historical section.
+ *
+ * Details membership comes from the shared fence-aware depth tracker, so every
+ * line remains archived while any enclosing details block is a closed
+ * milestone archive. This classifier is consumed by both the active-window
+ * safety guard and bracket removal's rewrite pass. Historical lines are
+ * evidence of neither an active-window mismatch nor a reference that removal
+ * may rewrite or delete.
+ */
+function archivedOrClosedMilestoneLineStarts(content: string): Set<number> {
+  const historical = new Set<number>();
+  const headingsByOffset = new Map(tokenizeHeadings(content).map((heading) => [heading.offset, heading]));
+  const fencedLineNumbers = fencedRoadmapLineNumbers(content);
+  const lines = splitRoadmapLineRecords(content);
+  const details = trackRoadmapDetails(content);
+  const historicalDetailsLineStarts = new Set<number>();
+  for (const block of details.blocks) {
+    if (!isClosedMilestoneDetails(block.text)) continue;
+    for (const line of lines) {
+      if (line.start >= block.startLine && line.start <= block.endLine) {
+        historicalDetailsLineStarts.add(line.start);
+      }
+    }
+  }
+  const detailsTagsByLine = new Map<number, RoadmapDetailsTag[]>();
+  for (const tag of details.tags) {
+    const lineTags = detailsTagsByLine.get(tag.lineStart) ?? [];
+    lineTags.push(tag);
+    detailsTagsByLine.set(tag.lineStart, lineTags);
+  }
+  let detailsDepth = 0;
+  let closedHeadingLevel = 0;
+  for (const line of lines) {
+    const fenced = fencedLineNumbers.has(line.lineNumber);
+    const lineTags = detailsTagsByLine.get(line.start) ?? [];
+    const insideDetails = detailsDepth > 0 || lineTags.some((tag) => !tag.closing);
+    if (historicalDetailsLineStarts.has(line.start) || closedHeadingLevel > 0) historical.add(line.start);
+    if (lineTags.length > 0) detailsDepth = lineTags[lineTags.length - 1].depthAfter;
+    if (insideDetails) {
+      continue;
+    }
+    if (fenced) {
+      continue;
+    }
+    const heading = headingsByOffset.get(line.start);
+    if (heading) {
+      const level = heading.level;
+      const milestoneHeading = isRecognizedMilestoneHeading(heading.text, level);
+      if (milestoneHeading && closedHeadingLevel && level <= closedHeadingLevel) closedHeadingLevel = 0;
+      if (!closedHeadingLevel && milestoneHeading && isClosedMilestoneHeading(heading.text)) {
+        closedHeadingLevel = level;
+      }
+    }
+    if (closedHeadingLevel > 0) historical.add(line.start);
+  }
+  return historical;
+}
+
+/**
+ * #4304: a pre-mutation SAFETY CHECK, not a fix to the read
+ * side's own window selection (mislocating the active window is PR-6 /
+ * #4751 territory — this function does not touch that). When the read side
+ * mislocates the active milestone window — a non-closed heading carrying
+ * the active version token sits BEFORE the real milestone heading ("##
+ * Goals for v2.0"), a document-level Progress heading placed before the
+ * milestone heading, or no milestone heading exists at all — the checklist/
+ * heading rewrite loop in `updateRoadmapAfterBracketPhaseRemoval` never
+ * reaches the target's REAL heading/checklist lines, because they sit
+ * outside `ranges`. Nothing downstream of that silently-empty rewrite stops
+ * the destructive directory delete/rename that already ran by the time the
+ * ROADMAP rewrite would have reported the mismatch, so the command "succeeds"
+ * with an empty report while the target's heading and checklist survive
+ * beside the sibling renumbered onto its old identity.
+ *
+ * Scans the WHOLE document outside CommonMark fences (not `ranges` — the
+ * located window is exactly
+ * what is in question) for the target's own heading/checklist lines via the
+ * SAME classifier (`classifyBracketOwnedLine`) the rewrite loop uses. If at
+ * least one is found and NONE of them fall inside the located `ranges`
+ * (primary or details) — including when `ranges` is null, i.e. no milestone
+ * window was located at all — the target is misplaced relative to what the
+ * read side thinks is active, and the caller must refuse before touching
+ * disk. A target correctly inside `ranges` (the overwhelmingly common case)
+ * returns null immediately; this never widens or narrows behavior for a
+ * correctly-located window.
+ */
+function bracketOwnedLineOutsideActiveWindow(
+  content: string,
+  targetId: BracketRoadmapPhaseId,
+  ranges: ReturnType<typeof currentMilestoneRawRanges>,
+): { outside: { lineNumber: number; text: string } | null; hasLiveTarget: boolean } {
+  // Heading deletion (`deleteSection`, scoped to `preDeleteRanges`) and
+  // checklist-row deletion (the per-line loop, gated on `active`) are two
+  // INDEPENDENT scoped operations in `updateRoadmapAfterBracketPhaseRemoval`
+  // — a degenerate window can legitimately contain one kind of owned line
+  // while missing the other (with no milestone heading, the version-less
+  // bracket fallback selects the first PHASE heading as if it were the milestone heading, so
+  // the resulting window happens to span every later phase HEADING to EOF
+  // while the checklist bullets — which sit ABOVE that heading — are still
+  // entirely outside it). Finding the heading safely inside must never mask
+  // a checklist row that is not, or vice versa: track each kind separately.
+  let headingInside = false;
+  let checklistInside = false;
+  let firstOutsideHeading: { lineNumber: number; text: string } | null = null;
+  let firstOutsideChecklist: { lineNumber: number; text: string } | null = null;
+  // #4304: a line archived inside <details> or sitting under a CLOSED milestone
+  // heading (isClosedMilestoneHeading — the SAME predicate
+  // currentMilestoneRawRanges itself uses to skip a closed heading when
+  // selecting the active one) is a SHIPPED milestone's own line — never
+  // evidence the ACTIVE window is mislocated. Same-code point releases
+  // (milestoneToken folds v2.0/v2.1 to one bracket id) legitimately carry
+  // the same [CODE.MM] NN identity in both the shipped archive/section and
+  // the active phase's heading-only entry (exactly what `phase add` writes,
+  // with no checklist bullet of its own) — this never widens what counts as
+  // OUTSIDE, only narrows which OUTSIDE lines count as evidence.
+  const historicalLineStarts = archivedOrClosedMilestoneLineStarts(content);
+  const fencedLineNumbers = fencedRoadmapLineNumbers(content);
+  for (const line of splitRoadmapLineRecords(content)) {
+    if (fencedLineNumbers.has(line.lineNumber)) continue;
+    const owned = classifyBracketOwnedLine(line.text);
+    if (!owned.id || (owned.kind !== 'heading' && owned.kind !== 'checklist')) continue;
+    if (!sameBracketPhaseId(owned.id, targetId)) continue;
+    const insideActive = Boolean(
+      ranges
+      && ((line.start >= ranges.primary.start && line.start < ranges.primary.end)
+        || (ranges.details !== null
+          && line.start >= ranges.details.start && line.start < ranges.details.end)),
+    );
+    if (historicalLineStarts.has(line.start)) continue;
+    if (owned.kind === 'heading') {
+      if (insideActive) headingInside = true;
+      else if (!firstOutsideHeading) firstOutsideHeading = { lineNumber: line.lineNumber, text: line.text.trim() };
+    } else {
+      if (insideActive) checklistInside = true;
+      else if (!firstOutsideChecklist) firstOutsideChecklist = { lineNumber: line.lineNumber, text: line.text.trim() };
+    }
+  }
+  const outside = firstOutsideHeading && !headingInside ? firstOutsideHeading
+    : firstOutsideChecklist && !checklistInside ? firstOutsideChecklist : null;
+  return { outside, hasLiveTarget: headingInside || checklistInside };
+}
+
+type BracketRenameCandidate = {
+  item: { dir: string; id: BracketRoadmapPhaseId; slug: string };
+  newId: BracketRoadmapPhaseId;
+  newDirName: string;
+};
+
+function bracketRenameCandidates(
+  phasesDir: string,
+  context: BracketWriteContext,
+  mapping: BracketRenumberMapping[],
+): BracketRenameCandidate[] {
+  const mappingKey = (phase: unknown, subphase: unknown): string =>
+    `${Number(phase)}.${subphase === undefined ? '' : Number(subphase)}`;
+  const byKey = new Map<string, BracketRoadmapPhaseId>();
+  for (const { oldId, newId } of mapping) byKey.set(mappingKey(oldId.phase, oldId.subphase), newId);
+
+  return bracketIdsInContext(phasesDir, context)
+    .filter(({ id }) => byKey.has(mappingKey(id.phase, id.subphase)))
+    .sort((a, b) => {
+      const phaseDelta = Number(a.id.phase) - Number(b.id.phase);
+      return phaseDelta !== 0
+        ? phaseDelta
+        : Number(a.id.subphase ?? 0) - Number(b.id.subphase ?? 0);
+    })
+    .map((item) => {
+      const newId = byKey.get(mappingKey(item.id.phase, item.id.subphase))!;
+      return { item, newId, newDirName: toDir(newId, item.slug) };
+    });
+}
+
+function assertBracketRenameDestinationsSafe(
+  phasesDir: string,
+  context: BracketWriteContext,
+  mapping: BracketRenumberMapping[],
+  targetDir: string | null,
+): void {
+  const occupied = new Set(readSubdirectories(phasesDir));
+  if (targetDir !== null) occupied.delete(targetDir);
+  for (const { item, newDirName } of bracketRenameCandidates(phasesDir, context, mapping)) {
+    // Simulate the same ascending sequence the rename loop will apply. A
+    // destination is free only after its target or earlier source vacates it.
+    assertPhaseDirectoryDestinationSafe(phasesDir, newDirName, 'renumber into', occupied);
+    occupied.delete(item.dir);
+    occupied.add(newDirName);
+  }
+}
+
+function renameBracketPhases(
+  phasesDir: string,
+  context: BracketWriteContext,
+  mapping: BracketRenumberMapping[],
+): {
+  renamedDirs: { from: string; to: string }[];
+  renamedFiles: { from: string; to: string }[];
+  renamedFileCollisions: { from: string; to: string; displaced_to: string | null }[];
+} {
+  const renamedDirs: { from: string; to: string }[] = [];
+  const renamedFiles: { from: string; to: string }[] = [];
+  const renamedFileCollisions: { from: string; to: string; displaced_to: string | null }[] = [];
+
+  for (const { item, newId, newDirName } of bracketRenameCandidates(phasesDir, context, mapping)) {
+    // Recheck immediately before the rename as well as cmdPhaseRemove's
+    // pre-mutation pass, closing the validation-to-use gap within this loop.
+    assertPhaseDirectoryDestinationSafe(phasesDir, newDirName, 'renumber into');
+    retryRenameSync(path.join(phasesDir, item.dir), path.join(phasesDir, newDirName));
+    renamedDirs.push({ from: item.dir, to: newDirName });
+    renameBracketArtifactFiles(
+      path.join(phasesDir, newDirName),
+      item.id,
+      newId,
+      renamedFiles,
+      renamedFileCollisions,
+    );
+  }
+
+  return { renamedDirs, renamedFiles, renamedFileCollisions };
+}
+
+interface BracketRoadmapRewriteResult {
+  updated: boolean;
+  roadmapLinesRewritten: number;
+  referencesLeftUntouched: number[];
+}
+
+interface RoadmapLineRecord {
+  text: string;
+  eol: string;
+  start: number;
+  lineNumber: number;
+}
+
+type BracketOwnedLine = {
+  kind: 'heading' | 'checklist' | 'progress' | 'other';
+  id: BracketRoadmapPhaseId | null;
+};
+
+const BRACKET_OWNED_PHASE_INTRO_SRC = phaseHeadingPrefixSrcFor(
+  PHASE_HEADING_BASELINE.LABEL_ONLY,
+  'bracket',
+  true,
+);
+const BRACKET_OWNED_PHASE_TOKEN_CAPTURE_SRC = `(${PHASE_NUMBER_TOKEN_SOURCE})`;
+const BRACKET_OWNED_TAG_SRC = '(?:[ \\t]*\\([^)\\r\\n]{0,200}\\))?';
+// #4304: every reader compiles BRACKET_OWNED_PHASE_INTRO_SRC's
+// own source (phaseHeadingPrefixSrcFor's bracket alternative) with the `i`
+// flag — `BRACKET_PROJECT_CODE_SRC` is deliberately spelled `[A-Z]...` on the
+// understanding that recognition folds case at compile time, never in the
+// source. The owned-line expressions below compile it with that same flag;
+// compiled with no flags at all, `[ck.02] 02:`,
+// `[CK.02] phase 02:` and `[CK.02] PHASE 02:` (case variants the read
+// grammar and `phase insert`/`phase add` accept) would
+// never classify as owned lines here. Headings and progress cells still compile
+// this source locally; checklist rows route through parsePhaseChecklistLine,
+// the same semantic reader used by init manager.
+const BRACKET_HEADING_LINE_RE = new RegExp(
+  `^ {0,3}#{2,4}[ \\t]*${BRACKET_OWNED_PHASE_INTRO_SRC}`
+  + `${BRACKET_OWNED_PHASE_TOKEN_CAPTURE_SRC}${BRACKET_OWNED_TAG_SRC}[ \\t]*:`,
+  'i',
+);
+const BRACKET_CELL_ID_RE = new RegExp(
+  `^${BRACKET_OWNED_PHASE_INTRO_SRC}${BRACKET_OWNED_PHASE_TOKEN_CAPTURE_SRC}`
+  + `${BRACKET_OWNED_TAG_SRC}(?:[ \\t]*:|[ \\t]|$)`,
+  'i',
+);
+
+function splitRoadmapLineRecords(content: string): RoadmapLineRecord[] {
+  const records: RoadmapLineRecord[] = [];
+  const lineRe = /([^\r\n]*)(\r\n|\n|$)/g;
+  let match: RegExpExecArray | null;
+  let lineNumber = 1;
+  while ((match = lineRe.exec(content)) !== null) {
+    if (match[0] === '') break;
+    records.push({
+      text: match[1],
+      eol: match[2],
+      start: match.index,
+      lineNumber,
+    });
+    lineNumber += 1;
+  }
+  return records;
+}
+
+function phaseIdFromOwnedParts(
+  bracketId: string | undefined,
+  phaseNumber: string | undefined,
+): BracketRoadmapPhaseId | null {
+  if (!bracketId || !phaseNumber) return null;
+  try {
+    // #4304: parsePhaseId's own display-form regex requires an
+    // uppercase project code and checks canonicality by requiring the
+    // re-rendered id to be byte-equal to the input, so a lowercase capture
+    // from the case-insensitive owned-line regexes above (`[ck.02]
+    // 02:`) would throw here and classify as "not owned", the
+    // identity-recognition gap `foldBracketId`'s own doc comment in
+    // phase-id.cts warns about ("fold before any identity operation; never
+    // fold for display"). This is an identity operation.
+    //
+    // #4304: the captured NUMBER needs the exact same
+    // treatment. BRACKET_OWNED_PHASE_TOKEN_CAPTURE_SRC is deliberately
+    // TOLERANT (PHASE_NUMBER_TOKEN_SOURCE, the read side's own grammar) so it
+    // captures "2", "002", and "02.1" — the same non-canonical spellings
+    // `roadmap get-phase`/`analyze`/`validate`, `phase insert` and
+    // `phase add` treat as real phases, but parsePhaseId's
+    // canonicality check (render(parse(x)) === x) throws on every one of
+    // them, so without this step the line would classify as 'other' and its
+    // owning heading/checklist/progress row would never be recognized.
+    // Canonicalize through the SAME adapter the bare-token argument path
+    // uses (phase-id-display's `phaseToken`, per-segment pad2) BEFORE
+    // parsePhaseId, exactly as `canonicalizeBracketPhaseArgument` already
+    // does for a CLI argument. A token phaseToken cannot canonicalize (a
+    // legacy M-NN letter suffix) falls through unchanged, which still fails
+    // parsePhaseId's own grammar precisely as before — this only widens
+    // acceptance to spellings phaseToken itself accepts.
+    const canonicalNumber = phaseToken(phaseNumber) ?? phaseNumber;
+    return parsePhaseId(`[${foldBracketId(bracketId)}] ${canonicalNumber}`);
+  } catch {
+    return null;
+  }
+}
+
+function phaseIdFromOwnedLineMatch(match: RegExpExecArray | null): BracketRoadmapPhaseId | null {
+  return phaseIdFromOwnedParts(match?.[1], match?.[2]);
+}
+
+function classifyBracketOwnedLine(line: string): BracketOwnedLine {
+  const headingId = phaseIdFromOwnedLineMatch(BRACKET_HEADING_LINE_RE.exec(line));
+  if (headingId) return { kind: 'heading', id: headingId };
+
+  const checklist = parsePhaseChecklistLine(line, 'bracket');
+  const checklistId = phaseIdFromOwnedParts(checklist?.bracketId, checklist?.phaseToken);
+  if (checklistId) return { kind: 'checklist', id: checklistId };
+
+  if (/^[ \t]*\|/.test(line)) {
+    const firstCell = splitTableRow(line)[0]?.replace(/^\*\*(.*)\*\*$/, '$1') ?? '';
+    const progressId = phaseIdFromOwnedLineMatch(BRACKET_CELL_ID_RE.exec(firstCell));
+    if (progressId) return { kind: 'progress', id: progressId };
+  }
+
+  return { kind: 'other', id: null };
+}
+
+function sameBracketPhaseId(a: BracketRoadmapPhaseId, b: BracketRoadmapPhaseId): boolean {
+  return a.project === b.project
+    && a.milestone === b.milestone
+    && a.phase === b.phase
+    && a.subphase === b.subphase;
+}
+
+type LegacyRemovalTargetEvidence = {
+  directories: string[];
+  headings: string[];
+};
+
+/**
+ * A bracket removal may share the live tree with migration-window legacy
+ * spellings, but it must never mutate that legacy identity indirectly by
+ * renumbering later bracket phases onto it. This check covers a target that
+ * resolves only to legacy spellings; legacySpellingsEntangledWithBracketRemoval
+ * covers a legacy spelling of any other identity the removal moves. Resolve both
+ * directory and heading evidence before any write. `matchPhaseDirs` owns legacy directory selection;
+ * `BRACKET_HEADING_LINE_RE` owns the reader-tolerant heading grammar and its
+ * legacy `Phase N:` alternative. A real, non-historical bracket heading for the
+ * target makes this an ordinary bracket removal even when legacy siblings are
+ * also present.
+ */
+function legacyOnlyBracketRemovalTarget(
+  subdirs: string[],
+  roadmapContent: string,
+  targetPhase: string,
+  targetId: BracketRoadmapPhaseId,
+  hasBracketDirectory: boolean,
+): LegacyRemovalTargetEvidence | null {
+  const legacyNormalized = normalizePhaseName(targetPhase);
+  const legacyDirectories = matchPhaseDirs(subdirs, legacyNormalized).matches.filter((dir) => {
+    try {
+      parsePhaseId(dir);
+      return false;
+    } catch {
+      return true;
+    }
+  });
+
+  const historicalLineStarts = archivedOrClosedMilestoneLineStarts(roadmapContent);
+  const legacyHeadings: string[] = [];
+  let hasBracketHeading = false;
+  for (const heading of tokenizeHeadings(roadmapContent)) {
+    if (heading.level < 2 || heading.level > 4) continue;
+    const headingLine = '#'.repeat(heading.level) + ' ' + heading.text;
+    const owned = classifyBracketOwnedLine(headingLine);
+    if (owned.kind === 'heading' && owned.id) {
+      if (!historicalLineStarts.has(heading.offset) && sameBracketPhaseId(owned.id, targetId)) {
+        hasBracketHeading = true;
+      }
+      continue;
+    }
+
+    // The shared bracket selector includes the legacy `Phase N:` alternative.
+    // If classification did not yield a bracket id, capture that alternative's
+    // numeric token and compare it through the same writer canonicalizer.
+    const legacyMatch = BRACKET_HEADING_LINE_RE.exec(headingLine);
+    const canonicalNumber = legacyMatch?.[2] ? phaseToken(legacyMatch[2]) : null;
+    const targetNumber = targetId.subphase ? `${targetId.phase}.${targetId.subphase}` : targetId.phase;
+    if (canonicalNumber === targetNumber) legacyHeadings.push(headingLine);
+  }
+
+  if (hasBracketDirectory || hasBracketHeading) return null;
+  if (legacyDirectories.length === 0 && legacyHeadings.length === 0) return null;
+  return { directories: legacyDirectories, headings: legacyHeadings };
+}
+
+type EntangledLegacySpelling = {
+  kind: 'directory' | 'heading';
+  spelling: string;
+  id: BracketRoadmapPhaseId;
+};
+
+/**
+ * #4304: legacy spellings the active bracket reader resolves to an identity
+ * this removal deletes, renumbers, or renumbers onto. The removal renames only
+ * canonical bracket directories and rewrites only bracket-owned ROADMAP lines
+ * (the inventory computeBracketRenumberMapping unions), so such a spelling
+ * would keep its old number: orphaned, or read as whichever phase lands on
+ * that number. Integer removal moves whole phases, so a spelling counts when
+ * its phase number is the target's or any mapped phase's, old or new, which
+ * also covers a legacy sub-phase under a moving parent. Sub-phase removal
+ * compares full identities. A legacy phase outside that set keeps a number
+ * nothing claims after the removal, so it does not block it.
+ *
+ * Directories are inventoried the way the allocator and the removal guard for
+ * the target's own sub-phases do: each non-canonical directory's
+ * `phaseKeyFromDir` key, kept only when `matchPhaseDirs` resolves the directory
+ * for that key. Headings use legacyOnlyBracketRemovalTarget's recognition,
+ * limited to the active milestone's own non-historical lines.
+ */
+function legacySpellingsEntangledWithBracketRemoval(
+  phasesDir: string,
+  roadmapContent: string,
+  ranges: ReturnType<typeof currentMilestoneRawRanges>,
+  context: BracketWriteContext,
+  removedInt: number,
+  removedSubphase: number | undefined,
+  mapping: BracketRenumberMapping[],
+): EntangledLegacySpelling[] {
+  const identityKey = (phase: number, subphase?: number): string => `${phase}.${subphase ?? ''}`;
+  const movingPhases = new Set<number>([removedInt]);
+  const movingIdentities = new Set<string>([identityKey(removedInt, removedSubphase)]);
+  for (const { oldId, newId } of mapping) {
+    for (const id of [oldId, newId]) {
+      const subphase = id.subphase === undefined ? undefined : Number(id.subphase);
+      movingPhases.add(Number(id.phase));
+      movingIdentities.add(identityKey(Number(id.phase), subphase));
+    }
+  }
+  const entangled = (phase: number, subphase: number | undefined): boolean => (
+    removedSubphase === undefined
+      ? movingPhases.has(phase)
+      : subphase !== undefined && movingIdentities.has(identityKey(phase, subphase))
+  );
+  const numericIdentity = (token: string): { phase: number; subphase?: number } | null => {
+    const [phasePart, subphasePart, ...rest] = token.split('.');
+    if (rest.length > 0 || !/^\d+$/.test(phasePart)) return null;
+    if (subphasePart !== undefined && !/^\d+$/.test(subphasePart)) return null;
+    const phase = Number(phasePart);
+    if (isSentinelPhaseId(phase)) return null;
+    return subphasePart === undefined ? { phase } : { phase, subphase: Number(subphasePart) };
+  };
+
+  const found: EntangledLegacySpelling[] = [];
+  for (const dir of readSubdirectories(phasesDir, true)) {
+    try {
+      parsePhaseId(dir);
+      continue;
+    } catch {
+      // Not canonical bracket grammar: a migration-window legacy spelling.
+    }
+    const key = phaseKeyFromDir(dir, 'bracket');
+    const identity = numericIdentity(key);
+    if (!identity || !entangled(identity.phase, identity.subphase)) continue;
+    if (!matchPhaseDirs([dir], key, 'bracket', context).matches.includes(dir)) continue;
+    found.push({ kind: 'directory', spelling: dir, id: bracketPhaseId(context, identity.phase, identity.subphase) });
+  }
+
+  const historicalLineStarts = archivedOrClosedMilestoneLineStarts(roadmapContent);
+  for (const heading of tokenizeHeadings(roadmapContent)) {
+    if (heading.level < 2 || heading.level > 4) continue;
+    if (!lineStartsInActiveMilestone(heading.offset, ranges) || historicalLineStarts.has(heading.offset)) continue;
+    const headingLine = '#'.repeat(heading.level) + ' ' + heading.text;
+    if (classifyBracketOwnedLine(headingLine).id) continue;
+    const legacyMatch = BRACKET_HEADING_LINE_RE.exec(headingLine);
+    const canonicalNumber = legacyMatch?.[2] ? phaseToken(legacyMatch[2]) : null;
+    const identity = canonicalNumber ? numericIdentity(canonicalNumber) : null;
+    if (!identity || !entangled(identity.phase, identity.subphase)) continue;
+    found.push({ kind: 'heading', spelling: headingLine, id: bracketPhaseId(context, identity.phase, identity.subphase) });
+  }
+  return found;
+}
+
+/** Name a legacy spelling, the bracket identity it resolves to, and its bracket form. */
+function describeEntangledLegacySpelling({ kind, spelling, id }: EntangledLegacySpelling): string {
+  return kind === 'directory'
+    ? `directory ${JSON.stringify(spelling)} is ${renderPhaseId(id)} (bracket prefix ${JSON.stringify(bracketDirPrefix(id))})`
+    : `heading ${JSON.stringify(spelling)} is ${renderPhaseId(id)}`;
+}
+
+/**
+ * Classify a fence-excluded heading token through the roadmap reader's shared
+ * bracket-plus-legacy phase-entry predicate, then decide whether it names a
+ * phase other than the selected removal target. Bracket headings retain their
+ * full project+milestone identity; a bare numeric `Phase NN:` heading is
+ * compared in the active target context. A reader-recognized custom legacy id
+ * cannot equal a numeric bracket target and is therefore distinct.
+ */
+function isDistinctReaderPhaseHeading(
+  heading: ReturnType<typeof tokenizeHeadings>[number],
+  targetId: BracketRoadmapPhaseId,
+): boolean {
+  if (heading.level < 2 || heading.level > 4) return false;
+  if (!isPhaseEntryHeading(heading.text, 'bracket')) return false;
+
+  const headingLine = '#'.repeat(heading.level) + ' ' + heading.text;
+  const owned = classifyBracketOwnedLine(headingLine);
+  if (owned.kind === 'heading' && owned.id) return !sameBracketPhaseId(owned.id, targetId);
+
+  const numericMatch = BRACKET_HEADING_LINE_RE.exec(headingLine);
+  const canonicalNumber = numericMatch?.[2] ? phaseToken(numericMatch[2]) : null;
+  if (!canonicalNumber) return true;
+  const [phase, subphase] = canonicalNumber.split('.');
+  return phase !== targetId.phase || subphase !== targetId.subphase;
+}
+
+function dashBracketPhaseId(id: BracketRoadmapPhaseId): string {
+  return `${id.project}.${id.milestone}-${id.phase}${id.subphase ? `.${id.subphase}` : ''}`;
+}
+
+/** The `PP[.SS][-LL]` tail of a rendered bracket phase id — renderPhaseId minus its milestone-bracket prefix. */
+function bracketPhaseNumberSrc(id: BracketRoadmapPhaseId): string {
+  return renderPhaseId(id).slice(renderMilestoneId(id).length + 1);
+}
+
+function replaceQualifiedBracketReference(
+  line: string,
+  oldId: BracketRoadmapPhaseId,
+  newId: BracketRoadmapPhaseId,
+): string {
+  const boundary = 'A-Za-z0-9.-';
+  const newNumber = bracketPhaseNumberSrc(newId);
+  const oldDisplay = renderPhaseId(oldId);
+  const qualified = tokenizePhaseDependencyReferences(line, 'bracket')
+    .filter((token) => {
+      if (token.kind !== 'qualified' || token.token !== oldDisplay) return false;
+      const before = token.referenceStart === undefined ? '' : line[token.referenceStart - 1] ?? '';
+      const after = line[token.end] ?? '';
+      return !new RegExp(`[${boundary}]`).test(before) && !new RegExp(`[${boundary}]`).test(after);
+    })
+    .sort((a, b) => b.start - a.start);
+  let rewritten = line;
+  for (const token of qualified) {
+    rewritten = rewritten.slice(0, token.start) + newNumber + rewritten.slice(token.end);
+  }
+  const oldDash = dashBracketPhaseId(oldId);
+  const newDash = dashBracketPhaseId(newId);
+  return rewritten.replace(
+    new RegExp(`(?<![${boundary}])${escapeRegex(oldDash)}(?![${boundary}])`, 'g'),
+    () => newDash,
+  );
+}
+
+function replaceBareBracketArtifactReference(
+  line: string,
+  oldId: BracketRoadmapPhaseId,
+  newId: BracketRoadmapPhaseId,
+): string {
+  const oldToken = bracketArtifactToken(oldId);
+  const newToken = bracketArtifactToken(newId);
+  const filename = `${escapeRegex(oldToken)}-\\d{2}`
+    + '(?:-[A-Za-z][A-Za-z0-9-]*)?-(?:PLAN|SUMMARY)\\.md';
+  return line.replace(
+    new RegExp(`(?<![A-Za-z0-9_./-])${filename}(?![A-Za-z0-9_.-])`, 'g'),
+    (match) => newToken + match.slice(oldToken.length),
+  );
+}
+
+function lineStartsInActiveMilestone(
+  lineStart: number,
+  ranges: ReturnType<typeof currentMilestoneRawRanges>,
+): boolean {
+  if (!ranges) return false;
+  return (lineStart >= ranges.primary.start && lineStart < ranges.primary.end)
+    || Boolean(ranges.details && lineStart >= ranges.details.start && lineStart < ranges.details.end);
+}
+
+/**
+ * #4304: a NARROWER boundary than currentMilestoneRawRanges'
+ * own primary/details ranges. Those stop only at a RECOGNIZED bracket/
+ * version-bearing milestone heading, by design (the read path's own
+ * milestone-scanning use case treats an unrelated heading — a
+ * `## Requirements Traceability`, a `## Notes` — as staying inside the
+ * current milestone's content, not as a boundary). A pipe-table row has no
+ * "this is my milestone's own table" marker beyond ordinary heading
+ * nesting, so deciding whether a progress/table row belongs to THIS
+ * milestone needs the plain Markdown rule instead: stop at the next
+ * heading of any kind at or above the milestone heading's own level —
+ * the SAME rule deleteSection/collectSection already apply elsewhere.
+ */
+function bracketMilestoneOwnTableEnd(
+  content: string,
+  sectionStart: number,
+  headings: readonly HeadingToken[],
+): number {
+  const level = (content.slice(sectionStart).match(/^#{1,4}/) ?? ['#'])[0].length;
+  for (const h of headings) {
+    if (h.offset <= sectionStart) continue;
+    if (h.level <= level) return h.offset;
+  }
+  return content.length;
+}
+
+/**
+ * #4304: does `lineStart` fall inside the active milestone's
+ * OWN progress/table content — its primary or details section, bounded by
+ * `bracketMilestoneOwnTableEnd` rather than the wider currentMilestoneRawRanges
+ * end?
+ */
+function lineStartsInMilestoneOwnTable(
+  content: string,
+  lineStart: number,
+  ranges: ReturnType<typeof currentMilestoneRawRanges>,
+  headings: readonly HeadingToken[],
+): boolean {
+  if (!ranges) return false;
+  if (
+    lineStart >= ranges.primary.start
+    && lineStart < bracketMilestoneOwnTableEnd(content, ranges.primary.start, headings)
+  ) {
+    return true;
+  }
+  return Boolean(
+    ranges.details
+    && lineStart >= ranges.details.start
+    && lineStart < bracketMilestoneOwnTableEnd(content, ranges.details.start, headings),
+  );
+}
+
+// #4304: the ONE textual expression of "this heading is
+// titled Progress" — the title starts with the word "Progress", any
+// suffix admitted ("Progress", "Progress (v2.1)", "Progress — current"),
+// case-insensitive. `bracketProgressSectionRange` below already tolerated a
+// suffix at its own fixed level-2 anchor; `isProgressHeading` inside
+// `bracketOwnProgressSectionRanges` required an EXACT "progress" match, so
+// a suffixed OWN heading ("## Progress (v2.1)", "### Progress (v2.0)")
+// never engaged the own-section scope even though the document-first scope
+// already matched the same suffix. Both interpolate this one source now.
+const BRACKET_PROGRESS_HEADING_TITLE_SRC = 'Progress\\b';
+const BRACKET_PROGRESS_HEADING_TITLE_RE = new RegExp(`^${BRACKET_PROGRESS_HEADING_TITLE_SRC}`, 'i');
+
+/**
+ * #4304: the SAME `## Progress`-section scope legacy's
+ * updateRoadmapAfterPhaseRemoval already uses (#2012, src/phase.cts:2482-2500)
+ * — the first `## Progress` heading (case-insensitive) through the next
+ * `#`/`##` heading or EOF. Lets a DOCUMENT-LEVEL Progress table that sits
+ * textually outside the active milestone's own ranges (e.g. after a later
+ * milestone's own section, the existing "global Progress table" shape) stay
+ * in scope for the target row's own deletion, exactly as it already was.
+ */
+function bracketProgressSectionRange(content: string): { start: number; end: number } | null {
+  const historicalLineStarts = archivedOrClosedMilestoneLineStarts(content);
+  const headings = tokenizeHeadings(content);
+  const headingIndex = headings.findIndex(
+    (heading) => heading.level === 2
+      && BRACKET_PROGRESS_HEADING_TITLE_RE.test(heading.text.trim())
+      && !historicalLineStarts.has(heading.offset),
+  );
+  if (headingIndex === -1) return null;
+  const start = headings[headingIndex].offset;
+  const nextHeading = headings.slice(headingIndex + 1).find((heading) => heading.level <= 2);
+  return { start, end: nextHeading?.offset ?? content.length };
+}
+
+/**
+ * #4304: every distinct RECOGNIZED milestone
+ * heading in the document, one representative offset per VERSION (one
+ * carrying a version token — `listMilestoneHeadings`' own grammar, via the
+ * SAME selection rule, `selectMilestoneHeading`, `currentMilestoneRawRanges`
+ * already uses to pick "the" heading for a single version) PLUS one marker
+ * per version-LESS bracket milestone heading recognized by the window
+ * locator's own grammar (`isBracketMilestoneBoundary`,
+ * src/roadmap-parser.cts — the SAME predicate `bracketAwareMilestoneSection`
+ * uses to decide a candidate heading is a milestone boundary while walking
+ * to find where the ACTIVE milestone's own section ends).
+ *
+ * A version-less ADR-612 canonical milestone heading
+ * (`## [CK.02] Shipped ✅`, no `vX.Y` anywhere) is a marker because the
+ * window locator recognizes it as a milestone boundary when walking the
+ * document. Without it, a same-code shipped/active pair sharing no version
+ * token would leave the shipped milestone's own `## Progress` heading
+ * invisible to the sandwich test, and its own Complete row would be
+ * deleted as if the table were shared/global.
+ *
+ * Deliberately NOT merged into one "one representative per identity" pass:
+ * a shipped and active milestone commonly share the SAME bracket code
+ * (`milestoneToken` folds `v2.0`/`v2.1` alike) while remaining two SEPARATE
+ * heading positions that each open their own section — collapsing them by
+ * id would silently drop one of the two boundaries the sandwich test needs.
+ * Version-token headings keep their existing one-per-version selection
+ * (unaffected, since every such heading already carries the distinguishing
+ * signal); only headings the version grammar cannot see at all (no `vX.Y`
+ * anywhere on the line) fall through to the boundary-predicate scan, so a
+ * heading already represented by the version loop is never double-counted
+ * merely for also being bracket-shaped (its own "(Phase Details)"
+ * continuation heading carries the SAME version token and is excluded here
+ * exactly as it always was — `selectMilestoneHeading` picks only the first
+ * non-closed occurrence of that version, never the continuation).
+ * `content[h.offset] === '#'` mirrors `bracketFallbackHeadingMatches`'s own
+ * ATX-only guard (a `<summary>` line naming a milestone is never a heading).
+ * Sorted ascending. Used to decide which milestone (if any) a document-first
+ * `## Progress` heading sits immediately after, with nothing of its own kind
+ * in between.
+ */
+function bracketRecognizedMilestoneMarkers(content: string): number[] {
+  const headings = tokenizeHeadings(content);
+  const versions = new Set(listMilestoneHeadings(content).map((h: { version: string }) => h.version));
+  const markers: number[] = [];
+  for (const version of versions) {
+    const selected = selectMilestoneHeading(content, version);
+    if (selected?.index !== undefined) markers.push(selected.index);
+  }
+  for (const h of headings) {
+    if (h.level > 3 || content[h.offset] !== '#') continue;
+    // Already represented above: this heading carries a version token the
+    // first loop already enumerated (its own group's selected marker, or —
+    // for a same-version continuation like "(Phase Details)" — the OTHER
+    // occurrence `selectMilestoneHeading` picked instead). Mirrors
+    // `extractMilestoneHeadingName`'s own no-`expectedVersion` grammar
+    // (src/roadmap-parser.cts) literally rather than importing a private
+    // helper across the module boundary for one boolean test.
+    if (/v\d+(?:\.\d+)*(?:[-.][A-Za-z0-9]+)*/i.test(h.text)) continue;
+    // #4304: a "(Phase Details)" heading is always a CONTINUATION of
+    // whatever milestone opened before it (`currentMilestoneRawRanges`'s own
+    // `detailsMatch` grammar, src/roadmap-parser.cts:2288-2294), never a
+    // second, separate milestone marker in its own right — the version loop
+    // above already skips a VERSIONED continuation for exactly this reason
+    // (comment above); a version-LESS one (`## [CK.02] Current (Phase
+    // Details)`) fell through to this boundary-predicate scan uncaught,
+    // because `isBracketMilestoneBoundary` is called with `selectedBracketId`
+    // `null` here and so cannot recognize it as a continuation of its own
+    // milestone.
+    if (/\(Phase\s+Details\)/i.test(h.text)) continue;
+    if (!isBracketMilestoneBoundary(h.text, h.level, null)) continue;
+    markers.push(h.offset);
+  }
+  return Array.from(new Set(markers)).sort((a: number, b: number) => a - b);
+}
+
+/**
+ * #4304: does the DOCUMENT-FIRST
+ * `## Progress` heading `bracketProgressSectionRange` found belong to a
+ * DIFFERENT, non-active milestone's OWN dedicated section, rather than
+ * being a genuinely document-level/shared table?
+ *
+ * The answer "the active milestone has a Progress heading of its own, and
+ * this isn't it, so it must be someone else's" would over-claim: a
+ * genuinely global `## Progress` that lists every milestone's rows (before
+ * any milestone heading at all, or trailing after the LAST recognized
+ * milestone heading with nothing bounding it on the far side) is neither
+ * the active milestone's own nor any OTHER milestone's dedicated section.
+ *
+ * The rule asks a POSITIONAL question instead, over every recognized
+ * milestone heading in the document (`bracketRecognizedMilestoneMarkers`),
+ * not just the active one: is this Progress heading SANDWICHED strictly
+ * between two recognized milestone headings — i.e. does it immediately
+ * follow one specific milestone's own heading (nothing else of that kind in
+ * between) AND does some other recognized milestone heading follow it
+ * later in the document? Only then is it unambiguously that earlier
+ * milestone's own trailing section (a shipped milestone's own table, or the
+ * same-code two-versions shape). A Progress heading with NOTHING preceding it (top of document) or
+ * NOTHING following it (trailing after the last recognized milestone
+ * heading) is open, shared territory — never "elsewhere" — because a
+ * milestone's own dedicated section and a document-wide table that merely
+ * happens to sit after the last milestone's content are textually
+ * indistinguishable by position alone once nothing bounds the far side.
+ */
+function bracketProgressSectionOwnedByOtherMilestone(
+  content: string,
+  progressStart: number,
+  activeRanges: ReturnType<typeof currentMilestoneRawRanges>,
+  ownProgressSectionRanges: readonly { start: number; end: number }[],
+): boolean {
+  // Fast path: exactly one of the ACTIVE milestone's own recognized
+  // Progress-titled headings (any level) is never "elsewhere".
+  if (ownProgressSectionRanges.some((r) => r.start === progressStart)) return false;
+
+  // #4304: the positional question below applies only when the ACTIVE
+  // milestone owns a Progress heading of its own; only then can a DIFFERENT
+  // Progress heading be "someone else's". Without that precondition, a
+  // document whose ACTIVE milestone has no dedicated Progress heading of its
+  // own (the common single-shared-table layout: one global `## Progress`
+  // table, no per-milestone one) would have its shared table declared
+  // another milestone's the moment ANY version-bearing heading (a
+  // `## Backlog (v4.0 candidates)` line, a changelog entry) followed it in
+  // the document, because the positional scan alone cannot distinguish "this
+  // table is the NEXT milestone's own dedicated section" from "this table is
+  // shared and a later milestone heading simply comes after it in the file".
+  // With no own Progress heading at all, the active milestone has no OWN claim
+  // any Progress heading could be "instead of", so
+  // a shared table can never be misread as belonging to a different one.
+  if (ownProgressSectionRanges.length === 0) return false;
+
+  // #4304: drop any marker lying STRICTLY inside the ACTIVE milestone's
+  // own ranges — a heading inside the active's own window (a same-id prose
+  // sub-heading like "### [CK.02] Notes", admitted by the boundary-predicate
+  // scan above because it is bracket-shaped and version-less) never opens a
+  // DIFFERENT milestone's section; it is content the active milestone itself
+  // owns. A marker AT the range's own start (the active's own primary/details
+  // heading) is kept — that is the "sandwiched under the ACTIVE milestone's
+  // own heading" case just below, not an interior heading. Same-code SHIPPED
+  // headings are never inside the active's own ranges, so they stay markers.
+  const markers = bracketRecognizedMilestoneMarkers(content).filter((offset) => {
+    if (!activeRanges) return true;
+    const insidePrimary = offset > activeRanges.primary.start && offset < activeRanges.primary.end;
+    const insideDetails = activeRanges.details !== null
+      && offset > activeRanges.details.start && offset < activeRanges.details.end;
+    return !insidePrimary && !insideDetails;
+  });
+  let precedingIndex = -1;
+  for (let i = 0; i < markers.length; i++) {
+    if (markers[i] <= progressStart) precedingIndex = i;
+    else break;
+  }
+  // Nothing precedes it (top-of-document global table): not owned by anyone.
+  if (precedingIndex === -1) return false;
+
+  // Sandwiched under the ACTIVE milestone's own heading: not "elsewhere".
+  const precedingOffset = markers[precedingIndex];
+  if (activeRanges && precedingOffset === activeRanges.primary.start) return false;
+
+  // Owned by a DIFFERENT milestone only when something else recognized
+  // follows it — a trailing section after the LAST recognized milestone
+  // heading is open territory, never exclusively that last milestone's own.
+  return precedingIndex < markers.length - 1;
+}
+
+/**
+ * #4304: the active milestone's OWN heading
+ * titled "Progress" (`BRACKET_PROGRESS_HEADING_TITLE_RE` — any suffix, any
+ * level, case-insensitive), found ANYWHERE inside its primary or details
+ * ranges — regardless of what precedes it within those ranges.
+ * `bracketMilestoneOwnTableEnd`/`lineStartsInMilestoneOwnTable` above anchor
+ * ONLY at the milestone/details heading itself, so an intervening heading of
+ * level <= the milestone's own (a `## Notes` aside, or the milestone's OWN
+ * `## Progress` heading when a shipped sibling sharing the bracket code
+ * sorts its own `## Progress` first in the document) closed that "own
+ * table" window before ever reaching the table it was
+ * meant to include. This is ADDITIVE, never a replacement for it: the
+ * existing bare-table-directly-after-phase-headings scope still
+ * independently keeps an unrelated `## Requirements Traceability` table
+ * out of its deletion scope, because that heading is not titled "Progress".
+ *
+ * The exact-title check required "progress", so a suffixed
+ * title ("## Progress (v2.1)", "### Progress (v2.0)") never engaged this
+ * scope even though the document-first `bracketProgressSectionRange` scope
+ * already matched the same suffix — a same-code two-versions shipped/active
+ * pair each titling their own table "Progress (vX.Y)" left the ACTIVE
+ * milestone's own table unrecognized as its own.
+ *
+ * A second gap the same title-widening exposes: a LEVEL-2 own Progress
+ * heading whose title EMBEDS the active milestone's own version token
+ * ("## Progress (v2.1)", level 2, same level as the milestone heading
+ * itself) is exactly what `currentMilestoneRawRanges`' own section-end scan
+ * mistakes for a NEW milestone's heading (it stops at any heading matching
+ * `v\d+\.\d+|✅|📋|🚧`, not just a real milestone one) — ending `ranges`
+ * immediately BEFORE this heading, so it never falls inside
+ * `ranges.primary`/`.details` even once titled "Progress". A heading is
+ * never titled merely "Progress" AND is a different milestone's own
+ * section-opening heading at once, so a Progress-titled heading sitting
+ * EXACTLY at the wide range's own end boundary is still the active
+ * milestone's own — the range ended there only because this heading's own
+ * suffix looked like a marker, not because a real, different milestone
+ * heading intervened.
+ */
+function bracketOwnProgressSectionRanges(
+  content: string,
+  ranges: ReturnType<typeof currentMilestoneRawRanges>,
+  headings: readonly HeadingToken[],
+): { start: number; end: number }[] {
+  if (!ranges) return [];
+  const isProgressHeading = (h: HeadingToken): boolean => BRACKET_PROGRESS_HEADING_TITLE_RE.test(h.text.trim());
+  const withinActive = (offset: number): boolean =>
+    (offset >= ranges.primary.start && offset < ranges.primary.end)
+    || Boolean(ranges.details && offset >= ranges.details.start && offset < ranges.details.end)
+    || offset === ranges.primary.end
+    || Boolean(ranges.details && offset === ranges.details.end);
+  const out: { start: number; end: number }[] = [];
+  for (const h of headings) {
+    if (!isProgressHeading(h) || !withinActive(h.offset)) continue;
+    out.push({ start: h.offset, end: bracketMilestoneOwnTableEnd(content, h.offset, headings) });
+  }
+  return out;
+}
+
+// #4304: shared "tolerant" trailing boundary for the
+// reporting-only detection regexes below. `(?!\d|\.\d)` blocks extending
+// into more digits or a ".digit" continuation (so a bare identity never
+// falsely matches inside a longer number or a different decimal sibling),
+// but — unlike the rewrite functions' own boundary — permits a following
+// '.', '-', letter, or end of line, so a genuinely stale mention survives
+// detection even when it sits before sentence-final punctuation or is
+// embedded in a directory-name suffix the rewriter deliberately declines
+// to touch (detection must be allowed to find more than the rewriter is
+// safe to fix).
+const BRACKET_REPORT_TOLERANT_BOUNDARY_SRC = '(?!\\d|\\.\\d)';
+
+function bracketQualifiedMentionedInLine(line: string, id: BracketRoadmapPhaseId): boolean {
+  const targetDisplay = renderPhaseId(id);
+  if (tokenizePhaseDependencyReferences(line, 'bracket')
+    .some((token) => token.kind === 'qualified' && token.token === targetDisplay)) return true;
+  const dash = dashBracketPhaseId(id);
+  return new RegExp(`(?<![A-Za-z0-9.-])${escapeRegex(dash)}${BRACKET_REPORT_TOLERANT_BOUNDARY_SRC}`).test(line);
+}
+
+function bracketLegacyPhaseMentionedInLine(line: string, id: BracketRoadmapPhaseId): boolean {
+  const token = bracketArtifactToken(id);
+  return new RegExp(
+    // #4304: a bracket-QUALIFIED, labeled mention
+    // ("[CK.02] Phase 03") is handled completely by
+    // replaceQualifiedBracketReference now — it is never "the legacy bare
+    // 'Phase NN' spelling this detector exists for. Without the negative
+    // lookbehind, the token search matched INSIDE that qualified mention
+    // too (nothing distinguished "Phase 03" preceded by "[CK.02] " from a
+    // genuinely unqualified "Phase 03:" heading), so a correctly-renumbered
+    // labeled line was reported as a dangling reference to the OLD id it no
+    // longer contains.
+    `(?<!\\][ \\t]{0,10})\\bPhase[ \\t]+${escapeRegex(token)}${BRACKET_REPORT_TOLERANT_BOUNDARY_SRC}`,
+    'i',
+  ).test(line);
+}
+
+function bracketArtifactMentionedInLine(line: string, id: BracketRoadmapPhaseId): boolean {
+  const token = bracketArtifactToken(id);
+  const filename = `${escapeRegex(token)}-\\d{2}(?:-[A-Za-z][A-Za-z0-9-]*)?-(?:PLAN|SUMMARY)\\.md`;
+  return new RegExp(`(?<![A-Za-z0-9_./-])${filename}(?![A-Za-z0-9_.-])`).test(line);
+}
+
+/**
+ * #4304: computed from the ORIGINAL (pre-rewrite) line, never
+ * the persisted content: re-searching the PERSISTED text for a
+ * pre-renumber id produces false positives whenever two or more phases
+ * shift (a later phase's NEW value collides textually with an earlier
+ * phase's OLD value).
+ *
+ * The removed identity is a dangling reference by construction wherever it
+ * is mentioned — nothing ever rewrites a reference to a deleted phase — so
+ * every spelling is checked directly with the tolerant boundary. A
+ * renumbered (old -> new) identity is "left untouched" only if running the
+ * SAME rewrite this line would actually receive still leaves a mention of
+ * the old identity behind afterward: the qualified-reference and
+ * bare-artifact rewriters have their own, stricter boundaries (e.g. they
+ * decline to rewrite immediately before a sentence-final period, or a
+ * bare token embedded in a directory-path segment), so a mention can be
+ * real and still survive the rewrite. The legacy "Phase NN" spelling is
+ * never rewritten by any bracket rewriter, so it is always checked
+ * directly for a renumbered identity too.
+ */
+function lineContainsTrackedBracketIdentity(
+  originalLine: string,
+  removedId: BracketRoadmapPhaseId,
+  mapping: BracketRenumberMapping[],
+): boolean {
+  if (
+    bracketQualifiedMentionedInLine(originalLine, removedId)
+    || bracketLegacyPhaseMentionedInLine(originalLine, removedId)
+    || bracketArtifactMentionedInLine(originalLine, removedId)
+  ) {
+    return true;
+  }
+
+  for (const { oldId, newId } of mapping) {
+    if (bracketLegacyPhaseMentionedInLine(originalLine, oldId)) return true;
+    const afterQualified = replaceQualifiedBracketReference(originalLine, oldId, newId);
+    if (bracketQualifiedMentionedInLine(afterQualified, oldId)) return true;
+    const afterArtifact = replaceBareBracketArtifactReference(originalLine, oldId, newId);
+    if (bracketArtifactMentionedInLine(afterArtifact, oldId)) return true;
+  }
+  return false;
+}
+
+/**
+ * #4304: maximum deletion boundary for a selected bracket phase heading.
+ * The active milestone range is the outer bound. Inside it, an HTML details
+ * boundary wins sooner. The shared fence-aware depth tracker preserves the
+ * closing tag of the exact container that encloses the target, or the opening
+ * tag of a container that starts after an outside target. Nested details do
+ * not count until their own close has restored the target's original depth.
+ * The deletion extent also stops at the next distinct phase heading recognized
+ * by the reader, whatever its heading depth; ordinary deeper subheadings remain
+ * part of the target section.
+ */
+function bracketPhaseDeletionContainerBoundary(content: string, targetOffset: number): number | null {
+  const tags = trackRoadmapDetails(content).tags;
+  let targetDepth = 0;
+  for (const tag of tags) {
+    if (tag.offset >= targetOffset) break;
+    targetDepth = tag.depthAfter;
+  }
+  for (const tag of tags) {
+    if (tag.offset < targetOffset) continue;
+    if (targetDepth === 0 && !tag.closing) return tag.lineStart;
+    if (targetDepth > 0 && tag.closing && tag.depthBefore === targetDepth) return tag.lineStart;
+  }
+  return null;
+}
+
+interface BracketRoadmapRemovalPlan {
+  content: string;
+  roadmapLinesRewritten: number;
+  keptOriginalLines: { text: string; active: boolean }[];
+  survivingTargetRows: string[];
+}
+
+/**
+ * #4304: the pure ROADMAP rewrite for a bracket removal, computed from the
+ * content alone so `phase remove` can run it before any mutation and refuse
+ * on what it would leave behind. `survivingTargetRows` lists every live
+ * (unfenced, not historical) pipe-table row keyed by the removed identity
+ * that the rewrite keeps: a shared Progress table the scope rules cannot
+ * attribute, or a non-Progress table such as a phase-keyed traceability
+ * table. Keeping such a row leaves a dangling identity that the renumbered
+ * sibling then duplicates; deleting it could drop data the row carries.
+ */
+function planBracketRoadmapRemoval(
+  originalContent: string,
+  targetId: BracketRoadmapPhaseId,
+  mapping: BracketRenumberMapping[],
+  cwd: string,
+): BracketRoadmapRemovalPlan {
+  // #4304: scope the section deletion to the active
+  // milestone's own ranges (the SAME primary+details discovery the
+  // checklist-row deletion below already uses), computed from the
+  // content BEFORE deletion. Without this, deleteSection removes the
+  // FIRST matching heading in the whole document: a shipped milestone
+  // and the active one sharing the same bracket code (milestoneToken
+  // folds e.g. v2.0 and v2.1 to one [CK.02]) let the shipped section's
+  // own detail heading be deleted while the active one survives.
+  const preDeleteRanges = currentMilestoneRawRanges(originalContent, cwd, 'bracket');
+  // #4304: historical protection applies while SELECTING the section, not
+  // only during the later per-line rewrite. A closed details archive can
+  // sit inside the raw active-milestone range and carry the same folded
+  // bracket id as the live phase; choosing that heading first deletes
+  // history and leaves the live target behind.
+  const preDeleteHistoricalLineStarts = archivedOrClosedMilestoneLineStarts(originalContent);
+  const isTargetHeading = (heading: ReturnType<typeof tokenizeHeadings>[number]): boolean => {
+    // #4304: classify the heading through the SAME shared
+    // owned-line grammar (classifyBracketOwnedLine / BRACKET_HEADING_LINE_RE)
+    // the checklist/progress-row deletion below already uses, instead of
+    // a literal `startsWith(targetDisplay)`; that comparison only ever
+    // recognized the display spelling ("[CK.02] 02"), so the read-grammar-
+    // admitted labeled spelling ("[CK.02] Phase 02:", pinned at
+    // tests/adr-612-bracket-grammar.test.cjs:644) was never matched here
+    // and its detail section survived a "removal" that deleted every
+    // other owned line for the same identity.
+    if (heading.level < 2 || heading.level > 4) return false;
+    const headingLine = '#'.repeat(heading.level) + ' ' + heading.text;
+    const owned = classifyBracketOwnedLine(headingLine);
+    if (owned.kind !== 'heading' || !owned.id || !sameBracketPhaseId(owned.id, targetId)) {
+      return false;
+    }
+    if (preDeleteHistoricalLineStarts.has(heading.offset)) return false;
+    if (!preDeleteRanges) return true;
+    return (
+      (heading.offset >= preDeleteRanges.primary.start && heading.offset < preDeleteRanges.primary.end)
+      || Boolean(
+        preDeleteRanges.details
+        && heading.offset >= preDeleteRanges.details.start
+        && heading.offset < preDeleteRanges.details.end,
+      )
+    );
+  };
+  const selectedTargetHeading = tokenizeHeadings(originalContent).find(isTargetHeading);
+  let deletionEndOffset: number | undefined;
+  if (selectedTargetHeading) {
+    const nextDistinctPhaseHeading = tokenizeHeadings(originalContent).find(
+      (heading) => heading.offset > selectedTargetHeading.offset
+        && isDistinctReaderPhaseHeading(heading, targetId),
+    );
+    const containingRange = preDeleteRanges
+      ? [preDeleteRanges.primary, ...(preDeleteRanges.details ? [preDeleteRanges.details] : [])]
+        .find((range) => selectedTargetHeading.offset >= range.start && selectedTargetHeading.offset < range.end)
+      : null;
+    const containerBoundary = bracketPhaseDeletionContainerBoundary(
+      originalContent,
+      selectedTargetHeading.offset,
+    );
+    const historicalBoundary = [...preDeleteHistoricalLineStarts]
+      .filter((offset) => offset > selectedTargetHeading.offset)
+      .sort((a, b) => a - b)[0];
+    deletionEndOffset = Math.min(
+      containingRange?.end ?? originalContent.length,
+      containerBoundary ?? originalContent.length,
+      historicalBoundary ?? originalContent.length,
+      nextDistinctPhaseHeading?.offset ?? originalContent.length,
+    );
+  }
+  let content = deleteSection(originalContent, isTargetHeading, { endOffset: deletionEndOffset });
+  let roadmapLinesRewritten = content === originalContent ? 0 : 1;
+  const ranges = currentMilestoneRawRanges(content, cwd, 'bracket');
+  // #4304: progress/table-row deletion is
+  // scoped to the active milestone's OWN table content
+  // (bracketMilestoneOwnTableEnd, narrower than `ranges` itself, see its
+  // own doc comment) plus its own "Progress"-titled heading found ANYWHERE
+  // in its ranges (bracketOwnProgressSectionRanges, additive:
+  // covers a `## Notes` aside or a per-milestone `## Progress` the plain
+  // own-table-end closes over too early) plus a document-level
+  // `## Progress` section that is not itself owned by a DIFFERENT
+  // milestone (legacy's own #2012 scope, plus an ownership gate),
+  // never the whole document, so a same-identity row in another pipe table
+  // (a shipped milestone sharing the same bracket code, an unrelated
+  // Requirements Traceability table) is never deleted.
+  const headingsForOwnTable = tokenizeHeadings(content);
+  const progressSectionRange = bracketProgressSectionRange(content);
+  const ownProgressSectionRanges = bracketOwnProgressSectionRanges(content, ranges, headingsForOwnTable);
+  const progressSectionOwnedElsewhere = progressSectionRange
+    ? bracketProgressSectionOwnedByOtherMilestone(content, progressSectionRange.start, ranges, ownProgressSectionRanges)
+    : false;
+  const historicalLineStarts = archivedOrClosedMilestoneLineStarts(content);
+  const fencedLineNumbers = fencedRoadmapLineNumbers(content);
+  // A row inside a Progress-titled section that the ownership rule assigns
+  // to a different milestone is that milestone's own record: kept, and not
+  // a surviving row of the removed identity.
+  const progressSections = headingsForOwnTable
+    .filter((heading) => BRACKET_PROGRESS_HEADING_TITLE_RE.test(heading.text.trim()))
+    .map((heading) => ({
+      start: heading.offset,
+      end: bracketMilestoneOwnTableEnd(content, heading.offset, headingsForOwnTable),
+      ownedElsewhere: bracketProgressSectionOwnedByOtherMilestone(
+        content,
+        heading.offset,
+        ranges,
+        ownProgressSectionRanges,
+      ),
+    }));
+  const inProgressSectionOwnedByOtherMilestone = (lineStart: number): boolean => {
+    const enclosing = progressSections.filter((section) => lineStart >= section.start && lineStart < section.end);
+    return enclosing.length > 0 && enclosing[enclosing.length - 1].ownedElsewhere;
+  };
+
+  // A row is a Progress-table row only when the nearest heading above it is
+  // a Progress-titled heading, a phase heading (the bare table that follows
+  // the phase list), or the milestone or details heading that opens the
+  // window. Any other heading, at any level, opens a different table (a
+  // phase-keyed Requirements Traceability table), whose rows are never
+  // deleted: a row keyed by the removed identity there refuses the removal.
+  const windowAnchors = new Set<number>(
+    ranges ? [ranges.primary.start, ...(ranges.details ? [ranges.details.start] : [])] : [],
+  );
+  const nearestHeadingKeepsProgressTable = (lineStart: number): boolean => {
+    let nearest: HeadingToken | undefined;
+    for (const heading of headingsForOwnTable) {
+      if (heading.offset >= lineStart) break;
+      nearest = heading;
+    }
+    if (!nearest || windowAnchors.has(nearest.offset)) return true;
+    if (BRACKET_PROGRESS_HEADING_TITLE_RE.test(nearest.text.trim())) return true;
+    return classifyBracketOwnedLine('#'.repeat(nearest.level) + ' ' + nearest.text).kind === 'heading';
+  };
+
+  // #4304: the referencesLeftUntouched report is computed
+  // from each KEPT line's ORIGINAL (pre-rewrite) text, never the
+  // persisted (already-rewritten) content: re-searching persisted text
+  // for a pre-renumber id produces false positives whenever two or more
+  // phases shift (a later phase's NEW value collides textually with an
+  // earlier phase's OLD value). A line
+  // that gets DELETED here (the target's own owned heading/checklist/
+  // progress row) can never be "left untouched": it does not exist in
+  // the output at all, so only kept lines are considered.
+  const keptOriginalLines: { text: string; active: boolean }[] = [];
+  const survivingTargetRows: string[] = [];
+
+  const rewritten: string[] = [];
+  for (const line of splitRoadmapLineRecords(content)) {
+    const active = lineStartsInActiveMilestone(line.start, ranges);
+    const historical = historicalLineStarts.has(line.start);
+    const fenced = fencedLineNumbers.has(line.lineNumber);
+    if (fenced) {
+      rewritten.push(line.text + line.eol);
+      keptOriginalLines.push({ text: line.text, active: false });
+      continue;
+    }
+    const owned = classifyBracketOwnedLine(line.text);
+    const underProgressTableHeading = owned.kind === 'progress' && nearestHeadingKeepsProgressTable(line.start);
+    const inMilestoneOwnTable = underProgressTableHeading
+      && (lineStartsInMilestoneOwnTable(content, line.start, ranges, headingsForOwnTable)
+        || ownProgressSectionRanges.some((r) => line.start >= r.start && line.start < r.end));
+    const inProgressSection = underProgressTableHeading && Boolean(
+      progressSectionRange
+      && !progressSectionOwnedElsewhere
+      && line.start >= progressSectionRange.start
+      && line.start < progressSectionRange.end,
+    );
+    if (!historical
+      && owned.id
+      && sameBracketPhaseId(owned.id, targetId)
+      && ((active && owned.kind === 'checklist') || inMilestoneOwnTable || inProgressSection)) {
+      roadmapLinesRewritten += 1;
+      continue;
+    }
+    if (
+      !historical
+      && owned.kind === 'progress'
+      && owned.id
+      && sameBracketPhaseId(owned.id, targetId)
+      && !inProgressSectionOwnedByOtherMilestone(line.start)
+    ) {
+      survivingTargetRows.push(line.text);
+    }
+
+    let next = line.text;
+    if (!historical) {
+      for (const { oldId, newId } of mapping) {
+        next = replaceQualifiedBracketReference(next, oldId, newId);
+        if (active) next = replaceBareBracketArtifactReference(next, oldId, newId);
+      }
+    }
+    if (next !== line.text) roadmapLinesRewritten += 1;
+    rewritten.push(next + line.eol);
+    // A historical line can be physically inside the raw active milestone
+    // range (closed details nested below the live milestone heading). It is
+    // intentionally exempt from this mutation, so it is not an active
+    // dangling reference for the removal report either.
+    keptOriginalLines.push({ text: line.text, active: active && !historical });
+  }
+  content = rewritten.join('');
+  return { content, roadmapLinesRewritten, keptOriginalLines, survivingTargetRows };
+}
+
+/**
+ * Remove the active bracket phase and renumber its later identities. Qualified
+ * references are rewritten roadmap-wide, including global sections and other
+ * project-code milestone sections, except for lines inside archived details or
+ * closed milestone sections. Those historical lines are never rewritten or
+ * deleted. Bare artifact references remain limited to the active milestone.
+ */
+function updateRoadmapAfterBracketPhaseRemoval(
+  roadmapPath: string,
+  removedInt: number,
+  removedSubphase: number | undefined,
+  context: BracketWriteContext,
+  mapping: BracketRenumberMapping[],
+  cwd: string,
+): BracketRoadmapRewriteResult {
+  return withPlanningLock(cwd, () => {
+    const originalContent = fs.readFileSync(roadmapPath, 'utf-8');
+    const targetId = bracketPhaseId(context, removedInt, removedSubphase);
+    const { content, roadmapLinesRewritten, keptOriginalLines } = planBracketRoadmapRemoval(
+      originalContent,
+      targetId,
+      mapping,
+      cwd,
+    );
+
+    const bracketNormalization = { preserveFencedMarkdownStructure: true } as const;
+    platformWriteSync(roadmapPath, content, bracketNormalization);
+    // platformWriteSync's own markdown normalization (_normalizeMd) inserts
+    // blank lines around headings/fences/lists and collapses runs of 3+
+    // blank lines, so a KEPT line's position here can shift from its
+    // position in `keptOriginalLines`. Normalization only ever adds or
+    // collapses BLANK lines — it never reorders or edits a non-blank
+    // line's text — so the Nth non-blank kept (original) line always
+    // corresponds to the Nth non-blank persisted line; blank kept lines
+    // are skipped entirely since they can never contain a tracked identity.
+    const persistedContent = fs.readFileSync(roadmapPath, 'utf-8');
+    const persistedNonBlankLineNumbers = splitRoadmapLineRecords(persistedContent)
+      .filter((line) => line.text.trim() !== '')
+      .map((line) => line.lineNumber);
+
+    const referencesLeftUntouched: number[] = [];
+    let nonBlankIndex = 0;
+    for (const { text, active } of keptOriginalLines) {
+      if (text.trim() === '') continue;
+      const persistedLineNumber = persistedNonBlankLineNumbers[nonBlankIndex];
+      nonBlankIndex += 1;
+      if (!active || persistedLineNumber === undefined) continue;
+      if (lineContainsTrackedBracketIdentity(text, targetId, mapping)) {
+        referencesLeftUntouched.push(persistedLineNumber);
+      }
+    }
+    return {
+      updated: contentChangedAfterNormalize(roadmapPath, originalContent, content, bracketNormalization),
+      roadmapLinesRewritten,
+      referencesLeftUntouched,
+    };
+  });
+}
+
+/**
+ * #4304: phase ids the reader lists but the bracket grammar cannot represent
+ * (a letter suffix such as `02a`, or a three-level `02.01.01`) are invisible
+ * to the renumber mapping and the owned-line rewrite. Removing a phase at or
+ * below them would leave them on their old numbers beside renumbered
+ * siblings, so they are reported here, from the live (unfenced, not
+ * historical) lines of the active milestone, for the caller to refuse.
+ * An integer removal is affected by every such id whose leading number is
+ * at or above the removed one; a sub-phase removal by those sharing its
+ * leading number.
+ */
+function unrepresentableBracketIdsAffectedByRemoval(
+  content: string,
+  ranges: ReturnType<typeof currentMilestoneRawRanges>,
+  removedInt: number,
+  removedSubphase: number | undefined,
+): string[] {
+  if (!ranges) return [];
+  const historicalLineStarts = archivedOrClosedMilestoneLineStarts(content);
+  const fencedLineNumbers = fencedRoadmapLineNumbers(content);
+  const liveActive = splitRoadmapLineRecords(content)
+    .map((line) => (
+      lineStartsInActiveMilestone(line.start, ranges)
+      && !historicalLineStarts.has(line.start)
+      && !fencedLineNumbers.has(line.lineNumber)
+        ? line.text
+        : ''
+    ))
+    .join('\n');
+  const affected: string[] = [];
+  for (const id of scanMilestonePhaseIds(liveActive, 'bracket')) {
+    // The owned-line grammar canonicalizes each numeric segment through
+    // `phaseToken` (`002` reads as `02`), so representable means one or two
+    // numeric segments that each canonicalize.
+    const segments = String(id).split('.');
+    if (segments.length <= 2 && segments.every((segment) => /^\d+$/.test(segment) && phaseToken(segment) !== null)) {
+      continue;
+    }
+    const leading = /^(\d+)/.exec(String(id));
+    if (!leading) continue;
+    const phase = Number(leading[1]);
+    if (removedSubphase === undefined ? phase >= removedInt : phase === removedInt) affected.push(String(id));
+  }
+  return affected;
+}
+
+/**
+ * #4304: `phase remove` adjusts only STATE.md's phase counts. When STATE.md's
+ * current phase (the canonical frontmatter, `Current Phase`, scoped prose
+ * ladder) is the removed identity or one the removal renumbers, every
+ * current-phase field would keep naming the old identity, which afterwards
+ * belongs to a different phase. Returns that current phase for the caller to
+ * refuse on, or null.
+ */
+function stateCurrentPhaseAffectedByBracketRemoval(
+  cwd: string,
+  targetId: BracketRoadmapPhaseId,
+  mapping: BracketRenumberMapping[],
+): string | null {
+  const statePath = path.join(planningDir(cwd), 'STATE.md');
+  if (!fs.existsSync(statePath)) return null;
+  const rawState = fs.readFileSync(statePath, 'utf-8');
+  const fm = frontmatterMod.extractFrontmatter(rawState, statePath) as Record<string, unknown>;
+  const current = stateMod.resolveCurrentPhaseId(fm, frontmatterMod.stripFrontmatter(rawState));
+  if (current === null || current === undefined) return null;
+  let currentToken = String(current).trim();
+  if (currentToken.includes('-')) {
+    try {
+      currentToken = renderPhaseId(parsePhaseId(currentToken));
+    } catch {
+      return null;
+    }
+  }
+  const match = new RegExp(
+    `^(?:\\[(${phaseIdMod.BRACKET_PROJECT_CODE_SRC})\\.(\\d+)\\][ \\t]*)?(\\d+)(?:\\.(\\d+))?$`,
+    'i',
+  ).exec(currentToken);
+  if (!match) return null;
+  // A current phase qualified with another project or milestone is not the
+  // active milestone's phase, whatever its number.
+  if (
+    match[1] !== undefined
+    && (match[1].toUpperCase() !== targetId.project || Number(match[2]) !== Number(targetId.milestone))
+  ) {
+    return null;
+  }
+  const phase = Number(match[3]);
+  const subphase = match[4] === undefined ? undefined : Number(match[4]);
+  const sameNumber = (id: BracketRoadmapPhaseId): boolean =>
+    Number(id.phase) === phase
+    && (id.subphase === undefined ? subphase === undefined : Number(id.subphase) === subphase);
+  return sameNumber(targetId) || mapping.some(({ oldId }) => sameNumber(oldId)) ? String(current).trim() : null;
+}
+
 function cmdPhaseRemove(
   cwd: string,
   targetPhase: string,
@@ -2600,9 +5161,40 @@ function cmdPhaseRemove(
 
   if (!fs.existsSync(roadmapPath)) error('ROADMAP.md not found');
 
-  const normalized = normalizePhaseName(targetPhase);
-  const isDecimal = targetPhase.includes('.');
   const force = options.force || false;
+  const removeConvention = resolvePhaseIdConvention(cwd);
+  const removeContext = removeConvention === 'bracket'
+    ? bracketWriteContext(cwd, loadConfig(cwd))
+    : null;
+
+  // #4304: canonicalize every bracket argument before
+  // directory matching or any write, through the SAME adapter `phase
+  // insert` now uses (canonicalizeBracketPhaseArgument) — a bare token
+  // through phase-id-display's `phaseToken`, a qualified/display token
+  // through phase-id.cts's strict `parsePhaseId`. A rejected spelling has no
+  // parseInt fallback, so it cannot partially name a real phase and reach
+  // the destructive path.
+  let normalized: string;
+  let isDecimal: boolean;
+  let requestedSlug: string | undefined;
+  let removedInt: number;
+  let removedSubphase: number | undefined;
+  if (removeContext) {
+    ({ normalized, isDecimal, slug: requestedSlug } = canonicalizeBracketPhaseArgument(removeContext, targetPhase, 'remove'));
+    const [phasePart, subphasePart] = normalized.split('.');
+    removedInt = Number(phasePart);
+    removedSubphase = subphasePart === undefined ? undefined : Number(subphasePart);
+    if (removedSubphase === 0) {
+      error('Cannot remove a .00 sub-phase: bracket sub-phases start at .01.', ERROR_REASON.USAGE);
+    }
+  } else {
+    // Legacy and milestone-prefixed paths retain their original permissive
+    // normalization and parseInt behavior byte-for-byte.
+    normalized = normalizePhaseName(targetPhase);
+    isDecimal = targetPhase.includes('.');
+    removedInt = parseInt(normalized, 10);
+    removedSubphase = isDecimal ? parseInt(normalized.split('.')[1], 10) : undefined;
+  }
 
   const subdirs = readSubdirectories(phasesDir, true);
   // #2237/#2528: every other resolution path refuses to choose between multiple
@@ -2610,7 +5202,37 @@ function cmdPhaseRemove(
   // taking `matches[0]` silently is strictly worse than anywhere else: it turns
   // "resolve nothing" into "delete one of two candidates, unrecoverably, and
   // renumber every phase after it". Refuse before any file is touched.
-  const { matches: phaseDirMatches } = matchPhaseDirs(subdirs, normalized);
+  const candidateDirs = removeContext
+    ? bracketIdsInContext(phasesDir, removeContext).map(({ dir }) => dir)
+    : subdirs;
+  const directoryContext = phaseDirectoryOptions(cwd);
+  let { matches: phaseDirMatches } = matchPhaseDirs(
+    candidateDirs,
+    removeConvention === 'bracket' ? normalized : phaseLookupQuery(targetPhase, directoryContext),
+    removeConvention === 'bracket' ? 'bracket' : undefined,
+    undefined,
+    directoryContext,
+  );
+  if (removeContext && requestedSlug !== undefined) {
+    phaseDirMatches = phaseDirMatches.filter((dir) =>
+      bracketDirSlug(dir, parsePhaseId(dir)) === requestedSlug);
+    if (phaseDirMatches.length !== 1) {
+      error(`Cannot remove ${targetPhase}: its slug does not exactly match a directory for phase ${normalized}.`, ERROR_REASON.USAGE);
+    }
+  }
+  const uniqueCustomTarget = phaseDirMatches.length === 1
+    && phaseIdMod.customDirectoryCandidates(phaseDirMatches[0], directoryContext).length === 1;
+  const mutationCandidates = subdirs.filter(dir => {
+    const owners = phaseIdMod.customDirectoryCandidates(dir, directoryContext);
+    // A unique proven target excludes siblings whose longer declared owner
+    // wins resolution. Unresolved/ambiguous queries retain the full refusal.
+    return dir === targetPhase || (owners.includes(targetPhase) && (!uniqueCustomTarget || dir === phaseDirMatches[0]));
+  });
+  // The numeric renumbering set comes from the renamers' own selector.
+  const renumbered = removeContext || isCustomPhaseId(targetPhase) ? [] : (isDecimal
+    ? selectDecimalRenames(subdirs, parseInt(normalized.split('.')[0], 10), parseInt(normalized.split('.')[1], 10), directoryContext)
+    : selectIntegerRenames(subdirs, parseInt(normalized, 10), directoryContext)).map(item => item.dir);
+  assertUnambiguousCustomDirectories([...new Set([...mutationCandidates, ...renumbered])], directoryContext);
   if (phaseDirMatches.length > 1) {
     output(
       {
@@ -2618,7 +5240,9 @@ function cmdPhaseRemove(
         error:
           `Phase ${normalized} is ambiguous: ${phaseDirMatches.length} directories match `
           + `(${phaseDirMatches.map((m) => `"${m}"`).join(', ')}). Refusing to remove any of them. `
-          + 'Set a distinct project_code in .planning/config.json, or pass the full directory name.',
+          + (removeContext
+            ? 'Remove the stale duplicate directory or give it a distinct bracket phase identity, then retry.'
+            : 'Set a distinct project_code in .planning/config.json, or pass the full directory name.'),
         ambiguous_matches: phaseDirMatches,
         directory_deleted: null,
         renamed_directories: [],
@@ -2631,6 +5255,40 @@ function cmdPhaseRemove(
     return;
   }
   const targetDir = phaseDirMatches[0] || null;
+  const customTarget = targetDir !== null && (directoryContext.directoryIds?.[targetDir] !== undefined
+    || phaseIdMod.customDirectoryCandidates(targetDir, directoryContext).length > 0);
+  const stableIds = new Set(subdirs.flatMap(dir => phaseIdMod.customDirectoryCandidates(dir, directoryContext))
+    .map(id => (isCustomPhaseId(id) ? id : normalizePhaseName(id)).toLowerCase()));
+
+
+  const roadmapContentBeforeRemoval = removeContext ? fs.readFileSync(roadmapPath, 'utf-8') : null;
+  if (removeContext) {
+    const targetId = bracketPhaseId(removeContext, removedInt, removedSubphase);
+    const legacyOnly = legacyOnlyBracketRemovalTarget(
+      subdirs,
+      roadmapContentBeforeRemoval!,
+      targetPhase,
+      targetId,
+      targetDir !== null,
+    );
+    if (legacyOnly) {
+      const evidence = [
+        ...legacyOnly.directories.map((dir) => `directory ${JSON.stringify(dir)}`),
+        ...legacyOnly.headings.map((heading) => `heading ${JSON.stringify(heading)}`),
+      ].join('; ');
+      // roadmap upgrade converts nothing once config selects bracket (it
+      // refuses a partial migration and treats an all-bracket ROADMAP as
+      // done), so name the conversion itself.
+      const directoryPrefix = legacyOnly.directories.length > 0
+        ? ` (directory prefix ${JSON.stringify(bracketDirPrefix(targetId))})`
+        : '';
+      error(
+        `Cannot remove phase ${normalized} under the bracket convention: it resolves only to `
+        + `legacy-spelled artifacts (${evidence}). Convert them to the bracket spelling `
+        + `${renderPhaseId(targetId)}${directoryPrefix} before removing this phase.`,
+      );
+    }
+  }
 
   if (targetDir && !force) {
     // #3183: canonical summary set (root+nested) from the single owner —
@@ -2643,6 +5301,172 @@ function cmdPhaseRemove(
         `Phase ${targetPhase} has ${summaryCount} executed plan(s). Use --force to remove anyway.`,
       );
     }
+  }
+
+  // #4304: compute the ONE renumber mapping shared by the disk
+  // rename and the ROADMAP rewrite before either runs, from the roadmap
+  // content as it stands right now (only the target directory is about to
+  // be deleted below; deletion does not change which OTHER identities the
+  // scan finds). Both consumers below apply this exact mapping so they
+  // cannot independently diverge on a decimal sub-phase identity.
+  const preRemovalRanges = roadmapContentBeforeRemoval
+    ? currentMilestoneRawRanges(roadmapContentBeforeRemoval, cwd, 'bracket')
+    : null;
+
+  // #4304: refuse before any mutation when the target's own
+  // heading/checklist line lives entirely OUTSIDE the milestone window the
+  // read side located — a mislocated window (a decoy heading carrying the
+  // active version token before the real milestone heading, a document-level
+  // Progress heading placed before it, or no milestone heading at all)
+  // otherwise lets the destructive delete/rename below proceed while the
+  // ROADMAP rewrite silently never reaches the target's real lines. Does not
+  // attempt to fix the window's own selection (PR-6 / #4751 territory) —
+  // only refuses instead of half-applying.
+  //
+  // #4304: NOT additionally gated on `targetDir` — a ROADMAP-only
+  // target (a phase `phase add` created with no directory materialized yet)
+  // on a mislocated window still half-applied under the `targetDir` gate:
+  // later directories renamed and their ROADMAP lines renumbered onto the
+  // target's identity while the target's own heading/checklist survived,
+  // with an empty report. The guard reads only ROADMAP content (never
+  // `targetDir` itself), so gating it on a directory that may not exist
+  // protected nothing; with no directory and no matching ROADMAP line the
+  // guard already reports no outside line.
+  if (removeContext) {
+    const guardTargetId = bracketPhaseId(removeContext, removedInt, removedSubphase);
+    const { outside, hasLiveTarget } = bracketOwnedLineOutsideActiveWindow(
+      roadmapContentBeforeRemoval!,
+      guardTargetId,
+      preRemovalRanges,
+    );
+    if (outside) {
+      const windowDescription = preRemovalRanges
+        ? `the located milestone window starting at line ${
+          roadmapContentBeforeRemoval!.slice(0, preRemovalRanges.primary.start).split('\n').length
+        } (${
+          roadmapContentBeforeRemoval!
+            .slice(preRemovalRanges.primary.start, roadmapContentBeforeRemoval!.indexOf('\n', preRemovalRanges.primary.start))
+            .trim()
+        })`
+        : 'no milestone heading at all';
+      error(
+        `Cannot remove phase ${normalized}: its own heading/checklist line `
+        + `(ROADMAP.md line ${outside.lineNumber}: ${JSON.stringify(outside.text)}) `
+        + `lies outside ${windowDescription}. ROADMAP.md's milestone heading was not `
+        + 'found where expected; verify the ROADMAP.md structure before removing.',
+        ERROR_REASON.USAGE,
+      );
+    }
+    if (targetDir === null && !hasLiveTarget) {
+      error(
+        `Cannot remove phase ${normalized}: no directory or live heading/checklist exists in the active milestone window.`,
+        ERROR_REASON.USAGE,
+      );
+    }
+  }
+
+  // #4304: refuse before any mutation when an INTEGER phase
+  // still has its own sub-phases. Without this, computeBracketRenumberMapping's
+  // filter (phase > removedInt only) never touches the removed phase's OWN
+  // sub-phases: they stay orphaned on disk/ROADMAP while the NEXT phase's
+  // sub-phases renumber onto the SAME identities, manufacturing duplicates
+  // (legacy has the same defect on its own path — parity, not fixed there).
+  if (removeContext && removedSubphase === undefined) {
+    const ownSubphases = bracketPhaseOwnSubphases(
+      phasesDir,
+      roadmapContentBeforeRemoval!,
+      preRemovalRanges,
+      removeContext,
+      removedInt,
+    );
+    if (ownSubphases.length > 0) {
+      error(
+        `Cannot remove phase ${normalized}: it still has sub-phase(s) `
+        + `${ownSubphases.map((id) => renderPhaseId(id)).join(', ')}. `
+        + 'Remove the sub-phase(s) first, then remove the phase.',
+      );
+    }
+  }
+
+  const bracketMapping = removeContext
+    ? computeBracketRenumberMapping(
+      phasesDir,
+      roadmapContentBeforeRemoval!,
+      preRemovalRanges,
+      removeContext,
+      removedInt,
+      removedSubphase,
+    )
+    : [];
+
+  // #4304: the mapping inventories only canonical bracket spellings. Refuse
+  // before any mutation while a legacy spelling resolves to an identity it
+  // deletes, renumbers, or renumbers onto; renumbering around it would leave
+  // that spelling on its old number for the reader to misattribute.
+  if (removeContext) {
+    const entangled = legacySpellingsEntangledWithBracketRemoval(
+      phasesDir,
+      roadmapContentBeforeRemoval!,
+      preRemovalRanges,
+      removeContext,
+      removedInt,
+      removedSubphase,
+      bracketMapping,
+    );
+    if (entangled.length > 0) {
+      error(
+        `Cannot remove phase ${normalized}: phase remove renumbers only bracket spellings, and `
+        + `${entangled.length === 1 ? 'this legacy spelling resolves' : 'these legacy spellings resolve'} `
+        + `to a phase it would delete or renumber: ${entangled.map(describeEntangledLegacySpelling).join('; ')}. `
+        + 'Convert each to its bracket spelling, then retry.',
+      );
+    }
+  }
+
+  if (removeContext) {
+    const targetId = bracketPhaseId(removeContext, removedInt, removedSubphase);
+    const unrepresentable = unrepresentableBracketIdsAffectedByRemoval(
+      roadmapContentBeforeRemoval!,
+      preRemovalRanges,
+      removedInt,
+      removedSubphase,
+    );
+    if (unrepresentable.length > 0) {
+      error(
+        `Cannot remove phase ${normalized}: the active milestone lists phase id(s) `
+        + `${unrepresentable.join(', ')} that are not representable in the bracket convention, `
+        + 'so phase remove can neither delete nor renumber them alongside their siblings. '
+        + 'Renumber or remove them first, then retry.',
+      );
+    }
+
+    const plan = planBracketRoadmapRemoval(roadmapContentBeforeRemoval!, targetId, bracketMapping, cwd);
+    if (plan.survivingTargetRows.length > 0) {
+      error(
+        `Cannot remove phase ${normalized}: ROADMAP.md has table row(s) keyed by ${renderPhaseId(targetId)} `
+        + `outside the milestone's own Progress tables (${plan.survivingTargetRows.map((row) => JSON.stringify(row.trim())).join(', ')}). `
+        + 'Removing the phase would leave each row naming an identity a renumbered sibling takes over. '
+        + 'Delete or re-key those rows first, then retry.',
+      );
+    }
+
+    const currentPhase = stateCurrentPhaseAffectedByBracketRemoval(cwd, targetId, bracketMapping);
+    if (currentPhase !== null) {
+      error(
+        `Cannot remove phase ${renderPhaseId(targetId)}: STATE.md's current phase is ${currentPhase}, which this `
+        + 'removal deletes or renumbers, and phase remove does not rewrite the current-phase fields. '
+        + 'Bracket phase remove deletes only phases after the current phase. To remove this one, point STATE.md\'s '
+        + `current phase at a phase before ${renderPhaseId(targetId)}, or, when there is none, clear the current-phase `
+        + 'fields (frontmatter current_phase, the Current Phase field and the Current Position Phase line), then retry.',
+      );
+    }
+  }
+
+  // Validate every bracket rename destination before deleting the target or
+  // changing ROADMAP/STATE, so a planted symlink produces a clean refusal
+  // with the planning tree untouched.
+  if (removeContext) {
+    assertBracketRenameDestinationsSafe(phasesDir, removeContext, bracketMapping, targetDir);
   }
 
   // #5118 (no write before the error): the STATE.md rewrite below rebuilds the
@@ -2669,16 +5493,29 @@ function cmdPhaseRemove(
   let renamedFiles: { from: string; to: string }[] = [];
   let renamedFileCollisions: { from: string; to: string; displaced_to: string | null }[] = [];
   try {
-    if (isDecimal) {
+    if (removeContext) {
+      // #4304: reuse the SAME removedInt/removedSubphase validated
+      // above (before deletion) instead of re-deriving from `normalized`,
+      // which is NaN for a qualified id like `CK.02-02`.
+      const renamed = renameBracketPhases(
+        phasesDir,
+        removeContext,
+        bracketMapping,
+      );
+      renamedDirs = renamed.renamedDirs;
+      renamedFiles = renamed.renamedFiles;
+      renamedFileCollisions = renamed.renamedFileCollisions;
+    } else if (!customTarget && isDecimal) {
       const renamed = renameDecimalPhases(
         phasesDir,
         parseInt(normalized.split('.')[0], 10),
         parseInt(normalized.split('.')[1], 10),
+        directoryContext,
       );
       renamedDirs = renamed.renamedDirs;
       renamedFiles = renamed.renamedFiles;
-    } else {
-      const renamed = renameIntegerPhases(phasesDir, parseInt(normalized, 10));
+    } else if (!customTarget) {
+      const renamed = renameIntegerPhases(phasesDir, parseInt(normalized, 10), directoryContext);
       renamedDirs = renamed.renamedDirs;
       renamedFiles = renamed.renamedFiles;
       renamedFileCollisions = renamed.renamedFileCollisions;
@@ -2697,13 +5534,29 @@ function cmdPhaseRemove(
     error(`Failed to renumber phase directories after removing phase ${targetPhase}: ${msg}`);
   }
 
-  const roadmapUpdated = updateRoadmapAfterPhaseRemoval(
-    roadmapPath,
-    targetPhase,
-    isDecimal,
-    parseInt(normalized, 10),
-    cwd,
-  );
+  const bracketRoadmapRewrite = removeContext
+    ? updateRoadmapAfterBracketPhaseRemoval(
+      roadmapPath,
+      removedInt,
+      removedSubphase,
+      removeContext,
+      bracketMapping,
+      cwd,
+    )
+    : null;
+  const roadmapUpdated = bracketRoadmapRewrite
+    ? bracketRoadmapRewrite.updated
+    : updateRoadmapAfterPhaseRemoval(
+      roadmapPath,
+      directoryContext.directoryIds?.[targetDir ?? '']
+        ?? (targetDir ? phaseIdMod.customDirectoryCandidates(targetDir, directoryContext)[0] : undefined)
+        ?? targetPhase,
+      isDecimal,
+      parseInt(normalized, 10),
+      cwd,
+      customTarget,
+      stableIds,
+    );
 
   const statePath = path.join(planningDir(cwd), 'STATE.md');
   let stateUpdated = false;
@@ -2794,6 +5647,12 @@ function cmdPhaseRemove(
       // change, not hardcoded regardless of whether ROADMAP.md's content
       // actually changed.
       roadmap_updated: roadmapUpdated,
+      ...(bracketRoadmapRewrite
+        ? {
+            roadmap_lines_rewritten: bracketRoadmapRewrite.roadmapLinesRewritten,
+            references_left_untouched: bracketRoadmapRewrite.referencesLeftUntouched,
+          }
+        : {}),
       state_updated: stateUpdated,
     },
     raw,
@@ -3708,6 +6567,7 @@ function auditArtifactWarnings(cwd: string, phaseFullDir: string): string[] {
 }
 
 function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
+  const directoryContext = phaseDirectoryOptions(cwd);
   if (!phaseNum) {
     error('phase number required for phase complete');
   }
@@ -3754,7 +6614,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   const phasesDir = path.join(planningDir(cwd), 'phases');
   const today = realClock.localToday();
 
-  const phaseInfoRaw = findPhaseInternal(cwd, phaseNum);
+  const phaseInfoRaw = findPhaseInternal(cwd, phaseNum, undefined, directoryContext);
   if (!phaseInfoRaw) {
     error(`Phase ${phaseNum} not found`);
   }
@@ -4058,7 +6918,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         const originalRoadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
         roadmapContent = originalRoadmapContent;
 
-        const phaseEscaped = phaseMarkdownRegexSource(phaseNum);
+        const phaseEscaped = phaseMarkdownRegexSource(phaseNum, directoryContext);
         // #2067: the gap between `]` and `Phase N` must allow only whitespace /
         // markdown bold emphasis — NOT greedy `.*`. A greedy gap matched a later
         // phase whose description merely mentioned the completed phase number,
@@ -4092,7 +6952,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // its own `- [ ] Phase N: …` entries inside a fenced code block, but it
         // is a real (and correct) behavioural difference on pathological input.
         const checkboxPattern = new RegExp(
-          `^[ \\t]*(-\\s*\\[)[ ](\\]\\s*(?:\\*\\*)?\\s*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
+          `^[ \\t]*(-\\s*\\[)[ ](\\]\\s*(?:\\*\\*)?\\s*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\r\\n]*)`,
           'i',
         );
 
@@ -4128,7 +6988,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // milestone ROADMAP binds, so a shipped milestone's same-numbered phase
         // cannot count.
         if (!phaseWasAlreadyComplete) {
-          const progressTable = locateProgressTable(originalMilestoneScope);
+          const progressTable = locateRoadmapProgress(originalMilestoneScope).table;
           if (progressTable !== null) {
             const wantMilestone = progressTable.columns.includes('Milestone')
               ? normalizeMilestoneToken(roadmapParserMod.getMilestoneInfo(cwd).value?.version)
@@ -4151,7 +7011,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         const editProgressHeadingSlice = (text: string, edit: (scoped: string) => string): string => {
           const progressMatch = text.match(/^##[ \t]+Progress\b/im);
           if (!progressMatch || progressMatch.index === undefined) {
-            return edit(text);
+            return editFromPhaseTable(text, edit);
           }
           const headingOffset = progressMatch.index;
           const beforeHeading = text.slice(0, headingOffset);
@@ -4159,7 +7019,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           const nextHeading = fromHeading.search(/\n#{1,2}[ \t]/);
           const scoped = nextHeading >= 0 ? fromHeading.slice(0, nextHeading) : fromHeading;
           const after = nextHeading >= 0 ? fromHeading.slice(nextHeading) : '';
-          return beforeHeading + edit(scoped) + after;
+          return beforeHeading + editFromPhaseTable(scoped, edit) + after;
         };
 
         // ADR-2143 §4: the plan-count write is now routed through
@@ -4326,43 +7186,17 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
               // flips a row — the same pairing rule the counts use.
               if (!coreUtilsMod.summaryPairsWithAnyPlan((phaseInfo['plans'] as string[] | undefined) ?? [], summaryFile)) continue;
               // ADR-5057 §6 (Phase 13, #5217): the per-plan flip is a bullet
-              // mutation, so it goes through `updateBullet` like the phase
+              // mutation (`updateBullet` inside the helper) like the phase
               // checkbox flip above — first matching bullet only, never a
               // fenced line, never a mid-line occurrence.
-              const planCheckboxPattern = coreUtilsMod.planRowPattern(planId, { anchored: true });
-              b = updateBullet(
-                b,
-                (_bulletText, rawLine) => planCheckboxPattern.test(rawLine),
-                (rawLine) => rawLine.replace(planCheckboxPattern, '$1x$2'),
-              );
+              b = coreUtilsMod.tickAnchoredPlanRow(b, planId);
             }
             return b;
           });
           return s;
         };
 
-        const milestoneRanges = currentMilestoneRawRanges(roadmapContent, cwd);
-        if (milestoneRanges) {
-          // Splice later windows first so an earlier window's offsets are not
-          // shifted by a length-changing mutation in a later window.
-          const windows = [milestoneRanges.details, milestoneRanges.primary]
-            .filter((w): w is { start: number; end: number } => w !== null)
-            .sort((a, b) => b.start - a.start);
-          for (const w of windows) {
-            roadmapContent =
-              roadmapContent.slice(0, w.start)
-              + mutateMilestonePhase(roadmapContent.slice(w.start, w.end))
-              + roadmapContent.slice(w.end);
-          }
-        } else {
-          // #5543: the active milestone could not be resolved (no STATE
-          // `milestone:`, no marker). Writing the whole document would let
-          // `withPhaseSection` pick the first `### Phase N:` in document order,
-          // which can sit inside a shipped `<details>` block. Hide the shipped
-          // blocks from the mutation and restore them untouched; a ROADMAP with
-          // no shipped block is mutated whole, as before.
-          roadmapContent = editOutsideShippedBlocks(roadmapContent, mutateMilestonePhase);
-        }
+        roadmapContent = editCurrentMilestone(roadmapContent, cwd, mutateMilestonePhase);
 
         writes.push({
           filePath: roadmapPath,
@@ -4378,7 +7212,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
 
         const reqPath = path.join(planningDir(cwd), 'REQUIREMENTS.md');
         if (fs.existsSync(reqPath)) {
-          const phaseEsc = phaseMarkdownRegexSource(phaseNum);
+          const phaseEsc = phaseMarkdownRegexSource(phaseNum, directoryContext);
           const currentMilestoneRoadmap = extractCurrentMilestone(roadmapContent, cwd);
           // #5007 (Phase 6 / ADR-4910 §8): this site captures the entire
           // section BODY through to the next heading (via its own
@@ -4759,18 +7593,21 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
       // comparePhaseNum-based so `02` and `2` dedupe. With no ROADMAP.md (or no
       // parseable rows) the set is empty and the scans behave exactly as
       // before.
+      // Custom IDs use declared roadmap order; the numeric-minimum comments
+      // below describe the unchanged legacy cascade.
       const roadmapCompleteNums: string[] = [];
       if (roadmapContent !== null) {
         try {
           const milestoneForComplete = extractCurrentMilestone(roadmapContent, cwd);
-          const completePattern = new RegExp(
-            `-\\s*\\[[xX]\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})`,
-            'gi'
+          const completePattern = phaseEntryRegExp(
+            `Phase\\s+(${phaseScanTokenSource(directoryContext)})`,
+            'gi',
           );
           let cm: RegExpExecArray | null;
           while ((cm = completePattern.exec(milestoneForComplete)) !== null) {
+            if (!isPhaseEntryChecked(cm[0])) continue;
             if (isSentinelPhaseId(cm[1])) continue;
-            if (!roadmapCompleteNums.some((n) => comparePhaseNum(cm![1], n) === 0)) {
+            if (!roadmapCompleteNums.some((n) => comparePhaseNum(cm![1], n, directoryContext) === 0)) {
               roadmapCompleteNums.push(cm[1]);
             }
           }
@@ -4780,7 +7617,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         }
       }
       const isCompletePhaseNum = (num: string): boolean =>
-        roadmapCompleteNums.some((n) => comparePhaseNum(num, n) === 0);
+        roadmapCompleteNums.some((n) => comparePhaseNum(num, n, directoryContext) === 0);
 
       try {
         // #3185 (ADR-3180 Decision 1): "which phase directories belong to
@@ -4793,7 +7630,9 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         const dirs = listMilestonePhaseDirs(phasesDir, { cwd }).value;
 
         for (const dir of dirs) {
-          const dm = dir.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i'));
+          const custom = phaseIdMod.customPhaseQuery(dir, directoryContext);
+          const owner = custom && customDirectoryOwner(dir, custom);
+          const dm = owner ? [dir, owner.id, owner.slug] : dir.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i'));
           if (dm) {
             // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
             if (isSentinelPhaseId(dm[1])) continue;
@@ -4805,8 +7644,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             // correct today — but that makes this scan's correctness depend on an
             // upstream sort nothing here states. Selecting the minimum explicitly costs
             // one comparison and removes the hidden coupling.
-            if (comparePhaseNum(dm[1], phaseNum) > 0
-              && (diskNextNum === null || comparePhaseNum(dm[1], diskNextNum) < 0)) {
+            if (comparePhaseNum(dm[1], phaseNum, directoryContext) > 0
+              && (diskNextNum === null || comparePhaseNum(dm[1], diskNextNum, directoryContext) < 0)) {
               diskNextNum = dm[1];
               diskNextName = dm[2] || null;
             }
@@ -4855,9 +7694,9 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // accepts. The two branches keep separate capture groups, normalized
           // just below the loop.
           const phasePattern = new RegExp(
-            `(?:#{2,4}\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n*]+)` +
-            `|-\\s*\\[[ xX]\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+))`,
-            'gi'
+            `(?:#{2,4}\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n*]+)` +
+            `|${phaseEntryPrefixSrc()}Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+))`,
+            'gim'
           );
           let pm: RegExpExecArray | null;
           while ((pm = phasePattern.exec(roadmapForPhases)) !== null) {
@@ -4887,8 +7726,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             // Phase NUMBERS define sequence here, exactly as `comparePhaseNum` does for
             // the disk scan and for #2028's lowest-outstanding override; the roadmap
             // defines which phases EXIST and which milestone they belong to.
-            if (comparePhaseNum(pmNum, phaseNum) > 0
-              && (roadmapNextNum === null || comparePhaseNum(pmNum, roadmapNextNum) < 0)) {
+            if (comparePhaseNum(pmNum, phaseNum, directoryContext) > 0
+              && (roadmapNextNum === null || comparePhaseNum(pmNum, roadmapNextNum, directoryContext) < 0)) {
               roadmapNextNum = pmNum;
               roadmapNextName = pmName
                 .replace(/\(INSERTED\)/i, '')
@@ -4913,7 +7752,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // and the roadmap mean the same phase" cannot drift from "N is above the
         // one just completed". `02` and `2` compare equal, which is the whole
         // point — they are the same phase spelled two ways.
-        const diskAgrees = diskNextNum !== null && comparePhaseNum(diskNextNum, roadmapNextNum) === 0;
+        const diskAgrees = diskNextNum !== null && comparePhaseNum(diskNextNum, roadmapNextNum, directoryContext) === 0;
         nextPhaseNum = diskAgrees ? diskNextNum : roadmapNextNum;
         nextPhaseName = diskAgrees ? diskNextName : roadmapNextName;
         isLastPhase = false;
@@ -4957,14 +7796,15 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // Without it, this lowest-outstanding override was blind to dash-grammar
           // rows and could not correct an out-of-order completion on the same
           // mixed-grammar roadmaps that broke stage 2.
-          const cbPattern = new RegExp(
-            `-\\s*\\[(x| )\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+)`,
-            'gi'
+          const cbPattern = phaseEntryRegExp(
+            `Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+)`,
+            'gi',
+            { state: 'captured' },
           );
           let cbm: RegExpExecArray | null;
           let lowestOutstanding: { num: string; name: string } | null = null;
           while ((cbm = cbPattern.exec(milestoneScope)) !== null) {
-            const isChecked = cbm[1].toLowerCase() === 'x';
+            const isChecked = isBoxCharChecked(cbm[1]);
             // #2949: exclude sentinel-range phase ids (0.x backlog, 999.x) from candidacy.
             // comparePhaseNum("0.1","12") === -12, so without this guard an unchecked 0.x
             // backlog row sorts below every real phase and is wrongly selected as next_phase,
@@ -4972,8 +7812,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             // isSentinelPhaseId covers both sentinel ranges (SENTINEL_RANGES = [0, 999]); a
             // real lower-numbered outstanding phase (e.g. Phase 9) is NOT a sentinel and is
             // still selected, preserving #2028's out-of-order-completion behavior.
-            if (!isChecked && !isSentinelPhaseId(cbm[2]) && comparePhaseNum(cbm[2], phaseNum) < 0) {
-              if (lowestOutstanding === null || comparePhaseNum(cbm[2], lowestOutstanding.num) < 0) {
+            if (!isChecked && !isSentinelPhaseId(cbm[2]) && comparePhaseNum(cbm[2], phaseNum, directoryContext) < 0) {
+              if (lowestOutstanding === null || comparePhaseNum(cbm[2], lowestOutstanding.num, directoryContext) < 0) {
                 lowestOutstanding = {
                   num: cbm[2],
                   name: cbm[3].replace(/\(INSERTED\)/i, '').trim().toLowerCase().replace(/\s+/g, '-'),
@@ -5037,7 +7877,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         let nextPhaseDisk: { status: ReturnType<typeof phaseStatus>['value']['status']; planCount: number; summaryCount: number } | null = null;
         if (nextPhaseNum && !isLastPhase) {
           try {
-            const nextInfo = findPhaseInternal(cwd, nextPhaseNum) as unknown as { found?: boolean; directory?: string } | null;
+            const nextInfo = findPhaseInternal(cwd, nextPhaseNum, undefined, directoryContext) as unknown as { found?: boolean; directory?: string } | null;
             if (nextInfo && nextInfo.found && nextInfo.directory) {
               const { value } = phaseStatus(path.join(cwd, nextInfo.directory), {
                 convention: resolvePhaseIdConvention(cwd),
@@ -5294,7 +8134,7 @@ function cmdPhaseUatPassed(
     error('phase number required for phase uat-passed');
   }
 
-  const phaseInfoRaw = findPhaseInternal(cwd, phaseNum!);
+  const phaseInfoRaw = findPhaseInternal(cwd, phaseNum!, undefined, phaseDirectoryOptions(cwd));
   if (!phaseInfoRaw) {
     error(`Phase ${phaseNum} not found`);
   }
@@ -5321,7 +8161,7 @@ function cmdPhaseListPlans(cwd: string, phaseNum: string | undefined, raw: boole
     error('phase number required for phase list-plans');
   }
 
-  const phaseInfo = findPhaseInternal(cwd, phaseNum!);
+  const phaseInfo = findPhaseInternal(cwd, phaseNum!, undefined, phaseDirectoryOptions(cwd));
   if (!phaseInfo) {
     output({ phase: phaseNum, plan_count: 0, has_plans: false, plans: [], phase_dir: null }, raw);
     return;
@@ -5363,4 +8203,12 @@ export = {
   computeDependencyLevels,
   buildShortFormToId,
   normalizeDependencyToken,
+  // Test seam (#4304): the bracket renumber mapping is a disk and ROADMAP
+  // bijection whose order must keep every rename destination free; exposed
+  // so a property test can drive it over generated identity sets.
+  _computeBracketRenumberMapping: computeBracketRenumberMapping,
+  // Test seam (#4304): the qualified-reference rewriter the ROADMAP rewrite
+  // applies once per mapping entry, so the same property can rewrite a line
+  // in mapping order.
+  _replaceQualifiedBracketReference: replaceQualifiedBracketReference,
 };

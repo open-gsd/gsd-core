@@ -36,7 +36,7 @@ const { stripFencedCode } = require('../gsd-core/bin/lib/markdown-sectionizer.cj
 
 const ROOT = path.join(__dirname, '..');
 const AGENT_PATH = path.join(ROOT, 'agents', 'gsd-plan-checker.md');
-const DOCS_AGENTS_PATH = path.join(ROOT, 'docs', 'AGENTS.md');
+const DOCS_AGENTS_PATH = path.join(ROOT, 'docs', 'reference', 'agents.md');
 const REVISION_LOOP_PATH = path.join(ROOT, 'gsd-core', 'references', 'revision-loop.md');
 const PLAN_PHASE_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'plan-phase.md');
 const PLANNER_PATH = path.join(ROOT, 'agents', 'gsd-planner.md');
@@ -313,7 +313,7 @@ describe('gsd-plan-checker Dimension 3b — undeclared/temporal coupling (#1954)
       );
     });
 
-    test('docs/AGENTS.md enumerates every dimension the agent defines', () => {
+    test('docs/reference/agents.md enumerates every dimension the agent defines', () => {
       const section = sliceBetween(docsAgents, /^### gsd-plan-checker$/m, /^### gsd-integration-checker$/m);
       const documented = new Set(
         [...section.matchAll(/^\| ([0-9]+[a-z]?) \| /gm)].map((m) => m[1])
@@ -322,16 +322,16 @@ describe('gsd-plan-checker Dimension 3b — undeclared/temporal coupling (#1954)
       assert.deepStrictEqual(
         missing,
         [],
-        `docs/AGENTS.md omits dimension(s): ${missing.join(', ')}`
+        `docs/reference/agents.md omits dimension(s): ${missing.join(', ')}`
       );
     });
 
-    test('docs/AGENTS.md documents the coupling check', () => {
+    test('docs/reference/agents.md documents the coupling check', () => {
       const section = sliceBetween(docsAgents, /^### gsd-plan-checker$/m, /^### gsd-integration-checker$/m);
       assert.match(
         section,
         /coupling/i,
-        'docs/AGENTS.md\'s gsd-plan-checker section must document the coupling check'
+        'docs/reference/agents.md\'s gsd-plan-checker section must document the coupling check'
       );
     });
   });

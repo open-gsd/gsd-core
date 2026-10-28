@@ -31,6 +31,7 @@ const {
   escapeSingleQuotedShellLiteral,
   retryRenameSync,
   contentChangedAfterNormalize,
+  GIT_LOCATION_ENV_VARS,
 } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'shell-command-projection.cjs'));
 
 const { createTempGitProject, createTempDir, cleanup } = require('./helpers.cjs');
@@ -86,6 +87,133 @@ describe('execGit', () => {
   test('respects cwd option', () => {
     const result = execGit(['status', '--porcelain'], { cwd: tmpDir });
     assert.strictEqual(result.exitCode, 0);
+  });
+
+  // #5548: cwd selects the repository; inherited location vars must not redirect it.
+  describe('inherited repository-location env (#5548)', () => {
+    const VARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_AUTHOR_NAME'];
+    let other, saved;
+    beforeEach(() => {
+      other = createTempGitProject();
+      saved = Object.fromEntries(VARS.map(k => [k, process.env[k]]));
+    });
+    afterEach(() => {
+      for (const k of VARS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+      cleanup(other);
+    });
+    const gitDir = (dir) => fs.realpathSync.native(path.join(dir, '.git'));
+
+    test('GIT_DIR set to another repo does not redirect cwd', () => {
+      process.env.GIT_DIR = gitDir(other);
+      const r = execGit(['rev-parse', '--absolute-git-dir'], { cwd: tmpDir });
+      assert.strictEqual(r.exitCode, 0, r.stderr);
+      assert.strictEqual(fs.realpathSync.native(r.stdout), gitDir(tmpDir));
+    });
+
+    test('GIT_WORK_TREE set to another dir does not redirect cwd', () => {
+      process.env.GIT_WORK_TREE = fs.realpathSync.native(other);
+      const r = execGit(['rev-parse', '--show-toplevel'], { cwd: tmpDir });
+      assert.strictEqual(fs.realpathSync.native(r.stdout), fs.realpathSync.native(tmpDir));
+    });
+
+    test('GIT_INDEX_FILE set to another repo index does not receive cwd staging', () => {
+      process.env.GIT_INDEX_FILE = path.join(gitDir(other), 'index');
+      fs.writeFileSync(path.join(tmpDir, 'f5548.txt'), 'x');
+      assert.strictEqual(execGit(['add', 'f5548.txt'], { cwd: tmpDir }).exitCode, 0);
+      delete process.env.GIT_INDEX_FILE;
+      assert.ok(execGit(['ls-files'], { cwd: tmpDir }).stdout.split('\n').includes('f5548.txt'));
+    });
+
+    test('other env (author) is still inherited', () => {
+      process.env.GIT_AUTHOR_NAME = 'Inherited Author';
+      const r = execGit(['var', 'GIT_AUTHOR_IDENT'], { cwd: tmpDir });
+      assert.equal(r.stdout.split(' <')[0], 'Inherited Author');
+    });
+
+    test('explicit opts.env GIT_DIR still wins (opt-out)', () => {
+      const r = execGit(['rev-parse', '--absolute-git-dir'], { cwd: tmpDir, env: { GIT_DIR: gitDir(other) } });
+      assert.strictEqual(fs.realpathSync.native(r.stdout), gitDir(other));
+    });
+  });
+
+  // #5048: execGit is the shared seam behind every git call the tool makes,
+  // including the read-only ones. Left at git's default, a read refreshes the
+  // index and takes an optional .git/index.lock to write the refreshed copy
+  // back, so it can lose a race against a real `git add`/`git commit` and fail
+  // it with `Unable to create '.git/index.lock': File exists`.
+  describe('GIT_OPTIONAL_LOCKS (#5048)', () => {
+    // Deterministic env capture, mirroring the execTool mock convention used
+    // below: spawnSync is fully mocked, so no real spawn runs.
+    function captureGitSpawnOptions(opts) {
+      const original = childProcess.spawnSync;
+      let captured = null;
+      childProcess.spawnSync = (file, args, options) => {
+        captured = { file, args, options };
+        return { status: 0, stdout: '', stderr: '' };
+      };
+      try {
+        execGit(['status', '--porcelain'], opts);
+      } finally {
+        childProcess.spawnSync = original;
+      }
+      return captured;
+    }
+
+    test('defaults to GIT_OPTIONAL_LOCKS=0', () => {
+      const captured = captureGitSpawnOptions();
+      assert.ok(captured, 'spawnSync was not called');
+      assert.equal(captured.file, 'git');
+      assert.equal(captured.options.env.GIT_OPTIONAL_LOCKS, '0');
+    });
+
+    test('the non-interactive defaults are preserved', () => {
+      const captured = captureGitSpawnOptions();
+      assert.equal(captured.options.env.GIT_TERMINAL_PROMPT, '0');
+      assert.equal(captured.options.env.GCM_INTERACTIVE, 'never');
+    });
+
+    test('the env inherits the parent environment', () => {
+      // A minimal env would drop PATH, HOME and the user's git config, so the
+      // assertion is over the whole inherited surface, not one key.
+      //
+      // The keys execGit sets on purpose are not inherited and are asserted by the
+      // sibling rows: a parent that already carries one (the Windows runner sets
+      // GCM_INTERACTIVE=Never) must not turn the intended override into a failure.
+      const OVERRIDDEN_ON_PURPOSE = new Set(['GIT_OPTIONAL_LOCKS', 'GIT_TERMINAL_PROMPT', 'GCM_INTERACTIVE']);
+      const captured = captureGitSpawnOptions();
+      for (const key of Object.keys(process.env)) {
+        if (OVERRIDDEN_ON_PURPOSE.has(key.toUpperCase())) continue;
+        if (GIT_LOCATION_ENV_VARS.includes(key.toUpperCase())) continue; // scrubbed on purpose (#5548)
+        assert.deepEqual(
+          captured.options.env[key], process.env[key],
+          `env must inherit ${key} from the parent process`);
+      }
+    });
+
+    test('a caller can opt back in through opts.env', () => {
+      // A writing command, or a status whose index refresh the caller wants
+      // persisted, must be able to turn the default back off. opts.env is
+      // spread last precisely so this override wins.
+      const captured = captureGitSpawnOptions({ env: { GIT_OPTIONAL_LOCKS: '1' } });
+      assert.equal(captured.options.env.GIT_OPTIONAL_LOCKS, '1');
+    });
+
+    test('argv and the spawn bounds are unchanged', () => {
+      // Only the env may change: a rewritten argv or a dropped timeout would
+      // be a behavior change smuggled in under this fix. The timeout is a
+      // fixture value proving execGit still forwards the caller's own option —
+      // execGit is fully mocked above, so no wall clock is involved.
+      const EXEC_GIT_OPTION_PASSTHROUGH_TIMEOUT_MS = 4321;
+      const captured = captureGitSpawnOptions({
+        cwd: tmpDir,
+        timeout: EXEC_GIT_OPTION_PASSTHROUGH_TIMEOUT_MS,
+      });
+      assert.deepEqual(captured.args, ['status', '--porcelain']);
+      assert.equal(captured.options.cwd, tmpDir);
+      assert.equal(captured.options.timeout, EXEC_GIT_OPTION_PASSTHROUGH_TIMEOUT_MS);
+      assert.equal(captured.options.encoding, 'utf-8');
+      assert.equal(captured.options.windowsHide, true);
+    });
   });
 });
 

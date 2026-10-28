@@ -15,12 +15,9 @@ const { escapeRegex } = require('../../gsd-core/bin/lib/pattern.cjs');
 
 /**
  * Workflows that Claude reaches and Pi does not, by path relative to gsd-core/workflows, with the reason.
- * `debug.md` is reached only through `/gsd-debug` and `gsd-debug-session-manager`, and the Pi
- * skill for `/gsd-debug` is the unsupported stub (`PI_UNSUPPORTED_SKILLS`).
+ * Empty since #5630: `debug.md` is reached by the partial `/skill:gsd-debug` (`list` and `status`).
  */
-const WORKFLOW_DISPOSITIONS = Object.freeze({
-  'debug.md': 'only /skill:gsd-debug runs it, and that skill is unsupported on Pi: needs nested dispatch; Pi dispatch is flat',
-});
+const WORKFLOW_DISPOSITIONS = Object.freeze({});
 
 /**
  * @param {Iterable<string>} claude surface names Claude ships

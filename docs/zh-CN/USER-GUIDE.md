@@ -401,12 +401,7 @@ AI 编码工具会幻觉出包名。攻击者会在 npm、PyPI 和 crates.io 上
 | `[SUS]` | 存在可疑信号 | 标记；规划器添加 `checkpoint:human-verify` |
 | `[SLOP]` | 高置信度幻觉 | 从 RESEARCH.md 中删除；永远不会到达规划器 |
 
-手动安装 slopcheck：
-
-```bash
-pip install slopcheck
-# verify: slopcheck install express --json
-```
+裁决基于实时注册表 API（npm、PyPI、crates.io）计算——无需安装任何单独的工具。`slopcheck` 是可选的仅升级适配器（只能提高裁决，不能降低）；任何随附配置都没有接入它，缺少它不会改变门控的行为。
 
 ---
 

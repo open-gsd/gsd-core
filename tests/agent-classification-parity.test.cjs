@@ -1,11 +1,11 @@
 // allow-test-rule: source-text-is-the-product
-// docs/AGENTS.md section layout + docs/INVENTORY.md table ARE the classification surface being validated
+// docs/reference/agents.md section layout + docs/INVENTORY.md table ARE the classification surface being validated
 'use strict';
 
 /**
  * Agent classification parity test (#1171)
  *
- * Makes docs/AGENTS.md section structure the single source of truth for
+ * Makes docs/reference/agents.md section structure the single source of truth for
  * primary-vs-advanced agent classification, and fails when docs/INVENTORY.md
  * or the AGENTS.md prose counts drift from it.
  *
@@ -22,7 +22,7 @@ const path = require('node:path');
 const { listAgentFiles } = require('./helpers/agent-roster.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
-const AGENTS_MD = path.join(ROOT, 'docs', 'AGENTS.md');
+const AGENTS_MD = path.join(ROOT, 'docs', 'reference', 'agents.md');
 const INVENTORY_MD = path.join(ROOT, 'docs', 'INVENTORY.md');
 const AGENTS_DIR = path.join(ROOT, 'agents');
 
@@ -305,7 +305,7 @@ describe('agent-classification-parity: AGENTS.md section structure is the single
     // --- (c) parenthetical slug list ---
     // The prose lists short slugs without "gsd-" prefix, e.g.:
     //   (pattern-mapper, debug-session-manager, ...)
-    // eslint-disable-next-line local/no-unbounded-quantifier -- parses docs/AGENTS.md, a maintainer-authored repo doc with bounded prose, not adversarial input
+    // eslint-disable-next-line local/no-unbounded-quantifier -- parses docs/reference/agents.md, a maintainer-authored repo doc with bounded prose, not adversarial input
     const parenMatch = rawAgentsMd.match(/\(([^)]+)\)\s+have concise stubs/);
     assert.ok(
       parenMatch,
@@ -434,7 +434,7 @@ describe('agent-classification-parity: AGENTS.md section structure is the single
       if (row === null) { missingRow.push(section.slug); continue; }
       if (row.value !== declared) {
         mismatches.push(
-          `  ${section.slug} (docs/AGENTS.md:${row.line})\n` +
+          `  ${section.slug} (docs/reference/agents.md:${row.line})\n` +
           `    doc:         ${row.value}\n` +
           `    frontmatter: ${declared}`,
         );
@@ -452,7 +452,7 @@ describe('agent-classification-parity: AGENTS.md section structure is the single
     assert.strictEqual(
       mismatches.length,
       0,
-      'docs/AGENTS.md **Tools** rows disagree with the agents\' tools: frontmatter.\n' +
+      'docs/reference/agents.md **Tools** rows disagree with the agents\' tools: frontmatter.\n' +
       'The role card documents a tool set the agent does not have (or omits one it does) — ' +
       'the #2526 drift class at the doc layer. Copy the frontmatter value verbatim:\n' +
       mismatches.join('\n'),

@@ -602,7 +602,7 @@ describe('gsd-codebase-mapper --paths flag', () => {
 
   test('AGENTS.md mentions --paths for mapper', () => {
     const doc = fs.readFileSync(
-      path.join(__dirname, '..', 'docs', 'AGENTS.md'),
+      path.join(__dirname, '..', 'docs', 'reference', 'agents.md'),
       'utf8',
     );
     assert.ok(/--paths/.test(doc));

@@ -43,6 +43,7 @@ import noRenderedTextLengthAssert from './eslint-rules/no-rendered-text-length-a
 import noUnconfinedPathJoin from './eslint-rules/no-unconfined-path-join.cjs';
 import noVerificationStatusLiteral from './eslint-rules/no-verification-status-literal.cjs';
 import noRuntimeNameLiteral from './eslint-rules/no-runtime-name-literal.cjs';
+import requireReadOnlyGitEnv from './eslint-rules/require-read-only-git-env.cjs';
 
 const unconfinedPathJoinAllowlist = require('./eslint-rules/no-unconfined-path-join.allowlist.json');
 
@@ -80,6 +81,7 @@ const localPlugin = {
     'no-unconfined-path-join': noUnconfinedPathJoin,
     'no-verification-status-literal': noVerificationStatusLiteral,
     'no-runtime-name-literal': noRuntimeNameLiteral,
+    'require-read-only-git-env': requireReadOnlyGitEnv,
   },
 };
 
@@ -178,6 +180,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/pr-branch-patterns.cjs',
       // #4984: tsc-generated — lint the src/undo-commit-selection.cts source.
       'gsd-core/bin/lib/undo-commit-selection.cjs',
+      // #5705: tsc-generated — lint the src/milestone-release-tags.cts source.
+      'gsd-core/bin/lib/milestone-release-tags.cjs',
       // #4145: tsc-generated runtime artifact — lint the src/pristine-baseline.cts source.
       'gsd-core/bin/lib/pristine-baseline.cjs',
       'gsd-core/bin/lib/ui-consideration-probe.cjs',
@@ -189,6 +193,7 @@ export default tseslint.config(
       // issue #1953: tsc-generated runtime artifact — lint the src/refactor-trigger-command-router.cts source.
       'gsd-core/bin/lib/refactor-trigger-command-router.cjs',
       'gsd-core/bin/lib/api-coverage.cjs',
+      'gsd-core/bin/lib/args-terminator.cjs',
       'gsd-core/bin/lib/artifacts.cjs',
       'gsd-core/bin/lib/assumption-delta.cjs',
       'gsd-core/bin/lib/state-transition.cjs',
@@ -250,6 +255,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/token-scanner.cjs',
       // #3311: tsc-generated runtime artifact — lint src/milestone-lock.cts, not this.
       'gsd-core/bin/lib/milestone-lock.cjs',
+      // #5551: tsc-generated runtime artifact — lint src/git-info-exclude.cts, not this.
+      'gsd-core/bin/lib/git-info-exclude.cjs',
       'gsd-core/bin/lib/health-diagnostic-types.cjs',
       'gsd-core/bin/lib/health-diagnostic.cjs',
       'gsd-core/bin/lib/health-diagnostic-rules/root-existence.cjs',
@@ -339,6 +346,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/quick-batch-dispatch.cjs',
       'gsd-core/bin/lib/quick-batch-command-router.cjs',
       'gsd-core/bin/lib/roadmap-parser.cjs',
+      'gsd-core/bin/lib/roadmap-progress.cjs',
       'gsd-core/bin/lib/drift.cjs',
       'gsd-core/bin/lib/cjs-command-router-adapter.cjs',
       'gsd-core/bin/lib/phase-command-router.cjs',
@@ -370,6 +378,10 @@ export default tseslint.config(
       'gsd-core/bin/lib/commands.cjs',
       'gsd-core/bin/lib/state.cjs',
       'gsd-core/bin/lib/milestone.cjs',
+      // #5706: tsc-generated runtime artifact — lint src/milestone-release-map.cts, not this.
+      'gsd-core/bin/lib/milestone-release-map.cjs',
+      // #5763: tsc-generated runtime artifact — lint src/phase-entry-grammar.cts, not this.
+      'gsd-core/bin/lib/phase-entry-grammar.cjs',
       'gsd-core/bin/lib/phase.cjs',
       'gsd-core/bin/lib/verify.cjs',
       'gsd-core/bin/lib/init.cjs',
@@ -415,6 +427,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/model-adapter.cjs',
       'gsd-core/bin/lib/hook-bus.cjs',
       'gsd-core/bin/lib/state-io.cjs',
+      // #5048: tsc-generated runtime artifact — lint the src/read-only-git-env.cts source.
+      'gsd-core/bin/lib/read-only-git-env.cjs',
       'gsd-core/bin/lib/external-descriptor-trust.cjs',
       'gsd-core/bin/lib/mcp-server.cjs',
       // #3072: tsc-generated runtime artifact — lint the src/mcp-catalog.cts source.
@@ -542,6 +556,11 @@ export default tseslint.config(
       // runtime-specific fact; comparing a runtime identifier to a registered
       // runtime-id literal re-derives one. Exempts the owner by path.
       'local/no-runtime-name-literal': 'error',
+      // #5048: a direct git spawn takes its env from readOnlyGitEnv() so a
+      // read-only call never contends for the optional index lock. A git
+      // command that never opens the index suppresses with
+      // `// allow-index-refresh: <reason>`.
+      'local/require-read-only-git-env': 'error',
     },
   },
 
@@ -560,6 +579,9 @@ export default tseslint.config(
     },
     rules: {
       'local/no-runtime-name-literal': 'error',
+      // #5048: see the src/**/*.cts block above. The rule scopes itself to
+      // hooks/**/*.js by path, so bin/install.js is untouched.
+      'local/require-read-only-git-env': 'error',
     },
   },
 
