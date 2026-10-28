@@ -12,6 +12,7 @@ import os from 'node:os';
 import { execGit, platformWriteSync, platformReadSync, toNativePath, posixNormalize } from './shell-command-projection.cjs';
 import { realClock } from './clock.cjs';
 import { escapeRegex } from './pattern.cjs';
+import { isBoxCharChecked, isPhaseEntryChecked, phaseEntryRegExp } from './phase-entry-grammar.cjs';
 import { collectSection } from './markdown-sectionizer.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- io.cjs is an export= CommonJS module
 import io = require('./io.cjs');
@@ -3308,12 +3309,13 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     }
   } else {
     // Preserve the historical greedy non-bracket fallback byte-for-byte.
-    const _allCompletedPattern = new RegExp(
-      `-\\s*\\[x\\]\\s*.*${phaseHeadingPrefixNoCapture}(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`,
+    const _allCompletedPattern = phaseEntryRegExp(
+      `.*${phaseHeadingPrefixNoCapture}(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`,
       'gi',
     );
     let _allMatch: RegExpExecArray | null;
     while ((_allMatch = _allCompletedPattern.exec(rawContent)) !== null) {
+      if (!isPhaseEntryChecked(_allMatch[0])) continue;
       const phaseNum = normalizePhaseNumber(_allMatch[1]);
       const phase = phaseMap.get(phaseNum);
       if (!phase || phase['phase_complete'] === true) {
@@ -4005,12 +4007,12 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
     // matched (by absorbing the bracket text). This does NOT migrate the site
     // onto phaseHeadingPrefixSrcFor / the bracket convention — that stays
     // out of scope per the comment above (#4984 revert, pinned census).
-    const cbPattern = new RegExp(`^[ \\t]*-[ \\t]*\\[(x| )\\][ \\t]*(?:\\*\\*)?(?:\\[[^\\]\\n]{0,200}\\]\\s*)?Phase\\s+(${phaseScanTokenSource(directoryContext)})[:\\s]`, 'gim');
+    const cbPattern = phaseEntryRegExp(`(?:\\[[^\\]\\n]{0,200}\\]\\s*)?Phase\\s+(${phaseScanTokenSource(directoryContext)})[:\\s]`, 'gim', { state: 'captured' });
     let cbm: RegExpExecArray | null;
     while ((cbm = cbPattern.exec(roadmapContent)) !== null) {
       const cbKey = cbm[2];
       if (!roadmapCheckboxStates.has(cbKey)) {
-        roadmapCheckboxStates.set(cbKey, cbm[1].toLowerCase() === 'x');
+        roadmapCheckboxStates.set(cbKey, isBoxCharChecked(cbm[1]));
       }
     }
   } catch {

@@ -79,6 +79,7 @@ import phaseIdDisplayMod = require('./phase-id-display.cjs');
 // numeric canonicalization instead of re-deriving it here — see
 // bracketWriteContext/bracketPhaseId below.
 const { milestoneToken, phaseToken } = phaseIdDisplayMod;
+import { isBoxCharChecked, isPhaseEntryChecked, phaseEntryPrefixSrc, phaseEntryRegExp } from './phase-entry-grammar.cjs';
 import { escapeRegex } from './pattern.cjs';
 import { declareGateExit } from './gate-exit.cjs';
 import { gateVerdict } from './gate-verdict.cjs';
@@ -126,7 +127,9 @@ const {
 // progress counters the phase-complete transaction passes downstream.
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-lifecycle.cjs is an export= CommonJS module
 import phaseLifecycleMod = require('./phase-lifecycle.cjs');
-const { deriveProgressFromRoadmap: deriveProgressFromRoadmapForIntent, clampPercent: clampPercentForIntent, milestoneVersionOf, locateProgressTable, normalizeMilestoneToken } = phaseLifecycleMod;
+const { deriveProgressFromRoadmap: deriveProgressFromRoadmapForIntent, clampPercent: clampPercentForIntent } = phaseLifecycleMod;
+// #5761: the Progress table locator and milestone-identity helpers live in their one owner.
+import { locateRoadmapProgress, milestoneVersionOf, normalizeMilestoneToken } from './roadmap-progress.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
@@ -2315,8 +2318,8 @@ function scanExistingDecimalPhaseNumbers(phasesDir: string, rawContent: string, 
     decimalSet.add(parseInt(rmMatch[1], 10));
   }
 
-  const checklistDecimalPattern = new RegExp(
-    `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?Phase\\s+${phaseMarkdownRegexSource(base)}\\.(\\d+)${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
+  const checklistDecimalPattern = phaseEntryRegExp(
+    `Phase\\s+${phaseMarkdownRegexSource(base)}\\.(\\d+)${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
     'gi',
   );
   let clMatch: RegExpExecArray | null;
@@ -2608,8 +2611,8 @@ function cmdPhaseInsert(
       ? bracketHeading !== null
       : tokenizeHeadings(content).some((h) => targetPattern.test(h.text));
 
-    const bulletPattern = new RegExp(
-      `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
+    const bulletPattern = phaseEntryRegExp(
+      `${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
       'i',
     );
     // #5007 (Phase 6 / ADR-4910 §8): a pure "does ANY phase heading exist"
@@ -2638,8 +2641,8 @@ function cmdPhaseInsert(
     }
 
     if (!headingMatch && !isBulletStyle) {
-      const checklistPattern = new RegExp(
-        `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
+      const checklistPattern = phaseEntryRegExp(
+        `${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
         'i',
       );
       if (checklistPattern.test(content)) {
@@ -2714,9 +2717,10 @@ function cmdPhaseInsert(
     let roadmapEntry: 'checklist' | 'progress_table' | 'none';
 
     if (isBulletStyle) {
-      const boldBulletPattern = new RegExp(
-        `-\\s*\\[[ x]\\]\\s*\\*\\*Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}:`,
+      const boldBulletPattern = phaseEntryRegExp(
+        `Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}:`,
         'i',
+        { bold: 'required' },
       );
       const useBold = boldBulletPattern.test(content);
       const phaseLabel = useBold
@@ -2731,7 +2735,7 @@ function cmdPhaseInsert(
       // matches what platformWriteSync enforces anyway.
       const bulletEntry = `\n- [ ] ${phaseLabel}`;
       // A non-bold bullet is not an entry `roadmap analyze` reads (checklistEntrySrc needs `**`).
-      roadmapEntry = new RegExp(checklistEntrySrc(insertConvention, false, true)).test(bulletEntry) ? 'checklist' : 'none';
+      roadmapEntry = new RegExp(checklistEntrySrc(insertConvention, false, true), 'm').test(bulletEntry) ? 'checklist' : 'none';
 
       // #3413: was `[^\n]*`, which on CRLF content swallows the line's
       // trailing \r into the match, shifting bulletLineEnd to land BETWEEN
@@ -2741,8 +2745,8 @@ function cmdPhaseInsert(
       // .md targets regardless). Widening to [^\r\n]* stops the match at the
       // true line-content boundary so bulletLineEnd lands cleanly before the
       // terminator.
-      const targetBulletPattern = new RegExp(
-        `(-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\r\\n]*)`,
+      const targetBulletPattern = phaseEntryRegExp(
+        `Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\r\\n]*`,
         'i',
       );
       const bulletMatchResult = rawContent.match(targetBulletPattern);
@@ -2756,7 +2760,7 @@ function cmdPhaseInsert(
       // #5599: land after the last bullet inside the allocation family's
       // subtree, not before the first following bullet of any number (which is
       // the target's own later decimal child when one exists).
-      const bulletRe = /\r?\n-\s*\[[ x]\]\s*(?:\*\*)?Phase\s+(?<tok>\d[^\s:*]*)[^\r\n]*/gi;
+      const bulletRe = new RegExp(`\\r?\\n${phaseEntryPrefixSrc()}Phase\\s+(?<tok>\\d[^\\s:*]*)[^\\r\\n]*`, 'gim');
       let insertIdx = bulletLineEnd;
       for (const m of afterBullet.matchAll(bulletRe)) {
         if (!isPhaseTokenWithin(m.groups!.tok, subtreeRoot)) {
@@ -6984,7 +6988,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // milestone ROADMAP binds, so a shipped milestone's same-numbered phase
         // cannot count.
         if (!phaseWasAlreadyComplete) {
-          const progressTable = locateProgressTable(originalMilestoneScope);
+          const progressTable = locateRoadmapProgress(originalMilestoneScope).table;
           if (progressTable !== null) {
             const wantMilestone = progressTable.columns.includes('Milestone')
               ? normalizeMilestoneToken(roadmapParserMod.getMilestoneInfo(cwd).value?.version)
@@ -7595,12 +7599,13 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
       if (roadmapContent !== null) {
         try {
           const milestoneForComplete = extractCurrentMilestone(roadmapContent, cwd);
-          const completePattern = new RegExp(
-            `-\\s*\\[[xX]\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})`,
-            'gi'
+          const completePattern = phaseEntryRegExp(
+            `Phase\\s+(${phaseScanTokenSource(directoryContext)})`,
+            'gi',
           );
           let cm: RegExpExecArray | null;
           while ((cm = completePattern.exec(milestoneForComplete)) !== null) {
+            if (!isPhaseEntryChecked(cm[0])) continue;
             if (isSentinelPhaseId(cm[1])) continue;
             if (!roadmapCompleteNums.some((n) => comparePhaseNum(cm![1], n, directoryContext) === 0)) {
               roadmapCompleteNums.push(cm[1]);
@@ -7690,8 +7695,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // just below the loop.
           const phasePattern = new RegExp(
             `(?:#{2,4}\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n*]+)` +
-            `|-\\s*\\[[ xX]\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+))`,
-            'gi'
+            `|${phaseEntryPrefixSrc()}Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+))`,
+            'gim'
           );
           let pm: RegExpExecArray | null;
           while ((pm = phasePattern.exec(roadmapForPhases)) !== null) {
@@ -7791,14 +7796,15 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // Without it, this lowest-outstanding override was blind to dash-grammar
           // rows and could not correct an out-of-order completion on the same
           // mixed-grammar roadmaps that broke stage 2.
-          const cbPattern = new RegExp(
-            `-\\s*\\[(x| )\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+)`,
-            'gi'
+          const cbPattern = phaseEntryRegExp(
+            `Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+)`,
+            'gi',
+            { state: 'captured' },
           );
           let cbm: RegExpExecArray | null;
           let lowestOutstanding: { num: string; name: string } | null = null;
           while ((cbm = cbPattern.exec(milestoneScope)) !== null) {
-            const isChecked = cbm[1].toLowerCase() === 'x';
+            const isChecked = isBoxCharChecked(cbm[1]);
             // #2949: exclude sentinel-range phase ids (0.x backlog, 999.x) from candidacy.
             // comparePhaseNum("0.1","12") === -12, so without this guard an unchecked 0.x
             // backlog row sorts below every real phase and is wrongly selected as next_phase,
