@@ -47,9 +47,11 @@ const MANAGER_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'manager.md')
 // conformance.test.cjs PRE_PHASE6) — mirrored here so a guard sentence can
 // never quietly push the file past it. #3771/#3916 raised the authoritative
 // PRE_PHASE6 value (94519 -> 96700 -> 98300) for the REVISION_CONFLICT
-// persistence/routing gate before this file's own next-merge landed; keep
+// persistence/routing gate before this file's own next-merge landed, and
+// #5182 raised it to 98500 for the stall watch's return receipt (+521),
+// merged with #5750's unrelated step 13c growth on next (+362); keep
 // this mirror equal to that constant, not a stale snapshot of it.
-const PLAN_PHASE_PHASE6_LINE = 98300;
+const PLAN_PHASE_PHASE6_LINE = 98500;
 
 function lfByteCount(p) {
   return Buffer.byteLength(readFileNormalized(p), 'utf-8');
