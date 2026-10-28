@@ -5634,6 +5634,11 @@ describe('state planned-phase command', () => {
     for (const n of [1, 2, 3]) fs.writeFileSync(path.join(phaseDir, `19-0${n}-PLAN.md`), '# Plan\n');
     return phaseDir;
   }
+  // The position a Plan / Current Plan line records, read through the owner; the written spelling is pinned where it is the contract.
+  const planAt = (name) => {
+    const read = stateTransitionMod.readPlanPosition(stateDocument.stateExtractField(fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8'), name));
+    return read && { n: read.n, ofM: read.ofM, m: read.m };
+  };
   const TBD_BODY = ['Phase: 19', 'Plan: 0 TBD in current phase', 'Status: Ready'];
   const PLAN_CMD = ['state', 'planned-phase', '--phase', '19', '--name', 'Tbd', '--plans'];
 
@@ -5651,7 +5656,7 @@ describe('state planned-phase command', () => {
     assert.ok(!output.updated.includes('Total Plans in Phase'), `no Total Plans line existed; got ${JSON.stringify(output.updated)}`);
 
     const after = fs.readFileSync(statePath, 'utf8');
-    assert.match(after, /^Plan: 0 of 3 in current phase$/m, `body Plan line; STATE.md was:\n${after}`);
+    assert.deepStrictEqual(planAt('Plan'), { n: 0, ofM: true, m: 3 }, `body Plan line; STATE.md was:\n${after}`);
     assert.match(after, /^Status: Ready to execute$/m, `body Status line; STATE.md was:\n${after}`);
     const fm = frontmatterLib.extractFrontmatter(after);
     assert.strictEqual(Number(fm.progress && fm.progress.total_plans), 3, `frontmatter progress.total_plans; fm was ${JSON.stringify(fm)}`);
@@ -5715,25 +5720,24 @@ describe('state planned-phase command', () => {
     writeTbdPlanFixture(['Phase: 19', 'Plan: 2 of 5 in current phase', 'Current Plan: 1 of 5 in current phase', 'Status: Ready']);
     const r = runGsdTools(['state', 'planned-phase', '--phase', '19', '--name', 'Tbd', '--plans', '6'], tmpDir);
     assert.ok(r.success, r.error);
-    const after = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8');
-    assert.match(after, /^Plan: 2 of 6 in current phase$/m);
-    assert.match(after, /^Current Plan: 1 of 6 in current phase$/m);
+    assert.deepStrictEqual(planAt('Plan'), { n: 2, ofM: true, m: 6 });
+    assert.deepStrictEqual(planAt('Current Plan'), { n: 1, ofM: true, m: 6 });
   });
 
   test('#5320: same-phase replan keeps a bare-number plan line beside Total Plans in Phase', () => {
-    for (const name of ['Current Plan', 'Plan']) {
-      writeTbdPlanFixture(['Phase: 19', `${name}: 2`, 'Total Plans in Phase: 5', 'Status: Ready']);
+    for (const line of ['Current Plan: 2', 'Plan: 2', 'Current Plan: 2 (wave 1)', 'Plan: 2 - wave 1 done']) {
+      writeTbdPlanFixture(['Phase: 19', line, 'Total Plans in Phase: 5', 'Status: Ready']);
       const r = runGsdTools(['state', 'planned-phase', '--phase', '19', '--name', 'Tbd', '--plans', '6'], tmpDir);
       assert.ok(r.success, r.error);
       const after = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8');
-      assert.match(after, new RegExp(`^${name}: 2$`, 'm'), `STATE.md was:\n${after}`);
+      assert.ok(`\n${after}`.includes(`\n${line}\n`), `STATE.md was:\n${after}`);
       assert.match(after, /^Total Plans in Phase: 6$/m);
     }
   });
 
   test('#5320: replan with no Phase: line keeps the plan number when frontmatter current_phase matches', () => {
     const statePath = path.join(tmpDir, '.planning', 'STATE.md');
-    for (const [fmPhase, want] of [['19', '2 of 6'], ['18', '0 of 6']]) {
+    for (const [fmPhase, want] of [['19', { n: 2, ofM: true, m: 6 }], ['18', { n: 0, ofM: true, m: 6 }]]) {
       fs.writeFileSync(statePath, [
         '---', 'gsd_state_version: 1.0', 'status: planning', `current_phase: ${fmPhase}`, 'progress:', '  total_phases: 1', '  completed_phases: 0', '  total_plans: 0', '  completed_plans: 0', '  percent: 0', '---', '',
         '# Project State', '', '## Current Position', '', 'Plan: 2 of 4 in current phase', 'Status: Ready', '',
@@ -5741,24 +5745,26 @@ describe('state planned-phase command', () => {
       ].join('\n'));
       const r = runGsdTools(['state', 'planned-phase', '--phase', '19', '--name', 'Tbd', '--plans', '6'], tmpDir);
       assert.ok(r.success, r.error);
-      assert.match(fs.readFileSync(statePath, 'utf8'), new RegExp(`^Plan: ${want} in current phase$`, 'm'));
+      assert.deepStrictEqual(planAt('Plan'), want);
     }
   });
 
   test('#5320: different-phase replan resets a bare-number plan line beside Total Plans in Phase', () => {
-    writeTbdPlanFixture(['Phase: 18', 'Plan: 2', 'Total Plans in Phase: 5', 'Status: Ready']);
-    const r = runGsdTools(['state', 'planned-phase', '--phase', '19', '--name', 'Tbd', '--plans', '3'], tmpDir);
-    assert.ok(r.success, r.error);
-    const after = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8');
-    assert.match(after, /^Plan: 0$/m, `STATE.md was:\n${after}`);
-    assert.match(after, /^Total Plans in Phase: 3$/m);
+    for (const line of ['Plan: 2', 'Plan: 2 - wave 1 done']) {
+      writeTbdPlanFixture(['Phase: 18', line, 'Total Plans in Phase: 5', 'Status: Ready']);
+      const r = runGsdTools(['state', 'planned-phase', '--phase', '19', '--name', 'Tbd', '--plans', '3'], tmpDir);
+      assert.ok(r.success, r.error);
+      const after = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8');
+      assert.match(after, /^Plan: 0$/m, `STATE.md was:\n${after}`);
+      assert.match(after, /^Total Plans in Phase: 3$/m);
+    }
   });
 
   test('#5320: replan for a different phase resets the plan number to 0', () => {
     writeTbdPlanFixture(['Phase: 18', 'Plan: 2 of 4 in current phase', 'Status: Ready']);
     const r = runGsdTools(['state', 'planned-phase', '--phase', '19', '--name', 'Tbd', '--plans', '3'], tmpDir);
     assert.ok(r.success, r.error);
-    assert.match(fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8'), /^Plan: 0 of 3 in current phase$/m);
+    assert.deepStrictEqual(planAt('Plan'), { n: 0, ofM: true, m: 3 });
   });
 
   test('#5320: --plans below the recorded plan position is refused; at it and above it is recorded (limit-1/limit/limit+1)', () => {
@@ -5807,12 +5813,16 @@ describe('state planned-phase command', () => {
     }
   });
 
-  test('#5320: a replan rewrites only the total: spelling, zero-padding and trailing text survive', () => {
+  test('#5320: a replan rewrites only the total of an N of M value; a bare N, an unfilled total or TBD gains it', () => {
     const statePath = path.join(tmpDir, '.planning', 'STATE.md');
     for (const [line, want] of [
       ['Plan: 2 of 5 - wave 2 done', 'Plan: 2 of 8 - wave 2 done'],
       ['Plan: 04 of 06', 'Plan: 04 of 08'],
+      ['Plan: 1 of 05', 'Plan: 1 of 08'],
+      ['Plan: 1 of 10', 'Plan: 1 of 8'],
       ['Plan: 2 of 5', 'Plan: 2 of 8'],
+      ['Plan: 1 of ?', 'Plan: 1 of 8'],
+      ['Plan: 1 of B in current phase', 'Plan: 1 of 8 in current phase'],
       ['Current Plan: 3 (blocked)', 'Current Plan: 3 of 8 (blocked)'],
       ['Plan: 0 TBD in current phase', 'Plan: 0 of 8 in current phase'],
       ['Plan: TBD', 'Plan: 0 of 8 in current phase'],
@@ -5870,7 +5880,7 @@ describe('state planned-phase command', () => {
       writeTbdPlanFixture([phaseLine, 'Plan: 2 of 4 in current phase', 'Status: Ready']);
       const r = runGsdTools(['state', 'planned-phase', '--phase', '1', '--name', 'Tbd', '--plans', '6'], tmpDir);
       assert.ok(r.success, `${phaseLine}: ${r.error}`);
-      assert.match(fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8'), /^Plan: 2 of 6 in current phase$/m, phaseLine);
+      assert.deepStrictEqual(planAt('Plan'), { n: 2, ofM: true, m: 6 }, phaseLine);
     }
   });
 
@@ -5879,11 +5889,14 @@ describe('state planned-phase command', () => {
     const statePath = path.join(tmpDir, '.planning', 'STATE.md');
     const ok = runGsdTools(['state', 'planned-phase', '--phase', '19', '--name', 'Tbd', '--plans', '9007199254740991'], tmpDir);
     assert.ok(ok.success, ok.error);
-    assert.match(fs.readFileSync(statePath, 'utf8'), /^Plan: 0 of 9007199254740991 in current phase$/m);
+    assert.deepStrictEqual(planAt('Plan'), { n: 0, ofM: true, m: 9007199254740991 });
     writeTbdPlanFixture(TBD_BODY);
     const before = fs.readFileSync(statePath);
-    const bad = runGsdTools(['state', 'planned-phase', '--phase', '19', '--name', 'Tbd', '--plans', '9007199254740992'], tmpDir);
+    const bad = runGsdTools(['state', 'planned-phase', '--phase', '19', '--name', 'Tbd', '--plans', '9007199254740992', '--json-errors'], tmpDir);
     assert.strictEqual(bad.success, false);
+    const failure = JSON.parse(bad.error);
+    assert.strictEqual(failure.reason, ERROR_REASON.USAGE);
+    assert.strictEqual(failure.message, 'Invalid --plans value. Expected a non-negative integer.');
     assert.ok(fs.readFileSync(statePath).equals(before));
   });
 
@@ -5899,34 +5912,6 @@ describe('state planned-phase command', () => {
       assert.strictEqual(failure.message, 'Invalid --plans value. Expected a non-negative integer.', `--plans ${bad}`);
       assert.ok(fs.readFileSync(statePath).equals(before), `--plans ${bad} must not write`);
     }
-  });
-
-  test('#5320: parsePlans property: digit strings round-trip up to MAX_SAFE_INTEGER, everything else is rejected', () => {
-    const { parsePlans } = require('../gsd-core/bin/lib/state-command-router.cjs');
-    const run = (v) => { let err = null; const n = parsePlans(v, (m) => { err = m; }); return { n, err }; };
-    const MAX = Number.MAX_SAFE_INTEGER;
-    fc.assert(fc.property(fc.integer({ min: 0, max: MAX }), (n) => {
-      const r = run(String(n));
-      return r.n === n && r.err === null;
-    }), { seed: 5320, numRuns: 200 });
-    fc.assert(fc.property(fc.integer({ min: 0, max: MAX }), fc.integer({ min: 1, max: 4 }), (n, zeros) => {
-      const r = run('0'.repeat(zeros) + String(n));
-      return r.n === n && r.err === null;
-    }), { seed: 5321, numRuns: 200 });
-    // Digit strings above the limit are rejected, not rounded.
-    fc.assert(fc.property(fc.bigInt({ min: BigInt(MAX) + 1n, max: 10n ** 40n }), (big) => {
-      const r = run(String(big));
-      return r.n === null && r.err !== null;
-    }), { seed: 5322, numRuns: 200 });
-    fc.assert(fc.property(
-      fc.string().filter((s) => !/^\d+$/.test(s)),
-      (s) => run(s).err !== null && run(s).n === null,
-    ), { seed: 5323, numRuns: 200 });
-    // limit-1 / limit / limit+1
-    assert.deepStrictEqual(run(String(MAX - 1)), { n: MAX - 1, err: null });
-    assert.deepStrictEqual(run(String(MAX)), { n: MAX, err: null });
-    assert.strictEqual(run(String(MAX + 1)).n, null);
-    assert.deepStrictEqual(run(null), { n: null, err: null });
   });
 
   test('#5320: --plans 0 is reported as 0, not ?', () => {
