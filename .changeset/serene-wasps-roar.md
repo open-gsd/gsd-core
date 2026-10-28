@@ -1,0 +1,5 @@
+---
+type: Fixed
+pr: 5736
+---
+**`roadmap update-plan-progress` no longer ticks a plan row in a shipped milestone or another phase** — a completed plan's checkbox was ticked at its first match anywhere in ROADMAP.md, so an archived `<details>` milestone or a sibling phase sharing the plan id got the tick instead of the active phase. Rows are now ticked only inside the updated phase's own section and checklist entry (both, when the row is in each) within the active milestone, and a row that sits under a non-phase heading inside the active milestone (owned by no sibling phase) counts as this phase's row, so no duplicate is inserted. Which regions are editable at all is decided by the archive masking of #5553 (shipped `<details>` blocks and closed milestone sections stay untouched), not here; rows under a `####` sub-heading of the phase tick too; `-[ ]` lines without a space after the dash are not bullets and are not ticked. `phase complete` shares the milestone scoping, but still ticks plan rows only inside the phase detail section, not checklist-bullet rows. (#5483)

@@ -1,9 +1,9 @@
 /**
  * roadmap-parser.cjs — unit tests
  *
- * Covers the 6 functions extracted from core.cjs per ADR-857 rollout
+ * Covers the 5 functions extracted from core.cjs per ADR-857 rollout
  * phase 2b (#870): stripShippedMilestones, extractCurrentMilestone,
- * replaceInCurrentMilestone, getRoadmapPhaseInternal, getMilestoneInfo,
+ * getRoadmapPhaseInternal, getMilestoneInfo,
  * getMilestonePhaseFilter.
  *
  * Includes:
@@ -30,12 +30,15 @@ const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
 const {
   stripShippedMilestones,
   extractCurrentMilestone,
-  replaceInCurrentMilestone,
+  maskArchivedDetails,
   getRoadmapPhaseInternal,
   getMilestoneInfo,
   getMilestonePhaseFilter,
   isMilestoneShippedInRoadmap,
   withPhaseSection,
+  editCurrentMilestone,
+  phaseChecklistBullet,
+  checklistBulletExtent,
 } = roadmapParser;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -765,28 +768,304 @@ describe('roadmap-parser: extractCurrentMilestone', () => {
   });
 });
 
-// ─── replaceInCurrentMilestone ────────────────────────────────────────────────
+// ─── maskArchivedDetails (#5553) ──────────────────────────────────────────────
 
-describe('roadmap-parser: replaceInCurrentMilestone', () => {
-  test('replaces in content after last </details> when present', () => {
-    const content = '<details>\nold\n</details>\n**Plans:** 0/1 plans';
-    const result = replaceInCurrentMilestone(content, /0\/1 plans/, '1/1 plans complete');
-    assert.ok(result.includes('1/1 plans complete'), 'replacement applied after </details>');
-    assert.ok(result.includes('<details>'), 'details block untouched');
+describe('roadmap-parser: maskArchivedDetails', () => {
+  let tmpDir;
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\n---\n# State\n');
+  });
+  afterEach(() => cleanup(tmpDir));
+
+  const ARCHIVE = '<details>\n<summary>v1.0 ✅ SHIPPED</summary>\n\nold\n</details>';
+  const ACTIVE = '## v2.0 Active\n\nnew\n';
+
+  test('restore of an edit that drops a placeholder reports failure (null), not a silent no-op', () => {
+    const { visible, restore } = maskArchivedDetails(`${ARCHIVE}\n\n${ACTIVE}`, tmpDir);
+    assert.ok(!visible.includes('old'), 'archive hidden');
+    assert.strictEqual(restore(ACTIVE), null);
   });
 
-  test('replaces anywhere when no </details> present', () => {
-    const content = '**Plans:** 0/1 plans';
-    const result = replaceInCurrentMilestone(content, /0\/1 plans/, '1/1 plans complete');
-    assert.strictEqual(result, '**Plans:** 1/1 plans complete');
+  test('restore of an untouched visible text round-trips byte-for-byte', () => {
+    const content = `${ARCHIVE}\n\n${ACTIVE}`;
+    const { visible, restore } = maskArchivedDetails(content, tmpDir);
+    assert.strictEqual(restore(visible), content);
   });
 
-  test('does not replace in shipped sections', () => {
-    const content = '<details>\n**Plans:** 0/1 plans\n</details>\n## v2.0\n**Plans:** 0/1 plans';
-    const result = replaceInCurrentMilestone(content, /0\/1 plans/, '1/1 plans complete');
-    // Only the SECOND occurrence (after </details>) should be replaced
-    assert.ok(result.includes('<details>\n**Plans:** 0/1 plans\n</details>'), 'shipped section unchanged');
-    assert.ok(result.includes('## v2.0\n**Plans:** 1/1 plans complete'), 'current section updated');
+  test('CRLF: a plain shipped section ends before the newline so the next heading stays at line start', () => {
+    const content = `${ACTIVE}\r\n## v1.0 ✅ SHIPPED\r\n\r\nold\r\n\r\n## Progress\r\n\r\nrow\r\n`.replace(/(?<!\r)\n/g, '\r\n');
+    const { visible } = maskArchivedDetails(content, tmpDir);
+    assert.ok(!visible.includes('old'), 'shipped section hidden');
+    assert.match(visible, /\r\n## Progress\r\n/);
+  });
+
+  // Any <details> block inside the active range that is not a wrapper around the
+  // active heading is archive, whatever its <summary>.
+  for (const [name, head] of Object.entries({
+    'no <summary>': '<details>\n',
+    'non-closed <summary>': '<details>\n<summary>Deferred scope</summary>\n',
+  })) {
+    test(`${name} inside the active range is masked`, () => {
+      const { visible, restore } = maskArchivedDetails(`${ACTIVE}\n${head}old\n</details>\n`, tmpDir);
+      assert.ok(!visible.includes('old'), 'block hidden');
+      assert.ok(visible.includes('new'), 'active text visible');
+      assert.strictEqual(restore(visible), `${ACTIVE}\n${head}old\n</details>\n`);
+    });
+  }
+
+  test('a <details> wrapping the active heading stays visible', () => {
+    const { visible } = maskArchivedDetails(`<details open>\n<summary>v2.0 Active</summary>\n\n${ACTIVE}\n</details>\n`, tmpDir);
+    assert.ok(visible.includes('new'));
+  });
+
+  test('an unclosed fence is bounded at the next heading, so a later archive is still masked', () => {
+    const { visible } = maskArchivedDetails(`# Roadmap\n\n\`\`\`\nstray\n\n## Notes\n\n${ARCHIVE}\n\n${ACTIVE}`, tmpDir);
+    assert.ok(!visible.includes('old'), 'archive after the unclosed fence hidden');
+    assert.ok(visible.includes('new'));
+  });
+
+  // Many lines, each a long never-closed opener, must still yield the archive hidden and the active text visible.
+  test('many long never-closed openers do not hide or unmask anything', () => {
+    const hostile = `<details ${'a'.repeat(190)}\n`.repeat(4000);
+    const { visible, restore } = maskArchivedDetails(`${hostile}${ARCHIVE}\n\n${ACTIVE}`, tmpDir);
+    assert.ok(!visible.includes('old'), 'archive hidden');
+    assert.ok(visible.includes('new'), 'active visible');
+    assert.strictEqual(restore(visible), `${hostile}${ARCHIVE}\n\n${ACTIVE}`);
+  });
+
+  // Deterministic scaling guard (no clock): a per-block indexOf/lastIndexOf over the whole text
+  // makes restore quadratic, so count the characters those scans are asked to cover.
+  test('restore scans the text a bounded number of times however many blocks it hides', (t) => {
+    const many = Array.from({ length: 3000 }, (_, i) => `<details>\n<summary>v0.${i} ✅ SHIPPED</summary>\nold ${i}\n</details>\n`).join('\n');
+    const { visible, restore } = maskArchivedDetails(`${many}\n${ACTIVE}`, tmpDir);
+    let scanned = 0;
+    const real = { indexOf: String.prototype.indexOf, lastIndexOf: String.prototype.lastIndexOf };
+    t.after(() => Object.assign(String.prototype, real));
+    for (const k of Object.keys(real)) String.prototype[k] = function (...a) { scanned += this.length; return real[k].apply(this, a); };
+    assert.strictEqual(restore(visible), `${many}\n${ACTIVE}`);
+    assert.ok(scanned <= 2 * visible.length, `restore scanned ${scanned} chars for a ${visible.length}-char text`);
+  });
+
+  // Unpaired tags that hide where an archive ends are flagged; a harmless stray is not.
+  for (const [name, content, expected] of [
+    ['an archive opener that is never closed', `<details>\n<summary>v1.0 ✅ SHIPPED</summary>\nold\n\n${ACTIVE}`, true],
+    ['an archive whose closer is indented four spaces', `<details>\n<summary>v1.0 ✅ SHIPPED</summary>\nold\n    </details>\n\n${ACTIVE}`, true],
+    ['a closed-summary archive that closes on its own line', `<details><summary>v1.0 ✅ SHIPPED</summary>old</details>\n\n${ACTIVE}`, false],
+    ['a stray opener with no summary', `<details>\nstray\n\n${ARCHIVE}\n\n${ACTIVE}`, false],
+    ['a stray opener ahead of a collapsed block in the active range', `<details>\n${ACTIVE}<details>\n<summary>Plans</summary>\nx\n</details>\n`, true],
+    ['a collapsed block in the active range with no stray', `${ACTIVE}<details>\n<summary>Plans</summary>\nx\n</details>\n`, false],
+  ]) {
+    test(`ambiguous: ${name} -> ${expected}`, () => {
+      assert.strictEqual(maskArchivedDetails(content, tmpDir).ambiguous, expected);
+    });
+  }
+
+  test('a closed-summary archive after the active section is not counted as hidden-in-active; a plain collapsed block is', () => {
+    const collapsed = '<details>\n<summary>Plans</summary>\n- [ ] 01-01-PLAN.md\n</details>\n';
+    assert.strictEqual(maskArchivedDetails(`${ACTIVE}\n${ARCHIVE}\n`, tmpDir).hiddenInActive, '');
+    assert.strictEqual(maskArchivedDetails(`${ACTIVE}${collapsed}`, tmpDir).hiddenInActive, collapsed.trimEnd());
+  });
+
+  test('a closed heading with the active milestone\'s version stays visible; another version is hidden', () => {
+    const { visible } = maskArchivedDetails(`## v2.0 Active\n\nnew\n\n## v2.0 Part 2 ✅\n\nmore\n\n## v1.9 Old ✅ SHIPPED\n\nold\n`, tmpDir);
+    assert.ok(visible.includes('more'), 'same version is part of the active milestone');
+    assert.ok(!visible.includes('old'), 'other version is archive');
+  });
+
+  test('a multi-line comment at the very start of the file does not leak its <details> as an opener', () => {
+    const content = `<!--\n<details>\nnote\n-->\n${ACTIVE}<details>\n<summary>Plans</summary>\nx\n</details>\n`;
+    assert.strictEqual(maskArchivedDetails(content, tmpDir).ambiguous, false);
+  });
+
+  test('a shipped heading that mentions the active version stays masked', () => {
+    const { visible } = maskArchivedDetails(`## v1.0 MVP ✅ SHIPPED (continued in v2.0)\n\nold\n\n## v2.0 Active\n\nnew\n`, tmpDir);
+    assert.ok(!visible.includes('old'), 'shipped section hidden');
+    assert.ok(visible.includes('new'));
+  });
+
+  test('a premature line-start </details> inside an archive is ambiguous, not silently unmasked', () => {
+    const content = `<details>\n<summary>v1.0 ✅ SHIPPED</summary>\n- <details><summary>notes</summary>\n </details>\n- [ ] 01-01-PLAN.md\n</details>\n\n${ACTIVE}`;
+    assert.strictEqual(maskArchivedDetails(content, tmpDir).ambiguous, true);
+  });
+
+  test('activeRange is reported in visible-text coordinates', () => {
+    const { visible, activeRange } = maskArchivedDetails(`${ARCHIVE}\n\n${ACTIVE}\n${ARCHIVE}\n`, tmpDir);
+    assert.ok(visible.slice(activeRange.start).startsWith('## v2.0 Active'));
+    assert.ok(visible.slice(activeRange.start, activeRange.end).includes('new'));
+    assert.strictEqual(maskArchivedDetails('# no milestone\n', tmpDir).activeRange, null);
+  });
+
+  for (const [name, stray] of Object.entries({
+    'an unterminated <!-- in prose': 'Note: use <!-- to start comments.\n',
+    'a stray <details> opener': '<details>\nstray\n',
+    'a multi-line opening tag': '<details\n  class="x">\nstray\n',
+  })) {
+    test(`${name} before an archive does not unmask it`, () => {
+      const { visible, restore } = maskArchivedDetails(`${stray}\n${ARCHIVE}\n\n${ACTIVE}`, tmpDir);
+      assert.ok(!visible.includes('old'), 'archive hidden');
+      assert.ok(visible.includes('new'), 'active visible');
+      assert.strictEqual(restore(visible), `${stray}\n${ARCHIVE}\n\n${ACTIVE}`);
+    });
+  }
+
+  // CommonMark pairs backtick runs of equal length: the span below is ONE code
+  // span, so its `<!--` is code and the later `-->` must not close a comment
+  // over the archive.
+  test('a multi-backtick code span holding <!-- does not open a comment over a later archive', () => {
+    const content = `Write \`\`a <!-- b \` c\`\` here\n\n${ARCHIVE}\n\nnote -->\n\n${ACTIVE}`;
+    const { visible, restore } = maskArchivedDetails(content, tmpDir);
+    assert.ok(!visible.includes('old'), 'archive hidden');
+    assert.ok(visible.includes('new'), 'active visible');
+    assert.strictEqual(restore(visible), content);
+  });
+
+  test('an archive nested in a <details open> wrapper around the active heading is masked on its own', () => {
+    const content = `<details open>\n<summary>v2.0 Active</summary>\n\n${ARCHIVE}\n\n${ACTIVE}</details>\n`;
+    const { visible } = maskArchivedDetails(content, tmpDir);
+    assert.ok(!visible.includes('old'), 'nested archive hidden');
+    assert.ok(visible.includes('new'), 'active visible');
+  });
+
+  test('hiddenInActive returns only blocks hidden inside the active range', () => {
+    const inActive = '<details>\n<summary>Plans</summary>\n- [ ] 01-01-PLAN.md\n</details>';
+    const { hiddenInActive } = maskArchivedDetails(`${ARCHIVE}\n\n${ACTIVE}\n${inActive}\n`, tmpDir);
+    assert.strictEqual(hiddenInActive, inActive);
+  });
+
+  test('markers are unguessable per call and a duplicated marker makes restore refuse', () => {
+    const content = `${ARCHIVE}\n\n${ACTIVE}`;
+    const a = maskArchivedDetails(content, tmpDir);
+    const b = maskArchivedDetails(content, tmpDir);
+    assert.notStrictEqual(a.visible, b.visible);
+    const marker = a.visible.match(/<!-- gsd-archived-details-[^ ]+ -->/)[0];
+    assert.doesNotMatch(marker, /details-0-0 /);
+    assert.strictEqual(a.restore(`${a.visible}\n${marker}`), null);
+  });
+
+  // A one-line or blockquoted archive is still an archive: its extent is known, so it is hidden.
+  for (const [name, archive] of Object.entries({
+    'one-line': '<details><summary>v1.0 ✅ SHIPPED</summary>old</details>',
+    'one-line with a tick-able plan row': '<details><summary>v1.0 ✅ SHIPPED</summary> old - [ ] 01-01-PLAN.md </details>',
+    'blockquoted': '> <details>\n> <summary>v1.0 ✅ SHIPPED</summary>\n> old\n> </details>',
+    'blockquoted one-line': '> <details><summary>v1.0 ✅ SHIPPED</summary>old</details>',
+  })) {
+    test(`${name} archive is masked and round-trips`, () => {
+      const content = `${archive}\n\n${ACTIVE}`;
+      const { visible, restore, ambiguous } = maskArchivedDetails(content, tmpDir);
+      assert.ok(!visible.includes('old'), 'archive hidden');
+      assert.ok(visible.includes('new'), 'active visible');
+      assert.strictEqual(ambiguous, false);
+      assert.strictEqual(restore(visible), content);
+    });
+  }
+
+  test('a prose line that merely starts with a mention of a closer does not pair with an opener', () => {
+    const { visible, ambiguous } = maskArchivedDetails(`${ARCHIVE}\n\ntext </details> text\n\n${ACTIVE}`, tmpDir);
+    assert.ok(!visible.includes('old'), 'archive hidden');
+    assert.strictEqual(ambiguous, false);
+  });
+
+  test('opener attribute run: 200 characters counts as a tag, 201 does not', () => {
+    const at = (n) => `<details ${'a'.repeat(n - 9)}>\n<summary>v1.0 ✅ SHIPPED</summary>\nold\n</details>\n\n${ACTIVE}`;
+    assert.ok(!maskArchivedDetails(at(207), tmpDir).visible.includes('old'), '199 attribute chars');
+    assert.ok(!maskArchivedDetails(at(208), tmpDir).visible.includes('old'), '200 attribute chars');
+    assert.ok(maskArchivedDetails(at(209), tmpDir).visible.includes('old'), '201 attribute chars');
+  });
+
+  test('indent: 0-3 spaces is a block-level tag, 4 is code', () => {
+    for (const n of [0, 1, 2, 3]) assert.ok(!maskArchivedDetails(`${' '.repeat(n)}${ARCHIVE}\n\n${ACTIVE}`, tmpDir).visible.includes('old'), `${n} spaces`);
+    assert.ok(maskArchivedDetails(`    ${ARCHIVE}\n\n${ACTIVE}`, tmpDir).visible.includes('old'));
+  });
+
+  // A closed milestone heading is an archive at any heading level 2-6 (boundary: 3 -> 4 -> 6); a level-1 heading would enclose the active milestone's own `##` heading.
+  for (const level of [2, 3, 4, 5, 6]) {
+    test(`plain shipped section at heading level ${level} is hidden`, () => {
+      const hashes = '#'.repeat(level);
+      const { visible } = maskArchivedDetails(`${hashes} v1.0 ✅ SHIPPED\n\nold\n\n${ACTIVE}`, tmpDir);
+      assert.ok(!visible.includes('old'));
+      assert.ok(visible.includes('new'));
+    });
+  }
+
+  test('a deep closed heading nested in the active milestone is not hidden, and a deeper one does not end a shallower shipped section', () => {
+    const active = maskArchivedDetails(`${ACTIVE}\n#### v2.0 sub ✅\n\nmore\n`, tmpDir).visible;
+    assert.ok(active.includes('more'));
+    const shipped = maskArchivedDetails(`## v1.0 ✅ SHIPPED\n\n#### detail\n\nold\n\n${ACTIVE}`, tmpDir).visible;
+    assert.ok(!shipped.includes('old'));
+  });
+
+  test('a collapsed block in the active range that holds the ## Progress table stays visible', () => {
+    const table = '## Progress\n\n| Phase | Plans Complete | Status | Completed |\n|---|---|---|---|\n| 1. A | 0/1 | Planned | |\n';
+    const { visible, hiddenInActive } = maskArchivedDetails(`${ACTIVE}\n<details>\n<summary>Progress</summary>\n\n${table}</details>\n`, tmpDir);
+    assert.ok(visible.includes('| 1. A | 0/1 | Planned | |'));
+    assert.strictEqual(hiddenInActive, '');
+  });
+
+  test('a stale STATE milestone pointing at a collapsed v1.0 keeps that block editable (it wraps the resolved heading)', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n# State\n');
+    const { visible } = maskArchivedDetails(`<details>\n<summary>v1.0 ✅ SHIPPED</summary>\n\n## v1.0 Old\n\nold\n</details>\n\n${ACTIVE}`, tmpDir);
+    assert.ok(visible.includes('old'));
+  });
+
+  test('property: restore(visible) round-trips, and any hostile prefix still hides the archive and shows the active text', () => {
+    const hostile = fc.constantFrom(
+      '<!-- <details> -->\n',
+      'Note: use <!-- to start comments.\n',
+      '<details>\nstray\n',
+      '<details\n  class="x">\n',
+      '</details>\n',
+      'inline <details> mention\n',
+      '    <details>\n',
+      '```\n<details>\n```\n',
+      '<!-- gsd-archived-details-0-0 -->\n',
+      '## Progress\n\n| Phase | Status |\n|---|---|\n| 1. A | x |\n',
+      '\n',
+    );
+    const archive = fc.constantFrom(
+      '<details>\n<summary>v1.0 ✅ SHIPPED</summary>\n\nold\n</details>\n',
+      '<DETAILS open>\n<summary>v0.9 ARCHIVED</summary>\nold\n</DETAILS>\n',
+      '## v1.0 ✅ SHIPPED\n\nold\n',
+      '#### v1.0 ✅ SHIPPED\n\nold\n',
+      '###### v1.0 ✅ SHIPPED\n\nold\n',
+      '> <details>\n> <summary>v1.0 ✅ SHIPPED</summary>\n> old\n> </details>\n',
+      '<details><summary>v1.0 ✅ SHIPPED</summary> old </details>\n',
+    );
+    const eol = fc.constantFrom('\n', '\r\n');
+    fc.assert(
+      fc.property(fc.array(hostile, { maxLength: 6 }), archive, eol, (prefix, arc, nl) => {
+        const content = `${prefix.join('')}\n${arc}\n${ACTIVE}`.replace(/\r?\n/g, nl);
+        const { visible, restore } = maskArchivedDetails(content, tmpDir);
+        return restore(visible) === content && !visible.includes('old') && visible.includes('new');
+      }),
+      { seed: 20260810, numRuns: 400 },
+    );
+  });
+
+  // Active-range shapes: a stray opener, a collapsed block, a same-version closed heading,
+  // and the archive on either side of the active section.
+  test('property: active-range shapes keep the archive hidden, the active text visible, and flag only unpaired tags', () => {
+    const collapsed = '<details>\n<summary>Plans</summary>\nplanrow\n</details>\n';
+    const part2 = '## v2.0 Part 2 ✅\n\nmore\n';
+    const extra = fc.constantFrom('', collapsed, part2, '<details>\nstray\n');
+    const stray = fc.constantFrom('', '<details>\nstray\n');
+    const arc = fc.constantFrom('<details>\n<summary>v1.0 ✅ SHIPPED</summary>\n\nold\n</details>\n', '## v1.0 ✅ SHIPPED\n\nold\n');
+    fc.assert(
+      fc.property(stray, extra, arc, fc.boolean(), (lead, mid, a, archiveFirst) => {
+        const active = `${lead}${ACTIVE}${mid}`;
+        const content = archiveFirst ? `${a}\n${active}` : `${active}\n${a}`;
+        const m = maskArchivedDetails(content, tmpDir);
+        const wrapperStray = lead !== '' && mid === collapsed;
+        return m.restore(m.visible) === content
+          && !m.visible.includes('old')
+          && m.visible.includes('new')
+          && (mid !== part2 || m.visible.includes('more'))
+          && (mid !== collapsed || (!m.visible.includes('planrow') && m.hiddenInActive.includes('planrow')))
+          && m.ambiguous === wrapperStray
+          && m.visible.slice(m.activeRange.start).startsWith('## v2.0 Active');
+      }),
+      { seed: 20261026, numRuns: 300 },
+    );
   });
 });
 
@@ -4082,5 +4361,236 @@ describe('roadmap-parser: sectioned ROADMAP with explicit `milestone: null` (#50
     const unbound = extractCurrentMilestone(sectioned, tmpDir);
     assert.ok(!bound.includes('Phase 1: First'), 'control narrows to v1.1');
     assert.ok(unbound.includes('Phase 1: First'), 'explicit null leaves the whole document, not the v1.1 slice');
+  });
+});
+
+// ─── #4998: readStateMilestoneScalar decodes the frontmatter value ────────────
+
+describe('#4998 regression: readStateMilestoneScalar', () => {
+  const { readStateMilestoneScalar } = roadmapParser;
+
+  test('returns the YAML-decoded value, not the on-disk quoted text', () => {
+    const state = '---\nmilestone: "\\"v1.1 — Example\\""\nstatus: executing\n---\n# State\n';
+    assert.strictEqual(readStateMilestoneScalar(state), '"v1.1 — Example"');
+    assert.strictEqual(readStateMilestoneScalar('---\nmilestone: v2.0\n---\n'), 'v2.0');
+    assert.strictEqual(readStateMilestoneScalar('---\nmilestone: 1.0\n---\n'), '1.0', 'FAILSAFE: a number-shaped value stays text');
+  });
+
+  test('falls back to the line read when there is no parseable frontmatter key', () => {
+    assert.strictEqual(readStateMilestoneScalar('# State\nmilestone: v3.0\n'), 'v3.0');
+    assert.strictEqual(readStateMilestoneScalar('# State\n'), null);
+  });
+
+  test('a non-string milestone value falls back to the legacy line read, unchanged', () => {
+    // FAILSAFE yields a sequence/map here, not text; the line read is what
+    // every reader returned before #4998, so that answer is kept.
+    assert.strictEqual(readStateMilestoneScalar('---\nmilestone: [v1, v2]\n---\n'), '[v1, v2]');
+    assert.strictEqual(readStateMilestoneScalar('---\nmilestone: { v: 1 }\n---\n'), '{ v: 1 }');
+  });
+
+  // trek-e review 5638530738 (Minor 5): a frontmatter that parses and names no
+  // milestone names none — a `milestone:` line in the body (here, a fenced
+  // example) is not read in its place.
+  test('a parsed frontmatter with no milestone key names none, whatever the body holds', () => {
+    const state = '---\nstatus: executing\n---\n# State\n\n```yaml\nmilestone: v9.9\n```\n';
+    assert.strictEqual(readStateMilestoneScalar(state), null);
+    assert.strictEqual(readStateMilestoneScalar('---\nmilestone: v1.0\n---\n```\nmilestone: v9.9\n```\n'), 'v1.0');
+    assert.strictEqual(readStateMilestoneScalar('---\nstatus: [oops\n---\nmilestone: v2.0\n'), 'v2.0', 'unparseable: the legacy read');
+  });
+
+  test('a trailing YAML comment is not part of the value', () => {
+    assert.strictEqual(readStateMilestoneScalar('---\nmilestone: v1.0 # note\n---\n'), 'v1.0');
+    assert.strictEqual(readStateMilestoneScalar('---\nmilestone: "v1.0" # note\n---\n'), 'v1.0');
+  });
+
+  // The writer's own escaper (escapeDoubleQuotedScalar) is the encoding the
+  // reader must undo: any value written through it reads back byte-identical,
+  // which is exactly the invariant that stops a layer accruing per write.
+  test('property: any value written through the double-quoted escaper reads back unchanged', () => {
+    const { escapeDoubleQuotedScalar } = require('../gsd-core/bin/lib/frontmatter.cjs');
+    fc.assert(fc.property(fc.string({ unit: 'grapheme', maxLength: 40 }), (value) => {
+      const state = `---\nmilestone: "${escapeDoubleQuotedScalar(value)}"\nstatus: executing\n---\n# State\n`;
+      assert.strictEqual(readStateMilestoneScalar(state), value);
+    }), { seed: 4998, numRuns: 300 });
+  });
+});
+
+// The three readers that consume the scalar, asserted directly rather than
+// only end to end via state.json: a value whose on-disk text differs from its
+// decoded text must still select the v1.1 milestone.
+describe('#4998 regression: milestone call sites read the decoded scalar', () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const ROADMAP = [
+    '# Roadmap', '',
+    '## v1.0 — Old', '',
+    '- [ ] **Phase 1: Old work**', '',
+    '## v1.1 — Next', '',
+    '- [ ] **Phase 2: New work**', '',
+  ].join('\n');
+  const SPELLINGS = ['"v1.1"', 'v1.1 # current milestone', "'v1.1' # quoted and commented"];
+
+  for (const spelling of SPELLINGS) {
+    test(`milestone: ${spelling} → getMilestoneInfo, extractCurrentMilestoneScoped and currentMilestoneRawRanges all select v1.1`, () => {
+      writeRoadmap(tmpDir, ROADMAP);
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), `---\nmilestone: ${spelling}\n---\n# State\n`);
+
+      assert.strictEqual(getMilestoneInfo(tmpDir).value.version, 'v1.1');
+
+      const scoped = roadmapParser.extractCurrentMilestoneScoped(ROADMAP, tmpDir);
+      assert.ok(scoped.value.includes('Phase 2: New work'), 'the v1.1 section is selected');
+      assert.ok(!scoped.value.includes('Phase 1: Old work'), 'the v1.0 section is not');
+
+      const ranges = roadmapParser.currentMilestoneRawRanges(ROADMAP, tmpDir);
+      assert.ok(ranges, 'a versioned active milestone yields ranges');
+      const primary = ROADMAP.slice(ranges.primary.start, ranges.primary.end);
+      assert.ok(primary.includes('Phase 2: New work') && !primary.includes('Phase 1: Old work'));
+    });
+  }
+
+  // trek-e review 5638530738 (Minor 5): `init milestone-op` returned v9.9 here.
+  test('a fenced milestone example below a frontmatter with no milestone key is never selected', () => {
+    writeRoadmap(tmpDir, `${ROADMAP}\n## v9.9 — Example\n\n- [ ] **Phase 9: Example**\n`);
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'),
+      '---\nstatus: executing\n---\n# State\n\n```yaml\nmilestone: v9.9\n```\n');
+    const info = getMilestoneInfo(tmpDir).value;
+    assert.notStrictEqual(info && info.version, 'v9.9');
+  });
+});
+
+describe('#5483 checklistBulletExtent', () => {
+  const rows = (text) => {
+    const { start, end } = checklistBulletExtent(text, phaseChecklistBullet('1', true).exec(text));
+    return text.slice(start, end);
+  };
+
+  test('EOF without a trailing newline: the last row is included', () => {
+    assert.strictEqual(rows('- [ ] **Phase 1: A**\n  - [ ] a\n  - [ ] b'), '  - [ ] a\n  - [ ] b');
+  });
+
+  test('bullet is the last line with no newline: empty extent', () => {
+    assert.strictEqual(rows('- [ ] **Phase 1: A**'), '');
+  });
+
+  test('depth boundary: deeper and equal-depth lines are in, shallower stops', () => {
+    assert.strictEqual(rows('  - [ ] **Phase 1: A**\n    deeper\n  equal\n shallower\n  after\n'), '    deeper\n  equal\n');
+  });
+
+  test('a blank line ends the extent', () => {
+    assert.strictEqual(rows('- [ ] **Phase 1: A**\n- [ ] a\n\n- [ ] b\n'), '- [ ] a\n');
+  });
+
+  test('the next phase bullet ends the extent', () => {
+    assert.strictEqual(rows('- [ ] **Phase 1: A**\n  - [ ] a\n- [ ] **Phase 2: B**\n  - [ ] b\n'), '  - [ ] a\n');
+  });
+});
+
+describe('#5483 withPhaseSection levelBounded', () => {
+  test('keeps a non-phase #### sub-heading but stops at a deeper phase heading', () => {
+    const doc = '### Phase 1: A\n#### Plans\nrow\n#### Phase 1.1: B\nother\n';
+    const seen = [];
+    withPhaseSection(doc, '1', (body) => { seen.push(body); return body; }, true);
+    assert.deepStrictEqual(seen, ['#### Plans\nrow\n']);
+  });
+});
+
+describe('#5483 maskShippedBlocks edge cases', () => {
+  const { editOutsideShippedBlocks } = roadmapParser;
+  const blank = (doc) => editOutsideShippedBlocks(doc, (t) => t.replace(/X/g, 'Y'));
+  const closed = (summary) => `<details>\n<summary>${summary}</summary>\nX\n</details>\n`;
+
+  test('a lone unmatched <details> opener does not stop a later closed block being masked', () => {
+    assert.strictEqual(blank(`collapse milestones in <details>\nX\n${closed('v1.0 SHIPPED')}`),
+      `collapse milestones in <details>\nY\n${closed('v1.0 SHIPPED')}`);
+  });
+
+  test('closed milestone summaries without a marker word or with inline HTML are masked', () => {
+    for (const s of ['v1.0 MVP (Phases 1-4) — Complete', '<b>v1.0</b> ✅']) {
+      assert.strictEqual(blank(closed(s)), closed(s), s);
+    }
+  });
+
+  test('an active milestone or notes block stays editable', () => {
+    for (const s of ['v2.0 — in progress', 'Notes']) {
+      assert.strictEqual(blank(closed(s)), closed(s).replace('X', 'Y'), s);
+    }
+  });
+});
+
+describe('#5483 editCurrentMilestone', () => {
+  const DETAILS = '<details>\n<summary>v0.8 shipped</summary>\nX\n</details>\n';
+  let dir;
+  beforeEach(() => { dir = createTempProject(); });
+  afterEach(() => { cleanup(dir); });
+
+  test('no milestone resolves: one call over the whole document, <details> blocks restored byte-for-byte', () => {
+    const doc = `A X\n${DETAILS}B X\n`;
+    const calls = [];
+    const out = editCurrentMilestone(doc, dir, (t) => { calls.push(t); return t.replace(/X/g, 'Y'); });
+    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(out, `A Y\n${DETAILS}B Y\n`);
+  });
+
+  test('no milestone resolves: a notes <details> block and a nested notes block inside a shipped one', () => {
+    const NOTES = '<details>\n<summary>Notes</summary>\nX\n</details>\n';
+    // Outer shipped block holding an inner notes block: the whole outer block stays hidden.
+    const NESTED = '<details>\n<summary>v0.8 shipped</summary>\n<details>\n<summary>Notes</summary>\nX\n</details>\nX\n</details>\n';
+    const out = editCurrentMilestone(`A X\n${NOTES}${NESTED}B X\n`, dir, (t) => t.replace(/X/g, 'Y'));
+    assert.strictEqual(out, `A Y\n${NOTES.replace('X', 'Y')}${NESTED}B Y\n`);
+  });
+
+  test('resolved milestone: windows edited in document order, length-changing edits splice correctly, outside untouched', () => {
+    fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+    const doc = '# R\n\n## Milestone v1.0\n\nX\n\n## Milestone v0.9\n\nX\n\n## Milestone v1.0 (Phase Details)\n\nX\n';
+    let n = 0;
+    const out = editCurrentMilestone(doc, dir, (t) => t.replace('X', `W${++n}${'!'.repeat(n * 5)}`));
+    assert.strictEqual(n, 2);
+    assert.strictEqual(out, '# R\n\n## Milestone v1.0\n\nW1!!!!!\n\n## Milestone v0.9\n\nX\n\n## Milestone v1.0 (Phase Details)\n\nW2!!!!!!!!!!\n');
+  });
+
+  test('resolved milestone: a <details> block inside the window is hidden from edit and restored', () => {
+    fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+    const doc = `## Milestone v1.0\n\nX\n${DETAILS}`;
+    const out = editCurrentMilestone(doc, dir, (t) => t.replace(/X/g, 'Y'));
+    assert.strictEqual(out, `## Milestone v1.0\n\nY\n${DETAILS}`);
+  });
+});
+
+describe('#5483 scoping properties', () => {
+  const fc = require('./helpers/fast-check-setup.cjs');
+  const { extractTaggedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+  const DETAILS = '<details>\n<summary>v0.8 shipped</summary>\nX\n</details>\n';
+  const CHUNKS = ['# R\n\n', '## Milestone v1.0\n\nX\n\n', '## Milestone v0.9\n\nX\n\n', '## Milestone v1.0 (Phase Details)\n\nX\n\n', DETAILS, 'X\n'];
+  const docs = fc.array(fc.constantFrom(...CHUNKS), { maxLength: 8 }).map((c) => c.join(''));
+  let dir;
+  beforeEach(() => {
+    dir = createTempProject();
+    fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+  });
+  afterEach(() => { cleanup(dir); });
+
+  test('editCurrentMilestone: an identity edit returns the input; <details> blocks survive any edit byte-for-byte', () => {
+    fc.assert(fc.property(docs, (doc) => {
+      assert.strictEqual(editCurrentMilestone(doc, dir, (t) => t), doc);
+      const out = editCurrentMilestone(doc, dir, (t) => t.replace(/X/g, 'YYY'));
+      assert.deepStrictEqual(extractTaggedBlocks(out, 'details'), extractTaggedBlocks(doc, 'details'));
+    }), { numRuns: 100 });
+  });
+
+  test('checklistBulletExtent: the extent starts after the bullet line and holds only nested, non-blank, non-phase lines', () => {
+    const LINES = ['  - [ ] a', '    deeper', '', '- [ ] **Phase 2: B**', 'shallow', '  - [x] b'];
+    fc.assert(fc.property(fc.array(fc.constantFrom(...LINES), { maxLength: 6 }), fc.boolean(), (tail, trailingNewline) => {
+      const head = '- [ ] **Phase 1: A**';
+      const text = [head, ...tail].join('\n') + (trailingNewline ? '\n' : '');
+      const { start, end } = checklistBulletExtent(text, phaseChecklistBullet('1', true).exec(text));
+      assert.ok(start <= end && end <= text.length);
+      if (text.includes('\n')) assert.strictEqual(start, head.length + 1);
+      const extent = text.slice(start, end);
+      for (const line of extent.split('\n').filter((l, i, a) => i < a.length - 1 || l !== '')) {
+        assert.ok(line.trim() !== '' && !/Phase/.test(line), `unexpected extent line ${JSON.stringify(line)}`);
+      }
+    }), { numRuns: 100 });
   });
 });

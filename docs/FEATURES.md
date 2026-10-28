@@ -452,8 +452,9 @@
 - REQ-SHIP-04: System MUST update STATE.md with shipping status and PR number
 - REQ-SHIP-05: System MUST support `--draft` flag for draft PRs
 - REQ-SHIP-06: System MUST support append-only project PR body sections configured with `ship.pr_body_sections`
+- REQ-SHIP-07: System MUST refuse a phase whose ROADMAP.md record (checklist entry, progress-table Status) does not read complete, has no record, or sits in an unreadable progress table, before any PR is created (`PHASE_NOT_COMPLETE`, `PHASE_NOT_RECORDED`, `ROADMAP_TABLE_UNREADABLE`; #5221)
 
-**Prerequisites:** Phase verified, `gh` CLI installed and authenticated, work on feature branch
+**Prerequisites:** Phase verified and recorded complete in ROADMAP.md, `gh` CLI installed and authenticated, `jq` installed, work on feature branch
 
 **Produces:** GitHub PR with rich body, optional configured PRD-style sections, STATE.md updated
 
@@ -3985,7 +3986,7 @@ See [Resolve verify-command path findings](how-to/resolve-verify-command-path-fi
 - REQ-SC-04: A missing `ROADMAP.md`, a missing or unreadable `.planning/`, an unwritable target, or any other failure NEVER errors the parent command. A directory that is not a GSD project stays untouched — the publisher will not create `.planning/` in order to publish into it.
 - REQ-SC-05: The skills own the file; readers never write it. It is a derived cache — safe to delete, regenerated at the next boundary.
 
-**Composed, never re-derived.** Milestone identity comes from `getMilestoneInfo`; phase rows from `locateProgressTable`, the same `## Progress` locator the progress counters use, so `state.json` can never disagree with the rest of GSD about which phases are complete; the recommended action from `classifyProject`. This module introduces no second answer to any question GSD already answers.
+**Composed, never re-derived.** Milestone identity comes from `getMilestoneInfo`; phase rows from `locateRoadmapProgress` (Roadmap Progress Module), the same `## Progress` locator the progress counters use, so `state.json` can never disagree with the rest of GSD about which phases are complete; the recommended action from `classifyProject`. This module introduces no second answer to any question GSD already answers.
 
 **Why it does not reuse `planning inspect`'s schema.** The two surfaces answer different questions and have opposite shapes. `planning inspect` is a rich, diagnostic-carrying **pull** query a consumer runs; this is a small **push** artifact a consumer watches. Publishing `planning inspect`'s payload at every `phase add` would mean opening every plan, summary and requirements document on a hot path, and freezing a much larger surface as a contract.
 
