@@ -285,7 +285,7 @@ If your PR adds, changes, deprecates, or removes user-visible behavior, you **mu
 | Changed command behavior or output | `docs/USER-GUIDE.md`, `docs/COMMANDS.md` |
 | Configuration / schema change | `docs/CONFIGURATION.md` |
 | Architectural change | `docs/ARCHITECTURE.md`, `docs/adr/` |
-| Agent or skill change | `docs/AGENTS.md` |
+| Agent or skill change | `docs/reference/agents.md` |
 | Removed command, flag, or workflow | All docs that referenced it |
 
 ### Language policy

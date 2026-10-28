@@ -137,6 +137,10 @@ node gsd-tools.cjs state signal-waiting --type TYPE --question "..." --options "
 node gsd-tools.cjs state signal-resume
 ```
 
+`state update`, `state patch` and `state record-session` take single-line values: a value containing a line break — CR, LF, U+2028 LINE SEPARATOR or U+2029 PARAGRAPH SEPARATOR, each of which starts a new line for the STATE.md readers — is refused with an error naming the field or flag, before anything is written.
+
+`state record-session` lists the fields it wrote under `updated`, and under `replacedRecord` any Stopped At / Resume File value the write displaced (the `None` placeholder is not a record). In the session section, a line inside a fenced code block is an example: no session writer (`record-session`, `state update`/`patch` of a session field, `phase complete`) changes it, and neither the frontmatter sync nor `state-snapshot` reads it as a field. A field whose current value continues onto the next line is left unchanged, because a single-line write would orphan the rest (a line directly below shaped `words: text` counts as a continuation unless its label is bold or one STATE.md defines, such as `Resume file` or `Status`, since a wrapped sentence can take that shape): it is listed under `skipped` as `{ "field", "reason": "wrapped_value", "continuation" }` with a warning on stderr (the continuation is echoed up to 200 characters, then `…`), and when every field to update was skipped the call reports `"recorded": false`. With no session heading, Last session, Last Date and Resume file are not written in place — `state-snapshot` reads them from a session section only — and the call appends a `## Session` section (reported as `"created": true`, which an insert into an existing section is not) holding the new Last session and Stopped at, and the passed Resume file or else the body's existing one rather than `None` (a Stopped at skipped as wrapped carries its existing value); a carried value holding U+2028/U+2029 is left out and listed as `{ "field", "reason": "line_separator" }`, and when the document ends inside an unclosed code fence nothing is appended (it would land inside the fence) and each field the call writes (Last session, and Stopped at or Resume file when passed) that was not written in place or skipped for another reason is listed with `"reason": "unclosed_fence"`. `state record-session`, `state update` and `state patch` write a session field (Stopped At, Paused At, Resume File, Last session, Last Date) inside the session section — not a fenced example there, and not a copy in another section such as `## Session Continuity Archive` — which is where the frontmatter sync and `state-snapshot` read it. `record-session` inserts a field the section lacks; `state update` and `state patch` report it updated, and a document whose session section lacks the field, or that has no session section, reports it not found and is left unchanged. `state patch`, like `state update`, reports a field that already holds the requested value as updated. `state update` and `state patch` replace a field's first line only and do not check for a wrapped value, so a continuation line below it stays in place: fold a wrapped value onto one line before updating it with them.
+
 ### State Snapshot
 
 Structured parse of the full STATE.md:
@@ -169,6 +173,7 @@ Manage phases — directories, numbering, and roadmap sync.
 node gsd-tools.cjs find-phase <phase>
 
 # Calculate next decimal phase number for insertions
+# (bracket convention: canonical two-digit sub-phase, see below)
 node gsd-tools.cjs phase next-decimal <phase>
 
 # Append new phase to roadmap + create directory
@@ -176,8 +181,13 @@ node gsd-tools.cjs phase add <description>
 
 # Insert decimal phase after existing
 node gsd-tools.cjs phase insert <after> <description> [--sibling]
+# add, add-batch and insert also write the phase's ROADMAP record (#5221): a checklist entry
+# after the active checklist, else a progress-table row, else no readable record; the output's
+# roadmap_entry says which ("checklist" | "progress_table" | "none")
 
 # Remove phase, renumber subsequent
+# (bracket convention: also reports roadmap_lines_rewritten and
+# references_left_untouched, see below)
 node gsd-tools.cjs phase remove <phase> [--force]
 
 # Mark phase complete, update state + roadmap
@@ -200,6 +210,70 @@ node gsd-tools.cjs phases list [--type planned|executed|all] [--phase N] [--incl
 # used by /gsd-new-milestone before roadmapping the next cycle
 node gsd-tools.cjs phases clear [--confirm] [--force] [--archive-version <version>]
 ```
+
+### Bracket phase ids (`phase remove`, `phase next-decimal`)
+
+When `phase_id_convention` is `"bracket"` (see [CONFIGURATION.md](CONFIGURATION.md)),
+these commands work on the active milestone's `[CODE.MM] NN` identities:
+
+- `phase next-decimal <phase>` inventories every spelling the readers accept
+  for that parent, on disk and in `ROADMAP.md` (bracket and legacy directories,
+  headings, checklist rows), and returns the next sub-phase in canonical
+  two-digit form (`02.03`, not `2.3`). The legacy `999` backlog parent keeps
+  its upstream spelling.
+- `phase remove <phase>` accepts a bare number (`2`, `02`), a qualified id
+  (`CK.02-02`, `CK.02-01.01`) or the display form (`[CK.02] 02`). A qualified
+  directory name with a slug (`CK.02-02-two`) is accepted only when the slug
+  exactly matches the selected directory. It deletes
+  the phase, renumbers the milestone's later phases and sub-phases on disk and
+  in `ROADMAP.md` from one mapping, and leaves shipped and archived history
+  byte-identical. It refuses, before anything is deleted or renamed, in the
+  cases listed below.
+
+`phase remove` refuses, with nothing changed, when:
+
+- a qualified argument carries a slug that does not exactly match the
+  directory for its phase number;
+- the target has neither a directory nor a live heading or checklist row in the
+  active milestone window, or the argument names a `.00` sub-phase;
+- the phase is outside the active milestone, has executed plans (without
+  `--force`) or live sub-phases, or resolves only to legacy-spelled artifacts;
+- a pipe-table row keyed by the removed id would survive outside the
+  milestone's own Progress tables: a shared Progress table the rewrite cannot
+  attribute, or any other phase-keyed table (for example a Requirements
+  Traceability table) under a heading of any level. A Progress-table row is
+  one whose nearest heading is a Progress-titled heading, a phase heading or
+  the milestone heading itself;
+- a phase id in the active milestone, such as `02a`, is one the bracket grammar
+  cannot represent and the removal would renumber it;
+- the `STATE.md` current phase (frontmatter `current_phase`, the
+  `Current Phase` field, or the Current Position `Phase:` line, read in that
+  order) is the removed phase or a phase the removal renumbers, that is, the
+  target is the current phase or any phase before it. Bracket `phase remove` deletes only phases after the current phase, because
+  it does not rewrite the current-phase fields. To remove such a phase, point
+  the current phase at a phase before the target, or, when there is none,
+  clear the current-phase fields, then retry. A current phase qualified with
+  another milestone (`[CK.01] 02`) does not count.
+
+Known limits of bracket `phase remove`, which it neither rewrites nor refuses:
+
+- A checklist row for the removed id outside the active milestone window (a
+  stale copy elsewhere in `ROADMAP.md`) is kept as written and is not
+  reported.
+- The dash form is matched case-sensitively: `CK.02-03` is renumbered and
+  reported, `ck.02-03` is neither.
+- Paths are recognized only with forward slashes. A plan or summary filename
+  after a backslash (`phases\CK.02-03-three\03-01-PLAN.md`) is renumbered as
+  a bare artifact reference, where the forward-slash form is left alone.
+- An on-disk `CK.MM-NNa` directory with no `ROADMAP.md` line is not checked;
+  the unrepresentable-id refusal reads `ROADMAP.md` only.
+
+The bracket `phase remove` JSON output adds two fields:
+
+| Field | Meaning |
+|---|---|
+| `roadmap_lines_rewritten` | Number of `ROADMAP.md` edits: the deleted phase section counts once, plus each deleted owned line (checklist row, Progress row) and each line whose references were renumbered. |
+| `references_left_untouched` | Line numbers, in the written `ROADMAP.md`, of live lines in the active milestone that still mention the removed id or a pre-renumber id in any spelling (for example prose such as `Phase 03`). Review these by hand. Empty when nothing was left. |
 
 ### Milestone-scoped phase listing (`phases list`)
 
@@ -481,6 +555,8 @@ no checklist entry, has no checkbox to disagree with and is never listed
 | `disk_status` | string | The disk-derived status the selectors use |
 | `plan_count` | number | Plans found for the phase |
 | `summary_count` | number | Summaries paired with a plan |
+
+`roadmap_record` (#5221) maps each phase number (leading zeros stripped per segment; under `phase_naming: custom`, also each custom id such as `AUTH`) to `true` when every recognised ROADMAP record of it — each checklist entry, under any bracket, and its progress-table Status cell — reads complete, else `false`; a phase with no checklist entry or table row is absent, and the whole field is `null` when the phase table does not parse or its `Phase`/`Status` headers are not recognised (a `Plans Complete` table headed in another case or wording). It reads the record only (whatever the disk says); `/gsd-ship` ships only a `true` phase.
 
 The selectors are unchanged: `checkbox_conflict` only reports the
 disagreement. To treat a phase as done despite its disk status, verify it
@@ -1204,10 +1280,13 @@ if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 
 ```bash
 # Archive milestone
-node gsd-tools.cjs milestone complete <version> (--confirm | --dry-run) [--name <name>] [--no-archive-phases] [--force] [--archive-quick]
+node gsd-tools.cjs milestone complete <version> (--confirm | --dry-run) [--name <name>] [--no-archive-phases] [--force] [--archive-quick] [--release-map <file>]
 
 # Archive .planning/quick/* into milestones/<version>-quick/ WITHOUT the milestone complete close-out (#2142)
 node gsd-tools.cjs milestone archive-quick <version> [--dry-run]
+
+# Preflight, then create annotated release tags per sub-repo (#5705)
+node gsd-tools.cjs milestone release-tags --map <file.json> [--dry-run]
 
 # Mark requirements as complete
 node gsd-tools.cjs requirements mark-complete <ids>
@@ -1223,8 +1302,9 @@ node gsd-tools.cjs requirements mark-complete <ids>
 | `--name <name>` | Display name for the MILESTONES.md entry. Defaults to `<version>`. |
 | `--no-archive-phases` | Leave phase directories in place instead of moving them into `.planning/milestones/<version>-phases/`. |
 | `--archive-quick` | Opt-in (default OFF, #2142): also move every directory under `.planning/quick/` into `.planning/milestones/<version>-quick/`, (re)write that archive directory's `README.md` index, and clear STATE.md's `### Quick Tasks Completed` table rows. See "`milestone archive-quick`" below for the narrower standalone form and the full behavior. |
+| `--release-map <file>` | Opt-in (#5706): archive a per-repository release map. `<file>` is a JSON array of `{ repo, release, reference, environment, status, tag }` entries (fields and limits in [Per-repository release mapping](CONFIGURATION.md#per-repository-release-mapping)). The map is validated before anything is written; any problem fails the command with every error listed and changes nothing. On success the map is written to `.planning/milestones/<version>-RELEASE-MAP.json`, a `**Release mapping:**` table is added to the MILESTONES.md entry, and the JSON result carries `release_map: { path, entries }`. The file must be a regular file of at most 1 MiB. A later run for the same version never overwrites an archived map that differs. Without the flag, output and files are unchanged. |
 | `--force` | Override the unstarted-phase guard (see below). |
-| `--dry-run` | Print the archive plan (roadmap, requirements, phases, and — when `--archive-quick` is also passed — quick-task dirs to move) without mutating anything. |
+| `--dry-run` | Print the archive plan (roadmap, requirements, phases, and — when `--archive-quick` is also passed — quick-task dirs to move) without mutating anything. With `--release-map`, the map is validated and reported under `would_archive.release_map`. |
 
 **Unstarted-phase guard.** Before archiving, the command scans the ROADMAP scoped for `<version>` and refuses if any `### Phase N:` heading in that slice has no matching phase directory on disk (`disk_status: no_directory`). Phase 0 (pre-milestone) and Phase 999 (backlog) sentinels are excluded. The guard runs whenever `--force` is absent, independent of `STATE.md`'s `milestone:` field — if that field is present but does not match `<version>`, a WARNING naming both values is emitted to stderr and the scan still runs (#2946). Pass `--force --confirm` to override (`--confirm` is required for any mutating run — #3726; `--force` alone does not imply it).
 
@@ -1242,6 +1322,16 @@ A narrower sibling of `milestone complete --archive-quick`, for callers that nee
 It moves every directory under `.planning/quick/` into `.planning/milestones/<version>-quick/`, (re)writes that archive directory's `README.md` index, and clears STATE.md's `### Quick Tasks Completed` table rows — the same move/index/reset logic `milestone complete --archive-quick` uses. Unlike `milestone complete`, it never archives `ROADMAP.md`/`REQUIREMENTS.md`, never writes a `MILESTONES.md` entry, and runs neither the unstarted-phase guard nor the milestone-window refusal — so, unlike `milestone complete --archive-quick`, it can be safely re-run against an already-completed milestone. JSON result: `{ version, archived, entries, archive_dir, state_updated, warnings }`.
 
 `milestone archive-quick` is a second subcommand of `milestone` (alongside `complete`) — it is not a separate top-level command.
+
+**`milestone release-tags` (#5705)**
+
+Creates one annotated git tag per repository listed in `sub_repos`. `--map` points at a JSON file (at most 1 MiB) holding an array of at most 256 entries (`skip` entries count toward the limit): `{ "repo": "api", "tag": "v1.2.0", "ref": "HEAD", "message": "...", "skip": false }`. `repo` must be listed in `sub_repos` (a leading `./` and trailing `/` are ignored; absolute paths, `..` segments and backslash variants are rejected). `ref` defaults to `HEAD`; `message` defaults to the tag name; `skip: true` reports the repo as skipped without touching it.
+
+Every entry is validated before the first tag is written, so a predictable failure creates nothing anywhere. A tag that already exists at the requested commit is reported `already_tagged` (re-running the same map is safe); a tag at a different commit is a `tag_conflict` and is never overwritten. `--dry-run` runs the validation only and reports `would_create`. Nothing is pushed.
+
+Tag creation is not transactional across repositories. If a write fails after earlier ones succeeded, the remaining repositories are still attempted, `created` lists every `repo:tag` already written, and the command exits non-zero; re-run the same map to retry only the failed ones.
+
+JSON result: `{ ok, phase, repos, created, errors }`. `phase` is `preflight` (validation failed), `dry_run` or `apply`. `repos` is keyed by repo path (`repo:tag` when one repo receives two tags); each value has `status` (`created`, `already_tagged`, `skipped`, `would_create`, `failed`, `error`) plus `tag`, `commit`, and on failure `reason`, `error`, `existing_commit`, `requested_commit`. Reason codes: `no_sub_repos`, `invalid_request`, `too_many_entries`, `repo_not_configured`, `repo_path_invalid`, `repo_missing`, `not_a_git_repo`, `tag_invalid`, `ref_unresolved`, `tag_conflict`, `duplicate_entry`, `git_timeout`, `tag_create_failed`.
 
 ---
 

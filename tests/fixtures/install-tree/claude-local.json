@@ -322,6 +322,7 @@
   "gsd-core/workflows/complete-milestone/detail/elaboration.md",
   "gsd-core/workflows/complete-milestone/steps/git-tag.md",
   "gsd-core/workflows/complete-milestone/steps/project-md-evolution-review.md",
+  "gsd-core/workflows/complete-milestone/steps/release-map.md",
   "gsd-core/workflows/debug.md",
   "gsd-core/workflows/diagnose-issues.md",
   "gsd-core/workflows/discuss-phase-assumptions.md",

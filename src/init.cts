@@ -12,6 +12,7 @@ import os from 'node:os';
 import { execGit, platformWriteSync, platformReadSync, toNativePath, posixNormalize } from './shell-command-projection.cjs';
 import { realClock } from './clock.cjs';
 import { escapeRegex } from './pattern.cjs';
+import { isBoxCharChecked, isPhaseEntryChecked, phaseEntryRegExp } from './phase-entry-grammar.cjs';
 import { collectSection } from './markdown-sectionizer.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- io.cjs is an export= CommonJS module
 import io = require('./io.cjs');
@@ -30,6 +31,8 @@ import roadmapParser = require('./roadmap-parser.cjs');
 import coreUtils = require('./core-utils.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
 import phaseId = require('./phase-id.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id-display.cjs is an export= CommonJS module
+import phaseIdDisplayMod = require('./phase-id-display.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- worktree-safety.cjs is an export= CommonJS module
 import worktreeSafety = require('./worktree-safety.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
@@ -98,7 +101,9 @@ const { harvestPriorVerifyCommands } = verifyCommandGrounding;
 const { output, error, ERROR_REASON, formatDiagnosticToken } = io;
 const { loadConfig, loadConfigResolved } = configLoader;
 const { resolveModelInternal, resolveGranularityInternal, assertValidGranularityOverride } = modelResolver;
-const { findPhaseInternal, listMilestonePhaseDirs, listAllPhaseDirs } = phaseLocator;
+const {
+  phaseDirectoryOptions, findPhaseInternal, listMilestonePhaseDirs, listAllPhaseDirs,
+} = phaseLocator;
 const {
   getRoadmapPhaseInternal,
   getMilestoneInfo,
@@ -108,10 +113,17 @@ const {
 const { pathExistsInternal, generateSlugInternal, toPosixPath } = coreUtils;
 const {
   comparePhaseNum,
+  phaseDirectoryName,
+  customPhaseQuery,
+  customDirectoryOwner,
+  phaseScanTokenSource,
+  phaseKeyFromToken,
+  phaseDirectoryContext,
   normalizePhaseName,
   stripProjectCodePrefix,
   PHASE_NUMBER_TOKEN_SOURCE,
   PHASE_DEP_REF_SOURCE,
+  extractPhaseDependencyTokens,
   isForeignPrefixedPhaseQuery,
   isSentinelPhaseId,
   extractPhaseToken,
@@ -119,10 +131,13 @@ const {
   renderPhaseBranchName,
   parsePhaseId,
   renderPhaseId,
+  bracketQualifiedKey,
   phaseHeadingPrefixSrcFor,
+  parsePhaseChecklistLine,
   PHASE_HEADING_BASELINE,
   buildPhaseHeadingScanRegex,
 } = phaseId;
+const { phaseToken } = phaseIdDisplayMod;
 const { pruneOrphanedWorktrees } = worktreeSafety;
 
 const {
@@ -194,8 +209,9 @@ function guardedFindPhase(
   cwd: string,
   phase: string,
   projectCode: unknown,
+  phaseNaming: unknown,
 ): Record<string, unknown> | null {
-  let phaseInfo = findPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+  let phaseInfo = findPhaseInternal(cwd, phase, undefined, phaseDirectoryOptions(cwd, { phase_naming: phaseNaming, project_code: projectCode })) as unknown as Record<string, unknown> | null;
   if (isForeignPrefixedPhaseQuery(phase, projectCode) && !phaseInfoMatchesExactPrefix(phaseInfo, phase)) {
     phaseInfo = null;
   }
@@ -751,6 +767,29 @@ function detectGitCreateTag(cwd: string): boolean {
 }
 
 /**
+ * `git.repo_tagging` ground truth (#5706, epic #3628): the milestone tagging
+ * mode exposed to `complete-milestone.md`. Only the documented `per_repo`
+ * opts in; an absent key or any other stored value reads as the default
+ * `single` (today's behavior), matching `loadConfig`'s resolution.
+ */
+function detectRepoTagging(cwd: string): 'single' | 'per_repo' {
+  return readConfigJsonValue(cwd, ['git', 'repo_tagging']) === 'per_repo' ? 'per_repo' : 'single';
+}
+
+/**
+ * The configured `planning.sub_repos` (#5706): an array of non-empty repo
+ * names, possibly empty. A legacy top-level `sub_repos` is honored when the
+ * nested key is absent, the same flat-then-nested order `loadConfig` applies.
+ * Non-string members are dropped; any degraded read yields `[]`.
+ */
+function detectSubRepos(cwd: string): string[] {
+  const nested = readConfigJsonValue(cwd, ['planning', 'sub_repos']);
+  const raw = nested !== undefined ? nested : readConfigJsonValue(cwd, ['sub_repos']);
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((name): name is string => typeof name === 'string' && name.trim() !== '');
+}
+
+/**
  * `state:phase-mvp-mode` ground truth (design doc §Behavior table: ROADMAP.md
  * `**Mode:** mvp` for the CURRENT phase). Bounded, non-throwing — an absent
  * `phaseNumber`, an absent ROADMAP.md, an absent phase heading, or a phase
@@ -1037,7 +1076,7 @@ function cmdInitExecutePhase(
   }
 
   const config = loadConfig(cwd);
-  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code, config.phase_naming);
   // #3216: getMilestoneInfo now returns a ScopedResult — `.value` carries the
   // MilestoneInfo (or null on any non-COMPLETE scope). NOT display-only: when
   // `branching_strategy === 'milestone'`, `milestone['version']`/`['name']`
@@ -1243,7 +1282,7 @@ function cmdInitPlanPhase(
 
   const config = loadConfig(cwd);
   // #2056/#2104: foreign-prefixed queries must not collapse to numeric phases.
-  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code, config.phase_naming);
   const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
   phaseInfo = applyRoadmapFallback(phaseInfo, roadmapPhase, (rp) => {
     const phaseName = rp['phase_name'] as string | null;
@@ -1278,12 +1317,16 @@ function cmdInitPlanPhase(
   const phaseNamePlan = resolvePhaseDisplayName(phaseInfo, roadmapPhase);
   const rawProjectCodePlan = (config.project_code as string) || '';
   let expectedPhaseDirPlan: string | null = null;
-  if (!phaseDirPlan && phaseNumberPlan && phaseNamePlan) {
+  const namingContextPlan = phaseDirectoryContext(config);
+  const customNamingPlan = customPhaseQuery(phase, namingContextPlan) !== null;
+  if ((!phaseDirPlan || customNamingPlan) && phaseNumberPlan && phaseNamePlan) {
     const paddedNum = normalizePhaseName(phaseNumberPlan);
-    const slug = (generateSlugInternal(phaseNamePlan) || '').substring(0, 60);
+    const expectedName = (roadmapPhase?.['phase_name'] as string | undefined) || phaseNamePlan;
+    const slug = (generateSlugInternal(expectedName) || '').substring(0, 60);
     if (slug) {
-      const prefix = rawProjectCodePlan ? `${rawProjectCodePlan}-` : '';
-      const dirName = `${prefix}${paddedNum}-${slug}`;
+      const dirName = phaseDirectoryName(
+        customPhaseQuery(phaseNumberPlan, namingContextPlan) ? phaseNumberPlan : paddedNum, slug, rawProjectCodePlan,
+      );
       // #2376: absolute — see comment on phase_dir below.
       expectedPhaseDirPlan = toPosixPath(path.join(planningPaths(cwd).phases, dirName));
     }
@@ -1976,7 +2019,7 @@ function cmdInitVerifyWork(cwd: string, phase: string, raw: boolean): void {
 
   const config = loadConfig(cwd);
   const _slashRuntime = resolveRuntime(cwd);
-  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code, config.phase_naming);
   const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
   phaseInfo = applyRoadmapFallback(phaseInfo, roadmapPhase, (rp) => {
     const phaseName = rp['phase_name'] as string | null;
@@ -2106,7 +2149,7 @@ function cmdInitCodeReview(
   options: Record<string, unknown> = {},
 ): void {
   const config = loadConfig(cwd);
-  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code, config.phase_naming);
   const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
   phaseInfo = applyRoadmapFallback(phaseInfo, roadmapPhase, (rp) => {
     const rpName = rp['phase_name'] as string | null;
@@ -2185,7 +2228,7 @@ function cmdInitReview(
   options: Record<string, unknown> = {},
 ): void {
   const config = loadConfig(cwd);
-  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code, config.phase_naming);
   const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
   phaseInfo = applyRoadmapFallback(phaseInfo, roadmapPhase, (rp) => ({
     found: true,
@@ -2256,7 +2299,7 @@ function cmdInitDiscussPhaseAssumptions(
   options: Record<string, unknown> = {},
 ): void {
   const config = loadConfig(cwd);
-  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code, config.phase_naming);
   const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
   phaseInfo = applyRoadmapFallback(phaseInfo, roadmapPhase, (rp) => {
     const rpName = rp['phase_name'] as string | null;
@@ -2323,7 +2366,7 @@ function cmdInitDiscussPhaseAssumptions(
 
 function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
   const config = loadConfig(cwd);
-  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code, config.phase_naming);
 
   // #2237: surface ambiguous phase-directory collisions instead of silently
   // taking the first match when unrelated projects share a .planning/phases/ tree.
@@ -2987,6 +3030,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   }
   const rawContent = fs.readFileSync(paths.roadmap, 'utf-8');
   const content = extractCurrentMilestone(rawContent, cwd);
+  const directoryContext = phaseDirectoryOptions(cwd, config, rawContent);
 
   // #3185 (ADR-3180 Decision 1): "which phase directories belong to the
   // CURRENT milestone" is the scoped question listMilestonePhaseDirs owns —
@@ -2994,39 +3038,34 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   // getMilestonePhaseFilter window check (which also never excluded
   // sentinels, unlike the owner).
   const _checkboxStates = new Map<string, boolean>();
-  // #4982: anchored (`^`, `m`) so the phase label must be the FIRST thing
-  // after the checkbox (tolerating only an optional `**` bold marker) —
-  // the prior unanchored `\s*.*` let the greedy `.*` bind to the LAST
-  // "Phase N" mentioned anywhere in the line's prose instead of the line's
-  // own phase. First-match-wins (`if (!_checkboxStates.has(...))` below)
+  // #4982: parsePhaseChecklistLine is line-anchored, so the phase label must
+  // be the FIRST thing after the checkbox (tolerating only an optional `**`
+  // bold marker), and a later "Phase N" in the line's prose cannot bind the
+  // checkbox. First-match-wins (`if (!_checkboxStates.has(...))` below)
   // additionally guards against a later anchored line (e.g. a per-plan
   // sub-entry self-titled "Phase N ...") overwriting an already-recorded
-  // phase's own (first) checkbox — anchoring alone does not fully close
-  // that "last-match-wins" composition defect.
-  const _cbPattern = new RegExp(
-    `^[ \\t]*-[ \\t]*\\[(x| )\\][ \\t]*(?:\\*\\*)?${phaseHeadingPrefix}(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`,
-    'gim',
-  );
-  let _cbMatch: RegExpExecArray | null;
-  while ((_cbMatch = _cbPattern.exec(content)) !== null) {
-    const phaseGroup = capturesBracketId ? 3 : 2;
-    const _cbKey = _cbMatch[phaseGroup];
-    if (!_checkboxStates.has(_cbKey)) {
-      _checkboxStates.set(_cbKey, _cbMatch[1].toLowerCase() === 'x');
+  // phase's own (first) checkbox; anchoring alone does not fully close that
+  // "last-match-wins" composition defect.
+  for (const line of content.split(/\r?\n/)) {
+    const checkbox = parsePhaseChecklistLine(line, phaseIdConvention, directoryContext);
+    if (checkbox && !_checkboxStates.has(checkbox.phaseToken)) {
+      _checkboxStates.set(checkbox.phaseToken, checkbox.checked);
     }
   }
 
   // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
   const phasePattern = new RegExp(
-    `#{2,4}\\s*${phaseHeadingPrefix}(${PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n]+)`,
+    `#{2,4}\\s*${phaseHeadingPrefix}(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n]+)`,
     'gi',
   );
   const phases: Record<string, unknown>[] = [];
+  const bracketIdsByPhaseNumber = new Map<string, string>();
   let match: RegExpExecArray | null;
 
   while ((match = phasePattern.exec(content)) !== null) {
     const bracketId = capturesBracketId ? match[1] : undefined;
     const phaseNum = capturesBracketId ? match[2] : match[1];
+    if (bracketId) bracketIdsByPhaseNumber.set(phaseNum, bracketId);
     const phaseName = (capturesBracketId ? match[3] : match[2])
       .replace(/\(INSERTED\)/i, '')
       .trim();
@@ -3043,7 +3082,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     const sectionStart = match.index;
     const restOfContent = content.slice(sectionStart);
     const nextHeader = restOfContent.match(new RegExp(
-      `\\n#{2,4}\\s+${phaseHeadingPrefixNoCapture}\\d[\\d.]*`,
+      `\\n#{2,4}\\s+${phaseHeadingPrefixNoCapture}${phaseScanTokenSource(directoryContext)}`,
       'i',
     ));
     const sectionEnd = nextHeader
@@ -3087,7 +3126,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
       // of reporting no_directory/phase_complete:false. Five other init
       // commands already route through this same primitive; this was the
       // holdout private copy (#4793-family declared-owner drift).
-      const located = findPhaseInternal(cwd, phaseNum, phaseIdConvention) as unknown as Record<string, unknown> | null;
+      const located = findPhaseInternal(cwd, phaseNum, phaseIdConvention, directoryContext) as unknown as Record<string, unknown> | null;
       const dirMatch = located && located['found']
         ? path.posix.basename(String(located['directory']))
         : null;
@@ -3214,18 +3253,83 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   );
   const phaseMap = new Map(phases.map((p) => [normalizePhaseNumber(p['number'] as string), p]));
 
-  const _allCompletedPattern = new RegExp(
-    `-\\s*\\[x\\]\\s*.*${phaseHeadingPrefixNoCapture}(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`,
-    'gi',
-  );
-  let _allMatch: RegExpExecArray | null;
-  while ((_allMatch = _allCompletedPattern.exec(rawContent)) !== null) {
-    const phaseNum = normalizePhaseNumber(_allMatch[1]);
-    const phase = phaseMap.get(phaseNum);
-    if (!phase || phase['phase_complete'] === true) {
-      completedNums.add(phaseNum);
+  const bracketIdentityKey = (value: string): string | null => {
+    try {
+      const id = parsePhaseId(value);
+      const subphase = id.subphase ? `.${id.subphase}` : '';
+      return bracketQualifiedKey(
+        `${id.project}.${id.milestone}-${id.phase}${subphase}`,
+        'bracket',
+      );
+    } catch {
+      return null;
+    }
+  };
+  const phaseByBracketIdentity = new Map<string, Record<string, unknown>>();
+  const bracketIdentityByPhaseNumber = new Map<string, string>();
+  const completedBracketIdentities = new Set<string>();
+  if (phaseIdConvention === 'bracket') {
+    for (const phase of phases) {
+      const phaseNumber = phase['number'] as string;
+      const bracketId = bracketIdsByPhaseNumber.get(phaseNumber);
+      const canonicalPhaseToken = phaseToken(phaseNumber);
+      // #4304: key each heading on the reader's canonical
+      // token, not on a strict parse of its rendered display. An accepted
+      // unpadded heading (`### [CK.02] 1:`) gets no display_id, because
+      // parsePhaseId rejects `CK.02-1`, so it had no identity at all and a
+      // checked `[CK.02] 01` row completed it while phase_complete was false.
+      // phaseToken pads the number to `01`, and `CK.02-01` is the form
+      // parsePhaseId accepts; canonical headings key exactly as before.
+      const key = bracketId && canonicalPhaseToken
+        ? bracketIdentityKey(`${bracketId}-${canonicalPhaseToken}`)
+        : null;
+      if (!key) continue;
+      bracketIdentityByPhaseNumber.set(normalizePhaseNumber(phaseNumber), key);
+      phaseByBracketIdentity.set(key, phase);
+      if (phase['phase_complete'] === true) completedBracketIdentities.add(key);
     }
   }
+
+  if (phaseIdConvention === 'bracket') {
+    // A checked historical row satisfies only its own qualified identity. In
+    // particular, `[CK.01] 01` must not complete bare/current `[CK.02] 01`.
+    for (const line of rawContent.split(/\r?\n/)) {
+      const checkbox = parsePhaseChecklistLine(line, phaseIdConvention);
+      if (!checkbox?.checked || !checkbox.bracketId) continue;
+      const identity = `[${checkbox.bracketId}] ${checkbox.phaseToken}`;
+      const key = bracketIdentityKey(identity);
+      if (!key) continue;
+      const current = phaseMap.get(normalizePhaseNumber(checkbox.phaseToken));
+      const currentKey = current
+        ? bracketIdentityByPhaseNumber.get(normalizePhaseNumber(current['number'] as string)) ?? null
+        : null;
+      if (!current || currentKey !== key || current['phase_complete'] === true) {
+        completedBracketIdentities.add(key);
+      }
+    }
+  } else {
+    // Preserve the historical greedy non-bracket fallback byte-for-byte.
+    const _allCompletedPattern = phaseEntryRegExp(
+      `.*${phaseHeadingPrefixNoCapture}(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`,
+      'gi',
+    );
+    let _allMatch: RegExpExecArray | null;
+    while ((_allMatch = _allCompletedPattern.exec(rawContent)) !== null) {
+      if (!isPhaseEntryChecked(_allMatch[0])) continue;
+      const phaseNum = normalizePhaseNumber(_allMatch[1]);
+      const phase = phaseMap.get(phaseNum);
+      if (!phase || phase['phase_complete'] === true) {
+        completedNums.add(phaseNum);
+      }
+    }
+  }
+
+  const currentDependencyNumber = (dependency: string): string | null => {
+    const identity = bracketIdentityKey(dependency);
+    if (!identity) return normalizePhaseNumber(dependency);
+    const current = phaseByBracketIdentity.get(identity);
+    return current ? normalizePhaseNumber(current['number'] as string) : null;
+  };
 
   function reaches(from: string, to: string, visited = new Set<string>()): boolean {
     const normalizedFrom = normalizePhaseNumber(from);
@@ -3234,17 +3338,20 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     visited.add(normalizedFrom);
     const p = phaseMap.get(normalizedFrom);
     if (!p || !p['dep_phases'] || (p['dep_phases'] as string[]).length === 0) return false;
-    if ((p['dep_phases'] as string[]).some((dep) => normalizePhaseNumber(dep) === normalizedTo)) {
+    if ((p['dep_phases'] as string[]).some((dep) => currentDependencyNumber(dep) === normalizedTo)) {
       return true;
     }
-    return (p['dep_phases'] as string[]).some((dep) => reaches(dep, to, visited));
+    return (p['dep_phases'] as string[]).some((dep) => {
+      const dependencyNumber = currentDependencyNumber(dep);
+      return dependencyNumber === null ? false : reaches(dependencyNumber, to, visited);
+    });
   }
 
   function hasDepRelationship(numA: string, numB: string): boolean {
     return reaches(numA, numB) || reaches(numB, numA);
   }
 
-  // #4764: a phase reference in depends_on prose is a PHASE-SHAPED token in
+  // #4764/#4304: a phase reference in depends_on prose is a PHASE-SHAPED token in
   // context — directly following "Phase"/"Phases" — never a bare digit run.
   // The previous whole-field scrape matched the token grammar against every
   // digit run, so calendar dates ("2026-09-14" → 2026, 09, 14), git shas
@@ -3257,9 +3364,27 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   // "Phase 1-3") — silently dropping a REAL dependency would clear
   // deps_satisfied prematurely, the dangerous direction. Negation prose
   // ("dropped the dependency on Phase 654") is NOT detected: the issue's own
-  // minimum keeps such tokens.
-  const depPhaseRefRe = new RegExp(`${PHASE_DEP_REF_SOURCE}`, 'gi');
-  const depTokenRe = new RegExp(`${PHASE_NUMBER_TOKEN_SOURCE}`, 'gi');
+  // minimum keeps such tokens. Bracket repositories route through the same
+  // phase-id owner so `[CK.02] 01` retains its complete qualified identity;
+  // bare `01` still resolves against the active milestone. This prevents a
+  // checked historical `[CK.01] 01` from satisfying incomplete `[CK.02] 01`.
+  // Non-bracket extraction remains this manager surface's exact #4764 code
+  // path below, including its case-insensitive token regex. Planning-inspect's
+  // old token regex was case-sensitive, so forcing both through one widened
+  // helper changed its `Phase 1a` bytes from `1` to `1a`.
+
+  const legacyManagerDependencyTokens = (prose: string): string[] => {
+    const depPhaseRefRe = new RegExp(`${PHASE_DEP_REF_SOURCE}`, 'gi');
+    const depTokenRe = new RegExp(`${PHASE_NUMBER_TOKEN_SOURCE}`, 'gi');
+    const tokens: string[] = [];
+    let refMatch: RegExpExecArray | null;
+    while ((refMatch = depPhaseRefRe.exec(prose)) !== null) {
+      let tokenMatch: RegExpExecArray | null;
+      depTokenRe.lastIndex = 0;
+      while ((tokenMatch = depTokenRe.exec(refMatch[1])) !== null) tokens.push(tokenMatch[0]);
+    }
+    return tokens;
+  };
 
   for (const phase of phases) {
     if (
@@ -3270,22 +3395,35 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     } else {
       const prose = phase['depends_on'] as string;
       const ownNumber = normalizePhaseNumber(phase['number'] as string);
+      const ownIdentity = typeof phase['display_id'] === 'string'
+        ? bracketIdentityKey(phase['display_id'])
+        : null;
       const depNums: string[] = [];
       const seen = new Set<string>();
-      let refMatch: RegExpExecArray | null;
-      depPhaseRefRe.lastIndex = 0;
-      while ((refMatch = depPhaseRefRe.exec(prose)) !== null) {
-        let tok: RegExpExecArray | null;
-        depTokenRe.lastIndex = 0;
-        while ((tok = depTokenRe.exec(refMatch[1])) !== null) {
-          const normalized = normalizePhaseNumber(tok[0]);
-          if (normalized === ownNumber) continue; // #4764: never the row's own phase
-          if (seen.has(normalized)) continue;
-          seen.add(normalized);
-          depNums.push(tok[0]);
+      const dependencyTokens = phaseIdConvention === 'bracket'
+        ? extractPhaseDependencyTokens(prose, phaseIdConvention)
+        : legacyManagerDependencyTokens(prose);
+      for (const token of dependencyTokens) {
+        const identity = bracketIdentityKey(token);
+        if (identity) {
+          if (identity === ownIdentity) continue;
+          if (seen.has(identity)) continue;
+          seen.add(identity);
+          depNums.push(token);
+          continue;
         }
+        const normalized = normalizePhaseNumber(token);
+        if (normalized === ownNumber) continue; // #4764: never the row's own phase
+        if (seen.has(normalized)) continue;
+        seen.add(normalized);
+        depNums.push(token);
       }
-      phase['deps_satisfied'] = depNums.every((n) => completedNums.has(normalizePhaseNumber(n)));
+      phase['deps_satisfied'] = depNums.every((dependency) => {
+        const identity = bracketIdentityKey(dependency);
+        return identity
+          ? completedBracketIdentities.has(identity)
+          : completedNums.has(normalizePhaseNumber(dependency));
+      });
       phase['dep_phases'] = depNums;
     }
   }
@@ -3532,6 +3670,10 @@ function cmdInitCompleteMilestone(
     milestones_path: fs.existsSync(milestonesPath) ? toPosixPath(milestonesPath) : null,
     project_path: fs.existsSync(projectPath) ? toPosixPath(projectPath) : null,
     requirements_path: fs.existsSync(requirementsPath) ? toPosixPath(requirementsPath) : null,
+    // #5706 (epic #3628): the repositories configured for this project and the
+    // milestone tagging mode, so the workflow reads both from one init call.
+    sub_repos: detectSubRepos(cwd),
+    repo_tagging: detectRepoTagging(cwd),
   };
 
   // #5195: `state:flat-mode` gates the PROJECT.md evolution review. PROJECT.md
@@ -3813,6 +3955,7 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
   }
 
   const phasesDir = path.join(planningDir(cwd), 'phases');
+  const directoryContext = phaseDirectoryOptions(cwd, config);
   const phases: Record<string, unknown>[] = [];
   let currentPhase: Record<string, unknown> | null = null;
   let nextPhase: Record<string, unknown> | null = null;
@@ -3830,7 +3973,7 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
     // buildPhaseHeadingScanRegex (phase-id.cts) so this scan also recognizes
     // bracket-convention headings instead of hand-rolling a literal `Phase\s+`.
     const { regex: headingPattern, phaseNumGroup: hNumGroup, phaseNameGroup: hNameGroup } = buildPhaseHeadingScanRegex(
-      PHASE_HEADING_BASELINE.ANY_BRACKET, progressConvention,
+      PHASE_HEADING_BASELINE.ANY_BRACKET, progressConvention, directoryContext,
     );
     let hm: RegExpExecArray | null;
     while ((hm = headingPattern.exec(roadmapContent)) !== null) {
@@ -3864,12 +4007,12 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
     // matched (by absorbing the bracket text). This does NOT migrate the site
     // onto phaseHeadingPrefixSrcFor / the bracket convention — that stays
     // out of scope per the comment above (#4984 revert, pinned census).
-    const cbPattern = new RegExp(`^[ \\t]*-[ \\t]*\\[(x| )\\][ \\t]*(?:\\*\\*)?(?:\\[[^\\]\\n]{0,200}\\]\\s*)?Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`, 'gim');
+    const cbPattern = phaseEntryRegExp(`(?:\\[[^\\]\\n]{0,200}\\]\\s*)?Phase\\s+(${phaseScanTokenSource(directoryContext)})[:\\s]`, 'gim', { state: 'captured' });
     let cbm: RegExpExecArray | null;
     while ((cbm = cbPattern.exec(roadmapContent)) !== null) {
       const cbKey = cbm[2];
       if (!roadmapCheckboxStates.has(cbKey)) {
-        roadmapCheckboxStates.set(cbKey, cbm[1].toLowerCase() === 'x');
+        roadmapCheckboxStates.set(cbKey, isBoxCharChecked(cbm[1]));
       }
     }
   } catch {
@@ -3888,10 +4031,12 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
     const dirs = listMilestonePhaseDirs(phasesDir, { cwd }).value;
 
     for (const dir of dirs) {
-      const dirMatch = dir.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i'));
-      const phaseNumber = dirMatch ? dirMatch[1] : dir;
-      const phaseName = dirMatch && dirMatch[2] ? dirMatch[2] : null;
-      seenPhaseNums.add(phaseNumber.replace(/^0+/, '') || '0');
+      const dirMatch = dir.match(new RegExp(`^(${phaseScanTokenSource(directoryContext)})-?(.*)`, 'i'));
+      const query = customPhaseQuery(dir, directoryContext);
+      const owner = query && customDirectoryOwner(dir, query);
+      const phaseNumber = owner ? owner.id : dirMatch ? dirMatch[1] : dir;
+      const phaseName = owner ? owner.slug : dirMatch && dirMatch[2] ? dirMatch[2] : null;
+      seenPhaseNums.add((phaseKeyFromToken(phaseNumber, directoryContext) ?? phaseNumber).toLowerCase());
 
       const phasePath = path.join(phasesDir, dir);
       const phaseFiles = fs.readdirSync(phasePath);
@@ -3953,7 +4098,7 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
   }
 
   for (const [num, name] of roadmapPhaseNames) {
-    const stripped = num.replace(/^0+/, '') || '0';
+    const stripped = (phaseKeyFromToken(num, directoryContext) ?? num).toLowerCase();
     if (!seenPhaseNums.has(stripped)) {
       const checkboxComplete =
         roadmapCheckboxStates.get(num) === true ||
@@ -3993,7 +4138,7 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
     }
   }
 
-  phases.sort((a, b) => comparePhaseNum(a['number'], b['number']));
+  phases.sort((a, b) => comparePhaseNum(a['number'], b['number'], directoryContext));
 
   // #3581: the frontier is ROADMAP ORDER, not artifact presence. The disk loop
   // above could claim nextPhase from a stray out-of-order artifact directory

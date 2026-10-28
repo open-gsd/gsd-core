@@ -1,6 +1,6 @@
 # GSD Agent Reference
 
-> Full role cards for 22 primary agents plus concise stubs for 13 advanced/specialized agents (35 shipped agents total). The `agents/` directory and [`docs/INVENTORY.md`](INVENTORY.md) are the authoritative roster; see [Architecture](ARCHITECTURE.md) for context.
+> Full role cards for 22 primary agents plus concise stubs for 13 advanced/specialized agents (35 shipped agents total). The `agents/` directory and [`docs/INVENTORY.md`](../INVENTORY.md) are the authoritative roster; see [Architecture](../ARCHITECTURE.md) for context.
 
 ---
 
@@ -12,7 +12,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 
 ### Agent Categories
 
-> The table below covers the **22 primary agents** detailed in this section. Thirteen additional shipped agents (pattern-mapper, debug-session-manager, code-reviewer, code-fixer, ai-researcher, domain-researcher, eval-planner, eval-auditor, framework-selector, intel-updater, doc-classifier, doc-synthesizer, mempalace-curator) have concise stubs in the [Advanced and Specialized Agents](#advanced-and-specialized-agents) section below. For the authoritative 35-agent roster, see [`docs/INVENTORY.md`](INVENTORY.md) and the `agents/` directory.
+> The table below covers the **22 primary agents** detailed in this section. Thirteen additional shipped agents (pattern-mapper, debug-session-manager, code-reviewer, code-fixer, ai-researcher, domain-researcher, eval-planner, eval-auditor, framework-selector, intel-updater, doc-classifier, doc-synthesizer, mempalace-curator) have concise stubs in the [Advanced and Specialized Agents](#advanced-and-specialized-agents) section below. For the authoritative 35-agent roster, see [`docs/INVENTORY.md`](../INVENTORY.md) and the `agents/` directory.
 
 | Category | Count | Agents |
 |----------|-------|--------|
@@ -313,7 +313,7 @@ Three further dimensions carry no number: **Verify Command Format Sanity**,
 | 7 | Inventory Provenance |
 
 **Key behaviors:**
-- **Inventory provenance (#2845):** a UI-SPEC whose component inventory carries no provenance line is reported as a defect, and the inventory is downgraded from a closed allowlist to a **non-exhaustive list of known-good components** — so an executor is never blocked from something the spec merely failed to mention. A spec with no inventory at all PASSes, which is what keeps every UI-SPEC written before the dimension existed validating unchanged. The checker never executes the recorded command; it reads the spec as a document. **Limits, because the dimension is narrower than it reads:** the line makes an inventory's origin falsifiable, not verified — nothing re-runs the command or compares the count, so a fabricated line passes; the rule is agent-applied like the other six, not a schema check; and "never executes the recorded command" is an instruction rather than a capability boundary, since the checker holds a `Bash` grant it needs for the agent-skills bootstrap. See [Security model → Trade-offs and limits](explanation/security-model.md#trade-offs-and-limits) and [How to design a UI phase](how-to/design-a-ui-phase.md#what-this-check-is-and-is-not).
+- **Inventory provenance (#2845):** a UI-SPEC whose component inventory carries no provenance line is reported as a defect, and the inventory is downgraded from a closed allowlist to a **non-exhaustive list of known-good components** — so an executor is never blocked from something the spec merely failed to mention. A spec with no inventory at all PASSes, which is what keeps every UI-SPEC written before the dimension existed validating unchanged. The checker never executes the recorded command; it reads the spec as a document. **Limits, because the dimension is narrower than it reads:** the line makes an inventory's origin falsifiable, not verified — nothing re-runs the command or compares the count, so a fabricated line passes; the rule is agent-applied like the other six, not a schema check; and "never executes the recorded command" is an instruction rather than a capability boundary, since the checker holds a `Bash` grant it needs for the agent-skills bootstrap. See [Security model → Trade-offs and limits](../explanation/security-model.md#trade-offs-and-limits) and [How to design a UI phase](../how-to/design-a-ui-phase.md#what-this-check-is-and-is-not).
 - **Adversarial stance / "The Auditor" (#1578):** applies explicit BLOCK/FLAG/PASS tiers and an anti-capitulation rule that resists author-framing pressure while still allowing self-correction when the prior dimension application was mistaken. Persona effects are strongest on Sonnet-class reasoning and unvalidated on budget/Haiku-class routing; the criteria and evidence remain authoritative.
 
 ---
@@ -401,7 +401,7 @@ installed Chrome (`CHROME_BIN` overrides discovery). With the key off, or no Chr
 the section prints one line and the Playwright-only path runs exactly as before. The report's
 `**Interaction captures:**` field carries the outcome — off, skipped with its reason, or the
 number of states captured — and an interaction state that was not captured is never reported as
-observed. See [Enable UI interaction capture](how-to/enable-ui-interaction-capture.md).
+observed. See [Enable UI interaction capture](../how-to/enable-ui-interaction-capture.md).
 
 ---
 
@@ -420,7 +420,7 @@ observed. See [Enable UI interaction capture](how-to/enable-ui-interaction-captu
 | **Produces** | `{phase}-DOM-VERIFY.md` |
 | **Gated by** | `workflow.live_dom_uat` (default `false`) |
 
-This is the **only** GSD agent carrying browser MCP tools. `gsd-executor` is deliberately not widened — for a first-party agent the static `tools:` list is the only control that exists ([ADR-1244](adr/1244-capability-ecosystem.md) D2, [ADR-857](adr/857-capability-system.md) D4). It carries no `Bash`: it does not start dev servers or shell out.
+This is the **only** GSD agent carrying browser MCP tools. `gsd-executor` is deliberately not widened — for a first-party agent the static `tools:` list is the only control that exists ([ADR-1244](../adr/1244-capability-ecosystem.md) D2, [ADR-857](../adr/857-capability-system.md) D4). It carries no `Bash`: it does not start dev servers or shell out.
 
 **Outcome codes** (`nothing_to_report` and `could_not_look` are never conflated):
 
@@ -432,7 +432,7 @@ This is the **only** GSD agent carrying browser MCP tools. `gsd-executor` is del
 | `could_not_look` | `profile_locked` | Another instance holds the browser profile |
 | `could_not_look` | `target_unreachable` | Nothing serving the target |
 
-**Reference:** [Enable live-DOM verification](how-to/enable-live-dom-verification.md) · [Explanation](explanation/live-dom-uat-capability.md)
+**Reference:** [Enable live-DOM verification](../how-to/enable-live-dom-verification.md) · [Explanation](../explanation/live-dom-uat-capability.md)
 
 ---
 
@@ -587,7 +587,7 @@ Communication style, decision patterns, debugging approach, UX preferences, vend
 
 ## Advanced and Specialized Agents
 
-Thirteen additional agents ship under `agents/gsd-*.md` and are used by specialty workflows (`/gsd-ai-integration-phase`, `/gsd-eval-review`, `/gsd-code-review`, `/gsd-code-review --fix`, `/gsd-debug`, `/gsd-map-codebase --query`, `/gsd-ingest-docs`), by the planner pipeline, and by the MemPalace capability at `ship:post`. Each carries full frontmatter in its agent file; the stubs below are concise by design. The authoritative roster (with spawner and primary-doc status per agent) lives in [`docs/INVENTORY.md`](INVENTORY.md).
+Thirteen additional agents ship under `agents/gsd-*.md` and are used by specialty workflows (`/gsd-ai-integration-phase`, `/gsd-eval-review`, `/gsd-code-review`, `/gsd-code-review --fix`, `/gsd-debug`, `/gsd-map-codebase --query`, `/gsd-ingest-docs`), by the planner pipeline, and by the MemPalace capability at `ship:post`. Each carries full frontmatter in its agent file; the stubs below are concise by design. The authoritative roster (with spawner and primary-doc status per agent) lives in [`docs/INVENTORY.md`](../INVENTORY.md).
 
 ### gsd-pattern-mapper
 
@@ -855,7 +855,7 @@ Thirteen additional agents ship under `agents/gsd-*.md` and are used by specialt
 
 ## Agent Tool Permissions Summary
 
-> **Scope:** this table covers the 22 primary agents only. The 13 advanced/specialized agents listed above carry their own tool surfaces in their `agents/gsd-*.md` frontmatter (summarized in the per-agent stubs above and in [`docs/INVENTORY.md`](INVENTORY.md)).
+> **Scope:** this table covers the 22 primary agents only. The 13 advanced/specialized agents listed above carry their own tool surfaces in their `agents/gsd-*.md` frontmatter (summarized in the per-agent stubs above and in [`docs/INVENTORY.md`](../INVENTORY.md)).
 
 | Agent | Read | Write | Edit | Bash | Grep | Glob | WebSearch | WebFetch | MCP |
 |-------|------|-------|------|------|------|------|-----------|----------|-----|
@@ -889,7 +889,7 @@ Thirteen additional agents ship under `agents/gsd-*.md` and are used by specialt
 
 ## Completion Contracts (machine-enforced)
 
-Every agent's return contract is declared in [`gsd-core/references/agent-contracts.md`](../gsd-core/references/agent-contracts.md)'s **Agent Registry** table — `(Agent, Completion Markers, Consumed by, Kind)` — and enforced by `npm run check:contract-drift` (part of `lint:ci`).
+Every agent's return contract is declared in [`gsd-core/references/agent-contracts.md`](../../gsd-core/references/agent-contracts.md)'s **Agent Registry** table — `(Agent, Completion Markers, Consumed by, Kind)` — and enforced by `npm run check:contract-drift` (part of `lint:ci`).
 
 The `Kind` column records how a caller actually detects the agent's completion:
 
@@ -903,4 +903,4 @@ When you add an agent or change what it returns, update its registry row in the 
 
 The same check also enforces the read-tag pairing: whenever a declared consumer emits `<required_reading>`, the producing agent's instructions must reference the gate (directly or via an `@`-included reference) — and the retired `<files_to_read>` vocabulary may not reappear under `workflows/`, `commands/`, or `agents/`.
 
-For acting on a specific finding, see [How to resolve a contract-drift finding](how-to/resolve-contract-drift-findings.md).
+For acting on a specific finding, see [How to resolve a contract-drift finding](../how-to/resolve-contract-drift-findings.md).

@@ -1020,3 +1020,211 @@ describe('#3719: applyAgentPathRewrites must restore @-anchored $HOME refs to ti
     });
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────
+// #5501: the skill/command pipeline (`_applyRuntimeRewrites`, Claude's
+// 'slash-tilde-restore' profile) rewrote only the slash forms `~/.claude/`
+// and `$HOME/.claude/`. The runtime launcher's shell default
+// `${CLAUDE_CONFIG_DIR:-$HOME/.claude}` has no trailing slash, so it survived
+// verbatim and a `--config-dir` install kept probing `~/.claude/gsd-core` —
+// gsd-discuss-phase and gsd-surface failed with "gsd-tools.cjs not found".
+// The gsd-core/ spec-tree copy already handled the bare form (#3544); this
+// pins the same behaviour for staged skills and commands.
+// ────────────────────────────────────────────────────────────────────────
+describe('#5501: Claude skill/command bodies rewrite the bare ~/.claude and $HOME/.claude forms', () => {
+  const { _applyRuntimeRewrites } = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
+  const launcherDefault = '_gsd_homes() { set -- "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "${ZCODE_CONFIG_DIR:-$HOME/.zcode}"; }\n';
+
+  test('the launcher default follows a custom $HOME-form config dir', () => {
+    const out = _applyRuntimeRewrites(launcherDefault, 'claude', '$HOME/.claude-work/', true, undefined);
+    assert.strictEqual(out, '_gsd_homes() { set -- "${CLAUDE_CONFIG_DIR:-$HOME/.claude-work}" "${ZCODE_CONFIG_DIR:-$HOME/.zcode}"; }\n');
+  });
+
+  test('the launcher default follows an absolute config dir', () => {
+    const out = _applyRuntimeRewrites(launcherDefault, 'claude', '/opt/gsd/cfg/', true, undefined);
+    assert.strictEqual(out, '_gsd_homes() { set -- "${CLAUDE_CONFIG_DIR:-/opt/gsd/cfg}" "${ZCODE_CONFIG_DIR:-$HOME/.zcode}"; }\n');
+  });
+
+  test('a .claude-work prefix is not doubled to .claude-work-work', () => {
+    const src = 'cat ~/.claude/gsd-core/VERSION; ls $HOME/.claude; echo "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"\n';
+    const out = _applyRuntimeRewrites(src, 'claude', '$HOME/.claude-work/', true, undefined);
+    assert.strictEqual(out, 'cat $HOME/.claude-work/gsd-core/VERSION; ls $HOME/.claude-work; echo "${CLAUDE_CONFIG_DIR:-$HOME/.claude-work}"\n');
+  });
+
+  test('.claude-plugin and .claudeignore are left alone', () => {
+    const src = 'see ~/.claude-plugin/plugin.json and $HOME/.claudeignore\n';
+    const out = _applyRuntimeRewrites(src, 'claude', '$HOME/.claude-work/', true, undefined);
+    assert.strictEqual(out, src);
+  });
+
+  test('@-references, slash and bare, are still restored to the tilde form', () => {
+    const src = '@~/.claude/gsd-core/workflows/stats.md\n@~/.claude\n';
+    assert.strictEqual(
+      _applyRuntimeRewrites(src, 'claude', '$HOME/.claude-work/', true, undefined),
+      '@~/.claude-work/gsd-core/workflows/stats.md\n@~/.claude-work\n',
+    );
+    assert.strictEqual(_applyRuntimeRewrites(src, 'claude', '$HOME/.claude/', true, undefined), src);
+  });
+
+  test('a project-relative prefix keeps the launcher default absolute (#4377)', () => {
+    const out = _applyRuntimeRewrites(launcherDefault, 'claude', '.claude/', false, undefined);
+    assert.strictEqual(out, launcherDefault);
+  });
+
+  test('the default ~/.claude install keeps the launcher default as written', () => {
+    const out = _applyRuntimeRewrites(launcherDefault, 'claude', '$HOME/.claude/', true, undefined);
+    assert.strictEqual(out, launcherDefault);
+  });
+
+  // #5501 review (F1): the slash pass used to emit the prefix and the bare pass then
+  // re-matched the `.claude` inside it, so a config dir nested under `~/.claude`
+  // (or one named `.claude.d`) was rewritten again. One pass rewrites each source
+  // occurrence exactly once.
+  test('a config dir nested under ~/.claude is not re-matched', () => {
+    const src = 'cat ~/.claude/gsd-core/x; echo "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"\n';
+    const out = _applyRuntimeRewrites(src, 'claude', '$HOME/.claude/profiles/work/', true, undefined);
+    assert.strictEqual(
+      out,
+      'cat $HOME/.claude/profiles/work/gsd-core/x; echo "${CLAUDE_CONFIG_DIR:-$HOME/.claude/profiles/work}"\n',
+    );
+  });
+
+  test('a config dir whose name starts .claude. is not re-matched', () => {
+    const out = _applyRuntimeRewrites('cat ~/.claude/gsd-core/x\n', 'claude', '$HOME/.claude.d/', true, undefined);
+    assert.strictEqual(out, 'cat $HOME/.claude.d/gsd-core/x\n');
+  });
+
+  // #5501 review (F6): a string replacement interprets `$&`; the prefix is emitted verbatim.
+  test('a config dir containing $& is emitted verbatim', () => {
+    const out = _applyRuntimeRewrites('ls ~/.claude ~/.claude/x\n', 'claude', '$HOME/.cl$&ude/', true, undefined);
+    assert.strictEqual(out, 'ls $HOME/.cl$&ude $HOME/.cl$&ude/x\n');
+  });
+
+  test('.claude.json and .claude.d style names keep their bytes', () => {
+    const src = 'read ~/.claude.json and $HOME/.claude.d/x\n';
+    assert.strictEqual(_applyRuntimeRewrites(src, 'claude', '$HOME/.claude-work/', true, undefined), src);
+  });
+
+  // #5501 review (F7): handing the restore the normalized prefix must not turn a
+  // look-alike @-ref on a default install into the tilde form.
+  test('bare prose keeps its bytes on a default install', () => {
+    const src = 'see ~/.claude and $HOME/.claude for details\n';
+    assert.strictEqual(_applyRuntimeRewrites(src, 'claude', '$HOME/.claude/', true, undefined), src);
+  });
+
+  test('a look-alike @-ref keeps its bytes on a default install', () => {
+    const src = '@$HOME/.claude-plugin/x\n@$HOME/.claudeignore\n';
+    assert.strictEqual(_applyRuntimeRewrites(src, 'claude', '$HOME/.claude/', true, undefined), src);
+  });
+
+  test('property: each home form is rewritten once and everything else keeps its bytes', () => {
+    const fc = require('fast-check');
+    const PREFIXES = [
+      '$HOME/.claude-work/', '$HOME/.claude/profiles/work/', '$HOME/.claude.d/',
+      '/opt/gsd/cfg/', '$HOME/.cl$&ude/', '$HOME/.claude/',
+    ];
+    // [source token, expected output given (prefix, prefix without trailing slash)]
+    const TOKENS = [
+      ['~/.claude/gsd-core/x', (p) => `${p}gsd-core/x`],
+      ['$HOME/.claude/gsd-core/x', (p) => `${p}gsd-core/x`],
+      // a default install keeps the bare spelling it was written with
+      ['~/.claude', (_p, n) => (n === '$HOME/.claude' ? '~/.claude' : n)],
+      ['$HOME/.claude', (_p, n) => n],
+      ['~/.claude-plugin/x', () => '~/.claude-plugin/x'],
+      ['$HOME/.claudeignore', () => '$HOME/.claudeignore'],
+      ['~/.claude.json', () => '~/.claude.json'],
+      ['plain text', () => 'plain text'],
+    ];
+    fc.assert(fc.property(
+      fc.constantFrom(...PREFIXES),
+      fc.array(fc.integer({ min: 0, max: TOKENS.length - 1 }), { minLength: 1, maxLength: 12 }),
+      (prefix, picks) => {
+        const normalized = prefix.replace(/\/$/, '');
+        const src = picks.map((i) => TOKENS[i][0]).join('\n');
+        const expected = picks.map((i) => TOKENS[i][1](prefix, normalized)).join('\n');
+        assert.strictEqual(_applyRuntimeRewrites(src, 'claude', prefix, true, undefined), expected);
+      },
+    ), { seed: 5501, numRuns: 100 });
+  });
+});
+
+describe('#5501: spawned installer — --config-dir skills find gsd-tools under the install path', () => {
+  const { before, after } = require('node:test');
+  const { spawnSync } = require('child_process');
+  const { cleanup } = require('./helpers.cjs');
+  const { runNode } = require('./helpers/process-seam.cjs');
+  const { INSTALL_TIMEOUT_MS, PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  const { INSTALL_SCRIPT, installerEnv } = require('./helpers/install-shared.cjs');
+  const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+
+  let home, configDir, runCwd;
+
+  function stagedBodies() {
+    const out = [];
+    const walk = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith('.md')) out.push({ file: full, content: fs.readFileSync(full, 'utf8') });
+      }
+    };
+    for (const sub of ['skills', 'commands']) {
+      const dir = path.join(configDir, sub);
+      if (fs.existsSync(dir)) walk(dir);
+    }
+    return out;
+  }
+
+  before(() => {
+    // The config dir sits under HOME with a name that EXTENDS '.claude', so
+    // the prefix is '$HOME/.claude-work/' — the shape that exposes both the
+    // missed bare default and any '.claude-work-work' doubling.
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5501-home-'));
+    configDir = path.join(home, '.claude-work');
+    runCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5501-cwd-'));
+    const r = runNode([INSTALL_SCRIPT, '--claude', '--global', '--config-dir', configDir, '--minimal'], {
+      cwd: home,
+      env: installerEnv({ HOME: home, USERPROFILE: home }),
+      timeoutMs: INSTALL_TIMEOUT_MS,
+    });
+    assert.strictEqual(r.exitCode, 0, `claude --global --config-dir install failed:\n${r.stdout}\n${r.stderr}`);
+  });
+
+  after(() => {
+    cleanup(home);
+    cleanup(runCwd);
+  });
+
+  test('no staged skill or command body keeps the ${CLAUDE_CONFIG_DIR:-$HOME/.claude} default', () => {
+    const bodies = stagedBodies();
+    assert.ok(bodies.some(({ file }) => file.includes('gsd-discuss-phase')), 'expected gsd-discuss-phase to be staged');
+    const stale = bodies.filter(({ content }) => content.includes('${CLAUDE_CONFIG_DIR:-$HOME/.claude}')).map(({ file }) => file);
+    assert.deepStrictEqual(stale, []);
+  });
+
+  test('staged bodies use .claude-work paths, never .claude-work-work', () => {
+    const bodies = stagedBodies();
+    const doubled = bodies.filter(({ content }) => content.includes('.claude-work-work')).map(({ file }) => file);
+    assert.deepStrictEqual(doubled, []);
+    assert.ok(
+      bodies.some(({ content }) => content.includes('${CLAUDE_CONFIG_DIR:-$HOME/.claude-work}')),
+      'expected the launcher default to point at $HOME/.claude-work',
+    );
+  });
+
+  test('the staged discuss-phase launcher resolves gsd-tools under <config-dir>/gsd-core', { skip: process.platform === 'win32' && 'POSIX shell launcher' }, () => {
+    const skill = fs.readFileSync(path.join(configDir, 'skills', 'gsd-discuss-phase', 'SKILL.md'), 'utf8');
+    const launcher = splitLines(skill).find((line) => line.startsWith('_GSD_SHIM_NAME='));
+    assert.ok(launcher, 'expected the runtime launcher line in gsd-discuss-phase');
+    // A minimal env: no CLAUDE_CONFIG_DIR or other runtime homes, cwd outside
+    // any project, so only the install-path default can find gsd-tools.
+    const r = spawnSync('bash', ['-c', `${launcher}\nprintf '%s' "$GSD_TOOLS"`], {
+      cwd: runCwd,
+      env: { HOME: home, PATH: process.env.PATH },
+      encoding: 'utf8',
+      timeout: PROBE_TIMEOUT_MS,
+    });
+    assert.strictEqual(r.status, 0, `launcher failed:\n${r.stdout}\n${r.stderr}`);
+    assert.strictEqual(r.stdout, path.join(configDir, 'gsd-core', 'bin', 'gsd-tools.cjs'));
+  });
+});

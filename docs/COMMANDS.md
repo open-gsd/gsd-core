@@ -394,7 +394,7 @@ Create PR from completed phase work with auto-generated body.
 | `N` | No | Phase number or milestone version (e.g., `4` or `v1.0`) |
 | `--draft` | No | Create as draft PR |
 
-**Prerequisites:** Phase verified (`/gsd-verify-work` passed), `gh` CLI installed and authenticated
+**Prerequisites:** Phase verified (`/gsd-verify-work` passed), `gh` CLI installed and authenticated, `jq` installed, phase recorded complete in ROADMAP.md
 **Produces:** GitHub PR with rich body from planning artifacts, STATE.md updated
 
 ```bash
@@ -409,6 +409,19 @@ Create PR from completed phase work with auto-generated body.
 - Verification status
 - Key decisions
 - Optional configured PRD-style sections from `ship.pr_body_sections`
+
+**ROADMAP record preflight** (#5221): after the verification check passes and before the gates, `/gsd-ship` runs `roadmap analyze` and reads its `roadmap_record` field with `jq`. The phase ships only when every ROADMAP record of it (checklist entry, progress-table Status) reads complete. Phase numbers match with leading zeros stripped per segment (`03.02` matches `3.2`). Every refusal prints to stderr and stops the workflow with exit 1, before any PR is created:
+
+| Condition | Message (stderr) | Fix |
+|-----------|------------------|-----|
+| Record reads incomplete | `PHASE_NOT_COMPLETE: Run /gsd-verify-work {n} (completes the phase), then re-run /gsd-ship` | Run `/gsd-verify-work {n}`. For a custom-id phase, also tick its checklist entry by hand (a second line says so). |
+| Phase has no checklist entry and no progress-table row | `PHASE_NOT_RECORDED: ROADMAP.md has no checklist entry or progress-table row for phase {n}; ...` | Add an entry or row, run `/gsd-verify-work {n}`, re-run. |
+| Progress table does not parse (e.g. a row with the wrong cell count) | `ROADMAP_TABLE_UNREADABLE: the ROADMAP.md progress table does not parse ...` | Fix the table, re-run. |
+| `roadmap analyze` exits non-zero | `roadmap.analyze failed — see the error above` | Fix the reported error. |
+| Analyze output has no `roadmap_record` field or is not JSON | `roadmap.analyze output unparseable` | Update gsd-core so analyze emits `roadmap_record`. |
+| `jq` is not installed | `jq: command not found`, then `roadmap.analyze output unparseable` | Install `jq`. The check fails closed: without `jq` no phase ships. |
+
+When `.planning/ROADMAP.md` does not exist, the check is skipped.
 
 **Ship gates (capability-driven):** `/gsd-ship` runs every active `ship:pre` gate from the capability registry. Two are on by default:
 
@@ -598,7 +611,7 @@ CRUD for phases in ROADMAP.md — add, insert, remove, or edit phases with a sin
 | `--force` | Allow editing in-progress or completed phases (used with `--edit`) |
 
 **Prerequisites:** `.planning/ROADMAP.md` exists
-**Produces:** Updated ROADMAP.md
+**Produces:** Updated ROADMAP.md. Add and insert also give the new phase a ROADMAP record (#5221), so `/gsd-ship` can read it: a `- [ ] **Phase N: …**` checklist entry after the active milestone's checklist, or, with no checklist, a `Not started` progress-table row; with neither, no readable record is written (`roadmap_entry: none`; also reported when the written entry is one `roadmap analyze` cannot read, e.g. a custom id over 64 characters) and `/gsd-ship` blocks the phase `PHASE_NOT_RECORDED` until you add one.
 
 ```bash
 /gsd-phase "Add authentication system"          # Append new phase with description
@@ -842,7 +855,7 @@ Interactive command center for managing multiple phases from one terminal.
 /gsd-manager --analyze-deps         # Scan ROADMAP phases for dependency relationships before parallel execution
 ```
 
-**Phase completion is disk-strict (ADR-3180 §7.4, issue #3186).** A phase's status here — and in `roadmap analyze`, `roadmap update-plan-progress`, and `phase complete` — is decided by one rule: a passing `*-VERIFICATION.md` on disk, checked unconditionally (plan count is never a precondition, so a zero-plan phase with a passing verification reports complete). A ticked `- [x]` checkbox in `ROADMAP.md` is a human annotation only; it carries no machine authority and is never consulted for these commands' completion verdicts. `roadmap update-plan-progress` additionally withholds writing the checkbox/completion date while any plan in the phase has no matching `*-SUMMARY.md`, mirroring `phase complete`'s own coverage gate.
+**Phase completion is disk-strict (ADR-3180 §7.4, issue #3186).** A phase's status here — and in `roadmap analyze`, `roadmap update-plan-progress`, and `phase complete` — is decided by one rule: a passing `*-VERIFICATION.md` on disk, checked unconditionally (plan count is never a precondition, so a zero-plan phase with a passing verification reports complete). A ticked `- [x]` checkbox in `ROADMAP.md` is a human annotation only; it carries no machine authority and is never consulted for these commands' completion verdicts. `roadmap update-plan-progress` additionally withholds writing the checkbox/completion date while any plan in the phase has no matching `*-SUMMARY.md`, mirroring `phase complete`'s own coverage gate. One reader of the checkbox is not a completion verdict: `/gsd-ship`'s preflight (#5221) first requires the disk verdict (`verification.status` = `passed`), then refuses a phase whose ROADMAP record — checklist checkbox and progress-table Status — does not read complete, or that has no such record, to catch a completion that was never written back. That check grants nothing the disk verdict withheld; the ADR-3180 §7.4 rule above is unchanged.
 
 **Which phase comes *next* is a different question, and the roadmap answers it.** Disk-strictness
 governs whether a phase is *complete*; it does not decide the successor. `phase complete` resolves

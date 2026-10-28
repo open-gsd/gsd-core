@@ -202,6 +202,7 @@
   - [Stated Failing Direction](#167-stated-failing-direction)
   - [Runtime Identity](#168-runtime-identity)
   - [Context Drift Gate](#3348-context-drift-gate)
+  - [Per-Repository Release Mapping](#3628-per-repository-release-mapping)
   - ["Failure Is a Value" — Strict Argv Rejection and the `--pick` Absence Contract](#3884-failure-is-a-value--strict-argv-rejection-and-the---pick-absence-contract)
   - [No Silent Swallow, No Verdict From Dropped Data](#3885-no-silent-swallow-no-verdict-from-dropped-data)
   - [Runtime Marker Resolution, Derived Codex Sandbox, and In-Phase Short-Form Dependencies](#3897-runtime-marker-resolution-derived-codex-sandbox-and-in-phase-short-form-dependencies)
@@ -451,8 +452,9 @@
 - REQ-SHIP-04: System MUST update STATE.md with shipping status and PR number
 - REQ-SHIP-05: System MUST support `--draft` flag for draft PRs
 - REQ-SHIP-06: System MUST support append-only project PR body sections configured with `ship.pr_body_sections`
+- REQ-SHIP-07: System MUST refuse a phase whose ROADMAP.md record (checklist entry, progress-table Status) does not read complete, has no record, or sits in an unreadable progress table, before any PR is created (`PHASE_NOT_COMPLETE`, `PHASE_NOT_RECORDED`, `ROADMAP_TABLE_UNREADABLE`; #5221)
 
-**Prerequisites:** Phase verified, `gh` CLI installed and authenticated, work on feature branch
+**Prerequisites:** Phase verified and recorded complete in ROADMAP.md, `gh` CLI installed and authenticated, `jq` installed, work on feature branch
 
 **Produces:** GitHub PR with rich body, optional configured PRD-style sections, STATE.md updated
 
@@ -3945,7 +3947,7 @@ See [Resolve verify-command path findings](how-to/resolve-verify-command-path-fi
 
 **Known limits:** no sandbox — once enabled, nothing constrains which origins are reached ([ADR-1244](adr/1244-capability-ecosystem.md) D5); DOM observation only, no screenshot diffing, accessibility audit, or performance tracing.
 
-**Reference:** [Configuration](CONFIGURATION.md) · [Enable live-DOM verification](how-to/enable-live-dom-verification.md) · [Explanation](explanation/live-dom-uat-capability.md) · [Agents](AGENTS.md)
+**Reference:** [Configuration](CONFIGURATION.md) · [Enable live-DOM verification](how-to/enable-live-dom-verification.md) · [Explanation](explanation/live-dom-uat-capability.md) · [Agents](reference/agents.md)
 
 ---
 
@@ -3984,7 +3986,7 @@ See [Resolve verify-command path findings](how-to/resolve-verify-command-path-fi
 - REQ-SC-04: A missing `ROADMAP.md`, a missing or unreadable `.planning/`, an unwritable target, or any other failure NEVER errors the parent command. A directory that is not a GSD project stays untouched — the publisher will not create `.planning/` in order to publish into it.
 - REQ-SC-05: The skills own the file; readers never write it. It is a derived cache — safe to delete, regenerated at the next boundary.
 
-**Composed, never re-derived.** Milestone identity comes from `getMilestoneInfo`; phase rows from `locateProgressTable`, the same `## Progress` locator the progress counters use, so `state.json` can never disagree with the rest of GSD about which phases are complete; the recommended action from `classifyProject`. This module introduces no second answer to any question GSD already answers.
+**Composed, never re-derived.** Milestone identity comes from `getMilestoneInfo`; phase rows from `locateRoadmapProgress` (Roadmap Progress Module), the same `## Progress` locator the progress counters use, so `state.json` can never disagree with the rest of GSD about which phases are complete; the recommended action from `classifyProject`. This module introduces no second answer to any question GSD already answers.
 
 **Why it does not reuse `planning inspect`'s schema.** The two surfaces answer different questions and have opposite shapes. `planning inspect` is a rich, diagnostic-carrying **pull** query a consumer runs; this is a small **push** artifact a consumer watches. Publishing `planning inspect`'s payload at every `phase add` would mean opening every plan, summary and requirements document on a hot path, and freezing a much larger surface as a contract.
 
@@ -4069,6 +4071,30 @@ phase's `CONTEXT.md` after that artifact was derived from it. Deterministic — 
 time (falling back to mtime for uncommitted edits), no model call. Sibling to the existing
 codebase-drift and schema-drift gates in the `drift` capability. Configure with
 `workflow.context_drift_precheck` (on/off) and `workflow.context_drift_action` (`warn`/`block`).
+
+---
+
+### 3628. Per-Repository Release Mapping
+
+**Command:** `/gsd-complete-milestone`
+
+**Config key:** `git.repo_tagging` (`single` default, `per_repo`)
+
+**Purpose:** A milestone that ships across several independently versioned repositories cannot be described by one `v[X.Y]` tag. A GSD milestone version names planned work in `.planning/`; each repository has its own release version, and some repositories may not be released at all. This feature records what each repository actually released against the milestone ([ADR-3628](adr/3628-milestone-release-mapping.md), epic #3628).
+
+**Behavior:** With `git.repo_tagging: per_repo` and a non-empty `planning.sub_repos`, milestone completion collects one release map entry per repository (status, release, reference, environment, tag choice), checks every requested tag before writing anything, shows one consolidated confirmation, creates the local annotated tags with `milestone release-tags`, and archives the map with `milestone complete --release-map`. No shared tag is created in the current directory on this path. Skipped and unreleased repositories stay in the archived map without receiving a tag.
+
+**Push:** Nothing is pushed by default. Each repository's tag is a separate confirmation naming the repository, the tag, the remote and its URL; a decline or failed push affects that repository only.
+
+**Compatibility:** `single` keeps the existing step unchanged, and `git.create_tag` keeps its meaning. With `per_repo`, `git.create_tag: false` still records the map and creates no tags. Archives without a map continue to parse.
+
+**Requirements:**
+- REQ-RELEASE-MAP-01: Tags MUST NOT be created before every requested tag has passed preflight.
+- REQ-RELEASE-MAP-02: An existing tag at a different commit MUST NOT be overwritten.
+- REQ-RELEASE-MAP-03: No tag MAY be pushed without a confirmation that names the repository and the remote.
+- REQ-RELEASE-MAP-04: The archived map MUST be stored by recorded value, not derived from `planning.sub_repos` at read time.
+
+**Reference:** [How to tag a multi-repository milestone](how-to/tag-a-multi-repo-milestone.md) · [Configuration Reference](CONFIGURATION.md#per-repository-release-mapping) · [CLI tools](CLI-TOOLS.md)
 
 ---
 

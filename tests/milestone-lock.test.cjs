@@ -647,3 +647,107 @@ describe('#3311 guard: advancePlan stays a targeted field replace', () => {
     assert.match(afterSection, /^Last activity: 2026-08-10/m, 'Last activity line must update');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #5551 — the machine-local claim file must not dirty the git tree
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('regressions: #5551 milestone.lock stays out of git status', () => {
+  const { createTempGitProject } = helpers;
+  const { execFileSync } = require('node:child_process');
+  const ENTRY = '/.planning/milestone.lock';
+
+  const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+  const git = (cwd, ...args) =>
+    execFileSync('git', args, { cwd, encoding: 'utf-8', timeout: LOOP_HOOK_POINT_CLI_TIMEOUT_MS });
+  const status = (cwd) => git(cwd, 'status', '--porcelain', '--untracked-files=all');
+  const excludeFile = (cwd) => path.resolve(cwd, git(cwd, 'rev-parse', '--git-path', 'info/exclude').trim());
+  const entries = (cwd) =>
+    splitLines(fs.existsSync(excludeFile(cwd)) ? fs.readFileSync(excludeFile(cwd), 'utf-8') : '').filter(
+      (l) => l === ENTRY,
+    );
+  const begin = (cwd, phase = '1') =>
+    runGsdTools(['state', 'begin-phase', '--phase', phase, '--name', 'setup', '--plans', '4'], cwd, {
+      ...SESSION_A,
+      GSD_TEST_MODE: '1',
+      GSD_NOW_MS: String(T0),
+    });
+
+  let tmpDir;
+  beforeEach(() => {
+    tmpDir = createTempGitProject();
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), BEGIN_PHASE_STATE_MD);
+  });
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('begin-phase leaves no milestone.lock in git status', () => {
+    const result = begin(tmpDir);
+    assert.ok(result.success, `begin-phase failed: ${result.error}`);
+    assert.ok(fs.existsSync(milestoneLockPath(tmpDir)), 'the claim must still be written');
+    assert.doesNotMatch(status(tmpDir), /milestone\.lock/);
+    assert.deepEqual(entries(tmpDir), [ENTRY]);
+  });
+
+  test('a repeated claim does not duplicate the exclude entry', () => {
+    assert.ok(begin(tmpDir).success);
+    fs.unlinkSync(milestoneLockPath(tmpDir)); // next claim re-creates the file
+    assert.ok(begin(tmpDir, '2').success);
+    assert.deepEqual(entries(tmpDir), [ENTRY]);
+  });
+
+  test('an exclude file without a trailing newline keeps its last line intact', () => {
+    fs.mkdirSync(path.dirname(excludeFile(tmpDir)), { recursive: true });
+    fs.writeFileSync(excludeFile(tmpDir), '*.keep-me');
+    assert.ok(begin(tmpDir).success);
+    const lines = splitLines(fs.readFileSync(excludeFile(tmpDir), 'utf-8'));
+    assert.ok(lines.includes('*.keep-me'), `pre-existing line lost: ${JSON.stringify(lines)}`);
+    assert.ok(lines.includes(ENTRY));
+  });
+
+  test('a tracked milestone.lock is left tracked and still reports its changes', () => {
+    fs.writeFileSync(milestoneLockPath(tmpDir), '{"phase":"9","session":null,"pid":1,"updated_at":1}\n');
+    git(tmpDir, 'add', '-f', '.planning/milestone.lock');
+    git(tmpDir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'track lock');
+    assert.ok(begin(tmpDir).success);
+    assert.match(status(tmpDir), /^ ?M .*milestone\.lock$/m);
+  });
+
+  test('a project outside any git repo still writes the claim', () => {
+    const plain = createTempProject();
+    try {
+      fs.writeFileSync(path.join(plain, '.planning', 'STATE.md'), BEGIN_PHASE_STATE_MD);
+      assert.ok(begin(plain).success);
+      assert.ok(fs.existsSync(milestoneLockPath(plain)));
+    } finally {
+      cleanup(plain);
+    }
+  });
+
+  test('a linked worktree writes the entry to the shared exclude and hides the claim', () => {
+    const linked = path.join(path.dirname(tmpDir), `gsd-linked-5551-${process.pid}`);
+    try {
+      git(tmpDir, 'worktree', 'add', '-q', '-b', 'linked-5551', linked);
+      fs.mkdirSync(path.join(linked, '.planning'), { recursive: true });
+      fs.writeFileSync(path.join(linked, '.planning', 'STATE.md'), BEGIN_PHASE_STATE_MD);
+      assert.ok(begin(linked).success);
+      assert.doesNotMatch(status(linked), /milestone\.lock/);
+      assert.deepEqual(entries(linked), [ENTRY]);
+    } finally {
+      cleanup(linked);
+    }
+  });
+
+  test('a planning directory below the repo root gets an anchored, escaped entry', () => {
+    // `[` is the gitignore metacharacter that is also a legal filename character on Windows.
+    const sub = path.join(tmpDir, 'we[ir]d#dir');
+    fs.mkdirSync(path.join(sub, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(sub, '.planning', 'STATE.md'), BEGIN_PHASE_STATE_MD);
+    assert.ok(begin(sub).success);
+    assert.doesNotMatch(status(tmpDir), /milestone\.lock/);
+    assert.ok(
+      splitLines(fs.readFileSync(excludeFile(tmpDir), 'utf-8')).includes('/we\\[ir]d#dir/.planning/milestone.lock'),
+    );
+  });
+});

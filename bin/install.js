@@ -63,6 +63,8 @@ const { composeWorkflow } = require('../gsd-core/bin/lib/workflow-fragments.cjs'
 // #3072: THE shared composition-scope predicate (also consumed by the served
 // MCP catalog, src/mcp-catalog.cts) — see the comment at its call site below.
 const { shouldCompose } = require('../gsd-core/bin/lib/mcp-catalog.cjs');
+// #5637: per-install terminator for the typed-text capture heredoc.
+const { armArgsNonce, disarmArgsNonce, stampInstalledContent } =require('../gsd-core/bin/lib/args-terminator.cjs');
 const runtimeArtifactConversion = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
 const { escapeRegex: escapeRegExp } = require('../gsd-core/bin/lib/pattern.cjs');
 // #2873: cross-scope shadow detection — reports (never fails) when a
@@ -1643,14 +1645,13 @@ const claudeToOpencodeTools = {
 const claudeToAntigravityTools = {
   // #4705: Antigravity-NATIVE tool names (see src/runtime-artifact-conversion.cts)
   Read: 'view_file',
-  Write: 'write_file',
+  Write: 'write_to_file',
   Edit: 'replace_file_content',
   Bash: 'run_command',
-  Glob: 'glob',
+  Glob: 'find_by_name',
   Grep: 'grep_search',
-  WebSearch: 'google_web_search',
-  WebFetch: 'web_fetch',
-  TodoWrite: 'write_todos',
+  WebSearch: 'search_web',
+  WebFetch: 'read_url_content',
 }
 
 // Tool name mapping from Claude/GSD agents to Kimi CLI module paths.
@@ -1719,13 +1720,16 @@ function convertAntigravityToolName(claudeTool) {
   // built-in tool; the lowercase fallback would emit an invalid
   // 'skill'/'slashcommand' name that fails frontmatter validation
   // (tools.N: Invalid tool name) and aborts the entire agent load (#1394).
+  // TodoWrite: exclude — agy 1.3.5 registers no todo tool, and an unknown name
+  // stops the agent from starting (#5447).
   if (
     claudeTool === 'Task' ||
     claudeTool === 'Agent' ||
     claudeTool === 'AskUserQuestion' ||
     claudeTool === 'ask_user' ||
     claudeTool === 'Skill' ||
-    claudeTool === 'SlashCommand'
+    claudeTool === 'SlashCommand' ||
+    claudeTool === 'TodoWrite'
   ) {
     return null;
   }
@@ -2159,43 +2163,11 @@ function parseKimiAgentSource(source) {
   };
 }
 
+// #5447: the tools list is read by the compiled module's parser (quoted entries,
+// `#` comments, inline and block lists), the one the runtime pipeline uses, so this
+// copy of the Antigravity and Kimi converters cannot diverge from it.
 function parseFrontmatterTools(frontmatter) {
-  if (!frontmatter) return [];
-  const lines = frontmatter.split(/\r?\n/);
-  const tools = [];
-  let collecting = false;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    if (collecting) {
-      if (trimmed.startsWith('- ')) {
-        tools.push(trimmed.slice(2).trim());
-        continue;
-      }
-      collecting = false;
-    }
-
-    if (trimmed === 'tools:' || trimmed === 'allowed-tools:') {
-      collecting = true;
-      continue;
-    }
-
-    if (trimmed.startsWith('tools:') || trimmed.startsWith('allowed-tools:')) {
-      const value = trimmed.slice(trimmed.indexOf(':') + 1).trim();
-      if (value) {
-        for (const tool of value.split(',')) {
-          const name = tool.trim();
-          if (name) tools.push(name);
-        }
-      } else {
-        collecting = true;
-      }
-    }
-  }
-
-  return tools;
+  return runtimeArtifactConversion.parseFrontmatterTools(frontmatter);
 }
 
 function addKimiAgentDiagnostic(diagnostics, code, message, value, source = null) {
@@ -2503,10 +2475,11 @@ function convertClaudeAgentToAntigravityAgent(content, isGlobal = false) {
   const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
   const description = extractFrontmatterField(frontmatter, 'description') || '';
   const color = extractFrontmatterField(frontmatter, 'color');
-  const toolsRaw = extractFrontmatterField(frontmatter, 'tools') || '';
 
-  // Map tools to Antigravity equivalents (reuse existing convertAntigravityToolName)
-  const claudeTools = toolsRaw.split(',').map(t => t.trim()).filter(Boolean);
+  // Map tools to Antigravity equivalents (reuse existing convertAntigravityToolName).
+  // parseFrontmatterTools reads both the inline comma list and the YAML block
+  // list (e.g. agents/gsd-security-auditor.md) (#5447).
+  const claudeTools = parseFrontmatterTools(frontmatter);
   const mappedTools = claudeTools.map(t => convertAntigravityToolName(t)).filter(Boolean);
 
   // #2876: quote description for the same reason as the skill variant.
@@ -6554,7 +6527,28 @@ function splitTopLevelKeys(content) {
   return { topLevel: content.trim(), rest: '' };
 }
 
+/**
+ * #5301: the path a config write must target. atomicWriteFileSync ends in a
+ * rename(2) onto its destination, which REPLACES a symlink at that path rather than
+ * writing through it, so a dotfiles-managed `config.toml -> ~/dotfiles/codex.toml`
+ * became a plain file and the user's copy never saw the merge. With
+ * GSD_ALLOW_SYMLINKED_DEST the symlink is intentional: resolve it and write the
+ * file it points at, leaving the link itself alone. Without the opt-in the path is
+ * returned unchanged (the install-root symlink guard refuses such a layout before
+ * any write), and so does a dangling link (the guard cannot resolve it), so only a
+ * link whose target exists reaches the resolution below.
+ */
+function resolveSymlinkWriteTarget(filePath) {
+  if (!isSymlinkedDestOptIn()) return filePath;
+  let stat;
+  try { stat = fs.lstatSync(filePath); } catch (_) { return filePath; }
+  if (!stat.isSymbolicLink()) return filePath;
+  try { return fs.realpathSync(filePath); } catch (_) { return filePath; }
+}
+
 function mergeCodexConfig(configPath, gsdBlock) {
+  // #5301: both write sites below land on the symlink's target, never replace the link.
+  configPath = resolveSymlinkWriteTarget(configPath);
   // Case 1: No config.toml — create fresh
   if (!fs.existsSync(configPath)) {
     atomicWriteFileSync(configPath, gsdBlock + '\n');
@@ -8138,6 +8132,8 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
       if (shouldCompose(srcPath)) {
         content = composeWorkflow(content, { sourcePath: srcPath });
       }
+      // #5637: the typed-text capture heredoc ends at a terminator the typed text cannot know.
+      content = stampInstalledContent(content);
 
       content = filterRuntimeNotesForTarget(content, runtime);
 
@@ -11109,6 +11105,16 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       ? process.cwd()
       : path.join(process.cwd(), dirName);
 
+  // #5637: this install's typed-text heredoc terminator: the directory's existing nonce on a
+  // reinstall (so it changes nothing), a fresh one otherwise.
+  if (process.env.GSD_ARGS_NONCE_OFF !== '1') {
+    // Only a global install reuses its nonce; a project-local dir may be a committed clone.
+    armArgsNonce(targetDir, isGlobal);
+  } else {
+    disarmArgsNonce();
+    console.warn('  GSD_ARGS_NONCE_OFF=1: the typed-text heredoc terminator is NOT randomized in this install.');
+  }
+
   // #5161: this install's record of the skill dirs it writes starts empty,
   // whichever install path it takes.
   installEngine.clearWrittenSkillDirs();
@@ -13350,7 +13356,8 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       // existing config; the snapshot restore below is a second line of
       // defense if even the rename fails.
       try {
-        atomicWriteFileSync(configPath, configContent, 'utf-8');
+        // #5301: write through an opted-in symlink instead of replacing it.
+        atomicWriteFileSync(resolveSymlinkWriteTarget(configPath), configContent, 'utf-8');
       } catch (writeErr) {
         // #2760 CR4 finding 1 — write failure must be loud and fatal. Wrap
         // with a `post-write` prefix the outer catch recognises so install
@@ -13956,10 +13963,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // bare basename so an unrelated user command that merely mentions the same
   // filename can't false-positive into GSD's validated set.
   configuredEntrypoints.push(
-    ...settingsEntrypoints.filter(entry => {
-      const hooksSegment = '/hooks/' + path.basename(entry.scriptPath);
-      return registeredHookCommands.some(command => command.includes(hooksSegment));
-    }),
+    ...selectConfiguredEntrypointsForValidation(settingsEntrypoints, registeredHookCommands),
   );
   const statuslineEntrypoints = settingsEntrypoints.filter(entry => entry.command === statuslineCommand);
   const updateBannerEntrypoints = settingsEntrypoints.filter(entry => entry.command === updateBannerCommand);
@@ -14053,6 +14057,25 @@ function describeEntrypointConsequence(invalidRuntime) {
   if (invalidRuntime === 'codex') return 'reverted: its pre-install snapshot was restored';
   if (ENTRYPOINT_LEFT_UNREVERTED_RUNTIMES.has(invalidRuntime)) return 'NOT reverted: its config file is already written and was left on disk — fix the reported path and rerun install';
   return 'not persisted: this runtime writes its config after this check';
+}
+
+// #5100: select which tracked entrypoints reach the validation gate. A named
+// export (see module.exports) so tests can drive the fresh-vs-upgrade split
+// directly; the install() call site is covered by a child-process test that
+// runs the installer with win32 emulated.
+function selectConfiguredEntrypointsForValidation(settingsEntrypoints, registeredHookCommands) {
+  return (settingsEntrypoints || []).filter(entry => {
+    // A command-less entry never produced a registered command, so the
+    // segment match below can never keep it — but it is exactly the
+    // unresolved-bash entry the gate must see (buildHookCommand pushes it
+    // without a `command` when no Git Bash is found). Exempt it: without this
+    // a fresh install silently drops it (gate passes) while an upgrade keeps
+    // it via the persisted command (gate fails) — same host, opposite
+    // verdicts. Surface it in both cases and let the gate decide loudly.
+    if (entry.command === undefined) return true;
+    const hooksSegment = '/hooks/' + path.basename(entry.scriptPath);
+    return registeredHookCommands.some(command => command.includes(hooksSegment));
+  });
 }
 
 function assertConfiguredEntrypoints(entries) {
@@ -15241,6 +15264,8 @@ module.exports = {
     install,
     installAllRuntimes,
     uninstall,
+    // #5100 — installer entrypoint-selection seam, exported for direct tests
+    selectConfiguredEntrypointsForValidation,
     // #3023 — shared hook bundle directory name, descriptor-driven
     SHARED_HOOKS_DIR_DEFAULT,
     resolveSharedHooksDirName,
