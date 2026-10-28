@@ -1731,9 +1731,8 @@ function mutateCurrentPositionResume(
 /** The two body field names a plan position is ever written under. */
 type PlanFieldName = 'Plan' | 'Current Plan';
 
-const PLAN_SHAPE_N = /^(\d+)(?:\s.*)?$/;
-const PLAN_SHAPE_N_OF_M = /^(\d+)\s+of\s+(\d+)(?:\s.*)?$/;
-const PLAN_SHAPE_BARE_N = /^\d+$/;
+const PLAN_SHAPE_N = /^(\d+)((?:\s.*)?)$/;
+const PLAN_SHAPE_N_OF_M = /^(\d+)\s+of\s+(\d+)((?:\s.*)?)$/;
 
 /**
  * Parse a decimal group into a plan number, or `null` if it is not a value we
@@ -1748,6 +1747,55 @@ const PLAN_SHAPE_BARE_N = /^\d+$/;
 function planNumberFrom(digits: string): number | null {
   const n = Number(digits);
   return Number.isSafeInteger(n) ? n : null;
+}
+
+/**
+ * The plan-count rule (#5320): a whole-string non-negative integer within the
+ * safe range, else `null`. `--plans` is parsed here, so no second `^\d+$` copy decides it.
+ */
+export function parsePlanCount(raw: string): number | null {
+  return /^\d+$/.test(raw) ? planNumberFrom(raw) : null;
+}
+
+/** A recorded `Plan` / `Current Plan` value, read once by `readPlanPosition`. */
+export type PlanPosition = {
+  /** Leading plan number; `null` past the safe-integer range. */
+  n: number | null;
+  /** The value spelled `N of M`. */
+  ofM: boolean;
+  /** The value is only digits: no ` of M`, no trailing text. */
+  bare: boolean;
+  /** Inline total of an `N of M` value; `null` for a bare `N` or past the safe range. */
+  m: number | null;
+  /** The value with its total slot cut out: text before, digit width, text after. */
+  slot: readonly [string, number, string];
+};
+
+/**
+ * The plan-position rule (#5320): the one reader of a `Current Plan` / `Plan` /
+ * `Total Plans in Phase` value, for `advancePlanCore` and `plannedPhaseCore`
+ * alike. `null` when the value is absent or neither `N` nor `N of M` leads it.
+ * The slot is where a new total goes: an `N of M` value swaps only M (keeping
+ * its zero-padding width and trailing text), a bare `N` gains ` of M` and drops
+ * the template's unfilled `TBD` (`0 TBD in current phase`).
+ */
+export function readPlanPosition(raw: string | null | undefined): PlanPosition | null {
+  if (!raw) return null;
+  const ofM = PLAN_SHAPE_N_OF_M.exec(raw);
+  if (ofM) {
+    const mAt = ofM[0].length - ofM[3].length - ofM[2].length;
+    return { n: planNumberFrom(ofM[1]), ofM: true, bare: false, m: planNumberFrom(ofM[2]), slot: [raw.slice(0, mAt), ofM[2].length, ofM[3]] };
+  }
+  const bare = PLAN_SHAPE_N.exec(raw);
+  if (!bare) return null;
+  return { n: planNumberFrom(bare[1]), ofM: false, bare: bare[2] === '', m: null, slot: [`${bare[1]} of `, 1, bare[2].replace(/^\s+TBD\b/, '') || ' in current phase'] };
+}
+
+/** `pos` re-rendered for a new total; with no position it starts the template spelling at plan 0. */
+export function renderPlanTotal(pos: PlanPosition | null, total: number): string {
+  if (!pos) return `0 of ${total} in current phase`;
+  const [before, width, after] = pos.slot;
+  return `${before}${String(total).padStart(width, '0')}${after}`;
 }
 
 /**
@@ -1979,33 +2027,31 @@ function advancePlanCore(content: string, deps: StateTransitionDeps): StateTrans
   const legacyTotal = stateExtractField(content, 'Total Plans in Phase');
   const planField = stateExtractField(content, 'Plan');
 
-  // Every branch below reads its numbers out of an ANCHORED match's capture
-  // groups. Nothing here calls parseInt on a raw field value, so a value the
-  // grammar does not fully describe cannot half-parse into a plausible number.
-  const legacyNMatch = legacyPlan ? PLAN_SHAPE_N.exec(legacyPlan) : null;
-  const legacyNofMMatch = legacyPlan ? PLAN_SHAPE_N_OF_M.exec(legacyPlan) : null;
-  const totalNMatch = legacyTotal ? PLAN_SHAPE_N.exec(legacyTotal) : null;
-  const planNofMMatch = planField ? PLAN_SHAPE_N_OF_M.exec(planField) : null;
-  const planNMatch = planField ? PLAN_SHAPE_N.exec(planField) : null;
+  // Every branch below reads its numbers through `readPlanPosition`, the ANCHORED
+  // plan-position reader. Nothing here calls parseInt on a raw field value, so a
+  // value the grammar does not fully describe cannot half-parse into a plausible number.
+  const legacy = readPlanPosition(legacyPlan);
+  const legacyTotalPos = readPlanPosition(legacyTotal);
+  const planPos = readPlanPosition(planField);
 
   let parsedCurrent: number | null = null;
   let parsedTotal: number | null = null;
 
-  if (legacyPlan && legacyTotal && (legacyNMatch || legacyNofMMatch) && totalNMatch) {
+  if (legacy && legacyTotalPos) {
     // Legacy pair wins whenever both fields are present and both are readable,
     // even if the Current Plan value also carries an "of M" — the explicit
     // sibling field is the stated intent, so it supplies the total.
-    parsedCurrent = planNumberFrom((legacyNMatch ?? legacyNofMMatch)![1]);
-    parsedTotal = planNumberFrom(totalNMatch[1]);
-  } else if (legacyNofMMatch) {
+    parsedCurrent = legacy.n;
+    parsedTotal = legacyTotalPos.n;
+  } else if (legacy?.ofM) {
     // Hybrid: legacy field name, compound value, no readable Total Plans
     // sibling. Written by hand (and by agents) often enough to be worth
     // reading — #3784.
-    parsedCurrent = planNumberFrom(legacyNofMMatch[1]);
-    parsedTotal = planNumberFrom(legacyNofMMatch[2]);
-  } else if (planNofMMatch) {
-    parsedCurrent = planNumberFrom(planNofMMatch[1]);
-    parsedTotal = planNumberFrom(planNofMMatch[2]);
+    parsedCurrent = legacy.n;
+    parsedTotal = legacy.m;
+  } else if (planPos?.ofM) {
+    parsedCurrent = planPos.n;
+    parsedTotal = planPos.m;
   }
   // No branch for a bare `Plan: N` paired with a `Total Plans in Phase: M`
   // sibling and no `Current Plan` at all (#3791 review round 6, M2). A revision
@@ -2028,12 +2074,8 @@ function advancePlanCore(content: string, deps: StateTransitionDeps): StateTrans
   // round 6, B1/M1). The parse above picks ONE field to advance FROM; these are
   // what each field independently claims, and they are the only honest basis
   // for writing that field back.
-  const legacyOwnCurrent = legacyNMatch || legacyNofMMatch
-    ? planNumberFrom((legacyNMatch ?? legacyNofMMatch)![1])
-    : null;
-  const planOwnCurrent = planNofMMatch || planNMatch
-    ? planNumberFrom((planNofMMatch ?? planNMatch)![1])
-    : null;
+  const legacyOwnCurrent = legacy ? legacy.n : null;
+  const planOwnCurrent = planPos ? planPos.n : null;
 
   // A document carrying BOTH spellings with DIFFERENT plan numbers disagrees
   // with itself, and no rule here can say which half is right. Refuse.
@@ -2623,18 +2665,19 @@ function plannedPhaseCore(
   const fmPhase = existingFm['current_phase'];
   const recordedPhase = bodyPhase ?? (typeof fmPhase === 'string' || typeof fmPhase === 'number' ? String(fmPhase) : null);
   const samePhase = phaseIdMod.phaseKeyFromProse(recordedPhase) === phaseIdMod.phaseKeyFromToken(intent.phaseNumber);
-  // Same-phase `N of M` / bare `N` of each Current Position plan line (m is null for a different phase), read once.
+  // Same-phase position of each Current Position plan line (null for a different phase), read once.
   const planPos = Object.fromEntries(['Plan', 'Current Plan'].map((name) => {
-    const raw = stateExtractField(posBefore, name) ?? '';
-    return [name, { raw, m: samePhase ? (PLAN_SHAPE_N_OF_M.exec(raw) ?? PLAN_SHAPE_N.exec(raw)) : null }];
+    const raw = stateExtractField(posBefore, name);
+    const read = readPlanPosition(raw);
+    return [name, { raw, read, pos: samePhase ? read : null }];
   }));
   const planValue = (name: string): string | undefined => {
     if (intent.planCount == null) return undefined;
-    const { raw, m } = planPos[name];
+    const { read, pos } = planPos[name];
     // A bare `N` beside `Total Plans in Phase:` is the legacy pair; the Total line already carries M.
     // Same phase keeps N; a new phase resets it to 0 in the same bare shape.
-    if (totalRecorded && PLAN_SHAPE_BARE_N.test(raw)) return samePhase ? undefined : '0';
-    return `${m ? m[1] : 0} of ${intent.planCount} in current phase`;
+    if (totalRecorded && read?.bare) return samePhase ? undefined : '0';
+    return renderPlanTotal(pos, intent.planCount);
   };
   body = mutateCurrentPositionForAdvance(
     body,
@@ -2653,20 +2696,16 @@ function plannedPhaseCore(
   for (const name of ['Plan', 'Current Plan']) {
     if (stateExtractField(posAfter, name) !== stateExtractField(posBefore, name)) updated.push(name);
   }
-  // #5320: --plans must land somewhere; the caller fails before any write.
-  if (intent.planCount != null && !totalRecorded
-    && stateExtractField(posBefore, 'Plan') === null && stateExtractField(posBefore, 'Current Plan') === null) {
-    return { content, updated: [], data: { planError: 'state planned-phase: --plans has no line to land on. Add `Plan: 0 TBD in current phase` under `## Current Position` (or a `Total Plans in Phase:` line) and retry.' } };
-  }
-  // The recorded N is the plan position (beginPhaseCore writes the first plan still to run), so N - 1 plans are done.
+  // #5320: --plans must land somewhere and may not drop below the recorded plan
+  // position (N of `Plan: N of M`: the first plan still to run, M once the last one is done);
+  // the caller fails before any write.
   if (intent.planCount != null) {
-    let executed = 0;
-    for (const { m } of Object.values(planPos)) {
-      const n = m ? planNumberFrom(m[1]) : null;
-      if (n !== null) executed = Math.max(executed, n - 1);
+    if (!totalRecorded && planPos['Plan'].raw === null && planPos['Current Plan'].raw === null) {
+      return { content, updated: [], data: { error: true, reason: 'plans_no_line', message: 'state planned-phase: --plans has no line to land on. Add `Plan: 0 TBD in current phase` under `## Current Position` (or a `Total Plans in Phase:` line) and retry.' } };
     }
-    if (executed > intent.planCount) {
-      return { content, updated: [], data: { planError: `state planned-phase: --plans ${intent.planCount} is below the executed plan count ${executed}.` } };
+    const position = Math.max(0, ...Object.values(planPos).map(({ pos }) => pos?.n ?? 0));
+    if (position > intent.planCount) {
+      return { content, updated: [], data: { error: true, reason: 'plans_below_position', message: `state planned-phase: --plans ${intent.planCount} is below the recorded plan position ${position}. Use --plans ${position} or more, or correct the position line.` } };
     }
   }
 

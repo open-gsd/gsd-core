@@ -22,6 +22,7 @@ const { routeHubCommandFamily } = cjsCommandRouterAdapter;
 import io = require('./io.cjs');
 const { ERROR_REASON } = io;
 import { parseNamedArgsOrExit } from './command-arg-projection.cjs';
+import { parsePlanCount } from './state-transition.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -69,8 +70,8 @@ interface RouteStateCommandOptions {
 // ─── Implementation ───────────────────────────────────────────────────────────
 
 function parsePlans(plans: string | null | undefined, error: (message: string, reason?: string) => void): number | null {
-  const parsedPlans = plans == null ? null : Number(plans);
-  if (plans != null && !(/^\d+$/.test(plans) && Number.isSafeInteger(parsedPlans))) {
+  const parsedPlans = plans == null ? null : parsePlanCount(plans);
+  if (plans != null && parsedPlans === null) {
     error('Invalid --plans value. Expected a non-negative integer.', ERROR_REASON.USAGE);
     return null;
   }
