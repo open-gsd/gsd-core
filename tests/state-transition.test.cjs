@@ -23,7 +23,11 @@ const {
   STATE_MD_SECTIONS,
   sliceCurrentPositionSection,
   stateReplaceProgressPercent,
+  parsePlanCount,
+  readPlanPosition,
+  renderPlanTotal,
 } = require('../gsd-core/bin/lib/state-transition.cjs');
+const { parsePlans } = require('../gsd-core/bin/lib/state-command-router.cjs');
 const { stateExtractField, computeProgressPercent, toFiniteNumber } = require('../gsd-core/bin/lib/state-document.cjs');
 const { SCOPE } = require('../gsd-core/bin/lib/planning-scope.cjs');
 const { STATE_FIELD_SCHEMA } = require('../gsd-core/bin/lib/state-md-schema.cjs');
@@ -5268,5 +5272,86 @@ describe('state.planned-phase progress merge on string-valued frontmatter (#5619
         }),
       { seed: 5619, numRuns: 200 }, // deterministic and bounded (CONTRIBUTING: property tests pin the seed)
     );
+  });
+});
+
+// #5320: the plan-count / plan-position rule has one owner (parsePlanCount, readPlanPosition,
+// renderPlanTotal). Parity: every site that reads or writes a plan count agrees with it on
+// generated inputs, at limit-1 / limit / limit+1.
+describe('#5320 plan-count / plan-position owner parity', () => {
+  const MAX = Number.MAX_SAFE_INTEGER;
+  const deps = { clock: fixedClock };
+  const parsed = (v) => { let err = null; const n = parsePlans(v, (m) => { err = m; }); return { n, err }; };
+  const doc = (line) => ['# Project State', '', '## Current Position', '', 'Phase: 19', line, 'Status: Ready', ''].join('\n');
+  const planned = (line, planCount) => transitionCore(doc(line), { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount }, deps);
+  const lineOf = (content) => content.split('\n').find((l) => l.startsWith('Plan: '));
+
+  test('parsePlans takes its count from parsePlanCount for every generated string', () => {
+    fc.assert(
+      fc.property(
+        fc.oneof(
+          fc.integer({ min: 0, max: MAX }).map(String),
+          fc.bigInt({ min: BigInt(MAX) - 1n, max: BigInt(MAX) + 2n }).map(String),
+          fc.bigInt({ min: 0n, max: 10n ** 30n }).map(String),
+          fc.string(),
+        ),
+        (raw) => {
+          // independent oracle: all ASCII digits and no larger than MAX_SAFE_INTEGER (BigInt compares exactly)
+          const expected = /^[0-9]+$/.test(raw) && BigInt(raw) <= BigInt(MAX) ? Number(raw) : null;
+          const site = parsed(raw);
+          return parsePlanCount(raw) === expected && site.n === expected && (expected === null) === (site.err !== null);
+        },
+      ),
+      { seed: 5320, numRuns: 300 },
+    );
+    assert.strictEqual(parsePlanCount(String(MAX - 1)), MAX - 1);
+    assert.strictEqual(parsePlanCount(String(MAX)), MAX);
+    assert.strictEqual(parsePlanCount(String(MAX + 1)), null);
+  });
+
+  test('planned-phase and advance-plan read and write the same position for generated values (limit-1/limit/limit+1)', () => {
+    const value = fc.record({
+      n: fc.integer({ min: 0, max: 999 }),
+      pad: fc.integer({ min: 0, max: 2 }),
+      m: fc.option(fc.integer({ min: 0, max: 999 }), { nil: null }),
+      rest: fc.constantFrom('', ' in current phase', ' - wave 2 done', ' (blocked)'),
+    });
+    fc.assert(
+      fc.property(value, fc.constantFrom(-1, 0, 1), ({ n, pad, m, rest }, off) => {
+        const raw = `${'0'.repeat(pad)}${n}${m === null ? '' : ` of ${m}`}${rest}`;
+        const total = n + off;
+        const read = readPlanPosition(raw);
+        if (read.n !== n || read.ofM !== (m !== null) || read.m !== m) return false;
+        if (total < 0) return true;
+        const r = planned(`Plan: ${raw}`, total);
+        if (off === -1) {
+          // below the recorded position: refused, document untouched
+          return r.data?.reason === 'plans_below_position' && r.content === doc(`Plan: ${raw}`) && r.updated.length === 0;
+        }
+        const written = lineOf(r.content).slice('Plan: '.length);
+        const back = readPlanPosition(written);
+        if (back.n !== n || !back.ofM || back.m !== total) return false;
+        if (written !== renderPlanTotal(read, total)) return false;
+        // advance-plan reads the written line the same way: position n of total
+        const adv = transitionCore(r.content, { kind: 'advancePlan' }, deps).data;
+        return adv.total_plans === total && (adv.previous_plan ?? adv.current_plan) === n;
+      }),
+      { seed: 5320, numRuns: 400 },
+    );
+  });
+
+  test('plannedPhase unit: Plan: 0 TBD records the exact count; a missing line and a lower count are typed refusals', () => {
+    const tbd = planned('Plan: 0 TBD in current phase', 3);
+    assert.strictEqual(lineOf(tbd.content), 'Plan: 0 of 3 in current phase');
+    assert.ok(tbd.updated.includes('Plan'));
+    assert.ok(tbd.content.includes('Status: Ready to execute'));
+    const none = transitionCore(doc('Notes: none'), { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 3 }, deps);
+    assert.strictEqual(none.data.reason, 'plans_no_line');
+    assert.strictEqual(none.content, doc('Notes: none'));
+    assert.strictEqual(planned('Plan: 3 of 5', 2).data.reason, 'plans_below_position');
+    assert.strictEqual(lineOf(planned('Plan: 3 of 5', 3).content), 'Plan: 3 of 3');
+    // a different phase restarts at plan 0 instead of refusing
+    const other = transitionCore(doc('Plan: 3 of 5').replace('Phase: 19', 'Phase: 18'), { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 2 }, deps);
+    assert.strictEqual(lineOf(other.content), 'Plan: 0 of 2 in current phase');
   });
 });

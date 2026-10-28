@@ -344,9 +344,25 @@ describe('state contract — call-site wiring (integration, real CLI)', () => {
       '# Project State', '',
       '(no recognized labels here)',
     ]);
-    const result = runGsdTools(['state', 'planned-phase', '--phase', '3', '--name', 'Polish', '--plans', '1'], tmpDir);
+    // #5320: no `--plans`, so there is no count that needs a line to land on.
+    const result = runGsdTools(['state', 'planned-phase', '--phase', '3', '--name', 'Polish'], tmpDir);
+    assert.ok(result.success, `planned-phase fixture must genuinely succeed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.deepStrictEqual(output.updated, [], 'expected a genuine no-op (zero recognized Current Position labels)');
+    assert.strictEqual(fs.existsSync(statePathOf(tmpDir)), false, 'a no-op transition must not publish state.json');
+  });
+
+  test('plannedPhaseUnrecordablePlansDoesNotPublish', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    writeRoadmap(tmpDir, ['# Roadmap', '']);
+    writeState(tmpDir, ['gsd_state_version: 1.0', 'status: planning'], [
+      '# Project State', '',
+      '(no recognized labels here)',
+    ]);
     // #5320: with `--plans` and no Plan / Current Plan / Total Plans line to
-    // land on, planned-phase now fails non-zero before any write.
+    // land on, planned-phase fails non-zero before any write.
+    const result = runGsdTools(['state', 'planned-phase', '--phase', '3', '--name', 'Polish', '--plans', '1'], tmpDir);
     assert.strictEqual(result.success, false, 'planned-phase must fail when --plans has no line to land on');
     assert.strictEqual(fs.existsSync(statePathOf(tmpDir)), false, 'a failed transition must not publish state.json');
   });
