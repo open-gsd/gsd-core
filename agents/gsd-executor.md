@@ -22,39 +22,7 @@ Your job: Execute the plan completely, commit each task, create SUMMARY.md, upda
 </role>
 
 <documentation_lookup>
-When you need library or framework documentation, check in this order:
-
-1. If Context7 MCP tools (`mcp__context7__*, mcp__plugin_context7_context7__*`) are available in your environment, use them:
-   - Resolve library ID: `mcp__context7__resolve-library-id` with `libraryName`
-   - Fetch docs: `mcp__context7__query-docs` with `libraryId` (the ID from step 1) and `query`
-
-2. If Context7 MCP is not available (custom subagents cannot see project-scoped
-   `.mcp.json` servers — they only inherit user-scoped `~/.claude/mcp.json`, so a
-   context7 server configured at the project scope is invisible to spawned
-   agents), use the CLI fallback via Bash:
-
-   Step 1 — Resolve library ID:
-   ```bash
-   if command -v ctx7 &>/dev/null; then
-     ctx7 library <name> "<query>"
-   else
-     echo "ctx7 not found — install with: npm install -g ctx7 (verify at npmjs.com/package/ctx7 first)"
-   fi
-   ```
-
-   Step 2 — Fetch documentation:
-   ```bash
-   if command -v ctx7 &>/dev/null; then
-     ctx7 docs <libraryId> "<query>"
-   else
-     echo "ctx7 not found — install with: npm install -g ctx7 (verify at npmjs.com/package/ctx7 first)"
-   fi
-   ```
-
-Do not skip documentation lookups because MCP tools are unavailable — the CLI fallback
-works via Bash and produces equivalent output. Do not rely on training knowledge alone
-for library APIs where version-specific behavior matters. Do NOT use `npx --yes` to
-auto-download ctx7 — this silently executes unverified packages from the registry.
+@~/.claude/gsd-core/references/research-documentation-lookup.md
 </documentation_lookup>
 
 <project_context>
@@ -800,12 +768,39 @@ gsd_run query state.record-session \
 ```
 
 ```bash
-# Mark completed requirements from PLAN.md frontmatter
-# Extract the `requirements` array from the plan's frontmatter, then mark each complete
-gsd_run query requirements.mark-complete ${REQ_IDS}
+# Locate assigned plan path for ready-ids check; fail closed if not found (#4944)
+PLAN_PATH="${PLAN_PATH:-}"
+if [ -z "$PLAN_PATH" ] || [ ! -f "$PLAN_PATH" ]; then
+  D="${PHASE_DIR:-$(printf '%s' "${INIT:-}" | jq -r '.phase_dir // empty' 2>/dev/null)}"
+  if [ -z "$D" ] || [ ! -d "$D" ]; then
+    PLAN_PATH=""; echo "WARN: Phase directory not found for plan resolution (${D:-unset})" >&2
+  else
+    shopt -s nullglob 2>/dev/null || true; setopt NULL_GLOB 2>/dev/null || true
+    P="$PLAN"; case "$P" in ""|*[!0-9]*) ;; *) P=$((10#$P)); [ "$P" -lt 10 ] && P=$(printf "%02d" "$P");; esac
+    C=()
+    for f in "$D/plans/PLAN-${P}.md" "$D/plans/PLAN-${PLAN}.md" "$D/${PHASE}-${P}-"*-PLAN.md "$D/"*"-${P}-PLAN.md" "$D/${PHASE}-${PLAN}-PLAN.md"; do
+      if [ -f "$f" ]; then
+        seen=false; for c in "${C[@]}"; do [ "$c" = "$f" ] && seen=true && break; done
+        [ "$seen" = false ] && C+=("$f")
+      fi
+    done
+    if [ "${#C[@]}" -eq 1 ]; then for c in "${C[@]}"; do PLAN_PATH="$c"; done; else PLAN_PATH=""; echo "WARN: Could not resolve unambiguous PLAN_PATH in $D (matches: ${#C[@]})" >&2; fi
+  fi
+fi
+
+# Gate requirement completion on ready-ids; fail closed if unresolved (#2388, #4944, #4956)
+if [ -n "$PLAN_PATH" ] && [ -f "$PLAN_PATH" ] && [ -n "$(printf '%s' "${REQ_IDS:-}" | tr -d '[:space:]')" ]; then
+  READY=$(gsd_run query requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS} 2>/dev/null || true)
+  READY_IDS=$(printf '%s' "$READY" | jq -r '.ready[]' 2>/dev/null | tr '\n' ' ')
+  if [ -n "$(printf '%s' "$READY_IDS" | tr -d '[:space:]')" ]; then
+    gsd_run query requirements.mark-complete ${READY_IDS}
+  else
+    echo "WARN: No requirement IDs ready to mark complete for ${PLAN_PATH} (blocked by sibling plans, failed query, or jq missing)" >&2
+  fi
+fi
 ```
 
-**Requirement IDs:** Extract from the PLAN.md frontmatter `requirements:` field (e.g., `requirements: [AUTH-01, AUTH-02]`). Pass all IDs to `requirements mark-complete`. If the plan has no requirements field, skip this step.
+**Requirement IDs:** Extract from PLAN.md `requirements:` (e.g. `[AUTH-01]`). If absent, skip. Query `requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS}` (#4956) before `requirements mark-complete`; skip if `PLAN_PATH` cannot be resolved. Shared requirements stay blocked until sibling plans finish (#2388, #4944).
 
 **State command behaviors:**
 - `state advance-plan`: Increments Current Plan, detects last-plan edge case, sets status
@@ -814,7 +809,8 @@ gsd_run query requirements.mark-complete ${REQ_IDS}
 - `state add-decision`: Adds to Decisions section, removes placeholders
 - `state record-session`: Updates Last session timestamp and Stopped At fields
 - `roadmap update-plan-progress`: Updates ROADMAP.md progress table row with PLAN vs SUMMARY counts
-- `requirements mark-complete`: Checks off requirement checkboxes and updates traceability table in REQUIREMENTS.md
+- `requirements ready-ids`: Scans sibling plans in phase directory; returns safe-to-complete IDs
+- `requirements mark-complete`: Checks off requirements and updates traceability in REQUIREMENTS.md for ready IDs
 
 **Extract decisions from SUMMARY.md:** Parse key-decisions from frontmatter or "Decisions Made" section → add each via `state add-decision`.
 
