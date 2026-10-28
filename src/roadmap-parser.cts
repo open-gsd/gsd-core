@@ -69,6 +69,7 @@ import { tokenizeHeadings, stripTaggedBlocks, withSection, stripFencedCode, coll
 import type { HeadingToken } from './markdown-sectionizer.cjs';
 import { findTableWithColumns, isDelimiterRow, splitTableRow } from './markdown-table.cjs';
 import type { MarkdownTable } from './markdown-table.cjs';
+import { findProgressSection } from './roadmap-progress.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningScopeMod = require('./planning-scope.cjs');
 const { SCOPE } = planningScopeMod;
@@ -1798,7 +1799,7 @@ function scanArchiveSpans(content: string, active: Array<{ start: number; end: n
     if (active.some((r) => start <= r.start && r.start < end)) continue;
     const inRange = overlapsActive(start, end) && !closedSummary(start);
     // A collapsed block of the active range that holds the Progress table stays editable, so the row moves with the plan ticks.
-    if (inRange && /^#{1,2}[ \t]+Progress\b/im.test(scan.slice(start, end))) { kept.push({ start, end }); continue; }
+    if (inRange && findProgressSection(scan.slice(start, end)) !== null) { kept.push({ start, end }); continue; }
     spans.push({ start, end });
     if (inRange) inActive.push({ start, end });
   }

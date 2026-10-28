@@ -126,7 +126,9 @@ const {
 // progress counters the phase-complete transaction passes downstream.
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-lifecycle.cjs is an export= CommonJS module
 import phaseLifecycleMod = require('./phase-lifecycle.cjs');
-const { deriveProgressFromRoadmap: deriveProgressFromRoadmapForIntent, clampPercent: clampPercentForIntent, milestoneVersionOf, locateProgressTable, normalizeMilestoneToken } = phaseLifecycleMod;
+const { deriveProgressFromRoadmap: deriveProgressFromRoadmapForIntent, clampPercent: clampPercentForIntent } = phaseLifecycleMod;
+// #5761: the Progress table locator and milestone-identity helpers live in their one owner.
+import { locateRoadmapProgress, milestoneVersionOf, normalizeMilestoneToken } from './roadmap-progress.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
@@ -6984,7 +6986,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // milestone ROADMAP binds, so a shipped milestone's same-numbered phase
         // cannot count.
         if (!phaseWasAlreadyComplete) {
-          const progressTable = locateProgressTable(originalMilestoneScope);
+          const progressTable = locateRoadmapProgress(originalMilestoneScope).table;
           if (progressTable !== null) {
             const wantMilestone = progressTable.columns.includes('Milestone')
               ? normalizeMilestoneToken(roadmapParserMod.getMilestoneInfo(cwd).value?.version)

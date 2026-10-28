@@ -572,6 +572,7 @@
       "reviewer-step-dispatch.cjs",
       "roadmap-command-router.cjs",
       "roadmap-parser.cjs",
+      "roadmap-progress.cjs",
       "roadmap-upgrade.cjs",
       "roadmap.cjs",
       "runtime-artifact-conversion.cjs",

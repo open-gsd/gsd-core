@@ -33,7 +33,8 @@ import roadmapParserModule = require('./roadmap-parser.cjs');
 const { stripShippedMilestones, extractCurrentMilestone, extractCurrentMilestoneScoped, checklistBulletExtent, withPhaseSection, listMilestoneHeadings, scanMilestonePhaseIds, collectTablePhaseRows, hasPhaseListingTableHeader } = roadmapParserModule;
 import { tokenizeHeadings } from './markdown-sectionizer.cjs';
 import { escapeCell, findTableWithColumns, parseMarkdownTable, updateTableCell } from './markdown-table.cjs';
-import { clampPercent, normalizeMilestoneToken } from './phase-lifecycle.cjs';
+import { clampPercent } from './phase-lifecycle.cjs';
+import { normalizeMilestoneToken } from './roadmap-progress.cjs';
 import { platformWriteSync, contentChangedAfterNormalize } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');

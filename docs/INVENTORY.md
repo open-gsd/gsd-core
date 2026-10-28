@@ -710,6 +710,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `roadmap-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools roadmap` |
 | `health-diagnostic-rules/roadmap-disk-consistency.cjs` | Health-diagnostic rules: ROADMAP-vs-disk phase directory consistency checks (W006, W007), both resolved through the shared `matchPhaseDirs` matcher, ported behavior-preserving from `cmdValidateHealth` (ADR-3180 §8.2/§8.3/§8.5, Phase 11, #3309) |
 | `roadmap-parser.cjs` | ROADMAP.md parsing — milestone slicing, current-milestone extraction, phase/milestone lookups, milestone-phase filter (extracted from `core.cjs`, ADR-857) |
+| `roadmap-progress.cjs` | Roadmap Progress Module (#5761, epic #5692) — the one owner of "which table is the ROADMAP Progress table and what is its milestone slice": `locateRoadmapProgress(content, {columns?, milestone?})`, `findProgressSection`, and the milestone-identity helpers `normalizeMilestoneToken` / `milestoneVersionOf`. Compiled from `src/roadmap-progress.cts`, gitignored |
 | `roadmap-upgrade.cjs` | Migration tool for converting legacy `Phase N` entries to milestone-prefixed `Phase M-NN` convention; `computeMigrationPlan` + `applyMigration` with dry-run default and atomic rollback |
 | `roadmap.cjs` | ROADMAP.md parsing, phase extraction, plan progress |
 | `health-diagnostic-rules/root-existence.cjs` | Health-diagnostic rules: root `.planning/` existence + PROJECT.md checks (E002-E004, W001), ported behavior-preserving from `cmdValidateHealth` (ADR-3180 §8.2/§8.3/§8.5, Phase 11, #3309) |
