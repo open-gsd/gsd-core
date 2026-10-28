@@ -16,9 +16,9 @@ An entry is one line, and every part below is matched the same way by every read
 | Bold wrapper | `**Phase N: Name**` or `__Phase N: Name__` | Optional, except where a reader needs the index form (below). A single `*` is not a bold wrapper. |
 | Gaps | spaces or tabs, none required | A line break between the marker, the box and the label ends the match. |
 
-`roadmap analyze` and the `phase add` / `phase insert` anchor read the bold form only, because a plain bullet is not an entry `roadmap analyze` reports on. A plain `- **Phase 36 — Name**` bullet without a checkbox is also accepted where the roadmapper writes that house style.
+`roadmap analyze` and the entry that `phase add` / `phase insert` write require the bold wrapper, because a plain bullet is not an entry `roadmap analyze` reports on. A plain `- **Phase 36 — Name**` bullet without a checkbox is also accepted where the roadmapper writes that house style.
 
-## What changed in 1.19
+## What changed
 
 Readers used to disagree on these inputs; they now agree:
 

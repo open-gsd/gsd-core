@@ -9,7 +9,7 @@
  * behind #4965 and #5545). Readers now compose their pattern from the prefix
  * built here and keep only their own tail (label, id token, separator).
  *
- * The accepted grammar (the normalisation rule recorded in the PR):
+ * The accepted grammar:
  *   entry  := indent marker gap box gap bold? gap <caller tail>
  *   indent := [ \t]*                   — an entry starts its line
  *   marker := '-' | '*'
@@ -32,8 +32,6 @@ export interface PhaseEntryPrefixOptions {
    * `captured` (any state, as capture group 1 — the box character).
    */
   state?: 'any' | 'unchecked' | 'captured';
-  /** Anchor to the line start with optional indent (default true; needs the `m` flag). */
-  anchored?: boolean;
 }
 
 const MARKER_SRC = '[-*]';
@@ -50,31 +48,30 @@ function stateSrc(state: PhaseEntryPrefixOptions['state']): string {
 }
 
 /**
- * Regex source of everything before the caller's `Phase`/label tail: indent,
+ * Regex source of everything before the caller's `Phase`/label tail: line start, indent,
  * marker, box, bold token and the horizontal gaps between them. A `captured`
  * state adds exactly one capture group (the box character) at the front.
  */
 export function phaseEntryPrefixSrc(options: PhaseEntryPrefixOptions = {}): string {
-  const { bold = 'optional', box = 'required', state = 'any', anchored = true } = options;
+  const { bold = 'optional', box = 'required', state = 'any' } = options;
   const boxSrc = `\\[${stateSrc(state)}\\][ \\t]*`;
   // `(?:token[ \t]*)?` rather than `[ \t]*` + token + `[ \t]*`, which backtracks
   // quadratically on a long blank run.
   const boldSrc = bold === 'required' ? `${BOLD_TOKEN_SRC}[ \\t]*` : `(?:${BOLD_TOKEN_SRC}[ \\t]*)?`;
   const body = box === 'optional' ? `(?:${boxSrc})?` : boxSrc;
-  return `${anchored ? '^[ \\t]*' : ''}${MARKER_SRC}[ \\t]*${body}${boldSrc}`;
+  return `^[ \\t]*${MARKER_SRC}[ \\t]*${body}${boldSrc}`;
 }
 
 /**
  * A RegExp for a phase entry: the grammar prefix followed by the caller's
- * `tailSrc`. Anchored patterns get the `m` flag, so `^` is a line start.
+ * `tailSrc`. The `m` flag is always set, so `^` is a line start.
  */
 export function phaseEntryRegExp(tailSrc: string, flags = '', options: PhaseEntryPrefixOptions = {}): RegExp {
-  const anchored = options.anchored ?? true;
-  const withM = anchored && !flags.includes('m') ? `${flags}m` : flags;
+  const withM = flags.includes('m') ? flags : `${flags}m`;
   return new RegExp(`${phaseEntryPrefixSrc(options)}${tailSrc}`, withM);
 }
 
-const ENTRY_BOX_RE = /^[ \t]*[-*][ \t]*\[([ xX])\]/;
+const ENTRY_BOX_RE = new RegExp(`^[ \\t]*${MARKER_SRC}[ \\t]*\\[([ xX])\\]`);
 
 /**
  * Whether a phase entry line (or a regex match of one, which starts at the

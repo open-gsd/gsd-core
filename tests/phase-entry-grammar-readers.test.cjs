@@ -17,6 +17,7 @@ const { buildRoadmapPhaseVariants, buildNotStartedPhaseVariants } = require('../
 const { hasPhaseEntries } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
 const { checklistEntrySrc } = require('../gsd-core/bin/lib/roadmap.cjs');
 const { isPhaseEntryChecked } = require('../gsd-core/bin/lib/phase-entry-grammar.cjs');
+const { parsePhaseChecklistLine } = require('../gsd-core/bin/lib/phase-id.cjs');
 
 const SEED = 5763;
 
@@ -58,6 +59,13 @@ function pureReaders() {
         const notStarted = buildNotStartedPhaseVariants(`# Roadmap\n\n${render(form)}\n`).has('1');
         // "not started" is the unchecked half: found-and-unchecked <=> state ' '.
         return { found: true, ticked: !notStarted };
+      },
+    },
+    {
+      name: 'phase-id.parsePhaseChecklistLine',
+      read: (form) => {
+        const parsed = parsePhaseChecklistLine(render(form), null);
+        return { found: parsed !== null && parsed.phaseToken === '1', ticked: parsed ? parsed.checked : null };
       },
     },
     {
@@ -155,7 +163,7 @@ describe('CLI readers agree on the accepted grammar (#5763)', () => {
   test('phase next-decimal sees a checklist sibling in every accepted form', () => {
     fc.assert(
       fc.property(formArb, (form) => {
-        writeRoadmap([render({ ...form, bold: form.bold }, '1'), render(form, '1.1')], '### Phase 1: Name\n\n**Goal**: g\n');
+        writeRoadmap([render(form, '1'), render(form, '1.1')], '### Phase 1: Name\n\n**Goal**: g\n');
         const result = runGsdTools('phase next-decimal 1 --raw', tmpDir);
         assert.ok(result.success, result.error);
         assert.match(result.output.trim(), /1\.2$/, `next decimal after ${JSON.stringify(render(form, '1.1'))}`);

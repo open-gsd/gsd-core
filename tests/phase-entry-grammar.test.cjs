@@ -80,12 +80,10 @@ describe('phase-entry grammar (#5763)', () => {
     assert.ok(!entry().test('> - [ ] Phase 1: x'));
   });
 
-  test('anchored: false opts out of the line start and does not force m', () => {
-    const re = entry({ anchored: false }, 'i');
-    assert.ok(re.test('see - [ ] Phase 1: x'));
-    assert.ok(!re.flags.includes('m'));
+  test('the m flag is always set so ^ is a line start', () => {
     assert.ok(entry({}, 'i').flags.includes('m'));
-    assert.equal(phaseEntryPrefixSrc({ anchored: false }).startsWith('^'), false);
+    assert.ok(entry({}, 'im').flags.includes('m'));
+    assert.ok(phaseEntryPrefixSrc().startsWith('^'));
   });
 
   test('other checkbox families never match a Phase tail', () => {

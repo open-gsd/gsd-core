@@ -79,7 +79,7 @@ import phaseIdDisplayMod = require('./phase-id-display.cjs');
 // numeric canonicalization instead of re-deriving it here — see
 // bracketWriteContext/bracketPhaseId below.
 const { milestoneToken, phaseToken } = phaseIdDisplayMod;
-import { isBoxCharChecked, phaseEntryRegExp } from './phase-entry-grammar.cjs';
+import { isBoxCharChecked, isPhaseEntryChecked, phaseEntryPrefixSrc, phaseEntryRegExp } from './phase-entry-grammar.cjs';
 import { escapeRegex } from './pattern.cjs';
 import { declareGateExit } from './gate-exit.cjs';
 import { gateVerdict } from './gate-verdict.cjs';
@@ -7597,12 +7597,13 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
       if (roadmapContent !== null) {
         try {
           const milestoneForComplete = extractCurrentMilestone(roadmapContent, cwd);
-          const completePattern = new RegExp(
-            `-\\s*\\[[xX]\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})`,
-            'gi'
+          const completePattern = phaseEntryRegExp(
+            `Phase\\s+(${phaseScanTokenSource(directoryContext)})`,
+            'gi',
           );
           let cm: RegExpExecArray | null;
           while ((cm = completePattern.exec(milestoneForComplete)) !== null) {
+            if (!isPhaseEntryChecked(cm[0])) continue;
             if (isSentinelPhaseId(cm[1])) continue;
             if (!roadmapCompleteNums.some((n) => comparePhaseNum(cm![1], n, directoryContext) === 0)) {
               roadmapCompleteNums.push(cm[1]);
@@ -7692,8 +7693,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // just below the loop.
           const phasePattern = new RegExp(
             `(?:#{2,4}\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n*]+)` +
-            `|-\\s*\\[[ xX]\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+))`,
-            'gi'
+            `|${phaseEntryPrefixSrc()}Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+))`,
+            'gim'
           );
           let pm: RegExpExecArray | null;
           while ((pm = phasePattern.exec(roadmapForPhases)) !== null) {

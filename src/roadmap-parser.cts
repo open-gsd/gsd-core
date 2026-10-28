@@ -2875,6 +2875,9 @@ function insideBareDetails(tags: { at: number; close: boolean }[], idx: number):
   return lo > 0 && !tags[lo - 1].close;
 }
 
+/** A phase heading or a bold phase-list entry: what makes a block a shipped/backlog milestone. */
+const ACTIVE_SCOPE_PHASE_ENTRY_SRC = `(?:^#{2,4}[ \\t]+Phase\\b|${phaseEntryPrefixSrc({ bold: 'required' })}Phase\\b)`;
+
 /**
  * The active milestone's writable scope as offsets into `content`.
  *
@@ -2894,9 +2897,6 @@ function insideBareDetails(tags: { at: number; close: boolean }[], idx: number):
  * An archive whose `</details>` is missing cannot be told from a wrapper, so
  * `start` stays 0 for it (documented fail-open).
  */
-/** A phase heading or a bold phase-list entry: what makes a block a shipped/backlog milestone. */
-const ACTIVE_SCOPE_PHASE_ENTRY_SRC = `(?:^#{2,4}[ \\t]+Phase\\b|${phaseEntryPrefixSrc({ bold: 'required' })}Phase\\b)`;
-
 function activeScope(content: string, cwd?: string): { start: number; end: number } {
   const tags = bareDetailsTags(content);
   const headingAt = currentMilestoneRawRanges(content, cwd)?.primary.start;
