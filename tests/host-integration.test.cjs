@@ -2911,7 +2911,7 @@ describe('#2627 dispatch-isolation CLI route', () => {
   function query(runtimeId, extraArgs = []) {
     const r = runNode(
       [GSD_TOOLS, 'query', 'dispatch-isolation', ...extraArgs],
-      { cwd: REPO_ROOT, env: { ...process.env, GSD_RUNTIME: runtimeId }, timeoutMs: PROBE_TIMEOUT_MS },
+      { cwd: REPO_ROOT, env: { ...process.env, GSD_RUNTIME: runtimeId, GSD_OPENCODE_GENERATION: '1' }, timeoutMs: PROBE_TIMEOUT_MS },
     );
     throwIfFailed(r, `gsd-tools query dispatch-isolation ${extraArgs.join(' ')}`);
     return r.stdout;

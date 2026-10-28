@@ -33,7 +33,7 @@ test('#4988: installed local CLI syncs and reads its own Claude agents', () => {
     }
 
     const preview = run(['effort', 'sync', '--dry-run']);
-    assert.equal(preview.agents_dir, path.join(configDir, 'agents'));
+    assert.equal(fs.realpathSync.native(preview.agents_dir), fs.realpathSync.native(path.join(configDir, 'agents')));
     assert.ok(preview.changes.some(change => change.agent === 'gsd-planner' && change.to === 'low'));
 
     const effective = run(['resolve-execution', 'gsd-planner']);
@@ -42,32 +42,32 @@ test('#4988: installed local CLI syncs and reads its own Claude agents', () => {
     assert.notEqual(effective.effort_effective, 'low');
 
     const applied = run(['effort', 'sync', '--apply']);
-    assert.equal(applied.agents_dir, path.join(configDir, 'agents'));
+    assert.equal(fs.realpathSync.native(applied.agents_dir), fs.realpathSync.native(path.join(configDir, 'agents')));
     assert.match(fs.readFileSync(agentPath, 'utf8'), /^effort: low$/m);
     assert.equal(run(['resolve-execution', 'gsd-planner']).effort_effective, 'low');
 
     const emptyExplicit = run(['effort', 'sync', '--dry-run', '--config-dir', globalDir]);
-    assert.equal(emptyExplicit.agents_dir, path.join(globalDir, 'agents'));
+    assert.equal(fs.realpathSync.native(emptyExplicit.agents_dir), fs.realpathSync.native(path.join(globalDir, 'agents')));
     assert.equal(emptyExplicit.reason, 'no GSD agent files found');
 
     const globalAgentPath = path.join(globalDir, 'agents', 'gsd-planner.md');
     fs.writeFileSync(globalAgentPath, before);
     const populatedExplicit = run(['effort', 'sync', '--dry-run', '--config-dir', globalDir]);
-    assert.equal(populatedExplicit.agents_dir, path.join(globalDir, 'agents'));
+    assert.equal(fs.realpathSync.native(populatedExplicit.agents_dir), fs.realpathSync.native(path.join(globalDir, 'agents')));
     assert.ok(populatedExplicit.changes.some(change => change.agent === 'gsd-planner' && change.to === 'low'));
 
     const manifestPath = path.join(configDir, 'gsd-file-manifest.json');
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, scope: 'global' }));
     const globalScope = run(['effort', 'sync', '--dry-run']);
-    assert.equal(globalScope.agents_dir, path.join(globalDir, 'agents'));
+    assert.equal(fs.realpathSync.native(globalScope.agents_dir), fs.realpathSync.native(path.join(globalDir, 'agents')));
     assert.ok(globalScope.changes.some(change => change.agent === 'gsd-planner' && change.to === 'low'));
 
     const legacyManifest = { ...manifest };
     delete legacyManifest.scope;
     fs.writeFileSync(manifestPath, JSON.stringify(legacyManifest));
     const absentScope = run(['effort', 'sync', '--dry-run']);
-    assert.equal(absentScope.agents_dir, path.join(globalDir, 'agents'));
+    assert.equal(fs.realpathSync.native(absentScope.agents_dir), fs.realpathSync.native(path.join(globalDir, 'agents')));
     assert.ok(absentScope.changes.some(change => change.agent === 'gsd-planner' && change.to === 'low'));
   } finally {
     cleanup(root);
