@@ -1764,8 +1764,8 @@ export type PlanPosition = {
   n: number | null;
   /** The value spelled `N of M`. */
   ofM: boolean;
-  /** The value is only digits: no ` of M`, no trailing text. */
-  bare: boolean;
+  /** A bare `N` with any trailing text and no total to fill; beside `Total Plans in Phase:` it is the legacy pair. */
+  legacy: boolean;
   /** Inline total of an `N of M` value; `null` for a bare `N` or past the safe range. */
   m: number | null;
   /** The value with its total slot cut out: text before, digit width, text after. */
@@ -1773,11 +1773,12 @@ export type PlanPosition = {
 };
 
 /**
- * The plan-position rule (#5320): the one reader of a `Current Plan` / `Plan` /
- * `Total Plans in Phase` value, for `advancePlanCore` and `plannedPhaseCore`
- * alike. `null` when the value is absent or neither `N` nor `N of M` leads it.
+ * The plan-position rule (#5320): reads a `Current Plan` / `Plan` /
+ * `Total Plans in Phase` value for `advancePlanCore` and `plannedPhaseCore`,
+ * its only two consumers. `null` when the value is absent or neither `N` nor `N of M` leads it.
  * The slot is where a new total goes: an `N of M` value swaps only M (keeping
- * its zero-padding width and trailing text), a bare `N` gains ` of M` and drops
+ * trailing text and, when M has a leading zero, its width), an unfilled total
+ * (`1 of ?`) is swapped for the count, and a bare `N` gains ` of M` and drops
  * the template's unfilled `TBD` (`0 TBD in current phase`).
  */
 export function readPlanPosition(raw: string | null | undefined): PlanPosition | null {
@@ -1785,11 +1786,16 @@ export function readPlanPosition(raw: string | null | undefined): PlanPosition |
   const ofM = PLAN_SHAPE_N_OF_M.exec(raw);
   if (ofM) {
     const mAt = ofM[0].length - ofM[3].length - ofM[2].length;
-    return { n: planNumberFrom(ofM[1]), ofM: true, bare: false, m: planNumberFrom(ofM[2]), slot: [raw.slice(0, mAt), ofM[2].length, ofM[3]] };
+    // Only an M written with a leading zero is padded; `10` shrinking to `9` is not `09`.
+    return { n: planNumberFrom(ofM[1]), ofM: true, legacy: false, m: planNumberFrom(ofM[2]), slot: [raw.slice(0, mAt), /^0\d/.test(ofM[2]) ? ofM[2].length : 1, ofM[3]] };
   }
   const bare = PLAN_SHAPE_N.exec(raw);
   if (!bare) return null;
-  return { n: planNumberFrom(bare[1]), ofM: false, bare: bare[2] === '', m: null, slot: [`${bare[1]} of `, 1, bare[2].replace(/^\s+TBD\b/, '') || ' in current phase'] };
+  const n = planNumberFrom(bare[1]);
+  // `N of ?` (begin-phase without --plans) holds an unfilled total: that word is the slot, so no second " of" is written.
+  const unfilled = /^(\s+of\s+)\S+/.exec(bare[2]);
+  if (unfilled) return { n, ofM: false, legacy: false, m: null, slot: [`${bare[1]}${unfilled[1]}`, 1, bare[2].slice(unfilled[0].length)] };
+  return { n, ofM: false, legacy: !/^\s+TBD\b/.test(bare[2]), m: null, slot: [`${bare[1]} of `, 1, bare[2].replace(/^\s+TBD\b/, '') || ' in current phase'] };
 }
 
 /** `pos` re-rendered for a new total; with no position it starts the template spelling at plan 0. */
@@ -2670,15 +2676,15 @@ function plannedPhaseCore(
   const planPos = Object.fromEntries(['Plan', 'Current Plan'].map((name) => {
     const raw = stateExtractField(posBefore, name);
     const read = readPlanPosition(raw);
-    return [name, { raw, read, pos: samePhase ? read : null }];
+    return [name, { raw, read, samePhaseRead: samePhase ? read : null }];
   }));
   const planValue = (name: string): string | undefined => {
     if (intent.planCount == null) return undefined;
-    const { read, pos } = planPos[name];
-    // A bare `N` beside `Total Plans in Phase:` is the legacy pair; the Total line already carries M.
-    // Same phase keeps N; a new phase resets it to 0 in the same bare shape.
-    if (totalRecorded && read?.bare) return samePhase ? undefined : '0';
-    return renderPlanTotal(pos, intent.planCount);
+    const { read, samePhaseRead } = planPos[name];
+    // A bare `N` (with any trailing text) beside `Total Plans in Phase:` is the legacy pair; the Total line already carries M.
+    // Same phase leaves the line as written; a new phase resets it to a bare 0.
+    if (totalRecorded && read?.legacy) return samePhase ? undefined : '0';
+    return renderPlanTotal(samePhaseRead, intent.planCount);
   };
   body = mutateCurrentPositionForAdvance(
     body,
@@ -2704,7 +2710,12 @@ function plannedPhaseCore(
     if (!totalRecorded && planPos['Plan'].raw === null && planPos['Current Plan'].raw === null) {
       return { content, updated: [], data: { error: true, reason: 'plans_no_line', message: 'state planned-phase: --plans has no line to land on. Add `Plan: 0 TBD in current phase` under `## Current Position` (or a `Total Plans in Phase:` line) and retry.' } };
     }
-    const position = Math.max(0, ...Object.values(planPos).map(({ pos }) => pos?.n ?? 0));
+    const reads = Object.values(planPos).map(({ samePhaseRead }) => samePhaseRead);
+    // A recorded position past the safe-integer range (`n` is null) is above every count that can be written.
+    if (reads.some((r) => r && r.n === null)) {
+      return { content, updated: [], data: { error: true, reason: 'plans_below_position', message: `state planned-phase: the recorded plan position is above ${Number.MAX_SAFE_INTEGER}, so no --plans count can hold it. Correct the position line.` } };
+    }
+    const position = Math.max(0, ...reads.map((r) => r?.n ?? 0));
     if (position > intent.planCount) {
       return { content, updated: [], data: { error: true, reason: 'plans_below_position', message: `state planned-phase: --plans ${intent.planCount} is below the recorded plan position ${position}. Use --plans ${position} or more, or correct the position line.` } };
     }

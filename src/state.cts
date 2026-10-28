@@ -6499,7 +6499,7 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number | null |
     const result = transitionCore(content, intent, deps);
     // #5320: --plans cannot be recorded (no line to land on, or below the recorded plan position); exit before the write.
     if (result.data?.['error']) {
-      error(String(result.data['message']), result.data['reason'] === 'plans_below_position' ? ioMod.ERROR_REASON.USAGE : ioMod.ERROR_REASON.UNKNOWN);
+      error(String(result.data['message']), result.data['reason'] === 'plans_below_position' ? ERROR_REASON.USAGE : ERROR_REASON.UNKNOWN);
     }
     precomputedUpdated = result.updated;
     if (resolvePhaseIdConvention(cwd) === 'bracket') {
