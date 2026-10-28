@@ -246,3 +246,30 @@ describe('ci-next-health: resolveNextHealth on merge_group', () => {
     assert.equal(out.payload.workflow_runs[0].id, 40515019525);
   });
 });
+
+describe('ci-next-health: review follow-ups', () => {
+  test('a re-run of a succeeded attempt is CLEAN even over an older red run', () => {
+    const rerun = run({ status: 'in_progress', run_attempt: 2, previous_attempt_conclusion: 'success' });
+    const out = classifyBaseRuns({ workflow_runs: [rerun, done('failure', { id: 9 })] });
+    assert.equal(out.verdict, VERDICT.CLEAN);
+  });
+
+  test('an unreadable previous attempt ("unknown") reads RED', () => {
+    const rerun = run({ status: 'in_progress', run_attempt: 2, previous_attempt_conclusion: 'unknown' });
+    assert.equal(classifyBaseRuns({ workflow_runs: [rerun, done('success')] }).verdict, VERDICT.RED);
+  });
+
+  test('a full 10th page of label events fails closed (applier unknown)', async () => {
+    const full = Array.from({ length: 100 }, () => ({ event: 'subscribed' }));
+    full[0] = { event: 'labeled', label: { name: 'fix-next' }, actor: { login: 'trek-e' } };
+    const out = await evalQueue(fakeGh(goodRoutes({ [`${R}/issues/5755/events`]: full })));
+    assert.equal(out.authorized, false);
+    assert.equal(out.reason, 'label-applier-unknown');
+  });
+
+  test('a queue ref for a different base branch is refused', async () => {
+    const out = await evalQueue(fakeGh(goodRoutes()), { baseRef: 'release/1.0' });
+    assert.equal(out.reason, 'queue-base-mismatch');
+    assert.equal((await evalQueue(fakeGh(goodRoutes()), { baseRef: 'next' })).authorized, true);
+  });
+});

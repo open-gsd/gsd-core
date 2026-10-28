@@ -1322,7 +1322,9 @@ it). The queue run cannot see event labels, so it reads them back from the
 API and honours the label only when all of these hold: the queue branch names
 the PR, the merge group holds that PR alone, the PR carries the label, and
 whoever applied the label has write or admin permission. A PR author cannot
-self-apply it to bypass the gate. Remove the label once the fix has merged.
+self-apply it to bypass the gate. If other entries are queued ahead of the
+fix, the group is larger than one commit and the bypass is refused; dequeue
+the others first. Remove the label once the fix has merged.
 
 A push run that is still in flight, including a re-run of a failed run, never
 counts as healthy: a re-run whose previous attempt failed is red, otherwise the

@@ -103,6 +103,11 @@ function classifyBaseRuns(payload) {
   if (typeof prior === 'string' && prior !== '' && prior !== 'success') {
     return { verdict: VERDICT.RED, run: newest, reason: 'rerun-in-flight-after-failure' };
   }
+  // A re-run of an attempt that succeeded: the newest evidence is green, so an
+  // older red run must not turn the gate red.
+  if (prior === 'success') {
+    return { verdict: VERDICT.CLEAN, run: newest, reason: 'rerun-in-flight-after-success' };
+  }
 
   const settled = runs.find((run) => !isInFlight(run));
   if (!settled) return { verdict: VERDICT.CLEAN, run: null, reason: 'newest-in-flight-no-history' };
@@ -129,6 +134,7 @@ function parseQueueRef(ref) {
 // reported as `write` by this endpoint's legacy `permission` field; both are
 // accepted so a role-name change cannot silently lock the bypass out.
 const BYPASS_PERMISSIONS = new Set(['admin', 'maintain', 'write']);
+const EVENT_PAGES_MAX = 10;
 
 /**
  * merge_group has no label surface, so read it back from the API. The bypass
@@ -144,9 +150,13 @@ const BYPASS_PERMISSIONS = new Set(['admin', 'maintain', 'write']);
  *
  * @returns {Promise<{authorized:boolean, reason:string, actor?:string, prNumber?:number}>}
  */
-async function evaluateQueueBypass({ headRef, baseSha, headSha, repo, ghGet } = {}) {
+async function evaluateQueueBypass({ headRef, baseRef, baseSha, headSha, repo, ghGet } = {}) {
   const parsed = parseQueueRef(headRef);
   if (!parsed) return { authorized: false, reason: 'queue-ref-unparseable' };
+  // The queue branch must be for the branch whose health is being judged.
+  if (typeof baseRef === 'string' && baseRef !== '' && parsed.base !== baseRef) {
+    return { authorized: false, reason: 'queue-base-mismatch', prNumber: parsed.prNumber };
+  }
   const { prNumber } = parsed;
   if (!baseSha || !headSha) return { authorized: false, reason: 'no-group-shas', prNumber };
 
@@ -161,7 +171,8 @@ async function evaluateQueueBypass({ headRef, baseSha, headSha, repo, ghGet } = 
     if (!hasLabel) return { authorized: false, reason: 'no-label', prNumber };
 
     let actor = null;
-    for (let page = 1; page <= 10; page += 1) {
+    let exhausted = false;
+    for (let page = 1; page <= EVENT_PAGES_MAX; page += 1) {
       const events = await ghGet(`/repos/${repo}/issues/${prNumber}/events?per_page=100&page=${page}`);
       if (!Array.isArray(events)) break;
       for (const event of events) {
@@ -170,7 +181,11 @@ async function evaluateQueueBypass({ headRef, baseSha, headSha, repo, ghGet } = 
         }
       }
       if (events.length < 100) break;
+      if (page === EVENT_PAGES_MAX) exhausted = true;
     }
+    // More events than we read: the latest `labeled` event may be unseen, so
+    // the applier is unknown. Fail closed.
+    if (exhausted) return { authorized: false, reason: 'label-applier-unknown', prNumber };
     if (!actor) return { authorized: false, reason: 'label-applier-unknown', prNumber };
 
     const perm = await ghGet(`/repos/${repo}/collaborators/${encodeURIComponent(actor)}/permission`);
@@ -397,17 +412,25 @@ async function main(argv = process.argv.slice(2)) {
     if (isInFlight(newest) && Number(newest.run_attempt) > 1) {
       // The list shows only the latest attempt; the previous one holds the
       // failure being re-run. An API error here propagates -> INDETERMINATE.
-      const previous = await ghGet(
-        `/repos/${repo}/actions/runs/${newest.id}/attempts/${Number(newest.run_attempt) - 1}`,
-      );
-      newest.previous_attempt_conclusion = previous && typeof previous.conclusion === 'string'
-        ? previous.conclusion : '';
+      // If this read fails we cannot show the re-run is not hiding a failure,
+      // and failing open here would reopen the hole this closes: treat an
+      // unreadable previous attempt as not-success (RED).
+      try {
+        const previous = await ghGet(
+          `/repos/${repo}/actions/runs/${newest.id}/attempts/${Number(newest.run_attempt) - 1}`,
+        );
+        newest.previous_attempt_conclusion = previous && typeof previous.conclusion === 'string'
+          ? previous.conclusion : 'unknown';
+      } catch {
+        newest.previous_attempt_conclusion = 'unknown';
+      }
     }
     return payload;
   };
 
   const evaluateQueue = () => evaluateQueueBypass({
     headRef: process.env.MERGE_GROUP_HEAD_REF || process.env.GITHUB_REF || '',
+    baseRef,
     baseSha: process.env.MERGE_GROUP_BASE_SHA || '',
     headSha: process.env.MERGE_GROUP_HEAD_SHA || process.env.GITHUB_SHA || '',
     repo,
