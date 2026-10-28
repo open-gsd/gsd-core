@@ -130,7 +130,7 @@ node gsd-tools.cjs state record-session --stopped-at "..." [--resume-file path]
 # already have summaries (a gap-closure re-entry), Current Plan and `Plan: N of M` start at the first
 # plan still to run instead of 1, and a **Current focus:** value that wraps onto further lines is
 # replaced whole. COUNT is a non-negative integer; anything else (e.g. 3.5, 3abc, -1) is rejected with a
-# usage error (it used to be truncated).
+# usage error (3.5 and 3abc used to be truncated to 3, -1 was accepted).
 node gsd-tools.cjs state begin-phase --phase N --name SLUG --plans COUNT
 
 # Agent-discoverable blocker signalling (used by discuss-phase / UI flows)
