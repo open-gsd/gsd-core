@@ -660,6 +660,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `package-legitimacy.cjs` | Registry-API package legitimacy verdicts (OK/SUS/SLOP) from npm/PyPI/crates, slopcheck optional |
 | `pattern.cjs` | The pattern-construction seam — `escapeRegex` (delegates to the built-in `RegExp.escape`) and `literalPattern`; sole owner of building a `RegExp` from a runtime value (ADR-3212 §1, epic #3212 Phase 1, #3412) |
 | `phase-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools phase` |
+| `phase-entry-grammar.cjs` | The one definition of a ROADMAP phase-list entry (compiled from `src/phase-entry-grammar.cts`, gitignored, #5763): bullet marker, checkbox, bold token and line anchoring as a regex-prefix builder plus the single tick reader; read-side consumers compose their tail onto it |
 | `phase-estimation.cjs` | Pure phase-effort estimation — `estimate`/`actuals` schema parse+render, smart-zone budget classification, and estimate-vs-actual calibration (median ratio, clamped, sample-gated). Confidence is derived from calibration sample count, never self-rated (ADR-2629) |
 | `phase-id-card.cjs` | Single runtime source for the compact annotated bracket phase-ID convention card and legend (ADR-612 PR-5) |
 | `phase-id-display.cjs` | Pure display adapter that routes legacy milestone metadata through the canonical bracket phase-ID parse/render pair (ADR-612 PR-5) |

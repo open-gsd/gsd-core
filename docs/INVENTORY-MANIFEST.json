@@ -526,6 +526,7 @@
       "package-legitimacy.cjs",
       "pattern.cjs",
       "phase-command-router.cjs",
+      "phase-entry-grammar.cjs",
       "phase-estimation.cjs",
       "phase-id-card.cjs",
       "phase-id-display.cjs",

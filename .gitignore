@@ -165,6 +165,8 @@ build/
 /gsd-core/bin/lib/prompt-budget.cjs
 /gsd-core/bin/lib/secrets.cjs
 /gsd-core/bin/lib/smart-entry.cjs
+# #5763: new module (phase-entry grammar) — emitted artifact, never edited.
+/gsd-core/bin/lib/phase-entry-grammar.cjs
 /gsd-core/bin/lib/phase-lifecycle.cjs
 /gsd-core/bin/lib/workstream-name-policy.cjs
 /gsd-core/bin/lib/decisions.cjs
