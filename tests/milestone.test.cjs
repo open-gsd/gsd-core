@@ -1960,7 +1960,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   test('negative control: empty or unset PLAN does not cause arithmetic error', (t) => {
     if (!haveTools()) return t.skip('bash and jq required');
     writeRequirements(tmpDir, SHARED_REQUIREMENTS);
-    const dir = makePhaseDir(tmpDir);
+    makePhaseDir(tmpDir);
 
     for (const emptyVal of ['', undefined]) {
       const env = {
