@@ -69,6 +69,7 @@ module.exports = {
   "tests/custom-phase-readers.test.cjs",
   "tests/custom-phase-review-round7.test.cjs",
   "tests/debugger-semantic-recall.test.cjs",
+  "tests/decisions.test.cjs",
   "tests/default-flip-documentation-lint.test.cjs",
   "tests/docs-update.test.cjs",
   "tests/drift-whole-change-set.test.cjs",

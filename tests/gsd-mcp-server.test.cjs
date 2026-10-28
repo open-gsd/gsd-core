@@ -54,7 +54,7 @@ for (const subcommand of [undefined, '']) {
 
     const cli = runGsdTools(['config-path', '--raw', '--json-errors'], dir);
     assert.equal(cli.success, true, cli.error);
-    assert.equal(cli.output, path.join(dir, '.planning', 'config.json'));
+    assert.equal(cli.output, path.join(fs.realpathSync.native(dir), '.planning', 'config.json'));
 
     const args = { family: 'config-path' };
     if (subcommand !== undefined) args.subcommand = subcommand;
@@ -63,7 +63,8 @@ for (const subcommand of [undefined, '']) {
       { cwd: dir },
     );
     assert.notEqual(res.result.isError, true, 'the family-only command must reach the CLI through MCP');
-    assert.equal(res.result.content[0].text.trim(), cli.output);
+    const mcpPath = res.result.content[0].text.trim();
+    assert.equal(path.join(fs.realpathSync.native(path.dirname(mcpPath)), path.basename(mcpPath)), cli.output);
   });
 }
 
