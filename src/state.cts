@@ -6497,8 +6497,10 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number | null |
       }
     }
     const result = transitionCore(content, intent, deps);
-    // #5320: --plans cannot be recorded (no line to land on, or below the executed plan count); exit before the write.
-    if (result.data?.['planError']) error(result.data['planError'] as string, ioMod.ERROR_REASON.USAGE);
+    // #5320: --plans cannot be recorded (no line to land on, or below the recorded plan position); exit before the write.
+    if (result.data?.['error']) {
+      error(String(result.data['message']), result.data['reason'] === 'plans_below_position' ? ioMod.ERROR_REASON.USAGE : ioMod.ERROR_REASON.UNKNOWN);
+    }
     precomputedUpdated = result.updated;
     if (resolvePhaseIdConvention(cwd) === 'bracket') {
       const display = phaseDisplayFor(cwd, phaseNumber as string | number);
@@ -6508,7 +6510,7 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number | null |
           transitioned,
           statePath,
           'Last Activity Description',
-          `${display} planning complete — ${planCount || '?'} plans ready`,
+          `${display} planning complete — ${planCount ?? '?'} plans ready`,
         );
       }
       const today = realClock.localToday();
