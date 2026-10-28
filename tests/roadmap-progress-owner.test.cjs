@@ -73,6 +73,8 @@ describe('#5761 owner: where the Progress table is', () => {
   test('## Progressive and ### Progress are not Progress headings', () => {
     assert.equal(findProgressSection(`## Progressive Enhancement\n\n${REAL}`), null);
     assert.equal(findProgressSection(`### Progress\n\n${REAL}`), null);
+    // The archive-span scan (roadmap-parser) asks this same question: level 1 is not the Progress section.
+    assert.equal(findProgressSection(`# Progress\n\n${REAL}`), null);
     assert.equal(findProgressSection('Progress is made.\n| Progress |\n'), null);
   });
 

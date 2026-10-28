@@ -25,7 +25,10 @@
  *     table carries a `Milestone` column, only that milestone's rows.
  *
  * Writers (`roadmap.cts`, `phase.cts`, traceability slices) still carry their
- * own slices; they move onto this owner in Phase 2 (#5762).
+ * own slices, and so does `phase.cts`'s `cmdPhaseComplete` already-complete
+ * check (it slices the Milestone column itself, with a blank-milestone-matches-
+ * nothing rule this owner deliberately does not share); they move onto this
+ * owner in Phase 2 (#5762).
  */
 
 import { findTableWithColumns } from './markdown-table.cjs';
