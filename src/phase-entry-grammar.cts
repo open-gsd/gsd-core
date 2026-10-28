@@ -40,6 +40,13 @@ const BOLD_TOKEN_SRC = '(?:\\*\\*|__)';
 /** Regex source of one bold token, for a reader that must also consume the closing wrapper. */
 export const PHASE_ENTRY_BOLD_TOKEN_SRC = BOLD_TOKEN_SRC;
 
+/**
+ * Regex source of a closing bold wrapper for a reader that captures the entry's
+ * name up to it. `**` closes anywhere; `__` closes only at the end of the line,
+ * so a name that contains `__init__` or `__tests__` is not cut short.
+ */
+export const PHASE_ENTRY_BOLD_CLOSE_SRC = '(?:\\*\\*|__(?=[ \\t]*\\r?$))';
+
 /** Source for the box interior, honouring the requested state filter. */
 function stateSrc(state: PhaseEntryPrefixOptions['state']): string {
   if (state === 'unchecked') return ' ';
@@ -59,7 +66,8 @@ export function phaseEntryPrefixSrc(options: PhaseEntryPrefixOptions = {}): stri
   // quadratically on a long blank run.
   const boldSrc = bold === 'required' ? `${BOLD_TOKEN_SRC}[ \\t]*` : `(?:${BOLD_TOKEN_SRC}[ \\t]*)?`;
   const body = box === 'optional' ? `(?:${boxSrc})?` : boxSrc;
-  return `^[ \\t]*${MARKER_SRC}[ \\t]*${body}${boldSrc}`;
+  // A leading BOM can only precede the first line; it is not part of the grammar's indent.
+  return `^\\uFEFF?[ \\t]*${MARKER_SRC}[ \\t]*${body}${boldSrc}`;
 }
 
 /**
@@ -71,7 +79,7 @@ export function phaseEntryRegExp(tailSrc: string, flags = '', options: PhaseEntr
   return new RegExp(`${phaseEntryPrefixSrc(options)}${tailSrc}`, withM);
 }
 
-const ENTRY_BOX_RE = new RegExp(`^[ \\t]*${MARKER_SRC}[ \\t]*\\[([ xX])\\]`);
+const ENTRY_BOX_RE = new RegExp(`^\\uFEFF?[ \\t]*${MARKER_SRC}[ \\t]*\\[([ xX])\\]`);
 
 /**
  * Whether a phase entry line (or a regex match of one, which starts at the

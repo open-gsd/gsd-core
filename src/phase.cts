@@ -2743,8 +2743,8 @@ function cmdPhaseInsert(
       // .md targets regardless). Widening to [^\r\n]* stops the match at the
       // true line-content boundary so bulletLineEnd lands cleanly before the
       // terminator.
-      const targetBulletPattern = new RegExp(
-        `(-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\r\\n]*)`,
+      const targetBulletPattern = phaseEntryRegExp(
+        `Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\r\\n]*`,
         'i',
       );
       const bulletMatchResult = rawContent.match(targetBulletPattern);
@@ -2758,7 +2758,7 @@ function cmdPhaseInsert(
       // #5599: land after the last bullet inside the allocation family's
       // subtree, not before the first following bullet of any number (which is
       // the target's own later decimal child when one exists).
-      const bulletRe = /\r?\n-\s*\[[ x]\]\s*(?:\*\*)?Phase\s+(?<tok>\d[^\s:*]*)[^\r\n]*/gi;
+      const bulletRe = new RegExp(`\\r?\\n${phaseEntryPrefixSrc()}Phase\\s+(?<tok>\\d[^\\s:*]*)[^\\r\\n]*`, 'gim');
       let insertIdx = bulletLineEnd;
       for (const m of afterBullet.matchAll(bulletRe)) {
         if (!isPhaseTokenWithin(m.groups!.tok, subtreeRoot)) {

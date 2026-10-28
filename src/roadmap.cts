@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { realClock } from './clock.cjs';
 import { escapeRegex } from './pattern.cjs';
-import { PHASE_ENTRY_BOLD_TOKEN_SRC, isBoxCharChecked, isPhaseEntryChecked, phaseEntryPrefixSrc, phaseEntryRegExp } from './phase-entry-grammar.cjs';
+import { PHASE_ENTRY_BOLD_CLOSE_SRC, isBoxCharChecked, isPhaseEntryChecked, phaseEntryPrefixSrc, phaseEntryRegExp } from './phase-entry-grammar.cjs';
 import { splitLines, detectEol, joinLines } from './text-lines.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
@@ -212,7 +212,7 @@ function searchPhaseInContent(content: string, escapedPhase: string, phaseNum: s
     // A BARE `Phase\s+` at base — takes the label-only baseline, so a bracket
     // repo gains the bracket-ID form and nothing else.
     const checklistPattern = phaseEntryRegExp(
-      `${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, convention)}${escapedPhase}${OPTIONAL_PHASE_TAG_SOURCE}:\\s*([^*]+?)${PHASE_ENTRY_BOLD_TOKEN_SRC}`,
+      `${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, convention)}${escapedPhase}${OPTIONAL_PHASE_TAG_SOURCE}:\\s*([^*]+?)${PHASE_ENTRY_BOLD_CLOSE_SRC}`,
       'i',
       { bold: 'required' },
     );

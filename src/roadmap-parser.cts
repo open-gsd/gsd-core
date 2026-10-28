@@ -22,7 +22,7 @@ import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { escapeRegex } from './pattern.cjs';
-import { PHASE_ENTRY_BOLD_TOKEN_SRC, phaseEntryPrefixSrc, phaseEntryRegExp } from './phase-entry-grammar.cjs';
+import { PHASE_ENTRY_BOLD_CLOSE_SRC, phaseEntryPrefixSrc, phaseEntryRegExp } from './phase-entry-grammar.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdModule = require('./phase-id.cjs');
 const {
@@ -1950,7 +1950,7 @@ function withPhaseSection(
 // en-dash, hyphen, or colon. Used as a fallback when no ATX heading matches, and
 // to count phases in a milestone that uses the bullet form.
 const BULLET_PHASE_LINE_PATTERN = phaseEntryRegExp(
-  `Phase\\s+([\\w][\\w.-]*)(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*(.+?)${PHASE_ENTRY_BOLD_TOKEN_SRC}`,
+  `Phase\\s+([\\w][\\w.-]*)(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*(.+?)${PHASE_ENTRY_BOLD_CLOSE_SRC}`,
   'im',
   { box: 'optional', bold: 'required' },
 );
@@ -1959,7 +1959,7 @@ const BULLET_PHASE_LINE_PATTERN = phaseEntryRegExp(
 function bulletPhaseLineFor(phaseNum: unknown, phaseSource?: string): RegExp {
   const num = phaseSource ?? phaseMarkdownRegexSource(phaseNum);
   return phaseEntryRegExp(
-    `Phase\\s+(${num})${OPTIONAL_PHASE_TAG_SOURCE}\\s*[—–:\\-]\\s*(.+?)${PHASE_ENTRY_BOLD_TOKEN_SRC}`,
+    `Phase\\s+(${num})${OPTIONAL_PHASE_TAG_SOURCE}\\s*[—–:\\-]\\s*(.+?)${PHASE_ENTRY_BOLD_CLOSE_SRC}`,
     'im',
     { box: 'optional', bold: 'required' },
   );

@@ -10,6 +10,7 @@ const {
   phaseEntryRegExp,
   isPhaseEntryChecked,
   isBoxCharChecked,
+  PHASE_ENTRY_BOLD_CLOSE_SRC,
 } = require('../gsd-core/bin/lib/phase-entry-grammar.cjs');
 
 const entry = (opts, flags = 'i') => phaseEntryRegExp('Phase\\s+1\\b', flags, opts);
@@ -84,6 +85,18 @@ describe('phase-entry grammar (#5763)', () => {
     assert.ok(entry({}, 'i').flags.includes('m'));
     assert.ok(entry({}, 'im').flags.includes('m'));
     assert.ok(phaseEntryPrefixSrc().startsWith('^'));
+  });
+
+  test('a leading BOM before the first entry is tolerated', () => {
+    assert.ok(entry().test('\uFEFF- [ ] **Phase 1: x**'));
+    assert.equal(isPhaseEntryChecked('\uFEFF- [x] **Phase 1: x**'), true);
+  });
+
+  test('the closing bold wrapper does not cut a name containing __', () => {
+    const re = new RegExp(`Phase\\s+1:\\s*(.+?)${PHASE_ENTRY_BOLD_CLOSE_SRC}`, 'im');
+    assert.equal(re.exec('- [ ] **Phase 1: Add __init__ support**')[1], 'Add __init__ support');
+    assert.equal(re.exec('- [ ] **Phase 1: Wire __tests__**')[1], 'Wire __tests__');
+    assert.equal(re.exec('- [ ] __Phase 1: Name__')[1], 'Name');
   });
 
   test('other checkbox families never match a Phase tail', () => {
