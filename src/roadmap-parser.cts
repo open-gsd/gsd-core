@@ -22,6 +22,7 @@ import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { escapeRegex } from './pattern.cjs';
+import { PHASE_ENTRY_BOLD_TOKEN_SRC, phaseEntryPrefixSrc, phaseEntryRegExp } from './phase-entry-grammar.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdModule = require('./phase-id.cjs');
 const {
@@ -1948,15 +1949,19 @@ function withPhaseSection(
 // is captured in group 1, the name in group 2; the separator may be an em-dash,
 // en-dash, hyphen, or colon. Used as a fallback when no ATX heading matches, and
 // to count phases in a milestone that uses the bullet form.
-const BULLET_PHASE_LINE_PATTERN =
-  /^\s*[-*]\s+(?:\[[ xX]\]\s+)?\*\*Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*[—–:\-]\s*(.+?)\*\*/im;
+const BULLET_PHASE_LINE_PATTERN = phaseEntryRegExp(
+  `Phase\\s+([\\w][\\w.-]*)(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*(.+?)${PHASE_ENTRY_BOLD_TOKEN_SRC}`,
+  'im',
+  { box: 'optional', bold: 'required' },
+);
 
 /** Build a bullet-phase-line regex pinned to a specific phase number (#2199). */
 function bulletPhaseLineFor(phaseNum: unknown, phaseSource?: string): RegExp {
   const num = phaseSource ?? phaseMarkdownRegexSource(phaseNum);
-  return new RegExp(
-    `^\\s*[-*]\\s+(?:\\[[ xX]\\]\\s+)?\\*\\*Phase\\s+(${num})${OPTIONAL_PHASE_TAG_SOURCE}\\s*[—–:\\-]\\s*(.+?)\\*\\*`,
+  return phaseEntryRegExp(
+    `Phase\\s+(${num})${OPTIONAL_PHASE_TAG_SOURCE}\\s*[—–:\\-]\\s*(.+?)${PHASE_ENTRY_BOLD_TOKEN_SRC}`,
     'im',
+    { box: 'optional', bold: 'required' },
   );
 }
 
@@ -2889,6 +2894,9 @@ function insideBareDetails(tags: { at: number; close: boolean }[], idx: number):
  * An archive whose `</details>` is missing cannot be told from a wrapper, so
  * `start` stays 0 for it (documented fail-open).
  */
+/** A phase heading or a bold phase-list entry: what makes a block a shipped/backlog milestone. */
+const ACTIVE_SCOPE_PHASE_ENTRY_SRC = `(?:^#{2,4}[ \\t]+Phase\\b|${phaseEntryPrefixSrc({ bold: 'required' })}Phase\\b)`;
+
 function activeScope(content: string, cwd?: string): { start: number; end: number } {
   const tags = bareDetailsTags(content);
   const headingAt = currentMilestoneRawRanges(content, cwd)?.primary.start;
@@ -2897,7 +2905,7 @@ function activeScope(content: string, cwd?: string): { start: number; end: numbe
   if (open) {
     anchor = headingAt;
   } else {
-    const firstActive = [...content.matchAll(/^(?:#{2,4}[ \t]+Phase\b|[ \t]*-[ \t]*\[[ x]\][ \t]*\*\*Phase\b)/gim)]
+    const firstActive = [...content.matchAll(new RegExp(ACTIVE_SCOPE_PHASE_ENTRY_SRC, 'gim'))]
       .find((m) => !insideBareDetails(tags, m.index));
     anchor = firstActive?.index ?? content.length;
   }
@@ -2907,7 +2915,7 @@ function activeScope(content: string, cwd?: string): { start: number; end: numbe
     if (t.close) start = t.at + '</details>'.length;
   }
   // Only a block that carries phase entries is a shipped/backlog milestone; a collapsible note inside the active milestone stays writable.
-  const phaseEntry = /^(?:#{2,4}[ \t]+Phase\b|[ \t]*-[ \t]*\[[ x]\][ \t]*\*\*Phase\b)/im;
+  const phaseEntry = new RegExp(ACTIVE_SCOPE_PHASE_ENTRY_SRC, 'im');
   const below = tags.find((t, i) => {
     if (t.close || t.at <= anchor || !/^[ \t]*$/.test(content.slice(content.lastIndexOf('\n', t.at - 1) + 1, t.at))) return false;
     const close = tags.slice(i + 1).find((c) => c.close);

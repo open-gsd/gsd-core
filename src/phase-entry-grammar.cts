@@ -39,6 +39,9 @@ export interface PhaseEntryPrefixOptions {
 const MARKER_SRC = '[-*]';
 const BOLD_TOKEN_SRC = '(?:\\*\\*|__)';
 
+/** Regex source of one bold token, for a reader that must also consume the closing wrapper. */
+export const PHASE_ENTRY_BOLD_TOKEN_SRC = BOLD_TOKEN_SRC;
+
 /** Source for the box interior, honouring the requested state filter. */
 function stateSrc(state: PhaseEntryPrefixOptions['state']): string {
   if (state === 'unchecked') return ' ';

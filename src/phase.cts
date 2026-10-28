@@ -79,6 +79,7 @@ import phaseIdDisplayMod = require('./phase-id-display.cjs');
 // numeric canonicalization instead of re-deriving it here — see
 // bracketWriteContext/bracketPhaseId below.
 const { milestoneToken, phaseToken } = phaseIdDisplayMod;
+import { isBoxCharChecked, phaseEntryRegExp } from './phase-entry-grammar.cjs';
 import { escapeRegex } from './pattern.cjs';
 import { declareGateExit } from './gate-exit.cjs';
 import { gateVerdict } from './gate-verdict.cjs';
@@ -2315,8 +2316,8 @@ function scanExistingDecimalPhaseNumbers(phasesDir: string, rawContent: string, 
     decimalSet.add(parseInt(rmMatch[1], 10));
   }
 
-  const checklistDecimalPattern = new RegExp(
-    `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?Phase\\s+${phaseMarkdownRegexSource(base)}\\.(\\d+)${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
+  const checklistDecimalPattern = phaseEntryRegExp(
+    `Phase\\s+${phaseMarkdownRegexSource(base)}\\.(\\d+)${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
     'gi',
   );
   let clMatch: RegExpExecArray | null;
@@ -2608,8 +2609,8 @@ function cmdPhaseInsert(
       ? bracketHeading !== null
       : tokenizeHeadings(content).some((h) => targetPattern.test(h.text));
 
-    const bulletPattern = new RegExp(
-      `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
+    const bulletPattern = phaseEntryRegExp(
+      `${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
       'i',
     );
     // #5007 (Phase 6 / ADR-4910 §8): a pure "does ANY phase heading exist"
@@ -2638,8 +2639,8 @@ function cmdPhaseInsert(
     }
 
     if (!headingMatch && !isBulletStyle) {
-      const checklistPattern = new RegExp(
-        `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
+      const checklistPattern = phaseEntryRegExp(
+        `${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
         'i',
       );
       if (checklistPattern.test(content)) {
@@ -2714,9 +2715,10 @@ function cmdPhaseInsert(
     let roadmapEntry: 'checklist' | 'progress_table' | 'none';
 
     if (isBulletStyle) {
-      const boldBulletPattern = new RegExp(
-        `-\\s*\\[[ x]\\]\\s*\\*\\*Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}:`,
+      const boldBulletPattern = phaseEntryRegExp(
+        `Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}:`,
         'i',
+        { bold: 'required' },
       );
       const useBold = boldBulletPattern.test(content);
       const phaseLabel = useBold
@@ -2731,7 +2733,7 @@ function cmdPhaseInsert(
       // matches what platformWriteSync enforces anyway.
       const bulletEntry = `\n- [ ] ${phaseLabel}`;
       // A non-bold bullet is not an entry `roadmap analyze` reads (checklistEntrySrc needs `**`).
-      roadmapEntry = new RegExp(checklistEntrySrc(insertConvention, false, true)).test(bulletEntry) ? 'checklist' : 'none';
+      roadmapEntry = new RegExp(checklistEntrySrc(insertConvention, false, true), 'm').test(bulletEntry) ? 'checklist' : 'none';
 
       // #3413: was `[^\n]*`, which on CRLF content swallows the line's
       // trailing \r into the match, shifting bulletLineEnd to land BETWEEN
@@ -7791,14 +7793,15 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // Without it, this lowest-outstanding override was blind to dash-grammar
           // rows and could not correct an out-of-order completion on the same
           // mixed-grammar roadmaps that broke stage 2.
-          const cbPattern = new RegExp(
-            `-\\s*\\[(x| )\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+)`,
-            'gi'
+          const cbPattern = phaseEntryRegExp(
+            `Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+)`,
+            'gi',
+            { state: 'captured' },
           );
           let cbm: RegExpExecArray | null;
           let lowestOutstanding: { num: string; name: string } | null = null;
           while ((cbm = cbPattern.exec(milestoneScope)) !== null) {
-            const isChecked = cbm[1].toLowerCase() === 'x';
+            const isChecked = isBoxCharChecked(cbm[1]);
             // #2949: exclude sentinel-range phase ids (0.x backlog, 999.x) from candidacy.
             // comparePhaseNum("0.1","12") === -12, so without this guard an unchecked 0.x
             // backlog row sorts below every real phase and is wrongly selected as next_phase,
