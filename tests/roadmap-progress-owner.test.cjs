@@ -99,6 +99,16 @@ describe('#5761 owner: where the Progress table is', () => {
     assert.notEqual(loc.section, null, 'the section is still reported');
   });
 
+  // Pre-owner the inventory probed `Phase|Milestone` over the whole document before it looked for
+  // `Phase|Plans Complete`, so a milestone table anywhere beat a flat table in the section.
+  test("sectionMiss: 'document' probes each column set over the section and then the document, in order", () => {
+    const flat = '| Phase | Plans Complete | Status | Completed |\n| --- | --- | --- | --- |\n| 1. A | 1/1 | Complete | - |\n';
+    const content = `## Progress\n\n${flat}\n## Notes\n\n${REAL}`;
+    const columns = [['Phase', 'Milestone'], ['Phase', 'Plans Complete']];
+    assert.deepEqual(phaseCells(locateRoadmapProgress(content, { columns, sectionMiss: 'document' }).rows), ['3. Alpha', '4. Beta', '5. Gamma']);
+    assert.deepEqual(phaseCells(locateRoadmapProgress(content, { columns }).rows), ['1. A'], 'the default stays section-scoped');
+  });
+
   test("sectionMiss: 'document' never overrides a Progress section that holds its own table (#2012 decoy stays avoided)", () => {
     const content = `## Notes\n\n${DECOY}\n## Progress\n\n${REAL}`;
     assert.deepEqual(phaseCells(locateRoadmapProgress(content, { sectionMiss: 'document' }).rows), ['3. Alpha', '4. Beta', '5. Gamma']);
