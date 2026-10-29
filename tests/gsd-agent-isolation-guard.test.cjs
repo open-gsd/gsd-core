@@ -2611,8 +2611,15 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
     test(`${name}: a HELD none runs sequentially — no FATAL, and re-records none at the site's own scope`, { skip: NO_BASH }, (t) => {
       const dir = createTempProject('gsd-4904-gate-held-');
       t.after(() => cleanup(dir));
-      const writtenAt = shellDegradesToNone(dir, ['--phase', '7', '--plan', 'plan-a']);
-      const run = runResolveBlock(dir, file, `gsd_run() { node ${JSON.stringify(TOOLS)} "$@"; }`);
+      // Both writes on a pinned clock, a minute apart, so a re-record that did
+      // not happen cannot pass as one written in the same millisecond.
+      const T0 = 1_000_000_000_000;
+      const pinned = (now) => ({ GSD_TEST_MODE: '1', GSD_NOW_MS: String(now) });
+      const degrade = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7', '--plan', 'plan-a', '--force-isolation', 'none'], dir,
+        { GSD_RUNTIME: 'claude', HOME: dir, ...pinned(T0) });
+      assert.equal(degrade.success, true, degrade.error);
+      assert.equal(readSentinelRaw(dir).written_at, T0, 'precondition: the held degrade was written at T0');
+      const run = runResolveBlock(dir, file, `gsd_run() { node ${JSON.stringify(TOOLS)} "$@"; }`, pinned(T0 + 60000));
       assert.equal(run.outcome, 'exited', run.stderr);
       assert.equal(run.exitCode, 0, `the block failed closed on a held none: ${run.stderr}`);
       assert.match(run.stdout, /^ISOLATION=none$/m);
@@ -2624,7 +2631,7 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
       assert.equal(sentinel.decided_by, 'caller', 'the re-record ran: it forces the final value');
       assert.equal(sentinel.plan, null, 'the re-record replaced the held plan-a record with this site\'s scope');
       assert.equal(sentinel.phase, SITE_SCOPE[name]);
-      assert.ok(sentinel.written_at >= writtenAt, 'the re-record is fresh as of this site, not as of the held record');
+      assert.equal(sentinel.written_at, T0 + 60000, 'the re-record is written at this site\'s time, not the held record\'s');
     });
 
     test(`${name}: re-recording a HELD none keeps its decided_at, so following a hold does not restart it`, { skip: NO_BASH }, (t) => {
