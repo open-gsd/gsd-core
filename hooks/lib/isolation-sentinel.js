@@ -387,7 +387,7 @@ function parseSentinelFile(file, clock, parentDirs = []) {
   // could have been re-derived costs one sequential run, while clobbering one
   // the caller owns makes the guard refuse the dispatch entirely (#4222).
   const decidedBy = parsed.decided_by === 'resolver' ? 'resolver' : 'caller';
-  // #4904 review: WHEN the decision was first made. A gate that follows a
+  // #4904: WHEN the decision was first made. A gate that follows a
   // held `none` re-records it (the guard judges the dispatch against the
   // record present at that instant), which refreshes `written_at`; the
   // re-record carries `decided_at` forward unchanged, so the hold below is

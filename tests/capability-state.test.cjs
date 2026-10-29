@@ -819,7 +819,7 @@ describe('cmdCapabilityState — end-to-end via gsd-tools CLI', () => {
       'utf8',
     );
 
-    // Warm-up spawn (#4904 review). This block makes the file's first
+    // Warm-up spawn (#4904). This block makes the file's first
     // `gsd-tools` spawn, and a cold Windows runner has killed exactly that
     // spawn at PROBE_TIMEOUT_MS while the ones after it took 0.5-2.4 s. One
     // untimed-by-the-tests spawn under the seam's default bound pays the cold

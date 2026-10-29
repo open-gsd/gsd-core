@@ -3257,7 +3257,7 @@ describe('#2652 dispatch-site parity — isolation gates on capability, not runt
     }
   });
 
-  // #5126 review, 2026-10-18 Nit 1: the two inline resolvers parse the query's
+  // The two inline resolvers parse the query's
   // JSON with `node -e` one-liners copied verbatim between them — the
   // decision+held pick and the harness-flag pick. The test above pins the
   // call shape only, so one copy could change (a dropped `^[a-z-]+$` check, a
@@ -3300,7 +3300,7 @@ describe('#2652 dispatch-site parity — isolation gates on capability, not runt
     assert.notEqual(mutated.get('_ISOLATION_FIELDS')[0], b.picks.get('_ISOLATION_FIELDS')[0]);
   });
 
-  // #5126 review, 2026-10-21 Nit 4: the byte-equality pin above covers the
+  // The byte-equality pin above covers the
   // executor's HARNESS_FLAG pick only by comparison with the gate's copy, and
   // its EXEC_OK pick by nothing. Run both shipped picks on what the real
   // `inspect-dispatch-isolation --json` prints for a harness-worktree host
