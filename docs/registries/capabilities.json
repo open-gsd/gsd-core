@@ -92,7 +92,7 @@
     "name": "Beads Lifecycle",
     "type": "capability",
     "repo": "davdittrich/gsd-beads",
-    "description": "Ties gsd-core's plan, execute, verify and ship lifecycle to Beads (bd) issue tracking: syncs PLAN.md tasks into bd issues under a phase epic, recalls open issues that may touch a phase before planning, closes completed tasks' issues after each wave, writes BEADS.md, and blocks /gsd-ship while blocking_open or diverged is not 0. Needs the bd binary; every step degrades to a no-op with a STATE.md note when bd is missing.",
+    "description": "Ties gsd-core's plan, execute, verify and ship lifecycle to Beads (bd) issue tracking: syncs PLAN.md tasks into bd issues under a phase epic, recalls open issues that may touch a phase before planning, closes completed tasks' issues after each wave, writes BEADS.md, and blocks /gsd-ship while blocking_open or diverged is not 0. Needs the bd binary; every step except the ship:pre gate degrades to a no-op with a STATE.md note when bd is missing, and the gate blocks /gsd-ship until bd is back or beads.ship_gate is false.",
     "author": "Dennis A. V. Dittrich",
     "license": "MIT",
     "enginesGsd": ">=1.11.0",
