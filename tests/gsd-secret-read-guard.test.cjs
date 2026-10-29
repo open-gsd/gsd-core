@@ -24,7 +24,8 @@
  *   5. Kimi vocabulary (ReadFile / Grep / Shell, `path`) is normalized.
  *   6. Fail-open crash policy: malformed / non-object payloads exit 0.
  *   7. Host opt-in (#5784): with GSD_SECRET_READ_GUARD_ON_CRASH=deny, a crash
- *      and a stalled stdin block as guard-error; any other value allows.
+ *      and a stdin that does not close block as guard-error; any other value
+ *      allows.
  *
  * Every assertion reads typed fields off the stdout JSON (code, path, tool)
  * — never a regex over the reason prose (CONTRIBUTING.md).
@@ -784,6 +785,18 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
 
   test('opted in: malformed JSON (the outer catch) blocks as guard-error', () => {
     assertGuardError(runHook(MALFORMED, DENY_ENV), 'crash');
+  });
+
+  test('opted in: a command deep enough to overflow the scanner still blocks', () => {
+    // The scanners recurse on nesting, so 100,000 unclosed substitutions after
+    // a secret read overflow the stack; the RangeError lands in the outer
+    // catch and fails open by default. Opted in it must block. Only the block
+    // is asserted, not its code, so a scanner that stops overflowing (and
+    // reports the read itself) still passes.
+    const command = `cat ${'.e' + 'nv'}; ` + '"$('.repeat(100000);
+    const r = runHook(bash(command), DENY_ENV);
+    assert.equal(r.status, 2, `expected block (exit 2), got exit ${r.status}; stdout=${r.stdout.slice(0, 200)}`);
+    assert.equal(JSON.parse(r.stdout).decision, 'block');
   });
 
   test('opted in: verdicts on a parsed payload are unchanged', () => {

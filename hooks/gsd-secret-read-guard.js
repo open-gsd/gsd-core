@@ -131,8 +131,8 @@
 //        bug in a hook that runs on EVERY Bash call must never brick a
 //        session; the crash policy is declared once below). A host may opt
 //        in to failing closed instead with GSD_SECRET_READ_GUARD_ON_CRASH=deny
-//        (#5784): a hook error, or no tool input within 3 s, then blocks with
-//        code guard-error.
+//        (#5784): a hook error, or a stdin that does not close within 3 s,
+//        then blocks with code guard-error.
 
 'use strict';
 
@@ -1529,9 +1529,11 @@ function normalizeKimiPayload(data) {
 }
 
 let input = '';
-// A stalled stdin is a hook failure, not a verdict on the payload, so it takes
-// the declared crash policy (#5784) rather than an unconditional allow.
-const stdinTimeout = setTimeout(() => crash(ON_CRASH, crashPayload('no tool input within 3 s')), 3000);
+// A stdin that has not closed within 3 s is a hook failure, not a verdict on
+// the payload, so it takes the declared crash policy (#5784) rather than an
+// unconditional allow. The timer is not reset by `data`: a payload written in
+// full whose stdin stays open is caught here too.
+const stdinTimeout = setTimeout(() => crash(ON_CRASH, crashPayload('stdin did not close within 3 s')), 3000);
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => input += chunk);
 process.stdin.on('end', () => {

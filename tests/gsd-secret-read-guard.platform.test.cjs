@@ -9,7 +9,7 @@
  * failure (#5784)"):
  *   - "opted in: a stalled stdin blocks as guard-error" — holds the hook's
  *     stdin pipe open through a raw child process, so the hook's own 3 s timer
- *     is what ends it; pipe EOF and kill behaviour differ on Windows
+ *     (stdin not closed) is what ends it; pipe EOF and kill behaviour differ on Windows
  *     (raw-child-process).
  *   - "unset: a stalled stdin still allows, silently" — the same held-open
  *     pipe, with the opt-in unset (raw-child-process).
