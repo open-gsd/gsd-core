@@ -3190,7 +3190,15 @@ describe('#4904 review — a renewed hold lapses ten minutes after the degrade w
     assert.deepEqual(fresh.map((s) => s.rel).sort(), Object.keys(FRESH_DECISION_SITES).sort(),
       'each named fresh-decision site is still there, exactly once');
     const following = sites.filter((s) => !fresh.includes(s));
-    assert.ok(following.length >= 7, `expected the gate's two, executor, per-plan, quick, diagnose-issues and quick-batch; found ${following.length}`);
+    assert.deepEqual(following.map((s) => s.rel).sort(), [
+      'gsd-core/references/dispatch-isolation-gate.md',
+      'gsd-core/references/dispatch-isolation-gate.md',
+      'gsd-core/workflows/diagnose-issues.md',
+      'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md',
+      'gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md',
+      'gsd-core/workflows/quick-batch/steps/worktree-dispatch.md',
+      'gsd-core/workflows/quick.md',
+    ], 'the re-records that can follow a held answer: a new one is added here with its own check');
     const missing = following.filter((s) => !s.line.includes('${_RENEW_HELD:+--renew-held "$_RENEW_HELD"}'));
     assert.deepEqual(missing.map((s) => s.at), [], 'a re-record that restarts a held degrade');
   });
