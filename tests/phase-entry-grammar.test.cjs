@@ -34,6 +34,15 @@ describe('phase-entry grammar (#5763)', () => {
     }
   });
 
+  test('decorated: any text but `Phase` may sit between the box and the label, the box is still required (#5764)', () => {
+    const re = (line) => phaseEntryRegExp('Phase\\s+2\\b', 'i', { decorated: true }).test(line);
+    assert.ok(re('- [x] ~~**Phase 2: B**~~'));
+    assert.ok(re('* [ ] 🚧 Phase 2: B'));
+    assert.ok(!re('- [ ] **Phase 5**: needs Phase 2'), 'the first Phase on the line is the label');
+    assert.ok(!re('see - [ ] Phase 2: B'), 'a mention before the box is not an entry');
+    assert.ok(!re('Phase 2: B'), 'no box, no entry');
+  });
+
   test('the split regexp keeps the indent and box neighbours in groups 1 and 2 (#5764)', () => {
     const re = phaseEntrySplitRegExp('Phase\\s+1\\b[^\\n]*', 'i', { state: 'unchecked' });
     assert.equal('  * [ ] __Phase 1: x__'.replace(re, '$1x$2'), '  * [x] __Phase 1: x__');

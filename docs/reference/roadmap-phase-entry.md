@@ -34,10 +34,13 @@ Readers used to disagree on these inputs; they now agree:
 | `- [X] **Phase 2: Name**` under `phase remove` | Not deleted | Deleted |
 | `text - [ ] Phase 2: Name` (mid-line mention) under `phase remove` | Deleted or renumbered | Left alone |
 | Indented `  - [ ] **Phase 1: Name**` under `phase complete` | Indent removed by the tick | Indent kept |
-| `- [ ] 🔴 Phase 2: Name` (anything but a bold wrapper between the box and `Phase`) under `phase remove` and `roadmap upgrade` | Deleted, renumbered or rewritten | Left alone, as every reader already did |
+| `- [ ] *Phase 2: Name*` (a lone `*` wrapper) under `roadmap upgrade` | Rewritten | Left alone, as every reader already did |
+| `- [ ] **Phase 5**: needs Phase 2: X` under `phase remove 2` | Deleted | Left alone: the first `Phase` on the line is its own label |
 | Plan rows nested under an entry, after a less-indented line (`roadmap update-plan-progress`) | The nested rows ran on past the less-indented line | The nested rows end at the less-indented line |
 
 A ROADMAP.md that parsed before still parses: the accepted set only grew, apart from the mid-line, line-break and no-space-after-marker rows, which were never real entries.
+
+`phase remove` is the one writer that also deletes and renumbers a decorated entry, such as the struck-through `- [x] ~~**Phase 4: Delta**~~` of a retired phase or an emoji before the label, which the readers skip: left alone, two entries would end up with one number. The decoration may not contain the word `Phase`.
 
 ## What is not a phase-list entry
 

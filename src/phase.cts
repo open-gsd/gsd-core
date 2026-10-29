@@ -3231,8 +3231,9 @@ function updateRoadmapAfterPhaseRemoval(
     );
     content = content.replace(
       // The entry prefix is the phase-entry grammar's (#5764): line-anchored, so a
-      // mid-line mention of the phase is not deleted.
-      new RegExp(`\\n?${phaseEntryPrefixSrc()}Phase[ \\t]+${padTolerant}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*`, 'gim'),
+      // mid-line mention of the phase is not deleted. `decorated` keeps the tolerance this
+      // delete always had for an entry the readers skip (`- [x] ~~**Phase 2: X**~~`, an emoji).
+      new RegExp(`\\n?${phaseEntryPrefixSrc({ decorated: true })}Phase[ \\t]+${padTolerant}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*`, 'gim'),
       '',
     );
     // ROW-DELETION (not a cell update) — removes the WHOLE Progress-table row
@@ -3314,7 +3315,9 @@ function updateRoadmapAfterPhaseRemoval(
           `${prefix}${stableIdentity(num) ? num : decrementRoadmapPhaseToken(num, removedInt)}${suffix}`,
       );
       content = content.replace(
-        new RegExp(`(${phaseEntryPrefixSrc()}Phase[ \\t]+)(\\d+)([ \\t]*:|[ \\t]+|(?=\\r?$))`, 'gim'),
+        // `decorated`, as the delete above: a struck-through or emoji entry is renumbered too,
+        // or two entries would share one number after the remove.
+        new RegExp(`(${phaseEntryPrefixSrc({ decorated: true })}Phase[ \\t]+)(\\d+)([ \\t]*:|[ \\t]+|(?=\\r?$))`, 'gim'),
         (_match, prefix: string, num: string, suffix: string) =>
           `${prefix}${stableIdentity(num) ? num : decrementRoadmapPhaseNumber(num, removedInt)}${suffix}`,
       );

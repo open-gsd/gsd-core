@@ -36,6 +36,14 @@ export interface PhaseEntryPrefixOptions {
    * the box character).
    */
   state?: 'any' | 'unchecked' | 'checked' | 'captured';
+  /**
+   * Allow any text between the box and the label (`- [x] ~~**Phase 4: X**~~`, an emoji, a
+   * tag) instead of an optional bold token. Only for a writer that must keep numbering
+   * consistent over entries the readers skip, such as `phase remove`'s renumber; it still
+   * needs the box, so a mention in the middle of a sentence is never an entry. Overrides `bold`
+   * and `box`.
+   */
+  decorated?: boolean;
 }
 
 const MARKER_SRC = '[-*]';
@@ -82,7 +90,11 @@ function stateSrc(state: PhaseEntryPrefixOptions['state']): string {
  * state adds exactly one capture group (the box character) at the front.
  */
 export function phaseEntryPrefixSrc(options: PhaseEntryPrefixOptions = {}): string {
-  const { bold = 'optional', box = 'required', state = 'any' } = options;
+  const { bold = 'optional', box = 'required', state = 'any', decorated = false } = options;
+  // The decoration may not contain the word `Phase`, so the entry's own label is the first one
+  // on the line and `- [ ] **Phase 5**: needs Phase 2` is not an entry of phase 2. No gap
+  // before the run: `[ \t]*` then a lazy run overlap and backtrack quadratically.
+  if (decorated) return `${LINE_OPEN_SRC}\\[${stateSrc(state)}\\](?:(?!Phase)[^\\r\\n])*?`;
   const boxSrc = `\\[${stateSrc(state)}\\][ \\t]*`;
   const body = box === 'optional' ? `(?:${boxSrc})?` : boxSrc;
   return `${LINE_OPEN_SRC}${body}${boldSrcFor(bold)}`;

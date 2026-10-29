@@ -400,6 +400,35 @@ describe('writers leave text that is not a phase entry alone (#5764)', () => {
     assert.deepEqual(entryLines(text), ['- [ ] **Phase 1: Name**', '- [ ] **Phase 2: Name**']);
   });
 
+  test('phase remove renumbers decorated entries too, and a mention inside another entry is not an entry', () => {
+    writeProject(
+      dir,
+      [
+        ...MILESTONE,
+        '- [ ] **Phase 1: A**',
+        '- [x] ~~**Phase 2: B**~~',
+        '- [ ] 🚧 **Phase 3: C**',
+        '- [ ] **Phase 4: D**, needs Phase 2: B',
+        '',
+        '### Phase 1: A',
+        '',
+        '### Phase 2: B',
+        '',
+        '### Phase 3: C',
+        '',
+        '### Phase 4: D',
+        '',
+      ].join('\n'),
+    );
+    const result = runGsdTools(['phase', 'remove', '1', '--force'], dir);
+    assert.ok(result.success, result.error);
+    assert.deepEqual(entryLines(readRoadmap(dir)), [
+      '- [x] ~~**Phase 1: B**~~',
+      '- [ ] 🚧 **Phase 2: C**',
+      '- [ ] **Phase 3: D**, needs Phase 2: B',
+    ]);
+  });
+
   test('phase complete ticks Phase 2 only: Phase 2.1 and Phase 20 are different phases', () => {
     writeProject(
       dir,
