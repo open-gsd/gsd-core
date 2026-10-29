@@ -184,9 +184,11 @@ before. The record carries `decided_at`, when the degrade was decided, beside `w
 `--renew-held <ms>` re-record refreshes `written_at` for the guard and records the `decidedAt` of
 the answer the site followed (never later than the write), and the hold measures its ten minutes
 from `decided_at`. The value comes from the answer, not from the file at write time, which may by
-then hold another plan's record. So a degrade lapses ten minutes after it was
-decided, however many gates follow it, and runs started a few minutes apart do not chain it.
-A forced `none` without `--renew-held` is a new decision and starts its own ten minutes. The re-record is
+then hold another plan's record. So renewing does not extend a degrade: it lapses ten minutes
+after it was decided, however many gates renew it. A forced `none` without `--renew-held` is a
+new decision and starts its own ten minutes, so the sites that decide one themselves (Pattern B
+segments, the orchestrator-worktree fallback below) keep the next unscoped query at `none` while
+they recur less than ten minutes apart. The re-record is
 still mandatory after any degrade a site decides itself: the resolver cannot compute these
 degrades, it only stops racing you for the file.
 
