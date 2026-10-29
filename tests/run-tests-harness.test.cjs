@@ -3463,14 +3463,18 @@ describe('partitionIsolatedFiles (#4497 codex-config.test.cjs chunk isolation, d
   // genuinely heavy — custom-phase-readers.test.cjs (~240s) and
   // lint-gate-evidence-drift.test.cjs (~144s) — and had been packed as a
   // 7s mean-weight file; both now cross the bar and are isolated by name.
+  //
+  // #5805 then re-measured every unit file from per-file durations on the CI
+  // runners under c8 (push run 40895178866 on next), replacing the Docker
+  // figures. Under real CI cost, emitted-attribution.test.cjs,
+  // install-minimal-hooks.test.cjs and install.test.cjs fall below the bar
+  // and roadmap.test.cjs crosses it; the pin follows the measurement.
   const EXPECTED_ISOLATED_UNIT_FILES = [
     'config.test.cjs',
     'custom-phase-readers.test.cjs',
-    'emitted-attribution.test.cjs',
-    'install-minimal-hooks.test.cjs',
     'lint-gate-evidence-drift.test.cjs',
-    'install.test.cjs',
     'phase.test.cjs',
+    'roadmap.test.cjs',
     'run-tests-harness.test.cjs',
     'state.test.cjs',
   ].sort();

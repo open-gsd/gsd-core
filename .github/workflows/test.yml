@@ -466,8 +466,10 @@ jobs:
           # `scope: targeted` lane runs no aux suite on its own, so this
           # must stay empty there. tests/ci-full-lane-sharding.test.cjs pins both
           # halves of this contract. Reserve-value derivation:
-          # .gsd/bug/fix-4070-shard1-aux-suite-budget/10-diagnosis.md.
-          RUN_TESTS_SHARD_RESERVE: ${{ matrix.scope == 'full' && '1:77' || '' }}
+          # .gsd/bug/fix-4070-shard1-aux-suite-budget/10-diagnosis.md (original
+          # 77, Docker-measured); #5805 re-derived it as 69 for the CI-measured
+          # table, see the derivation comment in tests/ci-full-lane-sharding.test.cjs.
+          RUN_TESTS_SHARD_RESERVE: ${{ matrix.scope == 'full' && '1:69' || '' }}
           # Real per-file CI durations (c8-instrumented, GitHub runner), the
           # same export the conformance lanes use (#5071). tests/test-timings.json
           # was measured in Docker without coverage, so it under-prices the
