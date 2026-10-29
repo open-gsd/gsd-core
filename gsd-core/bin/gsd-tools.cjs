@@ -2627,9 +2627,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // write time, so it can shorten a hold but never extend one.
     const renewIdx = args.indexOf('--renew-held');
     const renewArg = renewIdx !== -1 ? args[renewIdx + 1] : undefined;
-    const decidedAt = decidedBy === 'caller' && recordedIsolation === 'none' &&
-      typeof renewArg === 'string' && /^\d{1,16}$/.test(renewArg) && Number.isSafeInteger(Number(renewArg))
-      ? Number(renewArg)
+    const decidedAt = decidedBy === 'caller' && recordedIsolation === 'none'
+      ? dispatchIsolationOwner().parseRenewHeldMs(renewArg)
       : null;
     if (heldDegrade === null) {
       try {

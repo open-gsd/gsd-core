@@ -75,3 +75,16 @@ export function isDispatchIsolation(value: unknown): value is DispatchIsolation 
 export function isBaseCheckIsolationMode(value: unknown): value is BaseCheckIsolationMode {
   return typeof value === 'string' && BASE_CHECK_ISOLATION_VOCABULARY.has(value);
 }
+
+/**
+ * The decision time a dispatch site passes back with `--renew-held <ms>`
+ * (#4904): the `decidedAt` its held answer reported, in epoch milliseconds.
+ * Only 1 to 16 decimal digits whose value is a safe integer parse; leading
+ * zeros read as decimal. Anything else is null, and the re-record is then a
+ * fresh decision.
+ */
+export function parseRenewHeldMs(value: unknown): number | null {
+  if (typeof value !== 'string' || !/^\d{1,16}$/.test(value)) return null;
+  const ms = Number(value);
+  return Number.isSafeInteger(ms) ? ms : null;
+}
