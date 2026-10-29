@@ -100,7 +100,7 @@ const { harvestPriorVerifyCommands } = verifyCommandGrounding;
 
 const { output, error, ERROR_REASON, formatDiagnosticToken } = io;
 const { loadConfig, loadConfigResolved } = configLoader;
-const { resolveModelInternal, resolveGranularityInternal, assertValidGranularityOverride } = modelResolver;
+const { resolveModelInternal, resolveEffortArgInternal, resolveGranularityInternal, assertValidGranularityOverride } = modelResolver;
 const {
   phaseDirectoryOptions, findPhaseInternal, listMilestonePhaseDirs, listAllPhaseDirs,
 } = phaseLocator;
@@ -1133,7 +1133,9 @@ function cmdInitExecutePhase(
 
   const result: Record<string, unknown> = {
     executor_model: resolveModelInternal(cwd, 'gsd-executor'),
+    executor_effort_arg: resolveEffortArgInternal(cwd, 'gsd-executor'),
     verifier_model: resolveModelInternal(cwd, 'gsd-verifier'),
+    verifier_effort_arg: resolveEffortArgInternal(cwd, 'gsd-verifier'),
 
     tdd_mode: options['tdd'] || Boolean(config.tdd_mode) || false,
     commit_docs: config.commit_docs,
@@ -1347,8 +1349,11 @@ function cmdInitPlanPhase(
 
   const result: Record<string, unknown> = {
     researcher_model: resolveModelInternal(cwd, 'gsd-phase-researcher'),
+    researcher_effort_arg: resolveEffortArgInternal(cwd, 'gsd-phase-researcher'),
     planner_model: resolveModelInternal(cwd, 'gsd-planner'),
+    planner_effort_arg: resolveEffortArgInternal(cwd, 'gsd-planner'),
     checker_model: resolveModelInternal(cwd, 'gsd-plan-checker'),
+    checker_effort_arg: resolveEffortArgInternal(cwd, 'gsd-plan-checker'),
 
     tdd_mode: options['tdd'] || Boolean(config.tdd_mode) || false,
     granularity,
@@ -1621,8 +1626,11 @@ function cmdInitNewProject(cwd: string, raw: boolean, options: Record<string, un
 
   const result: Record<string, unknown> = {
     researcher_model: resolveModelInternal(cwd, 'gsd-project-researcher'),
+    researcher_effort_arg: resolveEffortArgInternal(cwd, 'gsd-project-researcher'),
     synthesizer_model: resolveModelInternal(cwd, 'gsd-research-synthesizer'),
+    synthesizer_effort_arg: resolveEffortArgInternal(cwd, 'gsd-research-synthesizer'),
     roadmapper_model: resolveModelInternal(cwd, 'gsd-roadmapper'),
+    roadmapper_effort_arg: resolveEffortArgInternal(cwd, 'gsd-roadmapper'),
 
     commit_docs: config.commit_docs,
 
@@ -1704,8 +1712,11 @@ function cmdInitNewMilestone(cwd: string, raw: boolean, options: Record<string, 
 
   const result: Record<string, unknown> = {
     researcher_model: resolveModelInternal(cwd, 'gsd-project-researcher'),
+    researcher_effort_arg: resolveEffortArgInternal(cwd, 'gsd-project-researcher'),
     synthesizer_model: resolveModelInternal(cwd, 'gsd-research-synthesizer'),
+    synthesizer_effort_arg: resolveEffortArgInternal(cwd, 'gsd-research-synthesizer'),
     roadmapper_model: resolveModelInternal(cwd, 'gsd-roadmapper'),
+    roadmapper_effort_arg: resolveEffortArgInternal(cwd, 'gsd-roadmapper'),
 
     commit_docs: config.commit_docs,
     research_enabled: config.research,
@@ -1827,16 +1838,22 @@ function cmdInitQuick(
 
   const result: Record<string, unknown> = {
     planner_model: resolveModelInternal(cwd, 'gsd-planner'),
+    planner_effort_arg: resolveEffortArgInternal(cwd, 'gsd-planner'),
     executor_model: resolveModelInternal(cwd, 'gsd-executor'),
+    executor_effort_arg: resolveEffortArgInternal(cwd, 'gsd-executor'),
     checker_model: resolveModelInternal(cwd, 'gsd-plan-checker'),
+    checker_effort_arg: resolveEffortArgInternal(cwd, 'gsd-plan-checker'),
     verifier_model: resolveModelInternal(cwd, 'gsd-verifier'),
+    verifier_effort_arg: resolveEffortArgInternal(cwd, 'gsd-verifier'),
     // #3936: Step 4.75 dispatches gsd-phase-researcher; resolve its own tier
     // (parity with cmdInitPlanPhase) so the research spawn stops pinning
     // planner_model.
     researcher_model: resolveModelInternal(cwd, 'gsd-phase-researcher'),
+    researcher_effort_arg: resolveEffortArgInternal(cwd, 'gsd-phase-researcher'),
     // #2072: the quick review step spawns gsd-code-reviewer; resolve its own model
     // so model_overrides / models.verification apply (was reusing executor_model).
     reviewer_model: resolveModelInternal(cwd, 'gsd-code-reviewer'),
+    reviewer_effort_arg: resolveEffortArgInternal(cwd, 'gsd-code-reviewer'),
 
     commit_docs: config.commit_docs,
     branch_name: quickBranchName,
@@ -1904,11 +1921,17 @@ function cmdInitQuickBatch(
 
   const result: Record<string, unknown> = {
     planner_model: resolveModelInternal(cwd, 'gsd-planner'),
+    planner_effort_arg: resolveEffortArgInternal(cwd, 'gsd-planner'),
     executor_model: resolveModelInternal(cwd, 'gsd-executor'),
+    executor_effort_arg: resolveEffortArgInternal(cwd, 'gsd-executor'),
     checker_model: resolveModelInternal(cwd, 'gsd-plan-checker'),
+    checker_effort_arg: resolveEffortArgInternal(cwd, 'gsd-plan-checker'),
     verifier_model: resolveModelInternal(cwd, 'gsd-verifier'),
+    verifier_effort_arg: resolveEffortArgInternal(cwd, 'gsd-verifier'),
     researcher_model: resolveModelInternal(cwd, 'gsd-phase-researcher'),
+    researcher_effort_arg: resolveEffortArgInternal(cwd, 'gsd-phase-researcher'),
     reviewer_model: resolveModelInternal(cwd, 'gsd-code-reviewer'),
+    reviewer_effort_arg: resolveEffortArgInternal(cwd, 'gsd-code-reviewer'),
 
     commit_docs: config.commit_docs,
 
@@ -2071,7 +2094,9 @@ function cmdInitVerifyWork(cwd: string, phase: string, raw: boolean): void {
 
   const result: Record<string, unknown> = {
     planner_model: resolveModelInternal(cwd, 'gsd-planner'),
+    planner_effort_arg: resolveEffortArgInternal(cwd, 'gsd-planner'),
     checker_model: resolveModelInternal(cwd, 'gsd-plan-checker'),
+    checker_effort_arg: resolveEffortArgInternal(cwd, 'gsd-plan-checker'),
 
     commit_docs: config.commit_docs,
 
@@ -2979,6 +3004,7 @@ function cmdInitMapCodebase(cwd: string, raw: boolean): void {
 
   const result: Record<string, unknown> = {
     mapper_model: resolveModelInternal(cwd, 'gsd-codebase-mapper'),
+    mapper_effort_arg: resolveEffortArgInternal(cwd, 'gsd-codebase-mapper'),
 
     commit_docs: config.commit_docs,
     search_gitignored: config.search_gitignored,
@@ -3895,6 +3921,7 @@ function cmdInitDebug(cwd: string, raw: boolean, options: Record<string, unknown
     // own cwd may differ from the orchestrator's.
     debug_dir: toPosixPath(planningPaths(cwd).debug),
     debugger_model: resolveModelInternal(cwd, 'gsd-debugger'),
+    debugger_effort_arg: resolveEffortArgInternal(cwd, 'gsd-debugger'),
     tdd_mode: Boolean(config.tdd_mode),
     diagnose: options['diagnose'] === true,
   };
@@ -4182,7 +4209,9 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
 
   const result: Record<string, unknown> = {
     executor_model: resolveModelInternal(cwd, 'gsd-executor'),
+    executor_effort_arg: resolveEffortArgInternal(cwd, 'gsd-executor'),
     planner_model: resolveModelInternal(cwd, 'gsd-planner'),
+    planner_effort_arg: resolveEffortArgInternal(cwd, 'gsd-planner'),
 
     commit_docs: config.commit_docs,
 
