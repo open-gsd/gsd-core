@@ -125,6 +125,7 @@ module.exports = {
   "tests/gsd-check-update-worker-platform-gate.test.cjs",
   "tests/gsd-mcp-server.test.cjs",
   "tests/gsd-path-export-hook.test.cjs",
+  "tests/gsd-secret-read-guard.platform.test.cjs",
   "tests/gsd-statusline.test.cjs",
   "tests/gsd-tool-dir.platform.test.cjs",
   "tests/gsd-validate-commit-crash-policy.test.cjs",
