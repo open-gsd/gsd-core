@@ -517,6 +517,7 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
     BASE_CHECK_ISOLATION_VOCABULARY,
     isDispatchIsolation,
     isBaseCheckIsolationMode,
+    parseRenewHeldMs,
   } = owner;
   const { VALID_ISOLATION: hookMirror } = require(path.join(__dirname, '../hooks/lib/isolation-sentinel.js'));
   const { cmdWorktreeBaseCheck } = require(path.join(__dirname, '../gsd-core/bin/lib/worktree-base-ref.cjs'));
@@ -589,6 +590,38 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
       assert.deepEqual(sorted(alts), sorted(DISPATCH_ISOLATION_MODES),
         `${site}: this shell validity list has drifted from src/dispatch-isolation.cts`);
     }
+  });
+
+  // #4904: `--renew-held <ms>` carries a held answer's decidedAt back. The
+  // limits are the 16-digit cap and Number.MAX_SAFE_INTEGER; at the CLI both
+  // sides of the second clamp to the write time, so they are pinned here.
+  for (const [value, expected] of [
+    [String(Number.MAX_SAFE_INTEGER - 1), Number.MAX_SAFE_INTEGER - 1],
+    [String(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER],
+    [String(Number.MAX_SAFE_INTEGER + 1), null],
+    ['9999999999999999', null],
+    ['0001000000000000', 1000000000000],
+    ['010', 10],
+    ['00001000000000000', null],
+    ['0', 0],
+    ['', null], ['-1', null], ['1e12', null], ['1.5', null], [' 1', null], ['1 ', null], ['0x10', null],
+    [12, null], [undefined, null],
+  ]) {
+    test(`parseRenewHeldMs(${JSON.stringify(value)}) -> ${expected}`, () => {
+      assert.equal(parseRenewHeldMs(value), expected);
+    });
+  }
+
+  test('property: every non-negative safe integer round-trips through its decimal string', () => {
+    fc.assert(fc.property(fc.integer({ min: 0, max: Number.MAX_SAFE_INTEGER }), (n) => {
+      assert.equal(parseRenewHeldMs(String(n)), n);
+    }));
+  });
+
+  test('property: a string that is not 1 to 16 decimal digits parses to null', () => {
+    fc.assert(fc.property(fc.string({ maxLength: 20 }).filter((s) => !/^\d{1,16}$/.test(s)), (s) => {
+      assert.equal(parseRenewHeldMs(s), null);
+    }));
   });
 
   test('the base-check subset is exactly the owner minus `none` — derived, not a second list', () => {
