@@ -48,7 +48,20 @@ export interface ProgressSectionRange {
   end: number;
 }
 
+/**
+ * The ONE textual expression of "this heading is titled Progress": the title
+ * starts with the word `Progress`, any suffix admitted (`Progress`,
+ * `Progress Tracker`, `Progress (v2.1)`), case-insensitive. `findProgressSection`
+ * adds the level-2 anchor; the bracket writers (`phase.cts`) reuse the title
+ * test at their own levels (#4304).
+ */
+export function isProgressHeadingTitle(text: string): boolean {
+  return /^Progress\b/i.test(text.trim());
+}
+
 export interface FindProgressSectionOptions {
+  /** Heading offsets that are not candidates (the bracket remover's archived/closed milestone headings). */
+  exclude?: ((offset: number) => boolean) | null;
   /** Active-milestone character range (`maskArchivedDetails().activeRange`): a Progress heading inside it wins. */
   active?: { start: number; end: number } | null;
 }
@@ -107,8 +120,9 @@ export function milestoneVersionOf(value: unknown): string | null {
  */
 export function findProgressSection(content: string, options: FindProgressSectionOptions = {}): ProgressSectionRange | null {
   const headings = tokenizeHeadings(content);
-  const isProgress = (h: HeadingToken): boolean => h.level === 2 && /^Progress\b/i.test(h.text);
-  const { active } = options;
+  const { active, exclude } = options;
+  const isProgress = (h: HeadingToken): boolean =>
+    h.level === 2 && isProgressHeadingTitle(h.text) && !(exclude && exclude(h.offset));
   // #5553: with an active-milestone range, the first Progress heading INSIDE it wins over an
   // earlier one (a shipped plain section's own table); with none in range, the first overall.
   const inActive = active ? headings.findIndex((h) => isProgress(h) && h.offset >= active.start && h.offset < active.end) : -1;

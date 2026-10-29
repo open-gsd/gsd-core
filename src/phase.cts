@@ -129,7 +129,7 @@ const {
 import phaseLifecycleMod = require('./phase-lifecycle.cjs');
 const { deriveProgressFromRoadmap: deriveProgressFromRoadmapForIntent, clampPercent: clampPercentForIntent } = phaseLifecycleMod;
 // #5761: the Progress table locator and milestone-identity helpers live in their one owner.
-import { locateRoadmapProgress, editRoadmapProgress, milestoneVersionOf, normalizeMilestoneToken } from './roadmap-progress.cjs';
+import { locateRoadmapProgress, editRoadmapProgress, findProgressSection, isProgressHeadingTitle, milestoneVersionOf, normalizeMilestoneToken } from './roadmap-progress.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
@@ -4353,8 +4353,8 @@ function lineStartsInMilestoneOwnTable(
 // a suffixed OWN heading ("## Progress (v2.1)", "### Progress (v2.0)")
 // never engaged the own-section scope even though the document-first scope
 // already matched the same suffix. Both interpolate this one source now.
-const BRACKET_PROGRESS_HEADING_TITLE_SRC = 'Progress\\b';
-const BRACKET_PROGRESS_HEADING_TITLE_RE = new RegExp(`^${BRACKET_PROGRESS_HEADING_TITLE_SRC}`, 'i');
+// #5762: that one source now lives in the Roadmap Progress Module (`isProgressHeadingTitle`);
+// `bracketProgressSectionRange` below is `findProgressSection` minus archived milestones.
 
 /**
  * #4304: the SAME `## Progress`-section scope legacy's
@@ -4366,17 +4366,10 @@ const BRACKET_PROGRESS_HEADING_TITLE_RE = new RegExp(`^${BRACKET_PROGRESS_HEADIN
  * in scope for the target row's own deletion, exactly as it already was.
  */
 function bracketProgressSectionRange(content: string): { start: number; end: number } | null {
+  // #5762: the Progress owner's section (first level-2 Progress heading to the next level-1/2
+  // heading), minus the archived/closed milestone headings this remover must not touch.
   const historicalLineStarts = archivedOrClosedMilestoneLineStarts(content);
-  const headings = tokenizeHeadings(content);
-  const headingIndex = headings.findIndex(
-    (heading) => heading.level === 2
-      && BRACKET_PROGRESS_HEADING_TITLE_RE.test(heading.text.trim())
-      && !historicalLineStarts.has(heading.offset),
-  );
-  if (headingIndex === -1) return null;
-  const start = headings[headingIndex].offset;
-  const nextHeading = headings.slice(headingIndex + 1).find((heading) => heading.level <= 2);
-  return { start, end: nextHeading?.offset ?? content.length };
+  return findProgressSection(content, { exclude: (offset) => historicalLineStarts.has(offset) });
 }
 
 /**
@@ -4544,7 +4537,7 @@ function bracketProgressSectionOwnedByOtherMilestone(
 
 /**
  * #4304: the active milestone's OWN heading
- * titled "Progress" (`BRACKET_PROGRESS_HEADING_TITLE_RE` — any suffix, any
+ * titled "Progress" (`isProgressHeadingTitle` — any suffix, any
  * level, case-insensitive), found ANYWHERE inside its primary or details
  * ranges — regardless of what precedes it within those ranges.
  * `bracketMilestoneOwnTableEnd`/`lineStartsInMilestoneOwnTable` above anchor
@@ -4586,7 +4579,7 @@ function bracketOwnProgressSectionRanges(
   headings: readonly HeadingToken[],
 ): { start: number; end: number }[] {
   if (!ranges) return [];
-  const isProgressHeading = (h: HeadingToken): boolean => BRACKET_PROGRESS_HEADING_TITLE_RE.test(h.text.trim());
+  const isProgressHeading = (h: HeadingToken): boolean => isProgressHeadingTitle(h.text);
   const withinActive = (offset: number): boolean =>
     (offset >= ranges.primary.start && offset < ranges.primary.end)
     || Boolean(ranges.details && offset >= ranges.details.start && offset < ranges.details.end)
@@ -4829,7 +4822,7 @@ function planBracketRoadmapRemoval(
   // to a different milestone is that milestone's own record: kept, and not
   // a surviving row of the removed identity.
   const progressSections = headingsForOwnTable
-    .filter((heading) => BRACKET_PROGRESS_HEADING_TITLE_RE.test(heading.text.trim()))
+    .filter((heading) => isProgressHeadingTitle(heading.text))
     .map((heading) => ({
       start: heading.offset,
       end: bracketMilestoneOwnTableEnd(content, heading.offset, headingsForOwnTable),
@@ -4861,7 +4854,7 @@ function planBracketRoadmapRemoval(
       nearest = heading;
     }
     if (!nearest || windowAnchors.has(nearest.offset)) return true;
-    if (BRACKET_PROGRESS_HEADING_TITLE_RE.test(nearest.text.trim())) return true;
+    if (isProgressHeadingTitle(nearest.text)) return true;
     return classifyBracketOwnedLine('#'.repeat(nearest.level) + ' ' + nearest.text).kind === 'heading';
   };
 

@@ -15,7 +15,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { locateRoadmapProgress, editRoadmapProgress } = require('../gsd-core/bin/lib/roadmap-progress.cjs');
+const { locateRoadmapProgress, editRoadmapProgress, findProgressSection, isProgressHeadingTitle } = require('../gsd-core/bin/lib/roadmap-progress.cjs');
 const { editProgressTableSlice } = require('../gsd-core/bin/lib/roadmap.cjs');
 const { updateTraceabilityCell } = require('../gsd-core/bin/lib/markdown-table.cjs');
 const roadmapParser = require('../gsd-core/bin/lib/roadmap-parser.cjs');
@@ -56,7 +56,8 @@ function check(writer) {
   return Object.entries(CORPUS)
     .filter(([, content]) => {
       const { seen } = sliceSeenBy(writer, content);
-      return seen.length !== 1 || JSON.stringify(phaseNumbers(locateRoadmapProgress(seen[0]).rows)) !== JSON.stringify(expectedFor(content));
+      // An empty expectation would let two empty row lists "agree".
+      return expectedFor(content).length === 0 || seen.length !== 1 || JSON.stringify(phaseNumbers(locateRoadmapProgress(seen[0]).rows)) !== JSON.stringify(expectedFor(content));
     })
     .map(([name]) => name);
 }
@@ -145,6 +146,24 @@ describe('#5762 owner write side: headingless, active range, edges', () => {
       const out = editRoadmapProgress(content, (s) => s.replace('Planned', 'Done'));
       assert.equal(out, content.replace('Planned', 'Done'), JSON.stringify(tail));
     }
+  });
+
+  test('the slice ends at an indented or bare ## heading, as the readers do (documented change)', () => {
+    for (const next of ['  ## Indented', '##']) {
+      const content = `## Progress\n\n${HEADER}\n${rowsOf([1, 'One'])}\n${next}\n\ntail\n`;
+      const seen = [];
+      editRoadmapProgress(content, (s) => { seen.push(s); return s; });
+      assert.ok(!seen[0].includes('tail'), JSON.stringify(next));
+    }
+  });
+
+  test('exclude drops candidate headings (the bracket remover skips archived milestones)', () => {
+    const first = `## Progress\n\n${table(rowsOf([1, 'Archived']))}\n## Next\n\n`;
+    const content = `${first}## Progress\n\n${table(rowsOf([2, 'Live']))}`;
+    const section = findProgressSection(content, { exclude: (offset) => offset === 0 });
+    assert.equal(section.start, first.length);
+    assert.ok(isProgressHeadingTitle('Progress (v2.1)') && isProgressHeadingTitle('progress tracker'));
+    assert.ok(!isProgressHeadingTitle('Progressive') && !isProgressHeadingTitle('Not Progress'));
   });
 
   test('CRLF content: the splice adds no bare LF and a CRLF section equals the LF result', () => {
