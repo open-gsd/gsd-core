@@ -72,7 +72,7 @@ function isWorkstreamForwardingSweepLine(sign, body, addedBodies, removedBodies)
   return false;
 }
 
-// #4904 review: the hold-renewal sweep appends the same single expansion to every
+// #4904: the hold-renewal sweep appends the same single expansion to every
 // re-record of a dispatch-isolation decision that can follow a held answer, quick.md's
 // and quick-batch's included. Like the --ws sweep above it is a mechanical propagation,
 // and it is recognized the same way: an added line counts only when stripping the
