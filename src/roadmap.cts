@@ -35,7 +35,7 @@ const { stripShippedMilestones, extractCurrentMilestone, extractCurrentMilestone
 import { tokenizeHeadings } from './markdown-sectionizer.cjs';
 import { escapeCell, findTableWithColumns, parseMarkdownTable, updateTableCell } from './markdown-table.cjs';
 import { clampPercent } from './phase-lifecycle.cjs';
-import { normalizeMilestoneToken } from './roadmap-progress.cjs';
+import { normalizeMilestoneToken, editRoadmapProgress } from './roadmap-progress.cjs';
 import { platformWriteSync, contentChangedAfterNormalize } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -1202,22 +1202,10 @@ function editFromPhaseTable(scoped: string, edit: (scoped: string) => string): s
  * the prior regex `.replace()`'s no-match-is-a-no-op semantics.
  */
 function editProgressTableSlice(content: string, edit: (scoped: string) => string, active: { start: number; end: number } | null = null): string {
-  // The first `## Progress` inside the active milestone's range wins over an earlier one
-  // (a shipped plain section's own table); with none in range, the first one overall.
-  const all = [...content.matchAll(/^##[ \t]+Progress\b/gim)];
-  const progressMatch = all.find((m) => active !== null && m.index >= active.start && m.index < active.end) ?? all[0];
-  if (!progressMatch || progressMatch.index === undefined) {
-    return editFromPhaseTable(content, edit);
-  }
-
-  const headingOffset = progressMatch.index;
-  const beforeHeading = content.slice(0, headingOffset);
-  const fromHeading = content.slice(headingOffset);
-  const nextHeading = fromHeading.search(/\n#{1,2}[ \t]/);
-  const scoped = nextHeading >= 0 ? fromHeading.slice(0, nextHeading) : fromHeading;
-  const after = nextHeading >= 0 ? fromHeading.slice(nextHeading) : '';
-
-  return beforeHeading + editFromPhaseTable(scoped, edit) + after;
+  // #5762: the Progress section is the owner's (`editRoadmapProgress`, the write side of the
+  // rule every reader uses; the first one inside the active milestone's range wins, #5553).
+  // A headingless document is edited whole, from the phase table's header.
+  return editRoadmapProgress(content, (scoped) => editFromPhaseTable(scoped, edit), { active });
 }
 
 function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | undefined, raw: boolean): void {

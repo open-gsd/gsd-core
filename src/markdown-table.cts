@@ -10,7 +10,7 @@
  * {ok,data|kind}; the two never mix (different modules).
  */
 
-import { collectSection, collectSections, replaceSection } from './markdown-sectionizer.cjs';
+import { collectSection, collectSections, replaceSection, tokenizeHeadings, headingSliceRange, editHeadingSlice } from './markdown-sectionizer.cjs';
 import type { HeadingToken, Section } from './markdown-sectionizer.cjs';
 import type { Result } from './write-set.cjs';
 export type { Result } from './write-set.cjs';
@@ -1102,6 +1102,33 @@ export function resetQuickTaskRows(
   const content = replaceSection(stateContent, section, newBody);
 
   return { ok: true, value: { content, cleared, variant: match.label } };
+}
+
+/**
+ * `updateTableCell` scoped to REQUIREMENTS.md's `## Traceability` (or
+ * `## Traceability Status`) section (#2245 F1, #5762): `updateTableCell` binds
+ * to the first table it finds, and the shipped template puts an `## Out of
+ * Scope` table (`Feature | Reason`, no `Status` column) before Traceability, so
+ * an unscoped call never reaches the real rows. The ONE copy of this slice
+ * (it used to live in both milestone.cts and phase.cts); the heading rule is
+ * the Progress owner's — first level-2 heading outside fenced code, running to
+ * the next level-1/2 heading. No such heading: the whole text, as before.
+ */
+export function updateTraceabilityCell(
+  text: string,
+  match: (row: Record<string, string>, index: number) => boolean,
+  column: string,
+  newValue: string | ((current: string) => string),
+): Result<string> {
+  const headings = tokenizeHeadings(text);
+  const index = headings.findIndex((h) => h.level === 2 && /^Traceability(?:[ \t]+Status)?\b/i.test(h.text));
+  if (index === -1) return updateTableCell(text, match, column, newValue);
+  let result: Result<string> = { ok: false, reason: 'no matching row' };
+  const edited = editHeadingSlice(text, headingSliceRange(text, headings, index, 2), (scoped) => {
+    result = updateTableCell(scoped, match, column, newValue);
+    return result.ok ? result.value : scoped;
+  });
+  return result.ok ? { ok: true, value: edited } : result;
 }
 
 // Consumers: require('../gsd-core/bin/lib/markdown-table.cjs')
