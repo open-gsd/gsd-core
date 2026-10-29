@@ -2,5 +2,5 @@
 type: Fixed
 pr: 5149
 ---
-<!-- docs-exempt: prompt guidance, reference table alignment, and schema doc table; no public CLI change -->
+<!-- docs-exempt: prompt guidance and reference table alignment; no public CLI change -->
 **Planners emitted symbols or endpoints in from:/to:, failing `verify key-links`** — `agents/gsd-planner.md` and `gsd-core/references/planner-guidance.md` now explicitly specify that `from:` and `to:` must be project-relative file paths only, with symbols and endpoints placed in `via:` (#4946).

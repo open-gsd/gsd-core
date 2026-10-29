@@ -599,7 +599,7 @@ must_haves:
 | `key_links[].from` | Source file (relative path from project root). Describe components or symbols in `via:`. |
 | `key_links[].to` | Target file (relative path from project root). Describe endpoints, APIs, or modules in `via:`. |
 | `key_links[].via` | How they connect, including any endpoint or symbol name (e.g. `fetch in useEffect — calls /api/chat`, `Prisma query via prisma.message`). |
-| `key_links[].pattern` | Optional. Regex to verify connection exists. When omitted, verification requires the `to` path string to appear in `from`. |
+| `key_links[].pattern` | Optional. Regex to verify connection exists. |
 
 **Why this matters:**
 
