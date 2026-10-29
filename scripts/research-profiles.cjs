@@ -132,7 +132,7 @@ const PROFILES = [
   {
     name: 'gsd-research-synthesizer',
     description:
-      'Synthesizes research outputs from parallel researcher agents into SUMMARY.md. Spawned by /gsd:new-project or /gsd:new-milestone after the researcher agents complete.',
+      'Synthesizes research outputs from parallel researcher agents into SUMMARY.md. Spawned by /gsd:new-project after 4 researcher agents complete.',
     color: 'purple',
     tools: 'Read, Write, Bash, Skill',
     requiredIncludes: [],

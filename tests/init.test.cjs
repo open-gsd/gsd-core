@@ -3371,8 +3371,8 @@ describe('#2376 — init.* path fields resolve when process cwd differs from --c
     // #5148: the synthesizer reads only the files written in this run, so its
     // required_reading is filled from a directive whose lines are built from {research_dir}.
     assert.ok(content.includes(
-      'Fill `{required_reading_lines}` with one `- {research_dir}/{FILE}` line per file'
-    ), 'research-synthesizer required_reading lines must be built from {research_dir}, not bare .planning/research/*.md literals');
+      '`{required_reading_lines}` is one line `- {research_dir}/{FILE}` per dimension'
+    ),'research-synthesizer required_reading lines must be built from {research_dir}, not bare .planning/research/*.md literals');
     assert.ok(content.includes(
       '<required_reading>\n{required_reading_lines}\n</required_reading>'
     ), 'research-synthesizer spawn must read the {required_reading_lines} built from {research_dir}');
@@ -3383,10 +3383,10 @@ describe('#2376 — init.* path fields resolve when process cwd differs from --c
 
     // #5148: the SUMMARY.md line is kept only when research ran in this run.
     assert.ok(content.includes(
-      'Keep the `{research_dir}/SUMMARY.md` line only if research ran in Step 8'
+      '`{research_summary_line}` is `- {research_dir}/SUMMARY.md` when research ran'
     ), 'roadmapper SUMMARY.md line must be conditional on research having run');
     assert.ok(content.includes(
-      '<required_reading>\n- {project_path}\n- {requirements_path}\n- {research_dir}/SUMMARY.md\n- {config_path}\n- {milestones_path}\n</required_reading>'
+      '<required_reading>\n- {project_path}\n- {requirements_path}\n{research_summary_line}\n- {config_path}\n- {milestones_path}\n</required_reading>'
     ), 'roadmapper spawn must read from {project_path}/{requirements_path}/{research_dir}/{config_path}/{milestones_path}, not bare .planning literals');
   });
 

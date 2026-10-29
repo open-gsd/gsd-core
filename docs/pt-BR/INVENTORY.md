@@ -23,7 +23,7 @@ Registro completo em `agents/gsd-*.md`. A coluna "Documento primário" indica se
 | gsd-ui-researcher | Produz contratos de design de UI para fases de frontend. | `/gsd-ui-phase` | primary |
 | gsd-assumptions-analyzer | Produz premissas embasadas em evidências para a discuss-phase (modo de premissas). | workflow `discuss-phase-assumptions` | primary |
 | gsd-advisor-researcher | Pesquisa uma única decisão em zona cinzenta durante o modo advisordiscuss-phase. | workflow `discuss-phase` (modo advisor) | primary |
-| gsd-research-synthesizer | Combina saídas de pesquisadores paralelos em um SUMMARY.md unificado. | `/gsd-new-project`, `/gsd-new-milestone` | primary |
+| gsd-research-synthesizer | Combina saídas de pesquisadores paralelos em um SUMMARY.md unificado. | `/gsd-new-project` | primary |
 | gsd-planner | Cria planos de fase executáveis com detalhamento de tarefas e verificação retroativa a partir dos objetivos. | `/gsd-plan-phase`, `/gsd-quick` | primary |
 | gsd-roadmapper | Cria roadmaps de projeto com detalhamento de fases e mapeamento de requisitos. | `/gsd-new-project` | primary |
 | gsd-executor | Executa planos GSD com commits atômicos e tratamento de desvios. | `/gsd-execute-phase`, `/gsd-quick` | primary |

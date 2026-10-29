@@ -23,7 +23,7 @@
 | gsd-ui-researcher | フロントエンドフェーズ向けの UI デザインコントラクトを作成。 | `/gsd-ui-phase` | primary |
 | gsd-assumptions-analyzer | discuss-phase（仮定モード）向けに証拠に基づく仮定を作成。 | `discuss-phase-assumptions` workflow | primary |
 | gsd-advisor-researcher | discuss-phase アドバイザーモード中に単一のグレーゾーン決定を調査。 | `discuss-phase` workflow (advisor mode) | primary |
-| gsd-research-synthesizer | 並列調査エージェントの出力を統合した SUMMARY.md にまとめる。 | `/gsd-new-project`, `/gsd-new-milestone` | primary |
+| gsd-research-synthesizer | 並列調査エージェントの出力を統合した SUMMARY.md にまとめる。 | `/gsd-new-project` | primary |
 | gsd-planner | タスク分解とゴール後退型検証を含む実行可能なフェーズプランを作成。 | `/gsd-plan-phase`, `/gsd-quick` | primary |
 | gsd-roadmapper | フェーズ分解と要件マッピングを含むプロジェクトロードマップを作成。 | `/gsd-new-project` | primary |
 | gsd-executor | アトミックコミットと逸脱処理を伴って GSD プランを実行。 | `/gsd-execute-phase`, `/gsd-quick` | primary |

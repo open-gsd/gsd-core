@@ -361,7 +361,7 @@ AskUserQuestion: "Research the domain ecosystem for this milestone's work — ne
 
 **If user chose "Research first":**
 
-Run one researcher per dimension (stack, features, architecture, pitfalls) by default. Drop a dimension only when it clearly does not apply to this milestone, and tell the user before spawning: `Skipping: {dimension(s)} — {reason}`. Never drop one silently. At least one must run; to run none, the user chooses Skip. `{dimensions kept}` is the list of dimensions that will run, and `{N}` is its count.
+Run one researcher per dimension (stack, features, architecture, pitfalls) by default. Drop a dimension only when it clearly does not apply to this milestone, and tell the user before spawning: `Skipping: {dimension(s)} — {reason}`. Never drop one silently. At least one must run; to run none, the user chooses Skip. `{dimensions kept}` is the list of dimensions that will run, in the order stack, features, architecture, pitfalls, and `{N}` is its count. `{required_reading_lines}` is one line `- {research_dir}/{FILE}` per dimension in `{dimensions kept}`, with `{FILE}` from the FILE row of the table below. `{research_summary_line}` is `- {research_dir}/SUMMARY.md` when research ran and an empty string when it did not.
 
 ```
 ### GSD ► RESEARCHING
@@ -373,6 +373,8 @@ Run one researcher per dimension (stack, features, architecture, pitfalls) by de
 ```bash
 mkdir -p .planning/research
 ```
+
+Remove what this run will rewrite, so a file left from an earlier run cannot pass for this run's output: `rm -f {research_dir}/SUMMARY.md` and `rm -f {research_dir}/{FILE}` for each dimension in `{dimensions kept}`. Files of skipped dimensions are left in place and never read.
 
 Spawn {N} parallel gsd-project-researcher agents (one per dimension kept). Each uses this template with dimension-specific fields:
 
@@ -389,7 +391,7 @@ Agent(prompt="
 SUBSEQUENT MILESTONE — [target features] (new features and refactors) in an existing app.
 {EXISTING_CONTEXT}
 Focus ONLY on what this milestone's work needs, including the integration points and pitfalls in the existing codebase it couples to or could break.
-Ground those in the existing code: read the codebase map from `/gsd-map-codebase` when the project has one; otherwise inspect the source this work touches.
+Ground those in the existing code: read the codebase map from `/gsd:map-codebase` when the project has one; otherwise inspect the source this work touches.
 </milestone_context>
 
 <question>{QUESTION}</question>
@@ -427,7 +429,7 @@ Use template: ~/.claude/gsd-core/templates/research-project/{FILE}
 
 > **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling all researcher Agent() calls above, do NOT read research files or synthesize content independently while the subagents are active. Wait for all researchers to complete before spawning the synthesizer. This prevents duplicate work and wasted context.
 
-After all complete, spawn synthesizer. Fill `{required_reading_lines}` with one `- {research_dir}/{FILE}` line per file written by the researchers spawned in this run for `{dimensions kept}` (never files left from earlier runs):
+After all complete, confirm that `{research_dir}/{FILE}` exists for every dimension in `{dimensions kept}`; a missing file means that researcher failed, so surface it and stop rather than synthesize without it. Then spawn synthesizer with `{required_reading_lines}` (the files written by the researchers spawned in this run, never files left from earlier runs):
 
 ```text
 Agent(prompt="
@@ -437,7 +439,7 @@ Synthesize research outputs into SUMMARY.md.
 {required_reading_lines}
 </required_reading>
 
-Research files for dimensions not listed above were intentionally skipped; their absence is expected, not an error.
+Read only the files listed above; do not read other research files in {research_dir}. Research files for dimensions not listed above were intentionally skipped; their absence is expected, not an error. In SUMMARY.md, mark a skipped dimension's sections and confidence row `Not researched (dimension skipped)` instead of inventing findings.
 
 ${AGENT_SKILLS_SYNTHESIZER}
 
@@ -556,7 +558,7 @@ gsd_run query commit "docs: define milestone v[X.Y] requirements" --files "$REQU
 - If `--reset-phase-numbers` is active, start at **Phase 1**
 - Otherwise, continue from the previous milestone's last phase number (v1.0 ended at phase 5 → v1.1 starts at phase 6)
 
-Keep the `{research_dir}/SUMMARY.md` line only if research ran in Step 8; otherwise drop it (never a SUMMARY.md left from earlier runs):
+Fill `{research_summary_line}` as defined in Step 8, and remove the line when it is empty (never a SUMMARY.md left from earlier runs):
 
 ```text
 Agent(prompt="
@@ -564,7 +566,7 @@ Agent(prompt="
 <required_reading>
 - {project_path}
 - {requirements_path}
-- {research_dir}/SUMMARY.md
+{research_summary_line}
 - {config_path}
 - {milestones_path}
 </required_reading>

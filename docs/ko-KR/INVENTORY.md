@@ -23,7 +23,7 @@
 | gsd-ui-researcher | 프론트엔드 단계용 UI 설계 계약 생성. | `/gsd-ui-phase` | primary |
 | gsd-assumptions-analyzer | discuss-phase (가정 모드)를 위한 근거 기반 가정 생성. | `discuss-phase-assumptions` 워크플로우 | primary |
 | gsd-advisor-researcher | discuss-phase 어드바이저 모드에서 단일 회색 지대 결정을 조사. | `discuss-phase` 워크플로우 (어드바이저 모드) | primary |
-| gsd-research-synthesizer | 병렬 조사 결과를 통합 SUMMARY.md로 결합. | `/gsd-new-project`, `/gsd-new-milestone` | primary |
+| gsd-research-synthesizer | 병렬 조사 결과를 통합 SUMMARY.md로 결합. | `/gsd-new-project` | primary |
 | gsd-planner | 태스크 분해 및 목표 역방향 검증이 포함된 실행 가능한 단계 계획 생성. | `/gsd-plan-phase`, `/gsd-quick` | primary |
 | gsd-roadmapper | 단계 분해 및 요구사항 매핑이 포함된 프로젝트 로드맵 생성. | `/gsd-new-project` | primary |
 | gsd-executor | 원자적 커밋과 편차 처리로 GSD 계획 실행. | `/gsd-execute-phase`, `/gsd-quick` | primary |

@@ -23,7 +23,7 @@ Brownfield equivalent of new-project. Project exists, PROJECT.md has history. Ga
 
 **Creates/Updates:**
 - `.planning/PROJECT.md` — updated with new milestone goals
-- `.planning/research/` — domain research (optional; the milestone's features and refactors, and what they couple to in the existing codebase)
+- `.planning/research/` — domain research (optional, NEW features only)
 - `.planning/REQUIREMENTS.md` — scoped requirements for this milestone
 - `.planning/ROADMAP.md` — phase structure (continues numbering)
 - `.planning/STATE.md` — reset for new milestone

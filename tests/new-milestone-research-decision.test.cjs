@@ -10,9 +10,10 @@
  *  5. researchers are briefed on the milestone's work and the existing
  *     codebase, and research is not offered when agents are not installed,
  *  6. Step 10 passes SUMMARY.md to the roadmapper only when research ran,
- *  7. the synthesizer contract does not require all four research files,
- *  8. per-dimension fields and the codebase-map instruction match that scope, and
- *     the /gsd-new-milestone command describes it the same way.
+ *  7. this run's outputs are cleared first, so an earlier run's file cannot pass
+ *     for them, and the synthesizer prompt reads only the files it is given,
+ *  8. per-dimension fields and the codebase-map instruction match that scope.
+ * The scope is gsd-core/workflows/new-milestone.md only (the #5148 approval).
  */
 
 const { describe, test } = require('node:test');
@@ -73,17 +74,24 @@ describe('new-milestone Step 8 research decision (#5148)', () => {
   });
 
   test('synthesizer required_reading lists only files written in this run', () => {
-    const synthStart = body.indexOf('After all complete, spawn synthesizer');
+    const synthStart = body.indexOf('After all complete, confirm that');
     assert.notEqual(synthStart, -1, 'synthesizer spawn step is missing');
     const synth = body.slice(synthStart);
-    assert.match(synth.split('Agent(prompt=')[0], /written by the researchers spawned in this run/);
-    assert.match(synth.split('Agent(prompt=')[0], /never files left from earlier runs/);
-    const reading = synth.slice(synth.indexOf('<required_reading>'), synth.indexOf('</required_reading>'));
-    assert.match(reading, /\{required_reading_lines\}/);
+    const intro = synth.split('Agent(prompt=')[0];
+    assert.match(intro, /written by the researchers spawned in this run/);
+    assert.match(intro, /never files left from earlier runs/);
+    assert.match(intro, /a missing file means that researcher failed/);
+    const readingStart = synth.indexOf('<required_reading>');
+    const readingEnd = synth.indexOf('</required_reading>');
+    assert.ok(readingStart !== -1 && readingEnd > readingStart, 'synthesizer <required_reading> block is missing');
+    const reading = synth.slice(readingStart, readingEnd);
+    assert.equal(reading.trim(), '<required_reading>\n{required_reading_lines}', 'required_reading must hold only the built {required_reading_lines}');
+    assert.match(synth, /Read only the files listed above; do not read other research files in \{research_dir\}/);
+    assert.match(synth, /`Not researched \(dimension skipped\)`/);
     assert.match(synth, /intentionally skipped; their absence is expected/, 'synthesizer prompt must say skipped dimensions are expected');
     assert.match(synth, /Display key findings from SUMMARY\.md \(omit a line whose dimension was skipped/,
       'RESEARCH COMPLETE must not show findings for a skipped dimension');
-    assert.doesNotMatch(reading, /^- \{research_dir\}\/PITFALLS\.md$/m, 'PITFALLS.md must not be unconditional');
+    assert.doesNotMatch(reading, /(STACK|FEATURES|ARCHITECTURE|PITFALLS)\.md/, 'no research file may be named unconditionally');
   });
 
   test('researcher template scopes the milestone work, not only new features', () => {
@@ -110,9 +118,19 @@ describe('new-milestone Step 8 research decision (#5148)', () => {
     const start = body.indexOf('**Common structure for every researcher:**');
     const template = body.slice(start, body.indexOf('subagent_type="gsd-project-researcher"'));
     const context = template.slice(template.indexOf('<milestone_context>'), template.indexOf('</milestone_context>'));
-    assert.match(context, /read the codebase map from `\/gsd-map-codebase` when the project has one; otherwise inspect the source this work touches/);
+    assert.match(context, /read the codebase map from `\/gsd:map-codebase` when the project has one; otherwise inspect the source this work touches/);
     assert.doesNotMatch(workflow, /codebase_map_files|\{codebase_map_lines\}/,
       'the approved scope is new-milestone.md only; no new init field feeds the researchers');
+  });
+
+  test('placeholders have a deterministic builder and outputs of an earlier run are cleared first', () => {
+    assert.match(body, /`\{dimensions kept\}` is the list of dimensions that will run, in the order stack, features, architecture, pitfalls, and `\{N\}` is its count/);
+    assert.match(body, /`\{required_reading_lines\}` is one line `- \{research_dir\}\/\{FILE\}` per dimension in `\{dimensions kept\}`/);
+    assert.match(body, /`\{research_summary_line\}` is `- \{research_dir\}\/SUMMARY\.md` when research ran and an empty string when it did not/);
+    const clear = body.indexOf('rm -f {research_dir}/SUMMARY.md');
+    const spawn = body.indexOf('Spawn {N} parallel');
+    assert.ok(clear !== -1 && spawn !== -1 && clear < spawn, 'outputs must be cleared before the researchers are spawned');
+    assert.match(body, /`rm -f \{research_dir\}\/\{FILE\}` for each dimension in `\{dimensions kept\}`/);
   });
 
   test('without installed agents, research is skipped without asking', () => {
@@ -130,33 +148,9 @@ describe('new-milestone Step 10 roadmapper uses research from this run (#5148)',
     assert.doesNotMatch(body, /SUMMARY\.md \(if exists\)/, 'SUMMARY.md must not be read just because it exists');
     const spawn = body.indexOf('Agent(prompt=');
     assert.notEqual(spawn, -1, 'Step 10 must spawn the roadmapper');
-    assert.match(body.slice(0, spawn), /`\{research_dir\}\/SUMMARY\.md` line only if research ran in Step 8/);
+    assert.match(body.slice(0, spawn), /Fill `\{research_summary_line\}` as defined in Step 8, and remove the line when it is empty/);
     assert.match(body.slice(0, spawn), /never a SUMMARY\.md left from earlier runs/);
-  });
-});
-
-describe('gsd-research-synthesizer reads only the files it is given (#5148)', () => {
-  for (const name of ['gsd-research-synthesizer.md', 'gsd-research-synthesizer.compact.md']) {
-    test(`${name} does not require all four research files`, () => {
-      const agent = readFileNormalized(path.join(__dirname, '..', 'agents', name));
-      assert.doesNotMatch(agent, /all 4 research files/i);
-      assert.match(agent, /^- Read the research files listed in `<required_reading>`/m);
-      assert.match(agent, /^- \[ \] Every research file listed in `<required_reading>` read$/m);
-      assert.doesNotMatch(agent, /cat \.planning\/research\/(STACK|FEATURES|ARCHITECTURE|PITFALLS)\.md/,
-        'Step 1 must not read a fixed set of four files');
-      const complete = agent.slice(agent.indexOf('**Files synthesized:**'), agent.indexOf('**Output:**'));
-      assert.doesNotMatch(complete, /STACK\.md|FEATURES\.md|ARCHITECTURE\.md|PITFALLS\.md/,
-        'SYNTHESIS COMPLETE must list the files actually read, not a fixed four');
-      assert.match(agent, /\/gsd:new-milestone/, 'spawned-by must name new-milestone');
-    });
-  }
-});
-
-describe('/gsd-new-milestone command describes the same research scope (#5148)', () => {
-  test('command file no longer limits research to new features', () => {
-    const command = readFileNormalized(path.join(__dirname, '..', 'commands', 'gsd', 'new-milestone.md'));
-    assert.doesNotMatch(command, /NEW features only/);
-    assert.match(command, /`\.planning\/research\/` — domain research \(optional; the milestone's features and refactors, and what they couple to in the existing codebase\)/);
+    assert.match(body.slice(spawn), /<required_reading>\n- \{project_path\}\n- \{requirements_path\}\n\{research_summary_line\}\n/);
   });
 });
 
