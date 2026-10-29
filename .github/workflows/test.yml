@@ -468,7 +468,21 @@ jobs:
           # halves of this contract. Reserve-value derivation:
           # .gsd/bug/fix-4070-shard1-aux-suite-budget/10-diagnosis.md.
           RUN_TESTS_SHARD_RESERVE: ${{ matrix.scope == 'full' && '1:77' || '' }}
+          # Real per-file CI durations (c8-instrumented, GitHub runner), the
+          # same export the conformance lanes use (#5071). tests/test-timings.json
+          # was measured in Docker without coverage, so it under-prices the
+          # files that are costly under c8 and shard 2/3 stayed the long pole.
+          RUN_TESTS_TIMING_EVENTS_FILE: ${{ runner.temp }}/test-timings-ubuntu-unit-job${{ strategy.job-index }}.jsonl
         run: npm run test:coverage:unit:raw -- --shard ${{ matrix.shard }}
+
+      - name: Upload per-file unit test durations
+        if: always() && matrix.scope == 'full'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: test-timings-ubuntu-unit-job${{ strategy.job-index }}
+          path: ${{ runner.temp }}/test-timings-ubuntu-unit-job${{ strategy.job-index }}.jsonl
+          if-no-files-found: warn
+          retention-days: 14
 
       # Raw V8 dumps, not rendered reports — coverage-gate merges these. They
       # compress hard in the artifact zip, but they are still bulk: keep the
