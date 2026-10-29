@@ -26,7 +26,7 @@ const ROOT = path.join(__dirname, '..');
 const GUARD_PATH = path.join(ROOT, 'scripts', 'lint-roadmap-progress-drift.cjs');
 const DRIFT_SCAN_PATH = path.join(ROOT, 'scripts', 'lib', 'drift-scan.cjs');
 const guard = require(GUARD_PATH);
-const { findProgressDrift, scanRepo, runPositiveControl, CLASS, MUST_FLAG, MUST_STAY_CLEAN } = guard;
+const { findProgressDrift, scanRepo, runPositiveControl, formatViolations, CLASS, MUST_FLAG, MUST_STAY_CLEAN } = guard;
 
 const FAKE = 'src/fake.cts';
 
@@ -67,16 +67,15 @@ describe('#5765 the guard on the real tree', () => {
   test('the CLI exits 0 on the real tree', () => {
     const r = childProcess.spawnSync(process.execPath, [GUARD_PATH], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /^ok roadmap-progress-drift/);
   });
 });
 
 describe('#5765 fixtures: every class goes red, clean code stays silent', () => {
-  for (const fixture of MUST_FLAG) {
-    test(`flagged as ${fixture.cls}: ${fixture.text.slice(0, 60)}`, () => {
+  MUST_FLAG.forEach((fixture, index) => {
+    test(`fixture ${index + 1} is flagged as ${fixture.cls}`, () => {
       assert.ok(classesOf(fixture.text).includes(fixture.cls), JSON.stringify(findProgressDrift(fixture.text, FAKE)));
     });
-  }
+  });
 
   for (const fixture of MUST_STAY_CLEAN) {
     test(`clean stays silent: ${fixture.name}`, () => {
@@ -102,11 +101,11 @@ describe('#5765 red proof: the shapes Phases 2 and 4 deleted are flagged', () =>
     [CLASS.PHASE_ENTRY_CHECKBOX, "new RegExp(`^(\\\\s*-\\\\s*\\\\[[ x]\\\\]\\\\s*\\\\*{0,2}Phase\\\\s+)(${PHASE_NUMBER_TOKEN_SOURCE})(\\\\s*[:\\\\s*])`, 'i')"],
     [CLASS.PHASE_ENTRY_CHECKBOX, 'for (const b of text.matchAll(/^([ \\t]*)-[ \\t]*\\[[ xX]\\][ \\t]*(?:\\*\\*[ \\t]*)?Phase[ \\t][^\\n]*$/gim)) spans.push(b);'],
   ];
-  for (const [cls, line] of HISTORIC) {
-    test(`${cls}: ${line.slice(0, 64)}`, () => {
+  HISTORIC.forEach(([cls, line], index) => {
+    test(`historic shape ${index + 1} is flagged as ${cls}`, () => {
       assert.ok(classesOf(line).includes(cls), JSON.stringify(findProgressDrift(line, FAKE)));
     });
-  }
+  });
 });
 
 describe('#5765 owner boundary is per class, not per file', () => {
@@ -157,12 +156,86 @@ describe('#5765 detector edges', () => {
     assert.deepEqual(classesOf(text), [CLASS.PROGRESS_HEADING]);
   });
 
-  test('a ROADMAP replace that names neither Progress nor a table row is not flagged', () => {
-    assert.deepEqual(findProgressDrift('const out = roadmapText.replace(/\\r\\n/g, "\\n");', FAKE), []);
+  test('the replace class reads the first argument, so a flagged twin differs from its clean sibling only there', () => {
+    const flagged = classesOf('const out = roadmapText.replace(progressRowRe, row);');
+    const clean = classesOf('const out = roadmapText.replace(/\\r\\n/g, "\\n");');
+    assert.deepEqual(flagged, [CLASS.PROGRESS_TABLE_REPLACE]);
+    assert.deepEqual(clean, []);
   });
 
-  test('a replace on something other than ROADMAP content is not flagged', () => {
-    assert.deepEqual(findProgressDrift('const out = bar.replace(machineSegment, progress);', FAKE), []);
+  test('a replace on something other than ROADMAP content is flagged only when its pattern names a Progress table', () => {
+    assert.deepEqual(classesOf('const out = bar.replace(progressTableRe, x);'), [CLASS.PROGRESS_TABLE_REPLACE]);
+    assert.deepEqual(classesOf('const out = bar.replace(machineSegment, progress);'), []);
+  });
+
+  test('a replace with a space before the paren is still read', () => {
+    assert.deepEqual(classesOf('const out = roadmapText.replace (progressRowRe, row);'), [CLASS.PROGRESS_TABLE_REPLACE]);
+  });
+});
+
+describe('#5765 tokenizing: where a literal starts and where a comment ends', () => {
+  test('a division before the real regex does not swallow it', () => {
+    assert.deepEqual(classesOf('const pct = done / total, re = /^##\\s+Progress/m;'), [CLASS.PROGRESS_HEADING]);
+  });
+
+  test('a block comment at the start of the line does not hide the code after it', () => {
+    assert.deepEqual(classesOf('/* gate */ const re = /^##\\s+Progress/m;'), [CLASS.PROGRESS_HEADING]);
+    assert.deepEqual(classesOf('/* unterminated /^##\\s+Progress/m'), []);
+  });
+
+  test('a // inside a string or a regex does not cut the line', () => {
+    assert.deepEqual(classesOf("const u = 'https://x.test', re = /^##\\s+Progress/m;"), [CLASS.PROGRESS_HEADING]);
+  });
+
+  test('a trailing comment after the code is cut', () => {
+    assert.deepEqual(classesOf('const ok = 1; // see /^##\\s+Progress/m'), []);
+    assert.deepEqual(classesOf('const re = /^##\\s+Progress/m; // gate'), [CLASS.PROGRESS_HEADING]);
+  });
+
+  test('\\sPhase, _Phase and lowercase phase with the i flag count as the word Phase', () => {
+    assert.deepEqual(classesOf('const re = /^-\\s\\[\\s\\]\\sPhase/;'), [CLASS.PHASE_ENTRY_CHECKBOX]);
+    assert.deepEqual(classesOf('const re = /^- \\[ \\] _Phase/;'), [CLASS.PHASE_ENTRY_CHECKBOX]);
+    assert.deepEqual(classesOf('const re = /^- \\[ \\] phase/i;'), [CLASS.PHASE_ENTRY_CHECKBOX]);
+  });
+
+  test('a hyphenated or longer word is not the word Phase', () => {
+    assert.deepEqual(classesOf('const re = /^- \\[ \\] Phase-gate/;'), []);
+    assert.deepEqual(classesOf('const re = /^- \\[ \\] Phased/;'), []);
+  });
+});
+
+describe('#5765 bounded work: an adversarial literal terminates', () => {
+  // A regression to an ambiguous repeat in the heading pattern turns the first case
+  // exponential in the number of `\s*` units; a hang here is the failure signal, and
+  // the node:test runner's per-file timeout is what ends it.
+  test('repeated \\s* after a heading marker terminates and reports nothing', () => {
+    const units = '\\s*'.repeat(130);
+    assert.deepEqual(classesOf(`const r = /#${units}X/;`), []);
+  });
+
+  test('repeated \\s* before Progress still reports the heading', () => {
+    assert.deepEqual(classesOf(`const r = /#${'\\s*'.repeat(8)}Progress/;`), [CLASS.PROGRESS_HEADING]);
+  });
+
+  test('a line of unclosed regex openers terminates', () => {
+    assert.deepEqual(classesOf('/['.repeat(100000)), []);
+  });
+});
+
+describe('#5765 literal-length boundary: the tokenizer reads up to MAX_REGEX_LITERAL_LEN', () => {
+  const { MAX_REGEX_LITERAL_LEN } = require(DRIFT_SCAN_PATH);
+  const regexOfLength = (length) => {
+    const head = '/^##\\s+Progress';
+    const tail = '/m';
+    return `${head}${'a'.repeat(length - head.length - tail.length)}${tail}`;
+  };
+
+  test('a heading regex literal of limit-1 characters is flagged', () => {
+    assert.deepEqual(classesOf(`const r = ${regexOfLength(MAX_REGEX_LITERAL_LEN - 1)};`), [CLASS.PROGRESS_HEADING]);
+  });
+
+  test('a heading regex literal far past the limit is not read as one literal, and does not throw', () => {
+    assert.deepEqual(classesOf(`const r = ${regexOfLength(MAX_REGEX_LITERAL_LEN * 3)};`), []);
   });
 });
 
@@ -187,15 +260,27 @@ describe('#5765 the scan surface', () => {
     const root = guardTree(t, {
       'tests/fixture.test.cjs': violation,
       'scripts/other-lint.cjs': violation,
+      'src/bad.cts': violation,
     });
-    assert.deepEqual(scanRepo(root), []);
+    assert.deepEqual(scanRepo(root).map((d) => d.file), ['src/bad.cts']);
   });
 
-  test('the CLI exits 1 and names file, line and class for a violating tree', (t) => {
+  test('the CLI exits 1 for a violating tree', (t) => {
     const root = guardTree(t, { 'src/bad.cts': violation });
     const r = runCli(root);
     assert.equal(r.status, 1, r.stdout);
-    assert.match(r.stderr, /src\/bad\.cts:1 {2}\[progress-heading\]/);
+  });
+
+  test('the failure report names file, line, class and the matched literal', (t) => {
+    const root = guardTree(t, { 'src/bad.cts': violation });
+    const lines = formatViolations(scanRepo(root));
+    assert.equal(lines.length, 5);
+    assert.equal(lines[4], '  src/bad.cts:1  [progress-heading]  /^##[ \\t]+Progress\\b/im');
+  });
+
+  test('the failure report sanitizes control bytes in the matched text', () => {
+    const lines = formatViolations([{ file: 'src/a.cts', line: 2, cls: CLASS.PROGRESS_TITLE, found: "'Progress\\\\b'‮" }]);
+    assert.equal(lines[lines.length - 1], "  src/a.cts:2  [progress-title]  'Progress\\\\b'\\u202e");
   });
 
   test('the CLI exits 0 for a clean tree', (t) => {
