@@ -89,6 +89,15 @@ describe('#5761 owner: where the Progress table is', () => {
     assert.equal(findProgressSection(`\`\`\`md\n# Progress\n\`\`\`\n`, { levels }), null);
   });
 
+  // The owner's heading rule is CommonMark's (the sectionizer's), shared by every reader: up to three
+  // leading spaces still make a heading. The pre-owner readers matched column zero only; this is
+  // the one rule the epic unifies them on, pinned here so it cannot drift per reader.
+  test('an ATX heading indented up to three spaces is a Progress heading; four spaces is code', () => {
+    assert.notEqual(findProgressSection(`   ## Progress\n\n${REAL}`), null);
+    assert.equal(findProgressSection(`    ## Progress\n\n${REAL}`), null);
+    assert.notEqual(findProgressSection(` # Progress\n\n${REAL}`, { levels: [1, 2] }), null);
+  });
+
   // The workstream inventory always read a milestone table that sits outside an existing
   // `## Progress` section; the section-scoped default (derive, state contract) still does not.
   test("sectionMiss: 'document' reads a table outside a table-less Progress section; the default does not", () => {

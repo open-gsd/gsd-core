@@ -150,7 +150,7 @@ export function findProgressSection(content: string, options: FindProgressSectio
   const inActive = active ? headings.findIndex((h) => isProgress(h) && h.offset >= active.start && h.offset < active.end) : -1;
   const index = inActive !== -1 ? inActive : headings.findIndex(isProgress);
   if (index === -1) return null;
-  return headingSliceRange(content, headings, index, Math.min(headings[index].level, 2));
+  return headingSliceRange(content, headings, index, headings[index].level);
 }
 
 /**
