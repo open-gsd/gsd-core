@@ -346,6 +346,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/quick-batch-dispatch.cjs',
       'gsd-core/bin/lib/quick-batch-command-router.cjs',
       'gsd-core/bin/lib/roadmap-parser.cjs',
+      'gsd-core/bin/lib/roadmap-progress.cjs',
       'gsd-core/bin/lib/drift.cjs',
       'gsd-core/bin/lib/cjs-command-router-adapter.cjs',
       'gsd-core/bin/lib/phase-command-router.cjs',
@@ -379,6 +380,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/milestone.cjs',
       // #5706: tsc-generated runtime artifact — lint src/milestone-release-map.cts, not this.
       'gsd-core/bin/lib/milestone-release-map.cjs',
+      // #5763: tsc-generated runtime artifact — lint src/phase-entry-grammar.cts, not this.
+      'gsd-core/bin/lib/phase-entry-grammar.cjs',
       'gsd-core/bin/lib/phase.cjs',
       'gsd-core/bin/lib/verify.cjs',
       'gsd-core/bin/lib/init.cjs',

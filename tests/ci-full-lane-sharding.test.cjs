@@ -262,7 +262,15 @@ test('shard 1\'s aux-suite cost is reserved out of the unit-test packer (#4070)'
   // tests/test-timings.json) gives an empirical ~2.86s-per-weight-unit
   // conversion; 220s / 2.86 ≈ 77 weight units — roughly 77 average-cost test
   // files' worth of virtual head start.
-  const EXPECTED_RESERVE = '1:77';
+  //
+  // #5805: tests/test-timings.json was re-measured from per-file durations
+  // on the CI runners under c8 (push run 40895178866 on next), which moved the
+  // table mean to ~6099ms of summed per-file duration per weight unit. The
+  // same unit-vs-wall conversion, refit on that run (shard 2/3 held ~1066s
+  // more summed per-file duration than shard 3/3 and ran ~550s longer, so
+  // ~0.52s of wall per summed second, ~3.17s of wall per weight unit), gives
+  // 220s / 3.17 ≈ 69 weight units for the same aux-suite wall cost.
+  const EXPECTED_RESERVE = '1:69';
 
   await t.test('the unit-test step reserves shard 1\'s aux-suite cost for the full-scope lane', () => {
     const unitStep = workflow.jobs.test.steps.find(

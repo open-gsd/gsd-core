@@ -22,6 +22,7 @@ import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { escapeRegex } from './pattern.cjs';
+import { PHASE_ENTRY_BOLD_CLOSE_SRC, phaseEntryPrefixSrc, phaseEntryRegExp, phaseEntrySplitRegExp } from './phase-entry-grammar.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdModule = require('./phase-id.cjs');
 const {
@@ -65,10 +66,10 @@ const { rawFrontmatterMapping } = frontmatterMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import unusableInputMod = require('./unusable-input.cjs');
 const { UNUSABLE_REASON, warnUnusableInput } = unusableInputMod;
-import { tokenizeHeadings, stripTaggedBlocks, withSection, stripFencedCode, collectSection, scanFencedBlocks, scanInlineCodeSpans } from './markdown-sectionizer.cjs';
+import { tokenizeHeadings, stripTaggedBlocks, withSection, stripFencedCode, scanFencedBlocks, scanInlineCodeSpans } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
-import { findTableWithColumns, isDelimiterRow, splitTableRow } from './markdown-table.cjs';
-import type { MarkdownTable } from './markdown-table.cjs';
+import { isDelimiterRow, splitTableRow } from './markdown-table.cjs';
+import { findProgressSection } from './roadmap-progress.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningScopeMod = require('./planning-scope.cjs');
 const { SCOPE } = planningScopeMod;
@@ -1798,7 +1799,8 @@ function scanArchiveSpans(content: string, active: Array<{ start: number; end: n
     if (active.some((r) => start <= r.start && r.start < end)) continue;
     const inRange = overlapsActive(start, end) && !closedSummary(start);
     // A collapsed block of the active range that holds the Progress table stays editable, so the row moves with the plan ticks.
-    if (inRange && /^#{1,2}[ \t]+Progress\b/im.test(scan.slice(start, end))) { kept.push({ start, end }); continue; }
+    // A level-1 `# Progress` has always counted here (#5692: no behavior change), hence `levels`.
+    if (inRange && findProgressSection(scan.slice(start, end), { levels: [1, 2] }) !== null) { kept.push({ start, end }); continue; }
     spans.push({ start, end });
     if (inRange) inActive.push({ start, end });
   }
@@ -1948,15 +1950,19 @@ function withPhaseSection(
 // is captured in group 1, the name in group 2; the separator may be an em-dash,
 // en-dash, hyphen, or colon. Used as a fallback when no ATX heading matches, and
 // to count phases in a milestone that uses the bullet form.
-const BULLET_PHASE_LINE_PATTERN =
-  /^\s*[-*]\s+(?:\[[ xX]\]\s+)?\*\*Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*[—–:\-]\s*(.+?)\*\*/im;
+const BULLET_PHASE_LINE_PATTERN = phaseEntryRegExp(
+  `Phase\\s+([\\w][\\w.-]*)(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*(.+?)${PHASE_ENTRY_BOLD_CLOSE_SRC}`,
+  'im',
+  { box: 'optional', bold: 'required' },
+);
 
 /** Build a bullet-phase-line regex pinned to a specific phase number (#2199). */
 function bulletPhaseLineFor(phaseNum: unknown, phaseSource?: string): RegExp {
   const num = phaseSource ?? phaseMarkdownRegexSource(phaseNum);
-  return new RegExp(
-    `^\\s*[-*]\\s+(?:\\[[ xX]\\]\\s+)?\\*\\*Phase\\s+(${num})${OPTIONAL_PHASE_TAG_SOURCE}\\s*[—–:\\-]\\s*(.+?)\\*\\*`,
+  return phaseEntryRegExp(
+    `Phase\\s+(${num})${OPTIONAL_PHASE_TAG_SOURCE}\\s*[—–:\\-]\\s*(.+?)${PHASE_ENTRY_BOLD_CLOSE_SRC}`,
     'im',
+    { box: 'optional', bold: 'required' },
   );
 }
 
@@ -2107,42 +2113,6 @@ function reportUnreadableRoadmap(err: unknown, roadmapPath: string): void {
   const code = (err as { code?: unknown } | null | undefined)?.code;
   if (typeof code !== 'string') return;
   warnUnusableInput({ reason: UNUSABLE_REASON.ROADMAP_UNREADABLE, source: roadmapPath });
-}
-
-// ─── Roadmap progress table (#1956/#2012 decoy avoidance) ─────────────────────
-
-/**
- * Locate ROADMAP.md's "Progress" table — the sole owner of the #2012
- * decoy-avoidance scope for the `drift-guard phase-status` CLI seam (#1956).
- *
- * Scopes to the `## Progress` heading first (level-2, exact case-insensitive
- * text `'progress'`, `{ levelBounded: true }`) via `collectSection` — the
- * same CRLF-safe seam `stateCurrentPositionSlice` (state-document.cts) uses
- * to scope STATE.md's `## Current Position` — so a differently-headed table
- * that happens to share the same column names (e.g. an "Archive Notes"
- * table) is never picked up instead of the real one (#2012). Falls back to
- * scanning the WHOLE document when no `## Progress` heading exists, so a
- * headingless milestone slice (#1445) still resolves rather than going
- * uncheckable — the same fallback `deriveProgressFromRoadmap`
- * (phase-lifecycle.cts) deliberately preserves.
- *
- * `deriveProgressFromRoadmap` independently expresses this same "scope to
- * `## Progress`, else whole document" rule via its own regex-based scope
- * (kept there deliberately rather than refactored onto this function — its
- * blast radius is large). The two locators are therefore separate
- * implementations of the same scoping rule and must agree about WHICH table
- * is the Progress table; a parity test in
- * tests/adr-22-plan-drift-guard.test.cjs asserts they do, per the repo's
- * generative-fix-divergence guard.
- *
- * Returns the same shape `findTableWithColumns` returns (or `null`).
- */
-function findRoadmapProgressTable(roadmapContent: string): MarkdownTable | null {
-  const isProgressHeading = (h: HeadingToken): boolean =>
-    h.level === 2 && h.text.trim().toLowerCase() === 'progress';
-  const section = collectSection(roadmapContent, isProgressHeading, { levelBounded: true });
-  const scoped = section ? section.body : roadmapContent;
-  return findTableWithColumns(scoped, ['Phase', 'Plans Complete', 'Status', 'Completed']);
 }
 
 // ─── Milestone info lookup ────────────────────────────────────────────────────
@@ -2870,6 +2840,9 @@ function insideBareDetails(tags: { at: number; close: boolean }[], idx: number):
   return lo > 0 && !tags[lo - 1].close;
 }
 
+/** A phase heading or a bold phase-list entry: what makes a block a shipped/backlog milestone. */
+const ACTIVE_SCOPE_PHASE_ENTRY_SRC = `(?:^#{2,4}[ \\t]+Phase\\b|${phaseEntryPrefixSrc({ bold: 'required' })}Phase\\b)`;
+
 /**
  * The active milestone's writable scope as offsets into `content`.
  *
@@ -2897,7 +2870,7 @@ function activeScope(content: string, cwd?: string): { start: number; end: numbe
   if (open) {
     anchor = headingAt;
   } else {
-    const firstActive = [...content.matchAll(/^(?:#{2,4}[ \t]+Phase\b|[ \t]*-[ \t]*\[[ x]\][ \t]*\*\*Phase\b)/gim)]
+    const firstActive = [...content.matchAll(new RegExp(ACTIVE_SCOPE_PHASE_ENTRY_SRC, 'gim'))]
       .find((m) => !insideBareDetails(tags, m.index));
     anchor = firstActive?.index ?? content.length;
   }
@@ -2907,7 +2880,7 @@ function activeScope(content: string, cwd?: string): { start: number; end: numbe
     if (t.close) start = t.at + '</details>'.length;
   }
   // Only a block that carries phase entries is a shipped/backlog milestone; a collapsible note inside the active milestone stays writable.
-  const phaseEntry = /^(?:#{2,4}[ \t]+Phase\b|[ \t]*-[ \t]*\[[ x]\][ \t]*\*\*Phase\b)/im;
+  const phaseEntry = new RegExp(ACTIVE_SCOPE_PHASE_ENTRY_SRC, 'im');
   const below = tags.find((t, i) => {
     if (t.close || t.at <= anchor || !/^[ \t]*$/.test(content.slice(content.lastIndexOf('\n', t.at - 1) + 1, t.at))) return false;
     const close = tags.slice(i + 1).find((c) => c.close);
@@ -2958,19 +2931,21 @@ function editCurrentMilestone(content: string, cwd: string | undefined, edit: (t
  * The checklist bullet of the phase whose number matches `phasePattern`
  * (`- [ ] **Phase N: …**`), as the one grammar shared by the Plans-count /
  * completion stamp and the plan-row ticks. `anyState` also matches a checked box.
- * Group 1 is the opening `- [`, group 2 the rest of the line after the box.
- * `(?:\*\*[ \t]*)?` rather than `[ \t]*` then `**` then `[ \t]*`, which would
- * backtrack quadratically on a long blank run.
+ * Group 1 is everything through the opening `[` (indent and marker included),
+ * group 2 the rest of the line from the closing `]`. The prefix (marker, box, bold token) is the phase-entry grammar's (#5764); the
+ * tail stops before `\r` so a stamp appended to group 2 lands on the entry's
+ * line, before its CRLF.
  */
 function phaseChecklistBullet(phasePattern: string, anyState: boolean): RegExp {
-  return new RegExp(
-    `^([ \\t]*-[ \\t]*\\[)${anyState ? '[ x]' : ' '}(\\][ \\t]*(?:\\*\\*[ \\t]*)?Phase[ \\t]+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s]|$)[^\\n]*)`,
-    'im',
+  return phaseEntrySplitRegExp(
+    `Phase[ \\t]+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s]|$)[^\\r\\n]*`,
+    'i',
+    { state: anyState ? 'any' : 'unchecked' },
   );
 }
 
 /** A checklist bullet of ANY phase: ends the rows nested under the previous one. */
-const ANY_PHASE_BULLET = /^[ \t]*-[ \t]*\[[ xX]\][ \t]*(?:\*\*[ \t]*)?Phase[ \t]/i;
+const ANY_PHASE_BULLET = phaseEntryRegExp('Phase[ \\t]', 'i');
 
 /**
  * [start,end) of the rows nested under a phase's checklist bullet: from the
@@ -2982,7 +2957,10 @@ function checklistBulletExtent(
   text: string,
   bullet: RegExpExecArray,
 ): { start: number; end: number } {
-  const depth = bullet[1].search(/\S/);
+  // The bullet's own indent, read from its line: a caller's capture group 1 may
+  // be the indent alone (which has no non-space and used to give -1, so a
+  // shallower line never ended the extent) or everything through the `[`.
+  const depth = text.slice(bullet.index).search(/\S/);
   const start = text.indexOf('\n', bullet.index) + 1;
   let end = start;
   while (start > 0 && end < text.length) {
@@ -3032,9 +3010,6 @@ export = {
   hasMilestoneSectioning,
   // #3642: the >=1 sibling buildStateFrontmatter's unbounded branch consumes.
   hasAnyMilestoneSection,
-  // #1956: sole owner of the #2012 decoy-avoidance scope for the
-  // `drift-guard phase-status` CLI seam.
-  findRoadmapProgressTable,
   // #3262 (write-time milestone-scope guard): the window phase-id scan owner
   // (consumed by getMilestonePhaseFilter above and the roadmap milestone-scope
   // CLI probe) and the free-text predicate the phase add/add-batch/insert

@@ -79,6 +79,7 @@ import phaseIdDisplayMod = require('./phase-id-display.cjs');
 // numeric canonicalization instead of re-deriving it here — see
 // bracketWriteContext/bracketPhaseId below.
 const { milestoneToken, phaseToken } = phaseIdDisplayMod;
+import { isBoxCharChecked, isPhaseEntryChecked, phaseEntryPrefixSrc, phaseEntryRegExp, phaseEntrySplitRegExp } from './phase-entry-grammar.cjs';
 import { escapeRegex } from './pattern.cjs';
 import { declareGateExit } from './gate-exit.cjs';
 import { gateVerdict } from './gate-verdict.cjs';
@@ -126,7 +127,9 @@ const {
 // progress counters the phase-complete transaction passes downstream.
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-lifecycle.cjs is an export= CommonJS module
 import phaseLifecycleMod = require('./phase-lifecycle.cjs');
-const { deriveProgressFromRoadmap: deriveProgressFromRoadmapForIntent, clampPercent: clampPercentForIntent, milestoneVersionOf, locateProgressTable, normalizeMilestoneToken } = phaseLifecycleMod;
+const { deriveProgressFromRoadmap: deriveProgressFromRoadmapForIntent, clampPercent: clampPercentForIntent } = phaseLifecycleMod;
+// #5761: the Progress table locator and milestone-identity helpers live in their one owner.
+import { locateRoadmapProgress, editRoadmapProgress, findProgressSection, isProgressHeadingTitle, milestoneVersionOf, normalizeMilestoneToken } from './roadmap-progress.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
@@ -138,14 +141,14 @@ import { parsePlanningDoc, findField, readNode, setFieldValue, serialize } from 
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { transitionCore, isStatePastPhase } from './state-transition.cjs';
-import { updateTableCell, deleteTableRow, escapeCell, splitTableRow, insertTableRow } from './markdown-table.cjs';
+import { updateTableCell, updateTraceabilityCell, deleteTableRow, escapeCell, splitTableRow, insertTableRow } from './markdown-table.cjs';
 import { deleteSection, updateBullet, tokenizeHeadings, scanFencedBlocks, type HeadingToken } from './markdown-sectionizer.cjs';
 import { PathAcceptance, tryWithinRoot } from './security.cjs';
 // #5060: the Phase Status Module owns the ROADMAP Status-cell token vocabulary.
 import { PHASE_STATUS, WIRE_STATUS, parseRoadmapStatusCell, toRoadmapStatusCell, phaseStatus } from './phase-status.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- roadmap.cjs is an export= CommonJS module
 import roadmapMod = require('./roadmap.cjs');
-const { buildPhaseHeadingRegex, editFromPhaseTable, findPhaseTableHeader, editProgressTableSlice, foldPhaseId, insideOpenDetails, checklistEntrySrc } = roadmapMod;
+const { buildPhaseHeadingRegex, findPhaseTableHeader, editProgressTableSlice, foldPhaseId, insideOpenDetails, checklistEntrySrc } = roadmapMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- uat-predicate.cjs is an export= CommonJS module
 import uatPredicate = require('./uat-predicate.cjs');
 const { evaluateUatPassed } = uatPredicate;
@@ -196,49 +199,6 @@ const looksLikePlanFile = (f: string): boolean =>
   /PLAN/i.test(f) &&
   !PLAN_OUTLINE_RE.test(f) &&
   !PLAN_PRE_BOUNCE_RE.test(f);
-
-/**
- * Scope an `updateTableCell` call to the `## Traceability` (or
- * `## Traceability Status`) heading's own section — up to the next H1/H2
- * heading — instead of handing it the WHOLE REQUIREMENTS.md content.
- *
- * F1 (#2245 review, BLOCKER): `updateTableCell` binds to the FIRST GFM table
- * found in whatever text it is given. The shipped requirements template
- * (gsd-core/templates/requirements.md) puts an `## Out of Scope` table
- * (`| Feature | Reason |`, no `Status` column) BEFORE `## Traceability` — so
- * an unscoped whole-file call targets the Out-of-Scope table instead, fails
- * with `{ok:false, reason:'unknown column: Status'}`, and the real
- * Traceability row is never flipped, while the checkbox surface still flips
- * and the command reports success (the #2140 silent-divergence class one
- * level deeper). Mirrors `editProgressHeadingSlice` below, which scopes
- * `## Progress` writes to that heading's own slice for the same reason.
- *
- * Falls back to running `updateTableCell` against the whole `text` when no
- * `## Traceability` heading exists — matching the previous (unscoped)
- * behaviour for a REQUIREMENTS.md whose traceability table sits under some
- * other heading, or with no heading at all (never worse than before this fix).
- */
-function updateTraceabilityCell(
-  text: string,
-  match: (row: Record<string, string>, index: number) => boolean,
-  column: string,
-  newValue: string | ((current: string) => string),
-): ReturnType<typeof updateTableCell> {
-  const headingMatch = text.match(/^##[ \t]+Traceability(?:[ \t]+Status)?\b/im);
-  if (!headingMatch || headingMatch.index === undefined) {
-    return updateTableCell(text, match, column, newValue);
-  }
-  const headingOffset = headingMatch.index;
-  const before = text.slice(0, headingOffset);
-  const fromHeading = text.slice(headingOffset);
-  const nextHeadingOffset = fromHeading.search(/\n#{1,2}[ \t]/);
-  const scoped = nextHeadingOffset >= 0 ? fromHeading.slice(0, nextHeadingOffset) : fromHeading;
-  const after = nextHeadingOffset >= 0 ? fromHeading.slice(nextHeadingOffset) : '';
-
-  const result = updateTableCell(scoped, match, column, newValue);
-  if (!result.ok) return result;
-  return { ok: true, value: before + result.value + after };
-}
 
 /**
  * Extract the MAJOR version segment from a version-ish string: "v1", "v1.3",
@@ -2315,8 +2275,8 @@ function scanExistingDecimalPhaseNumbers(phasesDir: string, rawContent: string, 
     decimalSet.add(parseInt(rmMatch[1], 10));
   }
 
-  const checklistDecimalPattern = new RegExp(
-    `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?Phase\\s+${phaseMarkdownRegexSource(base)}\\.(\\d+)${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
+  const checklistDecimalPattern = phaseEntryRegExp(
+    `Phase\\s+${phaseMarkdownRegexSource(base)}\\.(\\d+)${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
     'gi',
   );
   let clMatch: RegExpExecArray | null;
@@ -2608,8 +2568,8 @@ function cmdPhaseInsert(
       ? bracketHeading !== null
       : tokenizeHeadings(content).some((h) => targetPattern.test(h.text));
 
-    const bulletPattern = new RegExp(
-      `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
+    const bulletPattern = phaseEntryRegExp(
+      `${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
       'i',
     );
     // #5007 (Phase 6 / ADR-4910 §8): a pure "does ANY phase heading exist"
@@ -2638,8 +2598,8 @@ function cmdPhaseInsert(
     }
 
     if (!headingMatch && !isBulletStyle) {
-      const checklistPattern = new RegExp(
-        `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
+      const checklistPattern = phaseEntryRegExp(
+        `${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
         'i',
       );
       if (checklistPattern.test(content)) {
@@ -2714,9 +2674,10 @@ function cmdPhaseInsert(
     let roadmapEntry: 'checklist' | 'progress_table' | 'none';
 
     if (isBulletStyle) {
-      const boldBulletPattern = new RegExp(
-        `-\\s*\\[[ x]\\]\\s*\\*\\*Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}:`,
+      const boldBulletPattern = phaseEntryRegExp(
+        `Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}:`,
         'i',
+        { bold: 'required' },
       );
       const useBold = boldBulletPattern.test(content);
       const phaseLabel = useBold
@@ -2731,7 +2692,7 @@ function cmdPhaseInsert(
       // matches what platformWriteSync enforces anyway.
       const bulletEntry = `\n- [ ] ${phaseLabel}`;
       // A non-bold bullet is not an entry `roadmap analyze` reads (checklistEntrySrc needs `**`).
-      roadmapEntry = new RegExp(checklistEntrySrc(insertConvention, false, true)).test(bulletEntry) ? 'checklist' : 'none';
+      roadmapEntry = new RegExp(checklistEntrySrc(insertConvention, false, true), 'm').test(bulletEntry) ? 'checklist' : 'none';
 
       // #3413: was `[^\n]*`, which on CRLF content swallows the line's
       // trailing \r into the match, shifting bulletLineEnd to land BETWEEN
@@ -2741,8 +2702,8 @@ function cmdPhaseInsert(
       // .md targets regardless). Widening to [^\r\n]* stops the match at the
       // true line-content boundary so bulletLineEnd lands cleanly before the
       // terminator.
-      const targetBulletPattern = new RegExp(
-        `(-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\r\\n]*)`,
+      const targetBulletPattern = phaseEntryRegExp(
+        `Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\r\\n]*`,
         'i',
       );
       const bulletMatchResult = rawContent.match(targetBulletPattern);
@@ -2756,7 +2717,7 @@ function cmdPhaseInsert(
       // #5599: land after the last bullet inside the allocation family's
       // subtree, not before the first following bullet of any number (which is
       // the target's own later decimal child when one exists).
-      const bulletRe = /\r?\n-\s*\[[ x]\]\s*(?:\*\*)?Phase\s+(?<tok>\d[^\s:*]*)[^\r\n]*/gi;
+      const bulletRe = new RegExp(`\\r?\\n${phaseEntryPrefixSrc()}Phase\\s+(?<tok>\\d[^\\s:*]*)[^\\r\\n]*`, 'gim');
       let insertIdx = bulletLineEnd;
       for (const m of afterBullet.matchAll(bulletRe)) {
         if (!isPhaseTokenWithin(m.groups!.tok, subtreeRoot)) {
@@ -3226,7 +3187,10 @@ function updateRoadmapAfterPhaseRemoval(
       (h) => h.level >= 2 && h.level <= 4 && phaseHeadingRe.test(h.text),
     );
     content = content.replace(
-      new RegExp(`\\n?-\\s*\\[[ x]\\]\\s*.*Phase\\s+${padTolerant}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*`, 'gi'),
+      // The entry prefix is the phase-entry grammar's (#5764): line-anchored, so a
+      // mid-line mention of the phase is not deleted. `decorated` keeps the tolerance this
+      // delete always had for an entry the readers skip (`- [x] ~~**Phase 2: X**~~`, an emoji).
+      new RegExp(`\\n?${phaseEntryPrefixSrc({ decorated: true })}Phase[ \\t]+${padTolerant}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*`, 'gim'),
       '',
     );
     // ROW-DELETION (not a cell update) — removes the WHOLE Progress-table row
@@ -3244,34 +3208,25 @@ function updateRoadmapAfterPhaseRemoval(
     // `|2|0/2|Planned|-|`) undeleted — its closing `|` follows the digit with
     // no whitespace to match (#2245 audit) — and which was also unscoped to
     // any particular table.
-    const progressHeadingMatch = content.match(/^##[ \t]+Progress\b/im);
-    if (progressHeadingMatch && progressHeadingMatch.index !== undefined) {
-      const headingOffset = progressHeadingMatch.index;
-      const before = content.slice(0, headingOffset);
-      const fromHeading = content.slice(headingOffset);
-      const nextHeadingOffset = fromHeading.search(/\n#{1,2}[ \t]/);
-      const progressSection =
-        nextHeadingOffset >= 0 ? fromHeading.slice(0, nextHeadingOffset) : fromHeading;
-      const rest = nextHeadingOffset >= 0 ? fromHeading.slice(nextHeadingOffset) : '';
-
-      const matchRemovedProgressRow = (row: Record<string, string>): boolean => {
-        const firstCellRaw = (Object.values(row)[0] ?? '').trim();
-        if (customTarget) {
-          return new RegExp(`^${escaped}\\.?(?:\\s|$)`, 'i').test(firstCellRaw);
-        }
-        if (isDecimal) {
-          return new RegExp(`^${padTolerant}\\.?(?:\\s|$)`, 'i').test(firstCellRaw);
-        }
-        const leadingMatch = firstCellRaw.match(/^0*(\d+)(\.\d+)?/);
-        if (!leadingMatch || leadingMatch[2]) return false;
-        return parseInt(leadingMatch[1], 10) === removedInt;
-      };
-
-      const deleteResult = deleteTableRow(progressSection, matchRemovedProgressRow);
-      if (deleteResult.ok) {
-        content = before + deleteResult.value + rest;
+    // #5762: the slice is the Progress owner's (`editRoadmapProgress`), the write side of the
+    // rule every reader uses; `headingless: 'skip'` keeps the pre-owner "no `## Progress`
+    // heading, no row delete" (a row delete must not guess a table by column names alone).
+    const matchRemovedProgressRow = (row: Record<string, string>): boolean => {
+      const firstCellRaw = (Object.values(row)[0] ?? '').trim();
+      if (customTarget) {
+        return new RegExp(`^${escaped}\\.?(?:\\s|$)`, 'i').test(firstCellRaw);
       }
-    }
+      if (isDecimal) {
+        return new RegExp(`^${padTolerant}\\.?(?:\\s|$)`, 'i').test(firstCellRaw);
+      }
+      const leadingMatch = firstCellRaw.match(/^0*(\d+)(\.\d+)?/);
+      if (!leadingMatch || leadingMatch[2]) return false;
+      return parseInt(leadingMatch[1], 10) === removedInt;
+    };
+    content = editRoadmapProgress(content, (progressSection) => {
+      const deleteResult = deleteTableRow(progressSection, matchRemovedProgressRow);
+      return deleteResult.ok ? deleteResult.value : progressSection;
+    }, { headingless: 'skip' });
 
     if (!isDecimal && !customTarget) {
       // #1729: fold an optional pre-colon ( ) tag into the suffix capture so it
@@ -3308,7 +3263,9 @@ function updateRoadmapAfterPhaseRemoval(
           `${prefix}${stableIdentity(num) ? num : decrementRoadmapPhaseToken(num, removedInt)}${suffix}`,
       );
       content = content.replace(
-        /(-\s*\[[ x]\]\s*.*?Phase\s+)(\d+)(\s*:|\s+)/gi,
+        // `decorated`, as the delete above: a struck-through or emoji entry is renumbered too,
+        // or two entries would share one number after the remove.
+        new RegExp(`(${phaseEntryPrefixSrc({ decorated: true })}Phase[ \\t]+)(\\d+)([ \\t]*:|[ \\t]+|(?=\\r?$))`, 'gim'),
         (_match, prefix: string, num: string, suffix: string) =>
           `${prefix}${stableIdentity(num) ? num : decrementRoadmapPhaseNumber(num, removedInt)}${suffix}`,
       );
@@ -3350,18 +3307,9 @@ function updateRoadmapAfterPhaseRemoval(
       // silently fail to find an escaped-pipe cell's own line — preserving
       // every other byte of the row (ADR-2143 §7 byte-parity) while only the
       // digits actually change.
-      const ordinalHeadingMatch = content.match(/^##[ \t]+Progress\b/im);
-      if (ordinalHeadingMatch && ordinalHeadingMatch.index !== undefined) {
-        const ordinalHeadingOffset = ordinalHeadingMatch.index;
-        const ordinalBefore = content.slice(0, ordinalHeadingOffset);
-        const ordinalFromHeading = content.slice(ordinalHeadingOffset);
-        const ordinalNextHeadingOffset = ordinalFromHeading.search(/\n#{1,2}[ \t]/);
-        let ordinalSection =
-          ordinalNextHeadingOffset >= 0
-            ? ordinalFromHeading.slice(0, ordinalNextHeadingOffset)
-            : ordinalFromHeading;
-        const ordinalRest =
-          ordinalNextHeadingOffset >= 0 ? ordinalFromHeading.slice(ordinalNextHeadingOffset) : '';
+      // #5762: the slice is the Progress owner's; no `## Progress` heading means no renumber.
+      content = editRoadmapProgress(content, (progressSection) => {
+        let ordinalSection = progressSection;
 
         const phaseCellShapeRe = /^(\d+)(\.\s)/;
         const processedOrdinalRows = new Set<number>();
@@ -3402,8 +3350,8 @@ function updateRoadmapAfterPhaseRemoval(
           ordinalSection = cellResult.value;
         }
 
-        content = ordinalBefore + ordinalSection + ordinalRest;
-      }
+        return ordinalSection;
+      }, { headingless: 'skip' });
       content = content.replace(
         /(?<![0-9-])(\d{2})-(\d{2})(?=(?:(?:-[A-Za-z][A-Za-z0-9-]*)?-(?:PLAN|SUMMARY)\.md)|(?![0-9-]))/g,
         (_match, phaseNum: string, planNum: string) =>
@@ -4410,8 +4358,8 @@ function lineStartsInMilestoneOwnTable(
 // a suffixed OWN heading ("## Progress (v2.1)", "### Progress (v2.0)")
 // never engaged the own-section scope even though the document-first scope
 // already matched the same suffix. Both interpolate this one source now.
-const BRACKET_PROGRESS_HEADING_TITLE_SRC = 'Progress\\b';
-const BRACKET_PROGRESS_HEADING_TITLE_RE = new RegExp(`^${BRACKET_PROGRESS_HEADING_TITLE_SRC}`, 'i');
+// #5762: that one source now lives in the Roadmap Progress Module (`isProgressHeadingTitle`);
+// `bracketProgressSectionRange` below is `findProgressSection` minus archived milestones.
 
 /**
  * #4304: the SAME `## Progress`-section scope legacy's
@@ -4423,17 +4371,10 @@ const BRACKET_PROGRESS_HEADING_TITLE_RE = new RegExp(`^${BRACKET_PROGRESS_HEADIN
  * in scope for the target row's own deletion, exactly as it already was.
  */
 function bracketProgressSectionRange(content: string): { start: number; end: number } | null {
+  // #5762: the Progress owner's section (first level-2 Progress heading to the next level-1/2
+  // heading), minus the archived/closed milestone headings this remover must not touch.
   const historicalLineStarts = archivedOrClosedMilestoneLineStarts(content);
-  const headings = tokenizeHeadings(content);
-  const headingIndex = headings.findIndex(
-    (heading) => heading.level === 2
-      && BRACKET_PROGRESS_HEADING_TITLE_RE.test(heading.text.trim())
-      && !historicalLineStarts.has(heading.offset),
-  );
-  if (headingIndex === -1) return null;
-  const start = headings[headingIndex].offset;
-  const nextHeading = headings.slice(headingIndex + 1).find((heading) => heading.level <= 2);
-  return { start, end: nextHeading?.offset ?? content.length };
+  return findProgressSection(content, { exclude: (offset) => historicalLineStarts.has(offset) });
 }
 
 /**
@@ -4601,7 +4542,7 @@ function bracketProgressSectionOwnedByOtherMilestone(
 
 /**
  * #4304: the active milestone's OWN heading
- * titled "Progress" (`BRACKET_PROGRESS_HEADING_TITLE_RE` — any suffix, any
+ * titled "Progress" (`isProgressHeadingTitle` — any suffix, any
  * level, case-insensitive), found ANYWHERE inside its primary or details
  * ranges — regardless of what precedes it within those ranges.
  * `bracketMilestoneOwnTableEnd`/`lineStartsInMilestoneOwnTable` above anchor
@@ -4643,7 +4584,7 @@ function bracketOwnProgressSectionRanges(
   headings: readonly HeadingToken[],
 ): { start: number; end: number }[] {
   if (!ranges) return [];
-  const isProgressHeading = (h: HeadingToken): boolean => BRACKET_PROGRESS_HEADING_TITLE_RE.test(h.text.trim());
+  const isProgressHeading = (h: HeadingToken): boolean => isProgressHeadingTitle(h.text);
   const withinActive = (offset: number): boolean =>
     (offset >= ranges.primary.start && offset < ranges.primary.end)
     || Boolean(ranges.details && offset >= ranges.details.start && offset < ranges.details.end)
@@ -4886,7 +4827,7 @@ function planBracketRoadmapRemoval(
   // to a different milestone is that milestone's own record: kept, and not
   // a surviving row of the removed identity.
   const progressSections = headingsForOwnTable
-    .filter((heading) => BRACKET_PROGRESS_HEADING_TITLE_RE.test(heading.text.trim()))
+    .filter((heading) => isProgressHeadingTitle(heading.text))
     .map((heading) => ({
       start: heading.offset,
       end: bracketMilestoneOwnTableEnd(content, heading.offset, headingsForOwnTable),
@@ -4918,7 +4859,7 @@ function planBracketRoadmapRemoval(
       nearest = heading;
     }
     if (!nearest || windowAnchors.has(nearest.offset)) return true;
-    if (BRACKET_PROGRESS_HEADING_TITLE_RE.test(nearest.text.trim())) return true;
+    if (isProgressHeadingTitle(nearest.text)) return true;
     return classifyBracketOwnedLine('#'.repeat(nearest.level) + ' ' + nearest.text).kind === 'heading';
   };
 
@@ -6947,15 +6888,13 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // bug because a GSD-authored ROADMAP.md milestone checklist never puts
         // its own `- [ ] Phase N: …` entries inside a fenced code block, but it
         // is a real (and correct) behavioural difference on pathological input.
-        const checkboxPattern = new RegExp(
-          `^[ \\t]*(-\\s*\\[)[ ](\\]\\s*(?:\\*\\*)?\\s*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\r\\n]*)`,
-          'i',
-        );
+        // The phase-entry grammar's split regexp (#5764): group 1 is everything through the
+        // opening `[` (indent included, so a flip keeps the entry's indent), group 2 the rest.
+        const entryTailSrc = `Phase[ \\t]+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\r\\n]*`;
+        const checkboxPattern = phaseEntrySplitRegExp(entryTailSrc, 'i', { state: 'unchecked' });
 
         // #5165: pre-mutation read of the same checklist line, checked this time.
-        const checkedBoxPattern = new RegExp(
-          `^[ \\t]*(-\\s*\\[)[xX](\\]\\s*(?:\\*\\*)?\\s*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
-        );
+        const checkedBoxPattern = phaseEntrySplitRegExp(entryTailSrc, '', { state: 'checked' });
         const originalMilestoneScope = extractCurrentMilestone(originalRoadmapContent, cwd);
         phaseWasAlreadyComplete = originalMilestoneScope
           .split('\n')
@@ -6984,7 +6923,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // milestone ROADMAP binds, so a shipped milestone's same-numbered phase
         // cannot count.
         if (!phaseWasAlreadyComplete) {
-          const progressTable = locateProgressTable(originalMilestoneScope);
+          const progressTable = locateRoadmapProgress(originalMilestoneScope).table;
           if (progressTable !== null) {
             const wantMilestone = progressTable.columns.includes('Milestone')
               ? normalizeMilestoneToken(roadmapParserMod.getMilestoneInfo(cwd).value?.version)
@@ -6995,28 +6934,6 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
               && (wantMilestone === null || (wantMilestone !== '' && normalizeMilestoneToken(row['Milestone']) === wantMilestone)));
           }
         }
-
-        /**
-         * Within `text` (already scoped to one milestone window by the
-         * caller), scope further to the `## Progress` heading section (up to
-         * the next `#`/`##` heading) when present, run `edit` against just
-         * that slice, and splice the result back — falling back to the whole
-         * `text` when no `## Progress` heading exists (mirrors phase-
-         * lifecycle.cjs's deriveProgressFromRoadmap read-side scoping).
-         */
-        const editProgressHeadingSlice = (text: string, edit: (scoped: string) => string): string => {
-          const progressMatch = text.match(/^##[ \t]+Progress\b/im);
-          if (!progressMatch || progressMatch.index === undefined) {
-            return editFromPhaseTable(text, edit);
-          }
-          const headingOffset = progressMatch.index;
-          const beforeHeading = text.slice(0, headingOffset);
-          const fromHeading = text.slice(headingOffset);
-          const nextHeading = fromHeading.search(/\n#{1,2}[ \t]/);
-          const scoped = nextHeading >= 0 ? fromHeading.slice(0, nextHeading) : fromHeading;
-          const after = nextHeading >= 0 ? fromHeading.slice(nextHeading) : '';
-          return beforeHeading + editFromPhaseTable(scoped, edit) + after;
-        };
 
         // ADR-2143 §4: the plan-count write is now routed through
         // withPhaseSection (see mutateMilestonePhase below), which hands this
@@ -7140,7 +7057,9 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             (rawLine) => rawLine.replace(checkboxPattern, `$1x$2 (completed ${today})`),
           );
 
-          s = editProgressHeadingSlice(s, (scoped) => {
+          // #5762: `s` is already one milestone window; the Progress slice is the owner's
+          // (`editProgressTableSlice` -> `editRoadmapProgress`), the same one `roadmap update-plan-progress` uses.
+          s = editProgressTableSlice(s, (scoped) => {
             let text = scoped;
 
             const plansResult = updateTableCell(text, rowMatch, 'Plans Complete', ` ${summaryCount}/${planCount} `);
@@ -7595,12 +7514,13 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
       if (roadmapContent !== null) {
         try {
           const milestoneForComplete = extractCurrentMilestone(roadmapContent, cwd);
-          const completePattern = new RegExp(
-            `-\\s*\\[[xX]\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})`,
-            'gi'
+          const completePattern = phaseEntryRegExp(
+            `Phase\\s+(${phaseScanTokenSource(directoryContext)})`,
+            'gi',
           );
           let cm: RegExpExecArray | null;
           while ((cm = completePattern.exec(milestoneForComplete)) !== null) {
+            if (!isPhaseEntryChecked(cm[0])) continue;
             if (isSentinelPhaseId(cm[1])) continue;
             if (!roadmapCompleteNums.some((n) => comparePhaseNum(cm![1], n, directoryContext) === 0)) {
               roadmapCompleteNums.push(cm[1]);
@@ -7690,8 +7610,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // just below the loop.
           const phasePattern = new RegExp(
             `(?:#{2,4}\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n*]+)` +
-            `|-\\s*\\[[ xX]\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+))`,
-            'gi'
+            `|${phaseEntryPrefixSrc()}Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+))`,
+            'gim'
           );
           let pm: RegExpExecArray | null;
           while ((pm = phasePattern.exec(roadmapForPhases)) !== null) {
@@ -7791,14 +7711,15 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // Without it, this lowest-outstanding override was blind to dash-grammar
           // rows and could not correct an out-of-order completion on the same
           // mixed-grammar roadmaps that broke stage 2.
-          const cbPattern = new RegExp(
-            `-\\s*\\[(x| )\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+)`,
-            'gi'
+          const cbPattern = phaseEntryRegExp(
+            `Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+)`,
+            'gi',
+            { state: 'captured' },
           );
           let cbm: RegExpExecArray | null;
           let lowestOutstanding: { num: string; name: string } | null = null;
           while ((cbm = cbPattern.exec(milestoneScope)) !== null) {
-            const isChecked = cbm[1].toLowerCase() === 'x';
+            const isChecked = isBoxCharChecked(cbm[1]);
             // #2949: exclude sentinel-range phase ids (0.x backlog, 999.x) from candidacy.
             // comparePhaseNum("0.1","12") === -12, so without this guard an unchecked 0.x
             // backlog row sorts below every real phase and is wrongly selected as next_phase,
