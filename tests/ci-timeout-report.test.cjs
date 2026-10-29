@@ -573,11 +573,37 @@ test('shard balance (#5101)', async (t) => {
   });
 
   await t.test('a shard-layout change reports baseline-mismatch', () => {
+    const oldRuns = constantRuns(THREE_SHARD_CONFIG.minRuns, [1200000, 1200000, 1200000], { startId: 1, base: '2026-09-28T15:00:00Z' });
+    const newRuns = constantRuns(5, [1200000, 1200000, 1200000, 1200000], { startId: 101, base: '2026-09-30T15:00:00Z' });
+
+    const result = evaluateShardBalance(extractShardSamples([...oldRuns, ...newRuns], THREE_SHARD_CONFIG), THREE_SHARD_CONFIG);
+
+    assert.equal(result.status, 'baseline-mismatch');
+  });
+
+  // #5029: right after a re-shard merges, the baseline describes a layout no
+  // completed run uses yet. A mismatch needs minRuns runs of the baseline's
+  // own layout first, so the check cannot file an issue against the re-shard.
+  await t.test('a baseline layout with no runs yet is insufficient-data, not a mismatch (#5029)', () => {
     const runs = constantRuns(5, [1200000, 1200000, 1200000, 1200000]);
 
     const result = evaluateShardBalance(extractShardSamples(runs, THREE_SHARD_CONFIG), THREE_SHARD_CONFIG);
 
-    assert.equal(result.status, 'baseline-mismatch');
+    assert.equal(result.status, 'insufficient-data');
+    assert.equal(result.total, 4);
+  });
+
+  await t.test('baseline-mismatch waits for minRuns runs of the baseline layout (#5029)', () => {
+    const { minRuns } = THREE_SHARD_CONFIG;
+    const statusWith = (baselineLayoutRuns) => {
+      const oldRuns = constantRuns(baselineLayoutRuns, [1200000, 1200000, 1200000], { startId: 1, base: '2026-09-28T15:00:00Z' });
+      const newRuns = constantRuns(5, [1200000, 1200000, 1200000, 1200000], { startId: 101, base: '2026-09-30T15:00:00Z' });
+      return evaluateShardBalance(extractShardSamples([...oldRuns, ...newRuns], THREE_SHARD_CONFIG), THREE_SHARD_CONFIG).status;
+    };
+
+    assert.equal(statusWith(minRuns - 1), 'insufficient-data');
+    assert.equal(statusWith(minRuns), 'baseline-mismatch');
+    assert.equal(statusWith(minRuns + 1), 'baseline-mismatch');
   });
 
   await t.test('mixed layouts use only the newest layout', () => {
@@ -791,6 +817,54 @@ test('shard balance (#5101)', async (t) => {
     assert.equal(insufficientCalls.comment.length, 0);
   });
 
+  // #5029: the live config right after #5029 merges. SHARD_BALANCE already
+  // describes its layout, but every completed `next` push run in the window
+  // is still a 3-shard one. Once the baseline's layout has minRuns runs of its
+  // own, a newer run on another layout is a real mismatch and files the issue.
+  function layoutRuns(count, total, { startId, base }) {
+    const runs = [];
+    const jobsByRunId = {};
+    for (let k = 0; k < count; k += 1) {
+      const id = startId + k;
+      const createdAt = addMs(base, k * 3600000);
+      runs.push({ id, created_at: createdAt, head_sha: `sha${id}`, event: 'push' });
+      jobsByRunId[id] = Array.from({ length: total }, (_, i) => winJobFromMs(i + 1, total, 1200000, { start: createdAt }));
+    }
+    return { runs, jobsByRunId };
+  }
+
+  const previousLayout = 3;
+
+  await t.test('the runs before a re-shard\'s first new-layout run file no issue (#5029)', async () => {
+    assert.notEqual(SHARD_BALANCE.baselineShardTotal, previousLayout, 'fixture precondition: the live layout is not the previous one');
+    const { runs, jobsByRunId } = layoutRuns(SHARD_BALANCE.windowRuns, previousLayout, { startId: 1, base: '2026-10-01T00:00:00Z' });
+    const { github, calls } = makeGithub({ runs, jobsByRunId });
+    const { core } = makeCore();
+
+    const result = await checkShardBalance({ github, context, core, config: SHARD_BALANCE });
+
+    assert.equal(result.status, 'insufficient-data');
+    assert.equal(calls.create.length, 0);
+    assert.equal(calls.comment.length, 0);
+  });
+
+  await t.test('a lane that moves off an established baseline layout files the issue (#5029)', async () => {
+    assert.notEqual(SHARD_BALANCE.baselineShardTotal, previousLayout, 'fixture precondition: the live layout is not the previous one');
+    const established = layoutRuns(SHARD_BALANCE.minRuns, SHARD_BALANCE.baselineShardTotal, { startId: 1, base: '2026-10-01T00:00:00Z' });
+    const moved = layoutRuns(2, previousLayout, { startId: 101, base: '2026-10-05T00:00:00Z' });
+    const { github, calls } = makeGithub({
+      runs: [...established.runs, ...moved.runs],
+      jobsByRunId: { ...established.jobsByRunId, ...moved.jobsByRunId },
+    });
+    const { core } = makeCore();
+
+    const result = await checkShardBalance({ github, context, core, config: SHARD_BALANCE });
+
+    assert.equal(result.status, 'baseline-mismatch');
+    assert.equal(calls.create.length, 1);
+    assert.equal(result.issue.action, 'created');
+  });
+
   await t.test('an API failure is reported, not thrown', async () => {
     const { core, warnings } = makeCore();
     const { github } = makeGithub({ runs: [], jobsByRunId: {}, failListRuns: true });
@@ -899,10 +973,10 @@ test('SHARD_BALANCE matches the windows shard layout test.yml declares (#5029)',
 // #5029: the live gap limit is sized for six ~12-min shards (see the
 // SHARD_BALANCE comment for its measured basis). Boundary-tested against the
 // live config with a 6-shard fixture: one millisecond under the limit and the
-// gap exactly at it are ok, one millisecond over is a breach. Fixture values are derived from the config
-// (the slow shard is the one with the largest p90 baseline, and every shard
-// stays at or under its baseline) so a re-measured config keeps this test
-// meaningful instead of breaking it.
+// gap exactly at it are ok, one millisecond over is a breach. Fixture values
+// are derived from the config (the slow shard is the one with the largest p90
+// baseline, and every shard stays at or under its baseline) so a re-measured
+// config keeps this test meaningful instead of breaking it.
 test('the live gap limit holds at its boundary on the declared shard layout (#5029)', () => {
   const total = SHARD_BALANCE.baselineShardTotal;
   const limit = SHARD_BALANCE.maxMedianGapMs;

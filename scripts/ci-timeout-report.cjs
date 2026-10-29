@@ -798,8 +798,18 @@ function evaluateShardBalance(samples, config) {
 
   if (newestTotal !== config.baselineShardTotal) {
     const perShard = buildPerShard(keptSamples, newestTotal, config);
+    // #5029: a re-shard PR changes the baseline in the same merge, so until
+    // its first push runs complete on `next`, the newest runs still use the
+    // old layout. A mismatch means the lane moved away from the baseline's
+    // layout, which needs that layout to have run: while it has fewer than
+    // minRuns runs here, report insufficient-data rather than file an issue
+    // against the re-shard that just landed.
+    const baselineLayoutRuns = new Set(
+      samples.filter((s) => s.total === config.baselineShardTotal).map((s) => s.runId),
+    ).size;
+    const status = baselineLayoutRuns < config.minRuns ? 'insufficient-data' : 'baseline-mismatch';
     return {
-      status: 'baseline-mismatch', runs: runsCount, total: newestTotal, window: config.windowRuns, perShard, gapMs: null, breaches: [],
+      status, runs: runsCount, total: newestTotal, window: config.windowRuns, perShard, gapMs: null, breaches: [],
     };
   }
 

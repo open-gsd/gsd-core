@@ -32,6 +32,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const yaml = require('js-yaml');
 const { COVERED } = require('../scripts/mutation-matrix.cjs');
+const { THRESHOLD_PCT, isNearCap } = require('../scripts/lib/ci-job-timing.cjs');
+const { CONFORMANCE_TIER_FILES } = require('../scripts/lib/platform-conformance-tier.generated.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', '.github', 'workflows');
 
@@ -240,6 +242,81 @@ test('CI job timeout budgets carry headroom over measured cost (#2952)', async (
     assert.equal(requiredBudgetMinutes(16, 1.5), 24);
     assert.equal(requiredBudgetMinutes(19, 1.5), 29);
     assert.equal(requiredBudgetMinutes(10, 1.5), 15);
+  });
+});
+
+/**
+ * #5029's acceptance criterion: a test that fails against the previous shard
+ * layout and passes against the new one. The test-conformance LANE_COSTS entry
+ * cannot be that test, because it is a measured figure and the same at any
+ * shard count. This one projects the Windows rows' worst shard from the shard
+ * count test.yml declares and the current tier size, at the slow-runner skew
+ * #5029's triage measured from #4935's cancellation (~1.62x), and requires it
+ * to stay out of the near-cap band (THRESHOLD_PCT of timeout-minutes, from
+ * scripts/lib/ci-job-timing.cjs). The macOS rows are held by that LANE_COSTS
+ * entry's measured long pole instead.
+ *
+ * Model: a shard's long pole is a fixed cost plus its share of the tier,
+ * fixedSecondsPerShard + secondsPerTierFile * tierFiles / shards, fitted by
+ * least squares to the slowest Windows shard's job wall-clock in 45 runs: the
+ * 30 newest `next` push runs as of 2026-10-28 (40204893388 to 40743658906; 3
+ * shards, 353-367 files) and the 15 6-shard runs of PR #5053 whose heads carry
+ * #5097's weights (36785097774 to 39722364921; 285-342 files). Fitting with
+ * only the newest two or three 6-shard runs keeps the 3-shard projection at
+ * 96.0-96.5% of the cap and lowers the 6-shard one (66% to 56-58%), so these
+ * are the conservative constants. At 342 files they project 17.6m for six
+ * shards against 14m27s measured (run 39722364921): pessimistic, the safe
+ * direction.
+ */
+const WINDOWS_CONFORMANCE_PROJECTION = {
+  fixedSecondsPerShard: 584,
+  secondsPerTierFile: 8.32,
+  slowRunnerSkew: 1.62,
+};
+
+function projectedLongPoleSeconds(shards, tierFiles, model = WINDOWS_CONFORMANCE_PROJECTION) {
+  return model.fixedSecondsPerShard + (model.secondsPerTierFile * tierFiles) / shards;
+}
+
+// Fraction of the cap a slow runner's long pole would use.
+function slowRunnerCapShare(shards, tierFiles, capMinutes, model = WINDOWS_CONFORMANCE_PROJECTION) {
+  return (projectedLongPoleSeconds(shards, tierFiles, model) * model.slowRunnerSkew) / (capMinutes * 60);
+}
+
+function declaredWindowsConformanceShards(workflow) {
+  const entries = workflow.jobs['test-conformance'].strategy.matrix.include
+    .filter((e) => e.os === 'windows-latest');
+  const totals = [...new Set(entries.map((e) => Number(String(e.shard).split('/')[1])))];
+  assert.equal(totals.length, 1, `windows conformance entries disagree on the shard total: ${JSON.stringify(entries)}`);
+  return totals[0];
+}
+
+test('the Windows conformance worst shard clears its cap on a slow runner (#5029)', async (t) => {
+  await t.test('at the shard count test.yml declares and the current tier size', () => {
+    const workflow = loadWorkflow('test.yml');
+    const cap = workflow.jobs['test-conformance']['timeout-minutes'];
+    const shards = declaredWindowsConformanceShards(workflow);
+    const tierFiles = CONFORMANCE_TIER_FILES.length;
+    const share = slowRunnerCapShare(shards, tierFiles, cap);
+    const projected = projectedLongPoleSeconds(shards, tierFiles);
+
+    assert.equal(
+      isNearCap(share), false,
+      `${shards} windows shards over ${tierFiles} tier files project a ${(projected / 60).toFixed(1)}m worst `
+      + `shard; at the ${WINDOWS_CONFORMANCE_PROJECTION.slowRunnerSkew}x slow-runner skew that is `
+      + `${(share * 100).toFixed(1)}% of the ${cap}m cap, inside the ${THRESHOLD_PCT * 100}% near-cap band. `
+      + 'Add shards (and re-measure SHARD_BALANCE and this lane\'s LANE_COSTS entry); do not raise the cap (ADR-4641).',
+    );
+  });
+
+  // Boundary coverage on the predicate above, with a unit model so the share
+  // is exact: one second under the near-cap line passes, at it and one over fail.
+  await t.test('the near-cap line is exact at the boundary', () => {
+    const unit = { fixedSecondsPerShard: 0, secondsPerTierFile: 1, slowRunnerSkew: 1 };
+    const line = THRESHOLD_PCT * 45 * 60;
+    assert.equal(isNearCap(slowRunnerCapShare(1, line - 1, 45, unit)), false);
+    assert.equal(isNearCap(slowRunnerCapShare(1, line, 45, unit)), true);
+    assert.equal(isNearCap(slowRunnerCapShare(1, line + 1, 45, unit)), true);
   });
 });
 

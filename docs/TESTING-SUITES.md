@@ -651,7 +651,11 @@ measurements are recorded: the long pole per layout, why Windows is split six
 ways and macOS three (a slow macOS runner took the unsharded row past what the
 gate admits), and the figure the cap may not drop below. It had been uncovered
 since #4591, which is how it drifted to a 34m long pole against a 45m cap and
-began cancelling shards whose every chunk passed (#4935).
+began cancelling shards whose every chunk passed (#4935). The same file also
+projects the Windows rows' worst shard from the shard count `test.yml`
+declares and the current tier size, at the slow-runner skew #5029's triage
+measured, and fails when that shard would land in the near-cap band: it fails
+at the previous three-shard layout and passes at six.
 
 #5071 → #5097 has since priced win32 files by win32 measurements. If this lane
 is resharded on the strength of that, re-measure from the new runs and set the
