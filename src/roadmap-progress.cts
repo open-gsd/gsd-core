@@ -95,9 +95,10 @@ export interface LocateRoadmapProgressOptions {
   /**
    * What a Progress section that holds no matching table does. `'none'` (default) yields no
    * table: it never falls through to the rest of the document (#2012 decoy avoidance, and what
-   * `deriveProgressFromRoadmap` and the state contract always did). `'document'` then scans the
-   * whole document, which is what the workstream inventory did before the owner existed. A
-   * section that does hold a matching table always wins, so the decoy is still never picked.
+   * `deriveProgressFromRoadmap` and the state contract always did). `'document'` widens each
+   * column set's probe from the section to the whole document, set by set, which is what the
+   * workstream inventory did before the owner existed. A section that holds a table for the
+   * same column set always wins, so a decoy table before the section is still never picked.
    */
   sectionMiss?: 'none' | 'document';
 }
@@ -176,14 +177,14 @@ export function editRoadmapProgress(
 export function locateRoadmapProgress(content: string, options: LocateRoadmapProgressOptions = {}): RoadmapProgressLocation {
   const section = findProgressSection(content);
   const scoped = section ? content.slice(section.start, section.end) : content;
-  const probe = (text: string): MarkdownTable | null => {
-    for (const columns of options.columns ?? [CANONICAL_COLUMNS]) {
-      const found = findTableWithColumns(text, [...columns]);
-      if (found) return found;
-    }
-    return null;
-  };
-  const table = probe(scoped) ?? (section && options.sectionMiss === 'document' ? probe(content) : null);
+  // `sectionMiss: 'document'` widens each column set's probe from the section to the whole
+  // document, set by set, so an earlier set found anywhere still beats a later set in the section.
+  const widen = section !== null && options.sectionMiss === 'document';
+  let table: MarkdownTable | null = null;
+  for (const columns of options.columns ?? [CANONICAL_COLUMNS]) {
+    table = findTableWithColumns(scoped, [...columns]) ?? (widen ? findTableWithColumns(content, [...columns]) : null);
+    if (table) break;
+  }
   if (!table) return { table: null, rows: [], section };
 
   const want = normalizeMilestoneToken(options.milestone);
