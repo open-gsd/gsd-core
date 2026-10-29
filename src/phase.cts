@@ -79,7 +79,7 @@ import phaseIdDisplayMod = require('./phase-id-display.cjs');
 // numeric canonicalization instead of re-deriving it here — see
 // bracketWriteContext/bracketPhaseId below.
 const { milestoneToken, phaseToken } = phaseIdDisplayMod;
-import { isBoxCharChecked, isPhaseEntryChecked, phaseEntryPrefixSrc, phaseEntryRegExp } from './phase-entry-grammar.cjs';
+import { isBoxCharChecked, isPhaseEntryChecked, phaseEntryPrefixSrc, phaseEntryRegExp, phaseEntrySplitRegExp } from './phase-entry-grammar.cjs';
 import { escapeRegex } from './pattern.cjs';
 import { declareGateExit } from './gate-exit.cjs';
 import { gateVerdict } from './gate-verdict.cjs';
@@ -3230,7 +3230,9 @@ function updateRoadmapAfterPhaseRemoval(
       (h) => h.level >= 2 && h.level <= 4 && phaseHeadingRe.test(h.text),
     );
     content = content.replace(
-      new RegExp(`\\n?-\\s*\\[[ x]\\]\\s*.*Phase\\s+${padTolerant}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*`, 'gi'),
+      // The entry prefix is the phase-entry grammar's (#5764): line-anchored, so a
+      // mid-line mention of the phase is not deleted.
+      new RegExp(`\\n?${phaseEntryPrefixSrc()}Phase[ \\t]+${padTolerant}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*`, 'gim'),
       '',
     );
     // ROW-DELETION (not a cell update) — removes the WHOLE Progress-table row
@@ -3312,7 +3314,7 @@ function updateRoadmapAfterPhaseRemoval(
           `${prefix}${stableIdentity(num) ? num : decrementRoadmapPhaseToken(num, removedInt)}${suffix}`,
       );
       content = content.replace(
-        /(-\s*\[[ x]\]\s*.*?Phase\s+)(\d+)(\s*:|\s+)/gi,
+        new RegExp(`(${phaseEntryPrefixSrc()}Phase[ \\t]+)(\\d+)([ \\t]*:|[ \\t]+|(?=\\r?$))`, 'gim'),
         (_match, prefix: string, num: string, suffix: string) =>
           `${prefix}${stableIdentity(num) ? num : decrementRoadmapPhaseNumber(num, removedInt)}${suffix}`,
       );
@@ -6951,15 +6953,13 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // bug because a GSD-authored ROADMAP.md milestone checklist never puts
         // its own `- [ ] Phase N: …` entries inside a fenced code block, but it
         // is a real (and correct) behavioural difference on pathological input.
-        const checkboxPattern = new RegExp(
-          `^[ \\t]*(-\\s*\\[)[ ](\\]\\s*(?:\\*\\*)?\\s*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\r\\n]*)`,
-          'i',
-        );
+        // The phase-entry grammar's split regexp (#5764): group 1 is everything through the
+        // opening `[` (indent included, so a flip keeps the entry's indent), group 2 the rest.
+        const entryTailSrc = `Phase[ \\t]+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\r\\n]*`;
+        const checkboxPattern = phaseEntrySplitRegExp(entryTailSrc, 'i', { state: 'unchecked' });
 
         // #5165: pre-mutation read of the same checklist line, checked this time.
-        const checkedBoxPattern = new RegExp(
-          `^[ \\t]*(-\\s*\\[)[xX](\\]\\s*(?:\\*\\*)?\\s*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
-        );
+        const checkedBoxPattern = phaseEntrySplitRegExp(entryTailSrc, '', { state: 'checked' });
         const originalMilestoneScope = extractCurrentMilestone(originalRoadmapContent, cwd);
         phaseWasAlreadyComplete = originalMilestoneScope
           .split('\n')

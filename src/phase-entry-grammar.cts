@@ -10,16 +10,19 @@
  * built here and keep only their own tail (label, id token, separator).
  *
  * The accepted grammar:
- *   entry  := indent marker gap box gap bold? gap <caller tail>
+ *   entry  := indent marker mgap box gap bold? gap <caller tail>
  *   indent := [ \t]*                   — an entry starts its line
  *   marker := '-' | '*'
+ *   mgap   := [ \t]{1,4}               — a list item: `-[ ]` is not one (#5764)
  *   box    := '[' (' ' | 'x' | 'X') ']'
  *   bold   := '**' | '__'              — a reader may require it
  *   gap    := [ \t]*                   — horizontal whitespace only
  * A reader that needs plain `- **Phase N**` bullets may make the box optional.
  *
- * Writers (splice, flip, delete, renumber) are Phase 4 (#5764) and are not
- * migrated here.
+ * Writers (flip, delete, renumber, id rewrite) compose their patterns here too
+ * (#5764, Phase 4): `phaseEntryRegExp` for a whole-line match and
+ * `phaseEntrySplitRegExp` when the writer rewrites the box and needs the text on
+ * either side of it.
  */
 
 export interface PhaseEntryPrefixOptions {
@@ -28,13 +31,17 @@ export interface PhaseEntryPrefixOptions {
   /** `required` (default): a `[ ]`/`[x]` box; `optional`: plain `- **Phase N**` bullets too. */
   box?: 'required' | 'optional';
   /**
-   * Which box states match: `any` (default), `unchecked` (`[ ]` only) or
-   * `captured` (any state, as capture group 1 — the box character).
+   * Which box states match: `any` (default), `unchecked` (`[ ]` only),
+   * `checked` (`[x]`/`[X]` only) or `captured` (any state, as capture group 1 —
+   * the box character).
    */
-  state?: 'any' | 'unchecked' | 'captured';
+  state?: 'any' | 'unchecked' | 'checked' | 'captured';
 }
 
 const MARKER_SRC = '[-*]';
+// A list item has 1 to 4 spaces or tabs after its marker (CommonMark: none is not a list item,
+// five or more makes the rest an indented code block), so `-[ ] **Phase 1**` is not an entry.
+const MARKER_GAP_SRC = '[ \\t]{1,4}';
 const BOLD_TOKEN_SRC = '(?:\\*\\*|__)';
 
 /** Regex source of one bold token, for a reader that must also consume the closing wrapper. */
@@ -50,6 +57,7 @@ export const PHASE_ENTRY_BOLD_CLOSE_SRC = '(?:\\*\\*|__(?=[ \\t]*\\r?$))';
 /** Source for the box interior, honouring the requested state filter. */
 function stateSrc(state: PhaseEntryPrefixOptions['state']): string {
   if (state === 'unchecked') return ' ';
+  if (state === 'checked') return '[xX]';
   if (state === 'captured') return '([ xX])';
   return '[ xX]';
 }
@@ -67,7 +75,7 @@ export function phaseEntryPrefixSrc(options: PhaseEntryPrefixOptions = {}): stri
   const boldSrc = bold === 'required' ? `${BOLD_TOKEN_SRC}[ \\t]*` : `(?:${BOLD_TOKEN_SRC}[ \\t]*)?`;
   const body = box === 'optional' ? `(?:${boxSrc})?` : boxSrc;
   // A leading BOM can only precede the first line; it is not part of the grammar's indent.
-  return `^\\uFEFF?[ \\t]*${MARKER_SRC}[ \\t]*${body}${boldSrc}`;
+  return `^\\uFEFF?[ \\t]*${MARKER_SRC}${MARKER_GAP_SRC}${body}${boldSrc}`;
 }
 
 /**
@@ -79,7 +87,25 @@ export function phaseEntryRegExp(tailSrc: string, flags = '', options: PhaseEntr
   return new RegExp(`${phaseEntryPrefixSrc(options)}${tailSrc}`, withM);
 }
 
-const ENTRY_BOX_RE = new RegExp(`^\\uFEFF?[ \\t]*${MARKER_SRC}[ \\t]*\\[([ xX])\\]`);
+/**
+ * A RegExp for a phase entry a writer rewrites at the box: capture group 1 is
+ * everything through the opening `[` (indent, marker, gap) and capture group 2
+ * is everything from the closing `]` through the end of `tailSrc` (gap, bold
+ * token, label). A flip is `line.replace(re, '$1x$2')`; the box state itself is
+ * matched, not captured, so the writer chooses the new state. The `m` flag is
+ * always set.
+ */
+export function phaseEntrySplitRegExp(tailSrc: string, flags = '', options: PhaseEntryPrefixOptions = {}): RegExp {
+  const { bold = 'optional', state = 'any' } = options;
+  const boldSrc = bold === 'required' ? `${BOLD_TOKEN_SRC}[ \\t]*` : `(?:${BOLD_TOKEN_SRC}[ \\t]*)?`;
+  const withM = flags.includes('m') ? flags : `${flags}m`;
+  return new RegExp(
+    `^(\\uFEFF?[ \\t]*${MARKER_SRC}${MARKER_GAP_SRC}\\[)${stateSrc(state === 'captured' ? 'any' : state)}(\\][ \\t]*${boldSrc}${tailSrc})`,
+    withM,
+  );
+}
+
+const ENTRY_BOX_RE = new RegExp(`^\\uFEFF?[ \\t]*${MARKER_SRC}${MARKER_GAP_SRC}\\[([ xX])\\]`);
 
 /**
  * Whether a phase entry line (or a regex match of one, which starts at the

@@ -1,13 +1,14 @@
 /**
- * Cross-site agreement of the ROADMAP phase-entry WRITERS with the phase-entry
- * grammar (#5764, Phase 4 of epic #5692; readers were Phase 3, #5763).
+ * Cross-site agreement on the phase-entry grammar: readers (#5763, Phase 3 of
+ * #5692) and writers (#5764, Phase 4).
  *
  * Generates phase-list entries in every accepted form (marker x gap x box
- * state x bold token x indent) and applies each writer (`phase complete`,
- * `phase remove`, `roadmap update-plan-progress`, `roadmap upgrade`'s id
- * rewrite). Each writer must find the same entry every reader finds, change
- * only that entry, and leave the entry's form untouched. A writer with a
- * divergent private pattern is shown red by the positive control.
+ * state/case x bold token x indent). Readers must reach the same verdict:
+ * whether the phase exists and whether it is ticked. Writers (`phase complete`,
+ * `phase remove`, `roadmap update-plan-progress`, the `roadmap upgrade` id
+ * rewrite) must find the same entry the readers find, change only that entry,
+ * and leave its form untouched. A reader or writer with a divergent private
+ * pattern is shown red by the positive controls.
  */
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
@@ -16,28 +17,172 @@ const fs = require('fs');
 const path = require('path');
 const fc = require('fast-check');
 const { runGsdTools, createTempProject, cleanup, createTempDir } = require('./helpers.cjs');
+const { buildRoadmapPhaseVariants, buildNotStartedPhaseVariants } = require('../gsd-core/bin/lib/validate.cjs');
+const { hasPhaseEntries } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+const { checklistEntrySrc } = require('../gsd-core/bin/lib/roadmap.cjs');
+const { isPhaseEntryChecked } = require('../gsd-core/bin/lib/phase-entry-grammar.cjs');
+const { parsePhaseChecklistLine } = require('../gsd-core/bin/lib/phase-id.cjs');
 const { computeMigrationPlan } = require('../gsd-core/bin/lib/roadmap-upgrade.cjs');
 const { checklistBulletExtent, getRoadmapPhaseInternal } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
 const { buildStateContract } = require('../gsd-core/bin/lib/state-contract.cjs');
 const { buildPlanningSnapshot } = require('../gsd-core/bin/lib/planning-snapshot.cjs');
 
-const SEED = 5764;
+const SEED = 5763;
+const WRITER_SEED = 5764;
 
 const formArb = fc.record({
   indent: fc.constantFrom('', '  ', '\t'),
   marker: fc.constantFrom('-', '*'),
-  gap1: fc.constantFrom('', ' ', '  '),
+  gap1: fc.constantFrom(' ', '  ', '\t'),
   state: fc.constantFrom(' ', 'x', 'X'),
   gap2: fc.constantFrom('', ' '),
   bold: fc.constantFrom('**', '__', ''),
 });
-const uncheckedFormArb = formArb.map((f) => ({ ...f, state: ' ' }));
 
+/** `Phase <id>: Name`, bold-wrapped when the form carries a bold token. */
 function render(form, id = '1') {
   const label = `Phase ${id}: Name`;
   const wrapped = form.bold ? `${form.bold}${label}${form.bold}` : label;
   return `${form.indent}${form.marker}${form.gap1}[${form.state}]${form.gap2}${wrapped}`;
 }
+
+const isTicked = (form) => form.state !== ' ';
+
+/**
+ * A reader: `read(form)` -> verdict `{ found, ticked }`, or null when the form
+ * is outside what that reader is meant to see (a bold-required reader skips
+ * the bold-less forms).
+ */
+function pureReaders() {
+  return [
+    {
+      name: 'validate.buildRoadmapPhaseVariants',
+      read: (form) => ({
+        found: buildRoadmapPhaseVariants(`# Roadmap\n\n${render(form)}\n`).roadmapPhases.has('1'),
+        ticked: null,
+      }),
+    },
+    {
+      name: 'validate.buildNotStartedPhaseVariants',
+      read: (form) => {
+        const notStarted = buildNotStartedPhaseVariants(`# Roadmap\n\n${render(form)}\n`).has('1');
+        // "not started" is the unchecked half: found-and-unchecked <=> state ' '.
+        return { found: true, ticked: !notStarted };
+      },
+    },
+    {
+      name: 'phase-id.parsePhaseChecklistLine',
+      read: (form) => {
+        const parsed = parsePhaseChecklistLine(render(form), null);
+        return { found: parsed !== null && parsed.phaseToken === '1', ticked: parsed ? parsed.checked : null };
+      },
+    },
+    {
+      name: 'roadmap.checklistEntrySrc',
+      read: (form) => {
+        if (!form.bold) return null; // bold-required reader
+        const text = `# Roadmap\n\n${render(form)}\n`;
+        const m = new RegExp(checklistEntrySrc(null), 'im').exec(text);
+        return { found: m !== null, ticked: m ? isPhaseEntryChecked(m[0]) : null };
+      },
+    },
+    {
+      name: 'roadmap-parser.hasPhaseEntries',
+      read: (form) => {
+        if (!form.bold) return null; // bold-required reader
+        return { found: hasPhaseEntries(`# Roadmap\n\n${render(form)}\n`), ticked: null };
+      },
+    },
+  ];
+}
+
+/** Verdicts every reader must share for one form; returns the disagreements. */
+function disagreements(form, readers) {
+  const out = [];
+  for (const reader of readers) {
+    const verdict = reader.read(form);
+    if (verdict === null) continue;
+    if (!verdict.found) out.push(`${reader.name}: did not find ${JSON.stringify(render(form))}`);
+    else if (verdict.ticked !== null && verdict.ticked !== isTicked(form)) {
+      out.push(`${reader.name}: read ticked=${verdict.ticked} for ${JSON.stringify(render(form))}`);
+    }
+  }
+  return out;
+}
+
+describe('phase-entry readers agree on the accepted grammar (#5763)', () => {
+  test('every pure-string reader agrees on every accepted form', () => {
+    fc.assert(
+      fc.property(formArb, (form) => {
+        assert.deepEqual(disagreements(form, pureReaders()), []);
+      }),
+      { seed: SEED, numRuns: 400 },
+    );
+  });
+
+  test('positive control: a reader with a divergent private pattern is red', () => {
+    const divergent = {
+      // The pre-#5763 shape: hyphen only, lowercase x only, bold required.
+      name: 'divergent-reader',
+      read: (form) => {
+        const m = /-\s*\[([ x])\]\s*\*\*Phase\s+1:/i.exec(render(form));
+        return { found: m !== null, ticked: m ? m[1] === 'x' : null };
+      },
+    };
+    const readers = [...pureReaders(), divergent];
+    const reds = [];
+    for (const marker of ['-', '*']) {
+      for (const bold of ['**', '__']) {
+        reds.push(...disagreements({ indent: '', marker, gap1: ' ', state: 'X', gap2: ' ', bold }, readers));
+      }
+    }
+    assert.ok(reds.some((r) => r.startsWith('divergent-reader')), 'the divergent reader must be reported');
+    assert.ok(!reds.some((r) => !r.startsWith('divergent-reader')), `real readers stay green: ${reds.join('; ')}`);
+  });
+});
+
+describe('CLI readers agree on the accepted grammar (#5763)', () => {
+  let tmpDir;
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+  afterEach(() => cleanup(tmpDir));
+
+  function writeRoadmap(entries, details = '') {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap\n\n## Milestone: v1.0\n\n${entries.join('\n')}\n\n${details}`,
+    );
+  }
+
+  test('roadmap analyze: roadmap_record and roadmap_complete follow the tick for every form', () => {
+    fc.assert(
+      fc.property(formArb.filter((f) => f.bold !== ''), (form) => {
+        writeRoadmap([render(form)], '### Phase 1: Name\n\n**Goal**: g\n');
+        const result = runGsdTools('roadmap analyze', tmpDir);
+        assert.ok(result.success, result.error);
+        const out = JSON.parse(result.output);
+        assert.equal(out.roadmap_record['1'], isTicked(form), `roadmap_record for ${JSON.stringify(render(form))}`);
+        assert.equal(out.phases[0].roadmap_complete, isTicked(form), `roadmap_complete for ${JSON.stringify(render(form))}`);
+      }),
+      { seed: SEED, numRuns: 30 },
+    );
+  });
+
+  test('phase next-decimal sees a checklist sibling in every accepted form', () => {
+    fc.assert(
+      fc.property(formArb, (form) => {
+        writeRoadmap([render(form, '1'), render(form, '1.1')], '### Phase 1: Name\n\n**Goal**: g\n');
+        const result = runGsdTools('phase next-decimal 1 --raw', tmpDir);
+        assert.ok(result.success, result.error);
+        assert.match(result.output.trim(), /1\.2$/, `next decimal after ${JSON.stringify(render(form, '1.1'))}`);
+      }),
+      { seed: SEED, numRuns: 30 },
+    );
+  });
+});
+
+// ─── Writers (#5764) ─────────────────────────────────────────────────────────
 
 /** Lines that open a checklist entry of any accepted form. */
 const entryLines = (text) => text.split('\n').filter((l) => /^[ \t]*[-*][ \t]*\[[ xX]\]/.test(l.replace(/\r$/, '')));
@@ -182,12 +327,16 @@ function writers() {
 describe('phase-entry writers agree with the grammar on every accepted form (#5764)', () => {
   for (const writer of writers()) {
     test(`${writer.name}: finds, changes and preserves the entry in every accepted form`, () => {
+      // A flip writer only ever sees an unchecked entry, so generate those.
+      const arb = writer.name.startsWith('phase complete') || writer.name.startsWith('roadmap update-plan-progress')
+        ? formArb.map((f) => ({ ...f, state: ' ' }))
+        : formArb;
       fc.assert(
-        fc.property(formArb, (form) => {
+        fc.property(arb, (form) => {
           const problems = writer.run(form);
           if (problems !== null) assert.deepEqual(problems, [], `form ${JSON.stringify(render(form))}`);
         }),
-        { seed: SEED, numRuns: 24 },
+        { seed: WRITER_SEED, numRuns: 24 },
       );
     });
   }
@@ -272,7 +421,7 @@ describe('writers leave text that is not a phase entry alone (#5764)', () => {
     assert.equal(entries[2], '- [ ] **Phase 20: Name**');
   });
 
-  test('phase complete on a CRLF ROADMAP keeps each entry on one CRLF line', () => {
+  test('phase complete on a CRLF ROADMAP stamps the entry on its own line (the writer normalizes to LF)', () => {
     writeProject(
       dir,
       [...MILESTONE, '* [ ] **Phase 1: Name**', '* [ ] **Phase 2: Name**', '', '### Phase 1: Name', '**Goal:** g', '**Plans:** 1 plans', ''].join('\r\n'),
@@ -287,9 +436,11 @@ describe('writers leave text that is not a phase entry alone (#5764)', () => {
     );
     const result = runGsdTools(['phase', 'complete', '1'], dir);
     assert.ok(result.success, result.error);
-    const [first, second] = entryLines(readRoadmap(dir));
-    assert.match(first, /^\* \[x\] \*\*Phase 1: Name\*\* \(completed \d{4}-\d{2}-\d{2}\)\r$/, 'stamp stays before the line ending');
-    assert.equal(second, '* [ ] **Phase 2: Name**\r');
+    const text = readRoadmap(dir);
+    assert.equal(text.includes('\r'), false, 'no stray carriage return is left behind');
+    const [first, second] = entryLines(text);
+    assert.match(first, /^\* \[x\] \*\*Phase 1: Name\*\* \(completed \d{4}-\d{2}-\d{2}\)$/, 'the stamp lands on the entry line');
+    assert.equal(second, '* [ ] **Phase 2: Name**');
   });
 });
 
