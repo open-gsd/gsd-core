@@ -1260,7 +1260,7 @@ function executeWorktreeWaveCleanupPlan(plan: WaveCleanupPlan | null, deps: Work
   }
 
   // #4853: an empty manifest wave cleanup plan is a valid no-op reconciliation
-  // ONLY if no unmanifested agent worktrees exist on disk (Major 3).
+  // ONLY if no unmanifested agent worktrees exist on disk.
   if (entries.length === 0) {
     const listResult = readWorktreeList(plan.repoRoot, { execGit });
     if (!listResult.ok) {
