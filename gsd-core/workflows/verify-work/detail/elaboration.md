@@ -136,6 +136,7 @@ This lets `/gsd:verify-work` reconcile resolved gaps on resume (a gap whose plan
 """,
   subagent_type="gsd-planner",
   model="{planner_model}",
+  {planner_effort_arg},
   description="Plan gap fixes for Phase {phase}"
 )
 ````
@@ -185,6 +186,7 @@ Return one of:
 """,
   subagent_type="gsd-plan-checker",
   model="{checker_model}",
+  {checker_effort_arg},
   description="Verify Phase {phase} fix plans"
 )
 ```
@@ -227,6 +229,7 @@ the binding/non-binding contract and REVISION_CONFLICT handling stated above thi
 """,
   subagent_type="gsd-planner",
   model="{planner_model}",
+  {planner_effort_arg},
   description="Revise Phase {phase} plans"
 )
 ```

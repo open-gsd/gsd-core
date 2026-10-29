@@ -3922,6 +3922,9 @@ function cmdInitDebug(cwd: string, raw: boolean, options: Record<string, unknown
     debug_dir: toPosixPath(planningPaths(cwd).debug),
     debugger_model: resolveModelInternal(cwd, 'gsd-debugger'),
     debugger_effort_arg: resolveEffortArgInternal(cwd, 'gsd-debugger'),
+    // #5330: debug.md spawns gsd-debug-session-manager (with debugger_model); its
+    // effort is resolved for the agent actually spawned, so its own override applies.
+    debug_session_manager_effort_arg: resolveEffortArgInternal(cwd, 'gsd-debug-session-manager'),
     tdd_mode: Boolean(config.tdd_mode),
     diagnose: options['diagnose'] === true,
   };

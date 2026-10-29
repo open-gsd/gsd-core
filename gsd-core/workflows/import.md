@@ -207,6 +207,7 @@ Print: "Delegating to gsd-plan-checker (runs in a subagent — no output until i
 
 ```bash
 CHECKER_MODEL=$(gsd_run query resolve-model gsd-plan-checker --raw)
+CHECKER_EFFORT_ARG=$(gsd_run query resolve-model gsd-plan-checker --pick effort_arg 2>/dev/null || true)
 ```
 
 <!-- #2508 runtime-aware-dispatch -->
@@ -215,12 +216,13 @@ CHECKER_MODEL=$(gsd_run query resolve-model gsd-plan-checker --raw)
 
 <!-- #2517 model-omit-on-inherit -->
 
-> **Model omission (#2517).** Omit the `model` parameter entirely when the value it would carry (`CHECKER_MODEL`) is `"inherit"` or empty. An empty value 404s on runtimes without native tier aliases — the default on non-Claude runtimes. Omitting it inherits the orchestrator's model. See @gsd-core/references/model-profile-resolution.md.
+> **Model omission (#2517).** Omit the `model` parameter entirely when the value it would carry (`CHECKER_MODEL`) is `"inherit"` or empty. An empty value 404s on runtimes without native tier aliases — the default on non-Claude runtimes. Omitting it inherits the orchestrator's model. See @gsd-core/references/model-profile-resolution.md. In the object-form call below, write the value of `CHECKER_EFFORT_ARG` as `effort: "<level>"`, and omit it when empty.
 
 ```
 Agent({
   subagent_type: "gsd-plan-checker",
   model: "{CHECKER_MODEL}",
+  {CHECKER_EFFORT_ARG},
   prompt: "Validate: ${phase_dir}/{plan}-PLAN.md — check frontmatter completeness, task structure, and GSD conventions. Report any issues."
 })
 ```

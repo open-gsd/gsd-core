@@ -164,6 +164,7 @@ Display: "◆ Analyzing patterns..."
 
 ```bash
 PROFILER_MODEL=$(gsd_run query resolve-model gsd-user-profiler --raw)
+PROFILER_EFFORT_ARG=$(gsd_run query resolve-model gsd-user-profiler --pick effort_arg 2>/dev/null || true)
 ```
 
 <!-- #2517 model-omit-on-inherit -->
@@ -172,7 +173,7 @@ PROFILER_MODEL=$(gsd_run query resolve-model gsd-user-profiler --raw)
 
 **Spawn gsd-user-profiler agent using Task tool:**
 
-Use the Task tool to spawn the `gsd-user-profiler` agent, passing `model="{PROFILER_MODEL}"` (omit the parameter per the rule above when the value is `"inherit"` or empty). Provide it with:
+Use the Task tool to spawn the `gsd-user-profiler` agent, passing `model="{PROFILER_MODEL}"` (omit the parameter per the rule above when the value is `"inherit"` or empty) and `{PROFILER_EFFORT_ARG}` (omitted when empty). Provide it with:
 - The sampled JSONL file path from profile-sample output
 - The user-profiling reference doc at `$HOME/.claude/gsd-core/references/user-profiling.md`
 

@@ -38,6 +38,7 @@ ${AGENT_SKILLS_VERIFIER}
 Check must_haves against the actual codebase. Create VERIFICATION.md at ${ITEM_DIR}/${quick_id}-VERIFICATION.md.",
   subagent_type="gsd-verifier",
   model="{verifier_model}",
+  {verifier_effort_arg},
   description="Verify ${quick_id}: ${description}"
 )
 ```

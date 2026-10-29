@@ -80,6 +80,7 @@ Return: ## RESEARCH COMPLETE with file path
 ",
   subagent_type="gsd-phase-researcher",
   model="{researcher_model}",
+  {researcher_effort_arg},
   description="Research: ${description}"
 )
 ```

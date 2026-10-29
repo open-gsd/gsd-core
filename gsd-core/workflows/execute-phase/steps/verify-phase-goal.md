@@ -15,7 +15,7 @@ table in `aggregate_results`, the roadmap/state writes after a `passed` verdict)
 **Inputs — one bundle for both callers.** The `gsd_run query init.execute-phase "${PHASE_NUMBER}"`
 bundle (execute-phase loaded it in `initialize`; verify-work loads the same query before including
 this file). From it: `phase_dir` (`PHASE_DIR`), `phase_number` (`PHASE_NUMBER`),
-`verifier_model`, `phase_req_ids`, `requirements_path`, `section_manifest`, `response_language`.
+`verifier_model`, `verifier_effort_arg`, `phase_req_ids`, `requirements_path`, `section_manifest`, `response_language`.
 The phase goal is the `**Goal**` of this phase in ROADMAP.md, loaded explicitly below as `PHASE_GOAL`
 (`roadmap.get-phase --pick goal`, the query `verify-work/steps/mvp-uat-framing.md` uses) — the same
 value for both callers, never left for the model to resolve. Resolve the rest the same way:
@@ -153,7 +153,8 @@ ${CONTEXT_WINDOW >= 500000 ? `- {phase_dir}/*-CONTEXT.md (User decisions — ver
 
 ${VERIFIER_SKILLS}",
   subagent_type="gsd-verifier",
-  model="{verifier_model}"
+  model="{verifier_model}",
+  {verifier_effort_arg}  # omit this line when empty
 )
 ```
 
