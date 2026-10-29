@@ -21,6 +21,11 @@
  *     fall through to the rest of the document (#2012 decoy avoidance).
  *   - A document with no Progress heading is scanned whole (a headingless
  *     milestone slice, #1445, keeps resolving).
+ *   - Two readers had a wider pre-owner reach and ask for it by name, so the
+ *     rule stays single (#5692: no behavior change for existing ROADMAP.md
+ *     files): `levels: [1, 2]` for the archive-span probe, which always took a
+ *     level-1 `# Progress`, and `sectionMiss: 'document'` for the workstream
+ *     inventory, which always read a table outside a table-less section.
  *   - The milestone slice (#5165): when the caller names a milestone and the
  *     table carries a `Milestone` column, only that milestone's rows.
  *
@@ -64,6 +69,12 @@ export interface FindProgressSectionOptions {
   exclude?: ((offset: number) => boolean) | null;
   /** Active-milestone character range (`maskArchivedDetails().activeRange`): a Progress heading inside it wins. */
   active?: { start: number; end: number } | null;
+  /**
+   * Heading levels that count as a Progress heading. Default `[2]`. The archive-span probe
+   * (`scanArchiveSpans`) passes `[1, 2]`: it always took a level-1 `# Progress` too, and epic
+   * #5692 promises no behavior change for existing ROADMAP.md files.
+   */
+  levels?: readonly number[];
 }
 
 export interface EditRoadmapProgressOptions {
@@ -81,6 +92,14 @@ export interface LocateRoadmapProgressOptions {
   columns?: ReadonlyArray<readonly string[]>;
   /** Milestone to slice rows to (#5165). Absent/blank keeps every row. */
   milestone?: string | null;
+  /**
+   * What a Progress section that holds no matching table does. `'none'` (default) yields no
+   * table: it never falls through to the rest of the document (#2012 decoy avoidance, and what
+   * `deriveProgressFromRoadmap` and the state contract always did). `'document'` then scans the
+   * whole document, which is what the workstream inventory did before the owner existed. A
+   * section that does hold a matching table always wins, so the decoy is still never picked.
+   */
+  sectionMiss?: 'none' | 'document';
 }
 
 export interface RoadmapProgressLocation {
@@ -116,21 +135,21 @@ export function milestoneVersionOf(value: unknown): string | null {
 }
 
 /**
- * The Progress section of `content`: the first level-2 heading outside fenced
- * code whose text starts with the word `Progress`, up to the next level-1/2
- * heading. Null when the document has no such heading.
+ * The Progress section of `content`: the first level-2 heading (`levels` widens
+ * this) outside fenced code whose text starts with the word `Progress`, up to
+ * the next level-1/2 heading. Null when the document has no such heading.
  */
 export function findProgressSection(content: string, options: FindProgressSectionOptions = {}): ProgressSectionRange | null {
   const headings = tokenizeHeadings(content);
-  const { active, exclude } = options;
+  const { active, exclude, levels = [2] } = options;
   const isProgress = (h: HeadingToken): boolean =>
-    h.level === 2 && isProgressHeadingTitle(h.text) && !(exclude && exclude(h.offset));
+    levels.includes(h.level) && isProgressHeadingTitle(h.text) && !(exclude && exclude(h.offset));
   // #5553: with an active-milestone range, the first Progress heading INSIDE it wins over an
   // earlier one (a shipped plain section's own table); with none in range, the first overall.
   const inActive = active ? headings.findIndex((h) => isProgress(h) && h.offset >= active.start && h.offset < active.end) : -1;
   const index = inActive !== -1 ? inActive : headings.findIndex(isProgress);
   if (index === -1) return null;
-  return headingSliceRange(content, headings, index, 2);
+  return headingSliceRange(content, headings, index, Math.min(headings[index].level, 2));
 }
 
 /**
@@ -157,11 +176,14 @@ export function editRoadmapProgress(
 export function locateRoadmapProgress(content: string, options: LocateRoadmapProgressOptions = {}): RoadmapProgressLocation {
   const section = findProgressSection(content);
   const scoped = section ? content.slice(section.start, section.end) : content;
-  let table: MarkdownTable | null = null;
-  for (const columns of options.columns ?? [CANONICAL_COLUMNS]) {
-    table = findTableWithColumns(scoped, [...columns]);
-    if (table) break;
-  }
+  const probe = (text: string): MarkdownTable | null => {
+    for (const columns of options.columns ?? [CANONICAL_COLUMNS]) {
+      const found = findTableWithColumns(text, [...columns]);
+      if (found) return found;
+    }
+    return null;
+  };
+  const table = probe(scoped) ?? (section && options.sectionMiss === 'document' ? probe(content) : null);
   if (!table) return { table: null, rows: [], section };
 
   const want = normalizeMilestoneToken(options.milestone);

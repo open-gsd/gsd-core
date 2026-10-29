@@ -1799,7 +1799,8 @@ function scanArchiveSpans(content: string, active: Array<{ start: number; end: n
     if (active.some((r) => start <= r.start && r.start < end)) continue;
     const inRange = overlapsActive(start, end) && !closedSummary(start);
     // A collapsed block of the active range that holds the Progress table stays editable, so the row moves with the plan ticks.
-    if (inRange && findProgressSection(scan.slice(start, end)) !== null) { kept.push({ start, end }); continue; }
+    // A level-1 `# Progress` has always counted here (#5692: no behavior change), hence `levels`.
+    if (inRange && findProgressSection(scan.slice(start, end), { levels: [1, 2] }) !== null) { kept.push({ start, end }); continue; }
     spans.push({ start, end });
     if (inRange) inActive.push({ start, end });
   }
