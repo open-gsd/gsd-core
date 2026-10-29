@@ -86,7 +86,8 @@ describe('phase-entry grammar (#5763)', () => {
   test('state: unchecked matches only [ ]; captured adds exactly one group', () => {
     assert.ok(entry({ state: 'unchecked' }).test('- [ ] Phase 1: x'));
     assert.ok(!entry({ state: 'unchecked' }).test('- [x] Phase 1: x'));
-    const m = entry({ state: 'captured' }).exec('- [X] Phase 1: x');
+    const subject = '- [X] Phase 1: x';
+    const m = entry({ state: 'captured' }).exec(subject);
     assert.equal(m.length, 2);
     assert.equal(m[1], 'X');
   });
@@ -120,9 +121,10 @@ describe('phase-entry grammar (#5763)', () => {
 
   test('the closing bold wrapper does not cut a name containing __', () => {
     const re = new RegExp(`Phase\\s+1:\\s*(.+?)${PHASE_ENTRY_BOLD_CLOSE_SRC}`, 'im');
-    assert.equal(re.exec('- [ ] **Phase 1: Add __init__ support**')[1], 'Add __init__ support');
-    assert.equal(re.exec('- [ ] **Phase 1: Wire __tests__**')[1], 'Wire __tests__');
-    assert.equal(re.exec('- [ ] __Phase 1: Name__')[1], 'Name');
+    const nameOf = (line) => re.exec(line)[1];
+    assert.equal(nameOf('- [ ] **Phase 1: Add __init__ support**'), 'Add __init__ support');
+    assert.equal(nameOf('- [ ] **Phase 1: Wire __tests__**'), 'Wire __tests__');
+    assert.equal(nameOf('- [ ] __Phase 1: Name__'), 'Name');
   });
 
   test('other checkbox families never match a Phase tail', () => {
