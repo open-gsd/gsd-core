@@ -137,11 +137,12 @@ const LANE_COSTS = [
     // GitHub applies ONE job-level budget across every matrix combination, so
     // this figure is the slowest ROW, windows or macos shard.
     //
-    // It is windows. Sharded SIX ways as of #5029, its long pole across twelve
-    // 6-shard runs was 16m38s / 15m17s / 16m25s / 16m21s / 17m22s / 18m15s /
-    // 16m31s / 18m07s / 15m34s / 18m49s / 18m38s / 19m15s — usually shard 5/6.
-    // The worst, 19m15s (shard 5/6, run 38650210804), rounds up to 20, so this
-    // cap may not drop below 30m.
+    // It is windows. Sharded SIX ways as of #5029, its long pole across
+    // seventeen 6-shard runs was 16m38s / 15m17s / 16m25s / 16m21s / 17m22s /
+    // 18m15s / 16m31s / 18m07s / 15m34s / 18m49s / 18m38s / 19m15s / 16m58s /
+    // 16m23s / 15m18s / 14m27s / 18m35s (the last on run 40798310354, at 367
+    // tier files). The worst, 19m15s (shard 5/6, run 38650210804), rounds up
+    // to 20, so this cap may not drop below 30m.
     //
     // macOS was the slowest row until #5029 sharded it too. Unsharded it ran
     // 18m13s-26m01s across six runs on this PR (repo-wide p90 26.0m over 43
@@ -150,10 +151,11 @@ const LANE_COSTS = [
     // chunk 1.1-2.1x slower on the same 228-file tier). By this file's convention that
     // observation counts: m=40 requires 60m, over the 45m cap, so the row was
     // split three ways rather than the observation excluded. First 3-shard
-    // run (37694227292): 8m42s / 7m48s / 10m09s. Even at that slow runner's
-    // worst 2.1x, the 10m09s shard would be ~21m: it would then set this
-    // entry (22, so 33m required), still inside the 45m cap. If a macOS shard
-    // ever outruns windows, it sets this entry — re-measured, never scaled.
+    // run (37694227292): 8m42s / 7m48s / 10m09s; the worst 3-shard row since
+    // is 11m49s (shard 2/3, run 40798310354). Even at that slow runner's worst
+    // 2.1x, 11m49s would be ~25m: it would then set this entry (25, so 38m
+    // required), still inside the 45m cap. If a macOS shard ever outruns
+    // windows, it sets this entry — re-measured, never scaled.
     //
     // Why six shards and not fewer, in budget terms: measured windows long
     // poles were 34m24s and 34m14s at 3 shards (runs 36322513056, 36357457440)
@@ -169,7 +171,7 @@ const LANE_COSTS = [
     // This comment is the one record of these long poles (test.yml and
     // the TESTING-SUITES doc point here). Per-shard medians, p90s and the
     // shard-balance gap live in SHARD_BALANCE in scripts/ci-timeout-report.cjs.
-    evidence: 'run 38650210804 — windows shard 5/6 19m15s, worst of twelve 6-shard runs (binding row); macOS 3-shard long pole 10m09s on run 37694227292',
+    evidence: 'run 38650210804 — windows shard 5/6 19m15s, worst of seventeen 6-shard runs (binding row); macOS 3-shard worst 11m49s on run 40798310354',
   },
 ];
 
@@ -264,9 +266,10 @@ test('CI job timeout budgets carry headroom over measured cost (#2952)', async (
  * #5097's weights (36785097774 to 39722364921; 285-342 files). Fitting with
  * only the newest two or three 6-shard runs keeps the 3-shard projection at
  * 96.0-96.5% of the cap and lowers the 6-shard one (66% to 56-58%), so these
- * are the conservative constants. At 342 files they project 17.6m for six
- * shards against 14m27s measured (run 39722364921): pessimistic, the safe
- * direction.
+ * are the conservative constants. They model a typical runner, and single
+ * runs fall on either side: for six shards they project 17.6m at 342 files
+ * against 14m27s measured (run 39722364921), and 18.2m at 367 files against
+ * 18m35s (run 40798310354). The slow-runner skew is the margin for the rest.
  */
 const WINDOWS_CONFORMANCE_PROJECTION = {
   fixedSecondsPerShard: 584,
