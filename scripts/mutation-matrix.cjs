@@ -693,18 +693,18 @@ const COVERED = {
   // global trigger (below); it changed in 2 commits on next since 2026-07-01, the same rate
   // as state-contract.unit.test.cjs.
   //
-  // Re-derived after #4904 removed the sealed Set views and the frozen exports:
-  // CI run 38679417039, job 116240422047, `Stryker (dispatch-isolation)` (PR #5126):
-  // 81.48% (22 killed / 0 timeout / 5 survived), matching a local run with the same inputs,
-  // the mutants the seal added gone with it. All 5 survivors are equivalent for this tree:
+  // Re-derived after parseRenewHeldMs moved into the module (#4904): CI run 40947108766,
+  // job 123705480087, `Stryker (dispatch-isolation)` (PR #5126): 87.18% (34 killed /
+  // 0 timeout / 5 survived); every parser mutant is killed by the parity file's rows and
+  // properties. The 5 survivors are the ones measured before it, all equivalent for this tree:
   // the three __esModule interop mutants (only a default or namespace import reads that
   // flag, and no consumer uses either), and `typeof value === 'string' &&` -> `true &&` in
   // both guards (both Sets are built from the string tuples and nothing in the tree adds to
-  // them, so no non-string is ever a member). Floor = floor(81.48) - 1 = 80.
+  // them, so no non-string is ever a member). Floor = floor(87.18) - 1 = 86.
   'dispatch-isolation': {
     cjs: 'gsd-core/bin/lib/dispatch-isolation.cjs',
     extraTests: ['host-integration-validator-parity.test.cjs'],
-    minScore: 80,
+    minScore: 86,
   },
 };
 
