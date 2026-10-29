@@ -3457,10 +3457,18 @@ describe('partitionIsolatedFiles (#4497 codex-config.test.cjs chunk isolation, d
   // (0.3 * CHUNK_WORKING_BUDGET_MS ~= 120000ms). It correctly no longer
   // appears in the live-computed isolated set, so it is dropped from this
   // pinned expectation too, in place of being isolated by name.
+  //
+  // The table backfill that fixed the shard 2/3 cap overrun on next
+  // (run 40803043818) priced 445 previously unmeasured files. Two of them are
+  // genuinely heavy — custom-phase-readers.test.cjs (~240s) and
+  // lint-gate-evidence-drift.test.cjs (~144s) — and had been packed as a
+  // 7s mean-weight file; both now cross the bar and are isolated by name.
   const EXPECTED_ISOLATED_UNIT_FILES = [
     'config.test.cjs',
+    'custom-phase-readers.test.cjs',
     'emitted-attribution.test.cjs',
     'install-minimal-hooks.test.cjs',
+    'lint-gate-evidence-drift.test.cjs',
     'install.test.cjs',
     'phase.test.cjs',
     'run-tests-harness.test.cjs',
@@ -3486,7 +3494,7 @@ describe('partitionIsolatedFiles (#4497 codex-config.test.cjs chunk isolation, d
     return { weightOf, isMeasured, thresholdWeight, unitFiles };
   }
 
-  test('#4603/#4733: the live-table unit-suite isolated set equals the historical 8-file set exactly', () => {
+  test('#4603/#4733: the live-table unit-suite isolated set equals the pinned isolated set exactly', () => {
     const { weightOf, isMeasured, thresholdWeight, unitFiles } = liveTableFixtures();
     const { isolated } = partitionIsolatedFiles(unitFiles, { weightOf, isMeasured, thresholdWeight });
     const basenames = isolated.map((f) => f.split(/[\\/]/).pop()).sort();
