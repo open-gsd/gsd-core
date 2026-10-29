@@ -2373,7 +2373,7 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
   });
 
   test('stdout REPORTS the held `none` — raw prints it, and --json marks it held with no harness flag or exec', (t) => {
-    // #4904 review / the #5254 brief: "the query's stdout reports the held
+    // #4904 / #5254: "the query's stdout reports the held
     // value". The guard and the workflow read one decision; the dispatch
     // sites tell a held `none` from a declared one by `held`.
     const dir = createTempProject('gsd-4561-hold-');
@@ -2643,7 +2643,7 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
       assert.equal(sentinel.decided_at, T0, 'and kept the held decision\'s time');
     });
 
-    // Codex RV6.5 review of #5126: with the re-record skipped, the guard read
+    // With the re-record skipped, the guard read
     // the HELD record at dispatch time — a description that parses as another
     // phase, or the held record lapsing before the dispatch, made it fall back
     // to the registry and deny the sequential dispatch the hold asked for.
@@ -2687,7 +2687,7 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
     });
   }
 
-  // RV6.5 review of this round: after a held phase-level answer the per-plan
+  // After a held phase-level answer the per-plan
   // gate inherits USE_WORKTREES=false and forces a literal `none` for each
   // plan. Without the held answer's time that write restarted the hold.
   test('per-plan-worktree-gate.md after a held answer: the plan-scoped record keeps the held decision time', { skip: NO_BASH }, (t) => {
@@ -2985,7 +2985,7 @@ describe('#4561/#4630 — the hold\'s freshness window at both boundaries (readS
   }
 });
 
-// #4904 review (trek-e, 2026-10-21, Minor 1): every gate that follows a held
+// #4904: every gate that follows a held
 // `none` re-records it, so the guard has a fresh record at its own dispatch.
 // That re-record used to restart the hold as well, so runs started less than
 // ten minutes apart kept a degrade alive indefinitely and a base-check degrade
@@ -3100,7 +3100,7 @@ describe('#4904: a renewed hold lapses ten minutes after the degrade was decided
     assert.equal(answer.held, true, 'without the flag the second write restarted the hold — the behaviour the flag bounds');
   });
 
-  // RV6.5 review of this round: renewal used to read the time from whatever
+  // Renewal used to read the time from whatever
   // caller `none` stood in the file at write time. Another plan's degrade
   // recorded between a site's held query and its re-record then lent that
   // site its own, later time, and extended the hold the site had followed.
@@ -3162,7 +3162,7 @@ describe('#4904: a renewed hold lapses ten minutes after the degrade was decided
   // following a held none, and one that restarts the hold keeps the chain
   // alive on its own. The scan covers every forced re-record, not only the
   // `$ISOLATION` ones: the per-plan gate forces a literal `none` when it
-  // inherits a held USE_WORKTREES=false (RV6.5 review of this round). Three
+  // inherits a held USE_WORKTREES=false. Three
   // literal sites are new decisions by construction, each named with why.
   const FRESH_DECISION_SITES = {
     // only on an orchestrator-worktree host, which a held answer never is

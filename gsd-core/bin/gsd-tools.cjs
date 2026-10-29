@@ -2451,7 +2451,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // while still going through this single write path. `--renew-held <ms>`,
     // beside `--force-isolation none`, marks that write as a dispatch site
     // following a held degrade rather than deciding a new one, and carries the
-    // held answer's own `decidedAt` (#4904 review). Best-effort: a
+    // held answer's own `decidedAt` (#4904). Best-effort: a
     // sentinel write failure here must never fail the wave.
     const decision = resolveDispatchIsolationDecision({ args, cwd });
     const runtimeId = decision.runtimeId;
@@ -2583,7 +2583,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // sticky, and a fresh run with no sentinel records the natural
     // capability as it always did.
     //
-    // STDOUT REPORTS THE HELD VALUE (#4904 review, the #5254 brief): a held
+    // STDOUT REPORTS THE HELD VALUE (#4904, #5254): a held
     // query prints `none`, clears `harnessFlag`/`exec` the way a forced
     // `none` does, and sets `held: true` under --json. The guard and the
     // workflow then read the same decision. The dispatch sites tell a held
@@ -2624,7 +2624,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // repository caught up. The record is the caller's only when it records
     // exactly what the caller forced.
     const decidedBy = forcedApplied && recordedIsolation === forcedIsolation ? 'caller' : 'resolver';
-    // `--renew-held <ms>` (#4904 review): a dispatch site re-recording the
+    // `--renew-held <ms>` (#4904): a dispatch site re-recording the
     // `none` its own plain query reported as held passes that answer's
     // `decidedAt`, so the record keeps the decision it followed and the hold
     // does not outlive the degrade that started it. The value comes from the
@@ -3230,7 +3230,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       // costs one sequential run, while clobbering one the caller owns makes
       // the guard refuse the dispatch and the work does not run at all.
       decided_by: decidedBy,
-      // #4904 review — WHEN the decision was first made, so a renewed hold
+      // #4904 — WHEN the decision was first made, so a renewed hold
       // lapses ten minutes after the degrade itself, not after the last gate
       // that re-recorded it. A fresh decision is decided as it is written; a
       // `--renew-held` re-record passes the held record's value through.
