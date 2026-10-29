@@ -819,6 +819,17 @@ describe('roadmap-parser: maskArchivedDetails', () => {
     assert.ok(visible.includes('new'));
   });
 
+  // A collapsed block of the active range that holds the Progress table stays editable. A level-1
+  // `# Progress` heading always counted, so epic #5692's single Progress owner must keep it (and
+  // keep ### Progress, which never did, masked).
+  for (const [heading, kept] of [['# Progress', true], ['## Progress', true], ['### Progress', false]]) {
+    test(`a collapsed block of the active range holding "${heading}" is ${kept ? 'kept visible' : 'masked'}`, () => {
+      const block = `<details>\n<summary>Tracking</summary>\n\n${heading}\n\n| Phase | Plans Complete | Status | Completed |\n| --- | --- | --- | --- |\n| 1. Row | 0/1 | Planned | - |\n</details>\n`;
+      const { visible } = maskArchivedDetails(`${ACTIVE}\n${block}`, tmpDir);
+      assert.strictEqual(visible.includes('1. Row'), kept);
+    });
+  }
+
   test('an unclosed fence is bounded at the next heading, so a later archive is still masked', () => {
     const { visible } = maskArchivedDetails(`# Roadmap\n\n\`\`\`\nstray\n\n## Notes\n\n${ARCHIVE}\n\n${ACTIVE}`, tmpDir);
     assert.ok(!visible.includes('old'), 'archive after the unclosed fence hidden');
