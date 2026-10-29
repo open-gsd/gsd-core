@@ -3457,10 +3457,18 @@ describe('partitionIsolatedFiles (#4497 codex-config.test.cjs chunk isolation, d
   // (0.3 * CHUNK_WORKING_BUDGET_MS ~= 120000ms). It correctly no longer
   // appears in the live-computed isolated set, so it is dropped from this
   // pinned expectation too, in place of being isolated by name.
+  //
+  // The table backfill that fixed the shard 2/3 cap overrun on next
+  // (run 40803043818) priced 445 previously unmeasured files. Two of them are
+  // genuinely heavy — custom-phase-readers.test.cjs (~240s) and
+  // lint-gate-evidence-drift.test.cjs (~144s) — and had been packed as a
+  // 7s mean-weight file; both now cross the bar and are isolated by name.
   const EXPECTED_ISOLATED_UNIT_FILES = [
     'config.test.cjs',
+    'custom-phase-readers.test.cjs',
     'emitted-attribution.test.cjs',
     'install-minimal-hooks.test.cjs',
+    'lint-gate-evidence-drift.test.cjs',
     'install.test.cjs',
     'phase.test.cjs',
     'run-tests-harness.test.cjs',
