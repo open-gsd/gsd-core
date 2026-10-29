@@ -54,6 +54,20 @@ export const PHASE_ENTRY_BOLD_TOKEN_SRC = BOLD_TOKEN_SRC;
  */
 export const PHASE_ENTRY_BOLD_CLOSE_SRC = '(?:\\*\\*|__(?=[ \\t]*\\r?$))';
 
+/**
+ * Line start, indent, marker and the marker's gap, up to where the box opens.
+ * A leading BOM can only precede the first line; it is not part of the grammar's indent.
+ */
+const LINE_OPEN_SRC = `^\\uFEFF?[ \\t]*${MARKER_SRC}${MARKER_GAP_SRC}`;
+
+/**
+ * Source for the bold token and its trailing gap. `(?:token[ \t]*)?` rather than
+ * `[ \t]*` + token + `[ \t]*`, which backtracks quadratically on a long blank run.
+ */
+function boldSrcFor(bold: PhaseEntryPrefixOptions['bold']): string {
+  return bold === 'required' ? `${BOLD_TOKEN_SRC}[ \\t]*` : `(?:${BOLD_TOKEN_SRC}[ \\t]*)?`;
+}
+
 /** Source for the box interior, honouring the requested state filter. */
 function stateSrc(state: PhaseEntryPrefixOptions['state']): string {
   if (state === 'unchecked') return ' ';
@@ -70,12 +84,8 @@ function stateSrc(state: PhaseEntryPrefixOptions['state']): string {
 export function phaseEntryPrefixSrc(options: PhaseEntryPrefixOptions = {}): string {
   const { bold = 'optional', box = 'required', state = 'any' } = options;
   const boxSrc = `\\[${stateSrc(state)}\\][ \\t]*`;
-  // `(?:token[ \t]*)?` rather than `[ \t]*` + token + `[ \t]*`, which backtracks
-  // quadratically on a long blank run.
-  const boldSrc = bold === 'required' ? `${BOLD_TOKEN_SRC}[ \\t]*` : `(?:${BOLD_TOKEN_SRC}[ \\t]*)?`;
   const body = box === 'optional' ? `(?:${boxSrc})?` : boxSrc;
-  // A leading BOM can only precede the first line; it is not part of the grammar's indent.
-  return `^\\uFEFF?[ \\t]*${MARKER_SRC}${MARKER_GAP_SRC}${body}${boldSrc}`;
+  return `${LINE_OPEN_SRC}${body}${boldSrcFor(bold)}`;
 }
 
 /**
@@ -95,14 +105,14 @@ export function phaseEntryRegExp(tailSrc: string, flags = '', options: PhaseEntr
  * matched, not captured, so the writer chooses the new state. The `m` flag is
  * always set.
  */
-export function phaseEntrySplitRegExp(tailSrc: string, flags = '', options: PhaseEntryPrefixOptions = {}): RegExp {
+export function phaseEntrySplitRegExp(
+  tailSrc: string,
+  flags = '',
+  options: Pick<PhaseEntryPrefixOptions, 'bold'> & { state?: 'any' | 'unchecked' | 'checked' } = {},
+): RegExp {
   const { bold = 'optional', state = 'any' } = options;
-  const boldSrc = bold === 'required' ? `${BOLD_TOKEN_SRC}[ \\t]*` : `(?:${BOLD_TOKEN_SRC}[ \\t]*)?`;
   const withM = flags.includes('m') ? flags : `${flags}m`;
-  return new RegExp(
-    `^(\\uFEFF?[ \\t]*${MARKER_SRC}${MARKER_GAP_SRC}\\[)${stateSrc(state === 'captured' ? 'any' : state)}(\\][ \\t]*${boldSrc}${tailSrc})`,
-    withM,
-  );
+  return new RegExp(`(${LINE_OPEN_SRC}\\[)${stateSrc(state)}(\\][ \\t]*${boldSrcFor(bold)}${tailSrc})`, withM);
 }
 
 const ENTRY_BOX_RE = new RegExp(`^\\uFEFF?[ \\t]*${MARKER_SRC}${MARKER_GAP_SRC}\\[([ xX])\\]`);

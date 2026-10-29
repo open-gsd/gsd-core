@@ -34,8 +34,14 @@ Readers used to disagree on these inputs; they now agree:
 | `- [X] **Phase 2: Name**` under `phase remove` | Not deleted | Deleted |
 | `text - [ ] Phase 2: Name` (mid-line mention) under `phase remove` | Deleted or renumbered | Left alone |
 | Indented `  - [ ] **Phase 1: Name**` under `phase complete` | Indent removed by the tick | Indent kept |
+| `- [ ] 🔴 Phase 2: Name` (anything but a bold wrapper between the box and `Phase`) under `phase remove` and `roadmap upgrade` | Deleted, renumbered or rewritten | Left alone, as every reader already did |
+| Plan rows nested under an entry, after a less-indented line (`roadmap update-plan-progress`) | The nested rows ran on past the less-indented line | The nested rows end at the less-indented line |
 
 A ROADMAP.md that parsed before still parses: the accepted set only grew, apart from the mid-line, line-break and no-space-after-marker rows, which were never real entries.
+
+## What is not a phase-list entry
+
+Other checkbox lines keep their own patterns because they are not phase entries: requirement rows (`- [x] **REQ-1**`), plan rows (`- [ ] 01-01-PLAN.md`), and the generic checkbox bullets of the markdown sectionizer. The phase-number declaration scan in `src/phase-id.cts` (`buildPhaseDeclarationScans`) is also deliberately wider than an entry: any text inside the box, numbered-list rows and bracket-id bullets count, because over-counting a declared number is harmless and reusing one is not.
 
 ## Where the pattern lives
 

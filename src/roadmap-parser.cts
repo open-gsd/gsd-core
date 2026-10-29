@@ -2967,8 +2967,8 @@ function editCurrentMilestone(content: string, cwd: string | undefined, edit: (t
  * The checklist bullet of the phase whose number matches `phasePattern`
  * (`- [ ] **Phase N: …**`), as the one grammar shared by the Plans-count /
  * completion stamp and the plan-row ticks. `anyState` also matches a checked box.
- * Group 1 is the opening `- [`, group 2 the rest of the line after the box.
- * The prefix (marker, box, bold token) is the phase-entry grammar's (#5764); the
+ * Group 1 is everything through the opening `[` (indent and marker included),
+ * group 2 the rest of the line from the closing `]`. The prefix (marker, box, bold token) is the phase-entry grammar's (#5764); the
  * tail stops before `\r` so a stamp appended to group 2 lands on the entry's
  * line, before its CRLF.
  */

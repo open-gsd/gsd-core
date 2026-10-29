@@ -1402,8 +1402,8 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // same narrowing #4965 made for `roadmap analyze`'s checklist reader.
     // The lookahead only PEEKS (its `\s` may see a newline but consumes none):
     // the label must be followed by `:`, whitespace or the end of the line, so
-    // `Phase 2.1` / `Phase 20` are not `Phase 2`. Capture group 1 is the opening
-    // `- [`, group 2 the rest of the line after the box. The grammar (marker,
+    // `Phase 2.1` / `Phase 20` are not `Phase 2`. Capture group 1 is everything through
+    // the opening `[`, group 2 the rest of the line from the closing `]`. The grammar (marker,
     // box, bold token) is the phase-entry grammar's, shared with every reader
     // and writer through roadmap-parser's `phaseChecklistBullet` (#5764).
     const phaseChecklistBullet = (anyState: boolean): RegExp => phaseChecklistBulletFor(phasePattern, anyState);
