@@ -2991,7 +2991,7 @@ describe('#4561/#4630 — the hold\'s freshness window at both boundaries (readS
 // ten minutes apart kept a degrade alive indefinitely and a base-check degrade
 // outlived HEAD catching up. The record now carries `decided_at`; a
 // `--renew-held` re-record keeps it, and the hold lapses ten minutes after it.
-describe('#4904 review — a renewed hold lapses ten minutes after the degrade was decided, however many gates follow it', () => {
+describe('#4904: a renewed hold lapses ten minutes after the degrade was decided, however many gates renew it', () => {
   const { readSentinelAt } = require('../hooks/lib/isolation-sentinel.js');
   // A fixed epoch for every timestamp, pinned in gsd-tools through the clock
   // seam (GSD_NOW_MS under GSD_TEST_MODE, #474): no row reads the wall clock.
