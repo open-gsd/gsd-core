@@ -144,9 +144,12 @@ started less than ten minutes apart keep a degrade alive indefinitely and it out
 divergence that caused it. So the record also carries `decided_at`, when the degrade was decided.
 A held answer reports its `decidedAt`, and a site re-recording that `none` passes it back as
 `--renew-held <decidedAt>`: the write refreshes `written_at` for the guard and records the
-decision the site followed, and the hold lapses ten minutes after it however many gates follow.
-The time travels with the answer rather than being read from the file at write time, which by
-then can hold another plan's record. A forced `none` without the flag is a new decision. The host's *descriptors* — the harness flag and the orchestrator exec — are not
+decision the site followed, so renewing does not extend the hold: it lapses ten minutes after that
+decision. The time travels with the answer rather than being read from the file at write time,
+which by then can hold another plan's record. A forced `none` without the flag is a new decision
+with its own ten minutes, and the sites that decide one themselves (`execute-plan` Pattern B, the
+gate's orchestrator-worktree fallback) keep a query naming no phase or plan at `none` while they
+recur less than ten minutes apart. The host's *descriptors* — the harness flag and the orchestrator exec — are not
 decisions and are read from `inspect-dispatch-isolation`, which records nothing and holds
 nothing; read through the deciding query, a degrade recorded for one plan would answer for
 another plan's dispatch.
