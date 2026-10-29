@@ -3494,7 +3494,7 @@ describe('partitionIsolatedFiles (#4497 codex-config.test.cjs chunk isolation, d
     return { weightOf, isMeasured, thresholdWeight, unitFiles };
   }
 
-  test('#4603/#4733: the live-table unit-suite isolated set equals the historical 8-file set exactly', () => {
+  test('#4603/#4733: the live-table unit-suite isolated set equals the pinned isolated set exactly', () => {
     const { weightOf, isMeasured, thresholdWeight, unitFiles } = liveTableFixtures();
     const { isolated } = partitionIsolatedFiles(unitFiles, { weightOf, isMeasured, thresholdWeight });
     const basenames = isolated.map((f) => f.split(/[\\/]/).pop()).sort();

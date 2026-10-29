@@ -6,9 +6,9 @@
     "test-events-linux-node22.jsonl",
     "test-events-linux-node24.jsonl",
     "manual: codex-config.test.cjs/codex-config-hooks.test.cjs re-measured locally (node --test --test-reporter=tap, max of 3 runs) after next split codex-config.test.cjs (#4139/#4540) — the old 127783ms entry predated the split and codex-config-hooks.test.cjs, which now holds the #3245/#4249 install()-pipeline blocks, had no entry at all (PR #4249).",
-    "backfill: 445 files absent from the table (incl. custom-phase-readers 221s, lint-gate-evidence-drift 133s) added from gsd-test linux node24 runs 421b36fb/6800cc59/2bedeb9d, max of 3, scaled x1.08 (sum ratio over the 247 files both measured) to match this table's units (next run 40803043818, shard 2/3 cap overrun). Existing entries untouched."
+    "backfill: 444 files absent from the table (incl. custom-phase-readers 221s, lint-gate-evidence-drift 133s) added from gsd-test linux node24 runs 421b36fb/6800cc59/2bedeb9d, max of 3, scaled x1.08 (sum ratio over the 247 files both measured) to match this table's units (next run 40803043818, shard 2/3 cap overrun). Existing entries untouched."
   ],
-  "file_count": 1217,
+  "file_count": 1216,
   "timings": {
     "4213-progress-helpers.property.test.cjs": 68,
     "5100-win32-bare-bash-sentinel.property.test.cjs": 77,
@@ -803,7 +803,6 @@
     "phase-command-router.test.cjs": 3560,
     "phase-completion-single-owner.test.cjs": 8353,
     "phase-dependency-levels.test.cjs": 37,
-    "phase-entry-grammar-agreement.test.cjs": 58170,
     "phase-entry-grammar.test.cjs": 60,
     "phase-estimation.test.cjs": 25574,
     "phase-id-card.test.cjs": 32,
