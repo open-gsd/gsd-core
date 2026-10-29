@@ -10279,7 +10279,7 @@ ${creationBash}
       }
     });
 
-    test('init.execute-phase parsing safely ignores hostile shell characters in phase_dir (Blocker 1)', (t) => {
+    test('init.execute-phase parsing safely ignores hostile shell characters in phase_dir', (t) => {
       if (process.platform === 'win32') {
         t.skip('bash script execution test is POSIX-specific');
         return;
@@ -10306,7 +10306,7 @@ printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
       }
     });
 
-    test('cleanup-wave fails closed when empty manifest is reconciled but unmanifested agent worktrees exist (Major 3)', () => {
+    test('cleanup-wave fails closed when empty manifest is reconciled but unmanifested agent worktrees exist', () => {
       const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-unmanifested-wt-'));
       try {
         gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repoDir });
@@ -10341,7 +10341,7 @@ printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
       }
     });
 
-    test('cmdWorktreeManifestPath rejects .planning tree root itself as uncontained (Minor 9)', () => {
+    test('cmdWorktreeManifestPath rejects .planning tree root itself as uncontained', () => {
       const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-root-dir-'));
       try {
         fs.mkdirSync(path.join(repoDir, '.planning'), { recursive: true });
@@ -10360,7 +10360,7 @@ printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
       }
     });
 
-    test('findPhaseWaveManifests ignores directory named wave-1-manifest.json (Minor 9)', () => {
+    test('findPhaseWaveManifests ignores directory named wave-1-manifest.json', () => {
       const phaseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-dir-manifest-'));
       try {
         const falseManifestDir = path.join(phaseDir, 'wave-1-manifest.json');
@@ -10376,7 +10376,7 @@ printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
       }
     });
 
-    test('post-wave hook stash excludes wave manifests under worktree_skip_hooks=true (Nit 13)', () => {
+    test('post-wave hook stash excludes wave manifests under worktree_skip_hooks=true', () => {
       const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-skip-hooks-'));
       try {
         gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repoDir });
