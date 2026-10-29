@@ -320,6 +320,16 @@ an attacker who can write into the phase directory mid-run already has what the 
 protect. It narrows a real accident; it is not a security boundary, and the docs do not
 claim one. A hard link likewise passes isFile() by construction.
 
+**Before `const ROW_ID = /^(?:[A-Z][A-Z0-9]*-)?(?:CR|BL|WR|IN)-\d+(?:~\d+)?$/;`**
+
+ONE ID GRAMMAR, for review headings, ledger rows and frontmatter entries alike: an optional
+review-scoped prefix (`W6-CR-01`, `R1-WR-01`) and, in the ledger only, a `~N` re-key suffix.
+Reviewers reach for a prefix precisely because bare ids are reused across reviews, and a heading
+parser that rejected it recorded none of their findings (`unparsed: 10`), while a row parser that
+rejected it deleted every hand-renamed row. The tier is read from the segment before the number
+(prefixSev), so a prefix never changes a finding's severity. `~` is not admitted in a heading:
+a re-keyed row must never be matched by a later review, which is what keeps it from moving again.
+
 **Before `let fence = null;`**
 
 The OPEN fence's marker is remembered, not just the fact of being fenced. A bare toggle
@@ -389,8 +399,13 @@ ENUM-validated -- a value outside critical|warning|info is not a severity and is
 the row falls through to inference rather than carrying garbage (ADR-227, the same rule the
 disposition column takes).
 
-**Before `const m = l.match(/^\|\s*((?:CR|BL|WR|IN)-\d+)\s*\|\s*([^|]*?)\s*\|\s*(open|fixed|skipped|deferred)\s*\|\s*(.*?)\s*\|?\s*$/);`**
+**Before `const m = l.match(/^\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*(.*?)\s*\|?\s*$/);`**
 
+The row is matched by SHAPE (four cells) and its parts are validated after: the id against
+ROW_ID, the disposition against the enum. Matching the id and the enum inside one regex meant a
+row failing EITHER produced no prior entry, and a row with no prior entry that the current review
+does not report is not carried -- the rewrite deleted it with no console line. That is how a
+hand-renamed `R1-WR-01` row, or a carried row with a typo'd disposition, left the ledger.
 The disposition column is an ENUM, not 'any lowercase token'. ADR-227 requires a trust
 boundary to validate semantic SHAPE, not merely type, and to coerce a failure to the
 contract's safe default -- and this ledger is a trust boundary by construction, because
@@ -401,13 +416,17 @@ forever. One typo and the ledger reported a phase fully triaged.
 Note the asymmetry that made this a correctness bug rather than a style point: a typo
 OUTSIDE [a-z] ('Deferred') already failed to match, lost the decision and reset the row
 to open -- safe. A typo INSIDE [a-z] was unsafe. The parser failed open in the one
-direction that matters. A row that does not match now yields no prior entry, so the row
-falls back to 'open' -- the safe default, by the same path the capital-D case took.
+direction that matters. A disposition outside the enum is now coerced to 'open' explicitly --
+the safe default -- and the row keeps its Source cell and, if the review no longer reports it,
+its carried row.
 The Severity cell is CAPTURED, not skipped: it is the value the carry-forward below has to
 preserve, and skipping it (the previous [^|]*) is how a carried row lost its tier.
 
-**Before `if (m) {`**
+**Before `if (m && ROW_ID.test(m[1])) {`**
 
+A table row whose first cell is not a finding id (other than the header and the separator) is
+recorded in `foreign`, and its presence stops the rewrite further down: the ledger is rebuilt
+whole, so a row this parser cannot key would otherwise be deleted.
 Strip the carried marker before storing: it is rendered from the carried flag, so
 leaving it on the stored value would re-append it every run — the cell grows without
 bound AND the file changes on every run, defeating the unchanged-run check below.
@@ -420,6 +439,14 @@ is now factually wrong about its own contents. The residual ambiguity is irreduc
 costs nothing real: on a carried row the render puts the phrase straight back, and on a
 current row the phrase was self-contradictory to begin with. The unbounded quantifier is
 what had to go, not the strip itself.
+
+**Before `var mi = l.match(/^  - id: (.*?)\s*$/);`**
+
+EVERY `- id:` LINE MOVES THE CURSOR, matching or not. `_fmId` names the entry the following
+`severity:` / `title:` lines belong to. Set only on a MATCHING id, an entry this walker could not
+key left the cursor on the previous entry, and each of its `title:` lines overwrote that entry's
+recorded title -- a carried row then rendered under a foreign title, and the next reuse check
+compared against it. An unkeyable entry now sets the cursor to null, so its fields are ignored.
 
 **Before `const sameTitle = (a, b) => String(a === undefined ? '' : a).replace(/\s+/g, ' ').trim()`**
 
@@ -480,7 +507,41 @@ findings, both are legible from the marker, and both are strictly better than a 
 Prior rows UNION ids a fix report decided that the review no longer reports: a decision the
 ledger cannot render is a decision lost. Precedence matches row() -- applied beats recorded.
 
-**Before `const reusedNote = reused.length ? ' (' + reused.length + ' recorded decision(s) DROPPED -- the id now names a different finding, so the decision no longer has a row: ' + reused.join(', ') + ')' : '';`**
+**Before `const taken = new Set(rows.map((r) => r.id).concat(Array.from(prior.keys())));`**
+
+A REUSED ID MOVES THE EARLIER ROW; it does not drop it. Every review numbers from CR-01 /
+WR-01 / IN-01, so any re-review (--auto's loop, a per-wave review, a --gaps-only run) reuses
+ids, and the earlier version of this step dropped the earlier row whenever the id now named a
+different finding -- the common case, not an exception. The earlier row now moves to the next
+free `<id>~N` key with its decision, Source, severity and title, and renders as an ordinary
+carried row. `~` cannot appear in a review heading, so a re-keyed row is never matched by a later
+review and never moves again; a second reuse of the same id takes `~2`, and so on.
+This is ONE more spelling of the existing key, not a second identity scheme: the row, its
+frontmatter entry and the carried marker are the ones every carried row already has, so the
+unchanged-run check, the title round-trip and the pipe escaping all apply unchanged. (A separate
+`superseded:` block was tried during #3861 and withdrawn after producing a defect on each of
+three review passes; that is the shape this avoids.)
+Runs over EVERY row, current and carried, after both are built, and compares the title the row
+will render against the title the ledger recorded for that id. That covers the case row() could
+not: a fix report deciding the NEW finding under a reused id returns from row() before the
+identity check, and used to erase the earlier decision with no console line at all. An `open`
+earlier row moves too, for the reason a carried `open` row is kept: it records a finding that
+was seen and never triaged. A ledger with no recorded title (pre-titles) inherits on the id
+alone, exactly as sameFinding() does, so nothing moves there.
+
+**Before `const reusedNote = rekeyed.length ? ' (' + rekeyed.length + ' earlier row(s) re-keyed -- the id now names a different finding, so the earlier row moved with its decision: ' + rekeyed.join(', ') + ')' : '';`**
+
+The move is named on the console, id, decision and new key, for a reader who never opens the
+ledger.
+
+**Before `if (foreign.length) {`**
+
+REFUSE RATHER THAN DELETE. A table row with no parseable id cannot be keyed, carried or
+re-rendered, and the ledger is written whole, so writing would delete it with no trace. The step
+is advisory, so it does not fail: it names the rows, leaves the file as it is, and returns. The
+unchanged-run check never sees this run, so nothing is committed either.
+
+**Before `const staleNote = staleFix.length ? ' (' + staleFix.length + ' fix-report entr' + (staleFix.length === 1 ? 'y titles its' : 'ies title their') + ' finding differently from the review, so ' + (staleFix.length === 1 ? 'it was' : 'they were') + ' not reconciled -- a stale report, or a re-titled one: ' + staleFix.join(', ') + ')' : '';`**
 
 Surfaced, not thrown: the gate is advisory. But a fix report naming a finding whose title
 no longer matches is the one case where 'open' understates what is known, so it is stated.
@@ -492,8 +553,9 @@ On the console too, for a reader who never opens the ledger.
 **Before `if (rows.length === 0 && !unparsed && !fs.existsSync(process.env.DISPOSITION_FILE)) return;`**
 
 RECONCILE THE TWO PARSERS. The counts come from REVIEW.md's frontmatter; the rows come from
-heading matches against a CLOSED CR|BL|WR|IN alternation. A finding the heading parser cannot
-match -- a fifth prefix, a missing ': ' separator, a '#### ' heading -- contributed no row, no
+heading matches against a CLOSED CR|BL|WR|IN alternation (an optional review-scoped prefix
+aside). A finding the heading parser cannot
+match -- a fifth tier, a missing ': ' separator, a '#### ' heading -- contributed no row, no
 note and no diagnostic, and the ledger then declared 'open: 3 of 3' over a set strictly
 smaller than the console line reported one paragraph earlier. Two findings recorded nowhere,
 and neither artifact said so.
@@ -805,13 +867,14 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
   }
   // Captures the id AND the title: the title is what tells a stale fix report apart from a
   // current one, because finding ids are reused across re-reviews.
-  const ID_RE = /^###\s+((?:CR|BL|WR|IN)-\d+)\s*:\s*(.*)\$/;
+  const ID_RE = /^###\s+((?:[A-Z][A-Z0-9]*-)?(?:CR|BL|WR|IN)-\d+)\s*:\s*(.*)\$/;
+  const ROW_ID = /^(?:[A-Z][A-Z0-9]*-)?(?:CR|BL|WR|IN)-\d+(?:~\d+)?\$/;
   // BL- is Critical-tier-equivalent to CR- (gsd-code-reviewer.md 'Label equivalence').
   const sectionSev = new Map();
   // PREFIX severity -- the LAST resort, an inference from the id alone. Used only when neither
   // the current review's section nor a severity this ledger already RECORDED is available; the
   // precedence and the reason for it are stated at sev(), defined below once identity is known.
-  const prefixSev = (id) => ({ CR: 'critical', BL: 'critical', WR: 'warning' }[id.split('-')[0]] || 'info');
+  const prefixSev = (id) => ({ CR: 'critical', BL: 'critical', WR: 'warning' }[id.split('-').slice(-2)[0]] || 'info');
   const headings = (text) => {
     // Fenced blocks are skipped: review and fix bodies quote example findings, and a heading
     // inside a fence is an illustration, not a finding.
@@ -876,7 +939,7 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
   // Against order.length -- the CURRENT review's findings -- never rows.length, which also counts
   // rows carried from earlier reviews and would understate the shortfall or invent one.
   const unparsed = declaredTotal !== null && declaredTotal > order.length ? declaredTotal - order.length : 0;
-  const unparsedNote = unparsed ? ' (' + unparsed + ' finding(s) recorded NOWHERE: the review reports ' + declaredTotal + ', but only ' + order.length + ' matched the expected heading shape \`### <CR|BL|WR|IN>-NN: <title>\`)' : '';
+  const unparsedNote = unparsed ? ' (' + unparsed + ' finding(s) recorded NOWHERE: the review reports ' + declaredTotal + ', but only ' + order.length + ' matched the expected heading shape \`### [<PREFIX>-]<CR|BL|WR|IN>-NN: <title>\`)' : '';
   if (order.length === 0 && !unparsed && !fs.existsSync(process.env.DISPOSITION_FILE) && fixReports.length === 0) return;
   const prior = new Map();
   // TITLES, IN THE FRONTMATTER. Ids are reused across re-reviews (--auto renumbers), so an id alone
@@ -885,29 +948,30 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
   const priorTitle = new Map();
   const SEV_VOCAB = ['critical', 'warning', 'info'];
   const priorSev = new Map();
-  // Ids whose decision could not be carried: the id now names a DIFFERENT finding. REPORTED, not
-  // re-homed -- rows key on the id, and two under one id is an ambiguity. The note does NOT claim the
-  // old row is in git: committing is gated on commit_docs. See docs/features/code-review-pipeline.md.
-  const reused = [];
+  // Table rows that do not parse. Rewriting would delete them, so their presence stops the write.
+  const foreign = [];
   var _fmId = null, _fmSec = null;
   // Set when the ledger declares JSON scalars; without it they are bare. Load-bearing: a legacy title
   // that merely LOOKED like JSON was parsed, lost its quotes, and flipped to open.
   var _fmJson = false;
   if (fs.existsSync(process.env.DISPOSITION_FILE)) {
     for (const l of norm(fs.readFileSync(process.env.DISPOSITION_FILE, 'utf-8')).split('\n')) {
-      const m = l.match(/^\|\s*((?:CR|BL|WR|IN)-\d+)\s*\|\s*([^|]*?)\s*\|\s*(open|fixed|skipped|deferred)\s*\|\s*(.*?)\s*\|?\s*\$/);
-      if (m) {
-        prior.set(m[1], { d: m[3], src: m[4].replace(/\s*\(not in the current review\)\s*\$/, '') });
+      const m = l.match(/^\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*(.*?)\s*\|?\s*\$/);
+      if (m && ROW_ID.test(m[1])) {
+        const d = ['open', 'fixed', 'skipped', 'deferred'].indexOf(m[3]) !== -1 ? m[3] : 'open';
+        prior.set(m[1], { d: d, src: m[4].replace(/\s*\(not in the current review\)\s*\$/, '') });
         // The table wins over the frontmatter (set unconditionally here, only-if-absent below),
         // whichever order the two appear in the file.
         if (SEV_VOCAB.indexOf(m[2]) !== -1) priorSev.set(m[1], m[2]);
+      } else if (/^\|/.test(l) && !/^\|\s*Finding\s*\|/.test(l) && !/^\|[\s|:-]*\$/.test(l)) {
+        foreign.push(l.split('|')[1].trim().slice(0, 40) || '(empty first cell)');
       }
       // Frontmatter is walked in the same pass, as a SECTIONED list rather than by one line shape.
       if (/^titles: json\s*\$/.test(l)) { _fmJson = true; continue; }
       var msec = l.match(/^(findings):\s*\$/);
       if (msec) { _fmSec = msec[1]; _fmId = null; continue; }
-      var mi = l.match(/^  - id: ((?:CR|BL|WR|IN)-\d+)\s*\$/);
-      if (mi && _fmSec) { _fmId = mi[1]; continue; }
+      var mi = l.match(/^  - id: (.*?)\s*\$/);
+      if (mi && _fmSec) { _fmId = ROW_ID.test(mi[1]) ? mi[1] : null; continue; }
       // The frontmatter's own copy of the severity -- the fallback when the table cell is unusable.
       var msv = l.match(/^    severity: (critical|warning|info)\s*\$/);
       if (msv && _fmId && _fmSec === 'findings') { if (!priorSev.has(_fmId)) priorSev.set(_fmId, msv[1]); continue; }
@@ -953,9 +1017,7 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
     if (applied.has(id)) { const a = applied.get(id); return { id, sev: sev(id), d: a.d, src: a.src, t: title.has(id) ? title.get(id) : a.t }; }
     const was = prior.get(id);
     if (was && was.d !== 'open' && sameFinding(id)) return { id, sev: sev(id), d: was.d, src: was.src || 'recorded', t: title.get(id) };
-    // Reused id: the NEW finding is untriaged and renders 'open'; the prior decision loses its row,
-    // and that is REPORTED.
-    if (was && was.d !== 'open' && reused.indexOf(id + '=' + was.d) === -1) reused.push(id + '=' + was.d);
+    // Reused id: the NEW finding is untriaged and renders 'open'; the prior row is re-keyed below.
     return { id, sev: sev(id), d: 'open', src: '-', t: title.get(id) };
   };
   const rows = order.map(row);
@@ -973,14 +1035,30 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
     const kt = act && typeof act.t === 'string' ? act.t : priorTitle.get(id);
     rows.push({ id, sev: sev(id), d: d, src: src, t: kt, carried: true });
   }
+  const taken = new Set(rows.map((r) => r.id).concat(Array.from(prior.keys())));
+  const rekeyed = [];
+  for (const r of rows.slice()) {
+    const was = prior.get(r.id);
+    if (!was || !priorTitle.has(r.id) || typeof r.t !== 'string' || sameTitle(priorTitle.get(r.id), r.t)) continue;
+    let n = 1;
+    while (taken.has(r.id + '~' + n)) n++;
+    const k = r.id + '~' + n;
+    taken.add(k);
+    rows.push({ id: k, sev: priorSev.get(r.id) || prefixSev(r.id), d: was.d, src: was.src || (was.d === 'open' ? '-' : 'recorded'), t: priorTitle.get(r.id), carried: true });
+    rekeyed.push(r.id + '=' + was.d + ' -> ' + k);
+  }
   const open = rows.filter((r) => r.d === 'open').length;
-  const reusedNote = reused.length ? ' (' + reused.length + ' recorded decision(s) DROPPED -- the id now names a different finding, so the decision no longer has a row: ' + reused.join(', ') + ')' : '';
+  const reusedNote = rekeyed.length ? ' (' + rekeyed.length + ' earlier row(s) re-keyed -- the id now names a different finding, so the earlier row moved with its decision: ' + rekeyed.join(', ') + ')' : '';
   const staleNote = staleFix.length ? ' (' + staleFix.length + ' fix-report entr' + (staleFix.length === 1 ? 'y titles its' : 'ies title their') + ' finding differently from the review, so ' + (staleFix.length === 1 ? 'it was' : 'they were') + ' not reconciled -- a stale report, or a re-titled one: ' + staleFix.join(', ') + ')' : '';
   if (rows.length === 0 && !unparsed && !fs.existsSync(process.env.DISPOSITION_FILE)) return;
+  if (foreign.length) {
+    console.log('Code review disposition NOT rewritten: ' + foreign.length + ' ledger row(s) carry no finding id of the shape \`[<PREFIX>-]<CR|BL|WR|IN>-NN[~N]\`, and a rewrite would delete them: ' + foreign.join(', ') + '. Correct or remove them and re-run -- ' + process.env.DISPOSITION_FILE);
+    return;
+  }
   const escapePipes = (t) => t.replace(/\\\\.|\|/g, (m) => (m === '|' ? '\\\\|' : m));
   const body = ['# Phase ' + process.env.PADDED + ': Code Review Disposition', '', '| Finding | Severity | Disposition | Source |', '|---------|----------|-------------|--------|']
     .concat(rows.map((r) => { const src = escapePipes(r.src || '-'); const mark = r.carried && !/\(not in the current review\)\s*\$/.test(src) ? ' (not in the current review)' : ''; return '| ' + r.id + ' | ' + r.sev + ' | ' + r.d + ' | ' + src + mark + ' |'; }))
-    .concat(['', 'Dispositions: \`open\` (recorded, not yet triaged), \`fixed\`, \`skipped\`, \`deferred\`.', 'Set \`deferred\` by hand and put the reason in the Source cell; both are preserved. A \`|\` in the reason is kept as prose and escaped on the next run.', 'Re-running the gate keeps every row it can. A row the current review no longer reports is kept and its Source cell flagged, so a finding does not leave this record silently. ONE exception: when a finding id is REUSED by a different finding, the earlier decision cannot keep a row — the id is taken — and it is dropped. A RECORDED decision (anything but \`open\`) is named on the console when that happens; a row still at \`open\` is replaced silently, because \`open\` records no decision to lose.', '']).join('\n');
+    .concat(['', 'Dispositions: \`open\` (recorded, not yet triaged), \`fixed\`, \`skipped\`, \`deferred\`.', 'Set \`deferred\` by hand and put the reason in the Source cell; both are preserved. A \`|\` in the reason is kept as prose and escaped on the next run.', 'Re-running the gate keeps every row. A row the current review no longer reports is kept and its Source cell flagged, so a finding does not leave this record silently. When a finding id is REUSED by a different finding, the earlier row moves to the next free \`<id>~N\` key with its decision, Source and title, and the move is named on the console. A row this step cannot parse stops the rewrite: the ledger is left as it is and the row is named on the console.', '']).join('\n');
   // One line: the value feeds a line-oriented record a regex re-reads.
   const oneLine = (t) => String(t === undefined || t === null ? '' : t).replace(/[\r\n]+/g, ' ').trim();
   // JSON.stringify: YAML 1.2 is a JSON superset, so a colon, quote or leading '#' survives. The

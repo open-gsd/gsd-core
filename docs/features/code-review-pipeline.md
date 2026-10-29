@@ -104,15 +104,19 @@ decision is carried forward only while the ID still names the same finding. With
 `CR-01 fixed` would be inherited by a brand-new `CR-01`, which is a false decision in the one
 artifact whose purpose is telling triaged from forgotten.
 
-**The limitation that follows, stated rather than hidden.** When an ID *is* reused, the new finding
-is recorded `open` (nobody decided anything about it) and the earlier decision **loses its row** —
-the ledger keys rows on the finding ID, and two rows under one ID is an ambiguity, not a record. The
-drop is reported on the console, naming the ID and what had been decided — for a *recorded* decision.
-A prior row still sitting at `open` is replaced silently, and deliberately: `open` means nobody had
-decided anything, so there is no decision to lose. Preserving a recorded decision in the file
-was tried and withdrawn: it needed a second identity scheme and produced a fresh defect on each of
-three review passes. Recovery is the ledger's own git history where `commit_docs` is on — which is
-why the console reports the drop rather than pointing at a commit that may not exist.
+**When an ID *is* reused, the earlier row moves.** Every review numbers from `CR-01` / `WR-01` /
+`IN-01`, so any re-review reuses IDs. The new finding is recorded `open` (nobody decided anything
+about it) and the earlier row — its decision, Source, severity and title — moves to the next free
+`<ID>~N` key (`CR-01~1`, then `CR-01~2` on a second reuse), where it is an ordinary carried row.
+`~` never appears in a review heading, so a moved row is never matched again and never moves twice.
+The move is named on the console. A fix report deciding the new finding does not erase the earlier
+one's row either.
+
+**Review-scoped prefixes are IDs too.** A heading or ledger row may carry one prefix before the
+tier (`### W6-CR-01: …`, `| R1-WR-01 | … |`); the tier, and so the inferred severity, is read from the
+segment before the number. A ledger row whose first cell is not an ID of that shape stops the
+rewrite: the ledger is left as it is and the row is named on the console, because rewriting the
+file whole would delete it.
 
 **Two residuals, since (ID, title) is not proof of identity.** A ledger written before titles were
 recorded carries none, so its decisions are inherited on the ID alone — refusing there would reset
