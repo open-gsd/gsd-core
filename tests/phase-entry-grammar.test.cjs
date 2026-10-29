@@ -8,6 +8,7 @@ const assert = require('node:assert/strict');
 const {
   phaseEntryPrefixSrc,
   phaseEntryRegExp,
+  phaseEntrySplitRegExp,
   isPhaseEntryChecked,
   isBoxCharChecked,
   PHASE_ENTRY_BOLD_CLOSE_SRC,
@@ -18,12 +19,37 @@ const entry = (opts, flags = 'i') => phaseEntryRegExp('Phase\\s+1\\b', flags, op
 describe('phase-entry grammar (#5763)', () => {
   test('accepts both markers with every gap width', () => {
     for (const marker of ['-', '*']) {
-      for (const g1 of ['', ' ', '  ']) {
+      for (const g1 of [' ', '  ', '\t', '    ']) {
         for (const g2 of ['', ' ']) {
           assert.ok(entry().test(`${marker}${g1}[ ]${g2}**Phase 1: x**`), `${marker}${g1}[ ]${g2}`);
         }
       }
     }
+  });
+
+  test('the marker must be followed by 1 to 4 spaces or tabs: `-[ ]` is not a list item (#5764)', () => {
+    for (const marker of ['-', '*']) {
+      assert.ok(!entry().test(`${marker}[ ] **Phase 1: x**`), 'no gap after the marker');
+      assert.ok(!entry().test(`${marker}     [ ] **Phase 1: x**`), 'five spaces start an indented code block');
+    }
+  });
+
+  test('decorated: any text but `Phase` may sit between the box and the label, the box is still required (#5764)', () => {
+    const re = (line) => phaseEntryRegExp('Phase\\s+2\\b', 'i', { decorated: true }).test(line);
+    assert.ok(re('- [x] ~~**Phase 2: B**~~'));
+    assert.ok(re('* [ ] 🚧 Phase 2: B'));
+    assert.ok(!re('- [ ] **Phase 5**: needs Phase 2'), 'the first Phase on the line is the label');
+    assert.ok(!re('see - [ ] Phase 2: B'), 'a mention before the box is not an entry');
+    assert.ok(!re('Phase 2: B'), 'no box, no entry');
+  });
+
+  test('the split regexp keeps the indent and box neighbours in groups 1 and 2 (#5764)', () => {
+    const re = phaseEntrySplitRegExp('Phase\\s+1\\b[^\\n]*', 'i', { state: 'unchecked' });
+    assert.equal('  * [ ] __Phase 1: x__'.replace(re, '$1x$2'), '  * [x] __Phase 1: x__');
+    assert.equal('- [x] **Phase 1: x**'.replace(re, '$1x$2'), '- [x] **Phase 1: x**', 'an unchecked-only split ignores a ticked entry');
+    const checked = phaseEntrySplitRegExp('Phase\\s+1\\b', '', { state: 'checked' });
+    assert.ok(checked.test('- [X] Phase 1: x'));
+    assert.ok(!checked.test('- [ ] Phase 1: x'));
   });
 
   test('accepts box states [ ] [x] [X] and reads the tick in one place', () => {
@@ -60,7 +86,8 @@ describe('phase-entry grammar (#5763)', () => {
   test('state: unchecked matches only [ ]; captured adds exactly one group', () => {
     assert.ok(entry({ state: 'unchecked' }).test('- [ ] Phase 1: x'));
     assert.ok(!entry({ state: 'unchecked' }).test('- [x] Phase 1: x'));
-    const m = entry({ state: 'captured' }).exec('- [X] Phase 1: x');
+    const subject = '- [X] Phase 1: x';
+    const m = entry({ state: 'captured' }).exec(subject);
     assert.equal(m.length, 2);
     assert.equal(m[1], 'X');
   });
@@ -94,9 +121,10 @@ describe('phase-entry grammar (#5763)', () => {
 
   test('the closing bold wrapper does not cut a name containing __', () => {
     const re = new RegExp(`Phase\\s+1:\\s*(.+?)${PHASE_ENTRY_BOLD_CLOSE_SRC}`, 'im');
-    assert.equal(re.exec('- [ ] **Phase 1: Add __init__ support**')[1], 'Add __init__ support');
-    assert.equal(re.exec('- [ ] **Phase 1: Wire __tests__**')[1], 'Wire __tests__');
-    assert.equal(re.exec('- [ ] __Phase 1: Name__')[1], 'Name');
+    const nameOf = (line) => re.exec(line)[1];
+    assert.equal(nameOf('- [ ] **Phase 1: Add __init__ support**'), 'Add __init__ support');
+    assert.equal(nameOf('- [ ] **Phase 1: Wire __tests__**'), 'Wire __tests__');
+    assert.equal(nameOf('- [ ] __Phase 1: Name__'), 'Name');
   });
 
   test('other checkbox families never match a Phase tail', () => {

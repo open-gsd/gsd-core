@@ -24,16 +24,18 @@
  *   - The milestone slice (#5165): when the caller names a milestone and the
  *     table carries a `Milestone` column, only that milestone's rows.
  *
- * Writers (`roadmap.cts`, `phase.cts`, traceability slices) still carry their
- * own slices, and so does `phase.cts`'s `cmdPhaseComplete` already-complete
- * check (it slices the Milestone column itself, with a blank-milestone-matches-
- * nothing rule this owner deliberately does not share); they move onto this
- * owner in Phase 2 (#5762).
+ * The writers (`roadmap.cts` update-plan-progress / phase add, `phase.cts`
+ * complete / remove) cut their slice with `editRoadmapProgress` (#5762), the
+ * write side of the same rule, so a writer edits only the section the readers
+ * read. `phase.cts`'s `cmdPhaseComplete` already-complete check still slices
+ * the Milestone column itself, with a blank-milestone-matches-nothing rule this
+ * owner deliberately does not share.
  */
 
 import { findTableWithColumns } from './markdown-table.cjs';
 import type { MarkdownTable } from './markdown-table.cjs';
-import { tokenizeHeadings } from './markdown-sectionizer.cjs';
+import { tokenizeHeadings, headingSliceRange, editHeadingSlice } from './markdown-sectionizer.cjs';
+import type { HeadingToken } from './markdown-sectionizer.cjs';
 
 /** The canonical column set both RoadmapProgress variants carry. */
 const CANONICAL_COLUMNS: readonly string[] = ['Phase', 'Plans Complete', 'Status', 'Completed'];
@@ -44,6 +46,31 @@ export interface ProgressSectionRange {
   start: number;
   /** Exclusive end: the next level-1/2 heading, or the end of the content. */
   end: number;
+}
+
+/**
+ * The ONE textual expression of "this heading is titled Progress": the title
+ * starts with the word `Progress`, any suffix admitted (`Progress`,
+ * `Progress Tracker`, `Progress (v2.1)`), case-insensitive. `findProgressSection`
+ * adds the level-2 anchor; the bracket writers (`phase.cts`) reuse the title
+ * test at their own levels (#4304).
+ */
+export function isProgressHeadingTitle(text: string): boolean {
+  return /^Progress\b/i.test(text.trim());
+}
+
+export interface FindProgressSectionOptions {
+  /** Heading offsets that are not candidates (the bracket remover's archived/closed milestone headings). */
+  exclude?: ((offset: number) => boolean) | null;
+  /** Active-milestone character range (`maskArchivedDetails().activeRange`): a Progress heading inside it wins. */
+  active?: { start: number; end: number } | null;
+}
+
+export interface EditRoadmapProgressOptions {
+  /** Active-milestone character range (see `FindProgressSectionOptions.active`). */
+  active?: { start: number; end: number } | null;
+  /** No Progress heading: `'whole'` (default) edits the whole document, `'skip'` leaves it untouched. */
+  headingless?: 'whole' | 'skip';
 }
 
 export interface LocateRoadmapProgressOptions {
@@ -93,12 +120,37 @@ export function milestoneVersionOf(value: unknown): string | null {
  * code whose text starts with the word `Progress`, up to the next level-1/2
  * heading. Null when the document has no such heading.
  */
-export function findProgressSection(content: string): ProgressSectionRange | null {
+export function findProgressSection(content: string, options: FindProgressSectionOptions = {}): ProgressSectionRange | null {
   const headings = tokenizeHeadings(content);
-  const index = headings.findIndex((h) => h.level === 2 && /^Progress\b/i.test(h.text));
+  const { active, exclude } = options;
+  const isProgress = (h: HeadingToken): boolean =>
+    h.level === 2 && isProgressHeadingTitle(h.text) && !(exclude && exclude(h.offset));
+  // #5553: with an active-milestone range, the first Progress heading INSIDE it wins over an
+  // earlier one (a shipped plain section's own table); with none in range, the first overall.
+  const inActive = active ? headings.findIndex((h) => isProgress(h) && h.offset >= active.start && h.offset < active.end) : -1;
+  const index = inActive !== -1 ? inActive : headings.findIndex(isProgress);
   if (index === -1) return null;
-  const next = headings.slice(index + 1).find((h) => h.level <= 2);
-  return { start: headings[index].offset, end: next ? next.offset : content.length };
+  return headingSliceRange(content, headings, index, 2);
+}
+
+/**
+ * The WRITE side of the same rule (#5762): run `edit` on the Progress section
+ * `findProgressSection` locates and splice the result back byte-exact, so a
+ * writer can only ever edit the section the readers read.
+ *
+ * A document with no Progress heading is what the readers scan whole;
+ * `headingless: 'whole'` (default) gives `edit` that same whole document,
+ * `'skip'` leaves it untouched (a destructive writer that must not guess a
+ * table by column names alone).
+ */
+export function editRoadmapProgress(
+  content: string,
+  edit: (scoped: string) => string,
+  options: EditRoadmapProgressOptions = {},
+): string {
+  const section = findProgressSection(content, { active: options.active });
+  if (!section) return options.headingless === 'skip' ? content : edit(content);
+  return editHeadingSlice(content, section, edit);
 }
 
 /** Which table is the Progress table, and what is its milestone slice. */
