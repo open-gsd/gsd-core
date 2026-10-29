@@ -582,10 +582,14 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
       }
     };
     walk(root);
-    // Positive control: the scan must reach the four sites known at this
-    // commit (dispatch-isolation-gate.md, executor-isolation-dispatch.md,
-    // health.md, settings.md). Fewer means the scan is broken, not clean.
-    assert.ok(found.length >= 4, `expected >= 4 shell validity lists, found ${found.length}: ${found.map((f) => f.site).join(', ')}`);
+    // The exact set of copies: one missing means the scan broke or a list
+    // stopped naming a worktree mode, and a new one is added here on purpose.
+    assert.deepEqual(found.map((f) => f.site.replace(/:\d+$/, '')).sort(), [
+      'references/dispatch-isolation-gate.md',
+      'workflows/execute-phase/steps/executor-isolation-dispatch.md',
+      'workflows/health.md',
+      'workflows/settings.md',
+    ]);
     for (const { site, alts } of found) {
       assert.deepEqual(sorted(alts), sorted(DISPATCH_ISOLATION_MODES),
         `${site}: this shell validity list has drifted from src/dispatch-isolation.cts`);
