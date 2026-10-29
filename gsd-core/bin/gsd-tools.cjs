@@ -2916,9 +2916,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   // top-level require ran on EVERY gsd-tools command, and the bootstrap's
   // ensureRuntimeBuild cannot cover the gap: its fast path keys on a single
   // sentinel, so a lib compiled before this module existed reads as built and
-  // every command died on a bare `Cannot find module`. Loaded lazily, only the
-  // dispatch-isolation verbs need the owner, and they get the remedy named —
-  // the same error capability-validator.cjs raises for the same exposure.
+  // every command died on a bare `Cannot find module`. Loaded lazily, a
+  // command that loads neither this owner nor capability-validator.cjs still
+  // runs on such a tree. One that loads either names the `build:lib` remedy:
+  // the dispatch-isolation verbs here, and any command that reaches
+  // capability-source.cjs or capability-lifecycle.cjs, which require the
+  // validator at load, where it raises the same error.
   let _dispatchIsolationOwner;
   function dispatchIsolationOwner() {
     if (_dispatchIsolationOwner === undefined) {

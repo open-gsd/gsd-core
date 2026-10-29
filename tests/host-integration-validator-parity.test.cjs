@@ -12,6 +12,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { runGsdTools, createTempDir, cleanup } = require('./helpers.cjs');
+const { runNode } = require('./helpers/process-seam.cjs');
 // Seeded fast-check convention: the shared setup helper (seed 42, numRuns 200,
 // GSD_FC_SEED to explore), never 'fast-check' directly.
 const fc = require('./helpers/fast-check-setup.cjs');
@@ -681,7 +682,7 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
     }
   });
 
-  test('a lib built before the owner existed: unrelated gsd-tools commands still run, and a verb that needs the owner names the build:lib remedy', (t) => {
+  test('a lib built before the owner existed: a command that loads neither the owner nor the validator still runs, and one that loads either names the build:lib remedy', (t) => {
     // ensureRuntimeBuild's fast path keys on one sentinel, so a lib compiled
     // before src/dispatch-isolation.cts existed reads as built. Reproduce that
     // tree with a preload that refuses the owner to the two HAND-WRITTEN
@@ -704,7 +705,20 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
     const env = { NODE_OPTIONS: `--require ${JSON.stringify(preload)}` };
 
     const unrelated = runGsdTools(['current-timestamp', '--raw'], tmp, env);
-    assert.equal(unrelated.success, true, `a command that never touches the owner must still run on that tree: ${unrelated.error}`);
+    assert.equal(unrelated.success, true, `a command that loads neither the owner nor the validator must still run on that tree: ${unrelated.error}`);
+
+    // capability-source.cjs requires the validator at load, so whatever
+    // reaches it stops with the validator's remedy rather than running. It is
+    // required directly: through gsd-tools, a current compiled sibling (here
+    // host-integration.cjs) loads the owner first and Node's resolve cache then
+    // answers the validator, which a stale sibling that predates the owner
+    // never does.
+    const capabilitySource = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'capability-source.cjs');
+    const validatorLoad = runNode(['-e', `require(${JSON.stringify(capabilitySource)})`], {
+      cwd: tmp, env: { ...process.env, ...env },
+    });
+    assert.notEqual(validatorLoad.exitCode, 0, 'a module that requires the validator cannot load on that tree');
+    assert.match(validatorLoad.stderr, /capability-validator: the compiled runtime lib \.\/dispatch-isolation\.cjs is missing[\s\S]*npm run build:lib/);
 
     // The query and inspect verbs too: their resolver turns errors into a
     // successful `none`, and dispatch-isolation-gate.md reads rc 0 + `none` as
