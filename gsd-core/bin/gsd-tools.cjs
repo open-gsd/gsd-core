@@ -3403,9 +3403,10 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       ? args[planIdx + 1]
       : null;
 
-    // `record-dispatch-isolation` IS the caller's own decision — the verb the
-    // three unrederivable dispatch sites call. Stated rather than defaulted:
-    // this is the record #4561's hold exists to protect (#4630 ADR Phase 2).
+    // `record-dispatch-isolation` records a caller's own decision, the same
+    // record `query dispatch-isolation --force-isolation` writes for the
+    // dispatch sites. Stated rather than defaulted: this is the record #4561's
+    // hold exists to protect (#4630 ADR Phase 2).
     const result = writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag, phase, plan, decidedBy: 'caller' });
     output(result, raw);
   }

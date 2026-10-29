@@ -2823,7 +2823,7 @@ describe('#4630 — the isolation record states who decided it, so a re-query kn
     assert.equal(readSentinelRaw(dir).written_at, written, 'held means NOT rewritten');
   });
 
-  test('record-dispatch-isolation stamps `caller` — the verb the three unrederivable dispatch sites call', (t) => {
+  test('record-dispatch-isolation stamps `caller`, like a --force-isolation record', (t) => {
     const dir = createTempProject('gsd-4630-prov-recordverb-');
     t.after(() => cleanup(dir));
     const r = runGsdTools(
