@@ -125,10 +125,14 @@
 //
 // Triggers on: Read, Grep, Bash tool calls (Kimi: ReadFile, Grep, Shell)
 // Action: BLOCK (decision: 'block', exit 2) — codes secret-read |
-//         glob-too-complex | command-too-large | debugger-cli-spawn
+//         glob-too-complex | command-too-large | debugger-cli-spawn, and
+//         guard-error when the host opted in to deny-on-crash (#5784)
 // No-op: other tools, non-secret targets, hook errors (fail open — a parser
 //        bug in a hook that runs on EVERY Bash call must never brick a
-//        session; the crash policy is declared once below).
+//        session; the crash policy is declared once below). A host may opt
+//        in to failing closed instead with GSD_SECRET_READ_GUARD_ON_CRASH=deny
+//        (#5784): a hook error, or no tool input within 3 s, then blocks with
+//        code guard-error.
 
 'use strict';
 
@@ -136,8 +140,23 @@ const { HOOK_ON_CRASH, allow, deny, crash } = require('./lib/hook-exit.js');
 const { finalExtension, normalizeWindowsBasename, lastSegment } = require('./lib/filename-classification.js');
 
 // Fail open on a hook-internal error (see header). Declared ONCE so the
-// outer catch states its policy explicitly (#3911).
-const ON_CRASH = HOOK_ON_CRASH.ALLOW;
+// outer catch states its policy explicitly (#3911). A host that registers this
+// guard with Claude Code's `onFailure: "block"` can opt in to DENY with
+// GSD_SECRET_READ_GUARD_ON_CRASH=deny (#5784): `onFailure` cannot see a failure
+// the hook catches itself and exits 0 on, so without this a crash or a stalled
+// stdin still allows. Any other value, or none, keeps ALLOW. Read once, before
+// stdin, so the policy is settled before any failure it governs.
+const ON_CRASH = process.env.GSD_SECRET_READ_GUARD_ON_CRASH === 'deny'
+  ? HOOK_ON_CRASH.DENY
+  : HOOK_ON_CRASH.ALLOW;
+
+// The crash payload names the cause on DENY; on ALLOW it stays undefined so
+// the default path emits nothing, exactly as before.
+function crashPayload(why) {
+  if (ON_CRASH !== HOOK_ON_CRASH.DENY) return undefined;
+  const reason = `gsd-secret-read-guard: ${why}; denied because GSD_SECRET_READ_GUARD_ON_CRASH=deny`;
+  return { decision: 'block', code: 'guard-error', reason };
+}
 
 // Commands longer than this are denied rather than scanned (see header).
 const MAX_COMMAND_LENGTH = 1024 * 1024;
@@ -1510,7 +1529,9 @@ function normalizeKimiPayload(data) {
 }
 
 let input = '';
-const stdinTimeout = setTimeout(() => allow(undefined), 3000);
+// A stalled stdin is a hook failure, not a verdict on the payload, so it takes
+// the declared crash policy (#5784) rather than an unconditional allow.
+const stdinTimeout = setTimeout(() => crash(ON_CRASH, crashPayload('no tool input within 3 s')), 3000);
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => input += chunk);
 process.stdin.on('end', () => {
@@ -1562,8 +1583,8 @@ process.stdin.on('end', () => {
     if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
     allow(undefined);
   } catch {
-    // Fail open — never block valid tool calls due to hook errors.
-    // ON_CRASH is declared ALLOW at module top (#3911).
-    crash(ON_CRASH, undefined);
+    // Fail open — never block valid tool calls due to hook errors — unless the
+    // host opted in to DENY; ON_CRASH is declared at module top (#3911, #5784).
+    crash(ON_CRASH, crashPayload('internal error'));
   }
 });

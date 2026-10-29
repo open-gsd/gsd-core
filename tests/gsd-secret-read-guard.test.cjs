@@ -23,6 +23,8 @@
  *      here-strings, commit messages and heredoc bodies pass.
  *   5. Kimi vocabulary (ReadFile / Grep / Shell, `path`) is normalized.
  *   6. Fail-open crash policy: malformed / non-object payloads exit 0.
+ *   7. Host opt-in (#5784): with GSD_SECRET_READ_GUARD_ON_CRASH=deny, a crash
+ *      and a stalled stdin block as guard-error; any other value allows.
  *
  * Every assertion reads typed fields off the stdout JSON (code, path, tool)
  * — never a regex over the reason prose (CONTRIBUTING.md).
@@ -37,10 +39,21 @@ const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-secret-read-guard.js');
 
-function runHook(payload) {
+// #5784: the hook reads its crash policy from its environment, so an ambient
+// GSD_SECRET_READ_GUARD_ON_CRASH in the shell running this file would flip
+// every fail-open cell. Each spawn starts from process.env without it; the
+// opt-in cells pass it back explicitly.
+const ON_CRASH_ENV = 'GSD_SECRET_READ_GUARD_ON_CRASH';
+function hookEnv(extra = {}) {
+  const env = { ...process.env };
+  delete env[ON_CRASH_ENV];
+  return { ...env, ...extra };
+}
+
+function runHook(payload, extraEnv) {
   const r = runHookSeam(HOOK_PATH, [], {
     input: typeof payload === 'string' ? payload : JSON.stringify(payload),
-    env: { ...process.env },
+    env: hookEnv(extraEnv),
     timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
   });
   return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
@@ -744,6 +757,59 @@ describe('gsd-secret-read-guard: scope and crash policy', () => {
   });
 });
 
+describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)', () => {
+  // Claude Code's `onFailure: "block"` denies when a hook fails to start, times
+  // out or exits with an unexpected code; it cannot see a failure this hook
+  // catches and exits 0 on. GSD_SECRET_READ_GUARD_ON_CRASH=deny lets a host
+  // route those two failures, the outer catch and the stdin timer, through the
+  // #3911 crash() seam as DENY. Unset, or any other value, keeps ALLOW. The
+  // stdin-timer cells need a held-open pipe, a raw child process, so they live
+  // in tests/gsd-secret-read-guard.platform.test.cjs.
+  const DENY_ENV = { [ON_CRASH_ENV]: 'deny' };
+  const MALFORMED = '{not json';
+
+  // crash() hands one payload to both streams, so a guard-error deny's stderr
+  // is the payload's JSON, not the plain reason the scan's own codes write:
+  // assertBlocked's stderr check does not apply here.
+  function assertGuardError(r, label) {
+    assert.equal(r.status, 2, `${label}: expected block (exit 2), got exit ${r.status}; stdout=${r.stdout}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.decision, 'block', label);
+    assert.equal(out.code, 'guard-error', `${label}: code`);
+    assert.equal(typeof out.reason, 'string');
+    assert.ok(out.reason.length > 0, `${label}: reason present`);
+    assert.deepEqual(JSON.parse(r.stderr), out, `${label}: stderr carries the same payload`);
+    return out;
+  }
+
+  test('opted in: malformed JSON (the outer catch) blocks as guard-error', () => {
+    assertGuardError(runHook(MALFORMED, DENY_ENV), 'crash');
+  });
+
+  test('opted in: verdicts on a parsed payload are unchanged', () => {
+    assertAllowed(runHook(bash('ls -la'), DENY_ENV), 'allow');
+    assertBlocked(runHook(read('/p/.env'), DENY_ENV), 'Read', { code: 'secret-read', tool: 'Read', path: '/p/.env' });
+    // A null payload is a deliberate allow (#2595), not a crash.
+    assertAllowed(runHook('null', DENY_ENV), 'null payload');
+  });
+
+  test('only the exact value deny opts in', () => {
+    for (const value of ['DENY', 'Deny', '1', 'true', '', ' deny', 'deny ', 'allow']) {
+      assertAllowed(runHook(MALFORMED, { [ON_CRASH_ENV]: value }), `value ${JSON.stringify(value)}`);
+    }
+  });
+
+  test('property: any value other than exactly deny keeps a crash fail-open', () => {
+    fc.assert(fc.property(
+      // An environment value cannot hold a NUL byte.
+      fc.string().filter((value) => value !== 'deny' && !value.includes('\0')),
+      (value) => {
+        assertAllowed(runHook(MALFORMED, { [ON_CRASH_ENV]: value }), `value ${JSON.stringify(value)}`);
+      },
+    ), { seed: 5784, numRuns: 40 });
+  });
+});
+
 describe('gsd-secret-read-guard: container --env-file exemption (#4639)', () => {
   // `--env-file <file>` under a container runtime is consumed by the runtime
   // itself — the contents never enter the conversation, which is the threat
@@ -1118,7 +1184,7 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
   test('blocks: 1 MiB of leading timeout wrappers finishes inside the hook budget', () => {
     const r = runHookSeam(HOOK_PATH, [], {
       input: JSON.stringify(bash(padded(MAX_COMMAND_BYTES - 1))),
-      env: { ...process.env },
+      env: hookEnv(),
       timeoutMs: LINEAR_WALK_KILL_BOUND_MS,
     });
     assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, '1 MiB padded', { code: 'debugger-cli-spawn', tool: 'Bash' });
@@ -1130,7 +1196,7 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
       const base = padded(bytes);
       const r = runHookSeam(HOOK_PATH, [], {
         input: JSON.stringify(bash(base + ' '.repeat(bytes - base.length))),
-        env: { ...process.env },
+        env: hookEnv(),
         timeoutMs: LINEAR_WALK_KILL_BOUND_MS,
       });
       assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, `${bytes} bytes`, { code });
