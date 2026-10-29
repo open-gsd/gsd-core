@@ -3194,4 +3194,56 @@ describe('#4904 review — a renewed hold lapses ten minutes after the degrade w
     const missing = following.filter((s) => !s.line.includes('${_RENEW_HELD:+--renew-held "$_RENEW_HELD"}'));
     assert.deepEqual(missing.map((s) => s.at), [], 'a re-record that restarts a held degrade');
   });
+
+  // Shell state is lost between tool calls, so a site that reads `_RENEW_HELD`
+  // outside the bash block that set it must restore it first, or its re-record
+  // restarts the hold. Each use is classified by where the value comes from:
+  // set earlier in the same block; a ` `_RENEW_HELD` := ` restore list in the
+  // file; or the gate reference the site's workflow runs, which carries one.
+  const GATE_REF = 'gsd-core/references/dispatch-isolation-gate.md';
+  const RENEW_HELD_SOURCES = {
+    'gsd-core/references/dispatch-isolation-gate.md': ['same block', 'restore list'],
+    'gsd-core/workflows/diagnose-issues.md': ['gate reference'],
+    'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md': ['same block'],
+    'gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md': ['restore list'],
+    'gsd-core/workflows/quick-batch/steps/worktree-dispatch.md': ['gate reference'],
+    'gsd-core/workflows/quick.md': ['gate reference'],
+  };
+  test('every shipped site that reads _RENEW_HELD sets it in the same bash block or restores it', () => {
+    const root = path.join(__dirname, '..');
+    const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
+    const RESTORE = /`_RENEW_HELD` := /;
+    const gateRestores = RESTORE.test(read(GATE_REF));
+    const found = {};
+    const walk = (d) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const full = path.join(d, e.name);
+        if (e.isDirectory()) { walk(full); continue; }
+        if (!e.name.endsWith('.md')) continue;
+        const rel = path.relative(root, full).split(path.sep).join('/');
+        const text = fs.readFileSync(full, 'utf8');
+        let block = null;
+        splitLines(text).forEach((line) => {
+          if (block === null && line.trim() === '```bash') { block = []; return; }
+          if (block !== null && line.trim() === '```') { block = null; return; }
+          if (block === null) return;
+          if (line.includes('${_RENEW_HELD:+')) {
+            let source;
+            if (block.some((l) => /^\s*_RENEW_HELD=/.test(l))) source = 'same block';
+            else if (RESTORE.test(text)) source = 'restore list';
+            else {
+              // A step file runs inside its workflow: quick-batch/steps/x.md belongs to quick-batch.md.
+              const owner = rel.replace(/^(gsd-core\/workflows\/[^/]+)\/steps\/[^/]+\.md$/, '$1.md');
+              const reads = [rel, owner].some((f) => fs.existsSync(path.join(root, f)) && read(f).includes(`@${GATE_REF}`));
+              source = reads && gateRestores ? 'gate reference' : 'not restored';
+            }
+            (found[rel] = found[rel] || []).push(source);
+          }
+          block.push(line);
+        });
+      }
+    };
+    walk(path.join(root, 'gsd-core'));
+    assert.deepEqual(found, RENEW_HELD_SOURCES);
+  });
 });

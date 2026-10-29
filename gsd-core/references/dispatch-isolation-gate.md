@@ -52,9 +52,9 @@ esac
 # opt-out below is followed, instead of reading it as a host with no primitive.
 _RENEW_HELD=""
 if [ "$ISOLATION" = "none" ] && [ "$ISOLATION_RESOLVED" = "true" ] && [ "${_ISOLATION_HELD%%:*}" = "held" ]; then
-  echo "⚠ Dispatch isolation is held at none: an earlier step of this run degraded to sequential dispatch within the last 10 minutes. Running sequentially on the main working tree." >&2
   USE_WORKTREES=false
   _RENEW_HELD="${_ISOLATION_HELD#held:}"
+  echo "⚠ Dispatch isolation is held at none: an earlier step of this run degraded to sequential dispatch within the last 10 minutes. Running sequentially on the main working tree. _RENEW_HELD=$_RENEW_HELD" >&2
 fi
 
 # Project-level opt-out wins on every host; a host with no primitive fails closed.
@@ -82,6 +82,14 @@ fi
 # lapses ten minutes after the degrade was decided.
 gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" ${_RENEW_HELD:+--renew-held "$_RENEW_HELD"} >/dev/null 2>&1 || true
 ```
+
+**Carry the gate's values into later tool calls.** These blocks set `ISOLATION`,
+`USE_WORKTREES`, `HARNESS_FLAG` and `_RENEW_HELD`, and shell state is lost between tool calls.
+A site that reads them in a later call, including every re-record below, restores them first:
+`ISOLATION` := the value this block resolved, `USE_WORKTREES` := its final value,
+`HARNESS_FLAG` := the flag "Resolve the harness flag" set, and `_RENEW_HELD` := the value the
+held warning printed (empty when no hold was followed). Without `_RENEW_HELD` the re-record is a
+fresh decision and restarts the ten minutes that `--renew-held` keeps.
 
 | `ISOLATION` | Meaning | What a dispatch site does |
 |---|---|---|
