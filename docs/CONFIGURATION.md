@@ -2014,15 +2014,45 @@ agent will actually run at — read from the installed agent's `effort:` frontma
 claude runtime (`effort_effective_source: "frontmatter"`), reported as `"inherit"` when the
 key is absent (`"frontmatter-absent"` — the agent follows the session effort), and equal to
 the resolved value with source `"resolved"` when there is no install-time channel or no
-agent file to read. `--pick effort` still returns the resolved value.
+agent file to read. `--pick effort` still returns the resolved value. `effort_spawn_arg` is the per-spawn argument
+GSD's workflow spawns pass for the agent (empty when none, see "Per-spawn" below); when it is
+set, a workflow spawn runs at that level rather than `effort_effective`. It reflects the
+configured cascade only (not `--effort` or `--attempt`), for the runtime GSD resolves the
+way model resolution does.
 
 #### Where effort actually reaches — added in v1.8.0
 
-Effort resolved from the cascade above reaches a runtime through one of two channels.
+Effort resolved from the cascade above reaches a runtime through one of three channels.
 
 **Install-time.** The value is baked into the artifacts the installer generates — the
 `effort:` frontmatter key on a Claude subagent, `model_reasoning_effort` in a generated
 Codex `.toml`. This is fixed at install and changes only on reinstall or sync.
+
+**Per-spawn.** On a host whose subagent spawn call takes an effort argument, the
+orchestrator passes the resolved effort on each spawn that already passes a resolved model,
+so a project's `effort` settings for that agent apply on the next spawn with no
+`effort sync`. This too is a declared capability
+(`spawnEffortParam` in the runtime descriptor, ADR-1239); today only Claude Code declares
+one, its Agent tool's `effort` argument. Limits:
+
+- Claude Code 2.1.292 or later. An older build may reject the argument; the shared
+  reference the workflows point to (`gsd-core/references/model-profile-resolution.md`)
+  says to re-issue the spawn without it, and the baked frontmatter then applies.
+- Non-fork subagents only, and `CLAUDE_CODE_EFFORT_LEVEL` takes precedence over it.
+- The argument is passed only when the loaded config has an `effort` block: your
+  project's, or `~/.gsd/defaults.json`'s when there is no `.planning/` directory at all.
+  Under a project config with no `effort` block, or a `.planning/` with no `config.json`,
+  the frontmatter decides, because the runtime cascade does not read `defaults.json` there
+  and the installer does (#4633). A project with its own `effort` block does not inherit
+  `defaults.json`'s `agent_overrides` for agents it does not name. A project created while
+  `defaults.json` had an `effort` block starts with a copy of it, so later edits to
+  `defaults.json` reach `effort sync` but not that project's spawns.
+- The value is the same level `effort` reports, through the host's wire rules: `inherit`
+  passes no argument, and Claude's missing `minimal` becomes `low`.
+- The argument is resolved for the agent actually spawned. Spawns whose agent the
+  workflow cannot resolve effort for in advance (plan-phase's capability-hook agents, a
+  plan's `agent_hint` specialist) pass none, so that agent's own frontmatter applies;
+  ship's capability hooks resolve the hook agent's own effort by name.
 
 **Invocation-time.** When GSD spawns another CLI as a subprocess — the cross-AI reviewers
 in `/gsd-review` — the effort is appended to that CLI's own command line. Whether a host
@@ -2181,7 +2211,7 @@ commas, so annotations survive install, update and uninstall. It writes the `mcp
 
 ### The `tier` Field
 
-`node gsd-tools.cjs query resolve-model <agent> --pick tier` returns the tier GSD resolved for that agent, independent of `resolve_model_ids`: `opus` | `sonnet` | `haiku` | `fable` | `inherit` | `unknown`. It is also emitted as a `tier` key in the command's full JSON output.
+`node gsd-tools.cjs query resolve-model <agent> --pick tier` returns the tier GSD resolved for that agent, independent of `resolve_model_ids`: `opus` | `sonnet` | `haiku` | `fable` | `inherit` | `unknown`. It is also emitted as a `tier` key in the command's full JSON output. `--pick effort_arg` returns the per-spawn effort argument for the agent (see "Per-spawn" above), empty when none applies; it is emitted as `effort_arg` in the full JSON.
 
 `tier` is computed above the `resolve_model_ids: "omit"` gate, so it stays meaningful exactly where `model` does not — every non-Claude install (blank under `"omit"`) and any install where the runtime's tier map substitutes a name (e.g. `gpt-5.6-luna` for the haiku tier on Codex).
 
