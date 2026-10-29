@@ -673,7 +673,7 @@ const SHARD_BALANCE = Object.freeze({
   // p90 of a fresh sample of the same distribution too often (5/6's own twelfth
   // value, 1155000, is already above 1118000), so the daily check would open a
   // p90 breach on noise. 1.25 rather than the 1.5 used above keeps the rule a
-  // regression detector: x1.5 would put 5/6 at ~28 min, close to the 30-min
+  // regression detector: x1.5 would put 5/6 at ~28 min, close to the 33-min
   // job budget the test-conformance LANE_COSTS entry already enforces.
   baselineShardTotal: 6,
   baselineP90Ms: Object.freeze({

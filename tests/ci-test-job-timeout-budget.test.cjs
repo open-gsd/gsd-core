@@ -127,7 +127,7 @@ const LANE_COSTS = [
   },
   {
     job: 'test-conformance',
-    measuredMinutes: 20,
+    measuredMinutes: 22,
     // #5029: the first entry this lane has had. It ran uncovered from #4591
     // until now on the comment "no LANE_COSTS entry exists yet for this
     // brand-new job — generous until a real measurement exists", and that gap
@@ -138,11 +138,14 @@ const LANE_COSTS = [
     // this figure is the slowest ROW, windows or macos shard.
     //
     // It is windows. Sharded SIX ways as of #5029, its long pole across
-    // seventeen 6-shard runs was 16m38s / 15m17s / 16m25s / 16m21s / 17m22s /
+    // eighteen 6-shard runs was 16m38s / 15m17s / 16m25s / 16m21s / 17m22s /
     // 18m15s / 16m31s / 18m07s / 15m34s / 18m49s / 18m38s / 19m15s / 16m58s /
-    // 16m23s / 15m18s / 14m27s / 18m35s (the last on run 40798310354, at 367
-    // tier files). The worst, 19m15s (shard 5/6, run 38650210804), rounds up
-    // to 20, so this cap may not drop below 30m.
+    // 16m23s / 15m18s / 14m27s / 18m35s / 21m43s (the last two at 367 tier
+    // files). The worst, 21m43s (shard 5/6, run 40802722711), came from a slow
+    // VM: the same shard and partition took 18m17s on run 40798310354, and
+    // #5473's spawn watcher logged 12 slow probes (max 7.0s) against 4 (max
+    // 2.1s). By this file's convention it still counts: it rounds up to 22, so
+    // this cap may not drop below 33m.
     //
     // macOS was the slowest row until #5029 sharded it too. Unsharded it ran
     // 18m13s-26m01s across six runs on this PR (repo-wide p90 26.0m over 43
@@ -171,7 +174,7 @@ const LANE_COSTS = [
     // This comment is the one record of these long poles (test.yml and
     // the TESTING-SUITES doc point here). Per-shard medians, p90s and the
     // shard-balance gap live in SHARD_BALANCE in scripts/ci-timeout-report.cjs.
-    evidence: 'run 38650210804 — windows shard 5/6 19m15s, worst of seventeen 6-shard runs (binding row); macOS 3-shard worst 11m49s on run 40798310354',
+    evidence: 'run 40802722711 — windows shard 5/6 21m43s, worst of eighteen 6-shard runs (binding row); macOS 3-shard worst 11m49s on run 40798310354',
   },
 ];
 
@@ -269,7 +272,9 @@ test('CI job timeout budgets carry headroom over measured cost (#2952)', async (
  * are the conservative constants. They model a typical runner, and single
  * runs fall on either side: for six shards they project 17.6m at 342 files
  * against 14m27s measured (run 39722364921), and 18.2m at 367 files against
- * 18m35s (run 40798310354). The slow-runner skew is the margin for the rest.
+ * 18m35s and, on a slow VM, 21m43s (runs 40798310354 and 40802722711; the
+ * slow one is 1.19x the projection). The slow-runner skew is the margin for
+ * those.
  */
 const WINDOWS_CONFORMANCE_PROJECTION = {
   fixedSecondsPerShard: 584,
