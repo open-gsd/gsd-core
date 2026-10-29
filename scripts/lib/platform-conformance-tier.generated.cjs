@@ -274,6 +274,7 @@ module.exports = {
   "tests/process-seam.test.cjs",
   "tests/profile-output.test.cjs",
   "tests/profile-pipeline.test.cjs",
+  "tests/progress-drift-guard.test.cjs",
   "tests/prohibition-enforcement.test.cjs",
   "tests/project-root.test.cjs",
   "tests/quick-batch-command-router.stdin.test.cjs",
