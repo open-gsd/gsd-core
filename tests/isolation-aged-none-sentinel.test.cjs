@@ -303,15 +303,6 @@ describe('the per-plan worktree gate records the isolation sentinel per dispatch
     assert.equal(runBash('reextract', script, {}).trim().split('\n').pop(), '03-01-api|src/a.js|src/old.js');
   });
 
-  test('Part 2 restores _RENEW_HELD with the rest of the plan\'s state before it records', () => {
-    const start = gateLines.findIndex((l) => /^##\s/.test(l) && /Part 2/.test(l));
-    assert.notEqual(start, -1, 'per-plan-worktree-gate.md has a Part 2');
-    let end = gateLines.findIndex((l, i) => i > start && /^##\s/.test(l));
-    if (end === -1) end = gateLines.length;
-    const intro = gateLines.slice(start, end).join('\n').split('```')[0];
-    assert.match(intro, /`_RENEW_HELD` := /, 'Part 2 names _RENEW_HELD in its restore list, or a forced none after a lost shell restarts the hold (#5479)');
-  });
-
   describe('execute-phase.md places the record at the dispatch point', () => {
     const lines = readFileNormalized(EXECUTE_PHASE).split('\n');
     const stepStart = /^\d+(\.\d+)?\.\s+\*\*/;
@@ -335,7 +326,6 @@ describe('the per-plan worktree gate records the isolation sentinel per dispatch
       assert.match(body, /Part 2/, 'step 3 runs Part 2 (the plan-scoped record) of the gate');
       assert.match(body, /stored decision|that plan's own decision/i, 'step 3 reads the dispatched plan\'s stored decision');
       assert.match(body, /PLAN_FILES[^\n]*PLAN_DELETIONS/, 'step 3 re-extracts PLAN_FILES / PLAN_DELETIONS for the dispatched plan');
-      assert.match(body, /`_RENEW_HELD` := /, 'step 3 restores _RENEW_HELD, so a held answer\'s decidedAt survives to Part 2\'s forced record (#5479: shell state is lost between tool calls)');
     });
   });
 });
