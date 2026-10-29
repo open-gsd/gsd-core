@@ -66,7 +66,9 @@ export interface FindProgressSectionOptions {
   active?: { start: number; end: number } | null;
 }
 
-export interface EditRoadmapProgressOptions extends FindProgressSectionOptions {
+export interface EditRoadmapProgressOptions {
+  /** Active-milestone character range (see `FindProgressSectionOptions.active`). */
+  active?: { start: number; end: number } | null;
   /** No Progress heading: `'whole'` (default) edits the whole document, `'skip'` leaves it untouched. */
   headingless?: 'whole' | 'skip';
 }

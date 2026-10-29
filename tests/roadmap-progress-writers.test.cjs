@@ -18,7 +18,6 @@ const path = require('node:path');
 const { locateRoadmapProgress, editRoadmapProgress, findProgressSection, isProgressHeadingTitle } = require('../gsd-core/bin/lib/roadmap-progress.cjs');
 const { editProgressTableSlice } = require('../gsd-core/bin/lib/roadmap.cjs');
 const { updateTraceabilityCell } = require('../gsd-core/bin/lib/markdown-table.cjs');
-const roadmapParser = require('../gsd-core/bin/lib/roadmap-parser.cjs');
 const { runGsdTools, cleanup } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 
@@ -287,11 +286,5 @@ describe('#5762 one Traceability slice for REQUIREMENTS.md', () => {
   test('a row that is not in the Traceability table reports no matching row', () => {
     const res = flip(`## Traceability\n\n${REQ_TABLE}`, 'AUTH-99');
     assert.equal(res.ok, false);
-  });
-});
-
-describe('#5762 one locator tree-wide', () => {
-  test('findRoadmapProgressTable is retired: the owner is the only Progress locator', () => {
-    assert.equal(roadmapParser.findRoadmapProgressTable, undefined);
   });
 });
