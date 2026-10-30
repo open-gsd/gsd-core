@@ -422,7 +422,7 @@ the safe default. A row the review still reports is then rebuilt like any `open`
 The Severity cell is CAPTURED, not skipped: it is the value the carry-forward below has to
 preserve, and skipping it (the previous [^|]*) is how a carried row lost its tier.
 
-**Before `if (m && ROW_ID.test(m[1])) {`**
+**Before `} else if (m && ROW_ID.test(m[1])) {`**
 
 A table row whose first cell is not a finding id (other than the header and the separator) is
 recorded in `foreign`, and its presence stops the rewrite further down: the ledger is rebuilt
@@ -562,15 +562,17 @@ A DECIDED ROW NEVER LEAVES, OR CHANGES DECISION, SILENTLY -- checked against the
 shape. Every rule above reads rows by shape, and five review rounds each found a hand edit whose
 shape none of them read: a dropped Severity cell shifting `deferred` into the Severity slot and a
 Source into the Disposition slot (coerced to `open`), a row inside a quote or a list item, a
-duplicated id overwriting the first row, a capitalised `Deferred`. So every line is also split into
-cells at every `|`, and where one cell is a finding id, the first later cell from the disposition
-vocabulary (`open`, `fixed`, `skipped`, `deferred`, any case) is what the parse must have recorded
-for that id -- two rows of one id with different dispositions cannot both match what it kept. If it
-did not, the line is named and the rewrite stops, as for an unreadable row. On a row the builder
-writes, that first vocabulary cell is the Disposition column, since no Severity value is in the
-vocabulary, so a Source reading `fixed`, or holding an escaped `\|`, never decides it. The legend
-and the frontmatter cannot trip it: no cell of theirs is exactly an id. A typo outside the
-vocabulary (`wontfix`) keeps ADR-227's coercion to `open` above.
+duplicated id overwriting the first row, a capitalised `Deferred`, a decision in Markdown dress
+(`` `deferred` ``, `**deferred**`), a quoted table. So every body line -- the frontmatter, when the
+file opens with `---`, is skipped, since a finding title quoting a row is the builder's own text --
+is also stripped of leading quote and list markers and split into cells at every `|`, and where one
+cell is a finding id, the first later cell CONTAINING a vocabulary word (`open`, `fixed`, `skipped`,
+`deferred`, any case, as a whole word) gives the disposition the parse must have recorded for that
+id. If it did not, the line is named and the rewrite stops, as for an unreadable row. A second row
+for an id already read is named too, whatever it says, since the parse keeps one row per id. On a row
+the builder writes, that first cell is the Disposition column, since no Severity value is a
+vocabulary word, so a Source mentioning `fixed`, or holding an escaped `\|`, never decides it. A typo
+with no vocabulary word in it (`wontfix`) keeps ADR-227's coercion to `open` above.
 
 **Before `if (foreign.length) {`**
 
@@ -996,14 +998,19 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
   if (fs.existsSync(process.env.DISPOSITION_FILE)) {
     var _tbl = false;
     const decided = [], flagged = new Set();
+    var _ln = 0, _inFm = false;
     for (const l of norm(fs.readFileSync(process.env.DISPOSITION_FILE, 'utf-8')).split('\n')) {
+      if (_ln++ === 0 ? /^---\s*\$/.test(l) : false) _inFm = true; else if (_inFm && /^---\s*\$/.test(l)) _inFm = false;
       const t0 = l.trim();
       const hdr = /^\|?\s*Finding\s*\|\s*Severity\s*\|/i.test(t0);
       if (_tbl && /^(#{1,6}(\s|\$)|>|([-*+]|\d+[.)])(\s|\$)|<[A-Za-z!/]|\x60{3}|~{3})/.test(t0)) _tbl = false;
       const tl = hdr || !t0 ? '' : t0[0] === '|' ? t0 : _tbl || ROW_ID.test(t0.split('|')[0].trim()) && t0.indexOf('|') !== -1 ? '| ' + t0 : '';
       _tbl = hdr || (_tbl && t0 !== '');
       const m = tl.match(/^\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|\s][^|]*?)\s*(?:\|\s*(.*?))?\s*(?:(?<=(?:^|[^\\\\])(?:\\\\\\\\)*)\|)?\s*\$/);
-      if (m && ROW_ID.test(m[1])) {
+      if (m && ROW_ID.test(m[1]) && prior.has(m[1])) {
+        foreign.push(m[1] + ' (a second row)');
+        flagged.add(l);
+      } else if (m && ROW_ID.test(m[1])) {
         const d = ['open', 'fixed', 'skipped', 'deferred'].indexOf(m[3]) !== -1 ? m[3] : 'open';
         prior.set(m[1], { d: d, src: (m[4] || '').replace(/\s*\(not in the current review\)\s*\$/, '') });
         // The table wins over the frontmatter (set unconditionally here, only-if-absent below),
@@ -1013,9 +1020,9 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
         foreign.push(tl.split('|')[1].trim().slice(0, 40) || '(empty first cell)');
         flagged.add(l);
       }
-      const cs = l.split('|').map((c) => c.trim());
+      const cs = _inFm ? [] : l.replace(/^\s*(?:(?:[>*+-]|\d+[.)])\s*)+/, '').split('|').map((c) => c.trim());
       const ci = cs.findIndex((c) => ROW_ID.test(c));
-      const cw = ci === -1 ? undefined : cs.slice(ci + 1).find((c) => /^(open|fixed|skipped|deferred)\$/i.test(c));
+      const cw = ci === -1 ? undefined : cs.slice(ci + 1).map((c) => (c.match(/\b(open|fixed|skipped|deferred)\b/i) || [])[1]).find(Boolean);
       if (cw && !flagged.has(l)) decided.push([cs[ci], cw.toLowerCase(), l.trim().slice(0, 40)]);
       // Frontmatter is walked in the same pass, as a SECTIONED list rather than by one line shape.
       if (/^(?!-(\s|\$))\S/.test(l)) { _fmSec = null; _fmId = null; }
