@@ -121,8 +121,8 @@ its header to a blank line or the start of another block (a heading, quote, list
 so plain text written straight under the table is read as a row; put a blank line above it. A line
 keyed by a finding ID is read as a row wherever it sits, and any body line that names an ID and a
 disposition the step did not read as that disposition — a dropped cell, a row in a quote, a
-`` `deferred` `` in backticks — stops the rewrite too, as does a second row for one ID, so a recorded
-decision never changes or leaves silently.
+`` `deferred` `` in backticks, two rows joined onto one line — stops the rewrite too, as does a second
+row for one ID, so a recorded decision never changes or leaves silently.
 
 **Three residuals, since (ID, title) is not proof of identity.** A ledger written before titles were
 recorded carries none, so its decisions are inherited on the ID alone — refusing there would reset

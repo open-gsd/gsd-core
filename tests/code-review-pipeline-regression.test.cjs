@@ -4161,13 +4161,19 @@ describe('#3861 round 1 — the tests must run what BASH would run', () => {
     // decision stops the run: a dropped Severity cell, a row inside a quote, a duplicated id, a
     // capitalised word. An ordered list item under the table ends it, like any other block.
     for (const bad of ['| CR-01 | deferred | waiting on the vendor |', '> | CR-01 | critical | deferred | vendor |',
-      '| CR-01 | critical | Deferred | vendor |', '| CR-01 | critical | `deferred` | vendor |', '| CR-01 | critical | **deferred** | vendor |']) {
+      '| CR-01 | critical | Deferred | vendor |', '| CR-01 | critical | `deferred` | vendor |', '| CR-01 | critical | **deferred** | vendor |',
+      '> | `CR-01` | critical | deferred | vendor |', '| CR-01 | critical | deferred_q3 | vendor |',
+      '| WR-02 | warning | open | - | CR-01 | critical | deferred | vendor |']) {
       const t = head.concat([bad, '1. follow up', '']).join('\n');
       const o = runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: t });
       assert.strictEqual(o.ledger, t, 'the ledger is left exactly as it was: ' + bad);
       assert.match(o.stdout, /NOT rewritten: 1 ledger row\(s\).*CR-01/, bad);
     }
-    const word = head.concat(['| CR-01 | critical | open | fixed |', '']).join('\n');
+    // A line naming two ids whose decisions were both missed is named once, not twice.
+    const twice = head.concat(['> | WR-02 | warning | skipped | - | CR-01 | critical | deferred | vendor |', '']).join('\n');
+    assert.match(runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: twice }).stdout,
+      /NOT rewritten: 1 ledger row\(s\).*> \| WR-02/);
+    const word = head.concat(['| CR-01 | critical | open | fixed |', '| CR-02 | critical | deferred | see \\| WR-02 \\| skipped |', '']).join('\n');
     assert.doesNotMatch(runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: word }).stdout, /NOT rewritten/,
       'a Source that reads like a decision is not one');
     for (const second of ['| CR-01 | critical | open | - |', '| CR-01 | critical | deferred | a second reason |']) {
