@@ -57,7 +57,7 @@ import planningScopeMod = require('./planning-scope.cjs');
 const { SCOPE } = planningScopeMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import modelResolverMod = require('./model-resolver.cjs');
-const { resolveModelInternal, hasNativeModelAliases, resolveTierInternal, resolveModelForTier, resolveProviderEscalation, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, resolveGranularityInternal, assertValidGranularityOverride } = modelResolverMod;
+const { resolveModelInternal, resolveTierInternal, resolveModelForTier, resolveProviderEscalation, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, resolveGranularityInternal, assertValidGranularityOverride } = modelResolverMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import agentCommandRouterMod = require('./agent-command-router.cjs');
 const { AGENT_FAILURE_CLASSES } = agentCommandRouterMod;
@@ -78,7 +78,7 @@ const { extractFrontmatter, agentScalarNeedsDoubleQuoting, escapeDoubleQuotedSca
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import modelProfiles = require('./model-profiles.cjs');
 const { MODEL_PROFILES, VALID_PHASE_TYPES } = modelProfiles;
-import { formatGsdSlash, resolveRuntime, resolveActiveRuntime } from './runtime-slash.cjs';
+import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { findProjectRoot } from './project-root.cjs';
 import { writeEscalation, modelFamily } from './model-escalation.cjs';
@@ -657,11 +657,10 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
     escalation = { class: opts.failureClass, ...resolved };
   }
 
-  // Only a model escalated past the baseline writes a record, and only where the guard runs (native tier
-  // aliases, the hook's gate). Nothing clears a record: it is single-slot per agent type, so a sibling
+  // Only a model escalated past the baseline writes a record. Nothing clears a record: it is single-slot per agent type, so a sibling
   // plan's baseline `--attempt 0` must not drop an in-flight escalation; the guard's 10-minute window
   // bounds a stale one.
-  if (model && hasNativeModelAliases(resolveActiveRuntime(config)) && modelFamily(model) !== modelFamily(baselineModel)) {
+  if (model && modelFamily(model) !== modelFamily(baselineModel)) {
     recordModelEscalation(cwd, agentType, model);
   }
 
