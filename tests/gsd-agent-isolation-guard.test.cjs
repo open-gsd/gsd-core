@@ -116,14 +116,12 @@ function readSentinelRaw(dir) {
   return JSON.parse(fs.readFileSync(sentinelFile(dir), 'utf-8'));
 }
 
-// The executor's default-profile model, so the isolation rows stay silent under the Agent-model guard.
-const DEFAULT_EXECUTOR_MODEL = require('../gsd-core/bin/lib/model-profiles.cjs').MODEL_PROFILES['gsd-executor'].balanced;
-
 function agentPayload(overrides = {}) {
   return {
     hook_event_name: 'PreToolUse',
     tool_name: 'Agent',
-    tool_input: { subagent_type: 'gsd-executor', model: DEFAULT_EXECUTOR_MODEL },
+    // The executor's default-profile model, so the isolation rows stay silent under the Agent-model guard.
+    tool_input: { subagent_type: 'gsd-executor', model: require('../gsd-core/bin/lib/model-profiles.cjs').MODEL_PROFILES['gsd-executor'].balanced },
     ...overrides,
   };
 }
@@ -194,7 +192,7 @@ describe('gsd-agent-isolation-guard.js: applicability matrix (#3045)', () => {
   });
 
   test('row 2: isolation="worktree" present -> allow', () => {
-    const r = runHook(agentPayload({ tool_input: { subagent_type: 'gsd-executor', isolation: 'worktree', model: DEFAULT_EXECUTOR_MODEL } }), harnessProject);
+    const r = runHook(agentPayload({ tool_input: { subagent_type: 'gsd-executor', isolation: 'worktree', model: agentPayload().tool_input.model } }), harnessProject);
     assert.equal(r.status, 0, `stdout: ${r.stdout}`);
     assert.equal(r.stdout, '');
   });
@@ -616,7 +614,7 @@ describe('gsd-agent-isolation-guard.js: #4594 rows 15/28-32 — prompt-first ext
     writeSentinel(harnessProject, { isolation: 'none', phase: '03', plan: '03-02-hardening' });
     t.after(() => cleanup(path.join(harnessProject, '.gsd')));
     const r = runHook(
-      agentPayload({ tool_input: { subagent_type: 'gsd-executor', model: DEFAULT_EXECUTOR_MODEL, prompt: 'Execute plan 02 of phase 03-auth.' } }),
+      agentPayload({ tool_input: { subagent_type: 'gsd-executor', model: agentPayload().tool_input.model, prompt: 'Execute plan 02 of phase 03-auth.' } }),
       harnessProject,
     );
     assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
@@ -630,7 +628,7 @@ describe('gsd-agent-isolation-guard.js: #4594 rows 15/28-32 — prompt-first ext
       agentPayload({
         tool_input: {
           subagent_type: 'gsd-executor',
-          model: DEFAULT_EXECUTOR_MODEL,
+          model: agentPayload().tool_input.model,
           description: 'Run the executor',
           prompt: '[gsd:dispatch phase="03" plan="03-02-hardening"] Execute the plan.',
         },
@@ -891,7 +889,7 @@ describe('gsd-agent-isolation-guard.js: #3566 — per-install .gsd-runtime marke
     setWorld(t, { marker: null });
     assert.deepEqual(identity(), { runtimeId: null, confident: false });
     const decision = guardModule.evaluateDispatch(
-      { tool_name: 'Agent', tool_input: { subagent_type: 'gsd-executor', model: DEFAULT_EXECUTOR_MODEL }, cwd: markerProject },
+      { tool_name: 'Agent', tool_input: { subagent_type: 'gsd-executor', model: agentPayload().tool_input.model }, cwd: markerProject },
     );
     assert.equal(decision.action, 'allow');
   });
