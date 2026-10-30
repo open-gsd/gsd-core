@@ -67,7 +67,7 @@ function checkAgentModel(data, { clock } = {}) {
     // The workstream `init` resolves (GSD_WORKSTREAM > stored pointer, read-only peek, as the
     // gsd-tools dispatcher and gsd-statusline do), carried in GSD_WORKSTREAM into loadConfig and
     // planningDir. The pointer is keyed by the dispatching session (the payload's session_id, which
-    // Claude Code also exports to `init` as CLAUDE_CODE_SESSION_ID); the caller's environment is restored in `finally`.
+    // the host also exports to `init` as CLAUDE_CODE_SESSION_ID); the caller's environment is restored in `finally`.
     const store = require('../../gsd-core/bin/lib/active-workstream-store.cjs');
     const session = typeof data.session_id === 'string' && data.session_id ? data.session_id : undefined;
     const saved = { GSD_WORKSTREAM: process.env.GSD_WORKSTREAM, CLAUDE_CODE_SESSION_ID: process.env.CLAUDE_CODE_SESSION_ID };
