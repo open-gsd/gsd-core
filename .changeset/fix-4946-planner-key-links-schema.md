@@ -2,5 +2,5 @@
 type: Fixed
 pr: 5149
 ---
-<!-- docs-exempt: prompt guidance and reference table alignment; no public CLI change -->
-**Planners emitted symbols or endpoints in from:/to:, failing `verify key-links`** — `agents/gsd-planner.md` and `gsd-core/references/planner-guidance.md` now explicitly specify that `from:` and `to:` must be project-relative file paths only, with symbols and endpoints placed in `via:` (#4946).
+<!-- docs-exempt: shared planner prompt guidance only; no public CLI or documentation change -->
+**Planners no longer put symbols or endpoints in key-link file fields that fail `verify key-links`** — The shared planner guidance now states that `from:` and `to:` must be project-relative file paths, with symbols and endpoints in `via:`. The planner already loads this guidance while authoring key links (#4946).
