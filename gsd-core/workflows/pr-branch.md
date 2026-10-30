@@ -135,7 +135,7 @@ if [ -n "$MARKER_TIP" ]; then
 fi
 AHEAD=$(git rev-list --count "$CURRENT_BRANCH" --not "$BASE" "$TARGET" 2>/dev/null)
 if [ "$AHEAD" = "0" ]; then
-  echo "No commits ahead of $BASE — nothing to filter."
+  echo "No commits ahead of the last published tip (or $TARGET) — nothing to filter."
   settle_pending
   exit 0
 fi

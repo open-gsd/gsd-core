@@ -91,9 +91,9 @@ allowed population.
 | `<branch>-pr exists and is not merged into <target>` | The previous `-pr` branch is not merged yet (or was squash/rebase merged, the target changed those files since, and `gh` could not confirm the merged PR). | Pick one of the two printed commands: re-anchor if it was merged, or discard it. Then re-run. |
 | `<branch>-pr is merged into <target> but no longer holds the pending build` | The previous `-pr` branch was merged but was amended or rebased after the build, so the run cannot tell which commits were published. | Pick one of the two printed commands: re-anchor if the build was published, or discard it. Then re-run. |
 | `WARNING: dropped the pending build` | The previous `-pr` branch is gone and its merge could not be proven (it needs an executable, authenticated, online `gh`), so its commits will be replayed. | If it was squash/rebase merged, run the `git update-ref` the warning prints, re-run, and take the discard command that run prints for the rebuilt `-pr` (a conflict halt already deleted it: then only re-anchor and re-run). |
-| `Conflict outside the .planning/ filter` | A real content conflict between your commits and the target branch. | Resolve it on your working branch, then re-run `/gsd-pr-branch`. |
+| `Conflict outside the .planning/ filter` | A real content conflict between your commits and the target branch. | Resolve it on your working branch, then re-run `/gsd-pr-branch`. If it came from replaying commits you already published, re-anchor instead (the `git update-ref` the earlier WARNING printed). |
 | `Working tree has uncommitted changes` | Step 4's precondition failed. | Commit or stash, then re-run. |
-| `No commits ahead of <target>` | There is nothing to filter. | Not an error — you have not committed anything yet, or the target is wrong. |
+| `No commits ahead of the last published tip (or <target>)` | There is nothing to filter. | Not an error — you have not committed anything yet, or the target is wrong. |
 
 An `ℹ️` advisory listing `.planning/` paths appears only in **default** mode, naming paths that are
 neither transient nor structural (`config.json`, `intel/`, `workstreams/`) and therefore kept. Strict
