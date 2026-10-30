@@ -619,7 +619,7 @@ issue:
   unresolved_questions:
     - "Hash prefix — keep or change?"
     - "Cache TTL — what duration?"
-  fix_hint: "Ask the user to rule, record each ruling as a D-NN in CONTEXT.md (/gsd:discuss-phase), and cite it: 'RESOLVED (D-NN): <ruling>'"
+  fix_hint: "If a D-NN under <decisions> already answers it, cite it: 'RESOLVED (D-NN): <ruling>'. Otherwise never add a decision to CONTEXT.md: the user rules in /gsd:discuss-phase, or a sourced answer settles a factual gap; then /gsd:plan-phase --research re-runs the researcher"
 ```
 
 **Example — self-resolved, no decision on record (BLOCKER):**
