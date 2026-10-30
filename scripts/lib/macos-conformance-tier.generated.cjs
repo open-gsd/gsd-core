@@ -91,6 +91,7 @@ module.exports = {
   "tests/gate-evaluation-scope.test.cjs",
   "tests/gate-predicate.unit.test.cjs",
   "tests/gate-tdd-red-evidence-containment.test.cjs",
+  "tests/gate-tdd-review-checkpoint-hardening.test.cjs",
   "tests/gate-ui-plan.unit.test.cjs",
   "tests/gate-verify-command-paths.unit.test.cjs",
   "tests/gemini-runtime-removed.test.cjs",
