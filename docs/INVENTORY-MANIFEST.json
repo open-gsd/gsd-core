@@ -446,6 +446,7 @@
       "gate-verify-command-paths.cjs",
       "gate-verify-failure-directions.cjs",
       "git-base-branch.cjs",
+      "git-commit-timeout.cjs",
       "git-info-exclude.cjs",
       "graphify-command-router.cjs",
       "graphify.cjs",

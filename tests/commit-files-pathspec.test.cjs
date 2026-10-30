@@ -23,6 +23,7 @@ const { execFileSync } = require('node:child_process');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
 const { GIT_TIMEOUT_MS, PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { runWithTimedOutCommit } = require('./helpers/commit-timeout-probe.cjs');
 const {
   bareCommandName, tokenize, shellDashCPayloads, commentPortion,
   ISSUE_REF_RE, declarationReason, isDeclared, isUntrackedDeclaration,
@@ -3196,29 +3197,12 @@ describe('commit timeout reporting (#3886)', () => {
   // SIGTERM+ETIMEDOUT shape (posix) or the ETIMEDOUT-only shape (Windows —
   // #3050: signal is not reliably reported there).
   function commitWithTimedOutCommit({ cwd, files, stderr = "warning: LF will be replaced by CRLF", timeoutShape = 'posix' }) {
-    const script = `
-const path = require('path');
-const LIB = ${JSON.stringify(LIB)};
-const projection = require(path.join(LIB, 'shell-command-projection.cjs'));
-const { cmdCommit } = require(path.join(LIB, 'commands.cjs'));
-const timeoutShape = ${JSON.stringify(timeoutShape)};
-const stderrText = ${JSON.stringify(stderr)};
-const real = projection.execGit;
-projection.execGit = (args, opts) => {
-  if (args[0] === 'commit') {
-    const e = new Error('spawnSync git ETIMEDOUT');
-    e.code = 'ETIMEDOUT';
-    return { exitCode: 1, stdout: '', stderr: stderrText, signal: timeoutShape === 'posix' ? 'SIGTERM' : null, error: e };
-  }
-  return real(args, opts);
-};
-cmdCommit(${JSON.stringify(cwd)}, 'docs: probe', ${JSON.stringify(files)}, false, false, false);
-`;
-    const run = spawnSync(process.execPath, ['-e', script], { encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS });
+    // #5231: the shared probe also reports the `timeout` option execGit was handed for `git commit`.
+    const run = runWithTimedOutCommit(`cmds.cmdCommit(${JSON.stringify(cwd)}, 'docs: probe', ${JSON.stringify(files)}, false, false, false);`, { stderr, timeoutShape });
     if (run.status !== 0 && !run.stdout) {
       throw new Error(`probe crashed: ${run.stderr}`);
     }
-    return { result: JSON.parse(run.stdout) };
+    return { result: JSON.parse(run.stdout), timeout: run.timeout };
   }
 
   let tmpDir;
@@ -3251,6 +3235,54 @@ cmdCommit(${JSON.stringify(cwd)}, 'docs: probe', ${JSON.stringify(files)}, false
       );
     });
   }
+
+  // #5231: `git.commit_timeout_ms` — positive integer, default 30000.
+  function writeGitConfig(git) {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({ git }));
+  }
+
+  test('#5231: git.commit_timeout_ms sets the git commit timeout and the reported error differs per configured value', () => {
+    writeGitConfig({ commit_timeout_ms: 60000 });
+    const { result, timeout } = commitWithTimedOutCommit({ cwd: tmpDir, files: ['.planning/STATE.md'] });
+    assert.equal(timeout, 60000, 'execGit(commit) must receive the configured timeout');
+    assert.equal(result.reason, 'commit_timeout');
+    assert.equal(result.timed_out, true);
+    writeGitConfig({ commit_timeout_ms: 30000 });
+    const other = commitWithTimedOutCommit({ cwd: tmpDir, files: ['.planning/STATE.md'] });
+    assert.equal(other.timeout, 30000);
+    assert.notStrictEqual(result.error, other.result.error, 'the message must follow the configured timeout');
+  });
+
+  test('#5231: an active workstream config wins over the root config for the commit timeout', () => {
+    writeGitConfig({ commit_timeout_ms: 45000 });
+    const wsDir = path.join(tmpDir, '.planning', 'workstreams', 'ws');
+    fs.mkdirSync(wsDir, { recursive: true });
+    fs.writeFileSync(path.join(wsDir, 'config.json'), JSON.stringify({ git: { commit_timeout_ms: 60000 } }));
+    const run = runWithTimedOutCommit(`process.env.GSD_WORKSTREAM = 'ws'; cmds.cmdCommit(${JSON.stringify(tmpDir)}, 'docs: probe', ['.planning/STATE.md'], false, false, false);`);
+    assert.equal(run.timeout, 60000, run.stderr);
+  });
+
+  test('#5231: unset git.commit_timeout_ms defaults to 30000', () => {
+    const { result, timeout } = commitWithTimedOutCommit({ cwd: tmpDir, files: ['.planning/STATE.md'] });
+    assert.equal(timeout, 30000);
+    assert.equal(result.reason, 'commit_timeout');
+  });
+
+  test('#5231: invalid git.commit_timeout_ms (0, -1, abc, 1500.5, null, ceiling+1, MAX_SAFE_INTEGER+1) falls back to 30000', () => {
+    for (const bad of [0, -1, 'abc', 1500.5, null, 3600001, Number.MAX_SAFE_INTEGER + 1]) {
+      writeGitConfig({ commit_timeout_ms: bad });
+      const { timeout } = commitWithTimedOutCommit({ cwd: tmpDir, files: ['.planning/STATE.md'] });
+      assert.equal(timeout, 30000, JSON.stringify(bad));
+    }
+  });
+
+  test('#5231: git.commit_timeout_ms accepts 1, 2, ceiling-1 and the 3600000 ceiling', () => {
+    for (const ok of [1, 2, 3599999, 3600000]) {
+      writeGitConfig({ commit_timeout_ms: ok });
+      const { timeout } = commitWithTimedOutCommit({ cwd: tmpDir, files: ['.planning/STATE.md'] });
+      assert.equal(timeout, ok);
+    }
+  });
 
   test('a timeout whose partial output contains "nothing to commit" is still a timeout (precedence pin)', () => {
     // #3886 review: the isSpawnTimeout gate runs BEFORE the nothing-to-commit

@@ -66,6 +66,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Scope code review depth by path](how-to/scope-code-review-depth-by-path.md) — escalate `/gsd-code-review` to `deep` for sensitive directories while the rest of the repo stays at the default depth
 - [Work in parallel with workstreams](how-to/work-in-parallel-with-workstreams.md) — run independent lines of work simultaneously using workstreams
 - [Isolate work with workspaces](how-to/isolate-work-with-workspaces.md) — use workspaces to sandbox experimental or risky changes
+- [Raise the commit timeout for slow pre-commit hooks](how-to/raise-the-commit-timeout-for-slow-hooks.md) — set `git.commit_timeout_ms` when a hook outlasts the 30 s SDK commit timeout
 - [Debug a failed execution](how-to/debug-a-failed-execution.md) — diagnose and recover from broken or incomplete phase execution
 - [Recover from an invalid verification status](how-to/recover-from-an-invalid-verification-status.md) — get a phase passing again after `verification_status_invalid`, a `W030` health warning, or `phase_dir_not_found`
 - [Interpret scope-conformance warnings](how-to/interpret-scope-conformance-warnings.md) — read the advisory the worktree-wave merge emits when a plan branch commits outside its declared scope
