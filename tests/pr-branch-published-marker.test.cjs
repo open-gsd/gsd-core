@@ -740,6 +740,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.notEqual(r.status, 0);
     assert.match(r.stderr, /feature-pr exists and is not merged into main/);
     assert.deepEqual([markerOf(dir), pendingOf(dir), builtOf(dir)], before, 'a refused run changes no ref');
+    assert.equal(r.stderr.split(/\r?\n/).filter((l) => l.startsWith('  discard: ')).length, 1, 'exactly one discard option is printed');
     assert.equal(printedCmd(r.stderr, 'discard'), 'git branch -D feature-pr', 'the build is proven merged, so the menu must not offer to forget it');
     assert.equal(runSh(printedCmd(r.stderr, 'discard'), dir).status, 0);
     onlyRound2(publish(dir), dir);
