@@ -4163,12 +4163,20 @@ describe('#3861 round 1 — the tests must run what BASH would run', () => {
     for (const bad of ['| CR-01 | deferred | waiting on the vendor |', '> | CR-01 | critical | deferred | vendor |',
       '| CR-01 | critical | Deferred | vendor |', '| CR-01 | critical | `deferred` | vendor |', '| CR-01 | critical | **deferred** | vendor |',
       '> | `CR-01` | critical | deferred | vendor |', '| CR-01 | critical | deferred_q3 | vendor |',
-      '| WR-02 | warning | open | - | CR-01 | critical | deferred | vendor |']) {
+      '| WR-02 | warning | open | - | CR-01 | critical | deferred | vendor |', '| CR-01 | critical | ~~open~~ fixed | patched |',
+      '| CR-01 | critical | open -> fixed | patched |']) {
       const t = head.concat([bad, '1. follow up', '']).join('\n');
       const o = runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: t });
       assert.strictEqual(o.ledger, t, 'the ledger is left exactly as it was: ' + bad);
       assert.match(o.stdout, /NOT rewritten: 1 ledger row\(s\).*CR-01/, bad);
     }
+    // A quoted copy of a row is a second row even when it agrees with the first; two different lines
+    // that share their first 40 characters are still two lines.
+    const qdup = head.concat(['| CR-01 | critical | deferred | original reason |', '> | CR-01 | critical | deferred | second reason |', '']).join('\n');
+    assert.match(runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: qdup }).stdout, /NOT rewritten: 1 ledger row\(s\)/);
+    const same40 = head.concat(['> | CR-01 | critical | deferred | waiting on the vendor, ticket 1 |',
+      '> | CR-01 | critical | deferred | waiting on the vendor, ticket 2 |', '']).join('\n');
+    assert.match(runShippedDisposition({ reviewText: REVIEW('### IN-01: unrelated'), priorText: same40 }).stdout, /NOT rewritten: 2 ledger row\(s\)/);
     // A line naming two ids whose decisions were both missed is named once, not twice.
     const twice = head.concat(['> | WR-02 | warning | skipped | - | CR-01 | critical | deferred | vendor |', '']).join('\n');
     assert.match(runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: twice }).stdout,

@@ -556,10 +556,10 @@ alone, exactly as sameFinding() does, so nothing moves there.
 The move is named on the console, id, decision and new key, for a reader who never opens the
 ledger.
 
-**Before `for (const [id, w, t] of decided) if ((!prior.has(id) || prior.get(id).d !== w) && foreign.indexOf(t) === -1) foreign.push(t);`**
+**Before `for (const [id, w, l] of decided) if ((!prior.has(id) || prior.get(id).d !== w || priorLine.get(id) !== l) && !flagged.has(l)) { flagged.add(l); foreign.push(l.trim().slice(0, 40)); }`**
 
-A DECIDED ROW NEVER LEAVES, OR CHANGES DECISION, SILENTLY -- checked against the text, whatever its
-shape. Every rule above reads rows by shape, and five review rounds each found a hand edit whose
+A DECIDED ROW NEVER LEAVES, OR CHANGES DECISION, SILENTLY ON A READ -- checked against the text,
+whatever its shape. Every rule above reads rows by shape, and five review rounds each found a hand edit whose
 shape none of them read: a dropped Severity cell shifting `deferred` into the Severity slot and a
 Source into the Disposition slot (coerced to `open`), a row inside a quote or a list item, a
 duplicated id overwriting the first row, a capitalised `Deferred`, a decision in Markdown dress
@@ -568,14 +568,19 @@ every body line -- the frontmatter, when the file opens with `---`, is skipped, 
 quoting a row is the builder's own text -- is also stripped of leading quote and list markers, split
 into cells at every `|`, and stripped of emphasis (`` ` ``, `*`, `_`), and EVERY cell that is a
 finding id is paired with the first later cell that contains a vocabulary word (`open`, `fixed`,
-`skipped`, `deferred`, any case, from a word start): that is the disposition the parse must have
-recorded for the id. If it did not, the line is named, once however many of its ids fail, and the
-rewrite stops, as for an unreadable row. A second row for an id already read is named too, whatever
-it says, since the parse keeps one row per id. On a row the builder writes, the first such cell is the
-Disposition column, since no Severity value starts with a vocabulary word, and a Source cannot pair
-an id: the builder escapes every pipe in it, so every fragment of an escaped Source but the last ends
-in `\`, and the last, even when it reads as an id, has no cell after it to pair with.
-A typo with no vocabulary word in it (`wontfix`) keeps ADR-227's coercion to `open` above.
+`skipped`, `deferred`, any case, from a word start). That cell must BE one vocabulary word -- a cell
+like `~~open~~ fixed` or `open -> fixed` is ambiguous and never matches -- and the parse must have
+recorded that disposition for the id, from that same line. If not, the line is named, once however
+many of its ids fail, and the rewrite stops, as for an unreadable row. So a quoted copy of a row is
+named even when it agrees with the row, and a second table row for an id already read is named too,
+whatever it says, since the parse keeps one row per id. On a row the builder writes, the paired cell
+is the Disposition column, which is always exactly one word, since no Severity value starts with a
+vocabulary word; and a Source cannot pair an id: the builder escapes every pipe in it, so every
+fragment of an escaped Source but the last ends in `\`, and the last, even when it reads as an id,
+has no cell after it to pair with. A typo with no vocabulary word in it (`wontfix`) keeps ADR-227's
+coercion to `open` above. One override stays by design: a fix report on disk still decides its finding
+(applied beats recorded, above), so a hand decision on a finding that report names is replaced on
+the next run -- remove or correct the report to keep it.
 
 **Before `if (foreign.length) {`**
 
@@ -1000,7 +1005,7 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
   var _fmJson = false;
   if (fs.existsSync(process.env.DISPOSITION_FILE)) {
     var _tbl = false;
-    const decided = [], flagged = new Set();
+    const decided = [], flagged = new Set(), priorLine = new Map();
     var _ln = 0, _inFm = false;
     for (const l of norm(fs.readFileSync(process.env.DISPOSITION_FILE, 'utf-8')).split('\n')) {
       if (_ln++ === 0 ? /^---\s*\$/.test(l) : false) _inFm = true; else if (_inFm && /^---\s*\$/.test(l)) _inFm = false;
@@ -1016,6 +1021,7 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
       } else if (m && ROW_ID.test(m[1])) {
         const d = ['open', 'fixed', 'skipped', 'deferred'].indexOf(m[3]) !== -1 ? m[3] : 'open';
         prior.set(m[1], { d: d, src: (m[4] || '').replace(/\s*\(not in the current review\)\s*\$/, '') });
+        priorLine.set(m[1], l);
         // The table wins over the frontmatter (set unconditionally here, only-if-absent below),
         // whichever order the two appear in the file.
         if (SEV_VOCAB.indexOf(m[2]) !== -1) priorSev.set(m[1], m[2]);
@@ -1027,8 +1033,9 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
       if (!flagged.has(l)) cs.forEach((c, k) => {
         if (!ROW_ID.test(c)) return;
         for (let j = k + 1; j < cs.length; j++) {
-          const w = (cs[j].match(/\b(open|fixed|skipped|deferred)/i) || [])[1];
-          if (w) { decided.push([c, w.toLowerCase(), l.trim().slice(0, 40)]); return; }
+          if (!/\b(open|fixed|skipped|deferred)/i.test(cs[j])) continue;
+          decided.push([c, /^(open|fixed|skipped|deferred)\$/i.test(cs[j]) ? cs[j].toLowerCase() : '?', l]);
+          return;
         }
       });
       // Frontmatter is walked in the same pass, as a SECTIONED list rather than by one line shape.
@@ -1050,7 +1057,7 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
         continue;
       }
     }
-    for (const [id, w, t] of decided) if ((!prior.has(id) || prior.get(id).d !== w) && foreign.indexOf(t) === -1) foreign.push(t);
+    for (const [id, w, l] of decided) if ((!prior.has(id) || prior.get(id).d !== w || priorLine.get(id) !== l) && !flagged.has(l)) { flagged.add(l); foreign.push(l.trim().slice(0, 40)); }
   }
   const sameTitle = (a, b) => String(a === undefined ? '' : a).replace(/\s+/g, ' ').trim()
                            === String(b === undefined ? '' : b).replace(/\s+/g, ' ').trim();
