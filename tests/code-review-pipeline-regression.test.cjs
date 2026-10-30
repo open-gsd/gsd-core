@@ -4126,6 +4126,17 @@ describe('#3861 round 1 — the tests must run what BASH would run', () => {
     const rows = ledgerRows(runShippedDisposition({ reviewText: REVIEW('### IN-01: unrelated'), priorText: good }).ledger);
     assert.strictEqual(rows.find((r) => r.id === 'CR-09').disposition, 'deferred', 'an indented row is carried');
     assert.strictEqual(rows.find((r) => r.id === 'WR-10').disposition, 'skipped', 'a pipe-less row is carried');
+    // Inside the table every non-blank line is a row to a Markdown reader: a bare word (padded with
+    // empty cells), and a row whose first cell happens to read `Finding`, which is not the header.
+    const odd = head.concat(['| CR-01 | critical | deferred | vendor |', '| Finding | warning | fixed | by hand |', 'R1.4-WR-03', '']).join('\n');
+    const named = runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: odd });
+    assert.strictEqual(named.ledger, odd, 'the ledger is left exactly as it was');
+    assert.match(named.stdout, /NOT rewritten: 2 ledger row\(s\).*Finding.*R1\.4-WR-03/);
+    // A table whose header and separator carry no outer pipes, in any case, is the same table.
+    const bare = ['finding | severity | disposition | source', '--------|----------|-------------|-------',
+      'WR-11 | warning | deferred | vendor', ''].join('\n');
+    const kept = ledgerRows(runShippedDisposition({ reviewText: REVIEW('### IN-01: unrelated'), priorText: bare }).ledger);
+    assert.strictEqual(kept.find((r) => r.id === 'WR-11').disposition, 'deferred', 'a pipe-less table is carried');
   });
 
   test('an unkeyable or empty frontmatter id moves the cursor, so its title never lands on the entry before it', () => {
@@ -4137,13 +4148,22 @@ describe('#3861 round 1 — the tests must run what BASH would run', () => {
       '  - id: R1.2-WR-01', '    title: "an unkeyable entry"',
       '  - id: WR-09', '    severity: warning', '    disposition: deferred', '    title: "the second warning"',
       '  - id:', '    title: "an empty entry"',
-      'open: 0', 'total: 2', 'recorded: x', '---', '', '# Phase 01: Code Review Disposition', '',
+      '  - id: WR-06', '    severity: warning', '    disposition: deferred', '    title: "the third warning"',
+      '  -  id: R1.2-WR-02', '    title: "two spaces after the dash"',
+      '  - id: WR-05', '    severity: warning', '    disposition: deferred', '    title: "the fourth warning"',
+      '  - severity: warning', '    title: "an entry whose id is not its first key"', '    id: R1.2-WR-03',
+      '  - id: WR-04', '    severity: warning', '    disposition: deferred', '    title: "the fifth warning"',
+      'open: 0', 'total: 5', 'recorded: x', '---', '', '# Phase 01: Code Review Disposition', '',
+      '    title: "an indented body line, after the frontmatter has ended"', '',
       '| Finding | Severity | Disposition | Source |', '|---------|----------|-------------|--------|',
-      '| WR-08 | warning | deferred | phase 10 |', '| WR-09 | warning | deferred | phase 11 |', ''].join('\n');
+      '| WR-08 | warning | deferred | phase 10 |', '| WR-09 | warning | deferred | phase 11 |',
+      '| WR-06 | warning | deferred | phase 12 |', '| WR-05 | warning | deferred | phase 13 |',
+      '| WR-04 | warning | deferred | phase 14 |', ''].join('\n');
     const out = runShippedDisposition({
-      reviewText: REVIEW('### WR-08: the first warning', '### WR-09: the second warning'), priorText: prior });
+      reviewText: REVIEW('### WR-08: the first warning', '### WR-09: the second warning', '### WR-06: the third warning',
+        '### WR-05: the fourth warning', '### WR-04: the fifth warning'), priorText: prior });
     const rows = ledgerRows(out.ledger);
-    for (const id of ['WR-08', 'WR-09']) {
+    for (const id of ['WR-08', 'WR-09', 'WR-06', 'WR-05', 'WR-04']) {
       assert.strictEqual(rows.find((r) => r.id === id).disposition, 'deferred', id + ' keeps its decision');
       assert.ok(!rows.some((r) => r.id === id + '~1'), id + ' is not moved as if it were a different finding');
     }
