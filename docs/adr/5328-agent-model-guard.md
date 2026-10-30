@@ -1,6 +1,6 @@
 # ADR-5328: The Agent() Model Guard Rides the Isolation Guard, Recomputes Its Baseline, and Accepts a Bounded Escalation Record
 
-- **Status:** Accepted (2026-10-18); amended (2026-10-27) — session narrowing, native-alias write gate, baseline call, omitted model under deny
+- **Status:** Accepted (2026-10-18)
 - **Date:** 2026-10-17
 - **Issue:** [#5328](https://github.com/open-gsd/gsd-core/issues/5328) — `enhancement`, `approved-enhancement`
 - **Builds on:** [ADR-4630](4630-dispatch-identity-and-isolation-decision-seam.md) (one owner of the dispatch decision), [ADR-3473](3473-enforcement-by-construction.md) (one owner per invariant)
@@ -39,11 +39,3 @@ The issue suggested persisting resolved models when `init.*` runs. A persisted c
 - A default-on warning for every Claude Code user with a `.planning/config.json`.
 - `resolve-execution` gains a write side effect, only for an escalated model.
 - The guard is Claude-only.
-
-## Amendment (2026-10-27): session narrowing, the write gate and the omitted model
-
-Review of [PR #5413](https://github.com/open-gsd/gsd-core/pull/5413) after acceptance changed three points. Decisions 2, 3 and 4 and the Consequences above stand as accepted, read with these:
-
-- **Session narrowing (Decision 3).** When the dispatch carries a session id (hook `session_id`), only a record written in that session (`CLAUDE_CODE_SESSION_ID`) counts; a record without a session counts only for a dispatch without one. So a host whose Bash environment lacks `CLAUDE_CODE_SESSION_ID` while its hook payload carries `session_id` never has an escalation honoured.
-- **Write gate (Decision 3, Consequences).** `resolve-execution` writes the record only on a runtime whose host takes GSD's tier aliases (`hostBehaviors.nativeModelAliases`), the gate the guard itself runs under; elsewhere it writes no record (the dispatch-isolation sentinel still creates `.gsd/` on every runtime).
-- **Omitted model and the mode source (Decision 4).** Under `"deny"` only a passed, wrong `model` blocks; an omitted `model` stays a warning, because the hook cannot see the orchestrator's model that the subagent would inherit, so it cannot tell that the omission differs. `mode` is read from the root config only (like the other `hooks.*` keys); the runtime comes from the workstream-aware `loadConfig`, the result the expected model resolves through.
