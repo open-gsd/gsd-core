@@ -14,7 +14,10 @@
  *   answers it and predates the planning run); blocks every other question, naming the
  *   citation shapes the forgery used (none, a plan, a "disposition"); and blocks every
  *   question when CONTEXT.md is absent. Only the no-questions case reaches PASS.
- * - Its fix_hint routes to recording a user ruling, not to writing the marker.
+ * - Its fix_hint routes to recording a user ruling, not to writing the marker: a decision
+ *   already on record is cited; otherwise no decision is added during planning: the user
+ *   rules in discuss-phase (or a sourced answer settles a factual gap), and a research re-run
+ *   writes the citation.
  * - Its worked examples: the PASS example cites `D-NN`; the self-resolved shape is a
  *   BLOCKER example.
  * - `<success_criteria>` carries the dimension, so the checklist the agent ends on
@@ -134,13 +137,21 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     }
   });
 
-  test('fix_hint routes to recording a user ruling, never to writing the marker', () => {
+  test('fix_hint routes to a decision on record, else a user ruling and a research re-run, never to the planner adding one', () => {
     const hints = [...dim11.matchAll(/fix_hint:\s*"([^"]*)"/g)].map((m) => m[1]);
     assert.ok(hints.length >= 1, 'Dimension 11 must carry a fix_hint example');
     for (const hint of hints) {
       assert.doesNotMatch(hint, /mark section as/i, `fix_hint still prescribes the marker: ${hint}`);
       assert.match(hint, /D-NN/);
       assert.match(hint, /CONTEXT\.md/);
+      // The BLOCKER goes to the planner's revision loop. It can cite a decision already on record,
+      // but never add one: the hint says so, and names who rules, what settles a factual gap, and
+      // who writes the citation.
+      assert.match(hint, /If a D-NN under <decisions> already answers it, cite it/);
+      assert.match(hint, /Otherwise never add a decision to CONTEXT\.md/);
+      assert.match(hint, /a sourced answer settles a factual gap/);
+      assert.match(hint, /\/gsd:discuss-phase/);
+      assert.match(hint, /\/gsd:plan-phase --research/);
     }
   });
 
