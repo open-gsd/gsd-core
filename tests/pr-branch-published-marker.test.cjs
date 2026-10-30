@@ -13,7 +13,6 @@
 const { describe, test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const { cleanup, createTempDir } = require('./helpers.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
@@ -85,7 +84,8 @@ function publish(dir, target = 'main', { branch = 'feature', mode = 'true', gh =
   const script = [
     `CURRENT_BRANCH='${branch}'`,
     `TARGET=${target}`,
-    `gsd_run() { echo ${mode}; }`,
+    // run-with-timeout <secs> -- cmd...: log the call, then exec cmd (the real verb bounds it; the log proves it was used).
+    `gsd_run() { if [ "$1" = run-with-timeout ]; then echo "$*" >> .git/rwt.log; shift 3; "$@"; else echo ${mode}; fi; }`,
     prelude || `gh() { ${gh}; }`, // hermetic: no network lookup unless a test supplies one
     b('PR_BRANCH="${CURRENT_BRANCH}-pr"'),
     afterPre, // stands in for the outward steps (handle_sub_repos) that run between the preconditions and the build
@@ -123,9 +123,6 @@ const prMergedFns = () => {
   const block = extractBashBlockContaining(fs.readFileSync(WORKFLOW_PATH, 'utf-8'), 'pr_merged() {');
   return [block.match(/^_to\(\) \{.*\}$/m), block.match(/^pr_merged\(\) \{[\s\S]*?^\}$/m)].filter(Boolean).map((m) => m[0]).join('\n');
 };
-
-// gh runs only as an executable under `timeout`; the shim tests need the binary (stock macOS has none).
-const hasTimeout = runSh('timeout 1 true', os.tmpdir()).status === 0;
 
 // The command a refusal prints on its `  <label>: <cmd>` line, so tests run what a user would paste.
 const printedCmd = (stderr, label) => {
@@ -409,7 +406,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     return `PATH="${bin.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, d) => `/${d.toLowerCase()}`)}:$PATH"`;
   };
 
-  test('gh reporting a different head sha does not promote: the merge is not proven: nothing is published', { skip: !hasTimeout && 'needs a timeout binary' }, () => {
+  test('gh reporting a different head sha does not promote: the merge is not proven: nothing is published', () => {
     const dir = repo();
     commitRound(dir, 1);
     assert.equal(publish(dir).status, 0);
@@ -423,7 +420,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.notEqual(pendingOf(dir), pendingBefore, 'the old pending build was dropped');
   });
 
-  test('gh queried for another base is ignored: a -pr merged elsewhere never promotes', { skip: !hasTimeout && 'needs a timeout binary' }, () => {
+  test('gh queried for another base is ignored: a -pr merged elsewhere never promotes', () => {
     const dir = repo();
     commitRound(dir, 1);
     assert.equal(publish(dir).status, 0);
@@ -453,7 +450,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     onlyRound2(r, dir);
   });
 
-  test('squash-merged and deleted -pr, files changed on main since: a merged PR reported by gh proves it', { skip: !hasTimeout && 'needs a timeout binary' }, () => {
+  test('squash-merged and deleted -pr, files changed on main since: a merged PR reported by gh proves it', () => {
     const dir = repo();
     commitRound(dir, 1);
     assert.equal(publish(dir).status, 0);
@@ -466,40 +463,20 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.equal(markerOf(dir), tip1);
   });
 
-  // An executable gh (not a shell function) can only be bounded by `timeout`; stock macOS has none.
-  describe('executable gh on a host without `timeout`', () => {
+  // An executable gh is bounded by `gsd_run run-with-timeout`, which needs no timeout binary (stock macOS).
+  test('executable gh on a host without `timeout`: the lookup runs through run-with-timeout and proves the merge', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    assert.equal(publish(dir).status, 0);
+    const tip1 = git(dir, 'rev-parse', 'feature');
+    const prTip = builtOf(dir);
+    squashMerge(dir, { later: true, deletePr: true });
+    commitRound(dir, 2, 'two.txt');
     const noTimeout = "command() { if [ \"$1\" = -v ] && [ \"$2\" = timeout ]; then return 1; fi; builtin command \"$@\"; }";
-    const run = (hideTimeout) => {
-      const dir = repo();
-      commitRound(dir, 1);
-      assert.equal(publish(dir).status, 0);
-      const prTip = builtOf(dir);
-      const tip1 = git(dir, 'rev-parse', 'feature');
-      const pendingBefore = pendingOf(dir);
-      squashMerge(dir, { later: true, deletePr: true });
-      commitRound(dir, 2, 'two.txt');
-      const bin = createTempDir('gsd-prmarker-bin-');
-      dirs.push(bin);
-      fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\n: > .git/gh-called\necho ${prTip}\n`, { mode: 0o755 });
-      // MSYS bash splits PATH on ':', so a drive-letter path (D:/x) must be written /d/x
-      const binDir = bin.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, d) => `/${d.toLowerCase()}`);
-      const prelude = `PATH="${binDir}:$PATH"\n${hideTimeout ? noTimeout : ''}`;
-      const r = publish(dir, 'main', { prelude });
-      return { r, dir, tip1, pendingBefore, called: fs.existsSync(path.join(dir, '.git', 'gh-called')) };
-    };
-
-    test('the lookup is skipped: the merge is not proven: nothing is published and gh never runs unbounded', () => {
-      const { dir, called, pendingBefore } = run(true);
-      assert.equal(called, false);
-      assert.equal(markerOf(dir), '');
-      assert.notEqual(pendingOf(dir), pendingBefore, 'the old pending build was dropped');
-    });
-
-    test('control: with `timeout` available the same gh runs and proves the merge', { skip: !hasTimeout && 'needs a timeout binary' }, () => {
-      const { dir, tip1, called } = run(false);
-      assert.equal(called, true);
-      assert.equal(markerOf(dir), tip1);
-    });
+    const r = publish(dir, 'main', { prelude: `${ghPrelude(prTip)}\n${noTimeout}` });
+    onlyRound2(r, dir);
+    assert.equal(markerOf(dir), tip1);
+    assert.match(fs.readFileSync(path.join(dir, '.git', 'rwt.log'), 'utf-8'), /^run-with-timeout 10 -- gh pr list/m, 'gh ran bounded');
   });
 
   test('renamed file, squash merge on main keeps old.txt: not proven, the merge is not proven: nothing is published (--no-renames)', () => {
@@ -518,7 +495,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.notEqual(pendingOf(dir), pendingBefore, 'the old pending build was dropped');
   });
 
-  test('target origin/main: gh is queried with --base main (remote prefix stripped)', { skip: !hasTimeout && 'needs a timeout binary' }, () => {
+  test('target origin/main: gh is queried with --base main (remote prefix stripped)', () => {
     const dir = repo();
     git(dir, 'remote', 'add', 'origin', path.join(dir, 'no-such-remote'));
     git(dir, 'update-ref', 'refs/remotes/origin/main', 'main');

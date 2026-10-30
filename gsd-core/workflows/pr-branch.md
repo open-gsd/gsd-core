@@ -75,11 +75,11 @@ pr_merged() {
     return 0
   fi
   # Unprovable offline stays "not merged" (fail-safe): gh missing, a shell function or alias (it cannot be
-  # bounded), no `timeout` to bound it (stock macOS), unauthenticated, offline, or slower than 10s.
+  # bounded), unauthenticated, offline, or slower than 10s (gsd_run run-with-timeout needs no timeout binary).
   # Base-filtered: markers are keyed per target ($PR_BASE).
   _g=$(command -v gh) || return 1
-  case $_g in /*) command -v timeout >/dev/null 2>&1 || return 1 ;; *) return 1 ;; esac
-  timeout 10 gh pr list --state merged --head "$PR_BRANCH" --base "$PR_BASE" --json headRefOid --jq '.[].headRefOid' 2>/dev/null | grep -qx "$_sha"
+  case $_g in /*) ;; *) return 1 ;; esac
+  gsd_run run-with-timeout 10 -- gh pr list --state merged --head "$PR_BRANCH" --base "$PR_BASE" --json headRefOid --jq '.[].headRefOid' 2>/dev/null | grep -qx "$_sha"
 }
 
 # The last build counts as published only once its -pr tip (PR_TIP_REF) is merged, even if
