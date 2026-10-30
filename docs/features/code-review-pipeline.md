@@ -114,15 +114,18 @@ one's row either.
 
 **Review-scoped prefixes are IDs too.** A heading or ledger row may carry one prefix before the
 tier (`### W6-CR-01: …`, `| R1-WR-01 | … |`); the tier, and so the inferred severity, is read from the
-segment before the number. A ledger row whose first cell is not an ID of that shape stops the
-rewrite: the ledger is left as it is and the row is named on the console, because rewriting the
-file whole would delete it.
+segment before the number. A table row whose first cell is not an ID of that shape — indented, or
+written without its leading `|`, included — stops the rewrite: the ledger is left as it is and the
+row is named on the console, because rewriting the file whole would delete it.
 
-**Two residuals, since (ID, title) is not proof of identity.** A ledger written before titles were
+**Three residuals, since (ID, title) is not proof of identity.** A ledger written before titles were
 recorded carries none, so its decisions are inherited on the ID alone — refusing there would reset
-every decision in every existing ledger, which is the loss the guard exists to prevent. And two
-genuinely distinct findings that share both an ID and a title are indistinguishable to this key.
-Separating them needs a second identity scheme, which is the thing that was just withdrawn.
+every decision in every existing ledger, which is the loss the guard exists to prevent. Two
+genuinely distinct findings that share both an ID and a title are indistinguishable to this key;
+separating them would need a second identity scheme beside the row key, which is what a moved row
+avoids being. And a moved row is never matched again, by design: if a later review reports the
+earlier finding under its old ID again, that finding starts `open` and its earlier decision stays
+readable in the `~N` row, but it is not inherited. Each such flip adds one row.
 
 Reconciliation applies an outcome only when the fix report names the **same** finding, because
 finding IDs are reused across re-reviews and a stale report would otherwise declare a brand-new

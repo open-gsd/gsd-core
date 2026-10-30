@@ -4113,6 +4113,51 @@ describe('#3861 round 1 — the tests must run what BASH would run', () => {
     assert.match(out.stdout, /NOT rewritten: 1 ledger row\(s\).*R1\.2-WR-01/);
   });
 
+  test('an indented or pipe-less table row is read like any other row, never deleted silently', () => {
+    // GFM reads both as table rows, so a hand edit can produce either. Both used to fall outside the
+    // column-0 `|` the parser and the stop keyed on, and the whole-file rewrite deleted them unnamed.
+    const head = ['| Finding | Severity | Disposition | Source |', '|---------|----------|-------------|--------|'];
+    const bad = head.concat(['| CR-01 | critical | deferred | vendor |', ' | R1.2-WR-01 | warning | fixed | by hand |',
+      'R1.3-WR-02 | warning | fixed | by hand', '']).join('\n');
+    const stopped = runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: bad });
+    assert.strictEqual(stopped.ledger, bad, 'the ledger is left exactly as it was');
+    assert.match(stopped.stdout, /NOT rewritten: 2 ledger row\(s\).*R1\.2-WR-01.*R1\.3-WR-02/);
+    const good = head.concat(['  | CR-09 | critical | deferred | later |', 'WR-10 | warning | skipped | noise', '']).join('\n');
+    const rows = ledgerRows(runShippedDisposition({ reviewText: REVIEW('### IN-01: unrelated'), priorText: good }).ledger);
+    assert.strictEqual(rows.find((r) => r.id === 'CR-09').disposition, 'deferred', 'an indented row is carried');
+    assert.strictEqual(rows.find((r) => r.id === 'WR-10').disposition, 'skipped', 'a pipe-less row is carried');
+  });
+
+  test('an unkeyable or empty frontmatter id moves the cursor, so its title never lands on the entry before it', () => {
+    // `- id:` with nothing after it (no trailing space) did not match the id line at all, and an
+    // unkeyable id that kept the cursor would do the same: the next `title:` overwrote WR-09's, the
+    // review's own WR-09 then read as a different finding, and its decision was moved off it.
+    const prior = ['---', 'phase: 01', 'review: 01-REVIEW.md', 'titles: json', 'findings:',
+      '  - id: WR-08', '    severity: warning', '    disposition: deferred', '    title: "the first warning"',
+      '  - id: R1.2-WR-01', '    title: "an unkeyable entry"',
+      '  - id: WR-09', '    severity: warning', '    disposition: deferred', '    title: "the second warning"',
+      '  - id:', '    title: "an empty entry"',
+      'open: 0', 'total: 2', 'recorded: x', '---', '', '# Phase 01: Code Review Disposition', '',
+      '| Finding | Severity | Disposition | Source |', '|---------|----------|-------------|--------|',
+      '| WR-08 | warning | deferred | phase 10 |', '| WR-09 | warning | deferred | phase 11 |', ''].join('\n');
+    const out = runShippedDisposition({
+      reviewText: REVIEW('### WR-08: the first warning', '### WR-09: the second warning'), priorText: prior });
+    const rows = ledgerRows(out.ledger);
+    for (const id of ['WR-08', 'WR-09']) {
+      assert.strictEqual(rows.find((r) => r.id === id).disposition, 'deferred', id + ' keeps its decision');
+      assert.ok(!rows.some((r) => r.id === id + '~1'), id + ' is not moved as if it were a different finding');
+    }
+    assert.doesNotMatch(out.stdout, /re-keyed/);
+  });
+
+  test('outside a severity section the tier comes from the segment before the number', () => {
+    // sectionSev wins inside `## Critical Issues` and the like, so only an unsectioned heading reaches
+    // prefixSev. Reading the FIRST segment there made `W6-CR-01` info and `CR-WR-02` critical.
+    const out = runShippedDisposition({ reviewText: REVIEW('### W6-CR-01: a', '### CR-WR-02: b', '### R1-IN-03: c') });
+    assert.deepStrictEqual(ledgerRows(out.ledger).map((r) => r.id + '=' + r.severity),
+      ['W6-CR-01=critical', 'CR-WR-02=warning', 'R1-IN-03=info']);
+  });
+
   test('an out-of-vocabulary disposition on a CARRIED row is carried as open, not deleted', () => {
     const out = runShippedDisposition({ reviewText: REVIEW('### IN-01: unrelated'), priorText: '| CR-07 | critical | wontfix | reason |\n' });
     const row = ledgerRows(out.ledger).find((r) => r.id === 'CR-07');
