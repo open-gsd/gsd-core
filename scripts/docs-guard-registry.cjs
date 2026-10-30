@@ -157,6 +157,8 @@ function assertNoSuiteCollision(tests) {
  * unresolvable read is recorded as `'*'`, never a narrowed guess.
  */
 const DOCS_GUARD_TESTS = {
+  // The #5019 harness test runs the evidence harness's shipped.cjs, trial/iter3/build scripts and fixture.
+  'tests/code-review-fix-pipeline-regression.test.cjs': ['docs/issueevidence/5019-reviewer-hop-harness/'],
   'tests/pi-unsupported-skill-docs.test.cjs': ['docs/how-to/start-a-gsd-workflow-from-pi.md'],
   'tests/pi-parity-matrix.test.cjs': ['docs/reference/pi-parity-matrix.md'],
   'tests/adr-15-progress-converge.test.cjs': [
