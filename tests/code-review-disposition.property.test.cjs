@@ -398,9 +398,12 @@ describe('#3829 — the disposition ledger is a render/re-parse fixed point', ()
     }), RUNS);
   });
 
-  test('a reused id never loses an earlier decision, however many times it is reused', () => {
+  test('a reused id never loses an earlier decision, however many times it is reused', (t) => {
+    const dirs = [];
+    t.after(() => dirs.forEach(cleanup));
     fc.assert(fc.property(FINDINGS, DECIDED, fc.integer({ min: 1, max: 3 }), (findings, decision, reuses) => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3829-prop-'));
+      dirs.push(dir);
       const ledgerPath = path.join(dir, '01-REVIEW-DISPOSITION.md');
       const target = findings[0].id;
       // Decide the target by editing the rendered ledger in place, so its title is in the
@@ -411,30 +414,26 @@ describe('#3829 — the disposition ledger is a render/re-parse fixed point', ()
         assert.notStrictEqual(next, ledger, 'the hand-edit must actually change the row');
         fs.writeFileSync(ledgerPath, next);
       };
-      try {
-        fs.writeFileSync(path.join(dir, '01-REVIEW.md'), reviewFor(findings));
-        decide(runOnce(dir, '01').ledger);
-        let last = null;
-        for (let k = 1; k <= reuses; k++) {
-          // The same id now names a different finding: no generated title contains this text.
-          const reused = [{ id: target, title: 'reuse number ' + k + ' of ' + target }].concat(findings.slice(1));
-          fs.writeFileSync(path.join(dir, '01-REVIEW.md'), reviewFor(reused));
-          last = runOnce(dir, '01');
-          assert.match(last.stdout, new RegExp(target + '=' + decision + ' -> ' + target + '~' + k),
-            'reuse ' + k + ' must move the decided row to ' + target + '~' + k);
-          if (k < reuses) decide(last.ledger);
-        }
-        for (let k = 1; k <= reuses; k++) {
-          const row = last.ledger.split('\n').find((l) => l.startsWith('| ' + target + '~' + k + ' '));
-          assert.ok(row, target + '~' + k + ' must still have a row after ' + reuses + ' reuse(s)');
-          const cells = row.split(/\s\|\s/).map((c) => c.replace(/^\|\s*|\s*\|$/g, '').trim());
-          assert.strictEqual(cells[2], decision, 'and keep its decision');
-        }
-        const again = runOnce(dir, '01');
-        assert.ok(again.unchanged, 'a re-run over the same review rewrites nothing');
-      } finally {
-        cleanup(dir);
+      fs.writeFileSync(path.join(dir, '01-REVIEW.md'), reviewFor(findings));
+      decide(runOnce(dir, '01').ledger);
+      let last = null;
+      for (let k = 1; k <= reuses; k++) {
+        // The same id now names a different finding: no generated title contains this text.
+        const reused = [{ id: target, title: 'reuse number ' + k + ' of ' + target }].concat(findings.slice(1));
+        fs.writeFileSync(path.join(dir, '01-REVIEW.md'), reviewFor(reused));
+        last = runOnce(dir, '01');
+        assert.match(last.stdout, new RegExp(target + '=' + decision + ' -> ' + target + '~' + k),
+          'reuse ' + k + ' must move the decided row to ' + target + '~' + k);
+        if (k < reuses) decide(last.ledger);
       }
+      for (let k = 1; k <= reuses; k++) {
+        const row = last.ledger.split('\n').find((l) => l.startsWith('| ' + target + '~' + k + ' '));
+        assert.ok(row, target + '~' + k + ' must still have a row after ' + reuses + ' reuse(s)');
+        const cells = row.split(/\s\|\s/).map((c) => c.replace(/^\|\s*|\s*\|$/g, '').trim());
+        assert.strictEqual(cells[2], decision, 'and keep its decision');
+      }
+      const again = runOnce(dir, '01');
+      assert.ok(again.unchanged, 'a re-run over the same review rewrites nothing');
     }), RUNS);
   });
 
