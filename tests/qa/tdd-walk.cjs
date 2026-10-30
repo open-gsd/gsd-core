@@ -23,7 +23,7 @@
  *     the file's FIRST fenced block, which is not just the shim: it is the
  *     whole ISOLATION resolution (its own independent fail-closed branches),
  *     ahead of a LATER fenced block that contains the `_TDD_APPLICABLE_RAW=...`
- *     resolution followed by the `EXECUTOR_PROMPT=` composition this harness
+ *     resolution, in the same block as the `PROMPT_FILE` mktemp creation this harness
  *     does not need. A standalone execution must concatenate the first block
  *     (for its `gsd_run` definition) with just the TDD resolution lines
  *     sliced out of the second.
@@ -133,7 +133,7 @@ function extractFencedBashBlockContaining(content, marker) {
  * From executor-isolation-dispatch.md's later fenced block (the one composing
  * `EXECUTOR_PROMPT`), slice out ONLY the TDD-applicability resolution lines:
  * from `_TDD_APPLICABLE_RAW=` through the `TDD_APPLICABLE="$_TDD_APPLICABLE_RAW"`
- * line, inclusive. Everything before (comments) and after (`EXECUTOR_PROMPT=...`)
+ * line, inclusive. Everything before (comments) and after (the PROMPT_FILE mktemp creation)
  * is dropped.
  *
  * @param {string} blockBody

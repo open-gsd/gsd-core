@@ -138,29 +138,30 @@ Every entry with `needsReconciliation: true` (recorded running, process gone) is
 
 Run the loop below once per runnable plan in the wave, **one plan at a time** (`git worktree add` races on `.git/config.lock`).
 
-**Before running the bash block, substitute the plan's identifiers into it** exactly as you do for the `Agent()` prompt on the harness path: replace `{plan_number}` and `{phase_number}` with this plan's values. They are template placeholders, not shell variables. `$ORCH_ROOT` and `$EXPECTED_BASE` are real shell variables, already assigned earlier in this step; `$WAVE_WORKTREE_MANIFEST` was initialized above.
+**Before running each bash block below, substitute the plan's identifiers into it** exactly as you do for the `Agent()` prompt on the harness path: replace `{phase_dir}`, `{plan_file}`, `{plan_number}` and `{phase_number}` wherever the block uses them with this plan's values. They are template placeholders, not shell variables. `$ORCH_ROOT` and `$EXPECTED_BASE` are real shell variables, already assigned earlier in this step; `$WAVE_WORKTREE_MANIFEST` was initialized above.
 
 First build the executor prompt. It is the **same prompt text the harness path's `Agent()` call uses** — same executor identity, same execution context, same required-reading contract — with only the harness-only framing removed: drop the `<worktree_branch_check>` build-time embed note (this backend pins the base itself via `worktree create --base` and verifies it at merge) and the `<parallel_execution>` harness block (its SUMMARY-commit semantics ride inside the embedded `execute-plan.md` worktree mode). Keep `<objective>`, `<execution_context>`, `<required_reading>`, `${AGENT_SKILLS}`, and `<success_criteria>` from the harness prompt — substituting the worktree-specific `<execution_context>` framing below. The checkpoint gate rule (#3370, in `per-plan-executor-routing.md`) applies here too: add no prompt text refusing or overriding auto-approval for the default `gate="blocking"` — only `blocking-human` always surfaces.
 
-#3637: the process-spawned child has NO host subagent machinery — nothing loads the `gsd-executor` agent definition or the execute-plan workflow unless THIS prompt carries them. A short objective-only prompt forces the child to reconstruct its role from the repository (skill discovery, inference) and leaves it unaware of the gitignored-planning skip semantics, which is how executors ended up force-staging gitignored `SUMMARY.md` files to satisfy an unconditional commit criterion. Build-time embeds below are therefore MANDATORY, and the resolution check after the assignment fails closed: if any embed source cannot be read, do NOT spawn a generic process and hope — halt the wave (the fail-closed check after `dispatch-isolation` handles the worktree teardown).
+#3637: the process-spawned child has NO host subagent machinery — nothing loads the `gsd-executor` agent definition or the execute-plan workflow unless THIS prompt carries them. A short objective-only prompt forces the child to reconstruct its role from the repository (skill discovery, inference) and leaves it unaware of the gitignored-planning skip semantics, which is how executors ended up force-staging gitignored `SUMMARY.md` files to satisfy an unconditional commit criterion. Build-time embeds below are therefore MANDATORY, and the empty-prompt and placeholder checks after the read fail closed: if any embed source cannot be read, do NOT spawn a generic process and hope — halt the wave (the fail-closed check after `dispatch-isolation` handles the worktree teardown).
 
-Assign the composed prompt to a shell variable so it can be passed as one argument:
+Create the prompt file for THIS plan; the block prints its path as `PROMPT_FILE=<path>`:
 
 ```bash
-# Compose the executor prompt for THIS plan. Single-quoted multi-line
-# assignment (NOT a heredoc): these blocks are indented inside the workflow,
-# and a heredoc terminator must sit at column 0 — `<<-` strips only tabs, not
-# the leading spaces, so a heredoc here would never terminate. Single quotes
-# also stop the shell expanding anything in the prompt body — the prompt MUST
-# contain no single-quote character.
+# Compose the executor prompt for THIS plan (#5531). The prompt text below the
+# block is written to PROMPT_FILE with your file-writing tool, never through
+# the shell, so every substituted or inlined text (the ${AGENT_SKILLS} value,
+# the role definition, the execute-plan/summary/checkpoints files) reaches the
+# prompt byte-for-byte whatever quote characters it holds — apostrophes in a
+# persona must NEVER be escaped or stripped.
 #
 # ORCHESTRATOR BUILD-TIME EMBEDS (do these BEFORE the spawn, in order):
 #   1. Inline each file listed in <execution_context> verbatim, in order.
 #      An unreadable source file is a halt condition (#3637 fail-closed),
 #      never a skip — a child without these texts is not a gsd-executor.
-#   2. Substitute this plan's {plan_number}, {phase_number}, {phase_name},
-#      {phase_dir}, {plan_file}, {plan_id}, and {plan_padded} placeholders (same values the
-#      harness path substitutes into its Agent() prompt). {plan_id} is this
+#   2. Substitute this plan's {plan_number},
+#      {phase_number}, {phase_name}, {phase_dir}, {plan_file}, {plan_id}, and
+#      {plan_padded} placeholders (same values the harness path substitutes into
+#      its Agent() prompt). {plan_id} is this
 #      plan's `id` field from the phase-plan-index JSON — the guard hooks
 #      compare it verbatim against the sentinel the per-plan gate wrote, so a
 #      paraphrase or omission costs the dispatch its recorded isolation
@@ -187,7 +188,14 @@ if [ $_TDD_APPLICABLE_RC -ne 0 ]; then
 fi
 TDD_APPLICABLE="$_TDD_APPLICABLE_RAW"
 
-EXECUTOR_PROMPT='<objective>
+PROMPT_FILE=$(mktemp "${TMPDIR:-/tmp}/gsd-executor-prompt-XXXXXX") || { echo "FATAL: could not create executor prompt file for plan {plan_number} (TMPDIR unwritable?). Halting." >&2; exit 1; } # XXXXXX path-final on BSD/macOS (#1520)
+echo "PROMPT_FILE=$PROMPT_FILE"
+```
+
+Write the template below to the `PROMPT_FILE` path block 1 printed, with your file-writing tool and never through the shell, every build-time embed and placeholder substituted:
+
+```text
+<objective>
 Execute plan {plan_number} of phase {phase_number}-{phase_name}.
 [gsd:dispatch phase="{phase_number}" plan="{plan_id}"]
 Commit each task atomically. Create SUMMARY.md.
@@ -253,7 +261,15 @@ ${AGENT_SKILLS}
       Never force-stage gitignored planning artifacts: git add -f on
       .planning paths is forbidden. An intentional skip is a success path.
 - [ ] No modifications to shared orchestrator artifacts (the orchestrator handles all post-wave shared-file writes)
-</success_criteria>'
+</success_criteria>
+```
+
+Then read it back and check it:
+
+```bash
+EXECUTOR_PROMPT=$(cat -- "$PROMPT_FILE"); _PROMPT_RC=$?
+rm -f -- "$PROMPT_FILE"
+[ $_PROMPT_RC -eq 0 ] || { echo "FATAL: executor prompt file for plan {plan_number} is missing or unreadable. Halting." >&2; exit 1; }
 [ -n "$EXECUTOR_PROMPT" ] || { echo "FATAL: executor prompt is empty for plan {plan_number}." >&2; exit 1; }
 # #3637 fail-closed verification. Two classes of check:
 #   (a) template completeness — the prompt must carry the required-reading
@@ -284,13 +300,13 @@ printf '%s' "$EXECUTOR_PROMPT" | grep -q '\${AGENT_SKILLS}' && {
   echo "FATAL: executor prompt for plan {plan_number} still contains the un-substituted \${AGENT_SKILLS} marker — the role definition was not spliced in (#3637). Halting." >&2
   exit 1
 }
-printf '%s' "$EXECUTOR_PROMPT" | grep -q '\${TDD_APPLICABLE' && {
+if printf '%s' "$EXECUTOR_PROMPT" | grep -q '\${TDD_APPLICABLE'; then
   echo "FATAL: executor prompt for plan {plan_number} still contains the un-substituted \${TDD_APPLICABLE marker — the TDD-applicability decision was not resolved into the prompt (#4266). Halting." >&2
   exit 1
-}
+fi
 ```
 
-The prompt body must contain no single-quote character, since the assignment above is single-quoted; keep apostrophes out of it when editing.
+The prompt reaches the shell only as file contents read by `cat`, so apostrophes, `$(...)`, backticks and quotes in the template or in any spliced embed are never parsed or run; do not escape them. The read-and-check block removes the prompt file right after `cat`, so every halt of that block (unreadable file, empty prompt, a leftover placeholder) runs with the file already gone; `mktemp` is followed only by the `echo` of `PROMPT_FILE`, which cannot halt, so no halt can occur between creating the file and reading it. If you fail while writing `PROMPT_FILE` between the blocks, run `rm -f -- "$PROMPT_FILE"` before halting. Run the blocks as separate commands in one shell (`PROMPT_FILE` carries across them).
 
 Then create the worktree and resolve the spawn:
 

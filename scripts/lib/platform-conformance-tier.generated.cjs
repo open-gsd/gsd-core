@@ -111,6 +111,7 @@ module.exports = {
   "tests/execute-plan-update-codebase-map-diff-base.test.cjs",
   "tests/execute-wave-post-gate-pipeline-e2e.test.cjs",
   "tests/executed-plan.test.cjs",
+  "tests/executor-isolation-prompt-contract.test.cjs",
   "tests/executor-mvp-tdd-section.test.cjs",
   "tests/executor-sequential-linked-worktree.test.cjs",
   "tests/external-descriptor-confinement.test.cjs",
