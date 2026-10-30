@@ -520,12 +520,13 @@ Verified patterns from official sources:
 **Valid until:** [estimate - 30 days for stable, 7 for fast-moving]
 ```
 
-**Open Questions — only the user closes one.** List only what your research could not answer; a question
-you settled belongs in the findings, with its source. Never mark a question resolved yourself and never add
-a `(RESOLVED)` suffix to the section heading. If CONTEXT.md already records a decision that answers a
-question, cite it on that question as `RESOLVED (D-NN): <ruling>`, using the decision's real number. Never
-cite a plan, a disposition, or any file that does not exist. The plan-checker blocks planning on every
-question that cites no `D-NN` in CONTEXT.md (Dimension 11).
+**Open Questions — only the user closes one.** List only what your research could not answer, and list
+every such question in that section; a question you settled belongs in the findings, with its source. Never
+mark a question resolved, decided or closed yourself, and never add a `(RESOLVED)` suffix to the section
+heading. If CONTEXT.md's `<decisions>` already records a decision that answers a question, cite it on that
+question as `RESOLVED (D-NN): <ruling>`, using the decision's real number. Never add a decision to
+CONTEXT.md, and never cite a plan, a disposition, or any file that does not exist. The plan-checker blocks
+planning on every question that cites no such `D-NN` (Dimension 11).
 
 </output_format>
 

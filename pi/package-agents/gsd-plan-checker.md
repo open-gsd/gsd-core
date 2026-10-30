@@ -601,20 +601,20 @@ issue:
 
 **Skip if:** No RESEARCH.md exists for this phase.
 
-`gsd-phase-researcher` writes RESEARCH.md, so a `RESOLVED` marker or `(RESOLVED)` heading suffix there is the questions' own author closing them. Only the user closes an open question, recorded as a `D-NN` decision in the phase's CONTEXT.md.
+`gsd-phase-researcher` writes RESEARCH.md, so any resolution it records there is the questions' own author closing them. Only the user closes an open question, recorded as a `D-NN` under CONTEXT.md's `<decisions>`.
 
 **Process:**
-1. Find RESEARCH.md's `## Open Questions` section, whatever its heading suffix. No section, or no questions listed → PASS.
-2. For each question, find the `D-NN` its resolution cites; confirm that decision exists in CONTEXT.md and answers the question asked.
-3. BLOCKER for each question that: has no resolution; is marked `RESOLVED` (inline or by the heading suffix) without citing a `D-NN`; cites a `D-NN` that CONTEXT.md does not contain, or one that decides something else; or rests on a plan, a "planning-time disposition", the research itself, or another agent's output.
-4. A `(RESOLVED)` heading suffix is never evidence: it neither passes the dimension nor exempts a question from step 2.
+1. Collect every question RESEARCH.md leaves needing an answer or a user ruling before planning, under any heading, in prose or a list, whatever status it claims (resolved, decided, closed). A finding settled with a cited source is not one; an assumption or risk counts only if it names such a pending answer or ruling. None → PASS.
+2. A question passes only when it cites a `D-NN` that is under CONTEXT.md's `<decisions>`, answers the question asked, and was not added during this planning run.
+3. Every other question is a BLOCKER, however it is marked (`RESOLVED`, "Decided", "Closed", any case): no resolution; no `D-NN`; a `D-NN` CONTEXT.md does not contain, holds outside `<decisions>`, or that decides something else; or one resting on a plan, a "planning-time disposition", the research itself, or another agent's output.
+4. A `(RESOLVED)` heading suffix is never evidence. No CONTEXT.md: every question is a BLOCKER.
 
 **Example — unresolved questions:**
 ```yaml
 issue:
   dimension: research_resolution
   severity: blocker
-  required_property: "Every RESEARCH.md open question cites a D-NN decision that exists in CONTEXT.md and answers it"
+  required_property: "Every RESEARCH.md open question cites a D-NN under CONTEXT.md <decisions>, recorded before this run, that answers it"
   description: "RESEARCH.md has open questions with no user decision on record"
   file: "01-RESEARCH.md"
   unresolved_questions:
@@ -631,7 +631,7 @@ issue:
 2. **Cache TTL** — RESOLVED: 5 minutes, per plan 01-03
 ```
 
-**Example — resolved (PASS once CONTEXT.md is confirmed to record D-03 and D-04):**
+**Example — resolved (PASS once CONTEXT.md `<decisions>` records D-03 and D-04):**
 ```markdown
 ## Open Questions
 
@@ -1070,8 +1070,8 @@ Plan verification complete when:
   - [ ] Locked decisions have implementing tasks
   - [ ] No tasks contradict locked decisions
   - [ ] Deferred ideas not included in plans
-- [ ] Research resolution checked (if RESEARCH.md exists): every open question cites a `D-NN`
-      that exists in CONTEXT.md and answers it; a `(RESOLVED)` suffix or marker alone is a blocker
+- [ ] Research resolution checked (if RESEARCH.md exists): every open question, under any heading,
+      cites a `D-NN` under CONTEXT.md `<decisions>` that answers it; anything else is a blocker
 - [ ] Overall status determined (passed | issues_found)
 - [ ] Architectural tier compliance checked (tasks match responsibility map tiers)
 - [ ] Cross-plan data contracts checked (no conflicting transforms on shared data)
