@@ -147,7 +147,6 @@ module.exports = {
   "tests/gsd-agent-isolation-guard.test.cjs",
   "tests/gsd-check-update-worker-atomic-cache.test.cjs",
   "tests/gsd-check-update-worker-platform-gate.test.cjs",
-  "tests/gsd-dir.test.cjs",
   "tests/gsd-mcp-server-bin.test.cjs",
   "tests/gsd-mcp-server.test.cjs",
   "tests/gsd-path-export-hook.test.cjs",

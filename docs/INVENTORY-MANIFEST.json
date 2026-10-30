@@ -449,7 +449,6 @@
       "git-info-exclude.cjs",
       "graphify-command-router.cjs",
       "graphify.cjs",
-      "gsd-dir.cjs",
       "gsd2-import.cjs",
       "handshake-serialized.cjs",
       "health-diagnostic-rules/agent-install.cjs",
