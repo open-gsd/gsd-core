@@ -9,9 +9,11 @@
  *
  * ## What this suite locks
  *
- * - Dimension 11 no longer passes on the suffix or on an uncited marker, names the
- *   provenance it does accept (a `D-NN` that exists in CONTEXT.md), and blocks the
- *   citation shapes the forgery used: none, a plan, a "disposition".
+ * - Dimension 11 collects every open question, under any heading or in prose; passes one
+ *   only on the provenance it accepts (a `D-NN` under CONTEXT.md's `<decisions>` that
+ *   answers it and predates the planning run); blocks every other question, naming the
+ *   citation shapes the forgery used (none, a plan, a "disposition"); and blocks every
+ *   question when CONTEXT.md is absent. Only the no-questions case reaches PASS.
  * - Its fix_hint routes to recording a user ruling, not to writing the marker.
  * - Its worked examples: the PASS example cites `D-NN`; the self-resolved shape is a
  *   BLOCKER example.
@@ -79,21 +81,39 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     );
   });
 
-  test('a resolution counts only when it cites a D-NN that exists in CONTEXT.md and answers the question', () => {
-    assert.match(dim11, /only\s+the\s+user\s+closes/i);
-    assert.ok(
-      steps.some((l) => l.includes('`D-NN`') && l.includes('CONTEXT.md') && /\bexists\b/.test(l) && /\banswers\b/.test(l)),
-      'a step must check that the cited D-NN exists in CONTEXT.md and answers the question',
-    );
+  test('every question still needing a ruling is collected, whatever its heading, form or claimed status', () => {
+    const collect = steps[0];
+    assert.match(collect, /needing an answer or a user ruling/);
+    assert.match(collect, /any heading/, 'step 1 must not key on one literal heading');
+    assert.match(collect, /\bprose\b/, 'step 1 must collect questions written as prose');
+    assert.match(collect, /whatever status it claims/, 'a question the researcher calls closed is still collected');
+    assert.match(collect, /settled with a cited source is not one/, 'research findings are not questions');
+    assert.match(collect, /assumption or risk counts only if it names such a pending answer or ruling/, 'an assumption counts when it needs an answer, not only a ruling');
   });
 
-  test('the BLOCKER step names every case: uncited, dangling, irrelevant, non-user authority', () => {
+  test('a question passes only on a D-NN under CONTEXT.md <decisions> that answers it and predates this run', () => {
+    assert.match(dim11, /only\s+the\s+user\s+closes/i);
+    const pass = steps.find((l) => /\bpasses only\b/.test(l));
+    assert.ok(pass, 'a step must state the one way a question passes');
+    assert.ok(pass.includes('`D-NN`') && pass.includes("CONTEXT.md's `<decisions>`"), `pass rule not scoped to <decisions>: ${pass}`);
+    assert.match(pass, /\banswers\b/);
+    assert.match(pass, /not added during this planning run/);
+  });
+
+  test('no CONTEXT.md leaves every question a BLOCKER', () => {
+    assert.ok(steps.some((s) => /No CONTEXT\.md: every question is a BLOCKER/.test(s)), 'Process must say what happens without CONTEXT.md');
+  });
+
+  test('the BLOCKER step covers every other question, and names the cases: uncited, dangling, misplaced, irrelevant, non-user authority', () => {
     const blocker = steps.find((l) => /\bBLOCKER\b/.test(l));
     assert.ok(blocker, 'Process must carry a BLOCKER step');
     const cases = {
+      'every other question': /every other question/i,
+      'any marking, any case': /however it is marked[^:]*"Decided"[^:]*"Closed"[^:]*any case/,
       'no resolution': /no resolution/,
-      'marked RESOLVED without a D-NN': /`RESOLVED`[^;]*without citing/,
+      'no D-NN': /no `D-NN`/,
       'a D-NN CONTEXT.md lacks': /does not contain/,
+      'a D-NN outside <decisions>': /outside `<decisions>`/,
       'a D-NN that decides something else': /decides something else/,
       'a plan': /\bon a plan\b/,
       'a disposition': /"planning-time disposition"/,
@@ -108,7 +128,8 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.ok(props.length >= 1, 'Dimension 11 must carry a required_property example');
     for (const prop of props) {
       assert.match(prop, /D-NN/);
-      assert.match(prop, /CONTEXT\.md/);
+      assert.match(prop, /CONTEXT\.md <decisions>/);
+      assert.match(prop, /recorded before this run/, 'the binding property must carry the not-added-this-run condition');
       assert.match(prop, /\banswers\b/);
     }
   });
@@ -149,7 +170,8 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     const item = criteria.match(/- \[ \] Research resolution checked[^\n]*\n[^\n]*/);
     assert.ok(item, 'success_criteria must list the research resolution check');
     assert.match(item[0], /`D-NN`/);
-    assert.match(item[0], /CONTEXT\.md/);
+    assert.match(item[0], /CONTEXT\.md `<decisions>`/);
+    assert.match(item[0], /any heading/);
     assert.match(item[0], /\banswers\b/, 'the checklist must carry the body\'s relevance condition');
   });
 });
@@ -188,6 +210,9 @@ describe('researcher never resolves its own questions (#5438)', () => {
     assert.match(rule, /never\s+mark\s+a\s+question\s+resolved/i);
     assert.match(rule, /`\(RESOLVED\)`\s+suffix\s+to\s+the\s+section\s+heading/);
     assert.match(rule, /RESOLVED \(D-NN\)/);
+    assert.match(rule, /list\s+every\s+such\s+question\s+in\s+that\s+section/);
+    assert.match(rule, /CONTEXT\.md's\s+`<decisions>`/);
+    assert.match(rule, /Never\s+add\s+a\s+decision\s+to\s+CONTEXT\.md/);
     assert.match(rule, /cite a plan\b/);
     assert.match(rule, /\ba disposition\b/);
   });
@@ -209,6 +234,7 @@ describe('researcher never resolves its own questions (#5438)', () => {
     assert.match(guide, /never\s+mark\s+a\s+question\s+resolved/i);
     assert.match(guide, /`\(RESOLVED\)`\s+suffix\s+to\s+the\s+`## Open Questions`\s+section\s+heading/);
     assert.match(guide, /`D-NN`/);
-    assert.match(guide, /CONTEXT\.md/);
+    assert.match(guide, /CONTEXT\.md's `<decisions>`/);
+    assert.match(guide, /List every open question in that section/);
   });
 });
