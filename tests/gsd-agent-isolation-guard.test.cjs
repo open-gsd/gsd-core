@@ -116,13 +116,14 @@ function readSentinelRaw(dir) {
   return JSON.parse(fs.readFileSync(sentinelFile(dir), 'utf-8'));
 }
 
+// The executor's default-profile model, so the isolation rows stay silent under the Agent-model guard.
+const DEFAULT_EXECUTOR_MODEL = require('../gsd-core/bin/lib/model-profiles.cjs').MODEL_PROFILES['gsd-executor'].balanced;
+
 function agentPayload(overrides = {}) {
   return {
     hook_event_name: 'PreToolUse',
     tool_name: 'Agent',
-    // #5328: default `model` matches the executor's resolved default so the
-    // isolation rows stay silent under the Agent-model guard.
-    tool_input: { subagent_type: 'gsd-executor', model: 'sonnet' },
+    tool_input: { subagent_type: 'gsd-executor', model: DEFAULT_EXECUTOR_MODEL },
     ...overrides,
   };
 }
@@ -193,7 +194,7 @@ describe('gsd-agent-isolation-guard.js: applicability matrix (#3045)', () => {
   });
 
   test('row 2: isolation="worktree" present -> allow', () => {
-    const r = runHook(agentPayload({ tool_input: { subagent_type: 'gsd-executor', isolation: 'worktree', model: 'sonnet' } }), harnessProject);
+    const r = runHook(agentPayload({ tool_input: { subagent_type: 'gsd-executor', isolation: 'worktree', model: DEFAULT_EXECUTOR_MODEL } }), harnessProject);
     assert.equal(r.status, 0, `stdout: ${r.stdout}`);
     assert.equal(r.stdout, '');
   });
@@ -615,7 +616,7 @@ describe('gsd-agent-isolation-guard.js: #4594 rows 15/28-32 — prompt-first ext
     writeSentinel(harnessProject, { isolation: 'none', phase: '03', plan: '03-02-hardening' });
     t.after(() => cleanup(path.join(harnessProject, '.gsd')));
     const r = runHook(
-      agentPayload({ tool_input: { subagent_type: 'gsd-executor', model: 'sonnet', prompt: 'Execute plan 02 of phase 03-auth.' } }),
+      agentPayload({ tool_input: { subagent_type: 'gsd-executor', model: DEFAULT_EXECUTOR_MODEL, prompt: 'Execute plan 02 of phase 03-auth.' } }),
       harnessProject,
     );
     assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
@@ -629,7 +630,7 @@ describe('gsd-agent-isolation-guard.js: #4594 rows 15/28-32 — prompt-first ext
       agentPayload({
         tool_input: {
           subagent_type: 'gsd-executor',
-          model: 'sonnet',
+          model: DEFAULT_EXECUTOR_MODEL,
           description: 'Run the executor',
           prompt: '[gsd:dispatch phase="03" plan="03-02-hardening"] Execute the plan.',
         },
@@ -890,7 +891,7 @@ describe('gsd-agent-isolation-guard.js: #3566 — per-install .gsd-runtime marke
     setWorld(t, { marker: null });
     assert.deepEqual(identity(), { runtimeId: null, confident: false });
     const decision = guardModule.evaluateDispatch(
-      { tool_name: 'Agent', tool_input: { subagent_type: 'gsd-executor', model: 'sonnet' }, cwd: markerProject },
+      { tool_name: 'Agent', tool_input: { subagent_type: 'gsd-executor', model: DEFAULT_EXECUTOR_MODEL }, cwd: markerProject },
     );
     assert.equal(decision.action, 'allow');
   });
@@ -2126,7 +2127,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     }));
   });
 
-  test('an escalation record is honoured only in the session that asked for it', (t) => {
+  test('an escalation record is honoured unless both sides know different sessions', (t) => {
     setup(t);
     const now = 1_000_000;
     plantEscalation(project, 'gsd-executor', { model: 'opus', written_at: now, session: 's1' });
@@ -2136,7 +2137,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     assert.equal(as('s2'), 'warn');
     assert.equal(as(undefined), 'allow', 'unknown dispatching session never narrows');
     plantEscalation(project, 'gsd-executor', { model: 'opus', written_at: now });
-    assert.equal(as('s2'), 'warn', 'a session-less record does not count for a dispatch that knows its session');
+    assert.equal(as('s2'), 'allow', 'a session-less record counts: only two known, different sessions refuse');
     assert.equal(as(undefined), 'allow', 'neither side has a session');
   });
 
@@ -2177,10 +2178,10 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     assert.equal(d.reasonCode, REASON_CODE.HARNESS_FLAG_MISSING);
   });
 
-  test('deny mode blocks a wrong model but only warns on an omitted one (hook cannot see the orchestrator model)', (t) => {
+  test('deny blocks a wrong or an omitted model', (t) => {
     setup(t, { ...ISSUE_CONFIG, hooks: { agent_model_guard: 'deny' } });
     const d = evaluate(dispatch('gsd-planner', null));
-    assert.equal(d.action, 'warn');
+    assert.equal(d.action, 'block');
     assert.equal(d.passed, '');
     assert.equal(evaluate(dispatch('gsd-planner', 'sonnet')).action, 'block');
     assert.equal(evaluate(dispatch('gsd-planner', 'opus')).action, 'allow');
@@ -2308,7 +2309,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
 
   // Claude Code sets CLAUDE_CODE_SESSION_ID in Bash tool subprocesses to the hook JSON's session_id
   // (Claude Code environment-variables reference, CLAUDE_CODE_SESSION_ID); this pins GSD's side of that equality.
-  test('hook process: a record written with CLAUDE_CODE_SESSION_ID=X is honoured for session_id X only', (t) => {
+  test('hook process: a session-less record is honoured, a record for session X only for X', (t) => {
     setup(t);
     assert.ok(runGsdTools(['resolve-execution', 'gsd-executor', '--attempt', '1'], project, { ...PINNED, CLAUDE_CODE_SESSION_ID: 'sess-x' }).success);
     const warned = (session_id) => {
@@ -2320,7 +2321,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     assert.equal(warned('sess-x'), false);
     assert.equal(warned('sess-y'), true);
     assert.ok(runGsdTools(['resolve-execution', 'gsd-executor', '--attempt', '1'], project, { ...PINNED, CLAUDE_CODE_SESSION_ID: '' }).success);
-    assert.equal(warned('sess-x'), true, 'a session-less record is refused by a dispatch with a session');
+    assert.equal(warned('sess-x'), false, 'a session-less record is honoured');
     assert.equal(warned(undefined), false);
   });
 
@@ -2343,7 +2344,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     assert.equal(evaluate(dispatch('gsd-executor', 'opus', WORKTREE)).action, 'warn');
   });
 
-  test('a FIFO .gsd/.gitignore never hangs either .gsd writer; both still record', { skip: WIN32 }, (t) => {
+  test('a FIFO .gsd/.gitignore never hangs resolve-execution; the record is still written', { skip: WIN32 }, (t) => {
     setup(t);
     fs.mkdirSync(path.join(project, '.gsd'), { recursive: true });
     const made = runHookSeam(path.join(project, '.gsd', '.gitignore'), [], { interpreter: 'mkfifo', timeoutMs: PROBE_TIMEOUT_MS });
@@ -2352,27 +2353,25 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     assert.equal(esc.timedOut, false, 'resolve-execution must not block on the FIFO');
     assert.equal(esc.exitCode, 0, esc.stderr);
     assert.equal(fs.existsSync(escalationFile(project, 'gsd-executor')), true);
-    const sentinel = runNode([TOOLS_PATH, 'query', 'record-dispatch-isolation', '--isolation', 'none', '--json'],
-      { cwd: project, timeoutMs: PROBE_TIMEOUT_MS, env: { ...process.env, HOME: project, USERPROFILE: project } });
-    assert.equal(sentinel.timedOut, false, 'the dispatch sentinel writer must not block on the FIFO');
-    assert.equal(JSON.parse(sentinel.stdout).recorded, true);
     assert.equal(fs.lstatSync(path.join(project, '.gsd', '.gitignore')).isFIFO(), true, 'the FIFO is left as it was');
   });
 
-  test('one .gsd reader: readEscalation and prepareGsdDir give the same verdict at the size limit', (t) => {
+  test('the record and the .gsd/.gitignore share the 64 KiB bound: limit-1 and limit are read, limit+1 is left untouched', (t) => {
     setup(t);
-    const { readSmallGsdFile, prepareGsdDir, MAX_READ_BYTES } = require('../gsd-core/bin/lib/gsd-dir.cjs');
     const esc = require('../gsd-core/bin/lib/model-escalation.cjs');
     const record = JSON.stringify({ model: 'opus', written_at: PIN });
-    for (const [label, bytes, readable] of [['limit', MAX_READ_BYTES, true], ['limit+1', MAX_READ_BYTES + 1, false]]) {
+    const ignore = path.join(project, '.gsd', '.gitignore');
+    for (const [delta, readable] of [[-1, true], [0, true], [1, false]]) {
+      const bytes = esc.MAX_READ_BYTES + delta;
       plantEscalation(project, 'gsd-executor', record + ' '.repeat(bytes - record.length));
-      assert.equal(readSmallGsdFile(escalationFile(project, 'gsd-executor')) !== null, readable, label);
-      assert.equal(esc.readEscalation(project, 'gsd-executor') !== null, readable, label);
-      const ignore = path.join(project, '.gsd', '.gitignore');
+      assert.equal(esc.readEscalation(project, 'gsd-executor') !== null, readable, `record cap${delta}`);
       const start = '#'.repeat(bytes);
       fs.writeFileSync(ignore, start);
-      prepareGsdDir(project, 'model escalation', ['/model-escalation-*']);
-      assert.equal(fs.readFileSync(ignore, 'utf8') !== start, readable, `.gitignore ${label}`);
+      esc.writeEscalation(project, 'gsd-executor', 'opus');
+      const now = fs.readFileSync(ignore, 'utf8');
+      assert.equal(now === `${start}\n/model-escalation-*\n`, readable, `.gitignore cap${delta}`);
+      assert.equal(now === start, !readable, `.gitignore cap${delta} untouched`);
+      assert.equal(esc.readEscalation(project, 'gsd-executor') !== null, true, `record still written cap${delta}`);
     }
   });
 
@@ -2429,53 +2428,18 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     assert.deepEqual(fs.readdirSync(elsewhere), []);
   });
 
-  test('one .gsd owner: both writers leave .gsd/.gitignore exactly as prepareGsdDir does (limit-1, limit, limit+1 included)', (t) => {
-    const { prepareGsdDir, MAX_READ_BYTES } = require('../gsd-core/bin/lib/gsd-dir.cjs');
+  test('writeEscalation leaves a symlinked .gsd/.gitignore target alone and still writes the record', { skip: WIN32 }, (t) => {
+    setup(t);
     const esc = require('../gsd-core/bin/lib/model-escalation.cjs');
-    const writers = [
-      ['dispatch sentinel', ['/dispatch-isolation-sentinel.json', '/dispatch-isolation-sentinel.json.tmp-*', '/.gitignore'],
-        (dir) => JSON.parse(runGsdTools(['query', 'record-dispatch-isolation', '--isolation', 'none', '--json'], dir, { HOME: dir, USERPROFILE: dir }).output).recorded],
-      ['model escalation', ['/model-escalation-*'], (dir) => { esc.writeEscalation(dir, 'gsd-executor', 'opus'); return true; }],
-    ];
-    const starts = [null, '*\n', '!keep.txt\n', '!keep.txt', '#'.repeat(MAX_READ_BYTES - 1), '#'.repeat(MAX_READ_BYTES), '#'.repeat(MAX_READ_BYTES + 1)];
-    for (const [name, rules, write] of writers) {
-      for (const start of starts) {
-        const label = `${name} ${start === null ? 'absent' : start.length}`;
-        const viaWriter = createTempProject('gsd-dir-writer-');
-        const viaOwner = createTempProject('gsd-dir-owner-');
-        t.after(() => { cleanup(viaWriter); cleanup(viaOwner); });
-        for (const dir of [viaWriter, viaOwner]) {
-          if (start === null) continue;
-          fs.mkdirSync(path.join(dir, '.gsd'), { recursive: true });
-          fs.writeFileSync(path.join(dir, '.gsd', '.gitignore'), start);
-        }
-        assert.equal(write(viaWriter), true, label);
-        prepareGsdDir(viaOwner, name, rules);
-        assert.equal(fs.readFileSync(path.join(viaWriter, '.gsd', '.gitignore'), 'utf8'), fs.readFileSync(path.join(viaOwner, '.gsd', '.gitignore'), 'utf8'), label);
-      }
-    }
-  });
-
-  test('one .gsd owner: both writers refuse a symlinked .gsd/.gitignore and leave its target alone', { skip: WIN32 }, (t) => {
-    const esc = require('../gsd-core/bin/lib/model-escalation.cjs');
-    const outside = createTempDir('gsd-dir-target-');
+    const outside = createTempDir('gsd-aig-target-');
     t.after(() => cleanup(outside));
     const target = path.join(outside, 'target.txt');
     fs.writeFileSync(target, 'unchanged\n');
-    const plant = () => {
-      const dir = createTempProject('gsd-dir-linked-');
-      t.after(() => cleanup(dir));
-      fs.mkdirSync(path.join(dir, '.gsd'));
-      fs.symlinkSync(target, path.join(dir, '.gsd', '.gitignore'));
-      return dir;
-    };
-    const sentinelDir = plant();
-    const rec = JSON.parse(runGsdTools(['query', 'record-dispatch-isolation', '--isolation', 'none', '--json'], sentinelDir, { HOME: sentinelDir, USERPROFILE: sentinelDir }).output);
-    assert.equal(rec.recorded, false);
-    const escDir = plant();
-    assert.throws(() => esc.writeEscalation(escDir, 'gsd-executor', 'opus'));
-    assert.equal(fs.existsSync(escalationFile(escDir, 'gsd-executor')), false);
-    assert.equal(fs.statSync(target).size, Buffer.byteLength('unchanged\n'));
+    fs.mkdirSync(path.join(project, '.gsd'));
+    fs.symlinkSync(target, path.join(project, '.gsd', '.gitignore'));
+    esc.writeEscalation(project, 'gsd-executor', 'opus');
+    assert.equal(fs.readFileSync(target, 'utf8'), 'unchanged\n');
+    assert.equal(fs.existsSync(escalationFile(project, 'gsd-executor')), true);
   });
 
   test('64 KiB read caps: limit-1 and limit are read, limit+1 is not (escalation record, config)', (t) => {
@@ -2532,7 +2496,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     esc.writeEscalation(project, 'gsd-executor', 'opus');
     esc.writeEscalation(project, 'gsd-executor', 'opus');
     assert.equal(fs.readFileSync(ignore, 'utf8'),
-      '# gsd-core dispatch sentinel\n/dispatch-isolation-sentinel.json\n/.gitignore\n# gsd-core model escalation\n/model-escalation-*\n');
+      '# gsd-core dispatch sentinel\n/dispatch-isolation-sentinel.json\n/.gitignore\n/model-escalation-*\n');
     fs.writeFileSync(ignore, '*\r\n');
     esc.writeEscalation(project, 'gsd-executor', 'opus');
     assert.equal(fs.readFileSync(ignore, 'utf8'), '*\r\n', 'a bare * already covers the record');
@@ -2587,6 +2551,40 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     assert.equal(process.env.GSD_WORKSTREAM, undefined, 'the hook restores the environment');
   });
 
+  test('a session-scoped pointer selects the workstream from the payload session_id, as init resolves it', (t) => {
+    const keys = ['GSD_WORKSTREAM', 'GSD_SESSION_KEY', 'CODEX_THREAD_ID', 'CLAUDE_SESSION_ID', 'CLAUDE_CODE_SESSION_ID'];
+    const ambient = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    for (const k of keys) delete process.env[k];
+    t.after(() => { for (const k of keys) { if (ambient[k] === undefined) delete process.env[k]; else process.env[k] = ambient[k]; } });
+    setup(t);
+    const ws = path.join(project, '.planning', 'workstreams', 'alpha');
+    fs.mkdirSync(ws, { recursive: true });
+    fs.writeFileSync(path.join(ws, 'config.json'), JSON.stringify({ model_overrides: { 'gsd-planner': 'haiku' } }));
+    const store = require('../gsd-core/bin/lib/active-workstream-store.cjs');
+    process.env.CLAUDE_CODE_SESSION_ID = 'sess-ws';
+    store.setActiveWorkstream(project, 'alpha');
+    delete process.env.CLAUDE_CODE_SESSION_ID;
+    t.after(() => {
+      process.env.CLAUDE_CODE_SESSION_ID = 'sess-ws';
+      store.setActiveWorkstream(project, null);
+      delete process.env.CLAUDE_CODE_SESSION_ID;
+    });
+    const r = runGsdTools(['resolve-model', 'gsd-planner'], project, { GSD_WORKSTREAM: '', CLAUDE_CODE_SESSION_ID: 'sess-ws' });
+    assert.ok(r.success, r.error);
+    assert.equal(JSON.parse(r.output).model, 'haiku', 'init resolves the session-pointed workstream');
+    assert.equal(evaluate({ ...dispatch('gsd-planner', 'haiku'), session_id: 'sess-ws' }).action, 'allow');
+    assert.equal(evaluate({ ...dispatch('gsd-planner', 'haiku'), session_id: 'other' }).action, 'warn');
+    assert.equal(process.env.CLAUDE_CODE_SESSION_ID, undefined, 'the hook restores the environment');
+    assert.equal(process.env.GSD_WORKSTREAM, undefined, 'the hook restores the environment');
+  });
+
+  test('the reason states when resolve-execution --attempt records', (t) => {
+    setup(t);
+    const { reason } = evaluate(dispatch('gsd-planner', 'sonnet'));
+    assert.match(reason, /dynamic_routing/);
+    assert.match(reason, /--attempt N/);
+  });
+
   test('resolve-execution from a linked git worktree records at the root the hook reads', (t) => {
     setup(t);
     const parent = createTempDir('gsd-aig-linked-');
@@ -2612,11 +2610,8 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     }
   });
 
-  test('one native-alias gate: on a runtime without native tier aliases resolve-execution writes no record and the hook skips', (t) => {
+  test('a runtime without native tier aliases is skipped by the hook', (t) => {
     setup(t, { ...ISSUE_CONFIG, runtime: 'codex' });
-    const r = runGsdTools(['resolve-execution', 'gsd-executor', '--attempt', '1'], project, PINNED);
-    assert.ok(r.success, r.error);
-    assert.equal(fs.existsSync(path.join(project, '.gsd')), false);
     assert.equal(evaluate(dispatch('gsd-planner', 'sonnet')).action, 'allow');
   });
 

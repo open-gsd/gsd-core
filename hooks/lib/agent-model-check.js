@@ -2,9 +2,9 @@
 // hooks/lib/agent-model-check.js — #5328: does the model a model-authored
 // Agent()/Task() call passes match the one GSD resolved for that agent?
 // Baseline is resolveModelInternal over the workstream-aware config
-// (what `init` reports and the workflow tells the model to pass). A fresh,
-// session-matching `resolve-execution --attempt N` record
-// (gsd-core/bin/lib/model-escalation.cjs) legitimises the escalated model.
+// (what `init` reports and the workflow tells the model to pass). A fresh
+// `resolve-execution --attempt N` record (gsd-core/bin/lib/model-escalation.cjs; the same
+// session when both sides know one) legitimises the escalated model.
 // Never fails closed: any inability to verify is an allow.
 
 const path = require('path');
@@ -29,18 +29,18 @@ function readGuardMode(root, maxBytes) {
 // `@` keeps Vertex ids (`claude-opus-4-1@20250805`) intact; anything past the cap is cut.
 const sanitiseModelId = (s) => s.replace(/[^\w.:@/[\]-]/g, '?').slice(0, REASON_INTERPOLATION_MAX_LEN);
 
-// Only a passed, wrong model is denied: the hook cannot see the orchestrator's model, so an
-// omitted one (the subagent inherits it) may well match and stays a warning even under deny.
+// An omitted model is denied too: no stock agent pins a model in its frontmatter, so the subagent
+// would inherit the orchestrator's model, which is the drift #5328 reports.
 function verdict(mode, type, rawPassed, rawExpected) {
   const passed = sanitiseModelId(rawPassed);
   const expected = sanitiseModelId(rawExpected);
   return {
-    action: mode === 'deny' && passed ? 'block' : 'warn',
+    action: mode === 'deny' ? 'block' : 'warn',
     passed,
     expected,
     reason: `Agent model guard: subagent_type="${type}" ${passed ? `was passed model="${passed}"` : 'was passed no model'}, ` +
-      `but GSD resolved model="${expected}" for it. Pass model="${expected}" (or run ` +
-      `\`resolve-execution ${type} --attempt N\` first to escalate deliberately).`,
+      `but GSD resolved model="${expected}" for it. Pass model="${expected}" (or, when dynamic_routing escalates ` +
+      `tiers or a quota --failure-class applies, run \`resolve-execution ${type} --attempt N\` first to escalate deliberately).`,
   };
 }
 
@@ -66,10 +66,13 @@ function checkAgentModel(data, { clock } = {}) {
 
     // The workstream `init` resolves (GSD_WORKSTREAM > stored pointer, read-only peek, as the
     // gsd-tools dispatcher and gsd-statusline do), carried in GSD_WORKSTREAM into loadConfig and
-    // planningDir; the caller's environment is restored in `finally`.
+    // planningDir. The pointer is keyed by the dispatching session (the payload's session_id, which
+    // Claude Code also exports to `init` as CLAUDE_CODE_SESSION_ID); the caller's environment is restored in `finally`.
     const store = require('../../gsd-core/bin/lib/active-workstream-store.cjs');
-    const priorWorkstream = process.env.GSD_WORKSTREAM;
+    const session = typeof data.session_id === 'string' && data.session_id ? data.session_id : undefined;
+    const saved = { GSD_WORKSTREAM: process.env.GSD_WORKSTREAM, CLAUDE_CODE_SESSION_ID: process.env.CLAUDE_CODE_SESSION_ID };
     try {
+      if (session !== undefined) process.env.CLAUDE_CODE_SESSION_ID = session;
       store.applyResolvedWorkstreamEnv(store.resolveActiveWorkstream(root, [], process.env, { getStored: store.peekActiveWorkstream }), process.env);
       const resolver = require('../../gsd-core/bin/lib/model-resolver.cjs');
       const config = require('../../gsd-core/bin/lib/config-loader.cjs').loadConfig(root, { persist: false });
@@ -82,15 +85,19 @@ function checkAgentModel(data, { clock } = {}) {
       const passed = typeof toolInput.model === 'string' ? toolInput.model : '';
       if (passed && esc.modelFamily(passed) === esc.modelFamily(expected)) return ALLOW;
       if (passed) {
-        const session = typeof data.session_id === 'string' && data.session_id ? data.session_id : undefined;
         // realClock honours the GSD_TEST_MODE + GSD_NOW_MS pin in a hook subprocess (RULESET.TESTS.clock-seam).
         const now = (clock || require('../../gsd-core/bin/lib/clock.cjs').realClock).now();
         if (esc.escalationAllows(esc.readEscalation(root, type), passed, { now, session })) return ALLOW;
       }
       return verdict(mode, type, passed, expected);
     } finally {
-      if (priorWorkstream === undefined) delete process.env.GSD_WORKSTREAM;
-      else process.env.GSD_WORKSTREAM = priorWorkstream;
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) {
+          delete process.env[k];
+        } else {
+          process.env[k] = v;
+        }
+      }
     }
   } catch {
     return ALLOW;
