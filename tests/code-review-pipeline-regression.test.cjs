@@ -4137,6 +4137,14 @@ describe('#3861 round 1 — the tests must run what BASH would run', () => {
       'WR-11 | warning | deferred | vendor', ''].join('\n');
     const kept = ledgerRows(runShippedDisposition({ reviewText: REVIEW('### IN-01: unrelated'), priorText: bare }).ledger);
     assert.strictEqual(kept.find((r) => r.id === 'WR-11').disposition, 'deferred', 'a pipe-less table is carried');
+    // A hand-added row may omit the Source cell, and a pipe-less row's Source may end in an escaped
+    // pipe; a heading straight under the table starts a new block, so it ends the table, not a row.
+    const edits = head.concat(['| WR-12 | warning | deferred', 'WR-13 | warning | skipped | team A\\|', '## Notes', 'a note']).join('\n');
+    const edited = runShippedDisposition({ reviewText: REVIEW('### IN-01: unrelated'), priorText: edits });
+    assert.doesNotMatch(edited.stdout, /NOT rewritten/);
+    const er = ledgerRows(edited.ledger);
+    assert.strictEqual(er.find((r) => r.id === 'WR-12').disposition, 'deferred', 'a three-cell row is carried');
+    assert.match(er.find((r) => r.id === 'WR-13').source, /^team A\\\| \(not in the current review\)$/, 'the escaped pipe stays');
   });
 
   test('an unkeyable or empty frontmatter id moves the cursor, so its title never lands on the entry before it', () => {
@@ -4153,17 +4161,20 @@ describe('#3861 round 1 — the tests must run what BASH would run', () => {
       '  - id: WR-05', '    severity: warning', '    disposition: deferred', '    title: "the fourth warning"',
       '  - severity: warning', '    title: "an entry whose id is not its first key"', '    id: R1.2-WR-03',
       '  - id: WR-04', '    severity: warning', '    disposition: deferred', '    title: "the fifth warning"',
-      'open: 0', 'total: 5', 'recorded: x', '---', '', '# Phase 01: Code Review Disposition', '',
+      '  -', '    id: R1.2-WR-04', '    title: "an entry whose dash stands alone"',
+      '  - id: WR-03', '    severity: warning', '    disposition: deferred', '    title: "the sixth warning"',
+      '---', '    title: "the frontmatter fence ends the section"',
+      'open: 0', 'total: 6', 'recorded: x', '---', '', '# Phase 01: Code Review Disposition', '',
       '    title: "an indented body line, after the frontmatter has ended"', '',
       '| Finding | Severity | Disposition | Source |', '|---------|----------|-------------|--------|',
       '| WR-08 | warning | deferred | phase 10 |', '| WR-09 | warning | deferred | phase 11 |',
       '| WR-06 | warning | deferred | phase 12 |', '| WR-05 | warning | deferred | phase 13 |',
-      '| WR-04 | warning | deferred | phase 14 |', ''].join('\n');
+      '| WR-04 | warning | deferred | phase 14 |', '| WR-03 | warning | deferred | phase 15 |', ''].join('\n');
     const out = runShippedDisposition({
       reviewText: REVIEW('### WR-08: the first warning', '### WR-09: the second warning', '### WR-06: the third warning',
-        '### WR-05: the fourth warning', '### WR-04: the fifth warning'), priorText: prior });
+        '### WR-05: the fourth warning', '### WR-04: the fifth warning', '### WR-03: the sixth warning'), priorText: prior });
     const rows = ledgerRows(out.ledger);
-    for (const id of ['WR-08', 'WR-09', 'WR-06', 'WR-05', 'WR-04']) {
+    for (const id of ['WR-08', 'WR-09', 'WR-06', 'WR-05', 'WR-04', 'WR-03']) {
       assert.strictEqual(rows.find((r) => r.id === id).disposition, 'deferred', id + ' keeps its decision');
       assert.ok(!rows.some((r) => r.id === id + '~1'), id + ' is not moved as if it were a different finding');
     }

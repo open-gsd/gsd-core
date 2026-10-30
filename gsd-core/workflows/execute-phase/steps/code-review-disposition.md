@@ -399,9 +399,9 @@ ENUM-validated -- a value outside critical|warning|info is not a severity and is
 the row falls through to inference rather than carrying garbage (ADR-227, the same rule the
 disposition column takes).
 
-**Before `const m = tl.match(/^\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*(.*?)\s*\|?\s*$/);`**
+**Before `const m = tl.match(/^\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*(?:\|\s*(.*?))?\s*(?:(?<!\\)\|)?\s*$/);`**
 
-The row is matched by SHAPE (four cells) and its parts are validated after: the id against
+The row is matched by SHAPE (three cells, or four with Source) and its parts are validated after: the id against
 ROW_ID, the disposition against the enum. Matching the id and the enum inside one regex meant a
 row failing EITHER produced no prior entry, and a row with no prior entry that the current review
 does not report is not carried -- the rewrite deleted it with no console line. That is how a
@@ -427,14 +427,18 @@ preserve, and skipping it (the previous [^|]*) is how a carried row lost its tie
 A table row whose first cell is not a finding id (other than the header and the separator) is
 recorded in `foreign`, and its presence stops the rewrite further down: the ledger is rebuilt
 whole, so a row this parser cannot key would otherwise be deleted.
-A table row is what a Markdown reader takes for one, not only a line starting with `|` in column
-0. A line led by `|` at any indent is read as a row wherever it sits. The table's header -- with or
-without outer pipes -- opens a span that runs to the first blank line, and inside it EVERY
-non-blank line is a row (`tl`): one with no pipe at all is a row whose first cell is the whole
-line, and a row whose first cell reads `Finding` is a row: only a `Finding | Severity |` line is the
-header. Keyed on a column-0 `|` and a header test on the first cell alone, a row of any of those
-shapes was neither parsed nor flagged, so the rewrite deleted it with no console line. The span
-ends at the blank line because the legend below the table carries a `|` of its own.
+A table row is not only a line starting with `|` in column 0. A line led by `|` at any indent is
+read as a row wherever it sits. The table's header -- `Finding | Severity |`, with or without outer
+pipes, any case -- opens a span, and inside it every non-blank line is a row (`tl`): one with no
+pipe at all is a row whose first cell is the whole line, and a row whose first cell reads
+`Finding` is a row. The span ends at a blank line, since the legend below the table carries a `|`
+of its own, and at a line that starts another Markdown block -- a heading, quote, list item, HTML
+tag or code fence -- so a note written straight under the table is not taken for a row. Source is
+optional, so a hand-added three-cell row is read, and an escaped `\|` at the end of a Source cell
+is never taken for the row's closing pipe. Two in-span shapes are skipped, as header and separator
+are: a line made only of pipes, dashes, colons and spaces, and a repeated header; neither carries a
+decision. Keyed on a column-0 `|`, every other shape above was neither parsed nor flagged, so the
+rewrite deleted it with no console line.
 Strip the carried marker before storing: it is rendered from the carried flag, so
 leaving it on the stored value would re-append it every run — the cell grows without
 bound AND the file changes on every run, defeating the unchanged-run check below.
@@ -448,19 +452,19 @@ costs nothing real: on a carried row the render puts the phrase straight back, a
 current row the phrase was self-contradictory to begin with. The unbounded quantifier is
 what had to go, not the strip itself.
 
-**Before `if (/^[^\s-]/.test(l)) { _fmSec = null; _fmId = null; }`**
+**Before `if (/^(?!-(\s|$))\S/.test(l)) { _fmSec = null; _fmId = null; }`**
 
 THE CURSOR MOVES ON EVERY ENTRY, matching or not. `_fmId` names the entry the following
 `severity:` / `title:` lines belong to. Set only on a MATCHING `- id:` line, an entry this walker
 could not key left the cursor on the previous entry, and each of its `title:` lines overwrote that
 entry's recorded title -- a carried row then rendered under a foreign title, and the next reuse
-check compared against it. So: a list item's start (`-` and a space, at any indent) clears the
-cursor, its `- id:` line -- with or without a value -- sets it to that id or, when it does not
-parse, to null, and a column-0 line other than `findings:` or a list item ends the section. An
-item whose `id:` is not its first key is never keyed, so its fields are ignored. Each of these
-used to leave the cursor on the previous entry: `- id:` with no value and no trailing space,
-`-  id:`, an item whose first key is not `id:`, and a body line read as frontmatter because the
-section was never closed.
+check compared against it. So: a list item's start (`-` then whitespace or the end of the line,
+at any indent) clears the cursor, its `- id:` line -- with or without a value -- sets it to that id
+or, when it does not parse, to null, and any column-0 line that is not a `-` item ends the
+section, the frontmatter's closing `---` included. An item whose `id:` is not on its first line is
+never keyed, so its fields are ignored. Each of these used to leave the cursor on the previous
+entry: `- id:` with no value and no trailing space, `-  id:`, a dash alone on its line, an item
+whose first key is not `id:`, and a line after the section read as part of it.
 
 **Before `const sameTitle = (a, b) => String(a === undefined ? '' : a).replace(/\s+/g, ' ').trim()`**
 
@@ -973,12 +977,13 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
     for (const l of norm(fs.readFileSync(process.env.DISPOSITION_FILE, 'utf-8')).split('\n')) {
       const t0 = l.trim();
       const hdr = /^\|?\s*Finding\s*\|\s*Severity\s*\|/i.test(t0);
+      if (_tbl && /^(#|>|[-*+]\s|<|\x60{3}|~{3})/.test(t0)) _tbl = false;
       const tl = hdr || !t0 ? '' : t0[0] === '|' ? t0 : _tbl ? '| ' + t0 : '';
       _tbl = hdr || (_tbl && t0 !== '');
-      const m = tl.match(/^\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*(.*?)\s*\|?\s*\$/);
+      const m = tl.match(/^\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*(?:\|\s*(.*?))?\s*(?:(?<!\\\\)\|)?\s*\$/);
       if (m && ROW_ID.test(m[1])) {
         const d = ['open', 'fixed', 'skipped', 'deferred'].indexOf(m[3]) !== -1 ? m[3] : 'open';
-        prior.set(m[1], { d: d, src: m[4].replace(/\s*\(not in the current review\)\s*\$/, '') });
+        prior.set(m[1], { d: d, src: (m[4] || '').replace(/\s*\(not in the current review\)\s*\$/, '') });
         // The table wins over the frontmatter (set unconditionally here, only-if-absent below),
         // whichever order the two appear in the file.
         if (SEV_VOCAB.indexOf(m[2]) !== -1) priorSev.set(m[1], m[2]);
@@ -986,12 +991,12 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
         foreign.push(tl.split('|')[1].trim().slice(0, 40) || '(empty first cell)');
       }
       // Frontmatter is walked in the same pass, as a SECTIONED list rather than by one line shape.
+      if (/^(?!-(\s|\$))\S/.test(l)) { _fmSec = null; _fmId = null; }
       if (/^titles: json\s*\$/.test(l)) { _fmJson = true; continue; }
       var msec = l.match(/^(findings):\s*\$/);
       if (msec) { _fmSec = msec[1]; _fmId = null; continue; }
-      if (/^[^\s-]/.test(l)) { _fmSec = null; _fmId = null; }
       var mi = l.match(/^\s*-\s+id:(.*)\$/);
-      if (_fmSec && (mi || /^\s*-\s/.test(l))) _fmId = mi && ROW_ID.test(mi[1].trim()) ? mi[1].trim() : null;
+      if (_fmSec && (mi || /^\s*-(\s|\$)/.test(l))) _fmId = mi && ROW_ID.test(mi[1].trim()) ? mi[1].trim() : null;
       if (mi && _fmSec) continue;
       // The frontmatter's own copy of the severity -- the fallback when the table cell is unusable.
       var msv = l.match(/^    severity: (critical|warning|info)\s*\$/);
@@ -1073,7 +1078,7 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
   const staleNote = staleFix.length ? ' (' + staleFix.length + ' fix-report entr' + (staleFix.length === 1 ? 'y titles its' : 'ies title their') + ' finding differently from the review, so ' + (staleFix.length === 1 ? 'it was' : 'they were') + ' not reconciled -- a stale report, or a re-titled one: ' + staleFix.join(', ') + ')' : '';
   if (rows.length === 0 && !unparsed && !fs.existsSync(process.env.DISPOSITION_FILE)) return;
   if (foreign.length) {
-    console.log('Code review disposition NOT rewritten: ' + foreign.length + ' ledger row(s) carry no finding id of the shape \`[<PREFIX>-]<CR|BL|WR|IN>-NN[~N]\`, and a rewrite would delete them: ' + foreign.join(', ') + '. Correct or remove them and re-run -- ' + process.env.DISPOSITION_FILE);
+    console.log('Code review disposition NOT rewritten: ' + foreign.length + ' ledger row(s) this step cannot read (a row needs a first cell of the shape \`[<PREFIX>-]<CR|BL|WR|IN>-NN[~N]\` and at least three cells), and a rewrite would delete them: ' + foreign.join(', ') + '. Correct or remove them -- a note under the table needs a blank line above it -- and re-run: ' + process.env.DISPOSITION_FILE);
     return;
   }
   const escapePipes = (t) => t.replace(/\\\\.|\|/g, (m) => (m === '|' ? '\\\\|' : m));
