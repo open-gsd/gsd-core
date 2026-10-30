@@ -4128,10 +4128,11 @@ describe('#3861 round 1 — the tests must run what BASH would run', () => {
     assert.strictEqual(rows.find((r) => r.id === 'WR-10').disposition, 'skipped', 'a pipe-less row is carried');
     // Inside the table every non-blank line is a row to a Markdown reader: a bare word (padded with
     // empty cells), and a row whose first cell happens to read `Finding`, which is not the header.
-    const odd = head.concat(['| CR-01 | critical | deferred | vendor |', '| Finding | warning | fixed | by hand |', 'R1.4-WR-03', '']).join('\n');
+    const odd = head.concat(['| CR-01 | critical | deferred | vendor |', '| Finding | warning | fixed | by hand |', 'R1.4-WR-03',
+      '#2 is not a heading', '<5 ms is not a tag', '']).join('\n');
     const named = runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: odd });
     assert.strictEqual(named.ledger, odd, 'the ledger is left exactly as it was');
-    assert.match(named.stdout, /NOT rewritten: 2 ledger row\(s\).*Finding.*R1\.4-WR-03/);
+    assert.match(named.stdout, /NOT rewritten: 4 ledger row\(s\).*Finding.*R1\.4-WR-03.*#2 is not.*<5 ms/);
     // A table whose header and separator carry no outer pipes, in any case, is the same table.
     const bare = ['finding | severity | disposition | source', '--------|----------|-------------|-------',
       'WR-11 | warning | deferred | vendor', ''].join('\n');
@@ -4145,6 +4146,17 @@ describe('#3861 round 1 — the tests must run what BASH would run', () => {
     const er = ledgerRows(edited.ledger);
     assert.strictEqual(er.find((r) => r.id === 'WR-12').disposition, 'deferred', 'a three-cell row is carried');
     assert.match(er.find((r) => r.id === 'WR-13').source, /^team A\\\| \(not in the current review\)$/, 'the escaped pipe stays');
+    // A row keyed by an id is a row wherever it sits: a quote ends the Markdown table, but the
+    // decided row after it must not leave silently. A Source ending in an escaped BACKSLASH keeps its
+    // closing pipe as the border. A two-cell row has no disposition to read, so it stops the run.
+    const after = head.concat(['| CR-01 | critical | deferred | path C:\\\\|', '> a note', 'WR-14 | warning | skipped | noise', '']).join('\n');
+    const ar = ledgerRows(runShippedDisposition({ reviewText: REVIEW('### IN-01: unrelated'), priorText: after }).ledger);
+    assert.strictEqual(ar.find((r) => r.id === 'WR-14').disposition, 'skipped', 'a decided row after a quote is carried');
+    assert.match(ar.find((r) => r.id === 'CR-01').source, /^path C:\\\\ \(not in the current review\)$/, 'no pipe is invented');
+    const two = head.concat(['| CR-07 | deferred |', '']).join('\n');
+    const twoOut = runShippedDisposition({ reviewText: REVIEW('### IN-01: unrelated'), priorText: two });
+    assert.strictEqual(twoOut.ledger, two, 'a two-cell row stops the rewrite');
+    assert.match(twoOut.stdout, /NOT rewritten: 1 ledger row\(s\).*CR-07/);
   });
 
   test('an unkeyable or empty frontmatter id moves the cursor, so its title never lands on the entry before it', () => {

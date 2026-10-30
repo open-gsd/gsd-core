@@ -399,9 +399,9 @@ ENUM-validated -- a value outside critical|warning|info is not a severity and is
 the row falls through to inference rather than carrying garbage (ADR-227, the same rule the
 disposition column takes).
 
-**Before `const m = tl.match(/^\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*(?:\|\s*(.*?))?\s*(?:(?<!\\)\|)?\s*$/);`**
+**Before `const m = tl.match(/^\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|\s][^|]*?)\s*(?:\|\s*(.*?))?\s*(?:(?<=(?:^|[^\\])(?:\\\\)*)\|)?\s*$/);`**
 
-The row is matched by SHAPE (three cells, or four with Source) and its parts are validated after: the id against
+The row is matched by SHAPE (three cells with a Disposition, or four with Source) and its parts are validated after: the id against
 ROW_ID, the disposition against the enum. Matching the id and the enum inside one regex meant a
 row failing EITHER produced no prior entry, and a row with no prior entry that the current review
 does not report is not carried -- the rewrite deleted it with no console line. That is how a
@@ -432,10 +432,14 @@ read as a row wherever it sits. The table's header -- `Finding | Severity |`, wi
 pipes, any case -- opens a span, and inside it every non-blank line is a row (`tl`): one with no
 pipe at all is a row whose first cell is the whole line, and a row whose first cell reads
 `Finding` is a row. The span ends at a blank line, since the legend below the table carries a `|`
-of its own, and at a line that starts another Markdown block -- a heading, quote, list item, HTML
-tag or code fence -- so a note written straight under the table is not taken for a row. Source is
-optional, so a hand-added three-cell row is read, and an escaped `\|` at the end of a Source cell
-is never taken for the row's closing pipe. Two in-span shapes are skipped, as header and separator
+of its own, and at a line that starts another Markdown block -- a heading (`#` and a space), quote,
+list item, HTML tag or comment, or code fence -- so a note written straight under the table is not
+taken for a row. Outside the span, a line whose text before its first `|` is a finding id is still
+a row, so a decided row is never dropped for where it sits. Source is optional, so a hand-added
+three-cell row is read; the Disposition cell is not, so a two-cell row is named and stops the run
+instead of being read as an empty, hence `open`, decision. A Source ending in `\|` keeps that
+pipe, and one ending in `\\|` gives it up as the border: backslashes pair the way `escapePipes`
+pairs them. Two in-span shapes are skipped, as header and separator
 are: a line made only of pipes, dashes, colons and spaces, and a repeated header; neither carries a
 decision. Keyed on a column-0 `|`, every other shape above was neither parsed nor flagged, so the
 rewrite deleted it with no console line.
@@ -557,7 +561,8 @@ ledger.
 REFUSE RATHER THAN DELETE. A table row with no parseable id cannot be keyed, carried or
 re-rendered, and the ledger is written whole, so writing would delete it with no trace. The step
 is advisory, so it does not fail: it names the rows, leaves the file as it is, and returns. The
-unchanged-run check never sees this run, so nothing is committed either.
+commit step below still runs, so where `commit_docs` is on, a hand edit already in the file is
+committed as it stands -- the unreadable row included, so nothing leaves the record.
 
 **Before `const staleNote = staleFix.length ? ' (' + staleFix.length + ' fix-report entr' + (staleFix.length === 1 ? 'y titles its' : 'ies title their') + ' finding differently from the review, so ' + (staleFix.length === 1 ? 'it was' : 'they were') + ' not reconciled -- a stale report, or a re-titled one: ' + staleFix.join(', ') + ')' : '';`**
 
@@ -977,10 +982,10 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
     for (const l of norm(fs.readFileSync(process.env.DISPOSITION_FILE, 'utf-8')).split('\n')) {
       const t0 = l.trim();
       const hdr = /^\|?\s*Finding\s*\|\s*Severity\s*\|/i.test(t0);
-      if (_tbl && /^(#|>|[-*+]\s|<|\x60{3}|~{3})/.test(t0)) _tbl = false;
-      const tl = hdr || !t0 ? '' : t0[0] === '|' ? t0 : _tbl ? '| ' + t0 : '';
+      if (_tbl && /^(#{1,6}(\s|\$)|>|[-*+]\s|<[A-Za-z!/]|\x60{3}|~{3})/.test(t0)) _tbl = false;
+      const tl = hdr || !t0 ? '' : t0[0] === '|' ? t0 : _tbl || ROW_ID.test(t0.split('|')[0].trim()) && t0.indexOf('|') !== -1 ? '| ' + t0 : '';
       _tbl = hdr || (_tbl && t0 !== '');
-      const m = tl.match(/^\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*(?:\|\s*(.*?))?\s*(?:(?<!\\\\)\|)?\s*\$/);
+      const m = tl.match(/^\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|\s][^|]*?)\s*(?:\|\s*(.*?))?\s*(?:(?<=(?:^|[^\\\\])(?:\\\\\\\\)*)\|)?\s*\$/);
       if (m && ROW_ID.test(m[1])) {
         const d = ['open', 'fixed', 'skipped', 'deferred'].indexOf(m[3]) !== -1 ? m[3] : 'open';
         prior.set(m[1], { d: d, src: (m[4] || '').replace(/\s*\(not in the current review\)\s*\$/, '') });
@@ -1078,7 +1083,7 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
   const staleNote = staleFix.length ? ' (' + staleFix.length + ' fix-report entr' + (staleFix.length === 1 ? 'y titles its' : 'ies title their') + ' finding differently from the review, so ' + (staleFix.length === 1 ? 'it was' : 'they were') + ' not reconciled -- a stale report, or a re-titled one: ' + staleFix.join(', ') + ')' : '';
   if (rows.length === 0 && !unparsed && !fs.existsSync(process.env.DISPOSITION_FILE)) return;
   if (foreign.length) {
-    console.log('Code review disposition NOT rewritten: ' + foreign.length + ' ledger row(s) this step cannot read (a row needs a first cell of the shape \`[<PREFIX>-]<CR|BL|WR|IN>-NN[~N]\` and at least three cells), and a rewrite would delete them: ' + foreign.join(', ') + '. Correct or remove them -- a note under the table needs a blank line above it -- and re-run: ' + process.env.DISPOSITION_FILE);
+    console.log('Code review disposition NOT rewritten: ' + foreign.length + ' ledger row(s) this step cannot read (a row needs a first cell of the shape \`[<PREFIX>-]<CR|BL|WR|IN>-NN[~N]\`, a Severity and a Disposition), and a rewrite would delete them: ' + foreign.join(', ') + '. Correct or remove them -- a note under the table needs a blank line above it -- and re-run: ' + process.env.DISPOSITION_FILE);
     return;
   }
   const escapePipes = (t) => t.replace(/\\\\.|\|/g, (m) => (m === '|' ? '\\\\|' : m));

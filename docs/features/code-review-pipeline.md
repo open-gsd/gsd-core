@@ -117,8 +117,9 @@ tier (`### W6-CR-01: …`, `| R1-WR-01 | … |`); the tier, and so the inferred 
 segment before the number. A table row whose first cell is not an ID of that shape — indented, or
 written without its leading `|`, included — stops the rewrite: the ledger is left as it is and the
 row is named on the console, because rewriting the file whole would delete it. The table runs from
-its header to a blank line or the start of another block (a heading, quote, list or fence), so
-plain text written straight under the table is read as a row; put a blank line above it.
+its header to a blank line or the start of another block (a heading, quote, list, HTML or fence),
+so plain text written straight under the table is read as a row; put a blank line above it. A line
+keyed by a finding ID is read as a row wherever it sits.
 
 **Three residuals, since (ID, title) is not proof of identity.** A ledger written before titles were
 recorded carries none, so its decisions are inherited on the ID alone — refusing there would reset
