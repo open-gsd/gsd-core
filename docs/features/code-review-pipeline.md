@@ -119,7 +119,9 @@ written without its leading `|`, included — stops the rewrite: the ledger is l
 row is named on the console, because rewriting the file whole would delete it. The table runs from
 its header to a blank line or the start of another block (a heading, quote, list, HTML or fence),
 so plain text written straight under the table is read as a row; put a blank line above it. A line
-keyed by a finding ID is read as a row wherever it sits.
+keyed by a finding ID is read as a row wherever it sits, and any line that names an ID and a decision
+(`fixed`, `skipped`, `deferred`) the step did not read as that decision — a dropped cell, a row in a
+quote, a duplicated ID — stops the rewrite too, so a recorded decision never changes or leaves silently.
 
 **Three residuals, since (ID, title) is not proof of identity.** A ledger written before titles were
 recorded carries none, so its decisions are inherited on the ID alone — refusing there would reset

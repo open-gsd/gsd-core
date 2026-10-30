@@ -432,9 +432,9 @@ read as a row wherever it sits. The table's header -- `Finding | Severity |`, wi
 pipes, any case -- opens a span, and inside it every non-blank line is a row (`tl`): one with no
 pipe at all is a row whose first cell is the whole line, and a row whose first cell reads
 `Finding` is a row. The span ends at a blank line, since the legend below the table carries a `|`
-of its own, and at a line that starts another Markdown block -- a heading (`#` and a space), quote,
-list item, HTML tag or comment, or code fence -- so a note written straight under the table is not
-taken for a row. Outside the span, a line whose text before its first `|` is a finding id is still
+of its own, and at a line that starts another Markdown block -- a heading (`#`, then a space or the
+end of the line), quote, list item (`-`, `*`, `+` or `1.`), HTML tag or comment, or code fence -- so a
+note written straight under the table is not taken for a row. Outside the span, a line whose text before its first `|` is a finding id is still
 a row, so a decided row is never dropped for where it sits. Source is optional, so a hand-added
 three-cell row is read; the Disposition cell is not, so a two-cell row is named and stops the run
 instead of being read as an empty, hence `open`, decision. A Source ending in `\|` keeps that
@@ -555,6 +555,22 @@ alone, exactly as sameFinding() does, so nothing moves there.
 
 The move is named on the console, id, decision and new key, for a reader who never opens the
 ledger.
+
+**Before `for (const [id, w, t] of decided) if (!prior.has(id) || prior.get(id).d !== w) foreign.push(t);`**
+
+A DECIDED ROW NEVER LEAVES, OR CHANGES DECISION, SILENTLY -- checked against the text, whatever its
+shape. Every rule above reads rows by shape, and five review rounds each found a hand edit whose
+shape none of them read: a dropped Severity cell shifting `deferred` into the Severity slot and a
+Source into the Disposition slot (coerced to `open`), a row inside a quote or a list item, a
+duplicated id overwriting the first row, a capitalised `Deferred`. So every line is also split into
+cells at every `|`, and where one cell is a finding id, the first later cell from the disposition
+vocabulary (`open`, `fixed`, `skipped`, `deferred`, any case) is what the parse must have recorded
+for that id -- two rows of one id with different dispositions cannot both match what it kept. If it
+did not, the line is named and the rewrite stops, as for an unreadable row. On a row the builder
+writes, that first vocabulary cell is the Disposition column, since no Severity value is in the
+vocabulary, so a Source reading `fixed`, or holding an escaped `\|`, never decides it. The legend
+and the frontmatter cannot trip it: no cell of theirs is exactly an id. A typo outside the
+vocabulary (`wontfix`) keeps ADR-227's coercion to `open` above.
 
 **Before `if (foreign.length) {`**
 
@@ -979,10 +995,11 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
   var _fmJson = false;
   if (fs.existsSync(process.env.DISPOSITION_FILE)) {
     var _tbl = false;
+    const decided = [], flagged = new Set();
     for (const l of norm(fs.readFileSync(process.env.DISPOSITION_FILE, 'utf-8')).split('\n')) {
       const t0 = l.trim();
       const hdr = /^\|?\s*Finding\s*\|\s*Severity\s*\|/i.test(t0);
-      if (_tbl && /^(#{1,6}(\s|\$)|>|[-*+]\s|<[A-Za-z!/]|\x60{3}|~{3})/.test(t0)) _tbl = false;
+      if (_tbl && /^(#{1,6}(\s|\$)|>|([-*+]|\d+[.)])(\s|\$)|<[A-Za-z!/]|\x60{3}|~{3})/.test(t0)) _tbl = false;
       const tl = hdr || !t0 ? '' : t0[0] === '|' ? t0 : _tbl || ROW_ID.test(t0.split('|')[0].trim()) && t0.indexOf('|') !== -1 ? '| ' + t0 : '';
       _tbl = hdr || (_tbl && t0 !== '');
       const m = tl.match(/^\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|\s][^|]*?)\s*(?:\|\s*(.*?))?\s*(?:(?<=(?:^|[^\\\\])(?:\\\\\\\\)*)\|)?\s*\$/);
@@ -994,7 +1011,12 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
         if (SEV_VOCAB.indexOf(m[2]) !== -1) priorSev.set(m[1], m[2]);
       } else if (tl && !/^\|[\s|:-]*\$/.test(tl)) {
         foreign.push(tl.split('|')[1].trim().slice(0, 40) || '(empty first cell)');
+        flagged.add(l);
       }
+      const cs = l.split('|').map((c) => c.trim());
+      const ci = cs.findIndex((c) => ROW_ID.test(c));
+      const cw = ci === -1 ? undefined : cs.slice(ci + 1).find((c) => /^(open|fixed|skipped|deferred)\$/i.test(c));
+      if (cw && !flagged.has(l)) decided.push([cs[ci], cw.toLowerCase(), l.trim().slice(0, 40)]);
       // Frontmatter is walked in the same pass, as a SECTIONED list rather than by one line shape.
       if (/^(?!-(\s|\$))\S/.test(l)) { _fmSec = null; _fmId = null; }
       if (/^titles: json\s*\$/.test(l)) { _fmJson = true; continue; }
@@ -1014,6 +1036,7 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
         continue;
       }
     }
+    for (const [id, w, t] of decided) if (!prior.has(id) || prior.get(id).d !== w) foreign.push(t);
   }
   const sameTitle = (a, b) => String(a === undefined ? '' : a).replace(/\s+/g, ' ').trim()
                            === String(b === undefined ? '' : b).replace(/\s+/g, ' ').trim();

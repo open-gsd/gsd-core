@@ -4157,6 +4157,23 @@ describe('#3861 round 1 — the tests must run what BASH would run', () => {
     const twoOut = runShippedDisposition({ reviewText: REVIEW('### IN-01: unrelated'), priorText: two });
     assert.strictEqual(twoOut.ledger, two, 'a two-cell row stops the rewrite');
     assert.match(twoOut.stdout, /NOT rewritten: 1 ledger row\(s\).*CR-07/);
+    // Whatever shape a row takes, a line naming an id and a decision the parse did not record as that
+    // decision stops the run: a dropped Severity cell, a row inside a quote, a duplicated id, a
+    // capitalised word. An ordered list item under the table ends it, like any other block.
+    for (const bad of ['| CR-01 | deferred | waiting on the vendor |', '> | CR-01 | critical | deferred | vendor |',
+      '| CR-01 | critical | Deferred | vendor |']) {
+      const t = head.concat([bad, '1. follow up', '']).join('\n');
+      const o = runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: t });
+      assert.strictEqual(o.ledger, t, 'the ledger is left exactly as it was: ' + bad);
+      assert.match(o.stdout, /NOT rewritten: 1 ledger row\(s\).*CR-01/, bad);
+    }
+    const word = head.concat(['| CR-01 | critical | open | fixed |', '']).join('\n');
+    assert.doesNotMatch(runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: word }).stdout, /NOT rewritten/,
+      'a Source that reads like a decision is not one');
+    const dup = head.concat(['| CR-01 | critical | deferred | vendor |', '| CR-01 | critical | open | - |', '']).join('\n');
+    const dupOut = runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: dup });
+    assert.strictEqual(dupOut.ledger, dup, 'a duplicated id stops the rewrite');
+    assert.match(dupOut.stdout, /NOT rewritten: 1 ledger row\(s\).*CR-01/);
   });
 
   test('an unkeyable or empty frontmatter id moves the cursor, so its title never lands on the entry before it', () => {
