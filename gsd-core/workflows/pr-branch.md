@@ -66,22 +66,20 @@ shq() { case "$1" in ''|*[!A-Za-z0-9._/@%+=:,-]*) printf "'%s'" "$(printf %s "$1
 # _to CMD... — CMD capped at 10s where the host has a timeout binary, so a hung git cannot stall the run.
 _to() { if command -v timeout >/dev/null 2>&1; then timeout 10 "$@"; else "$@"; fi; }
 pr_merged() {
-  local _sha _fork _top _g _t
-  _t=
+  local _sha _fork _top _g
   _top=$(git rev-parse --show-toplevel) || return 1 # --name-only paths are root-relative; pathspecs resolve against cwd
   _to git merge-base --is-ancestor "$1" "$TARGET" 2>/dev/null && return 0
   _sha=$(_to git rev-parse -q --verify "$1") || return 1
-  if _fork=$(_to git merge-base "$_sha" "$TARGET" 2>/dev/null) && [ -n "$(_to git diff --name-only --no-renames "$_fork" "$_sha")" ] &&
-    _to git diff --name-only --no-renames -z "$_fork" "$_sha" | _to xargs -0 git -C "$_top" --literal-pathspecs diff --quiet "$_sha" "$TARGET" --; then
+  if _fork=$(_to git merge-base "$_sha" "$TARGET" 2>/dev/null) && [ -n "$(_to git -C "$_top" diff --name-only --no-renames "$_fork" "$_sha")" ] &&
+    _to git -C "$_top" diff --name-only --no-renames -z "$_fork" "$_sha" | _to xargs -0 git -C "$_top" --literal-pathspecs diff --quiet "$_sha" "$TARGET" --; then
     return 0
   fi
-  # Unprovable offline stays "not merged" (fail-safe): gh missing, unauthenticated, offline,
-  # slower than 10s, or an executable gh with no `timeout` to bound it (stock macOS). Base-filtered:
-  # markers are keyed per target ($PR_BASE).
+  # Unprovable offline stays "not merged" (fail-safe): gh missing, a shell function or alias (it cannot be
+  # bounded), no `timeout` to bound it (stock macOS), unauthenticated, offline, or slower than 10s.
+  # Base-filtered: markers are keyed per target ($PR_BASE).
   _g=$(command -v gh) || return 1
-  case $_g in /*) command -v timeout >/dev/null 2>&1 || return 1; _t="timeout 10" ;; esac
-  # shellcheck disable=SC2046
-  $(printf '%s' "$_t") gh pr list --state merged --head "$PR_BRANCH" --base "$PR_BASE" --json headRefOid --jq '.[].headRefOid' 2>/dev/null | grep -qx "$_sha"
+  case $_g in /*) command -v timeout >/dev/null 2>&1 || return 1 ;; *) return 1 ;; esac
+  timeout 10 gh pr list --state merged --head "$PR_BRANCH" --base "$PR_BASE" --json headRefOid --jq '.[].headRefOid' 2>/dev/null | grep -qx "$_sha"
 }
 
 # The last build counts as published only once its -pr tip (PR_TIP_REF) is merged, even if
@@ -90,6 +88,7 @@ pr_merged() {
 PENDING_TIP=$(git rev-parse -q --verify "$PENDING_REF")
 # One verdict for the leftover -pr branch (each lookup may call gh); the refusal below reads it.
 PR_BRANCH_MERGED=
+PENDING_VERDICT=
 [ -n "$PR_BRANCH_TIP" ] && pr_merged "$PR_BRANCH_TIP" && PR_BRANCH_MERGED=1
 # Forgetting a pending build removes both refs; DISCARD_PENDING is the same pair as a printed recovery command.
 drop_pending() { git update-ref -d "$PENDING_REF"; git update-ref -d "$PR_TIP_REF" 2>/dev/null; }
@@ -99,29 +98,45 @@ if [ -n "$PENDING_TIP" ]; then
   # while that branch still contains the built tip (amended or extended since); a -pr reset to the target says nothing about the build.
   PR_BUILT_TIP=$(git rev-parse -q --verify "$PR_TIP_REF")
   BUILT_MERGED=
-  if [ -n "$PR_BRANCH_TIP" ] && git merge-base --is-ancestor "$PR_BUILT_TIP" "$PR_BRANCH_TIP" 2>/dev/null; then BUILT_MERGED=$PR_BRANCH_MERGED; else pr_merged "$PR_TIP_REF" && BUILT_MERGED=1; fi
-  if [ -n "$BUILT_MERGED" ]; then
-    git update-ref "$MARKER_REF" "$PENDING_TIP" && drop_pending
-  elif [ -z "$PR_BRANCH_TIP" ]; then
-    drop_pending
-    echo "WARNING: dropped the pending build $PENDING_TIP: $PR_BRANCH is gone and its tip is not merged into $TARGET, so its commits will be replayed. If it was squash/rebase merged and $TARGET changed those files since, re-anchor: git update-ref $(shq "$MARKER_REF") $PENDING_TIP" >&2
+  if [ -n "$PR_BRANCH_TIP" ] && _to git merge-base --is-ancestor "$PR_BUILT_TIP" "$PR_BRANCH_TIP" 2>/dev/null; then BUILT_MERGED=$PR_BRANCH_MERGED; else pr_merged "$PR_TIP_REF" && BUILT_MERGED=1; fi
+  # The verdict is only recorded here; settle_pending applies it once no refusal can follow.
+  if [ -n "$BUILT_MERGED" ]; then PENDING_VERDICT=promote
+  elif [ -z "$PR_BRANCH_TIP" ]; then PENDING_VERDICT=drop
+  elif [ -n "$PR_BRANCH_MERGED" ] && [ "$(git rev-list --count "$PR_BRANCH_TIP" --not "$PR_BUILT_TIP" 2>/dev/null)" != 0 ]; then PENDING_VERDICT=unproven
   fi
 fi
+settle_pending() {
+  case $PENDING_VERDICT in
+    promote) git update-ref "$MARKER_REF" "$PENDING_TIP" && drop_pending ;;
+    drop)
+      drop_pending
+      echo "WARNING: dropped the pending build $PENDING_TIP: $PR_BRANCH is gone and its tip is not merged into $TARGET, so its commits will be replayed. If it was squash/rebase merged and $TARGET changed those files since, re-anchor: git update-ref $(shq "$MARKER_REF") $PENDING_TIP" >&2 ;;
+  esac
+}
 
 # BASE bounds every commit range below: the last published tip when still an ancestor
 # (repeat publish picks only new commits), else $TARGET.
 BASE="$TARGET"
 MARKER_TIP=$(git rev-parse -q --verify "$MARKER_REF")
+[ "$PENDING_VERDICT" = promote ] && MARKER_TIP=$PENDING_TIP
 if [ -n "$MARKER_TIP" ]; then
   if git merge-base --is-ancestor "$MARKER_TIP" "$CURRENT_BRANCH"; then
     BASE="$MARKER_TIP"
   else
-    echo "WARNING: $MARKER_REF is not an ancestor of $CURRENT_BRANCH (history rewritten); using $TARGET as base. Re-anchor: git update-ref $(shq "$MARKER_REF") <rebased commit equivalent to last published tip>" >&2
+    # History rewritten: the newest commit here with the same patch as a published one is the base, but only
+    # when every published commit kept a matching patch (a conflict-resolved one would be replayed) and no
+    # unpublished commit sits below that base (reordered, it would be skipped for good).
+    REBASED_TIP=
+    [ "$(git log --no-merges --cherry-mark --left-only --format=%m "$MARKER_TIP...$CURRENT_BRANCH" --not "$TARGET" 2>/dev/null | grep -c '^<')" = 0 ] &&
+      REBASED_TIP=$(git log --topo-order --no-merges --cherry-mark --right-only --format='%m %H' "$MARKER_TIP...$CURRENT_BRANCH" --not "$TARGET" 2>/dev/null | awk '$1=="="&&!e{e=$2} $1==">"&&e{b=1} END{if(e&&!b)print e}')
+    if [ -n "$REBASED_TIP" ]; then BASE="$REBASED_TIP"
+    else echo "WARNING: $MARKER_REF is not an ancestor of $CURRENT_BRANCH and its patches do not all match a commit here (history rewritten); using $TARGET as base. Re-anchor: git update-ref $(shq "$MARKER_REF") <rebased commit equivalent to last published tip>" >&2; fi
   fi
 fi
 AHEAD=$(git rev-list --count "$CURRENT_BRANCH" --not "$BASE" "$TARGET" 2>/dev/null)
 if [ "$AHEAD" = "0" ]; then
   echo "No commits ahead of $BASE — nothing to filter."
+  settle_pending
   exit 0
 fi
 
@@ -139,9 +154,10 @@ fi
 
 # A leftover -pr branch is reset only when already merged. Refuse here, before handle_sub_repos
 # pushes branches and opens PRs, so a refused run has no outward effects.
-if [ -n "$PR_BRANCH_TIP" ] && [ -z "$PR_BRANCH_MERGED" ]; then
-  echo "$PR_BRANCH exists and is not merged into $TARGET. Choose one, then re-run:" >&2
-  if git rev-parse -q --verify "$PENDING_REF" >/dev/null; then
+if [ -n "$PR_BRANCH_TIP" ] && { [ -z "$PR_BRANCH_MERGED" ] || [ "$PENDING_VERDICT" = unproven ]; }; then
+  if [ -z "$PR_BRANCH_MERGED" ]; then echo "$PR_BRANCH exists and is not merged into $TARGET. Choose one, then re-run:" >&2
+  else echo "$PR_BRANCH is merged into $TARGET but no longer holds the pending build $PENDING_TIP. Choose one, then re-run:" >&2; fi
+  if [ "$PENDING_VERDICT" != promote ] && git rev-parse -q --verify "$PENDING_REF" >/dev/null; then
     echo "  merged by squash/rebase: git update-ref $(shq "$MARKER_REF") \$(git rev-parse $(shq "$PENDING_REF")) && git branch -D $(shq "$PR_BRANCH") && $DISCARD_PENDING" >&2
     echo "  discard: git branch -D $(shq "$PR_BRANCH") && $DISCARD_PENDING" >&2
   else
@@ -149,6 +165,7 @@ if [ -n "$PR_BRANCH_TIP" ] && [ -z "$PR_BRANCH_MERGED" ]; then
   fi
   exit 1
 fi
+settle_pending
 ```
 
 Display:
