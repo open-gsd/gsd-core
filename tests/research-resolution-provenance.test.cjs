@@ -32,6 +32,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+const { stripFencedCode } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf-8').replace(/\r\n/g, '\n');
@@ -49,56 +50,29 @@ function span(doc, startHeading, endPattern) {
 }
 
 const dim11 = span(checker, '## Dimension 11: Research Resolution', /\n## Dimension 12\b/);
-// The numbered Process steps, from **Process:** to the first worked example. Each step is
-// joined with its continuation lines and its whitespace collapsed, so a step reads the same
-// whether it is one line, wrapped, or separated from its neighbours by blank lines.
-// Assertions below match invariant tokens within a step, never whole sentences.
-// Any other line in the block (a note after a blank line) is returned as prose of its own.
-function processBlock(dim) {
-  const steps = [];
-  const prose = [];
-  let prevBlank = true;
-  let last = null; // the unit the previous line went to, so a continuation joins it
-  for (const line of splitLines(span(dim, '**Process:**', /\n\*\*Example\b/))) {
-    if (/^\d+\.\s/.test(line)) { steps.push(line); last = steps; }
-    else if (last && line.trim() && (/^\s/.test(line) || !prevBlank)) last[last.length - 1] += ` ${line}`;
-    else if (line.trim()) { prose.push(line); last = prose; }
-    prevBlank = !line.trim();
-  }
-  const norm = (u) => u.replace(/\s+/g, ' ');
-  return { steps: steps.map(norm), prose: prose.map(norm) };
-}
-const steps = processBlock(dim11).steps;
-
-// Every unit of the dimension a model reads: each Process step and note (joined, as above),
-// and outside the Process block each paragraph and each fenced example, joined, so a wrap
-// cannot split one instruction across two units.
-function readingUnits(dim) {
-  const { steps: blockSteps, prose: blockProse } = processBlock(dim);
-  const units = [...blockSteps, ...blockProse];
-  let inFence = false;
-  let current = [];
-  const flush = () => { if (current.length) units.push(current.join(' ').replace(/\s+/g, ' ')); current = []; };
-  for (const line of splitLines(dim.replace(span(dim, '**Process:**', /\n\*\*Example\b/), ''))) {
-    if (line.startsWith('```')) { flush(); inFence = !inFence; continue; }
-    if (!inFence && !line.trim()) { flush(); continue; }
-    current.push(line);
-  }
-  flush();
-  return units;
-}
-// The review's requested guard: no arrow into PASS on anything that names the RESOLVED
-// marker (always written uppercase, so "unresolved" and the lowercase example label do not
-// count). Read per line and per joined unit. Whether prose grants PASS some other way is a
-// reading a text test cannot make; the provenance and BLOCKER tokens below carry the rule.
-const NAMES_MARKER = /\bRESOLVED\b/;
-const ARROW_TO_PASS = /(→|-+>|=+>|—+>|⇒|⟶|⟹|➔|➜|➡|↦)\s*[*`_"'“”‘’]*\s*PASS\b/i;
+// The numbered Process steps, from **Process:** to the first worked example, each with its
+// whitespace collapsed so a wrap cannot split one step. Assertions below match invariant
+// tokens within a step, never whole sentences.
+const steps = span(dim11, '**Process:**', /\n\*\*Example\b/)
+  .split(/\n(?=\d+\.\s)/)
+  .filter((s) => /^\d+\.\s/.test(s))
+  .map((s) => s.replace(/\s+/g, ' ').trim());
+// The dimension as a model reads its rules: everything but the fenced examples and their labels.
+const rules = splitLines(stripFencedCode(dim11).text)
+  .filter((l) => !/^\*\*Example\b/.test(l))
+  .join('\n');
 
 describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', () => {
-  test('nothing that names RESOLVED has an arrow into PASS, and the suffix is never evidence', () => {
-    for (const text of [...splitLines(dim11), ...readingUnits(dim11)]) {
-      if (NAMES_MARKER.test(text)) assert.doesNotMatch(text, ARROW_TO_PASS, `RESOLVED routed into PASS: ${text}`);
-    }
+  test('PASS is reached only when there are no questions, and the suffix is never evidence', () => {
+    const passSteps = steps.filter((s) => /\bPASS\b/.test(s));
+    assert.equal(passSteps.length, 1, 'exactly one Process step may grant PASS');
+    assert.match(passSteps[0], /\b(no questions|none)\b/i, `PASS granted other than for no questions: ${passSteps[0]}`);
+    assert.doesNotMatch(passSteps[0], /RESOLVED/, `PASS granted on the marker: ${passSteps[0]}`);
+    assert.equal(
+      (rules.match(/\bPASS\b/g) || []).length,
+      (passSteps[0].match(/\bPASS\b/g) || []).length,
+      'the dimension grants PASS outside its no-questions step',
+    );
     assert.ok(
       steps.some((s) => s.includes('`(RESOLVED)`') && /never evidence/.test(s)),
       'a step must say the (RESOLVED) heading suffix is never evidence',
@@ -121,8 +95,8 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
       'marked RESOLVED without a D-NN': /`RESOLVED`[^;]*without citing/,
       'a D-NN CONTEXT.md lacks': /does not contain/,
       'a D-NN that decides something else': /decides something else/,
-      'a plan': /\bplan\b/,
-      'a disposition': /disposition/,
+      'a plan': /\bon a plan\b/,
+      'a disposition': /"planning-time disposition"/,
       'the research itself': /research itself/,
       "another agent's output": /another agent/,
     };
@@ -214,8 +188,8 @@ describe('researcher never resolves its own questions (#5438)', () => {
     assert.match(rule, /never\s+mark\s+a\s+question\s+resolved/i);
     assert.match(rule, /`\(RESOLVED\)`\s+suffix\s+to\s+the\s+section\s+heading/);
     assert.match(rule, /RESOLVED \(D-NN\)/);
-    assert.match(rule, /\bplan\b/);
-    assert.match(rule, /\bdisposition\b/);
+    assert.match(rule, /cite a plan\b/);
+    assert.match(rule, /\ba disposition\b/);
   });
 
   test('the return template leaves open questions to a user ruling', () => {
