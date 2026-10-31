@@ -568,22 +568,22 @@ AskUserQuestion([
 ])
 ```
 
-If "Yes": write the same config object (minus project-specific fields like `brave_search`) to the global defaults store, `${GSD_HOME:-$HOME}/.gsd/defaults.json` (`~/.gsd/defaults.json` unless `GSD_HOME` is set):
+If "Yes": merge these settings into the global defaults store, `${GSD_HOME:-$HOME}/.gsd/defaults.json` (`~/.gsd/defaults.json` unless `GSD_HOME` is set). Do not write the file yourself: `config-save-defaults` merges, so keys this flow does not manage (`model_overrides`, `effort`, `runtime`, `resolve_model_ids`, `workflow` keys not listed below) survive, and it never copies machine-detected fields like `brave_search` (#5681).
+
+Replace each `<current>` with the setting's current value written as JSON (a string in double quotes; `true`, `false`, a number or `null` bare). The quoted heredoc passes the object to the command unchanged, so a `'`, `$` or backtick in a value such as `quick_branch_template` needs no escaping:
 
 ```bash
-mkdir -p "${GSD_HOME:-$HOME}/.gsd"
-```
-
-Write `${GSD_HOME:-$HOME}/.gsd/defaults.json` with:
-```json
+DEFAULTS_JSON=$(cat <<'JSON'
 {
   "mode": <current>,
   "granularity": <current>,
   "model_profile": <current>,
   "commit_docs": <current>,
   "parallelization": <current>,
-  "branching_strategy": <current>,
-  "quick_branch_template": <current>,
+  "git": {
+    "branching_strategy": <current>,
+    "quick_branch_template": <current>
+  },
   "workflow": {
     "research": <current>,
     "plan_check": <current>,
@@ -612,6 +612,9 @@ Write `${GSD_HOME:-$HOME}/.gsd/defaults.json` with:
     "auto_update": <current>
   }
 }
+JSON
+)
+gsd_run query config-save-defaults "$DEFAULTS_JSON"
 ```
 </step>
 

@@ -4048,3 +4048,289 @@ describe('config-new-project: choices are held to config-set leaf by leaf (#5268
     );
   });
 });
+
+describe('#5681 regression: config-save-defaults merges into the global defaults store', () => {
+  // The settings workflow's "save as global defaults" step wrote a fixed object,
+  // so every key only the defaults file carried was deleted, and the next install
+  // re-baked the agents without those overrides.
+  function store(t, contents) {
+    const gsdHome = createTempDir('gsd-5681-home-');
+    t.after(() => cleanup(gsdHome));
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    if (contents !== undefined) {
+      fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+      fs.writeFileSync(defaultsPath, contents);
+    }
+    const save = (settings) => runGsdTools(['config-save-defaults', JSON.stringify(settings)], gsdHome, { GSD_HOME: gsdHome });
+    const read = () => JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
+    return { defaultsPath, save, read };
+  }
+
+  test('keys the settings flow does not manage survive a save; the chosen settings are updated', (t) => {
+    const { save, read } = store(t, JSON.stringify({
+      model_profile: 'quality',
+      model_overrides: { 'gsd-codebase-mapper': 'opus' },
+      effort: { agent_overrides: { 'gsd-codebase-mapper': 'high' } },
+      runtime: 'codex',
+      resolve_model_ids: 'omit',
+      workflow: { research: true, unlisted_toggle: true },
+    }));
+    const result = save({ model_profile: 'balanced', workflow: { research: false, plan_check: true } });
+    assert.ok(result.success, result.error);
+    assert.deepStrictEqual(read(), {
+      model_profile: 'balanced',
+      model_overrides: { 'gsd-codebase-mapper': 'opus' },
+      effort: { agent_overrides: { 'gsd-codebase-mapper': 'high' } },
+      runtime: 'codex',
+      resolve_model_ids: 'omit',
+      workflow: { research: false, unlisted_toggle: true, plan_check: true },
+    });
+  });
+
+  test('a missing store is created with the saved settings', (t) => {
+    const { save, read } = store(t);
+    const result = save({ mode: 'yolo', workflow: { verifier: true } });
+    assert.ok(result.success, result.error);
+    assert.strictEqual(JSON.parse(result.output).created, true);
+    assert.deepStrictEqual(read(), { mode: 'yolo', workflow: { verifier: true } });
+  });
+
+  test('machine-detected search flags are not copied to the global store', (t) => {
+    const { save, read } = store(t, JSON.stringify({ mode: 'yolo' }));
+    const result = save({ model_profile: 'quality', brave_search: true, firecrawl: true, exa_search: true, tavily_search: true, ref_search: true, perplexity: true, jina: true });
+    assert.ok(result.success, result.error);
+    assert.deepStrictEqual(read(), { mode: 'yolo', model_profile: 'quality' });
+  });
+
+  for (const [label, contents] of [['not valid JSON', '{"model_profile": "quality",'], ['not a JSON object', '["quality"]']]) {
+    test(`a store that is ${label} is refused and left byte-identical`, (t) => {
+      const { defaultsPath, save } = store(t, contents);
+      const result = save({ model_profile: 'balanced' });
+      assert.strictEqual(result.success, false);
+      assert.match(result.error, /Refusing to overwrite/);
+      assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), contents);
+    });
+  }
+
+  test('settings that are not a JSON object are refused before the store is touched', (t) => {
+    const { defaultsPath, save } = store(t);
+    const result = save(['model_profile']);
+    assert.strictEqual(result.success, false);
+    assert.match(result.error, /expected a JSON object/);
+    assert.ok(!fs.existsSync(defaultsPath));
+  });
+});
+
+describe('#5681 regression: a saved setting replaces its legacy flat or nested twin', () => {
+  // Merging kept both spellings of a setting, and the stale one won: the loader
+  // reads a flat key first, and new-project creation keeps a nested value over a
+  // flat one. Each row follows the save through config-new-project and loadConfig.
+  const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
+  function newProjectAfterSave(t, defaults, settings) {
+    const gsdHome = createTempDir('gsd-5681-home-');
+    const projectDir = createTempDir('gsd-5681-proj-');
+    t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
+    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify(defaults));
+    const env = { GSD_HOME: gsdHome };
+    const saved = runGsdTools(['config-save-defaults', JSON.stringify(settings)], projectDir, env);
+    assert.ok(saved.success, saved.error);
+    const created = runGsdTools(['config-new-project', '{}'], projectDir, env);
+    assert.ok(created.success, created.error);
+    const store = JSON.parse(fs.readFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), 'utf-8'));
+    return { config: loadConfig(projectDir), store };
+  }
+
+  test('turning research off wins over a stale flat research: true', (t) => {
+    const { config } = newProjectAfterSave(t, { research: true }, { workflow: { research: false } });
+    assert.strictEqual(config.research, false);
+  });
+
+  // The save must use the nested spelling: new-project creation always writes
+  // git.branching_strategy (default "none"), and the loader keeps a set nested
+  // key over a flat one, so a saved flat "phase" came back as "none".
+  test('a saved non-default branching strategy reaches a new project', (t) => {
+    const { config } = newProjectAfterSave(t, {}, { git: { branching_strategy: 'phase' } });
+    assert.strictEqual(config.branching_strategy, 'phase');
+  });
+
+  test('a saved branching strategy wins over a stale flat branching_strategy', (t) => {
+    const { config } = newProjectAfterSave(t, { branching_strategy: 'milestone' }, { git: { branching_strategy: 'phase' } });
+    assert.strictEqual(config.branching_strategy, 'phase');
+  });
+
+  // A stale depth beside granularity is never migrated, so it was copied into
+  // every new project's config.json.
+  test('a saved granularity removes a stale depth from the store', (t) => {
+    const { config, store } = newProjectAfterSave(t, { depth: 'quick' }, { granularity: 'fine' });
+    assert.strictEqual(config.granularity, 'fine');
+    assert.deepStrictEqual(store, { granularity: 'fine' });
+  });
+
+  test('clearing a setting with null removes it and its legacy spelling, so the default applies', (t) => {
+    const { config, store } = newProjectAfterSave(
+      t,
+      { quick_branch_template: 'old/{slug}', git: { quick_branch_template: 'older/{slug}' } },
+      { git: { quick_branch_template: null } },
+    );
+    assert.strictEqual(config.quick_branch_template, null);
+    assert.deepStrictEqual(store, {});
+  });
+
+  // Every key the /gsd-settings template saves, each set to a value that is not
+  // its default, over a store holding the stale legacy spellings. The saved
+  // values are what the new project's config.json holds. The keys are checked
+  // against the template in settings.md, so a key the workflow saves under a
+  // spelling new projects drop (a flat branching_strategy) fails here.
+  test('every setting the settings template saves reaches a new project', (t) => {
+    const template = {
+      mode: 'yolo', granularity: 'fine', model_profile: 'quality', commit_docs: false, parallelization: false,
+      git: { branching_strategy: 'phase', quick_branch_template: 'q/{slug}' },
+      workflow: {
+        research: false, plan_check: false, verifier: false, auto_advance: true, nyquist_validation: false,
+        pattern_mapper: false, ui_phase: false, ui_safety_gate: false, ai_integration_phase: false, tdd_mode: true,
+        code_review: false, code_review_depth: 'deep', ui_review: false, skip_discuss: true, compact_content: true,
+      },
+      plan_review: { source_grounding: false },
+      intel: { enabled: true },
+      graphify: { enabled: true, auto_update: true },
+    };
+    const leaves = (obj, prefix = '') => Object.entries(obj).flatMap(([k, v]) =>
+      v !== null && typeof v === 'object' ? leaves(v, `${prefix}${k}.`) : [[`${prefix}${k}`, v]]);
+    const settingsMd = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'settings.md'), 'utf-8');
+    const open = "DEFAULTS_JSON=$(cat <<'JSON'\n";
+    const start = settingsMd.indexOf(open);
+    assert.ok(start !== -1, 'settings.md must assign DEFAULTS_JSON with a quoted heredoc');
+    const body = settingsMd.slice(start + open.length, settingsMd.indexOf('\nJSON\n', start));
+    const workflowTemplate = JSON.parse(body.replaceAll('<current>', 'null'));
+    assert.deepStrictEqual(leaves(template).map(([k]) => k).sort(), leaves(workflowTemplate).map(([k]) => k).sort());
+
+    const gsdHome = createTempDir('gsd-5681-home-');
+    const projectDir = createTempDir('gsd-5681-proj-');
+    t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
+    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({
+      research: true, plan_checker: true, branching_strategy: 'none', quick_branch_template: 'old/{slug}', depth: 'quick',
+    }));
+    const env = { GSD_HOME: gsdHome };
+    assert.ok(runGsdTools(['config-save-defaults', JSON.stringify(template)], projectDir, env).success);
+    assert.ok(runGsdTools(['config-new-project', '{}'], projectDir, env).success);
+    const created = JSON.parse(fs.readFileSync(path.join(projectDir, '.planning', 'config.json'), 'utf-8'));
+    for (const [keyPath, want] of leaves(template)) {
+      const got = keyPath.split('.').reduce((o, seg) => (o == null ? undefined : o[seg]), created);
+      assert.strictEqual(got, want, keyPath);
+    }
+    const config = loadConfig(projectDir);
+    assert.strictEqual(config.research, false);
+    assert.strictEqual(config.plan_checker, false);
+    assert.strictEqual(config.branching_strategy, 'phase');
+    assert.strictEqual(config.quick_branch_template, 'q/{slug}');
+    assert.strictEqual(config.granularity, 'fine');
+  });
+});
+
+describe('#5681: config-save-defaults holds the settings to the config-set rules', () => {
+  // The store seeds every new project, so it takes only what config-set would
+  // store, as config-new-project's choices do (#5268).
+  function storeWith(t, contents) {
+    const gsdHome = createTempDir('gsd-5681-home-');
+    t.after(() => cleanup(gsdHome));
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.writeFileSync(defaultsPath, contents);
+    const run = (args) => runGsdTools(['config-save-defaults', ...args], gsdHome, { GSD_HOME: gsdHome });
+    return { defaultsPath, run };
+  }
+  const BEFORE = JSON.stringify({ model_profile: 'quality' });
+
+  for (const [label, settings, message] of [
+    ['an unknown key', { workflow: { reserch: true } }, /Unknown config key: "workflow\.reserch"/],
+    ['a legacy flat spelling', { branching_strategy: 'phase' }, /Unknown config key: "branching_strategy"/],
+    ['an invalid value', { mode: 'bogus' }, /Invalid mode 'bogus'/],
+    ['a prototype key', JSON.parse('{"workflow":{"__proto__":{"x":1}}}'), /Unknown config key|prototype pollution/],
+  ]) {
+    test(`${label} is refused and the store is left byte-identical`, (t) => {
+      const { defaultsPath, run } = storeWith(t, BEFORE);
+      const result = run([JSON.stringify(settings)]);
+      assert.strictEqual(result.success, false);
+      assert.match(result.error, message);
+      assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), BEFORE);
+    });
+  }
+
+  test('an argument that is not valid JSON is refused', (t) => {
+    const { defaultsPath, run } = storeWith(t, BEFORE);
+    const result = run(['{"model_profile":']);
+    assert.strictEqual(result.success, false);
+    assert.match(result.error, /Invalid JSON for config-save-defaults/);
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), BEFORE);
+  });
+
+  for (const args of [[], ['{}', '{}']]) {
+    test(`${args.length} positionals is a usage error`, (t) => {
+      const { defaultsPath, run } = storeWith(t, BEFORE);
+      const result = run(args);
+      assert.strictEqual(result.success, false);
+      assert.match(result.error, /Usage: config-save-defaults <settings-json>/);
+      assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), BEFORE);
+    });
+  }
+
+  // In-process, so the fault lands on the store write and nothing before it.
+  test('a failed write is reported', async (t) => {
+    const gsdHome = createTempDir('gsd-5681-home-');
+    t.after(() => cleanup(gsdHome));
+    const savedGsdHome = process.env.GSD_HOME;
+    process.env.GSD_HOME = gsdHome;
+    t.after(() => {
+      if (savedGsdHome === undefined) delete process.env.GSD_HOME;
+      else process.env.GSD_HOME = savedGsdHome;
+    });
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    t.after(mockPartialWriteThenThrow(fs, (target) => String(target).startsWith(defaultsPath), 0));
+
+    const result = await runQuietly(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify({ mode: 'yolo' }), false));
+
+    assert.strictEqual(result.ok, false);
+    assert.match(result.err, /Failed to write defaults\.json/);
+  });
+});
+
+describe('#5681: mergeIntoGlobalDefaults properties', () => {
+  const { mergeIntoGlobalDefaults } = configLib;
+  // Few key names, so base and patch collide often and sections nest.
+  const key = fc.constantFrom('mode', 'git', 'workflow', 'research', 'effort');
+  const leaf = fc.oneof(fc.boolean(), fc.integer(), fc.string(), fc.array(fc.integer(), { maxLength: 3 }));
+  const tree = (withNull) => fc.letrec((tie) => ({
+    node: fc.dictionary(key, fc.oneof({ depthSize: 'small' }, withNull ? fc.oneof(leaf, fc.constant(null)) : leaf, tie('node')), { maxKeys: 4 }),
+  })).node;
+  const leaves = (obj, prefix = []) => Object.entries(obj).flatMap(([k, v]) =>
+    v !== null && typeof v === 'object' && !Array.isArray(v) ? leaves(v, [...prefix, k]) : [[[...prefix, k], v]]);
+  const at = (obj, keyPath) => keyPath.reduce((o, seg) => (o == null ? undefined : o[seg]), obj);
+
+  test('a base key the patch does not name survives unchanged', () => {
+    fc.assert(fc.property(tree(false), tree(true), (base, patch) => {
+      const merged = mergeIntoGlobalDefaults(base, patch);
+      for (const k of Object.keys(base)) {
+        if (!(k in patch)) assert.deepStrictEqual(merged[k], base[k]);
+      }
+    }));
+  });
+
+  test('every patch leaf is in the result, and a null leaf is absent', () => {
+    fc.assert(fc.property(tree(false), tree(true), (base, patch) => {
+      const merged = mergeIntoGlobalDefaults(base, patch);
+      for (const [keyPath, value] of leaves(patch)) {
+        if (value === null) assert.strictEqual(at(merged, keyPath), undefined);
+        else assert.deepStrictEqual(at(merged, keyPath), value);
+      }
+    }));
+  });
+
+  test('saving twice equals saving once', () => {
+    fc.assert(fc.property(tree(false), tree(true), (base, patch) => {
+      const once = mergeIntoGlobalDefaults(base, patch);
+      assert.deepStrictEqual(mergeIntoGlobalDefaults(once, patch), once);
+    }));
+  });
+});
