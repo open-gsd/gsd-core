@@ -687,7 +687,7 @@ ui-phase → UI-SPEC.md (design contract, optional)
     │
     ▼
 plan-phase
-    ├── Research gate (blocks if RESEARCH.md has unresolved open questions)
+    ├── Research gate (blocks until each RESEARCH.md open question cites a D-NN from CONTEXT.md <decisions>)
     ├── Phase Researcher → RESEARCH.md
     │       └── Package Legitimacy Gate: registry-API verdict on every package; [SLOP] removed,
     │           [SUS]/[ASSUMED] flagged; Audit table written to RESEARCH.md

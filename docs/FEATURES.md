@@ -2050,6 +2050,8 @@ Test suite that scans all agent, workflow, and command files for embedded inject
 
 **Purpose:** Block planning when RESEARCH.md has unresolved open questions, preventing plans built on incomplete information.
 
+**Resolved means user-decided:** an open question counts as resolved only when it cites a `D-NN` decision under the phase's CONTEXT.md `<decisions>`; a mark the researcher wrote itself, a `(RESOLVED)` heading suffix included, does not (plan-checker Dimension 11, #5438).
+
 **Requirements:**
 - REQ-RESGATE-01: System MUST scan RESEARCH.md for unresolved open questions before planning begins
 - REQ-RESGATE-02: System MUST block plan-phase entry when open questions exist

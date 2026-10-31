@@ -595,44 +595,48 @@ issue:
   fix_hint: "Add eslint verification step to each task's <verify> block"
 ```
 
-## Dimension 11: Research Resolution (#1602)
+## Dimension 11: Research Resolution (#1602, #5438)
 
-**Question:** Are all research questions resolved before planning proceeds?
+**Question:** Does every research question cite a user decision on record before planning proceeds?
 
 **Skip if:** No RESEARCH.md exists for this phase.
 
-**Process:**
-1. Read the phase's RESEARCH.md file
-2. Search for a `## Open Questions` section
-3. If section heading has `(RESOLVED)` suffix → PASS
-4. If section exists: check each listed question for inline `RESOLVED` marker
-5. FAIL if any question lacks a resolution
+`gsd-phase-researcher` writes RESEARCH.md, so any resolution it records there is the questions' own author closing them. Only the user closes an open question, recorded as a `D-NN` under CONTEXT.md's `<decisions>`.
 
-**Red flags:**
-- RESEARCH.md has `## Open Questions` section without `(RESOLVED)` suffix
-- Individual questions listed without resolution status
-- Prose-style open questions that haven't been addressed
+**Process:**
+1. Collect every question RESEARCH.md leaves needing an answer or a user ruling before planning, under any heading, in prose or a list, whatever status it claims (resolved, decided, closed). A finding settled with a cited source is not one; an assumption or risk counts only if it names such a pending answer or ruling. None → PASS.
+2. A question passes only when it cites a `D-NN` that is under CONTEXT.md's `<decisions>`, answers the question asked, and was not added during this planning run.
+3. Every other question is a BLOCKER, however it is marked (`RESOLVED`, "Decided", "Closed", any case): no resolution; no `D-NN`; a `D-NN` CONTEXT.md does not contain, holds outside `<decisions>`, or that decides something else; or one resting on a plan, a "planning-time disposition", the research itself, or another agent's output.
+4. A `(RESOLVED)` heading suffix is never evidence. No CONTEXT.md: every question is a BLOCKER.
 
 **Example — unresolved questions:**
 ```yaml
 issue:
   dimension: research_resolution
   severity: blocker
-  required_property: "RESEARCH.md carries no unresolved open question"
-  description: "RESEARCH.md has unresolved open questions"
+  required_property: "Every RESEARCH.md open question cites a D-NN under CONTEXT.md <decisions>, recorded before this run, that answers it"
+  description: "RESEARCH.md has open questions with no user decision on record"
   file: "01-RESEARCH.md"
   unresolved_questions:
     - "Hash prefix — keep or change?"
     - "Cache TTL — what duration?"
-  fix_hint: "Resolve questions and mark section as '## Open Questions (RESOLVED)'"
+  fix_hint: "If a D-NN under <decisions> already answers it, cite it: 'RESOLVED (D-NN): <ruling>'. Otherwise never add a decision to CONTEXT.md: the user rules in /gsd:discuss-phase, or a sourced answer settles a factual gap; then /gsd:plan-phase --research re-runs the researcher"
 ```
 
-**Example — resolved (PASS):**
+**Example — self-resolved, no decision on record (BLOCKER):**
 ```markdown
 ## Open Questions (RESOLVED)
 
-1. **Hash prefix** — RESOLVED: Use "guest_contract:"
-2. **Cache TTL** — RESOLVED: 5 minutes with Redis
+1. **Hash prefix** — RESOLVED: keep "guest_contract:" (planning-time disposition)
+2. **Cache TTL** — RESOLVED: 5 minutes, per plan 01-03
+```
+
+**Example — resolved (PASS once CONTEXT.md `<decisions>` records D-03 and D-04):**
+```markdown
+## Open Questions
+
+1. **Hash prefix** — RESOLVED (D-03): Use "guest_contract:"
+2. **Cache TTL** — RESOLVED (D-04): 5 minutes
 ```
 
 ## Dimension 12: Pattern Compliance (#1861)
@@ -1066,6 +1070,8 @@ Plan verification complete when:
   - [ ] Locked decisions have implementing tasks
   - [ ] No tasks contradict locked decisions
   - [ ] Deferred ideas not included in plans
+- [ ] Research resolution checked (if RESEARCH.md exists): every open question, under any heading,
+      cites a `D-NN` under CONTEXT.md `<decisions>` that answers it; anything else is a blocker
 - [ ] Overall status determined (passed | issues_found)
 - [ ] Architectural tier compliance checked (tasks match responsibility map tiers)
 - [ ] Cross-plan data contracts checked (no conflicting transforms on shared data)
