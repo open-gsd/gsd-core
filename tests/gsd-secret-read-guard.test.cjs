@@ -1564,6 +1564,14 @@ describe('gsd-secret-read-guard: a file named inside a curl option value (#5779)
     // parameter is read into the content type up to the next `;`.
     [`curl -F 'k=v;filename ="y;headers=@.env;"' x.test`, 'k=v;filename ="y;headers=@.env;"'],
     [`curl -F 'k=v;type=a/b;"y;headers=@.env;"' x.test`, 'k=v;type=a/b;"y;headers=@.env;"'],
+    // Inside a span curl may be quoting (a quoted unknown parameter, a quoted
+    // `@` name), a `;filename="` is literal: curl's quote closes after it and
+    // the headers file is read (curl 8.5.0).
+    [`curl -F 'k=v;"x;filename=";headers=@.env;"' x.test`, 'k=v;"x;filename=";headers=@.env;"'],
+    [`curl -F 'k=@"x;filename=";headers=@.env;"' x.test`, 'k=@"x;filename=";headers=@.env;"'],
+    [`curl -F 'k=@a,"x;filename=";headers=@.env;"' x.test`, 'k=@a,"x;filename=";headers=@.env;"'],
+    [`curl -F 'k=v; "x;filename=";headers=@.env;"' x.test`, 'k=v; "x;filename=";headers=@.env;"'],
+    [`curl -F 'k=v;"x;encoder=";headers=@.env;"' x.test`, 'k=v;"x;encoder=";headers=@.env;"'],
     // The value attached to -F, alone or behind other short flags.
     ['curl -Ffile=@.env x.test', '-Ffile=@.env'],
     ['curl -sFfile=@.env x.test', '-sFfile=@.env'],
