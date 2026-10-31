@@ -569,3 +569,317 @@ describe('headTreeEntry spawns no subprocess (#4432 row 54)', () => {
     assert.equal(missing, null);
   });
 });
+
+// ─── Reader limits, worktree check and parsing internals (#4432 review group 3) ──
+
+const { _internal } = require('../hooks/lib/git-head-tree.js');
+
+function sha(n) {
+  return n.toString(16).padStart(2, '0').repeat(20);
+}
+
+function commitFile(repo, rel = 'f.txt') {
+  writeFile(repo, rel, 'content\n');
+  commitAll(repo, 'add');
+}
+
+describe('headTreeEntry bounds the number of pack indexes (#4432 F6)', () => {
+  test('LIMITS carries maxPackFiles 64 and a 4 MiB maxRefsFileBytes', () => {
+    assert.equal(LIMITS.maxPackFiles, 64);
+    assert.equal(LIMITS.maxRefsFileBytes, 4 * 1024 * 1024);
+  });
+
+  test('resolves at limit and limit+1 and answers null at limit-1', (t) => {
+    const repo = initRepo(t);
+    for (const i of [1, 2, 3]) {
+      writeFile(repo, `f${i}.txt`, `${i}\n`);
+      commitAll(repo, `c${i}`);
+      git(repo, ['repack', '-q', '-d']);
+    }
+    const packDir = path.join(repo, '.git', 'objects', 'pack');
+    const packs = fs.readdirSync(packDir).filter((n) => n.endsWith('.idx')).length;
+    assert.ok(packs >= 2, `fixture needs several packs, has ${packs}`);
+    const expected = { mode: '100644', oid: oracleOid(repo, 'f1.txt') };
+    assert.deepEqual(headTreeEntry(repo, 'f1.txt', { maxPackFiles: packs + 1 }), expected, 'limit+1');
+    assert.deepEqual(headTreeEntry(repo, 'f1.txt', { maxPackFiles: packs }), expected, 'limit');
+    assert.equal(headTreeEntry(repo, 'f1.txt', { maxPackFiles: packs - 1 }), null, 'limit-1');
+  });
+});
+
+describe('headTreeEntry bounds and reuses packed-refs (#4432 F7)', () => {
+  function packedRepo(t) {
+    const repo = initRepo(t);
+    commitFile(repo);
+    const head = git(repo, ['rev-parse', 'HEAD']).trim();
+    for (let i = 0; i < 60; i++) {
+      fs.writeFileSync(path.join(repo, '.git', 'refs', 'heads', `padding-branch-${i}`), `${head}\n`);
+    }
+    git(repo, ['pack-refs', '--all', '--prune']);
+    const packedRefs = path.join(repo, '.git', 'packed-refs');
+    const size = fs.statSync(packedRefs).size;
+    const configSize = fs.statSync(path.join(repo, '.git', 'config')).size;
+    assert.ok(size > configSize, 'fixture needs packed-refs larger than config');
+    return { repo, size };
+  }
+
+  test('a packed-refs file of exactly the limit resolves; one byte over answers null', (t) => {
+    const { repo, size } = packedRepo(t);
+    const expected = { mode: '100644', oid: oracleOid(repo, 'f.txt') };
+    assert.deepEqual(headTreeEntry(repo, 'f.txt', { maxRefsFileBytes: size }), expected, 'limit');
+    assert.deepEqual(headTreeEntry(repo, 'f.txt', { maxRefsFileBytes: size + 1 }), expected, 'limit+1');
+    assert.equal(headTreeEntry(repo, 'f.txt', { maxRefsFileBytes: size - 1 }), null, 'limit-1');
+  });
+
+  test('packed-refs is opened at most once per call', (t) => {
+    const { repo } = packedRepo(t);
+    const fsMod = require('node:fs');
+    const originals = { openSync: fsMod.openSync, readFileSync: fsMod.readFileSync };
+    let opens = 0;
+    const count = (file) => {
+      if (typeof file === 'string' && file.endsWith('packed-refs')) opens++;
+    };
+    fsMod.openSync = function patchedOpen(file, ...rest) {
+      count(file);
+      return originals.openSync.call(this, file, ...rest);
+    };
+    fsMod.readFileSync = function patchedRead(file, ...rest) {
+      count(file);
+      return originals.readFileSync.call(this, file, ...rest);
+    };
+    let entry;
+    try {
+      entry = headTreeEntry(repo, 'f.txt');
+    } finally {
+      fsMod.openSync = originals.openSync;
+      fsMod.readFileSync = originals.readFileSync;
+    }
+    assert.ok(entry);
+    assert.equal(opens, 1);
+  });
+});
+
+describe('headTreeEntry verifies the git dir behind a .git file (#4432 F8)', () => {
+  test('a linked worktree made by git worktree add resolves', (t) => {
+    const repo = initRepo(t);
+    commitFile(repo, '.env.production');
+    const parent = mkTemp('gsd-4432-wt-');
+    t.after(() => cleanup(parent));
+    const wt = path.join(parent, 'linked');
+    git(repo, ['worktree', 'add', '-q', '-b', 'wt-branch', wt]);
+    assert.deepEqual(headTreeEntry(wt, '.env.production'), { mode: '100644', oid: oracleOid(repo, '.env.production') });
+  });
+
+  test('a planted .git file pointing at an arbitrary repository answers null', (t) => {
+    const victim = initRepo(t);
+    commitFile(victim, '.env.production');
+    const planted = mkTemp('gsd-4432-planted-');
+    t.after(() => cleanup(planted));
+    fs.writeFileSync(path.join(planted, '.git'), `gitdir: ${path.join(victim, '.git')}\n`);
+    assert.equal(headTreeEntry(planted, '.env.production'), null);
+  });
+
+  test('a planted .git file pointing at a real worktree git dir without the back-pointer answers null', (t) => {
+    const repo = initRepo(t);
+    commitFile(repo, '.env.production');
+    const parent = mkTemp('gsd-4432-wt-');
+    t.after(() => cleanup(parent));
+    git(repo, ['worktree', 'add', '-q', '-b', 'wt-branch', path.join(parent, 'linked')]);
+    const planted = path.join(parent, 'planted');
+    fs.mkdirSync(planted);
+    fs.writeFileSync(path.join(planted, '.git'), `gitdir: ${path.join(repo, '.git', 'worktrees', 'linked')}\n`);
+    assert.equal(headTreeEntry(planted, '.env.production'), null);
+  });
+
+  test('a planted .git file whose git dir names itself as common dir answers null', (t) => {
+    const parent = mkTemp('gsd-4432-planted-');
+    t.after(() => cleanup(parent));
+    const fakeGit = path.join(parent, 'fake', 'worktrees', 'x');
+    fs.mkdirSync(fakeGit, { recursive: true });
+    fs.writeFileSync(path.join(fakeGit, 'commondir'), '.\n');
+    fs.writeFileSync(path.join(fakeGit, 'gitdir'), `${path.join(parent, 'work', '.git')}\n`);
+    fs.writeFileSync(path.join(fakeGit, 'HEAD'), `${sha(1)}\n`);
+    fs.mkdirSync(path.join(parent, 'work'));
+    fs.writeFileSync(path.join(parent, 'work', '.git'), `gitdir: ${fakeGit}\n`);
+    assert.equal(headTreeEntry(path.join(parent, 'work'), 'a.txt'), null);
+  });
+});
+
+// ─── F10: parsing internals on hand-built buffers ───────────────────────────
+
+function encodeVarint(n) {
+  const out = [];
+  let v = n;
+  do {
+    let b = v & 0x7f;
+    v = Math.floor(v / 128);
+    if (v > 0) b |= 0x80;
+    out.push(b);
+  } while (v > 0);
+  return Buffer.from(out);
+}
+
+function packEntryHeader(type, size) {
+  const out = [];
+  let b = (type << 4) | (size & 0x0f);
+  let v = Math.floor(size / 16);
+  while (v > 0) {
+    out.push(b | 0x80);
+    b = v & 0x7f;
+    v = Math.floor(v / 128);
+  }
+  out.push(b);
+  return Buffer.from(out);
+}
+
+function encodeOfsDistance(rel) {
+  const bytes = [rel & 0x7f];
+  let v = rel;
+  while ((v = Math.floor(v / 128)) > 0) {
+    v -= 1;
+    bytes.unshift(0x80 | (v & 0x7f));
+  }
+  return Buffer.from(bytes);
+}
+
+function packFile(entries) {
+  const head = Buffer.alloc(12);
+  head.write('PACK', 0, 'latin1');
+  head.writeUInt32BE(2, 4);
+  head.writeUInt32BE(entries.length, 8);
+  return Buffer.concat([head, ...entries, Buffer.alloc(20)]);
+}
+
+function withFd(t, buf, fn) {
+  const dir = mkTemp('gsd-4432-fd-');
+  t.after(() => cleanup(dir));
+  const file = path.join(dir, 'blob.bin');
+  fs.writeFileSync(file, buf);
+  const fd = fs.openSync(file, 'r');
+  try {
+    return fn(fd, buf.length);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function buildIdx(oids, offsets32, bigOffsets) {
+  const head = Buffer.alloc(8 + 1024);
+  head.writeUInt32BE(0xff744f63, 0);
+  head.writeUInt32BE(2, 4);
+  const first = oids.map((o) => Buffer.from(o, 'hex')[0]);
+  for (let i = 0; i < 256; i++) head.writeUInt32BE(first.filter((b) => b <= i).length, 8 + 4 * i);
+  const offs = Buffer.alloc(offsets32.length * 4);
+  offsets32.forEach((o, i) => offs.writeUInt32BE(o, i * 4));
+  const bigs = Buffer.alloc(bigOffsets.length * 8);
+  bigOffsets.forEach((o, i) => bigs.writeBigUInt64BE(o, i * 8));
+  return Buffer.concat([
+    head,
+    ...oids.map((o) => Buffer.from(o, 'hex')),
+    Buffer.alloc(oids.length * 4),
+    offs,
+    bigs,
+    Buffer.alloc(40),
+  ]);
+}
+
+describe('git-head-tree parsing internals on hand-built buffers (#4432 F10)', () => {
+  const LIM = { ...LIMITS };
+
+  test('idxLookup reads a 32-bit offset, a 64-bit offset-table entry and reports a miss as -1', (t) => {
+    const oids = [sha(0x10), sha(0x20), sha(0x30)];
+    const big = 0x1_0000_0005n;
+    const idx = buildIdx(oids, [100, 0x80000000, 300], [big]);
+    withFd(t, idx, (fd, size) => {
+      assert.equal(_internal.idxLookup(fd, size, oids[0]), 100);
+      assert.equal(_internal.idxLookup(fd, size, oids[1]), Number(big));
+      assert.equal(_internal.idxLookup(fd, size, oids[2]), 300);
+      assert.equal(_internal.idxLookup(fd, size, sha(0x25)), -1);
+    });
+  });
+
+  test('idxLookup rejects a 64-bit slot beyond the table', (t) => {
+    const oids = [sha(0x10)];
+    const idx = buildIdx(oids, [0x80000007], [5n]);
+    withFd(t, idx, (fd, size) => {
+      assert.throws(() => _internal.idxLookup(fd, size, oids[0]), /truncated pack index/);
+    });
+  });
+
+  test('applyDelta: copy size 0 means 0x10000', () => {
+    const base = Buffer.alloc(0x10000, 0x61);
+    base[0x8000] = 0x62;
+    const delta = Buffer.concat([encodeVarint(0x10000), encodeVarint(0x10000), Buffer.from([0x80])]);
+    assert.ok(_internal.applyDelta(base, delta, LIM).equals(base));
+  });
+
+  test('applyDelta: reserved opcode 0 is refused', () => {
+    const delta = Buffer.concat([encodeVarint(1), encodeVarint(1), Buffer.from([0x00])]);
+    assert.throws(() => _internal.applyDelta(Buffer.from('a'), delta, LIM), /reserved delta opcode/);
+  });
+
+  test('applyDelta: copy with offset and size bytes plus insert', () => {
+    const base = Buffer.from('0123456789');
+    const delta = Buffer.concat([encodeVarint(10), encodeVarint(5), Buffer.from([0x91, 0x02, 0x03, 0x02, 0x41, 0x42])]);
+    assert.equal(_internal.applyDelta(base, delta, LIM).toString(), '234AB');
+  });
+
+  test('packEntry resolves a REF_DELTA against a loose base object', (t) => {
+    const repo = initRepo(t);
+    writeFile(repo, 'base.txt', 'hello world\n');
+    const baseOid = git(repo, ['hash-object', '-w', 'base.txt']).trim();
+    const delta = Buffer.concat([encodeVarint(12), encodeVarint(16), Buffer.from([0x90, 0x0c, 0x04]), Buffer.from('abcd')]);
+    const entry = Buffer.concat([
+      packEntryHeader(7, delta.length),
+      Buffer.from(baseOid, 'hex'),
+      zlib.deflateSync(delta),
+    ]);
+    const pack = packFile([entry]);
+    const gitDir = path.join(repo, '.git');
+    withFd(t, pack, (fd, size) => {
+      const got = _internal.packEntry(fd, size, 12, 0, { gitDir, commonDir: gitDir }, LIM);
+      assert.equal(got.type, 'blob');
+      assert.equal(got.depth, 1);
+      assert.equal(got.data.toString(), 'hello world\nabcd');
+    });
+  });
+
+  test('packEntry resolves an OFS_DELTA whose distance needs a multi-byte varint', (t) => {
+    let seed = 7;
+    const base = Buffer.alloc(300);
+    for (let i = 0; i < base.length; i++) {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      base[i] = seed >> 16;
+    }
+    const baseEntry = Buffer.concat([packEntryHeader(3, base.length), zlib.deflateSync(base)]);
+    assert.ok(baseEntry.length >= 128, 'distance must need two varint bytes');
+    const delta = Buffer.concat([
+      encodeVarint(300),
+      encodeVarint(302),
+      Buffer.from([0xb0, 0x2c, 0x01, 0x02]),
+      Buffer.from('ab'),
+    ]);
+    const deltaEntry = Buffer.concat([
+      packEntryHeader(6, delta.length),
+      encodeOfsDistance(baseEntry.length),
+      zlib.deflateSync(delta),
+    ]);
+    assert.equal(encodeOfsDistance(baseEntry.length).length, 2);
+    const pack = packFile([baseEntry, deltaEntry]);
+    withFd(t, pack, (fd, size) => {
+      const got = _internal.packEntry(fd, size, 12 + baseEntry.length, 0, { commonDir: os.tmpdir() }, LIM);
+      assert.equal(got.type, 'blob');
+      assert.ok(got.data.equals(Buffer.concat([base, Buffer.from('ab')])));
+    });
+  });
+
+  test('lookupRef prefers a loose ref over packed-refs', (t) => {
+    const dir = mkTemp('gsd-4432-refs-');
+    t.after(() => cleanup(dir));
+    fs.mkdirSync(path.join(dir, 'refs', 'heads'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'refs', 'heads', 'main'), `${sha(0xaa)}\n`);
+    fs.writeFileSync(path.join(dir, 'packed-refs'), `# pack-refs\n${sha(0xbb)} refs/heads/main\n${sha(0xcc)} refs/heads/other\n`);
+    const repo = { gitDir: dir, commonDir: dir };
+    assert.equal(_internal.lookupRef('refs/heads/main', repo, LIM), sha(0xaa));
+    assert.equal(_internal.lookupRef('refs/heads/other', repo, LIM), sha(0xcc));
+  });
+});
