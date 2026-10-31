@@ -20,12 +20,10 @@ const { collectSection } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { auditMilestoneMd, openWorkStep, openWorkStepFields } = require('./helpers/audit-milestone-step.cjs');
 
-const AUDIT_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'audit-milestone.md');
-
 // audit-milestone.md is shipped workflow text — the bytes ARE what the
 // runtime loads; a structural scan over it tests the deployed contract.
 test('#3796: the audit report writer and readers agree on the single-version filename', () => {
-  const md = fs.readFileSync(AUDIT_MD, 'utf-8');
+  const md = auditMilestoneMd();
   assert.ok(
     !md.includes('v{version}-v{version}'),
     '#3796: no doubled version segment may appear anywhere in the workflow',
