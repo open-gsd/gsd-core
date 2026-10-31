@@ -85,13 +85,21 @@ function isCommittedBlob(root, entry) {
 }
 
 /**
- * True when `abs` is a regular file (lstat: a symlink is not).
+ * True when `abs` is a regular file (lstat: a symlink is not). When `root` and
+ * `entry` are given, the real path of `abs` must also equal the real root joined
+ * with `entry`, so a symlinked PARENT directory (which lstat of the leaf does
+ * not see) is never exempt. A realpath failure means "not a match".
  * @param {string} abs
+ * @param {string} [root]
+ * @param {string} [entry]
  * @returns {boolean}
  */
-function isRegularFile(abs) {
+function isRegularFile(abs, root, entry) {
   try {
-    return fs.lstatSync(abs).isFile();
+    if (!fs.lstatSync(abs).isFile()) return false;
+    if (typeof root !== 'string' || typeof entry !== 'string') return true;
+    const fold = process.platform === 'win32' ? (s) => s.toLowerCase() : (s) => s;
+    return fold(fs.realpathSync(abs)) === fold(path.join(fs.realpathSync(root), entry));
   } catch {
     return false;
   }
@@ -121,7 +129,7 @@ function createExemptionChecker({
     if (verdicts.has(entry)) return verdicts.get(entry);
     let ok = false;
     try {
-      ok = regular(path.resolve(root, entry)) === true && committed(root, entry) === true;
+      ok = regular(path.resolve(root, entry), root, entry) === true && committed(root, entry) === true;
     } catch {
       ok = false;
     }
@@ -132,6 +140,9 @@ function createExemptionChecker({
   return function isExempt(token) {
     if (typeof token !== 'string' || token === '' || targets.length === 0) return false;
     if (!allowRelative && !path.isAbsolute(token)) return false;
+    // path.resolve would collapse `<symlinkdir>/../x` lexically while the OS
+    // reads through the link, so a `..` segment is refused before resolving.
+    if (token.split(/[\\/]/).includes('..')) return false;
     const resolved = fold(path.resolve(root, token));
     for (const { entry, target } of targets) {
       if (resolved === target) return verdictFor(entry);
