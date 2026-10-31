@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { isReleaseVersion, versionFromPackageJson, applyVersion, syncViaPr, main } = require('../scripts/sync-next-version.cjs');
+const { isReleaseVersion, versionFromPackageJson, applyVersion, syncViaPr, main, defaultRun } = require('../scripts/sync-next-version.cjs');
 
 // ---------------------------------------------------------------------------
 // Run-stub factory
@@ -245,4 +245,135 @@ test('syncViaPr — rethrows when git diff fails for a non-diff reason', () => {
     /fatal: not a git repo/,
     'should rethrow the real error',
   );
+});
+
+// ---------------------------------------------------------------------------
+// J. syncViaPr — a merge-queue base rejects --admin; enqueue instead (#5746)
+// ---------------------------------------------------------------------------
+
+/**
+ * A `run` seam for the post-push half of the sync: the PR already exists, so only the
+ * `gh pr merge` calls matter. `mergeResults` maps a merge flag (`--admin` / `--auto`) to
+ * what that call does: an Error to throw, or a string to return.
+ */
+function makeMergeRun(mergeResults) {
+  const calls = [];
+  function run(cmd, args, opts) {
+    calls.push({ cmd, args: [...args], opts });
+    if (cmd === 'git' && args[0] === 'show') return '{"version":"1.4.0"}';
+    if (cmd === 'git' && args[0] === 'diff') throw Object.assign(new Error('diff'), { status: 1 });
+    if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') return 'https://github.com/o/r/pull/777\n';
+    if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'merge') {
+      const flag = args.includes('--admin') ? '--admin' : '--auto';
+      const outcome = mergeResults[flag];
+      if (outcome instanceof Error) throw outcome;
+      return outcome ?? '';
+    }
+    return '';
+  }
+  run.calls = calls;
+  return run;
+}
+
+/**
+ * The error `execFileSync` raises for a failed `gh` call whose stderr was PIPED: the
+ * message is only "Command failed: ..." and the GitHub text lives on `err.stderr`.
+ * (With stderr inherited, `err.stderr` is null and the text never reaches the process —
+ * see the defaultRun test below — so a fake that put the text in `.message` would
+ * describe a failure production never produces.)
+ */
+function ghFailure(stderrText) {
+  return Object.assign(new Error('Command failed: gh pr merge 777'), { stderr: stderrText });
+}
+
+const MERGE_QUEUE_REJECTION = ghFailure(
+  'GraphQL: Repository rule violations found\n\nChanges must be made through the merge queue\n\n (mergePullRequest)\n',
+);
+
+const mergeCalls = (run) => run.calls.filter((c) => c.cmd === 'gh' && c.args[0] === 'pr' && c.args[1] === 'merge');
+
+test('syncViaPr — enqueues with --auto when the base requires the merge queue (#5746)', () => {
+  const run = makeMergeRun({ '--admin': MERGE_QUEUE_REJECTION });
+  const result = syncViaPr('1.5.0', { run });
+  assert.equal(result, 'queued');
+  const merges = mergeCalls(run);
+  assert.equal(merges.length, 2, 'one --admin attempt, then one --auto enqueue');
+  assert.ok(merges[0].args.includes('--admin'));
+  assert.deepEqual(merges[1].args, ['pr', 'merge', '--auto', '777'], 'the queue picks the strategy, so no --merge');
+});
+
+test('syncViaPr — a failed --auto enqueue is not swallowed (#5746)', () => {
+  const failure = Object.assign(new Error('Command failed: gh pr merge --auto 777'), {
+    stderr: 'auto-merge is not allowed for this repository',
+  });
+  const run = makeMergeRun({ '--admin': MERGE_QUEUE_REJECTION, '--auto': failure });
+  assert.throws(() => syncViaPr('1.5.0', { run }), (err) => err === failure);
+});
+
+test('syncViaPr — an unrelated merge failure is rethrown and does not fall back to --auto (#5746)', () => {
+  const failure = ghFailure('HTTP 500: internal error');
+  const run = makeMergeRun({ '--admin': failure });
+  assert.throws(() => syncViaPr('1.5.0', { run }), (err) => err === failure);
+  assert.equal(mergeCalls(run).length, 1, 'no enqueue after a failure that is not the merge-queue rule');
+});
+
+test('syncViaPr — an already-merged PR is still tolerated and does not enqueue (#5746)', () => {
+  const run = makeMergeRun({ '--admin': ghFailure('Pull request #777 is already merged') });
+  assert.equal(syncViaPr('1.5.0', { run }), 'synced');
+  assert.equal(mergeCalls(run).length, 1);
+});
+
+test('syncViaPr — a message naming both the queue and an already-merged PR does not enqueue (#5746)', () => {
+  const run = makeMergeRun({
+    '--admin': ghFailure('Pull request #777 is already merged (merge queue is not needed)'),
+  });
+  assert.equal(syncViaPr('1.5.0', { run }), 'synced');
+  assert.equal(mergeCalls(run).length, 1, 'already merged wins: --auto must not run on a merged PR');
+});
+
+test('syncViaPr — a queue rejection that also says "not mergeable" still enqueues (#5746)', () => {
+  const run = makeMergeRun({
+    '--admin': ghFailure('Pull request is not mergeable: Changes must be made through the merge queue'),
+  });
+  assert.equal(syncViaPr('1.5.0', { run }), 'queued');
+  assert.deepEqual(mergeCalls(run)[1].args, ['pr', 'merge', '--auto', '777']);
+});
+
+test('syncViaPr — the stderr of a failed enqueue is written out before the error propagates (#5746)', (t) => {
+  const failure = ghFailure('auto-merge is not enabled for this repository');
+  const run = makeMergeRun({ '--admin': MERGE_QUEUE_REJECTION, '--auto': failure });
+  const written = [];
+  t.mock.method(process.stderr, 'write', (chunk) => { written.push(String(chunk)); return true; });
+  assert.throws(() => syncViaPr('1.5.0', { run }), (err) => err === failure);
+  assert.ok(written.some((s) => s.includes('auto-merge is not enabled')), 'the GitHub reason must reach the log');
+});
+
+test('syncViaPr — both merge calls capture stderr so a failure carries its own text (#5746)', () => {
+  const run = makeMergeRun({ '--admin': MERGE_QUEUE_REJECTION });
+  syncViaPr('1.5.0', { run });
+  for (const call of mergeCalls(run)) {
+    assert.equal(call.opts.stdio[2], 'pipe', `${call.args.join(' ')} must pipe stderr, not inherit it`);
+  }
+});
+
+test('defaultRun — stderr is on err.stderr only when it is piped (why syncViaPr pipes it) (#5746)', () => {
+  // The phrase is assembled at runtime: execFileSync's message embeds the full command line,
+  // so a literal in the script would put the phrase in err.message and defeat the assertion.
+  const script = 'process.stderr.write(["merge", "queue"].join(" ")); process.exit(1);';
+  const piped = (() => {
+    try { defaultRun(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'pipe'] }); } catch (err) { return err; }
+    return null;
+  })();
+  assert.ok(piped, 'the child exits non-zero, so defaultRun throws');
+  assert.match(String(piped.stderr), /merge queue/, 'piped stderr is delivered on err.stderr');
+
+  // stderr NOT captured (`ignore` here to keep the test log quiet; the default `inherit` behaves the
+  // same for the error object): err.stderr is null and the message omits the text, so a failure
+  // could not be classified.
+  const inherited = (() => {
+    try { defaultRun(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'ignore'] }); } catch (err) { return err; }
+    return null;
+  })();
+  assert.ok(inherited);
+  assert.doesNotMatch(String(inherited.stderr || '') + inherited.message, /merge queue/);
 });

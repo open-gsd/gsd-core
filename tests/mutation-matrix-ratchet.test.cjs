@@ -224,10 +224,13 @@ const RATCHET_BASELINE = {
                                    // floor(75.26)-1. Supersedes the #3007 59.62% measurement
                                    // (248 killed / 168 survived) — see scripts/mutation-matrix.cjs
                                    // for the RuntimeError classification-change diagnosis.
-  'state-contract':          65,  // #3227: CI run 32769289750, job 97565813640,
-                                   // `Stryker (state-contract)`: measured 66.25%; floor(66.25)-1.
+  'state-contract':          69,  // #5764: CI run 40800623930, job 123207881000,
+                                   // `Stryker (state-contract)`: measured 70.43%; floor(70.43)-1.
+                                   // (#3227 set 65 from a measured 66.25%.)
                                    // Below TARGET_MUTATION_SCORE (80) — ratchet candidate like
                                    // planning-inspect / model-catalog above; raise as tests improve.
+  'state-document':          50,  // #4998: CI 50.47% (run 39742269013); range minimum
+  'planning-document':       74,  // #4998: CI run 39736529871 (#5234): measured 75.14%; floor(75.14)-1
 };
 
 describe('mutation-matrix ratchet: floor equality enforcement', () => {

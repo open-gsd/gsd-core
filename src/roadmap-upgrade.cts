@@ -10,6 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execGit, retryRenameSync } from './shell-command-projection.cjs';
+import { phaseEntryPrefixSrc } from './phase-entry-grammar.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -1686,14 +1687,15 @@ function computeBracketPlan(cwd: string): MigrationPlan {
   // bullet stayed legacy after an otherwise-done migration, so the
   // bracket-mode milestone id set carried the stale legacy token alongside
   // the bracket ones.
-  const CHECKLIST_BULLET_PREFIX_SRC = '[-*]\\s*\\[[ x]\\]\\s*\\*{0,2}';
+  // #5764: the prefix is the phase-entry grammar's (line-anchored, indent included).
+  const CHECKLIST_BULLET_PREFIX_SRC = phaseEntryPrefixSrc();
   const CHECKLIST_PHASE_INTRO_SRC = phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, undefined, true);
   const mnnChecklistRe = new RegExp(
-    `^(\\s*${CHECKLIST_BULLET_PREFIX_SRC})${CHECKLIST_PHASE_INTRO_SRC}(${MNN_SOURCE_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})`,
+    `(${CHECKLIST_BULLET_PREFIX_SRC})${CHECKLIST_PHASE_INTRO_SRC}(${MNN_SOURCE_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})`,
     'i',
   );
   const legacyChecklistRe = new RegExp(
-    `^(\\s*${CHECKLIST_BULLET_PREFIX_SRC})${CHECKLIST_PHASE_INTRO_SRC}(${PHASE_NUMBER_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})`,
+    `(${CHECKLIST_BULLET_PREFIX_SRC})${CHECKLIST_PHASE_INTRO_SRC}(${PHASE_NUMBER_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})`,
     'i',
   );
 
@@ -2068,8 +2070,9 @@ function computeMigrationPlan(cwd: string, options: Record<string, unknown> = {}
     if (roadmapEdits.some(e => e.lineIndex === i)) continue;
 
     // Match checklist items: "- [ ] **Phase N:**" or "- [x] Phase N:"  (also decimal)
+    // The entry prefix (marker, box, bold token) is the phase-entry grammar's (#5764).
     const checklistMatch = line.match(
-      new RegExp(`^(\\s*-\\s*\\[[ x]\\]\\s*\\*{0,2}Phase\\s+)(${PHASE_NUMBER_TOKEN_SOURCE})(\\s*[:\\s*])`, 'i')
+      new RegExp(`(${phaseEntryPrefixSrc()}Phase[ \\t]+)(${PHASE_NUMBER_TOKEN_SOURCE})(\\s*[:\\s*])`, 'i')
     );
     if (checklistMatch) {
       const legacyNum = checklistMatch[2];
@@ -2099,7 +2102,7 @@ function computeMigrationPlan(cwd: string, options: Record<string, unknown> = {}
 
       if (newId) {
         const newLine = line.replace(
-          new RegExp(`^(\\s*-\\s*\\[[ x]\\]\\s*\\*{0,2}Phase\\s+)${PHASE_NUMBER_TOKEN_SOURCE}(\\s*[:\\s*])`, 'i'),
+          new RegExp(`(${phaseEntryPrefixSrc()}Phase[ \\t]+)${PHASE_NUMBER_TOKEN_SOURCE}(\\s*[:\\s*])`, 'i'),
           `$1${newId}$2`
         );
         if (newLine !== line) {

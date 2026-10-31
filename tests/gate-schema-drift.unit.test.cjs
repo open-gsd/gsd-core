@@ -287,10 +287,10 @@ describe('resolvePhaseDirByToken (gate-phase-context, shared by the schema- and 
       put(dir, '.planning/phases/11-expansion/keep.txt', 'x\n');
       put(dir, '.planning/phases/01-core/keep.txt', 'x\n');
       const phasesDir = path.join(dir, '.planning', 'phases');
-      assert.equal(phaseContext.resolvePhaseDirByToken(phasesDir, '1'), path.join(phasesDir, '01-core'));
-      assert.equal(phaseContext.resolvePhaseDirByToken(phasesDir, '01'), path.join(phasesDir, '01-core'));
-      assert.equal(phaseContext.resolvePhaseDirByToken(phasesDir, '11'), path.join(phasesDir, '11-expansion'));
-      assert.equal(phaseContext.resolvePhaseDirByToken(phasesDir, '2'), null);
+      assert.equal(phaseContext.resolvePhaseDirByToken(dir, phasesDir, '1'), path.join(phasesDir, '01-core'));
+      assert.equal(phaseContext.resolvePhaseDirByToken(dir, phasesDir, '01'), path.join(phasesDir, '01-core'));
+      assert.equal(phaseContext.resolvePhaseDirByToken(dir, phasesDir, '11'), path.join(phasesDir, '11-expansion'));
+      assert.equal(phaseContext.resolvePhaseDirByToken(dir, phasesDir, '2'), null);
     } finally {
       cleanup(dir);
     }
@@ -302,8 +302,8 @@ describe('resolvePhaseDirByToken (gate-phase-context, shared by the schema- and 
       put(dir, '.planning/phases/custom-name/keep.txt', 'x\n');
       put(dir, '.planning/outside/keep.txt', 'x\n');
       const phasesDir = path.join(dir, '.planning', 'phases');
-      assert.equal(phaseContext.resolvePhaseDirByToken(phasesDir, 'custom-name'), path.join(phasesDir, 'custom-name'));
-      assert.equal(phaseContext.resolvePhaseDirByToken(phasesDir, '../outside'), null);
+      assert.equal(phaseContext.resolvePhaseDirByToken(dir, phasesDir, 'custom-name'), path.join(phasesDir, 'custom-name'));
+      assert.equal(phaseContext.resolvePhaseDirByToken(dir, phasesDir, '../outside'), null);
     } finally {
       cleanup(dir);
     }

@@ -71,7 +71,7 @@ function runSchemaDriftGate(cwd: string, phaseArg: string, skipFlag: boolean): G
   // matching "11-expansion"), making the drift gate inspect the wrong phase.
   // This shares the one selection rule with find-phase / verify
   // phase-completeness rather than restating it. (#1571, #2528)
-  const phaseDir = resolvePhaseDirByToken(phasesDir, phaseArg);
+  const phaseDir = resolvePhaseDirByToken(cwd, phasesDir, phaseArg);
 
   if (!phaseDir) {
     // An unresolvable phase is "could not look" (#5170): there is no phase directory to evaluate.

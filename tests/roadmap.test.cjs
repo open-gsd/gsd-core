@@ -10,8 +10,13 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup, captureFdSync } = require('./helpers.cjs');
-const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const { runGsdTools, createTempProject, cleanup, captureFdSync, TOOLS_PATH, TEST_ENV_BASE } = require('./helpers.cjs');
+const processSeam = require('./helpers/process-seam.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+const { scanFencedBlocks, tokenizeHeadings, collectSection, iterateBullets } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const { splitTableRow, isDelimiterRow } = require('../gsd-core/bin/lib/markdown-table.cjs');
+const { extractPhaseFieldMultiline } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
 
 describe('roadmap get-phase command', () => {
   let tmpDir;
@@ -2677,6 +2682,367 @@ describe('regressions: insert missing plan rows (#1163) — adversarial: partial
 });
 
 
+describe('#5483: update-plan-progress ticks only the active milestone row', () => {
+  let tmpDir;
+  let roadmapPath;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-5483-');
+    roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  const ARCHIVED = [
+    '<details>',
+    '<summary>v0.9 - shipped</summary>',
+    '',
+    '### Phase 1: test phase',
+    '',
+    'Plans:',
+    '- [ ] 01-01-PLAN.md',
+    '',
+    '</details>',
+    '',
+  ].join('\n');
+
+  // Structured readers over the product's sectionizer; no rendered-text matching.
+  const sectionizer = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+  const tickedPlanRows = (text) => sectionizer.iterateBullets(text)
+    .filter((b) => b.checked === true)
+    .map((b) => /^(?:\*\*)?(\d+-\d+-PLAN\.md)/.exec(b.text)?.[1])
+    .filter(Boolean);
+  const archivedBlocks = (text) => sectionizer.extractTaggedBlocks(text, 'details');
+  const tickedInArchived = (text) => tickedPlanRows(archivedBlocks(text).join('\n'));
+  const tickedInActive = (text) => tickedPlanRows(sectionizer.stripTaggedBlocks(text, 'details'));
+  const P1 = ['01-01-PLAN.md'];
+  const S1 = ['01-01-SUMMARY.md'];
+
+  const assertArchivedUntouched = (input, written) =>
+    assert.deepStrictEqual(archivedBlocks(written), archivedBlocks(input));
+
+  test('archived and active rows share a plan id: active ticked, archived byte-identical', () => {
+    const active = '## Milestone v1.0\n\n### Phase 1: test phase\n\nPlans:\n- [ ] 01-01-PLAN.md\n';
+    const input = `# ROADMAP\n\n${ARCHIVED}${active}`;
+    const written = setupPhase(1, input, P1, S1);
+    assertArchivedUntouched(input, written);
+    assert.deepStrictEqual(tickedInArchived(written), []);
+    assert.deepStrictEqual(tickedInActive(written), ['01-01-PLAN.md']);
+  });
+
+  test('plan row under a #### sub-heading of the phase section is present: no duplicate row inserted', () => {
+    const active = '## Milestone v1.0\n\n### Phase 1: test phase\n\nPlans:\n\n#### Plan list\n\n- [ ] 01-01-PLAN.md\n';
+    const written = setupPhase(1, `# ROADMAP\n\n${active}`, P1, S1);
+    const rows = sectionizer.iterateBullets(written).filter((b) => b.text.startsWith('01-01-PLAN.md'));
+    assert.deepStrictEqual(rows.map((b) => b.checked), [true]);
+  });
+
+  test('verb-inserted active row is ticked exactly once, archived row untouched', () => {
+    const active = '## Milestone v1.0\n\n### Phase 1: test phase\n\nPlans:\n';
+    const input = `# ROADMAP\n\n${ARCHIVED}${active}`;
+    const written = setupPhase(1, input, P1, S1);
+    assertArchivedUntouched(input, written);
+    assert.deepStrictEqual(tickedInArchived(written), []);
+    assert.deepStrictEqual(tickedInActive(written), ['01-01-PLAN.md']);
+  });
+
+  test('plan id only in archived milestone: ticked nowhere, archived byte-identical', () => {
+    // Active phase has no `Plans:` anchor, so nothing can be inserted there.
+    const active = '## Milestone v1.0\n\n### Phase 1: test phase\n\nNo plan list yet.\n';
+    const input = `# ROADMAP\n\n${ARCHIVED}${active}`;
+    const written = setupPhase(1, input, P1, S1);
+    assertArchivedUntouched(input, written);
+    assert.deepStrictEqual(tickedPlanRows(written), []);
+  });
+
+  function setupPhase(n, roadmap, plans = ['01-PLAN.md'], summaries = ['01-SUMMARY.md'], verified = false) {
+    fs.writeFileSync(roadmapPath, roadmap);
+    const dir = createPhaseWithPlans(tmpDir, String(n), plans);
+    for (const f of summaries) fs.writeFileSync(path.join(dir, f), '# Summary\n');
+    // A passed verification makes the phase complete, which stamps its checklist bullet. Written after the
+    // summaries: a summary newer than the verification marks the phase stale, and macOS/Windows mtimes are finer than Linux's.
+    if (verified) fs.writeFileSync(path.join(dir, `0${n}-VERIFICATION.md`), '---\nstatus: passed\n---\n# Verification\n');
+    const result = runGsdTools(['roadmap', 'update-plan-progress', String(n)], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    return fs.readFileSync(roadmapPath, 'utf-8');
+  }
+  const setupPhase2 = (roadmap) => setupPhase(2, roadmap);
+  // A Progress table is the write gate's phase representation for layouts without a phase heading.
+  const TABLE = '\n## Progress\n\n| Phase | Plans Complete | Status | Completed |\n|-------|---------------|--------|-----------|\n| 1. One | 0/1 | Planned |  |\n| 2. Two | 0/2 | Planned |  |\n';
+  const TWO = ['01-PLAN.md', '02-PLAN.md'];
+
+  test('un-prefixed plan names: updating phase 2 ticks only phase 2 row (existing-row loop)', () => {
+    const p1 = '### Phase 1: first\n\nPlans:\n- [ ] 01-PLAN.md\n\n';
+    const p2 = '### Phase 2: test phase\n\nPlans:\n- [ ] 01-PLAN.md\n';
+    const written = setupPhase2(`# ROADMAP\n\n## Milestone v1.0\n\n${p1}${p2}`);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [false, true]);
+  });
+
+  test('post-insert tick stays inside phase 2 section', () => {
+    // `01.5-PLAN.md` is not 01's presence (dotted sub-id) so 01 is inserted, but the
+    // prefix-matching tick would hit it first in file order without section scoping.
+    const p1 = '### Phase 1: first\n\nPlans:\n- [ ] 01.5-PLAN.md\n\n';
+    const p2 = '### Phase 2: test phase\n\nPlans:\n';
+    const written = setupPhase2(`# ROADMAP\n\n## Milestone v1.0\n\n${p1}${p2}`);
+    assert.deepStrictEqual(sectionizer.iterateBullets(written).map((b) => [b.text, b.checked]), [['01.5-PLAN.md', false], ['01-PLAN.md', true]]);
+  });
+
+  test('phase 2 section located without its row: sibling phase 1 same-id row stays unticked', () => {
+    const p1 = '### Phase 1: first\n\nPlans:\n- [ ] 01-PLAN.md\n\n';
+    const written = setupPhase(2, `# ROADMAP\n\n## Milestone v1.0\n\n${p1}### Phase 2: test phase\n\nNo plan list yet.\n${TABLE}`);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [false]);
+  });
+
+  test('detail section with empty Plans: plus flat checklist rows: no duplicate row, checklist row ticked', () => {
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n- [ ] **Phase 1: One**\n- [ ] 01-01-PLAN.md\n\n### Phase 1: One\n\nPlans:\n${TABLE}`, ['01-01-PLAN.md'], ['01-01-SUMMARY.md']);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [true]);
+  });
+
+  test('checklist bullet without rows: sibling phase nested same-id row stays unticked', () => {
+    const written = setupPhase(2, `# ROADMAP\n\n## Milestone v1.0\n\n- [ ] **Phase 1: One**\n  - [ ] 01-PLAN.md\n- [ ] **Phase 2: Two**\n${TABLE}`);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [false]);
+  });
+
+  test('a <details> block after the active milestone does not disable ticking', () => {
+    const active = '## Milestone v1.0\n\n### Phase 1: test phase\n\nPlans:\n- [ ] 01-01-PLAN.md\n\n';
+    const notes = '<details>\n<summary>Notes</summary>\n\nlater\n\n</details>\n';
+    const table = '## Progress\n\n| Phase | Plans Complete | Status | Completed |\n|-------|---------------|--------|-----------|\n| 1. test phase | 0/1 | Planned |  |\n\n';
+    // The Progress table after the notes block is the write gate's target.
+    const input = `# ROADMAP\n\n${ARCHIVED}${active}${notes}\n${table}`;
+    const written = setupPhase(1, input, P1, S1);
+    assertArchivedUntouched(input, written);
+    assert.deepStrictEqual(tickedInArchived(written), []);
+    assert.deepStrictEqual(tickedInActive(written), ['01-01-PLAN.md']);
+  });
+
+  test('CRLF roadmap: only the active row is ticked', () => {
+    // Line-ending normalization is the write seam's job; compare EOL-folded text.
+    const active = '## Milestone v1.0\n\n### Phase 1: test phase\n\nPlans:\n- [ ] 01-01-PLAN.md\n';
+    const input = `# ROADMAP\n\n${ARCHIVED}${active}`;
+    const written = setupPhase(1, input.replace(/\n/g, '\r\n'), P1, S1).replace(/\r\n/g, '\n');
+    assertArchivedUntouched(input, written);
+    assert.deepStrictEqual(tickedInArchived(written), []);
+    assert.deepStrictEqual(tickedInActive(written), ['01-01-PLAN.md']);
+  });
+
+  test('phase 1 vs 10 vs 1.1 headings: updating phase 1 ticks only phase 1', () => {
+    const sec = (n) => `### Phase ${n}: p${n}\n\nPlans:\n- [ ] 01-PLAN.md\n\n`;
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n${sec('10')}${sec('1.1')}${sec('1')}`);
+    // File order: phase 10, 1.1, 1.
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [false, false, true]);
+  });
+
+  // Owns temp-dir creation and cleanup so test bodies need no try/finally.
+  const withTempProject = (prefix, fn) => {
+    const dir = createTempProject(prefix);
+    try {
+      return fn(dir);
+    } finally {
+      cleanup(dir);
+    }
+  };
+
+  test('property: in any section order, only the updated phase\'s un-prefixed row is ticked', () => {
+    const fc = require('./helpers/fast-check-setup.cjs');
+    const sec = (n) => `### Phase ${n}: p${n}\n\nPlans:\n- [ ] 01-PLAN.md\n\n`;
+    fc.assert(fc.property(
+      fc.shuffledSubarray(['1', '2', '10', '1.1'], { minLength: 4, maxLength: 4 }),
+      fc.constantFrom('1', '2', '10'),
+      (order, target) => withTempProject('gsd-5483-prop-', (dir) => {
+        fs.writeFileSync(path.join(dir, '.planning', 'ROADMAP.md'), `# ROADMAP\n\n## Milestone v1.0\n\n${order.map(sec).join('')}`);
+        const phaseDir = createPhaseWithPlans(dir, target, ['01-PLAN.md']);
+        fs.writeFileSync(path.join(phaseDir, '01-SUMMARY.md'), '# Summary\n');
+        const result = runGsdTools(['roadmap', 'update-plan-progress', target], dir);
+        assert.ok(result.success, `Command failed: ${result.error}`);
+        const written = fs.readFileSync(path.join(dir, '.planning', 'ROADMAP.md'), 'utf-8');
+        // One row per section, in file order: exactly the target's is ticked.
+        assert.deepStrictEqual(planRows(written).map((b) => b.checked), order.map((n) => n === target), `order ${order} target ${target}`);
+      }),
+    ), { numRuns: 12 });
+  });
+
+  test('nested checklist: updating phase 2 leaves phase 1 nested row unticked', () => {
+    const written = setupPhase(2, `# ROADMAP\n\n## Milestone v1.0\n\n- [ ] **Phase 1: One**\n  - [ ] 01-PLAN.md\n  - [ ] 02-PLAN.md\n- [ ] **Phase 2: Two**\n  - [ ] 01-PLAN.md\n  - [ ] 02-PLAN.md\n${TABLE}`, TWO);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [false, false, true, false]);
+  });
+
+  test('milestone bullet mentioning "Phase 2" does not anchor phase 2 scope', () => {
+    const written = setupPhase(2, `# ROADMAP\n\n## Milestone v1.0\n\n- [ ] **v1.0 Milestone** - Phase 1 through Phase 2\n  - [ ] **Phase 1: One**\n    - [ ] 01-PLAN.md\n    - [ ] 02-PLAN.md\n  - [ ] **Phase 2: Two**\n    - [ ] 01-PLAN.md\n    - [ ] 02-PLAN.md\n${TABLE}`, TWO);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [false, false, true, false]);
+  });
+
+  test('bullet cross-referencing "Phase 1" listed first does not anchor phase 1 scope', () => {
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n- [ ] **Phase 2: Two** - builds on Phase 1 output\n  - [ ] 01-PLAN.md\n  - [ ] 02-PLAN.md\n- [ ] **Phase 1: One**\n  - [ ] 01-PLAN.md\n  - [ ] 02-PLAN.md\n${TABLE}`, TWO);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [false, false, true, false]);
+  });
+
+  test('rows under a #### sub-heading belong to the phase and tick (no-archive roadmaps behave as before)', () => {
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n### Phase 1: One\n\n#### Plans\n- [ ] 01-01-PLAN.md\n${TABLE}`, ['01-01-PLAN.md'], ['01-01-SUMMARY.md']);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [true]);
+  });
+
+  test('phase marked only by a bold paragraph still ticks via active-milestone fallback', () => {
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n**Phase 1: One**\n\n- [ ] 01-01-PLAN.md\n${TABLE}`, ['01-01-PLAN.md'], ['01-01-SUMMARY.md']);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [true]);
+  });
+
+  test('unscoped fallback ticks only the first matching row, not a later same-named row', () => {
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n**Phase 1: One**\n\n- [ ] 01-PLAN.md\n\n**Phase 2: Two**\n\n- [ ] 01-PLAN.md\n${TABLE}`);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [true, false]);
+  });
+
+  test('a deeper sibling phase heading ends the phase scope: its same-id row stays unticked', () => {
+    const written = setupPhase(1, '# ROADMAP\n\n## Milestone v1.0\n\n### Phase 1: One\n\nPlans:\n- [x] 01-01-PLAN.md\n\n#### Phase 1.1: Sub\n\nPlans:\n- [ ] 01-01-PLAN.md\n', P1, S1);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [true, false]);
+  });
+
+  test('an empty checklist-bullet extent does not count as located: the first matching row still ticks', () => {
+    const written = setupPhase(1, '# ROADMAP\n\n## Milestone v1.0\n\n- [ ] **Phase 1: One**\n- [ ] **Phase 2: Two**\n\n### Notes\n\nPlans:\n- [ ] 01-01-PLAN.md\n', P1, S1, true);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [true]);
+  });
+
+  test('flat checklist with unindented plan rows ticks the rows under the phase bullet', () => {
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n- [ ] **Phase 1: One**\n- [ ] 01-01-PLAN.md\n${TABLE}`, ['01-01-PLAN.md'], ['01-01-SUMMARY.md']);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [true]);
+  });
+
+  test('a non-milestone <details> notes block with no Progress table after it still ticks the active row', () => {
+    const active = '## Milestone v1.0\n\n### Phase 1: test phase\n\nPlans:\n- [ ] 01-01-PLAN.md\n\n';
+    const notes = '<details>\n<summary>Notes</summary>\n\nlater\n\n</details>\n';
+    const written = setupPhase(1, `# ROADMAP\n\n${active}${notes}`, P1, S1);
+    assert.deepStrictEqual(tickedPlanRows(written), ['01-01-PLAN.md']);
+  });
+
+  test('primary window and (Phase Details) window: phase 2 in the details window ticks, phase 1 row stays unticked', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+    const roadmap = '# ROADMAP\n\n## Milestone v1.0\n\n- [ ] **Phase 1: One**\n  - [ ] 01-PLAN.md\n\n'
+      + '## Milestone v1.0 (Phase Details)\n\n### Phase 2: Two\n\nPlans:\n- [ ] 02-01-PLAN.md\n';
+    const written = setupPhase(2, roadmap, ['02-01-PLAN.md'], ['02-01-SUMMARY.md']);
+    assert.deepStrictEqual(tickedPlanRows(written), ['02-01-PLAN.md']);
+  });
+
+  const NOTES = '\n<details>\n<summary>Notes</summary>\n\nlater\n\n</details>\n';
+  const planRows = (text) => sectionizer.iterateBullets(text).filter((b) => /^(?:\*\*)?\d+(?:-\d+)?-PLAN\.md/.test(b.text));
+  const plansFieldValue = (text) => {
+    const planning = require('../gsd-core/bin/lib/planning-document.cjs');
+    const doc = planning.parsePlanningDoc(text, 'ROADMAP.md').value;
+    return planning.readNode(doc, planning.findField(doc, 'Plans')).value;
+  };
+  const phaseBulletChecked = (text, n) =>
+    sectionizer.iterateBullets(text).find((b) => b.text.startsWith(`**Phase ${n}`))?.checked;
+
+  test('Plans count is written when a non-milestone <details> block follows the active phase', () => {
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n### Phase 1: One\n\n**Plans**: 0/1 plans executed\n\nPlans:\n- [ ] 01-01-PLAN.md\n${NOTES}`, P1, S1);
+    assert.strictEqual(plansFieldValue(written).split(/\s/)[0], '1/1');
+  });
+
+  test('phase checklist bullet before a non-milestone <details> block is ticked', () => {
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n- [ ] **Phase 1: One**\n${NOTES}${TABLE}`, P1, S1, true);
+    assert.strictEqual(phaseBulletChecked(written, 1), true);
+  });
+
+  test('unscoped fallback never ticks a row in a shipped (non-details) milestone, before or after the active one', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+    const shipped = (v) => `## ✅ ${v} - shipped\n\n**Phase 1: One**\n\n- [ ] 01-PLAN.md\n\n`;
+    const active = '## 🚧 v1.0 - Active\n\n**Phase 1: One**\n\n- [ ] 01-PLAN.md\n\n';
+    const details = `<details>\n<summary>v0.7 - shipped</summary>\n\n**Phase 1: One**\n\n- [ ] 01-PLAN.md\n\n</details>\n\n`;
+    for (const doc of [`${shipped('v0.8')}${active}${shipped('v0.9')}`, `${details}${active}`]) {
+      const written = setupPhase(1, `# ROADMAP\n\n${doc}${TABLE}`);
+      assert.deepStrictEqual(planRows(written).map((b) => b.checked).filter(Boolean), [true]);
+    }
+  });
+
+  test('unscoped fallback decides once across the primary and (Phase Details) windows', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+    const row = '**Phase 1: One**\n\n- [ ] 01-PLAN.md\n\n';
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n${row}## Milestone v1.0 (Phase Details)\n\n${row}${TABLE}`);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [true, false]);
+  });
+
+  test('a phase present in both the primary and (Phase Details) windows gets its missing row inserted once', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+    const sec = '### Phase 1: One\n\nPlans:\n\n';
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n${sec}## Milestone v1.0 (Phase Details)\n\n${sec}${TABLE}`, P1, S1);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [true]);
+  });
+
+  // Progress-table cells of the row whose Phase cell starts with `n.`.
+  const progressRow = (text, n) => {
+    const row = require('../gsd-core/bin/lib/markdown-table.cjs')
+      .findTableWithColumns(text, ['Phase', 'Plans Complete']).rows
+      .find((r) => r['Phase'].startsWith(`${n}.`));
+    return [row['Phase'], row['Plans Complete']];
+  };
+
+  test('Progress table before a non-milestone <details> notes block is still written', () => {
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n### Phase 1: One\n\nPlans:\n- [ ] 01-01-PLAN.md\n${TABLE}${NOTES}`, P1, S1);
+    assert.deepStrictEqual(progressRow(written, 1).slice(0, 2), ['1. One', '1/1']);
+  });
+
+  test('Progress table in a resolved milestone window before a notes block is still written', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n### Phase 1: One\n\nPlans:\n- [ ] 01-01-PLAN.md\n${TABLE}${NOTES}`, P1, S1);
+    assert.deepStrictEqual(progressRow(written, 1).slice(0, 2), ['1. One', '1/1']);
+  });
+
+  test('Progress table after a planned milestone heading is still written (template layout)', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n### Phase 1: One\n\nPlans:\n- [ ] 01-01-PLAN.md\n\n## Milestone v2.0 (planned)\n\nLater.\n${TABLE}`, P1, S1);
+    assert.deepStrictEqual(progressRow(written, 1).slice(0, 2), ['1. One', '1/1']);
+  });
+
+  test('Progress table before the active milestone heading is still written', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+    const written = setupPhase(1, `# ROADMAP\n${TABLE}\n## Milestone v1.0\n\n### Phase 1: One\n\nPlans:\n- [ ] 01-01-PLAN.md\n`, P1, S1);
+    assert.deepStrictEqual(progressRow(written, 1).slice(0, 2), ['1. One', '1/1']);
+  });
+
+  test('sibling phase carrying the same un-prefixed row does not make the phase look present', () => {
+    const p1 = '### Phase 1: first\n\nPlans:\n- [ ] 01-PLAN.md\n\n';
+    const written = setupPhase(2, `# ROADMAP\n\n## Milestone v1.0\n\n${p1}### Phase 2: test phase\n\nPlans:\n${TABLE}`);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [false, true]);
+  });
+
+  test('a row in both the detail section and the phase checklist bullet is ticked in both', () => {
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n- [ ] **Phase 1: One**\n  - [ ] 01-01-PLAN.md\n\n### Phase 1: One\n\nPlans:\n- [ ] 01-01-PLAN.md\n${TABLE}`, P1, S1);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), [true, true]);
+  });
+
+  test('a <details> block inside the active milestone window is not edited', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+    const input = `# ROADMAP\n\n## Milestone v1.0\n\n${ARCHIVED}### Phase 1: One\n\nPlans:\n- [ ] 01-01-PLAN.md\n${TABLE}`;
+    const written = setupPhase(1, input, P1, S1);
+    assertArchivedUntouched(input, written);
+    assert.deepStrictEqual(tickedInActive(written), ['01-01-PLAN.md']);
+  });
+
+  test('no archived milestone: a phase section or plan row inside a collapsed <details> is masked with the other blocks (#5553 owns which regions are editable)', () => {
+    const wrapped = setupPhase(1, `# ROADMAP\n\n<details>\n<summary>Phase 1 details</summary>\n\n### Phase 1: One\n\nPlans:\n- [ ] 01-01-PLAN.md\n\n</details>\n${TABLE}`, P1, S1);
+    assert.deepStrictEqual(planRows(wrapped).map((b) => b.checked), [false]);
+    const nested = setupPhase(1, `# ROADMAP\n\n### Phase 1: One\n\n<details>\n<summary>Plans</summary>\n\n- [ ] 01-01-PLAN.md\n\n</details>\n${TABLE}`, P1, S1);
+    assert.deepStrictEqual(planRows(nested).map((b) => b.checked), [false]);
+  });
+
+  test('unresolved milestone: a notes <details> nested in a shipped block keeps the whole shipped block untouched', () => {
+    const shipped = '<details>\n<summary>v0.9 - shipped</summary>\n\n<details>\n<summary>Notes</summary>\n\nlater\n\n</details>\n\n### Phase 2: Old\n\nPlans: 1/1\n- [ ] 02-01-PLAN.md\n\n</details>\n';
+    const active = '### Phase 2: Two\n\nPlans: 0/2\n- [ ] 02-01-PLAN.md\n- [ ] 02-02-PLAN.md\n';
+    const input = `# ROADMAP\n\n${shipped}\n${active}${TABLE}`;
+    const written = setupPhase(2, input, ['02-01-PLAN.md', '02-02-PLAN.md'], ['02-01-SUMMARY.md', '02-02-SUMMARY.md']);
+    // The tagged-block helpers do not nest, so compare the whole shipped prefix.
+    const head = `# ROADMAP\n\n${shipped}`;
+    assert.strictEqual(written.slice(0, head.length), head);
+    assert.deepStrictEqual(planRows(written.slice(head.length)).map((b) => b.checked), [true, true]);
+  });
+
+  test('a "-[ ]" row (no space after the dash) is not a bullet and stays unticked, as in phase complete', () => {
+    const written = setupPhase(1, `# ROADMAP\n\n## Milestone v1.0\n\n### Phase 1: One\n\nPlans:\n-[ ] 01-01-PLAN.md\n${TABLE}`, P1, S1);
+    assert.deepStrictEqual(planRows(written).map((b) => b.checked), []);
+  });
+});
+
+
 // ────────────────────────────────────────────────────────────────────────
 // Folded from tests/bug-2661-roadmap-sync-parallel.test.cjs — consolidation epic #1969 (B2 #1971)
 // ────────────────────────────────────────────────────────────────────────
@@ -3399,6 +3765,416 @@ Plans:
     const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
     const waveMatches = roadmap.match(/\*\*Wave \d+\*\*/g) || [];
     assert.strictEqual(waveMatches.length, 2, 'exactly 2 wave headers (not doubled)');
+  });
+
+  describe('#5321: re-annotation after replan', () => {
+    const ROADMAP4 = `# Roadmap
+
+### Phase 1: Foundation
+**Goal:** Set up project
+**Plans:** 4 plans
+
+Plans:
+- [ ] 01-01-PLAN.md — One
+- [ ] 01-02-PLAN.md — Two
+- [ ] 01-03-PLAN.md — Three
+- [ ] 01-04-PLAN.md — Four
+
+### Phase 2: Next
+**Goal:** Later
+`;
+    // Generated constraints block followed by a hand-written checklist bullet.
+    const ROADMAP_GEN_HAND_BULLET = ROADMAP4.replace(
+      '- [ ] 01-04-PLAN.md — Four\n',
+      '- [ ] 01-04-PLAN.md — Four\n\n**Cross-cutting constraints:** <!-- gsd:generated -->\n- Shared rule\n\n- [ ] confirm with design\n',
+    );
+    const planPath = (n) => path.join('.planning', 'phases', '01-foundation', `01-0${n}-PLAN.md`);
+    const roadmapFile = () => path.join(tmpDir, '.planning', 'ROADMAP.md');
+    const makeFour = (waves, truths = [[], [], [], []], roadmap = ROADMAP4) => makePlanProject({
+      '.planning/ROADMAP.md': roadmap,
+      ...Object.fromEntries(waves.map((w, i) => [planPath(i + 1), PLAN_TEMPLATE(w, truths[i])])),
+    });
+    const setPlan = (n, wave, truths = []) =>
+      fs.writeFileSync(path.join(tmpDir, planPath(n)), PLAN_TEMPLATE(wave, truths), 'utf-8');
+    const run = () => {
+      const r = runGsdTools('roadmap annotate-dependencies 1', tmpDir);
+      assert.ok(r.success, `Command failed: ${r.error}`);
+      return JSON.parse(r.output);
+    };
+
+    test('replanned wave change is regrouped without duplicate headers', () => {
+      tmpDir = makeFour([1, 2, 3, 3]);
+      run();
+      setPlan(4, 4);
+      const out = run();
+      assert.strictEqual(out.updated, true);
+      const roadmap = fs.readFileSync(roadmapFile(), 'utf-8');
+      assert.strictEqual((roadmap.match(/\*\*Wave \d+\*\*/g) || []).length, 4, 'one header per new wave');
+      assert.ok(
+        roadmap.includes(
+          '**Wave 3** *(blocked on Wave 2 completion)*\n- [ ] 01-03-PLAN.md — Three\n\n' +
+          '**Wave 4** *(blocked on Wave 3 completion)*\n- [ ] 01-04-PLAN.md — Four\n',
+        ),
+        'plans grouped under new waves',
+      );
+      assert.strictEqual((roadmap.match(/### Phase 2: Next/g) || []).length, 1, 'next phase intact');
+      assert.strictEqual(run().updated, false, 'immediate re-run is a no-op');
+      assert.strictEqual(fs.readFileSync(roadmapFile(), 'utf-8'), roadmap);
+    });
+
+    test('immediate re-run is byte-identical and reports updated:false', () => {
+      tmpDir = makeFour([1, 2, 3, 3], [['Shared rule'], ['Shared rule'], [], []]);
+      run();
+      setPlan(4, 4);
+      run();
+      const before = fs.readFileSync(roadmapFile(), 'utf-8');
+      const out = run();
+      assert.strictEqual(out.updated, false);
+      assert.strictEqual(fs.readFileSync(roadmapFile(), 'utf-8'), before);
+    });
+
+    test('collapsing to a single wave removes the old wave headers', () => {
+      tmpDir = makeFour([1, 2, 3, 3]);
+      run();
+      for (const n of [1, 2, 3, 4]) setPlan(n, 1);
+      const out = run();
+      assert.strictEqual(out.updated, true);
+      const roadmap = fs.readFileSync(roadmapFile(), 'utf-8');
+      assert.ok(!/\*\*Wave \d+\*\*/.test(roadmap), 'no wave headers remain');
+      assert.ok(!roadmap.includes('blocked on'), 'no blocked-on notes remain');
+      assert.strictEqual((roadmap.match(/- \[ \] 01-0\d-PLAN\.md/g) || []).length, 4, 'all 4 plans kept');
+      assert.strictEqual(run().updated, false, 'immediate re-run is a no-op');
+      assert.strictEqual(fs.readFileSync(roadmapFile(), 'utf-8'), roadmap);
+    });
+
+    test('CRLF ROADMAP.md re-annotates cleanly (platformWriteSync normalizes .md to LF)', () => {
+      tmpDir = makeFour([1, 2, 3, 3], undefined, ROADMAP4.replace(/\n/g, '\r\n'));
+      run();
+      setPlan(4, 4);
+      run();
+      const roadmap = fs.readFileSync(roadmapFile(), 'utf-8');
+      assert.strictEqual((roadmap.match(/\*\*Wave \d+\*\*/g) || []).length, 4);
+      assert.ok(!roadmap.includes('\r'), 'no stray CR');
+      assert.ok(!roadmap.includes('\n\n\n'), 'no duplicate blank lines');
+    });
+
+    for (const truth of ['[Invariant] x', '[ ] x', '[x] x']) {
+      test(`bracket-leading truth "${truth}" round-trips and stays out of the plan list`, () => {
+        const q = JSON.stringify(truth); // unquoted leading `[` is a YAML flow sequence
+        tmpDir = makeFour([1, 1, 2, 2], [[q], [q], ['Solo A'], ['Solo B']]);
+        run();
+        const first = fs.readFileSync(roadmapFile(), 'utf-8');
+        assert.ok(first.includes(`- ${truth}`), 'constraint bullet emitted');
+        const out = run();
+        assert.strictEqual(out.updated, false);
+        assert.strictEqual(fs.readFileSync(roadmapFile(), 'utf-8'), first);
+        const wave1 = first.split('**Wave 2**')[0];
+        assert.ok(!wave1.includes(`- ${truth}`), 'constraint not injected into Wave 1');
+      });
+    }
+
+    test('prose starting with **Wave N** after the checklist is preserved', () => {
+      const roadmap = ROADMAP4.replace(
+        '- [ ] 01-04-PLAN.md — Four\n',
+        '- [ ] 01-04-PLAN.md — Four\n**Wave 9** is deferred\n',
+      );
+      tmpDir = makeFour([1, 2, 3, 3], undefined, roadmap);
+      run();
+      run();
+      assert.ok(fs.readFileSync(roadmapFile(), 'utf-8').includes('**Wave 9** is deferred'));
+    });
+
+    test('standalone **Wave N** heading followed by prose is preserved', () => {
+      const roadmap = ROADMAP4.replace(
+        '- [ ] 01-04-PLAN.md — Four\n',
+        '- [ ] 01-04-PLAN.md — Four\n**Wave 9**\n\nsome prose\n',
+      );
+      tmpDir = makeFour([1, 2, 3, 3], undefined, roadmap);
+      run();
+      run();
+      assert.ok(fs.readFileSync(roadmapFile(), 'utf-8').includes('**Wave 9**\n\nsome prose'));
+    });
+
+    test('bullets directly under a generated constraints heading are machine-owned and regenerated (m1)', () => {
+      tmpDir = makeFour([1, 1, 2, 2], [['Shared rule'], ['Shared rule'], ['Solo A'], ['Solo B']]);
+      run();
+      const rp = roadmapFile();
+      fs.writeFileSync(rp, fs.readFileSync(rp, 'utf-8').replace('- Shared rule\n', '- Shared rule\n- my note\n'), 'utf-8');
+      assert.ok(fs.readFileSync(rp, 'utf-8').includes('- my note'), 'fixture edit landed');
+      run();
+      const after = fs.readFileSync(rp, 'utf-8');
+      assert.ok(!after.includes('my note'), 'contiguous bullet is regenerated away');
+      assert.ok(
+        after.includes('**Cross-cutting constraints:** <!-- gsd:generated -->\n- Shared rule\n'),
+        'generated block is re-emitted',
+      );
+    });
+
+    test('user bullet after a generated constraints block survives re-runs', () => {
+      tmpDir = makeFour([1, 1, 2, 2], [['Shared rule'], ['Shared rule'], ['Solo A'], ['Solo B']]);
+      run();
+      const rp = roadmapFile();
+      fs.writeFileSync(rp, fs.readFileSync(rp, 'utf-8').replace('- Shared rule\n', '- Shared rule\n\n- foo\n'), 'utf-8');
+      run();
+      const first = fs.readFileSync(rp, 'utf-8');
+      assert.ok(first.includes('- Shared rule\n\n- foo\n'), 'user bullet kept after blank separator');
+      const out = run();
+      assert.strictEqual(out.updated, false);
+      assert.strictEqual(fs.readFileSync(rp, 'utf-8'), first);
+    });
+
+    const runWithStderr = (...extra) => {
+      const r = processSeam.runNode([TOOLS_PATH, 'roadmap', 'annotate-dependencies', '1', ...extra], {
+        cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: PROBE_TIMEOUT_MS,
+      });
+      assert.strictEqual(r.exitCode, 0, r.stderr);
+      return r;
+    };
+
+    test('a hand-written bullet dropped under the generated heading is reported in the JSON (m3)', () => {
+      tmpDir = makeFour([1, 1, 2, 2], [['Shared rule'], ['Shared rule'], ['Solo A'], ['Solo B']]);
+      run();
+      const rp = roadmapFile();
+      fs.writeFileSync(rp, fs.readFileSync(rp, 'utf-8').replace('- Shared rule\n', '- Shared rule\n- my note\n'), 'utf-8');
+      assert.deepStrictEqual(run().dropped_generated_constraints, ['my note']);
+      assert.ok(!fs.readFileSync(rp, 'utf-8').includes('my note'));
+      assert.ok(!('dropped_generated_constraints' in run()), 'quiet once the bullet is gone');
+    });
+
+    test('dropping the generated block keeps the blank line that separates user bullets below it', () => {
+      const gen = '\n**Cross-cutting constraints:** <!-- gsd:generated -->\n- Shared\n\n';
+      const roadmap = ROADMAP4.replace('- [ ] 01-04-PLAN.md — Four\n', `- [ ] 01-04-PLAN.md — Four\n${gen}- my note\n`);
+      tmpDir = makeFour([1, 1, 2, 2], [['A'], ['B'], ['C'], ['D']], roadmap);
+      run();
+      assert.ok(fs.readFileSync(roadmapFile(), 'utf-8').includes('- [ ] 01-04-PLAN.md — Four\n\n- my note\n'));
+    });
+
+    test('a hand-written checklist bullet after the generated block does not stall annotation', () => {
+      const roadmap = ROADMAP_GEN_HAND_BULLET;
+      tmpDir = makeFour([1, 2, 3, 3], [['Shared rule'], ['Shared rule'], [], []], roadmap);
+      const out = run();
+      assert.ok(!out.skipped);
+      assert.ok(fs.readFileSync(roadmapFile(), 'utf-8').includes('- [ ] confirm with design'));
+    });
+
+    test('a blank line after the Plans: header or between plan rows still annotates (pre-#5321 layouts)', () => {
+      for (const roadmap of [
+        ROADMAP4.replace('Plans:\n', 'Plans:\n\n'),
+        ROADMAP4.replace('- [ ] 01-02-PLAN.md', '\n- [ ] 01-02-PLAN.md'),
+      ]) {
+        tmpDir = makeFour([1, 2, 3, 4], [['A'], ['B'], ['C'], ['D']], roadmap);
+        const out = run();
+        assert.strictEqual(out.updated, true);
+        assert.ok(!out.skipped);
+        assert.ok(fs.readFileSync(roadmapFile(), 'utf-8').includes('**Wave 2** *(blocked on Wave 1 completion)*'));
+      }
+    });
+
+    describe('legacy constraints block (no trailing blank line)', () => {
+      const legacy = (truths) => ROADMAP4.replace(
+        '- [ ] 01-04-PLAN.md — Four\n',
+        `- [ ] 01-04-PLAN.md — Four\n\n**Cross-cutting constraints:**\n${truths.map(t => `- ${t}\n`).join('')}`,
+      );
+      test('keeps a user bullet that is not a current shared truth', () => {
+        tmpDir = makeFour([1, 1, 2, 2], [['Shared rule'], ['Shared rule'], ['Solo A'], ['Solo B']],
+          legacy(['Shared rule', 'user note']));
+        run();
+        const first = fs.readFileSync(roadmapFile(), 'utf-8');
+        assert.strictEqual((first.match(/- Shared rule/g) || []).length, 1, 'generated bullet not duplicated');
+        assert.ok(first.includes('- user note'), 'user bullet kept');
+        assert.ok(first.indexOf('- user note') > first.indexOf('- Shared rule'), 'kept after generated block');
+        assert.strictEqual(run().updated, false);
+        assert.strictEqual(fs.readFileSync(roadmapFile(), 'utf-8'), first);
+      });
+      test('keeps a user bullet when no truths are shared any more', () => {
+        tmpDir = makeFour([1, 2, 3, 4], [['A'], ['B'], ['C'], ['D']], legacy(['user note']));
+        run();
+        const first = fs.readFileSync(roadmapFile(), 'utf-8');
+        assert.ok(first.includes('- user note'), 'user bullet kept');
+        assert.ok(!first.includes('**Cross-cutting constraints:**'), 'legacy heading removed');
+        assert.strictEqual(run().updated, false);
+        assert.strictEqual(fs.readFileSync(roadmapFile(), 'utf-8'), first);
+      });
+    });
+
+    test('legacy bullets equal to a current plan truth are regenerated; others are kept and reported (M3)', () => {
+      const legacy = ROADMAP4.replace(
+        '- [ ] 01-04-PLAN.md — Four\n',
+        '- [ ] 01-04-PLAN.md — Four\n\n**Cross-cutting constraints:**\n- Old rule\n- user note\n',
+      );
+      tmpDir = makeFour([1, 1, 2, 2], [['Old rule'], [], ['Solo A'], ['Solo B']], legacy);
+      const out = run();
+      const roadmap = fs.readFileSync(roadmapFile(), 'utf-8');
+      assert.ok(!roadmap.includes('- Old rule'), 'bullet matching a current plan truth is dropped');
+      assert.ok(roadmap.includes('- user note'), 'unknown bullet kept');
+      assert.deepStrictEqual(out.stale_legacy_constraints, ['user note']);
+    });
+
+    test('no stale_legacy_constraints key when nothing legacy was kept', () => {
+      tmpDir = makeFour([1, 1, 2, 2], [['Shared rule'], ['Shared rule'], [], []]);
+      assert.ok(!('stale_legacy_constraints' in run()));
+    });
+
+    test('indented detail line before a later plan row skips instead of orphaning it (m1)', () => {
+      const roadmap = ROADMAP4.replace(
+        '- [ ] 01-01-PLAN.md — One\n',
+        '- [ ] 01-01-PLAN.md — One\n  - detail line\n',
+      );
+      tmpDir = makeFour([1, 2, 3, 3], undefined, roadmap);
+      const out = run();
+      assert.strictEqual(out.updated, false);
+      assert.strictEqual(out.skipped, 'unrecognised_checklist_row');
+      assert.strictEqual(fs.readFileSync(roadmapFile(), 'utf-8'), roadmap);
+    });
+
+    test('a checklist in a later section is not mistaken for a stranded plan row (m1)', () => {
+      const roadmap = ROADMAP4.replace(
+        '- [ ] 01-04-PLAN.md — Four\n',
+        '- [ ] 01-04-PLAN.md — Four\n\n**Success Criteria:**\n- [ ] ships\n',
+      );
+      tmpDir = makeFour([1, 2, 3, 3], undefined, roadmap);
+      const out = run();
+      assert.strictEqual(out.updated, true);
+      assert.ok(!out.skipped);
+      assert.ok(fs.readFileSync(roadmapFile(), 'utf-8').includes('**Success Criteria:**\n- [ ] ships'));
+    });
+
+    test('property: any replan regroups waves, keeps every plan once, and re-runs idempotently (M2)', (t) => {
+      const fc = require('./helpers/fast-check-setup.cjs');
+      const waves = fc.array(fc.integer({ min: 1, max: 4 }), { minLength: 4, maxLength: 4 });
+      const truth = fc.array(fc.constantFrom('Shared rule', 'Other rule', 'Solo'), { maxLength: 2 });
+      const dirs = [];
+      t.after(() => dirs.forEach(cleanup));
+      fc.assert(fc.property(waves, waves, fc.array(truth, { minLength: 4, maxLength: 4 }), (before, after, truths) => {
+        tmpDir = makeFour(before, truths);
+        dirs.push(tmpDir);
+        run();
+        after.forEach((w, i) => setPlan(i + 1, w, truths[i]));
+        run();
+        const first = fs.readFileSync(roadmapFile(), 'utf-8');
+        const distinct = [...new Set(after)].sort((a, b) => a - b);
+        const headers = (first.match(/\*\*Wave (\d+)\*\*/g) || []).map(h => Number(h.match(/\d+/)[0]));
+        assert.deepStrictEqual(headers, distinct.length > 1 ? distinct : []);
+        for (let n = 1; n <= 4; n++) {
+          assert.strictEqual((first.match(new RegExp(`- \\[ \\] 01-0${n}-PLAN\\.md`, 'g')) || []).length, 1);
+        }
+        // every plan sits under its own wave's header
+        if (distinct.length > 1) {
+          after.forEach((w, i) => {
+            const rest = splitLines(first);
+            const at = rest.findIndex(l => l.includes(`**Wave ${w}**`));
+            const end = rest.findIndex((l, j) => j > at && (l === '' || l.includes('**Wave')));
+            const seg = rest.slice(at + 1, end < 0 ? undefined : end).join('\n');
+            assert.ok(seg.includes(`01-0${i + 1}-PLAN.md`), `plan ${i + 1} under wave ${w}`);
+          });
+        }
+        // PLAN_TEMPLATE writes `(none)` for a plan with no truths, so those plans share it
+        const perPlan = truths.map(ts => (ts.length ? ts : ['(none)']));
+        const sharedAny = perPlan.some(ts => ts.some(t => perPlan.filter(o => o.includes(t)).length >= 2));
+        assert.strictEqual(first.includes('**Cross-cutting constraints:**'), sharedAny);
+        const again = run();
+        assert.strictEqual(again.updated, false);
+        assert.strictEqual(fs.readFileSync(roadmapFile(), 'utf-8'), first);
+
+      }), { numRuns: 25, seed: 5321 });
+    });
+
+    test('user "**Cross-cutting constraints:** keep X" header and bullets are preserved', () => {
+      const roadmap = ROADMAP4.replace(
+        '- [ ] 01-04-PLAN.md — Four\n',
+        '- [ ] 01-04-PLAN.md — Four\n**Cross-cutting constraints:** keep X\n- user bullet\n',
+      );
+      tmpDir = makeFour([1, 2, 3, 3], undefined, roadmap);
+      run();
+      const out = fs.readFileSync(roadmapFile(), 'utf-8');
+      assert.ok(out.includes('**Cross-cutting constraints:** keep X\n- user bullet'));
+    });
+
+    test('a cross-cutting constraint no longer shared is removed', () => {
+      tmpDir = makeFour([1, 1, 2, 2], [['Shared rule'], ['Shared rule'], ['Solo A'], ['Solo B']]);
+      run();
+      assert.ok(fs.readFileSync(roadmapFile(), 'utf-8').includes('**Cross-cutting constraints:**'));
+      setPlan(2, 1, ['Different rule']);
+      const out = run();
+      assert.strictEqual(out.updated, true);
+      const roadmap = fs.readFileSync(roadmapFile(), 'utf-8');
+      assert.ok(!roadmap.includes('Cross-cutting constraints'), 'section removed');
+      assert.ok(!roadmap.includes('Shared rule'), 'stale constraint bullet removed');
+      assert.ok(roadmap.includes('### Phase 2: Next'), 'next phase intact');
+    });
+
+    test('user constraints header coexists with a generated block and re-runs are stable', () => {
+      const roadmap = ROADMAP4.replace(
+        '- [ ] 01-04-PLAN.md — Four\n',
+        '- [ ] 01-04-PLAN.md — Four\n\n**Cross-cutting constraints:** keep X\n- user bullet\n',
+      );
+      tmpDir = makeFour([1, 1, 2, 2], [['Shared rule'], ['Shared rule'], ['Solo A'], ['Solo B']], roadmap);
+      run();
+      const first = fs.readFileSync(roadmapFile(), 'utf-8');
+      assert.ok(first.includes('**Cross-cutting constraints:** <!-- gsd:generated -->\n- Shared rule\n'), 'generated block present');
+      assert.ok(first.includes('**Cross-cutting constraints:** keep X\n- user bullet'), 'user content kept');
+      assert.strictEqual(run().updated, false);
+      assert.strictEqual(fs.readFileSync(roadmapFile(), 'utf-8'), first);
+    });
+
+    describe('a checklist row the grammar rejects splits the list', () => {
+      const split = (middle) => ROADMAP4.replace(
+        '- [ ] 01-02-PLAN.md — Two\n',
+        middle,
+      );
+      const annotate = () => {
+        const r = runWithStderr();
+        return { out: JSON.parse(r.stdout), stderr: r.stderr };
+      };
+      const cases = {
+        'empty generated wave header': '\n**Wave 2** *(blocked on Wave 1 completion)*\n\n**Wave 3** *(blocked on Wave 2 completion)*\n- [ ] 01-02-PLAN.md — Two\n',
+        'double-space checkbox': '- [  ] 01-02-PLAN.md — Two\n',
+        'asterisk bullet': '* [ ] 01-02-PLAN.md — Two\n',
+      };
+      for (const [name, middle] of Object.entries(cases)) {
+        test(`${name}: file untouched and the skip is reported`, () => {
+          const roadmap = split(middle);
+          tmpDir = makeFour([1, 2, 3, 4], [['A'], ['B'], ['C'], ['D']], roadmap);
+          const { out } = annotate();
+          assert.strictEqual(out.updated, false);
+          assert.strictEqual(out.skipped, 'unrecognised_checklist_row');
+          assert.strictEqual(fs.readFileSync(roadmapFile(), 'utf-8'), roadmap, 'ROADMAP.md byte-identical');
+        });
+      }
+
+      test('the skip warning quotes the stranded row once', () => {
+        tmpDir = makeFour([1, 2, 3, 4], [['A'], ['B'], ['C'], ['D']], split(cases['double-space checkbox']));
+        const { stderr } = annotate();
+        assert.ok(stderr.includes('unrecognised checklist row "- [  ] 01-02-PLAN.md'), stderr);
+        assert.ok(!stderr.includes('""'), `row is double-quoted: ${stderr}`);
+      });
+
+      test('a hand-written checklist bullet after a dropped generated block stays out of the Plans list', () => {
+        const roadmap = ROADMAP_GEN_HAND_BULLET;
+        tmpDir = makeFour([1, 2, 3, 3], [['A'], ['B'], ['C'], ['D']], roadmap);
+        const lines = () => splitLines(fs.readFileSync(roadmapFile(), 'utf-8'));
+        const planRows = () => lines().filter(l => l.includes('-PLAN.md'));
+        run();
+        const rows1 = planRows();
+        assert.strictEqual(run().updated, false);
+        const after = lines();
+        const lastPlan = after.findLastIndex(l => l.includes('-PLAN.md'));
+        assert.ok(after.indexOf('- [ ] confirm with design') > lastPlan, 'bullet sits after the last plan row');
+        assert.deepStrictEqual(planRows(), rows1, 'Plans list rows unchanged between runs');
+      });
+
+      test('a markdown-link bullet after the list does not block annotation', () => {
+        const roadmap = ROADMAP4.replace(
+          '- [ ] 01-04-PLAN.md — Four\n',
+          '- [ ] 01-04-PLAN.md — Four\n- [ADR-12](https://example.com/adr-12)\n',
+        );
+        tmpDir = makeFour([1, 2, 3, 4], [['A'], ['B'], ['C'], ['D']], roadmap);
+        const { out, stderr } = annotate();
+        assert.strictEqual(out.updated, true);
+        assert.strictEqual(stderr, '');
+        assert.ok(fs.readFileSync(roadmapFile(), 'utf-8').includes('- [ADR-12](https://example.com/adr-12)'));
+      });
+    });
   });
 
   test('returns no-op when phase has no plans', () => {
@@ -6456,4 +7232,857 @@ describe('phase checklist stamp is anchored to the phase\'s own bullet (#5545)',
       assert.equal(out.reason, 'missing_phase_details');
     });
   }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #5221 — active-milestone scope must not be "text after the LAST </details>"
+// (a backlog <details> AFTER the active milestone), and the Status/Completed
+// writes must hit the phase table, not an earlier versions table.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('#5221: roadmap update-plan-progress — active milestone scope and phase-table targeting', () => {
+  let tmpDir;
+  let roadmapPath;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-5221-roadmap-');
+    roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  const SHIPPED = [
+    '<details>',
+    '<summary>✅ v1.0 Shipped</summary>',
+    '',
+    '### Phase 68: Old Scheduler',
+    '**Plans**: 3 plans',
+    '- [ ] **Phase 68: Old Scheduler**',
+    '',
+    '| Phase | Plans Complete | Status | Completed |',
+    '|-------|----------------|--------|-----------|',
+    '| 68 | 0/3 | Planned | - |',
+    '</details>',
+    '',
+  ];
+  const ACTIVE = [
+    '## v2.0 Active',
+    '',
+    '- [ ] **Phase 68: Scheduler** - ship it',
+    '',
+    '### Phase 68: Scheduler',
+    '**Goal**: schedule',
+    '**Plans**: 0/5 plans executed',
+    '',
+    '## Progress',
+    '',
+    '| Phase | Plans Complete | Status | Completed |',
+    '|-------|----------------|--------|-----------|',
+    '| 68 | 0/5 | Planned | - |',
+    '',
+  ];
+  const BACKLOG = [
+    '## Backlog',
+    '<details>',
+    '<summary>Ideas</summary>',
+    'later',
+    '</details>',
+    '',
+  ];
+
+  function seed(lines, { state = true, complete = false } = {}) {
+    if (state) fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    const roadmap = lines.join('\n');
+    const p68 = seedPhase68WithPlans(tmpDir, { roadmap });
+    if (complete) {
+      for (const n of ['01', '03', '04', '05']) fs.writeFileSync(path.join(p68, `68-${n}-SUMMARY.md`), '# S\n');
+      fs.writeFileSync(path.join(p68, '68-VERIFICATION.md'), '---\nstatus: passed\n---\n# V\n');
+    }
+    return roadmap;
+  }
+
+  // The writer re-spaces blank lines file-wide, so assert the shipped rows, not raw bytes.
+  function assertShippedUntouched(out) {
+    assert.ok(out.includes('- [ ] **Phase 68: Old Scheduler**'), 'shipped checkbox untouched');
+    assert.ok(out.includes('| 68 | 0/3 | Planned | - |'), 'shipped table row untouched');
+    assert.ok(out.includes('**Plans**: 3 plans'), 'shipped Plans line untouched');
+  }
+
+  function run() {
+    const result = runGsdTools('roadmap update-plan-progress 68', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    return JSON.parse(result.output);
+  }
+
+  test('backlog </details> after the active milestone does not hide it', () => {
+    seed([...SHIPPED, ...ACTIVE, ...BACKLOG], { complete: true });
+    const output = run();
+    assert.strictEqual(output.updated, true, JSON.stringify(output));
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.match(out, /- \[x\] \*\*Phase 68: Scheduler\*\* - ship it/);
+    assert.match(out, /\*\*Plans\*\*: 5\/5 plans complete/);
+    assert.match(out, /\| 68 \| 5\/5 \| Complete\s+\| \d{4}-\d{2}-\d{2} \|/);
+    // same-numbered phase inside the shipped <details> is untouched
+    assertShippedUntouched(out);
+    assert.ok(out.includes('<summary>Ideas</summary>\nlater\n</details>'), 'backlog untouched');
+  });
+
+  test('active milestone first, shipped <details> with a same-numbered phase below it', () => {
+    seed([...ACTIVE, ...SHIPPED], { complete: true });
+    assert.strictEqual(run().updated, true);
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.match(out, /- \[x\] \*\*Phase 68: Scheduler\*\* - ship it/);
+    assert.match(out, /\| 68 \| 5\/5 \| Complete\s+\| \d{4}-\d{2}-\d{2} \|/);
+    assertShippedUntouched(out);
+  });
+
+  test('property: activeScopeStart ignores backlog </details> after the active heading and excludes every shipped block before it', () => {
+    const fc = require('fast-check');
+    const { activeScopeStart } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    const build = (k, m) => [...Array(k).fill(SHIPPED).flat(), ...ACTIVE, ...Array(m).fill(BACKLOG).flat()].join('\n');
+    fc.assert(fc.property(fc.nat({ max: 3 }), fc.nat({ max: 3 }), (k, m) => {
+      const content = build(k, m);
+      const at = activeScopeStart(content, tmpDir);
+      assert.strictEqual(at, activeScopeStart(build(k, 0), tmpDir), 'backlog blocks after the heading never move the start');
+      const scope = content.slice(at);
+      assert.ok(scope.trimStart().startsWith('## v2.0 Active'), `scope starts at the active milestone (k=${k})`);
+      assert.ok(!scope.includes('Old Scheduler'), 'no shipped block is in scope');
+    }), { numRuns: 16, seed: 5221 });
+  });
+
+  test('activeScopeStart without a resolvable heading ignores a backlog <details> between the active phases and a later backlog entry', () => {
+    const { activeScopeStart } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+    const content = ['# Roadmap', '<details>', '<summary>shipped</summary>', '- [x] **Phase 1: Old**', '</details>', '',
+      '- [ ] **Phase 2: Active**', '- [ ] **Phase 3: Active**', '',
+      '<details>', '<summary>Backlog A</summary>', '- [ ] **Phase 999.1: A**', '</details>',
+      '<details>', '<summary>Backlog B</summary>', '- [ ] **Phase 999.2: B**', '</details>'].join('\n');
+    const scope = content.slice(activeScopeStart(content, tmpDir));
+    assert.ok(scope.includes('Phase 2: Active'), 'active phases stay in scope');
+    assert.ok(!scope.includes('Phase 1: Old'), 'shipped block stays out');
+  });
+
+  test('a Plans-headed Progress table directly above a shipped <details> does not leak into the shipped table', () => {
+    const active = ACTIVE.map((l) => l.replace('| Phase | Plans Complete |', '| Phase | Plans |'));
+    seed([...active, ...SHIPPED], { complete: true });
+    assert.strictEqual(run().updated, true);
+    assertShippedUntouched(fs.readFileSync(roadmapPath, 'utf-8'));
+  });
+
+  test('an active milestone wrapped in <details open> is found', () => {
+    seed(['<details open>', '<summary>v2.0 Active</summary>', '', ...ACTIVE, '</details>', ''], { complete: true });
+    const output = run();
+    assert.notStrictEqual(output.reason, 'missing_phase_details', JSON.stringify(output));
+    const a = runGsdTools('roadmap analyze', tmpDir);
+    assert.ok(a.success, a.error);
+    assert.notStrictEqual(JSON.parse(a.output).roadmap_record['68'], undefined);
+  });
+
+  test('milestone-grouped progress table: the record follows the STATE.md milestone', () => {
+    fs.writeFileSync(roadmapPath, [
+      '# Roadmap', '', '## v2.0 Active', '', '### Phase 1: Foo', '**Goal**: foo', '',
+      '## Progress', '',
+      '| Phase | Milestone | Plans Complete | Status | Completed |',
+      '|-------|-----------|----------------|--------|-----------|',
+      '| 1 | v1.0 | 1/1 | Complete | 2026-01-01 |',
+      '| 1 | v2.0 | 0/1 | Not started | - |',
+      '',
+    ].join('\n'));
+    const record = (milestone) => {
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), `---\nmilestone: ${milestone}\n---\n`);
+      const a = runGsdTools('roadmap analyze', tmpDir);
+      assert.ok(a.success, a.error);
+      return JSON.parse(a.output).roadmap_record['1'];
+    };
+    assert.strictEqual(record('v2.0'), false);
+    assert.strictEqual(record('v1.0'), true);
+  });
+
+  test('no resolvable milestone and a backlog <details> below the active phases: still updates', () => {
+    seed([...ACTIVE, ...BACKLOG], { state: false, complete: true });
+    const output = run();
+    assert.strictEqual(output.updated, true, JSON.stringify(output));
+  });
+
+  test('checklist-only active milestone (no Progress table) above a shipped <details>: shipped row untouched, record complete', () => {
+    seed([...ACTIVE.slice(0, 8), ...SHIPPED], { complete: true });
+    assert.strictEqual(run().updated, true);
+    assertShippedUntouched(fs.readFileSync(roadmapPath, 'utf-8'));
+    const a = runGsdTools('roadmap analyze', tmpDir);
+    assert.ok(a.success, a.error);
+    assert.strictEqual(JSON.parse(a.output).roadmap_record['68'], true);
+  });
+
+  test('a ## Progress inside a shipped <details> below a Progress-less active milestone is neither written nor read', () => {
+    const shippedRow = '| 68. Old | 3/3 | Planned | - |';
+    seed([
+      ...ACTIVE.slice(0, 8),
+      '<details>',
+      '<summary>✅ v1.0 Shipped</summary>',
+      '',
+      '## v1.0 Old',
+      '',
+      '## Progress',
+      '',
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|----------------|--------|-----------|',
+      shippedRow,
+      '</details>',
+      '',
+    ], { complete: true });
+    run();
+    assert.ok(fs.readFileSync(roadmapPath, 'utf-8').includes(shippedRow), 'shipped Progress row untouched');
+    const a = runGsdTools('roadmap analyze', tmpDir);
+    assert.ok(a.success, a.error);
+    assert.strictEqual(JSON.parse(a.output).roadmap_record['68'], true, 'the shipped Planned row is not the record');
+  });
+
+  test('versions table above the phase table: execute -> verify -> phase complete -> analyze reads the phase row Complete', () => {
+    const versions = [
+      '| Jira version | Phases | Status | Completed |',
+      '|--------------|--------|--------|-----------|',
+      '| 2.0 | 68 | Open | - |',
+      '',
+    ];
+    seed([...ACTIVE.slice(0, 10), ...versions, ...ACTIVE.slice(10)], { state: false });
+    const p68 = path.join(tmpDir, '.planning', 'phases', '68-scheduler');
+    for (const n of ['01', '03', '04', '05']) fs.writeFileSync(path.join(p68, `68-${n}-SUMMARY.md`), '# S\n');
+    run();
+    fs.writeFileSync(path.join(p68, '68-VERIFICATION.md'), '---\nstatus: passed\n---\n# V\n');
+    const c = runGsdTools('phase complete 68', tmpDir);
+    assert.ok(c.success, c.error);
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.ok(out.includes(versions.join('\n')), 'versions table untouched');
+    assert.match(out, /\| 68 \| 5\/5 \| Complete\s+\| \d{4}-\d{2}-\d{2} \|/);
+    const a = runGsdTools('roadmap analyze', tmpDir);
+    assert.ok(a.success, a.error);
+    assert.strictEqual(JSON.parse(a.output).roadmap_record['68'], true);
+  });
+
+  test('one </details> (shipped only) behaves as before', () => {
+    seed([...SHIPPED, ...ACTIVE], { complete: true });
+    assert.strictEqual(run().updated, true);
+    assertShippedUntouched(fs.readFileSync(roadmapPath, 'utf-8'));
+  });
+
+  test('zero </details> with STATE milestone still writes', () => {
+    seed([...ACTIVE, ...BACKLOG.slice(0, 1)], { complete: true });
+    assert.strictEqual(run().updated, true);
+  });
+
+  test('flat roadmap with no STATE writes', () => {
+    seed([...ACTIVE], { state: false, complete: true });
+    assert.strictEqual(run().updated, true);
+    assert.match(fs.readFileSync(roadmapPath, 'utf-8'), /\| 68 \| 5\/5 \| Complete/);
+  });
+
+  test('templates/roadmap.md layout (Progress at the bottom) with a backlog </details> after the active milestone', () => {
+    seed([
+      ...SHIPPED,
+      '## v2.0 Active',
+      '',
+      '### Phase 68: Scheduler',
+      '**Goal**: schedule',
+      '**Plans**: [Number of plans]',
+      '',
+      'Plans:',
+      '- [ ] 68-01: first',
+      '',
+      '## Backlog',
+      '<details>',
+      '<summary>Ideas</summary>',
+      '</details>',
+      '',
+      '## Progress',
+      '',
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|----------------|--------|-----------|',
+      '| 68 | 0/5 | Planned | - |',
+      '',
+    ], { complete: true });
+    assert.strictEqual(run().updated, true);
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.match(out, /\*\*Plans\*\*: 5\/5 plans complete/);
+    assert.match(out, /\| 68 \| 5\/5 \| Complete/);
+  });
+
+  test('A2: a versions table above the phase table is byte-identical; the phase table gets Status/Completed', () => {
+    const versions = [
+      '| Jira version | Phases | Status | Completed |',
+      '|--------------|--------|--------|-----------|',
+      '| 2.0 | 68 | Open | - |',
+      '',
+    ];
+    const lines = [...ACTIVE.slice(0, 10), ...versions, ...ACTIVE.slice(10)];
+    seed(lines, { state: false, complete: true });
+    assert.strictEqual(run().updated, true);
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.ok(out.includes(versions.join('\n')), 'versions table untouched');
+    assert.match(out, /\| 68 \| 5\/5 \| Complete\s+\| \d{4}-\d{2}-\d{2} \|/);
+  });
+
+  const DONE_ROW = /\| 68 \| 5\/5 \| Complete\s+\| \d{4}-\d{2}-\d{2} \|/;
+
+  test('R1: phase section + Progress table ABOVE the active milestone heading (below the last shipped </details>) stay writable', () => {
+    seed([
+      ...SHIPPED,
+      '### Phase 68: Scheduler',
+      '**Plans**: 0/5 plans executed',
+      '',
+      '## Progress',
+      '',
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|----------------|--------|-----------|',
+      '| 68 | 0/5 | Planned | - |',
+      '',
+      '## v2.0 Active',
+      '',
+      ...BACKLOG,
+    ], { complete: true });
+    assert.strictEqual(run().updated, true);
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.match(out, DONE_ROW);
+    assert.match(out, /\*\*Plans\*\*: 5\/5 plans complete/);
+    assertShippedUntouched(out);
+  });
+
+  test('R2b: stale STATE naming a shipped milestone (all headings closed) never writes into the shipped rows', () => {
+    fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+    const roadmap = [
+      '<details>',
+      '<summary>✅ v1.0 Shipped</summary>',
+      '',
+      '## ✅ v1.0 Shipped',
+      '### Phase 68: Old Scheduler',
+      '**Plans**: 3 plans',
+      '- [ ] **Phase 68: Old Scheduler**',
+      '',
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|----------------|--------|-----------|',
+      '| 68 | 0/3 | Planned | - |',
+      '</details>',
+      '',
+      ...ACTIVE,
+    ].join('\n');
+    const p68 = seedPhase68WithPlans(tmpDir, { roadmap });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
+    for (const n of ['01', '03', '04', '05']) fs.writeFileSync(path.join(p68, `68-${n}-SUMMARY.md`), '# S\n');
+    fs.writeFileSync(path.join(p68, '68-VERIFICATION.md'), '---\nstatus: passed\n---\n# V\n');
+    run();
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assertShippedUntouched(out);
+    assert.match(out, DONE_ROW);
+  });
+
+  test('R2c: Progress table without a "Plans Complete" header falls back to the whole slice (pre-#5221 behaviour)', () => {
+    seed([
+      ...ACTIVE.slice(0, 9),
+      '| Phase | Plans | Status | Completed |',
+      '|-------|-------|--------|-----------|',
+      '| 68 | 0/5 | Planned | - |',
+      '',
+    ], { state: false, complete: true });
+    run();
+    assert.match(fs.readFileSync(roadmapPath, 'utf-8'), /\| 68 \| 0\/5 \| Complete\s+\| \d{4}-\d{2}-\d{2} \|/);
+  });
+
+  test('R2d: a second phase table further down is not bound; the first (active) table is', () => {
+    const second = [
+      '### Notes',
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|----------------|--------|-----------|',
+      '| 68 | 0/9 | Planned | - |',
+      '',
+    ];
+    seed([...ACTIVE, ...second], { state: false, complete: true });
+    assert.strictEqual(run().updated, true);
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.match(out, DONE_ROW);
+    assert.ok(out.includes('| 68 | 0/9 | Planned | - |'), 'second table untouched');
+  });
+
+  // ── review round: a shipped block below the active milestone, one phase-table predicate, command parity ──
+
+  const SHIPPED_WITH_PLANS = [
+    '<details>',
+    '<summary>✅ v1.0 Shipped</summary>',
+    '',
+    '### Phase 68: Old Scheduler',
+    '**Plans**: 3 plans',
+    '- [ ] **Phase 68: Old Scheduler**',
+    '',
+    'Plans:',
+    '- [ ] 68-01-PLAN.md',
+    '- [ ] 68-03-PLAN.md',
+    '',
+    '| Phase | Plans Complete | Status | Completed |',
+    '|-------|----------------|--------|-----------|',
+    '| 68 | 0/3 | Planned | - |',
+    '</details>',
+    '',
+  ];
+  const nonBlank = (text) => text.split('\n').filter((l) => l.trim() !== '');
+  // Every <details>...</details> span as its non-blank lines, and the text outside them.
+  const splitDetails = (text) => {
+    const blocks = [];
+    let rest = '';
+    let at = 0;
+    for (;;) {
+      const open = text.indexOf('<details>', at);
+      const close = open === -1 ? -1 : text.indexOf('</details>', open);
+      if (close === -1) break;
+      rest += text.slice(at, open);
+      blocks.push(nonBlank(text.slice(open, close + '</details>'.length)));
+      at = close + '</details>'.length;
+    }
+    return { blocks, rest: rest + text.slice(at) };
+  };
+  const detailsBlocks = (text) => splitDetails(text).blocks;
+  const phase68Cells = (text) => {
+    const row = text.split('\n').find((l) => /^\|\s*68\s*\|/.test(l) && !l.includes('0/3'));
+    assert.ok(row, 'active phase 68 table row present');
+    return row.split('|').slice(1, -1).map((c) => c.trim());
+  };
+
+  for (const resolved of [true, false]) {
+    test(`a second run never reaches the shipped block below the active milestone (STATE milestone ${resolved ? 'resolved' : 'absent'})`, () => {
+      seed([...ACTIVE, ...SHIPPED_WITH_PLANS], { state: resolved, complete: true });
+      const before = detailsBlocks(fs.readFileSync(roadmapPath, 'utf-8'));
+      const first = run();
+      assert.strictEqual(first.updated, true, JSON.stringify(first));
+      const afterFirst = fs.readFileSync(roadmapPath, 'utf-8');
+      assert.deepStrictEqual(detailsBlocks(afterFirst), before, 'first run leaves the shipped block alone');
+      run();
+      const afterSecond = fs.readFileSync(roadmapPath, 'utf-8');
+      assert.deepStrictEqual(detailsBlocks(afterSecond), before, 'second run leaves the shipped block alone');
+      assert.deepStrictEqual(nonBlank(afterSecond), nonBlank(afterFirst), 'second run is idempotent');
+    });
+  }
+
+  test('activeScope: the scope ends at the first bare <details> below the active heading, in any tag case', () => {
+    const { activeScope } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    const below = [...ACTIVE, '<DETAILS>', '<summary>old</summary>', '- [ ] **Phase 68: Old**', '</DETAILS>', ''].join('\n');
+    const a = activeScope(below, tmpDir);
+    assert.strictEqual(a.end, below.indexOf('<DETAILS>'));
+    assert.ok(!below.slice(a.start, a.end).includes('Old'));
+    const above = ['<DETAILS>', '<summary>old</summary>', '</DETAILS>', ...ACTIVE].join('\n');
+    const b = activeScope(above, tmpDir);
+    assert.strictEqual(above.slice(b.start).trimStart().split('\n', 1)[0], '## v2.0 Active');
+    assert.strictEqual(b.end, above.length);
+  });
+
+  test('activeScope: an unclosed <details> before the active milestone cannot be told from a wrapper, so the scope starts at 0 (documented fail-open)', () => {
+    const { activeScope } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    const content = ['<details>', '<summary>v1.0</summary>', '', ...ACTIVE].join('\n');
+    assert.strictEqual(activeScope(content, tmpDir).start, 0);
+  });
+
+  test('property: no number of shipped blocks below the active milestone enters its writable scope', () => {
+    const fc = require('fast-check');
+    const { activeScope } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fc.assert(fc.property(fc.nat({ max: 3 }), fc.nat({ max: 3 }), fc.boolean(), (above, below, upper) => {
+      const tag = (t) => (upper ? t.toUpperCase() : t);
+      const block = SHIPPED.map((l) => (l === '<details>' ? tag(l) : l === '</details>' ? tag(l) : l));
+      const content = [...Array(above).fill(block).flat(), ...ACTIVE, ...Array(below).fill(block).flat()].join('\n');
+      const { start, end } = activeScope(content, tmpDir);
+      const scope = content.slice(start, end);
+      assert.ok(!scope.includes('Old Scheduler'), `above=${above} below=${below}`);
+      assert.ok(scope.includes('## v2.0 Active'));
+    }), { numRuns: 24, seed: 5221 });
+  });
+
+  const VERSIONS_THEN_PHASE_TABLE = (header) => [
+    ...ACTIVE.slice(0, 8),
+    '## Status',
+    '',
+    '| Release | Phase | Status | Completed |',
+    '|---------|-------|--------|-----------|',
+    '| 2.0 | 68 | Open | - |',
+    '',
+    header,
+    '|-------|-------|--------|-----------|',
+    '| 68 | 0/5 | Planned | - |',
+    '',
+  ];
+
+  test('a "Phase | Plans | Status" table below a versions table with Phase and Status columns is the one written', () => {
+    seed(VERSIONS_THEN_PHASE_TABLE('| Phase | Plans | Status | Completed |'), { state: false, complete: true });
+    run();
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.ok(nonBlank(out).includes('| 2.0 | 68 | Open | - |'), 'versions row untouched');
+    assert.strictEqual(phase68Cells(out)[2], 'Complete');
+  });
+
+  test('a lowercase phase-table header is neither written nor read as a record: roadmap_record is null', () => {
+    const lines = VERSIONS_THEN_PHASE_TABLE('| phase | plans complete | status | completed |');
+    seed(lines, { state: false, complete: true });
+    run();
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.ok(nonBlank(out).includes('| 68 | 0/5 | Planned | - |'), 'lowercase table row untouched');
+    assert.ok(nonBlank(out).includes('| 2.0 | 68 | Open | - |'), 'versions row untouched');
+    const a = runGsdTools('roadmap analyze', tmpDir);
+    assert.ok(a.success, a.error);
+    assert.strictEqual(JSON.parse(a.output).roadmap_record, null);
+  });
+
+  const PARITY_LAYOUTS = {
+    'shipped block above': () => [...SHIPPED, ...ACTIVE],
+    'shipped block below': () => [...ACTIVE, ...SHIPPED],
+    'backlog block below': () => [...SHIPPED, ...ACTIVE, ...BACKLOG],
+    'shipped and backlog blocks around the active milestone': () => [...SHIPPED, ...ACTIVE, ...BACKLOG, ...SHIPPED],
+  };
+  for (const [name, build] of Object.entries(PARITY_LAYOUTS)) {
+    test(`parity (${name}): phase complete and update-plan-progress change the same cells and nothing else`, () => {
+      const outcomes = {};
+      for (const [label, command] of [['phase complete', 'phase complete 68'], ['update-plan-progress', 'roadmap update-plan-progress 68']]) {
+        seed(build(), { complete: true });
+        const before = fs.readFileSync(roadmapPath, 'utf-8');
+        const result = runGsdTools(command, tmpDir);
+        assert.ok(result.success, `${label}: ${result.error}`);
+        const out = fs.readFileSync(roadmapPath, 'utf-8');
+        assert.deepStrictEqual(detailsBlocks(out), detailsBlocks(before), `${label}: every <details> block untouched`);
+        const sectioned = nonBlank(splitDetails(out).rest);
+        outcomes[label] = {
+          bullet: sectioned.find((l) => /^- \[[ x]\] \*\*Phase 68: Scheduler\*\*/.test(l))?.slice(0, 5),
+          row: phase68Cells(out).slice(0, 3),
+        };
+      }
+      assert.deepStrictEqual(outcomes['phase complete'], outcomes['update-plan-progress']);
+      assert.deepStrictEqual(outcomes['update-plan-progress'], { bullet: '- [x]', row: ['68', '5/5', 'Complete'] });
+    });
+  }
+
+  test('a collapsible note between two phases of the active milestone does not end the writable scope', () => {
+    const second = ['### Phase 69: Second', '**Plans**: 0/1 plans executed', '', 'Plans:', '- [ ] 69-01-PLAN.md', ''];
+    seed([...ACTIVE.slice(0, 8), '<details>', '<summary>Notes</summary>', 'design note', '</details>', '', ...second, ...ACTIVE.slice(8)], { complete: true });
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '69-second'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'phases', '69-second', '69-01-PLAN.md'), '# P\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'phases', '69-second', '69-01-SUMMARY.md'), '# S\n');
+    const r = runGsdTools('roadmap update-plan-progress 69', tmpDir);
+    assert.ok(r.success, r.error);
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.ok(nonBlank(out).includes('- [x] 69-01-PLAN.md'), 'phase 69 plan row ticked past the note');
+  });
+
+  test('a shipped <details> block in upper case below the active milestone is not written by the table slice', () => {
+    const upper = SHIPPED_WITH_PLANS.map((l) => l.replace('<details>', '<DETAILS>').replace('</details>', '</DETAILS>'));
+    seed([...ACTIVE.slice(0, 8), ...upper], { state: false, complete: true });
+    run();
+    const out = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.ok(nonBlank(out).includes('| 68 | 0/3 | Planned | - |'), 'shipped table row untouched');
+  });
+});
+
+// #5553: update-plan-progress edits only the active milestone, whatever the
+// archive's tag case / attributes / position relative to it.
+const ACTIVE_REGION_ARCHIVE_BODY = `- [ ] **Phase 1: Old**
+
+### Phase 1: Old
+**Goal:** old
+**Plans:** 0 plans
+
+Plans:
+- [ ] 01-01-PLAN.md
+`;
+const ACTIVE_REGION_ACTIVE_BODY = `## v2.0 Active
+
+- [ ] **Phase 1: A**
+
+### Phase 1: A
+**Goal:** a
+**Plans:** 0 plans
+
+Plans:
+- [ ] 01-01-PLAN.md
+
+## Progress
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 1. A | 0/1 | In Progress | |
+`;
+
+const activeRegionArchive = (open, tag) => `<${tag}${open}>\n<summary>v1.0 ✅ SHIPPED</summary>\n\n${ACTIVE_REGION_ARCHIVE_BODY}\n</${tag}>\n`;
+const NESTED_ARCHIVE = `<details>\n<summary>v1.0 ✅ SHIPPED</summary>\n\n<details>\n<summary>inner</summary>\n\nx\n</details>\n\n${ACTIVE_REGION_ARCHIVE_BODY}\n</details>\n`;
+
+const ACTIVE_REGION_SHAPES = {
+  'control: lowercase archive first': () => `# Roadmap\n\n${activeRegionArchive('', 'details')}\n${ACTIVE_REGION_ACTIVE_BODY}`,
+  'uppercase <DETAILS> archive': () => `# Roadmap\n\n${activeRegionArchive('', 'DETAILS')}\n${ACTIVE_REGION_ACTIVE_BODY}`,
+  '<details open> archive': () => `# Roadmap\n\n${activeRegionArchive(' open', 'details')}\n${ACTIVE_REGION_ACTIVE_BODY}`,
+  'archive after the active section (newest-first)': () => `# Roadmap\n\n${ACTIVE_REGION_ACTIVE_BODY}\n${activeRegionArchive('', 'details')}`,
+  'nested <details> inside the archive': () =>
+    `# Roadmap\n\n${NESTED_ARCHIVE}\n${ACTIVE_REGION_ACTIVE_BODY}`,
+  '<details open> wraps the active milestone': () =>
+    `# Roadmap\n\n${activeRegionArchive('', 'details')}\n<details open>\n<summary>v2.0 🚧 Active</summary>\n\n${ACTIVE_REGION_ACTIVE_BODY}\n</details>\n`,
+};
+
+describe('roadmap update-plan-progress active-region scoping (#5553)', () => {
+  let tmpDir;
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-a');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# summary\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\n---\n# State\n');
+  });
+  afterEach(() => cleanup(tmpDir));
+
+  // Typed view of a ROADMAP.md: tag stream, heading texts, per-phase Plans field
+  // and checkbox bullets, and table rows as cell arrays (never rendered text).
+  const roadmapView = (text) => {
+    const phases = {};
+    for (const h of tokenizeHeadings(text)) {
+      if (!/^Phase \d/.test(h.text)) continue;
+      const { body } = collectSection(text, (x) => x.line === h.line);
+      phases[h.text] = { plans: extractPhaseFieldMultiline(body, 'Plans'), bullets: iterateBullets(body).map((b) => [b.checked, b.text]) };
+    }
+    return {
+      tags: [...text.matchAll(/<\/?details\b[^>]*>/gi)].map((m) => m[0]),
+      headings: tokenizeHeadings(text).map((h) => h.text),
+      phases,
+      rows: text.split('\n').filter((l) => l.trim().startsWith('|')).map(splitTableRow).filter((c) => !isDelimiterRow(c)),
+    };
+  };
+  const TICKED_PLAN = [[true, '01-01-PLAN.md']];
+  const assertArchiveIntact = (input, out) => {
+    const before = roadmapView(input.replace(/\r\n/g, '\n'));
+    const after = roadmapView(out);
+    assert.deepEqual(after.tags, before.tags, 'archive tags unchanged');
+    assert.deepEqual(after.headings, before.headings, 'headings unchanged');
+    assert.deepEqual(after.phases['Phase 1: Old'], before.phases['Phase 1: Old'], 'archived phase untouched');
+  };
+  const assertActiveTicked = (out) => {
+    const view = roadmapView(out);
+    assert.deepEqual(view.phases['Phase 1: A'], { plans: '1/1 plans executed', bullets: TICKED_PLAN });
+    assert.deepEqual(view.rows.filter((r) => r[0] === '1. A' && r[2] === 'In Progress'), [['1. A', '1/1', 'In Progress', '']]);
+  };
+
+  for (const [name, build] of Object.entries(ACTIVE_REGION_SHAPES)) {
+    test(name, () => {
+      const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+      const input = build();
+      fs.writeFileSync(roadmapPath, input);
+      const result = runGsdTools(['roadmap', 'update-plan-progress', '1'], tmpDir);
+      assert.ok(result.success, result.error);
+      assert.strictEqual(JSON.parse(result.output).updated, true);
+      const out = fs.readFileSync(roadmapPath, 'utf-8');
+      assertArchiveIntact(input, out);
+      assertActiveTicked(out);
+    });
+  }
+
+  const runActiveRegion = (roadmap) => {
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+    fs.writeFileSync(roadmapPath, roadmap);
+    const result = runGsdTools(['roadmap', 'update-plan-progress', '1'], tmpDir);
+    assert.ok(result.success, result.error);
+    return fs.readFileSync(roadmapPath, 'utf-8');
+  };
+
+  test('no resolvable milestone: <details open> archive stays untouched', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nstatus: executing\n---\n# State\n');
+    const input = `# Roadmap\n\n${activeRegionArchive(' open', 'details')}\n${ACTIVE_REGION_ACTIVE_BODY}`;
+    const out = runActiveRegion(input);
+    assertArchiveIntact(input, out);
+    assert.deepEqual(roadmapView(out).phases['Phase 1: A'].bullets, TICKED_PLAN);
+  });
+
+  test('prose mentioning <details> without a close does not unmask later archives', () => {
+    const input = `# Roadmap\n\nShipped milestones are collapsed in \`<details>\` blocks.\n\n${activeRegionArchive('', 'details')}\n${ACTIVE_REGION_ACTIVE_BODY}`;
+    const out = runActiveRegion(input);
+    assertArchiveIntact(input, out);
+    assert.deepEqual(roadmapView(out).phases['Phase 1: A'].bullets, TICKED_PLAN);
+  });
+
+  test('plain (non-<details>) shipped milestone section stays untouched', () => {
+    const shipped = `## v1.0 ✅ SHIPPED\n\n${ACTIVE_REGION_ARCHIVE_BODY}`;
+    const input = `# Roadmap\n\n${shipped}\n${ACTIVE_REGION_ACTIVE_BODY}`;
+    const out = runActiveRegion(input);
+    assertArchiveIntact(input, out);
+    assert.deepEqual(roadmapView(out).phases['Phase 1: A'].bullets, TICKED_PLAN);
+  });
+
+  // A plain shipped section followed by `## Progress`
+  // must keep the heading at line start so the Progress scoping survives.
+  test('plain shipped section before ## Progress: decoy table row is not rewritten', () => {
+    const decoy = '### Decoy\n\n| Phase | Plans Complete | Status | Completed |\n|---|---|---|---|\n| 1. A | 0/1 | Not started | |\n';
+    const active = ACTIVE_REGION_ACTIVE_BODY.replace('## Progress', `${decoy}\n## v1.0 ✅ SHIPPED\n\n${ACTIVE_REGION_ARCHIVE_BODY}\n## Progress`);
+    const input = `# Roadmap\n\n${active}`;
+    const out = runActiveRegion(input);
+    assert.deepEqual(roadmapView(out).rows.filter((r) => r[0] === '1. A'), [
+      ['1. A', '0/1', 'Not started', ''],
+      ['1. A', '1/1', 'In Progress', ''],
+    ]);
+    assertArchiveIntact(input, out);
+  });
+
+  // A `<details>` that is not a real block-level tag (HTML comment, inline
+  // prose, indented code) or a stray one must not unbalance the scan.
+  const NOT_A_TAG = {
+    'opener inside an HTML comment': '<!--\n<details>\n-->\n',
+    'inline opener in prose': 'Wrap shipped work in <details> tags.\n',
+    'indented (code) opener': '    <details>\n',
+    'closer inside an HTML comment': '<!-- </details> -->\n',
+    'inline-code comment opener': 'Comments start with `<!--`.\n',
+    'unterminated comment opener in prose': 'Note: use <!-- to start comments.\n',
+    'stray unmatched opener': '<details>\nstray\n',
+  };
+  for (const [name, snippet] of Object.entries(NOT_A_TAG)) {
+    test(`${name} does not unmask a later archive`, () => {
+      const input = `# Roadmap\n\n${snippet}\n${activeRegionArchive('', 'details')}\n${ACTIVE_REGION_ACTIVE_BODY}`;
+      const out = runActiveRegion(input);
+      assertArchiveIntact(input, out);
+      assert.deepEqual(roadmapView(out).phases['Phase 1: A'].bullets, TICKED_PLAN);
+    });
+  }
+
+  test('CRLF roadmap: archives intact and Progress row updated', () => {
+    const shipped = `## v1.0 ✅ SHIPPED\n\n${ACTIVE_REGION_ARCHIVE_BODY}`;
+    const active = ACTIVE_REGION_ACTIVE_BODY.replace('## Progress', `${shipped}\n## Progress`);
+    const input = `# Roadmap\n\n${activeRegionArchive('', 'details')}\n${active}`;
+    // The platform write seam normalizes CRLF to LF for the whole file, so compare against the LF view.
+    const out = runActiveRegion(input.replace(/\n/g, '\r\n'));
+    assertArchiveIntact(input, out);
+    assert.deepEqual(roadmapView(out).rows.filter((r) => r[0] === '1. A'), [['1. A', '1/1', 'In Progress', '']]);
+  });
+
+  test('re-run with the active section already ticked leaves a trailing archive untouched', () => {
+    const ticked = ACTIVE_REGION_ACTIVE_BODY
+      .replace('- [ ] **Phase 1: A**', '- [x] **Phase 1: A** (completed 2026-01-01)')
+      .replace('**Plans:** 0 plans', '**Plans:** 1/1 plans complete')
+      .replace('- [ ] 01-01-PLAN.md', '- [x] 01-01-PLAN.md')
+      .replace('| 1. A | 0/1 | In Progress | |', '| 1. A | 1/1 | Complete | 2026-01-01 |');
+    const input = `# Roadmap\n\n${ticked}\n${activeRegionArchive('', 'details')}`;
+    assertArchiveIntact(input, runActiveRegion(input));
+  });
+
+  test('an archive nested in a <details open> wrapper around the active milestone stays untouched', () => {
+    const wrapper = `<details open>\n<summary>v2.0 Active</summary>\n\n${activeRegionArchive('', 'details')}\n${ACTIVE_REGION_ACTIVE_BODY}</details>\n`;
+    const input = `# Roadmap\n\n${wrapper}`;
+    const out = runActiveRegion(input);
+    assertArchiveIntact(input, out);
+    assert.deepEqual(roadmapView(out).phases['Phase 1: A'].bullets, TICKED_PLAN);
+  });
+
+  test('a collapsed Plans list in the active milestone gets no duplicate rows', () => {
+    const collapsed = ACTIVE_REGION_ACTIVE_BODY.replace('Plans:\n- [ ] 01-01-PLAN.md\n', 'Plans:\n<details>\n<summary>Plans</summary>\n\n- [ ] 01-01-PLAN.md\n</details>\n');
+    const { phases } = roadmapView(runActiveRegion(`# Roadmap\n\n${activeRegionArchive('', 'details')}\n${collapsed}`));
+    assert.deepEqual(phases['Phase 1: Old'].bullets, [[false, '01-01-PLAN.md']], 'archived row untouched');
+    assert.deepEqual(phases['Phase 1: A'].bullets.map((b) => b[1]), ['01-01-PLAN.md'], 'one active row, no inserted duplicate');
+  });
+
+  // Active phase with an empty Plans list and a Progress row, used by the shapes below.
+  const EMPTY_PLANS_ACTIVE = ACTIVE_REGION_ACTIVE_BODY.replace('Plans:\n- [ ] 01-01-PLAN.md\n', 'Plans:\n');
+  const PROGRESS = ACTIVE_REGION_ACTIVE_BODY.slice(ACTIVE_REGION_ACTIVE_BODY.indexOf('## Progress'));
+
+  test('an archive after the active section does not hide the active phase from plan-row insertion', () => {
+    const out = runActiveRegion(`# Roadmap\n\n${EMPTY_PLANS_ACTIVE}\n${activeRegionArchive('', 'details')}`);
+    assert.deepEqual(roadmapView(out).phases['Phase 1: A'].bullets, TICKED_PLAN);
+    assert.deepEqual(roadmapView(out).phases['Phase 1: Old'].bullets, [[false, '01-01-PLAN.md']], 'archived row untouched');
+  });
+
+  test('a closed-marker heading carrying the active version is part of the active milestone (not an archive)', () => {
+    const before = runActiveRegion(`# Roadmap\n\n## v2.0 Active\n\n## v2.0 Notes ✅\n\nnotes\n\n### Phase 1: A\n**Plans:** 0 plans\n\nPlans:\n- [ ] 01-01-PLAN.md\n\n${PROGRESS}`);
+    assertActiveTicked(before);
+    const after = runActiveRegion(`# Roadmap\n\n## v2.0 Active\n\n### Phase 1: A\n**Plans:** 0 plans\n\nPlans:\n\n## v2.0 Part 2 ✅\n\nPlans:\n- [ ] 01-01-PLAN.md\n\n${PROGRESS}`);
+    assert.deepEqual(roadmapView(after).phases['Phase 1: A'].plans, '1/1 plans executed');
+    assert.strictEqual((after.match(/01-01-PLAN\.md/g) ?? []).length, 1, 'no duplicate plan row');
+  });
+
+  test('a shipped plain section with its own ## Progress leaves that table alone', () => {
+    const shipped = '## v1.0 ✅ SHIPPED\n\n### Phase 1: Old\n**Plans:** 0 plans\n\n## Progress\n\n| Phase | Plans Complete | Status | Completed |\n|---|---|---|---|\n| 1. Old | 0/1 | In Progress | |\n';
+    const input = `# Roadmap\n\n${shipped}\n${ACTIVE_REGION_ACTIVE_BODY}`;
+    const out = runActiveRegion(input);
+    assert.deepEqual(roadmapView(out).rows.filter((r) => r[0].startsWith('1.')), [['1. Old', '0/1', 'In Progress', ''], ['1. A', '1/1', 'In Progress', '']]);
+    assert.deepEqual(roadmapView(out).phases['Phase 1: Old'], roadmapView(input).phases['Phase 1: Old']);
+  });
+
+  // Unpaired <details> tags hide where an archive ends: decline, never a half-edit.
+  const AMBIGUOUS = {
+    'a stray opener inside an <details open> wrapper around the active milestone': () =>
+      `# Roadmap\n\n<details open>\n<summary>v2.0 Active</summary>\n\n${EMPTY_PLANS_ACTIVE.replace('Plans:\n', '<details>\nPlans:\n- [ ] 01-01-PLAN.md\n')}</details>\n`,
+    'an archive opener that is never closed': () =>
+      `# Roadmap\n\n<details>\n<summary>v1.0 ✅ SHIPPED</summary>\n\n${ACTIVE_REGION_ARCHIVE_BODY}\n${ACTIVE_REGION_ACTIVE_BODY}`,
+    'an archive whose closer is indented four spaces': () =>
+      `# Roadmap\n\n<details>\n<summary>v1.0 ✅ SHIPPED</summary>\n\n${ACTIVE_REGION_ARCHIVE_BODY}\n    </details>\n\n${ACTIVE_REGION_ACTIVE_BODY}`,
+  };
+  for (const [name, build] of Object.entries(AMBIGUOUS)) {
+    test(`${name} is declined and ROADMAP.md is untouched`, () => {
+      const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+      const input = build();
+      fs.writeFileSync(roadmapPath, input);
+      const result = runGsdTools(['roadmap', 'update-plan-progress', '1'], tmpDir);
+      assert.ok(result.success, result.error);
+      assert.strictEqual(JSON.parse(result.output).reason, 'archive_structure_ambiguous');
+      assert.strictEqual(fs.readFileSync(roadmapPath, 'utf-8'), input);
+    });
+  }
+
+  test('a one-line archive cannot hide a phase, so it neither blocks nor changes the edit', () => {
+    const input = `# Roadmap\n\n<details><summary>v1.0 ✅ SHIPPED</summary> old notes </details>\n\n${ACTIVE_REGION_ACTIVE_BODY}`;
+    const out = runActiveRegion(input);
+    assert.ok(out.includes('<details><summary>v1.0 ✅ SHIPPED</summary> old notes </details>'));
+    assertActiveTicked(out);
+  });
+
+  // A collapsed block in the active range that holds the Progress table is not hidden:
+  // the row is updated together with the plan ticks (never `updated: true` over a stale row).
+  test('a Progress table inside a collapsed active-range block is updated with the plan tick', () => {
+    const collapsed = ACTIVE_REGION_ACTIVE_BODY.replace('## Progress', '<details>\n<summary>Progress</summary>\n\n## Progress').replace(/\n$/, '\n</details>\n');
+    const out = runActiveRegion(`# Roadmap\n\n${collapsed}`);
+    assert.deepEqual(roadmapView(out).phases['Phase 1: A'].bullets, TICKED_PLAN);
+    assert.deepEqual(roadmapView(out).rows.filter((r) => r[0] === '1. A'), [['1. A', '1/1', 'In Progress', '']]);
+  });
+
+  // Archive shapes the tag scan used to miss: each must leave the archive intact and tick the active milestone.
+  const MISSED_SHAPES = {
+    'blockquoted archive': `> <details>\n> <summary>v1.0 ✅ SHIPPED</summary>\n>\n${ACTIVE_REGION_ARCHIVE_BODY.replace(/^/gm, '> ')}\n> </details>\n`,
+    'one-line archive holding a plan row': '<details><summary>v1.0 ✅ SHIPPED</summary> Plans: - [ ] 01-01-PLAN.md </details>\n',
+    'plain shipped section at heading level 4': `#### v1.0 ✅ SHIPPED\n\n${ACTIVE_REGION_ARCHIVE_BODY}`,
+  };
+  for (const [name, archive] of Object.entries(MISSED_SHAPES)) {
+    test(`${name} stays untouched`, () => {
+      const input = `# Roadmap\n\n${archive}\n${ACTIVE_REGION_ACTIVE_BODY}`;
+      const out = runActiveRegion(input);
+      assert.deepEqual(roadmapView(out).phases['Phase 1: Old'], roadmapView(input).phases['Phase 1: Old']);
+      assert.strictEqual(out.slice(0, out.indexOf('## v2.0 Active')), input.slice(0, input.indexOf('## v2.0 Active')), 'everything above the active milestone is byte-identical');
+      assertActiveTicked(out);
+    });
+  }
+
+  test('a plan filename containing a guessable archive marker cannot relocate the archive', { skip: process.platform === 'win32' }, () => {
+    const hostile = '01-02-<!-- gsd-archived-details-0-0 -->-PLAN.md';
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'phases', '01-a', hostile), '# Plan\n');
+    const input = `# Roadmap\n\n${activeRegionArchive('', 'details')}\n${ACTIVE_REGION_ACTIVE_BODY}`;
+    const out = runActiveRegion(input);
+    assertArchiveIntact(input, out);
+    const { headings } = roadmapView(out);
+    assert.ok(headings.indexOf('Phase 1: Old') < headings.indexOf('v2.0 Active'), 'archive stays above the active milestone');
+  });
+
+  // The decline arm is only reachable when an edit loses a placeholder; stub the
+  // masker (called through the module object, so it can be replaced) to hand back
+  // a visible text with its marker already gone.
+  test('an edit that loses an archive placeholder is declined as archive_placeholder_lost and ROADMAP.md is untouched', (t) => {
+    const parserMod = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'roadmap-parser.cjs'));
+    const roadmapMod = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'roadmap.cjs'));
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+    fs.writeFileSync(roadmapPath, `# Roadmap\n\n${activeRegionArchive('', 'details')}\n${ACTIVE_REGION_ACTIVE_BODY}`);
+    const before = fs.readFileSync(roadmapPath);
+    const real = parserMod.maskArchivedDetails;
+    t.mock.method(parserMod, 'maskArchivedDetails', (content, cwd) => {
+      const masked = real(content, cwd);
+      return { ...masked, visible: masked.visible.replace(/<!-- gsd-archived-details-\S+ -->/, '') };
+    });
+    t.mock.method(process.stderr, 'write', () => true);
+    const out = JSON.parse(captureFdSync(1, () => roadmapMod.cmdRoadmapUpdatePlanProgress(tmpDir, '1', false)));
+    assert.strictEqual(out.updated, false);
+    assert.strictEqual(out.reason, 'archive_placeholder_lost');
+    assert.ok(fs.readFileSync(roadmapPath).equals(before), 'ROADMAP.md byte-identical');
+  });
 });

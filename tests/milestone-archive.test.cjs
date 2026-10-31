@@ -19,7 +19,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createTempProject, createTempDir, cleanup, runGsdTools, toPosixPath, TOOLS_PATH } = require('./helpers.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
-const { extractPhaseToken } = require('../gsd-core/bin/lib/phase-id.cjs');
 const { GATE_ROADMAP, writeGateCap, cleanEnv } = require('./helpers/ship-gate-fixture.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
@@ -1682,14 +1681,16 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     }
   });
 
-  test('G21c a bracket-convention dir that no roadmap id resolves keeps the literal dir token', () => {
+  test('G21c a bracket-convention dir resolves to the roadmap id, the token init.phase-op hands ship.md', () => {
     fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({ phase_id_convention: 'bracket' }));
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n\n## [GSD.02] v1.0\n\n### [GSD.02] 01: Setup\n**Goal:** a\n');
     cleanup(phaseDir('01-foundation'));
     cleanup(phaseDir('02-build'));
     fs.mkdirSync(phaseDir('GSD.02-01-setup'), { recursive: true });
     writeGateCap(home, { command: 'exit 3' });
-    assert.deepEqual(wouldRefuse().map((b) => b.phase), [extractPhaseToken('GSD.02-01-setup')]);
+    const r = runGsdTools(['query', 'init.phase-op', '01'], tmpDir, env());
+    assert.equal(r.success, true, r.error);
+    assert.deepEqual(wouldRefuse().map((b) => b.phase), [JSON.parse(r.output).phase_number]);
   });
 
   // A copy of the fixture project under a root named `name` (a parent dir keeps the name verbatim).
