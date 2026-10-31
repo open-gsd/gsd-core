@@ -562,6 +562,72 @@ describe('default probes against a real git repo (#4432 rows 17 18 19 21)', () =
   });
 });
 
+// ─── symlink and dot-segment gaps ───────────────────────────────────────────
+
+describe('exemption tokens are read through no symlink and no dot-dot (#4432)', () => {
+  /** A repo whose committed `tpl.txt` is exempt, plus an outside dir holding a different `tpl.txt`. */
+  function fixture(t) {
+    const repo = makeRepo(t);
+    fs.writeFileSync(path.join(repo, 'tpl.txt'), 'KEY=CHANGE_ME\n');
+    commitAll(repo, 'add template');
+    const outer = makeEmptyDir(t, 'gsd-4432-outer-');
+    fs.mkdirSync(path.join(outer, 'inner'));
+    fs.writeFileSync(path.join(outer, 'tpl.txt'), 'KEY=real-secret\n');
+    return { repo, outer };
+  }
+
+  test('positive control: the committed entry is exempt by absolute and relative token', (t) => {
+    const { repo } = fixture(t);
+    const check = createExemptionChecker({ root: repo, entries: ['tpl.txt'], allowRelative: true });
+    assert.equal(check(path.join(repo, 'tpl.txt')), true);
+    assert.equal(check('tpl.txt'), true);
+  });
+
+  test('<symlinked dir>/../<entry> is not exempt (absolute and relative)', (t) => {
+    const { repo, outer } = fixture(t);
+    if (!symlinkOrSkip(t, path.join(outer, 'inner'), path.join(repo, 'lnk'))) return;
+    const check = createExemptionChecker({ root: repo, entries: ['tpl.txt'], allowRelative: true });
+    assert.equal(check(`${repo}/lnk/../tpl.txt`), false, 'absolute');
+    assert.equal(check('lnk/../tpl.txt'), false, 'relative');
+  });
+
+  test('a token with a .. segment is never exempt, even when it stays inside the root', (t) => {
+    const { repo } = fixture(t);
+    fs.mkdirSync(path.join(repo, 'sub'));
+    const check = createExemptionChecker({ root: repo, entries: ['tpl.txt'], allowRelative: true });
+    for (const tok of [`${repo}/sub/../tpl.txt`, 'sub/../tpl.txt', '../tpl.txt', 'sub\\..\\tpl.txt']) {
+      assert.equal(check(tok), false, tok);
+    }
+  });
+
+  test('a token with a . segment resolves to the same file and stays exempt', (t) => {
+    const { repo } = fixture(t);
+    const check = createExemptionChecker({ root: repo, entries: ['tpl.txt'], allowRelative: true });
+    assert.equal(check('./tpl.txt'), true);
+    assert.equal(check(`${repo}/./tpl.txt`), true);
+  });
+
+  test('an entry whose parent directory was swapped for a symlink is not exempt', (t) => {
+    const { repo, outer } = fixture(t);
+    fs.mkdirSync(path.join(repo, 'cfg'));
+    fs.writeFileSync(path.join(repo, 'cfg', 'tpl.txt'), 'KEY=CHANGE_ME\n');
+    commitAll(repo, 'add cfg template');
+    const check = () => createExemptionChecker({ root: repo, entries: ['cfg/tpl.txt'], allowRelative: false });
+    assert.equal(check()(path.join(repo, 'cfg', 'tpl.txt')), true, 'before the swap');
+    fs.mkdirSync(path.join(outer, 'cfgdir'));
+    fs.writeFileSync(path.join(outer, 'cfgdir', 'tpl.txt'), 'KEY=real-secret\n');
+    cleanup(path.join(repo, 'cfg'));
+    if (!symlinkOrSkip(t, path.join(outer, 'cfgdir'), path.join(repo, 'cfg'))) return;
+    assert.equal(isRegularFile(path.join(repo, 'cfg', 'tpl.txt'), repo, 'cfg/tpl.txt'), false);
+    assert.equal(check()(path.join(repo, 'cfg', 'tpl.txt')), false, 'after the swap');
+  });
+
+  test('isRegularFile with no root and entry keeps the lstat-only contract', (t) => {
+    const { repo } = fixture(t);
+    assert.equal(isRegularFile(path.join(repo, 'tpl.txt')), true);
+  });
+});
+
 // ─── parity with config-set (suite P) ──────────────────────────────────────
 
 describe('hook-lib normalizer and config-set normalizer agree (#4432 rows 26 27 28 42)', () => {
