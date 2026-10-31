@@ -701,6 +701,8 @@ describe('bug #2650 plan-phase — all five planner/plan-checker spawns dispatch
       [1, '1', '1'],
       [2, '2', '2'],
       [30, '30', '30'],
+      // 9-digit cap so `* 60` cannot overflow: limit-1 / limit / limit+1.
+      [99999999, '99999999', '99999999'], [999999999, '999999999', '999999999'], [1000000000, '5', '10'],
       [-1, '5', '10'],
       ['abc', '5', '10'],
       [null, '5', '10'],

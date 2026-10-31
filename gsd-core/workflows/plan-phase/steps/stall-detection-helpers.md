@@ -107,22 +107,23 @@ PLANNER_STALL_THRESHOLD_MINUTES=$(gsd_run query config-get planner.stall_thresho
 # degrades to the safe default instead of crashing the watcher. Zero is
 # rejected too (#3923): an interval of 0 makes every gsd_stall_watch cycle a
 # zero-length sleep, and a threshold of 0 declares a healthy agent stalled on
-# the first check.
-[[ "$PLANNER_STALL_INTERVAL_MINUTES" =~ ^[1-9][0-9]*$ ]] || PLANNER_STALL_INTERVAL_MINUTES=5
-[[ "$PLANNER_STALL_THRESHOLD_MINUTES" =~ ^[1-9][0-9]*$ ]] || PLANNER_STALL_THRESHOLD_MINUTES=10
+# the first check. At most 9 digits, so `* 60` can never overflow.
+[[ "$PLANNER_STALL_INTERVAL_MINUTES" =~ ^[1-9][0-9]{0,8}$ ]] || PLANNER_STALL_INTERVAL_MINUTES=5
+[[ "$PLANNER_STALL_THRESHOLD_MINUTES" =~ ^[1-9][0-9]{0,8}$ ]] || PLANNER_STALL_THRESHOLD_MINUTES=10
 
 # gsd_stall_should_recover — pure decision function, no IO, no sleeping. Given how
 # long the orchestrator has been waiting plus two liveness signals (a completion
 # marker found in the agent's output file, and fresh on-disk artifact activity),
 # decides whether to keep waiting, treat the wait as satisfied, or auto-surface the
 # existing accept/retry/stop recovery menu (9a/11a). Never kills or retries anything
-# itself — it only classifies. Re-validates both numeric args as bare non-negative
-# integers (defense in depth — safe to call with any input, not just the resolved
-# config globals above) before either ever reaches arithmetic expansion.
+# itself — it only classifies. Re-validates both numeric args as bounded bare
+# non-negative integers (defense in depth — safe to call with any input, not just
+# the resolved config globals above, which are always >= 1) before either ever
+# reaches arithmetic expansion. It accepts 0 so callers can test boundaries.
 gsd_stall_should_recover() {
   local elapsed_seconds="$1" threshold_minutes="$2" marker_found="$3" artifact_fresh="$4"
-  [[ "$elapsed_seconds" =~ ^[0-9]+$ ]] || elapsed_seconds=0
-  [[ "$threshold_minutes" =~ ^[0-9]+$ ]] || threshold_minutes=10
+  [[ "$elapsed_seconds" =~ ^[0-9]{1,15}$ ]] || elapsed_seconds=0
+  [[ "$threshold_minutes" =~ ^[0-9]{1,9}$ ]] || threshold_minutes=10
   local threshold_seconds=$(( threshold_minutes * 60 ))
   if [ "$marker_found" = "true" ]; then
     echo "marker_received"; return 0
