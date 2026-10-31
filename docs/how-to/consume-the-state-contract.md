@@ -199,10 +199,26 @@ checkbox list is used instead, and a checkbox can only say complete or not — t
 in-progress phase is identified from `STATE.md`. Regenerating the progress table
 resolves most disagreements.
 
-**Should I commit `state.json`?** Your call. GSD does not add it to
-`.gitignore`. It is a derived cache — safe to delete, regenerated at the next
-boundary — so committing it mostly creates merge noise. If you keep `.planning/`
-out of your repo entirely, see
+**Should I commit `state.json`?** No. The first boundary command in each clone
+adds `/<prefix>state.json` (e.g. `/.planning/state.json`) to `.git/info/exclude`,
+so an untracked copy never shows in `git status`. An exclude cannot hide a file
+that is already tracked, so a copy you committed before stays modified after
+every boundary and `/gsd-ship` refuses the dirty tree. GSD never changes your
+index; `/gsd-health` (`validate health`) reports such a copy as warning `W031`
+with the exact command for the paths it found, e.g.
+`git --literal-pathspecs rm --cached --ignore-unmatch -- .planning/state.json`
+(or `.planning/workstreams/<name>/state.json`, `.planning/<project>/state.json`,
+`.planning/<project>/workstreams/<name>/state.json`). From the project directory
+(the one holding `.planning/`), run it once and commit the removal; the file stays on disk, rerunning it is a no-op, and `--repair` never
+runs it for you. A teammate whose tracked copy is modified (the usual case)
+cannot pull that commit (`Your local changes ... would be overwritten by
+merge`): they run `git checkout -- <path>` (or stash) first, and the next
+boundary regenerates the file. When `commit_docs` resolves to false (set as
+`commit_docs` or `planning.commit_docs`) or `.planning/` is already ignored, GSD
+does not add `state.json` to `.git/info/exclude`; the per-machine `milestone.lock`
+claim is excluded whatever `commit_docs` says. A repo that merely encloses the
+project, tracking nothing under it, is left alone too.
+If you keep `.planning/` out of your repo entirely, see
 [Keep planning docs out of a shared repo](keep-planning-docs-private.md).
 
 ## Related

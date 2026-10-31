@@ -413,6 +413,7 @@ const DOCS_GUARD_TESTS = {
   'tests/secure-phase.test.cjs': ['docs/CONFIGURATION.md'],
   'tests/security-dead-exports.regression.test.cjs': ['docs/FEATURES.md'],
   'tests/security.test.cjs': ['docs/INVENTORY-MANIFEST.json'],
+  'tests/state-contract.unit.test.cjs': ['docs/features/machine-readable-state-contract-planningstatejson.md'],
   // Walks docs/ recursively (todos-done-rename-guard.test.cjs:19-22
   // SCAN_DIRS) looking for stale references — a generic tree walk.
   'tests/todos-done-rename-guard.test.cjs': ['*'],

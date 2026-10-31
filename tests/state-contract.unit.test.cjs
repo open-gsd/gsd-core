@@ -55,6 +55,7 @@ const path = require('node:path');
 const fc = require('fast-check');
 
 const { createTempProject, createTempDir, cleanup } = require('./helpers.cjs');
+const { stubEnv } = require('./helpers/env-guard.cjs');
 
 const {
   buildStateContract,
@@ -1221,6 +1222,434 @@ describe('state contract — write mechanics', () => {
     assert.strictEqual(published.phases[0].name, 'Workstream Only');
     assert.notStrictEqual(published.phases[0].name, 'Foundation');
     assert.notStrictEqual(published.phases[0].name, 'Hardening');
+  });
+});
+
+// ─── 14b. Git-ignore of the derived cache (#5505) ─────────────────────────────
+
+describe('state contract — state.json is git-ignored via info/exclude (#5505)', () => {
+  const { createTempGitProject } = require('./helpers.cjs');
+  const { gitOrThrow, isFsLegalName } = require('./helpers/git-fixture.cjs');
+  const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+  const git = (cwd, ...args) => gitOrThrow(args, { cwd });
+  const excludeOf = (cwd) => path.resolve(cwd, git(cwd, 'rev-parse', '--git-path', 'info/exclude').trim());
+  const lines = (f) => splitLines(fs.readFileSync(f, 'utf8'));
+  // A project nested in an enclosing repo is edited only when that repo tracks a file under it.
+  const trackUnder = (repo, sub) => { fs.writeFileSync(path.join(sub, 'tracked.txt'), 'x'); git(repo, '--literal-pathspecs', 'add', '--', path.join(sub, 'tracked.txt')); };
+
+  test('isIdempotentEvenOnACrlfExclude', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    publishStateContract(tmpDir, fixedDeps());
+    const exclude = excludeOf(tmpDir);
+    fs.writeFileSync(exclude, fs.readFileSync(exclude, 'utf8').replace(/\r?\n/g, '\r\n'));
+    publishStateContract(tmpDir, fixedDeps());
+    assert.strictEqual(lines(exclude).filter((l) => l === '/.planning/state.json').length, 1);
+  });
+
+  test('linkedWorktreeWritesTheCommonExclude', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    const wt = path.join(tmpDir, 'linked');
+    git(tmpDir, 'worktree', 'add', '-q', '-b', 'wt', wt);
+    fs.mkdirSync(planningDirOf(wt), { recursive: true });
+    publishStateContract(wt, fixedDeps());
+    assert.ok(lines(excludeOf(tmpDir)).includes('/.planning/state.json'));
+    git(wt, 'check-ignore', '-q', '.planning/state.json');
+  });
+
+  test('globCharsInThePrefixAreEscaped', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    // The entry is always `/<prefix>state.json` and the prefix starts with `d`, so `#`, `!` and space
+    // sit mid-pattern. Windows forbids backslash, `*` and `?` in file names.
+    const meta = fc.constantFrom(...(process.platform === 'win32' ? [] : ['\\', '*', '?', ' ']), '[', ']', '#', '!', 'a', 'b');
+    const names = fc.array(meta, { minLength: 1, maxLength: 6 }).map((cs) => `d${cs.join('')}`);
+    fc.assert(fc.property(names, (name) => {
+      const sub = path.join(tmpDir, name);
+      fs.mkdirSync(planningDirOf(sub), { recursive: true });
+      trackUnder(tmpDir, sub);
+      publishStateContract(sub, fixedDeps());
+      git(tmpDir, 'check-ignore', '-q', `${name}/.planning/state.json`);
+      // An escaped entry matches only its own directory, never a glob sibling.
+      assert.throws(() => git(tmpDir, 'check-ignore', '-q', 'dX/.planning/state.json'));
+    }), { seed: 5505, numRuns: 15 });
+  });
+
+  test('aLeadingSpaceInThePrefixSurvivesGitOutputTrimming', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    const sub = path.join(tmpDir, ' notes');
+    fs.mkdirSync(planningDirOf(sub), { recursive: true });
+    trackUnder(tmpDir, sub);
+    publishStateContract(sub, fixedDeps());
+    git(tmpDir, 'check-ignore', '-q', ' notes/.planning/state.json');
+  });
+
+  test('aNewlineInThePlanningPathIsRejected', { skip: process.platform === 'win32' }, (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    const exclude = excludeOf(tmpDir);
+    const before = fs.readFileSync(exclude, 'utf8');
+    const sub = path.join(tmpDir, 'a\nb');
+    fs.mkdirSync(planningDirOf(sub), { recursive: true });
+    trackUnder(tmpDir, sub);
+    assert.strictEqual(publishStateContract(sub, fixedDeps()).published, true);
+    // gitignore cannot express a newline in a pattern: the path is rejected, no truncated entry is written.
+    assert.strictEqual(fs.readFileSync(exclude, 'utf8'), before);
+  });
+
+  test('ignoresInheritedGitDirEnv', (t) => {
+    const tmpDir = createTempGitProject();
+    const other = createTempGitProject();
+    t.after(() => { cleanup(tmpDir); cleanup(other); });
+    const before = fs.readFileSync(excludeOf(other), 'utf8');
+    const restoreGitDir = stubEnv(t, 'GIT_DIR', path.join(other, '.git'));
+    publishStateContract(tmpDir, fixedDeps());
+    restoreGitDir();
+    assert.ok(lines(excludeOf(tmpDir)).includes('/.planning/state.json'));
+    assert.strictEqual(fs.readFileSync(excludeOf(other), 'utf8'), before);
+  });
+
+  // The commit_docs gate must also read the cwd repo: an inherited GIT_DIR must not flip it.
+  for (const [name, cwdIgnores] of [['otherRepoIgnoresOnly', false], ['cwdRepoIgnoresOnly', true]]) {
+    test(`commitDocsGateIgnoresInheritedGitDir:${name}`, (t) => {
+      const tmpDir = createTempGitProject();
+      const other = createTempGitProject();
+      t.after(() => { cleanup(tmpDir); cleanup(other); });
+      fs.writeFileSync(path.join(planningDirOf(tmpDir), 'config.json'), '{}'); // no config at all skips the ignore tier, as loadConfig does
+      fs.appendFileSync(excludeOf(cwdIgnores ? tmpDir : other), '.planning\n');
+      const before = fs.readFileSync(excludeOf(tmpDir), 'utf8');
+      const restoreGitDir = stubEnv(t, 'GIT_DIR', path.join(other, '.git'));
+      publishStateContract(tmpDir, fixedDeps());
+      restoreGitDir();
+      // .planning ignored in the cwd repo means commit_docs is off: its exclude stays untouched.
+      assert.strictEqual(lines(excludeOf(tmpDir)).includes('/.planning/state.json'), !cwdIgnores);
+      if (cwdIgnores) assert.strictEqual(fs.readFileSync(excludeOf(tmpDir), 'utf8'), before);
+    });
+  }
+
+  test('anExcludeFailureStillPublishes', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    const exclude = excludeOf(tmpDir);
+    fs.unlinkSync(exclude);
+    fs.mkdirSync(exclude, { recursive: true });
+    assert.strictEqual(publishStateContract(tmpDir, fixedDeps()).published, true);
+    // No partial write: the blocking directory is left as it was, empty.
+    assert.deepStrictEqual(fs.readdirSync(exclude), []);
+    assert.strictEqual(fs.existsSync(statePathOf(tmpDir)), true);
+  });
+
+  test('aNonGitProjectPublishesWithoutCreatingDotGit', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    assert.strictEqual(publishStateContract(tmpDir, fixedDeps()).published, true);
+    assert.ok(!fs.existsSync(path.join(tmpDir, '.git')));
+  });
+
+  test('aFailingRevParseLeavesTheRepoAloneAndStillPublishes', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    fs.mkdirSync(path.join(tmpDir, '.git')); // an empty .git: git rev-parse exits non-zero
+    assert.strictEqual(publishStateContract(tmpDir, fixedDeps()).published, true);
+    assert.deepStrictEqual(fs.readdirSync(path.join(tmpDir, '.git')), []);
+  });
+
+  test('aPublishAfterTheRepoVanishesDoesNotRecreateIt', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    publishStateContract(tmpDir, fixedDeps());
+    fs.rmSync(path.join(tmpDir, '.git'), { recursive: true, force: true }); // eslint-disable-line local/no-raw-rmsync-in-tests -- the repository itself is the thing under test
+    publishStateContract(tmpDir, fixedDeps());
+    assert.ok(!fs.existsSync(path.join(tmpDir, '.git')));
+  });
+
+  test('linkedWorktreesShareOneExcludeEntry', (t) => {
+    const tmpDir = createTempGitProject();
+    const linked = `${tmpDir}-linked`;
+    t.after(() => { cleanup(linked); cleanup(tmpDir); });
+    git(tmpDir, 'worktree', 'add', '-q', '-b', 'linked', linked);
+    fs.mkdirSync(planningDirOf(linked), { recursive: true });
+    publishStateContract(tmpDir, fixedDeps());
+    publishStateContract(linked, fixedDeps());
+    git(linked, 'check-ignore', '-q', '.planning/state.json');
+    assert.strictEqual(lines(excludeOf(tmpDir)).filter((l) => l === '/.planning/state.json').length, 1);
+  });
+
+  // The read-check-append is not atomic across linked worktrees: a racing second append leaves a duplicate line, which git reads as one rule.
+  test('aDuplicatedExcludeEntryIsHarmless', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    fs.appendFileSync(excludeOf(tmpDir), '/.planning/state.json\n/.planning/state.json\n');
+    publishStateContract(tmpDir, fixedDeps());
+    git(tmpDir, 'check-ignore', '-q', '.planning/state.json');
+    assert.strictEqual(lines(excludeOf(tmpDir)).filter((l) => l === '/.planning/state.json').length, 2);
+  });
+
+  // Grammar: the prefix alphabet (every gitignore-significant character) crossed with every spelling of a
+  // user's negation. The entry is written iff no spelling names the file, and git agrees with the outcome.
+  test('prefixEscapeAndNegationProperty', () => {
+    const esc = (x) => x.replace(/[\\*?[]/g, '\\$&');
+    const chars = fc.constantFrom(...(process.platform === 'win32' ? [] : ['\\', '*', '?']), '[', ']', '#', '!', ' ', 'a', 'b');
+    // Windows strips a trailing space from a directory name and rejects the glob characters; POSIX keeps every case.
+    const legal = (name) => isFsLegalName(name) && !(process.platform === 'win32' && /[ .]$/.test(name));
+    // 0, 1, 6 and 7 characters: the project at the repo root, and the bounds of the name length
+    const names = fc.oneof(
+      fc.constant(''),
+      ...[1, 6, 7].map((n) => fc.array(chars, { minLength: n - 1, maxLength: n - 1 }).map((cs) => `d${cs.join('')}`).filter(legal)),
+    );
+    const spellings = fc.constantFrom('none', 'anchoredRel', 'rel', 'filename');
+    fc.assert(fc.property(names, spellings, (name, spelling) => {
+      const repo = createTempGitProject();
+      try {
+        const sub = name ? path.join(repo, name) : repo;
+        fs.mkdirSync(planningDirOf(sub), { recursive: true });
+        if (name) trackUnder(repo, sub);
+        const rel = `${esc(name ? `${name}/` : '')}.planning/state.json`;
+        const negation = { none: null, anchoredRel: `!/${rel}`, rel: `!${rel}`, filename: '!state.json' }[spelling];
+        const exclude = excludeOf(repo);
+        if (negation) fs.appendFileSync(exclude, `${negation}\n`);
+        publishStateContract(sub, fixedDeps());
+        const written = lines(exclude).includes(`/${rel}`);
+        assert.strictEqual(written, negation === null);
+        const target = `${name ? `${name}/` : ''}.planning/state.json`;
+        let ignored = true;
+        try { git(repo, 'check-ignore', '-q', '--', target); } catch { ignored = false; }
+        assert.strictEqual(ignored, negation === null);
+      } finally {
+        cleanup(repo);
+      }
+    }), { seed: 5505, numRuns: 40 });
+  });
+
+  test('anExplicitNegationOfTheEntryIsLeftAlone', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    const exclude = excludeOf(tmpDir);
+    fs.appendFileSync(exclude, '!/.planning/state.json\n');
+    const before = fs.readFileSync(exclude, 'utf8');
+    publishStateContract(tmpDir, fixedDeps());
+    assert.strictEqual(fs.readFileSync(exclude, 'utf8'), before);
+  });
+
+  test('bothExcludeCallersHonourAnExplicitNegation', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    const exclude = excludeOf(tmpDir);
+    fs.appendFileSync(exclude, '!/.planning/x\n');
+    const before = fs.readFileSync(exclude, 'utf8');
+    require('../gsd-core/bin/lib/git-info-exclude.cjs').excludeFromGit(planningDirOf(tmpDir), 'x');
+    assert.strictEqual(fs.readFileSync(exclude, 'utf8'), before);
+  });
+
+  test('planningRootIsTheGitRoot', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const planning = planningDirOf(tmpDir);
+    git(planning, 'init', '-q');
+    publishStateContract(tmpDir, fixedDeps());
+    assert.ok(lines(excludeOf(planning)).includes('/state.json'));
+    git(planning, 'check-ignore', '-q', 'state.json');
+  });
+
+  test('commitDocsFalseLeavesTheEnclosingRepoAlone', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    fs.writeFileSync(path.join(planningDirOf(tmpDir), 'config.json'), JSON.stringify({ planning: { commit_docs: false } }));
+    const exclude = excludeOf(tmpDir);
+    const before = fs.readFileSync(exclude, 'utf8');
+    assert.strictEqual(publishStateContract(tmpDir, fixedDeps()).published, true);
+    assert.strictEqual(fs.readFileSync(exclude, 'utf8'), before);
+  });
+
+  // Parity: the publisher's exclude gate must agree with loadConfig's commit_docs for every
+  // config shape (one resolver; a divergence reopens #5505's "never edit a repo that keeps planning out of git").
+  const gateShapes = {
+    flatFalseNestedTrue: { root: { commit_docs: false, planning: { commit_docs: true } } },
+    flatTrueNestedFalse: { root: { commit_docs: true, planning: { commit_docs: false } } },
+    nestedFalse: { root: { planning: { commit_docs: false } } },
+    nonBooleanTruthy: { root: { commit_docs: 'no' } },
+    nonBooleanFalsy: { root: { commit_docs: 0 } },
+    empty: { root: {} },
+    noConfigFile: { root: null },
+    noConfigIgnoredPlanning: { root: null, ignored: true },
+    emptyConfigIgnoredPlanning: { root: {}, ignored: true },
+    rootFlatFalseWsNestedTrue: { ws: 'ws1', root: { commit_docs: false }, own: { planning: { commit_docs: true } } },
+    rootTrueWsAbsent: { ws: 'ws1', root: { commit_docs: true }, own: {} },
+    wsOnlyFalse: { ws: 'ws1', root: {}, own: { commit_docs: false } },
+    legacyMultiRepoWithSubRepo: { root: { multiRepo: true }, subRepo: true },
+    unusableOwnConfigUnderWs: { ws: 'ws1', root: {}, ownRaw: '{ not json' },
+    unusableRootConfigUnderWs: { ws: 'ws1', rootRaw: '{ not json', own: { commit_docs: true } },
+    absentWsDir: { ws: 'ws1', root: {}, noWsDir: true },
+    // GSD_PROJECT + GSD_WORKSTREAM with no workstream config: loadConfig falls back to the PROJECT's config, not the planning root's.
+    projectWsConfigAbsent: { project: 'proj', ws: 'ws1', root: { commit_docs: false }, noOwnConfig: true },
+  };
+  const put = (file, obj, raw) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, raw ?? JSON.stringify(obj));
+  };
+  for (const [name, shape] of Object.entries(gateShapes)) {
+    test(`commitDocsGateMatchesCommitPolicy:${name}`, (t) => {
+      const tmpDir = createTempGitProject();
+      t.after(() => cleanup(tmpDir));
+      stubEnv(t, 'GSD_PROJECT', shape.project);
+      stubEnv(t, 'GSD_WORKSTREAM', shape.ws);
+      const planning = planningDirOf(tmpDir);
+      if (shape.root || shape.rootRaw) put(path.join(planning, 'config.json'), shape.root, shape.rootRaw);
+      if (shape.subRepo) {
+        fs.mkdirSync(path.join(tmpDir, 'sub'));
+        git(path.join(tmpDir, 'sub'), 'init', '-q');
+      }
+      if (shape.ignored) fs.appendFileSync(excludeOf(tmpDir), '.planning\n');
+      if (shape.ws && !shape.noWsDir) {
+        const wsDir = path.join(planning, ...(shape.project ? [shape.project] : []), 'workstreams', shape.ws);
+        if (shape.noOwnConfig) fs.mkdirSync(wsDir, { recursive: true });
+        else put(path.join(wsDir, 'config.json'), shape.own, shape.ownRaw);
+      }
+      const cfg = require('../gsd-core/bin/lib/config-loader.cjs');
+      const { resolveCommitDocsPolicy } = require('../gsd-core/bin/lib/commands.cjs');
+      const expected = resolveCommitDocsPolicy(cfg.loadConfig(tmpDir, { persist: false }), null, () => cfg.isGitIgnored(tmpDir, '.planning')).resolved;
+      publishStateContract(tmpDir, fixedDeps());
+      // The entry is derived from the path the publisher itself writes; with no workstream directory it writes nothing.
+      const published = path.join(require('../gsd-core/bin/lib/planning-workspace.cjs').planningPaths(tmpDir).planning, 'state.json');
+      const entry = '/' + path.relative(tmpDir, published).replace(/\\/g, '/');
+      assert.deepStrictEqual(lines(excludeOf(tmpDir)).filter((l) => l.endsWith('state.json')), expected && fs.existsSync(published) ? [entry] : []);
+    });
+  }
+
+  test('aBoundaryCommandSpawnsExactlyTheDocumentedGitCalls', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    fs.writeFileSync(path.join(planningDirOf(tmpDir), 'STATE.md'), '# State\n');
+    fs.writeFileSync(path.join(planningDirOf(tmpDir), 'config.json'), '{}');
+    git(tmpDir, 'add', '-A');
+    git(tmpDir, 'commit', '-q', '-m', 'planning');
+    const childProcess = require('node:child_process');
+    let gitCalls = 0;
+    const calls = [];
+    for (const fn of ['spawnSync', 'execFileSync']) {
+      const real = childProcess[fn];
+      t.mock.method(childProcess, fn, function (cmd, ...rest) {
+        if (path.basename(String(cmd)).replace(/\.exe$/, '') === 'git') {
+          gitCalls += 1;
+          calls.push({ args: rest[0], timeout: rest[1] && rest[1].timeout });
+        }
+        return real.call(this, cmd, ...rest);
+      });
+    }
+    assert.strictEqual(publishStateContract(tmpDir).published, true);
+    const GIT_CALL_BUDGET = 6;
+    assert.strictEqual(gitCalls, GIT_CALL_BUDGET);
+    // the two calls every boundary command pays for (the commit_docs ignore check and the exclude rev-parse) are bounded
+    const hot = calls.filter(({ args }) => args.includes('check-ignore') || args.includes('info/exclude'));
+    assert.strictEqual(hot.length, 2);
+    assert.ok(hot.every(({ timeout }) => timeout > 0 && timeout <= 5_000), JSON.stringify(hot));
+  });
+
+  test('publishLeavesALegacyConfigUnrewritten', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    const cfg = path.join(planningDirOf(tmpDir), 'config.json');
+    fs.writeFileSync(cfg, '{"branching_strategy":"none"}');
+    assert.strictEqual(publishStateContract(tmpDir, fixedDeps()).published, true);
+    // publish writes only state.json: loadConfig's legacy migration would rewrite this file.
+    assert.strictEqual(fs.readFileSync(cfg, 'utf8'), '{"branching_strategy":"none"}');
+  });
+
+  test('publishWithAStateMdLeavesALegacyConfigUnrewrittenAndSilent', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    fs.writeFileSync(path.join(planningDirOf(tmpDir), 'STATE.md'), '# State\n');
+    const cfg = path.join(planningDirOf(tmpDir), 'config.json');
+    fs.writeFileSync(cfg, '{"branching_strategy":"none"}');
+    const written = [];
+    t.mock.method(process.stderr, 'write', (chunk) => { written.push(String(chunk)); return true; });
+    assert.strictEqual(publishStateContract(tmpDir).published, true);
+    // classifyProject reads sub_repos through loadConfig: that read must neither migrate the file nor warn.
+    assert.strictEqual(fs.readFileSync(cfg, 'utf8'), '{"branching_strategy":"none"}');
+    assert.deepStrictEqual(written, []);
+  });
+
+  test('aNestedProjectOwnershipProbeIsBounded', (t) => {
+    const { OWNERSHIP_PROBE_TIMEOUT_MS } = require('../gsd-core/bin/lib/state-contract.cjs');
+    assert.ok(OWNERSHIP_PROBE_TIMEOUT_MS > 0 && OWNERSHIP_PROBE_TIMEOUT_MS <= 5_000);
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    const sub = path.join(tmpDir, 'sub');
+    fs.mkdirSync(planningDirOf(sub), { recursive: true });
+    trackUnder(tmpDir, sub);
+    const childProcess = require('node:child_process');
+    const real = childProcess.spawnSync;
+    const probes = [];
+    t.mock.method(childProcess, 'spawnSync', function (cmd, args, opts, ...rest) {
+      if (path.basename(String(cmd)).replace(/\.exe$/, '') === 'git' && args.includes('ls-files')) probes.push(opts.timeout);
+      return real.call(this, cmd, args, opts, ...rest);
+    });
+    publishStateContract(sub, fixedDeps());
+    assert.deepStrictEqual(probes, [OWNERSHIP_PROBE_TIMEOUT_MS]);
+  });
+
+  test('publishStaysSilentOnStderrWithAMalformedConfig', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    fs.writeFileSync(path.join(planningDirOf(tmpDir), 'config.json'), '{ not json');
+    const written = [];
+    t.mock.method(process.stderr, 'write', (chunk) => { written.push(String(chunk)); return true; });
+    assert.strictEqual(publishStateContract(tmpDir, fixedDeps()).published, true);
+    // REQ-SC-04: the publisher is invisible to the parent command's output.
+    assert.deepStrictEqual(written, []);
+  });
+
+  // REQ-SC-04: every stderr diagnostic of a read sits behind `quiet`. One fixture per guard; the loud
+  // read afterwards proves the fixture reaches its guard and that the quiet read did not consume the
+  // once-per-process dedupe slot of a later loud read.
+  describe('quietReadStaysSilentAtEveryGuard', () => {
+    const { loadConfigResolved } = require('../gsd-core/bin/lib/config-loader.cjs');
+    const put = (file, value) => {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value));
+    };
+    const shapes = {
+      rootConfigUnusable: { ws: 'ws', build: ({ planning }) => { put(path.join(planning, 'config.json'), '{ not json'); put(path.join(planning, 'workstreams', 'ws', 'config.json'), {}); } },
+      rootSectionNotObject: { ws: 'ws', build: ({ planning }) => { put(path.join(planning, 'config.json'), { multiRepo: true, planning: 'x' }); put(path.join(planning, 'workstreams', 'ws', 'config.json'), {}); } },
+      ownConfigUnusable: { build: ({ planning }) => put(path.join(planning, 'config.json'), '{ not json') },
+      ownSectionNotObject: { build: ({ planning }) => put(path.join(planning, 'config.json'), { multiRepo: true, planning: 'x' }) },
+      unknownKeys: { build: ({ planning, name }) => put(path.join(planning, 'config.json'), { [`zz_unknown_${name}`]: 1 }) },
+      profileOverrides: { build: ({ planning, name }) => put(path.join(planning, 'config.json'), { runtime: `zz-runtime-${name}` }) },
+      shadowedGlobalDefaults: { build: ({ planning, home }) => { put(path.join(planning, 'config.json'), {}); put(path.join(home, '.gsd', 'defaults.json'), { model_profile: 'quality' }); } },
+      unusableGlobalDefaults: { build: ({ planning, home }) => { cleanup(planning); put(path.join(home, '.gsd', 'defaults.json'), '{ not json'); } },
+    };
+    for (const [name, shape] of Object.entries(shapes)) {
+      test(`quietReadStaysSilent:${name}`, (t) => {
+        const tmpDir = createTempGitProject();
+        const home = createTempDir('gsd-quiet-home-');
+        t.after(() => { cleanup(tmpDir); cleanup(home); });
+        stubEnv(t, 'GSD_HOME', home);
+        stubEnv(t, 'GSD_PROJECT', undefined);
+        stubEnv(t, 'GSD_WORKSTREAM', shape.ws);
+        shape.build({ planning: planningDirOf(tmpDir), home, name });
+        const written = [];
+        t.mock.method(process.stderr, 'write', (chunk) => { written.push(String(chunk)); return true; });
+        loadConfigResolved(tmpDir, { persist: false, quiet: true });
+        assert.deepStrictEqual(written, []);
+        loadConfigResolved(tmpDir, { persist: false });
+        assert.ok(written.length > 0, 'the same read, loud, warns');
+      });
+    }
+  });
+
+  test('preTrackedCopyIsLeftTrackedAndStageable', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    fs.writeFileSync(statePathOf(tmpDir), '{}\n');
+    git(tmpDir, 'add', '-f', '.planning/state.json');
+    git(tmpDir, 'commit', '-q', '-m', 'track');
+    publishStateContract(tmpDir, fixedDeps());
+    // The index is never touched: migrating a tracked copy is the user's call.
+    assert.match(git(tmpDir, 'ls-files', '-v', '--', '.planning/state.json'), /^H \.planning\/state\.json$/m);
+    git(tmpDir, 'add', '--', '.planning/state.json');
+    assert.match(git(tmpDir, 'status', '--porcelain'), /^M {2}\.planning\/state\.json$/m);
   });
 });
 

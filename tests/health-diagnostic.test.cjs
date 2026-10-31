@@ -276,24 +276,24 @@ describe('evaluateRuleTable — duplicate-code guard (row 13)', () => {
 
 // ─── RULES — the fully wired table ──────────────────────────────────────────
 //
-// 34 rule entries. Counted directly from each rule-group file's own exported
+// 35 rule entries. Counted directly from each rule-group file's own exported
 // `RULES` array: root-existence (4: E002/E003/E004/W001) + state-consistency
-// (5: W024/W002/W011/W021/W026) + config-validation (11: W003/E005/W004/
-// W008/W016/W012/W013/W014/W015/W022/W029) + phase-structure (5: W005/W023/
+// (5: W024/W002/W011/W021/W026) + config-validation (12: W003/E005/W004/
+// W008/W016/W012/W013/W014/W015/W022/W029/W031 — W031 is #5505's tracked state.json) + phase-structure (5: W005/W023/
 // I001/W009/W030 — W030 is #5118's out-of-set verification report status) +
 // agent-install (1: W010) + roadmap-disk-consistency (2: W006/
 // W007) + worktree-health (3: W020/W017/W027) + milestone-archive-hygiene
 // (2: W018/W019) + install-surface-shadowing (1: W028, #2873 epic #2866
-// Phase 4a) = 34. config-validation.cts's W029 (#3586, epic #2292) is
+// Phase 4a) = 35. config-validation.cts's W029 (#3586, epic #2292) is
 // registered there per this batch's brief even though its subject
 // (`.planning/` tracked-but-ignored) is not config.json-sourced. E001 and
 // the home-directory guard (E010/I010) are deliberately NOT rows (design
 // doc, "Two guards that stay OUTSIDE the rule table entirely").
 
 describe('RULES', () => {
-  test('is the full, frozen 34-rule table with every code unique', () => {
+  test('is the full, frozen 35-rule table with every code unique', () => {
     assert.equal(Array.isArray(RULES), true);
-    assert.equal(RULES.length, 34);
+    assert.equal(RULES.length, 35);
     const codes = RULES.map((r) => r.code);
     assert.equal(new Set(codes).size, codes.length, 'every rule code must be unique');
   });
@@ -609,5 +609,48 @@ describe('health repair — GSD_PROJECT scoping (#3749)', () => {
       'the documented root-vs-workstream split keeps config.json at the workstream PARENT');
     assert.ok(!fs.existsSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha', 'config.json')),
       'config.json must not move into the workstream dir');
+  });
+});
+
+// ─── W031 remedy (#5505): the pasted command untracks exactly the tracked paths ──
+
+describe('W031 remedy under bash (#5505)', () => {
+  const { spawnSync } = require('node:child_process');
+  const { gitOrThrow, isFsLegalName } = require('./helpers/git-fixture.cjs');
+  const { resolveInterpreter } = require('./helpers/process-seam.cjs');
+  const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  const bash = resolveInterpreter('bash');
+  const hasBash = bash !== null && spawnSync(bash, ['-c', 'true'], { timeout: GIT_TIMEOUT_MS }).status === 0;
+
+  test('W031 remedy untracks exactly the tracked paths under bash', { skip: !hasBash }, (t) => {
+    const cwd = createTempGitProject('gsd-5505-w031-bash-');
+    t.after(() => cleanup(cwd));
+    // '*' is a legal POSIX project name: unquoted-literal, its pathspec would also match the unrelated intel/state.json.
+    // Names Windows rejects ('*', newline) run only where the filesystem accepts them.
+    const projects = ['my proj', "it's", 'a\nb', 'plain', '*'].filter(isFsLegalName);
+    const rels = [];
+    for (const name of projects) {
+      for (const file of ['state.json', 'STATE.md']) {
+        const rel = `.planning/${name}/${file}`;
+        fs.mkdirSync(path.dirname(path.join(cwd, rel)), { recursive: true });
+        fs.writeFileSync(path.join(cwd, rel), '{}\n');
+        rels.push(rel);
+      }
+    }
+    fs.mkdirSync(path.join(cwd, '.planning', 'intel'), { recursive: true });
+    fs.writeFileSync(path.join(cwd, '.planning', 'intel', 'state.json'), '{}\n'); // no project marker: not a publish path
+    gitOrThrow(['add', '-f', '-A'], { cwd });
+    gitOrThrow(['commit', '-q', '-m', 'track'], { cwd });
+
+    const w031 = RULES.find((r) => r.code === 'W031');
+    const [diagnostic] = w031.check(buildPlanningSnapshot(cwd));
+    const command = /`(git --literal-pathspecs rm [^`]*)`/.exec(diagnostic.remedy.args.command)[1];
+    const run = spawnSync(bash, ['-c', command], { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
+    assert.equal(run.status, 0, run.stderr);
+
+    const tracked = gitOrThrow(['ls-files', '-z'], { cwd }).split('\0').filter(Boolean);
+    assert.deepEqual(tracked.filter((f) => f.endsWith('/state.json')), ['.planning/intel/state.json'], `still tracked: ${tracked}`);
+    assert.equal(tracked.filter((f) => f.endsWith('/STATE.md')).length, projects.length);
+    for (const rel of rels) assert.ok(fs.existsSync(path.join(cwd, rel)), `${rel} stays on disk`);
   });
 });
