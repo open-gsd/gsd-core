@@ -238,12 +238,12 @@ AskUserQuestion([
     ]
   },
   {
-    question: "Inline plan threshold — tasks allowed inline before splitting to PLAN.md? (current: <value or 2>)",
+    question: "Inline plan threshold — plans with this many tasks or fewer execute inline instead of spawning a subagent? (current: <value or 2>)",
     header: "Inline Plan Threshold",
     multiSelect: false,
     options: [
       { label: "Keep current", description: "Leave threshold unchanged." },
-      { label: "Enter number", description: "Integer count. Non-numeric rejected. Default: 2" }
+      { label: "Enter number", description: "Integer >= 0. Non-numeric rejected. Default: 2. Set 0 to always spawn a subagent." }
     ]
   }
 ])

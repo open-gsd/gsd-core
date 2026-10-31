@@ -103,10 +103,13 @@ PLANNER_STALL_THRESHOLD_MINUTES=$(gsd_run query config-get planner.stall_thresho
 # a reliability risk this fix cannot afford: a malformed config value would
 # abort the stall-watcher itself with a bash syntax error, silently defeating
 # the exact hang-recovery this issue is about. Reject anything that is not a
-# bare non-negative integer before it is ever used, so a bad config value
-# degrades to the safe default instead of crashing the watcher.
-[[ "$PLANNER_STALL_INTERVAL_MINUTES" =~ ^[0-9]+$ ]] || PLANNER_STALL_INTERVAL_MINUTES=5
-[[ "$PLANNER_STALL_THRESHOLD_MINUTES" =~ ^[0-9]+$ ]] || PLANNER_STALL_THRESHOLD_MINUTES=10
+# bare positive integer before it is ever used, so a bad config value
+# degrades to the safe default instead of crashing the watcher. Zero is
+# rejected too (#3923): an interval of 0 makes every gsd_stall_watch cycle a
+# zero-length sleep, and a threshold of 0 declares a healthy agent stalled on
+# the first check.
+[[ "$PLANNER_STALL_INTERVAL_MINUTES" =~ ^[1-9][0-9]*$ ]] || PLANNER_STALL_INTERVAL_MINUTES=5
+[[ "$PLANNER_STALL_THRESHOLD_MINUTES" =~ ^[1-9][0-9]*$ ]] || PLANNER_STALL_THRESHOLD_MINUTES=10
 
 # gsd_stall_should_recover — pure decision function, no IO, no sleeping. Given how
 # long the orchestrator has been waiting plus two liveness signals (a completion
