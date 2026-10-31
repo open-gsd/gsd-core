@@ -1577,11 +1577,26 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.deepEqual(refusal(complete('--force')).blocked.map((b) => b.phase), ['05']);
   });
 
-  test('G16 UNREADABLE window scope: no gate runs (nothing is archived), a warning says so', () => {
-    // Workstream with phase dirs but no ROADMAP of its own (#3597): scope UNREADABLE, archive skipped.
+  const UNREADABLE_MSG = 'milestone window scope is "unreadable": the phase set cannot be resolved, so this gate was not run';
+  // Workstream with phase dirs but no ROADMAP of its own (#3597): scope UNREADABLE, archive skipped.
+  const seedUnreadable = () => {
     seedWorkstream(tmpDir, { name: 'alpha', state: '---\nmilestone: v1.0\n---\n\n# GSD State\n', active: true });
     for (const d of ['01-a', '02-b']) fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha', 'phases', d), { recursive: true });
+  };
+
+  test('G16 UNREADABLE window scope: a blocking halt gate that cannot run refuses the close, --force does not bypass it', () => {
+    seedUnreadable();
     writeGateCap(home, { command: 'exit 3' });
+    assert.deepEqual(gateResult(), { blocked: [{ cap_id: 'open-work', phase: '*', gate_message: UNREADABLE_MSG, details: null }], warnings: [] });
+    const before = snapshot();
+    assert.deepEqual(refusal(complete()).blocked.map((b) => b.phase), ['*']);
+    assert.deepEqual(refusal(complete('--force')).blocked.map((b) => b.phase), ['*']);
+    assert.deepEqual(snapshot(), before, 'a refused close must leave the project tree byte-identical');
+  });
+
+  test('G16e UNREADABLE window scope with an onError skip gate: a warning says so and the close proceeds', () => {
+    seedUnreadable();
+    writeGateCap(home, { command: 'exit 3', onError: 'skip' });
     assert.deepEqual(gateResult(), { blocked: [], warnings: [{ kind: 'scope_unreadable' }] });
     const r = completeRaw();
     assert.equal(r.exitCode, 0, r.stderr);
@@ -1755,6 +1770,19 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     const r = runGsdTools('milestone complete v1.0 --name MVP --confirm', tmpDir, env());
     assert.equal(r.success, false);
     assert.ok(r.error.includes(phrase[1]), r.error);
+  });
+
+  test('G30 the unstarted-phase guard and the gate token map read the same milestone window', () => {
+    // Free-form ROADMAP (no versioned milestone): the window comes from extractCurrentMilestone for both.
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n### Phase 1: A\n**Goal:** a\n\n### Phase 2: B\n**Goal:** b\n\n### Phase 3: C\n**Goal:** c\n');
+    cleanup(phaseDir('01-foundation'));
+    cleanup(phaseDir('02-build'));
+    fs.mkdirSync(phaseDir('01-a'), { recursive: true });
+    fs.mkdirSync(phaseDir('02-24-7-autonomy'), { recursive: true });
+    writeGateCap(home, { command: 'exit 3' });
+    assert.match(complete().error, /Phase 3/, 'the guard must read the window');
+    assert.deepEqual(refusal(complete('--force')).blocked.map((b) => b.phase), ['01', '02']);
   });
 
   test('G23 a project-code-prefixed phase dir yields the prefixed token', () => {

@@ -554,6 +554,11 @@ const SAFE_PHASE_DIR_RE = /^[^$`;&|<>()#*?[\r\n]+$/;
 // ship.md step 6 owns these two: their bespoke fail-closed branches are not the declared predicate.
 const SHIP_MD_OWNED_GATE_CAPS: ReadonlySet<string> = new Set(['security', 'broken-windows']);
 
+// One window per version, shared by the unstarted-phase guard and the gate token map (ADR-3180 Decision 4(c)).
+function milestoneWindow(cwd: string, roadmap: string, version: string): string {
+  return sliceMilestoneWindow(roadmap, version) ?? extractCurrentMilestone(roadmap, cwd);
+}
+
 /**
  * #5482: engine backstop for the one-way door. Re-runs every blocking ship:pre
  * check.predicate gate once per milestone phase dir through
@@ -573,9 +578,13 @@ function findBlockingShipGates(cwd: string, phasesDir: string, phaseDirs: string
   // A capability that failed to load has no hook left to gate: the typed entry keeps it from reading as clean.
   for (const capId of new Set(loadFailedCapIds)) warnings.push({ kind: 'capability_load_failed', capId });
   const gates = activeHooks.filter((hook) => hook.kind === 'gate' && hook.blocking === true && !SHIP_MD_OWNED_GATE_CAPS.has(hook.capId));
-  // UNREADABLE: the phase set is unresolvable (pass-all fallback), so there is no trustworthy set to gate.
+  // UNREADABLE: the phase set is unresolvable, so each gate is unevaluable: halt blocks, else it warns (once).
   if (scope === SCOPE.UNREADABLE) {
-    if (gates.length > 0) warnings.push({ kind: 'scope_unreadable' });
+    for (const hook of gates) {
+      if ((hook.check as { predicate?: unknown } | undefined)?.predicate === undefined) warnings.push({ kind: 'not_check_predicate', capId: hook.capId });
+      else if (hook.onError === 'halt') blocked.push({ cap_id: hook.capId, phase: '*', gate_message: `milestone window scope is "${SCOPE.UNREADABLE}": the phase set cannot be resolved, so this gate was not run`, details: null });
+      else if (!warnings.some((w) => w.kind === 'scope_unreadable')) warnings.push({ kind: 'scope_unreadable' });
+    }
     return { blocked, warnings };
   }
   // Same token `init` hands ship.md as phase_number: findPhaseInternal on each roadmap id of the window
@@ -584,7 +593,7 @@ function findBlockingShipGates(cwd: string, phasesDir: string, phaseDirs: string
   if (gates.length > 0 && phaseDirs.length > 0) {
     const roadmapPath = planningPaths(cwd).roadmap;
     const roadmap = fs.existsSync(roadmapPath) ? fs.readFileSync(roadmapPath, 'utf-8') : '';
-    const window = sliceMilestoneWindow(roadmap, version) ?? extractCurrentMilestone(roadmap, cwd);
+    const window = milestoneWindow(cwd, roadmap, version);
     for (const id of roadmapParserMod.scanMilestonePhaseIds(window, resolvePhaseIdConvention(cwd))) {
       const found = phaseLocatorMod.findPhaseInternal(cwd, id);
       if (found) tokenByDir.set(path.basename(found.directory), found.phase_number);
@@ -839,7 +848,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
       // free-form (no versioned milestones anywhere) shape, where both
       // windows converge to the same value regardless of which version drove
       // the lookup.
-      const scopedContent = sliceMilestoneWindow(roadmapContent, version) ?? extractCurrentMilestone(roadmapContent, cwd);
+      const scopedContent = milestoneWindow(cwd, roadmapContent, version);
       // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag, owned
       // by buildPhaseHeadingScanRegex (phase-id.cts) so this guard also
       // recognizes bracket-convention headings instead of hand-rolling a
