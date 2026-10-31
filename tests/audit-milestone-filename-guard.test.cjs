@@ -16,12 +16,14 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const AUDIT_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'audit-milestone.md');
+const { collectSection } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+const { auditMilestoneMd, openWorkStep, openWorkStepFields } = require('./helpers/audit-milestone-step.cjs');
 
 // audit-milestone.md is shipped workflow text — the bytes ARE what the
 // runtime loads; a structural scan over it tests the deployed contract.
 test('#3796: the audit report writer and readers agree on the single-version filename', () => {
-  const md = fs.readFileSync(AUDIT_MD, 'utf-8');
+  const md = auditMilestoneMd();
   assert.ok(
     !md.includes('v{version}-v{version}'),
     '#3796: no doubled version segment may appear anywhere in the workflow',
@@ -36,4 +38,50 @@ test('#3796: the audit report writer and readers agree on the single-version fil
     readers.length >= 5,
     `the single-version readers (heading, Report pointers, cat, checklist) must remain; found ${readers.length}`,
   );
+});
+
+// #5482: the audit lists the same open work milestone close would refuse on,
+// before it can report `passed`. The dry-run's would_refuse is that listing.
+test('#5482: audit lists open ship:pre gate work (would_refuse) and blocks passed on it', () => {
+  const step = openWorkStep();
+  assert.ok(step, '#5482: an audit step 5.6 must list open work');
+  assert.match(step, /milestone complete \{version\} --dry-run/);
+  assert.match(step, /would_refuse/);
+  assert.match(step, /gaps_found/);
+});
+
+// #5482: the entries step 5.6 reports need a slot in the report: the step-6 YAML, the gaps_found
+// output and the success criteria must name the same fields the step does.
+test('#5482: open-work entries have a slot in the YAML, the gaps_found output and the success criteria', () => {
+  const md = auditMilestoneMd();
+  const named = openWorkStepFields();
+  assert.deepEqual(named, ['cap_id', 'phase', 'gate_message', 'details']);
+  const aggregate = collectSection(md, (h) => h.text.startsWith('6.'));
+  assert.ok(aggregate, '#5482: step 6 must exist');
+  const lines = splitLines(aggregate.body);
+  const slot = lines.findIndex((l) => /^ {2}open_work:/.test(l));
+  assert.ok(slot >= 0, '#5482: the step-6 YAML gaps: block needs an open_work list');
+  const yaml = [];
+  for (let i = slot + 1; i < lines.length && /^ {4}/.test(lines[i]); i++) yaml.push(lines[i]);
+  const section = collectSection(md, (h) => h.text === 'Open Work');
+  assert.ok(section, '#5482: the gaps_found output needs an Open Work section');
+  for (const f of named) {
+    assert.match(yaml.join('\n'), new RegExp(`\\b${f}:`), `YAML open_work names ${f}`);
+    assert.ok(section.body.includes(`{${f}}`), `Open Work section names {${f}}`);
+  }
+  // gate_message and details are untrusted command output: the report line shows them inside a code fence.
+  const unfenced = collectSection(md, (h) => h.text === 'Open Work', { stripFences: true });
+  for (const f of ['gate_message', 'details']) {
+    assert.ok(!unfenced.body.includes(`{${f}}`), `{${f}} must sit inside a code fence in the Open Work section`);
+  }
+  assert.match(md.match(/<success_criteria>[\s\S]*<\/success_criteria>/)[0], /open work/i);
+});
+
+// #5482: a dry-run that evaluated no gate (gate_warnings) must not read as clean, in the audit and in the close preview.
+test('#5482: audit step 5.6 and the close preview both act on a non-empty gate_warnings', () => {
+  assert.match(openWorkStep(), /`gate_warnings` is non-empty/);
+  const md = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'complete-milestone.md'), 'utf-8');
+  const preview = splitLines(md).find((l) => l.startsWith('Read `would_refuse` from the JSON'));
+  assert.ok(preview, 'the close preview must read would_refuse');
+  assert.match(preview, /`gate_warnings` is non-empty/);
 });
