@@ -10511,7 +10511,7 @@ printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
 
         const agentWtDir = path.join(repoDir, 'worktree-agent-prunable');
         gitOrThrow(['worktree', 'add', '-b', 'worktree-agent-prunable', agentWtDir, 'HEAD'], { cwd: repoDir });
-        fs.rmSync(agentWtDir, { recursive: true, force: true });
+        cleanup(agentWtDir);
 
         const manifestPath = path.join(repoDir, '.planning', 'wave-1-manifest.json');
         fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
@@ -10566,7 +10566,11 @@ printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
       }
     });
 
-    test('post-wave hook stash excludes wave manifests under worktree_skip_hooks=true', () => {
+    test('post-wave hook stash excludes wave manifests under worktree_skip_hooks=true', (t) => {
+      if (process.platform === 'win32') {
+        t.skip('bash script execution test is POSIX-specific');
+        return;
+      }
       const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-skip-hooks-'));
       try {
         gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repoDir });
