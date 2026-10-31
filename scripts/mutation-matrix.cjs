@@ -681,6 +681,31 @@ const COVERED = {
     // about 3 minutes. Floor = floor(75.14) - 1 = 74.
     minScore: 74,
   },
+  // dispatch-isolation: net-new module from #4904 (ADR-4630 Phase 2), the owner of the
+  // dispatch-isolation vocabulary. Without this entry the gate reports has_work: "false"
+  // and skips it, the gap the state-contract note above describes.
+  //
+  // No test file matches the "dispatch-isolation*" naming rule. The guards and their
+  // fast-check properties live in host-integration-validator-parity.test.cjs, beside the
+  // parity pins for every consumer, so it is declared via extraTests. Its five
+  // gsd-tools spawns (the stale-lib remedy and usage-text tests) do not load this module
+  // in-process, so perTest coverage never re-runs them per mutant. Listing it makes it a
+  // global trigger (below); it changed in 2 commits on next since 2026-07-01, the same rate
+  // as state-contract.unit.test.cjs.
+  //
+  // Re-derived after parseRenewHeldMs moved into the module (#4904): CI run 40947108766,
+  // job 123705480087, `Stryker (dispatch-isolation)` (PR #5126): 87.18% (34 killed /
+  // 0 timeout / 5 survived); every parser mutant is killed by the parity file's rows and
+  // properties. The 5 survivors are the ones measured before it, all equivalent for this tree:
+  // the three __esModule interop mutants (only a default or namespace import reads that
+  // flag, and no consumer uses either), and `typeof value === 'string' &&` -> `true &&` in
+  // both guards (both Sets are built from the string tuples and nothing in the tree adds to
+  // them, so no non-string is ever a member). Floor = floor(87.18) - 1 = 86.
+  'dispatch-isolation': {
+    cjs: 'gsd-core/bin/lib/dispatch-isolation.cjs',
+    extraTests: ['host-integration-validator-parity.test.cjs'],
+    minScore: 86,
+  },
 };
 
 // Compute the final, derived `tests` array for every COVERED entry. Done once, after the

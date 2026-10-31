@@ -231,6 +231,8 @@ const RATCHET_BASELINE = {
                                    // planning-inspect / model-catalog above; raise as tests improve.
   'state-document':          50,  // #4998: CI 50.47% (run 39742269013); range minimum
   'planning-document':       74,  // #4998: CI run 39736529871 (#5234): measured 75.14%; floor(75.14)-1
+  'dispatch-isolation':      86,  // #4904: net-new module; re-derived after parseRenewHeldMs moved in:
+                                   // CI run 40947108766 (PR #5126): measured 87.18%; floor(87.18)-1.
 };
 
 describe('mutation-matrix ratchet: floor equality enforcement', () => {

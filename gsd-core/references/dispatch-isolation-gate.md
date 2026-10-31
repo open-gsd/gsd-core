@@ -26,8 +26,15 @@ read. It requires `gsd_run` to be defined (the standard shim preamble).
 # stdout is NOT a capability verdict, and reporting it as one tells a Claude
 # Code user their runtime "declares no executor-isolation primitive", which is
 # false (#2652 review).
-_ISOLATION_RAW=$(gsd_run query dispatch-isolation --raw 2>/dev/null)
+# The decision and whether it is HELD come from ONE call: a plain query reports
+# a degrade an earlier step recorded as `none` with `held: true` (see "A plain
+# re-query reports the held decision" below), and a second call could land
+# after that record went stale and answer the host capability instead.
+_ISOLATION_JSON=$(gsd_run query dispatch-isolation --json 2>/dev/null)
 _ISOLATION_RC=$?
+_ISOLATION_FIELDS=$(printf '%s' "$_ISOLATION_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write((j&&typeof j.isolation==="string"&&/^[a-z-]+$/.test(j.isolation)?j.isolation:"")+" "+(j&&j.held===true?"held:"+(Number.isSafeInteger(j.decidedAt)&&j.decidedAt>=0?j.decidedAt:""):"live"))}catch{process.stdout.write(" live")}})')
+_ISOLATION_RAW=${_ISOLATION_FIELDS% *}
+_ISOLATION_HELD=${_ISOLATION_FIELDS##* }
 if [ $_ISOLATION_RC -ne 0 ] || [ -z "$_ISOLATION_RAW" ]; then
   ISOLATION=none
   ISOLATION_RESOLVED=false      # fail closed, but we did NOT learn a verdict
@@ -40,6 +47,16 @@ case "$ISOLATION" in
   *) ISOLATION=none; ISOLATION_RESOLVED=false ;;   # out of vocabulary is not a verdict either
 esac
 
+# A HELD `none` is a degrade, not a capability verdict: an earlier step of this
+# run decided sequential dispatch and recorded it. Follow it, the way the
+# opt-out below is followed, instead of reading it as a host with no primitive.
+_RENEW_HELD=""
+if [ "$ISOLATION" = "none" ] && [ "$ISOLATION_RESOLVED" = "true" ] && [ "${_ISOLATION_HELD%%:*}" = "held" ]; then
+  USE_WORKTREES=false
+  _RENEW_HELD="${_ISOLATION_HELD#held:}"
+  echo "⚠ Dispatch isolation is held at none: an earlier step of this run degraded to sequential dispatch within the last 10 minutes. Running sequentially on the main working tree. _RENEW_HELD=$_RENEW_HELD" >&2
+fi
+
 # Project-level opt-out wins on every host; a host with no primitive fails closed.
 [ "$USE_WORKTREES" = "false" ] && ISOLATION=none
 if [ "$ISOLATION" = "none" ] && [ "$USE_WORKTREES" != "false" ]; then
@@ -51,11 +68,28 @@ if [ "$ISOLATION" = "none" ] && [ "$USE_WORKTREES" != "false" ]; then
   exit 1
 fi
 
-# Re-record: the opt-out above is decided in shell, where the resolver cannot see
-# it, so the sentinel still asserts the naturally-resolved mode. See "Re-record
-# after every degrade" below — this is the first of the mandatory calls.
-gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" >/dev/null 2>&1 || true
+# Re-record: the resolver re-derives the opt-out (#3737) and the base-check (#4222)
+# for the decision it records, so the sentinel already carries the opt-out decided
+# above; this call still pushes the shell's FINAL value through the same write path.
+# See "Re-record after every degrade" below — this is the first of the mandatory
+# calls, and the orchestrator-worktree fallback further down has its own.
+# A HELD `none` is re-recorded too. The isolation guard reads the record at the
+# instant of the dispatch, and the held one belongs to the step that wrote it: its
+# phase/plan can disagree with what this site dispatches, and its ten minutes can
+# run out before the dispatch, either of which turns this sequential dispatch into
+# a denied one. `--renew-held` passes the held answer's own decision time, so the
+# re-record refreshes the guard's record without restarting the hold: it still
+# lapses ten minutes after the degrade was decided.
+gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" ${_RENEW_HELD:+--renew-held "$_RENEW_HELD"} >/dev/null 2>&1 || true
 ```
+
+**Carry the gate's values into later tool calls.** These blocks set `ISOLATION`,
+`USE_WORKTREES`, `HARNESS_FLAG` and `_RENEW_HELD`, and shell state is lost between tool calls.
+A site that reads them in a later call, including every re-record below, restores them first:
+`ISOLATION` := the value this block resolved, `USE_WORKTREES` := its final value,
+`HARNESS_FLAG` := the flag "Resolve the harness flag" set, and `_RENEW_HELD` := the value the
+held warning printed (empty when no hold was followed). Without `_RENEW_HELD` the re-record is a
+fresh decision and restarts the ten minutes that `--renew-held` keeps.
 
 | `ISOLATION` | Meaning | What a dispatch site does |
 |---|---|---|
@@ -70,11 +104,14 @@ Fail-closed is the invariant: an undeclared, unknown, or unresolvable declaratio
 
 The flag is descriptor data — never hardcode `isolation="worktree"`, which is Claude Code's
 literal and wrong on any other harness-worktree host (Cursor declares the same capability).
+It is read from `inspect-dispatch-isolation`, which answers the host's declaration and records
+nothing: a plain `query dispatch-isolation` here would report a degrade another plan recorded
+as `none` with no flag, and stop a dispatch that has nothing to do with that plan.
 
 ```bash
 HARNESS_FLAG=""
 if [ "$ISOLATION" = "harness-worktree" ]; then
-  HARNESS_FLAG=$(gsd_run query dispatch-isolation --json 2>/dev/null \
+  HARNESS_FLAG=$(gsd_run query inspect-dispatch-isolation --json 2>/dev/null \
     | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(j&&j.harnessFlag?j.harnessFlag:"")}catch{process.stdout.write("")}})')
   [ -n "$HARNESS_FLAG" ] || { echo "FATAL: runtime declares dispatch.isolation=harness-worktree but no harnessIsolationFlag — refusing to dispatch an agent that would believe it is isolated." >&2; exit 1; }
 fi
@@ -108,22 +145,57 @@ dispatch.** This is not optional bookkeeping — it is what keeps the dispatch l
 (`.gsd/dispatch-isolation-sentinel.json`) as an unconditional side effect, and the shipped
 `PreToolUse` isolation guards read that sentinel at the instant of the dispatch call
 (`hooks/gsd-agent-isolation-guard.js`, `hooks/gsd-cursor-subagent-start.js`, shared reader
-`hooks/lib/isolation-sentinel.js`, #3045). Every degrade in this file is decided **in shell**,
-where the resolver cannot see it. Degrade without re-recording and the sentinel still asserts
+`hooks/lib/isolation-sentinel.js`, #3045). The resolver re-derives two of these degrades itself
+for the decision it records — the project opt-out (#3737) and the `worktree.base-check` divergence
+(#4222) — but every other degrade in this file is decided **in shell**, where the resolver cannot
+see it. Degrade without re-recording and the sentinel still asserts
 `harness-worktree` while the dispatch correctly omits the harness flag — the guard reads that
 as a dropped isolation flag and **denies the dispatch with exit 2**. The task does not run
 unisolated; it does not run at all.
 
 ```bash
-gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" >/dev/null 2>&1 || true
+gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" ${_RENEW_HELD:+--renew-held "$_RENEW_HELD"} >/dev/null 2>&1 || true
 ```
 
 `--force-isolation` pushes the final, shell-computed value through the same single write path
 (`none` also clears the stored `harnessFlag`, since none applies to sequential dispatch). It is
-idempotent and last-write-wins, so a site that degrades more than once simply calls it again —
-record immediately before dispatch so the sentinel is always fresh. Best-effort by design: a
-write failure must never fail the dispatch, since the guards' sentinel-absent fallback is safe,
-just less precise.
+idempotent and last-write-wins among forced records, so a site that degrades more than once
+simply calls it again — record immediately before dispatch so the sentinel is always fresh.
+`_RENEW_HELD` is set only by the resolve block above, when it followed a held `none`, to that
+answer's `decidedAt`; the expansion then adds `--renew-held <decidedAt>`, so the re-record keeps
+the decision time of the hold this site followed instead of restarting it.
+Best-effort by design: a write failure must never fail the dispatch, since the guards'
+sentinel-absent fallback is safe, just less precise.
+
+**A plain re-query reports the held decision (#4561, #4904).** Once a fresh `none` is recorded
+with `--force-isolation`, a later plain `query dispatch-isolation` — a subagent's own `gsd_run`
+traffic, a wave transition, another dispatch site's resolve — *holds* that record instead of
+re-persisting the host capability over it, provided it names no different `--phase`/`--plan`
+(an identifier it omits is unconstrained; one it names must match). It also **answers with
+it**: stdout is `none`, and under `--json` `harnessFlag` and `exec` are null, `held` is
+`true` and `decidedAt` is the epoch ms the held degrade was decided. The resolve block above reads `held` and runs sequentially rather than failing closed,
+then re-records `none` at its own scope with `--renew-held <decidedAt>`: the guard judges the dispatch
+against the record present at that instant, and the held one may name another phase or plan,
+or lapse before this site dispatches. The host's descriptors (`harnessFlag`,
+`exec`) are read from `inspect-dispatch-isolation`, which no hold reaches. A forced record
+always writes, a plain query scoped to a *different* plan writes (the per-plan gate's fresh
+record for the next plan), and a record past the reader's freshness window is replaced as
+before. The record carries `decided_at`, when the degrade was decided, beside `written_at`. A
+`--renew-held <ms>` re-record refreshes `written_at` for the guard and records the `decidedAt` of
+the answer the site followed (never later than the write), and the hold measures its ten minutes
+from `decided_at`. The value comes from the answer, not from the file at write time, which may by
+then hold another plan's record. So renewing does not extend a degrade: it lapses ten minutes
+after it was decided, however many gates renew it. A forced `none` without `--renew-held` is a
+new decision and starts its own ten minutes, so the sites that decide one themselves (Pattern B
+segments, the orchestrator-worktree fallback below) keep the next unscoped query at `none` while
+they recur less than ten minutes apart. The re-record is
+still mandatory after any degrade a site decides itself: the resolver cannot compute these
+degrades, it only stops racing you for the file.
+
+Because a query that names no `--phase`/`--plan` matches every record, a fresh degrade from one
+workflow also holds for the next unscoped resolve within the window — a `/gsd:quick` run started
+a few minutes after an `execute-plan` Pattern B segment runs sequentially. That errs toward the
+safe side, and the window bounds it.
 
 Wave sites re-record per plan rather than per phase — see
 `gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md`.
