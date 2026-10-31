@@ -28,20 +28,21 @@
  * — never a regex over the reason prose (CONTRIBUTING.md).
  */
 
-const { describe, test } = require('node:test');
+const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fc = require('fast-check');
 const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
-const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { QUICK_SPAWN_TIMEOUT_MS, GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-secret-read-guard.js');
 
-function runHook(payload) {
+function runHook(payload, { cwd } = {}) {
   const r = runHookSeam(HOOK_PATH, [], {
     input: typeof payload === 'string' ? payload : JSON.stringify(payload),
     env: { ...process.env },
     timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
+    ...(cwd === undefined ? {} : { cwd }),
   });
   return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
 }
@@ -1496,5 +1497,276 @@ describe('gsd-secret-read-guard: heredoc inside a command substitution (#5513)',
   test('a read after a top-level heredoc whose tag holds a substitution is denied', () => {
     const cmd = 'cat <<E$(x)F\ndata\nE$(x)F\ncat .env';
     assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+});
+
+/**
+ * #4432: `hooks.secret_read_exempt` in `.planning/config.json` lets a project
+ * exempt a named file from this guard, but only a file committed in HEAD as a
+ * regular blob; Read/Grep resolve a relative path against the payload `cwd`,
+ * Bash honors absolute paths only.
+ *
+ * Matrix rows covered (50-test-matrix.md, suite H):
+ *   1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 23 32 33 34 35 38
+ * Rows 17-22, 24-31, 36, 37, 41, 43 are suite L (tests/secret-read-exemptions.test.cjs);
+ * rows 39-40 are suite C (tests/config.test.cjs).
+ *
+ * Fixture: a real git repo whose HEAD commits `.env.production` (the template,
+ * content `KEY=CHANGE_ME`) and `.secrets`; `.env` and `apps/api/.env.production`
+ * are left untracked.
+ */
+describe('gsd-secret-read-guard: hooks.secret_read_exempt (#4432)', () => {
+  const fs = require('node:fs');
+  const { spawnSync } = require('node:child_process');
+  const { createTempGitProject, cleanup } = require('./helpers.cjs');
+  const KEY = 'hooks.secret_read_exempt';
+
+  let repo;
+  const abs = (rel) => path.join(repo, rel);
+  // The shipping-caller shape: the runtime puts the session cwd in the payload.
+  const withCwd = (payload) => ({ ...payload, cwd: repo });
+  const run = (payload) => runHook(withCwd(payload));
+
+  function git(args) {
+    const r = spawnSync('git', ['-c', 'commit.gpgsign=false', ...args], {
+      cwd: repo,
+      timeout: GIT_TIMEOUT_MS,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 't',
+        GIT_AUTHOR_EMAIL: 't@t',
+        GIT_COMMITTER_NAME: 't',
+        GIT_COMMITTER_EMAIL: 't@t',
+      },
+      encoding: 'utf8',
+    });
+    assert.equal(r.status, 0, `git ${args.join(' ')} failed: ${r.stderr}`);
+  }
+
+  /** `undefined` removes the config; a string is written verbatim; else the entries list. */
+  function configure(value, { raw = false } = {}) {
+    const dir = path.join(repo, '.planning');
+    const file = path.join(dir, 'config.json');
+    if (value === undefined) {
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+      return;
+    }
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, raw || typeof value === 'string' ? value : JSON.stringify(value));
+  }
+  const listed = (...entries) => configure({ hooks: { secret_read_exempt: entries } });
+
+  before(() => {
+    repo = fs.realpathSync(createTempGitProject('gsd-4432-hook-'));
+    fs.writeFileSync(abs('.env.production'), 'KEY=CHANGE_ME\n');
+    fs.writeFileSync(abs('.secrets'), 'KEY=CHANGE_ME\n');
+    git(['add', '-f', '.env.production', '.secrets']);
+    git(['commit', '-m', 'fixture: committed secret-named templates']);
+    fs.writeFileSync(abs('.env'), 'KEY=real\n');
+    fs.mkdirSync(abs('apps/api'), { recursive: true });
+    fs.writeFileSync(abs('apps/api/.env.production'), 'KEY=real\n');
+  });
+
+  after(() => {
+    cleanup(repo);
+  });
+
+  // Row 1.
+  test('unconfigured repo still blocks the template', () => {
+    configure(undefined);
+    assertBlocked(run(read(abs('.env.production'))), 'no config', { tool: 'Read', path: abs('.env.production') });
+  });
+
+  // Row 2.
+  test('config without the key still blocks', () => {
+    for (const cfg of [{}, { hooks: {} }, { hooks: { context_warnings: true } }]) {
+      configure(cfg);
+      assertBlocked(run(read(abs('.env.production'))), JSON.stringify(cfg), { tool: 'Read' });
+    }
+  });
+
+  // Row 3.
+  test('empty list exempts nothing', () => {
+    listed();
+    assertBlocked(run(read(abs('.env.production'))), 'empty list', { tool: 'Read' });
+  });
+
+  test('a string or object value exempts nothing', () => {
+    for (const value of ['.env.production', { '.env.production': true }, 7]) {
+      configure({ hooks: { secret_read_exempt: value } });
+      assertBlocked(run(read(abs('.env.production'))), JSON.stringify(value), { tool: 'Read' });
+    }
+  });
+
+  // Row 4.
+  test('one listed committed file is readable', () => {
+    listed('.env.production');
+    assertAllowed(run(read(abs('.env.production'))), 'listed template');
+    assertBlocked(run(read(abs('.env'))), 'unlisted .env stays blocked', { tool: 'Read', path: abs('.env') });
+  });
+
+  // Row 5.
+  test('two listed files each readable, unlisted .env blocked', () => {
+    listed('.env.production', '.secrets');
+    assertAllowed(run(read(abs('.env.production'))), '.env.production');
+    assertAllowed(run(read(abs('.secrets'))), '.secrets');
+    assertBlocked(run(read(abs('.env'))), '.env', { tool: 'Read', path: abs('.env') });
+  });
+
+  // Row 6.
+  test('relative Read path resolves against the payload cwd', () => {
+    listed('.env.production');
+    assertAllowed(run(read('.env.production')), 'relative');
+    assertAllowed(run(read('./.env.production')), 'dot-relative');
+  });
+
+  // Row 7.
+  test('Kimi ReadFile honors the exemption', () => {
+    listed('.env.production');
+    const kimi = (p) => ({ tool_name: 'kimi_cli.tools.file:ReadFile', tool_input: { path: p } });
+    assertAllowed(run(kimi(abs('.env.production'))), 'kimi abs');
+    assertAllowed(run(kimi('.env.production')), 'kimi relative');
+    assertBlocked(run(kimi(abs('.env'))), 'kimi unlisted', { tool: 'Read', path: abs('.env') });
+  });
+
+  // Row 8.
+  test('Grep path honors the exemption', () => {
+    listed('.env.production');
+    assertAllowed(run(grep({ path: abs('.env.production') })), 'grep abs');
+    assertAllowed(run(grep({ path: '.env.production' })), 'grep relative');
+    assertBlocked(run(grep({ path: abs('.env') })), 'grep unlisted', { tool: 'Grep', path: abs('.env') });
+  });
+
+  // Row 9.
+  test('Grep glob is not widened by an exemption', () => {
+    listed('.env.production');
+    assertBlocked(run(grep({ glob: '.env.production' })), 'glob', { tool: 'Grep' });
+    assertBlocked(run(grep({ path: repo, glob: '.env.production' })), 'path + glob', { tool: 'Grep' });
+  });
+
+  // Row 10.
+  test('Bash absolute path honors the exemption', () => {
+    listed('.env.production');
+    assertAllowed(run(bash(`cat ${abs('.env.production')}`)), 'cat abs');
+    assertBlocked(run(bash(`cat ${abs('.env')}`)), 'cat unlisted abs', { tool: 'Bash', path: abs('.env') });
+  });
+
+  // Row 11.
+  test('Bash relative name stays blocked', () => {
+    listed('.env.production');
+    assertBlocked(run(bash('cat .env.production')), 'cat relative', { code: 'secret-read', tool: 'Bash', path: '.env.production' });
+    assertBlocked(run(bash('cat ./.env.production')), 'cat dot-relative', { tool: 'Bash' });
+  });
+
+  // Row 12.
+  test('an exempt operand does not end the scan', () => {
+    listed('.env.production');
+    assertBlocked(run(bash(`cat ${abs('.env.production')} .env`)), 'exempt then secret', { tool: 'Bash', path: '.env' });
+    assertBlocked(run(bash(`cat .env ${abs('.env.production')}`)), 'secret then exempt', { tool: 'Bash', path: '.env' });
+  });
+
+  // Row 13.
+  test('ref:path never exempt', () => {
+    listed('.env.production');
+    assertBlocked(run(bash('git show HEAD:.env.production')), 'git show', { tool: 'Bash' });
+    assertBlocked(run(bash(`git show HEAD:${abs('.env.production')}`)), 'git show abs', { tool: 'Bash' });
+  });
+
+  // Row 14.
+  test('cd re-anchoring cannot borrow the exemption', () => {
+    listed('.env.production');
+    assertBlocked(run(bash('cd apps/api && cat .env.production')), 'cd then cat', { tool: 'Bash' });
+  });
+
+  // Row 15.
+  test('find -name stays blocked', () => {
+    listed('.env.production');
+    assertBlocked(run(bash('find . -name .env.production -exec cat {} \\;')), 'find -name', { tool: 'Bash' });
+  });
+
+  // Row 16.
+  test('untracked listed file stays blocked', () => {
+    listed('.env', 'apps/api/.env.production');
+    assertBlocked(run(read(abs('.env'))), 'untracked .env', { tool: 'Read', path: abs('.env') });
+    assertBlocked(run(read(abs('apps/api/.env.production'))), 'untracked nested', { tool: 'Read' });
+    assertBlocked(run(bash(`cat ${abs('.env')}`)), 'untracked via Bash', { tool: 'Bash', path: abs('.env') });
+  });
+
+  // Row 23.
+  test('nested same-name secret stays blocked', () => {
+    listed('.env.production');
+    assertBlocked(run(read(abs('apps/api/.env.production'))), 'nested abs', { tool: 'Read', path: abs('apps/api/.env.production') });
+    assertBlocked(run(read('apps/api/.env.production')), 'nested relative', { tool: 'Read' });
+  });
+
+  // Row 32.
+  test('missing cwd falls back to the process cwd', () => {
+    listed('.env.production');
+    assertAllowed(runHook(read('.env.production'), { cwd: repo }), 'no cwd in payload');
+    assertAllowed(runHook(read(abs('.env.production')), { cwd: repo }), 'no cwd, absolute');
+    assertAllowed(runHook({ ...read('.env.production'), cwd: 42 }, { cwd: repo }), 'numeric cwd');
+    assertAllowed(runHook({ ...read('.env.production'), cwd: '' }, { cwd: repo }), 'empty cwd');
+    assertBlocked(runHook(read('.env'), { cwd: repo }), 'unlisted, no cwd', { tool: 'Read' });
+  });
+
+  // Row 33.
+  test('exemption is not .env-specific', () => {
+    listed('.secrets');
+    assertAllowed(run(read(abs('.secrets'))), '.secrets');
+    assertBlocked(run(read(abs('.env.production'))), 'other committed template stays blocked', { tool: 'Read' });
+  });
+
+  // Row 34.
+  test('option-value absolute path honors the exemption', () => {
+    const cmd = `cat --env-file=${abs('.env.production')}`;
+    configure(undefined);
+    assertBlocked(run(bash(cmd)), 'control: unconfigured', { tool: 'Bash' });
+    listed('.env.production');
+    assertAllowed(run(bash(cmd)), 'configured');
+  });
+
+  // Row 35.
+  test('non-hit path never reads config', () => {
+    configure('{ this is not json', { raw: true });
+    assertAllowed(run(bash('ls -la && echo hello')), 'broken config, ordinary bash');
+    listed('.env.production');
+    assertAllowed(run(bash('git status --short')), 'configured, ordinary bash');
+  });
+
+  test('a broken config fails closed for a secret read', () => {
+    configure('{ this is not json', { raw: true });
+    assertBlocked(run(read(abs('.env.production'))), 'broken config', { tool: 'Read' });
+  });
+
+  // Row 38.
+  test('Bash deny reason names the config key only when exemptions are configured', () => {
+    const cmd = 'cat .env.production';
+    configure(undefined);
+    const plain = assertBlocked(run(bash(cmd)), 'unconfigured', { tool: 'Bash' });
+    listed('.env.production');
+    const hinted = assertBlocked(run(bash(cmd)), 'configured', { tool: 'Bash' });
+    assert.notEqual(hinted.reason, plain.reason);
+    assert.ok(hinted.reason.includes(KEY), 'configured Bash reason names the key');
+    assert.ok(!plain.reason.includes(KEY), 'unconfigured reason is unchanged');
+  });
+
+  test('Read deny reason is unchanged by configured exemptions', () => {
+    configure(undefined);
+    const plain = assertBlocked(run(read(abs('.env'))), 'unconfigured', { tool: 'Read' });
+    listed('.env.production');
+    const configured = assertBlocked(run(read(abs('.env'))), 'configured', { tool: 'Read' });
+    assert.equal(configured.reason, plain.reason);
+  });
+
+  test('property: an unlisted secret name stays blocked while one file is exempt', () => {
+    listed('.env.production');
+    fc.assert(
+      fc.property(SECRET, (name) => {
+        assertBlocked(run(read(abs(name))), name, { tool: 'Read', path: abs(name) });
+        assertBlocked(run(bash(`cat ${abs(name)}`)), name, { tool: 'Bash', path: abs(name) });
+        return true;
+      }),
+      PROPERTY_RUNS,
+    );
   });
 });
