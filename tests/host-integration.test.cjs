@@ -2907,6 +2907,7 @@ describe('#2627 dispatch-isolation CLI route', () => {
   const { runNode } = require('./helpers/process-seam.cjs');
   const { throwIfFailed } = require('./helpers/git-fixture.cjs');
   const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  const os = require('node:os');
   const GSD_TOOLS = path.join(REPO_ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
   const { createTempDir } = require('./helpers.cjs');
   const { before, after } = require('node:test');
@@ -2918,9 +2919,23 @@ describe('#2627 dispatch-isolation CLI route', () => {
   before(() => { cwd = createTempDir('gsd-2627-route-'); });
   after(() => cleanup(cwd));
 
-  function query(runtimeId, extraArgs = [], generation = '1') {
-    const env = { ...process.env, GSD_RUNTIME: runtimeId };
-    if (runtimeId === 'opencode') env.GSD_OPENCODE_GENERATION = generation;
+  function query(runtimeId, extraArgs = [], generation = '1', execOpts = {}) {
+    const env = { ...process.env, GSD_RUNTIME: runtimeId, ...execOpts.env };
+    if (runtimeId === 'opencode') {
+      if (generation !== undefined) {
+        env.GSD_OPENCODE_GENERATION = generation;
+      } else {
+        delete env.GSD_OPENCODE_GENERATION;
+      }
+    }
+    if (execOpts.env && ('PATH' in execOpts.env || 'Path' in execOpts.env)) {
+      const p = execOpts.env.PATH ?? execOpts.env.Path;
+      delete env.PATH;
+      delete env.Path;
+      env.PATH = p;
+      env.Path = p;
+    }
+    const cwd = execOpts.cwd || REPO_ROOT;
     const r = runNode(
       [GSD_TOOLS, 'query', 'dispatch-isolation', ...extraArgs],
       { cwd, env, timeoutMs: PROBE_TIMEOUT_MS },
@@ -2977,9 +2992,35 @@ describe('#2627 dispatch-isolation CLI route', () => {
   });
 
   test('OpenCode 2 binds the worktree through process cwd without --dir', () => {
-    const result = JSON.parse(query('opencode', ['--json', '--cwd-target', '/tmp/wt', '--prompt', 'P'], '2'));
-    assert.deepEqual(result.exec.args, ['run', 'P']);
-    assert.equal(result.exec.cwd, '/tmp/wt');
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-opencode2-'));
+    try {
+      const result = JSON.parse(
+        query('opencode', ['--json', '--cwd-target', '/tmp/wt', '--prompt', 'P'], '2', { cwd: tempDir }),
+      );
+      assert.deepEqual(result.exec.args, ['run', 'P']);
+      assert.equal(result.exec.cwd, '/tmp/wt');
+    } finally {
+      cleanup(tempDir);
+    }
+  });
+
+  test('absent OpenCode generation retains --dir on the CLI route', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-opencode-absent-'));
+    const emptyBinDir = path.join(tempDir, 'empty-bin');
+    fs.mkdirSync(emptyBinDir, { recursive: true });
+    try {
+      const result = JSON.parse(
+        query(
+          'opencode',
+          ['--json', '--cwd-target', '/tmp/wt', '--prompt', 'P'],
+          undefined,
+          { cwd: tempDir, env: { PATH: emptyBinDir, Path: emptyBinDir } },
+        ),
+      );
+      assert.deepEqual(result.exec.args, ['run', '--dir', '/tmp/wt', 'P']);
+    } finally {
+      cleanup(tempDir);
+    }
   });
 
   test('a cwd target with no prompt still resolves (prompt is optional at this seam)', () => {
