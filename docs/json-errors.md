@@ -187,7 +187,7 @@ caller, byte-identical to pre-#3912 behavior. See
 ### `error(message, reason)`
 
 `error()`'s `reason` argument now maps onto a declared outcome name (`USAGE`, `NO_INPUT`,
-`UNAVAILABLE`, `INTERNAL`, or `FAIL`) via a fixed table over all 28 `ERROR_REASON` members.
+`UNAVAILABLE`, `INTERNAL`, or `FAIL`) via a fixed table over all 31 `ERROR_REASON` members.
 
 - **Under `v1`, the mapping is recorded but never projected.** `error()` still throws
   `ExitError(1)` unconditionally, exactly as before — stderr and the exit code are byte-identical to
