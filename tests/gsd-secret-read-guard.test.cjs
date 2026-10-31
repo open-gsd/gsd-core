@@ -1665,6 +1665,24 @@ describe('gsd-secret-read-guard: hooks.secret_read_exempt (#4432)', () => {
     assertBlocked(run(bash(`cat .env ${abs('.env.production')}`)), 'secret then exempt', { tool: 'Bash', path: '.env' });
   });
 
+  // F3: a Bash exemption holds only when every command in the line is read-only.
+  test('Bash exemption requires a read-only command line', () => {
+    listed('.env.production');
+    const p = abs('.env.production');
+    assertAllowed(run(bash(`cat ${p}`)), 'cat');
+    assertAllowed(run(bash(`cat ${p} | grep KEY`)), 'cat | grep');
+    assertAllowed(run(bash(`head -n 1 ${p} 2>/dev/null`)), 'head, stderr to /dev/null');
+    assertAllowed(run(bash(`timeout 5 cat ${p}`)), 'wrapper then cat');
+    assertBlocked(run(bash(`mv a b && cat ${p}`)), 'mv before cat', { tool: 'Bash', path: p });
+    assertBlocked(run(bash(`ln -s x y; head ${p}`)), 'ln before head', { tool: 'Bash', path: p });
+    assertBlocked(run(bash(`cat ${p} | sh`)), 'cat piped to sh', { tool: 'Bash', path: p });
+    assertBlocked(run(bash(`cat $(echo x) ${p}`)), 'substitution body', { tool: 'Bash', path: p });
+    assertBlocked(run(bash(`cat \`echo x\` ${p}`)), 'backtick body', { tool: 'Bash', path: p });
+    assertBlocked(run(bash(`cat ${p} > out.txt`)), 'output redirect to a file', { tool: 'Bash', path: p });
+    assertBlocked(run(bash(`sort -o out.txt ${p}`)), 'sort -o writes', { tool: 'Bash', path: p });
+    assertBlocked(run(bash(`rg --pre sh KEY ${p}`)), 'rg --pre runs a command', { tool: 'Bash', path: p });
+  });
+
   // Row 13.
   test('ref:path never exempt', () => {
     listed('.env.production');
