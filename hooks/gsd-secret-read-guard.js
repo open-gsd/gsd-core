@@ -957,15 +957,24 @@ function curlValueNamesSecret(text) {
   const eq = text.indexOf('=');
   const valueStart = eq === -1 ? -1 : eq + 1;
   let list = false;
+  // The closing quote of the last span this scan read through rather than
+  // skipped. curl may be quoting such a span (a quoted unknown parameter
+  // `;"…"`, a quoted `@` name), so no quote inside it may start a skip: in
+  // `;"x;filename=";headers=@f;"` curl's quote closes after `filename=` and
+  // `f` opens, where reading that `"` as a `filename=` quote would skip it.
+  let readThrough = -1;
   let i = 0;
   while (i < text.length) {
     const ch = text[i];
     // A quoted value (`a="…"`, `;filename="…"`) is a word curl reads whole, so
     // an `@`, `<` or `,` inside it opens nothing. Only where curl reads a
     // quoted word: in `a=x="…;headers=@f"` the quote is literal and `f` opens.
-    if (ch === '"' && curlQuotesWordAt(text, i, valueStart)) {
+    if (ch === '"' && i > readThrough) {
       const close = curlClosingQuote(text, i);
-      if (close !== -1) { i = close + 1; continue; }
+      if (close !== -1) {
+        if (curlQuotesWordAt(text, i, valueStart)) { i = close + 1; continue; }
+        readThrough = close;
+      }
     }
     if (ch !== '@' && ch !== '<' && !(list && ch === ',')) { i++; continue; }
     if (ch === '@') list = true;
@@ -983,7 +992,12 @@ function curlValueNamesSecret(text) {
         // curl gives a quote its meaning only where a word starts; if this one
         // is not such a quote, what it spans is read on, so judge that reading
         // too whenever the span holds a delimiter.
-        i = CURL_QUOTED_SPECIAL_RE.test(raw) ? i + 1 : close + 1;
+        if (CURL_QUOTED_SPECIAL_RE.test(raw)) {
+          readThrough = close;
+          i++;
+        } else {
+          i = close + 1;
+        }
         continue;
       }
       // No closing quote: curl reads the name unquoted, quote and all.
