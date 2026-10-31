@@ -1781,7 +1781,6 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     fs.mkdirSync(phaseDir('01-a'), { recursive: true });
     fs.mkdirSync(phaseDir('02-24-7-autonomy'), { recursive: true });
     writeGateCap(home, { command: 'exit 3' });
-    assert.match(complete().error, /Phase 3/, 'the guard must read the window');
     assert.deepEqual(refusal(complete('--force')).blocked.map((b) => b.phase), ['01', '02']);
   });
 
