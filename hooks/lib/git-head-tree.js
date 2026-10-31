@@ -38,7 +38,8 @@ const LIMITS = Object.freeze({
   maxParentDirs: 64,
   maxObjectBytes: 1024 * 1024,
   maxDeltaDepth: 50,
-  maxRefsFileBytes: 32 * 1024 * 1024,
+  maxRefsFileBytes: 4 * 1024 * 1024,
+  maxPackFiles: 64,
 });
 
 const HEX40 = /^[0-9a-f]{40}$/;
@@ -93,6 +94,28 @@ function readTextOrNull(file, maxBytes) {
 
 // ─── locating the repository ────────────────────────────────────────────────
 
+function sameRealPath(a, b) {
+  try {
+    return fs.realpathSync(a) === fs.realpathSync(b);
+  } catch {
+    return false;
+  }
+}
+
+// A `.git` file is followed only when it is the one `git worktree add` wrote:
+// its gitdir is <commondir>/worktrees/<name> and that directory's `gitdir`
+// back-pointer names this very `.git` file. A planted file fails one of the two.
+function linkedWorktree(dir, dotGit, gitDir) {
+  const common = readTextOrNull(path.join(gitDir, 'commondir'), 4096);
+  if (common === null || common.trim() === '') fail('worktree git dir has no commondir');
+  const commonDir = path.resolve(gitDir, common.trim());
+  if (!sameRealPath(path.dirname(gitDir), path.join(commonDir, 'worktrees'))) fail('git dir is not a linked worktree');
+  const back = readTextOrNull(path.join(gitDir, 'gitdir'), 4096);
+  if (back === null || back.trim() === '') fail('worktree git dir has no back-pointer');
+  if (!sameRealPath(path.resolve(gitDir, back.trim()), dotGit)) fail('worktree back-pointer names another .git file');
+  return { top: dir, gitDir, commonDir };
+}
+
 function locateGit(startDir, limits) {
   let dir = path.resolve(startDir);
   for (let i = 0; i <= limits.maxParentDirs; i++) {
@@ -104,12 +127,12 @@ function locateGit(startDir, limits) {
       st = null;
     }
     if (st !== null) {
-      let gitDir = dotGit;
+      const gitDir = dotGit;
       if (st.isFile()) {
         const text = readTextOrNull(dotGit, 4096);
         const m = text === null ? null : /^gitdir:\s*(.+?)\s*$/m.exec(text);
         if (m === null) fail('unreadable .git file');
-        gitDir = path.resolve(dir, m[1]);
+        return linkedWorktree(dir, dotGit, path.resolve(dir, m[1]));
       } else if (!st.isDirectory()) {
         fail('unexpected .git entry');
       }
@@ -137,6 +160,15 @@ function isSafeRefName(name) {
     !name.split('/').some((seg) => seg === '' || seg === '.' || seg === '..');
 }
 
+// packed-refs is read at most once per repository per call, however many ref hops follow.
+function readPackedRefs(base, repo, limits) {
+  if (repo.packedRefsCache === undefined) repo.packedRefsCache = new Map();
+  if (!repo.packedRefsCache.has(base)) {
+    repo.packedRefsCache.set(base, readTextOrNull(path.join(base, 'packed-refs'), limits.maxRefsFileBytes));
+  }
+  return repo.packedRefsCache.get(base);
+}
+
 function lookupRef(name, repo, limits) {
   if (!isSafeRefName(name)) fail('bad ref name');
   for (const base of repo.gitDir === repo.commonDir ? [repo.gitDir] : [repo.gitDir, repo.commonDir]) {
@@ -144,7 +176,7 @@ function lookupRef(name, repo, limits) {
     if (loose !== null && loose.trim() !== '') return loose.trim();
   }
   for (const base of repo.gitDir === repo.commonDir ? [repo.gitDir] : [repo.commonDir, repo.gitDir]) {
-    const packed = readTextOrNull(path.join(base, 'packed-refs'), limits.maxRefsFileBytes);
+    const packed = readPackedRefs(base, repo, limits);
     if (packed === null) continue;
     for (const line of packed.split('\n')) {
       if (line === '' || line[0] === '#' || line[0] === '^') continue;
@@ -344,6 +376,7 @@ function readPacked(oid, repo, limits, level) {
   } catch {
     return null;
   }
+  if (names.length > limits.maxPackFiles) fail('too many pack files');
   for (const name of names) {
     const idxFd = fs.openSync(path.join(packDir, name), 'r');
     try {
@@ -432,4 +465,7 @@ function headTreeEntry(startDir, relPath, limits) {
   }
 }
 
-module.exports = { headTreeEntry, LIMITS };
+// Exposed so tests can drive the parsers with hand-built buffers; not a public API.
+const _internal = { applyDelta, idxLookup, packEntry, lookupRef, locateGit, resolveLimits };
+
+module.exports = { headTreeEntry, LIMITS, _internal };
