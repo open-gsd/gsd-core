@@ -1,3 +1,8 @@
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 **MVP-mode UAT framing.** When `MVP_MODE=true`, follow the rules in `@~/.claude/gsd-core/references/verify-mvp-mode.md`. Briefly:
 
 1. Generate the UAT script in three ordered sections: (a) user-flow walk-through derived from the phase's user-story goal, (b) technical checks (deferred — only run after user flow passes), (c) coverage check (goal-backward, narrowed to the user story's outcome clause).

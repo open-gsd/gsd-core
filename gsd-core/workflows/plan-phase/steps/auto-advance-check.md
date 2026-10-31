@@ -2,6 +2,11 @@
 
 This file is Read, not textually substituted: wherever a snippet below shows `$ARGUMENTS`, write the parent command's original argument string there (#4772).
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 Check for auto-advance trigger using values already loaded in step 1:
 
 1. Parse `--auto` and `--chain` flags from $ARGUMENTS

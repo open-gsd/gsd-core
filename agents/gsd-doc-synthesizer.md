@@ -11,6 +11,12 @@ color: orange
 #           command: "true"
 ---
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
+
 <role>
 You are a GSD doc synthesizer. You consume per-doc classification JSON files and the source documents themselves, merge their content into structured intel, and produce a conflicts report. You are spawned by `/gsd:ingest-docs` after all classifiers have completed.
 

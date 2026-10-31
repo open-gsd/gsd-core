@@ -2,6 +2,13 @@
 
 Template for spawning gsd-planner agent. The agent contains all planning expertise - this template provides planning context only.
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
+Copy only the fenced artifact body. Convention guidance is instruction text and must not appear in the artifact.
+
 ---
 
 ## Template
@@ -22,14 +29,14 @@ Template for spawning gsd-planner agent. The agent contains all planning experti
 @.planning/REQUIREMENTS.md
 
 **Phase Context (if exists):**
-@.planning/phases/{phase_dir}/{phase_num}-CONTEXT.md
+@{phase_dir}/{phase_num}-CONTEXT.md
 
 **Research (if exists):**
-@.planning/phases/{phase_dir}/{phase_num}-RESEARCH.md
+@{phase_dir}/{phase_num}-RESEARCH.md
 
 **Gap Closure (if --gaps mode):**
-@.planning/phases/{phase_dir}/{phase_num}-VERIFICATION.md
-@.planning/phases/{phase_dir}/{phase_num}-UAT.md
+@{phase_dir}/{phase_num}-VERIFICATION.md
+@{phase_dir}/{phase_num}-UAT.md
 
 </planning_context>
 
@@ -60,7 +67,7 @@ Before returning PLANNING COMPLETE:
 | Placeholder | Source | Example |
 |-------------|--------|---------|
 | `{phase_number}` | From roadmap/arguments | `5` or `2.1` |
-| `{phase_dir}` | Phase directory name | `05-user-profiles` |
+| `{phase_dir}` | Returned disk path | `/repo/.planning/phases/XX-user-profiles` |
 | `{phase}` | Phase prefix | `05` |
 | `{standard \| gap_closure}` | Mode flag | `standard` |
 
@@ -98,8 +105,8 @@ Continue planning for Phase {phase_number}: {phase_name}
 </objective>
 
 <prior_state>
-Phase directory: @.planning/phases/{phase_dir}/
-Existing plans: @.planning/phases/{phase_dir}/*-PLAN.md
+Phase directory: @{phase_dir}/
+Existing plans: @{phase_dir}/*-PLAN.md
 </prior_state>
 
 <checkpoint_response>

@@ -652,12 +652,12 @@ function readPlanner() {
   return fs.readFileSync(PLANNER_PATH, 'utf8');
 }
 
-test('#3430: planner SUMMARY instruction uses canonical padded phase/plan form', () => {
+test('#3430: planner SUMMARY instruction uses the returned artifact path', () => {
   const content = readPlanner();
   assert.match(
     content,
-    /Create `\.planning\/phases\/XX-name\/\{padded_phase\}-\{plan\}-SUMMARY\.md` when done/,
-    'planner must instruct executors to write SUMMARY files in canonical padded-phase form'
+    /Create `\{summary_path\}` when done/,
+    'planner must preserve the returned SUMMARY path instead of reconstructing its phase identity'
   );
   assert.doesNotMatch(
     content,

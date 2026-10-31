@@ -91,7 +91,7 @@ describe('verify-work deferred follow-up promotion (#4546)', () => {
     // The promoted entry reuses next.md's exact mechanism shape.
     const nextWork = readWorkflow(NEXT_PATH);
     const nextBlock = stepBlock(nextWork, 'prior_phase_completeness', 'next.md');
-    const nextShapeMarkers = ['### Phase 999.', '**Goal:**', '**Source phase:**', '**Deferred at:**'];
+    const nextShapeMarkers = ['### {backlog_phase_display}:', '**Goal:**', '**Source phase:**', '**Deferred at:**'];
     for (const marker of nextShapeMarkers) {
       assert.ok(nextBlock.includes(marker),
         `next.md prior_phase_completeness entry shape must contain ${marker} (fixture sanity)`);

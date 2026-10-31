@@ -1,8 +1,17 @@
 # Summary Template
 
-Template for `.planning/phases/XX-name/{phase}-{plan}-SUMMARY.md` - phase completion documentation.
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
+Copy only the fenced artifact body. Convention guidance is instruction text and must not appear in the artifact.
+
+Template for `{summary_path}` - phase completion documentation.
 
 ---
+
+For sequential projects, copy the legacy title and example below unchanged. For other conventions, use the writer-returned plan identity for the title; keep all non-identity text unchanged.
 
 ## File Template
 

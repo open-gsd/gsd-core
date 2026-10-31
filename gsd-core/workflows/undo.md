@@ -2,6 +2,11 @@
 Safe git revert workflow. Rolls back GSD phase or plan commits selected within the phase directory's own commit window with dependency checks and a confirmation gate. Uses git revert --no-commit (NEVER git reset) to preserve history.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 @~/.claude/gsd-core/references/ui-brand.md
 @~/.claude/gsd-core/references/gate-prompts.md
@@ -94,7 +99,7 @@ PROJECT_ROOT=$(gsd_run query planning inspect --pick generated_from.cwd --raw 2>
 
 If `PHASE_DIR` is empty, the phase does not exist in the active scope:
 ```
-Phase ${TARGET_PHASE} not found in the active planning scope. Nothing to revert.
+Requested phase ${TARGET_PHASE} not found in the active planning scope. Nothing to revert.
 ```
 Exit cleanly — do NOT fall back to an unbounded search.
 
@@ -171,20 +176,20 @@ fi
 
 If `PHASE_DIR_ARCHIVED` is non-empty, stop — this message, not the not-found one:
 ```
-Phase ${TARGET_PHASE} resolves to an ARCHIVED milestone directory (${PHASE_DIR_ARCHIVED}).
+{phase_display} resolves to an ARCHIVED milestone directory (${PHASE_DIR_ARCHIVED}).
 Refusing: the anchor there is the archival commit, so the window would span later
 milestones and select their same-numbered phase instead of this one.
 Use /gsd:undo --last N and select commits explicitly.
 ```
 If `PHASE_DIR_FOREIGN` is non-empty, stop with its own message:
 ```
-Phase ${TARGET_PHASE} is planned in the repository at ${PHASE_DIR_FOREIGN}, not the one this
+{phase_display} is planned in the repository at ${PHASE_DIR_FOREIGN}, not the one this
 command is running in. Refusing: that repository's history cannot bound commits in this one.
 Use /gsd:undo --last N here and select commits explicitly.
 ```
 And if `PHASE_DIR_REUSED` is non-empty, stop with its own message:
 ```
-Phase ${TARGET_PHASE} resolves to ${PHASE_DIR_LIVE}, but that path was emptied by commit
+{phase_display} resolves to ${PHASE_DIR_LIVE}, but that path was emptied by commit
 ${PHASE_DIR_REUSED} and re-created later. Refusing: the first commit adding this path belongs
 to the earlier occupant, so the window would open there and select its commits too.
 Use /gsd:undo --last N and select commits explicitly.
@@ -249,7 +254,7 @@ Use matching commits as COMMITS.
 the count and stop rather than capping — a partial phase revert leaves a worse tree state
 than either reverting the phase or not:
 ```
-Phase ${TARGET_PHASE} selects ${N} commits (>50). Refusing to revert a partial phase.
+{phase_display} selects ${N} commits (>50). Refusing to revert a partial phase.
 Use /gsd:undo --plan NN-MM per plan, or /gsd:undo --last N.
 ```
 
@@ -379,7 +384,7 @@ a literal directory an earlier occupant used (`03-auth` again, not merely phase 
 makes the oldest add at that path the **previous occupant's**. The archived refusal above
 cannot reach it — `find-phase` returns the **live** directory, so nothing is under
 `milestones/` to refuse. Driven before the guard: two milestones both using
-`.planning/phases/03-auth` anchored on the v1 plan commit and selected all four v1+v2 phase-03
+the same `03-auth` directory anchored on the v1 plan commit and selected all four v1+v2 phase-03
 commits; a workstream completed into `milestones/ws-feat-<date>/` and then re-created as `feat`
 with the same `03-auth` did the same across the two workstream generations. The collision check
 closes both without a phase identity a directory name does not carry, and without restating any
@@ -440,16 +445,11 @@ PLANNING_DIR=$(gsd_run query planning inspect --pick generated_from.planning_roo
 
 **MODE=phase:**
 
-Read `${PLANNING_DIR}/ROADMAP.md` inline.
+Run `gsd_run query roadmap.analyze` in the active planning scope. Inspect each phase record's `depends_on` identities using the canonical reference grammar; compare the resolved target identity, not a literal heading prefix. If analysis is unavailable or a dependency cannot be resolved, stop and surface that uncertainty before undoing commits.
 
-Search for phases that list a dependency on the target phase. Look for patterns like:
-- "Depends on: Phase ${TARGET_PHASE}"
-- "Depends on: ${TARGET_PHASE}"
-- "depends_on: [${TARGET_PHASE}]"
-
-For each dependent phase N found:
-1. Check if `${PLANNING_DIR}/phases/${N}-*/` directory exists
-2. If directory exists, check for any PLAN.md or SUMMARY.md files inside it
+For each dependent phase found:
+1. Run `gsd_run query find-phase "${N}" --raw` for its returned phase number; preserve the resolved directory, including custom names.
+2. Check that directory for any PLAN.md or SUMMARY.md files.
 
 If any downstream phase has started work, collect warnings:
 ```
@@ -463,8 +463,7 @@ If any downstream phase has started work, collect warnings:
 
 Extract the phase number from TARGET_PLAN (the NN part of NN-MM). Extract the plan number (the MM part).
 
-Look for later plans in the same phase directory (`${PLANNING_DIR}/phases/${NN}-*/`, the
-same workstream-resolved root). For each later plan (plans with number > MM):
+Resolve the target phase directory with `gsd_run query find-phase "${NN}" --raw` in the same workstream scope; inspect that returned directory. Look for later plans there. For each later plan (plans with number > MM):
 1. Read the later plan's PLAN.md
 2. Check if its `<files>` sections or `consumes` fields reference outputs from the target plan
 

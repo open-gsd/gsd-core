@@ -1,6 +1,12 @@
 # Per-plan worktree decision (#2772) and per-dispatch isolation record (#3045, #5516)
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 ## Part 1 — Decide (run for each plan in the wave, up front, at `execute_waves` step 2.5)
 This gate has two parts that run at **different times**. **Part 1** (this part) decides, for every plan in the wave, whether it uses worktree isolation, and stores each plan's answer; it runs for the whole wave before any dispatch. **Part 2** (below) writes the plan-scoped isolation record and runs once per plan, immediately before that plan's `Agent()` dispatch in step 3. The output `USE_WORKTREES_FOR_PLAN` gates the dispatch branch (worktree mode vs sequential mode) for that plan only — other plans in the same wave can still take the worktree path.
+
 
 `SUBMODULE_PATHS` is computed once in the `initialize` step (parsed from `.gitmodules`).
 

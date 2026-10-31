@@ -1,17 +1,16 @@
 Apply response_language to all user-facing prose — narration between tool calls, status updates, progress notes, and findings included; preserve code, paths, and identifiers.
 
 <purpose>
-Interactive configuration of GSD power-user knobs — plan bounce, planner stall detection and timing, node repair, subagent timeouts, inline plan threshold, cross-AI execution, base branch, branch templates, response language,
-context window, gitignored search, graphify build timeout, runtime model tier overrides, and
-model policy configuration (provider + budget → canonical tier mapping, or manual model ID
-assignment per cost tier).
-
-This is a companion to `/gsd:settings` — the common-case prompt there covers model profile,
-research/plan_check/verifier toggles, branching strategy, UI/AI phase gates, and worktree
-isolation. This advanced command covers everything else that is user-settable, grouped into
-eight sections so each prompt batch stays cognitively scoped. Every answer pre-selects the
-current value; numeric-input answers that are non-numeric are rejected and re-prompted.
+Configure the advanced settings listed below in eight prompt sections. `/gsd:settings`
+covers model profile, research/plan_check/verifier toggles, branching strategy, UI/AI
+phase gates and worktree isolation. Pre-select current values; reject and re-prompt
+non-numeric answers to numeric inputs.
 </purpose>
+
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
 
 <required_reading>
 Read all files referenced by the invoking prompt's execution_context before starting.

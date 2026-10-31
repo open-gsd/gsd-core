@@ -6,6 +6,11 @@ Chunked mode splits the single planner run into a short outline run + N short pe
 runs (~3–5 min each), committing each plan individually for crash resilience. Rerunning
 `/gsd:plan-phase {N} --chunked` resumes from the last committed plan.
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 For recovering plans from a prior *non-chunked* run, use step 6's "Add more plans" or
 proceed to `/gsd:execute-phase` — don't start a fresh chunked run over them.
 

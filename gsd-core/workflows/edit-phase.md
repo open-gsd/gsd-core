@@ -4,6 +4,11 @@
 Edit any field of an existing phase in ROADMAP.md in place. The phase number and position are always preserved. Guarded against in-progress and completed phases unless --force is passed. Validates depends_on references before writing. Shows a diff and requests confirmation before writing.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 Read all files referenced by the invoking prompt's execution_context before starting.
 </required_reading>
@@ -214,7 +219,7 @@ Exit (do not write).
 <step name="show_diff_and_confirm">
 Build the updated phase section by applying the changes to the original `section` text:
 
-- For `title`: replace the heading text after `Phase {N}:`
+- For `title`: replace the title text after the resolved `phase_display:` identifier
 - For `goal`: replace the `**Goal:**` line value
 - For `depends_on`: replace or add the `**Depends on:**` line
 - For `requirements`: replace or add the requirements block
@@ -248,7 +253,7 @@ SCOPE_BEFORE=$(gsd_run query roadmap milestone-scope)
 
 Write the updated phase back in place in ROADMAP.md.
 
-Read the full ROADMAP.md content, locate the phase section by its header (`## Phase {N}:` or `### Phase {N}:`), and replace exactly the old section text with the new section text. All content before and after the section (including other phases, milestone headers, and the summary checklist) must be left unchanged.
+Read the full ROADMAP.md content, locate the phase section by its header (`## {phase_display}:` or `### {phase_display}:`), and replace exactly the old section text with the new section text. All content before and after the section (including other phases, milestone headers, and the summary checklist) must be left unchanged.
 
 After writing, re-derive the milestone scope and compare it to the capture:
 
@@ -281,7 +286,7 @@ gsd_run query state.add-roadmap-evolution \
 Present completion summary:
 
 ```
-Phase {target} updated in ROADMAP.md.
+{phase_display} updated in ROADMAP.md.
 
 Fields changed: {changed_field_list}
 

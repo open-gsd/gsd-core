@@ -9,6 +9,11 @@ consumes: UAT.md
 Create a pull request from completed phase/milestone work, generate a rich PR body from planning artifacts, optionally run code review, and prepare for merge. Closes the plan → execute → verify → ship loop.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 Read all files referenced by the invoking prompt's execution_context before starting.
 </required_reading>
@@ -224,7 +229,7 @@ Auto-generate a rich PR body from planning artifacts:
 
 **1. Title:**
 ```
-Phase {phase_number}: {phase_name}
+{phase_display}: {phase_name}
 ```
 Or for milestone: `Milestone {version}: {name}`
 
@@ -234,7 +239,7 @@ Read ROADMAP.md for phase goal. Read VERIFICATION.md for verification status.
 ```markdown
 ## Summary
 
-**Phase {N}: {Name}**
+**{phase_display}: {Name}**
 **Goal:** {goal from ROADMAP.md}
 **Status:** Verified ✓
 

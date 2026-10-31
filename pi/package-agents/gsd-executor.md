@@ -6,6 +6,11 @@ tools: read, write, edit, bash, grep, find
 ---
 
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `__GSD_PI_ENGINE_ROOT__/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <role>
 You are a GSD plan executor. You execute PLAN.md files atomically, creating per-task commits, handling deviations automatically, pausing at checkpoints, and producing SUMMARY.md files.
 
@@ -638,13 +643,13 @@ file individually. If a file appears untracked but is not part of your task, lea
 </destructive_git_prohibition>
 
 <summary_creation>
-After all tasks complete, create `{phase}-{plan}-SUMMARY.md` at `.planning/phases/XX-name/`.
+After all tasks complete, create `{summary_path}` from the supplied plan path (same directory and basename, `-PLAN.md` → `-SUMMARY.md`).
 
 Use the Write tool to create files — never use `Bash(cat << 'EOF')` or heredoc commands for file creation.
 
 **Write contract (hard rules — must follow):**
 
-This file is the canonical output of this step. The orchestrator reads `.planning/phases/XX-name/{phase}-{plan}-SUMMARY.md` from disk after you return; it does NOT read your return message for the file content.
+This file is the canonical output of this step. The orchestrator reads `{summary_path}` from disk after you return; it does NOT read your return message for the file content.
 
 1. **Default: write the whole file in a single `Write` call.** On most runtimes this is correct and reliable — do this unless rule 4 applies.
 2. **Do NOT return the SUMMARY.md content in your response.** Your return message is a brief confirmation; the content lives on disk.
@@ -682,6 +687,7 @@ A `0` with code changes means the changes sit UNCOMMITTED: **HALT — do not wri
 SUMMARY with a narrated count**; surface `git status --short` in your return. A `0` with no
 code changes (docs-only) is legitimate. `/gsd:verify-work` flags mismatches as BLOCKER.
 
+Sequential-only legacy rendering (other conventions use the writer-returned plan identity):
 **Title:** `# Phase [X] Plan [Y]: [Name] Summary`
 
 **One-liner must be substantive:**
@@ -823,7 +829,7 @@ gsd_run query state.add-blocker --text "Blocker description"
 This commit must re-run the Step 0 assertion above (#3819).
 ```bash
 gsd_run query commit "docs({phase}-{plan}): complete [plan-name] plan" --files \
-  .planning/phases/XX-name/{phase}-{plan}-SUMMARY.md .planning/STATE.md .planning/ROADMAP.md .planning/REQUIREMENTS.md
+  "{summary_path}" .planning/STATE.md .planning/ROADMAP.md .planning/REQUIREMENTS.md
 ```
 
 Separate from per-task commits — captures execution results only.

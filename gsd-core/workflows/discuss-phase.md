@@ -11,6 +11,11 @@ Extract implementation decisions that downstream agents need. Analyze the phase 
 You are a thinking partner, not an interviewer. The user is the visionary — you are the builder. Your job is to capture decisions that will guide research and planning, not to figure out implementation yourself.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 @~/.claude/gsd-core/references/domain-probes.md
 @~/.claude/gsd-core/references/gate-prompts.md
@@ -131,7 +136,7 @@ Parse JSON for: `commit_docs`, `phase_found`, `phase_dir`, `phase_number`, `phas
 
 **If `phase_found` is false:**
 ```
-Phase [X] not found in roadmap.
+Requested phase [X] not found in roadmap.
 Use /gsd:progress ${GSD_WS} to see available phases.
 ```
 Exit workflow.
@@ -327,7 +332,7 @@ Analyze the phase to identify gray areas. Use both `prior_decisions` and `codeba
 Present the domain boundary, prior decisions, and gray areas to the user.
 
 ```
-Phase [X]: [Name]
+{phase_display}: [Name]
 Domain: [What this phase delivers — from your analysis]
 
 We'll clarify HOW to implement this. (New capabilities belong in other phases.)
@@ -437,7 +442,7 @@ Created: .planning/phases/${PADDED_PHASE}-${SLUG}/${PADDED_PHASE}-CONTEXT.md
 
 ## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
-**Phase ${PHASE}: [Name]** — [Goal from ROADMAP.md]
+**{phase_display}: [Name]** — [Goal from ROADMAP.md]
 
 `/clear` then:
 

@@ -1,3 +1,10 @@
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
+Copy only the fenced artifact body. Convention guidance is instruction text and must not appear in the artifact.
+
 Apply response_language to all user-facing prose — narration between tool calls, status updates, progress notes, and findings included; preserve code, paths, and identifiers.
 
 # CONTEXT.md template — for discuss-phase write_context step
@@ -27,7 +34,7 @@ The caller substitutes:
 ## Template body
 
 ```markdown
-# Phase [X]: [Name] - Context
+# {phase_display}: [Name] - Context
 
 **Gathered:** [date]
 **Status:** Ready for planning

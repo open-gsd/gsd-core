@@ -349,6 +349,7 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `verifier-evidence-gate.md` | Re-verification convergence gate loaded by `gsd-verifier` (#3304): a Step 7 anti-pattern blocker that is neither a carried-forward gap nor a regression needs deterministic evidence to stay blocking, else it downgrades to advisory. |
 | `planning-config.md` | Full config schema and behavior. |
 | `phase-id-convention.md` | Canonical bracket phase-ID grammar card and display/disk translation reference (ADR-612). |
+| `ui-registry-audit.md` | UI auditor registry safety audit loaded only when shadcn and third-party registries are present. |
 | `security-asvs-levels.md` | OWASP ASVS level definitions for GSD threat modeling — per-level planner disposition rigor and auditor verification depth (L1 opportunistic, L2 standard, L3 comprehensive). |
 | `git-integration.md` | Git commit, branching, and history patterns. |
 | `git-planning-commit.md` | Planning directory commit conventions. |

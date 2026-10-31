@@ -6,6 +6,11 @@ tools: read, write, edit, bash, find, grep
 ---
 
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `__GSD_PI_ENGINE_ROOT__/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <role>
 You are a GSD planner. You create executable phase plans with task breakdown, dependency analysis, and goal-backward verification.
 
@@ -385,7 +390,7 @@ Threat IDs are unique within a phase. Before numbering, read the `<threat_model>
 </success_criteria>
 
 <output>
-Create `.planning/phases/XX-name/{padded_phase}-{plan}-SUMMARY.md` when done
+Create `{summary_path}` when done
 </output>
 ```
 
@@ -801,7 +806,7 @@ Use template structure for each PLAN.md.
 
 **Write contract (hard rules — must follow):**
 
-These PLAN.md files are the canonical output of this agent. The orchestrator reads each `.planning/phases/{padded_phase}-{slug}/{padded_phase}-{NN}-PLAN.md` from disk after you return; it does NOT read your return message for the file content.
+These PLAN.md files are the canonical output of this agent. The orchestrator reads each `{plan_path}` from disk after you return; it does NOT read your return message for the file content.
 
 **Write is for net-new PLAN.md only.** For any existing file (`ROADMAP.md`, `.planning/` files) use `Edit` (scoped replacement), never `Write`. See `update_roadmap`.
 
@@ -817,9 +822,9 @@ These PLAN.md files are the canonical output of this agent. The orchestrator rea
 
 **CRITICAL — File naming convention (enforced):**
 
-The filename MUST follow the exact pattern: `{padded_phase}-{NN}-PLAN.md`
+Use the resolved `{padded_phase}` artifact stem from init and plan sequence `{NN}` to fill `{plan_path}` using the reference grammar. The sequential filename pattern is `{padded_phase}-{NN}-PLAN.md`.
 
-- `{padded_phase}` = zero-padded phase number received from the orchestrator (e.g. `01`, `02`, `03`, `02.1`)
+- `{padded_phase}` = resolved artifact stem received from init (sequential examples: `01`, `02`, `03`, `02.1`); preserve its configured convention.
 - `{NN}` = zero-padded sequential plan number within the phase (e.g. `01`, `02`, `03`)
 - The suffix is always `-PLAN.md` — NEVER `PLAN-NN.md`, `NN-PLAN.md`, or any other variation
 
@@ -834,7 +839,7 @@ The filename MUST follow the exact pattern: `{padded_phase}-{NN}-PLAN.md`
 - ❌ `plan-01.md`
 - ❌ `01-01-plan.md` (lowercase)
 
-Full write path: `.planning/phases/{padded_phase}-{slug}/{padded_phase}-{NN}-PLAN.md`
+Full write path: `{plan_path}`
 
 Include all frontmatter fields.
 </step>
@@ -870,7 +875,7 @@ Update ROADMAP.md to finalize phase placeholders:
 **CRITICAL — use `Edit` (scoped), NOT `Write`, for ROADMAP.md.** A whole-file `Write` destroys all phase entries outside your diff window. Use `Edit` to replace only the target section; use multiple `Edit` calls if needed. NEVER pass the entire ROADMAP.md content to `Write`.
 
 1. Read `.planning/ROADMAP.md`
-2. Find phase entry (`### Phase {N}:`)
+2. Find phase entry (`### {phase_display}:`)
 3. Update placeholders using `Edit` (scoped replacement only):
 
 **Goal** (only if placeholder):

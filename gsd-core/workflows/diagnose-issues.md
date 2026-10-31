@@ -8,6 +8,11 @@ After UAT finds gaps, spawn one debug agent per gap. Each agent investigates aut
 Orchestrator stays lean: parse gaps, spawn agents, collect results, update UAT.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <available_agent_types>
 Valid GSD subagent types (use exact names — do not fall back to 'general-purpose'):
 - gsd-debugger — Diagnoses and fixes issues
@@ -282,7 +287,7 @@ Update status in frontmatter to "diagnosed".
 
 Commit the updated UAT.md:
 ```bash
-gsd_run query commit "docs({phase_num}): add root causes from diagnosis" --files ".planning/phases/XX-name/{phase_num}-UAT.md"
+gsd_run query commit "docs({phase_num}): add root causes from diagnosis" --files "{phase_dir}/{padded_phase}-UAT.md"
 ```
 </step>
 

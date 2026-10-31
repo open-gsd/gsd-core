@@ -36,6 +36,11 @@ Mark current phase complete and advance to next. This is the natural point where
 
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <process>
 
 <step name="post_completion_mode" priority="first">
@@ -133,7 +138,7 @@ fail-closes unless canonical verification status is `passed`.
 
 ```
 ⚡ Auto-approved: Transition Phase [X] → Phase [X+1]
-Phase [X] complete — all [Y] plans finished.
+{phase_display} complete — all [Y] plans finished.
 
 Proceeding to mark done and advance...
 ```
@@ -157,7 +162,7 @@ Wait for confirmation before proceeding.
 Present:
 
 ```
-Phase [X] has incomplete plans:
+{phase_display} has incomplete plans:
 - {phase}-01-SUMMARY.md ✓ Complete
 - {phase}-02-SUMMARY.md ✗ Missing
 - {phase}-03-SUMMARY.md ✗ Missing
@@ -482,7 +487,7 @@ ls .planning/phases/*[X+1]*/*-CONTEXT.md 2>/dev/null || true
 **If CONTEXT.md exists:**
 
 ```
-Phase [X] marked complete.
+{phase_display} marked complete.
 
 Next: Phase [X+1] — [Name]
 
@@ -494,7 +499,7 @@ Exit skill and invoke SlashCommand("/gsd:plan-phase [X+1] --auto ${GSD_WS}")
 **If CONTEXT.md does NOT exist:**
 
 ```
-Phase [X] marked complete.
+{phase_display} marked complete.
 
 Next: Phase [X+1] — [Name]
 
@@ -516,7 +521,7 @@ Exit skill and invoke SlashCommand("/gsd:discuss-phase [X+1] --auto ${GSD_WS}")
 
 ## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
-**Phase [X+1]: [Name]** — [Goal from ROADMAP.md]
+**{phase_display}: [Name]** — [Goal from ROADMAP.md]
 
 `/clear` then:
 
@@ -540,7 +545,7 @@ Exit skill and invoke SlashCommand("/gsd:discuss-phase [X+1] --auto ${GSD_WS}")
 
 ## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
-**Phase [X+1]: [Name]** — [Goal from ROADMAP.md]
+**{phase_display}: [Name]** — [Goal from ROADMAP.md]
 <sub>✓ Context gathered, ready to plan</sub>
 
 `/clear` then:
@@ -629,7 +634,7 @@ gsd_run query config-set workflow._auto_chain_active false
 <if mode="yolo">
 
 ```
-Phase {X} marked complete.
+{phase_display} marked complete.
 
 🎉 Milestone {version} is 100% complete — all {N} phases finished!
 
@@ -680,7 +685,7 @@ Progress tracking is IMPLICIT: planning phase N implies phases 1-(N-1) complete.
 If user wants to move on but phase isn't fully complete:
 
 ```
-Phase [X] has incomplete plans:
+{phase_display} has incomplete plans:
 - {phase}-02-PLAN.md (not executed)
 - {phase}-03-PLAN.md (not executed)
 

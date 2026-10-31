@@ -2,6 +2,11 @@
 Audit Nyquist validation gaps for a completed phase. Generate missing tests. Update VALIDATION.md.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 @~/.claude/gsd-core/references/ui-brand.md
 </required_reading>

@@ -4,6 +4,11 @@
 Create structured `.planning/HANDOFF.json` and `.continue-here.md` handoff files to preserve complete work state across sessions. The JSON provides machine-readable state for `/gsd:resume-work`; the markdown provides human-readable context.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 Read all files referenced by the invoking prompt's execution_context before starting.
 </required_reading>
@@ -32,7 +37,7 @@ sketch=${sketch:+$(basename "$(dirname "$sketch")")}
 deliberation=$(ls .planning/deliberations/*.md 2>/dev/null | head -1 || true)
 ```
 
-- **Phase work**: active phase directory → handoff to `.planning/phases/XX-name/.continue-here.md`
+- **Phase work**: active phase directory → handoff to `{phase_dir}/.continue-here.md`
 - **Spike work**: active spike directory or spike-related files (no active phase) → handoff to `.planning/spikes/SPIKE-NNN/.continue-here.md` (create directory if needed)
 - **Sketch work**: active sketch directory (no active phase/spike) → handoff to `.planning/sketches/.continue-here.md`
 - **Deliberation work**: active deliberation file (no phase/spike/sketch) → handoff to `.planning/deliberations/.continue-here.md`
@@ -128,7 +133,7 @@ UNCOMMITTED=$(git status --porcelain)
 </step>
 
 <step name="write">
-**Write handoff to the path determined in the detect step** (e.g. `.planning/phases/XX-name/.continue-here.md`, `.planning/spikes/SPIKE-NNN/.continue-here.md`, or `.planning/.continue-here.md`):
+**Write handoff to the path determined in the detect step** (e.g. `{phase_dir}/.continue-here.md`, `.planning/spikes/SPIKE-NNN/.continue-here.md`, or `.planning/.continue-here.md`):
 
 ```markdown
 ---

@@ -11,6 +11,11 @@ Validate built features through conversational testing with persistent state. Cr
 User tests, Claude records. One test at a time. Plain text responses.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <available_agent_types>
 Valid GSD subagent types (use exact names — do not fall back to 'general-purpose'):
 - gsd-planner — Creates detailed plans from phase scope
@@ -369,7 +374,7 @@ skipped: 0
 [none yet]
 ```
 
-Write to `.planning/phases/XX-name/{phase_num}-UAT.md`
+Write to `{phase_dir}/{padded_phase}-UAT.md`
 
 Proceed to `present_test`.
 </step>
@@ -560,11 +565,11 @@ Choice [K]:
 (TEXT_MODE: present this as a plain-text numbered list per the text-mode convention and wait for the typed choice.)
 
 **If the user chooses [P]:**
-1. Compute the next backlog number: `{backlog_number}` = the smallest positive integer not already used by an existing `### Phase 999.{n}` heading in `.planning/ROADMAP.md` — scan the headings rather than counting them, since numbering may be non-contiguous. If `.planning/ROADMAP.md` does not exist, create it containing only a `## Backlog` section and use `1`.
+1. Compute the next backlog number: `{backlog_number}` = the smallest positive integer not already used by an existing backlog heading for CLI number `999.{n}` in `.planning/ROADMAP.md` — scan the headings rather than counting them, since numbering may be non-contiguous. If `.planning/ROADMAP.md` does not exist, create it containing only a `## Backlog` section and use `1`.
 2. Append to that `## Backlog` section one backlog entry per deferred follow-up (each with its own `999.{backlog_number}` heading, incrementing per entry), with `test`/`idea`/`deferred_at` verbatim from the section's YAML and `{idea}` flattened to a single line (newlines → spaces — a multi-line response would corrupt the single-line entry; this mirrors `next.md`'s use of a slug for the same reason):
 
 ```markdown
-### Phase 999.{backlog_number}: Follow-up — Phase {phase_num} deferred UAT follow-up: Test {test} (BACKLOG)
+### {backlog_phase_display}: Follow-up — Phase {phase_num} deferred UAT follow-up: Test {test} (BACKLOG)
 
 **Goal:** Resolve the UAT checkpoint deferred during Phase {phase_num} verification
 **Source phase:** {phase_num}
@@ -764,7 +769,7 @@ Parse the JSON output. For the CURRENT PHASE ONLY, surface:
 
 If any are found, display:
 ```
-Phase {N} Artifact Check
+{phase_display} Artifact Check
 
 ---
 
@@ -870,7 +875,7 @@ Exact Agent() prompt fields (revision_context, required_reading): `gsd-core/work
 ```
 ### GSD ► FIXES READY ✓
 
-**Phase {X}: {Name}** — {N} gap(s) diagnosed, {M} fix plan(s) created
+**{phase_display}: {Name}** — {N} gap(s) diagnosed, {M} fix plan(s) created
 
 | Gap | Root Cause | Fix Plan |
 |-----|------------|----------|

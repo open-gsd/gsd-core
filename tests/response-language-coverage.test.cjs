@@ -312,6 +312,15 @@ describe('response-language workflow coverage lint (#2529)', () => {
     }
   });
 
+  for (const prefix of ['~/.claude/', '$HOME/.claude/', './.claude/']) {
+    test(`#5027 supported installer prefix ${prefix} retains fragment inheritance`, () => {
+      const target = `${prefix}gsd-core/workflows/a/steps/b.md`;
+      assert.equal(namesFragmentAsEntryPoint(`Read \`${target}\`.`, 'a/steps/b.md'), true);
+      assert.equal(namesFragmentAsEntryPoint(`Read \`vendor/${target}\`.`, 'a/steps/b.md'), false);
+      assert.equal(namesFragmentAsEntryPoint(`The file \`${target}\` is deprecated.`, 'a/steps/b.md'), false);
+    });
+  }
+
   test('a fragment mentioned but never dispatched does not inherit', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-response-language-mention-'));
     tempDirs.push(root);

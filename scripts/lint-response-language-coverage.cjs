@@ -391,7 +391,10 @@ function namesFragmentAsEntryPoint(parent, relative) {
   // #3552's `"none"` arm introduced the second one — `Read and execute
   // `execute-phase/steps/protected-branch.md`` — and a rooted-only needle read
   // that live dispatch as no dispatch at all.
-  const needles = [`gsd-core/workflows/${relative}`, relative];
+  // The installer rewrites these exact source prefixes to runtime roots.
+  // Match the complete prefix so an unrelated vendor-path tail stays rejected.
+  const roots = ['', '~/.claude/', '$HOME/.claude/', './.claude/'];
+  const needles = [...roots.map(root => `${root}gsd-core/workflows/${relative}`), relative];
   return parent.split(/\r?\n/).some((line) => needles.some((needle) => {
     const at = line.indexOf(needle);
     // A path character immediately before the match means this is the TAIL of

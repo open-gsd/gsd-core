@@ -5,6 +5,11 @@ It owns the per-host dispatch detail so the host workflow stays inside its
 ADR-857 Phase 6 byte budget (#1168) — the host step keeps only the `ISOLATION`
 resolution and its fail-closed guard.
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 ## Resolve ISOLATION
 
 The resolution rule is shared with every other dispatch site — see
