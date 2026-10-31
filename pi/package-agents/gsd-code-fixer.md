@@ -475,7 +475,7 @@ For each finding, extract:
 - `fix`: Full fix content from **Fix:** section (may be multi-line, may contain code fences)
 
 **2. Filter by fix_scope:**
-- If `fix_scope == "critical_warning"`: include only CR-*, BL-*, and WR-* findings; `critical_warning` excludes necessity findings (removing code is a scope decision for the human, #4100)
+- If `fix_scope == "critical_warning"`: include only CR-*, BL-*, and WR-* findings; `critical_warning` excludes necessity findings (removing code is a scope decision for the human, #4100). The marker overrides the prefix: a WR-* finding carrying `**Category:** necessity` is OUT of scope here, and is skipped without applying any edit
 - If `fix_scope == "all"`: include CR-*, BL-*, WR-*, and IN-* findings; `all` includes necessity findings, ordered last. A necessity fix removes code, so record it as `fixed: requires human verification`
 
 **3. Sort findings by severity:**

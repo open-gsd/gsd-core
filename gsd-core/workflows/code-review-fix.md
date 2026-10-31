@@ -622,9 +622,11 @@ if [ "${FINDINGS_IN_SCOPE:-}" = "0" ]; then
   # #4100: a vacuous all_fixed (nothing was in scope) must not claim the review is resolved.
   echo "○ No findings were in fix scope (${FIX_SCOPE}). Out-of-scope findings (Info, and necessity unless --all) remain in ${REVIEW_PATH}."
   echo ""
-  echo "Next step:"
-  echo "  /gsd:code-review ${PHASE_NUMBER} --fix --all  — Include them in the fix scope"
-  echo ""
+  if [ "${FIX_SCOPE}" != "all" ]; then
+    echo "Next step:"
+    echo "  /gsd:code-review ${PHASE_NUMBER} --fix --all  — Include them in the fix scope"
+    echo ""
+  fi
 elif [ "$FIX_STATUS" = "all_fixed" ]; then
   echo "✓ All issues resolved."
   echo ""

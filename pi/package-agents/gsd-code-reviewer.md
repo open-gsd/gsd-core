@@ -288,10 +288,12 @@ findings:
   warning: N
   info: N
   total: N
-  necessity: N  # standard/deep only; subset of warning+info, never added to total
+  necessity: N
 status: clean | issues_found
 ---
 ```
+
+Emit `necessity:` only at standard/deep depth. It counts the necessity findings among `warning` + `info` and is never added to `total`.
 
 **3. Body sections (required order):**
 1) `## Structural Findings (fallow)` — only when structural findings were provided; list normalized items first.

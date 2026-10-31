@@ -160,10 +160,12 @@ findings:
   warning: N
   info: N
   total: N
-  necessity: N  # standard/deep only; subset of warning+info, never added to total
+  necessity: N
 status: clean | issues_found
 ---
 ```
+
+`necessity:` only at standard/deep: the necessity findings among `warning` + `info`, never added to `total`.
 
 **3. Body sections (required order):**
 1) `## Structural Findings (fallow)` — only if structural findings provided; normalized items first.

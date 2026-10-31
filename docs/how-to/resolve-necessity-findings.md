@@ -4,16 +4,7 @@
 
 ## Recognize one
 
-A necessity finding is an ordinary `WR-` or `IN-` finding whose body carries a category line:
-
-```markdown
-### WR-04: Impossible-state guard — client version check in single-artifact SPA
-
-**File:** `src/api/client.ts:42`
-**Category:** necessity
-**Issue:** The guarded state (client/server version skew) cannot occur: both are built and deployed as one artifact (`vite.config.ts:12`).
-**Fix:** Remove the check; record the invariant in a comment or ADR.
-```
+A necessity finding is an ordinary `WR-` or `IN-` finding. Its title names the subtype (for example `Impossible-state guard — …`) and its body carries the line `**Category:** necessity`. The "REVIEW.md format" section of `gsd-core/references/necessity-review.md` has a full example.
 
 The review summary shows how many there are on the `Necessity:` line. It shows `not assessed` when the review ran at `--depth=quick`, which never looks for them.
 

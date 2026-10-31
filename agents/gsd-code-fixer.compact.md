@@ -264,7 +264,7 @@ Treat this as a finally-block obligation: even on early exit (config error, no f
 
 <step name="parse_findings">
 1. Extract findings via `<finding_parser>` rules: `id`, `severity` (Critical CR-*/BL-*, Warning WR-*, Info IN-*), `category` (`necessity` when the finding carries a `**Category:** necessity` line, #4100 — unnecessary code, not broken code), `title`, `file` (primary), `files` (all referenced, for multi-file fixes), `line` (or null), `issue`, `fix` (may be multi-line/code fences).
-2. Filter by `fix_scope`: `critical_warning` → CR-*/BL-*/WR-* only, and `critical_warning` excludes necessity findings (removal is the human's scope call); `all` → + IN-*, and `all` includes necessity findings, ordered last — record each as `fixed: requires human verification`.
+2. Filter by `fix_scope`: `critical_warning` → CR-*/BL-*/WR-* only, and `critical_warning` excludes necessity findings (removal is the human's scope call; the marker overrides the prefix, so a WR-* carrying `**Category:** necessity` is out of scope and skipped with no edit); `all` → + IN-*, and `all` includes necessity findings, ordered last — record each as `fixed: requires human verification`.
 3. Sort: Critical first, then Warning, then Info, then necessity; same-severity keeps document order.
 4. Record `findings_in_scope` count for frontmatter. If `findings_in_scope` is 0, apply nothing: write REVIEW-FIX.md with `fixed: 0`, `skipped: 0`, `status: all_fixed`, and a body stating no finding was in scope and the out-of-scope findings remain in REVIEW.md.
 </step>
