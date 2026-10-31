@@ -1015,14 +1015,30 @@ function curlValueNamesSecret(text) {
 }
 
 // find's actions that run the words after them, up to `;` (or `+` after
-// `{}`), as a command.
+// `{}`), as a command. bfs takes find's actions.
 const FIND_EXEC_ACTIONS = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+const FIND_COMMANDS = new Set(['find', 'bfs']);
+
+// Commands whose documented job is to run another command given as their
+// operands (their man pages), other than the wrappers resolveCommand unwraps
+// and xargs/find, whose command position is read exactly. Their options
+// differ per command, so under them curl's arguments start after the first
+// operand whose last segment is curl, as for every launcher before #5779's
+// review narrowed the rule to commands that run curl.
+const CURL_WORD_LAUNCHERS = new Set([
+  'watch', 'ionice', 'taskset', 'chrt', 'flock', 'nsenter', 'unshare', 'chroot',
+  'runuser', 'setpriv', 'systemd-run', 'strace', 'ltrace', 'unbuffer',
+  'parallel', 'sem', 'torsocks', 'torify', 'proxychains', 'proxychains4',
+  'firejail', 'busybox', 'fd', 'fdfind', 'dotenv',
+]);
 
 // Which operands curl takes as its arguments (#5779): every one when curl is
 // the segment's command, and those after a curl that a launcher runs as a
 // command — xargs's sub-command, or the command of a find -exec / -execdir /
 // -ok / -okdir action, each past the wrappers resolveCommand unwraps
-// (`xargs sudo curl …`). Only those operands get curl's value reading. A
+// (`xargs sudo curl …`) — and, under a CURL_WORD_LAUNCHERS command, those
+// after its first curl word (`watch -n 5 curl …`). Only those operands get
+// curl's value reading. A
 // `curl` word anywhere else is an operand (`grep curl …`, `apt-get install
 // curl …`), so the words after it are judged as before.
 function curlArguments(base, operands) {
@@ -1043,7 +1059,15 @@ function markCurlArguments(base, words, from, to, marks, depth) {
   if (base === 'xargs') {
     const sub = xargsCommandIndex(words, from, to);
     if (sub !== -1) markLaunchedCurl(words, sub, to, marks, depth + 1);
-  } else if (base === 'find') {
+  } else if (CURL_WORD_LAUNCHERS.has(base)) {
+    // Options differ per launcher, so the command is the first curl word.
+    for (let k = from; k < to; k++) {
+      if (CURL_COMMANDS.has(commandName(words[k].text))) {
+        marks.fill(1, k + 1, to);
+        return;
+      }
+    }
+  } else if (FIND_COMMANDS.has(base)) {
     for (let j = from; j < to; j++) {
       if (!FIND_EXEC_ACTIONS.has(words[j].text)) continue;
       let end = j + 1;
