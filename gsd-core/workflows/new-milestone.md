@@ -331,7 +331,7 @@ with "agent type not found". Run the installer with --global to make agents avai
 
 Proceeding without research subagents — roadmap will be generated inline.
 ```
-Skip the parallel research spawn step and generate the roadmap inline.
+Step 8 then skips research without asking, and the roadmap is generated inline.
 
 <!-- gsd:section id="reset-phase-safety" when="flag:--reset-phase-numbers" -->
 If `section_manifest` is `null` or `"reset-phase-safety"` is in its `included` list: read and execute `gsd-core/workflows/new-milestone/steps/reset-phase-safety.md`. Otherwise skip — do not read the file.
@@ -339,50 +339,59 @@ If `section_manifest` is `null` or `"reset-phase-safety"` is in its `included` l
 
 ## 8. Research Decision
 
+**If `agents_installed` is false:** do not ask — research needs the researcher subagents. Display `Skipping research — GSD agents not installed (see warning above)` and continue to Step 9 as if the user chose Skip.
+
 Check `research_enabled` from init JSON (loaded from config).
 
 **If `research_enabled` is `true`:**
 
-AskUserQuestion: "Research the domain ecosystem for new features before defining requirements?"
-- "Research first (Recommended)" — Discover patterns, features, architecture for NEW capabilities
+AskUserQuestion: "Research the domain ecosystem for this milestone's work — new features, refactors, and what they couple to or could break in the existing codebase — before defining requirements?"
+- "Research first (Recommended)" — Discover patterns, features, architecture for the milestone's work, including integration points and pitfalls in the existing codebase
 - "Skip research for this milestone" — Go straight to requirements (does not change your default)
 
 **If `research_enabled` is `false`:**
 
-AskUserQuestion: "Research the domain ecosystem for new features before defining requirements?"
+AskUserQuestion: "Research the domain ecosystem for this milestone's work — new features, refactors, and what they couple to or could break in the existing codebase — before defining requirements?"
 - "Skip research (current default)" — Go straight to requirements
-- "Research first" — Discover patterns, features, architecture for NEW capabilities
+- "Research first" — Discover patterns, features, architecture for the milestone's work, including integration points and pitfalls in the existing codebase
+
+**`(Recommended)` is bound to `research_enabled`:** it marks "Research first" only when `research_enabled` is `true`, and is never added to or moved between options; the choice stays with the user.
 
 **IMPORTANT:** Do NOT persist this choice to config.json. The `workflow.research` setting is a persistent user preference that controls plan-phase behavior across the project. Changing it here would silently alter future `/gsd:plan-phase` behavior. To change the default, use `/gsd:settings`.
 
 **If user chose "Research first":**
 
+Run one researcher per dimension (stack, features, architecture, pitfalls) by default. Drop a dimension only when it clearly does not apply to this milestone, and tell the user before spawning: `Skipping: {dimension(s)} — {reason}`. Never drop one silently. At least one must run; to run none, the user chooses Skip. `{dimensions kept}` is the list of dimensions that will run, in the order stack, features, architecture, pitfalls, and `{N}` is its count. `{required_reading_lines}` is one line `- {research_dir}/{FILE}` per dimension in `{dimensions kept}`, with `{FILE}` from the FILE row of the table below. `{research_summary_line}` is `- {research_dir}/SUMMARY.md` when research ran and an empty string when it did not.
+
 ```
 ### GSD ► RESEARCHING
 
-◆ Spawning 4 researchers in parallel... (each runs in a subagent — no output until they return, ~1–5 min; expected, not a freeze)
-  → Stack, Features, Architecture, Pitfalls
+◆ Spawning {N} researchers in parallel... (each runs in a subagent — no output until they return, ~1–5 min; expected, not a freeze)
+  → {dimensions kept}
 ```
 
 ```bash
 mkdir -p .planning/research
 ```
 
-Spawn 4 parallel gsd-project-researcher agents. Each uses this template with dimension-specific fields:
+Remove what this run will rewrite, so a file left from an earlier run cannot pass for this run's output: `rm -f {research_dir}/SUMMARY.md` and `rm -f {research_dir}/{FILE}` for each dimension in `{dimensions kept}`. Files of skipped dimensions are left in place and never read.
 
-**Common structure for all 4 researchers:**
+Spawn {N} parallel gsd-project-researcher agents (one per dimension kept). Each uses this template with dimension-specific fields:
+
+**Common structure for every researcher:**
 <!-- #2517 model-omit-on-inherit -->
 
 > **Model omission (#2517).** Omit the `model` parameter entirely when the value it would carry (`researcher_model`, `synthesizer_model`, `roadmapper_model`) is `"inherit"` or empty. An empty value 404s on runtimes without native tier aliases — the default on non-Claude runtimes. Omitting it inherits the orchestrator's model. See @gsd-core/references/model-profile-resolution.md.
 
 ```text
 Agent(prompt="
-<research_type>Project Research — {DIMENSION} for [new features].</research_type>
+<research_type>Project Research — {DIMENSION} for this milestone's work.</research_type>
 
 <milestone_context>
-SUBSEQUENT MILESTONE — Adding [target features] to existing app.
+SUBSEQUENT MILESTONE — [target features] (new features and refactors) in an existing app.
 {EXISTING_CONTEXT}
-Focus ONLY on what's needed for the NEW features.
+Focus ONLY on what this milestone's work needs, including the integration points and pitfalls in the existing codebase it couples to or could break.
+Ground those in the existing code: read the codebase map from `/gsd:map-codebase` when the project has one; otherwise inspect the source this work touches.
 </milestone_context>
 
 <question>{QUESTION}</question>
@@ -412,26 +421,25 @@ Use template: ~/.claude/gsd-core/templates/research-project/{FILE}
 
 | Field | Stack | Features | Architecture | Pitfalls |
 |-------|-------|----------|-------------|----------|
-| EXISTING_CONTEXT | Existing validated capabilities (DO NOT re-research): [from PROJECT.md] | Existing features (already built): [from PROJECT.md] | Existing architecture: [from PROJECT.md or codebase map] | Focus on common mistakes when ADDING these features to existing system |
-| QUESTION | What stack additions/changes are needed for [new features]? | How do [target features] typically work? Expected behavior? | How do [target features] integrate with existing architecture? | Common mistakes when adding [target features] to [domain]? |
-| CONSUMER | Specific libraries with versions for NEW capabilities, integration points, what NOT to add | Table stakes vs differentiators vs anti-features, complexity noted, dependencies on existing | Integration points, new components, data flow changes, suggested build order | Warning signs, prevention strategy, which phase should address it |
-| GATES | Versions current (verify with Context7), rationale explains WHY, integration considered | Categories clear, complexity noted, dependencies identified | Integration points identified, new vs modified explicit, build order considers deps | Pitfalls specific to adding these features, integration pitfalls covered, prevention actionable |
+| EXISTING_CONTEXT | Existing validated capabilities (DO NOT re-research): [from PROJECT.md] | Existing features and the behavior they must keep through refactors: [from PROJECT.md] | Existing architecture: [from PROJECT.md or codebase map] | Focus on mistakes when making these changes (new features or refactors) to the existing system, and what they could break |
+| QUESTION | What stack additions/changes are needed for [target features]? | How do [target features] typically work? Expected behavior, and what existing behavior must stay? | How do [target features] integrate with or change the existing architecture? What do they couple to? | Common mistakes when making [target features] in [domain]? What in the existing codebase could they break? |
+| CONSUMER | Specific libraries with versions for this milestone's work, integration points, what NOT to add | Table stakes vs differentiators vs anti-features, complexity noted, dependencies on existing | Integration points, new components, data flow changes, suggested build order | Warning signs, prevention strategy, which phase should address it |
+| GATES | Versions current (verify with Context7), rationale explains WHY, integration considered | Categories clear, complexity noted, dependencies identified | Integration points identified, new vs modified explicit, build order considers deps | Pitfalls specific to this milestone's work, integration and breakage pitfalls covered, prevention actionable |
 | FILE | STACK.md | FEATURES.md | ARCHITECTURE.md | PITFALLS.md |
 
-> **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling all 4 researcher Agent() calls above, do NOT read research files or synthesize content independently while the subagents are active. Wait for all 4 researchers to complete before spawning the synthesizer. This prevents duplicate work and wasted context.
+> **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling all researcher Agent() calls above, do NOT read research files or synthesize content independently while the subagents are active. Wait for all researchers to complete before spawning the synthesizer. This prevents duplicate work and wasted context.
 
-After all 4 complete, spawn synthesizer:
+After all complete, confirm that `{research_dir}/{FILE}` exists for every dimension in `{dimensions kept}`; a missing file means that researcher failed, so surface it and stop rather than synthesize without it. Then spawn synthesizer with `{required_reading_lines}` (the files written by the researchers spawned in this run, never files left from earlier runs):
 
 ```text
 Agent(prompt="
 Synthesize research outputs into SUMMARY.md.
 
 <required_reading>
-- {research_dir}/STACK.md
-- {research_dir}/FEATURES.md
-- {research_dir}/ARCHITECTURE.md
-- {research_dir}/PITFALLS.md
+{required_reading_lines}
 </required_reading>
+
+Read only the files listed above; do not read other research files in {research_dir}. Research files for dimensions not listed above were intentionally skipped; their absence is expected, not an error. In SUMMARY.md, mark a skipped dimension's sections and confidence row `Not researched (dimension skipped)` instead of inventing findings.
 
 ${AGENT_SKILLS_SYNTHESIZER}
 
@@ -446,12 +454,12 @@ Commit after writing.
 **Synthesizer output self-heal (#222) — verify SUMMARY.md materialized:** The synthesizer's canonical output is `.planning/research/SUMMARY.md` on disk; its brief structured return (`## SYNTHESIS COMPLETE` plus a few `###` confirmation lines) is NOT the file content. The restriction is not always fabricated: Claude Code refuses a subagent's `Write` to a few exact basenames — `SUMMARY.md` among them — with `Subagents should return findings as text, not write report files` (observed on Claude Code 2.1.301), and the synthesizer is told to return the full document inline when its `Write` hits that error; the refusal is real, not fabricated. It depends on the exact basename (`SUMMARY.md`, `REPORT.md`, `FINDINGS.md`, `ANALYSIS.md`, case-insensitive; a prefixed name such as `01-01-SUMMARY.md` and other agents' files write fine), so do not tell other agents to avoid `Write`. Either cause lands in step 2. A known LLM false-refusal (issue #222) sometimes makes the agent return the full SUMMARY.md document inline — fabricating a write restriction (e.g. "the runtime is blocking file writes") — instead of writing the file. Prompt hardening alone does not fully eliminate it, so the orchestrator MUST absorb either cause deterministically before spawning `gsd-roadmapper`:
 
 1. Verify `.planning/research/SUMMARY.md` exists AND is substantive — non-empty, and free of any leftover `<!-- gsd:write-continue -->` continuation sentinel (which marks a truncated/incomplete write). You may validate with `gsd_run verify-summary .planning/research/SUMMARY.md` — it exits 0 regardless, so check its JSON `passed` field (`"passed": false` means missing or invalid), not the process exit code. If it passes, continue normally.
-2. If it is MISSING or invalid AND the synthesizer's return message contains the FULL SUMMARY.md document — recognizable by the template's top-level markers `# Project Research Summary`, `## Key Findings`, `## Implications for Roadmap`, and `## Sources`, not merely the brief `## SYNTHESIS COMPLETE` confirmation — the synthesizer returned the document inline (the #222 false-refusal, or the runtime's real refusal of the name `SUMMARY.md`): write that returned document to `.planning/research/SUMMARY.md` with the Write tool, then commit ALL research artifacts the synthesizer owns (it commits on behalf of the four researchers) with `gsd_run query commit "docs: complete project research" --files .planning/research/` unless they are already committed. Log `⚠ #222 self-heal: synthesizer returned SUMMARY.md inline without writing it; orchestrator persisted the file.`
+2. If it is MISSING or invalid AND the synthesizer's return message contains the FULL SUMMARY.md document — recognizable by the template's top-level markers `# Project Research Summary`, `## Key Findings`, `## Implications for Roadmap`, and `## Sources`, not merely the brief `## SYNTHESIS COMPLETE` confirmation — the synthesizer returned the document inline (the #222 false-refusal, or the runtime's real refusal of the name `SUMMARY.md`): write that returned document to `.planning/research/SUMMARY.md` with the Write tool, then commit ALL research artifacts the synthesizer owns (it commits on behalf of the researchers that ran) with `gsd_run query commit "docs: complete project research" --files .planning/research/` unless they are already committed. Log `⚠ #222 self-heal: synthesizer returned SUMMARY.md inline without writing it; orchestrator persisted the file.`
 3. If it is MISSING or invalid AND the return is only a brief confirmation (no full SUMMARY document to recover), the synthesizer genuinely failed — surface the error and stop; do NOT spawn `gsd-roadmapper` against a missing or incomplete SUMMARY.md.
 
 This guarantees `gsd-roadmapper` (which lists SUMMARY.md as required reading) never runs against a missing or truncated SUMMARY.md.
 
-Display key findings from SUMMARY.md:
+Display key findings from SUMMARY.md (omit a line whose dimension was skipped — Stack, Features or Pitfalls):
 ```
 ### GSD ► RESEARCH COMPLETE ✓
 
@@ -472,7 +480,7 @@ Read PROJECT.md: core value, current milestone goals, validated requirements (wh
 
 **If `$SELECTED_SEEDS` is non-empty (from step 2.5):** Include selected seed ideas and their "Why This Matters" sections as additional input when defining requirements. Seeds provide user-validated feature ideas that should be incorporated into the requirement categories alongside research findings or conversation-gathered features.
 
-**If research exists:** Read FEATURES.md, extract feature categories.
+**If research ran in Step 8:** If `{dimensions kept}` includes features, read FEATURES.md and extract feature categories; otherwise derive them from the milestone goals and SUMMARY.md. Never read research files left from earlier runs.
 
 Present features by category:
 ```
@@ -482,7 +490,7 @@ Present features by category:
 **Research notes:** [any relevant notes]
 ```
 
-**If no research:** Gather requirements through conversation. Ask: "What are the main things users need to do with [new features]?" Clarify, probe for related capabilities, group into categories.
+**If research was skipped:** Gather requirements through conversation. Ask: "What are the main things users need to do with [target features]?" Clarify, probe for related capabilities, group into categories.
 
 **Scope each category** via AskUserQuestion (multiSelect: true, header max 12 chars):
 - "[Feature 1]" — [brief description]
@@ -550,13 +558,15 @@ gsd_run query commit "docs: define milestone v[X.Y] requirements" --files "$REQU
 - If `--reset-phase-numbers` is active, start at **Phase 1**
 - Otherwise, continue from the previous milestone's last phase number (v1.0 ended at phase 5 → v1.1 starts at phase 6)
 
+Fill `{research_summary_line}` as defined in Step 8, and remove the line when it is empty (never a SUMMARY.md left from earlier runs):
+
 ```text
 Agent(prompt="
 <planning_context>
 <required_reading>
 - {project_path}
 - {requirements_path}
-- {research_dir}/SUMMARY.md (if exists)
+{research_summary_line}
 - {config_path}
 - {milestones_path}
 </required_reading>
@@ -715,7 +725,7 @@ Also: `/gsd:plan-phase [N] ${GSD_WS}` — skip discussion, plan directly
 - [ ] PROJECT.md updated with Current Milestone section (skipped when a workstream is active — shared file, see Step 4)
 - [ ] STATE.md reset for new milestone
 - [ ] MILESTONE-CONTEXT.md consumed and deleted (if existed)
-- [ ] Research completed (if selected) — 4 parallel agents, milestone-aware
+- [ ] Research completed (if selected) — one parallel agent per dimension kept, milestone-aware
 - [ ] Requirements gathered and scoped per category
 - [ ] REQUIREMENTS.md created with REQ-IDs
 - [ ] gsd-roadmapper spawned with phase numbering context
