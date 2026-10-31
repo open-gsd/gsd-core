@@ -17,6 +17,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { collectSection } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { auditMilestoneMd, openWorkStep, openWorkStepFields } = require('./helpers/audit-milestone-step.cjs');
 
 const AUDIT_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'audit-milestone.md');
@@ -56,14 +57,24 @@ test('#5482: audit lists open ship:pre gate work (would_refuse) and blocks passe
 test('#5482: open-work entries have a slot in the YAML, the gaps_found output and the success criteria', () => {
   const md = auditMilestoneMd();
   const named = openWorkStepFields();
-  assert.deepEqual(named, ['cap_id', 'phase', 'gate_message']);
-  const yaml = md.match(/^ {2}open_work:[^\n]*\n((?: {4,}[^\n]*\n)+)/m);
-  assert.ok(yaml, '#5482: the step-6 YAML gaps: block needs an open_work list');
+  assert.deepEqual(named, ['cap_id', 'phase', 'gate_message', 'details']);
+  const aggregate = collectSection(md, (h) => h.text.startsWith('6.'));
+  assert.ok(aggregate, '#5482: step 6 must exist');
+  const lines = splitLines(aggregate.body);
+  const slot = lines.findIndex((l) => /^ {2}open_work:/.test(l));
+  assert.ok(slot >= 0, '#5482: the step-6 YAML gaps: block needs an open_work list');
+  const yaml = [];
+  for (let i = slot + 1; i < lines.length && /^ {4}/.test(lines[i]); i++) yaml.push(lines[i]);
   const section = collectSection(md, (h) => h.text === 'Open Work');
   assert.ok(section, '#5482: the gaps_found output needs an Open Work section');
   for (const f of named) {
-    assert.match(yaml[1], new RegExp(`\\b${f}:`), `YAML open_work names ${f}`);
+    assert.match(yaml.join('\n'), new RegExp(`\\b${f}:`), `YAML open_work names ${f}`);
     assert.ok(section.body.includes(`{${f}}`), `Open Work section names {${f}}`);
+  }
+  // gate_message and details are untrusted command output: the report line shows them inside a code fence.
+  const unfenced = collectSection(md, (h) => h.text === 'Open Work', { stripFences: true });
+  for (const f of ['gate_message', 'details']) {
+    assert.ok(!unfenced.body.includes(`{${f}}`), `{${f}} must sit inside a code fence in the Open Work section`);
   }
   assert.match(md.match(/<success_criteria>[\s\S]*<\/success_criteria>/)[0], /open work/i);
 });

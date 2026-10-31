@@ -3,6 +3,7 @@
 // The audit-milestone workflow text and its step 5.6 (Open Work, #5482), shared by the tests that pin it.
 const fs = require('node:fs');
 const path = require('node:path');
+const { collectSection } = require('../../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 const AUDIT_MD = path.join(__dirname, '..', '..', 'gsd-core', 'workflows', 'audit-milestone.md');
 
@@ -11,7 +12,7 @@ function auditMilestoneMd() {
 }
 
 function openWorkStep() {
-  return auditMilestoneMd().split(/^## /m).find((s) => s.startsWith('5.6.'));
+  return collectSection(auditMilestoneMd(), (h) => h.text.startsWith('5.6.'))?.body;
 }
 
 // The entry field names step 5.6 tells the agent to report.

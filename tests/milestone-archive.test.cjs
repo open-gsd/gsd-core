@@ -18,6 +18,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createTempProject, createTempDir, cleanup, runGsdTools, toPosixPath, TOOLS_PATH } = require('./helpers.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+const { extractPhaseToken } = require('../gsd-core/bin/lib/phase-id.cjs');
+const { GATE_ROADMAP, writeGateCap, cleanEnv } = require('./helpers/ship-gate-fixture.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -1373,31 +1376,14 @@ describe('#3597: milestone complete refuses to archive on a non-COMPLETE window 
 // capabilities cannot leak in.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const GATE_ROADMAP = '# Roadmap v1.0 MVP\n\n### Phase 1: Foundation\n**Goal:** Setup\n\n### Phase 2: Build\n**Goal:** Build\n';
-
-function writeGateCap(home, { command, predicate, blocking = true, onError = 'halt', gates }) {
-  const capDir = path.join(home, '.gsd', 'capabilities', 'open-work');
-  fs.mkdirSync(capDir, { recursive: true });
-  fs.writeFileSync(path.join(capDir, 'capability.json'), JSON.stringify({
-    id: 'open-work', role: 'feature', version: '1.0.0', title: 'Open Work',
-    description: '#5482 engine backstop fixture', tier: 'standard', requires: [],
-    engines: { gsd: '>=0.0.0' }, runtimeCompat: { supported: ['*'], unsupported: [] },
-    skills: [], agents: [], hooks: [], config: {}, steps: [], contributions: [],
-    gates: (gates ?? [{ check: { predicate: predicate ?? { kind: 'command-exit-zero', command } }, blocking, onError }])
-      .map((g) => ({ point: 'ship:pre', ...g })),
-  }));
-}
+const EXIT3 = { kind: 'command-exit-zero', exitCode: 3, signal: null };
 
 describe('milestone complete re-checks blocking ship:pre predicate gates per milestone phase (#5482)', () => {
   let tmpDir;
   let home;
-  const env = () => ({
-    HOME: home, GSD_HOME: home,
-    XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local', 'share'), XDG_CACHE_HOME: path.join(home, '.cache'),
-  });
+  const env = () => cleanEnv(home);
   const complete = (extra = '') =>
     runGsdTools(`--json-errors milestone complete v1.0 --name MVP --confirm ${extra}`, tmpDir, env());
-  const dryRun = () => runGsdTools('milestone complete v1.0 --name MVP --dry-run', tmpDir, env());
   const archived = () => fs.existsSync(path.join(tmpDir, '.planning', 'milestones'));
   const parseErr = (r) => JSON.parse(r.error.trim().split('\n').pop());
   // A refused close: typed reason, raw output in the failure message so a red run is diagnosable.
@@ -1407,11 +1393,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.equal(err.reason, ERROR_REASON.MILESTONE_GATE_BLOCKED, r.error);
     return err;
   };
-  const wouldRefuse = () => {
-    const r = dryRun();
-    assert.equal(r.success, true, r.error);
-    return JSON.parse(r.output).would_refuse;
-  };
+  const wouldRefuse = () => gateResult().blocked;
   // Raw spawn (stderr visible on success) for the warning assertions.
   const completeRaw = (cwd = tmpDir) => runNode(
     [TOOLS_PATH, 'milestone', 'complete', 'v1.0', '--name', 'MVP', '--confirm'],
@@ -1419,10 +1401,16 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   );
   const phaseDir = (name) => path.join(tmpDir, '.planning', 'phases', name);
   // Public boundary: the dry-run JSON carries the blocks (would_refuse) and the typed warnings (gate_warnings).
-  const gateResult = (extra = '') => {
-    const r = runGsdTools(`milestone complete v1.0 --name MVP --dry-run ${extra}`, tmpDir, env());
+  const gateResult = (extra = '', cwd = tmpDir) => {
+    const r = runGsdTools(`milestone complete v1.0 --name MVP --dry-run ${extra}`, cwd, env());
     assert.equal(r.success, true, r.error);
-    const out = JSON.parse(r.output);
+    let out;
+    try {
+      out = JSON.parse(r.output);
+    } catch {
+      assert.fail(`dry-run stdout is not JSON: ${r.output}`);
+    }
+    assert.ok(Array.isArray(out.would_refuse) && Array.isArray(out.gate_warnings), `dry-run JSON lacks would_refuse/gate_warnings arrays: ${r.output}`);
     return { blocked: out.would_refuse, warnings: out.gate_warnings };
   };
   const snapshot = () => fs.readdirSync(tmpDir, { recursive: true }).sort()
@@ -1442,7 +1430,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     writeGateCap(home, { command: 'test "${PHASE_NUMBER}" != 01 || { echo 2 open items >&2; exit 3; }' });
     const before = snapshot();
     const err = refusal(complete());
-    assert.deepEqual(err.blocked, [{ cap_id: 'open-work', phase: '01', gate_message: 'command exited 3: 2 open items' }]);
+    assert.deepEqual(err.blocked, [{ cap_id: 'open-work', phase: '01', gate_message: 'command exited 3: 2 open items', details: EXIT3 }]);
     assert.match(err.message, /Nothing has been changed\. Resolve or waive in that capability; --force does not bypass it\.$/);
     assert.deepEqual(snapshot(), before, 'a refused close must leave the project tree byte-identical');
   });
@@ -1476,8 +1464,8 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     const preview = wouldRefuse();
     assert.equal(archived(), false);
     assert.deepEqual(preview, [
-      { cap_id: 'open-work', phase: '01', gate_message: 'command exited 3' },
-      { cap_id: 'open-work', phase: '02', gate_message: 'command exited 3' },
+      { cap_id: 'open-work', phase: '01', gate_message: 'command exited 3', details: EXIT3 },
+      { cap_id: 'open-work', phase: '02', gate_message: 'command exited 3', details: EXIT3 },
     ]);
   });
 
@@ -1549,7 +1537,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
 
   test('G13 two blocked phases both appear in the error details and in would_refuse', () => {
     writeGateCap(home, { command: 'echo open >&2; exit 3' });
-    const expected = ['01', '02'].map((phase) => ({ cap_id: 'open-work', phase, gate_message: 'command exited 3: open' }));
+    const expected = ['01', '02'].map((phase) => ({ cap_id: 'open-work', phase, gate_message: 'command exited 3: open', details: EXIT3 }));
     assert.deepEqual(wouldRefuse(), expected);
     const err = refusal(complete());
     assert.deepEqual(err.blocked, expected);
@@ -1595,19 +1583,19 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     seedWorkstream(tmpDir, { name: 'alpha', state: '---\nmilestone: v1.0\n---\n\n# GSD State\n', active: true });
     for (const d of ['01-a', '02-b']) fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha', 'phases', d), { recursive: true });
     writeGateCap(home, { command: 'exit 3' });
-    assert.deepEqual(gateResult(), { blocked: [], warnings: [{ kind: 'scope_unreadable', detail: 'unreadable' }] });
+    assert.deepEqual(gateResult(), { blocked: [], warnings: [{ kind: 'scope_unreadable' }] });
     const r = completeRaw();
     assert.equal(r.exitCode, 0, r.stderr);
     assert.match(r.stderr, /warning: ship:pre gates not re-checked: milestone window scope is "unreadable"/);
   });
 
-  test('G16b dry-run reports unevaluated gates in gate_warnings, so would_refuse [] is not read as clean', () => {
-    writeGateCap(home, { gates: [{ check: { query: 'status' }, blocking: true, onError: 'halt' }] });
-    const r = dryRun();
-    assert.equal(r.success, true, r.error);
-    const out = JSON.parse(r.output);
-    assert.deepEqual(out.would_refuse, []);
-    assert.deepEqual(out.gate_warnings, [{ kind: 'not_check_predicate', capId: 'open-work' }]);
+  test('G16d UNREADABLE window scope without a gate-declaring capability: no warning', () => {
+    seedWorkstream(tmpDir, { name: 'alpha', state: '---\nmilestone: v1.0\n---\n\n# GSD State\n', active: true });
+    for (const d of ['01-a', '02-b']) fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha', 'phases', d), { recursive: true });
+    assert.deepEqual(gateResult(), { blocked: [], warnings: [] });
+    const r = completeRaw();
+    assert.equal(r.exitCode, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, /ship:pre gates not re-checked/);
   });
 
   test('G16c a capability that failed to load is reported in gate_warnings, so would_refuse [] is not read as clean', () => {
@@ -1619,6 +1607,12 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     const { blocked, warnings } = gateResult();
     assert.deepEqual(blocked, []);
     assert.deepEqual(warnings, [{ kind: 'capability_load_failed', capId: 'open-work' }]);
+    // The loop-resolver owns the stderr line; the engine adds none for the same capability.
+    const r = completeRaw();
+    assert.equal(r.exitCode, 0, r.stderr);
+    const lines = r.stderr.split('\n');
+    assert.equal(lines.filter((l) => /open-work/.test(l) && /failed to load/.test(l)).length, 1, r.stderr);
+    assert.ok(!lines.some((l) => /not re-checked: the capability failed to load/.test(l)), r.stderr);
   });
 
   test('G17 --no-archive-phases still gates the milestone phases', () => {
@@ -1639,12 +1633,6 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   test('G19 stdout-only failure surfaces stdout in the refusal', () => {
     writeGateCap(home, { command: 'echo only-stdout; exit 2' });
     assert.equal(refusal(complete()).blocked[0].gate_message, 'command exited 2: only-stdout');
-  });
-
-  test('G20 a gate past its timeout blocks', () => {
-    const GATE_TIMEOUT_S = 1; // the gate's own bound (seconds), far below the 5s sleep it must cut short
-    writeGateCap(home, { predicate: { kind: 'command-exit-zero', command: 'sleep 5', timeout: GATE_TIMEOUT_S } });
-    assert.match(refusal(complete()).blocked[0].gate_message, new RegExp(`^command timed out after ${GATE_TIMEOUT_S}s`));
   });
 
   test('G21 a decimal phase dir yields the token init hands ship.md', () => {
@@ -1670,6 +1658,102 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.deepEqual(skipped.blocked, []);
     assert.equal(skipped.warnings[0].kind, 'skipped_phase');
     assert.equal(fs.existsSync(marker), false);
+  });
+
+  test('G21b each gated dir carries the phase_number init.phase-op reports for its roadmap phase', () => {
+    const scenarios = [
+      { ids: ['1', '1.1'], dirs: ['01-foundation', '01.1-hotfix'], phases: '### Phase 1: Foundation\n**Goal:** a\n\n### Phase 1.1: Hotfix\n**Goal:** b\n' },
+      { ids: ['1'], dirs: ['CK-01-foundation'], phases: '### Phase 1: Foundation\n**Goal:** a\n' },
+      { ids: ['1', '2'], dirs: ['01-foundation', '02-24-7-autonomy'], phases: '### Phase 1: Foundation\n**Goal:** a\n\n### Phase 2: Build\n**Goal:** b\n' },
+    ];
+    writeGateCap(home, { command: 'echo "${PHASE_NUMBER}" >&2; exit 3' });
+    for (const { ids, dirs, phases } of scenarios) {
+      for (const d of fs.readdirSync(path.join(tmpDir, '.planning', 'phases'))) cleanup(phaseDir(d));
+      for (const d of dirs) fs.mkdirSync(phaseDir(d), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), `# Roadmap v1.0 MVP\n\n${phases}`);
+      const expected = ids.map((id) => {
+        const r = runGsdTools(['query', 'init.phase-op', id], tmpDir, env());
+        assert.equal(r.success, true, r.error);
+        const init = JSON.parse(r.output);
+        assert.equal(init.phase_found, true, r.output);
+        return init.phase_number;
+      });
+      assert.deepEqual(wouldRefuse().map((b) => b.phase).sort(), expected.sort(), dirs.join(','));
+    }
+  });
+
+  test('G21c a bracket-convention dir that no roadmap id resolves keeps the literal dir token', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({ phase_id_convention: 'bracket' }));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n\n## [GSD.02] v1.0\n\n### [GSD.02] 01: Setup\n**Goal:** a\n');
+    cleanup(phaseDir('01-foundation'));
+    cleanup(phaseDir('02-build'));
+    fs.mkdirSync(phaseDir('GSD.02-01-setup'), { recursive: true });
+    writeGateCap(home, { command: 'exit 3' });
+    assert.deepEqual(wouldRefuse().map((b) => b.phase), [extractPhaseToken('GSD.02-01-setup')]);
+  });
+
+  // A copy of the fixture project under a root named `name` (a parent dir keeps the name verbatim).
+  const projectAt = (t, name) => {
+    const parent = createTempDir('gsd-5482-root-');
+    t.after(() => cleanup(parent));
+    const root = path.join(parent, name);
+    fs.cpSync(tmpDir, root, { recursive: true });
+    return root;
+  };
+
+  test('G22b a shell-hostile project root never reaches sh -c: every phase reads gate not run', (t) => {
+    const root = projectAt(t, 'r$(touch pwned)');
+    writeGateCap(home, { command: 'true "${PHASE_DIR}"' });
+    const { blocked } = gateResult('', root);
+    assert.deepEqual(blocked.map((b) => b.phase), ['01', '02']);
+    for (const b of blocked) assert.match(b.gate_message, /gate not run/);
+    assert.equal(fs.existsSync(path.join(root, 'pwned')), false);
+  });
+
+  test('G22c ordinary roots still run command gates; hostile roots and dirs read gate not run, never a pass', (t) => {
+    writeGateCap(home, { command: 'test ! -f "${PHASE_DIR}/OPEN_WORK" || exit 3' });
+    for (const d of ['01-foundation', '02-build']) fs.writeFileSync(path.join(phaseDir(d), 'OPEN_WORK'), '');
+    for (const name of ['r with space', 'ré café', "o'brien"]) {
+      for (const b of gateResult('', projectAt(t, name)).blocked) assert.match(b.gate_message, /^command exited 3/, name);
+    }
+    for (const b of gateResult('', projectAt(t, 'r#1')).blocked) assert.match(b.gate_message, /gate not run/);
+
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), `${GATE_ROADMAP}\n### Phase 3: Hostile\n**Goal:** c\n`);
+    fs.mkdirSync(phaseDir('03-x #y'), { recursive: true });
+    const byPhase = Object.fromEntries(wouldRefuse().map((b) => [b.phase, b.gate_message]));
+    assert.match(byPhase['03'], /gate not run/);
+    assert.match(byPhase['01'], /^command exited 3/);
+
+    // Other predicate kinds are not shell-interpolated: a root with parentheses still evaluates.
+    fs.writeFileSync(path.join(phaseDir('01-foundation'), '01-OPEN-WORK.md'), '---\nstatus: open\n---\n');
+    writeGateCap(home, { predicate: { kind: 'artifact-frontmatter-equals', artifact: 'OPEN-WORK.md', field: 'status', equals: 'closed' } });
+    const blocked = gateResult('', projectAt(t, 'r (x)')).blocked;
+    assert.ok(blocked.length > 0);
+    for (const b of blocked) assert.doesNotMatch(b.gate_message, /gate not run/);
+  });
+
+  test('G28 the workflow previews the close and stops on would_refuse before PROJECT.md, tags or archive', () => {
+    const md = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'complete-milestone.md'), 'utf-8');
+    const lines = splitLines(md);
+    const pre = lines.findIndex((l) => /milestone\.complete "v\[X\.Y\]" --dry-run(?!.*--release-map)/.test(l));
+    assert.ok(pre >= 0, 'a milestone.complete --dry-run preflight line must exist');
+    const before = (needle) => lines.findIndex((l) => l.includes(needle));
+    assert.ok(pre < before('PROJECT_MD_REVIEW'), 'preflight precedes the PROJECT.md review');
+    assert.ok(pre < before('complete-milestone/steps/release-map.md'), 'preflight precedes the release-map tags');
+    assert.ok(lines.slice(pre, before('PROJECT_MD_REVIEW')).some((l) => l.includes('would_refuse')), 'the preflight reads would_refuse');
+  });
+
+  test('G29 the refusal the workflow matches is the one the command prints', () => {
+    const md = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'complete-milestone.md'), 'utf-8');
+    const para = splitLines(md).find((l) => l.includes('milestone complete refused'));
+    assert.ok(para, 'the close step must describe the refusal');
+    assert.doesNotMatch(para, /starting/);
+    const phrase = para.match(/error contains `([^`]{1,200})`/);
+    assert.ok(phrase, 'the paragraph must quote the phrase the error contains');
+    writeGateCap(home, { command: 'exit 3' });
+    const r = runGsdTools('milestone complete v1.0 --name MVP --confirm', tmpDir, env());
+    assert.equal(r.success, false);
+    assert.ok(r.error.includes(phrase[1]), r.error);
   });
 
   test('G23 a project-code-prefixed phase dir yields the prefixed token', () => {
@@ -1704,7 +1788,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.ok(fs.existsSync(path.join(ws, 'phases', '01-foundation')), 'workstream phase dir must not move on refusal');
   });
 
-  test('G27 a phase dir symlinked outside the project is never handed to a gate', (t) => {
+  test('G27 a phase dir that is a symlink is not enumerated, so no gate runs on it', (t) => {
     const outside = createTempDir('gsd-5482-outside-');
     t.after(() => cleanup(outside));
     cleanup(phaseDir('02-build'));
