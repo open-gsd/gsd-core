@@ -167,7 +167,7 @@ describe('ADR-857 phase 6 verification and review capability migration', () => {
 
   test('secure-phase command self-gates through verify:post hooks', () => {
     const content = workflow('secure-phase.md');
-    const initFence = ['```bash', 'AUDITOR_MODEL='].join('\n');
+    const initFence = '\nAUDITOR_MODEL=$(gsd_run query resolve-model';
     const section = sectionBetween(content, initFence, 'Display banner:');
 
     assert.ok(section.includes('loop render-hooks verify:post'));
@@ -177,7 +177,7 @@ describe('ADR-857 phase 6 verification and review capability migration', () => {
 
   test('validate-phase command self-gates through verify:post hooks', () => {
     const content = workflow('validate-phase.md');
-    const initFence = ['```bash', 'AUDITOR_MODEL='].join('\n');
+    const initFence = '\nAUDITOR_MODEL=$(gsd_run query resolve-model';
     const section = sectionBetween(content, initFence, 'Display banner:');
 
     assert.ok(section.includes('loop render-hooks verify:post'));

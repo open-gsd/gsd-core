@@ -42,6 +42,7 @@ const {
   customPhaseDirectoryParts,
   customPhaseQuery,
   foldBracketId,
+  isForeignPrefixedPhaseQuery,
   isSentinelPhaseId,
   matchPhaseDirs,
   normalizePhaseName,
@@ -938,6 +939,42 @@ function getAllArchivedPhaseDirs(cwd: string): ArchivedPhaseDir[] {
   return out;
 }
 
+/** True when the resolved phase's number equals the query token, ignoring case: the exact-prefix check guardedFindPhase applies to a foreign-prefixed token. */
+function phaseInfoMatchesExactPrefix(
+  phaseInfo: Record<string, unknown> | null,
+  phase: string,
+): boolean {
+  const num = phaseInfo?.['phase_number'];
+  const numStr = typeof num === 'string' ? num : (typeof num === 'number' ? String(num) : '');
+  return numStr.toUpperCase() === phase.toUpperCase();
+}
+
+/**
+ * #2056 / #2105: `findPhaseInternal` matches a phase token against on-disk
+ * directories with no notion of project scope, so a token carrying a FOREIGN
+ * project-code prefix (`OTHER-05` in a `project_code: "MINE"` project) would
+ * otherwise resolve to this project's same-numbered directory — bug #2237.
+ * This is the guarded form every phase-token consumer must use; the bare
+ * `findPhaseInternal` above is the unscoped primitive it wraps.
+ *
+ * Lives here, beside the primitive it guards, rather than in a caller: #4030
+ * added a second consumer (`loop render-hooks --phase`, `loop-resolver.cts`)
+ * and routing that through the first consumer (`init.cts`) would have inverted
+ * the dependency tree and closed a require cycle.
+ */
+function guardedFindPhase(
+  cwd: string,
+  phase: string,
+  projectCode: unknown,
+  phaseNaming?: unknown,
+): Record<string, unknown> | null {
+  let phaseInfo = findPhaseInternal(cwd, phase, undefined, phaseDirectoryOptions(cwd, { phase_naming: phaseNaming, project_code: projectCode })) as unknown as Record<string, unknown> | null;
+  if (isForeignPrefixedPhaseQuery(phase, projectCode) && !phaseInfoMatchesExactPrefix(phaseInfo, phase)) {
+    phaseInfo = null;
+  }
+  return phaseInfo;
+}
+
 export = {
   createPhaseDirectories,
   phaseDirectoryOptions,
@@ -947,6 +984,7 @@ export = {
   resolvePhaseDirectoryLookup,
   matchPhaseDirsForLookup,
   findPhaseInternal,
+  guardedFindPhase,
   getArchivedPhaseDirs,
   getAllArchivedPhaseDirs,
   listMilestonePhaseDirs,

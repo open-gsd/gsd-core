@@ -1569,6 +1569,22 @@ gsd capability remove my-cap --scope project          # Turn the installed overl
 
 ---
 
+### `gsd-tools loop render-hooks`
+Resolve and render the active Capability hooks at a Loop Extension Point. Emits `{ point, activeHooks[], rendered, warnings?, skippedHooks?, context?, phaseDrop? }`.
+
+| Flag | Description |
+|------|-------------|
+| `<point>` | Loop Extension Point, e.g. `plan:pre` |
+| `--phase <token>` | Bare phase token (`05`, `07.5`). Adds `context: { phase, phaseDir }`, authoritative for task-local phase; omitted token means no `context` key. A token outside `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` (`INVALID_TOKEN`), an unusable `.planning/config.json` (`CONFIG_FAULT`), no match, ambiguity, a foreign `project_code` prefix, a match only in an archived milestone, or a directory outside `.planning/phases` omits `context` with a warning and sets the envelope's typed `phaseDrop` code; the phase-argument table in `loop-hook-dispatch.md` says what each code makes a handler receive. |
+| `--phase-dir <dir>` | Optional cross-check against the resolved directory; requires `--phase`. A different directory omits `context` with a warning. Emitted `phaseDir` is always the resolver's. |
+| `--config-dir <path>` | Runtime config directory for surface resolution |
+| `--runtime <r>` | Override the auto-detected runtime so the config directory resolves to that runtime's home (#2003) |
+| `--active-cap <capId>` | Print only `true` or `false`: whether that capability has an active hook at `<point>` |
+| `--after-fingerprint <phaseDir>` | Move `verify:post` steps whose declared artifact already exists in `phaseDir` into `skippedHooks` (#5105) |
+| `--raw` | Raw output mode; every envelope-fetching workflow call site passes it (the `--active-cap` probes print a bare `true`/`false` and do not) |
+
+---
+
 ## Brownfield Commands
 
 ### `/gsd-map-codebase`

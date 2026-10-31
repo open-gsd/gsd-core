@@ -20,6 +20,7 @@ const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 const GSD_ROOT = path.join(__dirname, '..', 'gsd-core');
 const CONFIG_TEMPLATE_PATH = path.join(GSD_ROOT, 'templates', 'config.json');
 const PLAN_PHASE_PATH = path.join(GSD_ROOT, 'workflows', 'plan-phase.md');
+const PLAN_BOUNCE_STEP_PATH = path.join(GSD_ROOT, 'workflows', 'plan-phase', 'steps', 'plan-bounce.md');
 
 describe('Plan Bounce: config keys', () => {
   test('config-set accepts workflow.plan_bounce', () => {
@@ -86,7 +87,14 @@ describe('Plan Bounce: config template defaults', () => {
 // plan-phase.md is the installed AI workflow instruction — its text content IS what executes.
 // String presence tests guard against accidental deletion of bounce step clauses.
 describe('Plan Bounce: plan-phase.md step 12.5', () => {
-  const content = fs.readFileSync(PLAN_PHASE_PATH, 'utf-8');
+  // Step 12.5's body is a lazily read step file (read only when bounce is activated): check the
+  // spine and that step together, where the agent reads them.
+  const host = fs.readFileSync(PLAN_PHASE_PATH, 'utf-8');
+  const content = `${host}\n${fs.readFileSync(PLAN_BOUNCE_STEP_PATH, 'utf-8')}`;
+
+  test('plan-phase.md step 12.5 reads its step file', () => {
+    assert.ok(host.includes('read and execute `gsd-core/workflows/plan-phase/steps/plan-bounce.md`'), 'step 12.5 must read plan-phase/steps/plan-bounce.md');
+  });
 
   test('plan-phase.md contains step 12.5', () => {
     assert.ok(
