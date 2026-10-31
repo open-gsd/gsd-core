@@ -6,13 +6,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { runMinimalInstall } = require('./helpers/install-shared.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, canonicalizePath } = require('./helpers.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 test('#4988: installed local CLI syncs and reads its own Claude agents', () => {
-  const installed = runMinimalInstall({ runtime: 'claude', scope: 'local' });
-  const root = fs.realpathSync.native(installed.root);
-  const configDir = fs.realpathSync.native(installed.configDir);
+  const { configDir, root } = runMinimalInstall({ runtime: 'claude', scope: 'local' });
   try {
     const globalDir = path.join(root, 'global-claude');
     fs.mkdirSync(path.join(globalDir, 'agents'), { recursive: true });
@@ -35,7 +33,7 @@ test('#4988: installed local CLI syncs and reads its own Claude agents', () => {
     }
 
     const preview = run(['effort', 'sync', '--dry-run']);
-    assert.equal(preview.agents_dir, path.join(configDir, 'agents'));
+    assert.equal(preview.agents_dir, path.join(canonicalizePath(configDir), 'agents'));
     assert.ok(preview.changes.some(change => change.agent === 'gsd-planner' && change.to === 'low'));
 
     const effective = run(['resolve-execution', 'gsd-planner']);
@@ -44,7 +42,7 @@ test('#4988: installed local CLI syncs and reads its own Claude agents', () => {
     assert.notEqual(effective.effort_effective, 'low');
 
     const applied = run(['effort', 'sync', '--apply']);
-    assert.equal(applied.agents_dir, path.join(configDir, 'agents'));
+    assert.equal(applied.agents_dir, path.join(canonicalizePath(configDir), 'agents'));
     assert.match(fs.readFileSync(agentPath, 'utf8'), /^effort: low$/m);
     assert.equal(run(['resolve-execution', 'gsd-planner']).effort_effective, 'low');
 
