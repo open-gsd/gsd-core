@@ -83,7 +83,11 @@
 // takes effect only for a file that is a regular file on disk AND a regular
 // blob (100644/100755) in the commit HEAD names — read from `.git` directly,
 // no subprocess, no timer (hooks/lib/git-head-tree.js). Read and Grep honor an
-// absolute or cwd-relative path; Bash honors the absolute path only. A Grep
+// absolute or cwd-relative path; Bash honors the absolute path only, and only
+// when EVERY command on the line is one of cat/head/tail/grep/egrep/fgrep/rg/
+// wc/diff/cmp/sort/uniq/cut/nl/od (after wrapper resolution) with no `$( )`/
+// backtick/`<( )` body, heredoc or file-writing redirect or option; any other
+// command (mv, ln, cp, git, sh, awk, sed, …) withdraws it for the whole line. A Grep
 // `glob` is never widened, and a colon-joined word (`HEAD:.env.production`)
 // never matches. An unreadable config or repository means no exemption.
 //
@@ -162,10 +166,74 @@ const MAX_GLOB_ALTERNATIVES = 64;
 // the stdin handler; `checker` is built lazily on the first secret-classified
 // token. Any failure while building or calling it means NOT exempt — never an
 // allow, and never a throw into the fail-open crash path.
-const exemption = { root: null, allowRelative: false, checker: null, configured: false };
+const exemption = { root: null, allowRelative: false, checker: null, configured: false, bashLine: null, bashReadOnly: null };
+
+// F3: a Bash exemption holds only when every command on the line is one of
+// these read-only readers; any other command anywhere on the line withdraws it
+// for every token (`mv a b && cat <exempt>` re-anchors or launders the name).
+const READ_ONLY_COMMANDS = new Set([
+  'cat', 'head', 'tail', 'grep', 'egrep', 'fgrep', 'rg', 'wc', 'diff', 'cmp', 'sort', 'uniq', 'cut', 'nl', 'od',
+]);
+
+// Per-command options that write a file or run a program, so the command is
+// not read-only: `sort -o f`, `sort --compress-program`, `rg --pre`.
+function readOnlyOptionsOnly(base, operands) {
+  let positional = 0;
+  for (const w of operands) {
+    const t = w.text;
+    if (base === 'sort' && (/^-[A-Za-z]*o/.test(t) || /^--(output|compress-program|files0-from)/.test(t))) return false;
+    if (base === 'rg' && /^--(pre|pre-glob|hostname-bin)(=|$)/.test(t)) return false;
+    if (base === 'uniq' && !t.startsWith('-')) positional++;
+  }
+  return base !== 'uniq' || positional <= 1; // `uniq in out` writes `out`
+}
+
+// Fail closed: a substitution body, heredoc, process substitution, file
+// redirect out, unresolved or unlisted command word, or any exception is false.
+function lineIsReadOnly(command) {
+  try {
+    const { tokens, nested } = tokenize(command);
+    if (nested.length > 0) return false;
+    const bySeg = new Map();
+    for (const t of tokens) {
+      if (t.kind === 'heredoc') return false;
+      if (t.kind === 'sep') continue;
+      if (t.kind === 'word' && t.procsub !== undefined) return false;
+      if (!bySeg.has(t.seg)) bySeg.set(t.seg, []);
+      bySeg.get(t.seg).push(t);
+    }
+    for (const segTokens of bySeg.values()) {
+      const words = [];
+      for (let k = 0; k < segTokens.length; k++) {
+        const t = segTokens[k];
+        if (t.kind === 'op') {
+          if (t.dup) continue;
+          const target = segTokens[k + 1];
+          if (!target || target.kind !== 'word') return false;
+          k++;
+          if (!t.read && target.text !== '/dev/null') return false; // output to a file
+          if (t.text.endsWith('<<<')) return false;
+          continue;
+        }
+        words.push(t);
+      }
+      if (words.length === 0) return false;
+      const cmd = resolveCommand(words);
+      if (!cmd || !READ_ONLY_COMMANDS.has(cmd.base)) return false;
+      if (!readOnlyOptionsOnly(cmd.base, cmd.operands)) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function isExemptSecret(tok) {
   if (exemption.root === null) return false;
+  if (exemption.bashLine !== null) {
+    if (exemption.bashReadOnly === null) exemption.bashReadOnly = lineIsReadOnly(exemption.bashLine);
+    if (exemption.bashReadOnly !== true) return false;
+  }
   try {
     if (exemption.checker === null) {
       const lib = require('./lib/secret-read-exemptions.js');
@@ -1608,6 +1676,7 @@ process.stdin.on('end', () => {
     const command = typeof data.tool_input.command === 'string' ? data.tool_input.command : '';
     if (command === '') allow(undefined);
     if (command.length > MAX_COMMAND_LENGTH) emitBlock('command-too-large', tool, '');
+    exemption.bashLine = command;
     const hit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
     if (hit !== null) emitBlock('secret-read', tool, hit);
     const spawn = findDebuggerCliSpawn(command, 0);
