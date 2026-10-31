@@ -24,7 +24,8 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const fc = require('fast-check');
 const { createTempGitProject, cleanup } = require('./helpers.cjs');
-const { GIT_TIMEOUT_MS: GIT_TEST_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { GIT_FIXTURE_TIMEOUT_MS: GIT_TEST_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const childProcess = require('node:child_process');
 
 const exemptions = require('../hooks/lib/secret-read-exemptions.js');
 const configLib = require('../gsd-core/bin/lib/config.cjs');
@@ -417,9 +418,45 @@ describe('createExemptionChecker (#4432 rows 20 22 23 24 25 36 43)', () => {
 // ─── probes against real git ────────────────────────────────────────────────
 
 describe('default probes against a real git repo (#4432 rows 17 18 19 21)', () => {
-  test('the git probe is bounded by an exported timeout', () => {
-    assert.equal(typeof exemptions.GIT_TIMEOUT_MS, 'number');
-    assert.ok(Number.isFinite(exemptions.GIT_TIMEOUT_MS) && exemptions.GIT_TIMEOUT_MS > 0);
+  // Row 54: no timer constant is exported, and no child process is ever spawned.
+  test('the module exports no timeout constant', () => {
+    for (const key of Object.keys(exemptions)) {
+      assert.ok(!/TIMEOUT/i.test(key), `unexpected export ${key}`);
+    }
+  });
+
+  test('the checks spawn no subprocess', (t) => {
+    const repo = makeRepo(t);
+    fs.writeFileSync(path.join(repo, '.env.production'), 'KEY=CHANGE_ME\n');
+    fs.writeFileSync(path.join(repo, '.env'), 'KEY=real\n');
+    commitAll(repo, 'add template');
+    fs.writeFileSync(path.join(repo, '.secrets'), 'untracked\n');
+
+    const names = ['spawnSync', 'execFileSync', 'execSync', 'spawn', 'exec', 'execFile'];
+    const originals = {};
+    const attempted = [];
+    for (const name of names) {
+      originals[name] = childProcess[name];
+      childProcess[name] = () => { attempted.push(name); throw new Error(`child_process.${name} must not be called`); };
+    }
+    let committed;
+    let untracked;
+    let checkedIn;
+    let checkedOut;
+    try {
+      committed = isCommittedBlob(repo, '.env.production');
+      untracked = isCommittedBlob(repo, '.secrets');
+      const check = createExemptionChecker({ root: repo, entries: ['.env.production', '.secrets'], allowRelative: false });
+      checkedIn = check(path.join(repo, '.env.production'));
+      checkedOut = check(path.join(repo, '.secrets'));
+    } finally {
+      for (const name of names) childProcess[name] = originals[name];
+    }
+    assert.deepEqual(attempted, []);
+    assert.equal(committed, true);
+    assert.equal(untracked, false);
+    assert.equal(checkedIn, true);
+    assert.equal(checkedOut, false);
   });
 
   test('positive control: a committed regular file is exempt through the default probes', (t) => {
