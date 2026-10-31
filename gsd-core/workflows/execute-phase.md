@@ -149,9 +149,7 @@ else
 fi
 ```
 
-`SUBMODULE_PATHS` is exported to the `execute_waves` step, where the per-plan decision happens (see "Per-plan worktree decision" sub-step inside `execute_waves`). The decision is per-plan because different plans in the same wave can touch different files — only plans whose paths intersect a submodule must drop worktree isolation; plans nowhere near a submodule keep parallel isolation.
-
-When `USE_WORKTREES` is `false`, `ISOLATION` is forced to `none`: executors run sequentially on the main working tree. The per-plan decision below has no effect when worktrees are project-disabled.
+`SUBMODULE_PATHS` is passed to the per-plan decision in step 2.5: plans touching a submodule drop worktree isolation; others keep parallel isolation. When `USE_WORKTREES=false`, `ISOLATION` is forced to `none` (sequential on main working tree).
 
 `USE_WORKTREES` and `ISOLATION` are also reset for the run when `worktree base-check` detects the orchestrator HEAD has diverged from the worktree fork base (#683) — read and follow `execute-phase/steps/worktree-base-check.md` for the degrade semantics and the `worktree.baseRef:"head"` escape hatch (#3659).
 
@@ -164,13 +162,10 @@ CONTEXT_WINDOW=$(gsd_run query config-get context_window --raw 2>/dev/null || ec
 When `CONTEXT_WINDOW >= 500000` (1M-class models), subagent prompts include richer context:
 - Executor agents receive prior wave SUMMARY.md files and the phase CONTEXT.md/RESEARCH.md
 - Verifier agents receive all PLAN.md, SUMMARY.md, CONTEXT.md files plus REQUIREMENTS.md
-- This enables cross-phase awareness and history-aware verification
 
-When `CONTEXT_WINDOW < 200000` (sub-200K models), subagent prompts are thinned to reduce static overhead:
-- Executor agents omit extended deviation rule examples and checkpoint examples from inline prompt — load on-demand via @~/.claude/gsd-core/references/executor-examples.md
-- Planner agents omit extended anti-pattern lists and specificity examples from inline prompt — load on-demand via @~/.claude/gsd-core/references/planner-antipatterns.md
-- Core rules and decision logic remain inline; only verbose examples and edge-case lists are extracted
-- This reduces executor static overhead by ~40% while preserving behavioral correctness
+When `CONTEXT_WINDOW < 200000` (sub-200K models), subagent prompts are thinned:
+- Executor agents omit extended deviation/checkpoint examples from inline prompt — load on-demand via @~/.claude/gsd-core/references/executor-examples.md
+- Planner agents load on-demand via @~/.claude/gsd-core/references/planner-antipatterns.md
 
 **If `phase_found` is false:** Error — phase directory not found.
 **If `plan_count` is 0:** Error — no plans found in phase.
@@ -186,24 +181,15 @@ signals are unreliable (see `<runtime_compatibility>`). Set `COPILOT_SEQUENTIAL=
 internally and skip the `execute_waves` step in favor of `check_interactive_mode`'s
 inline path for each plan.
 
-**REQUIRED — Sync chain flag with intent.** If user invoked manually (no `--auto`), clear the ephemeral chain flag from any previous interrupted `--auto` chain. This prevents stale `_auto_chain_active: true` from causing unwanted auto-advance. This does NOT touch `workflow.auto_advance` (the user's persistent settings preference). You MUST execute this bash block before any config reads:
+**REQUIRED — Sync chain flag with intent and resolve MVP mode.** If user invoked manually (no `--auto`), clear the ephemeral chain flag from any previous interrupted `--auto` chain. Resolve `MVP_MODE` via `phase.mvp-mode`:
 ```bash
 IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
 GSD_ARGS_END
 GSD_ARGS=${GSD_ARGS%$'\n'}
-# REQUIRED: prevents stale auto-chain from previous --auto runs
 if [[ ! "$GSD_ARGS" =~ --auto ]]; then
   gsd_run query config-set workflow._auto_chain_active false || true
 fi
-```
-
-Resolve `MVP_MODE` once via the centralized `phase.mvp-mode` query verb (precedence chain: CLI flag → ROADMAP `**Mode:** mvp` → `workflow.mvp_mode` config → false):
-```bash
-IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
-$ARGUMENTS
-GSD_ARGS_END
-GSD_ARGS=${GSD_ARGS%$'\n'}
 MVP_FLAG_ARG=""
 if [[ "$GSD_ARGS" =~ (^|[[:space:]])--mvp([[:space:]]|$) ]]; then MVP_FLAG_ARG="--cli-flag"; fi
 MVP_MODE=$(gsd_run query phase.mvp-mode "${PHASE_NUMBER}" $MVP_FLAG_ARG --pick active)
@@ -667,10 +653,8 @@ if(!wave)wave=pw;else if(pw&&wave!==pw){console.error("FATAL: CURRENT_WAVE ("+wa
 if(!wave||!/^[1-9]\d*$/.test(wave)){console.error("FATAL: cannot resolve wave number before worktree dispatch");process.exit(1);}
 process.stdout.write(wave);
 ') || exit 1
-      _MP_FLAG=""; _MP_VAL=""
-      if [ -n "${PHASE_DIR:-}" ]; then _MP_FLAG="--phase-dir"; _MP_VAL="$PHASE_DIR";
-      elif [ -n "${PHASE_NUMBER:-}" ]; then _MP_FLAG="--phase"; _MP_VAL="$PHASE_NUMBER";
-      else echo "FATAL: neither PHASE_DIR nor PHASE_NUMBER is set before worktree dispatch" >&2; exit 1; fi
+      _MP_FLAG="--phase"; _MP_VAL="${PHASE_NUMBER:-}"; [ -n "${PHASE_DIR:-}" ] && { _MP_FLAG="--phase-dir"; _MP_VAL="$PHASE_DIR"; }
+      [ -z "$_MP_VAL" ] && { echo "FATAL: neither PHASE_DIR nor PHASE_NUMBER is set before worktree dispatch" >&2; exit 1; }
       WAVE_WORKTREE_MANIFEST=$(gsd_run query worktree.manifest-path "$_MP_FLAG" "$_MP_VAL" --wave "$WAVE_NUM" --raw) || exit 1
       case "$WAVE_WORKTREE_MANIFEST" in /*|[A-Za-z]:[/\\]*) ;; *)
         echo "FATAL: worktree.manifest-path returned non-absolute or empty path: '$WAVE_WORKTREE_MANIFEST'" >&2
@@ -689,6 +673,7 @@ process.stdout.write(wave);
           fi
         done <<< "$EXISTING_MANIFESTS"
       fi
+      # Persist dispatch-time orchestrator root to manifest so wave-cleanup pins to orchestrator's OWN worktree (#630, see execute-phase/steps/executor-isolation-dispatch.md).
       ORCH_ROOT=$(git rev-parse --show-toplevel)
       ORCH_ROOT="$ORCH_ROOT" MANIFEST="$WAVE_WORKTREE_MANIFEST" node -e 'const fs=require("fs");fs.writeFileSync(process.env.MANIFEST,JSON.stringify({orchestrator_root:process.env.ORCH_ROOT||null,worktrees:[]})+"\n",{flag:"wx"})' || exit 1
       export WAVE_WORKTREE_MANIFEST
@@ -870,12 +855,12 @@ process.stdout.write(wave);
    ```bash
    SKIP_HOOKS=$(gsd_run query config-get workflow.worktree_skip_hooks --raw 2>/dev/null || echo "false")
    if [ "$SKIP_HOOKS" = "true" ]; then
-     # Stash uncommitted changes under a named ref so we always pop (#3542).
+     # Stash uncommitted changes under named ref so we always pop (#3542: refs/stash is shared across worktrees; executors forbidden from stash per <destructive_git_prohibition> in agents/gsd-executor.md).
      STASH_BEFORE=$(git rev-parse -q --verify refs/stash 2>/dev/null || true)
-     STASH_OUT=$(git stash push -u -m "gsd-post-wave-hook-$$" -- ":(exclude,glob)**/.planning/**/wave-[1-9]-manifest.json" ":(exclude,glob)**/.planning/**/wave-[1-9][0-9]*-manifest.json" 2>&1 || true)
+     STASH_OUT=$(git stash push -u -m "gsd-post-wave-hook-$$" -- ":(top,exclude,glob).planning/**/wave-[1-9]-manifest.json" ":(top,exclude,glob).planning/**/wave-[1-9][0-9]-manifest.json" ":(top,exclude,glob).planning/**/wave-[1-9][0-9][0-9]-manifest.json" 2>&1 || true)
      STASH_AFTER=$(git rev-parse -q --verify refs/stash 2>/dev/null || true)
      STASHED=false
-     [ -n "$STASH_AFTER" ] && [ "$STASH_AFTER" != "$STASH_BEFORE" ] && [ "$STASH_OUT" != "No local changes to save" ] && STASHED=true
+     [ -n "$STASH_AFTER" ] && [ "$STASH_AFTER" != "$STASH_BEFORE" ] && STASHED=true
      git hook run pre-commit 2>&1 || echo "⚠ Pre-commit hooks failed — review before continuing"
      [ "$STASHED" = "true" ] && (git stash pop >/dev/null 2>&1 || echo "⚠ Could not pop gsd-post-wave-hook stash — recover manually")
    fi
@@ -903,13 +888,15 @@ process.stdout.write(wave);
      exit 1
    }
 
-   # Guard: pin cleanup back to the orchestrator's OWN worktree and fail on branch drift (#3174, #630).
-   PRIMARY_WT=$(MANIFEST="$WAVE_WORKTREE_MANIFEST" node -e 'const fs=require("fs");try{const j=JSON.parse(fs.readFileSync(process.env.MANIFEST,"utf8"));if(j&&j.orchestrator_root)process.stdout.write(String(j.orchestrator_root))}catch(e){}')
+   # Guard: pin cleanup back to orchestrator's OWN worktree and fail on branch drift (#3174, #630).
+   # Resolves orchestrator_root from manifest (see execute-phase/steps/executor-isolation-dispatch.md).
+   PRIMARY_WT=$(MANIFEST="$WAVE_WORKTREE_MANIFEST" node -e 'const fs=require("fs");try{const j=JSON.parse(fs.readFileSync(process.env.MANIFEST,"utf8"));if(j&&j.orchestrator_root){let r=String(j.orchestrator_root);try{r=fs.realpathSync(r)}catch{}process.stdout.write(r)}}catch(e){}')
    [ -n "$PRIMARY_WT" ] || PRIMARY_WT=$(git worktree list --porcelain | awk '/^worktree /{print substr($0,10); exit}')
    if [ -z "$PRIMARY_WT" ]; then
      echo "FATAL: could not resolve orchestrator worktree before cleanup" >&2
      exit 1
    fi
+   git worktree list --porcelain | grep -qxF "worktree $PRIMARY_WT" || { echo "FATAL: orchestrator_root in manifest is not a registered worktree: '$PRIMARY_WT'" >&2; exit 1; }
    if [ -n "$PRIMARY_WT" ] && [ "$(pwd -P 2>/dev/null)" != "$(cd "$PRIMARY_WT" 2>/dev/null && pwd -P)" ]; then echo "⚠ Orchestrator CWD drifted to $(pwd) — pinning to $PRIMARY_WT before worktree cleanup (#3174)"; cd "$PRIMARY_WT" || { echo "FATAL: cannot cd to primary worktree $PRIMARY_WT" >&2; exit 1; }; fi
    ORCH_BRANCH=$(git rev-parse --abbrev-ref HEAD)
    [ -z "${EXPECTED_BRANCH:-}" ] || [ "$ORCH_BRANCH" = "$EXPECTED_BRANCH" ] || { echo "FATAL: orchestrator on '$ORCH_BRANCH' but expected '$EXPECTED_BRANCH' before worktree cleanup — refusing to merge (#3174-class drift)" >&2; exit 1; }
@@ -925,8 +912,10 @@ process.stdout.write(wave);
 
    ```bash
    # Cleanup-tail: pin orchestrator CWD to its OWN worktree before cleanup-tail (#3174, #630).
-   PRIMARY_WT=$(MANIFEST="$WAVE_WORKTREE_MANIFEST" node -e 'const fs=require("fs");try{const j=JSON.parse(fs.readFileSync(process.env.MANIFEST,"utf8"));if(j&&j.orchestrator_root)process.stdout.write(String(j.orchestrator_root))}catch(e){}')
+   # Resolves orchestrator_root from manifest (see execute-phase/steps/executor-isolation-dispatch.md).
+   PRIMARY_WT=$(MANIFEST="$WAVE_WORKTREE_MANIFEST" node -e 'const fs=require("fs");try{const j=JSON.parse(fs.readFileSync(process.env.MANIFEST,"utf8"));if(j&&j.orchestrator_root){let r=String(j.orchestrator_root);try{r=fs.realpathSync(r)}catch{}process.stdout.write(r)}}catch(e){}')
    [ -n "$PRIMARY_WT" ] || PRIMARY_WT=$(git worktree list --porcelain | awk '/^worktree /{print substr($0,10); exit}')
+   git worktree list --porcelain | grep -qxF "worktree $PRIMARY_WT" || { echo "FATAL: orchestrator_root in manifest is not a registered worktree: '$PRIMARY_WT'" >&2; exit 1; }
    if [ -n "$PRIMARY_WT" ] && [ "$(pwd -P 2>/dev/null)" != "$(cd "$PRIMARY_WT" 2>/dev/null && pwd -P)" ]; then echo "⚠ Orchestrator CWD drifted to $(pwd) — pinning to $PRIMARY_WT before cleanup-tail (#3174)"; cd "$PRIMARY_WT" || { echo "FATAL: cannot cd to primary worktree $PRIMARY_WT" >&2; exit 1; }; fi
    # Cleanup-tail: remove residual agent worktrees after a cross-wave-dependency deviation.
    # Uses only the current wave manifest to avoid touching unrelated active agents (#3384).
@@ -952,13 +941,13 @@ process.stdout.write(wave);
        git branch -D "$WT_BRANCH" 2>/dev/null || true
      fi
    done < "$WT_PATHS_FILE"
+   rm -f "$WT_PATHS_FILE"
    git worktree prune
-   if [ "$CLEANUP_FAILED" -eq 0 ]; then
-     rm -f "$WAVE_WORKTREE_MANIFEST" "$WT_PATHS_FILE"
+   if [ "$CLEANUP_FAILED" -eq 0 ] && [ ! -L "$WAVE_WORKTREE_MANIFEST" ] && ! git ls-files --error-unmatch "$WAVE_WORKTREE_MANIFEST" >/dev/null 2>&1 && [ -z "$(git worktree list --porcelain | grep -E '^branch refs/heads/((worktree-)?agent-|worktree-wf_)' || true)" ]; then
+     rm -f "$WAVE_WORKTREE_MANIFEST"
      unset WAVE_WORKTREE_MANIFEST
    else
      echo "⚠ Residual worktrees remain; preserving manifest at $WAVE_WORKTREE_MANIFEST for reconciliation." >&2
-     rm -f "$WT_PATHS_FILE"
    fi
    ```
 

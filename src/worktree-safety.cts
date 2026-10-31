@@ -43,12 +43,15 @@ const WORKTREE_AGENT_BRANCH_PATTERN = WORKTREE_AGENT_BRANCH_RE.source;
 // #4853: Single authoritative pattern and exclude pathspec for durable wave worktree manifests.
 // Both the git pathspec and JS basename regex govern wave manifest coordination files.
 // Basename requires positive integer wave number (1, 2, ...): wave-[1-9][0-9]*-manifest.json
+// Git glob uses bounded digit segments anchored to repository top level (:(top,...))
+// to avoid matching non-manifest files (such as wave-12-notes-manifest.json or wave-10x-manifest.json)
+// or nested .planning directories outside the project root.
 const WAVE_MANIFEST_BASENAME_RE = /^wave-[1-9][0-9]*-manifest\.json$/;
 const WAVE_MANIFEST_PATHSPEC_EXCLUDES: readonly string[] = Object.freeze([
-  ':(exclude,glob)**/.planning/**/wave-[1-9]-manifest.json',
-  ':(exclude,glob)**/.planning/**/wave-[1-9][0-9]*-manifest.json',
+  ':(top,exclude,glob).planning/**/wave-[1-9]-manifest.json',
+  ':(top,exclude,glob).planning/**/wave-[1-9][0-9]-manifest.json',
+  ':(top,exclude,glob).planning/**/wave-[1-9][0-9][0-9]-manifest.json',
 ]);
-const WAVE_MANIFEST_PATHSPEC_EXCLUDE = WAVE_MANIFEST_PATHSPEC_EXCLUDES[0];
 
 // GitResult now aliases the canonical SpawnResultOutput (shell-command-projection.cts),
 // which already carries `timedOut` — kept as a local name since it is referenced
@@ -618,6 +621,7 @@ function normalizeCleanupManifestEntry(entry: unknown): CleanupManifestEntry | n
 interface NormalizedManifestResult {
   ok: boolean;
   reason: string;
+  orchestratorRoot?: string | null;
   entries: CleanupManifestEntry[];
 }
 
@@ -631,13 +635,21 @@ function normalizeCleanupManifest(manifest: unknown): NormalizedManifestResult {
     }
   }
 
+  let orchestratorRoot: string | null = null;
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    const orch = (parsed as Record<string, unknown>).orchestrator_root;
+    if (typeof orch === 'string' && orch.trim()) {
+      orchestratorRoot = orch.trim();
+    }
+  }
+
   const p = parsed as Record<string, unknown> | unknown[] | null;
   const rawEntries = Array.isArray(p)
     ? p
     : (Array.isArray((p as Record<string, unknown>)?.worktrees) ? (p as Record<string, unknown>).worktrees as unknown[] : null);
 
   if (rawEntries === null) {
-    return { ok: false, reason: 'empty_manifest', entries: [] };
+    return { ok: false, reason: 'empty_manifest', orchestratorRoot, entries: [] };
   }
 
   const seen = new Set<string>();
@@ -654,20 +666,21 @@ function normalizeCleanupManifest(manifest: unknown): NormalizedManifestResult {
   // #4853: An explicitly empty entries collection (e.g. {"worktrees":[]}) is reconcilable
   // by cleanup-wave, allowing the ephemeral manifest to be unlinked after an interrupted wave.
   if (rawEntries.length === 0) {
-    return { ok: true, reason: 'empty_manifest', entries: [] };
+    return { ok: true, reason: 'empty_manifest', orchestratorRoot, entries: [] };
   }
 
   // When rawEntries had items but all of them were rejected, fail closed.
   if (entries.length === 0) {
-    return { ok: false, reason: 'empty_manifest', entries: [] };
+    return { ok: false, reason: 'empty_manifest', orchestratorRoot, entries: [] };
   }
 
-  return { ok: true, reason: 'ok', entries };
+  return { ok: true, reason: 'ok', orchestratorRoot, entries };
 }
 
 interface WaveCleanupPlan {
   ok: boolean;
   repoRoot: string;
+  orchestratorRoot?: string | null;
   action: string;
   discovery: string;
   reason: string;
@@ -680,6 +693,7 @@ function planWorktreeWaveCleanup(repoRoot: string, manifest: unknown): WaveClean
     return {
       ok: false,
       repoRoot,
+      orchestratorRoot: normalized.orchestratorRoot,
       action: 'skip',
       discovery: 'manifest',
       reason: normalized.reason,
@@ -690,6 +704,7 @@ function planWorktreeWaveCleanup(repoRoot: string, manifest: unknown): WaveClean
   return {
     ok: true,
     repoRoot,
+    orchestratorRoot: normalized.orchestratorRoot,
     action: 'cleanup_wave',
     discovery: 'manifest',
     reason: normalized.entries.length === 0 ? 'empty_manifest' : 'manifest_entries_present',
@@ -1259,33 +1274,96 @@ function executeWorktreeWaveCleanupPlan(plan: WaveCleanupPlan | null, deps: Work
     };
   }
 
-  // #4853: an empty manifest wave cleanup plan is a valid no-op reconciliation
-  // ONLY if no unmanifested agent worktrees exist on disk.
-  if (entries.length === 0) {
-    const listResult = readWorktreeList(plan.repoRoot, { execGit });
-    if (!listResult.ok) {
-      return {
-        ok: false,
-        action: 'cleanup_wave',
-        reason: listResult.reason || 'git_list_failed',
-        entries: [],
-        pending: [],
-        warnings: [],
-      };
+  // #4853: check for unmanifested agent worktrees on disk before proceeding.
+  // Entries in git worktree list are compared against the manifest's worktree_path set on every run.
+  // Scoped to this orchestrator's root (or plan.repoRoot) to avoid refusing cleanup when
+  // foreign lanes (#630) or quick tasks are active.
+  // Stale/prunable entries and confirmed-gone worktrees are ignored.
+  // Detached-HEAD agent worktrees (branch === null) are detected by worktree path/basename.
+  let listResult: WorktreeListResult;
+  try {
+    listResult = readWorktreeList(plan.repoRoot, { execGit });
+  } catch {
+    listResult = { ok: false, reason: 'git_list_failed', porcelain: '', entries: [] };
+  }
+
+  if (entries.length === 0 && !listResult.ok) {
+    return {
+      ok: false,
+      action: 'cleanup_wave',
+      reason: listResult.reason || 'git_list_failed',
+      entries: [],
+      pending: entries,
+      warnings: [],
+    };
+  }
+
+  if (listResult.ok) {
+    const manifestPaths = new Set<string>();
+    for (const entry of entries) {
+      const raw = path.resolve(plan.repoRoot, entry.worktree_path);
+      manifestPaths.add(raw);
+      try {
+        manifestPaths.add(fs.realpathSync(raw));
+      } catch {
+        // ignore
+      }
     }
-    const unrecordedAgentWorktrees = listResult.entries.filter((e) =>
-      Boolean(e.branch && WORKTREE_AGENT_BRANCH_RE.test(e.branch))
-    );
-    if (unrecordedAgentWorktrees.length > 0) {
+
+    const effectiveOrchRoot = plan.orchestratorRoot
+      ? path.resolve(plan.repoRoot, plan.orchestratorRoot)
+      : path.resolve(plan.repoRoot);
+    let realOrchRoot: string;
+    try {
+      realOrchRoot = fs.realpathSync(effectiveOrchRoot);
+    } catch {
+      realOrchRoot = effectiveOrchRoot;
+    }
+
+    const unmanifestedAgentWorktrees = listResult.entries.filter((e) => {
+      if (e.prunable) return false;
+      const resolvedPath = path.resolve(plan.repoRoot, e.path);
+      let realPath: string;
+      try {
+        realPath = fs.realpathSync(resolvedPath);
+      } catch {
+        realPath = resolvedPath;
+      }
+      if (manifestPaths.has(resolvedPath) || manifestPaths.has(realPath)) return false;
+
+      const isAgentBranch = Boolean(e.branch && WORKTREE_AGENT_BRANCH_RE.test(e.branch));
+      const baseName = path.basename(resolvedPath);
+      const isAgentPath = WORKTREE_AGENT_BRANCH_RE.test(baseName)
+        || (resolvedPath.split(path.sep).includes('worktrees') && (baseName.startsWith('agent-') || baseName.startsWith('worktree-agent-') || baseName.startsWith('worktree-wf_')));
+      if (!isAgentBranch && !isAgentPath) {
+        return false;
+      }
+
+      try {
+        const st = (deps.statSync || fs.statSync)(resolvedPath);
+        if (!st.isDirectory()) return false;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+          return false;
+        }
+      }
+
+      return isContainedIn(realPath, realOrchRoot) || isContainedIn(resolvedPath, effectiveOrchRoot);
+    });
+
+    if (unmanifestedAgentWorktrees.length > 0) {
       return {
         ok: false,
         action: 'cleanup_wave',
         reason: 'unmanifested_worktrees_present',
         entries: [],
-        pending: [],
+        pending: entries,
         warnings: [],
       };
     }
+  }
+
+  if (entries.length === 0) {
     return {
       ok: true,
       action: 'cleanup_wave',
@@ -1339,17 +1417,38 @@ function executeWorktreeWaveCleanupPlan(plan: WaveCleanupPlan | null, deps: Work
   // whose worktrees are all present never spends the subprocess — and it is still
   // early enough to be a true pre-prune snapshot, because every teardown that prunes
   // consults this predicate first.
-  let worktreeListSnapshot: WorktreeListResult | null = null;
+  let worktreeListSnapshot: WorktreeListResult | null = listResult.ok ? listResult : null;
   const snapshotWorktreeList = (): WorktreeListResult => {
-    if (!worktreeListSnapshot) worktreeListSnapshot = readWorktreeList(plan.repoRoot, { execGit });
+    if (!worktreeListSnapshot) {
+      try {
+        worktreeListSnapshot = readWorktreeList(plan.repoRoot, { execGit });
+      } catch {
+        worktreeListSnapshot = { ok: false, reason: 'git_list_failed', porcelain: '', entries: [] };
+      }
+    }
     return worktreeListSnapshot;
   };
   const resolveAgainstRepoRoot = (worktreePath: string): string => path.resolve(plan.repoRoot, worktreePath);
-  const findRegistered = (listed: WorktreeListResult, target: string): WorktreeEntry | undefined => (
-    listed.ok
-      ? listed.entries.find((listedEntry) => resolveAgainstRepoRoot(listedEntry.path) === target)
-      : undefined
-  );
+  const findRegistered = (listed: WorktreeListResult, target: string): WorktreeEntry | undefined => {
+    if (!listed.ok) return undefined;
+    const exact = listed.entries.find((listedEntry) => resolveAgainstRepoRoot(listedEntry.path) === target);
+    if (exact) return exact;
+    let realTarget: string;
+    try {
+      realTarget = fs.realpathSync(target);
+    } catch {
+      realTarget = target;
+    }
+    return listed.entries.find((listedEntry) => {
+      const resolved = resolveAgainstRepoRoot(listedEntry.path);
+      if (resolved === realTarget) return true;
+      try {
+        return fs.realpathSync(resolved) === realTarget;
+      } catch {
+        return false;
+      }
+    });
+  };
 
   // `worktree_path` comes from the manifest verbatim and may be relative, while the
   // porcelain always reports absolute paths; git resolves the manifest form against
@@ -1361,7 +1460,11 @@ function executeWorktreeWaveCleanupPlan(plan: WaveCleanupPlan | null, deps: Work
     if (fromSnapshot) return fromSnapshot;
     // Absent from the snapshot: it may have been registered after the wave began.
     // A list that cannot be read yields no entry, which blocks — the fail-safe way.
-    return findRegistered(readWorktreeList(plan.repoRoot, { execGit }), target);
+    try {
+      return findRegistered(readWorktreeList(plan.repoRoot, { execGit }), target);
+    } catch {
+      return undefined;
+    }
   };
 
   const statSyncRaw = deps.statSync || fs.statSync;
@@ -3512,6 +3615,5 @@ export = {
   findPhaseWaveManifests,
   cmdWorktreeManifestPath,
   WAVE_MANIFEST_BASENAME_RE,
-  WAVE_MANIFEST_PATHSPEC_EXCLUDE,
   WAVE_MANIFEST_PATHSPEC_EXCLUDES,
 };

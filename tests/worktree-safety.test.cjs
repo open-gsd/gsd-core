@@ -21,10 +21,12 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const childProcess = require('node:child_process');
 const fc = require('fast-check');
-const { createTempDir, cleanup } = require('./helpers.cjs');
+const { createTempDir, cleanup, readFileNormalized } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 const { makeFaultyGit } = require('./helpers/faulty-deps.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 const { HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 // 30000ms: this file's single named bound for every migrated subprocess call
@@ -9420,28 +9422,58 @@ describe('durable wave worktree manifests (#4853)', () => {
 
   function extractManifestCreationBash() {
     const wfPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
-    const content = fs.readFileSync(wfPath, 'utf8');
+    const content = readFileNormalized(wfPath);
     const marker = '**Worktree mode**';
     const markerIdx = content.indexOf(marker);
     if (markerIdx === -1) {
       throw new Error(`extractManifestCreationBash: could not find "${marker}" in ${wfPath}`);
     }
     const afterMarker = content.slice(markerIdx + marker.length);
-    const openFenceMatch = afterMarker.match(/```(?:bash|sh)\r?\n/);
-    if (!openFenceMatch) {
+    const lines = splitLines(afterMarker);
+    const fence = scanFencedBlocks(lines).find(
+      (b) => b.closeLineIdx !== -1 && ['bash', 'sh'].includes((b.infoString || '').trim()),
+    );
+    if (!fence) {
       throw new Error(`extractManifestCreationBash: could not find \`\`\`bash fence after "${marker}"`);
     }
-    const blockStart = openFenceMatch.index + openFenceMatch[0].length;
-    const closeFenceIdx = afterMarker.indexOf('```', blockStart);
-    if (closeFenceIdx === -1) {
-      throw new Error('extractManifestCreationBash: could not find closing ```');
-    }
-    const block = afterMarker.slice(blockStart, closeFenceIdx);
+    const block = lines.slice(fence.openLineIdx + 1, fence.closeLineIdx).join('\n');
     const ifIdx = block.indexOf('if [ "${USE_WORKTREES');
     if (ifIdx === -1) {
       throw new Error('extractManifestCreationBash: could not find if [ "${USE_WORKTREES in block');
     }
     return block.slice(ifIdx).trim();
+  }
+
+  function extractInitParsingBash() {
+    const wfPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
+    const content = readFileNormalized(wfPath);
+    const lines = splitLines(content);
+    const initIdx = lines.findIndex((l) => l.includes('INIT=$(gsd_run query init.execute-phase'));
+    if (initIdx === -1) {
+      throw new Error('extractInitParsingBash: could not find init.execute-phase line');
+    }
+    const initLines = lines.slice(initIdx, initIdx + 12);
+    const dirLine = initLines.find((l) => l.startsWith('PHASE_DIR='));
+    const numLine = initLines.find((l) => l.startsWith('PHASE_NUMBER='));
+    if (!dirLine || !numLine) {
+      throw new Error('extractInitParsingBash: could not find PHASE_DIR and PHASE_NUMBER parsing lines');
+    }
+    return [dirLine, numLine].join('\n');
+  }
+
+  function extractPostWaveHookStashBash() {
+    const wfPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
+    const content = readFileNormalized(wfPath);
+    const lines = splitLines(content);
+    const fence = scanFencedBlocks(lines).find((b) => {
+      if (b.closeLineIdx === -1) return false;
+      const body = lines.slice(b.openLineIdx + 1, b.closeLineIdx).join('\n');
+      return body.includes('SKIP_HOOKS') && body.includes('gsd-post-wave-hook-$$');
+    });
+    if (!fence) {
+      throw new Error('extractPostWaveHookStashBash: could not find post-wave hook stash block in execute-phase.md');
+    }
+    return lines.slice(fence.openLineIdx + 1, fence.closeLineIdx).join('\n');
   }
 
   describe('resolveWaveManifestPath', () => {
@@ -10289,10 +10321,10 @@ ${creationBash}
       try {
         const hostileDir = `$(touch ${markerPath})`;
         const initJson = JSON.stringify({ phase_dir: hostileDir, phase_number: 1 });
+        const parsingBash = extractInitParsingBash();
         const script = `
 INIT='${initJson}'
-PHASE_DIR=$(INIT="$INIT" node -e 'try{const j=JSON.parse(process.env.INIT);if(j&&j.phase_dir)process.stdout.write(String(j.phase_dir))}catch{}')
-PHASE_NUMBER=$(INIT="$INIT" node -e 'try{const j=JSON.parse(process.env.INIT);if(j&&j.phase_number!=null)process.stdout.write(String(j.phase_number))}catch{}')
+${parsingBash}
 printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
 `;
         const res = childProcess.spawnSync('bash', ['-c', script], { stdio: 'pipe', timeout: SUBPROCESS_TIMEOUT_MS });
@@ -10336,6 +10368,164 @@ printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
         assert.equal(parsed.result.reason, 'unmanifested_worktrees_present');
         assert.equal(parsed.manifest_unlinked, false);
         assert.equal(fs.existsSync(manifestPath), true, 'manifest must NOT be unlinked when unmanifested worktrees exist');
+      } finally {
+        cleanup(repoDir);
+      }
+    });
+
+    test('cleanup-wave fails closed with unmanifested_worktrees_present when manifest is partial (recorded 1 agent, 2nd agent on disk)', () => {
+      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-partial-manifest-'));
+      try {
+        gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repoDir });
+        gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repoDir });
+        gitOrThrow(['config', 'user.name', 'test'], { cwd: repoDir });
+        gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repoDir });
+        fs.writeFileSync(path.join(repoDir, 'init.txt'), 'init\n');
+        gitOrThrow(['add', 'init.txt'], { cwd: repoDir });
+        gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repoDir });
+        const baseSha = gitOrThrow(['rev-parse', 'HEAD'], { cwd: repoDir }).trim();
+
+        const wt1 = path.join(repoDir, 'agent-wt1');
+        const wt2 = path.join(repoDir, 'agent-wt2');
+        gitOrThrow(['worktree', 'add', '-b', 'worktree-agent-wt1', wt1, 'HEAD'], { cwd: repoDir });
+        gitOrThrow(['worktree', 'add', '-b', 'worktree-agent-wt2', wt2, 'HEAD'], { cwd: repoDir });
+
+        // Manifest records ONLY wt1 (partial manifest from crash after 1st agent)
+        const manifestPath = path.join(repoDir, '.planning', 'wave-1-manifest.json');
+        fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+        fs.writeFileSync(manifestPath, JSON.stringify({
+          orchestrator_root: repoDir,
+          worktrees: [{ agent_id: 'wt1', worktree_path: wt1, branch: 'worktree-agent-wt1', expected_base: baseSha }],
+        }));
+
+        const cleanupRes = childProcess.spawnSync('node', [
+          GSD_TOOLS, 'worktree', 'cleanup-wave',
+          '--manifest', manifestPath,
+        ], { cwd: repoDir, timeout: SUBPROCESS_TIMEOUT_MS });
+
+        assert.notEqual(cleanupRes.status, 0, 'cleanup-wave must fail closed when unmanifested agent worktree wt2 exists');
+        const parsed = JSON.parse(cleanupRes.stdout);
+        assert.equal(parsed.ok, false);
+        assert.equal(parsed.result.reason, 'unmanifested_worktrees_present');
+        assert.equal(parsed.manifest_unlinked, false);
+        assert.equal(fs.existsSync(manifestPath), true, 'manifest must NOT be unlinked on partial manifest');
+      } finally {
+        cleanup(repoDir);
+      }
+    });
+
+    test('cleanup-wave in lane A succeeds despite active agent worktree in foreign lane B', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-foreign-lane-'));
+      try {
+        const repo = path.join(root, 'repo');
+        fs.mkdirSync(repo);
+        gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repo });
+        gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repo });
+        gitOrThrow(['config', 'user.name', 'test'], { cwd: repo });
+        gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repo });
+        fs.writeFileSync(path.join(repo, 'init.txt'), 'init\n');
+        gitOrThrow(['add', 'init.txt'], { cwd: repo });
+        gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repo });
+
+        // Lane A (orchestrator A) and Lane B (foreign lane)
+        const laneA = path.join(root, 'lane-a');
+        const laneB = path.join(root, 'lane-b');
+        gitOrThrow(['worktree', 'add', '-b', 'lane-a-branch', laneA, 'HEAD'], { cwd: repo });
+        gitOrThrow(['worktree', 'add', '-b', 'lane-b-branch', laneB, 'HEAD'], { cwd: repo });
+
+        // Agent in Lane A
+        const agentA = path.join(laneA, 'agent-wt-a');
+        gitOrThrow(['worktree', 'add', '-b', 'worktree-agent-lane-a', agentA, 'lane-a-branch'], { cwd: repo });
+        const laneABaseSha = gitOrThrow(['rev-parse', 'lane-a-branch'], { cwd: repo }).trim();
+
+        // Active agent in foreign Lane B (should NOT block Lane A)
+        const agentB = path.join(laneB, 'agent-wt-b');
+        gitOrThrow(['worktree', 'add', '-b', 'worktree-agent-lane-b', agentB, 'lane-b-branch'], { cwd: repo });
+
+        // Manifest in Lane A scoped to orchestrator_root: laneA
+        const manifestPath = path.join(laneA, '.planning', 'wave-1-manifest.json');
+        fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+        fs.writeFileSync(manifestPath, JSON.stringify({
+          orchestrator_root: laneA,
+          worktrees: [{ agent_id: 'a', worktree_path: agentA, branch: 'worktree-agent-lane-a', expected_base: laneABaseSha }],
+        }));
+
+        const cleanupRes = childProcess.spawnSync('node', [
+          GSD_TOOLS, 'worktree', 'cleanup-wave',
+          '--manifest', manifestPath,
+        ], { cwd: laneA, timeout: SUBPROCESS_TIMEOUT_MS });
+
+        assert.equal(cleanupRes.status, 0, `cleanup-wave in lane A must succeed. stderr: ${cleanupRes.stderr?.toString()}`);
+        const parsed = JSON.parse(cleanupRes.stdout);
+        assert.equal(parsed.ok, true);
+        assert.equal(parsed.manifest_unlinked, true);
+        assert.equal(fs.existsSync(manifestPath), false, 'manifest in lane A unlinked');
+        assert.equal(fs.existsSync(agentB), true, 'foreign lane B agent worktree preserved untouched');
+      } finally {
+        cleanup(root);
+      }
+    });
+
+    test('cleanup-wave detects detached-HEAD agent worktree and fails closed with unmanifested_worktrees_present', () => {
+      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-detached-agent-'));
+      try {
+        gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repoDir });
+        gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repoDir });
+        gitOrThrow(['config', 'user.name', 'test'], { cwd: repoDir });
+        gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repoDir });
+        fs.writeFileSync(path.join(repoDir, 'init.txt'), 'init\n');
+        gitOrThrow(['add', 'init.txt'], { cwd: repoDir });
+        gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repoDir });
+
+        const agentWtDir = path.join(repoDir, 'worktree-agent-detached');
+        gitOrThrow(['worktree', 'add', '--detach', agentWtDir, 'HEAD'], { cwd: repoDir });
+
+        const manifestPath = path.join(repoDir, '.planning', 'wave-1-manifest.json');
+        fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+        fs.writeFileSync(manifestPath, JSON.stringify({ orchestrator_root: repoDir, worktrees: [] }));
+
+        const cleanupRes = childProcess.spawnSync('node', [
+          GSD_TOOLS, 'worktree', 'cleanup-wave',
+          '--manifest', manifestPath,
+        ], { cwd: repoDir, timeout: SUBPROCESS_TIMEOUT_MS });
+
+        assert.notEqual(cleanupRes.status, 0, 'cleanup-wave must fail closed on detached-HEAD agent worktree');
+        const parsed = JSON.parse(cleanupRes.stdout);
+        assert.equal(parsed.ok, false);
+        assert.equal(parsed.result.reason, 'unmanifested_worktrees_present');
+      } finally {
+        cleanup(repoDir);
+      }
+    });
+
+    test('cleanup-wave ignores stale prunable worktree whose directory is gone', () => {
+      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-prunable-agent-'));
+      try {
+        gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repoDir });
+        gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repoDir });
+        gitOrThrow(['config', 'user.name', 'test'], { cwd: repoDir });
+        gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repoDir });
+        fs.writeFileSync(path.join(repoDir, 'init.txt'), 'init\n');
+        gitOrThrow(['add', 'init.txt'], { cwd: repoDir });
+        gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repoDir });
+
+        const agentWtDir = path.join(repoDir, 'worktree-agent-prunable');
+        gitOrThrow(['worktree', 'add', '-b', 'worktree-agent-prunable', agentWtDir, 'HEAD'], { cwd: repoDir });
+        fs.rmSync(agentWtDir, { recursive: true, force: true });
+
+        const manifestPath = path.join(repoDir, '.planning', 'wave-1-manifest.json');
+        fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+        fs.writeFileSync(manifestPath, JSON.stringify({ orchestrator_root: repoDir, worktrees: [] }));
+
+        const cleanupRes = childProcess.spawnSync('node', [
+          GSD_TOOLS, 'worktree', 'cleanup-wave',
+          '--manifest', manifestPath,
+        ], { cwd: repoDir, timeout: SUBPROCESS_TIMEOUT_MS });
+
+        assert.equal(cleanupRes.status, 0, `cleanup-wave must ignore gone prunable worktree. stderr: ${cleanupRes.stderr?.toString()}`);
+        const parsed = JSON.parse(cleanupRes.stdout);
+        assert.equal(parsed.ok, true);
+        assert.equal(parsed.manifest_unlinked, true);
       } finally {
         cleanup(repoDir);
       }
@@ -10394,22 +10584,53 @@ printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
         // Modify an untracked work file as well
         fs.writeFileSync(path.join(repoDir, 'work.txt'), 'work\n');
 
-        // Execute stash push with the authoritative WAVE_MANIFEST_PATHSPEC_EXCLUDES
-        const stashRes = childProcess.spawnSync('git', [
-          'stash', 'push', '-u', '-m', 'test-post-wave-hook', '--',
-          ':(exclude,glob)**/.planning/**/wave-[1-9]-manifest.json',
-          ':(exclude,glob)**/.planning/**/wave-[1-9][0-9]*-manifest.json',
-        ], { cwd: repoDir, stdio: 'pipe', timeout: SUBPROCESS_TIMEOUT_MS });
+        // Create pre-commit hook that records file existence during hook execution
+        const hooksDir = path.join(repoDir, '.git', 'hooks');
+        fs.mkdirSync(hooksDir, { recursive: true });
+        const hookPath = path.join(hooksDir, 'pre-commit');
+        fs.writeFileSync(hookPath, `#!/usr/bin/env bash
+if [ -f "work.txt" ]; then
+  echo "HOOK_WORK_TXT_PRESENT" > hook-evidence.txt
+else
+  echo "HOOK_WORK_TXT_ABSENT" > hook-evidence.txt
+fi
+if [ -f ".planning/phases/01-test/wave-1-manifest.json" ]; then
+  echo "HOOK_MANIFEST_PRESENT" >> hook-evidence.txt
+else
+  echo "HOOK_MANIFEST_ABSENT" >> hook-evidence.txt
+fi
+exit 0
+`);
+        fs.chmodSync(hookPath, 0o755);
 
-        assert.equal(stashRes.status, 0);
-        // Manifest must remain on disk untouched
-        assert.ok(fs.existsSync(manifestPath), 'wave manifest must remain on disk excluded from stash');
-        // work.txt was stashed
-        assert.ok(!fs.existsSync(path.join(repoDir, 'work.txt')), 'work.txt must have been stashed');
+        // Execute extracted post-wave hook stash bash block directly from execute-phase.md
+        const stashBash = extractPostWaveHookStashBash();
+        const script = `
+set -e
+gsd_run() {
+  echo "true"
+}
+${stashBash}
+`;
+        const stashRes = childProcess.spawnSync('bash', ['-c', script], {
+          cwd: repoDir,
+          stdio: 'pipe',
+          timeout: SUBPROCESS_TIMEOUT_MS,
+        });
 
-        // Pop stash
-        gitOrThrow(['stash', 'pop'], { cwd: repoDir });
-        assert.ok(fs.existsSync(path.join(repoDir, 'work.txt')), 'work.txt restored');
+        assert.equal(stashRes.status, 0, `stash block must exit 0. stderr: ${stashRes.stderr?.toString()}`);
+
+        // Assert evidence recorded during hook execution:
+        // work.txt was stashed (absent during hook), manifest was excluded from stash (present during hook)
+        const evidencePath = path.join(repoDir, 'hook-evidence.txt');
+        assert.ok(fs.existsSync(evidencePath), 'hook must have executed and recorded evidence');
+        const evidence = fs.readFileSync(evidencePath, 'utf8');
+        assert.match(evidence, /HOOK_WORK_TXT_ABSENT/, 'work.txt must be stashed during hook execution');
+        assert.match(evidence, /HOOK_MANIFEST_PRESENT/, 'manifest must remain present during hook execution');
+
+        // Post-condition: after stash pop, both work.txt and manifestPath exist on disk
+        assert.ok(fs.existsSync(path.join(repoDir, 'work.txt')), 'work.txt restored after stash pop');
+        assert.ok(fs.existsSync(manifestPath), 'wave manifest remains on disk');
       } finally {
         cleanup(repoDir);
       }

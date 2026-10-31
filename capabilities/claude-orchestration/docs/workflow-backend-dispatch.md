@@ -206,10 +206,8 @@ if(!wave)wave=pw;else if(pw&&wave!==pw){console.error("FATAL: CURRENT_WAVE ("+wa
 if(!wave||!/^[1-9]\d*$/.test(wave)){console.error("FATAL: cannot resolve wave number before worktree dispatch");process.exit(1);}
 process.stdout.write(wave);
 ') || exit 1
-      _MP_FLAG=""; _MP_VAL=""
-      if [ -n "${PHASE_DIR:-}" ]; then _MP_FLAG="--phase-dir"; _MP_VAL="$PHASE_DIR";
-      elif [ -n "${PHASE_NUMBER:-}" ]; then _MP_FLAG="--phase"; _MP_VAL="$PHASE_NUMBER";
-      else echo "FATAL: neither PHASE_DIR nor PHASE_NUMBER is set before worktree dispatch" >&2; exit 1; fi
+      _MP_FLAG="--phase"; _MP_VAL="${PHASE_NUMBER:-}"; [ -n "${PHASE_DIR:-}" ] && { _MP_FLAG="--phase-dir"; _MP_VAL="$PHASE_DIR"; }
+      [ -z "$_MP_VAL" ] && { echo "FATAL: neither PHASE_DIR nor PHASE_NUMBER is set before worktree dispatch" >&2; exit 1; }
       WAVE_WORKTREE_MANIFEST=$(gsd_run query worktree.manifest-path "$_MP_FLAG" "$_MP_VAL" --wave "$WAVE_NUM" --raw) || exit 1
       case "$WAVE_WORKTREE_MANIFEST" in /*|[A-Za-z]:[/\\]*) ;; *)
         echo "FATAL: worktree.manifest-path returned non-absolute or empty path: '$WAVE_WORKTREE_MANIFEST'" >&2
@@ -228,6 +226,7 @@ process.stdout.write(wave);
           fi
         done <<< "$EXISTING_MANIFESTS"
       fi
+      # Persist dispatch-time orchestrator root to manifest so wave-cleanup pins to orchestrator's OWN worktree (#630, see execute-phase/steps/executor-isolation-dispatch.md).
       ORCH_ROOT=$(git rev-parse --show-toplevel)
       ORCH_ROOT="$ORCH_ROOT" MANIFEST="$WAVE_WORKTREE_MANIFEST" node -e 'const fs=require("fs");fs.writeFileSync(process.env.MANIFEST,JSON.stringify({orchestrator_root:process.env.ORCH_ROOT||null,worktrees:[]})+"\n",{flag:"wx"})' || exit 1
       export WAVE_WORKTREE_MANIFEST
