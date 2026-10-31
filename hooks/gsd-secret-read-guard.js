@@ -874,6 +874,129 @@ function operandNamesSecret(text) {
   return v[end] === '=' && namesSecret(v.slice(end + 1));
 }
 
+// curl opens a file named inside an option value as well as one given as its
+// own `@file` word (#5779): after `@` (`-d@f`, `-H@f`, `--data-urlencode
+// name@f`, `--url-query name@f`, `--variable name@f`) and after `=@` or `=<`
+// in a form part (`-F name=@f`, `-F name=<f`, `;headers=@f`). A name runs to
+// the next `;` (a form part parameter such as `;type=…`), `@` or `<`, with the
+// whitespace curl skips around it dropped; a quoted name (`@"f"`) runs to its
+// closing quote, curl unescaping `\\` and `\"` inside it. After `@` a `,` also
+// ends the name and starts another, for the form file list (`@a,f`), which
+// goes on after a part's parameters (`@a;type=t,f`); the same name is judged
+// with its commas kept too, since `-d @f` opens one file whose name may hold
+// them. A `<` name takes no list and keeps its commas (`-F name=<a,f` opens
+// `a,f`). This needs no table of curl's options; text with no `@` or `<` (a
+// JSON body, `-d 'a=1,.env'`) holds no file name. The cost is a fail-safe
+// false positive wherever curl reads an `@` or `<` followed by a secret name
+// another way: as data (`-d k=@.env`, `--form-string f=@.env`, `-d
+// 'email=me@.env'`, a URL's `user@` part) or as one name holding a comma
+// (`-d @a,.env`), pinned in tests. The scan reads each character at most
+// three times (once more only after an unmatched quote, of which a word holds
+// one), and a name with no `.` (which no secret name lacks) never reaches
+// namesSecret.
+const CURL_COMMANDS = new Set(['curl', 'curl.exe']);
+
+// curl's ISSPACE: what it skips before and trims after a form file name.
+function isCurlBlank(ch) {
+  return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\v' || ch === '\f';
+}
+
+// namesSecret judges only a name's last path segment (and the part of it after
+// a `:`), so the segment is cut out here first: one pass, where lastSegment's
+// trailing-separator regex backtracks on a long run of separators. An unquoted
+// name also loses the whitespace curl trims; a quoted one keeps it, as curl does.
+function curlNameIsSecret(text, start, end, trim) {
+  if (trim) {
+    while (start < end && isCurlBlank(text[start])) start++;
+    while (end > start && isCurlBlank(text[end - 1])) end--;
+  }
+  while (end > start && (text[end - 1] === '/' || text[end - 1] === '\\')) end--;
+  let seg = end;
+  while (seg > start && text[seg - 1] !== '/' && text[seg - 1] !== '\\') seg--;
+  const name = text.slice(seg, end);
+  return name.includes('.') && namesSecret(name);
+}
+
+// Index of the quote closing the one at `open` (curl's `\\` and `\"` skipped),
+// or -1. A word's quotes pair up, so only its last quote can be unmatched and
+// the scans from successive quotes do not overlap.
+function curlClosingQuote(text, open) {
+  let j = open + 1;
+  while (j < text.length && text[j] !== '"') j += text[j] === '\\' && (text[j + 1] === '\\' || text[j + 1] === '"') ? 2 : 1;
+  return j < text.length ? j : -1;
+}
+
+const CURL_QUOTED_SPECIAL_RE = /[;@<,]/;
+
+function curlValueNamesSecret(text) {
+  let list = false;
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    // A quoted value (`a="…"`, `;filename="…"`) is a word curl reads whole, so
+    // an `@`, `<` or `,` inside it opens nothing.
+    if (ch === '"' && i > 0 && text[i - 1] === '=') {
+      const close = curlClosingQuote(text, i);
+      if (close !== -1) { i = close + 1; continue; }
+    }
+    if (ch !== '@' && ch !== '<' && !(list && ch === ',')) { i++; continue; }
+    if (ch === '@') list = true;
+    // A `<` name keeps its commas unless it sits in an `@` file list
+    // (`@a;headers=<h,f`), where the list's `,` ends it.
+    const splitsAtComma = ch !== '<' || list;
+    i++;
+    while (i < text.length && isCurlBlank(text[i])) i++;
+    if (text[i] === '"') {
+      const close = curlClosingQuote(text, i);
+      if (close !== -1) {
+        const raw = text.slice(i + 1, close);
+        const name = raw.replace(/\\([\\"])/g, '$1');
+        if (curlNameIsSecret(name, 0, name.length, false)) return true;
+        // curl gives a quote its meaning only where a word starts; if this one
+        // is not such a quote, what it spans is read on, so judge that reading
+        // too whenever the span holds a delimiter.
+        i = CURL_QUOTED_SPECIAL_RE.test(raw) ? i + 1 : close + 1;
+        continue;
+      }
+      // No closing quote: curl reads the name unquoted, quote and all.
+    }
+    const start = i;
+    while (i < text.length && text[i] !== ';' && text[i] !== '@' && text[i] !== '<' && !(splitsAtComma && text[i] === ',')) i++;
+    if (curlNameIsSecret(text, start, i, true)) return true;
+    if (ch === '@' && text[i] === ',') {
+      let end = i;
+      while (end < text.length && text[end] !== ';' && text[end] !== '@' && text[end] !== '<') end++;
+      if (curlNameIsSecret(text, start, end, true)) return true;
+    }
+  }
+  return false;
+}
+
+// Index of the first operand curl takes as an argument: 0 when curl is the
+// segment's command, the index after the first `curl` word when a command the
+// guard does not unwrap runs it (`xargs curl …`, `find … -exec curl …`),
+// otherwise past the end. Only those operands get curl's value reading, so a
+// search pattern in a command with no `curl` word is judged as before.
+function curlArgumentStart(base, operands) {
+  if (CURL_COMMANDS.has(base)) return 0;
+  for (let k = 0; k < operands.length; k++) {
+    if (isCurlWord(operands[k].text)) return k + 1;
+  }
+  return operands.length;
+}
+
+// lastSegment(text).toLowerCase() is `curl` or `curl.exe`, read by hand: every
+// operand of every segment passes through here, and lastSegment's regex
+// backtracks on a long run of separators.
+function isCurlWord(text) {
+  let end = text.length;
+  while (end > 0 && (text[end - 1] === '/' || text[end - 1] === '\\')) end--;
+  let seg = end;
+  while (seg > 0 && end - seg <= 8 && text[seg - 1] !== '/' && text[seg - 1] !== '\\') seg--;
+  if (seg > 0 && text[seg - 1] !== '/' && text[seg - 1] !== '\\') return false;
+  return CURL_COMMANDS.has(text.slice(seg, end).toLowerCase());
+}
+
 const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
 // `-c`, or a combined short flag ending in `c` (`-lc`, `-ec`, `-euc`): mode c.
@@ -1217,9 +1340,11 @@ function findSecretRead(command, depth) {
     if (NON_READING_COMMANDS.has(base)) continue;
 
     const nameOnly = nameOnlyOperandIndices(base, operands);
+    const curlFrom = curlArgumentStart(base, operands);
     for (let k = 0; k < operands.length; k++) {
       if (nameOnly.has(k)) continue;
       if (operandNamesSecret(operands[k].text)) return operands[k].text;
+      if (k >= curlFrom && curlValueNamesSecret(operands[k].text)) return operands[k].text;
     }
   }
   return null;
@@ -1380,8 +1505,11 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
   // isSecretBasename still holds.
   const prevCmd = resolveCommand((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
   if (!prevCmd) return null;
+  // They become curl's arguments when the sub-command is curl (#5779).
+  const toCurl = CURL_COMMANDS.has(subBase);
   for (const w of prevCmd.operands) {
     if (operandNamesSecret(w.text)) return w.text;
+    if (toCurl && curlValueNamesSecret(w.text)) return w.text;
   }
   return null;
 }
