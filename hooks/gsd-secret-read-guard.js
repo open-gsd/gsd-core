@@ -908,6 +908,31 @@ function curlClosingQuote(text, open) {
 
 const CURL_QUOTED_SPECIAL_RE = /[;@<,]/;
 
+// The form part parameters whose value curl reads as a word that may be
+// quoted. It matches their names in any case. Every other parameter
+// (`type=`, an unknown `;foo=`) is read unquoted up to the next `;`.
+const CURL_QUOTED_PARAMS = ['filename', 'headers', 'encoder'];
+
+// Whether the `"` at `i` starts a word curl reads quoted: the part's value
+// (after the word's first `=`), or the value of a CURL_QUOTED_PARAMS
+// parameter after its `;`, past the whitespace curl skips at each. A quote
+// anywhere else is literal to curl, so a `;` inside what it spans still ends
+// the word and the `@` or `<` after it still opens a file.
+function curlQuotesWordAt(text, i, valueStart) {
+  let j = i;
+  while (j > 0 && isCurlBlank(text[j - 1])) j--;
+  if (j === valueStart) return true;
+  if (j === 0 || text[j - 1] !== '=') return false;
+  const nameEnd = j - 1;
+  for (const param of CURL_QUOTED_PARAMS) {
+    let k = nameEnd - param.length;
+    if (k < 1 || text.slice(k, nameEnd).toLowerCase() !== param) continue;
+    while (k > 0 && isCurlBlank(text[k - 1])) k--;
+    if (k > 0 && text[k - 1] === ';') return true;
+  }
+  return false;
+}
+
 // curl opens a file named inside an option value as well as one given as its
 // own `@file` word (#5779): after `@` (`-d@f`, `-H@f`, `--data-urlencode
 // name@f`, `--url-query name@f`, `--variable name@f`) and after `=@` or `=<`
@@ -929,13 +954,16 @@ const CURL_QUOTED_SPECIAL_RE = /[;@<,]/;
 // one), and a name with no `.` (which no secret name lacks) never reaches
 // namesSecret.
 function curlValueNamesSecret(text) {
+  const eq = text.indexOf('=');
+  const valueStart = eq === -1 ? -1 : eq + 1;
   let list = false;
   let i = 0;
   while (i < text.length) {
     const ch = text[i];
     // A quoted value (`a="…"`, `;filename="…"`) is a word curl reads whole, so
-    // an `@`, `<` or `,` inside it opens nothing.
-    if (ch === '"' && i > 0 && text[i - 1] === '=') {
+    // an `@`, `<` or `,` inside it opens nothing. Only where curl reads a
+    // quoted word: in `a=x="…;headers=@f"` the quote is literal and `f` opens.
+    if (ch === '"' && curlQuotesWordAt(text, i, valueStart)) {
       const close = curlClosingQuote(text, i);
       if (close !== -1) { i = close + 1; continue; }
     }
