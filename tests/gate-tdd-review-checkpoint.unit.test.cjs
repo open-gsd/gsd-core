@@ -19,7 +19,7 @@
  * router formats output (design D2).
  */
 
-const { test, describe } = require('node:test');
+const { test, describe, before } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -28,6 +28,7 @@ const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { createTempProject, createTempGitProject, cleanup } = require('./helpers.cjs');
 const { tempRootAliases, canonicalizeTempPaths } = require('./helpers/path-compare.cjs');
 
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const gate = require('../gsd-core/bin/lib/gate-tdd-review-checkpoint.cjs');
 const { isGateUsageFailure } = require('../gsd-core/bin/lib/gate-verdict.cjs');
 
@@ -105,7 +106,7 @@ const CASES = [
         passed: true,
         tddPlans: 1,
         violations: 1,
-        table: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 1\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✗  |   ✗   |    —     | FAIL   |\n\n⚠ Gate violations are advisory — review before advancing.\n  Plan 01-01 missing: RED, GREEN gate commit(s).\n  Expected commit pattern: test(01-01): ... → feat(01-01): ...',
+        table: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 1\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✗  |   ✗   |    —     | FAIL   |\n\n⚠ Gate violations are advisory — review before advancing.\n  Plan 01-01 missing: RED, GREEN gate commit(s).\n  Expected commit pattern: test(01-01): ... → feat(01-01): ... or fix(01-01): ...',
         rows: [
           {
             planId: '01-01',
@@ -119,7 +120,7 @@ const CASES = [
             ],
           },
         ],
-        message: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 1\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✗  |   ✗   |    —     | FAIL   |\n\n⚠ Gate violations are advisory — review before advancing.\n  Plan 01-01 missing: RED, GREEN gate commit(s).\n  Expected commit pattern: test(01-01): ... → feat(01-01): ...',
+        message: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 1\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✗  |   ✗   |    —     | FAIL   |\n\n⚠ Gate violations are advisory — review before advancing.\n  Plan 01-01 missing: RED, GREEN gate commit(s).\n  Expected commit pattern: test(01-01): ... → feat(01-01): ... or fix(01-01): ...',
       };
     },
   },
@@ -164,6 +165,61 @@ const CASES = [
     },
   },
   {
+    id: 'U5i',
+    // new #5274 behavior: not capturable on origin/next, unlike the cases above.
+    title: 'RED + fix GREEN (plan corrects a defect) -> Pass row, no violations (#5274)',
+    git: true,
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-01-PLAN.md', ['---', 'phase: 1', 'plan: 1', 'type: tdd', '---', '# Plan', ''].join('\n'));
+      h.w(dir, 'red.txt', 'r');
+      h.git(dir, 'add', '-A');
+      h.git(dir, 'commit', '-m', 'test(01-01): red');
+      h.w(dir, 'green.txt', 'g');
+      h.git(dir, 'add', '-A');
+      h.git(dir, 'commit', '-m', 'fix(01-01): green');
+    },
+    args() { return ['1']; },
+    outcome: 'pass',
+    block: false,
+    expected() {
+      return {
+        block: false,
+        passed: true,
+        tddPlans: 1,
+        violations: 0,
+        table: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 0\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✓  |   ✓   |    —     | Pass   |',
+        rows: [{ planId: '01-01', red: true, green: true, refactor: false, status: 'Pass', missing: [] }],
+        message: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 0\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✓  |   ✓   |    —     | Pass   |',
+      };
+    },
+  },
+  {
+    id: 'U5j',
+    // new #5274 behavior: not capturable on origin/next, unlike the cases above.
+    title: 'fix GREEN alone -> FAIL row missing RED (#5274)',
+    git: true,
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-01-PLAN.md', ['---', 'phase: 1', 'plan: 1', 'type: tdd', '---', '# Plan', ''].join('\n'));
+      h.w(dir, 'green.txt', 'g');
+      h.git(dir, 'add', '-A');
+      h.git(dir, 'commit', '-m', 'fix(01-01): green');
+    },
+    args() { return ['1']; },
+    outcome: 'advisory',
+    block: true,
+    expected() {
+      return {
+        block: true,
+        passed: true,
+        tddPlans: 1,
+        violations: 1,
+        table: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 1\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✗  |   ✓   |    —     | FAIL   |\n\n⚠ Gate violations are advisory — review before advancing.\n  Plan 01-01 missing: RED gate commit(s).\n  Expected commit pattern: test(01-01): ... → feat(01-01): ... or fix(01-01): ...',
+        rows: [{ planId: '01-01', red: false, green: true, refactor: false, status: 'FAIL', missing: ['RED'] }],
+        message: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 1\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✗  |   ✓   |    —     | FAIL   |\n\n⚠ Gate violations are advisory — review before advancing.\n  Plan 01-01 missing: RED gate commit(s).\n  Expected commit pattern: test(01-01): ... → feat(01-01): ... or fix(01-01): ...',
+      };
+    },
+  },
+  {
     id: 'U5e',
     title: 'RED only -> FAIL row missing GREEN',
     git: true,
@@ -182,7 +238,7 @@ const CASES = [
         passed: true,
         tddPlans: 1,
         violations: 1,
-        table: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 1\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✓  |   ✗   |    —     | FAIL   |\n\n⚠ Gate violations are advisory — review before advancing.\n  Plan 01-01 missing: GREEN gate commit(s).\n  Expected commit pattern: test(01-01): ... → feat(01-01): ...',
+        table: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 1\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✓  |   ✗   |    —     | FAIL   |\n\n⚠ Gate violations are advisory — review before advancing.\n  Plan 01-01 missing: GREEN gate commit(s).\n  Expected commit pattern: test(01-01): ... → feat(01-01): ... or fix(01-01): ...',
         rows: [
           {
             planId: '01-01',
@@ -195,7 +251,7 @@ const CASES = [
             ],
           },
         ],
-        message: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 1\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✓  |   ✗   |    —     | FAIL   |\n\n⚠ Gate violations are advisory — review before advancing.\n  Plan 01-01 missing: GREEN gate commit(s).\n  Expected commit pattern: test(01-01): ... → feat(01-01): ...',
+        message: '### TDD REVIEW — Phase 1\n\nTDD Plans: 1 | Gate violations: 1\n\n| Plan | RED | GREEN | REFACTOR | Status |\n|------|-----|-------|----------|--------|\n| 01-01 |  ✓  |   ✗   |    —     | FAIL   |\n\n⚠ Gate violations are advisory — review before advancing.\n  Plan 01-01 missing: GREEN gate commit(s).\n  Expected commit pattern: test(01-01): ... → feat(01-01): ... or fix(01-01): ...',
       };
     },
   },
@@ -326,6 +382,40 @@ describe('U5 evaluateTddReviewCheckpoint', () => {
       const actual = canonicalizeTempPaths(result.payload, aliases);
       assert.deepStrictEqual(actual, expected);
       assert.equal(JSON.stringify(actual), JSON.stringify(expected), 'payload key order is part of the contract');
+    });
+  }
+});
+
+describe('U5 GREEN commit types: gate agrees with the tdd.md lookup (#5274)', () => {
+  let re;
+  before(() => {
+    // allow-test-rule: docs-parity #5274 — the gate and the tdd.md executor lookup must agree on which commit types are GREEN
+    const md = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'references', 'tdd.md'), 'utf8');
+    const line = splitLines(md).find((l) => /--grep="\^\(/.test(l));
+    assert.ok(line, 'GREEN grep line present in tdd.md');
+    re = new RegExp(/--grep="([^"]{1,300})"/.exec(line)[1].replace('${PHASE_N}', '1').replace('${PLAN_N}', '1'));
+  });
+  for (const type of ['feat', 'fix', 'refactor', 'chore', 'docs', 'perf', 'build', 'ci', 'style', 'revert']) {
+    test(`test + ${type}`, () => {
+      const { result, writes } = run({
+        git: true,
+        setup(dir, hh) {
+          hh.w(dir, '.planning/phases/01-x/01-01-PLAN.md', ['---', 'phase: 1', 'plan: 1', 'type: tdd', '---', '# Plan', ''].join('\n'));
+          for (const t of ['test', type]) {
+            hh.w(dir, `${t}.txt`, t);
+            hh.git(dir, 'add', '-A');
+            hh.git(dir, 'commit', '-m', `${t}(01-01): x`);
+          }
+        },
+        args() { return ['1']; },
+      });
+      assert.deepStrictEqual(writes, [], 'a gate module must not write to stdout/stderr');
+      const row = result.payload.rows[0];
+      const docGreen = re.test(`${type}(01-01): x`);
+      assert.equal(row.green, docGreen, `${type}: gate and tdd.md lookup disagree`);
+      assert.equal(row.status, docGreen ? 'Pass' : 'FAIL');
+      if (!docGreen) assert.deepEqual(row.missing, ['GREEN']);
+      assert.equal(row.refactor, type === 'refactor');
     });
   }
 });
