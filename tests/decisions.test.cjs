@@ -3355,7 +3355,14 @@ describe('#4939: decision-coverage answers a caller error for a phase directory 
     const realStatSync = fs.statSync;
     const resolvedPhaseDir = fs.realpathSync.native(phaseDir);
     t.mock.method(fs, 'statSync', (p, ...rest) => {
-      if (typeof p === 'string' && (path.resolve(p) === path.resolve(phaseDir) || path.resolve(p) === resolvedPhaseDir)) {
+      if (typeof p === 'string') {
+        let resolvedPath;
+        try {
+          resolvedPath = fs.realpathSync.native(p);
+        } catch {
+          return realStatSync.call(fs, p, ...rest);
+        }
+        if (resolvedPath !== resolvedPhaseDir) return realStatSync.call(fs, p, ...rest);
         const err = new Error(`${code}: injected stat failure, stat '${p}'`);
         err.code = code;
         throw err;
@@ -3382,7 +3389,7 @@ describe('#4939: decision-coverage answers a caller error for a phase directory 
 
   for (const gate of ['decision-coverage-plan', 'decision-coverage-verify']) {
     test(`#5798: ${gate} reports stat errors through a symlinked phase directory`, (t) => {
-      const alias = path.join(path.dirname(phaseDir), '01-alias');
+      const alias = path.join(tmpDir, 'phase-alias');
       fs.symlinkSync(phaseDir, alias, 'junction');
       phaseDir = alias;
       const parsed = runGateWithStatFailure(t, gate, 'EACCES');
