@@ -119,6 +119,9 @@ describe('#4003 / #5164 — safe_resume_gate plan-commit lookups ask the resolve
   });
 });
 
+const { isTestFilePath } = require('../gsd-core/bin/lib/tdd-test-files.cjs');
+const { SHARED_TEST_PATHS, SHARED_NON_TEST_PATHS } = require('./helpers/tdd-test-paths.cjs');
+
 // ─── #4379: the RED pathspec is language-agnostic, and matches at root ──────
 //
 // The pathspec IS this gate's definition of "a test file". It was JS/TS-only, so
@@ -151,7 +154,9 @@ describe('#4379 — the TDD RED pathspec is language-agnostic', () => {
       'tests/c.py', '__tests__/d.js',           // directory conventions
       'test_mod.py', 'mod_test.py',             // Python, outside tests/
       'lib_spec.rb', 'x_test.exs',              // Ruby, Elixir
+      ...SHARED_TEST_PATHS,                     // every router-positive path
       'src/impl.go', 'src/lib.rs',              // NOT tests — must never match
+      ...SHARED_NON_TEST_PATHS,                 // NOT tests, nested + root
     ];
     for (const rel of files) {
       const abs = path.join(dir, rel);
@@ -188,6 +193,18 @@ describe('#4379 — the TDD RED pathspec is language-agnostic', () => {
     const hits = matched(dir, shippedRedPathspec());
     assert.ok(hits.has('root.test.js'), 'a root-level .test.js must match');
     assert.ok(hits.has('foo_test.go'), 'a root-level _test.go must match');
+  });
+
+  test('router and shipped pathspec agree on every shared path, nested included (#5181)', (t) => {
+    // Default-mode pathspecs match the whole path from the repo root: `tests/` is a root-anchored
+    // prefix and `test_*.py` only matches paths starting `test_`, so nested files need `:(glob)**/`.
+    const dir = seedRepo(t);
+    const hits = matched(dir, shippedRedPathspec());
+    for (const rel of [...SHARED_TEST_PATHS, ...SHARED_NON_TEST_PATHS]) {
+      const expected = SHARED_TEST_PATHS.includes(rel);
+      assert.equal(hits.has(rel), expected, `${rel} must agree: git`);
+      assert.equal(isTestFilePath(rel), expected, `${rel} must agree: router`);
+    }
   });
 
   test('the existing JS/TS conventions still match (no regression)', (t) => {

@@ -192,8 +192,7 @@ detection step above enumerates** — it costs nothing to recognise a convention
 onboarding flow does not yet auto-detect, and a project using one should not have its
 RED commits go unseen:
 - `*.test.*` / `*.spec.*` next to source — JS/TS and anything sharing the convention
-- `__tests__/` directory
-- `tests/` directory at root
+- `tests/` / `__tests__/` directory
 - `*_test.go` — Go
 - `test_*.py` / `*_test.py` — Python (in addition to `tests/`)
 - `*_test.exs` — Elixir
@@ -206,8 +205,9 @@ dropping the `**/` prefix only extends the same false-positive class to the repo
 accepted rather than narrowed, because narrowing it is a behaviour change to the
 currently-supported case and not part of making other languages visible.
 
-**Known gap — Rust (#4379).** `#[test]` conventionally lives inside the implementation file, so a
-Rust RED commit touches `src/*.rs` and no path-based gate can distinguish it from ordinary source.
+**Known gap — Rust inline unit tests (#4379).** Rust integration tests under `tests/` (including
+`crates/*/tests/`) match. An inline `#[test]` conventionally lives inside the implementation file, so
+such a RED commit touches `src/*.rs` and no path-based gate can distinguish it from ordinary source.
 Widening the pathspec to cover it would match all source and make the gate meaningless. `cargo test`
 works; the RED-*commit* gate cannot see it, so a Rust project using `workflow.tdd_mode` should
 expect the gate to trip.
