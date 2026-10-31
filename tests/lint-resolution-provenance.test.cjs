@@ -151,7 +151,6 @@ describe('lint-resolution-provenance: checkRegistry pure logic', () => {
     assert.ok(ok);
   });
 });
-
 describe('lint-resolution-provenance: real repo baseline', () => {
   test('repo baseline passes (real registry vs real agent-skills.test.cjs)', () => {
     // Run the actual check against the real registry and real test file.
