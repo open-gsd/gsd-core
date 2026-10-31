@@ -372,3 +372,9 @@ Merge-back, validation, and cleanup are the **existing** gauntlet, unchanged: th
 
 > **Declared-scope conformance (#2596):** ADR-1239 specifies that *both* isolation adapters route their merge through a check that each plan branch's committed diff stayed inside its declared `files_modified` scope. That check now exists, advisory-first, and is wired into **both** paths: this one passes `--files "$PLAN_FILES"` to `worktree create` above, the harness path passes it to `worktree record-agent`, and `cleanup-wave` runs the one comparison for both. A path outside the declared scope is reported in the result's `warnings` array; it does not block the merge. Promotion to a hard gate is a separate, disclosed change.
 
+## Orchestrator worktree resolution & cleanup guards (#630)
+
+When running wave execution and cleanup guards (both templated cleanup and cleanup-tail), `PRIMARY_WT` must be resolved from `orchestrator_root` persisted in the manifest (`WAVE_WORKTREE_MANIFEST`), not from `git worktree list`'s first entry.
+
+The first entry of `git worktree list` is always the main/primary repository checkout. In parallel workstreams, per-phase lanes, or secondary worktrees, the orchestrator's own worktree is NOT the first entry. Resolving from the first entry would pin a non-primary orchestrator off its own branch, tripping the `#3174` drift assertion. Resolving from `orchestrator_root` recorded at dispatch time ensures cleanup pins back to the orchestrator's own working tree. First-entry resolution survives only as a guarded fallback for legacy pre-#630 manifests.
+

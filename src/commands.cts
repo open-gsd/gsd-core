@@ -85,7 +85,6 @@ import { clampPercent, renderProgressBar } from './phase-lifecycle.cjs';
 import worktreeSafety = require('./worktree-safety.cjs');
 const {
   WAVE_MANIFEST_BASENAME_RE,
-  WAVE_MANIFEST_PATHSPEC_EXCLUDE,
   WAVE_MANIFEST_PATHSPEC_EXCLUDES,
 } = worktreeSafety;
 
@@ -2958,10 +2957,7 @@ function cmdCommitToSubrepo(cwd: string, message: string | undefined, files: str
         };
         continue;
       }
-      const commitOut = (commitResult.stdout + '\n' + commitResult.stderr).toLowerCase();
-    const isNothingToCommit = commitOut.includes('nothing to commit')
-      || commitOut.includes('nothing added to commit');
-    if (isNothingToCommit) {
+      if (commitResult.stdout.includes('nothing to commit') || commitResult.stderr.includes('nothing to commit')) {
         repos[repo] = { committed: false, hash: null, files: repoFiles, reason: 'nothing_to_commit' };
         continue;
       }
@@ -4441,7 +4437,6 @@ export = {
   cmdCommitDocsGuardEnable,
   cmdCommitDocsGuardDisable,
   _wsParseRetryAfter,
-  WAVE_MANIFEST_PATHSPEC_EXCLUDE,
   WAVE_MANIFEST_PATHSPEC_EXCLUDES,
   WAVE_MANIFEST_BASENAME_RE,
   isWaveManifestPath,
