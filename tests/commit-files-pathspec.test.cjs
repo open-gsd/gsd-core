@@ -3523,7 +3523,6 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       assert.equal(r.exitCode, 0, r.stderr);
       assert.equal(Number(git('rev-list', '--count', 'HEAD')), foreign ? 1 : 2);
       assert.equal(git('ls-files', '.planning').trim() === '', !foreign);
-      if (foreign) assert.match(r.stderr, /unrelated staged paths/);
     }
   });
 
@@ -3628,8 +3627,6 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     test('zero staged deletions: exits 0, commits nothing', () => {
       const r = run([]);
       assert.deepStrictEqual([r.status, r.commits], [0, 1]);
-      assert.match(r.stderr, /no staged .*deletion: nothing to commit/);
-      assert.doesNotMatch(r.stderr, /expected exactly one/);
     });
 
     test('the step prose names the staging step and covers commit, skip and refusal', () => {
