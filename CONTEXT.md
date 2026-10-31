@@ -1031,6 +1031,7 @@ Invariants:
 - Platform policy owned at the seam: `shell: process.platform === 'win32'` lives only in execNpm; probeTty returns `null` on Windows.
 - Normalization policy: platformWriteSync owns full `normalizeMd` for `.md`; CRLF-to-LF + trailing newline for all others; callers must NOT pre-call `normalizeMd`.
 - `_normalizeMd` is re-implemented inline (not imported from `core.cjs`) to avoid circular dep.
+- POSIX shell quoting has one implementation: `shellSingleQuote(value)` wraps a value as a single `sh` token, built on `escapeSingleQuotedShellLiteral` (the unwrapped `'` → `'\''` escape, for callers that supply their own quotes). Callers import it instead of re-implementing it; `capability-lifecycle`'s private copy (#1460) was removed in #4039.
 - `atomicWriteFileSync`, `safeReadFile`, `normalizeMd` were duplicated wrappers in `core.cjs`, removed from there in this module's own Migration Phase 4 (`#3468`, see ADR-0009/ADR-0010) — a separate effort from epic #1267 (the core.cjs re-export-spine retirement); callers now import `platformWriteSync`/`platformReadSync`/`normalizeContent` from this module directly.
 
 Migration: Phases 1-4 (#3465-#3468) shipped 2026-05-13 — seam additions, subprocess-dispatch migration (6 files), fs migration (15 files / 215 call sites), and core.cjs compat-export removal are all complete; see ADR-0009's 2026-05-13 Update section.
