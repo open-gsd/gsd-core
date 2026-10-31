@@ -2357,10 +2357,10 @@ Record state transition after plan-phase completes (Planned/Ready to execute).
 | Flag | Description |
 |------|-------------|
 | `--phase N` | Phase number that was planned |
-| `--plans N` | Number of plans generated |
+| `--plans N` | Number of plans generated; a non-negative integer (`state begin-phase --plans` applies the same rule) |
 
-**Prerequisites:** Phase has been planned
-**Produces:** Updated `STATE.md` with post-planning state
+**Prerequisites:** Phase has been planned; with `--plans`, STATE.md has a `Plan:` or `Current Plan:` line under `## Current Position`, or a `Total Plans in Phase:` line anywhere
+**Produces:** Updated `STATE.md` with post-planning state: `Status` becomes `Ready to execute` (a bare `Ready` counts as unedited), and `--plans` is written to `Total Plans in Phase:` and to the `Plan:` / `Current Plan:` line, which keeps its recorded plan number, `N of M` spelling and trailing text on a same-phase replan (a bare `N` beside `Total Plans in Phase:` stays as written on the same phase and resets to a bare `0` for a new one). Exits non-zero and writes nothing when `--plans` is not a non-negative integer, is below the recorded plan position (the `N` of `Plan: N of M`, or the bare `N` of `Plan: N` / `Current Plan: N`: the first plan still to run, or M once the last plan is done), or has no line to land on (a `Plan:` line outside `## Current Position` does not count, although `state advance-plan` reads one). `--plans 0` reports `0 plans ready`.
 
 ```bash
 node gsd-tools.cjs state planned-phase --phase 3 --plans 2
