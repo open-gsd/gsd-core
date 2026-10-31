@@ -690,6 +690,48 @@ describe('bug #2650 plan-phase — all five planner/plan-checker spawns dispatch
     }
   });
 
+  test('#3923: stored interval/threshold resolve to a positive integer, or the default', (t) => {
+    // Driven through the real config-get seam with the shape `config-set` and
+    // `/gsd-config --advanced` write (JSON numbers), plus hand-edited shapes.
+    // limit-1 (0) / limit (1) / limit+1 (2) for both keys.
+    const helpersBash = extractStallHelpersBash();
+    const cases = [
+      [undefined, '5', '10'],
+      [0, '5', '10'],
+      [1, '1', '1'],
+      [2, '2', '2'],
+      [30, '30', '30'],
+      // 9-digit cap so `* 60` cannot overflow: limit-1 / limit / limit+1.
+      [99999999, '99999999', '99999999'], [999999999, '999999999', '999999999'], [1000000000, '5', '10'],
+      [-1, '5', '10'],
+      ['abc', '5', '10'],
+      [null, '5', '10'],
+    ];
+    for (const [stored, expectedInterval, expectedThreshold] of cases) {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3923-resolve-'));
+      t.after(() => cleanup(tmp));
+      fs.mkdirSync(path.join(tmp, '.planning'), { recursive: true });
+      const config = stored === undefined
+        ? {}
+        : { planner: { stall_detect_interval_minutes: stored, stall_threshold_minutes: stored } };
+      fs.writeFileSync(path.join(tmp, '.planning', 'config.json'), `${JSON.stringify(config)}\n`);
+      const result = runBashScript(
+        `${helpersBash}\nprintf '%s %s\\n' "$PLANNER_STALL_INTERVAL_MINUTES" "$PLANNER_STALL_THRESHOLD_MINUTES"\n`,
+        [],
+        {
+          cwd: tmp,
+          env: { ...process.env, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, RUNTIME_DIR: REPO_ROOT, GSD_PROJECT: '', GSD_WORKSTREAM: '' },
+        },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(
+        result.stdout.trim(),
+        `${expectedInterval} ${expectedThreshold}`,
+        `stored ${JSON.stringify(stored)} resolved incorrectly`,
+      );
+    }
+  });
+
   test('standard planner spawn (step 8) dispatches with run_in_background=true and calls gsd_stall_watch', () => {
     const idx = workflow.indexOf('## 8. Spawn gsd-planner Agent');
     assert.notEqual(idx, -1);
