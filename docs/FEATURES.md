@@ -511,7 +511,7 @@
 
 ### 9. Phase Management
 
-**Commands:** `/gsd-phase`, `/gsd-phase --insert [N]`, `/gsd-phase --remove [N]`
+**Commands:** `/gsd-phase`, `/gsd-phase --insert [N] [--sibling]`, `/gsd-phase --remove [N]`
 
 **Purpose:** Dynamic roadmap modification during development.
 

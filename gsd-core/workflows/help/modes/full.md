@@ -231,10 +231,10 @@ Add new phase to end of current milestone.
 
 Usage: `/gsd:phase "Add admin dashboard"`
 
-**`/gsd:phase --insert <after> <description>`**
+**`/gsd:phase --insert <after> [--sibling] <description>`**
 Insert urgent work as decimal phase between existing phases.
 
-- Creates intermediate phase (e.g., 7.1 between 7 and 8)
+- Creates intermediate phase (e.g., 7.1 between 7 and 8); after a decimal phase it nests by default (15.2 -> 15.2.1), `--sibling` joins the parent level (15.3)
 - Useful for discovered work that must happen mid-milestone
 - Maintains phase ordering
 

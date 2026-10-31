@@ -19,7 +19,7 @@ Manage phases in ROADMAP.md with a single consolidated command.
 
 Mode routing:
 - **default** (no flag): Add a new integer phase to the end of the current milestone → add-phase workflow
-- **--insert**: Insert urgent work as a decimal phase (e.g., 72.1) between existing phases → insert-phase workflow
+- **--insert**: Insert urgent work as a decimal phase (e.g., 72.1) between existing phases (`--sibling` joins the parent level after a decimal phase; default nests) → insert-phase workflow
 - **--remove**: Remove a future phase and renumber subsequent phases → remove-phase workflow
 - **--edit**: Edit any field of an existing phase in place → edit-phase workflow
 </objective>
@@ -29,7 +29,7 @@ Mode routing:
 | Flag | Action | Workflow |
 |------|--------|----------|
 | (none) | Add new integer phase at end of milestone | add-phase |
-| --insert | Insert decimal phase (e.g., 72.1) after specified phase | insert-phase |
+| --insert | Insert decimal phase (e.g., 72.1) after specified phase; after a decimal phase it nests by default (15.2 -> 15.2.1), `--sibling` joins the parent level (15.3) | insert-phase |
 | --remove | Remove future phase, renumber subsequent | remove-phase |
 | --edit | Edit fields of existing phase in place | edit-phase |
 
@@ -46,7 +46,7 @@ Mode routing:
 Arguments: see the `<arguments>` block above.
 
 Parse the first token of the `<arguments>` block:
-- If it is `--insert`: strip the flag, pass remainder (format: <after-phase-number> <description>) to insert-phase workflow
+- If it is `--insert`: strip the flag, pass remainder (format: <after-phase-number> [--sibling] <description>) to insert-phase workflow
 - If it is `--remove`: strip the flag, pass remainder (phase number) to remove-phase workflow
 - If it is `--edit`: strip the flag, pass remainder (phase-number [--force]) to edit-phase workflow
 - Otherwise: pass all of the `<arguments>` block (phase description) to add-phase workflow
