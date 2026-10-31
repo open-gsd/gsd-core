@@ -27,6 +27,9 @@ test('#4988: installed local CLI syncs and reads its own Claude agents', () => {
     assert.match(before, /^effort: (?!low$)\S+/m, 'the installed agent starts with a different effort');
 
     const cli = path.join(configDir, 'gsd-core', 'bin', 'gsd-tools.cjs');
+    // Match the module loader's spelling of __dirname, including Windows short names.
+    const expectedAgentsDir = path.resolve(path.dirname(require.resolve(cli)), '..', '..', 'agents');
+    assert.equal(canonicalizePath(expectedAgentsDir), canonicalizePath(path.join(configDir, 'agents')));
     const env = isolatedEnv({ home: root, claudeConfigDir: globalDir, override: { GSD_HOME: root } });
     function run(args) {
       const result = runNode([cli, ...args], { cwd: root, env, timeoutMs: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS });
@@ -35,7 +38,7 @@ test('#4988: installed local CLI syncs and reads its own Claude agents', () => {
     }
 
     const preview = run(['effort', 'sync', '--dry-run']);
-    assert.equal(preview.agents_dir, canonicalizePath(path.join(configDir, 'agents')));
+    assert.equal(preview.agents_dir, expectedAgentsDir);
     assert.ok(preview.changes.some(change => change.agent === 'gsd-planner' && change.to === 'low'));
 
     const effective = run(['resolve-execution', 'gsd-planner']);
@@ -44,7 +47,7 @@ test('#4988: installed local CLI syncs and reads its own Claude agents', () => {
     assert.notEqual(effective.effort_effective, 'low');
 
     const applied = run(['effort', 'sync', '--apply']);
-    assert.equal(applied.agents_dir, canonicalizePath(path.join(configDir, 'agents')));
+    assert.equal(applied.agents_dir, expectedAgentsDir);
     assert.match(fs.readFileSync(agentPath, 'utf8'), /^effort: low$/m);
     assert.equal(run(['resolve-execution', 'gsd-planner']).effort_effective, 'low');
 
