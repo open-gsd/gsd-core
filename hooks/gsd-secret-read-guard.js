@@ -1078,18 +1078,30 @@ function curlValueNamesSecret(text) {
 // `{}`), as a command. bfs takes find's actions.
 const FIND_EXEC_ACTIONS = new Set(['-exec', '-execdir', '-ok', '-okdir']);
 const FIND_COMMANDS = new Set(['find', 'bfs']);
+const XARGS_COMMANDS = new Set(['xargs', 'xargs.exe']);
 
 // Commands whose documented job is to run another command given as their
-// operands (their man pages), other than the wrappers resolveCommand unwraps
-// and xargs/find, whose command position is read exactly. Their options
-// differ per command, so under them curl's arguments start after the first
-// operand whose last segment is curl, as for every launcher before #5779's
-// review narrowed the rule to commands that run curl.
+// operands or as an option's value (`fd -x`), or an applet (`busybox xargs`),
+// other than the wrappers resolveCommand unwraps and xargs/find, whose command
+// position is read exactly. Their options and subcommands (`op run --`, `uv
+// run`) differ per command, so under them curl's arguments start after the
+// first operand whose last segment is curl, as for every command before
+// #5779's review narrowed the rule to commands that run curl.
 const CURL_WORD_LAUNCHERS = new Set([
+  // process, scheduling and namespace runners
   'watch', 'ionice', 'taskset', 'chrt', 'flock', 'nsenter', 'unshare', 'chroot',
-  'runuser', 'setpriv', 'systemd-run', 'strace', 'ltrace', 'unbuffer',
-  'parallel', 'sem', 'torsocks', 'torify', 'proxychains', 'proxychains4',
-  'firejail', 'busybox', 'fd', 'fdfind', 'dotenv',
+  'runuser', 'setpriv', 'systemd-run', 'systemd-inhibit', 'prlimit', 'numactl',
+  'cpulimit', 'setarch', 'arch', 'caffeinate', 'sandbox-exec', 'chpst', 'tini',
+  'dumb-init', 'faketime', 'eatmydata', 'unbuffer', 'catchsegv', 'xvfb-run',
+  // tracers, debuggers and profilers
+  'strace', 'ltrace', 'valgrind', 'gdb', 'perf',
+  // job runners and file-event runners
+  'parallel', 'sem', 'entr', 'fd', 'fdfind', 'busybox',
+  // network wrappers
+  'torsocks', 'torify', 'proxychains', 'proxychains4', 'trickle', 'firejail',
+  // environment, secret and package runners
+  'dotenv', 'dotenvx', 'op', 'doppler', 'infisical', 'aws-vault', 'direnv',
+  'uv', 'poetry', 'pipenv', 'npx', 'pnpm', 'bunx', 'bundle', 'nix',
 ]);
 
 // Which operands curl takes as its arguments (#5779): every one when curl is
@@ -1116,7 +1128,7 @@ function markCurlArguments(base, words, from, to, marks, depth) {
     return;
   }
   if (depth >= MAX_NESTING_DEPTH) return;
-  if (base === 'xargs') {
+  if (XARGS_COMMANDS.has(base)) {
     const sub = xargsCommandIndex(words, from, to);
     if (sub !== -1) markLaunchedCurl(words, sub, to, marks, depth + 1);
   } else if (CURL_WORD_LAUNCHERS.has(base)) {
@@ -1496,7 +1508,7 @@ function findSecretRead(command, depth) {
     }
 
     // xargs turns stdin file names into a sub-command's operands.
-    if (base === 'xargs' && depth < MAX_NESTING_DEPTH) {
+    if (XARGS_COMMANDS.has(base) && depth < MAX_NESTING_DEPTH) {
       const hit = scanXargsPipe(operands, s, bySeg, sepAfter, depth);
       if (hit) return hit;
       // `.env` given to xargs itself (`xargs -a .env cat`) is an ordinary
