@@ -33,7 +33,7 @@ test('#4988: installed local CLI syncs and reads its own Claude agents', () => {
     }
 
     const preview = run(['effort', 'sync', '--dry-run']);
-    assert.equal(preview.agents_dir, path.join(canonicalizePath(configDir), 'agents'));
+    assert.equal(canonicalizePath(preview.agents_dir), path.join(canonicalizePath(configDir), 'agents'));
     assert.ok(preview.changes.some(change => change.agent === 'gsd-planner' && change.to === 'low'));
 
     const effective = run(['resolve-execution', 'gsd-planner']);
@@ -42,7 +42,7 @@ test('#4988: installed local CLI syncs and reads its own Claude agents', () => {
     assert.notEqual(effective.effort_effective, 'low');
 
     const applied = run(['effort', 'sync', '--apply']);
-    assert.equal(applied.agents_dir, path.join(canonicalizePath(configDir), 'agents'));
+    assert.equal(canonicalizePath(applied.agents_dir), path.join(canonicalizePath(configDir), 'agents'));
     assert.match(fs.readFileSync(agentPath, 'utf8'), /^effort: low$/m);
     assert.equal(run(['resolve-execution', 'gsd-planner']).effort_effective, 'low');
 
