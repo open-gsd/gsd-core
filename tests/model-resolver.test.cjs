@@ -6018,6 +6018,26 @@ function advertisedCodexEfforts(model) {
 }
 
 describe('#3007 — Codex effort capability is per-model, and every clamp is visible', () => {
+  test('#5591 GPT-6 models are registered without replacing the GPT-5.6 defaults', () => {
+    const { CODEX_MODEL_EFFORT, RUNTIME_PROFILE_MAP, renderEffortForRuntime } = require('../gsd-core/bin/lib/model-catalog.cjs');
+    assert.deepStrictEqual(RUNTIME_PROFILE_MAP.codex, {
+      opus: { model: 'gpt-5.6-sol', reasoning_effort: 'xhigh' },
+      sonnet: { model: 'gpt-5.6-terra', reasoning_effort: 'medium' },
+      haiku: { model: 'gpt-5.6-luna', reasoning_effort: 'medium' },
+    });
+    for (const model of ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna']) {
+      assert.ok(Object.hasOwn(CODEX_MODEL_EFFORT, model), model);
+      assert.deepStrictEqual(CODEX_MODEL_EFFORT[model], new Set(['low', 'medium', 'high', 'xhigh', 'max']));
+      for (const level of ['low', 'medium', 'high', 'xhigh', 'max']) {
+        assert.strictEqual(renderEffortForRuntime('codex', level, model).value, level);
+      }
+      assert.strictEqual(renderEffortForRuntime('codex', 'minimal', model).value, 'low');
+      for (const level of ['ultra']) {
+        assert.strictEqual(renderEffortForRuntime('codex', level, model).value, null);
+      }
+    }
+  });
+
   test('max survives for a model that advertises it', () => {
     const { renderEffortForRuntime } = require('../gsd-core/bin/lib/model-catalog.cjs');
     const r = renderEffortForRuntime('codex', 'max', 'gpt-5.6-sol');
@@ -6877,6 +6897,21 @@ describe('#4192 model_overrides: fully-qualified claude IDs resolve as configure
         model_profile_overrides: { codex: { opus: 'MPO-CODEX-OPUS' } },
       });
       assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'MPO-CODEX-OPUS');
+    });
+
+    test('GPT-6.1 Sol resolves through a Codex tier override and an agent pin still wins', () => {
+      dir = project({ model_profile: 'quality', model_profile_overrides: { codex: { opus: 'gpt-6.1-sol' } } });
+      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'gpt-6.1-sol');
+      assert.strictEqual(initQuick(dir, 'codex').executor_model, 'gpt-6.1-sol');
+      cleanup(dir);
+      dir = project({ model_profile: 'quality', model_profile_overrides: { codex: { opus: 'gpt-6.1-sol' } }, model_overrides: { 'gsd-executor': 'PINNED' } });
+      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'PINNED');
+    });
+
+    test('GPT-6 Astra resolves through the existing Codex override path', () => {
+      dir = project({ model_profile: 'quality', model_profile_overrides: { codex: { opus: 'gpt-6-astra' } } });
+      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'gpt-6-astra');
+      assert.strictEqual(initQuick(dir, 'codex').executor_model, 'gpt-6-astra');
     });
 
     test('model_overrides still wins over everything', () => {

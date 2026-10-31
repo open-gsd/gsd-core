@@ -450,6 +450,20 @@ If "Other (Group B or custom)" is selected, prompt the user to enter the runtime
 If the selected runtime differs from the stored `runtime` key, update `runtime` via
 `gsd_run query config-set runtime <value>` before proceeding to Step C.
 
+**Codex model choices:** If the selected runtime is `codex`, read `codexModelChoices` from
+`gsd-core/bin/shared/model-catalog.json` under the same installation as `GSD_TOOLS` (the
+catalog is `shared/model-catalog.json` next to that tool). Display each entry's `name`,
+`description`, and `id` in a numbered list. These are catalog candidates, not a guarantee of
+account access. Ask the user to check the current Codex `/model` selector for availability;
+only offer as selectable entries the IDs the user confirms are available. If availability
+cannot be confirmed, do not present an entry as available: retain Keep current, Clear override,
+and the existing manual ID option. Do not write any model automatically.
+
+For each tier in Step C, offer a confirmed Codex choice via a numbered text prompt (supporting
+all seven choices without exceeding the question tool's option limit), or the existing manual
+ID option. Map the chosen entry back to its catalog `id` and apply it through Step D; cancel
+leaves that tier unchanged. For other runtimes keep the existing prompts and labels unchanged.
+
 **Step C — Configure tier overrides for the selected runtime:**
 
 ```text
@@ -489,7 +503,7 @@ AskUserQuestion([
 
 **Step D — Apply the changes:**
 
-For each tier where the user chose "Enter model ID":
+For each tier where the user chose a confirmed Codex model or "Enter model ID":
 ```bash
 gsd_run query config-set model_profile_overrides.<runtime>.<tier> "<model-id>"
 ```
