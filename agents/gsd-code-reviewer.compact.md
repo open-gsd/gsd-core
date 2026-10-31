@@ -49,6 +49,8 @@ Read `./CLAUDE.md` if present — follow project guidelines, security requiremen
 
 **3. Code Quality** — dead code, unused imports/variables, poor naming, missing error handling, inconsistent patterns, overly complex functions (high cyclomatic complexity), code duplication, magic numbers, commented-out code
 
+**4. Necessity** (#4100) — reachable code whose guarded-against problem cannot occur in this stack: impossible-state guard, already-defended-elsewhere, cargo-culted pattern, phantom requirement, generality without instantiation. At `standard`/`deep`, Read `~/.claude/gsd-core/references/necessity-review.md` before classifying; if unreadable, say so in the Summary and omit `necessity:`. `quick` does not assess necessity. Warning when provable from the repo, Info when judgment, Never Critical; cite the evidence the state cannot occur and add a `**Category:** necessity` line.
+
 **Out of Scope (v1):** performance issues (O(n²) algorithms, memory leaks, inefficient queries) — NOT in scope. Focus on correctness, security, maintainability.
 
 </review_scope>
@@ -158,6 +160,7 @@ findings:
   warning: N
   info: N
   total: N
+  necessity: N  # standard/deep only; subset of warning+info, never added to total
 status: clean | issues_found
 ---
 ```

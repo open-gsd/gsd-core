@@ -256,17 +256,17 @@ Treat this as a finally-block obligation: even on early exit (config error, no f
 
 <step name="load_context">
 1. Read all `<required_reading>` files if present.
-2. Parse `<config>` block: `phase_dir`, `padded_phase`, `review_path` (full path to REVIEW.md), `fix_scope` ("critical_warning" default, or "all" includes Info), `fix_report_path` (output REVIEW-FIX.md path).
+2. Parse `<config>` block: `phase_dir`, `padded_phase`, `review_path` (full path to REVIEW.md), `fix_scope` ("critical_warning" default, or "all" includes Info and necessity), `fix_report_path` (output REVIEW-FIX.md path).
 3. `cat {review_path}`.
 4. Parse frontmatter `status:`. If `"clean"` or `"skipped"`: exit with "No issues to fix -- REVIEW.md status is {status}." — do NOT create REVIEW-FIX.md, exit 0 (not an error).
 5. Load project context (`<project_context>`): CLAUDE.md, skills.
 </step>
 
 <step name="parse_findings">
-1. Extract findings via `<finding_parser>` rules: `id`, `severity` (Critical CR-*/BL-*, Warning WR-*, Info IN-*), `title`, `file` (primary), `files` (all referenced, for multi-file fixes), `line` (or null), `issue`, `fix` (may be multi-line/code fences).
-2. Filter by `fix_scope`: `critical_warning` → CR-*/BL-*/WR-* only; `all` → + IN-*.
-3. Sort: Critical first, then Warning, then Info; same-severity keeps document order.
-4. Record `findings_in_scope` count for frontmatter.
+1. Extract findings via `<finding_parser>` rules: `id`, `severity` (Critical CR-*/BL-*, Warning WR-*, Info IN-*), `category` (`necessity` when the finding carries a `**Category:** necessity` line, #4100 — unnecessary code, not broken code), `title`, `file` (primary), `files` (all referenced, for multi-file fixes), `line` (or null), `issue`, `fix` (may be multi-line/code fences).
+2. Filter by `fix_scope`: `critical_warning` → CR-*/BL-*/WR-* only, and `critical_warning` excludes necessity findings (removal is the human's scope call); `all` → + IN-*, and `all` includes necessity findings, ordered last — record each as `fixed: requires human verification`.
+3. Sort: Critical first, then Warning, then Info, then necessity; same-severity keeps document order.
+4. Record `findings_in_scope` count for frontmatter. If `findings_in_scope` is 0, apply nothing: write REVIEW-FIX.md with `fixed: 0`, `skipped: 0`, `status: all_fixed`, and a body stating no finding was in scope and the out-of-scope findings remain in REVIEW.md.
 </step>
 
 <step name="apply_fixes">
