@@ -224,8 +224,8 @@ describe('researcher never resolves its own questions (#5438)', () => {
     assert.match(rule, /list\s+every\s+such\s+question\s+in\s+that\s+section/);
     assert.match(rule, /CONTEXT\.md's\s+`<decisions>`/);
     assert.match(rule, /Never\s+add\s+a\s+decision\s+to\s+CONTEXT\.md/);
-    assert.match(rule, /cite a plan\b/);
-    assert.match(rule, /\ba disposition\b/);
+    // Anchored on the negation: matching `cite a plan` alone passes when "never" becomes "always".
+    assert.match(rule, /\bnever\s+cite\s+a\s+plan,\s+a\s+disposition\b/i);
   });
 
   test('the return template leaves open questions to a user ruling', () => {
