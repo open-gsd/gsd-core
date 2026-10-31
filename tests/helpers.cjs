@@ -383,15 +383,9 @@ function createTempDir(prefix = 'gsd-test-') {
   return fs.mkdtempSync(path.join(require('os').tmpdir(), prefix));
 }
 
-// Canonicalize a filesystem path using fs.realpathSync.native when possible,
-// falling back to path.resolve when the path does not exist on disk.
+// Resolve existing fixture paths through the same native filesystem seam on all platforms.
 function canonicalizePath(p) {
-  if (typeof p !== 'string') return p;
-  try {
-    return fs.realpathSync.native(p);
-  } catch {
-    return path.resolve(p);
-  }
+  return fs.realpathSync.native(p);
 }
 
 // Create a bare temp directory whose returned path is canonicalized across platforms
