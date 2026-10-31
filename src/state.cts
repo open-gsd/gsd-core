@@ -6,6 +6,7 @@
  * from the prior hand-written .cjs; only strict types are added.
  */
 
+import type { PhaseDirectoryContext } from './phase-id.cjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { escapeRegex } from './pattern.cjs';
@@ -29,7 +30,6 @@ import phaseIdMod = require('./phase-id.cjs');
 const {
   parsePhaseFromProse,
   PHASE_NUMBER_TOKEN_SOURCE,
-  matchPhaseDirs,
   phaseKeyFromToken,
   phaseKeyFromDir,
   phaseHeadingPrefixSrcFor,
@@ -39,6 +39,11 @@ const {
   // #2761 M3: owns the bracket milestone intro and canonical pad2 spelling.
   bracketMilestoneIntroSrcFor,
 } = phaseIdMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseIdDisplayMod = require('./phase-id-display.cjs');
+// #4304: phaseDisplayFor below renders through this adapter
+// instead of re-deriving the bracket numeric grammar locally.
+const { renderBracketPhaseDisplay } = phaseIdDisplayMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
 // #3642: hasMilestoneSectioning no longer consumed here — its >=2 semantics answered sibling conflation, but this branch asks asserted-vs-section (>=1). It stays exported from roadmap-parser.cjs for its unit pins.
@@ -63,6 +68,33 @@ const { extractFrontmatter, reconstructFrontmatter, stripFrontmatter, propagateC
 function isUnparseableFrontmatter(existingFm: Record<string, unknown>): boolean {
   return (existingFm as unknown as Record<symbol, unknown>)[FRONTMATTER_UNPARSEABLE] === true;
 }
+
+/**
+ * Human-facing phase label for STATE.md descriptions. Identity-bearing fields
+ * such as Current Phase and the Current Position Phase row stay bare so their
+ * established readers remain byte-compatible; only descriptive text uses this
+ * renderer.
+ */
+function phaseDisplayFor(cwd: string, phaseNumber: string | number): string {
+  if (resolvePhaseIdConvention(cwd) !== 'bracket') return `Phase ${phaseNumber}`;
+
+  const config = loadConfig(cwd);
+  const project = typeof config['project_code'] === 'string' ? config['project_code'].trim() : '';
+  if (!project) {
+    error('phase_id_convention is "bracket" but project_code is missing in .planning/config.json');
+  }
+
+  const info = getMilestoneInfo(cwd);
+  const version = info.value?.version ?? '';
+  const display = renderBracketPhaseDisplay(version, phaseNumber, project);
+  if (display === null) {
+    error(
+      `phase_id_convention is "bracket" but phase ${phaseNumber} cannot be rendered ` +
+        `(the active milestone ${JSON.stringify(version)} cannot be resolved, or the phase number is invalid)`,
+    );
+  }
+  return display!;
+}
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import scanPhasePlans = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -85,7 +117,7 @@ const { SCOPE } = planningScopeMod;
 type Scope = planningScopeMod.Scope;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
-const { listMilestonePhaseDirs } = phaseLocatorMod;
+const { phaseDirectoryOptions, listMilestonePhaseDirs, resolvePhaseDirectoryLookup, matchPhaseDirsForLookup } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateTransitionMod = require('./state-transition.cjs');
 // #3873 (ADR-3473 §8.8): FRONTMATTER_KEY_TO_BODY_LABEL below is now a
@@ -102,6 +134,58 @@ import { findProjectRoot } from './project-root.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import milestoneLockMod = require('./milestone-lock.cjs');
 const { transitionCore, applyStatePreservation, sliceCurrentPositionSection, stateReplaceProgressPercent, formatProgressMachineSegment } = stateTransitionMod;
+
+function replaceStateBodyField(
+  content: string,
+  statePath: string,
+  field: string,
+  value: string,
+): string {
+  const { body, reassemble } = stateTransitionMod.beginFrontmatterReassembly(content, statePath);
+  const replaced = stateReplaceField(body, field, value);
+  return replaced === null ? content : reassemble(replaced);
+}
+
+/**
+ * Rewrite a handler-authored field inside Current Position only when it still
+ * carries the exact value the transition just emitted. The equality guard
+ * preserves executor-authored prose under the transition module's Knuth rule.
+ */
+function replaceCurrentPositionFieldValue(
+  content: string,
+  statePath: string,
+  field: string,
+  expected: string,
+  value: string,
+): string {
+  const { body, reassemble } = stateTransitionMod.beginFrontmatterReassembly(content, statePath);
+  const headings = tokenizeHeadings(body);
+  const index = headings.findIndex((heading) =>
+    heading.level === 2 && /^current\s+position$/i.test(heading.text),
+  );
+  if (index === -1) return content;
+
+  const heading = headings[index];
+  const lines = body.split('\n');
+  const headingLine = lines[heading.line - 1] ?? '';
+  const start = heading.offset + headingLine.length + 1;
+  let end = body.length;
+  for (let next = index + 1; next < headings.length; next++) {
+    if (headings[next].level < 2) continue;
+    end = headings[next].offset;
+    if (end > 0 && body[end - 1] === '\n') end -= 1;
+    if (end > 0 && body[end - 1] === '\r') end -= 1;
+    end = Math.max(start, end);
+    break;
+  }
+
+  const section = body.slice(start, end);
+  if (stateExtractField(section, field) !== expected) return content;
+  const replaced = stateReplaceField(section, field, value);
+  if (replaced === null) return content;
+  return reassemble(body.slice(0, start) + replaced + body.slice(end));
+}
+
 // #3699: the frontmatter-key <-> body-field routing behind `state update`'s
 // failure explanation, and the classification table it falls back to.
 const { getFieldClassification, getFrontmatterBodySource, frontmatterKeyForBodyField } = stateTransitionMod;
@@ -1066,15 +1150,17 @@ function unsummarizedPlansForPositionPhase(
   // as a real answer. This is a lookup of ONE phase token STATE.md names, not
   // a milestone enumeration, so the unscoped retry is in-contract.
   const convention = resolvePhaseIdConvention(cwd);
+  const lookup = resolvePhaseDirectoryLookup(cwd, positionPhase);
   const windowed = listMilestonePhaseDirs(phasesDir, { cwd, phaseIdConvention: convention });
   const candidateDirs = windowed.scope === SCOPE.COMPLETE ? windowed.value : [];
   // Canonical phase-token → directory matching (phase-id owner, #2562): both
   // sides of the comparison derived by the same function, never a local regex.
-  const { matches } = matchPhaseDirs(candidateDirs, positionPhase, convention);
+  const directoryContext = phaseDirectoryOptions(cwd);
+  const { matches } = matchPhaseDirsForLookup(candidateDirs, lookup, undefined, directoryContext);
   if (matches.length > 0) return scanOutstanding(phasesDir, matches[0]);
   const unscoped = listMilestonePhaseDirs(phasesDir);
   if (unscoped.scope !== SCOPE.COMPLETE) return null;
-  const retry = matchPhaseDirs(unscoped.value, positionPhase, convention);
+  const retry = matchPhaseDirsForLookup(unscoped.value, lookup, undefined, directoryContext);
   if (retry.matches.length === 0) return null;
   return scanOutstanding(phasesDir, retry.matches[0]);
 }
@@ -1122,7 +1208,7 @@ function cmdStateAdvancePlan(cwd: string, raw: boolean): void {
     // silently absorbed.
     const body = stripFrontmatter(content);
     const positionScope = matchCurrentPositionSection(body) ?? body;
-    const positionPhase = parseProsePhaseField(stateExtractField(positionScope, 'Phase'), resolvePhaseIdConvention(cwd)).phase;
+    const positionPhase = parseProsePhaseField(stateExtractField(positionScope, 'Phase'), resolvePhaseIdConvention(cwd), phaseDirectoryOptions(cwd)).phase;
     // #4093: a Current Position section with ZERO labeled fields has no
     // `Phase:` line either; frontmatter `current_phase` is the documented
     // survivor of body drift (the reporter's document still carried it, and
@@ -1675,7 +1761,7 @@ function cmdStateAddDecision(cwd: string, options: StateAddDecisionOptions, raw:
   if (!phaseId) {
     const rawState = fs.readFileSync(statePath, 'utf-8');
     const fm = extractFrontmatter(rawState, statePath) as Record<string, unknown>;
-    phaseId = resolveCurrentPhaseId(fm, stripFrontmatter(rawState), resolvePhaseIdConvention(cwd)) ?? undefined;
+    phaseId = resolveCurrentPhaseId(fm, stripFrontmatter(rawState), resolvePhaseIdConvention(cwd), phaseDirectoryOptions(cwd)) ?? undefined;
   }
 
   const entry = `- [Phase ${phaseId || '?'}]: ${summaryText}${rationaleText ? ` — ${rationaleText}` : ''}`;
@@ -1829,7 +1915,7 @@ function cmdStateAddRoadmapEvolution(cwd: string, options: StateAddRoadmapEvolut
   if (!phaseId) {
     const rawState = fs.readFileSync(statePath, 'utf-8');
     const fm = extractFrontmatter(rawState, statePath) as Record<string, unknown>;
-    phaseId = resolveCurrentPhaseId(fm, stripFrontmatter(rawState), resolvePhaseIdConvention(cwd)) ?? undefined;
+    phaseId = resolveCurrentPhaseId(fm, stripFrontmatter(rawState), resolvePhaseIdConvention(cwd), phaseDirectoryOptions(cwd)) ?? undefined;
   }
 
   const entry = `- Phase ${phaseId || '?'} ${actionText}${afterText}: ${flatNote}${urgentText}`;
@@ -2573,6 +2659,7 @@ function preferNewerLastActivity(
 function parseProsePhaseField(
   value: string | null,
   convention?: string | null,
+  directoryContext?: PhaseDirectoryContext,
 ): { phase: string | null; name: string | null } {
   // #2121 Phase 2 (#2125): delegate to the canonical anchored parser so this
   // module holds no independent prose phase-id regex. Drives #2111 — the
@@ -2581,10 +2668,10 @@ function parseProsePhaseField(
   // v0.5 -> "5"), so syncStateFrontmatter's #905 guard preserves the real
   // current_phase instead of clobbering it.
   // #5626: under `milestone-prefixed` the id is the whole `M-NN`; the convention comes from its owner.
-  return parsePhaseFromProse(value, convention);
+  return parsePhaseFromProse(value, convention, directoryContext);
 }
 
-function resolveStatePhase(fm: Record<string, unknown>, body: string, convention?: string | null): {
+function resolveStatePhase(fm: Record<string, unknown>, body: string, convention?: string | null, directoryContext?: PhaseDirectoryContext): {
   phase: string | null;
   name: string | null;
   sources: {
@@ -2598,11 +2685,11 @@ function resolveStatePhase(fm: Record<string, unknown>, body: string, convention
   const legacyRaw = stateFieldValue(fm, currentPositionScope, null, 'Current Phase').value;
   const currentPositionRaw = stateFieldValue(fm, currentPositionScope, null, 'Phase').value;
   const sources = {
-    frontmatter: parseProsePhaseField(frontmatterRaw, convention).phase,
-    legacy_current_phase: parseProsePhaseField(legacyRaw, convention).phase,
-    current_position_phase: parseProsePhaseField(currentPositionRaw, convention).phase,
+    frontmatter: parseProsePhaseField(frontmatterRaw, convention, directoryContext).phase,
+    legacy_current_phase: parseProsePhaseField(legacyRaw, convention, directoryContext).phase,
+    current_position_phase: parseProsePhaseField(currentPositionRaw, convention, directoryContext).phase,
   };
-  const prosePhase = parseProsePhaseField(currentPositionRaw, convention);
+  const prosePhase = parseProsePhaseField(currentPositionRaw, convention, directoryContext);
   return {
     phase: sources.frontmatter ?? sources.legacy_current_phase ?? sources.current_position_phase,
     name: stateFieldValue(fm, body, 'current_phase_name', null).value
@@ -2658,10 +2745,10 @@ function resolveStatePhase(fm: Record<string, unknown>, body: string, convention
  * Reconcile the two only by giving `resolveStatePhase` an explicit scope
  * parameter — never by pointing this at it and dropping the difference.
  */
-function resolveCurrentPhaseId(fm: Record<string, unknown>, body: string, convention?: string | null): string | null {
+function resolveCurrentPhaseId(fm: Record<string, unknown>, body: string, convention?: string | null, directoryContext?: PhaseDirectoryContext): string | null {
   const positionSection = sliceCurrentPositionSection(body);
   const prosePhase =
-    positionSection !== null ? parseProsePhaseField(stateFieldValue(fm, positionSection, null, 'Phase').value, convention).phase : null;
+    positionSection !== null ? parseProsePhaseField(stateFieldValue(fm, positionSection, null, 'Phase').value, convention, directoryContext).phase : null;
   return stateFieldValue(fm, body, 'current_phase', 'Current Phase').value ?? prosePhase;
 }
 
@@ -2704,7 +2791,8 @@ function cmdStateSnapshot(cwd: string, raw: boolean): void {
   // so it is scopeable exactly like Stopped At under ## Session. Fall back to
   // full-body search only when no ## Current Position section exists, so files
   // with no section heading keep their current behaviour.
-  const resolvedPhase = resolveStatePhase(fm, body, resolvePhaseIdConvention(cwd));
+  const directoryContext = phaseDirectoryOptions(cwd);
+  const resolvedPhase = resolveStatePhase(fm, body, resolvePhaseIdConvention(cwd), directoryContext);
   const currentPhase = resolvedPhase.phase;
   const currentPhaseName = resolvedPhase.name;
   const totalPhasesRaw = stateFieldValue(fm, body, 'total_phases', 'Total Phases').value;
@@ -2883,7 +2971,7 @@ function isMilestoneBounded(roadmapRaw: string, milestone: string, convention?: 
  * decimal, and project-code IDs are detected alike. Returns canonical keys
  * (see phaseKeyFromToken).
  */
-function extractRetiredPhaseNumbers(scope: string, convention?: string | null): Set<string> {
+function extractRetiredPhaseNumbers(scope: string, convention?: string | null, directoryContext?: PhaseDirectoryContext): Set<string> {
   const retired = new Set<string>();
   const isChecklistOrHeading = /^\s*(?:[-*+]\s*\[[ xX]\]|#{1,6}\s)/;
   // #612: the retirement filter has to widen with the counter it protects. The
@@ -2908,7 +2996,7 @@ function extractRetiredPhaseNumbers(scope: string, convention?: string | null): 
     while ((s = strikeSpan.exec(line)) !== null) {
       const phaseRef = phaseRefRe.exec(s[1]);
       // Require a digit so struck prose like ~~Phase Overview~~ is ignored.
-      if (phaseRef && /\d/.test(phaseRef[1])) retired.add(phaseKeyFromToken(phaseRef[1]));
+      if (phaseRef && (directoryContext?.phaseNaming === 'custom' || /\d/.test(phaseRef[1]))) retired.add(phaseKeyFromToken(phaseRef[1], directoryContext));
     }
   }
   return retired;
@@ -2958,6 +3046,7 @@ function countRoadmapPhaseHeadings(
   convention: string | null | undefined,
   retiredPhaseNums: Set<string>,
   applyConventionTokenSentinelRules: boolean,
+  directoryContext?: PhaseDirectoryContext,
 ): number {
   let count = 0;
   if (convention === 'bracket') {
@@ -2983,7 +3072,7 @@ function countRoadmapPhaseHeadings(
       if (applyConventionTokenSentinelRules && /^999\b/.test(token)) continue;
       // #1514: retired/folded phases are struck through in the ROADMAP;
       // exclude them from the denominator (they can never be completed).
-      if (retiredPhaseNums.has(phaseKeyFromToken(token))) continue;
+      if (retiredPhaseNums.has(phaseKeyFromToken(token, directoryContext))) continue;
       count++;
     }
     return count;
@@ -2996,7 +3085,7 @@ function countRoadmapPhaseHeadings(
     const token = m[1];
     if (!/\d/.test(token)) continue;
     if (applyConventionTokenSentinelRules && isSentinelPhaseId(token)) continue;
-    if (retiredPhaseNums.has(phaseKeyFromToken(token))) continue;
+    if (retiredPhaseNums.has(phaseKeyFromToken(token, directoryContext))) continue;
     count++;
   }
   return count;
@@ -3027,6 +3116,7 @@ function scanStatePhaseDirs(
   roadmapScope: string | null;
   roadmapRaw: string | null;
   retiredPhaseNums: Set<string>;
+  directoryContext: PhaseDirectoryContext;
 } {
   // Read the current-milestone ROADMAP scope once: it feeds both the
   // heading-based phase count and the retired/folded-phase
@@ -3035,12 +3125,14 @@ function scanStatePhaseDirs(
   let roadmapScope: string | null = null;
   let roadmapRaw: string | null = null;
   let retiredPhaseNums = new Set<string>();
+  let directoryContext = phaseDirectoryOptions(cwd, undefined, '');
   try {
     const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
     roadmapRaw = platformReadSync(roadmapPath);
     if (roadmapRaw !== null) {
       roadmapScope = extractCurrentMilestone(roadmapRaw, cwd);
-      retiredPhaseNums = extractRetiredPhaseNumbers(roadmapScope, phaseConvention);
+      directoryContext = {...directoryContext, roadmap: roadmapRaw};
+      retiredPhaseNums = extractRetiredPhaseNumbers(roadmapScope, phaseConvention, directoryContext);
     }
   } catch { /* fall through: no roadmap scope → no retired exclusion */ }
 
@@ -3068,7 +3160,7 @@ function scanStatePhaseDirs(
     // artifact; drop it from the disk phase set so it counts toward
     // neither the denominator nor the numerator (mirrors the heading
     // exclusion below). Project-code-aware via phaseKeyFromDir.
-    if (retiredPhaseNums.size > 0 && retiredPhaseNums.has(phaseKeyFromDir(dir, phaseConvention))) continue;
+    if (retiredPhaseNums.size > 0 && retiredPhaseNums.has(phaseKeyFromDir(dir, phaseConvention, directoryContext))) continue;
     // #3185: dedup grouping routed through the canonical phaseKeyFromDir
     // (src/phase-id.cts) instead of a local leading-digits regex that
     // diverged from extractPhaseToken/phaseKeyFromDir on
@@ -3076,7 +3168,7 @@ function scanStatePhaseDirs(
     // so a `PROJ-05`/`PROJ-05-slug` pair never deduped) and on
     // multi-segment milestone dirs. Same key surface used two lines
     // above for the retiredPhaseNums exclusion, so both filters agree.
-    const key = phaseKeyFromDir(dir, phaseConvention);
+    const key = phaseKeyFromDir(dir, phaseConvention, directoryContext);
     if (!seenPhaseNums.has(key)) {
       seenPhaseNums.set(key, dir);
     } else {
@@ -3107,6 +3199,7 @@ function scanStatePhaseDirs(
     roadmapScope,
     roadmapRaw,
     retiredPhaseNums,
+    directoryContext,
   };
 }
 
@@ -3153,6 +3246,7 @@ function buildStateFrontmatter(
   const prosePhase = parseProsePhaseField(
     stateExtractField(currentPositionScope, 'Phase'),
     cwd ? resolvePhaseIdConvention(cwd) : null,
+    cwd ? phaseDirectoryOptions(cwd) : undefined,
   );
   const currentPhase = stateExtractField(bodyContent, 'Current Phase') ?? prosePhase.phase;
   const currentPhaseName = stateExtractField(bodyContent, 'Current Phase Name') ?? prosePhase.name;
@@ -3261,6 +3355,7 @@ function buildStateFrontmatter(
             roadmapScope,
             roadmapRaw,
             retiredPhaseNums,
+            directoryContext,
           } = scanStatePhaseDirs(cwd, phasesDir, phaseConvention, milestoneExplicitlyNull ? null : storedMilestone);
 
           let diskTotalPlans = 0;
@@ -3299,7 +3394,7 @@ function buildStateFrontmatter(
           // fence-aware bracket strategy with #3185's canonical legacy
           // sentinel predicate for this read-path call.
           const roadmapPhaseCount = roadmapScope !== null
-            ? countRoadmapPhaseHeadings(roadmapScope, phaseConvention, retiredPhaseNums, true)
+            ? countRoadmapPhaseHeadings(roadmapScope, phaseConvention, retiredPhaseNums, true, directoryContext)
             : 0;
 
           cached = (() => {
@@ -4505,6 +4600,7 @@ function applyPostSyncPreservation(
   // #5626: the project's phase-id convention, resolved by the caller from its cwd (null: unset). Trailing and
   // optional so `options` stays the fifth parameter the options guard and its callers rely on.
   phaseIdConvention: string | null = null,
+  directoryContext?: PhaseDirectoryContext,
 ): string {
   assertStatePreservationOptions(options, 'applyPostSyncPreservation');
   const { resync, authoritativeFm, deriveProgressKeys, divergedFields, explicitProgressField, preWriteState } = options;
@@ -4566,7 +4662,7 @@ function applyPostSyncPreservation(
   const preCurrentPositionScope = matchCurrentPositionSection(preBody) ?? preBody;
   const preBodyCurrentPlan = stateExtractField(preBody, 'Current Plan');
   const preBodyCurrentPhase = stateExtractField(preBody, 'Current Phase')
-    ?? parseProsePhaseField(stateExtractField(preCurrentPositionScope, 'Phase'), phaseIdConvention).phase;
+    ?? parseProsePhaseField(stateExtractField(preCurrentPositionScope, 'Phase'), phaseIdConvention, directoryContext).phase;
   const preBodyPausedAt = stateExtractField(preSessionScope, 'Paused At');
   const preBodyLastActivityRaw = stateExtractField(preBody, 'Last Activity')
     ?? stateExtractField(preBody, 'Last activity');
@@ -4592,7 +4688,7 @@ function applyPostSyncPreservation(
   const postCurrentPositionScope = matchCurrentPositionSection(postBody) ?? postBody;
   const postBodyCurrentPlan = stateExtractField(postBody, 'Current Plan');
   const postBodyCurrentPhase = stateExtractField(postBody, 'Current Phase')
-    ?? parseProsePhaseField(stateExtractField(postCurrentPositionScope, 'Phase'), phaseIdConvention).phase;
+    ?? parseProsePhaseField(stateExtractField(postCurrentPositionScope, 'Phase'), phaseIdConvention, directoryContext).phase;
   const postBodyPausedAt = stateExtractField(postSessionScope, 'Paused At');
   const postBodyLastActivityRaw = stateExtractField(postBody, 'Last Activity')
     ?? stateExtractField(postBody, 'Last activity');
@@ -4821,6 +4917,7 @@ function syncAndPreserveStateMd(
     statePath,
     options,
     cwd ? resolvePhaseIdConvention(cwd) : null,
+    cwd ? phaseDirectoryOptions(cwd) : undefined,
   );
 }
 
@@ -5869,7 +5966,7 @@ function cmdStateJson(cwd: string, raw: boolean): void {
     const bodyPausedAt = stateExtractField(sessionScope, 'Paused At');
     const bodyPhaseSource = stateExtractField(body, 'Phase');
     const bodyCurrentPhase = stateExtractField(body, 'Current Phase')
-      ?? parseProsePhaseField(stateExtractField(positionScope, 'Phase'), resolvePhaseIdConvention(cwd)).phase;
+      ?? parseProsePhaseField(stateExtractField(positionScope, 'Phase'), resolvePhaseIdConvention(cwd), phaseDirectoryOptions(cwd)).phase;
     const bodyCurrentPlan = stateExtractField(body, 'Current Plan');
     const bodyStatus = stateExtractField(body, 'Status');
     // #3836: mirrors applyPostSyncPreservation's own derivation (state.cts
@@ -5933,7 +6030,7 @@ function cmdStateJson(cwd: string, raw: boolean): void {
  * phase locator's own rule, so this agrees with `init` and `phase-plan-index`.
  */
 function firstPlanToRun(cwd: string, phaseNumber: string | number): number | null {
-  const located = phaseLocatorMod.findPhaseInternal(cwd, String(phaseNumber));
+  const located = phaseLocatorMod.findPhaseInternal(cwd, String(phaseNumber), undefined, phaseDirectoryOptions(cwd));
   if (!located || !located.found) return null;
   const { plans, incomplete_plans: incomplete } = located;
   if (incomplete.length === 0 || incomplete.length === plans.length) return null;
@@ -5967,6 +6064,10 @@ function cmdStateBeginPhase(cwd: string, phaseNumber: string | number | null | u
   // before claimMilestonePhase so no phase-"null" milestone claim is taken.
   if (phaseNumber == null || String(phaseNumber).trim() === '') {
     error('phase required (--phase <N>)');
+  }
+  if (resolvePhaseIdConvention(cwd) === 'bracket'
+    && (String(phaseNumber).startsWith('[') || String(phaseNumber).includes('-'))) {
+    error('state begin-phase --phase requires a bare phase number such as 02; qualified ids are not accepted.', ERROR_REASON.USAGE);
   }
   const statePath = planningPaths(cwd).state;
   if (!fs.existsSync(statePath)) {
@@ -6033,7 +6134,38 @@ function cmdStateBeginPhase(cwd: string, phaseNumber: string | number | null | u
     if (result.data?.['resumed']) {
       delete rmwOptions.authoritativeFm;
     }
-    return result.content;
+    let transitioned = result.content;
+    if (resolvePhaseIdConvention(cwd) === 'bracket') {
+      const display = phaseDisplayFor(cwd, phaseNumber as string | number);
+      if (result.updated.includes('Last Activity Description')) {
+        transitioned = replaceStateBodyField(
+          transitioned,
+          statePath,
+          'Last Activity Description',
+          `${display} execution started`,
+        );
+      }
+      if (result.updated.includes('Current focus')) {
+        transitioned = replaceStateBodyField(
+          transitioned,
+          statePath,
+          'Current focus',
+          intent.phaseName ? `${display} — ${intent.phaseName}` : display,
+        );
+      }
+      const today = realClock.localToday();
+      const activitySuffix = result.data?.['resumed']
+        ? 'execution resumed (wave continue)'
+        : 'execution started';
+      transitioned = replaceCurrentPositionFieldValue(
+        transitioned,
+        statePath,
+        'Last Activity',
+        `${today} — Phase ${phaseNumber} ${activitySuffix}`,
+        `${today} — ${display} ${activitySuffix}`,
+      );
+    }
+    return transitioned;
   }, cwd, rmwOptions);
 
   // ADR-3408 §8.4 (D4): reconcile `beginPhaseCore`'s own success list against
@@ -6366,6 +6498,27 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number | null |
     }
     const result = transitionCore(content, intent, deps);
     precomputedUpdated = result.updated;
+    if (resolvePhaseIdConvention(cwd) === 'bracket') {
+      const display = phaseDisplayFor(cwd, phaseNumber as string | number);
+      let transitioned = result.content;
+      if (result.updated.includes('Last Activity Description')) {
+        transitioned = replaceStateBodyField(
+          transitioned,
+          statePath,
+          'Last Activity Description',
+          `${display} planning complete — ${planCount || '?'} plans ready`,
+        );
+      }
+      const today = realClock.localToday();
+      transitioned = replaceCurrentPositionFieldValue(
+        transitioned,
+        statePath,
+        'Last Activity',
+        `${today} — Phase ${phaseNumber} planning complete`,
+        `${today} — ${display} planning complete`,
+      );
+      return transitioned;
+    }
     return result.content;
   }, cwd, rmwOptions);
 
@@ -6600,7 +6753,8 @@ function cmdStateValidate(cwd: string, raw: boolean, opts: { strict?: boolean } 
   const scope: planningScopeMod.Scope = initialScope;
 
   const status = stateFieldValue(fm, body, 'status', 'Status').value || '';
-  const resolvedPhase = resolveStatePhase(fm, body, resolvePhaseIdConvention(cwd));
+  const directoryContext = phaseDirectoryOptions(cwd);
+  const resolvedPhase = resolveStatePhase(fm, body, resolvePhaseIdConvention(cwd), directoryContext);
   const currentPhase = resolvedPhase.phase;
   const totalPlansRaw = stateFieldValue(fm, body, 'total_plans_in_phase', 'Total Plans in Phase').value;
   const totalPlansInPhase = totalPlansRaw ? parseInt(totalPlansRaw, 10) : null;
@@ -6617,8 +6771,8 @@ function cmdStateValidate(cwd: string, raw: boolean, opts: { strict?: boolean } 
     emit({ valid: false, warnings, scope });
     return;
   }
-  const selectedPhaseKey = phaseKeyFromToken(currentPhase);
-  if (Object.values(resolvedPhase.sources).some(source => source !== null && phaseKeyFromToken(source) !== selectedPhaseKey)) {
+  const selectedPhaseKey = phaseKeyFromToken(currentPhase, directoryContext);
+  if (Object.values(resolvedPhase.sources).some(source => source !== null && phaseKeyFromToken(source, directoryContext) !== selectedPhaseKey)) {
     warnings.push(stateDiagnostic(
       'S003',
       SEVERITY.WARNING,
@@ -6657,7 +6811,7 @@ function cmdStateValidate(cwd: string, raw: boolean, opts: { strict?: boolean } 
   let phaseDirPath: string;
   try {
     const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
-    const phaseDir = entries.find(entry => entry.isDirectory() && phaseKeyFromDir(entry.name, validateConvention) === selectedPhaseKey);
+    const phaseDir = entries.find(entry => entry.isDirectory() && phaseKeyFromDir(entry.name, validateConvention, directoryContext) === selectedPhaseKey);
     if (!phaseDir) {
       warnings.push(stateDiagnostic(
         'S004',
@@ -6863,6 +7017,7 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
   // write branch can surface it identically.
   const existingSyncFm = extractFrontmatter(content, statePath) as Record<string, unknown>;
   const syncFrontmatterWasUnparseable = isUnparseableFrontmatter(existingSyncFm);
+  let directoryContext = phaseDirectoryOptions(cwd, undefined, '');
   const changes: string[] = [];
   let modified = content;
 
@@ -6885,8 +7040,9 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
     const roadmapRaw = platformReadSync(path.join(planningDir(cwd), 'ROADMAP.md'));
     if (roadmapRaw !== null) {
       syncRoadmapRaw = roadmapRaw;
+      directoryContext = {...directoryContext, roadmap: roadmapRaw};
       syncRoadmapScope = extractCurrentMilestone(roadmapRaw, cwd);
-      syncRetiredPhaseNums = extractRetiredPhaseNumbers(syncRoadmapScope, syncConvention);
+      syncRetiredPhaseNums = extractRetiredPhaseNumbers(syncRoadmapScope, syncConvention, directoryContext);
     }
   } catch { /* fall through: no roadmap scope → no retired exclusion */ }
 
@@ -6924,7 +7080,7 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
     entries = fs.readdirSync(phasesDir, { withFileTypes: true })
       .filter(e => e.isDirectory())
       .map(e => e.name)
-      .filter(name => !(syncRetiredPhaseNums.size > 0 && syncRetiredPhaseNums.has(phaseKeyFromDir(name, syncConvention))))
+      .filter(name => !(syncRetiredPhaseNums.size > 0 && syncRetiredPhaseNums.has(phaseKeyFromDir(name, syncConvention, directoryContext))))
       .filter(name => syncMilestonePhaseDirs === null || syncMilestonePhaseDirs.has(name))
       .sort();
   } catch {
@@ -6992,7 +7148,7 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
   // pre-existing legacy sync behavior while #3185 remains the read-path owner.
   let syncTotalPhases: number | null = null;
   const roadmapPhaseCount = syncRoadmapScope !== null
-    ? countRoadmapPhaseHeadings(syncRoadmapScope, syncConvention, syncRetiredPhaseNums, syncConvention === 'bracket')
+    ? countRoadmapPhaseHeadings(syncRoadmapScope, syncConvention, syncRetiredPhaseNums, syncConvention === 'bracket', directoryContext)
     : 0;
   if (roadmapPhaseCount > 0) {
     syncTotalPhases = Math.max(entries.length, roadmapPhaseCount);
@@ -7129,7 +7285,7 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): v
   const body = stripFrontmatter(rawState);
   // Prune needs an integer cutoff, so it parses the resolved id itself; a
   // non-numeric or absent id lands on 0 and prune bails, as before.
-  const currentPhase = parseInt(String(resolveCurrentPhaseId(fm, body, resolvePhaseIdConvention(cwd))), 10) || 0;
+  const currentPhase = parseInt(String(resolveCurrentPhaseId(fm, body, resolvePhaseIdConvention(cwd), phaseDirectoryOptions(cwd))), 10) || 0;
   const cutoff = currentPhase - keepRecent;
 
   if (cutoff <= 0) {
@@ -7370,7 +7526,7 @@ function cmdStateRebuild(cwd: string, options: StateRebuildOptions, raw: boolean
  * that the phase execution is finished and the project is ready for the next phase.
  * Implements the `gsd state complete-phase` subcommand (issue #2735).
  */
-function resolvePhaseIdForCompletePhase(fm: Record<string, unknown>, body: string, overridePhase: string | undefined): string | null {
+function resolvePhaseIdForCompletePhase(fm: Record<string, unknown>, body: string, overridePhase: string | undefined, directoryContext: PhaseDirectoryContext): string | null {
   // #3187: route through the single #1760 fallback-chain owner (fm scalar
   // then body field) instead of two raw stateExtractField calls on
   // frontmatter-blind content — a STATE.md whose phase lives only in
@@ -7389,7 +7545,7 @@ function resolvePhaseIdForCompletePhase(fm: Record<string, unknown>, body: strin
   // "Phase 0.5 complete". A canonical token at the start of the value
   // (3, 03, 3A, 3.3, 10.2, "3 of 5", "1 — Setup") is preserved; a milestone
   // closure line yields null, so the caller's "unable to resolve" guard fires.
-  return parsePhaseFromProse(candidate).phase;
+  return parsePhaseFromProse(candidate, undefined, directoryContext).phase;
 }
 
 /**
@@ -7444,7 +7600,8 @@ function cmdStateCompletePhase(cwd: string, raw: boolean, overridePhase?: string
     return;
   }
 
-  const resolvedPhase = resolvePhaseIdForCompletePhase(fm, body, overridePhase);
+  const directoryContext = phaseDirectoryOptions(cwd);
+  const resolvedPhase = resolvePhaseIdForCompletePhase(fm, body, overridePhase, directoryContext);
   if (!resolvedPhase || /^phase$/i.test(resolvedPhase)) {
     output({ error: 'Unable to resolve current phase. Pass an explicit phase: state complete-phase --phase <N>' }, raw, undefined);
     return;
@@ -7462,7 +7619,7 @@ function cmdStateCompletePhase(cwd: string, raw: boolean, overridePhase?: string
   const existingCurrentPhaseRaw = stateFieldValue(fm, body, 'current_phase', 'Current Phase').value || '';
   // #2125: same canonical parser as resolvePhaseIdForCompletePhase so the two
   // sites cannot diverge on the token they extract.
-  const existingCurrentPhase = parsePhaseFromProse(existingCurrentPhaseRaw).phase;
+  const existingCurrentPhase = parsePhaseFromProse(existingCurrentPhaseRaw, undefined, directoryContext).phase;
   if (existingCurrentPhase && existingCurrentPhase !== resolvedPhase) {
     output(
       { updated: [], phase: resolvedPhase, idempotent: true, note: 'phase already superseded; no-op' },
@@ -7501,6 +7658,7 @@ function cmdStateCompletePhase(cwd: string, raw: boolean, overridePhase?: string
 
   const wrote = readModifyWriteStateMd(statePath, (content) => {
     const currentPhase = resolvedPhase;
+    const currentPhaseDisplay = phaseDisplayFor(cwd, currentPhase);
 
     // Bug #1255: operate on body only so the YAML frontmatter `status:` key
     // cannot shadow the body Status field (pipe-table or inline).
@@ -7529,7 +7687,7 @@ function cmdStateCompletePhase(cwd: string, raw: boolean, overridePhase?: string
     if (result) { body = result; updated.push({ kind: 'field', name: 'Last Activity' }); }
 
     // Update Last Activity Description
-    const activityDesc = `Phase ${currentPhase} marked complete`;
+    const activityDesc = `${currentPhaseDisplay} marked complete`;
     result = stateReplaceField(body, 'Last Activity Description', activityDesc);
     if (result) { body = result; updated.push({ kind: 'field', name: 'Last Activity Description' }); }
 
@@ -7572,13 +7730,13 @@ function cmdStateCompletePhase(cwd: string, raw: boolean, overridePhase?: string
         }
 
         // Update Last activity line if present
-        const newActivity = `Last activity: ${today} — Phase ${currentPhase} marked complete`;
+        const newActivity = `Last activity: ${today} — ${currentPhaseDisplay} marked complete`;
         if (/^Last activity:/im.test(posBody)) {
           posBody = posBody.replace(/^Last activity:.*$/im, newActivity);
         } else {
           // Pipe-table format in Current Position (#1255)
           // Value must match the inline branch (date + narrative), not bare date.
-          const activityValue = `${today} — Phase ${currentPhase} marked complete`;
+          const activityValue = `${today} — ${currentPhaseDisplay} marked complete`;
           const replaced = stateReplaceField(posBody, 'Last Activity', activityValue)
             ?? stateReplaceField(posBody, 'Last activity', activityValue);
           if (replaced !== null) posBody = replaced;
@@ -7695,6 +7853,9 @@ export = {
   cmdStateBeginPhase,
   cmdStatePlannedPhase,
   cmdStateCompletePhase,
+  // #4304: the canonical write-path current-phase ladder, read by the bracket
+  // `phase remove` refusal before it deletes or renumbers that phase.
+  resolveCurrentPhaseId,
   cmdStateValidate,
   cmdStateSync,
   cmdStatePrune,

@@ -610,7 +610,7 @@ describe('regressions', () => {
     });
 
     // ── Matrix rows 18-21: io's export surface must not move (Hyrum) ─────────
-    test('io still exports both json-error-mode accessors and an unchanged ERROR_REASON', () => {
+    test('io exports both json-error-mode accessors and the complete ERROR_REASON registry', () => {
       const seen = readJsonFromChild([
         `const io = require(${JSON.stringify(IO_PATH)});`,
         `process.stdout.write(JSON.stringify({`,
@@ -620,6 +620,7 @@ describe('regressions', () => {
         `  frozen: Object.isFrozen(io.ERROR_REASON),`,
         `  reasonCount: Object.keys(io.ERROR_REASON).length,`,
         `  keys: Object.keys(io.ERROR_REASON).sort(),`,
+        `  phaseReasons: [io.ERROR_REASON.PHASE_ID_COLLISION, io.ERROR_REASON.AMBIGUOUS_PHASE_OWNER, io.ERROR_REASON.PHASE_NAMING_NOT_CUSTOM],`,
         `}));`,
       ]);
       assert.strictEqual(seen.setter, 'function');
@@ -642,7 +643,21 @@ describe('regressions', () => {
       // #5118 legitimately added a 27th code — VERIFICATION_STATUS_INVALID —
       // for a *-VERIFICATION.md status outside the closed VerificationStatus
       // set (ADR-5057 Phase 4), the same kind of documented growth.
-      assert.strictEqual(seen.reasonCount, 27, 'ERROR_REASON must keep all 27 members (26 + #5118 VERIFICATION_STATUS_INVALID)');
+      // #5186 adds typed phase collision, ambiguous-owner and naming refusals.
+      // Keep all previous members while checking the three intentional additions.
+      assert.strictEqual(seen.reasonCount, 30);
+      assert.deepEqual(seen.keys, [
+        'CONFIG_KEY_NOT_FOUND', 'CONFIG_NO_FILE', 'CONFIG_PARSE_FAILED', 'CONFIG_INVALID_KEY',
+        'SDK_FAIL_FAST', 'SDK_UNKNOWN_COMMAND', 'SDK_MISSING_ARG', 'PHASE_NOT_FOUND',
+        'PHASE_VERIFICATION_INCOMPLETE', 'PHASE_PLAN_COVERAGE_INCOMPLETE', 'SUMMARY_NO_PLANNING',
+        'WORKSTREAM_MODE_NONE_ACTIVE', 'WORKSTREAM_MODE_MARKER_UNRESOLVED',
+        'GRAPHIFY_NO_GRAPH', 'GRAPHIFY_INVALID_QUERY', 'ESTIMATE_PHASES_UNREADABLE',
+        'HOOKS_OPT_OUT', 'COMMIT_DOCS_GUARD_NOT_A_REPO', 'COMMIT_DOCS_GUARD_FOREIGN_HOOK',
+        'COMMIT_DOCS_GUARD_HOOKS_PATH_SET', 'SECURITY_SCAN_FAILED', 'PICK_FIELD_ABSENT',
+        'PICK_OUTPUT_NOT_JSON', 'SUMMARY_EXTRACT_UNPARSEABLE', 'VERIFICATION_STATUS_INVALID',
+        'USAGE', 'UNKNOWN', 'PHASE_ID_COLLISION', 'AMBIGUOUS_PHASE_OWNER', 'PHASE_NAMING_NOT_CUSTOM',
+      ].sort());
+      assert.deepEqual(seen.phaseReasons, ['phase_id_collision', 'ambiguous_phase_owner', 'phase_naming_not_custom']);
       assert.ok(
         seen.keys.includes('SDK_FAIL_FAST'),
         `ERROR_REASON must still include SDK_FAIL_FAST, got: ${JSON.stringify(seen.keys)}`,

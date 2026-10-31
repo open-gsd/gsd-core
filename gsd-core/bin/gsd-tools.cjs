@@ -4604,7 +4604,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // #1956: deterministic STATE.md-vs-ROADMAP.md phase-status drift.
             const { planningDir } = require('./lib/planning-workspace.cjs');
             const { stateExtractField, stateCurrentPositionSlice } = require('./lib/state-document.cjs');
-            const { findRoadmapProgressTable } = require('./lib/roadmap-parser.cjs');
+            const { locateRoadmapProgress } = require('./lib/roadmap-progress.cjs');
             const { phaseKeyFromProse } = require('./lib/phase-id.cjs');
             // STATE.md's YAML frontmatter carries its own lowercase `status:`
             // scalar ahead of the body's `## Current Position` prose "Status:"
@@ -4702,9 +4702,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
             const stateStatus = stateExtractField(currentPositionBody, 'Status');
 
-            // #1956/#2012: scoped to `## Progress` first (decoy-avoidance) —
-            // see findRoadmapProgressTable's doc comment (roadmap-parser.cts).
-            const table = findRoadmapProgressTable(roadmapContent);
+            // #1956/#2012: scoped to `## Progress` first (decoy-avoidance) — the
+            // Progress owner's rule (roadmap-progress.cts), shared with every reader and writer (#5762).
+            const { table } = locateRoadmapProgress(roadmapContent);
             const matchedRow = table
               ? table.rows.find((row) => phaseKeyFromProse(row.Phase) === phase && phase !== null)
               : undefined;

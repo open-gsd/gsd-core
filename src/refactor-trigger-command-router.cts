@@ -68,7 +68,7 @@ const { routeHubCommandFamily } = cjsCommandRouterAdapter;
 const { isCapabilityActive } = capabilityStateMod;
 const { resolveConfigKey } = capabilityActivationMod;
 const { loadConfig } = configLoaderMod;
-const { findPhaseInternal, listMilestonePhaseDirs } = phaseLocatorMod;
+const { phaseDirectoryOptions, findPhaseInternal, listMilestonePhaseDirs } = phaseLocatorMod;
 const { planningDir } = planningWorkspaceMod;
 
 const CAPABILITY_ID = 'refactor-trigger';
@@ -214,7 +214,7 @@ interface ResolvedPhase {
  * REFACTOR_GIT_UNAVAILABLE, for this case.
  */
 function resolvePhaseDirForArg(cwd: string, phaseArg: string): ResolvedPhase | null {
-  const search = findPhaseInternal(cwd, phaseArg);
+  const search = findPhaseInternal(cwd, phaseArg, undefined, phaseDirectoryOptions(cwd));
   if (!search || search.found !== true) return null;
   return { phaseDir: search.directory, padded: search.phase_number };
 }

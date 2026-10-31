@@ -7,7 +7,8 @@
  * already answers:
  *   - `planning-workspace.cjs`'s `planningPaths` for every `.planning/` path
  *     (workstream-aware — never re-derived here).
- *   - `phase-lifecycle.cjs`'s `locateProgressTable` (this issue's Edit 1) for
+ *   - `roadmap-progress.cjs`'s `locateRoadmapProgress` (#5761; was
+ *     `phase-lifecycle`'s `locateProgressTable`) for
  *     "where is the Progress table" — the SAME table
  *     `deriveProgressFromRoadmap` counts from, so `phases[]` and
  *     `deriveProgressFromRoadmap`'s `totalPhases` can never disagree about
@@ -72,6 +73,7 @@ import fs from 'node:fs';
 // documented `state.cjs -> state-contract.cjs -> smart-entry.cjs -> state.cjs`
 // require cycle the file header warns about.
 import { WIRE_STATUS, parseRoadmapStatusCell } from './phase-status.cjs';
+import { PHASE_ENTRY_BOLD_CLOSE_SRC, phaseEntryRegExp } from './phase-entry-grammar.cjs';
 
 // ─── Public wire vocabulary ────────────────────────────────────────────────
 
@@ -132,7 +134,7 @@ interface Owners {
   planningPaths: typeof import('./planning-workspace.cjs')['planningPaths'];
   platformReadSync: typeof import('./shell-command-projection.cjs')['platformReadSync'];
   platformWriteSync: typeof import('./shell-command-projection.cjs')['platformWriteSync'];
-  locateProgressTable: typeof import('./phase-lifecycle.cjs')['locateProgressTable'];
+  locateRoadmapProgress: typeof import('./roadmap-progress.cjs')['locateRoadmapProgress'];
   isSentinelPhaseId: typeof import('./phase-id.cjs')['isSentinelPhaseId'];
   parsePhaseFromProse: typeof import('./phase-id.cjs')['parsePhaseFromProse'];
   resolvePhaseIdConvention: typeof import('./planning-workspace.cjs')['resolvePhaseIdConvention'];
@@ -158,7 +160,7 @@ function owners(): Owners {
   /* eslint-disable @typescript-eslint/no-require-imports */
   const planningWorkspaceMod = require('./planning-workspace.cjs') as typeof import('./planning-workspace.cjs');
   const shellCommandProjectionMod = require('./shell-command-projection.cjs') as typeof import('./shell-command-projection.cjs');
-  const phaseLifecycleMod = require('./phase-lifecycle.cjs') as typeof import('./phase-lifecycle.cjs');
+  const roadmapProgressMod = require('./roadmap-progress.cjs') as typeof import('./roadmap-progress.cjs');
   const phaseIdMod = require('./phase-id.cjs') as typeof import('./phase-id.cjs');
   const roadmapParserMod = require('./roadmap-parser.cjs') as typeof import('./roadmap-parser.cjs');
   const markdownSectionizerMod = require('./markdown-sectionizer.cjs') as typeof import('./markdown-sectionizer.cjs');
@@ -170,7 +172,7 @@ function owners(): Owners {
     planningPaths: planningWorkspaceMod.planningPaths,
     platformReadSync: shellCommandProjectionMod.platformReadSync,
     platformWriteSync: shellCommandProjectionMod.platformWriteSync,
-    locateProgressTable: phaseLifecycleMod.locateProgressTable,
+    locateRoadmapProgress: roadmapProgressMod.locateRoadmapProgress,
     isSentinelPhaseId: phaseIdMod.isSentinelPhaseId,
     parsePhaseFromProse: phaseIdMod.parsePhaseFromProse,
     resolvePhaseIdConvention: planningWorkspaceMod.resolvePhaseIdConvention,
@@ -239,9 +241,19 @@ function phasesFromProgressTable(
 // ─── phases: `## Phases` checkbox fallback ─────────────────────────────────
 
 // `- [x] **Phase 1: Foundation**` / `- [ ] **Phase 2.1: Hardening**`.
-const PHASE_BULLET_RE = /^[ \t]*[-*][ \t]+\[([ xX])\][ \t]+\*\*Phase[ \t]+(\d+(?:\.\d+)*)[ \t]*:?[ \t]*([^*\n]*)\*\*/gm;
+// The entry prefix (marker, box, bold token) is the phase-entry grammar's (#5764): capture
+// group 1 is the box character, 2 the number, 3 the name.
+const PHASE_BULLET_RE = phaseEntryRegExp(
+  `Phase[ \\t]+(\\d+(?:\\.\\d+)*)[ \\t]*:?[ \\t]*([^*\\n]*)${PHASE_ENTRY_BOLD_CLOSE_SRC}`,
+  'g',
+  { state: 'captured', bold: 'required' },
+);
 // #5626: the same bullet under `milestone-prefixed`: the number capture takes one optional `-NN` segment.
-const PHASE_BULLET_MILESTONE_RE = /^[ \t]*[-*][ \t]+\[([ xX])\][ \t]+\*\*Phase[ \t]+(\d+(?:-\d+)?(?:\.\d+)*)[ \t]*:?[ \t]*([^*\n]*)\*\*/gm;
+const PHASE_BULLET_MILESTONE_RE = phaseEntryRegExp(
+  `Phase[ \\t]+(\\d+(?:-\\d+)?(?:\\.\\d+)*)[ \\t]*:?[ \\t]*([^*\\n]*)${PHASE_ENTRY_BOLD_CLOSE_SRC}`,
+  'g',
+  { state: 'captured', bold: 'required' },
+);
 
 /**
  * STATE.md's current phase, via the same frontmatter-then-body chain
@@ -304,14 +316,14 @@ function phasesFromChecklist(
 }
 
 function buildPhases(cwd: string, paths: { roadmap: string; state: string }): StateContractPhase[] {
-  const { platformReadSync, locateProgressTable } = owners();
+  const { platformReadSync, locateRoadmapProgress } = owners();
   try {
     let content = platformReadSync(paths.roadmap);
     if (content === null) return [];
     if (content.charCodeAt(0) === 0xfeff) content = content.slice(1); // strip leading BOM
 
     const convention = phaseIdConventionOf(cwd);
-    const table = locateProgressTable(content);
+    const { table } = locateRoadmapProgress(content);
     if (table) return phasesFromProgressTable(table, convention);
     return phasesFromChecklist(content, cwd, paths.state, convention);
   } catch {

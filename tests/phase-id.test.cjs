@@ -1696,3 +1696,50 @@ describe('parsePhaseFromProse: the planned-phase status phrase is not a name (#5
   });
 });
 
+
+// ─── bracket phase-number grammar parity (#5528) ─────────────────────────────
+// The bracket roadmap grammar lives in two owners: the heading scan and the declaration scans
+// (buildPhaseDeclarationScans) built on it. One generated phase must read back identically through
+// both. Directories are covered end to end by the allocation property in tests/phase.test.cjs.
+describe('bracket phase declarations agree across heading and bullet spellings (#5528)', () => {
+  const declared = (text) => {
+    const out = [];
+    for (const { regex, idGroup, numGroup } of phaseId.buildPhaseDeclarationScans('bracket')) {
+      regex.lastIndex = 0;
+      let m;
+      while ((m = regex.exec(text)) !== null) out.push([m[idGroup].toUpperCase(), parseInt(m[numGroup], 10)]);
+    }
+    return out;
+  };
+  test('property: id and number round-trip through every spelling', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom('GSD', 'P', 'AB1'), fc.integer({ min: 1, max: 99 }), fc.integer({ min: 1, max: 998 }),
+        (code, mm, n) => {
+          const id = `${code}.${String(mm).padStart(2, '0')}`;
+          const nn = String(n).padStart(2, '0');
+          const spellings = [`### [${id}] ${nn}: x`, `### Phase [${id}] ${nn}: x`, `- [ ] **[${id}] ${nn}: x**`, `- [${id}] ${nn}: x`];
+          for (const text of spellings) {
+            const hits = declared(text);
+            assert.ok(hits.length > 0 && hits.every(([i, num]) => i === id && num === n), text);
+          }
+          // The heading owner (`buildPhaseHeadingScanRegex`) read on its own agrees with the declaration scans it feeds.
+          const heading = phaseId.buildPhaseHeadingScanRegex(phaseId.PHASE_HEADING_BASELINE.LABEL_ONLY, 'bracket');
+          const hm = heading.regex.exec(`### [${id}] ${nn}: x`);
+          heading.regex.lastIndex = 0;
+          assert.ok(hm, `heading scan reads ### [${id}] ${nn}`);
+          assert.strictEqual(hm[heading.bracketGroup].toUpperCase(), id);
+          assert.strictEqual(parseInt(hm[heading.phaseNumGroup], 10), n);
+          // ...and a dash-separated `###` heading reads back the same id and number.
+          assert.ok(declared(`### [${id}] ${nn} - x`).some(([i, num]) => i === id && num === n), `### [${id}] ${nn} - x`);
+        },
+      ),
+      { numRuns: 100, seed: 5528 },
+    );
+  });
+
+  test('a ## milestone heading with a dash is a milestone, not a phase', () => {
+    assert.deepStrictEqual(declared('## [CK.02] 2 - Foundation'), []);
+    assert.deepStrictEqual(declared('## [CK.02] 2 — Foundation'), []);
+  });
+});

@@ -59,14 +59,158 @@ function classifyRunConclusion(payload) {
   return VERDICT.RED;
 }
 
+// Run statuses that mean "an attempt is still going". A run object reports the
+// state of its LATEST attempt only, so a re-run of a red run reads as
+// in-flight with no trace of the failure it is re-running.
+const IN_FLIGHT_STATUSES = new Set(['queued', 'in_progress', 'waiting', 'requested', 'pending']);
+
+function isInFlight(run) {
+  return Boolean(run) && IN_FLIGHT_STATUSES.has(run.status);
+}
+
+/**
+ * Pure, total: the "list workflow runs" payload (newest first, ANY status) ->
+ * the verdict, the run it rests on, and why. Never throws.
+ *
+ * A completed newest run is judged by classifyRunConclusion. An in-flight
+ * newest run is never read as healthy on its own:
+ *  - a re-run (`run_attempt` > 1) whose previous attempt did not succeed is RED
+ *    — the fetcher attaches that attempt's conclusion as
+ *    `previous_attempt_conclusion`, because the list endpoint cannot show it;
+ *  - otherwise the newest SETTLED run decides (red stays RED, green is CLEAN).
+ * This is what stops a mid-flight re-run from hiding the failure it re-runs
+ * (2026-10-27: it let #5755 and #5750 through behind a red `next`).
+ *
+ * @returns {{verdict:string, run:(object|null), reason:string}}
+ */
+function classifyBaseRuns(payload) {
+  if (payload === null || typeof payload !== 'object' || !Array.isArray(payload.workflow_runs)) {
+    return { verdict: VERDICT.INDETERMINATE, run: null, reason: 'malformed-payload' };
+  }
+  const runs = payload.workflow_runs;
+  if (runs.length === 0) return { verdict: VERDICT.CLEAN, run: null, reason: 'resolved' };
+
+  const [newest] = runs;
+  if (!isInFlight(newest)) {
+    return {
+      verdict: classifyRunConclusion({ workflow_runs: [newest] }),
+      run: newest,
+      reason: 'resolved',
+    };
+  }
+
+  const prior = newest.previous_attempt_conclusion;
+  if (typeof prior === 'string' && prior !== '' && prior !== 'success') {
+    return { verdict: VERDICT.RED, run: newest, reason: 'rerun-in-flight-after-failure' };
+  }
+  // A re-run of an attempt that succeeded: the newest evidence is green, so an
+  // older red run must not turn the gate red.
+  if (prior === 'success') {
+    return { verdict: VERDICT.CLEAN, run: newest, reason: 'rerun-in-flight-after-success' };
+  }
+
+  const settled = runs.find((run) => !isInFlight(run));
+  if (!settled) return { verdict: VERDICT.CLEAN, run: null, reason: 'newest-in-flight-no-history' };
+  return {
+    verdict: classifyRunConclusion({ workflow_runs: [settled] }),
+    run: settled,
+    reason: 'newest-in-flight',
+  };
+}
+
+// merge_group heads are `gh-readonly-queue/<base>/pr-<N>-<40-hex sha>`; the
+// name carries only the LAST PR of the group.
+const QUEUE_REF_PATTERN = /^(?:refs\/heads\/)?gh-readonly-queue\/(.+)\/pr-(\d+)-[0-9a-f]{40}$/;
+
+/** @returns {{base:string, prNumber:number}|null} */
+function parseQueueRef(ref) {
+  if (typeof ref !== 'string') return null;
+  const match = QUEUE_REF_PATTERN.exec(ref.trim());
+  if (!match) return null;
+  return { base: match[1], prNumber: Number(match[2]) };
+}
+
+// Repository permissions that may apply the bypass label. `maintain` is
+// reported as `write` by this endpoint's legacy `permission` field; both are
+// accepted so a role-name change cannot silently lock the bypass out.
+const BYPASS_PERMISSIONS = new Set(['admin', 'maintain', 'write']);
+const EVENT_PAGES_MAX = 10;
+
+/**
+ * merge_group has no label surface, so read it back from the API. The bypass
+ * is honoured only when ALL hold, and every failure is "not authorized" (RED),
+ * never fail-open:
+ *  1. the ref names a PR and the group holds exactly that one commit — a group
+ *     of several PRs would let one labelled PR carry unlabelled ones;
+ *  2. the PR currently carries the label;
+ *  3. the actor of the label's latest `labeled` event has write or admin
+ *     permission (triage-role users can apply labels).
+ *
+ * `ghGet(path)` returns parsed JSON or throws.
+ *
+ * @returns {Promise<{authorized:boolean, reason:string, actor?:string, prNumber?:number}>}
+ */
+async function evaluateQueueBypass({ headRef, baseRef, baseSha, headSha, repo, ghGet } = {}) {
+  const parsed = parseQueueRef(headRef);
+  if (!parsed) return { authorized: false, reason: 'queue-ref-unparseable' };
+  // The queue branch must be for the branch whose health is being judged.
+  if (typeof baseRef === 'string' && baseRef !== '' && parsed.base !== baseRef) {
+    return { authorized: false, reason: 'queue-base-mismatch', prNumber: parsed.prNumber };
+  }
+  const { prNumber } = parsed;
+  if (!baseSha || !headSha) return { authorized: false, reason: 'no-group-shas', prNumber };
+
+  try {
+    const compare = await ghGet(`/repos/${repo}/compare/${baseSha}...${headSha}`);
+    if (!compare || compare.total_commits !== 1) {
+      return { authorized: false, reason: 'multi-pr-group', prNumber };
+    }
+
+    const labels = await ghGet(`/repos/${repo}/issues/${prNumber}/labels?per_page=100`);
+    const hasLabel = Array.isArray(labels) && labels.some((l) => l && l.name === BYPASS_LABEL);
+    if (!hasLabel) return { authorized: false, reason: 'no-label', prNumber };
+
+    let actor = null;
+    let exhausted = false;
+    for (let page = 1; page <= EVENT_PAGES_MAX; page += 1) {
+      const events = await ghGet(`/repos/${repo}/issues/${prNumber}/events?per_page=100&page=${page}`);
+      if (!Array.isArray(events)) break;
+      for (const event of events) {
+        if (event && event.event === 'labeled' && event.label && event.label.name === BYPASS_LABEL) {
+          actor = event.actor && typeof event.actor.login === 'string' ? event.actor.login : null;
+        }
+      }
+      if (events.length < 100) break;
+      if (page === EVENT_PAGES_MAX) exhausted = true;
+    }
+    // More events than we read: the latest `labeled` event may be unseen, so
+    // the applier is unknown. Fail closed.
+    if (exhausted) return { authorized: false, reason: 'label-applier-unknown', prNumber };
+    if (!actor) return { authorized: false, reason: 'label-applier-unknown', prNumber };
+
+    const perm = await ghGet(`/repos/${repo}/collaborators/${encodeURIComponent(actor)}/permission`);
+    const level = perm && typeof perm.permission === 'string' ? perm.permission : '';
+    if (!BYPASS_PERMISSIONS.has(level)) {
+      return { authorized: false, reason: 'label-applier-lacks-write', actor, prNumber };
+    }
+    return { authorized: true, reason: 'queue-label', actor, prNumber };
+  } catch (err) {
+    return { authorized: false, reason: `bypass-check-failed: ${err.message}`, prNumber };
+  }
+}
+
 /**
  * Dependency-injected orchestrator. `fetchLatestRun` is an async function
  * taking the resolved base branch name and returning the parsed API payload
  * (or throwing) — injected so tests never touch the network.
+ * `evaluateQueueBypass` (merge_group only) is an async function returning
+ * `{authorized, reason, actor}`; it is how a queued fix-forward is recognised.
  *
  * @returns {Promise<{verdict:string, payload:*, reason:string}>}
  */
-async function resolveNextHealth({ fetchLatestRun, eventName, baseRef, labels } = {}) {
+async function resolveNextHealth({
+  fetchLatestRun, eventName, baseRef, labels, evaluateQueueBypass: queueBypass,
+} = {}) {
   if (!APPLICABLE_EVENTS.has(eventName)) {
     return { verdict: VERDICT.SKIPPED_NOT_APPLICABLE, payload: null, reason: 'not-applicable-event' };
   }
@@ -82,23 +226,46 @@ async function resolveNextHealth({ fetchLatestRun, eventName, baseRef, labels } 
     return { verdict: VERDICT.INDETERMINATE, payload: null, reason: `fetch-failed: ${err.message}` };
   }
 
-  const classified = classifyRunConclusion(payload);
-  if (classified !== VERDICT.RED) {
-    return { verdict: classified, payload, reason: 'resolved' };
+  const assessed = classifyBaseRuns(payload);
+  // The run the verdict rests on, so annotations link the red run and not the
+  // in-flight re-run that sits in front of it.
+  const evidence = assessed.run ? { workflow_runs: [assessed.run] } : payload;
+  if (assessed.verdict !== VERDICT.RED) {
+    const reason = assessed.reason === 'resolved' ? 'resolved' : assessed.reason;
+    return { verdict: assessed.verdict, payload: evidence, reason };
   }
 
-  // Escape hatch. `labels` is empty/absent for merge_group — that event has no
-  // label surface today, which means a queued merge-group commit cannot use
-  // this bypass. Known gap, not solved here: a maintainer must land the
-  // fix-forward as a direct pull_request merge (where the label IS readable)
-  // rather than through the merge queue, until GitHub exposes an equivalent
-  // signal for merge_group.
+  // Escape hatch for the PR that is itself the fix-forward. pull_request runs
+  // read the label from the event (`labels`). merge_group events carry no
+  // labels, so the queue run asks the API instead (evaluateQueueBypass).
   const labelList = Array.isArray(labels) ? labels : [];
   if (labelList.includes(BYPASS_LABEL)) {
-    return { verdict: VERDICT.BYPASSED, payload, reason: 'bypass-label' };
+    return { verdict: VERDICT.BYPASSED, payload: evidence, reason: 'bypass-label' };
   }
 
-  return { verdict: VERDICT.RED, payload, reason: 'red' };
+  if (eventName === 'merge_group' && typeof queueBypass === 'function') {
+    let decision;
+    try {
+      decision = await queueBypass();
+    } catch (err) {
+      decision = { authorized: false, reason: `bypass-check-failed: ${err.message}` };
+    }
+    if (decision && decision.authorized) {
+      return {
+        verdict: VERDICT.BYPASSED,
+        payload: evidence,
+        reason: decision.reason || 'queue-label',
+        actor: decision.actor,
+      };
+    }
+    return {
+      verdict: VERDICT.RED,
+      payload: evidence,
+      reason: `${assessed.reason === 'resolved' ? 'red' : assessed.reason}; bypass: ${decision && decision.reason}`,
+    };
+  }
+
+  return { verdict: VERDICT.RED, payload: evidence, reason: assessed.reason === 'resolved' ? 'red' : assessed.reason };
 }
 
 function usage() {
@@ -108,9 +275,15 @@ function usage() {
     '',
     'CI-only gate: checks whether the PR/merge-group\'s base branch\'s own last',
     'push-triggered Tests run is red, and fails the job (exit 1) when it is —',
-    'unless the PR carries the "fix-next" bypass label. Every other case',
-    '(wrong event, no resolvable base ref, an unreadable API read) fails open',
-    '(exit 0).',
+    'unless the PR carries the "fix-next" bypass label. A push run that is',
+    'still in flight (including a re-run of a failed run) never counts as',
+    'healthy: a re-run whose previous attempt failed is RED, otherwise the',
+    'newest settled run decides. Every other case (wrong event, no',
+    'resolvable base ref, an unreadable API read) fails open (exit 0).',
+    '',
+    'On merge_group the label is read back from the API: the queue ref must',
+    'name a PR, the group must hold exactly one commit, the PR must carry the',
+    'label, and whoever applied it must have write or admin permission.',
     '',
     'Environment variables read:',
     '  GITHUB_EVENT_NAME     workflow trigger event; only "pull_request" and',
@@ -128,6 +301,12 @@ function usage() {
     '                        the caller workflow must populate this from',
     '                        github.event.pull_request.labels.*.name); checked',
     '                        for the literal "fix-next" bypass label',
+    '  MERGE_GROUP_HEAD_REF  merge-group queue branch',
+    '                        (github.event.merge_group.head_ref; falls back to',
+    '                        GITHUB_REF)',
+    '  MERGE_GROUP_BASE_SHA  merge-group base sha (github.event.merge_group.base_sha)',
+    '  MERGE_GROUP_HEAD_SHA  merge-group head sha (github.event.merge_group.head_sha;',
+    '                        falls back to GITHUB_SHA)',
     '  GITHUB_OUTPUT         path to append verdict= step output to',
     '  GITHUB_STEP_SUMMARY   path to append a human-readable summary to',
   ].join('\n');
@@ -200,9 +379,10 @@ async function main(argv = process.argv.slice(2)) {
   const baseRef = resolveBaseRef(eventName);
   const labels = parseLabels(process.env.PR_LABELS);
 
-  const fetchLatestRun = async (branch) => {
-    const url = `${apiBase}/repos/${repo}/actions/workflows/${TESTS_WORKFLOW_FILE}/runs`
-      + `?branch=${encodeURIComponent(branch)}&event=push&status=completed&per_page=1`;
+  // JSON GET against the API. `path` is either absolute-from-root (starts with
+  // `/`) or a full URL. Returns parsed JSON (null if the body is not JSON).
+  const ghGet = async (pathOrUrl) => {
+    const url = pathOrUrl.startsWith('http') ? pathOrUrl : `${apiBase}${pathOrUrl}`;
     const headers = {
       accept: 'application/vnd.github+json',
       'x-github-api-version': '2022-11-28',
@@ -221,26 +401,66 @@ async function main(argv = process.argv.slice(2)) {
     }
   };
 
-  const result = await resolveNextHealth({ fetchLatestRun, eventName, baseRef, labels });
+  // No `status=completed` filter: an in-flight re-run must be visible so it
+  // cannot hide the failure it is re-running (see classifyBaseRuns).
+  const fetchLatestRun = async (branch) => {
+    const payload = await ghGet(
+      `/repos/${repo}/actions/workflows/${TESTS_WORKFLOW_FILE}/runs`
+      + `?branch=${encodeURIComponent(branch)}&event=push&per_page=5`,
+    );
+    const newest = payload && Array.isArray(payload.workflow_runs) ? payload.workflow_runs[0] : undefined;
+    if (isInFlight(newest) && Number(newest.run_attempt) > 1) {
+      // The list shows only the latest attempt; the previous one holds the
+      // failure being re-run. An API error here propagates -> INDETERMINATE.
+      // If this read fails we cannot show the re-run is not hiding a failure,
+      // and failing open here would reopen the hole this closes: treat an
+      // unreadable previous attempt as not-success (RED).
+      try {
+        const previous = await ghGet(
+          `/repos/${repo}/actions/runs/${newest.id}/attempts/${Number(newest.run_attempt) - 1}`,
+        );
+        newest.previous_attempt_conclusion = previous && typeof previous.conclusion === 'string'
+          ? previous.conclusion : 'unknown';
+      } catch {
+        newest.previous_attempt_conclusion = 'unknown';
+      }
+    }
+    return payload;
+  };
+
+  const evaluateQueue = () => evaluateQueueBypass({
+    headRef: process.env.MERGE_GROUP_HEAD_REF || process.env.GITHUB_REF || '',
+    baseRef,
+    baseSha: process.env.MERGE_GROUP_BASE_SHA || '',
+    headSha: process.env.MERGE_GROUP_HEAD_SHA || process.env.GITHUB_SHA || '',
+    repo,
+    ghGet,
+  });
+
+  const result = await resolveNextHealth({
+    fetchLatestRun, eventName, baseRef, labels, evaluateQueueBypass: evaluateQueue,
+  });
 
   writeOutput([`verdict=${result.verdict}`]);
-  writeSummary(`Base branch health: ${result.verdict}`);
+  writeSummary(`Base branch health: ${result.verdict}${result.reason ? ` (${result.reason})` : ''}`);
 
   if (result.verdict === VERDICT.RED) {
     const runUrl = runUrlOf(result.payload);
     process.stderr.write(
-      `::error::the base branch "${baseRef}"'s own last Tests run is red: ${runUrl} — `
+      `::error::the base branch "${baseRef}"'s own last Tests run is red or still re-running after a failure: ${runUrl} (${result.reason}) — `
       + 'wait for a fix-forward merge, or if THIS pull request is the fix, ask a '
-      + `maintainer to apply the "${BYPASS_LABEL}" label to explicitly override this gate.\n`,
+      + `maintainer with write access to apply the "${BYPASS_LABEL}" label and re-queue it `
+      + '(the queue run reads the label from the API; it must be the only PR in its merge group).\n',
     );
     return 1;
   }
 
   if (result.verdict === VERDICT.BYPASSED) {
     const runUrl = runUrlOf(result.payload);
+    const by = result.actor ? ` (label applied by ${result.actor})` : '';
     process.stderr.write(
       `::warning::the base branch "${baseRef}"'s own last Tests run is red: ${runUrl} — `
-      + `a human applied the "${BYPASS_LABEL}" label to explicitly override this gate.\n`,
+      + `a human applied the "${BYPASS_LABEL}" label to explicitly override this gate${by}.\n`,
     );
     return 0;
   }
@@ -266,6 +486,9 @@ module.exports = {
   BYPASS_LABEL,
   TESTS_WORKFLOW_FILE,
   classifyRunConclusion,
+  classifyBaseRuns,
+  parseQueueRef,
+  evaluateQueueBypass,
   resolveNextHealth,
   main,
 };

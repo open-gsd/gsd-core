@@ -18,6 +18,7 @@ import fs from 'node:fs';
 // at load time and become un-mockable.
 import childProcess from 'node:child_process';
 import { escapeRegex } from './pattern.cjs';
+import { scanFencedBlocks } from './markdown-sectionizer.cjs';
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 import { matchLines, writeScope, type WriteScope } from './markdown-line-diff.cjs';
 import { hostBehaviorsFor } from './runtime-name-policy.cjs';
@@ -1151,6 +1152,12 @@ export function probeTty(opts: { platform?: string } = {}): string | null {
 
 // ─── Platform file I/O ────────────────────────────────────────────────────────
 
+export interface ContentNormalizationOptions {
+  encoding?: BufferEncoding;
+  /** Bracket ROADMAP writers preserve heading/list-shaped fenced examples. */
+  preserveFencedMarkdownStructure?: boolean;
+}
+
 /**
  * How many leading lines of LF-only `text` are its closed YAML frontmatter block (opening
  * fence through closing fence), or 0 when there is none (an unterminated block is not
@@ -1171,7 +1178,7 @@ function withoutBom(line: string | undefined): string {
   return line !== undefined && line.charCodeAt(0) === 0xFEFF ? line.slice(1) : (line ?? '');
 }
 
-function _normalizeMd(content: string, prior?: string): string {
+function _normalizeMd(content: string, prior?: string, preserveFencedStructure = false): string {
   if (!content || typeof content !== 'string') return content;
   let text = content.replace(/\r\n/g, '\n');
   const lines = text.split('\n');
@@ -1200,6 +1207,7 @@ function _normalizeMd(content: string, prior?: string): string {
   };
   const fenceRegex = /^```/;
   const insideFence = new Array<boolean>(lines.length);
+  const insideSharedFence = new Array<boolean>(lines.length).fill(false);
   let fenceOpen = false;
   for (let i = 0; i < lines.length; i++) {
     if (i < frontmatterLines) {
@@ -1218,6 +1226,12 @@ function _normalizeMd(content: string, prior?: string): string {
       insideFence[i] = fenceOpen;
     }
   }
+  if (preserveFencedStructure) {
+    for (const block of scanFencedBlocks(lines)) {
+      const end = block.closeLineIdx === -1 ? lines.length : block.closeLineIdx;
+      for (let i = block.openLineIdx + 1; i < end; i++) insideSharedFence[i] = true;
+    }
+  }
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (i < frontmatterLines) {
@@ -1228,6 +1242,8 @@ function _normalizeMd(content: string, prior?: string): string {
     const prevTrimmed = prev.trimEnd();
     const trimmed = line.trimEnd();
     const isFenceLine = fenceRegex.test(trimmed);
+    // Bracket writers preserve literal headings and lists inside fenced examples.
+    const normalizeStructuralLine = !preserveFencedStructure || !insideSharedFence[i];
     // A heading or fence line the write authored brings its own separation, even
     // where it replaced a prose line in place (#5165). One that replaced a heading
     // or fence (a rename, a renumber) inherits the spacing around it instead.
@@ -1239,7 +1255,7 @@ function _normalizeMd(content: string, prior?: string): string {
     const keptAfter = scope !== null && !authoredStructure && i < lines.length - 1 && scope.junctionKept(i);
     // A blank-line run is collapsed only where the write made it (#5165).
     if (scope !== null && line === '' && result.length > 0 && result[result.length - 1] === '' && !keptBefore) continue;
-    if (/^#{1,6}\s/.test(trimmed) && i > 0 && prevTrimmed !== '' && prevTrimmed !== '---' && !keptBefore) blank();
+    if (normalizeStructuralLine && /^#{1,6}\s/.test(trimmed) && i > 0 && prevTrimmed !== '' && prevTrimmed !== '---' && !keptBefore) blank();
     if (isFenceLine && i > 0 && prevTrimmed !== '' && !insideFence[i] && (i === 0 || !insideFence[i - 1] || isFenceLine) && !keptBefore) {
       if (i === 0 || !insideFence[i - 1]) blank();
     }
@@ -1253,9 +1269,9 @@ function _normalizeMd(content: string, prior?: string): string {
     // from the after-heading rule below. The after-a-bullet rule at the end
     // of this loop is a different transition (list→prose) and is unaffected.
     result.push(line);
-    if (/^#{1,6}\s/.test(trimmed) && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '' && !keptAfter) blank();
+    if (normalizeStructuralLine && /^#{1,6}\s/.test(trimmed) && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '' && !keptAfter) blank();
     if (/^```\s*$/.test(trimmed) && i > 0 && insideFence[i - 1] && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '' && !keptAfter) blank();
-    if (/^(\s*[-*+]\s|\s*\d+\.\s)/.test(line) && i < lines.length - 1 && !keptAfter) {
+    if (normalizeStructuralLine && /^(\s*[-*+]\s|\s*\d+\.\s)/.test(line) && i < lines.length - 1 && !keptAfter) {
       const next = lines[i + 1];
       if (next !== undefined && next.trimEnd() !== '' && !/^(\s*[-*+]\s|\s*\d+\.\s)/.test(next) && !/^\s/.test(next)) blank();
     }
@@ -1278,8 +1294,7 @@ function _normalizeMd(content: string, prior?: string): string {
  * author line by line (#5113: `phase.add` added a blank line to an unrelated heading). Such a caller
  * owns the spacing and line endings of what it inserts.
  */
-export interface PlatformWriteOptions {
-  encoding?: BufferEncoding;
+export interface PlatformWriteOptions extends ContentNormalizationOptions {
   verbatim?: boolean;
   /**
    * The Markdown document this write replaces (#5165). When given, normalization
@@ -1297,7 +1312,7 @@ export function normalizeContent(filePath: string, content: string, opts: Platfo
   const isMd = path.extname(filePath).toLowerCase() === '.md';
   let normalized: string;
   if (isMd) {
-    normalized = _normalizeMd(content, opts.prior);
+    normalized = _normalizeMd(content, opts.prior, opts.preserveFencedMarkdownStructure === true);
   } else {
     normalized = (content ?? '').replace(/\r\n/g, '\n').replace(/\n*$/, '\n');
   }
@@ -1318,8 +1333,13 @@ export function normalizeContent(filePath: string, content: string, opts: Platfo
  * post-write re-read of the actual on-disk bytes) instead of a raw `!==` —
  * do not simplify this back to a direct string comparison.
  */
-export function contentChangedAfterNormalize(filePath: string, before: string, after: string): boolean {
-  return normalizeContent(filePath, after, { prior: before }).content !== normalizeContent(filePath, before, { prior: before }).content;
+export function contentChangedAfterNormalize(
+  filePath: string,
+  before: string,
+  after: string,
+  opts: ContentNormalizationOptions = {},
+): boolean {
+  return normalizeContent(filePath, after, { ...opts, prior: before }).content !== normalizeContent(filePath, before, { ...opts, prior: before }).content;
 }
 
 // Rename errnos that are transient on Windows: a concurrent reader (or an AV

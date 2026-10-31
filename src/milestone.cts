@@ -20,7 +20,7 @@ import { realClock } from './clock.cjs';
 import { transitionCore } from './state-transition.cjs';
 import { writeSetComplete } from './write-set.cjs';
 import type { WriteSet } from './write-set.cjs';
-import { updateTableCell, resetQuickTaskRows, QUICK_TASKS_SECTION_ABSENT } from './markdown-table.cjs';
+import { updateTraceabilityCell, resetQuickTaskRows, QUICK_TASKS_SECTION_ABSENT } from './markdown-table.cjs';
 import { requireSafePath, PathAcceptance, type ContainedPath } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- audit.cjs is an export= CommonJS module
 import auditMod = require('./audit.cjs');
@@ -36,7 +36,7 @@ import stateContract = require('./state-contract.cjs');
 const { publishStateContract } = stateContract;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { normalizePhaseName, matchPhaseDirs, isSentinelPhaseId, isSentinelPhaseDir, buildPhaseHeadingScanRegex, PHASE_HEADING_BASELINE } = phaseIdMod;
+const { isSentinelPhaseId, isSentinelPhaseDir, buildPhaseHeadingScanRegex, PHASE_HEADING_BASELINE } = phaseIdMod;
 import { escapeRegex } from './pattern.cjs';
 import {
   loadReleaseMapFile,
@@ -64,7 +64,7 @@ import planScanMod = require('./plan-scan.cjs');
 const { scanPhasePlans } = planScanMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
 import phaseLocatorMod = require('./phase-locator.cjs');
-const { listMilestonePhaseDirs } = phaseLocatorMod;
+const { phaseDirectoryOptions, listMilestonePhaseDirs, resolvePhaseDirectoryLookup, matchPhaseDirsForLookup } = phaseLocatorMod;
 const { planningPaths, resolvePhaseIdConvention } = planningWorkspace;
 const { extractFrontmatter } = frontmatterMod;
 // ADR-3408 §8.3 / #3469: `writeStateMd` gets sync and NO preservation — the
@@ -110,49 +110,6 @@ interface MilestoneCompleteOptions {
   // `<version>-RELEASE-MAP.json` and rendered into the MILESTONES.md entry.
   // Absent, the command's output and on-disk effects are unchanged.
   releaseMap?: string | null;
-}
-
-/**
- * Scope an `updateTableCell` call to the `## Traceability` (or
- * `## Traceability Status`) heading's own section — up to the next H1/H2
- * heading — instead of handing it the WHOLE REQUIREMENTS.md content.
- *
- * F1 (#2245 review, BLOCKER): `updateTableCell` binds to the FIRST GFM table
- * found in whatever text it is given. The shipped requirements template
- * (gsd-core/templates/requirements.md) puts an `## Out of Scope` table
- * (`| Feature | Reason |`, no `Status` column) BEFORE `## Traceability` — so
- * an unscoped whole-file call targets the Out-of-Scope table instead, fails
- * with `{ok:false, reason:'unknown column: Status'}`, and the real
- * Traceability row is never flipped, while the checkbox surface still flips
- * and the command reports success (the #2140 silent-divergence class one
- * level deeper). Mirrors phase.cts's `editProgressHeadingSlice` scoping of
- * `## Progress` writes to that heading's own slice.
- *
- * Falls back to running `updateTableCell` against the whole `text` when no
- * `## Traceability` heading exists — matching the previous (unscoped)
- * behaviour for a REQUIREMENTS.md whose traceability table sits under some
- * other heading, or with no heading at all (never worse than before this fix).
- */
-function updateTraceabilityCell(
-  text: string,
-  match: (row: Record<string, string>, index: number) => boolean,
-  column: string,
-  newValue: string | ((current: string) => string),
-): ReturnType<typeof updateTableCell> {
-  const headingMatch = text.match(/^##[ \t]+Traceability(?:[ \t]+Status)?\b/im);
-  if (!headingMatch || headingMatch.index === undefined) {
-    return updateTableCell(text, match, column, newValue);
-  }
-  const headingOffset = headingMatch.index;
-  const before = text.slice(0, headingOffset);
-  const fromHeading = text.slice(headingOffset);
-  const nextHeadingOffset = fromHeading.search(/\n#{1,2}[ \t]/);
-  const scoped = nextHeadingOffset >= 0 ? fromHeading.slice(0, nextHeadingOffset) : fromHeading;
-  const after = nextHeadingOffset >= 0 ? fromHeading.slice(nextHeadingOffset) : '';
-
-  const result = updateTableCell(scoped, match, column, newValue);
-  if (!result.ok) return result;
-  return { ok: true, value: before + result.value + after };
 }
 
 function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: boolean): void {
@@ -682,7 +639,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   // `platformEnsureDir(archiveDir)` below — a refused run (scope not COMPLETE,
   // no --force) must be a true no-op on disk, and creating the archive
   // directory first left an empty directory behind even on refusal.
-  const isDirInMilestone = getMilestonePhaseFilter(cwd, version);
+  const isDirInMilestone = getMilestonePhaseFilter(cwd, version, undefined, undefined, phaseDirectoryOptions(cwd));
   if (isDirInMilestone.missingExplicitVersion) {
     error(`no phases found for milestone ${version} in ROADMAP.md`);
   }
@@ -709,6 +666,11 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
         `cannot be trusted for this destructive operation. Re-run with --force to override.`,
     );
   }
+
+  // #2761/#4304: resolve once for every phase-directory consumer in this
+  // command. The matcher opts in only for bracket; the milestone enumerator
+  // retains the full resolved value it already accepted.
+  const phaseConvention = resolvePhaseIdConvention(cwd);
 
   // Guard: prevent marking complete when ROADMAP still lists phases that have
   // no directory on disk (disk_status: no_directory). This catches the case
@@ -792,9 +754,9 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
       // properly-scaffolded bracket phase reads as disk_status: 'no_directory'
       // — turning a real bracket project's own phases into false "ROADMAP
       // lists N unstarted phase(s)" failures on `milestone complete`.
-      const convention = resolvePhaseIdConvention(cwd);
+      const directoryContext = phaseDirectoryOptions(cwd, undefined, scopedContent);
       const { regex: phasePattern, phaseNumGroup } = buildPhaseHeadingScanRegex(
-        PHASE_HEADING_BASELINE.ANY_BRACKET, convention,
+        PHASE_HEADING_BASELINE.ANY_BRACKET, phaseConvention, directoryContext,
       );
       const noDirectoryPhases: string[] = [];
       let pm: RegExpExecArray | null;
@@ -817,12 +779,14 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
         // the #1445 /^999/ progress filters). (#1580)
         // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this local check already covered both 0 and 999; now delegates to the single canonical owner.
         if (isSentinelPhaseId(phaseNum)) continue;
-        const normalized = normalizePhaseName(phaseNum);
+        const lookup = resolvePhaseDirectoryLookup(cwd, phaseNum, undefined, directoryContext);
         // A phase has disk_status: 'no_directory' when no phase directory
         // with a matching token exists on disk. Use the same matchPhaseDirs
         // owner that roadmap.analyze uses to avoid false positives on decimal
-        // (2.1) and letter-suffix (12A) phase IDs. (#2528)
-        const hasDirectory = matchPhaseDirs(phaseDirEntries, normalized, convention).matches.length > 0;
+        // (2.1) and letter-suffix (12A) phase IDs. (#2528) Under #4304 the
+        // current checkout's bracket convention and migration-window legacy
+        // fallback are both owned by the shared lookup adapter.
+        const hasDirectory = matchPhaseDirsForLookup(phaseDirEntries, lookup, undefined, directoryContext).matches.length > 0;
         if (!hasDirectory) {
           noDirectoryPhases.push(phaseNum);
         }
@@ -853,7 +817,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   let totalTasks = 0;
   const accomplishments: string[] = [];
 
-  // #2761 (round-11 BLOCKER): resolved ONCE, ambiently (no explicit `ws` —
+  // #2761: resolved ONCE above, ambiently (no explicit `ws` —
   // this function has none of its own and already resolves everything else
   // off `cwd` via planningPaths(cwd), matching the ambient-workstream
   // contract `resolvePhaseIdConvention`/`planningDir` share), and threaded
@@ -868,8 +832,6 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   // the silent-inherit path without changing behavior for `null` /
   // `milestone-prefixed` projects, whose resolved convention is the same
   // value `undefined` would have lazily produced anyway.
-  const phaseConvention = resolvePhaseIdConvention(cwd);
-
   // #3597 (ADR-3180 Decision 2): SINGLE resolution of "which phase
   // directories belong to the current milestone" AND the SCOPE discriminator
   // that resolution came from — shared verbatim by the read-only stats loop

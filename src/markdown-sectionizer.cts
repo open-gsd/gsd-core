@@ -71,6 +71,15 @@ export interface CollectSectionOptions {
   stripFences?: boolean;
 }
 
+/** Options specific to `deleteSection`; legacy callers omit `endOffset`. */
+export interface DeleteSectionOptions extends CollectSectionOptions {
+  /**
+   * Maximum exclusive character offset for the deleted range. The ordinary
+   * heading-level boundary still applies, and the earlier boundary wins.
+   */
+  endOffset?: number;
+}
+
 /** Recognised bullet markers. */
 export type BulletMarker = 'dash' | 'checkbox-unchecked' | 'checkbox-checked' | 'numbered';
 
@@ -1197,6 +1206,50 @@ export function withSection(
   return replaceSection(content, section, newBody);
 }
 
+// ─── heading slices (byte-exact writable window) ──────────────────────────────
+
+/** Character range `[start, end)` of one heading's writable slice. */
+export interface HeadingSliceRange {
+  /** Offset of the heading's `#`. */
+  start: number;
+  /** Exclusive end: the next heading of level <= `maxLevel`, or the end of the content. */
+  end: number;
+}
+
+/**
+ * Range of the slice that starts at `headings[index]` and runs to the next
+ * heading of level <= `maxLevel` (fence-aware: `headings` comes from
+ * `tokenizeHeadings`). Unlike `collectSection` it keeps the heading line and
+ * every trailing byte, so a caller that edits the slice can splice it back
+ * byte-exact (#5762).
+ */
+export function headingSliceRange(
+  content: string,
+  headings: HeadingToken[],
+  index: number,
+  maxLevel = 2,
+): HeadingSliceRange {
+  const next = headings.slice(index + 1).find((h) => h.level <= maxLevel);
+  return { start: headings[index].offset, end: next ? next.offset : content.length };
+}
+
+/**
+ * Run `edit` on `content.slice(range.start, end)` and splice the result back,
+ * where `end` excludes the single newline that precedes the next heading — the
+ * slice the pre-owner writers cut with `search(/\n#{1,2}[ \t]/)` — so a row
+ * inserted at the end of a table keeps the blank line before that heading.
+ */
+export function editHeadingSlice(
+  content: string,
+  range: HeadingSliceRange,
+  edit: (slice: string) => string,
+): string {
+  const end = range.end < content.length && range.end > range.start && content[range.end - 1] === '\n'
+    ? range.end - 1
+    : range.end;
+  return content.slice(0, range.start) + edit(content.slice(range.start, end)) + content.slice(end);
+}
+
 // ─── deleteSection ────────────────────────────────────────────────────────────
 
 /**
@@ -1228,13 +1281,15 @@ export function withSection(
  * double-blank gap accumulates where the section used to sit. Content
  * elsewhere in the document is never touched.
  *
+ * `endOffset` adds an optional caller-owned maximum boundary. It never widens
+ * the heading-level range, and callers that omit it retain the legacy bytes.
  * Returns `content` unchanged when no heading matches `headingPredicate`
  * (bounded no-op, mirroring `withSection`'s miss behaviour).
  */
 export function deleteSection(
   content: string,
   headingPredicate: (heading: HeadingToken) => boolean,
-  opts: CollectSectionOptions = {},
+  opts: DeleteSectionOptions = {},
 ): string {
   if (typeof content !== 'string') return content;
 
@@ -1273,7 +1328,12 @@ export function deleteSection(
   const eofOffset = acc;
 
   const sectionStart = lineOffsets[target.line - 1]; // start of the target heading LINE itself
-  const sectionEnd = stopLine <= lines.length ? lineOffsets[stopLine - 1] : eofOffset;
+  const headingBoundedEnd = stopLine <= lines.length ? lineOffsets[stopLine - 1] : eofOffset;
+  const explicitEnd = typeof opts.endOffset === 'number' && Number.isFinite(opts.endOffset)
+    ? Math.max(0, Math.min(content.length, opts.endOffset))
+    : headingBoundedEnd;
+  const sectionEnd = Math.min(headingBoundedEnd, explicitEnd);
+  if (sectionEnd <= sectionStart) return content;
 
   const before = content.slice(0, sectionStart);
   const after = content.slice(sectionEnd);

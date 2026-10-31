@@ -1313,7 +1313,40 @@ function withAmbientCapabilityHome(t, prefix, id, point) {
   return home;
 }
 
-module.exports = { runGsdTools, homeSandboxEnv, seedConfigSection, createTempDir, createTempProject, createTempGitProject, cleanup, tmpRootCandidates, readFileNormalized, readWorkflowCombined, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, absPlanningPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, SESSION_ENV_KEYS, saveSessionEnv, restoreSessionEnv, clearSessionEnv, isolateWorkstreamEnv, restoreWorkstreamEnv, TOOLS_PATH, SESSION_IDENTITY_ENV_KEYS, scrubConfigLocationEnv, installSpawnEnv, installSpawnHome, sandboxHome, writePackageSourceMarkerFixture, writeAmbientCapabilityGate, withAmbientCapabilityHome, TEST_HOME_SANDBOX_MARKER, mockPartialWriteThenThrow, captureFdSync, suppressFdAsync };
+/** Shared custom-phase projects for the CLI reader and mutation contracts. */
+function createCustomPhaseProject(projectCode = null, phaseNaming = 'custom', roadmap = '# Roadmap\n\n## Milestone v1.0: Test\n\n## Phases\n') {
+  const cwd = fs.realpathSync(createTempProject());
+  fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), JSON.stringify({phase_naming: phaseNaming, project_code: projectCode}));
+  fs.writeFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), roadmap);
+  return cwd;
+}
+
+function runCustomPhaseCommand(cwd, args) {
+  const result = runGsdTools(args, cwd, homeSandboxEnv(cwd));
+  require('node:assert/strict').equal(result.success, true, result.error || result.output);
+  return JSON.parse(result.output);
+}
+
+function addCustomPhase(cwd, id, title = 'Boundary', projectCode = null) {
+  runCustomPhaseCommand(cwd, ['query', 'phase.add', title, '--id', id]);
+  // Fixture titles use word/space text. Keep the expected shape independent of
+  // production slug code; add literal cases here when punctuation is exercised.
+  const slug = title.toLowerCase().replaceAll(' ', '-').slice(0, 60);
+  const directory = `.planning/phases/${projectCode ? `${projectCode}-` : ''}${id}-${slug}`;
+  require('node:assert/strict').ok(fs.statSync(path.join(cwd, directory)).isDirectory());
+  return directory;
+}
+
+/** Existing installations can contain IDs that today's writers rightly refuse. */
+function seedCustomPhaseDirectory(cwd, id, title, projectCode = null) {
+  const directory = `.planning/phases/${projectCode ? `${projectCode}-` : ''}${id}-${title.toLowerCase().replaceAll(' ', '-')}`;
+  fs.mkdirSync(path.join(cwd, directory));
+  fs.writeFileSync(path.join(cwd, directory, '.phase-id'), id);
+  fs.appendFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), `\n### Phase ${id}: ${title}\n`);
+  return directory;
+}
+
+module.exports = { createCustomPhaseProject, runCustomPhaseCommand, addCustomPhase, seedCustomPhaseDirectory, runGsdTools, homeSandboxEnv, seedConfigSection, createTempDir, createTempProject, createTempGitProject, cleanup, tmpRootCandidates, readFileNormalized, readWorkflowCombined, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, absPlanningPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, SESSION_ENV_KEYS, saveSessionEnv, restoreSessionEnv, clearSessionEnv, isolateWorkstreamEnv, restoreWorkstreamEnv, TOOLS_PATH, SESSION_IDENTITY_ENV_KEYS, scrubConfigLocationEnv, installSpawnEnv, installSpawnHome, sandboxHome, writePackageSourceMarkerFixture, writeAmbientCapabilityGate, withAmbientCapabilityHome, TEST_HOME_SANDBOX_MARKER, mockPartialWriteThenThrow, captureFdSync, suppressFdAsync };
 
 // Lazy, for the reason builtLib() is lazy: reading either of these is what
 // forces the built-lib require, so a test file that needs neither can still
