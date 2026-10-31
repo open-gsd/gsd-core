@@ -441,6 +441,8 @@ const DOCS_GUARD_TESTS = {
   // is absent from the generated inventory manifest.
   'tests/verify-lifecycle-writes-e2e.test.cjs': ['docs/INVENTORY-MANIFEST.json'],
   'tests/workflow-fragments.test.cjs': ['docs/reference/workflow-fragments.md'],
+  // #4853: asserts workflow-backend-dispatch.md manifest creation block matches execute-phase.md verbatim
+  'tests/worktree-cleanup.test.cjs': ['capabilities/claude-orchestration/docs/workflow-backend-dispatch.md'],
 };
 
 /**
