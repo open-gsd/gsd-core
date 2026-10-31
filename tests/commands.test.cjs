@@ -15,6 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { runGsdTools, createTempProject, createTempDir, cleanup } = require('./helpers.cjs');
+const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { gitOrThrow, throwIfFailed } = require('./helpers/git-fixture.cjs');
@@ -841,6 +842,29 @@ describe('todo complete command', () => {
     assert.ok(!result.success, 'dry-run must still run existence checks');
     assert.ok(result.error.includes('not found'), 'error mentions not found');
   });
+
+  for (const flag of ['---dry-run', '--5', '--', '-1', '-']) {
+    test(`refuses unknown dash-led token ${JSON.stringify(flag)} without moving the todo`, () => {
+      const pendingDir = path.join(tmpDir, '.planning', 'todos', 'pending');
+      fs.mkdirSync(pendingDir, { recursive: true });
+      const source = path.join(pendingDir, 'dash-token-probe.md');
+      fs.writeFileSync(source, '---\ntitle: probe\nstatus: pending\n---\n\n# body\n');
+
+      const result = runGsdTools(['todo', 'complete', 'dash-token-probe.md', flag, '--json-errors'], tmpDir);
+      assert.equal(result.success, false);
+      assert.deepEqual(JSON.parse(result.error), {
+        ok: false,
+        reason: ERROR_REASON.USAGE,
+        message: `Unknown flag for todo complete: ${flag}`,
+      });
+      assert.equal(fs.existsSync(source), true, 'refused token must leave the pending todo in place');
+      assert.equal(
+        fs.existsSync(path.join(tmpDir, '.planning', 'todos', 'completed', 'dash-token-probe.md')),
+        false,
+        'refused token must not create a completed todo',
+      );
+    });
+  }
 
   test('writes completed and status: completed inside the frontmatter fence', () => {
     const pendingDir = path.join(tmpDir, '.planning', 'todos', 'pending');

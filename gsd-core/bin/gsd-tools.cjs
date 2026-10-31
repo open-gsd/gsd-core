@@ -787,7 +787,33 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     cmdGitBaseBranch(cwd, args.slice(2));
   }
 
+  function isConfigNewProjectFlagToken(arg) {
+    // This JSON-valued verb deliberately keeps negative numbers and bare separators
+    // available to its positional parser.
+    return typeof arg === 'string' && /^--?[A-Za-z]/.test(arg);
+  }
+
+  function isClosedWorldFlagToken(arg) {
+    // Closed mutation verbs accept no dash-led positional values. Refuse typo
+    // shapes such as ---dry-run, --5, --, -1 and - before any write occurs.
+    return typeof arg === 'string' && arg.startsWith('-');
+  }
+
+  function rejectUnknownFlags(args, knownFlags, verb) {
+    for (const arg of args) {
+      if (isClosedWorldFlagToken(arg) && !knownFlags.has(arg)) {
+        error(`Unknown flag for ${verb}: ${arg}`, ERROR_REASON.USAGE);
+      }
+    }
+  }
+
+  function rejectUnknownConfigMutationFlags(args) {
+    // #5286: reject before dispatch or positional selection; main removes --raw.
+    rejectUnknownFlags(args.slice(1), new Set(['--raw']), args[0]);
+  }
+
   function routeConfigEnsureSection({ args, cwd, raw }) {
+    rejectUnknownConfigMutationFlags(args);
     const handled = _dispatchNonFamily({
       registryCommand: 'config-ensure-section',
       registryArgs: args.slice(1),
@@ -816,6 +842,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeConfigSetModelProfile({ args, cwd, raw }) {
+    rejectUnknownConfigMutationFlags(args);
     const handled = _dispatchNonFamily({
       registryCommand: 'config-set-model-profile',
       registryArgs: args.slice(1),
@@ -870,7 +897,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     const CONFIG_NEW_PROJECT_KNOWN_FLAGS = new Set(['--dry-run', '--raw']);
     const positionals = [];
     for (const a of args.slice(1)) {
-      if (typeof a === 'string' && /^--?[A-Za-z]/.test(a)) {
+      if (isConfigNewProjectFlagToken(a)) {
         if (!CONFIG_NEW_PROJECT_KNOWN_FLAGS.has(a)) {
           error(`Unknown flag for config-new-project: ${a}`, ERROR_REASON.USAGE);
         }
@@ -888,7 +915,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     config.cmdConfigPath(cwd, raw, workstreamContext);
   }
 
-  async function routeMigrateConfig({ cwd, raw }) {
+  async function routeMigrateConfig({ args, cwd, raw }) {
+    rejectUnknownConfigMutationFlags(args);
     await config.cmdMigrateConfig(cwd, raw);
   }
 
@@ -3294,11 +3322,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // the dispatcher before routing; it stays in the set as a guard
             // against that splice ever moving.)
             const TODO_COMPLETE_KNOWN_FLAGS = new Set(['--dry-run', '--raw']);
-            for (const a of args.slice(3)) {
-              if (typeof a === 'string' && a.startsWith('-') && !TODO_COMPLETE_KNOWN_FLAGS.has(a)) {
-                error(`Unknown flag for todo complete: ${a}`, ERROR_REASON.USAGE);
-              }
-            }
+            rejectUnknownFlags(args.slice(3), TODO_COMPLETE_KNOWN_FLAGS, 'todo complete');
             commands.cmdTodoComplete(cwd, args[2], { dryRun: args.includes('--dry-run') }, raw);
           } else if (subcommand === 'match-phase') {
             commands.cmdTodoMatchPhase(cwd, args[2], raw);

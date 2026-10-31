@@ -679,6 +679,9 @@ node gsd-tools.cjs config-get <key>
 # Set model profile
 node gsd-tools.cjs config-set-model-profile <profile>
 
+# Migrate legacy config keys to their canonical names
+node gsd-tools.cjs migrate-config
+
 # Create config.json for a new project from the chosen settings
 node gsd-tools.cjs config-new-project '<choices-json>' [--dry-run]
 ```
@@ -728,6 +731,12 @@ so a refused choice, malformed JSON included, fails even when `config.json` alre
 with valid choices and an existing `config.json`, the command reports `already_exists` and
 leaves it untouched. The user defaults file is read only to build a new config, so a problem in
 it is not reported when the config already exists.
+
+`config-ensure-section`, `config-set-model-profile`, and `migrate-config` accept
+`--raw` but do not support `--dry-run`. They reject unsupported flags with a
+usage error before writing, including flags before the profile argument. The
+same contract applies with the `query` prefix. `config-set --dry-run` supports
+previewing an individual value change without writing.
 
 ---
 
