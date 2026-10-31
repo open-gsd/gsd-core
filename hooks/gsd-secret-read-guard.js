@@ -1075,31 +1075,77 @@ function curlValueNamesSecret(text) {
 // find's actions that run the words after them, up to `;` (or `+` after
 // `{}`), as a command. bfs takes find's actions.
 const FIND_EXEC_ACTIONS = new Set(['-exec', '-execdir', '-ok', '-okdir']);
-const FIND_COMMANDS = new Set(['find', 'bfs']);
+const FIND_COMMANDS = new Set(['find', 'find.exe', 'bfs']);
 const XARGS_COMMANDS = new Set(['xargs', 'xargs.exe']);
 
-// Commands whose documented job is to run another command given as their
-// operands or as an option's value (`fd -x`), or an applet (`busybox xargs`),
-// other than the wrappers resolveCommand unwraps and xargs/find, whose command
-// position is read exactly. Their options and subcommands (`op run --`, `uv
-// run`) differ per command, so under them curl's arguments start after the
-// first operand whose last segment is curl, as for every command before
-// #5779's review narrowed the rule to commands that run curl.
-const CURL_WORD_LAUNCHERS = new Set([
-  // process, scheduling and namespace runners
-  'watch', 'ionice', 'taskset', 'chrt', 'flock', 'nsenter', 'unshare', 'chroot',
-  'runuser', 'setpriv', 'systemd-run', 'systemd-inhibit', 'prlimit', 'numactl',
-  'cpulimit', 'setarch', 'arch', 'caffeinate', 'sandbox-exec', 'chpst', 'tini',
-  'dumb-init', 'faketime', 'eatmydata', 'unbuffer', 'catchsegv', 'xvfb-run',
-  // tracers, debuggers and profilers
-  'strace', 'ltrace', 'valgrind', 'gdb', 'perf',
-  // job runners and file-event runners
-  'parallel', 'sem', 'entr', 'fd', 'fdfind', 'busybox',
-  // network wrappers
-  'torsocks', 'torify', 'proxychains', 'proxychains4', 'trickle', 'firejail',
-  // environment, secret and package runners
-  'dotenv', 'dotenvx', 'op', 'doppler', 'infisical', 'aws-vault', 'direnv',
-  'uv', 'poetry', 'pipenv', 'npx', 'pnpm', 'bunx', 'bundle', 'nix',
+// Commands whose documented job is to run another command, other than the
+// wrappers resolveCommand unwraps and xargs/find, whose command position is
+// read exactly. Their options differ per command, so under them curl's
+// arguments start after the first operand whose last segment is curl, as for
+// every command before #5779's review narrowed the rule to commands that run
+// curl. A command that runs one only through a subcommand or an option
+// (`uv run`, `kubectl exec`, `fd -x`) names those words, and a curl word
+// counts only after one of them: `uv pip install curl …` runs no curl.
+const CURL_WORD_LAUNCHERS = new Map([
+  // Run their operands as a command.
+  ...[
+    // process, scheduling, privilege and namespace runners
+    'watch', 'ionice', 'taskset', 'chrt', 'flock', 'nsenter', 'unshare', 'chroot',
+    'runuser', 'setpriv', 'pkexec', 'run0', 'gosu', 'su-exec', 'systemd-run',
+    'systemd-inhibit', 'systemd-nspawn', 'bwrap', 'flatpak-spawn', 'prlimit',
+    'numactl', 'cpulimit', 'setarch', 'arch', 'caffeinate', 'sandbox-exec', 'chpst',
+    'tini', 'dumb-init', 'faketime', 'eatmydata', 'unbuffer', 'chronic',
+    'catchsegv', 'xvfb-run', 'wsl', 'wsl.exe', 'wine',
+    // tracers, debuggers and profilers
+    'strace', 'ltrace', 'valgrind', 'heaptrack',
+    // job runners and file-event runners
+    'parallel', 'sem', 'entr', 'busybox',
+    // network wrappers
+    'torsocks', 'torify', 'tsocks', 'proxychains', 'proxychains4', 'trickle',
+    'firejail',
+    // package runners that take the command as their operands
+    'npx', 'bunx', 'uvx',
+  ].map((name) => [name, null]),
+  // Run a command only after one of these words.
+  ['gdb', new Set(['--args', '-args'])],
+  ['perf', new Set(['record', 'stat', 'trace'])],
+  ['rr', new Set(['record'])],
+  ['fd', new Set(['-x', '--exec', '-X', '--exec-batch'])],
+  ['fdfind', new Set(['-x', '--exec', '-X', '--exec-batch'])],
+  ['pueue', new Set(['add'])],
+  ['scl', new Set(['enable'])],
+  ['toolbox', new Set(['run'])],
+  ['distrobox', new Set(['enter'])],
+  ['docker', new Set(['exec', 'run'])],
+  ['podman', new Set(['exec', 'run'])],
+  ['kubectl', new Set(['exec'])],
+  ['oc', new Set(['exec'])],
+  ['dotenv', new Set(['run', '--'])],
+  ['dotenvx', new Set(['run'])],
+  ['op', new Set(['run'])],
+  ['doppler', new Set(['run'])],
+  ['infisical', new Set(['run'])],
+  ['aws-vault', new Set(['exec'])],
+  ['direnv', new Set(['exec'])],
+  ['mise', new Set(['exec', 'x'])],
+  ['asdf', new Set(['exec'])],
+  ['npm', new Set(['exec', 'x'])],
+  ['pnpm', new Set(['exec', 'dlx'])],
+  ['yarn', new Set(['exec', 'dlx'])],
+  ['bun', new Set(['x'])],
+  ['uv', new Set(['run'])],
+  ['poetry', new Set(['run'])],
+  ['pipenv', new Set(['run'])],
+  ['pdm', new Set(['run'])],
+  ['hatch', new Set(['run'])],
+  ['rye', new Set(['run'])],
+  ['pixi', new Set(['run', 'exec'])],
+  ['pipx', new Set(['run'])],
+  ['conda', new Set(['run'])],
+  ['mamba', new Set(['run'])],
+  ['micromamba', new Set(['run'])],
+  ['bundle', new Set(['exec'])],
+  ['nix', new Set(['run', 'shell', 'develop'])],
 ]);
 
 // Which operands curl takes as its arguments (#5779): every one when curl is
@@ -1107,10 +1153,11 @@ const CURL_WORD_LAUNCHERS = new Set([
 // command — xargs's sub-command, or the command of a find -exec / -execdir /
 // -ok / -okdir action, each past the wrappers resolveCommand unwraps
 // (`xargs sudo curl …`) — and, under a CURL_WORD_LAUNCHERS command, those
-// after its first curl word (`watch -n 5 curl …`). Only those operands get
-// curl's value reading. A
-// `curl` word anywhere else is an operand (`grep curl …`, `apt-get install
-// curl …`), so the words after it are judged as before.
+// after its first curl word (`watch -n 5 curl …`), or after the first curl
+// word past the word it runs a command by (`uv run curl …`). Only those
+// operands get curl's value reading. A `curl` word anywhere else is an operand
+// (`grep curl …`, `apt-get install curl …`), so the words after it are judged
+// as before.
 function curlArguments(base, operands) {
   const marks = new Uint8Array(operands.length);
   markCurlArguments(base, operands, 0, operands.length, marks, 0);
@@ -1130,9 +1177,14 @@ function markCurlArguments(base, words, from, to, marks, depth) {
     const sub = xargsCommandIndex(words, from, to);
     if (sub !== -1) markLaunchedCurl(words, sub, to, marks, depth + 1);
   } else if (CURL_WORD_LAUNCHERS.has(base)) {
-    // Options differ per launcher, so the command is the first curl word.
+    // Options differ per launcher, so the command is the first curl word,
+    // after the subcommand or option, if any, that the launcher runs it by.
+    const runWords = CURL_WORD_LAUNCHERS.get(base);
+    let running = runWords === null;
     for (let k = from; k < to; k++) {
-      if (CURL_COMMANDS.has(commandName(words[k].text))) {
+      if (!running) {
+        running = runWords.has(words[k].text);
+      } else if (CURL_COMMANDS.has(commandName(words[k].text))) {
         marks.fill(1, k + 1, to);
         return;
       }
