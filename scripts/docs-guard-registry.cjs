@@ -320,6 +320,7 @@ const DOCS_GUARD_TESTS = {
   'tests/host-integration-descriptors.test.cjs': [
     'docs/reference/host-integration-capability-matrix.md',
   ],
+  'tests/inline-plan-threshold-default.test.cjs': ['docs/CONFIGURATION.md', 'docs/zh-CN/CONFIGURATION.md', 'docs/pt-BR/CONFIGURATION.md'],
   'tests/install.test.cjs': ['docs/reference/agents.md', 'docs/INVENTORY.md', 'docs/INVENTORY-MANIFEST.json'],
   // SOURCE_DIRS includes 'docs' and walks it recursively for every .md file
   // (intel.test.cjs:1223-1228) — a generic tree walk.

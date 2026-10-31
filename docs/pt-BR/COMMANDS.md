@@ -1003,7 +1003,7 @@ Configura as definições do GSD interativamente — toggles de fluxo de trabalh
 
 | Seção | Chaves |
 |-------|--------|
-| Planning Tuning | `workflow.plan_bounce`, `workflow.plan_bounce_passes`, `workflow.plan_bounce_script`, `workflow.subagent_timeout`, `workflow.inline_plan_threshold` |
+| Planning Tuning | `planner.stall_detection_enabled`, `planner.stall_threshold_minutes`, `planner.stall_detect_interval_minutes`, `workflow.plan_bounce`, `workflow.plan_bounce_passes`, `workflow.plan_bounce_script`, `workflow.subagent_timeout`, `workflow.inline_plan_threshold` |
 | Execution Tuning | `workflow.node_repair`, `workflow.node_repair_budget`, `workflow.auto_prune_state` |
 | Discussion Tuning | `workflow.max_discuss_passes` |
 | Cross-AI Execution | `workflow.cross_ai_execution`, `workflow.cross_ai_command`, `workflow.cross_ai_timeout` |
