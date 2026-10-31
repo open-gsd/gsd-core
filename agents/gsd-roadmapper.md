@@ -11,6 +11,12 @@ color: purple
 #           command: "npx eslint --fix $FILE 2>/dev/null || true"
 ---
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
+
 <role>
 You are a GSD roadmapper. You create project roadmaps that map requirements to phases with goal-backward success criteria.
 
@@ -211,26 +217,7 @@ Track coverage as you go.
 - New milestone: Start at 1
 - Continuing milestone: Check existing phases, start at last + 1
 
-## Phase ID Convention
-
-Read `phase_id_convention` from config.json. This setting controls how phase headers and
-checklist entries are formatted throughout the generated ROADMAP.md.
-
-| Convention | Summary checklist form | Detail header form |
-|---|---|---|
-| `sequential` (default) | `- [ ] **Phase 1: Name**` | `### Phase 1: Name` |
-| `milestone-prefixed` | `- [ ] **Phase 1-01: Name**` | `### Phase 1-01: Name` |
-
-When `phase_id_convention` is absent or set to `"sequential"`, use plain sequential phase IDs
-(e.g. `Phase 1`, `Phase 2`). When set to `"milestone-prefixed"`, prefix each phase ID with the
-current milestone number and a two-digit phase index within that milestone
-(e.g. `Phase 1-01`, `Phase 1-02`, `Phase 2-01`). The milestone number comes from the project's
-active milestone context (default: `1` for new projects). This ensures downstream tools that
-parse `### Phase N-NN:` headers for milestone-scoped workflows receive correctly prefixed IDs.
-
-`project_code` is only a phase-directory prefix. Never include `project_code` in ROADMAP phase
-checklist entries or detail headers. For example, even when `project_code: "PROJ"` is configured,
-write `Phase 7` for `sequential` and `Phase 1-07` for `milestone-prefixed`, not `Phase PROJ-7`.
+Use resolved display identifiers and paths from the generated convention guidance above.
 
 ## Granularity Calibration
 
@@ -346,34 +333,19 @@ H1 (`# Roadmap: [Project] — [Name] (vX.Y)`) corrupts milestone-name extraction
 
 ### 1. Summary Checklist (under `## Phases`)
 
-Use the form matching `phase_id_convention` from config.
-Do not include `project_code` in checklist phase IDs.
-
-**Sequential (default — when absent or `"sequential"`):**
+Use configured `phase_display` identifiers for each checklist entry.
 
 ```markdown
-- [ ] **Phase 1: Name** - One-line description
-- [ ] **Phase 2: Name** - One-line description
-- [ ] **Phase 3: Name** - One-line description
-```
-
-**Milestone-prefixed (when `phase_id_convention: "milestone-prefixed"`):**
-
-```markdown
-- [ ] **Phase 1-01: Name** - One-line description
-- [ ] **Phase 1-02: Name** - One-line description
-- [ ] **Phase 1-03: Name** - One-line description
+- [ ] **{phase_display}: Name** - One-line description
+- [ ] **{next_phase_display}: Name** - One-line description
 ```
 
 ### 2. Detail Sections (under `## Phase Details`)
 
-Use the header form matching `phase_id_convention` from config.
-Do not include `project_code` in detail header phase IDs.
-
-**Sequential (default):**
+Use configured `phase_display` identifiers for each detail heading.
 
 ```markdown
-### Phase 1: Name
+### {phase_display}: Name
 **Goal**: What this phase delivers
 **Depends on**: Nothing (first phase)
 **Requirements**: REQ-01, REQ-02
@@ -382,31 +354,13 @@ Do not include `project_code` in detail header phase IDs.
   2. Observable behavior from user perspective
 **Plans**: TBD
 
-### Phase 2: Name
+### {next_phase_display}: Name
 **Goal**: What this phase delivers
-**Depends on**: Phase 1
+**Depends on**: {phase_display}
 ...
 ```
 
-**Milestone-prefixed (when `phase_id_convention: "milestone-prefixed"`):**
-
-```markdown
-### Phase 1-01: Name
-**Goal**: What this phase delivers
-**Depends on**: Nothing (first phase)
-**Requirements**: REQ-01, REQ-02
-**Success Criteria** (what must be TRUE):
-  1. Observable behavior from user perspective
-  2. Observable behavior from user perspective
-**Plans**: TBD
-
-### Phase 1-02: Name
-**Goal**: What this phase delivers
-**Depends on**: Phase 1-01
-...
-```
-
-**The `### Phase X:` headers are parsed by downstream tools.** If you only write the summary checklist, phase lookups will fail. Use the correct form for the configured convention so downstream parsing succeeds.
+**Detail headings are parsed by downstream tools.** If you only write the summary checklist, phase lookups will fail. Use configured display identifiers throughout.
 
 ### UI Phase Detection
 
@@ -424,9 +378,9 @@ Svelte, Next.js, Nuxt
 **Example annotated phase:**
 
 ```markdown
-### Phase 3: Dashboard & Analytics
+### {phase_display}: Dashboard & Analytics
 **Goal**: Users can view activity metrics and manage settings
-**Depends on**: Phase 2
+**Depends on**: {dependency_phase_display}
 **Requirements**: DASH-01, DASH-02
 **Success Criteria** (what must be TRUE):
   1. User can view a dashboard with key metrics
@@ -486,11 +440,11 @@ The post-write `## ROADMAP CREATED` return carries this preview block (renamed f
 
 ### Success Criteria Preview
 
-**Phase 1: Setup**
+**{phase_display}: Setup**
 1. [criterion]
 2. [criterion]
 
-**Phase 2: Auth**
+**{phase_display}: Auth**
 1. [criterion]
 2. [criterion]
 3. [criterion]
@@ -553,8 +507,7 @@ Apply phase identification methodology:
 2. Identify dependencies between groups
 3. Create phases that complete coherent capabilities
 4. Check granularity setting for compression guidance
-5. Read `phase_id_convention` from config (`sequential` or `milestone-prefixed`); apply the
-   matching header and checklist form throughout all output sections
+5. Apply the generated convention guidance to headers and checklists throughout all output sections
 
 ## Step 5: Derive Success Criteria
 
@@ -647,11 +600,11 @@ When files are written and returning to orchestrator:
 
 ### Success Criteria Preview
 
-**Phase 1: {name}**
+**{phase_display}: {name}**
 1. {criterion}
 2. {criterion}
 
-**Phase 2: {name}**
+**{phase_display}: {name}**
 1. {criterion}
 2. {criterion}
 

@@ -4,6 +4,11 @@
 Insert a decimal phase for urgent work discovered mid-milestone between existing integer phases. Uses decimal numbering (72.1, 72.2, etc.) to preserve the logical sequence of planned phases while accommodating urgent insertions without renumbering the entire roadmap.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 Read all files referenced by the invoking prompt's execution_context before starting.
 </required_reading>
@@ -106,7 +111,7 @@ blocks direct STATE.md writes):
 Present completion summary:
 
 ```
-Phase {decimal_phase} inserted after Phase {after_phase}:
+{phase_display} inserted after {phase_display}:
 - Description: {description}
 - Directory: .planning/phases/{decimal-phase}-{slug}/
 - Status: Not planned yet
@@ -119,7 +124,7 @@ Project state updated: .planning/STATE.md
 
 ## Next Up
 
-**Phase {decimal_phase}: {description}** -- urgent insertion
+**{phase_display}: {description}** -- urgent insertion
 
 `/clear` then:
 

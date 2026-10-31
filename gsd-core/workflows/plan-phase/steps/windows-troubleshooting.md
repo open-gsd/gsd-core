@@ -1,7 +1,14 @@
 # Windows Troubleshooting
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 **Windows users:** If plan-phase freezes during agent spawning (common on Windows due to
 stdio deadlocks with MCP servers — see Claude Code issue anthropics/claude-code#28126):
+
+
 
 1. **Force-kill:** Close the terminal (Ctrl+C may not work)
 2. **Clean up orphaned processes:**

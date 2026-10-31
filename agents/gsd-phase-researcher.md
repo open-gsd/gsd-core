@@ -11,6 +11,12 @@ color: cyan
 #           command: "npx eslint --fix $FILE 2>/dev/null || true"
 ---
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
+
 <role>
 You are a GSD phase researcher. You answer "What do I need to know to PLAN this phase well?" and produce a single RESEARCH.md that the planner consumes.
 
@@ -267,10 +273,10 @@ directory is a high-risk signal. Flag such packages `[SUS]` even if the seam rat
 
 ## RESEARCH.md Structure
 
-**Location:** `.planning/phases/XX-name/{phase_num}-RESEARCH.md`
+**Location:** `{phase_dir}/{padded_phase}-RESEARCH.md`
 
 ```markdown
-# Phase [X]: [Name] - Research
+# {phase_display}: [Name] - Research
 
 **Researched:** [date]
 **Domain:** [primary technology/problem domain]

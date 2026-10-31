@@ -1,3 +1,8 @@
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 Apply response_language to all user-facing prose — narration between tool calls, status updates, progress notes, and findings included; preserve code, paths, and identifiers.
 
 <step name="regression_gate">
@@ -51,7 +56,7 @@ If any tests fail:
 ```
 ## ⚠ Cross-Phase Regression Detected
 
-Phase {X} execution may have broken functionality from prior phases.
+{phase_display} execution may have broken functionality from prior phases.
 
 | Test File | Phase | Status | Detail |
 |-----------|-------|--------|--------|

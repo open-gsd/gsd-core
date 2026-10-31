@@ -6,6 +6,11 @@ auto-fixable vs manual-only, spawns executor agents for fixable issues, runs tes
 after each fix, and commits atomically with finding IDs for traceability.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <available_agent_types>
 - gsd-executor — executes a specific, scoped code change
 </available_agent_types>

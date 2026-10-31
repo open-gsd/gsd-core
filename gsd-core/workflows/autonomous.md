@@ -6,6 +6,11 @@ Drive milestone phases autonomously — all remaining phases, a range via `--fro
 
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 
 Read all files referenced by the invoking prompt's execution_context before starting.
@@ -137,7 +142,7 @@ Display startup banner:
  Phases: {phase_count} total, {completed_phases} complete
 ```
 
-If `ONLY_PHASE` is set, display: `Single phase mode: Phase ${ONLY_PHASE}`
+If `ONLY_PHASE` is set, display: `Single phase mode: {phase_display}`
 Else if `FROM_PHASE` is set, display: `Starting from phase ${FROM_PHASE}`
 If `TO_PHASE` is set, display: `Stopping after phase ${TO_PHASE}`
 If `INTERACTIVE` is set, display: `Mode: Interactive (discuss inline, plan+execute inline — background on Codex only)`
@@ -195,7 +200,7 @@ Exit cleanly.
 **If `ONLY_PHASE` is set and no phases remain** (phase already complete):
 
 ```
-Phase ${ONLY_PHASE} is already complete. Nothing to do.
+{phase_display} is already complete. Nothing to do.
 ```
 
 Exit cleanly.
@@ -244,10 +249,10 @@ Extract `phase_name`, `goal`, `success_criteria` from each. Store for use in exe
 For the current phase, display the progress banner:
 
 ```
-### GSD ► AUTONOMOUS ▸ Phase {N}/{T}: {Name} [████░░░░] {P}%
+### GSD ► AUTONOMOUS ▸ {phase_display}/{T}: {Name} [████░░░░] {P}%
 ```
 
-Where N is the ROADMAP phase number, T is the milestone `phase_count`, and P = completed milestone phases / T × 100. Use `phase_count`, not remaining phases: phase 63 in a 7-phase milestone is `Phase 63/7`, not `Phase 63/3`. If N > T, render `Phase {N} ({position}/{T})`. Use an 8-character bar with █ and ░.
+Use the resolved phase display; N is its ROADMAP phase number, T is milestone `phase_count`, and P = completed milestone phases / T × 100. Use the milestone total, not remaining phases. If N > T, render `{phase_display} ({position}/{T})`. Use an 8-character bar with █ and ░.
 
 **3a. Smart Discuss**
 
@@ -267,7 +272,7 @@ Parse `has_context` from JSON.
 **If has_context is true:** Skip discuss — context already gathered. Display:
 
 ```
-Phase ${PHASE_NUM}: Context exists — skipping discuss.
+{phase_display}: Context exists — skipping discuss.
 ```
 
 Proceed to 3b.
@@ -281,7 +286,7 @@ SKIP_DISCUSS=$(gsd_run query config-get workflow.skip_discuss --raw 2>/dev/null 
 **If SKIP_DISCUSS is `true`:** Skip discuss entirely — the ROADMAP phase description is the spec. Display:
 
 ```
-Phase ${PHASE_NUM}: Discuss skipped (workflow.skip_discuss=true) — using ROADMAP phase goal as spec.
+{phase_display}: Discuss skipped (workflow.skip_discuss=true) — using ROADMAP phase goal as spec.
 ```
 
 Write a minimal CONTEXT.md so downstream plan-phase has valid input. Get phase details:
@@ -290,7 +295,7 @@ Write a minimal CONTEXT.md so downstream plan-phase has valid input. Get phase d
 DETAIL=$(gsd_run query roadmap.get-phase ${PHASE_NUM})
 ```
 
-Extract `goal` and `requirements` from JSON. Read `gsd-core/workflows/autonomous/templates/minimal-context.md` and write it to `${phase_dir}/${padded_phase}-CONTEXT.md`, filling its placeholders (`{PHASE_NUM}`, `{Phase Name}`, `{date}`, the goal) from the roadmap phase.
+Extract `goal` and `requirements` from JSON. Read `~/.claude/gsd-core/workflows/autonomous/templates/minimal-context.md` and write it to `${phase_dir}/${padded_phase}-CONTEXT.md`, filling its placeholders (`{phase_display}`, `{Phase Name}`, `{date}`, the goal) from the roadmap phase.
 
 Commit the minimal context:
 
@@ -459,7 +464,7 @@ If `VERIFY_ERROR` is set, handle_blocker with the error printed above — the re
 
 **If `passed`:**
 
-Display `Phase ${PHASE_NUM} ✅ ${PHASE_NAME} — Verification passed`, run `@~/.claude/gsd-core/workflows/transition.md`, then Proceed to iterate step.
+Display `{phase_display} ✅ ${PHASE_NAME} — Verification passed`, run `@~/.claude/gsd-core/workflows/transition.md`, then Proceed to iterate step.
 
 **Any status other than `passed`/`human_needed`/`gaps_found`:** execute-phase already ran, so a non-passed route after it is a real blocker — read `gsd_run query verification.status "${PHASE_DIR}" --pick next_action` and handle_blocker with it (#5118: branch on the owner's answer, never on a status word).
 
@@ -467,7 +472,7 @@ Display `Phase ${PHASE_NUM} ✅ ${PHASE_NAME} — Verification passed`, run `@~/
 
 Read `human_verification` items. In text mode (`--text` or init `text_mode=true`), replace AskUserQuestion with a plain-text numbered list. Otherwise ask whether to validate now or continue without validation. If validating now, present items, then ask `Validation result?` with `All good — continue` / `Found issues`.
 
-On "All good — continue": set VERIFICATION frontmatter `status: passed`, display `Phase ${PHASE_NUM} ✅ Human validation passed`, run `@~/.claude/gsd-core/workflows/transition.md`, then iterate.
+On "All good — continue": set VERIFICATION frontmatter `status: passed`, display `{phase_display} ✅ Human validation passed`, run `@~/.claude/gsd-core/workflows/transition.md`, then iterate.
 
 On "Found issues": Go to handle_blocker with the user's reported issues as the description.
 
@@ -481,13 +486,13 @@ On **"Continue without validation"**: record an explicit deferred state and stop
 | ${PHASE_NUM} | verification_deferred_human | /gsd:verify-work ${PHASE_NUM} |
 ```
 
-Append/update this STATE.md section, display `Phase ${PHASE_NUM} ⏭ verification_deferred_human — resume with /gsd:verify-work ${PHASE_NUM}`, then handle_blocker: "Human verification deferred for phase ${PHASE_NUM}."
+Append/update this STATE.md section, display `{phase_display} ⏭ verification_deferred_human — resume with /gsd:verify-work ${PHASE_NUM}`, then handle_blocker: "Human verification deferred for phase ${PHASE_NUM}."
 
 **If `gaps_found`:**
 
 Read gap score/items from VERIFICATION.md. Display:
 ```
-⚠ Phase ${PHASE_NUM}: ${PHASE_NAME} — Gaps Found
+⚠ {phase_display}: ${PHASE_NAME} — Gaps Found
 Score: {N}/{M} must-haves verified
 ```
 
@@ -520,7 +525,7 @@ Any status other than `passed`/`human_needed`/`gaps_found`: handle_blocker with 
 
 If still `gaps_found` after this retry, display `Gaps persist after closure attempt.` and ask `Continue anyway` / `Stop autonomous mode`.
 
-On "Continue anyway": record `verification_deferred_gaps` using the table below, display `Phase ${PHASE_NUM} ⏭ verification_deferred_gaps — resume with /gsd:plan-phase ${PHASE_NUM} --gaps`, then handle_blocker: "Verification gaps deferred for phase ${PHASE_NUM}."
+On "Continue anyway": record `verification_deferred_gaps` using the table below, display `{phase_display} ⏭ verification_deferred_gaps — resume with /gsd:plan-phase ${PHASE_NUM} --gaps`, then handle_blocker: "Verification gaps deferred for phase ${PHASE_NUM}."
 On "Stop autonomous mode": Go to handle_blocker.
 
 This limits gap closure to 1 retry.
@@ -535,7 +540,7 @@ On **"Continue without fixing"**: record an explicit deferred state and stop aut
 | ${PHASE_NUM} | verification_deferred_gaps | /gsd:plan-phase ${PHASE_NUM} --gaps |
 ```
 
-Append/update this STATE.md section, display `Phase ${PHASE_NUM} ⏭ verification_deferred_gaps — resume with /gsd:plan-phase ${PHASE_NUM} --gaps`, then handle_blocker: "Verification gaps deferred for phase ${PHASE_NUM}."
+Append/update this STATE.md section, display `{phase_display} ⏭ verification_deferred_gaps — resume with /gsd:plan-phase ${PHASE_NUM} --gaps`, then handle_blocker: "Verification gaps deferred for phase ${PHASE_NUM}."
 
 On **"Stop autonomous mode"**: Go to handle_blocker with "User stopped — gaps remain in phase ${PHASE_NUM}".
 
@@ -644,7 +649,7 @@ If all phases complete, proceed to lifecycle step.
 ```
 ### GSD ► AUTONOMOUS ▸ PHASE ${ONLY_PHASE} COMPLETE ✓
 
- Phase ${ONLY_PHASE}: ${PHASE_NAME} — Done
+ {phase_display}: ${PHASE_NAME} — Done
  Mode: Single phase (--only)
 
  Lifecycle skipped — run /gsd:autonomous without --only
@@ -773,16 +778,16 @@ Display final completion banner:
 
 When any phase operation fails or a blocker is detected, present 3 options via AskUserQuestion:
 
-**Prompt:** "Phase {N} ({Name}) encountered an issue: {description}"
+**Prompt:** "{phase_display} ({Name}) encountered an issue: {description}"
 
 **Options:**
 1. **"Fix and retry"** — Re-run the failed step (discuss, plan, or execute) for this phase
 2. **"Skip this phase"** — Mark phase as skipped, continue to the next incomplete phase
 3. **"Stop autonomous mode"** — Display summary of progress so far and exit cleanly
 
-**On "Fix and retry":** Loop back to the failed step within execute_phase. Track the retry count per phase + step (`RETRY_COUNT`, kept in memory for the run). If the same step fails again after retry, re-present these options. **Retry ceiling (#3210):** once the same phase step has failed 3 "Fix and retry" attempts, do NOT re-present the options — escalate to a terminal `needs_human` halt: display `Phase {N} ⛔ {Name} — needs_human`, list the unmet items (the blocker description from each attempt), append/update a `## Needs Human` section in STATE.md (`| ${PHASE_NUM} | needs_human | resolve blocker, then /gsd:autonomous --from ${PHASE_NUM} |`), and stop autonomous mode with the standard stopped-summary banner. A blocker that survives 3 fix attempts is an operator gate, not an executable gap.
+**On "Fix and retry":** Retry execute_phase; track `RETRY_COUNT` per phase + step. Re-present options after failure, except **Retry ceiling (#3210):** after 3 failed retries on that step, halt as terminal `needs_human` without options. Display `{phase_display} ⛔ {Name} — needs_human`; list each attempt's unmet blocker; append/update STATE.md `## Needs Human` (`| ${PHASE_NUM} | needs_human | resolve blocker, then /gsd:autonomous --from ${PHASE_NUM} |`); stop with the standard stopped-summary banner. Three failed fixes need an operator, not an executable gap.
 
-**On "Skip this phase":** Log `Phase {N} ⏭ {Name} — Skipped by user` and proceed to iterate.
+**On "Skip this phase":** Log `{phase_display} ⏭ {Name} — Skipped by user` and proceed to iterate.
 
 **On "Stop autonomous mode":** Display progress summary:
 

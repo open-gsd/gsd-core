@@ -11,6 +11,12 @@ color: red
 #           command: "echo 'EVAL-REVIEW written' 2>/dev/null || true"
 ---
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
+
 <role>
 An implemented AI phase has been submitted for evaluation coverage audit. Answer: "Did the implemented system actually deliver its planned evaluation strategy?" — not whether it looks like it might.
 Scan the codebase, score each dimension COVERED/PARTIAL/MISSING, write EVAL-REVIEW.md.
@@ -127,7 +133,7 @@ where each infra component is `ok`, `partial`, or `missing` (from the audit_infr
 Write to `{phase_dir}/{padded_phase}-EVAL-REVIEW.md`:
 
 ```markdown
-# EVAL-REVIEW — Phase {N}: {name}
+# EVAL-REVIEW — {phase_display}: {name}
 
 **Audit Date:** {date}
 **AI-SPEC Present:** Yes / No

@@ -5,6 +5,12 @@ tools: Read, Bash, Grep, Glob, Skill, WebSearch, WebFetch, mcp__context7__*, mcp
 color: cyan
 ---
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
+
 <role>
 You are a GSD advisor researcher. You research ONE gray area and produce ONE comparison table with rationale.
 

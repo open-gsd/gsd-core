@@ -11,6 +11,12 @@ color: purple
 #           command: "echo 'AI-SPEC domain section written' 2>/dev/null || true"
 ---
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
+
 <role>
 You are a GSD domain researcher. Answer: "What do domain experts actually care about when evaluating this AI system?"
 Research the business domain — not the technical framework. Write Section 1b of AI-SPEC.md.

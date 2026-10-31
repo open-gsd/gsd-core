@@ -1,6 +1,13 @@
 # Phase Context Template
 
-Template for `.planning/phases/XX-name/{phase_num}-CONTEXT.md` - captures implementation decisions for a phase.
+Template for `{phase_dir}/{padded_phase}-CONTEXT.md` - captures implementation decisions for a phase.
+
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
+Copy only the fenced artifact body. Convention guidance is instruction text and must not appear in the artifact.
 
 **Purpose:** Document decisions that downstream agents need. Researcher uses this to know WHAT to investigate. Planner uses this to know WHAT choices are locked vs flexible.
 
@@ -15,7 +22,7 @@ Template for `.planning/phases/XX-name/{phase_num}-CONTEXT.md` - captures implem
 ## File Template
 
 ```markdown
-# Phase [X]: [Name] - Context
+# {phase_display}: [Name] - Context
 
 **Gathered:** [date]
 **Status:** Ready for planning
@@ -106,7 +113,7 @@ Template for `.planning/phases/XX-name/{phase_num}-CONTEXT.md` - captures implem
 **Example 1: Visual feature (Post Feed)**
 
 ```markdown
-# Phase 3: Post Feed - Context
+# {phase_display}: Post Feed - Context
 
 **Gathered:** 2025-01-20
 **Status:** Ready for planning
@@ -179,7 +186,7 @@ Display posts from followed users in a scrollable feed. Users can view posts and
 **Example 2: CLI tool (Database backup)**
 
 ```markdown
-# Phase 2: Backup Command - Context
+# {phase_display}: Backup Command - Context
 
 **Gathered:** 2025-01-20
 **Status:** Ready for planning
@@ -250,7 +257,7 @@ CLI command to backup database to local file or S3. Supports full and incrementa
 **Example 3: Organization task (Photo library)**
 
 ```markdown
-# Phase 1: Photo Organization - Context
+# {phase_display}: Photo Organization - Context
 
 **Gathered:** 2025-01-20
 **Status:** Ready for planning
@@ -338,7 +345,7 @@ The output should answer: "What does the researcher need to investigate? What ch
 - "Easy to use"
 
 **After creation:**
-- File lives in phase directory: `.planning/phases/XX-name/{phase_num}-CONTEXT.md`
+- File lives in phase directory: `{phase_dir}/{padded_phase}-CONTEXT.md`
 - `gsd-phase-researcher` uses decisions to focus investigation AND reads canonical_refs to know WHAT docs to study
 - `gsd-planner` uses decisions + research to create executable tasks AND reads canonical_refs to verify alignment
 - Downstream agents should NOT need to ask the user again about captured decisions
