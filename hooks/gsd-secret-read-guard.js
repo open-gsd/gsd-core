@@ -1041,8 +1041,8 @@ function markCurlArguments(base, words, from, to, marks, depth) {
   }
   if (depth >= MAX_NESTING_DEPTH) return;
   if (base === 'xargs') {
-    const { subIdx } = xargsSubcommand(words, from, to);
-    if (subIdx !== -1) markLaunchedCurl(words, subIdx, to, marks, depth + 1);
+    const sub = xargsCommandIndex(words, from, to);
+    if (sub !== -1) markLaunchedCurl(words, sub, to, marks, depth + 1);
   } else if (base === 'find') {
     for (let j = from; j < to; j++) {
       if (!FIND_EXEC_ACTIONS.has(words[j].text)) continue;
@@ -1577,6 +1577,37 @@ function xargsSubcommand(operands, from, to) {
   return { subIdx: -1, argFile };
 }
 
+// xargs's options as GNU findutils 4.9 reads them, for finding the command it
+// runs: these short options take a value attached or as the next word (BSD's
+// -J, -R and -S too), `-e`, `-i` and `-l` take one only attached, and these
+// long options take one as `=value` or as the next word (any unambiguous
+// prefix). xargsSubcommand keeps next's reading for the shell and
+// non-reading checks.
+const XARGS_SHORT_VALUE = 'adEILnPsJRS';
+const XARGS_SHORT_ATTACHED = 'eil';
+const XARGS_LONG_VALUE = ['--arg-file', '--delimiter', '--max-args', '--max-chars', '--max-procs', '--process-slot-var'];
+
+// Index of the command xargs runs among operands[from..to), or -1.
+function xargsCommandIndex(operands, from, to) {
+  for (let m = from; m < to; m++) {
+    const t = operands[m].text;
+    if (t === '--') return m + 1 < to ? m + 1 : -1;
+    if (t.length < 2 || t[0] !== '-') return m;
+    if (t.startsWith('--')) {
+      if (!t.includes('=') && XARGS_LONG_VALUE.some((l) => l.startsWith(t))) m++;
+      continue;
+    }
+    for (let c = 1; c < t.length; c++) {
+      if (XARGS_SHORT_ATTACHED.includes(t[c])) break;
+      if (XARGS_SHORT_VALUE.includes(t[c])) {
+        if (c === t.length - 1) m++;
+        break;
+      }
+    }
+  }
+  return -1;
+}
+
 // `find … | xargs cat`: the upstream segment's operands become file names the
 // sub-command reads. Only inferred across a real pipe and when stdin is not
 // redirected by `-a`/`--arg-file`. A sub-command that is itself a shell
@@ -1606,7 +1637,8 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
   if (!prevCmd) return null;
   // They become curl's arguments when the sub-command, past the wrappers
   // resolveCommand unwraps, is curl (#5779): `xargs sudo curl`.
-  const subCmd = launchedCommandIndex(operands, subIdx, operands.length);
+  const runs = xargsCommandIndex(operands, 0, operands.length);
+  const subCmd = runs === -1 ? -1 : launchedCommandIndex(operands, runs, operands.length);
   const toCurl = subCmd !== -1 && CURL_COMMANDS.has(commandName(operands[subCmd].text));
   for (const w of prevCmd.operands) {
     if (operandNamesSecret(w.text)) return w.text;
