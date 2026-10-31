@@ -2344,7 +2344,7 @@ ${creationBash}
     assert.match(diff, /modified/, 'working tree modification must NOT have been committed to git history');
   });
 
-  test('cmdCommit: parity between JS isWaveManifestPath and git pathspec WAVE_MANIFEST_PATHSPEC_EXCLUDE', (t) => {
+  test('cmdCommit: parity between JS isWaveManifestPath and git pathspec WAVE_MANIFEST_PATHSPEC_EXCLUDES', (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-commit-5-'));
     t.after(() => {
       try { cleanup(root); } catch (_) { /* best-effort */ }
@@ -2358,32 +2358,52 @@ ${creationBash}
     gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: root });
 
     const commandsMod = require('../gsd-core/bin/lib/commands.cjs');
-    const { isWaveManifestPath } = commandsMod;
+    const { isWaveManifestPath, WAVE_MANIFEST_PATHSPEC_EXCLUDES } = commandsMod;
 
     const manifestUnderPlanning = path.join(root, '.planning', 'wave-1-manifest.json');
     const manifestUnderPhase = path.join(root, '.planning', 'phases', '01-foo', 'wave-2-manifest.json');
+    const manifestWave9 = path.join(root, '.planning', 'phases', '01-foo', 'wave-9-manifest.json');
+    const manifestWave10 = path.join(root, '.planning', 'phases', '01-foo', 'wave-10-manifest.json');
+    const manifestWave11 = path.join(root, '.planning', 'phases', '01-foo', 'wave-11-manifest.json');
     const digitPrefixedNonNumeric = path.join(root, '.planning', 'wave-1x-manifest.json');
+    const wave10xManifest = path.join(root, '.planning', 'phases', '01-foo', 'wave-10x-manifest.json');
     const waveNotesManifest = path.join(root, '.planning', 'phases', '01-foo', 'wave-1-notes-manifest.json');
+    const wave12NotesManifest = path.join(root, '.planning', 'phases', '01-foo', 'wave-12-notes-manifest.json');
     const nonNumericUnderPlanning = path.join(root, '.planning', 'wave-foo-manifest.json');
     const manifestOutsidePlanning = path.join(root, 'src', 'wave-3-manifest.json');
+    const nestedPlanningManifest = path.join(root, 'sub', '.planning', 'wave-1-manifest.json');
+
     fs.mkdirSync(path.dirname(manifestUnderPhase), { recursive: true });
     fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+    fs.mkdirSync(path.dirname(nestedPlanningManifest), { recursive: true });
+
     fs.writeFileSync(manifestUnderPlanning, '{}');
     fs.writeFileSync(manifestUnderPhase, '{}');
+    fs.writeFileSync(manifestWave9, '{}');
+    fs.writeFileSync(manifestWave10, '{}');
+    fs.writeFileSync(manifestWave11, '{}');
     fs.writeFileSync(digitPrefixedNonNumeric, '{}');
+    fs.writeFileSync(wave10xManifest, '{}');
     fs.writeFileSync(waveNotesManifest, '{}');
+    fs.writeFileSync(wave12NotesManifest, '{}');
     fs.writeFileSync(nonNumericUnderPlanning, '{}');
     fs.writeFileSync(manifestOutsidePlanning, '{}');
+    fs.writeFileSync(nestedPlanningManifest, '{}');
 
     // JS matcher checks
     assert.equal(isWaveManifestPath(manifestUnderPlanning, root), true);
     assert.equal(isWaveManifestPath(manifestUnderPhase, root), true);
+    assert.equal(isWaveManifestPath(manifestWave9, root), true);
+    assert.equal(isWaveManifestPath(manifestWave10, root), true);
+    assert.equal(isWaveManifestPath(manifestWave11, root), true);
     assert.equal(isWaveManifestPath(digitPrefixedNonNumeric, root), false, 'wave-1x is not a valid numeric wave manifest');
+    assert.equal(isWaveManifestPath(wave10xManifest, root), false, 'wave-10x is not a valid numeric wave manifest');
     assert.equal(isWaveManifestPath(waveNotesManifest, root), false, 'wave-1-notes is a user file, not a wave manifest');
+    assert.equal(isWaveManifestPath(wave12NotesManifest, root), false, 'wave-12-notes is a user file, not a wave manifest');
     assert.equal(isWaveManifestPath(nonNumericUnderPlanning, root), false);
     assert.equal(isWaveManifestPath(manifestOutsidePlanning, root), false);
+    assert.equal(isWaveManifestPath(nestedPlanningManifest, root), false);
 
-    const { WAVE_MANIFEST_PATHSPEC_EXCLUDES } = commandsMod;
     // Git pathspec exclude check: git ls-files with WAVE_MANIFEST_PATHSPEC_EXCLUDES should exclude wave manifests
     const lsFiles = childProcess.spawnSync(
       'git',
@@ -2393,10 +2413,22 @@ ${creationBash}
 
     assert.ok(!lsFiles.includes('.planning/wave-1-manifest.json'), 'git pathspec must exclude .planning/wave-1-manifest.json');
     assert.ok(!lsFiles.includes('.planning/phases/01-foo/wave-2-manifest.json'), 'git pathspec must exclude .planning/phases/01-foo/wave-2-manifest.json');
+    assert.ok(!lsFiles.includes('.planning/phases/01-foo/wave-9-manifest.json'), 'git pathspec must exclude wave-9');
+    assert.ok(!lsFiles.includes('.planning/phases/01-foo/wave-10-manifest.json'), 'git pathspec must exclude wave-10');
+    assert.ok(!lsFiles.includes('.planning/phases/01-foo/wave-11-manifest.json'), 'git pathspec must exclude wave-11');
     assert.ok(lsFiles.includes('.planning/wave-foo-manifest.json'), 'git pathspec must NOT exclude non-numeric name');
     assert.ok(lsFiles.includes('.planning/wave-1x-manifest.json'), 'git pathspec must NOT exclude non-positive-integer wave-1x');
+    assert.ok(lsFiles.includes('.planning/phases/01-foo/wave-10x-manifest.json'), 'git pathspec must NOT exclude non-positive-integer wave-10x');
     assert.ok(lsFiles.includes('.planning/phases/01-foo/wave-1-notes-manifest.json'), 'git pathspec must NOT exclude wave-1-notes');
+    assert.ok(lsFiles.includes('.planning/phases/01-foo/wave-12-notes-manifest.json'), 'git pathspec must NOT exclude wave-12-notes');
     assert.ok(lsFiles.includes('src/wave-3-manifest.json'), 'git pathspec must NOT exclude file outside .planning');
+    assert.ok(lsFiles.includes('sub/.planning/wave-1-manifest.json'), 'git pathspec must NOT exclude nested .planning outside repo root');
+
+    // Parity with execute-phase.md post-wave hook stash pathspec
+    const executePhaseContent = readFileNormalized(EXECUTE_PHASE_PATH);
+    for (const pattern of WAVE_MANIFEST_PATHSPEC_EXCLUDES) {
+      assert.ok(executePhaseContent.includes(`"${pattern}"`), `execute-phase.md stash push must include ${pattern}`); // allow-test-rule: source-text-is-the-product
+    }
   });
 
   test('manifest creation block parity between execute-phase.md and workflow-backend-dispatch.md', () => {
@@ -2463,6 +2495,49 @@ ${creationBash}
     assert.equal(res.status, 0, `dispatch block should resolve wave and create manifest: ${res.stderr?.toString()}`);
     assert.ok(fs.existsSync(path.join(phaseDir, 'wave-2-manifest.json')), 'wave-2-manifest.json must be created');
     assert.ok(!fs.existsSync(path.join(phaseDir, 'wave-1-manifest.json')), 'wave-1-manifest.json must NOT be created');
+  });
+
+  test('execute-phase dispatch block resolves wave in filtered or gaps-only runs when earlier waves are completed', (t) => {
+    const creationBash = extractManifestCreationBash();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-gaps-fallback-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: root });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: root });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: root });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: root });
+    fs.writeFileSync(path.join(root, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: root });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: root });
+
+    const phaseDir = path.join(root, '.planning', 'phases', '02-analytics');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    // Plan 02-01 and 02-02 completed; gap plan 02-03 in wave 3 is incomplete
+    fs.writeFileSync(path.join(phaseDir, '02-01-PLAN.md'), '---\nwave: 1\n---\n# Plan 02-01\n');
+    fs.writeFileSync(path.join(phaseDir, '02-01-SUMMARY.md'), '# Summary 02-01\n');
+    fs.writeFileSync(path.join(phaseDir, '02-02-PLAN.md'), '---\nwave: 2\ndepends_on:\n  - 02-01\n---\n# Plan 02-02\n');
+    fs.writeFileSync(path.join(phaseDir, '02-02-SUMMARY.md'), '# Summary 02-02\n');
+    fs.writeFileSync(path.join(phaseDir, '02-03-PLAN.md'), '---\nwave: 3\ngap_closure: true\ndepends_on:\n  - 02-02\n---\n# Plan 02-03\n');
+
+    const script = `
+set -e
+gsd_run() {
+  node "${GSD_TOOLS}" "$@"
+}
+unset CURRENT_WAVE
+export PHASE_DIR="${phaseDir}"
+${creationBash}
+`;
+    const scriptPath = path.join(root, 'test-dispatch-gaps.sh');
+    fs.writeFileSync(scriptPath, script);
+    const res = childProcess.spawnSync('bash', [scriptPath], {
+      cwd: root,
+      stdio: 'pipe',
+      timeout: HOOK_FANOUT_TIMEOUT_MS,
+    });
+    assert.equal(res.status, 0, `dispatch block should resolve wave 3 for gap plan: ${res.stderr?.toString()}`);
+    assert.ok(fs.existsSync(path.join(phaseDir, 'wave-3-manifest.json')), 'wave-3-manifest.json must be created');
   });
 
   test('execute-phase dispatch block succeeds when CURRENT_WAVE matches fallback wave', (t) => {
