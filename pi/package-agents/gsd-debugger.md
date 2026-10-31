@@ -967,7 +967,7 @@ git add src/path/to/fixed-file.ts
 git add src/path/to/other-file.ts
 git commit -m "fix: {brief description}
 
-Root cause: {root_cause}"
+Root cause: {root_cause}" -- ":(literal){path staged above}" ...
 ```
 
 Then commit planning docs via CLI (respects `commit_docs` config automatically):
