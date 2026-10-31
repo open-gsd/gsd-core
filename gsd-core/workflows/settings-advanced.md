@@ -1,8 +1,7 @@
 Apply response_language to all user-facing prose — narration between tool calls, status updates, progress notes, and findings included; preserve code, paths, and identifiers.
 
 <purpose>
-Interactive configuration of GSD power-user knobs — plan bounce, planner stall detection and its
-threshold/check interval, node repair, subagent timeouts, inline plan threshold, cross-AI execution, base branch, branch templates, response language,
+Interactive configuration of GSD power-user knobs — plan bounce, planner stall detection and timing, node repair, subagent timeouts, inline plan threshold, cross-AI execution, base branch, branch templates, response language,
 context window, gitignored search, graphify build timeout, runtime model tier overrides, and
 model policy configuration (provider + budget → canonical tier mapping, or manual model ID
 assignment per cost tier).
@@ -111,9 +110,8 @@ choice number or free-text value.
 `*_threshold`, `*_minutes`, `context_window`, `graphify.build_timeout`), if the user types a value that
 is not a non-negative integer, the workflow MUST reject it, state which value was invalid,
 and re-prompt that single field. The minimum accepted value is field-specific and is stated
-in each field's prompt below — `workflow.plan_bounce_passes`, `workflow.max_discuss_passes`,
-`planner.stall_threshold_minutes`, and `planner.stall_detect_interval_minutes` require `>= 1`;
-all other numeric fields accept `>= 0`. An empty input means "keep current"
+in each field's prompt below — the `*_passes` fields and the `planner.stall_*_minutes` fields
+require `>= 1`; all other numeric fields accept `>= 0`. An empty input means "keep current"
 — the existing value is retained. Non-numeric input is never silently coerced.
 
 **Free-text validation.** For branch template fields (`git.phase_branch_template`,
@@ -130,9 +128,7 @@ stored verbatim as a string.
 
 ### Section 1 — Planning Tuning
 
-`AskUserQuestion` accepts at most 4 questions per call, so this section is asked as four
-calls, in order: **1a** stall-detection toggle, **1b** stall threshold and check interval,
-**1c** plan bounce, **1d** subagent timeout and inline plan threshold.
+Asked as four calls, 1a–1d (`AskUserQuestion` takes at most 4 questions per call).
 
 **1a — Planner watchdog.** Before offering the disabled choice, display this warning verbatim:
 
@@ -152,19 +148,8 @@ AskUserQuestion([
 ])
 ```
 
-**1b — Stall threshold and check interval.**
-Ask this call only when `planner.stall_detection_enabled` is effectively `true` after 1a
-(the user chose Yes, or kept a current value that is not the boolean `false`). When it is
-`false`, the plan-phase watchdog never runs, so skip 1b and leave both keys untouched.
-
-`planner.stall_threshold_minutes` (default: `10`) is how long plan-phase waits with no completion
-marker and no fresh `*-PLAN.md` activity before it offers the accept-plans / retry / stop
-recovery choice. Raise it when a slow model is still working but gets flagged as stalled.
-Integer `>= 1`.
-
-`planner.stall_detect_interval_minutes` (default: `5`) is how often plan-phase checks while a
-planner or plan-checker runs; a finished agent is noticed at most one interval late. Integer
-`>= 1` — `0` would make every check a zero-length wait.
+**1b — Stall timing.** Ask only when `planner.stall_detection_enabled` is effectively `true` after 1a (anything but boolean `false`); otherwise skip 1b.
+`planner.stall_threshold_minutes`: idle time before plan-phase offers recovery; raise it for slow models. `planner.stall_detect_interval_minutes`: check cadence. Both integer `>= 1`.
 
 ```text
 AskUserQuestion([
@@ -174,7 +159,7 @@ AskUserQuestion([
     multiSelect: false,
     options: [
       { label: "Keep current", description: "Leave the threshold unchanged." },
-      { label: "Enter minutes", description: "Integer >= 1. Non-numeric rejected. Default: 10. Raise it for slow models that get flagged while still working." }
+      { label: "Enter minutes", description: "Integer >= 1. Default: 10." }
     ]
   },
   {
@@ -183,7 +168,7 @@ AskUserQuestion([
     multiSelect: false,
     options: [
       { label: "Keep current", description: "Leave the interval unchanged." },
-      { label: "Enter minutes", description: "Integer >= 1. Non-numeric rejected. Default: 5. Lower values notice a finished planner sooner." }
+      { label: "Enter minutes", description: "Integer >= 1. Default: 5." }
     ]
   }
 ])
@@ -224,7 +209,7 @@ AskUserQuestion([
 ])
 ```
 
-**1d — Timeouts and inline threshold.**
+**1d — Timeouts.**
 
 ```text
 AskUserQuestion([
@@ -573,7 +558,6 @@ keys and sibling sub-objects.
 ```bash
 # Example — only write keys the user changed. "Keep current" selections are skipped.
 gsd_run query config-set planner.stall_detection_enabled false
-gsd_run query config-set planner.stall_threshold_minutes 30
 gsd_run query config-set workflow.plan_bounce_passes 5
 gsd_run query config-set workflow.subagent_timeout 300000
 gsd_run query config-set git.base_branch main
@@ -889,8 +873,7 @@ UI/AI phase gates), use /gsd:settings.
 - [ ] Eight sections rendered (Planning, Execution, Discussion, Cross-AI, Git, Runtime/Output, Runtime Model Tiers, Model Policy)
 - [ ] Every field pre-selected to its current value (or documented default if absent)
 - [ ] Disabling planner stall detection shows the bounded-recovery warning before writing `false`
-- [ ] Stall threshold and check interval are asked only while stall detection is enabled, accept integers `>= 1`, and default to `10` / `5`
-- [ ] No `AskUserQuestion` call asks more than 4 questions
+- [ ] Stall threshold/interval asked only while stall detection is on; no call exceeds 4 questions
 - [ ] Numeric inputs validated — non-numeric rejected and re-prompted
 - [ ] Branch-template inputs validated — non-default must contain a placeholder
 - [ ] Null-allowed fields accept an empty input as a clear
