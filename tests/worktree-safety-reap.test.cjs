@@ -2285,17 +2285,19 @@ describe('#4941 regression: reap-orphans removes unregistered .claude/worktrees 
       t.skip('these characters are not valid in Windows file names');
       return;
     }
-    const repoDir = path.join(tmpBase, 'repo-ctrl');
-    initRepo(repoDir);
-    const name = 'agent-a00000e1\n[gsd] forged \u001b[2J\u009b31m\u007f\u202e\u2066\u200b\u2028\u2029\ufeff';
-    plainChild(repoDir, name);
-    // No git branch can carry these bytes; stub the harness-branch check so
-    // the escaping of a REMOVED name is what this row exercises.
-    const { json, err } = runCli(repoDir, { execGit: branchExists(() => true) });
+    // A directory name with these bytes fails the harness-name check, so they
+    // ride in what the removed directory HELD, which stderr prints (Codex review).
+    const { repoDir, residue } = repoWithResidue('ctrl');
+    const name = 'forged\n[gsd] forged \u001b[2J\u009b31m\u007f\u202e\u2066\u200b\u2028\u2029\ufeff';
+    excludeLocally(repoDir, 'forged*');
+    fs.writeFileSync(path.join(residue, name), 'x\n');
+    const { json, err } = runCli(repoDir);
+    assert.deepStrictEqual([json.entries[0].status, json.entries[0].reason], ['reaped', 'unregistered_residue']);
+    assert.ok(json.entries[0].contents.includes(name), 'the JSON keeps the exact name');
     const stderr = err.join('');
     assert.ok(!hasRawChar(stderr, true), `a raw control/invisible/bidi character reached stderr: ${JSON.stringify(stderr)}`);
     assert.strictEqual(stderr.split('\n').filter(Boolean).length, 1, 'exactly one [gsd] line');
-    assert.ok(json.entries[0].path.endsWith(name), 'the JSON keeps the exact name');
+    assert.match(stderr, /\(held [^\n]*"forged\\n\[gsd\] forged \\u001b\[2J/u, 'the removed directory\'s contents are named, escaped');
   });
 
   test('property: the printed name list never carries a raw control, invisible or bidi character, and names at most 5', () => {
@@ -2445,6 +2447,88 @@ describe('#4941 regression: reap-orphans removes unregistered .claude/worktrees 
     fs.writeFileSync(path.join(residue, 'build', 'out.js'), 'generated\n');
     const row = onlyRow(reapOrphanWorktrees(repoDir, deadOwnerDeps()));
     assert.deepStrictEqual([row.status, row.reason], ['reaped', 'unregistered_residue']);
+  });
+
+  // ─── #5812 ruling on ADR item 4 ────────────────────────────────────────────
+
+  // An ignored secret or planning file the harness did not copy in cannot be
+  // restored by git, so it keeps the residue; a byte-identical copy of the main
+  // checkout's file (what `.worktreeinclude` makes) does not.
+  for (const [label, rel] of [
+    ['an ignored .env', '.env'],
+    ['a nested ignored .env.local', path.join('config', '.env.local')],
+    ['an ignored .secrets', '.secrets'],
+    ['a file inside an ignored .env directory', path.join('.env', 'db-password')],
+    ['an ignored planning file (commit_docs: false)', path.join('.planning', 'phases', '01-x', '01-SUMMARY.md')],
+  ]) {
+    test(`a residue holding ${label} the harness did not create is kept as residue_has_user_data`, () => {
+      const { repoDir, residue } = repoWithResidue(`user-data-${label.split(' ').pop().replace(/[^a-z0-9]/gi, '')}`);
+      excludeLocally(repoDir, '.env*', '.secrets', '.planning/');
+      fs.mkdirSync(path.dirname(path.join(residue, rel)), { recursive: true });
+      fs.writeFileSync(path.join(residue, rel), 'only here\n');
+      const row = onlyRow(reapOrphanWorktrees(repoDir, deadOwnerDeps()));
+      assert.deepStrictEqual([row.status, row.reason], ['skipped', 'residue_has_user_data']);
+      assert.strictEqual(fs.readFileSync(path.join(residue, rel), 'utf8'), 'only here\n');
+    });
+  }
+
+  test('an ignored .env that differs from the main checkout\'s .env is kept', () => {
+    const { repoDir, residue } = repoWithResidue('user-data-differs');
+    excludeLocally(repoDir, '.env*');
+    // Same length: only the byte comparison can tell them apart.
+    fs.writeFileSync(path.join(repoDir, '.env'), 'KEY=main\n');
+    fs.writeFileSync(path.join(residue, '.env'), 'KEY=edit\n');
+    const row = onlyRow(reapOrphanWorktrees(repoDir, deadOwnerDeps()));
+    assert.deepStrictEqual([row.status, row.reason], ['skipped', 'residue_has_user_data']);
+    assert.strictEqual(fs.readFileSync(path.join(residue, '.env'), 'utf8'), 'KEY=edit\n');
+  });
+
+  test('an ignored .env identical to the main checkout\'s (a harness copy) does not keep the residue', () => {
+    const { repoDir, residue } = repoWithResidue('user-data-copy');
+    excludeLocally(repoDir, '.env*');
+    fs.writeFileSync(path.join(repoDir, '.env'), 'KEY=same\n');
+    fs.writeFileSync(path.join(residue, '.env'), 'KEY=same\n');
+    const row = onlyRow(reapOrphanWorktrees(repoDir, deadOwnerDeps()));
+    assert.deepStrictEqual([row.status, row.reason], ['reaped', 'unregistered_residue']);
+    assert.ok(!fs.existsSync(residue));
+    assert.strictEqual(fs.readFileSync(path.join(repoDir, '.env'), 'utf8'), 'KEY=same\n');
+  });
+
+  // Codex review: a main-checkout path that leads into the residue through a
+  // link is the file being removed, not a surviving copy.
+  test('a "copy" reached through a link into the residue is not a harness copy: the residue is kept', () => {
+    const { repoDir, residue } = repoWithResidue('user-data-alias');
+    excludeLocally(repoDir, '.env*', 'config');
+    fs.mkdirSync(path.join(residue, 'config'));
+    fs.writeFileSync(path.join(residue, 'config', '.env'), 'KEY=only\n');
+    fs.symlinkSync(path.join(residue, 'config'), path.join(repoDir, 'config'), 'junction');
+    const row = onlyRow(reapOrphanWorktrees(repoDir, deadOwnerDeps()));
+    assert.deepStrictEqual([row.status, row.reason], ['skipped', 'residue_has_user_data']);
+    assert.strictEqual(fs.readFileSync(path.join(residue, 'config', '.env'), 'utf8'), 'KEY=only\n');
+  });
+
+  // Codex review: a stranded `.gsd-reap-*` skips the branch comparison, but
+  // not the user-data guard.
+  test('a stranded .gsd-reap-* directory holding an ignored .env is kept as residue_has_user_data', () => {
+    const repoDir = path.join(tmpBase, 'repo-stranded-user-data');
+    initRepo(repoDir);
+    excludeLocally(repoDir, '.env*');
+    const stranded = plainChild(repoDir, '.gsd-reap-0123456789abcdef');
+    fs.writeFileSync(path.join(stranded, '.env'), 'KEY=only\n');
+    const row = onlyRow(reapOrphanWorktrees(repoDir, deadOwnerDeps()));
+    assert.deepStrictEqual([canonicalPath(row.path), row.status, row.reason], [canonicalPath(stranded), 'skipped', 'residue_has_user_data']);
+    assert.strictEqual(fs.readFileSync(path.join(stranded, '.env'), 'utf8'), 'KEY=only\n');
+  });
+
+  test('when git cannot list the ignored files the residue is kept as residue_unverified', () => {
+    const { repoDir, residue } = repoWithResidue('user-data-list-fails');
+    const faultyGit = makeFaultyGit({
+      faults: [{ kind: 'exit', exitCode: 128, when: (args) => args.includes('--ignored') }],
+      passthrough: realExecGit,
+    });
+    const row = onlyRow(reapOrphanWorktrees(repoDir, deadOwnerDeps({ execGit: faultyGit })));
+    assert.deepStrictEqual([row.status, row.reason], ['skipped', 'residue_unverified']);
+    assert.ok(fs.existsSync(residue));
   });
 
   test('work matching the OTHER harness branch spelling still counts as committed', () => {

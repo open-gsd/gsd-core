@@ -2878,7 +2878,9 @@ function reapOrphanWorktreesWithScan(repoRoot: string, deps: WorktreeDeps = {}):
  *     git cannot compare): it matches a harness branch's tip, with no
  *     modified, deleted or untracked-and-unignored file — the standard `git
  *     worktree remove` applies without `--force` (`residueHoldsWork`). A
- *     stranded `.gsd-reap-*` passed it in the sweep that renamed it.
+ *     stranded `.gsd-reap-*` passed it in the sweep that renamed it;
+ *   - no ignored file in it is a secret or user data the harness did not
+ *     create (`residue_has_user_data`): see `RESIDUE_USER_DATA_PATHSPECS`.
  * Removal is `fs.rmSync(p, { recursive: true })`, which unlinks a symlink or
  * junction found inside rather than following it (pinned by a junction test).
  */
@@ -3099,6 +3101,13 @@ function findUnregisteredResidue(
         continue;
       }
     }
+    // An ignored secret or planning file keeps any candidate, a stranded
+    // `.gsd-reap-*` included: git cannot restore it (#5812 ruling).
+    const userData = residueHoldsUserData(p, top, gitDirPath, execGit);
+    if (userData !== false) {
+      keep(userData === null ? 'residue_unverified' : 'residue_has_user_data');
+      continue;
+    }
     // Right before removing: the chain is still real directories, the child is
     // still one with no `.git`, and — resolved NOW, after those checks — it is
     // still inside the checkout's `.claude/worktrees`; the resolved path is the
@@ -3172,10 +3181,11 @@ function findUnregisteredResidue(
  * and any content at a submodule (gitlink) path, which git does not look
  * into without the submodule's `.git`. `false` when the directory matches at
  * least one branch tip — everything in it is then committed, or ignored and
- * so disposable by git's own standard (git cannot restore ignored files);
- * `true` when it matches none; `null` when git could not answer for any
- * branch. Each comparison reads the tip into a throwaway index,
- * so neither the checkout's index nor the directory is touched.
+ * so disposable by git's own standard (git cannot restore ignored files),
+ * except the secrets and user data `residueHoldsUserData` keeps; `true` when
+ * it matches none; `null` when git could not answer for any branch. Each
+ * comparison reads the tip into a throwaway index, so neither the checkout's
+ * index nor the directory is touched.
  */
 function residueHoldsWork(
   dir: string,
@@ -3226,6 +3236,79 @@ function residueHoldsWork(
     }
   }
   return answered ? true : null;
+}
+
+/**
+ * #5812 ruling: ignored files that keep a residue unless the harness copied
+ * them in — secrets (`.env*`, `.secrets`) and GSD's own planning files, which
+ * `planning.commit_docs: false` leaves ignored. git cannot restore an ignored
+ * file, so losing one of these cannot be undone. Every other ignored file stays
+ * disposable, as it is to `git worktree remove` without `--force`.
+ */
+const RESIDUE_USER_DATA_PATHSPECS: readonly string[] = [
+  ':(glob,icase)**/.env*',
+  ':(glob,icase)**/.env*/**',
+  ':(glob,icase)**/.secrets',
+  ':(glob,icase)**/.secrets/**',
+  ':(glob,icase).planning/**',
+];
+
+/**
+ * #5812 ruling: whether the residue holds an ignored secret or user-data file
+ * (`RESIDUE_USER_DATA_PATHSPECS`) that is not a harness copy. Listed against an
+ * empty throwaway index, so the answer does not depend on which branch the
+ * residue matched — a file some branch force-added still keeps it. `null` when
+ * git could not list them.
+ */
+function residueHoldsUserData(
+  dir: string,
+  top: string,
+  gitDirPath: string,
+  execGit: (args: string[], opts?: { cwd?: string; env?: Record<string, string>; timeout?: number }) => GitResult,
+): boolean | null {
+  let scratch: string | null = null;
+  try {
+    scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-reap-index-'));
+    const env = { GIT_INDEX_FILE: path.join(scratch, 'index') };
+    const listed = execGit(
+      ['--git-dir', gitDirPath, '--work-tree', dir, 'ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--', ...RESIDUE_USER_DATA_PATHSPECS],
+      { cwd: dir, env },
+    );
+    if (!gitResultOk(listed)) return null;
+    const real = fs.realpathSync.native(dir);
+    return String(listed.stdout).split('\0').some((rel) => rel !== '' && !isHarnessCopy(dir, real, top, rel));
+  } catch {
+    return null;
+  } finally {
+    if (scratch) {
+      try { fs.rmSync(scratch, { recursive: true, force: true }); } catch { /* left in the temp dir */ }
+    }
+  }
+}
+
+/** Files larger than this are never treated as a harness copy (#5812). */
+const HARNESS_COPY_COMPARE_LIMIT = 1024 * 1024;
+
+/**
+ * #5812: whether `rel` in the residue is a copy the harness made — Claude Code
+ * copies the ignored files `.worktreeinclude` names from the main checkout into
+ * each worktree it creates — shown by a regular file of the same bytes at the
+ * same path in the main checkout that resolves outside the residue (a source
+ * reached through a link into the residue is the file being removed). Anything
+ * else, an unreadable file included, is not a copy.
+ */
+function isHarnessCopy(dir: string, realDir: string, top: string, rel: string): boolean {
+  try {
+    const held = fs.lstatSync(path.join(dir, rel));
+    const source = fs.lstatSync(path.join(top, rel));
+    if (!held.isFile() || !source.isFile() || held.size !== source.size || held.size > HARNESS_COPY_COMPARE_LIMIT) return false;
+    const sourceKey = pathCompareKey(fs.realpathSync.native(path.join(top, rel)), process.platform);
+    const dirKey = pathCompareKey(realDir, process.platform);
+    if (isContainedIn(sourceKey, dirKey)) return false;
+    return fs.readFileSync(path.join(dir, rel)).equals(fs.readFileSync(path.join(top, rel)));
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -3329,7 +3412,7 @@ function pathCompareKey(canonical: string, platform: NodeJS.Platform): string {
 const RESIDUE_KEPT_REASONS: ReadonlySet<string> = new Set([
   'residue_not_harness_named', 'residue_no_harness_branch', 'residue_tracked', 'residue_remove_failed',
   'residue_contains_repository', 'residue_unverified', 'residue_unreadable', 'residue_age_unknown', 'residue_contains_cwd',
-  'residue_has_work',
+  'residue_has_work', 'residue_has_user_data',
   'worktree_list_failed',
 ]);
 
