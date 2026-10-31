@@ -876,142 +876,202 @@ function operandNamesSecret(text) {
 
 const CURL_COMMANDS = new Set(['curl', 'curl.exe']);
 
-// curl's ISSPACE: what it skips before and trims after a form file name.
-function isCurlBlank(ch) {
+// curl's two blank sets: ISSPACE, which its -F parser skips and trims before
+// 8.13, and ISBLANK, from 8.13.
+function isCurlSpace(ch) {
   return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\v' || ch === '\f';
+}
+
+function isCurlBlank(ch) {
+  return ch === ' ' || ch === '\t';
 }
 
 // namesSecret judges only a name's last path segment (and the part of it after
 // a `:`), so the segment is cut out here first: one pass, where lastSegment's
-// trailing-separator regex backtracks on a long run of separators. An unquoted
-// name also loses the whitespace curl trims; a quoted one keeps it, as curl does.
-function curlNameIsSecret(text, start, end, trim) {
-  if (trim) {
-    while (start < end && isCurlBlank(text[start])) start++;
-    while (end > start && isCurlBlank(text[end - 1])) end--;
-  }
-  while (end > start && (text[end - 1] === '/' || text[end - 1] === '\\')) end--;
+// trailing-separator regex backtracks on a long run of separators.
+function curlNameIsSecret(name) {
+  let end = name.length;
+  while (end > 0 && (name[end - 1] === '/' || name[end - 1] === '\\')) end--;
   let seg = end;
-  while (seg > start && text[seg - 1] !== '/' && text[seg - 1] !== '\\') seg--;
-  const name = text.slice(seg, end);
-  return name.includes('.') && namesSecret(name);
+  while (seg > 0 && name[seg - 1] !== '/' && name[seg - 1] !== '\\') seg--;
+  const last = name.slice(seg, end);
+  return last.includes('.') && namesSecret(last);
 }
 
-// Index of the quote closing the one at `open` (curl's `\\` and `\"` skipped),
-// or -1. A word's quotes pair up, so only its last quote can be unmatched and
-// the scans from successive quotes do not overlap.
-function curlClosingQuote(text, open) {
-  let j = open + 1;
-  while (j < text.length && text[j] !== '"') j += text[j] === '\\' && (text[j + 1] === '\\' || text[j + 1] === '"') ? 2 : 1;
-  return j < text.length ? j : -1;
-}
+// The grammars curl's -F parser (src/tool_formparse.c) has shipped. They open
+// different files for some values, so a value is judged under each:
+//   through 8.11  ISSPACE blanks; type= split by sscanf("%127[^/ ]/%127[^;, \n]")
+//   8.12          ISSPACE blanks; type= ends at a MIME tspecial
+//   from 8.13     ISBLANK blanks; type= ends at a MIME tspecial
+// Through 8.20 a file list goes on after any character a part ends at; from
+// 8.21 only after `,`, which opens a subset of what 8.13 opens.
+const CURL_FORM_GRAMMARS = [
+  { blank: isCurlSpace, sscanfType: true },
+  { blank: isCurlSpace, sscanfType: false },
+  { blank: isCurlBlank, sscanfType: false },
+];
+const CURL_TYPE_TSPECIALS = '()<>@,;:\\"[]?=\r\n ';
 
-const CURL_QUOTED_SPECIAL_RE = /[;@<,]/;
-
-// The form part parameters whose value curl reads as a word that may be
-// quoted. It matches their names in any case. Every other parameter
-// (`type=`, an unknown `;foo=`) is read unquoted up to the next `;`.
-const CURL_QUOTED_PARAMS = ['filename', 'headers', 'encoder'];
-
-// Whether the `"` at `i` starts a word curl reads quoted: the part's value
-// (after the word's first `=`), or the value of a CURL_QUOTED_PARAMS
-// parameter after its `;`, past the whitespace curl skips at each. A quote
-// anywhere else is literal to curl, so a `;` inside what it spans still ends
-// the word and the `@` or `<` after it still opens a file.
-function curlQuotesWordAt(text, i, valueStart) {
-  let j = i;
-  while (j > 0 && isCurlBlank(text[j - 1])) j--;
-  if (j === valueStart) return true;
-  if (j === 0 || text[j - 1] !== '=') return false;
-  const nameEnd = j - 1;
-  for (const param of CURL_QUOTED_PARAMS) {
-    let k = nameEnd - param.length;
-    if (k < 1 || text.slice(k, nameEnd).toLowerCase() !== param) continue;
-    while (k > 0 && isCurlBlank(text[k - 1])) k--;
-    if (k > 0 && text[k - 1] === ';') return true;
+// For each index i of `text`, the index of the first quote at or after i that
+// closes a quoted word, or -1. curl's get_param_word skips `\\` and `\"` pairs,
+// so a quote closes a word when the run of backslashes before it is even. A
+// scan always enters that run from its start, so where it began does not
+// matter, and one pass serves every word: no quote is scanned for twice.
+function curlQuoteClosers(text) {
+  const n = text.length;
+  const next = new Int32Array(n + 1);
+  next[n] = -1;
+  let run = 0;
+  const closes = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    if (text[i] === '"' && run % 2 === 0) closes[i] = 1;
+    run = text[i] === '\\' ? run + 1 : 0;
   }
-  return false;
+  for (let i = n - 1; i >= 0; i--) next[i] = closes[i] ? i : next[i + 1];
+  return next;
+}
+
+// Whether curl's -F parser, under grammar `g`, opens a secret file for the
+// value `text` (formparse, get_param_part and get_param_word, ported): a file
+// of an `@` list, a `<` file, or a `headers=@` / `headers=<` file. Each
+// character is read a bounded number of times.
+function curlFormOpensSecret(text, g, closers) {
+  const n = text.length;
+  const at = (k) => (k < n ? text[k] : '');
+  // get_param_word: [value, index it stops at, quoted]. A word starting with
+  // `"` that a later quote closes is quoted (its trailing data, up to `;` or
+  // the end character, is skipped); otherwise it runs to `;` or the end
+  // character, quote and all.
+  function word(p, endchar) {
+    if (text[p] === '"' && closers && closers[p + 1] !== -1) {
+      const close = closers[p + 1];
+      let k = close + 1;
+      while (k < n && text[k] !== ';' && text[k] !== endchar) k++;
+      return [text.slice(p + 1, close).replace(/\\([\\"])/g, '$1'), k, true];
+    }
+    let k = p;
+    while (k < n && text[k] !== ';' && text[k] !== endchar) k++;
+    return [text.slice(p, k), k, false];
+  }
+  // An unquoted word loses its trailing blanks.
+  function value(w) {
+    if (w[2]) return w[0];
+    let e = w[0].length;
+    while (e > 0 && g.blank(w[0][e - 1])) e--;
+    return w[0].slice(0, e);
+  }
+  function skipBlanks(p) {
+    while (p < n && g.blank(text[p])) p++;
+    return p;
+  }
+  function hasPrefix(p, s) {
+    return text.slice(p, p + s.length).toLowerCase() === s;
+  }
+  // get_param_part: the part's data word, then its `;` parameters. Returns
+  // { data, sep, end }, { hit } when a headers file is a secret, or { failed }
+  // when curl refuses the part (no file of it is opened).
+  function part(p, endchar) {
+    const d = word(skipBlanks(p), endchar);
+    const data = value(d);
+    p = d[1];
+    let sep = at(p);
+    let inType = false;
+    while (sep === ';') {
+      p = skipBlanks(p + 1);
+      if (!inType && hasPrefix(p, 'type=')) {
+        p = skipBlanks(p + 5);
+        if (g.sscanfType) {
+          const major = p;
+          while (p < n && p - major < 127 && text[p] !== '/' && text[p] !== ' ') p++;
+          if (p === major || text[p] !== '/') return { failed: true };
+          const minor = ++p;
+          while (p < n && p - minor < 127 && text[p] !== ';' && text[p] !== ',' && text[p] !== ' ' && text[p] !== '\n') p++;
+          if (p === minor) return { failed: true };
+          while (p < n && text[p] !== ';' && text[p] !== endchar) p++;
+        } else {
+          while (p < n && !CURL_TYPE_TSPECIALS.includes(text[p])) p++;
+        }
+        inType = true;
+      } else if (hasPrefix(p, 'filename=') || hasPrefix(p, 'encoder=')) {
+        inType = false;
+        p = word(skipBlanks(p + (text[p] === 'f' || text[p] === 'F' ? 9 : 8)), endchar)[1];
+      } else if (hasPrefix(p, 'headers=')) {
+        inType = false;
+        p += 8;
+        if (text[p] === '@' || text[p] === '<') {
+          const w = word(skipBlanks(p + 1), endchar);
+          if (curlNameIsSecret(value(w))) return { hit: true };
+          p = w[1];
+        } else {
+          p = word(skipBlanks(p), endchar)[1];
+        }
+      } else if (inType) {
+        while (p < n && text[p] !== ';' && text[p] !== endchar) p++;
+      } else {
+        p = word(p, endchar)[1];
+      }
+      sep = at(p);
+    }
+    return { data, sep, end: p };
+  }
+
+  const eq = text.indexOf('=');
+  if (eq === -1) return false;
+  let p = eq + 1;
+  if (text[p] === '@') {
+    for (;;) {
+      const r = part(p + 1, ',');
+      if (r.hit) return true;
+      if (r.failed) return false;
+      if (curlNameIsSecret(r.data)) return true;
+      if (r.sep === '') return false;
+      p = r.end;
+    }
+  }
+  if (text[p] === '<') {
+    const r = part(p + 1, '');
+    return r.hit === true || (!r.failed && curlNameIsSecret(r.data));
+  }
+  return part(p, '').hit === true;
+}
+
+const CURL_VARIABLE_FILE_RE = /^%?[A-Za-z0-9_]+(?:\[[0-9]*-[0-9]*\])?@/;
+
+// Whether a curl option outside -F reads a secret file from the value `v`:
+// after a leading `@` (-d and the other --data forms, --json, -H, -w,
+// --url), after the first `@` when the value holds no `=` (--data-urlencode,
+// --url-query), after `name@` or `name[range]@` (--variable), or after
+// `ecl:@` (--ech). The name is the rest of the value, unchanged.
+function curlAtValueOpensSecret(v) {
+  if (v[0] === '@' && curlNameIsSecret(v.slice(1))) return true;
+  const a = v.indexOf('@');
+  if (a !== -1 && v.indexOf('=') === -1 && curlNameIsSecret(v.slice(a + 1))) return true;
+  const m = CURL_VARIABLE_FILE_RE.exec(v);
+  if (m && curlNameIsSecret(v.slice(m[0].length))) return true;
+  return v.startsWith('ecl:@') && curlNameIsSecret(v.slice(5));
 }
 
 // curl opens a file named inside an option value as well as one given as its
-// own `@file` word (#5779): after `@` (`-d@f`, `-H@f`, `--data-urlencode
-// name@f`, `--url-query name@f`, `--variable name@f`) and after `=@` or `=<`
-// in a form part (`-F name=@f`, `-F name=<f`, `;headers=@f`). A name runs to
-// the next `;` (a form part parameter such as `;type=…`), `@` or `<`, with the
-// whitespace curl skips around it dropped; a quoted name (`@"f"`) runs to its
-// closing quote, curl unescaping `\\` and `\"` inside it. After `@` a `,` also
-// ends the name and starts another, for the form file list (`@a,f`), which
-// goes on after a part's parameters (`@a;type=t,f`); the same name is judged
-// with its commas kept too, since `-d @f` opens one file whose name may hold
-// them. A `<` name takes no list and keeps its commas (`-F name=<a,f` opens
-// `a,f`). This needs no table of curl's options; text with no `@` or `<` (a
-// JSON body, `-d 'a=1,.env'`) holds no file name. The cost is a fail-safe
-// false positive wherever curl reads an `@` or `<` followed by a secret name
-// another way: as data (`-d k=@.env`, `--form-string f=@.env`, `-d
-// 'email=me@.env'`, a URL's `user@` part) or as one name holding a comma
-// (`-d @a,.env`), pinned in tests. The scan reads each character at most
-// three times (once more only after an unmatched quote, of which a word holds
-// one), and a name with no `.` (which no secret name lacks) never reaches
-// namesSecret.
+// own `@file` word (#5779): `-d@f`, `-H@f`, `--data-urlencode name@f`,
+// `--variable name@f`, `-F name=@f`, `-F name=<f`, `-F 'k=v;headers=@f'`.
+// The guard holds no table of curl's options, so each curl argument is read
+// both as a -F value, under every grammar curl has shipped, and as a value of
+// the options that read `@file`. A value attached to short options (`-d@f`,
+// `-sd@f`, `-Fk=@f`) starts somewhere after the option letters, so the
+// reading after the first letter and after the last one are judged too. The
+// cost is a fail-safe denial where the word is read another way than the
+// option curl gives it (`-d k=@.env` read as a form value, a URL's `user@`
+// part read as `name@file`), pinned in tests.
 function curlValueNamesSecret(text) {
-  const eq = text.indexOf('=');
-  const valueStart = eq === -1 ? -1 : eq + 1;
-  let list = false;
-  // The closing quote of the last span this scan read through rather than
-  // skipped. curl may be quoting such a span (a quoted unknown parameter
-  // `;"…"`, a quoted `@` name), so no quote inside it may start a skip: in
-  // `;"x;filename=";headers=@f;"` curl's quote closes after `filename=` and
-  // `f` opens, where reading that `"` as a `filename=` quote would skip it.
-  let readThrough = -1;
-  let i = 0;
-  while (i < text.length) {
-    const ch = text[i];
-    // A quoted value (`a="…"`, `;filename="…"`) is a word curl reads whole, so
-    // an `@`, `<` or `,` inside it opens nothing. Only where curl reads a
-    // quoted word: in `a=x="…;headers=@f"` the quote is literal and `f` opens.
-    if (ch === '"' && i > readThrough) {
-      const close = curlClosingQuote(text, i);
-      if (close !== -1) {
-        if (curlQuotesWordAt(text, i, valueStart)) { i = close + 1; continue; }
-        readThrough = close;
-      }
-    }
-    if (ch !== '@' && ch !== '<' && !(list && ch === ',')) { i++; continue; }
-    if (ch === '@') list = true;
-    // A `<` name keeps its commas unless it sits in an `@` file list
-    // (`@a;headers=<h,f`), where the list's `,` ends it.
-    const splitsAtComma = ch !== '<' || list;
-    i++;
-    while (i < text.length && isCurlBlank(text[i])) i++;
-    if (text[i] === '"') {
-      const close = curlClosingQuote(text, i);
-      if (close !== -1) {
-        const raw = text.slice(i + 1, close);
-        const name = raw.replace(/\\([\\"])/g, '$1');
-        if (curlNameIsSecret(name, 0, name.length, false)) return true;
-        // curl gives a quote its meaning only where a word starts; if this one
-        // is not such a quote, what it spans is read on, so judge that reading
-        // too whenever the span holds a delimiter.
-        if (CURL_QUOTED_SPECIAL_RE.test(raw)) {
-          readThrough = close;
-          i++;
-        } else {
-          i = close + 1;
-        }
-        continue;
-      }
-      // No closing quote: curl reads the name unquoted, quote and all.
-    }
-    const start = i;
-    while (i < text.length && text[i] !== ';' && text[i] !== '@' && text[i] !== '<' && !(splitsAtComma && text[i] === ',')) i++;
-    if (curlNameIsSecret(text, start, i, true)) return true;
-    if (ch === '@' && text[i] === ',') {
-      let end = i;
-      while (end < text.length && text[end] !== ';' && text[end] !== '@' && text[end] !== '<') end++;
-      if (curlNameIsSecret(text, start, end, true)) return true;
-    }
+  const closers = text.includes('"') ? curlQuoteClosers(text) : null;
+  for (const g of CURL_FORM_GRAMMARS) {
+    if (curlFormOpensSecret(text, g, closers)) return true;
   }
-  return false;
+  if (curlAtValueOpensSecret(text)) return true;
+  if (text[0] !== '-' || text[1] === '-') return false;
+  let l = 1;
+  while (l < text.length && /[A-Za-z0-9]/.test(text[l])) l++;
+  return (l > 2 && curlAtValueOpensSecret(text.slice(2))) || (l > 1 && curlAtValueOpensSecret(text.slice(l)));
 }
 
 // find's actions that run the words after them, up to `;` (or `+` after
