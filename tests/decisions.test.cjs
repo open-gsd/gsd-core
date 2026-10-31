@@ -3356,7 +3356,12 @@ describe('#4939: decision-coverage answers a caller error for a phase directory 
     const resolvedPhaseDir = canonicalizePath(phaseDir);
     t.mock.method(fs, 'statSync', (p, ...rest) => {
       if (typeof p === 'string') {
-        const resolvedPath = canonicalizePath(p);
+        let resolvedPath;
+        try {
+          resolvedPath = canonicalizePath(p);
+        } catch {
+          return realStatSync.call(fs, p, ...rest);
+        }
         if (resolvedPath !== resolvedPhaseDir) return realStatSync.call(fs, p, ...rest);
         const err = new Error(`${code}: injected stat failure, stat '${p}'`);
         err.code = code;

@@ -589,6 +589,17 @@ function createTempDir(prefix = 'gsd-test-') {
   return fs.mkdtempSync(path.join(require('os').tmpdir(), prefix));
 }
 
+// Resolve existing fixture paths through the same native filesystem seam on all platforms.
+function canonicalizePath(p) {
+  return fs.realpathSync.native(p);
+}
+
+// Create a bare temp directory whose returned path is canonicalized across platforms
+// (resolves macOS /var symlink to /private/var and Windows 8.3 short paths).
+function createCanonicalTempDir(prefix = 'gsd-test-') {
+  return canonicalizePath(createTempDir(prefix));
+}
+
 // Create temp directory structure
 function createTempProject(prefix = 'gsd-test-') {
   return createFixture({ prefix, planning: true, git: false });
