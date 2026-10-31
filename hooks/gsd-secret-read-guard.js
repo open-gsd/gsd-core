@@ -1000,29 +1000,81 @@ function curlValueNamesSecret(text) {
   return false;
 }
 
-// Index of the first operand curl takes as an argument: 0 when curl is the
-// segment's command, the index after the first `curl` word when a command the
-// guard does not unwrap runs it (`xargs curl …`, `find … -exec curl …`),
-// otherwise past the end. Only those operands get curl's value reading, so a
-// search pattern in a command with no `curl` word is judged as before.
-function curlArgumentStart(base, operands) {
-  if (CURL_COMMANDS.has(base)) return 0;
-  for (let k = 0; k < operands.length; k++) {
-    if (isCurlWord(operands[k].text)) return k + 1;
-  }
-  return operands.length;
+// find's actions that run the words after them, up to `;` (or `+` after
+// `{}`), as a command.
+const FIND_EXEC_ACTIONS = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+
+// Which operands curl takes as its arguments (#5779): every one when curl is
+// the segment's command, and those after a curl that a launcher runs as a
+// command — xargs's sub-command, or the command of a find -exec / -execdir /
+// -ok / -okdir action, each past the wrappers resolveCommand unwraps
+// (`xargs sudo curl …`). Only those operands get curl's value reading. A
+// `curl` word anywhere else is an operand (`grep curl …`, `apt-get install
+// curl …`), so the words after it are judged as before.
+function curlArguments(base, operands) {
+  const marks = new Uint8Array(operands.length);
+  markCurlArguments(base, operands, 0, operands.length, marks, 0);
+  return marks;
 }
 
-// lastSegment(text).toLowerCase() is `curl` or `curl.exe`, read by hand: every
-// operand of every segment passes through here, and lastSegment's regex
-// backtracks on a long run of separators.
-function isCurlWord(text) {
+// Marks words[from..to) when `base`, the command they belong to, is curl, and
+// follows a launcher to the command it runs. Each level handles a range of the
+// segment's words once, and MAX_NESTING_DEPTH bounds the levels.
+function markCurlArguments(base, words, from, to, marks, depth) {
+  if (CURL_COMMANDS.has(base)) {
+    marks.fill(1, from, to);
+    return;
+  }
+  if (depth >= MAX_NESTING_DEPTH) return;
+  if (base === 'xargs') {
+    const { subIdx } = xargsSubcommand(words, from, to);
+    if (subIdx !== -1) markLaunchedCurl(words, subIdx, to, marks, depth + 1);
+  } else if (base === 'find') {
+    for (let j = from; j < to; j++) {
+      if (!FIND_EXEC_ACTIONS.has(words[j].text)) continue;
+      let end = j + 1;
+      while (end < to && !isFindExecEnd(words, end)) end++;
+      markLaunchedCurl(words, j + 1, end, marks, depth + 1);
+      j = end;
+    }
+  }
+}
+
+// `;` ends a find action's command, and so does `+` right after `{}`.
+function isFindExecEnd(words, k) {
+  const t = words[k].text;
+  return t === ';' || (t === '+' && words[k - 1].text === '{}');
+}
+
+// words[from..to) is a command a launcher runs: find its command word past the
+// wrappers resolveCommand unwraps, and mark that command's arguments.
+function markLaunchedCurl(words, from, to, marks, depth) {
+  const c = launchedCommandIndex(words, from, to);
+  if (c !== -1) markCurlArguments(commandName(words[c].text), words, c + 1, to, marks, depth);
+}
+
+// Index of the command word in words[from..to) that a launcher runs, past the
+// wrappers resolveCommand unwraps and their own options, or -1. Unlike a
+// shell, a launcher execs a leading `VAR=value` word, so none is skipped.
+function launchedCommandIndex(words, from, to) {
+  let idx = from;
+  while (idx < to) {
+    const spec = WRAPPERS.get(commandName(words[idx].text));
+    if (!spec) break;
+    idx = skipWrapperArgs(words, idx + 1, spec);
+  }
+  return idx < to ? idx : -1;
+}
+
+// lastSegment(text).toLowerCase(), read by hand in one pass: lastSegment's
+// trailing-separator regex backtracks on a long run of separators, and the
+// launched-command words reach here.
+function commandName(text) {
   let end = text.length;
   while (end > 0 && (text[end - 1] === '/' || text[end - 1] === '\\')) end--;
   let seg = end;
-  while (seg > 0 && end - seg <= 8 && text[seg - 1] !== '/' && text[seg - 1] !== '\\') seg--;
-  if (seg > 0 && text[seg - 1] !== '/' && text[seg - 1] !== '\\') return false;
-  return CURL_COMMANDS.has(text.slice(seg, end).toLowerCase());
+  while (seg > 0 && text[seg - 1] !== '/' && text[seg - 1] !== '\\') seg--;
+  return text.slice(seg, end).toLowerCase();
 }
 
 const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -1368,11 +1420,11 @@ function findSecretRead(command, depth) {
     if (NON_READING_COMMANDS.has(base)) continue;
 
     const nameOnly = nameOnlyOperandIndices(base, operands);
-    const curlFrom = curlArgumentStart(base, operands);
+    const curlArgs = curlArguments(base, operands);
     for (let k = 0; k < operands.length; k++) {
       if (nameOnly.has(k)) continue;
       if (operandNamesSecret(operands[k].text)) return operands[k].text;
-      if (k >= curlFrom && curlValueNamesSecret(operands[k].text)) return operands[k].text;
+      if (curlArgs[k] && curlValueNamesSecret(operands[k].text)) return operands[k].text;
     }
   }
   return null;
@@ -1495,24 +1547,29 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
   return null;
 }
 
-// `find … | xargs cat`: the upstream segment's operands become file names the
-// sub-command reads. Only inferred across a real pipe and when stdin is not
-// redirected by `-a`/`--arg-file`. A sub-command that is itself a shell
-// (`xargs -I{} sh -c 'cat .env'`) carries a literal script and is scanned in
-// mode c whether or not a pipe feeds it.
-function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
+// Index of xargs's sub-command among operands[from..to) (-1 when there is
+// none), and whether `-a`/`--arg-file` replaced its stdin.
+function xargsSubcommand(operands, from, to) {
   let argFile = false;
-  let subIdx = -1;
-  for (let m = 0; m < operands.length; m++) {
+  for (let m = from; m < to; m++) {
     const t = operands[m].text;
     if (t === '-a' || t === '--arg-file') { argFile = true; m++; continue; }
     if (t.startsWith('--arg-file=')) { argFile = true; continue; }
     if (XARGS_VALUE_FLAGS.has(t)) { m++; continue; }
     if (t.startsWith('--') && t.includes('=')) continue;
     if (t.startsWith('-')) continue; // no-value flag (-0 -r -t -p) or long flag
-    subIdx = m;
-    break;
+    return { subIdx: m, argFile };
   }
+  return { subIdx: -1, argFile };
+}
+
+// `find … | xargs cat`: the upstream segment's operands become file names the
+// sub-command reads. Only inferred across a real pipe and when stdin is not
+// redirected by `-a`/`--arg-file`. A sub-command that is itself a shell
+// (`xargs -I{} sh -c 'cat .env'`) carries a literal script and is scanned in
+// mode c whether or not a pipe feeds it.
+function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
+  const { subIdx, argFile } = xargsSubcommand(operands, 0, operands.length);
   if (subIdx === -1) return null; // no sub-command: xargs defaults to echo
 
   const subBase = lastSegment(operands[subIdx].text).toLowerCase();
