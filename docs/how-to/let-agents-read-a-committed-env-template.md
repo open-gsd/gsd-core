@@ -61,7 +61,8 @@ to retry with the absolute one.
 | Committed as a symlink, or replaced by one on disk | a symlink can point at a real secret | commit and keep a regular file |
 | Path in config does not match | matching is exact and case-sensitive (case-insensitive on Windows only) | list the path exactly as it is in the repository |
 | `config-set` changed a workstream config | the guard reads only the root `.planning/config.json` | set the key in the root config |
-| Not a git repository, or git did not answer within 5 seconds | the guard cannot confirm the file is committed | run inside the repository |
+| Not a git repository | the guard cannot confirm the file is committed | run inside the repository |
+| The repository is SHA-256, shallow/partial and missing the object, or its objects live only in alternates | the guard reads git's own files and cannot confirm the file | run in a normal clone |
 | Bash with a relative name | see above | use the absolute path, or the Read tool |
 
 ## Removing an exemption

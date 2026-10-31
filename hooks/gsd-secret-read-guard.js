@@ -78,6 +78,15 @@
 //   scans a `<( )` operand; and `find … | xargs cat` infers the upstream
 //   segment's names as the sub-command's read operands.
 //
+// Project exemptions (#4432): `hooks.secret_read_exempt` in the root project's
+// .planning/config.json lists repo-relative files that stay readable. An entry
+// takes effect only for a file that is a regular file on disk AND a regular
+// blob (100644/100755) in the commit HEAD names — read from `.git` directly,
+// no subprocess, no timer (hooks/lib/git-head-tree.js). Read and Grep honor an
+// absolute or cwd-relative path; Bash honors the absolute path only. A Grep
+// `glob` is never widened, and a colon-joined word (`HEAD:.env.production`)
+// never matches. An unreadable config or repository means no exemption.
+//
 // Grep globs are judged per brace alternative (never on the whole glob, so
 // `{.env.local,zzz.ts}` cannot hide behind a benign sibling): a pure-wildcard
 // alternative (`*`, `**`) is allowed — Grep already skips gitignored files,
@@ -147,6 +156,31 @@ const MAX_NESTING_DEPTH = 3;
 
 // Brace-alternative budget for a Grep glob before it is denied as too complex.
 const MAX_GLOB_ALTERNATIVES = 64;
+
+// #4432: project exemptions (`hooks.secret_read_exempt` in the ROOT project's
+// .planning/config.json). `root`/`allowRelative` are set once per invocation by
+// the stdin handler; `checker` is built lazily on the first secret-classified
+// token. Any failure while building or calling it means NOT exempt — never an
+// allow, and never a throw into the fail-open crash path.
+const exemption = { root: null, allowRelative: false, checker: null, configured: false };
+
+function isExemptSecret(tok) {
+  if (exemption.root === null) return false;
+  try {
+    if (exemption.checker === null) {
+      const lib = require('./lib/secret-read-exemptions.js');
+      const entries = lib.readExemptEntries(exemption.root);
+      exemption.configured = entries.length > 0;
+      exemption.checker = entries.length === 0
+        ? () => false
+        : lib.createExemptionChecker({ root: exemption.root, entries, allowRelative: exemption.allowRelative });
+    }
+    return exemption.checker(tok) === true;
+  } catch {
+    exemption.checker = () => false;
+    return false;
+  }
+}
 
 // `.env.<suffix>` names that are templates, not secrets (case-insensitive).
 const NON_SECRET_ENV_SUFFIXES = new Set(['example', 'sample', 'template', 'dist']);
@@ -309,12 +343,21 @@ function isSecretBasename(name) {
 // lower case once at the top so `.ENV` / `.Secrets` match on the
 // case-insensitive filesystems (macOS, Windows) where they ARE the secret file
 // — the same stance as the write guard's `/i` patterns.
-function namesSecret(tok) {
+function namesSecretByName(tok) {
   if (typeof tok !== 'string' || tok === '') return false;
   const lower = tok.toLowerCase();
   if (isSecretBasename(lastSegment(lower))) return true;
   const colon = lower.lastIndexOf(':');
   return colon !== -1 && isSecretBasename(lastSegment(lower.slice(colon + 1)));
+}
+
+// A secret-by-name token is still allowed when the project listed that exact
+// committed file under `hooks.secret_read_exempt` (#4432). The exemption is
+// consulted only on the secret-classified branch, so an ordinary token costs
+// no I/O.
+function namesSecret(tok) {
+  if (!namesSecretByName(tok)) return false;
+  return !isExemptSecret(tok);
 }
 
 // ---------------------------------------------------------------------------
@@ -1410,7 +1453,10 @@ function reasonFor(code, tool, target) {
   return `Secret read guard: ${tool} would read '${target}', which matches a protected secret-file ` +
     `pattern (${PATTERN_TEXT}). Secret values must not be read into the conversation. ` +
     'If you need a specific value, ask the user for it; if you need the variable NAMES, ' +
-    'read the non-secret template (.env.example) instead.';
+    'read the non-secret template (.env.example) instead.' +
+    (tool === 'Bash' && exemption.configured
+      ? ' Files the project lists under hooks.secret_read_exempt are readable from Bash only by their absolute path.'
+      : '');
 }
 
 // stdout gets the typed JSON block; stderr gets the plain reason string
@@ -1531,6 +1577,12 @@ process.stdin.on('end', () => {
     if (!data.tool_input || typeof data.tool_input !== 'object') {
       allow(undefined);
     }
+
+    // #4432: exemptions resolve against the payload cwd (as the context
+    // monitor does), else the process cwd. Bash honors absolute paths only: a
+    // relative word there is re-anchored by cd/find/xargs/git -C.
+    exemption.root = typeof data.cwd === 'string' && data.cwd !== '' ? data.cwd : process.cwd();
+    exemption.allowRelative = tool === 'Read' || tool === 'Grep';
 
     // Every payload field is read TYPED in a single statement (#2547 class):
     // `[]`/`{}` are truthy and a non-string degrades to '' here.

@@ -10,7 +10,7 @@ group: v1.7.0 Features
 
 **Requirements:**
 - REQ-SECRET-EXEMPT-01: An unconfigured project MUST block exactly as before; the config is read only after a token has already been classified as a secret name.
-- REQ-SECRET-EXEMPT-02: An exemption MUST apply only to a path listed in `hooks.secret_read_exempt` that is committed in `HEAD` as a regular file (mode `100644`/`100755`) and is a regular file in the working tree. A git error, a missing `HEAD`, or a git call over 5 seconds MUST leave the file blocked.
+- REQ-SECRET-EXEMPT-02: An exemption MUST apply only to a path listed in `hooks.secret_read_exempt` that is committed in `HEAD` as a regular file (mode `100644`/`100755`) and is a regular file in the working tree. An unreadable or unsupported repository (SHA-256, a missing object, a corrupt pack) or a missing `HEAD` MUST leave the file blocked. The check reads `.git` directly — no subprocess, no timer — so the verdict depends only on the repository's bytes.
 - REQ-SECRET-EXEMPT-03: Read and Grep `path` MAY resolve a relative path against the session directory; Bash MUST honor an exemption only for an absolute path, because a relative shell word can name a different file after `cd`, in `find -name`, or through `xargs`.
 - REQ-SECRET-EXEMPT-04: An exempt operand MUST NOT end the scan: another secret named in the same command is still refused.
 - REQ-SECRET-EXEMPT-05: `config-set` and the guard MUST accept and reject the same entries (absolute, `..`, empty, non-string and directory-shaped entries refused; `\` read as `/`; leading `./` dropped).
