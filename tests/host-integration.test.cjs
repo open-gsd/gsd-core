@@ -2908,10 +2908,12 @@ describe('#2627 dispatch-isolation CLI route', () => {
   const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
   const GSD_TOOLS = path.join(REPO_ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
 
-  function query(runtimeId, extraArgs = []) {
+  function query(runtimeId, extraArgs = [], generation = '1') {
+    const env = { ...process.env, GSD_RUNTIME: runtimeId };
+    if (runtimeId === 'opencode') env.GSD_OPENCODE_GENERATION = generation;
     const r = runNode(
       [GSD_TOOLS, 'query', 'dispatch-isolation', ...extraArgs],
-      { cwd: REPO_ROOT, env: { ...process.env, GSD_RUNTIME: runtimeId, GSD_OPENCODE_GENERATION: '1' }, timeoutMs: PROBE_TIMEOUT_MS },
+      { cwd: REPO_ROOT, env, timeoutMs: PROBE_TIMEOUT_MS },
     );
     throwIfFailed(r, `gsd-tools query dispatch-isolation ${extraArgs.join(' ')}`);
     return r.stdout;
@@ -2962,6 +2964,12 @@ describe('#2627 dispatch-isolation CLI route', () => {
     // kimi-code binds by process cwd — no flag in argv, but cwd still returned.
     assert.deepEqual(args('kimi-code'), ['--prompt', 'P']);
     assert.equal(queryJson('kimi-code', ['--cwd-target', '/tmp/wt', '--prompt', 'P']).exec.cwd, '/tmp/wt');
+  });
+
+  test('OpenCode 2 binds the worktree through process cwd without --dir', () => {
+    const result = JSON.parse(query('opencode', ['--json', '--cwd-target', '/tmp/wt', '--prompt', 'P'], '2'));
+    assert.deepEqual(result.exec.args, ['run', 'P']);
+    assert.equal(result.exec.cwd, '/tmp/wt');
   });
 
   test('a cwd target with no prompt still resolves (prompt is optional at this seam)', () => {
