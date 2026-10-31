@@ -1542,6 +1542,8 @@ Strict mode exists because the two ways to keep planning private are not equival
 
 Both modes filter by forcing the excluded paths back to whatever the target branch already tracks, in the index *and* the working tree. Un-staging alone would record a deletion of any planning file the target branch carries, and would leave the picked file untracked on disk, where it makes a later cherry-pick of the same path abort.
 
+**Repeat publishes.** Each run records the built tip in `refs/gsd/pr-built/<mode>/<target>/<branch>` and promotes it to `refs/gsd/pr-published/<mode>/<target>/<branch>` once its `-pr` branch is merged (ancestry, or matching content after a squash or rebase merge, or, when the target has since edited those files, a merged PR for the `-pr` branch reported by `gh`). Later runs pick only commits after that point. A leftover `-pr` branch that is already merged is replaced; an unmerged one is refused by name with the commands to re-anchor or discard it.
+
 ---
 
 ### 46. Security Hardening

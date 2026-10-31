@@ -877,9 +877,17 @@ Pick by which question you are actually asking:
 | You want | Setting | What you give up |
 |---|---|---|
 | Planning never enters git | `planning.commit_docs: false` | Parallel executor worktrees; planning git history |
-| Planning is versioned locally but never published | `planning.commit_docs: true` + `planning.pr_strict: true` | Nothing — but the working branch itself must not be pushed; publish the generated `-pr` branch |
+| Planning is versioned locally but never published | `planning.commit_docs: true` + `planning.pr_strict: true` | Nothing — but the working branch itself must not be pushed; publish the generated `-pr` branch. Repeat runs replay only commits after the last published tip (see below) |
 
 The two are independent keys and can be set together, but `pr_strict` is inert when `commit_docs` is `false`: with nothing committed, there is nothing for the PR-branch filter to remove.
+
+`/gsd-pr-branch` keeps its repeat-publish state in local refs that are never pushed:
+
+- **Markers.** The last built tip is recorded in `refs/gsd/pr-built/<mode>/<target>/<working-branch>` (plus the `-pr` tip in `refs/gsd/pr-built-head/<mode>/<target>/<working-branch>`) and promoted to `refs/gsd/pr-published/<mode>/<target>/<working-branch>` once that `-pr` tip is merged, even if the local branch was deleted. `<mode>` is `strict` or `default` (`planning.pr_strict`), so switching it between runs starts from the target instead of reusing the other mode's marker. Target and branch names are percent-encoded into one ref component by `refkey` in `gsd-core/workflows/pr-branch.md`, so `feat` and `feat/sub` never collide.
+- **What counts as merged.** The `-pr` tip is an ancestor of the target; or, for a squash or rebase merge, the target holds the `-pr` content for every path it changed; or, when the target has since edited those paths, `gh` reports a merged PR for the `-pr` branch into the target whose head is the `-pr` tip. `gh` is queried only as an executable (never a shell function or alias), bounded to 10s by `gsd_run run-with-timeout`, which needs no `timeout` binary, so this works on stock macOS too. `gh` uses its default repository, so under a fork-first setup set it with `gh repo set-default`; a PR whose head moved after the local `-pr` tip was built, for example by GitHub's Update branch, is not matched.
+- **A leftover `-pr` branch.** Merged and still holding the build: replaced. Not merged, or merged but no longer holding the pending build (amended or rebased): refused by name with the commands to re-anchor or discard it. Gone and its merge unprovable: announced as dropped, with the re-anchor command.
+- **A rebased working branch.** The base is the newest commit whose patch matches a published commit. If a published commit has no match (reordered, folded or conflict-resolved), the run warns and starts from the target; re-anchor with `git update-ref <published-ref> <rebased commit equivalent to last published tip>`.
+- **Unprovable merges.** Without `gh`, auth or network a discarded `-pr` leaves nothing published and its commits are replayed. Reset with `git update-ref -d <published-ref>`.
 
 See [Publish PRs without planning artifacts](how-to/publish-prs-without-planning-artifacts.md) for the setup.
 

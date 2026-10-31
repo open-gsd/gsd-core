@@ -188,6 +188,7 @@ module.exports = {
   "tests/plugin-manifest.test.cjs",
   "tests/policy-shell-pinning.test.cjs",
   "tests/portability-rule-disable-ban.test.cjs",
+  "tests/pr-branch-published-marker.test.cjs",
   "tests/precommit-alias-drift-hook.test.cjs",
   "tests/prepush-enterprise-email-hook.test.cjs",
   "tests/process-seam.test.cjs",
