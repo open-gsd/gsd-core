@@ -1301,7 +1301,7 @@ function ledgerRows(ledger) {
   if (ledger === null) return null;
   const rows = [];
   for (const line of ledger.split('\n')) {
-    const m = line.match(/^\|\s*((?:CR|BL|WR|IN)-\d+)\s*\|\s*([a-z]+)\s*\|\s*([a-z]+)\s*\|\s*(.*?)\s*\|$/);
+    const m = line.match(/^\|\s*((?:[A-Z][A-Z0-9]*-)?(?:CR|BL|WR|IN)-\d+(?:~\d+)?)\s*\|\s*([a-z]+)\s*\|\s*([a-z]+)\s*\|\s*(.*?)\s*\|$/);
     if (m) rows.push({ id: m[1], severity: m[2], disposition: m[3], source: m[4] });
   }
   return rows;
@@ -4010,62 +4010,244 @@ describe('#3861 round 1 — the tests must run what BASH would run', () => {
   // 'CR-01 fixed' against a review reporting a brand-new CR-01 rendered the NEW finding `fixed` — a
   // false decision in the artifact whose entire purpose is telling triaged from forgotten.
 
-  test('the ledger does not promise a preservation it no longer makes', () => {
-    // The rendered text said "preserves every row and every disposition" while the step had gained
-    // an intentional drop for a reused id — shipped, user-facing text asserting something false.
-    // And the console must not point at git: committing is gated on commit_docs and a failed commit
-    // is swallowed, so under commit_docs=false the overwritten decision may exist nowhere.
-    // Round 5 found this test VACUOUS: it ran with no prior ledger, so no reuse ever occurred and
-    // the `is in git` assertion could not have failed however the console was worded. Driven through
-    // a real drop now, so the negative assertion is made against a console line that actually exists.
+  // A reused id used to DROP the earlier row (named on the console when it held a decision). Every
+  // review numbers from CR-01, so that was the common case on any re-review. The earlier row now
+  // moves to the next free `<id>~N` key, an ordinary carried row that no review heading can emit.
+  const REVIEW = (...h) => ['---', 'status: issues_found', '---', ''].concat(h).join('\n');
+  const reusedOnce = () => {
     const seed = runShippedDisposition({
-      reviewText: ['---', 'status: issues_found', '---', '', '### CR-01: the original finding'].join('\n'),
+      reviewText: REVIEW('### CR-01: the original finding'),
+      priorText: '| CR-01 | critical | deferred | waiting on the vendor |\n',
+    });
+    return runShippedDisposition({ reviewText: REVIEW('### CR-01: a brand new finding'), priorText: seed.ledger });
+  };
+
+  test('a reused id moves the earlier row to <id>~1 with its decision, Source and title', () => {
+    const out = reusedOnce();
+    const rows = ledgerRows(out.ledger);
+    assert.strictEqual(rows.find((r) => r.id === 'CR-01').disposition, 'open', 'the new finding starts open');
+    const moved = rows.find((r) => r.id === 'CR-01~1');
+    assert.ok(moved, 'the earlier row must survive under CR-01~1');
+    assert.strictEqual(moved.disposition, 'deferred');
+    assert.match(moved.source, /^waiting on the vendor \(not in the current review\)$/);
+    assert.match(out.ledger, /- id: CR-01~1\n {4}severity: critical\n {4}disposition: deferred\n {4}title: "the original finding"/);
+    assert.match(out.stdout, /re-keyed .*CR-01=deferred -> CR-01~1/, 'the move is named on the console');
+    assert.doesNotMatch(out.stdout, /DROPPED|is in git/);
+    assert.doesNotMatch(out.ledger, /id is taken|is dropped/, 'the legend no longer states an exception');
+    assert.match(out.ledger, /next free `<id>~N` key/, 'and says where a reused id\'s row goes');
+  });
+
+  test('a re-keyed row is a fixed point, and a second reuse takes the next free key', () => {
+    const first = reusedOnce();
+    const again = runShippedDisposition({ reviewText: REVIEW('### CR-01: a brand new finding'), priorText: first.ledger });
+    assert.match(again.stdout, /disposition unchanged/, 'an unchanged review rewrites nothing');
+    const decided = first.ledger.replace('| CR-01 | critical | open | - |', '| CR-01 | critical | skipped | not ours |');
+    const second = runShippedDisposition({ reviewText: REVIEW('### CR-01: a third finding'), priorText: decided });
+    const rows = ledgerRows(second.ledger);
+    assert.strictEqual(rows.find((r) => r.id === 'CR-01~1').disposition, 'deferred', 'the first move survives');
+    assert.strictEqual(rows.find((r) => r.id === 'CR-01~2').disposition, 'skipped', 'the second takes ~2');
+    assert.match(second.stdout, /CR-01=skipped -> CR-01~2/);
+  });
+
+  test('an `open` prior under a reused id is kept too, like any finding the review no longer reports', () => {
+    const seed = runShippedDisposition({ reviewText: REVIEW('### CR-01: the original finding') });
+    const out = runShippedDisposition({ reviewText: REVIEW('### CR-01: a brand new finding'), priorText: seed.ledger });
+    assert.strictEqual(ledgerRows(out.ledger).find((r) => r.id === 'CR-01~1').disposition, 'open');
+    assert.match(out.stdout, /CR-01=open -> CR-01~1/);
+  });
+
+  test('a fix report deciding the NEW finding does not erase the earlier finding\'s decision', () => {
+    // applied wins row() before the identity check, so the reuse used to be lost with no report at all.
+    const seed = runShippedDisposition({
+      reviewText: REVIEW('### CR-01: the original finding'),
       priorText: '| CR-01 | critical | deferred | waiting on the vendor |\n',
     });
     const out = runShippedDisposition({
-      reviewText: ['---', 'status: issues_found', '---', '', '### CR-01: a brand new finding'].join('\n'),
+      reviewText: REVIEW('### CR-01: a brand new finding'),
+      fixText: ['## Fixed Issues', '', '### CR-01: a brand new finding'].join('\n'),
       priorText: seed.ledger,
     });
-    assert.match(out.stdout, /decision\(s\) DROPPED/, 'precondition: this run must actually drop a decision');
-    assert.doesNotMatch(out.ledger, /preserves every row and every disposition/,
-      'the unqualified preservation promise must not return');
-    assert.match(out.ledger, /id is REUSED/, 'and the one exception must be stated where a reader meets it');
-    assert.doesNotMatch(out.stdout, /is in git/, 'the console must not assert a recovery path that may not exist');
+    const rows = ledgerRows(out.ledger);
+    assert.strictEqual(rows.find((r) => r.id === 'CR-01').disposition, 'fixed');
+    assert.strictEqual(rows.find((r) => r.id === 'CR-01~1').disposition, 'deferred');
   });
 
-  test('an `open` prior is replaced SILENTLY, and the shipped text says so', () => {
-    // Round 5: the legend and both feature docs claimed the drop is named on the console
-    // unconditionally. It is not — `row()` reports only a RECORDED decision (`was.d !== 'open'`).
-    // The behaviour is deliberate (an `open` row records no decision to lose); the text was wrong.
-    const seed = runShippedDisposition({
-      reviewText: ['---', 'status: issues_found', '---', '', '### CR-01: the original finding'].join('\n'),
-    });
-    assert.strictEqual(ledgerRows(seed.ledger).find((r) => r.id === 'CR-01').disposition, 'open');
+  test('a review-scoped prefix on a heading is a finding, not a shortfall', () => {
     const out = runShippedDisposition({
-      reviewText: ['---', 'status: issues_found', '---', '', '### CR-01: a brand new finding'].join('\n'),
-      priorText: seed.ledger,
+      reviewText: ['---', 'status: issues_found', 'findings:', '  critical: 1', '  warning: 1', '  info: 0', '  total: 2', '---', '',
+        '## Critical Issues', '### W6-CR-01: prefixed critical', '## Warnings', '### W6-WR-01: prefixed warning'].join('\n'),
+      reviewTotal: '2',
     });
-    assert.doesNotMatch(out.stdout, /DROPPED/, 'an untriaged prior row is replaced without a report');
-    assert.match(out.ledger, /a row still at `open` is replaced silently/,
-      'and the legend must state that exception rather than promising an unconditional report');
+    const rows = ledgerRows(out.ledger);
+    assert.deepStrictEqual(rows.map((r) => r.id + '=' + r.severity), ['W6-CR-01=critical', 'W6-WR-01=warning']);
+    assert.doesNotMatch(out.stdout, /recorded NOWHERE/);
+    assert.doesNotMatch(out.ledger, /^unparsed:/m);
   });
 
-  test('a dropped decision is REPORTED on the console, not lost quietly', () => {
-    // The `superseded:` block that preserved these was tried and withdrawn — it produced a fresh
-    // defect on each of three review passes. What survives is the guard (no false `fixed`) plus an
-    // explicit report; the prior ledger row remains in git.
-    const seed = runShippedDisposition({
-      reviewText: ['---', 'status: issues_found', '---', '', '### CR-01: the original finding'].join('\n'),
-      priorText: '| CR-01 | critical | deferred | waiting on the vendor |\n',
-    });
+  test('a prefixed ledger row survives a re-run byte-for-byte, and does not lend its title to a neighbour', () => {
+    // statforge 55.3 renamed rows R1-* by hand after a reused-id loss; the closed alternation deleted
+    // all of them with no console line, and each unmatched `- id:` left _fmId on the previous bare
+    // id, so the prefixed entries' titles overwrote that id's title.
+    const prior = ['---', 'phase: 01', 'review: 01-REVIEW.md', 'titles: json', 'findings:',
+      '  - id: WR-09', '    severity: warning', '    disposition: deferred', '    title: "the deferred warning"',
+      '  - id: R1-WR-01', '    severity: warning', '    disposition: fixed', '    title: "renamed with a round prefix"',
+      'open: 0', 'total: 2', 'recorded: x', '---', '', '# Phase 01: Code Review Disposition', '',
+      '| Finding | Severity | Disposition | Source |', '|---------|----------|-------------|--------|',
+      '| WR-09 | warning | deferred | phase 10 (not in the current review) |',
+      '| R1-WR-01 | warning | fixed | 01-REVIEW-FIX.md (not in the current review) |', ''].join('\n');
+    const first = runShippedDisposition({ reviewText: REVIEW('### IN-01: unrelated'), priorText: prior });
+    const rows = ledgerRows(first.ledger);
+    assert.strictEqual(rows.find((r) => r.id === 'R1-WR-01').disposition, 'fixed', 'the prefixed row is kept');
+    assert.match(first.ledger, /- id: WR-09\n {4}severity: warning\n {4}disposition: deferred\n {4}title: "the deferred warning"/,
+      'WR-09 keeps its own title');
+    const again = runShippedDisposition({ reviewText: REVIEW('### IN-01: unrelated'), priorText: first.ledger });
+    assert.match(again.stdout, /disposition unchanged/);
+    assert.strictEqual(again.ledger.replace(/^recorded:.*$/m, ''), first.ledger.replace(/^recorded:.*$/m, ''));
+  });
+
+  test('a ledger row with no parseable id stops the rewrite and is named, never deleted', () => {
+    const prior = ['| Finding | Severity | Disposition | Source |', '|---------|----------|-------------|--------|',
+      '| CR-01 | critical | deferred | vendor |', '| R1.2-WR-01 | warning | fixed | by hand |', ''].join('\n');
+    const out = runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: prior });
+    assert.strictEqual(out.ledger, prior, 'the ledger is left exactly as it was');
+    assert.match(out.stdout, /NOT rewritten: 1 ledger row\(s\).*R1\.2-WR-01/);
+  });
+
+  test('an indented or pipe-less table row is read like any other row, never deleted silently', () => {
+    // GFM reads both as table rows, so a hand edit can produce either. Both used to fall outside the
+    // column-0 `|` the parser and the stop keyed on, and the whole-file rewrite deleted them unnamed.
+    const head = ['| Finding | Severity | Disposition | Source |', '|---------|----------|-------------|--------|'];
+    const bad = head.concat(['| CR-01 | critical | deferred | vendor |', ' | R1.2-WR-01 | warning | fixed | by hand |',
+      'R1.3-WR-02 | warning | fixed | by hand', '']).join('\n');
+    const stopped = runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: bad });
+    assert.strictEqual(stopped.ledger, bad, 'the ledger is left exactly as it was');
+    assert.match(stopped.stdout, /NOT rewritten: 2 ledger row\(s\).*R1\.2-WR-01.*R1\.3-WR-02/);
+    const good = head.concat(['  | CR-09 | critical | deferred | later |', 'WR-10 | warning | skipped | noise', '']).join('\n');
+    const rows = ledgerRows(runShippedDisposition({ reviewText: REVIEW('### IN-01: unrelated'), priorText: good }).ledger);
+    assert.strictEqual(rows.find((r) => r.id === 'CR-09').disposition, 'deferred', 'an indented row is carried');
+    assert.strictEqual(rows.find((r) => r.id === 'WR-10').disposition, 'skipped', 'a pipe-less row is carried');
+    // Inside the table every non-blank line is a row to a Markdown reader: a bare word (padded with
+    // empty cells), and a row whose first cell happens to read `Finding`, which is not the header.
+    const odd = head.concat(['| CR-01 | critical | deferred | vendor |', '| Finding | warning | fixed | by hand |', 'R1.4-WR-03',
+      '#2 is not a heading', '<5 ms is not a tag', '']).join('\n');
+    const named = runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: odd });
+    assert.strictEqual(named.ledger, odd, 'the ledger is left exactly as it was');
+    assert.match(named.stdout, /NOT rewritten: 4 ledger row\(s\).*Finding.*R1\.4-WR-03.*#2 is not.*<5 ms/);
+    // A table whose header and separator carry no outer pipes, in any case, is the same table.
+    const bare = ['finding | severity | disposition | source', '--------|----------|-------------|-------',
+      'WR-11 | warning | deferred | vendor', ''].join('\n');
+    const kept = ledgerRows(runShippedDisposition({ reviewText: REVIEW('### IN-01: unrelated'), priorText: bare }).ledger);
+    assert.strictEqual(kept.find((r) => r.id === 'WR-11').disposition, 'deferred', 'a pipe-less table is carried');
+    // A hand-added row may omit the Source cell, and a pipe-less row's Source may end in an escaped
+    // pipe; a heading straight under the table starts a new block, so it ends the table, not a row.
+    const edits = head.concat(['| WR-12 | warning | deferred', 'WR-13 | warning | skipped | team A\\|', '## Notes', 'a note']).join('\n');
+    const edited = runShippedDisposition({ reviewText: REVIEW('### IN-01: unrelated'), priorText: edits });
+    assert.doesNotMatch(edited.stdout, /NOT rewritten/);
+    const er = ledgerRows(edited.ledger);
+    assert.strictEqual(er.find((r) => r.id === 'WR-12').disposition, 'deferred', 'a three-cell row is carried');
+    assert.match(er.find((r) => r.id === 'WR-13').source, /^team A\\\| \(not in the current review\)$/, 'the escaped pipe stays');
+    // A row keyed by an id is a row wherever it sits: a quote ends the Markdown table, but the
+    // decided row after it must not leave silently. A Source ending in an escaped BACKSLASH keeps its
+    // closing pipe as the border. A two-cell row has no disposition to read, so it stops the run.
+    const after = head.concat(['| CR-01 | critical | deferred | path C:\\\\|', '> a note', 'WR-14 | warning | skipped | noise', '']).join('\n');
+    const ar = ledgerRows(runShippedDisposition({ reviewText: REVIEW('### IN-01: unrelated'), priorText: after }).ledger);
+    assert.strictEqual(ar.find((r) => r.id === 'WR-14').disposition, 'skipped', 'a decided row after a quote is carried');
+    assert.match(ar.find((r) => r.id === 'CR-01').source, /^path C:\\\\ \(not in the current review\)$/, 'no pipe is invented');
+    const two = head.concat(['| CR-07 | deferred |', '']).join('\n');
+    const twoOut = runShippedDisposition({ reviewText: REVIEW('### IN-01: unrelated'), priorText: two });
+    assert.strictEqual(twoOut.ledger, two, 'a two-cell row stops the rewrite');
+    assert.match(twoOut.stdout, /NOT rewritten: 1 ledger row\(s\).*CR-07/);
+    // Whatever shape a row takes, a line naming an id and a decision the parse did not record as that
+    // decision stops the run: a dropped Severity cell, a row inside a quote, a duplicated id, a
+    // capitalised word. An ordered list item under the table ends it, like any other block.
+    for (const bad of ['| CR-01 | deferred | waiting on the vendor |', '> | CR-01 | critical | deferred | vendor |',
+      '| CR-01 | critical | Deferred | vendor |', '| CR-01 | critical | `deferred` | vendor |', '| CR-01 | critical | **deferred** | vendor |',
+      '> | `CR-01` | critical | deferred | vendor |', '| CR-01 | critical | deferred_q3 | vendor |',
+      '| WR-02 | warning | open | - | CR-01 | critical | deferred | vendor |', '| CR-01 | critical | ~~open~~ fixed | patched |',
+      '| CR-01 | critical | open -> fixed | patched |']) {
+      const t = head.concat([bad, '1. follow up', '']).join('\n');
+      const o = runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: t });
+      assert.strictEqual(o.ledger, t, 'the ledger is left exactly as it was: ' + bad);
+      assert.match(o.stdout, /NOT rewritten: 1 ledger row\(s\).*CR-01/, bad);
+    }
+    // A quoted copy of a row is a second row even when it agrees with the first; two different lines
+    // that share their first 40 characters are still two lines.
+    const qdup = head.concat(['| CR-01 | critical | deferred | original reason |', '> | CR-01 | critical | deferred | second reason |', '']).join('\n');
+    assert.match(runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: qdup }).stdout, /NOT rewritten: 1 ledger row\(s\)/);
+    const same40 = head.concat(['> | CR-01 | critical | deferred | waiting on the vendor, ticket 1 |',
+      '> | CR-01 | critical | deferred | waiting on the vendor, ticket 2 |', '']).join('\n');
+    assert.match(runShippedDisposition({ reviewText: REVIEW('### IN-01: unrelated'), priorText: same40 }).stdout, /NOT rewritten: 2 ledger row\(s\)/);
+    // A line naming two ids whose decisions were both missed is named once, not twice.
+    const twice = head.concat(['> | WR-02 | warning | skipped | - | CR-01 | critical | deferred | vendor |', '']).join('\n');
+    assert.match(runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: twice }).stdout,
+      /NOT rewritten: 1 ledger row\(s\).*> \| WR-02/);
+    const word = head.concat(['| CR-01 | critical | open | fixed |', '| CR-02 | critical | deferred | see \\| WR-02 \\| skipped |', '']).join('\n');
+    assert.doesNotMatch(runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: word }).stdout, /NOT rewritten/,
+      'a Source that reads like a decision is not one');
+    for (const second of ['| CR-01 | critical | open | - |', '| CR-01 | critical | deferred | a second reason |']) {
+      const dup = head.concat(['| CR-01 | critical | deferred | vendor |', second, '']).join('\n');
+      const dupOut = runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: dup });
+      assert.strictEqual(dupOut.ledger, dup, 'a duplicated id stops the rewrite: ' + second);
+      assert.match(dupOut.stdout, /NOT rewritten: 1 ledger row\(s\).*CR-01/, second);
+    }
+    // A quoted table without pipes is still a table to a reader.
+    const quoted = ['> Finding | Severity | Disposition | Source', '> --------|----------|-------------|-------',
+      '> CR-09 | critical | deferred | waiting for vendor', ''].join('\n');
+    assert.match(runShippedDisposition({ reviewText: REVIEW('### IN-01: unrelated'), priorText: quoted }).stdout,
+      /NOT rewritten: 1 ledger row\(s\).*CR-09/);
+    // The builder's own frontmatter is not read for decisions: a finding whose title quotes a row.
+    const quoting = REVIEW('### WR-01: parser drops `| CR-01 | deferred | x |` rows');
+    const seeded = runShippedDisposition({ reviewText: quoting });
+    assert.match(runShippedDisposition({ reviewText: quoting, priorText: seeded.ledger }).stdout, /disposition unchanged/);
+  });
+
+  test('an unkeyable or empty frontmatter id moves the cursor, so its title never lands on the entry before it', () => {
+    // `- id:` with nothing after it (no trailing space) did not match the id line at all, and an
+    // unkeyable id that kept the cursor would do the same: the next `title:` overwrote WR-09's, the
+    // review's own WR-09 then read as a different finding, and its decision was moved off it.
+    const prior = ['---', 'phase: 01', 'review: 01-REVIEW.md', 'titles: json', 'findings:',
+      '  - id: WR-08', '    severity: warning', '    disposition: deferred', '    title: "the first warning"',
+      '  - id: R1.2-WR-01', '    title: "an unkeyable entry"',
+      '  - id: WR-09', '    severity: warning', '    disposition: deferred', '    title: "the second warning"',
+      '  - id:', '    title: "an empty entry"',
+      '  - id: WR-06', '    severity: warning', '    disposition: deferred', '    title: "the third warning"',
+      '  -  id: R1.2-WR-02', '    title: "two spaces after the dash"',
+      '  - id: WR-05', '    severity: warning', '    disposition: deferred', '    title: "the fourth warning"',
+      '  - severity: warning', '    title: "an entry whose id is not its first key"', '    id: R1.2-WR-03',
+      '  - id: WR-04', '    severity: warning', '    disposition: deferred', '    title: "the fifth warning"',
+      '  -', '    id: R1.2-WR-04', '    title: "an entry whose dash stands alone"',
+      '  - id: WR-03', '    severity: warning', '    disposition: deferred', '    title: "the sixth warning"',
+      '---', '    title: "the frontmatter fence ends the section"',
+      'open: 0', 'total: 6', 'recorded: x', '---', '', '# Phase 01: Code Review Disposition', '',
+      '    title: "an indented body line, after the frontmatter has ended"', '',
+      '| Finding | Severity | Disposition | Source |', '|---------|----------|-------------|--------|',
+      '| WR-08 | warning | deferred | phase 10 |', '| WR-09 | warning | deferred | phase 11 |',
+      '| WR-06 | warning | deferred | phase 12 |', '| WR-05 | warning | deferred | phase 13 |',
+      '| WR-04 | warning | deferred | phase 14 |', '| WR-03 | warning | deferred | phase 15 |', ''].join('\n');
     const out = runShippedDisposition({
-      reviewText: ['---', 'status: issues_found', '---', '', '### CR-01: a brand new finding'].join('\n'),
-      priorText: seed.ledger,
-    });
-    assert.strictEqual(ledgerRows(out.ledger).find((r) => r.id === 'CR-01').disposition, 'open');
-    assert.match(out.stdout, /decision\(s\) DROPPED/, 'the drop must be stated');
-    assert.match(out.stdout, /CR-01=deferred/, 'naming the id and what was decided');
-    assert.doesNotMatch(out.ledger, /^superseded:/m, 'and no preservation block is written');
+      reviewText: REVIEW('### WR-08: the first warning', '### WR-09: the second warning', '### WR-06: the third warning',
+        '### WR-05: the fourth warning', '### WR-04: the fifth warning', '### WR-03: the sixth warning'), priorText: prior });
+    const rows = ledgerRows(out.ledger);
+    for (const id of ['WR-08', 'WR-09', 'WR-06', 'WR-05', 'WR-04', 'WR-03']) {
+      assert.strictEqual(rows.find((r) => r.id === id).disposition, 'deferred', id + ' keeps its decision');
+      assert.ok(!rows.some((r) => r.id === id + '~1'), id + ' is not moved as if it were a different finding');
+    }
+    assert.doesNotMatch(out.stdout, /re-keyed/);
+  });
+
+  test('outside a severity section the tier comes from the segment before the number', () => {
+    // sectionSev wins inside `## Critical Issues` and the like, so only an unsectioned heading reaches
+    // prefixSev. Reading the FIRST segment there made `W6-CR-01` info and `CR-WR-02` critical.
+    const out = runShippedDisposition({ reviewText: REVIEW('### W6-CR-01: a', '### CR-WR-02: b', '### R1-IN-03: c') });
+    assert.deepStrictEqual(ledgerRows(out.ledger).map((r) => r.id + '=' + r.severity),
+      ['W6-CR-01=critical', 'CR-WR-02=warning', 'R1-IN-03=info']);
+  });
+
+  test('an out-of-vocabulary disposition on a CARRIED row is carried as open, not deleted', () => {
+    const out = runShippedDisposition({ reviewText: REVIEW('### IN-01: unrelated'), priorText: '| CR-07 | critical | wontfix | reason |\n' });
+    const row = ledgerRows(out.ledger).find((r) => r.id === 'CR-07');
+    assert.ok(row, 'the row must not vanish');
+    assert.strictEqual(row.disposition, 'open');
   });
 
   test('a prior decision is NOT inherited when the id now names a different finding', () => {

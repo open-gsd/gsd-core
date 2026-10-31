@@ -2508,21 +2508,36 @@ decision is carried forward only while the ID still names the same finding. With
 `CR-01 fixed` would be inherited by a brand-new `CR-01`, which is a false decision in the one
 artifact whose purpose is telling triaged from forgotten.
 
-**The limitation that follows, stated rather than hidden.** When an ID *is* reused, the new finding
-is recorded `open` (nobody decided anything about it) and the earlier decision **loses its row** —
-the ledger keys rows on the finding ID, and two rows under one ID is an ambiguity, not a record. The
-drop is reported on the console, naming the ID and what had been decided — for a *recorded* decision.
-A prior row still sitting at `open` is replaced silently, and deliberately: `open` means nobody had
-decided anything, so there is no decision to lose. Preserving a recorded decision in the file
-was tried and withdrawn: it needed a second identity scheme and produced a fresh defect on each of
-three review passes. Recovery is the ledger's own git history where `commit_docs` is on — which is
-why the console reports the drop rather than pointing at a commit that may not exist.
+**When an ID *is* reused, the earlier row moves.** Every review numbers from `CR-01` / `WR-01` /
+`IN-01`, so any re-review reuses IDs. The new finding is recorded `open` (nobody decided anything
+about it) and the earlier row — its decision, Source, severity and title — moves to the next free
+`<ID>~N` key (`CR-01~1`, then `CR-01~2` on a second reuse), where it is an ordinary carried row.
+`~` never appears in a review heading, so a moved row is never matched again and never moves twice.
+The move is named on the console. A fix report deciding the new finding does not erase the earlier
+one's row either.
 
-**Two residuals, since (ID, title) is not proof of identity.** A ledger written before titles were
+**Review-scoped prefixes are IDs too.** A heading or ledger row may carry one prefix before the
+tier (`### W6-CR-01: …`, `| R1-WR-01 | … |`); the tier, and so the inferred severity, is read from the
+segment before the number. A table row whose first cell is not an ID of that shape — indented, or
+written without its leading `|`, included — stops the rewrite: the ledger is left as it is and the
+row is named on the console, because rewriting the file whole would delete it. The table runs from
+its header to a blank line or the start of another block (a heading, quote, list, HTML or fence),
+so plain text written straight under the table is read as a row; put a blank line above it. A line
+keyed by a finding ID is read as a row wherever it sits, and any body line that names an ID and a
+disposition the step did not read as that disposition — a dropped cell, a row in a quote, a
+`` `deferred` `` in backticks, two rows joined onto one line, a struck-out `~~open~~ fixed` — stops the
+rewrite too, as does a second row for one ID, so reading the ledger never changes or drops a recorded
+decision silently. A fix report on disk still decides the finding it names on every run, so a hand
+decision on that finding is replaced until the report is removed or corrected.
+
+**Three residuals, since (ID, title) is not proof of identity.** A ledger written before titles were
 recorded carries none, so its decisions are inherited on the ID alone — refusing there would reset
-every decision in every existing ledger, which is the loss the guard exists to prevent. And two
-genuinely distinct findings that share both an ID and a title are indistinguishable to this key.
-Separating them needs a second identity scheme, which is the thing that was just withdrawn.
+every decision in every existing ledger, which is the loss the guard exists to prevent. Two
+genuinely distinct findings that share both an ID and a title are indistinguishable to this key;
+separating them would need a second identity scheme beside the row key, which is what a moved row
+avoids being. And a moved row is never matched again, by design: if a later review reports the
+earlier finding under its old ID again, that finding starts `open` and its earlier decision stays
+readable in the `~N` row, but it is not inherited. Each such flip adds one row.
 
 Reconciliation applies an outcome only when the fix report names the **same** finding, because
 finding IDs are reused across re-reviews and a stale report would otherwise declare a brand-new
