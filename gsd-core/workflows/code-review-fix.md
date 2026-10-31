@@ -281,8 +281,8 @@ if [ "$AUTO_MODE" = "true" ]; then
     _gsd_n=$(FIX_REPORT_PATH="$1" node -e "
       const fs = require('fs');
       try {
-        const c = fs.readFileSync(process.env.FIX_REPORT_PATH, 'utf-8').replace(/\r\n/g, '\n');
-        const m = c.match(/^---\n([\s\S]*?)\n---/);
+        const content = fs.readFileSync(process.env.FIX_REPORT_PATH, 'utf-8');
+        const m = content.replace(/\r\n/g, '\n').match(/^---\n([\s\S]*?)\n---/);
         const v = m && m[1].match(/^findings_in_scope:[ \t]*([0-9]+)[ \t]*$/m);
         process.stdout.write(v ? String(Number(v[1])) : '');
       } catch (e) {}
