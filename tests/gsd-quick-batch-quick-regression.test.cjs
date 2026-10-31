@@ -72,6 +72,20 @@ function isWorkstreamForwardingSweepLine(sign, body, addedBodies, removedBodies)
   return false;
 }
 
+// #5178: inserting the required --field flag repairs the shared query contract.
+// Require an exact added/removed pair so paths, fields and other content stay guarded.
+function isFrontmatterFieldFlagMigration(sign, body, addedBodies, removedBodies) {
+  const positionalTwin = (line) => line.replace(
+    /(\b(?:gsd_run|gsd-tools)\s+query\s+frontmatter\.get\s+(?:"[^"]*"|'[^']*'|[^\s]+))\s+--field\s+([\w.-]+)(`?)$/,
+    '$1 $2$3',
+  );
+  if (sign === '+') {
+    const twin = positionalTwin(body);
+    return twin !== body && removedBodies.has(twin);
+  }
+  return [...addedBodies].some((added) => positionalTwin(added) !== added && positionalTwin(added) === body);
+}
+
 /**
  * Does this path's diff say anything beyond the shared response-language
  * directive (#2529)?
@@ -104,6 +118,7 @@ function editsBeyondSharedDirective(base, file) {
     if (!/^[+-]/.test(line) || line.startsWith('+++') || line.startsWith('---')) return false;
     const body = line.slice(1).trim();
     if (isWorkstreamForwardingSweepLine(line[0], body, addedBodies, removedBodies)) return false;
+    if (isFrontmatterFieldFlagMigration(line[0], body, addedBodies, removedBodies)) return false;
     if (body === '' || body === INLINE_RESPONSE_LANGUAGE_DIRECTIVE) return false;
     if (body === CANONICAL_LAUNCHER_PREAMBLE.trim()) return false;
     if (looksLikeLauncherPreambleLine(body)) return false;
@@ -190,6 +205,26 @@ describe('quick-batch: /gsd:quick command + workflow stay byte-identical (row 48
     // catch; same false-positive class already scoped away twice above (#3730, #2529 round 40).
     const touchedQuickSteps = unexpectedQuickStepChanges(changed, isPhaseWork);
     assert.deepEqual(touchedQuickSteps, [], `unexpected changes under gsd-core/workflows/quick/steps/: ${touchedQuickSteps.join(', ')}`);
+  });
+
+  test('the #5178 field-flag migration requires exact paired lines and preserves other quick edits', () => {
+    const before = 'gsd-tools query frontmatter.get .planning/quick/{dir}/SUMMARY.md status';
+    const after = 'gsd-tools query frontmatter.get .planning/quick/{dir}/SUMMARY.md --field status';
+    const added = new Set([after]);
+    const removed = new Set([before]);
+    assert.equal(isFrontmatterFieldFlagMigration('+', after, added, removed), true);
+    assert.equal(isFrontmatterFieldFlagMigration('-', before, added, removed), true);
+    assert.equal(isFrontmatterFieldFlagMigration('+', after, added, new Set()), false);
+    assert.equal(isFrontmatterFieldFlagMigration('-', before, new Set(), removed), false);
+    for (const changed of [
+      after.replace('status', 'other_field'),
+      after.replace('SUMMARY.md', 'PLAN.md'),
+      after + ' changed prose',
+      'gsd-tools query other.command file --field status',
+    ]) {
+      assert.equal(isFrontmatterFieldFlagMigration('+', changed, new Set([changed]), removed), false, changed);
+      assert.equal(isFrontmatterFieldFlagMigration('-', before, new Set([changed]), removed), false, changed);
+    }
   });
 
   test('positive control: the #5118 allowance exempts exactly one path; every other quick path in the same branch shape still trips row 48', () => {
