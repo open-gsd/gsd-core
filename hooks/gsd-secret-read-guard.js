@@ -1069,23 +1069,71 @@ function curlValueNamesSecret(text) {
   for (const g of CURL_FORM_GRAMMARS) {
     if (curlFormOpensSecret(text, g, closers)) return true;
   }
-  return curlAtValueOpensSecret(text) || curlCertOpensSecret(text);
+  return curlAtValueOpensSecret(text);
 }
 
-// curl's --cert (-E) and --proxy-cert take `file:password`, so the name
-// before the first `:` is a file, also attached to short options (`-E f:pw`,
-// `-sEf:pw`). The guard judges a name's text after a `:` (`host:path`), not
-// before it.
-function curlCertOpensSecret(text) {
-  const colon = text.indexOf(':');
-  if (colon <= 0) return false;
-  let name = text.slice(0, colon);
-  if (name[0] === '-' && name[1] !== '-') {
-    let l = 1;
-    while (l < name.length && /[A-Za-z0-9]/.test(name[l])) l++;
-    name = name.slice(l);
+// curl's --cert (-E) and --proxy-cert take `file:password`. Unlike the values
+// above, a `file:password` reading would find a file in data curl sends
+// (`-d 'mount=/app/.env:ro'`) or in a URL, so it is applied only to the value
+// of one of those options: the word after `--cert`, `--proxy-cert` or a short
+// cluster ending in `E` (`-E`, `-sE`, `-#E`), the rest of a cluster after its
+// `E` (`-Ef:pw`, `-s#Ef:pw`), or the part after `=` (`--cert=f:pw`, 8.23).
+// Every prefix of either long name shorter than the name is ambiguous with
+// `--cert-type` / `--proxy-cert-type` where curl takes abbreviations (8.5).
+const CURL_CERT_OPTIONS = new Set(['--cert', '--proxy-cert']);
+const CURL_CERT_CLUSTER_RE = /^-[A-Za-z0-9#:]*?E/;
+
+// The value a cert option holds within `text`, or null.
+function curlAttachedCertValue(text) {
+  const eq = text.indexOf('=');
+  if (eq !== -1 && CURL_CERT_OPTIONS.has(text.slice(0, eq))) return text.slice(eq + 1);
+  const m = CURL_CERT_CLUSTER_RE.exec(text);
+  return m && m[0].length < text.length ? text.slice(m[0].length) : null;
+}
+
+// Whether `text` is a cert option whose value is the next word.
+function curlTakesCertValue(text) {
+  if (CURL_CERT_OPTIONS.has(text)) return true;
+  const m = CURL_CERT_CLUSTER_RE.exec(text);
+  return m !== null && m[0].length === text.length;
+}
+
+// The file a cert value names, read as curl's parse_cert_parameter
+// (src/tool_getparam.c) reads it: up to the first `:` not escaped by `\`, with
+// `\:` and `\\` standing for `:` and `\`, and a `pkcs11:` URI kept whole. On
+// Windows a drive letter's colon (`C:\f:pw`) is part of the name; the guard
+// does not know the platform, so it judges both names.
+function curlCertNamesSecret(v) {
+  if (/^pkcs11:/i.test(v)) return curlNameIsSecret(v);
+  let name = '';
+  for (let i = 0; i < v.length; i++) {
+    const ch = v[i];
+    if (ch === '\\') {
+      const next = v[i + 1];
+      if (next === undefined) {
+        name += '\\';
+      } else {
+        name += next === '\\' || next === ':' ? next : '\\' + next;
+        i++;
+      }
+    } else if (ch !== ':') {
+      name += ch;
+    } else if (i === 1 && (v[2] === '\\' || v[2] === '/') && /[A-Za-z]/.test(v[0])) {
+      if (curlNameIsSecret(name)) return true;
+      name += ':';
+    } else {
+      break;
+    }
   }
   return curlNameIsSecret(name);
+}
+
+// Whether curl, given words[k] as an argument, opens a secret through a cert
+// option's value in it or in the word before it.
+function curlCertOpensSecret(words, k) {
+  let v = curlAttachedCertValue(words[k].text);
+  if (v === null && k > 0 && curlTakesCertValue(words[k - 1].text)) v = words[k].text;
+  return v !== null && curlCertNamesSecret(v);
 }
 
 // find's actions that run the words after them, up to `;` (or `+` after
@@ -1600,7 +1648,9 @@ function findSecretRead(command, depth) {
     for (let k = 0; k < operands.length; k++) {
       if (nameOnly.has(k)) continue;
       if (operandNamesSecret(operands[k].text)) return operands[k].text;
-      if (curlArgs[k] && curlValueNamesSecret(operands[k].text)) return operands[k].text;
+      if (curlArgs[k] && (curlValueNamesSecret(operands[k].text) || curlCertOpensSecret(operands, k))) {
+        return operands[k].text;
+      }
     }
   }
   return null;
@@ -1802,9 +1852,16 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
   const runs = xargsCommandIndex(operands, 0, operands.length);
   const subCmd = runs === -1 ? -1 : launchedCommandIndex(operands, runs, operands.length);
   const toCurl = subCmd !== -1 && CURL_COMMANDS.has(commandName(operands[subCmd].text));
-  for (const w of prevCmd.operands) {
+  // Where the sub-command holds a cert option that takes the next word, a
+  // piped word may be its value (`xargs curl --cert`, `xargs -I{} curl -E {}`).
+  const certPiped = toCurl && operands.slice(subCmd + 1).some((w) => curlTakesCertValue(w.text));
+  const piped = prevCmd.operands;
+  for (let j = 0; j < piped.length; j++) {
+    const w = piped[j];
     if (operandNamesSecret(w.text)) return w.text;
-    if (toCurl && curlValueNamesSecret(w.text)) return w.text;
+    if (!toCurl) continue;
+    if (curlValueNamesSecret(w.text) || curlCertOpensSecret(piped, j)) return w.text;
+    if (certPiped && curlCertNamesSecret(w.text)) return w.text;
   }
   return null;
 }
