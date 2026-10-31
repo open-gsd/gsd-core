@@ -6,21 +6,19 @@
 
 ---
 
-## 1. Recognize the blocked condition
+## Step 1 — Recognize the blocked condition
 
 When a wave run is interrupted before cleanup completes, subsequent `/gsd-execute-phase` invocations fail closed before dispatching new worktrees:
 
 ```text
-BLOCKED: pre-existing wave manifest found at /absolute/path/to/.planning/phases/01-foundation/wave-1-manifest.json from an earlier/interrupted run.
-Refusing to overwrite in-flight wave record. Reconcile first with:
-    gsd_run query worktree.cleanup-wave --manifest "/absolute/path/to/.planning/phases/01-foundation/wave-1-manifest.json"
+BLOCKED: pre-existing wave manifest found at /absolute/path/to/.planning/phases/01-foundation/wave-1-manifest.json from an earlier/interrupted run. Reconcile with: gsd_run query worktree.cleanup-wave --manifest "/absolute/path/to/.planning/phases/01-foundation/wave-1-manifest.json"
 ```
 
 Execution halts immediately with exit code 1 to protect existing worktree records from truncation or accidental orphan state.
 
 ---
 
-## 2. Step 1 — Discover active wave manifests
+## Step 2 — Discover active wave manifests
 
 To locate in-flight wave manifests left in a phase directory:
 
@@ -40,7 +38,7 @@ gsd_run query worktree.manifest-path --phase <phase-id> --raw
 
 ---
 
-## 3. Step 2 — Reconcile and clean up the interrupted wave
+## Step 3 — Reconcile and clean up the interrupted wave
 
 Run `cleanup-wave` against the reported manifest path:
 
@@ -50,31 +48,33 @@ gsd_run query worktree.cleanup-wave --manifest "<manifest-path>"
 
 *(Direct CLI equivalent: `node gsd-tools.cjs worktree cleanup-wave --manifest "<manifest-path>"`)*
 
-`cleanup-wave` performs the following reconciliation steps:
-1. Validates each recorded worktree entry.
-2. Merges each executor branch back into the target branch.
-3. Removes each executor worktree directory (`git worktree remove`).
-4. Automatically unlinks the manifest file upon successful completion (`manifest_unlinked: true`, including for empty manifests).
+`cleanup-wave` reconciles executor worktrees, removes finished worktrees, and unlinks the manifest file upon successful completion (`manifest_unlinked: true`).
 
-**If `cleanup-wave` blocks:** When worktree branches conflict, contain uncommitted modifications, or residual worktrees fail to remove, `cleanup-wave` exits with non-zero exit code and retains the manifest on disk to allow manual review and resolution. Once the underlying blocking condition is addressed, re-running `cleanup-wave` completes the process and removes the manifest.
+**If `cleanup-wave` blocks:** When worktree branches conflict, contain uncommitted modifications, unmanifested worktrees exist on disk, or residual worktrees fail to remove, `cleanup-wave` exits non-zero and retains the manifest on disk for investigation. Once the underlying blocking condition is addressed, re-running `cleanup-wave` completes the process and removes the manifest.
 
 ---
 
-## 4. Step 3 — Resume execution
+## Step 4 — Resume execution
 
 Once `cleanup-wave` reports success and unlinks the manifest, re-run `/gsd-execute-phase`. Execution will proceed without blocking.
 
 ---
 
-## 5. Troubleshooting dispatch failures
+## Troubleshooting
 
-- **`FATAL: wave manifest at <path> is tracked by git`:**
+- **`FATAL: wave manifest at <path> is tracked by git` (`manifest_tracked_in_git`):**
   Wave manifests must be ephemeral and untracked. Untrack the manifest:
   ```bash
   git rm --cached "<path-to-manifest>"
   ```
 - **`FATAL: cannot resolve wave number before worktree dispatch`:**
   Occurs when neither `CURRENT_WAVE` nor incomplete plans with a defined wave could be resolved from `.planning/phases/`. Set `CURRENT_WAVE=<N>` explicitly or ensure phase plans carry valid `wave: <N>` frontmatter.
+- **`unmanifested_worktrees_present` (`Residual agent worktrees remain on disk that are not recorded in manifest`):**
+  Occurs when an executor worktree was created (or an empty manifest was left after a crash before recording) but is not recorded in the manifest. Inspect registered worktrees with `git worktree list`. If an abandoned agent worktree remains, review or remove it with `git worktree remove --force "<path>"` before re-running cleanup.
+- **`manifest_symlink_refused`:**
+  Wave manifests must be regular files, not symbolic links. Remove or replace the symlink with a regular file.
+- **`manifest_check_failed`:**
+  Git encountered an error while verifying whether the manifest is tracked. Verify repository health and ensure the manifest path is accessible.
 
 ---
 
