@@ -1057,21 +1057,19 @@ function curlAtValueOpensSecret(v) {
 // The guard holds no table of curl's options, so each curl argument is read
 // both as a -F value, under every grammar curl has shipped, and as a value of
 // the options that read `@file`. A value attached to short options (`-d@f`,
-// `-sd@f`, `-Fk=@f`) starts somewhere after the option letters, so the
-// reading after the first letter and after the last one are judged too. The
-// cost is a fail-safe denial where the word is read another way than the
-// option curl gives it (`-d k=@.env` read as a form value, a URL's `user@`
-// part read as `name@file`), pinned in tests.
+// `-sd@f`, `-Fk=@f`) needs no reading of its own: option letters hold no `=`
+// or `@`, so the form reading and the first-`@` reading find its file, and
+// where an `=` in the name stops the latter (`-d@a=b/f`), the file's last
+// path segment is the word's, judged as for every operand. The cost is a
+// fail-safe denial where the word is read another way than the option curl
+// gives it (`-d k=@.env` read as a form value, a URL's `user@` part read as
+// `name@file`), pinned in tests.
 function curlValueNamesSecret(text) {
   const closers = text.includes('"') ? curlQuoteClosers(text) : null;
   for (const g of CURL_FORM_GRAMMARS) {
     if (curlFormOpensSecret(text, g, closers)) return true;
   }
-  if (curlAtValueOpensSecret(text)) return true;
-  if (text[0] !== '-' || text[1] === '-') return false;
-  let l = 1;
-  while (l < text.length && /[A-Za-z0-9]/.test(text[l])) l++;
-  return (l > 2 && curlAtValueOpensSecret(text.slice(2))) || (l > 1 && curlAtValueOpensSecret(text.slice(l)));
+  return curlAtValueOpensSecret(text);
 }
 
 // find's actions that run the words after them, up to `;` (or `+` after
