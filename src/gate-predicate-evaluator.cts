@@ -33,7 +33,7 @@ import path from 'node:path';
 /** Default command timeout for `command-exit-zero` (30s). Matches execTool default. */
 const COMMAND_EXIT_ZERO_DEFAULT_TIMEOUT_MS = 30_000;
 
-/** Hard cap on the stderr/stdout tail embedded in the gate `message`. */
+/** Hard cap on the whole gate `message` (prefix + output tail, or prefix + command head on timeout). */
 const COMMAND_MAX_OUTPUT_CHARS = 2000;
 
 /** Hard cap on the declared command length (defense-in-depth against ARGV overflow / abuse). */
@@ -90,9 +90,19 @@ function interpolate(command: string, ctx: PredicateContext): string {
   });
 }
 
-/** Cap a string at COMMAND_MAX_OUTPUT_CHARS so gate messages stay context-bounded. */
-function trimToMax(s: string): string {
-  return s.length > COMMAND_MAX_OUTPUT_CHARS ? s.slice(0, COMMAND_MAX_OUTPUT_CHARS) : s;
+/**
+ * `prefix` + `text` capped at COMMAND_MAX_OUTPUT_CHARS in total, keeping the TAIL (errors land last;
+ * ADR-2008) or the HEAD (a command's program name). The cap counts UTF-16 units, so a cut can orphan
+ * half a surrogate pair (renders as U+FFFD in JSON); drop it, only when a cut happened.
+ * Not shared with capAtCodeUnits (runtime-artifact-conversion.cts): this module is a pure leaf (node:path only)
+ * and exporting that helper would add a heavy import for a one-line head cut.
+ */
+function prefixedCap(prefix: string, text: string, keep: 'head' | 'tail'): string {
+  const budget = COMMAND_MAX_OUTPUT_CHARS - prefix.length;
+  if (text.length <= budget) return prefix + text;
+  return prefix + (keep === 'tail'
+    ? text.slice(-budget).replace(/^[\uDC00-\uDFFF]/, '')
+    : text.slice(0, budget).replace(/[\uD800-\uDBFF]$/, ''));
 }
 
 function isNonEmptyString(v: unknown): v is string {
@@ -127,9 +137,11 @@ function evaluateCommandExitZero(
   const res = deps.runBoundedShell({ command: interpolated, cwd: ctx.cwd, timeoutMs });
 
   if (res.timedOut) {
+    const prefix = `command timed out after ${Math.round(timeoutMs / 1000)}s: `;
     return {
       block: true,
-      message: trimToMax(`command timed out after ${Math.round(timeoutMs / 1000)}s: ${res.stderr || interpolated}`),
+      // The command's head (program name, leading args) identifies it; only stderr is tail-capped.
+      message: prefixedCap(prefix, res.stderr || interpolated, res.stderr ? 'tail' : 'head'),
       details: { kind: 'command-exit-zero', timedOut: true, signal: res.signal },
     };
   }
@@ -144,11 +156,10 @@ function evaluateCommandExitZero(
 
   // Non-zero (incl. null exit from a signal kill) => block. Surface code + stderr/stdout tail.
   const code = res.exitCode === null ? '<none>' : String(res.exitCode);
-  const tail = trimToMax(res.stderr || res.stdout || '');
-  const message = tail ? `command exited ${code}: ${tail}` : `command exited ${code}`;
+  const output = res.stderr || res.stdout || '';
   return {
     block: true,
-    message: trimToMax(message),
+    message: output ? prefixedCap(`command exited ${code}: `, output, 'tail') : `command exited ${code}`,
     details: { kind: 'command-exit-zero', exitCode: res.exitCode, signal: res.signal },
   };
 }
