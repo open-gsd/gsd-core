@@ -1148,8 +1148,12 @@ const XARGS_COMMANDS = new Set(['xargs', 'xargs.exe']);
 // arguments start after the first operand whose last segment is curl, as for
 // every command before #5779's review narrowed the rule to commands that run
 // curl. A command that runs one only through a subcommand or an option
-// (`uv run`, `kubectl exec`, `fd -x`) names those words, and a curl word
-// counts only after one of them: `uv pip install curl …` runs no curl.
+// (`uv run`, `kubectl exec`, `docker compose exec`, `fd -x`) names those
+// words, and a curl word counts only after one of them: `uv pip install curl …`
+// runs no curl. A subcommand counts only as the command's first operand (or
+// first two, `compose exec`) past its options, so `kubectl get exec curl …`
+// runs none; an option's run word counts anywhere. Keys are matched without a
+// Windows `.exe`, `.cmd` or `.bat` suffix (`docker.exe`, `npx.cmd`).
 const CURL_WORD_LAUNCHERS = new Map([
   // Run their operands as a command.
   ...[
@@ -1159,7 +1163,7 @@ const CURL_WORD_LAUNCHERS = new Map([
     'systemd-inhibit', 'systemd-nspawn', 'bwrap', 'flatpak-spawn', 'prlimit',
     'numactl', 'cpulimit', 'setarch', 'arch', 'caffeinate', 'sandbox-exec', 'chpst',
     'tini', 'dumb-init', 'faketime', 'eatmydata', 'unbuffer', 'chronic',
-    'catchsegv', 'xvfb-run', 'wsl', 'wsl.exe', 'wine',
+    'catchsegv', 'xvfb-run', 'wsl', 'wine',
     // tracers, debuggers and profilers
     'strace', 'ltrace', 'valgrind', 'heaptrack',
     // job runners and file-event runners
@@ -1180,10 +1184,16 @@ const CURL_WORD_LAUNCHERS = new Map([
   ['scl', new Set(['enable'])],
   ['toolbox', new Set(['run'])],
   ['distrobox', new Set(['enter'])],
-  ['docker', new Set(['exec', 'run'])],
-  ['podman', new Set(['exec', 'run'])],
-  ['kubectl', new Set(['exec'])],
-  ['oc', new Set(['exec'])],
+  // Container runners: a word pair is a subcommand group's subcommand.
+  ...['docker', 'podman', 'nerdctl'].map((name) => [name, new Set([
+    'exec', 'run', 'compose exec', 'compose run', 'container exec', 'container run',
+  ])]),
+  ['docker-compose', new Set(['exec', 'run'])],
+  ['podman-compose', new Set(['exec', 'run'])],
+  ['lxc', new Set(['exec'])],
+  ['incus', new Set(['exec'])],
+  ['kubectl', new Set(['exec', 'run', 'debug'])],
+  ['oc', new Set(['exec', 'run', 'debug'])],
   ['dotenv', new Set(['run', '--'])],
   ['dotenvx', new Set(['run'])],
   ['op', new Set(['run'])],
@@ -1240,15 +1250,13 @@ function markCurlArguments(base, words, from, to, marks, depth) {
   if (XARGS_COMMANDS.has(base)) {
     const sub = xargsCommandIndex(words, from, to);
     if (sub !== -1) markLaunchedCurl(words, sub, to, marks, depth + 1);
-  } else if (CURL_WORD_LAUNCHERS.has(base)) {
+  } else if (CURL_WORD_LAUNCHERS.has(launcherKey(base))) {
     // Options differ per launcher, so the command is the first curl word,
     // after the subcommand or option, if any, that the launcher runs it by.
-    const runWords = CURL_WORD_LAUNCHERS.get(base);
-    let running = runWords === null;
-    for (let k = from; k < to; k++) {
-      if (!running) {
-        running = runWords.has(words[k].text);
-      } else if (CURL_COMMANDS.has(commandName(words[k].text))) {
+    const start = launcherRunIndex(words, from, to, CURL_WORD_LAUNCHERS.get(launcherKey(base)));
+    if (start === -1) return;
+    for (let k = start; k < to; k++) {
+      if (CURL_COMMANDS.has(launchedCurlName(words[k].text))) {
         marks.fill(1, k + 1, to);
         return;
       }
@@ -1262,6 +1270,60 @@ function markCurlArguments(base, words, from, to, marks, depth) {
       j = end;
     }
   }
+}
+
+function launcherKey(base) {
+  return base.replace(/\.(exe|cmd|bat)$/, '');
+}
+
+// Index of the first of words[from..to) that a launcher with `runWords` may
+// run as a command, or -1. With no run words, every operand may be. Otherwise
+// an option run word (`--args`, `-x`) counts anywhere, and a subcommand run
+// word only as the first operand past the options, or the second after a
+// subcommand group (`compose exec`). An operand right after an option with no
+// `=` may be that option's value (`kubectl -n ns exec`), so the subcommand may
+// still follow it; an option whose value is itself a run word
+// (`docker --context run …`) is read as running a command, the safe side.
+function launcherRunIndex(words, from, to, runWords) {
+  if (runWords === null) return from;
+  let group = '';
+  let subcommand = true;
+  let optionValue = false;
+  for (let k = from; k < to; k++) {
+    const t = words[k].text;
+    if (t.length > 1 && t[0] === '-') {
+      if (runWords.has(t)) return k + 1;
+      optionValue = !t.includes('=');
+      continue;
+    }
+    if (!subcommand) continue;
+    const sub = group + t;
+    if (runWords.has(sub)) return k + 1;
+    if (isRunWordGroup(runWords, sub)) {
+      group = sub + ' ';
+      optionValue = false;
+    } else if (optionValue) {
+      optionValue = false;
+    } else {
+      subcommand = false;
+    }
+  }
+  return -1;
+}
+
+function isRunWordGroup(runWords, sub) {
+  for (const w of runWords) {
+    if (w.length > sub.length && w[sub.length] === ' ' && w.startsWith(sub)) return true;
+  }
+  return false;
+}
+
+// A launched command word's name, without an image's `:tag` or `@digest`
+// (`docker run curlimages/curl:8.5.0 …` runs curl).
+function launchedCurlName(text) {
+  const name = commandName(text);
+  const cut = name.search(/[:@]/);
+  return cut > 0 ? name.slice(0, cut) : name;
 }
 
 // `;` ends a find action's command, and so does `+` right after `{}`.
