@@ -1069,7 +1069,23 @@ function curlValueNamesSecret(text) {
   for (const g of CURL_FORM_GRAMMARS) {
     if (curlFormOpensSecret(text, g, closers)) return true;
   }
-  return curlAtValueOpensSecret(text);
+  return curlAtValueOpensSecret(text) || curlCertOpensSecret(text);
+}
+
+// curl's --cert (-E) and --proxy-cert take `file:password`, so the name
+// before the first `:` is a file, also attached to short options (`-E f:pw`,
+// `-sEf:pw`). The guard judges a name's text after a `:` (`host:path`), not
+// before it.
+function curlCertOpensSecret(text) {
+  const colon = text.indexOf(':');
+  if (colon <= 0) return false;
+  let name = text.slice(0, colon);
+  if (name[0] === '-' && name[1] !== '-') {
+    let l = 1;
+    while (l < name.length && /[A-Za-z0-9]/.test(name[l])) l++;
+    name = name.slice(l);
+  }
+  return curlNameIsSecret(name);
 }
 
 // find's actions that run the words after them, up to `;` (or `+` after
