@@ -874,26 +874,6 @@ function operandNamesSecret(text) {
   return v[end] === '=' && namesSecret(v.slice(end + 1));
 }
 
-// curl opens a file named inside an option value as well as one given as its
-// own `@file` word (#5779): after `@` (`-d@f`, `-H@f`, `--data-urlencode
-// name@f`, `--url-query name@f`, `--variable name@f`) and after `=@` or `=<`
-// in a form part (`-F name=@f`, `-F name=<f`, `;headers=@f`). A name runs to
-// the next `;` (a form part parameter such as `;type=…`), `@` or `<`, with the
-// whitespace curl skips around it dropped; a quoted name (`@"f"`) runs to its
-// closing quote, curl unescaping `\\` and `\"` inside it. After `@` a `,` also
-// ends the name and starts another, for the form file list (`@a,f`), which
-// goes on after a part's parameters (`@a;type=t,f`); the same name is judged
-// with its commas kept too, since `-d @f` opens one file whose name may hold
-// them. A `<` name takes no list and keeps its commas (`-F name=<a,f` opens
-// `a,f`). This needs no table of curl's options; text with no `@` or `<` (a
-// JSON body, `-d 'a=1,.env'`) holds no file name. The cost is a fail-safe
-// false positive wherever curl reads an `@` or `<` followed by a secret name
-// another way: as data (`-d k=@.env`, `--form-string f=@.env`, `-d
-// 'email=me@.env'`, a URL's `user@` part) or as one name holding a comma
-// (`-d @a,.env`), pinned in tests. The scan reads each character at most
-// three times (once more only after an unmatched quote, of which a word holds
-// one), and a name with no `.` (which no secret name lacks) never reaches
-// namesSecret.
 const CURL_COMMANDS = new Set(['curl', 'curl.exe']);
 
 // curl's ISSPACE: what it skips before and trims after a form file name.
@@ -928,6 +908,26 @@ function curlClosingQuote(text, open) {
 
 const CURL_QUOTED_SPECIAL_RE = /[;@<,]/;
 
+// curl opens a file named inside an option value as well as one given as its
+// own `@file` word (#5779): after `@` (`-d@f`, `-H@f`, `--data-urlencode
+// name@f`, `--url-query name@f`, `--variable name@f`) and after `=@` or `=<`
+// in a form part (`-F name=@f`, `-F name=<f`, `;headers=@f`). A name runs to
+// the next `;` (a form part parameter such as `;type=…`), `@` or `<`, with the
+// whitespace curl skips around it dropped; a quoted name (`@"f"`) runs to its
+// closing quote, curl unescaping `\\` and `\"` inside it. After `@` a `,` also
+// ends the name and starts another, for the form file list (`@a,f`), which
+// goes on after a part's parameters (`@a;type=t,f`); the same name is judged
+// with its commas kept too, since `-d @f` opens one file whose name may hold
+// them. A `<` name takes no list and keeps its commas (`-F name=<a,f` opens
+// `a,f`). This needs no table of curl's options; text with no `@` or `<` (a
+// JSON body, `-d 'a=1,.env'`) holds no file name. The cost is a fail-safe
+// false positive wherever curl reads an `@` or `<` followed by a secret name
+// another way: as data (`-d k=@.env`, `--form-string f=@.env`, `-d
+// 'email=me@.env'`, a URL's `user@` part) or as one name holding a comma
+// (`-d @a,.env`), pinned in tests. The scan reads each character at most
+// three times (once more only after an unmatched quote, of which a word holds
+// one), and a name with no `.` (which no secret name lacks) never reaches
+// namesSecret.
 function curlValueNamesSecret(text) {
   let list = false;
   let i = 0;
