@@ -86,7 +86,7 @@ Your STACK.md feeds into roadmap creation. Be prescriptive:
 Write to: {research_dir}/STACK.md
 Use template: ~/.claude/gsd-core/templates/research-project/STACK.md
 </output>
-", subagent_type="gsd-project-researcher", model="{researcher_model}", description="Stack research")
+", subagent_type="gsd-project-researcher", model="{researcher_model}", {researcher_effort_arg}, description="Stack research")
 
 Agent(prompt="<research_type>
 Project Research — Features dimension for [domain].
@@ -126,7 +126,7 @@ Your FEATURES.md feeds into requirements definition. Categorize clearly:
 Write to: {research_dir}/FEATURES.md
 Use template: ~/.claude/gsd-core/templates/research-project/FEATURES.md
 </output>
-", subagent_type="gsd-project-researcher", model="{researcher_model}", description="Features research")
+", subagent_type="gsd-project-researcher", model="{researcher_model}", {researcher_effort_arg}, description="Features research")
 
 Agent(prompt="<research_type>
 Project Research — Architecture dimension for [domain].
@@ -166,7 +166,7 @@ Your ARCHITECTURE.md informs phase structure in roadmap. Include:
 Write to: {research_dir}/ARCHITECTURE.md
 Use template: ~/.claude/gsd-core/templates/research-project/ARCHITECTURE.md
 </output>
-", subagent_type="gsd-project-researcher", model="{researcher_model}", description="Architecture research")
+", subagent_type="gsd-project-researcher", model="{researcher_model}", {researcher_effort_arg}, description="Architecture research")
 
 Agent(prompt="<research_type>
 Project Research — Pitfalls dimension for [domain].
@@ -206,7 +206,7 @@ Your PITFALLS.md prevents mistakes in roadmap/planning. For each pitfall:
 Write to: {research_dir}/PITFALLS.md
 Use template: ~/.claude/gsd-core/templates/research-project/PITFALLS.md
 </output>
-", subagent_type="gsd-project-researcher", model="{researcher_model}", description="Pitfalls research")
+", subagent_type="gsd-project-researcher", model="{researcher_model}", {researcher_effort_arg}, description="Pitfalls research")
 ```
 
 (The "wait for all 4 researchers before spawning the synthesizer" orchestrator rule, the full

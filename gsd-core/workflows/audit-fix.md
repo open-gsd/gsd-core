@@ -102,6 +102,7 @@ For each **auto-fixable** finding (up to `--max`, ordered by severity desc):
 
 ```bash
 EXECUTOR_MODEL=$(gsd_run query resolve-model gsd-executor --raw)
+EXECUTOR_EFFORT_ARG=$(gsd_run query resolve-model gsd-executor --pick effort_arg 2>/dev/null || true)
 ```
 
 <!-- #2517 model-omit-on-inherit -->
@@ -113,7 +114,8 @@ EXECUTOR_MODEL=$(gsd_run query resolve-model gsd-executor --raw)
 Agent(
   prompt="Fix finding {ID}: {description}. Files: {file_refs}. Make the minimal change to resolve this specific finding. Do not refactor surrounding code.",
   subagent_type="gsd-executor",
-  model="{EXECUTOR_MODEL}"
+  model="{EXECUTOR_MODEL}",
+  {EXECUTOR_EFFORT_ARG}
 )
 ```
 

@@ -76,6 +76,7 @@ AGENT_SKILLS_ANALYZER=$(gsd_run query agent-skills gsd-assumptions-analyzer ${GS
 # #2072: resolve the routed model so model_overrides / models.discuss are honored
 # (the resolver maps gsd-assumptions-analyzer → phaseType "discuss"); thread it below.
 ANALYZER_MODEL=$(gsd_run query resolve-model gsd-assumptions-analyzer --raw)
+ANALYZER_EFFORT_ARG=$(gsd_run query resolve-model gsd-assumptions-analyzer --pick effort_arg 2>/dev/null || true)
 ```
 
 **If `response_language` is set:** All user-facing output of this workflow — narration between tool calls, status updates, progress notes, findings, questions, prompts, and explanations — MUST be presented in `{response_language}`. Technical terms, code, file paths, and subagent prompts stay in English — only user-facing output is translated.
@@ -288,7 +289,7 @@ If no USER-PROFILE.md: calibration_tier = "standard"
 > **Model omission (#2517).** Omit the `model` parameter entirely when the value it would carry (`ANALYZER_MODEL`) is `"inherit"` or empty. An empty value 404s on runtimes without native tier aliases — the default on non-Claude runtimes. Omitting it inherits the orchestrator's model. See @gsd-core/references/model-profile-resolution.md.
 
 ```
-Agent(subagent_type="gsd-assumptions-analyzer", model="{ANALYZER_MODEL}", prompt="""
+Agent(subagent_type="gsd-assumptions-analyzer", model="{ANALYZER_MODEL}", {ANALYZER_EFFORT_ARG}, prompt="""
 Analyze the codebase for Phase {PHASE}: {phase_name}.
 
 Phase goal: {roadmap_description}

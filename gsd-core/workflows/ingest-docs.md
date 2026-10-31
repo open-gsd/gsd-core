@@ -55,8 +55,11 @@ RESPONSE_LANGUAGE=$(gsd_run query config-get response_language --raw --default "
 INIT=$(gsd_run init ingest-docs)
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 CLASSIFIER_MODEL=$(gsd_run query resolve-model gsd-doc-classifier --raw)
+CLASSIFIER_EFFORT_ARG=$(gsd_run query resolve-model gsd-doc-classifier --pick effort_arg 2>/dev/null || true)
 SYNTHESIZER_MODEL=$(gsd_run query resolve-model gsd-doc-synthesizer --raw)
+SYNTHESIZER_EFFORT_ARG=$(gsd_run query resolve-model gsd-doc-synthesizer --pick effort_arg 2>/dev/null || true)
 ROADMAPPER_MODEL=$(gsd_run query resolve-model gsd-roadmapper --raw)
+ROADMAPPER_EFFORT_ARG=$(gsd_run query resolve-model gsd-roadmapper --pick effort_arg 2>/dev/null || true)
 ```
 
 **If `response_language` is set:** All user-facing output of this workflow — narration between tool calls, status updates, progress notes, findings, questions, prompts, and explanations — MUST be presented in `{response_language}`. Technical terms, code, file paths, and subagent prompts stay in English — only user-facing output is translated.
@@ -177,7 +180,7 @@ For each discovered doc, spawn `gsd-doc-classifier` in parallel. In Claude Code,
 
 <!-- #2517 model-omit-on-inherit -->
 
-> **Model omission (#2517).** Omit the `model` parameter entirely when the value it would carry (`CLASSIFIER_MODEL`, `SYNTHESIZER_MODEL`, `ROADMAPPER_MODEL`) is `"inherit"` or empty. An empty value 404s on runtimes without native tier aliases — the default on non-Claude runtimes. Omitting it inherits the orchestrator's model. See @gsd-core/references/model-profile-resolution.md.
+> **Model omission (#2517).** Omit the `model` parameter entirely when the value it would carry (`CLASSIFIER_MODEL`, `SYNTHESIZER_MODEL`, `ROADMAPPER_MODEL`) is `"inherit"` or empty. An empty value 404s on runtimes without native tier aliases — the default on non-Claude runtimes. Omitting it inherits the orchestrator's model. See @gsd-core/references/model-profile-resolution.md. In the object-form calls below, write each `…_EFFORT_ARG` value as `effort: "<level>"`, and omit it when empty.
 
 Per-spawn prompt fields:
 - `FILEPATH` — absolute path to the doc
@@ -186,7 +189,7 @@ Per-spawn prompt fields:
 - `MANIFEST_PRECEDENCE` — the precedence integer from the manifest if present, else omit
 - `<required_reading>` — `agents/gsd-doc-classifier.md` (the agent definition itself)
 
-**Model on every classifier spawn (#3602):** `model="{CLASSIFIER_MODEL}"` is a parameter of each Task/Agent call — not a prompt field, never folded into the prompt text — so `dynamic_routing`/`model_profile` tiers apply instead of the caller's session model. Omit the parameter per the rule above when the value is `"inherit"` or empty.
+**Model on every classifier spawn (#3602):** `model="{CLASSIFIER_MODEL}"` and `{CLASSIFIER_EFFORT_ARG}` (omitted when empty) is a parameter of each Task/Agent call — not a prompt field, never folded into the prompt text — so `dynamic_routing`/`model_profile` tiers apply instead of the caller's session model. Omit the parameter per the rule above when the value is `"inherit"` or empty.
 
 Collect the one-line confirmations from each classifier. If any classifier errors out, surface the error and abort without touching `.planning/` further.
 
@@ -204,6 +207,7 @@ Spawn `gsd-doc-synthesizer` once (runs in a subagent — no output until it retu
 Agent({
   subagent_type: "gsd-doc-synthesizer",
   model: "{SYNTHESIZER_MODEL}",
+  {SYNTHESIZER_EFFORT_ARG},
   prompt: "
     CLASSIFICATIONS_DIR: {intel_dir}/classifications
     INTEL_DIR: {intel_dir}
@@ -298,6 +302,7 @@ Delegate to `gsd-roadmapper` (runs in a subagent — no output until it returns,
 Agent({
   subagent_type: "gsd-roadmapper",
   model: "{ROADMAPPER_MODEL}",
+  {ROADMAPPER_EFFORT_ARG},
   prompt: "
     Mode: new-project-from-ingest
     Intel: {intel_dir}/SYNTHESIS.md (entry point)

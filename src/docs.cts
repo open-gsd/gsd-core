@@ -20,7 +20,7 @@ import configLoader = require('./config-loader.cjs');
 const { loadConfig } = configLoader;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import modelResolver = require('./model-resolver.cjs');
-const { resolveModelInternal } = modelResolver;
+const { resolveModelInternal, resolveEffortArgInternal } = modelResolver;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtils = require('./core-utils.cjs');
 const { pathExistsInternal, toPosixPath } = coreUtils;
@@ -274,6 +274,7 @@ function cmdDocsInit(cwd: string, raw: boolean): void {
   const config = loadConfig(cwd);
   const result: Record<string, unknown> = {
     doc_writer_model: resolveModelInternal(cwd, 'gsd-doc-writer'),
+    doc_writer_effort_arg: resolveEffortArgInternal(cwd, 'gsd-doc-writer'),
     commit_docs: config.commit_docs,
     existing_docs: scanExistingDocs(cwd),
     project_type: detectProjectType(cwd),

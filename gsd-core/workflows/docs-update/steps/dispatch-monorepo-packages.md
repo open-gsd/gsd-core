@@ -24,6 +24,7 @@ Spawn a `gsd-doc-writer` agent with `run_in_background=true`:
 Agent(
   subagent_type="gsd-doc-writer",
   model="{doc_writer_model}",
+  {doc_writer_effort_arg},
   run_in_background=true,
   description="Generate per-package README for {package_dir}",
   prompt="<doc_assignment>

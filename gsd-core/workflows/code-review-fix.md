@@ -33,7 +33,9 @@ AGENT_SKILLS_REVIEWER=$(gsd_run query agent-skills gsd-code-reviewer ${GSD_WS:+-
 # #2072: resolve the routed models so model_overrides / models.<phaseType> are honored
 # (gsd-code-reviewer → "verification", gsd-code-fixer → "execution"); thread them below.
 REVIEWER_MODEL=$(gsd_run query resolve-model gsd-code-reviewer --raw)
+REVIEWER_EFFORT_ARG=$(gsd_run query resolve-model gsd-code-reviewer --pick effort_arg 2>/dev/null || true)
 FIXER_MODEL=$(gsd_run query resolve-model gsd-code-fixer --raw)
+FIXER_EFFORT_ARG=$(gsd_run query resolve-model gsd-code-fixer --pick effort_arg 2>/dev/null || true)
 ```
 
 Parse from init JSON: `phase_found`, `phase_dir`, `phase_number`, `phase_name`, `padded_phase`, `commit_docs`.
@@ -214,7 +216,7 @@ Use Agent() to spawn agent:
 > **Model omission (#2517).** Omit the `model` parameter entirely when the value it would carry (`FIXER_MODEL`, `REVIEWER_MODEL`) is `"inherit"` or empty. An empty value 404s on runtimes without native tier aliases — the default on non-Claude runtimes. Omitting it inherits the orchestrator's model. See @gsd-core/references/model-profile-resolution.md.
 
 ```text
-Agent(subagent_type="gsd-code-fixer", model="{FIXER_MODEL}", prompt="
+Agent(subagent_type="gsd-code-fixer", model="{FIXER_MODEL}", {FIXER_EFFORT_ARG}, prompt="
 <required_reading>
 ${REVIEW_PATH}
 </required_reading>
@@ -302,7 +304,7 @@ if [ "$AUTO_MODE" = "true" ]; then
     
     # Spawn gsd-code-reviewer agent to re-review (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)
     # (This overwrites REVIEW_PATH with latest review state)
-    Agent(subagent_type="gsd-code-reviewer", model="{REVIEWER_MODEL}", prompt="
+    Agent(subagent_type="gsd-code-reviewer", model="{REVIEWER_MODEL}", {REVIEWER_EFFORT_ARG}, prompt="
 <config>
 depth: ${REVIEW_DEPTH}
 phase_dir: ${PHASE_DIR}
@@ -338,7 +340,7 @@ ${AGENT_SKILLS_REVIEWER}")
     # Still has issues — spawn fixer again (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)
     echo "Issues remain. Applying fixes for iteration ${ITERATION}..."
     
-    Agent(subagent_type="gsd-code-fixer", model="{FIXER_MODEL}", prompt="
+    Agent(subagent_type="gsd-code-fixer", model="{FIXER_MODEL}", {FIXER_EFFORT_ARG}, prompt="
 <required_reading>
 ${REVIEW_PATH}
 </required_reading>

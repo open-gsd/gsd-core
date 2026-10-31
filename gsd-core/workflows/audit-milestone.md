@@ -34,6 +34,7 @@ Extract from init JSON: `milestone_version`, `milestone_name`, `phase_count`, `c
 Resolve integration checker model:
 ```bash
 integration_checker_model=$(gsd_run query resolve-model gsd-integration-checker --raw)
+integration_checker_effort_arg=$(gsd_run query resolve-model gsd-integration-checker --pick effort_arg 2>/dev/null || true)
 ```
 
 ## 1. Determine Milestone Scope
@@ -100,7 +101,8 @@ MUST map each integration finding to affected requirement IDs where applicable.
 Verify cross-phase wiring and E2E user flows.
 ${AGENT_SKILLS_CHECKER}",
   subagent_type="gsd-integration-checker",
-  model="{integration_checker_model}"
+  model="{integration_checker_model}",
+  {integration_checker_effort_arg}
 )
 ```
 

@@ -72,6 +72,32 @@ function isWorkstreamForwardingSweepLine(sign, body, addedBodies, removedBodies)
   return false;
 }
 
+// #5330: the per-spawn effort sweep gives every spawn that passes a resolved model the
+// effort argument for the same agent: an added line that is only the placeholder
+// (`{<role>_effort_arg},`, optionally with its omit comment), an added
+// `resolve-model … --pick effort_arg` binding, and parse lines and inline calls that
+// gain the effort token. A changed line counts only when stripping the effort tokens
+// from the added side yields a removed line (or the reverse), as for `--ws` above, so
+// any OTHER edit still trips this row.
+const EFFORT_PLACEHOLDER_LINE_RE = /^\{[A-Za-z_]+_(?:effort_arg|EFFORT_ARG)\},?(?:\s+#.*)?$/;
+const EFFORT_BINDING_LINE_RE = /^[A-Za-z_]+_(?:effort_arg|EFFORT_ARG)=\$\(gsd_run query resolve-model \S+ --pick effort_arg 2>\/dev\/null \|\| true\)$/;
+const stripEffortTokens = (body) => body
+  .replace(/, `[a-z_]+_effort_arg`/g, '')
+  .replace(/, \{[A-Za-z_]+_(?:effort_arg|EFFORT_ARG)\}/g, '')
+  .replace(/ and `\{[A-Za-z_]+_(?:effort_arg|EFFORT_ARG)\}` \(omitted when empty\)/g, '');
+function isPerSpawnEffortSweepLine(sign, body, addedBodies, removedBodies) {
+  if (sign === '+' && (EFFORT_PLACEHOLDER_LINE_RE.test(body) || EFFORT_BINDING_LINE_RE.test(body))) return true;
+  if (sign === '+') {
+    const stripped = stripEffortTokens(body);
+    return stripped !== body && removedBodies.has(stripped);
+  }
+  for (const added of addedBodies) {
+    const stripped = stripEffortTokens(added);
+    if (stripped !== added && stripped === body) return true;
+  }
+  return false;
+}
+
 /**
  * Does this path's diff say anything beyond the shared response-language
  * directive (#2529)?
@@ -104,6 +130,7 @@ function editsBeyondSharedDirective(base, file) {
     if (!/^[+-]/.test(line) || line.startsWith('+++') || line.startsWith('---')) return false;
     const body = line.slice(1).trim();
     if (isWorkstreamForwardingSweepLine(line[0], body, addedBodies, removedBodies)) return false;
+    if (isPerSpawnEffortSweepLine(line[0], body, addedBodies, removedBodies)) return false;
     if (body === '' || body === INLINE_RESPONSE_LANGUAGE_DIRECTIVE) return false;
     if (body === CANONICAL_LAUNCHER_PREAMBLE.trim()) return false;
     if (looksLikeLauncherPreambleLine(body)) return false;

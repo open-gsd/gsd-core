@@ -57,7 +57,7 @@ import planningScopeMod = require('./planning-scope.cjs');
 const { SCOPE } = planningScopeMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import modelResolverMod = require('./model-resolver.cjs');
-const { resolveModelInternal, resolveTierInternal, resolveModelForTier, resolveProviderEscalation, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, resolveGranularityInternal, assertValidGranularityOverride } = modelResolverMod;
+const { resolveModelInternal, resolveTierInternal, resolveModelForTier, resolveProviderEscalation, resolveEffortInternal, resolveEffortArgInternal, resolveFastModeInternal, resolveEffortForTier, resolveGranularityInternal, assertValidGranularityOverride } = modelResolverMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import agentCommandRouterMod = require('./agent-command-router.cjs');
 const { AGENT_FAILURE_CLASSES } = agentCommandRouterMod;
@@ -581,9 +581,13 @@ function cmdResolveModel(cwd: string, agentType: string | undefined, raw: boolea
   // exists because the model id is deliberately blank under resolve_model_ids:"omit",
   // which leaves a tier-sensitive guard with nothing to read.
   const tier = resolveTierInternal(cwd, agentType);
+  // #5330: `effort_arg` is additive like `tier` — the per-spawn effort argument a
+  // workflow substitutes into the spawn call (`--pick effort_arg`), empty on a
+  // host with no per-spawn effort channel and under the #4633 interim gate.
+  const effort_arg = resolveEffortArgInternal(cwd, agentType);
   const result = agentModels
-    ? { model, profile, effort, tier }
-    : { model, profile, effort, tier, unknown_agent: true };
+    ? { model, profile, effort, tier, effort_arg }
+    : { model, profile, effort, tier, effort_arg, unknown_agent: true };
   output(result, raw, model);
 }
 
@@ -662,8 +666,10 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
 
   // #3534 (10a): the effective effort — what the installed agent will actually
   // run at. `effort` above is the config cascade; for the claude runtime the
-  // per-agent frontmatter key is the source of truth (Claude Code's Agent tool
-  // has no per-spawn effort parameter), so the query reads the installed file.
+  // per-agent frontmatter key is the installed source of truth, so the query
+  // reads the installed file. A GSD workflow spawn may also pass a per-spawn
+  // argument, which outranks the frontmatter for that spawn: reported separately
+  // as `effort_spawn_arg` below (#5330).
   // An ABSENT key is a real state — the agent follows the session effort
   // ('inherit'), not drift. No file / no frontmatter / any read failure means
   // no evidence: the resolved value is reported, flagged 'resolved' so a
@@ -715,6 +721,9 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
     effort_clamp_reason: rendered.reason,
     effort_effective: effortEffective,
     effort_effective_source: effortEffectiveSource,
+    // #5330: the per-spawn argument GSD's workflow spawns pass for this agent
+    // ('' when none); when set, a workflow spawn runs at it, not effort_effective.
+    effort_spawn_arg: resolveEffortArgInternal(cwd, agentType),
     fast_mode: fastMode,
     fast_mode_supported: fastModeSupported,
   };

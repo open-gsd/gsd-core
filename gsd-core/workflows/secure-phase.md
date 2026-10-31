@@ -35,6 +35,7 @@ Parse: `phase_dir`, `phase_number`, `phase_name`, `phase_slug`, `padded_phase`.
 
 ```bash
 AUDITOR_MODEL=$(gsd_run query resolve-model gsd-security-auditor --raw)
+AUDITOR_EFFORT_ARG=$(gsd_run query resolve-model gsd-security-auditor --pick effort_arg 2>/dev/null || true)
 VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)
 SECURITY_ASVS=$(gsd_run query config-get workflow.security_asvs_level --raw 2>/dev/null || echo "1")
 SECURITY_BLOCK_ON=$(gsd_run query config-get workflow.security_block_on --raw 2>/dev/null || echo "high")
@@ -128,6 +129,7 @@ Agent(
     "${AGENT_SKILLS_AUDITOR}",
   subagent_type="gsd-security-auditor",
   model="{AUDITOR_MODEL}",
+  {AUDITOR_EFFORT_ARG},
   description="Verify threat mitigations for Phase {N}"
 )
 ```

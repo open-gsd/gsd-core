@@ -40,6 +40,10 @@ if [ "${ISOLATION:-}" = "orchestrator-worktree" ] && [ -n "${PLAN_HINT:-}" ]; th
 fi
 ```
 
+**Effort argument (#5330).** `executor_effort_arg` is resolved for `gsd-executor`. When
+`EXECUTOR_TYPE` is any other agent, substitute nothing for its placeholder: a routed specialist keeps its
+own installed `effort:` frontmatter.
+
 `gsd_run query resolve-agent` consults the **active runtime's agent directory**
 (both project-local and user-global, across runtime filename variants — `.md`,
 `.agent.md`, `.toml`, the kimi `subagents/<name>.{yaml,md}` pair) and fails

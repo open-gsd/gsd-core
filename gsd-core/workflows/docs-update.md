@@ -30,9 +30,11 @@ AGENT_SKILLS=$(gsd_run query agent-skills gsd-doc-writer ${GSD_WS:+--ws=${GSD_WS
 INIT_DOCS_UPDATE=$(gsd_run query init.docs-update ${GSD_WS:+--ws=${GSD_WS##* }})
 if [[ "$INIT_DOCS_UPDATE" == @file:* ]]; then INIT_DOCS_UPDATE=$(cat "${INIT_DOCS_UPDATE#@file:}"); fi
 DOC_VERIFIER_MODEL=$(gsd_run query resolve-model gsd-doc-verifier --raw)
+DOC_VERIFIER_EFFORT_ARG=$(gsd_run query resolve-model gsd-doc-verifier --pick effort_arg 2>/dev/null || true)
 ```
 
 Extract from init JSON:
+- `doc_writer_effort_arg` — the per-spawn effort argument for the doc-writer spawns (empty: omit it)
 - `doc_writer_model` — model string for the doc-writer spawns (never hardcode a model name); the doc-verifier spawn resolves its own `DOC_VERIFIER_MODEL`
 - `commit_docs` — whether to commit generated files when done
 - `existing_docs` — array of `{path, has_gsd_marker}` objects for existing Markdown files
@@ -410,6 +412,7 @@ Use `run_in_background=true` for all three to enable parallel execution.
 Agent(
   subagent_type="gsd-doc-writer",
   model="{doc_writer_model}",
+  {doc_writer_effort_arg},
   run_in_background=true,
   description="Generate README.md for target project",
   prompt="<doc_assignment>
@@ -432,6 +435,7 @@ Write the doc file directly. Return confirmation only — do not return doc cont
 Agent(
   subagent_type="gsd-doc-writer",
   model="{doc_writer_model}",
+  {doc_writer_effort_arg},
   run_in_background=true,
   description="Generate ARCHITECTURE.md for target project",
   prompt="<doc_assignment>
@@ -454,6 +458,7 @@ Write the doc file directly. Return confirmation only — do not return doc cont
 Agent(
   subagent_type="gsd-doc-writer",
   model="{doc_writer_model}",
+  {doc_writer_effort_arg},
   run_in_background=true,
   description="Generate CONFIGURATION.md for target project",
   prompt="<doc_assignment>
@@ -535,6 +540,7 @@ Use `run_in_background=true` for all Wave 2 agents to enable parallel execution 
 Agent(
   subagent_type="gsd-doc-writer",
   model="{doc_writer_model}",
+  {doc_writer_effort_arg},
   run_in_background=true,
   description="Generate GETTING-STARTED.md for target project",
   prompt="<doc_assignment>
@@ -561,6 +567,7 @@ Write the doc file directly. Return confirmation only — do not return doc cont
 Agent(
   subagent_type="gsd-doc-writer",
   model="{doc_writer_model}",
+  {doc_writer_effort_arg},
   run_in_background=true,
   description="Generate DEVELOPMENT.md for target project",
   prompt="<doc_assignment>
@@ -587,6 +594,7 @@ Write the doc file directly. Return confirmation only — do not return doc cont
 Agent(
   subagent_type="gsd-doc-writer",
   model="{doc_writer_model}",
+  {doc_writer_effort_arg},
   run_in_background=true,
   description="Generate TESTING.md for target project",
   prompt="<doc_assignment>
@@ -613,6 +621,7 @@ Write the doc file directly. Return confirmation only — do not return doc cont
 Agent(
   subagent_type="gsd-doc-writer",
   model="{doc_writer_model}",
+  {doc_writer_effort_arg},
   run_in_background=true,
   description="Generate API.md for target project",
   prompt="<doc_assignment>
@@ -639,6 +648,7 @@ Write the doc file directly. Return confirmation only — do not return doc cont
 Agent(
   subagent_type="gsd-doc-writer",
   model="{doc_writer_model}",
+  {doc_writer_effort_arg},
   run_in_background=true,
   description="Generate DEPLOYMENT.md for target project",
   prompt="<doc_assignment>
@@ -666,6 +676,7 @@ Write the doc file directly. Return confirmation only — do not return doc cont
 Agent(
   subagent_type="gsd-doc-writer",
   model="{doc_writer_model}",
+  {doc_writer_effort_arg},
   run_in_background=true,
   description="Generate CONTRIBUTING.md for target project",
   prompt="<doc_assignment>

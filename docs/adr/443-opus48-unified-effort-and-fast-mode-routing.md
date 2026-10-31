@@ -231,3 +231,60 @@ reference, or agent invokes `resolve-execution … --effort` — still holds, tr
 `review.md` no longer calls `resolve-execution` at all, let alone with `--effort`. Decision item
 1 stays scoped to the operator surface per the 2026-08-19 amendment above; this correction
 touches only the factual "how review.md delivers effort to a host" claim, not that ratification.
+
+## Amendment (2026-10-29): the resolved cascade reaches Claude Code subagents per spawn (#5330)
+
+Recorded as a dated section, since ADRs here are append-only.
+
+**What changed on the host.** Claude Code's Agent tool now takes an optional per-call `effort`
+argument (`low` | `medium` | `high` | `xhigh` | `max`; Claude Code 2.1.292 or later). Decision
+item 4 names the subagent `effort` frontmatter and `CLAUDE_CODE_EFFORT_LEVEL` as Claude's channels,
+and `gsd-core/references/model-profiles.md` said the Agent tool had no per-spawn parameter, so
+frontmatter was the only channel. Both statements predate the argument.
+
+**The new channel.** Workflows now pass the resolved effort on each subagent spawn that already
+passes a resolved model, as `{<role>_effort_arg}` beside `model="{<role>_model}"`. The value comes
+from `resolveEffortArgInternal` (`src/model-resolver.cts`), which renders it through the host's
+runtime descriptor ([ADR-1239](1239-gsd-embeddable-orchestration-engine.md)'s 2026-10-29
+amendment), so the argument is empty on every host that declares no per-spawn channel. The
+installed `effort:` frontmatter stays the fallback wherever the argument is empty or ignored.
+
+**It passes the cascade, never the operator override.** `resolveEffortArgInternal` calls
+`resolveEffortInternal` with no options, so the value is precedence steps 2–5 (`agent_overrides` →
+`routing_tier_defaults` → `default` → canonical defaults). Decision item 1's invocation override
+stays operator-only, as the 2026-08-19 amendment requires: no workflow, reference or agent passes
+`resolve-execution … --effort`, and `tests/effort-surface-axis.test.cjs` still guards that.
+
+**Interim gate, pending #4633.** The runtime cascade and the install-time bake do not read the same
+config today. Under a project `.planning/config.json` the loader drops `~/.gsd/defaults.json`
+(Branch D never runs), while the installer merges that file into the frontmatter, so a global
+`effort` override is baked into the agent files but absent from the runtime value. Passing the
+runtime value whenever a project config exists would silently replace that override on every
+project-scoped spawn. Until #4633's single resolver makes both paths read the same merged config,
+the argument is emitted only when the loaded config carries an `effort` block: the project's own,
+or `defaults.json`'s when there is no `.planning/` directory at all (a `.planning/` without
+`config.json` loads the built-in defaults, so no argument). With no block, the frontmatter decides. Known
+limit: a project with its own `effort` block does not inherit `defaults.json`'s `agent_overrides`
+for agents it does not name. Remove the gate when #4633's resolver lands. The gate covers this
+channel only: Codex's agent conversion already tells its orchestrator to pass the runtime value as
+`reasoning_effort`, with no such gate, and that path is unchanged here.
+
+**The level follows the host's wire rules** (`renderEffortForRuntime`): `inherit` passes no
+argument and Claude's `minimal` becomes `low`. **The argument follows the agent actually
+spawned**: where a workflow spawns an agent it cannot resolve effort for in advance (plan-phase's
+capability-hook `ref.agent` spawns, an `agent_hint` specialist), it passes none and that agent's
+frontmatter applies; ship's capability hooks resolve the hook agent's own effort by name.
+
+**Hosts without the parameter.** The install-time projections onto Hermes `delegate_task` and Pi
+`gsd_dispatch` remove the placeholder as they remove `model=`.
+
+**Host limits** (documented in `references/model-profiles.md`): the argument needs Claude Code
+2.1.292 or later, applies to non-fork subagents, and `CLAUDE_CODE_EFFORT_LEVEL` takes precedence
+over it. An older build may reject the argument: the shared reference the workflows point to
+(`references/model-profile-resolution.md`) says to re-issue the spawn without it, and the
+frontmatter then applies.
+
+**What this does not change.** Install-time propagation, `effort sync`, Codex's own effort channel
+(#4270, #3706), and Decision item 6's escalation path are unchanged. Raising effort from task
+signals (`effort.dynamic`, the second half of #5330) is not part of this change; it is to be filed
+separately and judged against this ADR's reasoning on baked-in overrides.

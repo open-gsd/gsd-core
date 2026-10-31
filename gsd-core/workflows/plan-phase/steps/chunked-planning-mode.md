@@ -69,6 +69,7 @@ Agent(
   Return: ## OUTLINE COMPLETE with plan count.",
   subagent_type="gsd-planner",
   model="{planner_model}",
+  {planner_effort_arg},  # omit this line when empty
   description="Outline Phase {phase} (chunked)",
   run_in_background=true
 )
@@ -161,6 +162,7 @@ GSD_ARGS=${GSD_ARGS%$'\n'}
      Return: ## PLAN COMPLETE with the plan ID.",
      subagent_type="gsd-planner",
      model="{planner_model}",
+     {planner_effort_arg},  # omit this line when empty
      description="Plan {plan_id} (chunked {k}/{N})",
      run_in_background=true
    )

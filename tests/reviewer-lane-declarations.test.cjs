@@ -275,9 +275,11 @@ describe('B. The six existing runtime capabilities', () => {
   // #2871 Phase 2 added `triggerPrecedence` (required-with-default) to every
   // runtime body — a real, deliberate key-set change, not drift. Reflected
   // here in sorted position, same as every other key in these snapshots.
+  // #5330 added the optional `spawnEffortParam` to the claude body only (the
+  // per-spawn effort channel) — likewise deliberate.
   const EXPECTED_RUNTIME_KEYS = {
     antigravity: ['artifactLayout', 'commandStyle', 'configFormat', 'configHome', 'extendedHookEvents', 'hookEvents', 'hooksSurface', 'hostBehaviors', 'hostIntegration', 'installSurface', 'localConfigDir', 'permissionWriter', 'sandboxTier', 'supportTier', 'triggerPrecedence', 'writesSharedSettings'],
-    claude: ['artifactLayout', 'commandStyle', 'configFormat', 'configHome', 'extendedHookEvents', 'harnessIsolationFlag', 'hookEvents', 'hooksSurface', 'hostBehaviors', 'hostIntegration', 'installSurface', 'localConfigDir', 'permissionWriter', 'sandboxTier', 'supportTier', 'triggerPrecedence', 'writesSharedSettings'],
+    claude: ['artifactLayout', 'commandStyle', 'configFormat', 'configHome', 'extendedHookEvents', 'harnessIsolationFlag', 'hookEvents', 'hooksSurface', 'hostBehaviors', 'hostIntegration', 'installSurface', 'localConfigDir', 'permissionWriter', 'sandboxTier', 'spawnEffortParam', 'supportTier', 'triggerPrecedence', 'writesSharedSettings'],
     codex: ['artifactLayout', 'commandStyle', 'configFormat', 'configHome', 'extendedHookEvents', 'hookEvents', 'hooksSurface', 'hostBehaviors', 'hostIntegration', 'installSurface', 'localConfigDir', 'orchestratorExec', 'permissionWriter', 'sandboxTier', 'supportTier', 'triggerPrecedence', 'writesSharedSettings'],
     cursor: ['artifactLayout', 'commandStyle', 'configFormat', 'configHome', 'extendedHookEvents', 'harnessIsolationFlag', 'hookEvents', 'hooksSurface', 'hostBehaviors', 'hostIntegration', 'installSurface', 'localConfigDir', 'permissionWriter', 'sandboxTier', 'supportTier', 'triggerPrecedence', 'writesSharedSettings'],
     opencode: ['artifactLayout', 'commandStyle', 'configFormat', 'configHome', 'extendedHookEvents', 'extensionEvents', 'hooksSurface', 'hostBehaviors', 'hostIntegration', 'installSurface', 'localConfigDir', 'orchestratorExec', 'permissionWriter', 'sandboxTier', 'supportTier', 'triggerPrecedence', 'writesSharedSettings'],

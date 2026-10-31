@@ -35,6 +35,7 @@ Parse: `phase_dir`, `phase_number`, `phase_name`, `phase_slug`, `padded_phase`.
 
 ```bash
 AUDITOR_MODEL=$(gsd_run query resolve-model gsd-nyquist-auditor --raw)
+AUDITOR_EFFORT_ARG=$(gsd_run query resolve-model gsd-nyquist-auditor --pick effort_arg 2>/dev/null || true)
 VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)
 ```
 
@@ -123,6 +124,7 @@ Agent(
     "${AGENT_SKILLS_AUDITOR}",
   subagent_type="gsd-nyquist-auditor",
   model="{AUDITOR_MODEL}",
+  {AUDITOR_EFFORT_ARG},
   description="Fill validation gaps for Phase {N}"
 )
 ```

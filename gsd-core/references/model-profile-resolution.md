@@ -34,7 +34,8 @@ string** when nothing resolved.
 Agent(
   prompt="...",
   subagent_type="gsd-planner",
-  model="{planner_model}"
+  model="{planner_model}",
+  {planner_effort_arg}
 )
 ```
 
@@ -87,3 +88,13 @@ If `model_profile` is `"inherit"`, all agents resolve to `"inherit"` (useful for
 2. Declare the bound field on the workflow's parse line
 3. Pass `model="{bound_field}"` on each `Agent()` spawn
 4. Omit `model=` entirely whenever the bound value is `"inherit"` or empty
+5. Bind the effort argument the same way (#5330) — the `<role>_effort_arg` init field beside
+   `<role>_model`, or `query resolve-model <agent> --pick effort_arg` — and pass
+   `{<role>_effort_arg}` on the same spawn as one more argument (in an object-form call,
+   `Agent({ … })`, write the same parameter as `effort: "<level>"`). It is the host's per-spawn
+   effort argument, already rendered (`effort="high"` on a host whose runtime descriptor
+   declares `spawnEffortParam`). When it is empty, drop it: the host has no per-spawn effort
+   channel, or the config sets no `effort` block, and the agent's installed `effort:`
+   frontmatter applies
+6. If the spawn call rejects the effort argument (a host build older than its per-spawn
+   channel), re-issue the same call without it; the installed frontmatter still applies

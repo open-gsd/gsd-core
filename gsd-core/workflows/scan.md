@@ -51,7 +51,7 @@ INIT=$(gsd_run query init.map-codebase ${GSD_WS:+--ws=${GSD_WS##* }} 2>/dev/null
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
-Parse JSON for: `mapper_model`, `commit_docs`, `search_gitignored`, `parallelization`, `subagent_timeout`, `date`, `codebase_dir`, `existing_maps`, `has_maps`, `planning_exists`, `codebase_dir_exists`.
+Parse JSON for: `mapper_model`, `mapper_effort_arg`, `commit_docs`, `search_gitignored`, `parallelization`, `subagent_timeout`, `date`, `codebase_dir`, `existing_maps`, `has_maps`, `planning_exists`, `codebase_dir_exists`.
 
 Look up which documents would be produced for the selected focus (from the mapping table above).
 
@@ -93,7 +93,8 @@ Print: `◆ Spawning scanner... (runs in a subagent — no output until it retur
 Agent(
   prompt="Scan this codebase with focus: {focus}. Write results to {codebase_dir}/. Produce only: {document_list}",
   subagent_type="gsd-codebase-mapper",
-  model="{mapper_model}"
+  model="{mapper_model}",
+  {mapper_effort_arg}  # omit this line when empty
 )
 ```
 

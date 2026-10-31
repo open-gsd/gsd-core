@@ -605,6 +605,7 @@ const capabilities = {
         "effortSurface": "argv"
       },
       "harnessIsolationFlag": "isolation=\"worktree\"",
+      "spawnEffortParam": "effort",
       "hostBehaviors": {
         "attributionSource": "settings-json-commit",
         "authorsCanonicalWorkflow": true,
@@ -5956,6 +5957,7 @@ const runtimes = {
         "effortSurface": "argv"
       },
       "harnessIsolationFlag": "isolation=\"worktree\"",
+      "spawnEffortParam": "effort",
       "hostBehaviors": {
         "attributionSource": "settings-json-commit",
         "authorsCanonicalWorkflow": true,
