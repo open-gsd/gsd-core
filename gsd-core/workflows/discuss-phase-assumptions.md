@@ -6,6 +6,11 @@ You are a thinking partner, not an interviewer. Analyze the codebase deeply, sur
 believe based on evidence, and ask the user only to correct what's wrong.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <available_agent_types>
 Valid GSD subagent types (use exact names — do not fall back to 'general-purpose'):
 - gsd-assumptions-analyzer — Analyzes codebase to surface implementation assumptions
@@ -86,7 +91,7 @@ Parse JSON for: `commit_docs`, `phase_found`, `phase_dir`, `phase_number`, `phas
 
 **If `phase_found` is false:**
 ```
-Phase [X] not found in roadmap.
+Requested phase [X] not found in roadmap.
 
 Use /gsd:progress to see available phases.
 ```
@@ -380,7 +385,7 @@ Display all assumptions grouped by area with confidence badges.
 **Format for display:**
 
 ```
-## Phase {PHASE}: {phase_name} — Assumptions
+## {phase_display}: {phase_name} — Assumptions
 
 Based on codebase analysis, here's what I'd go with:
 
@@ -457,7 +462,7 @@ Map assumptions to CONTEXT.md sections:
 - When `spec_loaded = true`: add `<spec_lock>` immediately after `<domain>`, add the SPEC.md file to `<canonical_refs>` with the note "Locked requirements — MUST read before planning", and do NOT copy SPEC.md requirements into `<decisions>` (agents read SPEC.md directly); `<decisions>` holds only the HOW decisions from this discussion
 
 ```markdown
-# Phase {PHASE}: {phase_name} - Context
+# {phase_display}: {phase_name} - Context
 
 **Gathered:** {date} (assumptions mode)
 **Status:** Ready for planning
@@ -550,7 +555,7 @@ Write audit trail of assumptions and corrections.
 **File:** `${phase_dir}/${padded_phase}-DISCUSSION-LOG.md`
 
 ```markdown
-# Phase {PHASE}: {phase_name} - Discussion Log (Assumptions Mode)
+# {phase_display}: {phase_name} - Discussion Log (Assumptions Mode)
 
 > **Audit trail only.** Do not use as input to planning, research, or execution agents.
 > Decisions captured in CONTEXT.md — this log preserves the analysis.
@@ -649,7 +654,7 @@ Created: .planning/phases/${PADDED_PHASE}-${SLUG}/${PADDED_PHASE}-CONTEXT.md
 
 ## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
-**Phase ${PHASE}: {phase_name}** — {Goal from ROADMAP.md}
+**{phase_display}: {phase_name}** — {Goal from ROADMAP.md}
 
 `/clear` then:
 

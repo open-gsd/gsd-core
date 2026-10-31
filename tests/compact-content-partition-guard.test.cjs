@@ -836,3 +836,13 @@ describe('property: compact-content-split.cjs parsers', () => {
     );
   });
 });
+
+
+test('#5027: partition normalization exempts only a valid canonical convention region', () => {
+  const { START, END } = require('../scripts/gen-phase-id-convention.cjs');
+  const { phaseIdConventionBlock } = require('../gsd-core/bin/lib/phase-id-card.cjs');
+  const managed = `${START}\n${phaseIdConventionBlock()}\n${END}`;
+  assert.deepEqual(normalizeNonTrivialLines(`Before.\n${managed}\nAfter.`), ['Before.', 'After.']);
+  assert.ok(normalizeNonTrivialLines(`${START}\nstale instructions\n${END}`).includes('stale instructions'));
+  assert.ok(normalizeNonTrivialLines(`${START}\n${phaseIdConventionBlock()}`).includes(START));
+});

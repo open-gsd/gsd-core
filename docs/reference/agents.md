@@ -904,3 +904,17 @@ When you add an agent or change what it returns, update its registry row in the 
 The same check also enforces the read-tag pairing: whenever a declared consumer emits `<required_reading>`, the producing agent's instructions must reference the gate (directly or via an `@`-included reference) — and the retired `<files_to_read>` vocabulary may not reappear under `workflows/`, `commands/`, or `agents/`.
 
 For acting on a specific finding, see [How to resolve a contract-drift finding](../how-to/resolve-contract-drift-findings.md).
+
+## Phase-ID convention guidance
+
+Full agent definitions carry a generated short region. Resolve the configured
+convention, use returned writer/CLI identities and paths, and use phase-row `display_id`
+for phase labels when available; otherwise follow the reference grammar. Read the canonical convention reference lazily before emitting
+phase or plan identities. The source and parity/evidence checks are described in
+[Change generated phase-ID guidance](../how-to/change-phase-id-guidance.md).
+Compact variants do not carry this generated region.
+
+Two cap-required conditional details are lazy: the verifier's MVP contract is
+read from `verify-mvp-mode.md` only for MVP phases; the UI auditor's registry audit
+is read from `ui-registry-audit.md` only when shadcn and third-party registries are
+present. Their main deployed definitions remain the test and runtime surface.

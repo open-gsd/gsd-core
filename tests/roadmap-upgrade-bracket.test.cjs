@@ -1,3 +1,4 @@
+// allow-test-rule: source-text-is-the-product installed convention instructions and lookup recipes are the runtime product (#5027).
 'use strict';
 
 /**
@@ -26,8 +27,8 @@ const os = require('node:os');
 const path = require('node:path');
 
 const helpers = require('./helpers.cjs');
-const { cleanup, TOOLS_PATH } = helpers;
-const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
+const { cleanup, TOOLS_PATH, createTempProject, runGsdTools, TEST_ENV_BASE } = helpers;
+const { runNode, OUTCOME, runHook } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const {
@@ -37,13 +38,13 @@ const {
   rewriteRoadmapLines,
 } = require('../gsd-core/bin/lib/roadmap-upgrade.cjs');
 const { readVerificationStatus } = require('../gsd-core/bin/lib/verification.cjs');
-const { scopeToPhase, matchPhaseDirs, isSentinelPhaseId, parsePhaseId, renderPhaseId } = require('../gsd-core/bin/lib/phase-id.cjs');
+const { scopeToPhase, matchPhaseDirs, isSentinelPhaseId, isSentinelPhaseDir, stripProjectCodePrefix, parsePhaseId, renderPhaseId } = require('../gsd-core/bin/lib/phase-id.cjs');
 // #4144 round 5 Blocker 1: hasPhaseEntries and its exported single-owner
 // phase-heading predicate — the READERS' OWN phase-heading grammar the
 // bracket migrator's "phase-like but unparsed" refusal must be gated on
 // (see the describe block below).
 const { hasPhaseEntries, isPhaseHeadingText, scanMilestonePhaseIds } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
-const { extractFencedBlock } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const { extractFencedBlock, scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 // #4698 Blocker 1 (round 2): real production functions used to prove the
 // REAL dependency resolver (not a hand-rolled stand-in) resolves a
@@ -53,6 +54,8 @@ const { parsePlanDocument } = require('../gsd-core/bin/lib/plan-document.cjs');
 const { computeDependencyLevels, buildShortFormToId } = require('../gsd-core/bin/lib/phase.cjs');
 const { extractCanonicalPlanId } = require('../gsd-core/bin/lib/core-utils.cjs');
 const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
+const { deriveProgressFromRoadmap } = require('../gsd-core/bin/lib/phase-lifecycle.cjs');
+const identityGuidance = require('../gsd-core/bin/lib/phase-id-card.cjs');
 
 const FIXTURE_ROOT = path.join(__dirname, 'fixtures', 'roadmap-upgrade-bracket');
 const COMMAND_TIMEOUT_MS = 60000;
@@ -116,16 +119,30 @@ function buildTemplateRoadmap() {
   const templateContent = fs.readFileSync(templatePath, 'utf8');
   const block = extractFencedBlock(templateContent, 'markdown');
   assert.ok(block, 'gsd-core/templates/roadmap.md must still contain its fenced `markdown` roadmap example');
+  const phases = [
+    ['1', 'Alpha'], ['2', 'Beta'], ['2.1', 'Critical Fix (INSERTED)'],
+    ['3', 'Gamma'], ['4', 'Delta'],
+  ];
+  const main = phases.filter(([id]) => id !== '2.1');
+  const plans = ['01-01', '01-02', '01-03', '02-01', '02-02', '02.1-01', '03-01', '03-02', '04-01'];
+  const dependencies = ['Phase 1', 'Phase 2', 'Phase 2', 'Phase 3'];
+  let checklist = 0, detail = 0, plan = 0, dependency = 0, progress = 0;
   return block
     .replaceAll('[Project Name]', 'Nimbus')
-    .replaceAll('Phase 1: [Name]', 'Phase 1: Alpha')
-    .replaceAll('Phase 2: [Name]', 'Phase 2: Beta')
-    .replaceAll('Phase 3: [Name]', 'Phase 3: Gamma')
-    .replaceAll('Phase 4: [Name]', 'Phase 4: Delta')
-    .replaceAll('| 1. [Name] |', '| 1. Alpha |')
-    .replaceAll('| 2. [Name] |', '| 2. Beta |')
-    .replaceAll('| 3. [Name] |', '| 3. Gamma |')
-    .replaceAll('| 4. [Name] |', '| 4. Delta |');
+    .replace(/^(- \[[ x]\] \*\*)\{phase_display\}: \[Name\]/gm, (_, prefix) => {
+      const [id, name] = main[checklist++];
+      return `${prefix}Phase ${id}: ${name}`;
+    })
+    .replace(/^### \{phase_display\}: .*$/gm, () => {
+      const [id, name] = phases[detail++];
+      return `### Phase ${id}: ${name}`;
+    })
+    .replaceAll('{plan_display}', () => plans[plan++])
+    .replaceAll('{dependency_phase_display}', () => dependencies[dependency++])
+    .replaceAll('| {phase_table_id}. [Name] |', () => {
+      const [id, name] = main[progress++];
+      return `| ${id}. ${name} |`;
+    });
 }
 
 function runBracketUpgrade(cwd, extraArgs = []) {
@@ -4084,5 +4101,261 @@ describe('roadmap upgrade --convention bracket: transform properties', () => {
 
     assert.deepEqual([...kinds].sort(), ['legacy', 'mnn', 'mnn-deep']);
     assert.deepEqual([...bullets].sort(), ['bold', 'none', 'plain']);
+  });
+});
+
+describe('#5027 shipped-template round trips', () => {
+  const roots = new Set();
+  afterEach(() => { for (const root of roots) cleanup(root); roots.clear(); });
+  const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+
+  function project(convention) {
+    const root = fs.realpathSync(createTempProject('gsd-convention-roundtrip-'));
+    roots.add(root);
+    fs.writeFileSync(path.join(root, '.planning/config.json'), JSON.stringify({ phase_id_convention: convention, project_code: 'GSD' }));
+    fs.writeFileSync(path.join(root, '.planning/STATE.md'), '---\nmilestone: v2.0\n---\n');
+    return root;
+  }
+
+  function query(root, args) {
+    const result = runGsdTools(args, root, { HOME: root });
+    assert.ok(result.success, `${args.join(' ')}: ${result.error}`);
+    return JSON.parse(result.output);
+  }
+
+  const cases = [
+    { convention: null, name: 'sequential (null)', arg: '1', display: 'Phase 1', directory: '01-foundation', number: '01' },
+    { convention: 'milestone-prefixed', name: 'milestone-prefixed', arg: '2-01', display: 'Phase 2-01', directory: 'GSD-02-01-foundation', number: 'GSD-02-01' },
+    { convention: 'bracket', name: 'bracket', arg: '1', display: '[GSD.02] 01', directory: 'GSD.02-01-foundation', number: '01' },
+  ];
+
+  function renderedRoadmap(fixture, example) {
+    const root = project(fixture.convention);
+    const roadmapPath = path.join(root, '.planning/ROADMAP.md');
+    const phaseDir = path.join(root, '.planning/phases', fixture.directory);
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(roadmapPath, `# Roadmap\n\n### ${fixture.display}: Foundation\n**Goal:** Setup\n`);
+    const init = query(root, ['init', 'plan-phase', fixture.arg]);
+    assert.equal(init.phase_number, fixture.number, 'CLI owns the artifact and Progress identity');
+    assert.equal(Object.hasOwn(init, 'display_id'), false, 'init plan-phase requires the reference fallback');
+    assert.equal(init.phase_dir, phaseDir);
+    for (const suffix of ['01-PLAN', '02-PLAN', '03-PLAN', '01-SUMMARY']) {
+      fs.writeFileSync(path.join(phaseDir, `${init.phase_number}-${suffix}.md`), '# Fixture\n');
+    }
+
+    // Render the shipped heading and Progress-table example without changing any
+    // finished cell. A display token in the Phase column must fail at its reader.
+    const { heading, header, row } = example;
+    const progress = [...header, row].join('\n');
+    const render = text => text.replaceAll('{phase_display}', fixture.display)
+      .replaceAll('{phase_table_id}', stripProjectCodePrefix(init.phase_number)).replaceAll('[Name]', 'Foundation');
+    const roadmap = `# Roadmap\n\n${render(heading)}\n**Goal:** Setup\n**Plans:** 3 plans\n\n## Progress\n\n${render(progress)}\n`;
+    fs.writeFileSync(roadmapPath, roadmap);
+    return { root, roadmapPath, roadmap };
+  }
+
+  const roadmapLines = read('gsd-core/templates/roadmap.md').split('\n');
+  const progressExamples = scanFencedBlocks(roadmapLines)
+    .filter(block => block.infoString === 'markdown')
+    .flatMap((block, blockIndex) => {
+      assert.notEqual(block.closeLineIdx, -1, 'roadmap example fence must close');
+      const lines = roadmapLines.slice(block.openLineIdx + 1, block.closeLineIdx);
+      const start = lines.findIndex(line => line.startsWith('| Phase |'));
+      assert.ok(start >= 0, `roadmap fence ${blockIndex + 1}: Progress table`);
+      const header = lines.slice(start, start + 2);
+      return lines.slice(start + 2).filter(line => /^\|/.test(line)).map((row, rowIndex) => ({
+        heading: lines.find(line => /^#{3,4} /.test(line)), header, row,
+        label: `fence ${blockIndex + 1}, row ${rowIndex + 1}`,
+        plans: Number(row.match(/\| (\d+)\/(\d+) \|/)[2]),
+        complete: row.includes('| Complete |'),
+      }));
+    });
+
+  describe('#5027 roadmap template to real progress readers', () => {
+    for (const fixture of cases) for (const example of progressExamples) {
+      test(`${fixture.name}, ${example.label}: rendered Progress cells count phases and plans`, () => {
+        const { roadmap } = renderedRoadmap(fixture, example);
+        assert.deepEqual(deriveProgressFromRoadmap(roadmap), {
+          completedPhases: example.complete ? 1 : null, totalPhases: 1, totalPlans: example.plans,
+        });
+      });
+      test(`${fixture.name}, ${example.label}: update-plan-progress writes the rendered Progress row`, () => {
+        const { root, roadmapPath } = renderedRoadmap(fixture, example);
+        const result = query(root, ['roadmap', 'update-plan-progress', fixture.arg]);
+        assert.equal(result.updated, true);
+        assert.equal(result.plan_count, 3);
+        assert.equal(result.summary_count, 1);
+        const updated = fs.readFileSync(roadmapPath, 'utf8');
+        assert.match(updated, /\| 1\/3 \| In Progress \|/, 'the actual template row must receive the counts');
+        assert.equal(deriveProgressFromRoadmap(updated).totalPhases, 1);
+      });
+    }
+  });
+
+  for (const fixture of cases) {
+    test(`#5027 ${fixture.name}: retained legacy display aliases project to the selected phase identity`, () => {
+      const aliases = identityGuidance.PHASE_ID_LEGACY_DISPLAY_ALIASES;
+      assert.ok(Array.isArray(aliases), 'canonical display alias inventory');
+      for (const form of ['Phase {N}', 'Phase [X]', 'Phase ${PHASE_NUM}']) assert.ok(aliases.includes(form), form);
+      const { root, roadmapPath, roadmap } = renderedRoadmap(fixture, progressExamples[0]);
+      const source = query(root, ['roadmap', 'get-phase', fixture.arg]);
+      assert.equal(source.found, true);
+      const display = source.section.match(/^#{3,4} ([^:]{1,200}):/m)?.[1];
+      assert.equal(display, fixture.display);
+      for (const alias of aliases) {
+        // Guidance projects the complete display token, including its legacy
+        // Phase prefix. CLI arguments and frontmatter identities stay unchanged.
+        const projected = `### ${alias}: Foundation`.replace(alias, display);
+        fs.writeFileSync(roadmapPath, roadmap.replace(/^#{3,4} [^\n]{1,500}/m, projected));
+        const selected = query(root, ['roadmap', 'get-phase', fixture.arg]);
+        assert.equal(selected.found, true, alias);
+        assert.ok(selected.section.startsWith(`### ${fixture.display}: Foundation`), alias);
+        assert.equal(selected.phase_number, source.phase_number, 'display projection must not alter the CLI identity');
+      }
+    });
+    test(`#5027 ${fixture.name}: assumptions and MVP lookups select the returned roadmap section`, () => {
+      const { root, roadmap } = renderedRoadmap(fixture, progressExamples[0]);
+      const assumptions = read('gsd-core/workflows/list-phase-assumptions.md');
+      const lookup = extractFencedBlock(assumptions.slice(assumptions.indexOf('Validate phase exists in roadmap:')), 'bash');
+      assert.ok(lookup);
+      const script = `RUNTIME_DIR="${path.resolve(__dirname, '..')}"; gsd_run() { "${process.execPath}" "${TOOLS_PATH}" "$@"; }; PHASE=${fixture.arg};\n${lookup}`;
+      const result = runHook('-c', [script], { interpreter: 'bash', cwd: root, env: { ...process.env, ...TEST_ENV_BASE, HOME: root } });
+      assert.equal(result.exitCode, 0, result.stderr);
+      const selected = JSON.parse(result.stdout);
+      assert.equal(selected.found, true);
+      assert.ok(selected.section.startsWith(`### ${fixture.display}: Foundation`));
+      assert.ok(roadmap.includes(selected.section));
+      const mvp = read('gsd-core/workflows/mvp-phase.md').split('## 5. Update ROADMAP.md')[1].split('**Edit 1')[0];
+      const command = mvp.match(/`(gsd_run query roadmap\.get-phase [^`]{1,200})`/)?.[1];
+      assert.ok(command, 'MVP section selection must query the canonical reader');
+      const mvpResult = runHook('-c', [script.slice(0, script.indexOf('\n')) + '\n' + command], { interpreter: 'bash', cwd: root, env: { ...process.env, ...TEST_ENV_BASE, HOME: root } });
+      assert.equal(mvpResult.exitCode, 0, mvpResult.stderr);
+      assert.equal(JSON.parse(mvpResult.stdout).section, selected.section);
+    });
+  }
+
+  for (const fixture of cases) {
+    test(`#5027 ${fixture.name}: primary PLAN output preserves resolved SUMMARY path rendering`, () => {
+      const { root } = renderedRoadmap(fixture, progressExamples[0]);
+      const init = query(root, ['init', 'plan-phase', fixture.arg]);
+      const suppliedPlan = path.join(init.phase_dir, `${init.phase_number}-02-PLAN.md`);
+      assert.ok(fs.existsSync(suppliedPlan), 'the orchestrator supplies an existing plan');
+      const planPath = path.relative(root, suppliedPlan).split(path.sep).join('/');
+      const summaryPath = planPath.replace(/-PLAN\.md$/, '-SUMMARY.md');
+      const body = extractFencedBlock(read('gsd-core/templates/phase-prompt.md'), 'markdown');
+      assert.ok(body);
+      const rendered = body.replaceAll('{summary_path}', summaryPath);
+      const output = rendered.slice(rendered.indexOf('<output>'), rendered.indexOf('</output>') + 9);
+      const expected = `.planning/phases/${fixture.directory}/${init.phase_number}-02-SUMMARY.md`;
+      assert.equal(output, `<output>\nAfter completion, create \`${expected}\`\n</output>`);
+      assert.equal(path.resolve(root, summaryPath), suppliedPlan.replace(/-PLAN\.md$/, '-SUMMARY.md'));
+      if (fixture.convention === null) {
+        assert.equal(summaryPath, '.planning/phases/01-foundation/01-02-SUMMARY.md', 'legacy sequential spelling');
+      }
+    });
+  }
+
+  test('#5027 sequential context, roadmapper and new-project examples retain their legacy rendering', () => {
+    const root = project(null);
+    const roadmapPath = path.join(root, '.planning/ROADMAP.md');
+    fs.writeFileSync(roadmapPath, '# Roadmap\n\n## Phases\n\n## Phase Details\n');
+    for (const name of ['Foundation', 'Auth']) {
+      const added = query(root, ['phase', 'add', name]);
+      assert.equal(Object.hasOwn(added, 'display_id'), false, 'phase add requires its written heading or reference grammar');
+    }
+    const headings = splitLines(fs.readFileSync(roadmapPath, 'utf8'))
+      .map(line => /^### ([^:]{1,256}):/.exec(line)?.[1]).filter(Boolean);
+    assert.deepEqual(headings, ['Phase 1', 'Phase 2']);
+    const render = text => text.replaceAll('{phase_display}', headings[0])
+      .replaceAll('{next_phase_display}', headings[1]).replaceAll('[Name]', 'Foundation');
+    const context = extractFencedBlock(read('gsd-core/workflows/discuss-phase/templates/context.md'), 'markdown');
+    assert.ok(context);
+    assert.equal(render(context).split('\n')[0], '# Phase 1: Foundation - Context');
+    const roadmapper = read('agents/gsd-roadmapper.md');
+    const checklist = extractFencedBlock(roadmapper.slice(roadmapper.indexOf('### 1. Summary Checklist')), 'markdown');
+    const details = extractFencedBlock(roadmapper.slice(roadmapper.indexOf('### 2. Detail Sections')), 'markdown');
+    assert.ok(checklist && details);
+    assert.equal(render(checklist), '- [ ] **Phase 1: Name** - One-line description\n- [ ] **Phase 2: Name** - One-line description');
+    assert.ok(render(details).startsWith('### Phase 1: Name\n'));
+    assert.ok(render(details).includes('### Phase 2: Name\n'));
+    const projectExample = extractFencedBlock(read('gsd-core/workflows/new-project.md').split('Example MVP-mode emit for Phase 1:')[1], 'markdown');
+    assert.ok(projectExample);
+    assert.ok(render(projectExample).startsWith('### Phase 1: Foundation\n**Goal:** [Goal]\n**Mode:** mvp\n'));
+  });
+
+  test('#5027 bracket identity source fields match the actual CLI flow contracts', () => {
+    const root = project('bracket');
+    fs.writeFileSync(path.join(root, '.planning/ROADMAP.md'), '# Roadmap\n\n## [GSD.02] Active\n\n### [GSD.02] 01: Foundation\n**Goal:** Setup\n');
+    fs.mkdirSync(path.join(root, '.planning/phases/GSD.02-01-foundation'));
+    for (const flow of ['plan-phase', 'execute-phase', 'phase-op']) {
+      const init = query(root, ['init', flow, '1']);
+      assert.equal(init.phase_number, '01', flow);
+      assert.equal(Object.hasOwn(init, 'display_id'), false, `${flow}: render from the resolved identity`);
+      assert.ok(fs.existsSync(init.phase_dir), flow);
+    }
+    const added = query(root, ['phase', 'add', 'Auth']);
+    assert.equal(Object.hasOwn(added, 'display_id'), false, 'phase add writes a heading without returning display_id');
+    assert.equal(added.phase_number, 2);
+    assert.ok(fs.readFileSync(path.join(root, '.planning/ROADMAP.md'), 'utf8').includes('### [GSD.02] 02: Auth'));
+    for (const args of [['stats'], ['progress', 'json'], ['init', 'manager']]) {
+      const rows = query(root, args).phases;
+      assert.deepEqual(rows.map(row => row.display_id), ['[GSD.02] 01', '[GSD.02] 02'], args.join(' '));
+    }
+  });
+
+  describe('#5027 backlog shell recipe to find-phase', () => {
+    for (const convention of ['sequential', 'milestone-prefixed', 'bracket']) {
+      for (const next of ['999.1', '999.01']) test(`${convention}: NEXT=${next} is found by its numeric spelling`, () => {
+        const root = project(convention);
+        fs.writeFileSync(path.join(root, '.planning/ROADMAP.md'), `# Roadmap\n\n## Backlog\n\n### Phase ${next}: Future (BACKLOG)\n`);
+        const workflow = read('gsd-core/workflows/add-backlog.md');
+        const step = workflow.slice(workflow.indexOf('## Step 4:'), workflow.indexOf('## Step 5:'));
+        const recipe = extractFencedBlock(step, 'bash');
+        assert.ok(recipe, 'creation recipe must be executable');
+        const script = `gsd_run() { "${process.execPath}" "${TOOLS_PATH}" "$@"; }; NEXT=${next};\n${recipe.replace('$ARGUMENTS', 'Future')}`;
+        const result = runHook('-c', [script], { interpreter: 'bash', cwd: root, env: { ...process.env, ...TEST_ENV_BASE, HOME: root } });
+        assert.equal(result.exitCode, 0, result.stderr);
+        const dirs = fs.readdirSync(path.join(root, '.planning/phases'));
+        assert.equal(dirs.length, 1);
+        assert.equal(isSentinelPhaseDir(dirs[0]), true, dirs[0]);
+        // Existing CLI contracts preserve a decimal's spelling. Test each
+        // supported creation spelling without inventing cross-alias equivalence.
+        const found = query(root, ['query', 'find-phase', next]);
+        assert.equal(found.found, true, `${next} must find ${dirs[0]}`);
+        assert.equal(path.resolve(root, found.directory), path.join(root, '.planning/phases', dirs[0]));
+        assert.equal(isSentinelPhaseId(found.phase_number, convention), true, `${next}: sentinel identity must survive lookup`);
+      });
+    }
+  });
+
+  test('#5027 legacy checkpoint plan example resolves its prior SUMMARY references', () => {
+    const root = project(null);
+    const summaryDir = path.join(root, '.planning/phases/03-features');
+    fs.mkdirSync(summaryDir, { recursive: true });
+    for (const name of ['03-01-SUMMARY.md', '03-02-SUMMARY.md']) fs.writeFileSync(path.join(summaryDir, name), '# Prior summary\n');
+    const template = read('gsd-core/templates/phase-prompt.md');
+    const checkpoint = template.slice(template.indexOf('**Plan with checkpoint (non-autonomous):**'));
+    const plan = extractFencedBlock(checkpoint, 'markdown');
+    assert.ok(plan);
+    const context = plan.match(/<context>([\s\S]*?)<\/context>/)?.[1];
+    assert.ok(context);
+    const refs = [...context.matchAll(/^@(.+)$/gm)].map(match => match[1])
+      .filter(ref => !['.planning/PROJECT.md', '.planning/ROADMAP.md', '.planning/STATE.md'].includes(ref));
+    assert.equal(refs.length, 2, 'checkpoint plan consumes two prior summaries');
+    for (const ref of refs) assert.ok(fs.existsSync(path.resolve(root, ref)), `prior summary reference must resolve: ${ref}`);
+  });
+
+  describe('#5027 legacy SUMMARY title rendering', () => {
+    for (const phase of ['1', '2-01']) test(`phase ${phase}: template and execution title preserve their distinct legacy forms`, () => {
+      const body = extractFencedBlock(read('gsd-core/templates/summary.md'), 'markdown');
+      assert.ok(body);
+      const summaryTitle = body.split('\n').find(line => /^# .*Summary$/.test(line));
+      const executionTitle = read('gsd-core/workflows/execute-plan.md').match(/^Title: `([^`]+)`/m)?.[1];
+      assert.ok(summaryTitle);
+      assert.ok(executionTitle);
+      const render = text => text.replaceAll('[X]', phase).replaceAll('[Y]', '01').replaceAll('[Name]', 'Foundation');
+      assert.equal(render(summaryTitle), `# Phase ${phase}: Foundation Summary`);
+      assert.equal(render(executionTitle), `# Phase ${phase} Plan 01: Foundation Summary`);
+    });
   });
 });

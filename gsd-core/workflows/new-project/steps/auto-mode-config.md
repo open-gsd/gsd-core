@@ -2,6 +2,11 @@
 
 **If auto mode:** Collect config settings upfront before processing the idea document.
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 YOLO mode is implicit (auto = YOLO). Ask remaining config questions:
 
 **Round 1 — Core settings (3 questions, no Mode question):**

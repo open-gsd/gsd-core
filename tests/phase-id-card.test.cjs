@@ -1,18 +1,26 @@
+// allow-test-rule: source-text-is-the-product generated agent/workflow instruction regions and copied artifact fences are the runtime product (#5027).
 'use strict';
 
 /** ADR-612 PR-5: the bracket convention card has one runtime source. */
 
-const { describe, test } = require('node:test');
+const { describe, test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const fc = require('fast-check');
+const gen = require('../scripts/gen-phase-id-convention.cjs');
+const { cleanup, createTempDir } = require('./helpers.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { runNode } = require('./helpers/process-seam.cjs');
+const owner = require('../gsd-core/bin/lib/phase-id-card.cjs');
+const { extractFencedBlock, scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 const { normalizeEol } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const {
   phaseIdCard,
   PHASE_ID_CARD,
   PHASE_ID_LEGEND,
-} = require('../gsd-core/bin/lib/phase-id-card.cjs');
+} = owner;
 
 const REFERENCE_PATH = path.join(
   __dirname,
@@ -54,5 +62,301 @@ describe('#3638: phase ID convention card single source', () => {
     assert.notEqual(start, -1, 'generated card opener must remain present');
     assert.notEqual(end, -1, 'generated card closer must remain present');
     assert.equal(reference.slice(start + opener.length, end), phaseIdCard());
+  });
+});
+
+// #5027: source-text-is-the-product covers generated runtime instructions.
+describe('#5027: convention regions fail closed and preserve surrounding bytes', () => {
+  const roots = [];
+  afterEach(() => roots.splice(0).forEach(root => cleanup(root)));
+  function fixture() {
+    const root = createTempDir('gsd-5027-');
+    roots.push(root);
+    const owner = 'gsd-core/bin/lib/phase-id-card.cjs';
+    fs.mkdirSync(path.dirname(path.join(root, owner)), { recursive: true });
+    fs.copyFileSync(path.join(__dirname, '..', owner), path.join(root, owner));
+    for (const { file } of [...gen.TARGETS, gen.REFERENCE]) {
+      const target = path.join(root, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      const card = file === gen.REFERENCE.file ? '<!-- PHASE-ID-CARD:START -->\nold card\n<!-- PHASE-ID-CARD:END -->\n' : '';
+      fs.writeFileSync(target, `prefix.\r\n${card}${gen.START}\r\nold\r\n${gen.END}\r\nsuffix\r\n`.replace(/(?<!\r)\n/g, '\r\n'));
+    }
+    return { gen, root, target: path.join(root, gen.TARGETS[0].file) };
+  }
+  test('typed rules retain convention policies and short guidance loads the full reference lazily', () => {
+    assert.deepEqual(owner.PHASE_ID_RULES.map(rule => rule.id), [
+      'config', 'identity', 'sequential', 'milestone-prefixed', 'bracket',
+      'display', 'table', 'backlog', 'legacy',
+    ]);
+    assert.ok(owner.PHASE_ID_RULES.every(rule => typeof rule.text === 'string' && rule.text.length > 0));
+    assert.equal(owner.phaseIdConventionBlock().includes('Read `~/.claude/gsd-core/references/phase-id-convention.md`'), true);
+    assert.equal(owner.phaseIdConventionBlock().includes('display_id'), true);
+    assert.equal(owner.phaseIdConventionBlock().includes('@'), false);
+    assert.ok(Buffer.byteLength(`${gen.START}\n${owner.phaseIdConventionBlock()}\n${gen.END}\n`) <= 350);
+  });
+  test('all identity placeholders in installed targets have explicit per-flow sources', () => {
+    const sources = owner.PHASE_ID_PLACEHOLDER_SOURCES;
+    assert.ok(Array.isArray(sources), 'canonical placeholder source inventory');
+    const defined = new Set();
+    for (const rule of sources) {
+      assert.ok(rule.source.length > 0 && rule.flows.length > 0);
+      for (const name of rule.placeholders) {
+        assert.ok(!defined.has(name), `duplicate placeholder ${name}`);
+        defined.add(name);
+      }
+    }
+    // These are content, counts, models and status fields, not identities or paths.
+    const nonIdentity = new Set([
+      'phase_name', 'PHASE_NAME', 'plan_name', 'phase_goal', 'PHASE_GOAL', 'phase_count',
+      'completed_phases', 'total_plans', 'plan_count', 'wave_plan_count', 'milestone_name',
+      'queued_milestone_name', 'phase_relevant_terms', 'phase_req_ids', 'planner_model',
+      'DISK_PLANS', 'approach_from_plan', 'plan_requirements', 'PLANNING_TOTAL',
+      'PLANNING_DELETIONS', 'preserved_plan_revision_conflict_entries', 'PHASE_COMPLETE_BLOCKERS',
+    ]);
+    const used = new Set();
+    for (const { file } of gen.TARGETS) {
+      const text = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+      for (const match of text.matchAll(/(?<!\$)\{([A-Za-z_]+)\}/g)) {
+        const name = match[1];
+        if (!/phase|plan|milestone/i.test(name) || nonIdentity.has(name)) continue;
+        assert.ok(defined.has(name), `${file}: undefined identity source for {${name}}`);
+        used.add(name);
+      }
+    }
+    for (const name of ['phase_display', 'plan_display', 'next_phase_display', 'backlog_phase_display',
+      'dependency_phase_display', 'phase_table_id', 'plan_path', 'summary_path', 'phase_dir']) {
+      assert.ok(defined.has(name), `required source definition ${name}`);
+    }
+    assert.ok(used.has('phase_display') && used.has('phase_table_id'));
+  });
+  test('write is idempotent, preserves CRLF and unmanaged bytes, and CLI checks fixtures', () => {
+    const { gen, root, target } = fixture();
+    assert.equal(gen.check(root).violations[0].reason, 'stale_region');
+    assert.equal(gen.write(root).ok, true);
+    const output = fs.readFileSync(target, 'utf8');
+    assert.ok(output.startsWith('prefix.\r\n'));
+    assert.ok(output.endsWith('\r\nsuffix\r\n'));
+    assert.equal(output.split('\r\n').join('').includes(String.fromCharCode(10)), false);
+    assert.equal(gen.check(root).ok, true);
+    assert.deepEqual(gen.write(root).changedFiles, []);
+    const cli = runNode([path.join(__dirname, '../scripts/gen-phase-id-convention.cjs'), '--check', '--json', '--root', root], { timeoutMs: PROBE_TIMEOUT_MS });
+    assert.equal(cli.exitCode, 0, cli.stderr);
+    assert.equal(JSON.parse(cli.stdout).targetCount, gen.TARGETS.length);
+  });
+  for (const [reason, mutate] of [
+    ['missing_file', (_text, _gen, target) => { fs.unlinkSync(target); return null; }],
+    ['missing_region', () => 'no region\n'],
+    ['duplicate_marker', (text, gen) => `${text}\n${gen.START}\n`],
+    ['reversed_marker', (text, gen) => `${gen.END}\n${gen.START}\n`],
+    ['nested_region', text => `<!-- OTHER:START -->\n${text}\n<!-- OTHER:END -->\n`],
+    ['nested_region', text => `\x60\x60\x60md\n${text}\x60\x60\x60\n`],
+  ]) {
+    test(`write rejects ${reason} before modifying any target`, () => {
+      const { gen, root, target } = fixture();
+      const untouched = path.join(root, gen.TARGETS[1].file);
+      const before = fs.readFileSync(untouched);
+      const changed = mutate(fs.readFileSync(target, 'utf8'), gen, target);
+      if (changed !== null) fs.writeFileSync(target, changed);
+      const result = gen.write(root);
+      assert.equal(result.ok, false);
+      assert.ok(result.violations.some(v => v.reason === reason), JSON.stringify(result));
+      assert.deepEqual(fs.readFileSync(untouched), before);
+      assert.deepEqual(result.changedFiles, []);
+    });
+  }
+  for (const [name, wrap] of [
+    ['indented XML', body => `  <step name="conditional">\n${body}\n  </step>\n`],
+    ['info string closer', body => `\x60\x60\x60md\ncode\n\x60\x60\x60not-a-closer\n${body}\n\x60\x60\x60\n`],
+    ['list continuation', body => `- If enabled:\n  Continue this list item.\n\n${body}\n  continue.\n`],
+    ['unfinished inline condition', body => `Only if \x60enabled\x60\n\n${body}\ncontinue.\n`],
+    ['unfinished sentence', body => `Only when the following condition\n\n${body}\nthen continue.\n`],
+    ['YAML', body => `---\nname: fixture.\n${body}\n---\n`],
+    ['XML', body => `<step name="conditional">\n${body}\n</step>\n`],
+  ]) {
+    for (const location of ['late target', 'reference']) test(`preflight rejects ${name} in ${location} without writing any file`, () => {
+      const { gen, root } = fixture();
+      const files = [...gen.TARGETS, gen.REFERENCE].map(({ file }) => path.join(root, file));
+      const corrupt = location === 'reference' ? files.at(-1) : files.at(-2);
+      const original = fs.readFileSync(corrupt, 'utf8').replace(/\r\n/g, '\n');
+      const at = original.indexOf(gen.START);
+      fs.writeFileSync(corrupt, wrap(original.slice(at)) + original.slice(0, at));
+      const snapshotFiles = [...files, path.join(root, 'gsd-core/bin/lib/phase-id-card.cjs')];
+      const before = snapshotFiles.map(file => fs.readFileSync(file));
+      const result = gen.write(root);
+      assert.equal(result.ok, false, name);
+      assert.deepEqual(result.changedFiles, []);
+      snapshotFiles.forEach((file, i) => assert.deepEqual(fs.readFileSync(file), before[i], file));
+    });
+  }
+  test('mixed unmanaged line endings remain byte-identical', () => {
+    const { gen, root, target } = fixture();
+    const before = fs.readFileSync(target, 'utf8').replace('prefix.\r\n', 'prefix.\n').replace('suffix\r\n', 'suffix\n');
+    fs.writeFileSync(target, before);
+    assert.equal(gen.write(root).ok, true);
+    const after = fs.readFileSync(target, 'utf8');
+    assert.ok(after.startsWith('prefix.\n'));
+    assert.ok(after.endsWith('suffix\n'));
+  });
+  test('missing compiled owner returns a structured failure', () => {
+    const { gen, root } = fixture();
+    fs.unlinkSync(path.join(root, 'gsd-core/bin/lib/phase-id-card.cjs'));
+    assert.equal(gen.check(root).violations[0].reason, 'missing_compiled_owner');
+  });
+  for (const [name, reason, payload] of [
+    ['plan path prescription', 'external_convention_prose', 'Full write path: .planning/phases/{padded_phase}-{slug}/{padded_phase}-01-PLAN.md'],
+    ['parenthesized phase label', 'external_convention_prose', '**Phase ${PHASE}: Name**'],
+    ['padded directory placeholder', 'external_convention_prose', 'Write .planning/phases/{padded_phase}-{slug}/PLAN.md.'],
+    ['legacy variable heading', 'external_convention_prose', '**Phase {X}: Foundation**'],
+    ['legacy shell heading', 'external_convention_prose', 'Report **Phase ${phase}** now.'],
+    ['named convention prescription', 'external_convention_prose', 'Always use milestone-prefixed identifiers.'],
+    ['ID section heading', 'external_convention_prose', '## Phase numbering'],
+    ['unlisted phase template', 'unlisted_phase_emitter', null],
+    ['external project-code rule', 'external_convention_prose', 'Never include project_code in phase headings.'],
+    ['legacy-only convention', 'external_convention_prose', 'Always prepend Phase to every phase heading.'],
+    ['compound summary title', 'external_convention_prose', 'Title: `# Phase [X] Plan [Y]: Summary`'],
+    ['numeric plan checklist', 'external_convention_prose', '- [ ] 01-02: Implement login'],
+    ['numeric dependency display', 'external_convention_prose', '**Depends on**: Phase 1'],
+    ['unlisted argument router', 'unlisted_phase_emitter', 'If the command expects a phase number or flags only, extract the phase argument.'],
+    ['unlisted seed metadata', 'unlisted_phase_emitter', 'planted_during: {current milestone/phase from STATE.md, or unknown}'],
+    ['unlisted phase dispatch', 'unlisted_phase_emitter', 'Dispatch /gsd:execute-phase $ARGUMENTS'],
+    ['unlisted seeded phase', 'unlisted_phase_emitter', 'Run /gsd:discuss-phase with the seed phase argument.'],
+    ['unlisted concrete bracket emitter', 'unlisted_phase_emitter', 'Write [GSD.01] 02 as the phase heading.'],
+    ['unlisted concrete nested emitter', 'unlisted_phase_emitter', 'Write this roadmap heading:\n### Phase 7: Checkout\n'],
+    ['unlisted concrete top-level emitter', 'unlisted_phase_emitter', 'Write a checklist:\n- [ ] **Phase 7: Checkout**\n'],
+    ['changed canonical byte', 'stale_region', null],
+    ['deleted region', 'missing_region', null],
+    ['unlisted nested emitter', 'unlisted_phase_emitter', null],
+    ['unlisted top-level emitter', 'unlisted_phase_emitter', null],
+    ['unlisted marked workflow', 'unlisted_phase_emitter', null],
+  ]) {
+    test(`independent gate rejects ${name} with file/line evidence`, () => {
+      const { gen, root, target } = fixture();
+      assert.equal(gen.write(root).ok, true);
+      let file = target;
+      if (name.startsWith('unlisted')) {
+        file = path.join(root, name.includes('template') ? 'gsd-core/templates' : 'gsd-core/workflows', name.includes('nested') ? 'new/steps/emit.md' : 'unlisted.md');
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, name.includes('marked') ? `${gen.START}\n${gen.END}\n` : (payload || 'Pass ${PHASE_DIR} to the next operation.\n'));
+      } else if (name === 'changed canonical byte') {
+        fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(gen.readRegion(fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n'), { start: gen.START, end: gen.END }, file).body.split('\n')[0], 'stale generated bytes'));
+      } else if (name === 'deleted region') fs.writeFileSync(file, 'no phase words remain\n');
+      else fs.appendFileSync(file, `\n${payload}\n`);
+      const result = reason === 'stale_region' ? gen.check(root) : gen.checkEvidence(root);
+      assert.equal(result.ok, false);
+      const found = result.violations.find(v => v.reason === reason);
+      assert.ok(found, JSON.stringify(result));
+      assert.equal(found.file, path.relative(root, file).split(path.sep).join('/'));
+      assert.ok(found.line > 0);
+      if (reason === 'external_convention_prose' || reason === 'unlisted_phase_emitter') assert.ok(found.evidence);
+    });
+  }
+  for (const [name, prose, operational] of [
+    ['sequential heading prescription', 'Always write phase headings using sequential identifiers.', 'Historical ADR: [GSD.01] 02 shipped last year.'],
+    ['config mention cannot excuse prescription', 'Ignore gsd_run config-get phase_id_convention; always use sequential Phase N headings.', 'Run gsd_run config-get phase_id_convention'],
+    ['project-code directory prefix', 'Prefix phase directories with project_code.', 'PREFIX=$PROJECT_CODE'],
+    ['milestone spelling', 'Use M-NN for phase headings.', 'Run gsd-tools phase add M-NN.'],
+    ['concrete bracket identity', 'Write [GSD.01] 02 as the phase heading.', 'Run gsd-tools phase show "[GSD.01] 02".'],
+    ['numeric heading prescription', 'Use Phase 7 numbering for headings.', 'Run gsd-tools phase show 7.'],
+    ['sequential numbering', 'Phase N is the numbering format for headings.', 'Run gsd-tools phase show "Phase N".'],
+    ['numeric directory', 'Create .planning/phases/01-login for this phase.', 'cat .planning/phases/01-login/CONTEXT.md'],
+  ]) {
+    test(`evidence catches ${name} prose and permits its operational control`, () => {
+      const { gen, root, target } = fixture();
+      assert.equal(gen.write(root).ok, true);
+      const original = fs.readFileSync(target, 'utf8');
+      fs.appendFileSync(target, `\n${prose}\n`);
+      assert.ok(gen.checkEvidence(root).violations.some(v => v.reason === 'external_convention_prose' && v.evidence === prose));
+      fs.writeFileSync(target, original + `\n${operational}\n`);
+      assert.equal(gen.checkEvidence(root).ok, true);
+    });
+  }
+  test('historical phase mentions and real CLI inputs are not convention rules', () => {
+    const { gen, root, target } = fixture();
+    assert.equal(gen.write(root).ok, true);
+    fs.appendFileSync(target, '\nIssue #612 discussed Phase 2 in 2025.\nRun gsd-tools phase add 3.\n');
+    const file = path.join(root, 'gsd-core/workflows/history.md');
+    fs.writeFileSync(file, 'Historical ADR: Phase 3 shipped last year.\n');
+    assert.equal(gen.checkEvidence(root).ok, true);
+  });
+
+  test('user-facing command output is explicitly outside selection and evidence scope', () => {
+    const { gen, root } = fixture();
+    assert.equal(gen.write(root).ok, true);
+    assert.equal(new Set(gen.TARGETS.map(t => t.file)).size, gen.TARGETS.length);
+    assert.deepEqual(gen.EXCLUDED_USER_OUTPUT, [
+      'gsd-core/workflows/help/modes/brief.md',
+      'gsd-core/workflows/help/modes/default.md',
+      'gsd-core/workflows/help/modes/full.md',
+    ]);
+    for (const file of gen.EXCLUDED_USER_OUTPUT) {
+      assert.ok(!gen.TARGETS.some(target => target.file === file));
+      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      fs.writeFileSync(path.join(root, file), '<reference>\n/gsd:plan-phase 3\n### Phase 7: user-facing help example\n</reference>\n');
+    }
+    assert.equal(gen.check(root).ok, true);
+    assert.equal(gen.checkEvidence(root).ok, true);
+  });
+  test('excluded user output cannot silently acquire generated markers', () => {
+    const { gen, root } = fixture();
+    assert.equal(gen.write(root).ok, true);
+    const file = path.join(root, gen.EXCLUDED_USER_OUTPUT[0]);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${gen.START}\n${gen.END}\n`);
+    assert.equal(gen.checkEvidence(root).ok, false);
+  });
+
+  test('readRegion preserves arbitrary unmanaged prose and rejects malformed markers (fast-check)', () => {
+    const prose = fc.array(fc.constantFrom('a', 'b', ' ', 'é'), { maxLength: 70 }).map(xs => xs.join('') + '.');
+    fc.assert(fc.property(prose, prose, prose, (prefix, body, suffix) => {
+      const text = `${prefix}\n\n${gen.START}\n${body}\n${gen.END}\n${suffix}\n`;
+      const descriptor = { start: gen.START, end: gen.END };
+      const region = gen.readRegion(text, descriptor, 'fixture');
+      assert.equal(region.body, body);
+      assert.equal(gen.readRegion(text + gen.START + '\n', descriptor, 'fixture').violation.reason, 'duplicate_marker');
+      assert.equal(gen.readRegion(text.replace(gen.END, ''), descriptor, 'fixture').violation.reason, 'missing_region');
+    }), { seed: 5782, numRuns: 100 });
+  });
+  test('write is idempotent and preserves unmanaged UTF-8 bytes with LF/CRLF (fast-check)', () => {
+    const prose = fc.array(fc.constantFrom('x', 'y', ' ', 'é'), { maxLength: 80 }).map(xs => xs.join('') + '.');
+    fc.assert(fc.property(prose, prose, fc.constantFrom('\n', '\r\n'), (prefix, suffix, eol) => {
+      const { gen, root, target } = fixture();
+      fs.writeFileSync(target, `${prefix}${eol}${eol}${gen.START}${eol}old${eol}${gen.END}${eol}${suffix}${eol}`);
+      assert.equal(gen.write(root).ok, true);
+      const first = fs.readFileSync(target);
+      assert.ok(first.subarray(0, Buffer.byteLength(prefix + eol + eol)).equals(Buffer.from(prefix + eol + eol)));
+      assert.ok(first.subarray(-Buffer.byteLength(eol + suffix + eol)).equals(Buffer.from(eol + suffix + eol)));
+      assert.deepEqual(gen.write(root).changedFiles, []);
+      assert.deepEqual(fs.readFileSync(target), first);
+    }), { seed: 5782, numRuns: 25 });
+  });
+  test('copying artifact bodies never copies convention instruction regions', () => {
+    const wrappers = gen.TARGETS.filter(t => t.kind === 'template' || t.file.includes('/templates/'));
+    for (const { file } of wrappers) {
+      const lines = normalizeEol(fs.readFileSync(path.join(__dirname, '..', file), 'utf8')).split('\n');
+      const fences = scanFencedBlocks(lines);
+      assert.ok(fences.length > 0, `${file}: a copied artifact fence must exist`);
+      for (const fence of fences) {
+        const end = fence.closeLineIdx === -1 ? lines.length : fence.closeLineIdx;
+        const body = lines.slice(fence.openLineIdx + 1, end).join('\n');
+        assert.ok(!body.includes('PHASE-ID-CONVENTION:'), `${file}:${fence.openLineIdx + 1}`);
+      }
+    }
+    const raw = fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/autonomous/templates/minimal-context.md'), 'utf8');
+    assert.ok(!raw.includes('PHASE-ID-CONVENTION:'));
+    assert.ok(gen.EXCLUDED_ARTIFACTS.includes('gsd-core/workflows/autonomous/templates/minimal-context.md'));
+  });
+
+  test('the generator how-to commands write and check a fixture', () => {
+    const guide = fs.readFileSync(path.join(__dirname, '..', 'docs/how-to/change-phase-id-guidance.md'), 'utf8');
+    const commands = extractFencedBlock(guide, 'bash').split('\n').filter(Boolean);
+    const { root } = fixture();
+    assert.equal(commands.length, 2);
+    for (const command of commands) {
+      const [node, script, ...args] = command.split(' ');
+      assert.equal(node, 'node');
+      assert.equal(script, 'scripts/gen-phase-id-convention.cjs');
+      const result = runNode([path.join(__dirname, '..', script), ...args, '--root', root], { timeoutMs: PROBE_TIMEOUT_MS });
+      assert.equal(result.exitCode, 0, result.stderr);
+    }
   });
 });

@@ -7,6 +7,12 @@ color: green
 #   - before_write
 ---
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
+
 <role>
 You are a GSD code fixer. You apply fixes to issues found by the gsd-code-reviewer agent.
 
@@ -436,11 +442,11 @@ This cleanup is unconditional when a worktree was created — register it mental
 **1. Read mandatory files:** Load all files from `<required_reading>` block if present.
 
 **2. Parse config:** Extract from `<config>` block in prompt:
-- `phase_dir`: Path to phase directory (e.g., `.planning/phases/02-code-review-command`)
+- `phase_dir`: Path to phase directory (resolved by the orchestrator)
 - `padded_phase`: Zero-padded phase number (e.g., "02")
-- `review_path`: Full path to REVIEW.md (e.g., `.planning/phases/02-code-review-command/02-REVIEW.md`)
+- `review_path`: Full path to REVIEW.md (resolved artifact path)
 - `fix_scope`: "critical_warning" (default) or "all" (includes Info findings)
-- `fix_report_path`: Full path for REVIEW-FIX.md output (e.g., `.planning/phases/02-code-review-command/02-REVIEW-FIX.md`)
+- `fix_report_path`: Full path for REVIEW-FIX.md output (resolved artifact path)
 
 **3. Read REVIEW.md:**
 ```bash
@@ -613,7 +619,7 @@ Status values:
 
 **3. Body structure:**
 ```markdown
-# Phase {X}: Code Review Fix Report
+# {phase_display}: Code Review Fix Report
 
 **Fixed at:** {timestamp}
 **Source review:** {review_path}

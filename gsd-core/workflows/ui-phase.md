@@ -4,6 +4,11 @@ Generate a UI design contract (UI-SPEC.md) for frontend phases. Orchestrates gsd
 UI-SPEC.md locks spacing, typography, color, copywriting, and design system decisions before the planner creates tasks. This prevents design debt caused by ad-hoc styling decisions during execution.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 @~/.claude/gsd-core/references/ui-brand.md
 </required_reading>
@@ -483,7 +488,7 @@ Display:
 ```
 ### GSD ► UI-SPEC READY ✓
 
-**Phase {N}: {Name}** — UI design contract approved
+**{phase_display}: {Name}** — UI design contract approved
 
 Dimensions: 7/7 passed
 {If any FLAGs: "Recommendations: {N} (non-blocking)"}

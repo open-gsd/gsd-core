@@ -3733,7 +3733,7 @@ describe('#3861 round 1 — finding-id prefix census', () => {
     // hard-coded, and would miss the next prose-defined prefix exactly as it would miss BL.
     const emitted = new Set([
       ...[...agent.matchAll(/^###\s+([A-Z]+)-\d+:/gm)].map((m) => m[1]),
-      ...[...agent.matchAll(/\b([A-Z]+)-\s*(?:IDs?|prefix)/g)].map((m) => m[1]),
+      ...[...agent.matchAll(/\b([A-Z]+)-\s*(?:IDs?|prefix)(?![\w-])/g)].map((m) => m[1]),
       ...[...agent.matchAll(/IDs? beginning with\s+`?([A-Z]+)-/g)].map((m) => m[1]),
     ]);
     assert.ok(emitted.size > 0, 'the reviewer agent must still declare its finding-id shapes');

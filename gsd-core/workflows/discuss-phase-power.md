@@ -6,6 +6,11 @@ Power user mode for discuss-phase. Generates ALL questions upfront into a JSON s
 **When to use:** Large phases with many gray areas, or when users prefer to answer questions offline / asynchronously rather than interactively in the chat session.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <trigger>
 This workflow executes when `--power` flag is present in ARGUMENTS to `/gsd:discuss-phase`.
 

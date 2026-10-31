@@ -243,6 +243,13 @@ const RULES = [
     ],
   },
   {
+    name: 'phase convention guidance',
+    match: file =>
+      ['agents/', 'gsd-core/workflows/', 'gsd-core/templates/'].some(prefix => file.startsWith(prefix)) ||
+      ['src/phase-id-card.cts', 'scripts/gen-phase-id-convention.cjs', 'gsd-core/references/phase-id-convention.md'].includes(file),
+    tests: ['tests/phase-id-card.test.cjs'],
+  },
+  {
     name: 'workflow prompts',
     match: path => path.startsWith('gsd-core/workflows/'),
     tests: [

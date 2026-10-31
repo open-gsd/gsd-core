@@ -4,7 +4,9 @@
 // their prose asserts what runs in production (#163, #1205).
 'use strict';
 
-const { describe, test } = require('node:test');
+const { describe, test, beforeEach, afterEach } = require('node:test');
+const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
+const { currentMilestoneRawRanges } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
@@ -68,69 +70,31 @@ describe('gsd-roadmapper granularity calibration (#163)', () => {
   });
 });
 
-describe('gsd-roadmapper phase_id_convention support (#1205)', () => {
+describe('gsd-roadmapper generated convention guidance (#1205, #5027)', () => {
   const content = readAgent('gsd-roadmapper');
+  const gen = require('../scripts/gen-phase-id-convention.cjs');
+  const owner = require('../gsd-core/bin/lib/phase-id-card.cjs');
 
-  test('phase_identification section reads phase_id_convention from config', () => {
-    const section = extractBlock(content, 'phase_identification');
-    assert.ok(
-      section.includes('phase_id_convention'),
-      'phase_identification block must reference phase_id_convention config key'
-    );
+  test('short generated region directs emission to the canonical full reference', () => {
+    const region = gen.readRegion(content.replace(/\r\n/g, '\n'), { start: gen.START, end: gen.END }, 'agents/gsd-roadmapper.md');
+    assert.equal(region.violation, undefined);
+    assert.equal(region.body, owner.phaseIdConventionBlock());
+    const referencePath = path.join(__dirname, '..', gen.REFERENCE.file);
+    const reference = gen.readRegion(fs.readFileSync(referencePath, 'utf8').replace(/\r\n/g, '\n'), { start: gen.START, end: gen.END }, gen.REFERENCE.file);
+    assert.equal(reference.violation, undefined);
+    assert.equal(reference.body, owner.phaseIdConventionRules());
+  });
+  test('phase identification applies the generated guidance', () => {
+    assert.match(extractBlock(content, 'phase_identification'), /Use resolved display identifiers and paths from the generated convention guidance/);
   });
 
-  test('output_formats documents milestone-prefixed header format', () => {
+  test('output skeletons use configured display identifiers and keep detail requirements', () => {
     const section = extractBlock(content, 'output_formats');
-    assert.ok(
-      section.includes('milestone-prefixed'),
-      'output_formats block must document the milestone-prefixed convention'
-    );
-  });
-
-  test('output_formats shows milestone-prefixed phase header example (e.g. ### Phase 1-01:)', () => {
-    const section = extractBlock(content, 'output_formats');
-    assert.ok(
-      /###\s+Phase\s+\d+-\d{2}:/.test(section),
-      'output_formats must show a milestone-prefixed header example like "### Phase 1-01: Name"'
-    );
-  });
-
-  test('output_formats shows both sequential and milestone-prefixed summary checklist forms', () => {
-    const section = extractBlock(content, 'output_formats');
-    assert.ok(
-      /- \[ \] \*\*Phase \d+:/.test(section),
-      'output_formats must still show sequential summary checklist form "- [ ] **Phase N:"'
-    );
-    assert.ok(
-      /- \[ \] \*\*Phase \d+-\d{2}:/.test(section),
-      'output_formats must show milestone-prefixed checklist form "- [ ] **Phase N-NN:"'
-    );
-  });
-
-  test('phase_identification section falls back to sequential when convention absent or "sequential"', () => {
-    const section = extractBlock(content, 'phase_identification');
-    assert.ok(
-      section.includes('sequential'),
-      'phase_identification block must document that sequential is the default/fallback'
-    );
-  });
-
-  test('phase headings and checklists must not include project_code (#1455)', () => {
-    const phaseIdentification = extractBlock(content, 'phase_identification');
-    const outputFormats = extractBlock(content, 'output_formats');
-    const combined = `${phaseIdentification}\n${outputFormats}`;
-
-    assert.ok(
-      combined.includes('project_code'),
-      'roadmapper instructions must explicitly mention project_code'
-    );
-    assert.ok(
-      /project_code[\s\S]{0,120}Never include|Do not include `project_code`/.test(combined),
-      'roadmapper must state that project_code is not part of phase headings/checklists'
-    );
+    assert.match(section, /- \[ \] \*\*\{phase_display\}:/);
+    assert.match(section, /### \{phase_display\}:/);
+    for (const field of ['**Goal**', '**Depends on**', '**Requirements**', '**Success Criteria**', '**Plans**']) assert.ok(section.includes(field));
   });
 });
-
 
 // ────────────────────────────────────────────────────────────────────────
 // Folded from tests/feat-68-per-phase-granularity.test.cjs — consolidation epic #1969 (B3 #1972)
@@ -650,3 +614,64 @@ describe('#703 init.plan-phase end-to-end: granularity resolution via CLI', () =
 });
   });
 }
+
+// #5027: exercise the deployed prompt artifacts with actual runtime identities.
+describe('#5027 convention consumer contracts', () => {
+  let root;
+  beforeEach(() => { root = createTempProject('gsd-5027-consumers-'); });
+  afterEach(() => cleanup(root));
+  const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+  for (const convention of ['sequential', 'bracket']) test(`${convention}: init.plan-phase paths survive prompt substitution`, () => {
+    const planning = path.join(root, '.planning');
+    fs.writeFileSync(path.join(planning, 'config.json'), JSON.stringify({ phase_id_convention: convention, project_code: 'GSD' }));
+    fs.writeFileSync(path.join(planning, 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fs.writeFileSync(path.join(planning, 'ROADMAP.md'), convention === 'bracket' ? '# Roadmap\n\n## [GSD.02] Active\n\n### [GSD.02] 01: Foundation\n**Goal:** Setup\n' : '# Roadmap\n\n## v2.0 Active\n\n### Phase 1: Foundation\n**Goal:** Setup\n');
+    const dir = path.join(planning, 'phases', convention === 'bracket' ? 'GSD.02-01-foundation' : '01-foundation');
+    fs.mkdirSync(dir, { recursive: true });
+    const result = runGsdTools('init plan-phase 1', root, { HOME: root });
+    assert.ok(result.success, result.error);
+    const data = JSON.parse(result.output);
+    const found = runGsdTools(`query find-phase ${path.basename(dir)}`, root, { HOME: root });
+    assert.ok(found.success, found.error);
+    assert.equal(JSON.parse(found.output).phase_number, data.phase_number);
+    assert.ok(path.isAbsolute(data.phase_dir));
+    for (const suffix of ['CONTEXT', 'RESEARCH', 'VERIFICATION', 'UAT']) fs.writeFileSync(path.join(dir, `${data.phase_number}-${suffix}.md`), suffix);
+    for (const file of ['gsd-core/templates/planner-subagent-prompt.md', 'agents/gsd-verifier.md']) {
+      const template = read(file).replaceAll('{phase_dir}', data.phase_dir).replaceAll('{phase_num}', data.phase_number);
+      const artifactPaths = [...template.matchAll(/(?:@|`|\*\*Report:\*\* )([^\s`]*\/(?:01)-(?:CONTEXT|RESEARCH|VERIFICATION|UAT)\.md)/g)].map(match => match[1]);
+      assert.ok(artifactPaths.length >= (file.startsWith('agents/') ? 2 : 4), file);
+      artifactPaths.forEach(artifact => assert.ok(fs.existsSync(artifact), `${file}: ${artifact}`));
+    }
+  });
+  test('rendered milestone examples bind the active window and stop before planned', () => {
+    const template = read('gsd-core/templates/roadmap.md');
+    const source = template.slice(template.indexOf('<summary>✅ {shipped_milestone_display}'));
+    const active = source.split('\n').find(line => /^#{2,3} .*\{active_milestone_display\}/.test(line));
+    const planned = source.split('\n').find(line => /^#{2,3} .*\{planned_milestone_display\}/.test(line));
+    assert.ok(active && planned);
+    const render = (line, key, value) => line.replace(`{${key}}`, value).replace('[Name]', 'Name');
+    const roadmap = ['# Roadmap', render(active, 'active_milestone_display', '[GSD.02]'), '### [GSD.02] 01: Active', '**Goal:** Active only', render(planned, 'planned_milestone_display', '[GSD.03]'), '### [GSD.03] 01: Planned', '**Goal:** Future only'].join('\n');
+    fs.writeFileSync(path.join(root, '.planning/config.json'), JSON.stringify({ phase_id_convention: 'bracket', project_code: 'GSD' }));
+    fs.writeFileSync(path.join(root, '.planning/STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fs.writeFileSync(path.join(root, '.planning/ROADMAP.md'), roadmap);
+    const ranges = currentMilestoneRawRanges(roadmap, root, 'bracket');
+    assert.ok(ranges, roadmap);
+    assert.equal(ranges.primary.start, roadmap.indexOf(render(active, 'active_milestone_display', '[GSD.02]')), 'scope must bind the milestone, not its first phase heading');
+    const scoped = roadmap.slice(ranges.primary.start, ranges.primary.end);
+    assert.ok(scoped.includes('Active only'));
+    assert.ok(!scoped.includes('Future only'));
+    assert.ok(!scoped.includes('[GSD.03]'), 'scope must terminate at the planned milestone heading itself');
+  });
+  test('remaining report surfaces use display identities and review scope resolves canonically', () => {
+    for (const file of ['agents/gsd-eval-auditor.md', 'agents/gsd-ui-checker.md', 'agents/gsd-verifier.md', 'gsd-core/workflows/progress/steps/mvp-display.md']) {
+      const text = read(file);
+      assert.doesNotMatch(text, /Phase \{N\}|^Phase 1 — User Auth MVP/m, file);
+      assert.match(text, /\{phase_display\}/, file);
+    }
+    for (const file of ['agents/gsd-code-reviewer.md']) {
+      const text = read(file);
+      assert.doesNotMatch(text, /leading digits of.*phase_dir/);
+      assert.match(text, /query find-phase/);
+    }
+  });
+});

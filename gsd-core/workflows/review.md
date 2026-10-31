@@ -10,6 +10,11 @@ This implements adversarial review: different AI models catch different blind sp
 A plan that survives review from 2-3 independent AI systems is more robust.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <process>
 
 <step name="detect_clis">
@@ -190,7 +195,7 @@ Provide structured feedback on plan quality, completeness, and risks.
 ## Project Context
 {first 80 lines of PROJECT.md}
 
-## Phase {N}: {phase name}
+## {phase_display}: {phase name}
 ### Roadmap Section
 {roadmap phase section}
 
@@ -819,7 +824,7 @@ present as complete. Report instead:
 ```
 ### GSD ► REVIEW FAILED
 
-Phase {N}: every selected reviewer lane {failed to produce a result|was budget-skipped} — no
+{phase_display}: every selected reviewer lane {failed to produce a result|was budget-skipped} — no
 REVIEWS.md was written.
 
 {If the preserve+cleanup block below reports success: "Diagnostics preserved:
@@ -832,7 +837,7 @@ Otherwise (at least one lane succeeded), display summary:
 ```
 ### GSD ► REVIEW COMPLETE
 
-Phase {N} reviewed by {count} AI systems.
+{phase_display} reviewed by {count} AI systems.
 
 Consensus concerns:
 {top 3 shared concerns}

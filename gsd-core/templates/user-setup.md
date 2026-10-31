@@ -1,10 +1,19 @@
 # User Setup Template
 
-Template for `.planning/phases/XX-name/{phase}-USER-SETUP.md` - human-required configuration that Claude cannot automate.
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
+Copy only the fenced artifact body. Convention guidance is instruction text and must not appear in the artifact.
+
+Template for `{phase_dir}/{phase}-USER-SETUP.md` - human-required configuration that Claude cannot automate.
 
 **Purpose:** Document setup tasks that literally require human action - account creation, dashboard configuration, secret retrieval. Claude automates everything possible; this file captures only what remains.
 
 ---
+
+For sequential projects, retain the legacy title below. For other conventions, resolve `{phase_display}` from the reference sources for the title: `# {phase_display}: User Setup Required`.
 
 ## File Template
 
