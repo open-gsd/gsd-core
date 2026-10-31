@@ -48,7 +48,7 @@ if ! [[ "$PADDED_PHASE" =~ ^[0-9]+[A-Z]?(\.[0-9]+)*$ ]]; then
 fi
 ```
 
-**Phase validation (before config gate):**
+**Phase validation (before config gate):** `REVIEW_PATH` is not known yet, so this exit has no lane evidence to remove.
 If `phase_found` is false, report error and exit:
 ```
 Error: Phase ${PHASE_ARG} not found. Run /gsd:progress to see available phases.
@@ -98,7 +98,10 @@ If no active code-review step hook exists:
 ```
 Code review fix skipped (code-review capability inactive)
 ```
-Exit workflow.
+Remove the spent lane evidence (#5019), then exit workflow:
+```bash
+gsd_run lane-evidence-clear "$REVIEW_PATH" || true
+```
 
 Default is active through the Capability Registry schema — only skip when the registry resolves no active code-review step hook. This check runs AFTER phase validation so invalid phase errors are shown first.
 
@@ -111,6 +114,8 @@ Verify that REVIEW.md exists:
 ```bash
 if [ ! -f "${REVIEW_PATH}" ]; then
   echo "Error: No REVIEW.md found for Phase ${PHASE_ARG}. Run /gsd:code-review ${PHASE_ARG} first."
+  # #5019: spent lane evidence goes before the exit (same fence as cleanup_iteration_backups)
+  gsd_run lane-evidence-clear "$REVIEW_PATH" || true
   exit 1
 fi
 ```
@@ -139,7 +144,10 @@ If status is "clean" or "skipped":
 ```
 No issues to fix in Phase ${PHASE_ARG} REVIEW.md (status: ${REVIEW_STATUS}).
 ```
-Exit workflow.
+Remove the spent lane evidence (#5019), then exit workflow:
+```bash
+gsd_run lane-evidence-clear "$REVIEW_PATH" || true
+```
 
 If status is "unknown":
 ```
@@ -241,6 +249,11 @@ If Agent() fails:
 Error: Code fix agent failed: ${error_message}
 ```
 
+Remove the spent lane evidence (#5019):
+```bash
+gsd_run lane-evidence-clear "$REVIEW_PATH" || true
+```
+
 Check if FIX_REPORT_PATH exists:
 - If yes: "Partial success — some fixes may have been committed."
 - If no: "No fixes applied."
@@ -302,8 +315,12 @@ if [ "$AUTO_MODE" = "true" ]; then
     
     # Spawn gsd-code-reviewer agent to re-review (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)
     # (This overwrites REVIEW_PATH with latest review state)
+    # #5019: re-surface the lane evidence code-review.md persisted; absent => prompt unchanged.
+    B=$(gsd_run lane-evidence-read "$REVIEW_PATH" || true)
+    EXTERNAL_EVIDENCE_BLOCK=""
+    [ -n "$B" ] && EXTERNAL_EVIDENCE_BLOCK="$B"$'\n\n'
     Agent(subagent_type="gsd-code-reviewer", model="{REVIEWER_MODEL}", prompt="
-<config>
+${EXTERNAL_EVIDENCE_BLOCK}<config>
 depth: ${REVIEW_DEPTH}
 phase_dir: ${PHASE_DIR}
 review_path: ${REVIEW_PATH}
@@ -476,7 +493,7 @@ both, not two competing ones.
 </step>
 
 <step name="cleanup_iteration_backups">
-Only runs if AUTO_MODE is true. If AUTO_MODE is false, skip this step entirely.
+The `.iterN.md` backup removal below runs only if AUTO_MODE is true. The #5019 lane-evidence removal fence at the end of this step runs whatever AUTO_MODE is.
 
 **Removes the `.iterN.md` scratch — deliberately AFTER `record_disposition`, not at the end of the
 loop.** #3190's rule is unchanged: on convergence the backups are spent scratch and go; on degradation
@@ -514,6 +531,13 @@ if [ "$AUTO_MODE" = "true" ]; then
     echo "Iteration backups retained (final review status: ${FINAL_STATUS}) — post-mortem trail."
   fi
 fi
+```
+
+**#5019 lane-evidence removal** — the lane evidence is spent once the loop ends, converged or not. Every exit of this
+workflow after `REVIEW_PATH` is computed runs this fence (AUTO_MODE or not; with no state it is a no-op).
+
+```bash
+gsd_run lane-evidence-clear "$REVIEW_PATH" || true
 ```
 </step>
 

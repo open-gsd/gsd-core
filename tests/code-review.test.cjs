@@ -40,7 +40,7 @@ function extractBashBlocks(content) {
 }
 const os = require('os');
 const { runGsdTools, createTempProject, createTempGitProject, cleanup } = require('./helpers.cjs');
-const { runNode } = require('./helpers/process-seam.cjs');
+const { runNode, runHook } = require('./helpers/process-seam.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -733,8 +733,11 @@ describe('CR-REVIEWER-LANES: optional external source-reviewer dispatch (#4209)'
         'echo "CODE_REVIEW_POINT=[$CODE_REVIEW_POINT]"',
         'echo "EXPLICIT_JOINED=[$EXPLICIT_JOINED]"',
       ].join('\n');
-      const result = require('node:child_process').spawnSync('bash', ['-c', driver], { cwd: tmpDir, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
-      assert.equal(result.status, 0, `driver failed: stdout=${result.stdout} stderr=${result.stderr}`);
+      // Run from a file, not `bash -c`: the driver outgrew the Windows command-line limit (~8K), which
+      // surfaced as `syntax error: unexpected end of file`. stdin stays free for the stubbed `cat >/dev/null`.
+      fs.writeFileSync(path.join(tmpDir, 'driver.sh'), driver);
+      const result = runHook('driver.sh', [], { interpreter: 'bash', cwd: tmpDir, timeoutMs: PROBE_TIMEOUT_MS });
+      assert.equal(result.exitCode, 0, `driver failed: stdout=${result.stdout} stderr=${result.stderr}`);
       assert.match(result.stdout, /CODE_REVIEW_POINT=\[execute:post\]/,
         `CODE_REVIEW_POINT must be computed and survive within the SAME fence that later uses it for --point, got: ${result.stdout}`);
       assert.match(result.stdout, /EXPLICIT_JOINED=\[codex\]/,
