@@ -244,20 +244,46 @@ const CLAUDE_POLICY_ID_TO_ALIAS: Record<string, string> = {
 
 // Dedupe stderr warnings so repeated agent resolutions don't spam (#1133).
 const _modelPolicyUnmappableWarned = new Set<string>();
+const _projectModelOmitWarned = new Set<string>();
+const MODEL_RESOLVER_DIAGNOSTIC = Object.freeze({
+  PROJECT_MODEL_OMIT: 'project_model_omit',
+});
+// Existing omit may be authored or copied from shared defaults by an older
+// version. Neither origin can be inferred here. Keep a stable typed code on the
+// emitted diagnostic so tests and operators need not key behavior on prose.
+const PROJECT_MODEL_OMIT_WARNING = `gsd-tools: warning [${MODEL_RESOLVER_DIAGNOSTIC.PROJECT_MODEL_OMIT}]: ` +
+    'project config sets resolve_model_ids:"omit", so Claude agents ' +
+    'inherit the session model instead of model_profile tiers. This value may have been ' +
+    'copied from shared defaults by an older GSD version. If tier routing is intended, ' +
+    'remove resolve_model_ids or set it to false in the project config. Explicit omit ' +
+    'is still honored; the config is unchanged. (#5329)';
+
+function warnOnce(cache: Set<string>, key: string, message: string): void {
+  if (cache.has(key)) return;
+  cache.add(key);
+  try {
+    process.stderr.write(message + '\n');
+  } catch { /* stderr might be closed in a test harness */ }
+}
+
+function warnProjectModelOmit(cwd: string): void {
+  const key = path.resolve(planningDir(cwd));
+  warnOnce(_projectModelOmitWarned, key, PROJECT_MODEL_OMIT_WARNING);
+}
+
 function warnModelPolicyUnmappable(agentType: string, policyModel: string, tier: string): void {
   const key = `${agentType}::${policyModel}::${tier}`;
-  if (_modelPolicyUnmappableWarned.has(key)) return;
-  _modelPolicyUnmappableWarned.add(key);
   // MUST go to stderr — resolve-model's JSON result is parsed from stdout.
-  process.stderr.write(
+  warnOnce(_modelPolicyUnmappableWarned, key,
     `gsd: warning — model_policy resolved "${policyModel}" for ${agentType}, ` +
-    `but it has no Claude agent alias; using "${tier}" instead.\n`,
+    `but it has no Claude agent alias; using "${tier}" instead.`,
   );
 }
 
-// Test-only: reset the model_policy warn-dedupe cache between cases (#1133).
+// Test-only: reset model-policy diagnostics between cases (#1133, #5329).
 function _resetModelPolicyWarningCacheForTests(): void {
   _modelPolicyUnmappableWarned.clear();
+  _projectModelOmitWarned.clear();
 }
 
 // Dedupe stderr warnings for unmappable model_overrides Claude IDs (#2041 /
@@ -646,6 +672,9 @@ function resolveModelInternal(cwd: string, agentType: string): string {
   // returned its own model id at step 3 above, before this gate — for those the
   // explicit-project-omit honoring here is moot (step 3 wins, by #2517 design).
   if (omitApplies) {
+    // Only the Claude omission path loses profile routing. A non-Claude runtime,
+    // an explicit model pin, or an inherit tier needs no migration breadcrumb.
+    if (activeRuntime === 'claude' && tier && tier !== 'inherit') warnProjectModelOmit(cwd);
     return '';
   }
 
@@ -1107,6 +1136,8 @@ function resolveEffortForTier(cwd: string, agentType: string, attempt?: number):
 }
 
 export = {
+  MODEL_RESOLVER_DIAGNOSTIC,
+  PROJECT_MODEL_OMIT_WARNING,
   resolveTierEntry,
   CLAUDE_AGENT_ALIASES,
   resolveModelPolicy,
