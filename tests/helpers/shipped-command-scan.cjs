@@ -346,7 +346,7 @@ const stripComments = (raw) => {
 };
 
 const isGit = (t) => { const b = bareCommandName(t); return b === 'git' || /\/git$/.test(b); };
-const GIT_VALUE_FLAGS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--super-prefix']);
+const GIT_VALUE_FLAGS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--super-prefix', '--config-env', '--attr-source', '--shallow-file']);
 // Index of the git subcommand after the git word at `gi`: redirections are skipped, a value option skips its separate value, every other `-option` is skipped (a safety guard fails closed: an option it does not know must not hide the subcommand); -1 when there is none.
 const gitSubcommandIdx = (toks, gi) => {
   let c = gi + 1;
@@ -357,10 +357,10 @@ const gitSubcommandIdx = (toks, gi) => {
   }
   return -1;
 };
-const isWholeTree = (a) => /^(?::\((?:top|literal|glob)[^)]*\)|:\/)?(?:\.\/*|\*+|\/?)$/.test(a);
+const isWholeTree = (a) => /^(?::\((?:top|literal|glob|icase)[^)]*\)|:\/)?(?:\.\.?(?:\/+\.\.?)*\/*|\*+|\/?)$/.test(a);
 const isExcludeMagic = (a) => a.startsWith(':!') || a.startsWith(':^') || a.startsWith(':(exclude)');
 // `inline`: a bare `git commit` in a prose code span names the command, it is not an invocation.
-// An `echo`/`printf` word that holds `git ... commit` (recovery advice) is scanned as a script; other quoted prose is not.
+// An `echo`/`printf` word that holds `git ... commit` (recovery advice), or an `eval` word, is scanned as a script; other quoted prose is not.
 const unscopedGitCommits = (raw, inline = false) => {
   const out = [];
   const text = stripComments(raw);
@@ -373,7 +373,7 @@ const unscopedGitCommits = (raw, inline = false) => {
       while (k >= 0 && !toks[k].op) k -= 1;
       let w = k + 1;
       while (toks[w] && (toks[w].redir || toks[w].value === '{')) w += 1;
-      if (['echo', 'printf'].includes(toks[w]?.value) && /\bgit\b[^\n]*\bcommit\b/.test(toks[i].value)) out.push(...unscopedGitCommits(toks[i].value, inline));
+      if (['echo', 'printf', 'eval'].includes(toks[w]?.value) && /\bgit\b[^\n]*\bcommit\b/.test(toks[i].value)) out.push(...unscopedGitCommits(toks[i].value, inline));
       continue;
     }
     const c = gitSubcommandIdx(toks, i);
@@ -389,15 +389,23 @@ const unscopedGitCommits = (raw, inline = false) => {
     const dd = argv.indexOf('--');
     const spec = dd === -1 ? [] : argv.slice(dd + 1).filter((a) => !isExcludeMagic(a));
     const wholeTree = dd !== -1 && dd < argv.length - 1 && (spec.length === 0 || spec.some(isWholeTree));
+    // -i/--include, also bundled as in -qi, commits the whole index plus the named paths.
+    const include = argv.slice(0, dd === -1 ? argv.length : dd).some((a) => (a.length > 4 && '--include'.startsWith(a)) || /^-[^-mFcCtuS]*i/.test(a));
     const fromFile = argv.some((a) => a === '--pathspec-from-file' || a.startsWith('--pathspec-from-file='));
-    if ((dd === -1 && !fromFile && (argv.length > 0 || !inline)) || (dd !== -1 && dd === argv.length - 1) || wholeTree) out.push(text.slice(toks[i].start, prev.end));
+    if ((dd === -1 && !fromFile && (argv.length > 0 || !inline)) || (dd !== -1 && dd === argv.length - 1) || wholeTree || include) out.push(text.slice(toks[i].start, prev.end));
   }
-  for (const ln of text.split('\n')) for (const p of shellDashCPayloads(ln)) out.push(...unscopedGitCommits(p, inline));
+  // bash -c payloads per command line: an unquoted newline ends a command, a newline inside quotes does not.
+  let from = 0;
+  for (let k = 0; k < toks.length; k += 1) {
+    if (k + 1 < toks.length && !/(?<!\\)\n/.test(text.slice(toks[k].end, toks[k + 1].start))) continue;
+    for (const p of shellDashCPayloads(text.slice(toks[from].start, toks[k].end))) out.push(...unscopedGitCommits(p, inline));
+    from = k + 1;
+  }
   return out;
 };
 
-// The git prefixes the scanner resolves; the hook walker resolves all of them except --no-advice, --config-env and --attr-source (round-1 objection 2).
-const GIT_PREFIX_SPELLINGS = ['git', 'git -C d', 'git -c k=v', 'git --no-pager', '/usr/bin/git', 'git 2>/dev/null', 'git --super-prefix p', 'git --no-advice', 'git --config-env=k=V', 'git --attr-source=HEAD'];
+// Git prefix spellings the add guard and the commit scanner must both see through to the subcommand.
+const GIT_PREFIX_SPELLINGS = ['git', 'git -C d', 'git -c k=v', 'git --no-pager', '/usr/bin/git', 'git 2>/dev/null', 'git --super-prefix p', 'git --no-advice', 'git --config-env=k=V', 'git --attr-source=HEAD', 'git --attr-source HEAD', 'git --config-env k=V', 'git --shallow-file f'];
 
 module.exports = {
   bareCommandName,

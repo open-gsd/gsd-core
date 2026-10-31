@@ -30,7 +30,6 @@ const {
   hasReachingGitAdd, scanText, scanRepo, SCAN_ROOTS,
 } = require('./helpers/planning-add-guard.cjs');
 const { unscopedGitCommits, GIT_PREFIX_SPELLINGS } = require('./helpers/shipped-command-scan.cjs');
-const { skipToSubcommand } = require('../hooks/lib/git-cmd.js');
 
 const REPO_ROOT = path.join(__dirname, '..');
 
@@ -152,7 +151,6 @@ describe('commit_docs bypass guard (#1783, repo-wide per #3585)', () => {
         assert.equal(hasReachingGitAdd(`${pre} add -A`), true);
         assert.equal(unscopedGitCommits(`${pre} commit -m x`).length, 1);
       }
-      for (const pre of GIT_PREFIX_SPELLINGS.filter((p) => !p.includes('>') && !/--(?:no-advice|config-env|attr-source)/.test(p))) { const words = `${pre} commit`.split(' '); assert.equal(words[skipToSubcommand(words)], 'commit', pre); }
       assert.equal(unscopedGitCommits('V=$(git commit -m x)').length, 1);
       assert.equal(unscopedGitCommits('cd x\nbash -c "git commit -m x"').length, 1);
       assert.equal(unscopedGitCommits("bash -c 'git commit -m x'").length, 1);

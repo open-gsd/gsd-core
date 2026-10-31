@@ -3329,6 +3329,11 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     assert.equal(unscopedGitCommits('git commit -m x --pathspec-from-file=list.txt').length, 0);
   });
 
+  test('blind spots: -i/--include, .. and :(icase) whole-tree specs, separate-value --attr-source/--config-env, multi-line bash -c and quoted eval are unscoped', () => {
+    for (const c of ['git commit -i -m x -- a', 'git commit --include -m x -- a', 'git commit --inc -m x -- a', 'git commit -qi -m x -- a', 'git commit -m x -- ..', 'git commit -m x -- ../', 'git commit -m x -- ../..', "git commit -m x -- ':(icase).'", 'git --attr-source HEAD commit -m x', 'git --config-env k=V commit -m x', 'git --shallow-file f commit -m x', 'bash -c "cd a\ngit commit -m x"', 'eval "git commit -m x"']) assert.equal(unscopedGitCommits(c).length, 1, c);
+    for (const c of ['git commit -m x -- a', 'git commit --in -m x -- a', 'git commit -m x -- ...', "git commit -m x -- ':(icase)src'", 'git commit -m x -- -i', 'bash -c "cd a\ngit commit -m x -- a"', 'eval "git commit -m x -- a"']) assert.equal(unscopedGitCommits(c).length, 0, c);
+  });
+
   test('git -C / -c global options do not hide a commit', () => {
     assert.equal(unscopedGitCommits('git -C sub commit -m x').length, 1);
     assert.equal(unscopedGitCommits('git -c user.name=t -C sub commit -m x').length, 1);
@@ -3358,18 +3363,18 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     assert.equal(unscopedGitCommits('git commit -m "first\n# body"\ngit commit -m "later"').length, 2);
   });
 
-  // Deliberate whole-index commits: a pathspec would break or defeat them.
+  // Commits the scanner flags on purpose, each with its reason: whole-index commits (no pathspec) and whole-tree ones (`-- .`).
   // Key: `<file>: <first line of the command>`.
-  const WHOLE_INDEX_ALLOWLIST = new Map([
+  const UNSCOPED_COMMIT_ALLOWLIST = new Map([
     ['gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "feat: $branch for v[X.Y]"', 'squash merge: commit the merge result'],
     ['gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "feat: $MILESTONE_BRANCH for v[X.Y]"', 'squash merge: commit the merge result'],
     [`gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "Merge branch '$branch' for v[X.Y]"`, 'merge commit: git refuses a partial commit mid-merge'],
     [`gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "Merge branch '$MILESTONE_BRANCH' for v[X.Y]"`, 'merge commit: git refuses a partial commit mid-merge'],
-    ['agents/gsd-executor.md: git commit -m "chore(wip): scratch" -- .', 'whole worktree by design: run from the worktree root (maintainer-accepted example)'],
-    ['pi/package-agents/gsd-executor.md: git commit -m "chore(wip): scratch" -- .', 'whole worktree by design: run from the worktree root (maintainer-accepted example)'],
-    ["gsd-core/workflows/execute-phase.md: git commit -m 'chore(recover): recover worktree state' -- .", 'whole worktree by design: run from the worktree root (maintainer-accepted example)'],
-    ['gsd-core/workflows/fast.md: git commit -m "fix: {concise description of what changed}" -- . \':!.planning\'', 'the current directory minus .planning by design (maintainer review 5661319090)'],
-    ['gsd-core/workflows/fast.md: git commit -m "fix: {concise description of what changed}" -- .', 'the current directory by design (maintainer review 5661319090)'],
+    ['agents/gsd-executor.md: git commit -m "chore(wip): scratch" -- .', 'whole worktree: run from the worktree root'],
+    ['pi/package-agents/gsd-executor.md: git commit -m "chore(wip): scratch" -- .', 'whole worktree: run from the worktree root'],
+    ["gsd-core/workflows/execute-phase.md: git commit -m 'chore(recover): recover worktree state' -- .", 'whole worktree: run from the worktree root'],
+    ['gsd-core/workflows/fast.md: git commit -m "fix: {concise description of what changed}" -- . \':!.planning\'', '/gsd-fast commits the current directory minus .planning (commit_docs=false)'],
+    ['gsd-core/workflows/fast.md: git commit -m "fix: {concise description of what changed}" -- .', '/gsd-fast commits the current directory'],
     ['gsd-core/references/planning-config.md: git commit -m "chore: stop tracking planning docs"', 'commits the index removals: a -- .planning/ pathspec fails after git rm --cached; a staged-paths guard precedes it'],
     ['gsd-core/workflows/pr-branch.md: git commit -q -C "$HASH"', 'cherry-pick replay: reuses the source commit message over the staged result'],
     ['gsd-core/workflows/ship.md: git commit --allow-empty -m "chore: trigger CI (recover from ship-note skip-token)"', 'empty commit: no paths by design'],
@@ -3390,13 +3395,13 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       for (const [seg, inline] of segments) {
         for (const cmd of unscopedGitCommits(seg, inline)) {
           const key = `${f}: ${cmd.split('\n')[0]}`;
-          if (WHOLE_INDEX_ALLOWLIST.has(key)) seen.add(key);
+          if (UNSCOPED_COMMIT_ALLOWLIST.has(key)) seen.add(key);
           else offenders.push(key);
         }
       }
     }
-    assert.deepStrictEqual([...WHOLE_INDEX_ALLOWLIST.keys()].filter((k) => !seen.has(k)), [],
-      'stale WHOLE_INDEX_ALLOWLIST entries: remove them');
+    assert.deepStrictEqual([...UNSCOPED_COMMIT_ALLOWLIST.keys()].filter((k) => !seen.has(k)), [],
+      'stale UNSCOPED_COMMIT_ALLOWLIST entries: remove them');
     assert.deepStrictEqual(offenders, [],
       'unscoped `git commit` in shipped prompts sweeps foreign staged files (#5211); append `-- <paths>`');
   });
@@ -3411,6 +3416,21 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     fc.assert(fc.property(prefix, msg, fc.array(word, { minLength: 0, maxLength: 3 }), (pre, m, paths) => {
       const cmd = `${pre} commit -m ${m}${paths.length ? ` -- ${paths.join(' ')}` : ''}`;
       assert.equal(unscopedGitCommits(cmd).length, paths.length === 0 ? 1 : 0);
+    }), { seed: 5211, numRuns: 100 });
+  });
+
+  test('property: a widening option, a whole-tree pathspec, or a bash -c / eval wrapper keeps the verdict for every git prefix', () => {
+    const prefix = fc.constantFrom(...GIT_PREFIX_SPELLINGS);
+    fc.assert(fc.property(prefix, msg, fc.constantFrom('-i', '--include', '--inc', '-qi'), fc.array(word, { minLength: 1, maxLength: 3 }), (pre, m, opt, paths) => {
+      assert.equal(unscopedGitCommits(`${pre} commit ${opt} -m ${m} -- ${paths.join(' ')}`).length, 1);
+    }), { seed: 5211, numRuns: 100 });
+    fc.assert(fc.property(prefix, msg, fc.constantFrom('.', './', '..', '../', '../..', ':/', ':(icase).', ':(top,icase)'), (pre, m, t) => {
+      assert.equal(unscopedGitCommits(`${pre} commit -m ${m} -- ${t}`).length, 1);
+    }), { seed: 5211, numRuns: 100 });
+    const wrap = fc.constantFrom((c) => `bash -c 'cd x\n${c}'`, (c) => `eval '${c}'`);
+    fc.assert(fc.property(prefix, word, fc.array(word, { minLength: 0, maxLength: 3 }), wrap, (pre, w, paths, wrapper) => {
+      const cmd = `${pre} commit -m ${w}${paths.length ? ` -- ${paths.join(' ')}` : ''}`;
+      assert.equal(unscopedGitCommits(wrapper(cmd)).length, paths.length === 0 ? 1 : 0);
     }), { seed: 5211, numRuns: 100 });
   });
 
