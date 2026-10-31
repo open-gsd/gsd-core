@@ -1590,8 +1590,10 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
   // isSecretBasename still holds.
   const prevCmd = resolveCommand((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
   if (!prevCmd) return null;
-  // They become curl's arguments when the sub-command is curl (#5779).
-  const toCurl = CURL_COMMANDS.has(subBase);
+  // They become curl's arguments when the sub-command, past the wrappers
+  // resolveCommand unwraps, is curl (#5779): `xargs sudo curl`.
+  const subCmd = launchedCommandIndex(operands, subIdx, operands.length);
+  const toCurl = subCmd !== -1 && CURL_COMMANDS.has(commandName(operands[subCmd].text));
   for (const w of prevCmd.operands) {
     if (operandNamesSecret(w.text)) return w.text;
     if (toCurl && curlValueNamesSecret(w.text)) return w.text;
