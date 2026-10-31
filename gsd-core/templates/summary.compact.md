@@ -66,7 +66,7 @@ coverage:
     rationale: "[REQUIRED when human_judgment: true — why automation is insufficient]"
 
 # Metrics
-duration: Xmin
+duration: "<measured duration>"
 completed: YYYY-MM-DD
 status: complete
 ---

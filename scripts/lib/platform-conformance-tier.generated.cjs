@@ -253,6 +253,7 @@ module.exports = {
   "tests/pi-hook-bridge.test.cjs",
   "tests/pi-package.test.cjs",
   "tests/plan-count-single-owner.test.cjs",
+  "tests/plan-duration-persistence.test.cjs",
   "tests/plan-phase-stall-detection.test.cjs",
   "tests/plan-pre-hook-e2e.test.cjs",
   "tests/plan-review-convergence.test.cjs",

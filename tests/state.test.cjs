@@ -3829,17 +3829,22 @@ describe('cmdStateRecordSession (state record-session)', () => {
   // mis-attribution shape the issue measured (decisions landed on Phase 661
   // while phase 658 executed).
   //
-  // allow-test-rule: source-text-is-the-product (#4763) — agents/gsd-executor.md
-  // is shipped content; its text IS the deployed contract the runtime loads.
+  // allow-test-rule: source-text-is-the-product (#4763) — the executor spine
+  // and its lazy STATE-update part are shipped content; their text is the
+  // deployed contract the runtime loads.
   test('#4763: the executor decision loop passes --phase explicitly', () => {
     const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
     const executor = fs.readFileSync(
       path.join(__dirname, '..', 'agents', 'gsd-executor.md'), 'utf8');
-    const addDecisionLines = splitLines(executor)
+    const partPath = 'gsd-core/workflows/execute-plan/steps/executor-state-updates.md';
+    assert.ok(executor.includes(partPath),
+      'agents/gsd-executor.md must delegate STATE updates to the shipped part');
+    const stateUpdates = fs.readFileSync(path.join(__dirname, '..', partPath), 'utf8');
+    const addDecisionLines = splitLines(stateUpdates)
       .filter((l) => l.includes('state.add-decision'));
     assert.ok(
       addDecisionLines.length >= 1,
-      'agents/gsd-executor.md must carry the add-decision loop',
+      `${partPath} must carry the add-decision loop`,
     );
     for (const line of addDecisionLines) {
       assert.match(
