@@ -4,7 +4,7 @@
 
 **Prerequisites:** A working lane in a public repository, with a tagged release. If you have not built one yet, start with [Ship a reviewer lane in your capability](ship-a-reviewer-lane.md). GSD 1.9.1 or later.
 
-Listing is a documentation PR against `gsd-core`. There is no separate account, package publish, or approval queue — you append one JSON object, regenerate a catalog, and open a PR.
+Listing is a documentation PR against `gsd-core`. There is no separate account or package publish. Get an approved issue first (see [Submission process](../registries/README.md#submission-process)); then append one JSON object, regenerate a catalog, and open a PR.
 
 ---
 
@@ -88,7 +88,7 @@ Commit **both** the JSON source and the regenerated markdown.
 
 ## Open the PR
 
-Branch as `docs/<issue#>-<slug>`, and use the [registry-entry PR template](../../.github/PULL_REQUEST_TEMPLATE/registry-entry.md).
+First get an approved issue (see [Submission process](../registries/README.md#submission-process)). Branch as `docs/<issue#>-<slug>`, and use the [registry-entry PR template](../../.github/PULL_REQUEST_TEMPLATE/registry-entry.md).
 
 **One entry, one PR.** Do not bundle additions, updates, or removals together.
 

@@ -5,7 +5,15 @@
 > — New feature (not a registry listing): use [feature.md](?template=feature.md)
 > — Enhancement to existing behavior: use [enhancement.md](?template=enhancement.md)
 
-Full schema and process: [docs/registries/README.md](../../docs/registries/README.md).
+Full schema and process: [docs/registries/README.md](https://github.com/open-gsd/gsd-core/blob/next/docs/registries/README.md).
+
+---
+
+## Linked Issue
+
+> **Required.** External PRs are auto-closed without a linked approved issue.
+
+Closes #
 
 ---
 
@@ -71,8 +79,10 @@ Full schema and process: [docs/registries/README.md](../../docs/registries/READM
 
 ## Checklist
 
+- [ ] Issue linked above with `Closes #NNN`
+- [ ] Linked issue has the `approved-feature`, `approved-enhancement`, or `confirmed-bug` label
 - [ ] `npm run validate:registry` passes locally against my entry
-- [ ] `discussion` links to the GitHub Discussion I opened for this entry in the `EoS Registry` category *before* opening this PR — which, despite its name, carries threads for all three registries (see the *Open the entry's Discussion* step in [docs/registries/README.md](../../docs/registries/README.md))
+- [ ] `discussion` links to the GitHub Discussion I opened for this entry in the `EoS Registry` category *before* opening this PR — which, despite its name, carries threads for all three registries (see the *Open the entry's Discussion* step in [docs/registries/README.md](https://github.com/open-gsd/gsd-core/blob/next/docs/registries/README.md))
 - [ ] `.changeset/` fragment added with an `Added` type describing the new listing
 
 ---
