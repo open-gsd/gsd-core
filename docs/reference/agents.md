@@ -644,6 +644,7 @@ Thirteen additional agents ship under `agents/gsd-*.md` and are used by specialt
 
 **Key behaviors:**
 - Detects bugs (logic errors, null/undefined checks, off-by-one, type mismatches, unreachable code), security issues (injection, XSS, hardcoded secrets, insecure crypto), and quality issues
+- Detects **necessity** findings at `standard`/`deep` depth (#4100): reachable code whose guarded-against problem cannot occur in this stack (impossible-state guard, already-defended-elsewhere, cargo-culted pattern, phantom requirement, generality without instantiation). They are Warning or Info, never Critical, carry a `**Category:** necessity` line, and are counted in the frontmatter `necessity:` key. The taxonomy is read on demand from `gsd-core/references/necessity-review.md`. See [Resolve necessity findings](../how-to/resolve-necessity-findings.md)
 - Honors `CLAUDE.md` project conventions and `.claude/skills/` / `.agents/skills/` rules when present
 - Read-only against implementation source — never modifies code under review
 - Full-context review scope: surrounding modules, callers, tests, and docs, not a diff-only pass
@@ -667,6 +668,7 @@ Thirteen additional agents ship under `agents/gsd-*.md` and are used by specialt
 **Key behaviors:**
 - Treats `REVIEW.md` suggestions as guidance, not a patch to apply literally
 - Commits each fix atomically so review and rollback stay granular
+- Skips necessity findings under the default scope; `--all` includes them last, and each removal is marked `fixed: requires human verification` (#4100)
 - Honors `CLAUDE.md` and project-skill rules during fixes
 
 ---

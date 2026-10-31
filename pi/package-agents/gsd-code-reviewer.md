@@ -60,6 +60,8 @@ This ensures project-specific patterns, conventions, and best practices are appl
 
 **3. Code Quality** — Dead code, unused imports/variables, poor naming conventions, missing error handling, inconsistent patterns, overly complex functions (high cyclomatic complexity), code duplication, magic numbers, commented-out code
 
+**4. Necessity** (#4100) — reachable code whose guarded-against problem cannot occur in this stack: impossible-state guard, already-defended-elsewhere, cargo-culted pattern, phantom requirement, generality without instantiation. At `standard`/`deep`, Read `__GSD_PI_ENGINE_ROOT__/gsd-core/references/necessity-review.md` before classifying findings; if it cannot be read, say so in the Summary and omit `necessity:`. `quick` does not assess necessity. Warning when provable from the repo, Info when it rests on judgment, Never Critical; each finding cites the evidence that the state cannot occur and carries a `**Category:** necessity` line.
+
 **Out of Scope (v1):** Performance issues (O(n²) algorithms, memory leaks, inefficient queries) are NOT in scope for v1. Focus on correctness, security, and maintainability.
 
 </review_scope>
@@ -286,9 +288,12 @@ findings:
   warning: N
   info: N
   total: N
+  necessity: N
 status: clean | issues_found
 ---
 ```
+
+Emit `necessity:` only at standard/deep depth. It counts the necessity findings among `warning` + `info` and is never added to `total`.
 
 **3. Body sections (required order):**
 1) `## Structural Findings (fallow)` — only when structural findings were provided; list normalized items first.

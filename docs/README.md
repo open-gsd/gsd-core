@@ -28,6 +28,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Resolve edge-coverage findings](how-to/resolve-edge-coverage-findings.md) — turn the spec phase's surfaced domain-boundary edges into covered, dismissed, or backstopped spec decisions
 - [Probe edges in a non-English project](how-to/probe-edges-in-a-non-english-project.md) — get real edge coverage on a spec written in another language, and tell "no edges here" apart from "the probe could not read it"
 - [Resolve prohibition findings](how-to/resolve-prohibition-findings.md) — turn the spec phase's surfaced must-NOT constraints into resolved, dismissed, or deferred spec decisions
+- [Resolve necessity findings](how-to/resolve-necessity-findings.md) — decide whether to keep, simplify, or delete code that `/gsd-code-review` flags as guarding a problem that cannot occur
 - [Resolve an unreachable-workflow finding](how-to/resolve-unreachable-workflow-findings.md) — wire or fully sweep a shipped workflow that no command, agent, or skill references
 - [Acknowledge emitted-artifact drift](how-to/acknowledge-emitted-drift.md) — declare a deliberate emitted-byte ripple or workflow/agent growth in a commit trailer, and migrate an older ack fragment
 - [Change the STATE.md schema](how-to/change-the-state-md-schema.md) — add, change or remove a STATE.md frontmatter key and keep the template and all five reference documents in step
