@@ -32,7 +32,7 @@ const fc = require('./helpers/fast-check-setup.cjs');
 
 const { parseDecisions, extractDecisions } = require('../gsd-core/bin/lib/decisions.cjs');
 const { iterateBullets } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, cleanup, canonicalizePath } = require('./helpers.cjs');
 const { routeCheckCommand } = require('../gsd-core/bin/lib/check-command-router.cjs');
 const { writeMethodFailurePreload } = require('./helpers/fs-failure.cjs');
 const { runTools } = require('./helpers/gsd-tools-cli.cjs');
@@ -3353,8 +3353,16 @@ describe('#4939: decision-coverage answers a caller error for a phase directory 
   // permission bits: root bypasses them and Windows ignores them.
   function runGateWithStatFailure(t, subcommand, code) {
     const realStatSync = fs.statSync;
+    const resolvedPhaseDir = canonicalizePath(phaseDir);
     t.mock.method(fs, 'statSync', (p, ...rest) => {
-      if (typeof p === 'string' && path.resolve(p) === path.resolve(phaseDir)) {
+      if (typeof p === 'string') {
+        let resolvedPath;
+        try {
+          resolvedPath = canonicalizePath(p);
+        } catch {
+          return realStatSync.call(fs, p, ...rest);
+        }
+        if (resolvedPath !== resolvedPhaseDir) return realStatSync.call(fs, p, ...rest);
         const err = new Error(`${code}: injected stat failure, stat '${p}'`);
         err.code = code;
         throw err;
@@ -3377,6 +3385,24 @@ describe('#4939: decision-coverage answers a caller error for a phase directory 
       t.mock.restoreAll();
     }
     return JSON.parse(captured || '{}');
+  }
+
+  for (const gate of ['decision-coverage-plan', 'decision-coverage-verify']) {
+    test(`#5798: ${gate} reports stat errors through a symlinked phase directory`, (t) => {
+      const alias = path.join(tmpDir, 'phase-alias');
+      fs.symlinkSync(phaseDir, alias, 'junction');
+      phaseDir = alias;
+      const parsed = runGateWithStatFailure(t, gate, 'EACCES');
+      assert.strictEqual(parsed.reason, 'phase directory unreadable');
+      if (gate === 'decision-coverage-plan') {
+        assert.strictEqual(parsed.passed, false);
+        assert.strictEqual(parsed.covered, null);
+      } else {
+        assert.strictEqual(parsed.blocking, false);
+        assert.strictEqual(parsed.honored, null);
+        assert.strictEqual(parsed.total, null);
+      }
+    });
   }
 
   test('#4939: plan gate — an ENOENT stat failure is named as a missing directory', (t) => {
