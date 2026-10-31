@@ -300,6 +300,15 @@ shadows global defaults, including when that project config is `{}`. Set custom
 naming in the effective project config rather than relying on a shadowed global
 default. A corrupt project config reports its parse failure instead.
 
+Phase convention guidance in 35 full agents, 101 phase-emitting workflows, and nine
+template instruction wrappers is generated from `src/phase-id-card.cts`. The nine
+wrappers include the seven core phase templates plus verification-report and user-setup. The generator pins its exact
+target set and checks both parity and convention prose outside generated regions.
+After required completion writes succeed, an installer invocation displays one titled
+canonical card on stderr, including when installing all runtimes. See the [canonical convention reference](../gsd-core/references/phase-id-convention.md).
+Bracket remains opt-in; this guidance does not change new-project defaults or migrate
+existing identifiers. `phase_naming` remains independent of `phase_id_convention`.
+
 > **Note:** `granularity` was renamed from `depth` in v1.22.3. Existing configs are auto-migrated.
 
 > **Note:** `GSD_HOME` defaults to your home directory (`~`) when unset, so the key files above live in `~/.gsd/` unless you point `GSD_HOME` elsewhere.
