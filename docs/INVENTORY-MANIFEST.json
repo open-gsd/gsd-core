@@ -513,6 +513,7 @@
       "milestone.cjs",
       "model-adapter.cjs",
       "model-catalog.cjs",
+      "model-escalation.cjs",
       "model-profiles.cjs",
       "model-resolver.cjs",
       "normalize-test-command.cjs",
