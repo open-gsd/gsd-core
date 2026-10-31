@@ -157,6 +157,8 @@ Each finding starts with:
 
 Where ID matches: `CR-\d+` or `BL-\d+` (Critical-tier-equivalent), `WR-\d+` (Warning), or `IN-\d+` (Info)
 
+A finding whose body carries a `**Category:** necessity` line is a **necessity finding** (#4100): code the reviewer judged unnecessary, not broken. Its prefix still gives its severity.
+
 **Required Fields:**
 
 - **File:** line contains primary file path
@@ -438,7 +440,7 @@ This cleanup is unconditional when a worktree was created — register it mental
 - `phase_dir`: Path to phase directory (e.g., `.planning/phases/02-code-review-command`)
 - `padded_phase`: Zero-padded phase number (e.g., "02")
 - `review_path`: Full path to REVIEW.md (e.g., `.planning/phases/02-code-review-command/02-REVIEW.md`)
-- `fix_scope`: "critical_warning" (default) or "all" (includes Info findings)
+- `fix_scope`: "critical_warning" (default) or "all" (includes Info and necessity findings)
 - `fix_report_path`: Full path for REVIEW-FIX.md output (e.g., `.planning/phases/02-code-review-command/02-REVIEW-FIX.md`)
 
 **3. Read REVIEW.md:**
@@ -464,6 +466,7 @@ Read `./CLAUDE.md` and check for `.claude/skills/` or `.agents/skills/` (as desc
 For each finding, extract:
 - `id`: Finding identifier (e.g., CR-01, WR-03, IN-12)
 - `severity`: Critical (CR-* or BL-*), Warning (WR-*), Info (IN-*)
+- `category`: `necessity` when the finding carries a `**Category:** necessity` line, otherwise none
 - `title`: Issue title from `### ` heading
 - `file`: Primary file path from **File:** line
 - `files`: ALL file paths referenced in finding (including in Fix section) — for multi-file fixes
@@ -472,15 +475,17 @@ For each finding, extract:
 - `fix`: Full fix content from **Fix:** section (may be multi-line, may contain code fences)
 
 **2. Filter by fix_scope:**
-- If `fix_scope == "critical_warning"`: include only CR-*, BL-*, and WR-* findings
-- If `fix_scope == "all"`: include CR-*, BL-*, WR-*, and IN-* findings
+- If `fix_scope == "critical_warning"`: include only CR-*, BL-*, and WR-* findings; `critical_warning` excludes necessity findings (removing code is a scope decision for the human, #4100)
+- If `fix_scope == "all"`: include CR-*, BL-*, WR-*, and IN-* findings; `all` includes necessity findings, ordered last. A necessity fix removes code, so record it as `fixed: requires human verification`
 
 **3. Sort findings by severity:**
-- Critical (CR-* and BL-*) first, then Warning, then Info
+- Critical (CR-* and BL-*) first, then Warning, then Info, then necessity findings
 - Within same severity, maintain document order
 
 **4. Count findings in scope:**
 Record `findings_in_scope` for REVIEW-FIX.md frontmatter.
+
+If `findings_in_scope` is 0, apply nothing: write REVIEW-FIX.md with `fixed: 0`, `skipped: 0`, `status: all_fixed`, and a body stating that no finding was in scope and the out-of-scope findings remain in REVIEW.md.
 </step>
 
 <step name="apply_fixes">
