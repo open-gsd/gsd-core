@@ -178,11 +178,15 @@ describe('#5106: test-file conventions are one definition', () => {
     const workflowSpecs = [...line.matchAll(/--pathspec "([^"]{1,80})"/g)].map(m => m[1]);
     assert.deepEqual([...workflowSpecs].sort(), [...TEST_FILE_PATHSPECS].sort(),
       'the workflow pathspec list and TEST_FILE_PATHSPECS must be the same set');
-    // And every entry means the same thing to the router: a path built from the spec is a test file.
-    for (const spec of TEST_FILE_PATHSPECS) {
-      const sample = spec.endsWith('/') ? `${spec}x.js` : spec.replace(/\*/g, 'sample');
-      assert.equal(isTestFilePath(sample), true, `${spec} (as ${sample}) must be recognised as a test file`);
+    // And the router recognizes a literal root and nested sample of every convention.
+    const { SAMPLES_BY_SPEC: samples, SHARED_TEST_PATHS, SHARED_NON_TEST_PATHS } = require('./helpers/tdd-test-paths.cjs');
+    assert.deepEqual(Object.keys(samples).sort(), [...TEST_FILE_PATHSPECS].sort(),
+      'a root and a nested sample per TEST_FILE_PATHSPECS entry, keyed by spec');
+    for (const sample of SHARED_TEST_PATHS) {
+      assert.equal(isTestFilePath(sample), true, `${sample} must be recognized as a test file`);
     }
-    assert.equal(isTestFilePath('placement.go'), false);
+    for (const notTest of SHARED_NON_TEST_PATHS) {
+      assert.equal(isTestFilePath(notTest), false, `${notTest} must not be recognized as a test file`);
+    }
   });
 });

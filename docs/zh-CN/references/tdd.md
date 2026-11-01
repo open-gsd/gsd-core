@@ -179,8 +179,7 @@ cargo test    # Rust
 **5. 创建第一个测试文件：**
 遵循项目约定的测试位置：
 - 源文件旁边的 `*.test.ts` / `*.spec.ts`
-- `__tests__/` 目录
-- 根目录的 `tests/` 目录
+- `tests/` / `__tests__/` 目录（任意深度）
 
 框架设置是第一个 TDD 计划 RED 阶段的一次性成本。
 </framework_setup>
