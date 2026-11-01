@@ -42,8 +42,8 @@ contract documented in ADR-0894 (capability declaration format) and the
    ```bash
    gsd_run check predicate --predicate '<predicate JSON>' [--phase-dir …] [--phase-number …] [--phase-req-ids …] --raw
    ```
-3. `check-command-router.cts:cmdCheckPredicate` parses the predicate, builds the
-   production subprocess binding, and calls
+3. `gate-predicate.cts:evaluateCheckPredicate`, dispatched by the check command
+   router, parses the predicate, builds the production subprocess binding, and calls
    `gate-predicate-evaluator.cjs:evaluatePredicate`, which dispatches by
    `predicate.kind`.
 4. The evaluator returns the standard gate envelope:
@@ -70,33 +70,46 @@ contract.
 | `command` | string | yes | — | The shell command. Non-empty, ≤ 4096 chars |
 | `timeout` | number | no | `30` | Positive finite number, seconds |
 
-**Interpolation.** Before execution, three placeholders are substituted from
-the gate context; all others are left untouched for `sh` to interpret:
+**Phase context environment (ADR-2008 amendment, 2026-10-14).** GSD passes
+phase context as environment data and never substitutes text into `command`.
+Use quoted shell expansion to pass each value as one literal argument:
 
-| Placeholder | Source | Workflow flag |
+| Environment variable | Source | Workflow flag |
 |---|---|---|
-| `${PHASE_NUMBER}` | the active phase number | `--phase-number` |
-| `${PHASE_DIR}` | the active phase directory | `--phase-dir` |
-| `${PHASE_REQ_IDS}` | the phase's requirement ids | `--phase-req-ids` |
+| `GSD_GATE_PHASE_NUMBER` | the active phase number | `--phase-number` |
+| `GSD_GATE_PHASE_DIR` | the resolved absolute phase directory | `--phase-dir` |
+| `GSD_GATE_PHASE_REQ_IDS` | the phase's requirement ids | `--phase-req-ids` |
 
-An undefined placeholder interpolates to the empty string.
+For example, `test -d "$GSD_GATE_PHASE_DIR"` receives a directory containing
+quotes, backticks or `$(...)` as data. These three variables override inherited
+values; missing context is set to the empty string, so ambient variables cannot
+supply stale phase context. Other environment variables remain inherited and
+available to the shell as usual.
+
+**Breaking migration.** The old GSD placeholders `${PHASE_NUMBER}`,
+`${PHASE_DIR}` and `${PHASE_REQ_IDS}` are rejected before execution, including
+inside quotes, with a diagnostic naming the corresponding
+`"$GSD_GATE_PHASE_NUMBER"`, `"$GSD_GATE_PHASE_DIR"` or
+`"$GSD_GATE_PHASE_REQ_IDS"` replacement. Update capability manifests; neither
+single-quoting an old placeholder nor escaping phase data restores that contract.
+The replacement is ordinary shell expansion of environment data, not a GSD
+placeholder syntax. GSD does not provide a command-text substitution language.
 
 **`--phase-dir` is confined to the project.** The value is validated to resolve
-inside the project root before any predicate is evaluated; one that escapes is
-rejected as a usage error rather than evaluated. This applies to both kinds —
-`artifact-frontmatter-equals` resolves its artifact under that directory, and
-`command-exit-zero` interpolates it into `${PHASE_DIR}` — so an unconfined value
-would let a **blocking** gate return `block: false` on evidence from a directory
-the caller chose (#4354). An absolute path inside the project is still accepted;
-absolute is not a synonym for escaping. `${PHASE_DIR}` always interpolates the
-**resolved absolute path**, even when `--phase-dir` was given as a relative
-value — a command relying on `${PHASE_DIR}` staying relative must not assume
-that.
+inside the project root before either predicate kind is evaluated; one that
+escapes is rejected as a usage error. `artifact-frontmatter-equals` resolves its
+artifact under that directory, and `command-exit-zero` receives it in
+`GSD_GATE_PHASE_DIR`, so an unconfined value could let a **blocking** gate return
+`block: false` on evidence from a directory the caller chose (#4354). An absolute
+path inside the project is accepted. `GSD_GATE_PHASE_DIR` always contains the
+**resolved absolute path**, even when `--phase-dir` was relative.
 
-**Sandbox.** cwd = project root; env = inherited from the GSD process; killed
-(SIGTERM) on timeout. The command runs as the user, on the user's machine —
-there is no sandbox boundary vs. the user's own shell. See ADR-2008 "Trust
-model".
+**Sandbox.** cwd = project root; env = inherited with the three phase context
+variables above overridden; the direct shell is killed (SIGTERM) on timeout.
+The capability-authored command remains trusted shell code running as the user,
+on the user's machine. Environment transport protects phase data, without adding
+a sandbox boundary or restricting capability-authored shell operations. See
+ADR-2008 "Trust model".
 
 **Result mapping.**
 
@@ -111,6 +124,7 @@ model".
 
 - Missing, non-string, empty, or whitespace-only `command`.
 - `command` longer than 4096 chars.
+- Any retired `${PHASE_NUMBER}`, `${PHASE_DIR}` or `${PHASE_REQ_IDS}` spelling in `command`.
 - `timeout` present but not a positive finite number.
 - Unknown `kind`.
 

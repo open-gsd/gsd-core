@@ -33,16 +33,25 @@ the project root as its cwd and the inherited process environment.
 node "${GSD_CAP_DIR}/checks/pre-ship.js"
 ```
 
-You may interpolate three loop-context placeholders directly into the command:
+Read loop context from the namespaced environment variables provided to the
+child. Quote their shell expansion so each value is passed as literal data:
 
-| Placeholder | Meaning |
+| Environment variable | Meaning |
 |---|---|
-| `${PHASE_NUMBER}` | the active phase number (e.g. `03`) |
-| `${PHASE_DIR}` | the active phase directory |
-| `${PHASE_REQ_IDS}` | the phase's requirement ids |
+| `GSD_GATE_PHASE_NUMBER` | the active phase number (e.g. `03`) |
+| `GSD_GATE_PHASE_DIR` | the resolved absolute phase directory |
+| `GSD_GATE_PHASE_REQ_IDS` | the phase's requirement ids |
 
-Anything else (`${HOME}`, `$VAR`, etc.) is left for `sh` to interpret against
-the inherited env.
+For example, `node checks/pre-ship.js "$GSD_GATE_PHASE_DIR"` passes the directory
+as one argument even if its name contains spaces, quotes, backticks or `$(...)`.
+GSD never rewrites the command text. Missing phase values are empty strings and
+override any inherited variables with these names. Other variables (`${HOME}`,
+`$VAR`, etc.) remain available through the inherited environment.
+
+Existing manifests using `${PHASE_NUMBER}`, `${PHASE_DIR}` or `${PHASE_REQ_IDS}`
+must migrate to the corresponding quoted shell expansions above. The old
+spellings are rejected before the command runs, with the replacement named in
+the diagnostic. See the [ADR-2008 amendment](../adr/2008-command-exit-zero-gate.md#amendment--2026-10-14-phase-context-is-environment-data).
 
 ## Step 2 — declare the gate
 
@@ -58,7 +67,7 @@ config key with `when`:
       "check": {
         "predicate": {
           "kind": "command-exit-zero",
-          "command": "node \"${GSD_CAP_DIR}/checks/pre-ship.js\" \"${PHASE_DIR}\"",
+          "command": "node \"${GSD_CAP_DIR}/checks/pre-ship.js\" \"$GSD_GATE_PHASE_DIR\"",
           "timeout": 30
         }
       },
@@ -96,7 +105,7 @@ into a loop point:
 
 ```bash
 gsd_run check predicate \
-  --predicate '{"kind":"command-exit-zero","command":"node checks/pre-ship.js \"${PHASE_DIR}\"","timeout":30}' \
+  --predicate '{"kind":"command-exit-zero","command":"node checks/pre-ship.js \"$GSD_GATE_PHASE_DIR\"","timeout":30}' \
   --phase-dir ".planning/phases/03-my-phase" \
   --phase-number "03" \
   --raw
@@ -136,7 +145,8 @@ gsd_run loop render-hooks ship:pre --raw
 - **Output is trimmed.** Only the last 2000 chars of stderr/stdout surface in
   the gate `message`. Emit a concise diagnostic; don't rely on grepping long
   output downstream.
-- **Env is inherited.** The command sees the full GSD process environment. Do
+- **Env is inherited with phase context overridden.** The three `GSD_GATE_PHASE_*`
+  variables always reflect this invocation, including empty values. Do
   not put secrets in the command string; read them from env or a file like any
   shell script.
 

@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Unit tests for the gate-predicate evaluator (pure core) — issue #2008.
+ * Pure-core tests for the gate-predicate evaluator — #2008 / #5318.
  *
  * The evaluator is a pure, deps-injected function:
  *   evaluatePredicate(predicate, context, deps) -> { block, message, details? }
@@ -13,7 +13,7 @@
  *
  * Per RULESET.TESTS.boundary-coverage: exit code boundary (0/1/2), timedOut
  * true/false, message-trim boundary (MAX / MAX+1), timeout pass-through.
- * Per RULESET.TESTS.property-based: interpolation bijection property (fast-check).
+ * Per RULESET.TESTS.property-based-testing: command identity and environment round-trip properties (fast-check).
  */
 
 const { describe, test } = require('node:test');
@@ -54,7 +54,7 @@ function fakeShell(preset) {
   const run = (opts) => {
     calls.push(opts);
     return {
-      exitCode: preset.exitCode ?? 0,
+      exitCode: preset.exitCode === undefined ? 0 : preset.exitCode,
       stdout: preset.stdout ?? '',
       stderr: preset.stderr ?? '',
       signal: preset.signal ?? null,
@@ -65,6 +65,19 @@ function fakeShell(preset) {
 }
 
 const baseCtx = { cwd: '/proj', phaseNumber: '03', phaseDir: '/proj/.planning/phases/03-x', phaseReqIds: 'R-1' };
+
+/** Discover the context namespace from the actual shell seam, rather than a second name roster. */
+function phaseContextVariableNames() {
+  const shell = fakeShell({ exitCode: 0 });
+  evaluatePredicate({ kind: 'command-exit-zero', command: 'true' }, baseCtx, { runBoundedShell: shell.run });
+  assert.deepEqual(shell.calls[0].env, {
+    GSD_GATE_PHASE_NUMBER: baseCtx.phaseNumber,
+    GSD_GATE_PHASE_DIR: baseCtx.phaseDir,
+    GSD_GATE_PHASE_REQ_IDS: baseCtx.phaseReqIds,
+  });
+  return Object.keys(shell.calls[0].env).map((name) => name.slice('GSD_GATE_'.length));
+}
+
 
 // ─── command-exit-zero: exit-code boundary (0 / 1 / 2) ─────────────────────────
 
@@ -100,6 +113,14 @@ describe('evaluatePredicate — command-exit-zero exit mapping', () => {
       { runBoundedShell: shell.run },
     );
     assert.equal(res.block, true);
+  });
+
+  test('a signal-only result with a null exit code blocks', () => {
+    const shell = fakeShell({ exitCode: null, signal: 'SIGKILL' });
+    const result = evaluatePredicate({ kind: 'command-exit-zero', command: 'x' }, baseCtx, { runBoundedShell: shell.run });
+    assert.equal(result.block, true);
+    assert.equal(result.details.exitCode, null);
+    assert.equal(result.details.signal, 'SIGKILL');
   });
 
   test('exit 127 (ENOENT) => block:true, surfaces not-found', () => {
@@ -160,40 +181,56 @@ describe('evaluatePredicate — command-exit-zero timeout', () => {
   });
 });
 
-// ─── interpolation ────────────────────────────────────────────────────────────
+// ─── phase context transport ──────────────────────────────────────────────────
 
-describe('evaluatePredicate — interpolation', () => {
-  test('${PHASE_DIR}, ${PHASE_NUMBER}, ${PHASE_REQ_IDS} are substituted', () => {
+describe('evaluatePredicate — phase context environment', () => {
+  test('phase values are environment data and command text is unchanged', () => {
     const shell = fakeShell({ exitCode: 0 });
+    const command = 'check "$GSD_GATE_PHASE_DIR" "$GSD_GATE_PHASE_NUMBER" "$GSD_GATE_PHASE_REQ_IDS" ${HOME} $PHASE_DIR';
     evaluatePredicate(
-      { kind: 'command-exit-zero', command: 'check ${PHASE_DIR} ${PHASE_NUMBER} ${PHASE_REQ_IDS}' },
+      { kind: 'command-exit-zero', command },
       baseCtx,
       { runBoundedShell: shell.run },
     );
-    assert.equal(
-      shell.calls[0].command,
-      'check /proj/.planning/phases/03-x 03 R-1',
-    );
+    assert.equal(shell.calls[0].command, command);
+    assert.deepEqual(shell.calls[0].env, {
+      GSD_GATE_PHASE_NUMBER: baseCtx.phaseNumber,
+      GSD_GATE_PHASE_DIR: baseCtx.phaseDir,
+      GSD_GATE_PHASE_REQ_IDS: baseCtx.phaseReqIds,
+    });
   });
 
-  test('undefined context var => empty string (no leftover placeholder)', () => {
+  test('missing phase values are explicit empty environment values', () => {
     const shell = fakeShell({ exitCode: 0 });
     evaluatePredicate(
-      { kind: 'command-exit-zero', command: 'check ${PHASE_REQ_IDS}' },
+      { kind: 'command-exit-zero', command: 'check "$GSD_GATE_PHASE_REQ_IDS"' },
       { cwd: '/proj' },
       { runBoundedShell: shell.run },
     );
-    assert.equal(shell.calls[0].command, 'check ');
+    assert.deepEqual(shell.calls[0].env, {
+      GSD_GATE_PHASE_NUMBER: '', GSD_GATE_PHASE_DIR: '', GSD_GATE_PHASE_REQ_IDS: '',
+    });
   });
 
-  test('foreign ${HOME} placeholder left untouched (shell interprets)', () => {
-    const shell = fakeShell({ exitCode: 0 });
-    evaluatePredicate(
-      { kind: 'command-exit-zero', command: 'echo ${HOME}' },
-      baseCtx,
-      { runBoundedShell: shell.run },
-    );
-    assert.equal(shell.calls[0].command, 'echo ${HOME}');
+  test('each retired context spelling is rejected before execution, including quoted forms', () => {
+    for (const name of phaseContextVariableNames()) {
+      for (const quote of ['', "'", '"']) {
+        const shell = fakeShell({ exitCode: 0 });
+        assert.throws(
+          () => evaluatePredicate(
+            { kind: 'command-exit-zero', command: 'check ' + quote + '${' + name + '}' + quote },
+            baseCtx,
+            { runBoundedShell: shell.run },
+          ),
+          (err) => {
+            assert.ok(err.message.includes('${' + name + '}'));
+            assert.ok(err.message.includes('$GSD_GATE_' + name));
+            return true;
+          },
+        );
+        assert.deepEqual(shell.calls, []);
+      }
+    }
   });
 });
 
@@ -246,6 +283,15 @@ describe('evaluatePredicate — malformed predicate throws (maps to check-cmd fa
       () => evaluatePredicate({ kind: 'command-exit-zero', command: '   ' }, baseCtx, { runBoundedShell: fakeShell({}).run }),
       /command/i,
     );
+  });
+
+  test('command-length boundary accepts max-1 and max without rewriting', () => {
+    for (const length of [COMMAND_MAX_LENGTH - 1, COMMAND_MAX_LENGTH]) {
+      const shell = fakeShell({ exitCode: 0 });
+      const command = 'x'.repeat(length);
+      evaluatePredicate({ kind: 'command-exit-zero', command }, baseCtx, { runBoundedShell: shell.run });
+      assert.equal(shell.calls[0].command, command);
+    }
   });
 
   test('oversized command throws (ARGV-overflow guard)', () => {
@@ -313,40 +359,29 @@ describe('evaluatePredicate — exported contract surface', () => {
   });
 });
 
-// ─── property-based: interpolation bijection on non-placeholder strings ───────
+// ─── properties: command identity and context round-trip ───────────────────────
 
-describe('evaluatePredicate — interpolation property (fast-check)', () => {
-  test('strings without the 3 placeholders pass through unchanged', () => {
-    fc.assert(
-      fc.property(
-        fc.string({ maxLength: 40 }).filter((s) => s.trim().length > 0 && !/\$\{(PHASE_NUMBER|PHASE_DIR|PHASE_REQ_IDS)\}/.test(s)),
-        (cmd) => {
+describe('evaluatePredicate — phase transport properties (fast-check)', () => {
+  test('accepted commands are byte-for-byte identical regardless of context', () => {
+    fc.assert(fc.property(
+      fc.string({ minLength: 1, maxLength: 80 }).filter((s) => s.trim().length > 0 && !/\$\{(PHASE_NUMBER|PHASE_DIR|PHASE_REQ_IDS)\}/.test(s)),
+      fc.option(fc.string({ maxLength: 80 }), { nil: undefined }),
+      fc.option(fc.string({ maxLength: 80 }), { nil: undefined }),
+      fc.option(fc.string({ maxLength: 80 }), { nil: undefined }),
+      (command, phaseNumber, phaseDir, phaseReqIds) => {
         const shell = fakeShell({ exitCode: 0 });
         evaluatePredicate(
-          { kind: 'command-exit-zero', command: cmd },
-          baseCtx,
+          { kind: 'command-exit-zero', command },
+          { cwd: '/proj', phaseNumber, phaseDir, phaseReqIds },
           { runBoundedShell: shell.run },
         );
-        // sh -c receives exactly the input; only the 3 known placeholders would have been rewritten.
-        assert.equal(shell.calls[0].command, cmd);
-      }),
-      { numRuns: 100 },
-    );
-  });
-
-  test('every placeholder is fully replaced (no leftover ${PHASE_*})', () => {
-    fc.assert(
-      fc.property(fc.string({ maxLength: 20 }), (noise) => {
-        const cmd = `${noise} ${noise}`;
-        const shell = fakeShell({ exitCode: 0 });
-        evaluatePredicate(
-          { kind: 'command-exit-zero', command: `\${PHASE_DIR}${cmd}\${PHASE_NUMBER}` },
-          baseCtx,
-          { runBoundedShell: shell.run },
-        );
-        assert.doesNotMatch(shell.calls[0].command, /\$\{PHASE_(DIR|NUMBER|REQ_IDS)\}/);
-      }),
-      { numRuns: 100 },
-    );
+        assert.equal(shell.calls[0].command, command);
+        assert.deepEqual(shell.calls[0].env, {
+          GSD_GATE_PHASE_NUMBER: phaseNumber ?? '',
+          GSD_GATE_PHASE_DIR: phaseDir ?? '',
+          GSD_GATE_PHASE_REQ_IDS: phaseReqIds ?? '',
+        });
+      },
+    ), { numRuns: 100 });
   });
 });
