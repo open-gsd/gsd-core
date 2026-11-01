@@ -1467,7 +1467,7 @@ function beginPhaseCore(
       tryField('Current Phase Name', intent.phaseName);
     }
     tryField('Current Plan', String(startPlan));
-    if (intent.planCount) {
+    if (intent.planCount != null) {
       tryField('Total Plans in Phase', String(intent.planCount));
     }
 
