@@ -96,8 +96,10 @@
 //   (`cat .e*`), interpreter one-liners (`python -c "open('.env')"`), a piped
 //   script from a non-echo source (`cat gen.sh | bash`, `curl … | sh`), reads
 //   inside scripts the agent executes, and `glob: '*'` reaching a
-//   NON-gitignored `.env`, and a wrapper (or wrapper option taking a
-//   separate value) the WRAPPERS table does not list. `env -S` strings are
+//   NON-gitignored `.env`, a wrapper (or wrapper option taking a
+//   separate value) the WRAPPERS table does not list, and a wrapper in the
+//   sub-command of `xargs` or `find -exec`, which is not walked through that
+//   table (`xargs env -S 'cat .env'`). `env -S` strings are
 //   split by GNU coreutils env's rules, and also by FreeBSD/macOS env's (a
 //   backslash before a blank is that blank) and uutils env's (a
 //   backslash-newline removed, a comment ended by a newline), and read as
@@ -473,9 +475,10 @@ let heredocTagsAsWords = true;
 //    macOS, where a backslash before a blank is that blank) or 'uutils' (uutils
 //    coreutils, Ubuntu's env since 25.10, where a backslash before a newline is
 //    removed, inside quotes too, and a comment ends at a newline rather than
-//    ending the string). The first reading is PRIMARY_SPLIT.
-//  - splitSeen: the splitting reading met a split option, the only case in which the
-//    other readings (underUnsplitReading, underOtherSplitDialects) are run.
+//    ending the string). The first splitting reading is PRIMARY_SPLIT.
+//  - splitSeen: a reading met a split option. The splitting readings run when the
+//    reading before #5514 met one, or when a scan threw before it could tell; the
+//    other dialects run only when one was met.
 //  - splitTooDeep: a split string nested more than MAX_NESTING_DEPTH deep, whose
 //    command is not read. The Bash path denies it as `split-string-too-deep` rather
 //    than allow what it could not see.
@@ -1286,11 +1289,10 @@ function findSecretReadUnderOtherReadings(command) {
   return null;
 }
 
-// #5514: `scan` again with `env -S` strings skipped as the option's value, the
-// reading before #5514, so splitting them can add a denial but never remove one.
-// It runs only for a command whose splitting reading met a split option.
+// #5514: `scan` with `env -S` strings skipped as the option's value, the reading
+// before #5514. The Bash path runs it before any splitting reading, so splitting
+// can add a denial but never remove one.
 function underUnsplitReading(scan) {
-  if (!splitSeen) return null;
   envSplitStrings = false;
   try {
     return scan();
@@ -1305,8 +1307,7 @@ function underUnsplitReading(scan) {
 // they hold, can differ from what the primary reading saw (an escape can build a
 // `${` or a backslash-blank inside a nested string), so no screen over the
 // strings the primary reading split can tell which dialects are needed. These
-// readings run last (see the Bash path): each re-scans the whole command, so
-// they come after every reading the hook made before them.
+// readings run last (see the Bash path): each re-scans the whole command.
 function underOtherSplitDialects(scan) {
   if (!splitSeen) return null;
   for (const vars of ['keep', 'drop']) {
@@ -1773,21 +1774,46 @@ process.stdin.on('end', () => {
     const command = typeof data.tool_input.command === 'string' ? data.tool_input.command : '';
     if (command === '') allow(undefined);
     if (command.length > MAX_COMMAND_LENGTH) emitBlock('command-too-large', tool, '');
-    const secretScan = () => findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
-    const hit = secretScan() || underUnsplitReading(secretScan);
+    // Each of the three scans below (the plain one, the heredoc readings together,
+    // the spawn check) runs under its own catch, once per reading (#5514). One that
+    // throws (a word that overflows the parser, say) finds nothing, the scans and
+    // readings after it still run, and the command gets the crash verdict below only
+    // when none of them denies. Before, the first throw ended the hook, so it decided
+    // the verdict for every reading after it.
+    let threw = false;
+    const attempt = (scan) => {
+      try {
+        return scan();
+      } catch {
+        threw = true;
+        return null;
+      }
+    };
+    const secretScan = () => attempt(() => findSecretRead(command, 0))
+      || attempt(() => findSecretReadUnderOtherReadings(command));
+    const spawnScan = () => attempt(() => findDebuggerCliSpawn(command, 0));
+    // The reading before #5514 first, `env -S` strings skipped as the option's value.
+    // Every denial it makes is emitted before any splitting reading runs, so nothing
+    // a splitting reading does (its time, or a throw) can lose one.
+    const hit = underUnsplitReading(secretScan);
     if (hit !== null) emitBlock('secret-read', tool, hit);
-    const spawnScan = () => findDebuggerCliSpawn(command, 0);
-    const spawn = spawnScan() || underUnsplitReading(spawnScan);
+    const spawn = underUnsplitReading(spawnScan);
     if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
+    // A scan that threw may have stopped before a split option; read on.
+    if (!splitSeen && !threw) allow(undefined);
+    // The splitting readings (#5514) only add denials: GNU env's split, then the
+    // other env -S dialects, which re-scan the whole command once each.
+    const splitHit = secretScan();
+    if (splitHit !== null) emitBlock('secret-read', tool, splitHit);
+    const splitSpawn = spawnScan();
+    if (splitSpawn !== null) emitBlock('debugger-cli-spawn', tool, splitSpawn);
     if (splitTooDeep) emitBlock('split-string-too-deep', tool, '');
-    // The other env -S dialects (#5514) only add denials, and run after every check
-    // above has had its say: a command long enough that their re-scans outlast the
-    // hook's timeout then still gets each denial the readings above make.
     const dialectHit = underOtherSplitDialects(secretScan);
     if (dialectHit !== null) emitBlock('secret-read', tool, dialectHit);
     const dialectSpawn = underOtherSplitDialects(spawnScan);
     if (dialectSpawn !== null) emitBlock('debugger-cli-spawn', tool, dialectSpawn);
     if (splitTooDeep) emitBlock('split-string-too-deep', tool, '');
+    if (threw) crash(ON_CRASH, undefined);
     allow(undefined);
   } catch {
     // Fail open — never block valid tool calls due to hook errors.

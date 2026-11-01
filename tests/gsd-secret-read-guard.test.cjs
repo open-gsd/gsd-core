@@ -1598,9 +1598,40 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
     assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, 'read', { code: 'secret-read' });
   });
 
+  // A split-made word can throw: `findParenClose` recurses once per `"$(`, and the
+  // hook allows on a throw. The reading before #5514 never splits the string and runs
+  // first, so the read or launch after it is denied before any splitting reading runs.
+  for (const [label, tail, code] of [['read', 'cat .env', 'secret-read'], ['launch', TAIL, 'debugger-cli-spawn']]) {
+    test(`blocks: a ${label} after a string whose split overflows the parser`, () => {
+      const command = `env -S 'sh -c ${'\\"\\$('.repeat(20000)}' ; ${tail}`;
+      const r = runHookSeam(HOOK_PATH, [], {
+        input: JSON.stringify(bash(command)),
+        env: { ...process.env, NODE_V8_COVERAGE: '' },
+        timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
+      });
+      assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, label, { code });
+    });
+  }
+
+  // The other way round: env runs the read or launch in the string, with the words
+  // after it as its operands, and the reading that skips the string sees `bash -c`
+  // with a body that overflows the parser. That throw must not cost the denial the
+  // split makes.
+  for (const [label, inner, code] of [['read', 'cat .env', 'secret-read'], ['launch', TAIL, 'debugger-cli-spawn']]) {
+    test(`blocks: a ${label} in a string, when skipping it overflows the parser`, () => {
+      const command = `env -S '${inner}' bash -c '${'"$('.repeat(20000)}'`;
+      const r = runHookSeam(HOOK_PATH, [], {
+        input: JSON.stringify(bash(command)),
+        env: { ...process.env, NODE_V8_COVERAGE: '' },
+        timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
+      });
+      assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, label, { code });
+    });
+  }
+
   // The other env -S dialects re-scan the whole command, and the BSD ones make the
-  // 300,000-slash run below one word. The launch after it is denied by the readings
-  // that run first, so the dialect readings never run: a hang backstop, as above.
+  // 300,000-slash run below one word. The launch after it is denied by the reading
+  // before #5514, so no splitting reading runs: a hang backstop, as above.
   test('blocks: a launch after a string only the other dialects read slowly', () => {
     const command = `env -S '\${Z}\\ A=1 ls ${'/'.repeat(300000)}x'; ${TAIL}`;
     const r = runHookSeam(HOOK_PATH, [], {
