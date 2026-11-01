@@ -39,6 +39,8 @@ const {
 } = require(path.join(LIB, 'model-resolver.cjs'));
 const { spawnEffortParamFor } = require(path.join(LIB, 'runtime-name-policy.cjs'));
 const { validateRuntimeBody } = require(path.join(LIB, 'capability-validator.cjs'));
+const { renderEffortForRuntime } = require(path.join(LIB, 'model-catalog.cjs'));
+const { readGsdEffectiveEffortConfig, resolveInstallTimeEffort } = require(path.join(LIB, 'install-effort-resolver.cjs'));
 
 function tmpDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -79,6 +81,10 @@ function useEnv(t, { home, runtime }) {
 
 const MAPPER = 'gsd-codebase-mapper';
 const GLOBAL_OVERRIDE = { agent_overrides: { [MAPPER]: 'max' } };
+/** The built-in level for the mapper's tier (`light`), from config-defaults. */
+const MAPPER_TIER_DEFAULT = 'low';
+/** A capability manifest's agent: not in the model-profile table, so it has no tier. */
+const UNLISTED = 'gsd-third-party-curator';
 
 describe('#5330 resolveEffortArgInternal — the interim gate', () => {
   test('project config without an effort block: no argument, so the baked frontmatter holds', (t) => {
@@ -102,13 +108,51 @@ describe('#5330 resolveEffortArgInternal — the interim gate', () => {
     assert.equal(resolveEffortArgInternal(dir, MAPPER), 'effort="xhigh"');
   });
 
-  test('a project effort block without an entry for the agent still passes the cascade result', (t) => {
+  test('a project effort block without an entry for the agent passes its tier default, not effort.default', (t) => {
     const home = gsdHome();
     const dir = project({ effort: { default: 'medium' } });
     useEnv(t, { home, runtime: 'claude' });
     t.after(() => { cleanup(dir); cleanup(home); });
 
-    assert.equal(resolveEffortArgInternal(dir, MAPPER), `effort="${resolveEffortInternal(dir, MAPPER)}"`);
+    // Literal, so the test states the level: a table agent always has a tier, and the
+    // manifest answers for every tier, so the block's own `default` is never reached.
+    assert.equal(MAPPER_TIER_DEFAULT, 'low');
+    assert.equal(resolveEffortArgInternal(dir, MAPPER), `effort="${MAPPER_TIER_DEFAULT}"`);
+  });
+
+  test('known limit: a project block does not inherit defaults.json, so the argument can differ from the bake', (t) => {
+    const home = gsdHome(GLOBAL_OVERRIDE);
+    const dir = project({ effort: { agent_overrides: { 'gsd-planner': 'high' } } });
+    useEnv(t, { home, runtime: 'claude' });
+    t.after(() => { cleanup(dir); cleanup(home); });
+
+    // Pinned rather than hidden: this is the documented limit that #4633's resolver removes.
+    assert.equal(resolveInstallTimeEffort(readGsdEffectiveEffortConfig(dir), MAPPER), 'max');
+    assert.equal(resolveEffortArgInternal(dir, MAPPER), `effort="${MAPPER_TIER_DEFAULT}"`);
+  });
+
+  test('property: with no defaults.json, an emitted argument agrees with what the installer bakes', (t) => {
+    const home = gsdHome();
+    useEnv(t, { home, runtime: 'claude' });
+    t.after(() => cleanup(home));
+
+    const level = fc.constantFrom(...VALID_EFFORTS.filter((e) => e !== 'inherit'));
+    const block = fc.record({
+      default: level,
+      agent_overrides: fc.dictionary(fc.constantFrom(MAPPER, 'gsd-planner', 'gsd-executor'), level),
+      routing_tier_defaults: fc.dictionary(fc.constantFrom('light', 'standard', 'heavy'), level),
+    }, { requiredKeys: [] });
+
+    fc.assert(
+      fc.property(block, fc.constantFrom(MAPPER, 'gsd-planner', 'gsd-executor'), (effort, agent) => {
+        const dir = project({ effort });
+        const arg = resolveEffortArgInternal(dir, agent);
+        const baked = resolveInstallTimeEffort(readGsdEffectiveEffortConfig(dir), agent);
+        cleanup(dir);
+        return arg === `effort="${renderEffortForRuntime('claude', baked).value}"`;
+      }),
+      { numRuns: 60 },
+    );
   });
 
   test('no project config: defaults.json is the loaded config, so its effort is passed', (t) => {
@@ -136,6 +180,66 @@ describe('#5330 resolveEffortArgInternal — the interim gate', () => {
     t.after(() => { cleanup(dir); cleanup(home); });
 
     assert.equal(resolveEffortArgInternal(dir, MAPPER), '');
+  });
+});
+
+describe('#5330 resolveEffortArgInternal — an agent outside the model-profile table', () => {
+  test('control: such an agent gets no argument, whatever the block sets', (t) => {
+    const home = gsdHome();
+    useEnv(t, { home, runtime: 'claude' });
+    t.after(() => cleanup(home));
+
+    for (const effort of [{ default: 'max' }, { routing_tier_defaults: { heavy: 'max' } }, { agent_overrides: { [MAPPER]: 'max' } }, {}]) {
+      const dir = project({ effort });
+      t.after(() => cleanup(dir));
+      // The cascade still answers, from `default` or the hardcoded level: nobody chose either for
+      // this agent, and passing one would override its own frontmatter.
+      assert.ok(resolveEffortInternal(dir, UNLISTED).length > 0);
+      assert.equal(resolveEffortArgInternal(dir, UNLISTED), '', JSON.stringify(effort));
+    }
+  });
+
+  test('an agent_overrides entry naming it is an explicit choice and is passed', (t) => {
+    const home = gsdHome();
+    const dir = project({ effort: { agent_overrides: { [UNLISTED]: 'xhigh' } } });
+    useEnv(t, { home, runtime: 'claude' });
+    t.after(() => { cleanup(dir); cleanup(home); });
+
+    // Both cascades honour this entry, so the argument agrees with `resolve-model`'s `effort`.
+    assert.equal(resolveInstallTimeEffort(readGsdEffectiveEffortConfig(dir), UNLISTED), 'xhigh');
+    assert.equal(resolveEffortArgInternal(dir, UNLISTED), 'effort="xhigh"');
+  });
+
+  test('an invalid override entry speaks for nobody', (t) => {
+    const home = gsdHome();
+    const dir = project({ effort: { default: 'max', agent_overrides: { [UNLISTED]: 'turbo' } } });
+    useEnv(t, { home, runtime: 'claude' });
+    t.after(() => { cleanup(dir); cleanup(home); });
+
+    assert.equal(resolveEffortArgInternal(dir, UNLISTED), '');
+  });
+
+  test('prototype-chain names are not table members', (t) => {
+    const home = gsdHome();
+    const dir = project({ effort: { default: 'max' } });
+    useEnv(t, { home, runtime: 'claude' });
+    t.after(() => { cleanup(dir); cleanup(home); });
+
+    for (const name of ['constructor', 'toString', '__proto__']) {
+      assert.equal(resolveEffortArgInternal(dir, name), '', name);
+    }
+  });
+
+  test('resolve-model carries the empty argument beside unknown_agent', (t) => {
+    const home = gsdHome();
+    const dir = project({ effort: { default: 'max' } });
+    t.after(() => { cleanup(dir); cleanup(home); });
+
+    const res = runGsdTools(['query', 'resolve-model', UNLISTED], dir, { GSD_HOME: home, GSD_RUNTIME: 'claude' });
+    assert.ok(res.success, res.error);
+    const parsed = JSON.parse(res.output);
+    assert.equal(parsed.unknown_agent, true);
+    assert.equal(parsed.effort_arg, '');
   });
 });
 

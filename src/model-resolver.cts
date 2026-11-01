@@ -1023,6 +1023,15 @@ function resolveEffortInternal(cwd: string, agentType: string, opts?: EffortOpts
   return 'high';
 }
 
+/** Whether the `effort` block's `agent_overrides` holds a valid level for this agent. */
+function agentOverrideNames(effortCfg: Record<string, unknown>, agentType: string): boolean {
+  const overrides = effortCfg['agent_overrides'];
+  if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) return false;
+  if (!Object.hasOwn(overrides, agentType)) return false;
+  const level = (overrides as Record<string, unknown>)[agentType];
+  return typeof level === 'string' && EFFORT_SET.has(level);
+}
+
 /**
  * #5330 — the per-spawn effort argument for (cwd, agentType): `<param>="<effort>"`
  * on a host whose runtime descriptor declares `spawnEffortParam`, `''` otherwise.
@@ -1042,6 +1051,11 @@ function resolveEffortInternal(cwd: string, agentType: string, opts?: EffortOpts
  * user configured. Known limit: a project with its own `effort` block does not
  * inherit defaults.json's `agent_overrides` for agents it does not name.
  *
+ * An agent outside the model-profile table has no tier, so the cascade answers
+ * with `effort.default` or the hardcoded level: values nobody chose for it, which
+ * would override its own frontmatter. Such an agent gets no argument unless
+ * `effort.agent_overrides` names it, an explicit choice both cascades honour.
+ *
  * The level goes through the same wire rules as every other effort channel
  * (`renderEffortForRuntime`): `inherit` is never a wire level and renders no
  * argument, a level the host rejects renders none, and a host's clamp applies
@@ -1054,6 +1068,9 @@ function resolveEffortArgInternal(cwd: string, agentType: string): string {
   if (!param) return '';
   const effortCfg = config['effort'];
   if (!effortCfg || typeof effortCfg !== 'object' || Array.isArray(effortCfg)) return '';
+  if (!Object.hasOwn(MODEL_PROFILES, agentType) && !agentOverrideNames(effortCfg as Record<string, unknown>, agentType)) {
+    return '';
+  }
   const effort = resolveEffortInternal(cwd, agentType);
   if (effort === 'inherit') return '';
   const rendered = renderEffortForRuntime(runtime, effort);

@@ -577,7 +577,7 @@ Read the `activeHooks` array directly from `SHIP_POST_HOOKS_JSON` in-context (do
   HOOK_AGENT_EFFORT_ARG=$(gsd_run query resolve-model "<agent>" --pick effort_arg 2>/dev/null || true)
   ```
 
-  **#2517: omit the `model=` parameter entirely when `HOOK_AGENT_MODEL` is `inherit` or empty; omit the effort argument when `HOOK_AGENT_EFFORT_ARG` is empty (#5330)** — a capability may name an agent absent from the model-profile table, which resolves to the empty string, and passing an empty model 404s on non-Claude runtimes. Omitting inherits the orchestrator's model.
+  **#2517: omit the `model=` parameter entirely when `HOOK_AGENT_MODEL` is `inherit` or empty; omit the effort argument when `HOOK_AGENT_EFFORT_ARG` is empty (#5330)** — a capability may name an agent absent from the model-profile table, which resolves to the empty string, and passing an empty model 404s on non-Claude runtimes. Omitting inherits the orchestrator's model. Such an agent's effort argument is empty too unless `effort.agent_overrides` names it, so its own `effort:` frontmatter applies.
 
   With a resolved model (`{HOOK_AGENT_MODEL}` is the value the command above printed; `${…}` are bound shell variables):
 
