@@ -19,7 +19,7 @@ Adapted from the `ci-cd-reliability-architecture` skill in [l-gevity/l-gevity-sk
 | **Static cloud credentials** | Long-lived cloud keys stored as secrets for a provider that supports OIDC (`permissions: id-token: write`) | A leaked key stays valid until someone rotates it; OIDC tokens expire per run | Warning |
 | **Unpinned third-party action** | `uses: owner/action@main`, `@master` or `@latest` | An unpinned ref lets the action's code change between two runs of the same commit | Warning |
 
-Hardcoded secrets in a pipeline file stay Critical under the existing secrets rule. Style-level pipeline findings (step naming, step ordering, redundant checkout options) are Info.
+A hardcoded secret in a pipeline file stays Critical under the existing secrets rule. Style-level pipeline findings (step naming, step ordering, redundant checkout options) are Info.
 
 ## Evidence rule
 
