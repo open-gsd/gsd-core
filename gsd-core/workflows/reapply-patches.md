@@ -23,6 +23,8 @@ When the mode is not `off`, tell the user once, before the first prompt: on the 
 for this install, `--interactive=all` is recommended, because the recommendations have not yet been
 checked against this install's customizations.
 
+**Text mode (`workflow.text_mode: true` in config or `--text` flag):** Set `TEXT_MODE=true` if `--text` is present in the arguments OR `workflow.text_mode` is `true`. When TEXT_MODE is active, replace every `AskUserQuestion` call with a plain-text numbered list and ask the user to type their choice number. This is required for non-Claude runtimes where `AskUserQuestion` is not available.
+
 ## Step 1: Detect backed-up patches
 
 Check for local patches directory:
@@ -296,8 +298,8 @@ For each file in `HUNKS_OUTPUT.files`, for each hunk:
   without asking. Print one summary line for each:
   `kept without review: {file} hunk {hunk_id}: "{first user line, truncated to 60 chars}"`.
 
-Presenting a hunk means asking the user one question (`AskUserQuestion` where the runtime has it,
-otherwise a plain prompt and wait) that shows:
+Presenting a hunk means asking the user one question (`AskUserQuestion`, or under TEXT_MODE a
+plain-text numbered list the user answers by number) that shows:
 
 - **Stock text:** `stock_lines` (or "(none — your lines were inserted)" when empty)
 - **Your text:** `user_lines` (or "(none — you deleted the stock text)" when empty)
