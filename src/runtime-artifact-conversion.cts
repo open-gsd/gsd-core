@@ -3250,10 +3250,14 @@ function applyAgentBrandingRewrites(content, runtime) {
 /**
  * #5330: a role file for a host whose spawn primitive takes no per-call effort drops the
  * `{<role>_effort_arg}` argument line. Workflows are projected call by call in bin/install.js; a
- * role file keeps its call text, and the placeholder would reach the host unrendered.
+ * role file keeps its call text, and the placeholder would reach the host unrendered. Own-line is
+ * the only shipped form. The match is whole-line and context-blind: a placeholder inline in quoted
+ * text or shell is left alone, so that form stays visible to the real-install test rather than
+ * half-handled here, but a placeholder-only line inside a heredoc or a multiline string is removed
+ * like an argument line. No shipped role file has one.
  */
 function stripEffortArgLines(content: string): string {
-  return content.replace(/^[ \t]*\{[A-Za-z0-9_]+_(?:effort_arg|EFFORT_ARG)\},?[ \t]*(?:#[^\n]*)?\r?\n/gm, '');
+  return content.replace(/^[ \t]*\$?\{[A-Za-z0-9_]+_(?:effort_arg|EFFORT_ARG)\},?[ \t]*(?:#[^\n]*)?(?:\r?\n|$)/gm, '');
 }
 
 function convertClaudeAgentToHermesAgent(content) {

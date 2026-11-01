@@ -269,11 +269,12 @@ for agents it does not name. Remove the gate when #4633's resolver lands. The ga
 channel only: Codex's agent conversion already tells its orchestrator to pass the runtime value as
 `reasoning_effort`, with no such gate, and that path is unchanged here.
 
-The gate is on effort being configured at all, not on the agent being named, the same line
-OpenCode's `variant` gate draws (#3706, `docs/CONFIGURATION.md`): once a block exists the cascade
-answers for every agent. A per-agent gate would shrink the limit above, but a project naming only
-one agent would then run its others at whatever another project's `effort sync --apply` last baked,
-which is the cross-project reach this channel exists to end.
+The gate is on the loaded config having an `effort` block, not on the agent being named. A
+per-agent gate would shrink the limit above, but a project naming only one agent would then run its
+others at whatever another project's `effort sync --apply` last baked, which is the cross-project
+reach this channel exists to end. OpenCode's `variant` gate (#3706) has the same shape on a different
+input, the install-time config merged with `defaults.json`, so the two can disagree for one project
+until #4633 and it is no precedent for this choice.
 
 **The level follows the host's wire rules** (`renderEffortForRuntime`): `inherit` passes no
 argument and Claude's `minimal` becomes `low`. **The argument follows the agent actually

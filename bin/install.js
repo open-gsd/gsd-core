@@ -3345,9 +3345,11 @@ function _maskStringsAndComments(text) {
   return maskStringLiterals(text).replace(/#[^\n]*/g, (m) => ' '.repeat(m.length));
 }
 
-// #5330: a per-spawn effort placeholder as a call argument or a prose mention.
-// `${X_EFFORT_ARG}` is a shell expansion in a bash block, not a placeholder.
-const EFFORT_ARG_PLACEHOLDER_RE = /(?<!\$)\{[A-Za-z0-9_]+_(?:effort_arg|EFFORT_ARG)\}/;
+// #5330: a per-spawn effort placeholder as a call argument. Inside a call a `$`
+// prefix changes nothing: it is still an argument the host has no parameter for.
+const EFFORT_ARG_PLACEHOLDER_RE = /\$?\{[A-Za-z0-9_]+_(?:effort_arg|EFFORT_ARG)\}/;
+// Outside a call `${X_EFFORT_ARG}` is a shell expansion in a bash block, not a placeholder.
+const EFFORT_ARG_MENTION_RE = /(?<!\$)\{[A-Za-z0-9_]+_(?:effort_arg|EFFORT_ARG)\}/;
 
 /**
  * Normalize ONE `Agent(...)`/`Agent({...})` call span (already isolated by
@@ -3624,11 +3626,14 @@ function _assertProjectionComplete(content, toolConfig, namedDispatch = false) {
     // nothing projects it, so a survivor is a wording the prose strip does not know, and
     // the host would read a raw `{x_effort_arg}` it can never render.
     const spans = findDispatchCallSpans(content, toolName).sort((a, b) => b.start - a.start);
-    let scanned = content;
+    let outsideCalls = content;
+    let leftInCall = false;
     for (const span of spans) {
-      scanned = scanned.slice(0, span.start) + _maskStringsAndComments(scanned.slice(span.start, span.end)) + scanned.slice(span.end);
+      const call = content.slice(span.start, span.end);
+      if (EFFORT_ARG_PLACEHOLDER_RE.test(_maskStringsAndComments(call))) leftInCall = true;
+      outsideCalls = outsideCalls.slice(0, span.start) + outsideCalls.slice(span.end);
     }
-    if (EFFORT_ARG_PLACEHOLDER_RE.test(scanned)) {
+    if (leftInCall || EFFORT_ARG_MENTION_RE.test(outsideCalls)) {
       throw new Error(
         `${runtime} workflow install: projection left a per-spawn effort placeholder ` +
         '— refusing to install (fail-closed post-projection guard, #5330)',

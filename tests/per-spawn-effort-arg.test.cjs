@@ -163,22 +163,29 @@ describe('#5330 resolveEffortArgInternal — the interim gate', () => {
     useEnv(t, { home, runtime: 'claude' });
     t.after(() => cleanup(home));
 
-    const level = fc.constantFrom(...VALID_EFFORTS.filter((e) => e !== 'inherit'));
+    const agents = [MAPPER, 'gsd-planner', 'gsd-executor', UNLISTED];
+    // VALID_EFFORTS holds the wire levels; `inherit` is valid config that renders no argument.
+    const levels = [...VALID_EFFORTS, 'inherit'];
+    const level = fc.constantFrom(...levels);
+    const levelOrInvalid = fc.oneof(level, fc.constantFrom('turbo', '', 7, null));
     const block = fc.record({
       default: level,
-      agent_overrides: fc.dictionary(fc.constantFrom(MAPPER, 'gsd-planner', 'gsd-executor'), level),
-      routing_tier_defaults: fc.dictionary(fc.constantFrom('light', 'standard', 'heavy'), level),
+      agent_overrides: fc.dictionary(fc.constantFrom(...agents), levelOrInvalid),
+      routing_tier_defaults: fc.dictionary(fc.constantFrom('light', 'standard', 'heavy'), levelOrInvalid),
     }, { requiredKeys: [] });
 
     fc.assert(
-      fc.property(block, fc.constantFrom(MAPPER, 'gsd-planner', 'gsd-executor'), (effort, agent) => {
+      fc.property(block, fc.constantFrom(...agents), (effort, agent) => {
         const dir = project({ effort });
         const arg = resolveEffortArgInternal(dir, agent);
         const baked = resolveInstallTimeEffort(readGsdEffectiveEffortConfig(dir), agent);
         cleanup(dir);
-        return arg === `effort="${renderEffortForRuntime('claude', baked).value}"`;
+        // An unlisted agent's bake answers from `default`, which nobody chose for it: no argument.
+        const unnamed = agent === UNLISTED && !levels.includes(effort.agent_overrides?.[UNLISTED]);
+        const expected = unnamed || baked === 'inherit' ? '' : `effort="${renderEffortForRuntime('claude', baked).value}"`;
+        return arg === expected;
       }),
-      { numRuns: 60 },
+      { numRuns: 120 },
     );
   });
 
@@ -949,9 +956,16 @@ describe('#5330 dispatch projection strips the effort placeholder (Hermes, Pi)',
       assert.equal(out, project(src.replace('  {planner_effort_arg},\r\n', ''), cfg()));
     });
 
-    test(`${name}: a shell expansion is not a placeholder, so it neither strips nor refuses`, () => {
+    test(`${name}: a shell expansion outside a call neither strips nor refuses`, () => {
       const src = '```bash\necho "${REVIEWER_EFFORT_ARG}"\n```\n';
       assert.equal(project(src, cfg()), src);
+    });
+
+    test(`${name}: inside a call a $-prefixed form is an argument like any other`, () => {
+      const src = 'Agent(subagent_type="gsd-planner", ${P_EFFORT_ARG}, prompt="x")';
+      const out = project(src, cfg());
+      assert.doesNotMatch(out, /EFFORT_ARG/, out);
+      assert.equal(out, project(src.replace(' ${P_EFFORT_ARG},', ''), cfg()));
     });
 
     test(`${name}: a mention the strip does not recognise refuses the install, wherever it sits`, () => {
@@ -1000,6 +1014,40 @@ describe('#5330 dispatch projection strips the effort placeholder (Hermes, Pi)',
       assert.deepEqual(hits, []);
     });
   }
+
+  describe('role files on a host with no per-call effort', () => {
+    const conversion = require(path.join(LIB, 'runtime-artifact-conversion.cjs'));
+    const converters = {
+      hermes: conversion.convertClaudeAgentToHermesAgent,
+      pi: conversion.convertClaudeAgentToPiAgent,
+    };
+    const role = (body) => `---\nname: gsd-x\ndescription: d\ntools: Read\n---\n${body}`;
+
+    for (const [name, convert] of Object.entries(converters)) {
+      test(`${name}: an own-line argument goes, last line included`, () => {
+        const forms = [
+          'Agent(\n  model="{m_model}",\n  {m_effort_arg},  # omit this line when empty\n  prompt="x"\n)\n',
+          'Agent(\n  prompt="x",\n  ${P_EFFORT_ARG}\n)\n',
+          'Agent(prompt="x",\n  {planner_effort_arg}',
+        ];
+        for (const body of forms) {
+          const out = convert(role(body));
+          assert.doesNotMatch(out, /_(?:effort_arg|EFFORT_ARG)/, out);
+          assert.match(out, /prompt="x"/, out);
+        }
+      });
+
+      test(`${name}: only a whole line is touched, so quoted text and shell survive`, () => {
+        const kept = [
+          'prompt="Document f({planner_effort_arg}, model) verbatim."\n',
+          'The role reads {planner_effort_arg}\n',
+          'x_effort_arg=$(gsd_run query resolve-model gsd-x --pick effort_arg); printf "keep this\\n"\n',
+          'x_effort_arg=$(gsd_run query resolve-model gsd-x \\\n  --pick effort_arg)\n',
+        ];
+        for (const body of kept) assert.ok(convert(role(body)).includes(body), body);
+      });
+    }
+  });
 
   test('pi: the committed role files carry no effort placeholder', () => {
     const roles = listMarkdown(path.join(REPO_ROOT, 'pi', 'package-agents'));
