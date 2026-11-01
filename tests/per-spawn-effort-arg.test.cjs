@@ -420,6 +420,35 @@ describe('#5330 resolve-model CLI', () => {
   });
 });
 
+describe('#5330 resolve-execution effort_spawn_arg', () => {
+  const run = (t, runtime, ...flags) => {
+    const home = gsdHome();
+    const dir = project({ effort: { agent_overrides: { [MAPPER]: 'xhigh' } } });
+    t.after(() => { cleanup(dir); cleanup(home); });
+    const res = runGsdTools(['query', 'resolve-execution', MAPPER, ...flags], dir, { GSD_HOME: home, GSD_RUNTIME: runtime });
+    assert.ok(res.success, res.error);
+    return JSON.parse(res.output);
+  };
+
+  test('with no --host it answers for the active runtime', (t) => {
+    assert.equal(run(t, 'claude').effort_spawn_arg, 'effort="xhigh"');
+    assert.equal(run(t, 'codex').effort_spawn_arg, '');
+  });
+
+  test('--host names the host it answers for, as effort_surface does beside it', (t) => {
+    assert.equal(run(t, 'claude', '--host', 'codex').effort_spawn_arg, '');
+    assert.equal(run(t, 'codex', '--host', 'claude').effort_spawn_arg, 'effort="xhigh"');
+    assert.equal(run(t, 'claude', '--host', 'not-a-runtime').effort_spawn_arg, '');
+  });
+
+  test('--effort and --attempt move effort, not the argument: no workflow spawn passes either', (t) => {
+    const overridden = run(t, 'claude', '--effort', 'low');
+    assert.equal(overridden.effort, 'low');
+    assert.equal(overridden.effort_spawn_arg, 'effort="xhigh"');
+    assert.equal(run(t, 'claude', '--attempt', '2').effort_spawn_arg, 'effort="xhigh"');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Census: every spawn site that passes a resolved model also passes the effort
 // argument resolved for the same agent, and every effort placeholder has a

@@ -1057,7 +1057,8 @@ function agentOverrideNames(effortCfg: Record<string, unknown>, agentType: strin
  * would override its own frontmatter. Such an agent gets no argument unless
  * `effort.agent_overrides` names it, an explicit choice both cascades honour.
  *
- * The host must be named by GSD_RUNTIME, `config.runtime` or the install marker
+ * `opts.host` answers for a named host instead (`resolve-execution --host`).
+ * Otherwise the host must be named by GSD_RUNTIME, `config.runtime` or the install marker
  * (every install writes one). `resolveActiveRuntime`'s `'claude'` default is a
  * guess that model resolution can afford and this argument cannot: on an unnamed
  * host the frontmatter still applies, while a wrong `effort=` reaches its spawn call.
@@ -1067,9 +1068,9 @@ function agentOverrideNames(effortCfg: Record<string, unknown>, agentType: strin
  * argument, a level the host rejects renders none, and a host's clamp applies
  * (claude: `minimal` -> `low`).
  */
-function resolveEffortArgInternal(cwd: string, agentType: string): string {
+function resolveEffortArgInternal(cwd: string, agentType: string, opts?: { host?: string }): string {
   const config = loadConfig(cwd);
-  const runtime = resolveDeclaredRuntime(config);
+  const runtime = opts?.host ?? resolveDeclaredRuntime(config);
   if (!runtime) return '';
   const param = spawnEffortParamFor(runtime);
   if (!param) return '';

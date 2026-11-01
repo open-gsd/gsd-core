@@ -723,7 +723,12 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
     effort_effective_source: effortEffectiveSource,
     // #5330: the per-spawn argument GSD's workflow spawns pass for this agent
     // ('' when none); when set, a workflow spawn runs at it, not effort_effective.
-    effort_spawn_arg: resolveEffortArgInternal(cwd, agentType),
+    // It follows --host, but not --effort or --attempt: no workflow spawn passes those.
+    effort_spawn_arg: resolveEffortArgInternal(
+      cwd,
+      agentType,
+      typeof opts.host === 'string' && opts.host.length > 0 ? { host: opts.host } : undefined,
+    ),
     fast_mode: fastMode,
     fast_mode_supported: fastModeSupported,
   };
