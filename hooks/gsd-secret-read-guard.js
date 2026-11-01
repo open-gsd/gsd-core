@@ -120,7 +120,16 @@
 //   destination exemption can move a link prepared under a non-secret name
 //   onto a secret name (`ln -s .env.example l && mv l .env`), so a later
 //   edit of `.env` lands in the link target — a write redirection, the
-//   out-of-scope write class, not a read.)
+//   out-of-scope write class, not a read. #4432 adds three stated limits to
+//   the project exemptions: (1) an agent with Bash can rewrite local git state
+//   (force-add + commit, `update-ref`) to make a file committed; the
+//   committed-file rule stops the one-step "edit the config, then read" path
+//   and is the same class as the interpreter one-liner gap above — a
+//   guardrail, not a sandbox. (2) The guard vouches for the path, not for
+//   working-tree bytes that differ from HEAD; a content-hash check would block
+//   re-reading the template after each edit, the flow the issue asks for.
+//   (3) A file inside a git submodule cannot be exempted: the submodule's
+//   `.git` is a file the reader does not follow.)
 //
 // A second, unrelated contract is enforced on the Bash leg because this is the
 // one hook that already parses EVERY Bash command (#5214): a Bash command that
