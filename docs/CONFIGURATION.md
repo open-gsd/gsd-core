@@ -2017,8 +2017,8 @@ the resolved value with source `"resolved"` when there is no install-time channe
 agent file to read. `--pick effort` still returns the resolved value. `effort_spawn_arg` is the per-spawn argument
 GSD's workflow spawns pass for the agent (empty when none, see "Per-spawn" below); when it is
 set, a workflow spawn runs at that level rather than `effort_effective`. It reflects the
-configured cascade only (not `--effort` or `--attempt`), for the runtime GSD resolves the
-way model resolution does.
+configured cascade only (not `--effort` or `--attempt`, which no workflow spawn passes), for
+the host `--host` names or, without it, the host GSD can name (see "Per-spawn").
 
 #### Where effort actually reaches — added in v1.8.0
 
@@ -2049,10 +2049,14 @@ one, its Agent tool's `effort` argument. Limits:
   `defaults.json` reach `effort sync` but not that project's spawns.
 - The value is the same level `effort` reports, through the host's wire rules: `inherit`
   passes no argument, and Claude's missing `minimal` becomes `low`.
-- The argument is resolved for the agent actually spawned. Spawns whose agent the
-  workflow cannot resolve effort for in advance (plan-phase's capability-hook agents, a
-  plan's `agent_hint` specialist) pass none, so that agent's own frontmatter applies;
-  ship's capability hooks resolve the hook agent's own effort by name.
+- The argument is resolved for the agent actually spawned: a plan's `agent_hint` specialist
+  takes its own, and ship's capability hooks resolve the hook agent's by name. plan-phase's
+  capability-hook spawns pass none.
+- An agent outside the model-profile table, such as a third-party capability's, gets no
+  argument unless `effort.agent_overrides` names it, so its own frontmatter applies.
+- GSD passes the argument only to a host it can name, through `GSD_RUNTIME`, `runtime` in
+  the config or the marker every install writes. With none of those it passes nothing,
+  although model resolution still assumes Claude Code.
 
 **Invocation-time.** When GSD spawns another CLI as a subprocess — the cross-AI reviewers
 in `/gsd-review` — the effort is appended to that CLI's own command line. Whether a host

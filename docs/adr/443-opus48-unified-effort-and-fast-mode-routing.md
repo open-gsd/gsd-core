@@ -269,11 +269,25 @@ for agents it does not name. Remove the gate when #4633's resolver lands. The ga
 channel only: Codex's agent conversion already tells its orchestrator to pass the runtime value as
 `reasoning_effort`, with no such gate, and that path is unchanged here.
 
+The gate is on effort being configured at all, not on the agent being named, the same line
+OpenCode's `variant` gate draws (#3706, `docs/CONFIGURATION.md`): once a block exists the cascade
+answers for every agent. A per-agent gate would shrink the limit above, but a project naming only
+one agent would then run its others at whatever another project's `effort sync --apply` last baked,
+which is the cross-project reach this channel exists to end.
+
 **The level follows the host's wire rules** (`renderEffortForRuntime`): `inherit` passes no
 argument and Claude's `minimal` becomes `low`. **The argument follows the agent actually
-spawned**: where a workflow spawns an agent it cannot resolve effort for in advance (plan-phase's
-capability-hook `ref.agent` spawns, an `agent_hint` specialist), it passes none and that agent's
-frontmatter applies; ship's capability hooks resolve the hook agent's own effort by name.
+spawned**: an `agent_hint` specialist takes its own, ship's capability hooks resolve the hook
+agent's by name, and plan-phase's capability-hook `ref.agent` spawns pass none.
+
+**An agent outside the model-profile table gets no argument unless `agent_overrides` names it.**
+Such an agent has no tier, so the cascade answers with `effort.default` or the hardcoded level,
+neither chosen for it, and the argument outranks its own frontmatter. An `agent_overrides` entry
+is an explicit choice both cascades honour, so it is passed.
+
+**The host must be named.** `resolveActiveRuntime` ends in a `claude` default, which suits model
+resolution. The argument uses the same chain without the default (`resolveDeclaredRuntime`):
+every install writes the marker, and on a host nothing names the frontmatter still applies.
 
 **Hosts without the parameter.** The install-time projections onto Hermes `delegate_task` and Pi
 `gsd_dispatch` remove the placeholder as they remove `model=`.

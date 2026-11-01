@@ -94,7 +94,7 @@ If `model_profile` is `"inherit"`, all agents resolve to `"inherit"` (useful for
    `Agent({ … })`, write the same parameter as `effort: "<level>"`). It is the host's per-spawn
    effort argument, already rendered (`effort="high"` on a host whose runtime descriptor
    declares `spawnEffortParam`). When it is empty, drop it: the host has no per-spawn effort
-   channel, or the config sets no `effort` block, and the agent's installed `effort:`
-   frontmatter applies
+   channel, the config sets no `effort` block, or the agent is outside the profile table and
+   no `agent_overrides` entry names it, and the agent's installed `effort:` frontmatter applies
 6. If the spawn call rejects the effort argument (a host build older than its per-spawn
    channel), re-issue the same call without it; the installed frontmatter still applies
