@@ -120,3 +120,34 @@ describe('hooks/lib/isolation-sentinel.js: resolveSentinelRoot self-heal reachab
     assert.equal(result, cwd, 'resolveSentinelRoot degrades to the raw cwd on a build failure, same as any other resolution failure');
   });
 });
+
+// #5624: the hook resolves its root through findProjectRoot, so it inherits the
+// either-spelling `$HOME` stop. A hook with its own walk and a spelled-only
+// stop would answer differently from gsd-tools for this cwd, the #3050 split.
+describe('hooks/lib/isolation-sentinel.js: resolveSentinelRoot stops at a symlinked $HOME (#5624)', () => {
+  test('a cwd spelled through the $HOME target does not resolve to a .planning/ above $HOME', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-sentinel-home-'));
+    const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, GSD_HOME: process.env.GSD_HOME };
+    t.after(() => {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+      cleanup(tmpDir);
+    });
+    const target = path.join(tmpDir, 'real-home');
+    fs.mkdirSync(target);
+    const link = path.join(tmpDir, 'home-link');
+    fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+    process.env.HOME = link;
+    process.env.USERPROFILE = link;
+    process.env.GSD_HOME = link;
+    fs.mkdirSync(path.join(tmpDir, '.planning'));
+    const cwd = path.join(fs.realpathSync.native(target), 'ws', 'sub');
+    fs.mkdirSync(cwd, { recursive: true });
+
+    const { resolveSentinelRoot } = require(SENTINEL_MODULE_PATH);
+    assert.equal(resolveSentinelRoot(cwd), cwd,
+      'the hook must not read a sentinel from the workspace above $HOME');
+  });
+});

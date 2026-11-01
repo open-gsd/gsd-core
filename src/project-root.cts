@@ -46,6 +46,27 @@ export function findProjectRoot(startDir: string): string {
 
   const fsRoot = path.parse(resolvedStart).root;
   const home = os.homedir();
+  let realHome: string | null = null;
+  try {
+    realHome = fs.realpathSync.native(home);
+  } catch {
+    // no `$HOME` on disk: only the spelled comparison applies
+  }
+
+  // #5624: the `$HOME` stop holds however `$HOME` or the walked path is
+  // spelled. With `/home/me -> /data/me`, a cwd spelled `/data/me/...` (what
+  // `process.cwd()` reports) never has `/home/me` as a parent, so comparing
+  // spellings alone walked past `$HOME`. The isolation hooks resolve through
+  // this function too, so they keep the same boundary (#3050).
+  function isHome(d: string): boolean {
+    if (d === home) return true;
+    if (realHome === null) return false;
+    try {
+      return fs.realpathSync.native(d) === realHome;
+    } catch {
+      return false;
+    }
+  }
 
   // If startDir already contains .planning/, it IS the project root.
   try {
@@ -126,7 +147,7 @@ export function findProjectRoot(startDir: string): string {
   while (dir !== fsRoot && depth < FIND_PROJECT_ROOT_MAX_DEPTH) {
     const parent = path.dirname(dir);
     if (parent === dir) break;
-    if (parent === home) break;
+    if (isHome(parent)) break;
 
     const parentPlanning = parent + path.sep + '.planning';
     let parentPlanningIsDir = false;
@@ -185,7 +206,7 @@ export function findProjectRoot(startDir: string): string {
         // Lookahead: walk ancestors above `parent` to find a sub_repos claim.
         let ancestor = path.dirname(parent);
         let ancestorDepth = 0;
-        while (ancestor !== fsRoot && ancestor !== home && ancestorDepth < FIND_PROJECT_ROOT_MAX_DEPTH) {
+        while (ancestor !== fsRoot && !isHome(ancestor) && ancestorDepth < FIND_PROJECT_ROOT_MAX_DEPTH) {
           const ancestorPlanning = ancestor + path.sep + '.planning';
           try {
             if (fs.existsSync(ancestorPlanning) && fs.statSync(ancestorPlanning).isDirectory()) {
@@ -251,7 +272,7 @@ export function findProjectRoot(startDir: string): string {
     } catch {
       // ignore fs errors and continue walking
     }
-    if (parent2 === home) break;
+    if (isHome(parent2)) break;
     dir2 = parent2;
     depth2 += 1;
   }

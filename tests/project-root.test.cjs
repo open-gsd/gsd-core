@@ -396,4 +396,78 @@ describe('findProjectRoot nearest-.planning resolution (#1414)', () => {
     assert.notStrictEqual(result, parentGsd,
       'a symlinked non-.planning directory holding a nested repo must still count as a git boundary');
   });
+  // #5624: `$HOME` bounds the walk in either spelling. With `$HOME` a symlink, a
+  // cwd spelled through its target (what `process.cwd()` reports) never has the
+  // link as a parent, so a spelled comparison walked past `$HOME` and took a
+  // `.planning/` above it as the project. Each row is run with `$HOME` naming the
+  // link and the cwd its target, then the reverse. The stray workspace sits in
+  // tmpDir, the parent of both spellings.
+  describe('a symlinked $HOME stops the walk in either spelling (#5624)', () => {
+    function symlinkedHome(spelling) {
+      const target = mkDeep(tmpDir, 'real-home');
+      const link = path.join(tmpDir, 'home-link');
+      fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+      const resolved = fs.realpathSync.native(target);
+      const home = spelling === 'resolved cwd' ? link : resolved;
+      process.env.HOME = home;
+      process.env.USERPROFILE = home;
+      process.env.GSD_HOME = home;
+      return spelling === 'resolved cwd' ? resolved : link;
+    }
+
+    // A workspace above $HOME whose sub_repos names the home dir in both spellings.
+    function claimHomeFromAbove() {
+      fs.mkdirSync(path.join(tmpDir, '.planning'));
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'),
+        JSON.stringify({ sub_repos: ['real-home', 'home-link'] }));
+    }
+
+    for (const spelling of ['resolved cwd', 'link cwd']) {
+      test(`a .planning/ above $HOME is not taken as the project (${spelling})`, () => {
+        const cwdHome = symlinkedHome(spelling);
+        fs.mkdirSync(path.join(tmpDir, '.planning'));
+        const start = mkDeep(cwdHome, 'ws', 'sub');
+        assert.strictEqual(findProjectRoot(start), start,
+          'the nearest-.planning walk must stop at $HOME, not resolve to the workspace above it');
+      });
+
+      test(`a sub_repos claim above $HOME does not claim a cwd below it (${spelling})`, () => {
+        const cwdHome = symlinkedHome(spelling);
+        claimHomeFromAbove();
+        const start = mkDeep(cwdHome, 'ws', 'sub');
+        assert.strictEqual(findProjectRoot(start), start,
+          'the sub_repos walk must not read a config above $HOME');
+      });
+
+      test(`the sub_repos lookahead from a repo below $HOME stops at $HOME (${spelling})`, () => {
+        const cwdHome = symlinkedHome(spelling);
+        claimHomeFromAbove();
+        const ws = mkDeep(cwdHome, 'ws');
+        fs.mkdirSync(path.join(ws, '.planning'));
+        fs.mkdirSync(path.join(ws, '.git'));
+        const start = mkDeep(ws, 'sub');
+        assert.strictEqual(findProjectRoot(start), ws,
+          'the lookahead must keep the repo-owned .planning/, not hand the cwd to a claim above $HOME');
+      });
+
+      test(`a project rooted at $HOME still resolves (${spelling})`, () => {
+        const cwdHome = symlinkedHome(spelling);
+        fs.mkdirSync(path.join(cwdHome, '.planning'));
+        const start = mkDeep(cwdHome, 'ws', 'sub');
+        assert.strictEqual(findProjectRoot(start), cwdHome,
+          '$HOME itself is checked before the stop, in either spelling');
+      });
+    }
+
+    test('a $HOME missing on disk keeps the spelled stop and does not throw', () => {
+      const missing = path.join(tmpDir, 'no-such-home');
+      process.env.HOME = missing;
+      process.env.USERPROFILE = missing;
+      process.env.GSD_HOME = missing;
+      const proj = mkDeep(tmpDir, 'proj');
+      fs.mkdirSync(path.join(proj, '.planning'));
+      const start = mkDeep(proj, 'a', 'b');
+      assert.strictEqual(findProjectRoot(start), proj);
+    });
+  });
 });
