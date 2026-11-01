@@ -1584,11 +1584,23 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
     });
   }
 
+  // Only the split reads this read, and it makes the slash run a word of it, which
+  // `lastSegment` reads. Its regex strip was quadratic on such a run and outlasted
+  // the hook's 120 s timeout, after which the command runs; the read must be denied
+  // in time.
+  test('blocks: a read with a 1,000,000-slash word in an env -S string', () => {
+    const command = `env -S 'cat foo${'/'.repeat(1000000)}x .env'`;
+    const r = runHookSeam(HOOK_PATH, [], {
+      input: JSON.stringify(bash(command)),
+      env: { ...process.env, NODE_V8_COVERAGE: '' },
+      timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
+    });
+    assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, 'read', { code: 'secret-read' });
+  });
+
   // The other env -S dialects re-scan the whole command, and the BSD ones make the
-  // 300,000-slash run below one word, which `lastSegment`'s trailing-separator regex
-  // reads in quadratic time (`next` spends about 10 s on such a word at 200,000
-  // slashes). The launch after it is denied by the readings that run first, so the
-  // dialect readings never run: a hang backstop, as above.
+  // 300,000-slash run below one word. The launch after it is denied by the readings
+  // that run first, so the dialect readings never run: a hang backstop, as above.
   test('blocks: a launch after a string only the other dialects read slowly', () => {
     const command = `env -S '\${Z}\\ A=1 ls ${'/'.repeat(300000)}x'; ${TAIL}`;
     const r = runHookSeam(HOOK_PATH, [], {

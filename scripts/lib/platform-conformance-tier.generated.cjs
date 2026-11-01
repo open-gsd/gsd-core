@@ -121,6 +121,7 @@ module.exports = {
   "tests/faulty-deps.test.cjs",
   "tests/feat-2483-review-claude-mds-guard.test.cjs",
   "tests/features-index-gate.test.cjs",
+  "tests/filename-classification.test.cjs",
   "tests/frontmatter.test.cjs",
   "tests/gap-checker.property.test.cjs",
   "tests/gate-api-coverage-verify-pre-escape.test.cjs",
