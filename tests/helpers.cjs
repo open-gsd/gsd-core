@@ -1172,9 +1172,12 @@ function _restoreEnvPairs(saved) {
  *   path is quoted, with `\`, `"`, newline, tab and backspace escaped, so no
  *   character a TMPDIR can hold changes what git reads.
  *
- * execGit and runGsdTools pass process.env to git, so this covers in-process
- * reads and CLI spawns alike. It does not cover a `git` on PATH that is itself a
- * wrapper adding `-c` options. Returns a restore function, which puts back every
+ * The variables set here reach git through execGit and runGsdTools alike, so
+ * this covers in-process reads and CLI spawns. execGit itself drops inherited
+ * repository-location variables such as GIT_DIR and GIT_WORK_TREE (#5548), but
+ * the git calls that build fixtures do not, so clearing them here still
+ * matters. It does not cover a `git` on PATH that is itself a wrapper adding
+ * `-c` options. Returns a restore function, which puts back every
  * GIT_* variable exactly as it was and removes any a test added.
  */
 function isolateGitConfigEnv() {
