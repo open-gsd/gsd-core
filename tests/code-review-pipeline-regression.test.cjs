@@ -607,6 +607,20 @@ describe('Bug 2 — present_results severity-label parser', () => {
 // BUG 3 — fixer agent ID alphabet and filter sets must include BL-* alongside CR-*.
 // ---------------------------------------------------------------------------
 describe('Bug 3 — gsd-code-fixer BL-* inclusion in filter sets', () => {
+  // #5802: the ledger records a prefixed id, so the agent that fixes findings has to be told one is
+  // a finding, or a prefixed finding falls outside every CR-*-shaped filter and stays open.
+  for (const rel of [['agents', 'gsd-code-fixer.md'], ['agents', 'gsd-code-fixer.compact.md'], ['pi', 'package-agents', 'gsd-code-fixer.md']]) {
+    test('finding_parser states the review-scoped prefix: ' + rel.join('/'), () => {
+      const src = fs.readFileSync(path.join(ROOT, ...rel), 'utf8');
+      const parser = src.slice(src.indexOf('<finding_parser>'), src.indexOf('</finding_parser>'));
+      assert.ok(parser.includes('`[A-Z][A-Z0-9]*-`'), 'the prefix grammar must match the ledger\'s');
+      assert.ok(parser.includes('`W6-CR-01`'), 'a prefixed id must be shown');
+      assert.ok(parser.includes('segment before the number'), 'the tier must be located, so the filters still read it');
+      assert.ok(parser.includes('`{finding_id}` is the whole ID, prefix included'),
+        'the report must keep the prefix: the ledger matches a fix report\'s headings by the whole id');
+    });
+  }
+
   test('finding_parser documents BL-\\d+ as Critical-tier-equivalent', () => {
     const src = fs.readFileSync(FIXER_PATH, 'utf8');
     const parserStart = src.indexOf('<finding_parser>');
