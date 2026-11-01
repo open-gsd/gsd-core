@@ -112,16 +112,21 @@
 //   — the command-valued `-c` keys, the alias it invokes (with the words
 //   after it, through other aliases, bounded by alias hops rather than
 //   nesting depth), the options and trailing words its subcommand runs, and
-//   ext:: URLs — and blocks a `-c` value naming a secret file; ssh's
-//   ProxyCommand-style `-o` values are scanned too. Config files (and
-//   commands that write one), `--config-env` / `GIT_CONFIG_*` and the
-//   `GIT_EDITOR` / `GIT_SEQUENCE_EDITOR` / `GIT_SSH_COMMAND` / `GIT_PAGER` /
-//   `GIT_ALLOW_PROTOCOL` twins are not, even as a `VAR=… git` prefix on the
-//   same command; nor are program-path keys and options
+//   ext:: URLs — and blocks a config value naming a secret file; ssh's
+//   ProxyCommand-style `-o` values are scanned too. Config the command line
+//   sets in the environment counts like `-c`: `GIT_CONFIG_KEY_<n>` /
+//   `GIT_CONFIG_VALUE_<n>`, `GIT_CONFIG_PARAMETERS`, `--config-env` and the
+//   GIT_ENV_CONFIG_KEYS twins (`GIT_EDITOR`, `GIT_SSH_COMMAND`, …), set as a
+//   `VAR=…` prefix, through `env` / `sudo`, or by `export` / `declare` / a
+//   bare assignment anywhere in the script, and inherited by what it runs.
+//   Values the command line does not set (the inherited environment) and
+//   config files (and commands that write one) are not scanned, nor are
+//   program-path keys and options
 //   (`difftool.<tool>.path`, `core.hooksPath`, `--exec-path`, a merge
 //   strategy) whose program the hook cannot see, or a command inside the
 //   quoted argument of a program other than ssh's `-o` (`vim -c`). `core.pager`
-//   / `pager.*` are allowed on purpose (no TTY, nothing printed), except for
+//   / `pager.*` / `GIT_PAGER` / `PAGER` are allowed on purpose (no TTY,
+//   nothing printed), except for
 //   a bare `git grep -O`, which runs the pager regardless.
 //
 // A second, unrelated contract is enforced on the Bash leg because this is the
@@ -173,13 +178,15 @@ const NON_SECRET_ENV_SUFFIXES = new Set(['example', 'sample', 'template', 'dist'
 //   short    letters of short options that take a value (`-n 5`, `-n5`)
 //   long     long options that take a SEPARATE value word (`--adjustment 5`);
 //            `--opt=value` is one word and needs no entry
-//   assigns  leading `VAR=value` words belong to the wrapper (env)
+//   assigns  leading `VAR=value` words belong to the wrapper (env, sudo)
+//   reads    letters of short options whose value is a file the wrapper reads
+//            (`sshpass -f <file>`), checked like an operand
 //   operands positional words after the options (timeout's DURATION)
 // Taken from sudo(8), doas(1), env(1), nice(1), time(1), timeout(1),
-// stdbuf(1), setsid(1) and bash's `command`/`exec`. A wrong entry fails open
+// stdbuf(1), setsid(1), sshpass(1) and bash's `command`/`exec`. A wrong entry fails open
 // (the option's value becomes the command word), so keep it to the man pages.
 const WRAPPERS = new Map([
-  ['sudo', { short: 'CDghpRrTtUu', long: ['--close-from', '--chdir', '--group', '--host', '--prompt', '--chroot', '--role', '--command-timeout', '--type', '--other-user', '--user'] }],
+  ['sudo', { short: 'CDghpRrTtUu', long: ['--close-from', '--chdir', '--group', '--host', '--prompt', '--chroot', '--role', '--command-timeout', '--type', '--other-user', '--user'], assigns: true }],
   ['doas', { short: 'Cu' }],
   ['env', { short: 'uCSaP', long: ['--unset', '--chdir', '--split-string', '--argv0'], assigns: true }],
   ['nice', { short: 'n', long: ['--adjustment'] }],
@@ -190,6 +197,7 @@ const WRAPPERS = new Map([
   ['stdbuf', { short: 'ioe', long: ['--input', '--output', '--error'] }],
   ['setsid', {}],
   ['exec', { short: 'a' }],
+  ['sshpass', { short: 'fdpP', reads: 'f' }],
 ]);
 
 // Commands whose ordinary operands are file NAMES, never file CONTENTS. A
@@ -298,6 +306,21 @@ const STORE_HELPER_RE = /^store(?:\s|$)/i;
 const GIT_SPACE_RE = /[ \t\n\r]/;
 const GIT_BOOLEAN_RE = /^(?:true|false|yes|no|on|off|1|0|)$/i;
 
+// Environment variables git reads in place of a config key (#5492; git(1)
+// ENVIRONMENT, git-var(1), checked live on git 2.43). Where both are set git
+// prefers one (GIT_EDITOR over core.editor over VISUAL over EDITOR; GIT_PAGER
+// over core.pager over PAGER), but every value is scanned, so the order does
+// not matter here. GIT_SSH execs a program, like core.askPass; it is scanned
+// conservatively.
+const GIT_ENV_CONFIG_KEYS = new Map([
+  ['GIT_EDITOR', 'core.editor'], ['VISUAL', 'core.editor'], ['EDITOR', 'core.editor'],
+  ['GIT_SEQUENCE_EDITOR', 'sequence.editor'], ['GIT_SSH_COMMAND', 'core.sshcommand'], ['GIT_SSH', 'core.sshcommand'],
+  ['GIT_EXTERNAL_DIFF', 'diff.external'], ['GIT_ASKPASS', 'core.askpass'], ['SSH_ASKPASS', 'core.askpass'],
+  ['GIT_PROXY_COMMAND', 'core.gitproxy'], ['GIT_PAGER', 'core.pager'], ['PAGER', 'core.pager'],
+]);
+// Variables naming a config file git reads (and may quote in an error).
+const GIT_CONFIG_FILE_VARS = ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG'];
+
 // Subcommand options whose value git runs as a command (#5492; git 2.56
 // sources: builtin/rebase.c, connect.c, builtin/grep.c, git-difftool--helper.sh,
 // git-filter-branch.sh, git-send-email.perl, git-instaweb.sh, daemon.c,
@@ -307,9 +330,12 @@ const GIT_BOOLEAN_RE = /^(?:true|false|yes|no|on|off|1|0|)$/i;
 // unambiguous prefix (`ls-remote --u=<cmd>`), and an ambiguous one makes git
 // exit, so matching it only over-scans. An `optional` value must be attached (`grep -O<pager>`); a
 // bare one runs the configured pager. `getopt` options (Perl's
-// Getopt::Long) also take one dash and any case; `min` keeps send-email's
-// `--to` / `--cc` from reading as `--to-cmd` / `--cc-cmd`. clone's `config`
-// option sets a key like a global `-c`.
+// Getopt::Long) also take one dash or `+` and any case. Their `min` is the
+// shortest prefix Getopt::Long resolves to that option among all of
+// git-send-email.perl's (master), so `--to` / `--cc` stay recipients;
+// `attachedMin` is shorter when an earlier pass takes the bare prefix for a
+// flag (`-h` is help, but `-h=<cmd>` reaches `--header-cmd`). clone's
+// `config` option sets a key like a global `-c`.
 const GIT_COMMAND_OPTIONS = new Map([
   ['rebase', [{ short: 'x', long: 'exec' }]],
   ['fetch', [{ long: 'upload-pack' }]],
@@ -324,17 +350,17 @@ const GIT_COMMAND_OPTIONS = new Map([
   ['difftool', [{ short: 'x', long: 'extcmd' }]],
   ['filter-branch', ['setup', 'env-filter', 'tree-filter', 'index-filter', 'parent-filter', 'msg-filter',
     'commit-filter', 'tag-name-filter'].map((long) => ({ long }))],
-  ['send-email', ['to-cmd', 'cc-cmd', 'header-cmd', 'sendmail-cmd', 'smtp-server']
-    .map((long) => ({ long, min: 4, getopt: true }))],
+  ['send-email', [{ long: 'to-cmd', min: 5 }, { long: 'cc-cmd', min: 5 }, { long: 'header-cmd', min: 2, attachedMin: 1 },
+    { long: 'sendmail-cmd', min: 5 }, { long: 'smtp-server', min: 11 }].map((spec) => ({ ...spec, getopt: true }))],
   ['instaweb', [{ short: 'd', long: 'httpd' }]],
   ['daemon', [{ long: 'access-hook' }]],
   ['svn', [{ long: 'authors-prog' }]],
 ]);
 
-// Plain-alias hops on the current expansion path, and alias expansions in
-// the whole command. Alias hops spend no scan depth (#5492), so these bound
-// the scan instead (git itself only stops a repeated name); past either one
-// the scan fails closed on the alias.
+// Plain-alias hops on the current expansion path, and alias expansions
+// (defined or invoked) in one git command. Alias hops spend no scan depth
+// (#5492), so these bound the scan instead (git itself only stops a
+// repeated name); past either one the scan fails closed on the alias.
 const MAX_ALIAS_HOPS = 16;
 const MAX_ALIAS_EXPANSIONS = 256;
 
@@ -371,10 +397,20 @@ const SHELL_INTERPRETERS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'su']);
 // flag value is not mistaken for the script and stdin mode still applies.
 const SHELL_VALUE_FLAGS = new Set(['-o', '-O', '+o', '+O', '--rcfile', '--init-file']);
 
-// Value-taking `xargs` flags (long `--flag=value` forms are single words).
-// `-a`/`--arg-file` additionally replaces stdin, so it suppresses the pipeline
-// inference below.
-const XARGS_VALUE_FLAGS = new Set(['-n', '-I', '-i', '-L', '-l', '-P', '-s', '-d', '-E', '-a']);
+// GNU xargs(1) options: short letters whose value is attached or the next
+// word, short letters whose optional value must be attached, and long
+// options (any unambiguous prefix) whose value is the next word unless
+// attached with `=`; the optional ones take only `=`. `-a`/`--arg-file`
+// also replaces stdin, so it suppresses the pipeline inference below.
+const XARGS_SHORT_VALUE = 'adEILnPs';
+const XARGS_SHORT_OPTIONAL = 'eil';
+const XARGS_LONG_OPTIONS = new Map([
+  ['arg-file', 'value'], ['delimiter', 'value'], ['max-args', 'value'], ['max-procs', 'value'],
+  ['max-chars', 'value'], ['process-slot-var', 'value'], ['eof', 'optional'], ['replace', 'optional'],
+  ['max-lines', 'optional'], ['null', 'flag'], ['no-run-if-empty', 'flag'], ['verbose', 'flag'],
+  ['interactive', 'flag'], ['exit', 'flag'], ['open-tty', 'flag'], ['show-limits', 'flag'],
+  ['version', 'flag'], ['help', 'flag'],
+]);
 
 // Probe names a Grep glob alternative is matched against. `.env` and
 // `.secrets` are the exact names; the rest stand in for the open-ended
@@ -975,7 +1011,10 @@ function operandNamesSecret(text) {
   return v[end] === '=' && namesSecret(v.slice(end + 1));
 }
 
-const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
+// `NAME=value`, or bash's appending `NAME+=value`.
+const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
+// Builtins whose `NAME=value` operands set (and may export) a variable.
+const DECLARATION_COMMANDS = new Set(['export', 'declare', 'typeset', 'local', 'readonly']);
 
 // `-c`, or a combined short flag ending in `c` (`-lc`, `-ec`, `-euc`): mode c.
 const DASH_C_RE = /^-[A-Za-z]*c$/;
@@ -1021,19 +1060,42 @@ function skipWrapperArgs(words, start, spec) {
   return idx < words.length && words[idx].text === '--' ? idx + 1 : idx;
 }
 
+// The values a wrapper's `reads` options take in words[start, end).
+function wrapperReadValues(words, start, end, spec) {
+  const values = [];
+  for (let k = start; k < end; k++) {
+    const t = words[k].text;
+    if (!/^-[^-]/.test(t)) continue;
+    for (let i = 1; i < t.length; i++) {
+      if (!(spec.short || '').includes(t[i])) continue;
+      if (spec.reads.includes(t[i])) values.push(i + 1 < t.length ? t.slice(i + 1) : words[k + 1] ? words[k + 1].text : '');
+      break;
+    }
+  }
+  return values;
+}
+
 // Command base + operands after leading `VAR=val` assignments and prefix
 // wrappers with their own options (`sudo -u root`, `env -i VAR=x`,
-// `timeout -s KILL 5`, `nice -n 5`, …), or null when nothing but prefixes remain.
+// `timeout -s KILL 5`, `nice -n 5`, …), or null when nothing but prefixes
+// remain. `assigns` are the prefix's `VAR=val` words, which the command and
+// everything it runs inherit; `reads` are files a wrapper reads itself.
 function resolveCommand(words) {
   let idx = 0;
+  const reads = [];
   while (idx < words.length && ASSIGNMENT_RE.test(words[idx].text)) idx++;
   while (idx < words.length) {
     const spec = WRAPPERS.get(lastSegment(words[idx].text).toLowerCase());
     if (!spec) break;
-    idx = skipWrapperArgs(words, idx + 1, spec);
+    const next = skipWrapperArgs(words, idx + 1, spec);
+    if (spec.reads) reads.push(...wrapperReadValues(words, idx + 1, next, spec));
+    idx = next;
   }
   if (idx >= words.length) return null;
-  return { base: lastSegment(words[idx].text).toLowerCase(), operands: words.slice(idx + 1) };
+  return {
+    base: lastSegment(words[idx].text).toLowerCase(), operands: words.slice(idx + 1), reads,
+    assigns: words.slice(0, idx).map((w) => w.text).filter((t) => ASSIGNMENT_RE.test(t)),
+  };
 }
 
 // A lowercased git key reduced to its section and name. The subsection is
@@ -1105,18 +1167,102 @@ function* gitConfigsInForce() {
   }
 }
 
-// The last value set for `key` (lowercased), as git reads it.
-function gitConfigInForce(key) {
-  for (const config of gitConfigsInForce()) if (config.key === key) return config;
-  return undefined;
+// A config entry; `rawKey` keeps its case (url.<base>.insteadOf needs the base).
+function gitConfigEntry(rawKey, value, key = rawKey.toLowerCase()) {
+  return { rawKey, key, shape: gitConfigShape(key), value };
 }
 
 function parseGitConfig(text) {
   const eq = text.indexOf('=');
   if (eq === -1) return null;
-  const rawKey = text.slice(0, eq);
-  const key = rawKey.toLowerCase();
-  return { rawKey, key, shape: gitConfigShape(key), value: text.slice(eq + 1) };
+  return gitConfigEntry(text.slice(0, eq), text.slice(eq + 1));
+}
+
+// Shell variables the command line sets (#5492), as a stack of frames: one
+// per script (its `export` / `declare` / bare assignments, wherever they sit
+// in it) and one per command prefix (`VAR=… cmd`, `env`, `sudo`). Nested
+// scripts inherit them, as an exported environment is inherited. Every value
+// a name is given is kept, since assignment order and subshells decide which
+// one a command sees, and all of them are scanned.
+let shellVarScope = null;
+
+function shellVarFrame(parent, assignments) {
+  if (!assignments.length) return parent;
+  const vars = new Map();
+  for (const text of assignments) {
+    const eq = text.indexOf('=');
+    const name = text.slice(0, text[eq - 1] === '+' ? eq - 1 : eq);
+    if (!vars.has(name)) vars.set(name, new Set());
+    vars.get(name).add(text.slice(eq + 1));
+  }
+  return { parent, vars };
+}
+
+// The `NAME=value` words of a script's declaration builtins and bare
+// assignment segments.
+function scriptAssignments(tokens) {
+  const bySeg = new Map();
+  for (const t of tokens) {
+    if (t.kind !== 'word') continue;
+    if (!bySeg.has(t.seg)) bySeg.set(t.seg, []);
+    bySeg.get(t.seg).push(t.text);
+  }
+  const assignments = [];
+  for (const words of bySeg.values()) {
+    if (words.every((w) => ASSIGNMENT_RE.test(w)) || DECLARATION_COMMANDS.has(words[0])) {
+      assignments.push(...words.filter((w) => ASSIGNMENT_RE.test(w)));
+    }
+  }
+  return assignments;
+}
+
+function shellVarValues(name) {
+  const values = new Set();
+  for (let frame = shellVarScope; frame; frame = frame.parent) {
+    for (const value of frame.vars.get(name) || []) values.add(value);
+  }
+  return [...values];
+}
+
+function shellVarNames() {
+  const names = new Set();
+  for (let frame = shellVarScope; frame; frame = frame.parent) for (const name of frame.vars.keys()) names.add(name);
+  return names;
+}
+
+// `--config-env=<key>=<var>`: the key ends at the last `=`, since a
+// subsection may hold one and a variable name may not (git's config.c).
+function gitConfigEnvEntries(spec) {
+  const eq = spec.lastIndexOf('=');
+  if (eq <= 0) return [];
+  return shellVarValues(spec.slice(eq + 1)).map((value) => gitConfigEntry(spec.slice(0, eq), value));
+}
+
+// Config entries git takes from the environment the command line sets:
+// GIT_CONFIG_KEY_<n> / GIT_CONFIG_VALUE_<n> (whatever GIT_CONFIG_COUNT says,
+// which may come from the inherited environment), GIT_CONFIG_PARAMETERS
+// (its `'key'='value'` words, split at every `=` since a subsection may
+// hold one), and the GIT_ENV_CONFIG_KEYS twins, named by their variable.
+function gitEnvConfigs() {
+  const configs = [];
+  for (const name of shellVarNames()) {
+    const n = /^GIT_CONFIG_KEY_(\d+)$/.exec(name);
+    if (!n) continue;
+    for (const key of shellVarValues(name)) {
+      for (const value of shellVarValues(`GIT_CONFIG_VALUE_${n[1]}`)) configs.push(gitConfigEntry(key, value));
+    }
+  }
+  for (const parameters of shellVarValues('GIT_CONFIG_PARAMETERS')) {
+    for (const word of splitGitAlias(parameters) || []) {
+      for (let eq = word.indexOf('='); eq !== -1; eq = word.indexOf('=', eq + 1)) {
+        configs.push(gitConfigEntry(word.slice(0, eq), word.slice(eq + 1)));
+      }
+    }
+  }
+  for (const [name, key] of GIT_ENV_CONFIG_KEYS) {
+    for (const value of shellVarValues(name)) configs.push(gitConfigEntry(name, value, key));
+  }
+  return configs;
 }
 
 // The script a command-valued key runs, or null (#5045, #5492).
@@ -1162,11 +1308,12 @@ function gitOptionValues(specs, args) {
   for (let k = 0; k < args.length; k++) {
     const t = args[k];
     if (t === '--') continue;
-    const long = t.startsWith('--') ? t.slice(2) : getopt && /^-[^-]./.test(t) ? t.slice(1) : null;
+    const long = t.startsWith('--') ? t.slice(2) : getopt && /^[-+][^-]./.test(t) ? t.slice(1) : null;
     if (long !== null) {
       const eq = long.indexOf('=');
       const name = getopt ? (eq === -1 ? long : long.slice(0, eq)).toLowerCase() : eq === -1 ? long : long.slice(0, eq);
-      const spec = specs.find((s) => s.long && name.length >= (s.min || 1) && s.long.startsWith(name));
+      const min = (s) => (eq !== -1 && s.attachedMin) || s.min || 1;
+      const spec = specs.find((s) => s.long && name.length >= min(s) && s.long.startsWith(name));
       if (!spec) continue;
       if (eq !== -1) found.push([spec, long.slice(eq + 1)]);
       else if (spec.optional) found.push([spec, null]);
@@ -1186,13 +1333,12 @@ function gitOptionValues(specs, args) {
   return found;
 }
 
-// The pager a bare `git grep -O` runs: pager.grep unless it is a boolean,
-// else core.pager. It runs with no terminal, unlike paging.
-function gitGrepPager() {
-  const grep = gitConfigInForce('pager.grep');
-  if (grep && !GIT_BOOLEAN_RE.test(grep.value)) return grep.value;
-  const core = gitConfigInForce('core.pager');
-  return core ? core.value : null;
+// The pagers a bare `git grep -O` may run: GIT_PAGER, pager.grep unless it
+// is a boolean, core.pager and PAGER, in git's order; all are scanned. It
+// runs with no terminal, unlike paging.
+function gitGrepPagers() {
+  return [...gitConfigsInForce()].filter((config) => config.key === 'core.pager'
+    || (config.key === 'pager.grep' && !GIT_BOOLEAN_RE.test(config.value))).map((config) => config.value);
 }
 
 // Scripts a subcommand runs from its trailing words, rebuilt the way git
@@ -1281,15 +1427,21 @@ function gitExtScripts(words, own) {
  * of the command-valued -c keys (global or `clone -c`), a -c value naming a
  * secret file (git may quote it in an error), the alias the subcommand
  * invokes with the words after it and every other alias defined there, the
- * options and trailing words the subcommand runs, and ext:: URLs. -c values
+ * options and trailing words the subcommand runs, and ext:: URLs. Config
+ * set in the environment the command line sets (GIT_CONFIG_*,
+ * --config-env, the GIT_EDITOR-style twins) counts like -c, and -c values
  * stay in force for nested git commands, as git exports them. This
- * deliberately does not resolve config files, --config-env/GIT_CONFIG_*
- * values, the GIT_EDITOR-style environment twins, program-path keys, or keys
- * outside those sets: documented gaps, not a promise of complete Git config
- * analysis.
+ * deliberately does not resolve config files, environment values the
+ * command line does not set, program-path keys, or keys outside those sets:
+ * documented gaps, not a promise of complete Git config analysis.
  */
 function scanGitInvocation(operands, depth) {
-  if (depth === 0 && aliasHops === 0 && !gitConfigScope) aliasExpansions = 0;
+  // The alias budget is per git command, however it is reached; a nested git
+  // inside an alias or a script shares its outer command's budget.
+  if (aliasHops === 0 && !gitConfigScope) {
+    aliasExpansions = 0;
+    aliasLimitHit = false;
+  }
   const { sub, configs: globals } = walkGitGlobals(operands);
   const name = sub === -1 ? null : operands[sub].text;
   const rest = sub === -1 ? [] : operands.slice(sub + 1).map((w) => w.text);
@@ -1297,22 +1449,26 @@ function scanGitInvocation(operands, depth) {
   // #4856 pathspec exemption stays case-sensitive: both fail closed).
   const command = name && name.toLowerCase();
   const options = gitOptionValues(GIT_COMMAND_OPTIONS.get(command) || [], rest);
-  const own = [...globals, ...options.filter(([spec]) => spec.config).map(([, value]) => value)]
-    .map(parseGitConfig).filter(Boolean);
+  for (const file of GIT_CONFIG_FILE_VARS.flatMap(shellVarValues)) if (namesSecret(file)) return file;
+  // The environment's config comes in once, at the command the line runs: a
+  // plain-alias hop re-enters with it already in force.
+  const own = [
+    ...(aliasHops === 0 ? gitEnvConfigs() : []),
+    ...[...globals, ...options.filter(([spec]) => spec.config).map(([, value]) => value)]
+      .flatMap((config) => (typeof config === 'string' ? [parseGitConfig(config)] : gitConfigEnvEntries(config.configEnv))),
+  ].filter(Boolean);
   return withGitConfigs(own, aliasHops, () => {
     for (const config of own) {
       if (config.key.startsWith('alias.')) continue;
       const script = gitConfigScript(config);
-      if (script === null) {
-        if (namesSecret(config.value)) return config.value;
-        continue;
-      }
-      const hit = findSecretRead(script, depth + 1);
+      const hit = script === null ? null : findSecretRead(script, depth + 1);
       if (hit) return hit;
+      if (namesSecret(config.value)) return config.value;
     }
+    // Every definition of the invoked alias in force runs with the words
+    // after it: a variable may hold several values, and only one of them wins.
     const invoked = name === null ? null : `alias.${name.toLowerCase()}`;
-    const alias = invoked && gitConfigInForce(invoked);
-    if (alias) {
+    for (const alias of invoked ? [...gitConfigsInForce()].filter((config) => config.key === invoked) : []) {
       const hit = scanGitAlias(alias, rest, depth);
       if (hit) return hit;
     }
@@ -1323,7 +1479,7 @@ function scanGitInvocation(operands, depth) {
       if (hit) return hit;
     }
     const scripts = [
-      ...options.filter(([spec]) => !spec.config).map(([spec, value]) => (spec.optional && value === null ? gitGrepPager() : value)),
+      ...options.filter(([spec]) => !spec.config).flatMap(([spec, value]) => (spec.optional && value === null ? gitGrepPagers() : [value])),
       ...gitTrailingScripts(command, rest), ...gitExtScripts(rest, own),
     ];
     for (const script of scripts) {
@@ -1343,7 +1499,7 @@ function sshOptionScripts(operands) {
   for (let k = 0; k < operands.length; k++) {
     const t = operands[k].text;
     if (t === '--') break;
-    if (!/^-[A-Za-z]/.test(t)) continue;
+    if (!/^-[A-Za-z0-9]/.test(t)) continue;
     for (let i = 1; i < t.length; i++) {
       if (!SSH_VALUE_FLAGS.includes(t[i])) continue;
       const value = i + 1 < t.length ? t.slice(i + 1) : operands[++k] && operands[k].text;
@@ -1388,25 +1544,36 @@ function isListedFlag(text, flags) {
 
 // Walks git's global options (see GIT_GLOBAL_VALUE_OPTIONS). `sub` is the
 // subcommand's index, or -1 when an unlisted option (or the end of the words)
-// comes first; `configs` holds every `-c` value seen on the way, in order.
-// Past an unlisted option the subcommand cannot be located, so `configs`
-// conservatively takes the word after every later `-c` as well: a read
-// still needs a command-valued key, so a harmless value stays allowed.
+// comes first; `configs` holds every `-c` value and `--config-env` spec
+// seen on the way, in order, as git applies them (a spec as
+// `{ configEnv }`). Past an unlisted option the subcommand cannot be located,
+// so `configs` conservatively takes the word after every later `-c` /
+// `--config-env` as well: a read still needs a command-valued key, so a
+// harmless value stays allowed.
 function walkGitGlobals(operands) {
   const configs = [];
+  const collect = (option, value) => {
+    if (option === '-c') configs.push(value);
+    else if (option === '--config-env') configs.push({ configEnv: value });
+  };
   for (let k = 0; k < operands.length; k++) {
     const t = operands[k].text;
     if (!t.startsWith('-')) return { sub: k, configs };
     if (GIT_GLOBAL_VALUE_OPTIONS.has(t)) {
-      if (t === '-c' && k + 1 < operands.length) configs.push(operands[k + 1].text);
+      if (k + 1 < operands.length) collect(t, operands[k + 1].text);
       k++;
       continue;
     }
     if (GIT_GLOBAL_FLAGS.has(t)) continue;
     const eq = t.indexOf('=');
-    if (t.startsWith('--') && eq !== -1 && GIT_GLOBAL_EQUALS_FORM_OPTIONS.has(t.slice(0, eq))) continue;
-    for (let j = k + 1; j + 1 < operands.length; j++) {
-      if (operands[j].text === '-c') configs.push(operands[++j].text);
+    if (t.startsWith('--') && eq !== -1 && GIT_GLOBAL_EQUALS_FORM_OPTIONS.has(t.slice(0, eq))) {
+      collect(t.slice(0, eq), t.slice(eq + 1));
+      continue;
+    }
+    for (let j = k + 1; j < operands.length; j++) {
+      const w = operands[j].text;
+      if ((w === '-c' || w === '--config-env') && j + 1 < operands.length) collect(w, operands[++j].text);
+      else if (w.startsWith('--config-env=')) collect('--config-env', w.slice('--config-env='.length));
     }
     return { sub: -1, configs };
   }
@@ -1508,10 +1675,21 @@ function findSecretReadUnderOtherReadings(command) {
   return null;
 }
 
-// Returns the offending token text, or null.
+// Returns the offending token text, or null. The script's own variable
+// assignments are in scope for everything it runs, nested spans included.
 function findSecretRead(command, depth) {
-  const { tokens, nested } = tokenize(command);
+  const tokenized = tokenize(command);
+  const saved = shellVarScope;
+  shellVarScope = shellVarFrame(saved, scriptAssignments(tokenized.tokens));
+  try {
+    return scanScript(tokenized, depth);
+  } finally {
+    shellVarScope = saved;
+  }
+}
 
+function scanScript({ tokens, nested }, depth) {
+  const scriptScope = shellVarScope;
   for (const sub of nested) {
     if (depth < MAX_NESTING_DEPTH) {
       const hit = findSecretRead(sub, depth + 1);
@@ -1567,6 +1745,9 @@ function findSecretRead(command, depth) {
     if (!cmd) continue;
     const { base, operands } = cmd;
     const heredocs = heredocsBySeg.get(s) || [];
+    for (const file of cmd.reads) if (namesSecret(file)) return file;
+    // A prefix's variables reach this command and everything it runs.
+    shellVarScope = shellVarFrame(scriptScope, cmd.assigns);
 
     // eval concatenates ALL its operands and runs the result.
     if (base === 'eval') {
@@ -1757,11 +1938,26 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
   let subIdx = -1;
   for (let m = 0; m < operands.length; m++) {
     const t = operands[m].text;
-    if (t === '-a' || t === '--arg-file') { argFile = true; m++; continue; }
-    if (t.startsWith('--arg-file=')) { argFile = true; continue; }
-    if (XARGS_VALUE_FLAGS.has(t)) { m++; continue; }
-    if (t.startsWith('--') && t.includes('=')) continue;
-    if (t.startsWith('-')) continue; // no-value flag (-0 -r -t -p) or long flag
+    if (t === '--') { subIdx = m + 1 < operands.length ? m + 1 : -1; break; }
+    if (t.startsWith('--')) {
+      const eq = t.indexOf('=');
+      const name = t.slice(2, eq === -1 ? undefined : eq);
+      const matches = [...XARGS_LONG_OPTIONS.keys()].filter((long) => long.startsWith(name));
+      const long = XARGS_LONG_OPTIONS.has(name) ? name : matches.length === 1 ? matches[0] : null;
+      if (long === 'arg-file') argFile = true;
+      if (eq === -1 && XARGS_LONG_OPTIONS.get(long) === 'value') m++;
+      continue;
+    }
+    if (t.length > 1 && t.startsWith('-')) {
+      for (let i = 1; i < t.length; i++) {
+        if (t[i] === 'a') argFile = true;
+        if (XARGS_SHORT_OPTIONAL.includes(t[i])) break;
+        if (!XARGS_SHORT_VALUE.includes(t[i])) continue;
+        if (i === t.length - 1) m++;
+        break;
+      }
+      continue;
+    }
     subIdx = m;
     break;
   }
@@ -1771,6 +1967,11 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
   if (SHELL_INTERPRETERS.has(subBase)) {
     // Heredocs/here-strings belong to xargs, not the sub-shell; pass none.
     const hit = scanShellInterpreter(operands.slice(subIdx + 1), [], [], s, bySeg, sepAfter, depth);
+    if (hit) return hit;
+  } else {
+    // Any other sub-command (`git -c …`, `ssh -o …`) is scanned as the
+    // command xargs runs; stdin words only add operands after it.
+    const hit = findSecretRead(operands.slice(subIdx).map((w) => shellQuote(w.text)).join(' '), depth + 1);
     if (hit) return hit;
   }
   if (argFile) return null; // stdin replaced by a file — no pipeline inference
@@ -1919,61 +2120,71 @@ function normalizeKimiPayload(data) {
   return data;
 }
 
-let input = '';
-const stdinTimeout = setTimeout(() => allow(undefined), 3000);
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', chunk => input += chunk);
-process.stdin.on('end', () => {
-  clearTimeout(stdinTimeout);
-  try {
-    const data = normalizeKimiPayload(JSON.parse(input));
+function main() {
+  let input = '';
+  const stdinTimeout = setTimeout(() => allow(undefined), 3000);
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', chunk => input += chunk);
+  process.stdin.on('end', () => {
+    clearTimeout(stdinTimeout);
+    try {
+      const data = normalizeKimiPayload(JSON.parse(input));
 
-    // A null/primitive payload has nothing to guard — exit deliberately
-    // rather than throwing into the fail-open catch below (#2595 class).
-    if (data === null || typeof data !== 'object') {
-      allow(undefined);
-    }
-
-    const tool = bareToolName(data.tool_name);
-    if (tool !== 'Read' && tool !== 'Grep' && tool !== 'Bash') {
-      allow(undefined);
-    }
-    if (!data.tool_input || typeof data.tool_input !== 'object') {
-      allow(undefined);
-    }
-
-    // Every payload field is read TYPED in a single statement (#2547 class):
-    // `[]`/`{}` are truthy and a non-string degrades to '' here.
-    if (tool === 'Read') {
-      const filePath = typeof data.tool_input.file_path === 'string' ? data.tool_input.file_path : '';
-      if (namesSecret(filePath)) emitBlock('secret-read', tool, filePath);
-      allow(undefined);
-    }
-
-    if (tool === 'Grep') {
-      const grepPath = typeof data.tool_input.path === 'string' ? data.tool_input.path
-        : (typeof data.tool_input.file_path === 'string' ? data.tool_input.file_path : '');
-      if (namesSecret(grepPath)) emitBlock('secret-read', tool, grepPath);
-      const glob = typeof data.tool_input.glob === 'string' ? data.tool_input.glob : '';
-      if (glob !== '') {
-        const verdict = classifyGrepGlob(glob);
-        if (verdict) emitBlock(verdict, tool, glob);
+      // A null/primitive payload has nothing to guard — exit deliberately
+      // rather than throwing into the fail-open catch below (#2595 class).
+      if (data === null || typeof data !== 'object') {
+        allow(undefined);
       }
-      allow(undefined);
-    }
 
-    // Bash
-    const command = typeof data.tool_input.command === 'string' ? data.tool_input.command : '';
-    if (command === '') allow(undefined);
-    if (command.length > MAX_COMMAND_LENGTH) emitBlock('command-too-large', tool, '');
-    const hit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
-    if (hit !== null) emitBlock(aliasLimitHit ? 'alias-too-complex' : 'secret-read', tool, hit);
-    const spawn = findDebuggerCliSpawn(command, 0);
-    if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
-    allow(undefined);
-  } catch {
-    // Fail open — never block valid tool calls due to hook errors.
-    // ON_CRASH is declared ALLOW at module top (#3911).
-    crash(ON_CRASH, undefined);
-  }
-});
+      const tool = bareToolName(data.tool_name);
+      if (tool !== 'Read' && tool !== 'Grep' && tool !== 'Bash') {
+        allow(undefined);
+      }
+      if (!data.tool_input || typeof data.tool_input !== 'object') {
+        allow(undefined);
+      }
+
+      // Every payload field is read TYPED in a single statement (#2547 class):
+      // `[]`/`{}` are truthy and a non-string degrades to '' here.
+      if (tool === 'Read') {
+        const filePath = typeof data.tool_input.file_path === 'string' ? data.tool_input.file_path : '';
+        if (namesSecret(filePath)) emitBlock('secret-read', tool, filePath);
+        allow(undefined);
+      }
+
+      if (tool === 'Grep') {
+        const grepPath = typeof data.tool_input.path === 'string' ? data.tool_input.path
+          : (typeof data.tool_input.file_path === 'string' ? data.tool_input.file_path : '');
+        if (namesSecret(grepPath)) emitBlock('secret-read', tool, grepPath);
+        const glob = typeof data.tool_input.glob === 'string' ? data.tool_input.glob : '';
+        if (glob !== '') {
+          const verdict = classifyGrepGlob(glob);
+          if (verdict) emitBlock(verdict, tool, glob);
+        }
+        allow(undefined);
+      }
+
+      // Bash
+      const command = typeof data.tool_input.command === 'string' ? data.tool_input.command : '';
+      if (command === '') allow(undefined);
+      if (command.length > MAX_COMMAND_LENGTH) emitBlock('command-too-large', tool, '');
+      const hit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
+      if (hit !== null) emitBlock(aliasLimitHit ? 'alias-too-complex' : 'secret-read', tool, hit);
+      const spawn = findDebuggerCliSpawn(command, 0);
+      if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
+      allow(undefined);
+    } catch {
+      // Fail open — never block valid tool calls due to hook errors.
+      // ON_CRASH is declared ALLOW at module top (#3911).
+      crash(ON_CRASH, undefined);
+    }
+  });
+}
+
+if (require.main === module) {
+  main();
+}
+
+// Exported for tests only: the key sets and environment twins the git scan
+// uses, so a parity test compares them with its own oracle (#5492).
+module.exports = { GIT_COMMAND_CONFIG_KEYS, GIT_BANG_COMMAND_CONFIG_KEYS, GIT_CREDENTIAL_HELPER_KEYS, GIT_ENV_CONFIG_KEYS };
