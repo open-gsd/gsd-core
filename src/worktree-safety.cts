@@ -3295,9 +3295,9 @@ const HARNESS_COPY_COMPARE_LIMIT = 1024 * 1024;
  * #5812: whether `rel` in the residue is a copy the harness made — Claude Code
  * copies the ignored files `.worktreeinclude` names from the main checkout into
  * each worktree it creates — shown by a regular file of the same bytes at the
- * same path in the main checkout that resolves outside the residue (a source
- * reached through a link into the residue is the file being removed). Anything
- * else, an unreadable file included, is not a copy.
+ * same path in the main checkout that resolves outside `.claude/worktrees` (a
+ * source reached through a link into a residue may be removed by this sweep).
+ * Anything else, an unreadable file included, is not a copy.
  */
 function isHarnessCopy(dir: string, realDir: string, top: string, rel: string): boolean {
   try {
@@ -3305,8 +3305,10 @@ function isHarnessCopy(dir: string, realDir: string, top: string, rel: string): 
     const source = fs.lstatSync(path.join(top, rel));
     if (!held.isFile() || !source.isFile() || held.size !== source.size || held.size > HARNESS_COPY_COMPARE_LIMIT) return false;
     const sourceKey = pathCompareKey(fs.realpathSync.native(path.join(top, rel)), process.platform);
-    const dirKey = pathCompareKey(realDir, process.platform);
-    if (isContainedIn(sourceKey, dirKey)) return false;
+    // Inside `.claude/worktrees` the source is this residue or another one the
+    // same sweep may remove, so it is not a copy that survives (Codex review).
+    const sweptKey = pathCompareKey(path.dirname(realDir), process.platform);
+    if (isContainedIn(sourceKey, sweptKey)) return false;
     return fs.readFileSync(path.join(dir, rel)).equals(fs.readFileSync(path.join(top, rel)));
   } catch {
     return false;

@@ -2519,6 +2519,23 @@ describe('#4941 regression: reap-orphans removes unregistered .claude/worktrees 
     assert.strictEqual(fs.readFileSync(path.join(residue, 'config', '.env'), 'utf8'), 'KEY=only\n');
   });
 
+  // Codex review: a source inside another directory under `.claude/worktrees`
+  // may be removed by the same sweep, so it is not a surviving copy either.
+  test('a "copy" reached through a link into another directory under .claude/worktrees keeps the residue', () => {
+    const { repoDir, residue } = repoWithResidue('user-data-sibling');
+    excludeLocally(repoDir, '.env*', 'config');
+    const sibling = path.join(path.dirname(residue), 'shared', 'config');
+    fs.mkdirSync(sibling, { recursive: true });
+    fs.writeFileSync(path.join(sibling, '.env'), 'KEY=same\n');
+    fs.mkdirSync(path.join(residue, 'config'));
+    fs.writeFileSync(path.join(residue, 'config', '.env'), 'KEY=same\n');
+    fs.symlinkSync(sibling, path.join(repoDir, 'config'), 'junction');
+    const rows = reapOrphanWorktrees(repoDir, deadOwnerDeps()).filter((r) => r.path === residue);
+    assert.strictEqual(rows.length, 1, 'expected one row for the residue');
+    assert.deepStrictEqual([rows[0].status, rows[0].reason], ['skipped', 'residue_has_user_data']);
+    assert.strictEqual(fs.readFileSync(path.join(residue, 'config', '.env'), 'utf8'), 'KEY=same\n');
+  });
+
   // Codex review: a stranded `.gsd-reap-*` skips the branch comparison, but
   // not the user-data guard.
   test('a stranded .gsd-reap-* directory holding an ignored .env is kept as residue_has_user_data', () => {
