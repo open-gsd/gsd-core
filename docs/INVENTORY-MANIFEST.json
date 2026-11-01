@@ -241,6 +241,7 @@
       "autonomous-smart-discuss.md",
       "autonomous-ui-design-contract.md",
       "checkpoints.md",
+      "cicd-review-patterns.md",
       "common-bug-patterns.md",
       "compact-content-gate.md",
       "context-budget.md",
