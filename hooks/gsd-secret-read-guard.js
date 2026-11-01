@@ -1337,18 +1337,23 @@ const LAUNCHER_PAIR_OPTIONS = new Map([
   ['nix', new Set(['--option', '--arg', '--argstr', '--override-input', '--override-flake'])],
 ]);
 
-// Container runners: an operand may be an image, and `--entrypoint=` names the
-// command.
-const CONTAINER_LAUNCHERS = new Set(['docker', 'podman', 'nerdctl', 'docker-compose', 'podman-compose']);
+// Container runners: an operand may be an image, `--entrypoint=` names the
+// command, and kubectl's and oc's `--image=` names the image they run.
+const CONTAINER_LAUNCHERS = new Set(['docker', 'podman', 'nerdctl', 'docker-compose', 'podman-compose', 'kubectl', 'oc']);
+const CONTAINER_VALUE_PREFIXES = ['--entrypoint=', '--image='];
 
-// A launched command word's name. Under a container runner an image's `:tag`
-// or `@digest` is cut (`docker run curlimages/curl:8.5.0 …` runs curl) and
-// `--entrypoint=value` names the command it runs; elsewhere a word is read
-// whole (`scp curl@host:f` names no curl).
+// A launched command word's name. Under a container runner the value of
+// `--entrypoint=` or `--image=` counts as the word, and an image reference
+// (a word with a `/` repository path) loses its `:tag` or `@digest`
+// (`docker run curlimages/curl:8.5.0 …`, `kubectl run t
+// --image=curlimages/curl:8.5.0 -- …` run curl). Any other word is read whole
+// (`scp curl@host:f` names no curl).
 function launchedCurlName(text, container) {
   if (!container) return commandName(text);
-  const eq = text.startsWith('--entrypoint=') ? 12 : -1;
-  const name = commandName(eq === -1 ? text : text.slice(eq + 1));
+  const prefix = CONTAINER_VALUE_PREFIXES.find((p) => text.startsWith(p));
+  const word = prefix ? text.slice(prefix.length) : text;
+  const name = commandName(word);
+  if (!word.includes('/')) return name;
   const cut = name.search(/[:@]/);
   return cut > 0 ? name.slice(0, cut) : name;
 }
@@ -1912,7 +1917,8 @@ function xargsCommandIndex(operands, from, to) {
 // The string xargs replaces with each input among its options in
 // operands[from..to): `-I R`, `-IR`, BSD `-J R`, `-i` / `-iR` and
 // `--replace[=R]` (any unambiguous prefix; `{}` when no R), unless a later
-// `-L`, `-l` or `--max-lines` cancels it. null when xargs appends the input
+// `-L`, `-l`, `--max-lines`, or `-n` / `--max-args` with a count other than
+// 1, cancels it. null when xargs appends the input
 // after the command's words.
 function xargsReplaceString(operands, from, to) {
   let rep = null;
@@ -1926,6 +1932,10 @@ function xargsReplaceString(operands, from, to) {
         rep = eq === -1 ? '{}' : t.slice(eq + 1);
       } else if (name.length >= 7 && '--max-lines'.startsWith(name)) {
         rep = null;
+      } else if (name.length >= 7 && '--max-args'.startsWith(name)) {
+        const v = eq !== -1 ? t.slice(eq + 1) : m + 1 < to ? operands[m + 1].text : '';
+        if (v !== '1') rep = null;
+        if (eq === -1) m++;
       } else if (eq === -1 && XARGS_LONG_VALUE.some((l) => l.startsWith(t))) {
         m++;
       }
@@ -1941,9 +1951,14 @@ function xargsReplaceString(operands, from, to) {
         else if (m + 1 < to) rep = operands[++m].text;
         break;
       }
-      // GNU lets the last of -I/-i/--replace and -L/-l/--max-lines win: a
-      // later -L puts xargs back to appending its input (-n keeps -I).
+      // GNU lets the last of -I/-i/--replace and -L/-l/--max-lines/-n win: a
+      // later -L, or -n with any count but 1, puts xargs back to appending
+      // its input.
       if (t[c] === 'L' || t[c] === 'l') rep = null;
+      if (t[c] === 'n') {
+        const v = c < t.length - 1 ? t.slice(c + 1) : m + 1 < to ? operands[m + 1].text : '';
+        if (v !== '1') rep = null;
+      }
       if (XARGS_SHORT_ATTACHED.includes(t[c])) break;
       if (XARGS_SHORT_VALUE.includes(t[c])) {
         if (c === t.length - 1) m++;
