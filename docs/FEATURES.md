@@ -976,7 +976,7 @@ it did before this feature existed.
 |---------|------|---------|-------------|
 | `workflow.compact_content` | boolean | `false` | When `true`, loads token-minimized instruction/template/agent-persona variants wherever one is registered; falls back to canonical content everywhere else |
 
-**See also:** [ADR-4139](../adr/4139-compact-content-seam.md), [CONFIGURATION.md](../CONFIGURATION.md#workflow-toggles), [USER-GUIDE.md](../USER-GUIDE.md)
+**See also:** [ADR-4139](adr/4139-compact-content-seam.md), [CONFIGURATION.md](CONFIGURATION.md#workflow-toggles), [USER-GUIDE.md](USER-GUIDE.md)
 
 
 ---
@@ -1089,7 +1089,7 @@ mapper prompt; the message states how many were withheld and
 `withheld_paths` / `withheld_count` carry them for inspection. A directory with
 a non-ASCII or space-containing name is withheld and counted rather than
 dropped silently. If no safe path remains, `auto-remap` does not spawn the
-mapper. See [`verify codebase-drift`](../CLI-TOOLS.md#verify-codebase-drift-structural-drift-of-the-codebase-map-2003-5134).
+mapper. See [`verify codebase-drift`](CLI-TOOLS.md#verify-codebase-drift-structural-drift-of-the-codebase-map-2003-5134).
 
 **Non-blocking guarantee:** any internal failure (missing STRUCTURE.md,
 git errors, mapper spawn failure) logs a single line and the phase
@@ -1495,7 +1495,7 @@ Each reviewer is a **declared lane**: its binary, prompt and output channels, ti
 - Set `review.default_reviewers` in `.planning/config.json` (or via `gsd config-set`) to control no-flag `/gsd-review` fan-out.
 - `review.default_reviewers` may include configured `review.reviewer_instances` names; each instance runs as an independent reviewer identity backed by its configured adapter/model. Instance names are not CLI flags.
 - Use `--all` for a full pre-merge sweep without changing project defaults.
-- For local model servers with small context windows, set `review.max_prompt_tokens_per_reviewer` to auto-trim prompts per reviewer — see [Prompt budgets for small-context reviewers](../docs/CONFIGURATION.md#prompt-budgets-for-small-context-reviewers) in CONFIGURATION.md.
+- For local model servers with small context windows, set `review.max_prompt_tokens_per_reviewer` to auto-trim prompts per reviewer — see [Prompt budgets for small-context reviewers](docs/CONFIGURATION.md#prompt-budgets-for-small-context-reviewers) in CONFIGURATION.md.
 
 **Why record which model produced a review (#2295):** `reviewers:` in the frontmatter recorded which CLIs ran, but not which model each one resolved to. Without a pin, the model is whatever the CLI's own config or internal default happens to pick, so a "Codex vs Antigravity" comparison could quietly be a frontier model against a cheap-tier default with nothing in the record to say so — and a CLI update, or an unrelated config edit, could silently make past and future reviews incomparable.
 
@@ -2604,7 +2604,7 @@ lock (#4681); the disposition step does not take that lock. No lost update has b
 window is stated so it is not mistaken for a guarantee.
 
 Not to be confused with the **Review Dispositions Ledger** of reviews-mode planning
-([ADR-3806](../adr/3806-review-dispositions-ledger.md), `docs/features/review-dispositions-ledger.md`):
+([ADR-3806](adr/3806-review-dispositions-ledger.md), `docs/features/review-dispositions-ledger.md`):
 that one is a `## Review Dispositions Ledger` section inside `PLAN.md`, append-only per round, over
 `REVIEWS.md` findings. This artifact is a sibling file beside `REVIEW.md`, rewritten idempotently
 with rows carried. Same word, different inputs, writers, files and durability rules; neither governs
@@ -2627,7 +2627,7 @@ unchanged, so the disposition ledger records them like any other finding. Removi
 decision, so `--fix` skips necessity findings and `--fix --all` includes them last, each marked for
 human verification. `--fix --auto` also stops once the fixer reports nothing left in its scope,
 rather than re-running to its iteration cap over findings it will never touch. See
-[Resolve necessity findings](../how-to/resolve-necessity-findings.md).
+[Resolve necessity findings](how-to/resolve-necessity-findings.md).
 
 **CI/CD pipeline files (#4101):** workflow files, Dockerfiles, compose files and deploy scripts get
 their own reliability rubric, recognized by path rather than extension. Their defects rarely fail a
@@ -2642,7 +2642,7 @@ depth runs the mechanical subset on GitHub Actions workflows only. Pipeline find
 hardcoded secrets stay Critical. The REVIEW.md format and the fixer scope are unchanged. Quick mode's
 own check list now names its checks and runs each from one command block, which also closes a gap:
 quick reviews now catch secret values containing `-`, `.` or `/`, `passthru`, and commented-out code.
-See [Resolve CI/CD pipeline findings](../how-to/resolve-cicd-pipeline-findings.md).
+See [Resolve CI/CD pipeline findings](how-to/resolve-cicd-pipeline-findings.md).
 
 ---
 
@@ -3511,7 +3511,7 @@ explicit reviewer flags -> --all -> review.default_reviewers -> all detected rev
 - REQ-HUMAN-VERIFY-02: Human-needed verification MUST remain pending until the end-of-phase review resolves it.
 - REQ-HUMAN-VERIFY-03: Configs without the key MUST use `"end-of-phase"`.
 
-**Reference:** [Checkpoints Reference](../gsd-core/references/checkpoints.md)
+**Reference:** [Checkpoints Reference](gsd-core/references/checkpoints.md)
 
 ---
 
@@ -3643,7 +3643,7 @@ The resolved edges populate a `## Edge Coverage` section in `SPEC.md`. Unresolve
 
 The load-bearing wire is the `plan-phase` lift: `covered` and `backstop` edges become `must_haves.truths` the verifier can check, so the section is not merely documentation. A `backstop` edge is lifted as a **structured non-inferable marker** (`{ statement, verification: backstop }`, a flat scalar — not a prose note), which the **honest verifier** then consumes (see below) — closing the loop the edge-probe opened.
 
-**Honest verifier — abstention on non-inferable checks (#1154).** A non-inferable (`backstop`) truth is one whose correct behavior is not derivable from the spec alone, so the verifier cannot self-detect the gap and would confidently false-pass it (~100% of the time). At verify time, a `backstop` truth the verifier cannot confirm with **explicit evidence** (a passing wired held-out/property-based test, or a directly-observed behavior) **abstains** → `human_needed` with reason `insufficient_spec` (reported as `unverified — held-out test recommended`), **never a silent `passed`**. This is the verify-time, truth-axis mirror of the prohibition judgment-tier disposition (ADR-550 D4): exogenous (driven by the `backstop` tag, never a self-judged "abstain if unsure"), routing-not-diagnosis (the held-out test carries the omitted rule), and capable-tier dependent (reliable on `sonnet`+; the budget `haiku` tier degrades toward current behavior). An inferable truth is never abstained (the over-abstention guard). Reference: [Honest Verifier](../gsd-core/references/honest-verifier.md).
+**Honest verifier — abstention on non-inferable checks (#1154).** A non-inferable (`backstop`) truth is one whose correct behavior is not derivable from the spec alone, so the verifier cannot self-detect the gap and would confidently false-pass it (~100% of the time). At verify time, a `backstop` truth the verifier cannot confirm with **explicit evidence** (a passing wired held-out/property-based test, or a directly-observed behavior) **abstains** → `human_needed` with reason `insufficient_spec` (reported as `unverified — held-out test recommended`), **never a silent `passed`**. This is the verify-time, truth-axis mirror of the prohibition judgment-tier disposition (ADR-550 D4): exogenous (driven by the `backstop` tag, never a self-judged "abstain if unsure"), routing-not-diagnosis (the held-out test carries the omitted rule), and capable-tier dependent (reliable on `sonnet`+; the budget `haiku` tier degrades toward current behavior). An inferable truth is never abstained (the over-abstention guard). Reference: [Honest Verifier](gsd-core/references/honest-verifier.md).
 
 **Requirements:**
 - REQ-EDGE-01: The edge pass MUST run after the ambiguity gate and emit a `## Edge Coverage` SPEC section.
@@ -3656,7 +3656,7 @@ The load-bearing wire is the `plan-phase` lift: `covered` and `backstop` edges b
 - REQ-EDGE-08: `plan-phase` MUST lift a `backstop` edge into `must_haves.truths` as a structured flat-scalar marker (`{ statement, verification: backstop }`), never a prose parenthetical.
 - REQ-HONEST-01: At verify time a `backstop` truth that cannot be confirmed with explicit evidence MUST abstain → `human_needed` (reason `insufficient_spec`), never `passed`; an inferable truth MUST never be abstained (over-abstention guard); abstention MUST be exogenous (driven by the `backstop` tag, not self-judgment).
 
-**Reference:** [Edge Probe](../gsd-core/references/edge-probe.md)
+**Reference:** [Edge Probe](gsd-core/references/edge-probe.md)
 
 
 ---
@@ -3719,7 +3719,7 @@ The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, s
 - REQ-PROHIB-06: A well-formed but unwired `test`-tier prohibition MUST fail closed at verify time — never a silent pass.
 - REQ-PROHIB-07: A `test`-tier prohibition with a **machine-proven-fail-first**, genuinely-passing (non-vacuous) wired mechanical check (a `node --test` negative test OR a lint/AST rule) MUST dispose green and be satisfiable; a missing, un-provable, or non-passing check MUST hard-gate (flagged, non-green) in both interactive and autonomous modes. Fail-first is **machine-proven, not caller-attested** (#1279, ADR-550 D5d): before a clean pass greens, the producer independently runs the wired check against a known violation (the descriptor's `violationFixture`) and confirms it goes RED — a lint rule via the violating fixture, a node test via the violating subject injected through the `GSD_PROHIB_SUBJECT` convention; absent a violation source it fails closed, never falling back to attestation. (Enforcement half shipped #1259; deterministic descriptor auto-locate in #1278.)
 
-**Reference:** [Prohibition Probe](../gsd-core/references/prohibition-probe.md)
+**Reference:** [Prohibition Probe](gsd-core/references/prohibition-probe.md)
 
 ---
 
@@ -4431,8 +4431,8 @@ through a new call site.
   in `tests/eslint-rules.test.cjs` assert today's non-detection so a future widening is a visible
   choice, not a silent one.
 
-See [Resolve a raw-terminator finding](../how-to/resolve-a-raw-terminator-finding.md) for what to
-do when this rule fires, and [ADR-3889](../adr/3889-process-exit-contract.md) for the exit-code
+See [Resolve a raw-terminator finding](how-to/resolve-a-raw-terminator-finding.md) for what to
+do when this rule fires, and [ADR-3889](adr/3889-process-exit-contract.md) for the exit-code
 registry the seam is layered over.
 
 ---
@@ -4486,9 +4486,9 @@ integer follows `process.exit(` in its outer `catch`.
   emit a stderr diagnostic and exit 0 instead of silently allowing every
   commit (#3838).
 
-See [Declare a hook's crash policy](../how-to/declare-a-hook-crash-policy.md)
+See [Declare a hook's crash policy](how-to/declare-a-hook-crash-policy.md)
 for the full how-to, and
-[ADR-3889](../adr/3889-process-exit-contract.md) for the exit-code registry
+[ADR-3889](adr/3889-process-exit-contract.md) for the exit-code registry
 this vocabulary is layered over.
 
 ---
@@ -4496,7 +4496,7 @@ this vocabulary is layered over.
 ### 3912. gsd-tools Declares Outcomes, Pinned at v1
 
 **Purpose:** Give every `gsd-tools` terminating path a declared outcome name, and project that
-declaration through the versioned exit contract ([ADR-3889](../adr/3889-process-exit-contract.md)
+declaration through the versioned exit contract ([ADR-3889](adr/3889-process-exit-contract.md)
 §4) — without changing a single exit code for a caller that has not opted in.
 
 **Reference — what changed (ADR-3889 Phase 8, #3912):**
@@ -4527,7 +4527,7 @@ declaration through the versioned exit contract ([ADR-3889](../adr/3889-process-
   validate --strict` briefly exited `0` where it must exit `1`.
 - **`v1` is byte-identical.** `DEGRADED` projects to `0` under `v1` and to `80`
   (`exitCodeFor('DEGRADED')`) under `v2` — that asymmetry is
-  [ADR-2980](../adr/2980-payload-carried-error-is-a-degraded-result.md)'s compatibility boundary,
+  [ADR-2980](adr/2980-payload-carried-error-is-a-degraded-result.md)'s compatibility boundary,
   deliberately preserved, not a bug to reconcile.
 
 **Explanation — why this is the shape it is:**
@@ -4548,11 +4548,11 @@ concentrated in `frontmatter.cts`, `phase.cts`, and `roadmap.cts`. The `v2` proj
 over the enumerated 64, not a restated 60; see ADR-2980's amendment for the module-by-module
 breakdown.
 
-See [Adopt the v2 exit contract](../how-to/adopt-the-v2-exit-contract.md) for how to opt in and what
-it means for a CI gate, [`docs/json-errors.md`](../json-errors.md#outcome-declaration-and-the-versioned-exit-contract-adr-3889-4-3912)
+See [Adopt the v2 exit contract](how-to/adopt-the-v2-exit-contract.md) for how to opt in and what
+it means for a CI gate, [`docs/json-errors.md`](json-errors.md#outcome-declaration-and-the-versioned-exit-contract-adr-3889-4-3912)
 for the full reference, and
-[ADR-2980](../adr/2980-payload-carried-error-is-a-degraded-result.md) /
-[ADR-3889](../adr/3889-process-exit-contract.md) for the decisions.
+[ADR-2980](adr/2980-payload-carried-error-is-a-degraded-result.md) /
+[ADR-3889](adr/3889-process-exit-contract.md) for the decisions.
 
 ---
 
@@ -4644,10 +4644,10 @@ from the tracker at execution time instead of reading it inline out of `PLAN.md`
   reliability at that layer is an open concern (#3647) — see ADR-3646's Context and Rejected
   Alternatives for the full reasoning.
 
-See [Develop a task-content resolver capability](../how-to/develop-a-task-content-resolver-capability.md)
-for the authoring walkthrough, [Capability manifest → `taskContentResolver`](../reference/capability-manifest.md#taskcontentresolver)
+See [Develop a task-content resolver capability](how-to/develop-a-task-content-resolver-capability.md)
+for the authoring walkthrough, [Capability manifest → `taskContentResolver`](reference/capability-manifest.md#taskcontentresolver)
 for the field reference, and
-[`loop-hook-dispatch.md`](../../gsd-core/references/loop-hook-dispatch.md#the-executetask-point-a-different-shape)
+[`loop-hook-dispatch.md`](../gsd-core/references/loop-hook-dispatch.md#the-executetask-point-a-different-shape)
 for how `execute:task` differs from the twelve prose-dispatched points.
 
 ---
