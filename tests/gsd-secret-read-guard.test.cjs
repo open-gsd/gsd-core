@@ -1523,6 +1523,10 @@ describe('gsd-secret-read-guard: hooks.secret_read_exempt (#4432)', () => {
 
   let repo;
   const abs = (rel) => path.join(repo, rel);
+  // A Bash command must single-quote an absolute path: on Windows it contains
+  // backslashes, which an unquoted shell word treats as escapes (`\a` -> `a`),
+  // so the guard would see a path with no `.env` basename and miss the secret.
+  const absq = (rel) => `'${abs(rel)}'`;
   // The shipping-caller shape: the runtime puts the session cwd in the payload.
   const withCwd = (payload) => ({ ...payload, cwd: repo });
   const run = (payload) => runHook(withCwd(payload));
@@ -1647,8 +1651,8 @@ describe('gsd-secret-read-guard: hooks.secret_read_exempt (#4432)', () => {
   // Row 10.
   test('Bash absolute path honors the exemption', () => {
     listed('.env.production');
-    assertAllowed(run(bash(`cat ${abs('.env.production')}`)), 'cat abs');
-    assertBlocked(run(bash(`cat ${abs('.env')}`)), 'cat unlisted abs', { tool: 'Bash', path: abs('.env') });
+    assertAllowed(run(bash(`cat ${absq('.env.production')}`)), 'cat abs');
+    assertBlocked(run(bash(`cat ${absq('.env')}`)), 'cat unlisted abs', { tool: 'Bash', path: abs('.env') });
   });
 
   // Row 11.
@@ -1661,33 +1665,34 @@ describe('gsd-secret-read-guard: hooks.secret_read_exempt (#4432)', () => {
   // Row 12.
   test('an exempt operand does not end the scan', () => {
     listed('.env.production');
-    assertBlocked(run(bash(`cat ${abs('.env.production')} .env`)), 'exempt then secret', { tool: 'Bash', path: '.env' });
-    assertBlocked(run(bash(`cat .env ${abs('.env.production')}`)), 'secret then exempt', { tool: 'Bash', path: '.env' });
+    assertBlocked(run(bash(`cat ${absq('.env.production')} .env`)), 'exempt then secret', { tool: 'Bash', path: '.env' });
+    assertBlocked(run(bash(`cat .env ${absq('.env.production')}`)), 'secret then exempt', { tool: 'Bash', path: '.env' });
   });
 
   // F3: a Bash exemption holds only when every command in the line is read-only.
   test('Bash exemption requires a read-only command line', () => {
     listed('.env.production');
     const p = abs('.env.production');
-    assertAllowed(run(bash(`cat ${p}`)), 'cat');
-    assertAllowed(run(bash(`cat ${p} | grep KEY`)), 'cat | grep');
-    assertAllowed(run(bash(`head -n 1 ${p} 2>/dev/null`)), 'head, stderr to /dev/null');
-    assertAllowed(run(bash(`timeout 5 cat ${p}`)), 'wrapper then cat');
-    assertBlocked(run(bash(`mv a b && cat ${p}`)), 'mv before cat', { tool: 'Bash', path: p });
-    assertBlocked(run(bash(`ln -s x y; head ${p}`)), 'ln before head', { tool: 'Bash', path: p });
-    assertBlocked(run(bash(`cat ${p} | sh`)), 'cat piped to sh', { tool: 'Bash', path: p });
-    assertBlocked(run(bash(`cat $(echo x) ${p}`)), 'substitution body', { tool: 'Bash', path: p });
-    assertBlocked(run(bash(`cat \`echo x\` ${p}`)), 'backtick body', { tool: 'Bash', path: p });
-    assertBlocked(run(bash(`cat ${p} > out.txt`)), 'output redirect to a file', { tool: 'Bash', path: p });
-    assertBlocked(run(bash(`sort -o out.txt ${p}`)), 'sort -o writes', { tool: 'Bash', path: p });
-    assertBlocked(run(bash(`rg --pre sh KEY ${p}`)), 'rg --pre runs a command', { tool: 'Bash', path: p });
+    const pq = absq('.env.production');
+    assertAllowed(run(bash(`cat ${pq}`)), 'cat');
+    assertAllowed(run(bash(`cat ${pq} | grep KEY`)), 'cat | grep');
+    assertAllowed(run(bash(`head -n 1 ${pq} 2>/dev/null`)), 'head, stderr to /dev/null');
+    assertAllowed(run(bash(`timeout 5 cat ${pq}`)), 'wrapper then cat');
+    assertBlocked(run(bash(`mv a b && cat ${pq}`)), 'mv before cat', { tool: 'Bash', path: p });
+    assertBlocked(run(bash(`ln -s x y; head ${pq}`)), 'ln before head', { tool: 'Bash', path: p });
+    assertBlocked(run(bash(`cat ${pq} | sh`)), 'cat piped to sh', { tool: 'Bash', path: p });
+    assertBlocked(run(bash(`cat $(echo x) ${pq}`)), 'substitution body', { tool: 'Bash', path: p });
+    assertBlocked(run(bash(`cat \`echo x\` ${pq}`)), 'backtick body', { tool: 'Bash', path: p });
+    assertBlocked(run(bash(`cat ${pq} > out.txt`)), 'output redirect to a file', { tool: 'Bash', path: p });
+    assertBlocked(run(bash(`sort -o out.txt ${pq}`)), 'sort -o writes', { tool: 'Bash', path: p });
+    assertBlocked(run(bash(`rg --pre sh KEY ${pq}`)), 'rg --pre runs a command', { tool: 'Bash', path: p });
   });
 
   // Row 13.
   test('ref:path never exempt', () => {
     listed('.env.production');
     assertBlocked(run(bash('git show HEAD:.env.production')), 'git show', { tool: 'Bash' });
-    assertBlocked(run(bash(`git show HEAD:${abs('.env.production')}`)), 'git show abs', { tool: 'Bash' });
+    assertBlocked(run(bash(`git show HEAD:${absq('.env.production')}`)), 'git show abs', { tool: 'Bash' });
   });
 
   // Row 14.
@@ -1707,7 +1712,7 @@ describe('gsd-secret-read-guard: hooks.secret_read_exempt (#4432)', () => {
     listed('.env', 'apps/api/.env.production');
     assertBlocked(run(read(abs('.env'))), 'untracked .env', { tool: 'Read', path: abs('.env') });
     assertBlocked(run(read(abs('apps/api/.env.production'))), 'untracked nested', { tool: 'Read' });
-    assertBlocked(run(bash(`cat ${abs('.env')}`)), 'untracked via Bash', { tool: 'Bash', path: abs('.env') });
+    assertBlocked(run(bash(`cat ${absq('.env')}`)), 'untracked via Bash', { tool: 'Bash', path: abs('.env') });
   });
 
   // Row 23.
@@ -1736,7 +1741,7 @@ describe('gsd-secret-read-guard: hooks.secret_read_exempt (#4432)', () => {
 
   // Row 34.
   test('option-value absolute path honors the exemption', () => {
-    const cmd = `cat --env-file=${abs('.env.production')}`;
+    const cmd = `cat --env-file=${absq('.env.production')}`;
     configure(undefined);
     assertBlocked(run(bash(cmd)), 'control: unconfigured', { tool: 'Bash' });
     listed('.env.production');
@@ -1781,7 +1786,7 @@ describe('gsd-secret-read-guard: hooks.secret_read_exempt (#4432)', () => {
     fc.assert(
       fc.property(SECRET, (name) => {
         assertBlocked(run(read(abs(name))), name, { tool: 'Read', path: abs(name) });
-        assertBlocked(run(bash(`cat ${abs(name)}`)), name, { tool: 'Bash', path: abs(name) });
+        assertBlocked(run(bash(`cat ${absq(name)}`)), name, { tool: 'Bash', path: abs(name) });
         return true;
       }),
       PROPERTY_RUNS,
