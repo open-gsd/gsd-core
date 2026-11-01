@@ -45,6 +45,6 @@ These are not findings. Close them with a note, rather than changing the pipelin
 |---|---|
 | `quick` reported nothing for a Dockerfile or deploy script | `quick` checks GitHub Actions workflows only. Run `standard`. |
 | `quick` missed an unbounded job written in flow style (`jobs: { build: { … } }`) | The quick timeout check reads block-style YAML. `standard` reads the file. |
-| `quick` missed `npm install` | It is skipped on comment lines and global installs, and only applies when a lockfile exists. |
+| `quick` missed `npm install` | It is skipped on comment lines and global installs, and only runs when `package-lock.json` exists in the directory the review runs from (the project root). A lockfile in a monorepo subdirectory is not seen; run `standard`. |
 | The Summary says the CI/CD reference could not be read | The installation is missing `gsd-core/references/cicd-review-patterns.md`. The reviewer still applied the eight checks from its own rubric; reinstall to restore the full rubric. |
 | No pipeline file in REVIEW.md's file list | The file was not in scope. Pass it with `--files`. |

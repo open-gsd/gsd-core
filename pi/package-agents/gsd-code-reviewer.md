@@ -82,7 +82,7 @@ Checks (commands in `review_by_depth`):
 - Non-idempotent install
 - Missing job timeout
 
-The last three: GitHub Actions workflows only; the install check only with a `package-lock.json`.
+The last three: GitHub Actions workflows only.
 
 **standard** (default) — Read each changed file. Check for bugs, security issues, and quality problems in context. Cross-reference imports and exports. Target: 5-15 minutes.
 
@@ -92,7 +92,7 @@ Language-aware checks:
 - **Go**: Unchecked error returns, goroutine leaks, context not passed, `defer` in loops, race conditions
 - **C/C++**: Buffer overflow patterns, use-after-free indicators, null pointer dereferences, missing bounds checks, memory leaks
 - **Shell**: Unquoted variables, `eval` usage, missing `set -e`, command injection via interpolation
-- **CI/CD pipelines** (by path: `.github/workflows/*.yml`, `Dockerfile*`, `docker-compose*.yml`, deploy scripts): Read `__GSD_PI_ENGINE_ROOT__/gsd-core/references/cicd-review-patterns.md`; if it cannot be read, say so in the Summary and check: non-idempotent steps (`npm install` vs `npm ci`), no job `timeout-minutes`, deploy without `concurrency` + `cancel-in-progress`, per-environment rebuild (not build-once), no health check or rollback, load-bearing `continue-on-error`, static credentials where OIDC works, unpinned actions
+- **CI/CD pipelines** (by path: `.github/workflows/*.yml`, `Dockerfile*`, `docker-compose*.yml`, deploy scripts): Read `__GSD_PI_ENGINE_ROOT__/gsd-core/references/cicd-review-patterns.md`; if it cannot be read, say so in the Summary and check: non-idempotent steps (`npm install` vs `npm ci`, unlocked `pip install`, unguarded `mkdir`/`rm`), no job `timeout-minutes`, deploy without `concurrency` + `cancel-in-progress`, per-environment rebuild (not build-once), no health check or rollback, load-bearing `continue-on-error`, static credentials where OIDC works, unpinned actions
 
 **deep** — All of standard, plus cross-file analysis. Trace function call chains across imports. Target: 15-30 minutes.
 
@@ -204,28 +204,28 @@ Branch on depth level:
 **For depth=quick:**
 Run every check from `<depth_levels>` quick section:
 ```bash
-# FILE = one file in scope; the last three run on .github/workflows/ files only.
+# Set FILE per scoped path with: while IFS= read -r FILE (never paste a name into code).
 
 # Hardcoded secrets
-grep -n -E "(password|secret|api_key|token|apikey|api-key)\s*[=:]\s*['\"][^'\"]+['\"]" "$FILE"
+grep -n -E -- "(password|secret|api_key|token|apikey|api-key)\s*[=:]\s*['\"][^'\"]+['\"]" "$FILE"
 
 # Dangerous functions
-grep -n -E "eval\(|innerHTML|dangerouslySetInnerHTML|exec\(|system\(|shell_exec|passthru" "$FILE"
+grep -n -E -- "eval\(|innerHTML|dangerouslySetInnerHTML|exec\(|system\(|shell_exec|passthru" "$FILE"
 
 # Debug artifacts
-grep -n -E "console\.log|debugger;|TODO|FIXME|XXX|HACK" "$FILE"
+grep -n -E -- "console\.log|debugger;|TODO|FIXME|XXX|HACK" "$FILE"
 
 # Empty catch blocks
-grep -n -E "catch\s*\([^)]*\)\s*\{\s*\}" "$FILE"
+grep -n -E -- "catch\s*\([^)]*\)\s*\{\s*\}" "$FILE"
 
 # Commented-out code
-grep -n -E "^\s*//.*[{};]|^\s*#.*:|^\s*/\*" "$FILE"
+grep -n -E -- "^\s*//.*[{};]|^\s*#[[:space:]]*(if|for|while|def|class|elif|else|try|except|with)[[:space:](].*:[[:space:]]*$|^\s*/\*[^*].*[{};]" "$FILE"
 
 # Unpinned actions
-grep -n -E "uses:[[:space:]]*['\"]?[^[:space:]'\"]+@(main|master|latest)['\"]?([[:space:]]|$)" "$FILE"
+grep -n -E -- "^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*['\"]?[^[:space:]'\"]+@(main|master|latest)['\"]?([[:space:]]|$)" "$FILE"
 
 # Non-idempotent install
-grep -n -E "(^|[^[:alnum:]_-])npm[[:space:]]+(install|i)([[:space:]]|$)" "$FILE" | grep -v -E "^[0-9]+:[[:space:]]*#|[[:space:]](-g|--global)([[:space:]]|$)"
+[ -f package-lock.json ] && grep -n -E -- "(^|[^[:alnum:]_-])npm[[:space:]]+(install|i)([[:space:]]|$)" "$FILE" | grep -v -E "^[0-9]+:[[:space:]]*#|[[:space:]](-g|--global)([[:space:]]|$)"
 
 # Missing job timeout
 awk '
@@ -287,7 +287,7 @@ For each finding, assign severity:
 - Type coercion issues (`==` vs `===`)
 - Unhandled promise rejections
 - Dead code paths that indicate logic errors
-- CI/CD pipeline: no job timeout, unpinned action, non-idempotent install, no deploy concurrency guard, per-environment rebuild, no health check or rollback, load-bearing `continue-on-error`, static credentials
+- CI/CD pipeline findings: every check in the CI/CD entry
 
 **Info** — Style issues, naming improvements, dead code, unused imports, suggestions:
 - Unused imports/variables

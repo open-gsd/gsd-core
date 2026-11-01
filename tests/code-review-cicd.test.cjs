@@ -49,6 +49,8 @@ const STANDARD_CHECK_TERMS = [
   'npm ci', 'timeout-minutes', 'cancel-in-progress', 'build-once',
   'health check', 'rollback', 'continue-on-error', 'OIDC', 'unpinned',
 ];
+// Path keys the CI/CD entry and the CI/CD file group must both name.
+const PATH_KEYS = ['.github/workflows/', 'Dockerfile', 'docker-compose', 'deploy'];
 
 function step(src, name) {
   const open = src.indexOf(`<step name="${name}">`);
@@ -92,8 +94,8 @@ function declaredChecks(name) {
   return out;
 }
 
-/** Run one shipped quick check against a fixture; return the flagged line numbers. */
-function runCheck(name, label, contentLines, { eol = '\n', file = '.github/workflows/ci.yml' } = {}) {
+/** Run one shipped quick check against a fixture in a temp working directory (with a package-lock.json unless lockfile: false); return the flagged line numbers. */
+function runCheck(name, label, contentLines, { eol = '\n', file = '.github/workflows/ci.yml', lockfile = true } = {}) {
   const command = quickChecks(name).get(label);
   assert.ok(command, `${name}: quick fence must carry a "${label}" check`);
   const dir = createTempDir('gsd-4101-quick-');
@@ -101,14 +103,20 @@ function runCheck(name, label, contentLines, { eol = '\n', file = '.github/workf
     const target = path.join(dir, ...file.split('/'));
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, contentLines.join(eol) + eol);
+    if (lockfile) fs.writeFileSync(path.join(dir, 'package-lock.json'), '{}\n');
     const r = runHook('-c', [command], {
-      interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS, env: { ...process.env, FILE: target },
+      interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS, env: { ...process.env, FILE: target }, cwd: dir,
     });
     assert.strictEqual(r.outcome, OUTCOME.EXITED, r.stderr);
     assert.ok(r.exitCode === 0 || r.exitCode === 1, `${label} must exit 0 or 1, got ${r.exitCode}: ${r.stderr}`);
-    return r.stdout.split('\n').filter(Boolean).map((l) => Number(l.match(/^(\d+):/)?.[1]));
+    const lines = r.stdout.split('\n').filter(Boolean);
+    for (const l of lines) assert.match(l, /^\d+:/, `${label} printed a line that is not "N:…": ${JSON.stringify(l)}`);
+    return lines.map((l) => Number(l.slice(0, l.indexOf(':'))));
   } finally { cleanup(dir); }
 }
+
+/** A one-job workflow (job-level timeout set, so only the check under test can fire) followed by `stepLines`. */
+const workflow = (stepLines) => ['jobs:', '  build:', '    runs-on: ubuntu-latest', '    timeout-minutes: 5', '    steps:', ...stepLines];
 
 describe('#4101 quick-mode parity', () => {
   for (const name of REVIEWERS) {
@@ -133,42 +141,50 @@ describe('#4101 quick-mode drift fix (executed fence matches the declared rubric
       assert.deepStrictEqual(runCheck(name, 'Dangerous functions', ['ok();', 'passthru($cmd);'], { file: 'src/a.php' }), [2]);
       assert.deepStrictEqual(runCheck(name, 'Commented-out code', ['ok();', '// legacy();'], { file: 'src/a.js' }), [2]);
     });
+
+    test(`${name}: JSDoc openers and prose comments are not commented-out code`, { skip: !HAS_BASH }, () => {
+      assert.deepStrictEqual(runCheck(name, 'Commented-out code', ['/**', ' * Adds two numbers.', ' */', '# Note: fine', '# if x:', '/* x = 1; */'], { file: 'src/a.py' }), [5, 6]);
+    });
   }
 });
 
 describe('#4101 quick check: unpinned actions', () => {
-  const steps = (uses) => ['jobs:', '  build:', '    runs-on: ubuntu-latest', '    timeout-minutes: 5', '    steps:', ...uses.map((u) => `      - uses: ${u}`)];
-
   for (const name of REVIEWERS) {
     test(`${name}: mutable refs are flagged`, { skip: !HAS_BASH }, () => {
-      const lines = steps(['a/b@main', 'a/b@master', 'a/b@latest', '"a/b@main"', "'a/b/sub@master'", 'a/b@main # comment']);
+      const lines = workflow(['a/b@main', 'a/b@master', 'a/b@latest', '"a/b@main"', "'a/b/sub@master'", 'a/b@main # comment'].map((u) => `      - uses: ${u}`));
       assert.deepStrictEqual(runCheck(name, 'Unpinned actions', lines), [6, 7, 8, 9, 10, 11]);
       assert.deepStrictEqual(runCheck(name, 'Unpinned actions', lines, { eol: '\r\n' }), [6, 7, 8, 9, 10, 11]);
     });
 
     test(`${name}: pins and look-alikes are not flagged`, { skip: !HAS_BASH }, () => {
-      const lines = steps(['actions/checkout@v4', `a/b@${'a'.repeat(40)}`, './local-action', 'a/b@main-v2', 'a/b@mainline', 'docker://alpine:latest']);
+      const lines = workflow(['actions/checkout@v4', `a/b@${'a'.repeat(40)}`, './local-action', 'a/b@main-v2', 'a/b@mainline', 'docker://alpine:latest'].map((u) => `      - uses: ${u}`));
       assert.deepStrictEqual(runCheck(name, 'Unpinned actions', lines), []);
+    });
+
+    test(`${name}: uses: text inside a run block is not flagged`, { skip: !HAS_BASH }, () => {
+      assert.deepStrictEqual(runCheck(name, 'Unpinned actions', workflow(['      - run: |', '          echo "uses: x/y@main"'])), []);
     });
   }
 });
 
 describe('#4101 quick check: non-idempotent install', () => {
-  const job = (runs) => ['jobs:', '  build:', '    runs-on: ubuntu-latest', '    timeout-minutes: 5', '    steps:', ...runs];
-
   for (const name of REVIEWERS) {
     test(`${name}: npm install / npm i are flagged, including in block scalars`, { skip: !HAS_BASH }, () => {
-      const lines = job(['      - run: npm install', '      - run: npm i', '      - run: |', '          echo hi', '          npm install --save-dev x']);
+      const lines = workflow(['      - run: npm install', '      - run: npm i', '      - run: |', '          echo hi', '          npm install --save-dev x']);
       assert.deepStrictEqual(runCheck(name, 'Non-idempotent install', lines), [6, 7, 10]);
       assert.deepStrictEqual(runCheck(name, 'Non-idempotent install', lines, { eol: '\r\n' }), [6, 7, 10]);
     });
 
     test(`${name}: ci, global installs, comments and look-alikes are not flagged`, { skip: !HAS_BASH }, () => {
-      const lines = job([
+      const lines = workflow([
         '      - run: npm ci', '      - run: npm install -g typescript', '      - run: npm install --global x',
         '      # - run: npm install', '      - run: pnpm install', '      - run: npm install-test', '      - run: npm i18n',
       ]);
       assert.deepStrictEqual(runCheck(name, 'Non-idempotent install', lines), []);
+    });
+
+    test(`${name}: nothing is flagged when the repository has no package-lock.json`, { skip: !HAS_BASH }, () => {
+      assert.deepStrictEqual(runCheck(name, 'Non-idempotent install', workflow(['      - run: npm install']), { lockfile: false }), []);
     });
   }
 });
@@ -226,21 +242,31 @@ describe('#4101 quick check: missing job timeout', () => {
       timeout: fc.constantFrom('none', 'job', 'step'),
       timeoutFirst: fc.boolean(),
       extra: fc.boolean(),
+      noise: fc.boolean(),
     });
-    fc.assert(fc.property(fc.array(jobArb, { minLength: 0, maxLength: 5 }), (jobs) => {
+    const workflowArb = fc.tuple(fc.constantFrom(2, 4), fc.array(jobArb, { minLength: 0, maxLength: 5 }));
+    fc.assert(fc.property(workflowArb, ([indent, jobs]) => {
       const lines = ['name: ci', 'on: push', 'jobs:'];
       const expected = [];
+      const pad = (n) => ' '.repeat(n);
+      const p = pad(indent * 2);
       jobs.forEach((j, i) => {
         const keyLine = lines.length + 1;
-        lines.push(`  job-${i}:`);
+        lines.push(`${pad(indent)}job-${i}:`);
         const props = [];
-        if (j.kind === 'runner') props.push('    runs-on: ubuntu-latest');
-        else props.push('    uses: org/repo/.github/workflows/x.yml@v1');
-        if (j.extra) props.push('    env:', '      A: "1"');
-        if (j.timeout === 'job') props[j.timeoutFirst ? 'unshift' : 'push']('    timeout-minutes: 10');
+        if (j.kind === 'runner') props.push(`${p}runs-on: ubuntu-latest`);
+        else props.push(`${p}uses: org/repo/.github/workflows/x.yml@v1`);
+        if (j.extra) props.push(`${p}env:`, `${p}${pad(indent)}A: "1"`);
+        if (j.noise) props.push(`${p}# runs-on: comment`);
+        if (j.timeout === 'job') props[j.timeoutFirst ? 'unshift' : 'push'](`${p}timeout-minutes: 10`);
         if (j.kind === 'runner') {
-          props.push('    steps:', '      - run: make');
-          if (j.timeout === 'step') props.push('        timeout-minutes: 3');
+          const s = `${p}${pad(indent)}`;
+          props.push(`${p}steps:`, `${s}- run: make`);
+          if (j.timeout === 'step') props.push(`${s}${pad(2)}timeout-minutes: 3`);
+          if (j.noise) {
+            const b = `${s}${pad(4)}`;
+            props.push(`${s}- run: |`, `${b}runs-on: fake`, `${b}timeout-minutes: 1`);
+          }
         }
         lines.push(...props);
         if (j.kind === 'runner' && j.timeout !== 'job') expected.push(keyLine);
@@ -257,7 +283,7 @@ describe('#4101 standard-mode rubric', () => {
       const at = src.indexOf('**CI/CD pipelines**');
       assert.notStrictEqual(at, -1, `${name} must carry the CI/CD pipelines entry`);
       const bullet = src.slice(at, src.indexOf('\n', at));
-      for (const key of ['.github/workflows/', 'Dockerfile', 'docker-compose', 'deploy']) {
+      for (const key of PATH_KEYS) {
         assert.ok(bullet.includes(key), `${name} CI/CD entry must key on ${key}`);
       }
       for (const term of STANDARD_CHECK_TERMS) assert.ok(bullet.includes(term), `${name} CI/CD entry must name ${term}`);
@@ -271,7 +297,7 @@ describe('#4101 standard-mode rubric', () => {
       const at = scope.indexOf('CI/CD');
       assert.notStrictEqual(at, -1, `${name} scope_files must define a CI/CD group`);
       const group = scope.slice(at, scope.indexOf('\n', at));
-      for (const key of ['.github/workflows/', 'Dockerfile', 'docker-compose', 'deploy']) {
+      for (const key of PATH_KEYS) {
         assert.ok(group.includes(key), `${name} CI/CD group must name ${key}`);
       }
     });
@@ -281,9 +307,7 @@ describe('#4101 standard-mode rubric', () => {
       const critical = cls.slice(cls.indexOf('**Critical**'), cls.indexOf('**Warning**'));
       const warning = cls.slice(cls.indexOf('**Warning**'), cls.indexOf('**Info**'));
       assert.ok(/hardcoded secrets/i.test(critical), `${name} must keep secrets Critical`);
-      for (const term of ['pipeline', 'timeout', 'unpinned', 'rollback', 'concurrency']) {
-        assert.ok(warning.toLowerCase().includes(term), `${name} Warning tier must name ${term}`);
-      }
+      assert.ok(warning.includes('CI/CD pipeline findings: every check in the CI/CD entry'), `${name} Warning tier must carry every CI/CD check`);
     });
   }
 });
