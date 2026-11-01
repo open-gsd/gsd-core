@@ -166,7 +166,7 @@ interface SkippedNormalization {
    * The type is the whole diagnostic ("this is a string where an object belongs"),
    * and the value is still sitting untouched in the file, so echoing it buys
    * nothing. It would cost something: `cmdMigrateConfig` prints this report
-   * verbatim on `gsd-tools migrate-config --json`, and config values are treated
+   * verbatim on `gsd-tools migrate-config` (default JSON output), and config values are treated
    * as potentially secret-bearing elsewhere in this module (`maskSecret` on the
    * `config set/unset` output path).
    */
