@@ -1242,8 +1242,8 @@ describe('gsd-secret-read-guard: nested shell behind a wrapper with flags (#5627
 // expansion that fails only when expanded. Oracle: each block row runs the
 // read under bash 5.3.20 (the official bash:5.3 image), except the pre-5.3
 // rows, which run it under bash 5.2.21 and 3.2.57; no allow row runs it anywhere,
-// except the scan-depth and reach rows, which pin where the scan stops while bash
-// still runs it.
+// except the scan-depth, reach and not-reached rows, which pin where the scan
+// stops while bash still runs it.
 describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => {
   const closedChainThenRead = (n) => '${ '.repeat(n) + ':' + '; }'.repeat(n) + '; echo ${ cat .env; }';
   const funsubChainThenRead = (n) => "echo ${ echo '}' " + '${ : '.repeat(n - 2) + '${ # it"s\n}' + ' ; }'.repeat(n - 1) + '\ncat .env';
@@ -1382,6 +1382,23 @@ describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => 
   // and the scan reads them k - 1 levels deeper (funsubTags), so a read there
   // is denied up to k = MAX_NESTING_DEPTH + 1. bash 5.3, 5.2 and 3.2 run it.
   reach("the scan's reach over a read after a heredoc left pending k deep", [[3, true], [4, true], [5, false]], pendingChainThenRead);
+
+  // Two gaps neither reading reaches, pinned the same way. bash 5.2.37 and
+  // 3.2.57 run the read in both and bash 5.3.20 in neither; next allows both.
+  // The tokenizer's `${` branch ends a pre-5.3 expansion at the first `}`,
+  // here the one in double quotes (#5523 form A), and reads `<<` in a
+  // top-level `((` as a heredoc (#5523 form G). A failed `((` once duplicated
+  // the pending heredoc tags, and the copies made the bash 5.3 reading deny
+  // both by accident; closing either form flips its row.
+  const NOT_REACHED = [
+    ['#5523 form A, a `}` in double quotes ending the pre-5.3 expansion', 'echo ${ (( x << "${ <<E ; }" ) ) }\nE\ncat .env\n'],
+    ['#5523 form G, a top-level arithmetic shift read as a heredoc', 'x=${ (( ${ <<E ; } ) }; (( y = 1 << 2 ))\nE\ncat .env\n'],
+  ];
+  for (const [label, command] of NOT_REACHED) {
+    test(`not reached, allows: ${label}`, () => {
+      assertAllowed(runHook(bash(command)), label);
+    });
+  }
 
   // Long inputs the scan must finish and deny; each takes ~0.02-0.6 s alone.
   // A `((` that does not end in `))` is read again as subshells, and before the
