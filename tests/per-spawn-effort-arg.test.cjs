@@ -31,6 +31,7 @@ const os = require('node:os');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { runGsdTools, cleanup } = require('./helpers.cjs');
 const { span, runBash } = require('./helpers/doc-bash-span.cjs');
+const { runNode } = require('./helpers/process-seam.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const LIB = path.join(REPO_ROOT, 'gsd-core', 'bin', 'lib');
@@ -89,6 +90,23 @@ const GLOBAL_OVERRIDE = { agent_overrides: { [MAPPER]: 'max' } };
 const MAPPER_TIER_DEFAULT = 'low';
 /** A capability manifest's agent: not in the model-profile table, so it has no tier. */
 const UNLISTED = 'gsd-third-party-curator';
+
+/**
+ * `effort_arg` from an installed tree's own gsd-tools, for a project that sets the mapper's effort.
+ * GSD_RUNTIME is blanked so the marker that install wrote is the rung that answers.
+ */
+function installedEffortArg(t, configDir) {
+  const home = gsdHome();
+  const dir = project({ effort: { agent_overrides: { [MAPPER]: 'xhigh' } } });
+  t.after(() => { cleanup(dir); cleanup(home); });
+  const tools = path.join(configDir, 'gsd-core', 'bin', 'gsd-tools.cjs');
+  const res = runNode([tools, 'query', 'resolve-model', MAPPER], {
+    cwd: dir,
+    env: { ...process.env, GSD_RUNTIME: '', GSD_HOME: home },
+  });
+  assert.equal(res.exitCode, 0, res.stderr);
+  return JSON.parse(res.stdout).effort_arg;
+}
 
 describe('#5330 resolveEffortArgInternal — the interim gate', () => {
   test('project config without an effort block: no argument, so the baked frontmatter holds', (t) => {
@@ -528,8 +546,8 @@ function effortNameFor(modelName) {
     : `${modelName.slice(0, -'_MODEL'.length)}_EFFORT_ARG`;
 }
 
-const MODEL_SITE_RE = /model\s*[=:]\s*"\{([A-Za-z_]+_(?:model|MODEL))\}"|model `([A-Z_]+_MODEL)`|model\s*=\s*([a-z_]+_model)\b/g;
-const EFFORT_PLACEHOLDER_RE = /\{([A-Za-z_]+_(?:effort_arg|EFFORT_ARG))\}/g;
+const MODEL_SITE_RE = /model\s*[=:]\s*"\{([A-Za-z0-9_]+_(?:model|MODEL))\}"|model `([A-Z0-9_]+_MODEL)`|model\s*=\s*([a-z0-9_]+_model)\b/g;
+const EFFORT_PLACEHOLDER_RE = /\{([A-Za-z0-9_]+_(?:effort_arg|EFFORT_ARG))\}/g;
 
 /** The effort name for the agent a literal `subagent_type="gsd-…"` spawns: gsd-debug-session-manager → debug_session_manager_effort_arg. */
 function effortNameForAgent(window) {
@@ -592,7 +610,7 @@ function unboundEffortPlaceholders(content) {
   for (const m of text.matchAll(/From it:[^\n]*\n([^\n]*)/g)) {
     for (const b of m[1].matchAll(/`([A-Za-z0-9_]+)`/g)) declared.add(b[1]);
   }
-  const used = new Set([...text.matchAll(/\{([A-Za-z_]+_(?:effort_arg|EFFORT_ARG))\}/g)].map((m) => m[1]));
+  const used = new Set([...text.matchAll(EFFORT_PLACEHOLDER_RE)].map((m) => m[1]));
   return [...used].filter((e) => !declared.has(e));
 }
 
@@ -695,7 +713,7 @@ const INIT_ROLE_AGENTS = Object.freeze({
 /** Effort names bound in shell by `NAME=$(gsd_run query resolve-model <agent> …)`, mapped to that agent. */
 function shellEffortBindings(content) {
   const map = new Map();
-  const re = /^[ \t]*([A-Za-z_]+_(?:effort_arg|EFFORT_ARG))=\$\(gsd_run query resolve-model "?([^\s"]+)"?/gm;
+  const re = /^[ \t]*([A-Za-z0-9_]+_(?:effort_arg|EFFORT_ARG))=\$\(gsd_run query resolve-model "?([^\s"]+)"?/gm;
   for (const m of content.matchAll(re)) map.set(m[1], m[2]);
   return map;
 }
@@ -845,6 +863,31 @@ describe('#5330 dispatch projection strips the effort placeholder (Hermes, Pi)',
       const out = project('Use Agent with `model="{mapper_model}"` and `{mapper_effort_arg}` (omitted when empty), and more.', cfg());
       assert.doesNotMatch(out, /effort_arg/);
     });
+
+    test(`${name}: a role name with a digit is a placeholder like any other`, () => {
+      const call = project('Agent(subagent_type="gsd-planner", model="{p2_model}", {p2_effort_arg}, prompt="x")', cfg());
+      assert.doesNotMatch(call, /effort_arg/, call);
+      const prose = project('Use Agent with `model="{p2_model}"` and `{p2_effort_arg}` (omitted when empty).', cfg());
+      assert.doesNotMatch(prose, /effort_arg/, prose);
+    });
+
+    test(`${name}: an own-line placeholder in CRLF text leaves no trace`, () => {
+      const src = 'Agent(\r\n  subagent_type="gsd-planner",\r\n  {planner_effort_arg},\r\n  prompt="x"\r\n)';
+      const out = project(src, cfg());
+      assert.doesNotMatch(out, /effort_arg/, out);
+      assert.equal(out, project(src.replace('  {planner_effort_arg},\r\n', ''), cfg()));
+    });
+
+    test(`${name}: a mention the strip does not recognise refuses the install, wherever it sits`, () => {
+      const survivors = [
+        'Pass `{mapper_effort_arg}` on the spawn when it is set.',
+        'Spawn it with {X_EFFORT_ARG}.\n',
+        '```bash\necho {planner_effort_arg}\n```\n',
+      ];
+      for (const src of survivors) {
+        assert.throws(() => project(src, cfg()), /per-spawn effort placeholder/, src);
+      }
+    });
   }
 
   test('a placeholder inside a quoted value or a comment is text: kept, and no refusal', () => {
@@ -863,20 +906,54 @@ describe('#5330 dispatch projection strips the effort placeholder (Hermes, Pi)',
   });
 
   for (const runtime of ['hermes', 'pi']) {
-    test(`${runtime}: a real global install leaves no effort placeholder in any installed workflow`, (t) => {
-      // Workflows are where Agent(...) is projected onto the host primitive. Installed agent
-      // files keep their Agent(...) text, model= included, so they are out of this assertion.
+    test(`${runtime}: a real global install leaves no effort placeholder in a workflow, a reference or an agent`, (t) => {
+      // gsd-core/agents/ is the unconverted corpus every host ships, not a loaded role file.
       const { configDir, root } = runMinimalInstall({ runtime, scope: 'global' });
       t.after(() => cleanup(root));
       const hits = [];
       let scanned = 0;
-      for (const file of listMarkdown(path.join(configDir, 'gsd-core', 'workflows'))) {
-        scanned += 1;
-        const text = fs.readFileSync(file, 'utf8');
-        for (const m of text.matchAll(EFFORT_PLACEHOLDER_RE)) hits.push(`${path.relative(configDir, file)}: ${m[0]}`);
+      const roots = [['gsd-core', 'workflows'], ['gsd-core', 'references'], ['agents']];
+      for (const parts of roots) {
+        for (const file of listMarkdown(path.join(configDir, ...parts))) {
+          scanned += 1;
+          const text = fs.readFileSync(file, 'utf8');
+          for (const m of text.matchAll(EFFORT_PLACEHOLDER_RE)) hits.push(`${path.relative(configDir, file)}: ${m[0]}`);
+        }
       }
-      assert.ok(scanned >= 40, `vacuous: scanned ${scanned} installed markdown files`);
+      assert.ok(scanned >= 60, `vacuous: scanned ${scanned} installed markdown files`);
       assert.deepEqual(hits, []);
     });
   }
+
+  test('pi: the committed role files carry no effort placeholder', () => {
+    const roles = listMarkdown(path.join(REPO_ROOT, 'pi', 'package-agents'));
+    assert.ok(roles.length >= 30, `vacuous: ${roles.length} role files`);
+    const hits = roles.filter((f) => /_(?:effort_arg|EFFORT_ARG)\}/.test(fs.readFileSync(f, 'utf8')));
+    assert.deepEqual(hits.map((f) => path.basename(f)), []);
+  });
+
+  const workflowPlaceholders = (configDir) => listMarkdown(path.join(configDir, 'gsd-core', 'workflows'))
+    .flatMap((file) => [...fs.readFileSync(file, 'utf8').matchAll(EFFORT_PLACEHOLDER_RE)]);
+
+  // Hosts with no projection: the text keeps its placeholders, so what makes them harmless is the
+  // installed tool answering empty.
+  for (const runtime of ['codex', 'opencode', 'cursor']) {
+    test(`${runtime}: a real install keeps the placeholders and the installed tool renders them empty`, (t) => {
+      const { configDir, root } = runMinimalInstall({ runtime, scope: 'global' });
+      t.after(() => cleanup(root));
+
+      assert.ok(workflowPlaceholders(configDir).length >= 70, 'the workflows carry the placeholders');
+      const ref = fs.readFileSync(path.join(configDir, 'gsd-core', 'references', 'model-profile-resolution.md'), 'utf8');
+      assert.match(ref, /When it is empty, drop it/);
+      assert.equal(installedEffortArg(t, configDir), '');
+    });
+  }
+
+  test('claude: the installed tool renders the argument through its own marker', (t) => {
+    const { configDir, root } = runMinimalInstall({ runtime: 'claude', scope: 'global' });
+    t.after(() => cleanup(root));
+
+    assert.equal(fs.readFileSync(path.join(configDir, 'gsd-core', '.gsd-runtime'), 'utf8').trim(), 'claude');
+    assert.equal(installedEffortArg(t, configDir), 'effort="xhigh"');
+  });
 });

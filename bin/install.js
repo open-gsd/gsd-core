@@ -3346,7 +3346,7 @@ function _maskStringsAndComments(text) {
 }
 
 // #5330: a per-spawn effort placeholder as a call argument or a prose mention.
-const EFFORT_ARG_PLACEHOLDER_RE = /\{[A-Za-z_]+_(?:effort_arg|EFFORT_ARG)\}/;
+const EFFORT_ARG_PLACEHOLDER_RE = /\{[A-Za-z0-9_]+_(?:effort_arg|EFFORT_ARG)\}/;
 
 /**
  * Normalize ONE `Agent(...)`/`Agent({...})` call span (already isolated by
@@ -3618,15 +3618,20 @@ function _assertProjectionComplete(content, toolConfig, namedDispatch = false) {
   }
 
   if (toolConfig.supportsPerCallEffort !== true) {
-    for (const span of findDispatchCallSpans(content, toolName)) {
-      // Masked like the strip in _normalizeDispatchCallSpan: a placeholder inside a
-      // quoted value or a comment is text, not an argument, and is left alone by both.
-      if (EFFORT_ARG_PLACEHOLDER_RE.test(_maskStringsAndComments(content.slice(span.start, span.end)))) {
-        throw new Error(
-          `${runtime} workflow install: projection left a per-spawn effort placeholder inside a ${toolName}(...) call ` +
-          '— refusing to install (fail-closed post-projection guard, #5330)',
-        );
-      }
+    // Inside a call, masked like the strip in _normalizeDispatchCallSpan: a placeholder
+    // in a quoted value or a comment is text, and both leave it alone. Everywhere else
+    // nothing projects it, so a survivor is a wording the prose strip does not know, and
+    // the host would read a raw `{x_effort_arg}` it can never render.
+    const spans = findDispatchCallSpans(content, toolName).sort((a, b) => b.start - a.start);
+    let scanned = content;
+    for (const span of spans) {
+      scanned = scanned.slice(0, span.start) + _maskStringsAndComments(scanned.slice(span.start, span.end)) + scanned.slice(span.end);
+    }
+    if (EFFORT_ARG_PLACEHOLDER_RE.test(scanned)) {
+      throw new Error(
+        `${runtime} workflow install: projection left a per-spawn effort placeholder ` +
+        '— refusing to install (fail-closed post-projection guard, #5330)',
+      );
     }
   }
 }
@@ -3709,7 +3714,7 @@ function projectNamedDispatchToStructuralDelegate(content, dispatch, toolConfig)
   // "and `{<role>_effort_arg}` (omitted when empty)". Runs before the model
   // strip below, whose `(?:and\s+)?` would otherwise consume the "and ".
   if (toolConfig.supportsPerCallEffort !== true) {
-    converted = converted.replace(/ and `\{[A-Za-z_]+_(?:effort_arg|EFFORT_ARG)\}` \(omitted when empty\)/g, '');
+    converted = converted.replace(/ and `\{[A-Za-z0-9_]+_(?:effort_arg|EFFORT_ARG)\}` \(omitted when empty\)/g, '');
   }
   if (!toolConfig.supportsPerCallModel) {
     const modelResolutionRe = /\*\*Model resolution:\*\* If `executor_model` is `"inherit"`, omit the `model=` parameter from all `Agent\(\)` calls — do NOT pass `model="inherit"` to Agent\. Omitting the `model=` parameter causes [^.]+\. Only set `model=` when `executor_model` is an explicit model name \(e\.g\., `"claude-sonnet-5"`, `"claude-opus-4-8"`\)\./;

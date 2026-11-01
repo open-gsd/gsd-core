@@ -3247,8 +3247,17 @@ function applyAgentBrandingRewrites(content, runtime) {
  * `capabilities/hermes/capability.json`'s `hostBehaviors.brandingRewrites`,
  * never hardcoded here.
  */
+/**
+ * #5330: a role file for a host whose spawn primitive takes no per-call effort drops the
+ * `{<role>_effort_arg}` argument line. Workflows are projected call by call in bin/install.js; a
+ * role file keeps its call text, and the placeholder would reach the host unrendered.
+ */
+function stripEffortArgLines(content: string): string {
+  return content.replace(/^[ \t]*\{[A-Za-z0-9_]+_(?:effort_arg|EFFORT_ARG)\},?[ \t]*(?:#[^\n]*)?\r?\n/gm, '');
+}
+
 function convertClaudeAgentToHermesAgent(content) {
-  return applyAgentBrandingRewrites(content, 'hermes');
+  return applyAgentBrandingRewrites(stripEffortArgLines(content), 'hermes');
 }
 
 /**
@@ -3287,7 +3296,7 @@ function mapClaudeToolsToPi(tools: string[]): { mapped: string[]; dropped: strin
  * dispatcher then runs it with Pi's defaults minus `gsd_dispatch`).
  */
 function convertClaudeAgentToPiAgent(content) {
-  const converted = applyAgentBrandingRewrites(content, 'pi');
+  const converted = applyAgentBrandingRewrites(stripEffortArgLines(content), 'pi');
   const { frontmatter, body } = extractFrontmatterAndBody(converted);
   if (!frontmatter) return converted;
 
