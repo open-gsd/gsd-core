@@ -1278,6 +1278,9 @@ describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => 
     // Quote removal makes the opener, so only the script that runs holds one.
     ['read as a pre-5.3 parameter expansion in a bash -c script', "bash -c 'echo $''{\n<<'\"'E'\"'\n} & cat .env\n'"],
     ['read as a pre-5.3 parameter expansion in an eval script', "eval 'echo $''{' '\n<<E\n} & cat .env\n'"],
+    // bash 5.3 reads the next lines as the heredoc's body; bash 5.2 and 3.2 fail
+    // the first line's bad word and run the second. The bash 5.3 reading allows it.
+    ['a read on the line after one left holding a heredoc, read as a pre-5.3 parameter expansion', 'echo ${ cat <<E; }\ncat .env\nE\necho done'],
     // Each opens a `{ …; }` group, whose `}` does not close the substitution.
     ['a group after `function NAME`', `echo "\${ function f { :; }${dqTail}`],
     ['a group after `coproc`', `echo "\${ coproc { :; }${dqTail}`],
