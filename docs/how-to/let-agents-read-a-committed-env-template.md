@@ -15,6 +15,7 @@ This guide exempts that one file and keeps every other secret file blocked.
   what keeps a real secret from being unlocked by an edit to the project config.
 - The file must be a regular file. A symlink, committed or not, is never exempted.
 - You need a GSD project (`.planning/config.json` at the repository root).
+- This is a guardrail, not a sandbox. The guard vouches for the path, not for working-tree bytes that differ from `HEAD`, and an agent with Bash can rewrite local repository state (force-add and commit, `update-ref`) to make a file count as committed. A file inside a submodule cannot be exempted: the submodule's `.git` file is not followed.
 
 ## Steps
 
@@ -45,13 +46,15 @@ This guide exempts that one file and keeps every other secret file blocked.
 | Read | the file's path, absolute or relative to the project root |
 | Grep | `path` set to the file, absolute or relative |
 | Grep `glob` | not exempted — use `path` instead |
-| Bash | the **absolute** path only: `cat /home/me/app/.env.production` |
+| Bash | the **absolute** path only, in a line where every command is read-only: `cat /home/me/app/.env.production` |
 
 Bash needs the absolute path because a bare name in a shell command is not tied to one
 file: after `cd apps/api`, or as a `find -name` pattern, `.env.production` means a
 different file, which may hold real credentials. When an exemption is configured, the
 guard's refusal of a Bash command says so, so an agent that used a relative name knows
 to retry with the absolute one.
+
+Bash also honors an exemption only when every command in the line is one of `cat`, `head`, `tail`, `grep`, `egrep`, `fgrep`, `rg`, `wc`, `diff`, `cmp`, `sort`, `uniq`, `cut`, `nl` or `od`, with no `$( )`, backtick or `<( )` body. Any other command in the line (`mv`, `ln`, `cp`, `git`, `awk`, `sed`, a shell or interpreter) withdraws the exemption for the whole line: `cat /abs/.env.production | grep KEY` is allowed, `mv a b && cat /abs/.env.production` is refused.
 
 ## When the read is still refused
 
@@ -64,6 +67,8 @@ to retry with the absolute one.
 | Not a git repository | the guard cannot confirm the file is committed | run inside the repository |
 | The repository is SHA-256, shallow/partial and missing the object, or its objects live only in alternates | the guard reads git's own files and cannot confirm the file | run in a normal clone |
 | Bash with a relative name | see above | use the absolute path, or the Read tool |
+| Bash line that also runs a command outside the read-only list | any other command withdraws the exemption for the line | run the read alone, or use the Read tool |
+| File inside a submodule | the submodule's `.git` file is not followed | not supported |
 
 ## Removing an exemption
 
