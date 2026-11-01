@@ -406,6 +406,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/package-legitimacy.cjs',
       // ADR-457: tsc-generated runtime artifact — lint the src/git-base-branch.cts source.
       'gsd-core/bin/lib/git-base-branch.cjs',
+      // #5231: tsc-generated runtime artifact — lint the src/git-commit-timeout.cts source.
+      'gsd-core/bin/lib/git-commit-timeout.cjs',
       // ADR-1213: tsc-generated runtime artifact — lint the src/capability-writer.cts source.
       'gsd-core/bin/lib/capability-writer.cjs',
       // issue #1754: tsc-generated runtime artifact — lint the src/cli-skew-check.cts source.

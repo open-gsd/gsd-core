@@ -6115,8 +6115,8 @@ describe('#3859: the empty-diff probe is pinned against diff-only configuration'
 
 // #3859 follow-up: `cmdCommitToSubrepo` and `cmdPrSubrepo` carry the identical
 // structurally-shaped `canScope*`-branched `git commit` call as `cmdCommit`
-// above (see `COMMIT_TIMEOUT_MS`'s "three commit sites" comment in
-// src/commands.cts) and were missing the same `diff.ignoreSubmodules=dirty`
+// above (the three commit sites share the timeout rule in
+// src/git-commit-timeout.cts, `commitTimeoutMs`) and were missing the same `diff.ignoreSubmodules=dirty`
 // GIT_CONFIG_* override, applied unconditionally for the same reason.
 describe('#3859 follow-up: commit-to-subrepo and pr-subrepo also need the diff.ignoreSubmodules override', () => {
   const { createTempGitProject } = require('./helpers.cjs');
