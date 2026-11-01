@@ -9,18 +9,31 @@ execute:wave:post, execute:post, verify:pre, verify:post, ship:pre, ship:post).
 
 ```json
 {
-  "point": "discuss:pre",
+  "point": "plan:pre",
   "activeHooks": [
     { "kind": "contribution", "into": "orchestrator", "fragment": { "inline": "..." } },
     { "kind": "step", "ref": { "skill": "my-skill" } },
     { "kind": "gate", "check": { "query": "..." }, "blocking": true, "onError": "skip" }
   ],
-  "rendered": "..."
+  "rendered": "...",
+  "context": { "phase": "05", "phaseDir": ".planning/phases/05-widgets" }
 }
 ```
 
 `activeHooks` is an array of enabled hook entries for the named point. It is empty (or absent)
 when no capability has registered an active hook at this point — treat that as a no-op.
+
+`context` is additive and optional (#4030): present only when the caller passed `--phase
+<token>` and it resolved to exactly one on-disk phase directory. It is the task-local phase
+the render-hooks invocation was scoped to — **authoritative over `STATE.current_phase` or
+artifact-order/mtime inference** for any dispatch below that needs a phase, since
+`STATE.current_phase` is project lifecycle status, not a claim about this invocation's scope,
+and the two diverge whenever one phase is being planned or verified while another still
+executes. Absent `context` means `--phase` was omitted, or it was dropped: it matched no
+directory or several, matched only an archived milestone's phase, resolved to a directory
+outside the project's `.planning/phases` tree, or disagreed with `--phase-dir`; `--phase-dir`
+without `--phase` is dropped too. Every case except an omitted `--phase` appends a warning to
+`warnings`, and the envelope's `phaseDrop` carries the typed reason code. A dropped token is never passed on; the phase-argument table under `ref.command` says when the host's own `PHASE_NUMBER` stands in.
 
 ## Dispatch rules by `kind`
 
@@ -28,13 +41,23 @@ when no capability has registered an active hook at this point — treat that as
 
 Inject `fragment.inline` verbatim into the context for the role named in `into`
 (e.g. `orchestrator`, `planner`). Do not paraphrase — the text is the product.
+`context` does not apply to a `contribution`: its fragment is injected as written, no handler is invoked, and nothing carries the phase.
 
 ### `step`
 
 Dispatch the referenced unit. Exactly one of `ref.skill`, `ref.agent`, or `ref.command` is set.
 
-- `ref.skill` present → dispatch via the Skill tool with skill id `gsd-<ref.skill>`.
-- `ref.agent` present → dispatch via the Agent tool with `subagent_type` = `ref.agent`.
+- `ref.skill` present → dispatch via the Skill tool with skill id `gsd-<ref.skill>`. When
+  the phase-argument table below gives a phase argument, pass it as the skill's args (e.g.
+  `args="${context.phase}"`), plus whatever else that host's own dispatch already appends.
+  Skills diverge sharply on what an omitted phase argument does: some (e.g.
+  `code-review`) exit with "Phase not found"; others (e.g. `validate-phase`, whose
+  `argument-hint` documents "optional, defaults to last completed phase") silently fall back
+  to artifact-order inference, exactly the failure mode this field exists to close.
+- `ref.agent` present → dispatch via the Agent tool with `subagent_type` = `ref.agent`. If
+  `context` is present, include `context.phase` / `context.phaseDir` in the agent's prompt so
+  it operates on the task-local phase rather than inferring one. When it is absent, the
+  phase-argument table below says which phase, if any, the prompt names.
   Before dispatching an agent, print the canonical liveness banner so users know silence
   is expected and do not kill a healthy agent:
 
@@ -49,11 +72,32 @@ Dispatch the referenced unit. Exactly one of `ref.skill`, `ref.agent`, or `ref.c
   `` ` ``, `$(`, or a newline would terminate the assignment and run as its own statement
   before any shell-side check could execute. A value that fails is a malformed manifest:
   record a warning, skip that hook, continue to the next entry. Only a value that has passed
-  is run, with the phase number appended:
+  is run. The phase argument comes from the envelope, by this table (the same table
+  serves `ref.skill` and `ref.agent`):
+
+  | Envelope | Phase argument | Template under the comment |
+  | --- | --- | --- |
+  | `context` present | `context.phase` | `context present` |
+  | no `context`, no `phaseDrop` | the host's `${PHASE_NUMBER}` if it binds one, else none | `context absent, host binds PHASE_NUMBER` |
+  | `phaseDrop` is `UNRESOLVED` or `ARCHIVED` | the host's `${PHASE_NUMBER}` | `context absent, host binds PHASE_NUMBER` |
+  | `phaseDrop` is `ESCAPES_ROOT`, `DIR_MISMATCH`, `AMBIGUOUS`, `PHASE_DIR_ALONE`, `INVALID_TOKEN` or `CONFIG_FAULT` | none | `context absent, no PHASE_NUMBER` |
+
+  Before splicing any phase value into a command, check it in-context against
+  `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`; on a miss pass none. Never substitute an empty string
+  for a missing token:
 
   ```bash
+  # placeholders are filled in by you from the envelope, not by the shell
+  # context present
+  gsd_run ${ref.command} --phase "${context.phase}" --raw
+  # context absent, host binds PHASE_NUMBER
   gsd_run ${ref.command} --phase "${PHASE_NUMBER}" --raw
+  # context absent, no PHASE_NUMBER
+  gsd_run ${ref.command} --raw
   ```
+
+  `context.phaseDir` is not passed here — a capability that needs the directory, not just
+  the token, resolves it itself from `--phase` the same way `init.*` does.
 
 Wait for the result before continuing to the next hook or the next step.
 

@@ -102,7 +102,7 @@ const { output, error, ERROR_REASON, formatDiagnosticToken } = io;
 const { loadConfig, loadConfigResolved } = configLoader;
 const { resolveModelInternal, resolveGranularityInternal, assertValidGranularityOverride } = modelResolver;
 const {
-  phaseDirectoryOptions, findPhaseInternal, listMilestonePhaseDirs, listAllPhaseDirs,
+  phaseDirectoryOptions, guardedFindPhase, findPhaseInternal, listMilestonePhaseDirs, listAllPhaseDirs,
 } = phaseLocator;
 const {
   getRoadmapPhaseInternal,
@@ -172,17 +172,9 @@ void stripShippedMilestones;
 
 // #2056/#2104: isForeignPrefixedPhaseQuery is imported from phase-id.cts
 // (the canonical predicate). parsePhasePrefix is no longer needed locally.
-// phaseInfoMatchesExactPrefix and roadmapPhaseMatchesExactPrefix are local
-// helpers that post-filter the lookup results for foreign-prefix queries.
-
-function phaseInfoMatchesExactPrefix(
-  phaseInfo: Record<string, unknown> | null,
-  phase: string,
-): boolean {
-  const num = phaseInfo?.['phase_number'];
-  const numStr = typeof num === 'string' ? num : (typeof num === 'number' ? String(num) : '');
-  return numStr.toUpperCase() === phase.toUpperCase();
-}
+// roadmapPhaseMatchesExactPrefix is a local helper that post-filters the lookup
+// results for foreign-prefix queries; the phase-info equivalent moved to
+// phase-locator.cts alongside guardedFindPhase (#4030).
 
 // #4906 Phase 5 (#4984): NOT migrated onto the heading-baseline selector —
 // this site was never one of the five ADR-4910 §8 call sites this phase owns
@@ -202,22 +194,9 @@ function roadmapPhaseMatchesExactPrefix(
   return new RegExp(`^#{2,4}\\s*Phase\\s+${escapeRegex(phase)}(?:\\b|\\s|:)`, 'i').test(section);
 }
 
-// #2104: shared helpers that wrap findPhaseInternal / getRoadmapPhaseInternal
-// with the #2056 foreign-prefix guard, so every init command gets the same
-// protection without duplicating the guard logic at each call site.
-function guardedFindPhase(
-  cwd: string,
-  phase: string,
-  projectCode: unknown,
-  phaseNaming: unknown,
-): Record<string, unknown> | null {
-  let phaseInfo = findPhaseInternal(cwd, phase, undefined, phaseDirectoryOptions(cwd, { phase_naming: phaseNaming, project_code: projectCode })) as unknown as Record<string, unknown> | null;
-  if (isForeignPrefixedPhaseQuery(phase, projectCode) && !phaseInfoMatchesExactPrefix(phaseInfo, phase)) {
-    phaseInfo = null;
-  }
-  return phaseInfo;
-}
-
+// #2104: guardedGetRoadmapPhase wraps getRoadmapPhaseInternal with the #2056
+// foreign-prefix guard, so every init command gets the same protection; its
+// phase-directory twin, guardedFindPhase, lives in phase-locator.cts (#4030).
 function guardedGetRoadmapPhase(
   cwd: string,
   phase: string,
