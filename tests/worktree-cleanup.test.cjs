@@ -1856,6 +1856,47 @@ describe('durable wave worktree manifest contract (#4853)', () => {
     assert.equal(fs.existsSync(manifestPath), false, 'manifest must be deleted when all residual worktrees are cleaned');
   });
 
+  test('cleanup-tail bash fails closed when orchestrator_root in manifest is not a registered worktree', (t) => {
+    const cleanupTailBash = extractCleanupTailBash();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-cleanup-unreg-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    const repo = path.join(root, 'repo');
+    const unregisteredDir = path.join(root, 'unregistered-dir');
+    fs.mkdirSync(repo);
+    fs.mkdirSync(unregisteredDir);
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repo });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repo });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: repo });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repo });
+    fs.writeFileSync(path.join(repo, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: repo });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repo });
+
+    const manifestPath = path.join(repo, 'wave-1-manifest.json');
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        orchestrator_root: unregisteredDir,
+        worktrees: [],
+      }) + '\n',
+    );
+
+    const scriptPath = path.join(root, 'cleanup-tail.sh');
+    fs.writeFileSync(scriptPath, cleanupTailBash);
+    const res = childProcess.spawnSync('bash', [scriptPath], {
+      cwd: repo,
+      env: { ...process.env, WAVE_WORKTREE_MANIFEST: manifestPath },
+      stdio: 'pipe',
+      timeout: HOOK_FANOUT_TIMEOUT_MS,
+    });
+
+    assert.notEqual(res.status, 0, 'cleanup-tail must fail closed when orchestrator_root is unregistered');
+    const stderr = (res.stderr || '').toString();
+    assert.match(stderr, /FATAL: orchestrator_root in manifest is not a registered worktree/, 'stderr must report unregistered orchestrator_root');
+  });
+
   test('cleanup-tail bash preserves manifest when residual worktree removal fails (negative control)', (t) => {
     if (process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0)) {
       t.skip('directory permission failure simulation is POSIX-specific and bypassed when running as root');

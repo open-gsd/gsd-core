@@ -25,6 +25,7 @@ const {
   validatePromptStructure,
   assertWithinRoot,
   tryWithinRoot,
+  isContainedIn,
   PathAcceptance,
 } = require('../gsd-core/bin/lib/security.cjs');
 
@@ -1487,5 +1488,12 @@ describe('assertWithinRoot / tryWithinRoot — narrowed export (#4653)', () => {
       () => assertWithinRoot('../../etc/passwd', base),
       /escapes allowed directory/,
     );
+  });
+
+  test('isContainedIn handles Windows drive casing and separator variations', () => {
+    assert.equal(isContainedIn('C:\\repo\\sub\\file.txt', 'c:\\repo', path.win32), true);
+    assert.equal(isContainedIn('c:\\repo\\sub\\file.txt', 'C:\\repo', path.win32), true);
+    assert.equal(isContainedIn('C:/repo/sub/file.txt', 'c:\\repo', path.win32), true);
+    assert.equal(isContainedIn('C:\\repo2\\sub', 'C:\\repo', path.win32), false);
   });
 });
