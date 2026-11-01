@@ -755,6 +755,7 @@ describe('gsd-secret-read-guard: scope and crash policy', () => {
     const r = runHook('{not json');
     assert.equal(r.status, 0);
     assert.equal(r.stdout, '');
+    assert.equal(r.stderr, '', 'the default crash path must emit nothing on stderr (#5784)');
   });
 });
 
@@ -808,9 +809,16 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
     assertAllowed(runHook('null', DENY_ENV), 'null payload');
   });
 
+  // Any value but deny takes the default path, which stays silent on both
+  // streams, byte for byte as before the opt-in existed.
+  function assertFailOpen(r, label) {
+    assertAllowed(r, label);
+    assert.equal(r.stderr, '', `${label}: the default path must emit nothing on stderr`);
+  }
+
   test('only the exact value deny opts in', () => {
     for (const value of ['DENY', 'Deny', '1', 'true', '', ' deny', 'deny ', 'allow']) {
-      assertAllowed(runHook(MALFORMED, { [ON_CRASH_ENV]: value }), `value ${JSON.stringify(value)}`);
+      assertFailOpen(runHook(MALFORMED, { [ON_CRASH_ENV]: value }), `value ${JSON.stringify(value)}`);
     }
   });
 
@@ -819,7 +827,7 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
       // An environment value cannot hold a NUL byte.
       fc.string().filter((value) => value !== 'deny' && !value.includes('\0')),
       (value) => {
-        assertAllowed(runHook(MALFORMED, { [ON_CRASH_ENV]: value }), `value ${JSON.stringify(value)}`);
+        assertFailOpen(runHook(MALFORMED, { [ON_CRASH_ENV]: value }), `value ${JSON.stringify(value)}`);
       },
     ), { seed: 5784, numRuns: 40 });
   });

@@ -81,9 +81,12 @@ function runStalled(extraEnv, written) {
   });
 }
 
+// Only the unset cells use it: the default path must stay silent on both
+// streams, byte for byte as before the opt-in existed.
 function assertAllowed(r, label) {
   assert.equal(r.status, 0, `${label}: expected allow (exit 0), got exit ${r.status}; stdout=${r.stdout}`);
   assert.equal(r.stdout, '', `${label}: an allow must emit nothing on stdout`);
+  assert.equal(r.stderr, '', `${label}: the default path must emit nothing on stderr`);
 }
 
 // A guard-error deny writes the plain reason to stderr, as the scan's own codes
