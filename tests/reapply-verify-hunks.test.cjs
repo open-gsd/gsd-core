@@ -2515,3 +2515,554 @@ describe('Bug #4135: baseline coverage is reported, gateable, and widened from g
 });
   });
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded block — #4435 (reapply-patches --interactive[=exceptions|all]).
+// #4136's verbatim classifier cannot see semantic supersession: upstream
+// REWORDED the customization, or deleted the anchors it hung off. The
+// verifier gains a pre-merge `--hunks` mode (per-hunk stock vs user text,
+// a content hash, a closed-vocabulary recommendation and exception reasons)
+// and a gate-mode `--decisions <file>` that drops the required lines of a
+// hunk ONLY when a recorded human retire/rewrite decision names that hunk's
+// exact content hash. Present-and-gate: the tool recommends, never decides.
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe('folded:feat-4435-reapply-interactive', () => {
+'use strict';
+
+process.env.GSD_TEST_MODE = '1';
+
+const { test, describe, before, after } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { cleanup } = require('./helpers.cjs');
+const { runNode } = require('./helpers/process-seam.cjs');
+// Seeded fast-check convention (seed 42, overridable via GSD_FC_SEED).
+const fc = require('./helpers/fast-check-setup.cjs');
+
+const ROOT = path.join(__dirname, '..');
+const SCRIPT = path.join(ROOT, 'gsd-core', 'bin', 'verify-reapply-patches.cjs');
+const verifier = require(SCRIPT);
+const { HUNK_REASON, HUNK_RECOMMENDATION, DISPOSITION } = verifier;
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+
+let tmpRoot;
+let patchesDir;
+let configDir;
+let pristineDir;
+let decisionsPath;
+
+function sha256(content) {
+  return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
+}
+function writeFile(absPath, content) {
+  fs.mkdirSync(path.dirname(absPath), { recursive: true });
+  fs.writeFileSync(absPath, content);
+}
+function writeBackupMeta(pristine_hashes) {
+  writeFile(path.join(patchesDir, 'backup-meta.json'), JSON.stringify({ pristine_hashes }, null, 2));
+}
+function resetFixture() {
+  for (const dir of [patchesDir, configDir, pristineDir]) cleanup(dir);
+  fs.mkdirSync(patchesDir);
+  fs.mkdirSync(configDir);
+  fs.mkdirSync(pristineDir);
+  cleanup(decisionsPath);
+}
+/** Seed one file: pristine (validated by default), backup, fresh install. */
+function seed(rel, { pristine, backup, install, recordHash = true, writePristine = true }) {
+  writeBackupMeta(recordHash ? { [rel]: sha256(pristine) } : {});
+  writeFile(path.join(patchesDir, rel), backup);
+  writeFile(path.join(configDir, rel), install);
+  if (writePristine) writeFile(path.join(pristineDir, rel), pristine);
+}
+/** One verifier pass; runNode's bounded default timeout applies. */
+function run(extraArgs, { includePristine = true } = {}) {
+  const r = runNode([
+    SCRIPT,
+    '--patches-dir', patchesDir,
+    '--config-dir', configDir,
+    ...(includePristine ? ['--pristine-dir', pristineDir] : []),
+    '--json',
+    ...extraArgs,
+  ]);
+  let report = null;
+  if (r.stdout && r.stdout.trim().startsWith('{')) report = JSON.parse(r.stdout);
+  return { status: r.exitCode, report, stderr: r.stderr };
+}
+const runHunks = (opts) => run(['--hunks'], opts);
+const runGate = (opts) => run([], opts);
+function runGateWithDecisions(decisions, opts) {
+  writeFile(decisionsPath, typeof decisions === 'string' ? decisions : JSON.stringify(decisions));
+  return run(['--decisions', decisionsPath], opts);
+}
+function onlyFile(report) {
+  assert.ok(report, 'expected a JSON report');
+  assert.equal(report.files.length, 1, `expected one file; got ${JSON.stringify(report.files)}`);
+  return report.files[0];
+}
+/** A significant (>= 12 chars) line, unique per tag. */
+function L(tag) {
+  return `line ${tag} carrying substantive customization text`;
+}
+const lines = (...xs) => xs.join('\n') + '\n';
+
+before(() => {
+  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4435-'));
+  patchesDir = path.join(tmpRoot, 'patches');
+  configDir = path.join(tmpRoot, 'installed');
+  pristineDir = path.join(tmpRoot, 'pristine');
+  decisionsPath = path.join(tmpRoot, 'decisions.json');
+  resetFixture();
+});
+after(() => cleanup(tmpRoot));
+
+describe('#4435: --hunks per-hunk classification', () => {
+  test('enums expose the documented closed vocabularies', () => {
+    assert.deepEqual(Object.values(HUNK_RECOMMENDATION).sort(), ['keep', 'retire', 'review']);
+    assert.deepEqual(Object.values(DISPOSITION).sort(), ['keep', 'retire', 'rewrite']);
+    assert.deepEqual(Object.values(HUNK_REASON).sort(), [
+      'already_upstream', 'anchor_orphaned', 'baseline_unconfirmed',
+      'diff_too_large', 'partially_upstream', 'region_changed_upstream',
+    ]);
+  });
+
+  test('Row 1 (independence): default gate report carries no interactive keys', () => {
+    resetFixture();
+    const rel = 'gsd-core/workflows/r1.md';
+    seed(rel, { pristine: lines(L('a'), L('b')), backup: lines(L('a'), L('u'), L('b')), install: lines(L('a'), L('u'), L('b')) });
+    const g = runGate();
+    assert.equal(g.status, 0);
+    assert.deepEqual(Object.keys(g.report).sort(),
+      ['baseline_covered', 'checked', 'drifted', 'drifted_files', 'failures', 'no_baseline', 'no_baseline_files', 'results']);
+  });
+
+  test('Row 2: user addition away from any upstream change → keep, not an exception', () => {
+    resetFixture();
+    const rel = 'gsd-core/workflows/r2.md';
+    seed(rel, {
+      pristine: lines(L('a'), L('b'), L('c'), L('d'), L('e')),
+      backup: lines(L('a'), L('u'), L('b'), L('c'), L('d'), L('e')),
+      install: lines(L('a'), L('b'), L('c'), L('d'), L('e2')),
+    });
+    const { status, report } = runHunks();
+    assert.equal(status, 0);
+    const f = onlyFile(report);
+    assert.equal(f.baseline, 'validated');
+    assert.equal(f.hunks.length, 1);
+    const h = f.hunks[0];
+    assert.equal(h.kind, 'addition');
+    assert.deepEqual(h.user_lines, [L('u')]);
+    assert.equal(h.anchor_before, L('a'));
+    assert.equal(h.anchor_after, L('b'));
+    assert.equal(h.recommendation, HUNK_RECOMMENDATION.KEEP);
+    assert.equal(h.exception, false);
+    assert.deepEqual(h.reasons, []);
+    assert.match(h.hunk_hash, /^[0-9a-f]{64}$/);
+    assert.equal(report.exceptions_total, 0);
+    assert.equal(report.hunks_total, 1);
+  });
+
+  test('Row 3: user addition already in the install → retire candidate', () => {
+    resetFixture();
+    const rel = 'gsd-core/workflows/r3.md';
+    seed(rel, { pristine: lines(L('a'), L('b')), backup: lines(L('a'), L('u'), L('b')), install: lines(L('a'), L('u'), L('b'), L('new')) });
+    const h = onlyFile(runHunks().report).hunks[0];
+    assert.equal(h.present_in_install, 'all');
+    assert.ok(h.reasons.includes(HUNK_REASON.ALREADY_UPSTREAM));
+    assert.equal(h.recommendation, HUNK_RECOMMENDATION.RETIRE);
+    assert.equal(h.exception, true);
+  });
+
+  test('Row 4 (semantic): upstream reworded the stock line the user replaced → review', () => {
+    resetFixture();
+    const rel = 'gsd-core/workflows/r4.md';
+    seed(rel, {
+      pristine: lines(L('a'), L('stock'), L('b')),
+      backup: lines(L('a'), L('user-rewrite'), L('b')),
+      install: lines(L('a'), L('stock-reworded-upstream'), L('b')),
+    });
+    const h = onlyFile(runHunks().report).hunks[0];
+    assert.equal(h.kind, 'replacement');
+    assert.deepEqual(h.stock_lines, [L('stock')]);
+    assert.deepEqual(h.user_lines, [L('user-rewrite')]);
+    assert.ok(h.reasons.includes(HUNK_REASON.REGION_CHANGED_UPSTREAM), JSON.stringify(h.reasons));
+    assert.equal(h.recommendation, HUNK_RECOMMENDATION.REVIEW);
+    assert.equal(h.exception, true);
+  });
+
+  test('Row 5 (semantic): upstream inserted different text at the same junction → review', () => {
+    resetFixture();
+    const rel = 'gsd-core/workflows/r5.md';
+    seed(rel, {
+      pristine: lines(L('a'), L('b')),
+      backup: lines(L('a'), L('user-gate'), L('b')),
+      install: lines(L('a'), L('upstream-native-gate'), L('b')),
+    });
+    const h = onlyFile(runHunks().report).hunks[0];
+    assert.equal(h.present_in_install, 'none');
+    assert.ok(h.reasons.includes(HUNK_REASON.REGION_CHANGED_UPSTREAM));
+    assert.equal(h.recommendation, HUNK_RECOMMENDATION.REVIEW);
+  });
+
+  test('Row 6 (semantic): both anchors deleted upstream → anchor_orphaned, review', () => {
+    resetFixture();
+    const rel = 'gsd-core/workflows/r6.md';
+    seed(rel, {
+      pristine: lines(L('a'), L('b'), L('c'), L('d')),
+      backup: lines(L('a'), L('b'), L('u'), L('c'), L('d')),
+      install: lines(L('x'), L('y')),
+    });
+    const h = onlyFile(runHunks().report).hunks[0];
+    assert.equal(h.anchor_before, L('b'));
+    assert.equal(h.anchor_after, L('c'));
+    assert.ok(h.reasons.includes(HUNK_REASON.ANCHOR_ORPHANED));
+    assert.equal(h.recommendation, HUNK_RECOMMENDATION.REVIEW);
+  });
+
+  test('Row 7 (boundary): one of two hunk lines present → partially_upstream, review', () => {
+    resetFixture();
+    const rel = 'gsd-core/workflows/r7.md';
+    seed(rel, {
+      pristine: lines(L('a'), L('b'), L('c'), L('d'), L('e')),
+      backup: lines(L('a'), L('u1'), L('u2'), L('b'), L('c'), L('d'), L('e')),
+      install: lines(L('a'), L('b'), L('c'), L('d'), L('e'), L('u1')),
+    });
+    const h = onlyFile(runHunks().report).hunks[0];
+    assert.equal(h.present_in_install, 'some');
+    assert.ok(h.reasons.includes(HUNK_REASON.PARTIALLY_UPSTREAM));
+    assert.equal(h.recommendation, HUNK_RECOMMENDATION.REVIEW);
+  });
+
+  test('Row 8: a user deletion upstream also made → deletion hunk, retire', () => {
+    resetFixture();
+    const rel = 'gsd-core/workflows/r8.md';
+    seed(rel, {
+      pristine: lines(L('a'), L('obsolete'), L('b')),
+      backup: lines(L('a'), L('b')),
+      install: lines(L('a'), L('b')),
+    });
+    const h = onlyFile(runHunks().report).hunks[0];
+    assert.equal(h.kind, 'deletion');
+    assert.deepEqual(h.user_lines, []);
+    assert.deepEqual(h.stock_lines, [L('obsolete')]);
+    assert.equal(h.recommendation, HUNK_RECOMMENDATION.RETIRE);
+  });
+
+  for (const variant of [
+    { name: 'unvalidated (no recorded hash)', recordHash: false, writePristine: true, includePristine: true, baseline: 'unvalidated' },
+    { name: 'drifted (hash mismatch)', recordHash: true, writePristine: 'drift', includePristine: true, baseline: 'none' },
+    { name: 'absent (recorded hash, no snapshot)', recordHash: true, writePristine: false, includePristine: true, baseline: 'none' },
+    { name: 'no --pristine-dir', recordHash: true, writePristine: true, includePristine: false, baseline: 'none' },
+  ]) {
+    test(`Row 9 (negative): ${variant.name} → baseline_unconfirmed, never retire`, () => {
+      resetFixture();
+      const rel = 'gsd-core/workflows/r9.md';
+      seed(rel, {
+        pristine: lines(L('a'), L('b')),
+        backup: lines(L('a'), L('u'), L('b')),
+        install: lines(L('a'), L('u'), L('b')), // all present: would be retire if confirmed
+        recordHash: variant.recordHash,
+        writePristine: variant.writePristine === true,
+      });
+      if (variant.writePristine === 'drift') writeFile(path.join(pristineDir, rel), lines(L('newer snapshot')));
+      const { status, report } = runHunks({ includePristine: variant.includePristine });
+      assert.equal(status, 0);
+      const f = onlyFile(report);
+      assert.equal(f.baseline, variant.baseline);
+      assert.ok(f.hunks.length >= 1);
+      for (const h of f.hunks) {
+        assert.ok(h.reasons.includes(HUNK_REASON.BASELINE_UNCONFIRMED), JSON.stringify(h));
+        assert.equal(h.recommendation, HUNK_RECOMMENDATION.REVIEW);
+      }
+    });
+  }
+
+  // matchLines caps the Myers edit distance at 400. One stock line replaced by
+  // K user lines is K+1 edits: K=398 (399), K=399 (400 = limit), K=400 (401).
+  for (const [k, tooLarge] of [[398, false], [399, false], [400, true]]) {
+    test(`Row 10 (boundary): ${k + 1} edits → diff_too_large=${tooLarge}`, () => {
+      resetFixture();
+      const rel = 'gsd-core/workflows/r10.md';
+      const userBlock = Array.from({ length: k }, (_, i) => L(`bulk-${i}`));
+      seed(rel, {
+        pristine: lines(L('a'), L('stock-mid'), L('b')),
+        backup: lines(L('a'), ...userBlock, L('b')),
+        install: lines(L('a'), L('stock-mid'), L('b')),
+      });
+      const f = onlyFile(runHunks().report);
+      assert.equal(f.hunks.length, 1);
+      const h = f.hunks[0];
+      assert.equal(h.reasons.includes(HUNK_REASON.DIFF_TOO_LARGE), tooLarge);
+      assert.equal(h.required_lines.length, k);
+      if (tooLarge) assert.equal(h.recommendation, HUNK_RECOMMENDATION.REVIEW);
+    });
+  }
+
+  test('Row 11 (negative): incompatible mode flags exit 2', () => {
+    resetFixture();
+    seed('gsd-core/workflows/r11.md', { pristine: lines(L('a')), backup: lines(L('a'), L('u')), install: lines(L('a')) });
+    writeFile(decisionsPath, JSON.stringify({ decisions: [] }));
+    assert.equal(run(['--hunks', '--classify']).status, 2);
+    assert.equal(run(['--hunks', '--decisions', decisionsPath]).status, 2);
+    assert.equal(run(['--classify', '--decisions', decisionsPath]).status, 2);
+    assert.equal(run(['--decisions']).status, 2, '--decisions requires a path');
+  });
+
+  test('Row 21 (boundary): CRLF backup over LF pristine yields exactly the user hunk', () => {
+    resetFixture();
+    const rel = 'gsd-core/workflows/r21.md';
+    seed(rel, {
+      pristine: lines(L('a'), L('b')),
+      backup: [L('a'), L('u'), L('b')].join('\r\n') + '\r\n',
+      install: lines(L('a'), L('b')),
+    });
+    const f = onlyFile(runHunks().report);
+    assert.equal(f.hunks.length, 1);
+    assert.deepEqual(f.hunks[0].user_lines, [L('u')]);
+  });
+});
+
+describe('#4435: gate --decisions (present-and-gate)', () => {
+  function seedTwoHunks(rel) {
+    seed(rel, {
+      pristine: lines(L('a'), L('b'), L('c'), L('d')),
+      backup: lines(L('a'), L('keep-me'), L('b'), L('c'), L('retire-me'), L('d')),
+      install: lines(L('a'), L('b'), L('c'), L('d')),
+    });
+  }
+
+  test('Row 12: a human retire bound to the hunk hash passes the gate and is reported', () => {
+    resetFixture();
+    const rel = 'gsd-core/workflows/g12.md';
+    seedTwoHunks(rel);
+    const hunks = onlyFile(runHunks().report).hunks;
+    assert.equal(hunks.length, 2);
+    const [keepHunk, retireHunk] = hunks;
+    // Merge step: graft the kept hunk only (the install changes between phases).
+    writeFile(path.join(configDir, rel), lines(L('a'), L('keep-me'), L('b'), L('c'), L('d')));
+    const without = runGate();
+    assert.equal(without.status, 1, 'the retired hunk is missing without a decision');
+    const g = runGateWithDecisions({ decisions: [
+      { file: rel, hunk_hash: keepHunk.hunk_hash, disposition: 'keep' },
+      { file: rel, hunk_hash: retireHunk.hunk_hash, disposition: 'retire' },
+    ] });
+    assert.equal(g.status, 0, JSON.stringify(g.report));
+    assert.equal(g.report.failures, 0);
+    assert.equal(g.report.decisions.applied, 2);
+    assert.deepEqual(
+      g.report.decisions.retired.map((r) => [r.file.replace(/\\/g, '/'), r.hunk_hash, r.disposition]),
+      [[rel, retireHunk.hunk_hash, 'retire']],
+    );
+  });
+
+  test('Row 13 (hostile): a decision whose hunk content changed is stale → exit 2', () => {
+    resetFixture();
+    const rel = 'gsd-core/workflows/g13.md';
+    seedTwoHunks(rel);
+    const retireHunk = onlyFile(runHunks().report).hunks[1];
+    // The backup changes after the human saw it.
+    writeFile(path.join(patchesDir, rel), lines(L('a'), L('keep-me'), L('b'), L('c'), L('retire-me-EDITED'), L('d')));
+    const g = runGateWithDecisions({ decisions: [{ file: rel, hunk_hash: retireHunk.hunk_hash, disposition: 'retire' }] });
+    assert.equal(g.status, 2);
+    assert.match(g.stderr, /stale/i);
+  });
+
+  test('Row 14 (negative): a decision for a file not in the patches dir → exit 2', () => {
+    resetFixture();
+    seedTwoHunks('gsd-core/workflows/g14.md');
+    const g = runGateWithDecisions({ decisions: [{ file: 'gsd-core/workflows/nope.md', hunk_hash: 'a'.repeat(64), disposition: 'retire' }] });
+    assert.equal(g.status, 2);
+  });
+
+  test('Row 15 (hostile): malformed decisions files exit 2', () => {
+    resetFixture();
+    const rel = 'gsd-core/workflows/g15.md';
+    seedTwoHunks(rel);
+    const h = onlyFile(runHunks().report).hunks[1];
+    const bad = [
+      '', '{not json', '0', '"str"', '[]', 'null', 'true', '{}', '{"decisions":"x"}',
+      JSON.stringify({ decisions: [{ file: rel, disposition: 'retire' }] }),
+      JSON.stringify({ decisions: [{ hunk_hash: h.hunk_hash, disposition: 'retire' }] }),
+      JSON.stringify({ decisions: [{ file: rel, hunk_hash: h.hunk_hash, disposition: 'delete' }] }),
+      JSON.stringify({ decisions: [null] }),
+      JSON.stringify({ decisions: [{ file: rel, hunk_hash: h.hunk_hash, disposition: 'rewrite' }] }),
+      JSON.stringify({ decisions: [{ file: rel, hunk_hash: h.hunk_hash, disposition: 'rewrite', replacement_lines: [] }] }),
+      JSON.stringify({ decisions: [{ file: rel, hunk_hash: h.hunk_hash, disposition: 'rewrite', replacement_lines: [1] }] }),
+      JSON.stringify({ decisions: [{ file: rel, hunk_hash: h.hunk_hash, disposition: 'retire', replacement_lines: [L('x')] }] }),
+    ];
+    for (const body of bad) {
+      const g = runGateWithDecisions(body);
+      assert.equal(g.status, 2, `expected exit 2 for decisions body ${JSON.stringify(body)}`);
+    }
+    cleanup(decisionsPath);
+    assert.equal(run(['--decisions', decisionsPath]).status, 2, 'missing decisions file');
+  });
+
+  test('Row 16 (second occurrence): duplicate hash — identical dedups, conflicting exits 2', () => {
+    resetFixture();
+    const rel = 'gsd-core/workflows/g16.md';
+    seedTwoHunks(rel);
+    const [k, r] = onlyFile(runHunks().report).hunks;
+    writeFile(path.join(configDir, rel), lines(L('a'), L('keep-me'), L('b'), L('c'), L('d')));
+    const dup = { file: rel, hunk_hash: r.hunk_hash, disposition: 'retire' };
+    const ok = runGateWithDecisions({ decisions: [dup, dup, { file: rel, hunk_hash: k.hunk_hash, disposition: 'keep' }] });
+    assert.equal(ok.status, 0, JSON.stringify(ok.report));
+    assert.equal(ok.report.decisions.retired.length, 1);
+    const conflict = runGateWithDecisions({ decisions: [dup, { ...dup, disposition: 'keep' }] });
+    assert.equal(conflict.status, 2);
+  });
+
+  test('Row 17 (negative): a keep decision does not excuse a missing hunk', () => {
+    resetFixture();
+    const rel = 'gsd-core/workflows/g17.md';
+    seedTwoHunks(rel);
+    const [k, r] = onlyFile(runHunks().report).hunks;
+    const g = runGateWithDecisions({ decisions: [
+      { file: rel, hunk_hash: k.hunk_hash, disposition: 'keep' },
+      { file: rel, hunk_hash: r.hunk_hash, disposition: 'keep' },
+    ] });
+    assert.equal(g.status, 1);
+  });
+
+  test('Row 18 (independence): a line shared by a retired and a kept hunk stays required', () => {
+    resetFixture();
+    const rel = 'gsd-core/workflows/g18.md';
+    seed(rel, {
+      pristine: lines(L('a'), L('b'), L('c'), L('d')),
+      backup: lines(L('a'), L('shared'), L('b'), L('c'), L('shared'), L('d')),
+      install: lines(L('a'), L('b'), L('c'), L('d')),
+    });
+    const hunks = onlyFile(runHunks().report).hunks;
+    assert.equal(hunks.length, 2);
+    const g = runGateWithDecisions({ decisions: [{ file: rel, hunk_hash: hunks[0].hunk_hash, disposition: 'retire' }] });
+    assert.equal(g.status, 1, 'the kept hunk still requires the shared line');
+  });
+
+  test('Row 19: a rewrite decision drops the original lines and reports rewrite', () => {
+    resetFixture();
+    const rel = 'gsd-core/workflows/g19.md';
+    seed(rel, { pristine: lines(L('a'), L('b')), backup: lines(L('a'), L('orig'), L('b')), install: lines(L('a'), L('hand-rewritten by the user'), L('b')) });
+    const [h] = onlyFile(runHunks().report).hunks;
+    const g = runGateWithDecisions({ decisions: [{ file: rel, hunk_hash: h.hunk_hash, disposition: 'rewrite', replacement_lines: [L('hand-rewritten by the user')] }] });
+    assert.equal(g.status, 0, JSON.stringify(g.report));
+    assert.equal(g.report.decisions.retired[0].disposition, 'rewrite');
+  });
+
+  test('Row 19b (negative): a rewrite whose replacement line is absent from the install fails the gate', () => {
+    resetFixture();
+    const rel = 'gsd-core/workflows/g19b.md';
+    seed(rel, { pristine: lines(L('a'), L('b')), backup: lines(L('a'), L('orig'), L('b')), install: lines(L('a'), L('something else entirely'), L('b')) });
+    const [h] = onlyFile(runHunks().report).hunks;
+    const g = runGateWithDecisions({ decisions: [{ file: rel, hunk_hash: h.hunk_hash, disposition: 'rewrite', replacement_lines: [L('hand-rewritten by the user')] }] });
+    assert.equal(g.status, 1, JSON.stringify(g.report));
+  });
+
+  test('Row 12b: human output lists every retired or rewritten hunk', () => {
+    resetFixture();
+    const rel = 'gsd-core/workflows/g12b.md';
+    seedTwoHunks(rel);
+    const [keepHunk, retireHunk] = onlyFile(runHunks().report).hunks;
+    writeFile(path.join(configDir, rel), lines(L('a'), L('keep-me'), L('b'), L('c'), L('d')));
+    writeFile(decisionsPath, JSON.stringify({ decisions: [
+      { file: rel, hunk_hash: keepHunk.hunk_hash, disposition: 'keep' },
+      { file: rel, hunk_hash: retireHunk.hunk_hash, disposition: 'retire' },
+    ] }));
+    const r = runNode([SCRIPT, '--patches-dir', patchesDir, '--config-dir', configDir, '--pristine-dir', pristineDir, '--decisions', decisionsPath]);
+    assert.equal(r.exitCode, 0, r.stdout + r.stderr);
+    const out = splitLines(r.stdout);
+    assert.ok(out.some((l) => l.includes('## Hunks retired or rewritten by user decision')), r.stdout);
+    assert.ok(out.some((l) => l.includes('hunk 2 (retire)')), r.stdout);
+  });
+
+  test('Row 20 (boundary): over-broad (no --pristine-dir) file-level retire passes', () => {
+    resetFixture();
+    const rel = 'gsd-core/workflows/g20.md';
+    seed(rel, { pristine: lines(L('a')), backup: lines(L('a'), L('u')), install: lines(L('upstream only')) });
+    const f = onlyFile(runHunks({ includePristine: false }).report);
+    assert.equal(f.hunks.length, 1);
+    assert.equal(f.hunks[0].kind, 'file');
+    assert.equal(runGate({ includePristine: false }).status, 1);
+    const g = runGateWithDecisions(
+      { decisions: [{ file: rel, hunk_hash: f.hunks[0].hunk_hash, disposition: 'retire' }] },
+      { includePristine: false },
+    );
+    assert.equal(g.status, 0, JSON.stringify(g.report));
+  });
+});
+
+describe('#4435: properties', () => {
+  // Mix of significant lines and structural/trivial ones the significance
+  // filter must drop (blank, closing brace, code fence).
+  const lineArb = fc.constantFrom(L('a'), L('b'), L('c'), L('d'), L('e'), L('f'), '', '}', '```');
+  const docArb = fc.array(lineArb, { maxLength: 12 }).map((xs) => xs.join('\n'));
+
+  test('parity: union of hunk required_lines equals computeUserAddedLines', () => {
+    fc.assert(fc.property(docArb, docArb, (pristine, backup) => {
+      const hunks = verifier.computeHunks('f.md', backup, pristine);
+      const fromHunks = hunks.flatMap((h) => h.required_lines).sort();
+      const direct = verifier.computeUserAddedLines(backup, pristine).sort();
+      assert.deepEqual(fromHunks, direct);
+    }));
+  });
+
+  test('retiring every hunk makes the gate pass regardless of the install', () => {
+    fc.assert(fc.property(docArb, docArb, docArb, (pristine, backup, install) => {
+      resetFixture();
+      const rel = 'gsd-core/workflows/prop.md';
+      seed(rel, { pristine, backup, install });
+      const hunks = verifier.computeHunks(rel, backup, pristine);
+      const result = verifier.verifyFile({
+        relPath: rel, patchesDir, configDir, pristineDir,
+        pristineHashes: { [rel]: sha256(pristine) }, skillsRedirect: null,
+        retiredHashes: new Set(hunks.map((h) => h.hunk_hash)),
+      });
+      assert.equal(result.status, 'ok', JSON.stringify(result));
+    }), { numRuns: 50 });
+  });
+});
+
+describe('#4435: workflow + command contract', () => {
+  const WORKFLOW = path.join(ROOT, 'gsd-core', 'workflows', 'reapply-patches.md');
+  const UPDATE_MD = path.join(ROOT, 'commands', 'gsd', 'update.md');
+
+  test('Contract A: the workflow parses --interactive (bare=exceptions, =all, =exceptions, invalid halts)', () => {
+    // allow-test-rule: source-text-is-the-product (#4435)
+    // reapply-patches.md is the installed runtime workflow; its text IS the
+    // deployed behavioral contract for --reapply --interactive.
+    const md = fs.readFileSync(WORKFLOW, 'utf8');
+    for (const token of ['--interactive=all', '--interactive=exceptions', 'INTERACTIVE_MODE']) {
+      assert.ok(md.includes(token), `workflow must handle ${token}`);
+    }
+    assert.ok(splitLines(md).some((l) => l.includes('bare `--interactive`') && l.includes('exceptions')), 'bare --interactive must mean exceptions');
+    assert.ok(/unknown --interactive value/i.test(md), 'an invalid value must halt with a usage error');
+  });
+
+  test('Contract B: --hunks runs before merging; decisions only from user answers; gate gets --decisions', () => {
+    // allow-test-rule: source-text-is-the-product (#4435)
+    const md = fs.readFileSync(WORKFLOW, 'utf8');
+    const hunksIdx = md.indexOf('--hunks');
+    const mergeIdx = md.indexOf('### Three-way merge (when baseline is available)');
+    assert.ok(hunksIdx > 0 && hunksIdx < mergeIdx, 'the --hunks run must precede the merge rules');
+    assert.ok(md.includes('VERIFY_ARGS+=(--decisions "$DECISIONS_FILE")'), 'Step 5a must pass the decisions file');
+    assert.ok(/only from the user's answer/i.test(md), 'decisions must come only from user answers');
+    const assign = md.split(/\r?\n/).find((l) => /^\s*DECISIONS_FILE=/.test(l));
+    assert.ok(assign, 'DECISIONS_FILE must be assigned');
+    assert.ok(!assign.includes('PATCHES_DIR'), 'decisions file must live outside gsd-local-patches/ (the gate walks it)');
+  });
+
+  test('Contract D: update.md declares --interactive and forwards args to the reapply workflow', () => {
+    // allow-test-rule: source-text-is-the-product (#4435)
+    const content = fs.readFileSync(UPDATE_MD, 'utf8');
+    const hint = (content.match(/^argument-hint:\s*(.*)$/m) || [])[1] || '';
+    assert.ok(hint.includes('--interactive'), `argument-hint must declare --interactive; got ${hint}`);
+    assert.ok(/--interactive\[=exceptions\|all\]/.test(content), 'the flags block must document --interactive[=exceptions|all]');
+    assert.ok(/passing the remaining arguments/i.test(content), '--reapply must forward the remaining args');
+  });
+});
+  });
+}

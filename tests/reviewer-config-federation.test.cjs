@@ -111,7 +111,8 @@ describe('reviewer config federation — provenance actually moved (#2797)', () 
     // this loop. The part of the #2797 invariant that still holds — a lane must
     // never own a MODEL or HOST key it has no use for, or another lane's budget
     // key — is what this asserts directly for the two lanes that still have
-    // neither.
+    // neither. #4559 adds a fourth legitimate reason for a prompt-fed lane: its
+    // own `review.context_window_tokens.<slug>` key.
     for (const [key, entry] of Object.entries(registry.configSchema || {})) {
       const owner = entry && entry.owner;
       if (!['qwen', 'coderabbit'].includes(owner)) continue;
@@ -119,9 +120,12 @@ describe('reviewer config federation — provenance actually moved (#2797)', () 
         !key.startsWith('review.models.') && !key.endsWith('_host'),
         `${owner} must not own a model or host key, but owns "${key}"`,
       );
-      assert.equal(
-        key, `review.max_prompt_tokens_per_reviewer.${owner}`,
-        `${owner} must own no key other than its own budget key, but owns "${key}"`,
+      const allowed = [`review.max_prompt_tokens_per_reviewer.${owner}`];
+      // #4559: a prompt-fed lane also owns its own context-window key; coderabbit is sent no prompt and owns none
+      if (owner === 'qwen') allowed.push(`review.context_window_tokens.${owner}`);
+      assert.ok(
+        allowed.includes(key),
+        `${owner} must own no key other than its own budget or context-window key, but owns "${key}"`,
       );
     }
   });
@@ -212,8 +216,8 @@ describe('reviewer config federation — end-to-end through the CLI (#2797)', ()
   });
 
   test('an unset per-lane budget resolves to the -1 sentinel, not 0', (t) => {
-    // 0 is a LEGITIMATE per-lane budget meaning "do not trim this lane" — the
-    // guard in prepare_trimmed_prompt_for_reviewer returns early on it. A
+    // 0 is a LEGITIMATE per-lane budget meaning "no cap on this lane" — the
+    // cap resolver treats it as an explicit disable, never as unset. A
     // federated key always resolves to its declared default, so if that default
     // were 0, "unset" and "deliberately disabled" would be indistinguishable and
     // the workflow's fallback-to-global branch could not tell them apart.
@@ -504,18 +508,20 @@ describe('reviewer prompt budget — #3691 (CLI lanes cannot receive a cap)', ()
     assert.equal(planLane(tmpDir, 'codex').promptBudget, 1);
   });
 
-  test('row8 (anti-tightening pin, green today and after): no config at all trims nothing, on every declared lane', (t) => {
-    // Guards against a "fix" that hard-codes a budget onto every lane: that
-    // would satisfy rows 1-7 while breaking every user who configured nothing.
+  test('row8 (#4559): no config at all caps exactly the lanes that declare a context window, at floor(window * 0.65)', (t) => {
+    // Guards against a "fix" that hard-codes a budget onto every lane: a lane that declares no
+    // window (its model is unknowable) stays uncapped, as before.
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
     writeReviewConfig(tmpDir, {});
     const allSlugs = REVIEWER_LANES.map((l) => l.slug);
     const plans = planLanes(tmpDir, allSlugs);
+    const DERIVED = { claude: 130000, codex: 176800, qwen: 85196, 'kimi-code': 170393 };
     for (const slug of allSlugs) {
       const entry = plans.find((e) => e.slug === slug);
       assert.ok(entry, `no plan entry for slug "${slug}"`);
-      assert.equal(entry.promptBudget, null, `${slug}: the default resolved surface must not gain trimming`);
+      const expected = Object.prototype.hasOwnProperty.call(DERIVED, slug) ? DERIVED[slug] : null;
+      assert.equal(entry.promptBudget, expected, `${slug}: default resolved cap`);
     }
   });
 
@@ -557,7 +563,7 @@ describe('reviewer prompt budget — #3691 (CLI lanes cannot receive a cap)', ()
   // (JSON strings survive the round trip) and exercise the identical
   // `typeof v === 'number' && Number.isFinite(v)` guard: a string is rejected
   // by `typeof` exactly as a real NaN would be rejected by `Number.isFinite`.
-  test('property: per-lane wins when finite and not -1, else the global when finite, else null', () => {
+  test('property: per-lane wins when finite and not -1, else the global when finite, else the declared-window default (#4559)', () => {
     const perLaneArb = fc.oneof(
       fc.integer({ min: -1000, max: 1000000 }),
       fc.constantFrom(-1, 0),
@@ -590,7 +596,8 @@ describe('reviewer prompt budget — #3691 (CLI lanes cannot receive a cap)', ()
           if (!entry) return false;
 
           const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
-          const expected = isNum(p) && p !== -1 ? p : (isNum(g) ? g : null);
+          // codex declares a 272000-token window: floor(272000 * 0.65) = 176800 when nothing explicit applies.
+          const expected = isNum(p) && p !== -1 ? p : (isNum(g) ? g : 176800);
           return entry.promptBudget === expected;
         } finally {
           cleanup(tmpDir);

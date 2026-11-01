@@ -180,6 +180,7 @@ const STUB_PREAMBLE = [
   '  fi',
   '',
   '  if [ "$1" = "query" ] && [ "$2" = "prompt-budget" ]; then',
+  '    echo "prompt-budget" >> "$PB_LOG"',
   '    shift 2',
   '    local out base slug',
   '    out="$(arg_after --output-prompt "$@")"',
@@ -258,6 +259,7 @@ function buildEnv(opts, runDir, tracePath, barrierDir) {
     STUB_PAD_BYTES: String(opts.padBytes || 0),
     LANE_COUNT: String(laneCount),
     TRACE: tracePath,
+    PB_LOG: `${tracePath}.pb`,
     BARRIER_DIR: barrierDir,
   };
 }
@@ -304,6 +306,11 @@ function runDispatch(t, opts) {
     ? readFileNormalized(tracePath).split('\n').filter((l) => l.trim() !== '')
     : [];
 
+  const pbPath = `${tracePath}.pb`;
+  const promptBudgetCalls = fs.existsSync(pbPath)
+    ? readFileNormalized(pbPath).split('\n').filter((l) => l.trim() !== '')
+    : [];
+
   return {
     outcome: result.outcome,
     exitCode: result.exitCode,
@@ -311,6 +318,7 @@ function runDispatch(t, opts) {
     jsonl,
     lines,
     trace,
+    promptBudgetCalls,
     runDir,
   };
 }
@@ -464,15 +472,32 @@ describe('#3034 lane failure does not abort sibling lanes', () => {
   });
 });
 
-// ─── #13 — budget-too-small skip emits no result line ─────────────────────
+// ─── #13 (#4559) — lanes are never trimmed by the workflow ────────────────
+//
+// The workflow used to trim a lane's prompt with `prompt-budget` when its plan carried a budget,
+// and wrote a "review skipped: prompt budget" stub when the trim failed. #4559 removes trimming:
+// the cap is enforced (refuse, never trim) inside `review-lane invoke`. A lane whose plan
+// carries a budget must therefore be invoked with the untrimmed prompt and no `prompt-budget` call.
 
-describe('#3034 budget-too-small skip', () => {
-  test('budgetSkipEmitsNoResultLine', (t) => {
-    const result = runDispatch(t, { selected: SELECTED_3, parallel: 'true', budgetFailSlugs: ['gemini'] });
-    assert.deepEqual(slugOrder(result.lines), ['codex', 'claude'], 'the budget-skipped lane contributes no result line');
+describe('#4559 lanes are never trimmed by the workflow', () => {
+  test('lanesAreNeverTrimmed_4559', (t) => {
+    for (const parallel of [null, 'true']) {
+      const result = runDispatch(t, { selected: SELECTED_3, parallel, budgetFailSlugs: ['gemini'] });
+      assert.deepEqual(
+        result.promptBudgetCalls, [],
+        `parallel=${parallel}: invoke_reviewers must never call prompt-budget; got ${JSON.stringify(result.promptBudgetCalls)}`,
+      );
+      assert.deepEqual(
+        slugOrder(result.lines).sort(), ['claude', 'codex', 'gemini'],
+        `parallel=${parallel}: a lane whose plan carries a budget is still invoked`,
+      );
+    }
+  });
+
+  test('aLaneWithABudgetIsInvokedWithTheUntrimmedPromptPath_4559', (t) => {
+    const result = runDispatch(t, { selected: 'gemini', parallel: null, budgetFailSlugs: ['gemini'] });
     const stub = fs.readFileSync(path.join(result.runDir, 'gsd-review-gemini.md'), 'utf-8');
-    assert.match(stub, /skipped/);
-    assert.match(stub, /prompt budget/);
+    assert.equal(stub, 'stub review body for gemini\n', 'the lane ran; no "skipped" stub was written by the workflow');
   });
 });
 
@@ -867,7 +892,9 @@ function runWriteReviewsFlow(t, opts) {
   };
 }
 
-const BUDGET_SKIP_MD = (slug) => `${slug} review skipped: prompt budget (500 tokens) too small for the minimum review set.`;
+// #4559: the stub `review-lane invoke` writes when a lane's prompt exceeds its cap
+// (`renderPromptRefusalStub`). The workflow keys on the marker `review did not run: prompt exceeds`.
+const REFUSED_MD = (slug) => `${slug} review did not run: prompt exceeds this lane's context cap (estimated 130001 tokens > cap 130000 from the declared context window; raise review.context_window_tokens.${slug} or set review.max_prompt_tokens_per_reviewer.${slug} to 0).\n`;
 const LANE_FAILURE_MD = (slug) => `${slug} review failed: exit 1`;
 
 describe('#3352 every lane failed writes no REVIEWS.md', () => {
@@ -907,21 +934,49 @@ describe('#3352 one successful lane still writes REVIEWS.md (R1, must stay green
   });
 });
 
-describe('#3352 a budget-skipped lane is not a failure (N5)', () => {
-  test('budgetSkippedLanesAreNotFailures', (t) => {
+describe('#3352/#4559 a refused lane is not a failure (N5)', () => {
+  test('refusedLanesAreNotFailures', (t) => {
     const result = runWriteReviewsFlow(t, {
       selected: 'codex,gemini,claude',
       jsonlLines: [],
       lanes: {
-        codex: { md: BUDGET_SKIP_MD('codex') },
-        gemini: { md: BUDGET_SKIP_MD('gemini') },
-        claude: { md: BUDGET_SKIP_MD('claude') },
+        codex: { md: REFUSED_MD('codex') },
+        gemini: { md: REFUSED_MD('gemini') },
+        claude: { md: REFUSED_MD('claude') },
       },
     });
-    assert.equal(result.allLanesSkipped, 'true', `every lane was budget-skipped, not failed; stderr=${result.stderr}`);
-    assert.equal(result.totalLaneFailure, 'false', 'a budget skip must never be classified as a failure');
+    assert.equal(result.allLanesSkipped, 'true', `every lane was refused, not failed; stderr=${result.stderr}`);
+    assert.equal(result.totalLaneFailure, 'false', 'a prompt-cap refusal must never be classified as a failure');
     assert.equal(result.reviewsMdExists, false, 'nothing to review — REVIEWS.md still must not be written');
     assert.deepEqual(result.commitTrace, []);
+  });
+
+  test('someRefusedSomeRanStillWritesReviews_4559', (t) => {
+    const result = runWriteReviewsFlow(t, {
+      selected: 'codex,gemini,claude',
+      jsonlLines: [{ slug: 'codex' }],
+      lanes: {
+        codex: { md: '# Codex review\nlooks good\n' },
+        gemini: { md: REFUSED_MD('gemini') },
+        claude: { md: REFUSED_MD('claude') },
+      },
+    });
+    assert.equal(result.allLanesSkipped, 'false', 'one lane ran — the run is not all-skipped');
+    assert.equal(result.totalLaneFailure, 'false');
+    assert.equal(result.reviewsMdExists, true, 'at least one lane ran — REVIEWS.md must still be written');
+    assert.equal(result.commitTrace.length, 1, 'the commit must run exactly once');
+  });
+
+  test('aRefusedLaneAndAFailedLaneDoNotCountAsRan_4559', (t) => {
+    const result = runWriteReviewsFlow(t, {
+      selected: 'codex,gemini',
+      jsonlLines: [],
+      lanes: {
+        codex: { md: REFUSED_MD('codex') },
+        gemini: { md: LANE_FAILURE_MD('gemini'), err: 'boom\n' },
+      },
+    });
+    assert.equal(result.reviewsMdExists, false, 'neither lane produced a review');
   });
 });
 
@@ -1068,10 +1123,6 @@ describe('#4097 the run\'s own input copies are not preserved as diagnostics', (
     'gsd-review-requirements.md': 'REQUIREMENTS.md copy\n',
     'gsd-review-plan-12.6-01.md': 'plan 12.6-01 duplicate\n',
     'gsd-review-plan-12.6-02.md': 'plan 12.6-02 duplicate\n',
-    // Per-lane trimmed prompt written by prepare_trimmed_prompt_for_reviewer
-    // — also a run input, also matched by the issue's `gsd-review-prompt*`
-    // exclusion prefix.
-    'gsd-review-prompt-claude.md': 'budget-trimmed prompt for lane claude\n',
   };
 
   test('inputCopiesAreNotSweptIntoDiagnostics_4097', (t) => {

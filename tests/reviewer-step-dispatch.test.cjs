@@ -617,8 +617,13 @@ describe('dispatchReviewerLanes — fail-closed: budget overflow', () => {
     assert.equal(result.ok, false);
     const bySlug = Object.fromEntries(result.results.map((r) => [r.slug, r]));
     assert.equal(bySlug.claude.ok, false);
-    assert.equal(bySlug.claude.reason, 'budget_exceeded');
+    assert.equal(bySlug.claude.reason, 'prompt_exceeds_context');
+    assert.equal(bySlug.claude.refusal.cap, 5);
+    assert.equal(bySlug.claude.refusal.capSource, 'lane');
+    assert.equal(typeof bySlug.claude.refusal.estimatedTokens, 'number');
+    assert.ok(bySlug.claude.refusal.estimatedTokens > 5);
     assert.equal(bySlug.codex.ok, true);
+    assert.equal('refusal' in bySlug.codex, false);
   });
 
   test('budget 0 means unbounded (no hard-fail), mirroring the existing review-lane budgetFor convention', async () => {
@@ -810,7 +815,7 @@ describe('dispatchReviewerLanes — budget overflow exact boundary (#4209 review
     const { input, tokens } = budgetInput();
     const { result, invokeCalls } = await runWithBudget(input, tokens - 1);
     assert.equal(invokeCalls, 0);
-    assert.equal(result.results[0].reason, 'budget_exceeded');
+    assert.equal(result.results[0].reason, 'prompt_exceeds_context');
   });
 
   test('budget === estimatedTokens + 1 does not hard-fail (one token of headroom)', async () => {
