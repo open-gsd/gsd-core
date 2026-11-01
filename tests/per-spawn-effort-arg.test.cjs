@@ -15,7 +15,8 @@
  *
  * Isolation follows tests/model-resolver.test.cjs § "#492 manifest effort
  * fallback": a per-test GSD_HOME holding its own defaults.json, and GSD_RUNTIME
- * set per test so the per-install runtime marker never decides the host.
+ * set per test so the per-install runtime marker never decides the host, except
+ * where a test pins the marker to exercise it.
  */
 
 'use strict';
@@ -39,6 +40,7 @@ const {
 } = require(path.join(LIB, 'model-resolver.cjs'));
 const { spawnEffortParamFor } = require(path.join(LIB, 'runtime-name-policy.cjs'));
 const { validateRuntimeBody } = require(path.join(LIB, 'capability-validator.cjs'));
+const runtimeSlash = require(path.join(LIB, 'runtime-slash.cjs'));
 const { renderEffortForRuntime } = require(path.join(LIB, 'model-catalog.cjs'));
 const { readGsdEffectiveEffortConfig, resolveInstallTimeEffort } = require(path.join(LIB, 'install-effort-resolver.cjs'));
 
@@ -70,7 +72,8 @@ function project(config) {
 function useEnv(t, { home, runtime }) {
   const saved = { GSD_HOME: process.env.GSD_HOME, GSD_RUNTIME: process.env.GSD_RUNTIME };
   process.env.GSD_HOME = home;
-  process.env.GSD_RUNTIME = runtime;
+  if (runtime === undefined) delete process.env.GSD_RUNTIME;
+  else process.env.GSD_RUNTIME = runtime;
   t.after(() => {
     for (const [k, v] of Object.entries(saved)) {
       if (v === undefined) delete process.env[k];
@@ -254,6 +257,54 @@ describe('#5330 resolveEffortArgInternal — descriptor-driven, never host-coded
       assert.equal(resolveEffortArgInternal(dir, MAPPER), '');
     });
   }
+
+  describe('the host must be named: a positive signal, never the claude default', () => {
+    /** Pin the install-marker rung, restoring the file-read cache after the test. */
+    const useMarker = (t, value) => {
+      runtimeSlash._setInstallRuntimeMarkerForTests(value);
+      t.after(() => runtimeSlash._resetInstallRuntimeMarkerCacheForTests());
+    };
+    const EFFORT = { effort: { agent_overrides: { [MAPPER]: 'xhigh' } } };
+
+    test('env, config and marker all absent: no argument, though model resolution falls back to claude', (t) => {
+      const home = gsdHome();
+      const dir = project(EFFORT);
+      useEnv(t, { home });
+      useMarker(t, null);
+      t.after(() => { cleanup(dir); cleanup(home); });
+
+      assert.equal(runtimeSlash.resolveActiveRuntime({}), 'claude');
+      assert.equal(runtimeSlash.resolveDeclaredRuntime({}), null);
+      assert.equal(resolveEffortArgInternal(dir, MAPPER), '');
+    });
+
+    test('each rung alone is enough to name claude', (t) => {
+      const home = gsdHome();
+      const dir = project(EFFORT);
+      const withConfigRung = project({ ...EFFORT, runtime: 'claude' });
+      t.after(() => { cleanup(dir); cleanup(withConfigRung); cleanup(home); });
+
+      useEnv(t, { home });
+      useMarker(t, 'claude');
+      assert.equal(resolveEffortArgInternal(dir, MAPPER), 'effort="xhigh"', 'install marker');
+
+      runtimeSlash._setInstallRuntimeMarkerForTests(null);
+      assert.equal(resolveEffortArgInternal(withConfigRung, MAPPER), 'effort="xhigh"', 'config.runtime');
+
+      process.env.GSD_RUNTIME = 'claude';
+      assert.equal(resolveEffortArgInternal(dir, MAPPER), 'effort="xhigh"', 'GSD_RUNTIME');
+    });
+
+    test('a marker naming another host gets no argument', (t) => {
+      const home = gsdHome();
+      const dir = project(EFFORT);
+      useEnv(t, { home });
+      useMarker(t, 'codex');
+      t.after(() => { cleanup(dir); cleanup(home); });
+
+      assert.equal(resolveEffortArgInternal(dir, MAPPER), '');
+    });
+  });
 
   test('inherit renders no argument: it is never a wire level', (t) => {
     const home = gsdHome();

@@ -38,6 +38,7 @@ import path from 'node:path';
 import { canonicalizeRuntimeName, hostBehaviorsFor, spawnEffortParamFor } from './runtime-name-policy.cjs';
 import {
   resolveActiveRuntime,
+  resolveDeclaredRuntime,
   _setInstallRuntimeMarkerForTests,
   _resetInstallRuntimeMarkerCacheForTests,
 } from './runtime-slash.cjs';
@@ -1056,6 +1057,11 @@ function agentOverrideNames(effortCfg: Record<string, unknown>, agentType: strin
  * would override its own frontmatter. Such an agent gets no argument unless
  * `effort.agent_overrides` names it, an explicit choice both cascades honour.
  *
+ * The host must be named by GSD_RUNTIME, `config.runtime` or the install marker
+ * (every install writes one). `resolveActiveRuntime`'s `'claude'` default is a
+ * guess that model resolution can afford and this argument cannot: on an unnamed
+ * host the frontmatter still applies, while a wrong `effort=` reaches its spawn call.
+ *
  * The level goes through the same wire rules as every other effort channel
  * (`renderEffortForRuntime`): `inherit` is never a wire level and renders no
  * argument, a level the host rejects renders none, and a host's clamp applies
@@ -1063,7 +1069,8 @@ function agentOverrideNames(effortCfg: Record<string, unknown>, agentType: strin
  */
 function resolveEffortArgInternal(cwd: string, agentType: string): string {
   const config = loadConfig(cwd);
-  const runtime = resolveActiveRuntime(config);
+  const runtime = resolveDeclaredRuntime(config);
+  if (!runtime) return '';
   const param = spawnEffortParamFor(runtime);
   if (!param) return '';
   const effortCfg = config['effort'];
