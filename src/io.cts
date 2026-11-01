@@ -397,6 +397,9 @@ const ERROR_REASON = Object.freeze({
   // human_needed`) — verification.cts's VerificationStatusError, translated
   // once, centrally, by gsd-tools.cjs. Never read as "no result" at exit 0.
   VERIFICATION_STATUS_INVALID: 'verification_status_invalid',
+  // milestone complete (#5482): a blocking ship:pre predicate gate re-checked
+  // per milestone phase refused the one-way door; `blocked` lists each gate.
+  MILESTONE_GATE_BLOCKED: 'milestone_gate_blocked',
   // generic
   USAGE: 'usage',
   UNKNOWN: 'unknown',
@@ -482,8 +485,8 @@ function formatDiagnosticToken(value: string): string {
 
 /**
  * Map an ERROR_REASON wire value onto a declared outcome name (#3912,
- * ADR-3889 §4). Closed over the 27-member enum: every reason gets an
- * explicit entry below, so a 28th member added without a mapping falls
+ * ADR-3889 §4). Closed over the 28-member enum: every reason gets an
+ * explicit entry below, so a 29th member added without a mapping falls
  * through to the `?? 'FAIL'` default rather than silently mis-projecting —
  * and tests/A1 iterates `Object.values(ERROR_REASON)`, so that default is
  * exactly what makes an unmapped addition visible instead of invisible.
@@ -544,6 +547,9 @@ const REASON_TO_OUTCOME: Readonly<Record<string, string>> = Object.freeze({
   // the reader accepts — a broken prerequisite of the query, the same shape
   // as SUMMARY_EXTRACT_UNPARSEABLE just above.
   [ERROR_REASON.VERIFICATION_STATUS_INVALID]: 'UNAVAILABLE',
+  // #5482: a prerequisite of the close (no open work reported by a blocking
+  // ship:pre predicate gate) is unmet.
+  [ERROR_REASON.MILESTONE_GATE_BLOCKED]: 'UNAVAILABLE',
 
   // Self-failure: the run itself broke, not its inputs.
   [ERROR_REASON.SDK_FAIL_FAST]: 'INTERNAL',

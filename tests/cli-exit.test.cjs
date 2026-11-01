@@ -643,9 +643,10 @@ describe('regressions', () => {
       // #5118 legitimately added a 27th code — VERIFICATION_STATUS_INVALID —
       // for a *-VERIFICATION.md status outside the closed VerificationStatus
       // set (ADR-5057 Phase 4), the same kind of documented growth.
-      // #5186 adds typed phase collision, ambiguous-owner and naming refusals.
-      // Keep all previous members while checking the three intentional additions.
-      assert.strictEqual(seen.reasonCount, 30);
+      // #5186 adds typed phase collision, ambiguous-owner and naming refusals; #5482 adds
+      // MILESTONE_GATE_BLOCKED (a blocking ship:pre predicate gate refusing `milestone complete`).
+      // Keep all previous members while checking the four intentional additions.
+      assert.strictEqual(seen.reasonCount, 31);
       assert.deepEqual(seen.keys, [
         'CONFIG_KEY_NOT_FOUND', 'CONFIG_NO_FILE', 'CONFIG_PARSE_FAILED', 'CONFIG_INVALID_KEY',
         'SDK_FAIL_FAST', 'SDK_UNKNOWN_COMMAND', 'SDK_MISSING_ARG', 'PHASE_NOT_FOUND',
@@ -655,7 +656,7 @@ describe('regressions', () => {
         'HOOKS_OPT_OUT', 'COMMIT_DOCS_GUARD_NOT_A_REPO', 'COMMIT_DOCS_GUARD_FOREIGN_HOOK',
         'COMMIT_DOCS_GUARD_HOOKS_PATH_SET', 'SECURITY_SCAN_FAILED', 'PICK_FIELD_ABSENT',
         'PICK_OUTPUT_NOT_JSON', 'SUMMARY_EXTRACT_UNPARSEABLE', 'VERIFICATION_STATUS_INVALID',
-        'USAGE', 'UNKNOWN', 'PHASE_ID_COLLISION', 'AMBIGUOUS_PHASE_OWNER', 'PHASE_NAMING_NOT_CUSTOM',
+        'MILESTONE_GATE_BLOCKED', 'USAGE', 'UNKNOWN', 'PHASE_ID_COLLISION', 'AMBIGUOUS_PHASE_OWNER', 'PHASE_NAMING_NOT_CUSTOM',
       ].sort());
       assert.deepEqual(seen.phaseReasons, ['phase_id_collision', 'ambiguous_phase_owner', 'phase_naming_not_custom']);
       assert.ok(
