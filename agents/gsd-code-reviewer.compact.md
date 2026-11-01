@@ -58,10 +58,12 @@ Read `./CLAUDE.md` if present — follow project guidelines, security requiremen
 <depth_levels>
 
 **quick** — pattern-matching only, grep/regex scan for common anti-patterns, no full file reads. Target: <2 min.
-Checks (commands in `review_by_depth`): Hardcoded secrets; Dangerous functions; Debug artifacts; Empty catch blocks; Commented-out code.
+Checks (commands in `review_by_depth`): Hardcoded secrets; Dangerous functions; Debug artifacts; Empty catch blocks; Commented-out code; Unpinned actions; Non-idempotent install; Missing job timeout.
+The last three: GitHub Actions workflows only; the install check only with a `package-lock.json`.
 
 **standard** (default) — Read each changed file, check bugs/security/quality in context, cross-reference imports/exports. Target: 5-15 min.
 Language-aware checks: **JS/TS** unchecked `.length`, missing `await`, unhandled promise rejection, `as any`, `==` vs `===`, null coalescing issues. **Python** bare `except:`, mutable default args, f-string injection, `eval()`, missing `with` for file ops. **Go** unchecked error returns, goroutine leaks, context not passed, `defer` in loops, race conditions. **C/C++** buffer overflow patterns, use-after-free, null pointer deref, missing bounds checks, memory leaks. **Shell** unquoted variables, `eval`, missing `set -e`, command injection via interpolation.
+**CI/CD pipelines** (by path: `.github/workflows/*.yml`, `Dockerfile*`, `docker-compose*.yml`, deploy scripts): Read `~/.claude/gsd-core/references/cicd-review-patterns.md`; if it cannot be read, say so in the Summary and check: non-idempotent steps (`npm install` vs `npm ci`), no job `timeout-minutes`, deploy without `concurrency` + `cancel-in-progress`, per-environment rebuild (not build-once), no health check or rollback, load-bearing `continue-on-error`, static credentials where OIDC works, unpinned actions.
 
 **deep** — all of standard + cross-file analysis: trace call chains across imports, check type consistency at API boundaries (TS interfaces, API contracts), verify error propagation (thrown errors caught by callers), check state mutation consistency across modules, detect circular dependencies/coupling. Target: 15-30 min.
 
@@ -111,6 +113,7 @@ Use its `files`. A `status` of `unresolvable` (exit 69, JSON still printed), or 
 NOTE: do NOT exclude all `.md` — commands, workflows, and agents are source code in this codebase.
 
 **2. Group by language/type:** JS/TS (`.js`,`.jsx`,`.ts`,`.tsx`), Python (`.py`), Go (`.go`), C/C++ (`.c`,`.cpp`,`.h`,`.hpp`), Shell (`.sh`,`.bash`), other → generic.
+CI/CD (by path): `.github/workflows/*.yml`/`*.yaml`, `Dockerfile*`, `docker-compose*.yml`, `deploy*.sh` (also Shell).
 
 **3. Exit early if empty:** create REVIEW.md with `status: skipped`, all finding counts 0. Body: "No source files to review after filtering. All files in scope are documentation, planning artifacts, or generated files. Use `status: skipped` (not `clean`) because no actual review was performed."
 
@@ -120,7 +123,7 @@ NOTE: `status: clean` = reviewed, no issues. `status: skipped` = no reviewable f
 <step name="review_by_depth">
 **depth=quick:** run every check from `<depth_levels>`:
 ```bash
-# FILE = one file in scope.
+# FILE = one file in scope; the last three run on .github/workflows/ files only.
 
 # Hardcoded secrets
 grep -n -E "(password|secret|api_key|token|apikey|api-key)\s*[=:]\s*['\"][^'\"]+['\"]" "$FILE"
@@ -136,8 +139,29 @@ grep -n -E "catch\s*\([^)]*\)\s*\{\s*\}" "$FILE"
 
 # Commented-out code
 grep -n -E "^\s*//.*[{};]|^\s*#.*:|^\s*/\*" "$FILE"
+
+# Unpinned actions
+grep -n -E "uses:[[:space:]]*['\"]?[^[:space:]'\"]+@(main|master|latest)['\"]?([[:space:]]|$)" "$FILE"
+
+# Non-idempotent install
+grep -n -E "(^|[^[:alnum:]_-])npm[[:space:]]+(install|i)([[:space:]]|$)" "$FILE" | grep -v -E "^[0-9]+:[[:space:]]*#|[[:space:]](-g|--global)([[:space:]]|$)"
+
+# Missing job timeout
+awk '
+function flush() { if (job != "" && runs && !timed) print line ": " job ": no job-level timeout-minutes"; job = "" }
+{ sub(/\r$/, "") }
+/^[^[:space:]#]/ { flush(); injobs = ($0 ~ /^jobs:[[:space:]]*(#.*)?$/); jind = -1; next }
+!injobs || /^[[:space:]]*(#.*)?$/ { next }
+{ ind = match($0, /[^ ]/) - 1 }
+jind < 0 { jind = ind }
+ind == jind { flush(); job = $0; sub(/^ +/, "", job); sub(/:.*/, "", job); line = NR; kind = -1; runs = 0; timed = 0; next }
+kind < 0 { kind = ind }
+ind == kind && /^ *runs-on:/ { runs = 1 }
+ind == kind && /^ *timeout-minutes:/ { timed = 1 }
+END { flush() }
+' "$FILE"
 ```
-Severity: secrets/dangerous=Critical, debug and commented-out code=Info, empty catch=Warning.
+Severity: secrets/dangerous=Critical, debug and commented-out code=Info, empty catch and the three CI/CD checks=Warning.
 
 **depth=standard:** per file — Read full content, apply language-specific checks, check for: functions >50 lines, deep nesting (>4 levels), missing error handling in async functions, hardcoded config values, type safety issues (TS `any`, loose Python typing). Record findings with file path, line number, description.
 
@@ -147,7 +171,7 @@ Severity: secrets/dangerous=Critical, debug and commented-out code=Info, empty c
 <step name="classify_findings">
 **Critical** — security vulnerabilities, data loss, crashes, auth bypasses: SQL/command/path-traversal injection, hardcoded secrets in production code, null pointer derefs that crash, auth/authz bypasses, unsafe deserialization, buffer overflows.
 
-**Warning** — logic errors, unhandled edge cases, missing error handling, code smells that could cause bugs: unchecked array access, missing async error handling, off-by-one errors, `==` vs `===` coercion, unhandled promise rejections, dead code paths indicating logic errors.
+**Warning** — logic errors, unhandled edge cases, missing error handling, code smells that could cause bugs: unchecked array access, missing async error handling, off-by-one errors, `==` vs `===` coercion, unhandled promise rejections, dead code paths indicating logic errors; CI/CD pipeline: no job timeout, unpinned action, non-idempotent install, no deploy concurrency guard, per-environment rebuild, no health check or rollback, load-bearing `continue-on-error`, static credentials.
 
 **Info** — style, naming, dead code, unused imports, suggestions: unused imports/variables, poor naming (single letters except loop counters), commented-out code, TODO/FIXME, magic numbers, duplication.
 

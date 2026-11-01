@@ -79,6 +79,11 @@ Checks (commands in `review_by_depth`):
 - Debug artifacts
 - Empty catch blocks
 - Commented-out code
+- Unpinned actions
+- Non-idempotent install
+- Missing job timeout
+
+The last three: GitHub Actions workflows only; the install check only with a `package-lock.json`.
 
 **standard** (default) — Read each changed file. Check for bugs, security issues, and quality problems in context. Cross-reference imports and exports. Target: 5-15 minutes.
 
@@ -88,6 +93,7 @@ Language-aware checks:
 - **Go**: Unchecked error returns, goroutine leaks, context not passed, `defer` in loops, race conditions
 - **C/C++**: Buffer overflow patterns, use-after-free indicators, null pointer dereferences, missing bounds checks, memory leaks
 - **Shell**: Unquoted variables, `eval` usage, missing `set -e`, command injection via interpolation
+- **CI/CD pipelines** (by path: `.github/workflows/*.yml`, `Dockerfile*`, `docker-compose*.yml`, deploy scripts): Read `~/.claude/gsd-core/references/cicd-review-patterns.md`; if it cannot be read, say so in the Summary and check: non-idempotent steps (`npm install` vs `npm ci`), no job `timeout-minutes`, deploy without `concurrency` + `cancel-in-progress`, per-environment rebuild (not build-once), no health check or rollback, load-bearing `continue-on-error`, static credentials where OIDC works, unpinned actions
 
 **deep** — All of standard, plus cross-file analysis. Trace function call chains across imports. Target: 15-30 minutes.
 
@@ -176,6 +182,7 @@ NOTE: Do NOT exclude all `.md` files — commands, workflows, and agents are sou
 - Go: `.go`
 - C/C++: `.c`, `.cpp`, `.h`, `.hpp`
 - Shell: `.sh`, `.bash`
+- CI/CD (by path): `.github/workflows/*.yml`/`*.yaml`, `Dockerfile*`, `docker-compose*.yml`, `deploy*.sh` (also Shell)
 - Other: Review generically
 
 **3. Exit early if empty:** If no source files remain after filtering, create REVIEW.md with:
@@ -198,7 +205,7 @@ Branch on depth level:
 **For depth=quick:**
 Run every check from `<depth_levels>` quick section:
 ```bash
-# FILE = one file in scope.
+# FILE = one file in scope; the last three run on .github/workflows/ files only.
 
 # Hardcoded secrets
 grep -n -E "(password|secret|api_key|token|apikey|api-key)\s*[=:]\s*['\"][^'\"]+['\"]" "$FILE"
@@ -214,9 +221,30 @@ grep -n -E "catch\s*\([^)]*\)\s*\{\s*\}" "$FILE"
 
 # Commented-out code
 grep -n -E "^\s*//.*[{};]|^\s*#.*:|^\s*/\*" "$FILE"
+
+# Unpinned actions
+grep -n -E "uses:[[:space:]]*['\"]?[^[:space:]'\"]+@(main|master|latest)['\"]?([[:space:]]|$)" "$FILE"
+
+# Non-idempotent install
+grep -n -E "(^|[^[:alnum:]_-])npm[[:space:]]+(install|i)([[:space:]]|$)" "$FILE" | grep -v -E "^[0-9]+:[[:space:]]*#|[[:space:]](-g|--global)([[:space:]]|$)"
+
+# Missing job timeout
+awk '
+function flush() { if (job != "" && runs && !timed) print line ": " job ": no job-level timeout-minutes"; job = "" }
+{ sub(/\r$/, "") }
+/^[^[:space:]#]/ { flush(); injobs = ($0 ~ /^jobs:[[:space:]]*(#.*)?$/); jind = -1; next }
+!injobs || /^[[:space:]]*(#.*)?$/ { next }
+{ ind = match($0, /[^ ]/) - 1 }
+jind < 0 { jind = ind }
+ind == jind { flush(); job = $0; sub(/^ +/, "", job); sub(/:.*/, "", job); line = NR; kind = -1; runs = 0; timed = 0; next }
+kind < 0 { kind = ind }
+ind == kind && /^ *runs-on:/ { runs = 1 }
+ind == kind && /^ *timeout-minutes:/ { timed = 1 }
+END { flush() }
+' "$FILE"
 ```
 
-Record findings with severity: secrets/dangerous=Critical, debug and commented-out code=Info, empty catch=Warning
+Record findings with severity: secrets/dangerous=Critical, debug and commented-out code=Info, empty catch and the three CI/CD checks=Warning
 
 **For depth=standard:**
 For each file:
@@ -260,6 +288,7 @@ For each finding, assign severity:
 - Type coercion issues (`==` vs `===`)
 - Unhandled promise rejections
 - Dead code paths that indicate logic errors
+- CI/CD pipeline: no job timeout, unpinned action, non-idempotent install, no deploy concurrency guard, per-environment rebuild, no health check or rollback, load-bearing `continue-on-error`, static credentials
 
 **Info** — Style issues, naming improvements, dead code, unused imports, suggestions:
 - Unused imports/variables
