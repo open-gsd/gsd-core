@@ -577,13 +577,29 @@ describe('Bug 2 — present_results severity-label parser', () => {
     );
   });
 
-  // Docs-parity: the workflow .md must contain the updated grep for BL- headings.
-  test('code-review.md present_results grep includes BL- headings alongside CR- and WR-', () => {
-    const src = fs.readFileSync(WORKFLOW_PATH, 'utf8');
-    assert.ok(
-      src.includes('### BL-') && src.includes('### CR-') && src.includes('### WR-'),
-      'code-review.md present_results must grep for BL- alongside CR- and WR- headings'
-    );
+  // The shipped line, run on a review. Which headings it selects is the contract, not its spelling:
+  // the text check this replaced stayed green over a grep that read no prefixed heading (#5802).
+  // `-A 3` prints the lines after each selected heading whatever they are, so it comes off here and
+  // the output is the selection.
+  test('the Top issues grep selects critical and warning headings, prefixed or not', (t) => {
+    const line = readFileNormalized(WORKFLOW_PATH).split('\n').find((l) => l.startsWith('grep -A 3 ') && l.includes('REVIEW_PATH'));
+    assert.ok(line, 'code-review.md present_results must carry the Top issues grep');
+    const dir = createTempDir('gsd-5802-top-issues-');
+    t.after(() => cleanup(dir));
+    const reviewPath = path.join(dir, '01-REVIEW.md');
+    fs.writeFileSync(reviewPath, ['### CR-01: bare critical', '### BL-02: bare blocker', '### WR-03: bare warning',
+      '### W6-CR-04: prefixed critical', '### R1-BL-05: prefixed blocker', '### R1-WR-06: prefixed warning',
+      '###  W6-CR-09: two spaces', '###\tCR-10: a tab', '### WR-11 : a space before the colon',
+      '### IN-07: info stays out', '### W6-IN-08: prefixed info stays out', '### CR-: no number stays out',
+      '### WR-03garbage: not an id', ''].join('\n'));
+    const res = runHook('-c', [line.replace(' -A 3', '')], {
+      interpreter: 'bash',
+      timeoutMs: PROBE_TIMEOUT_MS,
+      env: { ...process.env, REVIEW_PATH: reviewPath },
+    });
+    assert.strictEqual(res.exitCode, 0, res.stderr);
+    assert.deepStrictEqual(res.stdout.trim().split('\n').map((l) => l.replace(/^###\s+(\S+?)\s*:.*$/, '$1')),
+      ['CR-01', 'BL-02', 'WR-03', 'W6-CR-04', 'R1-BL-05', 'R1-WR-06', 'W6-CR-09', 'CR-10', 'WR-11']);
   });
 });
 
