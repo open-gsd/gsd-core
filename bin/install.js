@@ -3346,7 +3346,8 @@ function _maskStringsAndComments(text) {
 }
 
 // #5330: a per-spawn effort placeholder as a call argument or a prose mention.
-const EFFORT_ARG_PLACEHOLDER_RE = /\{[A-Za-z0-9_]+_(?:effort_arg|EFFORT_ARG)\}/;
+// `${X_EFFORT_ARG}` is a shell expansion in a bash block, not a placeholder.
+const EFFORT_ARG_PLACEHOLDER_RE = /(?<!\$)\{[A-Za-z0-9_]+_(?:effort_arg|EFFORT_ARG)\}/;
 
 /**
  * Normalize ONE `Agent(...)`/`Agent({...})` call span (already isolated by

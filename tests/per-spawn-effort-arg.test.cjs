@@ -487,7 +487,7 @@ describe('#5330 the executor effort argument follows the routed agent', () => {
       probe: 'printf "[%s]" "$executor_effort_arg"',
     });
     assert.equal(r.status, 0, r.stderr);
-    return r.stdout;
+    return r.stdout.slice(r.stdout.lastIndexOf('['));
   };
 
   test('gsd-executor keeps the argument its init payload carried', () => {
@@ -502,13 +502,23 @@ describe('#5330 the executor effort argument follows the routed agent', () => {
     assert.equal(bound('gsd-acme-specialist', 'effort="max"'), '[effort="max"]');
   });
 
+  test('a specialist\'s value is printed: shell state never reaches the spawn call\'s placeholder', () => {
+    const r = runBash(rebind(), { stdout: 'effort="max"', rc: 0 }, { preamble: ['EXECUTOR_TYPE=gsd-acme-specialist'] });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /executor_effort_arg for gsd-acme-specialist: \[effort="max"\]/);
+    const none = runBash(rebind(), { stdout: '', rc: 0 }, { preamble: ['EXECUTOR_TYPE=gsd-acme-specialist'] });
+    assert.match(none.stdout, /executor_effort_arg for gsd-acme-specialist: \[\]/);
+    const executor = runBash(rebind(), { stdout: 'effort="max"', rc: 0 }, { preamble: ['EXECUTOR_TYPE=gsd-executor'] });
+    assert.equal(executor.stdout, '');
+  });
+
   test('a failed lookup empties the argument rather than leaving the executor\'s', () => {
     const r = runBash(rebind(), { stdout: '', rc: 1 }, {
       preamble: ['EXECUTOR_TYPE=gsd-acme-specialist', INIT_ARG],
       probe: 'printf "[%s]" "$executor_effort_arg"',
     });
     assert.equal(r.status, 0, r.stderr);
-    assert.equal(r.stdout, '[]');
+    assert.ok(r.stdout.endsWith('[]'), r.stdout);
   });
 
   test('the spawn site carries the rebound value with no condition of its own', () => {
@@ -937,6 +947,11 @@ describe('#5330 dispatch projection strips the effort placeholder (Hermes, Pi)',
       const out = project(src, cfg());
       assert.doesNotMatch(out, /effort_arg/, out);
       assert.equal(out, project(src.replace('  {planner_effort_arg},\r\n', ''), cfg()));
+    });
+
+    test(`${name}: a shell expansion is not a placeholder, so it neither strips nor refuses`, () => {
+      const src = '```bash\necho "${REVIEWER_EFFORT_ARG}"\n```\n';
+      assert.equal(project(src, cfg()), src);
     });
 
     test(`${name}: a mention the strip does not recognise refuses the install, wherever it sits`, () => {

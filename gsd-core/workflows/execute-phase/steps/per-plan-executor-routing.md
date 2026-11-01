@@ -16,6 +16,9 @@ default `gsd-executor`. `plan_json` (the current plan's object from
   `gsd-executor`.
 - The resolved `EXECUTOR_TYPE` is used as `subagent_type` in BOTH worktree and
   sequential dispatch (sequential reuses the worktree-mode `Agent()` template).
+- For a specialist, substitute the `executor_effort_arg` this step prints, in place of
+  the init payload's value, which was resolved for `gsd-executor`. Nothing printed
+  means `gsd-executor` is spawned and the init value stands.
 
 ## Resolution
 
@@ -36,6 +39,7 @@ fi
 # agent spawned, so a specialist takes its own (empty unless the config names it).
 if [ "$EXECUTOR_TYPE" != "gsd-executor" ]; then
   executor_effort_arg=$(gsd_run query resolve-model "$EXECUTOR_TYPE" --pick effort_arg 2>/dev/null || true)
+  echo "executor_effort_arg for $EXECUTOR_TYPE: [$executor_effort_arg]"
 fi
 
 # #1689 v1 routes only the Agent()-based dispatch. On the orchestrator-worktree
