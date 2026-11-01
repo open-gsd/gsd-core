@@ -1161,6 +1161,27 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
 }
 
 /**
+ * #4432: one `hooks.secret_read_exempt` entry as a POSIX repo-relative file
+ * path, or null when it is not one. The secret-read guard
+ * (hooks/lib/secret-read-exemptions.js `normalizeExemptEntry`) applies the SAME
+ * rules when it reads the list, and is standalone because an installed hook
+ * cannot require `src/`. The duplication is deliberate and pinned: a parity test
+ * (tests/secret-read-exemptions.test.cjs) drives one corpus and a seeded
+ * property through both, so a value accepted here is a value the hook honors.
+ */
+function normalizeSecretReadExemptEntry(entry: unknown): string | null {
+  if (typeof entry !== 'string') return null;
+  let s = entry.replace(/\\/g, '/');
+  while (s.startsWith('./')) s = s.slice(2);
+  if (s === '' || s === '.') return null;
+  if (s.startsWith('/') || s.endsWith('/')) return null;
+  if (/^[A-Za-z]:/.test(s)) return null;
+  if (s.includes('\0')) return null;
+  if (s.split('/').includes('..')) return null;
+  return s;
+}
+
+/**
  * The per-key VALUE rules, shared by `config-set` and `config-new-project`
  * (#5268). They were inline in `cmdConfigSet`, so `config-new-project` had no
  * way to apply them and wrote values `config-set` refuses for the same key.
@@ -1352,6 +1373,16 @@ function validateConfigValue(cwd: string, kp: string, parsedValue: unknown, val:
         + `hooks.context_critical_threshold < hooks.context_warning_threshold, and no valid `
         + `warning value is above 100, so a critical of 100 would always fall back to the `
         + `35/25 defaults. Use a value below 100.`);
+    }
+  }
+
+  // #4432: files the secret-read guard may let agents read. Every entry must be
+  // a repo-relative file path; the guard drops anything else when it reads the
+  // list, so storing it would be accept-then-discard.
+  if (kp === 'hooks.secret_read_exempt') {
+    if (!Array.isArray(parsedValue) || parsedValue.some((entry) => normalizeSecretReadExemptEntry(entry) === null)) {
+      error(`Invalid hooks.secret_read_exempt '${val}'. Must be an array of repo-relative file paths `
+        + `(no leading '/', drive prefix, '..' segment or trailing '/'), e.g. [".env.production"].`);
     }
   }
 
@@ -1742,4 +1773,5 @@ export = {
   setConfigValue,
   setConfigValues,
   isValidProtectedBranches,
+  normalizeSecretReadExemptEntry,
 };
