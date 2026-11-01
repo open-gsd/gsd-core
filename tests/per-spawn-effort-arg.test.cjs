@@ -32,6 +32,7 @@ const fc = require('./helpers/fast-check-setup.cjs');
 const { runGsdTools, cleanup } = require('./helpers.cjs');
 const { span, runBash } = require('./helpers/doc-bash-span.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
+const installer = require('../bin/install.js');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const LIB = path.join(REPO_ROOT, 'gsd-core', 'bin', 'lib');
@@ -43,7 +44,7 @@ const {
 const { spawnEffortParamFor } = require(path.join(LIB, 'runtime-name-policy.cjs'));
 const { validateRuntimeBody } = require(path.join(LIB, 'capability-validator.cjs'));
 const runtimeSlash = require(path.join(LIB, 'runtime-slash.cjs'));
-const { renderEffortForRuntime } = require(path.join(LIB, 'model-catalog.cjs'));
+const { MODEL_PROFILES, renderEffortForRuntime } = require(path.join(LIB, 'model-catalog.cjs'));
 const { readGsdEffectiveEffortConfig, resolveInstallTimeEffort } = require(path.join(LIB, 'install-effort-resolver.cjs'));
 
 function tmpDir(prefix) {
@@ -70,7 +71,11 @@ function project(config) {
   return dir;
 }
 
-/** Point the resolver at `home` and `runtime` for one test, restoring both after. */
+/**
+ * Point the resolver at `home` and `runtime` for one test, restoring both after. This writes
+ * process.env, so it relies on node:test running a file's tests serially, which is its default:
+ * nothing in this file sets `concurrency`.
+ */
 function useEnv(t, { home, runtime }) {
   const saved = { GSD_HOME: process.env.GSD_HOME, GSD_RUNTIME: process.env.GSD_RUNTIME };
   process.env.GSD_HOME = home;
@@ -344,6 +349,10 @@ describe('#5330 resolveEffortArgInternal — descriptor-driven, never host-coded
     assert.equal(resolveEffortArgInternal(dir, MAPPER), 'effort="low"');
   });
 
+  test('the clamp the property reads is claude\'s own: minimal renders low', () => {
+    assert.equal(renderEffortForRuntime('claude', 'minimal').value, 'low');
+  });
+
   test('property: on claude the argument is the cascade value a project names, after the host clamp', (t) => {
     const home = gsdHome();
     useEnv(t, { home, runtime: 'claude' });
@@ -354,7 +363,7 @@ describe('#5330 resolveEffortArgInternal — descriptor-driven, never host-coded
         const dir = project({ effort: { agent_overrides: { [MAPPER]: effort } } });
         const arg = resolveEffortArgInternal(dir, MAPPER);
         cleanup(dir);
-        return arg === `effort="${effort === 'minimal' ? 'low' : effort}"`;
+        return arg === `effort="${renderEffortForRuntime('claude', effort).value}"`;
       }),
       { numRuns: VALID_EFFORTS.length * 3 },
     );
@@ -549,6 +558,21 @@ function effortNameFor(modelName) {
 const MODEL_SITE_RE = /model\s*[=:]\s*"\{([A-Za-z0-9_]+_(?:model|MODEL))\}"|model `([A-Z0-9_]+_MODEL)`|model\s*=\s*([a-z0-9_]+_model)\b/g;
 const EFFORT_PLACEHOLDER_RE = /\{([A-Za-z0-9_]+_(?:effort_arg|EFFORT_ARG))\}/g;
 
+/**
+ * `(lineIndex, column) => text` of the `Agent(...)` call holding that position, or null. Uses the
+ * installer's own span finder, so the census and the projection agree on what a call is.
+ */
+function callLocator(content) {
+  const spans = installer.findDispatchCallSpans(content, 'Agent');
+  const lineStarts = [0];
+  for (const m of content.matchAll(/\n/g)) lineStarts.push(m.index + 1);
+  return (lineIndex, column) => {
+    const at = lineStarts[lineIndex] + column;
+    const span = spans.find((s) => s.start <= at && at < s.end);
+    return span ? content.slice(span.start, span.end) : null;
+  };
+}
+
 /** The effort name for the agent a literal `subagent_type="gsd-…"` spawns: gsd-debug-session-manager → debug_session_manager_effort_arg. */
 function effortNameForAgent(window) {
   const m = /subagent_type[=:]\s*"gsd-([a-z0-9-]+)"/.exec(window);
@@ -564,15 +588,17 @@ function effortNameForAgent(window) {
  */
 function unpairedSites(content) {
   const lines = content.split(/\r?\n/);
+  const inCall = callLocator(content);
   const out = [];
   lines.forEach((line, i) => {
     for (const m of line.matchAll(MODEL_SITE_RE)) {
       const model = m[1] || m[2] || m[3];
       const effort = effortNameFor(model);
-      // Within two lines either side: the placeholder sits next to the model line, or above
-      // `subagent_type` where a test pins `subagent_type` and `model` adjacent (quick.md).
-      const window = lines.slice(Math.max(0, i - 2), i + 3).join('\n');
-      const block = lines.slice(Math.max(0, i - 6), i + 7).join('\n');
+      // Inside an Agent(...) call the call itself is the site, so a neighbouring spawn's argument
+      // cannot stand in for a missing one. Elsewhere (prose) the placeholder sits within two lines.
+      const call = inCall(i, m.index);
+      const window = call ?? lines.slice(Math.max(0, i - 2), i + 3).join('\n');
+      const block = call ?? lines.slice(Math.max(0, i - 6), i + 7).join('\n');
       if (/\bref\.agent\b/.test(block)) {
         const roleField = [...window.matchAll(EFFORT_PLACEHOLDER_RE)].map((x) => x[1]).find((e) => /_effort_arg$/.test(e));
         if (roleField) out.push({ line: i + 1, model, effort: `none (hook agent; got {${roleField}})` });
@@ -726,15 +752,22 @@ function shellEffortBindings(content) {
  */
 function wrongAgentEffort(content, bindings = shellEffortBindings(content)) {
   const lines = content.split(/\r?\n/);
+  const inCall = callLocator(content);
   const out = [];
   lines.forEach((line, i) => {
     for (const m of line.matchAll(EFFORT_PLACEHOLDER_RE)) {
       const effort = m[1];
       let spawned = null;
-      let best = Infinity;
-      for (let j = Math.max(0, i - 6); j < Math.min(lines.length, i + 7); j += 1) {
-        const sm = /subagent_type[=:]\s*"(gsd-[a-z0-9-]+)"/.exec(lines[j]);
-        if (sm && Math.abs(j - i) < best) { best = Math.abs(j - i); spawned = sm[1]; }
+      const call = inCall(i, m.index);
+      if (call) {
+        spawned = (/subagent_type[=:]\s*"(gsd-[a-z0-9-]+)"/.exec(call) || [])[1] ?? null;
+      } else {
+        // Prose: the nearest literal subagent_type within six lines.
+        let best = Infinity;
+        for (let j = Math.max(0, i - 6); j < Math.min(lines.length, i + 7); j += 1) {
+          const sm = /subagent_type[=:]\s*"(gsd-[a-z0-9-]+)"/.exec(lines[j]);
+          if (sm && Math.abs(j - i) < best) { best = Math.abs(j - i); spawned = sm[1]; }
+        }
       }
       if (!spawned) continue;
       const shellAgent = bindings.get(effort);
@@ -760,6 +793,34 @@ describe('#5330 census: the effort is resolved for the agent spawned', () => {
     for (const file of listMarkdown(SHIPPED_MD_ROOTS[2])) judge(path.relative(REPO_ROOT, file), fs.readFileSync(file, 'utf8'));
     assert.ok(checked >= 70, `expected >=70 effort placeholders, found ${checked}`);
     assert.deepEqual(findings, [], `effort resolved for the wrong agent (#5330):\n  ${findings.join('\n  ')}`);
+  });
+
+  test('every agent a workflow resolves the argument for is in the profile table', () => {
+    // An unlisted agent resolves empty unless the config names it, so a typo in a binding would
+    // silently cost that spawn its argument. A dynamic binding ($VAR, <agent>) names no agent.
+    const named = new Set(Object.values(INIT_ROLE_AGENTS).flat());
+    const collect = (content) => {
+      for (const agent of shellEffortBindings(content).values()) {
+        if (agent.startsWith('gsd-')) named.add(agent);
+      }
+    };
+    for (const fam of workflowFamilies()) collect(fam.content);
+    for (const file of listMarkdown(SHIPPED_MD_ROOTS[2])) collect(fs.readFileSync(file, 'utf8'));
+    assert.ok(named.size >= 25, `expected >=25 agents with an effort argument, found ${named.size}`);
+    assert.deepEqual([...named].filter((a) => !Object.hasOwn(MODEL_PROFILES, a)), []);
+  });
+
+  test('detector: a neighbouring spawn\'s argument does not stand in for a missing one', () => {
+    const bare = 'Agent(subagent_type="gsd-planner", model="{planner_model}", prompt="a")';
+    const full = 'Agent(subagent_type="gsd-planner", model="{planner_model}", {planner_effort_arg}, prompt="b")';
+    assert.deepEqual(unpairedSites(`${bare}\n${full}\n`).map((u) => u.line), [1]);
+    assert.deepEqual(unpairedSites(`${full}\n${full}\n`), []);
+  });
+
+  test('detector: a placeholder is judged against its own call, not the nearest one', () => {
+    const planner = 'Agent(\n  subagent_type="gsd-planner",\n  prompt="a\n\n\n\n\n\n\n\nb",\n  model="{planner_model}",\n  {checker_effort_arg},\n)';
+    const checker = 'Agent(subagent_type="gsd-plan-checker", model="{checker_model}", prompt="c")';
+    assert.deepEqual(wrongAgentEffort(`${planner}\n${checker}\n`).map((f) => f.spawned), ['gsd-planner']);
   });
 
   test('detector: the round-1 debug shape is caught, the corrected one is not', () => {
