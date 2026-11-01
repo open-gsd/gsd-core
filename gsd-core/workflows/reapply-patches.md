@@ -10,6 +10,19 @@ After a GSD update wipes and reinstalls files, this workflow merges user's previ
 
 <process>
 
+## Step 0: Parse interactive mode (#4435)
+
+Read the arguments passed after `--reapply`:
+
+- no `--interactive` → `INTERACTIVE_MODE=off` (the default; Step 4 runs exactly as before)
+- bare `--interactive` or `--interactive=exceptions` → `INTERACTIVE_MODE=exceptions`
+- `--interactive=all` → `INTERACTIVE_MODE=all`
+- any other `--interactive=<value>` → STOP with: `unknown --interactive value '<value>' (expected exceptions or all)`. Do not reapply anything.
+
+When the mode is not `off`, tell the user once, before the first prompt: on the first interactive run
+for this install, `--interactive=all` is recommended, because the recommendations have not yet been
+checked against this install's customizations.
+
 ## Step 1: Detect backed-up patches
 
 Check for local patches directory:
@@ -250,6 +263,67 @@ merge paths below, unchanged. If the classifier cannot run at all (e.g. `GSD_HOM
 unset), fall back to merging every file as before; never report `Incorporated` without the
 classifier's structured confirmation.
 
+### Step 4 interactive review (#4435) — only when `INTERACTIVE_MODE` is not `off`
+
+Verbatim matching cannot see an edit that upstream adopted in different words, an edit whose
+surrounding stock text upstream rewrote, or an edit whose anchor lines upstream deleted. Interactive
+mode shows each user edit (hunk) and lets the USER decide. Present and gate: the tool recommends,
+the user decides, and nothing is retired without the user's answer.
+
+```bash
+DECISIONS_FILE="$(mktemp "${TMPDIR:-/tmp}/gsd-reapply-decisions.XXXXXX")"
+HUNKS_ARGS=(
+  --patches-dir "$PATCHES_DIR"
+  --config-dir  "$CONFIG_DIR"
+)
+if [ -d "$PRISTINE_DIR" ]; then
+  HUNKS_ARGS+=(--pristine-dir "$PRISTINE_DIR")
+fi
+HUNKS_ARGS+=(--hunks --json)
+
+# Informational: exits 0. Each hunk carries hunk_hash, kind, stock_lines, user_lines,
+# recommendation (keep | retire | review), reasons, and exception (true/false).
+HUNKS_OUTPUT="$(node "${GSD_HOME}/gsd-core/bin/verify-reapply-patches.cjs" "${HUNKS_ARGS[@]}")"
+```
+
+The decisions file lives in a temp directory, never inside `gsd-local-patches/`, because the
+Step 5a gate treats every file in that directory as a backed-up patch.
+
+For each file in `HUNKS_OUTPUT.files`, for each hunk:
+
+- `INTERACTIVE_MODE=all`: present EVERY hunk.
+- `INTERACTIVE_MODE=exceptions`: present only hunks with `exception: true`. Every other hunk is kept
+  without asking. Print one summary line for each:
+  `kept without review: {file} hunk {hunk_id}: "{first user line, truncated to 60 chars}"`.
+
+Presenting a hunk means asking the user one question (`AskUserQuestion` where the runtime has it,
+otherwise a plain prompt and wait) that shows:
+
+- **Stock text:** `stock_lines` (or "(none — your lines were inserted)" when empty)
+- **Your text:** `user_lines` (or "(none — you deleted the stock text)" when empty)
+- **Recommendation:** `recommendation`, with `reasons` explained in plain words:
+  `already_upstream` (the shipped file already has it), `partially_upstream` (only some of it is
+  there), `region_changed_upstream` (upstream also changed this spot, for example by rewording it),
+  `anchor_orphaned` (the lines it sat between are gone), `baseline_unconfirmed` (no verified
+  pre-update copy, so read the whole file), `diff_too_large` (the file changed too much to split it
+  into separate edits)
+- Options: **Keep** (graft it), **Retire** (drop it; keep upstream's text), **Rewrite** (the user
+  supplies replacement text, which is applied instead)
+
+Write a decision entry only from the user's answer to that hunk's question. Never write `retire` or
+`rewrite` for a hunk the user was not asked about, and never pick an answer on the user's behalf,
+even when the recommendation is `retire`. A hunk kept without review in `exceptions` mode is
+recorded as `keep`. Record each answer in `DECISIONS_FILE` as JSON:
+
+```json
+{ "decisions": [ { "file": "<file>", "hunk_hash": "<hunk_hash>", "disposition": "keep|retire|rewrite" } ] }
+```
+
+Then merge each file with the paths below, applying only `keep` hunks and the user's replacement
+text for `rewrite` hunks. A file whose hunks were all retired is left exactly as installed and
+reported `Incorporated` ("Retired by user decision"). A file with some hunks retired is reported
+`Merged` with "{N} hunk(s) retired by user decision".
+
 For each file in `backup-meta.json`:
 
 1. **Read the backed-up version** (user's modified copy from `gsd-local-patches/`)
@@ -351,6 +425,11 @@ VERIFY_ARGS=(
 )
 if [ -d "$PRISTINE_DIR" ]; then
   VERIFY_ARGS+=(--pristine-dir "$PRISTINE_DIR")
+fi
+# #4435: hunks the user retired or rewrote are excused only through the recorded,
+# hash-bound decisions. A decision whose hunk no longer matches exits 2 (stale).
+if [ "$INTERACTIVE_MODE" != "off" ] && [ -s "$DECISIONS_FILE" ]; then
+  VERIFY_ARGS+=(--decisions "$DECISIONS_FILE")
 fi
 VERIFY_ARGS+=(--json)
 
@@ -456,6 +535,14 @@ Then re-run /gsd:update --reapply to re-verify.
 
 Do not proceed to cleanup until the verifier exits 0.
 
+**If `VERIFY_STATUS` is 2 and stderr names a `stale decision`** (#4435), a recorded answer no longer
+matches its hunk because the backup or baseline changed after the user saw it. STOP, discard
+`DECISIONS_FILE`, and re-run `/gsd:update --reapply --interactive` so the user decides on the current
+text. Never edit the decisions file to make it match.
+
+When decisions were passed, the JSON report carries `decisions.retired` — every hunk excused by a
+user `retire` or `rewrite` decision. List each one in the Step 7 report.
+
 **Only when `VERIFY_STATUS` is 0** (or when all files had zero significant user-added lines, which the verifier reports as `Failures: 0`) may execution continue to gate 5b.
 
 ### 5b: Hunk Verification Table review (advisory gate, #1999)
@@ -520,6 +607,7 @@ Ask user:
 - [ ] User modifications identified and merged into new version
 - [ ] Superseded customizations classified `Incorporated` by the deterministic pre-flight classifier (pristine-confirmed) and not re-grafted
 - [ ] Conflicts surfaced to user with both versions shown
+- [ ] With `--interactive`, every presented hunk was decided by the user (never by the agent), retired/rewritten hunks were passed to the Step 5a gate through the hash-bound decisions file, and each retirement is listed in the report
 - [ ] Status reported for each file with summary of what was preserved
 - [ ] Post-merge verification checks each file for dropped hunks and warns if content appears missing
 </success_criteria>

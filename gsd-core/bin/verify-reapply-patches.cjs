@@ -29,6 +29,14 @@
  *                                    # documented #934 advisory posture, but
  *                                    # its coverage is ALWAYS headline-reported.
  *
+ *     [--hunks]                      # pre-merge mode (#4435): per-hunk stock vs
+ *                                    # user text, content hash, recommendation
+ *                                    # and exception reasons; always exits 0
+ *     [--decisions <path>]           # gate mode only (#4435): JSON file of human
+ *                                    # keep/retire/rewrite decisions bound to
+ *                                    # hunk content hashes; retire/rewrite drop
+ *                                    # that hunk's required lines from the gate
+ *
  * Exit codes (default gate mode):
  *   0 — every user-added line is present in the merged file (gate passes)
  *   1 — at least one missing line in at least one file (gate fails); outranks
@@ -60,12 +68,15 @@ const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 // release's writer dropped). Same module the installer's preserve-check uses,
 // so the two readers cannot drift apart again.
 const { findPristineByHash, findPristineInGit } = require('./lib/pristine-baseline.cjs');
+// #4435: line matcher (Myers, edit-distance capped) used to split a backup into
+// per-hunk user/stock regions and to locate upstream changes over the baseline.
+const { matchLines } = require('./lib/markdown-line-diff.cjs');
 
 const SIGNIFICANT_MIN_CHARS = 12;
 const GSD_HOOK_VERSION_LINE_RE = /^(?:\/\/|#)\s*gsd-hook-version:\s*\S+\s*$/i;
 
 function parseArgs(argv) {
-  const opts = { patchesDir: null, configDir: null, pristineDir: null, json: false, classify: false, minBaselineCoverage: null };
+  const opts = { patchesDir: null, configDir: null, pristineDir: null, json: false, classify: false, minBaselineCoverage: null, hunks: false, decisionsPath: null };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--patches-dir') opts.patchesDir = argv[++i];
@@ -73,7 +84,12 @@ function parseArgs(argv) {
     else if (arg === '--pristine-dir') opts.pristineDir = argv[++i];
     else if (arg === '--json') opts.json = true;
     else if (arg === '--classify') opts.classify = true;
-    else if (arg === '--min-baseline-coverage') {
+    else if (arg === '--hunks') opts.hunks = true;
+    else if (arg === '--decisions') {
+      const raw = argv[++i];
+      if (raw === undefined) throw new ExitError(2, '--decisions requires a path');
+      opts.decisionsPath = raw;
+    } else if (arg === '--min-baseline-coverage') {
       const raw = argv[++i];
       if (raw === undefined) {
         throw new ExitError(2, '--min-baseline-coverage requires a value between 0 and 1');
@@ -85,7 +101,7 @@ function parseArgs(argv) {
       opts.minBaselineCoverage = value;
     } else if (arg === '--help' || arg === '-h') {
       process.stdout.write(
-        'usage: verify-reapply-patches.cjs --patches-dir <path> --config-dir <path> [--pristine-dir <path>] [--json] [--classify] [--min-baseline-coverage <0..1>]\n',
+        'usage: verify-reapply-patches.cjs --patches-dir <path> --config-dir <path> [--pristine-dir <path>] [--json] [--classify] [--hunks] [--decisions <path>] [--min-baseline-coverage <0..1>]\n',
       );
       throw new ExitError(0);
     } else {
@@ -469,7 +485,267 @@ function coverageHeadline(covered, total) {
   return unverified > 0 ? `${base} (${unverified} unverified)` : base;
 }
 
-function verifyFile({ relPath, patchesDir, configDir, pristineDir, pristineHashes, skillsRedirect }) {
+// ── #4435: per-hunk model ────────────────────────────────────────────────
+const HUNK_REASON = Object.freeze({
+  BASELINE_UNCONFIRMED: 'baseline_unconfirmed',
+  DIFF_TOO_LARGE: 'diff_too_large',
+  ALREADY_UPSTREAM: 'already_upstream',
+  PARTIALLY_UPSTREAM: 'partially_upstream',
+  ANCHOR_ORPHANED: 'anchor_orphaned',
+  REGION_CHANGED_UPSTREAM: 'region_changed_upstream',
+});
+const HUNK_RECOMMENDATION = Object.freeze({ KEEP: 'keep', RETIRE: 'retire', REVIEW: 'review' });
+const DISPOSITION = Object.freeze({ KEEP: 'keep', RETIRE: 'retire', REWRITE: 'rewrite' });
+
+/**
+ * #4435: split a backup into hunks against the pristine baseline. Pure. The
+ * union of every hunk's required_lines equals computeUserAddedLines(backup,
+ * pristine) — same significance + normalization predicate.
+ */
+function computeHunks(fileKey, backupContent, pristineContent) {
+  const B = backupContent.split(/\r?\n/);
+  if (!pristineContent) {
+    const required = computeUserAddedLines(backupContent, null);
+    if (required.length === 0) return [];
+    return numberHunks(fileKey, [{
+      kind: 'file',
+      user_lines: B.filter(isSignificantLine),
+      stock_lines: [],
+      required_lines: required,
+      anchor_before: null,
+      anchor_after: null,
+      stock_range: null,
+      diff_too_large: false,
+    }]);
+  }
+  const P = pristineContent.split(/\r?\n/);
+  const nP = P.map(normalizeUpstreamOwnedLine);
+  const nB = B.map(normalizeUpstreamOwnedLine);
+  const pristineSet = new Set(nP);
+  const isRequired = (line) =>
+    isSignificantLine(line) && !pristineSet.has(normalizeUpstreamOwnedLine(line));
+  const m = matchLines(nP, nB);
+  if (m === null) {
+    const required = B.filter(isRequired);
+    if (required.length === 0) return [];
+    return numberHunks(fileKey, [{
+      kind: 'replacement',
+      user_lines: required,
+      stock_lines: [],
+      required_lines: required.slice(),
+      anchor_before: null,
+      anchor_after: null,
+      stock_range: null,
+      diff_too_large: true,
+    }]);
+  }
+  const hunks = [];
+  let prevP = -1;
+  let run = [];
+  const flush = (s, e) => {
+    const userLines = run;
+    run = [];
+    const stockLines = P.slice(s, e);
+    if (!userLines.some(isSignificantLine) && !stockLines.some(isSignificantLine)) return;
+    const kind = userLines.length && stockLines.length ? 'replacement' : userLines.length ? 'addition' : 'deletion';
+    let before = null;
+    for (let i = s - 1; i >= 0; i--) {
+      if (isSignificantLine(P[i])) { before = P[i]; break; }
+    }
+    let after = null;
+    for (let i = e; i < P.length; i++) {
+      if (isSignificantLine(P[i])) { after = P[i]; break; }
+    }
+    hunks.push({
+      kind,
+      user_lines: userLines,
+      stock_lines: stockLines,
+      required_lines: userLines.filter(isRequired),
+      anchor_before: before,
+      anchor_after: after,
+      stock_range: [s, e],
+      diff_too_large: false,
+    });
+  };
+  for (let j = 0; j < B.length; j++) {
+    if (m[j] === -1) {
+      run.push(B[j]);
+    } else {
+      flush(prevP + 1, m[j]);
+      prevP = m[j];
+    }
+  }
+  flush(prevP + 1, P.length);
+  return numberHunks(fileKey, hunks);
+}
+
+function numberHunks(fileKey, hunks) {
+  return hunks.map((h, i) => ({
+    hunk_id: i + 1,
+    hunk_hash: sha256(JSON.stringify([fileKey, h.kind, h.user_lines, h.stock_lines, h.anchor_before, h.anchor_after, h.stock_range])),
+    kind: h.kind,
+    user_lines: h.user_lines,
+    stock_lines: h.stock_lines,
+    required_lines: h.required_lines,
+    anchor_before: h.anchor_before,
+    anchor_after: h.anchor_after,
+    stock_range: h.stock_range,
+    diff_too_large: h.diff_too_large,
+  }));
+}
+
+/**
+ * #4435: annotate hunks with presence in the fresh install, closed-vocabulary
+ * reasons and a recommendation. Pure; strips stock_range / diff_too_large.
+ */
+function annotateHunks(hunks, { pristineContent, installedContent, baselineConfirmed }) {
+  const installed = installedContent == null ? '' : installedContent;
+  const iLines = new Set(installed.split(/\r?\n/).map((l) => normalizeUpstreamOwnedLine(l).trim()));
+  let upstreamUnknown = false;
+  const intervals = [];
+  if (pristineContent && hunks.some((h) => h.stock_range)) {
+    const P = pristineContent.split(/\r?\n/);
+    const nP = P.map(normalizeUpstreamOwnedLine);
+    const nI = installed.split(/\r?\n/).map(normalizeUpstreamOwnedLine);
+    const u = matchLines(nP, nI);
+    if (u === null) {
+      upstreamUnknown = true;
+    } else {
+      let prevP = -1;
+      let pendingInsert = false;
+      for (let k = 0; k < nI.length; k++) {
+        if (u[k] === -1) {
+          pendingInsert = true;
+        } else {
+          if (pendingInsert || u[k] > prevP + 1) intervals.push([prevP + 1, u[k]]);
+          pendingInsert = false;
+          prevP = u[k];
+        }
+      }
+      if (pendingInsert || P.length > prevP + 1) intervals.push([prevP + 1, P.length]);
+    }
+  }
+  const touches = ([s, e]) => intervals.some(([a, b]) => a <= e && s <= b);
+  const inInstall = (l) => iLines.has(normalizeUpstreamOwnedLine(l).trim());
+
+  return hunks.map((h) => {
+    const required = h.required_lines;
+    const n = required.filter((l) => installed.includes(l)).length;
+    const present = required.length === 0 ? 'n/a' : n === required.length ? 'all' : n === 0 ? 'none' : 'some';
+    const reasons = [];
+    if (!baselineConfirmed) reasons.push(HUNK_REASON.BASELINE_UNCONFIRMED);
+    if (h.diff_too_large || (upstreamUnknown && h.stock_range)) reasons.push(HUNK_REASON.DIFF_TOO_LARGE);
+    const stockSig = h.stock_lines.filter(isSignificantLine);
+    if (
+      (h.kind !== 'deletion' && present === 'all') ||
+      (h.kind === 'deletion' && stockSig.length > 0 && stockSig.every((l) => !inInstall(l)))
+    ) reasons.push(HUNK_REASON.ALREADY_UPSTREAM);
+    if (present === 'some') reasons.push(HUNK_REASON.PARTIALLY_UPSTREAM);
+    const anchors = [h.anchor_before, h.anchor_after].filter(Boolean);
+    if (anchors.length > 0 && anchors.every((a) => !inInstall(a))) reasons.push(HUNK_REASON.ANCHOR_ORPHANED);
+    if (h.stock_range && !upstreamUnknown && touches(h.stock_range)) reasons.push(HUNK_REASON.REGION_CHANGED_UPSTREAM);
+    let recommendation;
+    if (reasons.includes(HUNK_REASON.BASELINE_UNCONFIRMED) || reasons.includes(HUNK_REASON.DIFF_TOO_LARGE)) {
+      recommendation = HUNK_RECOMMENDATION.REVIEW;
+    } else if (reasons.includes(HUNK_REASON.ALREADY_UPSTREAM)) {
+      recommendation = HUNK_RECOMMENDATION.RETIRE;
+    } else if (reasons.length > 0) {
+      recommendation = HUNK_RECOMMENDATION.REVIEW;
+    } else {
+      recommendation = HUNK_RECOMMENDATION.KEEP;
+    }
+    const { stock_range: _sr, diff_too_large: _dtl, ...rest } = h;
+    return { ...rest, present_in_install: present, reasons, recommendation, exception: recommendation !== HUNK_RECOMMENDATION.KEEP };
+  });
+}
+
+/**
+ * #4435: per-file hunk record shared by --hunks and --decisions validation.
+ */
+function buildFileHunks({ relPath, patchesDir, configDir, pristineDir, pristineHashes, skillsRedirect }) {
+  const out = { file: relPath, baseline: 'none', reason: null, hunks: [], installedContent: null, pristineContent: null };
+  const backupPath = path.join(patchesDir, relPath);
+  if (!fs.existsSync(backupPath) || !fs.statSync(backupPath).isFile()) return out;
+  let backupContent;
+  try {
+    backupContent = fs.readFileSync(backupPath, 'utf8');
+  } catch {
+    out.reason = REASON.FAIL_READ_ERROR;
+    return out;
+  }
+  const installedPath = resolveInstalledPath(configDir, relPath, skillsRedirect);
+  try {
+    const st = fs.statSync(installedPath);
+    if (!st.isFile()) out.reason = REASON.FAIL_INSTALLED_NOT_REGULAR_FILE;
+    else out.installedContent = fs.readFileSync(installedPath, 'utf8');
+  } catch (err) {
+    out.reason = err && err.code === 'ENOENT' ? REASON.FAIL_INSTALLED_MISSING : REASON.FAIL_READ_ERROR;
+  }
+  const { resolution, content } = resolvePristineBaseline({ relPath, configDir, pristineDir, pristineHashes });
+  let pristine = null;
+  if (resolution === PRISTINE_RESOLUTION.VALIDATED) {
+    out.baseline = 'validated';
+    pristine = content;
+  } else if (resolution === PRISTINE_RESOLUTION.UNVALIDATED) {
+    out.baseline = 'unvalidated';
+    pristine = content;
+  } else if (resolution === PRISTINE_RESOLUTION.DRIFTED) {
+    out.reason = REASON.OK_PRISTINE_DRIFT_DETECTED;
+  } else if (resolution === PRISTINE_RESOLUTION.ABSENT_RECORDED) {
+    out.reason = REASON.OK_NO_BASELINE;
+  }
+  out.pristineContent = pristine;
+  out.hunks = computeHunks(relPath.replace(/\\/g, '/'), backupContent, pristine);
+  return out;
+}
+
+/**
+ * #4435: strict loader for the human decisions file. Every malformed shape is
+ * a usage error (exit 2) — a decision file is a trust boundary.
+ */
+function loadDecisions(decisionsPath) {
+  let raw;
+  try {
+    raw = fs.readFileSync(decisionsPath, 'utf8');
+  } catch (err) {
+    throw new ExitError(2, `cannot read decisions file: ${decisionsPath}${err && err.code ? ` (${err.code})` : ''}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new ExitError(2, `decisions file is not valid JSON: ${decisionsPath}`);
+  }
+  const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+  if (!isPlain(parsed) || !Array.isArray(parsed.decisions)) {
+    throw new ExitError(2, 'decisions file must be an object with a "decisions" array');
+  }
+  const dispositions = new Set(Object.values(DISPOSITION));
+  const byKey = new Map();
+  parsed.decisions.forEach((d, i) => {
+    if (!isPlain(d)) throw new ExitError(2, `invalid decision at index ${i}: not an object`);
+    if (typeof d.file !== 'string' || d.file === '') throw new ExitError(2, `invalid decision at index ${i}: file must be a non-empty string`);
+    if (typeof d.hunk_hash !== 'string' || !/^[0-9a-f]{64}$/.test(d.hunk_hash)) {
+      throw new ExitError(2, `invalid decision at index ${i}: hunk_hash must be 64 lowercase hex characters`);
+    }
+    if (typeof d.disposition !== 'string' || !dispositions.has(d.disposition)) {
+      throw new ExitError(2, `invalid decision at index ${i}: disposition must be one of ${[...dispositions].join(', ')}`);
+    }
+    const file = d.file.replace(/\\/g, '/');
+    const key = `${file}\0${d.hunk_hash}`;
+    const prior = byKey.get(key);
+    if (prior) {
+      if (prior.disposition !== d.disposition) {
+        throw new ExitError(2, `conflicting decisions for ${file} ${d.hunk_hash}`);
+      }
+      return;
+    }
+    byKey.set(key, { file, hunk_hash: d.hunk_hash, disposition: d.disposition });
+  });
+  return [...byKey.values()];
+}
+
+function verifyFile({ relPath, patchesDir, configDir, pristineDir, pristineHashes, skillsRedirect, retiredHashes }) {
   const backupPath = path.join(patchesDir, relPath);
   const installedPath = resolveInstalledPath(configDir, relPath, skillsRedirect);
   const result = { file: relPath, status: 'ok', missing: [], reason: null };
@@ -535,7 +811,14 @@ function verifyFile({ relPath, patchesDir, configDir, pristineDir, pristineHashe
   // content (null for OVERBROAD) feeds computeUserAddedLines, whose no-pristine
   // branch is the over-broad fallback.
 
-  const userAdded = computeUserAddedLines(backupContent, pristineContent);
+  let userAdded = computeUserAddedLines(backupContent, pristineContent);
+  // #4435: a hunk retired/rewritten by a recorded human decision (bound to its
+  // content hash) stops being required; every other hunk's lines still are.
+  if (retiredHashes && retiredHashes.size > 0) {
+    userAdded = computeHunks(relPath.replace(/\\/g, '/'), backupContent, pristineContent)
+      .filter((h) => !retiredHashes.has(h.hunk_hash))
+      .flatMap((h) => h.required_lines);
+  }
   if (userAdded.length === 0) {
     // Backup and pristine match exactly (or no significant content) — nothing
     // to verify but also nothing to lose. Report as ok with diagnostic code.
@@ -654,6 +937,12 @@ function classifyFile({ relPath, patchesDir, configDir, pristineDir, pristineHas
 
 function main() {
   const opts = parseArgs(process.argv.slice(2));
+  if (opts.hunks && opts.classify) {
+    throw new ExitError(2, '--hunks and --classify are mutually exclusive');
+  }
+  if (opts.decisionsPath !== null && (opts.hunks || opts.classify)) {
+    throw new ExitError(2, '--decisions applies only to the post-merge gate');
+  }
   if (!opts.patchesDir || !opts.configDir) {
     throw new ExitError(2, '--patches-dir and --config-dir are required');
   }
@@ -671,6 +960,50 @@ function main() {
   // #4086: skills-root fallback for runtimes whose skills kind declares a
   // `home` override outside configDir (codex global → $HOME/.agents/skills).
   const skillsRedirect = resolveSkillsRedirect(opts.configDir);
+
+  // #4435: --hunks is the pre-merge per-hunk presentation mode. It recommends;
+  // it never decides and never gates (always exit 0).
+  if (opts.hunks) {
+    const fileRecords = files.map((relPath) => {
+      const rec = buildFileHunks({
+        relPath,
+        patchesDir: opts.patchesDir,
+        configDir: opts.configDir,
+        pristineDir: opts.pristineDir,
+        pristineHashes,
+        skillsRedirect,
+      });
+      return {
+        file: rec.file,
+        baseline: rec.baseline,
+        reason: rec.reason,
+        hunks: annotateHunks(rec.hunks, {
+          pristineContent: rec.pristineContent,
+          installedContent: rec.installedContent,
+          baselineConfirmed: rec.baseline === 'validated',
+        }),
+      };
+    });
+    const hunksTotal = fileRecords.reduce((n, f) => n + f.hunks.length, 0);
+    const exceptionsTotal = fileRecords.reduce((n, f) => n + f.hunks.filter((h) => h.exception).length, 0);
+    if (opts.json) {
+      process.stdout.write(
+        JSON.stringify({ checked: fileRecords.length, hunks_total: hunksTotal, exceptions_total: exceptionsTotal, files: fileRecords }, null, 2) + '\n',
+      );
+    } else {
+      process.stdout.write(`# Reapply Patch Hunks (#4435)\n\n`);
+      process.stdout.write(`Checked: ${fileRecords.length} file(s)\n`);
+      process.stdout.write(`Hunks: ${hunksTotal} (${exceptionsTotal} exception(s))\n`);
+      for (const f of fileRecords) {
+        for (const h of f.hunks) {
+          if (h.exception) {
+            process.stdout.write(`- ${f.file} hunk ${h.hunk_id} [${h.recommendation}] ${h.reasons.join(', ')}\n`);
+          }
+        }
+      }
+    }
+    return 0;
+  }
 
   // Bug #4136: --classify is the pre-merge mode the workflow runs in Step 4
   // to decide which files NOT to merge. It is informational — always exit 0 —
@@ -720,6 +1053,42 @@ function main() {
     return 0;
   }
 
+  // #4435: validate every decision against the current hunks BEFORE verifying.
+  // A decision whose hash no longer matches a hunk is stale and aborts (exit 2).
+  let decisions = null;
+  const retiredByFile = new Map();
+  const retiredList = [];
+  if (opts.decisionsPath !== null) {
+    decisions = loadDecisions(opts.decisionsPath);
+    const fileSet = new Set(files.map((f) => f.replace(/\\/g, '/')));
+    const relByKey = new Map(files.map((f) => [f.replace(/\\/g, '/'), f]));
+    const hunkCache = new Map();
+    for (const d of decisions) {
+      if (!fileSet.has(d.file)) {
+        throw new ExitError(2, `decision names a file not in the patches dir: ${d.file}`);
+      }
+      if (!hunkCache.has(d.file)) {
+        hunkCache.set(d.file, buildFileHunks({
+          relPath: relByKey.get(d.file),
+          patchesDir: opts.patchesDir,
+          configDir: opts.configDir,
+          pristineDir: opts.pristineDir,
+          pristineHashes,
+          skillsRedirect,
+        }).hunks);
+      }
+      const hunk = hunkCache.get(d.file).find((h) => h.hunk_hash === d.hunk_hash);
+      if (!hunk) {
+        throw new ExitError(2, `stale decision: hunk ${d.hunk_hash} no longer matches ${d.file} (the backup or baseline changed since it was shown)`);
+      }
+      if (d.disposition === DISPOSITION.RETIRE || d.disposition === DISPOSITION.REWRITE) {
+        if (!retiredByFile.has(d.file)) retiredByFile.set(d.file, new Set());
+        retiredByFile.get(d.file).add(d.hunk_hash);
+        retiredList.push({ file: d.file, hunk_id: hunk.hunk_id, hunk_hash: d.hunk_hash, disposition: d.disposition });
+      }
+    }
+  }
+
   const results = files.map((relPath) =>
     verifyFile({
       relPath,
@@ -728,6 +1097,7 @@ function main() {
       pristineDir: opts.pristineDir,
       pristineHashes,
       skillsRedirect,
+      retiredHashes: retiredByFile.get(relPath.replace(/\\/g, '/')),
     }),
   );
 
@@ -770,9 +1140,9 @@ function main() {
   }
 
   if (opts.json) {
-    process.stdout.write(
-      JSON.stringify({ checked: results.length, failures: failures.length, drifted, drifted_files, no_baseline, no_baseline_files, baseline_covered, results }, null, 2) + '\n',
-    );
+    const report = { checked: results.length, failures: failures.length, drifted, drifted_files, no_baseline, no_baseline_files, baseline_covered, results };
+    if (decisions) report.decisions = { applied: decisions.length, retired: retiredList };
+    process.stdout.write(JSON.stringify(report, null, 2) + '\n');
   } else {
     process.stdout.write(`# Hunk Verification Gate (#2969)\n\n`);
     process.stdout.write(`Checked: ${results.length} file(s)\n`);
@@ -780,7 +1150,11 @@ function main() {
     // #4135: the coverage headline is printed on EVERY run, before any
     // per-file detail, so a near-zero-coverage green run can never render
     // identically to a fully-verified one.
-    process.stdout.write(`${coverageHeadline(baseline_covered, results.length)}\n\n`);
+    process.stdout.write(`${coverageHeadline(baseline_covered, results.length)}\n`);
+    if (decisions) {
+      process.stdout.write(`Decisions: ${decisions.length} applied, ${retiredList.length} hunk(s) retired by user decision\n`);
+    }
+    process.stdout.write('\n');
     if (baseline_covered < results.length) {
       if (!opts.pristineDir) {
         process.stdout.write(`No --pristine-dir: over-broad fallback — nothing was verified against a pristine baseline (#2998).\n\n`);
@@ -821,5 +1195,5 @@ if (require.main === module) {
   runMain(main);
 }
 
-module.exports = { computeUserAddedLines, isSignificantLine, verifyFile, classifyFile, walk, REASON, CLASSIFICATION, PRISTINE_RESOLUTION, resolvePristineBaseline, readPristineHashes, sha256, resolveInstalledPath, resolveSkillsRedirect, coverageHeadline, classifyBaselineCoverage };
+module.exports = { computeHunks, annotateHunks, buildFileHunks, HUNK_REASON, HUNK_RECOMMENDATION, DISPOSITION, computeUserAddedLines, isSignificantLine, verifyFile, classifyFile, walk, REASON, CLASSIFICATION, PRISTINE_RESOLUTION, resolvePristineBaseline, readPristineHashes, sha256, resolveInstalledPath, resolveSkillsRedirect, coverageHeadline, classifyBaselineCoverage };
 
