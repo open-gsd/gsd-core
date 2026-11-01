@@ -54,20 +54,41 @@ function emitBlock(output) {
 
 `HOOK_ON_CRASH` has exactly two values, `ALLOW` and `DENY`. Ask: **if this
 hook's own code throws, is it safer for the tool call to proceed, or safer to
-block it?**
+block it?** When the answer depends on the host rather than the hook, the host
+can choose between the two (the third case below).
 
 - **`ALLOW`** — the hook is advisory, or its enforcement is not the last line
-  of defense. A crash here should not stop legitimate work. This is every
-  migrated hook's policy today (19 of 19) — including the two hard-blocking
+  of defense. A crash here should not stop legitimate work. Every hook that
+  declares a fixed policy declares this one — including the two hard-blocking
   guards (`gsd-write-guard.js`, `gsd-worktree-path-guard.js`): their threat
   model is a confused agent overwriting a file it can already reach by other
   means, not a determined adversary, so a hook bug is not treated as worse
   than the thing it protects against.
 - **`DENY`** — a crash inside a security-critical check is itself suspicious
-  enough that refusing is the safer failure. Nothing in this repo declares
-  `DENY` yet; if you are the first, that is a real decision, not a default —
-  write the reason down (see below) and expect it to be scrutinized in
-  review.
+  enough that refusing is the safer failure. No hook declares `DENY` as its
+  fixed policy yet; if you are the first, that is a real decision, not a
+  default — write the reason down (see below) and expect it to be
+  scrutinized in review.
+- **Host-selected** — the right answer depends on how the host registered
+  the hook, not on the hook itself, so the host picks. Still declare it once
+  at module load, but from the environment, accept exactly one opt-in value,
+  and fall back to `ALLOW` for anything else, so a typo keeps the default.
+  `gsd-secret-read-guard.js` is the one hook that does this (#5784): a host
+  that registers it with Claude Code's `onFailure: "block"` wants the
+  guard's own failures to block too, and `onFailure` cannot see a failure the
+  hook catches and exits 0 on, so the host sets
+  `GSD_SECRET_READ_GUARD_ON_CRASH=deny`. The hook routes both of its failure
+  paths through the declared policy, the outer catch and its stdin timer:
+
+  ```js
+  const ON_CRASH = process.env.GSD_SECRET_READ_GUARD_ON_CRASH === 'deny'
+    ? HOOK_ON_CRASH.DENY
+    : HOOK_ON_CRASH.ALLOW;
+  ```
+
+  A host-selected `DENY` is still a deny. If the hook's other denials write a
+  plain reason to stderr, its crash should too: see
+  [A deny needing a distinct stderr payload](#a-deny-needing-a-distinct-stderr-payload).
 
 Declare it once, near your hook's imports, not inline at the call site:
 
