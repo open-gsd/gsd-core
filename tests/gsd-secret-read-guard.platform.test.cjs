@@ -13,6 +13,12 @@
  *     (raw-child-process).
  *   - "unset: a stalled stdin still allows, silently" — the same held-open
  *     pipe, with the opt-in unset (raw-child-process).
+ *   - "opted in: a full payload whose stdin stays open blocks as guard-error" —
+ *     writes a complete payload into the held-open pipe, so the timer must
+ *     still fire after data arrived (raw-child-process).
+ *   - "unset: a full payload whose stdin stays open still allows, silently" —
+ *     the same written, held-open pipe, with the opt-in unset
+ *     (raw-child-process).
  *
  * The process seam cannot stand in for these: spawnSync with no `input` closes
  * the child's stdin at once, so the hook sees EOF and takes its outer catch,
@@ -46,13 +52,14 @@ function runHook(payload, extraEnv) {
   return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
 }
 
-// Keeps the pipe open and never writes, so only the hook's own 3 s stdin timer
-// can end it. The kill is a hang backstop (that timer plus the quick-spawn
-// bound), never an elapsed-time assertion. NODE_V8_COVERAGE is blanked rather
-// than deleted: a child under c8 inherits it and runs several times slower,
-// and Node restores an inherited key that the child env lacks but leaves an
-// own key alone.
-function runStalled(extraEnv) {
+// Keeps the pipe open, so only the hook's own 3 s stdin timer can end it. With
+// a `written` string the payload goes in first, whole, and the pipe still stays
+// open. The kill is a hang backstop (that timer plus the quick-spawn bound),
+// never an elapsed-time assertion. NODE_V8_COVERAGE is blanked rather than
+// deleted: a child under c8 inherits it and runs several times slower, and Node
+// restores an inherited key that the child env lacks but leaves an own key
+// alone.
+function runStalled(extraEnv, written) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [HOOK_PATH], {
       env: hookEnv({ NODE_V8_COVERAGE: '', ...extraEnv }),
@@ -63,6 +70,7 @@ function runStalled(extraEnv) {
     child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
     child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
     child.stdin.on('error', () => {});
+    if (written !== undefined) child.stdin.write(written);
     const backstop = setTimeout(() => child.kill('SIGKILL'), 3000 + QUICK_SPAWN_TIMEOUT_MS);
     child.on('error', (err) => { clearTimeout(backstop); reject(err); });
     child.on('close', (status) => {
@@ -105,5 +113,20 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
 
   test('unset: a stalled stdin still allows, silently', async () => {
     assertAllowed(await runStalled(), 'stall');
+  });
+
+  // The timer runs from spawn and `data` does not touch it, so a payload that
+  // arrives whole while the pipe stays open is still a stall: the hook never
+  // reaches its verdict, which runs only on `end`.
+  const FULL_PAYLOAD = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls -la' } });
+
+  test('opted in: a full payload whose stdin stays open blocks as guard-error', async () => {
+    const written = assertGuardError(await runStalled(DENY_ENV, FULL_PAYLOAD), 'written stall');
+    const stall = assertGuardError(await runStalled(DENY_ENV), 'stall');
+    assert.equal(written.reason, stall.reason, 'the written stall must end on the stdin timer, like the empty one');
+  });
+
+  test('unset: a full payload whose stdin stays open still allows, silently', async () => {
+    assertAllowed(await runStalled(undefined, FULL_PAYLOAD), 'written stall');
   });
 });
