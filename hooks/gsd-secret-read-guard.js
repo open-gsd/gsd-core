@@ -1080,12 +1080,14 @@ function curlValueNamesSecret(text) {
 // `E` (`-Ef:pw`, `-s#Ef:pw`), or the part after `=` (`--cert=f:pw`, 8.23).
 // Every prefix of either long name shorter than the name is ambiguous with
 // `--cert-type` / `--proxy-cert-type` where curl takes abbreviations (8.5).
-// curl reads `--expand-<option>` as `<option>`, so `--expand-cert` is one too.
+// curl reads `--expand-<option>` as `<option>`, so `--expand-cert` is one too,
+// and through 8.5 it matched long names in any case (`--CERT`).
 const CURL_CERT_OPTIONS = new Set(['--cert', '--proxy-cert']);
 const CURL_CERT_CLUSTER_RE = /^-[A-Za-z0-9#:]*?E/;
 
 function isCurlCertOption(name) {
-  return CURL_CERT_OPTIONS.has(name.startsWith('--expand-') ? '--' + name.slice(9) : name);
+  const n = name.toLowerCase();
+  return CURL_CERT_OPTIONS.has(n.startsWith('--expand-') ? '--' + n.slice(9) : n);
 }
 
 // The value a cert option holds within `text`, or null.
@@ -1211,13 +1213,15 @@ const CURL_WORD_LAUNCHERS = new Map([
   ['asdf', new Set(['exec'])],
   ['npm', new Set(['exec', 'x'])],
   ['pnpm', new Set(['exec', 'dlx'])],
-  ['yarn', new Set(['exec', 'dlx'])],
+  // `yarn workspace <name> exec` and `workspaces foreach … exec` name a
+  // workspace before the run word, so the group word itself counts.
+  ['yarn', new Set(['exec', 'dlx', 'workspace', 'workspaces'])],
   ['bun', new Set(['x'])],
   ['uv', new Set(['run', 'tool run'])],
   ['poetry', new Set(['run'])],
   ['pipenv', new Set(['run'])],
   ['pdm', new Set(['run'])],
-  ['hatch', new Set(['run'])],
+  ['hatch', new Set(['run', 'env run'])],
   ['rye', new Set(['run'])],
   ['pixi', new Set(['run', 'exec'])],
   ['pipx', new Set(['run'])],
@@ -1325,10 +1329,10 @@ function isRunWordGroup(runWords, sub) {
 }
 
 // A launched command word's name, without an image's `:tag` or `@digest`
-// (`docker run curlimages/curl:8.5.0 …` runs curl). An option word's value
-// after `=` counts as the word (`docker run --entrypoint=curl img …`).
+// (`docker run curlimages/curl:8.5.0 …` runs curl). A container runner's
+// `--entrypoint=value` names the command it runs.
 function launchedCurlName(text) {
-  const eq = text[0] === '-' ? text.indexOf('=') : -1;
+  const eq = text.startsWith('--entrypoint=') ? 12 : -1;
   const name = commandName(eq === -1 ? text : text.slice(eq + 1));
   const cut = name.search(/[:@]/);
   return cut > 0 ? name.slice(0, cut) : name;
@@ -1890,6 +1894,45 @@ function xargsCommandIndex(operands, from, to) {
   return -1;
 }
 
+// The string xargs replaces with each input among its options in
+// operands[from..to): `-I R`, `-IR`, BSD `-J R`, `-i` / `-iR` and
+// `--replace[=R]` (any unambiguous prefix; `{}` when no R). null when xargs
+// appends the input after the command's words.
+function xargsReplaceString(operands, from, to) {
+  let rep = null;
+  for (let m = from; m < to; m++) {
+    const t = operands[m].text;
+    if (t === '--' || t.length < 2 || t[0] !== '-') break;
+    if (t.startsWith('--')) {
+      const eq = t.indexOf('=');
+      const name = eq === -1 ? t : t.slice(0, eq);
+      if (name.length >= 3 && '--replace'.startsWith(name)) {
+        rep = eq === -1 ? '{}' : t.slice(eq + 1);
+      } else if (eq === -1 && XARGS_LONG_VALUE.some((l) => l.startsWith(t))) {
+        m++;
+      }
+      continue;
+    }
+    for (let c = 1; c < t.length; c++) {
+      if (t[c] === 'i') {
+        rep = t.slice(c + 1) || '{}';
+        break;
+      }
+      if (t[c] === 'I' || t[c] === 'J') {
+        if (c < t.length - 1) rep = t.slice(c + 1);
+        else if (m + 1 < to) rep = operands[++m].text;
+        break;
+      }
+      if (XARGS_SHORT_ATTACHED.includes(t[c])) break;
+      if (XARGS_SHORT_VALUE.includes(t[c])) {
+        if (c === t.length - 1) m++;
+        break;
+      }
+    }
+  }
+  return rep === '' ? null : rep;
+}
+
 // `find … | xargs cat`: the upstream segment's operands become file names the
 // sub-command reads. Only inferred across a real pipe and when stdin is not
 // redirected by `-a`/`--arg-file`. A sub-command that is itself a shell
@@ -1922,15 +1965,28 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
   const runs = xargsCommandIndex(operands, 0, operands.length);
   const subCmd = runs === -1 ? -1 : launchedCommandIndex(operands, runs, operands.length);
   const toCurl = subCmd !== -1 && CURL_COMMANDS.has(commandName(operands[subCmd].text));
-  // Where the sub-command holds a cert option that takes the next word, a
-  // piped word may be its value (`xargs curl --cert`, `xargs -I{} curl -E {}`).
-  const certPiped = toCurl && operands.slice(subCmd + 1).some((w) => curlTakesCertValue(w.text));
+  // A piped word is a cert option's value where the sub-command's cert option
+  // has its value slot open to the input: the option is the last word (xargs
+  // appends the input), or its value holds the replace string
+  // (`xargs -I{} curl --cert {}`, `-E{}`).
+  const rep = toCurl ? xargsReplaceString(operands, 0, runs) : null;
+  let certPiped = false;
+  for (let k = toCurl ? subCmd + 1 : operands.length; k < operands.length && !certPiped; k++) {
+    const t = operands[k].text;
+    const v = curlAttachedCertValue(t);
+    if (rep !== null && v !== null && v.includes(rep)) certPiped = true;
+    else if (curlTakesCertValue(t)) {
+      const next = operands[k + 1];
+      certPiped = rep === null ? !next : next !== undefined && next.text.includes(rep);
+    }
+  }
   const piped = prevCmd.operands;
-  // And where a piped word is such an option, a sub-command word may be its
-  // value (`printf -E | xargs -I{} curl {} f:pw`).
-  if (toCurl && piped.some((w) => curlTakesCertValue(w.text))) {
-    for (let j = subCmd + 1; j < operands.length; j++) {
-      if (curlCertNamesSecret(operands[j].text)) return operands[j].text;
+  // And where a piped word is such an option put in by the replace string, the
+  // sub-command word after that string is its value
+  // (`printf -E | xargs -I{} curl {} f:pw`).
+  if (toCurl && rep !== null && piped.some((w) => curlTakesCertValue(w.text))) {
+    for (let k = subCmd + 1; k + 1 < operands.length; k++) {
+      if (operands[k].text.includes(rep) && curlCertNamesSecret(operands[k + 1].text)) return operands[k + 1].text;
     }
   }
   for (let j = 0; j < piped.length; j++) {
