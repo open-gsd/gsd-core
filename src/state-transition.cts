@@ -1467,7 +1467,7 @@ function beginPhaseCore(
       tryField('Current Phase Name', intent.phaseName);
     }
     tryField('Current Plan', String(startPlan));
-    if (intent.planCount) {
+    if (intent.planCount != null) {
       tryField('Total Plans in Phase', String(intent.planCount));
     }
 
@@ -1617,7 +1617,7 @@ function mutateCurrentPositionFirstTime(
   }
 
   // Plan line.
-  const planValue = `${intent.startPlan} of ${intent.planCount || '?'}`;
+  const planValue = `${intent.startPlan} of ${intent.planCount ?? '?'}`;
   if (/^Plan:/m.test(sectionBody)) {
     sectionBody = sectionBody.replace(/^Plan:.*$/m, `Plan: ${planValue}`);
   } else {
