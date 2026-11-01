@@ -890,13 +890,13 @@ process.stdout.write(wave);
 
    # Guard: pin cleanup back to orchestrator's OWN worktree and fail on branch drift (#3174, #630).
    # Resolves orchestrator_root from manifest (see execute-phase/steps/executor-isolation-dispatch.md).
-   PRIMARY_WT=$(MANIFEST="$WAVE_WORKTREE_MANIFEST" node -e 'const fs=require("fs");try{const j=JSON.parse(fs.readFileSync(process.env.MANIFEST,"utf8"));if(j&&j.orchestrator_root){let r=String(j.orchestrator_root);try{r=fs.realpathSync(r)}catch{}process.stdout.write(r)}}catch(e){}')
+   PRIMARY_WT=$(MANIFEST="$WAVE_WORKTREE_MANIFEST" node -e 'const fs=require("fs");try{const j=JSON.parse(fs.readFileSync(process.env.MANIFEST,"utf8"));if(j&&j.orchestrator_root){let r=String(j.orchestrator_root);try{r=fs.realpathSync.native(r)}catch{}process.stdout.write(r.replace(/\\/g,"/"))}}catch(e){}')
    [ -n "$PRIMARY_WT" ] || PRIMARY_WT=$(git worktree list --porcelain | awk '/^worktree /{print substr($0,10); exit}')
    if [ -z "$PRIMARY_WT" ]; then
      echo "FATAL: could not resolve orchestrator worktree before cleanup" >&2
      exit 1
    fi
-   git worktree list --porcelain | grep -qxF "worktree $PRIMARY_WT" || { echo "FATAL: orchestrator_root in manifest is not a registered worktree: '$PRIMARY_WT'" >&2; exit 1; }
+   git worktree list --porcelain | tr -d '\r' | grep -qiFx "worktree $PRIMARY_WT" || { echo "FATAL: orchestrator_root in manifest is not a registered worktree: '$PRIMARY_WT'" >&2; exit 1; }
    if [ -n "$PRIMARY_WT" ] && [ "$(pwd -P 2>/dev/null)" != "$(cd "$PRIMARY_WT" 2>/dev/null && pwd -P)" ]; then echo "⚠ Orchestrator CWD drifted to $(pwd) — pinning to $PRIMARY_WT before worktree cleanup (#3174)"; cd "$PRIMARY_WT" || { echo "FATAL: cannot cd to primary worktree $PRIMARY_WT" >&2; exit 1; }; fi
    ORCH_BRANCH=$(git rev-parse --abbrev-ref HEAD)
    [ -z "${EXPECTED_BRANCH:-}" ] || [ "$ORCH_BRANCH" = "$EXPECTED_BRANCH" ] || { echo "FATAL: orchestrator on '$ORCH_BRANCH' but expected '$EXPECTED_BRANCH' before worktree cleanup — refusing to merge (#3174-class drift)" >&2; exit 1; }
@@ -913,9 +913,9 @@ process.stdout.write(wave);
    ```bash
    # Cleanup-tail: pin orchestrator CWD to its OWN worktree before cleanup-tail (#3174, #630).
    # Resolves orchestrator_root from manifest (see execute-phase/steps/executor-isolation-dispatch.md).
-   PRIMARY_WT=$(MANIFEST="$WAVE_WORKTREE_MANIFEST" node -e 'const fs=require("fs");try{const j=JSON.parse(fs.readFileSync(process.env.MANIFEST,"utf8"));if(j&&j.orchestrator_root){let r=String(j.orchestrator_root);try{r=fs.realpathSync(r)}catch{}process.stdout.write(r)}}catch(e){}')
+   PRIMARY_WT=$(MANIFEST="$WAVE_WORKTREE_MANIFEST" node -e 'const fs=require("fs");try{const j=JSON.parse(fs.readFileSync(process.env.MANIFEST,"utf8"));if(j&&j.orchestrator_root){let r=String(j.orchestrator_root);try{r=fs.realpathSync.native(r)}catch{}process.stdout.write(r.replace(/\\/g,"/"))}}catch(e){}')
    [ -n "$PRIMARY_WT" ] || PRIMARY_WT=$(git worktree list --porcelain | awk '/^worktree /{print substr($0,10); exit}')
-   git worktree list --porcelain | grep -qxF "worktree $PRIMARY_WT" || { echo "FATAL: orchestrator_root in manifest is not a registered worktree: '$PRIMARY_WT'" >&2; exit 1; }
+   git worktree list --porcelain | tr -d '\r' | grep -qiFx "worktree $PRIMARY_WT" || { echo "FATAL: orchestrator_root in manifest is not a registered worktree: '$PRIMARY_WT'" >&2; exit 1; }
    if [ -n "$PRIMARY_WT" ] && [ "$(pwd -P 2>/dev/null)" != "$(cd "$PRIMARY_WT" 2>/dev/null && pwd -P)" ]; then echo "⚠ Orchestrator CWD drifted to $(pwd) — pinning to $PRIMARY_WT before cleanup-tail (#3174)"; cd "$PRIMARY_WT" || { echo "FATAL: cannot cd to primary worktree $PRIMARY_WT" >&2; exit 1; }; fi
    # Cleanup-tail: remove residual agent worktrees after a cross-wave-dependency deviation.
    # Uses only the current wave manifest to avoid touching unrelated active agents (#3384).

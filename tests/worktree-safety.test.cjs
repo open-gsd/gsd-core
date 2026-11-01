@@ -10566,6 +10566,26 @@ printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
       }
     });
 
+    test('parseWorktreePorcelain parses CRLF-delimited worktree blocks', () => {
+      const crlfPorcelain = [
+        'worktree /repo/main',
+        'HEAD 1111111111111111111111111111111111111111',
+        'branch refs/heads/main',
+        '',
+        'worktree /repo/agent-1',
+        'HEAD 2222222222222222222222222222222222222222',
+        'branch refs/heads/worktree-agent-1',
+        '',
+      ].join('\r\n');
+
+      const entries = parseWorktreePorcelain(crlfPorcelain);
+      assert.equal(entries.length, 2, 'both worktree entries must be parsed from CRLF input');
+      assert.equal(entries[0].path, '/repo/main');
+      assert.equal(entries[0].branch, 'main');
+      assert.equal(entries[1].path, '/repo/agent-1');
+      assert.equal(entries[1].branch, 'worktree-agent-1');
+    });
+
     test('post-wave hook stash excludes wave manifests under worktree_skip_hooks=true', (t) => {
       if (process.platform === 'win32') {
         t.skip('bash script execution test is POSIX-specific');
