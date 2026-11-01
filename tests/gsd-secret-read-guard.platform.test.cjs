@@ -2,11 +2,11 @@
 
 /**
  * gsd-secret-read-guard.js — the stdin-timer cells of the host crash-policy
- * opt-in (#5784), split out of tests/gsd-secret-read-guard.test.cjs because
- * they need a real OS pipe.
+ * opt-in (#5784). They need a real OS pipe, so they live in this `.platform`
+ * sibling of tests/gsd-secret-read-guard.test.cjs instead of in it.
  *
- * Moved tests (describe "gsd-secret-read-guard: host opt-in to deny on its own
- * failure (#5784)"):
+ * Tests, all new with #5784 rather than moved from the base file (describe
+ * "gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)"):
  *   - "opted in: a stalled stdin blocks as guard-error" — holds the hook's
  *     stdin pipe open through a raw child process, so the hook's own 3 s timer
  *     (stdin not closed) is what ends it; pipe EOF and kill behaviour differ on Windows
