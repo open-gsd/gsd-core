@@ -731,21 +731,33 @@ function loadDecisions(decisionsPath) {
     if (typeof d.disposition !== 'string' || !dispositions.has(d.disposition)) {
       throw new ExitError(2, `invalid decision at index ${i}: disposition must be one of ${[...dispositions].join(', ')}`);
     }
+    // #4435: a rewrite must carry the user's replacement text so the gate can
+    // verify it landed; keep/retire must not carry one.
+    let replacement = null;
+    if (d.disposition === DISPOSITION.REWRITE) {
+      if (!Array.isArray(d.replacement_lines) || d.replacement_lines.length === 0 || !d.replacement_lines.every((x) => typeof x === 'string')) {
+        throw new ExitError(2, `invalid decision at index ${i}: rewrite requires a non-empty replacement_lines array of strings`);
+      }
+      replacement = d.replacement_lines.slice();
+    } else if (Object.prototype.hasOwnProperty.call(d, 'replacement_lines')) {
+      throw new ExitError(2, `invalid decision at index ${i}: replacement_lines is allowed only for rewrite`);
+    }
     const file = d.file.replace(/\\/g, '/');
     const key = `${file}\0${d.hunk_hash}`;
     const prior = byKey.get(key);
     if (prior) {
-      if (prior.disposition !== d.disposition) {
+      if (prior.disposition !== d.disposition
+        || JSON.stringify(prior.replacement_lines) !== JSON.stringify(replacement)) {
         throw new ExitError(2, `conflicting decisions for ${file} ${d.hunk_hash}`);
       }
       return;
     }
-    byKey.set(key, { file, hunk_hash: d.hunk_hash, disposition: d.disposition });
+    byKey.set(key, { file, hunk_hash: d.hunk_hash, disposition: d.disposition, replacement_lines: replacement });
   });
   return [...byKey.values()];
 }
 
-function verifyFile({ relPath, patchesDir, configDir, pristineDir, pristineHashes, skillsRedirect, retiredHashes }) {
+function verifyFile({ relPath, patchesDir, configDir, pristineDir, pristineHashes, skillsRedirect, retiredHashes, extraRequired }) {
   const backupPath = path.join(patchesDir, relPath);
   const installedPath = resolveInstalledPath(configDir, relPath, skillsRedirect);
   const result = { file: relPath, status: 'ok', missing: [], reason: null };
@@ -819,6 +831,8 @@ function verifyFile({ relPath, patchesDir, configDir, pristineDir, pristineHashe
       .filter((h) => !retiredHashes.has(h.hunk_hash))
       .flatMap((h) => h.required_lines);
   }
+  // #4435: a rewrite's user-supplied replacement must be present in the merge.
+  if (extraRequired && extraRequired.length > 0) userAdded = userAdded.concat(extraRequired);
   if (userAdded.length === 0) {
     // Backup and pristine match exactly (or no significant content) — nothing
     // to verify but also nothing to lose. Report as ok with diagnostic code.
@@ -1058,6 +1072,7 @@ function main() {
   let decisions = null;
   const retiredByFile = new Map();
   const retiredList = [];
+  const rewriteLinesByFile = new Map();
   if (opts.decisionsPath !== null) {
     decisions = loadDecisions(opts.decisionsPath);
     const fileSet = new Set(files.map((f) => f.replace(/\\/g, '/')));
@@ -1085,6 +1100,10 @@ function main() {
         if (!retiredByFile.has(d.file)) retiredByFile.set(d.file, new Set());
         retiredByFile.get(d.file).add(d.hunk_hash);
         retiredList.push({ file: d.file, hunk_id: hunk.hunk_id, hunk_hash: d.hunk_hash, disposition: d.disposition });
+        if (d.disposition === DISPOSITION.REWRITE) {
+          if (!rewriteLinesByFile.has(d.file)) rewriteLinesByFile.set(d.file, []);
+          rewriteLinesByFile.get(d.file).push(...d.replacement_lines.filter(isSignificantLine));
+        }
       }
     }
   }
@@ -1098,6 +1117,7 @@ function main() {
       pristineHashes,
       skillsRedirect,
       retiredHashes: retiredByFile.get(relPath.replace(/\\/g, '/')),
+      extraRequired: rewriteLinesByFile.get(relPath.replace(/\\/g, '/')),
     }),
   );
 
@@ -1155,6 +1175,13 @@ function main() {
       process.stdout.write(`Decisions: ${decisions.length} applied, ${retiredList.length} hunk(s) retired by user decision\n`);
     }
     process.stdout.write('\n');
+    if (decisions && retiredList.length > 0) {
+      process.stdout.write(`## Hunks retired or rewritten by user decision\n\n`);
+      for (const r of retiredList) {
+        process.stdout.write(`- ${r.file} hunk ${r.hunk_id} (${r.disposition})\n`);
+      }
+      process.stdout.write('\n');
+    }
     if (baseline_covered < results.length) {
       if (!opts.pristineDir) {
         process.stdout.write(`No --pristine-dir: over-broad fallback — nothing was verified against a pristine baseline (#2998).\n\n`);

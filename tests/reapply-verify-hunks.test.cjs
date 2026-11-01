@@ -2890,6 +2890,10 @@ describe('#4435: gate --decisions (present-and-gate)', () => {
       JSON.stringify({ decisions: [{ hunk_hash: h.hunk_hash, disposition: 'retire' }] }),
       JSON.stringify({ decisions: [{ file: rel, hunk_hash: h.hunk_hash, disposition: 'delete' }] }),
       JSON.stringify({ decisions: [null] }),
+      JSON.stringify({ decisions: [{ file: rel, hunk_hash: h.hunk_hash, disposition: 'rewrite' }] }),
+      JSON.stringify({ decisions: [{ file: rel, hunk_hash: h.hunk_hash, disposition: 'rewrite', replacement_lines: [] }] }),
+      JSON.stringify({ decisions: [{ file: rel, hunk_hash: h.hunk_hash, disposition: 'rewrite', replacement_lines: [1] }] }),
+      JSON.stringify({ decisions: [{ file: rel, hunk_hash: h.hunk_hash, disposition: 'retire', replacement_lines: [L('x')] }] }),
     ];
     for (const body of bad) {
       const g = runGateWithDecisions(body);
@@ -2944,9 +2948,35 @@ describe('#4435: gate --decisions (present-and-gate)', () => {
     const rel = 'gsd-core/workflows/g19.md';
     seed(rel, { pristine: lines(L('a'), L('b')), backup: lines(L('a'), L('orig'), L('b')), install: lines(L('a'), L('hand-rewritten by the user'), L('b')) });
     const [h] = onlyFile(runHunks().report).hunks;
-    const g = runGateWithDecisions({ decisions: [{ file: rel, hunk_hash: h.hunk_hash, disposition: 'rewrite' }] });
+    const g = runGateWithDecisions({ decisions: [{ file: rel, hunk_hash: h.hunk_hash, disposition: 'rewrite', replacement_lines: [L('hand-rewritten by the user')] }] });
     assert.equal(g.status, 0, JSON.stringify(g.report));
     assert.equal(g.report.decisions.retired[0].disposition, 'rewrite');
+  });
+
+  test('Row 19b (negative): a rewrite whose replacement line is absent from the install fails the gate', () => {
+    resetFixture();
+    const rel = 'gsd-core/workflows/g19b.md';
+    seed(rel, { pristine: lines(L('a'), L('b')), backup: lines(L('a'), L('orig'), L('b')), install: lines(L('a'), L('something else entirely'), L('b')) });
+    const [h] = onlyFile(runHunks().report).hunks;
+    const g = runGateWithDecisions({ decisions: [{ file: rel, hunk_hash: h.hunk_hash, disposition: 'rewrite', replacement_lines: [L('hand-rewritten by the user')] }] });
+    assert.equal(g.status, 1, JSON.stringify(g.report));
+  });
+
+  test('Row 12b: human output lists every retired or rewritten hunk', () => {
+    resetFixture();
+    const rel = 'gsd-core/workflows/g12b.md';
+    seedTwoHunks(rel);
+    const [keepHunk, retireHunk] = onlyFile(runHunks().report).hunks;
+    writeFile(path.join(configDir, rel), lines(L('a'), L('keep-me'), L('b'), L('c'), L('d')));
+    writeFile(decisionsPath, JSON.stringify({ decisions: [
+      { file: rel, hunk_hash: keepHunk.hunk_hash, disposition: 'keep' },
+      { file: rel, hunk_hash: retireHunk.hunk_hash, disposition: 'retire' },
+    ] }));
+    const r = runNode([SCRIPT, '--patches-dir', patchesDir, '--config-dir', configDir, '--pristine-dir', pristineDir, '--decisions', decisionsPath]);
+    assert.equal(r.exitCode, 0, r.stdout + r.stderr);
+    const out = splitLines(r.stdout);
+    assert.ok(out.some((l) => l.includes('## Hunks retired or rewritten by user decision')), r.stdout);
+    assert.ok(out.some((l) => l.includes('hunk 2 (retire)')), r.stdout);
   });
 
   test('Row 20 (boundary): over-broad (no --pristine-dir) file-level retire passes', () => {
