@@ -17,7 +17,47 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fc = require('./helpers/fast-check-setup.cjs');
-const { finalExtension, normalizeWindowsBasename } = require('../hooks/lib/filename-classification.js');
+const { spawnSync } = require('node:child_process');
+const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { finalExtension, normalizeWindowsBasename, lastSegment } = require('../hooks/lib/filename-classification.js');
+
+test('lastSegment: the text after the last / or \\, trailing separators ignored', () => {
+  assert.equal(lastSegment('a/b/c'), 'c');
+  assert.equal(lastSegment('a\\b'), 'b');
+  assert.equal(lastSegment('a/b//'), 'b');
+  assert.equal(lastSegment('a\\b/\\'), 'b');
+  assert.equal(lastSegment('abc'), 'abc');
+  assert.equal(lastSegment('///'), '');
+  assert.equal(lastSegment(''), '');
+});
+
+// The Bash guard calls lastSegment on every command word, and an env -S split can
+// make a long run of separators one word. The regex form of the strip was quadratic
+// in such a run (minutes at this size). Run in a child so a regression fails at the
+// timeout rather than hanging the file.
+test('lastSegment: a 1,000,000-separator run inside a word, in linear time', () => {
+  const lib = require.resolve('../hooks/lib/filename-classification.js');
+  const script = `const { lastSegment } = require(${JSON.stringify(lib)});
+    process.stdout.write(lastSegment('foo' + '/'.repeat(1000000) + 'x') + '|' + lastSegment('foo' + '\\\\/'.repeat(500000)));`;
+  const r = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', timeout: QUICK_SPAWN_TIMEOUT_MS });
+  assert.equal(r.signal, null, 'lastSegment did not finish within the timeout');
+  assert.equal(r.stdout, 'x|foo');
+});
+
+test('fc: lastSegment matches the regex strip it replaced', () => {
+  const reference = (tok) => {
+    const s = tok.replace(/[\\/]+$/, '');
+    const i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+    return i === -1 ? s : s.slice(i + 1);
+  };
+  fc.assert(
+    fc.property(
+      fc.array(fc.constantFrom('/', '\\', 'a', '.', ' ', 'é'), { maxLength: 16 }).map((a) => a.join('')),
+      (s) => assert.equal(lastSegment(s), reference(s)),
+    ),
+    { seed: 42, numRuns: 500 },
+  );
+});
 
 test('finalExtension: a dotless string is its own final extension', () => {
   assert.equal(finalExtension('example'), 'example');
