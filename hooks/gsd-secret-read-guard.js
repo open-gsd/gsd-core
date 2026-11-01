@@ -1213,9 +1213,9 @@ const CURL_WORD_LAUNCHERS = new Map([
   ['asdf', new Set(['exec'])],
   ['npm', new Set(['exec', 'x'])],
   ['pnpm', new Set(['exec', 'dlx'])],
-  // `yarn workspace <name> exec` and `workspaces foreach … exec` name a
-  // workspace before the run word, so the group word itself counts.
-  ['yarn', new Set(['exec', 'dlx', 'workspace', 'workspaces'])],
+  // `yarn workspace <name> exec` names a workspace before the run word, so the
+  // group word itself counts; `workspaces foreach` runs a command in each.
+  ['yarn', new Set(['exec', 'dlx', 'workspace', 'workspaces foreach'])],
   ['bun', new Set(['x'])],
   ['uv', new Set(['run', 'tool run'])],
   ['poetry', new Set(['run'])],
@@ -1263,10 +1263,12 @@ function markCurlArguments(base, words, from, to, marks, depth) {
   } else if (CURL_WORD_LAUNCHERS.has(launcherKey(base))) {
     // Options differ per launcher, so the command is the first curl word,
     // after the subcommand or option, if any, that the launcher runs it by.
-    const start = launcherRunIndex(words, from, to, CURL_WORD_LAUNCHERS.get(launcherKey(base)));
+    const key = launcherKey(base);
+    const start = launcherRunIndex(words, from, to, CURL_WORD_LAUNCHERS.get(key), LAUNCHER_PAIR_OPTIONS.get(key));
     if (start === -1) return;
+    const container = CONTAINER_LAUNCHERS.has(key);
     for (let k = start; k < to; k++) {
-      if (CURL_COMMANDS.has(launchedCurlName(words[k].text))) {
+      if (CURL_COMMANDS.has(launchedCurlName(words[k].text, container))) {
         marks.fill(1, k + 1, to);
         return;
       }
@@ -1294,16 +1296,17 @@ function launcherKey(base) {
 // `=` may be that option's value (`kubectl -n ns exec`), so the subcommand may
 // still follow it; an option whose value is itself a run word
 // (`docker --context run …`) is read as running a command, the safe side.
-function launcherRunIndex(words, from, to, runWords) {
+// `pairOptions` names the options that take two values (`nix --option k v`).
+function launcherRunIndex(words, from, to, runWords, pairOptions) {
   if (runWords === null) return from;
   let group = '';
   let subcommand = true;
-  let optionValue = false;
+  let optionValues = 0;
   for (let k = from; k < to; k++) {
     const t = words[k].text;
     if (t.length > 1 && t[0] === '-') {
       if (runWords.has(t)) return k + 1;
-      optionValue = !t.includes('=');
+      optionValues = pairOptions && pairOptions.has(t) ? 2 : t.includes('=') ? 0 : 1;
       continue;
     }
     if (!subcommand) continue;
@@ -1311,9 +1314,9 @@ function launcherRunIndex(words, from, to, runWords) {
     if (runWords.has(sub)) return k + 1;
     if (isRunWordGroup(runWords, sub)) {
       group = sub + ' ';
-      optionValue = false;
-    } else if (optionValue) {
-      optionValue = false;
+      optionValues = 0;
+    } else if (optionValues > 0) {
+      optionValues--;
     } else {
       subcommand = false;
     }
@@ -1328,10 +1331,22 @@ function isRunWordGroup(runWords, sub) {
   return false;
 }
 
-// A launched command word's name, without an image's `:tag` or `@digest`
-// (`docker run curlimages/curl:8.5.0 …` runs curl). A container runner's
-// `--entrypoint=value` names the command it runs.
-function launchedCurlName(text) {
+// Launcher options that take two values, so two operands after one may be
+// its values rather than the subcommand.
+const LAUNCHER_PAIR_OPTIONS = new Map([
+  ['nix', new Set(['--option', '--arg', '--argstr', '--override-input', '--override-flake'])],
+]);
+
+// Container runners: an operand may be an image, and `--entrypoint=` names the
+// command.
+const CONTAINER_LAUNCHERS = new Set(['docker', 'podman', 'nerdctl', 'docker-compose', 'podman-compose']);
+
+// A launched command word's name. Under a container runner an image's `:tag`
+// or `@digest` is cut (`docker run curlimages/curl:8.5.0 …` runs curl) and
+// `--entrypoint=value` names the command it runs; elsewhere a word is read
+// whole (`scp curl@host:f` names no curl).
+function launchedCurlName(text, container) {
+  if (!container) return commandName(text);
   const eq = text.startsWith('--entrypoint=') ? 12 : -1;
   const name = commandName(eq === -1 ? text : text.slice(eq + 1));
   const cut = name.search(/[:@]/);
@@ -1896,8 +1911,9 @@ function xargsCommandIndex(operands, from, to) {
 
 // The string xargs replaces with each input among its options in
 // operands[from..to): `-I R`, `-IR`, BSD `-J R`, `-i` / `-iR` and
-// `--replace[=R]` (any unambiguous prefix; `{}` when no R). null when xargs
-// appends the input after the command's words.
+// `--replace[=R]` (any unambiguous prefix; `{}` when no R), unless a later
+// `-L`, `-l` or `--max-lines` cancels it. null when xargs appends the input
+// after the command's words.
 function xargsReplaceString(operands, from, to) {
   let rep = null;
   for (let m = from; m < to; m++) {
@@ -1908,6 +1924,8 @@ function xargsReplaceString(operands, from, to) {
       const name = eq === -1 ? t : t.slice(0, eq);
       if (name.length >= 3 && '--replace'.startsWith(name)) {
         rep = eq === -1 ? '{}' : t.slice(eq + 1);
+      } else if (name.length >= 7 && '--max-lines'.startsWith(name)) {
+        rep = null;
       } else if (eq === -1 && XARGS_LONG_VALUE.some((l) => l.startsWith(t))) {
         m++;
       }
@@ -1923,6 +1941,9 @@ function xargsReplaceString(operands, from, to) {
         else if (m + 1 < to) rep = operands[++m].text;
         break;
       }
+      // GNU lets the last of -I/-i/--replace and -L/-l/--max-lines win: a
+      // later -L puts xargs back to appending its input (-n keeps -I).
+      if (t[c] === 'L' || t[c] === 'l') rep = null;
       if (XARGS_SHORT_ATTACHED.includes(t[c])) break;
       if (XARGS_SHORT_VALUE.includes(t[c])) {
         if (c === t.length - 1) m++;
@@ -1940,16 +1961,22 @@ function xargsReplaceString(operands, from, to) {
 // mode c whether or not a pipe feeds it.
 function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
   const { subIdx, argFile } = xargsSubcommand(operands, 0, operands.length);
-  if (subIdx === -1) return null; // no sub-command: xargs defaults to echo
+  // The command xargs runs as GNU xargs reads its options, past the wrappers
+  // resolveCommand unwraps (#5779): the curl reading below follows it even
+  // where next's walk above finds another word or none (`xargs -l curl -s …`).
+  const runs = xargsCommandIndex(operands, 0, operands.length);
+  const subCmd = runs === -1 ? -1 : launchedCommandIndex(operands, runs, operands.length);
+  const toCurl = subCmd !== -1 && CURL_COMMANDS.has(commandName(operands[subCmd].text));
+  if (subIdx === -1 && !toCurl) return null; // no sub-command: xargs defaults to echo
 
-  const subBase = lastSegment(operands[subIdx].text).toLowerCase();
+  const subBase = subIdx === -1 ? '' : lastSegment(operands[subIdx].text).toLowerCase();
   if (SHELL_INTERPRETERS.has(subBase)) {
     // Heredocs/here-strings belong to xargs, not the sub-shell; pass none.
     const hit = scanShellInterpreter(operands.slice(subIdx + 1), [], [], s, bySeg, sepAfter, depth);
     if (hit) return hit;
   }
   if (argFile) return null; // stdin replaced by a file — no pipeline inference
-  if (NON_READING_COMMANDS.has(subBase)) return null;
+  if (!toCurl && NON_READING_COMMANDS.has(subBase)) return null;
 
   const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
   if (op !== '|' && op !== '|&') return null;
@@ -1960,11 +1987,7 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
   // isSecretBasename still holds.
   const prevCmd = resolveCommand((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
   if (!prevCmd) return null;
-  // They become curl's arguments when the sub-command, past the wrappers
-  // resolveCommand unwraps, is curl (#5779): `xargs sudo curl`.
-  const runs = xargsCommandIndex(operands, 0, operands.length);
-  const subCmd = runs === -1 ? -1 : launchedCommandIndex(operands, runs, operands.length);
-  const toCurl = subCmd !== -1 && CURL_COMMANDS.has(commandName(operands[subCmd].text));
+  // They become curl's arguments when that command is curl: `xargs sudo curl`.
   // A piped word is a cert option's value where the sub-command's cert option
   // has its value slot open to the input: the option is the last word (xargs
   // appends the input), or its value holds the replace string
