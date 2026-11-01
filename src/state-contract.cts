@@ -40,7 +40,9 @@
  * contract/40-design.md`): a `--watch` mode, a reader API inside gsd-core, a
  * diff/event stream, a config toggle, milestone-scoping of `phases[]`. This
  * module answers "where is this project right now" and nothing else — a
- * request for document *contents* belongs to `planning.inspect`.
+ * request for document *contents* belongs to `planning.inspect`. (Its one side
+ * effect beyond the snapshot: `excludeFromGit` (git-info-exclude.cts) keeps
+ * state.json out of git via `.git/info/exclude`, REQ-SC-05.)
  *
  * REQUIRE-CYCLE HAZARD (the single most important implementation
  * constraint). `src/state.cts` imports THIS module, and `src/smart-entry.cts`
@@ -134,6 +136,11 @@ interface Owners {
   planningPaths: typeof import('./planning-workspace.cjs')['planningPaths'];
   platformReadSync: typeof import('./shell-command-projection.cjs')['platformReadSync'];
   platformWriteSync: typeof import('./shell-command-projection.cjs')['platformWriteSync'];
+  excludeFromGit: typeof import('./git-info-exclude.cjs')['excludeFromGit'];
+  loadConfig: typeof import('./config-loader.cjs')['loadConfig'];
+  isGitIgnored: typeof import('./config-loader.cjs')['isGitIgnored'];
+  resolveCommitDocsTiers: typeof import('./config-loader.cjs')['resolveCommitDocsTiers'];
+  execGit: typeof import('./shell-command-projection.cjs')['execGit'];
   locateRoadmapProgress: typeof import('./roadmap-progress.cjs')['locateRoadmapProgress'];
   isSentinelPhaseId: typeof import('./phase-id.cjs')['isSentinelPhaseId'];
   parsePhaseFromProse: typeof import('./phase-id.cjs')['parsePhaseFromProse'];
@@ -166,12 +173,19 @@ function owners(): Owners {
   const markdownSectionizerMod = require('./markdown-sectionizer.cjs') as typeof import('./markdown-sectionizer.cjs');
   const stateDocumentMod = require('./state-document.cjs') as typeof import('./state-document.cjs');
   const frontmatterMod = require('./frontmatter.cjs') as typeof import('./frontmatter.cjs');
+  const configLoaderMod = require('./config-loader.cjs') as typeof import('./config-loader.cjs');
+  const gitInfoExcludeMod = require('./git-info-exclude.cjs') as typeof import('./git-info-exclude.cjs');
   const smartEntryMod = require('./smart-entry.cjs') as typeof import('./smart-entry.cjs');
   /* eslint-enable @typescript-eslint/no-require-imports */
   _owners = {
     planningPaths: planningWorkspaceMod.planningPaths,
     platformReadSync: shellCommandProjectionMod.platformReadSync,
     platformWriteSync: shellCommandProjectionMod.platformWriteSync,
+    excludeFromGit: gitInfoExcludeMod.excludeFromGit,
+    loadConfig: configLoaderMod.loadConfig,
+    isGitIgnored: configLoaderMod.isGitIgnored,
+    resolveCommitDocsTiers: configLoaderMod.resolveCommitDocsTiers,
+    execGit: shellCommandProjectionMod.execGit,
     locateRoadmapProgress: roadmapProgressMod.locateRoadmapProgress,
     isSentinelPhaseId: phaseIdMod.isSentinelPhaseId,
     parsePhaseFromProse: phaseIdMod.parsePhaseFromProse,
@@ -394,6 +408,27 @@ export function buildStateContract(cwd: string, deps?: StateContractDeps): State
   };
 }
 
+// Bound for the ownership probe's one `git ls-files` (same 5 s class as the other hot-path git calls).
+export const OWNERSHIP_PROBE_TIMEOUT_MS = 5_000;
+
+/** True when the repo that git-ignores via info/exclude owns the project: a `.git` entry between `stateDir` and the project root, else a tracked file outside `.planning/`. */
+function repoOwnsProject(cwd: string, stateDir: string): boolean {
+  const root = path.resolve(cwd);
+  for (let d = path.resolve(stateDir); ; d = path.dirname(d)) {
+    if (fs.existsSync(path.join(d, '.git'))) return true;
+    if (d === root || d === path.dirname(d)) break;
+  }
+  const r = owners().execGit(['ls-files', '-z', '--', '.', ':(exclude).planning'], { cwd, timeout: OWNERSHIP_PROBE_TIMEOUT_MS });
+  return (r.error as NodeJS.ErrnoException | undefined)?.code === 'ENOBUFS' || (r.exitCode === 0 && r.stdout.length > 0);
+}
+
+/** Append the derived-file exclude entry when the commit policy keeps planning in git and the repo owns the project (the publisher passes no phase override: it has no phase context, D13). */
+function excludeWhenGitOwns(cwd: string, stateDir: string): void {
+  const commitDocs = owners().loadConfig(cwd, { persist: false, quiet: true })['commit_docs'];
+  if (!owners().resolveCommitDocsTiers(undefined, commitDocs, () => owners().isGitIgnored(cwd, '.planning')).resolved) return;
+  if (repoOwnsProject(cwd, stateDir)) owners().excludeFromGit(stateDir, 'state.json');
+}
+
 /**
  * Publish the state-contract snapshot to `<planning>/state.json`. NEVER
  * throws — for any input, ever (acceptance criterion 3: the parent boundary
@@ -403,6 +438,10 @@ export function buildStateContract(cwd: string, deps?: StateContractDeps): State
  * guard is essential — `platformWriteSync` does `mkdirSync(dirname,
  * {recursive:true})`, so without it the publisher would conjure a
  * `.planning/` tree inside a non-GSD directory.
+ *
+ * Side effect (#5505): after a successful write it may append `/<prefix>state.json` to the
+ * enclosing repo's `.git/info/exclude` (best-effort, see `excludeFromGit`), gated on the commit
+ * policy and on that repo owning the project.
  *
  * `withPlanningLock` is deliberately NOT taken here — see the module-doc
  * "REQUIRE-CYCLE HAZARD" section's sibling note: it is not re-entrant and
@@ -436,6 +475,12 @@ export function publishStateContract(cwd: string, deps?: StateContractDeps): { p
       platformWriteSync(statePath, JSON.stringify(snapshot, null, 2) + '\n');
     } catch {
       return { published: false, reason: PUBLISH_REASON.WRITE_FAILED };
+    }
+
+    try {
+      excludeWhenGitOwns(cwd, path.dirname(statePath));
+    } catch {
+      // REQ-SC-04: ignoring is optional; never perturb the publish result.
     }
 
     return { published: true, reason: PUBLISH_REASON.PUBLISHED };

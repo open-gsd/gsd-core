@@ -25,7 +25,7 @@ import configLoaderMod = require('./config-loader.cjs');
 const { loadConfig, isGitIgnored } = configLoaderMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtilsMod = require('./core-utils.cjs');
-const { toPosixPath, generateSlugInternal, extractOneLinerFromBody } = coreUtilsMod;
+const { toPosixPath, generateSlugInternal, extractOneLinerFromBody, isStateJsonPublishPath } = coreUtilsMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
 const {
@@ -1598,7 +1598,8 @@ function resolvePhaseCommitDocsOverride(config: Record<string, unknown>, phaseNu
 }
 
 /**
- * #3587: the four-tier `commit_docs` precedence chain for a single commit —
+ * #3587: the four-tier `commit_docs` precedence chain for a single commit — the tiers live in
+ * `resolveCommitDocsTiers` (src/config-loader.cts); this is `cmdCommit`'s caller of it —
  * `phase_commit_docs.<phase-id>` (tier 1, resolved HERE because this call site
  * is the one place that knows the phase — see 40-design.md "Rejected" §1: NOT
  * inside `loadConfig`, which has no phase context and is called by nearly every
@@ -1621,11 +1622,7 @@ function resolveCommitDocsPolicy(
   phaseNum: string | null,
   isPlanningGitIgnored: () => boolean,
 ): CommitDocsResolution {
-  const phaseOverride = resolvePhaseCommitDocsOverride(config, phaseNum);
-  if (phaseOverride !== undefined) return { resolved: phaseOverride, source: 'phase' };
-  if (!config['commit_docs']) return { resolved: false, source: 'config' };
-  if (isPlanningGitIgnored()) return { resolved: false, source: 'gitignore' };
-  return { resolved: true, source: 'default' };
+  return configLoaderMod.resolveCommitDocsTiers(resolvePhaseCommitDocsOverride(config, phaseNum), config['commit_docs'], isPlanningGitIgnored);
 }
 
 // Reason string per commit_docs-resolution source, for the tier-1/tier-2 skip
@@ -2259,6 +2256,16 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
       // cmdCommitToSubrepo's exitCode-gated push.
       if (addResult.exitCode === 0) {
         stagedPaths.push(file);
+      } else if (
+        explicitFiles &&
+        // Any publish path (`.planning[/<project>][/workstreams/<ws>]/state.json`), whichever scope the env selects.
+        isStateJsonPublishPath(cwd, path.relative(cwd, fullPath)) &&
+        execGit(['check-ignore', '-q', '--', file], { cwd }).exitCode === 0
+      ) {
+        // #5505: the derived state.json, untracked and ignored, cannot stage; like a missing
+        // file it is skipped and recorded, not a failure. Any other ignored path still fails
+        // (naming it is a user error), and check-ignore exits 0 only for UNTRACKED paths.
+        skippedFiles.push(file);
       } else {
         stagingFailures.push({
           file,
@@ -4105,8 +4112,8 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
  *
  * The phase is derived from the STAGED `.planning/` paths via the single-
  * owner `detectPhaseNumberFromFiles` (the same helper `cmdCommit` uses), and
- * the policy itself is resolved via the single-owner `resolveCommitDocsPolicy`
- * (also shared with `cmdCommit`) — this function never re-derives phase
+ * the policy itself is resolved via `resolveCommitDocsPolicy`, `cmdCommit`'s caller of the
+ * single-owner `resolveCommitDocsTiers` (src/config-loader.cts) — this function never re-derives phase
  * detection or precedence, so it cannot diverge from `cmdCommit`'s decision
  * for the same staged tree (#3588 Part 1: this guard was previously
  * phase-blind, reading only project-level `commit_docs` and directly

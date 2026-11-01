@@ -172,8 +172,20 @@ function toLegacyResult(result) {
   return { status: result.exitCode, stdout: result.stdout, stderr: result.stderr };
 }
 
+/**
+ * True when `name` can be a directory name on this platform: Windows rejects
+ * `< > : " | ? *` and control characters, POSIX filesystems accept them.
+ * @param {string} name
+ * @returns {boolean}
+ */
+function isFsLegalName(name) {
+  return process.platform !== 'win32'
+    || (!/[<>:"|?*]/.test(name) && [...name].every((c) => c.charCodeAt(0) > 0x1f));
+}
+
 module.exports = {
   gitOrThrow,
+  isFsLegalName,
   throwIfFailed,
   toLegacyResult,
   DEFAULT_GIT_TIMEOUT_MS,

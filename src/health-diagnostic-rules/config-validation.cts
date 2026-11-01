@@ -61,6 +61,8 @@ type Diagnostic = healthDiagnosticMod.Diagnostic;
 type Rule = healthDiagnosticMod.Rule;
 
 import { VALID_PROFILES, VALID_TIERS, VALID_PHASE_TYPES } from '../model-catalog.cjs';
+import { sanitizeLabel } from '../security.cjs';
+import { escapeSingleQuotedShellLiteral } from '../shell-command-projection.cjs';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningScopeMod = require('../planning-scope.cjs');
@@ -310,6 +312,46 @@ function checkW029(snapshot: PlanningSnapshot): Diagnostic[] {
   ];
 }
 
+// ─── W031 — derived state.json still tracked by git (#5505 Case B) ──────────
+//
+// publishStateContract rewrites state.json at every boundary command and lists
+// it in .git/info/exclude, but an exclude cannot hide a tracked file: a copy
+// committed earlier is left modified, so /gsd-ship's clean-tree preflight
+// refuses. ADVISE-only, like W029: GSD never untracks files for you. The fix
+// uses --ignore-unmatch so rerunning it is a no-op, and --literal-pathspecs so a tracked
+// directory named with `*`, `?` or `[` untracks only itself, never a sibling's state.json.
+
+function checkW031(snapshot: PlanningSnapshot): Diagnostic[] {
+  const field = snapshot.stateJsonTracked;
+  // A listing git could not answer is not "nothing tracked": it stays silent like W029's unreadable scope.
+  if (!field || field.scope !== SCOPE.COMPLETE || field.value.length === 0) return [];
+  const paths = field.value;
+  // ANSI-C quoting: `\\` and `'` backslashed, C1 characters as their UTF-8 bytes (what git tracks),
+  // every other character through sanitizeLabel so C0/DEL keep their `\n`, `\t`, `\x1b` forms.
+  const c1Bytes = (ch: string): string => [...Buffer.from(ch)].map((b) => `\\x${b.toString(16)}`).join('');
+  const ansiCChar = (ch: string): string => (ch === '\\' || ch === "'" ? `\\${ch}` : /[\u0080-\u009f]/.test(ch) ? c1Bytes(ch) : sanitizeLabel(ch));
+  const ansiC = (p: string): string => `$'${[...p].map(ansiCChar).join('')}'`;
+  // Tracked names are repository content and health output is read by agents: escape control
+  // characters in the message, and quote the pasted command (POSIX single quotes; `$'..'` for a
+  // name with control characters) so it pastes as-is.
+  const quote = (p: string): string => {
+    if (/^[\w./-]+$/.test(p)) return p;
+    if (/\p{Cc}/u.test(p)) return ansiC(p);
+    return `'${escapeSingleQuotedShellLiteral(p)}'`;
+  };
+  const args = paths.map(quote).join(' ');
+  return [
+    {
+      code: 'W031',
+      severity: SEVERITY.WARNING,
+      message: `Tracked by git: ${paths.map(sanitizeLabel).join(', ')}. state.json is a derived cache rewritten at every boundary command, so a tracked copy stays modified and /gsd-ship refuses the dirty tree`,
+      remedy: adviseRemedy(
+        `From the project directory (the one holding \`.planning/\`), run \`git --literal-pathspecs rm --cached --ignore-unmatch -- ${args}\` once and commit the removal; the file stays on disk, and with commit_docs on GSD's .git/info/exclude entry keeps it ignored from then on`,
+      ),
+    },
+  ];
+}
+
 // ─── Exports ────────────────────────────────────────────────────────────────
 
 const RULES: Rule[] = [
@@ -372,6 +414,13 @@ const RULES: Rule[] = [
     description: '.planning/ matches a gitignore rule but is still tracked by git (gitignore has no effect on already-tracked files)',
     repairable: false,
     check: checkW029,
+  },
+  {
+    code: 'W031',
+    severity: SEVERITY.WARNING,
+    description: 'Derived .planning/state.json is tracked by git, so each boundary command leaves it modified',
+    repairable: false,
+    check: checkW031,
   },
 ];
 

@@ -236,6 +236,10 @@ interface ParsedConfig {
 
 const _gitIgnoredCache = new Map<string, boolean>();
 
+// The state-contract publisher reaches isGitIgnored through loadConfig at every boundary command:
+// fail fast there instead of waiting out execGit's 10 s default.
+const CHECK_IGNORE_TIMEOUT_MS = 5_000;
+
 function isGitIgnored(cwd: string, targetPath: string, env?: Record<string, string>): boolean {
   // #2206: strip trailing slashes — `git check-ignore` has a quirk where a
   // CRLF .gitignore with blank lines falsely reports a trailing-slash path
@@ -244,10 +248,23 @@ function isGitIgnored(cwd: string, targetPath: string, env?: Record<string, stri
   const key = cwd + '::' + normalized + (env ? '::env:' + JSON.stringify(Object.entries(env).sort()) : '');
   if (_gitIgnoredCache.has(key)) return _gitIgnoredCache.get(key)!;
   // --no-index checks .gitignore rules regardless of whether the file is tracked.
-  const result = execGit(['check-ignore', '-q', '--no-index', '--', normalized], { cwd, env });
+  const result = execGit(['check-ignore', '-q', '--no-index', '--', normalized], { cwd, env, timeout: CHECK_IGNORE_TIMEOUT_MS });
+  if (result.timedOut) return false; // a bound hit says nothing about the rules: not cached
   const ignored = result.exitCode === 0;
   _gitIgnoredCache.set(key, ignored);
   return ignored;
+}
+
+/** The commit_docs tiers for one decision: phase override, then commit_docs, then an ignored `.planning/`, then the default (#3587, #5505). */
+function resolveCommitDocsTiers(
+  phaseOverride: boolean | undefined,
+  commitDocs: unknown,
+  isPlanningGitIgnored: () => boolean,
+): { resolved: boolean; source: 'phase' | 'config' | 'gitignore' | 'default' } {
+  if (phaseOverride !== undefined) return { resolved: phaseOverride, source: 'phase' };
+  if (!commitDocs) return { resolved: false, source: 'config' };
+  if (isPlanningGitIgnored()) return { resolved: false, source: 'gitignore' };
+  return { resolved: true, source: 'default' };
 }
 
 // ─── Model alias resolution ───────────────────────────────────────────────────
@@ -694,11 +711,18 @@ function _warnUnusableConfig(fault: ConfigFault): void {
  * ASK the config something (a predicate, a status readout) pass it so that a read
  * cannot dirty the working tree; the ~30 callers that omit it keep persisting, so
  * a legacy config is still migrated exactly once by ordinary use.
+ *
+ * `options.quiet: true` suppresses every stderr diagnostic of the read (unusable or
+ * shadowed config, unknown keys, profile overrides) and does not consume the
+ * once-per-process dedupe slot of a later loud read. A caller that must not be seen by
+ * the parent command's output passes `{ persist: false, quiet: true }` (the
+ * state-contract publisher, REQ-SC-04).
  */
 function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown> = {}): ConfigResolution {
   // Opt-OUT, not opt-in: omitting the option must preserve the historical
   // write-back for every existing caller.
   const persist = options['persist'] !== false;
+  const quiet = options['quiet'] === true;
   // NOTE: loadConfigResolved resolves from cwd AS-IS (no walk-up).
   // Callers that need ancestor-anchoring (e.g. cmdAgentSkills) must do so
   // themselves via findProjectRoot() before calling this function.
@@ -748,13 +772,13 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       const rootRead = _readConfigFile(rootConfigPath);
       if (rootRead.kind === 'fault') {
         configFault = rootRead.fault;
-        _warnUnusableConfig(rootRead.fault);
+        if (!quiet) _warnUnusableConfig(rootRead.fault);
       }
       if (rootRead.kind !== 'ok') throw new Error('root config absent or unusable');
       rootParsed = rootRead.data;
       const { parsed: rootNormalized, normalizations: rootNorms, skipped: rootSkipped } = normalizeLegacyKeys(rootParsed);
       if (rootSkipped.length > 0) {
-        _warnUnusableInput({ reason: _UNUSABLE_REASON.CONFIG_SECTION_NOT_OBJECT, source: rootConfigPath });
+        if (!quiet) _warnUnusableInput({ reason: _UNUSABLE_REASON.CONFIG_SECTION_NOT_OBJECT, source: rootConfigPath });
       }
       if (rootNorms.length > 0) {
         for (const norm of rootNorms as unknown as NormalizationEntry[]) {
@@ -797,7 +821,7 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       // The workstream/root config that ACTUALLY governs this resolution is
       // unusable. This outranks any earlier root-config fault for reporting.
       configFault = read.fault;
-      _warnUnusableConfig(read.fault);
+      if (!quiet) _warnUnusableConfig(read.fault);
     }
     if (read.kind !== 'ok') throw new Error('config absent or unusable');
     const fileData: ParsedConfig = read.data;
@@ -808,7 +832,7 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
     {
       const { parsed: normalized, normalizations, skipped } = normalizeLegacyKeys(fileData);
       if (skipped.length > 0) {
-        _warnUnusableInput({ reason: _UNUSABLE_REASON.CONFIG_SECTION_NOT_OBJECT, source: configPath });
+        if (!quiet) _warnUnusableInput({ reason: _UNUSABLE_REASON.CONFIG_SECTION_NOT_OBJECT, source: configPath });
       }
       if (normalizations.length > 0) {
         Object.keys(fileData).forEach(k => delete (fileData as Record<string, unknown>)[k]);
@@ -881,7 +905,7 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
     }
 
     const unknownKeys = Object.keys(parsed).filter(k => !KNOWN_TOP_LEVEL.has(k));
-    if (unknownKeys.length > 0) {
+    if (unknownKeys.length > 0 && !quiet) {
       const warnKey = unknownKeys.join(',');
       if (!_warnedUnknownConfigKeys.has(warnKey)) {
         _warnedUnknownConfigKeys.add(warnKey);
@@ -891,7 +915,7 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       }
     }
 
-    _warnUnknownProfileOverrides(parsed, '.planning/config.json');
+    if (!quiet) _warnUnknownProfileOverrides(parsed, '.planning/config.json');
 
     const get = (key: string, nested?: { section: string; field: string }): unknown =>
       _getConfigValue(parsed, key, nested);
@@ -1024,7 +1048,7 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       const shadowHome = resolveGsdHome();
       const shadowPath = path.join(shadowHome, '.gsd', 'defaults.json');
       const shadowRead = _readConfigFile(shadowPath);
-      if (shadowRead.kind === 'ok') {
+      if (shadowRead.kind === 'ok' && !quiet) {
         _warnShadowedGlobalDefaults(shadowRead.data, shadowPath);
       }
     } catch {
@@ -1092,7 +1116,7 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
         // project config did not already fail — the nearer file is the one the
         // user is most likely to be able to act on.
         if (!configFault) configFault = globalRead.fault;
-        _warnUnusableConfig(globalRead.fault);
+        if (!quiet) _warnUnusableConfig(globalRead.fault);
       }
       if (globalRead.kind !== 'ok') throw new Error('global defaults absent or unusable');
       const globalDefaults = globalRead.data;
@@ -1216,6 +1240,7 @@ export = {
   CONFIG_REASON,
   _warnedUnusableConfig,
   isGitIgnored,
+  resolveCommitDocsTiers,
   CONFIG_DEFAULTS,
   _getConfigDefault,
   _getNestedConfigDefault,

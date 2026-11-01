@@ -31,6 +31,7 @@ const fc = require('fast-check');
 
 const { createTempDir, createTempGitProject, cleanup } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { stubEnv } = require('./helpers/env-guard.cjs');
 
 // `export =` shape TBD by the implementing phase — this module is "the sole
 // export consumers reach for" per the design doc, with `worstScope` also
@@ -1872,6 +1873,31 @@ describe('planningTracked field (#3586, matrix rows A1-A12)', () => {
     assert.deepStrictEqual(snap.planningTracked.value, { tracked: true, ignored: false });
   });
 
+  test('an exported GIT_DIR naming another repo decides neither tracked nor ignored (#5505)', (t) => {
+    const cwd = createTempGitProject('gsd-5505-env-');
+    const other = createTempGitProject('gsd-5505-env-other-');
+    t.after(() => { cleanup(cwd); cleanup(other); });
+    writeGitignore(other, '.planning/\n');
+    fs.writeFileSync(path.join(other, '.planning', 'state.json'), '{}\n');
+    commitAll(other, 'other tracks .planning');
+    gitOrThrow(['rm', '-rq', '--', '.planning'], { cwd });
+    gitOrThrow(['commit', '-m', 'cwd tracks nothing'], { cwd });
+    stubEnv(t, 'GIT_DIR', path.join(other, '.git'));
+    const snap = buildPlanningSnapshot(cwd);
+    assert.deepStrictEqual(snap.planningTracked.value, { tracked: false, ignored: false });
+    assert.deepStrictEqual(snap.stateJsonTracked.value, []);
+  });
+
+  test('stateJsonTracked classifies a failed listing like planningTracked: not_a_git_repo outside a work tree', (t) => {
+    const cwd = createTempDir('gsd-5505-nogit-');
+    t.after(() => cleanup(cwd));
+    fs.mkdirSync(path.join(cwd, '.planning'), { recursive: true });
+    const snap = buildPlanningSnapshot(cwd);
+    assert.strictEqual(snap.planningTracked.reason, 'not_a_git_repo');
+    assert.strictEqual(snap.stateJsonTracked.reason, snap.planningTracked.reason);
+    assert.strictEqual(snap.stateJsonTracked.scope, SCOPE.UNREADABLE);
+  });
+
   // ─── Locale-independence regression (#3586) ────────────────────────────────
   // The original defect: `not_a_git_repo` vs `git_list_failed` was
   // distinguished by regex-matching git's (localized) stderr prose. Under a
@@ -1931,10 +1957,15 @@ describe('planningTracked field (#3586, matrix rows A1-A12)', () => {
 
     const originalSpawnSync = childProcess.spawnSync;
     let lsFilesCalls = 0;
+    let stateJsonLsFilesCalls = 0;
     let revParseProbeCalls = 0;
     t.mock.method(childProcess, 'spawnSync', (cmd, args, opts) => {
       if (cmd === 'git' && Array.isArray(args)) {
-        if (args.includes('ls-files')) lsFilesCalls += 1;
+        // planningTracked's listing carries no `:(glob)` pathspec; stateJsonTracked's does.
+        if (args.includes('ls-files')) {
+          if (args.some((a) => String(a).startsWith(':(glob)'))) stateJsonLsFilesCalls += 1;
+          else lsFilesCalls += 1;
+        }
         if (args.includes('rev-parse') && args.includes('--is-inside-work-tree')) revParseProbeCalls += 1;
       }
       return originalSpawnSync.call(childProcess, cmd, args, opts);
@@ -1942,7 +1973,8 @@ describe('planningTracked field (#3586, matrix rows A1-A12)', () => {
 
     const snap = buildPlanningSnapshot(cwd);
     assert.strictEqual(snap.planningTracked.scope, SCOPE.COMPLETE);
-    assert.strictEqual(lsFilesCalls, 1, 'ls-files must run exactly once on the happy path');
+    assert.strictEqual(lsFilesCalls, 1, 'ls-files for planningTracked must run exactly once on the happy path');
+    assert.strictEqual(stateJsonLsFilesCalls, 1, 'ls-files for stateJsonTracked must run exactly once');
     assert.strictEqual(
       revParseProbeCalls,
       0,
@@ -1973,4 +2005,41 @@ describe('planningTracked field (#3586, matrix rows A1-A12)', () => {
       reason: 'ok_truncated',
     });
   });
+
+  test('stateJsonTracked survives an ENOBUFS listing', (t) => {
+    const cwd = createTempGitProject('gsd-5505-enobufs-');
+    t.after(() => cleanup(cwd));
+    const files = ['.planning/state.json', '.planning/workstreams/ws1/state.json'];
+    for (const f of files) {
+      fs.mkdirSync(path.dirname(path.join(cwd, f)), { recursive: true });
+      fs.writeFileSync(path.join(cwd, f), '{}\n');
+      gitOrThrow(['add', '-f', f], { cwd });
+    }
+    commitAll(cwd, 'track derived state');
+    // Only the whole-.planning listing (no `:(glob)` pathspec) overflows.
+    const originalSpawnSync = childProcess.spawnSync;
+    t.mock.method(childProcess, 'spawnSync', (cmd, args, opts) => {
+      if (Array.isArray(args) && args.includes('ls-files') && !args.some((a) => String(a).startsWith(':(glob)'))) {
+        return { status: null, stdout: '', stderr: '', signal: null, error: Object.assign(new Error('spawnSync git ENOBUFS'), { code: 'ENOBUFS' }) };
+      }
+      return originalSpawnSync.call(childProcess, cmd, args, opts);
+    });
+
+    const snap = buildPlanningSnapshot(cwd);
+    assert.strictEqual(snap.planningTracked.reason, 'ok_truncated');
+    assert.deepStrictEqual([...snap.stateJsonTracked.value].sort(), files);
+    assert.strictEqual(snap.stateJsonTracked.scope, SCOPE.COMPLETE);
+  });
+
+  // A listing git could not answer is UNREADABLE, never an empty "nothing tracked" (W031 stays silent on it).
+  for (const [name, mock, reason] of [['a failed', mockGitSpawnFailure, 'git_list_failed'], ['a timed-out', mockGitSpawnTimeout, 'git_timed_out']]) {
+    test(`stateJsonTracked reports ${name} listing as unreadable, not as nothing tracked`, (t) => {
+      const cwd = createTempGitProject('gsd-5505-unreadable-');
+      t.after(() => cleanup(cwd));
+      mock(t);
+      const snap = buildPlanningSnapshot(cwd);
+      assert.strictEqual(snap.stateJsonTracked.scope, SCOPE.UNREADABLE);
+      assert.strictEqual(snap.stateJsonTracked.reason, reason);
+    });
+  }
 });
