@@ -511,6 +511,7 @@ describe('reviewer lane invocation — absent-safe and hostile input (ADR-2782 D
       'MISSING_REQUIRED_BINARY',
       'PROBE_FAILED',
       'PROBE_TIMEOUT',
+      'PROMPT_EXCEEDS_CONTEXT',
       'UNKNOWN_HANDLER',
       'UNKNOWN_TRANSPORT',
     ]);
