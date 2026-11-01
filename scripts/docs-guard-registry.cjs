@@ -322,6 +322,7 @@ const DOCS_GUARD_TESTS = {
   ],
   'tests/inline-plan-threshold-default.test.cjs': ['docs/CONFIGURATION.md', 'docs/zh-CN/CONFIGURATION.md', 'docs/pt-BR/CONFIGURATION.md'],
   'tests/install.test.cjs': ['docs/reference/agents.md', 'docs/INVENTORY.md', 'docs/INVENTORY-MANIFEST.json'],
+  'tests/insert-phase-sibling-docs.test.cjs': ['docs/COMMANDS.md', 'docs/USER-GUIDE.md', 'docs/FEATURES.md', 'docs/features/phase-management.md'],
   // SOURCE_DIRS includes 'docs' and walks it recursively for every .md file
   // (intel.test.cjs:1223-1228) — a generic tree walk.
   'tests/intel.test.cjs': ['*'],
