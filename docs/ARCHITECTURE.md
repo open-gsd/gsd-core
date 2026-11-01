@@ -305,8 +305,8 @@ See [`docs/INVENTORY.md`](INVENTORY.md#hooks) for the authoritative hook roster.
 
 **Crash policy (ADR-3889 Phase 7, #3911).** Every enforcement hook terminates
 through `hooks/lib/hook-exit.js`'s `allow(payload)` (exit 0), `deny(payload,
-stderrPayload?)` (exit 2), or `crash(onCrash, payload)` — the last dispatching
-per a `HOOK_ON_CRASH` policy the hook must declare explicitly (`ALLOW` or
+stderrPayload?)` (exit 2), or `crash(onCrash, payload, stderrPayload?)` — the last
+dispatching per a `HOOK_ON_CRASH` policy the hook must declare explicitly (`ALLOW` or
 `DENY`, no default), so a hook's fail-open/fail-closed stance is a visible
 declaration rather than an inference from a bare `process.exit(N)`. Two hooks
 are deliberate exceptions — `gsd-read-injection-scanner.js` (PostToolUse) and
