@@ -4,7 +4,7 @@
  * Design:      .gsd/phase/feat-4559-review-lane-default-cap/40-design.md
  * Test matrix: .gsd/phase/feat-4559-review-lane-default-cap/50-test-matrix.md
  *
- * Pure rows (1-17) drive `resolveLaneCap` / `resolveLaneBudget` / `checkPromptAgainstCap` /
+ * Pure rows (1-17) drive `resolveLaneCap` / `checkPromptAgainstCap` / `refuseIfOverCap` /
  * `renderPromptRefusalStub` / `CONTEXT_WINDOW_HEADROOM` directly. CLI rows (21-25, 30) drive the
  * REAL `review-lane plan|invoke` against a temp project with a shim `claude` binary, so "the
  * binary was never spawned" is observed, not inferred.
@@ -19,13 +19,14 @@ const assert = require('node:assert/strict');
 const fc = require('fast-check');
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
 const { REVIEWER_LANES } = require('../gsd-core/bin/lib/review-lane-descriptor.cjs');
 const {
   resolveLaneCap,
-  resolveLaneBudget,
   checkPromptAgainstCap,
+  refuseIfOverCap,
   renderPromptRefusalStub,
   CONTEXT_WINDOW_HEADROOM,
   LANE_UNAVAILABLE,
@@ -118,7 +119,7 @@ describe('#4559 resolveLaneCap — explicit configuration precedence', () => {
     const r = resolveLaneCap(laneOf('claude'), cfg({ [budgetKey('claude')]: 0, 'review.max_prompt_tokens': 9000 }));
     assert.equal(r.cap, 0);
     assert.equal(r.source, 'lane');
-    assert.deepEqual(checkPromptAgainstCap(10 ** 9, r, 'claude'), { ok: true });
+    assert.deepEqual(checkPromptAgainstCap(10 ** 9, r, laneOf('claude')), { ok: true });
   });
 
   test('global beats derived when the per-lane value is the -1 sentinel', () => {
@@ -137,7 +138,7 @@ describe('#4559 resolveLaneCap — explicit configuration precedence', () => {
     const r = resolveLaneCap(laneOf('claude'), cfg({ [budgetKey('claude')]: -1, 'review.max_prompt_tokens': 0 }));
     assert.equal(r.cap, 0);
     assert.equal(r.source, 'global');
-    assert.deepEqual(checkPromptAgainstCap(10 ** 9, r, 'claude'), { ok: true });
+    assert.deepEqual(checkPromptAgainstCap(10 ** 9, r, laneOf('claude')), { ok: true });
   });
 
   test('a non-number per-lane value is ignored and falls through to the global', () => {
@@ -156,19 +157,6 @@ describe('#4559 resolveLaneCap — explicit configuration precedence', () => {
       const r = resolveLaneCap(laneOf('claude'), cfg({ 'review.max_prompt_tokens': bad }));
       assert.equal(r.cap, 130000, `global ${String(bad)}`);
       assert.equal(r.source, 'context-window', `global ${String(bad)}`);
-    }
-  });
-
-  test('resolveLaneBudget is the cap of resolveLaneCap, for every lane and config shape', () => {
-    const shapes = [
-      {},
-      { 'review.max_prompt_tokens': 9000 },
-      { 'review.max_prompt_tokens': 0 },
-    ];
-    for (const lane of REVIEWER_LANES) {
-      for (const shape of shapes) {
-        assert.equal(resolveLaneBudget(lane, cfg(shape)), resolveLaneCap(lane, cfg(shape)).cap, lane.slug);
-      }
     }
   });
 });
@@ -279,9 +267,9 @@ describe('#4559 checkPromptAgainstCap', () => {
 
   test('boundary: estimate = cap-1 and = cap run, = cap+1 is refused', () => {
     const cap = 130000;
-    assert.deepEqual(checkPromptAgainstCap(cap - 1, info(cap), 'claude'), { ok: true });
-    assert.deepEqual(checkPromptAgainstCap(cap, info(cap), 'claude'), { ok: true });
-    const over = checkPromptAgainstCap(cap + 1, info(cap), 'claude');
+    assert.deepEqual(checkPromptAgainstCap(cap - 1, info(cap), laneOf('claude')), { ok: true });
+    assert.deepEqual(checkPromptAgainstCap(cap, info(cap), laneOf('claude')), { ok: true });
+    const over = checkPromptAgainstCap(cap + 1, info(cap), laneOf('claude'));
     assert.equal(over.ok, false);
     assert.equal(over.reason, REFUSAL_REASON);
     assert.equal(typeof over.detail, 'string');
@@ -290,16 +278,16 @@ describe('#4559 checkPromptAgainstCap', () => {
 
   test('no cap never refuses: cap null and cap 0 with a huge estimate', () => {
     for (const cap of [null, 0]) {
-      assert.deepEqual(checkPromptAgainstCap(10 ** 12, info(cap, cap === null ? 'none' : 'lane'), 'claude'), { ok: true });
+      assert.deepEqual(checkPromptAgainstCap(10 ** 12, info(cap, cap === null ? 'none' : 'lane'), laneOf('claude')), { ok: true });
     }
   });
 
   test('a lane that ran and returned empty is not a refusal: an empty prompt never trips a cap', () => {
-    assert.deepEqual(checkPromptAgainstCap(0, info(1), 'claude'), { ok: true });
+    assert.deepEqual(checkPromptAgainstCap(0, info(1), laneOf('claude')), { ok: true });
   });
 
   test('refusal detail names the estimate, the cap and the remedy key', () => {
-    const over = checkPromptAgainstCap(130001, info(130000), 'claude');
+    const over = checkPromptAgainstCap(130001, info(130000), laneOf('claude'));
     assert.equal(over.ok, false);
     assert.ok(over.detail.includes('130001'), `detail must name the estimate: ${over.detail}`);
     assert.ok(over.detail.includes('130000'), `detail must name the cap: ${over.detail}`);
@@ -308,7 +296,7 @@ describe('#4559 checkPromptAgainstCap', () => {
 
   test('the refusal reason is the shared LANE_UNAVAILABLE member', () => {
     assert.equal(LANE_UNAVAILABLE.PROMPT_EXCEEDS_CONTEXT, REFUSAL_REASON);
-    assert.equal(checkPromptAgainstCap(2, info(1), 'claude').reason, LANE_UNAVAILABLE.PROMPT_EXCEEDS_CONTEXT);
+    assert.equal(checkPromptAgainstCap(2, info(1), laneOf('claude')).reason, LANE_UNAVAILABLE.PROMPT_EXCEEDS_CONTEXT);
   });
 
   test('renderPromptRefusalStub carries the stable marker, the slug and the detail', () => {
@@ -327,7 +315,7 @@ describe('#4559 properties', () => {
   test('property: refusal iff the estimate is strictly over a positive cap', () => {
     fc.assert(
       fc.property(fc.integer({ min: 1, max: 5_000_000 }), fc.integer({ min: 0, max: 10_000_000 }), (cap, est) => {
-        const r = checkPromptAgainstCap(est, { cap, source: 'lane', contextWindowTokens: null }, 'claude');
+        const r = checkPromptAgainstCap(est, { cap, source: 'lane', contextWindowTokens: null }, laneOf('claude'));
         return r.ok === (est <= cap);
       }),
       FC,
@@ -560,5 +548,196 @@ describe('#4559 review-lane invoke refuses a prompt over the cap', () => {
       false,
       'the lane-named review path must not be written for an instance run',
     );
+  });
+});
+
+// ─── review findings (F1, F3, F4, F6, F7, F10) ────────────────────────────
+
+describe('#4559 a promptChannel none lane receives no prompt, so no cap ever applies (coderabbit)', () => {
+  const NO_CAP = { cap: null, source: 'none', contextWindowTokens: null };
+
+  test('a global cap resolves to no cap', () => {
+    assert.deepEqual(resolveLaneCap(laneOf('coderabbit'), cfg({ 'review.max_prompt_tokens': 1000 })), NO_CAP);
+  });
+
+  test('a per-lane cap resolves to no cap', () => {
+    const get = cfg({ [budgetKey('coderabbit')]: 1000, 'review.max_prompt_tokens': 1000 });
+    assert.deepEqual(resolveLaneCap(laneOf('coderabbit'), get), NO_CAP);
+    assert.equal(refuseIfOverCap({ lane: laneOf('coderabbit'), estimatedTokens: 10 ** 9, configGet: get }), null);
+  });
+
+  test('property: whatever the keys hold, a promptChannel none lane resolves to no cap', () => {
+    fc.assert(
+      fc.property(fc.integer({ min: -5, max: 5_000_000 }), fc.integer({ min: -5, max: 5_000_000 }), (a, b) => {
+        const get = cfg({ [budgetKey('coderabbit')]: a, 'review.max_prompt_tokens': b, [windowKey('coderabbit')]: a });
+        const r = resolveLaneCap(laneOf('coderabbit'), get);
+        return r.cap === null && r.source === 'none' && r.contextWindowTokens === null;
+      }),
+      FC,
+    );
+  });
+
+  test('plan reports no cap for coderabbit under a global cap', { skip: POSIX_ONLY }, (t) => {
+    const p = makeProject(t, { review: { max_prompt_tokens: 1000 } });
+    const by = Object.fromEntries(plan(p, ['claude', 'coderabbit']).map((r) => [r.slug, r]));
+    assert.equal(by.claude.promptBudget, 1000);
+    assert.equal(by.claude.promptCapSource, 'global');
+    assert.equal(by.coderabbit.promptBudget, null);
+    assert.equal(by.coderabbit.promptCapSource, 'none');
+  });
+
+  test('invoke does not refuse coderabbit for a huge prompt under a global cap', { skip: POSIX_ONLY }, (t) => {
+    const p = makeProject(t, { review: { max_prompt_tokens: 1000 } });
+    fs.writeFileSync(p.promptPath, lfText(CHARS_OVER));
+    const res = invoke(p, [], 'coderabbit');
+    assert.notEqual(res.reason, REFUSAL_REASON);
+    assert.equal('refusal' in res, false);
+  });
+});
+
+describe('#4559 refuseIfOverCap — the one shared refusal decision', () => {
+  test('returns null at cap-1 and cap, a structured refusal at cap+1', () => {
+    const get = cfg({ [budgetKey('claude')]: 500 });
+    assert.equal(refuseIfOverCap({ lane: laneOf('claude'), estimatedTokens: 499, configGet: get }), null);
+    assert.equal(refuseIfOverCap({ lane: laneOf('claude'), estimatedTokens: 500, configGet: get }), null);
+    const over = refuseIfOverCap({ lane: laneOf('claude'), estimatedTokens: 501, configGet: get });
+    assert.equal(over.ok, false);
+    assert.equal(over.reason, REFUSAL_REASON);
+    assert.equal(typeof over.detail, 'string');
+    assert.deepEqual(over.refusal, { estimatedTokens: 501, cap: 500, capSource: 'lane', contextWindowTokens: null });
+  });
+
+  test('property: refuses exactly when the estimate is strictly over a positive cap', () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 5_000_000 }), fc.integer({ min: 0, max: 10_000_000 }), (cap, est) => {
+        const r = refuseIfOverCap({ lane: laneOf('claude'), estimatedTokens: est, configGet: cfg({ [budgetKey('claude')]: cap }) });
+        return est > cap ? r !== null && r.ok === false && r.refusal.cap === cap : r === null;
+      }),
+      FC,
+    );
+  });
+});
+
+describe('#4559 the refusal remedy names the lane\'s declared keys, not keys built from the slug', () => {
+  const custom = () =>
+    overlay('claude', {
+      slug: 'zeta',
+      promptBudgetKey: 'custom.zeta.budget',
+      contextWindowConfigKey: 'custom.zeta.window',
+    });
+
+  test('source lane: names the declared per-lane key', () => {
+    const r = refuseIfOverCap({ lane: custom(), estimatedTokens: 10, configGet: cfg({ 'custom.zeta.budget': 5 }) });
+    assert.ok(r.detail.includes('custom.zeta.budget'), r.detail);
+    assert.equal(r.detail.includes('max_prompt_tokens_per_reviewer.zeta'), false, r.detail);
+    assert.equal(r.detail.includes('max_prompt_tokens_per_reviewer.claude'), false, r.detail);
+  });
+
+  test('source global: names the global key and the declared per-lane key', () => {
+    const r = refuseIfOverCap({ lane: custom(), estimatedTokens: 10, configGet: cfg({ 'review.max_prompt_tokens': 5 }) });
+    assert.ok(r.detail.includes('review.max_prompt_tokens'), r.detail);
+    assert.ok(r.detail.includes('custom.zeta.budget'), r.detail);
+    assert.equal(r.detail.includes('max_prompt_tokens_per_reviewer.zeta'), false, r.detail);
+  });
+
+  test('source context-window: names the declared window key', () => {
+    const r = refuseIfOverCap({ lane: custom(), estimatedTokens: 10 ** 9, configGet: cfg({}) });
+    assert.equal(r.refusal.capSource, 'context-window');
+    assert.ok(r.detail.includes('custom.zeta.window'), r.detail);
+    assert.equal(r.detail.includes('context_window_tokens.zeta'), false, r.detail);
+  });
+});
+
+describe('#4559 a refusal stub that cannot be written is reported, not swallowed', () => {
+  test('stubWritten is true on success and false when the review path is unwritable', { skip: POSIX_ONLY }, (t) => {
+    const ok = makeProject(t);
+    fs.writeFileSync(ok.promptPath, lfText(CHARS_OVER));
+    const okRes = invoke(ok);
+    assert.equal(okRes.reason, REFUSAL_REASON);
+    assert.equal(okRes.stubWritten, true);
+
+    const bad = makeProject(t);
+    fs.writeFileSync(bad.promptPath, lfText(CHARS_OVER));
+    // A directory sitting where the stub must go makes the write fail.
+    fs.mkdirSync(path.join(bad.runDir, 'gsd-review-claude.md'));
+    const badRes = invoke(bad);
+    assert.equal(badRes.reason, REFUSAL_REASON, 'the refusal itself must still be reported');
+    assert.equal(badRes.ok, false);
+    assert.equal(badRes.stubWritten, false);
+  });
+});
+
+describe('#4559 every lane\'s context-window config description states its declared window', () => {
+  const capsDir = path.join(__dirname, '..', 'capabilities');
+  const findKey = (obj, key) => {
+    if (!obj || typeof obj !== 'object') return undefined;
+    if (Object.prototype.hasOwnProperty.call(obj, key)) return obj[key];
+    for (const v of Object.values(obj)) {
+      const hit = findKey(v, key);
+      if (hit !== undefined) return hit;
+    }
+    return undefined;
+  };
+  const manifests = fs
+    .readdirSync(capsDir)
+    .map((d) => path.join(capsDir, d, 'capability.json'))
+    .filter((f) => fs.existsSync(f))
+    .map((f) => JSON.parse(fs.readFileSync(f, 'utf8')));
+
+  test('the description matches the descriptor for every lane with a window key', () => {
+    let checked = 0;
+    for (const lane of REVIEWER_LANES) {
+      if (!lane.contextWindowConfigKey) continue;
+      const entries = manifests.map((m) => findKey(m, lane.contextWindowConfigKey)).filter((e) => e !== undefined);
+      assert.equal(entries.length, 1, `${lane.slug}: exactly one manifest declares ${lane.contextWindowConfigKey}`);
+      const expected =
+        lane.contextWindowTokens === null
+          ? 'use none (no declared window'
+          : `declared window of ${lane.contextWindowTokens} tokens`;
+      assert.ok(
+        String(entries[0].description).includes(expected),
+        `${lane.slug}: description must contain "${expected}": ${entries[0].description}`,
+      );
+      checked++;
+    }
+    assert.ok(checked >= DECLARED.length, 'at least every declared lane was checked');
+  });
+});
+
+describe('#4559 review.md aggregation drops a lane only when its parsed reason is the refusal', () => {
+  const REVIEW_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'review.md');
+
+  function aggregationLoop() {
+    const text = fs.readFileSync(REVIEW_MD, 'utf8');
+    const start = text.indexOf('for SLUG in $(printf \'%s\' "$DISPATCH_SLUGS"); do\n  LANE_RESULT=');
+    assert.notEqual(start, -1, 'aggregation loop not found in review.md');
+    const end = text.indexOf('\ndone\n', start);
+    assert.notEqual(end, -1, 'aggregation loop terminator not found');
+    return text.slice(start, end + '\ndone\n'.length);
+  }
+
+  test('a failed lane whose detail merely mentions the refusal string is still aggregated', { skip: POSIX_ONLY }, (t) => {
+    const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'gsd-4559-agg-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const write = (slug, obj) =>
+      fs.writeFileSync(path.join(dir, `gsd-review-lane-result-${slug}.json`), JSON.stringify(obj, null, 2) + '\n');
+    write('refused', { slug: 'refused', ok: false, reason: REFUSAL_REASON, detail: 'too big' });
+    write('ran', { slug: 'ran', ok: true });
+    write('mentions', { slug: 'mentions', ok: false, reason: 'probe_failed', detail: `earlier ${REFUSAL_REASON} noted` });
+
+    const r = spawnSync('bash', ['-c', aggregationLoop()], {
+      env: { ...process.env, RUN_DIR: dir, DISPATCH_SLUGS: 'refused ran mentions' },
+      encoding: 'utf8',
+      timeout: 15000,
+    });
+    assert.equal(r.status, 0, r.stderr);
+    const lines = fs
+      .readFileSync(path.join(dir, 'gsd-review-lane-results.jsonl'), 'utf8')
+      .split('\n')
+      .filter((l) => l.trim() !== '');
+    const joined = lines.join('\n');
+    assert.equal(joined.includes('"slug": "refused"'), false, 'the refused lane must be left out');
+    assert.equal(joined.includes('"slug": "ran"'), true);
+    assert.equal(joined.includes('"slug": "mentions"'), true, 'a failure that only mentions the string must be kept');
   });
 });
