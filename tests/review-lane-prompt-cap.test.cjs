@@ -738,3 +738,66 @@ describe('#4559 review.md aggregation drops a lane only when its parsed reason i
     assert.equal(joined.includes('"slug": "mentions"'), true, 'a failure that only mentions the string must be kept');
   });
 });
+
+describe('#4559 the refusal remedy for a lane that declares no cap keys', () => {
+  const keyless = () =>
+    overlay('claude', {
+      slug: 'keyless',
+      promptBudgetKey: null,
+      contextWindowConfigKey: null,
+      contextWindowTokens: 100000,
+    });
+
+  test('checkPromptAgainstCap does not name review.max_prompt_tokens: the key is not read for this lane', () => {
+    const capInfo = resolveLaneCap(keyless(), cfg({ 'review.max_prompt_tokens': 1 }));
+    assert.equal(capInfo.cap, 65000);
+    assert.equal(capInfo.source, 'context-window');
+    const over = checkPromptAgainstCap(70000, capInfo, keyless());
+    assert.equal(over.ok, false);
+    assert.equal(over.detail.includes('review.max_prompt_tokens'), false, over.detail);
+    assert.ok(over.detail.includes('contextWindowTokens'), `must say the cap comes from the declared window: ${over.detail}`);
+    assert.ok(over.detail.includes('declares no key'), `must say the lane declares no override key: ${over.detail}`);
+  });
+
+  test('refuseIfOverCap carries the same accurate remedy', () => {
+    const r = refuseIfOverCap({ lane: keyless(), estimatedTokens: 70000, configGet: cfg({}) });
+    assert.equal(r.ok, false);
+    assert.equal(r.refusal.capSource, 'context-window');
+    assert.equal(r.detail.includes('review.max_prompt_tokens'), false, r.detail);
+    assert.ok(r.detail.includes('contextWindowTokens'), r.detail);
+    assert.ok(r.detail.includes('declares no key'), r.detail);
+  });
+});
+
+describe('#4559 review-lane invoke refuses through the argv-file-ref and openai-http channels', () => {
+  test('kimi-code (argv-file-ref): an oversized --prompt-file is refused before the binary is probed or spawned', { skip: POSIX_ONLY }, (t) => {
+    const p = makeProject(t);
+    fs.writeFileSync(
+      path.join(p.binDir, 'kimi'),
+      '#!/usr/bin/env bash\n' + `printf '%s\\n' "$@" >> "${p.seen}"\n` + 'echo "kimi 0.0.0"\n',
+      { mode: 0o755 },
+    );
+    const body = lfText(681573); // ceil(681573 / 4) = 170394 > cap 170393
+    const big = path.join(p.runDir, 'gsd-review-prompt-big.md');
+    fs.writeFileSync(big, body);
+    const res = invoke(p, ['--prompt-file', big], 'kimi-code');
+    assert.equal(res.ok, false);
+    assert.equal(res.reason, REFUSAL_REASON);
+    assert.equal(res.refusal.estimatedTokens, Math.ceil(body.length / 4));
+    assert.equal(res.refusal.cap, 170393);
+    assert.equal(fs.existsSync(p.seen), false, 'the kimi binary must not be probed or spawned for a refused lane');
+  });
+
+  test('ollama (openai-http): an oversized --prompt-file is refused before any network call', { skip: POSIX_ONLY }, (t) => {
+    const p = makeProject(t, { review: { context_window_tokens: { ollama: 8192 } } });
+    const body = lfText(21297); // ceil(21297 / 4) = 5325 > cap 5324
+    const big = path.join(p.runDir, 'gsd-review-prompt-big.md');
+    fs.writeFileSync(big, body);
+    const res = invoke(p, ['--prompt-file', big], 'ollama');
+    assert.equal(res.ok, false);
+    assert.equal(res.reason, REFUSAL_REASON);
+    assert.equal(res.refusal.estimatedTokens, Math.ceil(body.length / 4));
+    assert.equal(res.refusal.cap, 5324);
+    assert.equal(res.refusal.capSource, 'context-window');
+  });
+});
