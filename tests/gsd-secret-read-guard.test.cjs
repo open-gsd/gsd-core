@@ -787,12 +787,14 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
     assertGuardError(runHook(MALFORMED, DENY_ENV), 'crash');
   });
 
-  test('opted in: a command deep enough to overflow the scanner still blocks', () => {
-    // The scanners recurse on nesting, so 100,000 unclosed substitutions after
-    // a secret read overflow the stack; the RangeError lands in the outer
-    // catch and fails open by default. Opted in it must block. Only the block
-    // is asserted, not its code, so a scanner that stops overflowing (and
-    // reports the read itself) still passes.
+  test('opted in: a secret read behind a scanner-overflowing command is never allowed', () => {
+    // What this pins is the host's promise, not a code path. Today 100,000
+    // unclosed substitutions after the read overflow the scanners' stack, and
+    // the RangeError reaches the outer catch: unset, the hook allows the read;
+    // opted in, it blocks as guard-error. Once the scanner stops overflowing
+    // (#5285 reports the shape as command-too-complex) the scan blocks it
+    // instead, so only the block is asserted, never its code. The outer catch
+    // itself is pinned by the malformed-JSON cell above.
     const command = `cat ${'.e' + 'nv'}; ` + '"$('.repeat(100000);
     const r = runHook(bash(command), DENY_ENV);
     assert.equal(r.status, 2, `expected block (exit 2), got exit ${r.status}; stdout=${r.stdout.slice(0, 200)}`);
