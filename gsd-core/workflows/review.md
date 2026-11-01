@@ -31,7 +31,7 @@ command -v kimi >/dev/null 2>&1 && echo "kimi-code:available" || echo "kimi-code
 # hosts and defaults come from each lane's descriptor
 gsd_run review-lane availability || { echo "WARNING: review-lane availability failed or is unsupported by this gsd-tools; treating local lanes as missing" >&2; printf 'ollama:missing\nlm_studio:missing\nllama_cpp:missing\n'; }
 
-# jq prerequisite (#2589). The config/model/budget lookups in this workflow no
+# jq prerequisite (#2589). The config/model lookups in this workflow no
 # longer need jq — they use the native --raw/--pick flags. But the lanes listed
 # under "jq-dependent reviewer lanes" below parse structured JSON that gsd-tools
 # does not emit (OpenAI-compatible /v1/chat/completions responses, opencode's
@@ -245,7 +245,7 @@ Output your review in markdown format.
 
 Write to a temp file: `{run_dir}/gsd-review-prompt.md`
 
-Also write individual section files so the budget tool can re-trim per reviewer:
+Append the plan coverage manifest to the prompt:
 
 ```bash
 # #2962: zsh aborts the block on an unmatched for-list glob (nomatch); bash passes it through. nullglob both.
@@ -253,38 +253,21 @@ shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
 
 RUN_DIR="{run_dir}"   # from gather_context
 
-# Write individual section files for per-reviewer budget trimming
-# These are always written so reviewers with a budget can invoke prompt-budget
-cp "$INSTRUCTIONS_BLOCK_FILE" "${RUN_DIR}/gsd-review-instructions.md"
-cp "$ROADMAP_SECTION_FILE" "${RUN_DIR}/gsd-review-roadmap.md"
-
-# Plan files: copy each PLAN.md to a predictable path named after its source
-# plan id (#3959: a bare padded index discards provenance — the budget tool's
-# per-plan `### <file>` header then renders a run-dir artifact name no reviewer
-# or consensus step can resolve. The plan id keeps the gsd-review-plan-*.md glob
-# prepare_trimmed_prompt_for_reviewer consumes.)
-for PLAN_FILE in "${PHASE_DIR}"/*-PLAN.md; do
-  PLAN_BASENAME=$(basename "$PLAN_FILE")
-  PLAN_ID="${PLAN_BASENAME%-PLAN.md}"
-  cp "$PLAN_FILE" "${RUN_DIR}/gsd-review-plan-${PLAN_ID}.md"
-done
-
 # #3301: plan coverage manifest — tell reviewers exactly which plan ids exist and
 # how many there are, so a review that silently covers 6 of 7 plans is no longer
 # indistinguishable from one that covers all 7. The id is the plan file's own
 # basename with the `-PLAN.md` suffix stripped (e.g. `12.6-01-PLAN.md` ->
 # `12.6-01`) — NOT the `plan:` frontmatter key, which holds only the bare
 # in-phase sequence number ("01") and can never reconstruct the phase-qualified
-# id reviewers need to cite. The filename is guaranteed present for every copied
-# plan, so no plan is ever dropped from the manifest for lacking a key.
+# id reviewers need to cite. The filename is guaranteed present for every plan,
+# so no plan is ever dropped from the manifest for lacking a key.
 # Count and bullets are both derived directly from the glob loop below, never
 # from re-splitting an accumulated string: bash word-splits an unquoted `$VAR`
 # on IFS by default, but zsh does not (no `setopt SH_WORD_SPLIT` here), so a
 # prior `PLAN_IDS="$PLAN_IDS $id"` + `for x in $PLAN_IDS` round-trip silently
 # collapsed every id onto one iteration under zsh whenever there were 2+ plans
-# (gsd-core#4099). Direct glob iteration (`for f in "${PHASE_DIR}"/*-PLAN.md`,
-# same pattern as the copy loop above) is identical under both shells, so this
-# never needs word-splitting at all.
+# (gsd-core#4099). Direct glob iteration (`for f in "${PHASE_DIR}"/*-PLAN.md`)
+# is identical under both shells, so this never needs word-splitting at all.
 PLAN_COUNT=0
 PLAN_ID_BULLETS=""
 for PLAN_FILE in "${PHASE_DIR}"/*-PLAN.md; do
@@ -295,10 +278,8 @@ for PLAN_FILE in "${PHASE_DIR}"/*-PLAN.md; do
 "
 done
 
-# Named to avoid BOTH existing RUN_DIR globs: `gsd-review-*.md` (reviewer
-# reports, invoke_reviewers) and `gsd-review-plan-*.md` (the plan copies just
-# above) — a manifest matching either would be picked up as a report or as a
-# plan to review.
+# Dot-prefixed so the `gsd-review-*.md` glob over RUN_DIR (reviewer reports,
+# invoke_reviewers) can never pick it up as a report.
 {
   echo ""
   echo "## Plan Coverage Manifest"
@@ -309,33 +290,11 @@ done
   printf '%s' "$PLAN_ID_BULLETS"
 } > "${RUN_DIR}/.plans-manifest.md"
 
-# Optional section files (only if content was included in the combined prompt)
-if [ -f ".planning/PROJECT.md" ]; then
-  cp .planning/PROJECT.md "${RUN_DIR}/gsd-review-project.md"
-fi
-_CTX=( "${PHASE_DIR}"/*-CONTEXT.md )
-if [ ${#_CTX[@]} -gt 0 ]; then
-  cat "${_CTX[@]}" > "${RUN_DIR}/gsd-review-context.md"
-fi
-_RESEARCH=( "${PHASE_DIR}"/*-RESEARCH.md )
-if [ ${#_RESEARCH[@]} -gt 0 ]; then
-  cat "${_RESEARCH[@]}" > "${RUN_DIR}/gsd-review-research.md"
-fi
-if [ -f ".planning/REQUIREMENTS.md" ]; then
-  cp .planning/REQUIREMENTS.md "${RUN_DIR}/gsd-review-requirements.md"
-fi
-
-# #3301: append the manifest to BOTH files reviewers actually read — the
-# per-lane budget-trimmed instructions file (descriptor lanes get
-# `--instructions-file`) and the full combined prompt (combined-prompt lanes
-# read the whole file). The `instructions` fragment is in prompt-budget's
-# `minimumFor` floor set and is never trimmed, so this survives per-lane
-# budget trimming intact.
-cat "${RUN_DIR}/.plans-manifest.md" >> "${RUN_DIR}/gsd-review-instructions.md"
+# #3301: append the manifest to the one prompt file every lane reads.
 cat "${RUN_DIR}/.plans-manifest.md" >> "${RUN_DIR}/gsd-review-prompt.md"
 ```
 
-Note: `INSTRUCTIONS_BLOCK_FILE`, `ROADMAP_SECTION_FILE`, and `PHASE_DIR` come from prompt assembly; `RUN_DIR` is the run-scoped dir from `gather_context` (#2358) re-assigned from `{run_dir}` above. Copy the temp files written during prompt assembly to these section paths (or write each section here if the prompt was built inline).
+Note: `PHASE_DIR` comes from prompt assembly; `RUN_DIR` is the run-scoped dir from `gather_context` (#2358) re-assigned from `{run_dir}` above. Every lane receives `gsd-review-prompt.md` whole — it is never trimmed per lane (#4559). A lane whose prompt exceeds its cap is refused in `invoke_reviewers`, not shortened.
 </step>
 
 <step name="invoke_reviewers">
@@ -408,35 +367,6 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 # user's intent; here it would fire exactly the requests the default exists to prevent.
 PARALLEL_LANES=$(gsd_run query config-get review.parallel_lanes --raw 2>/dev/null || echo "false")
 
-# Shared budget-trim helper. Was defined inside the Ollama leg; it is lane-agnostic, so it is
-# hoisted here now that any lane may declare a promptBudgetKey. Returns non-zero when the budget
-# is too small for the minimum review set (prompt-budget exit 2 / 11).
-prepare_trimmed_prompt_for_reviewer() {
-  REVIEWER_KEY="$1"; REVIEWER_BUDGET="$2"; OUTPUT_PROMPT="$3"; OUTPUT_META="$4"
-
-  PLAN_FILE_ARGS=""
-  for p in "$RUN_DIR"/gsd-review-plan-*.md; do
-    [ -f "$p" ] && PLAN_FILE_ARGS="$PLAN_FILE_ARGS --plan-file $p"
-  done
-  PROJECT_ARG=""
-  [ -f "$RUN_DIR/gsd-review-project.md" ] && PROJECT_ARG="--project-file $RUN_DIR/gsd-review-project.md"
-  CONTEXT_ARG=""
-  [ -f "$RUN_DIR/gsd-review-context.md" ] && CONTEXT_ARG="--context-file $RUN_DIR/gsd-review-context.md"
-  RESEARCH_ARG=""
-  [ -f "$RUN_DIR/gsd-review-research.md" ] && RESEARCH_ARG="--research-file $RUN_DIR/gsd-review-research.md"
-  REQUIREMENTS_ARG=""
-  [ -f "$RUN_DIR/gsd-review-requirements.md" ] && REQUIREMENTS_ARG="--requirements-file $RUN_DIR/gsd-review-requirements.md"
-
-  gsd_run query prompt-budget \
-    --budget "$REVIEWER_BUDGET" \
-    --instructions-file "$RUN_DIR/gsd-review-instructions.md" \
-    --roadmap-file "$RUN_DIR/gsd-review-roadmap.md" \
-    $PLAN_FILE_ARGS $PROJECT_ARG $CONTEXT_ARG $RESEARCH_ARG $REQUIREMENTS_ARG \
-    --output-prompt "$OUTPUT_PROMPT" \
-    --output-metadata "$OUTPUT_META"
-  return $?
-}
-
 gsd_run query review-lane plan \
   --selected "$SELECTED_REVIEWERS" --run-dir "$RUN_DIR" --repo-root "$REPO_ROOT" --json \
   > "$RUN_DIR/gsd-review-lanes.json"
@@ -453,36 +383,18 @@ run_review_lane() {
   # `local` is hygiene, not a live fix: each `&`-dispatched call already forks its own subshell, so
   # concurrent lanes cannot share these today. Scoped anyway so the isolation is a property of this
   # function rather than of the dispatch mechanism happening to fork.
-  local SLUG LANE_BUDGET PROMPT_ARG TRIMMED
+  local SLUG
   SLUG="$1"
-  # Per-lane prompt budget. The lane declares its own `promptBudgetKey`; `plan` resolved it,
-  # applying #2797's sentinel rule (-1 = unset → fall back to the global budget; 0 legitimately
-  # means "do not trim this lane"). Trimming itself stays in prompt-budget, which owns it.
-  LANE_BUDGET=$(gsd_run query review-lane plan --selected "$SLUG" --run-dir "$RUN_DIR" \
-                  --repo-root "$REPO_ROOT" --json 2>/dev/null \
-                | sed -n 's/.*"promptBudget": *\([0-9-]*\).*/\1/p' | head -1)
-  PROMPT_ARG=""
-  if [ -n "$LANE_BUDGET" ] && [ "$LANE_BUDGET" != "null" ] && [ "$LANE_BUDGET" -gt 0 ] 2>/dev/null; then
-    TRIMMED="$RUN_DIR/gsd-review-prompt-$SLUG.md"
-    if prepare_trimmed_prompt_for_reviewer "$SLUG" "$LANE_BUDGET" "$TRIMMED" \
-         "$RUN_DIR/gsd-review-prompt-$SLUG.metadata.json"; then
-      PROMPT_ARG="--prompt-file $TRIMMED"
-    else
-      # A budget too small for the minimum review set drops the lane just as silently as an empty
-      # response used to (#2605), so leave the skip visible in the review output, not only on stderr.
-      echo "$SLUG review skipped: prompt budget (${LANE_BUDGET} tokens) too small for the minimum review set." \
-        > "$RUN_DIR/gsd-review-$SLUG.md"
-      # Was `continue` when this was a loop body. Inside a function that keyword is not the loop
-      # control it looks like — `return 0` is what skips this lane and leaves it with no result line.
-      return 0
-    fi
-  fi
+  # #4559: no per-lane trimming. Every lane receives the whole prompt; `review-lane invoke` measures it
+  # against the lane's cap (its own `promptBudgetKey`, the global `review.max_prompt_tokens`, or the
+  # default derived from its declared context window) and REFUSES a lane that is over, writing a
+  # `review did not run: prompt exceeds` stub. A trimmed prompt reviewed something other than the plans.
 
   # One invocation, whatever the lane's transport, prompt channel, output channel or handler.
   # `--explicit` marks a lane the user NAMED: ADR-2782 D4 — not finding a lane nobody asked for is
   # normal, failing to run one somebody asked for is an error.
   gsd_run query review-lane invoke --slug "$SLUG" \
-    --run-dir "$RUN_DIR" --repo-root "$REPO_ROOT" $PROMPT_ARG $EXPLICIT_FLAG --json \
+    --run-dir "$RUN_DIR" --repo-root "$REPO_ROOT" $EXPLICIT_FLAG --json \
     > "$RUN_DIR/gsd-review-lane-result-$SLUG.json"
 }
 
@@ -527,13 +439,15 @@ wait
 
 # Aggregate in SELECTED_REVIEWERS order, NOT completion order, so the JSONL a concurrent run
 # produces is byte-identical to the one a sequential run produces. This is post-join and therefore
-# single-threaded, so `>>` here is safe. A lane that was budget-skipped, or that never started,
-# leaves no result file and correctly contributes no line.
+# single-threaded, so `>>` here is safe. A lane that never started leaves no result file, and a lane
+# REFUSED for its prompt cap (#4559: reason `prompt_exceeds_context`) is deliberately left out of the
+# aggregate — it did not run, so it must not count as a lane result or feed models:/model_sources:.
+# Its own result file stays in RUN_DIR for the `refused_reviewers` frontmatter.
 # Rewrapped through unquoted command substitution (gsd-core#4109) — see the
 # dispatch loop above for why a bare `$DISPATCH_SLUGS` collapses under zsh.
 for SLUG in $(printf '%s' "$DISPATCH_SLUGS"); do
   LANE_RESULT="$RUN_DIR/gsd-review-lane-result-$SLUG.json"
-  if [ -f "$LANE_RESULT" ]; then
+  if [ -f "$LANE_RESULT" ] && ! grep -q 'prompt_exceeds_context' "$LANE_RESULT" 2>/dev/null; then
     cat "$LANE_RESULT" >> "$RUN_DIR/gsd-review-lane-results.jsonl"
   fi
 done
@@ -546,7 +460,9 @@ review: it keeps its "failed or returned empty output" header (#2494/#2605/#2794
 
 A lane that will not run reports a typed reason rather than an empty file — `missing_binary`,
 `probe_failed`, `probe_timeout`, `missing_required_binary`, `host_unreachable`,
-`egress_host_changed`, `unknown_handler`, `budget_too_small`. **`egress_host_changed` means the lane
+`egress_host_changed`, `unknown_handler`, `budget_too_small`, `prompt_exceeds_context` (the prompt is over
+the lane's cap — refused, never trimmed; its review file carries a `review did not run: prompt exceeds` stub).
+**`egress_host_changed` means the lane
 was consented to send plans to one destination and `.planning/config.json` now names another; it is
 blocked, not silently redirected** (ADR-2782 D5).
 
@@ -563,7 +479,7 @@ Display progress:
 **#3352 (ADR-3473 §8.5): no artifact from failed inputs.** Before rendering anything, gate on
 whether any lane actually produced a result — "every lane failed" is exactly "the aggregate
 JSONL has zero lines" (§`invoke_reviewers`'s aggregation loop already builds this file as a
-byproduct; a lane that never started or was budget-skipped contributes no line either way).
+byproduct; a lane that never started or was refused for its prompt cap contributes no line either way).
 
 ```bash
 RUN_DIR="{run_dir}"
@@ -575,7 +491,7 @@ TOTAL_LANE_FAILURE="false"
 ALL_LANES_SKIPPED="false"
 if [ "${LANE_LINES:-0}" -eq 0 ]; then
   # Zero lines means every dispatched lane left no result JSON — either every one
-  # was budget-skipped (N5: a skip is not a failure) or every one actually failed
+  # was refused for its prompt cap (N5: a refusal is not a failure) or every one actually failed
   # to run. Re-derive the dispatched-slug set the same way invoke_reviewers did
   # (SELECTED_REVIEWERS is a shell block boundary — recompute, do not assume the
   # earlier step's local DISPATCH_SLUGS variable survived into this block).
@@ -586,10 +502,10 @@ if [ "${LANE_LINES:-0}" -eq 0 ]; then
     esac
     DISPATCH_SLUGS="$DISPATCH_SLUGS $SLUG"
   done
-  # Distinguish by whether every dispatched slug's stub markdown says "skipped":
-  # a skip stub always does (see run_review_lane's budget branch, which writes
-  # this exact text before returning without ever invoking the lane); a real
-  # failure stub does not. If a slug has no stub at all, it is not a skip.
+  # Distinguish by whether every dispatched slug's stub markdown carries the refusal marker:
+  # `review-lane invoke` writes `review did not run: prompt exceeds ...` (#4559) before returning
+  # without ever probing or spawning the lane; a real failure stub does not. If a slug has no
+  # stub at all, it is not a refusal.
   DISPATCHED_COUNT=0
   SKIPPED_COUNT=0
   # Rewrapped through unquoted command substitution (gsd-core#4109): a bare
@@ -598,7 +514,7 @@ if [ "${LANE_LINES:-0}" -eq 0 ]; then
   for SLUG in $(printf '%s' "$DISPATCH_SLUGS"); do
     DISPATCHED_COUNT=$((DISPATCHED_COUNT + 1))
     STUB="$RUN_DIR/gsd-review-$SLUG.md"
-    if [ -f "$STUB" ] && grep -q "review skipped: prompt budget" "$STUB" 2>/dev/null; then
+    if [ -f "$STUB" ] && grep -q "review did not run: prompt exceeds" "$STUB" 2>/dev/null; then
       SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
     fi
   done
@@ -611,15 +527,16 @@ fi
 ```
 
 - **If `ALL_LANES_SKIPPED=true`:** do NOT write `REVIEWS.md` and do NOT run the commit below —
-  there is nothing to review. Report to the user that every selected lane was budget-skipped
-  (not a failure) and stop; do not proceed to `present_results`' summary claiming a review ran.
+  there is nothing to review. Report to the user that every selected lane refused its prompt cap
+  (not a failure; name the cap and the `review.context_window_tokens.<slug>` /
+  `review.max_prompt_tokens_per_reviewer.<slug>` keys that raise it) and stop; do not proceed to `present_results`' summary claiming a review ran.
 - **If `TOTAL_LANE_FAILURE=true`:** do NOT write `REVIEWS.md` and do NOT run the commit below.
   Report the total lane failure to the user (name the lanes that were dispatched and point at
   their `.err`/stub files preserved under `.review-diagnostics/` by `present_results`) and stop.
 - **Otherwise** (at least one lane produced a result — R1, unchanged): proceed exactly as below.
 
 **#3301: plan coverage check.** For each dispatched lane that produced a *real* review (not a
-stub, not budget-skipped, not empty), check whether its output mentions every plan id from
+stub, not refused for its prompt cap, not empty), check whether its output mentions every plan id from
 `.plans-manifest.md` — the same manifest `build_prompt` gave the reviewer, so the expected-id list
 here can never diverge from what the reviewer was actually told. This is diagnostic only: it never
 blocks the workflow, never fails a lane, and never changes the `TOTAL_LANE_FAILURE`/
@@ -673,7 +590,7 @@ for SLUG in $(printf '%s' "$DISPATCH_SLUGS"); do
   REVIEW_FILE="$RUN_DIR/gsd-review-$SLUG.md"
   [ -f "$REVIEW_FILE" ] || continue
   [ -s "$REVIEW_FILE" ] || continue
-  grep -q "review skipped: prompt budget" "$REVIEW_FILE" 2>/dev/null && continue
+  grep -q "review did not run: prompt exceeds" "$REVIEW_FILE" 2>/dev/null && continue
   grep -q "failed or returned empty output" "$REVIEW_FILE" 2>/dev/null && continue
 
   node -e '
@@ -696,7 +613,7 @@ done
 
 Each `${RUN_DIR}/.plan-coverage-<slug>.json` carries `{complete, missing_ids, total}` for one
 graded lane. Collect these into a `plan_coverage` frontmatter block — **only** when at least one
-graded lane has `complete: false` (mirrors the existing `trimmed_reviewers` precedent: present
+graded lane has `complete: false` (mirrors the `refused_reviewers` precedent: present
 only when there is something to report):
 
 ```yaml
@@ -714,7 +631,7 @@ heading and before the end of the first exact `<!-- gsd:plan-revision-conflicts:
 as `{preserved_plan_revision_conflict_entries}`. Ignore identical headings or delimiters in reviewer
 output: reviewers do not own blocking state. Restore the captured bytes at the explicit slot below.
 
-After all reviewers complete, collect trim metadata files written during the run. For each reviewer that was trimmed (i.e. a `.metadata.json` file exists and `hardFailed` or `omitted` is non-empty, or `projectMdShrunk` is true, or `planTruncationPct > 0`), include a `trimmed_reviewers` block in the frontmatter. Omit the key entirely if no reviewer was trimmed.
+After all reviewers complete, collect the lanes that were refused for their prompt cap (#4559): each dispatched lane whose `${RUN_DIR}/gsd-review-lane-result-<slug>.json` has `"reason": "prompt_exceeds_context"`. For each, include a `refused_reviewers` entry in the frontmatter with `estimated_tokens`, `cap` and `cap_source` copied from that file's `refusal` object (`estimatedTokens`, `cap`, `capSource`). Omit the key entirely if no lane was refused. A refused lane's section in the body renders its `review did not run: prompt exceeds` stub, never an empty section.
 
 **Reviewer instances (#1517, optional):** when instances ran, frontmatter records their
 names, each gets its own `## <Adapter> Review (<instance>)` section, and ≥2 same-cli
@@ -746,16 +663,11 @@ models:                   # resolved model per reviewer; `unknown` when not reco
 model_sources:            # how each value above was determined
   codex: "banner"
   antigravity: "unknown"
-trimmed_reviewers:        # only present if at least one reviewer was trimmed
+refused_reviewers:        # only present if at least one lane was refused for its prompt cap (#4559)
   ollama:
-    budget: 6000
-    effective_budget: 5400
-    estimated_tokens: 5380
-    omitted: [context, research]
-    project_md_shrunk: true
-    plan_truncation_pct: 22
-    hard_failed: false
-    note_injected: true
+    estimated_tokens: 61000
+    cap: 6000
+    cap_source: lane      # lane | global | context-window
 plan_coverage:            # only present if at least one graded lane is incomplete (#3301)
   ollama:
     total: 7
@@ -819,7 +731,7 @@ present as complete. Report instead:
 ```
 ### GSD ► REVIEW FAILED
 
-Phase {N}: every selected reviewer lane {failed to produce a result|was budget-skipped} — no
+Phase {N}: every selected reviewer lane {failed to produce a result|refused its prompt cap} — no
 REVIEWS.md was written.
 
 {If the preserve+cleanup block below reports success: "Diagnostics preserved:
@@ -852,11 +764,9 @@ step names only `{padded_phase}-REVIEWS.md` explicitly, never a directory glob, 
 `.review-diagnostics/` is never swept into it.
 
 **#4097: preserve lane OUTPUT, never the run's own input copies.** `RUN_DIR` holds not only
-lane outputs — prompt assembly (the `gather_context`/section-copy step above) also writes the
-run's assembled INPUTS there under the same `gsd-review-` prefix: the combined prompt, the
-instructions/roadmap sections, a copy of every plan under review, the project/context/research/
-requirements sections, and the per-lane trimmed prompts. Those are byte-identical duplicates of
-files already committed under `.planning/`; sweeping them into `.review-diagnostics/` buries
+lane outputs — prompt assembly also writes the run's assembled INPUT there under the same
+`gsd-review-` prefix: the combined prompt (`gsd-review-prompt.md`). It duplicates files already
+committed under `.planning/`; sweeping them into `.review-diagnostics/` buries
 the actual evidence under plan duplicates and grows the phase directory on every run. The
 exclusion list below is CLOSED and owned here: this workflow itself writes every input
 basename at prompt-assembly time, so a future input file CANNOT silently join the evidence
@@ -882,12 +792,12 @@ DIAG_DIR="{phase_dir}/.review-diagnostics"
 # the closed input set this workflow itself writes — direct glob iteration with a `case`
 # filter, no string accumulator, identical under bash and zsh (#4099/#4109), and the
 # `nullglob` set at the top of this fence keeps an empty RUN_DIR an empty array (#2962).
-# `gsd-review-prompt*` deliberately covers BOTH the combined prompt (`gsd-review-prompt.md`)
-# and the per-lane trimmed prompts (`gsd-review-prompt-<slug>.md`).
+# `gsd-review-prompt*` is the one input file this workflow writes (#4559: no per-lane
+# trimmed prompts and no section copies remain).
 _DIAG_MD=()
 for f in "$RUN_DIR"/gsd-review-*.md; do
   case "$(basename "$f")" in
-    gsd-review-prompt*|gsd-review-instructions*|gsd-review-plan-*|gsd-review-project*|gsd-review-roadmap*|gsd-review-context*|gsd-review-research*|gsd-review-requirements*) ;;
+    gsd-review-prompt*) ;;
     *) _DIAG_MD+=("$f") ;;
   esac
 done
@@ -908,9 +818,8 @@ if [ ${#_DIAG_MD[@]} -gt 0 ] || [ ${#_DIAG_ERR[@]} -gt 0 ]; then
   # unique per run BY CONSTRUCTION — uniqueness never depends on the clock. The
   # UTC stamp is only a sort key in front of it, and is omitted entirely if `date`
   # fails. Lane basenames are unchanged INSIDE the subdirectory, so evidence still
-  # correlates back to its lane, and nothing inside $RUN_DIR is renamed (both
-  # `prepare_trimmed_prompt_for_reviewer` and the lane invocation resolver depend
-  # on those exact basenames).
+  # correlates back to its lane, and nothing inside $RUN_DIR is renamed (the
+  # lane invocation resolver depends on those exact basenames).
   _DIAG_STAMP="$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || true)"
   _DIAG_RUN_DIR="$DIAG_DIR/${_DIAG_STAMP:+${_DIAG_STAMP}-}$(basename "$RUN_DIR")"
   # `mkdir -p` still creates $DIAG_DIR itself, so a plain FILE sitting at

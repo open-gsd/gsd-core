@@ -37,6 +37,8 @@
     "evidenceClass": "diff-only",
     "requiresBinaries": [],
     "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.coderabbit",
+    "contextWindowTokens": null,
+    "contextWindowConfigKey": null,
     "modelConfigKey": null,
     "effortConfigKey": null,
     "defaultEffort": null,

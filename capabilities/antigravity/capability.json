@@ -143,6 +143,8 @@
     "evidenceClass": "source-grounded",
     "requiresBinaries": [],
     "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.antigravity",
+    "contextWindowTokens": null,
+    "contextWindowConfigKey": "review.context_window_tokens.antigravity",
     "modelConfigKey": "review.models.agy",
     "effortConfigKey": null,
     "defaultEffort": null,
@@ -158,6 +160,11 @@
       "type": "number",
       "default": -1,
       "description": "Prompt-token budget for the Antigravity reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\". Keyed on the reviewer slug `antigravity`, not the `agy` binary alias used by review.models.agy."
+    },
+    "review.context_window_tokens.antigravity": {
+      "type": "number",
+      "default": -1,
+      "description": "Context window in tokens used to derive the default prompt cap for the antigravity reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
     },
     "review.timeouts.antigravity": {
       "type": "number",

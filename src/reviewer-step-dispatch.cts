@@ -28,8 +28,9 @@
  *
  * The bounded source-review prompt built here is METADATA ONLY — repository root, canonical
  * file paths, review depth, base SHA, and four fixed prohibitions. It never embeds file
- * contents. If the assembled prompt exceeds a lane's resolved budget, that lane's dispatch
- * hard-fails before `invoke` runs for it — no silent truncation of the file list.
+ * contents. If the assembled prompt exceeds a lane's resolved prompt cap (an explicit cap or the
+ * default derived from its context window, #4559), that lane's dispatch hard-fails with reason
+ * `prompt_exceeds_context` before `invoke` runs for it — no silent truncation of the file list.
  */
 
 import fs from 'node:fs';
@@ -38,7 +39,7 @@ import path from 'node:path';
 import { estimateTokens } from './prompt-budget.cjs';
 import { tryWithinRootLexical } from './security.cjs';
 import type { LanePlan, ResolveResult } from './review-lane-invocation.cjs';
-import { resolveLaneBudget, artifactPaths } from './review-lane-invocation.cjs';
+import { resolveLaneCap, checkPromptAgainstCap, artifactPaths } from './review-lane-invocation.cjs';
 import type { ReviewerLane } from './review-lane-descriptor.cjs';
 import type {
   ReviewerSelectionInput,
@@ -218,9 +219,8 @@ function validatePaths(
   return { ok: true };
 }
 
-// `resolveLaneBudget` (review-lane-invocation.cjs) resolves the number; `null` and a resolved
-// `0` both mean unbounded (#2797) — the caller's overflow check must test both `!== null` and
-// `!== 0`. See the call site below.
+// `resolveLaneCap` (review-lane-invocation.cjs) resolves the cap; `null` and a resolved `0` both
+// mean unbounded (#2797), and `checkPromptAgainstCap` owns that test. See the call site below.
 
 /**
  * One-line depth definition for an external reviewer lane, condensed from `<depth_levels>` in
@@ -407,13 +407,14 @@ export async function dispatchReviewerLanes(
       anyFailed = true;
       continue;
     }
-    const budget = resolveLaneBudget(lane, configGet);
-    if (budget !== null && budget !== 0 && estimatedTokens > budget) {
+    // #4559: refuse-not-trim, through the same check `review-lane invoke` uses.
+    const capCheck = checkPromptAgainstCap(estimatedTokens, resolveLaneCap(lane, configGet), slug);
+    if (!capCheck.ok) {
       results.push({
         slug,
         ok: false,
-        reason: 'budget_exceeded',
-        detail: `estimated ${estimatedTokens} tokens exceeds resolved budget ${budget} for lane '${slug}'`,
+        reason: capCheck.reason,
+        detail: capCheck.detail,
       });
       anyFailed = true;
       continue;
