@@ -46,7 +46,9 @@ Resolve UI agent models:
 
 ```bash
 UI_RESEARCHER_MODEL=$(gsd_run query resolve-model gsd-ui-researcher --raw)
+UI_RESEARCHER_EFFORT_ARG=$(gsd_run query resolve-model gsd-ui-researcher --pick effort_arg 2>/dev/null || true)
 UI_CHECKER_MODEL=$(gsd_run query resolve-model gsd-ui-checker --raw)
+UI_CHECKER_EFFORT_ARG=$(gsd_run query resolve-model gsd-ui-checker --pick effort_arg 2>/dev/null || true)
 ```
 
 Check config:
@@ -182,6 +184,7 @@ Agent(
   prompt=ui_research_prompt,
   subagent_type="gsd-ui-researcher",
   model="{UI_RESEARCHER_MODEL}",
+  {UI_RESEARCHER_EFFORT_ARG},
   description="UI Design Contract Phase {N}"
 )
 ```
@@ -233,6 +236,7 @@ Agent(
   prompt=ui_checker_prompt,
   subagent_type="gsd-ui-checker",
   model="{UI_CHECKER_MODEL}",
+  {UI_CHECKER_EFFORT_ARG},
   description="Verify UI-SPEC Phase {N}"
 )
 ```

@@ -135,7 +135,7 @@ AGENT_SKILLS_VERIFIER=$(gsd_run query agent-skills gsd-verifier ${GSD_WS:+--ws=$
 AGENT_SKILLS_RESEARCHER=$(gsd_run query agent-skills gsd-phase-researcher ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
 
-Parse JSON for: `planner_model`, `executor_model`, `checker_model`, `verifier_model`, `reviewer_model`, `researcher_model`, `commit_docs`, `branch_name`, `quick_id`, `slug`, `date`, `timestamp`, `quick_dir`, `task_dir`, `roadmap_exists`, `planning_exists`, `response_language`.
+Parse JSON for: `planner_model`, `planner_effort_arg`, `executor_model`, `executor_effort_arg`, `checker_model`, `checker_effort_arg`, `verifier_model`, `verifier_effort_arg`, `reviewer_model`, `reviewer_effort_arg`, `researcher_model`, `researcher_effort_arg`, `commit_docs`, `branch_name`, `quick_id`, `slug`, `date`, `timestamp`, `quick_dir`, `task_dir`, `roadmap_exists`, `planning_exists`, `response_language`.
 
 `init.quick` does not emit dedicated `state_path`/`project_path` fields, so derive them from the already-absolute `quick_dir` (#2376 — files handed to a spawned subagent must resolve regardless of that subagent's own cwd):
 ```bash
@@ -353,6 +353,7 @@ Return: ## PLANNING COMPLETE with plan path
 ",
   subagent_type="gsd-planner",
   model="{planner_model}",
+  {planner_effort_arg},
   description="Quick plan: ${DESCRIPTION}"
 )
 ```
@@ -534,6 +535,7 @@ SUMMARY.md and stop — the user must rerun with worktrees disabled.
 ",
   subagent_type="gsd-executor",
   model="{executor_model}",
+  {executor_effort_arg},
   {harnessFlag}
   description="Execute: ${DESCRIPTION}"
 )
@@ -618,6 +620,7 @@ Agent(
   Files: ${CHANGED_FILES}
   Output: ${QUICK_DIR}/${quick_id}-REVIEW.md
   Depth: quick",
+  {reviewer_effort_arg},
   subagent_type="gsd-code-reviewer",
   model="{reviewer_model}"
 )

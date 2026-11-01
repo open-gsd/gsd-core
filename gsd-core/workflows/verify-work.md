@@ -54,7 +54,7 @@ AGENT_SKILLS_PLANNER=$(gsd_run query agent-skills gsd-planner ${GSD_WS:+--ws=${G
 AGENT_SKILLS_CHECKER=$(gsd_run query agent-skills gsd-plan-checker ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
 
-Parse JSON for: `planner_model`, `checker_model`, `commit_docs`, `phase_found`, `phase_dir`, `phase_number`, `phase_name`, `has_verification`, `uat_path`, `state_path`, `roadmap_path`, `response_language`.
+Parse JSON for: `planner_model`, `planner_effort_arg`, `checker_model`, `checker_effort_arg`, `commit_docs`, `phase_found`, `phase_dir`, `phase_number`, `phase_name`, `has_verification`, `uat_path`, `state_path`, `roadmap_path`, `response_language`.
 
 **If `response_language` is set:** All user-facing output of this workflow — narration between tool calls, status updates, progress notes, findings, questions, prompts, and explanations — MUST be presented in `{response_language}`. Technical terms, code, file paths, and subagent prompts stay in English — only user-facing output is translated.
 
@@ -794,7 +794,7 @@ PLANNING COMPLETE proceeds to verify_gap_plans; PLANNING INCONCLUSIVE reports an
 </step>
 
 <step name="verify_gap_plans">
-Spawn gsd-plan-checker against the fix plans (iteration_count starts at 1), model="{checker_model}" (omit on inherit/empty, #2517).
+Spawn gsd-plan-checker against the fix plans (iteration_count starts at 1), model="{checker_model}" (omit on inherit/empty, #2517) and `{checker_effort_arg}` (omitted when empty).
 
 <!-- gsd:protected -->
 > **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling Agent() above, stop working on this task immediately. Do not read more files, edit code, or run tests related to this task while the subagent is active. Wait for the subagent to return its result. This prevents duplicate work, conflicting edits, and wasted context. Only resume when the subagent result is available.

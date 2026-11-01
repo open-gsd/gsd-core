@@ -31,11 +31,11 @@ import { CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS } from './configuration.cj
 import modelProfiles = require('./model-profiles.cjs');
 const { MODEL_PROFILES, AGENT_TO_PHASE_TYPE, AGENT_DEFAULT_TIERS, VALID_AGENT_TIERS, nextTier } = modelProfiles;
 
-import { MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, PROVIDER_PRESETS, VALID_TIERS, CLAUDE_AGENT_ALIASES, mergeEffortTierDefaults } from './model-catalog.cjs';
+import { MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, PROVIDER_PRESETS, VALID_TIERS, CLAUDE_AGENT_ALIASES, mergeEffortTierDefaults, renderEffortForRuntime } from './model-catalog.cjs';
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { canonicalizeRuntimeName, hostBehaviorsFor } from './runtime-name-policy.cjs';
+import { canonicalizeRuntimeName, hostBehaviorsFor, spawnEffortParamFor } from './runtime-name-policy.cjs';
 import {
   resolveActiveRuntime,
   _setInstallRuntimeMarkerForTests,
@@ -1024,6 +1024,44 @@ function resolveEffortInternal(cwd: string, agentType: string, opts?: EffortOpts
 }
 
 /**
+ * #5330 — the per-spawn effort argument for (cwd, agentType): `<param>="<effort>"`
+ * on a host whose runtime descriptor declares `spawnEffortParam`, `''` otherwise.
+ * Workflows substitute it into the subagent spawn call as `{<role>_effort_arg}`;
+ * the agent's installed `effort:` frontmatter stays the fallback wherever it is
+ * empty. The value is the resolved cascade ({@link resolveEffortInternal} with no
+ * override), never the operator-only `resolve-execution --effort` override.
+ *
+ * Interim gate, until #4633's single config resolver lands: the argument is
+ * emitted only when the loaded config carries an `effort` block. Under a project
+ * config the loader drops ~/.gsd/defaults.json (Branch D never runs), while the
+ * installer merges it into the baked frontmatter, so passing the runtime cascade
+ * when the project sets no `effort` would replace a global `defaults.json` effort
+ * with the built-in value on every project-scoped spawn. With no `effort` block in
+ * the loaded config the frontmatter is the better answer; with one (the project's
+ * own, or defaults.json's when no project config exists) the cascade is what the
+ * user configured. Known limit: a project with its own `effort` block does not
+ * inherit defaults.json's `agent_overrides` for agents it does not name.
+ *
+ * The level goes through the same wire rules as every other effort channel
+ * (`renderEffortForRuntime`): `inherit` is never a wire level and renders no
+ * argument, a level the host rejects renders none, and a host's clamp applies
+ * (claude: `minimal` -> `low`).
+ */
+function resolveEffortArgInternal(cwd: string, agentType: string): string {
+  const config = loadConfig(cwd);
+  const runtime = resolveActiveRuntime(config);
+  const param = spawnEffortParamFor(runtime);
+  if (!param) return '';
+  const effortCfg = config['effort'];
+  if (!effortCfg || typeof effortCfg !== 'object' || Array.isArray(effortCfg)) return '';
+  const effort = resolveEffortInternal(cwd, agentType);
+  if (effort === 'inherit') return '';
+  const rendered = renderEffortForRuntime(runtime, effort);
+  if (typeof rendered.value !== 'string' || rendered.value.length === 0) return '';
+  return `${param}="${rendered.value}"`;
+}
+
+/**
  * #443 — Resolve fast_mode boolean for (cwd, agentType).
  */
 function resolveFastModeInternal(cwd: string, agentType: string, opts?: FastModeOpts): boolean {
@@ -1126,6 +1164,7 @@ export = {
   EFFORT_SET,
   nextEffort,
   resolveEffortInternal,
+  resolveEffortArgInternal,
   resolveFastModeInternal,
   resolveEffortForTier,
 };

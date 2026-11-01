@@ -35,6 +35,7 @@ $ARGUMENTS
 GSD_ARGS_END
 GSD_ARGS=${GSD_ARGS%$'\n'}
 AUDITOR_MODEL=$(gsd_run query resolve-model gsd-eval-auditor --pick model 2>/dev/null || true)
+AUDITOR_EFFORT_ARG=$(gsd_run query resolve-model gsd-eval-auditor --pick effort_arg 2>/dev/null || true)
 GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 AGENT_SKILLS_AUDITOR=$(gsd_run query agent-skills gsd-eval-auditor ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
@@ -123,7 +124,7 @@ state: {A or B}
 ${AGENT_SKILLS_AUDITOR}
 ```
 
-Spawn as Task with model `AUDITOR_MODEL`.
+Spawn as Task with model `AUDITOR_MODEL` and `{AUDITOR_EFFORT_ARG}` (omitted when empty).
 
 ## 4. Parse Auditor Result
 

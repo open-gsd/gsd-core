@@ -74,6 +74,7 @@ Agent(
   prompt=checker_prompt,
   subagent_type="gsd-plan-checker",
   model="{checker_model}",
+  {checker_effort_arg},
   description="Check quick plan: ${DESCRIPTION}"
 )
 ```
@@ -134,6 +135,7 @@ Agent(
   prompt=revision_prompt,
   subagent_type="gsd-planner",
   model="{planner_model}",
+  {planner_effort_arg},
   description="Revise quick plan: ${DESCRIPTION}"
 )
 ```

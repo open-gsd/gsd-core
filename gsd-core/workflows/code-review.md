@@ -70,6 +70,7 @@ AGENT_SKILLS_REVIEWER=$(gsd_run query agent-skills gsd-code-reviewer ${GSD_WS:+-
 # #2072: resolve the routed model so model_overrides / models.verification are honored
 # (the resolver maps gsd-code-reviewer → phaseType "verification"); thread it below.
 REVIEWER_MODEL=$(gsd_run query resolve-model gsd-code-reviewer --raw)
+REVIEWER_EFFORT_ARG=$(gsd_run query resolve-model gsd-code-reviewer --pick effort_arg 2>/dev/null || true)
 ```
 
 Parse from init JSON: `phase_found`, `phase_dir`, `phase_number`, `phase_name`, `padded_phase`, `commit_docs`, `fallow_enabled`, `fallow_scope`, `fallow_profile`, `fallow_mcp`, `fallow_max_crap`.
@@ -829,7 +830,7 @@ Print: `◆ Spawning code reviewer... (runs in a subagent — no output until it
 > **Model omission (#2517).** Omit the `model` parameter entirely when the value it would carry (`REVIEWER_MODEL`) is `"inherit"` or empty. An empty value 404s on runtimes without native tier aliases — the default on non-Claude runtimes. Omitting it inherits the orchestrator's model. See @gsd-core/references/model-profile-resolution.md.
 
 ```
-Agent(subagent_type="gsd-code-reviewer", model="{REVIEWER_MODEL}", prompt="
+Agent(subagent_type="gsd-code-reviewer", model="{REVIEWER_MODEL}", {REVIEWER_EFFORT_ARG}, prompt="
 <required_reading>
 ${FILES_TO_READ}
 </required_reading>

@@ -31,6 +31,7 @@ One round-trip carries everything this workflow needs (#3149 — this call repla
 - `commit_docs` — whether planning docs are committed.
 - `response_language` — TOP-LEVEL field, present ONLY when configured. Absent means English; absence is not a degraded read.
 - `debug_dir` — an absolute path anchored on `project_root` (#2376: `debug_file_path` values handed to the spawned `gsd-debug-session-manager` must resolve regardless of that subagent's own cwd, which may differ from the orchestrator's — build them as `{debug_dir}/{slug}.md`, never a bare `.planning/debug/...` literal).
+- `debug_session_manager_effort_arg` — the per-spawn effort argument for the `gsd-debug-session-manager` spawns below, resolved for that agent (empty: omit it)
 - `debugger_model` — the resolved model for `gsd-debugger` spawns; used as `{debugger_model}` below and governed by the model-omission rule in step 2.
 - `tdd_mode` — used as `{TDD_MODE}` in the session parameter blocks below.
 - `section_manifest` — `null` today, because this workflow declares no applicability-section markers of its own. **When it is `null`, read this workflow in full.** When it is present, read only the files named in its `read` array. `null` and an empty `included` array are NOT the same: `null` means "no manifest for this workflow", an empty `included` means "nothing applies".
@@ -147,6 +148,7 @@ specialist_dispatch_enabled: true
 """,
   subagent_type="gsd-debug-session-manager",
   model="{debugger_model}",
+  {debug_session_manager_effort_arg},
   description="Continue debug session {SLUG}",
   run_in_background=false
 )
@@ -261,6 +263,7 @@ specialist_dispatch_enabled: true
 """,
   subagent_type="gsd-debug-session-manager",
   model="{debugger_model}",
+  {debug_session_manager_effort_arg},
   description="Debug session {slug}",
   run_in_background=false
 )

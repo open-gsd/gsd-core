@@ -134,6 +134,7 @@ gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" >/dev/null
 
 # Model resolution for the debugger spawns below (#3602).
 DEBUGGER_MODEL=$(gsd_run query resolve-model gsd-debugger --raw)
+DEBUGGER_EFFORT_ARG=$(gsd_run query resolve-model gsd-debugger --pick effort_arg 2>/dev/null || true)
 ```
 
 **Spawn debug agents — parallel only when each one is isolated:**
@@ -201,6 +202,7 @@ Agent(
   prompt=filled_debug_prompt + "\n\n" + WORKTREE_GUARD + "\n\n<required_reading>\n- {phase_dir}/{phase_num}-UAT.md\n- {state_path}\n</required_reading>\n${AGENT_SKILLS_DEBUGGER}",
   subagent_type="gsd-debugger",
   model="{DEBUGGER_MODEL}",
+  {DEBUGGER_EFFORT_ARG},
   {harnessFlag}
   description="Debug: {truth_short}"
 )
