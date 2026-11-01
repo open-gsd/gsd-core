@@ -560,7 +560,9 @@ export function checkPromptAgainstCap(
         ? `raise review.max_prompt_tokens${budgetKey ? ` or set ${budgetKey}` : ''}`
         : windowKey
           ? `raise ${windowKey} if this lane's model has a larger window, or set it to 0 to remove the cap`
-          : `this lane's context window is fixed by its declaration; set review.max_prompt_tokens to override`;
+          : budgetKey
+            ? `this lane's context window is fixed by its declaration; set review.max_prompt_tokens or ${budgetKey} to override`
+            : `this lane's cap comes from its declared contextWindowTokens and the lane declares no key to override it`;
   const windowNote = contextWindowTokens !== null ? `, ${contextWindowTokens}-token context window` : '';
   return {
     ok: false,
