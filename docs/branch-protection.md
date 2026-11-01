@@ -205,8 +205,9 @@ The `test.yml` workflow always runs, but its `changes` job classifies the PR
 with `scripts/ci-test-scope.cjs` before starting expensive runners. The required
 branch-protection context is the single aggregate `Required tests` job.
 
-Doc-only PRs run the lightweight lint and aggregate jobs only. Code-touching PRs
-run the default required matrix:
+Doc-only PRs run the lightweight lint and aggregate jobs only. PRs whose code-touching paths are all
+lightweight paths (listed below), with or without doc changes, also skip the default
+matrix and run the `test-inert` lane. Other code-touching PRs run the default required matrix:
 
 - Ubuntu / Node 24 scoped tests
 - Ubuntu / Node 24 unit, integration, and security suites
@@ -239,7 +240,17 @@ tsconfig*.json
 .github/rulesets/**
 ```
 
-This list should stay aligned with changeset/docs policy where those gates care
+These paths are also code-touching but lightweight (test-inert), as are the
+administrative workflows allowlisted in `INERT_WORKFLOWS` (`scripts/ci-test-scope.cjs`):
+
+```
+CONTRIBUTING.md
+docs/registries/README.md
+.github/pull_request_template.md
+.github/PULL_REQUEST_TEMPLATE/**
+```
+
+These lists should stay aligned with changeset/docs policy where those gates care
 about the same user-facing surfaces.
 
 ### Adding a new code path

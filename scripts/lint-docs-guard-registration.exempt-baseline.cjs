@@ -133,7 +133,10 @@ const DOCS_GUARD_EXEMPT_DOCS_PATHS = {
   'ci-test-scope.test.cjs': [
     'docs/a.md', 'docs/adr', 'docs/adr/22-plan-drift-guard.md',
     'docs/adr/4641-windows-selector-consolidation.md', 'docs/how-to/configure-model-profiles.md',
-    'docs/installer-migrations.md', 'docs/ja-JP', 'docs/ja-JP/USAGE.md', 'docs/usage.md', 'docs/x.md',
+    'docs/installer-migrations.md', 'docs/ja-JP', 'docs/ja-JP/USAGE.md',
+    // #5427: classify() input strings for isTemplateLinkDoc and its near-misses; never read.
+    'docs/registries/README.md', 'docs/registries/README.mdx', 'docs/registries/other.md',
+    'docs/usage.md', 'docs/x.md',
   ],
   'cline-install.test.cjs': ['docs/guide.md'],
   'code-review-depth.test.cjs': ['docs/src/auth/x.ts'],

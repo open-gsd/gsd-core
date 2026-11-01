@@ -26,6 +26,42 @@ function scopeFor(files) {
 }
 
 describe('ci-test-scope.cjs', () => {
+  test('PR templates, CONTRIBUTING.md and the registries README select the template-link guard and its co-observers (#5427)', () => {
+    const observers = ['tests/pr-template-links.test.cjs', 'tests/self-test-report-workflow.test.cjs', 'tests/gemini-runtime-removed.test.cjs',
+      'tests/adr-index-gate.test.cjs', 'tests/contributor-standards.test.cjs', 'tests/context-predicates.test.cjs',
+      'tests/features-index-gate.test.cjs'];
+    for (const f of ['.github/pull_request_template.md', '.github/PULL_REQUEST_TEMPLATE/feature.md', 'CONTRIBUTING.md', 'docs/registries/README.md']) {
+      const r = scopeFor([f]);
+      for (const t of observers) assert.ok(r.targeted_tests.includes(t), `${f}: ${t}`);
+      assert.strictEqual(r.code_changed, true, f);
+      assert.strictEqual(r.product_changed, false, f);
+      assert.strictEqual(r.full_matrix, false, f);
+    }
+  });
+
+  test('a product path that selects no Windows-hint tests keeps full_matrix false next to a template doc (#5427)', () => {
+    const r = scopeFor(['agents/x.md', 'CONTRIBUTING.md']);
+    assert.deepStrictEqual([r.product_changed, r.full_matrix], [true, false]);
+  });
+
+  test('template doc + product file keeps product_changed and full_matrix (#5427)', () => {
+    const r = scopeFor(['CONTRIBUTING.md', 'hooks/x.js']);
+    assert.deepStrictEqual([r.code_changed, r.product_changed, r.full_matrix], [true, true, true]);
+  });
+
+  test('non-template docs and issue templates do not select the template-link guard (#5427)', () => {
+    for (const f of [
+      'docs/usage.md', '.github/ISSUE_TEMPLATE/bug_report.yml',
+      // near-miss names: prefix/exact-match boundary of isTemplateLinkDoc
+      '.github/PULL_REQUEST_TEMPLATES/x.md', '.github/pull_request_template.md.bak', 'CONTRIBUTING.mdx',
+      'docs/registries/README.mdx', 'docs/registries/other.md',
+    ]) {
+      const r = scopeFor([f]);
+      assert.ok(!r.targeted_tests.includes('tests/pr-template-links.test.cjs'), f);
+      assert.strictEqual(r.code_changed, false, f);
+    }
+  });
+
   test('docs-only changes: code_changed is false, product_changed false (skip matrix entirely)', () => {
     const result = scopeFor(['docs/usage.md']);
     assert.strictEqual(result.code_changed, false,
