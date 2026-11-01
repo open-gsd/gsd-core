@@ -158,7 +158,9 @@ Each finding starts with:
 
 Where ID matches: `CR-\d+` or `BL-\d+` (Critical-tier-equivalent), `WR-\d+` (Warning), or `IN-\d+` (Info)
 
-A finding whose body carries a `**Category:** necessity` line is a **necessity finding** (#4100): code the reviewer judged unnecessary, not broken. Its prefix still gives its severity.
+An ID may carry one review-scoped prefix of the shape `[A-Z][A-Z0-9]*-` before its tier (`W6-CR-01`, `R1-WR-01`). The tier is the segment before the number, so `CR-*`, `BL-*`, `WR-*` and `IN-*` below match the prefixed form too. `{finding_id}` is the whole ID, prefix included, in commits and in REVIEW-FIX.md: the disposition ledger matches a fix report's headings by it.
+
+A finding whose body carries a `**Category:** necessity` line is a **necessity finding** (#4100): code the reviewer judged unnecessary, not broken. Its tier still gives its severity.
 
 **Required Fields:**
 
@@ -476,7 +478,7 @@ For each finding, extract:
 - `fix`: Full fix content from **Fix:** section (may be multi-line, may contain code fences)
 
 **2. Filter by fix_scope:**
-- If `fix_scope == "critical_warning"`: include only CR-*, BL-*, and WR-* findings; `critical_warning` excludes necessity findings (removing code is a scope decision for the human, #4100). The marker overrides the prefix: a WR-* finding carrying `**Category:** necessity` is OUT of scope here, and is skipped without applying any edit
+- If `fix_scope == "critical_warning"`: include only CR-*, BL-*, and WR-* findings; `critical_warning` excludes necessity findings (removing code is a scope decision for the human, #4100). The marker overrides the tier: a WR-* finding carrying `**Category:** necessity` is OUT of scope here, and is skipped without applying any edit
 - If `fix_scope == "all"`: include CR-*, BL-*, WR-*, and IN-* findings; `all` includes necessity findings, ordered last. A necessity fix removes code, so record it as `fixed: requires human verification`
 
 **3. Sort findings by severity:**
