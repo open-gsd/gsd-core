@@ -356,6 +356,7 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `tdd.md` | Test-driven development integration patterns. |
 | `ui-brand.md` | Visual output formatting patterns. |
 | `common-bug-patterns.md` | Common bug patterns for code review and verification. |
+| `cicd-review-patterns.md` | CI/CD pipeline rubric for `gsd-code-reviewer`: eight reliability checks, severity tiers, and negative space. Read on demand at standard/deep depth when a pipeline file is in scope. |
 | `necessity-review.md` | Necessity rubric for `gsd-code-reviewer` (category 4): taxonomy, evidence rule, and negative space. Read on demand at standard/deep depth. |
 | `debugger-philosophy.md` | Evergreen debugging disciplines loaded by `gsd-debugger`. |
 | `debugger-fix-acceptance.md` | Multi-signal fix-acceptance guardrail (anti-overfitting) loaded by `gsd-debugger`. |

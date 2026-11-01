@@ -55,6 +55,7 @@ module.exports = {
   "tests/claude-md.test.cjs",
   "tests/cline-install.test.cjs",
   "tests/close-phase-todos-padded-resolves.test.cjs",
+  "tests/code-review-cicd.test.cjs",
   "tests/code-review-fix-pipeline-regression.test.cjs",
   "tests/code-review-necessity.test.cjs",
   "tests/code-review-pipeline-regression.test.cjs",
