@@ -98,9 +98,13 @@
 //   inside scripts the agent executes, and `glob: '*'` reaching a
 //   NON-gitignored `.env`, and a wrapper (or wrapper option taking a
 //   separate value) the WRAPPERS table does not list. `env -S` strings are
-//   split by GNU coreutils env's rules (another env's `-S` is not modelled)
-//   and also read as before #5514, skipped as the option's value; any
-//   reading's hit denies.
+//   split by GNU coreutils env's rules, and also by FreeBSD/macOS env's (a
+//   backslash before a blank is that blank) and uutils env's (a
+//   backslash-newline removed, a comment ended by a newline), and read as
+//   before #5514, skipped as the option's value; any reading's hit denies.
+//   Each reading applies one env's rules at every level, so a string that one
+//   env splits into a command running a different env (BSD env invoking a
+//   uutils env by path) is not read by the mix of the two.
 //   The promise is "no looser than the retired rules
 //   on plain commands, without arming the compound-`cd` prompt". Writes to
 //   secret files are out of scope (Write/Edit were never gated). Commands
@@ -462,16 +466,20 @@ let heredocTagsAsWords = true;
 //    #5514, kept (see underUnsplitReading) so splitting can add a denial to it
 //    but never remove one. With it false, resolveCommand reads every command exactly
 //    as before #5514.
-//  - splitDialect: how the split reads what the environment decides (see
-//    splitEnvString). `vars`: 'keep' keeps `${NAME}` as written, 'drop' reads it
-//    as an unset name, which env expands to nothing. The first reading is
-//    PRIMARY_SPLIT.
+//  - splitDialect: how the split reads the two things env implementations, or the
+//    environment, decide differently (see splitEnvString). `vars`: 'keep' keeps
+//    `${NAME}` as written, 'drop' reads it as an unset name, which every env
+//    expands to nothing. `escapes`: 'gnu' (GNU coreutils), 'bsd' (FreeBSD and
+//    macOS, where a backslash before a blank is that blank) or 'uutils' (uutils
+//    coreutils, Ubuntu's env since 25.10, where a backslash before a newline is
+//    removed, inside quotes too, and a comment ends at a newline rather than
+//    ending the string). The first reading is PRIMARY_SPLIT.
 //  - splitSeen: the splitting reading met a split option, the only case in which the
 //    other readings (underUnsplitReading, underOtherSplitDialects) are run.
 //  - splitTooDeep: a split string nested more than MAX_NESTING_DEPTH deep, whose
 //    command is not read. The Bash path denies it as `split-string-too-deep` rather
 //    than allow what it could not see.
-const PRIMARY_SPLIT = Object.freeze({ vars: 'keep' });
+const PRIMARY_SPLIT = Object.freeze({ vars: 'keep', escapes: 'gnu' });
 let envSplitStrings = true;
 let splitDialect = PRIMARY_SPLIT;
 let splitSeen = false;
@@ -950,6 +958,7 @@ function splitOptionValue(word, spec) {
 }
 
 const ENV_S_ESCAPES = { f: '\f', n: '\n', r: '\r', t: '\t', v: '\v' };
+const ENV_S_BLANKS = ' \t\n\v\f\r';
 const ENV_S_VAR_RE = /\$\{[A-Za-z_][A-Za-z0-9_]*\}/y;
 
 // The words `env -S STRING` splits STRING into, by GNU env's rules rather than
@@ -960,7 +969,10 @@ const ENV_S_VAR_RE = /\$\{[A-Za-z_][A-Za-z0-9_]*\}/y;
 // `${VAR}` outside single quotes is env's own expansion, of a value not known
 // here: kept as written, or under `vars: 'drop'` deleted, as an unset name
 // expands (no word of its own, and a `#` after it still starts a comment).
-// Where env would reject the string, the words read up to that point are returned.
+// Under `escapes: 'bsd'` a backslash before a blank is that blank; under
+// 'uutils' a backslash before a newline is removed, inside quotes too, and a
+// comment runs to the next newline, after which splitting goes on. Where env
+// would reject the string, the words read up to that point are returned.
 function splitEnvString(value, dialect = splitDialect) {
   const words = [];
   let word = '';
@@ -973,6 +985,10 @@ function splitEnvString(value, dialect = splitDialect) {
   };
   for (let i = 0; i < value.length; i++) {
     const ch = value[i];
+    if (dialect.escapes === 'uutils' && ch === '\\' && value[i + 1] === '\n') {
+      i++;
+      continue;
+    }
     if (quote === "'") {
       if (ch === "'") quote = '';
       else if (ch === '\\' && (value[i + 1] === '\\' || value[i + 1] === "'")) word += value[++i];
@@ -988,7 +1004,13 @@ function splitEnvString(value, dialect = splitDialect) {
       end();
       continue;
     }
-    if (quote === '' && ch === '#' && !inWord) break;
+    if (quote === '' && ch === '#' && !inWord) {
+      if (dialect.escapes !== 'uutils') break;
+      const eol = value.indexOf('\n', i);
+      if (eol === -1) break;
+      i = eol;
+      continue;
+    }
     if (ch === '$' && value[i + 1] !== '{') break;
     if (ch === '$' && dialect.vars === 'drop') {
       ENV_S_VAR_RE.lastIndex = i;
@@ -1006,6 +1028,7 @@ function splitEnvString(value, dialect = splitDialect) {
       if (next === '_') word += ' ';
       else if (next !== undefined && ENV_S_ESCAPES[next]) word += ENV_S_ESCAPES[next];
       else if (next !== undefined && '"#$\'\\'.includes(next)) word += next;
+      else if (dialect.escapes === 'bsd' && next !== undefined && ENV_S_BLANKS.includes(next)) word += next;
       else break; // `\c`, or an escape env rejects
       inWord = true;
       continue;
@@ -1278,21 +1301,24 @@ function underUnsplitReading(scan) {
 
 // #5514: `scan` again with `env -S` strings split under each splitDialect other
 // than PRIMARY_SPLIT, and returns the first hit. Every dialect runs whenever the
-// primary reading met a split option: what a string holds can differ from what
-// the primary reading saw (an escape can build a `${` inside a nested string),
-// so no screen over the strings it split can tell when the dialect is needed.
-// These readings run last (see the Bash path): each re-scans the whole command, so
+// primary reading met a split option: which strings a dialect reaches, and what
+// they hold, can differ from what the primary reading saw (an escape can build a
+// `${` or a backslash-blank inside a nested string), so no screen over the
+// strings the primary reading split can tell which dialects are needed. These
+// readings run last (see the Bash path): each re-scans the whole command, so
 // they come after every reading the hook made before them.
 function underOtherSplitDialects(scan) {
   if (!splitSeen) return null;
   for (const vars of ['keep', 'drop']) {
-    if (vars === PRIMARY_SPLIT.vars) continue;
-    splitDialect = { vars };
-    try {
-      const hit = scan();
-      if (hit !== null) return hit;
-    } finally {
-      splitDialect = PRIMARY_SPLIT;
+    for (const escapes of ['gnu', 'bsd', 'uutils']) {
+      if (vars === PRIMARY_SPLIT.vars && escapes === PRIMARY_SPLIT.escapes) continue;
+      splitDialect = { vars, escapes };
+      try {
+        const hit = scan();
+        if (hit !== null) return hit;
+      } finally {
+        splitDialect = PRIMARY_SPLIT;
+      }
     }
   }
   return null;

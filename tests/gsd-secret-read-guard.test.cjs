@@ -1506,6 +1506,47 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
     });
   }
 
+  // GNU env rejects a backslash before a blank and runs nothing. FreeBSD and macOS env
+  // read it as that blank (space, tab, newline, \v, \f or \r), and uutils env, Ubuntu's
+  // since 25.10, removes a backslash before a newline, inside quotes too. Each row reads
+  // or launches only under the env its label names, and each is denied.
+  const OTHER_ENV_READS = [
+    ['BSD: \\<space> in an assignment', String.raw`env -S 'A=1\ B cat .env'`, SECRET_HIT],
+    ['BSD: \\<space> in an option value', String.raw`env -S '-u\ x cat .env'`, SECRET_HIT],
+    ['BSD: \\<space> before a launch', String.raw`env -S 'A=1\ B claude --agent gsd-debugger -p hi'`, SPAWN_HIT],
+    ...[['tab', '\t'], ['vertical tab', '\v'], ['form feed', '\f'], ['carriage return', '\r']].map(
+      ([name, ch]) => [`BSD: \\<${name}> in an assignment`, `env -S 'A=1\\${ch}B cat .env'`, SECRET_HIT]),
+    // BSD reads the newline into the assignment, uutils removes it: either way env runs the read.
+    ['BSD and uutils: \\<newline> in an assignment', "env -S 'A=1\\\nB cat .env'", SECRET_HIT],
+    ['BSD: \\<space> inside double quotes', String.raw`env -S '"A=1\ B" cat .env'`, SECRET_HIT],
+    ['BSD, with an unset ${NAME} as well', "env -S 'A=1\\ B cat .e${Z}nv'", SECRET_HIT],
+    ['uutils: \\<newline> inside the file name', "env -S 'cat .e\\\nnv'", SECRET_HIT],
+    ['uutils: \\<newline> inside the binary', "env -S 'cl\\\naude --agent gsd-debugger -p hi'", SPAWN_HIT],
+    // Single quotes inside the env string, written with the shell's '\'' so the shell
+    // passes the backslash and newline on: inside its double quotes bash would remove them.
+    ['uutils: \\<newline> inside single quotes', "env -S 'cat '\\''.e\\\nnv'\\'''", SECRET_HIT],
+    ['uutils: \\<newline> inside a single-quoted binary', "env -S ''\\''cl\\\naude'\\'' --agent gsd-debugger -p hi'", SPAWN_HIT],
+    ['uutils: \\<newline> inside double quotes', "env -S 'cat \".e\\\nnv\"'", SECRET_HIT],
+    // uutils ends a comment at a newline and goes on splitting; GNU and BSD end the string.
+    ['uutils: a read after a comment line', "env -S '#\ncat .env'", SECRET_HIT],
+    ['uutils: a launch after a comment line', "env -S '#x y\nclaude --agent gsd-debugger -p hi'", SPAWN_HIT],
+    // A dialect can reach a nested string the first split never read, and an escape can
+    // build the `${` or the backslash-blank another dialect needs inside it, so every
+    // dialect runs whatever the first split saw.
+    ['BSD, then an unset ${NAME} built by escapes in a nested string', `env -S 'A=\\  env -S "cat .e\\$""{Z}nv"'`, SECRET_HIT],
+    ['BSD, then an escape-built ${NAME} before a launch', `env -S 'A=\\  env -S "cl\\$""{Z}aude --agent gsd-debugger -p x"'`, SPAWN_HIT],
+    ['an unset ${NAME}, then BSD on a backslash-blank built by escapes', `env -S '\${Z}env -S "A=\\\\""  cat .env"'`, SECRET_HIT],
+  ];
+  // uutils splits `echo #<newline>cat .env` into one command, `echo cat .env`, which reads nothing.
+  test('allows: a uutils comment line between the words of one echo', () => {
+    assertAllowed(runHook(bash("env -S 'echo #\ncat .env'")), 'echo');
+  });
+  for (const [label, command, expected] of OTHER_ENV_READS) {
+    test(`blocks: ${label}`, () => {
+      assertBlocked(runHook(bash(command)), label, expected);
+    });
+  }
+
   // MAX_NESTING_DEPTH (3) bounds a string split out of a split string: limit-1 and limit
   // are read, limit+1 is denied unread. GNU env runs all three (checked on coreutils 9.4).
   for (const depth of [2, 3]) {
@@ -1542,6 +1583,21 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
       assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, label, { code });
     });
   }
+
+  // The other env -S dialects re-scan the whole command, and the BSD ones make the
+  // 300,000-slash run below one word, which `lastSegment`'s trailing-separator regex
+  // reads in quadratic time (`next` spends about 10 s on such a word at 200,000
+  // slashes). The launch after it is denied by the readings that run first, so the
+  // dialect readings never run: a hang backstop, as above.
+  test('blocks: a launch after a string only the other dialects read slowly', () => {
+    const command = `env -S '\${Z}\\ A=1 ls ${'/'.repeat(300000)}x'; ${TAIL}`;
+    const r = runHookSeam(HOOK_PATH, [], {
+      input: JSON.stringify(bash(command)),
+      env: { ...process.env, NODE_V8_COVERAGE: '' },
+      timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
+    });
+    assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, 'launch', { code: 'debugger-cli-spawn' });
+  });
 
   // The words for the properties below: env options and assignments, an optional
   // wrapper, then a launch, a read, or a command that does neither. The `bash -c` reads
@@ -1594,22 +1650,28 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
     assert.ok(splitDecides >= 10, `only ${splitDecides} of 40 runs were decided by the split string`);
   });
 
-  // An unset `${NAME}` cut in anywhere outside single quotes changes no word, so a
-  // string denied without it is denied with it.
-  test('property: an unset ${NAME} keeps a denial', () => {
+  // Four edits that change no word under the env each models, so a string denied
+  // without the edit is denied with it: an unset `${NAME}` cut in anywhere outside
+  // single quotes (every env), a `\<newline>` cut in anywhere (uutils), a comment line
+  // cut in where a word starts (uutils, where a comment ends at a newline), and a
+  // backslash put before each blank inside double quotes (BSD, where `\<blank>` is
+  // that blank).
+  test('property: an unset ${NAME}, a \\<newline>, a uutils comment line or a BSD \\<blank> keeps a denial', () => {
     // The pieces of the spelled string, each marked with whether the cut after it sits
-    // inside single quotes.
+    // inside single quotes, whether it is a character inside double quotes, and
+    // whether it starts a word.
     const spelledPieces = (words, spellings) => words.flatMap((w, k) => {
       const how = spellings[k][0] === 'bare' && w.includes(' ') ? 'double' : spellings[k][0];
       const pieces = PIECES[how](w);
+      const inner = (j) => j > 0 && j < pieces.length - 1;
       return [
-        ...(k ? [{ text: spellings[k][1], sqAfter: false }] : []),
-        ...pieces.map((text, j) => ({ text, sqAfter: how === 'single' && j < pieces.length - 1 })),
+        ...(k ? [{ text: spellings[k][1], sqAfter: false, dq: false }] : []),
+        ...pieces.map((text, j) => ({ text, sqAfter: how === 'single' && j < pieces.length - 1, dq: how === 'double' && inner(j), wordStart: j === 0 })),
       ];
     });
     let deniedBefore = 0;
     fc.assert(
-      fc.property(WORDS, SPELLINGS, fc.constantFrom(...REST), fc.nat(), (words, spellings, rest, varAt) => {
+      fc.property(WORDS, SPELLINGS, fc.constantFrom(...REST), fc.nat(), fc.nat(), fc.nat(), (words, spellings, rest, varAt, newlineAt, commentAt) => {
         const denied = (command) => runHook(bash(command)).status === 2;
         const pieces = spelledPieces(words, spellings);
         const texts = pieces.map((p) => p.text);
@@ -1623,6 +1685,9 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
         };
         const edited = [
           cutIn('${Z}', varAt, (b) => b === 0 || !pieces[b - 1].sqAfter),
+          cutIn('\\\n', newlineAt, () => true),
+          cutIn('#c d\n', commentAt, (b) => b < pieces.length && pieces[b].wordStart),
+          pieces.map((p) => (p.dq && ' \t'.includes(p.text) ? `\\${p.text}` : p.text)).join(''),
         ];
         return edited.every((string) => denied(`env -S ${shellQuote(string)} ${rest}`));
       }),
