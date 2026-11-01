@@ -46,6 +46,7 @@ const {
   cmdWorktreeReapOrphans,
   pruneOrphanedWorktrees,
 } = require('../gsd-core/bin/lib/worktree-safety.cjs');
+const { execGit: seamExecGit } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
 
 // ─── Fixed clock values (ADR-456 clock seam) ─────────────────────────────────
 
@@ -84,19 +85,13 @@ function git(args, cwd) {
 }
 
 /**
- * An `execGit`-shaped delegate that runs REAL git. Used as `makeFaultyGit`'s
- * `passthrough` so a test can fault one argv and leave every other call intact.
+ * An `execGit`-shaped delegate that runs REAL git through the production seam,
+ * so `env` (the throwaway `GIT_INDEX_FILE`), `rawStdout` and stdout trimming
+ * behave as they do without a fault. Used as `makeFaultyGit`'s `passthrough` so
+ * a test can fault one argv and leave every other call intact.
  */
 function realExecGit(args, opts = {}) {
-  const r = runGit(args, { cwd: opts.cwd, timeoutMs: GIT_TIMEOUT_MS });
-  return {
-    exitCode: r.exitCode,
-    stdout: r.stdout,
-    stderr: r.stderr,
-    signal: r.signal,
-    error: r.code === null ? null : Object.assign(new Error(r.code), { code: r.code }),
-    timedOut: r.timedOut,
-  };
+  return seamExecGit(args, { ...opts, timeout: opts.timeout ?? GIT_TIMEOUT_MS });
 }
 
 /** A benign zero-exit result carrying `stdout`. */
@@ -968,7 +963,8 @@ describe('#3057 cmdWorktreeReapOrphans / pruneOrphanedWorktrees output verdicts'
 
   test('pruneOrphanedWorktrees hands the porcelain to a caller-supplied parseWorktreePorcelain', () => {
     const f = makeFixture(tmpBase, 'pruneparser');
-    const realPorcelain = git(['worktree', 'list', '--porcelain'], f.repoDir);
+    // The production seam trims stdout, so this is what readWorktreeList hands on.
+    const realPorcelain = git(['worktree', 'list', '--porcelain'], f.repoDir).trim();
     const seen = [];
     const faultyGit = makeFaultyGit({ passthrough: realExecGit });
 
@@ -2492,6 +2488,22 @@ describe('#4941 regression: reap-orphans removes unregistered .claude/worktrees 
     assert.deepStrictEqual([row.status, row.reason], ['reaped', 'unregistered_residue']);
     assert.ok(!fs.existsSync(residue));
     assert.strictEqual(fs.readFileSync(path.join(repoDir, '.env'), 'utf8'), 'KEY=same\n');
+  });
+
+  // Codex review: git lists ` config/.env` first; trimmed, it would read as
+  // `config/.env`, the harness copy, and the unique file would be removed.
+  test('a unique ignored .env whose path starts with a space is kept beside a harness copy of the trimmed path', () => {
+    const { repoDir, residue } = repoWithResidue('user-data-leading-space');
+    excludeLocally(repoDir, '.env*');
+    fs.mkdirSync(path.join(repoDir, 'config'));
+    fs.writeFileSync(path.join(repoDir, 'config', '.env'), 'KEY=same\n');
+    fs.mkdirSync(path.join(residue, 'config'));
+    fs.writeFileSync(path.join(residue, 'config', '.env'), 'KEY=same\n');
+    fs.mkdirSync(path.join(residue, ' config'));
+    fs.writeFileSync(path.join(residue, ' config', '.env'), 'KEY=only\n');
+    const row = onlyRow(reapOrphanWorktrees(repoDir, deadOwnerDeps()));
+    assert.deepStrictEqual([row.status, row.reason], ['skipped', 'residue_has_user_data']);
+    assert.strictEqual(fs.readFileSync(path.join(residue, ' config', '.env'), 'utf8'), 'KEY=only\n');
   });
 
   // Codex review: a main-checkout path that leads into the residue through a

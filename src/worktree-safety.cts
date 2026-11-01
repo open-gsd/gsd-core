@@ -56,7 +56,7 @@ type ExecGitFn = typeof execGitSeam;
  * passthrough. Tests inject mocks via deps.execGit using the same
  * (args, opts) shape — see worktree-safety-policy.test.cjs.
  */
-function execGitDefault(args: string[], opts: { cwd?: string; env?: Record<string, string>; timeout?: number } = {}): GitResult {
+function execGitDefault(args: string[], opts: { cwd?: string; env?: Record<string, string>; timeout?: number; rawStdout?: boolean } = {}): GitResult {
   return execGitSeam(args, { ...opts, timeout: opts.timeout ?? DEFAULT_GIT_TIMEOUT_MS });
 }
 
@@ -3264,7 +3264,7 @@ function residueHoldsUserData(
   dir: string,
   top: string,
   gitDirPath: string,
-  execGit: (args: string[], opts?: { cwd?: string; env?: Record<string, string>; timeout?: number }) => GitResult,
+  execGit: (args: string[], opts?: { cwd?: string; env?: Record<string, string>; timeout?: number; rawStdout?: boolean }) => GitResult,
 ): boolean | null {
   let scratch: string | null = null;
   try {
@@ -3272,7 +3272,9 @@ function residueHoldsUserData(
     const env = { GIT_INDEX_FILE: path.join(scratch, 'index') };
     const listed = execGit(
       ['--git-dir', gitDirPath, '--work-tree', dir, 'ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--', ...RESIDUE_USER_DATA_PATHSPECS],
-      { cwd: dir, env },
+      // Raw: each name is compared, and a trimmed first name could match a
+      // harness copy while the real file is a different, unique one.
+      { cwd: dir, env, rawStdout: true },
     );
     if (!gitResultOk(listed)) return null;
     const real = fs.realpathSync.native(dir);

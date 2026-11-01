@@ -644,7 +644,7 @@ export function isSpawnTimeout(result: { error?: unknown }): boolean {
   return (result.error as NodeJS.ErrnoException | null | undefined)?.code === 'ETIMEDOUT';
 }
 
-function _spawnResult(result: { error?: NodeJS.ErrnoException | null; status?: number | null; stdout?: Buffer | string | null; stderr?: Buffer | string | null; signal?: NodeJS.Signals | null }, program: string): SpawnResultOutput {
+function _spawnResult(result: { error?: NodeJS.ErrnoException | null; status?: number | null; stdout?: Buffer | string | null; stderr?: Buffer | string | null; signal?: NodeJS.Signals | null }, program: string, rawStdout = false): SpawnResultOutput {
   if (result.error && result.error.code === 'ENOENT') {
     return { exitCode: 127, stdout: '', stderr: `${program}: not found`, signal: null, error: result.error, timedOut: false };
   }
@@ -652,7 +652,7 @@ function _spawnResult(result: { error?: NodeJS.ErrnoException | null; status?: n
   const error = result.error ?? null;
   return {
     exitCode: result.status ?? 1,
-    stdout: (result.stdout ?? '').toString().trim(),
+    stdout: rawStdout ? (result.stdout ?? '').toString() : (result.stdout ?? '').toString().trim(),
     stderr: (result.stderr ?? '').toString().trim(),
     signal,
     error,
@@ -666,7 +666,10 @@ function _spawnResult(result: { error?: NodeJS.ErrnoException | null; status?: n
 // #5548: owned by read-only-git-env.cts (its default base is scrubbed); re-exported for callers.
 export { GIT_LOCATION_ENV_VARS, scrubGitLocationEnv } from './read-only-git-env.cjs';
 
-export function execGit(args: string[], opts: { cwd?: string; env?: Record<string, string>; timeout?: number } = {}): SpawnResultOutput {
+// `rawStdout` keeps stdout exactly as git wrote it. A caller that reads file
+// names from a `-z` listing needs it: trimming would strip leading whitespace
+// from the first name and turn ` config/.env` into `config/.env`.
+export function execGit(args: string[], opts: { cwd?: string; env?: Record<string, string>; timeout?: number; rawStdout?: boolean } = {}): SpawnResultOutput {
   // Non-interactive defaults: a hung credential prompt or terminal-input
   // probe must surface as a timeout, not block the tool forever. Callers
   // can override via opts.env.
@@ -696,7 +699,7 @@ export function execGit(args: string[], opts: { cwd?: string; env?: Record<strin
     timeout: opts.timeout ?? 10_000,
     windowsHide: true,
   });
-  return _spawnResult(result, 'git');
+  return _spawnResult(result, 'git', opts.rawStdout === true);
 }
 
 export function execNpm(args: string[], opts: { cwd?: string; timeout?: number } = {}): SpawnResultOutput {
