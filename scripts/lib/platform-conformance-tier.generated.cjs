@@ -175,6 +175,7 @@ module.exports = {
   "tests/install-path-detection.test.cjs",
   "tests/install-regressions.test.cjs",
   "tests/install-runtime-artifacts.test.cjs",
+  "tests/install-symlink-preflight.test.cjs",
   "tests/install-write-confinement.test.cjs",
   "tests/install.test.cjs",
   "tests/installer-first-install-user-skill-5522.test.cjs",

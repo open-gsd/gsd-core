@@ -161,11 +161,13 @@
         "install-profile-workflow-spawns.test.cjs",
         "install-regressions.test.cjs",
         "install-runtime-artifacts.test.cjs",
+        "install-symlink-preflight.test.cjs",
         "install-update-marker.test.cjs",
         "install-write-confinement.test.cjs",
         "install.test.cjs"
       ],
-      "issue": "#3798 — the profile-closure spawn test reads the real repo surface (commands+workflows+agents); consolidating it into install.test.cjs would put a whole-repo scan behind the suite's heaviest file"
+      "issue": "#3798 — the profile-closure spawn test reads the real repo surface (commands+workflows+agents); consolidating it into install.test.cjs would put a whole-repo scan behind the suite's heaviest file",
+      "justification": "#5306 moves the existing symlink-preflight suites out of install-runtime-artifacts.test.cjs after Windows conformance exceeded its 600-second chunk timeout. Independent file placement lets the existing cost-balanced runner spread these subprocess installs; shared pristine fixtures and reduced profile duplication also shorten the suites."
     },
     "edge-probe": {
       "files": [
