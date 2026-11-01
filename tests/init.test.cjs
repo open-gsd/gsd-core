@@ -3368,14 +3368,25 @@ describe('#2376 — init.* path fields resolve when process cwd differs from --c
     const wfPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'new-milestone.md');
     const content = fs.readFileSync(wfPath, 'utf8');
 
+    // #5148: the synthesizer reads only the files written in this run, so its
+    // required_reading is filled from a directive whose lines are built from {research_dir}.
     assert.ok(content.includes(
-      '<required_reading>\n- {research_dir}/STACK.md\n- {research_dir}/FEATURES.md\n- {research_dir}/ARCHITECTURE.md\n- {research_dir}/PITFALLS.md\n</required_reading>'
-    ), 'research-synthesizer spawn must read from {research_dir}, not bare .planning/research/*.md literals');
+      '`{required_reading_lines}` is one line `- {research_dir}/{FILE}` per dimension'
+    ),'research-synthesizer required_reading lines must be built from {research_dir}, not bare .planning/research/*.md literals');
+    assert.ok(content.includes(
+      '<required_reading>\n{required_reading_lines}\n</required_reading>'
+    ), 'research-synthesizer spawn must read the {required_reading_lines} built from {research_dir}');
+    assert.doesNotMatch(content, /\.planning\/research\/(STACK|FEATURES|ARCHITECTURE|PITFALLS)\.md/,
+      'new-milestone.md must not reference bare .planning/research/<dimension>.md literals');
     assert.ok(content.includes('Write to: {research_dir}/SUMMARY.md'),
       'research-synthesizer spawn must write to {research_dir}/SUMMARY.md, not a bare literal');
 
+    // #5148: the SUMMARY.md line is kept only when research ran in this run.
     assert.ok(content.includes(
-      '<required_reading>\n- {project_path}\n- {requirements_path}\n- {research_dir}/SUMMARY.md (if exists)\n- {config_path}\n- {milestones_path}\n</required_reading>'
+      '`{research_summary_line}` is `- {research_dir}/SUMMARY.md` when research ran'
+    ), 'roadmapper SUMMARY.md line must be conditional on research having run');
+    assert.ok(content.includes(
+      '<required_reading>\n- {project_path}\n- {requirements_path}\n{research_summary_line}\n- {config_path}\n- {milestones_path}\n</required_reading>'
     ), 'roadmapper spawn must read from {project_path}/{requirements_path}/{research_dir}/{config_path}/{milestones_path}, not bare .planning literals');
   });
 
