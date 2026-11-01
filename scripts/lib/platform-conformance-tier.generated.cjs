@@ -11,6 +11,7 @@ module.exports = {
   "tests/adr857-core-without-capabilities.test.cjs",
   "tests/agent-install-check.test.cjs",
   "tests/agent-install-validation.test.cjs",
+  "tests/agent-query-contract.test.cjs",
   "tests/agent-skills.test.cjs",
   "tests/antigravity-upgrades.test.cjs",
   "tests/api-coverage-gate-e2e.test.cjs",

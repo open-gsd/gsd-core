@@ -139,7 +139,7 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
    this is the single, additive `quick-batch update` verb, never a second
    writer): for each item that produced a PLAN.md this round, read its
    `depends_on`/`files_modified` via
-   `gsd_run query frontmatter.get "${item_dir}/${quick_id}-PLAN.md" depends_on`
+   `gsd_run query frontmatter.get "${item_dir}/${quick_id}-PLAN.md" --field depends_on`
    and `... files_modified`, then:
    ```bash
    QB_UPDATE_JSON=$(gsd_run quick-batch update --batch "$BATCH_ID" --updates "$LAYER_UPDATES_JSON" --raw)
