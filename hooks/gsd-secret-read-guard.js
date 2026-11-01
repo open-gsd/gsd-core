@@ -89,15 +89,17 @@
 //
 // Documented gaps (none are statically resolvable by a hook, and Claude
 // Code's own 2.1.259 Bash-side enforcement does not resolve them either):
-//   `$VAR` indirection (`bash -c "$TEST_CMD"`, `cat "$F"`, and `${VAR}`
-//   inside an `env -S` string, kept as written), shell globs
+//   `$VAR` indirection (`bash -c "$TEST_CMD"`, `cat "$F"`, and a `${VAR}`
+//   inside an `env -S` string that is set, `Z=claude env -S '${Z} …'`: the
+//   string is read with each `${VAR}` kept as written and with it empty, as
+//   env expands an unset name), shell globs
 //   (`cat .e*`), interpreter one-liners (`python -c "open('.env')"`), a piped
 //   script from a non-echo source (`cat gen.sh | bash`, `curl … | sh`), reads
 //   inside scripts the agent executes, and `glob: '*'` reaching a
 //   NON-gitignored `.env`, and a wrapper (or wrapper option taking a
 //   separate value) the WRAPPERS table does not list. `env -S` strings are
 //   split by GNU coreutils env's rules (another env's `-S` is not modelled)
-//   and also read as before #5514, skipped as the option's value; either
+//   and also read as before #5514, skipped as the option's value; any
 //   reading's hit denies.
 //   The promise is "no looser than the retired rules
 //   on plain commands, without arming the compound-`cd` prompt". Writes to
@@ -457,15 +459,21 @@ let heredocTagsAsWords = true;
 // #5514: the `env -S` readings.
 //  - envSplitStrings: the string is split into words read in the option's place, as
 //    env runs it. false skips the string as the option's value, the reading before
-//    #5514, kept (see underUnsplitReading) so splitting can add a denial to it but
-//    never remove one, even where the split cannot be decoded (`${VAR}` in it).
-//    With it false, resolveCommand reads every command exactly as before #5514.
+//    #5514, kept (see underUnsplitReading) so splitting can add a denial to it
+//    but never remove one. With it false, resolveCommand reads every command exactly
+//    as before #5514.
+//  - splitDialect: how the split reads what the environment decides (see
+//    splitEnvString). `vars`: 'keep' keeps `${NAME}` as written, 'drop' reads it
+//    as an unset name, which env expands to nothing. The first reading is
+//    PRIMARY_SPLIT.
 //  - splitSeen: the splitting reading met a split option, the only case in which the
-//    reading before #5514 is run.
+//    other readings (underUnsplitReading, underOtherSplitDialects) are run.
 //  - splitTooDeep: a split string nested more than MAX_NESTING_DEPTH deep, whose
 //    command is not read. The Bash path denies it as `split-string-too-deep` rather
 //    than allow what it could not see.
+const PRIMARY_SPLIT = Object.freeze({ vars: 'keep' });
 let envSplitStrings = true;
+let splitDialect = PRIMARY_SPLIT;
 let splitSeen = false;
 let splitTooDeep = false;
 
@@ -942,15 +950,18 @@ function splitOptionValue(word, spec) {
 }
 
 const ENV_S_ESCAPES = { f: '\f', n: '\n', r: '\r', t: '\t', v: '\v' };
+const ENV_S_VAR_RE = /\$\{[A-Za-z_][A-Za-z0-9_]*\}/y;
 
 // The words `env -S STRING` splits STRING into, by GNU env's rules rather than
 // the shell's: blanks separate outside quotes; single quotes keep everything but
 // `\\` and `\'`; outside them `\_` separates (a space inside double quotes),
 // `\c` ends the string, `\f \n \r \t \v` are those characters and
 // `\" \# \$ \' \\` the character itself; `#` starting a word starts a comment;
-// `${VAR}` is kept as written, since its value is not known here. Where env
-// would reject the string, the words read up to that point are returned.
-function splitEnvString(value) {
+// `${VAR}` outside single quotes is env's own expansion, of a value not known
+// here: kept as written, or under `vars: 'drop'` deleted, as an unset name
+// expands (no word of its own, and a `#` after it still starts a comment).
+// Where env would reject the string, the words read up to that point are returned.
+function splitEnvString(value, dialect = splitDialect) {
   const words = [];
   let word = '';
   let inWord = false;
@@ -979,6 +990,13 @@ function splitEnvString(value) {
     }
     if (quote === '' && ch === '#' && !inWord) break;
     if (ch === '$' && value[i + 1] !== '{') break;
+    if (ch === '$' && dialect.vars === 'drop') {
+      ENV_S_VAR_RE.lastIndex = i;
+      if (ENV_S_VAR_RE.test(value)) {
+        i = ENV_S_VAR_RE.lastIndex - 1;
+        continue;
+      }
+    }
     if (ch === '\\') {
       const next = value[++i];
       if (next === '_' && quote === '') {
@@ -1256,6 +1274,28 @@ function underUnsplitReading(scan) {
   } finally {
     envSplitStrings = true;
   }
+}
+
+// #5514: `scan` again with `env -S` strings split under each splitDialect other
+// than PRIMARY_SPLIT, and returns the first hit. Every dialect runs whenever the
+// primary reading met a split option: what a string holds can differ from what
+// the primary reading saw (an escape can build a `${` inside a nested string),
+// so no screen over the strings it split can tell when the dialect is needed.
+// These readings run last (see the Bash path): each re-scans the whole command, so
+// they come after every reading the hook made before them.
+function underOtherSplitDialects(scan) {
+  if (!splitSeen) return null;
+  for (const vars of ['keep', 'drop']) {
+    if (vars === PRIMARY_SPLIT.vars) continue;
+    splitDialect = { vars };
+    try {
+      const hit = scan();
+      if (hit !== null) return hit;
+    } finally {
+      splitDialect = PRIMARY_SPLIT;
+    }
+  }
+  return null;
 }
 
 // Returns the offending token text, or null.
@@ -1713,6 +1753,14 @@ process.stdin.on('end', () => {
     const spawnScan = () => findDebuggerCliSpawn(command, 0);
     const spawn = spawnScan() || underUnsplitReading(spawnScan);
     if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
+    if (splitTooDeep) emitBlock('split-string-too-deep', tool, '');
+    // The other env -S dialects (#5514) only add denials, and run after every check
+    // above has had its say: a command long enough that their re-scans outlast the
+    // hook's timeout then still gets each denial the readings above make.
+    const dialectHit = underOtherSplitDialects(secretScan);
+    if (dialectHit !== null) emitBlock('secret-read', tool, dialectHit);
+    const dialectSpawn = underOtherSplitDialects(spawnScan);
+    if (dialectSpawn !== null) emitBlock('debugger-cli-spawn', tool, dialectSpawn);
     if (splitTooDeep) emitBlock('split-string-too-deep', tool, '');
     allow(undefined);
   } catch {

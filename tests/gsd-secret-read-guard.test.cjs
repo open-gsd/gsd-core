@@ -1452,8 +1452,8 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
     }
   });
 
-  // A string the split cannot decode (`${VAR}` in it) leaves words the split reading
-  // takes for the command; the reading that skips the string goes on to the command
+  // A string whose words depend on a `${VAR}` value leaves words the split readings
+  // take for the command; the reading that skips the string goes on to the command
   // written out after it, and its hit denies.
   test('an undecodable string: the reading that skips it reaches the command after it', () => {
     for (const s of ['bash${X} -c "cat .env"', '${SHELL} -c "cat .env"']) {
@@ -1473,6 +1473,38 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
   test('four env -S strings in a row reach the launch', () => {
     assertBlocked(runHook(bash(`env -S 'env' -S 'env' -S 'env' -S '${LAUNCH}'`)), 'four', { code: 'debugger-cli-spawn' });
   });
+
+  // env expands `${NAME}` outside single quotes itself, and GNU, BSD and uutils env all
+  // expand an unset name to nothing: no word of its own, and a `#` after it still starts
+  // a comment. So the string is also read with each `${NAME}` deleted, and either
+  // reading's hit denies. Single quotes and `\$` keep `${NAME}` as written.
+  const SECRET_HIT = { tool: 'Bash', path: '.env' };
+  const SPAWN_HIT = { code: 'debugger-cli-spawn' };
+  const UNSET_VAR_READS = [
+    ['before the binary', "env -S '${Z}claude --agent gsd-debugger -p x'", SPAWN_HIT],
+    ['inside the binary', "env -S 'cl${Z}aude --agent gsd-debugger -p x'", SPAWN_HIT],
+    ['inside the agent name', "env -S 'claude --agent gsd-deb${Z}ugger'", SPAWN_HIT],
+    ['inside the file name', "env -S 'cat .e${Z}nv'", SECRET_HIT],
+    ['before the file name', "env -S 'cat ${Z}.env'", SECRET_HIT],
+    ['inside double quotes', `env -S 'cat ".e\${Z}nv"'`, SECRET_HIT],
+    ['in a string split out of a split string', String.raw`env -S 'env -S "cat .e\${Z}nv"'`, SECRET_HIT],
+    ['inside single quotes of the outer string, read by the inner env', `env -S "env -S 'cat .e\${Z}nv'"`, SECRET_HIT],
+  ];
+  for (const [label, command, expected] of UNSET_VAR_READS) {
+    test(`blocks: an unset \${NAME} ${label}`, () => {
+      assertBlocked(runHook(bash(command)), label, expected);
+    });
+  }
+  const UNSET_VAR_ALLOWS = [
+    ['inside single quotes, not expanded', `env -S "cat '\${Z}'.env"`],
+    ['after \\$, not expanded', String.raw`env -S 'cat \${Z}.env'`],
+    ['before an existence check', "env -S 'ls ${Z}.env'"],
+  ];
+  for (const [label, command] of UNSET_VAR_ALLOWS) {
+    test(`allows: \${NAME} ${label}`, () => {
+      assertAllowed(runHook(bash(command)), label);
+    });
+  }
 
   // MAX_NESTING_DEPTH (3) bounds a string split out of a split string: limit-1 and limit
   // are read, limit+1 is denied unread. GNU env runs all three (checked on coreutils 9.4).
@@ -1511,35 +1543,39 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
     });
   }
 
+  // The words for the properties below: env options and assignments, an optional
+  // wrapper, then a launch, a read, or a command that does neither. The `bash -c` reads
+  // hold a quote, a backslash or a TAB, so most of their spellings carry an escape the
+  // split must decode; the ESCAPE_READS and SPLIT_READS rows above each target one
+  // escape or split rule.
+  const OPTIONS = fc.array(fc.constantFrom(['-i'], ['FOO=1'], ['-u', 'HOME']), { maxLength: 2 }).map((o) => o.flat());
+  const WRAPPER = fc.constantFrom([], ['nice', '-n', '5'], ['sudo', '-u', 'me'], ['timeout', '5']);
+  const CORE = fc.constantFrom(
+    ['claude', '--agent', 'gsd-debugger', '-p', 'x y'], ['claude', '--agent=gsd-debugger'], ['cat', '.env'],
+    ['bash', '-c', "cat '.env'"], ['bash', '-c', 'cat ".env"'], ['bash', '-c', 'cat \\.env'], ['bash', '-c', 'cat\t.env'],
+    ['claude', '--agent', 'gsd-executor'], ['ls', '.env'], ['cat', '.env.example'],
+    ['echo', '#x', 'a"b', 'a\\b'], ['printf', "it's", '$x', 'tab\there'],
+  );
+  const WORDS = fc.tuple(OPTIONS, WRAPPER, CORE).map(([o, w, c]) => [...o, ...w, ...c]);
+  // One env -S spelling per word: double quotes, single quotes, or bare with env's
+  // escapes, and words joined by a space, a tab or env's `\_`. A bare word cannot hold
+  // a space (`\_` outside quotes separates words), so such a word is double-quoted.
+  // PIECES keeps each escape whole, so a cut between two pieces never splits one.
+  const ESCAPES = { '\t': '\\t', '"': '\\"', '\\': '\\\\', '#': '\\#', $: '\\$', "'": "\\'" };
+  const PIECES = {
+    double: (w) => ['"', ...[...w].map((ch) => ('\\"$'.includes(ch) ? `\\${ch}` : ch)), '"'],
+    single: (w) => ["'", ...[...w].map((ch) => ("\\'".includes(ch) ? `\\${ch}` : ch)), "'"],
+    bare: (w) => (w.includes(' ') ? PIECES.double(w) : [...w].map((ch) => ESCAPES[ch] || ch)),
+  };
+  const SPELL = Object.fromEntries(Object.keys(PIECES).map((how) => [how, (w) => PIECES[how](w).join('')]));
+  const SPELLINGS = fc.array(fc.tuple(fc.constantFrom('double', 'single', 'bare'), fc.constantFrom(' ', '\t', '\\_')), { minLength: 12, maxLength: 12 });
+  const shellQuote = (s) => `'${s.replace(/'/g, "'\\''")}'`;
+  const REST = ['', '', '.env', '--agent gsd-debugger', LAUNCH];
+
   // Splitting is a parser: the same words get the same verdict whether env splits them
   // out of a string or the shell passes them as words, unless the reading before #5514
   // (the string skipped, `env REST`) denies on its own.
   test('property: env -S words read as if written out, or as the string skipped', () => {
-    // The words: env options and assignments, an optional wrapper, then a launch, a read,
-    // or a command that does neither. The `bash -c` reads hold a quote, a backslash or a
-    // TAB, so most of their spellings carry an escape the split must decode; the
-    // ESCAPE_READS and SPLIT_READS rows above each target one escape or split rule.
-    const OPTIONS = fc.array(fc.constantFrom(['-i'], ['FOO=1'], ['-u', 'HOME']), { maxLength: 2 }).map((o) => o.flat());
-    const WRAPPER = fc.constantFrom([], ['nice', '-n', '5'], ['sudo', '-u', 'me'], ['timeout', '5']);
-    const CORE = fc.constantFrom(
-      ['claude', '--agent', 'gsd-debugger', '-p', 'x y'], ['claude', '--agent=gsd-debugger'], ['cat', '.env'],
-      ['bash', '-c', "cat '.env'"], ['bash', '-c', 'cat ".env"'], ['bash', '-c', 'cat \\.env'], ['bash', '-c', 'cat\t.env'],
-      ['claude', '--agent', 'gsd-executor'], ['ls', '.env'], ['cat', '.env.example'],
-      ['echo', '#x', 'a"b', 'a\\b'], ['printf', "it's", '$x', 'tab\there'],
-    );
-    const WORDS = fc.tuple(OPTIONS, WRAPPER, CORE).map(([o, w, c]) => [...o, ...w, ...c]);
-    // One env -S spelling per word: double quotes, single quotes, or bare with env's
-    // escapes, and words joined by a space, a tab or env's `\_`. A bare word cannot hold
-    // a space (`\_` outside quotes separates words), so such a word is double-quoted.
-    const ESCAPES = { '\t': '\\t', '"': '\\"', '\\': '\\\\', '#': '\\#', $: '\\$', "'": "\\'" };
-    const SPELL = {
-      double: (w) => `"${w.replace(/[\\"$]/g, (m) => `\\${m}`)}"`,
-      single: (w) => `'${w.replace(/[\\']/g, (m) => `\\${m}`)}'`,
-      bare: (w) => (w.includes(' ') ? SPELL.double(w) : [...w].map((ch) => ESCAPES[ch] || ch).join('')),
-    };
-    const SPELLINGS = fc.array(fc.tuple(fc.constantFrom('double', 'single', 'bare'), fc.constantFrom(' ', '\t', '\\_')), { minLength: 12, maxLength: 12 });
-    const shellQuote = (s) => `'${s.replace(/'/g, "'\\''")}'`;
-    const REST = ['', '', '.env', '--agent gsd-debugger', LAUNCH];
     let splitDecides = 0;
     fc.assert(
       fc.property(WORDS, SPELLINGS, fc.constantFrom(...REST), (words, spellings, rest) => {
@@ -1556,6 +1592,44 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
     // Not vacuous: in enough runs only the split string can deny, since the reading
     // that skips it allows.
     assert.ok(splitDecides >= 10, `only ${splitDecides} of 40 runs were decided by the split string`);
+  });
+
+  // An unset `${NAME}` cut in anywhere outside single quotes changes no word, so a
+  // string denied without it is denied with it.
+  test('property: an unset ${NAME} keeps a denial', () => {
+    // The pieces of the spelled string, each marked with whether the cut after it sits
+    // inside single quotes.
+    const spelledPieces = (words, spellings) => words.flatMap((w, k) => {
+      const how = spellings[k][0] === 'bare' && w.includes(' ') ? 'double' : spellings[k][0];
+      const pieces = PIECES[how](w);
+      return [
+        ...(k ? [{ text: spellings[k][1], sqAfter: false }] : []),
+        ...pieces.map((text, j) => ({ text, sqAfter: how === 'single' && j < pieces.length - 1 })),
+      ];
+    });
+    let deniedBefore = 0;
+    fc.assert(
+      fc.property(WORDS, SPELLINGS, fc.constantFrom(...REST), fc.nat(), (words, spellings, rest, varAt) => {
+        const denied = (command) => runHook(bash(command)).status === 2;
+        const pieces = spelledPieces(words, spellings);
+        const texts = pieces.map((p) => p.text);
+        if (!denied(`env -S ${shellQuote(texts.join(''))} ${rest}`)) return true;
+        deniedBefore++;
+        const cutIn = (token, at, legal) => {
+          const cuts = [];
+          for (let b = 0; b <= pieces.length; b++) if (legal(b)) cuts.push(b);
+          const b = cuts[at % cuts.length];
+          return [...texts.slice(0, b), token, ...texts.slice(b)].join('');
+        };
+        const edited = [
+          cutIn('${Z}', varAt, (b) => b === 0 || !pieces[b - 1].sqAfter),
+        ];
+        return edited.every((string) => denied(`env -S ${shellQuote(string)} ${rest}`));
+      }),
+      { ...PROPERTY_RUNS, numRuns: 40 },
+    );
+    // Not vacuous: enough runs start from a denied string.
+    assert.ok(deniedBefore >= 10, `only ${deniedBefore} of 40 runs started from a denied string`);
   });
 
   test('property: nested strings are read up to MAX_NESTING_DEPTH and denied past it', () => {
