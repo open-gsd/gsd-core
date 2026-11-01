@@ -556,7 +556,7 @@ alone, exactly as sameFinding() does, so nothing moves there.
 The move is named on the console, id, decision and new key, for a reader who never opens the
 ledger.
 
-**Before `for (const [id, w, l] of decided) if ((!prior.has(id) || prior.get(id).d !== w || priorLine.get(id) !== l) && !flagged.has(l)) { flagged.add(l); foreign.push(l.trim().slice(0, 40)); }`**
+**Before `for (const [id, w, l] of decided) if ((!prior.has(id) || prior.get(id).d !== w || priorLine.get(id) !== l) && !flagged.has(l)) { flagged.add(l); foreign.push(shown(l)); }`**
 
 A DECIDED ROW NEVER LEAVES, OR CHANGES DECISION, SILENTLY ON A READ -- checked against the text,
 whatever its shape. Every rule above reads rows by shape, and five review rounds each found a hand edit whose
@@ -588,7 +588,12 @@ REFUSE RATHER THAN DELETE. A table row with no parseable id cannot be keyed, car
 re-rendered, and the ledger is written whole, so writing would delete it with no trace. The step
 is advisory, so it does not fail: it names the rows, leaves the file as it is, and returns. The
 commit step below still runs, so where `commit_docs` is on, a hand edit already in the file is
-committed as it stands -- the unreadable row included, so nothing leaves the record.
+committed as it stands -- the unreadable row included, so nothing leaves the record. `shown()`
+gives a name its console form: a name read from a ledger line is hand-edited text that no id
+regex has validated, so it passes through a terminal or a log only with every control character,
+invisible format character (a bidirectional override, say) and line separator shown as `?`, and
+the whitespace at its edges trimmed. The cut to 40 characters comes first, so half a surrogate
+pair it leaves is shown as `?` too. The ledger's own bytes are untouched.
 
 **Before `const staleNote = staleFix.length ? ' (' + staleFix.length + ' fix-report entr' + (staleFix.length === 1 ? 'y titles its' : 'ies title their') + ' finding differently from the review, so ' + (staleFix.length === 1 ? 'it was' : 'they were') + ' not reconciled -- a stale report, or a re-titled one: ' + staleFix.join(', ') + ')' : '';`**
 
@@ -999,6 +1004,7 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
   const priorSev = new Map();
   // Table rows that do not parse. Rewriting would delete them, so their presence stops the write.
   const foreign = [];
+  const shown = (s) => s.trim().slice(0, 40).replace(/[\p{C}\p{Zl}\p{Zp}]/gu, '?');
   var _fmId = null, _fmSec = null;
   // Set when the ledger declares JSON scalars; without it they are bare. Load-bearing: a legacy title
   // that merely LOOKED like JSON was parsed, lost its quotes, and flipped to open.
@@ -1026,7 +1032,7 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
         // whichever order the two appear in the file.
         if (SEV_VOCAB.indexOf(m[2]) !== -1) priorSev.set(m[1], m[2]);
       } else if (tl && !/^\|[\s|:-]*\$/.test(tl)) {
-        foreign.push(tl.split('|')[1].trim().slice(0, 40) || '(empty first cell)');
+        foreign.push(shown(tl.split('|')[1]) || '(empty first cell)');
         flagged.add(l);
       }
       const cs = _inFm ? [] : l.replace(/^\s*(?:(?:[>*+-]|\d+[.)])\s*)+/, '').split('|').map((c) => c.replace(/[\x60*_]/g, '').trim());
@@ -1057,7 +1063,7 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
         continue;
       }
     }
-    for (const [id, w, l] of decided) if ((!prior.has(id) || prior.get(id).d !== w || priorLine.get(id) !== l) && !flagged.has(l)) { flagged.add(l); foreign.push(l.trim().slice(0, 40)); }
+    for (const [id, w, l] of decided) if ((!prior.has(id) || prior.get(id).d !== w || priorLine.get(id) !== l) && !flagged.has(l)) { flagged.add(l); foreign.push(shown(l)); }
   }
   const sameTitle = (a, b) => String(a === undefined ? '' : a).replace(/\s+/g, ' ').trim()
                            === String(b === undefined ? '' : b).replace(/\s+/g, ' ').trim();

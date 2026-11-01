@@ -118,7 +118,8 @@ segment before the number. The fixer agent is told the same prefix, and the revi
 list accepts it.
 A table row whose first cell is not an ID of that shape — indented, or written without its leading
 `|`, included — stops the rewrite: the ledger is left as it is and the row is named on the console,
-because rewriting the file whole would delete it. The table runs from
+with the whitespace at its edges trimmed and any other control or invisible format character shown
+as `?`, because rewriting the file whole would delete it. The table runs from
 its header to a blank line or the start of another block (a heading, quote, list, HTML or fence),
 so plain text written straight under the table is read as a row; put a blank line above it. A line
 keyed by a finding ID is read as a row wherever it sits, and any body line that names an ID and a

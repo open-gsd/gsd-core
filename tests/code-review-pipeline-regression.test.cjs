@@ -4143,6 +4143,30 @@ describe('#3861 round 1 — the tests must run what BASH would run', () => {
     assert.match(out.stdout, /NOT rewritten: 1 ledger row\(s\).*R1\.2-WR-01/);
   });
 
+  test('a ledger line named on the console shows no control or format character, and stays in the ledger as written', () => {
+    const esc = String.fromCharCode(27), bel = String.fromCharCode(7), csi = String.fromCharCode(0x9b);
+    const rlo = String.fromCodePoint(0x202e), lineSep = String.fromCodePoint(0x2028);
+    const HEAD = ['| Finding | Severity | Disposition | Source |', '|---------|----------|-------------|--------|'];
+    const clean = (stdout) => assert.doesNotMatch(stdout.trim(), /[\p{C}\p{Zl}\p{Zp}]/u, 'the console line must be printable');
+    // A first cell that is not an id: the table-row path.
+    const cell = HEAD.concat(['| ' + esc + ']0;owned' + bel + 'R1.2-' + rlo + 'WR-01 | warning | fixed | by hand |', '']).join('\n');
+    const byCell = runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: cell });
+    clean(byCell.stdout);
+    assert.match(byCell.stdout, /NOT rewritten: 1 ledger row\(s\).*\?\]0;owned\?R1\.2-\?WR-01/);
+    assert.strictEqual(byCell.ledger, cell, 'the ledger keeps its bytes');
+    // A decided id the parse did not read: the whole-line path.
+    const line = HEAD.concat(['> ' + esc + '[2J' + csi + lineSep + '| WR-02 | warning | deferred | x |', '']).join('\n');
+    const byLine = runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: line });
+    clean(byLine.stdout);
+    assert.match(byLine.stdout, /NOT rewritten: 1 ledger row\(s\).*> \?\[2J\?\?\| WR-02/);
+    assert.strictEqual(byLine.ledger, line, 'the ledger keeps its bytes');
+    // The cut at 40 falls inside a surrogate pair: the half it leaves is shown like any other.
+    const astral = String.fromCodePoint(0x1f600);
+    const split = HEAD.concat(['| ' + 'A'.repeat(39) + astral + ' | warning | fixed | x |', '']).join('\n');
+    const bySplit = runShippedDisposition({ reviewText: REVIEW('### CR-01: something'), priorText: split });
+    assert.ok(bySplit.stdout.includes(': ' + 'A'.repeat(39) + '?. Correct'), bySplit.stdout);
+  });
+
   test('an indented or pipe-less table row is read like any other row, never deleted silently', () => {
     // GFM reads both as table rows, so a hand edit can produce either. Both used to fall outside the
     // column-0 `|` the parser and the stop keyed on, and the whole-file rewrite deleted them unnamed.
