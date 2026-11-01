@@ -794,12 +794,14 @@ DIAG_DIR="{phase_dir}/.review-diagnostics"
 # the closed input set this workflow itself writes — direct glob iteration with a `case`
 # filter, no string accumulator, identical under bash and zsh (#4099/#4109), and the
 # `nullglob` set at the top of this fence keeps an empty RUN_DIR an empty array (#2962).
-# `gsd-review-prompt*` is the one input file this workflow writes (#4559: no per-lane
-# trimmed prompts and no section copies remain).
+# `gsd-review-prompt*` is the one input file this workflow now writes (#4559 removed the
+# per-lane trimmed prompts and the section copies). The section-copy names stay excluded:
+# a run dir reused from an earlier GSD version can still hold them, and they are inputs,
+# not lane evidence.
 _DIAG_MD=()
 for f in "$RUN_DIR"/gsd-review-*.md; do
   case "$(basename "$f")" in
-    gsd-review-prompt*) ;;
+    gsd-review-prompt*|gsd-review-instructions*|gsd-review-plan-*|gsd-review-project*|gsd-review-roadmap*|gsd-review-context*|gsd-review-research*|gsd-review-requirements*) ;;
     *) _DIAG_MD+=("$f") ;;
   esac
 done
