@@ -78,7 +78,7 @@ A capability declares a `command-exit-zero` gate under the existing
 | Timeout | Default 30s; overridable per-gate | Bounded execution is non-negotiable; an unbounded gate could hang the loop forever |
 | Interpolation | `${PHASE_NUMBER}`, `${PHASE_DIR}`, `${PHASE_REQ_IDS}` substituted from gate context; undefined → `''`; all other `${X}` left untouched for `sh` to interpret | Parity with the context existing `check.query` gates already receive |
 | Result mapping | exit 0 → `block:false`; non-zero → `block:true`; timeout (SIGTERM) → `block:true` (`timed_out`); `sh` missing (ENOENT, exit 127) → `block:true` | Fail-closed: every non-zero outcome blocks. A blocking gate with `block:true` halts per the existing two-step gate contract |
-| Output cap | stderr/stdout tail embedded in `message` trimmed to 2000 chars | Keeps the `GATE_RESULT` payload context-bounded |
+| Output cap | The whole `message`, prefix included, is capped at 2000 chars: the tail of stderr/stdout is kept, or the command head on a timeout with empty stderr | Keeps the `GATE_RESULT` payload context-bounded |
 
 ### Evaluation path
 
