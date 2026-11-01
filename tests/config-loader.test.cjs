@@ -1529,9 +1529,9 @@ describe('regressions — #3760 loader never expands or persists a non-object se
     assert.doesNotThrow(() => { config = loadConfig(tmpDir); });
 
     assert.equal(readRawConfig(), before, 'the config file must not be rewritten with an expanded section');
-    // The loader projects `git.branching_strategy` to a flat top-level key, so the
-    // legacy value the migration declined to move is still what resolution sees.
-    assert.equal(config.branching_strategy, 'none', 'the legacy value must still resolve');
+    // A present non-object parent blocks both the declined legacy migration and
+    // the lower default projection (#5096 Major 2).
+    assert.equal(config.branching_strategy, undefined);
   });
 
   test('loadConfig leaves a string planning section untouched on disk', () => {

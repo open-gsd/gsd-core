@@ -227,4 +227,4 @@ function mergeFederatedConfig(input: MergeFederatedConfigInput): MergeFederatedC
   return { values, validKeys, warnings };
 }
 
-export = { mergeFederatedConfig };
+export = { mergeFederatedConfig, isWellFormedSlice: _isWellFormedSlice, typeMatchesSlice: _typeMatches };

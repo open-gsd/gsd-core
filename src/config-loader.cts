@@ -128,6 +128,37 @@ function _getConfigNested(parsed: Record<string, unknown>, section: string, fiel
   return undefined;
 }
 
+/**
+ * A present non-object section is an explicit inheritance barrier. Remove every
+ * projection the assembled loader would otherwise repopulate from defaults so
+ * its effective object agrees with per-key resolution (#5096 Major 2).
+ */
+const BLOCKED_SECTION_PROJECTIONS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  workflow: [
+    'workflow', 'research', 'plan_checker', 'verifier', 'nyquist_validation',
+    'post_planning_gaps', 'mvp_mode', 'tdd_mode', 'text_mode', 'auto_advance',
+    '_auto_chain_active', 'subagent_timeout',
+  ],
+  git: [
+    'git', 'branching_strategy', 'base_branch', 'protected_branches',
+    'allow_default_branch_commits', 'phase_branch_template',
+    'milestone_branch_template', 'quick_branch_template',
+  ],
+  planning: ['planning', 'commit_docs', 'search_gitignored', 'sub_repos', 'pr_strict'],
+  planner: ['planner', 'planner_stall_detection_enabled'],
+  review: ['review'],
+});
+
+function _removeBlockedSectionDefaults(
+  parsed: Record<string, unknown>,
+  assembled: Record<string, unknown>,
+): void {
+  for (const [section, projections] of Object.entries(BLOCKED_SECTION_PROJECTIONS)) {
+    if (!Object.prototype.hasOwnProperty.call(parsed, section) || isConfigSection(parsed[section])) continue;
+    for (const projection of projections) delete assembled[projection];
+  }
+}
+
 const CONFIG_DEFAULTS = {
   model_profile: _getConfigDefault('model_profile'),
   commit_docs: _getConfigDefault('commit_docs'),
@@ -599,7 +630,7 @@ interface ConfigResolution {
 }
 
 /**
- * Read + JSON-parse a config file, keeping *absent* distinguishable from
+ * Read + parse a config file, keeping *absent* distinguishable from
  * *unusable*. `platformReadSync` returns null on ENOENT and re-throws every
  * other errno, which is the seam that makes this separable at all.
  */
@@ -1010,6 +1041,8 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
     } catch {
       // Defensive: keep no-throw contract
     }
+
+    _removeBlockedSectionDefaults(parsed, _baseConfig);
 
     // A1 vs A2: disambiguate by whether a real workstream was requested.
     // Fix 4: empty-string ws ('') resolves the root path → source:'root'.
