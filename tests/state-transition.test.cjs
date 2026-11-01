@@ -5282,37 +5282,51 @@ describe('regressions (#5787): state begin-phase plan total', () => {
     '',
     'Phase: 3 (x) — PLANNED',
     'Plan: 0 of 0',
+    'Total Plans in Phase: 5',
     'Status: Planned',
     '',
   ].join('\n');
 
-  function beginPhaseWithPlans(plansArgs) {
+  // Cleanup is registered before any step that can throw, so a failing run never leaks the temp dir.
+  function beginPhaseWithPlans(plansArgs, t) {
     const tmpDir = createTempProject('gsd-5787-');
+    t.after(() => cleanup(tmpDir));
     const statePath = path.join(tmpDir, '.planning', 'STATE.md');
     fs.writeFileSync(statePath, STATE_FIXTURE, 'utf-8');
     const result = runGsdTools(`state begin-phase --phase 3 --name x${plansArgs}`, tmpDir);
-    const planField = stateExtractField(fs.readFileSync(statePath, 'utf-8'), 'Plan');
-    return { result, planField, tmpDir };
+    const content = fs.readFileSync(statePath, 'utf-8');
+    return {
+      result,
+      planField: stateExtractField(content, 'Plan'),
+      totalField: stateExtractField(content, 'Total Plans in Phase'),
+    };
   }
 
   test('--plans 0 records a plan total of 0, not the unknown placeholder', (t) => {
-    const { result, planField, tmpDir } = beginPhaseWithPlans(' --plans 0');
-    t.after(() => cleanup(tmpDir));
+    const { result, planField, totalField } = beginPhaseWithPlans(' --plans 0', t);
     assert.equal(result.success, true, `begin-phase should succeed: ${result.error}`);
     assert.equal(planField, '1 of 0');
+    assert.equal(totalField, '0');
+  });
+
+  test('--plans 1 records a plan total of 1 (boundary: limit+1 of zero)', (t) => {
+    const { result, planField, totalField } = beginPhaseWithPlans(' --plans 1', t);
+    assert.equal(result.success, true, `begin-phase should succeed: ${result.error}`);
+    assert.equal(planField, '1 of 1');
+    assert.equal(totalField, '1');
   });
 
   test('--plans 4 records the given plan total (positive control)', (t) => {
-    const { result, planField, tmpDir } = beginPhaseWithPlans(' --plans 4');
-    t.after(() => cleanup(tmpDir));
+    const { result, planField, totalField } = beginPhaseWithPlans(' --plans 4', t);
     assert.equal(result.success, true, `begin-phase should succeed: ${result.error}`);
     assert.equal(planField, '1 of 4');
+    assert.equal(totalField, '4');
   });
 
-  test('no --plans still records the unknown placeholder', (t) => {
-    const { result, planField, tmpDir } = beginPhaseWithPlans('');
-    t.after(() => cleanup(tmpDir));
+  test('no --plans keeps the unknown placeholder and leaves the total unchanged', (t) => {
+    const { result, planField, totalField } = beginPhaseWithPlans('', t);
     assert.equal(result.success, true, `begin-phase should succeed: ${result.error}`);
     assert.equal(planField, '1 of ?');
+    assert.equal(totalField, '5');
   });
 });
