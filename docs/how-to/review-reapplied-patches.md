@@ -59,7 +59,12 @@ decide what happens to it.
 | `baseline_unconfirmed` | There is no verified pre-update copy of this file, so the tool cannot tell your edits from upstream's changes. | Read the whole file |
 | `diff_too_large` | The file changed too much (more than 400 line edits) to split into separate edits, so it is shown as one block. | Read the whole file |
 
-A recommendation is only a suggestion. Nothing is retired unless you choose Retire.
+A recommendation is only a suggestion. Nothing is retired unless you choose Retire. Before the run
+cleans up, it lists every edit that was retired or rewritten and asks you to confirm each one was
+your decision. The check can prove that an answer matches the text you were shown, but not who gave
+it, so this confirmation is the final safeguard. If you see an entry you did not choose, say so and
+that edit is restored. A rewrite is checked like a kept edit: your replacement text must be present
+in the merged file.
 
 ## When an answer stops applying
 

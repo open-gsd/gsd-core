@@ -39,6 +39,8 @@ Routes to the update workflow which handles:
 </flags>
 
 <process>
+If the arguments contain `--interactive` (bare or with a value) but not `--reapply`, STOP with: `--interactive applies only to --reapply (for example: /skill:gsd-update --reapply --interactive=all)`. Do nothing else.
+
 Parse the first token of the `<arguments>` block:
 - If it is `--sync`: strip the flag, execute the sync-skills workflow (passing remaining args for --from/--to/--dry-run/--apply).
 - If it is `--reapply`: strip the flag, execute the reapply-patches workflow, passing the remaining arguments (for example `--interactive=all`) to it.

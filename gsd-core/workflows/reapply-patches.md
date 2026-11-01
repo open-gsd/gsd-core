@@ -319,6 +319,14 @@ recorded as `keep`. Record each answer in `DECISIONS_FILE` as JSON:
 { "decisions": [ { "file": "<file>", "hunk_hash": "<hunk_hash>", "disposition": "keep|retire|rewrite" } ] }
 ```
 
+A `rewrite` entry must also carry `"replacement_lines": [...]` — exactly the lines the user supplied.
+The Step 5a gate then requires those lines to be present in the merged file, so a rewrite is verified
+like any kept edit. `keep` and `retire` entries never carry `replacement_lines`.
+
+Shell variables do not survive between separate command invocations. Write `INTERACTIVE_MODE` and the
+`DECISIONS_FILE` path down when you set them, and set both again in the same command that runs the
+Step 5a verifier.
+
 Then merge each file with the paths below, applying only `keep` hunks and the user's replacement
 text for `rewrite` hunks. A file whose hunks were all retired is left exactly as installed and
 reported `Incorporated` ("Retired by user decision"). A file with some hunks retired is reported
@@ -541,7 +549,11 @@ matches its hunk because the backup or baseline changed after the user saw it. S
 text. Never edit the decisions file to make it match.
 
 When decisions were passed, the JSON report carries `decisions.retired` — every hunk excused by a
-user `retire` or `rewrite` decision. List each one in the Step 7 report.
+user `retire` or `rewrite` decision. Before Step 6, show the user this list (file, hunk id,
+disposition) and ask them to confirm that each one is a decision they made. The gate can prove that a
+decision matches the exact text that was shown, but not who made it, so the user's confirmation of
+this list is the final check. If the user disowns any entry, restore that hunk from the backup and
+re-run Step 5a without it. List each confirmed entry in the Step 7 report.
 
 **Only when `VERIFY_STATUS` is 0** (or when all files had zero significant user-added lines, which the verifier reports as `Failures: 0`) may execution continue to gate 5b.
 
@@ -579,6 +591,8 @@ Do not proceed to cleanup until both gates (5a and 5b) pass.
 **Why both gates?** 5a (the script) is the binding gate — it does the actual substring check structurally and cannot be shortcut by the LLM. 5b (the table review) is the advisory gate — it provides a redundant safety net via the Step 4 prose summary, ensuring that even a script regression or absent pristine baseline cannot silently allow a `verified: no` row to slip past, nor can a missing table go unnoticed. Layered gates favour false-positive halts (recoverable) over silent successes on lost content (unrecoverable).
 
 ## Step 6: Cleanup option
+
+If `DECISIONS_FILE` was created (#4435), delete it now: `rm -f "$DECISIONS_FILE"`.
 
 Ask user:
 - "Keep patch backups for reference?" → preserve `gsd-local-patches/`
