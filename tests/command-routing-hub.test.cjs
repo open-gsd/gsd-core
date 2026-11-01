@@ -1024,7 +1024,7 @@ test('bug #167: query meta-command prefixes direct gsd-tools calls', (t) => {
  * Original #1818 invariant: gsd-tools must NOT silently ignore --help/-h
  * and proceed with a destructive command — that turned AI-agent
  * hallucinations into accidental data loss (e.g. `phases clear --help`
- * deleting phase dirs because the flag was dropped).
+ * clearing phase dirs because the flag was dropped).
  *
  * #3019 update: the same destructive-protection invariant still holds,
  * but the response shape changed. Previously --help → non-zero error
