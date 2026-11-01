@@ -217,7 +217,7 @@ What's changed recently:
 <open_questions>
 ## Open Questions
 
-Things that couldn't be fully resolved:
+Things that couldn't be fully resolved (see **Open Questions** under Guidelines for how a question is closed):
 
 1. **[Question]**
    - What we know: [partial info]
@@ -578,6 +578,11 @@ function useVehicleControls(rigidBodyRef) {
 - Don't hand-roll: Be explicit about what problems to NOT solve yourself
 - Pitfalls: Include warning signs, not just "don't do this"
 - Sources: Mark confidence levels honestly
+
+**Open Questions:**
+- Only the user closes an open question: never mark a question resolved yourself, and never add a `(RESOLVED)` suffix to the `## Open Questions` section heading
+- List every open question in that section, never in prose or under another heading
+- A question is resolved only when it cites a `D-NN` decision recorded under CONTEXT.md's `<decisions>`, as `RESOLVED (D-NN): <ruling>`; the plan-checker blocks planning on any other (Dimension 11)
 
 **Integration with planning:**
 - RESEARCH.md loaded as @context reference in PLAN.md
