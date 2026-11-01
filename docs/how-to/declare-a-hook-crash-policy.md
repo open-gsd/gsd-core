@@ -26,9 +26,10 @@ const { HOOK_ON_CRASH, allow, deny, crash } = require('./lib/hook-exit.js');
   block code. `payload` is written to stdout; by default the same bytes go to
   stderr too. See "A deny needing a distinct stderr payload" below for when
   you pass `stderrPayload`.
-- **`crash(onCrash, payload)`** — dispatches to `allow`/`deny` per a policy
-  YOU supply. There is no default: call `crash(ON_CRASH, payload)` from your
-  outer catch, never a bare `crash(payload)`.
+- **`crash(onCrash, payload, stderrPayload?)`** — dispatches to `allow`/`deny`
+  per a policy YOU supply. There is no default: call `crash(ON_CRASH, payload)`
+  from your outer catch, never a bare `crash(payload)`. `stderrPayload` is
+  forwarded to `deny` on the DENY branch only; ALLOW writes nothing to fd 2.
 
 A real guard shape:
 
@@ -106,6 +107,16 @@ written raw (no `JSON.stringify`), anything else is JSON-stringified like the
 stdout payload. Reach for this only when a specific downstream reader needs
 plain text on stderr — most hooks have no such reader and should leave
 `stderrPayload` unset.
+
+`crash(onCrash, payload, stderrPayload)` takes the same optional argument and
+forwards it to `deny()` on the DENY branch only, so a hook whose own denials
+write plain text keeps doing so when its crash policy denies.
+`gsd-secret-read-guard.js` is the instance: its scan blocks pass the reason as
+`stderrPayload`, and so does its `guard-error` deny (#5784):
+
+```js
+crash(ON_CRASH, { decision: 'block', code: 'guard-error', reason }, reason);
+```
 
 ## The exception: two hooks that must NOT call `deny()`
 

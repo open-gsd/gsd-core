@@ -150,12 +150,18 @@ const ON_CRASH = process.env.GSD_SECRET_READ_GUARD_ON_CRASH === 'deny'
   ? HOOK_ON_CRASH.DENY
   : HOOK_ON_CRASH.ALLOW;
 
-// The crash payload names the cause on DENY; on ALLOW it stays undefined so
-// the default path emits nothing, exactly as before.
-function crashPayload(why) {
-  if (ON_CRASH !== HOOK_ON_CRASH.DENY) return undefined;
+// Ends the hook through the declared crash policy. On DENY the payload names
+// the cause and stderr carries its plain reason, as emitBlock's denials do:
+// Kimi's hook bus reads stderr back to the model verbatim. On ALLOW both stay
+// undefined, so the default path is crash(ALLOW, undefined) and emits nothing,
+// exactly as before.
+function crashFor(why) {
+  if (ON_CRASH !== HOOK_ON_CRASH.DENY) {
+    crash(ON_CRASH, undefined);
+    return;
+  }
   const reason = `gsd-secret-read-guard: ${why}; denied because GSD_SECRET_READ_GUARD_ON_CRASH=deny`;
-  return { decision: 'block', code: 'guard-error', reason };
+  crash(ON_CRASH, { decision: 'block', code: 'guard-error', reason }, reason);
 }
 
 // Commands longer than this are denied rather than scanned (see header).
@@ -1533,7 +1539,7 @@ let input = '';
 // the payload, so it takes the declared crash policy (#5784) rather than an
 // unconditional allow. The timer is not reset by `data`: a payload written in
 // full whose stdin stays open is caught here too.
-const stdinTimeout = setTimeout(() => crash(ON_CRASH, crashPayload('stdin did not close within 3 s')), 3000);
+const stdinTimeout = setTimeout(() => crashFor('stdin did not close within 3 s'), 3000);
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => input += chunk);
 process.stdin.on('end', () => {
@@ -1587,6 +1593,6 @@ process.stdin.on('end', () => {
   } catch {
     // Fail open — never block valid tool calls due to hook errors — unless the
     // host opted in to DENY; ON_CRASH is declared at module top (#3911, #5784).
-    crash(ON_CRASH, crashPayload('internal error'));
+    crashFor('internal error');
   }
 });

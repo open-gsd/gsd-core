@@ -769,9 +769,9 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
   const DENY_ENV = { [ON_CRASH_ENV]: 'deny' };
   const MALFORMED = '{not json';
 
-  // crash() hands one payload to both streams, so a guard-error deny's stderr
-  // is the payload's JSON, not the plain reason the scan's own codes write:
-  // assertBlocked's stderr check does not apply here.
+  // A guard-error deny writes the plain reason to stderr, as the scan's own
+  // codes do (crash() forwards the hook's stderrPayload on DENY). The payload
+  // carries no tool or path, so assertBlocked does not fit.
   function assertGuardError(r, label) {
     assert.equal(r.status, 2, `${label}: expected block (exit 2), got exit ${r.status}; stdout=${r.stdout}`);
     const out = JSON.parse(r.stdout);
@@ -779,7 +779,7 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
     assert.equal(out.code, 'guard-error', `${label}: code`);
     assert.equal(typeof out.reason, 'string');
     assert.ok(out.reason.length > 0, `${label}: reason present`);
-    assert.deepEqual(JSON.parse(r.stderr), out, `${label}: stderr carries the same payload`);
+    assert.equal(r.stderr, out.reason, `${label}: stderr must carry the plain reason string (crash stderrPayload)`);
     return out;
   }
 

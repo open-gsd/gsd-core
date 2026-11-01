@@ -4448,10 +4448,11 @@ integer follows `process.exit(` in its outer `catch`.
 **What changed (ADR-3889 Phase 7, #3911):**
 
 - `hooks/lib/hook-exit.js` (hand-written) exposes `allow(payload)` → exit 0,
-  `deny(payload, stderrPayload?)` → exit 2, and `crash(onCrash, payload)`,
-  which dispatches to `allow`/`deny` per a `HOOK_ON_CRASH` policy the caller
-  must supply — `crash()` has no default policy, so a hook cannot fail open
-  by omission.
+  `deny(payload, stderrPayload?)` → exit 2, and
+  `crash(onCrash, payload, stderrPayload?)`, which dispatches to `allow`/`deny`
+  per a `HOOK_ON_CRASH` policy the caller must supply (the optional
+  `stderrPayload` reaches `deny` only; #5784) — `crash()` has no default
+  policy, so a hook cannot fail open by omission.
 - Every one of the 19 enforcement hooks under `hooks/*.js` now declares
   `const ON_CRASH = HOOK_ON_CRASH.ALLOW` (or `DENY`) once, with a
   hook-specific comment naming why, and calls `crash(ON_CRASH, payload)` from
