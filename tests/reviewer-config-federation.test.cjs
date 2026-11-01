@@ -111,7 +111,8 @@ describe('reviewer config federation — provenance actually moved (#2797)', () 
     // this loop. The part of the #2797 invariant that still holds — a lane must
     // never own a MODEL or HOST key it has no use for, or another lane's budget
     // key — is what this asserts directly for the two lanes that still have
-    // neither.
+    // neither. #4559 adds a fourth legitimate reason for a prompt-fed lane: its
+    // own `review.context_window_tokens.<slug>` key.
     for (const [key, entry] of Object.entries(registry.configSchema || {})) {
       const owner = entry && entry.owner;
       if (!['qwen', 'coderabbit'].includes(owner)) continue;
@@ -119,9 +120,12 @@ describe('reviewer config federation — provenance actually moved (#2797)', () 
         !key.startsWith('review.models.') && !key.endsWith('_host'),
         `${owner} must not own a model or host key, but owns "${key}"`,
       );
-      assert.equal(
-        key, `review.max_prompt_tokens_per_reviewer.${owner}`,
-        `${owner} must own no key other than its own budget key, but owns "${key}"`,
+      const allowed = [`review.max_prompt_tokens_per_reviewer.${owner}`];
+      // #4559: a prompt-fed lane also owns its own context-window key; coderabbit is sent no prompt and owns none
+      if (owner === 'qwen') allowed.push(`review.context_window_tokens.${owner}`);
+      assert.ok(
+        allowed.includes(key),
+        `${owner} must own no key other than its own budget or context-window key, but owns "${key}"`,
       );
     }
   });
