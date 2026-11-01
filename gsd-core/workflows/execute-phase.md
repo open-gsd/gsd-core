@@ -679,7 +679,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
      # When executor_model is "inherit", omit this parameter entirely so
      # Claude Code inherits the orchestrator model automatically.
      model="{executor_model}",  # omit this line when executor_model == "inherit"
-     {executor_effort_arg},  # omit when empty or when EXECUTOR_TYPE is not gsd-executor
+     {executor_effort_arg},  # omit this line when empty
      # The host's OWN declared isolation flag (`harnessFlag` from
      # `dispatch-isolation --json`; see the isolation-dispatch fragment).
      # Emit the declared token — do NOT hardcode a runtime's flag.

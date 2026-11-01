@@ -32,6 +32,12 @@ if [ "${AGENT_HINT_ROUTING:-true}" != "false" ]; then
   fi
 fi
 
+# #5330: init resolved executor_effort_arg for gsd-executor. The argument follows the
+# agent spawned, so a specialist takes its own (empty unless the config names it).
+if [ "$EXECUTOR_TYPE" != "gsd-executor" ]; then
+  executor_effort_arg=$(gsd_run query resolve-model "$EXECUTOR_TYPE" --pick effort_arg 2>/dev/null || true)
+fi
+
 # #1689 v1 routes only the Agent()-based dispatch. On the orchestrator-worktree
 # backend (process-spawn; no subagent_type) a resolved hint cannot be honored
 # yet — surface it so a set hint is never silently ignored.
@@ -39,10 +45,6 @@ if [ "${ISOLATION:-}" = "orchestrator-worktree" ] && [ -n "${PLAN_HINT:-}" ]; th
   echo "note: plan ${plan_id} agent_hint='${PLAN_HINT}' resolved, but orchestrator-worktree dispatch does not route subagent types in this release — using the default executor." >&2
 fi
 ```
-
-**Effort argument (#5330).** `executor_effort_arg` is resolved for `gsd-executor`. When
-`EXECUTOR_TYPE` is any other agent, substitute nothing for its placeholder: a routed specialist keeps its
-own installed `effort:` frontmatter.
 
 `gsd_run query resolve-agent` consults the **active runtime's agent directory**
 (both project-local and user-global, across runtime filename variants — `.md`,

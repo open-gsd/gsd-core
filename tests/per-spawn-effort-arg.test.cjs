@@ -30,6 +30,7 @@ const path = require('node:path');
 const os = require('node:os');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { runGsdTools, cleanup } = require('./helpers.cjs');
+const { span, runBash } = require('./helpers/doc-bash-span.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const LIB = path.join(REPO_ROOT, 'gsd-core', 'bin', 'lib');
@@ -446,6 +447,47 @@ describe('#5330 resolve-execution effort_spawn_arg', () => {
     assert.equal(overridden.effort, 'low');
     assert.equal(overridden.effort_spawn_arg, 'effort="xhigh"');
     assert.equal(run(t, 'claude', '--attempt', '2').effort_spawn_arg, 'effort="xhigh"');
+  });
+});
+
+describe('#5330 the executor effort argument follows the routed agent', () => {
+  const ROUTING = 'gsd-core/workflows/execute-phase/steps/per-plan-executor-routing.md';
+  const INIT_ARG = 'executor_effort_arg=\'effort="high"\'';
+  const rebind = () => span(ROUTING, 'if [ "$EXECUTOR_TYPE" != "gsd-executor" ]', 'fi');
+  const bound = (type, stdout) => {
+    const r = runBash(rebind(), { stdout, rc: 0 }, {
+      preamble: [`EXECUTOR_TYPE=${type}`, INIT_ARG],
+      probe: 'printf "[%s]" "$executor_effort_arg"',
+    });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout;
+  };
+
+  test('gsd-executor keeps the argument its init payload carried', () => {
+    assert.equal(bound('gsd-executor', 'effort="max"'), '[effort="high"]');
+  });
+
+  test('a specialist the config does not name gets none, so its frontmatter applies', () => {
+    assert.equal(bound('gsd-acme-specialist', ''), '[]');
+  });
+
+  test('a specialist the config names gets its own level, never the executor\'s', () => {
+    assert.equal(bound('gsd-acme-specialist', 'effort="max"'), '[effort="max"]');
+  });
+
+  test('a failed lookup empties the argument rather than leaving the executor\'s', () => {
+    const r = runBash(rebind(), { stdout: '', rc: 1 }, {
+      preamble: ['EXECUTOR_TYPE=gsd-acme-specialist', INIT_ARG],
+      probe: 'printf "[%s]" "$executor_effort_arg"',
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout, '[]');
+  });
+
+  test('the spawn site carries the rebound value with no condition of its own', () => {
+    const host = fs.readFileSync(path.join(REPO_ROOT, 'gsd-core', 'workflows', 'execute-phase.md'), 'utf8');
+    const line = host.split(/\r?\n/).find((l) => l.includes('{executor_effort_arg}'));
+    assert.match(line, /\{executor_effort_arg\},\s+# omit this line when empty$/);
   });
 });
 
