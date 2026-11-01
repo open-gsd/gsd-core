@@ -198,7 +198,8 @@ describe('#5638: the generated gsd-debug skill', () => {
   });
 
   test('commits with a message file, never a shell-quoted string built from model or user text', () => {
-    assert.ok(skill.includes('git commit -F <message file>'));
+    assert.ok(skill.includes('git commit -F "<message file>" -- ":(literal)<file fix touched>" ...'));
+    assert.ok(read('agents', 'gsd-debug-session-manager.md').includes('-- ":(literal)<file fix touched>" ...'));
     assert.equal(skill.includes('git commit -m'), false);
     assert.ok(skill.includes('{debug_dir}/resolved/<slug>.md'));
     assert.ok(skill.includes('{debug_dir}/<slug>.md'));

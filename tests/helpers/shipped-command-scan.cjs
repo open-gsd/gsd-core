@@ -185,9 +185,10 @@ const tokenize = (str) => {
 // backslash escapes the space, so the shell keeps `docs: #` as ONE word and
 // `#` is literal — while a preceded-by-whitespace test reads it as a comment.
 // The scan would then exempt a line the runtime still executes unscoped.
-const commentPortion = (line) => {
-  let quote = null;
-  let started = false;
+// One pass over a line: { cut: index of the comment `#` or -1, quote: the quote still open at the end }. `quote0` is a quote opened on an earlier line.
+const scanLine = (line, quote0 = null) => {
+  let quote = quote0;
+  let started = quote0 !== null;
   for (let i = 0; i < line.length; i += 1) {
     const ch = line[i];
     if (quote) {
@@ -198,12 +199,13 @@ const commentPortion = (line) => {
     if (ch === '\\' && i + 1 < line.length) { started = true; i += 1; continue; }
     if (ch === '"' || ch === "'") { started = true; quote = ch; continue; }
     if (/\s/.test(ch)) { started = false; continue; }
-    if (ch === '#' && !started) return line.slice(i);
+    if (ch === '#' && !started) return { cut: i, quote: null };
     if (ch === '>' || ch === '<' || ch === ';' || ch === '|' || ch === '&') { started = false; continue; }
     started = true;
   }
-  return '';
+  return { cut: -1, quote };
 };
+const commentPortion = (line) => { const { cut } = scanLine(line); return cut === -1 ? '' : line.slice(cut); };
 
 // The explicit opt-out for content that shows the defect ON PURPOSE. A
 // wrong-example is otherwise indistinguishable from a regression — which is
@@ -338,6 +340,73 @@ const shellDashCPayloads = (str) => {
   return payloads;
 };
 
+const stripComments = (raw) => {
+  let q = null;
+  return raw.split('\n').map((line) => { const r = scanLine(line, q); q = r.quote; return r.cut === -1 ? line : line.slice(0, r.cut); }).join('\n');
+};
+
+const isGit = (t) => { const b = bareCommandName(t); return b === 'git' || /\/git$/.test(b); };
+const GIT_VALUE_FLAGS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--super-prefix', '--config-env', '--attr-source', '--shallow-file']);
+// Index of the git subcommand after the git word at `gi`: redirections are skipped, a value option skips its separate value, every other `-option` is skipped (a safety guard fails closed: an option it does not know must not hide the subcommand); -1 when there is none.
+const gitSubcommandIdx = (toks, gi) => {
+  let c = gi + 1;
+  while (c < toks.length && !toks[c].op) {
+    if (toks[c].redir) { c += 1; continue; }
+    if (!toks[c].value.startsWith('-')) return c;
+    c += GIT_VALUE_FLAGS.has(toks[c].value) ? 2 : 1;
+  }
+  return -1;
+};
+const isWholeTree = (a) => /^(?::\((?:top|literal|glob|icase)[^)]*\)|:\/)?(?:\.\.?(?:\/+\.\.?)*\/*|\*+|\/?)$/.test(a);
+const isExcludeMagic = (a) => a.startsWith(':!') || a.startsWith(':^') || a.startsWith(':(exclude)');
+// `inline`: a bare `git commit` in a prose code span names the command, it is not an invocation.
+// An `echo`/`printf` word that holds `git ... commit` (recovery advice), or an `eval` word, is scanned as a script; other quoted prose is not.
+const unscopedGitCommits = (raw, inline = false) => {
+  const out = [];
+  const text = stripComments(raw);
+  const toks = tokenize(text);
+  let skipTo = -1;
+  for (let i = 0; i < toks.length; i += 1) {
+    if (i <= skipTo || toks[i].op || toks[i].redir) continue;
+    if (!isGit(toks[i])) {
+      let k = i - 1;
+      while (k >= 0 && !toks[k].op) k -= 1;
+      let w = k + 1;
+      while (toks[w] && (toks[w].redir || toks[w].value === '{')) w += 1;
+      if (['echo', 'printf', 'eval'].includes(toks[w]?.value) && /\bgit\b[^\n]*\bcommit\b/.test(toks[i].value)) out.push(...unscopedGitCommits(toks[i].value, inline));
+      continue;
+    }
+    const c = gitSubcommandIdx(toks, i);
+    if (c === -1 || toks[c].value !== 'commit') continue;
+    const argv = [];
+    let prev = toks[c];
+    for (let j = c + 1; j < toks.length && !toks[j].op; j += 1) {
+      if (/(?<!\\)\n/.test(text.slice(prev.end, toks[j].start))) break;
+      if (!toks[j].redir) argv.push(toks[j].value);
+      prev = toks[j];
+      skipTo = j;
+    }
+    const dd = argv.indexOf('--');
+    const spec = dd === -1 ? [] : argv.slice(dd + 1).filter((a) => !isExcludeMagic(a));
+    const wholeTree = dd !== -1 && dd < argv.length - 1 && (spec.length === 0 || spec.some(isWholeTree));
+    // -i/--include, also bundled as in -qi, commits the whole index plus the named paths.
+    const include = argv.slice(0, dd === -1 ? argv.length : dd).some((a) => (a.length > 4 && '--include'.startsWith(a)) || /^-[^-mFcCtuS]*i/.test(a));
+    const fromFile = argv.some((a) => a === '--pathspec-from-file' || a.startsWith('--pathspec-from-file='));
+    if ((dd === -1 && !fromFile && (argv.length > 0 || !inline)) || (dd !== -1 && dd === argv.length - 1) || wholeTree || include) out.push(text.slice(toks[i].start, prev.end));
+  }
+  // bash -c payloads per command line: an unquoted newline ends a command, a newline inside quotes does not.
+  let from = 0;
+  for (let k = 0; k < toks.length; k += 1) {
+    if (k + 1 < toks.length && !/(?<!\\)\n/.test(text.slice(toks[k].end, toks[k + 1].start))) continue;
+    for (const p of shellDashCPayloads(text.slice(toks[from].start, toks[k].end))) out.push(...unscopedGitCommits(p, inline));
+    from = k + 1;
+  }
+  return out;
+};
+
+// Git prefix spellings the add guard and the commit scanner must both see through to the subcommand.
+const GIT_PREFIX_SPELLINGS = ['git', 'git -C d', 'git -c k=v', 'git --no-pager', '/usr/bin/git', 'git 2>/dev/null', 'git --super-prefix p', 'git --no-advice', 'git --config-env=k=V', 'git --attr-source=HEAD', 'git --attr-source HEAD', 'git --config-env k=V', 'git --shallow-file f'];
+
 module.exports = {
   bareCommandName,
   tokenize,
@@ -349,4 +418,8 @@ module.exports = {
   declaredReasonFor,
   isDeclared,
   isUntrackedDeclaration,
+  isGit,
+  gitSubcommandIdx,
+  unscopedGitCommits,
+  GIT_PREFIX_SPELLINGS,
 };

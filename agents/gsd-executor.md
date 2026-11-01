@@ -566,8 +566,9 @@ git commit -m "{type}({phase}-{plan}): {concise task description}
 
 - {key change 1}
 - {key change 2}
-"
+" -- ":(literal){step-2 path}" ...
 ```
+`--` commits only those paths' working-tree content, each one quoted as `":(literal){path}"` so `[` and `*` are not globs and a space does not split the path: list every step-2 path (both old and new path of a rename); `git add` new files first.
 
 **5. Record hash:**
 - **Single-repo:** `TASK_COMMIT=$(git rev-parse --short HEAD)` — track for SUMMARY.
@@ -624,7 +625,7 @@ back, those deletions appear on the main branch, destroying prior-wave work (#20
   touching `refs/stash`:
 
   - **Move WIP off the working tree:** commit it to a throwaway branch you own
-    (e.g. `git checkout -b scratch-/<task>-wip && git add -A && git commit -m "chore(wip): scratch"`),
+    (e.g. `git checkout -b scratch-/<task>-wip && git add -A -- . && git commit -m "chore(wip): scratch" -- .   # from THIS worktree's root`),
     then `git checkout <your-worktree-branch>` to return to your task. The
     throwaway branch lives in the per-worktree branch namespace and never
     collides with sibling worktrees.
@@ -858,8 +859,8 @@ one of these shapes:
   index rolled back. Surface `file` + `error` (git's stderr); do not retry — a
   retry hits the same cause.
 
-**Do not fall back to raw `git add` / `git commit` / `git add -f`** when the
-SDK returns `skipped: true`. The SDK's skip is the user's deliberate choice
+**When the SDK returns `skipped: true`, do not fall back to raw `git add` /
+`git commit`, and never use `git add -f`**. The SDK's skip is the user's deliberate choice
 to keep `.planning/` files out of git history. Force-staging gitignored
 content via `git add -f .planning/...` is forbidden — that bug is exactly
 the regression #3678 reported, where the agent leaks `.planning/` artifacts
