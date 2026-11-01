@@ -332,3 +332,19 @@ When multiple layers apply, the resolver picks the highest-priority entry:
 - [Multi-agent orchestration](../explanation/multi-agent-orchestration.md)
 - [Commands reference](../COMMANDS.md)
 - [Docs index](../README.md)
+
+## Pin a Codex model
+
+Check the Codex `/model` selector to confirm the model is available to your account. Then use
+`/gsd:config --advanced` Section 7, or set the existing override in `.planning/config.json`:
+
+```json
+{
+  "runtime": "codex",
+  "model_profile": "balanced",
+  "model_profile_overrides": { "codex": { "sonnet": "gpt-6.1-sol" } }
+}
+```
+
+This pins the `sonnet` tier while preserving the other tier defaults. A per-agent
+`model_overrides` entry takes precedence. Reinstall Codex agent files as described above.

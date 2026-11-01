@@ -134,8 +134,21 @@
     "_baseline": ["low", "medium", "high", "xhigh", "max"],
     "gpt-5.6-sol":   ["low", "medium", "high", "xhigh", "max", "ultra"],
     "gpt-5.6-terra": ["low", "medium", "high", "xhigh", "max"],
-    "gpt-5.6-luna":  ["low", "medium", "high", "xhigh", "max"]
+    "gpt-5.6-luna":  ["low", "medium", "high", "xhigh", "max"],
+    "gpt-6.1-sol": ["low", "medium", "high", "xhigh", "max"],
+    "gpt-6-astra": ["low", "medium", "high", "xhigh", "max"],
+    "gpt-6-sol": ["low", "medium", "high", "xhigh", "max"],
+    "gpt-6-luna": ["low", "medium", "high", "xhigh", "max"]
   },
+  "codexModelChoices": [
+    { "id": "gpt-6.1-sol", "name": "GPT-6.1-Sol (current)", "description": "Latest workhorse model for coding and everyday work" },
+    { "id": "gpt-6-astra", "name": "GPT-6-Astra", "description": "Frontier model for the most demanding work" },
+    { "id": "gpt-6-sol", "name": "GPT-6-Sol", "description": "Previous generation workhorse model" },
+    { "id": "gpt-6-luna", "name": "GPT-6-Luna", "description": "Fast and affordable model for easier tasks" },
+    { "id": "gpt-5.6-sol", "name": "GPT-5.6-Sol", "description": "Older generation workhorse model" },
+    { "id": "gpt-5.6-terra", "name": "GPT-5.6-Terra", "description": "Older balanced model for straightforward work" },
+    { "id": "gpt-5.6-luna", "name": "GPT-5.6-Luna", "description": "Older fast and efficient model" }
+  ],
   "agents": {
     "gsd-planner":                { "golden": "opus",   "balanced": "opus",   "budget": "sonnet", "phaseType": "planning",     "routingTier": "heavy" },
     "gsd-roadmapper":             { "golden": "opus",   "balanced": "sonnet", "budget": "sonnet", "phaseType": "planning",     "routingTier": "heavy" },
