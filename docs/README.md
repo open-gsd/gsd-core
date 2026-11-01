@@ -38,6 +38,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Resolve a contract-drift finding](how-to/resolve-contract-drift-findings.md) — bring an agent's completion contract, read-tag gate, or deleted-file test reference back into agreement with the registry
 - [Resolve unreachable-guard findings](how-to/resolve-unreachable-guard-findings.md) — fix shell guards whose fallback arm cannot run, and tell "nothing to report" apart from "could not look"
 - [Declare a hook's crash policy](how-to/declare-a-hook-crash-policy.md) — terminate a GSD hook with `allow`/`deny`/`crash`, declare its `ON_CRASH` policy, and tell a hook's own crash apart from a check that could not run at all
+- [Make the secret-read guard fail closed](how-to/make-the-secret-read-guard-fail-closed.md) — have `gsd-secret-read-guard.js` block, instead of allow, when it fails on its own, on a `settings.json` install
 - [Handle gate verb exit statuses](how-to/handle-gate-verb-exit-statuses.md) — capture a gate verb's status safely under `set -e` and tell a failing verdict from a gate that could not look
 - [Resolve a skipped capability probe](how-to/resolve-a-skipped-capability-probe.md) — act on a coverage gate that held your phase for an unestablished scope, or a planning checkpoint that reported `skipped` instead of a verdict
 - [Diagnose which gsd-tools is running](how-to/diagnose-a-foreign-gsd-tools.md) — tell this package's tool apart from the predecessor's colliding binary and from a gsd-core too old to identify itself
