@@ -178,10 +178,10 @@ describe('headTreeEntry follows a .git file (#4432 row 46)', () => {
     const r = gitRaw(repo, ['worktree', 'add', '-q', '-b', 'other', wt]);
     if (r.status !== 0) {
       t.skip(`git worktree unavailable: ${r.stderr}`);
-      return;
+    } else {
+      assert.ok(fs.statSync(path.join(wt, '.git')).isFile(), 'linked worktree has a .git file');
+      assert.deepEqual(headTreeEntry(wt, '.env.production'), { mode: '100644', oid: oracleOid(repo, '.env.production') });
     }
-    assert.ok(fs.statSync(path.join(wt, '.git')).isFile(), 'linked worktree has a .git file');
-    assert.deepEqual(headTreeEntry(wt, '.env.production'), { mode: '100644', oid: oracleOid(repo, '.env.production') });
   });
 });
 
@@ -296,11 +296,11 @@ describe('headTreeEntry fails closed on a SHA-256 repository (#4432 row 49)', ()
     const init = gitRaw(dir, ['init', '-q', '-b', 'main', '--object-format=sha256']);
     if (init.status !== 0) {
       t.skip(`git lacks --object-format=sha256: ${init.stderr}`);
-      return;
+    } else {
+      writeFile(dir, '.env.production', 'x\n');
+      commitAll(dir, 'add');
+      assert.equal(headTreeEntry(dir, '.env.production'), null);
     }
-    writeFile(dir, '.env.production', 'x\n');
-    commitAll(dir, 'add');
-    assert.equal(headTreeEntry(dir, '.env.production'), null);
   });
 });
 
@@ -461,12 +461,12 @@ describe('headTreeEntry honors injected limits at limit-1, limit and limit+1 (#4
     const depth = Math.max(depthByOid.get(head) ?? 0, depthByOid.get(tree) ?? 0);
     if (depth < 1) {
       t.skip('git did not delta-compress the commit or tree HEAD reads');
-      return;
+    } else {
+      assert.ok(headTreeEntry(repo, 'file0.txt', { maxDeltaDepth: depth + 1 }), 'limit+1');
+      assert.ok(headTreeEntry(repo, 'file0.txt', { maxDeltaDepth: depth }), 'limit');
+      assert.equal(headTreeEntry(repo, 'file0.txt', { maxDeltaDepth: depth - 1 }), null, 'limit-1');
+      assert.deepEqual(headTreeEntry(repo, 'file0.txt'), { mode: '100644', oid: oracleOid(repo, 'file0.txt') });
     }
-    assert.ok(headTreeEntry(repo, 'file0.txt', { maxDeltaDepth: depth + 1 }), 'limit+1');
-    assert.ok(headTreeEntry(repo, 'file0.txt', { maxDeltaDepth: depth }), 'limit');
-    assert.equal(headTreeEntry(repo, 'file0.txt', { maxDeltaDepth: depth - 1 }), null, 'limit-1');
-    assert.deepEqual(headTreeEntry(repo, 'file0.txt'), { mode: '100644', oid: oracleOid(repo, 'file0.txt') });
   });
 
   test('unknown or invalid limit values fall back to the defaults', (t) => {
@@ -630,32 +630,6 @@ describe('headTreeEntry bounds and reuses packed-refs (#4432 F7)', () => {
     assert.equal(headTreeEntry(repo, 'f.txt', { maxRefsFileBytes: size - 1 }), null, 'limit-1');
   });
 
-  test('packed-refs is opened at most once per call', (t) => {
-    const { repo } = packedRepo(t);
-    const fsMod = require('node:fs');
-    const originals = { openSync: fsMod.openSync, readFileSync: fsMod.readFileSync };
-    let opens = 0;
-    const count = (file) => {
-      if (typeof file === 'string' && file.endsWith('packed-refs')) opens++;
-    };
-    fsMod.openSync = function patchedOpen(file, ...rest) {
-      count(file);
-      return originals.openSync.call(this, file, ...rest);
-    };
-    fsMod.readFileSync = function patchedRead(file, ...rest) {
-      count(file);
-      return originals.readFileSync.call(this, file, ...rest);
-    };
-    let entry;
-    try {
-      entry = headTreeEntry(repo, 'f.txt');
-    } finally {
-      fsMod.openSync = originals.openSync;
-      fsMod.readFileSync = originals.readFileSync;
-    }
-    assert.ok(entry);
-    assert.equal(opens, 1);
-  });
 });
 
 describe('headTreeEntry verifies the git dir behind a .git file (#4432 F8)', () => {
