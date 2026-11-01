@@ -128,7 +128,8 @@
 //
 // Triggers on: Read, Grep, Bash tool calls (Kimi: ReadFile, Grep, Shell)
 // Action: BLOCK (decision: 'block', exit 2) — codes secret-read |
-//         glob-too-complex | command-too-large | debugger-cli-spawn
+//         glob-too-complex | command-too-large | debugger-cli-spawn, and in
+//         test mode only scan-step-budget (see SCAN_STEP_BUDGET)
 // No-op: other tools, non-secret targets, hook errors (fail open — a parser
 //        bug in a hook that runs on EVERY Bash call must never brick a
 //        session; the crash policy is declared once below).
@@ -756,10 +757,31 @@ let failedArith = null;
 function arithKey(i, depth) {
   return (i * (MAX_FUNSUB_DEPTH + 2) + funsubDepth) * (MAX_FUNSUB_DEPTH + 1) + depth;
 }
+
+// The work the close finders do for one hook call, in steps: a character one
+// of them reads, or a tag a recorded span pushes again. Their cost is bounded
+// by the records above and by MAX_FUNSUB_DEPTH, and a test asserts that bound
+// as a count rather than by the clock: with GSD_TEST_MODE=1, a positive
+// integer in GSD_TEST_SECRET_READ_GUARD_SCAN_STEPS caps the steps, and past
+// the cap the hook denies (`scan-step-budget`). Without both it is no cap.
+// It can only deny, never allow.
+let scanSteps = 0;
+const SCAN_STEP_BUDGET = scanStepBudget(process.env);
+function scanStepBudget(env) {
+  if (env.GSD_TEST_MODE !== '1') return Infinity;
+  const v = env.GSD_TEST_SECRET_READ_GUARD_SCAN_STEPS;
+  return typeof v === 'string' && /^[1-9][0-9]*$/.test(v) ? Number(v) : Infinity;
+}
+function scanStep(n) {
+  scanSteps += n;
+  if (scanSteps > SCAN_STEP_BUDGET) emitBlock('scan-step-budget', 'Bash', '');
+}
+
 // The recorded end of the span at `i`, its tags pushed again, or -1.
 function knownSpan(kind, i) {
   const hit = spanCache === null ? undefined : spanCache.get(spanKey(kind, i));
   if (hit === undefined) return -1;
+  scanStep(1 + hit.tags.length);
   for (const t of hit.tags) funsubTags.push(t);
   return hit.end;
 }
@@ -773,6 +795,7 @@ function recordSpan(kind, i, end, mark) {
 // quoting, so each is skipped whole.
 function skipDoubleQuoted(str, i) {
   while (i < str.length && str[i] !== '"') {
+    scanStep(1);
     if (str[i] === '\\') { i += 2; continue; }
     if (str[i] === '$' && str[i + 1] === '(') { i = findParenClose(str, i + 2) + 1; continue; }
     if (isFunsubOpen(str, i) && funsubDepth < MAX_FUNSUB_DEPTH) { i = findFunsubClose(str, funsubStart(str, i)) + 1; continue; }
@@ -795,6 +818,7 @@ function skipDoubleQuoted(str, i) {
 function findParamClose(str, i) {
   const open = [[i, funsubTags.length]]; // [start, funsubTags mark] of each `${` still open
   while (i < str.length) {
+    scanStep(1);
     const ch = str[i];
     if (ch === '\\') { i += 2; continue; }
     if (ch === "'") {
@@ -859,6 +883,7 @@ function findArithClose(str, i) {
   let depth = 0;
   let end = str.length;
   while (i < str.length) {
+    scanStep(1);
     if (failedArith !== null && failedArith.has(arithKey(i, depth))) { end = -1; break; }
     const e = skipWordPart(str, i);
     if (e !== -1) {
@@ -883,6 +908,7 @@ function findArithClose(str, i) {
 function findArrayClose(str, i) {
   let atWord = true;
   while (i < str.length) {
+    scanStep(1);
     const ch = str[i];
     if (ch === ')') return i;
     if (ch === ' ' || ch === '\t' || ch === '\n') { atWord = true; i++; continue; }
@@ -974,6 +1000,7 @@ function scanFunsubClose(str, i) {
       atCommand = COMMAND_POSITION_WORDS.has(word);
     };
     while (i < str.length) {
+      scanStep(1);
       const ch = str[i];
       if (ch === '\\' && str[i + 1] === '\n') { i += 2; continue; } // a continuation joins the lines
       if (ch === ' ' || ch === '\t') { endWord(); i++; continue; }
@@ -1982,6 +2009,10 @@ function reasonFor(code, tool, target) {
   if (code === 'command-too-large') {
     return `Secret read guard: this Bash command is over ${MAX_COMMAND_LENGTH} characters and ` +
       'cannot be checked for secret-file reads. Split it into smaller commands.';
+  }
+  if (code === 'scan-step-budget') {
+    return `Secret read guard: the scan of this Bash command took more than the ${SCAN_STEP_BUDGET} steps ` +
+      'GSD_TEST_SECRET_READ_GUARD_SCAN_STEPS allows (test mode only).';
   }
   if (code === 'glob-too-complex') {
     return `Secret read guard: the Grep glob '${target}' expands to more than ${MAX_GLOB_ALTERNATIVES} ` +

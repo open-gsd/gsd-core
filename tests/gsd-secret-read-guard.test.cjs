@@ -1403,17 +1403,34 @@ describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => 
     });
   }
 
-  // Long inputs the scan must finish and deny; each takes ~0.02-0.6 s alone.
-  // A `((` that does not end in `))` is read again as subshells, and before the
-  // scan recorded what it had measured (the spans, and the states a failed
-  // attempt reached) that took 19 s at 333 bytes and 356 s at 1 MiB. Without
-  // the records, the two 31-level rows and the 130000-line row run past 45 s;
-  // so does the 340000-subshell row without findArithClose's depth cap, and the
-  // 170000-attempt row without the records and with an unclosed `((` failing
-  // instead of reading to the end. The 95000-heredoc and million-paren
-  // rows pin only that a long input finishes and denies. The spawn's timeout is
-  // a hang backstop, not an assertion (RULESET.TESTS.no-timing-assertion): it
-  // turns a runaway into a failure instead of a suite that never returns.
+  // The close finders' cost, asserted as a count of steps rather than by the
+  // clock (RULESET.TESTS.no-timing-assertion): in test mode the hook denies as
+  // `scan-step-budget` once its steps pass GSD_TEST_SECRET_READ_GUARD_SCAN_STEPS,
+  // and each row below sets that to STEPS_PER_BYTE times the command's length.
+  // The most any row takes is 34 steps a byte (the million-paren row, where each
+  // `((` reads MAX_FUNSUB_DEPTH + 2 characters before the cap fails it).
+  const STEPS_PER_BYTE = 64;
+  const runBudgeted = (command, env = {}) => {
+    const r = runHookSeam(HOOK_PATH, [], {
+      input: JSON.stringify(bash(command)),
+      env: { ...process.env, NODE_V8_COVERAGE: '', GSD_TEST_MODE: '1', GSD_TEST_SECRET_READ_GUARD_SCAN_STEPS: String(STEPS_PER_BYTE * command.length), ...env },
+      timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
+    });
+    return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
+  };
+
+  // Long inputs the scan must finish and deny inside the step budget. A `((`
+  // that does not end in `))` is read again as subshells, and before the scan
+  // recorded what it had measured (the spans, and the states a failed attempt
+  // reached) that took 19 s at 333 bytes and 356 s at 1 MiB. Without the
+  // records the two 31-level rows and the 130000-line row pass the budget;
+  // so does the 340000-subshell row without findArithClose's depth cap, and
+  // the 170000-attempt row without the records and with an unclosed `((`
+  // failing instead of reading to the end. Each does so within about 1.5 s.
+  // The 95000-heredoc and million-paren rows pin only that a long input
+  // finishes and denies. The spawn's timeout is a hang backstop, not the
+  // assertion: it turns a runaway into a failure instead of a suite that
+  // never returns.
   // The spawn sets NODE_V8_COVERAGE to '' so the hook runs uninstrumented in
   // the c8 unit shards, where coverage slows the scan up to ~10x (the
   // million-paren row: 0.40 s plain, 4.6 s covered). Deleting the key is not
@@ -1429,30 +1446,34 @@ describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => 
     ['a read before 130000 `((` lines each opening a parameter expansion', 'cat .env\necho ${ \n' + '((#${x\n'.repeat(130000) + '}'.repeat(130000) + ') }'],
   ];
   for (const [label, command] of TIMED) {
-    test(`blocks a long input: ${label}`, () => {
-      const r = runHookSeam(HOOK_PATH, [], {
-        input: JSON.stringify(bash(command)),
-        env: { ...process.env, NODE_V8_COVERAGE: '' },
-        timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
-      });
-      assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, label, { tool: 'Bash', path: '.env' });
+    test(`blocks a long input inside the step budget: ${label}`, () => {
+      assertBlocked(runBudgeted(command), label, { code: 'secret-read', tool: 'Bash', path: '.env' });
     });
   }
+
+  test('the step budget denies once the scan passes it', () => {
+    const command = 'echo ${ (( ${ :; } ) ); }';
+    assertBlocked(runBudgeted(command, { GSD_TEST_SECRET_READ_GUARD_SCAN_STEPS: '1' }), 'budget of 1', { code: 'scan-step-budget', tool: 'Bash', path: '' });
+  });
+
+  test('the step budget is no cap outside test mode', () => {
+    const env = { ...process.env, GSD_TEST_SECRET_READ_GUARD_SCAN_STEPS: '1' };
+    delete env.GSD_TEST_MODE;
+    const r = runHookSeam(HOOK_PATH, [], { input: JSON.stringify(bash('echo ${ (( ${ :; } ) ); }')), env, timeoutMs: QUICK_SPAWN_TIMEOUT_MS });
+    assertAllowed({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, 'budget of 1 without GSD_TEST_MODE');
+  });
 
   // A `((` that does not end in `))` is read again as subshells, and the
   // heredoc tags its nested substitution left were once pushed again with
   // them, doubling at every level: 31 levels aborted a 1 GB heap. Each row
-  // runs in a 256 MB heap, around MAX_FUNSUB_DEPTH (32); the heap, not the
-  // backstop, is what fails a regression: the hook aborts well before it.
+  // runs in a 256 MB heap, around MAX_FUNSUB_DEPTH (32), and inside the step
+  // budget, which counts each tag pushed again: with the tags kept, all three
+  // pass the budget in about 20 ms, before the heap is reached.
   for (const depth of [31, 32, 33]) {
-    test(`blocks inside a 256 MB heap: a read after ${depth} nested \`(( \${ <<E\` that each end in \`) \``, () => {
+    test(`blocks inside a 256 MB heap and the step budget: a read after ${depth} nested \`(( \${ <<E\` that each end in \`) \``, () => {
       const command = 'echo ${ ' + '(( ${ <<E '.repeat(depth) + '; } ) '.repeat(depth) + '}\ncat .env';
-      const r = runHookSeam(HOOK_PATH, [], {
-        input: JSON.stringify(bash(command)),
-        env: { ...process.env, NODE_V8_COVERAGE: '', NODE_OPTIONS: '--max-old-space-size=256' },
-        timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
-      });
-      assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, `${depth} levels`, { tool: 'Bash', path: '.env' });
+      const r = runBudgeted(command, { NODE_OPTIONS: '--max-old-space-size=256' });
+      assertBlocked(r, `${depth} levels`, { code: 'secret-read', tool: 'Bash', path: '.env' });
     });
   }
 
