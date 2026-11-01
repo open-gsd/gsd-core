@@ -741,16 +741,20 @@ let funsubDepth = 0;
 // funsubTags. A `((` that does not end in `))` is read again as two
 // subshells, so without the record each span nested in it would be scanned
 // once more per enclosing `((`, doubling the work at every level.
+// funsubDepth runs from 0 to MAX_FUNSUB_DEPTH, so each key names one span.
 let spanCache = null;
 const FUNSUB_SPAN = 0;
 const PARAM_SPAN = 1;
-const ARITH_STATE = 2;
 function spanKey(kind, i) {
-  return (i * (MAX_FUNSUB_DEPTH + 2) + funsubDepth) * 3 + kind;
+  return (i * (MAX_FUNSUB_DEPTH + 2) + funsubDepth) * 2 + kind;
 }
-// A failed arithmetic attempt's state: its index and open parens.
+// The states failed arithmetic attempts reached during the same call: an
+// index, the depth there, and the parens open (0 to MAX_FUNSUB_DEPTH). They
+// have a set of their own: sharing spanCache, a state's key could equal a
+// span's, and the span lookup then read the state's null and threw.
+let failedArith = null;
 function arithKey(i, depth) {
-  return spanKey(ARITH_STATE, i) * (MAX_FUNSUB_DEPTH + 2) + depth;
+  return (i * (MAX_FUNSUB_DEPTH + 2) + funsubDepth) * (MAX_FUNSUB_DEPTH + 1) + depth;
 }
 // The recorded end of the span at `i`, its tags pushed again, or -1.
 function knownSpan(kind, i) {
@@ -855,7 +859,7 @@ function findArithClose(str, i) {
   let depth = 0;
   let end = str.length;
   while (i < str.length) {
-    if (spanCache !== null && spanCache.has(arithKey(i, depth))) { end = -1; break; }
+    if (failedArith !== null && failedArith.has(arithKey(i, depth))) { end = -1; break; }
     const e = skipWordPart(str, i);
     if (e !== -1) {
       i = e;
@@ -870,7 +874,7 @@ function findArithClose(str, i) {
     }
     i++;
   }
-  if (end === -1 && spanCache !== null) for (const k of reached) spanCache.set(k, null);
+  if (end === -1 && failedArith !== null) for (const k of reached) failedArith.add(k);
   return end;
 }
 
@@ -908,6 +912,7 @@ function findFunsubClose(str, i) {
   const top = spanCache === null;
   if (top) {
     spanCache = new Map();
+    failedArith = new Set();
     funsubSplits = [];
   }
   try {
@@ -918,7 +923,10 @@ function findFunsubClose(str, i) {
     recordSpan(FUNSUB_SPAN, i, end, mark);
     return end;
   } finally {
-    if (top) spanCache = null;
+    if (top) {
+      spanCache = null;
+      failedArith = null;
+    }
   }
 }
 function scanFunsubClose(str, i) {

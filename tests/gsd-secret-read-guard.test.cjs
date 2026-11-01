@@ -1248,6 +1248,16 @@ describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => 
   const closedChainThenRead = (n) => '${ '.repeat(n) + ':' + '; }'.repeat(n) + '; echo ${ cat .env; }';
   const funsubChainThenRead = (n) => "echo ${ echo '}' " + '${ : '.repeat(n - 2) + '${ # it"s\n}' + ' ; }'.repeat(n - 1) + '\ncat .env';
   const pendingChainThenRead = (k) => "false && echo ${ echo '}' " + '${ echo '.repeat(k - 2) + '${ :<<F; }\nF\n: ; }' + '\n: ; }'.repeat(k - 2) + '\ncat .env';
+  // A failed `((` records the state it reached past `""` (index p, one paren
+  // open); the 24th opener, read at depth 23, starts its body at 34p + 1. When
+  // both records shared one map under integer keys, those two keys were equal:
+  // the span lookup read the state's null and threw, and the hook allowed.
+  const failedArithThenDeepChain = () => {
+    const head = 'echo ${ (( (""';
+    const prefix = head + ' ) ) ); cat .env; :';
+    const firstOpener = 34 * head.length - 1 - 3 * 22;
+    return prefix + ' '.repeat(firstOpener - prefix.length) + '${ '.repeat(23) + ':; ' + '}; '.repeat(23) + '}\n';
+  };
   // Closing the substitution early resumes the double-quoted scan inside its
   // body, where the `"` before `'` ends the string and the `'` hides the read.
   const dqTail = `; echo "'"; }"; cat .env`;
@@ -1334,6 +1344,7 @@ describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => 
     ['a read after 20000 nested ones', closedChainThenRead(20000)],
     ['a read before 20000 unclosed ones', 'cat .env; ' + '${ '.repeat(20000)],
     ['a read before 20000 unclosed ones in double quotes', 'cat .env; ' + '${ "'.repeat(20000)],
+    ['a read before a chain whose deepest span shares its position with a failed `((` state', failedArithThenDeepChain()],
   ];
   for (const [label, command] of BLOCKS) {
     test(`blocks: ${label}`, () => {
