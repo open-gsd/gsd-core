@@ -6,6 +6,7 @@
 - **Absorbs:** [#4222](https://github.com/open-gsd/gsd-core/issues/4222), [#4561](https://github.com/open-gsd/gsd-core/issues/4561), [#4594](https://github.com/open-gsd/gsd-core/issues/4594) — three `confirmed-bug` issues that are the same missing owner reported at two ends of one wire
 - **Framed by:** [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) (host-integration interface — agent dispatch is interface point 2)
 - **Pattern copied from:** [ADR-2121](2121-phase-identifier-parsing-consolidation.md) (phase-identifier consolidation: seam + migration + anti-divergence guard). This ADR reuses its phase-token grammar and its drift-lint shape deliberately.
+- **Amended:** 2026-09-29 to 2026-10-24 by Phase 2 ([#4904](https://github.com/open-gsd/gsd-core/issues/4904)) — Decision 2 defines the `IsolationDecision`'s provenance field, `decided_by` (`resolver` | `caller`, absent reads as `caller`), and states which decisions a re-query holds. Without it, Decision 2's hold and #4232's re-derivation cannot both be true. The record also carries `decided_at`, when the decision was made, so a hold that later gates renew lapses ten minutes after the degrade. See *The record states who decided it* under Decision 2, and *A plan-scoped write does not re-derive the base check* for where that re-derivation stops. Decision 3 gains the workflow-shell validity lists as a second class of pinned copy.
 - **Scope note:** unlike ADR-2121, this ADR does **not** land as a code-free Phase 0. It ships alongside Phase 1's implementation because the epic's phase sub-issues could not be created in the session that executed it; the decisions below were nonetheless fixed before that implementation was written, and Phases 2 and 3 execute against this file.
 
 ## Context
@@ -103,6 +104,96 @@ computes its degrade from call-site context that does not exist on disk:
 overwritten.** #4232's base-check re-derivation stays — it is correct for the producers it
 covers, and this decision builds on it rather than replacing it.
 
+**The record states who decided it.** Holding and re-deriving are mutually exclusive on a
+record that carries only the value and its scope. The degrade #4232 re-derives is itself
+written as a fresh, in-scope `none` — so a hold keyed on value and freshness makes the
+resolver hold its *own* previous answer, and #4232's "the evaluation reads live git state"
+silently stops being true. Hold none of them and the three producers above are clobbered
+again. The value cannot tell the two cases apart; only the producer can.
+
+An `IsolationDecision` therefore carries a provenance field, `decided_by` in the sentinel
+file (`decidedBy` once read), with exactly two values:
+
+| `decided_by` | Written when | A later plain re-query |
+|---|---|---|
+| `resolver` | the resolver derived the value itself, from state it re-reads on every call — the #3737 opt-out, #4232's base check — including when either overrules a `--force-isolation` value | re-evaluates it; the record is not held |
+| `caller` | a producer recorded it with `--force-isolation` (or `record-dispatch-isolation`), from a call site whose reasoning the resolver cannot reconstruct — the three producers in the table above — and the recorded value is the one it forced | holds it, when the record is fresh, well-formed, `none`, and in scope for the query |
+
+**Provenance names the writer, not the kind of degrade.** `executor-isolation-dispatch.md` ends by
+forcing the shell's final value (`--force-isolation "$ISOLATION"`), so a base-check `none` that
+reaches that line is recorded as `caller` and held while it is fresh. That is deliberate. The
+orchestrator has already committed to dispatching that run sequentially; if HEAD catching up
+underneath it flipped the record back to `harness-worktree`, the guard would start refusing the
+very dispatches the degrade mandated, which is #4222 in reverse. The next forced re-record, which
+re-runs the base check in shell first, or the sentinel's ten-minute freshness window ends the hold;
+past that window the guard falls back to resolving the host capability, as it does for any stale
+record (#3045).
+Live re-evaluation governs the records the resolver writes itself: the plain-query path #4222 was
+reported against (for the base check, the plain queries that name no plan). The hold is consulted on every plain query, including one that derives `none`
+itself; writing that `none` as `resolver` would re-own the caller's record, and on a repository
+where both degrades apply the caller's decision would be lost when HEAD caught up.
+
+**A held decision is also the query's answer.** A plain query that holds a record prints its
+`none`, with no `harnessFlag` or `exec`, and marks it `held: true` under `--json`, so the guard
+and the workflow read one decision rather than two. A dispatch site therefore tells a held
+`none` (follow it: run sequentially) from a host that declares no primitive (fail closed) by
+that field. It still re-records its final `none`, at its own scope: the guard judges a
+dispatch against the record present at that instant, and a held record can name another phase
+or plan, or lapse before the site dispatches. That re-record must not renew the hold, or runs
+started less than ten minutes apart keep a degrade alive indefinitely and it outlives the HEAD
+divergence that caused it. So the record also carries `decided_at`, when the degrade was decided.
+A held answer reports its `decidedAt`, and a site re-recording that `none` passes it back as
+`--renew-held <decidedAt>`: the write refreshes `written_at` for the guard and records the
+decision the site followed, so renewing does not extend the hold: it lapses ten minutes after that
+decision. The time travels with the answer rather than being read from the file at write time,
+which by then can hold another plan's record. A forced `none` without the flag is a new decision
+with its own ten minutes, and the sites that decide one themselves (`execute-plan` Pattern B, the
+gate's orchestrator-worktree fallback) keep a query naming no phase or plan at `none` while they
+recur less than ten minutes apart. The host's *descriptors* — the harness flag and the orchestrator exec — are not
+decisions and are read from `inspect-dispatch-isolation`, which records nothing and holds
+nothing; read through the deciding query, a degrade recorded for one plan would answer for
+another plan's dispatch.
+
+**An absent field reads as `caller`**, and so does any value other than `resolver`. The
+case this covers is a record written by a pre-Phase-2 `gsd-tools` still in flight during an
+upgrade, and the default is chosen by the cost of being wrong in each direction: holding a
+degrade that could have been re-derived costs one sequential run; clobbering one the caller
+owns makes the guard refuse the dispatch outright, and the work does not run at all —
+#4222's own worst case.
+
+**What is re-derivable is not recorded.** The same rule settles the non-git project root,
+whose base-check verdict #4734 changed after #4232 closed. A root with no repository has no
+HEAD to compare against a fork base, so the base check has re-derived nothing there, and
+that verdict is recomputed on every call. The resolver does not record it as a degrade; the
+guard's #4734 fallback keeps owning it. The indeterminate `head-unresolvable` degrade is
+still recorded, because failing closed on an indeterminate answer is #3050's rule.
+
+**A plan-scoped write does not re-derive the base check.** A query that carries `--plan`,
+even with an empty value, records the per-plan decision, and the base check is not one.
+Execute-phase takes it at the phase-level resolve and again between waves (#1369), and a
+degrade at either turns worktrees off for the rest of the run, so every later plan records a
+forced `none`. A plan reaches the per-plan gate's plain re-record only when neither degraded.
+HEAD can still move after that plan was decided: in a mixed wave a sequential plan commits on
+the main tree before a worktree plan of the same wave dispatches, and a wave can merge back
+while the between-wave check did not run. Re-deriving there would record `none` for a plan
+decided `true`, so the guard would allow a dispatch of that plan without its harness flag.
+The flag rather than its value is the test, because an empty `$plan_id` (lost with an earlier
+tool call's shell) would otherwise record a `none` that names no plan, which the guard applies
+to every plan of the phase. The #4561 hold reads the same empty value as no scope; the two
+answer different questions, which scope a held record must match and whether this write is a
+plan's record. Where the harness forks from `origin/HEAD`, a flagged dispatch on that base is
+still stopped by the worktree branch check's `exit 42`, as it is without this decision. Every
+query that names no plan, at phase level or unscoped, still re-derives the base check. Its
+residual is its own: one made mid-run after HEAD moved records `none` for the phase or the run,
+and until the next record the guard reads it for every plan. No shipped flow dispatches against
+it while its shell state is intact: execute-phase makes no such query after its resolve and
+runs the base check itself between waves, and the one-shot flows (quick, quick-batch,
+diagnose-issues, execute-plan) run the same check in shell and force its result before they
+dispatch. The cost is a rule a future caller must know: a new plan-scoped plain query records
+what the resolver derives without the base check (the host capability, or `none` under the
+`use_worktrees` opt-out), and a hold still applies to it. If it needs the base check, it runs
+that check in shell and forces the result, as the per-plan gate does for its submodule degrade.
+
 ### Decision 3 — a copy that must exist is pinned by a parity test, never merely tolerated
 
 Decision 1's cold-load constraint means `hooks/lib/` carries deliberate mirrors of two
@@ -114,6 +205,12 @@ This matters more than it looks. A drifted grammar mirror fails as a **non-match
 throws, no test that only feeds the old shape notices, and the symptom is a guard that
 quietly stops recognizing valid input. That is the failure mode that produced #4594 and it
 is invisible without a pin.
+
+The same holds outside `hooks/lib/`. The dispatch sites and diagnostics validate the resolver's
+output in shell (`case "$ISOLATION" in harness-worktree|orchestrator-worktree|none) ;;`), and shell
+inside workflow markdown cannot import the owner at all. Each such list is pinned to the owner by a
+parity test that discovers the lists by scanning `gsd-core/**/*.md`, so a new copy naming a worktree
+mode is pinned the day it lands.
 
 A mirror's justification is part of the contract: **do not "clean up" a pinned mirror
 without replacing the reason it exists.**
