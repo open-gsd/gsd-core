@@ -1906,6 +1906,7 @@ describe('gsd-secret-read-guard: a file named inside a curl option value (#5779)
     // there only from an image reference (a word with a `/`).
     "watch scp curl@host:f 'x@.env' .",
     "parallel ssh curl@host cat 'x@.env' ::: a",
+    "watch rsync a/curl@v2 'x@.env' .",
     "docker exec c scp curl@host:f 'x@.env' .",
     "docker run alpine grep curl:x 'x@.env' f",
     // -n2 cancels -I, so the piped word is appended as a URL after `--cert {}`.
