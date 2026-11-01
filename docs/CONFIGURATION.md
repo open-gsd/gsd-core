@@ -370,7 +370,8 @@ validated silently and was never read. Such a key is now rejected by `config-set
 lanes are `claude`, `codex`, `opencode`, `cursor`, `agy` (the Antigravity lane — its key suffix is
 the CLI's own name, not the lane slug), `ollama`, `lm_studio` and `llama_cpp`.
 
-The same applies to `review.max_prompt_tokens_per_reviewer.<slug>`. `review.max_prompt_tokens`
+The same applies to `review.max_prompt_tokens_per_reviewer.<slug>` and
+`review.context_window_tokens.<slug>`. `review.max_prompt_tokens`
 (the global default), `review.default_reviewers` and `review.reviewer_instances` describe policy
 across lanes rather than one lane's behavior, so they remain central and are unaffected.
 
@@ -1570,8 +1571,9 @@ Configure per-CLI model selection for `/gsd-review`. When set, overrides the CLI
 | `review.models.lm_studio` | string | (server default) | Model name passed to LM Studio when `--lm-studio` reviewer is invoked. If unset, the first available model reported by the server is used. |
 | `review.models.llama_cpp` | string | (server default) | Model name passed to llama.cpp when `--llama-cpp` reviewer is invoked. If unset, the first model reported by `/v1/models` is used. |
 | `review.default_reviewers` | string[] \| null | (all detected reviewers) | Default reviewer subset for no-flag `/gsd-review`. Example: `["codex","claude"]`. May include configured `review.reviewer_instances` names. Explicit flags and `--all` override this setting. |
-| `review.max_prompt_tokens` | number\|null | null | Default maximum estimated tokens for the assembled review prompt. When set, the prompt is deterministically trimmed before being sent to each reviewer. Per-reviewer overrides via `review.max_prompt_tokens_per_reviewer` take precedence. null = no trim (current behavior). |
-| `review.max_prompt_tokens_per_reviewer` | object | {} | Per-reviewer token budget overrides. Keys are reviewer slugs. Every declared reviewer lane accepts one (`claude`, `codex`, `coderabbit`, `opencode`, `qwen`, `cursor`, `antigravity`, `kimi-code`, `ollama`, `lm_studio`, `llama_cpp`). A lane's value of `-1` (the default) is unset and inherits `review.max_prompt_tokens`; `0` disables trimming for that lane specifically; any other number is that lane's own budget. |
+| `review.max_prompt_tokens` | number\|null | null | Prompt cap, in estimated tokens, for every reviewer lane whose own `review.max_prompt_tokens_per_reviewer.<slug>` is unset. A lane whose prompt is over its cap is refused, not trimmed. `0` turns the cap off for every lane that inherits it, including the default derived from the lane's context window. null = no global cap, so each lane falls back to its context-window default. |
+| `review.max_prompt_tokens_per_reviewer` | object | {} | Per-lane prompt caps. Keys are reviewer slugs; every declared reviewer lane accepts one (`claude`, `codex`, `coderabbit`, `opencode`, `qwen`, `cursor`, `antigravity`, `kimi-code`, `ollama`, `lm_studio`, `llama_cpp`). `-1` (the default) means unset: the lane inherits `review.max_prompt_tokens`. `0` turns the cap off for that lane. Any other number is that lane's own cap. |
+| `review.context_window_tokens` | object | {} | Per-lane context window in tokens, used to derive the default cap (65% of the window) when neither max-prompt key applies. Keys are reviewer slugs; every prompt-fed lane accepts one (all except `coderabbit`, which sends no prompt). `-1` (the default) uses the window the lane declares: `claude` 200000, `codex` 272000, `qwen` 131072, `kimi-code` 262144. The other lanes declare none and stay uncapped unless you set one here. `0` turns the derived default off for that lane. Raise it when you have pinned a larger model, for example `gsd config-set review.context_window_tokens.claude 1000000`. |
 | `review.parallel_lanes` | boolean | `false` | Dispatch independent reviewer lanes concurrently within a single `/gsd-review` pass. Default `false` keeps the sequential dispatch that protects against provider rate limits. Opt in only when your providers can accept concurrent requests. Convergence cycles stay sequential either way. |
 | `review.ollama_host` | string | `http://localhost:11434` | Base URL of the Ollama server. Override when running Ollama on a non-default port or remote host: `gsd config-set review.ollama_host http://192.168.1.10:11434` |
 | `review.lm_studio_host` | string | `http://localhost:1234` | Base URL of the LM Studio local server. Override when using a non-default port. |
@@ -1579,7 +1581,18 @@ Configure per-CLI model selection for `/gsd-review`. When set, overrides the CLI
 
 ### Prompt budgets for reviewer lanes
 
-Every declared reviewer lane can be capped, most usefully the local model servers (Ollama, llama.cpp, LM Studio), which typically accept far fewer tokens than cloud APIs — but any CLI lane can be given a budget too. Setting `review.max_prompt_tokens_per_reviewer` (or the global `review.max_prompt_tokens` fallback, which every lane whose own key is unset inherits) triggers deterministic prompt trimming before the prompt is sent to that reviewer: CONTEXT is dropped first, then RESEARCH, then REQUIREMENTS; PROJECT.md is head-shrunk to the first 40 lines; PLANs are tail-truncated proportionally — instructions and roadmap are always preserved. When a reviewer is trimmed, a disclosure note is injected at the top of the prompt and trim metadata (budget, omitted sections, truncation percentage) is recorded in the REVIEWS.md frontmatter under `trimmed_reviewers`. If even the minimum review set (instructions + roadmap + plan stubs) exceeds the budget, the reviewer is skipped with a warning rather than sending a truncated prompt that would produce misleading feedback.
+Every prompt-fed reviewer lane has a prompt cap. Each lane resolves its cap in this order, highest first:
+
+| Source | Key | Notes |
+|---|---|---|
+| Per-lane cap | `review.max_prompt_tokens_per_reviewer.<slug>` | `-1` = unset; `0` = no cap |
+| Global cap | `review.max_prompt_tokens` | `null` = unset; `0` = no cap |
+| Context-window default | 65% of `review.context_window_tokens.<slug>`, or of the lane's declared window | `claude` 130000, `codex` 176800, `qwen` 85196, `kimi-code` 170393 out of the box |
+| None | — | `opencode`, `cursor`, `antigravity` and the local servers declare no window, because GSD cannot know which model they run |
+
+When the review prompt is larger than the cap, **the lane does not run.** It reports the reason `prompt_exceeds_context` and writes a stub that starts `<slug> review did not run: prompt exceeds this lane's context cap`. The stub names the estimated size, the cap, where the cap came from, and the key to change. REVIEWS.md lists the lane under `refused_reviewers` in its frontmatter. If every selected lane is refused, no REVIEWS.md is written. The prompt is never trimmed. A trimmed prompt produced a review that read exactly like a clean pass on material the model never saw, so a refusal you can act on is the safer failure.
+
+Prompt size is estimated at four characters per token. Real tokenizers count source code more densely than that, and the 35% headroom absorbs the difference. The declared windows are the smallest that each CLI's default model can resolve to. If your plan or pinned model has a larger window, raise `review.context_window_tokens.<slug>`. To see each lane's resolved cap and its source, run `gsd-tools review-lane plan --selected <slug> --json` and read `promptBudget` and `promptCapSource`. To act on a refused lane, see [Fix a reviewer lane that refused an oversized prompt](how-to/fix-a-refused-reviewer-lane.md).
 
 ### Example
 

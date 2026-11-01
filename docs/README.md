@@ -56,6 +56,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Plan a phase](how-to/plan-a-phase.md) — run research, decompose work, and verify plan quality
 - [Verify a dependency-compatibility claim](how-to/verify-a-dependency-compatibility-claim.md) — act on a compatibility claim the researcher left `[ASSUMED]`, and tell "nothing declared" apart from "a constraint is declared" and "the lookup failed"
 - [Execute a phase](how-to/execute-a-phase.md) — run plans in parallel waves with fresh-context subagents
+- [Fix a reviewer lane that refused an oversized prompt](how-to/fix-a-refused-reviewer-lane.md) — read a `prompt_exceeds_context` refusal, find where the lane's cap came from, and get the review to run
 - [Enable parallel reviewer lanes](how-to/enable-parallel-reviewer-lanes.md) — cut a multi-reviewer `/gsd-review` pass toward its slowest lane, and tell a rate-limited lane apart from one that was never selected
 - [Enable concurrent per-plan planners in chunked mode](how-to/enable-concurrent-chunked-planning.md) — dispatch chunked `/gsd-plan-phase`'s per-plan Tasks together within one outline Wave instead of one at a time, and know when the setting has no effect
 - [Verify and ship](how-to/verify-and-ship.md) — walk through completed work, diagnose failures, and create the PR
