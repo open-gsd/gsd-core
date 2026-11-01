@@ -1080,20 +1080,25 @@ function curlValueNamesSecret(text) {
 // `E` (`-Ef:pw`, `-s#Ef:pw`), or the part after `=` (`--cert=f:pw`, 8.23).
 // Every prefix of either long name shorter than the name is ambiguous with
 // `--cert-type` / `--proxy-cert-type` where curl takes abbreviations (8.5).
+// curl reads `--expand-<option>` as `<option>`, so `--expand-cert` is one too.
 const CURL_CERT_OPTIONS = new Set(['--cert', '--proxy-cert']);
 const CURL_CERT_CLUSTER_RE = /^-[A-Za-z0-9#:]*?E/;
+
+function isCurlCertOption(name) {
+  return CURL_CERT_OPTIONS.has(name.startsWith('--expand-') ? '--' + name.slice(9) : name);
+}
 
 // The value a cert option holds within `text`, or null.
 function curlAttachedCertValue(text) {
   const eq = text.indexOf('=');
-  if (eq !== -1 && CURL_CERT_OPTIONS.has(text.slice(0, eq))) return text.slice(eq + 1);
+  if (eq !== -1 && isCurlCertOption(text.slice(0, eq))) return text.slice(eq + 1);
   const m = CURL_CERT_CLUSTER_RE.exec(text);
   return m && m[0].length < text.length ? text.slice(m[0].length) : null;
 }
 
 // Whether `text` is a cert option whose value is the next word.
 function curlTakesCertValue(text) {
-  if (CURL_CERT_OPTIONS.has(text)) return true;
+  if (isCurlCertOption(text)) return true;
   const m = CURL_CERT_CLUSTER_RE.exec(text);
   return m !== null && m[0].length === text.length;
 }
@@ -1187,13 +1192,14 @@ const CURL_WORD_LAUNCHERS = new Map([
   // Container runners: a word pair is a subcommand group's subcommand.
   ...['docker', 'podman', 'nerdctl'].map((name) => [name, new Set([
     'exec', 'run', 'compose exec', 'compose run', 'container exec', 'container run',
+    ...(name === 'podman' ? ['unshare'] : []),
   ])]),
   ['docker-compose', new Set(['exec', 'run'])],
   ['podman-compose', new Set(['exec', 'run'])],
   ['lxc', new Set(['exec'])],
   ['incus', new Set(['exec'])],
-  ['kubectl', new Set(['exec', 'run', 'debug'])],
-  ['oc', new Set(['exec', 'run', 'debug'])],
+  ['kubectl', new Set(['exec', 'run', 'debug', 'alpha debug'])],
+  ['oc', new Set(['exec', 'run', 'debug', 'alpha debug', 'rsh'])],
   ['dotenv', new Set(['run', '--'])],
   ['dotenvx', new Set(['run'])],
   ['op', new Set(['run'])],
@@ -1207,7 +1213,7 @@ const CURL_WORD_LAUNCHERS = new Map([
   ['pnpm', new Set(['exec', 'dlx'])],
   ['yarn', new Set(['exec', 'dlx'])],
   ['bun', new Set(['x'])],
-  ['uv', new Set(['run'])],
+  ['uv', new Set(['run', 'tool run'])],
   ['poetry', new Set(['run'])],
   ['pipenv', new Set(['run'])],
   ['pdm', new Set(['run'])],
@@ -1319,9 +1325,11 @@ function isRunWordGroup(runWords, sub) {
 }
 
 // A launched command word's name, without an image's `:tag` or `@digest`
-// (`docker run curlimages/curl:8.5.0 …` runs curl).
+// (`docker run curlimages/curl:8.5.0 …` runs curl). An option word's value
+// after `=` counts as the word (`docker run --entrypoint=curl img …`).
 function launchedCurlName(text) {
-  const name = commandName(text);
+  const eq = text[0] === '-' ? text.indexOf('=') : -1;
+  const name = commandName(eq === -1 ? text : text.slice(eq + 1));
   const cut = name.search(/[:@]/);
   return cut > 0 ? name.slice(0, cut) : name;
 }
@@ -1918,6 +1926,13 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
   // piped word may be its value (`xargs curl --cert`, `xargs -I{} curl -E {}`).
   const certPiped = toCurl && operands.slice(subCmd + 1).some((w) => curlTakesCertValue(w.text));
   const piped = prevCmd.operands;
+  // And where a piped word is such an option, a sub-command word may be its
+  // value (`printf -E | xargs -I{} curl {} f:pw`).
+  if (toCurl && piped.some((w) => curlTakesCertValue(w.text))) {
+    for (let j = subCmd + 1; j < operands.length; j++) {
+      if (curlCertNamesSecret(operands[j].text)) return operands[j].text;
+    }
+  }
   for (let j = 0; j < piped.length; j++) {
     const w = piped[j];
     if (operandNamesSecret(w.text)) return w.text;
