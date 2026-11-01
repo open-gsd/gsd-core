@@ -23,6 +23,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Install GSD as a Pi package](how-to/install-gsd-as-a-pi-package.md) — `pi install npm:@opengsd/gsd-core` instead of the gsd-core installer, with the same commands and extension
 - [Install a minimal GSD and add skills later](how-to/install-minimal-and-add-skills.md) — install only the core skills, then grow the surface with profiles and `/gsd-surface`
 - [Attach a plugin-provided skill to a GSD agent](how-to/attach-a-plugin-skill-to-a-gsd-agent.md) — use the `global:plugin:skill` entry form to load Claude Code plugin skills into agent prompts
+- [Review reapplied patches hunk by hunk](how-to/review-reapplied-patches.md) — after `/gsd-update`, keep, retire, or rewrite each of your edits that upstream adopted, reworded around, or orphaned
 - [Discuss a phase](how-to/discuss-a-phase.md) — capture implementation decisions before planning begins
 - [Tag a multi-repository milestone](how-to/tag-a-multi-repo-milestone.md) — record each repository's own release against a milestone, create per-repository tags, and decide repository by repository what to push
 - [Resolve edge-coverage findings](how-to/resolve-edge-coverage-findings.md) — turn the spec phase's surfaced domain-boundary edges into covered, dismissed, or backstopped spec decisions
