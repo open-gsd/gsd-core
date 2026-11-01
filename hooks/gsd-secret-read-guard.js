@@ -874,6 +874,527 @@ function operandNamesSecret(text) {
   return v[end] === '=' && namesSecret(v.slice(end + 1));
 }
 
+const CURL_COMMANDS = new Set(['curl', 'curl.exe']);
+
+// curl's two blank sets: ISSPACE, which its -F parser skips and trims before
+// 8.13, and ISBLANK, from 8.13.
+function isCurlSpace(ch) {
+  return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\v' || ch === '\f';
+}
+
+function isCurlBlank(ch) {
+  return ch === ' ' || ch === '\t';
+}
+
+// namesSecret judges only a name's last path segment (and the part of it after
+// a `:`), so the segment is cut out here first: one pass, where lastSegment's
+// trailing-separator regex backtracks on a long run of separators.
+function curlNameIsSecret(name) {
+  let end = name.length;
+  while (end > 0 && (name[end - 1] === '/' || name[end - 1] === '\\')) end--;
+  let seg = end;
+  while (seg > 0 && name[seg - 1] !== '/' && name[seg - 1] !== '\\') seg--;
+  const last = name.slice(seg, end);
+  return last.includes('.') && namesSecret(last);
+}
+
+// The grammars curl's -F parser (src/tool_formparse.c) has shipped. They open
+// different files for some values, so a value is judged under each:
+//   through 8.11  ISSPACE blanks; type= split by sscanf("%127[^/ ]/%127[^;, \n]")
+//   8.12          ISSPACE blanks; type= ends at a MIME tspecial
+//   from 8.13     ISBLANK blanks; type= ends at a MIME tspecial
+// Through 8.20 a file list goes on after any character a part ends at; from
+// 8.21 only after `,`, which opens a subset of what 8.13 opens.
+const CURL_FORM_GRAMMARS = [
+  { blank: isCurlSpace, sscanfType: true },
+  { blank: isCurlSpace, sscanfType: false },
+  { blank: isCurlBlank, sscanfType: false },
+];
+const CURL_TYPE_TSPECIALS = '()<>@,;:\\"[]?=\r\n ';
+
+// For each index i of `text`, the index of the first quote at or after i that
+// closes a quoted word, or -1. curl's get_param_word skips `\\` and `\"` pairs,
+// so a quote closes a word when the run of backslashes before it is even. A
+// scan always enters that run from its start, so where it began does not
+// matter, and one pass serves every word: no quote is scanned for twice.
+function curlQuoteClosers(text) {
+  const n = text.length;
+  const next = new Int32Array(n + 1);
+  next[n] = -1;
+  let run = 0;
+  const closes = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    if (text[i] === '"' && run % 2 === 0) closes[i] = 1;
+    run = text[i] === '\\' ? run + 1 : 0;
+  }
+  for (let i = n - 1; i >= 0; i--) next[i] = closes[i] ? i : next[i + 1];
+  return next;
+}
+
+// Whether curl's -F parser, under grammar `g`, opens a secret file for the
+// value `text` (formparse, get_param_part and get_param_word, ported): a file
+// of an `@` list, a `<` file, or a `headers=@` / `headers=<` file. Each
+// character is read a bounded number of times.
+function curlFormOpensSecret(text, g, closers) {
+  const n = text.length;
+  const at = (k) => (k < n ? text[k] : '');
+  // get_param_word: [value, index it stops at, quoted]. A word starting with
+  // `"` that a later quote closes is quoted (its trailing data, up to `;` or
+  // the end character, is skipped); otherwise it runs to `;` or the end
+  // character, quote and all.
+  function word(p, endchar) {
+    if (text[p] === '"' && closers && closers[p + 1] !== -1) {
+      const close = closers[p + 1];
+      let k = close + 1;
+      while (k < n && text[k] !== ';' && text[k] !== endchar) k++;
+      return [text.slice(p + 1, close).replace(/\\([\\"])/g, '$1'), k, true];
+    }
+    let k = p;
+    while (k < n && text[k] !== ';' && text[k] !== endchar) k++;
+    return [text.slice(p, k), k, false];
+  }
+  // An unquoted word loses its trailing blanks.
+  function value(w) {
+    if (w[2]) return w[0];
+    let e = w[0].length;
+    while (e > 0 && g.blank(w[0][e - 1])) e--;
+    return w[0].slice(0, e);
+  }
+  function skipBlanks(p) {
+    while (p < n && g.blank(text[p])) p++;
+    return p;
+  }
+  function hasPrefix(p, s) {
+    return text.slice(p, p + s.length).toLowerCase() === s;
+  }
+  // get_param_part: the part's data word, then its `;` parameters. Returns
+  // { data, sep, end }, { hit } when a headers file is a secret, or { failed }
+  // when curl refuses the part (no file of it is opened).
+  function part(p, endchar) {
+    const d = word(skipBlanks(p), endchar);
+    const data = value(d);
+    p = d[1];
+    let sep = at(p);
+    let inType = false;
+    while (sep === ';') {
+      p = skipBlanks(p + 1);
+      if (!inType && hasPrefix(p, 'type=')) {
+        p = skipBlanks(p + 5);
+        if (g.sscanfType) {
+          const major = p;
+          while (p < n && p - major < 127 && text[p] !== '/' && text[p] !== ' ') p++;
+          if (p === major || text[p] !== '/') return { failed: true };
+          const minor = ++p;
+          while (p < n && p - minor < 127 && text[p] !== ';' && text[p] !== ',' && text[p] !== ' ' && text[p] !== '\n') p++;
+          if (p === minor) return { failed: true };
+          while (p < n && text[p] !== ';' && text[p] !== endchar) p++;
+        } else {
+          while (p < n && !CURL_TYPE_TSPECIALS.includes(text[p])) p++;
+        }
+        inType = true;
+      } else if (hasPrefix(p, 'filename=') || hasPrefix(p, 'encoder=')) {
+        inType = false;
+        p = word(skipBlanks(p + (text[p] === 'f' || text[p] === 'F' ? 9 : 8)), endchar)[1];
+      } else if (hasPrefix(p, 'headers=')) {
+        inType = false;
+        p += 8;
+        if (text[p] === '@' || text[p] === '<') {
+          const w = word(skipBlanks(p + 1), endchar);
+          if (curlNameIsSecret(value(w))) return { hit: true };
+          p = w[1];
+        } else {
+          p = word(skipBlanks(p), endchar)[1];
+        }
+      } else if (inType) {
+        while (p < n && text[p] !== ';' && text[p] !== endchar) p++;
+      } else {
+        p = word(p, endchar)[1];
+      }
+      sep = at(p);
+    }
+    return { data, sep, end: p };
+  }
+
+  const eq = text.indexOf('=');
+  if (eq === -1) return false;
+  let p = eq + 1;
+  if (text[p] === '@') {
+    for (;;) {
+      const r = part(p + 1, ',');
+      if (r.hit) return true;
+      if (r.failed) return false;
+      if (curlNameIsSecret(r.data)) return true;
+      if (r.sep === '') return false;
+      p = r.end;
+    }
+  }
+  if (text[p] === '<') {
+    const r = part(p + 1, '');
+    return r.hit === true || (!r.failed && curlNameIsSecret(r.data));
+  }
+  return part(p, '').hit === true;
+}
+
+const CURL_VARIABLE_FILE_RE = /^%?[A-Za-z0-9_]+(?:\[[0-9]*-[0-9]*\])?@/;
+
+// Whether a curl option outside -F reads a secret file from the value `v`:
+// after a leading `@` (-d and the other --data forms, --json, -H, -w,
+// --url), after the first `@` when the value holds no `=` (--data-urlencode,
+// --url-query), after `name@` or `name[range]@` (--variable), or after
+// `ecl:@` (--ech). The name is the rest of the value, unchanged.
+function curlAtValueOpensSecret(v) {
+  if (v[0] === '@' && curlNameIsSecret(v.slice(1))) return true;
+  const a = v.indexOf('@');
+  if (a !== -1 && v.indexOf('=') === -1 && curlNameIsSecret(v.slice(a + 1))) return true;
+  const m = CURL_VARIABLE_FILE_RE.exec(v);
+  if (m && curlNameIsSecret(v.slice(m[0].length))) return true;
+  return v.startsWith('ecl:@') && curlNameIsSecret(v.slice(5));
+}
+
+// curl opens a file named inside an option value as well as one given as its
+// own `@file` word (#5779): `-d@f`, `-H@f`, `--data-urlencode name@f`,
+// `--variable name@f`, `-F name=@f`, `-F name=<f`, `-F 'k=v;headers=@f'`.
+// The guard holds no table of curl's options, so each curl argument is read
+// both as a -F value, under every grammar curl has shipped, and as a value of
+// the options that read `@file`. A value attached to short options (`-d@f`,
+// `-sd@f`, `-Fk=@f`) needs no reading of its own: option letters hold no `=`
+// or `@`, so the form reading and the first-`@` reading find its file, and
+// where an `=` in the name stops the latter (`-d@a=b/f`), the file's last
+// path segment is the word's, judged as for every operand. The cost is a
+// fail-safe denial where the word is read another way than the option curl
+// gives it (`-d k=@.env` read as a form value, a URL's `user@` part read as
+// `name@file`), pinned in tests.
+function curlValueNamesSecret(text) {
+  const closers = text.includes('"') ? curlQuoteClosers(text) : null;
+  for (const g of CURL_FORM_GRAMMARS) {
+    if (curlFormOpensSecret(text, g, closers)) return true;
+  }
+  return curlAtValueOpensSecret(text);
+}
+
+// curl's --cert (-E) and --proxy-cert take `file:password`. Unlike the values
+// above, a `file:password` reading would find a file in data curl sends
+// (`-d 'mount=/app/.env:ro'`) or in a URL, so it is applied only to the value
+// of one of those options: the word after `--cert`, `--proxy-cert` or a short
+// cluster ending in `E` (`-E`, `-sE`, `-#E`), the rest of a cluster after its
+// `E` (`-Ef:pw`, `-s#Ef:pw`), or the part after `=` (`--cert=f:pw`, 8.23).
+// Every prefix of either long name shorter than the name is ambiguous with
+// `--cert-type` / `--proxy-cert-type` where curl takes abbreviations (8.5).
+// curl reads `--expand-<option>` as `<option>`, so `--expand-cert` is one too,
+// and through 8.5 it matched long names in any case (`--CERT`).
+const CURL_CERT_OPTIONS = new Set(['--cert', '--proxy-cert']);
+const CURL_CERT_CLUSTER_RE = /^-[A-Za-z0-9#:]*?E/;
+
+function isCurlCertOption(name) {
+  const n = name.toLowerCase();
+  return CURL_CERT_OPTIONS.has(n.startsWith('--expand-') ? '--' + n.slice(9) : n);
+}
+
+// The value a cert option holds within `text`, or null.
+function curlAttachedCertValue(text) {
+  const eq = text.indexOf('=');
+  if (eq !== -1 && isCurlCertOption(text.slice(0, eq))) return text.slice(eq + 1);
+  const m = CURL_CERT_CLUSTER_RE.exec(text);
+  return m && m[0].length < text.length ? text.slice(m[0].length) : null;
+}
+
+// Whether `text` is a cert option whose value is the next word.
+function curlTakesCertValue(text) {
+  if (isCurlCertOption(text)) return true;
+  const m = CURL_CERT_CLUSTER_RE.exec(text);
+  return m !== null && m[0].length === text.length;
+}
+
+// The file a cert value names, read as curl's parse_cert_parameter
+// (src/tool_getparam.c) reads it: up to the first `:` not escaped by `\`, with
+// `\:` and `\\` standing for `:` and `\`, and a `pkcs11:` URI kept whole. On
+// Windows a drive letter's colon (`C:\f:pw`) is part of the name; the guard
+// does not know the platform, so it judges both names.
+function curlCertNamesSecret(v) {
+  if (/^pkcs11:/i.test(v)) return curlNameIsSecret(v);
+  let name = '';
+  for (let i = 0; i < v.length; i++) {
+    const ch = v[i];
+    if (ch === '\\') {
+      const next = v[i + 1];
+      if (next === undefined) {
+        name += '\\';
+      } else {
+        name += next === '\\' || next === ':' ? next : '\\' + next;
+        i++;
+      }
+    } else if (ch !== ':') {
+      name += ch;
+    } else if (i === 1 && (v[2] === '\\' || v[2] === '/') && /[A-Za-z]/.test(v[0])) {
+      if (curlNameIsSecret(name)) return true;
+      name += ':';
+    } else {
+      break;
+    }
+  }
+  return curlNameIsSecret(name);
+}
+
+// Whether curl, given words[k] as an argument, opens a secret through a cert
+// option's value in it or in the word before it.
+function curlCertOpensSecret(words, k) {
+  let v = curlAttachedCertValue(words[k].text);
+  if (v === null && k > 0 && curlTakesCertValue(words[k - 1].text)) v = words[k].text;
+  return v !== null && curlCertNamesSecret(v);
+}
+
+// find's actions that run the words after them, up to `;` (or `+` after
+// `{}`), as a command. bfs takes find's actions.
+const FIND_EXEC_ACTIONS = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+const FIND_COMMANDS = new Set(['find', 'find.exe', 'bfs']);
+const XARGS_COMMANDS = new Set(['xargs', 'xargs.exe']);
+
+// Commands whose documented job is to run another command, other than the
+// wrappers resolveCommand unwraps and xargs/find, whose command position is
+// read exactly. Their options differ per command, so under them curl's
+// arguments start after the first operand whose last segment is curl, as for
+// every command before #5779's review narrowed the rule to commands that run
+// curl. A command that runs one only through a subcommand or an option
+// (`uv run`, `kubectl exec`, `docker compose exec`, `fd -x`) names those
+// words, and a curl word counts only after one of them: `uv pip install curl …`
+// runs no curl. A subcommand counts only as the command's first operand (or
+// first two, `compose exec`) past its options, so `kubectl get exec curl …`
+// runs none; an option's run word counts anywhere. Keys are matched without a
+// Windows `.exe`, `.cmd` or `.bat` suffix (`docker.exe`, `npx.cmd`).
+const CURL_WORD_LAUNCHERS = new Map([
+  // Run their operands as a command.
+  ...[
+    // process, scheduling, privilege and namespace runners
+    'watch', 'ionice', 'taskset', 'chrt', 'flock', 'nsenter', 'unshare', 'chroot',
+    'runuser', 'setpriv', 'pkexec', 'run0', 'gosu', 'su-exec', 'systemd-run',
+    'systemd-inhibit', 'systemd-nspawn', 'bwrap', 'flatpak-spawn', 'prlimit',
+    'numactl', 'cpulimit', 'setarch', 'arch', 'caffeinate', 'sandbox-exec', 'chpst',
+    'tini', 'dumb-init', 'faketime', 'eatmydata', 'unbuffer', 'chronic',
+    'catchsegv', 'xvfb-run', 'wsl', 'wine',
+    // tracers, debuggers and profilers
+    'strace', 'ltrace', 'valgrind', 'heaptrack',
+    // job runners and file-event runners
+    'parallel', 'sem', 'entr', 'busybox',
+    // network wrappers
+    'torsocks', 'torify', 'tsocks', 'proxychains', 'proxychains4', 'trickle',
+    'firejail',
+    // package runners that take the command as their operands
+    'npx', 'bunx', 'uvx',
+  ].map((name) => [name, null]),
+  // Run a command only after one of these words.
+  ['gdb', new Set(['--args', '-args'])],
+  ['perf', new Set(['record', 'stat', 'trace'])],
+  ['rr', new Set(['record'])],
+  ['fd', new Set(['-x', '--exec', '-X', '--exec-batch'])],
+  ['fdfind', new Set(['-x', '--exec', '-X', '--exec-batch'])],
+  ['pueue', new Set(['add'])],
+  ['scl', new Set(['enable'])],
+  ['toolbox', new Set(['run'])],
+  ['distrobox', new Set(['enter'])],
+  // Container runners: a word pair is a subcommand group's subcommand.
+  ...['docker', 'podman', 'nerdctl'].map((name) => [name, new Set([
+    'exec', 'run', 'compose exec', 'compose run', 'container exec', 'container run',
+    ...(name === 'podman' ? ['unshare'] : []),
+  ])]),
+  ['docker-compose', new Set(['exec', 'run'])],
+  ['podman-compose', new Set(['exec', 'run'])],
+  ['lxc', new Set(['exec'])],
+  ['incus', new Set(['exec'])],
+  ['kubectl', new Set(['exec', 'run', 'debug', 'alpha debug'])],
+  ['oc', new Set(['exec', 'run', 'debug', 'alpha debug', 'rsh'])],
+  ['dotenv', new Set(['run', '--'])],
+  ['dotenvx', new Set(['run'])],
+  ['op', new Set(['run'])],
+  ['doppler', new Set(['run'])],
+  ['infisical', new Set(['run'])],
+  ['aws-vault', new Set(['exec'])],
+  ['direnv', new Set(['exec'])],
+  ['mise', new Set(['exec', 'x'])],
+  ['asdf', new Set(['exec'])],
+  ['npm', new Set(['exec', 'x'])],
+  ['pnpm', new Set(['exec', 'dlx'])],
+  // `yarn workspace <name> exec` names a workspace before the run word, so the
+  // group word itself counts; `workspaces foreach` runs a command in each.
+  ['yarn', new Set(['exec', 'dlx', 'workspace', 'workspaces foreach'])],
+  ['bun', new Set(['x'])],
+  ['uv', new Set(['run', 'tool run'])],
+  ['poetry', new Set(['run'])],
+  ['pipenv', new Set(['run'])],
+  ['pdm', new Set(['run'])],
+  ['hatch', new Set(['run', 'env run'])],
+  ['rye', new Set(['run'])],
+  ['pixi', new Set(['run', 'exec'])],
+  ['pipx', new Set(['run'])],
+  ['conda', new Set(['run'])],
+  ['mamba', new Set(['run'])],
+  ['micromamba', new Set(['run'])],
+  ['bundle', new Set(['exec'])],
+  ['nix', new Set(['run', 'shell', 'develop'])],
+]);
+
+// Which operands curl takes as its arguments (#5779): every one when curl is
+// the segment's command, and those after a curl that a launcher runs as a
+// command — xargs's sub-command, or the command of a find -exec / -execdir /
+// -ok / -okdir action, each past the wrappers resolveCommand unwraps
+// (`xargs sudo curl …`) — and, under a CURL_WORD_LAUNCHERS command, those
+// after its first curl word (`watch -n 5 curl …`), or after the first curl
+// word past the word it runs a command by (`uv run curl …`). Only those
+// operands get curl's value reading. A `curl` word anywhere else is an operand
+// (`grep curl …`, `apt-get install curl …`), so the words after it are judged
+// as before.
+function curlArguments(base, operands) {
+  const marks = new Uint8Array(operands.length);
+  markCurlArguments(base, operands, 0, operands.length, marks, 0);
+  return marks;
+}
+
+// Marks words[from..to) when `base`, the command they belong to, is curl, and
+// follows a launcher to the command it runs. Each level handles a range of the
+// segment's words once, and MAX_NESTING_DEPTH bounds the levels.
+function markCurlArguments(base, words, from, to, marks, depth) {
+  if (CURL_COMMANDS.has(base)) {
+    marks.fill(1, from, to);
+    return;
+  }
+  if (depth >= MAX_NESTING_DEPTH) return;
+  if (XARGS_COMMANDS.has(base)) {
+    const sub = xargsCommandIndex(words, from, to);
+    if (sub !== -1) markLaunchedCurl(words, sub, to, marks, depth + 1);
+  } else if (CURL_WORD_LAUNCHERS.has(launcherKey(base))) {
+    // Options differ per launcher, so the command is the first curl word,
+    // after the subcommand or option, if any, that the launcher runs it by.
+    const key = launcherKey(base);
+    const start = launcherRunIndex(words, from, to, CURL_WORD_LAUNCHERS.get(key), LAUNCHER_PAIR_OPTIONS.get(key));
+    if (start === -1) return;
+    const container = CONTAINER_LAUNCHERS.has(key);
+    for (let k = start; k < to; k++) {
+      if (CURL_COMMANDS.has(launchedCurlName(words[k].text, container))) {
+        marks.fill(1, k + 1, to);
+        return;
+      }
+    }
+  } else if (FIND_COMMANDS.has(base)) {
+    for (let j = from; j < to; j++) {
+      if (!FIND_EXEC_ACTIONS.has(words[j].text)) continue;
+      let end = j + 1;
+      while (end < to && !isFindExecEnd(words, end)) end++;
+      markLaunchedCurl(words, j + 1, end, marks, depth + 1);
+      j = end;
+    }
+  }
+}
+
+function launcherKey(base) {
+  return base.replace(/\.(exe|cmd|bat)$/, '');
+}
+
+// Index of the first of words[from..to) that a launcher with `runWords` may
+// run as a command, or -1. With no run words, every operand may be. Otherwise
+// an option run word (`--args`, `-x`) counts anywhere, and a subcommand run
+// word only as the first operand past the options, or the second after a
+// subcommand group (`compose exec`). An operand right after an option with no
+// `=` may be that option's value (`kubectl -n ns exec`), so the subcommand may
+// still follow it; an option whose value is itself a run word
+// (`docker --context run …`) is read as running a command, the safe side.
+// `pairOptions` names the options that take two values (`nix --option k v`).
+function launcherRunIndex(words, from, to, runWords, pairOptions) {
+  if (runWords === null) return from;
+  let group = '';
+  let subcommand = true;
+  let optionValues = 0;
+  for (let k = from; k < to; k++) {
+    const t = words[k].text;
+    if (t.length > 1 && t[0] === '-') {
+      if (runWords.has(t)) return k + 1;
+      optionValues = pairOptions && pairOptions.has(t) ? 2 : t.includes('=') ? 0 : 1;
+      continue;
+    }
+    if (!subcommand) continue;
+    const sub = group + t;
+    if (runWords.has(sub)) return k + 1;
+    if (isRunWordGroup(runWords, sub)) {
+      group = sub + ' ';
+      optionValues = 0;
+    } else if (optionValues > 0) {
+      optionValues--;
+    } else {
+      subcommand = false;
+    }
+  }
+  return -1;
+}
+
+function isRunWordGroup(runWords, sub) {
+  for (const w of runWords) {
+    if (w.length > sub.length && w[sub.length] === ' ' && w.startsWith(sub)) return true;
+  }
+  return false;
+}
+
+// Launcher options that take two values, so two operands after one may be
+// its values rather than the subcommand.
+const LAUNCHER_PAIR_OPTIONS = new Map([
+  ['nix', new Set(['--option', '--arg', '--argstr', '--override-input', '--override-flake'])],
+]);
+
+// Container runners: an operand may be an image, `--entrypoint=` names the
+// command, and kubectl's and oc's `--image=` names the image they run.
+const CONTAINER_LAUNCHERS = new Set(['docker', 'podman', 'nerdctl', 'docker-compose', 'podman-compose', 'kubectl', 'oc']);
+const CONTAINER_VALUE_PREFIXES = ['--entrypoint=', '--image='];
+
+// A launched command word's name. Under a container runner the value of
+// `--entrypoint=` or `--image=` counts as the word, and an image reference
+// (a word with a `/` repository path) loses its `:tag` or `@digest`
+// (`docker run curlimages/curl:8.5.0 …`, `kubectl run t
+// --image=curlimages/curl:8.5.0 -- …` run curl). Any other word is read whole
+// (`scp curl@host:f` names no curl).
+function launchedCurlName(text, container) {
+  if (!container) return commandName(text);
+  const prefix = CONTAINER_VALUE_PREFIXES.find((p) => text.startsWith(p));
+  const word = prefix ? text.slice(prefix.length) : text;
+  const name = commandName(word);
+  if (!word.includes('/')) return name;
+  const cut = name.search(/[:@]/);
+  return cut > 0 ? name.slice(0, cut) : name;
+}
+
+// `;` ends a find action's command, and so does `+` right after `{}`.
+function isFindExecEnd(words, k) {
+  const t = words[k].text;
+  return t === ';' || (t === '+' && words[k - 1].text === '{}');
+}
+
+// words[from..to) is a command a launcher runs: find its command word past the
+// wrappers resolveCommand unwraps, and mark that command's arguments.
+function markLaunchedCurl(words, from, to, marks, depth) {
+  const c = launchedCommandIndex(words, from, to);
+  if (c !== -1) markCurlArguments(commandName(words[c].text), words, c + 1, to, marks, depth);
+}
+
+// Index of the command word in words[from..to) that a launcher runs, past the
+// wrappers resolveCommand unwraps and their own options, or -1. Unlike a
+// shell, a launcher execs a leading `VAR=value` word, so none is skipped.
+function launchedCommandIndex(words, from, to) {
+  let idx = from;
+  while (idx < to) {
+    const spec = WRAPPERS.get(commandName(words[idx].text));
+    if (!spec) break;
+    idx = skipWrapperArgs(words, idx + 1, spec);
+  }
+  return idx < to ? idx : -1;
+}
+
+// lastSegment(text).toLowerCase(), read by hand in one pass: lastSegment's
+// trailing-separator regex backtracks on a long run of separators, and the
+// launched-command words reach here.
+function commandName(text) {
+  let end = text.length;
+  while (end > 0 && (text[end - 1] === '/' || text[end - 1] === '\\')) end--;
+  let seg = end;
+  while (seg > 0 && text[seg - 1] !== '/' && text[seg - 1] !== '\\') seg--;
+  return text.slice(seg, end).toLowerCase();
+}
+
 const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
 // `-c`, or a combined short flag ending in `c` (`-lc`, `-ec`, `-euc`): mode c.
@@ -1195,7 +1716,7 @@ function findSecretRead(command, depth) {
     }
 
     // xargs turns stdin file names into a sub-command's operands.
-    if (base === 'xargs' && depth < MAX_NESTING_DEPTH) {
+    if (XARGS_COMMANDS.has(base) && depth < MAX_NESTING_DEPTH) {
       const hit = scanXargsPipe(operands, s, bySeg, sepAfter, depth);
       if (hit) return hit;
       // `.env` given to xargs itself (`xargs -a .env cat`) is an ordinary
@@ -1217,9 +1738,13 @@ function findSecretRead(command, depth) {
     if (NON_READING_COMMANDS.has(base)) continue;
 
     const nameOnly = nameOnlyOperandIndices(base, operands);
+    const curlArgs = curlArguments(base, operands);
     for (let k = 0; k < operands.length; k++) {
       if (nameOnly.has(k)) continue;
       if (operandNamesSecret(operands[k].text)) return operands[k].text;
+      if (curlArgs[k] && (curlValueNamesSecret(operands[k].text) || curlCertOpensSecret(operands, k))) {
+        return operands[k].text;
+      }
     }
   }
   return null;
@@ -1342,34 +1867,131 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
   return null;
 }
 
-// `find … | xargs cat`: the upstream segment's operands become file names the
-// sub-command reads. Only inferred across a real pipe and when stdin is not
-// redirected by `-a`/`--arg-file`. A sub-command that is itself a shell
-// (`xargs -I{} sh -c 'cat .env'`) carries a literal script and is scanned in
-// mode c whether or not a pipe feeds it.
-function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
+// Index of xargs's sub-command among operands[from..to) (-1 when there is
+// none), and whether `-a`/`--arg-file` replaced its stdin.
+function xargsSubcommand(operands, from, to) {
   let argFile = false;
-  let subIdx = -1;
-  for (let m = 0; m < operands.length; m++) {
+  for (let m = from; m < to; m++) {
     const t = operands[m].text;
     if (t === '-a' || t === '--arg-file') { argFile = true; m++; continue; }
     if (t.startsWith('--arg-file=')) { argFile = true; continue; }
     if (XARGS_VALUE_FLAGS.has(t)) { m++; continue; }
     if (t.startsWith('--') && t.includes('=')) continue;
     if (t.startsWith('-')) continue; // no-value flag (-0 -r -t -p) or long flag
-    subIdx = m;
-    break;
+    return { subIdx: m, argFile };
   }
-  if (subIdx === -1) return null; // no sub-command: xargs defaults to echo
+  return { subIdx: -1, argFile };
+}
 
-  const subBase = lastSegment(operands[subIdx].text).toLowerCase();
+// xargs's options as GNU findutils 4.9 reads them, for finding the command it
+// runs: these short options take a value attached or as the next word (BSD's
+// -J, -R and -S too), `-e`, `-i` and `-l` take one only attached, and these
+// long options take one as `=value` or as the next word (any unambiguous
+// prefix). xargsSubcommand keeps next's reading for the shell and
+// non-reading checks.
+const XARGS_SHORT_VALUE = 'adEILnPsJRS';
+const XARGS_SHORT_ATTACHED = 'eil';
+const XARGS_LONG_VALUE = ['--arg-file', '--delimiter', '--max-args', '--max-chars', '--max-procs', '--process-slot-var'];
+
+// Index of the command xargs runs among operands[from..to), or -1.
+function xargsCommandIndex(operands, from, to) {
+  for (let m = from; m < to; m++) {
+    const t = operands[m].text;
+    if (t === '--') return m + 1 < to ? m + 1 : -1;
+    if (t.length < 2 || t[0] !== '-') return m;
+    if (t.startsWith('--')) {
+      if (!t.includes('=') && XARGS_LONG_VALUE.some((l) => l.startsWith(t))) m++;
+      continue;
+    }
+    for (let c = 1; c < t.length; c++) {
+      if (XARGS_SHORT_ATTACHED.includes(t[c])) break;
+      if (XARGS_SHORT_VALUE.includes(t[c])) {
+        if (c === t.length - 1) m++;
+        break;
+      }
+    }
+  }
+  return -1;
+}
+
+// The string xargs replaces with each input among its options in
+// operands[from..to): `-I R`, `-IR`, BSD `-J R`, `-i` / `-iR` and
+// `--replace[=R]` (any unambiguous prefix; `{}` when no R), unless a later
+// `-L`, `-l`, `--max-lines`, or `-n` / `--max-args` with a count other than
+// 1, cancels it. null when xargs appends the input
+// after the command's words.
+function xargsReplaceString(operands, from, to) {
+  let rep = null;
+  for (let m = from; m < to; m++) {
+    const t = operands[m].text;
+    if (t === '--' || t.length < 2 || t[0] !== '-') break;
+    if (t.startsWith('--')) {
+      const eq = t.indexOf('=');
+      const name = eq === -1 ? t : t.slice(0, eq);
+      if (name.length >= 3 && '--replace'.startsWith(name)) {
+        rep = eq === -1 ? '{}' : t.slice(eq + 1);
+      } else if (name.length >= 7 && '--max-lines'.startsWith(name)) {
+        rep = null;
+      } else if (name.length >= 7 && '--max-args'.startsWith(name)) {
+        const v = eq !== -1 ? t.slice(eq + 1) : m + 1 < to ? operands[m + 1].text : '';
+        if (v !== '1') rep = null;
+        if (eq === -1) m++;
+      } else if (eq === -1 && XARGS_LONG_VALUE.some((l) => l.startsWith(t))) {
+        m++;
+      }
+      continue;
+    }
+    for (let c = 1; c < t.length; c++) {
+      if (t[c] === 'i') {
+        rep = t.slice(c + 1) || '{}';
+        break;
+      }
+      if (t[c] === 'I' || t[c] === 'J') {
+        if (c < t.length - 1) rep = t.slice(c + 1);
+        else if (m + 1 < to) rep = operands[++m].text;
+        break;
+      }
+      // GNU lets the last of -I/-i/--replace and -L/-l/--max-lines/-n win: a
+      // later -L, or -n with any count but 1, puts xargs back to appending
+      // its input.
+      if (t[c] === 'L' || t[c] === 'l') rep = null;
+      if (t[c] === 'n') {
+        const v = c < t.length - 1 ? t.slice(c + 1) : m + 1 < to ? operands[m + 1].text : '';
+        if (v !== '1') rep = null;
+      }
+      if (XARGS_SHORT_ATTACHED.includes(t[c])) break;
+      if (XARGS_SHORT_VALUE.includes(t[c])) {
+        if (c === t.length - 1) m++;
+        break;
+      }
+    }
+  }
+  return rep === '' ? null : rep;
+}
+
+// `find … | xargs cat`: the upstream segment's operands become file names the
+// sub-command reads. Only inferred across a real pipe and when stdin is not
+// redirected by `-a`/`--arg-file`. A sub-command that is itself a shell
+// (`xargs -I{} sh -c 'cat .env'`) carries a literal script and is scanned in
+// mode c whether or not a pipe feeds it.
+function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
+  const { subIdx, argFile } = xargsSubcommand(operands, 0, operands.length);
+  // The command xargs runs as GNU xargs reads its options, past the wrappers
+  // resolveCommand unwraps (#5779): the curl reading below follows it even
+  // where next's walk above finds another word or none (`xargs -l curl -s …`).
+  const runs = xargsCommandIndex(operands, 0, operands.length);
+  const subCmd = runs === -1 ? -1 : launchedCommandIndex(operands, runs, operands.length);
+  const toCurl = subCmd !== -1 && CURL_COMMANDS.has(commandName(operands[subCmd].text));
+  if (subIdx === -1 && !toCurl) return null; // no sub-command: xargs defaults to echo
+
+  const subBase = subIdx === -1 ? '' : lastSegment(operands[subIdx].text).toLowerCase();
   if (SHELL_INTERPRETERS.has(subBase)) {
     // Heredocs/here-strings belong to xargs, not the sub-shell; pass none.
     const hit = scanShellInterpreter(operands.slice(subIdx + 1), [], [], s, bySeg, sepAfter, depth);
     if (hit) return hit;
   }
   if (argFile) return null; // stdin replaced by a file — no pipeline inference
-  if (NON_READING_COMMANDS.has(subBase)) return null;
+  if (!toCurl && NON_READING_COMMANDS.has(subBase)) return null;
 
   const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
   if (op !== '|' && op !== '|&') return null;
@@ -1380,8 +2002,37 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
   // isSecretBasename still holds.
   const prevCmd = resolveCommand((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
   if (!prevCmd) return null;
-  for (const w of prevCmd.operands) {
+  // They become curl's arguments when that command is curl: `xargs sudo curl`.
+  // A piped word is a cert option's value where the sub-command's cert option
+  // has its value slot open to the input: the option is the last word (xargs
+  // appends the input), or its value holds the replace string
+  // (`xargs -I{} curl --cert {}`, `-E{}`).
+  const rep = toCurl ? xargsReplaceString(operands, 0, runs) : null;
+  let certPiped = false;
+  for (let k = toCurl ? subCmd + 1 : operands.length; k < operands.length && !certPiped; k++) {
+    const t = operands[k].text;
+    const v = curlAttachedCertValue(t);
+    if (rep !== null && v !== null && v.includes(rep)) certPiped = true;
+    else if (curlTakesCertValue(t)) {
+      const next = operands[k + 1];
+      certPiped = rep === null ? !next : next !== undefined && next.text.includes(rep);
+    }
+  }
+  const piped = prevCmd.operands;
+  // And where a piped word is such an option put in by the replace string, the
+  // sub-command word after that string is its value
+  // (`printf -E | xargs -I{} curl {} f:pw`).
+  if (toCurl && rep !== null && piped.some((w) => curlTakesCertValue(w.text))) {
+    for (let k = subCmd + 1; k + 1 < operands.length; k++) {
+      if (operands[k].text.includes(rep) && curlCertNamesSecret(operands[k + 1].text)) return operands[k + 1].text;
+    }
+  }
+  for (let j = 0; j < piped.length; j++) {
+    const w = piped[j];
     if (operandNamesSecret(w.text)) return w.text;
+    if (!toCurl) continue;
+    if (curlValueNamesSecret(w.text) || curlCertOpensSecret(piped, j)) return w.text;
+    if (certPiped && curlCertNamesSecret(w.text)) return w.text;
   }
   return null;
 }
