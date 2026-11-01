@@ -71,7 +71,7 @@ Each item below breaks an existing install if you get it wrong.
 
 ## Step 5 — Execute the mode
 
-All registry work follows the standard submission process: fork, edit exactly one JSON object, run `npm run gen:registry`, commit **both** the JSON source and the regenerated markdown, and open one PR from a `docs/<issue#>-<slug>` branch using the registry-entry PR template. Never hand-edit the generated `.md` — the `gen:registry --check` drift gate rejects it. **One entry, one PR**, always.
+All registry work follows the standard [submission process](../registries/README.md#submission-process), which starts with an approved issue: fork, edit exactly one JSON object, run `npm run gen:registry`, commit **both** the JSON source and the regenerated markdown, and open one PR from a `docs/<issue#>-<slug>` branch using the registry-entry PR template. Never hand-edit the generated `.md` — the `gen:registry --check` drift gate rejects it. **One entry, one PR**, always.
 
 ### T1 — Consensual handoff
 

@@ -231,6 +231,11 @@ const DOCS_GUARD_TESTS = {
   // Walks docs/*.md and every docs/<locale>/*.md dir dynamically
   // (docs-parity-live-registry.test.cjs:42, 428) — deliberately generic.
   'tests/docs-parity-live-registry.test.cjs': ['*'],
+  'tests/registry-docs-approved-issue-parity.test.cjs': [
+    'docs/registries/README.md',
+    'docs/how-to/list-your-reviewer-lane.md',
+    'docs/how-to/take-over-a-capability-or-eos.md',
+  ],
   // #3839: pins every hook-table Event cell in the five locales' ARCHITECTURE
   // and INVENTORY files against src/runtime-hooks-surface.cts registrations.
   'tests/docs-hooks-table-parity.test.cjs': [
