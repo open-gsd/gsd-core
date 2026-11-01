@@ -98,8 +98,13 @@
 //   inside scripts the agent executes, and `glob: '*'` reaching a
 //   NON-gitignored `.env`, a wrapper (or wrapper option taking a
 //   separate value) the WRAPPERS table does not list, and a wrapper in the
-//   sub-command of `xargs` or `find -exec`, which is not walked through that
-//   table (`xargs env -S 'cat .env'`). `env -S` strings are
+//   sub-command of `xargs`, which is not walked through that table, so an
+//   `env -S` string or a shell script behind it is not read (`xargs env -S
+//   'cat .env'`, `xargs sudo sh -c 'cat .env'`; the sub-command's own operands
+//   are still checked). A `find -exec` sub-command is not resolved as a command
+//   either, so its shell script or `env -S` string is not read (`find . -exec
+//   sh -c 'cat .env' \;`); its words are still checked as operands. `env -S`
+//   strings are
 //   split by GNU coreutils env's rules, and also by FreeBSD/macOS env's (a
 //   backslash before a blank is that blank) and uutils env's (a
 //   backslash-newline removed, a comment ended by a newline), and read as

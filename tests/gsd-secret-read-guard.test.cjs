@@ -1488,7 +1488,12 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
     ['before the file name', "env -S 'cat ${Z}.env'", SECRET_HIT],
     ['inside double quotes', `env -S 'cat ".e\${Z}nv"'`, SECRET_HIT],
     ['in a string split out of a split string', String.raw`env -S 'env -S "cat .e\${Z}nv"'`, SECRET_HIT],
-    ['inside single quotes of the outer string, read by the inner env', `env -S "env -S 'cat .e\${Z}nv'"`, SECRET_HIT],
+    // The outer string is in shell double quotes, so the shell, not env, empties `${Z}`
+    // here; the deletion reading reaches the same words.
+    ['in an inner string, the outer one in shell double quotes', `env -S "env -S 'cat .e\${Z}nv'"`, SECRET_HIT],
+    // Here the shell passes `${Z}` on, the outer env's single quotes keep it, and the
+    // inner env empties it.
+    ['inside single quotes of the outer string, read by the inner env', "env -S 'env -S '\\''cat .e${Z}nv'\\'''", SECRET_HIT],
   ];
   for (const [label, command, expected] of UNSET_VAR_READS) {
     test(`blocks: an unset \${NAME} ${label}`, () => {
@@ -1496,7 +1501,10 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
     });
   }
   const UNSET_VAR_ALLOWS = [
-    ['inside single quotes, not expanded', `env -S "cat '\${Z}'.env"`],
+    // The env string in shell single quotes, so the shell passes `${Z}` on: env's own
+    // single quotes keep it, and cat is given `${Z}.env`. (In shell double quotes the
+    // shell would empty it first, the `$VAR` gap the header documents.)
+    ['inside single quotes, not expanded', "env -S 'cat '\\''${Z}'\\''.env'"],
     ['after \\$, not expanded', String.raw`env -S 'cat \${Z}.env'`],
     ['before an existence check', "env -S 'ls ${Z}.env'"],
   ];
