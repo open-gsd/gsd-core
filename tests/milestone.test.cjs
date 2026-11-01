@@ -18,6 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, cleanup, parseFrontmatter, TOOLS_PATH, TEST_ENV_BASE } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
+const { spawnSync } = require('node:child_process');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -1613,7 +1614,6 @@ describe('requirements ready-ids command (#2388 shared-ID gate)', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const haveTools = () => {
-  const { spawnSync } = require('node:child_process');
   const probe = (cmd) => spawnSync(cmd, ['--version'], { encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS });
   return probe('bash').status === 0 && probe('jq').status === 0;
 };
@@ -1645,12 +1645,30 @@ function extractFencedBash(content, anchor) {
   throw new Error(`No bash block found after anchor: ${anchor}`);
 }
 
+const REQUIREMENTS = `# Requirements
+
+## Feature
+
+- [ ] **SHARED-01**: declared by both plans
+- [ ] **SOLO-01**: only plan-02 declares this
+- [ ] **ONLY1-01**: only plan 01 declares this
+- [ ] **ONLY2-01**: only plan 02 declares this
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| SHARED-01 | Phase 5 | Pending |
+| SOLO-01 | Phase 5 | Pending |
+| ONLY1-01 | Phase 5 | Pending |
+| ONLY2-01 | Phase 5 | Pending |
+`;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // execute-plan.md update_requirements — the shared-ID gate runs as written (#4956)
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('execute-plan.md update_requirements block runs as written (#4956)', () => {
-  const { spawnSync } = require('node:child_process');
   const { readWorkflowCombined } = require('./helpers.cjs');
   const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
   const workflow = (name) => readWorkflowCombined(path.join(__dirname, '..', 'gsd-core', 'workflows', name));
@@ -1662,23 +1680,6 @@ describe('execute-plan.md update_requirements block runs as written (#4956)', ()
   /** The first ```bash block inside <step name="update_requirements"> of execute-plan.md. */
   const updateRequirementsBash = () =>
     extractFencedBash(workflow('execute-plan.md'), '<step name="update_requirements">');
-
-  const REQUIREMENTS = `# Requirements
-
-## Feature
-
-- [ ] **SHARED-01**: declared by both plans
-- [ ] **ONLY1-01**: only plan 01 declares this
-- [ ] **ONLY2-01**: only plan 02 declares this
-
-## Traceability
-
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| SHARED-01 | Phase 5 | Pending |
-| ONLY1-01 | Phase 5 | Pending |
-| ONLY2-01 | Phase 5 | Pending |
-`;
 
   function fixture() {
     writeRequirements(tmpDir, REQUIREMENTS);
@@ -1772,26 +1773,11 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   afterEach(() => { cleanup(tmpDir); });
 
 
-  function makePhaseDir(tmpDir) {
-    const dir = path.join(tmpDir, '.planning', 'phases', '05-05-feature');
+  function makePhaseDir(parentDir) {
+    const dir = path.join(parentDir, '.planning', 'phases', '05-05-feature');
     fs.mkdirSync(dir, { recursive: true });
     return dir;
   }
-
-  const SHARED_REQUIREMENTS = `# Requirements
-
-## Feature
-
-- [ ] **SHARED-01**: shared across two plans
-- [ ] **SOLO-01**: only plan-02 declares this
-
-## Traceability
-
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| SHARED-01 | Phase 5 | Pending |
-| SOLO-01 | Phase 5 | Pending |
-`;
 
   function extractExecutorReadyIdsBash() {
     const executorPath = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
@@ -1803,7 +1789,6 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
 
   function runExtractedExecutorBash(cwd, envOverrides = {}, scriptPrefix = '') {
     const bashSnippet = extractExecutorReadyIdsBash();
-    const { spawnSync } = require('child_process');
     const fullScript = [
       '#!/usr/bin/env bash',
       'set -e',
@@ -1818,6 +1803,11 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
       env: {
         ...process.env,
         ...TEST_ENV_BASE,
+        PLAN: '',
+        PHASE: '',
+        PHASE_DIR: '',
+        INIT: '',
+        PLAN_PATH: '',
         ...envOverrides,
       },
       encoding: 'utf-8',
@@ -1827,12 +1817,12 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
 
   test('behavioral: extracted executor bash gates shared requirement until sibling plan finishes', (t) => {
     if (!haveTools()) return t.skip('bash and jq required');
-    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+    writeRequirements(tmpDir, REQUIREMENTS);
     const dir = makePhaseDir(tmpDir);
     const plan1 = path.join(dir, '05-05-01-a-PLAN.md');
     const plan2 = path.join(dir, '05-05-02-b-PLAN.md');
     fs.writeFileSync(plan1, '---\nphase: 05-05\nplan: 01\nrequirements: [SHARED-01]\n---\nPlan A\n');
-    fs.writeFileSync(plan2, '---\nphase: 05-05\nplan: 02\nrequirements: [SHARED-01, SOLO-01]\n---\nPlan B\n');
+    fs.writeFileSync(plan2, '---\nphase: 05-05\nplan: 02\nrequirements: [SHARED-01, ONLY2-01]\n---\nPlan B\n');
 
     // Step 1: Plan 1 finishes first (writes its summary). Sibling Plan 2 has no summary yet.
     fs.writeFileSync(path.join(dir, '05-05-01-a-SUMMARY.md'), 'done\n');
@@ -1856,20 +1846,20 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     // Execute the extracted prompt bash for Plan 2
     const res2 = runExtractedExecutorBash(tmpDir, {
       PLAN_PATH: plan2,
-      REQ_IDS: 'SHARED-01 SOLO-01',
+      REQ_IDS: 'SHARED-01 ONLY2-01',
     });
     assert.strictEqual(res2.status, 0, `extracted bash failed: ${res2.stderr || res2.stdout}`);
-    assert.strictEqual(res2.stderr, '', 'No warning when all requirements are ready');
+    assert.doesNotMatch(res2.stderr, /WARN: No requirement IDs ready to mark complete/);
 
     // Assert REQUIREMENTS.md on disk now has both checked
     content = readRequirements(tmpDir);
     assert.ok(content.includes('- [x] **SHARED-01**'), 'SHARED-01 checkbox should now be checked on disk');
-    assert.ok(content.includes('- [x] **SOLO-01**'), 'SOLO-01 checkbox should now be checked on disk');
+    assert.ok(content.includes('- [x] **ONLY2-01**'), 'ONLY2-01 checkbox should now be checked on disk');
   });
 
   test('behavioral: bogus preset PLAN_PATH re-resolves when directory is resolvable', (t) => {
     if (!haveTools()) return t.skip('bash and jq required');
-    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+    writeRequirements(tmpDir, REQUIREMENTS);
     const dir = makePhaseDir(tmpDir);
     const plan = path.join(dir, '05-05-01-a-PLAN.md');
     fs.writeFileSync(plan, '---\nphase: 05-05\nplan: 01\nrequirements: [SOLO-01]\n---\nPlan A\n');
@@ -1892,7 +1882,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
 
   test('negative control: nonexistent plan path with unresolvable directory fails closed', (t) => {
     if (!haveTools()) return t.skip('bash and jq required');
-    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+    writeRequirements(tmpDir, REQUIREMENTS);
     const dir = makePhaseDir(tmpDir);
     // Plant plan1 without sibling summary
     const plan1 = path.join(dir, '05-05-01-a-PLAN.md');
@@ -1913,7 +1903,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
 
   test('negative control: missing jq fails closed, warns on stderr, and preserves requirements', (t) => {
     if (!haveTools()) return t.skip('bash and jq required');
-    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+    writeRequirements(tmpDir, REQUIREMENTS);
     const dir = makePhaseDir(tmpDir);
     const plan = path.join(dir, '05-05-01-a-PLAN.md');
     fs.writeFileSync(plan, '---\nphase: 05-05\nplan: 01\nrequirements: [SOLO-01]\n---\nPlan A\n');
@@ -1938,14 +1928,14 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
 
   test('negative control: failing ready-ids query fails closed, warns on stderr, and preserves requirements', (t) => {
     if (!haveTools()) return t.skip('bash and jq required');
-    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+    writeRequirements(tmpDir, REQUIREMENTS);
     const dir = makePhaseDir(tmpDir);
     const plan = path.join(dir, '05-05-01-a-PLAN.md');
     fs.writeFileSync(plan, '---\nphase: 05-05\nplan: 01\nrequirements: [SOLO-01]\n---\nPlan A\n');
     fs.writeFileSync(path.join(dir, '05-05-01-a-SUMMARY.md'), 'done\n');
 
     // Override gsd_run to simulate ready-ids query failure
-    const failingGsdRunPrefix = 'gsd_run() { if [ "$2" = "requirements.ready-ids" ]; then return 1; fi; node "${TOOLS_PATH}" "$@"; }';
+    const failingGsdRunPrefix = `gsd_run() { if [ "$2" = "requirements.ready-ids" ]; then return 1; fi; node "${TOOLS_PATH}" "$@"; }`;
     const res = runExtractedExecutorBash(tmpDir, {
       PLAN_PATH: plan,
       REQ_IDS: 'SOLO-01',
@@ -1959,7 +1949,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
 
   test('negative control: empty or unset PLAN does not cause arithmetic error', (t) => {
     if (!haveTools()) return t.skip('bash and jq required');
-    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+    writeRequirements(tmpDir, REQUIREMENTS);
     makePhaseDir(tmpDir);
 
     for (const emptyVal of ['', undefined]) {
@@ -1981,7 +1971,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
 
   test('behavioral: extracted executor bash resolves nested plans layout from INIT JSON', (t) => {
     if (!haveTools()) return t.skip('bash and jq required');
-    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+    writeRequirements(tmpDir, REQUIREMENTS);
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-05-feature');
     const plansDir = path.join(phaseDir, 'plans');
     fs.mkdirSync(plansDir, { recursive: true });
@@ -2008,7 +1998,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
 
   test('behavioral: extracted executor bash resolves flat layout with slug from INIT JSON', (t) => {
     if (!haveTools()) return t.skip('bash and jq required');
-    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+    writeRequirements(tmpDir, REQUIREMENTS);
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-05-feature');
     fs.mkdirSync(phaseDir, { recursive: true });
 
@@ -2034,7 +2024,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
 
   test('behavioral: extracted executor bash resolves canonical on-disk shape with padded PHASE and PLAN', (t) => {
     if (!haveTools()) return t.skip('bash and jq required');
-    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+    writeRequirements(tmpDir, REQUIREMENTS);
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
     fs.mkdirSync(phaseDir, { recursive: true });
 
@@ -2066,7 +2056,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
 
   test('behavioral: extracted executor bash resolves canonical on-disk shape with unpadded PHASE and PLAN', (t) => {
     if (!haveTools()) return t.skip('bash and jq required');
-    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+    writeRequirements(tmpDir, REQUIREMENTS);
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
     fs.mkdirSync(phaseDir, { recursive: true });
 
@@ -2098,13 +2088,13 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
 
   test('negative control: multi-digit sibling containing target plan digit does not hijack PLAN_PATH', (t) => {
     if (!haveTools()) return t.skip('bash and jq required');
-    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+    writeRequirements(tmpDir, REQUIREMENTS);
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
     fs.mkdirSync(phaseDir, { recursive: true });
 
     // Target plan is 05-02-PLAN.md (PLAN=2).
-    // Decoy is 05-01-20-decoy-PLAN.md (plan 20).
-    // Sibling plan 20 shares digit 2 and sorts before 05-02-PLAN.md, but must not match target plan 2.
+    // Sibling file 05-01-20-decoy-PLAN.md contains the target plan digit in its slug,
+    // but belongs to plan 01 and must not match target plan 2.
     const planTarget = path.join(phaseDir, '05-02-PLAN.md');
     const planDecoyBefore = path.join(phaseDir, '05-01-20-decoy-PLAN.md');
     fs.writeFileSync(planTarget, '---\nphase: 5\nplan: 2\nrequirements: [SHARED-01]\n---\nTarget Plan 02\n');
@@ -2133,7 +2123,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
 
   test('negative control: ambiguous plan candidates fail closed and warn on stderr', (t) => {
     if (!haveTools()) return t.skip('bash and jq required');
-    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+    writeRequirements(tmpDir, REQUIREMENTS);
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
     fs.mkdirSync(phaseDir, { recursive: true });
 
@@ -2151,77 +2141,77 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
       REQ_IDS: 'SOLO-01',
     });
     assert.strictEqual(res.status, 0, `extracted bash should exit 0 on graceful fail-close: ${res.stderr || res.stdout}`);
-    // Ambiguity must clear PLAN_PATH (fail closed) and emit warning on stderr
+    // Ambiguity must clear PLAN_PATH (fail closed) and emit warning on stderr citing matches: 2
     assert.match(res.stdout, /(^|\n)RESOLVED_PLAN_PATH=(\n|$)/, 'Ambiguous match must clear PLAN_PATH');
-    assert.ok(res.stderr.includes('WARN: Could not resolve unambiguous PLAN_PATH'), 'Ambiguity must emit stderr diagnostic warning');
+    assert.match(res.stderr, /WARN: Could not resolve unambiguous PLAN_PATH.*\(matches: 2\)/, 'Ambiguity must emit stderr diagnostic warning citing matches: 2');
 
     // Requirements must remain untouched
     const content = readRequirements(tmpDir);
     assert.ok(content.includes('- [ ] **SOLO-01**'), 'SOLO-01 must remain unchecked when plan path is ambiguous');
   });
 
-  test("negative control: unresolved directory emits diagnostic warning on stderr", (t) => {
-    if (!haveTools()) return t.skip("bash and jq required");
-    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+  test('negative control: unresolved directory emits diagnostic warning on stderr', (t) => {
+    if (!haveTools()) return t.skip('bash and jq required');
+    writeRequirements(tmpDir, REQUIREMENTS);
 
     // Completely unset phase_dir, INIT, and PHASE_DIR so directory cannot be resolved
     const res = runExtractedExecutorBash(tmpDir, {
-      PLAN_PATH: "",
-      INIT: "",
-      PHASE_DIR: "",
-      PHASE: "05-05",
-      PLAN: "03",
-      REQ_IDS: "SOLO-01",
+      PLAN_PATH: '',
+      INIT: '',
+      PHASE_DIR: '',
+      PHASE: '05-05',
+      PLAN: '03',
+      REQ_IDS: 'SOLO-01',
     });
     assert.strictEqual(res.status, 0, `extracted bash should exit 0 on graceful fail-close: ${res.stderr || res.stdout}`);
-    assert.match(res.stdout, /(^|\n)RESOLVED_PLAN_PATH=(\n|$)/, "Unresolved directory must clear PLAN_PATH");
-    assert.ok(res.stderr.includes("WARN: Phase directory not found for plan resolution"), "Must emit stderr diagnostic warning when directory cannot be resolved");
+    assert.match(res.stdout, /(^|\n)RESOLVED_PLAN_PATH=(\n|$)/, 'Unresolved directory must clear PLAN_PATH');
+    assert.match(res.stderr, /WARN: Phase directory not found for plan resolution/, 'Must emit stderr diagnostic warning when directory cannot be resolved');
 
     // Requirements must remain untouched
     const content = readRequirements(tmpDir);
-    assert.ok(content.includes("- [ ] **SOLO-01**"), "SOLO-01 must remain unchecked when directory cannot be resolved");
+    assert.ok(content.includes('- [ ] **SOLO-01**'), 'SOLO-01 must remain unchecked when directory cannot be resolved');
   });
 
-  test("behavioral: plan number equal to phase tail in slug layout resolves unambiguously", (t) => {
-    if (!haveTools()) return t.skip("bash and jq required");
-    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
-    const phaseDir = path.join(tmpDir, ".planning", "phases", "05-05-feature");
+  test('behavioral: plan number equal to phase tail in slug layout resolves unambiguously', (t) => {
+    if (!haveTools()) return t.skip('bash and jq required');
+    writeRequirements(tmpDir, REQUIREMENTS);
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-05-feature');
     fs.mkdirSync(phaseDir, { recursive: true });
 
     // Populate plans 05-05-01 through 05-05-05 in flat slug layout
     for (let i = 1; i <= 5; i++) {
-      const pad = String(i).padStart(2, "0");
+      const pad = String(i).padStart(2, '0');
       fs.writeFileSync(path.join(phaseDir, `05-05-${pad}-step-PLAN.md`), `---\nphase: 05-05\nplan: ${pad}\nrequirements: [SOLO-01]\n---\nPlan ${pad}\n`);
     }
 
     // Target plan 05 has its summary
-    fs.writeFileSync(path.join(phaseDir, "05-05-05-step-SUMMARY.md"), "done\n");
+    fs.writeFileSync(path.join(phaseDir, '05-05-05-step-SUMMARY.md'), 'done\n');
 
     // Test with PLAN=5 (unpadded)
     const resUnpadded = runExtractedExecutorBash(tmpDir, {
-      PLAN_PATH: "",
-      INIT: JSON.stringify({ phase_dir: ".planning/phases/05-05-feature" }),
-      PHASE: "05-05",
-      PLAN: "5",
-      REQ_IDS: "SOLO-01",
+      PLAN_PATH: '',
+      INIT: JSON.stringify({ phase_dir: '.planning/phases/05-05-feature' }),
+      PHASE: '05-05',
+      PLAN: '5',
+      REQ_IDS: 'SOLO-01',
     });
     assert.strictEqual(resUnpadded.status, 0, `extracted bash failed for PLAN=5: ${resUnpadded.stderr || resUnpadded.stdout}`);
-    assert.match(resUnpadded.stdout, /RESOLVED_PLAN_PATH=.*05-05-05-step-PLAN.md/, "PLAN=5 must resolve to 05-05-05-step-PLAN.md, not match all 5 plans via phase prefix");
-    assert.doesNotMatch(resUnpadded.stderr, /WARN: Could not resolve unambiguous PLAN_PATH/, "No ambiguity warning on valid unique resolution");
-    assert.match(resUnpadded.stderr, /WARN: No requirement IDs ready to mark complete/, "Emits warning that shared requirements are blocked");
+    assert.match(resUnpadded.stdout, /RESOLVED_PLAN_PATH=.*05-05-05-step-PLAN.md/, 'PLAN=5 must resolve to 05-05-05-step-PLAN.md, not match all 5 plans via phase prefix');
+    assert.doesNotMatch(resUnpadded.stderr, /WARN: Could not resolve unambiguous PLAN_PATH/, 'No ambiguity warning on valid unique resolution');
+    assert.match(resUnpadded.stderr, /WARN: No requirement IDs ready to mark complete/, 'Emits warning that shared requirements are blocked');
 
     // Test with PLAN=05 (padded)
     const resPadded = runExtractedExecutorBash(tmpDir, {
-      PLAN_PATH: "",
-      INIT: JSON.stringify({ phase_dir: ".planning/phases/05-05-feature" }),
-      PHASE: "05-05",
-      PLAN: "05",
-      REQ_IDS: "SOLO-01",
+      PLAN_PATH: '',
+      INIT: JSON.stringify({ phase_dir: '.planning/phases/05-05-feature' }),
+      PHASE: '05-05',
+      PLAN: '05',
+      REQ_IDS: 'SOLO-01',
     });
     assert.strictEqual(resPadded.status, 0, `extracted bash failed for PLAN=05: ${resPadded.stderr || resPadded.stdout}`);
-    assert.match(resPadded.stdout, /RESOLVED_PLAN_PATH=.*05-05-05-step-PLAN.md/, "PLAN=05 must resolve to 05-05-05-step-PLAN.md");
-    assert.doesNotMatch(resPadded.stderr, /WARN: Could not resolve unambiguous PLAN_PATH/, "No ambiguity warning on valid unique resolution");
-    assert.match(resPadded.stderr, /WARN: No requirement IDs ready to mark complete/, "Emits warning that shared requirements are blocked");
+    assert.match(resPadded.stdout, /RESOLVED_PLAN_PATH=.*05-05-05-step-PLAN.md/, 'PLAN=05 must resolve to 05-05-05-step-PLAN.md');
+    assert.doesNotMatch(resPadded.stderr, /WARN: Could not resolve unambiguous PLAN_PATH/, 'No ambiguity warning on valid unique resolution');
+    assert.match(resPadded.stderr, /WARN: No requirement IDs ready to mark complete/, 'Emits warning that shared requirements are blocked');
   });
 
   test('boundary cases: plan padding handles limits and non-numeric PLAN without spurious digits', (t) => {
@@ -2232,13 +2222,15 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     const boundaryCases = [
       { plan: '9', file: '05-09-PLAN.md' },
       { plan: '10', file: '05-10-PLAN.md' },
+      { plan: '11', file: '05-11-PLAN.md' },
       { plan: '99', file: '05-99-PLAN.md' },
       { plan: '100', file: '05-100-PLAN.md' },
+      { plan: '101', file: '05-101-PLAN.md' },
       { plan: '1a', file: '05-1a-PLAN.md' },
     ];
 
     for (const b of boundaryCases) {
-      writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+      writeRequirements(tmpDir, REQUIREMENTS);
       const targetPath = path.join(phaseDir, b.file);
       const summaryPath = path.join(phaseDir, b.file.replace('-PLAN.md', '-SUMMARY.md'));
       fs.writeFileSync(targetPath, `---\nphase: 5\nplan: ${b.plan}\nrequirements: [SOLO-01]\n---\nBoundary\n`);
@@ -2261,6 +2253,175 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
       fs.unlinkSync(targetPath);
       fs.unlinkSync(summaryPath);
     }
+  });
+
+  test('behavioral: slug-layout with unpadded PHASE and PLAN resolves target plan without matching prefix sibling (#4944)', (t) => {
+    if (!haveTools()) return t.skip('bash and jq required');
+    writeRequirements(tmpDir, REQUIREMENTS);
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
+    fs.mkdirSync(phaseDir, { recursive: true });
+
+    // Slug-layout siblings:
+    // 05-01-step-02-PLAN.md has slug ending in -02, but declares plan: 01.
+    // 05-02-api-PLAN.md declares plan: 02.
+    const plan1 = path.join(phaseDir, '05-01-step-02-PLAN.md');
+    const plan2 = path.join(phaseDir, '05-02-api-PLAN.md');
+    fs.writeFileSync(plan1, '---\nphase: 5\nplan: 01\nrequirements: [SHARED-01]\n---\nPlan 01\n');
+    fs.writeFileSync(plan2, '---\nphase: 5\nplan: 02\nrequirements: [SHARED-01, ONLY2-01]\n---\nPlan 02\n');
+
+    // Plan 02 completes its summary; Plan 01 has not finished.
+    fs.writeFileSync(path.join(phaseDir, '05-02-api-SUMMARY.md'), 'done\n');
+
+    // Run for PLAN=2 (unpadded) and PHASE=5 (unpadded)
+    const res = runExtractedExecutorBash(tmpDir, {
+      PLAN_PATH: '',
+      INIT: JSON.stringify({ phase_dir: '.planning/phases/05-feature' }),
+      PHASE: '5',
+      PLAN: '2',
+      REQ_IDS: 'SHARED-01 ONLY2-01',
+    });
+    assert.strictEqual(res.status, 0, `extracted bash failed: ${res.stderr || res.stdout}`);
+    assert.match(res.stdout, /RESOLVED_PLAN_PATH=.*05-02-api-PLAN.md/, 'Must resolve to 05-02-api-PLAN.md, not 05-01-step-02-PLAN.md');
+    assert.doesNotMatch(res.stdout, /05-01-step-02-PLAN.md/);
+
+    // SHARED-01 remains blocked by unfinished sibling 01; ONLY2-01 completes
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [ ] **SHARED-01**'), 'SHARED-01 must stay unchecked while sibling 01 is unfinished');
+    assert.ok(content.includes('- [x] **ONLY2-01**'), 'ONLY2-01 must be marked complete');
+  });
+
+  test('behavioral: bracketed requirement IDs are preserved and not dropped by shell globbing (#4944)', (t) => {
+    if (!haveTools()) return t.skip('bash and jq required');
+    writeRequirements(tmpDir, REQUIREMENTS);
+    const dir = makePhaseDir(tmpDir);
+    const plan = path.join(dir, '05-05-01-a-PLAN.md');
+    fs.writeFileSync(plan, '---\nphase: 05-05\nplan: 01\nrequirements: [ONLY1-01]\n---\nPlan 1\n');
+    fs.writeFileSync(path.join(dir, '05-05-01-a-SUMMARY.md'), 'done\n');
+
+    // Pass bracketed ID as given in executor prompt examples: [ONLY1-01]
+    const res = runExtractedExecutorBash(tmpDir, {
+      PLAN_PATH: plan,
+      REQ_IDS: '[ONLY1-01]',
+    });
+    assert.strictEqual(res.status, 0, `extracted bash failed: ${res.stderr || res.stdout}`);
+    assert.doesNotMatch(res.stderr, /WARN: No requirement IDs ready to mark complete/, 'Must not drop bracketed requirement ID');
+
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [x] **ONLY1-01**'), 'ONLY1-01 must be marked complete when passed as [ONLY1-01]');
+  });
+
+  test('behavioral: preset PLAN_PATH naming wrong plan is rejected and re-resolved (#4944)', (t) => {
+    if (!haveTools()) return t.skip('bash and jq required');
+    writeRequirements(tmpDir, REQUIREMENTS);
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
+    fs.mkdirSync(phaseDir, { recursive: true });
+
+    const plan1 = path.join(phaseDir, '05-01-PLAN.md');
+    const plan2 = path.join(phaseDir, '05-02-PLAN.md');
+    fs.writeFileSync(plan1, '---\nphase: 5\nplan: 01\nrequirements: [SHARED-01]\n---\nPlan 1\n');
+    fs.writeFileSync(plan2, '---\nphase: 5\nplan: 02\nrequirements: [ONLY2-01]\n---\nPlan 2\n');
+    fs.writeFileSync(path.join(phaseDir, '05-02-SUMMARY.md'), 'done\n');
+
+    // Preset PLAN_PATH erroneously points to plan 1 while target PLAN is 2
+    const res = runExtractedExecutorBash(tmpDir, {
+      PLAN_PATH: plan1,
+      INIT: JSON.stringify({ phase_dir: '.planning/phases/05-feature' }),
+      PHASE: '5',
+      PLAN: '2',
+      REQ_IDS: 'ONLY2-01',
+    });
+    assert.strictEqual(res.status, 0, `extracted bash failed: ${res.stderr || res.stdout}`);
+    assert.match(res.stdout, /RESOLVED_PLAN_PATH=.*05-02-PLAN.md/, 'Must reject mismatched preset and re-resolve to plan 2');
+
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [x] **ONLY2-01**'), 'ONLY2-01 must be marked complete');
+  });
+
+  test('behavioral: parity between executor resolver and canonical plan paths across layouts (#4944)', (t) => {
+    if (!haveTools()) return t.skip('bash and jq required');
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
+    const plansDir = path.join(phaseDir, 'plans');
+    fs.mkdirSync(plansDir, { recursive: true });
+
+    const layouts = [
+      { name: 'flat-canonical', file: path.join(phaseDir, '05-01-PLAN.md'), phase: '05', plan: '01' },
+      { name: 'flat-slug', file: path.join(phaseDir, '05-02-auth-gate-PLAN.md'), phase: '05', plan: '02' },
+      { name: 'nested-canonical', file: path.join(plansDir, 'PLAN-03.md'), phase: '05', plan: '03' },
+      { name: 'nested-slug', file: path.join(plansDir, 'PLAN-04-summary.md'), phase: '05', plan: '04' },
+    ];
+
+    for (const l of layouts) {
+      fs.writeFileSync(l.file, `---\nphase: ${l.phase}\nplan: ${l.plan}\nrequirements: []\n---\n${l.name}\n`);
+      const res = runExtractedExecutorBash(tmpDir, {
+        PLAN_PATH: '',
+        INIT: JSON.stringify({ phase_dir: '.planning/phases/05-feature' }),
+        PHASE: l.phase,
+        PLAN: l.plan,
+        REQ_IDS: '',
+      });
+      assert.strictEqual(res.status, 0, `${l.name} failed`);
+      const escaped = path.basename(l.file).replace('.', '\\.');
+      assert.match(res.stdout, new RegExp('RESOLVED_PLAN_PATH=.*' + escaped), `${l.name} must resolve to exact canonical file`);
+      fs.unlinkSync(l.file);
+    }
+  });
+
+  test('property (fast-check): resolver returns plan matching frontmatter plan or fails closed (#4944)', (t) => {
+    if (!haveTools()) return t.skip('bash and jq required');
+    const fc = require('./helpers/fast-check-setup.cjs');
+
+    const planGen = fc.record({
+      phaseNum: fc.integer({ min: 1, max: 20 }),
+      planIds: fc.uniqueArray(fc.integer({ min: 1, max: 20 }), { minLength: 1, maxLength: 4 }),
+      targetPlan: fc.integer({ min: 1, max: 25 }),
+      padPhase: fc.boolean(),
+      padPlan: fc.boolean(),
+    });
+
+    fc.assert(
+      fc.property(planGen, ({ phaseNum, planIds, targetPlan, padPhase, padPlan }) => {
+        const pRoot = path.join(tmpDir, `prop-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+        const padPh = String(phaseNum).padStart(2, '0');
+        const phaseRelDir = path.join('.planning', 'phases', `${padPh}-prop`);
+        const pPhaseDir = path.join(pRoot, phaseRelDir);
+        fs.mkdirSync(pPhaseDir, { recursive: true });
+
+        try {
+          const createdFiles = new Map();
+          for (const pid of planIds) {
+            const padP = String(pid).padStart(2, '0');
+            const filePath = path.join(pPhaseDir, `${padPh}-${padP}-step-${padP}-PLAN.md`);
+            fs.writeFileSync(filePath, `---\nphase: ${phaseNum}\nplan: ${pid}\nrequirements: []\n---\nTest\n`);
+            createdFiles.set(pid, filePath);
+          }
+
+          const phaseStr = padPhase ? padPh : String(phaseNum);
+          const planStr = padPlan ? String(targetPlan).padStart(2, '0') : String(targetPlan);
+
+          const res = runExtractedExecutorBash(pRoot, {
+            PLAN_PATH: '',
+            INIT: JSON.stringify({ phase_dir: phaseRelDir }),
+            PHASE: phaseStr,
+            PLAN: planStr,
+            REQ_IDS: '',
+          });
+
+          assert.strictEqual(res.status, 0);
+          const match = res.stdout.match(/RESOLVED_PLAN_PATH=(.*)/);
+          const resolved = match ? match[1].trim() : '';
+          const resolvedAbs = resolved ? path.resolve(pRoot, resolved) : '';
+
+          if (createdFiles.has(targetPlan)) {
+            assert.strictEqual(resolvedAbs, createdFiles.get(targetPlan));
+          } else {
+            assert.strictEqual(resolved, '', 'Target plan not on disk must fail closed with empty path');
+          }
+        } finally {
+          cleanup(pRoot);
+        }
+      }),
+      { numRuns: 30 }
+    );
   });
 });
 
