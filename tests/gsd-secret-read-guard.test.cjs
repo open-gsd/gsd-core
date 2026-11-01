@@ -24,8 +24,9 @@
  *   5. Kimi vocabulary (ReadFile / Grep / Shell, `path`) is normalized.
  *   6. Fail-open crash policy: malformed / non-object payloads exit 0.
  *   7. Host opt-in (#5784): with GSD_SECRET_READ_GUARD_ON_CRASH=deny, a crash
- *      and a stdin that does not close block as guard-error; any other value
- *      allows.
+ *      blocks as guard-error; any other value allows. The stdin-not-closing
+ *      cells need a real OS pipe and live in
+ *      tests/gsd-secret-read-guard.platform.test.cjs.
  *
  * Every assertion reads typed fields off the stdout JSON (code, path, tool)
  * — never a regex over the reason prose (CONTRIBUTING.md).
