@@ -99,7 +99,8 @@ function isRegularFile(abs, root, entry) {
     if (!fs.lstatSync(abs).isFile()) return false;
     if (typeof root !== 'string' || typeof entry !== 'string') return true;
     const fold = process.platform === 'win32' ? (s) => s.toLowerCase() : (s) => s;
-    return fold(fs.realpathSync(abs)) === fold(path.join(fs.realpathSync(root), entry));
+    // .native: canonical long form on Windows (see sameRealPath in git-head-tree.js).
+    return fold(fs.realpathSync.native(abs)) === fold(path.join(fs.realpathSync.native(root), entry));
   } catch {
     return false;
   }

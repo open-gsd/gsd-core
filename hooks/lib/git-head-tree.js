@@ -94,9 +94,12 @@ function readTextOrNull(file, maxBytes) {
 
 // ─── locating the repository ────────────────────────────────────────────────
 
+// realpathSync.native, not the JS realpath: on Windows the JS form leaves an
+// 8.3 short name (RUNNER~1) as written, so the same directory reached through a
+// short and a long name compared unequal and a real linked worktree was refused.
 function sameRealPath(a, b) {
   try {
-    return fs.realpathSync(a) === fs.realpathSync(b);
+    return fs.realpathSync.native(a) === fs.realpathSync.native(b);
   } catch {
     return false;
   }
