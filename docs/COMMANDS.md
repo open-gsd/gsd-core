@@ -1747,12 +1747,14 @@ Update GSD with changelog preview, and optionally sync skills or reapply local p
 |------|-------------|
 | `--sync` | Sync skills from the GSD registry after updating |
 | `--reapply` | Restore local modifications (patches) after updating |
+| `--interactive[=exceptions\|all]` | With `--reapply`: show each of your edits next to the stock text with a recommendation, and keep, retire, or rewrite it on your answer. `all` shows every edit. `exceptions` (the default for bare `--interactive`) shows only edits upstream adopted, partly adopted, reworded around, or orphaned, and keeps the rest. Any other value is rejected. See [Review reapplied patches hunk by hunk](how-to/review-reapplied-patches.md) |
 | `--next` / `--rc` | Target the `@next` RC dist-tag instead of `@latest` (installs or refreshes a release candidate, e.g. `1.4.0-rc.1`; see ADR #660) |
 
 ```bash
 /gsd-update                         # Check for updates and install
 /gsd-update --sync                  # Update and sync skills
 /gsd-update --reapply               # Update and reapply local patches
+/gsd-update --reapply --interactive=all  # Decide each reapplied edit yourself
 /gsd-update --next                  # Install from the @next RC dist-tag
 ```
 
@@ -1784,8 +1786,8 @@ Review source files changed during a phase for bugs, security vulnerabilities, a
 | `--depth=quick\|standard\|deep` | No | Review depth level. Overrides both `workflow.code_review_depth` and any matching `workflow.code_review_depth_overrides` path rule — the flag always wins. `quick`: pattern-matching only (~2 min). `standard`: per-file analysis with language-specific checks (~5–15 min, default). `deep`: cross-file analysis including import graphs and call chains (~15–30 min) |
 | `--files file1,file2,...` | No | Explicit comma-separated file list; skips SUMMARY/git scoping entirely |
 | `--fix` | No | Auto-fix issues after review — reads REVIEW.md, spawns fixer agent, commits each fix atomically |
-| `--fix --all` | No | Include Info findings in fix scope (default: Critical + Warning only) |
-| `--fix --auto` | No | Fix + re-review iteration loop, capped at 3 iterations |
+| `--fix --all` | No | Include Info and necessity findings in fix scope (default: Critical + Warning, excluding necessity findings). Necessity findings are fixed last, by removing code, and are marked for human verification |
+| `--fix --auto` | No | Fix + re-review iteration loop, capped at 3 iterations. Stops early when the fixer reports no findings left in its scope, leaving out-of-scope findings in `REVIEW.md` |
 | *(reviewer-lane flag)* | No | Any flag `gsd_run review-lane flags` reports for the installed roster (e.g. `--codex`, `--agy`) — see below |
 
 **Prerequisites:** Phase has been executed and has SUMMARY.md or git history

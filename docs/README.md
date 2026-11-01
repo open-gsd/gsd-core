@@ -23,11 +23,14 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Install GSD as a Pi package](how-to/install-gsd-as-a-pi-package.md) — `pi install npm:@opengsd/gsd-core` instead of the gsd-core installer, with the same commands and extension
 - [Install a minimal GSD and add skills later](how-to/install-minimal-and-add-skills.md) — install only the core skills, then grow the surface with profiles and `/gsd-surface`
 - [Attach a plugin-provided skill to a GSD agent](how-to/attach-a-plugin-skill-to-a-gsd-agent.md) — use the `global:plugin:skill` entry form to load Claude Code plugin skills into agent prompts
+- [Review reapplied patches hunk by hunk](how-to/review-reapplied-patches.md) — after `/gsd-update`, keep, retire, or rewrite each of your edits that upstream adopted, reworded around, or orphaned
 - [Discuss a phase](how-to/discuss-a-phase.md) — capture implementation decisions before planning begins
 - [Tag a multi-repository milestone](how-to/tag-a-multi-repo-milestone.md) — record each repository's own release against a milestone, create per-repository tags, and decide repository by repository what to push
 - [Resolve edge-coverage findings](how-to/resolve-edge-coverage-findings.md) — turn the spec phase's surfaced domain-boundary edges into covered, dismissed, or backstopped spec decisions
 - [Probe edges in a non-English project](how-to/probe-edges-in-a-non-english-project.md) — get real edge coverage on a spec written in another language, and tell "no edges here" apart from "the probe could not read it"
 - [Resolve prohibition findings](how-to/resolve-prohibition-findings.md) — turn the spec phase's surfaced must-NOT constraints into resolved, dismissed, or deferred spec decisions
+- [Resolve CI/CD pipeline findings](how-to/resolve-cicd-pipeline-findings.md) — act on what `/gsd-code-review` reports for workflow files, Dockerfiles and deploy scripts, and tell a real finding from a false one
+- [Resolve necessity findings](how-to/resolve-necessity-findings.md) — decide whether to keep, simplify, or delete code that `/gsd-code-review` flags as guarding a problem that cannot occur
 - [Resolve an unreachable-workflow finding](how-to/resolve-unreachable-workflow-findings.md) — wire or fully sweep a shipped workflow that no command, agent, or skill references
 - [Acknowledge emitted-artifact drift](how-to/acknowledge-emitted-drift.md) — declare a deliberate emitted-byte ripple or workflow/agent growth in a commit trailer, and migrate an older ack fragment
 - [Change the STATE.md schema](how-to/change-the-state-md-schema.md) — add, change or remove a STATE.md frontmatter key and keep the template and all five reference documents in step

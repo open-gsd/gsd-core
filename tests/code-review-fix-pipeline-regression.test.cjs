@@ -268,3 +268,107 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     assert.strictEqual(unknown.review, true, 'an unparseable status must retain, never remove');
   });
 });
+
+// ---------------------------------------------------------------------------
+// #4100 — `--auto` converges when nothing is left in fix scope.
+//
+// Before: the loop stopped only on a re-review returning `status: clean`. A review whose remaining
+// findings were all out of scope (Info, or Necessity without --all) never reaches clean, so the
+// loop re-spawned the fixer with zero in-scope findings until MAX_ITERATIONS and printed the
+// degradation warning over a run that had nothing left to do. The fixer's own `findings_in_scope`
+// is the scope authority; `_gsd_fix_scope_empty` reads it strictly — only a frontmatter value of 0
+// proves zero scope, and anything unusable keeps the old behavior.
+// ---------------------------------------------------------------------------
+describe('#4100 — code-review-fix --auto zero-scope convergence', () => {
+  const fc = require('./helpers/fast-check-setup.cjs');
+
+  function scopeHelper() {
+    const src = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+    const lines = stepRegion(src, 'auto_iteration_loop').replace(/\r\n/g, '\n').split('\n');
+    const start = lines.findIndex((l) => l === '  _gsd_fix_scope_empty() {');
+    assert.notStrictEqual(start, -1, '_gsd_fix_scope_empty helper must exist in auto_iteration_loop');
+    const end = lines.findIndex((l, i) => i > start && l === '  }');
+    assert.notStrictEqual(end, -1, '_gsd_fix_scope_empty helper must close');
+    return lines.slice(start, end + 1).join('\n');
+  }
+
+  function probe(reportBody, { name = '01-REVIEW-FIX.md', write = true } = {}) {
+    const dir = createTempDir('gsd-4100-scope-');
+    try {
+      const report = path.join(dir, name);
+      if (write) fs.writeFileSync(report, reportBody);
+      const script = [
+        'set -euo pipefail',
+        scopeHelper(),
+        'if _gsd_fix_scope_empty "$P"; then echo yes; else echo no; fi',
+      ].join('\n');
+      const res = runHook('-c', [script], {
+        interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS, env: { ...process.env, P: report },
+      });
+      assert.strictEqual(res.exitCode, 0, 'the helper must never abort the loop: ' + res.stderr);
+      return { verdict: res.stdout.trim(), pwned: fs.existsSync(path.join(dir, 'pwned')) };
+    } finally { cleanup(dir); }
+  }
+
+  const report = (value, eol = '\n') =>
+    ['---', 'status: all_fixed', `findings_in_scope: ${value}`, 'fixed: 0', 'skipped: 0', '---', '', 'body'].join(eol);
+
+  test('boundary: 0 proves zero scope, 1 and -1 do not, 00 is zero, CRLF is honored', { skip: !HAS_BASH }, () => {
+    assert.strictEqual(probe(report('0')).verdict, 'yes', 'limit: 0 in scope');
+    assert.strictEqual(probe(report('1')).verdict, 'no', 'limit+1: 1 in scope');
+    assert.strictEqual(probe(report('-1')).verdict, 'no', 'limit-1: a negative count is malformed, not zero');
+    assert.strictEqual(probe(report('00')).verdict, 'yes', 'a zero-padded zero is still zero');
+    assert.strictEqual(probe(report('0', '\r\n')).verdict, 'yes', 'a CRLF report is read the same');
+  });
+
+  test('never proves zero from unusable input', { skip: !HAS_BASH }, () => {
+    assert.strictEqual(probe(report('')).verdict, 'no', 'blank value');
+    assert.strictEqual(probe(report('none')).verdict, 'no', 'non-numeric value');
+    assert.strictEqual(probe(['---', 'status: all_fixed', '---'].join('\n')).verdict, 'no', 'absent key');
+    assert.strictEqual(probe('findings_in_scope: 0\n').verdict, 'no', 'no frontmatter');
+    assert.strictEqual(probe(['---', 'status: partial', '---', 'findings_in_scope: 0'].join('\n')).verdict, 'no',
+      'the key in the body is not the frontmatter');
+    assert.strictEqual(probe('', { write: false }).verdict, 'no', 'missing report');
+    const hostile = probe(report('0'), { name: 'a;$(touch pwned)`touch pwned`.md' });
+    assert.strictEqual(hostile.verdict, 'yes', 'a hostile path is data');
+    assert.strictEqual(hostile.pwned, false, 'and is never executed');
+  });
+
+  test('property: zero scope iff findings_in_scope is zero', { skip: !HAS_BASH }, () => {
+    fc.assert(
+      fc.property(fc.nat({ max: 5000 }), (n) => probe(report(String(n))).verdict === (n === 0 ? 'yes' : 'no')),
+      { numRuns: 25 },
+    );
+  });
+
+  test('the loop consults the helper before iterating and after every fixer pass', () => {
+    const region = stepRegion(fs.readFileSync(WORKFLOW_PATH, 'utf8'), 'auto_iteration_loop');
+    const calls = region.split('_gsd_fix_scope_empty "${FIX_REPORT_PATH}"').length - 1;
+    assert.ok(calls >= 2, 'helper must gate the loop entry and each iteration: found ' + calls);
+    assert.ok(region.includes('while [ "$NO_SCOPE_LEFT" = false ] && [ $ITERATION -lt $MAX_ITERATIONS ]; do'),
+      'the loop must not start once nothing is in scope');
+    assert.ok(region.includes('if [ "$NO_SCOPE_LEFT" = false ] && [ $ITERATION -ge $MAX_ITERATIONS ]; then'),
+      'the degradation warning must not fire on a zero-scope stop');
+  });
+
+  test('the fix summary does not claim resolution when nothing was in scope', { skip: !HAS_BASH }, () => {
+    const region = stepRegion(fs.readFileSync(WORKFLOW_PATH, 'utf8'), 'present_results').replace(/\r\n/g, '\n');
+    const lines = region.split('\n');
+    const marker = lines.findIndex((l) => l.includes('All issues resolved.'));
+    assert.notStrictEqual(marker, -1);
+    let start = marker;
+    while (start > 0 && !/^```bash\s*$/.test(lines[start])) start--;
+    let end = marker;
+    while (end < lines.length && !/^```\s*$/.test(lines[end])) end++;
+    const fence = lines.slice(start + 1, end).join('\n');
+    const run = (inScope) => runHook('-c', [fence], {
+      interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS,
+      env: { ...process.env, FIX_STATUS: 'all_fixed', FINDINGS_IN_SCOPE: inScope, FIX_SCOPE: 'critical_warning',
+        FIX_REPORT_PATH: 'x', REVIEW_PATH: 'y', PHASE_NUMBER: '1' },
+    }).stdout;
+    const zero = run('0');
+    assert.ok(zero.includes('No findings were in fix scope'), 'zero scope says so');
+    assert.ok(!zero.includes('All issues resolved.'), 'and does not claim resolution');
+    assert.ok(run('2').includes('All issues resolved.'), 'a real all_fixed run is unchanged');
+  });
+});
