@@ -107,7 +107,7 @@ function parseWorktreePorcelain(porcelain: string): WorktreeBranchEntry[] {
 
 function parseWorktreeEntries(porcelain: string): WorktreeEntry[] {
   const entries: WorktreeEntry[] = [];
-  const blocks = String(porcelain || '').split('\n\n').filter(Boolean);
+  const blocks = String(porcelain || '').replace(/\r\n/g, '\n').split('\n\n').filter(Boolean);
   for (const block of blocks) {
     const lines = block.split('\n');
     const worktreeLine = lines.find((l) => l.startsWith('worktree '));
@@ -1205,10 +1205,19 @@ function executeWorktreeWaveCleanupPlan(plan: WaveCleanupPlan | null, deps: Work
     for (const entry of entries) {
       const raw = path.resolve(plan.repoRoot, entry.worktree_path);
       manifestPaths.add(raw);
+      if (process.platform === 'win32') manifestPaths.add(raw.toLowerCase());
       try {
-        manifestPaths.add(fs.realpathSync(raw));
+        const nativeReal = fs.realpathSync.native ? fs.realpathSync.native(raw) : fs.realpathSync(raw);
+        manifestPaths.add(nativeReal);
+        if (process.platform === 'win32') manifestPaths.add(nativeReal.toLowerCase());
       } catch {
-        // ignore
+        try {
+          const standardReal = fs.realpathSync(raw);
+          manifestPaths.add(standardReal);
+          if (process.platform === 'win32') manifestPaths.add(standardReal.toLowerCase());
+        } catch {
+          // ignore
+        }
       }
     }
 
@@ -1217,9 +1226,13 @@ function executeWorktreeWaveCleanupPlan(plan: WaveCleanupPlan | null, deps: Work
       : path.resolve(plan.repoRoot);
     let realOrchRoot: string;
     try {
-      realOrchRoot = fs.realpathSync(effectiveOrchRoot);
+      realOrchRoot = fs.realpathSync.native ? fs.realpathSync.native(effectiveOrchRoot) : fs.realpathSync(effectiveOrchRoot);
     } catch {
-      realOrchRoot = effectiveOrchRoot;
+      try {
+        realOrchRoot = fs.realpathSync(effectiveOrchRoot);
+      } catch {
+        realOrchRoot = effectiveOrchRoot;
+      }
     }
 
     const unmanifestedAgentWorktrees = listResult.entries.filter((e) => {
@@ -1227,11 +1240,18 @@ function executeWorktreeWaveCleanupPlan(plan: WaveCleanupPlan | null, deps: Work
       const resolvedPath = path.resolve(plan.repoRoot, e.path);
       let realPath: string;
       try {
-        realPath = fs.realpathSync(resolvedPath);
+        realPath = fs.realpathSync.native ? fs.realpathSync.native(resolvedPath) : fs.realpathSync(resolvedPath);
       } catch {
-        realPath = resolvedPath;
+        try {
+          realPath = fs.realpathSync(resolvedPath);
+        } catch {
+          realPath = resolvedPath;
+        }
       }
-      if (manifestPaths.has(resolvedPath) || manifestPaths.has(realPath)) return false;
+      if (manifestPaths.has(resolvedPath) || manifestPaths.has(realPath) ||
+          (process.platform === 'win32' && (manifestPaths.has(resolvedPath.toLowerCase()) || manifestPaths.has(realPath.toLowerCase())))) {
+        return false;
+      }
 
       const isAgentBranch = Boolean(e.branch && WORKTREE_AGENT_BRANCH_RE.test(e.branch));
       const baseName = path.basename(resolvedPath);
@@ -1333,21 +1353,34 @@ function executeWorktreeWaveCleanupPlan(plan: WaveCleanupPlan | null, deps: Work
   const resolveAgainstRepoRoot = (worktreePath: string): string => path.resolve(plan.repoRoot, worktreePath);
   const findRegistered = (listed: WorktreeListResult, target: string): WorktreeEntry | undefined => {
     if (!listed.ok) return undefined;
-    const exact = listed.entries.find((listedEntry) => resolveAgainstRepoRoot(listedEntry.path) === target);
+    const exact = listed.entries.find((listedEntry) => {
+      const p = resolveAgainstRepoRoot(listedEntry.path);
+      return p === target || (process.platform === 'win32' && p.toLowerCase() === target.toLowerCase());
+    });
     if (exact) return exact;
     let realTarget: string;
     try {
-      realTarget = fs.realpathSync(target);
+      realTarget = fs.realpathSync.native ? fs.realpathSync.native(target) : fs.realpathSync(target);
     } catch {
-      realTarget = target;
+      try {
+        realTarget = fs.realpathSync(target);
+      } catch {
+        realTarget = target;
+      }
     }
     return listed.entries.find((listedEntry) => {
       const resolved = resolveAgainstRepoRoot(listedEntry.path);
-      if (resolved === realTarget) return true;
+      if (resolved === realTarget || (process.platform === 'win32' && resolved.toLowerCase() === realTarget.toLowerCase())) return true;
       try {
-        return fs.realpathSync(resolved) === realTarget;
+        const realResolved = fs.realpathSync.native ? fs.realpathSync.native(resolved) : fs.realpathSync(resolved);
+        return realResolved === realTarget || (process.platform === 'win32' && realResolved.toLowerCase() === realTarget.toLowerCase());
       } catch {
-        return false;
+        try {
+          const standardResolved = fs.realpathSync(resolved);
+          return standardResolved === realTarget || (process.platform === 'win32' && standardResolved.toLowerCase() === realTarget.toLowerCase());
+        } catch {
+          return false;
+        }
       }
     });
   };
@@ -1839,7 +1872,7 @@ function cmdWorktreeCleanupWave(cwd: string, args: string[] = [], deps: Record<s
     let realParent: string;
     try {
       realParent = fs.existsSync(resolvedManifestPath)
-        ? fs.realpathSync(path.dirname(resolvedManifestPath))
+        ? (fs.realpathSync.native ? fs.realpathSync.native(path.dirname(resolvedManifestPath)) : fs.realpathSync(path.dirname(resolvedManifestPath)))
         : path.dirname(resolvedManifestPath);
     } catch {
       realParent = path.dirname(resolvedManifestPath);
@@ -1847,9 +1880,13 @@ function cmdWorktreeCleanupWave(cwd: string, args: string[] = [], deps: Record<s
     const realManifestTarget = path.join(realParent, path.basename(resolvedManifestPath));
     let realRepoTopLevel: string;
     try {
-      realRepoTopLevel = fs.realpathSync(repoTopLevel);
+      realRepoTopLevel = fs.realpathSync.native ? fs.realpathSync.native(repoTopLevel) : fs.realpathSync(repoTopLevel);
     } catch {
-      realRepoTopLevel = repoTopLevel;
+      try {
+        realRepoTopLevel = fs.realpathSync(repoTopLevel);
+      } catch {
+        realRepoTopLevel = repoTopLevel;
+      }
     }
     return !isContainedIn(realManifestTarget, realRepoTopLevel);
   })() : false;
