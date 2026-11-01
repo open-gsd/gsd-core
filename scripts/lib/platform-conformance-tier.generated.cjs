@@ -299,6 +299,7 @@ module.exports = {
   "tests/review-lane-availability.test.cjs",
   "tests/review-lane-invocation.test.cjs",
   "tests/review-lane-no-redirect-5433.test.cjs",
+  "tests/review-lane-prompt-cap.test.cjs",
   "tests/review-lane-runner.test.cjs",
   "tests/review-lane-windows-spawn-resolution.test.cjs",
   "tests/review-model-config.test.cjs",
