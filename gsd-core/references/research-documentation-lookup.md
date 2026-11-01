@@ -1,6 +1,6 @@
 When you need library or framework documentation, check in this order:
 
-1. If Context7 MCP tools (`mcp__context7__*`) are available in your environment, use them:
+1. If Context7 MCP tools (`mcp__context7__*, mcp__plugin_context7_context7__*`) are available in your environment, use them:
    - Resolve library ID: `mcp__context7__resolve-library-id` with `libraryName`
    - Fetch docs: `mcp__context7__query-docs` with `libraryId` (the ID from step 1) and `query`
 
@@ -27,5 +27,6 @@ When you need library or framework documentation, check in this order:
    ```
 
 Do not skip documentation lookups because MCP tools are unavailable — the CLI fallback
-works via Bash and produces equivalent output. Do NOT use `npx --yes` to auto-download
+works via Bash and produces equivalent output. Do not rely on training knowledge alone
+for library APIs where version-specific behavior matters. Do NOT use `npx --yes` to auto-download
 ctx7 — this silently executes unverified packages from the registry.
