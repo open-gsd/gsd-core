@@ -20,7 +20,7 @@ import phaseIdMod = require('./phase-id.cjs');
 const { normalizePhaseName } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
-const { findPhaseInternal } = phaseLocatorMod;
+const { phaseDirectoryOptions, findPhaseInternal } = phaseLocatorMod;
 import { platformWriteSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -107,7 +107,7 @@ function cmdTemplateFill(cwd: string, templateType: string | null | undefined, o
   if (!templateType) { error('template type required: summary, plan, or verification'); }
   if (!options.phase) { error('--phase required'); }
 
-  const phaseInfo = findPhaseInternal(cwd, options.phase);
+  const phaseInfo = findPhaseInternal(cwd, options.phase, undefined, phaseDirectoryOptions(cwd));
   if (!phaseInfo || !phaseInfo.found) { output({ error: 'Phase not found', phase: options.phase }, raw, undefined); return; }
 
   const padded = normalizePhaseName(options.phase);

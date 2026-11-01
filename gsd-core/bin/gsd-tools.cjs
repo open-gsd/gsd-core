@@ -90,6 +90,10 @@
  *                                    milestones/vX.Y-RELEASE-MAP.json and record it in MILESTONES.md
  *                                    (#5706; validated before any write, absent = unchanged)
  *
+ *   milestone release-tags --map <file.json> [--dry-run]
+ *                                      Preflight, then create annotated tags per sub-repo from a JSON array of
+ *                                      {repo, tag, ref?, message?, skip?}; never pushes, never overwrites (#5705)
+ *
  *   milestone archive-quick <version>  Move .planning/quick/* dirs to milestones/vX.Y-quick/ + reset the
  *                                      Quick Tasks Completed table, WITHOUT the milestone complete close-out
  *                                      (no ROADMAP/REQUIREMENTS/MILESTONES.md writes, no completion guards);
@@ -330,6 +334,7 @@ const config = require('./lib/config.cjs');
 const estimateCli = require('./lib/estimate-cli.cjs');
 const template = require('./lib/template.cjs');
 const milestone = require('./lib/milestone.cjs');
+const milestoneReleaseTags = require('./lib/milestone-release-tags.cjs');
 const commands = require('./lib/commands.cjs');
 const runtimeIdentity = require('./lib/runtime-identity.cjs');
 const init = require('./lib/init.cjs');
@@ -3240,8 +3245,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // unlike `milestone complete --archive-quick`.
             const dryRun = args.includes('--dry-run');
             milestone.cmdQuickArchive(cwd, args[2], { dryRun }, raw);
+          } else if (subcommand === 'release-tags') {
+            // #5705 (epic #3628 Phase 1): repository-scoped annotated release tags.
+            milestoneReleaseTags.cmdMilestoneReleaseTags(cwd, args, raw);
           } else {
-            error('Unknown milestone subcommand. Available: complete, archive-quick', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+            error('Unknown milestone subcommand. Available: complete, archive-quick, release-tags', ERROR_REASON.SDK_UNKNOWN_COMMAND);
           }
   }
 
@@ -4596,7 +4604,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // #1956: deterministic STATE.md-vs-ROADMAP.md phase-status drift.
             const { planningDir } = require('./lib/planning-workspace.cjs');
             const { stateExtractField, stateCurrentPositionSlice } = require('./lib/state-document.cjs');
-            const { findRoadmapProgressTable } = require('./lib/roadmap-parser.cjs');
+            const { locateRoadmapProgress } = require('./lib/roadmap-progress.cjs');
             const { phaseKeyFromProse } = require('./lib/phase-id.cjs');
             // STATE.md's YAML frontmatter carries its own lowercase `status:`
             // scalar ahead of the body's `## Current Position` prose "Status:"
@@ -4694,9 +4702,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
             const stateStatus = stateExtractField(currentPositionBody, 'Status');
 
-            // #1956/#2012: scoped to `## Progress` first (decoy-avoidance) —
-            // see findRoadmapProgressTable's doc comment (roadmap-parser.cts).
-            const table = findRoadmapProgressTable(roadmapContent);
+            // #1956/#2012: scoped to `## Progress` first (decoy-avoidance) — the
+            // Progress owner's rule (roadmap-progress.cts), shared with every reader and writer (#5762).
+            const { table } = locateRoadmapProgress(roadmapContent);
             const matchedRow = table
               ? table.rows.find((row) => phaseKeyFromProse(row.Phase) === phase && phase !== null)
               : undefined;

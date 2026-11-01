@@ -163,6 +163,7 @@ const DOCS_GUARD_TESTS = {
     'docs/COMMANDS.md',
     'docs/how-to/run-phases-autonomously.md',
   ],
+  'tests/adr-612-bracket-new-project-config.test.cjs': ['docs/CONFIGURATION.md'],
   // Walks docs/adr/ as a directory (builds/reads docs/adr/README.md and
   // fixture ADRs throughout) and separately reads docs/contributor-standards.md.
   'tests/adr-index-gate.test.cjs': ['docs/adr/', 'docs/contributor-standards.md'],
@@ -204,6 +205,7 @@ const DOCS_GUARD_TESTS = {
   // files without re-deriving the scan's own file-discovery logic.
   'tests/commit-files-pathspec.test.cjs': ['*'],
   'tests/compact-content-4139.test.cjs': ['docs/CONFIGURATION.md'],
+  'tests/complete-milestone-release-map-routing.test.cjs': ['docs/README.md', 'docs/how-to/tag-a-multi-repo-milestone.md'],
   'tests/config-field-docs.test.cjs': ['docs/CONFIGURATION.md'],
   'tests/config.test.cjs': ['docs/CONFIGURATION.md'],
   // #4974: doc/workflow content-parity checks read docs/CONFIGURATION.md's
@@ -318,6 +320,7 @@ const DOCS_GUARD_TESTS = {
   'tests/host-integration-descriptors.test.cjs': [
     'docs/reference/host-integration-capability-matrix.md',
   ],
+  'tests/inline-plan-threshold-default.test.cjs': ['docs/CONFIGURATION.md', 'docs/zh-CN/CONFIGURATION.md', 'docs/pt-BR/CONFIGURATION.md'],
   'tests/install.test.cjs': ['docs/reference/agents.md', 'docs/INVENTORY.md', 'docs/INVENTORY-MANIFEST.json'],
   // SOURCE_DIRS includes 'docs' and walks it recursively for every .md file
   // (intel.test.cjs:1223-1228) — a generic tree walk.

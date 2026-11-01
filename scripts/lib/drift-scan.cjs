@@ -294,12 +294,39 @@ function sanitizeForReport(text) {
     .replace(/[\u200B-\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069]/g, (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
 }
 
+/**
+ * Read the quoted or backtick-delimited string literal starting at `line[start]`
+ * (which must be `'`, `"`, or a backtick). Returns `{ text, end }` (`text`
+ * includes both delimiters, `end` is the index one past the literal) or null when
+ * no close quote is found within MAX_REGEX_LITERAL_LEN characters. Same single
+ * left-to-right, no-backtracking, escape-aware pass as `readRegexLiteralAt` (a
+ * `\x` escape consumes both characters, so an escaped quote never ends the
+ * literal early). A literal cannot span lines in a per-line scan. The older drift
+ * guards each carry their own byte-identical copy; new guards import this one.
+ */
+function readStringLiteralAt(line, start) {
+  const quote = line[start];
+  if (quote !== "'" && quote !== '"' && quote !== '`') return null;
+  const limit = Math.min(line.length, start + MAX_REGEX_LITERAL_LEN);
+  for (let i = start + 1; i < limit; i++) {
+    const ch = line[i];
+    if (ch === '\\') {
+      i++;
+      continue;
+    }
+    if (ch === '\r' || ch === '\n') return null;
+    if (ch === quote) return { text: line.slice(start, i + 1), end: i + 1 };
+  }
+  return null;
+}
+
 module.exports = {
   SKIP_DIR_NAMES,
   isInsideRoot,
   isUnderSkippedDir,
   walk,
   readRegexLiteralAt,
+  readStringLiteralAt,
   MAX_REGEX_LITERAL_LEN,
   sanitizeForReport,
   scanTree,

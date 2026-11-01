@@ -36,7 +36,7 @@ Each dispatch starts a separate `pi` process that runs the role with its own pro
 
 Limits:
 
-- **One level deep.** A dispatched role has no `gsd_dispatch` tool, so a role cannot spawn another role. `/gsd-debug` needs that (its session manager spawns `gsd-debugger`), so only `/skill:gsd-debug list` and `/skill:gsd-debug status <slug>`, which start no agent, run on Pi. Every other form prints that it cannot run on Pi (needs nested dispatch; Pi dispatch is flat) and stops. Run `/gsd-debug` in a runtime that can dispatch nested agents to start or continue a session; `list` and `status` read the sessions it writes from `.planning/debug/`.
+- **One level deep.** A dispatched role has no `gsd_dispatch` tool, so a role cannot spawn another role. `/gsd-debug` on Claude runs a session manager (`gsd-debug-session-manager`) that spawns `gsd-debugger`, so on Pi the skill never dispatches the manager: the Pi session runs the manager's loop itself and dispatches only `gsd-debugger`. See [Debug a bug from Pi](#debug-a-bug-from-pi).
 - **No per-call model or background run.** The role uses the model of the Pi session that dispatches it, and a dispatch blocks until the role finishes.
 - **GSD roles only.** The one workflow step that asks for the host's generic `general-purpose` agent (the assumptions mode of `/skill:gsd-discuss-phase`) has no role file, so `gsd_dispatch` refuses it with `role-unresolved` and the skill stops that step.
 - **Installed roles only.** `gsd_dispatch` reads the role from your GSD install, never from the project's `.pi/agents/`, and refuses a role file that no longer matches the install's manifest.
@@ -51,6 +51,27 @@ If a dispatch fails, `gsd_dispatch` returns an error result and the skill tells 
 | `depth-exceeded` | A dispatched role tried to dispatch again | Expected on Pi; use a runtime with nested dispatch for that workflow. |
 | `child-failed` | The child `pi` exited non-zero or ended in an error; the message ends with its stderr tail | Read the stderr tail; fix the model sign-in or the task and run the step again. |
 | `timeout` | The role ran past the 30-minute dispatch limit, or Pi cancelled the call, and the role was stopped | Split the task, then run the step again. |
+
+## Debug a bug from Pi
+
+Every `/gsd-debug` form runs on Pi:
+
+```text
+/skill:gsd-debug list
+/skill:gsd-debug status <slug>
+/skill:gsd-debug continue <slug>
+/skill:gsd-debug --diagnose <description>
+/skill:gsd-debug <description>
+```
+
+`list` and `status <slug>` read `.planning/debug/` and start no agent. The other forms create or resume a session file there and run the checkpoint loop in your Pi session: the session dispatches `gsd-debugger` with `gsd_dispatch`, reads what it returns (a root cause, a TDD checkpoint, a checkpoint that needs you, an inconclusive investigation, a fix the guardrail rejected, or completion) and acts on it. What differs from Claude:
+
+- **Questions are plain-text.** Pi has no structured question tool, so the session prints the question and its numbered options, ends its turn and waits for your reply. Type the number or your answer.
+- **State is in the session file.** The loop keeps `goal`, `tdd_mode`, `tdd_phase`, `resume_count`, `awaiting`, `question` and `last_next_action` in the `## Session Loop` section of `.planning/debug/<slug>.md`, so `/skill:gsd-debug continue <slug>` resumes a session after Pi lost its context, including one waiting on your answer. The file exists once the five symptom answers are in; until then the answers live only in the conversation.
+- **`--diagnose` stops at the root cause.** It prints the Root Cause Report and offers no fix; the session file is kept.
+- **No specialist review.** The specialist skills that the Claude session manager invokes after a root cause (TypeScript, Swift and the like) are Claude skills, so the review step is skipped.
+- **A dispatch error stops the loop.** `gsd_dispatch <code>: <message>` is printed, nothing is committed, and `continue <slug>` resumes the session.
+- **Unrecognized returns are retried three times.** After three re-dispatches, or two that leave `next_action` unchanged, the session prints a blocker report.
 
 ## If it does not start
 

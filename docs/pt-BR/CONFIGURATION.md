@@ -99,6 +99,7 @@ O GSD armazena as configurações do projeto em `.planning/config.json`. Criado 
   "git": {
     "branching_strategy": "none",
     "create_tag": true,
+    "repo_tagging": "single",
     "phase_branch_template": "gsd/phase-{phase}-{slug}",
     "milestone_branch_template": "gsd/{milestone}-{slug}",
     "quick_branch_template": null
@@ -264,7 +265,7 @@ Todos os controles de fluxo de trabalho seguem o padrão **ausente = habilitado*
 | `planner.stall_detection_enabled` | boolean | `true` | Controla a detecção limitada de travamento do planejador padrão, dos planejadores de esboço/por plano em chunks, do verificador de planos e do planejador de revisão. Use `gsd config-set planner.stall_detection_enabled false` para ignorar o polling do watchdog e aguardar cada agente pelo mecanismo de conclusão nativa do runtime. **Aviso:** `false` abre mão da recuperação limitada se o runtime perder a entrega da conclusão; pode ser necessário interromper e usar o fallback existente do sistema de arquivos. A execução e o tratamento do resultado nunca são ignorados. |
 | `planner.stall_detect_interval_minutes` | number | `5` | Minutos entre verificações de travamento enquanto um planejador ou verificador de planos está ativo. O orquestrador inspeciona a atividade em disco de `*-PLAN.md` nessa cadência (#2650). |
 | `planner.stall_threshold_minutes` | number | `10` | Minutos sem marcador de conclusão ou atividade recente em planos antes que a fase de planejamento ofereça automaticamente as opções aceitar/tentar novamente/parar (#2650). |
-| `workflow.inline_plan_threshold` | number | `3` | Número máximo de tasks em uma fase antes que o planejador gere um arquivo PLAN.md separado em vez de incorporar tasks no prompt |
+| `workflow.inline_plan_threshold` | number | `2` | Planos com esta quantidade de tasks ou menos são executados inline em vez de criar um subagente executor, evitando o custo de criação do subagente em planos pequenos. Use `0` para sempre criar um subagente. |
 | `workflow.drift_threshold` | number | `3` | Número mínimo de novos elementos estruturais (novos diretórios, exportações barrel, migrações, módulos de rota) introduzidos durante uma fase antes que o gate de deriva pós-execução da base de código tome ação. Consulte [#2003](https://github.com/open-gsd/gsd-core/issues/2003). Adicionado na v1.39 |
 | `workflow.drift_action` | string | `warn` | O que fazer quando `workflow.drift_threshold` é excedido após `/gsd-execute-phase`. `warn` imprime uma mensagem sugerindo `/gsd-map-codebase --paths …`; `auto-remap` gera `gsd-codebase-mapper` com escopo para os caminhos afetados. Adicionado na v1.39 |
 | `workflow.build_command` | string | (nenhum) | Comando shell para compilar o projeto no gate de build pós-merge (Passo A do passo 5.6 na fase de execução). Quando não definido, o gate detecta automaticamente: Xcode (`.xcodeproj` presente) → `xcodebuild build`, `Makefile` com alvo `build:` → `make build`, Justfile → `just build`, `Cargo.toml` → `cargo build`, `go.mod` → `go build ./...`, Python → `python -m py_compile`, `package.json` com script `build` → `npm run build`. Executa com timeout de 5 minutos; falha incrementa `WAVE_FAILURE_COUNT`. Adicionado na v1.39 |
@@ -548,9 +549,29 @@ Todos os quatro campos são **opcionais e aditivos** — arquivos STATE.md sem e
 | `git.branching_strategy` | enum | `none` | `none`, `phase` ou `milestone` |
 | `git.base_branch` | string | `main` | O branch de integração a partir do qual os branches de fase/marco são criados e nos quais são mesclados de volta. Substitua quando seu repositório usar `master` ou um branch de release |
 | `git.create_tag` | boolean | `true` | Cria uma tag git (`v[X.Y]`) na conclusão do marco. Defina como `false` para projetos com seu próprio fluxo de release |
+| `git.repo_tagging` | enum | `single` | Modo de tagging do marco (#5706): `single` ou `per_repo`. `single` é o comportamento existente. `per_repo` faz um projeto multi-repo registrar um release por repositório configurado (veja a seção "Mapeamento de release por repositório" abaixo). Independente de `git.create_tag`; `git.create_tag: false` com `per_repo` registra o mapa e não cria nenhuma tag. Um valor inválido em um `config.json` editado manualmente é lido como `single` |
 | `git.phase_branch_template` | string | `gsd/phase-{phase}-{slug}` | Template de nome de branch para estratégia de fase |
 | `git.milestone_branch_template` | string | `gsd/{milestone}-{slug}` | Template de nome de branch para estratégia de marco |
 | `git.quick_branch_template` | string ou null | `null` | Template opcional de nome de branch para tasks `/gsd-quick` |
+
+### Mapeamento de release por repositório
+
+Um projeto multi-repo pode registrar qual release cada repositório publicou para um marco. O registro é um mapa de release (release map): um array JSON fornecido a `milestone complete <version> --release-map <file>` e arquivado pelo valor registrado. `git.repo_tagging` seleciona o modo de tagging; `init complete-milestone` o expõe como `repo_tagging`, ao lado de `sub_repos` (os repositórios configurados, possivelmente vazio).
+
+Cada entrada do mapa de release tem estes campos:
+
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| `repo` | string | Nome do repositório. Obrigatório, não vazio, único dentro do mapa. Tratado como dado, nunca como caminho |
+| `release` | string ou null | A versão ou tag de release do repositório |
+| `reference` | string ou null | Um SHA de commit ou uma referência de pull request |
+| `environment` | string ou null | Ambiente de destino, texto livre (por exemplo `production`, `development`, `npm`) |
+| `status` | enum | Obrigatório. Status do mapa de release: `released`, `deployed`, `unreleased` |
+| `tag` | enum | Obrigatório. Estados de tag do mapa de release: `created`, `already_tagged`, `skipped`, `none` |
+
+Cada campo de texto é limitado a 200 caracteres e um mapa a 256 entradas. Campos desconhecidos são rejeitados. Uma entrada é arquivada como registrada: nunca é filtrada contra `planning.sub_repos`, então um repositório que foi ignorado, não lançado ou não está mais configurado permanece no mapa. O arquivo guarda os valores brutos em `.planning/milestones/<version>-RELEASE-MAP.json` (`{ "version", "entries" }`), e a entrada de MILESTONES.md ganha uma tabela **Release mapping:** com os valores escapados para markdown. Um marco arquivado sem mapa não é afetado.
+
+A versão de marco do GSD nomeia o trabalho planejado em `.planning/`; ela pode diferir da versão de release de cada repositório, e os repositórios não precisam compartilhar uma única sequência. Com `git.repo_tagging: per_repo` e `sub_repos` não vazio, `/gsd-complete-milestone` coleta o mapa, verifica cada tag solicitada antes de criar qualquer uma, cria as tags (`milestone release-tags`), arquiva o mapa e faz uma pergunta separada por repositório, nomeando o repositório e seu remote, antes de enviar uma tag. Nada é enviado por padrão. Veja [Como marcar um marco multi-repo](../how-to/tag-a-multi-repo-milestone.md).
 
 ### Comparação de Estratégias
 

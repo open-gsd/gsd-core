@@ -99,6 +99,7 @@ GSD 将项目设置存储在 `.planning/config.json` 中。该文件在 `/gsd-ne
   "git": {
     "branching_strategy": "none",
     "create_tag": true,
+    "repo_tagging": "single",
     "phase_branch_template": "gsd/phase-{phase}-{slug}",
     "milestone_branch_template": "gsd/{milestone}-{slug}",
     "quick_branch_template": null
@@ -264,7 +265,7 @@ API 密钥字段接受字符串值（密钥本身）。也可以设置为哨兵�
 | `planner.stall_detection_enabled` | boolean | `true` | 控制标准规划器、分块大纲/逐计划规划器、计划检查器和修订规划器的有界停滞检测。运行 `gsd config-set planner.stall_detection_enabled false` 可跳过 watchdog 轮询，改用运行时原生完成机制等待每个 agent。**警告：** `false` 会放弃运行时丢失完成回传时的有界恢复；届时可能需要中断并使用现有文件系统回退。规划器执行和结果处理不会被跳过。 |
 | `planner.stall_detect_interval_minutes` | number | `5` | 规划器或计划检查器活跃时的停滞检查间隔分钟数。规划阶段编排器按此频率检查磁盘上的 `*-PLAN.md` 活动（#2650）。 |
 | `planner.stall_threshold_minutes` | number | `10` | 没有完成标记或新的磁盘计划活动超过此分钟数后，规划阶段自动提供接受计划/重试/停止恢复选项（#2650）。 |
-| `workflow.inline_plan_threshold` | number | `3` | 阶段中任务数量的最大值，超过此值后规划器生成单独的 PLAN.md 文件而非在提示词中内联任务 |
+| `workflow.inline_plan_threshold` | number | `2` | 任务数不超过此值的计划以内联方式执行，而不是派生执行器子代理，从而为小型计划省去子代理派生开销。设为 `0` 表示始终派生子代理。 |
 | `workflow.drift_threshold` | number | `3` | 阶段期间引入的新结构元素（新目录、桶形导出、迁移、路由模块）的最小数量，超过此值后执行后代码库漂移门禁采取行动。参见 [#2003](https://github.com/open-gsd/gsd-core/issues/2003)。v1.39 新增 |
 | `workflow.drift_action` | string | `warn` | `/gsd-execute-phase` 后超过 `workflow.drift_threshold` 时的处理方式。`warn` 打印建议运行 `/gsd-map-codebase --paths …` 的消息；`auto-remap` 派生 `gsd-codebase-mapper` 限定于受影响路径。v1.39 新增 |
 | `workflow.build_command` | string | （无） | 在执行阶段步骤 5.6 的步骤 A 中（合并后构建门禁）构建项目的 shell 命令。未设置时，门禁自动检测：Xcode（存在 `.xcodeproj`）→ `xcodebuild build`，带 `build:` 目标的 `Makefile` → `make build`，Justfile → `just build`，`Cargo.toml` → `cargo build`，`go.mod` → `go build ./...`，Python → `python -m py_compile`，带 `build` 脚本的 `package.json` → `npm run build`。5 分钟超时运行；失败时递增 `WAVE_FAILURE_COUNT`。v1.39 新增 |
@@ -548,9 +549,29 @@ gsd-tools query config-set features.thinking_partner false
 | `git.branching_strategy` | enum | `none` | `none`、`phase` 或 `milestone` |
 | `git.base_branch` | string | `main` | 创建阶段/里程碑分支并合并回的集成分支。当仓库使用 `master` 或发布分支时可覆盖 |
 | `git.create_tag` | boolean | `true` | 在里程碑完成时创建 git 标签（`v[X.Y]`）。对于有自己发布流程的项目，设为 `false` |
+| `git.repo_tagging` | enum | `single` | 里程碑标签模式（#5706）：`single` 或 `per_repo`。`single` 为现有行为。`per_repo` 让多仓库项目为每个已配置的仓库记录一次发布（见下方“按仓库的发布映射”一节）。独立于 `git.create_tag`；`per_repo` 搭配 `git.create_tag: false` 时会记录映射但不创建任何标签。手动编辑的 `config.json` 中的无效值按 `single` 读取 |
 | `git.phase_branch_template` | string | `gsd/phase-{phase}-{slug}` | 阶段策略的分支名称模板 |
 | `git.milestone_branch_template` | string | `gsd/{milestone}-{slug}` | 里程碑策略的分支名称模板 |
 | `git.quick_branch_template` | string 或 null | `null` | `/gsd-quick` 任务的可选分支名称模板 |
+
+### 按仓库的发布映射
+
+多仓库项目可以为某个里程碑记录各仓库实际发布了哪个版本。该记录即发布映射（release map）：一个 JSON 数组，通过 `milestone complete <version> --release-map <file>` 提供，并按记录值归档。`git.repo_tagging` 选择标签模式；`init complete-milestone` 会把它作为 `repo_tagging` 与 `sub_repos`（已配置的仓库，可能为空）一并暴露。
+
+发布映射的每个条目包含以下字段：
+
+| 字段 | 类型 | 描述 |
+|-------|------|-------------|
+| `repo` | string | 仓库名称。必填、非空白，且在映射内唯一。作为数据处理，绝不作为路径 |
+| `release` | string 或 null | 该仓库的发布版本或标签 |
+| `reference` | string 或 null | 提交 SHA 或拉取请求引用 |
+| `environment` | string 或 null | 目标环境，自由文本（例如 `production`、`development`、`npm`） |
+| `status` | enum | 必填。发布映射状态：`released`、`deployed`、`unreleased` |
+| `tag` | enum | 必填。发布映射标签状态：`created`、`already_tagged`、`skipped`、`none` |
+
+每个字符串字段限制为 200 个字符，一个映射最多 256 个条目。未知字段会被拒绝。条目按记录值归档：绝不会按 `planning.sub_repos` 过滤，因此被跳过、未发布或已不再配置的仓库仍保留在映射中。归档把原始值保存在 `.planning/milestones/<version>-RELEASE-MAP.json`（`{ "version", "entries" }`）中，MILESTONES.md 条目会新增一个 **Release mapping:** 表格，其中的值已针对 markdown 转义。未带映射归档的里程碑不受影响。
+
+GSD 里程碑版本指的是 `.planning/` 中的计划工作；它可以与任一仓库的发布版本不同，各仓库也无需共用同一个版本序列。当 `git.repo_tagging: per_repo` 且 `sub_repos` 非空时，`/gsd-complete-milestone` 会收集映射，在创建任何标签之前检查每个请求的标签，创建标签（`milestone release-tags`），归档映射，并在推送标签之前针对每个仓库单独询问（指明仓库及其远程）。默认不推送任何内容。参见[如何为多仓库里程碑打标签](../how-to/tag-a-multi-repo-milestone.md)。
 
 ### 策略对比
 

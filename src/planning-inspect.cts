@@ -48,7 +48,7 @@ import planningSnapshotMod = require('./planning-snapshot.cjs');
 const { buildPlanningSnapshot, worstScope } = planningSnapshotMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspaceMod = require('./planning-workspace.cjs');
-const { planningPaths } = planningWorkspaceMod;
+const { planningPaths, resolvePhaseIdConvention } = planningWorkspaceMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planScan = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -73,7 +73,7 @@ const { readVerificationStatus, VerificationStatusError, failOnVerificationStatu
 type VerificationStatusErrorT = InstanceType<typeof VerificationStatusError>;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { phaseKeyFromDir, phaseKeyFromToken, phaseMarkdownRegexSource } = phaseIdMod;
+const { phaseKeyFromDir, phaseKeyFromToken, phaseMarkdownRegexSource, extractPhaseDependencyTokens } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
 const { extractCurrentMilestone } = roadmapParserMod;
@@ -462,6 +462,7 @@ function buildRequirements(
   knownPhaseKeys: Set<string>,
   diagnostics: Diagnostic[],
   planningRoot: string,
+  directoryContext: ReturnType<typeof phaseIdMod.phaseDirectoryContext>,
 ): { rows: RequirementRow[]; scope: Scope } {
   const doc = readDocument(requirementsPath, planningRoot);
   if (!doc.exists) {
@@ -523,7 +524,7 @@ function buildRequirements(
       // here too — it is a FILE-MEMBERSHIP predicate (#3511) for aggregate
       // `*-UAT.md` / `*-VERIFICATION.md` scans, not a phase-identity equality
       // test, and is unreliable for decimal phases.
-      if (!knownPhaseKeys.has(phaseKeyFromToken(token))) {
+      if (!knownPhaseKeys.has(phaseKeyFromToken(token, directoryContext))) {
         diagnostics.push({
           code: INSPECT_DIAGNOSTIC.REQUIREMENT_PHASE_UNKNOWN,
           subject: `${item.id}->${token}`,
@@ -1059,26 +1060,15 @@ function extractGoalProse(sectionBody: string): string | null {
  * token scan above), never a document-wide scan. `[]` when the line is
  * absent.
  */
-function extractDependencyTokens(sectionBody: string): string[] {
+function extractDependencyTokens(sectionBody: string, phaseIdConvention: string | null): string[] {
   const m = DEPENDS_ON_LINE_RE.exec(sectionBody);
   if (!m) return [];
-  // #4764: phase REFERENCES, not digit runs — the same prose-anchored grammar
-  // init.manager's dep_phases extraction uses (owner: phase-id.cts's
-  // PHASE_DEP_REF_SOURCE). The whole-field token scrape this replaces pulled
-  // calendar dates, git shas and ledger ids in as dependencies. The grammar's
-  // capture group 1 already excludes the "Phase(s)" anchor word, so no
-  // prefix-strip literal is needed here. Self-exclusion (init.manager drops
-  // the row's own number) is deliberately NOT applied: this reader has no row
-  // context at the extraction site and reports informationally, it does not
-  // gate.
-  const refRe = new RegExp(phaseIdMod.PHASE_DEP_REF_SOURCE, 'gi');
-  const tokenRe = new RegExp(phaseIdMod.PHASE_NUMBER_TOKEN_SOURCE, 'g');
-  const tokens: string[] = [];
-  let refMatch: RegExpExecArray | null;
-  while ((refMatch = refRe.exec(m[1])) !== null) {
-    for (const t of refMatch[1].matchAll(tokenRe)) tokens.push(t[0]);
-  }
-  return sortedUnique(tokens);
+  // #4764/#4304: phase REFERENCES, not digit runs. Both this informational
+  // reader and init.manager consume phase-id.cts's convention-aware owner, so
+  // bracket milestone digits never surface as dependencies. Self-exclusion is
+  // deliberately NOT applied here: this site has no row context and does not
+  // gate readiness.
+  return sortedUnique(extractPhaseDependencyTokens(m[1], phaseIdConvention));
 }
 
 /**
@@ -1092,10 +1082,10 @@ function extractDependencyTokens(sectionBody: string): string[] {
  * sibling phase whose TITLE merely mentions this phase's number is never
  * hijacked.
  */
-function findPhaseRoadmapSection(cwd: string, roadmapText: string, phaseId: string): string | null {
+function findPhaseRoadmapSection(cwd: string, roadmapText: string, phaseId: string, directoryContext: phaseIdMod.PhaseDirectoryContext): string | null {
   const scoped = extractCurrentMilestone(roadmapText, cwd);
   const headingRe = new RegExp(
-    `^(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+${phaseMarkdownRegexSource(phaseId)}(?=[\\s:(]|$)`,
+    `^(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+${phaseMarkdownRegexSource(phaseId, directoryContext)}(?=[\\s:(]|$)`,
     'i',
   );
   const section = collectSection(scoped, (h) => headingRe.test(h.text));
@@ -1128,7 +1118,9 @@ function buildPhaseGoalAndDependencies(
   roadmapDoc: { text: string | null; readable: boolean },
   phaseId: string | null,
   phaseDirLabel: string,
+  phaseIdConvention: string | null,
   diagnostics: Diagnostic[],
+  directoryContext: phaseIdMod.PhaseDirectoryContext,
 ): { goal: ScopedText; dependencies: ScopedTextList } {
   if (!roadmapDoc.readable || roadmapDoc.text === null) {
     diagnostics.push({
@@ -1152,7 +1144,7 @@ function buildPhaseGoalAndDependencies(
       dependencies: { value: [], scope: SCOPE.UNSCOPED },
     };
   }
-  const sectionBody = findPhaseRoadmapSection(cwd, roadmapDoc.text, phaseId);
+  const sectionBody = findPhaseRoadmapSection(cwd, roadmapDoc.text, phaseId, directoryContext);
   if (sectionBody === null) {
     diagnostics.push({
       code: INSPECT_DIAGNOSTIC.ROADMAP_UNSCOPED,
@@ -1166,7 +1158,7 @@ function buildPhaseGoalAndDependencies(
   }
   return {
     goal: { value: extractGoalProse(sectionBody), scope: SCOPE.COMPLETE },
-    dependencies: { value: extractDependencyTokens(sectionBody), scope: SCOPE.COMPLETE },
+    dependencies: { value: extractDependencyTokens(sectionBody, phaseIdConvention), scope: SCOPE.COMPLETE },
   };
 }
 
@@ -1190,6 +1182,7 @@ function buildPlanningInspectResult(cwd: string): {
   let statusError: VerificationStatusErrorT | null = null;
   const diagnostics: Diagnostic[] = [];
   const paths = planningPaths(cwd);
+  const phaseIdConvention = resolvePhaseIdConvention(cwd);
   const planningExists = fs.existsSync(paths.planning);
   if (!planningExists) {
     diagnostics.push({
@@ -1200,6 +1193,7 @@ function buildPlanningInspectResult(cwd: string): {
   }
 
   const snapshot = buildPlanningSnapshot(cwd);
+  const directoryContext = snapshot.directoryContext;
 
   if (snapshot.milestone.scope !== SCOPE.COMPLETE) {
     diagnostics.push({
@@ -1236,7 +1230,7 @@ function buildPlanningInspectResult(cwd: string): {
   // one phase.
   const checkboxByPhaseKey = new Map<string, boolean>();
   for (const [token, ticked] of Object.entries(checkboxes)) {
-    checkboxByPhaseKey.set(phaseKeyFromToken(token), ticked);
+    checkboxByPhaseKey.set(phaseKeyFromToken(token, directoryContext), ticked);
   }
   const phaseSnapshots = snapshot.phases.value as {
     dir: string;
@@ -1251,7 +1245,7 @@ function buildPlanningInspectResult(cwd: string): {
   // `phaseKeyFromDir`), not a raw regex scrape — this is the set
   // `buildRequirements` below matches Traceability tokens against via
   // `phaseKeyFromToken`.
-  const knownPhaseKeys: Set<string> = new Set(windowed.map((dir) => phaseKeyFromDir(dir)));
+  const knownPhaseKeys: Set<string> = new Set(windowed.map((dir) => phaseKeyFromDir(dir, undefined, directoryContext)));
 
   // Read once, shared across every phase row's goal/dependencies lookup —
   // the same `readDocument` seam every other document read in this module
@@ -1296,8 +1290,18 @@ function buildPlanningInspectResult(cwd: string): {
     }
 
     const token = /^(\d+(?:\.\d+)*)/.exec(phase.dir);
-    const phaseId = token ? token[1] : null;
-    const { goal, dependencies } = buildPhaseGoalAndDependencies(cwd, roadmapDoc, phaseId, phase.dir, diagnostics);
+    const custom = phaseIdMod.customPhaseQuery(phase.dir, directoryContext);
+    const owner = custom && phaseIdMod.customPhaseDirectoryParts(phase.dir, custom);
+    const phaseId = owner ? owner.id : token ? token[1] : null;
+    const { goal, dependencies } = buildPhaseGoalAndDependencies(
+      cwd,
+      roadmapDoc,
+      phaseId,
+      phase.dir,
+      phaseIdConvention,
+      diagnostics,
+      directoryContext,
+    );
 
     // `uat.foldScope`, NOT `uat.scope` (#3078 round-8). The two currently
     // agree at every call site — see `buildUatRows` for why the field is
@@ -1333,8 +1337,8 @@ function buildPlanningInspectResult(cwd: string): {
         route: verification.route,
       },
       roadmap_acceptance: {
-        checkbox: checkboxByPhaseKey.has(phaseKeyFromDir(phase.dir))
-          ? (checkboxByPhaseKey.get(phaseKeyFromDir(phase.dir)) as boolean)
+        checkbox: checkboxByPhaseKey.has(phaseKeyFromDir(phase.dir, undefined, directoryContext))
+          ? (checkboxByPhaseKey.get(phaseKeyFromDir(phase.dir, undefined, directoryContext)) as boolean)
           : null,
         // ADR-3180 §7.4: a ticked checkbox is a human annotation with no
         // machine authority. Stated in the payload so a consumer cannot
@@ -1349,7 +1353,7 @@ function buildPlanningInspectResult(cwd: string): {
     };
   });
 
-  const requirements = buildRequirements(paths.requirements, knownPhaseKeys, diagnostics, paths.planning);
+  const requirements = buildRequirements(paths.requirements, knownPhaseKeys, diagnostics, paths.planning, directoryContext);
 
   const phaseScope = worstScope(
     snapshot.phaseDirs.scope,

@@ -65,7 +65,7 @@ same helper.
 **5. Enforcement by construction — no re-introduced ratchet; the scan surface is declared.** A seeded
 `local/no-adhoc-state-write` allowlist is rejected (Alternatives). Enforcement rides the type system
 (`writeStateMd` requiring a `StateTransaction`) plus the existing terminal Axis-2 guard
-(`findRawStateWrites` / `targetsStatePath` / `RAW_WRITE_CALL_START_RE`, `scripts/lint-state-write-path-drift.cjs:606,564`),
+(`findRawStateWrites` / `targetsStatePath` / `RAW_WRITE_CALL_START_RE`, `scripts/lint-state-write-path-drift.cjs`),
 extended. Its scan surface is declared (§ Scan surface).
 
 **6. The completion-ratio composition + the write-side aggregates get an owner — scoped, not wholesale.**
@@ -144,7 +144,7 @@ inflates the "N found by the guard" census, so it is **excluded**.
 
 | Concern | Owner | Guard | Scan surface | Status |
 |---|---|---|---|---|
-| No raw STATE.md write outside the seam | `writeStateMd` requires `StateTransaction` (type) | `findRawStateWrites` (Axis 2, terminal) `lint-state-write-path-drift.cjs:606,564` | authored (above) | Enforced (extended here) |
+| No raw STATE.md write outside the seam | `writeStateMd` requires `StateTransaction` (type) | `findRawStateWrites` (Axis 2, terminal), `targetsStatePath`, `RAW_WRITE_CALL_START_RE` in `scripts/lint-state-write-path-drift.cjs` | authored (above) | Enforced (extended here) |
 | Composition not re-assembled | `syncAndPreserveStateMd` | `findCompositionBypasses` (terminal, #3871) | `src/**` | Enforced |
 | Completion-ratio re-derivation | ADR-3180 §7.6 kernel/discriminator | `lint-completion-ratio-drift.cjs` (**inherited**; §7.6 rules 1–2) | `src/**` | Enforced |
 | Bounded mutation (declared scope) | verifying executor | positive-control test (drives it red) | n/a (test) | Required — Phase 2 |

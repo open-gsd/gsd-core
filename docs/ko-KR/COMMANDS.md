@@ -1006,7 +1006,7 @@ GSD 설정을 대화형으로 구성합니다 — 워크플로 토글, 고급 �
 
 | 섹션 | 키 |
 |---------|------|
-| 계획 조정 | `workflow.plan_bounce`, `workflow.plan_bounce_passes`, `workflow.plan_bounce_script`, `workflow.subagent_timeout`, `workflow.inline_plan_threshold` |
+| 계획 조정 | `planner.stall_detection_enabled`, `planner.stall_threshold_minutes`, `planner.stall_detect_interval_minutes`, `workflow.plan_bounce`, `workflow.plan_bounce_passes`, `workflow.plan_bounce_script`, `workflow.subagent_timeout`, `workflow.inline_plan_threshold` |
 | 실행 조정 | `workflow.node_repair`, `workflow.node_repair_budget`, `workflow.auto_prune_state` |
 | 논의 조정 | `workflow.max_discuss_passes` |
 | 크로스 AI 실행 | `workflow.cross_ai_execution`, `workflow.cross_ai_command`, `workflow.cross_ai_timeout` |

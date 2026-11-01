@@ -26,6 +26,7 @@
   - [Note Capture](#13-note-capture)
   - [Auto-Advance (Next)](#14-auto-advance-next)
   - [Review Dispositions Ledger](#3806-review-dispositions-ledger)
+  - [Planner Stall Watchdog](#3923-planner-stall-watchdog)
   - [Quick Batch Mode](#4015-quick-batch-mode)
 - [Quality Assurance Features](#quality-assurance-features)
   - [Nyquist Validation](#15-nyquist-validation)
@@ -202,6 +203,7 @@
   - [Stated Failing Direction](#167-stated-failing-direction)
   - [Runtime Identity](#168-runtime-identity)
   - [Context Drift Gate](#3348-context-drift-gate)
+  - [Per-Repository Release Mapping](#3628-per-repository-release-mapping)
   - ["Failure Is a Value" — Strict Argv Rejection and the `--pick` Absence Contract](#3884-failure-is-a-value--strict-argv-rejection-and-the---pick-absence-contract)
   - [No Silent Swallow, No Verdict From Dropped Data](#3885-no-silent-swallow-no-verdict-from-dropped-data)
   - [Runtime Marker Resolution, Derived Codex Sandbox, and In-Phase Short-Form Dependencies](#3897-runtime-marker-resolution-derived-codex-sandbox-and-in-phase-short-form-dependencies)
@@ -451,8 +453,9 @@
 - REQ-SHIP-04: System MUST update STATE.md with shipping status and PR number
 - REQ-SHIP-05: System MUST support `--draft` flag for draft PRs
 - REQ-SHIP-06: System MUST support append-only project PR body sections configured with `ship.pr_body_sections`
+- REQ-SHIP-07: System MUST refuse a phase whose ROADMAP.md record (checklist entry, progress-table Status) does not read complete, has no record, or sits in an unreadable progress table, before any PR is created (`PHASE_NOT_COMPLETE`, `PHASE_NOT_RECORDED`, `ROADMAP_TABLE_UNREADABLE`; #5221)
 
-**Prerequisites:** Phase verified, `gh` CLI installed and authenticated, work on feature branch
+**Prerequisites:** Phase verified and recorded complete in ROADMAP.md, `gh` CLI installed and authenticated, `jq` installed, work on feature branch
 
 **Produces:** GitHub PR with rich body, optional configured PRD-style sections, STATE.md updated
 
@@ -647,6 +650,27 @@ formats already in the wild is decided. Legacy PLAN.md content written before th
 not migrated or flagged.
 
 **Reference:** [ADR-3806](adr/3806-review-dispositions-ledger.md) · [Cross-AI Peer Review](#42-cross-ai-peer-review)
+
+---
+
+### 3923. Planner Stall Watchdog
+
+**Command:** `/gsd-plan-phase` (settings: `/gsd-config --advanced`, Planning Tuning)
+
+**Purpose:** A planner or plan-checker subagent can finish its work while the runtime loses the completion handoff, which used to leave plan-phase waiting forever (#2650). Plan-phase now watches for completion itself and, after a bounded wait with no sign of progress, offers the accept-plans / retry / stop recovery choice. Models differ widely in speed, so how long "no sign of progress" lasts before that choice appears is a setting you can change (#3923).
+
+**Behavior:**
+
+- **Two signals count as progress.** A completion marker in the agent's output, or a `*-PLAN.md` file modified within the last check interval. Either one keeps plan-phase waiting. Only when neither appears for `planner.stall_threshold_minutes` (default `10`) does plan-phase treat the agent as stalled.
+- **It checks on a fixed cadence.** Plan-phase looks every `planner.stall_detect_interval_minutes` (default `5`). Each check is one bounded wait, so a finished agent is noticed at most one interval late. That is the cost of never hanging.
+- **The threshold is the knob for slow models.** A model that is still working but takes longer than the threshold to write anything is flagged as stalled. Raising the threshold removes those false alarms. Lowering the interval notices a finished planner sooner, at the price of more checks.
+- **Both values are whole minutes, `1` or more.** A stored `0`, a negative, a non-number or a value of more than nine digits falls back to the default. An interval of `0` would make every check a zero-length wait, and a threshold of `0` would flag a healthy agent on the first check.
+- **The watchdog can be turned off.** `planner.stall_detection_enabled: false` waits on the runtime's own completion signal instead. That gives up the bounded recovery, so `/gsd-config --advanced` shows a warning first and only asks for the threshold and interval while the watchdog is on.
+
+**Requirements:**
+- REQ-PLANNER-STALL-01: The stall threshold and check interval MUST be settable from `/gsd-config --advanced` without editing `config.json`
+- REQ-PLANNER-STALL-02: The defaults MUST stay 10 minutes (threshold) and 5 minutes (interval)
+- REQ-PLANNER-STALL-03: A stored value that is not a positive integer of at most nine digits MUST resolve to the default
 
 ---
 
@@ -2592,6 +2616,19 @@ the next pass — and because REVIEW.md has a single writer (`gsd-code-reviewer`
 not. The gate remains advisory throughout: it reports and records, and never blocks phase
 completion.
 
+**Necessity findings (#4100):** at `standard` and `deep` depth the reviewer also asks whether the
+problem a piece of code addresses can occur in this stack at all. Code that is correct and reachable
+but guards against nothing (an impossible-state guard, a concern another layer already owns, a
+pattern whose prerequisites do not hold, a requirement that has lapsed, an abstraction with one
+instantiation) is reported as an ordinary Warning or Info finding carrying a `**Category:** necessity`
+line, never as Critical, and must cite the evidence that the state cannot occur. The frontmatter
+`necessity:` key counts them as a subset of `warning` + `info`; `total:` and the finding IDs are
+unchanged, so the disposition ledger records them like any other finding. Removing code is a scope
+decision, so `--fix` skips necessity findings and `--fix --all` includes them last, each marked for
+human verification. `--fix --auto` also stops once the fixer reports nothing left in its scope,
+rather than re-running to its iteration cap over findings it will never touch. See
+[Resolve necessity findings](../how-to/resolve-necessity-findings.md).
+
 ---
 
 ### 94. Socratic Exploration
@@ -3984,7 +4021,7 @@ See [Resolve verify-command path findings](how-to/resolve-verify-command-path-fi
 - REQ-SC-04: A missing `ROADMAP.md`, a missing or unreadable `.planning/`, an unwritable target, or any other failure NEVER errors the parent command. A directory that is not a GSD project stays untouched — the publisher will not create `.planning/` in order to publish into it.
 - REQ-SC-05: The skills own the file; readers never write it. It is a derived cache — safe to delete, regenerated at the next boundary.
 
-**Composed, never re-derived.** Milestone identity comes from `getMilestoneInfo`; phase rows from `locateProgressTable`, the same `## Progress` locator the progress counters use, so `state.json` can never disagree with the rest of GSD about which phases are complete; the recommended action from `classifyProject`. This module introduces no second answer to any question GSD already answers.
+**Composed, never re-derived.** Milestone identity comes from `getMilestoneInfo`; phase rows from `locateRoadmapProgress` (Roadmap Progress Module), the same `## Progress` locator the progress counters use, so `state.json` can never disagree with the rest of GSD about which phases are complete; the recommended action from `classifyProject`. This module introduces no second answer to any question GSD already answers.
 
 **Why it does not reuse `planning inspect`'s schema.** The two surfaces answer different questions and have opposite shapes. `planning inspect` is a rich, diagnostic-carrying **pull** query a consumer runs; this is a small **push** artifact a consumer watches. Publishing `planning inspect`'s payload at every `phase add` would mean opening every plan, summary and requirements document on a hot path, and freezing a much larger surface as a contract.
 
@@ -4069,6 +4106,30 @@ phase's `CONTEXT.md` after that artifact was derived from it. Deterministic — 
 time (falling back to mtime for uncommitted edits), no model call. Sibling to the existing
 codebase-drift and schema-drift gates in the `drift` capability. Configure with
 `workflow.context_drift_precheck` (on/off) and `workflow.context_drift_action` (`warn`/`block`).
+
+---
+
+### 3628. Per-Repository Release Mapping
+
+**Command:** `/gsd-complete-milestone`
+
+**Config key:** `git.repo_tagging` (`single` default, `per_repo`)
+
+**Purpose:** A milestone that ships across several independently versioned repositories cannot be described by one `v[X.Y]` tag. A GSD milestone version names planned work in `.planning/`; each repository has its own release version, and some repositories may not be released at all. This feature records what each repository actually released against the milestone ([ADR-3628](adr/3628-milestone-release-mapping.md), epic #3628).
+
+**Behavior:** With `git.repo_tagging: per_repo` and a non-empty `planning.sub_repos`, milestone completion collects one release map entry per repository (status, release, reference, environment, tag choice), checks every requested tag before writing anything, shows one consolidated confirmation, creates the local annotated tags with `milestone release-tags`, and archives the map with `milestone complete --release-map`. No shared tag is created in the current directory on this path. Skipped and unreleased repositories stay in the archived map without receiving a tag.
+
+**Push:** Nothing is pushed by default. Each repository's tag is a separate confirmation naming the repository, the tag, the remote and its URL; a decline or failed push affects that repository only.
+
+**Compatibility:** `single` keeps the existing step unchanged, and `git.create_tag` keeps its meaning. With `per_repo`, `git.create_tag: false` still records the map and creates no tags. Archives without a map continue to parse.
+
+**Requirements:**
+- REQ-RELEASE-MAP-01: Tags MUST NOT be created before every requested tag has passed preflight.
+- REQ-RELEASE-MAP-02: An existing tag at a different commit MUST NOT be overwritten.
+- REQ-RELEASE-MAP-03: No tag MAY be pushed without a confirmation that names the repository and the remote.
+- REQ-RELEASE-MAP-04: The archived map MUST be stored by recorded value, not derived from `planning.sub_repos` at read time.
+
+**Reference:** [How to tag a multi-repository milestone](how-to/tag-a-multi-repo-milestone.md) · [Configuration Reference](CONFIGURATION.md#per-repository-release-mapping) · [CLI tools](CLI-TOOLS.md)
 
 ---
 

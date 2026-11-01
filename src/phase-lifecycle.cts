@@ -20,8 +20,8 @@
  *   - Issue #4 (open-gsd/gsd-core)
  */
 
-import { findTableWithColumns } from './markdown-table.cjs';
-import type { MarkdownTable } from './markdown-table.cjs';
+// #5761: the Progress table and its milestone slice have one owner.
+import { locateRoadmapProgress } from './roadmap-progress.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
 import phaseIdMod = require('./phase-id.cjs');
 const { isSentinelPhaseId } = phaseIdMod;
@@ -37,70 +37,11 @@ export interface RoadmapProgress {
 }
 
 /**
- * #3227: the single owner of "where is this ROADMAP's Progress table".
- * Lifted verbatim out of deriveProgressFromRoadmap so `state-contract.cts`
- * enumerates phases from THE SAME table this module derives its counts from.
- * A second copy of this locator is the DEFECT.GENERATIVE-FIX shape.
- *
- * ADR-2143 §3 ("addressed by NAME, never ordinal"): the Progress table is
- * located via the markdown-table seam's `findTableWithColumns`, which is
- * column-NAME/order/count-invariant — it matches the first table whose header
- * is a SUPERSET of the canonical `Phase` / `Plans Complete` / `Status` /
- * `Completed` names, in any order, tolerating extra/injected unrelated
- * columns (#2137's fast-check property test shuffles headers and injects
- * columns and asserts the derived counts never change). This supersedes the
- * earlier `findTableBySchema` exact-schema lookup, which required an exact
- * canonical column SET+ORDER and returned all-null on any reordering or
- * injection.
- *
- * Scoped to the `## Progress` section when the document has one (#2012 decoy
- * avoidance — a differently-headed table sharing the same column names must
- * not be picked up instead); a headingless milestone slice (#1445) falls back
- * to scanning the whole input, preserving the "Progress table not under a
- * `## Progress` heading, or not the first table in the document, still
- * resolves" behaviour.
- */
-export function locateProgressTable(roadmapContent: string): MarkdownTable | null {
-  const progressMatch = roadmapContent.match(/^##[ \t]+Progress\b/im);
-  let scoped = roadmapContent;
-  if (progressMatch && progressMatch.index !== undefined) {
-    const afterHeading = roadmapContent.slice(progressMatch.index);
-    const nextHeading = afterHeading.search(/\n#{1,2}[ \t]/);
-    scoped = nextHeading >= 0 ? afterHeading.slice(0, nextHeading) : afterHeading;
-  }
-  return findTableWithColumns(scoped, ['Phase', 'Plans Complete', 'Status', 'Completed']);
-}
-
-/**
- * #5165: a milestone token compared by identity, not spelling — `v1.1`, `V1.1`
- * and ` 1.1 ` name one milestone. A hand-decorated Progress cell
- * (`**v1.1**`, `` `v1.1` ``, `v1.1 (current)`) still names its first
- * whitespace-separated token. Absent/blank tokens normalize to `''`.
- */
-export function normalizeMilestoneToken(value: unknown): string {
-  // `[v1.1](ROADMAP.md#v11)` names its link text.
-  const unlinked = (milestoneVersionOf(value) ?? '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
-  const first = unlinked.split(/\s+/)[0] ?? '';
-  return first.replace(/^[*_`]+|[*_`:,;]+$/g, '').replace(/^v/i, '').toLowerCase();
-}
-
-/**
- * #5165: a STATE.md `milestone:` frontmatter value as a trimmed version string,
- * or null when it is absent, blank or not scalar text.
- */
-export function milestoneVersionOf(value: unknown): string | null {
-  if (typeof value !== 'string' && typeof value !== 'number') return null;
-  const text = String(value).trim();
-  return text === '' ? null : text;
-}
-
-/**
  * Derive completed_phases, total_phases, and total_plans from ROADMAP content.
  * Root cause fix for issue #4 — see gen-phase-lifecycle.mjs for full documentation.
  *
- * The Progress table itself is located by `locateProgressTable` (ADR-2143 §3,
- * lifted out as #3227's single-owner extraction) — this function consumes
- * that table.
+ * The Progress table itself is located by `locateRoadmapProgress` (the Roadmap
+ * Progress Module, ADR-2143 §3) — this function consumes that table's slice.
  *
  * Cells are read by column NAME (`r['Status']`, `r['Plans Complete']`,
  * `r['Phase']`), fixing #2137 (the old position-based regex assumed "Status"
@@ -120,19 +61,13 @@ export function deriveProgressFromRoadmap(roadmapContent: string, milestoneFilte
   // `{ ok: false, reason }`, not an exception — so the catch was masking
   // nothing but dead code paths. Removed per ADR-2143 §5; the public
   // `RoadmapProgress` contract (nulls = absent) is unchanged.
-  const table = locateProgressTable(roadmapContent);
+  // #5165: the milestone-grouped Progress table keeps every milestone's rows,
+  // shipped ones included; the owner returns only the named milestone's slice.
+  // A named milestone that matches no row yields nulls (nothing countable)
+  // rather than a foreign count.
+  const { table, rows: scopedRows } = locateRoadmapProgress(roadmapContent, { milestone: milestoneFilter });
 
   if (table) {
-    // #5165: the milestone-grouped Progress table (templates/roadmap.md) keeps
-    // every milestone's rows, shipped ones included. When the caller names the
-    // milestone and the table carries a `Milestone` column, count only that
-    // milestone's rows. A table without the column (or a caller without a
-    // milestone) keeps the whole-table behavior; a named milestone that matches
-    // no row yields nulls (nothing countable) rather than a foreign count.
-    const wantMilestone = normalizeMilestoneToken(milestoneFilter);
-    const scopedRows = wantMilestone !== '' && table.columns.includes('Milestone')
-      ? table.rows.filter((r) => normalizeMilestoneToken(r['Milestone']) === wantMilestone)
-      : table.rows;
 
     // Data rows only (exclude sentinel phases 0 and 999.x).
     // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.

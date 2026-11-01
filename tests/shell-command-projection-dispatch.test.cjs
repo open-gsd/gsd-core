@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
 const childProcess = require('node:child_process');
+const fc = require('fast-check');
 
 const {
   execGit,
@@ -29,8 +30,10 @@ const {
   escapePowerShellSingleQuoted,
   escapePosixDoubleQuoted,
   escapeSingleQuotedShellLiteral,
+  shellSingleQuote,
   retryRenameSync,
   contentChangedAfterNormalize,
+  GIT_LOCATION_ENV_VARS,
 } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'shell-command-projection.cjs'));
 
 const { createTempGitProject, createTempDir, cleanup } = require('./helpers.cjs');
@@ -88,6 +91,53 @@ describe('execGit', () => {
     assert.strictEqual(result.exitCode, 0);
   });
 
+  // #5548: cwd selects the repository; inherited location vars must not redirect it.
+  describe('inherited repository-location env (#5548)', () => {
+    const VARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_AUTHOR_NAME'];
+    let other, saved;
+    beforeEach(() => {
+      other = createTempGitProject();
+      saved = Object.fromEntries(VARS.map(k => [k, process.env[k]]));
+    });
+    afterEach(() => {
+      for (const k of VARS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+      cleanup(other);
+    });
+    const gitDir = (dir) => fs.realpathSync.native(path.join(dir, '.git'));
+
+    test('GIT_DIR set to another repo does not redirect cwd', () => {
+      process.env.GIT_DIR = gitDir(other);
+      const r = execGit(['rev-parse', '--absolute-git-dir'], { cwd: tmpDir });
+      assert.strictEqual(r.exitCode, 0, r.stderr);
+      assert.strictEqual(fs.realpathSync.native(r.stdout), gitDir(tmpDir));
+    });
+
+    test('GIT_WORK_TREE set to another dir does not redirect cwd', () => {
+      process.env.GIT_WORK_TREE = fs.realpathSync.native(other);
+      const r = execGit(['rev-parse', '--show-toplevel'], { cwd: tmpDir });
+      assert.strictEqual(fs.realpathSync.native(r.stdout), fs.realpathSync.native(tmpDir));
+    });
+
+    test('GIT_INDEX_FILE set to another repo index does not receive cwd staging', () => {
+      process.env.GIT_INDEX_FILE = path.join(gitDir(other), 'index');
+      fs.writeFileSync(path.join(tmpDir, 'f5548.txt'), 'x');
+      assert.strictEqual(execGit(['add', 'f5548.txt'], { cwd: tmpDir }).exitCode, 0);
+      delete process.env.GIT_INDEX_FILE;
+      assert.ok(execGit(['ls-files'], { cwd: tmpDir }).stdout.split('\n').includes('f5548.txt'));
+    });
+
+    test('other env (author) is still inherited', () => {
+      process.env.GIT_AUTHOR_NAME = 'Inherited Author';
+      const r = execGit(['var', 'GIT_AUTHOR_IDENT'], { cwd: tmpDir });
+      assert.equal(r.stdout.split(' <')[0], 'Inherited Author');
+    });
+
+    test('explicit opts.env GIT_DIR still wins (opt-out)', () => {
+      const r = execGit(['rev-parse', '--absolute-git-dir'], { cwd: tmpDir, env: { GIT_DIR: gitDir(other) } });
+      assert.strictEqual(fs.realpathSync.native(r.stdout), gitDir(other));
+    });
+  });
+
   // #5048: execGit is the shared seam behind every git call the tool makes,
   // including the read-only ones. Left at git's default, a read refreshes the
   // index and takes an optional .git/index.lock to write the refreshed copy
@@ -135,6 +185,7 @@ describe('execGit', () => {
       const captured = captureGitSpawnOptions();
       for (const key of Object.keys(process.env)) {
         if (OVERRIDDEN_ON_PURPOSE.has(key.toUpperCase())) continue;
+        if (GIT_LOCATION_ENV_VARS.includes(key.toUpperCase())) continue; // scrubbed on purpose (#5548)
         assert.deepEqual(
           captured.options.env[key], process.env[key],
           `env must inherit ${key} from the parent process`);
@@ -3199,5 +3250,94 @@ describe('path export projection — escaping (#3118)', () => {
       assert.ok(fs.statSync(to).isFile());
       assert.equal(fs.existsSync(from), false);
     });
+  });
+});
+
+// #4039: `shellSingleQuote` is the ONE POSIX single-quote implementation, owned by the
+// shell-command projection seam. capability-lifecycle used to carry a private copy (#1460);
+// these tests pin the shared export's behavior so the removed copy's output is preserved
+// byte-for-byte.
+
+// The exact expression of the private helper #4039 removed from capability-lifecycle.cts.
+function referenceQuote(value) {
+  return "'" + value.replace(/'/g, "'\\''") + "'";
+}
+
+// Decode ONE POSIX shell word made only of single-quoted runs and backslash-escaped
+// single quotes (the only forms shellSingleQuote emits). Returns null when the word is
+// anything else, so a malformed token fails the round-trip instead of decoding loosely.
+function decodePosixSingleQuotedWord(word) {
+  let out = '';
+  let i = 0;
+  while (i < word.length) {
+    if (word[i] === "'") {
+      const close = word.indexOf("'", i + 1);
+      if (close === -1) return null;
+      out += word.slice(i + 1, close);
+      i = close + 1;
+    } else if (word[i] === '\\' && word[i + 1] === "'") {
+      out += "'";
+      i += 2;
+    } else {
+      return null;
+    }
+  }
+  return out;
+}
+
+describe('shellSingleQuote (#4039)', () => {
+  test('is exported by the shell-command projection module', () => {
+    assert.equal(typeof shellSingleQuote, 'function');
+  });
+
+  test('empty string becomes an empty quoted token', () => {
+    assert.equal(shellSingleQuote(''), "''");
+  });
+
+  test('plain path is wrapped in single quotes', () => {
+    assert.equal(shellSingleQuote('/a/b'), "'/a/b'");
+  });
+
+  test('a path with a space stays one token (#1460 install-prefix shape)', () => {
+    assert.equal(shellSingleQuote('/Users/Bob Smith/.claude/x.js'), "'/Users/Bob Smith/.claude/x.js'");
+  });
+
+  test('embedded quote count boundaries: 0, 1, 2', () => {
+    assert.equal(shellSingleQuote('ab'), "'ab'");
+    assert.equal(shellSingleQuote("a'b"), "'a'\\''b'");
+    assert.equal(shellSingleQuote("a''b"), "'a'\\'''\\''b'");
+  });
+
+  test('leading and trailing quotes are escaped', () => {
+    assert.equal(shellSingleQuote("'x'"), "''\\''x'\\'''");
+  });
+
+  test('shell metacharacters, newline and tab pass through verbatim inside the quotes', () => {
+    const hostile = '$(rm -rf ~); `id` "x" \\ & | * ? < > # ! \n\t';
+    assert.equal(shellSingleQuote(hostile), "'" + hostile + "'");
+  });
+
+  test('inner escape stays unwrapped (its callers supply their own quotes)', () => {
+    assert.equal(escapeSingleQuotedShellLiteral("a'b"), "a'\\''b");
+  });
+
+  test('property: output is byte-identical to the removed capability-lifecycle helper', () => {
+    fc.assert(
+      fc.property(fc.string({ unit: 'binary' }), (s) => {
+        assert.equal(shellSingleQuote(s), referenceQuote(s));
+      }),
+      { seed: 4039, numRuns: 500 },
+    );
+  });
+
+  test('property: output is one POSIX word that decodes back to the input', () => {
+    fc.assert(
+      fc.property(fc.string({ unit: 'binary' }), (s) => {
+        const quoted = shellSingleQuote(s);
+        assert.ok(quoted.startsWith("'") && quoted.endsWith("'"));
+        assert.equal(decodePosixSingleQuotedWord(quoted), s);
+      }),
+      { seed: 4039, numRuns: 500 },
+    );
   });
 });
