@@ -35,7 +35,7 @@ const {
   _HOST_INTEGRATION_VOCAB,
   validateCapability,
 } = require('../gsd-core/bin/lib/capability-validator.cjs');
-const { cleanup, readFileNormalized } = require('./helpers.cjs');
+const { cleanup, readFileNormalized, createCanonicalTempDir } = require('./helpers.cjs');
 const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -2908,10 +2908,26 @@ describe('#2627 dispatch-isolation CLI route', () => {
   const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
   const GSD_TOOLS = path.join(REPO_ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
 
-  function query(runtimeId, extraArgs = []) {
+  function query(runtimeId, extraArgs = [], generation = '1', execOpts = {}) {
+    const env = { ...process.env, GSD_RUNTIME: runtimeId, ...execOpts.env };
+    if (runtimeId === 'opencode') {
+      if (generation !== null) {
+        env.GSD_OPENCODE_GENERATION = generation;
+      } else {
+        delete env.GSD_OPENCODE_GENERATION;
+      }
+    }
+    if (execOpts.env && ('PATH' in execOpts.env || 'Path' in execOpts.env)) {
+      const p = execOpts.env.PATH ?? execOpts.env.Path;
+      delete env.PATH;
+      delete env.Path;
+      env.PATH = p;
+      env.Path = p;
+    }
+    const cwd = execOpts.cwd || REPO_ROOT;
     const r = runNode(
       [GSD_TOOLS, 'query', 'dispatch-isolation', ...extraArgs],
-      { cwd: REPO_ROOT, env: { ...process.env, GSD_RUNTIME: runtimeId }, timeoutMs: PROBE_TIMEOUT_MS },
+      { cwd, env, timeoutMs: PROBE_TIMEOUT_MS },
     );
     throwIfFailed(r, `gsd-tools query dispatch-isolation ${extraArgs.join(' ')}`);
     return r.stdout;
@@ -2962,6 +2978,38 @@ describe('#2627 dispatch-isolation CLI route', () => {
     // kimi-code binds by process cwd — no flag in argv, but cwd still returned.
     assert.deepEqual(args('kimi-code'), ['--prompt', 'P']);
     assert.equal(queryJson('kimi-code', ['--cwd-target', '/tmp/wt', '--prompt', 'P']).exec.cwd, '/tmp/wt');
+  });
+
+  test('OpenCode 2 binds the worktree through process cwd without --dir', () => {
+    const tempDir = createCanonicalTempDir('gsd-opencode2-');
+    try {
+      const result = JSON.parse(
+        query('opencode', ['--json', '--cwd-target', '/tmp/wt', '--prompt', 'P'], '2', { cwd: tempDir }),
+      );
+      assert.deepEqual(result.exec.args, ['run', 'P']);
+      assert.equal(result.exec.cwd, '/tmp/wt');
+    } finally {
+      cleanup(tempDir);
+    }
+  });
+
+  test('absent OpenCode generation retains --dir on the CLI route', () => {
+    const tempDir = createCanonicalTempDir('gsd-opencode-absent-');
+    const emptyBinDir = path.join(tempDir, 'empty-bin');
+    fs.mkdirSync(emptyBinDir, { recursive: true });
+    try {
+      const result = JSON.parse(
+        query(
+          'opencode',
+          ['--json', '--cwd-target', '/tmp/wt', '--prompt', 'P'],
+          null,
+          { cwd: tempDir, env: { PATH: emptyBinDir, Path: emptyBinDir, GSD_OPENCODE_GENERATION: '2' } },
+        ),
+      );
+      assert.deepEqual(result.exec.args, ['run', '--dir', '/tmp/wt', 'P']);
+    } finally {
+      cleanup(tempDir);
+    }
   });
 
   test('a cwd target with no prompt still resolves (prompt is optional at this seam)', () => {

@@ -19,7 +19,7 @@ const {
   PROTOCOL_VERSION,
   SERVER_NAME,
 } = require('../gsd-core/bin/lib/mcp-server.cjs');
-const { createTempDir, cleanup, runGsdTools, sandboxHome, scrubConfigLocationEnv } = require('./helpers.cjs');
+const { createTempDir, createCanonicalTempDir, cleanup, runGsdTools, sandboxHome, scrubConfigLocationEnv } = require('./helpers.cjs');
 
 test('initialize: returns protocolVersion + capabilities + serverInfo', () => {
   const res = handleMessage({ jsonrpc: '2.0', id: 1, method: 'initialize' });
@@ -46,15 +46,17 @@ test('tools/list: gsd_invoke_command requires only family (#5325)', () => {
 
 for (const subcommand of [undefined, '']) {
   test(`tools/call: config-path matches the CLI with ${subcommand === undefined ? 'omitted' : 'empty'} subcommand (#5325)`, (t) => {
-    const dir = createTempDir();
+    const dir = createCanonicalTempDir();
     t.after(() => cleanup(dir));
     t.after(scrubConfigLocationEnv());
     sandboxHome(t, dir);
     fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
 
+    const expectedPath = path.join(dir, '.planning', 'config.json');
+
     const cli = runGsdTools(['config-path', '--raw', '--json-errors'], dir);
     assert.equal(cli.success, true, cli.error);
-    assert.equal(cli.output, path.join(dir, '.planning', 'config.json'));
+    assert.equal(cli.output, expectedPath);
 
     const args = { family: 'config-path' };
     if (subcommand !== undefined) args.subcommand = subcommand;
@@ -63,7 +65,8 @@ for (const subcommand of [undefined, '']) {
       { cwd: dir },
     );
     assert.notEqual(res.result.isError, true, 'the family-only command must reach the CLI through MCP');
-    assert.equal(res.result.content[0].text.trim(), cli.output);
+    const mcpPath = res.result.content[0].text.trim();
+    assert.equal(mcpPath, cli.output);
   });
 }
 
