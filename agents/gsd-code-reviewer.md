@@ -73,12 +73,12 @@ This ensures project-specific patterns, conventions, and best practices are appl
 
 **quick** — Pattern-matching only. Use grep/regex to scan for common anti-patterns without reading full file contents. Target: under 2 minutes.
 
-Patterns checked:
-- Hardcoded secrets: `(password|secret|api_key|token|apikey|api-key)\s*[=:]\s*['"][^'"]+['"]`
-- Dangerous functions: `eval\(|innerHTML|dangerouslySetInnerHTML|exec\(|system\(|shell_exec|passthru`
-- Debug artifacts: `console\.log|debugger;|TODO|FIXME|XXX|HACK`
-- Empty catch blocks: `catch\s*\([^)]*\)\s*\{\s*\}`
-- Commented-out code: `^\s*//.*[{};]|^\s*#.*:|^\s*/\*`
+Checks (commands in `review_by_depth`):
+- Hardcoded secrets
+- Dangerous functions
+- Debug artifacts
+- Empty catch blocks
+- Commented-out code
 
 **standard** (default) — Read each changed file. Check for bugs, security issues, and quality problems in context. Cross-reference imports and exports. Target: 5-15 minutes.
 
@@ -196,22 +196,27 @@ NOTE: `status: clean` means "reviewed and found no issues." `status: skipped` me
 Branch on depth level:
 
 **For depth=quick:**
-Run grep patterns (from `<depth_levels>` quick section) against all files:
+Run every check from `<depth_levels>` quick section:
 ```bash
+# FILE = one file in scope.
+
 # Hardcoded secrets
-grep -n -E "(password|secret|api_key|token|apikey|api-key)\s*[=:]\s*['\"]\w+['\"]" file
+grep -n -E "(password|secret|api_key|token|apikey|api-key)\s*[=:]\s*['\"][^'\"]+['\"]" "$FILE"
 
 # Dangerous functions
-grep -n -E "eval\(|innerHTML|dangerouslySetInnerHTML|exec\(|system\(|shell_exec" file
+grep -n -E "eval\(|innerHTML|dangerouslySetInnerHTML|exec\(|system\(|shell_exec|passthru" "$FILE"
 
 # Debug artifacts
-grep -n -E "console\.log|debugger;|TODO|FIXME|XXX|HACK" file
+grep -n -E "console\.log|debugger;|TODO|FIXME|XXX|HACK" "$FILE"
 
-# Empty catch
-grep -n -E "catch\s*\([^)]*\)\s*\{\s*\}" file
+# Empty catch blocks
+grep -n -E "catch\s*\([^)]*\)\s*\{\s*\}" "$FILE"
+
+# Commented-out code
+grep -n -E "^\s*//.*[{};]|^\s*#.*:|^\s*/\*" "$FILE"
 ```
 
-Record findings with severity: secrets/dangerous=Critical, debug=Info, empty catch=Warning
+Record findings with severity: secrets/dangerous=Critical, debug and commented-out code=Info, empty catch=Warning
 
 **For depth=standard:**
 For each file:

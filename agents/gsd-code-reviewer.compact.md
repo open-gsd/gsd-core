@@ -58,7 +58,7 @@ Read `./CLAUDE.md` if present — follow project guidelines, security requiremen
 <depth_levels>
 
 **quick** — pattern-matching only, grep/regex scan for common anti-patterns, no full file reads. Target: <2 min.
-Patterns: hardcoded secrets `(password|secret|api_key|token|apikey|api-key)\s*[=:]\s*['"][^'"]+['"]`; dangerous fns `eval\(|innerHTML|dangerouslySetInnerHTML|exec\(|system\(|shell_exec|passthru`; debug artifacts `console\.log|debugger;|TODO|FIXME|XXX|HACK`; empty catch `catch\s*\([^)]*\)\s*\{\s*\}`; commented-out code `^\s*//.*[{};]|^\s*#.*:|^\s*/\*`.
+Checks (commands in `review_by_depth`): Hardcoded secrets; Dangerous functions; Debug artifacts; Empty catch blocks; Commented-out code.
 
 **standard** (default) — Read each changed file, check bugs/security/quality in context, cross-reference imports/exports. Target: 5-15 min.
 Language-aware checks: **JS/TS** unchecked `.length`, missing `await`, unhandled promise rejection, `as any`, `==` vs `===`, null coalescing issues. **Python** bare `except:`, mutable default args, f-string injection, `eval()`, missing `with` for file ops. **Go** unchecked error returns, goroutine leaks, context not passed, `defer` in loops, race conditions. **C/C++** buffer overflow patterns, use-after-free, null pointer deref, missing bounds checks, memory leaks. **Shell** unquoted variables, `eval`, missing `set -e`, command injection via interpolation.
@@ -118,14 +118,26 @@ NOTE: `status: clean` = reviewed, no issues. `status: skipped` = no reviewable f
 </step>
 
 <step name="review_by_depth">
-**depth=quick:** run grep patterns from `<depth_levels>` against all files:
+**depth=quick:** run every check from `<depth_levels>`:
 ```bash
-grep -n -E "(password|secret|api_key|token|apikey|api-key)\s*[=:]\s*['\"]\w+['\"]" file
-grep -n -E "eval\(|innerHTML|dangerouslySetInnerHTML|exec\(|system\(|shell_exec" file
-grep -n -E "console\.log|debugger;|TODO|FIXME|XXX|HACK" file
-grep -n -E "catch\s*\([^)]*\)\s*\{\s*\}" file
+# FILE = one file in scope.
+
+# Hardcoded secrets
+grep -n -E "(password|secret|api_key|token|apikey|api-key)\s*[=:]\s*['\"][^'\"]+['\"]" "$FILE"
+
+# Dangerous functions
+grep -n -E "eval\(|innerHTML|dangerouslySetInnerHTML|exec\(|system\(|shell_exec|passthru" "$FILE"
+
+# Debug artifacts
+grep -n -E "console\.log|debugger;|TODO|FIXME|XXX|HACK" "$FILE"
+
+# Empty catch blocks
+grep -n -E "catch\s*\([^)]*\)\s*\{\s*\}" "$FILE"
+
+# Commented-out code
+grep -n -E "^\s*//.*[{};]|^\s*#.*:|^\s*/\*" "$FILE"
 ```
-Severity: secrets/dangerous=Critical, debug=Info, empty catch=Warning.
+Severity: secrets/dangerous=Critical, debug and commented-out code=Info, empty catch=Warning.
 
 **depth=standard:** per file — Read full content, apply language-specific checks, check for: functions >50 lines, deep nesting (>4 levels), missing error handling in async functions, hardcoded config values, type safety issues (TS `any`, loose Python typing). Record findings with file path, line number, description.
 
