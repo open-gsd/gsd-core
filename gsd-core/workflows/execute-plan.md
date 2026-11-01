@@ -301,7 +301,7 @@ For `type: tdd` plans — RED-GREEN-REFACTOR:
 2. **Cycle (#3990: stated ONCE; #4267: cited correctly):** execute RED → GREEN → REFACTOR
 exactly as specified in the canonical `~/.claude/gsd-core/references/tdd.md` reference — the
 "Red-Green-Refactor Cycle" section's commit-scope contract (`test({phase}-{plan})` →
-`feat({phase}-{plan})` → `refactor({phase}-{plan})`, RED must fail, GREEN must pass, REFACTOR
+`feat({phase}-{plan})` or `fix({phase}-{plan})` → `refactor({phase}-{plan})`, RED must fail, GREEN must pass, REFACTOR
 commits only on change), the "Gate Enforcement Rules" section's "Fail-Fast Rules" subsection,
 and the "Error Handling" section. The reference is the single source; do not improvise a
 variant.

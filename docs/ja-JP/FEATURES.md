@@ -2487,7 +2487,7 @@ capture_thought({
 **要件:**
 - REQ-TDD-01: `workflow.tdd_mode` 設定キー（boolean、デフォルト `false`）
 - REQ-TDD-02: 有効時、プランナーは `references/tdd.md` の TDD ヒューリスティックをすべての適格なタスク（ビジネスロジック、API、バリデーション、アルゴリズム、ステートマシン）に適用する
-- REQ-TDD-03: Executor は `type: tdd` プランのゲートシーケンスを強制する — RED コミット（`test(...)`）は GREEN コミット（`feat(...)`）より先でなければならない
+- REQ-TDD-03: Executor は `type: tdd` プランのゲートシーケンスを強制する — RED コミット（`test(...)`）は GREEN コミット（`feat(...)` または `fix(...)`）より先でなければならない
 - REQ-TDD-04: Executor は RED フェーズ中にテストが予期しなくパスした場合にフェイルファストする（機能がすでに存在するかテストが間違っている）
 - REQ-TDD-05: フェーズ終了時の協調レビューチェックポイントがすべての TDD プランにわたるゲートコンプライアンスを確認する（勧告的、非ブロッキング）
 - REQ-TDD-06: ゲート違反は SUMMARY.md の `## TDD Gate Compliance` セクション下に表示される
