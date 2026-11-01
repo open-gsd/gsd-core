@@ -450,6 +450,13 @@ describe('findProjectRoot nearest-.planning resolution (#1414)', () => {
           'the lookahead must keep the repo-owned .planning/, not hand the cwd to a claim above $HOME');
       });
 
+      test(`a cwd at $HOME itself does not resolve to a .planning/ above it (${spelling})`, () => {
+        const cwdHome = symlinkedHome(spelling);
+        fs.mkdirSync(path.join(tmpDir, '.planning'));
+        assert.strictEqual(findProjectRoot(cwdHome), cwdHome,
+          'starting at $HOME, every ancestor is above $HOME');
+      });
+
       test(`a project rooted at $HOME still resolves (${spelling})`, () => {
         const cwdHome = symlinkedHome(spelling);
         fs.mkdirSync(path.join(cwdHome, '.planning'));
@@ -458,6 +465,15 @@ describe('findProjectRoot nearest-.planning resolution (#1414)', () => {
           '$HOME itself is checked before the stop, in either spelling');
       });
     }
+
+    test('a cwd at a plain (not symlinked) $HOME does not resolve to a .planning/ above it', () => {
+      const home = mkDeep(tmpDir, 'plain-home');
+      process.env.HOME = home;
+      process.env.USERPROFILE = home;
+      process.env.GSD_HOME = home;
+      fs.mkdirSync(path.join(tmpDir, '.planning'));
+      assert.strictEqual(findProjectRoot(home), home);
+    });
 
     test('a $HOME missing on disk keeps the spelled stop and does not throw', () => {
       const missing = path.join(tmpDir, 'no-such-home');

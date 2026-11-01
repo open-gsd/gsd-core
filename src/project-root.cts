@@ -78,6 +78,10 @@ export function findProjectRoot(startDir: string): string {
     // fall through
   }
 
+  // #5624: started at `$HOME` itself, with no `.planning/` of its own, there is
+  // nothing to walk: every ancestor is above `$HOME`.
+  if (isHome(resolvedStart)) return startDir;
+
   // A `.planning` that is itself a symlink is a deliberate hop into a separate
   // tree (the documented "keep planning content out of the tracked repo"
   // convention: `.planning -> ~/.gsd-external-planning/<project>/`, its own git
