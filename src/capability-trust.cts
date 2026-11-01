@@ -265,7 +265,7 @@ interface ReviewerLaneSurface {
    * `probe` is the reason it exists and is not a hypothetical: `probeLane` SPAWNS `probe.binary`
    * with `--help` (`review-lane-runner.cts`, `command-exists`/`command-capability`), so an overlay
    * naming an arbitrary probe binary executes it — the same class as `invoke.env`, one level out.
-   * `requiresBinaries`, `emptyOutput`, `promptBudgetKey`, `contextWindowTokens` (#4559) and
+   * `requiresBinaries`, `emptyOutput`, `promptBudgetKey`, `contextWindowTokens` (#4559),
    * `contextWindowConfigKey` and `modelConfigKey` ride along for the
    * same reason the invoke residual exists: enumerating "the ones that matter" is what failed.
    *

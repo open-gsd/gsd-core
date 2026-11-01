@@ -447,7 +447,9 @@ wait
 # dispatch loop above for why a bare `$DISPATCH_SLUGS` collapses under zsh.
 for SLUG in $(printf '%s' "$DISPATCH_SLUGS"); do
   LANE_RESULT="$RUN_DIR/gsd-review-lane-result-$SLUG.json"
-  if [ -f "$LANE_RESULT" ] && ! grep -q 'prompt_exceeds_context' "$LANE_RESULT" 2>/dev/null; then
+  # The refusal is the PARSED `reason` field — a failed lane whose `detail` merely mentions the
+  # string is a real lane result and must stay in the aggregate.
+  if [ -f "$LANE_RESULT" ] && ! node -e 'try{process.exit(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).reason==="prompt_exceeds_context"?0:1)}catch{process.exit(1)}' "$LANE_RESULT"; then
     cat "$LANE_RESULT" >> "$RUN_DIR/gsd-review-lane-results.jsonl"
   fi
 done
@@ -460,7 +462,7 @@ review: it keeps its "failed or returned empty output" header (#2494/#2605/#2794
 
 A lane that will not run reports a typed reason rather than an empty file — `missing_binary`,
 `probe_failed`, `probe_timeout`, `missing_required_binary`, `host_unreachable`,
-`egress_host_changed`, `unknown_handler`, `budget_too_small`, `prompt_exceeds_context` (the prompt is over
+`egress_host_changed`, `unknown_handler`, `prompt_exceeds_context` (the prompt is over
 the lane's cap — refused, never trimmed; its review file carries a `review did not run: prompt exceeds` stub).
 **`egress_host_changed` means the lane
 was consented to send plans to one destination and `.planning/config.json` now names another; it is

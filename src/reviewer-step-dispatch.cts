@@ -39,7 +39,8 @@ import path from 'node:path';
 import { estimateTokens } from './prompt-budget.cjs';
 import { tryWithinRootLexical } from './security.cjs';
 import type { LanePlan, ResolveResult } from './review-lane-invocation.cjs';
-import { resolveLaneCap, checkPromptAgainstCap, artifactPaths } from './review-lane-invocation.cjs';
+import { refuseIfOverCap, artifactPaths } from './review-lane-invocation.cjs';
+import type { PromptRefusal } from './review-lane-invocation.cjs';
 import type { ReviewerLane } from './review-lane-descriptor.cjs';
 import type {
   ReviewerSelectionInput,
@@ -120,7 +121,7 @@ export interface ReviewerStepDispatchDeps {
   getLane: (slug: string) => ReviewerLane | undefined;
   /**
    * REQUIRED (#4209 R3). A `configGet` that always returns `undefined` silently disables
-   * `resolveLaneBudget`'s overflow guard (a missing config key and an explicitly-unbounded
+   * `refuseIfOverCap`'s overflow guard (a missing config key and an explicitly-unbounded
    * config key are indistinguishable to it) — a safety-relevant gate must not fail open on a
    * missing dependency, so this has no default.
    */
@@ -147,6 +148,8 @@ export interface ReviewerLaneDispatchResult {
   detail?: string;
   reviewPath?: string;
   errPath?: string;
+  /** Present only when the lane was refused for its prompt cap (`prompt_exceeds_context`). */
+  refusal?: PromptRefusal['refusal'];
 }
 
 export interface ReviewerStepDispatchResult {
@@ -408,13 +411,14 @@ export async function dispatchReviewerLanes(
       continue;
     }
     // #4559: refuse-not-trim, through the same check `review-lane invoke` uses.
-    const capCheck = checkPromptAgainstCap(estimatedTokens, resolveLaneCap(lane, configGet), slug);
-    if (!capCheck.ok) {
+    const refused = refuseIfOverCap({ lane, estimatedTokens, configGet });
+    if (refused) {
       results.push({
         slug,
         ok: false,
-        reason: capCheck.reason,
-        detail: capCheck.detail,
+        reason: refused.reason,
+        detail: refused.detail,
+        refusal: refused.refusal,
       });
       anyFailed = true;
       continue;

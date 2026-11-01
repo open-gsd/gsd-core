@@ -56,8 +56,6 @@ export const LANE_UNAVAILABLE = Object.freeze({
   PROBE_TIMEOUT: 'probe_timeout',
   HOST_UNREACHABLE: 'host_unreachable',
   EGRESS_HOST_CHANGED: 'egress_host_changed',
-  BUDGET_TOO_SMALL: 'budget_too_small',
-  BUDGET_TOOL_FAILED: 'budget_tool_failed',
   /**
    * #4559: the prompt a lane would receive is larger than its prompt cap (an explicit cap, or the
    * default derived from the lane's context window). The lane is REFUSED — never trimmed, because a
@@ -403,7 +401,8 @@ export function fileRefPrompt(promptPath: string, repoRoot: string): string {
 /**
  * Re-point a resolved plan at a different prompt file (`review-lane invoke --prompt-file`, #5049).
  *
- * The override carries a budget-trimmed prompt, so it has to land wherever THIS lane actually
+ * The override carries a caller-substituted prompt (a section subset, say; nothing trims a prompt
+ * to fit a lane since #4559), so it has to land wherever THIS lane actually
  * reads its prompt, and that differs by channel:
  *   - `stdin`: the runner streams the file `plan.stdin` names.
  *   - `argv-file-ref`: the prompt PATH is embedded in a sentence in argv (`fileRefPrompt`), already
@@ -489,6 +488,12 @@ export interface LaneCapInfo {
  * this function rather than each carrying their own copy (#4209 R3 — two verbatim copies drift).
  */
 export function resolveLaneCap(lane: ReviewerLane, configGet: (key: string) => unknown): LaneCapInfo {
+  // A spawn lane whose prompt channel is `none` (coderabbit) is fed no prompt, so there is nothing
+  // to cap: no key — explicit, global or derived — may ever refuse it (#4559, design row 18).
+  const laneRaw = lane as unknown as { transport?: unknown; invoke?: { promptChannel?: unknown } } | null;
+  if (laneRaw?.transport === 'spawn' && laneRaw.invoke?.promptChannel === 'none') {
+    return { cap: null, source: 'none', contextWindowTokens: null };
+  }
   const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
   const isPositive = (v: unknown): v is number => isNum(v) && v > 0;
   const raw = lane as unknown as {
@@ -521,11 +526,6 @@ export function resolveLaneCap(lane: ReviewerLane, configGet: (key: string) => u
   };
 }
 
-/** The lane's prompt cap, or `null` when it has none. Callers needing the source use `resolveLaneCap`. */
-export function resolveLaneBudget(lane: ReviewerLane, configGet: (key: string) => unknown): number | null {
-  return resolveLaneCap(lane, configGet).cap;
-}
-
 export type PromptCapCheck =
   | { ok: true }
   | { ok: false; reason: typeof LANE_UNAVAILABLE.PROMPT_EXCEEDS_CONTEXT; detail: string };
@@ -539,16 +539,28 @@ export type PromptCapCheck =
 export function checkPromptAgainstCap(
   estimatedTokens: number,
   capInfo: LaneCapInfo,
-  slug: string,
+  lane: ReviewerLane,
 ): PromptCapCheck {
   const { cap, source, contextWindowTokens } = capInfo;
   if (cap === null || !(cap > 0) || !(estimatedTokens > cap)) return { ok: true };
+  const raw = lane as unknown as {
+    slug?: unknown;
+    promptBudgetKey?: unknown;
+    contextWindowConfigKey?: unknown;
+  } | null;
+  const slug = typeof raw?.slug === 'string' ? raw.slug : '';
+  const budgetKey = typeof raw?.promptBudgetKey === 'string' && raw.promptBudgetKey ? raw.promptBudgetKey : null;
+  const windowKey =
+    typeof raw?.contextWindowConfigKey === 'string' && raw.contextWindowConfigKey ? raw.contextWindowConfigKey : null;
+  // Remedy keys are the lane's DECLARED keys (an overlay lane's differ from the slug convention).
   const remedy =
     source === 'lane'
-      ? `raise review.max_prompt_tokens_per_reviewer.${slug} or set it to 0 to remove the cap`
+      ? `raise ${budgetKey ?? 'the lane prompt cap'} or set it to 0 to remove the cap`
       : source === 'global'
-        ? `raise review.max_prompt_tokens or set review.max_prompt_tokens_per_reviewer.${slug}`
-        : `raise review.context_window_tokens.${slug} if this lane's model has a larger window, or set it to 0 to remove the cap`;
+        ? `raise review.max_prompt_tokens${budgetKey ? ` or set ${budgetKey}` : ''}`
+        : windowKey
+          ? `raise ${windowKey} if this lane's model has a larger window, or set it to 0 to remove the cap`
+          : `this lane's context window is fixed by its declaration; set review.max_prompt_tokens to override`;
   const windowNote = contextWindowTokens !== null ? `, ${contextWindowTokens}-token context window` : '';
   return {
     ok: false,
@@ -556,6 +568,45 @@ export function checkPromptAgainstCap(
     detail:
       `estimated ${estimatedTokens} tokens exceeds the ${cap}-token cap for lane '${slug}' ` +
       `(source: ${source}${windowNote}); ${remedy}`,
+  };
+}
+
+/** A lane's refusal: the typed reason plus the numbers behind it (`review-lane invoke` / dispatch output). */
+export interface PromptRefusal {
+  ok: false;
+  reason: typeof LANE_UNAVAILABLE.PROMPT_EXCEEDS_CONTEXT;
+  detail: string;
+  refusal: {
+    estimatedTokens: number;
+    cap: number | null;
+    capSource: PromptCapSource;
+    contextWindowTokens: number | null;
+  };
+}
+
+/**
+ * Resolve the lane's cap and decide refuse-or-run in one pure step (#4559): `null` = run, otherwise
+ * the structured refusal. `review-lane invoke` and `dispatchReviewerLanes` both call this, so the
+ * two surfaces cannot disagree about whether, or how, a lane is refused.
+ */
+export function refuseIfOverCap(input: {
+  lane: ReviewerLane;
+  estimatedTokens: number;
+  configGet: (key: string) => unknown;
+}): PromptRefusal | null {
+  const capInfo = resolveLaneCap(input.lane, input.configGet);
+  const verdict = checkPromptAgainstCap(input.estimatedTokens, capInfo, input.lane);
+  if (verdict.ok) return null;
+  return {
+    ok: false,
+    reason: verdict.reason,
+    detail: verdict.detail,
+    refusal: {
+      estimatedTokens: input.estimatedTokens,
+      cap: capInfo.cap,
+      capSource: capInfo.source,
+      contextWindowTokens: capInfo.contextWindowTokens,
+    },
   };
 }
 

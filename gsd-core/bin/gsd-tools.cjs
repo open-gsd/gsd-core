@@ -1631,7 +1631,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     const fsx = require('node:fs');
     const os = require('node:os');
     const { REVIEWER_LANES, mergeReviewerLanes } = require('./lib/review-lane-descriptor.cjs');
-    const { resolveLanePlan: resolveLanePlanBase, resolveLaneEffort, resolveLaneCap, checkPromptAgainstCap, renderPromptRefusalStub, artifactPaths, applyPromptOverride } = require('./lib/review-lane-invocation.cjs');
+    const { resolveLanePlan: resolveLanePlanBase, resolveLaneEffort, resolveLaneCap, refuseIfOverCap, renderPromptRefusalStub, artifactPaths, applyPromptOverride } = require('./lib/review-lane-invocation.cjs');
     const { estimateTokens } = require('./lib/prompt-budget.cjs');
     // OpenCode 2.x argv differs from 1.x (no --variant; effort rides on the model as `#variant`;
     // ADR-5331 D5/D8). The generation is probed lazily, only when the opencode lane is resolved.
@@ -2190,36 +2190,46 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       entry.plan = applyPromptOverride(entry.plan, promptOverride, repoRoot);
     }
 
-    // #4559: refuse, never trim. Measure the prompt this lane would actually receive (the
-    // substituted file when `--prompt-file` was given) against its cap BEFORE any consent lookup,
-    // probe or spawn. An unreadable file is not a refusal: the runner reports its own error for it.
+    // #4559: refuse, never trim. Measure the prompt this lane would actually receive — the file
+    // the RESOLVED plan reads (stdin file, or the plan's prompt path for argv / argv-file-ref /
+    // http lanes; `--prompt-file` already retargeted the plan above) — against its cap BEFORE any
+    // consent lookup, probe or spawn. An unreadable file is not a refusal: the runner reports its
+    // own error for it. The decision itself lives in `refuseIfOverCap`; this only does the IO.
     {
+      const plannedPrompt = entry.plan.transport === 'spawn' && entry.plan.stdin
+        ? entry.plan.stdin
+        : entry.plan.promptPath;
       let promptText = null;
       try {
-        promptText = fs.readFileSync(promptOverride || artifactPaths(runDir, entry.slug).promptPath, 'utf8');
+        promptText = fs.readFileSync(plannedPrompt || artifactPaths(runDir, entry.slug).promptPath, 'utf8');
       } catch { promptText = null; }
       if (promptText !== null) {
-        const capInfo = capFor(laneBySlug.get(entry.slug));
-        const estimatedTokens = estimateTokens(promptText);
-        const verdict = checkPromptAgainstCap(estimatedTokens, capInfo, entry.slug);
-        if (!verdict.ok) {
+        const refused = refuseIfOverCap({
+          lane: laneBySlug.get(entry.slug),
+          estimatedTokens: estimateTokens(promptText),
+          configGet,
+        });
+        if (refused) {
           const reviewPath = entry.plan.reviewPath;
+          let stubWritten = true;
           try {
             fs.mkdirSync(path.dirname(reviewPath), { recursive: true });
-            fs.writeFileSync(reviewPath, renderPromptRefusalStub(entry.slug, verdict.detail), 'utf8');
-          } catch { /* the structured result below still reports the refusal */ }
+            fs.writeFileSync(reviewPath, renderPromptRefusalStub(entry.slug, refused.detail), 'utf8');
+          } catch (e) {
+            stubWritten = false;
+            process.stderr.write(
+              `review-lane invoke: could not write the refusal stub to ${reviewPath}: ` +
+              `${e && e.message ? e.message : String(e)}\n`,
+            );
+          }
           output({
             slug: entry.slug,
             ok: false,
-            reason: verdict.reason,
-            detail: verdict.detail,
+            reason: refused.reason,
+            detail: refused.detail,
             reviewPath,
-            refusal: {
-              estimatedTokens,
-              cap: capInfo.cap,
-              capSource: capInfo.source,
-              contextWindowTokens: capInfo.contextWindowTokens,
-            },
+            stubWritten,
+            refusal: refused.refusal,
           }, raw);
           return;
         }

@@ -20,6 +20,7 @@ const fc = require('fast-check');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
 const { REVIEWER_LANES } = require('../gsd-core/bin/lib/review-lane-descriptor.cjs');
@@ -718,7 +719,7 @@ describe('#4559 review.md aggregation drops a lane only when its parsed reason i
 
   test('a failed lane whose detail merely mentions the refusal string is still aggregated', { skip: POSIX_ONLY }, (t) => {
     const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'gsd-4559-agg-'));
-    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    t.after(() => cleanup(dir));
     const write = (slug, obj) =>
       fs.writeFileSync(path.join(dir, `gsd-review-lane-result-${slug}.json`), JSON.stringify(obj, null, 2) + '\n');
     write('refused', { slug: 'refused', ok: false, reason: REFUSAL_REASON, detail: 'too big' });
@@ -728,14 +729,10 @@ describe('#4559 review.md aggregation drops a lane only when its parsed reason i
     const r = spawnSync('bash', ['-c', aggregationLoop()], {
       env: { ...process.env, RUN_DIR: dir, DISPATCH_SLUGS: 'refused ran mentions' },
       encoding: 'utf8',
-      timeout: 15000,
+      timeout: PROBE_TIMEOUT_MS,
     });
     assert.equal(r.status, 0, r.stderr);
-    const lines = fs
-      .readFileSync(path.join(dir, 'gsd-review-lane-results.jsonl'), 'utf8')
-      .split('\n')
-      .filter((l) => l.trim() !== '');
-    const joined = lines.join('\n');
+    const joined = fs.readFileSync(path.join(dir, 'gsd-review-lane-results.jsonl'), 'utf8');
     assert.equal(joined.includes('"slug": "refused"'), false, 'the refused lane must be left out');
     assert.equal(joined.includes('"slug": "ran"'), true);
     assert.equal(joined.includes('"slug": "mentions"'), true, 'a failure that only mentions the string must be kept');
