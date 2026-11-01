@@ -50,7 +50,13 @@ export function isContainedIn(
   pathImpl: { sep: string } = path,
 ): boolean {
   if (resolvedTarget === resolvedRoot) return true;
-  return (resolvedTarget + pathImpl.sep).startsWith(resolvedRoot + pathImpl.sep); // allow-handrolled-containment: this IS the canonical comparison every other site routes through
+  if ((resolvedTarget + pathImpl.sep).startsWith(resolvedRoot + pathImpl.sep)) return true; // allow-handrolled-containment: this IS the canonical comparison every other site routes through
+  if (pathImpl.sep === '\\' || (process.platform === 'win32' && pathImpl === path)) {
+    const normTarget = resolvedTarget.replace(/\//g, '\\');
+    const normRoot = resolvedRoot.replace(/\//g, '\\');
+    return (normTarget + '\\').toLowerCase().startsWith((normRoot + '\\').toLowerCase()); // allow-handrolled-containment: Windows case-insensitive containment comparison fallback
+  }
+  return false;
 }
 
 /**
