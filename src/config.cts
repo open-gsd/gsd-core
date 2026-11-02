@@ -17,8 +17,9 @@ import cliExitMod = require('./cli-exit.cjs');
 const { ExitError } = cliExitMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoader = require('./config-loader.cjs');
-const { CONFIG_DEFAULTS, resolvePlannerStallDetectionEnabled } = configLoader;
+const { CONFIG_DEFAULTS, LEGACY_FLAT_KEYS, resolvePlannerStallDetectionEnabled } = configLoader;
 import { platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
+import { resolveGsdHome } from './runtime-homes.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir, planningRoot, resolveEnvWorkstream, withPlanningLock } = planningWorkspace;
@@ -340,6 +341,22 @@ interface NewProjectConfigPlan {
 }
 
 /**
+ * Search integrations a new project detects from this machine: the flag is on
+ * when the env var is set or the key file exists under `$GSD_HOME/.gsd`.
+ * `config-save-defaults` never copies these flags to the global store, where
+ * they would override the detection in every new project (#5681).
+ */
+const DETECTED_SEARCH_INTEGRATIONS: readonly { key: string; envVar: string; keyFile: string }[] = [
+  { key: 'brave_search', envVar: 'BRAVE_API_KEY', keyFile: 'brave_api_key' },
+  { key: 'firecrawl', envVar: 'FIRECRAWL_API_KEY', keyFile: 'firecrawl_api_key' },
+  { key: 'exa_search', envVar: 'EXA_API_KEY', keyFile: 'exa_api_key' },
+  { key: 'tavily_search', envVar: 'TAVILY_API_KEY', keyFile: 'tavily_api_key' },
+  { key: 'ref_search', envVar: 'REF_API_KEY', keyFile: 'ref_api_key' },
+  { key: 'perplexity', envVar: 'PERPLEXITY_API_KEY', keyFile: 'perplexity_api_key' },
+  { key: 'jina', envVar: 'JINA_API_KEY', keyFile: 'jina_api_key' },
+];
+
+/**
  * Plan a fully-materialized config object for a new project. Writes nothing:
  * the user defaults rewrite comes back as data, for the caller to persist once
  * it has decided to write at all (#5268: a `--dry-run` never does, and a
@@ -364,20 +381,10 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
   const gsdHome = process.env['GSD_HOME'] || os.homedir();
 
   // Detect API key availability
-  const braveKeyFile = path.join(gsdHome, '.gsd', 'brave_api_key');
-  const hasBraveSearch = !!(process.env['BRAVE_API_KEY'] || fs.existsSync(braveKeyFile));
-  const firecrawlKeyFile = path.join(gsdHome, '.gsd', 'firecrawl_api_key');
-  const hasFirecrawl = !!(process.env['FIRECRAWL_API_KEY'] || fs.existsSync(firecrawlKeyFile));
-  const exaKeyFile = path.join(gsdHome, '.gsd', 'exa_api_key');
-  const hasExaSearch = !!(process.env['EXA_API_KEY'] || fs.existsSync(exaKeyFile));
-  const tavilyKeyFile = path.join(gsdHome, '.gsd', 'tavily_api_key');
-  const hasTavilySearch = !!(process.env['TAVILY_API_KEY'] || fs.existsSync(tavilyKeyFile));
-  const refKeyFile = path.join(gsdHome, '.gsd', 'ref_api_key');
-  const hasRefSearch = !!(process.env['REF_API_KEY'] || fs.existsSync(refKeyFile));
-  const perplexityKeyFile = path.join(gsdHome, '.gsd', 'perplexity_api_key');
-  const hasPerplexity = !!(process.env['PERPLEXITY_API_KEY'] || fs.existsSync(perplexityKeyFile));
-  const jinaKeyFile = path.join(gsdHome, '.gsd', 'jina_api_key');
-  const hasJina = !!(process.env['JINA_API_KEY'] || fs.existsSync(jinaKeyFile));
+  const detectedSearch: Record<string, boolean> = {};
+  for (const { key, envVar, keyFile } of DETECTED_SEARCH_INTEGRATIONS) {
+    detectedSearch[key] = !!(process.env[envVar] || fs.existsSync(path.join(gsdHome, '.gsd', keyFile)));
+  }
 
   // Load user-level defaults from $GSD_HOME/.gsd/defaults.json if available
   const globalDefaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
@@ -404,13 +411,7 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
     commit_docs: CONFIG_DEFAULTS.commit_docs,
     parallelization: CONFIG_DEFAULTS.parallelization,
     search_gitignored: CONFIG_DEFAULTS.search_gitignored,
-    brave_search: hasBraveSearch,
-    firecrawl: hasFirecrawl,
-    exa_search: hasExaSearch,
-    tavily_search: hasTavilySearch,
-    ref_search: hasRefSearch,
-    perplexity: hasPerplexity,
-    jina: hasJina,
+    ...detectedSearch,
     git: {
       branching_strategy: CONFIG_DEFAULTS.branching_strategy,
       create_tag: true,
@@ -587,9 +588,10 @@ function isConfigSection(cwd: string, keyPath: string): boolean {
  * each value is the one `config-set` would persist (a normalizing rule's
  * result where one applies). An empty object is a section with nothing set:
  * refused as an unknown key unless its name is a real section, and left out
- * of the result either way.
+ * of the result either way. A null choice is left out too, unless `keepNull`
+ * keeps it as the request to clear the key (`config-save-defaults`).
  */
-function validateNewProjectChoices(cwd: string, choices: Record<string, unknown>, prefix = ''): Record<string, unknown> {
+function validateNewProjectChoices(cwd: string, choices: Record<string, unknown>, prefix = '', keepNull = false): Record<string, unknown> {
   const checked: Record<string, unknown> = {};
   for (const key of Object.keys(choices)) {
     const kp = prefix ? `${prefix}.${key}` : key;
@@ -624,7 +626,7 @@ function validateNewProjectChoices(cwd: string, choices: Record<string, unknown>
       if (Object.keys(value).length === 0 && !isValidConfigKey(kp, cwd) && !isConfigSection(cwd, kp)) {
         assertKnownConfigKey(cwd, kp);
       }
-      const section = validateNewProjectChoices(cwd, value, kp);
+      const section = validateNewProjectChoices(cwd, value, kp, keepNull);
       // Empty as given, or emptied by null choices: it sets nothing.
       if (Object.keys(section).length > 0) checked[key] = section;
       continue;
@@ -653,7 +655,7 @@ function validateNewProjectChoices(cwd: string, choices: Record<string, unknown>
     if (kp.split('.').some((segment) => segment === '__proto__' || segment === 'prototype' || segment === 'constructor')) {
       error('Invalid config key (prototype pollution guard): ' + kp, ERROR_REASON.CONFIG_PARSE_FAILED);
     }
-    if (value === null) continue;
+    if (value === null && !keepNull) continue;
     checked[key] = checkedValue;
   }
   return checked;
@@ -740,6 +742,107 @@ function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: 
   // creation that fails before here leaves the defaults file as it was.
   persistDefaultsRewrite(plan);
   output({ created: true, path: '.planning/config.json' }, raw, 'created');
+}
+
+/**
+ * Settings with a legacy spelling, as [legacy, canonical]: each flat key the
+ * loader reads ahead of its nested key (config-loader's LEGACY_FLAT_KEYS), and
+ * `depth`, which the loader and new-project creation read only when
+ * `granularity` is absent.
+ */
+const SPELLING_TWINS: readonly (readonly [string, string])[] = [
+  ...Object.entries(LEGACY_FLAT_KEYS).map(([flat, { section, field }]) => [flat, `${section}.${field}`] as const),
+  ['depth', 'granularity'],
+];
+
+/** The value at a one- or two-segment config path, or undefined. */
+function readPath(obj: Record<string, unknown>, dotted: string): unknown {
+  const [head, field] = dotted.split('.');
+  if (field === undefined) return obj[head];
+  const section = obj[head];
+  return isPlainObject(section) ? section[field] : undefined;
+}
+
+/**
+ * Remove from `store` the legacy spelling of every setting `patch` sets, or the
+ * stale legacy value keeps winning over the saved one. `patch` has passed the
+ * `config-set` key rules, which accept only canonical spellings.
+ */
+function dropShadowedSpellings(store: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...store };
+  for (const [legacy, canonical] of SPELLING_TWINS) {
+    if (readPath(patch, canonical) !== undefined) delete result[legacy];
+  }
+  return result;
+}
+
+/**
+ * Deep-merge `patch` into the global defaults `base`: objects merge key by key,
+ * a null removes the key (as `config-set <key> null` clears one), and anything
+ * else replaces. A section left empty is dropped.
+ */
+function mergeIntoGlobalDefaults(base: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) {
+      delete merged[key];
+    } else if (isPlainObject(value)) {
+      const section = mergeIntoGlobalDefaults(isPlainObject(merged[key]) ? merged[key] : {}, value);
+      if (Object.keys(section).length === 0) delete merged[key];
+      else merged[key] = section;
+    } else {
+      merged[key] = value;
+    }
+  }
+  return merged;
+}
+
+/**
+ * Save settings as global defaults (#5681): merge them into
+ * `$GSD_HOME/.gsd/defaults.json` instead of replacing the file, so keys the
+ * settings flow does not manage (`model_overrides`, `effort`, `runtime`,
+ * `resolve_model_ids`, unlisted `workflow` keys …) survive. The settings are held
+ * to the `config-set` rules first, as `config-new-project` holds its choices,
+ * since this store seeds every new project; a null clears its key. A saved
+ * setting removes its legacy spelling (SPELLING_TWINS). A missing file is
+ * created; an unreadable or non-object one is refused rather than overwritten.
+ */
+function cmdConfigSaveDefaults(cwd: string, settingsJson: string | undefined, raw: boolean): void {
+  let settings: unknown;
+  try {
+    settings = JSON.parse(settingsJson ?? '');
+  } catch (err) {
+    error('Invalid JSON for config-save-defaults: ' + (err as Error).message, ERROR_REASON.USAGE);
+  }
+  if (!isPlainObject(settings)) {
+    error('Invalid settings for config-save-defaults: expected a JSON object of config keys.', ERROR_REASON.USAGE);
+  }
+  const unchecked: Record<string, unknown> = { ...(settings as Record<string, unknown>) };
+  for (const { key } of DETECTED_SEARCH_INTEGRATIONS) delete unchecked[key];
+  const patch = validateNewProjectChoices(cwd, unchecked, '', true);
+
+  const defaultsPath = path.join(resolveGsdHome(), '.gsd', 'defaults.json');
+  let existing: Record<string, unknown> = {};
+  const created = !fs.existsSync(defaultsPath);
+  if (!created) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
+    } catch (err) {
+      error(`Refusing to overwrite ${defaultsPath}: it is not valid JSON (${(err as Error).message}). Fix or remove it, then save again.`);
+    }
+    if (!isPlainObject(parsed)) {
+      error(`Refusing to overwrite ${defaultsPath}: it does not hold a JSON object. Fix or remove it, then save again.`);
+    }
+    existing = parsed as Record<string, unknown>;
+  }
+
+  try {
+    platformWriteSync(defaultsPath, JSON.stringify(mergeIntoGlobalDefaults(dropShadowedSpellings(existing, patch), patch), null, 2) + '\n');
+  } catch (err) {
+    error('Failed to write defaults.json: ' + (err as Error).message);
+  }
+  output({ saved: true, created, path: defaultsPath }, raw, 'saved');
 }
 
 /**
@@ -1736,6 +1839,8 @@ export = {
   cmdConfigGet,
   cmdConfigSetModelProfile,
   cmdConfigNewProject,
+  cmdConfigSaveDefaults,
+  mergeIntoGlobalDefaults,
   cmdConfigPath,
   cmdMigrateConfig,
   // Exported for programmatic use by capability-writer and tests

@@ -681,6 +681,9 @@ node gsd-tools.cjs config-set-model-profile <profile>
 
 # Create config.json for a new project from the chosen settings
 node gsd-tools.cjs config-new-project '<choices-json>' [--dry-run]
+
+# Merge settings into the global defaults store ($GSD_HOME/.gsd/defaults.json)
+node gsd-tools.cjs config-save-defaults '<settings-json>'
 ```
 
 `config-new-project` takes the chosen settings as one JSON object, nested by section
@@ -728,6 +731,19 @@ so a refused choice, malformed JSON included, fails even when `config.json` alre
 with valid choices and an existing `config.json`, the command reports `already_exists` and
 leaves it untouched. The user defaults file is read only to build a new config, so a problem in
 it is not reported when the config already exists.
+
+`config-save-defaults` is the write behind `/gsd-settings` "save as global defaults" (#5681).
+It merges one JSON object into `$GSD_HOME/.gsd/defaults.json` (`~/.gsd/defaults.json` unless
+`GSD_HOME` is set): sections merge key by key, a `null` removes its key, and any other value
+replaces. Keys the settings flow does not manage (`model_overrides`, `effort`, `runtime`,
+`resolve_model_ids`, unlisted `workflow` keys) survive a save. The object is held to the
+`config-set` key and value rules first, as `config-new-project` choices are, so only canonical
+spellings are accepted (`git.branching_strategy`, not `branching_strategy`). A saved setting
+removes its legacy spelling from the store (`research` for `workflow.research`, `depth` for
+`granularity`), so a stale value cannot keep winning. A missing file is created. The search
+flags that new projects detect from this machine (`brave_search`, `firecrawl`, `exa_search`,
+`tavily_search`, `ref_search`, `perplexity`, `jina`) are never copied. A store that is not
+valid JSON, or not a JSON object, is refused and left as it was.
 
 ---
 
