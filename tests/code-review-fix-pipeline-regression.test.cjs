@@ -515,7 +515,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
   // The three readers of "what is a backup": the cleanup fence, the disposition step's bash loop,
   // and the disposition step's node `iterOf`. They must classify every name alike.
   test('T6h — #5506: the three backup readers agree on which names are backups',
-    { skip: !HAS_BASH }, () => {
+    { skip: !HAS_BASH }, (t) => {
     const FIX = 'gsd-core/workflows/code-review-fix.md';
     const DISP = 'gsd-core/workflows/execute-phase/steps/code-review-disposition.md';
     // `iter3` is what auto_iteration_loop writes (`.iter${ITERATION}.md`) at ITERATION=3.
@@ -525,12 +525,11 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     const expected = names.map((n) => /^01-REVIEW-FIX\.iter[0-9]+\.md$/.test(n));
     const one = (name, lines, preamble, probe) => {
       const dir = createTempDir('gsd-5506-readers-');
-      try {
-        if (name) fs.writeFileSync(path.join(dir, name), 'x');
-        const r = runBash(lines, { stdout: '', rc: 0 }, { preamble: preamble(dir), probe });
-        assert.strictEqual(r.status, 0, r.stderr);
-        return r.stdout.trim();
-      } finally { cleanup(dir); }
+      t.after(() => cleanup(dir));
+      if (name) fs.writeFileSync(path.join(dir, name), 'x');
+      const r = runBash(lines, { stdout: '', rc: 0 }, { preamble: preamble(dir), probe });
+      assert.strictEqual(r.status, 0, r.stderr);
+      return r.stdout.trim();
     };
     const reader1 = names.map((n) => one(n, span(FIX, 'BACKUP_FILES=()', 'done'),
       (d) => ['cd "' + d + '"', 'shopt -s nullglob', 'REVIEW_PATH="' + d + '/01-REVIEW.md"',
