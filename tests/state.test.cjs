@@ -3849,8 +3849,8 @@ describe('cmdStateRecordSession (state record-session)', () => {
     for (const line of addDecisionLines) {
       assert.match(
         line,
-        /--phase\s+"\$\{PHASE\}"/,
-        `every add-decision invocation must pass --phase "${'${PHASE}'}": ${line.trim()}`,
+        /--phase\s+"\$PHASE_VALUE"/,
+        `every add-decision invocation must pass the fresh shell's resolved --phase "$PHASE_VALUE": ${line.trim()}`,
       );
     }
   });

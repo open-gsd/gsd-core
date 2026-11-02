@@ -48,8 +48,8 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
 
   function timingKeyBlock(file) {
     const lines = splitLines(fs.readFileSync(file, 'utf8'));
-    const start = lines.findIndex((line) => line.trim() === '# gsd:plan-timing-key:start');
-    const end = lines.findIndex((line, index) => index > start && line.trim() === '# gsd:plan-timing-key:end');
+    const start = lines.findIndex((line) => line.trim() === '# plan-timing-key:start');
+    const end = lines.findIndex((line, index) => index > start && line.trim() === '# plan-timing-key:end');
     assert.ok(start !== -1 && end > start, `${path.basename(file)} must delimit its timing-key resolver`);
     return lines.slice(start + 1, end)
       .map((line) => line.trimStart())
@@ -458,7 +458,7 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
           runFresh(dir, start(), 1000, identity);
           const summary = runFresh(dir, finish(), 1000 + 59 * 60 + 59, identity);
           const lines = splitLines(timingFence(surface.file, surface.metric, surface.step));
-          const begin = lines.findIndex((line) => line.trim() === '# gsd:plan-timing-key:start');
+          const begin = lines.findIndex((line) => line.trim() === '# plan-timing-key:start');
           const firstMutation = lines.findIndex((line) => line.trimStart().startsWith('gsd_run query state.advance-plan'));
           const call = lines.findIndex((line) => line.trimStart().startsWith('gsd_run query state.record-metric'));
           assert.ok(begin !== -1 && firstMutation > begin && call > firstMutation,

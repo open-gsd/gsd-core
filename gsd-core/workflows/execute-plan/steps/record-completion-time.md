@@ -1,7 +1,7 @@
 <step name="record_completion_time">
 After verification, before SUMMARY; rerun after more work to refresh completion (#5212).
 ```bash
-# gsd:plan-timing-key:start
+# plan-timing-key:start
 canonicalize_timing_id() {
   local raw="$1" segment rest canonical=""
   case "$raw" in ''|.*|*.|*..*|*[!0-9.]*) printf '%s' "$raw"; return ;; esac
@@ -15,19 +15,19 @@ canonicalize_timing_id() {
   done
   printf '%s' "$canonical"
 }
-PHASE_ID=$(cat <<'GSD:PLAN:PHASE:5212'
+PHASE_ID=$(cat <<'PLAN!PHASE!5212'
 {phase}
-GSD:PLAN:PHASE:5212
+PLAN!PHASE!5212
 )
-PLAN_ID=$(cat <<'GSD:PLAN:NUMBER:5212'
+PLAN_ID=$(cat <<'PLAN!NUMBER!5212'
 {plan}
-GSD:PLAN:NUMBER:5212
+PLAN!NUMBER!5212
 )
 PHASE_ID=$(canonicalize_timing_id "$PHASE_ID")
 PLAN_ID=$(canonicalize_timing_id "$PLAN_ID")
 TIMING_KEY=$(printf '%s\0%s' "$PHASE_ID" "$PLAN_ID" | git hash-object --stdin) || exit 1
 TIMING_FILE=$(git rev-parse --git-path "gsd-plan-timing-$TIMING_KEY") || exit 1
-# gsd:plan-timing-key:end
+# plan-timing-key:end
 if [ ! -r "$TIMING_FILE" ]; then
   echo "ERROR: timing marker is missing; resume in the original worktree or restart explicitly as fresh." >&2
   exit 1

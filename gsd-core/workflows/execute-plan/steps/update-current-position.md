@@ -9,7 +9,7 @@ IS_WORKTREE=$([ -f .git ] && echo "true" || echo "false")
 # Skip in parallel mode — orchestrator handles STATE.md centrally.
 if [ "$IS_WORKTREE" != "true" ]; then
   # Resolve and validate before the first STATE mutation.
-  # gsd:plan-timing-key:start
+  # plan-timing-key:start
   canonicalize_timing_id() {
     local raw="$1" segment rest canonical=""
     case "$raw" in ''|.*|*.|*..*|*[!0-9.]*) printf '%s' "$raw"; return ;; esac
@@ -23,13 +23,13 @@ if [ "$IS_WORKTREE" != "true" ]; then
     done
     printf '%s' "$canonical"
   }
-  PHASE_ID=$(cat <<'GSD:PLAN:PHASE:5212'
+  PHASE_ID=$(cat <<'PLAN!PHASE!5212'
 {phase}
-GSD:PLAN:PHASE:5212
+PLAN!PHASE!5212
 )
-  PLAN_ID=$(cat <<'GSD:PLAN:NUMBER:5212'
+  PLAN_ID=$(cat <<'PLAN!NUMBER!5212'
 {plan}
-GSD:PLAN:NUMBER:5212
+PLAN!NUMBER!5212
 )
   PHASE_VALUE=$PHASE_ID
   PLAN_VALUE=$PLAN_ID
@@ -37,16 +37,16 @@ GSD:PLAN:NUMBER:5212
   PLAN_ID=$(canonicalize_timing_id "$PLAN_ID")
   TIMING_KEY=$(printf '%s\0%s' "$PHASE_ID" "$PLAN_ID" | git hash-object --stdin) || exit 1
   TIMING_FILE=$(git rev-parse --git-path "gsd-plan-timing-$TIMING_KEY") || exit 1
-  # gsd:plan-timing-key:end
+  # plan-timing-key:end
   DURATION=$(tail -n 1 "$TIMING_FILE.result") || exit 1
   [[ "$DURATION" =~ ^([0-9]+\ min|[0-9]+h\ [0-5]?[0-9]m)$ ]] || { echo "ERROR: cached plan duration is missing or invalid; rerun record_completion_time before STATE updates." >&2; exit 1; }
-  TASK_COUNT_VALUE=$(cat <<'GSD:PLAN:TASKS:5212'
+  TASK_COUNT_VALUE=$(cat <<'PLAN!TASKS!5212'
 {task_count}
-GSD:PLAN:TASKS:5212
+PLAN!TASKS!5212
 )
-  FILE_COUNT_VALUE=$(cat <<'GSD:PLAN:FILES:5212'
+  FILE_COUNT_VALUE=$(cat <<'PLAN!FILES!5212'
 {file_count}
-GSD:PLAN:FILES:5212
+PLAN!FILES!5212
 )
   [[ "$TASK_COUNT_VALUE" =~ ^[0-9]+$ && "$FILE_COUNT_VALUE" =~ ^[0-9]+$ ]] || { echo "ERROR: plan task/file counts are missing or invalid; provide the measured counts before STATE updates." >&2; exit 1; }
 
