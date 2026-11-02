@@ -1550,22 +1550,22 @@ describe('phaseVarBinding (static assignment check)', () => {
   });
 });
 
+function makePhaseProject(...phaseDirNames) {
+  const dir = createTempProject('loop-phase-ctx-');
+  for (const name of phaseDirNames) {
+    fs.mkdirSync(path.join(dir, '.planning', 'phases', name), { recursive: true });
+  }
+  return dir;
+}
+
+function renderWithPhase(projectDir, point, extraArgs = []) {
+  return runNode(
+    [GSD_TOOLS, 'loop', 'render-hooks', point, '--cwd', projectDir, ...extraArgs],
+    { cwd: ROOT, timeoutMs: PROBE_TIMEOUT_MS },
+  );
+}
+
 describe('cmdLoopRenderHooks --phase (#4030)', () => {
-  function makePhaseProject(...phaseDirNames) {
-    const dir = createTempProject('loop-phase-ctx-');
-    for (const name of phaseDirNames) {
-      fs.mkdirSync(path.join(dir, '.planning', 'phases', name), { recursive: true });
-    }
-    return dir;
-  }
-
-  function renderWithPhase(projectDir, point, extraArgs = []) {
-    return runNode(
-      [GSD_TOOLS, 'loop', 'render-hooks', point, '--cwd', projectDir, ...extraArgs],
-      { cwd: ROOT, timeoutMs: PROBE_TIMEOUT_MS },
-    );
-  }
-
   test('[happy] --phase matching exactly one directory adds context:{phase,phaseDir}', (t) => {
     const dir = makePhaseProject('05-widgets');
     t.after(() => cleanup(dir));
@@ -2524,14 +2524,12 @@ describe('every phase-scoped render-hooks call site actually carries --phase', (
 describe('cmdLoopRenderHooks --phase confinement and --phase-dir identity (#4030)', () => {
   const symlinkSkip = process.platform === 'win32' ? 'directory symlinks require elevation on Windows' : false;
   const mk = (t, ...names) => {
-    const dir = createTempProject('loop-phase-conf-');
+    const dir = makePhaseProject(...names);
     t.after(() => cleanup(dir));
-    for (const n of names) fs.mkdirSync(path.join(dir, '.planning', 'phases', n), { recursive: true });
     return dir;
   };
   const run = (dir, args) => {
-    const r = runNode([GSD_TOOLS, 'loop', 'render-hooks', 'plan:pre', '--cwd', dir, ...args, '--raw'],
-      { cwd: ROOT, timeoutMs: PROBE_TIMEOUT_MS });
+    const r = renderWithPhase(dir, 'plan:pre', [...args, '--raw']);
     assert.strictEqual(r.exitCode, 0, 'stderr: ' + r.stderr);
     return JSON.parse(r.stdout.trim());
   };
@@ -2566,8 +2564,7 @@ describe('cmdLoopRenderHooks --phase confinement and --phase-dir identity (#4030
   // with no control characters. Decode the envelope and each quoted value, and
   // assert on length and code points, never on prose or raw stdout bytes.
   const runText = (dir, args) => {
-    const r = runNode([GSD_TOOLS, 'loop', 'render-hooks', 'plan:pre', '--cwd', dir, ...args, '--raw'],
-      { cwd: ROOT, timeoutMs: PROBE_TIMEOUT_MS });
+    const r = renderWithPhase(dir, 'plan:pre', [...args, '--raw']);
     assert.strictEqual(r.exitCode, 0, 'stderr: ' + r.stderr);
     return r.stdout;
   };
