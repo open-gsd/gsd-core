@@ -5411,6 +5411,8 @@ describe('#5320 plan-count / plan-position owner parity', () => {
 
   test('plannedPhase unit: only the `?` placeholder after `of` is an unfilled total; an author word there survives', () => {
     assert.strictEqual(lineOf(planned('Plan: 2 of the way done', 6).content), 'Plan: 2 of 6 of the way done');
+    assert.strictEqual(lineOf(planned('Plan: 2 of A/B testing', 6).content), 'Plan: 2 of 6 of A/B testing');
+    assert.strictEqual(lineOf(planned('Plan: 2 of I/O work', 6).content), 'Plan: 2 of 6 of I/O work');
     assert.strictEqual(lineOf(planned('Plan: 2 of ? - wave 1 done', 6).content), 'Plan: 2 of 6 - wave 1 done');
   });
 
