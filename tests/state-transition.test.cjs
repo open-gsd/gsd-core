@@ -5338,6 +5338,7 @@ describe('#5320 plan-count / plan-position owner parity', () => {
       return `${s.n} of ${s.kind === 'NofM' ? s.m : '?'}${s.rest}`;
     };
     const readable = (s) => s !== null && s.kind !== 'TBD';
+    const adv0 = (content) => transitionCore(content, { kind: 'advancePlan' }, deps).data;
     fc.assert(
       fc.property(
         fc.record({
@@ -5369,8 +5370,10 @@ describe('#5320 plan-count / plan-position owner parity', () => {
           if (r.data?.reason !== (want ?? undefined)) return false;
           if (want !== null) return r.content === content && r.updated.length === 0;
           // advance-plan reads a plan line only when one reads, or when planned-phase wrote an unreadable one (no Total line)
-          if (reads.length === 0 && (!(plan || cur) || total)) return true;
-          const adv = transitionCore(r.content, { kind: 'advancePlan' }, deps).data;
+          if (!(plan || cur)) return true;
+          // no readable line and a Total line: planned-phase leaves the lines as written (as before) and advance-plan refuses them as before
+          if (reads.length === 0 && total) return adv0(r.content).error === true;
+          const adv = adv0(r.content);
           const position = newPhase ? 0 : recorded;
           return adv.error === undefined && adv.total_plans === count && (adv.previous_plan ?? adv.current_plan) === position;
         },
