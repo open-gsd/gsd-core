@@ -954,8 +954,8 @@ function phaseInfoMatchesExactPrefix(
  * directories with no notion of project scope, so a token carrying a FOREIGN
  * project-code prefix (`OTHER-05` in a `project_code: "MINE"` project) would
  * otherwise resolve to this project's same-numbered directory — bug #2237.
- * This is the guarded form every phase-token consumer must use; the bare
- * `findPhaseInternal` above is the unscoped primitive it wraps.
+ * This is the guarded form that `init.*` and `loop render-hooks --phase` use;
+ * the bare `findPhaseInternal` above is the unscoped primitive it wraps.
  *
  * Lives here, beside the primitive it guards, rather than in a caller: #4030
  * added a second consumer (`loop render-hooks --phase`, `loop-resolver.cts`)
