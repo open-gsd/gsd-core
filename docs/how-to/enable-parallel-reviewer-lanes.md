@@ -92,7 +92,7 @@ That is true sequentially too, but concurrency gives you more ways to drop one a
 | Every selected lane in `reviewers:`, all sections populated | Working as intended | Nothing |
 | A lane's section carries the "failed or returned empty output" header | The lane ran and produced nothing usable. Read the captured stderr in the stub | If it names a rate limit or quota, your provider cannot take this concurrency — see below |
 | A lane reports `probe_timeout` or `host_unreachable` | The lane could not be reached at all — a local server that is down, not a concurrency effect | Start the server; unrelated to this setting |
-| A lane reports `budget_too_small` | Its prompt budget cannot fit the minimum review set | Raise `review.max_prompt_tokens_per_reviewer.<slug>`; unrelated to this setting |
+| A lane reports `prompt_exceeds_context` | The review prompt is over the lane's prompt cap, so the lane was refused rather than trimmed | See [Fix a reviewer lane that refused an oversized prompt](fix-a-refused-reviewer-lane.md); unrelated to this setting |
 | A lane reports `egress_host_changed` | The lane was consented to one destination and the config now names another. It is blocked, not redirected | Re-consent deliberately; unrelated to this setting |
 | A lane is missing from `reviewers:` entirely | It was never selected | Check your flags and `review.default_reviewers` |
 | Several lanes stub out at once, with provider errors | The concurrency is more than your account can take | Turn the key back off, or narrow `review.default_reviewers` |

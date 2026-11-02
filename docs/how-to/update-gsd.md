@@ -46,6 +46,7 @@ Restart your runtime after a successful update to pick up new commands and agent
 |------|--------------|
 | `--sync` | After updating, sync skills from the GSD registry |
 | `--reapply` | After updating, merge locally modified GSD files back in from `gsd-local-patches/` |
+| `--reapply --interactive[=exceptions\|all]` | Decide each reapplied edit yourself — see [Review reapplied patches hunk by hunk](review-reapplied-patches.md) |
 | `--next` / `--rc` | Target the `@next` RC dist-tag instead of `@latest` (installs or refreshes a release candidate; see ADR #660) |
 
 ```bash
