@@ -356,6 +356,8 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `tdd.md` | Test-driven development integration patterns. |
 | `ui-brand.md` | Visual output formatting patterns. |
 | `common-bug-patterns.md` | Common bug patterns for code review and verification. |
+| `cicd-review-patterns.md` | CI/CD pipeline rubric for `gsd-code-reviewer`: eight reliability checks, severity tiers, and negative space. Read on demand at standard/deep depth when a pipeline file is in scope. |
+| `necessity-review.md` | Necessity rubric for `gsd-code-reviewer` (category 4): taxonomy, evidence rule, and negative space. Read on demand at standard/deep depth. |
 | `debugger-philosophy.md` | Evergreen debugging disciplines loaded by `gsd-debugger`. |
 | `debugger-fix-acceptance.md` | Multi-signal fix-acceptance guardrail (anti-overfitting) loaded by `gsd-debugger`. |
 | `debugger-sbfl.md` | Spectrum-based fault localization (Ochiai) pre-filter loaded by `gsd-debugger`. |
@@ -660,7 +662,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `package-legitimacy.cjs` | Registry-API package legitimacy verdicts (OK/SUS/SLOP) from npm/PyPI/crates, slopcheck optional |
 | `pattern.cjs` | The pattern-construction seam — `escapeRegex` (delegates to the built-in `RegExp.escape`) and `literalPattern`; sole owner of building a `RegExp` from a runtime value (ADR-3212 §1, epic #3212 Phase 1, #3412) |
 | `phase-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools phase` |
-| `phase-entry-grammar.cjs` | The one definition of a ROADMAP phase-list entry (compiled from `src/phase-entry-grammar.cts`, gitignored, #5763): bullet marker, checkbox, bold token and line anchoring as a regex-prefix builder plus the single tick reader; read-side consumers compose their tail onto it |
+| `phase-entry-grammar.cjs` | The one definition of a ROADMAP phase-list entry (compiled from `src/phase-entry-grammar.cts`, gitignored, #5763): bullet marker, checkbox, bold token and line anchoring as regex-prefix and split-box builders plus the single tick reader; readers and writers compose their tail onto it (writers since #5764) |
 | `phase-estimation.cjs` | Pure phase-effort estimation — `estimate`/`actuals` schema parse+render, smart-zone budget classification, and estimate-vs-actual calibration (median ratio, clamped, sample-gated). Confidence is derived from calibration sample count, never self-rated (ADR-2629) |
 | `phase-id-card.cjs` | Single runtime source for the compact annotated bracket phase-ID convention card and legend (ADR-612 PR-5) |
 | `phase-id-display.cjs` | Pure display adapter that routes legacy milestone metadata through the canonical bracket phase-ID parse/render pair (ADR-612 PR-5) |

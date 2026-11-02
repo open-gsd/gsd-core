@@ -151,9 +151,11 @@ function parseRoadmapProgressRows(content: string, directoryContext: ReturnType<
   // unattributed and be treated as current-milestone, silently over-including.
   // #5761: the roadmap-progress owner picks the table (heading-scoped, so a
   // decoy table elsewhere cannot be mistaken for it); this reader only supplies
-  // the probe order.
+  // the probe order. A table outside a table-less `## Progress` section has
+  // always been read here (#5692: no behavior change), hence `sectionMiss`.
   const { rows: tableRows } = locateRoadmapProgress(content, {
     columns: [['Phase', 'Milestone'], ['Phase', 'Plans Complete']],
+    sectionMiss: 'document',
   });
   const rows: RoadmapProgressRow[] = [];
   for (const row of tableRows) {
