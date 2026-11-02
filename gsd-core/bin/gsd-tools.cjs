@@ -1631,7 +1631,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     const fsx = require('node:fs');
     const os = require('node:os');
     const { REVIEWER_LANES, mergeReviewerLanes } = require('./lib/review-lane-descriptor.cjs');
-    const { resolveLanePlan: resolveLanePlanBase, resolveLaneEffort, resolveLaneBudget, applyPromptOverride } = require('./lib/review-lane-invocation.cjs');
+    const { resolveLanePlan: resolveLanePlanBase, resolveLaneEffort, resolveLaneCap, refuseIfOverCap, renderPromptRefusalStub, artifactPaths, applyPromptOverride } = require('./lib/review-lane-invocation.cjs');
+    const { estimateTokens } = require('./lib/prompt-budget.cjs');
     // OpenCode 2.x argv differs from 1.x (no --variant; effort rides on the model as `#variant`;
     // ADR-5331 D5/D8). The generation is probed lazily, only when the opencode lane is resolved.
     const resolveLanePlan = (laneInput) => {
@@ -1915,11 +1916,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     };
     const effortFor = (lane) => resolveLaneEffort(lane, configGet, renderLaneEffort);
 
-    // Per-lane prompt budget: `resolveLaneBudget` (review-lane-invocation.cjs) owns the #2797
+    // Per-lane prompt cap: `resolveLaneCap` (review-lane-invocation.cjs) owns the #2797 + #4559
     // resolution semantics (shared with src/reviewer-step-dispatch.cts, #4209 R3 — was two
-    // verbatim copies). Only the budget VALUE is resolved here; assembly/trimming stay in
-    // `prompt-budget`, which the workflow calls, handing the trimmed file back via `--prompt-file`.
-    const budgetFor = (lane) => resolveLaneBudget(lane, configGet);
+    // verbatim copies). `plan` reports it; `invoke` REFUSES a lane whose prompt is over it
+    // (#4559) rather than trimming — the prompt is never edited on the way to a lane.
+    const capFor = (lane) => resolveLaneCap(lane, configGet);
 
     // #4209 (ADR-2782 seam) — the ONE interpreter route for a step that declared
     // `supportsReviewerLanes: true`. Wires `dispatchReviewerLanes` (src/reviewer-step-dispatch.cts)
@@ -2059,17 +2060,19 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       } catch (e) {
         return { slug, ok: false, reason: 'malformed_lane', detail: `resolver threw: ${e && e.message ? e.message : String(e)}` };
       }
-      return r.ok
-        ? {
-            slug,
-            ok: true,
-            section: lane.reviewsSection,
-            transport: r.plan.transport,
-            promptBudget: budgetFor(lane),
-            promptPath: r.plan.transport === 'spawn' ? r.plan.stdin : r.plan.promptPath,
-            plan: r.plan,
-          }
-        : { slug, ok: false, reason: r.reason, detail: r.detail };
+      if (!r.ok) return { slug, ok: false, reason: r.reason, detail: r.detail };
+      const laneCap = capFor(lane);
+      return {
+        slug,
+        ok: true,
+        section: lane.reviewsSection,
+        transport: r.plan.transport,
+        promptBudget: laneCap.cap,
+        promptCapSource: laneCap.source,
+        contextWindowTokens: laneCap.contextWindowTokens,
+        promptPath: r.plan.transport === 'spawn' ? r.plan.stdin : r.plan.promptPath,
+        plan: r.plan,
+      };
     });
 
     if (sub === 'plan') {
@@ -2178,12 +2181,59 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       ];
     }
 
-    // `--prompt-file` lets the caller substitute a budget-trimmed prompt. Applied to whichever
-    // channel this lane actually reads from (stdin, argv, an argv-embedded file reference, or the
-    // http promptPath), so one flag serves every lane (#5049).
+    // `--prompt-file` lets the caller substitute a different prompt (a section subset, say). Applied
+    // to whichever channel this lane actually reads from (stdin, argv, an argv-embedded file
+    // reference, or the http promptPath), so one flag serves every lane (#5049). It is no longer a
+    // trim hand-off: nothing in review.md trims a prompt to fit a lane since #4559.
     const promptOverride = flag('--prompt-file');
     if (promptOverride) {
       entry.plan = applyPromptOverride(entry.plan, promptOverride, repoRoot);
+    }
+
+    // #4559: refuse, never trim. Measure the prompt this lane would actually receive — the file
+    // the RESOLVED plan reads (stdin file, or the plan's prompt path for argv / argv-file-ref /
+    // http lanes; `--prompt-file` already retargeted the plan above) — against its cap BEFORE any
+    // consent lookup, probe or spawn. An unreadable file is not a refusal: the runner reports its
+    // own error for it. The decision itself lives in `refuseIfOverCap`; this only does the IO.
+    {
+      const plannedPrompt = entry.plan.transport === 'spawn' && entry.plan.stdin
+        ? entry.plan.stdin
+        : entry.plan.promptPath;
+      let promptText = null;
+      try {
+        promptText = fs.readFileSync(plannedPrompt || artifactPaths(runDir, entry.slug).promptPath, 'utf8');
+      } catch { promptText = null; }
+      if (promptText !== null) {
+        const refused = refuseIfOverCap({
+          lane: laneBySlug.get(entry.slug),
+          estimatedTokens: estimateTokens(promptText),
+          configGet,
+        });
+        if (refused) {
+          const reviewPath = entry.plan.reviewPath;
+          let stubWritten = true;
+          try {
+            fs.mkdirSync(path.dirname(reviewPath), { recursive: true });
+            fs.writeFileSync(reviewPath, renderPromptRefusalStub(entry.slug, refused.detail), 'utf8');
+          } catch (e) {
+            stubWritten = false;
+            process.stderr.write(
+              `review-lane invoke: could not write the refusal stub to ${reviewPath}: ` +
+              `${e && e.message ? e.message : String(e)}\n`,
+            );
+          }
+          output({
+            slug: entry.slug,
+            ok: false,
+            reason: refused.reason,
+            detail: refused.detail,
+            reviewPath,
+            stubWritten,
+            refusal: refused.refusal,
+          }, raw);
+          return;
+        }
+      }
     }
 
     // ADR-2782 D5 rule 4: re-resolve the consented destination at INVOCATION. `undefined` (no
