@@ -5368,7 +5368,8 @@ describe('#5320 plan-count / plan-position owner parity', () => {
           const r = transitionCore(content, { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: count }, deps);
           if (r.data?.reason !== (want ?? undefined)) return false;
           if (want !== null) return r.content === content && r.updated.length === 0;
-          if (!plan && !cur) return true;
+          // advance-plan reads a plan line only when one reads, or when planned-phase wrote an unreadable one (no Total line)
+          if (reads.length === 0 && (!(plan || cur) || total)) return true;
           const adv = transitionCore(r.content, { kind: 'advancePlan' }, deps).data;
           const position = newPhase ? 0 : recorded;
           return adv.error === undefined && adv.total_plans === count && (adv.previous_plan ?? adv.current_plan) === position;
