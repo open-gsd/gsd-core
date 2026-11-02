@@ -16,6 +16,7 @@ import { realClock, type Clock } from './clock.cjs';
 import { retryRenameSync } from './shell-command-projection.cjs';
 import { findProjectRoot } from './project-root.cjs';
 import { CLAUDE_AGENT_ALIASES } from './model-catalog.cjs';
+import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import worktreeSafetyMod = require('./worktree-safety.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -72,7 +73,7 @@ export function sessionRoot(cwd: string): string {
 }
 
 /** Compare at tier-alias level: `claude-sonnet-4-6` and `sonnet` are the same. Tier names are the catalog's CLAUDE_AGENT_ALIASES. */
-const FAMILY_RE = new RegExp(`(?:^|[^a-z0-9])(${[...CLAUDE_AGENT_ALIASES].join('|')})(?:$|[^a-z])`);
+const FAMILY_RE = new RegExp(`(?:^|[^a-z0-9])(${[...CLAUDE_AGENT_ALIASES].map(escapeRegex).join('|')})(?:$|[^a-z])`);
 export function modelFamily(model: unknown): string {
   const s = String(model).toLowerCase();
   return FAMILY_RE.exec(s)?.[1] ?? s;

@@ -99,3 +99,18 @@ test('property: readGuardMode gives skip for an absent, unparseable or over-cap 
   }
 });
 
+test('modelFamily escapes catalog tier names', () => {
+  const { CLAUDE_AGENT_ALIASES } = require('../gsd-core/bin/lib/model-catalog.cjs');
+  const mod = require.resolve('../gsd-core/bin/lib/model-escalation.cjs');
+  CLAUDE_AGENT_ALIASES.add('o.us');
+  delete require.cache[mod];
+  try {
+    const { modelFamily } = require(mod);
+    if (modelFamily('claude-o.us-1') !== 'o.us') throw new Error('the tier name matches literally');
+    if (modelFamily('claude-oxus-1') !== 'claude-oxus-1') throw new Error('a . in a tier name is not a wildcard');
+  } finally {
+    CLAUDE_AGENT_ALIASES.delete('o.us');
+    delete require.cache[mod];
+  }
+});
+
