@@ -30,22 +30,21 @@ test('property: modelFamily maps any id carrying a catalog tier name as a token 
   fc.assert(fc.property(fc.constantFrom('gpt-5', 'o3', 'gemini-2.5-pro', 'xopus', 'sonnetx', '9opus'), (id) => modelFamily(id) === id));
 });
 
-test('property: ensureGsdIgnore keeps a file with a bare * or its marker, else appends marker and rules once; an absent file becomes *', () => {
-  const { ensureGsdIgnore } = require('../gsd-core/bin/gsd-tools.cjs');
+test('property: writeEscalation keeps a .gitignore with a bare * or its marker, else appends marker and rules once; an absent file becomes *', () => {
+  const { writeEscalation } = require('../gsd-core/bin/lib/model-escalation.cjs');
   const marker = '# gsd-core model guard';
-  const rules = ['/model-escalation-*', '/.gitignore.tmp-*'];
   const dir = createTempDir('gsd-esc-ignore-');
   try {
-    const file = path.join(dir, '.gitignore');
-    ensureGsdIgnore(dir, marker, rules);
+    const file = path.join(dir, '.gsd', '.gitignore');
+    writeEscalation(dir, 'gsd-executor', 'opus');
     if (fs.readFileSync(file, 'utf8') !== '*\n') throw new Error('an absent .gitignore must become *');
     const line = fc.constantFrom('*', '* ', '!*', 'a*', '/x', '', marker, '# gsd-core dispatch sentinel');
     fc.assert(fc.property(fc.array(line, { maxLength: 4 }), fc.constantFrom('\n', '\r\n'), fc.boolean(), (lines, eol, trailing) => {
       const before = lines.join(eol) + (trailing && lines.length ? eol : '');
       fs.writeFileSync(file, before);
-      ensureGsdIgnore(dir, marker, rules);
+      writeEscalation(dir, 'gsd-executor', 'opus');
       const once = fs.readFileSync(file, 'utf8');
-      ensureGsdIgnore(dir, marker, rules);
+      writeEscalation(dir, 'gsd-executor', 'opus');
       const covered = /^\*\r?$/m.test(before) || before.includes(marker);
       const want = covered ? before : `${before}${before.endsWith('\n') ? '' : '\n'}${marker}\n/model-escalation-*\n/.gitignore.tmp-*\n`;
       return once === want && fs.readFileSync(file, 'utf8') === once;
@@ -79,3 +78,4 @@ test('property: the CLI pin accept regex is exactly "alphanumeric first, then MO
   fc.assert(fc.property(fc.string({ unit: 'binary-ascii', maxLength: 12 }), (id) =>
     MODEL_ID_CHARSET_RE.test(id) === (/^[A-Za-z0-9]/.test(id) && body.test(id))));
 });
+

@@ -772,9 +772,6 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       attempt,
       failureClass,
       host,
-      // #5328: the escalation record's .gsd/.gitignore rule goes through the sentinel's owner; '/.gitignore.tmp-*'
-      // covers the owner's own temp file should a crash land between write and rename (Nit 4).
-      seedGsdIgnore: (gsdDir) => ensureGsdIgnore(gsdDir, '# gsd-core model guard', ['/model-escalation-*', '/.gitignore.tmp-*']),
     });
   }
 
@@ -2912,63 +2909,6 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   /**
-   * #5328: the one owner of `.gsd/.gitignore` upkeep, for the dispatch sentinel
-   * (writeDispatchIsolationSentinel) and the model-escalation record (resolve-execution).
-   * Creates the file as `*`; else, when it has neither a bare `*` line nor `marker`,
-   * appends `marker` and `rules` by tmp + rename. Throws when the file is a symlink;
-   * any other read or write failure leaves the rules as they are. `sentinelDir` must exist.
-   */
-  function ensureGsdIgnore(sentinelDir, marker, rules) {
-    const nodePath = require('path');
-    const nodeFs = require('fs');
-    const ignorePath = nodePath.join(sentinelDir, '.gitignore');
-    try {
-      nodeFs.writeFileSync(ignorePath, '*\n', { flag: 'wx' });
-    } catch (ignoreError) {
-      if (ignoreError.code === 'EEXIST') {
-        // Keep a pre-existing ignore file. A bare '*' already ignores the
-        // whole directory, including this file and the writers' temp files.
-        // Read through an fd opened without following links where supported,
-        // and without blocking on a FIFO; replace by rename rather than append
-        // through the path, so a link swapped in after the check cannot redirect a write elsewhere.
-        let fd;
-        let ignoreTmpPath;
-        try {
-          if (nodeFs.lstatSync(ignorePath).isSymbolicLink()) {
-            throw new Error('.gsd/.gitignore is a symlink');
-          }
-          const { O_RDONLY, O_NOFOLLOW, O_NONBLOCK } = nodeFs.constants;
-          fd = nodeFs.openSync(ignorePath, O_RDONLY | (O_NOFOLLOW || 0) | (O_NONBLOCK || 0));
-          if (!nodeFs.fstatSync(fd).isFile()) throw new Error('.gsd/.gitignore is not a regular file');
-          const current = nodeFs.readFileSync(fd, 'utf8');
-          nodeFs.closeSync(fd);
-          fd = undefined;
-          if (!current.includes(marker) && !/^\*\r?$/m.test(current)) {
-            const additionalRules = `${current.endsWith('\n') ? '' : '\n'}${marker}\n${rules.map((rule) => `${rule}\n`).join('')}`;
-            ignoreTmpPath = `${ignorePath}.tmp-${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`;
-            nodeFs.writeFileSync(ignoreTmpPath, current + additionalRules, { flag: 'wx' });
-            if (nodeFs.lstatSync(ignorePath).isSymbolicLink()) {
-              throw new Error('.gsd/.gitignore is a symlink');
-            }
-            nodeFs.renameSync(ignoreTmpPath, ignorePath);
-            ignoreTmpPath = null;
-          }
-        } catch (existingIgnoreError) {
-          if (existingIgnoreError.code === 'ELOOP' || existingIgnoreError.message === '.gsd/.gitignore is a symlink') {
-            throw new Error('.gsd/.gitignore is a symlink');
-          }
-          // Any other read or write failure keeps the existing rules; the caller still writes its file.
-        } finally {
-          if (fd !== undefined) nodeFs.closeSync(fd);
-          if (ignoreTmpPath) {
-            try { nodeFs.unlinkSync(ignoreTmpPath); } catch (_) { /* best-effort cleanup */ }
-          }
-        }
-      }
-    }
-  }
-
-  /**
    * Atomically persist the resolved dispatch-isolation decision to the
    * run-scoped sentinel both isolation guard hooks read
    * (hooks/gsd-agent-isolation-guard.js, hooks/gsd-cursor-subagent-start.js;
@@ -2999,12 +2939,56 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
         throw new Error('sentinel directory is a symlink or resolves outside the project');
       }
       // User projects do not inherit gsd-core's root .gitignore. Ignore this
-      // tool-owned directory locally before writing the first sentinel.
-      ensureGsdIgnore(sentinelDir, '# gsd-core dispatch sentinel', [
-        '/dispatch-isolation-sentinel.json',
-        '/dispatch-isolation-sentinel.json.tmp-*',
-        '/.gitignore',
-      ]);
+      // tool-owned directory locally before writing the first sentinel. An
+      // ordinary ignore-file IO failure must not prevent recording isolation.
+      const ignorePath = nodePath.join(sentinelDir, '.gitignore');
+      try {
+        nodeFs.writeFileSync(ignorePath, '*\n', { flag: 'wx' });
+      } catch (ignoreError) {
+        if (ignoreError.code === 'EEXIST') {
+          // Keep a pre-existing ignore file. A bare '*' already ignores the
+          // whole directory, including this file and the sentinel temp file.
+          // Read through an fd opened without following links where supported;
+          // replace by rename rather than append through the path, so a link
+          // swapped in after the check cannot redirect a write elsewhere.
+          let fd;
+          let ignoreTmpPath;
+          try {
+            if (nodeFs.lstatSync(ignorePath).isSymbolicLink()) {
+              throw new Error('sentinel ignore file is a symlink');
+            }
+            fd = nodeFs.openSync(ignorePath, nodeFs.constants.O_RDONLY | (nodeFs.constants.O_NOFOLLOW || 0));
+            if (!nodeFs.fstatSync(fd).isFile()) throw new Error('sentinel ignore file is not a regular file');
+            const current = nodeFs.readFileSync(fd, 'utf8');
+            nodeFs.closeSync(fd);
+            fd = undefined;
+            if (!current.includes('# gsd-core dispatch sentinel') && !/^\*\r?$/m.test(current)) {
+              const additionalRules = `${current.endsWith('\n') ? '' : '\n'}# gsd-core dispatch sentinel\n` +
+                '/dispatch-isolation-sentinel.json\n' +
+                '/dispatch-isolation-sentinel.json.tmp-*\n' +
+                '/.gitignore\n';
+              ignoreTmpPath = `${ignorePath}.tmp-${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`;
+              nodeFs.writeFileSync(ignoreTmpPath, current + additionalRules, { flag: 'wx' });
+              if (nodeFs.lstatSync(ignorePath).isSymbolicLink()) {
+                throw new Error('sentinel ignore file is a symlink');
+              }
+              nodeFs.renameSync(ignoreTmpPath, ignorePath);
+              ignoreTmpPath = null;
+            }
+          } catch (existingIgnoreError) {
+            if (existingIgnoreError.code === 'ELOOP' || existingIgnoreError.message === 'sentinel ignore file is a symlink') {
+              throw new Error('sentinel ignore file is a symlink');
+            }
+            // Ignore seeding is best-effort; the sentinel is still useful if
+            // this path cannot be read or updated.
+          } finally {
+            if (fd !== undefined) nodeFs.closeSync(fd);
+            if (ignoreTmpPath) {
+              try { nodeFs.unlinkSync(ignoreTmpPath); } catch (_) { /* best-effort cleanup */ }
+            }
+          }
+        }
+      }
       // Atomic write: unique temp file + rename, so a concurrent reader (a
       // guard hook firing mid-write) never observes a partially-written
       // sentinel. Unique per-process+time so concurrent orchestrator-worktree
@@ -5834,8 +5818,6 @@ if (require.main === module) {
 // ADR-1244 Phase 5: export dispatchOverlayCapabilityCommand + defaultRequireFromInstallRoot for
 // the third-party overlay dispatch + install-root confinement tests.
 module.exports = {
-  // #5328: exported for tests — the one .gsd/.gitignore owner (property and parity tests).
-  ensureGsdIgnore,
   dispatchCapabilityCommand,
   dispatchOverlayCapabilityCommand,
   defaultRequireFromInstallRoot,

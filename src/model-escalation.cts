@@ -11,6 +11,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { realClock, type Clock } from './clock.cjs';
 import { retryRenameSync } from './shell-command-projection.cjs';
 import { findProjectRoot } from './project-root.cjs';
@@ -80,20 +81,55 @@ function writeAtomic(file: string, content: string): void {
 }
 
 /**
- * Throws when the record cannot be written, a symlinked `.gsd` or `.gsd/.gitignore` included. Under
+ * Throws when the record cannot be written: a symlinked or redirected `.gsd`, or a symlinked `.gsd/.gitignore`. Under
  * hooks.agent_model_guard:'deny' a missing record blocks the escalated model, so the caller (recordModelEscalation)
- * reports it. `seedIgnore` is the one `.gsd/.gitignore` owner (ensureGsdIgnore, gsd-tools.cjs), run before the record lands.
+ * reports it. `.gsd/.gitignore` follows the dispatch-sentinel writer's policy (gsd-core/bin/gsd-tools.cjs,
+ * writeDispatchIsolationSentinel; a parity test pins the two): create `*`; else keep a file with a bare `*` or this
+ * writer's marker, else append marker and rules by tmp + rename; any other read or write failure keeps the rules.
  */
 export function writeEscalation(
-  root: string, agentType: string, model: string, seedIgnore: (gsdDir: string) => void, session?: string,
-  clock: Pick<Clock, 'now'> = realClock,
+  root: string, agentType: string, model: string, session?: string, clock: Pick<Clock, 'now'> = realClock,
 ): void {
   if (!GUARDED_AGENT_TYPES.has(agentType)) return; // also keeps agentType, a file name, from traversing
   const dir = path.join(root, '.gsd');
   fs.mkdirSync(dir, { recursive: true });
-  // Catches a planted .gsd symlink; racing a swap after this needs repo write access already.
-  if (fs.lstatSync(dir).isSymbolicLink()) throw new Error(`${dir} is a symlink`);
-  seedIgnore(dir);
+  // Catches a planted .gsd symlink and an ancestor redirect; racing a swap after this needs repo write access already.
+  if (fs.lstatSync(dir).isSymbolicLink() || path.relative(fs.realpathSync(root), fs.realpathSync(dir)) !== '.gsd') {
+    throw new Error(`${dir} is a symlink or resolves outside the project`);
+  }
+  const ignore = path.join(dir, '.gitignore');
+  try {
+    fs.writeFileSync(ignore, '*\n', { flag: 'wx' });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'EEXIST') {
+      // O_NONBLOCK beyond the sentinel's open: a FIFO here must not hang resolve-execution.
+      const { O_RDONLY, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
+      let fd: number | undefined;
+      let tmp: string | undefined;
+      try {
+        if (fs.lstatSync(ignore).isSymbolicLink()) throw new Error(`${ignore} is a symlink`);
+        fd = fs.openSync(ignore, O_RDONLY | (O_NOFOLLOW || 0) | (O_NONBLOCK || 0));
+        if (!fs.fstatSync(fd).isFile()) throw new Error(`${ignore} is not a regular file`);
+        const cur = fs.readFileSync(fd, 'utf8');
+        fs.closeSync(fd);
+        fd = undefined;
+        if (!cur.includes('# gsd-core model guard') && !/^\*\r?$/m.test(cur)) {
+          tmp = `${ignore}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
+          fs.writeFileSync(tmp, `${cur}${cur.endsWith('\n') ? '' : '\n'}# gsd-core model guard\n/model-escalation-*\n/.gitignore.tmp-*\n`, { flag: 'wx' });
+          if (fs.lstatSync(ignore).isSymbolicLink()) throw new Error(`${ignore} is a symlink`);
+          retryRenameSync(tmp, ignore);
+          tmp = undefined;
+        }
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ELOOP' || (err as Error).message === `${ignore} is a symlink`) {
+          throw new Error(`${ignore} is a symlink`);
+        }
+      } finally {
+        if (fd !== undefined) fs.closeSync(fd);
+        if (tmp) fs.rmSync(tmp, { force: true });
+      }
+    }
+  }
   const rec: EscalationRecord = { model, written_at: clock.now(), ...(session ? { session } : {}) };
   writeAtomic(escalationFile(root, agentType), JSON.stringify(rec));
 }

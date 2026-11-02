@@ -1174,7 +1174,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
     assert.equal(result.success, true, result.error);
     const recorded = JSON.parse(result.output);
     assert.equal(recorded.recorded, false);
-    assert.match(recorded.error, /\.gsd\/\.gitignore is a symlink/);
+    assert.match(recorded.error, /sentinel ignore file is a symlink/);
     assert.equal(fs.readFileSync(target, 'utf8'), 'unchanged\n');
     assert.equal(fs.existsSync(sentinelFile(dir)), false);
   });
@@ -2330,8 +2330,6 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     assert.equal(esc.exitCode, 0, esc.stderr);
     assert.equal(fs.existsSync(escalationFile(project, 'gsd-executor')), true);
     assert.equal(fs.lstatSync(path.join(project, '.gsd', '.gitignore')).isFIFO(), true, 'the FIFO is left as it was');
-    const sen = runNode([TOOLS_PATH, 'record-dispatch-isolation', '--isolation', 'harness-worktree'], { cwd: project, timeoutMs: PROBE_TIMEOUT_MS });
-    assert.equal(sen.timedOut, false, 'the dispatch sentinel shares the owner and does not block on the FIFO either');
   });
 
   test('a non-regular config.json fails open without an unbounded read', { skip: WIN32 || !fs.existsSync('/dev/zero') }, (t) => {
@@ -2361,7 +2359,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     const tmp = `${escalationFile(project, 'gsd-executor')}.${process.pid}.tmp`;
     fs.mkdirSync(path.join(project, '.gsd'), { recursive: true });
     fs.writeFileSync(tmp, 'left by a crashed writer');
-    esc.writeEscalation(project, 'gsd-executor', 'opus', () => {}, undefined, { now: () => 42 });
+    esc.writeEscalation(project, 'gsd-executor', 'opus', undefined, { now: () => 42 });
     assert.deepEqual(JSON.parse(fs.readFileSync(escalationFile(project, 'gsd-executor'), 'utf8')), { model: 'opus', written_at: 42 });
     assert.equal(fs.existsSync(tmp), false);
   });
@@ -2371,7 +2369,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     const esc = require('../gsd-core/bin/lib/model-escalation.cjs');
     const file = escalationFile(project, 'gsd-executor');
     fs.mkdirSync(file, { recursive: true }); // rename of a file onto a directory fails
-    assert.throws(() => esc.writeEscalation(project, 'gsd-executor', 'opus', () => {}));
+    assert.throws(() => esc.writeEscalation(project, 'gsd-executor', 'opus'));
     assert.equal(fs.existsSync(`${file}.${process.pid}.tmp`), false);
   });
 
@@ -2447,7 +2445,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     const elsewhere = createTempDir('gsd-aig-elsewhere-');
     t.after(() => cleanup(elsewhere));
     fs.symlinkSync(elsewhere, path.join(project, '.gsd'));
-    assert.throws(() => require('../gsd-core/bin/lib/model-escalation.cjs').writeEscalation(project, 'gsd-executor', 'opus', () => {}));
+    assert.throws(() => require('../gsd-core/bin/lib/model-escalation.cjs').writeEscalation(project, 'gsd-executor', 'opus'));
     assert.deepEqual(fs.readdirSync(elsewhere), []);
   });
 
@@ -2521,7 +2519,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     assert.equal(process.env.GSD_WORKSTREAM, undefined, 'the hook restores the environment');
   });
 
-  test('one .gsd/.gitignore owner: the dispatch sentinel and the escalation record are git-ignored whichever writes first', (t) => {
+  test('both .gsd/.gitignore writers: the dispatch sentinel and the escalation record are git-ignored whichever writes first', (t) => {
     for (const order of [['sentinel', 'escalation'], ['escalation', 'sentinel']]) {
       for (const pre of [null, '# user\n/notes\n', '*\n', '']) {
         setup(t);
@@ -2541,6 +2539,56 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
           assert.equal(ci.exitCode, 0, `${order.join(' then ')}, pre ${JSON.stringify(pre)}: ${f} is ignored`);
         }
       }
+    }
+  });
+
+  test('the escalation writer follows the dispatch-sentinel writer\'s .gsd/.gitignore policy', { skip: WIN32 }, (t) => {
+    const cap = require('../gsd-core/bin/lib/model-escalation.cjs').MAX_READ_BYTES;
+    const outside = createTempDir('gsd-aig-parity-');
+    t.after(() => cleanup(outside));
+    const target = path.join(outside, 'target.txt');
+    const preStates = {
+      absent: null, star: '*\n', user: '# user\n/notes\n', 'no newline': '# user',
+      oversized: `${'#'.repeat(cap)}\n`, directory: { kind: 'dir' }, symlink: { kind: 'link' },
+    };
+    const writers = {
+      sentinel: { marker: '# gsd-core dispatch sentinel', file: 'dispatch-isolation-sentinel.json',
+        run: () => runGsdTools(['record-dispatch-isolation', '--isolation', 'harness-worktree'], project) },
+      escalation: { marker: '# gsd-core model guard', file: 'model-escalation-gsd-executor.json',
+        run: () => runGsdTools(['resolve-execution', 'gsd-executor', '--attempt', '1'], project, PINNED) },
+    };
+    for (const [name, pre] of Object.entries(preStates)) {
+      const outcome = {};
+      for (const [w, writer] of Object.entries(writers)) {
+        setup(t);
+        fs.writeFileSync(target, 'unchanged\n');
+        const ignore = path.join(project, '.gsd', '.gitignore');
+        fs.mkdirSync(path.join(project, '.gsd'));
+        if (pre && pre.kind === 'dir') fs.mkdirSync(ignore);
+        else if (pre && pre.kind === 'link') fs.symlinkSync(target, ignore);
+        else if (pre !== null) fs.writeFileSync(ignore, pre);
+        const r = writer.run();
+        assert.ok(r.success, `${name}/${w}: ${r.error}`);
+        const written = fs.existsSync(path.join(project, '.gsd', writer.file));
+        let ignoreState;
+        if (pre && pre.kind === 'dir') ignoreState = fs.statSync(ignore).isDirectory() ? 'directory' : 'replaced';
+        else if (pre && pre.kind === 'link') ignoreState = fs.lstatSync(ignore).isSymbolicLink() ? 'symlink' : 'replaced';
+        else {
+          const now = fs.readFileSync(ignore, 'utf8');
+          if (pre === null) ignoreState = now === '*\n' ? 'created *' : 'other';
+          else if (now === pre) ignoreState = 'unchanged';
+          else ignoreState = now.startsWith(pre) && now.split(writer.marker).length === 2 ? 'one block appended' : 'other';
+        }
+        outcome[w] = { written, ignoreState, target: fs.readFileSync(target, 'utf8') };
+      }
+      assert.deepEqual(outcome.escalation, outcome.sentinel, `${name}: both writers agree`);
+    }
+    // a .gsd symlink refuses both writers
+    for (const w of Object.values(writers)) {
+      setup(t);
+      fs.symlinkSync(outside, path.join(project, '.gsd'));
+      w.run();
+      assert.equal(fs.existsSync(path.join(outside, w.file)), false, w.file);
     }
   });
 

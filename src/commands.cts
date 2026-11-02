@@ -606,9 +606,9 @@ function cmdResolveGranularity(cwd: string, phaseType: string | undefined, raw: 
  * cwd, so a --project-dir/--cwd naming another project records nothing. File, root, validation and window live in
  * model-escalation.cts, shared with the hook.
  */
-function recordModelEscalation(cwd: string, agentType: string, model: string, seedGsdIgnore: (gsdDir: string) => void): void {
+function recordModelEscalation(cwd: string, agentType: string, model: string): void {
   try {
-    writeEscalation(sessionRoot(cwd), agentType, model, seedGsdIgnore, process.env['CLAUDE_CODE_SESSION_ID'] || undefined);
+    writeEscalation(sessionRoot(cwd), agentType, model, process.env['CLAUDE_CODE_SESSION_ID'] || undefined);
   } catch (e) {
     process.stderr.write(`gsd: model-escalation record not written: ${(e as Error).message}; under hooks.agent_model_guard "deny" the guard blocks ${model}\n`);
   }
@@ -624,7 +624,7 @@ function recordModelEscalation(cwd: string, agentType: string, model: string, se
  * Flags: --effort <level>, --fast-mode <true|false>, --attempt <n>,
  *        --failure-class <class> (#2296), --host <runtime-id> (#2481)
  */
-function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: boolean, opts: { effortOverride?: string; fastModeOverride?: boolean; attempt?: number; failureClass?: string; host?: string; seedGsdIgnore: (gsdDir: string) => void }): void {
+function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: boolean, opts: { effortOverride?: string; fastModeOverride?: boolean; attempt?: number; failureClass?: string; host?: string } = {}): void {
   if (!agentType) {
     error('agent-type required');
   }
@@ -656,7 +656,7 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
   // plan's baseline `--attempt 0` must not drop an in-flight escalation; the guard's 10-minute window
   // bounds a stale one.
   if (model && modelFamily(model) !== modelFamily(baselineModel)) {
-    recordModelEscalation(cwd, agentType, model, opts.seedGsdIgnore);
+    recordModelEscalation(cwd, agentType, model);
   }
 
   const effortOpts: Record<string, unknown> = {};
