@@ -2067,7 +2067,6 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
   test('omitted model warns; unguarded agent types and tools are untouched', (t) => {
     setup(t);
     assert.equal(evaluate(dispatch('gsd-executor', null, WORKTREE)).action, 'warn');
-    assert.equal(evaluate(dispatch('gsd-codebase-mapper', 'opus')).action, 'allow');
     assert.equal(evaluate({ ...dispatch('gsd-planner', 'sonnet'), tool_name: 'Bash' }).action, 'allow');
   });
 

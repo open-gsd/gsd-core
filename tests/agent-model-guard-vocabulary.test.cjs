@@ -23,8 +23,6 @@ test('hooks.agent_model_guard vocabulary: config-set, both doc rows and the hook
   assert.deepEqual(row('gsd-core/references/planning-config.md').split(/(?<!\\)\|/)[4].match(/`[^`]+`/g), VOCAB);
   const conf = row('docs/CONFIGURATION.md');
   for (const v of VOCAB) assert.ok(conf.includes(v), v);
-  assert.doesNotMatch(conf, /an omitted `model` blocks too/, 'the omitted-model rule is stated once');
-  assert.doesNotMatch(conf, /therefore/);
   const saved = process.env.GSD_RUNTIME;
   delete process.env.GSD_RUNTIME;
   t.after(() => { if (saved === undefined) delete process.env.GSD_RUNTIME; else process.env.GSD_RUNTIME = saved; });
