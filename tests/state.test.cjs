@@ -5752,6 +5752,17 @@ describe('state planned-phase command', () => {
     }
   });
 
+  test('#5320: an unreadable Current Plan beside a readable Total Plans in Phase is left as written', () => {
+    // complete-phase writes `Current Plan: Not started`; only the Total line records --plans there.
+    writeTbdPlanFixture(['Phase: 19', 'Current Plan: Not started', 'Total Plans in Phase: 5', 'Status: Ready']);
+    const r = runGsdTools([...PLAN_CMD, '6'], tmpDir);
+    assert.ok(r.success, r.error);
+    const after = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8');
+    assert.match(after, /^Current Plan: Not started$/m, `STATE.md was:\n${after}`);
+    assert.match(after, /^Total Plans in Phase: 6$/m);
+    assert.ok(!JSON.parse(r.output).updated.includes('Current Plan'));
+  });
+
   test('#5320: replan keeps the recorded plan number and moves only the total', () => {
     writeTbdPlanFixture(['Phase: 19', 'Plan: 2 of 5 in current phase', 'Current Plan: 2 of 5 in current phase', 'Status: Ready']);
     const r = runGsdTools(['state', 'planned-phase', '--phase', '19', '--name', 'Tbd', '--plans', '6'], tmpDir);

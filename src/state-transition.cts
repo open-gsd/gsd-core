@@ -1822,7 +1822,7 @@ function readPlanLines(content: string) {
  * What `plannedPhaseCore` may write for `--plans <count>` (#5320): a refusal, or the new text of each
  * plan line `advancePlanCore` reads (`undefined`: leave the line as written). `Plan:` is never written
  * bare, a bare `Current Plan:` beside a recorded `Total Plans in Phase:` stays the legacy pair, and an
- * unreadable line is rewritten only when no other plan line reads.
+ * unreadable line is rewritten only when no other plan line reads and no `Total Plans in Phase:` line records the count.
  */
 function planLinesForPlanned(content: string, count: number, samePhase: boolean, totalRecorded: boolean):
   { error: { reason: string; message: string } } | { error?: undefined; plan?: string; currentPlan?: string } {
@@ -1866,10 +1866,10 @@ function planLinesForPlanned(content: string, count: number, samePhase: boolean,
   if (lines.currentPlan !== null) {
     if (legacy?.legacy && totalRecorded) currentPlan = samePhase ? undefined : '0';
     else if (legacy) currentPlan = carry(legacy);
-    else if (!planPos) currentPlan = fresh;
+    else if (!planPos && !totalRecorded) currentPlan = fresh;
   }
   let plan: string | undefined;
-  if (lines.plan !== null) plan = planPos ? carry(planPos) : legacy ? undefined : fresh;
+  if (lines.plan !== null) plan = planPos ? carry(planPos) : legacy || totalRecorded ? undefined : fresh;
   return { plan, currentPlan };
 }
 
