@@ -30,7 +30,7 @@ Dry run without a reviewer: after step 2, write any `01-REVIEW.md` with a `statu
 | Trial | Result |
 |---|---|
 | base-1 .. base-5 | `RETAINED=0 TAGGED=0` each |
-| base-6 | `R=0` |
+| base-6 | `RETAINED=0 TAGGED=0` |
 | head-1 | `RETAINED=1 TAGGED=1` |
 | head-2 | `RETAINED=1 TAGGED=1` |
 | head-3 | `RETAINED=1 TAGGED=1` |
