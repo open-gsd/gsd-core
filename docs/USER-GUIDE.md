@@ -168,14 +168,15 @@ identity is recorded only at close time — the version from the command
 argument, the name from the separate `--name` value the close workflow passes
 alongside it (defaulting to the version when no name is given). There is no
 start-registration step to look for, and none is needed; `/gsd-new-milestone`
-(the cycle opener) exists only from the second milestone onward, where it reads
+(the cycle opener) is intended for the second milestone onward, where it reads
 the previous version from `MILESTONES.md` and records the new identity at cycle
 start.
 
-Until the first close, the milestone-aware commands report no current
-milestone: `gsd_run query init.manager` emits `milestone_version: null` and
-`milestone_name: null`, and `gsd_run query init.new-milestone` emits
-`current_milestone: null` — the documented state, not data loss.
+Until the first close, while `ROADMAP.md` carries no version token, the
+milestone-aware commands report no current milestone: `gsd_run query
+init.manager` emits `milestone_version: null` and `milestone_name: null`, and
+`gsd_run query init.new-milestone` emits `current_milestone: null` — the
+documented state, not data loss.
 
 ---
 
