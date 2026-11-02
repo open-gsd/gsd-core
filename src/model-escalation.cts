@@ -13,16 +13,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { realClock, type Clock } from './clock.cjs';
 import { retryRenameSync } from './shell-command-projection.cjs';
+import { findProjectRoot } from './project-root.cjs';
+import { CLAUDE_AGENT_ALIASES } from './model-catalog.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import capabilityLedgerMod = require('./capability-ledger.cjs');
-
-const { readSmallRegularFile } = capabilityLedgerMod;
+import worktreeSafetyMod = require('./worktree-safety.cjs');
 
 export const ESCALATION_WINDOW_MS = 10 * 60 * 1000;
 /** Tolerated clock skew for a record stamped slightly in the future. */
 export const ESCALATION_SKEW_MS = 5000;
 /** A record is a few hundred bytes; anything bigger is not ours. */
 export const MAX_READ_BYTES = 64 * 1024;
+/**
+ * The model-id character-class body (#3714): gsd-tools.cjs derives its pin accept regex and sanitizer from it, and
+ * hooks/lib/agent-model-check.js its echo sanitizer. Plain characters and `x-y` ranges only: it is interpolated raw
+ * into both `[BODY]` and `[^BODY]`.
+ */
+export const MODEL_ID_CHARSET_BODY = 'A-Za-z0-9._:/@-';
 
 /** The agent types the guard checks; also the only ones an escalation record is written for. */
 export const GUARDED_AGENT_TYPES: ReadonlySet<string> = new Set(['gsd-executor', 'gsd-verifier', 'gsd-plan-checker', 'gsd-planner']);
@@ -36,10 +42,24 @@ export interface EscalationRecord {
 export const escalationFile = (root: string, agentType: string): string =>
   path.join(root, '.gsd', `model-escalation-${agentType}.json`);
 
-/** Compare at tier-alias level: `claude-sonnet-4-6` and `sonnet` are the same. */
+/** The root a record for `cwd` lives at: the root hooks/lib/isolation-sentinel.js resolveSentinelRoot gives the hook (a test pins the two equal). */
+export function escalationRoot(cwd: string): string {
+  return fs.existsSync(path.join(cwd, '.planning')) ? cwd : findProjectRoot(worktreeSafetyMod.resolveWorktreeRoot(cwd).root);
+}
+
+/** The root a CLI run at `cwd` writes a guard record at; throws when --project-dir/--cwd point away from the session's working directory, whose root the hook reads. */
+export function sessionRoot(cwd: string): string {
+  const root = escalationRoot(cwd);
+  const session = escalationRoot(process.cwd());
+  if (root !== session) throw new Error(`the project resolves to ${root}, but the Agent model guard reads at ${session}`);
+  return root;
+}
+
+/** Compare at tier-alias level: `claude-sonnet-4-6` and `sonnet` are the same. Tier names are the catalog's CLAUDE_AGENT_ALIASES. */
+const FAMILY_RE = new RegExp(`(?:^|[^a-z0-9])(${[...CLAUDE_AGENT_ALIASES].join('|')})(?:$|[^a-z])`);
 export function modelFamily(model: unknown): string {
   const s = String(model).toLowerCase();
-  return /(?:^|[^a-z0-9])(opus|sonnet|haiku|fable)(?:$|[^a-z])/.exec(s)?.[1] ?? s;
+  return FAMILY_RE.exec(s)?.[1] ?? s;
 }
 
 /**
@@ -60,34 +80,20 @@ function writeAtomic(file: string, content: string): void {
 }
 
 /**
- * Throws when the record cannot be written, a symlinked `.gsd` included. Under hooks.agent_model_guard:'deny'
- * a missing record blocks the legitimate escalated model, so the caller (recordModelEscalation) must report it.
- * The .gitignore upkeep stays best-effort: a rule that fails to land never loses the record.
+ * Throws when the record cannot be written, a symlinked `.gsd` or `.gsd/.gitignore` included. Under
+ * hooks.agent_model_guard:'deny' a missing record blocks the escalated model, so the caller (recordModelEscalation)
+ * reports it. `seedIgnore` is the one `.gsd/.gitignore` owner (ensureGsdIgnore, gsd-tools.cjs), run before the record lands.
  */
 export function writeEscalation(
-  root: string, agentType: string, model: string, session?: string, clock: Pick<Clock, 'now'> = realClock,
+  root: string, agentType: string, model: string, seedIgnore: (gsdDir: string) => void, session?: string,
+  clock: Pick<Clock, 'now'> = realClock,
 ): void {
   if (!GUARDED_AGENT_TYPES.has(agentType)) return; // also keeps agentType, a file name, from traversing
   const dir = path.join(root, '.gsd');
   fs.mkdirSync(dir, { recursive: true });
   // Catches a planted .gsd symlink; racing a swap after this needs repo write access already.
   if (fs.lstatSync(dir).isSymbolicLink()) throw new Error(`${dir} is a symlink`);
-  const ignore = path.join(dir, '.gitignore');
-  try {
-    fs.writeFileSync(ignore, '*\n', { flag: 'wx' });
-  } catch {
-    // Pre-existing (e.g. the dispatch sentinel's rules only): a bare `*` already covers the record,
-    // else add our own rule. Replace by rename so a link swapped in after the lstat is not written through.
-    // Own try: an oversized or unreadable .gitignore must not abort before the record is written.
-    try {
-      if (!fs.lstatSync(ignore).isSymbolicLink()) {
-        const cur = readSmallRegularFile(ignore, MAX_READ_BYTES) ?? '';
-        if (!/^\*\r?$/m.test(cur) && !/^\/model-escalation-\*\r?$/m.test(cur)) {
-          writeAtomic(ignore, `${cur}${cur === '' || cur.endsWith('\n') ? '' : '\n'}/model-escalation-*\n`);
-        }
-      }
-    } catch { /* leave the rules as they are */ }
-  }
+  seedIgnore(dir);
   const rec: EscalationRecord = { model, written_at: clock.now(), ...(session ? { session } : {}) };
   writeAtomic(escalationFile(root, agentType), JSON.stringify(rec));
 }

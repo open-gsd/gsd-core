@@ -80,10 +80,7 @@ import modelProfiles = require('./model-profiles.cjs');
 const { MODEL_PROFILES, VALID_PHASE_TYPES } = modelProfiles;
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
-import { findProjectRoot } from './project-root.cjs';
-import { writeEscalation, modelFamily } from './model-escalation.cjs';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-import worktreeSafetyMod = require('./worktree-safety.cjs');
+import { writeEscalation, modelFamily, sessionRoot } from './model-escalation.cjs';
 import { clampPercent, renderProgressBar } from './phase-lifecycle.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planScanMod = require('./plan-scan.cjs');
@@ -604,18 +601,17 @@ function cmdResolveGranularity(cwd: string, phaseType: string | undefined, raw: 
 }
 
 /**
- * #5328: record a model that differs from the resolved baseline so
- * hooks/lib/agent-model-check.js lets the Agent() call pass it. The root mirrors
- * resolveSentinelRoot (the CLI already receives a remapped cwd); file, validation and
- * window live in model-escalation.cts, shared with the hook.
+ * #5328: record a model that differs from the resolved baseline so hooks/lib/agent-model-check.js lets the
+ * Agent() call pass it. The hook reads at the root of the session's working directory, which is this process's
+ * cwd, so a --project-dir/--cwd naming another project records nothing. File, root, validation and window live in
+ * model-escalation.cts, shared with the hook.
  */
-function recordModelEscalation(cwd: string, agentType: string, model: string): void {
+function recordModelEscalation(cwd: string, agentType: string, model: string, seedGsdIgnore: (gsdDir: string) => void): void {
   try {
-    const root = fs.existsSync(path.join(cwd, '.planning'))
-      ? cwd
-      : findProjectRoot(worktreeSafetyMod.resolveWorktreeRoot(cwd).root);
-    writeEscalation(root, agentType, model, process.env['CLAUDE_CODE_SESSION_ID'] || undefined);
-  } catch (e) { process.stderr.write(`gsd: model-escalation record not written: ${(e as Error).message}\n`); } // reported, not fatal: the escalation itself proceeds; under deny the guard then blocks the model
+    writeEscalation(sessionRoot(cwd), agentType, model, seedGsdIgnore, process.env['CLAUDE_CODE_SESSION_ID'] || undefined);
+  } catch (e) {
+    process.stderr.write(`gsd: model-escalation record not written: ${(e as Error).message}; under hooks.agent_model_guard "deny" the guard blocks ${model}\n`);
+  }
 }
 
 /**
@@ -628,12 +624,11 @@ function recordModelEscalation(cwd: string, agentType: string, model: string): v
  * Flags: --effort <level>, --fast-mode <true|false>, --attempt <n>,
  *        --failure-class <class> (#2296), --host <runtime-id> (#2481)
  */
-function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: boolean, opts?: { effortOverride?: string; fastModeOverride?: boolean; attempt?: number; failureClass?: string; host?: string }): void {
+function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: boolean, opts: { effortOverride?: string; fastModeOverride?: boolean; attempt?: number; failureClass?: string; host?: string; seedGsdIgnore: (gsdDir: string) => void }): void {
   if (!agentType) {
     error('agent-type required');
   }
 
-  opts = opts || {};
   const config = loadConfig(cwd);
   const profile = (config['model_profile'] as string) || 'balanced';
   // #2068: resolve the model per-attempt so dynamic_routing ESCALATES the MODEL
@@ -661,7 +656,7 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
   // plan's baseline `--attempt 0` must not drop an in-flight escalation; the guard's 10-minute window
   // bounds a stale one.
   if (model && modelFamily(model) !== modelFamily(baselineModel)) {
-    recordModelEscalation(cwd, agentType, model);
+    recordModelEscalation(cwd, agentType, model, opts.seedGsdIgnore);
   }
 
   const effortOpts: Record<string, unknown> = {};

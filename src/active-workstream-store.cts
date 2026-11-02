@@ -516,6 +516,7 @@ function applyResolvedWorkstreamEnv(
 export = {
   validateWorkstreamName,
   getWorkstreamSessionKey,
+  WORKSTREAM_SESSION_ENV_KEYS,
   createSharedPointerAdapter,
   createSessionScopedPointerAdapter,
   createMemoryPointerAdapter,
