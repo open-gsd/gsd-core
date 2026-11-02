@@ -5999,7 +5999,6 @@ describe('#3052: planned-phase preserves same-date last_activity_desc', () => {
         '**Status:** Planning',
         '**Last Activity:** 2020-09-10 — stale description',
         '**Current Phase:** 1',
-        '**Total Plans in Phase:** 0',
         '',
       ].join('\n'),
     );
@@ -6011,6 +6010,7 @@ describe('#3052: planned-phase preserves same-date last_activity_desc', () => {
     // clock. Pinning it is hygiene rather than a live-defect fix: a declared pin that
     // silently does nothing is still wrong, and leaving it here teaches the pattern that
     // put a wall-clock timestamp into the #3395 block below.
+    fs.appendFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'Plan: 0 TBD in current phase\n'); // #5320: --plans needs a line to land on
     const result = runGsdTools(
       ['state', 'planned-phase', '--phase', '1', '--plans', '3'],
       tmpDir,
@@ -6031,6 +6031,35 @@ describe('#3052: planned-phase preserves same-date last_activity_desc', () => {
       !frontmatter.includes('stale description'),
       'stale body desc must NOT appear in frontmatter (it may remain in body prose)',
     );
+  });
+
+  test('#5320: fixtures restored to their original text refuse --plans with no line to land on', () => {
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    const fm = (extra) => [
+      '---', 'gsd_state_version: 1.0', 'milestone: v1.0', 'status: executing', ...extra,
+      'progress:', '  total_phases: 1', '  completed_phases: 0', '  total_plans: 0', '  completed_plans: 0', '  percent: 0', '---', '',
+    ];
+    const tail = ['', '## Session Continuity', '', '**Last session:** 2024-01-10', '**Stopped at:** None', '**Resume file:** None', ''];
+    // [original text of the fixture, its planned-phase command]
+    for (const [lines, cmd] of [
+      [
+        ['---', 'last_activity: 2020-09-10', 'last_activity_desc: authoritative description', '---', '', '# Project State', '', '**Status:** Planning',
+          '**Last Activity:** 2020-09-10 — stale description', '**Current Phase:** 1', ''],
+        ['--phase', '1', '--plans', '3'],
+      ],
+      [['---', 'gsd_state_version: 1.0', 'stopped_at: "curated stop must survive"', '---', '', '# Project State', '', '## Current Position', '', 'Status: Not started', ''], ['--phase', '2', '--name', 'Build', '--plans', '4']],
+      [[...fm([]), '# Project State', '', '## Current Position', '', 'Status: Executing', 'Phase: 1', ...tail], ['--phase', '1', '--name', 'Foo', '--plans', '5']],
+      [[...fm(['current_phase: "3"']), '# Project State', '', '## Current Position', '', 'Status: Executing', 'Phase: 3 (Foo) — EXECUTING', ...tail], ['--phase', '4', '--name', 'Bar', '--plans', '2']],
+    ]) {
+      fs.writeFileSync(statePath, lines.join('\n'));
+      const before = fs.readFileSync(statePath);
+      const r = runGsdTools(['state', 'planned-phase', ...cmd, '--json-errors'], tmpDir);
+      assert.strictEqual(r.success, false, cmd.join(' '));
+      const failure = JSON.parse(r.error);
+      assert.strictEqual(failure.reason, ERROR_REASON.UNKNOWN);
+      assert.match(failure.message, /--plans has no line to land on/);
+      assert.ok(fs.readFileSync(statePath).equals(before), `${cmd.join(' ')}: STATE.md must stay byte-identical`);
+    }
   });
 });
 
@@ -9266,9 +9295,10 @@ describe('ADR-3408 §8.5 Matrix (#3471): stale-but-present, and the report resid
     test('E8a: cmdStatePlannedPhase reconciles the same way as cmdStateBeginPhase (traced, not assumed)', () => {
       const content = [
         '---', 'gsd_state_version: 1.0', 'stopped_at: "curated stop must survive"', '---', '',
-        '# Project State', '', '## Current Position', '', 'Plan: 0 TBD in current phase', 'Status: Not started', '',
+        '# Project State', '', '## Current Position', '', 'Status: Not started', '',
       ].join('\n');
       fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), content);
+      fs.appendFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'Plan: 0 TBD in current phase\n'); // #5320: --plans needs a line to land on
 
       const result = runGsdTools(['state', 'planned-phase', '--phase', '2', '--name', 'Build', '--plans', '4'], tmpDir);
       assert.ok(result.success, `Command failed: ${result.error}`);
@@ -20228,7 +20258,6 @@ describe('#3872 / ADR-3473 §8.7: what a command reports it wrote', () => {
         '',
         'Status: Executing',
         'Phase: 1',
-        'Plan: 0 TBD in current phase',
         '',
         '## Session Continuity',
         '',
@@ -20253,6 +20282,7 @@ describe('#3872 / ADR-3473 §8.7: what a command reports it wrote', () => {
       const before = frontmatterLib.extractFrontmatter(fs.readFileSync(statePath, 'utf-8'));
       assert.strictEqual(Number(before.progress.total_plans), 0, 'setup: curated total_plans starts at 0');
 
+      fs.appendFileSync(path.join(cwd, '.planning', 'STATE.md'), 'Plan: 0 TBD in current phase\n'); // #5320: --plans needs a line to land on
       const result = runGsdTools(['state', 'planned-phase', '--phase', '1', '--name', 'Foo', '--plans', '5'], cwd);
       assert.ok(result.success, `Command failed: ${result.error}`);
       const output = JSON.parse(result.output);
@@ -20283,6 +20313,7 @@ describe('#3872 / ADR-3473 §8.7: what a command reports it wrote', () => {
       const before = fs.readFileSync(statePath, 'utf-8');
       assert.ok(before.includes('Phase: 1\n'), 'setup: Current Position starts with the bare pre-plan Phase line');
 
+      fs.appendFileSync(path.join(cwd, '.planning', 'STATE.md'), 'Plan: 0 TBD in current phase\n'); // #5320: --plans needs a line to land on
       const result = runGsdTools(['state', 'planned-phase', '--phase', '1', '--name', 'Foo', '--plans', '5'], cwd);
       assert.ok(result.success, `Command failed: ${result.error}`);
       const output = JSON.parse(result.output);
@@ -20401,7 +20432,6 @@ describe('#3872 / ADR-3473 §8.7: what a command reports it wrote', () => {
           '',
           'Status: Executing',
           'Phase: 3 (Foo) — EXECUTING',
-          'Plan: 0 TBD in current phase',
           '',
           '## Session Continuity',
           '',
@@ -20419,6 +20449,7 @@ describe('#3872 / ADR-3473 §8.7: what a command reports it wrote', () => {
       //   BEFORE current_phase: 3
       //   CLI output: {"updated":["Status"],"phase":"4","plan_count":2}
       //   AFTER  current_phase: 4
+      fs.appendFileSync(path.join(cwd, '.planning', 'STATE.md'), 'Plan: 0 TBD in current phase\n'); // #5320: --plans needs a line to land on
       const result = runGsdTools(['state', 'planned-phase', '--phase', '4', '--name', 'Bar', '--plans', '2'], cwd);
       assert.ok(result.success, `Command failed: ${result.error}`);
       const output = JSON.parse(result.output);
