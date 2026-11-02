@@ -5277,8 +5277,8 @@ describe('state.planned-phase progress merge on string-valued frontmatter (#5619
 
 // #5320: the plan-count / plan-position rule has one owner (parsePlanCount, readPlanLines and
 // planLinesForPlanned in state-transition). Parity: every site that reads or writes a plan count
-// agrees with it on generated inputs, at limit-1 / limit / limit+1. Tests reach the owners only
-// through the public boundaries (routeStateCommand, transitionCore).
+// agrees with it on generated inputs, at limit-1 / limit / limit+1. parsePlanCount, the exported
+// grammar owner, is called directly; every other owner is reached through routeStateCommand and transitionCore.
 describe('#5320 plan-count / plan-position owner parity', () => {
   const MAX = Number.MAX_SAFE_INTEGER;
   const deps = { clock: fixedClock };
