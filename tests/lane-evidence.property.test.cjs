@@ -9,6 +9,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
+const { cleanup } = require('./helpers.cjs');
 const { persistLaneEvidence, readLaneEvidence, laneStatePath } = require('../gsd-core/bin/lib/lane-evidence.cjs');
 
 const SUFFIX_RE = /^[A-Za-z0-9]{6}$/;
@@ -52,7 +53,25 @@ describe('#5019 lane-evidence grammar (property)', () => {
     const block = fc.string({ unit: fc.constantFrom(...'aZ \r\n\t<>é'), minLength: 1, maxLength: 40 });
     fc.assert(fc.property(block, (b) => {
       persistLaneEvidence(sb.review, 'abc123', 'auto', b, sb.tmp);
-      assert.strictEqual(readLaneEvidence(sb.review, sb.tmp), `${b}\n\n`);
+      assert.strictEqual(readLaneEvidence(sb.review, sb.tmp), b);
+      return true;
+    }), runs);
+  });
+
+  test('persist and read share one grammar', (t) => {
+    const sb = sandbox(t);
+    const suffix = fc.string({ unit: fc.constantFrom(...'aZ09bY'), minLength: 5, maxLength: 7 });
+    fc.assert(fc.property(suffix, fc.constantFrom('auto', 'once'), (sfx, mode) => {
+      const dir = path.join(sb.tmp, `gsd-review-lanes-${sfx}`);
+      fs.mkdirSync(dir, { recursive: true });
+      let persisted = true;
+      try { persistLaneEvidence(sb.review, sfx, mode, 'b', sb.tmp); } catch { persisted = false; }
+      cleanup(sb.state); // the raw state is written below, whatever persist did
+      fs.writeFileSync(sb.state, `${sfx}\n${mode}\nblock`);
+      const stderr = process.stderr.write; process.stderr.write = () => true;
+      let got; try { got = readLaneEvidence(sb.review, sb.tmp); } finally { process.stderr.write = stderr; }
+      cleanup(dir);
+      assert.strictEqual(got === 'block', persisted && mode === 'auto', JSON.stringify([sfx, mode]));
       return true;
     }), runs);
   });

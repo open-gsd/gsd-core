@@ -28,7 +28,7 @@ describe('#5019 lane-evidence verbs', () => {
     sb.lane('abc123');
     persistLaneEvidence(sb.review, 'abc123', 'auto', BLOCK, sb.tmp);
     assert.strictEqual(fs.readFileSync(sb.state, 'utf8'), `abc123\nauto\n${BLOCK}`);
-    assert.strictEqual(readLaneEvidence(sb.review, sb.tmp), `${BLOCK}\n\n`);
+    assert.strictEqual(readLaneEvidence(sb.review, sb.tmp), BLOCK);
     if (process.platform !== 'win32') assert.strictEqual(fs.statSync(sb.state).mode & 0o777, 0o600);
   });
 
@@ -38,7 +38,7 @@ describe('#5019 lane-evidence verbs', () => {
     for (const [min, ok] of [[359, true], [360, false], [361, false]]) {
       persistLaneEvidence(sb.review, 'abc123', 'auto', BLOCK, sb.tmp);
       age(sb.state, min);
-      assert.strictEqual(readLaneEvidence(sb.review, sb.tmp), ok ? `${BLOCK}\n\n` : '', `${min} min old`);
+      assert.strictEqual(readLaneEvidence(sb.review, sb.tmp), ok ? BLOCK : '', `${min} min old`);
     }
   });
 
@@ -47,8 +47,9 @@ describe('#5019 lane-evidence verbs', () => {
     sb.lane('abc123');
     persistLaneEvidence(sb.review, 'abc123', 'auto', BLOCK, sb.tmp);
     age(sb.state, 300);
+    const aged = fs.statSync(sb.state).mtimeMs;
     readLaneEvidence(sb.review, sb.tmp);
-    assert.ok(Date.now() - fs.statSync(sb.state).mtimeMs < 60000);
+    assert.ok(fs.statSync(sb.state).mtimeMs > aged);
   });
 
   test('read without a lane dir, or with a malformed state, yields nothing', (t) => {
@@ -162,7 +163,7 @@ describe('#5019 lane-evidence verbs', () => {
     persistLaneEvidence(other, 'def456', 'auto', 'two', sb.tmp);
     clearLaneEvidence(sb.review, { tmpDir: sb.tmp });
     assert.strictEqual(readLaneEvidence(sb.review, sb.tmp), '');
-    assert.strictEqual(readLaneEvidence(other, sb.tmp), 'two\n\n');
+    assert.strictEqual(readLaneEvidence(other, sb.tmp), 'two');
   });
 
   test('symlinked state file or lane dir is never followed', (t) => {
@@ -182,19 +183,35 @@ describe('#5019 lane-evidence verbs', () => {
     assert.strictEqual(fs.existsSync(path.join(sb.victim, 'keep')), true);
   });
 
-  test('state or lane dir owned by another uid is ignored by read and clear', (t) => {
-    if (process.platform === 'win32' || process.getuid() !== 0) return t.skip('needs root to create a foreign-owned entry');
+  // A foreign owner is simulated by raising the uid of one lstat result, so the guard runs as non-root in CI.
+  const foreign = (t, victim) => {
+    const real = fs.lstatSync;
+    t.mock.method(fs, 'lstatSync', (p, ...rest) => {
+      const st = real.call(fs, p, ...rest);
+      return p === victim ? Object.assign(Object.create(Object.getPrototypeOf(st)), st, { uid: st.uid + 1 }) : st;
+    });
+  };
+
+  test('a foreign-owned state is ignored by read and clear', { skip: process.platform === 'win32' }, (t) => {
     const sb = sandbox(t);
     const d = sb.lane('abc123');
     persistLaneEvidence(sb.review, 'abc123', 'auto', BLOCK, sb.tmp);
-    fs.chownSync(sb.state, 12345, 12345);
+    foreign(t, sb.state);
+    t.mock.method(process.stderr, 'write', () => true);
     assert.strictEqual(readLaneEvidence(sb.review, sb.tmp), '');
     clearLaneEvidence(sb.review, { tmpDir: sb.tmp });
     assert.deepStrictEqual([fs.existsSync(d), fs.existsSync(sb.state)], [true, true], 'foreign state is left alone');
-    fs.chownSync(sb.state, 0, 0); fs.chownSync(d, 12345, 12345);
+  });
+
+  test('a foreign-owned lane dir is not removed', { skip: process.platform === 'win32' }, (t) => {
+    const sb = sandbox(t);
+    const d = sb.lane('abc123');
+    persistLaneEvidence(sb.review, 'abc123', 'auto', BLOCK, sb.tmp);
+    foreign(t, d);
+    t.mock.method(process.stderr, 'write', () => true);
     assert.strictEqual(readLaneEvidence(sb.review, sb.tmp), '');
     clearLaneEvidence(sb.review, { tmpDir: sb.tmp });
-    assert.strictEqual(fs.existsSync(d), true, 'foreign lane dir is not removed');
+    assert.deepStrictEqual([fs.existsSync(d), fs.existsSync(sb.state)], [true, false], 'foreign lane dir kept, owned state removed');
   });
 
   test('CLI parity: gsd-tools lane-evidence-persist/read/clear equal the direct calls', (t) => {
@@ -206,7 +223,7 @@ describe('#5019 lane-evidence verbs', () => {
     assert.strictEqual(fs.readFileSync(sb.state, 'utf8'), `abc123\nauto\n${BLOCK}`);
     const read = run(['lane-evidence-read', sb.review]);
     assert.strictEqual(read.stdout, readLaneEvidence(sb.review, sb.tmp));
-    assert.strictEqual(read.stdout, `${BLOCK}\n\n`);
+    assert.strictEqual(read.stdout, BLOCK);
     assert.strictEqual(run(['lane-evidence-persist', sb.review, 'bad', 'auto'], BLOCK).exitCode !== 0, true);
     assert.strictEqual(run(['lane-evidence-clear', sb.review, '--keep-auto']).exitCode, 0);
     assert.strictEqual(fs.existsSync(sb.state), true, '--keep-auto keeps an auto state');

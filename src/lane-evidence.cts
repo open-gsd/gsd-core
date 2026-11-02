@@ -18,9 +18,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { retryRenameSync } from './shell-command-projection.cjs';
 
-const STATE_RE = /^([A-Za-z0-9]{6})\n(auto|once)\n([\s\S]*)$/;
-const SUFFIX_RE = /^[A-Za-z0-9]{6}$/; // the same grammar as STATE_RE's line 1 and 2, anchored for a lone argument
-const MODE_RE = /^(auto|once)$/;
+const SUFFIX_SRC = '[A-Za-z0-9]{6}';
+const MODE_SRC = 'auto|once';
+const STATE_RE = new RegExp(`^(${SUFFIX_SRC})\\n(${MODE_SRC})\\n([\\s\\S]*)$`);
+const SUFFIX_RE = new RegExp(`^${SUFFIX_SRC}$`); // a lone argument, anchored
+const MODE_RE = new RegExp(`^(?:${MODE_SRC})$`);
 const MAX_AGE_MS = 360 * 60000; // a state idle for 6h is a crashed earlier run's leftover
 const LANES = 'gsd-review-lanes-';
 
@@ -33,13 +35,17 @@ export function laneStatePath(reviewPath: string, tmpDir: string = defaultTmp())
 
 const ownedByCurrentUser = (st: fs.Stats): boolean => process.platform === 'win32' || st.uid === process.getuid!();
 
-/** Remove the lane dir `suffix` names when it is a real directory we own. */
-function removeLaneDir(tmpDir: string, suffix: string): void {
+/** The lane dir `suffix` names under tmpDir, or null unless it is a real directory we own. */
+function ownedLaneDir(tmpDir: string, suffix: string): string | null {
+  const dir = path.join(tmpDir, LANES + suffix);
   try {
-    const dir = path.join(tmpDir, LANES + suffix);
     const st = fs.lstatSync(dir);
-    if (st.isDirectory() && ownedByCurrentUser(st)) fs.rmSync(dir, { recursive: true, force: true });
-  } catch { /* missing: nothing to remove */ }
+    return st.isDirectory() && ownedByCurrentUser(st) ? dir : null;
+  } catch { return null; } // missing: nothing to act on
+}
+function removeLaneDir(tmpDir: string, suffix: string): void {
+  const dir = ownedLaneDir(tmpDir, suffix);
+  if (dir) try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
 }
 
 /** The parsed state, or null when absent or not a regular file we own (a present one that is not ours is `rejected`). */
@@ -68,19 +74,14 @@ export function persistLaneEvidence(reviewPath: string, suffix: string, mode: st
   }
 }
 
-/** The block plus a blank line, or '' when there is no usable state. */
+/** The stored block, or '' when there is no usable state. */
 export function readLaneEvidence(reviewPath: string, tmpDir: string = defaultTmp()): string {
   const file = laneStatePath(reviewPath, tmpDir);
   const s = loadState(file);
   if (s === null) return '';
-  if (s !== 'rejected' && s.mode === 'auto' && Date.now() - s.mtimeMs < MAX_AGE_MS) {
-    try {
-      const st = fs.lstatSync(path.join(tmpDir, LANES + s.suffix));
-      if (st.isDirectory() && ownedByCurrentUser(st)) {
-        try { const now = new Date(); fs.utimesSync(file, now, now); } catch { /* freshness refresh is best effort */ }
-        return `${s.block}\n\n`;
-      }
-    } catch { /* lane dir missing */ }
+  if (s !== 'rejected' && s.mode === 'auto' && Date.now() - s.mtimeMs < MAX_AGE_MS && ownedLaneDir(tmpDir, s.suffix)) {
+    try { const now = new Date(); fs.utimesSync(file, now, now); } catch { /* freshness refresh is best effort */ }
+    return s.block;
   }
   process.stderr.write(`Warning: lane evidence ${file} rejected (idle for 6h, not an --auto state, not a regular file we own, malformed, or lane dir missing, a symlink or foreign); re-reviewing without it.\n`);
   return '';
