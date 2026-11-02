@@ -87,7 +87,7 @@ Present plan identification, wait for confirmation.
 </step>
 
 <step name="record_start_time">
-Read and execute `gsd-core/workflows/execute-plan/steps/record-start-time.md`. Replace `{timing_attempt}` with `fresh` for a new workflow invocation, or `continuation` when resuming completed-task/checkpoint state. The part's shell guard decides whether to replace or preserve the marker (#5212).
+Read and execute `gsd-core/workflows/execute-plan/steps/record-start-time.md`. Replace `{timing_attempt}` with `fresh`: this workflow invocation owns the start marker. Checkpoint continuations are newly spawned executor agents, whose `<completed_tasks>` payload selects `continuation` in their own guarded start step. The part's shell guard decides whether to replace or preserve the marker (#5212).
 </step>
 
 <step name="parse_segments">
@@ -424,7 +424,7 @@ handles STATE.md/ROADMAP.md updates centrally after merging worktrees to avoid
 merge conflicts).
 
 Update STATE.md using gsd_run query (or legacy gsd-tools) state mutations:
-Read and execute `gsd-core/workflows/execute-plan/steps/update-current-position.md`.
+Read and execute `gsd-core/workflows/execute-plan/steps/update-current-position.md`. Replace `{task_count}` and `{file_count}` with the measured completed-task and changed-file counts.
 The part validates the cached measured duration before any STATE write; a missing or malformed result stops without partial progress.
 </step>
 

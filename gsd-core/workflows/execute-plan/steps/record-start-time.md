@@ -2,18 +2,33 @@
 Replace `{timing_attempt}` with exactly `fresh` when this invocation has no continuation payload, or `continuation` when it carries completed-task/checkpoint state. The shell guard is authoritative: a fresh attempt replaces an abandoned marker, while a continuation preserves it. A continuation must resume in the original worktree; if its marker is missing, stop and resume there or deliberately restart as `fresh`.
 ```bash
 GSD_TIMING_ATTEMPT='{timing_attempt}'
-PHASE_ID=$(cat <<'GSD_PLAN_PHASE'
+# gsd:plan-timing-key:start
+canonicalize_timing_id() {
+  local raw="$1" segment rest canonical=""
+  case "$raw" in ''|.*|*.|*..*|*[!0-9.]*) printf '%s' "$raw"; return ;; esac
+  rest=$raw
+  while :; do
+    case "$rest" in *.*) segment=${rest%%.*}; rest=${rest#*.} ;; *) segment=$rest; rest= ;; esac
+    segment=${segment#"${segment%%[!0]*}"}
+    segment=${segment:-0}
+    canonical="${canonical}${canonical:+.}${segment}"
+    [ -n "$rest" ] || break
+  done
+  printf '%s' "$canonical"
+}
+PHASE_ID=$(cat <<'GSD:PLAN:PHASE:5212'
 {phase}
-GSD_PLAN_PHASE
+GSD:PLAN:PHASE:5212
 )
-PLAN_ID=$(cat <<'GSD_PLAN_NUMBER'
+PLAN_ID=$(cat <<'GSD:PLAN:NUMBER:5212'
 {plan}
-GSD_PLAN_NUMBER
+GSD:PLAN:NUMBER:5212
 )
-case "$PHASE_ID" in *[!0-9]*|'') ;; *) PHASE_ID=${PHASE_ID#"${PHASE_ID%%[!0]*}"}; PHASE_ID=${PHASE_ID:-0} ;; esac
-case "$PLAN_ID" in *[!0-9]*|'') ;; *) PLAN_ID=${PLAN_ID#"${PLAN_ID%%[!0]*}"}; PLAN_ID=${PLAN_ID:-0} ;; esac
+PHASE_ID=$(canonicalize_timing_id "$PHASE_ID")
+PLAN_ID=$(canonicalize_timing_id "$PLAN_ID")
 TIMING_KEY=$(printf '%s\0%s' "$PHASE_ID" "$PLAN_ID" | git hash-object --stdin) || exit 1
 TIMING_FILE=$(git rev-parse --git-path "gsd-plan-timing-$TIMING_KEY") || exit 1
+# gsd:plan-timing-key:end
 case "$GSD_TIMING_ATTEMPT" in
   fresh)
     rm -f -- "$TIMING_FILE.result"
