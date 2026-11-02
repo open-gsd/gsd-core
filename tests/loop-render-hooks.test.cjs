@@ -2528,11 +2528,12 @@ describe('cmdLoopRenderHooks --phase confinement and --phase-dir identity (#4030
     t.after(() => cleanup(dir));
     return dir;
   };
-  const run = (dir, args) => {
+  const runText = (dir, args) => {
     const r = renderWithPhase(dir, 'plan:pre', [...args, '--raw']);
     assert.strictEqual(r.exitCode, 0, 'stderr: ' + r.stderr);
-    return JSON.parse(r.stdout.trim());
+    return r.stdout;
   };
+  const run = (dir, args) => JSON.parse(runText(dir, args).trim());
 
   test('[hostile] a symlinked .planning/phases parent yields no context and a warning, hooks still dispatch', { skip: symlinkSkip }, (t) => {
     const dir = createTempDir('loop-phase-conf-');
@@ -2563,11 +2564,6 @@ describe('cmdLoopRenderHooks --phase confinement and --phase-dir identity (#4030
   // Every echoed value in a warning is a JSON string capped at 80 characters
   // with no control characters. Decode the envelope and each quoted value, and
   // assert on length and code points, never on prose or raw stdout bytes.
-  const runText = (dir, args) => {
-    const r = renderWithPhase(dir, 'plan:pre', [...args, '--raw']);
-    assert.strictEqual(r.exitCode, 0, 'stderr: ' + r.stderr);
-    return r.stdout;
-  };
   const echoed = (out) => JSON.parse(out.trim()).warnings.flatMap(
     (w) => [...w.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => JSON.parse(`"${m[1]}"`)));
   const hasControl = (v) => [...v].some((c) => { const n = c.codePointAt(0); return n <= 0x1f || (n >= 0x7f && n <= 0x9f); });
