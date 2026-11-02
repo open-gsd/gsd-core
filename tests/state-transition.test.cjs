@@ -24,10 +24,9 @@ const {
   sliceCurrentPositionSection,
   stateReplaceProgressPercent,
   parsePlanCount,
-  readPlanPosition,
-  renderPlanTotal,
 } = require('../gsd-core/bin/lib/state-transition.cjs');
-const { parsePlans } = require('../gsd-core/bin/lib/state-command-router.cjs');
+const { routeStateCommand } = require('../gsd-core/bin/lib/state-command-router.cjs');
+const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
 const { stateExtractField, computeProgressPercent, toFiniteNumber } = require('../gsd-core/bin/lib/state-document.cjs');
 const { SCOPE } = require('../gsd-core/bin/lib/planning-scope.cjs');
 const { STATE_FIELD_SCHEMA } = require('../gsd-core/bin/lib/state-md-schema.cjs');
@@ -5275,13 +5274,25 @@ describe('state.planned-phase progress merge on string-valued frontmatter (#5619
   });
 });
 
-// #5320: the plan-count / plan-position rule has one owner (parsePlanCount, readPlanPosition,
-// renderPlanTotal). Parity: every site that reads or writes a plan count agrees with it on
-// generated inputs, at limit-1 / limit / limit+1.
+// #5320: the plan-count / plan-position rule has one owner (parsePlanCount, readPlanLines and
+// planLinesForPlanned in state-transition). Parity: every site that reads or writes a plan count
+// agrees with it on generated inputs, at limit-1 / limit / limit+1. Tests reach the owners only
+// through the public boundaries (routeStateCommand, transitionCore).
 describe('#5320 plan-count / plan-position owner parity', () => {
   const MAX = Number.MAX_SAFE_INTEGER;
   const deps = { clock: fixedClock };
-  const parsed = (v) => { let err = null; const n = parsePlans(v, (m) => { err = m; }); return { n, err }; };
+  const parsed = (v) => {
+    let planArg;
+    const errors = [];
+    const state = { cmdStateBeginPhase: (_cwd, _phase, _name, plans) => { planArg = plans; } };
+    const error = (message, reason) => { errors.push({ message, reason }); };
+    try {
+      routeStateCommand({ state, args: ['state', 'begin-phase', '--phase', '1', ...(v === undefined ? [] : ['--plans', v])], cwd: '/fake/cwd', raw: false, error });
+    } catch {
+      // parseNamedArgsOrExit throws once its error() returns instead of exiting; the recorded rejection is what counts.
+    }
+    return { n: planArg, errors };
+  };
   const doc = (line) => ['# Project State', '', '## Current Position', '', 'Phase: 19', line, 'Status: Ready', ''].join('\n');
   const planned = (line, planCount) => transitionCore(doc(line), { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount }, deps);
   const lineOf = (content) => content.split('\n').find((l) => l.startsWith('Plan: '));
@@ -5300,7 +5311,8 @@ describe('#5320 plan-count / plan-position owner parity', () => {
           // independent oracle: all ASCII digits and no larger than MAX_SAFE_INTEGER (BigInt compares exactly)
           const expected = /^[0-9]+$/.test(raw) && BigInt(raw) <= BigInt(MAX) ? Number(raw) : null;
           const site = parsed(raw);
-          return parsePlanCount(raw) === expected && site.n === expected && (expected === null) === (site.err !== null);
+          if (expected !== null) return parsePlanCount(raw) === expected && site.n === expected && site.errors.length === 0;
+          return parsePlanCount(raw) === null && site.errors.length > 0 && site.errors.every((e) => e.reason === ERROR_REASON.USAGE);
         },
       ),
       { seed: 5320, numRuns: 300 },
@@ -5308,58 +5320,83 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     assert.strictEqual(parsePlanCount(String(MAX - 1)), MAX - 1);
     assert.strictEqual(parsePlanCount(String(MAX)), MAX);
     assert.strictEqual(parsePlanCount(String(MAX + 1)), null);
-    assert.deepStrictEqual(parsed(null), { n: null, err: null });
+    assert.deepStrictEqual(parsed(undefined), { n: null, errors: [] });
   });
 
   test('planned-phase and advance-plan read and write the same position for generated values (limit-1/limit/limit+1)', () => {
-    const zeros = (digits, count) => '0'.repeat(count) + digits;
-    const value = fc.record({
-      n: fc.integer({ min: 0, max: 999 }),
-      nPad: fc.integer({ min: 0, max: 2 }),
-      m: fc.option(fc.integer({ min: 0, max: 999 }), { nil: null }),
-      mPad: fc.integer({ min: 0, max: 2 }),
-      hole: fc.option(fc.constantFrom('?', 'B'), { nil: null }), // an unfilled total: `N of ?`
-      rest: fc.constantFrom('', ' in current phase', ' - wave 2 done', ' (blocked)'),
+    const rests = ['', ' in current phase', ' - wave 2 done'];
+    const spec = fc.record({
+      kind: fc.constantFrom('N', 'NofM', 'NofQ', 'TBD'),
+      n: fc.integer({ min: 0, max: 9 }),
+      m: fc.integer({ min: 1, max: 9 }),
+      rest: fc.constantFrom(...rests),
     });
+    const render = (s) => {
+      if (s.kind === 'TBD') return 'TBD';
+      if (s.kind === 'N') return `${s.n}${s.rest}`;
+      return `${s.n} of ${s.kind === 'NofM' ? s.m : '?'}${s.rest}`;
+    };
+    const readable = (s) => s !== null && s.kind !== 'TBD';
     fc.assert(
-      fc.property(value, fc.constantFrom(-1, 0, 1), ({ n, nPad, m, mPad, hole, rest }, off) => {
-        const nText = zeros(String(n), nPad);
-        const mText = hole ?? (m === null ? null : zeros(String(m), mPad));
-        const raw = `${nText}${mText === null ? '' : ` of ${mText}`}${rest}`;
-        const total = n + off;
-        const read = readPlanPosition(raw);
-        const hasM = hole === null && m !== null;
-        if (read.n !== n || read.ofM !== hasM || read.m !== (hasM ? m : null)) return false;
-        if (total < 0) return true;
-        const r = planned(`Plan: ${raw}`, total);
-        if (off === -1) {
-          // below the recorded position: refused, document untouched
-          return r.data?.reason === 'plans_below_position' && r.content === doc(`Plan: ${raw}`) && r.updated.length === 0;
-        }
-        // independent expectation: only an M that carries a leading zero is padded; a bare N gains ` of M`
-        const totalText = hasM && mPad > 0 ? String(total).padStart(mText.length, '0') : String(total);
-        const tail = !hasM && hole === null && rest === '' ? ' in current phase' : rest;
-        const written = lineOf(r.content).slice('Plan: '.length);
-        if (written !== `${nText} of ${totalText}${tail}`) return false;
-        // advance-plan reads the written line the same way: position n of total
-        const adv = transitionCore(r.content, { kind: 'advancePlan' }, deps).data;
-        return adv.total_plans === total && (adv.previous_plan ?? adv.current_plan) === n;
-      }),
+      fc.property(
+        fc.record({
+          plan: fc.option(spec, { nil: null }),
+          cur: fc.option(spec, { nil: null }),
+          total: fc.boolean(),
+          newPhase: fc.boolean(),
+          planInSection: fc.boolean(),
+          off: fc.constantFrom(-1, 0, 1),
+        }),
+        ({ plan, cur, total, newPhase, planInSection, off }) => {
+          const lines = ['Phase: ' + (newPhase ? '18' : '19')];
+          if (plan && planInSection) lines.push(`Plan: ${render(plan)}`);
+          if (cur) lines.push(`Current Plan: ${render(cur)}`);
+          if (total) lines.push('Total Plans in Phase: 5');
+          lines.push('Status: Ready');
+          const tail = plan && !planInSection ? ['', '## Session Continuity', '', `Plan: ${render(plan)}`] : [];
+          const content = ['# Project State', '', '## Current Position', '', ...lines, ...tail, ''].join('\n');
+          const reads = [plan, cur].filter(readable);
+          const recorded = Math.max(0, ...reads.map((s) => s.n));
+          const count = recorded + off;
+          if (count < 0) return true;
+          // independent oracle
+          let want = null;
+          if (!plan && !cur && !total) want = 'plans_no_line';
+          else if (!newPhase && reads.length === 2 && reads[0].n !== reads[1].n) want = 'ambiguous_plan_position';
+          else if (!newPhase && recorded > count) want = 'plans_below_position';
+          const r = transitionCore(content, { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: count }, deps);
+          if (r.data?.reason !== (want ?? undefined)) return false;
+          if (want !== null) return r.content === content && r.updated.length === 0;
+          if (!plan && !cur) return true;
+          const adv = transitionCore(r.content, { kind: 'advancePlan' }, deps).data;
+          const position = newPhase ? 0 : recorded;
+          return adv.error === undefined && adv.total_plans === count && (adv.previous_plan ?? adv.current_plan) === position;
+        },
+      ),
       { seed: 5320, numRuns: 400 },
     );
   });
 
   test('plannedPhase unit: a shrinking total keeps its width, an unfilled total is replaced, a legacy position beside Total Plans in Phase is kept, an unsafe recorded position refuses', () => {
-    assert.strictEqual(renderPlanTotal(readPlanPosition('1 of 10'), 9), '1 of 9');
     assert.strictEqual(lineOf(planned('Plan: 1 of 10', 9).content), 'Plan: 1 of 9');
     assert.strictEqual(lineOf(planned('Plan: 1 of 010', 9).content), 'Plan: 1 of 009');
     assert.strictEqual(lineOf(planned('Plan: 1 of ?', 3).content), 'Plan: 1 of 3');
     assert.strictEqual(lineOf(planned('Plan: 1 of B in current phase', 3).content), 'Plan: 1 of 3 in current phase');
-    const beside = (line, phase) => transitionCore(doc(line).replace('Status:', 'Total Plans in Phase: 5\nStatus:').replace('Phase: 19', `Phase: ${phase}`), { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 6 }, deps).content.split('\n');
-    for (const line of ['Current Plan: 2', 'Current Plan: 2 (wave 1)', 'Plan: 2 - wave 1 done']) {
-      assert.ok(beside(line, 19).includes(line), `${line} is kept on the same phase`);
+    const beside = (line, phase) => transitionCore(
+      doc(line).replace('Status:', 'Total Plans in Phase: 5\nStatus:').replace('Phase: 19', `Phase: ${phase}`),
+      { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 6 },
+      deps,
+    ).content.split('\n');
+    // [line, written on the same phase, written on a new phase]: a Plan: line is never left bare, a Current Plan: line stays the legacy pair
+    for (const [line, same, fresh] of [
+      ['Current Plan: 2', 'Current Plan: 2', 'Current Plan: 0'],
+      ['Current Plan: 2 (wave 1)', 'Current Plan: 2 (wave 1)', 'Current Plan: 0'],
+      ['Plan: 2', 'Plan: 2 of 6 in current phase', 'Plan: 0 of 6 in current phase'],
+      ['Plan: 2 - wave 1 done', 'Plan: 2 of 6 - wave 1 done', 'Plan: 0 of 6 in current phase'],
+    ]) {
+      assert.ok(beside(line, 19).includes(same), `${line} is written ${same} on the same phase`);
       assert.ok(beside(line, 19).includes('Total Plans in Phase: 6'));
-      assert.ok(beside(line, 18).includes(line.split(':')[0] + ': 0'), `${line} resets to a bare 0 on a new phase`);
+      assert.ok(beside(line, 18).includes(fresh), `${line} is written ${fresh} on a new phase`);
     }
     const huge = planned('Plan: 99999999999999999999 of 5', 3);
     assert.strictEqual(huge.data.reason, 'plans_below_position');
