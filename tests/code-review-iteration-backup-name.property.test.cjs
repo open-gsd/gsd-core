@@ -14,7 +14,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { span, runBash } = require('./helpers/doc-bash-span.cjs');
-const { have } = require('./helpers/bash-probe.cjs');
+const { hasPosixBash } = require('./helpers/posix-bash-gate.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const FIX = 'gsd-core/workflows/code-review-fix.md';
@@ -37,9 +37,8 @@ function kept(names) {
 
 const oracle = (names) => [...names].filter((n) => BACKUP.test(n)).sort();
 
-// The span is POSIX bash: skip without bash and on win32 (same gate as the pipeline tests).
-const NO_BASH = !(have('bash') && process.platform !== 'win32')
-  && 'bash is not available (the fence is POSIX-only)';
+// The span is POSIX bash: skip where it cannot run (same gate as the pipeline tests).
+const NO_BASH = !hasPosixBash() && 'bash is not available (the fence is POSIX-only)';
 
 describe('#5506 backup name grammar', { skip: NO_BASH }, () => {
   test('the cleanup span keeps exactly the .iter<digits>.md names', () => {
