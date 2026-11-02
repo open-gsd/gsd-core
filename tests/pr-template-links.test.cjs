@@ -11,6 +11,7 @@ const { extractLinks } = require('../scripts/gen-adr-index.cjs');
 const {
   REPO, NEXT, hrefsIn, isBadLink, missingNext, repoPathOf, unresolvedAnchors, headingSet,
 } = require('./helpers/pr-template-links.cjs');
+const { isPrTemplate } = require('../scripts/ci-test-scope.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const DOCS_ANCHOR = 'CONTRIBUTING.md#documentation-updates--update-the-relevant-docs';
@@ -201,23 +202,32 @@ describe('angle-enclosed destinations (#5427)', () => {
   });
 });
 
+const entries = (dir) => fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })
+  .map((e) => ({ rel: path.posix.join(dir, e.name), dir: e.isDirectory() }));
+// Every file GitHub reads as a PR template: root, docs/ and .github/, plain or in a directory.
+const templateFiles = () => ['.', 'docs', '.github'].flatMap(entries)
+  .flatMap((e) => (e.dir && isPrTemplate(`${e.rel}/x`) ? entries(e.rel) : [e]))
+  .map((e) => e.rel)
+  .filter(isPrTemplate);
+
 describe('PR template links (#5427)', () => {
-  const files = ['.github/pull_request_template.md',
-    ...['fix', 'feature', 'enhancement', 'registry-entry']
-      .map((n) => `.github/PULL_REQUEST_TEMPLATE/${n}.md`)];
-  for (const f of files) {
-    test(`${f}: no link is bad`, () => {
-      assert.deepEqual(hrefsOf(f).filter(isBadLink), []);
-    });
-    test(`${f}: blob/next links point at existing repo paths`, () => {
-      assert.deepEqual(missingNext(hrefsOf(f), f), []);
-    });
-    test(`${f}: anchors on next resolve`, () => {
-      assert.deepEqual(unresolvedAnchors(hrefsOf(f), f), []);
-    });
-  }
+  const eachTemplate = (check) => {
+    const files = templateFiles();
+    assert.ok(files.length >= 5, `templates: ${files}`);
+    assert.ok(files.includes('.github/pull_request_template.md'), `templates: ${files}`);
+    const failing = files.map((f) => [f, check(f, hrefsOf(f))]).filter(([, found]) => found.length);
+    assert.deepEqual(Object.fromEntries(failing), {});
+  };
+  test('no link is bad', () => eachTemplate((f, hs) => hs.filter(isBadLink)));
+  test('blob/next links point at existing repo paths',
+    () => eachTemplate((f, hs) => missingNext(hs, f)));
+  test('anchors on next resolve', () => eachTemplate((f, hs) => unresolvedAnchors(hs, f)));
   test('"Using the wrong template?" links keep ?template= (maintainer ruling on #5427)', () => {
-    for (const f of files) assert.ok(hrefsOf(f).some((h) => h.startsWith('?template=')), f);
+    const names = ['fix', 'feature', 'enhancement', 'registry-entry'];
+    const files = names.map((n) => `.github/PULL_REQUEST_TEMPLATE/${n}.md`);
+    for (const f of ['.github/pull_request_template.md', ...files]) {
+      assert.ok(hrefsOf(f).some((h) => h.startsWith('?template=')), f);
+    }
   });
   for (const n of ['feature', 'enhancement']) {
     test(`${n}: links the Documentation Updates anchor`, () => {

@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const {
   REPO, NEXT, hrefsIn, isBadLink, unresolvedAnchors,
 } = require('./helpers/pr-template-links.cjs');
+const { isPrTemplate } = require('../scripts/ci-test-scope.cjs');
 
 const seg = fc.stringMatching(/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,19}$/); // never `.` or `..`
 const rel = fc.array(seg, { minLength: 1, maxLength: 3 }).map((a) => a.join('/'));
@@ -108,6 +109,23 @@ describe('link extractor (#5427)', () => {
       assert.deepEqual(hrefsIn(`prose href="${d}" and src='${d}'`), [], 'prose');
       assert.deepEqual(hrefsIn(`<a title="href=${e}" href="${d}">`), [d], 'inside a quoted value');
       assert.deepEqual(hrefsIn(`<a title='src=${e}' src='${d}'>`), [d], 'single-quoted value');
+    }));
+  });
+});
+
+describe('PR template locations (#5427)', () => {
+  const recase = (word) => fc
+    .array(fc.boolean(), { minLength: word.length, maxLength: word.length })
+    .map((flags) => [...word].map((c, i) => (flags[i] ? c.toUpperCase() : c)).join(''));
+  const where = fc.constantFrom('', 'docs/', '.github/');
+  test('property: isPrTemplate holds for every location x casing and fails for near-misses', () => {
+    fc.assert(fc.property(where, recase('pull_request_template'), seg, (dir, name, f) => {
+      assert.ok(isPrTemplate(`${dir}${name}.md`), `${dir}${name}.md`);
+      assert.ok(isPrTemplate(`${dir}${name}/${f}.md`), `${dir}${name}/${f}.md`);
+      for (const near of [`${dir}${name}.md.bak`, `${dir}${name}.mdx`, `${dir}${name}s/${f}.md`,
+        `${dir}${name}`, `${dir}sub/${name}.md`, `x${dir}${name}.md`, `${dir}${name}/`]) {
+        assert.ok(!isPrTemplate(near), near);
+      }
     }));
   });
 });
