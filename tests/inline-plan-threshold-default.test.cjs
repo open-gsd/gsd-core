@@ -31,8 +31,16 @@ test('#3801: the defaults manifest owns workflow.inline_plan_threshold (default 
 });
 
 test('#3801: every shipped surface naming the default agrees with the manifest', () => {
+  // #3923: the settings prompt's own "Default: N" and the CONFIGURATION.md rows
+  // (English + translations) drifted to 3 while this list covered only the
+  // read_current line — every surface that states the default is listed here.
   const surfaces = [
     ['gsd-core/workflows/settings-advanced.md', /inline_plan_threshold`\s*\(default:\s*`(\d+)`/],
+    ['gsd-core/workflows/settings-advanced.md', /Inline plan threshold[^\n]*\(current: <value or (\d+)>\)/],
+    ['gsd-core/workflows/settings-advanced.md', /Inline plan threshold[\s\S]{0,400}?Default: (\d+)/],
+    ['docs/CONFIGURATION.md', /`workflow\.inline_plan_threshold`\s*\|\s*number\s*\|\s*`(\d+)`/],
+    ['docs/zh-CN/CONFIGURATION.md', /`workflow\.inline_plan_threshold`\s*\|\s*number\s*\|\s*`(\d+)`/],
+    ['docs/pt-BR/CONFIGURATION.md', /`workflow\.inline_plan_threshold`\s*\|\s*number\s*\|\s*`(\d+)`/],
   ];
   for (const [rel, re] of surfaces) {
     const md = fs.readFileSync(path.join(REPO, rel), 'utf8');

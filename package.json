@@ -91,7 +91,7 @@
     "gpt-tokenizer": "4.0.0",
     "js-yaml": "^4.3.2",
     "mutation-testing-metrics": "^3.7.3",
-    "re2js": "^2.8.6",
+    "re2js": "^2.8.7",
     "saxes": "6.0.0",
     "tap-parser": "18.3.4",
     "typescript": "^6.0.3",
