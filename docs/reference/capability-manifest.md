@@ -272,7 +272,9 @@ All 12 shipped lane declarations carry all 14 fields below.
 | `reviewsSection` | string | The `REVIEWS.md` heading this lane renders under. Must be unique across the merged roster. |
 | `evidenceClass` | closed enum | `source-grounded` \| `diff-only` (diff-only findings are down-weighted in consensus). |
 | `requiresBinaries` | string[] | Extra binaries the lane needs beyond `invoke.binary`. |
-| `promptBudgetKey` | string or `null` | Federated config key bounding prompt size. |
+| `promptBudgetKey` | string or `null` | Federated config key holding this lane's explicit prompt cap. A prompt over the resolved cap refuses the lane (`prompt_exceeds_context`); it is never trimmed. |
+| `contextWindowTokens` | positive number or `null` | Optional. The context window of the lane's default model, in tokens. When no explicit cap applies, the lane's cap is 65% of this. Omit it, or set `null`, when the model is chosen outside GSD and so cannot be known. Any value that is not a positive finite number is treated as `null`. |
+| `contextWindowConfigKey` | string or `null` | Optional. Federated config key, `review.context_window_tokens.<slug>`, that overrides `contextWindowTokens`: `-1` = use the declared window, `0` = no derived cap. `null` for a lane that is sent no prompt. |
 | `modelConfigKey` | string or `null` | Federated config key naming the model, e.g. `review.models.kimi-code`. |
 | `handler` | closed enum or `null` | `antigravity` \| `openai-compatible` \| `opencode` \| `null`. |
 

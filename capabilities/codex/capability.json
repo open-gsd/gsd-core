@@ -157,6 +157,8 @@
     "evidenceClass": "source-grounded",
     "requiresBinaries": [],
     "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.codex",
+    "contextWindowTokens": 272000,
+    "contextWindowConfigKey": "review.context_window_tokens.codex",
     "modelConfigKey": "review.models.codex",
     "effortConfigKey": "review.effort.codex",
     "defaultEffort": "high",
@@ -171,7 +173,12 @@
     "review.max_prompt_tokens_per_reviewer.codex": {
       "type": "number",
       "default": -1,
-      "description": "Prompt-token budget for the Codex reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+      "description": "Prompt-token budget for the Codex reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+    },
+    "review.context_window_tokens.codex": {
+      "type": "number",
+      "default": -1,
+      "description": "Context window in tokens used to derive the default prompt cap for the codex reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 272000 tokens; 0 disables the derived cap; a positive number overrides the window."
     },
     "review.timeouts.codex": {
       "type": "number",

@@ -666,6 +666,17 @@ function describeViolation(v) {
   }
 }
 
+/**
+ * Fragment bodies live in `docs/features/` and are emitted into `docs/FEATURES.md`, one
+ * directory up, so a relative markdown link target written for the fragment must lose
+ * `depth` leading `../` to resolve from the index (1 for a section; 2 for a group note from
+ * `docs/features/_groups/`). Only relative targets are touched:
+ * `http(s):`, `#anchor` and absolute `/` targets (and anything not starting `../`) pass through.
+ */
+function rewriteRelativeLinks(text, depth = 1) {
+  return text.replace(new RegExp(`\\]\\((?:\\.\\./){${depth}}`, 'g'), '](');
+}
+
 /** Render the generated region: the table of contents, then every section. */
 function renderFeatures(corpus) {
   const out = [START_MARKER, '', '## Table of Contents', ''];
@@ -677,10 +688,10 @@ function renderFeatures(corpus) {
 
   for (const g of corpus.groups) {
     out.push('', '---', '', `## ${g.title}`, '');
-    if (g.note) out.push(g.note, '');
+    if (g.note) out.push(rewriteRelativeLinks(g.note, 2), '');
     g.sections.forEach((s, i) => {
       if (i > 0) out.push('---', '');
-      out.push(`### ${s.id}. ${s.title}`, '', s.body, '');
+      out.push(`### ${s.id}. ${s.title}`, '', rewriteRelativeLinks(s.body), '');
     });
   }
 
@@ -836,6 +847,7 @@ module.exports = {
   checkInboundAnchors,
   buildCorpus,
   renderFeatures,
+  rewriteRelativeLinks,
   spliceIntoFeatures,
   describeViolation,
 };

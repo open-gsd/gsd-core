@@ -502,8 +502,6 @@ describe('reviewer lane invocation — absent-safe and hostile input (ADR-2782 D
   test('the unavailability reason enum is locked', () => {
     // Adding a reason is three coordinated changes: enum, emitting site, and this assertion.
     assert.deepStrictEqual(Object.keys(LANE_UNAVAILABLE).sort(), [
-      'BUDGET_TOOL_FAILED',
-      'BUDGET_TOO_SMALL',
       'EGRESS_HOST_CHANGED',
       'HOST_UNREACHABLE',
       'MALFORMED_LANE',
@@ -511,6 +509,7 @@ describe('reviewer lane invocation — absent-safe and hostile input (ADR-2782 D
       'MISSING_REQUIRED_BINARY',
       'PROBE_FAILED',
       'PROBE_TIMEOUT',
+      'PROMPT_EXCEEDS_CONTEXT',
       'UNKNOWN_HANDLER',
       'UNKNOWN_TRANSPORT',
     ]);

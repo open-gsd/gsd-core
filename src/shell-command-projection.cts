@@ -470,6 +470,19 @@ export function escapeSingleQuotedShellLiteral(value: unknown): string {
 }
 
 /**
+ * #1460 / #4039: POSIX single-quote an arbitrary string as ONE shell token. A path such as a
+ * hook script's absolute install location commonly sits under a home directory containing
+ * spaces or other metacharacters (e.g. "/Users/Bob Smith/.claude/..."); written unquoted it
+ * would word-split and, with a hostile prefix, could inject. Wrapping in single quotes — with
+ * each embedded `'` escaped as `'\''` by escapeSingleQuotedShellLiteral — makes the whole value a
+ * single token no metacharacter inside it can break. This is the one implementation of that rule;
+ * do not re-implement it in a caller.
+ */
+export function shellSingleQuote(value: string): string {
+  return "'" + escapeSingleQuotedShellLiteral(value) + "'";
+}
+
+/**
  * The `export PATH="<dir>:$PATH"` line every persistence lane appends, plus the escaped directory
  * token it embeds. One builder because three lanes emit this line: a lane that re-escapes it
  * locally is how #3118 shipped a `$(…)` into ~/.bashrc, where it ran on every new shell. The

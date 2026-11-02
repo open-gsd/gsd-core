@@ -82,24 +82,20 @@ const SHELLS = detectShells();
  * the block cannot silently blank these rows.
  */
 function extractBuildPromptBlock() {
+  // #4559: the per-section run-dir copies (context, research, instructions, plan-N, ...) existed only
+  // to feed per-lane trimming and are gone, so the old anchor (`gsd-review-context.md`) no longer
+  // exists. The block is bound by what it still owns: deriving `.plans-manifest.md` from the
+  // `*-PLAN.md` files and appending it to the combined prompt.
   const content = readWorkflowCombined(REVIEW_WORKFLOW);
-  const anchorIdx = content.indexOf('gsd-review-context.md');
-  assert.notEqual(anchorIdx, -1, 'gsd-review-context.md no longer appears in review.md (+steps)');
-  const before = content.slice(0, anchorIdx);
-  const fenceOpenRe = /```bash\r?\n/g;
-  let lastOpen = -1;
-  let m;
-  while ((m = fenceOpenRe.exec(before)) !== null) lastOpen = m.index + m[0].length;
-  assert.notEqual(lastOpen, -1, 'gsd-review-context.md is not inside a ```bash fence of review.md (+steps)');
-  const after = content.slice(lastOpen);
-  const closeIdx = after.indexOf('\n```');
-  assert.notEqual(closeIdx, -1, 'unterminated ```bash fence around gsd-review-context.md');
-  const body = after.slice(0, closeIdx);
-  // Bind the extraction to build_prompt, not just "some block that mentions the
-  // file": the instructions copy is unique to this block.
+  const lines = content.split(/\r?\n/);
+  const body = scanFencedBlocks(lines)
+    .filter((b) => b.closeLineIdx !== -1 && (b.infoString || '').trim() === 'bash')
+    .map((b) => lines.slice(b.openLineIdx + 1, b.closeLineIdx).join('\n'))
+    .find((blockBody) => blockBody.includes('> "${RUN_DIR}/.plans-manifest.md"') && blockBody.includes('-PLAN.md'));
+  assert.ok(body, 'no ```bash fence of review.md (+steps) derives .plans-manifest.md from *-PLAN.md');
   assert.ok(
-    body.includes('gsd-review-instructions.md'),
-    'extracted block writes gsd-review-context.md but not gsd-review-instructions.md — wrong block',
+    body.includes('gsd-review-prompt.md'),
+    'the manifest-deriving block must append the manifest to gsd-review-prompt.md — wrong block',
   );
   return body;
 }
@@ -214,27 +210,23 @@ describe('#3300 build_prompt optional-section guards under nullglob', () => {
       t.after(() => cleanup(fx.root));
       const res = runBlock(shell, extractBuildPromptBlock(), fx);
       assert.strictEqual(res.status, 0, `block exited ${res.status}: ${res.stderr}`);
-      // Row 1/2 of the matrix — the failing-first core. Pre-fix these exist
-      // as 0-byte files (the `>` redirect creates them before cat blocks or
-      // EOFs); post-fix they must not exist at all.
+      // #4559: lanes are no longer trimmed, so the per-section files that only fed the trimmer
+      // (context, research, plan copies, ...) are not written by this block at all.
       assert.strictEqual(
         readIfPresent(path.join(fx.runDir, 'gsd-review-context.md')),
         null,
-        'gsd-review-context.md must NOT be created when no *-CONTEXT.md exists',
+        'gsd-review-context.md must NOT be created',
       );
       assert.strictEqual(
         readIfPresent(path.join(fx.runDir, 'gsd-review-research.md')),
         null,
-        'gsd-review-research.md must NOT be created when no *-RESEARCH.md exists',
+        'gsd-review-research.md must NOT be created',
       );
-      // The always-on parts of the block still did their job (#3959: the copy
-      // is named after the source plan id, not the bare padded index).
-      assert.strictEqual(readIfPresent(path.join(fx.runDir, 'gsd-review-plan-01.md')), 'plan\n');
-      assert.strictEqual(readIfPresent(path.join(fx.runDir, 'gsd-review-plan-00.md')), null,
-        'the bare-index copy name is gone (#3959)');
+      assert.strictEqual(readIfPresent(path.join(fx.runDir, 'gsd-review-plan-01.md')), null,
+        'plan copies fed only the trimmer and must not be written');
     });
 
-    test(`[${shell.name}] present optional sources: output matches the source exactly`, (t) => {
+    test(`[${shell.name}] present optional sources: no per-section copy is written (#4559)`, (t) => {
       const fx = buildFixture({
         '01-PLAN.md': 'plan\n',
         '01-CONTEXT.md': 'ctx\n',
@@ -243,29 +235,10 @@ describe('#3300 build_prompt optional-section guards under nullglob', () => {
       t.after(() => cleanup(fx.root));
       const res = runBlock(shell, extractBuildPromptBlock(), fx);
       assert.strictEqual(res.status, 0, `block exited ${res.status}: ${res.stderr}`);
-      assert.strictEqual(readIfPresent(path.join(fx.runDir, 'gsd-review-context.md')), 'ctx\n');
-      assert.strictEqual(readIfPresent(path.join(fx.runDir, 'gsd-review-research.md')), 'research\n');
-    });
-
-    test(`[${shell.name}] research-only phase: context output stays absent`, (t) => {
-      const fx = buildFixture({ '01-PLAN.md': 'plan\n', '01-RESEARCH.md': 'research\n' });
-      t.after(() => cleanup(fx.root));
-      const res = runBlock(shell, extractBuildPromptBlock(), fx);
-      assert.strictEqual(res.status, 0, `block exited ${res.status}: ${res.stderr}`);
       assert.strictEqual(readIfPresent(path.join(fx.runDir, 'gsd-review-context.md')), null);
-      assert.strictEqual(readIfPresent(path.join(fx.runDir, 'gsd-review-research.md')), 'research\n');
-    });
-
-    test(`[${shell.name}] multiple matches concatenate in glob order (original cat <glob> semantics)`, (t) => {
-      const fx = buildFixture({
-        '01-PLAN.md': 'plan\n',
-        '01-CONTEXT.md': 'A\n',
-        '02-CONTEXT.md': 'B\n',
-      });
-      t.after(() => cleanup(fx.root));
-      const res = runBlock(shell, extractBuildPromptBlock(), fx);
-      assert.strictEqual(res.status, 0, `block exited ${res.status}: ${res.stderr}`);
-      assert.strictEqual(readIfPresent(path.join(fx.runDir, 'gsd-review-context.md')), 'A\nB\n');
+      assert.strictEqual(readIfPresent(path.join(fx.runDir, 'gsd-review-research.md')), null);
+      // The plans manifest is the one thing the block still owns.
+      assert.match(readIfPresent(path.join(fx.runDir, '.plans-manifest.md')), /Total plans in this review: 1/);
     });
 
     test(`[${shell.name}] open, unconsumed stdin pipe: block completes within ${STDIN_BOUND_MS}ms`, async (t) => {
@@ -297,9 +270,9 @@ describe('#3300 build_prompt optional-section guards under nullglob', () => {
 
 // ─── #3959: plan copies carry source provenance, prompt carries path anchors ──
 
-describe('#3959 plan-copy provenance and path anchors', () => {
+describe('#3959 plan path anchors (#4559: plan copies removed with the trimmer)', () => {
   for (const shell of SHELLS) {
-    test(`[${shell.name}] plan copies are named after their source plan id, not a bare index`, (t) => {
+    test(`[${shell.name}] no plan copy is written, bare-index or source-named`, (t) => {
       const fx = buildFixture({
         '01-PLAN.md': 'plan one\n',
         '02-PLAN.md': 'plan two\n',
@@ -307,13 +280,13 @@ describe('#3959 plan-copy provenance and path anchors', () => {
       t.after(() => cleanup(fx.root));
       const res = runBlock(shell, extractBuildPromptBlock(), fx);
       assert.strictEqual(res.status, 0, `block exited ${res.status}: ${res.stderr}`);
-      // Source-named copies: reviewers and the budget tool's `### <file>`
-      // header (src/prompt-budget.cts) see a resolvable plan identity, and
-      // the prepare_trimmed_prompt_for_reviewer glob still matches.
-      assert.strictEqual(readIfPresent(path.join(fx.runDir, 'gsd-review-plan-01.md')), 'plan one\n');
-      assert.strictEqual(readIfPresent(path.join(fx.runDir, 'gsd-review-plan-02.md')), 'plan two\n');
-      assert.strictEqual(readIfPresent(path.join(fx.runDir, 'gsd-review-plan-00.md')), null,
-        'bare-index copy names must not survive (#3959)');
+      for (const name of ['gsd-review-plan-01.md', 'gsd-review-plan-02.md', 'gsd-review-plan-00.md']) {
+        assert.strictEqual(readIfPresent(path.join(fx.runDir, name)), null, `${name} must not be written`);
+      }
+      // Plan identity still reaches reviewers through the manifest (one bullet per source plan id).
+      const manifest = readIfPresent(path.join(fx.runDir, '.plans-manifest.md'));
+      assert.match(manifest, /^- 01$/m);
+      assert.match(manifest, /^- 02$/m);
     });
   }
 

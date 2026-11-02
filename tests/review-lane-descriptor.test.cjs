@@ -1187,3 +1187,73 @@ describe('#4255 — every lane declares where its review effort comes from', () 
     }
   });
 });
+
+// #4559 — a lane declares the context window its default prompt cap derives from.
+describe('reviewer lane descriptor — declared context window (#4559)', () => {
+  /** Declared floors: slug -> contextWindowTokens. Every other lane declares null. */
+  const DECLARED_WINDOWS = { claude: 200000, codex: 272000, qwen: 131072, 'kimi-code': 262144 };
+
+  /** The registry capability shipping the reviewer body for `slug`. */
+  function manifestFor(slug) {
+    return Object.values(CAPABILITY_REGISTRY.capabilities || {}).find(
+      (c) => c && c.reviewer && c.reviewer.slug === slug,
+    );
+  }
+
+  test('descriptor declares the agreed window floor per lane and null elsewhere', () => {
+    for (const lane of REVIEWER_LANES) {
+      const expected = Object.prototype.hasOwnProperty.call(DECLARED_WINDOWS, lane.slug)
+        ? DECLARED_WINDOWS[lane.slug]
+        : null;
+      assert.strictEqual(lane.contextWindowTokens, expected, `${lane.slug}: contextWindowTokens`);
+    }
+  });
+
+  test('descriptor declares review.context_window_tokens.<slug> for every lane except coderabbit', () => {
+    for (const lane of REVIEWER_LANES) {
+      const expected = lane.slug === 'coderabbit' ? null : `review.context_window_tokens.${lane.slug}`;
+      assert.strictEqual(lane.contextWindowConfigKey, expected, `${lane.slug}: contextWindowConfigKey`);
+    }
+  });
+
+  test('descriptor and capability manifest agree on contextWindowTokens and contextWindowConfigKey per lane', () => {
+    for (const lane of REVIEWER_LANES) {
+      const cap = manifestFor(lane.slug);
+      assert.ok(cap, `${lane.slug}: no capability manifest ships this lane`);
+      assert.strictEqual(
+        cap.reviewer.contextWindowTokens, lane.contextWindowTokens,
+        `${lane.slug}: manifest contextWindowTokens diverges from the descriptor`,
+      );
+      assert.strictEqual(
+        cap.reviewer.contextWindowConfigKey, lane.contextWindowConfigKey,
+        `${lane.slug}: manifest contextWindowConfigKey diverges from the descriptor`,
+      );
+    }
+  });
+
+  test('a manifest declares its context-window config key (number, default -1) iff contextWindowConfigKey is non-null', () => {
+    for (const lane of REVIEWER_LANES) {
+      const cap = manifestFor(lane.slug);
+      assert.ok(cap, `${lane.slug}: no capability manifest ships this lane`);
+      const key = `review.context_window_tokens.${lane.slug}`;
+      const entry = (cap.config || {})[key];
+      if (lane.contextWindowConfigKey === null) {
+        assert.strictEqual(entry, undefined, `${lane.slug}: must not own ${key}`);
+        continue;
+      }
+      assert.ok(entry, `${lane.slug}: manifest config block must declare ${key}`);
+      assert.strictEqual(entry.type, 'number', `${lane.slug}: ${key} type`);
+      assert.strictEqual(entry.default, -1, `${lane.slug}: ${key} default is the -1 unset sentinel`);
+    }
+  });
+
+  test('the registry config schema attributes each context-window key to its owning lane', () => {
+    for (const lane of REVIEWER_LANES) {
+      if (lane.contextWindowConfigKey === null) continue;
+      const entry = (CAPABILITY_REGISTRY.configSchema || {})[lane.contextWindowConfigKey];
+      assert.ok(entry, `${lane.contextWindowConfigKey} missing from the registry config schema`);
+      assert.strictEqual(entry.type, 'number');
+      assert.strictEqual(entry.default, -1);
+    }
+  });
+});

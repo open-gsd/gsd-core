@@ -237,6 +237,8 @@ const capabilities = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.antigravity",
+      "contextWindowTokens": null,
+      "contextWindowConfigKey": "review.context_window_tokens.antigravity",
       "modelConfigKey": "review.models.agy",
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -251,7 +253,12 @@ const capabilities = {
       "review.max_prompt_tokens_per_reviewer.antigravity": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Antigravity reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\". Keyed on the reviewer slug `antigravity`, not the `agy` binary alias used by review.models.agy."
+        "description": "Prompt-token budget for the Antigravity reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\". Keyed on the reviewer slug `antigravity`, not the `agy` binary alias used by review.models.agy."
+      },
+      "review.context_window_tokens.antigravity": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the antigravity reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.antigravity": {
         "type": "number",
@@ -667,6 +674,8 @@ const capabilities = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.claude",
+      "contextWindowTokens": 200000,
+      "contextWindowConfigKey": "review.context_window_tokens.claude",
       "modelConfigKey": "review.models.claude",
       "effortConfigKey": "review.effort.claude",
       "defaultEffort": "high",
@@ -681,7 +690,12 @@ const capabilities = {
       "review.max_prompt_tokens_per_reviewer.claude": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Claude reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the Claude reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.claude": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the claude reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 200000 tokens; 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.claude": {
         "type": "number",
@@ -1110,6 +1124,8 @@ const capabilities = {
       "evidenceClass": "diff-only",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.coderabbit",
+      "contextWindowTokens": null,
+      "contextWindowConfigKey": null,
       "modelConfigKey": null,
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -1119,7 +1135,7 @@ const capabilities = {
       "review.max_prompt_tokens_per_reviewer.coderabbit": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the CodeRabbit reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the CodeRabbit reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
       }
     }
   },
@@ -1282,6 +1298,8 @@ const capabilities = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.codex",
+      "contextWindowTokens": 272000,
+      "contextWindowConfigKey": "review.context_window_tokens.codex",
       "modelConfigKey": "review.models.codex",
       "effortConfigKey": "review.effort.codex",
       "defaultEffort": "high",
@@ -1296,7 +1314,12 @@ const capabilities = {
       "review.max_prompt_tokens_per_reviewer.codex": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Codex reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the Codex reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.codex": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the codex reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 272000 tokens; 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.codex": {
         "type": "number",
@@ -1564,6 +1587,8 @@ const capabilities = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.cursor",
+      "contextWindowTokens": null,
+      "contextWindowConfigKey": "review.context_window_tokens.cursor",
       "modelConfigKey": "review.models.cursor",
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -1578,7 +1603,12 @@ const capabilities = {
       "review.max_prompt_tokens_per_reviewer.cursor": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Cursor reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the Cursor reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.cursor": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the cursor reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
       }
     }
   },
@@ -2411,6 +2441,8 @@ const capabilities = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.kimi-code",
+      "contextWindowTokens": 262144,
+      "contextWindowConfigKey": "review.context_window_tokens.kimi-code",
       "modelConfigKey": "review.models.kimi-code",
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -2425,7 +2457,12 @@ const capabilities = {
       "review.max_prompt_tokens_per_reviewer.kimi-code": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Kimi Code reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the Kimi Code reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.kimi-code": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the kimi-code reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 262144 tokens; 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.kimi-code": {
         "type": "number",
@@ -2525,6 +2562,8 @@ const capabilities = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.llama_cpp",
+      "contextWindowTokens": null,
+      "contextWindowConfigKey": "review.context_window_tokens.llama_cpp",
       "modelConfigKey": "review.models.llama_cpp",
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -2544,7 +2583,12 @@ const capabilities = {
       "review.max_prompt_tokens_per_reviewer.llama_cpp": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the llama.cpp reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the llama.cpp reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.llama_cpp": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the llama_cpp reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.llama_cpp": {
         "type": "number",
@@ -2591,6 +2635,8 @@ const capabilities = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.lm_studio",
+      "contextWindowTokens": null,
+      "contextWindowConfigKey": "review.context_window_tokens.lm_studio",
       "modelConfigKey": "review.models.lm_studio",
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -2610,7 +2656,12 @@ const capabilities = {
       "review.max_prompt_tokens_per_reviewer.lm_studio": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the LM Studio reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the LM Studio reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.lm_studio": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the lm_studio reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.lm_studio": {
         "type": "number",
@@ -2881,6 +2932,8 @@ const capabilities = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.ollama",
+      "contextWindowTokens": null,
+      "contextWindowConfigKey": "review.context_window_tokens.ollama",
       "modelConfigKey": "review.models.ollama",
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -2900,7 +2953,12 @@ const capabilities = {
       "review.max_prompt_tokens_per_reviewer.ollama": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Ollama reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the Ollama reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.ollama": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the ollama reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.ollama": {
         "type": "number",
@@ -3085,6 +3143,8 @@ const capabilities = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.opencode",
+      "contextWindowTokens": null,
+      "contextWindowConfigKey": "review.context_window_tokens.opencode",
       "modelConfigKey": "review.models.opencode",
       "effortConfigKey": "review.effort.opencode",
       "defaultEffort": "high",
@@ -3099,7 +3159,12 @@ const capabilities = {
       "review.max_prompt_tokens_per_reviewer.opencode": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the OpenCode reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the OpenCode reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.opencode": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the opencode reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.opencode": {
         "type": "number",
@@ -3496,6 +3561,8 @@ const capabilities = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.qwen",
+      "contextWindowTokens": 131072,
+      "contextWindowConfigKey": "review.context_window_tokens.qwen",
       "modelConfigKey": null,
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -3505,7 +3572,12 @@ const capabilities = {
       "review.max_prompt_tokens_per_reviewer.qwen": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Qwen Code reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the Qwen Code reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.qwen": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the qwen reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 131072 tokens; 0 disables the derived cap; a positive number overrides the window."
       }
     }
   },
@@ -4931,11 +5003,13 @@ const configKeys = {
   "workflow.api_coverage_gate": "ai-integration",
   "review.models.agy": "antigravity",
   "review.max_prompt_tokens_per_reviewer.antigravity": "antigravity",
+  "review.context_window_tokens.antigravity": "antigravity",
   "review.timeouts.antigravity": "antigravity",
   "workflow.assumption_delta": "assumption-delta",
   "workflow.windows_enforce": "broken-windows",
   "review.models.claude": "claude",
   "review.max_prompt_tokens_per_reviewer.claude": "claude",
+  "review.context_window_tokens.claude": "claude",
   "review.timeouts.claude": "claude",
   "review.effort.claude": "claude",
   "claude_orchestration.enabled": "claude-orchestration",
@@ -4947,10 +5021,12 @@ const configKeys = {
   "review.max_prompt_tokens_per_reviewer.coderabbit": "coderabbit",
   "review.models.codex": "codex",
   "review.max_prompt_tokens_per_reviewer.codex": "codex",
+  "review.context_window_tokens.codex": "codex",
   "review.timeouts.codex": "codex",
   "review.effort.codex": "codex",
   "review.models.cursor": "cursor",
   "review.max_prompt_tokens_per_reviewer.cursor": "cursor",
+  "review.context_window_tokens.cursor": "cursor",
   "workflow.drift_threshold": "drift",
   "workflow.drift_action": "drift",
   "workflow.schema_drift_gate": "drift",
@@ -4967,15 +5043,18 @@ const configKeys = {
   "intel.enabled": "intel",
   "review.models.kimi-code": "kimi-code",
   "review.max_prompt_tokens_per_reviewer.kimi-code": "kimi-code",
+  "review.context_window_tokens.kimi-code": "kimi-code",
   "review.timeouts.kimi-code": "kimi-code",
   "workflow.live_dom_uat": "live-dom-uat",
   "review.models.llama_cpp": "llama-cpp",
   "review.llama_cpp_host": "llama-cpp",
   "review.max_prompt_tokens_per_reviewer.llama_cpp": "llama-cpp",
+  "review.context_window_tokens.llama_cpp": "llama-cpp",
   "review.timeouts.llama_cpp": "llama-cpp",
   "review.models.lm_studio": "lm-studio",
   "review.lm_studio_host": "lm-studio",
   "review.max_prompt_tokens_per_reviewer.lm_studio": "lm-studio",
+  "review.context_window_tokens.lm_studio": "lm-studio",
   "review.timeouts.lm_studio": "lm-studio",
   "mempalace.enabled": "mempalace",
   "mempalace.memory_mode": "mempalace",
@@ -4991,14 +5070,17 @@ const configKeys = {
   "review.models.ollama": "ollama",
   "review.ollama_host": "ollama",
   "review.max_prompt_tokens_per_reviewer.ollama": "ollama",
+  "review.context_window_tokens.ollama": "ollama",
   "review.timeouts.ollama": "ollama",
   "review.models.opencode": "opencode",
   "review.max_prompt_tokens_per_reviewer.opencode": "opencode",
+  "review.context_window_tokens.opencode": "opencode",
   "review.timeouts.opencode": "opencode",
   "review.effort.opencode": "opencode",
   "workflow.pattern_mapper": "pattern-mapper",
   "profile-pipeline.enabled": "profile-pipeline",
   "review.max_prompt_tokens_per_reviewer.qwen": "qwen",
+  "review.context_window_tokens.qwen": "qwen",
   "refactor.trigger_enabled": "refactor-trigger",
   "refactor.complexity_threshold": "refactor-trigger",
   "refactor.complexity_jump_delta": "refactor-trigger",
@@ -5038,7 +5120,13 @@ const configSchema = {
     "owner": "antigravity",
     "type": "number",
     "default": -1,
-    "description": "Prompt-token budget for the Antigravity reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\". Keyed on the reviewer slug `antigravity`, not the `agy` binary alias used by review.models.agy."
+    "description": "Prompt-token budget for the Antigravity reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\". Keyed on the reviewer slug `antigravity`, not the `agy` binary alias used by review.models.agy."
+  },
+  "review.context_window_tokens.antigravity": {
+    "owner": "antigravity",
+    "type": "number",
+    "default": -1,
+    "description": "Context window in tokens used to derive the default prompt cap for the antigravity reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
   },
   "review.timeouts.antigravity": {
     "owner": "antigravity",
@@ -5068,7 +5156,13 @@ const configSchema = {
     "owner": "claude",
     "type": "number",
     "default": -1,
-    "description": "Prompt-token budget for the Claude reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+    "description": "Prompt-token budget for the Claude reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+  },
+  "review.context_window_tokens.claude": {
+    "owner": "claude",
+    "type": "number",
+    "default": -1,
+    "description": "Context window in tokens used to derive the default prompt cap for the claude reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 200000 tokens; 0 disables the derived cap; a positive number overrides the window."
   },
   "review.timeouts.claude": {
     "owner": "claude",
@@ -5136,7 +5230,7 @@ const configSchema = {
     "owner": "coderabbit",
     "type": "number",
     "default": -1,
-    "description": "Prompt-token budget for the CodeRabbit reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+    "description": "Prompt-token budget for the CodeRabbit reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
   },
   "review.models.codex": {
     "owner": "codex",
@@ -5148,7 +5242,13 @@ const configSchema = {
     "owner": "codex",
     "type": "number",
     "default": -1,
-    "description": "Prompt-token budget for the Codex reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+    "description": "Prompt-token budget for the Codex reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+  },
+  "review.context_window_tokens.codex": {
+    "owner": "codex",
+    "type": "number",
+    "default": -1,
+    "description": "Context window in tokens used to derive the default prompt cap for the codex reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 272000 tokens; 0 disables the derived cap; a positive number overrides the window."
   },
   "review.timeouts.codex": {
     "owner": "codex",
@@ -5172,7 +5272,13 @@ const configSchema = {
     "owner": "cursor",
     "type": "number",
     "default": -1,
-    "description": "Prompt-token budget for the Cursor reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+    "description": "Prompt-token budget for the Cursor reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+  },
+  "review.context_window_tokens.cursor": {
+    "owner": "cursor",
+    "type": "number",
+    "default": -1,
+    "description": "Context window in tokens used to derive the default prompt cap for the cursor reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
   },
   "workflow.drift_threshold": {
     "owner": "drift",
@@ -5279,7 +5385,13 @@ const configSchema = {
     "owner": "kimi-code",
     "type": "number",
     "default": -1,
-    "description": "Prompt-token budget for the Kimi Code reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+    "description": "Prompt-token budget for the Kimi Code reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+  },
+  "review.context_window_tokens.kimi-code": {
+    "owner": "kimi-code",
+    "type": "number",
+    "default": -1,
+    "description": "Context window in tokens used to derive the default prompt cap for the kimi-code reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 262144 tokens; 0 disables the derived cap; a positive number overrides the window."
   },
   "review.timeouts.kimi-code": {
     "owner": "kimi-code",
@@ -5309,7 +5421,13 @@ const configSchema = {
     "owner": "llama-cpp",
     "type": "number",
     "default": -1,
-    "description": "Prompt-token budget for the llama.cpp reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+    "description": "Prompt-token budget for the llama.cpp reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+  },
+  "review.context_window_tokens.llama_cpp": {
+    "owner": "llama-cpp",
+    "type": "number",
+    "default": -1,
+    "description": "Context window in tokens used to derive the default prompt cap for the llama_cpp reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
   },
   "review.timeouts.llama_cpp": {
     "owner": "llama-cpp",
@@ -5333,7 +5451,13 @@ const configSchema = {
     "owner": "lm-studio",
     "type": "number",
     "default": -1,
-    "description": "Prompt-token budget for the LM Studio reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+    "description": "Prompt-token budget for the LM Studio reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+  },
+  "review.context_window_tokens.lm_studio": {
+    "owner": "lm-studio",
+    "type": "number",
+    "default": -1,
+    "description": "Context window in tokens used to derive the default prompt cap for the lm_studio reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
   },
   "review.timeouts.lm_studio": {
     "owner": "lm-studio",
@@ -5428,7 +5552,13 @@ const configSchema = {
     "owner": "ollama",
     "type": "number",
     "default": -1,
-    "description": "Prompt-token budget for the Ollama reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+    "description": "Prompt-token budget for the Ollama reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+  },
+  "review.context_window_tokens.ollama": {
+    "owner": "ollama",
+    "type": "number",
+    "default": -1,
+    "description": "Context window in tokens used to derive the default prompt cap for the ollama reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
   },
   "review.timeouts.ollama": {
     "owner": "ollama",
@@ -5446,7 +5576,13 @@ const configSchema = {
     "owner": "opencode",
     "type": "number",
     "default": -1,
-    "description": "Prompt-token budget for the OpenCode reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+    "description": "Prompt-token budget for the OpenCode reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+  },
+  "review.context_window_tokens.opencode": {
+    "owner": "opencode",
+    "type": "number",
+    "default": -1,
+    "description": "Context window in tokens used to derive the default prompt cap for the opencode reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
   },
   "review.timeouts.opencode": {
     "owner": "opencode",
@@ -5476,7 +5612,13 @@ const configSchema = {
     "owner": "qwen",
     "type": "number",
     "default": -1,
-    "description": "Prompt-token budget for the Qwen Code reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+    "description": "Prompt-token budget for the Qwen Code reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+  },
+  "review.context_window_tokens.qwen": {
+    "owner": "qwen",
+    "type": "number",
+    "default": -1,
+    "description": "Context window in tokens used to derive the default prompt cap for the qwen reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 131072 tokens; 0 disables the derived cap; a positive number overrides the window."
   },
   "refactor.trigger_enabled": {
     "owner": "refactor-trigger",
@@ -5717,6 +5859,8 @@ const runtimes = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.antigravity",
+      "contextWindowTokens": null,
+      "contextWindowConfigKey": "review.context_window_tokens.antigravity",
       "modelConfigKey": "review.models.agy",
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -5731,7 +5875,12 @@ const runtimes = {
       "review.max_prompt_tokens_per_reviewer.antigravity": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Antigravity reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\". Keyed on the reviewer slug `antigravity`, not the `agy` binary alias used by review.models.agy."
+        "description": "Prompt-token budget for the Antigravity reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\". Keyed on the reviewer slug `antigravity`, not the `agy` binary alias used by review.models.agy."
+      },
+      "review.context_window_tokens.antigravity": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the antigravity reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.antigravity": {
         "type": "number",
@@ -6018,6 +6167,8 @@ const runtimes = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.claude",
+      "contextWindowTokens": 200000,
+      "contextWindowConfigKey": "review.context_window_tokens.claude",
       "modelConfigKey": "review.models.claude",
       "effortConfigKey": "review.effort.claude",
       "defaultEffort": "high",
@@ -6032,7 +6183,12 @@ const runtimes = {
       "review.max_prompt_tokens_per_reviewer.claude": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Claude reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the Claude reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.claude": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the claude reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 200000 tokens; 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.claude": {
         "type": "number",
@@ -6421,6 +6577,8 @@ const runtimes = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.codex",
+      "contextWindowTokens": 272000,
+      "contextWindowConfigKey": "review.context_window_tokens.codex",
       "modelConfigKey": "review.models.codex",
       "effortConfigKey": "review.effort.codex",
       "defaultEffort": "high",
@@ -6435,7 +6593,12 @@ const runtimes = {
       "review.max_prompt_tokens_per_reviewer.codex": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Codex reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the Codex reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.codex": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the codex reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 272000 tokens; 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.codex": {
         "type": "number",
@@ -6703,6 +6866,8 @@ const runtimes = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.cursor",
+      "contextWindowTokens": null,
+      "contextWindowConfigKey": "review.context_window_tokens.cursor",
       "modelConfigKey": "review.models.cursor",
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -6717,7 +6882,12 @@ const runtimes = {
       "review.max_prompt_tokens_per_reviewer.cursor": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Cursor reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the Cursor reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.cursor": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the cursor reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
       }
     }
   },
@@ -7232,6 +7402,8 @@ const runtimes = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.kimi-code",
+      "contextWindowTokens": 262144,
+      "contextWindowConfigKey": "review.context_window_tokens.kimi-code",
       "modelConfigKey": "review.models.kimi-code",
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -7246,7 +7418,12 @@ const runtimes = {
       "review.max_prompt_tokens_per_reviewer.kimi-code": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Kimi Code reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the Kimi Code reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.kimi-code": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the kimi-code reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 262144 tokens; 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.kimi-code": {
         "type": "number",
@@ -7431,6 +7608,8 @@ const runtimes = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.opencode",
+      "contextWindowTokens": null,
+      "contextWindowConfigKey": "review.context_window_tokens.opencode",
       "modelConfigKey": "review.models.opencode",
       "effortConfigKey": "review.effort.opencode",
       "defaultEffort": "high",
@@ -7445,7 +7624,12 @@ const runtimes = {
       "review.max_prompt_tokens_per_reviewer.opencode": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the OpenCode reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the OpenCode reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.opencode": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the opencode reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.opencode": {
         "type": "number",
@@ -7711,6 +7895,8 @@ const runtimes = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.qwen",
+      "contextWindowTokens": 131072,
+      "contextWindowConfigKey": "review.context_window_tokens.qwen",
       "modelConfigKey": null,
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -7720,7 +7906,12 @@ const runtimes = {
       "review.max_prompt_tokens_per_reviewer.qwen": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Qwen Code reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the Qwen Code reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.qwen": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the qwen reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 131072 tokens; 0 disables the derived cap; a positive number overrides the window."
       }
     }
   },

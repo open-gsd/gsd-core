@@ -88,11 +88,16 @@ const SETTINGS_WORKFLOW_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'setting
 
 const SPEC_FIELDS = {
   planning: [
+    { key: 'planner.stall_detection_enabled',       default: 'true' },
+    // #3923: the stall threshold and poll interval are user-settable here; defaults unchanged.
+    { key: 'planner.stall_threshold_minutes',       default: '10' },
+    { key: 'planner.stall_detect_interval_minutes', default: '5' },
     { key: 'workflow.plan_bounce',           default: 'false' },
     { key: 'workflow.plan_bounce_passes',    default: '2' },
     { key: 'workflow.plan_bounce_script',    default: 'null' },
     { key: 'workflow.subagent_timeout',      default: '300000' },
-    { key: 'workflow.inline_plan_threshold', default: '3' },
+    // #3801: the defaults manifest owns this value (2); the prompt used to advertise 3.
+    { key: 'workflow.inline_plan_threshold', default: '2' },
   ],
   execution: [
     { key: 'workflow.node_repair',        default: 'true' },
@@ -434,6 +439,145 @@ describe('gsd-settings-advanced — negative scenarios', () => {
     assert.strictEqual(typeof stored.workflow.max_discuss_passes, 'number');
     assert.strictEqual(stored.workflow.max_discuss_passes, 7);
   });
+});
+
+// ─── #3923: planner stall threshold / interval on the advanced surface ────────
+
+/** Hard cap on questions per AskUserQuestion call (the tool schema's `maxItems`). */
+const ASK_USER_QUESTION_QUESTION_CAP = 4;
+
+/**
+ * Split `text` into the bodies of its `AskUserQuestion([ ... ])` calls and count the
+ * `question:` entries in each. Bracket-depth scan, so nested `options: [...]` arrays do not
+ * end a call early.
+ * @returns {Array<{line: number, questions: number}>}
+ */
+function countQuestionsPerCall(text) {
+  const calls = [];
+  const opener = 'AskUserQuestion([';
+  for (let idx = text.indexOf(opener); idx >= 0; idx = text.indexOf(opener, idx + 1)) {
+    let depth = 0;
+    let end = idx + opener.length - 1;
+    for (; end < text.length; end += 1) {
+      if (text[end] === '[') depth += 1;
+      else if (text[end] === ']') {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    const body = text.slice(idx, end);
+    calls.push({
+      line: text.slice(0, idx).split('\n').length,
+      questions: (body.match(/\bquestion:/g) || []).length,
+    });
+  }
+  return calls;
+}
+
+/** Text between `### <heading>` and the next `### ` heading (or end of text). */
+function sectionText(text, heading) {
+  const start = text.indexOf(`### ${heading}`);
+  if (start < 0) return '';
+  const next = text.indexOf('\n### ', start + 4);
+  return next < 0 ? text.slice(start) : text.slice(start, next);
+}
+
+function buildCall(n) {
+  const qs = Array.from({ length: n }, (_, i) =>
+    `  { question: "Q${i}?", header: "H${i}", options: [ { label: "a" }, { label: "b" } ] }`);
+  return `AskUserQuestion([\n${qs.join(',\n')}\n])`;
+}
+
+describe('#3923: planner stall threshold is configurable via /gsd-config --advanced', () => {
+  const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+  const planning = sectionText(workflow, 'Section 1');
+
+  test('countQuestionsPerCall counts generated calls exactly at limit-1, limit, limit+1', () => {
+    for (const n of [ASK_USER_QUESTION_QUESTION_CAP - 1, ASK_USER_QUESTION_QUESTION_CAP, ASK_USER_QUESTION_QUESTION_CAP + 1]) {
+      const [call] = countQuestionsPerCall(buildCall(n));
+      assert.strictEqual(call.questions, n);
+      assert.strictEqual(call.questions <= ASK_USER_QUESTION_QUESTION_CAP, n <= ASK_USER_QUESTION_QUESTION_CAP);
+    }
+  });
+
+  test('countQuestionsPerCall is exact for any sequence of generated calls (property)', () => {
+    fc.assert(
+      fc.property(fc.array(fc.integer({ min: 0, max: 9 }), { minLength: 1, maxLength: 6 }), (sizes) => {
+        const text = sizes.map(buildCall).join('\n\nprose between calls\n\n');
+        const counts = countQuestionsPerCall(text).map((c) => c.questions);
+        assert.deepStrictEqual(counts, sizes);
+      }),
+      { numRuns: 200, seed: 3923 }
+    );
+  });
+
+  test('every AskUserQuestion call in settings-advanced asks at most 4 questions', () => {
+    const calls = countQuestionsPerCall(workflow);
+    assert.ok(calls.length > 0, 'settings-advanced.md must contain AskUserQuestion calls');
+    const over = calls.filter((c) => c.questions > ASK_USER_QUESTION_QUESTION_CAP);
+    assert.deepStrictEqual(
+      over, [],
+      `AskUserQuestion calls over the ${ASK_USER_QUESTION_QUESTION_CAP}-question cap (line/questions): ${JSON.stringify(over)}`
+    );
+  });
+
+  test('Planning Tuning prompts for both stall keys with their current value pre-shown', () => {
+    assert.match(planning, /question:\s*"[^"]*stall threshold[^"]*\(current: <value or 10>\)"/i);
+    assert.match(planning, /question:\s*"[^"]*stall (check|poll) interval[^"]*\(current: <value or 5>\)"/i);
+  });
+
+  test('stall threshold and interval prompts require an integer >= 1', () => {
+    for (const key of ['planner.stall_threshold_minutes', 'planner.stall_detect_interval_minutes']) {
+      const found = findDocumentedDefault(planning, key, '>= 1');
+      assert.ok(found.occurrences > 0, `Planning Tuning must name ${key}`);
+      assert.ok(found.ok, `Planning Tuning must state a ">= 1" minimum near ${key}. Last window:\n${found.window}`);
+    }
+  });
+
+  test('threshold and interval are asked only when stall detection stays enabled', () => {
+    assert.match(
+      planning,
+      /only when[^\n]*planner\.stall_detection_enabled[^\n]*`true`/i,
+      'the threshold/interval prompt must be gated on the effective stall_detection_enabled value'
+    );
+  });
+
+  test('update_config and confirm steps carry both stall keys', () => {
+    const update = workflow.slice(workflow.indexOf('<step name="update_config">'), workflow.indexOf('<step name="model_policy">'));
+    const confirm = workflow.slice(workflow.indexOf('<step name="confirm">'));
+    for (const key of ['stall_threshold_minutes', 'stall_detect_interval_minutes']) {
+      assert.ok(update.includes(`"${key}": <new|existing>`), `update_config merge shape missing planner.${key}`);
+      assert.match(confirm, new RegExp(`\\|\\s*planner\\.${key}\\s*\\|\\s*\\{minutes\\}\\s*\\|`), `confirm table missing planner.${key}`);
+    }
+  });
+
+  test('inline plan threshold prompt no longer advertises a default of 3 (#3801 drift)', () => {
+    assert.doesNotMatch(planning, /Inline plan threshold[^\n]*current: <value or 3>/);
+    assert.doesNotMatch(planning, /Default: 3"/);
+  });
+
+  for (const value of ['1', '30']) {
+    test(`config-set planner.stall_threshold_minutes ${value} stores a Number and preserves siblings`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      const configPath = path.join(tmpDir, '.planning', 'config.json');
+      fs.writeFileSync(configPath, JSON.stringify({
+        model_profile: 'balanced',
+        planner: { stall_detection_enabled: true },
+      }, null, 2));
+
+      const set = runGsdTools(['config-set', 'planner.stall_threshold_minutes', value], tmpDir, { HOME: tmpDir });
+      assert.ok(set.success, `config-set failed: ${set.error || set.output}`);
+      const stored = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      assert.strictEqual(stored.planner.stall_threshold_minutes, Number(value));
+      assert.strictEqual(stored.planner.stall_detection_enabled, true, 'sibling planner key clobbered');
+      assert.strictEqual(stored.model_profile, 'balanced', 'top-level key clobbered');
+
+      const get = runGsdTools(['config-get', 'planner.stall_threshold_minutes', '--raw'], tmpDir, { HOME: tmpDir });
+      assert.ok(get.success, `config-get failed: ${get.error || get.output}`);
+      assert.strictEqual(get.output.trim(), value);
+    });
+  }
 });
 
 

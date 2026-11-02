@@ -189,3 +189,31 @@ re-review loop rewrites REVIEW.md on every iteration — a ledger kept inside it
 the next pass — and because REVIEW.md has a single writer (`gsd-code-reviewer`) that the gate is
 not. The gate remains advisory throughout: it reports and records, and never blocks phase
 completion.
+
+**Necessity findings (#4100):** at `standard` and `deep` depth the reviewer also asks whether the
+problem a piece of code addresses can occur in this stack at all. Code that is correct and reachable
+but guards against nothing (an impossible-state guard, a concern another layer already owns, a
+pattern whose prerequisites do not hold, a requirement that has lapsed, an abstraction with one
+instantiation) is reported as an ordinary Warning or Info finding carrying a `**Category:** necessity`
+line, never as Critical, and must cite the evidence that the state cannot occur. The frontmatter
+`necessity:` key counts them as a subset of `warning` + `info`; `total:` and the finding IDs are
+unchanged, so the disposition ledger records them like any other finding. Removing code is a scope
+decision, so `--fix` skips necessity findings and `--fix --all` includes them last, each marked for
+human verification. `--fix --auto` also stops once the fixer reports nothing left in its scope,
+rather than re-running to its iteration cap over findings it will never touch. See
+[Resolve necessity findings](../how-to/resolve-necessity-findings.md).
+
+**CI/CD pipeline files (#4101):** workflow files, Dockerfiles, compose files and deploy scripts get
+their own reliability rubric, recognized by path rather than extension. Their defects rarely fail a
+test; they surface at release or deploy time, so the reviewer is the only automated gate that reads
+them before merge. At `standard` and `deep` depth the reviewer checks for non-idempotent steps,
+missing job timeouts, deploy workflows without a concurrency guard, per-environment rebuilds instead
+of build-once/promote, deploys without a health check or rollback, `continue-on-error` on a
+load-bearing step, static cloud credentials where OIDC is supported, and unpinned third-party
+actions. The rubric is read on demand from `gsd-core/references/cicd-review-patterns.md`, which also
+lists what does not count (global tool installs, reusable-workflow calls, tag and SHA pins). `quick`
+depth runs the mechanical subset on GitHub Actions workflows only. Pipeline findings are Warning;
+hardcoded secrets stay Critical. The REVIEW.md format and the fixer scope are unchanged. Quick mode's
+own check list now names its checks and runs each from one command block, which also closes a gap:
+quick reviews now catch secret values containing `-`, `.` or `/`, `passthru`, and commented-out code.
+See [Resolve CI/CD pipeline findings](../how-to/resolve-cicd-pipeline-findings.md).

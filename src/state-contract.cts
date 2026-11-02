@@ -73,6 +73,7 @@ import fs from 'node:fs';
 // documented `state.cjs -> state-contract.cjs -> smart-entry.cjs -> state.cjs`
 // require cycle the file header warns about.
 import { WIRE_STATUS, parseRoadmapStatusCell } from './phase-status.cjs';
+import { PHASE_ENTRY_BOLD_CLOSE_SRC, phaseEntryRegExp } from './phase-entry-grammar.cjs';
 
 // ─── Public wire vocabulary ────────────────────────────────────────────────
 
@@ -240,9 +241,19 @@ function phasesFromProgressTable(
 // ─── phases: `## Phases` checkbox fallback ─────────────────────────────────
 
 // `- [x] **Phase 1: Foundation**` / `- [ ] **Phase 2.1: Hardening**`.
-const PHASE_BULLET_RE = /^[ \t]*[-*][ \t]+\[([ xX])\][ \t]+\*\*Phase[ \t]+(\d+(?:\.\d+)*)[ \t]*:?[ \t]*([^*\n]*)\*\*/gm;
+// The entry prefix (marker, box, bold token) is the phase-entry grammar's (#5764): capture
+// group 1 is the box character, 2 the number, 3 the name.
+const PHASE_BULLET_RE = phaseEntryRegExp(
+  `Phase[ \\t]+(\\d+(?:\\.\\d+)*)[ \\t]*:?[ \\t]*([^*\\n]*)${PHASE_ENTRY_BOLD_CLOSE_SRC}`,
+  'g',
+  { state: 'captured', bold: 'required' },
+);
 // #5626: the same bullet under `milestone-prefixed`: the number capture takes one optional `-NN` segment.
-const PHASE_BULLET_MILESTONE_RE = /^[ \t]*[-*][ \t]+\[([ xX])\][ \t]+\*\*Phase[ \t]+(\d+(?:-\d+)?(?:\.\d+)*)[ \t]*:?[ \t]*([^*\n]*)\*\*/gm;
+const PHASE_BULLET_MILESTONE_RE = phaseEntryRegExp(
+  `Phase[ \\t]+(\\d+(?:-\\d+)?(?:\\.\\d+)*)[ \\t]*:?[ \\t]*([^*\\n]*)${PHASE_ENTRY_BOLD_CLOSE_SRC}`,
+  'g',
+  { state: 'captured', bold: 'required' },
+);
 
 /**
  * STATE.md's current phase, via the same frontmatter-then-body chain

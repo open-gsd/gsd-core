@@ -1206,6 +1206,50 @@ export function withSection(
   return replaceSection(content, section, newBody);
 }
 
+// ─── heading slices (byte-exact writable window) ──────────────────────────────
+
+/** Character range `[start, end)` of one heading's writable slice. */
+export interface HeadingSliceRange {
+  /** Offset of the heading's `#`. */
+  start: number;
+  /** Exclusive end: the next heading of level <= `maxLevel`, or the end of the content. */
+  end: number;
+}
+
+/**
+ * Range of the slice that starts at `headings[index]` and runs to the next
+ * heading of level <= `maxLevel` (fence-aware: `headings` comes from
+ * `tokenizeHeadings`). Unlike `collectSection` it keeps the heading line and
+ * every trailing byte, so a caller that edits the slice can splice it back
+ * byte-exact (#5762).
+ */
+export function headingSliceRange(
+  content: string,
+  headings: HeadingToken[],
+  index: number,
+  maxLevel = 2,
+): HeadingSliceRange {
+  const next = headings.slice(index + 1).find((h) => h.level <= maxLevel);
+  return { start: headings[index].offset, end: next ? next.offset : content.length };
+}
+
+/**
+ * Run `edit` on `content.slice(range.start, end)` and splice the result back,
+ * where `end` excludes the single newline that precedes the next heading — the
+ * slice the pre-owner writers cut with `search(/\n#{1,2}[ \t]/)` — so a row
+ * inserted at the end of a table keeps the blank line before that heading.
+ */
+export function editHeadingSlice(
+  content: string,
+  range: HeadingSliceRange,
+  edit: (slice: string) => string,
+): string {
+  const end = range.end < content.length && range.end > range.start && content[range.end - 1] === '\n'
+    ? range.end - 1
+    : range.end;
+  return content.slice(0, range.start) + edit(content.slice(range.start, end)) + content.slice(end);
+}
+
 // ─── deleteSection ────────────────────────────────────────────────────────────
 
 /**
