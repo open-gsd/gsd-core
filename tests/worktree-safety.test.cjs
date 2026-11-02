@@ -3906,6 +3906,9 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     const absWorktree = path.join(repoRoot, worktreePath);
     fs.mkdirSync(path.join(absWorktree, '.planning'), { recursive: true });
     fs.writeFileSync(path.join(absWorktree, '.planning', 'q1-SUMMARY.md'), 'summary content');
+    // A linked worktree carries a `.git` FILE; since #4941 wave cleanup blocks
+    // a directory without one as `worktree_unregistered` before any rescue.
+    fs.writeFileSync(path.join(absWorktree, '.git'), 'gitdir: /repo/main/.git/worktrees/a1\n');
 
     const plan = {
       ok: true,
@@ -8582,6 +8585,9 @@ describe('#2596 SUMMARY-artifact predicate and its parity with the walker', () =
     // cross-check every collected path against the predicate.
     const tmp = createTempDir('wt-2596-summary-parity');
     t.after(() => cleanup(tmp));
+    // A linked worktree carries a `.git` FILE; since #4941 wave cleanup blocks
+    // a directory without one as `worktree_unregistered` before any rescue.
+    nodeFs.writeFileSync(path.join(tmp, '.git'), 'gitdir: /repo/main/.git/worktrees/a1\n');
 
     const planning = path.join(tmp, '.planning', 'phases', '3');
     nodeFs.mkdirSync(planning, { recursive: true });

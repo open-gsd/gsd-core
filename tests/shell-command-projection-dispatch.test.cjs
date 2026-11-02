@@ -91,6 +91,15 @@ describe('execGit', () => {
     assert.strictEqual(result.exitCode, 0);
   });
 
+  // #4941: a `-z` file listing must reach the caller byte for byte; trimmed,
+  // the first name loses its leading space and can match a different file.
+  test('rawStdout keeps a -z listing exact; the default trims it', () => {
+    fs.writeFileSync(path.join(tmpDir, ' lead.txt'), 'x');
+    const args = ['ls-files', '-z', '--others', '--exclude-standard', '--', ' lead.txt'];
+    assert.strictEqual(execGit(args, { cwd: tmpDir, rawStdout: true }).stdout, ' lead.txt\0');
+    assert.strictEqual(execGit(args, { cwd: tmpDir }).stdout, 'lead.txt\0');
+  });
+
   // #5548: cwd selects the repository; inherited location vars must not redirect it.
   describe('inherited repository-location env (#5548)', () => {
     const VARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_AUTHOR_NAME'];
