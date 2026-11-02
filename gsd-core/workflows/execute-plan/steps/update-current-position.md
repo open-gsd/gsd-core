@@ -9,28 +9,52 @@ IS_WORKTREE=$([ -f .git ] && echo "true" || echo "false")
 # Skip in parallel mode — orchestrator handles STATE.md centrally.
 if [ "$IS_WORKTREE" != "true" ]; then
   # Resolve and validate before the first STATE mutation.
-  PHASE_ID=$(cat <<'GSD_PLAN_PHASE'
+  # gsd:plan-timing-key:start
+  canonicalize_timing_id() {
+    local raw="$1" segment rest canonical=""
+    case "$raw" in ''|.*|*.|*..*|*[!0-9.]*) printf '%s' "$raw"; return ;; esac
+    rest=$raw
+    while :; do
+      case "$rest" in *.*) segment=${rest%%.*}; rest=${rest#*.} ;; *) segment=$rest; rest= ;; esac
+      segment=${segment#"${segment%%[!0]*}"}
+      segment=${segment:-0}
+      canonical="${canonical}${canonical:+.}${segment}"
+      [ -n "$rest" ] || break
+    done
+    printf '%s' "$canonical"
+  }
+  PHASE_ID=$(cat <<'GSD:PLAN:PHASE:5212'
 {phase}
-GSD_PLAN_PHASE
+GSD:PLAN:PHASE:5212
 )
-  PLAN_ID=$(cat <<'GSD_PLAN_NUMBER'
+  PLAN_ID=$(cat <<'GSD:PLAN:NUMBER:5212'
 {plan}
-GSD_PLAN_NUMBER
+GSD:PLAN:NUMBER:5212
 )
   PHASE_VALUE=$PHASE_ID
   PLAN_VALUE=$PLAN_ID
-  case "$PHASE_ID" in *[!0-9]*|'') ;; *) PHASE_ID=${PHASE_ID#"${PHASE_ID%%[!0]*}"}; PHASE_ID=${PHASE_ID:-0} ;; esac
-  case "$PLAN_ID" in *[!0-9]*|'') ;; *) PLAN_ID=${PLAN_ID#"${PLAN_ID%%[!0]*}"}; PLAN_ID=${PLAN_ID:-0} ;; esac
+  PHASE_ID=$(canonicalize_timing_id "$PHASE_ID")
+  PLAN_ID=$(canonicalize_timing_id "$PLAN_ID")
   TIMING_KEY=$(printf '%s\0%s' "$PHASE_ID" "$PLAN_ID" | git hash-object --stdin) || exit 1
   TIMING_FILE=$(git rev-parse --git-path "gsd-plan-timing-$TIMING_KEY") || exit 1
+  # gsd:plan-timing-key:end
   DURATION=$(tail -n 1 "$TIMING_FILE.result") || exit 1
   [[ "$DURATION" =~ ^([0-9]+\ min|[0-9]+h\ [0-5]?[0-9]m)$ ]] || { echo "ERROR: cached plan duration is missing or invalid; rerun record_completion_time before STATE updates." >&2; exit 1; }
+  TASK_COUNT_VALUE=$(cat <<'GSD:PLAN:TASKS:5212'
+{task_count}
+GSD:PLAN:TASKS:5212
+)
+  FILE_COUNT_VALUE=$(cat <<'GSD:PLAN:FILES:5212'
+{file_count}
+GSD:PLAN:FILES:5212
+)
+  [[ "$TASK_COUNT_VALUE" =~ ^[0-9]+$ && "$FILE_COUNT_VALUE" =~ ^[0-9]+$ ]] || { echo "ERROR: plan task/file counts are missing or invalid; provide the measured counts before STATE updates." >&2; exit 1; }
 
   gsd_run query state.advance-plan
   gsd_run query state.update-progress
   gsd_run query state.record-metric \
     --phase "$PHASE_VALUE" --plan "$PLAN_VALUE" --duration "${DURATION}" \
-    --tasks "${TASK_COUNT}" --files "${FILE_COUNT}"
+    --tasks "$TASK_COUNT_VALUE" --files "$FILE_COUNT_VALUE"
 fi
 ```
 </step>

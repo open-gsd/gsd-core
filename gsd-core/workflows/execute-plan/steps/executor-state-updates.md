@@ -4,36 +4,89 @@ Apply response_language to all user-facing prose — narration between tool call
 ```bash
 _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; GSD_TOOLS="${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}"; _gsd_at() { for _p; do if [ -f "$_p" ]; then GSD_TOOLS="$_p"; return 0; fi; done; return 1; }; _gsd_id_ok() { case "$("$1" runtime-identity --raw 2>/dev/null || true)" in '{"packageName":"@opengsd/gsd-core"'*'}') return 0;; *) return 1;; esac; }; _gsd_homes() { set -- "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}" "$HOME/.gemini/antigravity-ide" "$HOME/.gemini/antigravity-cli" "${AUGMENT_CONFIG_DIR:-$HOME/.augment}" "${CLINE_CONFIG_DIR:-$HOME/.cline}" "${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}" "${CODEX_HOME:-$HOME/.codex}" "${COPILOT_CONFIG_DIR:-${COPILOT_HOME:-$HOME/.copilot}}" "${CURSOR_CONFIG_DIR:-$HOME/.cursor}" "${HERMES_HOME:-$HOME/.hermes}" "${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}" "${KIMI_CONFIG_DIR:-$HOME/.config/agents}" "$HOME/.agents" "${KIMI_CODE_HOME:-$HOME/.kimi-code}" "${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}" "${QWEN_CONFIG_DIR:-$HOME/.qwen}" "${TRAE_CONFIG_DIR:-$HOME/.trae}" "${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}" "${ZCODE_CONFIG_DIR:-$HOME/.zcode}" "${GROK_AGENTS_HOME:-$HOME/.agents}"; for _h; do _gsd_at "$_h/gsd-core/bin/${_GSD_SHIM_NAME}" && return 0; done; return 1; }; if _gsd_at "${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.claude/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.codex/gsd-core/bin/${_GSD_SHIM_NAME}"; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif _gsd_homes; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif unset -f gsd_run; _G="$(command -v gsd_run)"; [ -n "$_G" ] && _gsd_id_ok "$_G"; then GSD_TOOLS="$_G"; gsd_run() { "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and no identity-proving gsd_run is on PATH. Run: npx -y @opengsd/gsd-core@latest --claude --local" >&2; exit 1; fi; GSD_IDENTITY_STATUS=unverified; _gsd_id_ok gsd_run && GSD_IDENTITY_STATUS=ok; export GSD_IDENTITY_STATUS; [ "$GSD_IDENTITY_STATUS" = ok ] || echo "WARNING: \"$GSD_TOOLS\" did not prove it is @opengsd/gsd-core - it is either a different package or an @opengsd/gsd-core older than the runtime-identity verb. See docs/how-to/diagnose-a-foreign-gsd-tools.md" >&2; if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -n "${GSD_TOOLS:-}" ]; then printf "export PATH='%s':\"\$PATH\"\n" "${GSD_TOOLS%/*}" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true; fi
 # Resolve first; a bad result must leave STATE untouched.
-PHASE_ID=$(cat <<'GSD_PLAN_PHASE'
+# gsd:plan-timing-key:start
+canonicalize_timing_id() {
+  local raw="$1" segment rest canonical=""
+  case "$raw" in ''|.*|*.|*..*|*[!0-9.]*) printf '%s' "$raw"; return ;; esac
+  rest=$raw
+  while :; do
+    case "$rest" in *.*) segment=${rest%%.*}; rest=${rest#*.} ;; *) segment=$rest; rest= ;; esac
+    segment=${segment#"${segment%%[!0]*}"}
+    segment=${segment:-0}
+    canonical="${canonical}${canonical:+.}${segment}"
+    [ -n "$rest" ] || break
+  done
+  printf '%s' "$canonical"
+}
+PHASE_ID=$(cat <<'GSD:PLAN:PHASE:5212'
 {phase}
-GSD_PLAN_PHASE
+GSD:PLAN:PHASE:5212
 )
-PLAN_ID=$(cat <<'GSD_PLAN_NUMBER'
+PLAN_ID=$(cat <<'GSD:PLAN:NUMBER:5212'
 {plan}
-GSD_PLAN_NUMBER
+GSD:PLAN:NUMBER:5212
 )
 PHASE_VALUE=$PHASE_ID
 PLAN_VALUE=$PLAN_ID
-case "$PHASE_ID" in *[!0-9]*|'') ;; *) PHASE_ID=${PHASE_ID#"${PHASE_ID%%[!0]*}"}; PHASE_ID=${PHASE_ID:-0} ;; esac
-case "$PLAN_ID" in *[!0-9]*|'') ;; *) PLAN_ID=${PLAN_ID#"${PLAN_ID%%[!0]*}"}; PLAN_ID=${PLAN_ID:-0} ;; esac
+PHASE_ID=$(canonicalize_timing_id "$PHASE_ID")
+PLAN_ID=$(canonicalize_timing_id "$PLAN_ID")
 TIMING_KEY=$(printf '%s\0%s' "$PHASE_ID" "$PLAN_ID" | git hash-object --stdin) || exit 1
 TIMING_FILE=$(git rev-parse --git-path "gsd-plan-timing-$TIMING_KEY") || exit 1
+# gsd:plan-timing-key:end
 DURATION=$(tail -n 1 "$TIMING_FILE.result") || exit 1
 [[ "$DURATION" =~ ^([0-9]+\ min|[0-9]+h\ [0-5]?[0-9]m)$ ]] || { echo "ERROR: cached plan duration is missing or invalid; rerun record_completion_time before STATE updates." >&2; exit 1; }
+TASK_COUNT_VALUE=$(cat <<'GSD:PLAN:TASKS:5212'
+{task_count}
+GSD:PLAN:TASKS:5212
+)
+FILE_COUNT_VALUE=$(cat <<'GSD:PLAN:FILES:5212'
+{file_count}
+GSD:PLAN:FILES:5212
+)
+[[ "$TASK_COUNT_VALUE" =~ ^[0-9]+$ && "$FILE_COUNT_VALUE" =~ ^[0-9]+$ ]] || { echo "ERROR: plan task/file counts are missing or invalid; provide the measured counts before STATE updates." >&2; exit 1; }
 
 gsd_run query state.advance-plan
 gsd_run query state.update-progress
 gsd_run query state.record-metric \
   --phase "$PHASE_VALUE" --plan "$PLAN_VALUE" --duration "${DURATION}" \
-  --tasks "${TASK_COUNT}" --files "${FILE_COUNT}"
+  --tasks "$TASK_COUNT_VALUE" --files "$FILE_COUNT_VALUE"
 
-# Add decisions (extract from SUMMARY.md key-decisions).
-# --phase prevents fallback to STATE.md's global pointer for out-of-order plans (#4763).
-for decision in "${DECISIONS[@]}"; do
-  gsd_run query state.add-decision --phase "${PHASE}" --summary "${decision}"
-done
+# Add decisions from the just-written SUMMARY without inheriting a shell array.
+SUMMARY_PATH=$(cat <<'GSD:PLAN:SUMMARY:5212'
+{summary_path}
+GSD:PLAN:SUMMARY:5212
+)
+if [ -n "$SUMMARY_PATH" ]; then
+  DECISIONS_JSON=$(gsd_run query summary-extract "$SUMMARY_PATH" --fields decisions) || exit 1
+  DECISION_DIR=$(mktemp -d "${TMPDIR:-/tmp}/gsd-plan-decisions.XXXXXX") || exit 1
+  trap 'rm -rf -- "$DECISION_DIR"' EXIT
+  printf '%s' "$DECISIONS_JSON" | DECISION_DIR="$DECISION_DIR" node -e '
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const input = JSON.parse(fs.readFileSync(0, "utf8"));
+    const rows = [];
+    for (const [index, decision] of (input.decisions || []).entries()) {
+      const summary = path.join(process.env.DECISION_DIR, String(index) + ".summary");
+      const rationale = path.join(process.env.DECISION_DIR, String(index) + ".rationale");
+      fs.writeFileSync(summary, String(decision.summary || ""));
+      if (decision.rationale) fs.writeFileSync(rationale, String(decision.rationale));
+      rows.push(summary + "\t" + (decision.rationale ? rationale : "-"));
+    }
+    fs.writeFileSync(path.join(process.env.DECISION_DIR, "manifest"), rows.join("\n") + (rows.length ? "\n" : ""));
+  ' || exit 1
+  while IFS="$(printf '\t')" read -r summary_file rationale_file; do
+    [ -n "$summary_file" ] || continue
+    if [ "$rationale_file" = "-" ]; then
+      gsd_run query state.add-decision --phase "$PHASE_VALUE" --summary-file "$summary_file"
+    else
+      gsd_run query state.add-decision --phase "$PHASE_VALUE" --summary-file "$summary_file" --rationale-file "$rationale_file"
+    fi
+  done < "$DECISION_DIR/manifest"
+  rm -rf -- "$DECISION_DIR"
+  trap - EXIT
+fi
 
 gsd_run query state.record-session \
-  --stopped-at "Completed ${PHASE}-${PLAN}-PLAN.md" --resume-file "None"
+  --stopped-at "Completed ${PHASE_VALUE}-${PLAN_VALUE}-PLAN.md" --resume-file "None"
 ```
 </step>

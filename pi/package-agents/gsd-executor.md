@@ -97,7 +97,7 @@ Parse: frontmatter (phase, plan, type, autonomous, wave, depends_on), objective,
 </step>
 
 <step name="record_start_time">
-Read and execute `gsd-core/workflows/execute-plan/steps/record-start-time.md`. Replace `{timing_attempt}` with `fresh` when this prompt has no `<completed_tasks>` payload, or `continuation` when it does. The part's shell guard, not step-skipping prose, decides whether the marker is replaced or preserved (#5212).
+Read and execute `__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/execute-plan/steps/record-start-time.md`. Replace `{timing_attempt}` with `fresh` when this prompt has no `<completed_tasks>` payload, or `continuation` when it does. The part's shell guard, not step-skipping prose, decides whether the marker is replaced or preserved (#5212).
 </step>
 
 <worktree_metadata_capture>
@@ -635,7 +635,7 @@ file individually. If a file appears untracked but is not part of your task, lea
 </destructive_git_prohibition>
 
 <step name="record_completion_time">
-After verification, before SUMMARY, read and execute `gsd-core/workflows/execute-plan/steps/record-completion-time.md`; rerun it after more work to refresh completion. A continuation must use the original worktree whose Git metadata owns the marker; follow the part's recovery diagnostic instead of creating a new start.
+After verification, before SUMMARY, read and execute `__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/execute-plan/steps/record-completion-time.md`; rerun it after more work to refresh completion. A continuation must use the original worktree whose Git metadata owns the marker; follow the part's recovery diagnostic instead of creating a new start.
 </step>
 
 <summary_creation>
@@ -771,8 +771,8 @@ After SUMMARY.md, update ROADMAP.md progress FIRST, then STATE.md. The ROADMAP w
 PROGRESS=$(gsd_run query roadmap.update-plan-progress "${PHASE_NUMBER}") && REASON=$(jq -er '.reason//""' <<<"$PROGRESS") && [ "$REASON" != missing_phase_details ] || { echo "ERROR: ROADMAP update-plan-progress did not complete for ${PHASE_NUMBER}-${PLAN} (missing_phase_details decline, failed query, or jq not installed). STOP: skip this plan's completion steps." >&2; exit 1; }
 ```
 
-Then update STATE.md using `gsd-tools query` state handlers (named flags):
-Read and execute `gsd-core/workflows/execute-plan/steps/executor-state-updates.md`. It resolves and validates the cached duration before the first STATE mutation, then records the metric, decisions, and session.
+Then update STATE.md using `gsd-tools query` state handlers (named flags).
+Read and execute `__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/execute-plan/steps/executor-state-updates.md`. Replace `{task_count}` and `{file_count}` with the measured completed-task and changed-file counts, and `{summary_path}` with the SUMMARY.md path just written. The part resolves every value it consumes in its own shell, validates the cached duration before the first STATE mutation, then records the metric, SUMMARY decisions, and session. It never relies on `${DECISIONS[@]}`, `${PHASE}`, or other variables from an earlier Bash call.
 
 ```bash
 # Mark completed requirements from PLAN.md frontmatter
@@ -841,10 +841,10 @@ the regression #3678 reported, where the agent leaks `.planning/` artifacts
 into the user's project history.
 </final_commit>
 
-<clear_plan_timing>
+<step name="clear_plan_timing">
 On successful close-out remove markers; retain them for checkpoint/failure continuation.
-Read and execute `gsd-core/workflows/execute-plan/steps/clear-plan-timing.md`.
-</clear_plan_timing>
+Read and execute `__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/execute-plan/steps/clear-plan-timing.md`.
+</step>
 
 <completion_format>
 ```markdown

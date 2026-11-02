@@ -34,11 +34,13 @@ describe('#4783 execute-phase continuation spawn does not point at a missing tem
 
   test('step 6 still states the continuation placeholders and the <completed_tasks> tag itself', () => {
     const text = readFileNormalized(EXECUTE);
-    const step = /\*\*Spawn continuation agent \(NOT resume\)\*\*[\s\S]*?\n7\. /.exec(text);
+    const step = /\*\*Spawn continuation agent \(NOT resume\)[^*\n]*\*\*[\s\S]*?\n7\. /.exec(text);
     assert.ok(step, 'could not locate the continuation spawn step');
-    for (const placeholder of ['{completed_tasks_table}', '{resume_task_number}', '{resume_task_name}', '{user_response}', '{resume_instructions}']) {
+    for (const placeholder of ['{completed_tasks_table}', '{resume_task_number}', '{resume_task_name}', '{user_response}', '{resume_instructions}', '{worktree_path}']) {
       assert.ok(step[0].includes(placeholder), `step 6 must state ${placeholder}`);
     }
     assert.ok(step[0].includes('<completed_tasks>'), 'step 6 must name the <completed_tasks> tag the executor keys on');
+    assert.ok(step[0].includes('original executor worktree'), 'step 6 must preserve the worktree that owns continuation metadata');
+    assert.ok(step[0].includes('fail closed'), 'step 6 must refuse a missing continuation worktree');
   });
 });

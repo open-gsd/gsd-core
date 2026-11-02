@@ -18,6 +18,13 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
   const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
   const { createTempDir, cleanup } = require('./helpers.cjs');
   const WORKFLOW = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-plan.md');
+  const TIMING_PARTS = [
+    'record-start-time.md',
+    'record-completion-time.md',
+    'executor-state-updates.md',
+    'update-current-position.md',
+    'clear-plan-timing.md',
+  ].map((name) => path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-plan', 'steps', name));
   const TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
   const NO_BASH = process.platform === 'win32' || runHook('-c', ['exit 0'], {
     interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS,
@@ -31,12 +38,22 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
     const end = source.indexOf(step ? '</step>' : `</${tag}>`, start);
     assert.ok(end > start, `${tag} must close`);
     const section = source.slice(start + opening.length, end);
-    const match = /`((?:~\/\.claude\/)?gsd-core\/workflows\/[^`]+\.md)`/.exec(section);
+    const match = /`((?:~\/\.claude\/)?gsd-core\/workflows\/[^`]{1,500}\.md)`/.exec(section);
     assert.ok(match, `${tag} must name its workflow part`);
     return {
       declaredPath: match[1],
       sourcePath: match[1].replace(/^~\/\.claude\//, ''),
     };
+  }
+
+  function timingKeyBlock(file) {
+    const lines = splitLines(fs.readFileSync(file, 'utf8'));
+    const start = lines.findIndex((line) => line.trim() === '# gsd:plan-timing-key:start');
+    const end = lines.findIndex((line, index) => index > start && line.trim() === '# gsd:plan-timing-key:end');
+    assert.ok(start !== -1 && end > start, `${path.basename(file)} must delimit its timing-key resolver`);
+    return lines.slice(start + 1, end)
+      .map((line) => line.trimStart())
+      .filter((line) => !line.startsWith('PHASE_VALUE=') && !line.startsWith('PLAN_VALUE='));
   }
 
   function timingFence(file, tag, step = false, followPart = true) {
@@ -54,15 +71,15 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
       lines.slice(block.openLineIdx + 1, block.closeLineIdx).some((line) => line.includes('state.record-metric'))
     ));
     if (!fence && followPart) {
-      const part = /`(gsd-core\/workflows\/[^`]+\.md)`/.exec(lines.join('\n'));
-      if (part) return timingFence(path.join(__dirname, '..', part[1]), tag, true, false);
+      const part = /`((?:~\/\.claude\/)?gsd-core\/workflows\/[^`]+\.md)`/.exec(lines.join('\n'));
+      if (part) return timingFence(path.join(__dirname, '..', part[1].replace(/^~\/\.claude\//, '')), tag, true, false);
     }
     fence ??= fences[0];
     if (!fence && followPart) {
       // A spine step may delegate to a workflow part; execute the part it names.
-      const part = /`(gsd-core\/workflows\/[^`]+\.md)`/.exec(lines.join('\n'));
+      const part = /`((?:~\/\.claude\/)?gsd-core\/workflows\/[^`]+\.md)`/.exec(lines.join('\n'));
       assert.ok(part, `${tag} must have a Bash fence or name the workflow part that carries it`);
-      return timingFence(path.join(__dirname, '..', part[1]), tag, true, false);
+      return timingFence(path.join(__dirname, '..', part[1].replace(/^~\/\.claude\//, '')), tag, true, false);
     }
     assert.ok(fence && fence.closeLineIdx !== -1, `${tag} must have a complete Bash fence`);
     return lines.slice(fence.openLineIdx + 1, fence.closeLineIdx).join('\n');
@@ -85,6 +102,8 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
     mutationLog = '',
     taskCount = 2,
     fileCount = 3,
+    summaryPath = '',
+    decisionsJson = '{"decisions":[]}',
   ) {
     const [phase, plan] = identity;
     const executableCode = splitLines(code)
@@ -97,13 +116,14 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
       'date() { if [ "$*" = +%s ]; then printf "%s\\n" "$FIXTURE_EPOCH"; else printf "%s\\n" "$FIXTURE_ISO"; fi; }',
       // Intercept only the state mutation to inspect the actual named arguments.
       realCli ? 'gsd_run() { node "$FIXTURE_TOOLS" "$@"; }' :
-        'gsd_run() { if [ -n "$FIXTURE_MUTATION_LOG" ]; then node -e \'const fs=require("node:fs");fs.appendFileSync(process.argv[1],JSON.stringify(process.argv.slice(2))+"\\n")\' "$FIXTURE_MUTATION_LOG" "$@"; fi; if [ "$2" = state.record-metric ]; then node -e \'const a=process.argv.slice(1);process.stdout.write(JSON.stringify({duration:a[a.indexOf("--duration")+1]})+"\\n")\' "$@"; fi; }',
+        'gsd_run() { if [ -n "$FIXTURE_MUTATION_LOG" ]; then node -e \'const fs=require("node:fs");fs.appendFileSync(process.argv[1],JSON.stringify(process.argv.slice(2))+"\\n")\' "$FIXTURE_MUTATION_LOG" "$@"; fi; if [ "$2" = summary-extract ]; then printf "%s\\n" "$FIXTURE_DECISIONS_JSON"; elif [ "$2" = state.record-metric ]; then node -e \'const a=process.argv.slice(1);process.stdout.write(JSON.stringify({duration:a[a.indexOf("--duration")+1]})+"\\n")\' "$@"; fi; }',
       executableCode
         .replaceAll('{phase}', phase)
         .replaceAll('{plan}', plan)
         .replaceAll('{timing_attempt}', attempt)
         .replaceAll('{task_count}', String(taskCount))
-        .replaceAll('{file_count}', String(fileCount)),
+        .replaceAll('{file_count}', String(fileCount))
+        .replaceAll('{summary_path}', summaryPath),
       ...(expose ? ['node -e \'process.stdout.write(JSON.stringify({file:process.argv[1]})+"\\n")\' "${TIMING_FILE:-}"'] : []),
     ].join('\n');
     const result = runHook('-c', [script], {
@@ -112,6 +132,7 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
         ...process.env, FIXTURE_TOOLS: TOOLS,
         FIXTURE_EPOCH: String(epoch), FIXTURE_ISO: new Date(epoch * 1000).toISOString().replace('.000Z', 'Z'),
         GSD_TEST_MODE: '1', GSD_NOW_MS: String(epoch * 1000), FIXTURE_MUTATION_LOG: mutationLog,
+        FIXTURE_DECISIONS_JSON: decisionsJson,
       },
     });
     throwIfFailed(result, 'fresh timing shell');
@@ -128,7 +149,7 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
     for (const [tag, agentStep] of [
       ['record_start_time', true],
       ['record_completion_time', true],
-      ['clear_plan_timing', false],
+      ['clear_plan_timing', true],
     ]) {
       const agentPart = delegatedPart(AGENT, tag, agentStep);
       const workflowPart = delegatedPart(WORKFLOW, tag, true);
@@ -144,6 +165,11 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
       );
       assert.equal(agentPart.sourcePath, workflowPart.sourcePath, `${tag} delegation paths must share one source`);
     }
+  });
+
+  test('#5212: every timing part shares one canonical identity-to-key program', () => {
+    const [owner, ...mirrors] = TIMING_PARTS.map(timingKeyBlock);
+    for (const mirror of mirrors) assert.deepEqual(mirror, owner);
   });
 
   for (const surface of surfaces) {
@@ -370,6 +396,41 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
         } finally { cleanup(dir); }
       });
 
+      if (surface.name === 'executor') test('the state-update shell extracts SUMMARY decisions without an inherited array', () => {
+        const dir = fixture();
+        try {
+          const mutationLog = path.join(dir, 'decision-mutations.jsonl');
+          runFresh(dir, start(), 1000);
+          runFresh(dir, finish(), 1060);
+          runFresh(
+            dir,
+            timingFence(surface.file, surface.metric, surface.step),
+            1060,
+            ['03', '01'],
+            false,
+            false,
+            'fresh',
+            mutationLog,
+            2,
+            3,
+            '.planning/phases/03-example/03-01-SUMMARY.md',
+            JSON.stringify({ decisions: [
+              { summary: 'Use $HOME literally', rationale: 'Preserve * and spaces' },
+              { summary: 'No rationale', rationale: null },
+            ] }),
+          );
+          const calls = splitLines(fs.readFileSync(mutationLog, 'utf8')).filter(Boolean).map(JSON.parse);
+          const decisions = calls.filter((call) => call[1] === 'state.add-decision');
+          assert.equal(decisions.length, 2);
+          for (const call of decisions) {
+            assert.equal(call[call.indexOf('--phase') + 1], '03');
+            assert.ok(call.includes('--summary-file'));
+          }
+          assert.ok(decisions[0].includes('--rationale-file'));
+          assert.equal(decisions[1].includes('--rationale-file'), false);
+        } finally { cleanup(dir); }
+      });
+
       test('phase and plan text is data, never shell syntax', () => {
         const dir = fixture();
         try {
@@ -397,7 +458,7 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
           runFresh(dir, start(), 1000, identity);
           const summary = runFresh(dir, finish(), 1000 + 59 * 60 + 59, identity);
           const lines = splitLines(timingFence(surface.file, surface.metric, surface.step));
-          const begin = lines.findIndex((line) => line.trimStart().startsWith('PHASE_ID='));
+          const begin = lines.findIndex((line) => line.trim() === '# gsd:plan-timing-key:start');
           const firstMutation = lines.findIndex((line) => line.trimStart().startsWith('gsd_run query state.advance-plan'));
           const call = lines.findIndex((line) => line.trimStart().startsWith('gsd_run query state.record-metric'));
           assert.ok(begin !== -1 && firstMutation > begin && call > firstMutation,
