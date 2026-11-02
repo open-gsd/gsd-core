@@ -214,6 +214,7 @@
   - [Unreadable-Directory Scope Signal](#4014-unreadable-directory-scope-signal)
   - [Graphify CLI Preferred for Planner and Researcher Graph Queries](#4836-graphify-cli-preferred-for-planner-and-researcher-graph-queries)
   - [Gate Evidence and Verdict-Driven Exit Status](#5170-gate-evidence-and-verdict-driven-exit-status)
+  - [Agent Model Guard](#5328-agent-model-guard)
 
 ---
 
@@ -1567,7 +1568,7 @@ PreToolUse hook that detects when Claude attempts file edits outside a GSD workf
 Test suite that scans all agent, workflow, and command files for embedded injection vectors.
 
 **5. Agent Isolation and Model Guard Hook** (`gsd-agent-isolation-guard.js`)
-PreToolUse hook. Besides the isolation-parameter check, on Claude Code it compares the `model` passed to `Agent()`/`Task()` for `gsd-executor`, `gsd-verifier`, `gsd-plan-checker` and `gsd-planner` with the resolved model (tier level: `claude-sonnet-4-6` equals `sonnet`). `hooks.agent_model_guard`: `"warn"` (default; any other stored value behaves as warn) adds model-visible context on mismatch, `"deny"` blocks a wrong or an omitted model, `false` disables. A deliberate escalation via `resolve-execution <agent>` (`--attempt N` or `--failure-class`) writes a single-slot `.gsd/model-escalation-<agent>.json` that the guard honours for 10 minutes, only for a model of the same tier family and, when both the dispatch and the record carry a session id, only if `resolve-execution` ran in that session; nothing clears it earlier. `--attempt N` records only when `dynamic_routing` `tier_models` or a quota `--failure-class` resolves a model other than the baseline; otherwise it resolves the baseline and records nothing, so under `"deny"` pass the resolved model. Fails open on any inability to verify, including a root `.planning/config.json` larger than 64 KiB, so `"deny"` is not enforced then.
+PreToolUse hook. Besides the isolation-parameter check, on Claude Code it compares the `model` passed to `Agent()`/`Task()` for the four guarded GSD agents with the model GSD resolved for them; see [Agent Model Guard](#5328-agent-model-guard).
 
 **Requirements:**
 - REQ-SEC-01: All user-supplied file paths MUST be validated against the project directory
@@ -4727,6 +4728,14 @@ default location.
 **Known limits:** `checkUiPresence` is a vocabulary check over prose and reads nothing; it stays outside the evidence type. Gates whose accepted-evidence model is narrower than GSD's producers (#4692, #4867, #4957) are out of scope.
 
 **Reference:** [Gate verb exit statuses](CLI-TOOLS.md#gate-verb-exit-statuses-5170) · [Exit code reference](reference/exit-codes.md) · [Handle gate verb exit statuses](how-to/handle-gate-verb-exit-statuses.md)
+
+---
+
+### 5328. Agent Model Guard
+
+**Purpose:** Catch an orchestrator that dispatches a guarded GSD agent on a model other than the one GSD resolved for it (#5328).
+
+PreToolUse hook. Besides the isolation-parameter check, on Claude Code it compares the `model` passed to `Agent()`/`Task()` for `gsd-executor`, `gsd-verifier`, `gsd-plan-checker` and `gsd-planner` with the resolved model (tier level: `claude-sonnet-4-6` equals `sonnet`). `hooks.agent_model_guard`: `"warn"` (default; any other stored value behaves as warn) adds model-visible context on mismatch, `"deny"` blocks a wrong or an omitted model, `false` disables. A deliberate escalation via `resolve-execution <agent>` (`--attempt N` or `--failure-class`) writes a single-slot `.gsd/model-escalation-<agent>.json` that the guard honours for 10 minutes, only for a model of the same tier family and, when both the dispatch and the record carry a session id, only if `resolve-execution` ran in that session; nothing clears it earlier. `--attempt N` records only when `dynamic_routing` `tier_models` or a quota `--failure-class` resolves a model other than the baseline; otherwise it resolves the baseline and records nothing, so under `"deny"` pass the resolved model. Fails open on any inability to verify, including a root `.planning/config.json` larger than 64 KiB, so `"deny"` is not enforced then.
 
 ---
 
