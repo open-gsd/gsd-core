@@ -2750,16 +2750,15 @@ function plannedPhaseCore(
       phase: `${intent.phaseNumber}${labelName ? ` (${labelName})` : ''} — READY TO EXECUTE`,
       status: 'Ready to execute',
       lastActivity: `${today} — Phase ${intent.phaseNumber} planning complete`,
-      plan: planned.plan,
-      currentPlan: planned.currentPlan,
     },
     statusDefaults,
     lastActivityDefaults,
   );
   if (body !== beforePos) updated.push('Current Position');
-  // The first-match line advance-plan reads, wherever it sits.
+  // The plan lines are written once, on the first-match line advance-plan reads, wherever it sits.
   if (planned.plan !== undefined) body = stateReplaceField(body, 'Plan', planned.plan) || body;
   if (planned.currentPlan !== undefined) body = stateReplaceField(body, 'Current Plan', planned.currentPlan) || body;
+  if (!updated.includes('Current Position') && posSlice(body) !== posBefore) updated.push('Current Position');
   if (stateExtractField(body, 'Plan') !== stateExtractField(beforePos, 'Plan')) updated.push('Plan');
   if (stateExtractField(body, 'Current Plan') !== stateExtractField(beforePos, 'Current Plan')) updated.push('Current Plan');
 

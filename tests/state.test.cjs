@@ -5763,6 +5763,17 @@ describe('state planned-phase command', () => {
     assert.ok(!JSON.parse(r.output).updated.includes('Current Plan'));
   });
 
+  test('#5320: a stray earlier Plan: line is the one written; the section line keeps its own position', () => {
+    writeTbdPlanFixture(['Phase: 19', 'Plan: 2 of 4 in current phase', 'Status: Ready']);
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, fs.readFileSync(statePath, 'utf8').replace('# Project State\n', '# Project State\n\nPlan: 1 of 4\n'));
+    const r = runGsdTools([...PLAN_CMD, '6'], tmpDir);
+    assert.ok(r.success, r.error);
+    const after = fs.readFileSync(statePath, 'utf8');
+    assert.match(after, /^Plan: 1 of 6$/m, `the first-match line is written; STATE.md was:\n${after}`);
+    assert.match(after, /^Plan: 2 of 4 in current phase$/m, `the section line is not overwritten from the stray one; STATE.md was:\n${after}`);
+  });
+
   test('#5320: replan keeps the recorded plan number and moves only the total', () => {
     writeTbdPlanFixture(['Phase: 19', 'Plan: 2 of 5 in current phase', 'Current Plan: 2 of 5 in current phase', 'Status: Ready']);
     const r = runGsdTools(['state', 'planned-phase', '--phase', '19', '--name', 'Tbd', '--plans', '6'], tmpDir);
