@@ -5752,6 +5752,21 @@ describe('state planned-phase command', () => {
     }
   });
 
+  test('#5320: every planned-phase refusal carries its exit class (--json-errors reason)', () => {
+    // [fixture lines, --plans, reason]: a recorded position that cannot be held or is below --plans is a usage error; a document problem is not
+    for (const [lines, plans, reason] of [
+      [['Phase: 19', 'Status: Ready'], '3', ERROR_REASON.UNKNOWN],
+      [['Phase: 19', 'Plan: 2 of 5', 'Current Plan: 3 of 5', 'Status: Ready'], '6', ERROR_REASON.UNKNOWN],
+      [['Phase: 19', 'Plan: 3 of 5', 'Status: Ready'], '2', ERROR_REASON.USAGE],
+      [['Phase: 19', 'Plan: 99999999999999999999 of 5', 'Status: Ready'], '3', ERROR_REASON.USAGE],
+    ]) {
+      writeTbdPlanFixture(lines);
+      const r = runGsdTools([...PLAN_CMD, plans, '--json-errors'], tmpDir);
+      assert.strictEqual(r.success, false, lines.join(' / '));
+      assert.strictEqual(JSON.parse(r.error).reason, reason, lines.join(' / '));
+    }
+  });
+
   test('#5320: an unreadable Current Plan beside a readable Total Plans in Phase is left as written', () => {
     // complete-phase writes `Current Plan: Not started`; only the Total line records --plans there.
     writeTbdPlanFixture(['Phase: 19', 'Current Plan: Not started', 'Total Plans in Phase: 5', 'Status: Ready']);
