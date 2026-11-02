@@ -240,15 +240,9 @@ tsconfig*.json
 .github/rulesets/**
 ```
 
-These paths are also code-touching but lightweight (test-inert), as are the
-administrative workflows allowlisted in `INERT_WORKFLOWS` (`scripts/ci-test-scope.cjs`):
-
-```
-CONTRIBUTING.md
-docs/registries/README.md
-.github/pull_request_template.md
-.github/PULL_REQUEST_TEMPLATE/**
-```
+Files that `isTemplateLinkDoc` matches (`scripts/ci-test-scope.cjs`) are also
+code-touching but lightweight (test-inert), as are the administrative workflows
+allowlisted in `INERT_WORKFLOWS`.
 
 These lists should stay aligned with changeset/docs policy where those gates care
 about the same user-facing surfaces.

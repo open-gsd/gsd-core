@@ -69,10 +69,27 @@ const WORKFLOW_LINT_TESTS = [
   'tests/lint-pr-check-project-dir.test.cjs',
 ];
 
-// PR templates, CONTRIBUTING.md (the anchor target) and docs/registries/README.md (the registry-entry link target)
-// are docs, but their links are guarded by a test: they count as a lightweight code change (like inert CI) so that test is selected.
-const isTemplateLinkDoc = filePath => filePath === 'CONTRIBUTING.md' || filePath === 'docs/registries/README.md' ||
-  filePath === '.github/pull_request_template.md' || filePath.startsWith('.github/PULL_REQUEST_TEMPLATE/');
+// GitHub's default PR-template locations: the root, docs/ and .github/, as
+// pull_request_template.md or a PULL_REQUEST_TEMPLATE/ directory (names case-insensitive).
+// CONTRIBUTING.md (the anchor target) and docs/registries/README.md (the registry-entry
+// link target) are docs whose links a test guards: they count as lightweight code
+// changes (like inert CI), so that test is selected.
+const isPrTemplate = filePath =>
+  /^(?:(?:\.github|docs)\/)?pull_request_template(?:\.md|\/.+)$/i.test(filePath);
+const isTemplateLinkDoc = filePath => filePath === 'CONTRIBUTING.md' ||
+  filePath === 'docs/registries/README.md' || isPrTemplate(filePath);
+const isLightweight = filePath => isInertCi(filePath) || isTemplateLinkDoc(filePath);
+const TEMPLATE_LINK_OBSERVERS = [
+  'tests/pr-template-links.test.cjs',
+  'tests/pr-template-links.property.test.cjs',
+  'tests/self-test-report-workflow.test.cjs',
+  'tests/gemini-runtime-removed.test.cjs',
+  'tests/adr-index-gate.test.cjs',
+  'tests/contributor-standards.test.cjs',
+  'tests/context-predicates.test.cjs',
+  'tests/features-index-gate.test.cjs',
+  'tests/commit-files-pathspec.test.cjs',
+];
 
 const RULES = [
   {
@@ -211,9 +228,7 @@ const RULES = [
   {
     name: 'PR template links (#5427)',
     match: isTemplateLinkDoc,
-    tests: ['tests/pr-template-links.test.cjs', 'tests/self-test-report-workflow.test.cjs', 'tests/gemini-runtime-removed.test.cjs',
-      'tests/adr-index-gate.test.cjs', 'tests/contributor-standards.test.cjs', 'tests/context-predicates.test.cjs',
-      'tests/features-index-gate.test.cjs'],
+    tests: TEMPLATE_LINK_OBSERVERS,
   },
   {
     name: 'changeset tooling',
@@ -589,7 +604,7 @@ function classify(files, reachabilityDeps = {}) {
     }
 
     // Inert workflow files and template-link docs (isTemplateLinkDoc) set a lightweight signal.
-    if (isInertCi(file) || isTemplateLinkDoc(file)) {
+    if (isLightweight(file)) {
       lightweightChanged = true;
     }
 
@@ -745,6 +760,8 @@ module.exports = {
   missingRuleTestFiles,
   PROTECTED_WORKFLOWS,
   INERT_WORKFLOWS,
+  isPrTemplate,
+  TEMPLATE_LINK_OBSERVERS,
   missingProtectedWorkflows,
   classify,
   reachesConformanceTierOrSeam,
