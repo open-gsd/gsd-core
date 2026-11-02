@@ -271,9 +271,13 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
 });
 
 describe('#5019 — --auto re-review keeps the external reviewer lane evidence', () => {
-  const FIX = fs.readFileSync(WORKFLOW_PATH, 'utf8');
-  const REVIEW = fs.readFileSync(path.join(ROOT, 'gsd-core', 'workflows', 'code-review.md'), 'utf8');
-  const { persistLaneEvidence } = require('../gsd-core/bin/lib/lane-evidence.cjs');
+  const { before } = require('node:test');
+  let FIX, REVIEW, persistLaneEvidence, laneStatePath;
+  before(() => {
+    FIX = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+    REVIEW = fs.readFileSync(path.join(ROOT, 'gsd-core', 'workflows', 'code-review.md'), 'utf8');
+    ({ persistLaneEvidence, laneStatePath } = require('../gsd-core/bin/lib/lane-evidence.cjs'));
+  });
 
   // Lines [from, to] (inclusive, first match after `from`) of a step region, so a test RUNS the
   // shipped snippet instead of grepping it.
@@ -312,7 +316,7 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
     'check_review_exists': () => lines(stepRegion(FIX, 'check_review_exists'), CALL, CALL),
     'check_review_status': () => lines(stepRegion(FIX, 'check_review_status'), CALL, CALL),
     'spawn_fixer': () => lines(stepRegion(FIX, 'spawn_fixer'), CALL, CALL),
-    // the reviewer-failure exit derives REVIEW_PATH itself (this fence cannot lean on earlier steps)
+    // the reviewer-failure exit reuses the REVIEW_PATH spawn_reviewer's step already derived
     'spawn_reviewer': () => lines(stepRegion(REVIEW, 'spawn_reviewer'), '# #5019: the reviewer agent failed', CALL),
   };
 
@@ -321,7 +325,7 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
       const run = (sb, content, mk) => {
         mk && mk(sb);
         fs.writeFileSync(sb.state, content);
-        bash(`${envOf(sb)}; ${name === 'spawn_reviewer' ? '' : REVIEW_PATH_EXPR}\n${snippet()}`);
+        bash(`${envOf(sb)}; ${REVIEW_PATH_EXPR}\n${snippet()}`);
         return { state: fs.existsSync(sb.state), victim: fs.existsSync(path.join(sb.victim, 'keep')) };
       };
       sandbox(t, (sb) => {
@@ -345,7 +349,7 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
         for (const d of real) assert.strictEqual(fs.existsSync(d), true, 'wrong-length suffix names a real dir: kept');
       });
       sandbox(t, (sb) => { // no state: a no-op that does not fail
-        bash(`${envOf(sb)}; ${name === 'spawn_reviewer' ? '' : REVIEW_PATH_EXPR}\n${snippet()}`);
+        bash(`${envOf(sb)}; ${REVIEW_PATH_EXPR}\n${snippet()}`);
         assert.strictEqual(fs.existsSync(sb.victim), true);
       });
     });
@@ -433,6 +437,27 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
       const out = bash(`${envOf(sb)}; PHASE_ARG=1; ${REVIEW_PATH_EXPR}\n${fence}`);
       assert.strictEqual(out.exitCode, 1);
       assert.deepStrictEqual([fs.existsSync(sb.state), fs.existsSync(d), fs.existsSync(path.join(sb.victim, 'keep'))], [false, false, true]);
+    });
+  });
+
+  test('the lane dir the dispatch fence makes is the one lane-evidence-clear removes', { skip: !HAS_BASH }, (t) => {
+    sandbox(t, (sb) => {
+      const cited = path.join(sb.dir, 'gsd-review-x.md'); fs.writeFileSync(cited, 'lane-only finding');
+      dispatch(sb, [{ ok: true, slug: 'codex', reviewPath: cited }], true);
+      assert.deepStrictEqual([laneDirs(sb).length, states(sb).length], [1, 1], 'the real mktemp template makes one dir the state names');
+      bash(`${envOf(sb)}; ${REVIEW_PATH_EXPR}\n${CALL}`);
+      assert.deepStrictEqual([laneDirs(sb), states(sb)], [[], []], 'the clear verb removes the dir the template made');
+    });
+  });
+
+  test('the reviewer-failure fence clears the REVIEW_PATH it is given', { skip: !HAS_BASH }, (t) => {
+    sandbox(t, (sb) => {
+      const sentinel = path.join(sb.dir, 'other-REVIEW.md');
+      const lanes = sb.lane('abc123');
+      persistLaneEvidence(sentinel, 'abc123', 'once', 'block', sb.tmp);
+      const state = laneStatePath(sentinel, sb.tmp);
+      bash(`${envOf(sb)}; REVIEW_PATH="${sentinel}"\n${REMOVALS.spawn_reviewer()}`);
+      assert.deepStrictEqual([fs.existsSync(state), fs.existsSync(lanes)], [false, false]);
     });
   });
 

@@ -684,7 +684,7 @@ elif [ ${#EXPLICIT_REVIEWER_SLUGS[@]} -gt 0 ]; then
   # accepts for the identical resource class: a leftover $TMPDIR entry is cheaper than a cleanup
   # mechanism (e.g. a trap) that could fire before a later step reads it.
   LANE_RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/gsd-review-lanes-XXXXXX")
-  # The persisted evidence is keyed to the review path; the other inputs (FIX_AUTO, REVIEW_FILES, DIFF_BASE, REVIEW_DEPTH, PHASE_DIR) come from the orchestrator shell.
+  # The persisted evidence is keyed to the review path, derived here as check_empty_scope and spawn_reviewer derive it; the other inputs (FIX_AUTO, REVIEW_FILES, DIFF_BASE, REVIEW_DEPTH, PHASE_DIR) come from the orchestrator shell.
   REVIEW_PATH="${PHASE_DIR}/${PADDED_PHASE}-REVIEW.md"
   DISPATCH_JSON=$(printf '%s\n' "${REVIEW_FILES[@]}" | gsd_run review-lane dispatch-step \
     --repo-root "$REPO_ROOT" --depth "$REVIEW_DEPTH" --base-sha "$DIFF_BASE" \
@@ -875,8 +875,7 @@ No REVIEW.md created. You can retry with /gsd:code-review ${PHASE_ARG} or check 
 
 Remove the persisted lane evidence so it cannot leak into a later `code-review-fix` run:
 ```bash
-# #5019: the reviewer agent failed, so commit_review never runs; this fence derives its own REVIEW_PATH
-REVIEW_PATH="${PHASE_DIR}/${PADDED_PHASE}-REVIEW.md"
+# #5019: the reviewer agent failed, so commit_review never runs
 gsd_run lane-evidence-clear "$REVIEW_PATH" || true
 ```
 
