@@ -251,5 +251,4 @@ function routeStateCommand({ state, args, cwd, raw, error }: RouteStateCommandOp
 
 export = {
   routeStateCommand,
-  parsePlans,
 };

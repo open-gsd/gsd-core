@@ -1759,7 +1759,7 @@ export function parsePlanCount(raw: string): number | null {
 }
 
 /** A recorded `Plan` / `Current Plan` value, read once by `readPlanPosition`. */
-export type PlanPosition = {
+type PlanPosition = {
   /** Leading plan number; `null` past the safe-integer range. */
   n: number | null;
   /** The value spelled `N of M`. */
@@ -1781,7 +1781,7 @@ export type PlanPosition = {
  * (`1 of ?`) is swapped for the count, and a bare `N` gains ` of M` and drops
  * the template's unfilled `TBD` (`0 TBD in current phase`).
  */
-export function readPlanPosition(raw: string | null | undefined): PlanPosition | null {
+function readPlanPosition(raw: string | null | undefined): PlanPosition | null {
   if (!raw) return null;
   const ofM = PLAN_SHAPE_N_OF_M.exec(raw);
   if (ofM) {
@@ -1798,8 +1798,83 @@ export function readPlanPosition(raw: string | null | undefined): PlanPosition |
   return { n, ofM: false, legacy: !/^\s+TBD\b/.test(bare[2]), m: null, slot: [`${bare[1]} of `, 1, bare[2].replace(/^\s+TBD\b/, '') || ' in current phase'] };
 }
 
+/**
+ * The three plan lines of a document, read once from the whole document (frontmatter included)
+ * exactly as `advancePlanCore` reads them (#5320). `ambiguous`: `Current Plan` and `Plan` both
+ * read and record different plan numbers (differing totals are not a disagreement).
+ */
+function readPlanLines(content: string) {
+  const currentPlan = stateExtractField(content, 'Current Plan');
+  const plan = stateExtractField(content, 'Plan');
+  const legacy = readPlanPosition(currentPlan);
+  const planPos = readPlanPosition(plan);
+  return {
+    currentPlan,
+    plan,
+    legacy,
+    totalPos: readPlanPosition(stateExtractField(content, 'Total Plans in Phase')),
+    planPos,
+    ambiguous: legacy !== null && planPos !== null && legacy.n !== null && planPos.n !== null && legacy.n !== planPos.n,
+  };
+}
+
+/**
+ * What `plannedPhaseCore` may write for `--plans <count>` (#5320): a refusal, or the new text of each
+ * plan line `advancePlanCore` reads (`undefined`: leave the line as written). `Plan:` is never written
+ * bare, a bare `Current Plan:` beside a recorded `Total Plans in Phase:` stays the legacy pair, and an
+ * unreadable line is rewritten only when no other plan line reads.
+ */
+function planLinesForPlanned(content: string, count: number, samePhase: boolean, totalRecorded: boolean):
+  { error: { reason: string; message: string } } | { error?: undefined; plan?: string; currentPlan?: string } {
+  const lines = readPlanLines(content);
+  const { legacy, planPos } = lines;
+  if (lines.plan === null && lines.currentPlan === null && !totalRecorded) {
+    return { error: {
+      reason: 'plans_no_line',
+      message: 'state planned-phase: --plans has no line to land on. ' +
+        'Add `Plan: 0 TBD in current phase` under `## Current Position` (or a `Total Plans in Phase:` line) and retry.',
+    } };
+  }
+  if (samePhase) {
+    // A recorded position past the safe-integer range (`n` is null) is above every count that can be written.
+    if ((legacy && legacy.n === null) || (planPos && planPos.n === null)) {
+      return { error: {
+        reason: 'plans_below_position',
+        message: `state planned-phase: the recorded plan position is above ${Number.MAX_SAFE_INTEGER}, ` +
+          'so no --plans count can hold it. Correct the position line.',
+      } };
+    }
+    if (lines.ambiguous) {
+      return { error: {
+        reason: 'ambiguous_plan_position',
+        message: `state planned-phase: Plan and Current Plan record different plan positions (${lines.currentPlan} vs ${lines.plan}). ` +
+          'Correct one of them and retry.',
+      } };
+    }
+    const position = Math.max(0, legacy?.n ?? 0, planPos?.n ?? 0);
+    if (position > count) {
+      return { error: {
+        reason: 'plans_below_position',
+        message: `state planned-phase: --plans ${count} is below the recorded plan position ${position}. ` +
+          `Use --plans ${position} or more, or correct the position line.`,
+      } };
+    }
+  }
+  const carry = (pos: PlanPosition): string => renderPlanTotal(samePhase ? pos : null, count);
+  const fresh = renderPlanTotal(null, count);
+  let currentPlan: string | undefined;
+  if (lines.currentPlan !== null) {
+    if (legacy?.legacy && totalRecorded) currentPlan = samePhase ? undefined : '0';
+    else if (legacy) currentPlan = carry(legacy);
+    else if (!planPos) currentPlan = fresh;
+  }
+  let plan: string | undefined;
+  if (lines.plan !== null) plan = planPos ? carry(planPos) : legacy ? undefined : fresh;
+  return { plan, currentPlan };
+}
+
 /** `pos` re-rendered for a new total; with no position it starts the template spelling at plan 0. */
-export function renderPlanTotal(pos: PlanPosition | null, total: number): string {
+function renderPlanTotal(pos: PlanPosition | null, total: number): string {
   if (!pos) return `0 of ${total} in current phase`;
   const [before, width, after] = pos.slot;
   return `${before}${String(total).padStart(width, '0')}${after}`;
@@ -2030,16 +2105,10 @@ function advancePlanCore(content: string, deps: StateTransitionDeps): StateTrans
   // `planSourceField`/`planRawValue` pair here and then wrote the OTHER
   // spelling from this one's numbers, which is precisely how a field ended up
   // holding a value nothing had derived for it.
-  const legacyPlan = stateExtractField(content, 'Current Plan');
-  const legacyTotal = stateExtractField(content, 'Total Plans in Phase');
-  const planField = stateExtractField(content, 'Plan');
-
-  // Every branch below reads its numbers through `readPlanPosition`, the ANCHORED
-  // plan-position reader. Nothing here calls parseInt on a raw field value, so a
-  // value the grammar does not fully describe cannot half-parse into a plausible number.
-  const legacy = readPlanPosition(legacyPlan);
-  const legacyTotalPos = readPlanPosition(legacyTotal);
-  const planPos = readPlanPosition(planField);
+  // Every branch below reads its numbers through `readPlanLines`, whose ANCHORED
+  // plan-position reader calls no parseInt on a raw field value, so a value the
+  // grammar does not fully describe cannot half-parse into a plausible number.
+  const { currentPlan: legacyPlan, plan: planField, legacy, totalPos: legacyTotalPos, planPos, ambiguous } = readPlanLines(content);
 
   let parsedCurrent: number | null = null;
   let parsedTotal: number | null = null;
@@ -2104,7 +2173,7 @@ function advancePlanCore(content: string, deps: StateTransitionDeps): StateTrans
   // not resolved: `Current Plan: 2` / `Total Plans in Phase: 5` beside
   // `Plan: 2 of 9` advances to `3` and `3 of 9`. Reconciling the two totals
   // would be this transition inventing an answer to a question nobody asked it.
-  if (legacyOwnCurrent !== null && planOwnCurrent !== null && legacyOwnCurrent !== planOwnCurrent) {
+  if (ambiguous) {
     return {
       content: reassemble(body),
       updated: [],
@@ -2672,54 +2741,27 @@ function plannedPhaseCore(
   const fmPhase = existingFm['current_phase'];
   const recordedPhase = bodyPhase ?? (typeof fmPhase === 'string' || typeof fmPhase === 'number' ? String(fmPhase) : null);
   const samePhase = phaseIdMod.phaseKeyFromProse(recordedPhase) === phaseIdMod.phaseKeyFromToken(intent.phaseNumber);
-  // Same-phase position of each Current Position plan line (null for a different phase), read once.
-  const planPos = Object.fromEntries(['Plan', 'Current Plan'].map((name) => {
-    const raw = stateExtractField(posBefore, name);
-    const read = readPlanPosition(raw);
-    return [name, { raw, read, samePhaseRead: samePhase ? read : null }];
-  }));
-  const planValue = (name: string): string | undefined => {
-    if (intent.planCount == null) return undefined;
-    const { read, samePhaseRead } = planPos[name];
-    // A bare `N` (with any trailing text) beside `Total Plans in Phase:` is the legacy pair; the Total line already carries M.
-    // Same phase leaves the line as written; a new phase resets it to a bare 0.
-    if (totalRecorded && read?.legacy) return samePhase ? undefined : '0';
-    return renderPlanTotal(samePhaseRead, intent.planCount);
-  };
+  // #5320: the plan lines advance-plan reads, from the same scope; a refusal writes nothing.
+  const planned: ReturnType<typeof planLinesForPlanned> = intent.planCount == null ? {} : planLinesForPlanned(content, intent.planCount, samePhase, totalRecorded);
+  if (planned.error) return { content, updated: [], data: { error: true, ...planned.error } };
   body = mutateCurrentPositionForAdvance(
     body,
     {
       phase: `${intent.phaseNumber}${labelName ? ` (${labelName})` : ''} — READY TO EXECUTE`,
       status: 'Ready to execute',
       lastActivity: `${today} — Phase ${intent.phaseNumber} planning complete`,
-      plan: planValue('Plan'),
-      currentPlan: planValue('Current Plan'),
+      plan: planned.plan,
+      currentPlan: planned.currentPlan,
     },
     statusDefaults,
     lastActivityDefaults,
   );
   if (body !== beforePos) updated.push('Current Position');
-  const posAfter = posSlice(body);
-  for (const name of ['Plan', 'Current Plan']) {
-    if (stateExtractField(posAfter, name) !== stateExtractField(posBefore, name)) updated.push(name);
-  }
-  // #5320: --plans must land somewhere and may not drop below the recorded plan
-  // position (N of `Plan: N of M`: the first plan still to run, M once the last one is done);
-  // the caller fails before any write.
-  if (intent.planCount != null) {
-    if (!totalRecorded && planPos['Plan'].raw === null && planPos['Current Plan'].raw === null) {
-      return { content, updated: [], data: { error: true, reason: 'plans_no_line', message: 'state planned-phase: --plans has no line to land on. Add `Plan: 0 TBD in current phase` under `## Current Position` (or a `Total Plans in Phase:` line) and retry.' } };
-    }
-    const reads = Object.values(planPos).map(({ samePhaseRead }) => samePhaseRead);
-    // A recorded position past the safe-integer range (`n` is null) is above every count that can be written.
-    if (reads.some((r) => r && r.n === null)) {
-      return { content, updated: [], data: { error: true, reason: 'plans_below_position', message: `state planned-phase: the recorded plan position is above ${Number.MAX_SAFE_INTEGER}, so no --plans count can hold it. Correct the position line.` } };
-    }
-    const position = Math.max(0, ...reads.map((r) => r?.n ?? 0));
-    if (position > intent.planCount) {
-      return { content, updated: [], data: { error: true, reason: 'plans_below_position', message: `state planned-phase: --plans ${intent.planCount} is below the recorded plan position ${position}. Use --plans ${position} or more, or correct the position line.` } };
-    }
-  }
+  // The first-match line advance-plan reads, wherever it sits.
+  if (planned.plan !== undefined) body = stateReplaceField(body, 'Plan', planned.plan) || body;
+  if (planned.currentPlan !== undefined) body = stateReplaceField(body, 'Current Plan', planned.currentPlan) || body;
+  if (stateExtractField(body, 'Plan') !== stateExtractField(beforePos, 'Plan')) updated.push('Plan');
+  if (stateExtractField(body, 'Current Plan') !== stateExtractField(beforePos, 'Current Plan')) updated.push('Current Plan');
 
   // #2400 Bug B: sync progress.total_plans to the frontmatter when a plan count
   // is given. This writes the explicitly-provided count — it is NOT a re-derivation
