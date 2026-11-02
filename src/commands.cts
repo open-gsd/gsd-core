@@ -80,7 +80,7 @@ import modelProfiles = require('./model-profiles.cjs');
 const { MODEL_PROFILES, VALID_PHASE_TYPES } = modelProfiles;
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
-import { writeEscalation, modelFamily, sessionRoot } from './model-escalation.cjs';
+import { writeEscalation, modelFamily, sessionRoot, readGuardMode } from './model-escalation.cjs';
 import { clampPercent, renderProgressBar } from './phase-lifecycle.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planScanMod = require('./plan-scan.cjs');
@@ -604,11 +604,15 @@ function cmdResolveGranularity(cwd: string, phaseType: string | undefined, raw: 
  * #5328: record a model that differs from the resolved baseline so hooks/lib/agent-model-check.js lets the
  * Agent() call pass it. The hook reads at the root of the session's working directory, which is this process's
  * cwd, so a --project-dir/--cwd naming another project records nothing. File, root, validation and window live in
- * model-escalation.cts, shared with the hook.
+ * model-escalation.cts, shared with the hook. Nothing is written while the guard is off (`hooks.agent_model_guard`
+ * false or an unreadable root config), as the hook then reads nothing.
  */
 function recordModelEscalation(cwd: string, agentType: string, model: string): void {
   try {
-    writeEscalation(sessionRoot(cwd), agentType, model, process.env['CLAUDE_CODE_SESSION_ID'] || undefined);
+    const root = sessionRoot(cwd);
+    const { mode, skip } = readGuardMode(root);
+    if (skip || mode === false) return;
+    writeEscalation(root, agentType, model, process.env['CLAUDE_CODE_SESSION_ID'] || undefined);
   } catch (e) {
     process.stderr.write(`gsd: model-escalation record not written: ${(e as Error).message}; under hooks.agent_model_guard "deny" the guard blocks ${model}\n`);
   }

@@ -79,3 +79,23 @@ test('property: the CLI pin accept regex is exactly "alphanumeric first, then MO
     MODEL_ID_CHARSET_RE.test(id) === (/^[A-Za-z0-9]/.test(id) && body.test(id))));
 });
 
+test('property: readGuardMode gives skip for an absent, unparseable or over-cap root config, else hooks.agent_model_guard', () => {
+  const { readGuardMode, MAX_READ_BYTES } = require('../gsd-core/bin/lib/model-escalation.cjs');
+  const root = createTempDir('gsd-esc-mode-');
+  const config = path.join(root, '.planning', 'config.json');
+  try {
+    fs.mkdirSync(path.dirname(config), { recursive: true });
+    if (JSON.stringify(readGuardMode(root)) !== '{"skip":true}') throw new Error('an absent config skips');
+    fc.assert(fc.property(fc.constantFrom('warn', 'deny', false, true, 'off', undefined), fc.constantFrom(0, MAX_READ_BYTES - 1, MAX_READ_BYTES, MAX_READ_BYTES + 1), (mode, size) => {
+      const body = JSON.stringify({ hooks: { agent_model_guard: mode } });
+      fs.writeFileSync(config, size ? body + ' '.repeat(Math.max(0, size - body.length)) : body);
+      const got = readGuardMode(root);
+      return size > MAX_READ_BYTES ? got.skip === true : got.skip === undefined && got.mode === mode;
+    }));
+    fs.writeFileSync(config, '{not json');
+    if (readGuardMode(root).skip !== true) throw new Error('unparseable skips');
+  } finally {
+    cleanup(root);
+  }
+});
+

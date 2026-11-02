@@ -18,6 +18,8 @@ import { findProjectRoot } from './project-root.cjs';
 import { CLAUDE_AGENT_ALIASES } from './model-catalog.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import worktreeSafetyMod = require('./worktree-safety.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import ledgerMod = require('./capability-ledger.cjs');
 
 export const ESCALATION_WINDOW_MS = 10 * 60 * 1000;
 /** Tolerated clock skew for a record stamped slightly in the future. */
@@ -46,6 +48,19 @@ export const escalationFile = (root: string, agentType: string): string =>
 /** The root a record for `cwd` lives at: the root hooks/lib/isolation-sentinel.js resolveSentinelRoot gives the hook (a test pins the two equal). */
 export function escalationRoot(cwd: string): string {
   return fs.existsSync(path.join(cwd, '.planning')) ? cwd : findProjectRoot(worktreeSafetyMod.resolveWorktreeRoot(cwd).root);
+}
+
+/**
+ * `hooks.agent_model_guard` from the root `.planning/config.json` only, as strict JSON capped at MAX_READ_BYTES, like the other
+ * hooks.* keys; `skip` when absent, unreadable, oversized or unparseable. The hook and resolve-execution both read it here.
+ */
+export function readGuardMode(root: string): { mode?: unknown; skip?: true } {
+  try {
+    const text = ledgerMod.readSmallRegularFile(path.join(root, '.planning', 'config.json'), MAX_READ_BYTES);
+    return text === null ? { skip: true } : { mode: ((JSON.parse(text) as { hooks?: Record<string, unknown> }).hooks || {})['agent_model_guard'] };
+  } catch {
+    return { skip: true };
+  }
 }
 
 /** The root a CLI run at `cwd` writes a guard record at; throws when --project-dir/--cwd point away from the session's working directory, whose root the hook reads. */

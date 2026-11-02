@@ -2592,6 +2592,18 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     }
   });
 
+  test('a guard that is off: resolve-execution writes nothing and the hook allows; warn writes the record', (t) => {
+    setup(t, { ...ISSUE_CONFIG, hooks: { agent_model_guard: false } });
+    const r = runGsdTools(['resolve-execution', 'gsd-executor', '--attempt', '1'], project, PINNED);
+    assert.ok(r.success, r.error);
+    assert.equal(JSON.parse(r.output).model, 'opus');
+    assert.equal(fs.existsSync(path.join(project, '.gsd')), false);
+    assert.equal(evaluate(dispatch('gsd-executor', 'opus', WORKTREE)).action, 'allow');
+    writeConfig(project, JSON.stringify({ ...ISSUE_CONFIG, hooks: { agent_model_guard: 'warn' } }));
+    assert.ok(runGsdTools(['resolve-execution', 'gsd-executor', '--attempt', '1'], project, PINNED).success);
+    assert.equal(fs.existsSync(escalationFile(project, 'gsd-executor')), true);
+  });
+
   test('--project-dir naming another project records nothing; escalationRoot equals the hook\'s resolveSentinelRoot', (t) => {
     setup(t);
     const other = mkProject('gsd-aig-other-');

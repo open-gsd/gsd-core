@@ -6,7 +6,6 @@
 // A fresh `resolve-execution --attempt N` record (gsd-core/bin/lib/model-escalation.cjs; the same session when both sides know one) legitimises the escalated model.
 // Never fails closed: any inability to verify is an allow.
 
-const path = require('path');
 const { resolveSentinelRoot } = require('./isolation-sentinel.js');
 const { REASON_INTERPOLATION_MAX_LEN } = require('./isolation-deny-reason.js');
 
@@ -15,13 +14,6 @@ const ALLOW = { action: 'allow' };
 // Literal copy of model-escalation's GUARDED_AGENT_TYPES so every other subagent dispatch is
 // allowed before the runtime build seam and the built artifact load; a test pins the two equal.
 const GUARDED_TYPES = new Set(['gsd-executor', 'gsd-verifier', 'gsd-plan-checker', 'gsd-planner']);
-
-// `hooks.agent_model_guard`, from the root config only and parsed as strict JSON, like the other hooks.* keys.
-// A config this cannot read is an inability to verify, which allows (ADR-5328 Decision 2).
-function readGuardMode(root, maxBytes) {
-  const text = require('../../gsd-core/bin/lib/capability-ledger.cjs').readSmallRegularFile(path.join(root, '.planning', 'config.json'), maxBytes);
-  return text === null ? { skip: true } : { mode: (JSON.parse(text).hooks || {}).agent_model_guard };
-}
 
 // An omitted model is denied too: no stock agent pins a model in its frontmatter, so the subagent
 // would inherit the orchestrator's model, which is the drift #5328 reports.
@@ -60,7 +52,7 @@ function checkAgentModel(data, { clock } = {}) {
     const esc = require('../../gsd-core/bin/lib/model-escalation.cjs');
 
     const root = resolveSentinelRoot(data.cwd || process.cwd());
-    const { mode, skip } = readGuardMode(root, esc.MAX_READ_BYTES);
+    const { mode, skip } = esc.readGuardMode(root);
     if (skip || mode === false) return ALLOW;
 
     // The workstream `init` resolves without --ws (GSD_WORKSTREAM > stored pointer, read-only peek, as the
