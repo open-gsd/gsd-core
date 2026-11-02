@@ -22,7 +22,7 @@ import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { escapeRegex } from './pattern.cjs';
-import { PHASE_ENTRY_BOLD_CLOSE_SRC, phaseEntryPrefixSrc, phaseEntryRegExp } from './phase-entry-grammar.cjs';
+import { PHASE_ENTRY_BOLD_CLOSE_SRC, phaseEntryPrefixSrc, phaseEntryRegExp, phaseEntrySplitRegExp } from './phase-entry-grammar.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdModule = require('./phase-id.cjs');
 const {
@@ -1799,7 +1799,8 @@ function scanArchiveSpans(content: string, active: Array<{ start: number; end: n
     if (active.some((r) => start <= r.start && r.start < end)) continue;
     const inRange = overlapsActive(start, end) && !closedSummary(start);
     // A collapsed block of the active range that holds the Progress table stays editable, so the row moves with the plan ticks.
-    if (inRange && findProgressSection(scan.slice(start, end)) !== null) { kept.push({ start, end }); continue; }
+    // A level-1 `# Progress` has always counted here (#5692: no behavior change), hence `levels`.
+    if (inRange && findProgressSection(scan.slice(start, end), { levels: [1, 2] }) !== null) { kept.push({ start, end }); continue; }
     spans.push({ start, end });
     if (inRange) inActive.push({ start, end });
   }
@@ -2930,19 +2931,21 @@ function editCurrentMilestone(content: string, cwd: string | undefined, edit: (t
  * The checklist bullet of the phase whose number matches `phasePattern`
  * (`- [ ] **Phase N: …**`), as the one grammar shared by the Plans-count /
  * completion stamp and the plan-row ticks. `anyState` also matches a checked box.
- * Group 1 is the opening `- [`, group 2 the rest of the line after the box.
- * `(?:\*\*[ \t]*)?` rather than `[ \t]*` then `**` then `[ \t]*`, which would
- * backtrack quadratically on a long blank run.
+ * Group 1 is everything through the opening `[` (indent and marker included),
+ * group 2 the rest of the line from the closing `]`. The prefix (marker, box, bold token) is the phase-entry grammar's (#5764); the
+ * tail stops before `\r` so a stamp appended to group 2 lands on the entry's
+ * line, before its CRLF.
  */
 function phaseChecklistBullet(phasePattern: string, anyState: boolean): RegExp {
-  return new RegExp(
-    `^([ \\t]*-[ \\t]*\\[)${anyState ? '[ x]' : ' '}(\\][ \\t]*(?:\\*\\*[ \\t]*)?Phase[ \\t]+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s]|$)[^\\n]*)`,
-    'im',
+  return phaseEntrySplitRegExp(
+    `Phase[ \\t]+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s]|$)[^\\r\\n]*`,
+    'i',
+    { state: anyState ? 'any' : 'unchecked' },
   );
 }
 
 /** A checklist bullet of ANY phase: ends the rows nested under the previous one. */
-const ANY_PHASE_BULLET = /^[ \t]*-[ \t]*\[[ xX]\][ \t]*(?:\*\*[ \t]*)?Phase[ \t]/i;
+const ANY_PHASE_BULLET = phaseEntryRegExp('Phase[ \\t]', 'i');
 
 /**
  * [start,end) of the rows nested under a phase's checklist bullet: from the
@@ -2954,7 +2957,10 @@ function checklistBulletExtent(
   text: string,
   bullet: RegExpExecArray,
 ): { start: number; end: number } {
-  const depth = bullet[1].search(/\S/);
+  // The bullet's own indent, read from its line: a caller's capture group 1 may
+  // be the indent alone (which has no non-space and used to give -1, so a
+  // shallower line never ended the extent) or everything through the `[`.
+  const depth = text.slice(bullet.index).search(/\S/);
   const start = text.indexOf('\n', bullet.index) + 1;
   let end = start;
   while (start > 0 && end < text.length) {
