@@ -513,10 +513,27 @@ function applyResolvedWorkstreamEnv(
   env['GSD_WORKSTREAM'] = resolution.ws;
 }
 
+// #5328: the workstream an `init --ws` of `session` used, kept session-scoped beside the pointer files (its name, never a
+// model) so the Agent model guard compares against what `init` reported. No session id: nothing is kept.
+function initWorkstreamAdapter(cwd: string, session: string | undefined): WorkstreamPointerAdapter | null {
+  const token = sanitizeWorkstreamSessionToken(session);
+  return token ? createSessionScopedPointerAdapter(cwd, `init-ws-${token}`) : null;
+}
+
+function recordInitWorkstream(cwd: string, session: string | undefined, name: string): void {
+  if (validateWorkstreamName(name)) initWorkstreamAdapter(cwd, session)?.write(name);
+}
+
+function peekInitWorkstream(cwd: string, session: string | undefined): string | null {
+  return initWorkstreamAdapter(cwd, session)?.read() ?? null;
+}
+
 export = {
   validateWorkstreamName,
   getWorkstreamSessionKey,
   WORKSTREAM_SESSION_ENV_KEYS,
+  recordInitWorkstream,
+  peekInitWorkstream,
   createSharedPointerAdapter,
   createSessionScopedPointerAdapter,
   createMemoryPointerAdapter,

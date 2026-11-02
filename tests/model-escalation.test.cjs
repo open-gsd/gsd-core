@@ -79,6 +79,39 @@ test('property: the CLI pin accept regex is exactly "alphanumeric first, then MO
     MODEL_ID_CHARSET_RE.test(id) === (/^[A-Za-z0-9]/.test(id) && body.test(id))));
 });
 
+test('property: the init --ws carry round-trips a valid name per session, other sessions and an absent session read null, invalid names are never kept', () => {
+  const store = require('../gsd-core/bin/lib/active-workstream-store.cjs');
+  const project = createTempDir('gsd-esc-carry-');
+  const base = 'a'.repeat(159);
+  const clearAll = () => { for (const s of ['s1', 's2', base, `${base}b`]) store.createSessionScopedPointerAdapter(project, `init-ws-${s}`).clear(); };
+  try {
+    fc.assert(fc.property(
+      fc.constantFrom('alpha', 'b-2', 'c_3', 'd.4', '../x', 'a b', ''), fc.constantFrom('s1', 's2', undefined, ''),
+      (name, session) => {
+        try {
+          store.recordInitWorkstream(project, session, name);
+          const kept = Boolean(session) && store.validateWorkstreamName(name);
+          const other = session === 's1' ? 's2' : 's1';
+          return store.peekInitWorkstream(project, session) === (kept ? name : null) && store.peekInitWorkstream(project, other) === null;
+        } finally {
+          clearAll();
+        }
+      },
+    ));
+    try {
+      store.recordInitWorkstream(project, base, 'alpha');
+      if (store.peekInitWorkstream(project, `${base}b`) !== null) throw new Error('159 chars must not read as 160');
+      clearAll();
+      store.recordInitWorkstream(project, `${base}b`, 'alpha');
+      if (store.peekInitWorkstream(project, `${base}bc`) !== 'alpha') throw new Error('161 chars cut to the 160-char token');
+    } finally {
+      clearAll();
+    }
+  } finally {
+    cleanup(project);
+  }
+});
+
 test('property: readGuardMode gives skip for an absent, unparseable or over-cap root config, else hooks.agent_model_guard', () => {
   const { readGuardMode, MAX_READ_BYTES } = require('../gsd-core/bin/lib/model-escalation.cjs');
   const root = createTempDir('gsd-esc-mode-');

@@ -1,9 +1,12 @@
 'use strict';
 // hooks/lib/agent-model-check.js — #5328: does the model a model-authored
 // Agent()/Task() call passes match the one GSD resolved for that agent?
-// Baseline is resolveModelInternal over the workstream the hook resolves at dispatch: GSD_WORKSTREAM > stored pointer,
-// as `init` does without --ws. A workstream selected only with --ws is not visible to the hook (ADR-5328 Decision 2).
-// A fresh `resolve-execution --attempt N` record (gsd-core/bin/lib/model-escalation.cjs; the same session when both sides know one) legitimises the escalated model.
+// Baseline: resolveModelInternal for the workstream `init` used, recomputed
+// at dispatch (ADR-5328 Decision 2): the one an `init --ws` of this session
+// recorded (docs/adr/5328-agent-model-guard-workstream-carry.md), and the one
+// GSD_WORKSTREAM or the stored pointer selects.
+// A fresh `resolve-execution --attempt N` record (gsd-core/bin/lib/model-escalation.cjs;
+// the same session when both sides know one) legitimises the escalated model.
 // Never fails closed: any inability to verify is an allow.
 
 const { resolveSentinelRoot } = require('./isolation-sentinel.js');
@@ -35,6 +38,40 @@ function verdict(esc, mode, type, rawPassed, rawExpected) {
   };
 }
 
+// The expected model for `type` under the workstream `args` select (['--ws', name], or [] for
+// GSD_WORKSTREAM > the stored pointer), or null where the check does not apply (no native tier
+// aliases on that runtime, or `inherit`). The pointer is keyed by the dispatching session: the
+// payload's session_id, which the host also exports to `init` as CLAUDE_CODE_SESSION_ID; the
+// WORKSTREAM_SESSION_ENV_KEYS entries ranked above it are cleared for the lookup. The caller's
+// environment is restored in `finally`, so every candidate starts from it.
+function baselineFor(store, root, type, session, args) {
+  const keys = store.WORKSTREAM_SESSION_ENV_KEYS;
+  const outranking = keys.slice(0, keys.indexOf('CLAUDE_CODE_SESSION_ID'));
+  const saved = Object.fromEntries(['GSD_WORKSTREAM', 'CLAUDE_CODE_SESSION_ID', ...outranking].map((k) => [k, process.env[k]]));
+  try {
+    if (session !== undefined) {
+      for (const k of outranking) delete process.env[k];
+      process.env.CLAUDE_CODE_SESSION_ID = session;
+    }
+    store.applyResolvedWorkstreamEnv(store.resolveActiveWorkstream(root, args, process.env, { getStored: store.peekActiveWorkstream }), process.env);
+    const resolver = require('../../gsd-core/bin/lib/model-resolver.cjs');
+    const config = require('../../gsd-core/bin/lib/config-loader.cjs').loadConfig(root, { persist: false });
+    // Only where the host resolves the tier aliases GSD resolves to, over the one runtime chain
+    // (GSD_RUNTIME > config.runtime > marker), from the config the expected model resolves through.
+    if (!resolver.hasNativeModelAliases(require('../../gsd-core/bin/lib/runtime-slash.cjs').resolveActiveRuntime(config))) return null;
+    const expected = resolver.resolveModelInternal(root, type, { persist: false });
+    return expected && expected !== 'inherit' ? expected : null;
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) {
+        delete process.env[k];
+      } else {
+        process.env[k] = v;
+      }
+    }
+  }
+}
+
 /**
  * @returns {{action:'allow'}|{action:'warn'|'block', passed:string, expected:string, reason:string}}
  * `passed` and `expected` are the sanitised values `reason` renders ('' = no model passed).
@@ -55,47 +92,26 @@ function checkAgentModel(data, { clock } = {}) {
     const { mode, skip } = esc.readGuardMode(root);
     if (skip || mode === false) return ALLOW;
 
-    // The workstream `init` resolves without --ws (GSD_WORKSTREAM > stored pointer, read-only peek, as the
-    // gsd-tools dispatcher and gsd-statusline do), carried in GSD_WORKSTREAM into loadConfig and planningDir.
-    // The pointer is keyed by the dispatching session: the payload's session_id, which the host also exports to
-    // `init` as CLAUDE_CODE_SESSION_ID; the WORKSTREAM_SESSION_ENV_KEYS entries ranked above it are cleared for the
-    // lookup. The caller's environment is restored in `finally`.
     const store = require('../../gsd-core/bin/lib/active-workstream-store.cjs');
     const session = typeof data.session_id === 'string' && data.session_id ? data.session_id : undefined;
-    const keys = store.WORKSTREAM_SESSION_ENV_KEYS;
-    const outranking = keys.slice(0, keys.indexOf('CLAUDE_CODE_SESSION_ID'));
-    const saved = Object.fromEntries(['GSD_WORKSTREAM', 'CLAUDE_CODE_SESSION_ID', ...outranking].map((k) => [k, process.env[k]]));
-    try {
-      if (session !== undefined) {
-        for (const k of outranking) delete process.env[k];
-        process.env.CLAUDE_CODE_SESSION_ID = session;
-      }
-      store.applyResolvedWorkstreamEnv(store.resolveActiveWorkstream(root, [], process.env, { getStored: store.peekActiveWorkstream }), process.env);
-      const resolver = require('../../gsd-core/bin/lib/model-resolver.cjs');
-      const config = require('../../gsd-core/bin/lib/config-loader.cjs').loadConfig(root, { persist: false });
-      // Only where the host resolves the tier aliases GSD resolves to, over the one runtime chain
-      // (GSD_RUNTIME > config.runtime > marker), from the config the expected model resolves through.
-      if (!resolver.hasNativeModelAliases(require('../../gsd-core/bin/lib/runtime-slash.cjs').resolveActiveRuntime(config))) return ALLOW;
-      const expected = resolver.resolveModelInternal(root, type, { persist: false });
-      if (!expected || expected === 'inherit') return ALLOW;
-
-      const passed = typeof toolInput.model === 'string' ? toolInput.model : '';
-      if (passed && esc.modelFamily(passed) === esc.modelFamily(expected)) return ALLOW;
-      if (passed) {
-        // realClock honours the GSD_TEST_MODE + GSD_NOW_MS pin in a hook subprocess (RULESET.TESTS.clock-seam).
-        const now = (clock || require('../../gsd-core/bin/lib/clock.cjs').realClock).now();
-        if (esc.escalationAllows(esc.readEscalation(root, type), passed, { now, session })) return ALLOW;
-      }
-      return verdict(esc, mode, type, passed, expected);
-    } finally {
-      for (const [k, v] of Object.entries(saved)) {
-        if (v === undefined) {
-          delete process.env[k];
-        } else {
-          process.env[k] = v;
-        }
-      }
+    // Where workstreams exist, a dispatch without a session id cannot establish the workstream `init` used: allow.
+    if (session === undefined && require('../../gsd-core/bin/lib/planning-workspace.cjs').listAvailableWorkstreams(root).length > 0) return ALLOW;
+    const carried = store.peekInitWorkstream(root, session);
+    const expected = [];
+    for (const args of carried ? [['--ws', carried], []] : [[]]) {
+      const model = baselineFor(store, root, type, session, args);
+      if (model === null) return ALLOW;
+      expected.push(model);
     }
+
+    const passed = typeof toolInput.model === 'string' ? toolInput.model : '';
+    if (passed && expected.some((m) => esc.modelFamily(m) === esc.modelFamily(passed))) return ALLOW;
+    if (passed) {
+      // realClock honours the GSD_TEST_MODE + GSD_NOW_MS pin in a hook subprocess (RULESET.TESTS.clock-seam).
+      const now = (clock || require('../../gsd-core/bin/lib/clock.cjs').realClock).now();
+      if (esc.escalationAllows(esc.readEscalation(root, type), passed, { now, session })) return ALLOW;
+    }
+    return verdict(esc, mode, type, passed, expected[0]);
   } catch {
     return ALLOW;
   }

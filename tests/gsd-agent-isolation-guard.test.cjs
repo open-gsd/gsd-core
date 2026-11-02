@@ -2193,12 +2193,12 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
 
   test('workstream runtime decides the native-alias gate, like the expected-model path', (t) => {
     setupWorkstream(t, ISSUE_CONFIG, { runtime: 'codex' });
-    assert.equal(evaluate(dispatch('gsd-planner', 'sonnet')).action, 'allow');
+    assert.equal(evaluate({ ...dispatch('gsd-planner', 'sonnet'), session_id: 'sess-p' }).action, 'allow');
   });
 
   test('hooks.agent_model_guard is read from the root config only (documented, like the other hooks.* keys)', (t) => {
     setupWorkstream(t, ISSUE_CONFIG, { hooks: { agent_model_guard: false } });
-    assert.equal(evaluate(dispatch('gsd-planner', 'sonnet')).action, 'warn');
+    assert.equal(evaluate({ ...dispatch('gsd-planner', 'sonnet'), session_id: 'sess-p' }).action, 'warn');
   });
 
   test('corrupt and future-dated records are ignored; Task tool name is guarded', (t) => {
@@ -2484,8 +2484,8 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     const r = runGsdTools(['resolve-model', 'gsd-planner'], project, { GSD_WORKSTREAM: '' });
     assert.ok(r.success, r.error);
     assert.equal(JSON.parse(r.output).model, 'haiku', 'init resolves the pointer-selected workstream');
-    assert.equal(evaluate(dispatch('gsd-planner', 'haiku')).action, 'allow');
-    assert.equal(evaluate(dispatch('gsd-planner', 'opus')).action, 'warn');
+    assert.equal(evaluate({ ...dispatch('gsd-planner', 'haiku'), session_id: 'sess-p' }).action, 'allow');
+    assert.equal(evaluate({ ...dispatch('gsd-planner', 'opus'), session_id: 'sess-p' }).action, 'warn');
     assert.equal(process.env.GSD_WORKSTREAM, undefined, 'the hook restores the environment');
   });
 
@@ -2517,6 +2517,82 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     assert.equal(process.env.GSD_SESSION_KEY, 'hook-env', 'the hook restores the environment');
     assert.equal(process.env.CLAUDE_CODE_SESSION_ID, undefined, 'the hook restores the environment');
     assert.equal(process.env.GSD_WORKSTREAM, undefined, 'the hook restores the environment');
+  });
+
+  // The init --ws carry lives under os.tmpdir(), keyed by project and session: clear every one a test makes.
+  const carryStore = () => require('../gsd-core/bin/lib/active-workstream-store.cjs');
+  function clearCarries(t, ...sessions) {
+    t.after(() => { for (const s of sessions) carryStore().createSessionScopedPointerAdapter(project, `init-ws-${s}`).clear(); });
+  }
+  function setupCarry(t, rootConfig, ...sessions) {
+    pinWorkstreamEnv(t, undefined);
+    setup(t, rootConfig);
+    const ws = path.join(project, '.planning', 'workstreams', 'alpha');
+    fs.mkdirSync(ws, { recursive: true });
+    fs.writeFileSync(path.join(ws, 'config.json'), JSON.stringify({ model_overrides: { 'gsd-planner': 'haiku' } }));
+    clearCarries(t, ...sessions);
+  }
+  const initQuick = (session, withWs = true) =>
+    runGsdTools(['query', 'init.quick', 't', ...(withWs ? ['--ws=alpha'] : [])], project, { GSD_WORKSTREAM: '', CLAUDE_CODE_SESSION_ID: session });
+  const inSession = (model, session) => ({ ...dispatch('gsd-planner', model), session_id: session });
+
+  test('init --ws carries the workstream to the hook: its baseline passes, another model warns, deny blocks', (t) => {
+    setupCarry(t, ISSUE_CONFIG, 'sess-ws');
+    const r = initQuick('sess-ws');
+    assert.ok(r.success, r.error);
+    assert.equal(JSON.parse(r.output).planner_model, 'haiku');
+    assert.equal(evaluate(inSession('haiku', 'sess-ws')).action, 'allow');
+    assert.equal(evaluate(inSession('sonnet', 'sess-ws')).action, 'warn');
+    assert.equal(evaluate(inSession('haiku', 'other')).action, 'warn', 'another session has no carry');
+    writeConfig(project, JSON.stringify({ ...ISSUE_CONFIG, hooks: { agent_model_guard: 'deny' } }));
+    assert.equal(evaluate(inSession('sonnet', 'sess-ws')).action, 'block');
+  });
+
+  test('a carried workstream and the session pointer: a model matching either baseline passes, the verdict names the carried one', (t) => {
+    const keys = ['GSD_WORKSTREAM', 'GSD_SESSION_KEY', 'CODEX_THREAD_ID', 'CLAUDE_SESSION_ID', 'CLAUDE_CODE_SESSION_ID'];
+    const ambient = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    for (const k of keys) delete process.env[k];
+    t.after(() => { for (const k of keys) { if (ambient[k] === undefined) delete process.env[k]; else process.env[k] = ambient[k]; } });
+    setupCarry(t, ISSUE_CONFIG, 'sess-ws');
+    const beta = path.join(project, '.planning', 'workstreams', 'beta');
+    fs.mkdirSync(beta, { recursive: true });
+    fs.writeFileSync(path.join(beta, 'config.json'), JSON.stringify({ model_overrides: { 'gsd-planner': 'sonnet' } }));
+    const store = carryStore();
+    process.env.CLAUDE_CODE_SESSION_ID = 'sess-ws';
+    store.setActiveWorkstream(project, 'beta');
+    delete process.env.CLAUDE_CODE_SESSION_ID;
+    t.after(() => {
+      process.env.CLAUDE_CODE_SESSION_ID = 'sess-ws';
+      store.setActiveWorkstream(project, null);
+      delete process.env.CLAUDE_CODE_SESSION_ID;
+    });
+    assert.ok(initQuick('sess-ws').success);
+    assert.equal(evaluate(inSession('haiku', 'sess-ws')).action, 'allow');
+    assert.equal(evaluate(inSession('sonnet', 'sess-ws')).action, 'allow');
+    const v = evaluate(inSession('opus', 'sess-ws'));
+    assert.equal(v.action, 'warn');
+    assert.equal(v.expected, 'haiku');
+    assert.equal(process.env.GSD_WORKSTREAM, undefined, 'the hook restores the environment');
+  });
+
+  test('workstreams exist and the dispatch has no session id: allow', (t) => {
+    setupCarry(t, ISSUE_CONFIG);
+    assert.equal(evaluate(dispatch('gsd-planner', 'sonnet')).action, 'allow');
+  });
+
+  test('an init without --ws neither writes nor clears the carry', (t) => {
+    setupCarry(t, ISSUE_CONFIG, 'sess-ws', 'fresh');
+    assert.ok(initQuick('sess-ws').success);
+    assert.ok(initQuick('sess-ws', false).success);
+    assert.equal(evaluate(inSession('haiku', 'sess-ws')).action, 'allow', 'the unflagged init left the carry');
+    assert.ok(initQuick('fresh', false).success);
+    assert.equal(carryStore().peekInitWorkstream(project, 'fresh'), null);
+  });
+
+  test('an invalid carried name allows', (t) => {
+    setupCarry(t, ISSUE_CONFIG, 'sess-bad');
+    carryStore().createSessionScopedPointerAdapter(project, 'init-ws-sess-bad').write('../x');
+    assert.equal(evaluate(inSession('sonnet', 'sess-bad')).action, 'allow');
   });
 
   test('both .gsd/.gitignore writers: the dispatch sentinel and the escalation record are git-ignored whichever writes first', (t) => {

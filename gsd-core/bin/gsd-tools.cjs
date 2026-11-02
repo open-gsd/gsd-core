@@ -4885,6 +4885,16 @@ const HOST_COMMAND_ROUTERS = {
   // ran before the router in the old `case 'init':` arm.
   init: (ctx) => {
     try { warnIfStaleBake(ctx.cwd); } catch { /* guard must never break init */ }
+    // #5328: the Agent model guard compares against the workstream `init` used; the hook never sees --ws, so carry it.
+    const ws = ctx.workstreamContext;
+    if (ws && ws.source === 'cli') {
+      try {
+        require('./lib/active-workstream-store.cjs').recordInitWorkstream(
+          require('./lib/model-escalation.cjs').escalationRoot(ctx.cwd), process.env.CLAUDE_CODE_SESSION_ID, ws.ws);
+      } catch (e) {
+        process.stderr.write(`gsd: --ws ${ws.ws} not recorded for the Agent model guard: ${e.message}\n`);
+      }
+    }
     routeInitCommand({ init, ...ctx });
   },
   // capability → routeCapabilityCommand (ADR-2346 P2). The router is async
