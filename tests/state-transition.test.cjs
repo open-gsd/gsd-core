@@ -5405,6 +5405,11 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     assert.strictEqual(huge.content, doc('Plan: 99999999999999999999 of 5'));
   });
 
+  test('plannedPhase unit: only the `?` placeholder after `of` is an unfilled total; an author word there survives', () => {
+    assert.strictEqual(lineOf(planned('Plan: 2 of the way done', 6).content), 'Plan: 2 of 6 of the way done');
+    assert.strictEqual(lineOf(planned('Plan: 2 of ? - wave 1 done', 6).content), 'Plan: 2 of 6 - wave 1 done');
+  });
+
   test('plannedPhase unit: Plan: 0 TBD records the exact count; a missing line and a lower count are typed refusals', () => {
     const tbd = planned('Plan: 0 TBD in current phase', 3);
     assert.strictEqual(lineOf(tbd.content), 'Plan: 0 of 3 in current phase');
