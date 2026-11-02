@@ -548,9 +548,6 @@ if [ "$AUTO_MODE" = "true" ]; then
       console.log(match && /status:\s*(\S+)/.test(match[1]) ? match[1].match(/status:\s*(\S+)/)[1] : 'unknown');
     } catch (e) { console.log('unknown'); }
   " 2>/dev/null)
-  # Anything but a proven-clean final review RETAINS the backups. An unreadable or unparseable
-  # review is not evidence of convergence, and retaining costs a few scratch files where deleting
-  # costs the post-mortem trail the retention rule exists for.
   # zsh-safe nullglob: the #2962 idiom (complete-milestone.md), each half behind `|| true` so the
   # other shell's missing builtin cannot abort a `set -e` caller; the caller's setting is restored.
   NG_WAS_SET=false; { shopt -q nullglob || [[ -o NULL_GLOB ]]; } 2>/dev/null && NG_WAS_SET=true
@@ -563,6 +560,9 @@ if [ "$AUTO_MODE" = "true" ]; then
     case "$_n" in ''|*[!0-9]*) ;; *) BACKUP_FILES+=("$_f") ;; esac
   done
   [ "$NG_WAS_SET" = true ] || shopt -u nullglob 2>/dev/null || unsetopt NULL_GLOB 2>/dev/null || :
+  # Anything but a proven-clean final review RETAINS the backups. An unreadable or unparseable
+  # review is not evidence of convergence, and retaining costs a few scratch files where deleting
+  # costs the post-mortem trail the retention rule exists for.
   if [ "$FINAL_STATUS" = "clean" ]; then
     # Converged: the backups are spent scratch, removed and never committed, whatever
     # COMMIT_DOCS says (#5506: a converged run leaves no backups and no commit).
