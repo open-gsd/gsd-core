@@ -23,8 +23,8 @@ const { span, runBash } = require('./helpers/doc-bash-span.cjs');
 const { runGsdTools } = require('./helpers.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-// Same gate the shipped fences carry everywhere in this suite: bash is not assumed on win32.
-const HAS_BASH = process.platform !== 'win32';
+// The bash probe the property test uses too (tests/helpers/bash-probe.cjs, #5170).
+const HAS_BASH = have('bash');
 
 // Extract the bash fence out of a named <step>, so a test can RUN it rather than grep it.
 // Line-scanned rather than matched with a multiline regex: an ad-hoc fence regex trips
@@ -88,20 +88,22 @@ function stepRegion(src, name) {
   return src.slice(open, close + '</step>'.length);
 }
 
-// Mirrors `query commit MSG [--files F...] [--files-removed F...] --raw` (src/commands.cts cmdCommit,
-// proven against the real CLI by T6i): --files paths missing on disk are SKIPPED (#2014); only
-// --files-removed stages a deletion, and a path there still on disk prints "failed" before any
-// commit (staging_failed); an empty scoped diff prints "nothing"; the commit is scoped to the named
-// paths (-- <paths>), so an unrelated pre-staged file is never swept in (#2112). A stub that
-// `git add`s everything would mask a deletion routed through --files.
+// Mirrors `query commit MSG [--files F...] [--files-removed F...] --raw` (src/commands.cts
+// cmdCommit, proven against the real CLI by T6i): --files paths missing on disk are SKIPPED
+// (#2014); only --files-removed stages a deletion, and a path there still on disk prints "failed"
+// before any commit (staging_failed); an empty scoped diff prints "nothing"; the commit is scoped
+// to the named paths (-- <paths>), so an unrelated pre-staged file is never swept in (#2112). A
+// stub that `git add`s everything would mask a deletion routed through --files.
 const REAL_COMMIT_BODY = ' local msg="$3"; shift 3; local m="" a=() r=() p=();'
   + ' while [ $# -gt 0 ]; do case "$1" in --files) m=a;; --files-removed) m=r;; --raw) m="";;'
   + ' *) if [ "$m" = a ] && [ -e "$1" ]; then a+=("$1");'
   + ' elif [ "$m" = r ]; then r+=("$1"); fi;; esac; shift; done;'
   + ' for f in ${r[@]+"${r[@]}"}; do [ -e "$f" ] && { echo failed; return 0; }; done;'
   + ' if [ ${#a[@]} -gt 0 ]; then git add -- "${a[@]}"; p+=("${a[@]}"); fi;'
-  + ' if [ ${#r[@]} -gt 0 ]; then git rm -q --cached --ignore-unmatch -- "${r[@]}"; p+=("${r[@]}"); fi;'
-  + ' if [ ${#p[@]} -eq 0 ] || git diff --cached --quiet -- "${p[@]}"; then echo nothing; return 0; fi;'
+  + ' if [ ${#r[@]} -gt 0 ]; then git rm -q --cached --ignore-unmatch -- "${r[@]}";'
+  + ' p+=("${r[@]}"); fi;'
+  + ' if [ ${#p[@]} -eq 0 ] || git diff --cached --quiet -- "${p[@]}"; then'
+  + ' echo nothing; return 0; fi;'
   + ' git commit -q -m "$msg" -- "${p[@]}" && git rev-parse --short HEAD; }';
 
 describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH env wiring', () => {
@@ -285,10 +287,8 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     assert.strictEqual(unknown.review, true, 'an unparseable status must retain, never remove');
   });
 
-  // One real-git fixture for the T6 tests below: a seeded repo holding REVIEW(-FIX).md plus two
-  // iter2 backups,
-  // committed (a degraded run already committed them) or left untracked (this run just wrote them).
-  const seedBackupRepo = (t, prefix, status, committedBackups) => {
+  // The git fixture and the gsd_run stub prefix every T6 repo is built from (seedBackupRepo, T6i).
+  const initRepo = (t, prefix) => {
     const dir = createTempDir(prefix);
     t.after(() => cleanup(dir));
     const git = (...a) => gitOrThrow(a, { cwd: dir, timeoutMs: PROBE_TIMEOUT_MS });
@@ -296,16 +296,24 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     git('config', 'user.email', 't@t');
     git('config', 'user.name', 't');
     git('config', 'commit.gpgsign', 'false');
+    return { dir, git };
+  };
+  const gsdRunStub = (body) => 'gsd_run() { [ "$1 $2" = "query commit" ] || return 1;' + body;
+
+  // One real-git fixture for the T6 tests below: a seeded repo holding REVIEW(-FIX).md plus two
+  // iter2 backups, committed (a degraded run already committed them) or left untracked (this run
+  // just wrote them).
+  const seedBackupRepo = (t, prefix, status, committedBackups) => {
+    const { dir, git } = initRepo(t, prefix);
     fs.writeFileSync(
       path.join(dir, '01-REVIEW.md'),
       ['---', 'status: ' + status, '---'].join('\n')
     );
     fs.writeFileSync(path.join(dir, '01-REVIEW-FIX.md'), 'fix');
     const writeBackups = () => {
-      for (const f of ['01-REVIEW.iter2.md', '01-REVIEW-FIX.iter2.md']) fs.writeFileSync(
-        path.join(dir, f),
-        'scratch'
-      );
+      for (const f of ['01-REVIEW.iter2.md', '01-REVIEW-FIX.iter2.md']) {
+        fs.writeFileSync(path.join(dir, f), 'scratch');
+      }
     };
     if (committedBackups) writeBackups();
     git('add', '.');
@@ -314,14 +322,14 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     return dir;
   };
 
-  // Shared by T6c-T6h: run the shipped fence in a seeded repo with the real-CLI stub.
+  // Shared by T6c-T6g: run the shipped fence in a seeded repo with the real-CLI stub.
   const runFence = (dir, { commitDocs = 'true', pre = '', post = '', body = REAL_COMMIT_BODY,
     interpreter = 'bash' } = {}) => {
     const fence = stepFence(fs.readFileSync(WORKFLOW_PATH, 'utf8'), 'cleanup_iteration_backups');
     const script = [
       'set -euo pipefail',
       'cd "' + dir + '"',
-      'gsd_run() { [ "$1 $2" = "query commit" ] || return 1;' + body,
+      gsdRunStub(body),
       'AUTO_MODE=true',
       'COMMIT_DOCS=' + commitDocs,
       'PADDED_PHASE=01',
@@ -343,7 +351,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
   test('T6c — #5506: retained backups are COMMITTED when COMMIT_DOCS=true, left alone when false',
     { skip: !HAS_BASH }, (t) => {
     // A non-clean --auto run retains <NN>-REVIEW(-FIX).iterN.md. Untracked, they leave a dirty tree
-    // that blocks the next checkout/worktree op. Execute the shipped fence against a real git repo.
+    // that /gsd-ship's clean-tree preflight refuses. Execute the shipped fence against a real repo.
     // The default mode runs the real-CLI stub (REAL_COMMIT_BODY, add + scoped commit, prints the
     // hash); the other modes make gsd_run print what cmdCommit prints for that outcome, so every
     // defined outcome is driven: `skipped` is a per-phase phase_commit_docs=false override
@@ -362,11 +370,9 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
         commitDocs,
         body: ' echo "$*" >> gsd-calls.log;' + (stubs[mode] || REAL_COMMIT_BODY),
       });
-      const calls = fs.existsSync(path.join(
-        dir,
-        'gsd-calls.log'
-      )) ? fs.readFileSync(path.join(dir, 'gsd-calls.log'), 'utf8') : '';
-      if (calls) fs.unlinkSync(path.join(dir, 'gsd-calls.log'));
+      const log = path.join(dir, 'gsd-calls.log');
+      const calls = fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '';
+      if (calls) fs.unlinkSync(log);
       return {
         calls,
         stdout: res.stdout,
@@ -438,14 +444,9 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
         const dir = seedBackupRepo(t, 'gsd-5506-converged-', 'clean', committed);
         runFence(dir, { commitDocs, body: ' echo "$*" >> gsd-calls.log; return 1; }' });
         assert.ok(!fs.existsSync(path.join(dir, 'gsd-calls.log')), label + ': no commit attempted');
-        assert.strictEqual(
-          gitOrThrow(
-            ['rev-list', '--count', 'HEAD'],
-            { cwd: dir, timeoutMs: PROBE_TIMEOUT_MS }
-          ).trim(),
-          '1',
-          label + ': no new commit'
-        );
+        const commits = gitOrThrow(['rev-list', '--count', 'HEAD'],
+          { cwd: dir, timeoutMs: PROBE_TIMEOUT_MS }).trim();
+        assert.strictEqual(commits, '1', label + ': no new commit');
         for (const f of ['01-REVIEW.iter2.md', '01-REVIEW-FIX.iter2.md']) {
           assert.ok(!fs.existsSync(path.join(dir, f)), label + ': ' + f + ' removed');
         }
@@ -474,22 +475,11 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
   });
 
   test('T6f — #5506: nullglob is restored to the caller state', { skip: !HAS_BASH }, (t) => {
+    const post = 'shopt -q nullglob && echo NG=on || echo NG=off';
     const dir = seedBackupRepo(t, 'gsd-5506-shopt-', 'clean', true);
-    assert.match(
-      runFence(
-        dir,
-        { pre: 'shopt -s nullglob', post: 'shopt -q nullglob && echo NG=on || echo NG=off' }
-      ).stdout,
-      /NG=on/
-    );
+    assert.match(runFence(dir, { pre: 'shopt -s nullglob', post }).stdout, /NG=on/);
     const dir2 = seedBackupRepo(t, 'gsd-5506-shopt2-', 'clean', true);
-    assert.match(
-      runFence(
-        dir2,
-        { pre: 'shopt -u nullglob', post: 'shopt -q nullglob && echo NG=on || echo NG=off' }
-      ).stdout,
-      /NG=off/
-    );
+    assert.match(runFence(dir2, { pre: 'shopt -u nullglob', post }).stdout, /NG=off/);
   });
 
   // The fence is run by whatever shell the agent host has; the maintainer's zsh reproduction is a
@@ -589,22 +579,13 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
         tracked: [A], setup: () => {}, args: ['--files-removed', A],
       },
       '--files-removed deleted path': {
-        tracked: [A], setup: (
-          w,
-          g,
-          d
-        ) => { fs.unlinkSync(path.join(d, A)); }, args: ['--files-removed', A],
+        tracked: [A], setup: (w, g, d) => { fs.unlinkSync(path.join(d, A)); },
+        args: ['--files-removed', A],
       },
     };
     const build = (sc) => {
-      const dir = createTempDir('gsd-5506-parity-');
-      t.after(() => cleanup(dir));
-      const g = (...a) => gitOrThrow(a, { cwd: dir, timeoutMs: PROBE_TIMEOUT_MS });
+      const { dir, git: g } = initRepo(t, 'gsd-5506-parity-');
       const w = (f, c = 'scratch') => fs.writeFileSync(path.join(dir, f), c);
-      g('init', '-q');
-      g('config', 'user.email', 't@t');
-      g('config', 'user.name', 't');
-      g('config', 'commit.gpgsign', 'false');
       w('01-REVIEW.md', 'review');
       w('other.md', 'base');
       for (const f of sc.tracked || []) w(f);
@@ -616,7 +597,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     const cls = (tok) => (/^[0-9a-f]{7,40}$/.test(tok) ? 'hash' : tok);
     for (const [label, sc] of Object.entries(scenarios)) {
       const stub = build(sc);
-      const script = ['cd "' + stub.dir + '"', 'gsd_run() {' + REAL_COMMIT_BODY,
+      const script = ['cd "' + stub.dir + '"', gsdRunStub(REAL_COMMIT_BODY),
         'gsd_run query commit "msg" ' + sc.args.join(' ') + ' --raw'].join('\n');
       const sres = runHook('-c', [script], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
       assert.strictEqual(sres.exitCode, 0, label + ': stub: ' + sres.stderr);
