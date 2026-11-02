@@ -9,7 +9,7 @@ if [ "$arm" = head ]; then
   # dispatch (shipped fence; only review-lane dispatch-step stubbed) -> writes lane dir + persisted evidence state under TMPDIR
   run_shipped dispatch head "$P" > "$W/$arm/dispatch.block.txt" 2> "$W/$arm/dispatch.stderr.txt"
   cp "$A/lib/fixture/01-REVIEW.md" "$P/phase/01-REVIEW.md"   # the iteration-1 reviewer's output
-  run_shipped commit head "$P" > "$W/$arm/commit.out.txt"      # fresh shell, shipped commit_review fence, FIX_AUTO=true
+  run_shipped commit head "$P" > "$W/$arm/commit.out.txt"      # fresh shell, shipped commit_review fence
 else
   cp "$A/lib/fixture/01-REVIEW.md" "$P/phase/01-REVIEW.md"
 fi

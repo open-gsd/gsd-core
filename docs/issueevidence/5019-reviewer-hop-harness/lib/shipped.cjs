@@ -48,7 +48,7 @@ gsd_run() {
     stub, 'set -- --cursor', stepFence(REVIEW, 'dispatch_reviewer_lanes'), 'printf "%s" "$EXTERNAL_EVIDENCE_BLOCK"'].join('\n'));
 } else if (verb === 'commit') {
   console.log([`cd "${project}"; gsd_run() { node "${GSD_TOOLS}" "$@"; }`,
-    `export TMPDIR="${tmp}"; REVIEW_PATH="${phase}/01-REVIEW.md"; COMMIT_DOCS=false; FIX_AUTO=true`, stepFence(REVIEW, 'commit_review')].join('\n'));
+    `export TMPDIR="${tmp}"; REVIEW_PATH="${phase}/01-REVIEW.md"; COMMIT_DOCS=false`, stepFence(REVIEW, 'commit_review')].join('\n'));
 } else if (verb === 'prompt') {
   const loop = stepRegion(FIX, 'auto_iteration_loop');
   const call = loop.indexOf('Agent(subagent_type="gsd-code-reviewer"'); if (call < 0) fail('reviewer Agent() not found');

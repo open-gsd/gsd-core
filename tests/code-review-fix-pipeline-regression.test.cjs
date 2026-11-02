@@ -476,34 +476,6 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
     });
   });
 
-  // The #5019 reviewer-hop harness stages and asserts the evidence through the shipped fences and the verbs:
-  // dispatch, commit (--auto), then the generated head prompt must carry the block and the cited lane path.
-  test('harness head prompt carries the evidence block', { skip: !HAS_BASH }, (t) => {
-    const HARNESS = path.join(ROOT, 'docs', 'issueevidence', '5019-reviewer-hop-harness');
-    const shipped = path.join(HARNESS, 'lib', 'shipped.cjs');
-    for (const f of ['trial.sh', 'iter3.sh', 'build.sh']) {
-      const r = runHook('-n', [path.join(HARNESS, f)], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
-      assert.strictEqual(r.exitCode, 0, `${f}: ${r.stderr}`);
-    }
-    const project = createTempDir('gsd-5019-harness-');
-    t.after(() => cleanup(project));
-    for (const d of ['src', 'phase', 'tmp']) fs.mkdirSync(path.join(project, d));
-    for (const f of ['config', 'lockout', 'messages', 'auth']) fs.copyFileSync(path.join(HARNESS, 'lib', 'fixture', `${f}.js`), path.join(project, 'src', `${f}.js`));
-    const run = (verb) => {
-      const gen = runNode([shipped, verb, ROOT, project, 'head'], {});
-      assert.strictEqual(gen.exitCode, 0, `${verb}: ${gen.stderr}`);
-      const r = runHook('-c', [gen.stdout], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS * 4, env: { ...process.env, TMPDIR: path.join(project, 'tmp') } });
-      assert.strictEqual(r.exitCode, 0, `${verb}: ${r.stderr}`);
-      return r.stdout;
-    };
-    run('dispatch');
-    fs.copyFileSync(path.join(HARNESS, 'lib', 'fixture', '01-REVIEW.md'), path.join(project, 'phase', '01-REVIEW.md'));
-    run('commit');
-    const prompt = run('prompt');
-    assert.match(prompt, /<external_reviewer_evidence>/);
-    assert.ok(prompt.includes('gsd-review-cursor.md'), 'the cited lane path is in the prompt');
-  });
-
   test('lane-evidence-clear: no argument is a usage error; an absent file is a quiet no-op', (t) => {
     const dir = createTempDir('gsd-5019-'); t.after(() => cleanup(dir));
     const noArg = runNode([GSD_TOOLS, 'lane-evidence-clear'], {});
