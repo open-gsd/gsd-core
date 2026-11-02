@@ -57,6 +57,7 @@ module.exports = {
   "tests/close-phase-todos-padded-resolves.test.cjs",
   "tests/code-review-cicd.test.cjs",
   "tests/code-review-fix-pipeline-regression.test.cjs",
+  "tests/code-review-iteration-backup-name.property.test.cjs",
   "tests/code-review-necessity.test.cjs",
   "tests/code-review-pipeline-regression.test.cjs",
   "tests/code-review-tier3-files-override-scoping.test.cjs",

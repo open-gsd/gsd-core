@@ -23,8 +23,8 @@ const { span, runBash } = require('./helpers/doc-bash-span.cjs');
 const { runGsdTools } = require('./helpers.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-// The bash probe the property test uses too (tests/helpers/bash-probe.cjs, #5170).
-const HAS_BASH = have('bash');
+// The fence is POSIX bash: bash on PATH and not win32 (same gate as the property test).
+const HAS_BASH = have('bash') && process.platform !== 'win32';
 
 // Extract the bash fence out of a named <step>, so a test can RUN it rather than grep it.
 // Line-scanned rather than matched with a multiline regex: an ad-hoc fence regex trips

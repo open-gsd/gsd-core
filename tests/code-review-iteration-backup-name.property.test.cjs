@@ -37,8 +37,9 @@ function kept(names) {
 
 const oracle = (names) => [...names].filter((n) => BACKUP.test(n)).sort();
 
-// The span is bash: skip where there is none.
-const NO_BASH = !have('bash') && 'bash is not available';
+// The span is POSIX bash: skip without bash and on win32 (same gate as the pipeline tests).
+const NO_BASH = !(have('bash') && process.platform !== 'win32')
+  && 'bash is not available (the fence is POSIX-only)';
 
 describe('#5506 backup name grammar', { skip: NO_BASH }, () => {
   test('the cleanup span keeps exactly the .iter<digits>.md names', () => {
