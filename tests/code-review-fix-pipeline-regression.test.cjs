@@ -361,8 +361,9 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     // that /gsd-ship's clean-tree preflight refuses. Execute the shipped fence against a real repo.
     // The default mode runs the real-CLI stub (REAL_COMMIT_BODY, add + scoped commit, prints the
     // hash); the other modes make gsd_run print what cmdCommit prints for that outcome, so every
-    // defined outcome is driven: `skipped` is a per-phase phase_commit_docs=false override
-    // (src/commands.cts cmdCommit), `nothing` and `committed` are silent successes, `fail` exits 1.
+    // defined outcome is driven: `skipped` is a commit_docs policy skip (per-phase override or
+    // gitignored .planning; src/commands.cts cmdCommit), `nothing` and `committed` are silent
+    // successes, `fail` exits 1.
     const git = (dir, ...a) => runGit(a, { cwd: dir, timeoutMs: PROBE_TIMEOUT_MS });
 
     const drive = (commitDocs, status = 'issues_found', mode = 'commit') => {
@@ -416,12 +417,11 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
       assert.doesNotMatch(quiet.stdout, /^(Warning|Note)/m, mode + ': no warning or note');
     }
 
-    // Per-phase phase_commit_docs=false: cmdCommit exits 0 printing "skipped";
-    // say so, not "failed".
+    // A commit_docs policy skip: cmdCommit exits 0 printing "skipped"; say so, not "failed".
     const phaseOff = drive('true', 'issues_found', 'skipped');
     assert.strictEqual(phaseOff.count, '1', 'a skipped commit commits nothing');
     assert.ok(phaseOff.review && phaseOff.fix, 'backups are retained on disk');
-    assert.match(phaseOff.stdout, /phase_commit_docs is false/);
+    assert.match(phaseOff.stdout, /skipped by the commit_docs policy/);
     assert.doesNotMatch(
       phaseOff.stdout,
       /staged/,

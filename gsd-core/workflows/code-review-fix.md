@@ -540,15 +540,15 @@ if [ "$AUTO_MODE" = "true" ]; then
     # #5506: untracked backups leave a dirty tree. Commit them so the trail stays recoverable.
     if [ "$COMMIT_DOCS" = "true" ] && [ "${#BACKUP_FILES[@]}" -gt 0 ]; then
       # --raw prints the hash, or "committed", "nothing", "skipped" or "failed".
-      # Per-phase commit_docs=false exits 0 with "skipped": judge by output, not exit code.
+      # A commit_docs policy skip exits 0 with "skipped": judge by output, not exit code.
       BACKUP_COMMIT=$(gsd_run query commit \
         "docs(${PADDED_PHASE}): retain code review iteration backups" \
         --files "${BACKUP_FILES[@]}" --raw) || BACKUP_COMMIT=failed
       case "$BACKUP_COMMIT" in
         nothing|committed) ;; # unchanged, or committed without a hash
         skipped)
-          echo "Note: phase_commit_docs is false for this phase; iteration backups not" \
-            "committed: ${BACKUP_FILES[*]}" ;;
+          echo "Note: commit skipped by the commit_docs policy (per-phase override or" \
+            "gitignored .planning); iteration backups not committed: ${BACKUP_FILES[*]}" ;;
         ''|*[!0-9a-f]*)
           echo "Warning: iteration backup commit failed (${BACKUP_COMMIT:-no output}); a" \
             "rejected commit can leave them staged (git restore --staged): ${BACKUP_FILES[*]}" ;;
