@@ -114,3 +114,14 @@ test('modelFamily escapes catalog tier names', () => {
   }
 });
 
+test('escalationRoot degrades to the raw cwd on a resolution error, as resolveSentinelRoot does', (t) => {
+  t.mock.method(require('../gsd-core/bin/lib/worktree-safety.cjs'), 'resolveWorktreeRoot', () => { throw new Error('git unavailable'); });
+  const { escalationRoot } = require('../gsd-core/bin/lib/model-escalation.cjs');
+  const { resolveSentinelRoot } = require('../hooks/lib/isolation-sentinel.js');
+  const dir = createTempDir('gsd-esc-degrade-');
+  try {
+    if (escalationRoot(dir) !== dir || resolveSentinelRoot(dir) !== dir) throw new Error('both degrade to the cwd');
+  } finally {
+    cleanup(dir);
+  }
+});

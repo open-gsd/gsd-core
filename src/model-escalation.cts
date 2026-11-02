@@ -46,9 +46,13 @@ export interface EscalationRecord {
 export const escalationFile = (root: string, agentType: string): string =>
   path.join(root, '.gsd', `model-escalation-${agentType}.json`);
 
-/** The root a record for `cwd` lives at: the root hooks/lib/isolation-sentinel.js resolveSentinelRoot gives the hook (a test pins the two equal). */
+/** The root a record for `cwd` lives at: the root hooks/lib/isolation-sentinel.js resolveSentinelRoot gives the hook, raw `cwd` on a resolution error included (a test pins the two equal). */
 export function escalationRoot(cwd: string): string {
-  return fs.existsSync(path.join(cwd, '.planning')) ? cwd : findProjectRoot(worktreeSafetyMod.resolveWorktreeRoot(cwd).root);
+  try {
+    return fs.existsSync(path.join(cwd, '.planning')) ? cwd : findProjectRoot(worktreeSafetyMod.resolveWorktreeRoot(cwd).root);
+  } catch {
+    return cwd;
+  }
 }
 
 /**
