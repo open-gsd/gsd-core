@@ -88,7 +88,7 @@ Commit **both** the JSON source and the regenerated markdown.
 
 ## Open the PR
 
-First get an approved issue (see [Submission process](../registries/README.md#submission-process)). Branch as `docs/<issue#>-<slug>`, and use the [registry-entry PR template](../../.github/PULL_REQUEST_TEMPLATE/registry-entry.md).
+Branch as `docs/<issue#>-<slug>`, where `<issue#>` is the approved issue from step 1 of the [Submission process](../registries/README.md#submission-process), and use the [registry-entry PR template](../../.github/PULL_REQUEST_TEMPLATE/registry-entry.md).
 
 **One entry, one PR.** Do not bundle additions, updates, or removals together.
 
