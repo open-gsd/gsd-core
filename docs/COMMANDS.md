@@ -2395,12 +2395,12 @@ Persist, re-read and remove the external-reviewer lane evidence that `/gsd-code-
 `code-review-fix --auto` re-reviews (#5019). The state is a file under `$TMPDIR` (`/tmp` when unset, `os.tmpdir()` on Windows) keyed to the
 review file, `<suffix>\n<auto|once>\n<block>`; nothing is written into the project or its git metadata.
 `code-review` persists at dispatch (an empty block persists nothing and removes the lane directory), and clears at
-`check_empty_scope`, in `commit_review` (`--keep-auto` keeps an `--auto` state for the fixer loop) and when the
+`check_empty_scope`, in `commit_review` (`--keep-auto` keeps an `--auto` state for the fixer loop only when REVIEW.md is valid; otherwise `commit_review` clears it) and when the
 reviewer agent fails; `code-review-fix` reads before each re-review and clears at every exit after `REVIEW_PATH`
 is computed (its phase-validation exits precede that, and a nonexistent phase has no evidence to remove).
 
 **Prerequisites:** none — they read no project state and need no resolvable project root
-**Produces:** `lane-evidence-read` prints the block and a blank line, or nothing; the others print nothing. All exit 0 whether or not there was anything to do; an empty `<review-path>` or an invalid `<suffix>`/mode is a usage error with non-zero exit
+**Produces:** `lane-evidence-read` prints the block exactly as stored, or nothing; the others print nothing. All exit 0 whether or not there was anything to do; non-zero only for a usage error (an empty `<review-path>`, an invalid `<suffix>` or mode) and, for `lane-evidence-persist`, an unreadable stdin block (the lane directory is kept under a `once` state that `commit_review` then clears)
 
 ```bash
 printf '%s' "$EXTERNAL_EVIDENCE_BLOCK" | gsd_run lane-evidence-persist "$REVIEW_PATH" "$SUFFIX" auto
@@ -2409,8 +2409,8 @@ gsd_run lane-evidence-clear "$REVIEW_PATH" --keep-auto
 ```
 
 The suffix is data, not a path: only a 6-character alphanumeric value names a `$TMPDIR/gsd-review-lanes-<suffix>`
-directory. A symlinked or foreign-owned state or lane directory is never followed, and a malformed state, or one idle
-for 6 hours, is rejected (read prints a warning). Each read refreshes the state's mtime.
+directory. A symlinked or foreign-owned state or lane directory is never followed. A malformed state, a state that is not
+`auto`, or one idle for 6 hours is not read (read prints a warning); only a usable read refreshes the state's mtime.
 
 ---
 

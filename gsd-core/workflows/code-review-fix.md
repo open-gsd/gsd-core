@@ -565,8 +565,9 @@ if [ "$AUTO_MODE" = "true" ]; then
 fi
 ```
 
-**#5019 lane-evidence removal** — the lane evidence is spent once the loop ends, converged or not. Every exit of this
-workflow after `REVIEW_PATH` is computed runs this fence (AUTO_MODE or not; with no state it is a no-op).
+**#5019 lane-evidence removal** — the lane evidence is spent once the loop ends, converged or not. Every exit after
+`REVIEW_PATH` is computed removes the evidence through this verb: the early exits above call it where they exit, this
+fence covers the end of the loop (AUTO_MODE or not; with no state it is a no-op).
 
 ```bash
 gsd_run lane-evidence-clear "$REVIEW_PATH" || true
