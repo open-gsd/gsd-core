@@ -5776,6 +5776,8 @@ describe('state planned-phase command', () => {
     assert.match(after, /^Current Plan: Not started$/m, `STATE.md was:\n${after}`);
     assert.match(after, /^Total Plans in Phase: 6$/m);
     assert.ok(!JSON.parse(r.output).updated.includes('Current Plan'));
+    // as before this change: advance-plan has no readable position on this shape and refuses it
+    assert.strictEqual(JSON.parse(runGsdTools(['state', 'advance-plan'], tmpDir).output).reason, 'plan_position_unreadable');
   });
 
   test('#5320: a stray earlier Plan: line is the one written; the section line keeps its own position', () => {
