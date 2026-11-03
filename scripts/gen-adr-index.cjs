@@ -483,6 +483,21 @@ function maskInlineCodeSpans(line) {
 const ANGLE = /\s*<([^>\n]*)>/y;
 const TAIL = /(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?\s*\)/y;
 /**
+ * True when the `]` at `at` closes a bracket pair opened earlier in its paragraph
+ * (balanced, backslash escapes honoured): a stray `](x)` is text, not a link.
+ */
+function hasLabelOpener(text, at) {
+  const para = text.slice(0, at).split(/\n[ \t\r]*\n/).pop();
+  let depth = 1;
+  for (let j = para.length - 1; j >= 0; j -= 1) {
+    if (para[j - 1] === '\\') continue;
+    if (para[j] === ']') depth += 1;
+    else if (para[j] === '[' && !--depth) return true;
+  }
+  return false;
+}
+
+/**
  * Every inline-link destination in `text` (mask code first, see `maskCode`): an
  * angle-enclosed or bare destination (bare: balanced parentheses to any depth, `\`
  * escapes), then an optional title. Returns `{ at, dest, raw }` per link: `at` is the
@@ -492,6 +507,7 @@ const TAIL = /(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?\s*\)/y;
 function scanInlineLinks(text) {
   const out = [];
   for (let i = text.indexOf(']('); i >= 0; i = text.indexOf('](', i + 2)) {
+    if (!hasLabelOpener(text, i)) continue;
     ANGLE.lastIndex = i + 2;
     const angle = ANGLE.exec(text);
     let end = angle ? ANGLE.lastIndex : i + 2;

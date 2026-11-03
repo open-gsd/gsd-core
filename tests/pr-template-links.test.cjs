@@ -84,6 +84,13 @@ describe('link extractor (#5427)', () => {
 });
 
 describe('link extractor, edge forms (#5427)', () => {
+  test('a `](` with no opening bracket is text; attribute text in an open tag is not prose', () => {
+    assert.deepEqual(hrefsIn('stray ](../x.md) and [ok](../y.md) and [see [1]](../z.md)'),
+      ['../y.md', '../z.md']);
+    assert.deepEqual(hrefsIn('[a]\\](../x.md)\n\n](../w.md)'), []);
+    assert.deepEqual(hrefsIn('<a title="[x](../old.md)">t</a>'), []);
+    assert.deepEqual(hrefsIn('<a title="[x](../old.md)" href="../h.md">t</a>'), ['../h.md']);
+  });
   test('attributes tolerate whitespace around = and srcset lists every candidate', () => {
     assert.deepEqual(hrefsIn('<a href = "../x.md"> <img src\n=\n\'y.png\'>'), ['../x.md', 'y.png']);
     assert.deepEqual(hrefsIn('<img srcset="a.png 1x, ../b.png 2x">'), ['a.png', '../b.png']);
@@ -142,6 +149,9 @@ describe('next-ref existence and anchors (#5427)', () => {
       ['CONTRIBUTING.md#nope', '.github/pull_request_template.md#nope']);
     const seams = { headingsOf: () => new Set(['x_y']) };
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md#x%5Fy`], 'tpl.md', seams), []);
+    assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md#`], 'tpl.md'), []);
+    assert.deepEqual(unresolvedAnchors([`${REPO}raw/next/CONTRIBUTING.md#nope`], 'tpl.md'),
+      ['CONTRIBUTING.md#nope']);
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md`, `${NEXT}no-such.md#a`,
       `${REPO}issues/1#a`], 'tpl.md'), []);
   });
@@ -270,11 +280,18 @@ describe('PR template links (#5427)', () => {
   test('blob/next links point at existing repo paths',
     () => eachTemplate((f, hs) => missingNext(hs, f)));
   test('anchors on next resolve', () => eachTemplate((f, hs) => unresolvedAnchors(hs, f)));
-  test('"Using the wrong template?" links keep ?template= (maintainer ruling on #5427)', () => {
+  test('"Using the wrong template?" links keep ?template= and name an existing template', () => {
     const names = ['fix', 'feature', 'enhancement', 'registry-entry'];
     const files = names.map((n) => `.github/PULL_REQUEST_TEMPLATE/${n}.md`);
+    const all = templateFiles();
     for (const f of ['.github/pull_request_template.md', ...files]) {
-      assert.ok(hrefsOf(f).some((h) => h.startsWith('?template=')), f);
+      const values = hrefsOf(f).filter((h) => h.startsWith('?template='))
+        .map((h) => h.slice('?template='.length));
+      assert.ok(values.length, f);
+      // GitHub resolves the value against .github/PULL_REQUEST_TEMPLATE/, or .github/ for a path
+      const missing = values.filter((v) => !all.includes(`.github/PULL_REQUEST_TEMPLATE/${v}`)
+        && !all.includes(`.github/${v}`));
+      assert.deepEqual(missing, [], f);
     }
   });
   for (const n of ['feature', 'enhancement']) {

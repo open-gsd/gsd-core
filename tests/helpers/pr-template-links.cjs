@@ -74,7 +74,10 @@ const attrsIn = (t) => [...t.matchAll(TAG)].flatMap(([, body]) => [...body.match
 const hrefsIn = (text) => {
   const t = maskBlocks(maskComments(text));
   const refs = [...t.matchAll(REFDEF)].map((m) => m.slice(1).find((g) => g !== undefined));
-  return [...scanInlineLinks(t).map(({ dest }) => dest), ...attrsIn(t), ...refs];
+  // Attribute text of an HTML open tag is not prose: blanked for the link scan only
+  // (the `<A>` of `[a](<A>)` has no attributes and stays).
+  const prose = t.replace(TAG, (tag, body) => tag.replace(body, body.replace(/\S/g, ' ')));
+  return [...scanInlineLinks(prose).map(({ dest }) => dest), ...attrsIn(t), ...refs];
 };
 
 // Host and owner/name are case-insensitive on GitHub, the view and the ref are not.
@@ -200,10 +203,10 @@ const unresolvedAnchors = (hs, where, seams = {}) => {
   return hs.filter((h) => nextRel(h)?.includes('#')).flatMap((h) => {
     const rel = repoPathOf(h, where);
     const anchor = decode(h.slice(h.indexOf('#') + 1), h, where);
-    if (!existsExact(rel)) return [];
+    if (!existsExact(rel) || anchor === '') return [];
     const kind = anchorKind(repoLink(h), rel);
     const ok = kind === 'heading' ? headingsOf(rel).has(anchor)
-      : kind !== 'line' || lineAnchorOk(anchor, linesOf(rel));
+      : kind === 'line' && lineAnchorOk(anchor, linesOf(rel));
     return ok ? [] : [`${rel}#${anchor}`];
   });
 };
