@@ -7,7 +7,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { slugify } = require('../scripts/gen-features.cjs');
-const { extractLinks } = require('../scripts/gen-adr-index.cjs');
+const { extractLinks, maskCode } = require('../scripts/gen-adr-index.cjs');
+const { createTempDir, cleanup } = require('./helpers.cjs');
 const {
   REPO, NEXT, hrefsIn, isBadLink, missingNext, repoPathOf, unresolvedAnchors, headingSet,
 } = require('./helpers/pr-template-links.cjs');
@@ -202,13 +203,60 @@ describe('angle-enclosed destinations (#5427)', () => {
   });
 });
 
-const entries = (dir) => fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })
+// The pre-#5427 ADR-gate extractor, frozen as the oracle for the shared-scanner rewrite.
+const oldExtractLinks = (text) => {
+  const out = [];
+  const re = /!?\[[^\][\n]*\]\(([^()\n]*)\)/g;
+  maskCode(String(text)).split(/\r?\n/).forEach((l, i) => {
+    re.lastIndex = 0;
+    for (let m = re.exec(l); m !== null; m = re.exec(l)) out.push({ line: i + 1, target: m[1] });
+  });
+  return out;
+};
+
+describe('ADR gate extractLinks over the shared scanner (#5427)', () => {
+  test('agrees with the frozen regex implementation on every docs/adr file', () => {
+    const dir = path.join(ROOT, 'docs', 'adr');
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
+    assert.ok(files.length > 0, 'docs/adr/*.md');
+    for (const f of files) {
+      const text = fs.readFileSync(path.join(dir, f), 'utf8');
+      assert.deepEqual(extractLinks(text), oldExtractLinks(text), f);
+    }
+  });
+  test('pins the two intentional differences and the forms that keep their results', () => {
+    assert.deepEqual(extractLinks('[a](x y)'), []);
+    assert.deepEqual(extractLinks('[a]()'), []);
+    assert.deepEqual(extractLinks('[a](x "t")'), [{ line: 1, target: 'x "t"' }]);
+    assert.deepEqual(extractLinks('[a](<x y>)'), [{ line: 1, target: '<x y>' }]);
+    assert.deepEqual(extractLinks('![i](p.png)'), [{ line: 1, target: 'p.png' }]);
+  });
+});
+
+const entries = (root, dir) => fs.readdirSync(path.join(root, dir), { withFileTypes: true })
   .map((e) => ({ rel: path.posix.join(dir, e.name), dir: e.isDirectory() }));
 // Every file GitHub reads as a PR template: root, docs/ and .github/, plain or in a directory.
-const templateFiles = () => ['.', 'docs', '.github'].flatMap(entries)
-  .flatMap((e) => (e.dir && isPrTemplate(`${e.rel}/x`) ? entries(e.rel) : [e]))
+const templateFiles = (root = ROOT) => ['.', 'docs', '.github']
+  .flatMap((d) => entries(root, d))
+  .flatMap((e) => (e.dir && isPrTemplate(`${e.rel}/x`) ? entries(root, e.rel) : [e]))
+  .filter((e) => !e.dir)
   .map((e) => e.rel)
   .filter(isPrTemplate);
+
+describe('templateFiles (#5427)', () => {
+  test('lists files, never a subdirectory of a template directory', (t) => {
+    const dir = createTempDir();
+    t.after(() => cleanup(dir));
+    const sub = path.join(dir, '.github', 'PULL_REQUEST_TEMPLATE', 'sub');
+    fs.mkdirSync(sub, { recursive: true });
+    fs.mkdirSync(path.join(dir, 'docs'));
+    fs.writeFileSync(path.join(dir, '.github', 'PULL_REQUEST_TEMPLATE', 'fix.md'), '');
+    fs.writeFileSync(path.join(sub, 'x.md'), '');
+    fs.writeFileSync(path.join(dir, 'pull_request_template.md'), '');
+    assert.deepEqual(templateFiles(dir).sort(),
+      ['.github/PULL_REQUEST_TEMPLATE/fix.md', 'pull_request_template.md']);
+  });
+});
 
 describe('PR template links (#5427)', () => {
   const eachTemplate = (check) => {

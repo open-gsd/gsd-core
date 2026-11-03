@@ -12,41 +12,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { slugify } = require('../../scripts/gen-features.cjs');
-const { maskCode } = require('../../scripts/gen-adr-index.cjs');
+const { maskCode, scanInlineLinks } = require('../../scripts/gen-adr-index.cjs');
 const { tokenizeHeadings } = require('../../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 const ROOT = path.join(__dirname, '..', '..');
 const REPO = 'https://github.com/open-gsd/gsd-core/';
 const NEXT = `${REPO}blob/next/`;
-
-// Inline links: an angle-enclosed or bare destination (bare: balanced parentheses, any
-// depth), then an optional title.
-const ANGLE = /\s*<([^>\n]*)>/y;
-const TAIL = /(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?\s*\)/y;
-const inlineDests = (t) => {
-  const out = [];
-  for (let i = t.indexOf(']('); i >= 0; i = t.indexOf('](', i + 2)) {
-    ANGLE.lastIndex = i + 2;
-    const m = ANGLE.exec(t);
-    let j = m ? ANGLE.lastIndex : i + 2;
-    let d = m?.[1];
-    if (!m) {
-      let depth = 0;
-      while (/\s/.test(t[j] ?? '')) j++;
-      const start = j;
-      for (; j < t.length && !/\s/.test(t[j]); j++) {
-        if (t[j] === '\\' && /\S/.test(t[j + 1] ?? '')) j++;
-        else if (t[j] === '(') depth++;
-        else if (t[j] === ')' && !depth--) break;
-      }
-      if (depth > 0) continue;
-      d = t.slice(start, j);
-    }
-    TAIL.lastIndex = j;
-    if (d && TAIL.test(t)) out.push(d);
-  }
-  return out;
-};
 
 const REF_PREFIX = String.raw`^(?:[ \t]*(?:>|(?:[-*+]|\d{1,9}[.)])(?=[ \t])))* *`
   + String.raw`\[[^\]\n]+\]:[ \t]*(?:\r?\n[ \t]*)?`;
@@ -103,7 +74,7 @@ const attrsIn = (t) => [...t.matchAll(TAG)].flatMap(([, body]) => [...body.match
 const hrefsIn = (text) => {
   const t = maskBlocks(maskComments(text));
   const refs = [...t.matchAll(REFDEF)].map((m) => m.slice(1).find((g) => g !== undefined));
-  return [...inlineDests(t), ...attrsIn(t), ...refs];
+  return [...scanInlineLinks(t).map(({ dest }) => dest), ...attrsIn(t), ...refs];
 };
 
 // Host and owner/name are case-insensitive on GitHub, the view and the ref are not.

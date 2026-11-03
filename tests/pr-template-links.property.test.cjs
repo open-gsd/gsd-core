@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const {
   REPO, NEXT, hrefsIn, isBadLink, unresolvedAnchors,
 } = require('./helpers/pr-template-links.cjs');
+const { extractLinks } = require('../scripts/gen-adr-index.cjs');
 const { isPrTemplate } = require('../scripts/ci-test-scope.cjs');
 
 const seg = fc.stringMatching(/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,19}$/); // never `.` or `..`
@@ -126,6 +127,29 @@ describe('PR template locations (#5427)', () => {
         `${dir}${name}`, `${dir}sub/${name}.md`, `x${dir}${name}.md`, `${dir}${name}/`]) {
         assert.ok(!isPrTemplate(near), near);
       }
+    }));
+  });
+});
+
+describe('ADR gate extractLinks (#5427)', () => {
+  const d = fc.stringMatching(/^[A-Za-z0-9_-][A-Za-z0-9._/-]{0,19}$/);
+  const text = fc.stringMatching(/^[A-Za-z0-9 ]{0,10}$/);
+  const ttl = fc.constantFrom('', ' "t"', " 't'");
+  test('property: a bracket-free text and a parenthesis-free target give one link', () => {
+    fc.assert(fc.property(text, d, ttl, (a, dest, t) => {
+      assert.deepEqual(extractLinks(`[${a}](${dest}${t})`), [{ line: 1, target: dest + t }]);
+    }));
+  });
+  test('property: an open parenthesis in the destination or a stray close bracket or newline'
+    + ' in the text is no link; a close parenthesis ends the link; an open bracket restarts it',
+  () => {
+    fc.assert(fc.property(text, d, ttl, (a, dest, t) => {
+      assert.deepEqual(extractLinks(`[${a}](${dest}(${t})`), []);
+      assert.deepEqual(extractLinks(`[${a}](${dest})x${t})`), [{ line: 1, target: dest }]);
+      for (const bad of [']', '\n']) {
+        assert.deepEqual(extractLinks(`[${a}${bad}${a}](${dest}${t})`), []);
+      }
+      assert.deepEqual(extractLinks(`[${a}[${a}](${dest}${t})`), [{ line: 1, target: dest + t }]);
     }));
   });
 });
