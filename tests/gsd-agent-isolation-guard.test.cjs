@@ -2037,17 +2037,14 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
   const PINNED = { GSD_TEST_MODE: '1', GSD_NOW_MS: String(PIN) };
   const atPin = { now: () => PIN };
 
-  test('isolation fixtures pin the profile the payload model comes from', () => {
+  test('isolation fixtures pin the profile the payload model comes from', (t) => {
     const dir = mkProject('gsd-aig-pin-');
-    try {
-      writeConfig(dir, pinnedConfig({ runtime: 'claude' }));
-      const r = runGsdTools(['resolve-model', 'gsd-executor'], dir);
-      assert.ok(r.success, r.error);
-      assert.equal(JSON.parse(r.output).model, agentPayload().tool_input.model);
-      assert.equal(JSON.parse(fs.readFileSync(path.join(dir, '.planning', 'config.json'), 'utf8')).model_profile, PINNED_PROFILE);
-    } finally {
-      cleanup(dir);
-    }
+    t.after(() => cleanup(dir));
+    writeConfig(dir, pinnedConfig({ runtime: 'claude' }));
+    const r = runGsdTools(['resolve-model', 'gsd-executor'], dir);
+    assert.ok(r.success, r.error);
+    assert.equal(JSON.parse(r.output).model, agentPayload().tool_input.model);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, '.planning', 'config.json'), 'utf8')).model_profile, PINNED_PROFILE);
   });
 
   test('mismatch warns; matching alias or full id allows', (t) => {

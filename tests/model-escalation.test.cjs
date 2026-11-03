@@ -30,45 +30,39 @@ test('property: modelFamily maps any id carrying a catalog tier name as a token 
   fc.assert(fc.property(fc.constantFrom('gpt-5', 'o3', 'gemini-2.5-pro', 'xopus', 'sonnetx', '9opus'), (id) => modelFamily(id) === id));
 });
 
-test('property: writeEscalation keeps a .gitignore with a bare * or its marker, else appends marker and rules once; an absent file becomes *', () => {
+test('property: writeEscalation keeps a .gitignore with a bare * or its marker, else appends marker and rules once; an absent file becomes *', (t) => {
   const { writeEscalation } = require('../gsd-core/bin/lib/model-escalation.cjs');
   const marker = '# gsd-core model guard';
   const dir = createTempDir('gsd-esc-ignore-');
-  try {
-    const file = path.join(dir, '.gsd', '.gitignore');
+  t.after(() => cleanup(dir));
+  const file = path.join(dir, '.gsd', '.gitignore');
+  writeEscalation(dir, 'gsd-executor', 'opus');
+  if (fs.readFileSync(file, 'utf8') !== '*\n') throw new Error('an absent .gitignore must become *');
+  const line = fc.constantFrom('*', '* ', '!*', 'a*', '/x', '', marker, '# gsd-core dispatch sentinel');
+  fc.assert(fc.property(fc.array(line, { maxLength: 4 }), fc.constantFrom('\n', '\r\n'), fc.boolean(), (lines, eol, trailing) => {
+    const before = lines.join(eol) + (trailing && lines.length ? eol : '');
+    fs.writeFileSync(file, before);
     writeEscalation(dir, 'gsd-executor', 'opus');
-    if (fs.readFileSync(file, 'utf8') !== '*\n') throw new Error('an absent .gitignore must become *');
-    const line = fc.constantFrom('*', '* ', '!*', 'a*', '/x', '', marker, '# gsd-core dispatch sentinel');
-    fc.assert(fc.property(fc.array(line, { maxLength: 4 }), fc.constantFrom('\n', '\r\n'), fc.boolean(), (lines, eol, trailing) => {
-      const before = lines.join(eol) + (trailing && lines.length ? eol : '');
-      fs.writeFileSync(file, before);
-      writeEscalation(dir, 'gsd-executor', 'opus');
-      const once = fs.readFileSync(file, 'utf8');
-      writeEscalation(dir, 'gsd-executor', 'opus');
-      const covered = /^\*\r?$/m.test(before) || before.includes(marker);
-      const want = covered ? before : `${before}${before.endsWith('\n') ? '' : '\n'}${marker}\n/model-escalation-*\n/.gitignore.tmp-*\n`;
-      return once === want && fs.readFileSync(file, 'utf8') === once;
-    }));
-  } finally {
-    cleanup(dir);
-  }
+    const once = fs.readFileSync(file, 'utf8');
+    writeEscalation(dir, 'gsd-executor', 'opus');
+    const covered = /^\*\r?$/m.test(before) || before.includes(marker);
+    const want = covered ? before : `${before}${before.endsWith('\n') ? '' : '\n'}${marker}\n/model-escalation-*\n/.gitignore.tmp-*\n`;
+    return once === want && fs.readFileSync(file, 'utf8') === once;
+  }));
 });
 
-test('property: escalationRoot resolves a directory at any depth inside a project to the root resolveSentinelRoot gives the hook', () => {
+test('property: escalationRoot resolves a directory at any depth inside a project to the root resolveSentinelRoot gives the hook', (t) => {
   const { escalationRoot } = require('../gsd-core/bin/lib/model-escalation.cjs');
   const { resolveSentinelRoot } = require('../hooks/lib/isolation-sentinel.js');
   const { createFixture } = require('./fixtures/index.cjs');
   const project = createFixture({ prefix: 'gsd-esc-root-', planning: true, git: true, projectDoc: false });
-  try {
-    const root = escalationRoot(project);
-    fc.assert(fc.property(fc.array(fc.constantFrom('a', 'b', 'c.d'), { maxLength: 3 }), (segs) => {
-      const dir = path.join(project, ...segs);
-      fs.mkdirSync(dir, { recursive: true });
-      return escalationRoot(dir) === root && resolveSentinelRoot(dir) === root;
-    }));
-  } finally {
-    cleanup(project);
-  }
+  t.after(() => cleanup(project));
+  const root = escalationRoot(project);
+  fc.assert(fc.property(fc.array(fc.constantFrom('a', 'b', 'c.d'), { maxLength: 3 }), (segs) => {
+    const dir = path.join(project, ...segs);
+    fs.mkdirSync(dir, { recursive: true });
+    return escalationRoot(dir) === root && resolveSentinelRoot(dir) === root;
+  }));
 });
 
 test('property: the CLI pin accept regex is exactly "alphanumeric first, then MODEL_ID_CHARSET_BODY" from the owner', () => {
@@ -79,65 +73,52 @@ test('property: the CLI pin accept regex is exactly "alphanumeric first, then MO
     MODEL_ID_CHARSET_RE.test(id) === (/^[A-Za-z0-9]/.test(id) && body.test(id))));
 });
 
-test('property: the init --ws carry round-trips a valid name per session, other sessions and an absent session read null, invalid names are never kept', () => {
+test('property: the init --ws carry round-trips a valid name per session, other sessions and an absent session read null, invalid names are never kept', (t) => {
   const store = require('../gsd-core/bin/lib/active-workstream-store.cjs');
   const { ESCALATION_WINDOW_MS: W } = require('../gsd-core/bin/lib/model-escalation.cjs');
   const T = 1_000_000;
   const project = createTempDir('gsd-esc-carry-');
   const base = 'a'.repeat(159);
   const clearAll = () => { for (const s of ['s1', 's2', base, `${base}b`]) store.createSessionScopedPointerAdapter(project, `init-ws-${s}`).clear(); };
-  try {
-    fc.assert(fc.property(
-      fc.constantFrom('alpha', 'b-2', 'c_3', 'd.4', '../x', 'a b', ''), fc.constantFrom('s1', 's2', undefined, ''),
-      (name, session) => {
-        try {
-          const recorded = store.recordInitWorkstream(project, session, name, T);
-          const kept = Boolean(session) && store.validateWorkstreamName(name);
-          const other = session === 's1' ? 's2' : 's1';
-          return recorded === kept && store.peekInitWorkstream(project, session, T) === (kept ? name : null) && store.peekInitWorkstream(project, other, T) === null;
-        } finally {
-          clearAll();
-        }
-      },
-    ));
-    try {
-      store.recordInitWorkstream(project, base, 'alpha', T);
-      if (store.peekInitWorkstream(project, `${base}b`, T) !== null) throw new Error('159 chars must not read as 160');
+  t.after(() => { clearAll(); cleanup(project); });
+  fc.assert(fc.property(
+    fc.constantFrom('alpha', 'b-2', 'c_3', 'd.4', '../x', 'a b', ''), fc.constantFrom('s1', 's2', undefined, ''),
+    (name, session) => {
       clearAll();
-      store.recordInitWorkstream(project, `${base}b`, 'alpha', T);
-      if (store.peekInitWorkstream(project, `${base}bc`, T) !== 'alpha') throw new Error('161 chars cut to the 160-char token');
-    } finally {
-      clearAll();
-    }
-    try {
-      store.recordInitWorkstream(project, 's1', 'alpha', T);
-      const at = (now) => store.peekInitWorkstream(project, 's1', now);
-      if (at(T + W - 1) !== 'alpha' || at(T + W) !== null || at(T + W + 1) !== null) throw new Error('a carry counts for W ms');
-      store.recordInitWorkstream(project, 's1', 'alpha', T + W - 1);
-      if (at(T + W + 1) !== 'alpha') throw new Error('a new record refreshes the carry');
-    } finally {
-      clearAll();
-    }
-  } finally {
-    cleanup(project);
-  }
+      const recorded = store.recordInitWorkstream(project, session, name, T);
+      const kept = Boolean(session) && store.validateWorkstreamName(name);
+      const other = session === 's1' ? 's2' : 's1';
+      return recorded === kept && store.peekInitWorkstream(project, session, T) === (kept ? name : null) && store.peekInitWorkstream(project, other, T) === null;
+    },
+  ));
+  clearAll();
+  store.recordInitWorkstream(project, base, 'alpha', T);
+  if (store.peekInitWorkstream(project, `${base}b`, T) !== null) throw new Error('159 chars must not read as 160');
+  clearAll();
+  store.recordInitWorkstream(project, `${base}b`, 'alpha', T);
+  if (store.peekInitWorkstream(project, `${base}bc`, T) !== 'alpha') throw new Error('161 chars cut to the 160-char token');
+  clearAll();
+  store.recordInitWorkstream(project, 's1', 'alpha', T);
+  const at = (now) => store.peekInitWorkstream(project, 's1', now);
+  if (at(T + W - 1) !== 'alpha' || at(T + W) !== null || at(T + W + 1) !== null) throw new Error('a carry counts for W ms');
+  store.recordInitWorkstream(project, 's1', 'alpha', T + W - 1);
+  if (at(T + W + 1) !== 'alpha') throw new Error('a new record refreshes the carry');
 });
 
-test('recordInitWorkstream prunes this project\'s expired carries', () => {
+test('recordInitWorkstream prunes this project\'s expired carries', (t) => {
   const store = require('../gsd-core/bin/lib/active-workstream-store.cjs');
   const { ESCALATION_WINDOW_MS: W } = require('../gsd-core/bin/lib/model-escalation.cjs');
   const T = 1_000_000;
   const project = createTempDir('gsd-esc-prune-');
   const raw = (s) => store.createSessionScopedPointerAdapter(project, `init-ws-${s}`);
-  try {
-    store.recordInitWorkstream(project, 's1', 'alpha', T);
-    store.recordInitWorkstream(project, 's2', 'beta', T + W);
-    if (raw('s1').read() !== null) throw new Error('the expired s1 carry stays');
-    if (store.peekInitWorkstream(project, 's2', T + W) !== 'beta') throw new Error('the s2 carry is lost');
-  } finally {
+  t.after(() => {
     for (const s of ['s1', 's2']) raw(s).clear();
     cleanup(project);
-  }
+  });
+  store.recordInitWorkstream(project, 's1', 'alpha', T);
+  store.recordInitWorkstream(project, 's2', 'beta', T + W);
+  if (raw('s1').read() !== null) throw new Error('the expired s1 carry stays');
+  if (store.peekInitWorkstream(project, 's2', T + W) !== 'beta') throw new Error('the s2 carry is lost');
 });
 
 test('a stray entry in the carry directory cannot turn a recorded carry into "not recorded"', (t) => {
@@ -185,39 +166,35 @@ test('guardApplies: false when the guard is off, the root config is unreadable, 
   }
 });
 
-test('property: readGuardMode gives skip for an absent, unparseable or over-cap root config, else hooks.agent_model_guard', () => {
+test('property: readGuardMode gives skip for an absent, unparseable or over-cap root config, else hooks.agent_model_guard', (t) => {
   const { readGuardMode, MAX_READ_BYTES } = require('../gsd-core/bin/lib/model-escalation.cjs');
   const root = createTempDir('gsd-esc-mode-');
   const config = path.join(root, '.planning', 'config.json');
-  try {
-    fs.mkdirSync(path.dirname(config), { recursive: true });
-    if (JSON.stringify(readGuardMode(root)) !== '{"skip":true}') throw new Error('an absent config skips');
-    fc.assert(fc.property(fc.constantFrom('warn', 'deny', false, true, 'off', undefined), fc.constantFrom(0, MAX_READ_BYTES - 1, MAX_READ_BYTES, MAX_READ_BYTES + 1), (mode, size) => {
-      const body = JSON.stringify({ hooks: { agent_model_guard: mode } });
-      fs.writeFileSync(config, size ? body + ' '.repeat(Math.max(0, size - body.length)) : body);
-      const got = readGuardMode(root);
-      return size > MAX_READ_BYTES ? got.skip === true : got.skip === undefined && got.mode === mode;
-    }));
-    fs.writeFileSync(config, '{not json');
-    if (readGuardMode(root).skip !== true) throw new Error('unparseable skips');
-  } finally {
-    cleanup(root);
-  }
+  t.after(() => cleanup(root));
+  fs.mkdirSync(path.dirname(config), { recursive: true });
+  if (JSON.stringify(readGuardMode(root)) !== '{"skip":true}') throw new Error('an absent config skips');
+  fc.assert(fc.property(fc.constantFrom('warn', 'deny', false, true, 'off', undefined), fc.constantFrom(0, MAX_READ_BYTES - 1, MAX_READ_BYTES, MAX_READ_BYTES + 1), (mode, size) => {
+    const body = JSON.stringify({ hooks: { agent_model_guard: mode } });
+    fs.writeFileSync(config, size ? body + ' '.repeat(Math.max(0, size - body.length)) : body);
+    const got = readGuardMode(root);
+    return size > MAX_READ_BYTES ? got.skip === true : got.skip === undefined && got.mode === mode;
+  }));
+  fs.writeFileSync(config, '{not json');
+  if (readGuardMode(root).skip !== true) throw new Error('unparseable skips');
 });
 
-test('modelFamily escapes catalog tier names', () => {
+test('modelFamily escapes catalog tier names', (t) => {
   const { CLAUDE_AGENT_ALIASES } = require('../gsd-core/bin/lib/model-catalog.cjs');
   const mod = require.resolve('../gsd-core/bin/lib/model-escalation.cjs');
-  CLAUDE_AGENT_ALIASES.add('o.us');
-  delete require.cache[mod];
-  try {
-    const { modelFamily } = require(mod);
-    if (modelFamily('claude-o.us-1') !== 'o.us') throw new Error('the tier name matches literally');
-    if (modelFamily('claude-oxus-1') !== 'claude-oxus-1') throw new Error('a . in a tier name is not a wildcard');
-  } finally {
+  t.after(() => {
     CLAUDE_AGENT_ALIASES.delete('o.us');
     delete require.cache[mod];
-  }
+  });
+  CLAUDE_AGENT_ALIASES.add('o.us');
+  delete require.cache[mod];
+  const { modelFamily } = require(mod);
+  if (modelFamily('claude-o.us-1') !== 'o.us') throw new Error('the tier name matches literally');
+  if (modelFamily('claude-oxus-1') !== 'claude-oxus-1') throw new Error('a . in a tier name is not a wildcard');
 });
 
 test('escalationRoot degrades to the raw cwd on a resolution error, as resolveSentinelRoot does', (t) => {
@@ -225,9 +202,6 @@ test('escalationRoot degrades to the raw cwd on a resolution error, as resolveSe
   const { escalationRoot } = require('../gsd-core/bin/lib/model-escalation.cjs');
   const { resolveSentinelRoot } = require('../hooks/lib/isolation-sentinel.js');
   const dir = createTempDir('gsd-esc-degrade-');
-  try {
-    if (escalationRoot(dir) !== dir || resolveSentinelRoot(dir) !== dir) throw new Error('both degrade to the cwd');
-  } finally {
-    cleanup(dir);
-  }
+  t.after(() => cleanup(dir));
+  if (escalationRoot(dir) !== dir || resolveSentinelRoot(dir) !== dir) throw new Error('both degrade to the cwd');
 });
