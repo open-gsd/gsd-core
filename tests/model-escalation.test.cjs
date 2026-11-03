@@ -140,7 +140,7 @@ test('recordInitWorkstream prunes this project\'s expired carries', () => {
   }
 });
 
-test('a stray entry in the carry directory cannot turn a recorded carry into "not recorded"', () => {
+test('a stray entry in the carry directory cannot turn a recorded carry into "not recorded"', (t) => {
   const store = require('../gsd-core/bin/lib/active-workstream-store.cjs');
   const os = require('node:os');
   const T = 1_000_000;
@@ -148,42 +148,40 @@ test('a stray entry in the carry directory cannot turn a recorded carry into "no
   const project = createTempDir('gsd-esc-stray-');
   const root = path.join(os.tmpdir(), 'gsd-workstream-sessions');
   let dir = null;
-  try {
-    store.recordInitWorkstream(project, token, 'alpha', T);
-    dir = fs.readdirSync(root).map((d) => path.join(root, d)).find((d) => fs.existsSync(path.join(d, `init-ws-${token}`)));
-    if (!dir) throw new Error('the carry directory is not found');
-    fs.mkdirSync(path.join(dir, 'init-ws-x'));
-    if (store.recordInitWorkstream(project, token, 'beta', T + 1) !== true) throw new Error('a recorded carry must report true');
-    if (store.peekInitWorkstream(project, token, T + 1) !== 'beta') throw new Error('the beta carry is lost');
-  } finally {
+  t.after(() => {
     if (dir) cleanup(path.join(dir, 'init-ws-x'));
     store.createSessionScopedPointerAdapter(project, `init-ws-${token}`).clear();
     cleanup(project);
-  }
+  });
+  store.recordInitWorkstream(project, token, 'alpha', T);
+  dir = fs.readdirSync(root).map((d) => path.join(root, d)).find((d) => fs.existsSync(path.join(d, `init-ws-${token}`)));
+  if (!dir) throw new Error('the carry directory is not found');
+  fs.mkdirSync(path.join(dir, 'init-ws-x'));
+  if (store.recordInitWorkstream(project, token, 'beta', T + 1) !== true) throw new Error('a recorded carry must report true');
+  if (store.peekInitWorkstream(project, token, T + 1) !== 'beta') throw new Error('the beta carry is lost');
 });
 
-test('guardApplies: false when the guard is off, the root config is unreadable, or the runtime has no native tier aliases; true for warn and deny on claude', () => {
+test('guardApplies: false when the guard is off, the root config is unreadable, or the runtime has no native tier aliases; true for warn and deny on claude', (t) => {
   const { guardApplies } = require('../gsd-core/bin/lib/model-escalation.cjs');
   const saved = process.env.GSD_RUNTIME;
   delete process.env.GSD_RUNTIME;
   const root = createTempDir('gsd-esc-applies-');
-  const config = path.join(root, '.planning', 'config.json');
-  try {
-    fs.mkdirSync(path.dirname(config), { recursive: true });
-    const at = (text) => { fs.writeFileSync(config, text); return guardApplies(root); };
-    const rows = [
-      [JSON.stringify({ runtime: 'claude' }), true],
-      [JSON.stringify({ runtime: 'claude', hooks: { agent_model_guard: 'deny' } }), true],
-      [JSON.stringify({ runtime: 'claude', hooks: { agent_model_guard: false } }), false],
-      [JSON.stringify({ runtime: 'codex' }), false],
-      ['{not json', false],
-    ];
-    for (const [text, want] of rows) {
-      if (at(text) !== want) throw new Error(`guardApplies(${text}) must be ${want}`);
-    }
-  } finally {
+  t.after(() => {
     if (saved === undefined) delete process.env.GSD_RUNTIME; else process.env.GSD_RUNTIME = saved;
     cleanup(root);
+  });
+  const config = path.join(root, '.planning', 'config.json');
+  fs.mkdirSync(path.dirname(config), { recursive: true });
+  const at = (text) => { fs.writeFileSync(config, text); return guardApplies(root); };
+  const rows = [
+    [JSON.stringify({ runtime: 'claude' }), true],
+    [JSON.stringify({ runtime: 'claude', hooks: { agent_model_guard: 'deny' } }), true],
+    [JSON.stringify({ runtime: 'claude', hooks: { agent_model_guard: false } }), false],
+    [JSON.stringify({ runtime: 'codex' }), false],
+    ['{not json', false],
+  ];
+  for (const [text, want] of rows) {
+    if (at(text) !== want) throw new Error(`guardApplies(${text}) must be ${want}`);
   }
 });
 
