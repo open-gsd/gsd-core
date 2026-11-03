@@ -158,7 +158,7 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
   test('a directory at the carry path reads as no carry', (t) => {
     const session = path.basename(base);
     const file = carryFile(t, session);
-    fs.rmSync(file);
+    cleanup(file);
     fs.mkdirSync(file);
     t.after(() => cleanup(file));
     assert.equal(peekInitWorkstream(base, session, T), null);
@@ -183,18 +183,14 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
     createSessionScopedPointerAdapter(base, 'init-ws-zold').write(`alpha ${T}`);
     t.after(() => createSessionScopedPointerAdapter(base, 'init-ws-zold').clear());
     const realList = fs.readdirSync;
-    const realRm = fs.rmSync;
-    const forced = [];
+    const rm = t.mock.method(fs, 'rmSync');
     fs.readdirSync = (d, ...rest) => {
       const names = realList(d, ...rest);
       return d === dir ? ['init-ws-0phantom', ...names] : names;
     };
-    fs.rmSync = (f, opts) => {
-      if (path.basename(f) === 'init-ws-0phantom') forced.push(opts?.force);
-      return realRm(f, opts);
-    };
-    t.after(() => { fs.readdirSync = realList; fs.rmSync = realRm; });
+    t.after(() => { fs.readdirSync = realList; });
     assert.equal(recordInitWorkstream(base, session, 'beta', T + W), true);
+    const forced = rm.mock.calls.filter((c) => path.basename(c.arguments[0]) === 'init-ws-0phantom').map((c) => c.arguments[1]?.force);
     assert.deepEqual(forced, [true], 'the vanished entry is removed with force');
     assert.equal(raw('init-ws-zold'), null, 'a later expired carry is still pruned');
   });
