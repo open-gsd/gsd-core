@@ -39,7 +39,7 @@ The executor MUST:
    ```
 ### TDD GATE TRIPPED — Plan {plan_id}, Task {task_id}
 
-   Reason: {missing_red_commit | red_commit_not_failing | feat_before_test | invalid_red}
+   Reason: {missing_red_commit | red_commit_not_failing | impl_before_test | invalid_red}
 
    Behavior expected to be tested:
    - {first behavior bullet}
