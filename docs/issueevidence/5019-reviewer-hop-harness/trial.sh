@@ -7,8 +7,8 @@ arm=${1:?head|base}; n=${2:?trial number}; T=$W/$arm/trial-$n
 [ -e "$T" ] && { echo "$T exists; pick a new N" >&2; exit 1; }
 mkdir -p "$T"; cp -a "$W/$arm/project" "$T/project"
 OLD=$W/$arm/project NEW=$T/project
-# BSD and GNU sed disagree on -i, so rewrite through a temp file
-while IFS= read -r -d '' f; do sed "s|$OLD|$NEW|g" "$f" > "$f.new" && mv "$f.new" "$f"; done < <(grep -rIl --null -F "$OLD" "$T/project" || true)
+# literal replace in node: sed would read `|`, `&` and `\` in the path as syntax
+grep -rIlZ -F "$OLD" "$T/project" | OLD=$OLD NEW=$NEW xargs -0 node -e 'const fs = require("fs"); for (const f of process.argv.slice(1)) fs.writeFileSync(f, fs.readFileSync(f, "utf8").split(process.env.OLD).join(process.env.NEW));' || true
 if [ "$arm" = head ]; then
   # the state is keyed to the resolved REVIEW_PATH, so the copy needs its own: read at OLD, rewrite the path, persist at NEW (fresh mtime)
   TOOLS=$(wt_of head)/gsd-core/bin/gsd-tools.cjs
