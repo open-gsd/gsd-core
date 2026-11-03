@@ -499,31 +499,33 @@ function linkTargetIsMissing(linkPath: string): boolean {
  * opt-in the link's real target is returned, so the rename lands there and the
  * link stays in place. A plain or missing file is returned unchanged. A
  * dangling link is refused either way (`tryLstat` sees it where `existsSync`
- * would not), the same as `hasExistingSymlinkBetween` treats one.
+ * would not), the same as `hasExistingSymlinkBetween` treats one elsewhere in
+ * the installer.
  *
  * `label` starts the refusal message and names the writer, e.g.
- * `writeSettings: settings file`. When the opt-in is already set, telling the
- * user to re-run with it would send them in a circle, so those refusals say
- * what is actually wrong instead: the link's target is missing, or it resolves
- * to the install root itself (which `hasExistingSymlinkBetween` always refuses).
+ * `writeSettings: settings file`. Each refusal says what would let the write
+ * go ahead, so the helper first asks whether the link could be followed at
+ * all. A link `hasExistingSymlinkBetween` refuses even with following allowed
+ * (a missing target, a loop, a link to the install root itself) is refused
+ * with that reason whether or not the opt-in is set, because setting it would
+ * not help. Only a link the opt-in would let through asks for the opt-in.
  */
 function resolveSymlinkedLeafWritePath(installRoot: string, targetPath: string, label: string): string {
   const stat = tryLstat(targetPath);
   if (!stat || !stat.isSymbolicLink()) return targetPath;
-  const optIn = isSymlinkedDestOptIn();
-  if (hasExistingSymlinkBetween(installRoot, targetPath, { allowOptInFollow: optIn })) {
-    if (optIn && linkTargetIsMissing(targetPath)) {
+  if (hasExistingSymlinkBetween(installRoot, targetPath, { allowOptInFollow: true })) {
+    if (linkTargetIsMissing(targetPath)) {
       throw new Error(
         `${label} "${targetPath}" is a symlink whose target does not exist, so it was not written. ` +
           'Point the link at an existing file or remove it, then re-run.',
       );
     }
-    if (optIn) {
-      throw new Error(
-        `${label} "${targetPath}" is a symlink GSD will not follow even with GSD_ALLOW_SYMLINKED_DEST set, ` +
-          `because it resolves to the install root "${installRoot}" itself or cannot be resolved, so it was not written.`,
-      );
-    }
+    throw new Error(
+      `${label} "${targetPath}" is a symlink GSD will not follow, even with GSD_ALLOW_SYMLINKED_DEST set, ` +
+        `because it resolves to the install root "${installRoot}" itself or cannot be resolved, so it was not written.`,
+    );
+  }
+  if (!isSymlinkedDestOptIn()) {
     throw new Error(
       `${label} "${targetPath}" is a symlink the install root "${installRoot}" does not trust, so it was not written. ` +
         'If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.',
