@@ -31,8 +31,9 @@ artifact-order/mtime inference** for any dispatch below that needs a phase, sinc
 and the two diverge whenever one phase is being planned or verified while another still
 executes. Absent `context` means `--phase` was omitted, or it was dropped: it matched no
 directory or several, matched only an archived milestone's phase, resolved to a directory
-outside the project's `.planning/phases` tree, or disagreed with `--phase-dir`; `--phase-dir`
-without `--phase` is dropped too. Every case except an omitted `--phase` appends a warning to
+outside the project's `.planning/phases` tree, disagreed with `--phase-dir`, was not a safe
+phase token (`INVALID_TOKEN`), or could not be resolved because `.planning/config.json` is
+unusable (`CONFIG_FAULT`); `--phase-dir` without `--phase` is dropped too. Every case except an omitted `--phase` appends a warning to
 `warnings`, and the envelope's `phaseDrop` carries the typed reason code. A dropped token is never passed on; the phase-argument table under `ref.command` says when the host's own `PHASE_NUMBER` stands in.
 
 ## Dispatch rules by `kind`
