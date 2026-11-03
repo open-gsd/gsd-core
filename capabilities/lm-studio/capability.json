@@ -36,6 +36,8 @@
     "evidenceClass": "source-grounded",
     "requiresBinaries": [],
     "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.lm_studio",
+    "contextWindowTokens": null,
+    "contextWindowConfigKey": "review.context_window_tokens.lm_studio",
     "modelConfigKey": "review.models.lm_studio",
     "effortConfigKey": null,
     "defaultEffort": null,
@@ -55,7 +57,12 @@
     "review.max_prompt_tokens_per_reviewer.lm_studio": {
       "type": "number",
       "default": -1,
-      "description": "Prompt-token budget for the LM Studio reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+      "description": "Prompt-token budget for the LM Studio reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+    },
+    "review.context_window_tokens.lm_studio": {
+      "type": "number",
+      "default": -1,
+      "description": "Context window in tokens used to derive the default prompt cap for the lm_studio reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
     },
     "review.timeouts.lm_studio": {
       "type": "number",

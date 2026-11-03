@@ -20,7 +20,8 @@ import { stateReplaceField, stateExtractField, stateReplaceFieldIfTemplate, stat
 import { KNOWN_TEMPLATE_DEFAULTS, toFiniteNumber, computeProgressPercent, fieldContinuationEnd } from './state-document.cjs';
 import { tokenizeHeadings, withSection, maskFences } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
-import { deriveProgressFromRoadmap, milestoneVersionOf, clampPercent, clampPercentFromFraction, renderProgressBar } from './phase-lifecycle.cjs';
+import { deriveProgressFromRoadmap, clampPercent, clampPercentFromFraction, renderProgressBar } from './phase-lifecycle.cjs';
+import { milestoneVersionOf } from './roadmap-progress.cjs';
 import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
 import phaseIdMod = require('./phase-id.cjs');
@@ -1466,7 +1467,7 @@ function beginPhaseCore(
       tryField('Current Phase Name', intent.phaseName);
     }
     tryField('Current Plan', String(startPlan));
-    if (intent.planCount) {
+    if (intent.planCount != null) {
       tryField('Total Plans in Phase', String(intent.planCount));
     }
 
@@ -1616,7 +1617,7 @@ function mutateCurrentPositionFirstTime(
   }
 
   // Plan line.
-  const planValue = `${intent.startPlan} of ${intent.planCount || '?'}`;
+  const planValue = `${intent.startPlan} of ${intent.planCount ?? '?'}`;
   if (/^Plan:/m.test(sectionBody)) {
     sectionBody = sectionBody.replace(/^Plan:.*$/m, `Plan: ${planValue}`);
   } else {
