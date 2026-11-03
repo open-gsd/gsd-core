@@ -386,6 +386,14 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
     });
   });
 
+  test('the initialize step derives FIX_AUTO=true from --auto and false without it', { skip: !HAS_BASH }, () => {
+    // `dispatch` presets FIX_AUTO; this is the one test that runs the derivation the persist fence depends on
+    const derive = (flag) => bash([`export GSD_LIB_DIR="${path.join(ROOT, 'gsd-core', 'bin', 'lib')}"; set -- 1${flag}`,
+      lines(stepRegion(REVIEW, 'initialize'), 'FLAGS_JSON=$(node', 'FIX_AUTO=$(echo "$FLAGS_JSON" | node -e "process.stdout.write(String(JSON.parse(require(\'fs\').readFileSync(\'/dev/stdin\',\'utf-8\')).auto))")'),
+      'printf "%s" "$FIX_AUTO"'].join('\n')).stdout;
+    assert.deepStrictEqual([derive(' --auto'), derive('')], ['true', 'false']);
+  });
+
   test('commit_review keeps the persisted evidence only for --auto with a valid REVIEW.md, from a fresh shell', { skip: !HAS_BASH }, (t) => {
     const fence = stepFence(REVIEW, 'commit_review');
     const drive = (auto, reviewText) => sandbox(t, (sb) => {
