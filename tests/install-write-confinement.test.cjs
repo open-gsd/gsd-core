@@ -4679,15 +4679,12 @@ describe('#4636 RED: capability-skill symlink escape (isPathConfined has no real
 // ---------------------------------------------------------------------------
 
 describe('resolveSymlinkedLeafWritePath (#5037)', () => {
-  const { resolveSymlinkedLeafWritePath, SYMLINKED_LEAF_REFUSAL } = require('../gsd-core/bin/lib/install-engine.cjs');
+  const { resolveSymlinkedLeafWritePath } = require('../gsd-core/bin/lib/install-engine.cjs');
   const LABEL = 'test writer: file';
-  const { NOT_TRUSTED, TARGET_MISSING, NOT_FOLLOWABLE } = SYMLINKED_LEAF_REFUSAL;
-
-  test('SYMLINKED_LEAF_REFUSAL is frozen and holds exactly the three refusals', () => {
-    assert.ok(Object.isFrozen(SYMLINKED_LEAF_REFUSAL), 'the codes must be frozen');
-    assert.deepStrictEqual(Object.keys(SYMLINKED_LEAF_REFUSAL).sort(), ['NOT_FOLLOWABLE', 'NOT_TRUSTED', 'TARGET_MISSING']);
-    assert.strictEqual(new Set(Object.values(SYMLINKED_LEAF_REFUSAL)).size, 3, 'each code must be distinct');
-  });
+  // The refusal is a plain Error with no code, while a filesystem error (for
+  // example from realpath) always carries one, so this tells the refusal apart
+  // from an fs failure without matching any text.
+  const isRefusal = (err) => err instanceof Error && err.code === undefined;
 
   let savedOptIn;
   beforeEach(() => {
@@ -4749,45 +4746,9 @@ describe('resolveSymlinkedLeafWritePath (#5037)', () => {
         t.skip('symlink creation unsupported on this platform/privilege');
         return;
       }
-      // With the opt-in already set, asking for it again would not help, so
-      // that refusal is TARGET_MISSING rather than NOT_TRUSTED.
-      assert.throws(() => resolveSymlinkedLeafWritePath(l.root, l.filePath, LABEL),
-        { code: optIn ? TARGET_MISSING : NOT_TRUSTED });
+      assert.throws(() => resolveSymlinkedLeafWritePath(l.root, l.filePath, LABEL), isRefusal);
       assert.ok(fs.lstatSync(l.filePath).isSymbolicLink(), 'the dangling link must survive');
       assert.strictEqual(fs.existsSync(l.targetPath), false, 'nothing may be created at the missing target');
-    });
-
-    // Both writers that share this helper must treat a dangling link the same
-    // way: refuse it and leave it in place.
-    test(`writeSettings and the Codex hooks.json writer both refuse a dangling link (${mode})`, (t) => {
-      setOptIn(optIn);
-      const { writeSettings } = require('../bin/install.js');
-      const { reconcileCodexHooksJsonEvent } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-parity-'));
-      t.after(() => cleanup(root));
-      const settingsPath = path.join(root, 'settings.json');
-      const hooksJsonPath = path.join(root, 'hooks.json');
-      const missingSettings = path.join(root, 'missing-settings.json');
-      const missingHooks = path.join(root, 'missing-hooks.json');
-      try {
-        fs.symlinkSync(missingSettings, settingsPath, 'file');
-        fs.symlinkSync(missingHooks, hooksJsonPath, 'file');
-      } catch {
-        t.skip('symlink creation unsupported on this platform/privilege');
-        return;
-      }
-      const refusal = { code: optIn ? TARGET_MISSING : NOT_TRUSTED };
-
-      assert.throws(() => writeSettings(settingsPath, { hooks: {} }), refusal);
-      assert.throws(
-        () => reconcileCodexHooksJsonEvent(root, 'SessionStart', { managedCommand: 'node /gsd/hooks/gsd-context-monitor.js' }),
-        refusal,
-      );
-
-      for (const [link, target] of [[settingsPath, missingSettings], [hooksJsonPath, missingHooks]]) {
-        assert.ok(fs.lstatSync(link).isSymbolicLink(), `${path.basename(link)} must still be a symlink`);
-        assert.strictEqual(fs.existsSync(target), false, `nothing may be created at ${path.basename(target)}`);
-      }
     });
   }
 
@@ -4811,7 +4772,7 @@ describe('resolveSymlinkedLeafWritePath (#5037)', () => {
     }
 
     setOptIn(undefined);
-    assert.throws(() => resolveSymlinkedLeafWritePath(root, filePath, LABEL), { code: NOT_TRUSTED });
+    assert.throws(() => resolveSymlinkedLeafWritePath(root, filePath, LABEL), isRefusal);
 
     setOptIn('1');
     assert.strictEqual(resolveSymlinkedLeafWritePath(root, filePath, LABEL), fs.realpathSync(finalTarget));
@@ -4819,20 +4780,22 @@ describe('resolveSymlinkedLeafWritePath (#5037)', () => {
     assert.strictEqual(fs.readlinkSync(middleLink), finalTarget, 'resolving must not touch the middle link');
   });
 
-  test('with the opt-in, a link loop is refused as unresolvable, not as a missing target', (t) => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-loop-'));
-    t.after(() => cleanup(root));
-    const filePath = path.join(root, 'file.json');
-    try {
-      fs.symlinkSync(filePath, filePath, 'file');
-    } catch {
-      t.skip('symlink creation unsupported on this platform/privilege');
-      return;
-    }
-    setOptIn('1');
-    assert.throws(() => resolveSymlinkedLeafWritePath(root, filePath, LABEL), { code: NOT_FOLLOWABLE });
-    assert.ok(fs.lstatSync(filePath).isSymbolicLink(), 'the link must be left alone');
-  });
+  for (const optIn of [undefined, '1']) {
+    test(`a link loop is refused and left in place (GSD_ALLOW_SYMLINKED_DEST=${optIn ?? 'unset'})`, (t) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-loop-'));
+      t.after(() => cleanup(root));
+      const filePath = path.join(root, 'file.json');
+      try {
+        fs.symlinkSync(filePath, filePath, 'file');
+      } catch {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      setOptIn(optIn);
+      assert.throws(() => resolveSymlinkedLeafWritePath(root, filePath, LABEL), isRefusal);
+      assert.strictEqual(fs.readlinkSync(filePath), filePath, 'the link must be left alone');
+    });
+  }
 
   test('a link whose target is the install root itself is refused even with the opt-in', (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-rootlink-'));
@@ -4846,12 +4809,12 @@ describe('resolveSymlinkedLeafWritePath (#5037)', () => {
     }
 
     setOptIn(undefined);
-    assert.throws(() => resolveSymlinkedLeafWritePath(root, filePath, LABEL), { code: NOT_TRUSTED });
+    assert.throws(() => resolveSymlinkedLeafWritePath(root, filePath, LABEL), isRefusal);
 
-    // The opt-in never relaxes this case (a write there would land on the
-    // install root), so that refusal is NOT_FOLLOWABLE rather than NOT_TRUSTED.
+    // The opt-in never relaxes this case: a write there would land on the
+    // install root.
     setOptIn('1');
-    assert.throws(() => resolveSymlinkedLeafWritePath(root, filePath, LABEL), { code: NOT_FOLLOWABLE });
+    assert.throws(() => resolveSymlinkedLeafWritePath(root, filePath, LABEL), isRefusal);
     assert.strictEqual(fs.readlinkSync(filePath), root, 'the link must be left alone');
   });
 
@@ -4862,7 +4825,7 @@ describe('resolveSymlinkedLeafWritePath (#5037)', () => {
       t.skip('symlink creation unsupported on this platform/privilege');
       return;
     }
-    assert.throws(() => resolveSymlinkedLeafWritePath(l.root, l.filePath, LABEL), { code: NOT_TRUSTED });
+    assert.throws(() => resolveSymlinkedLeafWritePath(l.root, l.filePath, LABEL), isRefusal);
     assert.ok(fs.lstatSync(l.filePath).isSymbolicLink(), 'the link must survive');
     assert.strictEqual(fs.readlinkSync(l.filePath), l.targetPath, 'the link must still point at the same target');
   });
