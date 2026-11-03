@@ -192,6 +192,29 @@ describe('link classification (#5427)', () => {
   });
 });
 
+describe('escaped brackets, empty destinations, reference labels (#5427)', () => {
+  test('an escaped closing bracket is text, an even run is a link', () => {
+    assert.deepEqual(hrefsIn('[a\\](../x.md)'), []);
+    assert.deepEqual(hrefsIn('[a\\\\](../x.md)'), ['../x.md']);
+    assert.deepEqual(extractLinks('[a\\](x.md)'), []);
+  });
+  test('an empty destination is reported by the guard and ignored by extractLinks', () => {
+    assert.deepEqual(hrefsIn('[a]()'), ['']);
+    assert.deepEqual(hrefsIn('[a](<>)'), ['']);
+    assert.ok(hrefsIn('[a]()').filter(isBadLink).length > 0);
+    assert.deepEqual(extractLinks('[a]()'), []);
+    assert.deepEqual(extractLinks('[a](<>)'), []);
+    assert.deepEqual(missingNext([''], 'x.md'), []);
+    assert.deepEqual(unresolvedAnchors([''], 'x.md'), []);
+  });
+  test('reference labels honour escaped brackets', () => {
+    assert.deepEqual(hrefsIn('[a\\]b]: ../x.md'), ['../x.md']);
+    assert.deepEqual(hrefsIn('[a\\]: ../x.md'), []);
+    assert.deepEqual(hrefsIn('[a\\\\]: ../x.md'), ['../x.md']);
+    assert.deepEqual(hrefsIn('[a]:\n[b\\]c]: ../x.md'), ['../x.md']);
+  });
+});
+
 describe('angle-enclosed destinations (#5427)', () => {
   const ABS = `${NEXT}guide/my%20guide.md`;
   test('inline: relative with spaces is extracted and rejected', () => {

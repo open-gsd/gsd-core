@@ -482,17 +482,22 @@ function maskInlineCodeSpans(line) {
 
 const ANGLE = /\s*<([^>\n]*)>/y;
 const TAIL = /(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?\s*\)/y;
+// True when the character at `j` is preceded by an odd run of backslashes.
+const isEscaped = (s, j) => {
+  let n = 0;
+  while (s[j - 1 - n] === '\\') n += 1;
+  return n % 2 === 1;
+};
 /**
  * True when the `]` at `at` closes a bracket pair opened earlier in its paragraph
  * (balanced, backslash escapes honoured): a stray `](x)` is text, not a link.
  */
 function hasLabelOpener(text, at) {
+  if (isEscaped(text, at)) return false;
   const para = text.slice(0, at).split(/\n[ \t\r]*\n/).pop();
   let depth = 1;
   for (let j = para.length - 1; j >= 0; j -= 1) {
-    let slashes = 0;
-    while (para[j - 1 - slashes] === '\\') slashes += 1;
-    if (slashes % 2) continue;
+    if (isEscaped(para, j)) continue;
     if (para[j] === ']') depth += 1;
     else if (para[j] === '[' && !--depth) return true;
   }
@@ -503,7 +508,7 @@ function hasLabelOpener(text, at) {
  * Every inline-link destination in `text` (mask code first, see `maskCode`): an
  * angle-enclosed or bare destination (bare: balanced parentheses to any depth, `\`
  * escapes), then an optional title. Returns `{ at, dest, raw }` per link: `at` is the
- * index of the `]`, `dest` the destination, `raw` the text between the parentheses.
+ * index of the `]`, `dest` the destination (may be empty), `raw` the text between the parentheses.
  * The one scanner behind `extractLinks` and the PR-template link guard.
  */
 function scanInlineLinks(text) {
@@ -527,7 +532,7 @@ function scanInlineLinks(text) {
       dest = text.slice(start, end);
     }
     TAIL.lastIndex = end;
-    if (dest && TAIL.test(text)) {
+    if (TAIL.test(text)) {
       out.push({ at: i, dest, raw: text.slice(i + 2, TAIL.lastIndex - 1) });
     }
   }
@@ -552,10 +557,10 @@ function scanInlineLinks(text) {
 function extractLinks(text) {
   const masked = maskCode(String(text));
   const out = [];
-  for (const { at, raw } of scanInlineLinks(masked)) {
+  for (const { at, dest, raw } of scanInlineLinks(masked)) {
     const open = masked.lastIndexOf('[', at - 1);
     const textOk = open >= 0 && !/[\][\n]/.test(masked.slice(open + 1, at));
-    if (textOk && !/[()\n]/.test(raw)) {
+    if (dest && textOk && !/[()\n]/.test(raw)) {
       out.push({ line: masked.slice(0, at).split(/\r?\n/).length, target: raw });
     }
   }

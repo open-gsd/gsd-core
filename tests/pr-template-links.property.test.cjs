@@ -153,3 +153,24 @@ describe('ADR gate extractLinks (#5427)', () => {
     }));
   });
 });
+
+describe('escapes and empty destinations (#5427)', () => {
+  const n = fc.integer({ min: 0, max: 5 });
+  const bs = (k) => '\\'.repeat(k);
+  test('property: escaped label end', () => {
+    fc.assert(fc.property(n, rel, (k, d) => {
+      assert.deepEqual(hrefsIn(`[a${bs(k)}](${d})`), k % 2 ? [] : [d]);
+    }));
+  });
+  test('property: escaped reference label', () => {
+    fc.assert(fc.property(n, rel, (k, d) => {
+      assert.deepEqual(hrefsIn(`[a${bs(k)}]: ${d}`), k % 2 ? [] : [d]);
+    }));
+  });
+  test('property: an empty destination yields one empty string, never a link', () => {
+    fc.assert(fc.property(fc.constantFrom('', ' ', '  ', '<>', ' <>'), (ws) => {
+      assert.deepEqual(hrefsIn(`[a](${ws})`), ['']);
+      assert.deepEqual(extractLinks(`[a](${ws})`), []);
+    }));
+  });
+});

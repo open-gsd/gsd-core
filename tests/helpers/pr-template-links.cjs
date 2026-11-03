@@ -19,9 +19,10 @@ const ROOT = path.join(__dirname, '..', '..');
 const REPO = 'https://github.com/open-gsd/gsd-core/';
 const NEXT = `${REPO}blob/next/`;
 
+const REF_LABEL = String.raw`\[(?:\\.|[^\]\\\n])+\]:`;
 const REF_PREFIX = String.raw`^(?:[ \t]*(?:>|(?:[-*+]|\d{1,9}[.)])(?=[ \t])))* *`
-  + String.raw`\[[^\]\n]+\]:[ \t]*(?:\r?\n[ \t]*)?`;
-const REF_DEST = String.raw`(?:<([^>\n]*)>|(?!\[[^\]\n]+\]:)(\S+))`;
+  + REF_LABEL + String.raw`[ \t]*(?:\r?\n[ \t]*)?`;
+const REF_DEST = String.raw`(?:<([^>\n]*)>|(?!${REF_LABEL})(\S+))`;
 const REF_TITLE = String.raw`(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?[ \t]*$`;
 const REFDEF = new RegExp(REF_PREFIX + REF_DEST + REF_TITLE, 'gm');
 
