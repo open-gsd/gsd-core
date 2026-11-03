@@ -693,7 +693,15 @@ function resolveActiveHooksForPoint(
   // absent from loadConfig still fall through to raw .planning/config.json reads
   // (precedence levels 2-3) in each pass; that residual re-read window is
   // pre-existing (unchanged by this consolidation), not introduced here.
-  const { config, reason: configReason } = loadConfigResolved(cwd);
+  let config: Record<string, unknown>;
+  let configReason: string | undefined;
+  try {
+    ({ config, reason: configReason } = loadConfigResolved(cwd));
+  } catch {
+    // planningDir throws on a hostile GSD_WORKSTREAM; keep the base behaviour of defaulting.
+    config = {};
+    configReason = undefined;
+  }
   const configFault = configReason === CONFIG_REASON.CONFIG_UNPARSEABLE || configReason === CONFIG_REASON.CONFIG_UNREADABLE
     ? configReason
     : undefined;
