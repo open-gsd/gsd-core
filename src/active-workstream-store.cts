@@ -514,34 +514,40 @@ function applyResolvedWorkstreamEnv(
 }
 
 // #5328: the workstream an `init --ws` of `session` used, kept session-scoped beside the pointer files as "<name> <written at, ms>"
-// (a name, never a model) so the Agent model guard compares against what `init` reported. A carry older than `maxAgeMs` counts
-// for nothing, and the next record prunes it. No session id: nothing is kept.
+// (a name, never a model) so the Agent model guard compares against what `init` reported. A carry older than an escalation record's window
+// (ESCALATION_WINDOW_MS) counts for nothing, and the next record prunes it. No session id: nothing is kept.
 function initWorkstreamAdapter(cwd: string, session: string | undefined): WorkstreamPointerAdapter | null {
   const token = sanitizeWorkstreamSessionToken(session);
   return token ? createSessionScopedPointerAdapter(cwd, `init-ws-${token}`) : null;
 }
 
-function freshInitWorkstream(raw: string | null, now: number, maxAgeMs: number): string | null {
+function freshInitWorkstream(raw: string | null, now: number): string | null {
+  // The carry lives as long as an escalation record. Required at call time: model-escalation reaches this module statically
+  // (through config-loader), so a top-level import would close a require cycle.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { ESCALATION_WINDOW_MS } = require('./model-escalation.cjs') as { ESCALATION_WINDOW_MS: number };
   const [name, at] = (raw ?? '').trim().split(' ');
   const age = now - Number(at);
-  return name && age >= 0 && age < maxAgeMs ? name : null;
+  return name && age >= 0 && age < ESCALATION_WINDOW_MS ? name : null;
 }
 
-/** Records `name` for `session` at `now` and prunes this project's carries older than `maxAgeMs`; false when nothing was recorded (no session id, or an invalid name). */
-function recordInitWorkstream(cwd: string, session: string | undefined, name: string, now: number, maxAgeMs: number): boolean {
+/** Records `name` for `session` at `now` and prunes this project's expired carries (best effort); false when nothing was recorded (no session id, or an invalid name). */
+function recordInitWorkstream(cwd: string, session: string | undefined, name: string, now: number): boolean {
   const adapter = initWorkstreamAdapter(cwd, session);
   if (!adapter || !validateWorkstreamName(name)) return false;
   adapter.write(`${name} ${now}`);
-  const { dirPath } = getSessionScopedWorkstreamFile(cwd, 'init-ws-') as SessionScopedWorkstreamFile;
-  for (const f of fs.readdirSync(dirPath)) {
-    const file = path.join(dirPath, f);
-    if (f.startsWith('init-ws-') && freshInitWorkstream(platformReadSync(file), now, maxAgeMs) === null) fs.rmSync(file, { force: true });
-  }
+  try {
+    const { dirPath } = getSessionScopedWorkstreamFile(cwd, 'init-ws-') as SessionScopedWorkstreamFile;
+    for (const f of fs.readdirSync(dirPath)) {
+      const file = path.join(dirPath, f);
+      if (f.startsWith('init-ws-') && freshInitWorkstream(platformReadSync(file), now) === null) fs.rmSync(file, { force: true });
+    }
+  } catch { /* pruning is cleanup only: the carry above is recorded */ }
   return true;
 }
 
-function peekInitWorkstream(cwd: string, session: string | undefined, now: number, maxAgeMs: number): string | null {
-  return freshInitWorkstream(initWorkstreamAdapter(cwd, session)?.read() ?? null, now, maxAgeMs);
+function peekInitWorkstream(cwd: string, session: string | undefined, now: number): string | null {
+  return freshInitWorkstream(initWorkstreamAdapter(cwd, session)?.read() ?? null, now);
 }
 
 export = {

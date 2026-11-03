@@ -91,29 +91,29 @@ test('property: the init --ws carry round-trips a valid name per session, other 
       fc.constantFrom('alpha', 'b-2', 'c_3', 'd.4', '../x', 'a b', ''), fc.constantFrom('s1', 's2', undefined, ''),
       (name, session) => {
         try {
-          const recorded = store.recordInitWorkstream(project, session, name, T, W);
+          const recorded = store.recordInitWorkstream(project, session, name, T);
           const kept = Boolean(session) && store.validateWorkstreamName(name);
           const other = session === 's1' ? 's2' : 's1';
-          return recorded === kept && store.peekInitWorkstream(project, session, T, W) === (kept ? name : null) && store.peekInitWorkstream(project, other, T, W) === null;
+          return recorded === kept && store.peekInitWorkstream(project, session, T) === (kept ? name : null) && store.peekInitWorkstream(project, other, T) === null;
         } finally {
           clearAll();
         }
       },
     ));
     try {
-      store.recordInitWorkstream(project, base, 'alpha', T, W);
-      if (store.peekInitWorkstream(project, `${base}b`, T, W) !== null) throw new Error('159 chars must not read as 160');
+      store.recordInitWorkstream(project, base, 'alpha', T);
+      if (store.peekInitWorkstream(project, `${base}b`, T) !== null) throw new Error('159 chars must not read as 160');
       clearAll();
-      store.recordInitWorkstream(project, `${base}b`, 'alpha', T, W);
-      if (store.peekInitWorkstream(project, `${base}bc`, T, W) !== 'alpha') throw new Error('161 chars cut to the 160-char token');
+      store.recordInitWorkstream(project, `${base}b`, 'alpha', T);
+      if (store.peekInitWorkstream(project, `${base}bc`, T) !== 'alpha') throw new Error('161 chars cut to the 160-char token');
     } finally {
       clearAll();
     }
     try {
-      store.recordInitWorkstream(project, 's1', 'alpha', T, W);
-      const at = (now) => store.peekInitWorkstream(project, 's1', now, W);
+      store.recordInitWorkstream(project, 's1', 'alpha', T);
+      const at = (now) => store.peekInitWorkstream(project, 's1', now);
       if (at(T + W - 1) !== 'alpha' || at(T + W) !== null || at(T + W + 1) !== null) throw new Error('a carry counts for W ms');
-      store.recordInitWorkstream(project, 's1', 'alpha', T + W - 1, W);
+      store.recordInitWorkstream(project, 's1', 'alpha', T + W - 1);
       if (at(T + W + 1) !== 'alpha') throw new Error('a new record refreshes the carry');
     } finally {
       clearAll();
@@ -130,13 +130,60 @@ test('recordInitWorkstream prunes this project\'s expired carries', () => {
   const project = createTempDir('gsd-esc-prune-');
   const raw = (s) => store.createSessionScopedPointerAdapter(project, `init-ws-${s}`);
   try {
-    store.recordInitWorkstream(project, 's1', 'alpha', T, W);
-    store.recordInitWorkstream(project, 's2', 'beta', T + W, W);
+    store.recordInitWorkstream(project, 's1', 'alpha', T);
+    store.recordInitWorkstream(project, 's2', 'beta', T + W);
     if (raw('s1').read() !== null) throw new Error('the expired s1 carry stays');
-    if (store.peekInitWorkstream(project, 's2', T + W, W) !== 'beta') throw new Error('the s2 carry is lost');
+    if (store.peekInitWorkstream(project, 's2', T + W) !== 'beta') throw new Error('the s2 carry is lost');
   } finally {
     for (const s of ['s1', 's2']) raw(s).clear();
     cleanup(project);
+  }
+});
+
+test('a stray entry in the carry directory cannot turn a recorded carry into "not recorded"', () => {
+  const store = require('../gsd-core/bin/lib/active-workstream-store.cjs');
+  const os = require('node:os');
+  const T = 1_000_000;
+  const token = `prune-${process.pid}`;
+  const project = createTempDir('gsd-esc-stray-');
+  const root = path.join(os.tmpdir(), 'gsd-workstream-sessions');
+  let dir = null;
+  try {
+    store.recordInitWorkstream(project, token, 'alpha', T);
+    dir = fs.readdirSync(root).map((d) => path.join(root, d)).find((d) => fs.existsSync(path.join(d, `init-ws-${token}`)));
+    if (!dir) throw new Error('the carry directory is not found');
+    fs.mkdirSync(path.join(dir, 'init-ws-x'));
+    if (store.recordInitWorkstream(project, token, 'beta', T + 1) !== true) throw new Error('a recorded carry must report true');
+    if (store.peekInitWorkstream(project, token, T + 1) !== 'beta') throw new Error('the beta carry is lost');
+  } finally {
+    if (dir) cleanup(path.join(dir, 'init-ws-x'));
+    store.createSessionScopedPointerAdapter(project, `init-ws-${token}`).clear();
+    cleanup(project);
+  }
+});
+
+test('guardApplies: false when the guard is off, the root config is unreadable, or the runtime has no native tier aliases; true for warn and deny on claude', () => {
+  const { guardApplies } = require('../gsd-core/bin/lib/model-escalation.cjs');
+  const saved = process.env.GSD_RUNTIME;
+  delete process.env.GSD_RUNTIME;
+  const root = createTempDir('gsd-esc-applies-');
+  const config = path.join(root, '.planning', 'config.json');
+  try {
+    fs.mkdirSync(path.dirname(config), { recursive: true });
+    const at = (text) => { fs.writeFileSync(config, text); return guardApplies(root); };
+    const rows = [
+      [JSON.stringify({ runtime: 'claude' }), true],
+      [JSON.stringify({ runtime: 'claude', hooks: { agent_model_guard: 'deny' } }), true],
+      [JSON.stringify({ runtime: 'claude', hooks: { agent_model_guard: false } }), false],
+      [JSON.stringify({ runtime: 'codex' }), false],
+      ['{not json', false],
+    ];
+    for (const [text, want] of rows) {
+      if (at(text) !== want) throw new Error(`guardApplies(${text}) must be ${want}`);
+    }
+  } finally {
+    if (saved === undefined) delete process.env.GSD_RUNTIME; else process.env.GSD_RUNTIME = saved;
+    cleanup(root);
   }
 });
 

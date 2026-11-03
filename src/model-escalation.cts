@@ -21,6 +21,11 @@ import { escapeRegex } from './pattern.cjs';
 import worktreeSafetyMod = require('./worktree-safety.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ledgerMod = require('./capability-ledger.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import modelResolverMod = require('./model-resolver.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import configLoaderMod = require('./config-loader.cjs');
+import { resolveActiveRuntime } from './runtime-slash.cjs';
 
 export const ESCALATION_WINDOW_MS = 10 * 60 * 1000;
 /** Tolerated clock skew for a record stamped slightly in the future. */
@@ -66,6 +71,17 @@ export function readGuardMode(root: string): { mode?: unknown; skip?: true } {
   } catch {
     return { skip: true };
   }
+}
+
+/**
+ * Does the Agent model guard apply at `root` under the current GSD_WORKSTREAM: it is on (readGuardMode), and the runtime of the
+ * config the expected model resolves through (GSD_RUNTIME > config.runtime > marker) resolves native tier aliases. The hook
+ * (per candidate workstream) and the `init --ws` warning both ask it here.
+ */
+export function guardApplies(root: string): boolean {
+  const { mode, skip } = readGuardMode(root);
+  return !skip && mode !== false &&
+    modelResolverMod.hasNativeModelAliases(resolveActiveRuntime(configLoaderMod.loadConfig(root, { persist: false })));
 }
 
 /** The root a CLI run at `cwd` writes a guard record at; throws when --project-dir/--cwd point away from the session's working directory, whose root the hook reads. */

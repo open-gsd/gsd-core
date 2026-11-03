@@ -55,10 +55,8 @@ function baselineFor(store, root, type, session, args) {
     }
     store.applyResolvedWorkstreamEnv(store.resolveActiveWorkstream(root, args, process.env, { getStored: store.peekActiveWorkstream }), process.env);
     const resolver = require('../../gsd-core/bin/lib/model-resolver.cjs');
-    const config = require('../../gsd-core/bin/lib/config-loader.cjs').loadConfig(root, { persist: false });
-    // Only where the host resolves the tier aliases GSD resolves to, over the one runtime chain
-    // (GSD_RUNTIME > config.runtime > marker), from the config the expected model resolves through.
-    if (!resolver.hasNativeModelAliases(require('../../gsd-core/bin/lib/runtime-slash.cjs').resolveActiveRuntime(config))) return null;
+    // Only where the guard applies under this candidate's workstream (model-escalation guardApplies, shared with `init --ws`).
+    if (!require('../../gsd-core/bin/lib/model-escalation.cjs').guardApplies(root)) return null;
     const expected = resolver.resolveModelInternal(root, type, { persist: false });
     return expected && expected !== 'inherit' ? expected : null;
   } finally {
@@ -98,7 +96,7 @@ function checkAgentModel(data, { clock } = {}) {
     if (session === undefined && require('../../gsd-core/bin/lib/planning-workspace.cjs').listAvailableWorkstreams(root).length > 0) return ALLOW;
     // realClock honours the GSD_TEST_MODE + GSD_NOW_MS pin in a hook subprocess (RULESET.TESTS.clock-seam).
     const now = (clock || require('../../gsd-core/bin/lib/clock.cjs').realClock).now();
-    const carried = store.peekInitWorkstream(root, session, now, esc.ESCALATION_WINDOW_MS);
+    const carried = store.peekInitWorkstream(root, session, now);
     const expected = [];
     for (const args of carried ? [['--ws', carried], []] : [[]]) {
       const model = baselineFor(store, root, type, session, args);
