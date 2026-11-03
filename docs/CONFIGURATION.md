@@ -2224,6 +2224,8 @@ When `runtime` is set, profile tiers (`opus`/`sonnet`/`haiku`) resolve to runtim
 
 This resolves `gsd-planner` → `gpt-5.6-sol` (xhigh), `gsd-executor` → `gpt-5.6-terra` (medium), `gsd-codebase-mapper` → `gpt-5.6-luna` (medium). Codex skills pass each resolved `model` and `reasoning_effort` to `spawn_agent` when its visible schema advertises the corresponding field; otherwise they omit the field and inherit the session/static agent configuration.
 
+For Codex model selection and per-agent pinning, see [Choosing or pinning a Codex model](how-to/configure-model-profiles.md#choosing-or-pinning-a-codex-model).
+
 **Claude example** — pin a tier's generation without giving up tier-based profiles (#4192):
 
 ```json

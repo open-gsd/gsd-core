@@ -95,9 +95,10 @@ describe('model-catalog: exported enums/maps', () => {
     assert.equal(CODEX_MODEL_EFFORT['gpt-5.6-sol'].has('ultra'), true);
     assert.equal(CODEX_MODEL_EFFORT['gpt-5.6-terra'].has('ultra'), false);
     assert.equal(CODEX_MODEL_EFFORT['gpt-5.6-luna'].has('ultra'), false);
-    for (const model of ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna']) {
-      assert.deepEqual(CODEX_MODEL_EFFORT[model], new Set(['low', 'medium', 'high', 'xhigh', 'max']));
+    for (const model of ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol']) {
+      assert.deepEqual(CODEX_MODEL_EFFORT[model], new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']));
     }
+    assert.deepEqual(CODEX_MODEL_EFFORT['gpt-6-luna'], new Set(['low', 'medium', 'high', 'xhigh', 'max']));
   });
 
   test('MODEL_ALIAS_MAP maps opus/sonnet/haiku to claude model ids', () => {
