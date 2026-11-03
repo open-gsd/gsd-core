@@ -524,13 +524,33 @@ function initWorkstreamAdapter(cwd: string, session: string | undefined): Workst
 /** How long an `init --ws` carry counts: longer than one execute-phase run, yet it expires within a day; every `init --ws` restarts it. */
 const INIT_WORKSTREAM_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 
+/** A carry is "<name> <ms>": far below this, so a larger file is not one. */
+const INIT_WORKSTREAM_MAX_BYTES = 1024;
+
 function freshInitWorkstream(raw: string | null, now: number): string | null {
   const [name, at] = (raw ?? '').trim().split(' ');
   const age = now - Number(at);
   return name && age >= 0 && age < INIT_WORKSTREAM_MAX_AGE_MS ? name : null;
 }
 
-/** Records `name` for `session` at `now` and prunes this project's expired carries (best effort); false when nothing was recorded (no session id, or an invalid name). */
+/** The carry file's text, or null when it is missing, not a regular file or unreadable: a FIFO or device planted at the path never blocks or streams (O_NONBLOCK, `fstat` on the opened descriptor, small cap). */
+function readCarry(file: string): string | null {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0));
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.size > INIT_WORKSTREAM_MAX_BYTES) return null;
+    return fs.readFileSync(fd, 'utf-8');
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch { /* already closed */ }
+    }
+  }
+}
+
+/** Records `name` for `session` at `now` and prunes this project's expired carries (best effort, one entry at a time); false when nothing was recorded (no session id, or an invalid name). */
 function recordInitWorkstream(cwd: string, session: string | undefined, name: string, now: number): boolean {
   const adapter = initWorkstreamAdapter(cwd, session);
   if (!adapter || !validateWorkstreamName(name)) return false;
@@ -538,15 +558,20 @@ function recordInitWorkstream(cwd: string, session: string | undefined, name: st
   try {
     const { dirPath } = getSessionScopedWorkstreamFile(cwd, 'init-ws-') as SessionScopedWorkstreamFile;
     for (const f of fs.readdirSync(dirPath)) {
+      if (!f.startsWith('init-ws-')) continue;
       const file = path.join(dirPath, f);
-      if (f.startsWith('init-ws-') && freshInitWorkstream(platformReadSync(file), now) === null) fs.rmSync(file, { force: true });
+      try {
+        if (freshInitWorkstream(readCarry(file), now) === null) fs.rmSync(file, { force: true });
+      } catch { /* an entry that cannot be removed does not stop the sweep */ }
     }
   } catch { /* pruning is cleanup only: the carry above is recorded */ }
   return true;
 }
 
 function peekInitWorkstream(cwd: string, session: string | undefined, now: number): string | null {
-  return freshInitWorkstream(initWorkstreamAdapter(cwd, session)?.read() ?? null, now);
+  const token = sanitizeWorkstreamSessionToken(session);
+  const scoped = token ? getSessionScopedWorkstreamFile(cwd, `init-ws-${token}`) : null;
+  return scoped ? freshInitWorkstream(readCarry(scoped.filePath), now) : null;
 }
 
 export = {

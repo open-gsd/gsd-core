@@ -10,6 +10,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { runHook, runNode } = require('./helpers/process-seam.cjs');
 const { cleanup, saveSessionEnv, restoreSessionEnv, clearSessionEnv } = require('./helpers.cjs');
 const { createSessionScopedPointerAdapter } = require('../gsd-core/bin/lib/active-workstream-store.cjs');
 
@@ -101,5 +103,51 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
     t.after(() => cleanup(stray));
     assert.equal(recordInitWorkstream(base, session, 'beta', T + W), true);
     assert.equal(peekInitWorkstream(base, session, T + W), 'beta');
+  });
+
+  // The carry directory of `base`: a record for a throwaway session creates it, and the session's own files stay inside it.
+  const carryDir = (t, session) => {
+    t.after(() => createSessionScopedPointerAdapter(base, `init-ws-${session}`).clear());
+    recordInitWorkstream(base, session, 'alpha', T);
+    const sessions = path.join(os.tmpdir(), 'gsd-workstream-sessions');
+    return fs.readdirSync(sessions).map((d) => path.join(sessions, d)).find((d) => fs.existsSync(path.join(d, `init-ws-${session}`)));
+  };
+
+  test('an unreadable entry does not stop the prune of later expired carries', (t) => {
+    const session = path.basename(base);
+    const dir = carryDir(t, session);
+    const strays = [];
+    for (let i = 0; i < 8; i++) {
+      const stray = path.join(dir, `init-ws-0stray${i}`);
+      fs.mkdirSync(stray);
+      strays.push(stray);
+      createSessionScopedPointerAdapter(base, `init-ws-old${i}`).write(`alpha ${T}`);
+    }
+    t.after(() => {
+      strays.forEach((s) => cleanup(s));
+      for (let i = 0; i < 8; i++) createSessionScopedPointerAdapter(base, `init-ws-old${i}`).clear();
+    });
+    assert.equal(recordInitWorkstream(base, session, 'beta', T + W), true);
+    for (let i = 0; i < 8; i++) assert.equal(raw(`init-ws-old${i}`), null, `old${i} is pruned`);
+  });
+
+  test('a FIFO named like a carry never blocks a read or a record', (t) => {
+    const session = path.basename(base);
+    const dir = carryDir(t, session);
+    const fifoSession = `${session}-fifo`;
+    const fifo = path.join(dir, `init-ws-${fifoSession}`);
+    const made = runHook(fifo, [], { interpreter: 'mkfifo', timeoutMs: PROBE_TIMEOUT_MS });
+    if (made.exitCode !== 0) return t.skip('mkfifo is not available');
+    t.after(() => cleanup(fifo));
+    const lib = path.resolve(__dirname, '../gsd-core/bin/lib/active-workstream-store.cjs');
+    const run = (code) => runNode(['-e', code, lib, base, fifoSession, session], { timeoutMs: PROBE_TIMEOUT_MS });
+    const peeked = run('const s = require(process.argv[1]); console.log(String(s.peekInitWorkstream(process.argv[2], process.argv[3], 0)));');
+    assert.equal(peeked.timedOut, false, 'peek returned instead of blocking');
+    assert.equal(peeked.exitCode, 0, peeked.stderr);
+    assert.equal(peeked.stdout.trim(), 'null');
+    const recorded = run('const s = require(process.argv[1]); console.log(String(s.recordInitWorkstream(process.argv[2], process.argv[4], "beta", Date.now())));');
+    assert.equal(recorded.timedOut, false, 'record returned instead of blocking');
+    assert.equal(recorded.exitCode, 0, recorded.stderr);
+    assert.equal(recorded.stdout.trim(), 'true');
   });
 });
