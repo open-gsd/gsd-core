@@ -6546,6 +6546,39 @@ function resolveSymlinkWriteTarget(filePath) {
   try { return fs.realpathSync(filePath); } catch (_) { return filePath; }
 }
 
+/**
+ * #5716: refuse a symlinked Codex config.toml unless GSD_ALLOW_SYMLINKED_DEST is set, as
+ * installCodexConfig and the hooks.json writer refuse it. Callers run this only when they
+ * are about to write config.toml, so a link GSD would leave alone is never refused.
+ */
+function assertCodexConfigLinkAllowed(configPath) {
+  if (!isSymlinkedDestOptIn() && fs.lstatSync(configPath).isSymbolicLink()) {
+    throw new Error(
+      `Codex config.toml at "${configPath}" is a symlink, refusing to change it. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
+    );
+  }
+}
+
+/**
+ * #5716: save stripGsdFromCodexConfig's result back to config.toml. `cleaned` is null
+ * when only GSD content was left, and a regular file is then deleted as before. Deleting
+ * a symlinked config.toml would delete the user's link and leave the GSD block in the
+ * file it points at, and deleting the file it points at would leave a dangling link,
+ * so with GSD_ALLOW_SYMLINKED_DEST that file is emptied instead and the link stays.
+ * Without the opt-in a symlinked config.toml is refused before it or the file it links
+ * to is touched. Returns true when the file was deleted.
+ */
+function writeStrippedCodexConfig(configPath, cleaned) {
+  assertCodexConfigLinkAllowed(configPath);
+  const isSymlink = fs.lstatSync(configPath).isSymbolicLink();
+  if (cleaned === null && !isSymlink) {
+    fs.unlinkSync(configPath);
+    return true;
+  }
+  fs.writeFileSync(resolveSymlinkWriteTarget(configPath), cleaned === null ? '' : cleaned);
+  return false;
+}
+
 function mergeCodexConfig(configPath, gsdBlock) {
   // #5301: both write sites below land on the symlink's target, never replace the link.
   configPath = resolveSymlinkWriteTarget(configPath);
@@ -8684,11 +8717,11 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
       const content = fs.readFileSync(codexConfigPath, 'utf8');
       const cleaned = stripGsdFromCodexConfig(content);
       if (cleaned === null) {
-        fs.unlinkSync(codexConfigPath);
+        const removed = writeStrippedCodexConfig(codexConfigPath, cleaned);
         removedCount++;
-        console.log(`  ${green}✓${reset} Removed config.toml (was GSD-only)`);
+        console.log(`  ${green}✓${reset} ${removed ? 'Removed config.toml' : 'Emptied the file config.toml links to'} (was GSD-only)`);
       } else if (cleaned !== content) {
-        fs.writeFileSync(codexConfigPath, cleaned);
+        writeStrippedCodexConfig(codexConfigPath, cleaned);
         removedCount++;
         console.log(`  ${green}✓${reset} Cleaned GSD sections from config.toml`);
       }
@@ -12346,12 +12379,13 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   if (!_codexAgentRolesEnabled() && hostBehaviorsFor(runtime).tomlConfigInstall) {
     const codexConfigPath = path.join(targetDir, 'config.toml');
     if (fs.existsSync(codexConfigPath)) {
+      // #5716: the validated config.toml rewrite later in this install always writes
+      // this file, so a symlink is refused here even when the strip changes nothing.
+      assertCodexConfigLinkAllowed(codexConfigPath);
       const existing = fs.readFileSync(codexConfigPath, 'utf8');
       const cleaned = stripGsdFromCodexConfig(existing);
-      if (cleaned === null) {
-        fs.unlinkSync(codexConfigPath);
-      } else if (cleaned !== existing) {
-        fs.writeFileSync(codexConfigPath, cleaned);
+      if (cleaned !== existing) {
+        writeStrippedCodexConfig(codexConfigPath, cleaned);
       }
     }
   }
