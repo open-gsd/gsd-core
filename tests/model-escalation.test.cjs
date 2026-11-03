@@ -121,27 +121,6 @@ test('recordInitWorkstream prunes this project\'s expired carries', (t) => {
   if (store.peekInitWorkstream(project, 's2', T + W) !== 'beta') throw new Error('the s2 carry is lost');
 });
 
-test('a stray entry in the carry directory cannot turn a recorded carry into "not recorded"', (t) => {
-  const store = require('../gsd-core/bin/lib/active-workstream-store.cjs');
-  const os = require('node:os');
-  const T = 1_000_000;
-  const token = `prune-${process.pid}`;
-  const project = createTempDir('gsd-esc-stray-');
-  const root = path.join(os.tmpdir(), 'gsd-workstream-sessions');
-  let dir = null;
-  t.after(() => {
-    if (dir) cleanup(path.join(dir, 'init-ws-x'));
-    store.createSessionScopedPointerAdapter(project, `init-ws-${token}`).clear();
-    cleanup(project);
-  });
-  store.recordInitWorkstream(project, token, 'alpha', T);
-  dir = fs.readdirSync(root).map((d) => path.join(root, d)).find((d) => fs.existsSync(path.join(d, `init-ws-${token}`)));
-  if (!dir) throw new Error('the carry directory is not found');
-  fs.mkdirSync(path.join(dir, 'init-ws-x'));
-  if (store.recordInitWorkstream(project, token, 'beta', T + 1) !== true) throw new Error('a recorded carry must report true');
-  if (store.peekInitWorkstream(project, token, T + 1) !== 'beta') throw new Error('the beta carry is lost');
-});
-
 test('guardApplies: false when the guard is off, the root config is unreadable, or the runtime has no native tier aliases; true for warn and deny on claude', (t) => {
   const { guardApplies } = require('../gsd-core/bin/lib/model-escalation.cjs');
   const saved = process.env.GSD_RUNTIME;

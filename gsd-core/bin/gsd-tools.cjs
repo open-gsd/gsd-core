@@ -4891,9 +4891,11 @@ const HOST_COMMAND_ROUTERS = {
       try {
         const esc = require('./lib/model-escalation.cjs');
         const root = esc.escalationRoot(ctx.cwd);
-        const recorded = require('./lib/active-workstream-store.cjs').recordInitWorkstream(
+        // Only a workstream init resolves (the directory its config loader reads): a --ws naming none adds no guard baseline.
+        const exists = fs.statSync(planningDir(root, ws.ws), { throwIfNoEntry: false })?.isDirectory() === true;
+        const recorded = exists && require('./lib/active-workstream-store.cjs').recordInitWorkstream(
           root, process.env.CLAUDE_CODE_SESSION_ID, ws.ws, require('./lib/clock.cjs').realClock.now());
-        if (!recorded && esc.guardApplies(root)) {
+        if (exists && !recorded && esc.guardApplies(root)) {
           process.stderr.write(`gsd: --ws ${ws.ws} not recorded for the Agent model guard: no CLAUDE_CODE_SESSION_ID\n`);
         }
       } catch (e) {

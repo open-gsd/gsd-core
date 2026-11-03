@@ -2586,6 +2586,42 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     assert.equal(carryStore().createSessionScopedPointerAdapter(project, 'init-ws-fresh').read(), null, 'no carry file');
   });
 
+  test('init --ws naming no workstream directory records no carry; an existing workstream still does', (t) => {
+    setupCarry(t, ISSUE_CONFIG, 'sess-ws', 'sess-nope');
+    const r = runGsdTools(['query', 'init.quick', 't', '--ws=nope'], project, { GSD_WORKSTREAM: '', CLAUDE_CODE_SESSION_ID: 'sess-nope' });
+    assert.ok(r.success, r.error);
+    assert.equal(carryStore().createSessionScopedPointerAdapter(project, 'init-ws-sess-nope').read(), null, 'no carry file');
+    assert.ok(initQuick('sess-ws').success);
+    assert.equal(carryStore().peekInitWorkstream(project, 'sess-ws', Date.now()), 'alpha');
+  });
+
+  test('init --ws spelled in another case carries it where the filesystem resolves that spelling to the directory', (t) => {
+    setupCarry(t, ISSUE_CONFIG, 'sess-upper');
+    const { planningDir } = require('../gsd-core/bin/lib/planning-workspace.cjs');
+    if (fs.statSync(planningDir(project, 'ALPHA'), { throwIfNoEntry: false })?.isDirectory() !== true) {
+      t.skip('case-sensitive filesystem: ALPHA resolves to no workstream directory, the missing-workstream row covers it');
+      return;
+    }
+    const r = runGsdTools(['query', 'init.quick', 't', '--ws=ALPHA'], project, { GSD_WORKSTREAM: '', CLAUDE_CODE_SESSION_ID: 'sess-upper' });
+    assert.ok(r.success, r.error);
+    assert.equal(JSON.parse(r.output).planner_model, 'haiku');
+    assert.equal(carryStore().peekInitWorkstream(project, 'sess-upper', Date.now()), 'ALPHA');
+    assert.equal(evaluate(inSession('haiku', 'sess-upper')).action, 'allow');
+  });
+
+  test('init --ws naming a symlinked workstream directory carries it', (t) => {
+    setupCarry(t, ISSUE_CONFIG, 'sess-link');
+    const target = createTempDir('gsd-aig-ws-target-');
+    t.after(() => cleanup(target));
+    fs.writeFileSync(path.join(target, 'config.json'), JSON.stringify({ model_overrides: { 'gsd-planner': 'sonnet' } }));
+    fs.symlinkSync(target, path.join(project, '.planning', 'workstreams', 'beta'), 'junction');
+    const r = runGsdTools(['query', 'init.quick', 't', '--ws=beta'], project, { GSD_WORKSTREAM: '', CLAUDE_CODE_SESSION_ID: 'sess-link' });
+    assert.ok(r.success, r.error);
+    assert.equal(JSON.parse(r.output).planner_model, 'sonnet');
+    assert.equal(carryStore().peekInitWorkstream(project, 'sess-link', Date.now()), 'beta');
+    assert.equal(evaluate(inSession('sonnet', 'sess-link')).action, 'allow');
+  });
+
   test('an invalid carried name allows', (t) => {
     setupCarry(t, ISSUE_CONFIG, 'sess-bad');
     carryStore().createSessionScopedPointerAdapter(project, 'init-ws-sess-bad').write(`../x ${Date.now()}`);
