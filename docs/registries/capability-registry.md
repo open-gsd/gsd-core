@@ -8,10 +8,28 @@ _To add your capability, see the [registry README](./README.md)._
 
 | Name | What it is | Latest release | GSD compat | Discussion |
 |---|---|---|---|---|
+| [Beads Lifecycle](https://github.com/davdittrich/gsd-beads) | Ties gsd-core's plan, execute, verify and ship lifecycle to Beads \(bd\) issue tracking: syncs PLAN.md tasks into bd issues under a phase epic, recalls open issues that may touch a phase before planning, closes completed tasks' issues after each wave, writes BEADS.md, and blocks /gsd-ship while blocking\_open or diverged is not 0. Needs the bd binary; every step except the ship:pre gate degrades to a no-op with a STATE.md note when bd is missing, and the gate blocks /gsd-ship until bd is back or beads.ship\_gate is false. | ![release](https://img.shields.io/github/v/release/davdittrich/gsd-beads?sort=semver&include_prereleases) | `>=1.11.0` | [discuss](https://github.com/open-gsd/gsd-core/discussions/5308) |
 | [Markdown Linting](https://github.com/davdittrich/markdown-linting) | Runs rumdl over .planning/, README.md and CLAUDE.md after verify:post, writes a LINT-REPORT.md violation count, and re-measures at ship:pre to advise \(never block\) /gsd-ship when markdown violations remain. | ![release](https://img.shields.io/github/v/release/davdittrich/markdown-linting?sort=semver&include_prereleases) | `>=1.6.0` | [discuss](https://github.com/open-gsd/gsd-core/discussions/5294) |
 | [Ponytail Everywhere](https://github.com/davdittrich/ponytail-everywhere) | Brings lazy-ladder discipline \(YAGNI, reuse before writing, stdlib and native features before dependencies, shortest working diff\) to GSD as an advisory planner contribution at plan:pre, matching executor and verifier fragments, and a plan-review proportionality checker contribution. An optional Claude Code plugin adds a subagent banner and a pre-expansion check that recommends a smaller route before scope-expanding commands. | ![release](https://img.shields.io/github/v/release/davdittrich/ponytail-everywhere?sort=semver&include_prereleases) | `>=1.13.0` | [discuss](https://github.com/open-gsd/gsd-core/discussions/5292) |
 | [PR Workflow](https://github.com/davdittrich/pr-workflow) | Reads the open pull request and its checks for the current branch with gh, writes a PR.md report after each execute wave, and advises \(never blocks\) at ship:pre when the PR is not green. Fails open: a missing or erroring gh yields an unavailable report instead of a stale pass. | ![release](https://img.shields.io/github/v/release/davdittrich/pr-workflow?sort=semver&include_prereleases) | `>=1.6.0` | [discuss](https://github.com/open-gsd/gsd-core/discussions/5304) |
 | [SOTA Numerics](https://github.com/davdittrich/sota-numerics) | Advisory steering across the plan, execute, verify and ship lifecycle toward state-of-the-art numerics: internally consistent, project-consistent, unambiguous, complete, efficient, quiet-running, agent-facing code. Adds advisory fragments at plan:pre, execute:wave:pre, execute:wave:post and ship:pre, plus one blocking plan:post gate that requires an Alternatives Considered section with cited, dated alternatives and a Decided by line in every plan. | ![release](https://img.shields.io/github/v/release/davdittrich/sota-numerics?sort=semver&include_prereleases) | `>=1.16.0` | [discuss](https://github.com/open-gsd/gsd-core/discussions/5303) |
+
+## Beads Lifecycle
+- **Repository:** https://github.com/davdittrich/gsd-beads — [latest release](https://github.com/davdittrich/gsd-beads/releases/latest)
+- **What it is:** Ties gsd-core's plan, execute, verify and ship lifecycle to Beads \(bd\) issue tracking: syncs PLAN.md tasks into bd issues under a phase epic, recalls open issues that may touch a phase before planning, closes completed tasks' issues after each wave, writes BEADS.md, and blocks /gsd-ship while blocking\_open or diverged is not 0. Needs the bd binary; every step except the ship:pre gate degrades to a no-op with a STATE.md note when bd is missing, and the gate blocks /gsd-ship until bd is back or beads.ship\_gate is false.
+- **Author:** Dennis A. V. Dittrich
+- **Every interaction with GSD:** Loop Extension Points: plan:pre, plan:post, execute:wave:pre, execute:wave:post, verify:post, ship:pre; hook kinds: step, contribution, gate; configKeys: beads.enabled, beads.epic\_per, beads.ship\_gate, beads.sync\_mode; runtimeCompat: all; produces: BEADS-RECALL.md, BEADS.md, PLAN.md; consumes: BEADS-RECALL.md, BEADS.md, CONTEXT.md, PLAN.md, UAT.md
+- **Install:**
+```sh
+gsd capability install https://github.com/davdittrich/gsd-beads.git#v1.12.0
+```
+- **Uninstall:**
+```sh
+gsd capability remove beads
+```
+- **GSD compatibility:** `>=1.11.0`
+- **License:** MIT
+- **Discussion / ranking:** https://github.com/open-gsd/gsd-core/discussions/5308
 
 ## Markdown Linting
 - **Repository:** https://github.com/davdittrich/markdown-linting — [latest release](https://github.com/davdittrich/markdown-linting/releases/latest)
