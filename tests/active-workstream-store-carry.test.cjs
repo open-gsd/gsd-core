@@ -131,6 +131,74 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
     for (let i = 0; i < 8; i++) assert.equal(raw(`init-ws-old${i}`), null, `old${i} is pruned`);
   });
 
+  // The carry file path of a throwaway session, so a test writes the raw bytes a carry holds.
+  const carryFile = (t, session) => path.join(carryDir(t, session), `init-ws-${session}`);
+
+  test('surrounding whitespace in the carry file parses to the same name and write time', (t) => {
+    const session = path.basename(base);
+    const file = carryFile(t, session);
+    for (const text of [`alpha ${T}`, `\n alpha ${T}`, `alpha ${T}\n`, `  \talpha ${T} \n\n`]) {
+      fs.writeFileSync(file, text);
+      assert.equal(peekInitWorkstream(base, session, T), 'alpha', JSON.stringify(text));
+    }
+  });
+
+  test('a carry file is read up to exactly 1024 bytes and not beyond', (t) => {
+    const session = path.basename(base);
+    const file = carryFile(t, session);
+    const cap = 1024;
+    const sized = (n) => `alpha ${T}`.padEnd(n, ' ');
+    for (const [n, expected] of [[cap - 1, 'alpha'], [cap, 'alpha'], [cap + 1, null]]) {
+      fs.writeFileSync(file, sized(n));
+      assert.equal(fs.statSync(file).size, n);
+      assert.equal(peekInitWorkstream(base, session, T), expected, `${n} bytes`);
+    }
+  });
+
+  test('a directory at the carry path reads as no carry', (t) => {
+    const session = path.basename(base);
+    const file = carryFile(t, session);
+    fs.rmSync(file);
+    fs.mkdirSync(file);
+    t.after(() => cleanup(file));
+    assert.equal(peekInitWorkstream(base, session, T), null);
+  });
+
+  test('a read releases its descriptor whether the carry is small or oversized', (t) => {
+    if (!fs.existsSync('/proc/self/fd')) return t.skip('no /proc/self/fd');
+    const session = path.basename(base);
+    const file = carryFile(t, session);
+    const open = () => fs.readdirSync('/proc/self/fd').length;
+    for (const text of [`alpha ${T}`, `alpha ${T}`.padEnd(2048, ' ')]) {
+      fs.writeFileSync(file, text);
+      const before = open();
+      for (let i = 0; i < 20; i++) peekInitWorkstream(base, session, T);
+      assert.equal(open(), before, `${text.length} bytes leaks no descriptor`);
+    }
+  });
+
+  test('pruning an entry that vanished after the listing does not throw, still prunes later entries and removes with force', (t) => {
+    const session = path.basename(base);
+    const dir = carryDir(t, session);
+    createSessionScopedPointerAdapter(base, 'init-ws-zold').write(`alpha ${T}`);
+    t.after(() => createSessionScopedPointerAdapter(base, 'init-ws-zold').clear());
+    const realList = fs.readdirSync;
+    const realRm = fs.rmSync;
+    const forced = [];
+    fs.readdirSync = (d, ...rest) => {
+      const names = realList(d, ...rest);
+      return d === dir ? ['init-ws-0phantom', ...names] : names;
+    };
+    fs.rmSync = (f, opts) => {
+      if (path.basename(f) === 'init-ws-0phantom') forced.push(opts?.force);
+      return realRm(f, opts);
+    };
+    t.after(() => { fs.readdirSync = realList; fs.rmSync = realRm; });
+    assert.equal(recordInitWorkstream(base, session, 'beta', T + W), true);
+    assert.deepEqual(forced, [true], 'the vanished entry is removed with force');
+    assert.equal(raw('init-ws-zold'), null, 'a later expired carry is still pruned');
+  });
+
   test('a FIFO named like a carry never blocks a read or a record', (t) => {
     const session = path.basename(base);
     const dir = carryDir(t, session);
