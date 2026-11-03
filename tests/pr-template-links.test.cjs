@@ -88,6 +88,8 @@ describe('link extractor, edge forms (#5427)', () => {
     assert.deepEqual(hrefsIn('stray ](../x.md) and [ok](../y.md) and [see [1]](../z.md)'),
       ['../y.md', '../z.md']);
     assert.deepEqual(hrefsIn('[a]\\](../x.md)\n\n](../w.md)'), []);
+    assert.deepEqual(hrefsIn('\\\\[x](../y.md)'), ['../y.md']);
+    assert.deepEqual(hrefsIn('\\[x](../y.md)'), []);
     assert.deepEqual(hrefsIn('<a title="[x](../old.md)">t</a>'), []);
     assert.deepEqual(hrefsIn('<a title="[x](../old.md)" href="../h.md">t</a>'), ['../h.md']);
   });

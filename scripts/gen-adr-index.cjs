@@ -490,7 +490,9 @@ function hasLabelOpener(text, at) {
   const para = text.slice(0, at).split(/\n[ \t\r]*\n/).pop();
   let depth = 1;
   for (let j = para.length - 1; j >= 0; j -= 1) {
-    if (para[j - 1] === '\\') continue;
+    let slashes = 0;
+    while (para[j - 1 - slashes] === '\\') slashes += 1;
+    if (slashes % 2) continue;
     if (para[j] === ']') depth += 1;
     else if (para[j] === '[' && !--depth) return true;
   }
