@@ -678,13 +678,17 @@ elif [ ${#EXPLICIT_REVIEWER_SLUGS[@]} -gt 0 ]; then
   # (gsd-review-prompt.md, gsd-review-<slug>.md/.err) are read-once evidence for THIS run, never
   # meant to be committed, and a second dispatch on the same phase would otherwise silently
   # overwrite the prior run's files in place. Removed by commit_review once the reviewer agent
-  # has read every cited evidence path (an `--auto` run with a valid REVIEW.md keeps it until code-review-fix.md's
-  # loop ends, #5019; the reviewer-failure fence and the next run's check_empty_scope also remove it, and a
-  # dispatch with no evidence removes it at once). An early exit between here and commit_review (a checkpoint,
-  # a halt) leaves it until then: the trade-off review.md's own gather_context/cleanup pair accepts for the identical
-  # resource class (a leftover $TMPDIR entry is cheaper than a cleanup mechanism, e.g. a trap, that could fire before a later step reads it).
+  # has read every cited evidence path (an `--auto` run with a valid REVIEW.md keeps it until
+  # code-review-fix.md's loop ends, #5019; the reviewer-failure fence and the next run's
+  # check_empty_scope also remove it, and a dispatch with no evidence removes it at once). An early
+  # exit between here and commit_review (a checkpoint, a halt) leaves it until then: the trade-off
+  # review.md's own gather_context/cleanup pair accepts for the identical resource class (a leftover
+  # $TMPDIR entry is cheaper than a cleanup mechanism, e.g. a trap, that could fire before a later
+  # step reads it).
   LANE_RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/gsd-review-lanes-XXXXXX")
-  # The persisted evidence is keyed to the review path, derived here as check_empty_scope and spawn_reviewer derive it; the other inputs (FIX_AUTO, REVIEW_FILES, DIFF_BASE, REVIEW_DEPTH, PHASE_DIR) come from the orchestrator shell.
+  # The persisted evidence is keyed to the review path, derived here as check_empty_scope and
+  # spawn_reviewer derive it; the other inputs (FIX_AUTO, REVIEW_FILES, DIFF_BASE, REVIEW_DEPTH,
+  # PHASE_DIR) come from the orchestrator shell.
   REVIEW_PATH="${PHASE_DIR}/${PADDED_PHASE}-REVIEW.md"
   DISPATCH_JSON=$(printf '%s\n' "${REVIEW_FILES[@]}" | gsd_run review-lane dispatch-step \
     --repo-root "$REPO_ROOT" --depth "$REVIEW_DEPTH" --base-sha "$DIFF_BASE" \

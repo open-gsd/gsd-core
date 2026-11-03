@@ -21,23 +21,7 @@ const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 // Same gate the shipped fences carry everywhere in this suite: bash is not assumed on win32.
 const HAS_BASH = process.platform !== 'win32';
 
-// Extract the bash fence out of a named <step>, so a test can RUN it rather than grep it.
-// Line-scanned rather than matched with a multiline regex: an ad-hoc fence regex trips
-// local/no-adhoc-markdown-parsing, and a bare \n against readFileSync content trips
-// local/no-crlf-fragile-split (Windows autocrlf yields \r\n). Same shape as bashFences() in
-// tests/code-review-pipeline-regression.test.cjs, which solved this first.
-function stepFence(src, name) {
-  const open = src.indexOf(`<step name="${name}">`);
-  assert.notStrictEqual(open, -1, `step "${name}" not found`);
-  const close = src.indexOf('</step>', open);
-  const lines = src.slice(open, close).replace(/\r\n/g, '\n').split('\n');
-  let start = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (start === -1 && /^```bash\s*$/.test(lines[i])) { start = i + 1; continue; }
-    if (start !== -1 && /^```\s*$/.test(lines[i])) return lines.slice(start, i).join('\n');
-  }
-  assert.fail(`step "${name}" carries no bash fence`);
-}
+const { stepFence, stepRegion } = require('./helpers/lines.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -74,15 +58,6 @@ const VALID_FIX_REPORT = [
   '',
   'All findings resolved across 2 iterations.',
 ].join('\n');
-
-/** Slice the workflow text of a single <step name="...">…</step> region. */
-function stepRegion(src, name) {
-  const open = src.indexOf(`<step name="${name}">`);
-  assert.notStrictEqual(open, -1, `step "${name}" not found in workflow`);
-  const close = src.indexOf('</step>', open);
-  assert.notStrictEqual(close, -1, `step "${name}" has no closing </step>`);
-  return src.slice(open, close + '</step>'.length);
-}
 
 describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH env wiring', () => {
   // -------------------------------------------------------------------------

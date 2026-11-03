@@ -1,6 +1,6 @@
 'use strict';
-// Slices SHIPPED bash out of the workflow .md files exactly as
-// tests/code-review-fix-pipeline-regression.test.cjs does (stepRegion / stepFence / lines),
+// Slices SHIPPED bash out of the workflow .md files through the one slicer of tests/helpers/lines.cjs
+// (stepRegion / stepFence / lines), the same one tests/code-review-fix-pipeline-regression.test.cjs uses,
 // and prints a bash script on stdout. Nothing here is hand-written workflow logic except the
 // stub of `review-lane dispatch-step` (the one call that would spawn a metered CLI).
 // usage: shipped.cjs dispatch|commit|prompt <worktree> <project> [head|base]
@@ -12,24 +12,9 @@ const FIX = rd('code-review-fix.md'), REVIEW = rd('code-review.md');
 const GSD_TOOLS = path.join(wt, 'gsd-core', 'bin', 'gsd-tools.cjs');
 const fail = (m) => { console.error(m); process.exit(2); };
 
-function stepRegion(src, name) {
-  const open = src.indexOf(`<step name="${name}">`); if (open < 0) fail(`step ${name} not found`);
-  const close = src.indexOf('</step>', open); if (close < 0) fail(`step ${name} unclosed`);
-  return src.slice(open, close + 7);
-}
-function stepFence(src, name) {
-  const open = src.indexOf(`<step name="${name}">`); if (open < 0) fail(`step ${name} not found`);
-  const close = src.indexOf('</step>', open);
-  const l = src.slice(open, close).replace(/\r\n/g, '\n').split('\n');
-  let start = -1;
-  for (let i = 0; i < l.length; i++) {
-    if (start === -1 && /^```bash\s*$/.test(l[i])) { start = i + 1; continue; }
-    if (start !== -1 && /^```\s*$/.test(l[i])) return l.slice(start, i).join('\n');
-  }
-  fail(`step ${name} has no bash fence`);
-}
-const sliceLines = require('../../../../tests/helpers/lines.cjs');
-const lines = (...a) => { try { return sliceLines(...a); } catch (e) { fail(e.message); } };
+const slice = require('../../../../tests/helpers/lines.cjs');
+const viaFail = (f) => (...a) => { try { return f(...a); } catch (e) { fail(e.message); } };
+const [lines, stepRegion, stepFence] = [slice, slice.stepRegion, slice.stepFence].map(viaFail);
 const T = '" 2>/dev/null)';
 const tmp = `${project}/tmp`, phase = `${project}/phase`;
 
