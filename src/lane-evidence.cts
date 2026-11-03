@@ -43,9 +43,11 @@ function ownedLaneDir(tmpDir: string, suffix: string): string | null {
     return st.isDirectory() && ownedByCurrentUser(st) ? dir : null;
   } catch { return null; } // missing: nothing to act on
 }
-function removeLaneDir(tmpDir: string, suffix: string): void {
+/** False only when removing an owned lane dir failed: its suffix lives in the state, so the caller must keep the state. */
+function removeLaneDir(tmpDir: string, suffix: string): boolean {
   const dir = ownedLaneDir(tmpDir, suffix);
-  if (dir) try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+  if (!dir) return true;
+  try { fs.rmSync(dir, { recursive: true, force: true }); return true; } catch { return false; }
 }
 
 /** The parsed state, or null when absent or not a regular file we own (a present one that is not ours is `rejected`). */
@@ -96,7 +98,7 @@ export function clearLaneEvidence(reviewPath: string, opts: { keepAuto?: boolean
     // a state we do not own is another user's: leave it (and what it names) alone
     if (s !== 'rejected') {
       if (opts.keepAuto && s.mode === 'auto') return;
-      removeLaneDir(tmpDir, s.suffix);
+      if (!removeLaneDir(tmpDir, s.suffix)) return;
     } else if (!ownedByCurrentUser(fs.lstatSync(file))) return;
     fs.rmSync(file, { force: true });
   } catch { /* best effort: the fences ran with no `set -e` */ }

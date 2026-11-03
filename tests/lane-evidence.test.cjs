@@ -214,6 +214,19 @@ describe('#5019 lane-evidence verbs', () => {
     assert.deepStrictEqual([fs.existsSync(d), fs.existsSync(sb.state)], [true, false], 'foreign lane dir kept, owned state removed');
   });
 
+  test('a lane dir that cannot be removed keeps its state, so a later clear still finds and removes both', (t) => {
+    const sb = sandbox(t);
+    const d = sb.lane('abc123');
+    persistLaneEvidence(sb.review, 'abc123', 'auto', BLOCK, sb.tmp);
+    const realRm = fs.rmSync;
+    const rm = t.mock.method(fs, 'rmSync', (p, ...rest) => { if (p === d) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' }); return realRm.call(fs, p, ...rest); });
+    clearLaneEvidence(sb.review, { tmpDir: sb.tmp });
+    assert.deepStrictEqual([fs.existsSync(d), fs.existsSync(sb.state)], [true, true], 'the state still names the dir');
+    rm.mock.restore();
+    clearLaneEvidence(sb.review, { tmpDir: sb.tmp });
+    assert.deepStrictEqual([fs.existsSync(d), fs.existsSync(sb.state)], [false, false]);
+  });
+
   test('CLI parity: gsd-tools lane-evidence-persist/read/clear equal the direct calls', (t) => {
     const sb = sandbox(t);
     const d = sb.lane('abc123');
