@@ -516,9 +516,14 @@ function applyResolvedWorkstreamEnv(
 // #5328: the workstream an `init --ws` of `session` used, kept session-scoped beside the pointer files as "<name> <written at, ms>"
 // (a name, never a model) so the Agent model guard compares against what `init` reported. A carry older than
 // INIT_WORKSTREAM_MAX_AGE_MS counts for nothing, and the next record prunes it. No session id: nothing is kept.
-function initWorkstreamAdapter(cwd: string, session: string | undefined): WorkstreamPointerAdapter | null {
+function initWorkstreamKey(session: string | undefined): string | null {
   const token = sanitizeWorkstreamSessionToken(session);
-  return token ? createSessionScopedPointerAdapter(cwd, `init-ws-${token}`) : null;
+  return token ? `init-ws-${token}` : null;
+}
+
+function initWorkstreamAdapter(cwd: string, session: string | undefined): WorkstreamPointerAdapter | null {
+  const key = initWorkstreamKey(session);
+  return key ? createSessionScopedPointerAdapter(cwd, key) : null;
 }
 
 /** How long an `init --ws` carry counts: longer than one execute-phase run, yet it expires within a day; every `init --ws` restarts it. */
@@ -569,8 +574,8 @@ function recordInitWorkstream(cwd: string, session: string | undefined, name: st
 }
 
 function peekInitWorkstream(cwd: string, session: string | undefined, now: number): string | null {
-  const token = sanitizeWorkstreamSessionToken(session);
-  const scoped = token ? getSessionScopedWorkstreamFile(cwd, `init-ws-${token}`) : null;
+  const key = initWorkstreamKey(session);
+  const scoped = key ? getSessionScopedWorkstreamFile(cwd, key) : null;
   return scoped ? freshInitWorkstream(readCarry(scoped.filePath), now) : null;
 }
 
