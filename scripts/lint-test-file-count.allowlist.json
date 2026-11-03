@@ -1,6 +1,15 @@
 {
   "_doc": "Baseline of modules currently exceeding the 2-test-file limit. Each entry locks in TODAY's exact test filenames as the allowlisted set (identity ratchet). Adding a NEW test file to a capped module fails (novel). Removing one requires pruning this list (stale, ratchet-down). When a cluster drops to ≤ 2, remove its entry entirely. New entries require justification in PR description.",
   "modules": {
+    "active-workstream-store": {
+      "files": [
+        "active-workstream-store-carry.test.cjs",
+        "active-workstream-store.test.cjs",
+        "active-workstream-store.unit.test.cjs"
+      ],
+      "issue": "5328",
+      "justification": "The #5328 init --ws carry functions are mutated by the active-workstream-store Stryker shard, which runs only files named after the module; the carry tests live in their own file so the shard covers them (owner's choice over growing the unit file)."
+    },
     "ui-consideration-probe": {
       "files": [
         "ui-consideration-probe-docs-fixtures.test.cjs",
