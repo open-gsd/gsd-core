@@ -96,7 +96,9 @@ function checkAgentModel(data, { clock } = {}) {
     const session = typeof data.session_id === 'string' && data.session_id ? data.session_id : undefined;
     // Where workstreams exist, a dispatch without a session id cannot establish the workstream `init` used: allow.
     if (session === undefined && require('../../gsd-core/bin/lib/planning-workspace.cjs').listAvailableWorkstreams(root).length > 0) return ALLOW;
-    const carried = store.peekInitWorkstream(root, session);
+    // realClock honours the GSD_TEST_MODE + GSD_NOW_MS pin in a hook subprocess (RULESET.TESTS.clock-seam).
+    const now = (clock || require('../../gsd-core/bin/lib/clock.cjs').realClock).now();
+    const carried = store.peekInitWorkstream(root, session, now, esc.ESCALATION_WINDOW_MS);
     const expected = [];
     for (const args of carried ? [['--ws', carried], []] : [[]]) {
       const model = baselineFor(store, root, type, session, args);
@@ -107,8 +109,6 @@ function checkAgentModel(data, { clock } = {}) {
     const passed = typeof toolInput.model === 'string' ? toolInput.model : '';
     if (passed && expected.some((m) => esc.modelFamily(m) === esc.modelFamily(passed))) return ALLOW;
     if (passed) {
-      // realClock honours the GSD_TEST_MODE + GSD_NOW_MS pin in a hook subprocess (RULESET.TESTS.clock-seam).
-      const now = (clock || require('../../gsd-core/bin/lib/clock.cjs').realClock).now();
       if (esc.escalationAllows(esc.readEscalation(root, type), passed, { now, session })) return ALLOW;
     }
     return verdict(esc, mode, type, passed, expected[0]);

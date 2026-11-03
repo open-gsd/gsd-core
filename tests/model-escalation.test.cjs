@@ -81,6 +81,8 @@ test('property: the CLI pin accept regex is exactly "alphanumeric first, then MO
 
 test('property: the init --ws carry round-trips a valid name per session, other sessions and an absent session read null, invalid names are never kept', () => {
   const store = require('../gsd-core/bin/lib/active-workstream-store.cjs');
+  const { ESCALATION_WINDOW_MS: W } = require('../gsd-core/bin/lib/model-escalation.cjs');
+  const T = 1_000_000;
   const project = createTempDir('gsd-esc-carry-');
   const base = 'a'.repeat(159);
   const clearAll = () => { for (const s of ['s1', 's2', base, `${base}b`]) store.createSessionScopedPointerAdapter(project, `init-ws-${s}`).clear(); };
@@ -89,25 +91,51 @@ test('property: the init --ws carry round-trips a valid name per session, other 
       fc.constantFrom('alpha', 'b-2', 'c_3', 'd.4', '../x', 'a b', ''), fc.constantFrom('s1', 's2', undefined, ''),
       (name, session) => {
         try {
-          store.recordInitWorkstream(project, session, name);
+          const recorded = store.recordInitWorkstream(project, session, name, T, W);
           const kept = Boolean(session) && store.validateWorkstreamName(name);
           const other = session === 's1' ? 's2' : 's1';
-          return store.peekInitWorkstream(project, session) === (kept ? name : null) && store.peekInitWorkstream(project, other) === null;
+          return recorded === kept && store.peekInitWorkstream(project, session, T, W) === (kept ? name : null) && store.peekInitWorkstream(project, other, T, W) === null;
         } finally {
           clearAll();
         }
       },
     ));
     try {
-      store.recordInitWorkstream(project, base, 'alpha');
-      if (store.peekInitWorkstream(project, `${base}b`) !== null) throw new Error('159 chars must not read as 160');
+      store.recordInitWorkstream(project, base, 'alpha', T, W);
+      if (store.peekInitWorkstream(project, `${base}b`, T, W) !== null) throw new Error('159 chars must not read as 160');
       clearAll();
-      store.recordInitWorkstream(project, `${base}b`, 'alpha');
-      if (store.peekInitWorkstream(project, `${base}bc`) !== 'alpha') throw new Error('161 chars cut to the 160-char token');
+      store.recordInitWorkstream(project, `${base}b`, 'alpha', T, W);
+      if (store.peekInitWorkstream(project, `${base}bc`, T, W) !== 'alpha') throw new Error('161 chars cut to the 160-char token');
+    } finally {
+      clearAll();
+    }
+    try {
+      store.recordInitWorkstream(project, 's1', 'alpha', T, W);
+      const at = (now) => store.peekInitWorkstream(project, 's1', now, W);
+      if (at(T + W - 1) !== 'alpha' || at(T + W) !== null || at(T + W + 1) !== null) throw new Error('a carry counts for W ms');
+      store.recordInitWorkstream(project, 's1', 'alpha', T + W - 1, W);
+      if (at(T + W + 1) !== 'alpha') throw new Error('a new record refreshes the carry');
     } finally {
       clearAll();
     }
   } finally {
+    cleanup(project);
+  }
+});
+
+test('recordInitWorkstream prunes this project\'s expired carries', () => {
+  const store = require('../gsd-core/bin/lib/active-workstream-store.cjs');
+  const { ESCALATION_WINDOW_MS: W } = require('../gsd-core/bin/lib/model-escalation.cjs');
+  const T = 1_000_000;
+  const project = createTempDir('gsd-esc-prune-');
+  const raw = (s) => store.createSessionScopedPointerAdapter(project, `init-ws-${s}`);
+  try {
+    store.recordInitWorkstream(project, 's1', 'alpha', T, W);
+    store.recordInitWorkstream(project, 's2', 'beta', T + W, W);
+    if (raw('s1').read() !== null) throw new Error('the expired s1 carry stays');
+    if (store.peekInitWorkstream(project, 's2', T + W, W) !== 'beta') throw new Error('the s2 carry is lost');
+  } finally {
+    for (const s of ['s1', 's2']) raw(s).clear();
     cleanup(project);
   }
 });

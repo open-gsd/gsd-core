@@ -4889,8 +4889,16 @@ const HOST_COMMAND_ROUTERS = {
     const ws = ctx.workstreamContext;
     if (ws && ws.source === 'cli') {
       try {
-        require('./lib/active-workstream-store.cjs').recordInitWorkstream(
-          require('./lib/model-escalation.cjs').escalationRoot(ctx.cwd), process.env.CLAUDE_CODE_SESSION_ID, ws.ws);
+        const esc = require('./lib/model-escalation.cjs');
+        const root = esc.escalationRoot(ctx.cwd);
+        const recorded = require('./lib/active-workstream-store.cjs').recordInitWorkstream(
+          root, process.env.CLAUDE_CODE_SESSION_ID, ws.ws, require('./lib/clock.cjs').realClock.now(), esc.ESCALATION_WINDOW_MS);
+        // Warn only where the guard runs: on, and on a runtime with native tier aliases (the hook's own test, baselineFor).
+        const { mode, skip } = esc.readGuardMode(root);
+        if (!recorded && !skip && mode !== false && require('./lib/model-resolver.cjs').hasNativeModelAliases(
+          require('./lib/runtime-slash.cjs').resolveActiveRuntime(require('./lib/config-loader.cjs').loadConfig(root, { persist: false })))) {
+          process.stderr.write(`gsd: --ws ${ws.ws} not recorded for the Agent model guard: no CLAUDE_CODE_SESSION_ID\n`);
+        }
       } catch (e) {
         process.stderr.write(`gsd: --ws ${ws.ws} not recorded for the Agent model guard: ${e.message}\n`);
       }

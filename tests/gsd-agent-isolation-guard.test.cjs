@@ -2590,8 +2590,38 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
 
   test('an invalid carried name allows', (t) => {
     setupCarry(t, ISSUE_CONFIG, 'sess-bad');
-    carryStore().createSessionScopedPointerAdapter(project, 'init-ws-sess-bad').write('../x');
+    carryStore().createSessionScopedPointerAdapter(project, 'init-ws-sess-bad').write(`../x ${Date.now()}`);
     assert.equal(evaluate(inSession('sonnet', 'sess-bad')).action, 'allow');
+  });
+
+  test('the hook ignores a carry older than the escalation window', (t) => {
+    setupCarry(t, ISSUE_CONFIG, 'sess-ws');
+    const r = runGsdTools(['query', 'init.quick', 't', '--ws=alpha'], project, { ...PINNED, GSD_WORKSTREAM: '', CLAUDE_CODE_SESSION_ID: 'sess-ws' });
+    assert.ok(r.success, r.error);
+    assert.equal(evaluate(inSession('haiku', 'sess-ws'), { now: () => PIN + ESCALATION_WINDOW_MS - 1 }).action, 'allow');
+    assert.equal(evaluate(inSession('haiku', 'sess-ws'), { now: () => PIN + ESCALATION_WINDOW_MS }).action, 'warn');
+  });
+
+  test('init --ws without a session id warns on stderr where the guard runs; init output is unchanged', (t) => {
+    const { runNode } = require('./helpers/process-seam.cjs');
+    const { TOOLS_PATH } = require('./helpers.cjs');
+    const run = (session) => runNode([TOOLS_PATH, 'query', 'init.quick', 't', '--ws=alpha'],
+      { cwd: project, env: { ...process.env, ...PINNED, GSD_WORKSTREAM: '', CLAUDE_CODE_SESSION_ID: session }, timeoutMs: PROBE_TIMEOUT_MS });
+    const NOT_RECORDED = 'not recorded for the Agent model guard: no CLAUDE_CODE_SESSION_ID';
+    setupCarry(t, ISSUE_CONFIG, 'sess-ws');
+    const bare = run('');
+    assert.equal(bare.exitCode, 0, bare.stderr);
+    assert.ok(bare.stderr.includes(NOT_RECORDED), bare.stderr);
+    const withSession = run('sess-ws');
+    assert.equal(withSession.exitCode, 0, withSession.stderr);
+    assert.ok(!withSession.stderr.includes(NOT_RECORDED));
+    assert.deepEqual(JSON.parse(bare.stdout), JSON.parse(withSession.stdout));
+    for (const config of [{ ...ISSUE_CONFIG, runtime: 'codex' }, { ...ISSUE_CONFIG, hooks: { agent_model_guard: false } }]) {
+      setupCarry(t, config);
+      const quiet = run('');
+      assert.equal(quiet.exitCode, 0, quiet.stderr);
+      assert.ok(!quiet.stderr.includes(NOT_RECORDED), JSON.stringify(config));
+    }
   });
 
   test('both .gsd/.gitignore writers: the dispatch sentinel and the escalation record are git-ignored whichever writes first', (t) => {

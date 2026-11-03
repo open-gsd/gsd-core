@@ -11,7 +11,7 @@ The workflows select a workstream with `--ws` on the `init` call (`gsd-core/work
 
 ## Decision
 
-1. `init` invoked with `--ws` on its command line records that workstream name, session-scoped beside the active-workstream pointer files (`recordInitWorkstream`, `src/active-workstream-store.cts`), keyed by `CLAUDE_CODE_SESSION_ID`. An `init` without the flag never writes and never clears it; no other command writes it. With no session id nothing is recorded.
+1. `init` invoked with `--ws` on its command line records that workstream name and the time it was written, session-scoped beside the active-workstream pointer files (`recordInitWorkstream`, `src/active-workstream-store.cts`), keyed by `CLAUDE_CODE_SESSION_ID`. An `init` without the flag never writes and never clears it; no other command writes it. With no session id nothing is recorded. A record counts for 10 minutes (`ESCALATION_WINDOW_MS`, the escalation record's window); every `init --ws` refreshes it and prunes this project's expired records.
 2. The guard's baseline is the set {the recorded workstream for the dispatch's `session_id`, the `GSD_WORKSTREAM`/pointer resolution}. A dispatch passes when its model matches either at tier level, or when an escalation record allows it; a mismatch reports the recorded workstream's model.
 3. When the project has workstreams and the dispatch carries no session id, the guard cannot establish the workstream `init` used, and allows.
 4. Nothing is persisted but a workstream name. Models are recomputed at dispatch, as ADR-5328 Decision 2 requires.
@@ -27,4 +27,4 @@ The workflows select a workstream with `--ws` on the `init` call (`gsd-core/work
 ## Consequences
 
 - `init --ws` gains a write side effect: one small file under the OS temp directory per session and project.
-- A stale record (an earlier `init --ws` in the same session) widens the accepted set to two baselines, never more.
+- A record expires 10 minutes after the last `init --ws` that wrote it, so an earlier workstream stops widening the accepted set once that window passes; an unflagged `init` neither writes nor clears it.
