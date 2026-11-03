@@ -46,7 +46,7 @@ test('property: writeEscalation keeps a .gitignore with a bare * or its marker, 
     const once = fs.readFileSync(file, 'utf8');
     writeEscalation(dir, 'gsd-executor', 'opus');
     const covered = /^\*\r?$/m.test(before) || before.includes(marker);
-    const want = covered ? before : `${before}${before.endsWith('\n') ? '' : '\n'}${marker}\n/model-escalation-*\n/.gitignore.tmp-*\n`;
+    const want = covered ? before : `${before}${before.endsWith('\n') ? '' : '\n'}${marker}\n/model-escalation-*\n/.gitignore\n/.gitignore.tmp-*\n`;
     return once === want && fs.readFileSync(file, 'utf8') === once;
   }));
 });
@@ -75,7 +75,7 @@ test('property: the CLI pin accept regex is exactly "alphanumeric first, then MO
 
 test('property: the init --ws carry round-trips a valid name per session, other sessions and an absent session read null, invalid names are never kept', (t) => {
   const store = require('../gsd-core/bin/lib/active-workstream-store.cjs');
-  const { ESCALATION_WINDOW_MS: W } = require('../gsd-core/bin/lib/model-escalation.cjs');
+  const { INIT_WORKSTREAM_MAX_AGE_MS: W } = store;
   const T = 1_000_000;
   const project = createTempDir('gsd-esc-carry-');
   const base = 'a'.repeat(159);
@@ -107,7 +107,7 @@ test('property: the init --ws carry round-trips a valid name per session, other 
 
 test('recordInitWorkstream prunes this project\'s expired carries', (t) => {
   const store = require('../gsd-core/bin/lib/active-workstream-store.cjs');
-  const { ESCALATION_WINDOW_MS: W } = require('../gsd-core/bin/lib/model-escalation.cjs');
+  const { INIT_WORKSTREAM_MAX_AGE_MS: W } = store;
   const T = 1_000_000;
   const project = createTempDir('gsd-esc-prune-');
   const raw = (s) => store.createSessionScopedPointerAdapter(project, `init-ws-${s}`);

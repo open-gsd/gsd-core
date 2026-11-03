@@ -2582,7 +2582,8 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     assert.ok(initQuick('sess-ws', false).success);
     assert.equal(evaluate(inSession('haiku', 'sess-ws')).action, 'allow', 'the unflagged init left the carry');
     assert.ok(initQuick('fresh', false).success);
-    assert.equal(carryStore().peekInitWorkstream(project, 'fresh'), null);
+    assert.equal(carryStore().peekInitWorkstream(project, 'fresh', Date.now()), null);
+    assert.equal(carryStore().createSessionScopedPointerAdapter(project, 'init-ws-fresh').read(), null, 'no carry file');
   });
 
   test('an invalid carried name allows', (t) => {
@@ -2591,33 +2592,30 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     assert.equal(evaluate(inSession('sonnet', 'sess-bad')).action, 'allow');
   });
 
-  test('the hook ignores a carry older than the escalation window', (t) => {
+  test('the hook ignores a carry older than INIT_WORKSTREAM_MAX_AGE_MS', (t) => {
     setupCarry(t, ISSUE_CONFIG, 'sess-ws');
     const r = runGsdTools(['query', 'init.quick', 't', '--ws=alpha'], project, { ...PINNED, GSD_WORKSTREAM: '', CLAUDE_CODE_SESSION_ID: 'sess-ws' });
     assert.ok(r.success, r.error);
-    assert.equal(evaluate(inSession('haiku', 'sess-ws'), { now: () => PIN + ESCALATION_WINDOW_MS - 1 }).action, 'allow');
-    assert.equal(evaluate(inSession('haiku', 'sess-ws'), { now: () => PIN + ESCALATION_WINDOW_MS }).action, 'warn');
+    assert.equal(evaluate(inSession('haiku', 'sess-ws'), { now: () => PIN + carryStore().INIT_WORKSTREAM_MAX_AGE_MS - 1 }).action, 'allow');
+    assert.equal(evaluate(inSession('haiku', 'sess-ws'), { now: () => PIN + carryStore().INIT_WORKSTREAM_MAX_AGE_MS }).action, 'warn');
   });
 
-  test('init --ws without a session id warns on stderr where the guard runs; init output is unchanged', (t) => {
+  test('init --ws without a session id records nothing and leaves the init output unchanged', (t) => {
     const { runNode } = require('./helpers/process-seam.cjs');
     const { TOOLS_PATH } = require('./helpers.cjs');
     const run = (session) => runNode([TOOLS_PATH, 'query', 'init.quick', 't', '--ws=alpha'],
       { cwd: project, env: { ...process.env, ...PINNED, GSD_WORKSTREAM: '', CLAUDE_CODE_SESSION_ID: session }, timeoutMs: PROBE_TIMEOUT_MS });
-    const NOT_RECORDED = 'not recorded for the Agent model guard: no CLAUDE_CODE_SESSION_ID';
     setupCarry(t, ISSUE_CONFIG, 'sess-ws');
     const bare = run('');
     assert.equal(bare.exitCode, 0, bare.stderr);
-    assert.ok(bare.stderr.includes(NOT_RECORDED), bare.stderr);
     const withSession = run('sess-ws');
     assert.equal(withSession.exitCode, 0, withSession.stderr);
-    assert.ok(!withSession.stderr.includes(NOT_RECORDED));
     assert.deepEqual(JSON.parse(bare.stdout), JSON.parse(withSession.stdout));
+    assert.equal(carryStore().peekInitWorkstream(project, 'sess-ws', PIN), 'alpha');
     for (const config of [{ ...ISSUE_CONFIG, runtime: 'codex' }, { ...ISSUE_CONFIG, hooks: { agent_model_guard: false } }]) {
       setupCarry(t, config);
       const quiet = run('');
       assert.equal(quiet.exitCode, 0, quiet.stderr);
-      assert.ok(!quiet.stderr.includes(NOT_RECORDED), JSON.stringify(config));
     }
   });
 
@@ -2635,7 +2633,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
             : runGsdTools(['resolve-execution', 'gsd-executor', '--attempt', '1'], project, PINNED);
           assert.ok(r.success, `${w}: ${r.error}`);
         }
-        for (const f of ['dispatch-isolation-sentinel.json', 'model-escalation-gsd-executor.json', '.gitignore.tmp-1-ab']) {
+        for (const f of ['dispatch-isolation-sentinel.json', 'model-escalation-gsd-executor.json', '.gitignore', '.gitignore.tmp-1-ab']) {
           if (!f.startsWith('.gitignore')) assert.equal(fs.existsSync(path.join(project, '.gsd', f)), true, f);
           const ci = runGit(['check-ignore', '-q', path.join('.gsd', f)], { cwd: project, timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
           assert.equal(ci.exitCode, 0, `${order.join(' then ')}, pre ${JSON.stringify(pre)}: ${f} is ignored`);
@@ -2681,7 +2679,9 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
           else if (now === pre) ignoreState = 'unchanged';
           else ignoreState = now.startsWith(pre) && now.split(writer.marker).length === 2 ? 'one block appended' : 'other';
         }
-        outcome[w] = { written, ignoreState, target: fs.readFileSync(target, 'utf8') };
+        const selfIgnored = typeof pre === 'object' && pre !== null ? undefined
+          : runGit(['check-ignore', '-q', path.join('.gsd', '.gitignore')], { cwd: project, timeoutMs: GIT_FIXTURE_TIMEOUT_MS }).exitCode === 0;
+        outcome[w] = { written, ignoreState, selfIgnored, target: fs.readFileSync(target, 'utf8') };
       }
       assert.deepEqual(outcome.escalation, outcome.sentinel, `${name}: both writers agree`);
     }
@@ -2734,11 +2734,13 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     }
   });
 
-  test('the reason states when resolve-execution --attempt records', (t) => {
+  test('a mismatch verdict carries its structured fields', (t) => {
     setup(t);
-    const { reason } = evaluate(dispatch('gsd-planner', 'sonnet'));
-    assert.match(reason, /dynamic_routing/);
-    assert.match(reason, /--attempt N/);
+    const v = evaluate(dispatch('gsd-planner', 'sonnet'));
+    assert.equal(v.action, 'warn');
+    assert.equal(v.reasonCode, REASON_CODE.AGENT_MODEL_MISMATCH);
+    assert.equal(v.passed, 'sonnet');
+    assert.equal(v.expected, 'opus');
   });
 
   test('resolve-execution from a linked git worktree records at the root the hook reads', (t) => {

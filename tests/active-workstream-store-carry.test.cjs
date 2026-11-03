@@ -18,7 +18,7 @@ const { createSessionScopedPointerAdapter } = require('../gsd-core/bin/lib/activ
 
 describe('recordInitWorkstream / peekInitWorkstream', () => {
   const { recordInitWorkstream, peekInitWorkstream } = require('../gsd-core/bin/lib/active-workstream-store.cjs');
-  const W = require('../gsd-core/bin/lib/model-escalation.cjs').ESCALATION_WINDOW_MS;
+  const W = require('../gsd-core/bin/lib/active-workstream-store.cjs').INIT_WORKSTREAM_MAX_AGE_MS;
   const T = 1_000_000;
   let base;
   let saved;
@@ -61,6 +61,8 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
       assert.equal(peekInitWorkstream(base, 's1', T), null, name);
     }
   });
+
+  test('the carry window is 12 hours', () => assert.equal(W, 12 * 60 * 60 * 1000));
 
   test('expiry: fresh at age 0 and W-1, expired at W and W+1, and a future write time is not fresh', () => {
     recordInitWorkstream(base, 's1', 'alpha', T);

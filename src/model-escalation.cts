@@ -151,7 +151,7 @@ export function writeEscalation(
         fd = undefined;
         if (!cur.includes('# gsd-core model guard') && !/^\*\r?$/m.test(cur)) {
           tmp = `${ignore}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
-          fs.writeFileSync(tmp, `${cur}${cur.endsWith('\n') ? '' : '\n'}# gsd-core model guard\n/model-escalation-*\n/.gitignore.tmp-*\n`, { flag: 'wx' });
+          fs.writeFileSync(tmp, `${cur}${cur.endsWith('\n') ? '' : '\n'}# gsd-core model guard\n/model-escalation-*\n/.gitignore\n/.gitignore.tmp-*\n`, { flag: 'wx' });
           if (fs.lstatSync(ignore).isSymbolicLink()) throw new Error(`${ignore} is a symlink`);
           retryRenameSync(tmp, ignore);
           tmp = undefined;

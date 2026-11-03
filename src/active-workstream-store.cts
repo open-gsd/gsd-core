@@ -514,21 +514,20 @@ function applyResolvedWorkstreamEnv(
 }
 
 // #5328: the workstream an `init --ws` of `session` used, kept session-scoped beside the pointer files as "<name> <written at, ms>"
-// (a name, never a model) so the Agent model guard compares against what `init` reported. A carry older than an escalation record's window
-// (ESCALATION_WINDOW_MS) counts for nothing, and the next record prunes it. No session id: nothing is kept.
+// (a name, never a model) so the Agent model guard compares against what `init` reported. A carry older than
+// INIT_WORKSTREAM_MAX_AGE_MS counts for nothing, and the next record prunes it. No session id: nothing is kept.
 function initWorkstreamAdapter(cwd: string, session: string | undefined): WorkstreamPointerAdapter | null {
   const token = sanitizeWorkstreamSessionToken(session);
   return token ? createSessionScopedPointerAdapter(cwd, `init-ws-${token}`) : null;
 }
 
+/** How long an `init --ws` carry counts: longer than one execute-phase run, yet it expires within a day; every `init --ws` restarts it. */
+const INIT_WORKSTREAM_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+
 function freshInitWorkstream(raw: string | null, now: number): string | null {
-  // The carry lives as long as an escalation record. Required at call time: model-escalation reaches this module statically
-  // (through config-loader), so a top-level import would close a require cycle.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { ESCALATION_WINDOW_MS } = require('./model-escalation.cjs') as { ESCALATION_WINDOW_MS: number };
   const [name, at] = (raw ?? '').trim().split(' ');
   const age = now - Number(at);
-  return name && age >= 0 && age < ESCALATION_WINDOW_MS ? name : null;
+  return name && age >= 0 && age < INIT_WORKSTREAM_MAX_AGE_MS ? name : null;
 }
 
 /** Records `name` for `session` at `now` and prunes this project's expired carries (best effort); false when nothing was recorded (no session id, or an invalid name). */
@@ -556,6 +555,7 @@ export = {
   WORKSTREAM_SESSION_ENV_KEYS,
   recordInitWorkstream,
   peekInitWorkstream,
+  INIT_WORKSTREAM_MAX_AGE_MS,
   createSharedPointerAdapter,
   createSessionScopedPointerAdapter,
   createMemoryPointerAdapter,
