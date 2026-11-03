@@ -2472,6 +2472,21 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
     }
   });
 
+  test('[config] hostile GSD_WORKSTREAM does not abort the config step', (t) => {
+    const dir = makePhaseProject('02-beta');
+    const prior = process.env.GSD_WORKSTREAM;
+    process.env.GSD_WORKSTREAM = '../x';
+    t.after(() => {
+      cleanup(dir);
+      if (prior === undefined) delete process.env.GSD_WORKSTREAM; else process.env.GSD_WORKSTREAM = prior;
+    });
+    const { resolveActiveHooksForPoint } = require(path.join(ROOT, 'gsd-core/bin/lib/loop-resolver.cjs'));
+    // Later steps may still throw on this workstream; only the config step must default.
+    let stack = '';
+    try { resolveActiveHooksForPoint(dir, 'plan:pre', { phase: '02' }); } catch (e) { stack = String(e.stack); }
+    assert.ok(!stack.includes('loadConfigResolved'), 'loadConfigResolved throw must not escape the config step');
+  });
+
   test('[phaseDrop] ambiguous warning caps the count at 5', (t) => {
     const echoedMore = (n) => {
       const dir = makePhaseProject(...Array.from({ length: n }, (_, i) => `05-${String.fromCharCode(97 + i)}`));
