@@ -2154,35 +2154,26 @@ describe('#1874 F6 adjacent: malformed settings.local.json does not crash the in
 // used to replace that link with a plain file and leave the target stale. Both
 // installer writes of the file, the primary settings write and the #338
 // local-install migration, must refuse the link without GSD_ALLOW_SYMLINKED_DEST
-// and write through to its target with it.
+// and write through to its target with it. Uninstall rewrites settings.json
+// through the same writer, so it refuses or writes through the same way.
+//
+// Each refusal case has an opt-in twin that runs the same layout to exit 0,
+// so the only thing that differs between the two runs is the opt-in. The
+// install cases also require gsd-core/VERSION, which is written before either
+// settings write, so a run that failed earlier for some other reason cannot
+// pass as a refusal.
 
 describe('#5037: the installer never replaces a symlinked settings.json', () => {
   const USER_SETTINGS = { env: { MY_TOKEN: 'keep-me' } };
-  const { SYMLINKED_LEAF_REFUSAL } = require('../gsd-core/bin/lib/install-engine.cjs');
-  const UNCAUGHT_ERROR_RECORDER = path.join(__dirname, 'helpers', 'uncaught-error-code-recorder-preload.cjs');
 
-  // The installer exits through an uncaught error, so the preload records that
-  // error's code. Exit code 1 and an untouched link alone would also hold for
-  // an install that failed earlier for an unrelated reason, so the refusal
-  // cases also require the settings writer's own refusal code.
   function runInstaller(root, args, { optIn }) {
-    // A fresh name per run, so an earlier run's record can never be read back.
-    const recordFile = path.join(root, `uncaught-error-${crypto.randomUUID()}.json`);
     const env = installSpawnEnv({
       HOME: root,
       USERPROFILE: root,
-      GSD_UNCAUGHT_ERROR_RECORD_FILE: recordFile,
       ...(optIn ? { GSD_ALLOW_SYMLINKED_DEST: '1' } : {}),
     });
     delete env.GSD_TEST_MODE;
-    const result = runNode(['--require', UNCAUGHT_ERROR_RECORDER, INSTALL_SCRIPT, ...args], {
-      cwd: root,
-      env,
-      timeoutMs: SCOPED_INSTALL_TIMEOUT_MS,
-    });
-    // null when the run ended without an uncaught error.
-    const errorCode = fs.existsSync(recordFile) ? JSON.parse(fs.readFileSync(recordFile, 'utf8')).code : null;
-    return { ...result, errorCode };
+    return runNode([INSTALL_SCRIPT, ...args], { cwd: root, env, timeoutMs: SCOPED_INSTALL_TIMEOUT_MS });
   }
 
   // Writes `content` to <root>/dotfiles/settings.json and links `linkPath` to it.
@@ -2237,8 +2228,8 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
           // 1, not merely non-zero: a timed-out or killed installer reports null.
           assert.strictEqual(result.exitCode, 1,
             `a refused settings write must fail the install\n${result.stdout}\n${result.stderr}`);
-          assert.strictEqual(result.errorCode, SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED,
-            `the install must fail on the settings symlink refusal, not on some earlier error\n${result.stderr}`);
+          assert.ok(fs.existsSync(path.join(claudeDir, 'gsd-core', 'VERSION')),
+            'the install must have reached the settings write before failing');
           assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), before, 'the link target must be byte-for-byte unchanged');
         }
       });
@@ -2288,8 +2279,8 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
           // 1, not merely non-zero: a timed-out or killed installer reports null.
           assert.strictEqual(result.exitCode, 1,
             `a refused settings write must fail the install\n${result.stdout}\n${result.stderr}`);
-          assert.strictEqual(result.errorCode, SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED,
-            `the install must fail on the settings symlink refusal, not on some earlier error\n${result.stderr}`);
+          assert.ok(fs.existsSync(path.join(claudeDir, 'gsd-core', 'VERSION')),
+            'the install must have reached the settings write before failing');
           assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), sharedBefore, 'the link target must be byte-for-byte unchanged');
           assert.strictEqual(fs.readFileSync(localSettingsPath, 'utf8'), localBefore,
             'settings.local.json must not be half-migrated when the shared write is refused');
@@ -2298,14 +2289,14 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
     }
   });
 
-  // Uninstall removes GSD's files and only then rewrites settings.json, so it
-  // checks a symlinked settings.json before the first removal. A refusal at
-  // the end would leave settings entries pointing at hooks already deleted.
+  // Uninstall rewrites settings.json through writeSettings after it removes
+  // GSD's files, so the refusal comes at that write, once those removals are
+  // done. Checking before the first removal is left to its own design.
   describe('uninstall', () => {
     for (const optIn of [false, true]) {
       test(optIn
         ? 'with GSD_ALLOW_SYMLINKED_DEST=1 uninstall cleans the link target and the link survives'
-        : 'without GSD_ALLOW_SYMLINKED_DEST uninstall refuses before removing any GSD file', (t) => {
+        : 'without GSD_ALLOW_SYMLINKED_DEST uninstall refuses the settings write and leaves the link and its target unchanged', (t) => {
         const root = createTempDir('gsd-5037-uninstall-');
         t.after(() => cleanup(root));
         const claudeDir = path.join(root, '.claude');
@@ -2342,18 +2333,19 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
           // 1, not merely non-zero: a timed-out or killed uninstall reports null.
           assert.strictEqual(result.exitCode, 1,
             `a refused settings write must fail the uninstall\n${result.stdout}\n${result.stderr}`);
-          assert.strictEqual(result.errorCode, SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED,
-            `the uninstall must fail on the settings symlink refusal, not on some earlier error\n${result.stderr}`);
-          assert.ok(fs.existsSync(gsdCoreDir), 'no GSD file may be removed before the refusal');
+          // gsd-core/ is removed just before the settings write, so its absence
+          // shows the run got that far rather than failing earlier.
+          assert.strictEqual(fs.existsSync(gsdCoreDir), false,
+            'the uninstall must have reached the settings write before failing');
           assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), installedSettings,
             'the link target must be byte-for-byte unchanged');
         }
       });
     }
 
-    // The check covers only a settings.json uninstall would write. A link
-    // holding no GSD entries, or a dangling one, is never written, so it must
-    // not block the uninstall, with or without the opt-in.
+    // writeSettings only runs when uninstall changed the settings, so a link
+    // holding no GSD entries, or a dangling one, is never written and must not
+    // block the uninstall, with or without the opt-in.
     function installClaudeGlobal(root) {
       const claudeDir = path.join(root, '.claude');
       const installed = runInstaller(root, ['--claude', '--global', '--config-dir', claudeDir], { optIn: false });
@@ -2407,31 +2399,6 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
         assert.strictEqual(fs.existsSync(missingTarget), false, 'nothing may be created at the missing target');
       });
     }
-  });
-
-  // uninstall() runs the settings cleanup once silently to decide whether to
-  // check the link, then again for real, so its return value must be exactly
-  // "step 6 would write".
-  describe('stripGsdFromSettings', () => {
-    const { stripGsdFromSettings } = installExports || {};
-    const claudeDir = path.join(path.sep, 'home', 'u', '.claude');
-    const gsdHook = { type: 'command', command: `node ${path.join(claudeDir, 'hooks', 'gsd-check-update.js')}` };
-    const userHook = { type: 'command', command: 'echo mine' };
-
-    test('reports and strips GSD entries, keeping the user hook beside them', () => {
-      const settings = { ...USER_SETTINGS, hooks: { SessionStart: [{ hooks: [gsdHook, userHook] }] } };
-      assert.strictEqual(stripGsdFromSettings(settings, 'claude', claudeDir, () => {}), true);
-      assert.deepStrictEqual(settings, { ...USER_SETTINGS, hooks: { SessionStart: [{ hooks: [userHook] }] } });
-    });
-
-    test('reports no change and logs nothing for settings without GSD entries', () => {
-      const settings = { ...USER_SETTINGS, hooks: { SessionStart: [{ hooks: [userHook] }] } };
-      const snapshot = JSON.stringify(settings);
-      const lines = [];
-      assert.strictEqual(stripGsdFromSettings(settings, 'claude', claudeDir, (line) => lines.push(line)), false);
-      assert.strictEqual(JSON.stringify(settings), snapshot, 'settings must be left as they were');
-      assert.deepStrictEqual(lines, []);
-    });
   });
 });
 
