@@ -1000,7 +1000,7 @@ ROADMAP.md 中阶段的 CRUD 操作 — 通过单一合并命令添加、插入�
 
 | 章节 | 键 |
 |---------|------|
-| 规划调优 | `workflow.plan_bounce`、`workflow.plan_bounce_passes`、`workflow.plan_bounce_script`、`workflow.subagent_timeout`、`workflow.inline_plan_threshold` |
+| 规划调优 | `planner.stall_detection_enabled`、`planner.stall_threshold_minutes`、`planner.stall_detect_interval_minutes`、`workflow.plan_bounce`、`workflow.plan_bounce_passes`、`workflow.plan_bounce_script`、`workflow.subagent_timeout`、`workflow.inline_plan_threshold` |
 | 执行调优 | `workflow.node_repair`、`workflow.node_repair_budget`、`workflow.auto_prune_state` |
 | 讨论调优 | `workflow.max_discuss_passes` |
 | 跨 AI 执行 | `workflow.cross_ai_execution`、`workflow.cross_ai_command`、`workflow.cross_ai_timeout` |
