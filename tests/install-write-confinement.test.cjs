@@ -5650,3 +5650,103 @@ describe('resolveSymlinkedLeafWritePath (#5037)', () => {
     assert.ok(fs.lstatSync(l.filePath).isSymbolicLink(), 'resolving must not touch the link');
   });
 });
+
+// ---------------------------------------------------------------------------
+// #5037 parity: two resolvers decide where a write to a possibly symlinked file
+// lands. bin/install.js's resolveSymlinkWriteTarget (#5301) serves the Codex
+// config.toml writers; install-engine's resolveSymlinkedLeafWritePath serves
+// writeSettings and the Codex hooks.json writer. resolveSymlinkWriteTarget
+// never refuses: it relies on installCodexConfig's install-root guard
+// (hasExistingSymlinkBetween), which runs before both config.toml writes in
+// every install that stages agents. resolveSymlinkedLeafWritePath runs that
+// same check itself. So wherever the guard allows the write the two must
+// return the same path, and wherever it refuses resolveSymlinkedLeafWritePath
+// must refuse. The table pins which layouts the guard refuses and what
+// resolveSymlinkWriteTarget returns for each, so a change to either shows up.
+// ---------------------------------------------------------------------------
+
+describe('the config.toml and settings.json symlink resolvers agree (#5037)', () => {
+  const { resolveSymlinkedLeafWritePath, hasExistingSymlinkBetween } = require('../gsd-core/bin/lib/install-engine.cjs');
+  const { resolveSymlinkWriteTarget } = require('../bin/install.js');
+  const LABEL = 'parity: file';
+  // A refusal has no code; a filesystem error always has one.
+  const isRefusal = (err) => err instanceof Error && err.code === undefined;
+
+  let savedOptIn;
+  beforeEach(() => {
+    savedOptIn = process.env.GSD_ALLOW_SYMLINKED_DEST;
+  });
+  afterEach(() => {
+    if (savedOptIn === undefined) delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+    else process.env.GSD_ALLOW_SYMLINKED_DEST = savedOptIn;
+  });
+
+  function setOptIn(value) {
+    if (value === undefined) delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+    else process.env.GSD_ALLOW_SYMLINKED_DEST = value;
+  }
+
+  // An install root and a separate dir, plus `file.toml` in the root built by
+  // `make`. Returns null when this platform or account cannot create symlinks.
+  function build(t, make) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-parity-root-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-parity-outside-'));
+    t.after(() => {
+      cleanup(root);
+      cleanup(outside);
+    });
+    const filePath = path.join(root, 'file.toml');
+    try {
+      make({ root, outside, filePath });
+    } catch {
+      return null;
+    }
+    return { root, outside, filePath };
+  }
+
+  const unchanged = (l) => l.filePath;
+  const outsideTarget = (l) => fs.realpathSync(path.join(l.outside, 'real.toml'));
+  const installRoot = (l) => fs.realpathSync(l.root);
+
+  // [layout, build it, per opt-in state: [the guard refuses it, what
+  // resolveSymlinkWriteTarget returns]]
+  const CASES = [
+    ['a plain file', ({ filePath }) => fs.writeFileSync(filePath, ''),
+      { unset: [false, unchanged], optIn: [false, unchanged] }],
+    ['a missing file', () => {},
+      { unset: [false, unchanged], optIn: [false, unchanged] }],
+    ['a link to a file outside the root', ({ outside, filePath }) => {
+      fs.writeFileSync(path.join(outside, 'real.toml'), '');
+      fs.symlinkSync(path.join(outside, 'real.toml'), filePath, 'file');
+    }, { unset: [true, unchanged], optIn: [false, outsideTarget] }],
+    ['a dangling link', ({ outside, filePath }) => fs.symlinkSync(path.join(outside, 'missing.toml'), filePath, 'file'),
+      { unset: [true, unchanged], optIn: [true, unchanged] }],
+    ['a link loop', ({ filePath }) => fs.symlinkSync(filePath, filePath, 'file'),
+      { unset: [true, unchanged], optIn: [true, unchanged] }],
+    ['a link to the install root itself', ({ root, filePath }) => fs.symlinkSync(root, filePath, 'dir'),
+      { unset: [true, unchanged], optIn: [true, installRoot] }],
+  ];
+
+  for (const [name, make, byOptIn] of CASES) {
+    for (const optIn of [undefined, '1']) {
+      const [guarded, configTomlTarget] = optIn ? byOptIn.optIn : byOptIn.unset;
+      const outcome = guarded ? 'the guard refuses it and so does the settings.json resolver' : 'both resolvers return the same path';
+      test(`${name}: ${outcome} (GSD_ALLOW_SYMLINKED_DEST=${optIn ?? 'unset'})`, (t) => {
+        const l = build(t, make);
+        if (!l) {
+          t.skip('symlink creation unsupported on this platform/privilege');
+          return;
+        }
+        setOptIn(optIn);
+        assert.strictEqual(hasExistingSymlinkBetween(l.root, l.filePath, { allowOptInFollow: optIn === '1' }), guarded,
+          'the check installCodexConfig runs before the config.toml writes decides this layout');
+        assert.strictEqual(resolveSymlinkWriteTarget(l.filePath), configTomlTarget(l));
+        if (guarded) {
+          assert.throws(() => resolveSymlinkedLeafWritePath(l.root, l.filePath, LABEL), isRefusal);
+        } else {
+          assert.strictEqual(resolveSymlinkedLeafWritePath(l.root, l.filePath, LABEL), configTomlTarget(l));
+        }
+      });
+    }
+  }
+});

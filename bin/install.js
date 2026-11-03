@@ -15507,6 +15507,9 @@ module.exports = {
     // #1191 — exported so tests exercise the REAL readSettings, not a replica
     readSettings,
     writeSettings,
+    // #5037: exported so a parity test can pin where the config.toml link
+    // resolver and the shared settings.json/hooks.json one agree and differ
+    resolveSymlinkWriteTarget,
     writeNonClaudeDefaults,
     stripJsonComments,
     copyWithPathReplacement,
