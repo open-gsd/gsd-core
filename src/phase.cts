@@ -2607,6 +2607,24 @@ function cmdPhaseInsert(
           `Phase ${afterPhase} exists in roadmap summary but is missing a detail section (### Phase ${afterPhase}: ...).`,
         );
       }
+      // #5679: this whole-file probe only chooses the error message; insert
+      // stays current-milestone-only and never writes to another milestone.
+      const headingOffset = tokenizeHeadings(rawContent).find((h) => targetPattern.test(h.text))?.offset;
+      const checklistOffset = checklistPattern.exec(rawContent)?.index;
+      const foundOffsets = [headingOffset, checklistOffset].filter((o): o is number => o !== undefined);
+      if (foundOffsets.length > 0) {
+        const foundAt = Math.min(...foundOffsets);
+        const preceding = listMilestoneHeadings(rawContent.slice(0, foundAt));
+        const owner = preceding.length > 0 ? preceding[preceding.length - 1].version : null;
+        const current = (getMilestoneInfo(cwd) as { value?: { version?: string } | null }).value?.version ?? null;
+        const ownerClause = owner ? `is in milestone ${owner}` : 'is outside the current milestone';
+        const currentClause = current
+          ? `STATE.md's current milestone is ${current}`
+          : "STATE.md's current milestone does not include it";
+        error(
+          `Phase ${afterPhase} ${ownerClause}, but ${currentClause}. phase insert only targets phases in the current milestone.`,
+        );
+      }
       error(`Phase ${afterPhase} not found in ROADMAP.md`);
     }
 
