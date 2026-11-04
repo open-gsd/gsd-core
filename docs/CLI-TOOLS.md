@@ -1416,10 +1416,11 @@ node gsd-tools.cjs quick-tasks-append --task "<description>" --directory "[<id>-
 node gsd-tools.cjs quick-tasks-append --task "<description>" --quick-id <id> --slug <slug> --status PASS
 # This append touches only the body table — it no longer forces a re-derive of the disk-derived
 # `progress.*` frontmatter, which previously overwrote curated values (#3356).
-# A --task over 240 characters (the #2618 todo-bullet bound) is still written in full and the
-# command still exits 0, but the JSON result's `warnings` (a string[], empty otherwise) carries one
-# entry; under --raw the warning goes to stderr. Pass a one-line title; detail belongs in the
-# task's SUMMARY (#5830).
+# A --task over 240 characters (the #2618 todo-bullet bound; "characters" are UTF-16 code units,
+# JavaScript string length, so an emoji counts as 2) is still written in full and the command
+# still exits 0, but the JSON result's `warnings` (a string[], empty otherwise) carries one entry;
+# under --raw the warning goes to stderr. `quick-batch complete` returns the same `warnings` for
+# the row it appends. Pass a one-line title; detail belongs in the task's SUMMARY (#5830).
 # See "Milestone Commands" below for `milestone archive-quick` (#2142) — sweeps .planning/quick/* into
 # milestones/<version>-quick/ and clears this table, without a full `milestone complete`.
 
