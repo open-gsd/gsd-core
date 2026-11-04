@@ -19,13 +19,27 @@ export function fileHash(filePath: string): string {
   return createHash('sha256').update(readFileSync(filePath)).digest('hex');
 }
 
+/** A file the sync rewrote, with its on-disk hash captured BEFORE the rewrite (null when unreadable). */
+export interface RewrittenFile {
+  path: string;
+  preHash: string | null;
+}
+
+/** fileHash that returns null instead of throwing — for capturing a pre-rewrite hash. */
+export function tryFileHash(filePath: string): string | null {
+  try { return fileHash(filePath); } catch { return null; }
+}
+
 /**
- * Update ONLY the manifest entries for `absPaths` (files under `configDir`).
+ * Update ONLY the manifest entries for `rewritten` files (under `configDir`),
+ * and only those that were GSD-owned before the rewrite: `preHash` equal to the
+ * recorded manifest entry. A file the user had already edited keeps its stale
+ * entry so the next install still detects it and backs it up.
  * Skips silently (returns false) when the manifest is absent, unparseable or
  * not the documented shape; publishes via tmp + rename.
  */
-export function recordManifestFileHashes(configDir: string, absPaths: readonly string[]): boolean {
-  if (absPaths.length === 0) return false;
+export function recordManifestFileHashes(configDir: string, rewritten: readonly RewrittenFile[]): boolean {
+  if (rewritten.length === 0) return false;
   const manifestPath = join(configDir, MANIFEST_NAME);
   let manifest: Record<string, unknown>;
   try {
@@ -40,9 +54,10 @@ export function recordManifestFileHashes(configDir: string, absPaths: readonly s
 
   const entries = files as Record<string, string>;
   let changed = false;
-  for (const absPath of absPaths) {
+  for (const { path: absPath, preHash } of rewritten) {
     const rel = relative(configDir, absPath).replace(/\\/g, '/');
     if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) continue;
+    if (preHash === null || entries[rel] !== preHash) continue;
     try {
       entries[rel] = fileHash(absPath);
       changed = true;

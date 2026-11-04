@@ -492,6 +492,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 
 | Module | Responsibility |
 |--------|----------------|
+| `install-manifest-record.cjs` | Install manifest per-file hash ownership (#5683): `fileHash` (sha256 of file bytes, shared with `bin/install.js`) and `recordManifestFileHashes` (after `effort sync --apply`, updates only the entries of files that were GSD-owned before the rewrite: pre-sync hash equal to the manifest entry) |
 | `installer-migrations/000-first-time-baseline.cjs` | Installer migration: records the first-time installer migration baseline scan — walks per-runtime install surfaces so pre-existing files are classified before any later migration runs |
 | `installer-migrations/001-legacy-orphan-files.cjs` | Installer migration: removes manifest-managed legacy orphan hook files (`hooks/gsd-notify.sh`, `hooks/statusline.js`) |
 | `installer-migrations/002-codex-legacy-hooks-json.cjs` | Installer migration: removes legacy Codex `hooks.json` GSD hook registrations |
@@ -554,7 +555,6 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `command-roster.cjs` | Read-only discovery of canonical `commands/gsd/*.md` command stems for runtime artifact conversion and namespace rewrites |
 | `command-routing-hub.cjs` | Pure-result dispatch hub that centralizes mode decision (SDK vs CJS), error taxonomy, and no-throw contract for all command-family routers (#3788) |
 | `commands.cjs` | Misc CLI commands (slug, timestamp, todos, scaffolding, stats) |
-| `install-manifest-record.cjs` | Install manifest per-file hash ownership (#5683): `fileHash` (sha256 of file bytes, shared with `bin/install.js`) and `recordManifestFileHashes` (updates only the named entries of `gsd-file-manifest.json` after `effort sync --apply`) |
 | `complexity-trigger.cjs` | Pure leaf for the complexity-triggered refactor capability — analyzer, evaluator, and baseline persistence; wrapped by `refactor-trigger-command-router.cjs` (#1953) |
 | `config-loader.cjs` | Project config loading — defaults merge, legacy-key migration, workstream overlay, unknown-key/profile-override validation (extracted from `core.cjs`, ADR-857) |
 | `config-schema.cjs` | Single source of truth for `VALID_CONFIG_KEYS` and dynamic key patterns; imported by both the validator and the config-schema-docs parity test |

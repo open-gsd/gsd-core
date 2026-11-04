@@ -11,7 +11,7 @@ import path from 'node:path';
 import { normalizeEol } from './text-lines.cjs';
 import { execGit, GIT_LOCATION_ENV_VARS, platformWriteSync, platformReadSync, platformEnsureDir, isSpawnTimeout, retryRenameSync } from './shell-command-projection.cjs';
 import { escapeRegex } from './pattern.cjs';
-import { recordManifestFileHashes } from './install-manifest-record.cjs';
+import { recordManifestFileHashes, tryFileHash, type RewrittenFile } from './install-manifest-record.cjs';
 import { locateFrontmatterFence, type LocateFrontmatterFenceOptions } from './frontmatter-fence.cjs';
 import { requireSafePath, sanitizeForDisplay, tryWithinRoot, assertWithinRoot, PathAcceptance } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -974,7 +974,7 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
   // cmdEffortSyncCodex and cmdEffortSyncOpencode, so a fault mid-write can
   // never leave an agent file truncated or empty.
   let fileFailureCount = 0;
-  const rewrittenFiles: string[] = [];
+  const rewrittenFiles: RewrittenFile[] = [];
 
   for (const file of files) {
     const agentName = file.replace(/\.md$/, '');
@@ -992,6 +992,9 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
       fileFailureCount++;
       continue;
     }
+
+    // #5683: hash BEFORE any rewrite — only a GSD-owned file gets re-recorded.
+    const preHash = tryFileHash(filePath);
 
     // Resolve using install-time logic: home defaults merged with project config.
     const universalEffort = resolveInstallTimeEffort(effortCfg, agentName);
@@ -1052,7 +1055,7 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
             if (originalModeInherit !== undefined) fs.chmodSync(tmpPathInherit, originalModeInherit);
           } catch { /* non-fatal: proceed with default tmp-file mode */ }
           retryRenameSync(tmpPathInherit, filePath);
-          rewrittenFiles.push(filePath);
+          rewrittenFiles.push({ path: filePath, preHash });
         } catch {
           try { fs.unlinkSync(tmpPathInherit); } catch { /* already gone or never created */ }
           skipped++;
@@ -1126,7 +1129,7 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
           if (originalModeSet !== undefined) fs.chmodSync(tmpPathSet, originalModeSet);
         } catch { /* non-fatal: proceed with default tmp-file mode */ }
         retryRenameSync(tmpPathSet, filePath);
-        rewrittenFiles.push(filePath);
+        rewrittenFiles.push({ path: filePath, preHash });
       } catch {
         try { fs.unlinkSync(tmpPathSet); } catch { /* already gone or never created */ }
         skipped++;
@@ -1208,7 +1211,7 @@ function cmdEffortSyncCodex(raw: boolean, dryRun: boolean, configDir?: string): 
   const refused: CodexEffortSyncRefusal[] = [];
   const writeFailures: EffortSyncFileFailure[] = [];
   const readFailures: EffortSyncFileFailure[] = [];
-  const rewrittenFiles: string[] = [];
+  const rewrittenFiles: RewrittenFile[] = [];
   let synced = 0;
   let skipped = 0;
 
@@ -1228,6 +1231,7 @@ function cmdEffortSyncCodex(raw: boolean, dryRun: boolean, configDir?: string): 
       continue;
     }
 
+    const preHash = tryFileHash(filePath); // #5683
     const parsed = parseCodexAgentToml(content);
     if (!parsed.ok) {
       // Never partially rewritten (40-design.md, ADR-2313 reader/writer
@@ -1297,7 +1301,7 @@ function cmdEffortSyncCodex(raw: boolean, dryRun: boolean, configDir?: string): 
           if (originalMode !== undefined) fs.chmodSync(tmpPath, originalMode);
         } catch { /* non-fatal: proceed with default tmp-file mode */ }
         retryRenameSync(tmpPath, filePath);
-        rewrittenFiles.push(filePath);
+        rewrittenFiles.push({ path: filePath, preHash });
       } catch (err) {
         // Reported, not thrown — the remaining agents still get processed.
         // Clean up the orphaned tmp file; filePath itself was never touched.
@@ -1369,7 +1373,7 @@ function cmdEffortSyncOpencode(cwd: string, raw: boolean, dryRun: boolean, confi
   const changes: EffortSyncChange[] = [];
   const writeFailures: EffortSyncFileFailure[] = [];
   const readFailures: EffortSyncFileFailure[] = [];
-  const rewrittenFiles: string[] = [];
+  const rewrittenFiles: RewrittenFile[] = [];
   let synced = 0;
   let skipped = 0;
 
@@ -1388,6 +1392,8 @@ function cmdEffortSyncOpencode(cwd: string, raw: boolean, dryRun: boolean, confi
       readFailures.push({ agent: agentName, file: filePath, error: err instanceof Error ? err.message : String(err) });
       continue;
     }
+
+    const preHash = tryFileHash(filePath); // #5683
 
     // `target === null` covers both "no effort configured" (inherit) and "a
     // level OpenCode does not accept" — both must produce NO `variant:` key,
@@ -1481,7 +1487,7 @@ function cmdEffortSyncOpencode(cwd: string, raw: boolean, dryRun: boolean, confi
           if (originalMode !== undefined) fs.chmodSync(tmpPath, originalMode);
         } catch { /* non-fatal: proceed with default tmp-file mode */ }
         retryRenameSync(tmpPath, filePath);
-        rewrittenFiles.push(filePath);
+        rewrittenFiles.push({ path: filePath, preHash });
       } catch (err) {
         try { fs.unlinkSync(tmpPath); } catch { /* already gone or never created */ }
         changes.pop();
