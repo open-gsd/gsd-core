@@ -94,6 +94,7 @@ if grep -q "Quick Tasks Completed" .planning/STATE.md 2>/dev/null; then
   # appending — silent no-op when already canonical, so this runs harmlessly
   # on every fast task and migrates exactly once, on the first.
   gsd_run quick-tasks-migrate || true
+  TASK_TITLE="${TASK_TITLE:-$TASK}"  # never an empty --task if the title was not set
   gsd_run quick-tasks-append --task "$TASK_TITLE" || echo "⚠ fast.md log_to_state: could not append Quick Tasks row (see message above); continuing."
 fi
 ```
