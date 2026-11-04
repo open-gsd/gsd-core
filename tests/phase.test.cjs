@@ -18874,3 +18874,59 @@ describe('#5676: phase.complete under milestone-prefixed', () => {
     }
   });
 });
+
+describe('#5676: find-phase directory token under milestone-prefixed', () => {
+  const buildFindFixture = (convention, dir, prefix) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5676-find-'));
+    const put = (rel, lines) => {
+      const file = path.join(tmp, rel);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, lines.join('\n'));
+    };
+    put('.planning/config.json', [JSON.stringify(convention === 'legacy' ? {} : { phase_id_convention: convention })]);
+    put('.planning/ROADMAP.md', [
+      '---',
+      `phase_id_convention: ${convention}`,
+      '---',
+      '',
+      '# Roadmap',
+      '',
+      '## [GSD] v1.0 — Core',
+      '',
+      `### Phase ${prefix}: Beta`,
+      '**Goal:** B',
+      '**Plans**: 1 plans',
+      '',
+    ]);
+    put(`.planning/phases/${dir}/${prefix}-01-PLAN.md`, ['# Plan', '']);
+    put('.planning/STATE.md', ['---', 'milestone: v1.0', 'status: executing', '---', '', '# State', '']);
+    return tmp;
+  };
+
+  test('#5676: find-phase 3-02 reports phase 03-02 with slug beta', () => {
+    const tmp = buildFindFixture('milestone-prefixed', '03-02-beta', '03-02');
+    try {
+      const result = runGsdTools(['find-phase', '3-02'], tmp);
+      assert.ok(result.success, `find-phase should succeed: ${result.error}`);
+      const found = JSON.parse(result.output);
+      assert.strictEqual(found.directory, '.planning/phases/03-02-beta');
+      assert.strictEqual(found.phase_number, '03-02');
+      assert.strictEqual(found.phase_name, 'beta');
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('#5676: find-phase keeps the legacy NN-slug split on an integer phase', () => {
+    const tmp = buildFindFixture('legacy', '02-beta', '02');
+    try {
+      const result = runGsdTools(['find-phase', '2'], tmp);
+      assert.ok(result.success, `find-phase should succeed: ${result.error}`);
+      const found = JSON.parse(result.output);
+      assert.strictEqual(found.phase_number, '02');
+      assert.strictEqual(found.phase_name, 'beta');
+    } finally {
+      cleanup(tmp);
+    }
+  });
+});

@@ -6177,4 +6177,78 @@ describe('#5676: init progress and init manager under milestone-prefixed', () =>
     assert.deepStrictEqual(phases.map((p) => [bare(p.number), p.name]), [['3-01', 'Alpha'], ['3-02', 'Beta']]);
     assert.strictEqual(phases[0].disk_status, 'complete');
   });
+
+  // The completed-phase fallback must read a checked `- [x] **Phase 3-02: Beta**`
+  // as phase `3-02`; the legacy token read it as `3` and never satisfied 3-02.
+  function buildDependencyFixture(t, ids, dirs) {
+    const tmp = createTempProject('gsd-5676-deps-');
+    t.after(() => cleanup(tmp));
+    const put = (rel, lines) => {
+      const file = path.join(tmp, rel);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, lines.join('\n'));
+    };
+    const convention = ids[0].includes('-') ? 'milestone-prefixed' : 'legacy';
+    put('.planning/config.json', [JSON.stringify(convention === 'legacy' ? {} : { phase_id_convention: convention })]);
+    put('.planning/ROADMAP.md', [
+      '---',
+      `phase_id_convention: ${convention}`,
+      '---',
+      '',
+      '# Roadmap',
+      '',
+      '## [GSD] v1.0 — Core',
+      '',
+      `- [x] **Phase ${ids[0]}: Alpha**`,
+      `- [x] **Phase ${ids[1]}: Beta**`,
+      `- [ ] **Phase ${ids[2]}: Gamma**`,
+      '',
+      `### Phase ${ids[0]}: Alpha`,
+      '**Goal:** A',
+      '**Plans**: 1 plans',
+      '',
+      `### Phase ${ids[1]}: Beta`,
+      '**Goal:** B',
+      '**Plans**: 1 plans',
+      '',
+      `### Phase ${ids[2]}: Gamma`,
+      '**Goal:** C',
+      `**Depends on**: Phase ${ids[1]}`,
+      '**Plans**: 1 plans',
+      '',
+    ]);
+    put('.planning/STATE.md', ['---', 'milestone: v1.0', 'status: executing', '---', '', '# State', '']);
+    dirs.forEach(({ dir, prefix, complete }) => {
+      put(`.planning/phases/${dir}/${prefix}-01-PLAN.md`, ['# Plan', '']);
+      if (!complete) return;
+      put(`.planning/phases/${dir}/${prefix}-01-SUMMARY.md`, ['# Summary', '']);
+      put(`.planning/phases/${dir}/${prefix}-VERIFICATION.md`, ['---', 'status: passed', '---', '', '# Verification', '']);
+    });
+    return tmp;
+  }
+
+  test('#5676: init manager satisfies a dependency on a checked M-NN phase', (t) => {
+    const tmp = buildDependencyFixture(t, ['3-01', '3-02', '3-03'], [
+      { dir: '03-01-alpha', prefix: '03-01', complete: true },
+      { dir: '03-02-beta', prefix: '03-02', complete: true },
+      { dir: '03-03-gamma', prefix: '03-03', complete: false },
+    ]);
+    const result = runGsdTools(['init', 'manager', '--raw'], tmp);
+    assert.ok(result.success, `init manager failed: ${result.error}`);
+    const phases = JSON.parse(result.output).phases;
+    assert.deepStrictEqual(phases.map((p) => [bare(p.number), p.deps_satisfied]), [['3-01', true], ['3-02', true], ['3-03', true]]);
+    assert.ok(!phases.some((p) => bare(p.number) === '3'), 'the bare integer 3 is never a phase');
+  });
+
+  test('#5676: init manager keeps the legacy dependency read on an integer phase', (t) => {
+    const tmp = buildDependencyFixture(t, ['1', '2', '3'], [
+      { dir: '01-alpha', prefix: '01', complete: true },
+      { dir: '02-beta', prefix: '02', complete: true },
+      { dir: '03-gamma', prefix: '03', complete: false },
+    ]);
+    const result = runGsdTools(['init', 'manager', '--raw'], tmp);
+    assert.ok(result.success, `init manager failed: ${result.error}`);
+    const phases = JSON.parse(result.output).phases;
+    assert.deepStrictEqual(phases.map((p) => [bare(p.number), p.deps_satisfied]), [['1', true], ['2', true], ['3', true]]);
+  });
 });
