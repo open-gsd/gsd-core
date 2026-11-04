@@ -1910,8 +1910,10 @@ const STATE_MILESTONE_ECHO_LIMIT = 80;
  * #5726: STATE.md's `milestone:` value is untrusted text. Cap it at
  * `STATE_MILESTONE_ECHO_LIMIT` characters (ellipsis past the cap), then quote it
  * with `JSON.stringify` (the `phase.cts` precedent for echoed user text), which
- * escapes ESC/BEL/newlines; C1 controls and DEL, which JSON leaves raw, are
- * escaped too so no byte can drive the terminal.
+ * escapes ESC/BEL/newlines; the characters JSON leaves raw but a terminal acts on
+ * are escaped too: DEL and C1 controls, zero-width and direction marks
+ * (U+200B-U+200F), line/paragraph separators and bidi embeddings/overrides
+ * (U+2028-U+202E), bidi isolates (U+2066-U+2069) and the BOM (U+FEFF).
  */
 function echoStateMilestone(value: string): string {
   const chars = Array.from(value);
@@ -1919,7 +1921,7 @@ function echoStateMilestone(value: string): string {
     ? `${chars.slice(0, STATE_MILESTONE_ECHO_LIMIT).join('')}…`
     : value;
   return JSON.stringify(capped).replace(
-    /[\u007f-\u009f]/g,
+    /[\u007f-\u009f\u{200b}-\u{200f}\u{2028}-\u{202e}\u{2066}-\u{2069}\u{feff}]/gu,
     (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`,
   );
 }

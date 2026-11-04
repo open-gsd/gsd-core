@@ -232,6 +232,72 @@ function isMilestoneShippedInRoadmap(content: string, version: string): boolean 
   return false;
 }
 
+/**
+ * #5726: `content` with every fenced code block and HTML comment blanked to
+ * spaces (newlines kept), so offsets and line structure are unchanged but no
+ * heading inside a fence or comment can be located. Same fence grammar as
+ * `tokenizeHeadings`: a line opening with three or more backticks or tildes
+ * toggles the fence.
+ */
+function blankFencesAndComments(content: string): string {
+  const blank = (s: string): string => s.replace(/[^\n]/g, ' ');
+  const noComments = content.replace(/<!--[\s\S]*?(?:-->|$)/g, blank);
+  let inFence = false;
+  return noComments
+    .split('\n')
+    .map((line) => {
+      const opens = /^ {0,3}(?:`{3,}|~{3,})/.test(line);
+      const wasInFence = inFence;
+      if (opens) inFence = !inFence;
+      return opens || wasInFence ? blank(line) : line;
+    })
+    .join('\n');
+}
+
+/**
+ * #5726: is this ONE heading (or `<summary>` text) a shipped-status line? The
+ * owner's closed classification is the gate; on top of it the marker must read
+ * as a STATUS, not as part of the title: a word marker counts when written in
+ * capitals (`SHIPPED`) or inside a parenthetical/bracket (`(shipped)`), so a
+ * milestone named `Failed Payment Recovery` stays open; a check mark counts
+ * anywhere except inside a parenthetical that names another version
+ * (`Next (after v2.0 prep ✅)`), which describes that other thing, not this one.
+ */
+function isShippedStatusHeading(headingText: string): boolean {
+  if (!isClosedMilestoneHeading(headingText)) return false;
+  const own = headingText.replace(/\([^)]*\bv\d[^)]*\)/gi, '');
+  return /✅|🗄/.test(own)
+    || /\b(?:CLOSED|ARCHIVED|ABANDONED|SHIPPED|FAILED)\b/.test(own)
+    || /[([][^)\]]*\b(?:closed|archived|abandoned|shipped|failed)\b[^)\]]*[)\]]/i.test(own);
+}
+
+/**
+ * #5726: is the milestone window `extractCurrentMilestoneScoped` selected for
+ * `version` a SHIPPED one? Decided on the heading the owner selects
+ * (`selectActiveMilestoneHeading`: the first non-closed match, else the first),
+ * located in fence- and comment-blanked content so an example inside a fence or
+ * comment cannot stand in for the real heading.
+ */
+function selectedMilestoneHeadingShipped(
+  content: string,
+  version: string,
+  phaseIdConvention: string | null,
+): boolean {
+  const visible = blankFencesAndComments(content);
+  let matches = locateMilestoneHeadings(visible, version);
+  if (matches.length === 0) matches = bracketFallbackHeadingMatches(visible, version, phaseIdConvention);
+  if (matches.length === 0) return false;
+  return isShippedStatusHeading(selectActiveMilestoneHeading(visible, version, matches)[1]);
+}
+
+/**
+ * #5726: is the `<summary>` the archive-span window was cut from a shipped one?
+ * Read from fence- and comment-blanked content, tags removed.
+ */
+function archiveSummaryShipped(summaryInner: string): boolean {
+  return isShippedStatusHeading(summaryInner.replace(/<[^>]{0,200}>/g, ''));
+}
+
 // #2761 B1: matches a bracket MILESTONE heading's intro (`[GSD.02]`) at the
 // START of a heading's text, capturing the bracket id in group 1. Shared by
 // isBracketMilestoneBoundary below — the ONE recognizer for "is this heading
@@ -1336,13 +1402,12 @@ function extractCurrentMilestoneScoped(content: string, cwd?: string, ws?: strin
   // twin copy in `getMilestonePhaseFilter`, the intra-owner-file duplicate
   // review caught since the drift guard exempts this file by construction).
   const versionedMilestonesPresent = hasVersionedMilestones(content);
-  // #5726: STATE.md's milestone is one the ROADMAP itself marks shipped (a
-  // closed heading or `<summary>`), via the existing `isMilestoneShippedInRoadmap`
-  // classification. The window below then IS the closed milestone, and a write
-  // verb would number against its phases. Reported by the window's one owner.
-  const shippedStateMilestone = versionFromState && version !== null && isMilestoneShippedInRoadmap(content, version)
-    ? { shippedMilestone: version }
-    : {};
+  // #5726: STATE.md's milestone is one the ROADMAP itself marks shipped. Decided
+  // below, from the heading (or archive `<summary>`) the window was actually cut
+  // from, so a line that merely mentions the version cannot read as shipped.
+  // Reported by the window's one owner.
+  const shippedOf = (shipped: boolean): { shippedMilestone?: string } =>
+    shipped && versionFromState && version !== null ? { shippedMilestone: version } : {};
 
   if (!version) {
     const value = stripShippedMilestones(content);
@@ -1414,7 +1479,9 @@ function extractCurrentMilestoneScoped(content: string, cwd?: string, ws?: strin
             windowHasPhaseEntries: hasPhaseEntries(value, phaseIdConvention),
             documentHasPhaseEntries,
           }),
-          ...shippedStateMilestone,
+          ...shippedOf(archiveSummaryShipped(
+            blankFencesAndComments(content).match(summaryPattern)?.[1] ?? '',
+          )),
         };
       }
     }
@@ -1681,7 +1748,7 @@ function extractCurrentMilestoneScoped(content: string, cwd?: string, ws?: strin
       windowHasPhaseEntries: hasPhaseEntries(value, phaseIdConvention),
       documentHasPhaseEntries,
     }),
-    ...shippedStateMilestone,
+    ...shippedOf(selectedMilestoneHeadingShipped(content, version, bracketScopeConvention)),
   };
 }
 
