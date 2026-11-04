@@ -18752,4 +18752,33 @@ describe('#5679: phase insert names another milestone', () => {
     assert.equal(result.success, false);
     assert.equal(result.error, 'Phase 9 not found in ROADMAP.md');
   });
+  test('bullet-only roadmap whose only phase bullet is fenced: not found, bytes unchanged', () => {
+    const roadmap = [
+      '# Roadmap',
+      '',
+      '- [ ] **Phase 3: Export**',
+      '',
+      '```',
+      '- [ ] **Phase 9: Example**',
+      '```',
+      '',
+    ].join('\n');
+    const { result, roadmapBefore, roadmapAfter } = runInsert(['9', 'x'], roadmap);
+    assert.equal(result.success, false);
+    assert.equal(result.error, 'Phase 9 not found in ROADMAP.md');
+    assert.equal(roadmapAfter, roadmapBefore);
+  });
+
+  test('bullet-only roadmap with a fenced example bullet before the real one: inserts after the real bullet in its bold style', () => {
+    const fence = ['```', '- [ ] Phase 2: Example', '```'].join('\n');
+    const real = '- [ ] **Phase 2: Real**';
+    const roadmap = ['# Roadmap', '', fence, '', real, '- [ ] **Phase 3: Next**', ''].join('\n');
+    const { result, roadmapAfter } = runInsert(['2', 'x'], roadmap);
+    assert.ok(result.success, `phase insert failed: ${result.error}`);
+    assert.ok(roadmapAfter.includes(fence), 'fence content must be byte-identical');
+    assert.equal(
+      roadmapAfter,
+      roadmap.replace(real, `${real}\n- [ ] **Phase 02.1: x**`),
+    );
+  });
 });
