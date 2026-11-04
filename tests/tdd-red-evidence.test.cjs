@@ -1204,3 +1204,65 @@ describe('#5106 — go test RED evidence', () => {
     assert.equal(qualified.verdict, 'RED_EVIDENCE_OK');
   });
 });
+
+// ── #5721 — a vitest load-failure JUnit entry never satisfies a RED target ────
+// vitest's JUnit reporter emits one <testcase classname="bad.test.js" name="bad.test.js">
+// with a <failure> for a test FILE that crashed at load. That entry asserted nothing.
+
+describe('#5721 — vitest load-failure JUnit entry is never a RED target', () => {
+  const VITEST_EVIDENCE = {"command":"vitest 4.1.7 run --globals --reporter=junit (scratch hash.test.js, bad.test.js)","exitCode":1,"output":"<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n<testsuites name=\"vitest tests\" tests=\"3\" failures=\"2\" errors=\"0\" time=\"0.020839859\">\n    <testsuite name=\"bad.test.js\" timestamp=\"2026-10-24T11:57:58.844Z\" hostname=\"fixture-host\" tests=\"1\" failures=\"1\" errors=\"0\" skipped=\"0\" time=\"0\">\n        <testcase classname=\"bad.test.js\" name=\"bad.test.js\" time=\"0\">\n            <failure message=\"load crash\" type=\"Error\">\nError: load crash\n ❯ bad.test.js:1:7\n            </failure>\n        </testcase>\n    </testsuite>\n    <testsuite name=\"hash.test.js\" timestamp=\"2026-10-24T11:57:58.854Z\" hostname=\"fixture-host\" tests=\"2\" failures=\"1\" errors=\"0\" skipped=\"0\" time=\"0.020839859\">\n        <testcase classname=\"hash.test.js\" name=\"suite one &gt; issue #42 case\" time=\"0.012710944\">\n            <failure message=\"expected 1 to be 2 // Object.is equality\" type=\"AssertionError\">\nAssertionError: expected 1 to be 2 // Object.is equality\n\n- Expected\n+ Received\n\n- 2\n+ 1\n\n ❯ hash.test.js:3:15\n            </failure>\n        </testcase>\n        <testcase classname=\"hash.test.js\" name=\"suite one &gt; a passing case\" time=\"0.00074436\">\n        </testcase>\n    </testsuite>\n</testsuites>\n","targetTest":"bad.test.js"};
+
+  const { parseTestReport } = require('../gsd-core/bin/lib/report-parser.cjs');
+  const classify = (targetTest, extra = {}) => classifyRedEvidence({ ...VITEST_EVIDENCE, targetTest, ...extra });
+
+  test('AC1: the crashing file as target is INVALID_RED with the load-failure reason', () => {
+    const result = classify('bad.test.js');
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'fixture_or_load_failure');
+    assert.equal(result.evidence.matched_test, null);
+  });
+
+  test('AC1: the qualified load-failure identity as target is INVALID_RED too', () => {
+    const result = classify('bad.test.js#bad.test.js');
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.evidence.matched_test, null);
+  });
+
+  test('AC2: the real failing test as target is still RED_EVIDENCE_OK', () => {
+    const result = classify('suite one > issue #42 case');
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.equal(result.reason, 'target_test_failed');
+    assert.equal(result.evidence.matched_test, 'hash.test.js#suite one > issue #42 case');
+  });
+
+  test('AC3 (#4701): classname-qualified target and a name containing # still match', () => {
+    for (const target of ['hash.test.js#suite one > issue #42 case', 'suite one > issue #42 case']) {
+      const result = classify(target);
+      assert.equal(result.verdict, 'RED_EVIDENCE_OK', target);
+      assert.equal(result.evidence.matched_test, 'hash.test.js#suite one > issue #42 case', target);
+    }
+  });
+
+  test('control: a passing test as target is not the failure', () => {
+    const result = classify('suite one > a passing case');
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'no_target_test_failure');
+  });
+
+  test('parser marks only the load-failure case', () => {
+    const report = parseTestReport(VITEST_EVIDENCE.output);
+    assert.deepEqual(report.tests.map((t) => t.loadFailure === true), [true, false, false]);
+  });
+
+  test('control: a file-like name under a different classname is a real test', () => {
+    const output = '<testsuite tests="1"><testcase classname="suite" name="bad.test.js"><failure/></testcase></testsuite>';
+    const result = classifyRedEvidence({ command: 'x', exitCode: 1, output, targetTest: 'bad.test.js' });
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+  });
+
+  test('control (#4724): a Surefire class-level entry with name == classname keeps matching the class target', () => {
+    const output = '<testsuite tests="1"><testcase classname="com.example.AppTest" name="com.example.AppTest"><error/></testcase></testsuite>';
+    const result = classifyRedEvidence({ command: 'mvn test', exitCode: 1, output, targetTest: 'AppTest' });
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+  });
+});
