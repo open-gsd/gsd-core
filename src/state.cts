@@ -8,6 +8,7 @@
 
 import type { PhaseDirectoryContext } from './phase-id.cjs';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -48,7 +49,7 @@ const { renderBracketPhaseDisplay } = phaseIdDisplayMod;
 import roadmapParserMod = require('./roadmap-parser.cjs');
 // #3642: hasMilestoneSectioning no longer consumed here — its >=2 semantics answered sibling conflation, but this branch asks asserted-vs-section (>=1). It stays exported from roadmap-parser.cjs for its unit pins.
 const { getMilestoneInfo, extractCurrentMilestone, isMilestoneBoundedInRoadmap, hasAnyMilestoneSection, classifyMilestoneScalar } = roadmapParserMod;
-import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync, toPosixPath, execGit, normalizeContent } from './shell-command-projection.cjs';
+import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync, toPosixPath, execGit, normalizeContent, platformRestoreFileSync, platformReadBytesSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir, planningPaths, resolvePhaseIdConvention } = planningWorkspace;
@@ -7275,21 +7276,47 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
 const STATE_ARCHIVE_HEADER = '# STATE Archive\n\nPruned entries from STATE.md. Recoverable but no longer loaded into agent context.\n\n';
 
 /**
+ * #5831: identity of one prune run — sha256 over the exact pre-prune STATE.md
+ * bytes and the prune parameters. Recorded in the run's archive block as an
+ * HTML comment (`<!-- gsd-prune-run: <hex> -->`, invisible when rendered).
+ * The prune's output is a pure function of these inputs, so a later prune
+ * with the same marker would archive exactly the same entries again.
+ */
+function pruneRunMarker(stateBytes: Buffer, cutoff: number, keepRecent: number): string {
+  return crypto.createHash('sha256')
+    .update(`gsd-prune-run v1\0cutoff=${cutoff}\0keep-recent=${keepRecent}\0`)
+    .update(stateBytes)
+    .digest('hex');
+}
+
+const PRUNE_RUN_MARKER_LINE = /^<!-- gsd-prune-run: ([0-9a-f]{64}) -->\r?$/gm;
+
+/** Pure: the run marker of the archive's most recent marked block, or null (no marked block, e.g. an archive written before #5831). */
+function lastPruneRunMarker(archiveText: string): string | null {
+  let last: string | null = null;
+  for (const m of archiveText.matchAll(PRUNE_RUN_MARKER_LINE)) last = m[1];
+  return last;
+}
+
+/**
  * Structured form of one prune's STATE-ARCHIVE.md append (#5831): what the
  * archive is built on (`base`: the existing archive text, or the header when
  * the archive is absent), the separator inserted before the new block, and the
- * block itself — its heading fields and every pruned entry per section, in
- * order and with every occurrence kept. `renderStateArchiveAppend` turns it
- * into the text `publishPrunedToArchive` writes.
+ * block itself — its heading fields, its run marker, and every pruned entry
+ * per section, in order and with every occurrence kept.
+ * `renderStateArchiveAppend` turns it into the text `publishPrunedToArchive`
+ * writes.
  */
 interface StateArchiveAppendPlan {
   base: string;
-  /** '' when `base` ends with a newline; '\n\n' so the heading starts on its own line otherwise. */
+  /** '' when `base` is empty or ends with a newline; '\n\n' so the heading starts on its own line otherwise. */
   boundary: '' | '\n\n';
   block: {
     date: string;
     cutoff: number;
     keepRecent: number;
+    /** `pruneRunMarker` of the run that produced this block. */
+    run: string;
     sections: Array<{ section: string; lines: string[] }>;
   };
 }
@@ -7298,7 +7325,7 @@ interface StateArchiveAppendPlan {
 function planStateArchiveAppend(
   existing: string | null,
   sections: PrunedSection[],
-  meta: { date: string; cutoff: number; keepRecent: number },
+  meta: { date: string; cutoff: number; keepRecent: number; run: string },
 ): StateArchiveAppendPlan {
   const base = existing ?? STATE_ARCHIVE_HEADER;
   return {
@@ -7308,15 +7335,22 @@ function planStateArchiveAppend(
       date: meta.date,
       cutoff: meta.cutoff,
       keepRecent: meta.keepRecent,
+      run: meta.run,
       sections: sections.map(s => ({ section: s.section, lines: [...s.lines] })),
     },
   };
 }
 
-/** Pure: render a plan to the archive text (the `## Pruned ...` block format is unchanged). */
+/**
+ * Pure: render a plan to the archive text. The visible `## Pruned ...` block
+ * format is unchanged; the run marker is one HTML-comment line under the
+ * heading.
+ */
 function renderStateArchiveAppend(plan: StateArchiveAppendPlan): string {
   const { block } = plan;
-  let out = plan.base + plan.boundary + `## Pruned ${block.date} (phases 1-${block.cutoff}, kept recent ${block.keepRecent})\n\n`;
+  let out = plan.base + plan.boundary +
+    `## Pruned ${block.date} (phases 1-${block.cutoff}, kept recent ${block.keepRecent})\n\n` +
+    `<!-- gsd-prune-run: ${block.run} -->\n\n`;
   for (const section of block.sections) {
     out += `### ${section.section}\n\n${section.lines.join('\n')}\n\n`;
   }
@@ -7329,15 +7363,6 @@ interface ArchiveRollback {
   restore(stateErr: unknown): void;
 }
 
-function readBytesOrNull(filePath: string): Buffer | null {
-  try {
-    return fs.readFileSync(filePath);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw err;
-  }
-}
-
 function errMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
@@ -7347,12 +7372,23 @@ function errMessage(e: unknown): string {
  * handle that puts the archive back exactly as it was (#5831).
  *
  * Callers must hold the STATE.md lock (cmdStatePrune calls this from inside
- * its `readModifyWriteStateMd` transform). The write goes through
- * `platformWriteSync` (temp file + rename) and throws on failure, so the
- * caller's STATE.md rewrite never happens without it. That is not a strict
- * atomicity guarantee: `platformWriteSync` falls back to a direct write when
- * the temp-file write fails, and that fallback can truncate the destination
- * before throwing.
+ * its `readModifyWriteStateMd` transform). The write is atomic — temp file +
+ * rename with no direct-write fallback (`platformWriteSync` `atomic`) — and
+ * throws on failure, so the caller's STATE.md rewrite never happens without
+ * it and a failed write leaves the archive's previous bytes in place. Should
+ * the archive still differ from its snapshot after a failed write, it is
+ * restored before the error propagates.
+ *
+ * Returns null, writing nothing, when the archive's most recent block carries
+ * this run's marker: an earlier run with the same STATE.md bytes and
+ * parameters published its block but never rewrote STATE.md (killed between
+ * the two writes, or a failed STATE.md write whose archive restore also
+ * failed). Its block already holds exactly these entries, so the retry only
+ * rewrites STATE.md. A completed prune changes STATE.md, so a later
+ * legitimate prune — even of an identical entry that was added again — has a
+ * different marker and is archived again. (If STATE.md is put back to the
+ * byte-identical pre-prune file, e.g. by reverting it in git, the same
+ * occurrences are already archived and are not archived twice.)
  */
 function publishPrunedToArchive(
   statePath: string,
@@ -7360,22 +7396,31 @@ function publishPrunedToArchive(
   sections: PrunedSection[],
   cutoff: number,
   keepRecent: number,
-): ArchiveRollback {
-  const stateBytes = fs.readFileSync(statePath);
-  const archiveBytes = readBytesOrNull(archivePath);
-  const existing = archiveBytes === null ? null : platformReadSync(archivePath);
-  const plan = planStateArchiveAppend(existing, sections, { date: realClock.localToday(), cutoff, keepRecent });
-  platformWriteSync(archivePath, renderStateArchiveAppend(plan));
+): ArchiveRollback | null {
+  const stateBytes = platformReadBytesSync(statePath);
+  if (stateBytes === null) throw new Error(`state prune: ${statePath} disappeared while its lock was held`);
+  const archiveBytes = platformReadBytesSync(archivePath);
+  const existing = archiveBytes === null ? null : archiveBytes.toString('utf-8');
+  const run = pruneRunMarker(stateBytes, cutoff, keepRecent);
+  if (existing !== null && lastPruneRunMarker(existing) === run) return null;
+
+  const plan = planStateArchiveAppend(existing, sections, { date: realClock.localToday(), cutoff, keepRecent, run });
+  try {
+    platformWriteSync(archivePath, renderStateArchiveAppend(plan), { atomic: true });
+  } catch (writeErr) {
+    restoreArchiveAfterFailedWrite(archivePath, archiveBytes, writeErr);
+    throw writeErr;
+  }
 
   return {
     restore(stateErr: unknown): void {
       // Roll back only when STATE.md provably still holds the entries (its
       // bytes are exactly the pre-write snapshot). If the failed write changed
-      // or removed it (the platformWriteSync direct-write fallback can
-      // truncate), the archive copy may be the only one left — keep it.
+      // or removed it (a non-atomic fallback can truncate), the archive copy
+      // may be the only one left — keep it.
       let stateNow: Buffer | null;
       try {
-        stateNow = readBytesOrNull(statePath);
+        stateNow = platformReadBytesSync(statePath);
       } catch (readErr) {
         throw new AggregateError(
           [stateErr, readErr],
@@ -7386,27 +7431,39 @@ function publishPrunedToArchive(
       }
       if (stateNow === null || !stateNow.equals(stateBytes)) return;
       try {
-        if (archiveBytes === null) {
-          fs.rmSync(archivePath, { force: true });
-        } else {
-          const tmpPath = archivePath + '.restore.' + process.pid;
-          fs.writeFileSync(tmpPath, archiveBytes);
-          try {
-            retryRenameSync(tmpPath, archivePath);
-          } catch (renameErr) {
-            try { fs.unlinkSync(tmpPath); } catch { /* already gone */ }
-            throw renameErr;
-          }
-        }
+        platformRestoreFileSync(archivePath, archiveBytes);
       } catch (restoreErr) {
         throw new AggregateError(
           [stateErr, restoreErr],
           `state prune: writing STATE.md failed (${errMessage(stateErr)}) and restoring STATE-ARCHIVE.md also failed ` +
-          `(${errMessage(restoreErr)}). The pruned entries are now in both STATE.md and STATE-ARCHIVE.md — duplicated, not lost.`,
+          `(${errMessage(restoreErr)}). The pruned entries are in both files for now; pruning again with the same ` +
+          'options only removes them from STATE.md (the archived block is recognised by its run marker).',
         );
       }
     },
   };
+}
+
+/**
+ * #5831: after the archive write itself threw, put the archive back to its
+ * snapshot if it no longer matches it. The atomic write leaves the destination
+ * untouched on failure, so this normally finds nothing to do; it guards the
+ * earlier entries against any write path that damages the file and then
+ * throws. A failed check or restore is reported alongside the write error.
+ */
+function restoreArchiveAfterFailedWrite(archivePath: string, archiveBytes: Buffer | null, writeErr: unknown): void {
+  try {
+    const now = platformReadBytesSync(archivePath);
+    const unchanged = now === null ? archiveBytes === null : archiveBytes !== null && now.equals(archiveBytes);
+    if (!unchanged) platformRestoreFileSync(archivePath, archiveBytes);
+  } catch (restoreErr) {
+    throw new AggregateError(
+      [writeErr, restoreErr],
+      `state prune: writing STATE-ARCHIVE.md failed (${errMessage(writeErr)}) and putting it back to its previous ` +
+      `content also failed (${errMessage(restoreErr)}). STATE.md was not changed and still holds every entry; ` +
+      'check STATE-ARCHIVE.md for earlier archived entries.',
+    );
+  }
 }
 
 /**
@@ -7477,17 +7534,24 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): v
     return;
   }
 
-  // #5831: prune is lossless — archive first, then STATE.md, with rollback.
-  // Everything runs inside readModifyWriteStateMd, i.e. under the STATE.md
-  // lock, which also serializes archive writers (this is the only one):
+  // #5831: archive first, then STATE.md, with rollback. Everything runs
+  // inside readModifyWriteStateMd, i.e. under the STATE.md lock, which also
+  // serializes archive writers (this is the only one):
   //   1. compute the prune and snapshot the archive's exact bytes (or absence);
-  //   2. publish the archive (old content + one `## Pruned ...` block);
+  //   2. publish the archive atomically (old content + one `## Pruned ...`
+  //      block carrying this run's marker), or skip it when the archive's
+  //      latest block already carries that marker (see publishPrunedToArchive);
   //   3. write STATE.md. If that throws, `onWriteFailure` restores the archive
   //      to its snapshot (or deletes it if it was absent) and the error is
   //      rethrown, so both files are as they were before the prune.
-  // A failed archive write (step 2) throws out of the transform before
-  // STATE.md is touched. The remaining gap: a process killed between steps 2
-  // and 3 leaves the entries in BOTH files — duplication, never loss.
+  // A failed archive write (step 2) leaves the archive's previous bytes and
+  // throws out of the transform before STATE.md is touched. So no thrown
+  // failure loses an entry. A process killed between steps 2 and 3 (or a
+  // failed restore) leaves the entries in both files; re-running the same
+  // prune on the unchanged STATE.md then only rewrites STATE.md, so each entry
+  // ends up archived once. Not covered: a retry with different options, or
+  // after STATE.md was edited in between — a different run, which archives its
+  // entries again (duplicated, never lost).
   let rollback: ArchiveRollback | null = null;
   readModifyWriteStateMd(statePath, (content) => {
     const result = runPruneCore(content);
@@ -8020,6 +8084,9 @@ export = {
   // prune's archive write is built from, exposed so tests assert on it.
   planStateArchiveAppend,
   renderStateArchiveAppend,
+  // #5831: a prune run's marker and the archive's latest one (retry detection).
+  pruneRunMarker,
+  lastPruneRunMarker,
   cmdStateRebuild,
   cmdStateMilestoneSwitch,
   cmdSignalWaiting,
