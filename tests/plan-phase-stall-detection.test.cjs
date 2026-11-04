@@ -1218,6 +1218,13 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     for (const b of branches) assert.match(b, /rm -f "\{receipt\}"/, `false branch must rm the receipt: ${b.slice(0, 90)}`);
   });
 
+  // Review 5692447413 Minor 1: the revision watch names where a finished revision goes.
+  test('the revision watch routes ## REVISION COMPLETE to "Spawn checker again (step 10)" (#5182)', () => {
+    const para = sectionOf(readPlanPhase(), REVISION_SECTION).split('\n').find((l) => l.includes('(`revision`)'));
+    assert.ok(para, 'the revision ORCHESTRATOR RULE paragraph exists');
+    assert.match(para, /marker_received[^;]*## REVISION COMPLETE[^;]*step 10/, 'REVISION COMPLETE must route to the checker re-spawn (step 10)');
+  });
+
   test('AC3: a finished revision yields marker_received within one poll interval', (t) => {
     const f = fixture(t);
     const revision = watchCallOf(sectionOf(readPlanPhase(), REVISION_SECTION));
