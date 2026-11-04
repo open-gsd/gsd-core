@@ -51,6 +51,8 @@ const { cleanup, readFileNormalized, readWorkflowCombined, runGsdTools } = requi
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
+// How far into the checker's receipt rule the no-Bash-write assertion looks: the rule's own opening text.
+const RECEIPT_RULE_SCAN_CHARS = 700;
 const PLAN_PHASE_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'plan-phase.md');
 const STALL_HELPERS_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'plan-phase', 'steps', 'stall-detection-helpers.md');
 const CHUNKED_PLANNING_MODE_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'plan-phase', 'steps', 'chunked-planning-mode.md');
@@ -1602,7 +1604,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     // declares Write (Group B) and the receipt is its only write.
     assert.match(checker.match(/^tools:.*$/m)[0], /\bWrite\b/, 'the checker declares Write for its receipt');
     const rule = checker.slice(checker.indexOf('**Return receipt (#5182):**'));
-    assert.doesNotMatch(rule.slice(0, 700), /printf/, 'no Bash printf write appears in the checker receipt rule');
+    assert.doesNotMatch(rule.slice(0, RECEIPT_RULE_SCAN_CHARS), /printf/, 'no Bash printf write appears in the checker receipt rule');
     // The limit must hold on spawns that send no receipt (quick, quick-batch, import), so it
     // also lives in <anti_patterns>, outside the receipt-conditional rule.
     const anti = checker.slice(checker.indexOf('<anti_patterns>'), checker.indexOf('</anti_patterns>'));
