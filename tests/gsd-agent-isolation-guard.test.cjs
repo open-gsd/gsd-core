@@ -1982,3 +1982,45 @@ describe('gsd-agent-isolation-guard.js: #4734 — a non-git project root is neve
     assert.equal(JSON.parse(r.stdout).decision, 'block');
   });
 });
+
+describe('gsd-agent-isolation-guard.js: #5682 — interleaved per-dispatch records (in-process, real record-dispatch-isolation writer)', () => {
+  const guardModule = require('../hooks/gsd-agent-isolation-guard.js');
+  const FLAG = 'isolation="worktree"';
+  const A = { phase: '21', plan: '21-13' };
+  const B = { phase: '23', plan: '23-15' };
+  let project;
+  let savedGsdRuntime;
+
+  before(() => {
+    savedGsdRuntime = process.env.GSD_RUNTIME;
+    delete process.env.GSD_RUNTIME;
+    project = mkProject('gsd-aig-5682-');
+    writeConfig(project, JSON.stringify({ runtime: 'claude' }));
+  });
+  after(() => {
+    cleanup(project);
+    if (savedGsdRuntime === undefined) delete process.env.GSD_RUNTIME;
+    else process.env.GSD_RUNTIME = savedGsdRuntime;
+  });
+
+  function record(args) {
+    const result = runGsdTools(['record-dispatch-isolation', ...args], project);
+    assert.ok(result.success, `record-dispatch-isolation failed: ${result.error}`);
+    assert.equal(JSON.parse(result.output).recorded, true);
+  }
+
+  test('#5682: two orchestrators interleaving records each get their own isolation decision from the guard', () => {
+    record(['--isolation', 'none', '--phase', A.phase, '--plan', A.plan]);
+    record(['--isolation', 'harness-worktree', `--harness-flag=${FLAG}`, '--phase', B.phase, '--plan', B.plan]);
+    const clock = { now: () => readSentinelRaw(project).written_at + 1 };
+
+    const forA = guardModule.resolveIsolationState(project, { clock, dispatchIds: A });
+    assert.equal(forA.isolation, 'none', 'A\'s recorded sequential decision still governs its own flag-less dispatch');
+    assert.equal(forA.sentinelDiscarded, null, 'A\'s record was consulted, not discarded');
+
+    const forB = guardModule.resolveIsolationState(project, { clock, dispatchIds: B });
+    assert.equal(forB.isolation, 'harness-worktree', 'B\'s dispatch still requires the harness flag');
+    assert.equal(forB.harnessFlag, FLAG);
+    assert.equal(forB.sentinelDiscarded, null);
+  });
+});
