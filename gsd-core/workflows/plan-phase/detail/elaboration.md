@@ -4,6 +4,10 @@ Apply response_language to all user-facing prose — narration between tool call
 
 Elaboration deferred from the `plan-phase.md` spine under ADR-4139 (Compact Content mode). Read via `gsd-core/references/compact-content-gate.md` when `workflow.compact_content` is `false`. This file supplements the spine — it does not stand alone.
 
+## § 2401 — prior_verify_commands Is Not Context-Window Gated
+
+**#2401 — `prior_verify_commands` is NOT part of that enrichment and is never gated on `CONTEXT_WINDOW`.** It is a handful of one-line `<automated>` commands harvested from the nearest prior phase that had any; the payload is tiny and its absence at 200k is exactly what made the planner re-invent a verify command and author an unrunnable path. Surface it at every context window.
+
 ## § 9a — Filesystem Fallback (Planner)
 
 This elaborates the spine's §9a trigger condition (above) — the recovery banner and its three options.
