@@ -6122,3 +6122,59 @@ describe('init: the phase SPEC (#5629)', () => {
     }
   });
 });
+
+describe('#5676: init progress and init manager under milestone-prefixed', () => {
+  function buildFixture(t) {
+    const tmp = createTempProject('gsd-5676-init-');
+    t.after(() => cleanup(tmp));
+    const put = (rel, lines) => {
+      const file = path.join(tmp, rel);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, lines.join('\n'));
+    };
+    put('.planning/config.json', [JSON.stringify({ phase_id_convention: 'milestone-prefixed' })]);
+    put('.planning/ROADMAP.md', [
+      '---',
+      'phase_id_convention: milestone-prefixed',
+      '---',
+      '',
+      '# Roadmap',
+      '',
+      '## [GSD] v1.0 — Core',
+      '',
+      '- [x] **Phase 3-01: Alpha**',
+      '- [ ] **Phase 3-02: Beta**',
+      '',
+      '### Phase 3-01: Alpha',
+      '**Goal:** A',
+      '**Plans**: 1 plans',
+      '',
+      '### Phase 3-02: Beta',
+      '**Goal:** B',
+      '**Plans**: 1 plans',
+      '',
+    ]);
+    put('.planning/phases/03-01-alpha/03-01-01-PLAN.md', ['# Plan', '']);
+    put('.planning/phases/03-01-alpha/03-01-01-SUMMARY.md', ['# Summary', '']);
+    put('.planning/phases/03-01-alpha/03-01-VERIFICATION.md', ['---', 'status: passed', '---', '', '# Verification', '']);
+    put('.planning/phases/03-02-beta/03-02-01-PLAN.md', ['# Plan', '']);
+    put('.planning/STATE.md', ['---', 'milestone: v1.0', 'current_phase: 3-02', 'status: executing', '---', '', '# State', '']);
+    return tmp;
+  }
+  const bare = (n) => String(n).replace(/^0+/, '');
+
+  test('#5676: init progress keeps the M-NN id whole and the slug as the name', (t) => {
+    const result = runGsdTools(['init', 'progress', '--raw'], buildFixture(t));
+    assert.ok(result.success, `init progress failed: ${result.error}`);
+    const phases = JSON.parse(result.output).phases;
+    assert.deepStrictEqual(phases.map((p) => [bare(p.number), p.name]), [['3-01', 'alpha'], ['3-02', 'beta']]);
+  });
+
+  test('#5676: init manager reads M-NN headings, checkboxes and directories', (t) => {
+    const result = runGsdTools(['init', 'manager', '--raw'], buildFixture(t));
+    assert.ok(result.success, `init manager failed: ${result.error}`);
+    const phases = JSON.parse(result.output).phases;
+    assert.deepStrictEqual(phases.map((p) => [bare(p.number), p.name]), [['3-01', 'Alpha'], ['3-02', 'Beta']]);
+    assert.strictEqual(phases[0].disk_status, 'complete');
+  });
+});

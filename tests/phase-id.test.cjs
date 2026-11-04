@@ -1827,3 +1827,49 @@ describe('#5676: phaseScanTokenSource under milestone-prefixed', () => {
     }
   });
 });
+
+describe('#5676: parsePhaseChecklistLine under milestone-prefixed', () => {
+  const ctx = phaseId.phaseDirectoryContext({});
+
+  test('reads a checked M-NN row, with and without a directory context', () => {
+    for (const context of [undefined, ctx]) {
+      const row = phaseId.parsePhaseChecklistLine('- [x] **Phase 3-01: Alpha**', 'milestone-prefixed', context);
+      assert.ok(row, `row parsed (context ${context ? 'given' : 'absent'})`);
+      assert.strictEqual(row.phaseToken, '3-01');
+      assert.strictEqual(row.checked, true);
+    }
+  });
+
+  test('reads an unchecked M-NN row', () => {
+    const row = phaseId.parsePhaseChecklistLine('- [ ] **Phase 3-02: Beta**', 'milestone-prefixed', ctx);
+    assert.ok(row);
+    assert.strictEqual(row.phaseToken, '3-02');
+    assert.strictEqual(row.checked, false);
+  });
+
+  for (const convention of [undefined, null, 'sequential']) {
+    test(`convention ${JSON.stringify(convention)} keeps reading a dotted row unchanged`, () => {
+      const row = phaseId.parsePhaseChecklistLine('- [x] **Phase 3: Alpha**', convention, ctx);
+      assert.deepStrictEqual(row, { checked: true, bracketId: undefined, phaseToken: '3' });
+    });
+  }
+});
+
+describe('#5676: buildPhaseHeadingScanRegex under milestone-prefixed', () => {
+  const ctx = phaseId.phaseDirectoryContext({});
+  const tokens = (text, convention, context) => {
+    const scan = phaseId.buildPhaseHeadingScanRegex(phaseId.PHASE_HEADING_BASELINE.ANY_BRACKET, convention, context);
+    return [...text.matchAll(scan.regex)].map((m) => [m[scan.phaseNumGroup], m[scan.phaseNameGroup].trim()]);
+  };
+
+  test('yields the M-NN headings in order, with and without a directory context', () => {
+    const text = '### Phase 3-01: Alpha\n### Phase 3-02: Beta';
+    for (const context of [undefined, ctx]) {
+      assert.deepStrictEqual(tokens(text, 'milestone-prefixed', context), [['3-01', 'Alpha'], ['3-02', 'Beta']]);
+    }
+  });
+
+  test('legacy convention reads dotted headings unchanged', () => {
+    assert.deepStrictEqual(tokens('### Phase 1: Alpha\n### Phase 2.1: Beta', undefined, ctx), [['1', 'Alpha'], ['2.1', 'Beta']]);
+  });
+});
