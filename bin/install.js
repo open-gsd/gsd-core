@@ -2715,13 +2715,13 @@ function convertClaudeToTraeMarkdown(content) {
   converted = converted.replace(/\.\/CLAUDE\.md/g, '.trae/rules/rules.md');
   converted = converted.replace(/`CLAUDE\.md`/g, '`.trae/rules/rules.md`');
   converted = converted.replace(/\bCLAUDE\.md\b/g, '.trae/rules/rules.md');
-  converted = converted.replace(/\.claude\/skills\//g, '.trae/skills/');
+  converted = converted.replace(/(?<!~\/|\$HOME\/)\.claude\/skills\//g, '.trae/skills/');
   converted = converted.replace(/\.\/\.claude\//g, './.trae/');
-  converted = converted.replace(/\.claude\//g, '.trae/');
+  converted = converted.replace(/(?<!~\/|\$HOME\/)\.claude\//g, '.trae/');
   // Bare forms (no trailing slash) — after slash forms to avoid double-rewrite.
   // Use negative lookahead (?![\w-]) to preserve .claude-plugin and .claudeignore.
-  converted = converted.replace(/~\/\.claude(?![\w-])/g, '~/.trae');
-  converted = converted.replace(/\$HOME\/\.claude(?![\w-])/g, '$HOME/.trae');
+  converted = converted.replace(/~\/\.claude(?![\w\/-])/g, '~/.trae');
+  converted = converted.replace(/\$HOME\/\.claude(?![\w\/-])/g, () => '$HOME/.trae');
   // Environment variable name rewrite
   converted = converted.replace(/\bCLAUDE_CONFIG_DIR\b/g, 'TRAE_CONFIG_DIR');
   converted = converted.replace(/\*\*Known Claude Code bug \(classifyHandoffIfNeeded\):\*\*[^\n]*\n/g, '');
@@ -8152,33 +8152,8 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
         // balanced masking grammar used by this path and the rewrite engine.
         const rewriteGenericPaths = (body) => {
           content = body;
-          const globalClaudeRegex = /~\/\.claude\//g;
-          const globalClaudeHomeRegex = /\$HOME\/\.claude\//g;
-          const localClaudeRegex = /\.\/\.claude\//g;
-          content = content.replace(globalClaudeRegex, pathPrefix);
-          content = content.replace(globalClaudeHomeRegex, pathPrefix);
-          content = content.replace(localClaudeRegex, `./${dirName}/`);
-          // #3544 review (Finding 1 fallout): guarded with the SAME
-          // negative-lookahead convention already used at ~:2859-2860 below
-          // ("preserve .claude-plugin and .claudeignore"). A naive `\b` here
-          // is satisfied by ANY non-word character, including '-' — so for a
-          // --config-dir whose name EXTENDS '.claude' (e.g. '.claude-work',
-          // pathPrefix '$HOME/.claude-work/'), this pass re-matched the
-          // '$HOME/.claude' PREFIX of its own slash-form output (lines above)
-          // and re-appended the full prefix, corrupting every emitted path to
-          // '$HOME/.claude-work-work/...'. Harmless no-op for the literal
-          // default '.claude' (self-replace with an identical string), which
-          // is why this went undetected until a non-default config-dir name
-          // was exercised.
-          content = content.replace(/~\/\.claude(?![\w-])/g, pathPrefix.replace(/\/$/, ''));
-          content = content.replace(/\$HOME\/\.claude(?![\w-])/g, pathPrefix.replace(/\/$/, ''));
-          content = content.replace(/\.\/\.claude\b/g, `./${dirName}`);
-          content = content.replace(/~\/\.qwen\//g, pathPrefix);
-          content = content.replace(/\$HOME\/\.qwen\//g, pathPrefix);
-          content = content.replace(/\.\/\.qwen\//g, `./${dirName}/`);
-          content = content.replace(/~\/\.hermes\//g, pathPrefix);
-          content = content.replace(/\$HOME\/\.hermes\//g, pathPrefix);
-          content = content.replace(/\.\/\.hermes\//g, `./${dirName}/`);
+          // #5715: every generic source form in ONE pass (no rescan of the emitted prefix).
+          content = runtimeArtifactConversion._rewriteSpecTreeConfigDirForms(content, pathPrefix, dirName);
           // #3544: restore @-file-reference lines to the tilde form Claude Code
           // actually expands — the SAME correction #3133 already applies to
           // skill/command bodies via _applyRuntimeRewrites's 'claude' case (see

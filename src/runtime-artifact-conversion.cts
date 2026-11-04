@@ -1920,13 +1920,13 @@ function convertClaudeToTraeMarkdown(content) {
   converted = converted.replace(/\.\/CLAUDE\.md/g, '.trae/rules/rules.md');
   converted = converted.replace(/`CLAUDE\.md`/g, '`.trae/rules/rules.md`');
   converted = converted.replace(/\bCLAUDE\.md\b/g, '.trae/rules/rules.md');
-  converted = converted.replace(/\.claude\/skills\//g, '.trae/skills/');
+  converted = converted.replace(/(?<!~\/|\$HOME\/)\.claude\/skills\//g, '.trae/skills/');
   converted = converted.replace(/\.\/\.claude\//g, './.trae/');
-  converted = converted.replace(/\.claude\//g, '.trae/');
+  converted = converted.replace(/(?<!~\/|\$HOME\/)\.claude\//g, '.trae/');
   // Bare forms (no trailing slash) — after slash forms to avoid double-rewrite.
   // Use negative lookahead (?![\w-]) to preserve .claude-plugin and .claudeignore.
-  converted = converted.replace(/~\/\.claude(?![\w-])/g, '~/.trae');
-  converted = converted.replace(/\$HOME\/\.claude(?![\w-])/g, '$HOME/.trae');
+  converted = converted.replace(/~\/\.claude(?![\w\/-])/g, '~/.trae');
+  converted = converted.replace(/\$HOME\/\.claude(?![\w\/-])/g, () => '$HOME/.trae');
   // Environment variable name rewrite
   converted = converted.replace(/\bCLAUDE_CONFIG_DIR\b/g, 'TRAE_CONFIG_DIR');
   converted = converted.replace(/\*\*Known Claude Code bug \(classifyHandoffIfNeeded\):\*\*[^\n]*\n/g, '');
@@ -3868,25 +3868,90 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false, a
 }
 
 /**
- * #5501: rewrite `~/.claude` and `$HOME/.claude` in one pass. `pathPrefix` (with
- * its trailing slash) replaces the slash form; `normalizedPathPrefix` replaces the
- * bare form, guarded so `.claude-plugin`, `.claudeignore` and `.claude.json` keep
- * their bytes. A function replacement, never a string: a string replacement
- * interprets `$&` in a config dir, and a single pass never rescans text it emitted.
+ * #5501 / #5715: rewrite config-dir source forms (`~/.claude/`, `$HOME/.claude`,
+ * `./.claude/`, ...) in ONE pass. A sequential `.replace` chain re-scans the prefix an
+ * earlier pass emitted, so a config dir nested under `~/.claude` or named
+ * `.claude.d` was rewritten again inside its own output. Here every rule is an
+ * alternative of one regex (earlier rules win at a position), so each source
+ * occurrence is rewritten exactly once and emitted text is never rescanned. The
+ * replacement is a FUNCTION result, never a string: a string replacement
+ * interprets `$&`, `$`` and `$'` in a config dir.
  */
 // The bare form ends at anything but a word character, `-`, or `.` + word character,
 // so `.claude-plugin`, `.claudeignore`, `.claude.json` and `.claude.d` are not home forms.
 const CLAUDE_HOME_BARE_BOUNDARY = '(?![\\w-]|\\.\\w)';
-const CLAUDE_HOME_FORM_RE = new RegExp('(?:~|\\$HOME)\\/\\.claude(\\/|' + CLAUDE_HOME_BARE_BOUNDARY + ')', 'g');
 
-function rewriteClaudeHomeForms(content: string, pathPrefix: string, normalizedPathPrefix: string): string {
-  return content.replace(CLAUDE_HOME_FORM_RE, (match: string, tail: string) => {
-    if (tail === '/') return pathPrefix;
-    // A default install: the bare form already names the target. Keep the source
-    // spelling (`~/.claude` stays `~/.claude`) so default installs stay byte-identical.
-    if (normalizedPathPrefix === '$HOME/.claude') return match;
-    return normalizedPathPrefix;
+interface ConfigDirRewriteRule {
+  pattern: string;
+  replacement: string | ((match: string) => string);
+}
+
+const CONFIG_DIR_REWRITE_RE_CACHE = new Map<string, RegExp>();
+
+function rewriteSourceFormsOnce(content: string, rules: ReadonlyArray<ConfigDirRewriteRule>): string {
+  if (rules.length === 0) return content;
+  const source = rules.map((rule) => '(' + rule.pattern + ')').join('|');
+  let re = CONFIG_DIR_REWRITE_RE_CACHE.get(source);
+  if (!re) {
+    re = new RegExp(source, 'g');
+    CONFIG_DIR_REWRITE_RE_CACHE.set(source, re);
+  }
+  return content.replace(re, (match: string, ...groups: unknown[]) => {
+    for (let i = 0; i < rules.length; i++) {
+      if (groups[i] !== undefined) {
+        const replacement = rules[i].replacement;
+        return typeof replacement === 'function' ? replacement(match) : replacement;
+      }
+    }
+    return match;
   });
+}
+
+/**
+ * Rule builders for one install target. `slash` rewrites `~/D/` and `$HOME/D/` to the
+ * prefix; `tilde` only `~/D/`; `bare` rewrites `~/D` and `$HOME/D` (no trailing slash)
+ * to the normalized prefix; `localSlash` / `localBare` rewrite `./D/` and `./D`.
+ * Order the rules slash forms first: the bare boundary also accepts a following `/`.
+ */
+function configDirRuleBuilders(pathPrefix: string, normalizedPathPrefix: string, dirName: string) {
+  const dir = (d: string) => escapeRegExp(d);
+  const slashRule = (pattern: string): ConfigDirRewriteRule => ({ pattern, replacement: pathPrefix });
+  const bareRule = (pattern: string, replacement?: ConfigDirRewriteRule['replacement']): ConfigDirRewriteRule => ({
+    pattern,
+    replacement: replacement ?? normalizedPathPrefix,
+  });
+  return {
+    slash: (d: string) => [slashRule('~\\/' + dir(d) + '\\/'), slashRule('\\$HOME\\/' + dir(d) + '\\/')],
+    tilde: (d: string) => [slashRule('~\\/' + dir(d) + '\\/')],
+    bare: (d: string, replacement?: ConfigDirRewriteRule['replacement']) => [
+      bareRule('~\\/' + dir(d) + CLAUDE_HOME_BARE_BOUNDARY, replacement),
+      bareRule('\\$HOME\\/' + dir(d) + CLAUDE_HOME_BARE_BOUNDARY, replacement),
+    ],
+    localSlash: (d: string, replacement: string = './' + dirName + '/'): ConfigDirRewriteRule[] => [
+      { pattern: '\\.\\/' + dir(d) + '\\/', replacement },
+    ],
+    localBare: (d: string, boundary: string): ConfigDirRewriteRule[] => [
+      { pattern: '\\.\\/' + dir(d) + boundary, replacement: './' + dirName },
+    ],
+  };
+}
+
+/**
+ * The gsd-core/ spec-tree copy (`copyWithPathReplacement` in bin/install.js): the
+ * generic Claude / Qwen / Hermes source forms to the install prefix, in one pass.
+ */
+function rewriteSpecTreeConfigDirForms(content: string, pathPrefix: string, dirName: string): string {
+  const b = configDirRuleBuilders(pathPrefix, pathPrefix.replace(/\/$/, ''), dirName);
+  return rewriteSourceFormsOnce(content, [
+    ...b.slash('.claude'),
+    ...b.localSlash('.claude'),
+    ...b.slash('.qwen'),
+    ...b.localSlash('.qwen'),
+    ...b.slash('.hermes'),
+    ...b.localSlash('.hermes'),
+    ...b.bare('.claude'),
+    ...b.localBare('.claude', '\\b'),
+  ]);
 }
 
 function _applyRuntimeRewritesInner(content, runtime, pathPrefix, isGlobal = false, attribution = undefined) {
@@ -3907,101 +3972,100 @@ function _applyRuntimeRewritesInner(content, runtime, pathPrefix, isGlobal = fal
     content = _stampNonClaudeRuntimeDefaults(content, runtime);
   }
 
+  const b = configDirRuleBuilders(pathPrefix, normalizedPathPrefix, dirName);
+  const LOOKAHEAD = '(?![\\w-])';
+  const WORD_EDGE = '\\b';
+
   switch (rewriteBehaviors.contentRewriteProfile) {
     case 'slash-own-tilde':
-      content = content.replace(/~\/\.claude\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      content = content.replace(/~\/\.codex\//g, pathPrefix);
+      content = rewriteSourceFormsOnce(content, [
+        ...b.slash('.claude'),
+        ...b.localSlash('.claude'),
+        ...b.tilde('.codex'),
+      ]);
       // #1515 stamp moved to _stampNonClaudeRuntimeDefaults (#1521 generalisation).
       content = processAttribution(content, attribution);
       break;
 
     case 'slash-bare-own-tilde':
-      content = content.replace(/~\/\.claude\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      content = content.replace(/~\/\.cline\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.cline\//g, pathPrefix);
-      content = content.replace(/~\/\.claude\b/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.claude\b/g, normalizedPathPrefix);
-      content = content.replace(/~\/\.cline\b/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.cline\b/g, normalizedPathPrefix);
+      content = rewriteSourceFormsOnce(content, [
+        ...b.slash('.claude'),
+        ...b.localSlash('.claude'),
+        ...b.slash('.cline'),
+        ...b.bare('.claude'),
+        ...b.bare('.cline'),
+      ]);
       content = processAttribution(content, attribution);
       break;
 
     case 'slash-lookahead-own-tilde':
-      content = content.replace(/~\/\.claude\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\.\/\.claude(?![\w-])/g, `./${dirName}`);
-      content = content.replace(/~\/\.cursor\//g, pathPrefix);
+      content = rewriteSourceFormsOnce(content, [
+        ...b.slash('.claude'),
+        ...b.localSlash('.claude'),
+        ...b.tilde('.cursor'),
+        ...b.bare('.claude'),
+        ...b.localBare('.claude', LOOKAHEAD),
+      ]);
       content = processAttribution(content, attribution);
       break;
 
     case 'slash-lookahead-nested-own-devin': {
-      content = content.replace(/~\/\.claude\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/~\/\.codeium\/windsurf\//g, pathPrefix);
-      if (isGlobal) {
-        content = content.replace(/\.devin\/skills\//g, `${pathPrefix}skills/`);
-        content = content.replace(/\.\/\.devin\//g, pathPrefix);
-        content = content.replace(/~\/\.devin(?![\w-])/g, normalizedPathPrefix);
-        content = content.replace(/\$HOME\/\.devin(?![\w-])/g, normalizedPathPrefix);
-      }
+      content = rewriteSourceFormsOnce(content, [
+        ...b.slash('.claude'),
+        ...b.localSlash('.claude'),
+        ...b.tilde('.codeium/windsurf'),
+        ...(isGlobal
+          ? [
+              { pattern: '\\.devin\\/skills\\/', replacement: pathPrefix + 'skills/' },
+              ...b.localSlash('.devin', pathPrefix),
+            ]
+          : []),
+        ...b.bare('.claude'),
+        ...(isGlobal ? b.bare('.devin') : []),
+      ]);
       content = processAttribution(content, attribution);
       break;
     }
 
     case 'slash-lookahead-own-derived': {
-      content = content.replace(/~\/\.claude\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\.\/\.claude(?![\w-])/g, `./${dirName}`);
       // #2097: dot-dir self-references (~/.augment/…) → resolved prefix,
       // dirName-derived (no runtime literal). getDirName('augment') resolves
       // to '.augment', so this is byte-identical to the prior hardcoded regexes.
-      const _dd = escapeRegExp(dirName);
-      content = content.replace(new RegExp('~/' + _dd + '/', 'g'), pathPrefix);
-      content = content.replace(new RegExp('\\$HOME/' + _dd + '/', 'g'), pathPrefix);
-      content = content.replace(new RegExp('~/' + _dd + '(?![\\w-])', 'g'), normalizedPathPrefix);
-      content = content.replace(new RegExp('\\$HOME/' + _dd + '(?![\\w-])', 'g'), normalizedPathPrefix);
+      content = rewriteSourceFormsOnce(content, [
+        ...b.slash('.claude'),
+        ...b.localSlash('.claude'),
+        ...b.slash(dirName),
+        ...b.bare('.claude'),
+        ...b.localBare('.claude', LOOKAHEAD),
+        ...b.bare(dirName),
+      ]);
       content = processAttribution(content, attribution);
       break;
     }
 
     case 'slash-bare-own-derived':
-      content = content.replace(/~\/\.claude\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      content = content.replace(/~\/\.claude\b/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.claude\b/g, normalizedPathPrefix);
-      content = content.replace(/\.\/\.claude\b/g, `./${dirName}`);
       // #2094: descriptor-driven — dirName resolves to '.trae' via
-      // getDirName()/localConfigDir, so this regex is built rather than
-      // hardcoded as `/~\/\.trae\//g` (byte-identical output for trae).
-      content = content.replace(new RegExp('~/' + escapeRegExp(dirName) + '/', 'g'), pathPrefix);
+      // getDirName()/localConfigDir, so the own-dir rule is built rather than
+      // hardcoded (byte-identical output for trae).
+      content = rewriteSourceFormsOnce(content, [
+        ...b.slash('.claude'),
+        ...b.localSlash('.claude'),
+        ...b.tilde(dirName),
+        ...b.bare('.claude'),
+        ...b.localBare('.claude', WORD_EDGE),
+      ]);
       content = processAttribution(content, attribution);
       break;
 
     case 'slash-bare-own-tilde-bare':
-      content = content.replace(/~\/\.claude\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      content = content.replace(/~\/\.claude\b/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.claude\b/g, normalizedPathPrefix);
-      content = content.replace(/\.\/\.claude\b/g, `./${dirName}`);
-      content = content.replace(/~\/\.codebuddy\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.codebuddy\//g, pathPrefix);
-      content = content.replace(/~\/\.codebuddy\b/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.codebuddy\b/g, normalizedPathPrefix);
+      content = rewriteSourceFormsOnce(content, [
+        ...b.slash('.claude'),
+        ...b.localSlash('.claude'),
+        ...b.slash('.codebuddy'),
+        ...b.bare('.claude'),
+        ...b.localBare('.claude', WORD_EDGE),
+        ...b.bare('.codebuddy'),
+      ]);
       content = processAttribution(content, attribution);
       break;
 
@@ -4017,11 +4081,14 @@ function _applyRuntimeRewritesInner(content, runtime, pathPrefix, isGlobal = fal
       // #5501: the slash AND bare forms in ONE pass. The launcher default
       // `${CLAUDE_CONFIG_DIR:-$HOME/.claude}` has no trailing slash, so a slash-only
       // rewrite left a --config-dir install probing `~/.claude/gsd-core`. One
-      // combined pass (not slash then bare) so a prefix the pass emits is never
-      // rescanned: a config dir nested under `~/.claude` or named `.claude.d` would
-      // otherwise be rewritten again.
-      content = rewriteClaudeHomeForms(content, pathPrefix, normalizedPathPrefix);
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
+      // pass (#5715: also `./.claude/`) so a prefix the pass emits is never
+      // rescanned. A default install keeps the source spelling of the bare form
+      // (`~/.claude` stays `~/.claude`) so it stays byte-identical.
+      content = rewriteSourceFormsOnce(content, [
+        ...b.slash('.claude'),
+        ...b.localSlash('.claude'),
+        ...b.bare('.claude', (match: string) => (normalizedPathPrefix === '$HOME/.claude' ? match : normalizedPathPrefix)),
+      ]);
       // #3133 / #3544: restore @-file-reference lines to the tilde form
       // Claude actually expands — see restoreClaudeGlobalAtRefTilde's doc
       // comment above for why this must be a separate, @-anchored pass. Handed
@@ -4037,12 +4104,12 @@ function _applyRuntimeRewritesInner(content, runtime, pathPrefix, isGlobal = fal
     // (the gsd-surface skill) that need the negative-lookahead bare rewrites the
     // claude profile deliberately does not have (it would change claude's bytes).
     case 'slash-lookahead-tilde-restore':
-      content = content.replace(/~\/\.claude\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\.\/\.claude(?![\w-])/g, `./${dirName}`);
+      content = rewriteSourceFormsOnce(content, [
+        ...b.slash('.claude'),
+        ...b.localSlash('.claude'),
+        ...b.bare('.claude'),
+        ...b.localBare('.claude', LOOKAHEAD),
+      ]);
       content = restoreClaudeGlobalAtRefTilde(content, pathPrefix);
       content = processAttribution(content, attribution);
       break;
@@ -4050,7 +4117,6 @@ function _applyRuntimeRewritesInner(content, runtime, pathPrefix, isGlobal = fal
     // Descriptor-driven brand literals (ADR-1239 / #2092): the qwen/hermes
     // brand VALUES (CLAUDE.md/Claude Code/.claude/ replacements) now read from
     // runtime.hostBehaviors.brandingRewrites instead of hardcoded literals.
-    // EXACT regexes/order preserved — only the replacement values changed.
     // qwen and hermes share this profile; their own dot-dir is derived from the
     // descriptor's `localConfigDir` (`getDirName`) rather than spelled per host.
     case 'branded-lookahead-own-derived': {
@@ -4059,36 +4125,33 @@ function _applyRuntimeRewritesInner(content, runtime, pathPrefix, isGlobal = fal
       // brand-literal replacements, still apply the non-branding path
       // rewrites below) instead of throwing on `_b['CLAUDE.md']`.
       const _b = rewriteBehaviors.brandingRewrites;
-      const _own = escapeRegExp(dirName);
       if (_b) {
         content = content.replace(/CLAUDE\.md/g, _b['CLAUDE.md']);
         // #2284(b): skips <runtime_compatibility> comparison-table content (protected region).
         content = applyClaudeCodeBrandSwap(content, _b['Claude Code']);
       }
-      content = content.replace(/~\/\.claude\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
-      content = content.replace(new RegExp('~/' + _own + '/', 'g'), pathPrefix);
-      content = content.replace(new RegExp('\\$HOME/' + _own + '/', 'g'), pathPrefix);
-      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(new RegExp('~/' + _own + '(?![\\w-])', 'g'), normalizedPathPrefix);
-      content = content.replace(new RegExp('\\$HOME/' + _own + '(?![\\w-])', 'g'), normalizedPathPrefix);
+      content = rewriteSourceFormsOnce(content, [
+        ...b.slash('.claude'),
+        ...b.slash(dirName),
+        ...b.localSlash('.claude', _b ? './' + _b['.claude/'] : undefined),
+        ...b.localSlash(dirName),
+        ...b.bare('.claude'),
+        ...b.bare(dirName),
+      ]);
       if (_b) {
-        content = content.replace(/\.claude\//g, _b['.claude/']);
+        content = content.replace(/\.claude\//g, () => _b['.claude/']);
       }
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      content = content.replace(new RegExp('\\./' + _own + '/', 'g'), `./${dirName}/`);
       content = processAttribution(content, attribution);
       break;
     }
 
     case 'slash-bare':
-      content = content.replace(/~\/\.claude\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      content = content.replace(/~\/\.claude\b/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.claude\b/g, normalizedPathPrefix);
-      content = content.replace(/\.\/\.claude\b/g, `./${dirName}`);
+      content = rewriteSourceFormsOnce(content, [
+        ...b.slash('.claude'),
+        ...b.localSlash('.claude'),
+        ...b.bare('.claude'),
+        ...b.localBare('.claude', WORD_EDGE),
+      ]);
       content = processAttribution(content, attribution);
       break;
 
@@ -4362,16 +4425,14 @@ function applyAgentPathRewrites(content: string, runtime: string, pathPrefix: st
 
 function applyAgentPathRewritesInner(content: string, runtime: string, pathPrefix: string): string {
   const normalizedPathPrefix = pathPrefix.replace(/\/$/, '');
-  content = content.replace(/~\/\.claude\//g, pathPrefix);
-  content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
   // #3719 review (MAJOR): a bare `\b` is satisfied by ANY non-word character,
   // including '-' — for a --config-dir whose name EXTENDS '.claude' (e.g.
   // '.claude-work'), this re-matched the '.claude' PREFIX of the emitted
-  // '.claude-work' path and corrupted it to '.claude-work-work'. Guard with
-  // the SAME negative-lookahead convention already used at
-  // copyWithPathReplacement's call site (bin/install.js:7729-7730).
-  content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
-  content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
+  // '.claude-work' path and corrupted it to '.claude-work-work'. #5715: the
+  // slash and bare forms are one single-pass rewrite, so no emitted prefix is
+  // ever rescanned (a nested or `.claude.`-named config dir stays intact).
+  const b = configDirRuleBuilders(pathPrefix, normalizedPathPrefix, '');
+  content = rewriteSourceFormsOnce(content, [...b.slash('.claude'), ...b.bare('.claude')]);
   // #3719: the THIRD emit path that needed this restore. #3133 added it to the
   // skill/command pipeline (`_applyRuntimeRewrites` case 'claude') and #3544 to
   // bin/install.js's spec-tree copy; the agents pipeline never got it, so every
@@ -4683,6 +4744,7 @@ export = {
   _localIncludeDirName: localIncludeDirName,
   _restoreClaudeGlobalAtRefTilde: restoreClaudeGlobalAtRefTilde,
   _applyRuntimeRewrites,
+  _rewriteSpecTreeConfigDirForms: rewriteSpecTreeConfigDirForms,
   _stampNonClaudeRuntimeDefaults,
   // #2652: registry-resolved dispatch isolation, mirroring routeDispatchIsolation
   _negotiatedDispatchIsolation,
