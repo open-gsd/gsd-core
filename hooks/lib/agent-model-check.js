@@ -39,8 +39,9 @@ function verdict(esc, mode, type, rawPassed, rawExpected) {
 }
 
 // The expected model for `type` under the workstream `args` select (['--ws', name], or [] for
-// GSD_WORKSTREAM > the stored pointer), or null where the check does not apply (no native tier
-// aliases on that runtime, or `inherit`). The pointer is keyed by the dispatching session: the
+// GSD_WORKSTREAM > the stored pointer): `undefined` where the guard does not apply under that candidate's
+// runtime (no native tier aliases there; the candidate contributes no baseline), `null` where the model is
+// unresolved or `inherit` (cannot verify). The pointer is keyed by the dispatching session: the
 // payload's session_id, which the host also exports to `init` as CLAUDE_CODE_SESSION_ID; the
 // WORKSTREAM_SESSION_ENV_KEYS entries ranked above it are cleared for the lookup. The caller's
 // environment is restored in `finally`, so every candidate starts from it.
@@ -56,7 +57,7 @@ function baselineFor(store, root, type, session, args) {
     store.applyResolvedWorkstreamEnv(store.resolveActiveWorkstream(root, args, process.env, { getStored: store.peekActiveWorkstream }), process.env);
     const resolver = require('../../gsd-core/bin/lib/model-resolver.cjs');
     // Only where the guard applies under this candidate's workstream (model-escalation guardApplies, shared with `init --ws`).
-    if (!require('../../gsd-core/bin/lib/model-escalation.cjs').guardApplies(root)) return null;
+    if (!require('../../gsd-core/bin/lib/model-escalation.cjs').guardApplies(root)) return undefined;
     const expected = resolver.resolveModelInternal(root, type, { persist: false });
     return expected && expected !== 'inherit' ? expected : null;
   } finally {
@@ -100,9 +101,11 @@ function checkAgentModel(data, { clock } = {}) {
     const expected = [];
     for (const args of carried ? [['--ws', carried], []] : [[]]) {
       const model = baselineFor(store, root, type, session, args);
+      if (model === undefined) continue;
       if (model === null) return ALLOW;
       expected.push(model);
     }
+    if (expected.length === 0) return ALLOW;
 
     const passed = typeof toolInput.model === 'string' ? toolInput.model : '';
     if (passed && expected.some((m) => esc.modelFamily(m) === esc.modelFamily(passed))) return ALLOW;

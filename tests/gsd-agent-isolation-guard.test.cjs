@@ -2571,6 +2571,38 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     assert.equal(process.env.GSD_WORKSTREAM, undefined, 'the hook restores the environment');
   });
 
+  function setupNonNativePointer(t, rootConfig) {
+    const keys = ['GSD_WORKSTREAM', 'GSD_SESSION_KEY', 'CODEX_THREAD_ID', 'CLAUDE_SESSION_ID', 'CLAUDE_CODE_SESSION_ID'];
+    const ambient = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    for (const k of keys) delete process.env[k];
+    t.after(() => { for (const k of keys) { if (ambient[k] === undefined) delete process.env[k]; else process.env[k] = ambient[k]; } });
+    setupCarry(t, rootConfig, 'sess-ws');
+    const beta = path.join(project, '.planning', 'workstreams', 'beta');
+    fs.mkdirSync(beta, { recursive: true });
+    fs.writeFileSync(path.join(beta, 'config.json'), JSON.stringify({ runtime: 'codex' }));
+    const store = carryStore();
+    process.env.CLAUDE_CODE_SESSION_ID = 'sess-ws';
+    store.setActiveWorkstream(project, 'beta');
+    delete process.env.CLAUDE_CODE_SESSION_ID;
+    t.after(() => {
+      process.env.CLAUDE_CODE_SESSION_ID = 'sess-ws';
+      store.setActiveWorkstream(project, null);
+      delete process.env.CLAUDE_CODE_SESSION_ID;
+    });
+    assert.ok(initQuick('sess-ws').success);
+  }
+
+  test("a non-native pointer workstream does not veto the carried workstream's baseline", (t) => {
+    setupNonNativePointer(t, { ...ISSUE_CONFIG, hooks: { agent_model_guard: 'deny' } });
+    assert.equal(evaluate(inSession('haiku', 'sess-ws')).action, 'allow', 'the carried baseline still passes');
+    assert.equal(evaluate(inSession('opus', 'sess-ws')).action, 'block');
+  });
+
+  test('every candidate workstream non-native: the guard does not apply', (t) => {
+    setupNonNativePointer(t, { ...ISSUE_CONFIG, runtime: 'codex', hooks: { agent_model_guard: 'deny' } });
+    assert.equal(evaluate(inSession('opus', 'sess-ws')).action, 'allow');
+  });
+
   test('workstreams exist and the dispatch has no session id: allow', (t) => {
     setupCarry(t, ISSUE_CONFIG);
     assert.equal(evaluate(dispatch('gsd-planner', 'sonnet')).action, 'allow');
