@@ -341,6 +341,54 @@ function resolveBase(env = process.env, { cwd = REPO_ROOT } = {}) {
 }
 
 /**
+ * The newest commit of the base branch that HEAD contains, when it is newer than
+ * `floorSha` (a commit HEAD already contains); otherwise `floorSha` unchanged.
+ *
+ * Active only when `env.GITHUB_BASE_REF` is set (Actions sets it on pull_request
+ * events) and `refs/remotes/origin/<GITHUB_BASE_REF>` resolves. Local runs, release
+ * lanes, `merge_group` and the gsd-test container (no `origin/*` refs) keep the pin's
+ * merge-base exactly as before.
+ *
+ * `merge-base(origin/<base>, HEAD)` is stable while the base branch advances mid-run:
+ * a commit that lands after the merge ref was built is not in HEAD, so it cannot become
+ * the result. The ancestry check keeps the result from ever moving BELOW the floor, and
+ * any git failure keeps the floor rather than guessing.
+ *
+ * @param {string} floorSha `merge-base(pin, HEAD)`, a 40-hex sha.
+ * @param {object} env base-ref environment.
+ * @param {{cwd: string, diagnostic?: function}} options repository to resolve against; an
+ *   optional `diagnostic` hears why the floor was kept when the base branch was named.
+ * @returns {string} a 40-hex sha HEAD contains.
+ */
+function advanceToMergedBase(floorSha, env, { cwd, diagnostic }) {
+  const branch = env.GITHUB_BASE_REF;
+  if (!branch) return floorSha;
+  const keep = (why) => {
+    if (diagnostic) diagnostic(`emitted-attribution: keeping the pin's merge-base ${floorSha}: ${why}`);
+    return floorSha;
+  };
+  let tip;
+  try {
+    tip = git(['rev-parse', '--verify', `refs/remotes/origin/${branch}^{commit}`], { cwd }).trim();
+  } catch {
+    return keep(`GITHUB_BASE_REF=${branch} is set but refs/remotes/origin/${branch} does not resolve`);
+  }
+  let merged;
+  try {
+    merged = git(['merge-base', tip, 'HEAD'], { cwd }).trim();
+  } catch (err) {
+    return keep(`merge-base(origin/${branch}, HEAD) failed: ${err.message}`);
+  }
+  if (!/^[0-9a-f]{40}$/.test(merged) || merged === floorSha) return floorSha;
+  try {
+    git(['merge-base', '--is-ancestor', floorSha, merged], { cwd });
+  } catch {
+    return keep(`merge-base(origin/${branch}, HEAD) ${merged} does not descend from it`);
+  }
+  return merged;
+}
+
+/**
  * The commit the differential gate measures FROM: the merge-base of the resolved base
  * ref and HEAD, alongside the base tip it was derived from.
  *
@@ -352,8 +400,19 @@ function resolveBase(env = process.env, { cwd = REPO_ROOT } = {}) {
  * merged onto `next`), `next` gained #4937 between `create` and `finalize`, and a
  * baseline built at the `next` TIP attributed that merge to the release branch.
  *
- * PR lanes merge the tree onto `pull_request.base.sha` first, so there the merge-base
- * IS the base tip and the cache key (`emitted-baseline-<base.sha>`) still hits.
+ * PR lanes are NOT always merged onto `pull_request.base.sha`, the job's
+ * `GSD_EMITTED_BASE` pin. `actions/checkout` checks out GitHub's merge ref
+ * (`refs/pull/N/merge`), built on the base tip GitHub last saw, and `base.sha` can be
+ * older: on PR #5119 it was 34 `next` commits behind the merge ref's first parent. The
+ * "Rebase check" merge of the pin is then a no-op, `merge-base(pin, HEAD)` is the old
+ * sha, and the measured range sweeps in base-branch commits the PR never authored, with
+ * their ack trailers. So on a lane that names its base branch (`GITHUB_BASE_REF`) the
+ * merge-base is advanced to `advanceToMergedBase`'s result: the invariant is that the
+ * attribution base is always a commit HEAD contains, the pin bounds it from below and
+ * the tree bounds it from above. When the pin is the merged base (the usual case) this
+ * changes nothing and the cache key (`emitted-baseline-<base.sha>`) still hits; when it
+ * is stale the key misses and `resolveBaseline` builds the baseline in-job at the
+ * advanced sha (ADR-2719 §5).
  *
  * Null when no base ref resolves (the caller's explicit-skip path, same as
  * `resolveBase`). A merge-base failure once a base DOES resolve THROWS: the three-dot
@@ -387,6 +446,16 @@ function resolveAttributionBase(env = process.env, { cwd = REPO_ROOT, diagnostic
   }
   if (!/^[0-9a-f]{40}$/.test(sha)) {
     throw new Error(`emitted-attribution: merge-base of "${resolved.ref}" and HEAD is not a 40-hex sha: ${JSON.stringify(sha)}`);
+  }
+  const merged = advanceToMergedBase(sha, env, { cwd, diagnostic });
+  if (merged !== sha) {
+    if (diagnostic) {
+      diagnostic(
+        `emitted-attribution: HEAD already contains origin/${env.GITHUB_BASE_REF} up to ${merged}, newer than ` +
+        `merge-base(${resolved.ref}, HEAD)@${sha}; measuring from ${merged} so base-only commits stay out of range`,
+      );
+    }
+    sha = merged;
   }
   return { ref: resolved.ref, tipSha: resolved.sha, sha };
 }
