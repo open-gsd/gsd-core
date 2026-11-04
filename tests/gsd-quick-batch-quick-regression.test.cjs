@@ -72,6 +72,35 @@ function isWorkstreamForwardingSweepLine(sign, body, addedBodies, removedBodies)
   return false;
 }
 
+// #5830: STATE.md size warnings touch BOTH callers of the shared
+// `appendQuickTaskRow` primitive — quick-batch's `completeQuickItem` now
+// passes its length warning through, and ordinary quick logs a one-line
+// `TASK_TITLE` instead of the full description. That is a change to the
+// shared primitive's contract, not #3676 quick-batch phase work, so the
+// quick.md half is carved out here, line by line: the guidance paragraph
+// (exact bodies), the defaulting line (exact body), and the
+// `${DESCRIPTION}` -> `${TASK_TITLE}` rename, which counts only when the
+// diff pairs it with its `${DESCRIPTION}` twin (the same pairing rule the
+// #4772 workstream sweep uses). Any OTHER quick.md line still trips row 48.
+const QUICK_TASK_TITLE_5830_LINES = new Set([
+  'STATE.md is a digest: the row names the task, the task\'s SUMMARY.md holds the detail (#5830). Set',
+  '`TASK_TITLE` to a one-line title of at most 240 characters — `${DESCRIPTION}` itself when it is',
+  'already one short line, otherwise a summary of it. Never paste the SUMMARY or a multi-sentence',
+  'description into the row. A longer `--task` is still written in full, but the command reports a',
+  '`warnings` entry; if it does, shorten the title next time rather than editing the row.',
+  'TASK_TITLE="${TASK_TITLE:-$DESCRIPTION}"  # never an empty --task if the title was not set',
+]);
+function isQuickTaskTitleSweepLine(sign, body, addedBodies, removedBodies) {
+  if (sign === '+' && QUICK_TASK_TITLE_5830_LINES.has(body)) return true;
+  if (sign === '+' && body.includes('${TASK_TITLE}')) {
+    return removedBodies.has(body.split('${TASK_TITLE}').join('${DESCRIPTION}'));
+  }
+  if (sign === '-' && body.includes('${DESCRIPTION}')) {
+    return addedBodies.has(body.split('${DESCRIPTION}').join('${TASK_TITLE}'));
+  }
+  return false;
+}
+
 /**
  * Does this path's diff say anything beyond the shared response-language
  * directive (#2529)?
@@ -104,6 +133,7 @@ function editsBeyondSharedDirective(base, file) {
     if (!/^[+-]/.test(line) || line.startsWith('+++') || line.startsWith('---')) return false;
     const body = line.slice(1).trim();
     if (isWorkstreamForwardingSweepLine(line[0], body, addedBodies, removedBodies)) return false;
+    if (file === 'gsd-core/workflows/quick.md' && isQuickTaskTitleSweepLine(line[0], body, addedBodies, removedBodies)) return false;
     if (body === '' || body === INLINE_RESPONSE_LANGUAGE_DIRECTIVE) return false;
     if (body === CANONICAL_LAUNCHER_PREAMBLE.trim()) return false;
     if (looksLikeLauncherPreambleLine(body)) return false;
@@ -190,6 +220,25 @@ describe('quick-batch: /gsd:quick command + workflow stay byte-identical (row 48
     // catch; same false-positive class already scoped away twice above (#3730, #2529 round 40).
     const touchedQuickSteps = unexpectedQuickStepChanges(changed, isPhaseWork);
     assert.deepEqual(touchedQuickSteps, [], `unexpected changes under gsd-core/workflows/quick/steps/: ${touchedQuickSteps.join(', ')}`);
+  });
+
+  test('positive control: the #5830 TASK_TITLE carve-out exempts only its own lines', () => {
+    const removed = new Set(['gsd_run quick-tasks-append --task "${DESCRIPTION}"']);
+    const added = new Set(['gsd_run quick-tasks-append --task "${TASK_TITLE}"']);
+    // The paired rename, both sides, and the exact guidance/default lines are the carve-out.
+    assert.equal(isQuickTaskTitleSweepLine('+', 'gsd_run quick-tasks-append --task "${TASK_TITLE}"', added, removed), true);
+    assert.equal(isQuickTaskTitleSweepLine('-', 'gsd_run quick-tasks-append --task "${DESCRIPTION}"', added, removed), true);
+    for (const body of QUICK_TASK_TITLE_5830_LINES) {
+      assert.equal(isQuickTaskTitleSweepLine('+', body, new Set(), new Set()), true, body);
+    }
+    // An unpaired rename, a reworded guidance line, a removed guidance line,
+    // and unrelated quick prose all still count as edits.
+    assert.equal(isQuickTaskTitleSweepLine('+', 'Commit with ${TASK_TITLE}', added, removed), false);
+    assert.equal(isQuickTaskTitleSweepLine('-', 'Commit with ${DESCRIPTION}', added, removed), false);
+    assert.equal(isQuickTaskTitleSweepLine('+', 'STATE.md is a digest (#5830).', new Set(), new Set()), false);
+    const [firstGuidance] = QUICK_TASK_TITLE_5830_LINES;
+    assert.equal(isQuickTaskTitleSweepLine('-', firstGuidance, new Set(), new Set()), false);
+    assert.equal(isQuickTaskTitleSweepLine('+', 'Spawn the executor with --validate', new Set(), new Set()), false);
   });
 
   test('positive control: the #5118 allowance exempts exactly one path; every other quick path in the same branch shape still trips row 48', () => {
