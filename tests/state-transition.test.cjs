@@ -5373,7 +5373,8 @@ describe('#5676: isStatePastPhase under milestone-prefixed', () => {
   test('#5676 property: with no convention the leading-integer read is unchanged', () => {
     fc.assert(
       fc.property(phaseId, phaseId, (a, b) => {
-        assert.equal(isStatePastPhase(fm(a.id), b.id, undefined, undefined), comparePhaseNum(String(a.m), String(b.m)) > 0);
+        // The current phase reads as its leading integer, compared numerically with an integer phase.
+        assert.equal(isStatePastPhase(fm(a.id), String(b.m), undefined, undefined), a.m > b.m);
       }),
       { seed: 5676, numRuns: 300 },
     );
