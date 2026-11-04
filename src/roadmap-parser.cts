@@ -89,29 +89,51 @@ const CLOSED_STATUS_WORDS = 'CLOSED|ARCHIVED|ABANDONED|SHIPPED|FAILED';
 // A status word marks status when it is in capitals, inside a parenthetical or
 // bracket, after a dash or colon, or ends the heading (optionally followed by a
 // date). Anywhere else it is a title word (`Failed Payment Recovery`).
-const CLOSED_STATUS_CAPS_RE = new RegExp(`\\b(?:${CLOSED_STATUS_WORDS})\\b`);
-const CLOSED_STATUS_GROUPED_RE = new RegExp(`[(\\[][^)\\]]*\\b(?:${CLOSED_STATUS_WORDS})\\b[^)\\]]*[)\\]]`, 'i');
-const CLOSED_STATUS_SEPARATED_RE = new RegExp(`(?:^|\\s)[\\u2013\\u2014-]+\\s*(?:${CLOSED_STATUS_WORDS})\\b|:\\s*(?:${CLOSED_STATUS_WORDS})\\b`, 'i');
-const CLOSED_STATUS_TRAILING_RE = new RegExp(`\\b(?:${CLOSED_STATUS_WORDS})\\b[\\s\\d.,;:!/\\u2013\\u2014-]*$`, 'i');
+const CLOSED_STATUS_WORD_G = new RegExp(`\\b(?:${CLOSED_STATUS_WORDS})\\b`, 'gi');
+const CLOSED_STATUS_SEPARATOR_BEFORE_RE = /(?:[–—-]|:)\s*$/;
 const CLOSED_STATUS_MARK_RE = /[\u{2705}\u{1f5c4}]/u;
+const TITLE_NOUN_MONTH_OR_DAY_RE = /^(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)$/i;
+
+/**
+ * Does the status word at `index` read as a TITLE word (`Failed Payment
+ * Recovery`)? Only when it is not in CAPS, not inside parens/brackets, not after
+ * a dash or colon, and the next word is a capitalized title noun: not a month,
+ * weekday, date or number, `Q1`-`Q4`, a version token, a lowercase word,
+ * punctuation, or the end of the heading.
+ */
+function isStatusWordTitleWord(text: string, index: number, word: string): boolean {
+  if (word === word.toUpperCase()) return false;
+  const before = text.slice(0, index);
+  let depth = 0;
+  for (const ch of before) {
+    if (ch === '(' || ch === '[') depth++;
+    else if ((ch === ')' || ch === ']') && depth > 0) depth--;
+  }
+  if (depth > 0 || CLOSED_STATUS_SEPARATOR_BEFORE_RE.test(before)) return false;
+  const next = /^\s+([A-Z][a-z][A-Za-z'’-]*)/.exec(text.slice(index + word.length));
+  if (!next) return false;
+  const noun = next[1];
+  return !TITLE_NOUN_MONTH_OR_DAY_RE.test(noun) && !/^Q[1-4]$/.test(noun);
+}
 
 /**
  * THE closed-milestone predicate (#5726, ADR-3180): selection, masking, the
- * archive strip and the shipped refusal all call this one function. Needs a
- * closed marker and no active marker, and the marker must read as a STATUS, not
- * as part of the title. A check mark counts anywhere except inside a
- * parenthetical that names another version (`Next (after v2.0 prep` + check mark + `)`); a
- * status WORD counts there (`(shipped, replaces v0.9)`).
+ * archive strip and the shipped refusal all call this one function. Baseline
+ * (the pre-#5726 behaviour): a closed marker and no active marker. Two
+ * exceptions read as open: a check mark inside a parenthetical that names
+ * another version (`Next (after v2.0 prep` + check mark + `)`), and a status
+ * word that is a title word (`Failed Payment Recovery`, `Closed Beta`). A status
+ * word counts inside a version parenthetical (`(shipped, replaces v0.9)`).
  */
 function isClosedMilestoneHeading(headingText: string): boolean {
   if (!MILESTONE_CLOSED_MARKER_PATTERN.test(headingText) || MILESTONE_ACTIVE_MARKER_PATTERN.test(headingText)) return false;
   const text = headingText.replace(/<[^>]{0,200}>/g, '');
   const own = text.replace(/\([^)]*\bv\d[^)]*\)/gi, '');
-  return CLOSED_STATUS_MARK_RE.test(own)
-    || CLOSED_STATUS_CAPS_RE.test(text)
-    || CLOSED_STATUS_GROUPED_RE.test(text)
-    || CLOSED_STATUS_SEPARATED_RE.test(text)
-    || CLOSED_STATUS_TRAILING_RE.test(text);
+  if (CLOSED_STATUS_MARK_RE.test(own)) return true;
+  for (const m of text.matchAll(CLOSED_STATUS_WORD_G)) {
+    if (!isStatusWordTitleWord(text, m.index ?? 0, m[0])) return true;
+  }
+  return false;
 }
 
 /**
