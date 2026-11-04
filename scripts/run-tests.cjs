@@ -415,11 +415,13 @@ function setupRunTempRoot() {
   for (const key of ['TMPDIR', 'TEMP', 'TMP']) {
     const v = process.env[key] || '';
     if (!v) continue;
-    inherited = basename(v).startsWith(RUN_TEMP_ROOT_PREFIX) ? v : '';
+    // #5688: resolve against THIS process's cwd now; a relative value would be
+    // re-resolved against each child's cwd. No realpath: absolute stays byte-identical.
+    inherited = basename(v).startsWith(RUN_TEMP_ROOT_PREFIX) ? resolve(v) : '';
     break;
   }
   createdRunTempRoot = !inherited;
-  const root = inherited || mkdtempSync(join(tmpdir(), RUN_TEMP_ROOT_PREFIX));
+  const root = inherited || mkdtempSync(join(resolve(tmpdir()), RUN_TEMP_ROOT_PREFIX));
   for (const key of ['TMPDIR', 'TEMP', 'TMP']) process.env[key] = root;
   return root;
 }
