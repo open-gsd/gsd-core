@@ -338,6 +338,13 @@ interface ReadModifyWriteOptions {
    * callback throws a replacement.
    */
   onWriteFailure?: (err: unknown) => void;
+  /**
+   * #5831: write STATE.md with the seam's atomic mode (temp file + rename, no
+   * truncating direct-write fallback), so a failed write leaves STATE.md's
+   * previous bytes in place. Set by prune, whose entries may otherwise exist
+   * in no file; other callers keep the default write.
+   */
+  atomicWrite?: boolean;
 }
 
 /**
@@ -353,7 +360,7 @@ interface ReadModifyWriteOptions {
  * value) deliberately: converting it ripples into every caller's control
  * flow for no behavior change.
  */
-type StatePreservationOptions = Omit<ReadModifyWriteOptions, 'resync' | 'onWriteFailure'> & { resync: boolean };
+type StatePreservationOptions = Omit<ReadModifyWriteOptions, 'resync' | 'onWriteFailure' | 'atomicWrite'> & { resync: boolean };
 
 interface StateRecordMetricOptions {
   phase: string;
@@ -4996,7 +5003,7 @@ function readModifyWriteStateMd(statePath: string, transformFn: (content: string
         },
       );
 
-      platformWriteSync(statePath, synced);
+      platformWriteSync(statePath, synced, { atomic: options?.atomicWrite === true });
     } catch (err) {
       if (options?.onWriteFailure) options.onWriteFailure(err);
       throw err;
@@ -7414,10 +7421,10 @@ function publishPrunedToArchive(
 
   return {
     restore(stateErr: unknown): void {
-      // Roll back only when STATE.md provably still holds the entries (its
+      // Roll back only once STATE.md provably holds the entries again (its
       // bytes are exactly the pre-write snapshot). If the failed write changed
-      // or removed it (a non-atomic fallback can truncate), the archive copy
-      // may be the only one left — keep it.
+      // or removed it, put the snapshot back first; if that fails too, the
+      // archive copy may be the only one left — keep it.
       let stateNow: Buffer | null;
       try {
         stateNow = platformReadBytesSync(statePath);
@@ -7429,7 +7436,18 @@ function publishPrunedToArchive(
           'check STATE.md before pruning again.',
         );
       }
-      if (stateNow === null || !stateNow.equals(stateBytes)) return;
+      if (stateNow === null || !stateNow.equals(stateBytes)) {
+        try {
+          platformRestoreFileSync(statePath, stateBytes);
+        } catch (stateRestoreErr) {
+          throw new AggregateError(
+            [stateErr, stateRestoreErr],
+            `state prune: writing STATE.md failed (${errMessage(stateErr)}) and left it changed, and putting its ` +
+            `previous content back also failed (${errMessage(stateRestoreErr)}). STATE-ARCHIVE.md was left as written ` +
+            'and holds the pruned entries; check STATE.md before pruning again.',
+          );
+        }
+      }
       try {
         platformRestoreFileSync(archivePath, archiveBytes);
       } catch (restoreErr) {
@@ -7544,14 +7562,20 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): v
   //   3. write STATE.md. If that throws, `onWriteFailure` restores the archive
   //      to its snapshot (or deletes it if it was absent) and the error is
   //      rethrown, so both files are as they were before the prune.
-  // A failed archive write (step 2) leaves the archive's previous bytes and
-  // throws out of the transform before STATE.md is touched. So no thrown
-  // failure loses an entry. A process killed between steps 2 and 3 (or a
-  // failed restore) leaves the entries in both files; re-running the same
-  // prune on the unchanged STATE.md then only rewrites STATE.md, so each entry
-  // ends up archived once. Not covered: a retry with different options, or
-  // after STATE.md was edited in between — a different run, which archives its
-  // entries again (duplicated, never lost).
+  // Both writes are atomic (temp file + rename, no truncating fallback). A
+  // failed archive write (step 2) leaves the archive's previous bytes and
+  // throws out of the transform before STATE.md is touched; a failed STATE.md
+  // write leaves it as it was (or is put back from the snapshot) before the
+  // archive is restored. When a restore itself fails, the archive is kept, so
+  // the pruned entries are in at least one file (only a STATE.md write that
+  // damaged STATE.md and whose restore also failed can cost unpruned content,
+  // and that error says so). A process killed between steps 2
+  // and 3 (or a failed archive restore) leaves the entries in both files;
+  // re-running the same prune then only rewrites STATE.md, because the run
+  // marker covers just the pruned sections' bodies and the options — other
+  // state commands in between do not change it. Not covered: a re-run with
+  // different options, or after one of those sections was edited in between —
+  // a different run, which archives its entries again (duplicated, never lost).
   let rollback: ArchiveRollback | null = null;
   readModifyWriteStateMd(statePath, (content) => {
     const result = runPruneCore(content);
@@ -7561,6 +7585,7 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): v
     archived.push(...result.archivedSections);
     return result.newContent;
   }, cwd, {
+    atomicWrite: true,
     onWriteFailure: (stateErr) => {
       if (rollback !== null) rollback.restore(stateErr);
     },
