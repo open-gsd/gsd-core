@@ -85,8 +85,33 @@ type Scope = planningScopeMod.Scope;
  */
 const MILESTONE_CLOSED_MARKER_PATTERN = /\b(?:CLOSED|ARCHIVED|ABANDONED|SHIPPED|FAILED)\b|✅|🗄/i;
 const MILESTONE_ACTIVE_MARKER_PATTERN = /\b(?:STARTED|ACTIVE|WIP)\b|in\s+progress|🚧|🔄/i;
+const CLOSED_STATUS_WORDS = 'CLOSED|ARCHIVED|ABANDONED|SHIPPED|FAILED';
+// A status word marks status when it is in capitals, inside a parenthetical or
+// bracket, after a dash or colon, or ends the heading (optionally followed by a
+// date). Anywhere else it is a title word (`Failed Payment Recovery`).
+const CLOSED_STATUS_CAPS_RE = new RegExp(`\\b(?:${CLOSED_STATUS_WORDS})\\b`);
+const CLOSED_STATUS_GROUPED_RE = new RegExp(`[(\\[][^)\\]]*\\b(?:${CLOSED_STATUS_WORDS})\\b[^)\\]]*[)\\]]`, 'i');
+const CLOSED_STATUS_SEPARATED_RE = new RegExp(`(?:^|\\s)[\\u2013\\u2014-]+\\s*(?:${CLOSED_STATUS_WORDS})\\b|:\\s*(?:${CLOSED_STATUS_WORDS})\\b`, 'i');
+const CLOSED_STATUS_TRAILING_RE = new RegExp(`\\b(?:${CLOSED_STATUS_WORDS})\\b[\\s\\d.,;:!/\\u2013\\u2014-]*$`, 'i');
+const CLOSED_STATUS_MARK_RE = /[\u{2705}\u{1f5c4}]/u;
+
+/**
+ * THE closed-milestone predicate (#5726, ADR-3180): selection, masking, the
+ * archive strip and the shipped refusal all call this one function. Needs a
+ * closed marker and no active marker, and the marker must read as a STATUS, not
+ * as part of the title. A check mark counts anywhere except inside a
+ * parenthetical that names another version (`Next (after v2.0 prep` + check mark + `)`); a
+ * status WORD counts there (`(shipped, replaces v0.9)`).
+ */
 function isClosedMilestoneHeading(headingText: string): boolean {
-  return MILESTONE_CLOSED_MARKER_PATTERN.test(headingText) && !MILESTONE_ACTIVE_MARKER_PATTERN.test(headingText);
+  if (!MILESTONE_CLOSED_MARKER_PATTERN.test(headingText) || MILESTONE_ACTIVE_MARKER_PATTERN.test(headingText)) return false;
+  const text = headingText.replace(/<[^>]{0,200}>/g, '');
+  const own = text.replace(/\([^)]*\bv\d[^)]*\)/gi, '');
+  return CLOSED_STATUS_MARK_RE.test(own)
+    || CLOSED_STATUS_CAPS_RE.test(text)
+    || CLOSED_STATUS_GROUPED_RE.test(text)
+    || CLOSED_STATUS_SEPARATED_RE.test(text)
+    || CLOSED_STATUS_TRAILING_RE.test(text);
 }
 
 /**
@@ -255,23 +280,6 @@ function blankFencesAndComments(content: string): string {
 }
 
 /**
- * #5726: is this ONE heading (or `<summary>` text) a shipped-status line? The
- * owner's closed classification is the gate; on top of it the marker must read
- * as a STATUS, not as part of the title: a word marker counts when written in
- * capitals (`SHIPPED`) or inside a parenthetical/bracket (`(shipped)`), so a
- * milestone named `Failed Payment Recovery` stays open; a check mark counts
- * anywhere except inside a parenthetical that names another version
- * (`Next (after v2.0 prep ✅)`), which describes that other thing, not this one.
- */
-function isShippedStatusHeading(headingText: string): boolean {
-  if (!isClosedMilestoneHeading(headingText)) return false;
-  const own = headingText.replace(/\([^)]*\bv\d[^)]*\)/gi, '');
-  return /✅|🗄/.test(own)
-    || /\b(?:CLOSED|ARCHIVED|ABANDONED|SHIPPED|FAILED)\b/.test(own)
-    || /[([][^)\]]*\b(?:closed|archived|abandoned|shipped|failed)\b[^)\]]*[)\]]/i.test(own);
-}
-
-/**
  * #5726: is the milestone window `extractCurrentMilestoneScoped` selected for
  * `version` a SHIPPED one? Decided on the heading the owner selects
  * (`selectActiveMilestoneHeading`: the first non-closed match, else the first),
@@ -287,7 +295,7 @@ function selectedMilestoneHeadingShipped(
   let matches = locateMilestoneHeadings(visible, version);
   if (matches.length === 0) matches = bracketFallbackHeadingMatches(visible, version, phaseIdConvention);
   if (matches.length === 0) return false;
-  return isShippedStatusHeading(selectActiveMilestoneHeading(visible, version, matches)[1]);
+  return isClosedMilestoneHeading(selectActiveMilestoneHeading(visible, version, matches)[1]);
 }
 
 /**
@@ -295,7 +303,7 @@ function selectedMilestoneHeadingShipped(
  * Read from fence- and comment-blanked content, tags removed.
  */
 function archiveSummaryShipped(summaryInner: string): boolean {
-  return isShippedStatusHeading(summaryInner.replace(/<[^>]{0,200}>/g, ''));
+  return isClosedMilestoneHeading(summaryInner.replace(/<[^>]{0,200}>/g, ''));
 }
 
 // #2761 B1: matches a bracket MILESTONE heading's intro (`[GSD.02]`) at the
