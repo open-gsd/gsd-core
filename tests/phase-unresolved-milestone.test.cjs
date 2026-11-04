@@ -281,6 +281,44 @@ describe('#5726 phase write verbs on an unresolved STATE milestone', () => {
     assert.equal(JSON.parse(result.output).phase_number, 5);
   });
 
+  // "Shipped" is read off the heading the window actually selects, never off any
+  // line that merely mentions the version: these shapes are NOT shipped milestones.
+  const phaseBlock = (n, name) => `### Phase ${n}: ${name}\n**Goal:** x\n\n`;
+  const FENCED_SHIPPED_EXAMPLE = `# Roadmap\n\n\`\`\`\n## v1.0 Example ✅\n\`\`\`\n\n## v1.0 Real\n\n${phaseBlock(1, 'One')}`;
+  const OPEN_HEADING_CHECK_IN_PAREN = `# Roadmap\n\n## v2.0 Next (after v2.0 prep ✅)\n\n${phaseBlock(1, 'One')}`;
+  const OPEN_FAILED_TITLE = `# Roadmap\n\n## v1.0 Failed Payment Recovery\n\n${phaseBlock(1, 'One')}`;
+  const REOPENED = `# Roadmap\n\n## v1.0 Core ✅ SHIPPED\n\n${phaseBlock(1, 'One')}## v1.0 Core Reopened (in progress)\n\n${phaseBlock(2, 'Two')}`;
+  const COMMENTED_SHIPPED = `# Roadmap\n\n<!-- ## v1.0 Old ✅ -->\n\n## v1.0 Real\n\n${phaseBlock(1, 'One')}`;
+  const SHIPPED_V1_CURRENT_V101 = `# Roadmap\n\n## v1.0 Core ✅ SHIPPED\n\n${phaseBlock(1, 'One')}## v1.0.1 Patch\n\n${phaseBlock(2, 'Two')}`;
+  const OPEN_V1_SHIPPED_V101 = `# Roadmap\n\n## v1.0 Core\n\n${phaseBlock(1, 'One')}## v1.0.1 Patch ✅ SHIPPED\n\n${phaseBlock(2, 'Two')}`;
+
+  for (const [shape, roadmap, milestone, phaseNumber] of [
+    ['a fenced shipped example above the real heading', FENCED_SHIPPED_EXAMPLE, 'v1.0', 2],
+    ['an open heading with a check mark in a parenthetical about another version', OPEN_HEADING_CHECK_IN_PAREN, 'v2.0', 2],
+    ['an open milestone whose title contains "Failed"', OPEN_FAILED_TITLE, 'v1.0', 2],
+    ['a shipped heading followed by a reopened in-progress heading', REOPENED, 'v1.0', 3],
+    ['a shipped heading inside an HTML comment', COMMENTED_SHIPPED, 'v1.0', 2],
+    ['STATE v1.0.1 current beside a shipped v1.0 (prefix boundary)', SHIPPED_V1_CURRENT_V101, 'v1.0.1', 3],
+    ['STATE v1.0 open beside a shipped v1.0.1 (prefix boundary)', OPEN_V1_SHIPPED_V101, 'v1.0', 2],
+  ]) {
+    test(`phase add allocates ${phaseNumber} for ${shape}`, () => {
+      setup({ roadmap, milestone });
+      const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+      assert.equal(result.success, true, result.error);
+      assert.equal(JSON.parse(result.output).phase_number, phaseNumber);
+    });
+  }
+
+  test('a <details> summary heading with an unresolved STATE milestone (v9.9) refuses as unresolved, not shipped', () => {
+    const roadmap = `# Roadmap\n\n## v2.0 Current\n\n${phaseBlock(4, 'Four')}<details>\n<summary>v1.0 Core</summary>\n\n${phaseBlock(1, 'One')}</details>\n`;
+    setup({ roadmap, milestone: 'v9.9' });
+    const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+    assert.equal(result.success, false, result.output);
+    assert.ok(result.error.includes('v9.9'), result.error);
+    assert.ok(/no milestone heading/.test(result.error), result.error);
+    assert.ok(!/already shipped/.test(result.error), result.error);
+  });
+
   describe('the STATE milestone echoed in the refusal', () => {
     const refusalFor = (milestone) => {
       setup({ roadmap: TWO_MILESTONES, milestone });
@@ -294,6 +332,21 @@ describe('#5726 phase write verbs on an unresolved STATE milestone', () => {
       assert.ok(!/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/.test(result.error), `raw control bytes leaked: ${JSON.stringify(result.error)}`);
       assert.ok(result.error.includes('\\u001b'), `ESC must be shown escaped: ${result.error}`);
     });
+
+    // Bidi controls, zero-width and format characters, and line separators are
+    // invisible or reorder the terminal line: each must be shown as \uXXXX.
+    // U+2028/U+2029 end the STATE line, so they are placed after a printable tail.
+    for (const codePoint of [0x7f, 0x85, 0x9f, 0x200b, 0x200f, 0x202a, 0x202e, 0x2066, 0x2069, 0xfeff, 0x2028, 0x2029]) {
+      const hex = codePoint.toString(16).padStart(4, '0');
+      test(`U+${hex.toUpperCase()} in the echoed milestone is escaped, never raw`, () => {
+        const result = refusalFor(`v9.9${String.fromCharCode(codePoint)}tail`);
+        assert.equal(result.success, false);
+        assert.ok(!result.error.includes(String.fromCharCode(codePoint)), `raw U+${hex} leaked: ${JSON.stringify(result.error)}`);
+        if (codePoint !== 0x2028 && codePoint !== 0x2029) {
+          assert.ok(result.error.includes(`\\u${hex}`), `U+${hex} must be shown escaped: ${JSON.stringify(result.error)}`);
+        }
+      });
+    }
 
     for (const [label, length] of [['limit-1', 79], ['limit', 80], ['limit+1', 81]]) {
       test(`a ${length}-char milestone (${label}) is ${length > 80 ? 'truncated with an ellipsis' : 'echoed whole'}`, () => {
