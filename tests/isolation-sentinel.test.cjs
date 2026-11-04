@@ -38,12 +38,14 @@
  * this test fails exactly when the fix regresses.
  */
 
-const { test, describe } = require('node:test');
+const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, runGsdTools } = require('./helpers.cjs');
+const fc = require('./helpers/fast-check-setup.cjs');
+const { createFixture } = require('./fixtures/index.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const SENTINEL_MODULE_PATH = path.join(REPO_ROOT, 'hooks', 'lib', 'isolation-sentinel.js');
@@ -118,5 +120,187 @@ describe('hooks/lib/isolation-sentinel.js: resolveSentinelRoot self-heal reachab
     assert.equal(worktreeSafetyCalls, 0, 'a thrown RuntimeBuildError must short-circuit before resolveWorktreeRoot is ever reached');
     assert.equal(projectRootCalls, 0, 'a thrown RuntimeBuildError must short-circuit before findProjectRoot is ever reached');
     assert.equal(result, cwd, 'resolveSentinelRoot degrades to the raw cwd on a build failure, same as any other resolution failure');
+  });
+});
+
+describe('hooks/lib/isolation-sentinel.js: per-dispatch keyed records (#5682)', () => {
+  const sentinel = require(SENTINEL_MODULE_PATH);
+  const { readSentinel, agedNoneGovernsDispatch, sentinelAppliesToDispatch, SENTINEL_STALE_MS, AGED_NONE_MAX_MS, VALID_ISOLATION } = sentinel;
+  const guard = require('../hooks/gsd-agent-isolation-guard.js');
+
+  const FLAG = 'isolation="worktree"';
+  const LEGACY_FILE = path.join('.gsd', 'dispatch-isolation-sentinel.json');
+  const KEYED_DIR = path.join('.gsd', 'dispatch-isolation');
+  const keyedFile = (root, phase, plan) => path.join(root, KEYED_DIR, `${phase}--${plan}.json`);
+  const A = { phase: '21', plan: '21-13' };
+  const B = { phase: '23', plan: '23-15' };
+
+  let project;
+  let savedGsdRuntime;
+
+  beforeEach(() => {
+    savedGsdRuntime = process.env.GSD_RUNTIME;
+    delete process.env.GSD_RUNTIME;
+    project = createFixture({ prefix: 'gsd-5682-', planning: true, git: true, projectDoc: false });
+    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+  });
+  afterEach(() => {
+    cleanup(project);
+    if (savedGsdRuntime === undefined) delete process.env.GSD_RUNTIME;
+    else process.env.GSD_RUNTIME = savedGsdRuntime;
+  });
+
+  /** Persist one decision through the real `record-dispatch-isolation` CLI writer. */
+  function record(root, { isolation, phase, plan, flag }) {
+    const args = ['record-dispatch-isolation', '--isolation', isolation];
+    if (flag) args.push(`--harness-flag=${flag}`);
+    if (phase) args.push('--phase', phase);
+    if (plan) args.push('--plan', plan);
+    const result = runGsdTools(args, root);
+    assert.ok(result.success, `record-dispatch-isolation failed: ${result.error}`);
+    assert.equal(JSON.parse(result.output).recorded, true);
+  }
+
+  const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf-8'));
+  const clockAt = (ms) => ({ now: () => ms });
+
+  /** A's decision, then B's: the legacy single slot now holds B. */
+  function interleave(root) {
+    record(root, { isolation: 'none', ...A });
+    record(root, { isolation: 'harness-worktree', flag: FLAG, ...B });
+    return clockAt(readJson(path.join(root, LEGACY_FILE)).written_at + 1);
+  }
+
+  test('#5682: interleaved records each resolve for their own dispatch', () => {
+    const clock = interleave(project);
+
+    const forA = readSentinel(project, { clock, dispatchIds: A });
+    assert.equal(forA.present, true);
+    assert.equal(forA.stale, false);
+    assert.equal(forA.malformed, false);
+    assert.equal(forA.isolation, 'none');
+    assert.equal(forA.phase, '21');
+    assert.equal(forA.plan, '21-13');
+    assert.equal(forA.harnessFlag, null);
+
+    const forB = readSentinel(project, { clock, dispatchIds: B });
+    assert.equal(forB.stale, false);
+    assert.equal(forB.isolation, 'harness-worktree');
+    assert.equal(forB.phase, '23');
+    assert.equal(forB.plan, '23-15');
+    assert.equal(forB.harnessFlag, FLAG);
+  });
+
+  test('#5682: an earlier phase\'s record does not authorize a later dispatch', () => {
+    record(project, { isolation: 'none', phase: '21', plan: '21-01' });
+    const later = { phase: '22', plan: '22-01' };
+    const clock = clockAt(readJson(path.join(project, LEGACY_FILE)).written_at + 1);
+
+    const read = readSentinel(project, { clock, dispatchIds: later });
+    assert.equal(read.phase, '21', 'a keyed miss falls through to the legacy record');
+    assert.equal(sentinelAppliesToDispatch(read, later), false, 'the legacy logic rejects the foreign phase');
+    assert.equal(
+      guard.resolveIsolationState(project, { clock, dispatchIds: later }).isolation,
+      'harness-worktree',
+      'the registry fallback governs the later phase, not the earlier phase\'s none',
+    );
+  });
+
+  test('#5682: single orchestrator unchanged', () => {
+    record(project, { isolation: 'none', ...A });
+    const clock = clockAt(readJson(path.join(project, LEGACY_FILE)).written_at + 1);
+    const legacy = readSentinel(project, { clock });
+    assert.deepEqual(readSentinel(project, { clock, dispatchIds: A }), legacy, 'dispatch with ids');
+    assert.deepEqual(readSentinel(project, { clock, dispatchIds: { phase: null, plan: null } }), legacy, 'dispatch with no ids');
+    assert.deepEqual(readSentinel(project, { clock, dispatchIds: { phase: '21', plan: null } }), legacy, 'dispatch with a phase only');
+    assert.equal(legacy.isolation, 'none');
+  });
+
+  test('#5682: single orchestrator unchanged for a phase-level record (no plan, no keyed file)', () => {
+    record(project, { isolation: 'none', phase: '21' });
+    assert.equal(fs.existsSync(path.join(project, KEYED_DIR)), false, 'a plan-less record writes the legacy file only');
+    const clock = clockAt(readJson(path.join(project, LEGACY_FILE)).written_at + 1);
+    const legacy = readSentinel(project, { clock });
+    assert.deepEqual(readSentinel(project, { clock, dispatchIds: A }), legacy);
+    assert.equal(legacy.phase, '21');
+    assert.equal(legacy.plan, null);
+  });
+
+  test('#5682: keyed record keeps the trust window', () => {
+    interleave(project);
+    const file = keyedFile(project, A.phase, A.plan);
+    const written = 1_000_000;
+    fs.writeFileSync(file, JSON.stringify({ ...readJson(file), written_at: written }));
+
+    const at = (age) => readSentinel(project, { clock: clockAt(written + age), dispatchIds: A });
+    assert.equal(at(SENTINEL_STALE_MS - 1).stale, false, 'limit-1 is fresh');
+    assert.equal(at(SENTINEL_STALE_MS).stale, true, 'limit is stale');
+    assert.equal(at(SENTINEL_STALE_MS + 1).stale, true, 'limit+1 is stale');
+    assert.equal(at(SENTINEL_STALE_MS + 1).phase, '21', 'the stale answer still comes from the keyed record');
+    assert.equal(at(SENTINEL_STALE_MS + 1).isolation, 'none');
+    assert.equal(at(-5000).stale, false, 'the future tolerance edge is fresh');
+    assert.equal(at(-5001).stale, true, 'beyond the future tolerance is stale');
+  });
+
+  test('#5682: keyed none keeps the aged-none window and a future-dated keyed record never governs', () => {
+    interleave(project);
+    const file = keyedFile(project, A.phase, A.plan);
+    const written = 1_000_000;
+    fs.writeFileSync(file, JSON.stringify({ ...readJson(file), written_at: written }));
+
+    const governs = (age) => {
+      const clock = clockAt(written + age);
+      return agedNoneGovernsDispatch(readSentinel(project, { clock, dispatchIds: A }), A, { clock });
+    };
+    assert.equal(governs(SENTINEL_STALE_MS), true, 'past the trust window the aged none governs its own phase');
+    assert.equal(governs(AGED_NONE_MAX_MS - 1), true);
+    assert.equal(governs(AGED_NONE_MAX_MS), true);
+    assert.equal(governs(AGED_NONE_MAX_MS + 1), false);
+    assert.equal(governs(-5001), false, 'future-dated');
+    const future = readSentinel(project, { clock: clockAt(written - 6000), dispatchIds: A });
+    assert.equal(future.stale, true);
+    assert.equal(future.phase, '21');
+  });
+
+  test('#5682: key/content mismatch is ignored', () => {
+    const clock = interleave(project);
+    const file = keyedFile(project, A.phase, A.plan);
+    fs.writeFileSync(file, JSON.stringify({ ...readJson(file), phase: '99', plan: '99-01' }));
+
+    const read = readSentinel(project, { clock, dispatchIds: A });
+    assert.equal(read.phase, '23', 'a keyed file that disagrees with its own filename falls through to the legacy record');
+    assert.equal(read.plan, '23-15');
+    assert.equal(read.isolation, 'harness-worktree');
+  });
+
+  test('#5682 property: any interleaving of records over distinct keys reads back each key\'s last write', () => {
+    // Records are laid out exactly as the writer lays them (one keyed file per phase/plan plus the
+    // legacy single slot, last writer wins); the writer itself is driven through the real CLI above.
+    const KEYS = [A, B, { phase: '22', plan: '22-01' }, { phase: '24', plan: '24-02' }];
+    const T0 = 1_000_000;
+    const op = fc.record({ key: fc.integer({ min: 0, max: KEYS.length - 1 }), isolation: fc.constantFrom(...VALID_ISOLATION) });
+    const gsd = path.join(project, '.gsd');
+
+    fc.assert(
+      fc.property(fc.array(op, { minLength: 1, maxLength: 12 }), (ops) => {
+        cleanup(gsd);
+        fs.mkdirSync(path.join(project, KEYED_DIR), { recursive: true });
+        const last = new Map();
+        ops.forEach((o, i) => {
+          const { phase, plan } = KEYS[o.key];
+          const body = JSON.stringify({ isolation: o.isolation, harness_flag: null, phase, plan, written_at: T0 + i });
+          fs.writeFileSync(keyedFile(project, phase, plan), body);
+          fs.writeFileSync(path.join(project, LEGACY_FILE), body);
+          last.set(o.key, o.isolation);
+        });
+        const clock = clockAt(T0 + ops.length);
+        for (const [k, isolation] of last) {
+          const read = readSentinel(project, { clock, dispatchIds: KEYS[k] });
+          if (read.isolation !== isolation || read.phase !== KEYS[k].phase || read.plan !== KEYS[k].plan) return false;
+        }
+        return true;
+      }),
+      { seed: 5682, numRuns: 200 },
+    );
   });
 });

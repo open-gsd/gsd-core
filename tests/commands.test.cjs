@@ -6550,3 +6550,73 @@ describe('todo complete writes into the frontmatter block the one fence owner fi
     );
   });
 });
+
+describe('record-dispatch-isolation keyed per-dispatch records (#5682)', () => {
+  let project;
+  let outside;
+  beforeEach(() => {
+    project = createTempProject();
+    outside = createTempDir('gsd-5682-outside-');
+  });
+  afterEach(() => {
+    cleanup(project);
+    cleanup(outside);
+  });
+
+  const KEYED_DIR = path.join('.gsd', 'dispatch-isolation');
+
+  function record(phase, plan) {
+    const result = runGsdTools(['record-dispatch-isolation', '--isolation', 'none', '--phase', phase, '--plan', plan], project);
+    assert.ok(result.success, `record-dispatch-isolation failed: ${result.error}`);
+    return JSON.parse(result.output);
+  }
+
+  test('#5682: unsafe keys never become paths', () => {
+    const long = (c, n) => c.repeat(n);
+    const unsafe = [
+      ['../x', '21-13'],
+      ['21', 'a/b'],
+      ['..', '21-13'],
+      ['21', '..'],
+      ['.', '21-13'],
+      [long('p', 101), '21-13'],
+      ['21', long('q', 101)],
+    ];
+    for (const [phase, plan] of unsafe) {
+      const out = record(phase, plan);
+      assert.equal(out.recorded, true, `legacy record still written for ${JSON.stringify([phase.slice(0, 12), plan.slice(0, 12)])}`);
+      const legacy = JSON.parse(fs.readFileSync(path.join(project, '.gsd', 'dispatch-isolation-sentinel.json'), 'utf-8'));
+      assert.equal(legacy.phase, phase);
+      assert.equal(legacy.plan, plan);
+      const entries = fs.readdirSync(path.join(project, '.gsd'));
+      for (const entry of entries) {
+        assert.ok(
+          ['.gitignore', 'dispatch-isolation-sentinel.json', 'dispatch-isolation'].includes(entry),
+          `no stray entry under .gsd for ${JSON.stringify([phase.slice(0, 12), plan.slice(0, 12)])}: ${entry}`,
+        );
+      }
+      const keyed = path.join(project, KEYED_DIR);
+      if (fs.existsSync(keyed)) assert.deepEqual(fs.readdirSync(keyed), [], 'no keyed file for an unsafe key');
+    }
+  });
+
+  test('#5682: a 100-character phase or plan is a safe key and is written', () => {
+    const phase = 'a'.repeat(100);
+    const plan = 'b'.repeat(100);
+    assert.equal(record(phase, '21-13').recorded, true);
+    assert.equal(record('21', plan).recorded, true);
+    const written = fs.readdirSync(path.join(project, KEYED_DIR)).sort();
+    assert.deepEqual(written, [`${phase}--21-13.json`, `21--${plan}.json`].sort());
+  });
+
+  test('#5682: gitignore covers keyed dir', () => {
+    fs.mkdirSync(path.join(project, '.gsd'), { recursive: true });
+    fs.writeFileSync(path.join(project, '.gsd', '.gitignore'), 'user-rule/\n');
+
+    assert.equal(record('21', '21-13').recorded, true);
+    const lines = splitLines(fs.readFileSync(path.join(project, '.gsd', '.gitignore'), 'utf-8'));
+    assert.ok(lines.includes('user-rule/'), 'the pre-existing rule is kept');
+    assert.ok(lines.includes('/dispatch-isolation-sentinel.json'), 'the legacy rule is kept');
+    assert.ok(lines.includes('/dispatch-isolation/'), 'the keyed directory is ignored');
+  });
+});
