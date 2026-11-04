@@ -1,5 +1,5 @@
 ---
 type: Fixed
-pr: 5766
+pr: 5866
 ---
 **The TDD RED-commit gate now recognises test files case-insensitively, like the behavior-adding check already did** — the shared test-file convention list (`src/tdd-test-files.cts`) is consumed by two consumers: the router, which decides whether a task is behavior-adding, and the RED-commit gate in `execute-phase.md`, which asks git for the commits that touched a test file. The router has always matched case-insensitively (`Tests/foo.rs`, `__TESTS__/a.js` and `Foo.TEST.js` are test files to it), but git pathspecs are case-sensitive unless they carry the `:(icase)` magic prefix — so a RED commit touching only those paths was invisible to the gate, and the gate asked for a RED commit that already existed. The gate's pathspecs now carry `:(icase)`, so both consumers answer the same question about the same files; the workflow's pathspec literals stay pinned to the exported list by a contract test, so the two cannot drift apart again in either direction. (#5766)
