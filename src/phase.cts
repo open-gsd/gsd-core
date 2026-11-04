@@ -1904,6 +1904,26 @@ function assertBracketGeneratedIdentity(
   }
 }
 
+const STATE_MILESTONE_ECHO_LIMIT = 80;
+
+/**
+ * #5726: STATE.md's `milestone:` value is untrusted text. Cap it at
+ * `STATE_MILESTONE_ECHO_LIMIT` characters (ellipsis past the cap), then quote it
+ * with `JSON.stringify` (the `phase.cts` precedent for echoed user text), which
+ * escapes ESC/BEL/newlines; C1 controls and DEL, which JSON leaves raw, are
+ * escaped too so no byte can drive the terminal.
+ */
+function echoStateMilestone(value: string): string {
+  const chars = Array.from(value);
+  const capped = chars.length > STATE_MILESTONE_ECHO_LIMIT
+    ? `${chars.slice(0, STATE_MILESTONE_ECHO_LIMIT).join('')}…`
+    : value;
+  return JSON.stringify(capped).replace(
+    /[\u007f-\u009f]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`,
+  );
+}
+
 /**
  * #5726: the current-milestone window for a verb that WRITES to the ROADMAP.
  * When STATE.md names a milestone that has no heading in a ROADMAP carrying
@@ -1916,10 +1936,17 @@ function assertBracketGeneratedIdentity(
  * Read-only readers keep calling `extractCurrentMilestone` and keep degrading.
  */
 function currentMilestoneWindowOrRefuse(rawContent: string, cwd: string, command: string): string {
-  const { value, unresolvedMilestone } = extractCurrentMilestoneScoped(rawContent, cwd);
+  const { value, unresolvedMilestone, shippedMilestone } = extractCurrentMilestoneScoped(rawContent, cwd);
+  if (shippedMilestone) {
+    error(
+      `${command}: STATE.md names milestone ${echoStateMilestone(shippedMilestone)}, which ROADMAP.md marks as already shipped, `
+        + 'so the current milestone window is a closed one. Refusing to number the phase or link its dependencies '
+        + 'against a shipped milestone. Start the next milestone (or correct the milestone field in STATE.md), then retry.',
+    );
+  }
   if (unresolvedMilestone) {
     error(
-      `${command}: STATE.md names milestone "${unresolvedMilestone}", but ROADMAP.md has no milestone heading for it, `
+      `${command}: STATE.md names milestone ${echoStateMilestone(unresolvedMilestone)}, but ROADMAP.md has no milestone heading for it, `
         + 'so the current milestone window cannot be resolved. Refusing to use the whole roadmap, which would number '
         + 'the phase and link its dependencies against other milestones. Add the milestone heading to ROADMAP.md '
         + 'or correct the milestone field in STATE.md, then retry.',

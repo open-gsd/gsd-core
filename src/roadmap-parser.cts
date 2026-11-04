@@ -531,6 +531,26 @@ function hasVersionedMilestones(content: string): boolean {
   return /^#{1,3}\s+.*v\d+\.\d+/mi.test(content);
 }
 
+/**
+ * #5726: does this ROADMAP carry a RECOGNIZED versioned milestone heading — a
+ * non-Phase level 1-3 heading with a version token, outside fenced code and
+ * HTML comments? Stricter than `hasVersionedMilestones` (a raw line regex that
+ * a Phase title such as `### Phase 1: Migrate to v2.0 API`, a fenced example or
+ * a commented-out heading all satisfy), so it is NOT a replacement: that
+ * predicate feeds `classifyMilestoneWindow`'s rows 3/4 and its behavior stays
+ * as is. This one gates only the write refusal for an unresolved STATE
+ * milestone, which must not fire on a roadmap that has no real milestone
+ * heading at all. Built on `tokenizeHeadings` (fence-aware),
+ * `isRecognizedMilestoneHeading` (Phase exclusion, level bound) and
+ * `listMilestoneHeadings` (the version-bearing grammar).
+ */
+function hasRecognizedVersionedMilestoneHeading(content: string): boolean {
+  const visible = content.replace(/<!--[\s\S]*?-->/g, '');
+  return tokenizeHeadings(visible).some((heading) =>
+    isRecognizedMilestoneHeading(heading.text, heading.level)
+    && listMilestoneHeadings(`${'#'.repeat(heading.level)} ${heading.text}`).length > 0);
+}
+
 // This file's milestone-heading vocabulary: a version token (`v1.2`-style),
 // a ✅/🚧/📋 status marker, or the word "Milestone". Tested against a
 // non-Phase heading's own text by `hasMilestoneSectioning` below — this
@@ -1276,7 +1296,7 @@ function readStateMilestoneScalar(stateRaw: string): string | null {
  *   expose it (its 20 callers are not the scope-axis consumers; V005's
  *   router site and `getMilestonePhaseFilter` resolve and thread it).
  */
-function extractCurrentMilestoneScoped(content: string, cwd?: string, ws?: string | null, phaseIdConvention?: string | null): { value: string; scope: Scope; unresolvedMilestone?: string } {
+function extractCurrentMilestoneScoped(content: string, cwd?: string, ws?: string | null, phaseIdConvention?: string | null): { value: string; scope: Scope; unresolvedMilestone?: string; shippedMilestone?: string } {
   if (!cwd) {
     // Row 1: a deliberate unscoped read (no cwd supplied) is a real answer —
     // the caller asked for no scoping, so whole-document is COMPLETE.
@@ -1316,6 +1336,13 @@ function extractCurrentMilestoneScoped(content: string, cwd?: string, ws?: strin
   // twin copy in `getMilestonePhaseFilter`, the intra-owner-file duplicate
   // review caught since the drift guard exempts this file by construction).
   const versionedMilestonesPresent = hasVersionedMilestones(content);
+  // #5726: STATE.md's milestone is one the ROADMAP itself marks shipped (a
+  // closed heading or `<summary>`), via the existing `isMilestoneShippedInRoadmap`
+  // classification. The window below then IS the closed milestone, and a write
+  // verb would number against its phases. Reported by the window's one owner.
+  const shippedStateMilestone = versionFromState && version !== null && isMilestoneShippedInRoadmap(content, version)
+    ? { shippedMilestone: version }
+    : {};
 
   if (!version) {
     const value = stripShippedMilestones(content);
@@ -1387,6 +1414,7 @@ function extractCurrentMilestoneScoped(content: string, cwd?: string, ws?: strin
             windowHasPhaseEntries: hasPhaseEntries(value, phaseIdConvention),
             documentHasPhaseEntries,
           }),
+          ...shippedStateMilestone,
         };
       }
     }
@@ -1404,7 +1432,9 @@ function extractCurrentMilestoneScoped(content: string, cwd?: string, ws?: strin
     // unshipped roadmap, so a write verb must not allocate against it. Reported
     // only here, by the window's one owner; a free-form legacy ROADMAP (no
     // versioned headings) and a bullet-guessed version stay a plain UNSCOPED.
-    if (scope === SCOPE.UNSCOPED && versionFromState && versionedMilestonesPresent) {
+    // The gate counts only RECOGNIZED milestone headings, so a version token in
+    // a Phase title, a fence or an HTML comment does not read as a milestone.
+    if (scope === SCOPE.UNSCOPED && versionFromState && hasRecognizedVersionedMilestoneHeading(content)) {
       return { value, scope, unresolvedMilestone: version };
     }
     return { value, scope };
@@ -1651,6 +1681,7 @@ function extractCurrentMilestoneScoped(content: string, cwd?: string, ws?: strin
       windowHasPhaseEntries: hasPhaseEntries(value, phaseIdConvention),
       documentHasPhaseEntries,
     }),
+    ...shippedStateMilestone,
   };
 }
 
