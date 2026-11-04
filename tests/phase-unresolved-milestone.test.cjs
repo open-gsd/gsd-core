@@ -323,7 +323,8 @@ describe('#5726 phase write verbs on an unresolved STATE milestone', () => {
   const phaseBlock = (n, name) => `### Phase ${n}: ${name}\n**Goal:** x\n\n`;
   const FENCED_SHIPPED_EXAMPLE = `# Roadmap\n\n\`\`\`\n## v1.0 Example ✅\n\`\`\`\n\n## v1.0 Real\n\n${phaseBlock(1, 'One')}`;
   const OPEN_HEADING_CHECK_IN_PAREN = `# Roadmap\n\n## v2.0 Next (after v2.0 prep ✅)\n\n${phaseBlock(1, 'One')}`;
-  const OPEN_FAILED_TITLE = `# Roadmap\n\n## v1.0 Failed Payment Recovery\n\n${phaseBlock(1, 'One')}`;
+  const OPEN_FAILED_TITLE = `# Roadmap\n\n## v1.0 Failed Payment Recovery (in progress)\n\n${phaseBlock(1, 'One')}`;
+  const FAILED_TITLE_NO_MARKER = `# Roadmap\n\n## v1.0 Failed Payment Recovery\n\n${phaseBlock(1, 'One')}`;
   const REOPENED = `# Roadmap\n\n## v1.0 Core ✅ SHIPPED\n\n${phaseBlock(1, 'One')}## v1.0 Core Reopened (in progress)\n\n${phaseBlock(2, 'Two')}`;
   const COMMENTED_SHIPPED = `# Roadmap\n\n<!-- ## v1.0 Old ✅ -->\n\n## v1.0 Real\n\n${phaseBlock(1, 'One')}`;
   const SHIPPED_V1_CURRENT_V101 = `# Roadmap\n\n## v1.0 Core ✅ SHIPPED\n\n${phaseBlock(1, 'One')}## v1.0.1 Patch\n\n${phaseBlock(2, 'Two')}`;
@@ -332,7 +333,7 @@ describe('#5726 phase write verbs on an unresolved STATE milestone', () => {
   for (const [shape, roadmap, milestone, phaseNumber] of [
     ['a fenced shipped example above the real heading', FENCED_SHIPPED_EXAMPLE, 'v1.0', 2],
     ['an open heading with a check mark in a parenthetical about another version', OPEN_HEADING_CHECK_IN_PAREN, 'v2.0', 2],
-    ['an open milestone whose title contains "Failed"', OPEN_FAILED_TITLE, 'v1.0', 2],
+    ['a milestone whose title contains "Failed" and carries an active marker', OPEN_FAILED_TITLE, 'v1.0', 2],
     ['a shipped heading followed by a reopened in-progress heading', REOPENED, 'v1.0', 3],
     ['a shipped heading inside an HTML comment', COMMENTED_SHIPPED, 'v1.0', 2],
     ['STATE v1.0.1 current beside a shipped v1.0 (prefix boundary)', SHIPPED_V1_CURRENT_V101, 'v1.0.1', 3],
@@ -343,6 +344,19 @@ describe('#5726 phase write verbs on an unresolved STATE milestone', () => {
       const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
       assert.equal(result.success, true, result.error);
       assert.equal(JSON.parse(result.output).phase_number, phaseNumber);
+    });
+  }
+
+  for (const [verb, run] of VERBS) {
+    test(`${verb} refuses a milestone whose title merely contains "Failed" and names the remedy`, () => {
+      setup({ roadmap: FAILED_TITLE_NO_MARKER, milestone: 'v1.0' });
+      const beforeRoadmap = roadmapBytes();
+      const result = run(tmpDir);
+      assert.equal(result.success, false, `${verb} must refuse: ${result.output}`);
+      assert.ok(/already shipped/.test(result.error), result.error);
+      assert.ok(/rename/i.test(result.error), `message must name renaming: ${result.error}`);
+      assert.ok(result.error.includes('\u{1f6a7}') && result.error.includes('(in progress)'), `message must name an active marker: ${result.error}`);
+      assert.ok(roadmapBytes().equals(beforeRoadmap), 'ROADMAP.md must be byte-identical');
     });
   }
 

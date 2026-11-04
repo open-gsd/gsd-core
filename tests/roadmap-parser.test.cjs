@@ -4660,18 +4660,26 @@ describe('roadmap-parser: isClosedMilestoneHeading', () => {
     ['v1.0 MVP (Shipped: 2026-01-01)', true],
     ['v1.0 MVP — ARCHIVED 2026-01-01', true],
     ['v1.0 MVP [shipped]', true],
-    // A status word that is a title word is open.
-    ['v1.1 Failed Payment Recovery', false],
-    ['v1.1 Shipped Features Release', false],
-    ['v1.1 Closed Beta', false],
-    ['v1.1 Archived Docs', false],
-    ['v1.1 Abandoned Cart', false],
-    ['Failed Payment Recovery', false],
-    ['Milestone v1.1 Closed Beta', false],
-    // Ambiguous: first word + capitalized noun outside the exclusion set reads as a title.
-    ['v1.1 Shipped Feature Flags', false],
-    ['v1.1 Shipped The Big One', false],
-    // A status word that is not the first word of the name stays a status.
+    // A status word anywhere in the heading closes it, title word or not (origin/next semantics).
+    ['v1.1 Failed Payment Recovery', true],
+    ['v1.1 Shipped Features Release', true],
+    ['v1.1 Closed Beta', true],
+    ['v1.1 Archived Docs', true],
+    ['v1.1 Abandoned Cart', true],
+    ['Failed Payment Recovery', true],
+    ['Milestone v1.1 Closed Beta', true],
+    ['v1.1 Shipped Feature Flags', true],
+    ['v1.1 Shipped The Big One', true],
+    ['v1.1 Shipped To Production', true],
+    ['v1.1 Shipped On Time', true],
+    ['v1.1 Shipped All Phases', true],
+    ['v1.1 Shipped Everything', true],
+    ['v1.1 Closed Out', true],
+    ['v1.1 Archived In Place', true],
+    // An active marker beside a status-word title keeps the heading open.
+    ['v1.1 Failed Payment Recovery (in progress)', false],
+    ['\u{1f6a7} v1.1 Closed Beta', false],
+    ['v1.1 Archived Docs WIP', false],
     ['v1.0 Shipped Successfully', true],
     ['v1.0 MVP Shipped Features Release', true],
     ['MVP Shipped Early', true],
@@ -4698,12 +4706,13 @@ describe('roadmap-parser: isClosedMilestoneHeading', () => {
     ['Shipped V2', true],
     ['Shipped 2026', true],
     ['v1.1 Shipped Phases 1-4', true],
-    // Tag names go, attribute text stays.
     ['<span class="shipped">v1.0</span>', true],
     ['v1.0 <b>Shipped</b> Successfully', true],
-    ['v1.1 <b>Closed</b> Beta', false],
-    // A check mark inside a parenthetical naming another version is open.
+    ['v1.1 <b>Closed</b> Beta', true],
+    // The one exception: a check mark only inside a parenthetical naming another version is open.
     ['v2.1 Next (after v2.0 prep ✅)', false],
+    ['v2.1 Next (after v2.0 prep \u{1f5c4})', false],
+    ['v2.1 Next ✅ (after v2.0 prep)', true],
     // An active marker is never closed.
     ['v1.1 Active MVP shipped', false],
     ['v1.1 WIP ✅ done', false],
@@ -4717,45 +4726,31 @@ describe('roadmap-parser: isClosedMilestoneHeading', () => {
     });
   }
 
-  const WORD = fc.constantFrom('payments', 'mvp', 'auth', 'search', 'billing', 'core', 'api', 'reports');
-  const TITLE = fc.array(WORD, { minLength: 1, maxLength: 3 }).map((w) => w.join(' '));
-  const VERSION = fc.tuple(fc.nat(9), fc.nat(9)).map(([a, b]) => `v${a}.${b}`);
-  const STATUS = fc.constantFrom('closed', 'archived', 'abandoned', 'shipped', 'failed');
-  const SUFFIX = fc.tuple(STATUS, fc.constantFrom('caps', 'parens', 'brackets', 'dash', 'colon', 'date', 'month-year')).map(([s, form]) => {
-    switch (form) {
-      case 'caps': return s.toUpperCase();
-      case 'parens': return `(${s})`;
-      case 'brackets': return `[${s}]`;
-      case 'dash': return `— ${s}`;
-      case 'colon': return `: ${s}`;
-      case 'date': return `${s} 2026-01-01`;
-      default: return `${s} Jan 2026`;
-    }
+  // The predicate is exactly origin/next's `closed marker && !active marker`, except
+  // that a check mark living only inside a parenthetical naming another version is open.
+  // The token pool holds no such parenthetical, so equality must hold for every heading.
+  const NEXT_CLOSED = /\b(?:CLOSED|ARCHIVED|ABANDONED|SHIPPED|FAILED)\b|\u{2705}|\u{1f5c4}/iu;
+  const NEXT_ACTIVE = /\b(?:STARTED|ACTIVE|WIP)\b|in\s+progress|\u{1f6a7}|\u{1f504}/iu;
+  const nextPredicate = (h) => NEXT_CLOSED.test(h) && !NEXT_ACTIVE.test(h);
+  const TOKEN = fc.constantFrom(
+    'v1.0', 'v2.3', 'MVP', 'Payment', 'Recovery', 'Beta', 'Docs', 'payments', 'Phases', '1-4', '2026-01-01',
+    'Shipped', 'shipped', 'SHIPPED', 'Closed', 'closed', 'Archived', 'Abandoned', 'Failed', 'FAILED',
+    '\u{2705}', '\u{1f5c4}', 'WIP', 'Active', 'in progress', 'STARTED', '\u{1f6a7}', '\u{1f504}',
+    '(shipped)', '(see v2.0)', '(replaces v0.9)', '[archived]', '—', ':', '<b>', '</b>', '<span class="shipped">',
+  );
+  const HEADING = fc.array(TOKEN, { maxLength: 8 }).map((t) => t.join(' '));
+
+  test('property: equals the origin/next predicate for every heading without an other-version check mark', () => {
+    fc.assert(fc.property(HEADING, (h) => {
+      assert.strictEqual(isClosedMilestoneHeading(h), nextPredicate(h), JSON.stringify(h));
+    }), { numRuns: 1000 });
   });
 
-  test('property: any title plus a status suffix reads closed', () => {
-    fc.assert(fc.property(VERSION, TITLE, SUFFIX, (v, t, s) => {
-      assert.strictEqual(isClosedMilestoneHeading(`${v} ${t} ${s}`), true);
-    }), { numRuns: 200 });
-  });
-
-  test('property: a status word then an excluded capitalized word reads closed', () => {
-    const EXCLUDED = fc.constantFrom(
-      'Phase', 'Phases', 'Version', 'Milestone', 'Release', 'Today', 'Yesterday', 'Tomorrow', 'Early', 'Late',
-      'Recently', 'Successfully', 'Spring', 'Summer', 'Autumn', 'Fall', 'Winter', 'January', 'Sept', 'March',
-      'Monday', 'Friday', 'Wed',
-    );
-    const CAPITALIZED = STATUS.map((s) => s[0].toUpperCase() + s.slice(1));
-    const LEAD = fc.constantFrom('', 'v1.1 ', 'Milestone v2.0 ', 'v3.4 MVP ');
-    fc.assert(fc.property(LEAD, CAPITALIZED, EXCLUDED, fc.constantFrom('', ' 2026', ' 1-4'), (lead, s, w, tail) => {
-      assert.strictEqual(isClosedMilestoneHeading(`${lead}${s} ${w}${tail}`), true);
-    }), { numRuns: 300 });
-  });
-
-  test('property: an active marker is never closed', () => {
-    const ACTIVE = fc.constantFrom('WIP', 'ACTIVE', 'STARTED', 'in progress', '\u{1f6a7}', '\u{1f504}');
-    fc.assert(fc.property(VERSION, TITLE, SUFFIX, ACTIVE, (v, t, s, a) => {
-      assert.strictEqual(isClosedMilestoneHeading(`${v} ${t} ${s} ${a}`), false);
+  test('property: an other-version parenthetical check mark alone never closes, anywhere in the heading', () => {
+    const NEUTRAL = fc.array(fc.constantFrom('v2.1', 'Next', 'Payment', 'Beta', 'MVP'), { maxLength: 3 }).map((t) => t.join(' '));
+    const PAREN = fc.constantFrom('(after v2.0 prep \u{2705})', '(\u{2705} replaces v1.0)', '(v3 \u{1f5c4} done)');
+    fc.assert(fc.property(NEUTRAL, PAREN, NEUTRAL, (a, p, b) => {
+      assert.strictEqual(isClosedMilestoneHeading(`${a} ${p} ${b}`), false);
     }), { numRuns: 200 });
   });
 });
