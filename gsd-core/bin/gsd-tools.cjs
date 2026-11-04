@@ -2915,12 +2915,18 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * swallowed so the legacy result is unchanged. The key rule lives in hooks/lib/isolation-sentinel.js
    * (the reader); if that module is unreachable from this install layout, only the legacy file is written.
    */
-  function writeKeyedDispatchIsolationRecord(cwd, sentinelDir, payload) {
+  function writeKeyedDispatchIsolationRecord(cwd, sentinelDir, payload, clock) {
     const nodePath = require('path');
     const nodeFs = require('fs');
     try {
-      const { keyedSentinelPath, KEYED_SENTINEL_DIR } = require('../../hooks/lib/isolation-sentinel.js');
-      const keyedFile = keyedSentinelPath(cwd, payload.phase, payload.plan);
+      const {
+        keyedSentinelPath, phaseSentinelPath, KEYED_SENTINEL_DIR, AGED_NONE_MAX_MS,
+      } = require('../../hooks/lib/isolation-sentinel.js');
+      // A plan-scoped decision lands at <phase>--<plan>.json; a plan-less one (the phase-level
+      // degrade) at <phase>.json, so concurrent phase-level orchestrators keep separate records.
+      const keyedFile = payload.plan
+        ? keyedSentinelPath(cwd, payload.phase, payload.plan)
+        : phaseSentinelPath(cwd, payload.phase);
       if (!keyedFile) return;
       const keyedDir = nodePath.join(cwd, KEYED_SENTINEL_DIR);
       nodeFs.mkdirSync(keyedDir, { recursive: true });
@@ -2928,13 +2934,20 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           nodePath.relative(nodeFs.realpathSync(sentinelDir), nodeFs.realpathSync(keyedDir)) !== 'dispatch-isolation') {
         return;
       }
-      const tmpPath = `${keyedFile}.tmp-${process.pid}-${Date.now()}`;
-      nodeFs.writeFileSync(tmpPath, JSON.stringify(payload));
-      nodeFs.renameSync(tmpPath, keyedFile);
-      // Prune records older than the longest any record can still govern (24h, #5479).
-      const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+      const tmpPath = `${keyedFile}.tmp-${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`;
+      try {
+        nodeFs.writeFileSync(tmpPath, JSON.stringify(payload), { flag: 'wx' });
+        nodeFs.renameSync(tmpPath, keyedFile);
+      } catch (writeError) {
+        try { nodeFs.unlinkSync(tmpPath); } catch (_) { /* best-effort cleanup */ }
+        throw writeError;
+      }
+      // Prune records and orphaned temp files older than the longest any record can still govern
+      // (AGED_NONE_MAX_MS, #5479), measured on the injected clock.
+      const cutoff = clock.now() - AGED_NONE_MAX_MS;
+      const written = nodePath.basename(keyedFile);
       for (const name of nodeFs.readdirSync(keyedDir)) {
-        if (!name.endsWith('.json')) continue;
+        if (name === written || !(name.endsWith('.json') || name.includes('.json.tmp-'))) continue;
         try {
           const file = nodePath.join(keyedDir, name);
           if (nodeFs.lstatSync(file).mtimeMs < cutoff) nodeFs.unlinkSync(file);
@@ -2953,7 +2966,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * per-plan degrade call site and back-compat/tests) share exactly one
    * write implementation. Never throws — returns `{ recorded, path, error? }`.
    */
-  function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null }) {
+  function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null }, { clock = require('./lib/clock.cjs').realClock } = {}) {
     const nodePath = require('path');
     const nodeFs = require('fs');
     const sentinelDir = nodePath.join(cwd, '.gsd');
@@ -2963,7 +2976,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       harness_flag: harnessFlag || null,
       phase: phase || null,
       plan: plan || null,
-      written_at: Date.now(),
+      written_at: clock.now(),
     };
     try {
       nodeFs.mkdirSync(sentinelDir, { recursive: true });
@@ -3038,7 +3051,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       const tmpPath = `${sentinelPath}.tmp-${process.pid}-${Date.now()}`;
       nodeFs.writeFileSync(tmpPath, JSON.stringify(payload));
       nodeFs.renameSync(tmpPath, sentinelPath);
-      writeKeyedDispatchIsolationRecord(cwd, sentinelDir, payload);
+      writeKeyedDispatchIsolationRecord(cwd, sentinelDir, payload, clock);
       return { recorded: true, path: '.gsd/dispatch-isolation-sentinel.json' };
     } catch (err) {
       return { recorded: false, path: '.gsd/dispatch-isolation-sentinel.json', error: err && err.message };

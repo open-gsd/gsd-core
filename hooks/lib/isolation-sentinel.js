@@ -85,6 +85,16 @@ function keyedSentinelPath(root, phase, plan) {
   return path.join(root, KEYED_SENTINEL_DIR, `${phase}--${plan}.json`);
 }
 
+/**
+ * #5682: phase-level keyed record path (`<phase>.json`, written when a decision carries no plan),
+ * or null unless the phase is a safe key. Two orchestrators recording plan-less decisions for
+ * different phases each keep their own file.
+ */
+function phaseSentinelPath(root, phase) {
+  if (!isSafeSentinelKey(phase)) return null;
+  return path.join(root, KEYED_SENTINEL_DIR, `${phase}.json`);
+}
+
 // #3045 SECURITY F2 fix: how long a written sentinel is trusted as "this
 // dispatch's decision" before a reader falls back to the conservative
 // registry+config check.
@@ -198,27 +208,41 @@ function resolveSentinelRoot(cwd) {
 function readSentinel(cwd, { clock = Date, dispatchIds = null } = {}) {
   const root = resolveSentinelRoot(cwd);
 
-  // #5682: the record keyed by this dispatch's own phase/plan, when it has one and the file
-  // agrees with its own key. A fresh keyed record wins outright; a stale one is remembered so the
-  // existing aged-none path can still see it unless a fresh, applicable legacy record exists.
-  let keyed = null;
-  const keyedFile = dispatchIds ? keyedSentinelPath(root, dispatchIds.phase, dispatchIds.plan) : null;
-  if (keyedFile) {
-    const candidate = parseSentinelFile(keyedFile, clock);
-    if (
-      candidate.present && !candidate.malformed &&
-      candidate.phase === dispatchIds.phase && candidate.plan === dispatchIds.plan
-    ) {
-      if (!candidate.stale) return candidate;
-      keyed = candidate;
+  // #5682: candidates are the record keyed by this dispatch's own phase/plan, the phase-level
+  // record for its phase, and the single legacy slot. A keyed candidate counts only when it is
+  // well-formed and its contents agree with its own filename key; the legacy slot only when it
+  // applies to this dispatch. Among FRESH candidates the latest `writtenAt` wins, so a newer
+  // phase-level decision is not shadowed by an older plan-scoped one (and vice versa).
+  const keyedCandidates = [];
+  if (dispatchIds) {
+    const planFile = keyedSentinelPath(root, dispatchIds.phase, dispatchIds.plan);
+    if (planFile) {
+      const c = parseSentinelFile(planFile, clock);
+      if (c.present && !c.malformed && c.phase === dispatchIds.phase && c.plan === dispatchIds.plan) keyedCandidates.push(c);
+    }
+    const phaseFile = phaseSentinelPath(root, dispatchIds.phase);
+    if (phaseFile) {
+      const c = parseSentinelFile(phaseFile, clock);
+      if (c.present && !c.malformed && c.phase === dispatchIds.phase && c.plan === null) keyedCandidates.push(c);
     }
   }
 
   const legacy = parseSentinelFile(sentinelPath(root), clock);
-  if (keyed && !(legacy.present && !legacy.stale && sentinelAppliesToDispatch(legacy, dispatchIds))) {
-    return keyed;
-  }
+  const legacyApplies = legacy.present && !legacy.malformed && sentinelAppliesToDispatch(legacy, dispatchIds);
+
+  const fresh = keyedCandidates.filter((c) => !c.stale);
+  if (legacyApplies && !legacy.stale) fresh.push(legacy);
+  if (fresh.length > 0) return latestWritten(fresh);
+
+  // Nothing fresh: a stale keyed record still feeds the aged-none path; otherwise the legacy
+  // slot is returned exactly as before.
+  if (keyedCandidates.length > 0) return latestWritten(keyedCandidates);
   return legacy;
+}
+
+/** The candidate with the greatest `writtenAt` (ties keep the earlier-listed, i.e. most specific). */
+function latestWritten(candidates) {
+  return candidates.reduce((best, c) => (c.writtenAt > best.writtenAt ? c : best));
 }
 
 /** Parse and validate one sentinel file. Never throws. Shape: see `readSentinel`. */
@@ -398,6 +422,7 @@ module.exports = {
   KEYED_SENTINEL_DIR,
   isSafeSentinelKey,
   keyedSentinelPath,
+  phaseSentinelPath,
   SENTINEL_STALE_MS,
   AGED_NONE_MAX_MS,
   sentinelPath,
