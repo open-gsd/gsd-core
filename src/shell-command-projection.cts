@@ -1418,6 +1418,17 @@ export interface PlatformWriteOptions extends ContentNormalizationOptions {
   };
   /** Test seam for the Windows device branch (platform and fs calls), so it runs on POSIX. Not for production callers. */
   deviceSeams?: WindowsDeviceSeams;
+  /**
+   * #5831: publish only by temp file + rename, never by a direct write. On ANY
+   * failure (the temp-file write, including one that created the file and then
+   * failed partway, or the rename) the temp file is removed and the error is
+   * thrown, so the destination keeps its previous bytes (or stays absent).
+   * Without it, `platformWriteSync` falls back to a direct write when the temp
+   * file cannot be written or atomically renamed, and that direct write
+   * truncates the destination before it can fail. Use it when the destination
+   * holds data that exists nowhere else.
+   */
+  atomic?: boolean;
 }
 
 export function normalizeContent(filePath: string, content: string, opts: PlatformWriteOptions = {}): { content: string; encoding: BufferEncoding } {
@@ -2106,6 +2117,10 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   }
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   walkedParent ??= statParent();
+  if (opts.atomic === true) {
+    publishViaTempFile(filePath + '.tmp.' + process.pid, filePath, normalized, encoding);
+    return;
+  }
 
   // Step 1: write the sibling tmp file, created exclusively under an unpredictable name so a
   // planted symlink or FIFO is never followed or blocked on (#5759). If THIS fails, nothing
@@ -2175,6 +2190,49 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   // Atomic publish is genuinely impossible here (e.g. EXDEV cross-device move):
   // fall back to a direct write to preserve write availability.
   writeTargetDirect(filePath, normalized, encoding, walked, opts.writeSeams?.afterDirectLstat, checkParent);
+}
+
+/**
+ * #5831: write `data` to `tmpPath` and rename it over `filePath`, with no
+ * direct-write fallback. The temp file is removed on any failure — also a
+ * write that created it and failed partway — and the error is thrown; the
+ * destination is then exactly as it was.
+ */
+function publishViaTempFile(tmpPath: string, filePath: string, data: string | Buffer, encoding?: BufferEncoding): void {
+  try {
+    if (typeof data === 'string') fs.writeFileSync(tmpPath, data, encoding);
+    else fs.writeFileSync(tmpPath, data);
+    const renameErr = atomicRenameWithRetry(tmpPath, filePath);
+    if (renameErr !== null) throw renameErr;
+  } catch (err) {
+    try { fs.unlinkSync(tmpPath); } catch { /* never created, or already gone */ }
+    throw err;
+  }
+}
+
+/**
+ * #5831: put `filePath` back to an exact earlier state — `bytes` written
+ * verbatim (no normalization) through a temp file and rename, or the file
+ * removed when `bytes` is null (it did not exist). Throws on failure, leaving
+ * no temp file behind; the destination is then as it was before the call.
+ */
+export function platformRestoreFileSync(filePath: string, bytes: Buffer | null): void {
+  if (bytes === null) {
+    fs.rmSync(filePath, { force: true });
+    return;
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  publishViaTempFile(filePath + '.restore.' + process.pid, filePath, bytes);
+}
+
+/** #5831: a file's exact bytes, or null when it does not exist. Other read errors throw. */
+export function platformReadBytesSync(filePath: string): Buffer | null {
+  try {
+    return fs.readFileSync(filePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
 }
 
 export function platformReadSync(filePath: string, opts: { encoding?: BufferEncoding; required?: boolean } = {}): string | null {
