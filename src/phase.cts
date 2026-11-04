@@ -7806,7 +7806,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // pin would all rewind it. A first-time completion (box unchecked, or
         // STATE not past N, #2028 out-of-order) still transitions.
         const stateAlreadyPast = phaseWasAlreadyComplete
-          && isStatePastPhase(originalStateContent, phaseNum, statePath);
+          && isStatePastPhase(originalStateContent, phaseNum, statePath, resolvePhaseIdConvention(cwd));
         let stateContent = originalStateContent;
 
         // ADR-1769 Phase 3: the STATE.md field-update policy (Current Phase

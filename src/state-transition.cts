@@ -2235,8 +2235,11 @@ function nextPhaseWording(disk: NextPhaseDisk | null): { status: string; current
  * position; the caller combines this with "the phase is already complete in
  * ROADMAP.md" so a first-time out-of-order completion (#2028) still
  * transitions. An unparseable or absent current phase is "not past".
+ * #5676: under `milestone-prefixed` the id is the whole `M-NN` (`3-02`, not `3`).
  */
-export function isStatePastPhase(content: string, phaseNum: string | number, sourcePath?: string): boolean {
+export function isStatePastPhase(
+  content: string, phaseNum: string | number, sourcePath?: string, convention?: string | null,
+): boolean {
   const fm = extractFrontmatter(content, sourcePath) as Record<string, unknown>;
   const fromFm = fm['current_phase'];
   let raw: string | null = typeof fromFm === 'string' || typeof fromFm === 'number' ? String(fromFm) : null;
@@ -2245,7 +2248,9 @@ export function isStatePastPhase(content: string, phaseNum: string | number, sou
     raw = stateExtractField(body, 'Current Phase') || stateExtractField(body, 'Phase') || null;
   }
   // `Phase 4` / `phase 4 of 9` name phase 4 as surely as `4 of 9` does.
-  const m = raw === null ? null : /^\s*(?:phase\s+)?(\d+(?:\.\d+)*)/i.exec(raw);
+  const re = convention === 'milestone-prefixed'
+    ? /^\s*(?:phase\s+)?(\d+(?:-\d+)?(?:\.\d+)*)/i : /^\s*(?:phase\s+)?(\d+(?:\.\d+)*)/i;
+  const m = raw === null ? null : re.exec(raw);
   if (!m) return false;
   return comparePhaseNum(m[1], String(phaseNum)) > 0;
 }
