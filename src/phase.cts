@@ -99,6 +99,7 @@ import roadmapParserMod = require('./roadmap-parser.cjs');
 const {
   stripShippedMilestones,
   extractCurrentMilestone,
+  extractCurrentMilestoneScoped,
   currentMilestoneRawRanges,
   withPhaseSection,
   editCurrentMilestone,
@@ -1904,6 +1905,30 @@ function assertBracketGeneratedIdentity(
 }
 
 /**
+ * #5726: the current-milestone window for a verb that WRITES to the ROADMAP.
+ * When STATE.md names a milestone that has no heading in a ROADMAP carrying
+ * versioned milestones, the window owner falls back to the whole unshipped
+ * roadmap (scope UNSCOPED, `unresolvedMilestone` set), and number allocation,
+ * the `Depends on` line and the insert target would run over every milestone.
+ * ADR-3180: that is a non-answer, refused where it is destructive. Refuses
+ * before any write, naming the milestone; every other scope (a real heading,
+ * a free-form legacy ROADMAP, no milestone field) returns the window unchanged.
+ * Read-only readers keep calling `extractCurrentMilestone` and keep degrading.
+ */
+function currentMilestoneWindowOrRefuse(rawContent: string, cwd: string, command: string): string {
+  const { value, unresolvedMilestone } = extractCurrentMilestoneScoped(rawContent, cwd);
+  if (unresolvedMilestone) {
+    error(
+      `${command}: STATE.md names milestone "${unresolvedMilestone}", but ROADMAP.md has no milestone heading for it, `
+        + 'so the current milestone window cannot be resolved. Refusing to use the whole roadmap, which would number '
+        + 'the phase and link its dependencies against other milestones. Add the milestone heading to ROADMAP.md '
+        + 'or correct the milestone field in STATE.md, then retry.',
+    );
+  }
+  return value;
+}
+
+/**
  * #4304: refuse a bracket `phase add` / `add-batch` whose located milestone
  * window is a decoy. A non-milestone heading carrying the active version
  * token ahead of the real milestone heading (`## Goals for v2.0` before
@@ -1985,8 +2010,8 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
 
   const { newPhaseId, dirName, roadmapEntry } = withPlanningLock(cwd, () => {
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
+    const content = currentMilestoneWindowOrRefuse(rawContent, cwd, 'phase add');
     if (bracketContext) assertBracketAddWindowLocated(rawContent, cwd, bracketContext, 'phase add');
-    const content = extractCurrentMilestone(rawContent, cwd);
 
     let _newPhaseId: number | string;
 
@@ -2103,8 +2128,8 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
 
   const results = withPlanningLock(cwd, () => {
     let rawContent = fs.readFileSync(roadmapPath, 'utf-8');
+    const content = currentMilestoneWindowOrRefuse(rawContent, cwd, 'phase add-batch');
     if (bracketContext) assertBracketAddWindowLocated(rawContent, cwd, bracketContext, 'phase add-batch');
-    const content = extractCurrentMilestone(rawContent, cwd);
     let maxPhase = 0;
     if (bracketContext) {
       const used = collectBracketPhaseNumbers(
@@ -2555,7 +2580,7 @@ function cmdPhaseInsert(
 
   const { decimalPhase, dirName, roadmapEntry } = withPlanningLock(cwd, () => {
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
-    const content = extractCurrentMilestone(rawContent, cwd);
+    const content = currentMilestoneWindowOrRefuse(rawContent, cwd, 'phase insert');
 
     // #4304: canonicalize a bracket argument
     // through the SAME adapter `phase remove` uses

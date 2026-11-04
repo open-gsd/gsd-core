@@ -1276,7 +1276,7 @@ function readStateMilestoneScalar(stateRaw: string): string | null {
  *   expose it (its 20 callers are not the scope-axis consumers; V005's
  *   router site and `getMilestonePhaseFilter` resolve and thread it).
  */
-function extractCurrentMilestoneScoped(content: string, cwd?: string, ws?: string | null, phaseIdConvention?: string | null): { value: string; scope: Scope } {
+function extractCurrentMilestoneScoped(content: string, cwd?: string, ws?: string | null, phaseIdConvention?: string | null): { value: string; scope: Scope; unresolvedMilestone?: string } {
   if (!cwd) {
     // Row 1: a deliberate unscoped read (no cwd supplied) is a real answer —
     // the caller asked for no scoping, so whole-document is COMPLETE.
@@ -1285,6 +1285,9 @@ function extractCurrentMilestoneScoped(content: string, cwd?: string, ws?: strin
 
   let version: string | null = null;
   let stateAssertsNoMilestone = false;
+  // #5726: set only when the version came from STATE.md's `milestone:` field,
+  // not from the in-progress bullet guess below.
+  let versionFromState = false;
   try {
     const statePath = path.join(planningDir(cwd, ws), 'STATE.md');
     const stateRaw = platformReadSync(statePath);
@@ -1293,6 +1296,7 @@ function extractCurrentMilestoneScoped(content: string, cwd?: string, ws?: strin
       if (milestoneScalar !== null) {
         const classified = classifyMilestoneScalar(milestoneScalar);
         version = classified.version;
+        versionFromState = classified.version !== null;
         stateAssertsNoMilestone = classified.explicitNull;
       }
     }
@@ -1387,17 +1391,23 @@ function extractCurrentMilestoneScoped(content: string, cwd?: string, ws?: strin
       }
     }
     const value = stripShippedMilestones(content);
-    return {
-      value,
-      scope: classifyMilestoneWindow({
-        readable: true,
-        versionResolved,
-        hasVersionedMilestones: versionedMilestonesPresent,
-        headingFound: false,
-        windowHasPhaseEntries: hasPhaseEntries(value, phaseIdConvention),
-        documentHasPhaseEntries,
-      }),
-    };
+    const scope = classifyMilestoneWindow({
+      readable: true,
+      versionResolved,
+      hasVersionedMilestones: versionedMilestonesPresent,
+      headingFound: false,
+      windowHasPhaseEntries: hasPhaseEntries(value, phaseIdConvention),
+      documentHasPhaseEntries,
+    });
+    // #5726 (row 5): STATE.md names a milestone and the ROADMAP, which carries
+    // versioned milestone headings, has none for it. `value` is then the whole
+    // unshipped roadmap, so a write verb must not allocate against it. Reported
+    // only here, by the window's one owner; a free-form legacy ROADMAP (no
+    // versioned headings) and a bullet-guessed version stay a plain UNSCOPED.
+    if (scope === SCOPE.UNSCOPED && versionFromState && versionedMilestonesPresent) {
+      return { value, scope, unresolvedMilestone: version };
+    }
+    return { value, scope };
   }
 
   const allMatches = headingMatches;
