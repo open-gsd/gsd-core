@@ -2191,11 +2191,14 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
     return targetPath;
   }
 
-  function hasGsdCheckUpdateHook(settings) {
+  // Whether SessionStart holds a GSD-managed hook, decided by the installer's own
+  // recognizer rather than by matching the command text.
+  const { isManagedHookCommand } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
+  function hasGsdSessionStartHook(settings) {
     const sessionStart = (settings.hooks && settings.hooks.SessionStart) || [];
     return sessionStart.some(
       entry => entry && Array.isArray(entry.hooks) &&
-        entry.hooks.some(h => h && typeof h.command === 'string' && h.command.includes('gsd-check-update'))
+        entry.hooks.some(h => h && isManagedHookCommand(h.command, { surface: 'settings-json', args: h.args }))
     );
   }
 
@@ -2223,7 +2226,7 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
           assert.strictEqual(result.exitCode, 0, `installer exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`);
           const after = JSON.parse(fs.readFileSync(targetPath, 'utf8'));
           assert.deepStrictEqual(after.env, USER_SETTINGS.env, 'user settings must survive the write-through');
-          assert.ok(hasGsdCheckUpdateHook(after), 'GSD hooks must land in the link target');
+          assert.ok(hasGsdSessionStartHook(after), 'GSD hooks must land in the link target');
         } else {
           // 1, not merely non-zero: a timed-out or killed installer reports null.
           assert.strictEqual(result.exitCode, 1,
@@ -2270,9 +2273,9 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
           assert.strictEqual(result.exitCode, 0, `installer exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`);
           const sharedAfter = JSON.parse(fs.readFileSync(targetPath, 'utf8'));
           assert.deepStrictEqual(sharedAfter.env, USER_SETTINGS.env, 'user settings must survive in the link target');
-          assert.strictEqual(hasGsdCheckUpdateHook(sharedAfter), false, 'GSD entries must be stripped from the link target');
+          assert.strictEqual(hasGsdSessionStartHook(sharedAfter), false, 'GSD entries must be stripped from the link target');
           const localAfter = JSON.parse(fs.readFileSync(localSettingsPath, 'utf8'));
-          assert.ok(hasGsdCheckUpdateHook(localAfter), 'GSD entries must be relocated to settings.local.json');
+          assert.ok(hasGsdSessionStartHook(localAfter), 'GSD entries must be relocated to settings.local.json');
           assert.ok(localAfter.permissions.allow.includes('Bash(npm test)'),
             'user permissions in settings.local.json must survive');
         } else {
@@ -2317,7 +2320,7 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
           t.skip('symlink creation unsupported on this platform/privilege');
           return;
         }
-        assert.ok(hasGsdCheckUpdateHook(JSON.parse(installedSettings)), 'setup: the link target must hold GSD hooks');
+        assert.ok(hasGsdSessionStartHook(JSON.parse(installedSettings)), 'setup: the link target must hold GSD hooks');
 
         const result = runInstaller(root, ['--claude', '--global', '--uninstall', '--config-dir', claudeDir], { optIn });
 
@@ -2328,7 +2331,7 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
           assert.strictEqual(fs.existsSync(gsdCoreDir), false, 'uninstall must remove gsd-core/');
           const after = JSON.parse(fs.readFileSync(targetPath, 'utf8'));
           assert.deepStrictEqual(after.env, USER_SETTINGS.env, 'user settings must survive in the link target');
-          assert.strictEqual(hasGsdCheckUpdateHook(after), false, 'GSD hooks must be removed from the link target');
+          assert.strictEqual(hasGsdSessionStartHook(after), false, 'GSD hooks must be removed from the link target');
         } else {
           // 1, not merely non-zero: a timed-out or killed uninstall reports null.
           assert.strictEqual(result.exitCode, 1,
