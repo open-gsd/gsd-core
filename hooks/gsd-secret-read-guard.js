@@ -1183,11 +1183,20 @@ function curlAtValueOpensSecret(v) {
 // `-sd@f`, `-Fk=@f`) needs no reading of its own: option letters hold no `=`
 // or `@`, so the form reading and the first-`@` reading find its file, and
 // where an `=` in the name stops the latter (`-d@a=b/f`), the file's last
-// path segment is the word's, judged as for every operand. The cost is a
-// fail-safe denial where the word is read another way than the option curl
-// gives it (`-d k=@.env` read as a form value, a URL's `user@` part read as
-// `name@file`), pinned in tests.
+// path segment is the word's, judged as for every operand. curl 8.23 also
+// takes `--option=value`, so the value after a leading `--name=` is read the
+// same way (`--form=k=@f`, `--data-urlencode=k@f`), as well as the whole word.
+// The cost is a fail-safe denial where the word is read another way than the
+// option curl gives it (`-d k=@.env` read as a form value, a URL's `user@` part
+// read as `name@file`), pinned in tests.
 function curlValueNamesSecret(text) {
+  const option = CURL_LONG_OPTION_RE.exec(text);
+  return curlWordNamesSecret(text) || (option !== null && curlWordNamesSecret(text.slice(option[0].length)));
+}
+
+const CURL_LONG_OPTION_RE = /^--[A-Za-z0-9-]+=/;
+
+function curlWordNamesSecret(text) {
   const closers = text.includes('"') ? curlQuoteClosers(text) : null;
   for (const g of CURL_FORM_GRAMMARS) {
     if (curlFormOpensSecret(text, g, closers)) return true;
