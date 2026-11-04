@@ -1187,6 +1187,8 @@ a git repo — "unknown" is reported as unknown, not as fresh.
 
 **Verification report status outside the closed set (`W030`).** A phase's `*-VERIFICATION.md` may carry only `status: passed`, `gaps_found`, or `human_needed`. Any other value — `verified`, `Passed`, `stale`, a number — is a hard error for every other command that reads the report (`verification_status_invalid`); `/gsd-health` instead reports the file as a WARNING naming the value and the accepted set, so the check itself never fails on the defect it diagnoses. Set the report's frontmatter `status:` to an accepted value, or delete the report and re-run the phase's verification with `/gsd-execute-phase` (a deleted report reads `missing`, which routes there). Not auto-fixable. See [`verification status`](CLI-TOOLS.md#verification-status-the-verification-verdict-5118).
 
+**STATE.md far over its line target (`W031`).** STATE.md is a digest with a 100-line target (`templates/state.md`). When the file is more than 3x that (over 300 lines), health adds a WARNING naming the line count. Run `gsd-tools state prune` to archive old Decisions and Recently Completed entries, and `/gsd-cleanup` to archive quick-task history (quick archival stays opt-in). Not auto-fixable: `--repair` never touches STATE.md for this warning, because which history to archive is your call.
+
 **`--repair` does not apply destructive fixes.** Resetting config.json
 (`resetConfig`) and regenerating STATE.md (`regenerateState`) are destructive
 — the former loses custom settings, the latter loses session history — so

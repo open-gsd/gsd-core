@@ -103,6 +103,15 @@ export const STATUS_LIFECYCLE_ENUM = Object.freeze([
   'completed',
 ] as const);
 
+/**
+ * STATE.md's documented size target, in lines (#5830). The one code-side
+ * copy of the number `gsd-core/templates/state.md`'s `<size_constraint>`,
+ * `gsd-core/workflows/execute-plan.md` and `docs/reference/state-md.md` state
+ * in prose ("Keep STATE.md under 100 lines"). The health rule W031 warns when
+ * STATE.md is more than 3x this target.
+ */
+export const STATE_MD_LINE_TARGET = 100;
+
 // ─── The schema row shape ───────────────────────────────────────────────────
 
 export type StateFieldSchema = {
