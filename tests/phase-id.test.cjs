@@ -1488,6 +1488,55 @@ describe('phaseKeyFrom* — one key space for directories and prose', () => {
     assert.strictEqual(phaseId.phaseKeyFromProse(undefined), null);
   });
 
+  // #5675: under `milestone-prefixed` the phase id is the whole `M-NN`. Read without the
+  // convention, `3-01` and `3-02` both keyed as `03`, so every phase of a milestone collapsed
+  // onto one key while their directories keyed `03-01` / `03-02`.
+  test('#5675: under milestone-prefixed a prose M-NN key equals its directory key and is distinct per phase', () => {
+    const MP = 'milestone-prefixed';
+    const first = phaseId.phaseKeyFromProse('3-01. Create layer', undefined, MP);
+    const second = phaseId.phaseKeyFromProse('3-02. Validator', undefined, MP);
+    assert.strictEqual(first, phaseId.phaseKeyFromDir('3-01-create-layer', MP));
+    assert.strictEqual(second, phaseId.phaseKeyFromDir('3-02-validator', MP));
+    assert.strictEqual(first, '03-01');
+    assert.strictEqual(second, '03-02');
+    assert.notStrictEqual(first, second);
+    // The STATE.md writer shapes and decorated table cells read the same phase.
+    for (const prose of [
+      '3-02 — Validator (aside)',
+      '3-02 (Validator) — EXECUTING',
+      '**3-02. Validator**',
+      'Phase 3-02: Validator',
+      '03-02. Validator',
+    ]) {
+      assert.strictEqual(phaseId.phaseKeyFromProse(prose, undefined, MP), '03-02', prose);
+    }
+  });
+
+  test('#5675: the M-NN segment boundary (bare milestone, one segment, a sub-phase of it)', () => {
+    const MP = 'milestone-prefixed';
+    const cases = [
+      ['3. Bare', '3-bare', '03'],
+      ['3-01. One', '3-01-one', '03-01'],
+      ['3-01.1 Sub', '3-01.1-sub', '03-01.1'],
+    ];
+    for (const [prose, dir, key] of cases) {
+      assert.strictEqual(phaseId.phaseKeyFromProse(prose, undefined, MP), key, prose);
+      assert.strictEqual(phaseId.phaseKeyFromDir(dir, MP), key, dir);
+    }
+    assert.strictEqual(phaseId.phaseKeyFromProse('Not a phase', undefined, MP), null);
+    assert.strictEqual(phaseId.phaseKeyFromProse(null, undefined, MP), null);
+    assert.strictEqual(phaseId.phaseKeyFromProse(undefined, undefined, MP), null);
+  });
+
+  test('#5675: every other convention keeps the leading-integer prose key', () => {
+    for (const convention of [undefined, null, '', 'bracket', 'legacy']) {
+      assert.strictEqual(phaseId.phaseKeyFromProse('3-01. Create layer', undefined, convention), '03', String(convention));
+      assert.strictEqual(phaseId.phaseKeyFromProse('3-02. Validator', undefined, convention), '03', String(convention));
+    }
+    // The two-argument caller shape is untouched.
+    assert.strictEqual(phaseId.phaseKeyFromProse('3-01. Create layer'), '03');
+  });
+
   test('parentPhaseKey resolves a sub-phase to its parent and a top-level to null', () => {
     assert.strictEqual(phaseId.parentPhaseKey('30.1'), '30');
     assert.strictEqual(phaseId.parentPhaseKey('05.12'), '05');
