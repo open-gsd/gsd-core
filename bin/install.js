@@ -2659,7 +2659,11 @@ function convertSlashCommandsToTraeSkillMentions(content) {
   });
 }
 
-function convertClaudeToTraeMarkdown(content) {
+function convertClaudeToTraeMarkdown(content, pathPrefix) {
+  return runtimeArtifactConversion._shieldEmittedPrefix(content, pathPrefix, convertClaudeToTraeMarkdownBody);
+}
+
+function convertClaudeToTraeMarkdownBody(content) {
   let converted = convertSlashCommandsToTraeSkillMentions(filterRuntimeNotesForTarget(content, 'trae'));
   converted = converted.replace(/\bBash\(/g, 'Shell(');
   converted = converted.replace(/\bEdit\(/g, 'StrReplace(');
@@ -2765,8 +2769,8 @@ function convertClaudeCommandToTraeSkill(content, skillName) {
   return `${fm}\n${body}`;
 }
 
-function convertClaudeAgentToTraeAgent(content) {
-  let converted = convertClaudeToTraeMarkdown(content);
+function convertClaudeAgentToTraeAgent(content, _isGlobal, meta) {
+  let converted = convertClaudeToTraeMarkdown(content, meta && meta.pathPrefix);
 
   const { frontmatter, body } = extractFrontmatterAndBody(converted);
   if (!frontmatter) return converted;
@@ -7949,7 +7953,7 @@ const RUNTIME_CONTENT_DISPATCH = {
     },
   },
   trae: {
-    md: (content) => convertClaudeToTraeMarkdown(content),
+    md: (content, ctx) => convertClaudeToTraeMarkdown(content, ctx && ctx.pathPrefix),
     js: (content) => {
       content = content.replace(/\/gsd:([a-z0-9-]+)/g, (_, commandName) => {
         return `/gsd-${commandName}`;
