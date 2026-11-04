@@ -111,6 +111,9 @@ node gsd-tools.cjs phase add <description>
 
 # Insere fase decimal após a existente
 node gsd-tools.cjs phase insert <after> <description>
+# add, add-batch and insert also write the phase's ROADMAP record (#5221): a checklist entry
+# after the active checklist, else a progress-table row, else no readable record; the output's
+# roadmap_entry says which ("checklist" | "progress_table" | "none")
 
 # Remove fase, renumera as subsequentes
 node gsd-tools.cjs phase remove <phase> [--force]
@@ -137,6 +140,8 @@ node gsd-tools.cjs roadmap get-phase <phase>
 
 # Análise completa do roadmap com status em disco
 node gsd-tools.cjs roadmap analyze
+# roadmap_record (#5221): phase number -> true when every ROADMAP record of it (checklist entry, progress-table Status) reads complete;
+# absent when unrecorded, null when the phase table is unreadable. /gsd-ship ships only a true phase.
 
 # Atualiza linha da tabela de progresso a partir do disco
 node gsd-tools.cjs roadmap update-plan-progress <N>

@@ -1,13 +1,23 @@
 /**
  * Pure phase-id parsing/matching helpers — normalize, token match,
- * milestone/phase-dir id parsing, phase-markdown regex builders.
+ * milestone/phase-dir id parsing, phase-markdown regex builders, and identity
+ * indexes over caller-supplied roadmap text. No filesystem or config reads.
  *
  * Extracted from core.cts (ADR-857 rollout phase 2a / issue #865).
  * The hand-written bodies are preserved byte-for-behaviour; only the module
  * boundary moved. The core.cjs re-export spine was retired in epic #1267;
  * callers import phase-id helpers from phase-id.cjs directly.
  *
+ * Custom directory lookup decision table (#5186):
+ *   1. An exact physical basename selects that directory and reports its owner.
+ *   2. Exact recorded IDs win; a unique case/padding alias may name a record.
+ *      Multiple alias records remain ambiguous rather than last-write-wins.
+ *   3. Markerless reads use known heading/ID prefixes; mutations refuse when
+ *      more than one owner fits. Marked segment-prefix pairs are independent.
+ *   4. Unrecorded numeric and bracket queries keep their legacy matching paths.
+ *
  * Dependencies:
+ *   - ./markdown-sectionizer.cjs (tokenizeHeadings over supplied roadmap text)
  *   - ./pattern.cjs (escapeRegex — #3212 Phase 1 seam; this module is no
  *     longer the owner of pattern-escaping, only a consumer)
  *   - ./core-utils.cjs (generateSlugInternal — #3883/ADR-3473 §8.3: the
@@ -23,7 +33,9 @@
  *     core-utils.cts's own getPhaseFileStats/plan-scan.cjs seam.
  */
 
+import { isBoxCharChecked, phaseEntryRegExp } from './phase-entry-grammar.cjs';
 import { escapeRegex } from './pattern.cjs';
+import { tokenizeHeadings } from './markdown-sectionizer.cjs';
 
 // ─── Phase-id helpers ─────────────────────────────────────────────────────────
 
@@ -64,7 +76,7 @@ const OPTIONAL_PHASE_TAG_SOURCE = '(?:\\s*\\([^)\\n]{0,200}\\))?';
 // introduced outside this module without a `// phase-id-owner:` justification.
 const PHASE_NUMBER_TOKEN_SOURCE = '\\d+[A-Z]?(?:\\.\\d+)*';
 
-// #4764: a phase REFERENCE in depends-on PROSE — the token in context, directly
+// #4764: a legacy phase REFERENCE in depends-on PROSE — the token in context, directly
 // following "Phase"/"Phases", with bare-token list continuation ("Phases 1 and 2",
 // "Phase 1, 2, and 3", "Phase 1-3"). Built HERE, beside the token grammar it is
 // anchored on, because two readers consume Depends-on prose (init.manager's
@@ -77,8 +89,9 @@ const PHASE_NUMBER_TOKEN_SOURCE = '\\d+[A-Z]?(?:\\.\\d+)*';
 // dependencies. The `-` separator deliberately extracts range ENDPOINTS only
 // ("Phase 1-3" → 1, 3) — the pre-#4764 behavior; interior enumeration stays
 // out (a range's middle is not written as a reference).
-const PHASE_DEP_REF_SOURCE =
-  `\\bphases?\\s+(${PHASE_NUMBER_TOKEN_SOURCE}(?:(?:\\s*,\\s*(?:and\\s+)?|\\s+and\\s+|\\s*&\\s*|\\s+(?:to|through)\\s+|\\s*-\\s*)${PHASE_NUMBER_TOKEN_SOURCE})*)`;
+const PHASE_DEP_TOKEN_LIST_SOURCE =
+  `${PHASE_NUMBER_TOKEN_SOURCE}(?:(?:\\s*,\\s*(?:and\\s+)?|\\s+and\\s+|\\s*&\\s*|\\s+(?:to|through)\\s+|\\s*-\\s*)${PHASE_NUMBER_TOKEN_SOURCE})*`;
+const PHASE_DEP_REF_SOURCE = `\\bphases?\\s+(${PHASE_DEP_TOKEN_LIST_SOURCE})`;
 
 // #2528 review: the CASE-FLEXIBLE renderings of the two sources above, for call
 // sites that scan directory names (where a project code or a variant suffix may
@@ -328,6 +341,45 @@ const PHASE_HEADING_BASELINE = Object.freeze({
  *
  * Pure: takes the resolved convention, never reads config.
  */
+// #4304: `bracketAlt`'s own alternation, factored out to a named
+// function so every write-side consumer that needs "this bracket, optionally
+// followed by the literal Phase label, then a digit" derives from the SAME
+// expression the read grammar compiles — never a hand-retyped `[ \t]+` /
+// case-sensitive copy. `idSrc` is the regex SOURCE for the bracket's
+// `{CODE}.{MM}` interior: the generic `BRACKET_ID_SRC` class (capturing or
+// not) for a classifier that must recognize ANY bracket identity, or one
+// escaped, already-known project/milestone pair (via
+// `bracketQualifiedIntroSrcFor` below) for a rewriter/detector that already
+// knows exactly which identity it means. Returns only the regex SOURCE —
+// every caller compiles it themselves (every reader uses the `i` flag), so
+// this composes with `g`, an outer capturing group, or a trailing literal
+// number.
+function bracketAltIntroSrcFor(idSrc: string): string {
+  // `[ \t]*` not `\s*`: `\s` spans newlines, so a bracket-terminated heading
+  // followed by a blank line and a digit-leading prose line read as one phase.
+  return `\\[${idSrc}\\][ \\t]*(?:Phase\\s+|(?=\\d))`;
+}
+
+/**
+ * #4304: the qualified-mention intro for ONE already-known
+ * bracket identity — `[{PROJECT}.{MM}]` (both escaped literals, not a
+ * class), optionally followed by the `Phase` label — built from
+ * `bracketAltIntroSrcFor` so a rewriter or detector anchoring a specific
+ * phase-number token right after it accepts exactly the spellings
+ * `phaseHeadingPrefixSrcFor`'s bracket alternative does: any case (compile
+ * with `i`), zero-or-more spaces, an optional `Phase` label. phase.cts's
+ * write-side bracket-identity regexes (the qualified-reference replacer, the
+ * qualified-mention detector) build their intro through this instead of
+ * re-typing `[ \t]+` / case-sensitive brackets independently of the read
+ * grammar. A hand-composed case-sensitive, `[ \t]+`-spaced copy would reject
+ * `[ck.02] 02:`, `[CK.02] PHASE 02:`, and the no-space `[CK.02]02:`, all of
+ * which `roadmap get-phase`, `roadmap analyze`, `phase insert` and
+ * `phase add` accept as real phases.
+ */
+function bracketQualifiedIntroSrcFor(project: unknown, milestone: unknown): string {
+  return bracketAltIntroSrcFor(`${escapeRegex(String(project))}\\.${escapeRegex(String(milestone))}`);
+}
+
 function phaseHeadingPrefixSrcFor(
   baseline: string,
   convention?: string | null,
@@ -338,8 +390,6 @@ function phaseHeadingPrefixSrcFor(
     : BASE_PHASE_LABEL_PREFIX_SRC;
   if (convention !== 'bracket') return base;
   const id = capturing ? `(${BRACKET_ID_SRC})` : BRACKET_ID_SRC;
-  // `[ \t]*` not `\s*`: `\s` spans newlines, so a bracket-terminated heading
-  // followed by a blank line and a digit-leading prose line read as one phase.
   // BOTH bracket forms are admitted at both baselines, and both CAPTURE. The
   // any-bracket base already matches `[GSD.999] Phase 07:` on its own — but
   // through the base alternative, which captures nothing, so the reader saw
@@ -347,8 +397,48 @@ function phaseHeadingPrefixSrcFor(
   // counted a labeled icebox heading as a real phase while the label-less form
   // beside it was excluded. Two derivations of one ROADMAP disagreed. The
   // bracket alternative is tried FIRST so it wins the capture.
-  const bracketAlt = `\\[${id}\\][ \\t]*(?:Phase\\s+|(?=\\d))`;
+  const bracketAlt = bracketAltIntroSrcFor(id);
   return `(?:${bracketAlt}|${base})`;
+}
+
+type PhaseChecklistLine = {
+  checked: boolean;
+  bracketId?: string;
+  phaseToken: string;
+};
+
+/**
+ * Parse one roadmap phase-checkbox row through the same anchored grammar used
+ * by readers and writers (#4982). The identity must be the first thing after
+ * the checkbox, tolerating only an optional `**`. Bracket mode captures the
+ * leading `[CODE.MM] PP` identity. Both paths treat whitespace or a colon
+ * immediately after the phase token as the boundary. Returning semantic fields
+ * keeps consumers from depending on capture-group offsets.
+ */
+function parsePhaseChecklistLine(
+  line: string,
+  convention?: string | null,
+  context?: PhaseDirectoryContext,
+): PhaseChecklistLine | null {
+  const capturesBracketId = convention === 'bracket';
+  const intro = phaseHeadingPrefixSrcFor(
+    PHASE_HEADING_BASELINE.LABEL_ONLY,
+    convention,
+    capturesBracketId,
+  );
+  const pattern = phaseEntryRegExp(
+    `${intro}(${context ? phaseScanTokenSource(context) : PHASE_NUMBER_TOKEN_SOURCE})`
+      + `${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s])`,
+    'i',
+    { state: 'captured' },
+  );
+  const match = pattern.exec(line);
+  if (!match) return null;
+  return {
+    checked: isBoxCharChecked(match[1]),
+    bracketId: capturesBracketId ? match[2] : undefined,
+    phaseToken: capturesBracketId ? match[3] : match[2],
+  };
 }
 
 /** Group layout for a `buildPhaseHeadingScanRegex` match, so a caller never computes its own offset. */
@@ -380,15 +470,65 @@ interface PhaseHeadingScanPattern {
  * This function answers "which phases exist in this content", not "does this
  * specific phase exist".
  */
-function buildPhaseHeadingScanRegex(baseline: string, convention?: string | null): PhaseHeadingScanPattern {
+function buildPhaseHeadingScanRegex(baseline: string, convention?: string | null, context?: PhaseDirectoryContext): PhaseHeadingScanPattern {
   const bracketGroup = convention === 'bracket' ? 1 : null;
   const phaseNumGroup = bracketGroup ? 2 : 1;
   const phaseNameGroup = phaseNumGroup + 1;
   const regex = new RegExp(
-    `^ {0,3}#{2,4}\\s*${phaseHeadingPrefixSrcFor(baseline, convention, true)}(${PHASE_NUMBER_TOKEN_SOURCE})${OPTIONAL_PHASE_TAG_SOURCE}:\\s*([^\\n]+)`,
+    `^ {0,3}#{2,4}\\s*${phaseHeadingPrefixSrcFor(baseline, convention, true)}(${context && convention !== 'bracket' ? phaseScanTokenSource(context) : PHASE_NUMBER_TOKEN_SOURCE})${OPTIONAL_PHASE_TAG_SOURCE}:\\s*([^\\n]+)`,
     'gim',
   );
   return { regex, bracketGroup, phaseNumGroup, phaseNameGroup };
+}
+
+/** One scan over roadmap text: which capture holds the bracket id (null when none) and which the phase number. */
+interface PhaseScan {
+  regex: RegExp;
+  idGroup: number | null;
+  numGroup: number;
+}
+
+/**
+ * Every scan that answers "which phase numbers does this roadmap text declare" (#5528): section
+ * headings, plus checklist bullets when `withBullets`. A non-bracket convention gets the plain
+ * `Phase N` heading scan and the checkbox-led `Phase N` bullet it always had.
+ *
+ * Under the bracket convention it also gets, beyond `buildPhaseHeadingScanRegex`'s `[ID] NN` and
+ * `[ID] Phase NN` headings: the word-first heading `Phase [ID] NN`; and a bullet whose bracket IS
+ * the id (`- [GSD.02] 03: X`, no checkbox). The checkbox of the other bullet shape may not itself
+ * be a bracket id, or `- [GSD.999] Phase 07` would read `[GSD.999]` as a checkbox and drop the id
+ * that marks it an icebox row. A bullet is one line, so its label uses `[ \t]` where a heading's
+ * uses `\s`.
+ */
+function buildPhaseDeclarationScans(convention?: string | null, withBullets = true): PhaseScan[] {
+  const heading = buildPhaseHeadingScanRegex(PHASE_HEADING_BASELINE.LABEL_ONLY, convention);
+  const scans: PhaseScan[] = [{ regex: heading.regex, idGroup: heading.bracketGroup, numGroup: heading.phaseNumGroup }];
+  const bracket = convention === 'bracket';
+  // Under bracket a numbered-list item (`1. [ ] **[GSD.02] 05: n**`) is a checklist row too.
+  const bullet = bracket ? '^[ \\t]*(?:-|\\d+[.)])[ \\t]*' : '^[ \\t]*-[ \\t]*';
+  // Bracket ids may carry a letter suffix (`12A`), as the heading scan's phase token does.
+  const tail = bracket ? '(\\d+)(?=[A-Za-z]?(?:[:.\\s*]|$))' : '(\\d+)(?=[:.\\s*]|$)';
+  const checkbox = `\\[${bracket ? `(?!${BRACKET_ID_SRC}\\])` : ''}[^\\]]{0,200}\\][ \\t]*`;
+  if (!bracket) {
+    if (withBullets) scans.push({ regex: new RegExp(`${bullet}${checkbox}\\*{0,2}Phase[ \\t]+${tail}`, 'gim'), idGroup: null, numGroup: 1 });
+    return scans;
+  }
+  scans.push({ regex: new RegExp(`^ {0,3}#{2,4}\\s*Phase[ \\t]+\\[(${BRACKET_ID_SRC})\\][ \\t]*(${PHASE_NUMBER_TOKEN_SOURCE})${OPTIONAL_PHASE_TAG_SOURCE}\\s*:`, 'gim'), idGroup: 1, numGroup: 2 });
+  if (withBullets) {
+    const label = `(?:\\[(${BRACKET_ID_SRC})\\][ \\t]*(?:Phase[ \\t]+|(?=\\d))|Phase[ \\t]+)`;
+    scans.push({ regex: new RegExp(`${bullet}${checkbox}\\*{0,2}${label}${tail}`, 'gim'), idGroup: 1, numGroup: 2 });
+    // The word-first heading's bullet twin: `- [ ] Phase [GSD.02] 07:`.
+    scans.push({ regex: new RegExp(`${bullet}${checkbox}\\*{0,2}Phase[ \\t]+\\[(${BRACKET_ID_SRC})\\][ \\t]*${tail}`, 'gim'), idGroup: 1, numGroup: 2 });
+    // The checkbox forms above deliberately over-count a colon-less `- [ ] [GSD.02] 2026 notes` as phase 2026: a
+    // skipped number is harmless, a reused one is not, so do not "fix" them with a colon requirement.
+    // With no checkbox to vouch for it the number needs a `:`, a bold close or end of line, or a dash
+    // separator (`- [GSD.02] 05 - Name`), or `- [GSD.02] 2026 notes` is phase 2026.
+    scans.push({ regex: new RegExp(`${bullet}\\*{0,2}\\[(${BRACKET_ID_SRC})\\][ \\t]*(?:Phase[ \\t]+|(?=\\d))(\\d+)(?=[A-Za-z]?(?::|\\*{0,2}[ \\t]*$|[ \\t]+[-\u2013\u2014][ \\t]))`, 'gim'), idGroup: 1, numGroup: 2 });
+  }
+  // A dash-separated heading (`### [GSD.02] 05 - Name`) is outside the colon grammar the readers share, but still a declaration.
+  // `###`/`####` only: a `##` milestone heading (`## [CK.02] 2 - Foundation`) names the milestone, not a phase.
+  scans.push({ regex: new RegExp(`^ {0,3}#{3,4}\\s*\\[(${BRACKET_ID_SRC})\\][ \\t]*(\\d+)(?=[A-Za-z]?[ \\t]+[-\u2013\u2014][ \\t])`, 'gim'), idGroup: 1, numGroup: 2 });
+  return scans;
 }
 
 function stripProjectCodePrefix(value: unknown, caseInsensitive = true): string {
@@ -571,6 +711,147 @@ function parsePhaseId(input: string): PhaseId {
   throw new Error(`parsePhaseId: not a bracket phase id: ${JSON.stringify(input)}`);
 }
 
+/**
+ * Phase tokens referenced by one already-addressed Depends-on value.
+ *
+ * The non-bracket branch is planning-inspect's #4764 extractor byte-for-byte:
+ * its reference regex is case-insensitive but its token regex is not, so
+ * `Phase 1a` remains `1` while `Phase 1A` remains `1A`. The manager keeps its
+ * own pre-#4304 non-bracket extractor because that surface historically made
+ * both regexes case-insensitive. Only bracket mode shares the widened grammar.
+ * Bracket repositories additionally accept the four identity spellings their
+ * readers and writers expose: `[CODE.MM] NN`, `CODE.MM-NN`,
+ * `[CODE.MM] Phase NN`, and a value consisting only of bare `NN`. Qualified
+ * spellings retain project+milestone+phase identity in canonical display form,
+ * including every continuation token in one qualified list; bare tokens remain
+ * bare for active-milestone resolution by the consumer.
+ * Bracket identity recognition is composed from phaseHeadingPrefixSrcFor and
+ * parsePhaseId; this function owns no second bracket-id regex.
+ */
+type PhaseDependencyToken = {
+  kind: 'legacy' | 'qualified' | 'qualified-fallback' | 'identity' | 'bare';
+  referenceStart?: number;
+  start: number;
+  end: number;
+  token: string;
+};
+
+/**
+ * Tokenize dependency references with source spans. Bracket-qualified lists
+ * canonicalize every numeric segment before strict identity parsing. If the
+ * qualified identity still cannot be parsed, the reader keeps the original
+ * token as a legacy dependency instead of silently dropping it.
+ */
+function tokenizePhaseDependencyReferences(
+  prose: string,
+  convention?: string | null,
+): PhaseDependencyToken[] {
+  const input = prose;
+  const found: PhaseDependencyToken[] = [];
+  const qualifiedTokenSpans: { start: number; end: number }[] = [];
+  const legacyRefRe = new RegExp(`${PHASE_DEP_REF_SOURCE}`, 'gi');
+  const tokenRe = new RegExp(PHASE_NUMBER_TOKEN_SOURCE, convention === 'bracket' ? 'gi' : 'g');
+  let refMatch: RegExpExecArray | null;
+  while ((refMatch = legacyRefRe.exec(input)) !== null) {
+    const referenceStart = refMatch.index + refMatch[0].length - refMatch[1].length;
+    tokenRe.lastIndex = 0;
+    let tokenMatch: RegExpExecArray | null;
+    while ((tokenMatch = tokenRe.exec(refMatch[1])) !== null) {
+      const start = referenceStart + tokenMatch.index;
+      found.push({ kind: 'legacy', start, end: start + tokenMatch[0].length, token: tokenMatch[0] });
+    }
+  }
+
+  if (convention !== 'bracket') {
+    return found;
+  }
+
+  const bracketDisplayRe = new RegExp(
+    `${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, 'bracket', true)}(${PHASE_DEP_TOKEN_LIST_SOURCE})`,
+    'gi',
+  );
+  let displayMatch: RegExpExecArray | null;
+  while ((displayMatch = bracketDisplayRe.exec(input)) !== null) {
+    if (!displayMatch[1]) continue;
+    const tokenList = displayMatch[2];
+    const tokenListStart = displayMatch.index + displayMatch[0].length - tokenList.length;
+    tokenRe.lastIndex = 0;
+    let tokenMatch: RegExpExecArray | null;
+    while ((tokenMatch = tokenRe.exec(tokenList)) !== null) {
+      const start = tokenListStart + tokenMatch.index;
+      const end = start + tokenMatch[0].length;
+      qualifiedTokenSpans.push({ start, end });
+      const numeric = tokenMatch[0].split('.').every((part) => /^\d+$/.test(part))
+        ? tokenMatch[0].split('.').map(pad2).join('.')
+        : null;
+      try {
+        if (numeric === null) throw new Error('not a numeric bracket phase token');
+        const id = parsePhaseId(`[${foldBracketId(displayMatch[1])}] ${numeric}`);
+        found.push({
+          kind: 'qualified',
+          referenceStart: displayMatch.index,
+          start,
+          end,
+          token: renderPhaseId(id),
+        });
+      } catch {
+        found.push({
+          kind: 'qualified-fallback',
+          referenceStart: displayMatch.index,
+          start,
+          end,
+          token: tokenMatch[0],
+        });
+      }
+    }
+  }
+
+  const chunks = input.matchAll(/\S+/g);
+  for (const chunk of chunks) {
+    const candidate = chunk[0]
+      .replace(/^[`*_([{]+/, '')
+      .replace(/[`*_\])}.:,;]+$/, '');
+    try {
+      const id = parsePhaseId(candidate);
+      const sub = id.subphase ? `.${id.subphase}` : '';
+      const canonicalDash = `${id.project}.${id.milestone}-${id.phase}${sub}`;
+      if (id.plan || candidate !== canonicalDash) continue;
+      found.push({
+        kind: 'identity',
+        start: chunk.index ?? 0,
+        end: (chunk.index ?? 0) + candidate.length,
+        token: renderPhaseId(id),
+      });
+    } catch {
+      // Most prose chunks are not identities. parsePhaseId is the classifier.
+    }
+  }
+
+  const trimmed = input.trim();
+  if (new RegExp(`^${PHASE_NUMBER_TOKEN_SOURCE}$`, 'i').test(trimmed)) {
+    const start = input.indexOf(trimmed);
+    found.push({ kind: 'bare', start, end: start + trimmed.length, token: trimmed });
+  }
+
+  const identityAware = found.filter(({ kind, start, end }) => {
+    if (kind !== 'legacy') return true;
+    return !qualifiedTokenSpans.some((span) => start === span.start && end === span.end);
+  });
+  identityAware.sort((a, b) => a.start - b.start);
+  return identityAware;
+}
+
+function extractPhaseDependencyTokens(prose: string, convention?: string | null): string[] {
+  const found = tokenizePhaseDependencyReferences(prose, convention);
+  const seen = new Set<string>();
+  return found.flatMap(({ token }) => {
+    const key = token.toUpperCase();
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [token];
+  });
+}
+
 function renderMilestoneId(id: { project: string; milestone: string }): string {
   return `[${id.project}.${id.milestone}]`;
 }
@@ -747,7 +1028,9 @@ function isSentinelPhaseDir(dirName: string): boolean {
  * Render a regex source fragment matching a phase number against ROADMAP/STATE
  * prose regardless of zero-padding on either side.
  */
-function phaseMarkdownRegexSource(phaseNum: unknown): string {
+function phaseMarkdownRegexSource(phaseNum: unknown, context?: PhaseDirectoryContext): string {
+  const custom = context && customPhaseQuery(String(phaseNum), context);
+  if (custom) return escapeRegex(custom.id);
   const stripped = stripProjectCodePrefix(phaseNum);
 
   // Milestone-prefixed IDs: M-NN or M-N-N (deep).
@@ -788,7 +1071,29 @@ function phaseMarkdownRegexSourceExact(phaseNum: unknown): string | null {
   return escapeRegex(raw);
 }
 
-function comparePhaseNum(a: unknown, b: unknown): number {
+function comparePhaseNum(a: unknown, b: unknown, context?: PhaseDirectoryContext): number {
+  if (context?.phaseNaming === 'custom') {
+    const index = customIdentityIndex(context);
+    const identity = (value: unknown): string => {
+      const text = String(value);
+      if (index.recorded.has(text)) return text;
+      const query = customPhaseQuery(text, context);
+      return query?.recordedId ?? (query ? (query.listed ? query.id : customDirectoryOwner(text, query)?.id ?? query.id) : text);
+    };
+    const first = identity(a), second = identity(b);
+    // Arbitrary custom IDs have no numeric ordering: use their declared order.
+    // The relation must stay a total preorder for every `.sort` it feeds, so
+    // once a project declares a custom ID every declared ID sorts by position
+    // and ahead of every undeclared one; undeclared IDs (including unlisted
+    // numeric directories) keep the original comparator among themselves.
+    // A project with only legacy numeric IDs never enters this branch.
+    if (index.hasCustom) {
+      const left = index.orderByFold.get(recordedPhaseKey(first)), right = index.orderByFold.get(recordedPhaseKey(second));
+      if (left !== undefined && right !== undefined) return left - right;
+      if (left !== undefined) return -1;
+      if (right !== undefined) return 1;
+    }
+  }
   // Strip optional project_code prefix before comparing
   const sa = stripProjectCodePrefix(a);
   const sb = stripProjectCodePrefix(b);
@@ -1384,6 +1689,11 @@ function phaseTokenMatches(dirName: string, normalized: string, convention?: str
   return false;
 }
 
+type BracketPhaseLookupContext = {
+  project: string;
+  milestone: string;
+};
+
 /**
  * #2528: the LEADING DIGIT RUN of a directory name — the fragment the
  * bare-integer fallback selects on, and the one `phaseNumberForMatch` then
@@ -1404,6 +1714,220 @@ const BARE_INTEGER_RE = new RegExp(`^${LEADING_DIGIT_RUN_SOURCE}$`);
 /** Strip leading zeros for numeric-equality compare, keeping a lone "0". */
 const unpad = (digits: string): string => digits.replace(/^0+(?=\d)/, '');
 
+/** #5186: the directory shape shared by phase.add and custom-ID readers. */
+const UNSAFE_PHASE_DIRECTORY_PART_RE = /[/\\\0]|\.\./;
+class PhaseDirectoryNameError extends Error {
+  constructor(message: string, readonly kind: 'invalid' | 'collision' = 'invalid') { super(message); }
+}
+function phaseDirectoryName(id: string, slug: string, projectCode?: string | null): string {
+  if (!id || [id, slug, projectCode ?? ''].some(part => UNSAFE_PHASE_DIRECTORY_PART_RE.test(part))) {
+    throw new PhaseDirectoryNameError('Invalid phase id or directory component: paths, .. and NUL are not allowed');
+  }
+  return `${projectCode ? `${projectCode}-` : ''}${id}-${slug}`;
+}
+
+/** Grammar required only when writing an arbitrary custom identity. */
+function validateCustomPhaseId(id: string): void {
+  if (!id || id !== id.trim() || /[\s:]/.test(id) || id.startsWith('[')) {
+    throw new PhaseDirectoryNameError('Invalid custom phase id: empty IDs, whitespace, colons and a leading [ are not allowed');
+  }
+}
+
+/** Keep numeric, letter-suffixed and bracket queries on their legacy path. */
+const LEGACY_PHASE_ID_RE = new RegExp(`^${PHASE_NUMBER_TOKEN_SOURCE}(?:-\\d+)*$`, 'i');
+function isCustomPhaseId(id: string): boolean {
+  return !LEGACY_PHASE_ID_RE.test(id)
+    && !id.startsWith('[');
+}
+
+/** Preserve every legacy segment while applying its normal padding rules. */
+function recordedPhaseKey(id: string): string {
+  // Whole-token normalization can discard a letter-suffixed continuation
+  // (2A-2). Normalize its segments independently so it never aliases 2A.
+  return (LEGACY_PHASE_ID_RE.test(id) ? id.split('-').map(normalizePhaseName).join('-') : id).toLowerCase();
+}
+
+const CUSTOM_PHASE_ID_FILE = '.phase-id';
+type PhaseDirectoryContext = { phaseNaming: unknown; projectCode: string | null; roadmap: string; knownIds: string[]; directoryIds?: Record<string, string>; unmarkedDirectories?: string[]; directoryIdsByRoot?: Record<string, Record<string, string>>; configError?: {path: string; message: string} };
+
+/** Naming policy is supplied by the config owner; grammar remains pure. */
+function phaseDirectoryContext(config: Record<string, unknown>, roadmap = '', knownIds: string[] = []): PhaseDirectoryContext {
+  return { phaseNaming: typeof config.phase_naming === 'string' ? config.phase_naming.toLowerCase() : config.phase_naming, projectCode: config.project_code as string | null ?? null, roadmap, knownIds };
+}
+
+/** Custom scans reuse the numeric source verbatim outside configured custom projects. */
+function phaseScanTokenSource(context: PhaseDirectoryContext): string {
+  return context?.phaseNaming === 'custom' ? '[^ \t:\n]+' : PHASE_NUMBER_TOKEN_SOURCE;
+}
+type CustomPhaseQuery = { id: string; listed: boolean; recordedId?: string; projectCode?: string | null; prefixes: { id: string; prefix: string }[]; directoryIds?: Record<string, string> };
+
+type CustomIdentityIndex = { roadmap: string; knownIds: string[]; explicitIds: Set<string>; ids: Set<string>; recorded: Set<string>; recordedByFold: Map<string, string[]>; order: Map<string, number>; orderByFold: Map<string, number>; hasCustom: boolean; prefixes: {id: string; prefix: string}[] };
+const customIdentityIndexes = new WeakMap<PhaseDirectoryContext, CustomIdentityIndex>();
+
+function customIdentityIndex(options: PhaseDirectoryContext): CustomIdentityIndex {
+  let index = customIdentityIndexes.get(options);
+  if (!index || index.roadmap !== options.roadmap || index.knownIds !== options.knownIds) {
+    const headingId = /^Phase[ \t]+([^ \t:\n]+)(?:[ \t]+\([^)\n]*\))?[ \t]*:/;
+    const headings = tokenizeHeadings(options.roadmap ?? '')
+      .filter(heading => heading.level >= 2 && heading.level <= 4)
+      .flatMap(heading => heading.text.match(headingId)?.[1] ?? []);
+    const recorded = new Set(Object.values(options.directoryIds ?? {}));
+    const recordedByFold = new Map<string, string[]>();
+    for (const id of recorded) {
+      const key = recordedPhaseKey(id);
+      const aliases = recordedByFold.get(key);
+      if (aliases) aliases.push(id);
+      else recordedByFold.set(key, [id]);
+    }
+    const ids = new Set([...headings, ...options.knownIds ?? [], ...recorded]);
+    index = {
+      roadmap: options.roadmap, knownIds: options.knownIds, explicitIds: new Set(options.knownIds ?? []), ids, recorded, recordedByFold, order: new Map([...ids].map((id, i) => [id, i])),
+      // Declared position under the same fold the writers use, so `02` and `2` share a slot.
+      orderByFold: [...ids].reduce((fold, id, i) => fold.has(recordedPhaseKey(id)) ? fold : fold.set(recordedPhaseKey(id), i), new Map<string, number>()),
+      hasCustom: recorded.size > 0 || [...ids].some(isCustomPhaseId),
+      prefixes: [...ids].filter(token => token && !UNSAFE_PHASE_DIRECTORY_PART_RE.test(token))
+        .sort((a, b) => b.length - a.length)
+        .map(token => ({id: token, prefix: phaseDirectoryName(token, '')})),
+    };
+    customIdentityIndexes.set(options, index);
+  }
+  return index;
+}
+
+/** Preflight every custom writer, including all IDs in a batch, before writes. */
+function validateCustomPhaseIds(ids: string[], context: PhaseDirectoryContext): void {
+  const index = customIdentityIndex(context);
+  const known = new Set(index.ids);
+  const prospective = {...context, knownIds: [...context.knownIds ?? [], ...ids]};
+  for (const id of ids) {
+    validateCustomPhaseId(id);
+    // The same sentinel grammar filters phases list and roadmap.analyze.
+    // Refuse identities those readers would hide rather than creating orphans.
+    if (isSentinelPhaseId(id)) {
+      throw new PhaseDirectoryNameError(`Custom ID ${id} is reserved for backlog or icebox phases and would be hidden by phase readers; choose a visible ID`, 'collision');
+    }
+    if (context.projectCode && id.toLowerCase().startsWith(`${context.projectCode}-`.toLowerCase())) {
+      throw new PhaseDirectoryNameError(`Custom ID ${id} already begins with project_code ${context.projectCode}; pass the ID without its project prefix`);
+    }
+    const collision = [...known].find(other => recordedPhaseKey(id) === recordedPhaseKey(other));
+    if (collision) {
+      throw new PhaseDirectoryNameError(`Custom ID ${id} collides with existing or pending ID ${collision}; choose a distinct ID`, 'collision');
+    }
+    for (const dir of context.unmarkedDirectories ?? []) {
+      const candidates = customDirectoryCandidates(dir, prospective);
+      if (candidates.some(candidate => recordedPhaseKey(candidate) === recordedPhaseKey(id))) {
+        throw new PhaseDirectoryNameError(`Custom ID ${id} would claim markerless directory ${dir}; candidates: ${candidates.join(', ')}. Write the owning ID into ${dir}/${CUSTOM_PHASE_ID_FILE} and retry`, 'collision');
+      }
+    }
+    known.add(id);
+  }
+}
+
+/** Custom heading IDs are identity hints only; titles never locate directories. */
+function customPhaseQuery(id: string, options: PhaseDirectoryContext): CustomPhaseQuery | null {
+  if (options?.phaseNaming !== 'custom' || id.startsWith('[')) return null;
+  if (UNSAFE_PHASE_DIRECTORY_PART_RE.test(id)) return null;
+  const index = customIdentityIndex(options);
+  const prefix = options.projectCode ? `${options.projectCode}-` : '';
+  const queryBody = prefix && id.toLowerCase().startsWith(prefix.toLowerCase()) ? id.slice(prefix.length) : id;
+  // Markers are authoritative; only legacy-shaped IDs share their ordinary
+  // numeric padding normalization. Resolve recorded IDs before interpreting a
+  // query as a basename: an ID may equal a different directory's full name.
+  const aliases = index.recordedByFold.get(recordedPhaseKey(queryBody)) ?? [];
+  let recorded = index.recorded.has(id) ? id : index.recorded.has(queryBody) ? queryBody : aliases.length === 1 ? aliases[0] : undefined;
+  if (recorded !== undefined) {
+    id = recorded;
+  } else {
+    const directoryId = options.directoryIds?.[id]
+      ?? (options.unmarkedDirectories?.includes(id) ? customDirectoryOwner(id, {
+        id, listed: false, projectCode: options.projectCode, prefixes: index.prefixes,
+      })?.id : undefined);
+    if (directoryId !== undefined) {
+      id = directoryId;
+      if (index.recorded.has(id)) recorded = id;
+    }
+  }
+  const body = prefix && id.toLowerCase().startsWith(prefix.toLowerCase()) ? id.slice(prefix.length) : id;
+  const listed = index.ids.has(id);
+  // Legacy numeric tokens (including configured display prefixes) keep their
+  // reading unless a writer explicitly recorded this exact ID. That record
+  // also distinguishes an unpadded 2A from the custom continuation 2A-2.
+  if (!index.recorded.has(id) && !body.includes('-') && LEGACY_PHASE_ID_RE.test(body)) return null;
+  if (!index.recorded.has(id) && !isCustomPhaseId(id) && !(listed && /[a-z]/i.test(id))) return null;
+  // Only a complete legacy segment identifies a numeric directory. Digit-leading
+  // custom IDs such as 2FA must not collapse to their leading digit run.
+  if (!listed && !options.directoryIds?.[id] && body.includes('-') && LEGACY_PHASE_ID_RE.test(body.split('-')[0])) return null;
+  // Listed identities outrank the query; a directory's slug never invents an ID.
+  return {
+    id, listed: listed, recordedId: recorded, projectCode: options.projectCode, directoryIds: options.directoryIds,
+    prefixes: listed ? index.prefixes : [...index.prefixes, {id, prefix: phaseDirectoryName(id, '')}],
+  };
+}
+
+/** Candidate project prefixes for the custom directory shape. */
+function customDirectoryBodies(dir: string, projectCode?: string | null): string[] {
+  const bodies = [dir];
+  if (projectCode) {
+    const prefix = `${projectCode}-`;
+    if (dir.startsWith(prefix)) bodies.unshift(dir.slice(prefix.length));
+  }
+  return bodies;
+}
+
+/** Known IDs and writer-shaped prefixes are computed once per query. */
+function customDirectoryOwner(dir: string, query: CustomPhaseQuery): { id: string; slug: string } | null {
+  // A writer-recorded identity survives heading edits and archival. A slug
+  // cannot prove where an arbitrary hyphenated ID ends. Legacy directories
+  // keep heading-assisted read compatibility; destructive callers require proof.
+  const recordedId = query.directoryIds?.[dir];
+  if (recordedId !== undefined) {
+    if (UNSAFE_PHASE_DIRECTORY_PART_RE.test(recordedId)) return null;
+    const prefixes = [phaseDirectoryName(recordedId, '')];
+    // Scaffold retains legacy numeric directory padding while recording the
+    // requested ID. Resolve its directory shape independently of the query
+    // normalization above; a digit-leading custom ID still owns its full token.
+    if (LEGACY_PHASE_ID_RE.test(recordedId)) prefixes.push(phaseDirectoryName(normalizePhaseName(recordedId), ''));
+    for (const prefix of prefixes) {
+      const body = customDirectoryBodies(dir, query.projectCode).find(body => body.startsWith(prefix));
+      if (body) return { id: recordedId, slug: body.slice(prefix.length) };
+    }
+    return null;
+  }
+  for (const body of customDirectoryBodies(dir, query.projectCode)) {
+    const owner = query.prefixes.find(candidate => body.startsWith(candidate.prefix));
+    if (owner) return {id: owner.id, slug: body.slice(owner.prefix.length)};
+  }
+  return null;
+}
+
+/** All plausible owners of a markerless directory, for destructive preflight. */
+function customDirectoryCandidates(dir: string, context: PhaseDirectoryContext): string[] {
+  if (context.phaseNaming !== 'custom') return [];
+  const recorded = context.directoryIds?.[dir];
+  if (recorded !== undefined) {
+    if (!recorded || UNSAFE_PHASE_DIRECTORY_PART_RE.test(recorded)) return [];
+    const owner = customDirectoryOwner(dir, {
+      id: recorded, listed: true, projectCode: context.projectCode,
+      directoryIds: context.directoryIds, prefixes: [],
+    });
+    return owner ? [owner.id] : [];
+  }
+  const index = customIdentityIndex(context);
+  const candidates = [...new Set(customDirectoryBodies(dir, context.projectCode).flatMap(body =>
+    index.prefixes.filter(candidate => body.startsWith(candidate.prefix)).map(candidate => candidate.id)))];
+  // A lone legacy numeric heading is not proof of a custom identity. Preserve
+  // all candidates when ownership is ambiguous, and explicit recorded hints.
+  if (candidates.length === 1 && LEGACY_PHASE_ID_RE.test(candidates[0])
+    && !candidates[0].includes('-') && !index.explicitIds.has(candidates[0])) return [];
+  return candidates;
+}
+
+function customPhaseDirectoryParts(dir: string, query: CustomPhaseQuery): { id: string; slug: string } | null {
+  const owner = customDirectoryOwner(dir, query);
+  if (query.recordedId !== undefined) return owner?.id === query.recordedId ? owner : null;
+  return owner?.id.toLowerCase() === query.id.toLowerCase() ? owner : null;
+}
+
 /**
  * #2528: the CANONICAL phase-directory match selection — the one rule every
  * directory-resolution path (the shared locator plus the `find-phase` and
@@ -1411,7 +1935,11 @@ const unpad = (digits: string): string => digits.replace(/^0+(?=\d)/, '');
  * here because the surrounding scan/ambiguity/shaping code exists per site and
  * had already diverged; the selection itself must not.
  *
- * Two passes:
+ * Readers supply their naming context; legacy direct callers default to the
+ * context-free numeric policy. Configured custom IDs
+ * resolve through the inverse of phaseDirectoryName before normalization can
+ * collapse an ID such as A-2 into a numeric query. Other queries retain the
+ * legacy two passes:
  *   1. PRIMARY — exact token match (`phaseTokenMatches`), unchanged behavior.
  *   2. BARE-INTEGER FALLBACK — only when the primary pass matched NOTHING and
  *      the query is a bare integer, re-filter by each directory's own LEADING
@@ -1455,31 +1983,98 @@ const unpad = (digits: string): string => digits.replace(/^0+(?=\d)/, '');
  *
  *   TAKE `matches[0]` — `cmdPhasesList`, `cmdInitManager`, `cmdRoadmapAnalyze`,
  *   the schema-drift gate (`resolvePhaseDirByToken`), `detectVerifyFailed`. Each read a directory to
- *   DECORATE a row they are already emitting; each used `.find()` before this
- *   PR, so first-match is their prior behavior preserved verbatim, and each is
- *   order-stable because the directory list is sorted and this function filters
- *   without reordering.
+ *   DECORATE a row they are already emitting. In bracket mode those current-
+ *   checkout callers pass the active project+milestone context: an exact
+ *   qualified match wins, and bracket directories from other milestones are
+ *   excluded before any first-match policy can run. Legacy selection order is
+ *   unchanged.
  *
- * The honest caveat on that second tier: the bare-number fallback makes
- * multi-match newly REACHABLE for inputs that previously found nothing, so those
- * five can now silently pick one of several candidates where they used to report
- * not-found. That is a widening of an existing first-match rule, not a new rule
- * — but it is a widening, and promoting any of them to refusal is a UX decision
- * about their own output, not a change to selection, so it does not belong here.
+ * Without an active bracket context the historical first-match/ambiguity policy
+ * remains the caller's responsibility. With a context, only migration-window
+ * legacy names can participate in fallback when the exact bracket identity is
+ * absent; a prior milestone's qualified directory can never mask the active one.
  *
  * `usedBareFallback` tells callers to derive the displayed phase number from
  * the directory's leading digit run instead of `extractPhaseToken` (whose
  * token for these dirs is the mis-absorbed multi-segment form).
  */
-function matchPhaseDirs(dirs: string[], normalized: string, convention?: string | null): { matches: string[]; usedBareFallback: boolean } {
-  const primary = dirs.filter(d => phaseTokenMatches(d, normalized, convention));
-  if (primary.length > 0) return { matches: primary, usedBareFallback: false };
+/**
+ * The query a directory lookup hands to `matchPhaseDirs`. Custom projects pass
+ * the id as written (their ids have no padding form); every other convention
+ * keeps the normalized token callers always supplied.
+ */
+function phaseLookupQuery(query: string, context: PhaseDirectoryContext): string {
+  return context?.phaseNaming === 'custom' ? query : normalizePhaseName(query);
+}
+
+function matchPhaseDirs(
+  dirs: string[],
+  query: string,
+  convention?: string | null,
+  bracketContext?: BracketPhaseLookupContext | null,
+  context: PhaseDirectoryContext = phaseDirectoryContext({}),
+): { matches: string[]; usedBareFallback: boolean } {
+  const custom = convention === 'bracket' ? null : customPhaseQuery(query, context);
+  if (custom?.recordedId !== undefined) {
+    return {matches: dirs.filter(dir => customPhaseDirectoryParts(dir, custom) !== null), usedBareFallback: false};
+  }
+  // A complete basename names that physical directory when no record owns the
+  // query. Custom projects only: a numeric project with `01` and `01-foo` must
+  // still reach the #2237 ambiguity refusal for the bare token `01`.
+  if (context.phaseNaming === 'custom' && convention !== 'bracket') {
+    const directoryMatches = dirs.filter(dir => dir === query);
+    if (directoryMatches.length > 0) return {matches: directoryMatches, usedBareFallback: false};
+  }
+  // Bracket queries arrive canonical from the lookup boundary; every other
+  // convention normalizes here (custom ids keep their literal spelling below).
+  const normalized = convention === 'bracket' ? query : normalizePhaseName(query);
+  // Recorded directories never enter legacy token or bare-number fallback for
+  // another query. Keep those compatibility passes for unmarked directories.
+  if (context.phaseNaming === 'custom' && convention !== 'bracket') {
+    dirs = dirs.filter(dir => context.directoryIds?.[dir] === undefined
+      || (custom !== null && customPhaseDirectoryParts(dir, custom) !== null));
+  }
+  if (custom) {
+    // A full directory name is an existing lookup form, distinct from an ID prefix.
+    const exact = dirs.filter(d => d === custom.id);
+    if (exact.length > 0) return { matches: exact, usedBareFallback: false };
+    const matches = dirs.filter(d => customPhaseDirectoryParts(d, custom) !== null);
+    if (matches.length > 0 || isCustomPhaseId(query)) return { matches, usedBareFallback: false };
+  }
+  // Custom writers preserve an explicit ID's spelling, including an unpadded
+  // letter suffix (7B). Prefer that literal token before the legacy padded form.
+  if (context?.phaseNaming === 'custom' && convention !== 'bracket' && query !== normalized) {
+    const literal = dirs.filter(d => phaseTokenMatches(d, query, convention));
+    if (literal.length > 0) return { matches: literal, usedBareFallback: false };
+  }
+  let candidates = dirs;
+
+  // #4304: a bare phase number from STATE/ROADMAP names the active bracket
+  // identity, not every physical directory left behind by prior milestones.
+  // Prefer the exact qualified directory. If it is absent, retain only
+  // migration-window legacy names; a differently-qualified bracket directory
+  // must never win merely because it sorts first.
+  if (convention === 'bracket' && bracketContext && !bracketQualifiedKey(normalized, convention)) {
+    const qualified = `${bracketContext.project}.${bracketContext.milestone}-${normalized}`;
+    const exact = dirs.filter(d => phaseTokenMatches(d, qualified, convention));
+    if (exact.length > 0) return { matches: exact, usedBareFallback: false };
+    candidates = dirs.filter(d => bracketQualifiedKey(d, convention) === null);
+  }
+
+  const primary = candidates.filter(d => phaseTokenMatches(d, normalized, convention));  if (primary.length > 0) return { matches: primary, usedBareFallback: false };
+
+  // Normalization pads a literal continuation ID such as 0-00 to 00-00.
+  // Preserve its exact-token lookup before falling back to a bare integer.
+  if (query !== normalized && query.includes('-')) {
+    const literal = dirs.filter(d => phaseTokenMatches(d, query, convention));
+    if (literal.length > 0) return { matches: literal, usedBareFallback: false };
+  }
 
   const bare = String(normalized);
   if (!BARE_INTEGER_RE.test(bare)) return { matches: primary, usedBareFallback: false };
   const want = unpad(bare);
 
-  const fallback = dirs.filter(d => {
+  const fallback = candidates.filter(d => {
     const m = stripProjectCodePrefix(d).match(LEADING_DIGIT_RUN_RE);
     return m !== null && unpad(m[1]) === want;
   });
@@ -1492,8 +2087,8 @@ function matchPhaseDirs(dirs: string[], normalized: string, convention?: string 
  * directory's leading digit run (the whole point of the fallback is that the
  * extracted token is wrong for these dirs).
  */
-function phaseNumberForMatch(dirName: string, usedBareFallback: boolean): string {
-  if (!usedBareFallback) return extractPhaseToken(dirName);
+function phaseNumberForMatch(dirName: string, usedBareFallback: boolean, convention?: string | null): string {
+  if (!usedBareFallback) return extractPhaseToken(dirName, convention);
   const stripped = stripProjectCodePrefix(dirName);
   const prefix = dirName.slice(0, dirName.length - stripped.length);
   const m = stripped.match(LEADING_DIGIT_RUN_PREFIX_RE);
@@ -1524,7 +2119,8 @@ function phaseNumberForMatch(dirName: string, usedBareFallback: boolean): string
  * of wide IDs (`001.10`) is relied on by plan-ID capture and wave assignment.
  * Arithmetic is avoided (`parseInt` would lose precision on a long digit run).
  */
-function phaseKeyFromToken(token: unknown): string {
+function phaseKeyFromToken(token: unknown, context?: PhaseDirectoryContext): string {
+  if (context && customPhaseQuery(String(token), context)) return String(token).toUpperCase();
   const stripped = String(token)
     .split('-')
     .map(segment => segment.replace(/^0+(?=\d)/, ''))
@@ -1545,8 +2141,15 @@ function phaseKeyFromToken(token: unknown): string {
  * #2562's own defect class reached from the other side: both sides of a comparison
  * must be derived not merely by the same function but under the same convention.
  */
-function phaseKeyFromDir(dirName: string, convention?: string | null): string {
-  return phaseKeyFromToken(extractPhaseToken(dirName, convention));
+function phaseKeyFromDir(dirName: string, convention?: string | null, context?: PhaseDirectoryContext): string {
+  if (context && convention !== 'bracket') {
+    const custom = customPhaseQuery(dirName, context);
+    if (custom) {
+      const owner = customDirectoryOwner(dirName, custom);
+      if (owner) return phaseKeyFromToken(owner.id, context);
+    }
+  }
+  return phaseKeyFromToken(extractPhaseToken(dirName, convention), context);
 }
 
 /**
@@ -1556,10 +2159,11 @@ function phaseKeyFromDir(dirName: string, convention?: string | null): string {
  * mistaken for a non-phase. Returns null when the value does not BEGIN with a
  * phase token (`parsePhaseFromProse` anchoring, #2111).
  */
-function phaseKeyFromProse(value: string | null | undefined): string | null {
+function phaseKeyFromProse(value: string | null | undefined, context?: PhaseDirectoryContext): string | null {
   if (value == null) return null;
-  const { phase } = parsePhaseFromProse(String(value).replace(/[*_`~]/g, ''));
-  return phase === null ? null : phaseKeyFromToken(phase);
+  const clean = String(value).replace(/[*_`~]/g, '');
+  const { phase } = parsePhaseFromProse(clean, undefined, context);
+  return phase === null ? null : phaseKeyFromToken(phase, context);
 }
 
 /**
@@ -1607,11 +2211,19 @@ const PHASE_PROSE_MILESTONE_PREFIXED_RE = /^\s*(?:Phase\s+)?(?:[A-Z][A-Z0-9_]*-)
 function parsePhaseFromProse(
   value: string | null,
   convention?: string | null,
+  context?: PhaseDirectoryContext,
 ): { phase: string | null; name: string | null } {
   if (!value) return { phase: null, name: null };
   // Coerce defensively so a non-string caller cannot throw on this canonical
   // surface (mirrors the sibling #2121 functions' String(...) handling).
   const str = String(value);
+  const candidate = context?.phaseNaming === 'custom'
+    ? str.trim().replace(/^Phase[ \t]+/i, '').split(/[ \t:]/, 1)[0].replace(/\.$/, '')
+    : null;
+  const query = candidate && context && customPhaseQuery(candidate, context);
+  // Only an identity a writer recorded or the roadmap lists is a phase id; an
+  // ordinary word in the field (`complete`, `None`, `TBD`) is not one.
+  const custom = query && (query.listed || query.recordedId !== undefined);
   const phaseMatch = str.match(convention === 'milestone-prefixed' ? PHASE_PROSE_MILESTONE_PREFIXED_RE : PHASE_PROSE_RE);
   // The name-extraction quantifiers are length-bounded so a crafted long
   // unterminated run (many `(` or `—`) in an untrusted STATE.md field value
@@ -1655,7 +2267,7 @@ function parsePhaseFromProse(
     ? rawName.trim()
     : null;
   return {
-    phase: phaseMatch ? phaseMatch[1] : null,
+    phase: custom ? candidate : phaseMatch ? phaseMatch[1] : null,
     name,
   };
 }
@@ -1772,11 +2384,13 @@ function roadmapPhaseLookupSources(phaseNum: unknown): string[] {
   return [...new Set(sources)];
 }
 
-export = {
+const phaseIdExports = {
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
   OPTIONAL_PHASE_TAG_SOURCE,
   PHASE_NUMBER_TOKEN_SOURCE,
   PHASE_DEP_REF_SOURCE,
+  tokenizePhaseDependencyReferences,
+  extractPhaseDependencyTokens,
   CASE_FLEXIBLE_PROJECT_CODE_PREFIX_SOURCE,
   CASE_FLEXIBLE_PHASE_NUMBER_TOKEN_SOURCE,
   PHASE_CONTINUATION_SEGMENT_SOURCE,
@@ -1793,7 +2407,10 @@ export = {
   BASE_PHASE_LABEL_PREFIX_SRC,
   PHASE_HEADING_BASELINE,
   phaseHeadingPrefixSrcFor,
+  parsePhaseChecklistLine,
+  bracketQualifiedIntroSrcFor,
   buildPhaseHeadingScanRegex,
+  buildPhaseDeclarationScans,
   foldBracketId,
   bracketQualifiedKey,
   stripProjectCodePrefix,
@@ -1817,6 +2434,19 @@ export = {
   scopeToPhase,
   phaseTokenMatches,
   matchPhaseDirs,
+  phaseLookupQuery,
+  phaseDirectoryContext,
+  phaseScanTokenSource,
+  phaseDirectoryName,
+  validateCustomPhaseId,
+  validateCustomPhaseIds,
+  PhaseDirectoryNameError,
+  customPhaseQuery,
+  customPhaseDirectoryParts,
+  customDirectoryOwner,
+  customDirectoryCandidates,
+  CUSTOM_PHASE_ID_FILE,
+  isCustomPhaseId,
   phaseNumberForMatch,
   phaseKeyFromToken,
   phaseKeyFromDir,
@@ -1829,3 +2459,9 @@ export = {
   roadmapPhaseLookupSources,
   renderPhaseBranchName,
 };
+
+// A declaration merge exposes the shared type alongside the CommonJS value,
+// matching planning-scope.cts; export type cannot accompany export =.
+// eslint-disable-next-line @typescript-eslint/no-namespace
+declare namespace phaseIdExports { export { PhaseDirectoryContext }; }
+export = phaseIdExports;
