@@ -550,13 +550,15 @@ function forkedAtOrBeforePhaseStart(git: Git, p1: string, p2: string, rangeBase:
  * The files a listed two-parent merge brought in from its SECOND parent's side: base work, not the
  * unit's. A merge contributes nothing when ANY of these holds, so unlisted phase work is never hidden:
  * a listed commit sits on that side (`<p2> ^<p1>`: a phase branch merged into its base); a listed
- * non-merge commit is an ancestor of `<p2>` (a branch forked from the phase, whose unlisted commits
- * are phase work); the fork point (`git merge-base <p1> <p2>`) is not at or before `rangeBase` (a
- * side forked from phase work, or a later catch-up whose fork point is an earlier catch-up's base
- * commit: reported as an advisory false positive, never hidden); `rangeBase` is the empty tree or
- * there is no merge-base or the check fails; or the file was touched by a commit on the phase side
- * (`<rangeBase>..<p1> ^<p2>`, listed or not). Only files touched solely by the second parent's side
- * are subtracted.
+ * non-merge commit is an ancestor of `<p2>` after the phase start (`<p2> ^<rangeBase>`, one walk: a
+ * branch forked from the phase, whose unlisted commits are phase work); the fork point
+ * (`git merge-base <p1> <p2>`) is not at or before `rangeBase` (a side forked from phase work, or a
+ * later catch-up whose fork point is an earlier catch-up's base commit: reported as an advisory
+ * false positive, never hidden); `rangeBase` is the empty tree or there is no merge-base; any git
+ * call for this merge fails or times out (this merge subtracts nothing, the others are unaffected);
+ * or the file was touched by a commit on the phase side (`<rangeBase>..<p1> ^<p2>`, listed or not,
+ * merge commits included through their own changes against each parent, `git log -m`). Only files
+ * touched solely by the second parent's side are subtracted.
  */
 function baseSideMergeFiles(
   git: Git, merges: readonly string[], parentsOf: ParentMap, listed: ReadonlySet<string>,
@@ -567,15 +569,28 @@ function baseSideMergeFiles(
     const parents = parentsOf.get(sha) ?? [];
     if (parents.length !== 2) continue;
     const [p1 = '', p2 = ''] = parents;
-    const secondSide = git(['rev-list', p2, `^${p1}`]).split('\n').filter(Boolean);
-    if (secondSide.some((entry) => listed.has(entry))) continue;
-    if (listedNonMerge.some((entry) => isAncestor(git, entry, p2))) continue;
-    if (!forkedAtOrBeforePhaseStart(git, p1, p2, rangeBase)) continue;
-    const phaseSide = new Set(splitNul(git([
-      '-c', 'core.quotepath=off', 'log', '--format=', '--name-only', '-z', p1, `^${p2}`,
-      ...(rangeBase === EMPTY_TREE ? [] : [`^${rangeBase}`]), '--', '.', ...SCOPE_EXCLUSION_PATHSPECS,
-    ])));
-    for (const file of rangeFiles(git, `${sha}^1`, sha)) if (!phaseSide.has(file)) files.add(file);
+    try {
+      const secondSide = git(['rev-list', p2, `^${p1}`]).split('\n').filter(Boolean);
+      if (secondSide.some((entry) => listed.has(entry))) continue;
+      // One walk of the second parent's history after the phase start, intersected with the listed
+      // non-merge commits (never one ancestry spawn per listed commit).
+      const reachable = new Set(git([
+        'rev-list', p2, ...(rangeBase === EMPTY_TREE ? [] : [`^${rangeBase}`]),
+      ]).split('\n').filter(Boolean));
+      if (listedNonMerge.some((entry) => reachable.has(entry))) continue;
+      if (!forkedAtOrBeforePhaseStart(git, p1, p2, rangeBase)) continue;
+      // `-m` lists a merge commit's own changes against each parent: a phase-side merge's conflict
+      // resolution or edit is phase work. Over-inclusion only keeps a file in outsideUnion.
+      const phaseSide = new Set(splitNul(git([
+        '-c', 'core.quotepath=off', 'log', '-m', '--format=', '--name-only', '-z', p1, `^${p2}`,
+        ...(rangeBase === EMPTY_TREE ? [] : [`^${rangeBase}`]), '--', '.', ...SCOPE_EXCLUSION_PATHSPECS,
+      ])));
+      const brought = rangeFiles(git, `${sha}^1`, sha).filter((file) => !phaseSide.has(file));
+      for (const file of brought) files.add(file);
+    } catch (error) {
+      // A merge whose check could not be answered subtracts nothing (its files stay named).
+      if (!(error instanceof ScopeUnreadable)) throw error;
+    }
   }
   return files;
 }
