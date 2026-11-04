@@ -477,6 +477,59 @@ describe('resolveEvaluationScope — outsideUnion and merge-only scopes (#5751)'
     assert.equal(result.payload.status, 'degraded');
   });
 
+  test('[boundary] a lockfile-only task commit beside a clean merge is not merge-only', () => {
+    const { repo } = divergedRepo();
+    const lock = commit(repo, 'package-lock.json', 'feat(03-01): lockfile', '{"a":1}\n');
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up with main');
+    summarize(repo, [lock, repo.git('rev-parse', 'HEAD')]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'degraded');
+    assert.equal(scope.reason, 'empty-after-exclusions');
+  });
+
+  test('[boundary] a lockfile-only task commit beside a conflict-resolving merge resolves to the resolution', () => {
+    const { repo } = divergedRepo();
+    const lock = commit(repo, 'package-lock.json', 'feat(03-01): lockfile', '{"a":1}\n');
+    const merge = resolvedCatchUp(repo);
+    summarize(repo, [lock, merge]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.equal(scope.source, 'task-commits');
+    assert.deepEqual(scope.changedFiles, ['src/shared.js']);
+  });
+
+  test('[regression] unlisted phase work on a sub-branch merged into the phase stays in outsideUnion', () => {
+    const { repo, task } = divergedRepo();
+    repo.git('checkout', '-b', 'sub');
+    commit(repo, 'src/sub.js', 'feat(03-01): sub-branch work no SUMMARY lists');
+    repo.git('checkout', 'phase');
+    commit(repo, 'src/phase-two.js', 'feat(03-01): second phase commit');
+    repo.git('merge', '--no-ff', 'sub', '-m', 'chore: merge sub-branch');
+    summarize(repo, [task, repo.git('rev-parse', 'HEAD')]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.ok(scope.outsideUnion.includes('src/sub.js'));
+    assert.ok(scope.outsideUnion.includes('src/phase-two.js'));
+  });
+
+  test('[regression] an unlisted phase edit to a file the base also touched stays in outsideUnion after a catch-up merge', () => {
+    const { repo, task } = divergedRepo();
+    const body = 'a\n1\n2\n3\n4\n5\n6\n7\nz\n';
+    repo.git('checkout', 'main');
+    commit(repo, 'src/many.js', 'feat: base adds many', body);
+    repo.git('checkout', 'phase');
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: first catch up');
+    repo.git('checkout', 'main');
+    commit(repo, 'src/many.js', 'feat: base appends to many', `${body}base-tail\n`);
+    repo.git('checkout', 'phase');
+    commit(repo, 'src/many.js', 'feat: unlisted phase edit of many', body.replace('a\n', 'phase-head\n'));
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: second catch up');
+    summarize(repo, [task, repo.git('rev-parse', 'HEAD')]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.ok(scope.outsideUnion.includes('src/many.js'));
+  });
+
   test('[independence] a plan unit whose only matches are merges says merge-only', () => {
     const repo = makeRepo();
     commit(repo, 'src/shared.js', 'chore: shared', 'v0\n');
