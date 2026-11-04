@@ -608,6 +608,35 @@ describe('resolveEvaluationScope — outsideUnion and merge-only scopes (#5751)'
     assert.ok(scope.outsideUnion.includes('src/many.js'));
   });
 
+  test('[regression] an unlisted phase edit made AFTER the catch-up merge stays in outsideUnion', () => {
+    const { repo, task } = divergedRepo();
+    repo.git('checkout', 'main');
+    commit(repo, 'src/shared.js', 'feat: base edits shared', 'base\n');
+    repo.git('checkout', 'phase');
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up with main');
+    const catchUp = repo.git('rev-parse', 'HEAD');
+    commit(repo, 'src/shared.js', 'feat: unlisted edit of shared after the catch-up', 'phase-edit\n');
+    const later = commit(repo, 'src/phase2.js', 'feat(03-01): phase work 2');
+    summarize(repo, [task, catchUp, later]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.ok(scope.outsideUnion.includes('src/shared.js'), 'the unlisted post-merge edit is named');
+    assert.ok(!scope.outsideUnion.includes('src/base.js'), 'a base file no phase commit touched is still subtracted');
+  });
+
+  test('[independence] a catch-up with a later unlisted edit to a non-base file still subtracts the base delta', () => {
+    const { repo, task } = divergedRepo();
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up with main');
+    const catchUp = repo.git('rev-parse', 'HEAD');
+    commit(repo, 'src/unlisted.js', 'feat: unlisted phase edit of a non-base file');
+    const later = commit(repo, 'src/phase2.js', 'feat(03-01): phase work 2');
+    summarize(repo, [task, catchUp, later]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.ok(!scope.outsideUnion.includes('src/base.js'), 'the base delta is still subtracted');
+    assert.ok(scope.outsideUnion.includes('src/unlisted.js'), 'the unlisted phase edit is named');
+  });
+
   test('[independence] a plan unit whose only matches are merges says merge-only', () => {
     const repo = makeRepo();
     commit(repo, 'src/shared.js', 'chore: shared', 'v0\n');
