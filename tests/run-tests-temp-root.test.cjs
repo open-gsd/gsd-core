@@ -343,8 +343,10 @@ describe('#4020 — run-tests temp root', () => {
           env: { ...process.env },
         });
         assert.equal(r.exitCode, 0, r.stderr.slice(-300));
+        assert.ok(path.isAbsolute(r.stdout), `child tmpdir must be absolute, got ${r.stdout}`);
         assert.equal(r.stdout, root, 'the child resolves the parent\'s root, not a cwd-relative one');
-        assert.ok(fs.existsSync(r.stdout));
+        assert.ok(fs.existsSync(path.resolve(elsewhere, r.stdout)),
+          'the dir exists when resolved from the child\'s cwd');
       });
     });
 
@@ -362,8 +364,12 @@ describe('#4020 — run-tests temp root', () => {
       t.after(() => cleanup(base));
       const segment = fc.stringMatching(/^[a-z0-9]{1,8}$/);
       fc.assert(
-        fc.property(fc.array(segment, { minLength: 1, maxLength: 3 }), (segments) => {
-          const rel = segments.join('/');
+        fc.property(
+          fc.array(segment, { minLength: 1, maxLength: 3 }),
+          fc.option(segment, { nil: undefined }),
+          (segments, runSuffix) => {
+          // runSuffix generated => last segment is an inherited run root (gsd-test-run-*)
+          const rel = (runSuffix === undefined ? segments : [...segments, `gsd-test-run-${runSuffix}`]).join('/');
           fs.mkdirSync(path.join(base, rel), { recursive: true });
           withTmpEnv({ cwd: base, tmpdir: rel, temp: rel, tmp: rel }, () => {
             const expectedParent = path.resolve(rel);
@@ -371,14 +377,15 @@ describe('#4020 — run-tests temp root', () => {
             const dir = createFixture({ planning: false });
             assert.ok(path.isAbsolute(root));
             assert.ok(path.isAbsolute(dir));
-            if (path.basename(rel).startsWith('gsd-test-run-')) {
+            if (runSuffix !== undefined) {
               assert.equal(root, expectedParent);
             } else {
               assert.equal(path.dirname(root), expectedParent);
             }
             assert.ok(path.basename(root).startsWith('gsd-test-run-'));
           });
-        }),
+          },
+        ),
         { seed: 5688, numRuns: 25 },
       );
     });
