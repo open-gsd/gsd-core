@@ -1,3 +1,4 @@
+// docs-guard-exempt: docs/ appears only in ADR citations; the one read call is a temp-fixture STATE.md (#5830).
 /**
  * GSD Tools Tests - Health Validation
  *
@@ -2262,12 +2263,11 @@ describe('W030 repairs a known legacy verification status (#5291)', () => {
 // `--repair` leaves STATE.md byte-identical and the warning in place.
 describe('W031: STATE.md far over its line target (#5830)', () => {
   const { STATE_MD_LINE_TARGET } = require('../gsd-core/bin/lib/state-md-schema.cjs');
-  const { readFileNormalized } = require('./helpers.cjs');
   let tmpDir;
   beforeEach(() => { tmpDir = createTempProject(); });
   afterEach(() => { cleanup(tmpDir); });
 
-  function seed(totalLines) {
+  function seed(totalLines, eol = '\n') {
     writeMinimalRoadmap(tmpDir, ['1']);
     writeMinimalProjectMd(tmpDir);
     writeValidConfigJson(tmpDir);
@@ -2282,7 +2282,7 @@ describe('W031: STATE.md far over its line target (#5830)', () => {
     for (let i = 0; head.length + rows.length < totalLines; i++) {
       rows.push(`| ${i + 1} | Quick task ${i + 1} | 2026-10-01 | abc1234 | — |`);
     }
-    writeMinimalStateMd(tmpDir, [...head, ...rows].join('\n') + '\n');
+    writeMinimalStateMd(tmpDir, [...head, ...rows].join(eol) + eol);
   }
 
   const healthJson = (extra = []) => {
@@ -2306,11 +2306,16 @@ describe('W031: STATE.md far over its line target (#5830)', () => {
     assert.strictEqual(w031(healthJson()).length, 0);
   });
 
-  test('--repair leaves an oversized STATE.md untouched and W031 in place', () => {
-    seed(STATE_MD_LINE_TARGET * 3 + 1);
-    const before = readFileNormalized(statePath());
-    healthJson(['--repair']);
-    assert.strictEqual(readFileNormalized(statePath()), before, '--repair must not rewrite STATE.md for W031');
-    assert.strictEqual(w031(healthJson()).length, 1, 'W031 must survive --repair');
-  });
+  // Raw bytes, not EOL-normalized text: a repair that rewrote LF<->CRLF would
+  // still be a rewrite.
+  for (const [label, eol] of [['LF', '\n'], ['CRLF', '\r\n']]) {
+    test(`--repair leaves an oversized ${label} STATE.md byte-identical and W031 in place`, () => {
+      seed(STATE_MD_LINE_TARGET * 3 + 1, eol);
+      const before = fs.readFileSync(statePath());
+      assert.strictEqual(before.includes(Buffer.from('\r\n')), eol === '\r\n', `precondition: fixture is ${label}`);
+      healthJson(['--repair']);
+      assert.ok(fs.readFileSync(statePath()).equals(before), `--repair must not rewrite a ${label} STATE.md for W031`);
+      assert.strictEqual(w031(healthJson()).length, 1, 'W031 must survive --repair');
+    });
+  }
 });
