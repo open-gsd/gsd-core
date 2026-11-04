@@ -54,6 +54,7 @@ const {
   customPhaseDirectoryParts,
   customDirectoryOwner,
   phaseScanTokenSource,
+  phaseNumberTokenSource,
   CUSTOM_PHASE_ID_FILE,
   isCustomPhaseId,
   isSentinelPhaseId,
@@ -7537,6 +7538,9 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
       //      where the roadmap would give `2` and a slugified title. Promoting the
       //      roadmap without this would silently change the reported value on
       //      every aligned project, which is the majority case.
+      // #5676: the numeric phase-token grammar follows the convention, so a
+      // milestone-prefixed `03-02-beta` is phase `3-02`, not phase `3`.
+      const phaseConvention = resolvePhaseIdConvention(cwd);
       let diskNextNum: string | null = null;
       let diskNextName: string | null = null;
       let roadmapNextNum: string | null = null;
@@ -7557,7 +7561,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         try {
           const milestoneForComplete = extractCurrentMilestone(roadmapContent, cwd);
           const completePattern = phaseEntryRegExp(
-            `Phase\\s+(${phaseScanTokenSource(directoryContext)})`,
+            `Phase\\s+(${phaseScanTokenSource(directoryContext, phaseConvention)})`,
             'gi',
           );
           let cm: RegExpExecArray | null;
@@ -7589,7 +7593,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         for (const dir of dirs) {
           const custom = phaseIdMod.customPhaseQuery(dir, directoryContext);
           const owner = custom && customDirectoryOwner(dir, custom);
-          const dm = owner ? [dir, owner.id, owner.slug] : dir.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i'));
+          const dm = owner ? [dir, owner.id, owner.slug] : dir.match(new RegExp(`^(${phaseNumberTokenSource(phaseConvention)})-?(.*)`, 'i'));
           if (dm) {
             // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
             if (isSentinelPhaseId(dm[1])) continue;
@@ -7651,8 +7655,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // accepts. The two branches keep separate capture groups, normalized
           // just below the loop.
           const phasePattern = new RegExp(
-            `(?:#{2,4}\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n*]+)` +
-            `|${phaseEntryPrefixSrc()}Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+))`,
+            `(?:#{2,4}\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext, phaseConvention)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n*]+)` +
+            `|${phaseEntryPrefixSrc()}Phase\\s+(${phaseScanTokenSource(directoryContext, phaseConvention)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+))`,
             'gim'
           );
           let pm: RegExpExecArray | null;
@@ -7754,7 +7758,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // rows and could not correct an out-of-order completion on the same
           // mixed-grammar roadmaps that broke stage 2.
           const cbPattern = phaseEntryRegExp(
-            `Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+)`,
+            `Phase\\s+(${phaseScanTokenSource(directoryContext, phaseConvention)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+)`,
             'gi',
             { state: 'captured' },
           );
@@ -7806,7 +7810,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // pin would all rewind it. A first-time completion (box unchecked, or
         // STATE not past N, #2028 out-of-order) still transitions.
         const stateAlreadyPast = phaseWasAlreadyComplete
-          && isStatePastPhase(originalStateContent, phaseNum, statePath, resolvePhaseIdConvention(cwd));
+          && isStatePastPhase(originalStateContent, phaseNum, statePath, phaseConvention);
         let stateContent = originalStateContent;
 
         // ADR-1769 Phase 3: the STATE.md field-update policy (Current Phase
@@ -7837,7 +7841,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             const nextInfo = findPhaseInternal(cwd, nextPhaseNum, undefined, directoryContext) as unknown as { found?: boolean; directory?: string } | null;
             if (nextInfo && nextInfo.found && nextInfo.directory) {
               const { value } = phaseStatus(path.join(cwd, nextInfo.directory), {
-                convention: resolvePhaseIdConvention(cwd),
+                convention: phaseConvention,
               });
               nextPhaseDisk = { status: value.status, planCount: value.planCount, summaryCount: value.summaryCount };
             }

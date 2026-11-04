@@ -75,6 +75,8 @@ const OPTIONAL_PHASE_TAG_SOURCE = '(?:\\s*\\([^)\\n]{0,200}\\))?';
 // (scripts/lint-phase-id-drift.cjs) fails CI if a literal re-derivation is
 // introduced outside this module without a `// phase-id-owner:` justification.
 const PHASE_NUMBER_TOKEN_SOURCE = '\\d+[A-Z]?(?:\\.\\d+)*';
+// #5676: milestone-prefixed M-NN token grammar (one optional -NN segment, the #5626 grammar).
+const PHASE_NUMBER_TOKEN_SOURCE_MILESTONE_PREFIXED = '\\d+(?:-\\d+)?[A-Z]?(?:\\.\\d+)*';
 
 // #4764: a legacy phase REFERENCE in depends-on PROSE — the token in context, directly
 // following "Phase"/"Phases", with bare-token list continuation ("Phases 1 and 2",
@@ -1755,9 +1757,18 @@ function phaseDirectoryContext(config: Record<string, unknown>, roadmap = '', kn
   return { phaseNaming: typeof config.phase_naming === 'string' ? config.phase_naming.toLowerCase() : config.phase_naming, projectCode: config.project_code as string | null ?? null, roadmap, knownIds };
 }
 
-/** Custom scans reuse the numeric source verbatim outside configured custom projects. */
-function phaseScanTokenSource(context: PhaseDirectoryContext): string {
-  return context?.phaseNaming === 'custom' ? '[^ \t:\n]+' : PHASE_NUMBER_TOKEN_SOURCE;
+/** #5676: the single owner of the numeric phase-token source per convention. */
+function phaseNumberTokenSource(convention?: string | null): string {
+  return convention === 'milestone-prefixed' ? PHASE_NUMBER_TOKEN_SOURCE_MILESTONE_PREFIXED : PHASE_NUMBER_TOKEN_SOURCE;
+}
+
+/**
+ * Custom scans reuse the numeric source verbatim outside configured custom projects.
+ * #5676: under `milestone-prefixed` the numeric source admits the `M-NN` token
+ * (`3-02`), so a `03-02-beta` directory is read as phase `3-02`, not phase `3`.
+ */
+function phaseScanTokenSource(context: PhaseDirectoryContext, convention?: string | null): string {
+  return context?.phaseNaming === 'custom' ? '[^ \t:\n]+' : phaseNumberTokenSource(convention);
 }
 type CustomPhaseQuery = { id: string; listed: boolean; recordedId?: string; projectCode?: string | null; prefixes: { id: string; prefix: string }[]; directoryIds?: Record<string, string> };
 
@@ -2215,7 +2226,7 @@ function isPlannedPhaseStatusPhrase(value: unknown): boolean {
 // (`3-01`), so the number capture takes one optional `-NN` segment; every other convention (and an absent
 // one) keeps the dotted-only capture, where `3-01` reads as phase `3` exactly as before.
 const PHASE_PROSE_RE = /^\s*(?:Phase\s+)?(?:[A-Z][A-Z0-9_]*-)?(\d+[A-Z]?(?:\.\d+)*)\b/i;
-const PHASE_PROSE_MILESTONE_PREFIXED_RE = /^\s*(?:Phase\s+)?(?:[A-Z][A-Z0-9_]*-)?(\d+(?:-\d+)?[A-Z]?(?:\.\d+)*)\b/i;
+const PHASE_PROSE_MILESTONE_PREFIXED_RE = new RegExp(`^\\s*(?:Phase\\s+)?(?:[A-Z][A-Z0-9_]*-)?(${PHASE_NUMBER_TOKEN_SOURCE_MILESTONE_PREFIXED})\\b`, 'i');
 
 function parsePhaseFromProse(
   value: string | null,
@@ -2397,6 +2408,8 @@ const phaseIdExports = {
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
   OPTIONAL_PHASE_TAG_SOURCE,
   PHASE_NUMBER_TOKEN_SOURCE,
+  PHASE_NUMBER_TOKEN_SOURCE_MILESTONE_PREFIXED,
+  phaseNumberTokenSource,
   PHASE_DEP_REF_SOURCE,
   tokenizePhaseDependencyReferences,
   extractPhaseDependencyTokens,
