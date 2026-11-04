@@ -102,6 +102,11 @@ const {
   editCurrentMilestone,
   findMilestoneScopeHeadingLines,
   getMilestoneInfo,
+  // #5679: the STATE.md milestone read getMilestoneInfo itself uses, and the
+  // archive-aware owner of a ROADMAP offset.
+  readStateMilestoneScalar,
+  classifyMilestoneScalar,
+  milestoneVersionAtOffset,
   scanMilestonePhaseIds,
   // #4304: every recognized milestone heading in the document,
   // not just the active one — see bracketProgressSectionOwnedByOtherMilestone.
@@ -2495,6 +2500,49 @@ function isPhaseTokenWithin(token: string, ancestor: string): boolean {
   return a.every((segment, i) => canon(segment) === canon(t[i]));
 }
 
+/**
+ * #5679: where the bracket heading for `targetId` sits anywhere in the file, or
+ * null. Same fence-aware heading tokens and owned-line grammar as
+ * `activeBracketInsertHeading`, but with no window or archive filter, so it
+ * finds the heading the active window excludes.
+ */
+function bracketHeadingOffsetAnywhere(content: string, targetId: BracketRoadmapPhaseId): number | null {
+  const fencedLineNumbers = fencedRoadmapLineNumbers(content);
+  const lineByStart = new Map(splitRoadmapLineRecords(content).map((line) => [line.start, line]));
+  for (const heading of tokenizeHeadings(content)) {
+    const line = lineByStart.get(heading.offset);
+    if (!line || fencedLineNumbers.has(line.lineNumber)) continue;
+    const owned = classifyBracketOwnedLine(line.text);
+    if (owned.kind === 'heading' && owned.id && sameBracketPhaseId(owned.id, targetId)) return heading.offset;
+  }
+  return null;
+}
+
+/**
+ * #5679: the `phase insert` error for a phase that exists in the ROADMAP but
+ * outside the current milestone. Names the milestone that holds it (archive
+ * aware, never the current one) and the current milestone, saying "STATE.md's"
+ * only when STATE.md's `milestone:` is where that version came from.
+ */
+function otherMilestonePhaseMessage(rawContent: string, foundAt: number, cwd: string, afterPhase: string): string {
+  let stateVersion: string | null = null;
+  try {
+    const stateRaw = platformReadSync(path.join(planningDir(cwd), 'STATE.md'));
+    const scalar = stateRaw === null ? null : readStateMilestoneScalar(stateRaw);
+    if (scalar !== null) stateVersion = classifyMilestoneScalar(scalar).version;
+  } catch { /* unreadable STATE.md: getMilestoneInfo's own fallback below decides */ }
+  const derivedVersion = (getMilestoneInfo(cwd) as { value?: { version?: string } | null }).value?.version ?? null;
+  const current = stateVersion ?? derivedVersion;
+  const owner = milestoneVersionAtOffset(rawContent, foundAt);
+  const ownerClause = owner && owner.toLowerCase() !== current?.toLowerCase()
+    ? `is in milestone ${owner}`
+    : 'is outside the current milestone';
+  let currentClause = 'the current milestone does not include it';
+  if (stateVersion) currentClause = `STATE.md's current milestone is ${stateVersion}`;
+  else if (derivedVersion) currentClause = `the current milestone is ${derivedVersion}`;
+  return `Phase ${afterPhase} ${ownerClause}, but ${currentClause}. phase insert only targets phases in the current milestone.`;
+}
+
 function cmdPhaseInsert(
   cwd: string,
   afterPhase: string,
@@ -2589,6 +2637,9 @@ function cmdPhaseInsert(
     const isBulletStyle = !bracketContext && !headingMatch && bulletPattern.test(content) && !roadmapHasHeadingPhases;
 
     if (bracketContext && !bracketHeading) {
+      // #5679: a heading the active window excludes lives in another milestone.
+      const elsewhereAt = bracketHeadingOffsetAnywhere(rawContent, bracketTargetId!);
+      if (elsewhereAt !== null) error(otherMilestonePhaseMessage(rawContent, elsewhereAt, cwd, afterPhase));
       const searchedRanges = bracketSectionRanges?.details
         ? 'primary and Phase Details ranges'
         : 'primary range';
@@ -2613,17 +2664,7 @@ function cmdPhaseInsert(
       const checklistOffset = checklistPattern.exec(rawContent)?.index;
       const foundOffsets = [headingOffset, checklistOffset].filter((o): o is number => o !== undefined);
       if (foundOffsets.length > 0) {
-        const foundAt = Math.min(...foundOffsets);
-        const preceding = listMilestoneHeadings(rawContent.slice(0, foundAt));
-        const owner = preceding.length > 0 ? preceding[preceding.length - 1].version : null;
-        const current = (getMilestoneInfo(cwd) as { value?: { version?: string } | null }).value?.version ?? null;
-        const ownerClause = owner ? `is in milestone ${owner}` : 'is outside the current milestone';
-        const currentClause = current
-          ? `STATE.md's current milestone is ${current}`
-          : "STATE.md's current milestone does not include it";
-        error(
-          `Phase ${afterPhase} ${ownerClause}, but ${currentClause}. phase insert only targets phases in the current milestone.`,
-        );
+        error(otherMilestonePhaseMessage(rawContent, Math.min(...foundOffsets), cwd, afterPhase));
       }
       error(`Phase ${afterPhase} not found in ROADMAP.md`);
     }
