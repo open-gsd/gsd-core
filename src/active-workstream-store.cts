@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { probeTty, platformWriteSync, platformReadSync, platformEnsureDir, readPriorMarkdown } from './shell-command-projection.cjs';
+import { probeTty, platformWriteSync, platformReadSync, platformEnsureDir, readBoundedRegularFile } from './shell-command-projection.cjs';
 import {
   isValidActiveWorkstreamName,
   isReservedWorkstreamName,
@@ -538,9 +538,9 @@ function freshInitWorkstream(raw: string | null, now: number): string | null {
   return name && age >= 0 && age < INIT_WORKSTREAM_MAX_AGE_MS ? name : null;
 }
 
-/** The carry file's text, or null when it is missing, not a regular file, unreadable or longer than INIT_WORKSTREAM_MAX_BYTES bytes: the bounded read (O_NONBLOCK, `fstat` on the opened descriptor) is readPriorMarkdown's, so a FIFO or device planted at the path never blocks or streams. */
+/** The carry file's text, or null when it is missing, not a regular file, unreadable or longer than INIT_WORKSTREAM_MAX_BYTES bytes: the bounded read (O_NONBLOCK, `fstat` on the opened descriptor) is readBoundedRegularFile's, so a FIFO or device planted at the path never blocks or streams. */
 function readCarry(file: string): string | null {
-  const text = readPriorMarkdown(file, 'utf-8');
+  const text = readBoundedRegularFile(file, 'utf-8');
   return text === undefined || Buffer.byteLength(text, 'utf-8') > INIT_WORKSTREAM_MAX_BYTES ? null : text;
 }
 

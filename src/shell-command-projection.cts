@@ -1414,13 +1414,15 @@ export function retryRenameSync(fromPath: string, toPath: string): void {
 const MAX_PRIOR_BYTES = 2 * 1024 * 1024;
 
 /**
- * The Markdown document a write replaces, or undefined when there is none worth
- * diffing against: no file, not a regular file (a FIFO or device reports size 0
+ * The bounded regular-file reader: the text of `filePath`, or undefined when there is
+ * none worth reading: no file, not a regular file (a FIFO or device reports size 0
  * and would block or never end), unreadable, or larger than MAX_PRIOR_BYTES. The
  * bound is enforced on the bytes actually read from one open descriptor, so a
- * file that grows after the check cannot exceed it.
+ * file that grows after the check cannot exceed it. Callers: the scoped Markdown
+ * write's read of the `prior` document it replaces, and readCarry's read of the
+ * `init --ws` carry file in active-workstream-store.
  */
-export function readPriorMarkdown(filePath: string, encoding: BufferEncoding): string | undefined {
+export function readBoundedRegularFile(filePath: string, encoding: BufferEncoding): string | undefined {
   let fd: number | undefined;
   try {
     // O_NONBLOCK keeps opening a FIFO from waiting for a writer; it is absent on Windows.
@@ -1450,7 +1452,7 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   // #5165: a Markdown write is scoped to what it changed relative to the file it replaces.
   let prior = opts.prior;
   if (prior === undefined && opts.verbatim !== true && path.extname(filePath).toLowerCase() === '.md') {
-    prior = readPriorMarkdown(filePath, opts.encoding ?? 'utf-8');
+    prior = readBoundedRegularFile(filePath, opts.encoding ?? 'utf-8');
   }
   const { content: normalized, encoding } = normalizeContent(filePath, content, { ...opts, prior });
   fs.mkdirSync(path.dirname(filePath), { recursive: true });

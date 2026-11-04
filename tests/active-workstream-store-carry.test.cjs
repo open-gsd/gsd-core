@@ -157,11 +157,11 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
 
   test('a carry read goes through the bounded regular-file reader of shell-command-projection', (t) => {
     const projection = require('../gsd-core/bin/lib/shell-command-projection.cjs');
-    assert.equal(typeof projection.readPriorMarkdown, 'function', 'the owner of the bounded read is exported');
+    assert.equal(typeof projection.readBoundedRegularFile, 'function', 'the owner of the bounded read is exported');
     const session = path.basename(base);
     const file = carryFile(t, session);
     fs.writeFileSync(file, `alpha ${T}`);
-    const spy = t.mock.method(projection, 'readPriorMarkdown');
+    const spy = t.mock.method(projection, 'readBoundedRegularFile');
     assert.equal(peekInitWorkstream(base, session, T), 'alpha');
     assert.deepEqual(spy.mock.calls.map((c) => c.arguments[0]), [file]);
   });
