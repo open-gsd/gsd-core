@@ -18,7 +18,15 @@ export interface TestReportCase {
   group: string | null;
   groupIdentities: string[];
   status: TestStatus;
+  /**
+   * True for a test FILE that crashed at load (#5721): vitest's JUnit reporter emits one case whose
+   * `name` and `classname` are both the file name. It asserted nothing, so it can never be a RED target.
+   */
+  loadFailure?: true;
 }
+
+/** A name that is a test source file (vitest/jest/pytest style), as opposed to a Java class or method. */
+const TEST_FILE_NAME = /\.(?:[cm]?[jt]sx?|py|rb|php|swift|kt|go|rs)$/;
 
 export interface TestReport {
   format: ReportFormat;
@@ -126,6 +134,7 @@ function parseJunit(output: string): TestReport {
         group: className || null,
         groupIdentities: className ? [className, className.split('.').at(-1)!] : [],
         status: TestStatus.Passed,
+        ...(name === className && TEST_FILE_NAME.test(name) ? { loadFailure: true as const } : {}),
       };
     } else if (current && parent === 'testcase') {
       if (tag.name === 'failure' || tag.name === 'error') {
