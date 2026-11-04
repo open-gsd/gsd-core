@@ -207,6 +207,7 @@ describe('#5894: releaseTagFor', () => {
       ['release/1.20.0', 'v1.20.0'],
       ['hotfix/1.20.1', 'v1.20.1'],
       ['release/1.20', null],
+      ['release/01.20.0', null],
       ['chore/x', null],
       [undefined, null],
     ];

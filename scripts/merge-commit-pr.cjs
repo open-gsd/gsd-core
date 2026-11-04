@@ -54,7 +54,7 @@ const GH_MERGE_TIMEOUT_MS = 60000;
 
 /** The release tag a release/hotfix head branch publishes: release/1.20.0 -> v1.20.0. */
 function releaseTagFor(headRef) {
-  const match = /^(?:release|hotfix)\/([0-9]+\.[0-9]+\.[0-9]+)$/.exec(String(headRef || ''));
+  const match = /^(?:release|hotfix)\/((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))$/.exec(String(headRef || ''));
   return match ? `v${match[1]}` : null;
 }
 
@@ -149,6 +149,9 @@ function mergeWithMergeCommit({ prNumber, repo, gh = defaultGh }) {
   }
   if (kind === RELEASE_PIPELINE_PR_KIND.RELEASE_MERGE) {
     const tag = releaseTagFor(head.ref);
+    if (tag === null) {
+      return { ok: false, reason: MERGE_COMMIT_PR_REASON.VERIFY_UNREADABLE, kind, mergeSha, detail: 'no release tag for ' + head.ref };
+    }
     let tagCompare;
     try {
       tagCompare = JSON.parse(gh(['api', `repos/${repo}/compare/${tag}...${base.ref}`]));

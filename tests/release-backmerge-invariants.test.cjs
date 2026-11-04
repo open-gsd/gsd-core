@@ -13,10 +13,30 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const yaml = require('js-yaml');
+const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const WORKFLOWS_DIR = path.join(REPO_ROOT, '.github', 'workflows');
+
+const HAS_ADMIN_TOKEN_EXPR = "${{ secrets.GSD_BOT_PR_TOKEN != '' }}";
+
+// The step's `run` text up to (not including) the first line matching `stopRe`.
+function runPrefix(run, stopRe) {
+  const lines = run.split('\n');
+  const idx = lines.findIndex((l) => stopRe.test(l));
+  assert.notEqual(idx, -1, `no line matching ${stopRe} in the step's run`);
+  return lines.slice(0, idx).join('\n') + '\n';
+}
+
+function runGuard(guard, token, extraEnv) {
+  return spawnSync('bash', ['-c', guard], {
+    env: { ...process.env, HAS_ADMIN_TOKEN: token, ...extraEnv },
+    encoding: 'utf8',
+    timeout: QUICK_SPAWN_TIMEOUT_MS,
+  });
+}
 
 function loadWorkflow(name) {
   return yaml.load(fs.readFileSync(path.join(WORKFLOWS_DIR, name), 'utf8'));
@@ -104,6 +124,24 @@ describe('release backmerge invariants (#2504) — auto-backmerge.yml', () => {
     assert.doesNotMatch(step.run || '', /gh pr merge/);
   });
 
+  test('the back-merge step reads HAS_ADMIN_TOKEN from the secret and its guard fails without the token (#5894)', () => {
+    const { step } = findStep(steps, 'Merge the back-merge PR as a merge commit');
+    assert.ok(step);
+    assert.equal(step.env.HAS_ADMIN_TOKEN, HAS_ADMIN_TOKEN_EXPR);
+  });
+
+  test('the back-merge guard exits 1 with ::error:: without the token and 0 with it (#5894)', { skip: process.platform === 'win32' }, () => {
+    const { step } = findStep(steps, 'Merge the back-merge PR as a merge commit');
+    assert.ok(step);
+    // Stop at the line that RUNS the script, not the echo that mentions it.
+    const guard = runPrefix(step.run, /^\s*node scripts\/merge-commit-pr\.cjs\b/);
+    const without = runGuard(guard, 'false', { PR: '77' });
+    assert.equal(without.status, 1);
+    assert.ok(without.stdout.includes('::error::'));
+    const withToken = runGuard(guard, 'true', { PR: '77' });
+    assert.equal(withToken.status, 0);
+  });
+
   test('the -s ours reconcile step is present (never-conflict back-merge)', () => {
     const reconcile = steps.find((s) => typeof s.run === 'string' && /merge\s+-s\s+ours/.test(s.run));
     assert.ok(reconcile, 'expected a `git merge -s ours` reconcile step keeping next\'s tree wholesale');
@@ -163,6 +201,29 @@ describe('release backmerge invariants (#2504) — release.yml finalize', () => 
       const needs = [].concat(job.needs || []);
       assert.ok(needs.includes('validate-version'), `job ${name} must list validate-version in needs`);
     }
+  });
+
+  test('validate-version gates the ancestry step on non-rc, non-hotfix runs (#5894)', () => {
+    const vSteps = (wf.jobs && wf.jobs['validate-version'] && wf.jobs['validate-version'].steps) || [];
+    const { step } = findStep(vSteps, 'Require main to be an ancestor of next');
+    assert.ok(step);
+    assert.equal(step.if, "inputs.action != 'rc' && steps.validate.outputs.is_hotfix != 'true'");
+  });
+
+  test('the auto-merge step reads HAS_ADMIN_TOKEN from the secret (#5894)', () => {
+    assert.ok(automerge);
+    assert.equal(automerge.env.HAS_ADMIN_TOKEN, HAS_ADMIN_TOKEN_EXPR);
+  });
+
+  test('the auto-merge guard warns and exits 0 without the token, and stays silent with it (#5894)', { skip: process.platform === 'win32' }, () => {
+    assert.ok(automerge);
+    const guard = runPrefix(automerge.run, /^\s*PR=\$\(gh pr list/);
+    const without = runGuard(guard, 'false', {});
+    assert.equal(without.status, 0);
+    assert.ok(without.stdout.includes('::warning::'));
+    const withToken = runGuard(guard, 'true', {});
+    assert.equal(withToken.status, 0);
+    assert.ok(!withToken.stdout.includes('GSD_BOT_PR_TOKEN is not set'));
   });
 
   test('the auto-merge only fires on a cleanly MERGEABLE PR (never force-merges a conflict)', () => {

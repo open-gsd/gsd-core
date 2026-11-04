@@ -948,7 +948,7 @@ jobs:
         run: |
           set -uo pipefail
           if [ "$HAS_ADMIN_TOKEN" != "true" ]; then
-            echo "::warning::GSD_BOT_PR_TOKEN is not set, so the release → main PR is left for a repo admin: node scripts/merge-commit-pr.cjs <PR> (#5894)."
+            echo "::warning::GSD_BOT_PR_TOKEN is not set, so the release → main PR is left open: a merge made with GITHUB_TOKEN would not trigger auto-backmerge.yml, so main would never be merged back into next. Merge it as a repo admin: node scripts/merge-commit-pr.cjs <PR> (#5894)."
             exit 0
           fi
           PR=$(gh pr list --base main --head "$BRANCH" --state open --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
