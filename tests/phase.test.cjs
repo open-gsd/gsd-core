@@ -18524,3 +18524,126 @@ describe('phase insert placement (#5599)', () => {
     );
   });
 });
+
+describe('#5679: phase insert names another milestone', () => {
+  const STATE_V11 = ['---', 'milestone: v1.1', '---', '', '# State', ''].join('\n');
+
+  const ROADMAP_V10_HEAD = [
+    '# Roadmap',
+    '',
+    '### ✅ v1.0: First release (Shipped)',
+    '',
+  ];
+  const ROADMAP_V11 = [
+    '### 🚧 v1.1: Second release (In Progress)',
+    '',
+    '- [ ] Phase 3: Export',
+    '- [ ] Phase 4: Reports',
+    '',
+    '#### Phase 3: Export',
+    '**Goal:** export',
+    '',
+    '#### Phase 4: Reports',
+    '**Goal:** reports',
+    '',
+  ];
+  const ROADMAP = [
+    ...ROADMAP_V10_HEAD,
+    '- [x] Phase 1: Setup',
+    '- [x] Phase 2: Core',
+    '',
+    '#### Phase 1: Setup',
+    '**Goal:** setup',
+    '',
+    '#### Phase 2: Core',
+    '**Goal:** core',
+    '',
+    ...ROADMAP_V11,
+  ].join('\n');
+  // Phase 2 is a checklist bullet in v1.0 with no `#### Phase 2` detail heading.
+  const ROADMAP_NO_DETAIL = [
+    ...ROADMAP_V10_HEAD,
+    '- [x] Phase 1: Setup',
+    '- [x] Phase 2: Core',
+    '',
+    '#### Phase 1: Setup',
+    '**Goal:** setup',
+    '',
+    ...ROADMAP_V11,
+  ].join('\n');
+
+  function listPhaseDirs(dir) {
+    const phasesDir = path.join(dir, '.planning', 'phases');
+    return fs.existsSync(phasesDir) ? fs.readdirSync(phasesDir).sort() : [];
+  }
+
+  // Runs `phase insert` in a fresh project; always cleans up.
+  function runInsert(args, roadmapText) {
+    const dir = createTempProject();
+    try {
+      const roadmapPath = path.join(dir, '.planning', 'ROADMAP.md');
+      fs.writeFileSync(path.join(dir, '.planning', 'config.json'), '{}');
+      fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), STATE_V11);
+      fs.writeFileSync(roadmapPath, roadmapText);
+      const roadmapBefore = fs.readFileSync(roadmapPath, 'utf8');
+      const dirsBefore = listPhaseDirs(dir);
+      const result = runGsdTools(['phase', 'insert', ...args], dir);
+      return {
+        result,
+        roadmapBefore,
+        roadmapAfter: fs.readFileSync(roadmapPath, 'utf8'),
+        dirsBefore,
+        dirsAfter: listPhaseDirs(dir),
+      };
+    } finally {
+      cleanup(dir);
+    }
+  }
+
+  test('phase in a closed milestone: the error names that milestone and the current one', () => {
+    const { result } = runInsert(['2', 'Hotfix for v1.0'], ROADMAP);
+    assert.equal(result.success, false);
+    assert.ok(result.error.includes('milestone v1.0'), `error was: ${result.error}`);
+    assert.ok(result.error.includes('current milestone is v1.1'), `error was: ${result.error}`);
+    assert.ok(!result.error.includes('not found in ROADMAP.md'), `error was: ${result.error}`);
+  });
+
+  test('phase in a closed milestone: nothing is written', () => {
+    const { result, roadmapBefore, roadmapAfter, dirsBefore, dirsAfter } = runInsert(
+      ['2', 'Hotfix for v1.0'],
+      ROADMAP,
+    );
+    assert.equal(result.success, false);
+    assert.equal(roadmapAfter, roadmapBefore);
+    assert.deepEqual(dirsAfter, dirsBefore);
+  });
+
+  test('phase absent from the whole file keeps the not-found message', () => {
+    const { result } = runInsert(['9', 'x'], ROADMAP);
+    assert.equal(result.success, false);
+    assert.ok(result.error.includes('Phase 9 not found in ROADMAP.md'), `error was: ${result.error}`);
+  });
+
+  test('phase in the current milestone still inserts', () => {
+    const { result } = runInsert(['3', 'Export follow-up'], ROADMAP);
+    assert.ok(result.success, `phase insert failed: ${result.error}`);
+    assert.equal(JSON.parse(result.output).phase_number, '03.1');
+  });
+
+  test('phase only in another milestone checklist: gets the other-milestone message', () => {
+    const { result } = runInsert(['2', 'x'], ROADMAP_NO_DETAIL);
+    assert.equal(result.success, false);
+    assert.ok(result.error.includes('milestone v1.0'), `error was: ${result.error}`);
+    assert.ok(!result.error.includes('missing a detail section'), `error was: ${result.error}`);
+    assert.ok(!result.error.includes('not found in ROADMAP.md'), `error was: ${result.error}`);
+  });
+
+  test('milestone boundary: last phase of v1.0 is rejected, first phase of v1.1 inserts', () => {
+    const last = runInsert(['2', 'x'], ROADMAP);
+    assert.equal(last.result.success, false);
+    assert.ok(last.result.error.includes('milestone v1.0'), `error was: ${last.result.error}`);
+    const first = runInsert(['3', 'x'], ROADMAP);
+    assert.ok(first.result.success, `phase insert failed: ${first.result.error}`);
+    assert.equal(JSON.parse(first.result.output).phase_number, '03.1');
+  });
+});
