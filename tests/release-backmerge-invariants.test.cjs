@@ -73,9 +73,9 @@ describe('release backmerge invariants (#2504) — auto-backmerge.yml', () => {
   // The ancestry-establishing steps must be present. Together with the two
   // continue-on-error assertions above, this guarantees the back-merge PR is
   // opened and admin-merged unconditionally — the whole point of the workflow.
-  test('the ancestry-establishing steps (open PR + admin-merge) are present', () => {
+  test('the ancestry-establishing steps (open PR + merge-commit merge) are present', () => {
     assert.ok(findStep(steps, 'Open or update PR').step, "expected an 'Open or update PR' step");
-    assert.ok(findStep(steps, 'Admin-merge the back-merge PR').step, "expected an 'Admin-merge the back-merge PR' step");
+    assert.ok(findStep(steps, 'Merge the back-merge PR as a merge commit').step, "expected an 'Merge the back-merge PR as a merge commit' step");
   });
 
   // Closes the subtler regression the `continue-on-error` alone can't stop: a
@@ -84,7 +84,7 @@ describe('release backmerge invariants (#2504) — auto-backmerge.yml', () => {
   // the exact coupling this fix removes. The ancestry steps must never gate on
   // any step's outcome/conclusion — only on next_exists (+ needs_review).
   test('the ancestry steps are NOT gated on any step outcome/conclusion', () => {
-    for (const name of ['Open or update PR', 'Admin-merge the back-merge PR']) {
+    for (const name of ['Open or update PR', 'Merge the back-merge PR as a merge commit']) {
       const { step } = findStep(steps, name);
       assert.ok(step, `expected a '${name}' step`);
       const cond = typeof step.if === 'string' ? step.if : '';
@@ -95,6 +95,13 @@ describe('release backmerge invariants (#2504) — auto-backmerge.yml', () => {
           `failure block the ancestry PR again, re-opening the divergence loop. See #2504. (if: ${cond})`
       );
     }
+  });
+
+  test('the back-merge lands through merge-commit-pr.cjs, never `gh pr merge` (#5894)', () => {
+    const { step } = findStep(steps, 'Merge the back-merge PR as a merge commit');
+    assert.ok(step);
+    assert.match(step.run || '', /node scripts\/merge-commit-pr\.cjs "\$PR"/);
+    assert.doesNotMatch(step.run || '', /gh pr merge/);
   });
 
   test('the -s ours reconcile step is present (never-conflict back-merge)', () => {
@@ -134,9 +141,20 @@ describe('release backmerge invariants (#2504) — release.yml finalize', () => 
     assert.ok(automerge, "expected a finalize step named like 'Auto-merge the release → main PR'");
     assert.match(
       automerge.run || '',
-      /pr merge\b[^\n]*--admin/,
-      'the auto-merge step must admin-merge the merge-back PR (symmetric with auto-backmerge main→next). See #2515.'
+      /node scripts\/merge-commit-pr\.cjs "\$PR"/,
+      'the auto-merge step must land the merge-back PR through merge-commit-pr.cjs (a verified merge commit, #5894). See #2515.'
     );
+    assert.doesNotMatch(automerge.run || '', /gh pr merge/);
+  });
+
+  test('validate-version requires main to be an ancestor of next, after the published-version check (#5894)', () => {
+    const vSteps = (wf.jobs && wf.jobs['validate-version'] && wf.jobs['validate-version'].steps) || [];
+    const { step, index } = findStep(vSteps, 'Require main to be an ancestor of next');
+    const { index: publishedIdx } = findStep(vSteps, 'Reject already-published versions');
+    assert.ok(step, "expected a 'Require main to be an ancestor of next' step");
+    assert.ok(publishedIdx !== -1, "expected a 'Reject already-published versions' step");
+    assert.ok(index > publishedIdx);
+    assert.ok((step.run || '').includes('node scripts/release-ancestry.cjs --ancestor origin/main --descendant origin/next'));
   });
 
   test('the auto-merge only fires on a cleanly MERGEABLE PR (never force-merges a conflict)', () => {
