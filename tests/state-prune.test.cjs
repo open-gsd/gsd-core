@@ -547,7 +547,7 @@ describe('#5831: state prune never loses entries', () => {
 
   /** The production plan for an append onto `prior` (null = absent archive) by the run that pruned `stateBytes`. */
   function planFor(prior, sections, cutoff, keepRecent, stateBytes = fs.readFileSync(statePath)) {
-    const run = stateLib.pruneRunMarker(stateBytes, cutoff, keepRecent);
+    const run = stateLib.pruneRunMarker(prunableRawFrom(stateBytes.toString('utf-8'), cutoff), cutoff, keepRecent);
     return stateLib.planStateArchiveAppend(prior, sections, { date: realClock.localToday(), cutoff, keepRecent, run });
   }
 
@@ -1027,20 +1027,40 @@ describe('#5831: state prune never loses entries', () => {
     assertWriteIsPlan(writes[0], prunableRawFrom(stateLines(8, [...OLD_ENTRIES, PHASE7]), 3), 3, 5);
   });
 
-  test('a run marker is the latest marked block only, and depends on the STATE.md bytes and both options', () => {
-    const bytes = Buffer.from(stateLines(8, OLD_ENTRIES));
-    const run = stateLib.pruneRunMarker(bytes, 5, 3);
+  test('a run marker depends on the pruned sections\' bodies and both options only, and the latest marked block wins', () => {
+    const doc = (extra, decisions = [...OLD_ENTRIES, PHASE7], eol = '\n') =>
+      ['---', `last_updated: ${extra}`, '---', stateLines(8, decisions, eol), `## Session${eol}${eol}Stopped at: ${extra}${eol}`].join(eol);
+    const marker = (content, cutoff = 5, keepRecent = 3) =>
+      stateLib.pruneRunMarker(prunableRawFrom(content, cutoff), cutoff, keepRecent);
+    const run = marker(doc('one'));
     assert.match(run, /^[0-9a-f]{64}$/);
-    assert.strictEqual(stateLib.pruneRunMarker(Buffer.from(bytes), 5, 3), run, 'deterministic');
-    assert.notStrictEqual(stateLib.pruneRunMarker(Buffer.concat([bytes, Buffer.from('\n')]), 5, 3), run);
-    assert.notStrictEqual(stateLib.pruneRunMarker(bytes, 4, 3), run);
-    assert.notStrictEqual(stateLib.pruneRunMarker(bytes, 5, 4), run);
+    assert.strictEqual(marker(doc('two')), run, 'frontmatter and other sections do not count');
+    assert.strictEqual(marker(doc('one', [...OLD_ENTRIES, PHASE7], '\r\n')), run, 'line endings do not count');
+    assert.strictEqual(marker(doc('one', [...OLD_ENTRIES, '', PHASE7])), run, 'blank lines do not count');
+    assert.notStrictEqual(marker(doc('one', [...OLD_ENTRIES, PHASE7, '- [Phase 8]: new'])), run, 'a kept line of a pruned section counts');
+    assert.notStrictEqual(marker(doc('one', [PHASE1, PHASE2, PHASE7])), run, 'the pruned lines count');
+    assert.notStrictEqual(marker(doc('one'), 5, 4), run, 'keep-recent counts');
+    assert.notStrictEqual(marker(doc('one'), 4, 3), run, 'the cutoff counts');
 
-    const other = stateLib.pruneRunMarker(bytes, 1, 1);
+    const other = marker(doc('one'), 1, 1);
     assert.strictEqual(stateLib.lastPruneRunMarker(SEED_ARCHIVE), null, 'an archive without markers');
     assert.strictEqual(stateLib.lastPruneRunMarker(`x\n<!-- gsd-prune-run: ${run} -->\n\ny\n<!-- gsd-prune-run: ${other} -->\r\n`), other);
     assert.strictEqual(stateLib.lastPruneRunMarker(`- [Phase 1]: quoted <!-- gsd-prune-run: ${run} -->\n`), null,
       'a marker inside an entry line is not a block marker');
+  });
+
+  test('a retry after a kill still archives each entry once when another state command rewrote STATE.md in between', () => {
+    pruneKilledBeforeStateWrite(3);
+    const beforeOther = fs.readFileSync(statePath);
+    const other = runGsdTools(['state', 'record-session', '--stopped-at', 'between the kill and the retry'], tmpDir);
+    assert.ok(other.success, `record-session failed: ${other.error}`);
+    assert.notDeepStrictEqual(fs.readFileSync(statePath), beforeOther, 'the other state command changed STATE.md');
+
+    const writes = captureArchiveWrites();
+    prune(3);
+    assert.strictEqual(writes.length, 0, 'the retry does not write the archive');
+    assertArchivedOnce(OLD_ENTRIES);
+    assert.deepStrictEqual(prunable(), [{ section: 'Decisions', lines: [PHASE7] }], 'the retry finished the prune');
   });
 
   // ── boundaries of the archive base ─────────────────────────────────────
