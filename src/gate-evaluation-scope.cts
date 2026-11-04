@@ -406,8 +406,52 @@ export function resolveEvaluationScope(projectDir: string, unit: ScopeUnit, opti
   }
 }
 
-/** A commit's own file set. `--first-parent`: a merge commit contributes its diff against parent 1. */
+/** First git release with `show --remerge-diff` (#5751). */
+const REMERGE_DIFF_MIN_GIT: readonly [number, number] = [2, 36];
+
+/** Per-resolve cache of the `git --version` probe, keyed by the bound git function. */
+const remergeSupportCache = new WeakMap<Git, boolean>();
+
+/**
+ * Whether this git can report a merge's own changes (`--remerge-diff`, git >= 2.36). Detected from
+ * `git --version`, never from error output: an unknown option exits 128 or 129 depending on where
+ * it is parsed. An unparseable version reads as unsupported, the safe side. A timeout still
+ * rethrows (unresolvable); any other probe failure reads as unsupported.
+ */
+function supportsRemergeDiff(git: Git): boolean {
+  const cached = remergeSupportCache.get(git);
+  if (cached !== undefined) return cached;
+  let supported = false;
+  try {
+    const match = /(\d+)\.(\d+)/.exec(git(['--version']));
+    if (match) {
+      const major = Number(match[1]);
+      const minor = Number(match[2]);
+      supported = major > REMERGE_DIFF_MIN_GIT[0] || (major === REMERGE_DIFF_MIN_GIT[0] && minor >= REMERGE_DIFF_MIN_GIT[1]);
+    }
+  } catch (error) {
+    if (error instanceof ScopeUnreadable && error.reason === 'git-timeout') throw error;
+  }
+  remergeSupportCache.set(git, supported);
+  return supported;
+}
+
+/**
+ * A commit's own file set. A non-merge commit contributes what it changed. A merge commit
+ * contributes only what the merge itself changed (conflict resolutions and edits, from
+ * `--remerge-diff`), so a clean merge contributes nothing and both merge orientations agree (#5751).
+ * `--first-parent` would report a catch-up merge's whole base branch. On a git without
+ * `--remerge-diff`, or for an octopus merge (remerge covers two-parent merges), a merge contributes
+ * nothing: it may under-report, and never reports the base branch's work.
+ */
 function commitFiles(git: Git, sha: string): string[] {
+  const parents = git(['rev-list', '--parents', '-n', '1', sha]).trim().split(/\s+/).length - 1;
+  if (parents > 1) {
+    if (parents !== 2 || !supportsRemergeDiff(git)) return [];
+    return splitNul(git(
+      ['-c', 'core.quotepath=off', 'show', '--remerge-diff', '--pretty=format:', '--name-only', '-z', sha, '--', '.', ...SCOPE_EXCLUSION_PATHSPECS],
+    ));
+  }
   const out = git(
     ['-c', 'core.quotepath=off', 'show', '--first-parent', '--pretty=format:', '--name-only', '-z', sha, '--', '.', ...SCOPE_EXCLUSION_PATHSPECS],
   );
