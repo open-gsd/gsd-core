@@ -1437,21 +1437,24 @@ describe('#5715: config-dir rewrites are single-pass and literal', () => {
     }
   });
 
-  test('#5715: default-install output for .claude look-alikes equals the pre-#5715 output', () => {
-    // Goldens captured from a build of origin/next (the code before #5715).
+  test('#5715: default-install output for .claude look-alikes equals the pre-#5715 output, except the intentionally changed home and local look-alike files', () => {
+    // Goldens captured from a build of origin/next (the code before #5715). Two
+    // classes are INTENTIONALLY different from that build: a `.claude`-prefixed name
+    // that is not the config dir itself (`.claude.json`, `.claude-plugin`) is Claude
+    // Code's own file and now stays unchanged, in its `~/`, `$HOME/` and `./` forms.
     const forms = ['~/.claude', '~/.claude.', '~/.claude-', '~/.claudex', '~/.claude/', '~/.claude.json', '~/.claude-plugin', '$HOME/.claude.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'];
     const golden = {
       codex: ['~/.claude', '~/.claude.', '~/.claude-', '~/.claudex', '$HOME/.codex/', '~/.claude.json', '~/.claude-plugin', '$HOME/.claude.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'],
-      cline: ['$HOME/.cline', '$HOME/.cline.', '$HOME/.cline-', '~/.claudex', '$HOME/.cline/', '$HOME/.cline.json', '$HOME/.cline-plugin', '$HOME/.cline.json', '$HOME/.cline-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'],
-      cursor: ['$HOME/.cursor', '$HOME/.cursor.', '~/.claude-', '~/.claudex', '$HOME/.cursor/', '$HOME/.cursor.json', '~/.claude-plugin', '$HOME/.cursor.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.cursor.json', './.claude-x', './.claudex'],
-      windsurf: ['$HOME/.windsurf', '$HOME/.windsurf.', '~/.claude-', '~/.claudex', '$HOME/.windsurf/', '$HOME/.windsurf.json', '~/.claude-plugin', '$HOME/.windsurf.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'],
-      augment: ['$HOME/.augment', '$HOME/.augment.', '~/.claude-', '~/.claudex', '$HOME/.augment/', '$HOME/.augment.json', '~/.claude-plugin', '$HOME/.augment.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.augment.json', './.claude-x', './.claudex'],
-      trae: ['$HOME/.trae', '$HOME/.trae.', '$HOME/.trae-', '~/.claudex', '$HOME/.trae/', '$HOME/.trae.json', '$HOME/.trae-plugin', '$HOME/.trae.json', '$HOME/.trae-plugin', '$HOME/.claudex', './.trae.json', './.trae-x', './.claudex'],
-      codebuddy: ['$HOME/.codebuddy', '$HOME/.codebuddy.', '$HOME/.codebuddy-', '~/.claudex', '$HOME/.codebuddy/', '$HOME/.codebuddy.json', '$HOME/.codebuddy-plugin', '$HOME/.codebuddy.json', '$HOME/.codebuddy-plugin', '$HOME/.claudex', './.codebuddy.json', './.codebuddy-x', './.claudex'],
+      cline: ['$HOME/.cline', '$HOME/.cline.', '~/.claude-', '~/.claudex', '$HOME/.cline/', '~/.claude.json', '~/.claude-plugin', '$HOME/.claude.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'],
+      cursor: ['$HOME/.cursor', '$HOME/.cursor.', '~/.claude-', '~/.claudex', '$HOME/.cursor/', '~/.claude.json', '~/.claude-plugin', '$HOME/.claude.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'],
+      windsurf: ['$HOME/.windsurf', '$HOME/.windsurf.', '~/.claude-', '~/.claudex', '$HOME/.windsurf/', '~/.claude.json', '~/.claude-plugin', '$HOME/.claude.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'],
+      augment: ['$HOME/.augment', '$HOME/.augment.', '~/.claude-', '~/.claudex', '$HOME/.augment/', '~/.claude.json', '~/.claude-plugin', '$HOME/.claude.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'],
+      trae: ['$HOME/.trae', '$HOME/.trae.', '~/.claude-', '~/.claudex', '$HOME/.trae/', '~/.claude.json', '~/.claude-plugin', '$HOME/.claude.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'],
+      codebuddy: ['$HOME/.codebuddy', '$HOME/.codebuddy.', '~/.claude-', '~/.claudex', '$HOME/.codebuddy/', '~/.claude.json', '~/.claude-plugin', '$HOME/.claude.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'],
       claude: ['~/.claude', '~/.claude.', '~/.claude-', '~/.claudex', '$HOME/.claude/', '~/.claude.json', '~/.claude-plugin', '$HOME/.claude.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'],
-      pi: ['$HOME/.pi', '$HOME/.pi.', '~/.claude-', '~/.claudex', '$HOME/.pi/', '$HOME/.pi.json', '~/.claude-plugin', '$HOME/.pi.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.pi.json', './.claude-x', './.claudex'],
-      qwen: ['$HOME/.qwen', '$HOME/.qwen.', '~/.claude-', '~/.claudex', '$HOME/.qwen/', '$HOME/.qwen.json', '~/.claude-plugin', '$HOME/.qwen.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'],
-      hermes: ['$HOME/.hermes', '$HOME/.hermes.', '~/.claude-', '~/.claudex', '$HOME/.hermes/', '$HOME/.hermes.json', '~/.claude-plugin', '$HOME/.hermes.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'],
+      pi: ['$HOME/.pi', '$HOME/.pi.', '~/.claude-', '~/.claudex', '$HOME/.pi/', '~/.claude.json', '~/.claude-plugin', '$HOME/.claude.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'],
+      qwen: ['$HOME/.qwen', '$HOME/.qwen.', '~/.claude-', '~/.claudex', '$HOME/.qwen/', '~/.claude.json', '~/.claude-plugin', '$HOME/.claude.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'],
+      hermes: ['$HOME/.hermes', '$HOME/.hermes.', '~/.claude-', '~/.claudex', '$HOME/.hermes/', '~/.claude.json', '~/.claude-plugin', '$HOME/.claude.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'],
     };
     for (const [id, expected] of Object.entries(golden)) {
       const actual = forms.map((form) => _applyRuntimeRewrites(form, id, `$HOME/.${id}/`, true, undefined));
@@ -1484,10 +1487,12 @@ describe('#5715: config-dir rewrites are single-pass and literal', () => {
 
   describe('windsurf .devin forms', () => {
     const WS = '$HOME/.codeium/windsurf/';
-    // The pre-#5715 sequential output, pinned (the text before `.devin` survives).
+    // The pre-#5715 sequential output, pinned, except the `~/` and `$HOME/` skills
+    // forms: those emitted a stray `~/` or a doubled `$HOME/` and now yield the
+    // normalized windsurf prefix followed by `skills/x`.
     const cases = [
-      ['~/.devin/skills/x', '~/$HOME/.codeium/windsurf/skills/x'],
-      ['$HOME/.devin/skills/x', '$HOME/$HOME/.codeium/windsurf/skills/x'],
+      ['~/.devin/skills/x', '$HOME/.codeium/windsurf/skills/x'],
+      ['$HOME/.devin/skills/x', '$HOME/.codeium/windsurf/skills/x'],
       ['./.devin/skills/x', './$HOME/.codeium/windsurf/skills/x'],
       ['.devin/skills/y', '$HOME/.codeium/windsurf/skills/y'],
       ['./.devin/x', '$HOME/.codeium/windsurf/x'],
@@ -1496,7 +1501,7 @@ describe('#5715: config-dir rewrites are single-pass and literal', () => {
       ['~/.devin.json', '$HOME/.codeium/windsurf.json'],
       ['~/.devin-x', '~/.devin-x'],
     ];
-    test('#5715: global install keeps the pre-#5715 .devin output', () => {
+    test('#5715: global install .devin output (skills forms corrected, the rest as before)', () => {
       for (const [input, expected] of cases) {
         assert.strictEqual(_applyRuntimeRewrites(input, 'windsurf', WS, true, undefined), expected, input);
       }
