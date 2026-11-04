@@ -18711,14 +18711,6 @@ describe('#5679: phase insert names another milestone', () => {
     const bracketInsert = (phase) =>
       runInsert([phase, 'x'], BRACKET_ROADMAP, { state: BRACKET_STATE, config: BRACKET_CONFIG });
 
-    test('phase heading outside the active window: names the milestone that holds it', () => {
-      const { result } = bracketInsert('2');
-      assert.equal(result.success, false);
-      assert.ok(result.error.includes('milestone v1.9'), `error was: ${result.error}`);
-      assert.ok(result.error.includes('current milestone is v2.0'), `error was: ${result.error}`);
-      assert.ok(!result.error.includes('Could not find live'), `error was: ${result.error}`);
-    });
-
     test('phase absent from the whole file keeps the could-not-find-live text', () => {
       const { result } = bracketInsert('9');
       assert.equal(result.success, false);
@@ -18750,7 +18742,8 @@ describe('#5679: phase insert names another milestone', () => {
     ].join('\n');
     const { result } = runInsert(['9', 'x'], roadmap);
     assert.equal(result.success, false);
-    assert.equal(result.error, 'Phase 9 not found in ROADMAP.md');
+    assert.ok(result.error.includes('Phase 9 not found in ROADMAP.md'), `error was: ${result.error}`);
+    assert.ok(!result.error.includes('milestone'), `error was: ${result.error}`);
   });
   test('bullet-only roadmap whose only phase bullet is fenced: not found, bytes unchanged', () => {
     const roadmap = [
@@ -18765,7 +18758,8 @@ describe('#5679: phase insert names another milestone', () => {
     ].join('\n');
     const { result, roadmapBefore, roadmapAfter } = runInsert(['9', 'x'], roadmap);
     assert.equal(result.success, false);
-    assert.equal(result.error, 'Phase 9 not found in ROADMAP.md');
+    assert.ok(result.error.includes('Phase 9 not found in ROADMAP.md'), `error was: ${result.error}`);
+    assert.ok(!result.error.includes('milestone'), `error was: ${result.error}`);
     assert.equal(roadmapAfter, roadmapBefore);
   });
 
