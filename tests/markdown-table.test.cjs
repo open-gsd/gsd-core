@@ -717,11 +717,48 @@ describe('CLI: quick-tasks-append (#3356)', () => {
       assert.deepEqual(JSON.parse(r.output).warnings, []);
     });
 
-    test('--raw keeps stdout to the row alone and exits 0 on a long description', (t) => {
+    // runGsdTools drops stderr on success, so the --raw cases go through the
+    // process seam directly to keep both streams.
+    function appendTaskRaw(t, description) {
+      const { runNode } = require('./helpers/process-seam.cjs');
+      const { TOOLS_PATH, SESSION_IDENTITY_ENV_KEYS } = require('./helpers.cjs');
+      const { SEAM_DEFAULT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      writeState(tmpDir, 25);
+      const env = { ...process.env, ...Object.fromEntries(SESSION_IDENTITY_ENV_KEYS.map((k) => [k, ''])) };
+      const r = runNode([TOOLS_PATH, 'quick-tasks-append', '--task', description, '--raw'], {
+        cwd: tmpDir, env, timeoutMs: SEAM_DEFAULT_TIMEOUT_MS,
+      });
+      // Parse stdout as the row of the table it was appended to.
+      const table = parseMarkdownTable([
+        '| # | Description | Date | Commit | Directory |',
+        '|---|-------------|------|--------|-----------|',
+        r.stdout.trim(),
+      ].join('\n'));
+      assert.ok(table.ok, `stdout must be exactly one table row: ${JSON.stringify(r.stdout)}`);
+      return { r, rows: table.value.rows };
+    }
+
+    test('--raw at 241 characters: stdout is the row alone, stderr carries the warning, exit 0', (t) => {
       const description = 'a'.repeat(241);
-      const { r } = appendTask(t, description, ['--raw']);
-      assert.ok(r.success, r.error);
-      assert.match(r.output, new RegExp(`^\\| 1 \\| ${description} \\| \\S+ \\| \\S+ \\| — \\|$`));
+      const { r, rows } = appendTaskRaw(t, description);
+      assert.equal(r.exitCode, 0, r.stderr);
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0]['#'], '1');
+      assert.equal(rows[0].Description, description);
+      assert.equal(rows[0].Directory, '—');
+      const warningLines = r.stderr.split('\n').filter((l) => l.startsWith('⚠ quick-tasks-append:'));
+      assert.equal(warningLines.length, 1, `expected one stderr warning, got ${JSON.stringify(r.stderr)}`);
+      assert.ok(warningLines[0].includes('241'), warningLines[0]);
+    });
+
+    test('--raw at 240 characters: no stderr warning', (t) => {
+      const description = 'a'.repeat(240);
+      const { r, rows } = appendTaskRaw(t, description);
+      assert.equal(r.exitCode, 0, r.stderr);
+      assert.equal(rows[0].Description, description);
+      assert.ok(!r.stderr.includes('quick-tasks-append:'), `unexpected stderr warning: ${JSON.stringify(r.stderr)}`);
     });
   });
 
