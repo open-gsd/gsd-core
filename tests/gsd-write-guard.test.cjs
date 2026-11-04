@@ -28,12 +28,14 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const helpers = require('./helpers.cjs');
 const {
-  createTempDir, createTempGitProject, cleanup, runGsdTools, homeSandboxEnv, readFileNormalized,
-} = require('./helpers.cjs');
+  createTempDir, createTempGitProject, cleanup, runGsdTools, homeSandboxEnv, readFileNormalized, toPosixPath,
+} = helpers;
 const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
+const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { skipUnless } = require('./helpers/bash-probe.cjs');
-const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { QUICK_SPAWN_TIMEOUT_MS, GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-write-guard.js');
 
@@ -956,4 +958,58 @@ describe('guard <-> gsd-roadmapper binding (the /gsd:new-milestone collapse path
     assert.match(milestone, /re-spawn roadmapper[^\n]*same `<write_targets>` block/,
       'new-milestone.md: the Adjust re-spawn must reuse the same <write_targets> block');
   });
+
+  // #5859: the synthesizer commits all the research in one call (its Step 7). A named project keeps
+  // its research in its own directory, so that commit must stage that directory only; committing the
+  // root .planning/research/ commits the root project's research and leaves the named project's
+  // untracked. Each case runs the Step 7 fence as shipped, launcher preamble and real `query commit`
+  // included, with the research directory put in place of the agent's placeholder (a no-op when the
+  // fence names a literal path). The directory stands in for init's research_dir, which still
+  // resolves to the root under GSD_PROJECT until #5858 lands.
+  for (const agent of ['gsd-research-synthesizer.md', 'gsd-research-synthesizer.compact.md']) {
+    test(`${agent} Step 7 under ${NAMED_PROJECT.label}: the research commit stages only the named project's research directory (#5859)`,
+      { skip: skipUnless('bash') }, () => {
+        const dir = scopedFixture();
+        try {
+          fs.writeFileSync(path.join(dir, '.planning', 'beta', 'PROJECT.md'), '# Beta\n');
+          gitOrThrow(['add', '-A'], { cwd: dir });
+          gitOrThrow(['commit', '-m', 'add the beta project'], { cwd: dir });
+          const rootResearch = path.join(dir, '.planning', 'research');
+          const scopedResearch = path.join(dir, '.planning', 'beta', 'research');
+          for (const [researchDir, tag] of [[rootResearch, 'root'], [scopedResearch, 'beta']]) {
+            fs.mkdirSync(researchDir, { recursive: true });
+            for (const file of ['STACK.md', 'SUMMARY.md']) fs.writeFileSync(path.join(researchDir, file), `${tag} ${file}\n`);
+          }
+
+          const src = readFileNormalized(path.join(__dirname, '..', 'agents', agent));
+          const stepStart = src.indexOf('## Step 7: Commit All Research');
+          assert.notEqual(stepStart, -1, `synthesizer Step 7 missing or renamed in ${agent} — rebind this test`);
+          const step = src.slice(stepStart, src.indexOf('## Step 8', stepStart));
+          const fence = step.split('```bash')[1].split('```')[0].split('{research_dir}').join(toPosixPath(scopedResearch));
+          // RUNTIME_DIR pins the preamble's gsd_run to this checkout's gsd-tools.cjs; an empty
+          // CLAUDE_ENV_FILE keeps it from appending to a live session's env file.
+          const env = {
+            ...process.env, ...helpers.TEST_ENV_BASE, ...homeSandboxEnv(dir), ...NAMED_PROJECT.env,
+            RUNTIME_DIR: path.join(__dirname, '..'), CLAUDE_ENV_FILE: '',
+          };
+          const run = spawnSync('bash', ['-c', fence], { cwd: dir, env, encoding: 'utf8', timeout: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS });
+          assert.equal(run.error, undefined, `bash could not run ${agent}'s Step 7 fence: ${run.error}`);
+          assert.equal(run.status, 0, `${agent}'s Step 7 commit fence failed: ${run.stderr}`);
+          assert.equal(JSON.parse(run.stdout).committed, true, `query commit must commit the research: ${run.stdout}`);
+
+          const committed = gitOrThrow(['show', '--name-only', '--format=', 'HEAD'], { cwd: dir }).split('\n').filter(Boolean).sort();
+          assert.deepEqual(committed, ['.planning/beta/research/STACK.md', '.planning/beta/research/SUMMARY.md'],
+            `${agent}'s Step 7 must commit the named project's research directory and nothing else`);
+          const pending = gitOrThrow(['status', '--porcelain', '--untracked-files=all', '--', '.planning'], { cwd: dir })
+            .split('\n').filter(Boolean).sort();
+          assert.deepEqual(pending, ['?? .planning/research/STACK.md', '?? .planning/research/SUMMARY.md'],
+            "the root project's research must be neither staged nor committed");
+          for (const file of ['STACK.md', 'SUMMARY.md']) {
+            assert.equal(fs.readFileSync(path.join(rootResearch, file), 'utf8'), `root ${file}\n`, `the root ${file} must be untouched`);
+          }
+        } finally {
+          cleanup(dir);
+        }
+      });
+  }
 });
