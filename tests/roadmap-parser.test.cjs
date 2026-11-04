@@ -4664,6 +4664,44 @@ describe('roadmap-parser: isClosedMilestoneHeading', () => {
     ['v1.1 Failed Payment Recovery', false],
     ['v1.1 Shipped Features Release', false],
     ['v1.1 Closed Beta', false],
+    ['v1.1 Archived Docs', false],
+    ['v1.1 Abandoned Cart', false],
+    ['Failed Payment Recovery', false],
+    ['Milestone v1.1 Closed Beta', false],
+    // Ambiguous: first word + capitalized noun outside the exclusion set reads as a title.
+    ['v1.1 Shipped Feature Flags', false],
+    ['v1.1 Shipped The Big One', false],
+    // A status word that is not the first word of the name stays a status.
+    ['v1.0 Shipped Successfully', true],
+    ['v1.0 MVP Shipped Features Release', true],
+    ['MVP Shipped Early', true],
+    // A status word followed by a scope, time or number word is a status.
+    ['Shipped Phases 1-4', true],
+    ['Shipped Phase 3', true],
+    ['Shipped Version 2', true],
+    ['Shipped Milestone v1.0', true],
+    ['Shipped Today', true],
+    ['Shipped Yesterday', true],
+    ['Shipped Tomorrow', true],
+    ['Shipped Early', true],
+    ['Shipped Late', true],
+    ['Shipped Recently', true],
+    ['Shipped Release 2', true],
+    ['Shipped Spring 2026', true],
+    ['Shipped Winter', true],
+    ['Shipped Monday', true],
+    ['Shipped Friday', true],
+    ['Shipped March', true],
+    ['Shipped May 2026', true],
+    ['Shipped Sept 2026', true],
+    ['Shipped Q1 2026', true],
+    ['Shipped V2', true],
+    ['Shipped 2026', true],
+    ['v1.1 Shipped Phases 1-4', true],
+    // Tag names go, attribute text stays.
+    ['<span class="shipped">v1.0</span>', true],
+    ['v1.0 <b>Shipped</b> Successfully', true],
+    ['v1.1 <b>Closed</b> Beta', false],
     // A check mark inside a parenthetical naming another version is open.
     ['v2.1 Next (after v2.0 prep ✅)', false],
     // An active marker is never closed.
@@ -4683,7 +4721,7 @@ describe('roadmap-parser: isClosedMilestoneHeading', () => {
   const TITLE = fc.array(WORD, { minLength: 1, maxLength: 3 }).map((w) => w.join(' '));
   const VERSION = fc.tuple(fc.nat(9), fc.nat(9)).map(([a, b]) => `v${a}.${b}`);
   const STATUS = fc.constantFrom('closed', 'archived', 'abandoned', 'shipped', 'failed');
-  const SUFFIX = fc.tuple(STATUS, fc.constantFrom('caps', 'parens', 'brackets', 'dash', 'colon', 'date', 'iso')).map(([s, form]) => {
+  const SUFFIX = fc.tuple(STATUS, fc.constantFrom('caps', 'parens', 'brackets', 'dash', 'colon', 'date', 'month-year')).map(([s, form]) => {
     switch (form) {
       case 'caps': return s.toUpperCase();
       case 'parens': return `(${s})`;
@@ -4699,6 +4737,19 @@ describe('roadmap-parser: isClosedMilestoneHeading', () => {
     fc.assert(fc.property(VERSION, TITLE, SUFFIX, (v, t, s) => {
       assert.strictEqual(isClosedMilestoneHeading(`${v} ${t} ${s}`), true);
     }), { numRuns: 200 });
+  });
+
+  test('property: a status word then an excluded capitalized word reads closed', () => {
+    const EXCLUDED = fc.constantFrom(
+      'Phase', 'Phases', 'Version', 'Milestone', 'Release', 'Today', 'Yesterday', 'Tomorrow', 'Early', 'Late',
+      'Recently', 'Successfully', 'Spring', 'Summer', 'Autumn', 'Fall', 'Winter', 'January', 'Sept', 'March',
+      'Monday', 'Friday', 'Wed',
+    );
+    const CAPITALIZED = STATUS.map((s) => s[0].toUpperCase() + s.slice(1));
+    const LEAD = fc.constantFrom('', 'v1.1 ', 'Milestone v2.0 ', 'v3.4 MVP ');
+    fc.assert(fc.property(LEAD, CAPITALIZED, EXCLUDED, fc.constantFrom('', ' 2026', ' 1-4'), (lead, s, w, tail) => {
+      assert.strictEqual(isClosedMilestoneHeading(`${lead}${s} ${w}${tail}`), true);
+    }), { numRuns: 300 });
   });
 
   test('property: an active marker is never closed', () => {
