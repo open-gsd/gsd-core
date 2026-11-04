@@ -105,8 +105,11 @@ jobs:
 
       # #5894: a squashed back-merge leaves main outside next's history, and the
       # release → main merge then conflicts in every version field. Refuse to
-      # cut or finalize until main is an ancestor of next again.
+      # cut or finalize until main is an ancestor of next again. rc never touches
+      # main, and a hotfix is cut from a tag on main and merges back cleanly either
+      # way, so only a non-hotfix create or finalize is gated.
       - name: Require main to be an ancestor of next
+        if: inputs.action != 'rc' && steps.validate.outputs.is_hotfix != 'true'
         run: |
           git fetch --no-tags origin main next
           node scripts/release-ancestry.cjs --ancestor origin/main --descendant origin/next
@@ -941,8 +944,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN || secrets.GITHUB_TOKEN }}
           BRANCH: ${{ needs.validate-version.outputs.branch }}
+          HAS_ADMIN_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN != '' }}
         run: |
           set -uo pipefail
+          if [ "$HAS_ADMIN_TOKEN" != "true" ]; then
+            echo "::warning::GSD_BOT_PR_TOKEN is not set, so the release → main PR is left for a repo admin: node scripts/merge-commit-pr.cjs <PR> (#5894)."
+            exit 0
+          fi
           PR=$(gh pr list --base main --head "$BRANCH" --state open --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
           if [ -z "$PR" ]; then
             echo "No open release→main PR for $BRANCH (creation may be blocked by org policy); nothing to auto-merge."

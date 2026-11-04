@@ -6,16 +6,19 @@ Four ruleset specs live under `.github/rulesets/`. All are committed with
 `enforcement: disabled` and activated in stages via the 4-PR rollout below.
 
 ### `main-protection`
-Targets `~DEFAULT_BRANCH` (main). Enforces:
+Targets `~DEFAULT_BRANCH`, which is `next` (the default branch since ADR-230), despite the name. Enforces:
 - No deletions or force pushes
-- Merge commits only: `main` receives release/hotfix merge-backs, which must keep the release branch and its tag in `main`'s history (#5894)
-- All changes via pull request (0 required approvals, stale-review dismissal, thread resolution required, merge commits only)
+- Required linear history (no merge commits)
+- All changes via pull request (0 required approvals, stale-review dismissal, thread resolution required, squash/rebase only)
 - Required status checks: the aggregate `Required tests` gate plus PR policy
   checks for size, branch name, changeset, docs, target branch, issue link, and
   PR template format
+- One bypass actor, the repository Admin role, so the main → next back-merge can land as a merge commit despite the linear-history rule (#5894)
 
 ### `release-branches`
-Targets `refs/heads/release/**` and `refs/heads/hotfix/**`. Same checks as `main-protection`; PRs into release/hotfix branches merge by squash or rebase.
+Targets `refs/heads/release/**` and `refs/heads/hotfix/**`. Same rules as
+`main-protection` except `required_linear_history` is omitted (merge commits
+are permitted on release/hotfix branches).
 
 ### `tag-immutability`
 Targets all tags (`~ALL`). Blocks tag updates and deletions — tags are
@@ -31,7 +34,8 @@ waits up to 15 minutes to collect two PRs and up to 90 minutes for the checks
 to respond. It carries no other rules and one bypass actor, the repository Admin role (#5894), used to land the main → next back-merge as a merge commit through `scripts/merge-commit-pr.cjs`.
 
 Two things must be settled before it is enforced:
-- **The auto back-merge.** Settled by #5894: `auto-backmerge.yml` lands the back-merge with `node scripts/merge-commit-pr.cjs <PR>` (REST merge as an admin, pinned to the head sha, verified to keep `main` an ancestor of `next`). `check-branch` fails on back-merge PRs so the queue never takes one, and `release.yml` refuses to cut or finalize while `main` is not an ancestor of `next` (`scripts/release-ancestry.cjs`).
+- **The auto back-merge.** Settled by #5894: `auto-backmerge.yml` lands the back-merge with `node scripts/merge-commit-pr.cjs <PR>` (REST merge as an admin, pinned to the head sha, verified to keep `main` an ancestor of `next`). `check-branch` fails on back-merge PRs so the queue refuses to enqueue one (a merge_group run cannot eject it: #5600 keeps every merge_group job skipped), and `release.yml` refuses to cut or finalize while `main` is not an ancestor of `next` (`scripts/release-ancestry.cjs`).
+- **Rollout order (#5894).** The bypass actor only takes effect when the live `next-queue` ruleset is updated. Do not use `scripts/sync-rulesets.sh` for it (it forces one enforcement level onto every ruleset). After this change merges: `jq '{name,target,enforcement:"active",conditions,bypass_actors,rules}' .github/rulesets/next-queue.json | gh api -X PUT repos/open-gsd/gsd-core/rulesets/<next-queue id> --input -`, then land the repair back-merge with `node scripts/merge-commit-pr.cjs <PR>`. Until then `release.yml` refuses to cut or finalize a release.
 - **The Windows/macOS lane.** Moving it off PR runs is a separate switch, the
   repo variable `GSD_PR_LINUX_ONLY` (#5604). Set it only once the queue is
   enforced; until then Windows and macOS would first run after merge.

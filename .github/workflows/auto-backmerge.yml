@@ -252,10 +252,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN || secrets.GITHUB_TOKEN }}
           PR: ${{ steps.openpr.outputs.pr }}
+          HAS_ADMIN_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN != '' }}
         run: |
           # #5894: a merge commit (never the squash queue) keeps main an
           # ancestor of next. merge-commit-pr.cjs merges through the REST
           # endpoint (which honors the next-queue ruleset's admin bypass;
           # `gh pr merge --admin` does not), pinned to the head sha, and
           # fails unless the merge commit has two parents and next contains main.
+          if [ "$HAS_ADMIN_TOKEN" != "true" ]; then
+            echo "::error::GSD_BOT_PR_TOKEN is not set. The back-merge must be merged by a repo admin token: the next-queue ruleset's bypass is the Admin role, and GITHUB_TOKEN cannot use it (#5894). Merge PR #$PR with: node scripts/merge-commit-pr.cjs $PR"
+            exit 1
+          fi
           node scripts/merge-commit-pr.cjs "$PR"

@@ -157,6 +157,14 @@ describe('release backmerge invariants (#2504) — release.yml finalize', () => 
     assert.ok((step.run || '').includes('node scripts/release-ancestry.cjs --ancestor origin/main --descendant origin/next'));
   });
 
+  test('every other job needs validate-version, so the ancestry gate runs before any tagging job (#5894)', () => {
+    for (const [name, job] of Object.entries(wf.jobs)) {
+      if (name === 'validate-version') continue;
+      const needs = [].concat(job.needs || []);
+      assert.ok(needs.includes('validate-version'), `job ${name} must list validate-version in needs`);
+    }
+  });
+
   test('the auto-merge only fires on a cleanly MERGEABLE PR (never force-merges a conflict)', () => {
     assert.ok(automerge, "expected the 'Auto-merge the release → main PR' step");
     assert.match(

@@ -12,6 +12,7 @@ const yaml = require('js-yaml');
 const {
   MERGE_COMMIT_PR_REASON,
   GH_MERGE_TIMEOUT_MS,
+  releaseTagFor,
   parseArgs,
   mergeWithMergeCommit,
   main,
@@ -23,13 +24,13 @@ const MERGE = 'b'.repeat(40);
 const BASE_PARENT = 'c'.repeat(40);
 const REPO = 'open-gsd/gsd-core';
 
-function fakeGh({ pr, merge, commit, compare, throwOn = {} }) {
+function fakeGh({ pr, merge, commit, compare, tagCompare = { behind_by: 0 }, throwOn = {} }) {
   const calls = [];
   const gh = (args, opts) => {
     calls.push({ args, opts });
-    const key = args[1] === '-X' ? 'merge' : (/\/compare\//.test(args[1]) ? 'compare' : (/\/commits\//.test(args[1]) ? 'commit' : 'pr'));
+    const key = args[1] === '-X' ? 'merge' : (/\/compare\/v/.test(args[1]) ? 'tagCompare' : /\/compare\//.test(args[1]) ? 'compare' : (/\/commits\//.test(args[1]) ? 'commit' : 'pr'));
     if (throwOn[key]) { const e = new Error(throwOn[key]); e.stderr = throwOn[key]; throw e; }
-    return JSON.stringify({ pr, merge, commit, compare }[key]);
+    return JSON.stringify({ pr, merge, commit, compare, tagCompare }[key]);
   };
   return { gh, calls };
 }
@@ -88,6 +89,34 @@ describe('#5894: mergeWithMergeCommit', () => {
     const { result } = run({ pr: releasePr() });
     assert.equal(result.ok, true);
     assert.equal(result.kind, 'release-merge');
+  });
+
+  test('a release PR reads compare/<tag>...<base> and succeeds when the tag is in the base', () => {
+    const { result, calls } = run({ pr: releasePr() });
+    assert.equal(result.ok, true);
+    assert.ok(calls.some((c) => c.args[1] === 'repos/open-gsd/gsd-core/compare/v1.20.0...main'));
+  });
+
+  test('a release PR whose tag is not in the base is TAG_NOT_IN_BASE', () => {
+    const { result } = run({ pr: releasePr(), tagCompare: { behind_by: 1 } });
+    assert.equal(result.reason, MERGE_COMMIT_PR_REASON.TAG_NOT_IN_BASE);
+    assert.equal(result.detail, 'v1.20.0 behind_by=1');
+  });
+
+  test('an unreadable tag compare is VERIFY_UNREADABLE', () => {
+    const { gh } = fakeGh({ ...GOOD, pr: releasePr() });
+    const throwing = (args, opts) => {
+      if (/\/compare\/v/.test(args[1])) { const e = new Error('HTTP 404'); e.stderr = 'HTTP 404'; throw e; }
+      return gh(args, opts);
+    };
+    const result = mergeWithMergeCommit({ prNumber: 77, repo: REPO, gh: throwing });
+    assert.equal(result.reason, MERGE_COMMIT_PR_REASON.VERIFY_UNREADABLE);
+    assert.equal(result.mergeSha, MERGE);
+  });
+
+  test('a back-merge PR makes no tag compare call', () => {
+    const { calls } = run({ pr: backmergePr() });
+    assert.ok(!calls.some((c) => /\/compare\/v/.test(c.args[1])));
   });
 
   test('a one-parent (squash-shaped) result is NOT_A_MERGE_COMMIT', () => {
@@ -172,6 +201,19 @@ describe('#5894: mergeWithMergeCommit', () => {
   });
 });
 
+describe('#5894: releaseTagFor', () => {
+  test('maps release and hotfix heads to their tag', () => {
+    const table = [
+      ['release/1.20.0', 'v1.20.0'],
+      ['hotfix/1.20.1', 'v1.20.1'],
+      ['release/1.20', null],
+      ['chore/x', null],
+      [undefined, null],
+    ];
+    for (const [ref, tag] of table) assert.equal(releaseTagFor(ref), tag, String(ref));
+  });
+});
+
 describe('#5894: merge-commit-pr parseArgs', () => {
   test('defaults and --repo', () => {
     assert.deepEqual(parseArgs(['77'], {}), { prNumber: 77, repo: 'open-gsd/gsd-core' });
@@ -249,10 +291,19 @@ describe('#5894: branch-naming check-branch refuses back-merge PRs', () => {
 
   test('parity: every back-merge branch the pipeline classifies fails check-branch', async () => {
     for (const headRef of ['chore/backmerge-main-to-next-4dce9e8', 'chore/backmerge-main-to-next-' + 'a'.repeat(40)]) {
-      if (releasePipelinePrKind({ headRef, baseRef: 'next', sameRepo: true }) === RELEASE_PIPELINE_PR_KIND.MAIN_TO_NEXT_BACKMERGE) {
-        assert.ok(await failureFor(headRef, 'next'), `${headRef} must fail check-branch`);
-      }
+      assert.equal(
+        releasePipelinePrKind({ headRef, baseRef: 'next', sameRepo: true }),
+        RELEASE_PIPELINE_PR_KIND.MAIN_TO_NEXT_BACKMERGE,
+        `${headRef} must classify as a back-merge`,
+      );
+      assert.ok(await failureFor(headRef, 'next'), `${headRef} must fail check-branch`);
     }
+  });
+
+  test('the guard is a superset: a back-merge-named branch the classifier rejects still fails check-branch', async () => {
+    const headRef = 'chore/backmerge-main-to-next-not-a-sha';
+    assert.equal(releasePipelinePrKind({ headRef, baseRef: 'next', sameRepo: true }), null);
+    assert.ok(await failureFor(headRef, 'next'), `${headRef} must fail check-branch`);
   });
 
   test('other PRs are not failed by the back-merge rule', async () => {

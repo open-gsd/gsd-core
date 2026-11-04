@@ -38,6 +38,7 @@ const MERGE_COMMIT_PR_REASON = Object.freeze({
   MERGE_REFUSED: 'merge-refused',
   NOT_A_MERGE_COMMIT: 'not-a-merge-commit',
   ANCESTRY_BROKEN: 'ancestry-broken',
+  TAG_NOT_IN_BASE: 'tag-not-in-base',
   VERIFY_UNREADABLE: 'verify-unreadable',
 });
 
@@ -50,6 +51,12 @@ const PR_NUMBER_RE = /^[1-9][0-9]*$/;
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const GH_TIMEOUT_MS = 30000;
 const GH_MERGE_TIMEOUT_MS = 60000;
+
+/** The release tag a release/hotfix head branch publishes: release/1.20.0 -> v1.20.0. */
+function releaseTagFor(headRef) {
+  const match = /^(?:release|hotfix)\/([0-9]+\.[0-9]+\.[0-9]+)$/.exec(String(headRef || ''));
+  return match ? `v${match[1]}` : null;
+}
 
 /** Parse argv. Returns { prNumber, repo } or { error }. */
 function parseArgs(argv, env = process.env) {
@@ -140,6 +147,18 @@ function mergeWithMergeCommit({ prNumber, repo, gh = defaultGh }) {
   if (!compare || compare.behind_by !== 0) {
     return { ok: false, reason: MERGE_COMMIT_PR_REASON.ANCESTRY_BROKEN, kind, mergeSha, detail: `behind_by=${compare && compare.behind_by}` };
   }
+  if (kind === RELEASE_PIPELINE_PR_KIND.RELEASE_MERGE) {
+    const tag = releaseTagFor(head.ref);
+    let tagCompare;
+    try {
+      tagCompare = JSON.parse(gh(['api', `repos/${repo}/compare/${tag}...${base.ref}`]));
+    } catch (err) {
+      return { ok: false, reason: MERGE_COMMIT_PR_REASON.VERIFY_UNREADABLE, kind, mergeSha, detail: errorText(err) };
+    }
+    if (!tagCompare || tagCompare.behind_by !== 0) {
+      return { ok: false, reason: MERGE_COMMIT_PR_REASON.TAG_NOT_IN_BASE, kind, mergeSha, detail: `${tag} behind_by=${tagCompare && tagCompare.behind_by}` };
+    }
+  }
   return { ok: true, reason: MERGE_COMMIT_PR_REASON.MERGED, kind, mergeSha };
 }
 
@@ -161,4 +180,4 @@ function main(argv = process.argv.slice(2), { gh = defaultGh, env = process.env,
 
 if (require.main === module) runMain(main);
 
-module.exports = { MERGE_COMMIT_PR_REASON, HISTORY_KINDS, GH_TIMEOUT_MS, GH_MERGE_TIMEOUT_MS, parseArgs, mergeWithMergeCommit, main };
+module.exports = { MERGE_COMMIT_PR_REASON, HISTORY_KINDS, GH_TIMEOUT_MS, GH_MERGE_TIMEOUT_MS, releaseTagFor, parseArgs, mergeWithMergeCommit, main };
