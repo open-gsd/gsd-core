@@ -341,43 +341,6 @@ function resolveBase(env = process.env, { cwd = REPO_ROOT } = {}) {
 }
 
 /**
- * The commit the differential gate measures FROM: the merge-base of the resolved base
- * ref and HEAD, alongside the base tip it was derived from.
- *
- * The baseline manifests, the changed-path range (`resolveChangedPaths`'s three-dot
- * diff) and the ack-trailer range (`readAckTrailers`) must all start at ONE commit, or
- * a change that landed only on the base side after HEAD forked shows up in
- * baseline-vs-current while no path in `merge-base..HEAD` explains it (#5008). That is
- * exactly what `release.yml`'s finalize lane hit: it tests `release/X.Y.Z` as is (never
- * merged onto `next`), `next` gained #4937 between `create` and `finalize`, and a
- * baseline built at the `next` TIP attributed that merge to the release branch.
- *
- * PR lanes are NOT always merged onto `pull_request.base.sha`, the job's
- * `GSD_EMITTED_BASE` pin. `actions/checkout` checks out GitHub's merge ref
- * (`refs/pull/N/merge`), built on the base tip GitHub last saw, and `base.sha` can be
- * older: on PR #5119 it was 34 `next` commits behind the merge ref's first parent. The
- * "Rebase check" merge of the pin is then a no-op, `merge-base(pin, HEAD)` is the old
- * sha, and the measured range sweeps in base-branch commits the PR never authored, with
- * their ack trailers. So on a lane that names its base branch (`GITHUB_BASE_REF`) the
- * merge-base is advanced to `advanceToMergedBase`'s result: the invariant is that the
- * attribution base is always a commit HEAD contains, the pin bounds it from below and
- * the tree bounds it from above. When the pin is the merged base (the usual case) this
- * changes nothing and the cache key (`emitted-baseline-<base.sha>`) still hits; when it
- * is stale the key misses and `resolveBaseline` builds the baseline in-job at the
- * advanced sha (ADR-2719 §5).
- *
- * Null when no base ref resolves (the caller's explicit-skip path, same as
- * `resolveBase`). A merge-base failure once a base DOES resolve THROWS: the three-dot
- * diff needs the same commit, so a silent fallback to the tip would reintroduce the
- * mismatch this exists to close.
- *
- * @param {object} [env] base-ref environment overrides.
- * @param {object} [options] resolution and reporting options.
- * @param {string} [options.cwd] repository to resolve against.
- * @param {function} [options.diagnostic] receives base context before any checks fail or skip.
- * @returns {{ ref: string, tipSha: string, sha: string } | null} `sha` is the merge-base.
- */
-/**
  * The newest commit of the base branch that HEAD contains, when it is newer than
  * `floorSha` (a commit HEAD already contains); otherwise `floorSha` unchanged.
  *
@@ -415,6 +378,43 @@ function advanceToMergedBase(floorSha, env, { cwd }) {
   return merged;
 }
 
+/**
+ * The commit the differential gate measures FROM: the merge-base of the resolved base
+ * ref and HEAD, alongside the base tip it was derived from.
+ *
+ * The baseline manifests, the changed-path range (`resolveChangedPaths`'s three-dot
+ * diff) and the ack-trailer range (`readAckTrailers`) must all start at ONE commit, or
+ * a change that landed only on the base side after HEAD forked shows up in
+ * baseline-vs-current while no path in `merge-base..HEAD` explains it (#5008). That is
+ * exactly what `release.yml`'s finalize lane hit: it tests `release/X.Y.Z` as is (never
+ * merged onto `next`), `next` gained #4937 between `create` and `finalize`, and a
+ * baseline built at the `next` TIP attributed that merge to the release branch.
+ *
+ * PR lanes are NOT always merged onto `pull_request.base.sha`, the job's
+ * `GSD_EMITTED_BASE` pin. `actions/checkout` checks out GitHub's merge ref
+ * (`refs/pull/N/merge`), built on the base tip GitHub last saw, and `base.sha` can be
+ * older: on PR #5119 it was 34 `next` commits behind the merge ref's first parent. The
+ * "Rebase check" merge of the pin is then a no-op, `merge-base(pin, HEAD)` is the old
+ * sha, and the measured range sweeps in base-branch commits the PR never authored, with
+ * their ack trailers. So on a lane that names its base branch (`GITHUB_BASE_REF`) the
+ * merge-base is advanced to `advanceToMergedBase`'s result: the invariant is that the
+ * attribution base is always a commit HEAD contains, the pin bounds it from below and
+ * the tree bounds it from above. When the pin is the merged base (the usual case) this
+ * changes nothing and the cache key (`emitted-baseline-<base.sha>`) still hits; when it
+ * is stale the key misses and `resolveBaseline` builds the baseline in-job at the
+ * advanced sha (ADR-2719 §5).
+ *
+ * Null when no base ref resolves (the caller's explicit-skip path, same as
+ * `resolveBase`). A merge-base failure once a base DOES resolve THROWS: the three-dot
+ * diff needs the same commit, so a silent fallback to the tip would reintroduce the
+ * mismatch this exists to close.
+ *
+ * @param {object} [env] base-ref environment overrides.
+ * @param {object} [options] resolution and reporting options.
+ * @param {string} [options.cwd] repository to resolve against.
+ * @param {function} [options.diagnostic] receives base context before any checks fail or skip.
+ * @returns {{ ref: string, tipSha: string, sha: string } | null} `sha` is the merge-base.
+ */
 function resolveAttributionBase(env = process.env, { cwd = REPO_ROOT, diagnostic } = {}) {
   const resolved = resolveBase(env, { cwd });
   if (diagnostic) {

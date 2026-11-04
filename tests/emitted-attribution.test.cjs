@@ -2432,6 +2432,36 @@ test('the base advance is bounded: the pin holds off the PR lane, and a base tip
   assert.equal(resolveAttributionBase({ GSD_EMITTED_BASE: b0, GITHUB_BASE_REF: 'no-such-branch' }, { cwd: root }).sha, b0);
 });
 
+test('the base advance never moves below the pin when the base-branch ref is older than it', (t) => {
+  const { root, b0, b2, mergeRef } = makeStalePinMergeRefRepo(t);
+  // origin/next behind the pin: the pin's merge-base is newer, so it holds.
+  gitFixture(root, ['update-ref', 'refs/remotes/origin/next', b0]);
+  assert.equal(resolveAttributionBase({ GSD_EMITTED_BASE: b2, GITHUB_BASE_REF: 'next' }, { cwd: root }).sha, b2,
+    'an origin ref older than the pin must not pull the attribution base backwards');
+  assert.equal(gitFixture(root, ['rev-parse', 'HEAD']), mergeRef, 'fixture: HEAD stays the merge ref');
+});
+
+test('a genuine ack-trailer conflict in the PR\'s own commits still fails after the base advance', (t) => {
+  const { root, b0, b2 } = makeStalePinMergeRefRepo(t);
+  // Two PR-side commits on top of the merge ref declare one key with two reasons.
+  for (const [i, reason] of [[1, 'pr reason one'], [2, 'pr reason two']]) {
+    fs.writeFileSync(path.join(root, 'pr-only.txt'), `pr ${i}\n`);
+    gitFixture(root, ['add', '-A']);
+    gitFixture(root, ['commit', '-q', '-m', `PR commit ${i}`, '-m',
+      `Emitted-Drift-Ack-Growth: plan-phase.md — ${reason}`]);
+  }
+  const base = resolveAttributionBase({ GSD_EMITTED_BASE: b0, GITHUB_BASE_REF: 'next' }, { cwd: root });
+  assert.equal(base.sha, b2);
+  const { ack } = resolveAttributionInputs(base, {
+    cwd: root,
+    resolveBaselineFn: () => ({ ok: true, via: 'build', baseline: {} }),
+    readJson: () => null,
+  });
+  assert.equal(ack.errors.length, 1, 'the PR\'s own conflicting trailers must still be reported');
+  assert.match(ack.errors[0], /plan-phase\.md/);
+  assert.match(ack.errors[0], /declared twice/);
+});
+
 // ─── The real thing: the law, run against the actual tree ───────────────────
 //
 // Everything above exercises the pure law against synthetic input, which is what makes
