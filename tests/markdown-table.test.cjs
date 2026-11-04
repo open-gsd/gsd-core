@@ -650,6 +650,81 @@ describe('CLI: quick-tasks-append (#3356)', () => {
     });
   }
 
+  // #5830: an over-long description is still written verbatim (no text is
+  // shortened or dropped) but the result carries a warning. The limit is the
+  // #2618 240-character todo-bullet bound; exit code stays 0.
+  describe('#5830: description length warning', () => {
+    const { QUICK_TASK_DESCRIPTION_MAX_CHARS } = require('../gsd-core/bin/lib/markdown-table.cjs');
+
+    function appendTask(t, description, extraArgs = []) {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      writeState(tmpDir, 25);
+      const r = runGsdTools(['quick-tasks-append', '--task', description, ...extraArgs], tmpDir);
+      const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8');
+      return { r, state };
+    }
+
+    test('the limit is 240 characters, matching #2618', () => {
+      assert.equal(QUICK_TASK_DESCRIPTION_MAX_CHARS, 240);
+    });
+
+    test('a long description warns, exits 0, and is stored verbatim', (t) => {
+      const description = 'Long summary sentence. '.repeat(40).trim();
+      assert.ok(description.length > 240, 'precondition: description exceeds the limit');
+      const { r, state } = appendTask(t, description);
+      assert.ok(r.success, `quick-tasks-append must still exit 0: ${r.error}`);
+      const out = JSON.parse(r.output);
+      assert.equal(out.ok, true);
+      assert.equal(out.warnings.length, 1, `expected one warning, got ${JSON.stringify(out.warnings)}`);
+      assert.ok(out.warnings[0].includes(String(description.length)), `warning must state the length: ${out.warnings[0]}`);
+      assert.ok(out.warnings[0].includes('240'), `warning must state the limit: ${out.warnings[0]}`);
+      assert.ok(out.row.includes(`| ${description} |`), 'the row carries the full description');
+      assert.ok(state.includes(`| 1 | ${description} |`), 'STATE.md carries the full description, unshortened');
+    });
+
+    test('a short description produces no warning', (t) => {
+      const { r } = appendTask(t, 'Fix thing');
+      assert.ok(r.success, r.error);
+      assert.deepEqual(JSON.parse(r.output).warnings, []);
+    });
+
+    test('boundary: exactly 240 characters produces no warning', (t) => {
+      const description = 'a'.repeat(240);
+      const { r, state } = appendTask(t, description);
+      assert.ok(r.success, r.error);
+      assert.deepEqual(JSON.parse(r.output).warnings, []);
+      assert.ok(state.includes(`| ${description} |`));
+    });
+
+    test('boundary: 241 characters warns and is stored verbatim', (t) => {
+      const description = 'a'.repeat(241);
+      const { r, state } = appendTask(t, description);
+      assert.ok(r.success, r.error);
+      const out = JSON.parse(r.output);
+      assert.equal(out.warnings.length, 1);
+      assert.ok(out.warnings[0].includes('241'), out.warnings[0]);
+      assert.ok(state.includes(`| ${description} |`));
+    });
+
+    test('the length is measured on the description, not on its escaped cell', (t) => {
+      // 240 characters, two of them `|`: the escaped cell is longer than 240,
+      // the description itself is not.
+      const description = 'a|b'.padEnd(239, 'c') + '|';
+      assert.equal(description.length, 240);
+      const { r } = appendTask(t, description);
+      assert.ok(r.success, r.error);
+      assert.deepEqual(JSON.parse(r.output).warnings, []);
+    });
+
+    test('--raw keeps stdout to the row alone and exits 0 on a long description', (t) => {
+      const description = 'a'.repeat(241);
+      const { r } = appendTask(t, description, ['--raw']);
+      assert.ok(r.success, r.error);
+      assert.match(r.output, new RegExp(`^\\| 1 \\| ${description} \\| \\S+ \\| \\S+ \\| — \\|$`));
+    });
+  });
+
   test('defect 2: a body-only append does not force a full progress re-derive — a curated total_phases divergent from disk survives', (t) => {
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
