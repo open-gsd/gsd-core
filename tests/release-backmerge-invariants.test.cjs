@@ -72,7 +72,7 @@ describe('release backmerge invariants (#2504) — auto-backmerge.yml', () => {
 
   // The ancestry-establishing steps must be present. Together with the two
   // continue-on-error assertions above, this guarantees the back-merge PR is
-  // opened and admin-merged unconditionally — the whole point of the workflow.
+  // opened and merged as a merge commit unconditionally — the whole point of the workflow.
   test('the ancestry-establishing steps (open PR + merge-commit merge) are present', () => {
     assert.ok(findStep(steps, 'Open or update PR').step, "expected an 'Open or update PR' step");
     assert.ok(findStep(steps, 'Merge the back-merge PR as a merge commit').step, "expected an 'Merge the back-merge PR as a merge commit' step");

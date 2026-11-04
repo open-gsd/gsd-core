@@ -287,6 +287,7 @@ module.exports = {
   "tests/quick-review-scope-tip-bound.test.cjs",
   "tests/read-guard.test.cjs",
   "tests/reapply-verify-hunks.test.cjs",
+  "tests/release-ancestry.test.cjs",
   "tests/repo-layout.test.cjs",
   "tests/representative-corpus.test.cjs",
   "tests/require-fs-op-fallback.rule.test.cjs",

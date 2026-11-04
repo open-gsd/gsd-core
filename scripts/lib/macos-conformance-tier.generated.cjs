@@ -142,6 +142,7 @@ module.exports = {
   "tests/markdown-sectionizer-xml-tags.property.test.cjs",
   "tests/markdown-sectionizer.test.cjs",
   "tests/mcp-catalog.test.cjs",
+  "tests/merge-commit-pr.test.cjs",
   "tests/milestone-archive.test.cjs",
   "tests/milestone-release-tags.test.cjs",
   "tests/milestone-window-single-owner.test.cjs",
