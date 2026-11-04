@@ -610,6 +610,9 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
   const directoryContext = phaseDirectoryOptions(cwd);
   const lookup = resolvePhaseDirectoryLookup(cwd, phase, undefined, directoryContext);
   const { normalized, convention } = lookup;
+  // #5676: `lookup.convention` is only ever 'bracket'; the directory token grammar
+  // (`03-02-beta` -> `03-02` + `beta`) needs the repo's own convention.
+  const tokenConvention = resolvePhaseIdConvention(cwd);
   const notFound = {
     found: false,
     directory: null,
@@ -687,8 +690,8 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
       const dirMatch = isBracketDirectory
         ? null
         : match.match(
-          new RegExp(`^${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i')
-        ) || match.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i'));
+          new RegExp(`^${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}(${phaseNumberTokenSource(tokenConvention)})-?(.*)`, 'i')
+        ) || match.match(new RegExp(`^(${phaseNumberTokenSource(tokenConvention)})-?(.*)`, 'i'));
       const customParts = custom ? customPhaseDirectoryParts(match, custom) : null;
       const phaseNumber = isBracketDirectory
         ? phaseNumberForMatch(match, usedBareFallback, convention)

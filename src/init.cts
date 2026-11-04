@@ -117,6 +117,7 @@ const {
   customPhaseQuery,
   customDirectoryOwner,
   phaseScanTokenSource,
+  phaseNumberTokenSource,
   phaseKeyFromToken,
   phaseDirectoryContext,
   normalizePhaseName,
@@ -3310,7 +3311,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   } else {
     // Preserve the historical greedy non-bracket fallback byte-for-byte.
     const _allCompletedPattern = phaseEntryRegExp(
-      `.*${phaseHeadingPrefixNoCapture}(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`,
+      `.*${phaseHeadingPrefixNoCapture}(${phaseNumberTokenSource(phaseIdConvention)})[:\\s]`,
       'gi',
     );
     let _allMatch: RegExpExecArray | null;
@@ -3375,7 +3376,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
 
   const legacyManagerDependencyTokens = (prose: string): string[] => {
     const depPhaseRefRe = new RegExp(`${PHASE_DEP_REF_SOURCE}`, 'gi');
-    const depTokenRe = new RegExp(`${PHASE_NUMBER_TOKEN_SOURCE}`, 'gi');
+    const depTokenRe = new RegExp(`${phaseNumberTokenSource(phaseIdConvention)}`, 'gi');
     const tokens: string[] = [];
     let refMatch: RegExpExecArray | null;
     while ((refMatch = depPhaseRefRe.exec(prose)) !== null) {
