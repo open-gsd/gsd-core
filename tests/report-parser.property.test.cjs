@@ -299,11 +299,15 @@ test('property: arbitrary go-shaped noise never throws and never accepts without
 });
 
 test('#5721 property: a file-named load-failure entry is never a RED target; the real failure still is', () => {
-  const ext = fc.constantFrom('.test.js', '.spec.ts', '.test.mjs', '_test.py', '.test.tsx');
+  const ext = fc.constantFrom('.test.js', '.spec.ts', '.test.mjs', '.test.cts', '.spec.mts', '.test.tsx', '.test.jsx');
   const stem = fc.array(fc.constantFrom('a', 'Z', '7', '-', '_'), { minLength: 1, maxLength: 12 }).map(c => c.join(''));
-  fc.assert(fc.property(stem, ext, stem, (loadStem, extension, realStem) => {
+  // equal classname/name is the load-failure shape; any differing pair is a real test (and so a valid target).
+  fc.assert(fc.property(stem, ext, stem, fc.boolean(), (loadStem, extension, realStem, same) => {
     const file = `L${loadStem}${extension}`;
     const real = `R${realStem}`;
+    const sibling = `${file}x`;
+    const pair = parseTestReport(`<testsuite tests="1"><testcase classname="${file}" name="${same ? file : sibling}"><failure/></testcase></testsuite>`);
+    assert.equal(pair.tests[0].loadFailure === true, same);
     const output = `<testsuites><testsuite tests="1"><testcase classname="${file}" name="${file}"><failure/></testcase></testsuite>`
       + `<testsuite tests="1"><testcase classname="ok.test.js" name="${real}"><failure/></testcase></testsuite></testsuites>`;
     const load = classifyRedEvidence(evidence(output, file));
