@@ -316,3 +316,11 @@ test('#5721 property: a file-named load-failure entry is never a RED target; the
     assert.equal(classifyRedEvidence(evidence(output, real)).verdict, 'RED_EVIDENCE_OK');
   }));
 });
+
+test('#5721 property: classname "Test suite failed to run" is always flagged, whatever the name', () => {
+  const name = fc.string({ unit: fc.constantFrom('a', 'Z', '7', '-', '_', ' ', '.', '#', '>', 'ü'), maxLength: 30 });
+  fc.assert(fc.property(name, (title) => {
+    const report = parseTestReport(`<testsuite tests="1"><testcase classname="Test suite failed to run" name="${xmlEscape(title)}"><error/></testcase></testsuite>`);
+    assert.equal(report.tests[0].loadFailure, true);
+  }));
+});

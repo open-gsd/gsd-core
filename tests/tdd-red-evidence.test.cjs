@@ -1287,6 +1287,13 @@ describe('#5721 — vitest load-failure JUnit entry is never a RED target', () =
     assert.equal(flagged('classname="bad.test.js" name="bad.test.j"'), false);
   });
 
+  test('boundary: equal names with a wrong extension are not load failures, a Windows path is', () => {
+    for (const file of ['bad.test.j', 'bad.testjs', 'bad.js.snap', 'bad.test.jsxx']) {
+      assert.equal(parseTestReport(caseXml(`classname="${file}" name="${file}"`)).tests[0].loadFailure, undefined, file);
+    }
+    assert.equal(flagged('classname="src\\a\\bad.test.ts" name="src\\a\\bad.test.ts"'), true);
+  });
+
   test('a nested path and every JS/TS extension family member are flagged', () => {
     for (const file of ['src/a/bad.test.ts', 'bad.test.mts', 'bad.test.cts', 'bad.test.tsx', 'bad.test.mjs', 'bad.test.cjs', 'bad.test.jsx']) {
       assert.equal(flagged(`classname="${file}" name="${file}"`), true, file);
@@ -1326,6 +1333,12 @@ describe('#5721 — vitest load-failure JUnit entry is never a RED target', () =
     test('the real failing test is still RED_EVIDENCE_OK', () => {
       assert.equal(jest('real real fails').verdict, 'RED_EVIDENCE_OK');
     });
+
+    test('the jest-junit testExecError hook-failure entry (name === classname, not a file) is not a load failure', () => {
+      const title = "Test execution failure: could be caused by test hooks like 'afterAll'.";
+      const output = `<testsuite tests="1"><testcase classname="${title}" name="${title}" time="0"><failure>hook crashed</failure></testcase></testsuite>`;
+      assert.equal(parseTestReport(output).tests[0].loadFailure, undefined);
+    });
   });
 
   // node:test TAP (nodejs/node#64203): a test file that exits non-zero without a failing subtest
@@ -1338,6 +1351,17 @@ describe('#5721 — vitest load-failure JUnit entry is never a RED target', () =
       const result = classifyRedEvidence({ command: 'node --test', exitCode: 1, output: tapFor('test failed', 'ERR_TEST_FAILURE'), targetTest: 'crash.test.cjs' });
       assert.equal(result.verdict, 'INVALID_RED');
       assert.equal(result.reason, 'fixture_or_load_failure');
+    });
+
+    test('AC2: the file-level entry beside a real failing subtest: subtest target is RED, file target is INVALID_RED', () => {
+      const output = ['TAP version 13', 'not ok 1 - real subtest', '  ---', "  error: 'expected 1 to equal 2'", "  code: 'ERR_ASSERTION'", '  ...',
+        'not ok 2 - crash.test.cjs', '  ---', "  type: 'test'", "  failureType: 'testCodeFailure'", "  error: 'test failed'", "  code: 'ERR_TEST_FAILURE'", '  ...',
+        '1..2', '# tests 2', '# fail 2', ''].join('\n');
+      const run = (targetTest) => classifyRedEvidence({ command: 'node --test', exitCode: 1, output, targetTest });
+      assert.equal(run('real subtest').verdict, 'RED_EVIDENCE_OK');
+      const file = run('crash.test.cjs');
+      assert.equal(file.verdict, 'INVALID_RED');
+      assert.equal(file.reason, 'fixture_or_load_failure');
     });
 
     test('control: a file-looking test name that fails a real assertion stays a valid target', () => {
