@@ -19,6 +19,9 @@ gsd_run quick-batch complete \
   --raw
 ```
 
+The result's `warnings` is non-empty when the description was over 240 characters: the row is
+still written in full (#5830). Show each warning under that item in the final report.
+
 Items NOT reaching this call — `human_needed`, `failed` (planner/checker/
 merge/verification failure), or still `blocked`/`pending` (a dependency
 failed, row 32) — are left exactly as their respective routing step set
