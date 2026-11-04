@@ -1107,9 +1107,11 @@ function curlFormOpensSecret(text, g, closers) {
           const major = p;
           while (p < n && p - major < 127 && text[p] !== '/' && text[p] !== ' ') p++;
           if (p === major || text[p] !== '/') return { failed: true };
-          const minor = ++p;
-          while (p < n && p - minor < 127 && text[p] !== ';' && text[p] !== ',' && text[p] !== ' ' && text[p] !== '\n') p++;
-          if (p === minor) return { failed: true };
+          // The minor's 127-character cut moves nothing: curl goes on from it
+          // to the same `;` or end character, which the minor's own stop set
+          // holds, so only an empty minor differs.
+          p++;
+          if (p === n || ';, \n'.includes(text[p])) return { failed: true };
           while (p < n && text[p] !== ';' && text[p] !== endchar) p++;
         } else {
           while (p < n && !CURL_TYPE_TSPECIALS.includes(text[p])) p++;
