@@ -4639,3 +4639,72 @@ describe('milestoneVersionAtOffset (#5679)', () => {
     }), { numRuns: 200, seed: 5679 });
   });
 });
+
+// ─── isClosedMilestoneHeading (#5726) ────────────────────────────────────────
+
+describe('roadmap-parser: isClosedMilestoneHeading', () => {
+  const { isClosedMilestoneHeading } = roadmapParser;
+  const CASES = [
+    // Forms the pre-#5726 predicate read as closed: they stay closed.
+    ['v1.0 MVP shipped 2026-01-01 (Phases 1-4)', true],
+    ['v1.0 MVP shipped (2026-01-01)', true],
+    ['v1.0 MVP shipped on 2026-01-01', true],
+    ['v1.0 MVP shipped Jan 2026', true],
+    ['v1.0 MVP shipped in Q1', true],
+    ['v1.0 archived (see v1.1)', true],
+    ['v1.0 shipped; replaced by v1.1', true],
+    ['v1.1 Next (shipped, replaces v0.9)', true],
+    ['v1.0 <b>MVP</b> shipped', true],
+    // Strings the writers emit.
+    ['✅ v1.0 MVP — SHIPPED 2026-01-01', true],
+    ['v1.0 MVP (Shipped: 2026-01-01)', true],
+    ['v1.0 MVP — ARCHIVED 2026-01-01', true],
+    ['v1.0 MVP [shipped]', true],
+    // A status word that is a title word is open.
+    ['v1.1 Failed Payment Recovery', false],
+    ['v1.1 Shipped Features Release', false],
+    ['v1.1 Closed Beta', false],
+    // A check mark inside a parenthetical naming another version is open.
+    ['v2.1 Next (after v2.0 prep ✅)', false],
+    // An active marker is never closed.
+    ['v1.1 Active MVP shipped', false],
+    ['v1.1 WIP ✅ done', false],
+    ['v1.1 In Progress — SHIPPED', false],
+    // No marker at all.
+    ['v1.1 Payments', false],
+  ];
+  for (const [heading, expected] of CASES) {
+    test(`${JSON.stringify(heading)} -> ${expected ? 'closed' : 'open'}`, () => {
+      assert.strictEqual(isClosedMilestoneHeading(heading), expected);
+    });
+  }
+
+  const WORD = fc.constantFrom('payments', 'mvp', 'auth', 'search', 'billing', 'core', 'api', 'reports');
+  const TITLE = fc.array(WORD, { minLength: 1, maxLength: 3 }).map((w) => w.join(' '));
+  const VERSION = fc.tuple(fc.nat(9), fc.nat(9)).map(([a, b]) => `v${a}.${b}`);
+  const STATUS = fc.constantFrom('closed', 'archived', 'abandoned', 'shipped', 'failed');
+  const SUFFIX = fc.tuple(STATUS, fc.constantFrom('caps', 'parens', 'brackets', 'dash', 'colon', 'date', 'iso')).map(([s, form]) => {
+    switch (form) {
+      case 'caps': return s.toUpperCase();
+      case 'parens': return `(${s})`;
+      case 'brackets': return `[${s}]`;
+      case 'dash': return `— ${s}`;
+      case 'colon': return `: ${s}`;
+      case 'date': return `${s} 2026-01-01`;
+      default: return `${s} Jan 2026`;
+    }
+  });
+
+  test('property: any title plus a status suffix reads closed', () => {
+    fc.assert(fc.property(VERSION, TITLE, SUFFIX, (v, t, s) => {
+      assert.strictEqual(isClosedMilestoneHeading(`${v} ${t} ${s}`), true);
+    }), { numRuns: 200 });
+  });
+
+  test('property: an active marker is never closed', () => {
+    const ACTIVE = fc.constantFrom('WIP', 'ACTIVE', 'STARTED', 'in progress', '\u{1f6a7}', '\u{1f504}');
+    fc.assert(fc.property(VERSION, TITLE, SUFFIX, ACTIVE, (v, t, s, a) => {
+      assert.strictEqual(isClosedMilestoneHeading(`${v} ${t} ${s} ${a}`), false);
+    }), { numRuns: 200 });
+  });
+});
