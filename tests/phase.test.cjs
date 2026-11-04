@@ -18728,4 +18728,28 @@ describe('#5679: phase insert names another milestone', () => {
       );
     });
   });
+
+  test('phase mentioned only inside a fenced block and an HTML comment: not found, never attributed to a milestone', () => {
+    const roadmap = [
+      '# Roadmap',
+      '',
+      '### 🚧 v1.1 Next (In Progress)',
+      '',
+      '#### Phase 3: Export',
+      '**Goal**: e',
+      '',
+      '```',
+      '- [ ] **Phase 9: Example**',
+      '### Phase 9: Example',
+      '```',
+      '',
+      '<!--',
+      '- [ ] **Phase 9: Commented**',
+      '-->',
+      '',
+    ].join('\n');
+    const { result } = runInsert(['9', 'x'], roadmap);
+    assert.equal(result.success, false);
+    assert.equal(result.error, 'Phase 9 not found in ROADMAP.md');
+  });
 });
