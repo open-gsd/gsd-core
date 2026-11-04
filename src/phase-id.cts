@@ -2423,6 +2423,7 @@ const phaseIdExports = {
   PHASE_NUMBER_TOKEN_SOURCE_MILESTONE_PREFIXED,
   phaseNumberTokenSource,
   PHASE_DEP_REF_SOURCE,
+  phaseDepRefSource,
   tokenizePhaseDependencyReferences,
   extractPhaseDependencyTokens,
   CASE_FLEXIBLE_PROJECT_CODE_PREFIX_SOURCE,
