@@ -123,7 +123,7 @@ const {
   normalizePhaseName,
   stripProjectCodePrefix,
   PHASE_NUMBER_TOKEN_SOURCE,
-  phaseDepRefSource,
+  PHASE_DEP_REF_SOURCE,
   extractPhaseDependencyTokens,
   isForeignPrefixedPhaseQuery,
   isSentinelPhaseId,
@@ -3375,8 +3375,8 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   // helper changed its `Phase 1a` bytes from `1` to `1a`.
 
   const legacyManagerDependencyTokens = (prose: string): string[] => {
-    const depPhaseRefRe = new RegExp(phaseDepRefSource(phaseIdConvention), 'gi');
-    const depTokenRe = new RegExp(`${phaseNumberTokenSource(phaseIdConvention)}`, 'gi');
+    const depPhaseRefRe = new RegExp(`${PHASE_DEP_REF_SOURCE}`, 'gi');
+    const depTokenRe = new RegExp(`${PHASE_NUMBER_TOKEN_SOURCE}`, 'gi');
     const tokens: string[] = [];
     let refMatch: RegExpExecArray | null;
     while ((refMatch = depPhaseRefRe.exec(prose)) !== null) {

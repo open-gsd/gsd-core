@@ -1894,26 +1894,9 @@ describe('#5676: declaration scans and dependency tokens under milestone-prefixe
     assert.deepStrictEqual(bulletNums('- [ ] Phase 2: X', 'milestone-prefixed'), ['2']);
   });
 
-  test('dependency prose yields whole M-NN ids', () => {
-    assert.deepStrictEqual(depTokens('Phase 3-02, Phase 3-03', 'milestone-prefixed'), ['3-02', '3-03']);
-    assert.deepStrictEqual(depTokens('Phases 3-02 and 3-03', 'milestone-prefixed'), ['3-02', '3-03']);
-  });
-
   test('legacy dependency prose keeps range endpoints', () => {
     assert.deepStrictEqual(depTokens('Phase 1-3', undefined), ['1', '3']);
     assert.deepStrictEqual(depTokens('Phases 1 and 2', undefined), ['1', '2']);
     assert.deepStrictEqual(depTokens('Phase 1-3', 'sequential'), ['1', '3']);
-  });
-
-  test('property: a rendered M-NN list tokenizes back to the same ids', () => {
-    const id = fc.tuple(fc.integer({ min: 1, max: 99 }), fc.integer({ min: 1, max: 99 }))
-      .map(([m, n]) => `${m}-${String(n).padStart(2, '0')}`);
-    fc.assert(
-      fc.property(fc.array(id, { minLength: 1, maxLength: 6 }), (ids) => {
-        const prose = `Phase ${ids.join(', ')}`;
-        assert.deepStrictEqual(depTokens(prose, 'milestone-prefixed'), ids);
-      }),
-      { seed: 5676, numRuns: 300 },
-    );
   });
 });

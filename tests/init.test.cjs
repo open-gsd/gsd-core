@@ -6227,19 +6227,6 @@ describe('#5676: init progress and init manager under milestone-prefixed', () =>
     return tmp;
   }
 
-  test('#5676: init manager satisfies a dependency on a checked M-NN phase', (t) => {
-    const tmp = buildDependencyFixture(t, ['3-01', '3-02', '3-03'], [
-      { dir: '03-01-alpha', prefix: '03-01', complete: true },
-      { dir: '03-02-beta', prefix: '03-02', complete: true },
-      { dir: '03-03-gamma', prefix: '03-03', complete: false },
-    ]);
-    const result = runGsdTools(['init', 'manager', '--raw'], tmp);
-    assert.ok(result.success, `init manager failed: ${result.error}`);
-    const phases = JSON.parse(result.output).phases;
-    assert.deepStrictEqual(phases.map((p) => [bare(p.number), p.deps_satisfied]), [['3-01', true], ['3-02', true], ['3-03', true]]);
-    assert.ok(!phases.some((p) => bare(p.number) === '3'), 'the bare integer 3 is never a phase');
-  });
-
   test('#5676: init manager keeps the legacy dependency read on an integer phase', (t) => {
     const tmp = buildDependencyFixture(t, ['1', '2', '3'], [
       { dir: '01-alpha', prefix: '01', complete: true },
@@ -6250,21 +6237,5 @@ describe('#5676: init progress and init manager under milestone-prefixed', () =>
     assert.ok(result.success, `init manager failed: ${result.error}`);
     const phases = JSON.parse(result.output).phases;
     assert.deepStrictEqual(phases.map((p) => [bare(p.number), p.deps_satisfied]), [['1', true], ['2', true], ['3', true]]);
-  });
-
-  test('#5676: init manager reads a comma list of M-NN dependencies as whole ids', (t) => {
-    const tmp = buildDependencyFixture(t, ['3-01', '3-02', '3-03'], [
-      { dir: '03-01-alpha', prefix: '03-01', complete: true },
-      { dir: '03-02-beta', prefix: '03-02', complete: true },
-      { dir: '03-03-gamma', prefix: '03-03', complete: false },
-    ]);
-    const roadmapPath = path.join(tmp, '.planning', 'ROADMAP.md');
-    fs.writeFileSync(roadmapPath, fs.readFileSync(roadmapPath, 'utf8').replace('**Depends on**: Phase 3-02', '**Depends on**: Phase 3-01, Phase 3-02'));
-    const result = runGsdTools(['init', 'manager', '--raw'], tmp);
-    assert.ok(result.success, `init manager failed: ${result.error}`);
-    const phases = JSON.parse(result.output).phases;
-    const gamma = phases.find((p) => bare(p.number) === '3-03');
-    assert.strictEqual(gamma.deps_satisfied, true);
-    assert.deepStrictEqual(gamma.dep_phases.map(bare), ['3-01', '3-02']);
   });
 });

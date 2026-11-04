@@ -95,18 +95,6 @@ const PHASE_DEP_TOKEN_LIST_SOURCE =
   `${PHASE_NUMBER_TOKEN_SOURCE}(?:(?:\\s*,\\s*(?:and\\s+)?|\\s+and\\s+|\\s*&\\s*|\\s+(?:to|through)\\s+|\\s*-\\s*)${PHASE_NUMBER_TOKEN_SOURCE})*`;
 const PHASE_DEP_REF_SOURCE = `\\bphases?\\s+(${PHASE_DEP_TOKEN_LIST_SOURCE})`;
 
-// #5676: convention-parameterized dependency list. Under milestone-prefixed `3-02` is ONE id, so
-// the `-` range separator is dropped and the M-NN token is the list element; every other
-// convention returns the legacy constants byte-for-byte.
-function phaseDepTokenListSource(convention?: string | null): string {
-  if (convention !== 'milestone-prefixed') return PHASE_DEP_TOKEN_LIST_SOURCE;
-  const token = PHASE_NUMBER_TOKEN_SOURCE_MILESTONE_PREFIXED;
-  return `${token}(?:(?:\\s*,\\s*(?:and\\s+)?|\\s+and\\s+|\\s*&\\s*|\\s+(?:to|through)\\s+)(?:phases?\\s+)?${token})*`;
-}
-function phaseDepRefSource(convention?: string | null): string {
-  return convention === 'milestone-prefixed' ? `\\bphases?\\s+(${phaseDepTokenListSource(convention)})` : PHASE_DEP_REF_SOURCE;
-}
-
 // #2528 review: the CASE-FLEXIBLE renderings of the two sources above, for call
 // sites that scan directory names (where a project code or a variant suffix may
 // legitimately be lowercase) and therefore cannot use a case-sensitive class.
@@ -763,8 +751,8 @@ function tokenizePhaseDependencyReferences(
   const input = prose;
   const found: PhaseDependencyToken[] = [];
   const qualifiedTokenSpans: { start: number; end: number }[] = [];
-  const legacyRefRe = new RegExp(phaseDepRefSource(convention), 'gi');
-  const tokenRe = new RegExp(phaseNumberTokenSource(convention), convention === 'bracket' ? 'gi' : 'g');
+  const legacyRefRe = new RegExp(`${PHASE_DEP_REF_SOURCE}`, 'gi');
+  const tokenRe = new RegExp(PHASE_NUMBER_TOKEN_SOURCE, convention === 'bracket' ? 'gi' : 'g');
   let refMatch: RegExpExecArray | null;
   while ((refMatch = legacyRefRe.exec(input)) !== null) {
     const referenceStart = refMatch.index + refMatch[0].length - refMatch[1].length;
@@ -2423,7 +2411,6 @@ const phaseIdExports = {
   PHASE_NUMBER_TOKEN_SOURCE_MILESTONE_PREFIXED,
   phaseNumberTokenSource,
   PHASE_DEP_REF_SOURCE,
-  phaseDepRefSource,
   tokenizePhaseDependencyReferences,
   extractPhaseDependencyTokens,
   CASE_FLEXIBLE_PROJECT_CODE_PREFIX_SOURCE,
