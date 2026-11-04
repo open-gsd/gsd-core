@@ -93,9 +93,18 @@ function recoverDuplicateKeyDiagnostic(extra: string): Record<string, unknown> |
   // Count `failureType` keys anywhere in the body — block form, quoted form and flow
   // mapping positions included (the line-anchored scan missed a single-line
   // `{failureType: a, failureType: b}` body): two occurrences anywhere make the
-  // interruption signal ambiguous, so the block is never recovered.
-  const failureTypeKeys = body.match(/(?:^|[,\[{(\s])(?:'failureType'|"failureType"|failureType)\s*:/g);
-  if (failureTypeKeys !== null && failureTypeKeys.length > 1) return null;
+  // interruption signal ambiguous, so the block is never recovered. A double-quoted
+  // key is unescaped before comparing, because YAML decodes `"\x66…"`/`"\u0066…"`
+  // to the same key the plain form spells and the ambiguity rule must not be
+  // spellable around (single-quoted and plain keys have no escape forms).
+  let failureTypeKeys = 0;
+  for (const _match of body.matchAll(/(?:^|[,\[{(\s])(?:'failureType'|failureType)\s*:/g)) failureTypeKeys++;
+  for (const match of body.matchAll(/(?:^|[,\[{(\s])"((?:\\.|[^"\\])*)"\s*:/g)) {
+    const key = (match[1] ?? '').replace(/\\(?:x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4})/g, (escape) =>
+      String.fromCodePoint(parseInt(escape.slice(2), 16)));
+    if (key === 'failureType') failureTypeKeys++;
+  }
+  if (failureTypeKeys > 1) return null;
   return tolerant as Record<string, unknown>;
 }
 

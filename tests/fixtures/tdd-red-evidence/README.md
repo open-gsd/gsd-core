@@ -35,7 +35,9 @@ Vitest is not needed to run GSD's regression suite.
   `stack` in that test's diagnostic block, which strict YAML rejects as
   duplicate mapping keys. The nested capture wraps the same test in
   `describe('token validation', …)` so the diagnostic block arrives indented.
-  Source (`throws-red.test.cjs`; the others vary only in assertion/structure):
+  Source (`throws-red.test.cjs`; the others vary only in assertion/structure;
+  excerpt abridged — the captured file carries ~5 preamble lines, hence the
+  `8:1`/`9:31` locations):
 
 ```js
 const { test } = require('node:test');

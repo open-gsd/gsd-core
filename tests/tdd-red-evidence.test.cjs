@@ -1264,6 +1264,19 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
     assert.equal(result.evidence.fail, 1);
   });
 
+  test('a repeated-key block carrying no failureType at all recovers the same way', () => {
+    // node:test always writes failureType, but recovery must not depend on it:
+    // the scan for repeated failureType keys runs on a match that can be null.
+    const noFailureType = THROWS_REGEXP_DIAG.filter((line) => !line.startsWith('  failureType'));
+    const result = classifyRedEvidence(validRedInput({
+      output: dupDiagTAP(noFailureType),
+      targetTest: 'rejects a malformed token',
+      targetFile: undefined,
+    }));
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.deepEqual(result.evidence.report_errors, []);
+  });
+
   test('a single-key diagnostic control (assert.equal shape) stays accepted', () => {
     // The same failure intent without repeated keys — node:test's shape for
     // assert.equal — parsed fine before #5819 and must keep doing so.
@@ -1343,6 +1356,9 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
       // One flow-mapping body line repeating failureType: a line-anchored scan alone
       // would miss it; the interruption signal stays ambiguous either way.
       ["  {failureType: 'testTimeoutFailure', error: 'a', error: 'b', failureType: 'testCodeFailure'}"],
+      // Escape-spelled double-quoted key: YAML decodes "\x66" to 'f', so at parse level
+      // both keys are failureType and the first (interrupting) value must not be masked.
+      ['  "failureType": \'testTimeoutFailure\'', '  "' + String.fromCharCode(92) + 'x66ailureType": \'testCodeFailure\''],
     ]) {
       const result = classifyRedEvidence(validRedInput({
         output: dupDiagTAP([...diag, "  error: 'first'", "  error: 'second'"]),
@@ -1352,6 +1368,35 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
       assert.equal(result.verdict, 'INVALID_RED', JSON.stringify(diag));
       assert.ok(result.evidence.report_errors.includes('Malformed TAP'), JSON.stringify(diag));
     }
+  });
+
+  test('a single escape-spelled failureType key recovers like the plain form', () => {
+    // The unescape only feeds the ambiguity count: one failureType key, however
+    // spelled, does not make the signal ambiguous, and the decoded value reaches
+    // the interruption check through the tolerant parse like any other value.
+    const diag = [
+      '  "' + String.fromCharCode(92) + 'x66ailureType": \'testCodeFailure\'',
+      "  error: 'first'",
+      "  error: 'second'",
+    ];
+    const result = classifyRedEvidence(validRedInput({
+      output: dupDiagTAP(diag),
+      targetTest: 'rejects a malformed token',
+      targetFile: undefined,
+    }));
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.deepEqual(result.evidence.report_errors, []);
+    const interrupted = classifyRedEvidence(validRedInput({
+      output: dupDiagTAP([
+        '  "' + String.fromCharCode(92) + 'x66ailureType": \'testTimeoutFailure\'',
+        "  error: 'first'",
+        "  error: 'second'",
+      ]),
+      targetTest: 'rejects a malformed token',
+      targetFile: undefined,
+    }));
+    assert.equal(interrupted.verdict, 'INVALID_RED');
+    assert.deepEqual(interrupted.evidence.report_errors, ['Test run interrupted by cancellation, hook failure, or timeout']);
   });
 
   test('a diagnostic block carrying anchors or aliases is refused, never recovered', () => {
@@ -1416,6 +1461,33 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
     assert.equal(result.verdict, 'INVALID_RED');
     assert.equal(result.reason, 'invalid_record');
     assert.ok(result.evidence.report_errors.length > 0);
+  });
+
+  test('a plan-first report truncated mid-diagnostic is refused even with a complete plan', () => {
+    // The truncation guard above is backstopped by the missing plan; this shape
+    // has a COMPLETE plan first, so only the recovered-block framing (the block
+    // re-emitted without its closing `...`) refuses it. A recovery that ignored
+    // the missing closer would wave a truncated stream through as RED.
+    const planFirstTruncated = [
+      'TAP version 13',
+      '1..1',
+      '# Subtest: rejects a malformed token',
+      'not ok 1 - rejects a malformed token',
+      '  ---',
+      "  failureType: 'testCodeFailure'",
+      "  error: 'first failure'",
+      "  error: 'second failure'",
+      '  stack: \'frame one\'',
+    ].join('\n');
+    const result = classifyRedEvidence(validRedInput({
+      output: planFirstTruncated,
+      targetTest: 'rejects a malformed token',
+      targetFile: undefined,
+    }));
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'invalid_record');
+    assert.ok(result.evidence.report_errors.includes('Non-TAP data in report'),
+      `expected the truncated block to stay non-TAP data, got ${JSON.stringify(result.evidence.report_errors)}`);
   });
 
   test('a recovered non-target failure reports the policy refusal, not a broken report', () => {
