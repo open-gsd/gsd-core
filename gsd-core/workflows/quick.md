@@ -682,13 +682,13 @@ description into the row. A longer `--task` is still written in full, but the co
 
 **If `$VALIDATE_MODE` (or table has Status column):**
 ```bash
-TASK_TITLE="${TASK_TITLE:-$DESCRIPTION}"  # never an empty --task if the title was not set
+TASK_TITLE="${DESCRIPTION}"  # always this task's text; swap in a one-line summary only if it is long
 gsd_run quick-tasks-append --quick-id "${quick_id}" --slug "${slug}" --task "${TASK_TITLE}" --status "${VERIFICATION_STATUS}"
 ```
 
 **If NOT `$VALIDATE_MODE` (and table has no Status column):**
 ```bash
-TASK_TITLE="${TASK_TITLE:-$DESCRIPTION}"  # never an empty --task if the title was not set
+TASK_TITLE="${DESCRIPTION}"  # always this task's text; swap in a one-line summary only if it is long
 gsd_run quick-tasks-append --quick-id "${quick_id}" --slug "${slug}" --task "${TASK_TITLE}"
 ```
 
