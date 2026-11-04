@@ -102,6 +102,7 @@ module.exports = {
   "tests/effort-local-install.test.cjs",
   "tests/effort-surface-axis.test.cjs",
   "tests/effort-sync-installed-runtime.test.cjs",
+  "tests/effort-sync-manifest.test.cjs",
   "tests/emitted-ack-trailer.test.cjs",
   "tests/emitted-attribution.test.cjs",
   "tests/emitted-provenance.test.cjs",
