@@ -107,6 +107,7 @@ const {
   readStateMilestoneScalar,
   classifyMilestoneScalar,
   milestoneVersionAtOffset,
+  blankCodeAndComments,
   scanMilestonePhaseIds,
   // #4304: every recognized milestone heading in the document,
   // not just the active one — see bracketProgressSectionOwnedByOtherMilestone.
@@ -2634,7 +2635,8 @@ function cmdPhaseInsert(
     );
     const roadmapHasHeadingPhases = anyHeadingPattern.test(content);
     // #4304: bracket identities live in headings only, so a bracket ROADMAP never takes the legacy bullet-insertion branch — a bullet-only bracket ROADMAP falls through to the checklist-refusal path below instead.
-    const isBulletStyle = !bracketContext && !headingMatch && bulletPattern.test(content) && !roadmapHasHeadingPhases;
+    const liveCurrent = blankCodeAndComments(content);
+    const isBulletStyle = !bracketContext && !headingMatch && bulletPattern.test(liveCurrent) && !roadmapHasHeadingPhases;
 
     if (bracketContext && !bracketHeading) {
       // #5679: a heading the active window excludes lives in another milestone.
@@ -2653,15 +2655,17 @@ function cmdPhaseInsert(
         `${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
         'i',
       );
-      if (checklistPattern.test(content)) {
+      if (checklistPattern.test(liveCurrent)) {
         error(
           `Phase ${afterPhase} exists in roadmap summary but is missing a detail section (### Phase ${afterPhase}: ...).`,
         );
       }
       // #5679: this whole-file probe only chooses the error message; insert
       // stays current-milestone-only and never writes to another milestone.
-      const headingOffset = tokenizeHeadings(rawContent).find((h) => targetPattern.test(h.text))?.offset;
-      const checklistOffset = checklistPattern.exec(rawContent)?.index;
+      // Fenced blocks and HTML comments are masked (same length, offsets stay aligned) so example text never counts as a phase.
+      const liveContent = blankCodeAndComments(rawContent);
+      const headingOffset = tokenizeHeadings(liveContent).find((h) => targetPattern.test(h.text))?.offset;
+      const checklistOffset = checklistPattern.exec(liveContent)?.index;
       const foundOffsets = [headingOffset, checklistOffset].filter((o): o is number => o !== undefined);
       if (foundOffsets.length > 0) {
         error(otherMilestonePhaseMessage(rawContent, Math.min(...foundOffsets), cwd, afterPhase));

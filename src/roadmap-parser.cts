@@ -1829,7 +1829,8 @@ function milestoneVersionAtOffset(content: string, offset: number): string | nul
     .sort((a, b) => b.start - a.start);
   for (const span of containing) {
     const head = content.slice(span.start, span.start + 1200);
-    const summary = /<summary[^>]*>([\s\S]{0,1000}?)<\/summary>/i.exec(head);
+    // Only a <details> span owns its <summary>; a plain closed-milestone section must not borrow a later block's.
+    const summary = /^<details\b/i.test(head) ? /<summary[^>]*>([\s\S]{0,1000}?)<\/summary>/i.exec(head) : null;
     const text = summary ? summary[1].replace(/<[^>]{0,200}>/g, '') : head.split('\n', 1)[0];
     const version = text.match(VERSION_TOKEN)?.[0];
     if (version) return version;
@@ -3066,6 +3067,8 @@ export = {
   isClosedMilestoneDetails,
   // #5679: the owning milestone version of a ROADMAP offset, archive-aware.
   milestoneVersionAtOffset,
+  // #5679: same-length copy with fenced blocks, code spans and HTML comments blanked.
+  blankCodeAndComments,
   // #4144 round 5 Blocker 1: the readers' own phase-heading grammar, so the
   // bracket roadmap migrator's "phase-like but unparsed" refusal
   // (src/roadmap-upgrade.cts) can gate on it instead of a private, looser
