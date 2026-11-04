@@ -356,7 +356,11 @@ interface StateFields {
   stateLineCount: { value: number | null; scope: Scope };
 }
 
-/** Line count as an editor shows it: a trailing terminator does not open a new line. */
+/**
+ * Line count as an editor shows it: a trailing terminator does not open a new
+ * line. LF and CRLF both terminate a line; `''` is 0 lines. Exported for its
+ * property test (#5830).
+ */
 function countLines(content: string): number {
   if (content === '') return 0;
   const parts = content.split(/\r?\n/);
@@ -1391,4 +1395,5 @@ function buildPlanningSnapshot(cwd: string): PlanningSnapshot {
 export = {
   buildPlanningSnapshot,
   worstScope,
+  countLines,
 };
