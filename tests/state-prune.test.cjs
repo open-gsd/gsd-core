@@ -721,26 +721,61 @@ describe('#5831: state prune never loses entries', () => {
     });
   }
 
-  // ── STATE.md changed or unknown after its failed write: keep the archive ─
+  // ── STATE.md damaged by its failed write: put it back, then roll back ──
 
-  for (const damage of ['truncated', 'removed']) {
-    test(`a STATE.md write that ${damage} STATE.md before failing keeps the published archive`, () => {
-      const writes = captureArchiveWrites();
-      failWritesTo(statePath, 'ENOSPC', (p, realWrite) => {
+  /**
+   * Make the STATE.md write (temp file or direct) damage STATE.md and fail;
+   * writes of the restore temp file go through unless `failRestore`.
+   */
+  function damagingStateWrite(damage, failRestore = false) {
+    const realWrite = fs.writeFileSync;
+    mock.method(fs, 'writeFileSync', (p, ...rest) => {
+      const fail = (code) => { const e = new Error(`${code}: simulated`); e.code = code; throw e; };
+      if (p === statePath || (typeof p === 'string' && p.startsWith(statePath + '.tmp.'))) {
         if (damage === 'truncated') realWrite.call(fs, statePath, '');
         else if (fs.existsSync(statePath)) fs.unlinkSync(statePath);
-      });
+        fail('ENOSPC');
+      }
+      if (failRestore && typeof p === 'string' && p.startsWith(statePath + '.restore.')) fail('EIO');
+      return realWrite.call(fs, p, ...rest);
+    });
+  }
+
+  for (const damage of ['truncated', 'removed']) {
+    test(`a STATE.md write that ${damage} STATE.md before failing is undone: STATE.md and the archive are as before`, () => {
+      writeStateMd(tmpDir, stateLines(8, [...OLD_ENTRIES, PHASE7]) + '\n## Notes\n\nunpruned notes\n');
+      fs.writeFileSync(archivePath, SEED_ARCHIVE);
+      const stateBefore = fs.readFileSync(statePath);
+      const writes = captureArchiveWrites();
+      damagingStateWrite(damage);
       assert.throws(() => prune(3), (err) => err.code === 'ENOSPC' && !(err instanceof AggregateError),
         'the original STATE.md error propagates');
       mock.restoreAll();
 
-      assert.strictEqual(writes.length, 1);
-      assert.deepStrictEqual(fs.readFileSync(archivePath), writes[0].after,
-        'the archive is left exactly as published — it may hold the only copy');
-      assertWriteIsPlan(writes[0], prunableRawFrom(stateLines(8, [...OLD_ENTRIES, PHASE7]), 5), 5, 3);
+      assert.strictEqual(writes.length, 1, 'the archive was published before the STATE.md write');
+      assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md is byte-identical, kept entries and notes included');
+      assert.strictEqual(fs.readFileSync(archivePath, 'utf-8'), SEED_ARCHIVE, 'the archive is restored');
+      assert.deepStrictEqual(planningLeftovers(), []);
       assert.ok(lockReleased(), 'the STATE.md lock is released');
     });
   }
+
+  test('when STATE.md cannot be put back after a damaging write, both causes surface and the archive is kept', () => {
+    const writes = captureArchiveWrites();
+    damagingStateWrite('truncated', true);
+    let thrown = null;
+    try { prune(3); } catch (err) { thrown = err; }
+    mock.restoreAll();
+
+    assert.ok(thrown instanceof AggregateError, 'a combined error is thrown');
+    assert.deepStrictEqual(thrown.errors.map(e => e.code), ['ENOSPC', 'EIO']);
+    assert.strictEqual(writes.length, 1);
+    assert.deepStrictEqual(fs.readFileSync(archivePath), writes[0].after,
+      'the archive is left exactly as published — it holds the only copy of the pruned entries');
+    assertWriteIsPlan(writes[0], prunableRawFrom(stateLines(8, [...OLD_ENTRIES, PHASE7]), 5), 5, 3);
+    assert.deepStrictEqual(planningLeftovers(), []);
+    assert.ok(lockReleased(), 'the STATE.md lock is released');
+  });
 
   function prunableRawFrom(content, cutoff) {
     return transitionCore(content, { kind: 'prune', cutoff }, { clock: realClock }).data.archivedSections;
