@@ -1228,3 +1228,236 @@ describe('#5501: spawned installer — --config-dir skills find gsd-tools under 
     assert.strictEqual(r.stdout, path.join(configDir, 'gsd-core', 'bin', 'gsd-tools.cjs'));
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────
+// #5715: the per-profile rewrites, the agents pipeline and the spec-tree copy
+// ran sequential `.replace()` passes, so a later pass re-scanned the prefix an
+// earlier pass had just emitted (nested / `.claude.`-named config dirs repeated
+// the prefix) and string replacement values expanded `$&`. One pass, literal
+// replacement, each source occurrence rewritten exactly once.
+// ────────────────────────────────────────────────────────────────────────
+describe('#5715: config-dir rewrites are single-pass and literal', () => {
+  const fc = require('fast-check');
+  const conv = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
+  const { _applyRuntimeRewrites, applyAgentPathRewrites } = conv;
+  const installJs = require('../bin/install.js');
+
+  // Profiles that rewrite the bare `~/.claude` / `$HOME/.claude` forms to the prefix.
+  const BARE_IDS = ['cline', 'codebuddy', 'cursor', 'augment', 'windsurf', 'trae', 'kimi', 'pi'];
+  // Branded profiles rewrite the slash forms only (bare stays); codex is slash-only.
+  const SLASH_IDS = ['codex', 'hermes', 'qwen'];
+  const ALL_IDS = [...BARE_IDS, ...SLASH_IDS];
+  const SLASH_SRC = ['A ~/.claude/x', 'B $HOME/.claude/y'].join('\n');
+  const BARE_SRC = ['A ~/.claude/x', 'B ~/.claude', 'C $HOME/.claude/y', 'D $HOME/.claude'].join('\n');
+  const occurrences = (s, sub) => s.split(sub).length - 1;
+  const bareOf = (prefix) => prefix.replace(/\/$/, '');
+  const expectedBare = (prefix) =>
+    ['A ' + prefix + 'x', 'B ' + bareOf(prefix), 'C ' + prefix + 'y', 'D ' + bareOf(prefix)].join('\n');
+  const expectedSlash = (prefix) => ['A ' + prefix + 'x', 'B ' + prefix + 'y'].join('\n');
+
+  test('#5715: nested config dir rewritten once per profile', () => {
+    const prefix = '$HOME/.claude/profiles/work/';
+    for (const id of ALL_IDS) {
+      const out = _applyRuntimeRewrites(SLASH_SRC, id, prefix, true, undefined);
+      assert.strictEqual(occurrences(out, 'profiles/work'), 2, `${id}: ${JSON.stringify(out)}`);
+      assert.ok(!out.includes('profiles/work/profiles/work'), `${id}: ${JSON.stringify(out)}`);
+    }
+    for (const id of BARE_IDS) {
+      assert.strictEqual(_applyRuntimeRewrites(SLASH_SRC, id, prefix, true, undefined), expectedSlash(prefix), id);
+    }
+    assert.strictEqual(_applyRuntimeRewrites(SLASH_SRC, 'codex', prefix, true, undefined), expectedSlash(prefix));
+  });
+
+  test('#5715: bare form nested rewritten once', () => {
+    const prefix = '$HOME/.claude/profiles/work/';
+    for (const id of BARE_IDS) {
+      const out = _applyRuntimeRewrites(BARE_SRC, id, prefix, true, undefined);
+      assert.strictEqual(out, expectedBare(prefix), id);
+      assert.strictEqual(occurrences(out, '$HOME/.claude/profiles/work'), 4, id);
+    }
+  });
+
+  test('#5715: .claude.-named config dir not re-matched', () => {
+    const prefix = '$HOME/.claude.d/';
+    for (const id of BARE_IDS) {
+      assert.strictEqual(_applyRuntimeRewrites(BARE_SRC, id, prefix, true, undefined), expectedBare(prefix), id);
+    }
+    for (const id of SLASH_IDS) {
+      const out = _applyRuntimeRewrites(SLASH_SRC, id, prefix, true, undefined);
+      assert.ok(!out.includes('.d.d'), `${id}: ${JSON.stringify(out)}`);
+    }
+    assert.strictEqual(_applyRuntimeRewrites(SLASH_SRC, 'codex', prefix, true, undefined), expectedSlash(prefix));
+  });
+
+  test('#5715: replacement is literal', () => {
+    for (const prefix of ['$HOME/.cl$&ude/', '$HOME/.a$`b/', "$HOME/.a$'b/"]) {
+      for (const id of BARE_IDS) {
+        assert.strictEqual(_applyRuntimeRewrites(BARE_SRC, id, prefix, true, undefined), expectedBare(prefix), `${id} ${prefix}`);
+      }
+      assert.strictEqual(_applyRuntimeRewrites(SLASH_SRC, 'codex', prefix, true, undefined), expectedSlash(prefix), `codex ${prefix}`);
+    }
+  });
+
+  test('#5715: agents pipeline single-pass', () => {
+    const src = ['A ~/.claude/x', 'C $HOME/.claude/y'].join('\n');
+    for (const prefix of ['$HOME/.claude/profiles/work/', '$HOME/.claude.d/', '$HOME/.cl$&ude/']) {
+      assert.strictEqual(
+        applyAgentPathRewrites(src, 'claude', prefix),
+        ['A ' + prefix + 'x', 'C ' + prefix + 'y'].join('\n'),
+        prefix,
+      );
+    }
+  });
+
+  describe('spec-tree copy (copyWithPathReplacement)', () => {
+    const copied = (prefix, src) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5715-'));
+      try {
+        const from = path.join(root, 'from');
+        const to = path.join(root, 'to');
+        fs.mkdirSync(from);
+        fs.writeFileSync(path.join(from, 'a.md'), src);
+        installJs.copyWithPathReplacement(from, to, prefix, 'claude', false, true, root);
+        return fs.readFileSync(path.join(to, 'a.md'), 'utf8');
+      } finally {
+        require('./helpers.cjs').cleanup(root);
+      }
+    };
+    const src = ['A ~/.claude/x', 'C $HOME/.claude/y'].join('\n');
+
+    test('#5715: spec-tree copy single-pass', () => {
+      for (const prefix of ['$HOME/.claude/profiles/work/', '$HOME/.claude.d/', '$HOME/.cl$&ude/']) {
+        assert.strictEqual(copied(prefix, src), ['A ' + prefix + 'x', 'C ' + prefix + 'y'].join('\n'), prefix);
+      }
+    });
+
+    test('#5715: surfaces agree', () => {
+      for (const prefix of ['$HOME/.claude/profiles/work/', '$HOME/.claude.d/', '$HOME/.cl$&ude/', '$HOME/.claude/']) {
+        const skill = _applyRuntimeRewrites(src, 'claude', prefix, true, undefined);
+        assert.strictEqual(applyAgentPathRewrites(src, 'claude', prefix), skill, `agents ${prefix}`);
+        assert.strictEqual(copied(prefix, src), skill, `spec-tree ${prefix}`);
+      }
+    });
+  });
+
+  test('#5715: own dot-dir prefix not rescanned', () => {
+    const cursor = _applyRuntimeRewrites('A ~/.cursor/x', 'cursor', '$HOME/.cursor/sub/', true, undefined);
+    assert.strictEqual(cursor, 'A $HOME/.cursor/sub/x');
+    const hermes = _applyRuntimeRewrites('A ~/.hermes/x', 'hermes', '$HOME/.hermes/sub/', true, undefined);
+    assert.strictEqual(hermes, 'A $HOME/.hermes/sub/x');
+    const qwen = _applyRuntimeRewrites('A ~/.qwen/x', 'qwen', '$HOME/.qwen/sub/', true, undefined);
+    assert.strictEqual(qwen, 'A $HOME/.qwen/sub/x');
+  });
+
+  test('#5715: default installs byte-identical', () => {
+    const src = ['A ~/.claude/x', 'B ~/.claude', 'C $HOME/.claude/y', 'D $HOME/.claude', 'E ./.claude/z'].join('\n');
+    const golden = {
+      codex: ['A $HOME/.claude/x', 'B ~/.claude', 'C $HOME/.claude/y', 'D $HOME/.claude', 'E ./.codex/z'],
+      cline: ['A $HOME/.claude/x', 'B $HOME/.claude', 'C $HOME/.claude/y', 'D $HOME/.claude', 'E ./.cline/z'],
+      codebuddy: ['A $HOME/.claude/x', 'B $HOME/.claude', 'C $HOME/.claude/y', 'D $HOME/.claude', 'E ./.codebuddy/z'],
+      cursor: ['A $HOME/.claude/x', 'B $HOME/.claude', 'C $HOME/.claude/y', 'D $HOME/.claude', 'E ./.cursor/z'],
+      augment: ['A $HOME/.claude/x', 'B $HOME/.claude', 'C $HOME/.claude/y', 'D $HOME/.claude', 'E ./.augment/z'],
+      windsurf: ['A $HOME/.claude/x', 'B $HOME/.claude', 'C $HOME/.claude/y', 'D $HOME/.claude', 'E ./.windsurf/z'],
+      trae: ['A $HOME/.claude/x', 'B $HOME/.claude', 'C $HOME/.claude/y', 'D $HOME/.claude', 'E ./.trae/z'],
+      kimi: ['A $HOME/.claude/x', 'B $HOME/.claude', 'C $HOME/.claude/y', 'D $HOME/.claude', 'E ./.kimi-code/z'],
+      pi: ['A $HOME/.claude/x', 'B $HOME/.claude', 'C $HOME/.claude/y', 'D $HOME/.claude', 'E ./.pi/z'],
+      hermes: ['A $HOME/.hermes/x', 'B $HOME/.claude', 'C $HOME/.hermes/y', 'D $HOME/.claude', 'E ./.hermes/z'],
+      qwen: ['A $HOME/.qwen/x', 'B $HOME/.claude', 'C $HOME/.qwen/y', 'D $HOME/.claude', 'E ./.qwen/z'],
+      claude: ['A $HOME/.claude/x', 'B ~/.claude', 'C $HOME/.claude/y', 'D $HOME/.claude', 'E ./.claude/z'],
+    };
+    for (const [id, lines] of Object.entries(golden)) {
+      assert.strictEqual(_applyRuntimeRewrites(src, id, '$HOME/.claude/', true, undefined), lines.join('\n'), id);
+    }
+    const own = {
+      codex: ['A $HOME/.codex/x', 'B ~/.claude', 'C $HOME/.codex/y', 'D $HOME/.claude', 'E ./.codex/z'],
+      cline: ['A $HOME/.cline/x', 'B $HOME/.cline', 'C $HOME/.cline/y', 'D $HOME/.cline', 'E ./.cline/z'],
+      codebuddy: ['A $HOME/.codebuddy/x', 'B $HOME/.codebuddy', 'C $HOME/.codebuddy/y', 'D $HOME/.codebuddy', 'E ./.codebuddy/z'],
+      cursor: ['A $HOME/.cursor/x', 'B $HOME/.cursor', 'C $HOME/.cursor/y', 'D $HOME/.cursor', 'E ./.cursor/z'],
+      augment: ['A $HOME/.augment/x', 'B $HOME/.augment', 'C $HOME/.augment/y', 'D $HOME/.augment', 'E ./.augment/z'],
+      windsurf: ['A $HOME/.windsurf/x', 'B $HOME/.windsurf', 'C $HOME/.windsurf/y', 'D $HOME/.windsurf', 'E ./.windsurf/z'],
+      trae: ['A $HOME/.trae/x', 'B $HOME/.trae', 'C $HOME/.trae/y', 'D $HOME/.trae', 'E ./.trae/z'],
+      kimi: ['A $HOME/.kimi/x', 'B $HOME/.kimi', 'C $HOME/.kimi/y', 'D $HOME/.kimi', 'E ./.kimi-code/z'],
+      pi: ['A $HOME/.pi/x', 'B $HOME/.pi', 'C $HOME/.pi/y', 'D $HOME/.pi', 'E ./.pi/z'],
+      hermes: ['A $HOME/.hermes/x', 'B $HOME/.hermes', 'C $HOME/.hermes/y', 'D $HOME/.hermes', 'E ./.hermes/z'],
+      qwen: ['A $HOME/.qwen/x', 'B $HOME/.qwen', 'C $HOME/.qwen/y', 'D $HOME/.qwen', 'E ./.qwen/z'],
+    };
+    for (const [id, lines] of Object.entries(own)) {
+      const prefix = `$HOME/.${id}/`;
+      assert.strictEqual(_applyRuntimeRewrites(src, id, prefix, true, undefined), lines.join('\n'), `${id} own default`);
+    }
+  });
+
+  test('#5715: long config dir boundary', () => {
+    const NAME_MAX = 255;
+    for (const len of [NAME_MAX - 1, NAME_MAX, NAME_MAX + 1]) {
+      const prefix = `$HOME/.claude/${'a'.repeat(len)}/`;
+      for (const id of ['cline', 'cursor']) {
+        assert.strictEqual(_applyRuntimeRewrites(BARE_SRC, id, prefix, true, undefined), expectedBare(prefix), `${id} ${len}`);
+      }
+    }
+    const PATH_MAX = 4096;
+    for (const total of [PATH_MAX - 1, PATH_MAX, PATH_MAX + 1]) {
+      const head = '$HOME/.claude/';
+      const prefix = head + 'b'.repeat(total - head.length - 1) + '/';
+      assert.strictEqual(prefix.length, total);
+      assert.strictEqual(_applyRuntimeRewrites(BARE_SRC, 'cline', prefix, true, undefined), expectedBare(prefix), `total ${total}`);
+    }
+  });
+
+  test('#5715: look-alike source forms preserved', () => {
+    const src = [
+      'a ~/.claude-plugin/plugin.json',
+      'b $HOME/.claudeignore',
+      'c ~/.claude.json',
+      'd $HOME/.claude.d/q',
+      'e ~/.claude.d',
+    ].join('\n');
+    for (const id of BARE_IDS) {
+      assert.strictEqual(_applyRuntimeRewrites(src, id, '$HOME/.claude-work/', true, undefined), src, id);
+    }
+  });
+
+  test('#5715: no-op inputs', () => {
+    for (const id of ALL_IDS) {
+      assert.strictEqual(_applyRuntimeRewrites('', id, '$HOME/.claude/profiles/work/', true, undefined), '', id);
+      const plain = 'nothing to rewrite here\n';
+      assert.strictEqual(_applyRuntimeRewrites(plain, id, '$HOME/.claude/profiles/work/', true, undefined), plain, id);
+    }
+  });
+
+  test('#5715: slash-only profile keeps bare form', () => {
+    const src = ['B ~/.claude', 'D $HOME/.claude'].join('\n');
+    for (const prefix of ['$HOME/.claude/profiles/work/', '$HOME/.claude.d/', '$HOME/.codex/']) {
+      assert.strictEqual(_applyRuntimeRewrites(src, 'codex', prefix, true, undefined), src, prefix);
+    }
+  });
+
+  test('#5715: trae converter does not rescan prefix', () => {
+    const prefix = '$HOME/.claude/profiles/work/';
+    const rewritten = _applyRuntimeRewrites(SLASH_SRC, 'trae', prefix, true, undefined);
+    const skill = installJs.convertClaudeCommandToTraeSkill(rewritten, 'gsd-x');
+    assert.strictEqual(occurrences(skill, '$HOME/.claude/profiles/work/'), 2, skill);
+    assert.ok(!skill.includes('.trae/profiles'), skill);
+  });
+
+  test('#5715 property: rewrite is single-pass and idempotent', () => {
+    const piece = fc.constantFrom('~/.claude/x', '$HOME/.claude/y', '~/.claude', '$HOME/.claude');
+    const dir = fc.constantFrom('.claude', '.claude.', '.claude/profiles/work', '.cl$&ude', '.a$`b', ".a$'b", '.cfg', '.claude.d');
+    fc.assert(
+      fc.property(fc.array(piece, { maxLength: 8 }), dir, (pieces, cfg) => {
+        const prefix = `$HOME/${cfg}/`;
+        const source = pieces.join('\n');
+        const model = pieces.map((p) => (p.endsWith('/x') || p.endsWith('/y') ? prefix + p.slice(-1) : bareOf(prefix))).join('\n');
+        const out = _applyRuntimeRewrites(source, 'cline', prefix, true, undefined);
+        assert.strictEqual(out, model);
+        // one-to-one: every source form yields exactly one prefix
+        assert.strictEqual(occurrences(out, bareOf(prefix)), pieces.length);
+        // idempotent when the config dir does not itself contain a source form
+        if (cfg !== '.claude/profiles/work' && cfg !== '.claude.' && cfg !== '.claude.d') {
+          assert.strictEqual(_applyRuntimeRewrites(out, 'cline', prefix, true, undefined), out);
+        }
+      }),
+      { seed: 5715, numRuns: 200 },
+    );
+  });
+});
