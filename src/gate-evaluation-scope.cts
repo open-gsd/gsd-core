@@ -110,7 +110,10 @@ export interface EvaluationScope {
   files: string[];
   /** `changedFiles` that no longer exist on disk, by name. */
   missingOnDisk: string[];
-  /** Range minus union: files changed in the phase window by commits that are not the unit's. */
+  /**
+   * Range minus union: files changed in the phase window by commits that are not the unit's. What a
+   * listed catch-up merge brought in from the base branch is base work, and is not named here.
+   */
   outsideUnion: string[];
   /** Listed commit ids not reachable from the ref (other branch, dropped by a rebase), by name. */
   unreachable: string[];
@@ -310,12 +313,19 @@ class ScopeUnreadable extends Error {
 
 type Git = (args: string[], cwd?: string) => string;
 
+/** The git subcommand of `args`: the first argument after any leading `-c <key=value>` pairs. */
+function gitSubcommand(args: readonly string[]): string {
+  let index = 0;
+  while (args[index] === '-c') index += 2;
+  return args[index] ?? '';
+}
+
 function makeGit(projectDir: string, runner: GitRunner): Git {
   return (args, cwd = projectDir) => {
     const result = runner(args, { cwd });
     if (result.timedOut) throw new ScopeUnreadable('git-timeout');
     if (result.exitCode === 127) throw new ScopeUnreadable('git-unavailable');
-    if (result.exitCode !== 0) throw new ScopeUnreadable(`git-failed:${args[0] ?? ''}`, result.exitCode);
+    if (result.exitCode !== 0) throw new ScopeUnreadable(`git-failed:${gitSubcommand(args)}`, result.exitCode);
     return result.stdout;
   };
 }
@@ -409,6 +419,23 @@ export function resolveEvaluationScope(projectDir: string, unit: ScopeUnit, opti
 /** First git release with `show --remerge-diff` (#5751). */
 const REMERGE_DIFF_MIN_GIT: readonly [number, number] = [2, 36];
 
+/**
+ * The first `<major>.<minor>` in `git --version` output ("git version 2.45.1.windows.1",
+ * "2.36.0-rc0", "2.54.0 (Apple Git-157)"), or null when there is none.
+ */
+export function parseGitVersion(output: string): { major: number; minor: number } | null {
+  const match = /(\d+)\.(\d+)/.exec(output);
+  return match ? { major: Number(match[1]), minor: Number(match[2]) } : null;
+}
+
+/** Whether `git --version` output names a git that has `show --remerge-diff`; unparseable reads as no. */
+export function remergeDiffSupported(output: string): boolean {
+  const version = parseGitVersion(output);
+  if (version === null) return false;
+  return version.major > REMERGE_DIFF_MIN_GIT[0]
+    || (version.major === REMERGE_DIFF_MIN_GIT[0] && version.minor >= REMERGE_DIFF_MIN_GIT[1]);
+}
+
 /** Per-resolve cache of the `git --version` probe, keyed by the bound git function. */
 const remergeSupportCache = new WeakMap<Git, boolean>();
 
@@ -423,12 +450,7 @@ function supportsRemergeDiff(git: Git): boolean {
   if (cached !== undefined) return cached;
   let supported = false;
   try {
-    const match = /(\d+)\.(\d+)/.exec(git(['--version']));
-    if (match) {
-      const major = Number(match[1]);
-      const minor = Number(match[2]);
-      supported = major > REMERGE_DIFF_MIN_GIT[0] || (major === REMERGE_DIFF_MIN_GIT[0] && minor >= REMERGE_DIFF_MIN_GIT[1]);
-    }
+    supported = remergeDiffSupported(git(['--version']));
   } catch (error) {
     if (error instanceof ScopeUnreadable && error.reason === 'git-timeout') throw error;
   }
@@ -442,10 +464,10 @@ function supportsRemergeDiff(git: Git): boolean {
  * `--remerge-diff`), so a clean merge contributes nothing and both merge orientations agree (#5751).
  * `--first-parent` would report a catch-up merge's whole base branch. On a git without
  * `--remerge-diff`, or for an octopus merge (remerge covers two-parent merges), a merge contributes
- * nothing: it may under-report, and never reports the base branch's work.
+ * nothing: it may under-report, and never reports the base branch's work. `parents` is the commit's
+ * parent count, read from the log that listed it (no per-commit lookup).
  */
-function commitFiles(git: Git, sha: string): string[] {
-  const parents = git(['rev-list', '--parents', '-n', '1', sha]).trim().split(/\s+/).length - 1;
+function commitFiles(git: Git, sha: string, parents: number): string[] {
   if (parents > 1) {
     if (parents !== 2 || !supportsRemergeDiff(git)) return [];
     return splitNul(git(
@@ -476,30 +498,52 @@ function finalizeFiles(scope: EvaluationScope, repoRoot: string, changed: Iterab
   scope.missingOnDisk = missing;
 }
 
+/** `%P` rides every log so a commit's parents come from the listing itself, never a per-commit lookup. */
 function logFormat(withBody: boolean): string {
-  return withBody ? '--format=%H%x1f%s%x1f%b%x1e' : '--format=%H%x1f%s%x1e';
+  return withBody ? '--format=%H%x1f%P%x1f%s%x1f%b%x1e' : '--format=%H%x1f%P%x1f%s%x1e';
 }
 
-function parseLog(out: string, withBody: boolean): ScopeCommit[] {
+/** Parent shas by commit sha, as read from the logs that listed the commits. */
+type ParentMap = Map<string, string[]>;
+
+function parseLog(out: string, withBody: boolean, parentsOut?: ParentMap): ScopeCommit[] {
   const commits: ScopeCommit[] = [];
   for (const record of out.split('\x1e')) {
     const trimmed = record.replace(/^\n+/, '');
     if (!trimmed) continue;
-    const [sha, subject, body] = trimmed.split('\x1f');
+    const [sha, parents, subject, body] = trimmed.split('\x1f');
     if (!sha || !/^[0-9a-f]{40}$/.test(sha)) continue;
     const commit: ScopeCommit = { sha, subject: subject ?? '' };
     if (withBody) commit.body = (body ?? '').trim();
     commits.push(commit);
+    parentsOut?.set(sha, (parents ?? '').split(' ').filter(Boolean));
   }
   return commits;
 }
 
-function subjectsFor(git: Git, shas: readonly string[], withBody: boolean, chunkSize: number): ScopeCommit[] {
+function subjectsFor(git: Git, shas: readonly string[], withBody: boolean, chunkSize: number, parentsOut: ParentMap): ScopeCommit[] {
   const out: ScopeCommit[] = [];
   for (const group of chunk(shas, chunkSize)) {
-    out.push(...parseLog(git(['log', '--no-walk=unsorted', logFormat(withBody), ...group]), withBody));
+    out.push(...parseLog(git(['log', '--no-walk=unsorted', logFormat(withBody), ...group]), withBody, parentsOut));
   }
   return out;
+}
+
+/**
+ * The files a listed two-parent merge brought in from its SECOND parent's side: base work, not the
+ * unit's. Only when no listed commit sits on that side (`<p2> ^<p1>`): a phase branch merged into
+ * its base has its own task commits there, and its files are the unit's, not the base's.
+ */
+function baseSideMergeFiles(git: Git, merges: readonly string[], parentsOf: ParentMap, listed: ReadonlySet<string>): Set<string> {
+  const files = new Set<string>();
+  for (const sha of merges) {
+    const parents = parentsOf.get(sha) ?? [];
+    if (parents.length !== 2) continue;
+    const secondSide = git(['rev-list', parents[1] ?? '', `^${parents[0] ?? ''}`]).split('\n').filter(Boolean);
+    if (secondSide.some((entry) => listed.has(entry))) continue;
+    for (const file of rangeFiles(git, `${sha}^1`, sha)) files.add(file);
+  }
+  return files;
 }
 
 /**
@@ -589,23 +633,38 @@ function resolvePhase(
   scope.rangeBase = options.since ?? phaseRangeBase(git, phaseDir, ref);
 
   const union = new Set<string>();
+  const nonMergeFiles = new Set<string>();
+  const merges: string[] = [];
+  const parentsOf: ParentMap = new Map();
   const commits: ScopeCommit[] = [];
   const withFiles = options.includeFiles ?? true;
   // At least 2: a chunk of one never shrinks the list `newestOf` reduces.
   const chunkSize = Math.max(2, options.shaChunk ?? SHA_CHUNK);
-  for (const meta of subjectsFor(git, [...new Set(shas)], options.includeBody === true, chunkSize)) {
-    const files = commitFiles(git, meta.sha);
-    for (const file of files) union.add(file);
+  for (const meta of subjectsFor(git, [...new Set(shas)], options.includeBody === true, chunkSize, parentsOf)) {
+    const parentCount = parentsOf.get(meta.sha)?.length ?? 0;
+    const files = commitFiles(git, meta.sha, parentCount);
+    if (parentCount > 1) merges.push(meta.sha);
+    for (const file of files) {
+      union.add(file);
+      if (parentCount <= 1) nonMergeFiles.add(file);
+    }
     commits.push(withFiles ? { ...meta, files: [...files].sort() } : meta);
   }
 
-  if (union.size > 0) {
+  // Listed merges and nothing else of the unit's own: a merge carries only its resolutions, so the
+  // union is not the phase's work (a SUMMARY that lists just the phase-into-base merge sha).
+  const mergeOnly = merges.length > 0 && nonMergeFiles.size === 0;
+  if (union.size > 0 && !mergeOnly) {
     scope.source = 'task-commits';
     scope.commits = commits;
     finalizeFiles(scope, repoRoot, union);
     if (scope.rangeBase) {
-      const window = rangeFiles(git, scope.rangeBase, newestOf(git, commits.map((c) => c.sha), chunkSize));
-      scope.outsideUnion = uniqueSorted(window.filter((f) => !union.has(f)));
+      const listed = new Set(commits.map((c) => c.sha));
+      const window = rangeFiles(git, scope.rangeBase, newestOf(git, [...listed], chunkSize));
+      // The window still holds what a listed catch-up merge brought in from the base; that is base
+      // work the union deliberately omits, not phase work another commit did.
+      const baseSide = baseSideMergeFiles(git, merges, parentsOf, listed);
+      scope.outsideUnion = uniqueSorted(window.filter((f) => !union.has(f) && !baseSide.has(f)));
     }
     return;
   }
@@ -615,7 +674,8 @@ function resolvePhase(
     summaryCount === 0 ? 'no-summary'
       : refs.length === 0 ? 'no-task-commit-rows'
         : shas.length === 0 ? (sinceDropped > 0 ? 'no-task-commits-since' : 'no-reachable-task-commits')
-          : 'empty-after-exclusions';
+          : mergeOnly ? 'merge-only-task-commits'
+            : 'empty-after-exclusions';
   if (!scope.rangeBase) throw new ScopeUnreadable(`${reason}:no-phase-start-anchor`);
   scope.status = 'degraded';
   scope.reason = reason;
@@ -671,7 +731,8 @@ function resolveBySubject(
     ['log', range, logFormat(withBody), '-n', String(max * 2), ...sinceArgs, ...grepArgs, ...(pathspecs.length > 0 ? ['--', ...pathspecs] : [])],
   );
   // `--grep` matches ANY message line; a plan lookup is subject-anchored, so filter on the subject.
-  let commits = parseLog(out, withBody).filter((c) => anchored === null || anchored.test(c.subject)).slice(0, max);
+  const parentsOf: ParentMap = new Map();
+  let commits = parseLog(out, withBody, parentsOf).filter((c) => anchored === null || anchored.test(c.subject)).slice(0, max);
   const since = options.since;
   if (since !== undefined) commits = commits.filter((c) => !isAncestor(git, c.sha, since));
   if (options.commitsOnly === true) {
@@ -682,8 +743,11 @@ function resolveBySubject(
   const withFiles = options.includeFiles ?? false;
   const union = new Set<string>();
   const result: ScopeCommit[] = [];
+  let mergeCount = 0;
   for (const meta of commits) {
-    const files = commitFiles(git, meta.sha);
+    const parentCount = parentsOf.get(meta.sha)?.length ?? 0;
+    if (parentCount > 1) mergeCount += 1;
+    const files = commitFiles(git, meta.sha, parentCount);
     for (const file of files) union.add(file);
     result.push(withFiles ? { ...meta, files: [...files].sort() } : meta);
   }
@@ -691,9 +755,10 @@ function resolveBySubject(
   finalizeFiles(scope, repoRoot, union);
   // Found nothing: a truthful "none" (status stays `resolved` — git was read), said out loud so a
   // caller can tell "no such commits" from "an empty scope that was never computed". Commits whose
-  // every path is excluded (planning-only) are an empty scope too, and say so.
+  // every path is excluded (planning-only) are an empty scope too, and say so; so are matches that
+  // are all merges (a merge carries only its own resolutions, #5751).
   if (result.length === 0) scope.reason = 'no-matching-commits';
-  else if (scope.changedFiles.length === 0) scope.reason = 'empty-after-exclusions';
+  else if (scope.changedFiles.length === 0) scope.reason = mergeCount === result.length ? 'merge-only' : 'empty-after-exclusions';
 }
 
 // ─── The `check evaluation-scope` verb ────────────────────────────────────────
