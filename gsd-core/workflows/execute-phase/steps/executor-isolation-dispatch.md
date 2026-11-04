@@ -138,7 +138,7 @@ Every entry with `needsReconciliation: true` (recorded running, process gone) is
 
 Run the loop below once per runnable plan in the wave, **one plan at a time** (`git worktree add` races on `.git/config.lock`).
 
-**Before running each bash block below, substitute the plan's identifiers into it** exactly as you do for the `Agent()` prompt on the harness path: replace `{phase_dir}`, `{plan_file}`, `{plan_number}` and `{phase_number}` wherever the block uses them with this plan's values. They are template placeholders, not shell variables. `$ORCH_ROOT` and `$EXPECTED_BASE` are real shell variables, already assigned earlier in this step; `$WAVE_WORKTREE_MANIFEST` was initialized above.
+**Before running each bash block below, substitute the plan's identifiers into it** exactly as you do for the `Agent()` prompt on the harness path: replace `{phase_dir}`, `{plan_file}`, `{plan_number}`, `{phase_number}` and `{plan_padded}` wherever the block uses them with this plan's values. They are template placeholders, not shell variables. `$ORCH_ROOT` and `$EXPECTED_BASE` are real shell variables, already assigned earlier in this step; `$WAVE_WORKTREE_MANIFEST` was initialized above.
 
 First build the executor prompt. It is the **same prompt text the harness path's `Agent()` call uses** — same executor identity, same execution context, same required-reading contract — with only the harness-only framing removed: drop the `<worktree_branch_check>` build-time embed note (this backend pins the base itself via `worktree create --base` and verifies it at merge) and the `<parallel_execution>` harness block (its SUMMARY-commit semantics ride inside the embedded `execute-plan.md` worktree mode). Keep `<objective>`, `<execution_context>`, `<required_reading>`, `${AGENT_SKILLS}`, and `<success_criteria>` from the harness prompt — substituting the worktree-specific `<execution_context>` framing below. The checkpoint gate rule (#3370, in `per-plan-executor-routing.md`) applies here too: add no prompt text refusing or overriding auto-approval for the default `gate="blocking"` — only `blocking-human` always surfaces.
 
@@ -151,17 +151,17 @@ Create the prompt file for THIS plan; the block prints its path as `PROMPT_FILE=
 # block is written to PROMPT_FILE with your file-writing tool, never through
 # the shell, so every substituted or inlined text (the ${AGENT_SKILLS} value,
 # the role definition, the execute-plan/summary/checkpoints files) reaches the
-# prompt byte-for-byte whatever quote characters it holds — apostrophes in a
+# prompt unchanged whatever quote characters it holds — apostrophes in a
 # persona must NEVER be escaped or stripped.
 #
 # ORCHESTRATOR BUILD-TIME EMBEDS (do these BEFORE the spawn, in order):
 #   1. Inline each file listed in <execution_context> verbatim, in order.
 #      An unreadable source file is a halt condition (#3637 fail-closed),
 #      never a skip — a child without these texts is not a gsd-executor.
-#   2. Substitute this plan's {plan_number},
-#      {phase_number}, {phase_name}, {phase_dir}, {plan_file}, {plan_id}, and
-#      {plan_padded} placeholders (same values the harness path substitutes into
-#      its Agent() prompt). {plan_id} is this
+#   2. Substitute this plan's {plan_number}, {phase_number}, {phase_name},
+#      {phase_dir}, {plan_file}, {plan_id}, and {plan_padded} placeholders
+#      (same values the harness path substitutes into its Agent() prompt).
+#      {plan_id} is this
 #      plan's `id` field from the phase-plan-index JSON — the guard hooks
 #      compare it verbatim against the sentinel the per-plan gate wrote, so a
 #      paraphrase or omission costs the dispatch its recorded isolation
@@ -188,7 +188,12 @@ if [ $_TDD_APPLICABLE_RC -ne 0 ]; then
 fi
 TDD_APPLICABLE="$_TDD_APPLICABLE_RAW"
 
-PROMPT_FILE=$(mktemp "${TMPDIR:-/tmp}/gsd-executor-prompt-XXXXXX") || { echo "FATAL: could not create executor prompt file for plan {plan_number} (TMPDIR unwritable?). Halting." >&2; exit 1; } # XXXXXX path-final on BSD/macOS (#1520)
+# The prompt file lives under ORCH_ROOT/.claude, inside every host's writable
+# root (the worktrees live there too). Its name is keyed by plan so the
+# read-and-check block finds it by glob; leftovers of this plan are removed first.
+mkdir -p "${ORCH_ROOT}/.claude" || { echo "FATAL: could not create ${ORCH_ROOT}/.claude for the executor prompt file of plan {plan_number}. Halting." >&2; exit 1; }
+rm -f -- "${ORCH_ROOT}"/.claude/gsd-executor-prompt-{phase_number}-{plan_number}-??????
+PROMPT_FILE=$(mktemp "${ORCH_ROOT}/.claude/gsd-executor-prompt-{phase_number}-{plan_number}-XXXXXX") || { echo "FATAL: could not create executor prompt file for plan {plan_number} (is ${ORCH_ROOT}/.claude writable?). Halting." >&2; exit 1; } # XXXXXX path-final on BSD/macOS (#1520)
 echo "PROMPT_FILE=$PROMPT_FILE"
 ```
 
@@ -267,9 +272,12 @@ ${AGENT_SKILLS}
 Then read it back and check it:
 
 ```bash
-EXECUTOR_PROMPT=$(cat -- "$PROMPT_FILE"); _PROMPT_RC=$?
-rm -f -- "$PROMPT_FILE"
-[ $_PROMPT_RC -eq 0 ] || { echo "FATAL: executor prompt file for plan {plan_number} is missing or unreadable. Halting." >&2; exit 1; }
+# This block runs as its own command: it finds the file block 1 created by the
+# same plan-keyed glob, so no path text is spliced into shell source.
+for PROMPT_FILE in "${ORCH_ROOT}"/.claude/gsd-executor-prompt-{phase_number}-{plan_number}-??????; do :; done
+if EXECUTOR_PROMPT=$(cat -- "$PROMPT_FILE"); then _PROMPT_RC=0; else _PROMPT_RC=$?; fi
+rm -f -- "$PROMPT_FILE" || :
+[ "$_PROMPT_RC" -eq 0 ] || { echo "FATAL: executor prompt file for plan {plan_number} is missing or unreadable. Halting." >&2; exit 1; }
 [ -n "$EXECUTOR_PROMPT" ] || { echo "FATAL: executor prompt is empty for plan {plan_number}." >&2; exit 1; }
 # #3637 fail-closed verification. Two classes of check:
 #   (a) template completeness — the prompt must carry the required-reading
@@ -306,7 +314,7 @@ if printf '%s' "$EXECUTOR_PROMPT" | grep -q '\${TDD_APPLICABLE'; then
 fi
 ```
 
-The prompt reaches the shell only as file contents read by `cat`, so apostrophes, `$(...)`, backticks and quotes in the template or in any spliced embed are never parsed or run; do not escape them. The read-and-check block removes the prompt file right after `cat`, so every halt of that block (unreadable file, empty prompt, a leftover placeholder) runs with the file already gone; `mktemp` is followed only by the `echo` of `PROMPT_FILE`, which cannot halt, so no halt can occur between creating the file and reading it. If you fail while writing `PROMPT_FILE` between the blocks, run `rm -f -- "$PROMPT_FILE"` before halting. Run the blocks as separate commands in one shell (`PROMPT_FILE` carries across them).
+The prompt reaches the shell only as file contents read by `cat`, so apostrophes, `$(...)`, backticks and quotes in the template or in any spliced embed are never parsed or run; do not escape them. Run each block as its own command: no shell variable crosses between them. The read-and-check block finds the file by the same plan-keyed glob block 1 created it with, reads it without letting an unreadable file stop it before the FATAL message, and removes it before any check, so every halt of that block runs with the file already gone. If writing `PROMPT_FILE` fails between the blocks, run `rm -f --` on the path block 1 printed before halting.
 
 Then create the worktree and resolve the spawn:
 

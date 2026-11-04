@@ -130,10 +130,10 @@ function extractFencedBashBlockContaining(content, marker) {
 }
 
 /**
- * From executor-isolation-dispatch.md's later fenced block (the one composing
- * `EXECUTOR_PROMPT`), slice out ONLY the TDD-applicability resolution lines:
+ * From executor-isolation-dispatch.md's later fenced block (the one that creates
+ * `PROMPT_FILE`), slice out ONLY the TDD-applicability resolution lines:
  * from `_TDD_APPLICABLE_RAW=` through the `TDD_APPLICABLE="$_TDD_APPLICABLE_RAW"`
- * line, inclusive. Everything before (comments) and after (the PROMPT_FILE mktemp creation)
+ * line, inclusive. Everything before (comments) and after (the `PROMPT_FILE` creation)
  * is dropped.
  *
  * @param {string} blockBody
