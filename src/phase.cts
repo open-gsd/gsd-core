@@ -2502,24 +2502,6 @@ function isPhaseTokenWithin(token: string, ancestor: string): boolean {
 }
 
 /**
- * #5679: where the bracket heading for `targetId` sits anywhere in the file, or
- * null. Same fence-aware heading tokens and owned-line grammar as
- * `activeBracketInsertHeading`, but with no window or archive filter, so it
- * finds the heading the active window excludes.
- */
-function bracketHeadingOffsetAnywhere(content: string, targetId: BracketRoadmapPhaseId): number | null {
-  const fencedLineNumbers = fencedRoadmapLineNumbers(content);
-  const lineByStart = new Map(splitRoadmapLineRecords(content).map((line) => [line.start, line]));
-  for (const heading of tokenizeHeadings(content)) {
-    const line = lineByStart.get(heading.offset);
-    if (!line || fencedLineNumbers.has(line.lineNumber)) continue;
-    const owned = classifyBracketOwnedLine(line.text);
-    if (owned.kind === 'heading' && owned.id && sameBracketPhaseId(owned.id, targetId)) return heading.offset;
-  }
-  return null;
-}
-
-/**
  * #5679: the `phase insert` error for a phase that exists in the ROADMAP but
  * outside the current milestone. Names the milestone that holds it (archive
  * aware, never the current one) and the current milestone, saying "STATE.md's"
@@ -2639,9 +2621,6 @@ function cmdPhaseInsert(
     const isBulletStyle = !bracketContext && !headingMatch && bulletPattern.test(liveCurrent) && !roadmapHasHeadingPhases;
 
     if (bracketContext && !bracketHeading) {
-      // #5679: a heading the active window excludes lives in another milestone.
-      const elsewhereAt = bracketHeadingOffsetAnywhere(rawContent, bracketTargetId!);
-      if (elsewhereAt !== null) error(otherMilestonePhaseMessage(rawContent, elsewhereAt, cwd, afterPhase));
       const searchedRanges = bracketSectionRanges?.details
         ? 'primary and Phase Details ranges'
         : 'primary range';
