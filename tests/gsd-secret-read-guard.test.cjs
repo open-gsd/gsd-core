@@ -1180,6 +1180,7 @@ describe('gsd-secret-read-guard: nested shell behind a wrapper with flags (#5627
     'command -p', 'command --', 'time -p', 'time -f %e',
     'stdbuf -oL', 'stdbuf -i0 -oL -eL', 'stdbuf --output=L', 'setsid', 'setsid -w', 'exec', 'exec -a name',
     'nohup', 'sudo -u root', 'sudo -E', 'sudo --', 'sudo -u root -g wheel', 'doas -u root',
+    'sudo -c staff', 'sudo --login-class staff', 'sudo -a bsdauth', 'sudo --auth-type bsdauth', 'doas -a passwd',
     'nice -n 5 timeout -s KILL 5 env -i', 'sudo -n timeout 5 nohup',
   ];
   for (const w of wrappers) {
@@ -1233,6 +1234,49 @@ describe('gsd-secret-read-guard: nested shell behind a wrapper with flags (#5627
         return r.status === 2;
       }),
       { numRuns: 25 },
+    );
+  });
+});
+
+describe('gsd-secret-read-guard: sudo/doas value options the wrapper table missed (#5852)', () => {
+  // Oracle: sudo(8) documents `-a type, --auth-type=type` and `-c class,
+  // --login-class=class`; doas(1) documents `-a style`. Each takes the next
+  // word as its value, so the command is the word after it. When that value
+  // happens to be a non-reading command name (or `timeout`), reading it as the
+  // command word let the read through; 1.18.0 denied all of these.
+  const reads = [
+    'sudo -c ls cat .env', 'sudo --login-class ls cat .env',
+    'sudo -a echo cat .env', 'sudo --auth-type echo cat .env',
+    'sudo -c timeout cat .env', 'doas -a ls cat .env',
+    'sudo -cls cat .env', 'doas -als cat .env',
+    "sudo -c ls bash -c 'cat .env'", "doas -a ls bash -c 'cat .env'",
+  ];
+  for (const cmd of reads) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  const stillBlocked = ['sudo -u root cat .env', 'doas -u root cat .env', 'sudo -c staff cat .env', 'sudo -E cat .env'];
+  for (const cmd of stillBlocked) {
+    test(`still blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  // The option consumes exactly one word: the command after the value is
+  // resolved, and a no-value option (-n, -E, -H) still resolves to the next word.
+  const allows = ['sudo -c staff ls .env', 'doas -a passwd ls .env', 'sudo --auth-type bsdauth ls .env', 'sudo -n ls .env', 'sudo -E -H ls .env'];
+  for (const cmd of allows) {
+    test(`allows ${JSON.stringify(cmd)}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  test('the debugger-spawn check resolves the command after sudo -c', () => {
+    assertBlocked(
+      runHook(bash('sudo -c ls claude --agent gsd-debugger -p hi')),
+      'sudo -c', { code: 'debugger-cli-spawn', tool: 'Bash' },
     );
   });
 });
