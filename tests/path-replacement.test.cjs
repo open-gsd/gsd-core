@@ -1601,4 +1601,289 @@ describe('#5715: config-dir rewrites are single-pass and literal', () => {
       { seed: 5715, numRuns: 400 },
     );
   });
+
+  test('#5715 property: every runtime id, $HOME / absolute / ./ prefixes, never rescans the prefix', () => {
+    const KINDS = { home: (d) => `$HOME/${d}/`, abs: (d) => `/opt/x/${d}/`, rel: (d) => `./${d}/` };
+    const cfg = fc.constantFrom('.claude', '.claude.', '.claude-', '.claudex', '.claude/', '.claude/profiles/work', '.claude.d', '.cl$&ude', '.a$`b', ".a$'b", '.cfg');
+    fc.assert(
+      fc.property(
+        fc.constantFrom('claude', ...conv.NON_CLAUDE_RUNTIMES),
+        fc.constantFrom('home', 'abs', 'rel'),
+        fc.array(fc.constantFrom(...SOURCE_FORMS), { maxLength: 8 }),
+        cfg,
+        (id, kind, pieces, dir) => {
+          if (id === 'claude' && dir === '.claude' && kind === 'home') return; // a default install keeps the bare spelling
+          const prefix = KINDS[kind](dir);
+          const placeholder = KINDS[kind]('.zzplaceholder');
+          const source = pieces.concat(OWN_FORM[id] ? [OWN_FORM[id]] : []).join('\n');
+          const model = _applyRuntimeRewrites(source, id, placeholder, true, undefined)
+            .split(placeholder).join(prefix)
+            .split(bareOf(placeholder)).join(bareOf(prefix));
+          assert.strictEqual(_applyRuntimeRewrites(source, id, prefix, true, undefined), model, `${id} ${prefix}`);
+        },
+      ),
+      { seed: 5715, numRuns: 1500 },
+    );
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// #5715: the emitted-prefix shield. Converters that run AFTER the prefix pass (agents,
+// the gsd-core spec tree, OpenCode/Kilo commands and skills, command bodies, the Codex
+// agent TOML) must not rescan the prefix or expand `$&` in it.
+// ────────────────────────────────────────────────────────────────────────
+describe('#5715: shieldEmittedPrefix', () => {
+  const fc = require('fast-check');
+  const conv = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
+  const { _shieldEmittedPrefix: shield } = conv;
+  // A converter that rewrites every source form the Trae/Kilo/OpenCode converters touch.
+  const rewriteAll = (s) => s
+    .replace(/\/gsd:([a-z0-9-]+)/g, '/gsd-$1')
+    .replace(/\bBash\(/g, 'Shell(')
+    .replace(/\bEdit\(/g, 'StrReplace(')
+    .replace(/\$ARGUMENTS\b/g, '{{GSD_ARGS}}')
+    .replace(/\.claude\//g, '.x/');
+
+  test('#5715: a prefix without a Claude name is shielded too (/gsd:, Bash(, Edit(, $ARGUMENTS)', () => {
+    for (const prefix of ['/home/u/gsd:x/', '/opt/Bash(1)/', '/opt/Edit(2)/', '/opt/$ARGUMENTS/']) {
+      const content = `A ${prefix}f.md and /gsd:plan and Bash(ls) and Edit(f) and $ARGUMENTS`;
+      assert.strictEqual(
+        shield(content, prefix, rewriteAll),
+        `A ${prefix}f.md and /gsd-plan and Shell(ls) and StrReplace(f) and {{GSD_ARGS}}`,
+        prefix,
+      );
+    }
+  });
+
+  test('#5715: the prefix is restored byte for byte, in its trailing-slash, bare and tilde spellings', () => {
+    const prefix = '$HOME/.claude/profiles/work/';
+    const content = `@${prefix}a.md ${prefix.slice(0, -1)} @~/.claude/profiles/work/b.md`;
+    assert.strictEqual(shield(content, prefix, rewriteAll), content);
+  });
+
+  test('#5715: the replacement is literal, `$&` in the prefix is not expanded', () => {
+    const prefix = '/opt/p/$&x/';
+    const content = `A ${prefix}f.md /gsd:a`;
+    assert.strictEqual(shield(content, prefix, rewriteAll), `A ${prefix}f.md /gsd-a`);
+  });
+
+  test('#5715: content holding the old control characters is still shielded', () => {
+    const prefix = '/opt/p/.claude/x/';
+    const content = `\u0001\u0002\u0003\u0004 ${prefix}f.md .claude/g`;
+    assert.strictEqual(shield(content, prefix, rewriteAll), `\u0001\u0002\u0003\u0004 ${prefix}f.md .x/g`);
+  });
+
+  test('#5715: the sentinel namespace is chosen per call, absent from the content', () => {
+    const prefix = '/opt/p/.claude/x/';
+    for (const taken of [0, 1, 17, 254]) {
+      const decoys = Array.from({ length: taken + 1 }, (_, n) => `${n}:0`).join('');
+      const content = `${decoys} ${prefix}f.md .claude/g`;
+      assert.strictEqual(shield(content, prefix, rewriteAll), `${decoys} ${prefix}f.md .x/g`, `${taken}`);
+    }
+  });
+
+  test('#5715: when no sentinel namespace is free it throws, it never converts unshielded', () => {
+    const prefix = '/opt/p/.claude/x/';
+    const decoys = Array.from({ length: 256 }, (_, n) => `${n}:`).join('');
+    let converted = false;
+    assert.throws(
+      () => shield(`${decoys} ${prefix}f.md`, prefix, (s) => { converted = true; return s; }),
+      /no free sentinel namespace/,
+    );
+    assert.strictEqual(converted, false);
+    // the limit - 1 boundary still shields
+    const almost = Array.from({ length: 255 }, (_, n) => `${n}:`).join('');
+    assert.strictEqual(shield(`${almost} ${prefix}f.md`, prefix, rewriteAll), `${almost} ${prefix}f.md`);
+  });
+
+  test('#5715: a prefix that is only the Claude config dir is never shielded', () => {
+    for (const prefix of ['.claude/', '.claude', './.claude/', './.claude', '././.claude/']) {
+      assert.strictEqual(shield('a .claude/b ./.claude/c', prefix, rewriteAll), 'a .x/b ./.x/c', prefix);
+    }
+    for (const prefix of ['', '/', './', '.']) {
+      assert.strictEqual(shield('a .claude/b', prefix, rewriteAll), 'a .x/b', JSON.stringify(prefix));
+    }
+  });
+
+  test('#5715: only exact occurrences of the full prefix are shielded, other .claude/ text is converted', () => {
+    const prefix = '.claude/profiles/work/';
+    const content = `@${prefix}a.md .claude/skills/q ./.claude/other .claude/profiles/other/z`;
+    assert.strictEqual(
+      shield(content, prefix, rewriteAll),
+      `@${prefix}a.md .x/skills/q ./.x/other .x/profiles/other/z`,
+    );
+  });
+
+  test('#5715: a non-string prefix and a prefix absent from the content pass straight through', () => {
+    assert.strictEqual(shield('a .claude/b', undefined, rewriteAll), 'a .x/b');
+    assert.strictEqual(shield('a .claude/b', null, rewriteAll), 'a .x/b');
+    assert.strictEqual(shield('a .claude/b', '/opt/p/.claude/zz/', rewriteAll), 'a .x/b');
+  });
+
+  test('#5715 property: a shielded identity conversion round-trips, a shielded rewrite never touches the prefix', () => {
+    const piece = fc.constantFrom('.claude/', '/gsd:a ', 'Bash(x)', '$ARGUMENTS', '\u0001', '0:0', 'text ', '\n');
+    const prefix = fc.constantFrom('/opt/p/.claude/x/', '$HOME/.claude/profiles/work/', '/home/u/gsd:x/', '/opt/$&q/', './.claude/x/', '.claude/x/');
+    fc.assert(
+      fc.property(fc.array(piece, { maxLength: 12 }), prefix, fc.nat({ max: 12 }), (pieces, p, at) => {
+        const content = pieces.slice(0, at).concat([`@${p}f.md `], pieces.slice(at)).join('');
+        assert.strictEqual(shield(content, p, (s) => s), content);
+        const out = shield(content, p, rewriteAll);
+        assert.ok(out.includes(`@${p}f.md `), `${JSON.stringify(out)}`);
+        // the prefix text survives exactly as often as it was emitted
+        assert.strictEqual(out.split(p.replace(/\/$/, '')).length, content.split(p.replace(/\/$/, '')).length);
+      }),
+      { seed: 5715, numRuns: 500 },
+    );
+  });
+
+  test('#5715: Trae resolves the instruction file at the emitted .trae prefix, as before', () => {
+    for (const prefix of ['$HOME/.trae/', './.trae/', '/opt/p/.trae/']) {
+      assert.strictEqual(
+        conv.convertClaudeToTraeMarkdown(`see ${prefix}CLAUDE.md and \`${prefix}CLAUDE.md\``, prefix),
+        `see ${prefix}rules/rules.md and \`${prefix}rules/rules.md\``,
+        prefix,
+      );
+    }
+  });
+
+  test('#5715: the standalone Trae converter leaves ~/.claude/ and $HOME/.claude/ forms for the rewrite pass', () => {
+    const src = 'See ~/.claude/x and $HOME/.claude/y and .claude/skills/z';
+    assert.strictEqual(conv.convertClaudeToTraeMarkdown(src), 'See ~/.claude/x and $HOME/.claude/y and .trae/skills/z');
+  });
+});
+
+describe('#5715: --config-dir containing .claude/ and $& on every runtime with a post-prefix converter (spawned installer)', { skip: process.platform === 'win32' && 'POSIX paths' }, () => {
+  const { after } = require('node:test');
+  const { cleanup } = require('./helpers.cjs');
+  const { runNode } = require('./helpers/process-seam.cjs');
+  const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  const { INSTALL_SCRIPT, installerEnv } = require('./helpers/install-shared.cjs');
+
+  // Nested under .claude, with `$&`: every earlier pass rescanned or expanded this.
+  const REAL = '.claude/$&x/profiles/work';
+  const PLACEHOLDER = '.zzph/qqx/profiles/work';
+  const RUNTIMES = ['kilo', 'opencode', 'codex', 'cline', 'codebuddy', 'hermes', 'qwen', 'windsurf', 'kimi', 'trae', 'augment', 'cursor', 'pi'];
+  const created = [];
+
+  function install(runtime, rel) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5715-e2e-'));
+    created.push(home);
+    const configDir = path.join(home, rel);
+    const r = runNode([INSTALL_SCRIPT, `--${runtime}`, '--global', '--config-dir', configDir, '--minimal'], {
+      cwd: home,
+      env: installerEnv({ HOME: home, USERPROFILE: home }),
+      timeoutMs: INSTALL_TIMEOUT_MS,
+    });
+    assert.strictEqual(r.exitCode, 0, `${runtime} --config-dir ${rel} install failed:\n${r.stdout}\n${r.stderr}`);
+    return { home, configDir };
+  }
+
+  // Every .md / .toml under the config dir, with the install's own home path and the
+  // per-install terminator nonce normalized.
+  function emitted({ home, configDir }) {
+    const homes = [home, fs.realpathSync(home)];
+    const out = new Map();
+    const walk = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isSymbolicLink()) continue;
+        if (entry.isDirectory()) walk(full);
+        else if (/\.(md|toml)$/.test(entry.name)) {
+          let text = fs.readFileSync(full, 'utf8');
+          for (const h of homes) text = text.split(h).join('@HOME');
+          out.set(path.relative(configDir, full), text.replace(/GSD_(QUICK_BATCH_)?ARGS_END_[0-9a-f]{32}/g, 'ARGS_END_N'));
+        }
+      }
+    };
+    walk(configDir);
+    return out;
+  }
+
+  after(() => {
+    for (const dir of created) cleanup(dir);
+  });
+
+  for (const runtime of RUNTIMES) {
+    test(`#5715: ${runtime} emits the prefix once, literally, exactly as for a config dir with no source form in its name`, () => {
+      const real = emitted(install(runtime, REAL));
+      const model = emitted(install(runtime, PLACEHOLDER));
+      assert.ok(real.size > 20, `${runtime}: expected an emitted tree, got ${real.size} files`);
+      assert.deepStrictEqual([...real.keys()].sort(), [...model.keys()].sort(), `${runtime}: file set`);
+      const wrong = [];
+      for (const [file, text] of real) {
+        if (text !== model.get(file).split(PLACEHOLDER).join(REAL)) wrong.push(file);
+      }
+      assert.deepStrictEqual(wrong.slice(0, 5), [], `${runtime}: ${wrong.length} files differ from the model`);
+      const all = [...real.values()].join('\n');
+      assert.ok(!all.includes('profiles/work/profiles/work'), `${runtime}: prefix repeated`);
+      assert.ok(!all.includes('.claude/~/'), `${runtime}: $& expanded to a tilde path`);
+      assert.ok(!all.includes('@GSD core/x'), `${runtime}: $& expanded in the Kimi include`);
+    });
+  }
+
+  test('#5715: copilot and antigravity includes retargeted to a config dir under their own default home emit the prefix once', () => {
+    for (const [runtime, rel] of [['copilot', '.copilot/pp'], ['antigravity', '.gemini/antigravity/pp']]) {
+      const files = emitted(install(runtime, rel));
+      assert.ok(files.size > 20, `${runtime}: expected an emitted tree`);
+      const repeated = [...files].filter(([, text]) => text.includes('/pp/pp/')).map(([file]) => file);
+      assert.deepStrictEqual(repeated.slice(0, 5), [], `${runtime}: prefix repeated in ${repeated.length} files`);
+    }
+  });
+
+  test('#5715: the reviewer repros (kilo, opencode, codex agents) are clean', () => {
+    const kilo = emitted(install('kilo', '.claude/profiles/work'));
+    assert.ok(![...kilo.values()].some((t) => t.includes('/profiles/work/profiles/work/')), 'kilo repeated prefix');
+    const opencode = emitted(install('opencode', REAL));
+    assert.ok(![...opencode.values()].some((t) => t.includes('.claude/~/.config/opencode')), 'opencode $& expansion');
+    const codex = emitted(install('codex', REAL));
+    const agents = [...codex].filter(([file]) => file.startsWith('agents/') && file.endsWith('.toml'));
+    assert.ok(agents.length > 0, 'codex agent tomls');
+    assert.ok(agents.every(([, t]) => !t.includes('~/.codex/gsd-core/x')), 'codex agent $& expansion');
+    assert.ok(agents.some(([, t]) => t.includes('@HOME/.claude/$&x/profiles/work/gsd-core/')), 'codex agent prefix');
+  });
+});
+
+describe('#5715: Trae local install writes the local include path (intentional correction)', { skip: process.platform === 'win32' && 'POSIX paths' }, () => {
+  const { cleanup } = require('./helpers.cjs');
+  const { runNode } = require('./helpers/process-seam.cjs');
+  const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  const { INSTALL_SCRIPT, installerEnv } = require('./helpers/install-shared.cjs');
+
+  function skillFiles(root) {
+    const out = [];
+    const walk = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name === 'SKILL.md') out.push(fs.readFileSync(full, 'utf8'));
+      }
+    };
+    walk(root);
+    return out;
+  }
+
+  test('#5715: a local Trae skill include points at the project .trae/, not at $HOME/.trae/', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5715-trae-home-'));
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5715-trae-proj-'));
+    try {
+      const r = runNode([INSTALL_SCRIPT, '--trae', '--local', '--minimal'], {
+        cwd: project,
+        env: installerEnv({ HOME: home, USERPROFILE: home }),
+        timeoutMs: INSTALL_TIMEOUT_MS,
+      });
+      assert.strictEqual(r.exitCode, 0, `${r.stdout}\n${r.stderr}`);
+      const bodies = skillFiles(path.join(project, '.trae', 'skills'));
+      assert.ok(bodies.length > 0, 'expected installed Trae skills');
+      const real = fs.realpathSync(project);
+      const includes = bodies.filter((b) => b.includes('gsd-core/workflows/'));
+      assert.ok(includes.length > 0, 'expected skills that include a workflow');
+      assert.ok(includes.every((b) => !b.includes('@$HOME/.trae/')), 'a local skill still points at the global dir');
+      assert.ok(includes.some((b) => b.includes(`@${real}/.trae/gsd-core/workflows/`)), 'expected the project-local include path');
+      // Every real Trae path rewrites the ~/.claude and $HOME/.claude forms after the converter.
+      assert.ok(bodies.every((b) => !/(~|\$HOME)\/\.claude\//.test(b)), 'a Claude home form survived the rewrite pass');
+    } finally {
+      cleanup(home);
+      cleanup(project);
+    }
+  });
 });
