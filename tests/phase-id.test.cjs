@@ -1514,11 +1514,13 @@ describe('phaseKeyFrom* — one key space for directories and prose', () => {
 
   test('#5675: the M-NN segment boundary (bare milestone, one segment, a sub-phase of it)', () => {
     const MP = 'milestone-prefixed';
+    assert.strictEqual(phaseId.phaseKeyFromProse('3-01-02. X', undefined, MP), '03-01'); // one -NN only
     const cases = [
       ['3. Bare', '3-bare', '03'],
       ['3-01. One', '3-01-one', '03-01'],
       ['3-01.1 Sub', '3-01.1-sub', '03-01.1'],
     ];
+    for (const w of ['3-1. W', '3-01. W', '3-001. W']) assert.strictEqual(phaseId.phaseKeyFromProse(w, undefined, MP), '03-01', w);
     for (const [prose, dir, key] of cases) {
       assert.strictEqual(phaseId.phaseKeyFromProse(prose, undefined, MP), key, prose);
       assert.strictEqual(phaseId.phaseKeyFromDir(dir, MP), key, dir);

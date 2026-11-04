@@ -671,28 +671,32 @@ describe('#5675: drift-guard phase-status reads M-NN phases under milestone-pref
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5675-'));
     planningDir = path.join(tmpDir, '.planning');
     fs.mkdirSync(planningDir, { recursive: true });
-    fs.writeFileSync(path.join(planningDir, 'STATE.md'), `---
-gsd_state_version: '1.0'
-status: executing
----
-
-# Project State
-
-## Current Position
-
-Phase: 3-02 (Validator) — EXECUTING
-Plan: 1 of 1 in current phase
-Status: In progress
-`);
-    fs.writeFileSync(path.join(planningDir, 'ROADMAP.md'), `# Roadmap: Test Project
-
-## Progress
-
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 3-01. Create layer | 1/1 | Complete | - |
-| 3-02. Validator | 0/1 | In Progress | - |
-`);
+    fs.writeFileSync(path.join(planningDir, 'STATE.md'), [
+      '---',
+      "gsd_state_version: '1.0'",
+      'status: executing',
+      '---',
+      '',
+      '# Project State',
+      '',
+      '## Current Position',
+      '',
+      'Phase: 3-02 (Validator) — EXECUTING',
+      'Plan: 1 of 1 in current phase',
+      'Status: In progress',
+      '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(planningDir, 'ROADMAP.md'), [
+      '# Roadmap: Test Project',
+      '',
+      '## Progress',
+      '',
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|----------------|--------|-----------|',
+      '| 3-01. Create layer | 1/1 | Complete | - |',
+      '| 3-02. Validator | 0/1 | In Progress | - |',
+      '',
+    ].join('\n'));
   });
 
   afterEach(() => {
@@ -710,7 +714,7 @@ Status: In progress
     const result = JSON.parse(res.output);
     assert.equal(result.phase, '03-02');
     assert.equal(result.roadmapStatus, 'In Progress');
-    assert.notEqual(result.verdict, 'drifted');
+    assert.equal(result.verdict, 'consistent');
   });
 
   test('with no --phase the STATE.md Current Position phase is the target', () => {
@@ -720,7 +724,7 @@ Status: In progress
     const result = JSON.parse(res.output);
     assert.equal(result.phase, '03-02');
     assert.equal(result.roadmapStatus, 'In Progress');
-    assert.notEqual(result.verdict, 'drifted');
+    assert.equal(result.verdict, 'consistent');
   });
 
   test('without the convention phase-status keys keep the leading integer', () => {
@@ -728,5 +732,6 @@ Status: In progress
     assert.ok(res.success, `Expected success, got: ${res.error}`);
     const result = JSON.parse(res.output);
     assert.equal(result.phase, '03');
+    assert.equal(result.roadmapStatus, 'Complete', 'without the convention 3-02 keys as 03 and reads the first row of milestone 3, as before');
   });
 });
