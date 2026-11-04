@@ -429,7 +429,7 @@ function parsePhaseChecklistLine(
     capturesBracketId,
   );
   const pattern = phaseEntryRegExp(
-    `${intro}(${context ? phaseScanTokenSource(context) : PHASE_NUMBER_TOKEN_SOURCE})`
+    `${intro}(${context ? phaseScanTokenSource(context, convention) : phaseNumberTokenSource(convention)})`
       + `${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s])`,
     'i',
     { state: 'captured' },
@@ -477,7 +477,7 @@ function buildPhaseHeadingScanRegex(baseline: string, convention?: string | null
   const phaseNumGroup = bracketGroup ? 2 : 1;
   const phaseNameGroup = phaseNumGroup + 1;
   const regex = new RegExp(
-    `^ {0,3}#{2,4}\\s*${phaseHeadingPrefixSrcFor(baseline, convention, true)}(${context && convention !== 'bracket' ? phaseScanTokenSource(context) : PHASE_NUMBER_TOKEN_SOURCE})${OPTIONAL_PHASE_TAG_SOURCE}:\\s*([^\\n]+)`,
+    `^ {0,3}#{2,4}\\s*${phaseHeadingPrefixSrcFor(baseline, convention, true)}(${context && convention !== 'bracket' ? phaseScanTokenSource(context, convention) : phaseNumberTokenSource(convention)})${OPTIONAL_PHASE_TAG_SOURCE}:\\s*([^\\n]+)`,
     'gim',
   );
   return { regex, bracketGroup, phaseNumGroup, phaseNameGroup };
