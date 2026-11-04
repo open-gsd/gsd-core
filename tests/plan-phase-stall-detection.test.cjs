@@ -1705,6 +1705,34 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.ok(ran >= 6);
   });
 
+  // Review 5692447413 Minor 2: a phase dir that IS the project root, or sits inside
+  // .git, would put .gsd-returns/ (and a catch-all .gitignore) where it does not belong.
+  test('gsd_receipt_path refuses a phase dir equal to the project root or inside .git, and creates nothing there (#5182)', (t) => {
+    const f = fixture(t);
+    const proj = path.join(f.dir, 'proj');
+    fs.mkdirSync(path.join(proj, '.git', 'objects'), { recursive: true });
+    fs.mkdirSync(path.join(proj, 'sub', 'ph'), { recursive: true });
+    const cases = [
+      [fwd(proj), 'the project root itself'],
+      [`${fwd(proj)}/`, 'the project root with a trailing slash'],
+      [`${fwd(proj)}/.git`, 'the .git directory'],
+      [`${fwd(proj)}/.git/objects`, 'a directory inside .git'],
+      [`${fwd(proj)}/.git/new-dir`, 'a missing directory inside .git'],
+    ];
+    for (const [phaseDir, label] of cases) {
+      const r = receiptPathFrom(f, proj, phaseDir, proj);
+      assert.notEqual(r.status, 0, `${label}: refused`);
+      assert.equal(r.stdout, '', `${label}: no path printed`);
+      assertRefusalReason(r, label);
+    }
+    assert.ok(!fs.existsSync(path.join(proj, '.gsd-returns')), 'nothing is created at the project root');
+    assert.ok(!fs.existsSync(path.join(proj, '.git', '.gsd-returns')), 'nothing is created inside .git');
+    assert.ok(!fs.existsSync(path.join(proj, '.git', 'objects', '.gsd-returns')), 'nothing is created inside .git/objects');
+    // A normal phase dir under the same root is still accepted.
+    const ok = receiptPathFrom(f, proj, `${fwd(proj)}/sub/ph`, proj);
+    assert.equal(ok.status, 0, ok.stderr);
+  });
+
   // Review 5563209291 Minor 3: path-shaped generation. Segments are drawn from `a`, `.`,
   // `..` and `link`; `proj/link` and `proj/a/link` are links to a directory outside the
   // project, and a `link` segment anywhere else is a plain (missing) directory name. A dir

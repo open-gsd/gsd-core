@@ -200,7 +200,7 @@ gsd_stall_should_recover() {
 # phase dir outside a subdirectory cwd is still accepted when ROOT is passed): a checkout can commit the phase dir, `.planning` or `.gsd-returns` as
 # a symlink, and mkdir -p and the .gitignore write would follow it out of the
 # project. So a symlinked or dangling phase dir (or a missing component on the way
-# to it), a phase dir with a `..` component (after a missing component it would
+# to it), a phase dir that is the project root or holds a `.git` component, a phase dir with a `..` component (after a missing component it would
 # pass the ancestor check, and mkdir -p would then resolve it outside the project)
 # or a `.` component (init's phase_dir never has one),
 # a phase dir that resolves outside the root, and a symlinked .gsd-returns
@@ -242,6 +242,9 @@ gsd_receipt_path() {
   phys=$(CDPATH='' cd -P -- "$a" >/dev/null 2>&1 && pwd -P) || { _gsd_no_receipt 'the phase dir ancestor does not resolve'; return 1; }
   case "$phys/" in "$root"/*) ;; *) _gsd_no_receipt 'the phase dir resolves outside the project root'; return 1 ;; esac
   rest="${dir#"$a"}"
+  # The project root itself and anything under a .git component are never a phase dir.
+  [ "${phys%/}$rest" = "$root" ] && { _gsd_no_receipt 'the phase dir is the project root'; return 1; }
+  case "${phys%/}$rest/" in */.git/*) _gsd_no_receipt 'the phase dir is inside .git'; return 1 ;; esac
   [ -L "$dir/.gsd-returns" ] && { _gsd_no_receipt '.gsd-returns is a symlink'; return 1; }
   mkdir -p "$dir/.gsd-returns" || { _gsd_no_receipt 'cannot create .gsd-returns'; return 1; }
   got=$(CDPATH='' cd -P -- "$dir/.gsd-returns" >/dev/null 2>&1 && pwd -P) || { _gsd_no_receipt '.gsd-returns does not resolve'; return 1; }
