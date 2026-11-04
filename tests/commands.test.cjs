@@ -6609,6 +6609,63 @@ describe('record-dispatch-isolation keyed per-dispatch records (#5682)', () => {
     assert.deepEqual(written, [`${phase}--21-13.json`, `21--${plan}.json`].sort());
   });
 
+  const pinned = (now) => ({ GSD_TEST_MODE: '1', GSD_NOW_MS: String(now) });
+  function recordAt(now, args) {
+    const result = runGsdTools(['record-dispatch-isolation', '--isolation', 'none', ...args], project, pinned(now));
+    assert.ok(result.success, `record-dispatch-isolation failed: ${result.error}`);
+    return JSON.parse(result.output);
+  }
+  function aged(file, now, ageMs) {
+    const when = new Date(now - ageMs);
+    fs.utimesSync(file, when, when);
+  }
+
+  test('#5682 F4: keys of 99, 100 and 101 characters are written, written, refused', () => {
+    for (const [n, written] of [[99, true], [100, true], [101, false]]) {
+      const key = 'k'.repeat(n);
+      cleanup(path.join(project, KEYED_DIR));
+      assert.equal(record(key, '21-13').recorded, true);
+      assert.equal(record('21', key).recorded, true);
+      assert.equal(recordAt(Date.now(), ['--phase', key]).recorded, true);
+      const names = fs.existsSync(path.join(project, KEYED_DIR)) ? fs.readdirSync(path.join(project, KEYED_DIR)).sort() : [];
+      const expected = written ? [`${key}--21-13.json`, `21--${key}.json`, `${key}.json`].sort() : [];
+      assert.deepEqual(names, expected, `length ${n}`);
+    }
+  });
+
+  test('#5682 F1: prune keeps a record 24h-1ms old and removes one 24h+1ms old, by the injected clock', () => {
+    const { AGED_NONE_MAX_MS } = require('../hooks/lib/isolation-sentinel.js');
+    const now = Date.now();
+    recordAt(now, ['--phase', '21', '--plan', '21-01']);
+    const keyed = path.join(project, KEYED_DIR);
+    const keep = path.join(keyed, '30--30-01.json');
+    const drop = path.join(keyed, '31--31-01.json');
+    fs.writeFileSync(keep, '{}');
+    fs.writeFileSync(drop, '{}');
+    aged(keep, now, AGED_NONE_MAX_MS - 1);
+    aged(drop, now, AGED_NONE_MAX_MS + 1);
+    recordAt(now, ['--phase', '21', '--plan', '21-02']);
+    assert.equal(fs.existsSync(keep), true, 'limit-1 kept');
+    assert.equal(fs.existsSync(drop), false, 'limit+1 removed');
+    assert.equal(fs.existsSync(path.join(keyed, '21--21-02.json')), true, 'the record just written survives its own prune');
+  });
+
+  test('#5682 F1: prune also removes orphaned temp files older than the window and keeps young ones', () => {
+    const { AGED_NONE_MAX_MS } = require('../hooks/lib/isolation-sentinel.js');
+    const now = Date.now();
+    recordAt(now, ['--phase', '21', '--plan', '21-01']);
+    const keyed = path.join(project, KEYED_DIR);
+    const oldTmp = path.join(keyed, '21--21-01.json.tmp-1-2');
+    const youngTmp = path.join(keyed, '21--21-01.json.tmp-3-4');
+    fs.writeFileSync(oldTmp, '{');
+    fs.writeFileSync(youngTmp, '{');
+    aged(oldTmp, now, AGED_NONE_MAX_MS + 1);
+    aged(youngTmp, now, AGED_NONE_MAX_MS - 1);
+    recordAt(now, ['--phase', '21', '--plan', '21-02']);
+    assert.equal(fs.existsSync(oldTmp), false, 'orphaned temp past the window removed');
+    assert.equal(fs.existsSync(youngTmp), true, 'young temp kept');
+  });
+
   test('#5682: gitignore covers keyed dir', () => {
     fs.mkdirSync(path.join(project, '.gsd'), { recursive: true });
     fs.writeFileSync(path.join(project, '.gsd', '.gitignore'), 'user-rule/\n');

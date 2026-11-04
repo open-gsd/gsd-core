@@ -216,9 +216,9 @@ describe('hooks/lib/isolation-sentinel.js: per-dispatch keyed records (#5682)', 
     assert.equal(legacy.isolation, 'none');
   });
 
-  test('#5682: single orchestrator unchanged for a phase-level record (no plan, no keyed file)', () => {
+  test('#5682: single orchestrator unchanged for a phase-level record (no plan)', () => {
     record(project, { isolation: 'none', phase: '21' });
-    assert.equal(fs.existsSync(path.join(project, KEYED_DIR)), false, 'a plan-less record writes the legacy file only');
+    assert.deepEqual(fs.readdirSync(path.join(project, KEYED_DIR)), ['21.json'], 'a plan-less record writes the phase-level keyed file');
     const clock = clockAt(readJson(path.join(project, LEGACY_FILE)).written_at + 1);
     const legacy = readSentinel(project, { clock });
     assert.deepEqual(readSentinel(project, { clock, dispatchIds: A }), legacy);
@@ -271,6 +271,91 @@ describe('hooks/lib/isolation-sentinel.js: per-dispatch keyed records (#5682)', 
     assert.equal(read.phase, '23', 'a keyed file that disagrees with its own filename falls through to the legacy record');
     assert.equal(read.plan, '23-15');
     assert.equal(read.isolation, 'harness-worktree');
+  });
+
+  /** Persist one decision through the CLI writer with the clock pinned to `now`. */
+  function recordAt(root, now, { isolation, phase, plan, flag }) {
+    const args = ['record-dispatch-isolation', '--isolation', isolation];
+    if (flag) args.push(`--harness-flag=${flag}`);
+    if (phase) args.push('--phase', phase);
+    if (plan) args.push('--plan', plan);
+    const result = runGsdTools(args, root, { GSD_TEST_MODE: '1', GSD_NOW_MS: String(now) });
+    assert.ok(result.success, `record-dispatch-isolation failed: ${result.error}`);
+    assert.equal(JSON.parse(result.output).recorded, true);
+  }
+
+  test('#5682: a newer applicable phase-level record beats an older fresh keyed record', () => {
+    const T = Date.now();
+    recordAt(project, T, { isolation: 'none', ...A });
+    recordAt(project, T + 1000, { isolation: 'harness-worktree', flag: FLAG, phase: '21' });
+    const read = readSentinel(project, { clock: clockAt(T + 2000), dispatchIds: A });
+    assert.equal(read.stale, false);
+    assert.equal(read.isolation, 'harness-worktree', 'the newer phase-level decision governs plan 21-13');
+    assert.equal(read.plan, null);
+    assert.equal(read.writtenAt, T + 1000);
+  });
+
+  test('#5682: an older phase-level record does not beat a newer keyed record', () => {
+    const T = Date.now();
+    recordAt(project, T, { isolation: 'harness-worktree', flag: FLAG, phase: '21' });
+    recordAt(project, T + 1000, { isolation: 'none', ...A });
+    recordAt(project, T + 2000, { isolation: 'harness-worktree', flag: FLAG, ...B });
+    const read = readSentinel(project, { clock: clockAt(T + 3000), dispatchIds: A });
+    assert.equal(read.isolation, 'none');
+    assert.equal(read.plan, '21-13');
+  });
+
+  test('#5682: two phase-level orchestrators each resolve their own record', () => {
+    const T = Date.now();
+    recordAt(project, T, { isolation: 'none', phase: '21' });
+    recordAt(project, T + 1000, { isolation: 'harness-worktree', flag: FLAG, phase: '23' });
+    const clock = clockAt(T + 2000);
+    const for21 = readSentinel(project, { clock, dispatchIds: A });
+    assert.equal(for21.isolation, 'none');
+    assert.equal(for21.phase, '21');
+    const for23 = readSentinel(project, { clock, dispatchIds: B });
+    assert.equal(for23.isolation, 'harness-worktree');
+    assert.equal(for23.phase, '23');
+    assert.equal(readSentinel(project, { clock, dispatchIds: { phase: '21', plan: null } }).isolation, 'none', 'a plan-less dispatch of phase 21');
+  });
+
+  test('#5682: a phase-level keyed file whose content disagrees with its filename is ignored', () => {
+    const T = Date.now();
+    recordAt(project, T, { isolation: 'none', phase: '21' });
+    const file = path.join(project, KEYED_DIR, '21.json');
+    fs.writeFileSync(file, JSON.stringify({ ...readJson(file), phase: '99' }));
+    recordAt(project, T + 1000, { isolation: 'harness-worktree', flag: FLAG, ...B });
+    const read = readSentinel(project, { clock: clockAt(T + 2000), dispatchIds: A });
+    assert.equal(read.phase, '23', 'falls through to the legacy record');
+  });
+
+  test('#5682 F4: isSafeSentinelKey accepts 99 and 100 characters and rejects 101', () => {
+    assert.equal(sentinel.isSafeSentinelKey('k'.repeat(99)), true, 'limit-1');
+    assert.equal(sentinel.isSafeSentinelKey('k'.repeat(100)), true, 'limit');
+    assert.equal(sentinel.isSafeSentinelKey('k'.repeat(101)), false, 'limit+1');
+    assert.equal(sentinel.keyedSentinelPath(project, 'k'.repeat(100), 'p'), path.join(project, KEYED_DIR, `${'k'.repeat(100)}--p.json`));
+    assert.equal(sentinel.keyedSentinelPath(project, 'k'.repeat(101), 'p'), null);
+    assert.equal(sentinel.keyedSentinelPath(project, 'k', 'p'.repeat(101)), null);
+  });
+
+  test('#5682 F5 property: an accepted key pair stays inside the keyed directory, a rejected one yields null', () => {
+    const root = path.join(os.tmpdir(), 'gsd-5682-prop-root');
+    const keyed = path.join(root, KEYED_DIR);
+    const key = fc.oneof(
+      fc.stringMatching(/^[A-Za-z0-9._-]{0,110}$/),
+      fc.string({ maxLength: 12 }),
+      fc.constantFrom('.', '..', '../x', 'a/b', 'a\\b', '', 'x\0y', '..\\..', '21', '21-13'),
+    );
+    fc.assert(
+      fc.property(key, key, (k, k2) => {
+        const out = sentinel.keyedSentinelPath(root, k, k2);
+        if (sentinel.isSafeSentinelKey(k) && sentinel.isSafeSentinelKey(k2)) {
+          return typeof out === 'string' && path.dirname(out) === keyed && path.basename(out) === `${k}--${k2}.json`;
+        }
+        return out === null;
+      }),
+      { seed: 5682, numRuns: 300 },
+    );
   });
 
   test('#5682 property: any interleaving of records over distinct keys reads back each key\'s last write', () => {
