@@ -94,12 +94,23 @@ const CLOSED_STATUS_SEPARATOR_BEFORE_RE = /(?:[–—-]|:)\s*$/;
 const CLOSED_STATUS_MARK_RE = /[\u{2705}\u{1f5c4}]/u;
 const TITLE_NOUN_MONTH_OR_DAY_RE = /^(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)$/i;
 
+// The status word is the FIRST word of the milestone name: only an optional
+// `Milestone` word and a version token precede it (`v1.1 Closed Beta`).
+const TITLE_WORD_LEADING_RE = /^\s*(?:milestone\s+)?(?:v\d+(?:\.\d+)*\s+)?$/i;
+// Words after a status word that make it a status, not a title word: scope or
+// time words (`Shipped Phases 1-4`, `Shipped Today`, `Shipped Spring 2026`).
+const TITLE_NOUN_STATUS_TAIL_RE = new RegExp(
+  `^(?:phases?|versions?|milestones?|releases?|today|yesterday|tomorrow|early|late|recently|successfully|spring|summer|autumn|fall|winter|${TITLE_NOUN_MONTH_OR_DAY_RE.source.slice(4, -2)})$`,
+  'i',
+);
+
 /**
  * Does the status word at `index` read as a TITLE word (`Failed Payment
- * Recovery`)? Only when it is not in CAPS, not inside parens/brackets, not after
- * a dash or colon, and the next word is a capitalized title noun: not a month,
- * weekday, date or number, `Q1`-`Q4`, a version token, a lowercase word,
- * punctuation, or the end of the heading.
+ * Recovery`)? Only when ALL hold: it is not in CAPS, not inside parens/brackets,
+ * not after a dash or colon; it is the first word of the milestone name; and the
+ * next word is a capitalized noun (a lowercase word, number, `Q1`, version
+ * token, punctuation or the end of the heading is not) outside
+ * `TITLE_NOUN_STATUS_TAIL_RE`.
  */
 function isStatusWordTitleWord(text: string, index: number, word: string): boolean {
   if (word === word.toUpperCase()) return false;
@@ -110,10 +121,11 @@ function isStatusWordTitleWord(text: string, index: number, word: string): boole
     else if ((ch === ')' || ch === ']') && depth > 0) depth--;
   }
   if (depth > 0 || CLOSED_STATUS_SEPARATOR_BEFORE_RE.test(before)) return false;
+  if (!TITLE_WORD_LEADING_RE.test(before)) return false;
   const next = /^\s+([A-Z][a-z][A-Za-z'’-]*)/.exec(text.slice(index + word.length));
   if (!next) return false;
-  const noun = next[1];
-  return !TITLE_NOUN_MONTH_OR_DAY_RE.test(noun) && !/^Q[1-4]$/.test(noun);
+  const lead = /^[A-Za-z]+/.exec(next[1]);
+  return lead !== null && !TITLE_NOUN_STATUS_TAIL_RE.test(lead[0]);
 }
 
 /**
@@ -127,7 +139,8 @@ function isStatusWordTitleWord(text: string, index: number, word: string): boole
  */
 function isClosedMilestoneHeading(headingText: string): boolean {
   if (!MILESTONE_CLOSED_MARKER_PATTERN.test(headingText) || MILESTONE_ACTIVE_MARKER_PATTERN.test(headingText)) return false;
-  const text = headingText.replace(/<[^>]{0,200}>/g, '');
+  // Tag names and angle brackets go; attribute text stays, so `<span class="shipped">v1.0</span>` still reads shipped.
+  const text = headingText.replace(/<\/?[A-Za-z][A-Za-z0-9-]*|\/?>/g, ' ');
   const own = text.replace(/\([^)]*\bv\d[^)]*\)/gi, '');
   if (CLOSED_STATUS_MARK_RE.test(own)) return true;
   for (const m of text.matchAll(CLOSED_STATUS_WORD_G)) {
