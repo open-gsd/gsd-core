@@ -79,15 +79,15 @@ function ruleFor(code) {
 // ─── RULES shape ────────────────────────────────────────────────────────────
 
 describe('RULES (state-consistency group)', () => {
-  test('exports exactly 5 rules: W024, W002, W011, W021, W026', () => {
+  test('exports exactly 6 rules: W024, W002, W011, W021, W026, W031', () => {
     assert.deepEqual(
       RULES.map((r) => r.code).sort(),
-      ['W002', 'W011', 'W021', 'W024', 'W026'],
+      ['W002', 'W011', 'W021', 'W024', 'W026', 'W031'],
     );
   });
 
   test('every rule is severity WARNING', () => {
-    for (const code of ['W024', 'W002', 'W011', 'W021', 'W026']) {
+    for (const code of ['W024', 'W002', 'W011', 'W021', 'W026', 'W031']) {
       assert.equal(ruleFor(code).severity, SEVERITY.WARNING);
     }
   });
