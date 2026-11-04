@@ -18,6 +18,7 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const fc = require('fast-check');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
@@ -220,6 +221,167 @@ describe('#4020 — run-tests temp root', () => {
     assert.equal(r2.exitCode, 0, `second nested runner should pass: ${r2.stderr.slice(-300)}`);
     assert.ok(fs.existsSync(sibling),
       'a nested runner never sweeps the shared root — sibling fixtures survive');
+  });
+
+  describe('#5688 — relative TMPDIR yields absolute temp paths', () => {
+    // In-process: env + cwd are saved and restored in finally, and the whole
+    // sandbox is removed by the caller. os.tmpdir() reads the env on every call.
+    const runner = require('../scripts/run-tests.cjs');
+    const { createFixture } = require('./fixtures/index.cjs');
+
+    function withTmpEnv({ cwd, tmpdir, temp, tmp }, fn) {
+      const keys = ['TMPDIR', 'TEMP', 'TMP'];
+      const savedEnv = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+      const savedCwd = process.cwd();
+      try {
+        process.chdir(cwd);
+        const want = { TMPDIR: tmpdir, TEMP: temp, TMP: tmp };
+        for (const k of keys) {
+          if (want[k] === undefined) delete process.env[k];
+          else process.env[k] = want[k];
+        }
+        return fn();
+      } finally {
+        process.chdir(savedCwd);
+        for (const k of keys) {
+          if (savedEnv[k] === undefined) delete process.env[k];
+          else process.env[k] = savedEnv[k];
+        }
+      }
+    }
+
+    function sandboxWithRel(t, rel) {
+      const base = createTempDir('gsd-5688-');
+      t.after(() => cleanup(base));
+      fs.mkdirSync(path.join(base, rel), { recursive: true });
+      return base;
+    }
+
+    test('#5688: setupRunTempRoot resolves relative TMPDIR to absolute', (t) => {
+      const base = sandboxWithRel(t, 'reltmp');
+      withTmpEnv({ cwd: base, tmpdir: 'reltmp', temp: 'reltmp', tmp: 'reltmp' }, () => {
+        const expectedParent = path.resolve('reltmp');
+        const root = runner.setupRunTempRoot();
+        assert.ok(path.isAbsolute(root), `root must be absolute, got ${root}`);
+        assert.equal(path.dirname(root), expectedParent);
+        for (const k of ['TMPDIR', 'TEMP', 'TMP']) {
+          assert.equal(process.env[k], root, `${k} exported absolute`);
+        }
+      });
+    });
+
+    test('#5688: createFixture returns absolute dir under relative TMPDIR', (t) => {
+      const base = sandboxWithRel(t, 'reltmp');
+      withTmpEnv({ cwd: base, tmpdir: 'reltmp' }, () => {
+        const dir = createFixture({ planning: false });
+        assert.ok(path.isAbsolute(dir), `fixture must be absolute, got ${dir}`);
+        assert.equal(path.dirname(dir), path.resolve('reltmp'));
+      });
+    });
+
+    test('#5688: absolute TMPDIR redirect preserved', (t) => {
+      const base = createTempDir('gsd-5688-abs-');
+      t.after(() => cleanup(base));
+      const outer = path.join(base, 'outer');
+      fs.mkdirSync(outer);
+      withTmpEnv({ cwd: base, tmpdir: outer, temp: outer, tmp: outer }, () => {
+        const root = runner.setupRunTempRoot();
+        assert.equal(path.dirname(root), outer, 'absolute base is byte-identical (no realpath)');
+        assert.equal(createFixture({ planning: false }).startsWith(root + path.sep), true);
+      });
+    });
+
+    test('#5688: dot TMPDIR resolves to cwd', (t) => {
+      const base = createTempDir('gsd-5688-dot-');
+      t.after(() => cleanup(base));
+      withTmpEnv({ cwd: base, tmpdir: '.' }, () => {
+        const cwd = process.cwd();
+        const root = runner.setupRunTempRoot();
+        assert.ok(path.isAbsolute(root));
+        assert.equal(path.dirname(root), cwd);
+      });
+    });
+
+    for (const [label, tmpdir] of [['empty', ''], ['unset', undefined]]) {
+      test(`#5688: ${label} TMPDIR yields absolute root`, (t) => {
+        const base = createTempDir('gsd-5688-def-');
+        t.after(() => cleanup(base));
+        withTmpEnv({ cwd: base, tmpdir }, () => {
+          const root = runner.setupRunTempRoot();
+          try {
+            assert.ok(path.isAbsolute(root), `root must be absolute, got ${root}`);
+            assert.ok(path.isAbsolute(process.env.TMPDIR));
+          } finally {
+            cleanup(root);
+          }
+        });
+      });
+    }
+
+    test('#5688: inherited relative run root exported absolute', (t) => {
+      const rel = 'gsd-test-run-inherited5688';
+      const base = sandboxWithRel(t, rel);
+      withTmpEnv({ cwd: base, tmpdir: rel, temp: rel, tmp: rel }, () => {
+        const expected = path.resolve(rel);
+        const root = runner.setupRunTempRoot();
+        assert.equal(root, expected, 'the inherited root is reused, resolved');
+        assert.ok(path.isAbsolute(root));
+        for (const k of ['TMPDIR', 'TEMP', 'TMP']) assert.equal(process.env[k], expected);
+        assert.ok(fs.existsSync(expected), 'the reused root is not removed');
+      });
+    });
+
+    test('#5688: child with changed cwd sees same temp dir', (t) => {
+      const base = sandboxWithRel(t, 'reltmp');
+      const elsewhere = createTempDir('gsd-5688-elsewhere-');
+      t.after(() => cleanup(elsewhere));
+      withTmpEnv({ cwd: base, tmpdir: 'reltmp' }, () => {
+        const root = runner.setupRunTempRoot();
+        const r = runNode(['-e', 'process.stdout.write(require("os").tmpdir())'], {
+          timeoutMs: RUN_TESTS_ISOLATED_PROBE_TIMEOUT_MS,
+          cwd: elsewhere,
+          env: { ...process.env },
+        });
+        assert.equal(r.exitCode, 0, r.stderr.slice(-300));
+        assert.equal(r.stdout, root, 'the child resolves the parent\'s root, not a cwd-relative one');
+        assert.ok(fs.existsSync(r.stdout));
+      });
+    });
+
+    test('#5688: runner and fixtures temp base parity', (t) => {
+      const base = sandboxWithRel(t, 'reltmp');
+      withTmpEnv({ cwd: base, tmpdir: 'reltmp' }, () => {
+        const fixtureParent = path.dirname(createFixture({ planning: false }));
+        const runnerParent = path.dirname(runner.setupRunTempRoot());
+        assert.equal(fixtureParent, runnerParent);
+      });
+    });
+
+    test('#5688: prop: any relative TMPDIR yields absolute root', (t) => {
+      const base = createTempDir('gsd-5688-prop-');
+      t.after(() => cleanup(base));
+      const segment = fc.stringMatching(/^[a-z0-9]{1,8}$/);
+      fc.assert(
+        fc.property(fc.array(segment, { minLength: 1, maxLength: 3 }), (segments) => {
+          const rel = segments.join('/');
+          fs.mkdirSync(path.join(base, rel), { recursive: true });
+          withTmpEnv({ cwd: base, tmpdir: rel, temp: rel, tmp: rel }, () => {
+            const expectedParent = path.resolve(rel);
+            const root = runner.setupRunTempRoot();
+            const dir = createFixture({ planning: false });
+            assert.ok(path.isAbsolute(root));
+            assert.ok(path.isAbsolute(dir));
+            if (path.basename(rel).startsWith('gsd-test-run-')) {
+              assert.equal(root, expectedParent);
+            } else {
+              assert.equal(path.dirname(root), expectedParent);
+            }
+            assert.ok(path.basename(root).startsWith('gsd-test-run-'));
+          });
+        }),
+        { seed: 5688, numRuns: 25 },
+      );
+    });
   });
 
   describe('#4220 — computeSweepProtectSet ancestor-walk termination', () => {
