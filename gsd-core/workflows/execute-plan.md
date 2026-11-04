@@ -483,7 +483,7 @@ gsd_run query state.record-session \
   --resume-file "None"
 ```
 
-Keep STATE.md under 150 lines.
+Keep STATE.md under 100 lines.
 </step>
 
 <step name="issues_review_gate">

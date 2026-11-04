@@ -82,6 +82,11 @@ unrecognized, the helper fails loud (non-zero exit) instead of silently guessing
 a column count — this replaces the prior inline `awk NF-2` arithmetic that was
 the root cause of #2133.
 
+Pass a one-line title of at most 240 characters as `$TASK_TITLE` — `$TASK` itself when it is
+already one short line, otherwise a summary of it. STATE.md is a digest; the detail lives in the
+commit message (#5830). A longer `--task` is still written in full, but the command reports a
+`warnings` entry.
+
 ```bash
 # Detect whether STATE.md has a Quick Tasks Completed table
 if grep -q "Quick Tasks Completed" .planning/STATE.md 2>/dev/null; then
@@ -89,7 +94,7 @@ if grep -q "Quick Tasks Completed" .planning/STATE.md 2>/dev/null; then
   # appending — silent no-op when already canonical, so this runs harmlessly
   # on every fast task and migrates exactly once, on the first.
   gsd_run quick-tasks-migrate || true
-  gsd_run quick-tasks-append --task "$TASK" || echo "⚠ fast.md log_to_state: could not append Quick Tasks row (see message above); continuing."
+  gsd_run quick-tasks-append --task "$TASK_TITLE" || echo "⚠ fast.md log_to_state: could not append Quick Tasks row (see message above); continuing."
 fi
 ```
 </step>

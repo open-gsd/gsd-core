@@ -805,7 +805,21 @@ export interface QuickTaskFields {
 }
 
 /**
+ * Advisory length bound for a Quick Tasks `Description` cell (#5830). Same
+ * 240-character bound #2618 set for pending-todo bullets
+ * (`PENDING_TODO_BULLET_MAX_CHARS`, `src/init.cts`): one table row is one line
+ * of STATE.md, which is a digest, so a row should name the task, not narrate
+ * it — the detail belongs in the task's SUMMARY. Exceeding it never shortens
+ * or rejects the row; `appendQuickTaskRow` only reports a warning.
+ */
+export const QUICK_TASK_DESCRIPTION_MAX_CHARS = 240;
+
+/**
  * Append one row to STATE.md's "Quick Tasks Completed" table.
+ *
+ * A description longer than `QUICK_TASK_DESCRIPTION_MAX_CHARS` (measured on
+ * the raw description, before cell escaping) is still written verbatim; the
+ * result's `warnings` carries one prose entry saying so (#5830).
  *
  * Pure, schema-driven replacement for fast.md's inline `awk NF-2` column-count
  * guess (#2133, ADR-2143 §3 schema registry / §7 fail-loud unrecognized-schema
@@ -826,7 +840,7 @@ export interface QuickTaskFields {
 export function appendQuickTaskRow(
   stateContent: string,
   fields: QuickTaskFields,
-): Result<{ content: string; row: string; variant: string }> {
+): Result<{ content: string; row: string; variant: string; warnings: string[] }> {
   const section = selectQuickTasksSection(stateContent);
   if (!section) {
     return { ok: false, reason: QUICK_TASKS_SECTION_ABSENT };
@@ -882,7 +896,15 @@ export function appendQuickTaskRow(
 
   const content = replaceSection(stateContent, section, newBody);
 
-  return { ok: true, value: { content, row, variant: match.label } };
+  const warnings: string[] = [];
+  if (fields.description.length > QUICK_TASK_DESCRIPTION_MAX_CHARS) {
+    warnings.push(
+      `description is ${fields.description.length} characters (limit ${QUICK_TASK_DESCRIPTION_MAX_CHARS}); ` +
+      'the row was written in full, but STATE.md is a digest — pass a one-line title and keep the detail in the task\'s SUMMARY',
+    );
+  }
+
+  return { ok: true, value: { content, row, variant: match.label, warnings } };
 }
 
 

@@ -23,6 +23,8 @@
  *    genuine conflation) — STATE says the milestone is complete/archived, but
  *    ROADMAP (scoped to that same milestone) still lists a phase with no
  *    matching disk directory.
+ *  - W031 (#5830, new — not a `verify.cts` port) — STATE.md is more than 3x
+ *    its documented line target. Advisory, never repaired.
  *
  * - W002's original message interpolates `${slash('health')}`
  *   (`verify.cts:1770`) and W011's interpolates `${slash('progress')}`
@@ -60,6 +62,9 @@ const { getMilestoneFromPhaseId, matchPhaseDirs, phaseLookupQuery, extractPhaseT
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- the single owner of the persisted status vocabulary
 import stateDocumentMod = require('../state-document.cjs');
 const { normalizeStateStatus } = stateDocumentMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- the one code-side copy of STATE.md's line target (#5830)
+import stateMdSchemaMod = require('../state-md-schema.cjs');
+const { STATE_MD_LINE_TARGET } = stateMdSchemaMod;
 
 // ─── W024 — STATE.md commit-age freshness (DELIBERATELY INERT) ─────────────
 
@@ -394,8 +399,46 @@ const RULE_W026: Rule = {
   },
 };
 
+// ─── W031 — STATE.md far over its documented line target (#5830) ──────────
+
+/**
+ * STATE.md is a digest with a documented line target
+ * (`STATE_MD_LINE_TARGET`, `templates/state.md` `<size_constraint>`). Nothing
+ * else bounds it — quick-task rows in particular accumulate without limit —
+ * and several workflows read the whole file into context. Advisory only:
+ * the fix is a judgement about which history to archive, so `--repair` never
+ * acts; the remedy names the two tools that do (`state prune` for the
+ * sections it covers, `/gsd-cleanup` for quick-task archival, opt-in per
+ * #2142). Fires only when the file is MORE than 3x the target, so a file
+ * modestly over the target stays quiet.
+ */
+const STATE_MD_OVERSIZE_FACTOR = 3;
+
+const RULE_W031: Rule = {
+  code: 'W031',
+  severity: SEVERITY.WARNING,
+  description: `STATE.md is more than ${STATE_MD_OVERSIZE_FACTOR}x its ${STATE_MD_LINE_TARGET}-line target`,
+  repairable: false,
+  check: (snapshot: PlanningSnapshot): Diagnostic[] => {
+    const lines = snapshot.stateLineCount.value;
+    if (lines === null || lines <= STATE_MD_LINE_TARGET * STATE_MD_OVERSIZE_FACTOR) return [];
+    return [
+      {
+        code: 'W031',
+        severity: SEVERITY.WARNING,
+        message:
+          `STATE.md is ${lines} lines, more than ${STATE_MD_OVERSIZE_FACTOR}x its ` +
+          `${STATE_MD_LINE_TARGET}-line target — it is a digest, not an archive`,
+        remedy: adviseRemedy(
+          'Run `gsd-tools state prune` to archive old Decisions/Recently Completed entries, and /gsd-cleanup to archive quick-task history',
+        ),
+      },
+    ];
+  },
+};
+
 // ─── Exports ────────────────────────────────────────────────────────────────
 
-const RULES: Rule[] = [RULE_W024, RULE_W002, RULE_W011, RULE_W021, RULE_W026];
+const RULES: Rule[] = [RULE_W024, RULE_W002, RULE_W011, RULE_W021, RULE_W026, RULE_W031];
 
 export = { RULES };

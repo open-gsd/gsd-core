@@ -42,7 +42,9 @@
  *                                      markdown-table.cjs; #2133/ADR-2143).
  *                                      Fails loud (non-zero exit) on a missing
  *                                      or unrecognized table instead of the old
- *                                      awk NF-2 silent-skip guess.
+ *                                      awk NF-2 silent-skip guess. A --task
+ *                                      over 240 chars is written in full with
+ *                                      a `warnings` entry, exit 0 (#5830).
  *   config-ensure-section              Initialize .planning/config.json
  *   history-digest                     Aggregate all SUMMARY.md data
  *   summary-extract <path> [--fields]  Extract structured data from SUMMARY.md
@@ -1564,7 +1566,14 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             return result.value.content;
           }, cwd, { resync: false });
 
-          output({ ok: true, row: mutation.row, variant: mutation.variant }, raw, mutation.row);
+          // #5830: an over-long description is written verbatim, exit stays 0;
+          // the warning rides in the JSON `warnings` (prose string[], the
+          // repo-wide meaning of that field) and, in --raw mode where stdout
+          // carries only the row, goes to stderr.
+          if (raw) {
+            for (const w of mutation.warnings) process.stderr.write(`⚠ quick-tasks-append: ${w}\n`);
+          }
+          output({ ok: true, row: mutation.row, variant: mutation.variant, warnings: mutation.warnings }, raw, mutation.row);
   }
 
   /**
