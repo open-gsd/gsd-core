@@ -1865,32 +1865,77 @@ function convertSlashCommandsToTraeSkillMentions(content) {
 }
 
 /**
- * #5715: run `convert` over `content` with every occurrence of the install prefix the
- * rewrite pass already emitted shielded from it. The agents and gsd-core spec-tree
- * paths substitute the prefix BEFORE the Trae converter runs, so a config dir that
- * itself contains a Claude name (`/opt/proj/.claude/trae-home`) would be rewritten a
- * second time. Only a prefix that contains that name needs shielding; any other prefix
- * passes straight through, which keeps default-install output byte-identical.
+ * #5715: the texts of the install prefix a rewrite pass emitted, or `[]` when the prefix
+ * must not be shielded. The prefix is the normalized (slash-less) form, which also covers
+ * the trailing-slash form and the bare form; a `$HOME/...` prefix also yields its `~/...`
+ * spelling, which the Claude tilde restore emits for `@` includes.
+ *
+ * A prefix that is nothing but the Claude config dir itself (`.claude`, `./.claude`, with
+ * or without a trailing slash) is never shielded: it is indistinguishable from the
+ * look-alike `.claude/` text the converters are meant to rewrite, so shielding it would
+ * suppress every such conversion. Empty and `.` prefixes are likewise not shielded.
  */
-function shieldEmittedPrefix(content, pathPrefix, convert) {
-  if (typeof pathPrefix !== 'string') return convert(content);
-  const normalizedPrefix = pathPrefix.replace(/\/$/, '');
-  if (!/claude/i.test(normalizedPrefix) || !content.includes(normalizedPrefix)) return convert(content);
-  const sentinel = ['\u0001', '\u0002', '\u0003', '\u0004'].find((c) => !content.includes(c));
-  if (sentinel === undefined) return convert(content);
-  const stash = [];
-  const shieldedPrefix = normalizedPrefix.replace(/claude/gi, (match) => {
-    stash.push(match);
-    return sentinel + (stash.length - 1) + sentinel;
+function shieldedPrefixForms(pathPrefix: unknown): string[] {
+  if (typeof pathPrefix !== 'string') return [];
+  const normalized = pathPrefix.replace(/\/+$/, '');
+  const bare = normalized.replace(/^(?:\.\/)+/, '');
+  if (bare === '' || bare === '.' || bare === '.claude') return [];
+  return normalized.startsWith('$HOME/') ? [normalized, '~' + normalized.slice('$HOME'.length)] : [normalized];
+}
+
+/** Candidate sentinel namespaces tried by shieldEmittedPrefix before it gives up. */
+const SHIELD_SENTINEL_LIMIT = 256;
+
+/**
+ * #5715: run `convert` over `content` with every exact occurrence of the install prefix
+ * the rewrite pass already emitted shielded from it. The agents, the gsd-core spec tree,
+ * the OpenCode-family and the command-body converters all run AFTER the prefix is
+ * substituted, so a config dir that contains a source form (`.claude/`, `$&`, `/gsd:x`,
+ * `Bash(`) would otherwise be converted a second time inside its own output.
+ *
+ * Every prefix that occurs in the content is shielded, whatever it contains. A default
+ * install is unaffected: the converters have nothing to rewrite inside a prefix that
+ * holds no source form, so the output is byte-identical. The sentinel namespace is chosen
+ * per call and checked absent from `content`; when none of the candidates is free this
+ * throws instead of converting unshielded.
+ */
+function shieldEmittedPrefix(content: string, pathPrefix: unknown, convert: (shielded: string) => string): string {
+  const forms = shieldedPrefixForms(pathPrefix).filter((form) => content.includes(form));
+  if (forms.length === 0) return convert(content);
+  let namespace = 0;
+  while (namespace < SHIELD_SENTINEL_LIMIT && content.includes('' + namespace + ':')) namespace += 1;
+  if (namespace === SHIELD_SENTINEL_LIMIT) {
+    throw new Error('shieldEmittedPrefix: no free sentinel namespace in the content; refusing to convert it unshielded');
+  }
+  const tokenOf = (index: number) => '' + namespace + ':' + index + '';
+  let shielded = content;
+  forms.forEach((form, index) => {
+    shielded = shielded.split(form).join(tokenOf(index));
   });
-  const converted = convert(content.split(normalizedPrefix).join(shieldedPrefix));
-  return converted.split(sentinel).length === 1
-    ? converted
-    : converted.replace(new RegExp(sentinel + '(\\d+)' + sentinel, 'g'), (_match, index) => stash[Number(index)]);
+  let converted = convert(shielded);
+  forms.forEach((form, index) => {
+    converted = converted.split(tokenOf(index)).join(form);
+  });
+  return converted;
+}
+
+/**
+ * #2658 / #5715: the emitted `.trae/` prefix followed by the Claude instruction file names
+ * the Trae rules file under that same prefix. The Body converter resolves it with a pattern
+ * that reads the prefix text, which the shield hides from it, so the exact emitted prefix is
+ * resolved here, before shielding, by literal replacement.
+ */
+function resolveTraeInstructionFileAtPrefix(content: string, pathPrefix: unknown): string {
+  let resolved = content;
+  for (const form of shieldedPrefixForms(pathPrefix)) {
+    if (!form.endsWith('.trae')) continue;
+    resolved = resolved.split(form + '/CLAUDE.md').join(form + '/rules/rules.md');
+  }
+  return resolved;
 }
 
 function convertClaudeToTraeMarkdown(content, pathPrefix) {
-  return shieldEmittedPrefix(content, pathPrefix, convertClaudeToTraeMarkdownBody);
+  return shieldEmittedPrefix(resolveTraeInstructionFileAtPrefix(content, pathPrefix), pathPrefix, convertClaudeToTraeMarkdownBody);
 }
 
 function convertClaudeToTraeMarkdownBody(content) {
@@ -3546,19 +3591,22 @@ function retargetInstalledIncludes(
   if (typeof content !== 'string' || content.length === 0) return content;
   if (typeof pathPrefix !== 'string' || !pathPrefix.endsWith('/')) return content;
   if (!behaviors) return content;
-  let result = content;
-
+  // #5715: every rule is an alternative of ONE pass, so the prefix a rule emits is never
+  // rescanned by another (a prefix under `$HOME/<root>/` was rewritten a second time by
+  // the `@$HOME/<root>/` rule after the `@~/<root>/` rule had emitted it), and the
+  // replacement is a function result: a string replacement would expand `$&` in a prefix.
+  const rules: ConfigDirRewriteRule[] = [];
   if (behaviors.retargetsGsdCoreProsePath === true) {
-    result = result.replace(/@?GSD core\/(?=[a-z])/g, `${pathPrefix}gsd-core/`);
+    rules.push({ pattern: '@?GSD core\\/(?=[a-z])', replacement: `${pathPrefix}gsd-core/` });
   }
-
   const home = behaviors.defaultHomeIncludeRoot;
   if (typeof home === 'string' && home.length > 0 && pathPrefix !== `$HOME/${home}/`) {
-    result = result
-      .split(`@~/${home}/`).join(`@${pathPrefix}`)
-      .split(`@$HOME/${home}/`).join(`@${pathPrefix}`);
+    rules.push(
+      { pattern: '@~\\/' + escapeRegExp(home) + '\\/', replacement: `@${pathPrefix}` },
+      { pattern: '@\\$HOME\\/' + escapeRegExp(home) + '\\/', replacement: `@${pathPrefix}` },
+    );
   }
-  return result;
+  return rewriteSourceFormsOnce(content, rules);
 }
 
 /** Return a safe project-relative prefix for a resolved install target. */
@@ -3987,6 +4035,22 @@ function rewriteSpecTreeConfigDirForms(content: string, pathPrefix: string, dirN
   ]);
 }
 
+/**
+ * The OpenCode / Kilo commands and skills path pass: `~/.claude/`, `$HOME/.claude/` and the
+ * runtimes' own `~/.opencode/` / `~/.kilo/` to the install prefix, `./.claude/` to the
+ * runtime's local dir, in ONE pass with literal replacement (a prefix is never rescanned,
+ * and `$&` in a config dir is not expanded).
+ */
+function rewriteOpencodeFamilyConfigDirForms(content: string, pathPrefix: string, dirName: string): string {
+  const b = configDirRuleBuilders(pathPrefix, pathPrefix.replace(/\/$/, ''), dirName);
+  return rewriteSourceFormsOnce(content, [
+    ...b.slash('.claude'),
+    ...b.localSlash('.claude'),
+    ...b.tilde('.opencode'),
+    ...b.tilde('.kilo'),
+  ]);
+}
+
 function _applyRuntimeRewritesInner(content, runtime, pathPrefix, isGlobal = false, attribution = undefined) {
   const dirName = getDirName(runtime);
   const normalizedPathPrefix = pathPrefix.replace(/\/$/, '');
@@ -4265,7 +4329,8 @@ function applyRuntimeContentRewritesForCommandsInPlace(stagedDir, runtime, pathP
       // from runtime.hostBehaviors instead of a hardcoded runtime-name branch.
       const _cmdConv = hostBehaviorsFor(runtime).commandBodyConverter;
       if (_cmdConv && COMMAND_BODY_CONVERTERS[_cmdConv]) {
-        content = COMMAND_BODY_CONVERTERS[_cmdConv](content);
+        // #5715: the converter runs after the prefix pass, so the emitted prefix is shielded.
+        content = shieldEmittedPrefix(content, pathPrefix, COMMAND_BODY_CONVERTERS[_cmdConv]);
       }
       installFs().writeFileSync(path.join(tempDir, entry.name), content);
     }
@@ -4461,6 +4526,24 @@ function applyAgentPathRewrites(content: string, runtime: string, pathPrefix: st
     );
   }
   return applyAgentPathRewritesInner(content, runtime, pathPrefix);
+}
+
+/**
+ * #5715: run an agent converter over content whose config-dir forms `applyAgentPathRewrites`
+ * has already rewritten, with the emitted prefix shielded from the converter. A runtime that
+ * declares `noPathRewrite` emitted no prefix, so nothing is shielded.
+ */
+function shieldAgentConverterPrefix(
+  content: string,
+  runtime: string,
+  pathPrefix: string,
+  convert: (shielded: string) => string,
+): string {
+  if (hostBehaviorsFor(runtime).noPathRewrite === true) return convert(content);
+  // The runtime whose own dot-dir is `.trae` resolves the instruction file at the emitted
+  // prefix (see resolveTraeInstructionFileAtPrefix) before the prefix is hidden.
+  const resolved = getDirName(runtime) === '.trae' ? resolveTraeInstructionFileAtPrefix(content, pathPrefix) : content;
+  return shieldEmittedPrefix(resolved, pathPrefix, convert);
 }
 
 function applyAgentPathRewritesInner(content: string, runtime: string, pathPrefix: string): string {
@@ -4785,6 +4868,9 @@ export = {
   _restoreClaudeGlobalAtRefTilde: restoreClaudeGlobalAtRefTilde,
   _applyRuntimeRewrites,
   _rewriteSpecTreeConfigDirForms: rewriteSpecTreeConfigDirForms,
+  _rewriteOpencodeFamilyConfigDirForms: rewriteOpencodeFamilyConfigDirForms,
+  _shieldAgentConverterPrefix: shieldAgentConverterPrefix,
+  _resolveTraeInstructionFileAtPrefix: resolveTraeInstructionFileAtPrefix,
   _shieldEmittedPrefix: shieldEmittedPrefix,
   _stampNonClaudeRuntimeDefaults,
   // #2652: registry-resolved dispatch isolation, mirroring routeDispatchIsolation

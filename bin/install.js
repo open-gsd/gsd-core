@@ -2660,7 +2660,11 @@ function convertSlashCommandsToTraeSkillMentions(content) {
 }
 
 function convertClaudeToTraeMarkdown(content, pathPrefix) {
-  return runtimeArtifactConversion._shieldEmittedPrefix(content, pathPrefix, convertClaudeToTraeMarkdownBody);
+  return runtimeArtifactConversion._shieldEmittedPrefix(
+    runtimeArtifactConversion._resolveTraeInstructionFileAtPrefix(content, pathPrefix),
+    pathPrefix,
+    convertClaudeToTraeMarkdownBody,
+  );
 }
 
 function convertClaudeToTraeMarkdownBody(content) {
@@ -7283,14 +7287,16 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
     content = composeWorkflow(content, { sourcePath: agentTomlSourcePath });
     // Replace full .claude/gsd-core prefix so path resolves to the Codex
     // GSD install before generic .claude → .codex conversion rewrites it.
-    content = content.replace(/~\/\.claude\/gsd-core\//g, codexGsdPath);
-    content = content.replace(/\$HOME\/\.claude\/gsd-core\//g, codexGsdPath);
+    // #5715: one pass, function replacement: a string replacement would expand `$&` in a
+    // config dir, and a second pass would rescan the path the first emitted.
+    content = content.replace(/(?:~|\$HOME)\/\.claude\/gsd-core\//g, () => codexGsdPath);
     // Route TOML emit through the same full Claude→Codex conversion pipeline
     // used on the `.md` emit path (#2639). Covers: slash-command rewrites,
     // $ARGUMENTS → {{GSD_ARGS}}, /clear removal, anchored and bare .claude/
     // paths, .claudeignore → .codexignore, and standalone "Claude" /
     // CLAUDE.md neutralization via neutralizeAgentReferences(..., 'AGENTS.md').
-    content = convertClaudeToCodexMarkdown(content);
+    // #5715: the converter runs after the path above was emitted; shield it from the converter.
+    content = runtimeArtifactConversion._shieldEmittedPrefix(content, codexGsdPath, convertClaudeToCodexMarkdown);
     const { frontmatter } = extractFrontmatterAndBody(content);
     // #3897 security review F1 (blocker, post-merge): this loop used to key
     // the sandbox/hold decision off ONLY the filename stem while the emitted
@@ -7953,6 +7959,8 @@ const RUNTIME_CONTENT_DISPATCH = {
     },
   },
   trae: {
+    // #5715: the Trae converter shields (and resolves) the emitted prefix itself.
+    mdShieldsPrefix: true,
     md: (content, ctx) => convertClaudeToTraeMarkdown(content, ctx && ctx.pathPrefix),
     js: (content) => {
       content = content.replace(/\/gsd:([a-z0-9-]+)/g, (_, commandName) => {
@@ -8194,7 +8202,15 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
       content = normalizeAgentBodyForRuntime(content, runtime, readGsdCommandNames());
 
       // Apply per-runtime .md converter (if any)
-      if (dispatch.md) content = dispatch.md(content, ctx);
+      // #5715: the generic pass above emitted `pathPrefix`; shield it from the converter
+      // (a converter that skips the generic pass emitted nothing to shield).
+      if (dispatch.md) {
+        content = runtimeArtifactConversion._shieldEmittedPrefix(
+          content,
+          dispatch.mdSkipGenericRewrite || dispatch.mdShieldsPrefix ? undefined : pathPrefix,
+          (shielded) => dispatch.md(shielded, ctx),
+        );
+      }
 
       // Re-run attribution after converter for runtimes that need it (copilot, antigravity)
       if (dispatch.mdReattributeAfter) content = processAttribution(content, getCommitAttribution(runtime));
