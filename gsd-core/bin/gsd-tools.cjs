@@ -4652,7 +4652,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
           if (subcommand === 'phase-status') {
             // #1956: deterministic STATE.md-vs-ROADMAP.md phase-status drift.
-            const { planningDir } = require('./lib/planning-workspace.cjs');
+            const { planningDir, resolvePhaseIdConvention } = require('./lib/planning-workspace.cjs');
             const { stateExtractField, stateCurrentPositionSlice } = require('./lib/state-document.cjs');
             const { locateRoadmapProgress } = require('./lib/roadmap-progress.cjs');
             const { phaseKeyFromProse } = require('./lib/phase-id.cjs');
@@ -4670,6 +4670,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
               : undefined;
 
             const dir = planningDir(cwd);
+            const phaseConvention = resolvePhaseIdConvention(cwd);
             const statePath = path.join(dir, 'STATE.md');
             const roadmapPath = path.join(dir, 'ROADMAP.md');
 
@@ -4680,7 +4681,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
               // missing_state below
             }
             if (stateContent === null) {
-              const phase = phaseArg !== undefined ? phaseKeyFromProse(phaseArg) : null;
+              const phase = phaseArg !== undefined ? phaseKeyFromProse(phaseArg, undefined, phaseConvention) : null;
               output({
                 verdict: 'uncheckable',
                 reason: 'missing_state',
@@ -4720,7 +4721,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // document.
             const currentPositionBody = stateCurrentPositionSlice(stateBody);
             if (currentPositionBody === null) {
-              const phase = phaseArg !== undefined ? phaseKeyFromProse(phaseArg) : null;
+              const phase = phaseArg !== undefined ? phaseKeyFromProse(phaseArg, undefined, phaseConvention) : null;
               output({
                 verdict: 'uncheckable',
                 reason: 'no_current_position',
@@ -4735,8 +4736,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // Resolve the target phase: --phase if given, else whatever
             // STATE.md's Current Position reports as current.
             const phase = phaseArg !== undefined
-              ? phaseKeyFromProse(phaseArg)
-              : phaseKeyFromProse(stateExtractField(currentPositionBody, 'Phase'));
+              ? phaseKeyFromProse(phaseArg, undefined, phaseConvention)
+              : phaseKeyFromProse(stateExtractField(currentPositionBody, 'Phase'), undefined, phaseConvention);
 
             if (roadmapContent === null) {
               output({
@@ -4756,7 +4757,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // Progress owner's rule (roadmap-progress.cts), shared with every reader and writer (#5762).
             const { table } = locateRoadmapProgress(roadmapContent);
             const matchedRow = table
-              ? table.rows.find((row) => phaseKeyFromProse(row.Phase) === phase && phase !== null)
+              ? table.rows.find((row) => phaseKeyFromProse(row.Phase, undefined, phaseConvention) === phase && phase !== null)
               : undefined;
 
             if (!matchedRow) {
