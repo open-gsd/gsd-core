@@ -1885,6 +1885,8 @@ function shieldedPrefixForms(pathPrefix: unknown): string[] {
 
 /** Candidate sentinel namespaces tried by shieldEmittedPrefix before it gives up. */
 const SHIELD_SENTINEL_LIMIT = 256;
+const SHIELD_SENTINEL_OPEN = '\uE000';
+const SHIELD_SENTINEL_CLOSE = '\uE001';
 
 /**
  * #5715: run `convert` over `content` with every exact occurrence of the install prefix
@@ -1903,11 +1905,11 @@ function shieldEmittedPrefix(content: string, pathPrefix: unknown, convert: (shi
   const forms = shieldedPrefixForms(pathPrefix).filter((form) => content.includes(form));
   if (forms.length === 0) return convert(content);
   let namespace = 0;
-  while (namespace < SHIELD_SENTINEL_LIMIT && content.includes('' + namespace + ':')) namespace += 1;
+  while (namespace < SHIELD_SENTINEL_LIMIT && content.includes(SHIELD_SENTINEL_OPEN + namespace + ':')) namespace += 1;
   if (namespace === SHIELD_SENTINEL_LIMIT) {
     throw new Error('shieldEmittedPrefix: no free sentinel namespace in the content; refusing to convert it unshielded');
   }
-  const tokenOf = (index: number) => '' + namespace + ':' + index + '';
+  const tokenOf = (index: number) => SHIELD_SENTINEL_OPEN + namespace + ':' + index + SHIELD_SENTINEL_CLOSE;
   let shielded = content;
   forms.forEach((form, index) => {
     shielded = shielded.split(form).join(tokenOf(index));

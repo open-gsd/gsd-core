@@ -1676,7 +1676,7 @@ describe('#5715: shieldEmittedPrefix', () => {
   test('#5715: the sentinel namespace is chosen per call, absent from the content', () => {
     const prefix = '/opt/p/.claude/x/';
     for (const taken of [0, 1, 17, 254]) {
-      const decoys = Array.from({ length: taken + 1 }, (_, n) => `${n}:0`).join('');
+      const decoys = Array.from({ length: taken + 1 }, (_, n) => `\uE000${n}:0\uE001`).join('');
       const content = `${decoys} ${prefix}f.md .claude/g`;
       assert.strictEqual(shield(content, prefix, rewriteAll), `${decoys} ${prefix}f.md .x/g`, `${taken}`);
     }
@@ -1684,7 +1684,7 @@ describe('#5715: shieldEmittedPrefix', () => {
 
   test('#5715: when no sentinel namespace is free it throws, it never converts unshielded', () => {
     const prefix = '/opt/p/.claude/x/';
-    const decoys = Array.from({ length: 256 }, (_, n) => `${n}:`).join('');
+    const decoys = Array.from({ length: 256 }, (_, n) => `\uE000${n}:`).join('');
     let converted = false;
     assert.throws(
       () => shield(`${decoys} ${prefix}f.md`, prefix, (s) => { converted = true; return s; }),
@@ -1692,7 +1692,7 @@ describe('#5715: shieldEmittedPrefix', () => {
     );
     assert.strictEqual(converted, false);
     // the limit - 1 boundary still shields
-    const almost = Array.from({ length: 255 }, (_, n) => `${n}:`).join('');
+    const almost = Array.from({ length: 255 }, (_, n) => `\uE000${n}:`).join('');
     assert.strictEqual(shield(`${almost} ${prefix}f.md`, prefix, rewriteAll), `${almost} ${prefix}f.md`);
   });
 
@@ -1721,7 +1721,7 @@ describe('#5715: shieldEmittedPrefix', () => {
   });
 
   test('#5715 property: a shielded identity conversion round-trips, a shielded rewrite never touches the prefix', () => {
-    const piece = fc.constantFrom('.claude/', '/gsd:a ', 'Bash(x)', '$ARGUMENTS', '\u0001', '0:0', 'text ', '\n');
+    const piece = fc.constantFrom('.claude/', '/gsd:a ', 'Bash(x)', '$ARGUMENTS', '\u0001', '\uE0000:0\uE001', 'text ', '\n');
     const prefix = fc.constantFrom('/opt/p/.claude/x/', '$HOME/.claude/profiles/work/', '/home/u/gsd:x/', '/opt/$&q/', './.claude/x/', '.claude/x/');
     fc.assert(
       fc.property(fc.array(piece, { maxLength: 12 }), prefix, fc.nat({ max: 12 }), (pieces, p, at) => {
