@@ -2158,11 +2158,20 @@ function phaseKeyFromDir(dirName: string, convention?: string | null, context?: 
  * `Phase:` value. Markdown emphasis is stripped first so a bolded cell is not
  * mistaken for a non-phase. Returns null when the value does not BEGIN with a
  * phase token (`parsePhaseFromProse` anchoring, #2111).
+ *
+ * #5675: `convention` is the project's `phase_id_convention`. Under `milestone-prefixed` the id is
+ * the whole `M-NN` (`3-01`), so the key equals `phaseKeyFromDir` for the same phase; every other
+ * convention (and an absent one) keeps the leading-integer read. It is the trailing parameter so the
+ * existing `(value, context)` callers stay byte-identical.
  */
-function phaseKeyFromProse(value: string | null | undefined, context?: PhaseDirectoryContext): string | null {
+function phaseKeyFromProse(
+  value: string | null | undefined,
+  context?: PhaseDirectoryContext,
+  convention?: string | null,
+): string | null {
   if (value == null) return null;
   const clean = String(value).replace(/[*_`~]/g, '');
-  const { phase } = parsePhaseFromProse(clean, undefined, context);
+  const { phase } = parsePhaseFromProse(clean, convention, context);
   return phase === null ? null : phaseKeyFromToken(phase, context);
 }
 
