@@ -44,7 +44,7 @@ const ISSUE_LINK_REASON = Object.freeze({
 // shared with pr-title-validator.yml so the two gates agree — and requires
 // `sameRepo === true` plus the exact base branch, so a fork cannot forge it
 // by naming its branch.
-const { isReleasePipelinePr, BACKMERGE_BRANCH_PREFIX } = require('./release-pipeline-pr.cjs');
+const { releasePipelinePrKind, BACKMERGE_BRANCH_PREFIX } = require('./release-pipeline-pr.cjs');
 
 // #4196: Dependabot has no mechanism to link a PR it opens to a repo issue —
 // its alerts live in the Security tab, not as issues, so there is nothing
@@ -151,8 +151,11 @@ function evaluateIssueLink({ prBody, headRef, baseRef, sameRepo, authorLogin, ch
   // #1389: `sameRepo === true` is required, not just the branch name — a fork
   // PR could otherwise name its branch to forge this exemption (#5890 adds the
   // base branch and the release/sync shapes; see release-pipeline-pr.cjs).
-  if (isReleasePipelinePr({ headRef, baseRef, sameRepo })) {
-    return { ok: true, reason: ISSUE_LINK_REASON.OK_BACKMERGE_EXEMPT };
+  const releaseKind = releasePipelinePrKind({ headRef, baseRef, sameRepo });
+  if (releaseKind) {
+    // `kind` names which release-pipeline PR this is (the reason keeps its
+    // #1389 name so existing consumers of the enum are unchanged).
+    return { ok: true, reason: ISSUE_LINK_REASON.OK_BACKMERGE_EXEMPT, kind: releaseKind };
   }
 
   if (!hasFollowUpReference(prBody)) {

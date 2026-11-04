@@ -17,9 +17,11 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const yaml = require('js-yaml');
 const fc = require('fast-check');
+const { cleanup } = require('./helpers.cjs');
 
 const {
   RELEASE_PIPELINE_PR_KIND,
@@ -111,6 +113,9 @@ describe('releasePipelinePrKind (#5890)', () => {
       ['chore/backmerge-main-to-next-', 'next'],
       ['chore/backmerge-main-to-next', 'next'],
       ['x/chore/backmerge-main-to-next-4dce9e8', 'next'],
+      ['chore/backmerge-main-to-next-4dce9e8/x', 'next'],
+      ['chore/backmerge-main-to-next-4DCE9E8', 'next'],
+      ['chore/backmerge-main-to-next-4dce9eg', 'next'],
       // ordinary work branches
       ['fix/5890-release-pipeline-pr-exemption', 'next'],
       ['', 'next'],
@@ -122,6 +127,18 @@ describe('releasePipelinePrKind (#5890)', () => {
         `${JSON.stringify(headRef)} -> ${baseRef}`,
       );
     }
+  });
+
+  test('BOUNDARY: the backmerge suffix is a 7..40-char short sha', () => {
+    const at = (n) => releasePipelinePrKind({
+      headRef: `chore/backmerge-main-to-next-${'a'.repeat(n)}`, baseRef: 'next', sameRepo: true,
+    });
+    assert.equal(at(6), null, '6 hex (limit-1 below the 7 floor)');
+    assert.equal(at(7), RELEASE_PIPELINE_PR_KIND.MAIN_TO_NEXT_BACKMERGE, '7 hex (floor)');
+    assert.equal(at(8), RELEASE_PIPELINE_PR_KIND.MAIN_TO_NEXT_BACKMERGE, '8 hex (floor+1)');
+    assert.equal(at(39), RELEASE_PIPELINE_PR_KIND.MAIN_TO_NEXT_BACKMERGE, '39 hex (ceiling-1)');
+    assert.equal(at(40), RELEASE_PIPELINE_PR_KIND.MAIN_TO_NEXT_BACKMERGE, '40 hex (ceiling)');
+    assert.equal(at(41), null, '41 hex (ceiling+1)');
   });
 
   test('non-string and missing inputs fail closed', () => {
@@ -157,16 +174,26 @@ describe('releasePipelinePrKind (#5890)', () => {
       { numRuns: 500 },
     );
   });
+
+  test('PROPERTY: an exempt head/base pair is never exempt unless sameRepo is exactly true', () => {
+    fc.assert(
+      fc.property(fc.constantFrom(...EXEMPT), fc.anything().filter((v) => v !== true), ({ headRef, baseRef }, sameRepo) => {
+        assert.equal(releasePipelinePrKind({ headRef, baseRef, sameRepo }), null);
+      }),
+      { numRuns: 500 },
+    );
+  });
 });
 
 describe('Issue link required honors the release-pipeline exemption (#5890)', () => {
   const sourceDiff = { changedFiles: ['package.json', 'src/init.cts'], changedFilesTotal: 2 };
 
   test('every release-pipeline PR passes with no issue reference in its body', () => {
-    for (const { headRef, baseRef } of EXEMPT) {
+    for (const { headRef, baseRef, kind } of EXEMPT) {
       const result = evaluateIssueLink({ prBody: 'Automated.', headRef, baseRef, sameRepo: true, ...sourceDiff });
       assert.equal(result.reason, ISSUE_LINK_REASON.OK_BACKMERGE_EXEMPT, `${headRef} -> ${baseRef}`);
       assert.equal(result.ok, true);
+      assert.equal(result.kind, kind, `${headRef} -> ${baseRef}`);
     }
   });
 
@@ -196,7 +223,7 @@ function titleValidatorScript() {
   return step.with.script;
 }
 
-async function runTitleValidator({ title, headRef, baseRef, headRepo = 'open-gsd/gsd-core', userLogin = 'trek-e' }) {
+async function runTitleValidator({ title, headRef, baseRef, headRepo = 'open-gsd/gsd-core', userLogin = 'trek-e', workspace = REPO_ROOT }) {
   const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
   const outcome = { failed: null, comments: 0 };
   const core = {
@@ -220,12 +247,12 @@ async function runTitleValidator({ title, headRef, baseRef, headRepo = 'open-gsd
         number: 1,
         title,
         user: { login: userLogin },
-        head: { ref: headRef, repo: { full_name: headRepo } },
+        head: { ref: headRef, repo: headRepo === null ? null : { full_name: headRepo } },
         base: { ref: baseRef },
       },
     },
   };
-  const fakeProcess = { env: { GITHUB_WORKSPACE: REPO_ROOT, WARN_ONLY: 'false' } };
+  const fakeProcess = { env: { GITHUB_WORKSPACE: workspace, WARN_ONLY: 'false' } };
   const fn = new AsyncFunction('require', 'github', 'context', 'core', 'process', titleValidatorScript());
   await fn(require, github, context, core, fakeProcess);
   return outcome;
@@ -272,5 +299,48 @@ describe('validate-title honors the release-pipeline exemption (#5890)', () => {
       title: 'chore(deps): bump x', headRef: 'dependabot/npm_and_yarn/x', baseRef: 'next', userLogin: 'dependabot[bot]',
     });
     assert.equal(bot.failed, null);
+  });
+
+  test('a release-pipeline branch against the wrong base still fails missing-issue-ref', async () => {
+    for (const { headRef, baseRef } of EXEMPT) {
+      const otherBase = baseRef === 'main' ? 'next' : 'main';
+      const outcome = await runTitleValidator({ title: titles[headRef], headRef, baseRef: otherBase });
+      assert.match(String(outcome.failed), /\(missing-issue-ref\)/, `${headRef} -> ${otherBase}`);
+    }
+  });
+
+  test('the waiver covers missing-issue-ref only: a bad type prefix on an exempt branch still fails', async () => {
+    for (const { headRef, baseRef } of EXEMPT) {
+      const outcome = await runTitleValidator({ title: `[security] ${titles[headRef]}`, headRef, baseRef });
+      assert.match(String(outcome.failed), /\(bad-prefix\)/, `${headRef} -> ${baseRef}`);
+    }
+  });
+
+  test('the head repo comparison is case-insensitive, like SAME_REPO in require-issue-link.yml', async () => {
+    const outcome = await runTitleValidator({
+      title: titles['release/1.20.0'], headRef: 'release/1.20.0', baseRef: 'main', headRepo: 'Open-GSD/GSD-Core',
+    });
+    assert.equal(outcome.failed, null);
+  });
+
+  test('a deleted fork (head.repo null) is never waived', async () => {
+    const outcome = await runTitleValidator({
+      title: titles['release/1.20.0'], headRef: 'release/1.20.0', baseRef: 'main', headRepo: null,
+    });
+    assert.match(String(outcome.failed), /\(missing-issue-ref\)/);
+  });
+
+  test('bootstrap: with no release-pipeline-pr.cjs on the base branch, nothing is waived', async (t) => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5890-bootstrap-'));
+    t.after(() => cleanup(workspace));
+    fs.mkdirSync(path.join(workspace, 'scripts', 'release-notes'), { recursive: true });
+    fs.copyFileSync(
+      path.join(REPO_ROOT, 'scripts', 'release-notes', 'conventional-title.cjs'),
+      path.join(workspace, 'scripts', 'release-notes', 'conventional-title.cjs'),
+    );
+    const outcome = await runTitleValidator({
+      title: titles['release/1.20.0'], headRef: 'release/1.20.0', baseRef: 'main', workspace,
+    });
+    assert.match(String(outcome.failed), /\(missing-issue-ref\)/);
   });
 });
