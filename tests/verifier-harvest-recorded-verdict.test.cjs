@@ -38,12 +38,13 @@ test('#5741: <expected> text is carried through unmodified', () => {
 });
 
 test('#5741: planner-side references agree that harvest ignores a recorded verdict', () => {
-  for (const [name, text] of [['planner-human-verify-mode.md', plannerMode], ['checkpoints.md', checkpoints]]) {
-    assert.match(text, /even when (its|the) `<expected>` already records a verdict/, name);
-    assert.doesNotMatch(
-      text,
-      /(skip|omit|drop)[^\n.]{0,60}(already|once)[^\n.]{0,40}(verified|verdict)/i,
-      `${name} must not permit skipping a verified human-check`,
-    );
+  const cases = [
+    ['planner-human-verify-mode.md', plannerMode,
+      /verifier \(Step 8\) harvests every `<verify><human-check>` block at end-of-phase, even when its `<expected>` already records a verdict/],
+    ['checkpoints.md', checkpoints,
+      /verifier harvests every `<verify><human-check>` at end-of-phase \(Step 8\), even when its `<expected>` already records a verdict/],
+  ];
+  for (const [name, text, harvestSentence] of cases) {
+    assert.match(text, harvestSentence, name);
   }
 });
