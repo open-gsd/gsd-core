@@ -158,4 +158,155 @@ describe('#5726 phase write verbs on an unresolved STATE milestone', () => {
     const insert = runGsdTools(['phase', 'insert', '2', 'Urgent fix'], tmpDir);
     assert.equal(insert.success, true, insert.error);
   });
+
+  // A version token in a Phase heading, a fence or an HTML comment is not a
+  // milestone heading, so it must not make a free-form roadmap "versioned".
+  const PHASE_HEADING_VERSION = [
+    '# Roadmap',
+    '',
+    '### Phase 1: Migrate to v2.0 API',
+    '**Goal:** a',
+    '',
+    '### Phase 2: Two',
+    '**Goal:** b',
+    '',
+  ].join('\n');
+
+  const FENCED_AND_COMMENTED_VERSION = [
+    '# Roadmap',
+    '',
+    '### Phase 1: One',
+    '**Goal:** a',
+    '',
+    '```',
+    '## v3.0 Example',
+    '```',
+    '',
+    '<!--',
+    '## v4.0 Hidden',
+    '-->',
+    '',
+  ].join('\n');
+
+  test('Phase heading naming a version, STATE milestone v1.0: phase add is unchanged', () => {
+    setup({ roadmap: PHASE_HEADING_VERSION, milestone: 'v1.0' });
+    const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+    assert.equal(result.success, true, result.error);
+    assert.equal(JSON.parse(result.output).phase_number, 3);
+  });
+
+  test('Phase heading naming a version, STATE milestone v1.0: phase add-batch and insert are unchanged', () => {
+    setup({ roadmap: PHASE_HEADING_VERSION, milestone: 'v1.0' });
+    const batch = runGsdTools(['phase', 'add-batch', '--descriptions', '["New one"]'], tmpDir);
+    assert.equal(batch.success, true, batch.error);
+    const insert = runGsdTools(['phase', 'insert', '2', 'Urgent fix'], tmpDir);
+    assert.equal(insert.success, true, insert.error);
+  });
+
+  test('versioned headings only inside a fence and an HTML comment, STATE milestone v1.0: phase add is unchanged', () => {
+    setup({ roadmap: FENCED_AND_COMMENTED_VERSION, milestone: 'v1.0' });
+    const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+    assert.equal(result.success, true, result.error);
+    assert.equal(JSON.parse(result.output).phase_number, 2);
+  });
+
+  // STATE names a milestone the ROADMAP marks shipped: the window is the closed
+  // milestone, so allocation would collide with its phases.
+  const SHIPPED_IN_DETAILS = [
+    '# Roadmap',
+    '',
+    '## v2.0 Current',
+    '',
+    '### Phase 4: Four',
+    '**Goal:** d',
+    '',
+    '<details>',
+    '<summary>✅ v1.0 Shipped (Phases 1-3)</summary>',
+    '',
+    '### Phase 1: One',
+    '**Goal:** a',
+    '',
+    '### Phase 3: Three',
+    '**Goal:** c',
+    '',
+    '</details>',
+    '',
+  ].join('\n');
+
+  const SHIPPED_HEADING = [
+    '# Roadmap',
+    '',
+    '## ✅ v1.0 Done (shipped)',
+    '',
+    '### Phase 1: One',
+    '**Goal:** a',
+    '',
+    '## v2.0 Cur',
+    '',
+    '### Phase 2: Two',
+    '**Goal:** b',
+    '',
+  ].join('\n');
+
+  for (const [shape, roadmap] of [['a <details> block', SHIPPED_IN_DETAILS], ['a ✅ heading', SHIPPED_HEADING]]) {
+    for (const [verb, run] of VERBS) {
+      test(`${verb} refuses a STATE milestone v1.0 shipped as ${shape}, names it, writes nothing`, () => {
+        setup({ roadmap, milestone: 'v1.0' });
+        const beforeRoadmap = roadmapBytes();
+        const beforeDirs = phaseDirs();
+
+        const result = run(tmpDir);
+
+        assert.equal(result.success, false, `${verb} must refuse: ${result.output}`);
+        assert.ok(result.error.includes('v1.0'), `error must name v1.0: ${result.error}`);
+        assert.ok(/already shipped/.test(result.error), `error must say the milestone is already shipped: ${result.error}`);
+        assert.ok(result.error.includes(verb), `error must name the verb ${verb}: ${result.error}`);
+        assert.ok(roadmapBytes().equals(beforeRoadmap), 'ROADMAP.md must be byte-identical');
+        assert.deepEqual(phaseDirs(), beforeDirs, 'no phase directory may be created');
+      });
+    }
+  }
+
+  test('STATE milestone v2.0 (not shipped) beside a shipped v1.0 heading still allocates normally', () => {
+    setup({ roadmap: SHIPPED_HEADING, milestone: 'v2.0' });
+    const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+    assert.equal(result.success, true, result.error);
+    assert.equal(JSON.parse(result.output).phase_number, 3);
+  });
+
+  test('STATE milestone v2.0 (not shipped) beside a shipped <details> v1.0 block still allocates normally', () => {
+    setup({ roadmap: SHIPPED_IN_DETAILS, milestone: 'v2.0' });
+    const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+    assert.equal(result.success, true, result.error);
+    assert.equal(JSON.parse(result.output).phase_number, 5);
+  });
+
+  describe('the STATE milestone echoed in the refusal', () => {
+    const refusalFor = (milestone) => {
+      setup({ roadmap: TWO_MILESTONES, milestone });
+      return runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+    };
+
+    test('control characters are escaped, not written to the terminal', () => {
+      const result = refusalFor('v9.9\u001b]0;pwned\u0007\u001b[31m\u009b');
+      assert.equal(result.success, false);
+      // eslint-disable-next-line no-control-regex
+      assert.ok(!/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/.test(result.error), `raw control bytes leaked: ${JSON.stringify(result.error)}`);
+      assert.ok(result.error.includes('\\u001b'), `ESC must be shown escaped: ${result.error}`);
+    });
+
+    for (const [label, length] of [['limit-1', 79], ['limit', 80], ['limit+1', 81]]) {
+      test(`a ${length}-char milestone (${label}) is ${length > 80 ? 'truncated with an ellipsis' : 'echoed whole'}`, () => {
+        const milestone = `v${'9'.repeat(length - 1)}`;
+        const result = refusalFor(milestone);
+        assert.equal(result.success, false);
+        if (length <= 80) {
+          assert.ok(result.error.includes(JSON.stringify(milestone)), result.error);
+        } else {
+          assert.ok(!result.error.includes(milestone), 'the full over-limit value must not be echoed');
+          assert.ok(result.error.includes(`${milestone.slice(0, 80)}…`), result.error);
+        }
+      });
+    }
+  });
 });
