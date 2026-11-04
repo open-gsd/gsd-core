@@ -23,6 +23,7 @@ const {
   STATE_MD_SECTIONS,
   sliceCurrentPositionSection,
   stateReplaceProgressPercent,
+  isStatePastPhase,
 } = require('../gsd-core/bin/lib/state-transition.cjs');
 const { stateExtractField, computeProgressPercent, toFiniteNumber } = require('../gsd-core/bin/lib/state-document.cjs');
 const { SCOPE } = require('../gsd-core/bin/lib/planning-scope.cjs');
@@ -5328,5 +5329,40 @@ describe('regressions (#5787): state begin-phase plan total', () => {
     assert.equal(result.success, true, `begin-phase should succeed: ${result.error}`);
     assert.equal(planField, '1 of ?');
     assert.equal(totalField, '5');
+  });
+});
+
+describe('#5676: isStatePastPhase under milestone-prefixed', () => {
+  const fm = (cp) => ['---', `current_phase: ${cp}`, '---', '# State', ''].join('\n');
+  const MP = 'milestone-prefixed';
+
+  test('#5676: under milestone-prefixed a later M-NN current phase is past an earlier one', () => {
+    assert.equal(isStatePastPhase(fm('3-02'), '3-01', undefined, MP), true);
+    assert.equal(isStatePastPhase(fm('3-01'), '3-02', undefined, MP), false);
+    assert.equal(isStatePastPhase(fm('3-01'), '3-01', undefined, MP), false);
+    assert.equal(isStatePastPhase(fm('3-03'), '3-02', undefined, MP), true);
+    assert.equal(isStatePastPhase(fm('4-01'), '3-09', undefined, MP), true);
+    const bodyCurrent = ['---', 'status: executing', '---', '# State', '', 'Current Phase: 3-02', ''].join('\n');
+    assert.equal(isStatePastPhase(bodyCurrent, '3-01', undefined, MP), true);
+    const bodyPosition = [
+      '---', 'status: executing', '---', '# State', '',
+      '## Current Position', '', 'Phase: Phase 3-02 of 9 (X)', '',
+    ].join('\n');
+    assert.equal(isStatePastPhase(bodyPosition, '3-01', undefined, MP), true);
+  });
+
+  test('#5676: an absent or unparseable current phase is still not past', () => {
+    const absent = ['---', 'status: x', '---', '# State', ''].join('\n');
+    assert.equal(isStatePastPhase(absent, '3-01', undefined, MP), false);
+    assert.equal(isStatePastPhase(fm("''"), '3-01', undefined, MP), false);
+    assert.equal(isStatePastPhase(fm('TBD'), '3-01', undefined, MP), false);
+  });
+
+  test('#5676: other conventions keep the leading-integer read', () => {
+    for (const c of [undefined, null, '', 'bracket', 'sequential']) {
+      assert.equal(isStatePastPhase(fm('3-02'), '3-01', undefined, c), false);
+      assert.equal(isStatePastPhase(fm('4'), '3', undefined, c), true);
+    }
+    assert.equal(isStatePastPhase(fm('3-02'), '3-01'), false);
   });
 });
