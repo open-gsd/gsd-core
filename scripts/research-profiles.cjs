@@ -140,7 +140,7 @@ const PROFILES = [
       'gsd_run query commit',
     ],
     outputContract: [
-      '.planning/research/SUMMARY.md',
+      '{research_dir}/SUMMARY.md',
       '## SYNTHESIS COMPLETE',
     ],
   },
