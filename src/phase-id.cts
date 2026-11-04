@@ -95,6 +95,18 @@ const PHASE_DEP_TOKEN_LIST_SOURCE =
   `${PHASE_NUMBER_TOKEN_SOURCE}(?:(?:\\s*,\\s*(?:and\\s+)?|\\s+and\\s+|\\s*&\\s*|\\s+(?:to|through)\\s+|\\s*-\\s*)${PHASE_NUMBER_TOKEN_SOURCE})*`;
 const PHASE_DEP_REF_SOURCE = `\\bphases?\\s+(${PHASE_DEP_TOKEN_LIST_SOURCE})`;
 
+// #5676: convention-parameterized dependency list. Under milestone-prefixed `3-02` is ONE id, so
+// the `-` range separator is dropped and the M-NN token is the list element; every other
+// convention returns the legacy constants byte-for-byte.
+function phaseDepTokenListSource(convention?: string | null): string {
+  if (convention !== 'milestone-prefixed') return PHASE_DEP_TOKEN_LIST_SOURCE;
+  const token = PHASE_NUMBER_TOKEN_SOURCE_MILESTONE_PREFIXED;
+  return `${token}(?:(?:\\s*,\\s*(?:and\\s+)?|\\s+and\\s+|\\s*&\\s*|\\s+(?:to|through)\\s+)(?:phases?\\s+)?${token})*`;
+}
+function phaseDepRefSource(convention?: string | null): string {
+  return convention === 'milestone-prefixed' ? `\\bphases?\\s+(${phaseDepTokenListSource(convention)})` : PHASE_DEP_REF_SOURCE;
+}
+
 // #2528 review: the CASE-FLEXIBLE renderings of the two sources above, for call
 // sites that scan directory names (where a project code or a variant suffix may
 // legitimately be lowercase) and therefore cannot use a case-sensitive class.
@@ -509,7 +521,7 @@ function buildPhaseDeclarationScans(convention?: string | null, withBullets = tr
   // Under bracket a numbered-list item (`1. [ ] **[GSD.02] 05: n**`) is a checklist row too.
   const bullet = bracket ? '^[ \\t]*(?:-|\\d+[.)])[ \\t]*' : '^[ \\t]*-[ \\t]*';
   // Bracket ids may carry a letter suffix (`12A`), as the heading scan's phase token does.
-  const tail = bracket ? '(\\d+)(?=[A-Za-z]?(?:[:.\\s*]|$))' : '(\\d+)(?=[:.\\s*]|$)';
+  const tail = bracket ? '(\\d+)(?=[A-Za-z]?(?:[:.\\s*]|$))' : convention === 'milestone-prefixed' ? `(${phaseNumberTokenSource(convention)})(?=[:.\\s*]|$)` : '(\\d+)(?=[:.\\s*]|$)';
   const checkbox = `\\[${bracket ? `(?!${BRACKET_ID_SRC}\\])` : ''}[^\\]]{0,200}\\][ \\t]*`;
   if (!bracket) {
     if (withBullets) scans.push({ regex: new RegExp(`${bullet}${checkbox}\\*{0,2}Phase[ \\t]+${tail}`, 'gim'), idGroup: null, numGroup: 1 });
@@ -751,8 +763,8 @@ function tokenizePhaseDependencyReferences(
   const input = prose;
   const found: PhaseDependencyToken[] = [];
   const qualifiedTokenSpans: { start: number; end: number }[] = [];
-  const legacyRefRe = new RegExp(`${PHASE_DEP_REF_SOURCE}`, 'gi');
-  const tokenRe = new RegExp(PHASE_NUMBER_TOKEN_SOURCE, convention === 'bracket' ? 'gi' : 'g');
+  const legacyRefRe = new RegExp(phaseDepRefSource(convention), 'gi');
+  const tokenRe = new RegExp(phaseNumberTokenSource(convention), convention === 'bracket' ? 'gi' : 'g');
   let refMatch: RegExpExecArray | null;
   while ((refMatch = legacyRefRe.exec(input)) !== null) {
     const referenceStart = refMatch.index + refMatch[0].length - refMatch[1].length;
