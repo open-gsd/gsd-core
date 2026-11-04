@@ -530,12 +530,33 @@ function subjectsFor(git: Git, shas: readonly string[], withBody: boolean, chunk
 }
 
 /**
+ * Whether every merge-base of `p1` and `p2` is `rangeBase` or one of its ancestors: the second side
+ * was forked from history that predates the phase, so it is base work. False when `rangeBase` is the
+ * empty tree, when there is no merge-base, and when git cannot answer (a timeout or a failure): the
+ * caller then subtracts nothing and the files stay in `outsideUnion`.
+ */
+function forkedAtOrBeforePhaseStart(git: Git, p1: string, p2: string, rangeBase: string): boolean {
+  if (rangeBase === EMPTY_TREE) return false;
+  try {
+    const bases = (gitOrNo(git, ['merge-base', '--all', p1, p2]) ?? '').split('\n').filter(Boolean);
+    return bases.length > 0 && bases.every((base) => isAncestor(git, base, rangeBase));
+  } catch (error) {
+    if (error instanceof ScopeUnreadable) return false;
+    throw error;
+  }
+}
+
+/**
  * The files a listed two-parent merge brought in from its SECOND parent's side: base work, not the
  * unit's. A merge contributes nothing when ANY of these holds, so unlisted phase work is never hidden:
  * a listed commit sits on that side (`<p2> ^<p1>`: a phase branch merged into its base); a listed
  * non-merge commit is an ancestor of `<p2>` (a branch forked from the phase, whose unlisted commits
- * are phase work); or the file was touched by a commit on the phase side (`<rangeBase>..<p1> ^<p2>`,
- * listed or not). Only files touched solely by the second parent's side are subtracted.
+ * are phase work); the fork point (`git merge-base <p1> <p2>`) is not at or before `rangeBase` (a
+ * side forked from phase work, or a later catch-up whose fork point is an earlier catch-up's base
+ * commit: reported as an advisory false positive, never hidden); `rangeBase` is the empty tree or
+ * there is no merge-base or the check fails; or the file was touched by a commit on the phase side
+ * (`<rangeBase>..<p1> ^<p2>`, listed or not). Only files touched solely by the second parent's side
+ * are subtracted.
  */
 function baseSideMergeFiles(
   git: Git, merges: readonly string[], parentsOf: ParentMap, listed: ReadonlySet<string>,
@@ -549,6 +570,7 @@ function baseSideMergeFiles(
     const secondSide = git(['rev-list', p2, `^${p1}`]).split('\n').filter(Boolean);
     if (secondSide.some((entry) => listed.has(entry))) continue;
     if (listedNonMerge.some((entry) => isAncestor(git, entry, p2))) continue;
+    if (!forkedAtOrBeforePhaseStart(git, p1, p2, rangeBase)) continue;
     const phaseSide = new Set(splitNul(git([
       '-c', 'core.quotepath=off', 'log', '--format=', '--name-only', '-z', p1, `^${p2}`,
       ...(rangeBase === EMPTY_TREE ? [] : [`^${rangeBase}`]), '--', '.', ...SCOPE_EXCLUSION_PATHSPECS,
