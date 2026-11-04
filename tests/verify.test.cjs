@@ -1334,6 +1334,23 @@ describe('verify summary command', () => {
     assert.ok(JSON.stringify(output.checks.files_created.missing).includes('src/missing.ts'),
       'src/missing.ts must be reported missing');
   });
+
+  // #5859: the new-project / new-milestone #222 self-heal passes init's absolute
+  // research_dir (`verify-summary "{research_dir}/SUMMARY.md"`); an absolute path
+  // must resolve to itself, not to <cwd>/<absolute path>.
+  test('an absolute summary path gets the same verdict as the relative one (#5859)', () => {
+    const rel = path.join('.planning', 'research', 'SUMMARY.md');
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'research'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, rel), '# Research Summary\n\nNo files claimed.\n');
+
+    const relative = JSON.parse(runGsdTools(['verify-summary', rel], tmpDir).output);
+    const result = runGsdTools(['verify-summary', path.join(tmpDir, rel)], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const absolute = JSON.parse(result.output);
+    assert.strictEqual(absolute.checks.summary_exists, true, 'the absolute path names an existing SUMMARY.md');
+    assert.strictEqual(absolute.passed, relative.passed, 'absolute and relative paths must agree');
+    assert.strictEqual(absolute.passed, true, `should pass, errors: ${JSON.stringify(absolute.errors)}`);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

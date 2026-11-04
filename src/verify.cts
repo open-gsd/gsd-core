@@ -118,7 +118,8 @@ function verifySummaryCore(
   checkFileCount?: number,
   opts?: { checkCommits?: boolean },
 ): SummaryVerification {
-  const fullPath = path.join(cwd, summaryPath);
+  // #5859: init emits absolute paths (#2376); resolve keeps a relative path cwd-anchored.
+  const fullPath = path.resolve(cwd, summaryPath);
   const checkCount = checkFileCount || 2;
   const checkCommits = opts?.checkCommits !== false;
 
