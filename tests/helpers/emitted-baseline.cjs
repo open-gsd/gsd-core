@@ -117,7 +117,7 @@ function validateBaseline(doc, expectedSha, source) {
  *
  *   1. `GSD_EMITTED_BASELINE` — an operator pin; a mismatch here is a HARD STOP
  *   2. the on-disk cache, validated against the expected sha — a mismatch RECOVERS
- *   3. an in-job build at the expected sha — merge-base(base, HEAD), #5008 (slow fallback)
+ *   3. an in-job build at the expected sha — the attribution base (#5008, #5797), slow fallback
  *   4. none → explicit failure (NEVER a silent pass)
  *
  * #2854: steps 1 and 2 differ only in what a mismatch means, so which door a given
@@ -208,10 +208,10 @@ function resolveBaseline({
     try {
       built = buildFallback();
     } catch (err) {
-      attempts.push(`in-job build at merge-base(base, HEAD) failed: ${err.message}`);
+      attempts.push(`in-job build at the expected sha failed: ${err.message}`);
       return { ok: false, via: 'build', attempted, errors: attempts };
     }
-    const v = validateBaseline(built, expectedSha, 'in-job build at merge-base(base, HEAD)');
+    const v = validateBaseline(built, expectedSha, 'in-job build at the expected sha');
     if (v.ok) return { ok: true, via: 'build', attempted, ...v };
     attempts.push(...v.errors);
     return { ok: false, via: 'build', attempted, errors: attempts };

@@ -356,24 +356,34 @@ function resolveBase(env = process.env, { cwd = REPO_ROOT } = {}) {
  *
  * @param {string} floorSha `merge-base(pin, HEAD)`, a 40-hex sha.
  * @param {object} env base-ref environment.
- * @param {{cwd: string}} options repository to resolve against.
+ * @param {{cwd: string, diagnostic?: function}} options repository to resolve against; an
+ *   optional `diagnostic` hears why the floor was kept when the base branch was named.
  * @returns {string} a 40-hex sha HEAD contains.
  */
-function advanceToMergedBase(floorSha, env, { cwd }) {
+function advanceToMergedBase(floorSha, env, { cwd, diagnostic }) {
   const branch = env.GITHUB_BASE_REF;
   if (!branch) return floorSha;
+  const keep = (why) => {
+    if (diagnostic) diagnostic(`emitted-attribution: keeping the pin's merge-base ${floorSha}: ${why}`);
+    return floorSha;
+  };
+  let tip;
+  try {
+    tip = git(['rev-parse', '--verify', `refs/remotes/origin/${branch}^{commit}`], { cwd }).trim();
+  } catch {
+    return keep(`GITHUB_BASE_REF=${branch} is set but refs/remotes/origin/${branch} does not resolve`);
+  }
   let merged;
   try {
-    const tip = git(['rev-parse', '--verify', `refs/remotes/origin/${branch}^{commit}`], { cwd }).trim();
     merged = git(['merge-base', tip, 'HEAD'], { cwd }).trim();
-  } catch {
-    return floorSha;
+  } catch (err) {
+    return keep(`merge-base(origin/${branch}, HEAD) failed: ${err.message}`);
   }
   if (!/^[0-9a-f]{40}$/.test(merged) || merged === floorSha) return floorSha;
   try {
     git(['merge-base', '--is-ancestor', floorSha, merged], { cwd });
   } catch {
-    return floorSha;
+    return keep(`merge-base(origin/${branch}, HEAD) ${merged} does not descend from it`);
   }
   return merged;
 }
@@ -437,7 +447,7 @@ function resolveAttributionBase(env = process.env, { cwd = REPO_ROOT, diagnostic
   if (!/^[0-9a-f]{40}$/.test(sha)) {
     throw new Error(`emitted-attribution: merge-base of "${resolved.ref}" and HEAD is not a 40-hex sha: ${JSON.stringify(sha)}`);
   }
-  const merged = advanceToMergedBase(sha, env, { cwd });
+  const merged = advanceToMergedBase(sha, env, { cwd, diagnostic });
   if (merged !== sha) {
     if (diagnostic) {
       diagnostic(

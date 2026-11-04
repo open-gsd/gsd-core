@@ -2441,6 +2441,43 @@ test('the base advance never moves below the pin when the base-branch ref is old
   assert.equal(gitFixture(root, ['rev-parse', 'HEAD']), mergeRef, 'fixture: HEAD stays the merge ref');
 });
 
+test('a pin that is already the merged base is kept and says nothing about an advance', (t) => {
+  const { root, b2 } = makeStalePinMergeRefRepo(t);
+  const messages = [];
+  // origin/next is at B2, the pin's own merge-base: advanceToMergedBase reaches its
+  // `merged === floorSha` return, the usual PR-lane case.
+  const base = resolveAttributionBase({ GSD_EMITTED_BASE: b2, GITHUB_BASE_REF: 'next' },
+    { cwd: root, diagnostic: (m) => messages.push(m) });
+  assert.equal(base.sha, b2, 'the pin must be kept when it is already the newest base commit HEAD contains');
+  assert.equal(messages.length, 1, 'only the resolved-base line is expected; a second call would be an advance report');
+  assert.match(messages[0], /emitted-attribution resolved base:/);
+  assert.ok(!messages.some((m) => m.includes('measuring from')), 'no advance diagnostic when nothing advanced');
+});
+
+test('an advance reports itself and names both the pin\'s merge-base and the advanced sha', (t) => {
+  const { root, b0, b2 } = makeStalePinMergeRefRepo(t);
+  const messages = [];
+  const base = resolveAttributionBase({ GSD_EMITTED_BASE: b0, GITHUB_BASE_REF: 'next' },
+    { cwd: root, diagnostic: (m) => messages.push(m) });
+  assert.equal(base.sha, b2);
+  assert.equal(messages.length, 2, 'the resolved-base line plus exactly one advance line');
+  const advance = messages[1];
+  assert.ok(advance.includes(b0), `the advance line must name the pin's merge-base ${b0}: ${advance}`);
+  assert.ok(advance.includes(b2), `the advance line must name the advanced sha ${b2}: ${advance}`);
+  assert.match(advance, /measuring from/);
+});
+
+test('a base-branch ref that does not resolve says so instead of silently keeping the pin', (t) => {
+  const { root, b0 } = makeStalePinMergeRefRepo(t);
+  const messages = [];
+  const base = resolveAttributionBase({ GSD_EMITTED_BASE: b0, GITHUB_BASE_REF: 'no-such-branch' },
+    { cwd: root, diagnostic: (m) => messages.push(m) });
+  assert.equal(base.sha, b0, 'behavior is unchanged: the pin\'s merge-base is kept');
+  assert.equal(messages.length, 2, 'the resolved-base line plus exactly one skipped-advance line');
+  assert.match(messages[1], /origin\/no-such-branch/);
+  assert.match(messages[1], /does not resolve/);
+});
+
 test('a genuine ack-trailer conflict in the PR\'s own commits still fails after the base advance', (t) => {
   const { root, b0, b2 } = makeStalePinMergeRefRepo(t);
   // Two PR-side commits on top of the merge ref declare one key with two reasons.
@@ -2541,7 +2578,7 @@ test('differential attribution over the real tree', { timeout: HEAVY_REAL_TREE_T
     // #2854: report the sources actually reached, not a hardcoded list of all three. An
     // early return could claim it "tried an in-job build" it never called, which sent
     // contributors hunting a rebuild that had not run.
-    `no usable emitted baseline for merge-base(${base}, HEAD)@${baseSha.slice(0, 12)} (tried ` +
+    `no usable emitted baseline measured from ${baseSha.slice(0, 12)} (pin ${base}) (tried ` +
     `${(resolvedBaseline.attempted || []).join(', ') || 'nothing'}):` +
     `\n  ${(resolvedBaseline.errors || []).join('\n  ')}`,
   );
@@ -2600,7 +2637,7 @@ test('differential attribution over the real tree', { timeout: HEAVY_REAL_TREE_T
 
   assert.ok(
     result.ok,
-    `emitted-attribution failed against merge-base(${base}, HEAD)@${baseSha.slice(0, 12)}:\n\n${formatReport(result)}`,
+    `emitted-attribution failed measured from ${baseSha.slice(0, 12)} (pin ${base}):\n\n${formatReport(result)}`,
   );
 });
 
