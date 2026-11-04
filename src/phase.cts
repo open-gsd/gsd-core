@@ -2742,7 +2742,7 @@ function cmdPhaseInsert(
         'i',
         { bold: 'required' },
       );
-      const useBold = boldBulletPattern.test(content);
+      const useBold = boldBulletPattern.test(liveCurrent);
       const phaseLabel = useBold
         ? `**Phase ${_decimalPhase}: ${description}**`
         : `Phase ${_decimalPhase}: ${description}`;
@@ -2769,13 +2769,13 @@ function cmdPhaseInsert(
         `Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\r\\n]*`,
         'i',
       );
-      const bulletMatchResult = rawContent.match(targetBulletPattern);
+      // Match against the masked text (same length, offsets aligned) so a fenced or commented example bullet is never the splice anchor; splice into the original text at the masked match index.
+      const bulletMatchResult = blankCodeAndComments(rawContent).match(targetBulletPattern);
       if (!bulletMatchResult) {
         error(`Could not find Phase ${afterPhase} bullet line`);
       }
 
-      const bulletLineEnd =
-        rawContent.indexOf(bulletMatchResult![0]) + bulletMatchResult![0].length;
+      const bulletLineEnd = bulletMatchResult!.index! + bulletMatchResult![0].length;
       const afterBullet = rawContent.slice(bulletLineEnd);
       // #5599: land after the last bullet inside the allocation family's
       // subtree, not before the first following bullet of any number (which is
