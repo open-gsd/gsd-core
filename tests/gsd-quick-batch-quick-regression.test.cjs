@@ -78,7 +78,7 @@ function isWorkstreamForwardingSweepLine(sign, body, addedBodies, removedBodies)
 // `TASK_TITLE` instead of the full description. That is a change to the
 // shared primitive's contract, not #3676 quick-batch phase work, so the
 // quick.md half is carved out here, line by line: the guidance paragraph
-// (exact bodies), the defaulting line (exact body), and the
+// (exact bodies), the assignment line (exact body), and the
 // `${DESCRIPTION}` -> `${TASK_TITLE}` rename, which counts only when the
 // diff pairs it with its `${DESCRIPTION}` twin (the same pairing rule the
 // #4772 workstream sweep uses). Any OTHER quick.md line still trips row 48.
@@ -88,7 +88,7 @@ const QUICK_TASK_TITLE_5830_LINES = new Set([
   'already one short line, otherwise a summary of it. Never paste the SUMMARY or a multi-sentence',
   'description into the row. A longer `--task` is still written in full, but the command reports a',
   '`warnings` entry; if it does, shorten the title next time rather than editing the row.',
-  'TASK_TITLE="${TASK_TITLE:-$DESCRIPTION}"  # never an empty --task if the title was not set',
+  'TASK_TITLE="${DESCRIPTION}"  # always this task\'s text; swap in a one-line summary only if it is long',
 ]);
 function isQuickTaskTitleSweepLine(sign, body, addedBodies, removedBodies) {
   if (sign === '+' && QUICK_TASK_TITLE_5830_LINES.has(body)) return true;
@@ -225,7 +225,7 @@ describe('quick-batch: /gsd:quick command + workflow stay byte-identical (row 48
   test('positive control: the #5830 TASK_TITLE carve-out exempts only its own lines', () => {
     const removed = new Set(['gsd_run quick-tasks-append --task "${DESCRIPTION}"']);
     const added = new Set(['gsd_run quick-tasks-append --task "${TASK_TITLE}"']);
-    // The paired rename, both sides, and the exact guidance/default lines are the carve-out.
+    // The paired rename, both sides, and the exact guidance/assignment lines are the carve-out.
     assert.equal(isQuickTaskTitleSweepLine('+', 'gsd_run quick-tasks-append --task "${TASK_TITLE}"', added, removed), true);
     assert.equal(isQuickTaskTitleSweepLine('-', 'gsd_run quick-tasks-append --task "${DESCRIPTION}"', added, removed), true);
     for (const body of QUICK_TASK_TITLE_5830_LINES) {
