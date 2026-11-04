@@ -89,7 +89,7 @@ Bucketing the sizes was rejected: rounding to the nearest 2KB lets a PR add 1.9K
 
 ### 5. The baseline is cached, not committed
 
-The push-to-`next` run publishes the manifest and size maps; the PR lane restores them from cache, keyed on **the `next` sha the PR was merged with**. That key discipline is load-bearing — a stale baseline mis-attributes silently. Cache miss falls back to an in-job build at `origin/next`.
+The push-to-`next` run publishes the manifest and size maps; the PR lane restores them from cache, keyed on **the `next` sha the PR's tree is based on**: `pull_request.base.sha` is the pin and floor, and when the tested merge ref contains a newer `next` (#5797) the base advances to `merge-base(origin/<base>, HEAD)`. That key discipline is load-bearing — a stale baseline mis-attributes silently. Cache miss, including a pin the merge ref has outgrown, falls back to an in-job build at the merge-base.
 
 Bot-committing the baseline to `next` post-merge was considered and rejected. It is close to ADR-2264 Phase 3 (#2268), and notably that ADR's objection does not apply here: the Amendment deferred CI-owned regen because it "needs a write-token workflow running on PR code (an injection surface)," whereas committing post-merge runs already-reviewed code. It was rejected on a different cost — `next` carries `strict: true`, so a bot commit after every emitted-byte-changing merge doubles the rate `next` advances and taxes all ~30 open PRs. Its one unique benefit is an absolute anchor, which §1 establishes is not required.
 
