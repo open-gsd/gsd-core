@@ -1668,6 +1668,8 @@ function cmdInitNewProject(cwd: string, raw: boolean, options: Record<string, un
     // read these instead of hardcoding '.planning/...' literals.
     requirements_path: toPosixPath(path.join(planningDir(cwd), 'REQUIREMENTS.md')),
     roadmap_path: toPosixPath(path.join(planningDir(cwd), 'ROADMAP.md')),
+    // #5859: the roadmapper's STATE.md write target, as cmdInitNewMilestone reports it.
+    state_path: toPosixPath(path.join(planningDir(cwd), 'STATE.md')),
     // #4456 correction: an isolated review pass initially "fixed" this to
     // planningDir(cwd, null) on the assumption that config.json is shared
     // like PROJECT.md (workstream-flag.md's directory diagram marks it

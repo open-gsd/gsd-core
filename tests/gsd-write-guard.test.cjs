@@ -27,8 +27,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createTempDir, cleanup } = require('./helpers.cjs');
+const { spawnSync } = require('node:child_process');
+const {
+  createTempDir, createTempGitProject, cleanup, runGsdTools, homeSandboxEnv, readFileNormalized,
+} = require('./helpers.cjs');
 const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
+const { skipUnless } = require('./helpers/bash-probe.cjs');
 const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-write-guard.js');
@@ -794,9 +798,11 @@ describe('guard <-> gsd-roadmapper binding (the /gsd:new-milestone collapse path
       'write would be hard-blocked by gsd-write-guard on /gsd:new-milestone (#2255 round 10 Blocker 1)');
 
     // Both curated targets the step writes must be armed by name — one arming
-    // cannot cover both, because the token is path-bound and single-use.
-    for (const target of ['.planning/ROADMAP.md', '.planning/STATE.md']) {
-      assert.ok(step.includes(`printf '${target}\\n' > ${sentinel}`),
+    // cannot cover both, because the token is path-bound and single-use. The
+    // names are variables bound to the prompt's write targets (#5859), so a
+    // workstream's or named project's file is armed, never the root project's.
+    for (const target of ['"$ROADMAP_TARGET"', '"$STATE_TARGET"']) {
+      assert.ok(step.includes(`printf '%s\\n' ${target} > ${sentinel}`),
         `Step 7 must arm ${sentinel} for ${target} immediately before writing it — ` +
         'the sentinel is path-bound and single-use, so a single arming covers only one file');
     }
@@ -830,10 +836,105 @@ describe('guard <-> gsd-roadmapper binding (the /gsd:new-milestone collapse path
     const src = fs.readFileSync(roadmapperPath, 'utf8');
     const stepStart = src.indexOf('## Step 7: Write Files Immediately');
     const step = src.slice(stepStart, src.indexOf('## Step 8', stepStart));
-    for (const target of ['.planning/ROADMAP.md', '.planning/STATE.md']) {
+    for (const target of ['"$ROADMAP_TARGET"', '"$STATE_TARGET"']) {
       assert.ok(step.includes(`[ -f ${target} ] &&`),
         `Step 7 must gate the ${target} arming on the file existing — an unconditional ` +
         'arming on the new-project path strands an unconsumed sentinel (#2255 round 10)');
     }
   });
+
+  // #5859: under a workstream (--ws) or a named project (GSD_PROJECT), init resolves ROADMAP.md
+  // and STATE.md inside that scope's directory, and the spawn passes them as write targets. Step 7
+  // must arm exactly those targets. Arming the root literal blocks the scoped Write and leaves a
+  // live token on disk that authorizes a collapse of the root project's file instead.
+  //
+  // Each case runs Step 7's arming fence as shipped, with the init-resolved write target put in
+  // place of the agent's placeholder (a no-op when the fence names a literal path), then sends the
+  // Write through the real guard.
+  const ROADMAP_LEG = { file: 'ROADMAP.md', field: 'roadmap_path', placeholder: '{roadmap_path}', fence: 1 };
+  const STATE_LEG = { file: 'STATE.md', field: 'state_path', placeholder: '{state_path}', fence: 2 };
+  const WORKSTREAM = { label: 'a workstream (--ws alpha)', args: ['--ws=alpha'], env: { GSD_PROJECT: '', GSD_WORKSTREAM: '' } };
+  const NAMED_PROJECT = { label: 'a named project (GSD_PROJECT=beta)', args: [], env: { GSD_PROJECT: 'beta', GSD_WORKSTREAM: '' } };
+
+  function scopedFixture() {
+    const dir = fs.realpathSync(createTempGitProject('gsd-roadmapper-scope-'));
+    fs.mkdirSync(path.join(dir, '.planning', 'workstreams', 'alpha'), { recursive: true });
+    fs.mkdirSync(path.join(dir, '.planning', 'beta'), { recursive: true });
+    return dir;
+  }
+
+  function initPaths(dir, command, scope) {
+    const r = runGsdTools(['init', command, ...scope.args], dir, { ...homeSandboxEnv(dir), ...scope.env });
+    assert.equal(r.success, true, r.error);
+    return JSON.parse(r.output);
+  }
+
+  function runStep7Arming(dir, leg, target) {
+    const src = readFileNormalized(roadmapperPath);
+    const stepStart = src.indexOf('## Step 7: Write Files Immediately');
+    assert.notEqual(stepStart, -1,
+      'roadmapper Step 7 missing or renamed in gsd-roadmapper.md — rebind this test');
+    const step = src.slice(stepStart, src.indexOf('## Step 8', stepStart));
+    const fence = step.split('```bash')[leg.fence].split('```')[0].split(leg.placeholder).join(target);
+    // `[ -f X ] && printf ...` exits 1 when X is absent; only a shell error fails here.
+    const armed = spawnSync('bash', ['-c', fence], { cwd: dir, encoding: 'utf8', timeout: QUICK_SPAWN_TIMEOUT_MS });
+    assert.equal(armed.error, undefined, `bash could not run Step 7's ${leg.file} fence: ${armed.error}`);
+    assert.equal(armed.stderr, '', `Step 7's ${leg.file} fence must run cleanly: ${armed.stderr}`);
+  }
+
+  for (const scope of [WORKSTREAM, NAMED_PROJECT]) {
+    test(`/gsd:new-milestone under ${scope.label}: Step 7 arms the init-resolved ROADMAP.md and STATE.md, never the root project's (#5859)`,
+      { skip: skipUnless('bash') }, () => {
+        const dir = scopedFixture();
+        try {
+          const paths = initPaths(dir, 'new-milestone', scope);
+          const tokenPath = path.join(dir, '.planning', '.gsd-allow-shrink');
+          for (const leg of [ROADMAP_LEG, STATE_LEG]) {
+            const rootFile = path.join(dir, '.planning', leg.file);
+            fs.writeFileSync(rootFile, lines(292, 'root'));
+            const target = paths[leg.field];
+            assert.notEqual(path.resolve(target), rootFile, `fixture: init must resolve a scoped ${leg.file}`);
+            fs.writeFileSync(target, lines(292, 'outgoing milestone'));
+
+            runStep7Arming(dir, leg, target);
+            // The new milestone's file (53 of 292 lines) is a legitimate collapse of the OUTGOING
+            // scoped file: Step 7's arming must authorize exactly that Write.
+            const res = runHook(writePayload(target, lines(53), { cwd: dir }));
+            assert.equal(res.status, 0,
+              `Step 7's arming must authorize the scoped target ${target}; the guard blocked it: ${res.stdout}`);
+            assert.equal(fs.existsSync(tokenPath), false,
+              `no unconsumed shrink token may be left after the ${leg.file} write: it would authorize ` +
+              `collapsing the root project's ${leg.file}`);
+            assert.equal(fs.readFileSync(rootFile, 'utf8'), lines(292, 'root'), `the root ${leg.file} must be untouched`);
+          }
+        } finally {
+          cleanup(dir);
+        }
+      });
+  }
+
+  test(`/gsd:new-project under ${NAMED_PROJECT.label}: Step 7 leaves no token armed for the root project's ROADMAP.md or STATE.md (#5859)`,
+    { skip: skipUnless('bash') }, () => {
+      const dir = scopedFixture();
+      try {
+        fs.writeFileSync(path.join(dir, '.planning', 'ROADMAP.md'), lines(292, 'root'));
+        fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), lines(292, 'root'));
+        const paths = initPaths(dir, 'new-project', NAMED_PROJECT);
+        const tokenPath = path.join(dir, '.planning', '.gsd-allow-shrink');
+        for (const leg of [ROADMAP_LEG, STATE_LEG]) {
+          const target = paths[leg.field];
+          assert.ok(target, `init new-project must report ${leg.field}, the roadmapper's ${leg.file} write target`);
+          assert.equal(fs.existsSync(target), false, `fixture: the named project has no ${leg.file} yet`);
+
+          runStep7Arming(dir, leg, target);
+          const res = runHook(writePayload(target, lines(53), { cwd: dir }));
+          assert.equal(res.status, 0, `the new project's first ${leg.file} Write must pass: ${res.stdout}`);
+          assert.equal(fs.existsSync(tokenPath), false,
+            `Step 7 must not arm a token when the named project's ${leg.file} does not exist yet: an ` +
+            `unconsumed token lives 15 minutes and lets a later collapse of the root ${leg.file} through`);
+        }
+      } finally {
+        cleanup(dir);
+      }
+    });
 });
