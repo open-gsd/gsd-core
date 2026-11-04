@@ -536,7 +536,8 @@ describe('#5831: state prune never loses entries', () => {
     mock.method(scp, 'platformWriteSync', (p, content, ...rest) => {
       if (p !== archivePath) return realPws.call(scp, p, content, ...rest);
       const prior = bytesOrNull(archivePath);
-      const write = { content, prior: prior === null ? null : prior.toString('utf-8'), after: null };
+      // `state`: the STATE.md bytes the run pruned (the lock is held, so they are still on disk).
+      const write = { content, prior: prior === null ? null : prior.toString('utf-8'), state: fs.readFileSync(statePath), after: null };
       writes.push(write);
       realPws.call(scp, p, content, ...rest);
       write.after = fs.readFileSync(archivePath); // the bytes as published
@@ -544,14 +545,15 @@ describe('#5831: state prune never loses entries', () => {
     return writes;
   }
 
-  /** The production plan for an append onto `prior` (null = absent archive). */
-  function planFor(prior, sections, cutoff, keepRecent) {
-    return stateLib.planStateArchiveAppend(prior, sections, { date: realClock.localToday(), cutoff, keepRecent });
+  /** The production plan for an append onto `prior` (null = absent archive) by the run that pruned `stateBytes`. */
+  function planFor(prior, sections, cutoff, keepRecent, stateBytes = fs.readFileSync(statePath)) {
+    const run = stateLib.pruneRunMarker(stateBytes, cutoff, keepRecent);
+    return stateLib.planStateArchiveAppend(prior, sections, { date: realClock.localToday(), cutoff, keepRecent, run });
   }
 
   /** Assert a captured write is exactly the rendered production plan, and return that plan. */
   function assertWriteIsPlan(write, sections, cutoff, keepRecent) {
-    const plan = planFor(write.prior, sections, cutoff, keepRecent);
+    const plan = planFor(write.prior, sections, cutoff, keepRecent, write.state);
     assert.strictEqual(write.content, stateLib.renderStateArchiveAppend(plan), 'the writer writes the rendered plan');
     return plan;
   }
@@ -571,6 +573,21 @@ describe('#5831: state prune never loses entries', () => {
       }
       return realWrite.call(fs, p, ...rest);
     });
+  }
+
+  /** Files in .planning/ other than STATE.md, the archive and the lock: temp-file leftovers. */
+  function planningLeftovers() {
+    const keep = new Set([path.basename(statePath), path.basename(archivePath), path.basename(statePath) + '.lock']);
+    return fs.readdirSync(path.dirname(statePath)).filter(f => !keep.has(f) && /\.(tmp|restore)\.\d+$/.test(f));
+  }
+
+  /** How many archive lines are exactly `line`. */
+  function archiveCount(line) {
+    return fs.readFileSync(archivePath, 'utf-8').split(/\r?\n/).filter(l => l === line).length;
+  }
+
+  function assertArchivedOnce(lines) {
+    assert.deepStrictEqual(lines.map(archiveCount), lines.map(() => 1), 'each entry is in the archive exactly once');
   }
 
   function lockReleased() {
@@ -641,17 +658,20 @@ describe('#5831: state prune never loses entries', () => {
     });
   }
 
-  test('when the restore write fails, the error carries both causes and the entries stay in both files', () => {
+  test('when the restore write fails partway, the error carries both causes, no temp file is left, and the retry archives once', () => {
     fs.writeFileSync(archivePath, SEED_ARCHIVE);
     const stateBefore = fs.readFileSync(statePath);
     const writes = captureArchiveWrites();
 
     const realWrite = fs.writeFileSync;
-    mock.method(fs, 'writeFileSync', (p, ...rest) => {
+    mock.method(fs, 'writeFileSync', (p, data, ...rest) => {
       const fail = (code) => { const e = new Error(`${code}: simulated`); e.code = code; throw e; };
       if (typeof p === 'string' && p.startsWith(statePath)) fail('ENOSPC');
-      if (typeof p === 'string' && p.startsWith(archivePath + '.restore.')) fail('EIO');
-      return realWrite.call(fs, p, ...rest);
+      if (typeof p === 'string' && p.startsWith(archivePath + '.restore.')) {
+        realWrite.call(fs, p, data.subarray(0, 4)); // the temp file exists, partly written
+        fail('EIO');
+      }
+      return realWrite.call(fs, p, data, ...rest);
     });
     let thrown = null;
     try { prune(3); } catch (err) { thrown = err; }
@@ -662,7 +682,13 @@ describe('#5831: state prune never loses entries', () => {
     assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md still holds every entry');
     assert.strictEqual(writes.length, 1);
     assert.deepStrictEqual(fs.readFileSync(archivePath), writes[0].after, 'the archive keeps the published block');
+    assert.deepStrictEqual(planningLeftovers(), [], 'the partial restore temp file is removed');
     assert.ok(lockReleased(), 'the STATE.md lock is released');
+
+    prune(3);
+    assert.strictEqual(writes.length, 1, 'the retry recognises the published block and does not write the archive');
+    assertArchivedOnce(OLD_ENTRIES);
+    assert.deepStrictEqual(prunable(), [{ section: 'Decisions', lines: [PHASE7] }], 'the retry removed the entries from STATE.md');
   });
 
   for (const step of ['rename', 'removal']) {
@@ -846,5 +872,193 @@ describe('#5831: state prune never loses entries', () => {
     assert.strictEqual(out.total_would_archive, OLD_ENTRIES.length);
     assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md bytes unchanged');
     assert.strictEqual(archiveExists(tmpDir), false, 'dry-run must not create STATE-ARCHIVE.md');
+  });
+
+  // ── the archive write itself fails partway: earlier entries survive ────
+
+  for (const archiveBefore of ['present', 'absent']) {
+    test(`a temp-file write failure never reaches the archive through a truncating direct write (archive ${archiveBefore})`, () => {
+      if (archiveBefore === 'present') fs.writeFileSync(archivePath, SEED_ARCHIVE);
+      const stateBefore = fs.readFileSync(statePath);
+      const archiveBytes = bytesOrNull(archivePath);
+
+      // Every archive write fails on a full disk; a write to the archive
+      // itself (the direct-write fallback) truncates it before failing.
+      failWritesTo(archivePath, 'ENOSPC', (p, realWrite) => { if (p === archivePath) realWrite.call(fs, p, ''); });
+      assert.throws(() => prune(3), (err) => err.code === 'ENOSPC');
+      mock.restoreAll();
+
+      assert.deepStrictEqual(bytesOrNull(archivePath), archiveBytes, 'the archive keeps its exact previous bytes / stays absent');
+      assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md bytes unchanged');
+      assert.deepStrictEqual(planningLeftovers(), [], 'no temp file is left');
+      assert.ok(lockReleased(), 'the STATE.md lock is released');
+    });
+  }
+
+  for (const archiveBefore of ['present', 'absent']) {
+    test(`an archive write that damages the archive and then throws is undone before the error propagates (archive ${archiveBefore})`, () => {
+      if (archiveBefore === 'present') fs.writeFileSync(archivePath, SEED_ARCHIVE);
+      const stateBefore = fs.readFileSync(statePath);
+      const archiveBytes = bytesOrNull(archivePath);
+      const realPws = scp.platformWriteSync;
+      mock.method(scp, 'platformWriteSync', (p, ...rest) => {
+        if (p !== archivePath) return realPws.call(scp, p, ...rest);
+        fs.writeFileSync(archivePath, 'half a bl'); // any write path that leaves the file damaged
+        const e = new Error('EIO: simulated'); e.code = 'EIO'; throw e;
+      });
+      assert.throws(() => prune(3), (err) => err.code === 'EIO' && !(err instanceof AggregateError));
+      mock.restoreAll();
+
+      assert.deepStrictEqual(bytesOrNull(archivePath), archiveBytes, 'the archive is put back exactly / removed again');
+      assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md bytes unchanged');
+      assert.ok(lockReleased(), 'the STATE.md lock is released');
+    });
+  }
+
+  test('when undoing a damaging archive write also fails, both causes surface and STATE.md is untouched', () => {
+    fs.writeFileSync(archivePath, SEED_ARCHIVE);
+    const stateBefore = fs.readFileSync(statePath);
+    const realPws = scp.platformWriteSync;
+    mock.method(scp, 'platformWriteSync', (p, ...rest) => {
+      if (p !== archivePath) return realPws.call(scp, p, ...rest);
+      fs.writeFileSync(archivePath, 'half a bl');
+      const e = new Error('EIO: simulated'); e.code = 'EIO'; throw e;
+    });
+    mock.method(scp, 'platformRestoreFileSync', () => { const e = new Error('EROFS: simulated'); e.code = 'EROFS'; throw e; });
+    let thrown = null;
+    try { prune(3); } catch (err) { thrown = err; }
+    mock.restoreAll();
+
+    assert.ok(thrown instanceof AggregateError, 'a combined error is thrown');
+    assert.deepStrictEqual(thrown.errors.map(e => e.code), ['EIO', 'EROFS']);
+    assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md still holds every entry');
+    assert.ok(lockReleased(), 'the STATE.md lock is released');
+  });
+
+  // ── a retry after a kill between the two writes is idempotent ──────────
+
+  /**
+   * The on-disk result of a prune killed after it published the archive and
+   * before it wrote STATE.md: the archive holds the new block, STATE.md is
+   * byte-for-byte what the run read. (The lock a killed process leaves is
+   * stale-recovered separately; it is not what this pins.)
+   */
+  function pruneKilledBeforeStateWrite(keepRecent) {
+    const stateBefore = fs.readFileSync(statePath);
+    prune(keepRecent);
+    fs.writeFileSync(statePath, stateBefore);
+  }
+
+  for (const archiveBefore of ['absent', 'present', 'present without markers']) {
+    test(`a prune re-run after a kill between the archive and STATE.md writes archives each entry once (archive ${archiveBefore})`, () => {
+      if (archiveBefore === 'present') fs.writeFileSync(archivePath, SEED_ARCHIVE);
+      if (archiveBefore === 'present without markers') {
+        // An archive written before #5831: the same block format, no run marker.
+        fs.writeFileSync(archivePath, '# STATE Archive\n\n## Pruned 2026-01-01 (phases 1-2, kept recent 3)\n\n### Decisions\n\n- [Phase 0]: older\n\n');
+      }
+      pruneKilledBeforeStateWrite(3);
+      assert.deepStrictEqual(OLD_ENTRIES.map(archiveCount), [1, 1, 1], 'the killed run published its block');
+      assert.deepStrictEqual(prunable(5), [{ section: 'Decisions', lines: OLD_ENTRIES }], 'STATE.md still holds the entries');
+      const archiveAfterKill = fs.readFileSync(archivePath);
+
+      const writes = captureArchiveWrites();
+      prune(3);
+
+      assert.strictEqual(writes.length, 0, 'the retry does not write the archive');
+      assert.deepStrictEqual(fs.readFileSync(archivePath), archiveAfterKill, 'the archive is unchanged by the retry');
+      assertArchivedOnce(OLD_ENTRIES);
+      assert.deepStrictEqual(prunable(), [{ section: 'Decisions', lines: [PHASE7] }], 'the retry finished the prune');
+    });
+  }
+
+  test('after a killed run and its retry, an identical entry pruned again later is still archived again', () => {
+    pruneKilledBeforeStateWrite(3);
+    prune(3); // the retry
+    writeStateMd(tmpDir, stateLines(8, [PHASE1, PHASE7])); // the same decision text lands again
+    const writes = captureArchiveWrites();
+    prune(3);
+
+    assert.strictEqual(writes.length, 1, 'a new prune run writes the archive');
+    assertWriteIsPlan(writes[0], [{ section: 'Decisions', count: 1, lines: [PHASE1] }], 5, 3);
+    assert.strictEqual(archiveCount(PHASE1), 2, 'the second occurrence is archived as well');
+    assert.deepStrictEqual([PHASE2, PHASE4].map(archiveCount), [1, 1]);
+  });
+
+  test('a re-run with different options after a kill is a different run and archives its own block', () => {
+    pruneKilledBeforeStateWrite(3); // cutoff 5
+    const writes = captureArchiveWrites();
+    prune(5); // cutoff 3: a different prune of the same STATE.md
+    assert.strictEqual(writes.length, 1, 'not mistaken for a retry of the cutoff-5 run');
+    assertWriteIsPlan(writes[0], prunableRawFrom(stateLines(8, [...OLD_ENTRIES, PHASE7]), 3), 3, 5);
+  });
+
+  test('a run marker is the latest marked block only, and depends on the STATE.md bytes and both options', () => {
+    const bytes = Buffer.from(stateLines(8, OLD_ENTRIES));
+    const run = stateLib.pruneRunMarker(bytes, 5, 3);
+    assert.match(run, /^[0-9a-f]{64}$/);
+    assert.strictEqual(stateLib.pruneRunMarker(Buffer.from(bytes), 5, 3), run, 'deterministic');
+    assert.notStrictEqual(stateLib.pruneRunMarker(Buffer.concat([bytes, Buffer.from('\n')]), 5, 3), run);
+    assert.notStrictEqual(stateLib.pruneRunMarker(bytes, 4, 3), run);
+    assert.notStrictEqual(stateLib.pruneRunMarker(bytes, 5, 4), run);
+
+    const other = stateLib.pruneRunMarker(bytes, 1, 1);
+    assert.strictEqual(stateLib.lastPruneRunMarker(SEED_ARCHIVE), null, 'an archive without markers');
+    assert.strictEqual(stateLib.lastPruneRunMarker(`x\n<!-- gsd-prune-run: ${run} -->\n\ny\n<!-- gsd-prune-run: ${other} -->\r\n`), other);
+    assert.strictEqual(stateLib.lastPruneRunMarker(`- [Phase 1]: quoted <!-- gsd-prune-run: ${run} -->\n`), null,
+      'a marker inside an entry line is not a block marker');
+  });
+
+  // ── boundaries of the archive base ─────────────────────────────────────
+
+  test('an existing 0-byte archive is appended to as-is: no header, no separator', () => {
+    fs.writeFileSync(archivePath, '');
+    const sections = prunableRaw(5);
+    const writes = captureArchiveWrites();
+    prune(3);
+
+    assert.strictEqual(writes.length, 1);
+    assert.strictEqual(writes[0].prior, '', 'the empty archive is the base');
+    const plan = assertWriteIsPlan(writes[0], sections, 5, 3);
+    assert.strictEqual(plan.base, '', 'the header is not added to an existing archive');
+    assert.strictEqual(plan.boundary, '', 'no separator before the first heading');
+    assert.ok(fs.readFileSync(archivePath, 'utf-8').startsWith('## Pruned '), 'the archive starts with the block heading');
+    assertArchivedOnce(OLD_ENTRIES);
+  });
+
+  // ── the plan/render pair: properties ───────────────────────────────────
+
+  test('property: the rendered append keeps the base, separates it cleanly, holds every planned line, and ends with its own run marker', () => {
+    const lineChar = fc.constantFrom('a', 'Z', '0', ' ', '-', '#', '[', ']', ':', '<', '!', '>', 'é', '\t');
+    const entry = fc.string({ unit: lineChar, maxLength: 30 }).map(t => `- ${t}`);
+    const baseChar = fc.constantFrom('a', ' ', '#', '\n', '\r', '-', '<', '!', '>');
+    const base = fc.option(fc.string({ unit: baseChar, maxLength: 60 }), { nil: null });
+    const section = fc.record({
+      section: fc.constantFrom('Decisions', 'Recently Completed', 'Blockers'),
+      lines: fc.array(entry, { minLength: 1, maxLength: 6 }),
+    });
+    const hex64 = fc.string({ unit: fc.constantFrom(...'0123456789abcdef'), minLength: 64, maxLength: 64 });
+
+    fc.assert(fc.property(base, fc.array(section, { minLength: 1, maxLength: 3 }), hex64, fc.nat(50), fc.nat(9),
+      (existing, sections, run, cutoff, keepRecent) => {
+        const input = sections.map(s => ({ ...s, count: s.lines.length }));
+        const plan = stateLib.planStateArchiveAppend(existing, input, { date: '2026-11-04', cutoff, keepRecent, run });
+        const out = stateLib.renderStateArchiveAppend(plan);
+
+        if (existing === null) assert.ok(plan.base.startsWith('# STATE Archive\n'), 'an absent archive gets the header');
+        else assert.strictEqual(plan.base, existing, 'an existing archive is the base, even when empty');
+        assert.ok(out.startsWith(plan.base), 'the base is kept byte-for-byte');
+        assert.strictEqual(plan.boundary === '\n\n', plan.base.length > 0 && !plan.base.endsWith('\n'),
+          'a separator exactly when the base is non-empty without a trailing LF');
+
+        const block = out.slice(plan.base.length + plan.boundary.length);
+        assert.ok(block.startsWith(`## Pruned 2026-11-04 (phases 1-${cutoff}, kept recent ${keepRecent})\n`), 'the heading starts the block on its own line');
+        const blockLines = block.split('\n');
+        const planned = input.flatMap(s => s.lines);
+        for (const line of new Set(planned)) {
+          assert.strictEqual(blockLines.filter(l => l === line).length, planned.filter(l => l === line).length,
+            'every planned line appears once per occurrence');
+        }
+        assert.strictEqual(stateLib.lastPruneRunMarker(out), run, 'the new block carries the latest run marker');
+      }));
   });
 });
