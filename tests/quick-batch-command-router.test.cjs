@@ -471,6 +471,36 @@ describe('quick-batch-command-router: end-to-end via gsd-tools (rows 46-47)', ()
     }
   });
 
+  test('#5830: quick-batch complete surfaces the length warning in its JSON result', () => {
+    const dir = mkTmpProject();
+    try {
+      fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), [
+        '# STATE', '', '## Quick Tasks Completed', '',
+        '| # | Description | Date | Commit | Status | Directory |',
+        '| --- | --- | --- | --- | --- | --- |', '',
+      ].join('\n'));
+      const tasksFile = path.join(dir, '.planning', 'tasks.md');
+      fs.writeFileSync(tasksFile, '- first task\n- second task\n');
+      const created = runGsdTools(['quick-batch', 'create', '--file', tasksFile, '--raw'], dir);
+      assert.equal(created.success, true, `create failed: ${created.error}`);
+      const createdJson = JSON.parse(created.output);
+      const quickId = createdJson.manifest.items[0].quick_id;
+
+      const description = 'd'.repeat(241);
+      const completed = runGsdTools([
+        'quick-batch', 'complete', '--batch', createdJson.batchId, '--quick-id', quickId,
+        '--description', description, '--date', '2026-01-01', '--commit', 'abc1234', '--raw',
+      ], dir);
+      assert.equal(completed.success, true, `complete failed: ${completed.error}`);
+      const completedJson = JSON.parse(completed.output);
+      assert.equal(completedJson.appended, true);
+      assert.equal(completedJson.warnings.length, 1, JSON.stringify(completedJson.warnings));
+      assert.ok(completedJson.warnings[0].includes('241'), completedJson.warnings[0]);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   test('effective-concurrency verb is reachable end-to-end and returns a number', () => {
     const dir = mkTmpProject();
     try {

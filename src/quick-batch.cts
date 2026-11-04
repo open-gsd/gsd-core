@@ -752,6 +752,11 @@ interface CompleteQuickItemFields {
  * idempotency of its own), then marks the item `complete` in `BATCH.json`.
  * Both steps run inside ONE `withPlanningLock` transaction. A repeat call for
  * an already-complete item is a no-op (no re-append, no re-write).
+ *
+ * `warnings` passes through `appendQuickTaskRow`'s advisory warnings (#5830:
+ * a description over `QUICK_TASK_DESCRIPTION_MAX_CHARS` is written in full
+ * but reported), so the `quick-batch complete` JSON carries them the same way
+ * `quick-tasks-append`'s does. Empty when no row was appended.
  */
 function completeQuickItem(
   cwd: string,
@@ -759,10 +764,10 @@ function completeQuickItem(
   quickId: string,
   fields: CompleteQuickItemFields,
   options: { clock?: Clock } = {},
-): Result<{ appended: boolean; manifest: QuickBatchManifest }> {
+): Result<{ appended: boolean; manifest: QuickBatchManifest; warnings: string[] }> {
   const clock = options.clock ?? realClock;
   try {
-    return withPlanningLock(cwd, (): Result<{ appended: boolean; manifest: QuickBatchManifest }> => {
+    return withPlanningLock(cwd, (): Result<{ appended: boolean; manifest: QuickBatchManifest; warnings: string[] }> => {
       const loaded = loadBatch(cwd, batchId);
       if (!loaded.ok) return loaded;
       const manifest = loaded.value;
@@ -773,6 +778,7 @@ function completeQuickItem(
       const stateContent = fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf-8') : '';
 
       let appended = false;
+      let warnings: string[] = [];
       if (!hasQuickTaskRow(stateContent, quickId)) {
         const appendResult = appendQuickTaskRow(stateContent, {
           description: fields.description,
@@ -784,6 +790,7 @@ function completeQuickItem(
         if (!appendResult.ok) return appendResult;
         platformWriteSync(statePath, appendResult.value.content);
         appended = true;
+        warnings = appendResult.value.warnings;
       }
 
       if (item.status !== 'complete') {
@@ -792,7 +799,7 @@ function completeQuickItem(
         platformWriteSync(batchManifestPath(cwd, batchId), JSON.stringify(manifest, null, 2) + '\n');
       }
 
-      return { ok: true, value: { appended, manifest } };
+      return { ok: true, value: { appended, manifest, warnings } };
     }, clock);
   } catch (err) {
     return { ok: false, reason: err instanceof Error ? err.message : String(err) };
