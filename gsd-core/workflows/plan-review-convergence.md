@@ -492,6 +492,8 @@ unresolvable conflict escalates rather than deadlocking.
 gsd_run state planned-phase --phase "${PHASE}" --name "${phase_name}" --plans "${PLAN_COUNT}"
 ```
 
+Exits non-zero, writing nothing, when `--plans` cannot be recorded: surface the error; re-run only after adding a missing line it names, and stop on an invalid or below-position `--plans`.
+
 Display:
 ```text
 ### GSD ► CONVERGENCE COMPLETE ✓

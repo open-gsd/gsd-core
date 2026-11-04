@@ -1904,6 +1904,22 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(completed.includes('Phase: 02 — COMPLETE'), true);
   });
 
+  test('state planned-phase --plans 0 reports 0 plans ready under bracket display (#5320)', () => {
+    const dir = project('adr-612-state-planned-zero-');
+    writeBracketFixture(dir);
+    const statePath = planning(dir, 'STATE.md');
+    fs.writeFileSync(
+      statePath,
+      fs.readFileSync(statePath, 'utf8')
+        .replace('Last activity: 2026-09-01 — Roadmap created', 'Last activity: 2026-09-01'),
+    );
+    run(['state', 'planned-phase', '--phase', '02', '--name', 'User Dashboard', '--plans', '0'], dir);
+    assert.equal(
+      fs.readFileSync(statePath, 'utf8').includes('**Last Activity Description:** [CK.02] 02 planning complete — 0 plans ready'),
+      true,
+    );
+  });
+
   test('a state write materializes milestone frontmatter from the active ROADMAP milestone', () => {
     const dir = project('adr-612-state-milestone-');
     writeBracketFixture(dir);
