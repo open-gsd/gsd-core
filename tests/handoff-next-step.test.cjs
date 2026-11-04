@@ -1,7 +1,6 @@
 'use strict';
 // #5723: new-project / new-milestone closing hand-off must name discuss-phase
 // as the recommended next step and execute-phase as the step that executes.
-// allow-test-rule: hand-off text in shipped command/skill markdown is the product
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -9,12 +8,12 @@ const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
 const FILES = [
-  'commands/gsd/new-project.md',
-  'skills/gsd-new-project/SKILL.md',
-  'pi/package-skills/gsd-new-project/SKILL.md',
-  'commands/gsd/new-milestone.md',
-  'skills/gsd-new-milestone/SKILL.md',
-  'pi/package-skills/gsd-new-milestone/SKILL.md',
+  ['commands/gsd/new-project.md', '/gsd:'],
+  ['skills/gsd-new-project/SKILL.md', '/gsd-'],
+  ['pi/package-skills/gsd-new-project/SKILL.md', '/skill:gsd-'],
+  ['commands/gsd/new-milestone.md', '/gsd:'],
+  ['skills/gsd-new-milestone/SKILL.md', '/gsd-'],
+  ['pi/package-skills/gsd-new-milestone/SKILL.md', '/skill:gsd-'],
 ];
 
 function handoffLine(rel) {
@@ -25,18 +24,17 @@ function handoffLine(rel) {
 }
 
 describe('#5723 new-project/new-milestone hand-off next step', () => {
-  for (const rel of FILES) {
-    test(`${rel} hand-off names discuss, plan, execute in order`, () => {
+  for (const [rel, prefix] of FILES) {
+    test(`${rel} hand-off names discuss, plan, execute in order with ${prefix} form`, () => {
       const line = handoffLine(rel);
-      assert.doesNotMatch(line, /plan-phase[^;]*start execution/i);
       assert.doesNotMatch(line, /start(s)? execution/i);
-      const d = line.indexOf('discuss-phase');
-      const p = line.indexOf('plan-phase');
-      const e = line.indexOf('execute-phase');
-      assert.ok(d >= 0, 'names discuss-phase');
-      assert.ok(p > d, 'plan-phase follows discuss-phase');
-      assert.ok(e > p, 'execute-phase follows plan-phase');
-      assert.match(line.slice(e), /execute/);
+      const d = line.indexOf(`${prefix}discuss-phase`);
+      const p = line.indexOf(`${prefix}plan-phase`);
+      const e = line.indexOf(`${prefix}execute-phase`);
+      assert.ok(d >= 0, `names ${prefix}discuss-phase`);
+      assert.ok(p > d, `${prefix}plan-phase follows ${prefix}discuss-phase`);
+      assert.ok(e > p, `${prefix}execute-phase follows ${prefix}plan-phase`);
+      assert.match(line.slice(e), /^[^`]+`\s+to execute\./);
     });
   }
 });
