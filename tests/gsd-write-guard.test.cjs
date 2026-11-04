@@ -937,4 +937,23 @@ describe('guard <-> gsd-roadmapper binding (the /gsd:new-milestone collapse path
         cleanup(dir);
       }
     });
+
+  // #5859: the fixture tests above substitute init's paths for the agent's
+  // placeholders themselves, so they cannot see the workflow -> agent link. The
+  // roadmapper falls back to root .planning/ paths when its prompt names no
+  // target, so every create/revise spawn must pass all three targets.
+  test('new-project and new-milestone pass the init-resolved write targets to every roadmapper spawn (#5859)', () => {
+    const want = ['ROADMAP.md: {roadmap_path}', 'STATE.md: {state_path}', 'REQUIREMENTS.md: {requirements_path}'];
+    for (const [file, spawns] of [['new-project.md', 2], ['new-milestone.md', 1]]) {
+      const src = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', file), 'utf8');
+      const blocks = [...src.matchAll(/<write_targets>([\s\S]{0,400}?)<\/write_targets>/g)].map((m) => m[1]);
+      assert.equal(blocks.length, spawns, `${file}: expected ${spawns} <write_targets> block(s), one per roadmapper spawn`);
+      for (const body of blocks) {
+        for (const line of want) assert.ok(body.includes(line), `${file}: <write_targets> must name "${line}"`);
+      }
+    }
+    const milestone = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'new-milestone.md'), 'utf8');
+    assert.match(milestone, /re-spawn roadmapper[^\n]*same `<write_targets>` block/,
+      'new-milestone.md: the Adjust re-spawn must reuse the same <write_targets> block');
+  });
 });
