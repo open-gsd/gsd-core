@@ -538,10 +538,9 @@ function freshInitWorkstream(raw: string | null, now: number): string | null {
   return name && age >= 0 && age < INIT_WORKSTREAM_MAX_AGE_MS ? name : null;
 }
 
-/** The carry file's text, or null when it is missing, not a regular file, unreadable or longer than INIT_WORKSTREAM_MAX_BYTES bytes: the bounded read (O_NONBLOCK, `fstat` on the opened descriptor) is readBoundedRegularFile's, so a FIFO or device planted at the path never blocks or streams. */
+/** The carry file's text, or null when it is missing, not a regular file, unreadable or longer than INIT_WORKSTREAM_MAX_BYTES bytes: the bounded read (O_NONBLOCK, `fstat` on the opened descriptor, refusal on the size before any byte is read) is readBoundedRegularFile's, so a FIFO, a device or an oversized file planted at the path never blocks, streams or is loaded. */
 function readCarry(file: string): string | null {
-  const text = readBoundedRegularFile(file, 'utf-8');
-  return text === undefined || Buffer.byteLength(text, 'utf-8') > INIT_WORKSTREAM_MAX_BYTES ? null : text;
+  return readBoundedRegularFile(file, 'utf-8', INIT_WORKSTREAM_MAX_BYTES) ?? null;
 }
 
 /** Records `name` for `session` at `now` and prunes this project's expired carries (best effort, one entry at a time); false when nothing was recorded (no session id, or an invalid name). */

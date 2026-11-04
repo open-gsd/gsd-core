@@ -163,7 +163,7 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
     fs.writeFileSync(file, `alpha ${T}`);
     const spy = t.mock.method(projection, 'readBoundedRegularFile');
     assert.equal(peekInitWorkstream(base, session, T), 'alpha');
-    assert.deepEqual(spy.mock.calls.map((c) => c.arguments[0]), [file]);
+    assert.deepEqual(spy.mock.calls.map((c) => c.arguments), [[file, 'utf-8', 1024]]);
   });
 
   test('the carry cap counts bytes, not characters', (t) => {
@@ -173,6 +173,19 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
     assert.ok(text.length <= 1024 && Buffer.byteLength(text, 'utf-8') > 1024);
     fs.writeFileSync(file, text);
     assert.equal(peekInitWorkstream(base, session, T), null);
+  });
+
+  test('an oversized carry is refused on its size without any byte being read', (t) => {
+    const session = path.basename(base);
+    const file = carryFile(t, session);
+    fs.writeFileSync(file, `alpha ${T}`);
+    const read = t.mock.method(fs, 'readSync');
+    assert.equal(peekInitWorkstream(base, session, T), 'alpha');
+    assert.ok(read.mock.callCount() > 0, 'positive control: a valid carry is read through the spied fs.readSync');
+    read.mock.resetCalls();
+    fs.writeFileSync(file, `alpha ${T}`.padEnd(1024 * 1024, ' '));
+    assert.equal(peekInitWorkstream(base, session, T), null);
+    assert.equal(read.mock.callCount(), 0);
   });
 
   test('a directory at the carry path reads as no carry', (t) => {
