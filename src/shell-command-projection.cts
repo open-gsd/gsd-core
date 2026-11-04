@@ -2211,6 +2211,23 @@ function publishViaTempFile(tmpPath: string, filePath: string, data: string | Bu
 }
 
 /**
+ * #5831: remove a file (absent is fine), retrying the transient Windows lock
+ * errnos (EPERM/EBUSY/EACCES — DEFECT.WINDOWS-FS-OPS) like the rename does.
+ */
+function removeFileWithRetry(filePath: string): void {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      fs.rmSync(filePath, { force: true });
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code ?? '';
+      if (attempt >= RENAME_MAX_ATTEMPTS || !RENAME_RETRY_ERRNOS.has(code)) throw err;
+      renameBackoff();
+    }
+  }
+}
+
+/**
  * #5831: put `filePath` back to an exact earlier state — `bytes` written
  * verbatim (no normalization) through a temp file and rename, or the file
  * removed when `bytes` is null (it did not exist). Throws on failure, leaving
@@ -2218,7 +2235,7 @@ function publishViaTempFile(tmpPath: string, filePath: string, data: string | Bu
  */
 export function platformRestoreFileSync(filePath: string, bytes: Buffer | null): void {
   if (bytes === null) {
-    fs.rmSync(filePath, { force: true });
+    removeFileWithRetry(filePath);
     return;
   }
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
