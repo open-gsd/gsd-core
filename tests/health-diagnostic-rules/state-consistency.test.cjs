@@ -749,7 +749,13 @@ describe('W031 — STATE.md far over its documented line target (#5830)', () => 
     assert.equal(diagnostics[0].remedy.action, REMEDY_ACTION.ADVISE);
     assert.equal(diagnostics[0].remedy.risk, REMEDY_RISK.NONE);
     assert.match(diagnostics[0].remedy.args.command, /state prune/);
-    assert.match(diagnostics[0].remedy.args.command, /\/gsd-cleanup/);
+    assert.match(diagnostics[0].remedy.args.command, /milestone archive-quick <version>/);
+    // The remedy must not promise more than the tools do (#5830 review):
+    // state prune never touches Quick Tasks, archive-quick needs a task
+    // directory, and /gsd-fast rows have no archive command.
+    assert.match(diagnostics[0].remedy.args.command, /does not touch the Quick Tasks table/);
+    assert.match(diagnostics[0].remedy.args.command, /only when at least one task directory exists/);
+    assert.match(diagnostics[0].remedy.args.command, /\/gsd-fast\) have no archive command/);
   });
 
   test('W031 counts CRLF lines the same as LF lines', (t) => {

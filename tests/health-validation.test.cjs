@@ -2259,7 +2259,7 @@ describe('W030 repairs a known legacy verification status (#5291)', () => {
 });
 
 // #5830: a STATE.md far over its documented line target (3x) is an advisory
-// warning pointing at `state prune` and `/gsd-cleanup`. It is never repaired:
+// warning pointing at `state prune` and `milestone archive-quick`. It is never repaired:
 // `--repair` leaves STATE.md byte-identical and the warning in place.
 describe('W031: STATE.md far over its line target (#5830)', () => {
   const { STATE_MD_LINE_TARGET } = require('../gsd-core/bin/lib/state-md-schema.cjs');

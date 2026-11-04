@@ -407,9 +407,12 @@ const RULE_W026: Rule = {
  * else bounds it — quick-task rows in particular accumulate without limit —
  * and several workflows read the whole file into context. Advisory only:
  * the fix is a judgement about which history to archive, so `--repair` never
- * acts; the remedy names the two tools that do (`state prune` for the
- * sections it covers, `/gsd-cleanup` for quick-task archival, opt-in per
- * #2142). Fires only when the file is MORE than 3x the target, so a file
+ * acts. The remedy names what each tool really covers: `state prune` archives
+ * Decisions/Recently Completed but never the Quick Tasks table, and
+ * `milestone archive-quick <version>` (#2142, the command `/gsd-cleanup`
+ * calls, opt-in) resets that table only when it moves at least one
+ * `.planning/quick/` task directory. Rows with no directory (`/gsd-fast`)
+ * have no archive tool, so the remedy says to trim them by hand. Fires only when the file is MORE than 3x the target, so a file
  * modestly over the target stays quiet.
  */
 const STATE_MD_OVERSIZE_FACTOR = 3;
@@ -430,7 +433,10 @@ const RULE_W031: Rule = {
           `STATE.md is ${lines} lines, more than ${STATE_MD_OVERSIZE_FACTOR}x its ` +
           `${STATE_MD_LINE_TARGET}-line target — it is a digest, not an archive`,
         remedy: adviseRemedy(
-          'Run `gsd-tools state prune` to archive old Decisions/Recently Completed entries, and /gsd-cleanup to archive quick-task history',
+          'Run `gsd-tools state prune` to archive old Decisions/Recently Completed entries (it does not touch the Quick Tasks table). ' +
+          'For the Quick Tasks table, `gsd-tools milestone archive-quick <version>` moves the .planning/quick/ task directories into ' +
+          'milestones/<version>-quick/ and resets the table, but only when at least one task directory exists; ' +
+          'rows without a task directory (logged by /gsd-fast) have no archive command, so trim them by hand',
         ),
       },
     ];
