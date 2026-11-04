@@ -323,24 +323,51 @@ describe('#5683: effort sync keeps the install manifest in step with rewritten a
       }
     });
 
-    test('#5683: pre-sync user edit under sync', () => {
-      // Contract: the sync records the bytes it publishes. A hand-edit made
-      // before the sync is carried into the rewritten file, and the manifest
-      // follows the file (the pre-sync edit is not reported as a local patch).
+    test('#5683: pre-sync user edit stays unowned by the manifest', () => {
+      // Contract: only a file that was GSD-owned (on-disk hash == manifest
+      // entry) before the sync gets its new hash recorded. A hand-edit made
+      // before the sync keeps its stale manifest entry so the next install
+      // still detects it; the untouched agent is recorded as before.
       const fx = claudeFixture({
-        onDisk: { 'gsd-a': 'high' },
-        overrides: { 'gsd-a': 'xhigh' },
+        onDisk: { 'gsd-a': 'high', 'gsd-b': 'high' },
+        overrides: { 'gsd-a': 'xhigh', 'gsd-b': 'xhigh' },
       });
       try {
         fs.appendFileSync(fx.agentPath('gsd-a'), '\nHand-edited line.\n');
+        const before = readManifest(fx.configDir);
         const result = runEffortSync({ ...fx, runtime: 'claude', dryRun: false });
-        assert.strictEqual(result.synced, 1);
+        assert.strictEqual(result.synced, 2);
         const content = fs.readFileSync(fx.agentPath('gsd-a'), 'utf8');
         assert.match(content, /^effort: xhigh$/m);
         assert.match(content, /Hand-edited line\./);
-        assert.strictEqual(readManifest(fx.configDir).files['agents/gsd-a.md'], hashOnDisk(fx.agentPath('gsd-a')));
+        const after = readManifest(fx.configDir);
+        assert.strictEqual(after.files['agents/gsd-a.md'], before.files['agents/gsd-a.md'], 'edited agent entry unchanged');
+        assert.notStrictEqual(after.files['agents/gsd-a.md'], hashOnDisk(fx.agentPath('gsd-a')));
+        assert.strictEqual(after.files['agents/gsd-b.md'], hashOnDisk(fx.agentPath('gsd-b')), 'untouched agent is recorded');
       } finally {
         cleanup(fx.root);
+      }
+    });
+
+    test('#5683: sync then install still reports a pre-sync user edit as locally modified', { timeout: E2E_TIMEOUT_MS }, () => {
+      const { configDir, root } = runMinimalInstall({ runtime: 'claude', scope: 'global' });
+      try {
+        writeProjectConfig(root, { 'gsd-ai-researcher': 'low', 'gsd-advisor-researcher': 'medium' });
+        const edited = path.join(configDir, 'agents', 'gsd-ai-researcher.md');
+        const clean = path.join(configDir, 'agents', 'gsd-advisor-researcher.md');
+        fs.appendFileSync(edited, '\nHand-edited line.\n');
+        const before = readManifest(configDir);
+        const result = runEffortSync({ cwd: root, home: root, configDir, runtime: 'claude', dryRun: false });
+        assert.strictEqual(result.synced, 2, 'precondition: both agents rewritten');
+        const after = readManifest(configDir);
+        assert.strictEqual(after.files['agents/gsd-ai-researcher.md'], before.files['agents/gsd-ai-researcher.md']);
+        assert.strictEqual(after.files['agents/gsd-advisor-researcher.md'], hashOnDisk(clean));
+        const output = reinstall({ runtime: 'claude', configDir, root });
+        assert.match(output, /locally modified/i, 'the pre-sync edit is still detected');
+        assert.deepStrictEqual(patchBackups(configDir), ['gsd-ai-researcher.md'], 'only the edited agent is backed up');
+        assert.ok(fs.existsSync(edited));
+      } finally {
+        cleanup(root);
       }
     });
 
@@ -442,6 +469,9 @@ describe('#5683: effort sync keeps the install manifest in step with rewritten a
           const fx = claudeFixture({ onDisk: { 'gsd-a': 'high' }, overrides: { 'gsd-a': 'xhigh' } });
           try {
             fs.writeFileSync(fx.agentPath('gsd-a'), claudeAgent('gsd-a', 'high', body));
+            const owned = readManifest(fx.configDir);
+            owned.files['agents/gsd-a.md'] = hashOnDisk(fx.agentPath('gsd-a'));
+            fs.writeFileSync(manifestPathOf(fx.configDir), JSON.stringify(owned));
             const result = runEffortSync({ ...fx, runtime: 'claude', dryRun: false });
             assert.strictEqual(result.synced, 1);
             const recorded = readManifest(fx.configDir).files['agents/gsd-a.md'];
