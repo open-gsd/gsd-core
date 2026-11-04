@@ -1209,6 +1209,15 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.match(step11, /## ISSUES FOUND[^\n]*step 12/, 'ISSUES FOUND must route to step 12');
   });
 
+  // Review 5692447413 Minor 5: with the toggle off the prompt still carries <return_receipt>,
+  // so a receipt can still be written; each `false` branch must remove it.
+  test('every plan-phase.md `false` toggle branch removes the receipt (#5182)', () => {
+    const plan = readPlanPhase();
+    const branches = plan.split('\n').filter((l) => l.startsWith('- **`false`:** issue the same Agent() call but omit `run_in_background`'));
+    assert.equal(branches.length, 3, 'planner, checker and revision each have a false branch');
+    for (const b of branches) assert.match(b, /rm -f "\{receipt\}"/, `false branch must rm the receipt: ${b.slice(0, 90)}`);
+  });
+
   test('AC3: a finished revision yields marker_received within one poll interval', (t) => {
     const f = fixture(t);
     const revision = watchCallOf(sectionOf(readPlanPhase(), REVISION_SECTION));
