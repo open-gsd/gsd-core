@@ -1204,3 +1204,229 @@ describe('#5106 — go test RED evidence', () => {
     assert.equal(qualified.verdict, 'RED_EVIDENCE_OK');
   });
 });
+
+// ─── #5819 — node:test assert.throws/rejects RED repeats diagnostic keys ──────
+// node:test emits `error` and `stack` twice in a failing assert.throws(fn, /re/)
+// diagnostic block. Strict YAML rejects the duplicates, the whole block came
+// back as non-TAP data, and a genuine RED was refused as invalid_record.
+// Real captures of all three shapes live in tests/fixtures/tdd-red-evidence/;
+// the fixtures below restate the shape with neutral paths for the matrix.
+const INTERRUPTION = 'Test run interrupted by cancellation, hook failure, or timeout';
+
+const dupDiagTAP = (diagLines, points = ['not ok 1 - rejects a malformed token'], plan = '1..1') => [
+  'TAP version 13',
+  ...points.flatMap((point) => [`# Subtest: ${point.replace(/^(?:not )?ok \d+ - /, '')}`, point]),
+  '  ---',
+  ...diagLines,
+  '  ...',
+  plan,
+  `# tests ${points.length}`,
+  '# suites 0',
+  `# pass ${points.filter((p) => p.startsWith('ok ')).length}`,
+  `# fail ${points.filter((p) => p.startsWith('not ok')).length}`,
+  '# cancelled 0', '# skipped 0', '# todo 0', '# duration_ms 84.6',
+  '',
+].join('\n');
+
+const THROWS_REGEXP_DIAG = [
+  "  duration_ms: 1.7641",
+  "  type: 'test'",
+  "  location: 'throws-red.test.cjs:8:1'",
+  "  failureType: 'testCodeFailure'",
+  '  error: |-',
+  '    The input did not match the regular expression /rejected token/. Input:',
+  '    ',
+  "    'Error: boom: token accepted'",
+  '    ',
+  "  code: 'ERR_ASSERTION'",
+  "  name: 'AssertionError'",
+  '  expected:',
+  '  actual:',
+  "  error: 'boom: token accepted'",
+  '  stack: |-',
+  '    throws-red.test.cjs:9:31',
+  "  operator: 'throws'",
+  '  stack: |-',
+  '    throws-red.test.cjs:9:10',
+];
+
+describe('#5819 — node:test RED with repeated diagnostic keys', () => {
+  test('a real assert.throws(fn, /re/) RED is accepted despite repeated error/stack keys', () => {
+    const result = classifyRedEvidence(validRedInput({
+      output: dupDiagTAP(THROWS_REGEXP_DIAG),
+      targetTest: 'rejects a malformed token',
+      targetFile: undefined,
+    }));
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.equal(result.reason, 'target_test_failed');
+    assert.equal(result.evidence.matched_test, 'rejects a malformed token');
+    assert.deepEqual(result.evidence.report_errors, []);
+    assert.equal(result.evidence.fail, 1);
+  });
+
+  test('a single-key diagnostic control (assert.equal shape) stays accepted', () => {
+    // The same failure intent without repeated keys — node:test's shape for
+    // assert.equal — parsed fine before #5819 and must keep doing so.
+    const singleKey = [
+      '  duration_ms: 0.923',
+      "  type: 'test'",
+      "  location: 'control-equal.test.cjs:6:1'",
+      "  failureType: 'testCodeFailure'",
+      '  error: |-',
+      '    Expected values to be strictly equal:',
+      '    ',
+      '    1 !== 2',
+      '    ',
+      "  code: 'ERR_ASSERTION'",
+      "  name: 'AssertionError'",
+      '  expected: 2',
+      '  actual: 1',
+      "  operator: 'strictEqual'",
+      '  stack: |-',
+      '    control-equal.test.cjs:7:10',
+    ];
+    const result = classifyRedEvidence(validRedInput({
+      output: dupDiagTAP(singleKey),
+      targetTest: 'rejects a malformed token',
+      targetFile: undefined,
+    }));
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.deepEqual(result.evidence.report_errors, []);
+  });
+
+  test('a recovered block still refuses interruptions: timeout, cancellation, hook failure', () => {
+    for (const failureType of ['testTimeoutFailure', 'cancelledByParent', 'hookFailed']) {
+      const diag = THROWS_REGEXP_DIAG.map((line) =>
+        line === "  failureType: 'testCodeFailure'" ? `  failureType: '${failureType}'` : line);
+      const result = classifyRedEvidence(validRedInput({
+        output: dupDiagTAP(diag),
+        targetTest: 'rejects a malformed token',
+        targetFile: undefined,
+      }));
+      assert.equal(result.verdict, 'INVALID_RED', failureType);
+      assert.equal(result.reason, 'invalid_record', failureType);
+      assert.deepEqual(result.evidence.report_errors, [INTERRUPTION], failureType);
+    }
+  });
+
+  test('a single-key interruption diagnostic keeps its existing refusal (no recovery involved)', () => {
+    const diag = [
+      "  failureType: 'testTimeoutFailure'",
+      "  error: 'timed out after 500ms'",
+    ];
+    const result = classifyRedEvidence(validRedInput({
+      output: dupDiagTAP(diag),
+      targetTest: 'rejects a malformed token',
+      targetFile: undefined,
+    }));
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.deepEqual(result.evidence.report_errors, [INTERRUPTION]);
+  });
+
+  test('a repeated failureType key is ambiguous and stays refused, never recovered', () => {
+    const diag = THROWS_REGEXP_DIAG.flatMap((line) =>
+      line === "  failureType: 'testCodeFailure'"
+        ? [line, "  failureType: 'testCodeFailure'"]
+        : [line]);
+    const result = classifyRedEvidence(validRedInput({
+      output: dupDiagTAP(diag),
+      targetTest: 'rejects a malformed token',
+      targetFile: undefined,
+    }));
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.deepEqual(result.evidence.report_errors, ['Non-TAP data in report', 'Malformed TAP']);
+  });
+
+  test('a repeated failureType key in quoted or single-line flow form is equally refused', () => {
+    for (const diag of [
+      ["  'failureType': 'testTimeoutFailure'", "  'failureType': 'testCodeFailure'"],
+      // One flow-mapping body line repeating failureType: a line-anchored scan alone
+      // would miss it; the interruption signal stays ambiguous either way.
+      ["  {failureType: 'testTimeoutFailure', error: 'a', error: 'b', failureType: 'testCodeFailure'}"],
+    ]) {
+      const result = classifyRedEvidence(validRedInput({
+        output: dupDiagTAP([...diag, "  error: 'first'", "  error: 'second'"]),
+        targetTest: 'rejects a malformed token',
+        targetFile: undefined,
+      }));
+      assert.equal(result.verdict, 'INVALID_RED', JSON.stringify(diag));
+      assert.ok(result.evidence.report_errors.includes('Malformed TAP'), JSON.stringify(diag));
+    }
+  });
+
+  test('a diagnostic block carrying anchors or aliases is refused, never recovered', () => {
+    for (const diag of [
+      ["  failureType: &interrupted 'testTimeoutFailure'", "  saved: *interrupted", "  error: 'a'", "  error: 'b'"],
+      ["  payload: &x ['a']", "  other: *x", "  error: 'a'", "  error: 'b'"],
+    ]) {
+      const result = classifyRedEvidence(validRedInput({
+        output: dupDiagTAP(diag),
+        targetTest: 'rejects a malformed token',
+        targetFile: undefined,
+      }));
+      assert.equal(result.verdict, 'INVALID_RED', JSON.stringify(diag));
+      assert.ok(result.evidence.report_errors.includes('Non-TAP data in report'), JSON.stringify(diag));
+    }
+  });
+
+  test('repeated keys alongside another YAML error stay refused', () => {
+    const diag = [...THROWS_REGEXP_DIAG, '  code: [unclosed'];
+    const result = classifyRedEvidence(validRedInput({
+      output: dupDiagTAP(diag),
+      targetTest: 'rejects a malformed token',
+      targetFile: undefined,
+    }));
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'invalid_record');
+    assert.ok(result.evidence.report_errors.includes('Malformed TAP'));
+  });
+
+  test('malformed YAML without repeated keys stays refused', () => {
+    const diag = [
+      "  failureType: 'testCodeFailure'",
+      '  error: [unclosed',
+    ];
+    const result = classifyRedEvidence(validRedInput({
+      output: dupDiagTAP(diag),
+      targetTest: 'rejects a malformed token',
+      targetFile: undefined,
+    }));
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.ok(result.evidence.report_errors.includes('Malformed TAP'));
+  });
+
+  test('garbage after the TAP plan stays refused', () => {
+    const output = dupDiagTAP(THROWS_REGEXP_DIAG) + 'not tap garbage line\n';
+    const result = classifyRedEvidence(validRedInput({
+      output,
+      targetTest: 'rejects a malformed token',
+      targetFile: undefined,
+    }));
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.ok(result.evidence.report_errors.includes('Non-TAP data in report'));
+  });
+
+  test('a diagnostic block truncated before its closing ... is a truncated record, never RED', () => {
+    const truncated = dupDiagTAP(THROWS_REGEXP_DIAG).replace('  ...\n1..1', '');
+    const result = classifyRedEvidence(validRedInput({
+      output: truncated,
+      targetTest: 'rejects a malformed token',
+      targetFile: undefined,
+    }));
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'invalid_record');
+    assert.ok(result.evidence.report_errors.length > 0);
+  });
+
+  test('a recovered non-target failure reports the policy refusal, not a broken report', () => {
+    const points = ['ok 1 - rejects a malformed token', 'not ok 2 - unrelated legacy behavior'];
+    const result = classifyRedEvidence(validRedInput({
+      output: dupDiagTAP(THROWS_REGEXP_DIAG, points, '1..2'),
+      targetTest: 'rejects a malformed token',
+      targetFile: undefined,
+    }));
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'no_target_test_failure');
+    assert.deepEqual(result.evidence.report_errors, []);
+  });
+});
