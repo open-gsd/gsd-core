@@ -38,6 +38,7 @@ const { RULES } = stateConsistency;
 
 const { buildPlanningSnapshot } = require('../../gsd-core/bin/lib/planning-snapshot.cjs');
 const { SEVERITY, REMEDY_ACTION, REMEDY_RISK } = require('../../gsd-core/bin/lib/health-diagnostic.cjs');
+const { SCOPE } = require('../../gsd-core/bin/lib/planning-scope.cjs');
 
 function planningDirOf(cwd) {
   return path.join(cwd, '.planning');
@@ -695,10 +696,32 @@ describe('W031 — STATE.md far over its documented line target (#5830)', () => 
     assert.equal(STATE_MD_LINE_TARGET, 100);
   });
 
+  // Parity: the drift #5830 fixed was prose (execute-plan.md said 150), so
+  // the shipped documents that state the target are pinned to the constant,
+  // not to a literal. The text of a template/workflow is what the runtime
+  // loads, so it is read here as data.
+  for (const rel of ['gsd-core/templates/state.md', 'gsd-core/workflows/execute-plan.md']) {
+    test(`W031 parity: ${rel} states the same line target as STATE_MD_LINE_TARGET`, () => {
+      const text = fs.readFileSync(path.join(__dirname, '..', '..', rel), 'utf8');
+      const targets = [...text.matchAll(/^Keep STATE\.md under (\d+) lines\.$/gm)].map((m) => Number(m[1]));
+      assert.deepEqual(targets, [STATE_MD_LINE_TARGET], `${rel} must state the target exactly once`);
+    });
+  }
+
   test('W031 is a non-repairable WARNING', () => {
     const rule = ruleFor('W031');
     assert.equal(rule.severity, SEVERITY.WARNING);
     assert.equal(rule.repairable, false);
+  });
+
+  test('W031 does not fire one line below 3x the target', (t) => {
+    const cwd = createTempDir('gsd-5830-w031-0-');
+    t.after(() => cleanup(cwd));
+    writeState(cwd, stateOfLines(threshold() - 1));
+
+    const snapshot = buildPlanningSnapshot(cwd);
+    assert.equal(snapshot.stateLineCount.value, threshold() - 1);
+    assert.deepEqual(ruleFor('W031').check(snapshot), []);
   });
 
   test('W031 does not fire at exactly 3x the target', (t) => {
@@ -754,6 +777,16 @@ describe('W031 — STATE.md far over its documented line target (#5830)', () => 
 
     const snapshot = buildPlanningSnapshot(cwd);
     assert.equal(snapshot.stateLineCount.value, null);
+    assert.deepEqual(ruleFor('W031').check(snapshot), []);
+  });
+
+  test('W031 stays silent when STATE.md is unreadable (a directory)', (t) => {
+    const cwd = createTempDir('gsd-5830-w031-6-');
+    t.after(() => cleanup(cwd));
+    fs.mkdirSync(path.join(planningDirOf(cwd), 'STATE.md'), { recursive: true });
+
+    const snapshot = buildPlanningSnapshot(cwd);
+    assert.deepEqual(snapshot.stateLineCount, { value: null, scope: SCOPE.UNREADABLE });
     assert.deepEqual(ruleFor('W031').check(snapshot), []);
   });
 });
