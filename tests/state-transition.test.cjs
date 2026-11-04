@@ -28,6 +28,7 @@ const {
 const { stateExtractField, computeProgressPercent, toFiniteNumber } = require('../gsd-core/bin/lib/state-document.cjs');
 const { SCOPE } = require('../gsd-core/bin/lib/planning-scope.cjs');
 const { STATE_FIELD_SCHEMA } = require('../gsd-core/bin/lib/state-md-schema.cjs');
+const { comparePhaseNum } = require('../gsd-core/bin/lib/phase-id.cjs');
 const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
 
 const fixedClock = Object.freeze({
@@ -5349,6 +5350,33 @@ describe('#5676: isStatePastPhase under milestone-prefixed', () => {
       '## Current Position', '', 'Phase: Phase 3-02 of 9 (X)', '',
     ].join('\n');
     assert.equal(isStatePastPhase(bodyPosition, '3-01', undefined, MP), true);
+    assert.equal(isStatePastPhase(fm('3-02.1'), '3-02', undefined, MP), true);
+    assert.equal(isStatePastPhase(fm('3-02'), '3-02.1', undefined, MP), false);
+    assert.equal(isStatePastPhase(fm('3-10'), '3-09', undefined, MP), true);
+    assert.equal(isStatePastPhase(fm('3-09'), '3-10', undefined, MP), false);
+    assert.equal(isStatePastPhase(fm('3-02A'), '3-02', undefined, MP), true);
+  });
+
+  const phaseId = fc.tuple(
+    fc.integer({ min: 1, max: 20 }), fc.integer({ min: 1, max: 30 }), fc.option(fc.integer({ min: 1, max: 5 }), { nil: undefined }),
+  ).map(([m, n, d]) => ({ m, id: `${m}-${String(n).padStart(2, '0')}${d === undefined ? '' : `.${d}`}` }));
+
+  test('#5676 property: under milestone-prefixed isStatePastPhase agrees with comparePhaseNum', () => {
+    fc.assert(
+      fc.property(phaseId, phaseId, (a, b) => {
+        assert.equal(isStatePastPhase(fm(a.id), b.id, undefined, MP), comparePhaseNum(a.id, b.id) > 0);
+      }),
+      { seed: 5676, numRuns: 500 },
+    );
+  });
+
+  test('#5676 property: with no convention the leading-integer read is unchanged', () => {
+    fc.assert(
+      fc.property(phaseId, phaseId, (a, b) => {
+        assert.equal(isStatePastPhase(fm(a.id), b.id, undefined, undefined), comparePhaseNum(String(a.m), String(b.m)) > 0);
+      }),
+      { seed: 5676, numRuns: 300 },
+    );
   });
 
   test('#5676: an absent or unparseable current phase is still not past', () => {
