@@ -9542,6 +9542,7 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
 
       const result = runVerifiedPhaseComplete('phase complete 6', tmpDir);
       assert.ok(result.success, `Command failed: ${result.error}`);
+      assert.strictEqual('auto_prune_error' in JSON.parse(result.output), false, '#5831: no error field when auto-prune succeeds');
 
       const newState = readStateMdForAutoPrune(tmpDir);
       assert.doesNotMatch(newState, /\[Phase 1\]: Old decision/);
@@ -9563,7 +9564,13 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
 
       const result = runVerifiedPhaseComplete('phase complete 6', tmpDir);
       assert.ok(result.success, `phase complete must not fail on a best-effort auto-prune: ${result.error}`);
-      assert.strictEqual(JSON.parse(result.output).auto_pruned, false);
+      const out = JSON.parse(result.output);
+      assert.strictEqual(out.auto_pruned, false);
+      assert.strictEqual(typeof out.auto_prune_error, 'string', 'the failure is reported, not swallowed');
+      assert.ok(out.auto_prune_error.length > 0);
+      assert.strictEqual(out.has_warnings, true);
+      assert.strictEqual(out.warnings.filter(w => w.startsWith('auto-prune of STATE.md failed')).length, 1,
+        'one advisory warning names the failed auto-prune');
 
       const { transitionCore } = require('../gsd-core/bin/lib/state-transition.cjs');
       const { realClock } = require('../gsd-core/bin/lib/clock.cjs');
