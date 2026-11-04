@@ -3127,7 +3127,7 @@ function updateCore(
 // prune — intent implementation (Phase 7)
 // ----------------------------------------------------------------------------
 
-type PrunedSection = { section: string; count: number; lines: string[] };
+type PrunedSection = { section: string; count: number; lines: string[]; sourceBody: string };
 
 // Stop predicate for prune section slicing: a level-2 OR level-3 heading ends
 // the section (mirrors state.cts STOP_H2_H3 — Decisions / Recently Completed /
@@ -3179,7 +3179,7 @@ function pruneCore(
     const body = c.slice(bs, se);
     const { keep, archive } = transform(body);
     if (archive.length > 0) {
-      sections.push({ section: sectionName, count: archive.length, lines: archive });
+      sections.push({ section: sectionName, count: archive.length, lines: archive, sourceBody: body });
       c = c.slice(0, bs) + keep.join('\n') + c.slice(se);
     }
   };

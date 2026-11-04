@@ -423,6 +423,8 @@ interface PrunedSection {
   section: string;
   count: number;
   lines: string[];
+  /** #5831: the section's body before the prune (identifies the run; see pruneRunMarker). */
+  sourceBody: string;
 }
 
 const STATE_PROGRESS_RESYNC_FIELDS = new Set([
@@ -7283,17 +7285,26 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
 const STATE_ARCHIVE_HEADER = '# STATE Archive\n\nPruned entries from STATE.md. Recoverable but no longer loaded into agent context.\n\n';
 
 /**
- * #5831: identity of one prune run — sha256 over the exact pre-prune STATE.md
- * bytes and the prune parameters. Recorded in the run's archive block as an
- * HTML comment (`<!-- gsd-prune-run: <hex> -->`, invisible when rendered).
- * The prune's output is a pure function of these inputs, so a later prune
- * with the same marker would archive exactly the same entries again.
+ * #5831: identity of one prune run — sha256 over the prune parameters and the
+ * pre-prune bodies of the sections it prunes (CRLF folded to LF, trailing
+ * whitespace and blank lines ignored). Recorded in the run's archive block as
+ * an HTML comment (`<!-- gsd-prune-run: <hex> -->`, invisible when rendered).
+ * Only the touched sections count, so a retry still matches after another
+ * state command rewrote frontmatter, the session block or other sections in
+ * between; a completed prune removes lines from those bodies, so a later
+ * legitimate prune has a different marker.
  */
-function pruneRunMarker(stateBytes: Buffer, cutoff: number, keepRecent: number): string {
-  return crypto.createHash('sha256')
-    .update(`gsd-prune-run v1\0cutoff=${cutoff}\0keep-recent=${keepRecent}\0`)
-    .update(stateBytes)
-    .digest('hex');
+function pruneRunMarker(sections: PrunedSection[], cutoff: number, keepRecent: number): string {
+  const hash = crypto.createHash('sha256').update(`gsd-prune-run v2\0cutoff=${cutoff}\0keep-recent=${keepRecent}\0`);
+  for (const s of sections) {
+    const body = s.sourceBody
+      .split('\n')
+      .map(l => l.replace(/\s+$/, ''))
+      .filter(l => l.length > 0)
+      .join('\n');
+    hash.update(`${s.section}\0${body}\0`);
+  }
+  return hash.digest('hex');
 }
 
 const PRUNE_RUN_MARKER_LINE = /^<!-- gsd-prune-run: ([0-9a-f]{64}) -->\r?$/gm;
@@ -7387,15 +7398,16 @@ function errMessage(e: unknown): string {
  * restored before the error propagates.
  *
  * Returns null, writing nothing, when the archive's most recent block carries
- * this run's marker: an earlier run with the same STATE.md bytes and
- * parameters published its block but never rewrote STATE.md (killed between
- * the two writes, or a failed STATE.md write whose archive restore also
- * failed). Its block already holds exactly these entries, so the retry only
- * rewrites STATE.md. A completed prune changes STATE.md, so a later
- * legitimate prune — even of an identical entry that was added again — has a
- * different marker and is archived again. (If STATE.md is put back to the
- * byte-identical pre-prune file, e.g. by reverting it in git, the same
- * occurrences are already archived and are not archived twice.)
+ * this run's marker: an earlier run with the same parameters and the same
+ * pruned-section bodies published its block but never rewrote STATE.md
+ * (killed between the two writes, or a failed STATE.md write whose archive
+ * restore also failed). Its block already holds exactly these entries, so the
+ * retry only rewrites STATE.md. A completed prune removes lines from those
+ * sections, so a later legitimate prune — even of an identical entry that was
+ * added again — normally has a different marker and is archived again. (If
+ * those section bodies are put back exactly as they were before the prune,
+ * e.g. by reverting STATE.md in git, the same occurrences are already archived
+ * and are not archived twice.)
  */
 function publishPrunedToArchive(
   statePath: string,
@@ -7408,7 +7420,7 @@ function publishPrunedToArchive(
   if (stateBytes === null) throw new Error(`state prune: ${statePath} disappeared while its lock was held`);
   const archiveBytes = platformReadBytesSync(archivePath);
   const existing = archiveBytes === null ? null : archiveBytes.toString('utf-8');
-  const run = pruneRunMarker(stateBytes, cutoff, keepRecent);
+  const run = pruneRunMarker(sections, cutoff, keepRecent);
   if (existing !== null && lastPruneRunMarker(existing) === run) return null;
 
   const plan = planStateArchiveAppend(existing, sections, { date: realClock.localToday(), cutoff, keepRecent, run });
