@@ -1794,3 +1794,36 @@ describe('bracket phase declarations agree across heading and bullet spellings (
     assert.deepStrictEqual(declared('## [CK.02] 2 — Foundation'), []);
   });
 });
+
+describe('#5676: phaseScanTokenSource under milestone-prefixed', () => {
+  const ctx = phaseId.phaseDirectoryContext({});
+  const split = (source, name) => {
+    const m = new RegExp('^(' + source + ')-?(.*)', 'i').exec(name);
+    return m ? [m[1], m[2]] : null;
+  };
+
+  test('reads the M-NN token whole from a directory-style name', () => {
+    const source = phaseId.phaseScanTokenSource(ctx, 'milestone-prefixed');
+    assert.deepStrictEqual(split(source, '03-02-beta'), ['03-02', 'beta']);
+    assert.deepStrictEqual(split(source, '3-01-alpha'), ['3-01', 'alpha']);
+    assert.deepStrictEqual(split(source, '03-02.1-fix'), ['03-02.1', 'fix']);
+    assert.deepStrictEqual(split(source, '03-beta'), ['03', 'beta']);
+  });
+
+  for (const convention of [undefined, null, '', 'bracket', 'sequential']) {
+    test(`convention ${JSON.stringify(convention)} keeps the dotted-only token source`, () => {
+      const source = phaseId.phaseScanTokenSource(ctx, convention);
+      assert.strictEqual(source, phaseId.phaseScanTokenSource(ctx));
+      assert.deepStrictEqual(split(source, '03-02-beta'), ['03', '02-beta']);
+    });
+  }
+
+  test('token source capture agrees with parsePhaseFromProse', () => {
+    const source = phaseId.phaseScanTokenSource(ctx, 'milestone-prefixed');
+    for (const id of ['3-01', '03-02', '3-02A', '3-02.1', '12-10']) {
+      const m = new RegExp('^(' + source + ')\\b', 'i').exec(id);
+      assert.ok(m, `token source reads ${id}`);
+      assert.strictEqual(m[1], phaseId.parsePhaseFromProse(id, 'milestone-prefixed').phase, id);
+    }
+  });
+});

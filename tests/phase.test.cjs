@@ -18778,69 +18778,91 @@ describe('#5679: phase insert names another milestone', () => {
 });
 
 describe('#5676: phase.complete under milestone-prefixed', () => {
-  test('#5676: re-completing 3-01 does not rewind STATE from 3-02', () => {
+  // firstTime=false: 3-01 already complete, STATE on 3-02 (re-completion).
+  // firstTime=true: 3-01 unchecked/in progress, STATE on 3-01.
+  const buildFixture = (firstTime) => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5676-'));
-    try {
-      const put = (rel, lines) => {
-        const file = path.join(tmp, rel);
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, lines.join('\n'));
-      };
-      put('.planning/config.json', [JSON.stringify({ phase_id_convention: 'milestone-prefixed' })]);
-      put('.planning/ROADMAP.md', [
-        '---',
-        'phase_id_convention: milestone-prefixed',
-        '---',
-        '',
-        '# Roadmap',
-        '',
-        '## [GSD] v1.0 — Core',
-        '',
-        '- [x] **Phase 3-01: Alpha**',
-        '- [ ] **Phase 3-02: Beta**',
-        '',
-        '### Phase 3-01: Alpha',
-        '**Goal:** A',
-        '**Plans**: 1 plans',
-        '',
-        '### Phase 3-02: Beta',
-        '**Goal:** B',
-        '**Plans**: 1 plans',
-        '',
-        '## Progress',
-        '',
-        '| Phase | Plans Complete | Status | Completed |',
-        '|-------|----------------|--------|-----------|',
-        '| 3-01. Alpha | 1/1 | Complete | 2026-10-01 |',
-        '| 3-02. Beta | 0/1 | In progress | - |',
-        '',
-      ]);
-      put('.planning/phases/03-01-alpha/03-01-01-PLAN.md', ['# Plan', '']);
-      put('.planning/phases/03-01-alpha/03-01-01-SUMMARY.md', ['# Summary', '']);
-      put('.planning/phases/03-01-alpha/03-01-VERIFICATION.md', ['---', 'status: passed', '---', '', '# Verification', '']);
-      put('.planning/phases/03-02-beta/03-02-01-PLAN.md', ['# Plan', '']);
-      put('.planning/STATE.md', [
-        '---',
-        'milestone: v1.0',
-        'current_phase: 3-02',
-        'status: executing',
-        '---',
-        '',
-        '# State',
-        '',
-        '## Current Position',
-        '',
-        'Phase: 3-02 of 2 (Beta)',
-        'Plan: 1 of 1 in current phase',
-        'Status: In progress',
-        '',
-      ]);
-      gitOrThrow(['init', '-q'], { cwd: tmp });
-      gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: tmp });
-      gitOrThrow(['config', 'user.name', 'Test'], { cwd: tmp });
-      gitOrThrow(['add', '-A'], { cwd: tmp });
-      gitOrThrow(['commit', '-qm', 'init'], { cwd: tmp });
+    const put = (rel, lines) => {
+      const file = path.join(tmp, rel);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, lines.join('\n'));
+    };
+    put('.planning/config.json', [JSON.stringify({ phase_id_convention: 'milestone-prefixed' })]);
+    put('.planning/ROADMAP.md', [
+      '---',
+      'phase_id_convention: milestone-prefixed',
+      '---',
+      '',
+      '# Roadmap',
+      '',
+      '## [GSD] v1.0 — Core',
+      '',
+      firstTime ? '- [ ] **Phase 3-01: Alpha**' : '- [x] **Phase 3-01: Alpha**',
+      '- [ ] **Phase 3-02: Beta**',
+      '',
+      '### Phase 3-01: Alpha',
+      '**Goal:** A',
+      '**Plans**: 1 plans',
+      '',
+      '### Phase 3-02: Beta',
+      '**Goal:** B',
+      '**Plans**: 1 plans',
+      '',
+      '## Progress',
+      '',
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|----------------|--------|-----------|',
+      firstTime ? '| 3-01. Alpha | 0/1 | In progress | - |' : '| 3-01. Alpha | 1/1 | Complete | 2026-10-01 |',
+      '| 3-02. Beta | 0/1 | In progress | - |',
+      '',
+    ]);
+    put('.planning/phases/03-01-alpha/03-01-01-PLAN.md', ['# Plan', '']);
+    put('.planning/phases/03-01-alpha/03-01-01-SUMMARY.md', ['# Summary', '']);
+    put('.planning/phases/03-01-alpha/03-01-VERIFICATION.md', ['---', 'status: passed', '---', '', '# Verification', '']);
+    put('.planning/phases/03-02-beta/03-02-01-PLAN.md', ['# Plan', '']);
+    put('.planning/STATE.md', [
+      '---',
+      'milestone: v1.0',
+      firstTime ? 'current_phase: 3-01' : 'current_phase: 3-02',
+      'status: executing',
+      '---',
+      '',
+      '# State',
+      '',
+      '## Current Position',
+      '',
+      firstTime ? 'Phase: 3-01 of 2 (Alpha)' : 'Phase: 3-02 of 2 (Beta)',
+      'Plan: 1 of 1 in current phase',
+      'Status: In progress',
+      '',
+    ]);
+    gitOrThrow(['init', '-q'], { cwd: tmp });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: tmp });
+    gitOrThrow(['config', 'user.name', 'Test'], { cwd: tmp });
+    gitOrThrow(['add', '-A'], { cwd: tmp });
+    gitOrThrow(['commit', '-qm', 'init'], { cwd: tmp });
+    return tmp;
+  };
 
+  test('#5676: first-time completion of 3-01 advances STATE to 3-02', () => {
+    const tmp = buildFixture(true);
+    try {
+      const result = runGsdTools(['query', 'phase.complete', '3-01'], tmp, { HOME: tmp });
+      assert.ok(result.success, `phase.complete should succeed: ${result.error}`);
+
+      const state = fs.readFileSync(path.join(tmp, '.planning', 'STATE.md'), 'utf8');
+      assert.match(state, /^current_phase: "?0?3-02"?$/m);
+      assert.match(state, /^current_phase_name: "?Beta"?$/m);
+      assert.match(state, /^Phase: .*3-02/m);
+      assert.doesNotMatch(state, /02: beta/i);
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('#5676: re-completing 3-01 does not rewind STATE from 3-02', () => {
+    const tmp = buildFixture(false);
+    try {
       const result = runGsdTools(['query', 'phase.complete', '3-01'], tmp, { HOME: tmp });
       assert.ok(result.success, `phase.complete should succeed: ${result.error}`);
 
