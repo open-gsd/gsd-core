@@ -669,6 +669,23 @@ describe('CLI: quick-tasks-append (#3356)', () => {
       assert.equal(QUICK_TASK_DESCRIPTION_MAX_CHARS, 240);
     });
 
+    // Parity: the Quick Tasks bound and the #2618 Pending Todos bullet cap
+    // are one number (STATE_MD_ENTRY_MAX_CHARS). The second assertion is
+    // behavioral, so it fails if init.cts ever stops capping at the shared
+    // constant, not only if the exported names disagree.
+    test('parity: the Quick Tasks bound equals the #2618 Pending Todos bullet cap', () => {
+      const { STATE_MD_ENTRY_MAX_CHARS } = require('../gsd-core/bin/lib/state-md-schema.cjs');
+      const { renderPendingTodosMarkdown } = require('../gsd-core/bin/lib/init.cjs');
+      assert.equal(QUICK_TASK_DESCRIPTION_MAX_CHARS, STATE_MD_ENTRY_MAX_CHARS);
+      const bullet = renderPendingTodosMarkdown([{
+        created: '2026-09-01',
+        area: 'api',
+        title: 'x'.repeat(STATE_MD_ENTRY_MAX_CHARS * 2),
+        path: '.planning/todos/pending/2026-09-01-x.md',
+      }], '/repo');
+      assert.equal(bullet.length, STATE_MD_ENTRY_MAX_CHARS, 'an over-long todo bullet is capped at the shared bound');
+    });
+
     test('a long description warns, exits 0, and is stored verbatim', (t) => {
       const description = 'Long summary sentence. '.repeat(40).trim();
       assert.ok(description.length > 240, 'precondition: description exceeds the limit');
@@ -687,6 +704,14 @@ describe('CLI: quick-tasks-append (#3356)', () => {
       const { r } = appendTask(t, 'Fix thing');
       assert.ok(r.success, r.error);
       assert.deepEqual(JSON.parse(r.output).warnings, []);
+    });
+
+    test('boundary: 239 characters produces no warning', (t) => {
+      const description = 'a'.repeat(239);
+      const { r, state } = appendTask(t, description);
+      assert.ok(r.success, r.error);
+      assert.deepEqual(JSON.parse(r.output).warnings, []);
+      assert.ok(state.includes(`| ${description} |`));
     });
 
     test('boundary: exactly 240 characters produces no warning', (t) => {

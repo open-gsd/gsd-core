@@ -112,6 +112,17 @@ export const STATUS_LIFECYCLE_ENUM = Object.freeze([
  */
 export const STATE_MD_LINE_TARGET = 100;
 
+/**
+ * The length bound for one STATE.md digest entry, in UTF-16 code units
+ * (JavaScript `string.length`, so an astral-plane emoji counts as 2). Set by
+ * #2618 for "Pending Todos" bullets (`PENDING_TODO_BULLET_MAX_CHARS`,
+ * `src/init.cts`, which truncates to it) and reused by #5830 for the Quick
+ * Tasks `Description` cell (`QUICK_TASK_DESCRIPTION_MAX_CHARS`,
+ * `src/markdown-table.cts`, which only warns past it). Both name this one
+ * constant so the two bounds cannot drift apart.
+ */
+export const STATE_MD_ENTRY_MAX_CHARS = 240;
+
 // ─── The schema row shape ───────────────────────────────────────────────────
 
 export type StateFieldSchema = {
