@@ -1420,7 +1420,7 @@ const MAX_PRIOR_BYTES = 2 * 1024 * 1024;
  * bound is enforced on the bytes actually read from one open descriptor, so a
  * file that grows after the check cannot exceed it.
  */
-function readPriorMarkdown(filePath: string, encoding: BufferEncoding): string | undefined {
+export function readPriorMarkdown(filePath: string, encoding: BufferEncoding): string | undefined {
   let fd: number | undefined;
   try {
     // O_NONBLOCK keeps opening a FIFO from waiting for a writer; it is absent on Windows.
