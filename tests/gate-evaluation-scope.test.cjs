@@ -45,18 +45,21 @@ function write(dir, rel, content) {
   fs.writeFileSync(target, content, 'utf8');
 }
 
-function makeRepo() {
+function makeRepo({ deferScaffold = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-scope-'));
   dirs.push(dir);
   const git = (...args) => gitOrThrow(args, { cwd: dir, env: { ...process.env, ...IDENTITY } }).trim();
   git('init', '--initial-branch=main');
   git('config', 'user.email', 'test@test.io');
   git('config', 'user.name', 'Test');
-  write(dir, '.planning/config.json', '{}');
-  write(dir, `${PHASE_DIR}/03-CONTEXT.md`, 'context\n');
-  git('add', '.');
-  git('commit', '-m', 'docs(03): scaffold phase');
-  return { dir, git };
+  const scaffold = () => {
+    write(dir, '.planning/config.json', '{}');
+    write(dir, `${PHASE_DIR}/03-CONTEXT.md`, 'context\n');
+    git('add', '.');
+    git('commit', '-m', 'docs(03): scaffold phase');
+  };
+  if (!deferScaffold) scaffold();
+  return { dir, git, scaffold };
 }
 
 /** Commit one real file; returns the full sha. */
@@ -245,11 +248,16 @@ function gitReporting(version) {
   return { runner, calls };
 }
 
-/** phase branch with one task commit, base with `src/base.js`; returns the repo and the task sha. */
+/**
+ * phase branch with one task commit, base with `src/base.js`; returns the repo and the task sha. The
+ * phase directory is scaffolded ON the phase branch, after the fork point, so `rangeBase` is the fork
+ * commit (not the empty tree) and a catch-up merge forks at the phase start (#5751).
+ */
 function divergedRepo() {
-  const repo = makeRepo();
+  const repo = makeRepo({ deferScaffold: true });
   commit(repo, 'src/shared.js', 'chore: shared', 'v0\n');
   repo.git('checkout', '-b', 'phase');
+  repo.scaffold();
   const task = commit(repo, 'src/phase.js', 'feat(03-01): phase work');
   repo.git('checkout', 'main');
   commit(repo, 'src/base.js', 'feat: base work');
@@ -423,7 +431,7 @@ describe('resolveEvaluationScope — outsideUnion and merge-only scopes (#5751)'
     assert.equal(scope.status, 'resolved');
     assert.deepEqual(scope.changedFiles, ['src/phase.js']);
     assert.ok(!scope.outsideUnion.includes('src/base.js'));
-    assert.deepEqual(scope.outsideUnion, ['src/shared.js', 'src/unlisted.js']);
+    assert.deepEqual(scope.outsideUnion, ['src/unlisted.js']);
   });
 
   test('[regression] a listed resolved catch-up merge does not put the base delta in outsideUnion', () => {
@@ -442,7 +450,7 @@ describe('resolveEvaluationScope — outsideUnion and merge-only scopes (#5751)'
     summarize(repo, [task, repo.git('rev-parse', 'HEAD')]);
     const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
     assert.equal(scope.status, 'resolved');
-    assert.deepEqual(scope.outsideUnion, ['src/base.js', 'src/shared.js']);
+    assert.deepEqual(scope.outsideUnion, ['src/base.js']);
   });
 
   test('[boundary] a SUMMARY listing only a clean phase-into-base merge degrades to the phase range', () => {
@@ -510,6 +518,76 @@ describe('resolveEvaluationScope — outsideUnion and merge-only scopes (#5751)'
     assert.equal(scope.status, 'resolved');
     assert.ok(scope.outsideUnion.includes('src/sub.js'));
     assert.ok(scope.outsideUnion.includes('src/phase-two.js'));
+  });
+
+  test('[regression] a sub-branch forked from an UNLISTED phase commit is never subtracted (fork-point rule)', () => {
+    const { repo, task } = divergedRepo();
+    commit(repo, 'src/unlisted.js', 'feat(03-01): unlisted phase commit');
+    repo.git('checkout', '-b', 'sub');
+    commit(repo, 'src/sub.js', 'feat(03-01): sub-branch work no SUMMARY lists');
+    repo.git('checkout', 'phase');
+    commit(repo, 'src/phase-two.js', 'feat(03-01): second phase commit');
+    repo.git('merge', '--no-ff', 'sub', '-m', 'chore: merge sub-branch');
+    summarize(repo, [task, repo.git('rev-parse', 'HEAD')]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.ok(scope.outsideUnion.includes('src/sub.js'), 'the fork point is phase work, so the side is phase work');
+    assert.ok(scope.outsideUnion.includes('src/unlisted.js'));
+  });
+
+  test('[boundary] the first catch-up forks at the phase start and is subtracted; a second catch-up is reported (accepted cost)', () => {
+    const { repo, task } = divergedRepo();
+    const first = (() => { repo.git('merge', '--no-ff', 'main', '-m', 'chore: first catch up'); return repo.git('rev-parse', 'HEAD'); })();
+    repo.git('checkout', 'main');
+    commit(repo, 'src/base-two.js', 'feat: more base work');
+    repo.git('checkout', 'phase');
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: second catch up');
+    summarize(repo, [task, first, repo.git('rev-parse', 'HEAD')]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.ok(!scope.outsideUnion.includes('src/base.js'), 'the first catch-up forks at the phase start');
+    // The second catch-up forks at the first catch-up\'s main commit, after the phase start: the
+    // resolver cannot tell it from a sub-branch, so it errs toward reporting (advisory false positive).
+    assert.ok(scope.outsideUnion.includes('src/base-two.js'));
+  });
+
+  test('[boundary] a merge with no merge-base subtracts nothing', () => {
+    const { repo, task } = divergedRepo();
+    repo.git('checkout', '--orphan', 'unrelated');
+    repo.git('rm', '-rf', '.');
+    commit(repo, 'src/orphan.js', 'feat: unrelated history');
+    repo.git('checkout', 'phase');
+    repo.git('merge', '--no-ff', '--allow-unrelated-histories', 'unrelated', '-m', 'chore: merge unrelated');
+    summarize(repo, [task, repo.git('rev-parse', 'HEAD')]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.ok(scope.outsideUnion.includes('src/orphan.js'));
+  });
+
+  test('[boundary] a phase directory that arrived with the root commit (empty-tree rangeBase) subtracts nothing', () => {
+    const repo = makeRepo();
+    repo.git('checkout', '-b', 'phase');
+    const task = commit(repo, 'src/phase.js', 'feat(03-01): phase work');
+    repo.git('checkout', 'main');
+    commit(repo, 'src/base.js', 'feat: base work');
+    repo.git('checkout', 'phase');
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up with main');
+    summarize(repo, [task, repo.git('rev-parse', 'HEAD')]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.ok(scope.outsideUnion.includes('src/base.js'));
+  });
+
+  test('[boundary] a merge-base check that times out subtracts nothing', () => {
+    const { repo, task } = divergedRepo();
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up with main');
+    summarize(repo, [task, repo.git('rev-parse', 'HEAD')]);
+    const runner = (args, opts) => (args[0] === 'merge-base' && args[1] !== '--is-ancestor'
+      ? { exitCode: null, stdout: '', stderr: '', signal: 'SIGTERM', error: null, timedOut: true }
+      : realExecGit(args, opts));
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' }, { execGit: runner });
+    assert.equal(scope.status, 'resolved');
+    assert.ok(scope.outsideUnion.includes('src/base.js'));
   });
 
   test('[regression] an unlisted phase edit to a file the base also touched stays in outsideUnion after a catch-up merge', () => {
