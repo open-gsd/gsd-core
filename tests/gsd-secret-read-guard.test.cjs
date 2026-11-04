@@ -1181,6 +1181,7 @@ describe('gsd-secret-read-guard: nested shell behind a wrapper with flags (#5627
     'stdbuf -oL', 'stdbuf -i0 -oL -eL', 'stdbuf --output=L', 'setsid', 'setsid -w', 'exec', 'exec -a name',
     'nohup', 'sudo -u root', 'sudo -E', 'sudo --', 'sudo -u root -g wheel', 'doas -u root',
     'sudo -c staff', 'sudo --login-class staff', 'sudo -a bsdauth', 'sudo --auth-type bsdauth', 'doas -a passwd',
+    'sudo --login', 'sudo --login -u root',
     'nice -n 5 timeout -s KILL 5 env -i', 'sudo -n timeout 5 nohup',
   ];
   for (const w of wrappers) {
@@ -1257,7 +1258,12 @@ describe('gsd-secret-read-guard: sudo/doas value options the wrapper table misse
     });
   }
 
-  const stillBlocked = ['sudo -u root cat .env', 'doas -u root cat .env', 'sudo -c staff cat .env', 'sudo -E cat .env'];
+  // `--login` (sudo's -i) takes no value. It must not prefix-match the valued
+  // `--login-class`, or `cat` becomes its value and `.env` the command word.
+  const stillBlocked = [
+    'sudo -u root cat .env', 'doas -u root cat .env', 'sudo -c staff cat .env', 'sudo -E cat .env',
+    'sudo --login cat .env', "sudo --login bash -c 'cat .env'", 'sudo --login -u root cat .env',
+  ];
   for (const cmd of stillBlocked) {
     test(`still blocks ${JSON.stringify(cmd)}`, () => {
       assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
@@ -1266,10 +1272,18 @@ describe('gsd-secret-read-guard: sudo/doas value options the wrapper table misse
 
   // The option consumes exactly one word: the command after the value is
   // resolved, and a no-value option (-n, -E, -H) still resolves to the next word.
-  const allows = ['sudo -c staff ls .env', 'doas -a passwd ls .env', 'sudo --auth-type bsdauth ls .env', 'sudo -n ls .env', 'sudo -E -H ls .env'];
+  const allows = ['sudo -c staff ls .env', 'doas -a passwd ls .env', 'sudo --auth-type bsdauth ls .env', 'sudo -n ls .env', 'sudo -E -H ls .env', 'sudo --login ls .env'];
   for (const cmd of allows) {
     test(`allows ${JSON.stringify(cmd)}`, () => {
       assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  // The xargs-pipe check resolves the UPSTREAM command with resolveCommand
+  // (xargs's own sub-command word is taken as is), so the wrapper sits upstream.
+  for (const cmd of ['sudo -c staff echo .env | xargs cat', 'sudo --login echo .env | xargs cat']) {
+    test(`the xargs-pipe check resolves the upstream command: ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
     });
   }
 
