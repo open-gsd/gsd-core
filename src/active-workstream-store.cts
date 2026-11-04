@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { probeTty, platformWriteSync, platformReadSync, platformEnsureDir } from './shell-command-projection.cjs';
+import { probeTty, platformWriteSync, platformReadSync, platformEnsureDir, readBoundedRegularFile } from './shell-command-projection.cjs';
 import {
   isValidActiveWorkstreamName,
   isReservedWorkstreamName,
@@ -513,9 +513,67 @@ function applyResolvedWorkstreamEnv(
   env['GSD_WORKSTREAM'] = resolution.ws;
 }
 
+// #5328: the workstream an `init --ws` of `session` used, kept session-scoped beside the pointer files as "<name> <written at, ms>"
+// (a name, never a model) so the Agent model guard compares against what `init` reported. A carry older than
+// INIT_WORKSTREAM_MAX_AGE_MS counts for nothing, and the next record prunes it. No session id: nothing is kept.
+function initWorkstreamKey(session: string | undefined): string | null {
+  const token = sanitizeWorkstreamSessionToken(session);
+  return token ? `init-ws-${token}` : null;
+}
+
+function initWorkstreamAdapter(cwd: string, session: string | undefined): WorkstreamPointerAdapter | null {
+  const key = initWorkstreamKey(session);
+  return key ? createSessionScopedPointerAdapter(cwd, key) : null;
+}
+
+/** How long an `init --ws` carry counts: longer than one execute-phase run, yet it expires within a day; every `init --ws` restarts it. */
+const INIT_WORKSTREAM_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+
+/** A carry is "<name> <ms>": far below this, so a larger file is not one. */
+const INIT_WORKSTREAM_MAX_BYTES = 1024;
+
+function freshInitWorkstream(raw: string | null, now: number): string | null {
+  const [name, at] = (raw ?? '').trim().split(' ');
+  const age = now - Number(at);
+  return name && age >= 0 && age < INIT_WORKSTREAM_MAX_AGE_MS ? name : null;
+}
+
+/** The carry file's text, or null when it is missing, not a regular file, unreadable or longer than INIT_WORKSTREAM_MAX_BYTES bytes: the bounded read (O_NONBLOCK, `fstat` on the opened descriptor, refusal on the size before any byte is read) is readBoundedRegularFile's, so a FIFO, a device or an oversized file planted at the path never blocks, streams or is loaded. */
+function readCarry(file: string): string | null {
+  return readBoundedRegularFile(file, 'utf-8', INIT_WORKSTREAM_MAX_BYTES) ?? null;
+}
+
+/** Records `name` for `session` at `now` and prunes this project's expired carries (best effort, one entry at a time); false when nothing was recorded (no session id, or an invalid name). */
+function recordInitWorkstream(cwd: string, session: string | undefined, name: string, now: number): boolean {
+  const adapter = initWorkstreamAdapter(cwd, session);
+  if (!adapter || !validateWorkstreamName(name)) return false;
+  adapter.write(`${name} ${now}`);
+  try {
+    const { dirPath } = getSessionScopedWorkstreamFile(cwd, 'init-ws-') as SessionScopedWorkstreamFile;
+    for (const f of fs.readdirSync(dirPath)) {
+      if (!f.startsWith('init-ws-')) continue;
+      const file = path.join(dirPath, f);
+      try {
+        if (freshInitWorkstream(readCarry(file), now) === null) fs.rmSync(file, { force: true });
+      } catch { /* an entry that cannot be removed does not stop the sweep */ }
+    }
+  } catch { /* pruning is cleanup only: the carry above is recorded */ }
+  return true;
+}
+
+function peekInitWorkstream(cwd: string, session: string | undefined, now: number): string | null {
+  const key = initWorkstreamKey(session);
+  const scoped = key ? getSessionScopedWorkstreamFile(cwd, key) : null;
+  return scoped ? freshInitWorkstream(readCarry(scoped.filePath), now) : null;
+}
+
 export = {
   validateWorkstreamName,
   getWorkstreamSessionKey,
+  WORKSTREAM_SESSION_ENV_KEYS,
+  recordInitWorkstream,
+  peekInitWorkstream,
+  INIT_WORKSTREAM_MAX_AGE_MS,
   createSharedPointerAdapter,
   createSessionScopedPointerAdapter,
   createMemoryPointerAdapter,

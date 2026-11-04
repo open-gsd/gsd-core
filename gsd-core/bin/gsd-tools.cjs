@@ -2587,7 +2587,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   // (the injection case above — the .toml surface never had to consider this
   // because TOML string-quoting isn't a shell argv boundary) is dropped with
   // a warning rather than ever reaching child_process argv.
-  // Single source of truth for the model-id "allowed characters" notion
+  // Single source of truth for the model-id "allowed characters" notion (owned by src/model-escalation.cts since #5328, which the Agent model guard also reads)
   // (#3714 follow-up — "Generative Fix Divergence"): the accept regex
   // (MODEL_ID_CHARSET_RE, used to ADMIT a pin) and the sanitizer keep-class
   // (MODEL_ID_SANITIZE_STRIP_RE, used to RENDER a rejected pin into a
@@ -2603,7 +2603,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   // (MODEL_ID_SANITIZE_STRIP_RE, `[^BODY]`) below — only plain characters
   // and `x-y` ranges are safe here. A class metacharacter (`^`, `]`, `\`)
   // would mean different things in the two derived regexes if ever added.
-  const MODEL_ID_CHARSET_BODY = 'A-Za-z0-9._:/@-';
+  const { MODEL_ID_CHARSET_BODY } = require('./lib/model-escalation.cjs');
   // The first character must be alphanumeric (#3714 hardening): a leading
   // '.', '_', ':', '/', or '@' has no legitimate model-id use case and, for
   // resolveOrchestratorExec's documented role as a GENERAL descriptor→argv
@@ -4885,6 +4885,23 @@ const HOST_COMMAND_ROUTERS = {
   // ran before the router in the old `case 'init':` arm.
   init: (ctx) => {
     try { warnIfStaleBake(ctx.cwd); } catch { /* guard must never break init */ }
+    // #5328: the Agent model guard compares against the workstream `init` used; the hook never sees --ws, so carry it.
+    const ws = ctx.workstreamContext;
+    if (ws && ws.source === 'cli') {
+      try {
+        const esc = require('./lib/model-escalation.cjs');
+        const root = esc.escalationRoot(ctx.cwd);
+        // Only a workstream init resolves (the directory its config loader reads): a --ws naming none adds no guard baseline.
+        const exists = fs.statSync(planningDir(root, ws.ws), { throwIfNoEntry: false })?.isDirectory() === true;
+        const recorded = exists && require('./lib/active-workstream-store.cjs').recordInitWorkstream(
+          root, process.env.CLAUDE_CODE_SESSION_ID, ws.ws, require('./lib/clock.cjs').realClock.now());
+        if (exists && !recorded && esc.guardApplies(root)) {
+          process.stderr.write(`gsd: --ws ${ws.ws} not recorded for the Agent model guard: no CLAUDE_CODE_SESSION_ID\n`);
+        }
+      } catch (e) {
+        process.stderr.write(`gsd: --ws ${ws.ws} not recorded for the Agent model guard: ${e.message}\n`);
+      }
+    }
     routeInitCommand({ init, ...ctx });
   },
   // capability → routeCapabilityCommand (ADR-2346 P2). The router is async

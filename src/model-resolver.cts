@@ -519,8 +519,9 @@ function resolveTierInternal(cwd: string, agentType: string): string {
   return resolveTierFromConfig(loadConfig(cwd), agentType);
 }
 
-function resolveModelInternal(cwd: string, agentType: string): string {
-  const config = loadConfig(cwd);
+// `loadOptions` reaches loadConfig: a read-only caller (the #5328 hook) passes `{ persist: false }`.
+function resolveModelInternal(cwd: string, agentType: string, loadOptions: Record<string, unknown> = {}): string {
+  const config = loadConfig(cwd, loadOptions);
 
   // 1. Per-agent override (#2041: map Claude full IDs → Agent-tool aliases on
   // the claude runtime, mirroring the model_policy path #1144; non-Claude
@@ -1113,6 +1114,7 @@ export = {
   resolveModelInternal,
   resolveTierInternal,
   resolveTierFromConfig,
+  hasNativeModelAliases,
   _resetModelPolicyWarningCacheForTests,
   _resetModelOverrideWarningCacheForTests,
   _setInstallRuntimeMarkerForTests,
