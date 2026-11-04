@@ -151,6 +151,7 @@ describe('config-field-docs', () => {
       'git.base_branch',
       'git.phase_branch_template',
       'git.milestone_branch_template',
+      'git.commit_timeout_ms',
     ];
     const missing = gitFields.filter(f => !content.includes(`\`${f}\``));
     assert.deepStrictEqual(
