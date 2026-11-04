@@ -102,6 +102,12 @@ const {
   editCurrentMilestone,
   findMilestoneScopeHeadingLines,
   getMilestoneInfo,
+  // #5679: the STATE.md milestone read getMilestoneInfo itself uses, and the
+  // archive-aware owner of a ROADMAP offset.
+  readStateMilestoneScalar,
+  classifyMilestoneScalar,
+  milestoneVersionAtOffset,
+  blankCodeAndComments,
   scanMilestonePhaseIds,
   // #4304: every recognized milestone heading in the document,
   // not just the active one — see bracketProgressSectionOwnedByOtherMilestone.
@@ -2495,6 +2501,31 @@ function isPhaseTokenWithin(token: string, ancestor: string): boolean {
   return a.every((segment, i) => canon(segment) === canon(t[i]));
 }
 
+/**
+ * #5679: the `phase insert` error for a phase that exists in the ROADMAP but
+ * outside the current milestone. Names the milestone that holds it (archive
+ * aware, never the current one) and the current milestone, saying "STATE.md's"
+ * only when STATE.md's `milestone:` is where that version came from.
+ */
+function otherMilestonePhaseMessage(rawContent: string, foundAt: number, cwd: string, afterPhase: string): string {
+  let stateVersion: string | null = null;
+  try {
+    const stateRaw = platformReadSync(path.join(planningDir(cwd), 'STATE.md'));
+    const scalar = stateRaw === null ? null : readStateMilestoneScalar(stateRaw);
+    if (scalar !== null) stateVersion = classifyMilestoneScalar(scalar).version;
+  } catch { /* unreadable STATE.md: getMilestoneInfo's own fallback below decides */ }
+  const derivedVersion = (getMilestoneInfo(cwd) as { value?: { version?: string } | null }).value?.version ?? null;
+  const current = stateVersion ?? derivedVersion;
+  const owner = milestoneVersionAtOffset(rawContent, foundAt);
+  const ownerClause = owner && owner.toLowerCase() !== current?.toLowerCase()
+    ? `is in milestone ${owner}`
+    : 'is outside the current milestone';
+  let currentClause = 'the current milestone does not include it';
+  if (stateVersion) currentClause = `STATE.md's current milestone is ${stateVersion}`;
+  else if (derivedVersion) currentClause = `the current milestone is ${derivedVersion}`;
+  return `Phase ${afterPhase} ${ownerClause}, but ${currentClause}. phase insert only targets phases in the current milestone.`;
+}
+
 function cmdPhaseInsert(
   cwd: string,
   afterPhase: string,
@@ -2586,7 +2617,8 @@ function cmdPhaseInsert(
     );
     const roadmapHasHeadingPhases = anyHeadingPattern.test(content);
     // #4304: bracket identities live in headings only, so a bracket ROADMAP never takes the legacy bullet-insertion branch — a bullet-only bracket ROADMAP falls through to the checklist-refusal path below instead.
-    const isBulletStyle = !bracketContext && !headingMatch && bulletPattern.test(content) && !roadmapHasHeadingPhases;
+    const liveCurrent = blankCodeAndComments(content);
+    const isBulletStyle = !bracketContext && !headingMatch && bulletPattern.test(liveCurrent) && !roadmapHasHeadingPhases;
 
     if (bracketContext && !bracketHeading) {
       const searchedRanges = bracketSectionRanges?.details
@@ -2602,10 +2634,20 @@ function cmdPhaseInsert(
         `${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
         'i',
       );
-      if (checklistPattern.test(content)) {
+      if (checklistPattern.test(liveCurrent)) {
         error(
           `Phase ${afterPhase} exists in roadmap summary but is missing a detail section (### Phase ${afterPhase}: ...).`,
         );
+      }
+      // #5679: this whole-file probe only chooses the error message; insert
+      // stays current-milestone-only and never writes to another milestone.
+      // Fenced blocks and HTML comments are masked (same length, offsets stay aligned) so example text never counts as a phase.
+      const liveContent = blankCodeAndComments(rawContent);
+      const headingOffset = tokenizeHeadings(liveContent).find((h) => targetPattern.test(h.text))?.offset;
+      const checklistOffset = checklistPattern.exec(liveContent)?.index;
+      const foundOffsets = [headingOffset, checklistOffset].filter((o): o is number => o !== undefined);
+      if (foundOffsets.length > 0) {
+        error(otherMilestonePhaseMessage(rawContent, Math.min(...foundOffsets), cwd, afterPhase));
       }
       error(`Phase ${afterPhase} not found in ROADMAP.md`);
     }
@@ -2679,7 +2721,7 @@ function cmdPhaseInsert(
         'i',
         { bold: 'required' },
       );
-      const useBold = boldBulletPattern.test(content);
+      const useBold = boldBulletPattern.test(liveCurrent);
       const phaseLabel = useBold
         ? `**Phase ${_decimalPhase}: ${description}**`
         : `Phase ${_decimalPhase}: ${description}`;
@@ -2706,13 +2748,13 @@ function cmdPhaseInsert(
         `Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\r\\n]*`,
         'i',
       );
-      const bulletMatchResult = rawContent.match(targetBulletPattern);
+      // Match against the masked text (same length, offsets aligned) so a fenced or commented example bullet is never the splice anchor; splice into the original text at the masked match index.
+      const bulletMatchResult = blankCodeAndComments(rawContent).match(targetBulletPattern);
       if (!bulletMatchResult) {
         error(`Could not find Phase ${afterPhase} bullet line`);
       }
 
-      const bulletLineEnd =
-        rawContent.indexOf(bulletMatchResult![0]) + bulletMatchResult![0].length;
+      const bulletLineEnd = bulletMatchResult!.index! + bulletMatchResult![0].length;
       const afterBullet = rawContent.slice(bulletLineEnd);
       // #5599: land after the last bullet inside the allocation family's
       // subtree, not before the first following bullet of any number (which is
