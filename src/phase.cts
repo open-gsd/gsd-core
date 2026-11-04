@@ -1946,7 +1946,9 @@ function currentMilestoneWindowOrRefuse(rawContent: string, cwd: string, command
     error(
       `${command}: STATE.md names milestone ${echoStateMilestone(shippedMilestone)}, which ROADMAP.md marks as already shipped, `
         + 'so the current milestone window is a closed one. Refusing to number the phase or link its dependencies '
-        + 'against a shipped milestone. Start the next milestone (or correct the milestone field in STATE.md), then retry.',
+        + 'against a shipped milestone. Start the next milestone (or correct the milestone field in STATE.md), then retry. '
+        + 'If the heading is not shipped and its title merely contains a status word (such as "Failed Payment Recovery"), '
+        + 'rename the milestone, or add an active marker to the heading, for example \u{1f6a7} or "(in progress)".',
     );
   }
   if (unresolvedMilestone) {
