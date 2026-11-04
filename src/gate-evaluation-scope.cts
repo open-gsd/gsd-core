@@ -531,17 +531,29 @@ function subjectsFor(git: Git, shas: readonly string[], withBody: boolean, chunk
 
 /**
  * The files a listed two-parent merge brought in from its SECOND parent's side: base work, not the
- * unit's. Only when no listed commit sits on that side (`<p2> ^<p1>`): a phase branch merged into
- * its base has its own task commits there, and its files are the unit's, not the base's.
+ * unit's. A merge contributes nothing when ANY of these holds, so unlisted phase work is never hidden:
+ * a listed commit sits on that side (`<p2> ^<p1>`: a phase branch merged into its base); a listed
+ * non-merge commit is an ancestor of `<p2>` (a branch forked from the phase, whose unlisted commits
+ * are phase work); or the file was touched by a commit on the phase side (`<rangeBase>..<p1> ^<p2>`,
+ * listed or not). Only files touched solely by the second parent's side are subtracted.
  */
-function baseSideMergeFiles(git: Git, merges: readonly string[], parentsOf: ParentMap, listed: ReadonlySet<string>): Set<string> {
+function baseSideMergeFiles(
+  git: Git, merges: readonly string[], parentsOf: ParentMap, listed: ReadonlySet<string>,
+  listedNonMerge: readonly string[], rangeBase: string,
+): Set<string> {
   const files = new Set<string>();
   for (const sha of merges) {
     const parents = parentsOf.get(sha) ?? [];
     if (parents.length !== 2) continue;
-    const secondSide = git(['rev-list', parents[1] ?? '', `^${parents[0] ?? ''}`]).split('\n').filter(Boolean);
+    const [p1 = '', p2 = ''] = parents;
+    const secondSide = git(['rev-list', p2, `^${p1}`]).split('\n').filter(Boolean);
     if (secondSide.some((entry) => listed.has(entry))) continue;
-    for (const file of rangeFiles(git, `${sha}^1`, sha)) files.add(file);
+    if (listedNonMerge.some((entry) => isAncestor(git, entry, p2))) continue;
+    const phaseSide = new Set(splitNul(git([
+      '-c', 'core.quotepath=off', 'log', '--format=', '--name-only', '-z', p1, `^${p2}`,
+      ...(rangeBase === EMPTY_TREE ? [] : [`^${rangeBase}`]), '--', '.', ...SCOPE_EXCLUSION_PATHSPECS,
+    ])));
+    for (const file of rangeFiles(git, `${sha}^1`, sha)) if (!phaseSide.has(file)) files.add(file);
   }
   return files;
 }
@@ -633,7 +645,6 @@ function resolvePhase(
   scope.rangeBase = options.since ?? phaseRangeBase(git, phaseDir, ref);
 
   const union = new Set<string>();
-  const nonMergeFiles = new Set<string>();
   const merges: string[] = [];
   const parentsOf: ParentMap = new Map();
   const commits: ScopeCommit[] = [];
@@ -644,16 +655,14 @@ function resolvePhase(
     const parentCount = parentsOf.get(meta.sha)?.length ?? 0;
     const files = commitFiles(git, meta.sha, parentCount);
     if (parentCount > 1) merges.push(meta.sha);
-    for (const file of files) {
-      union.add(file);
-      if (parentCount <= 1) nonMergeFiles.add(file);
-    }
+    for (const file of files) union.add(file);
     commits.push(withFiles ? { ...meta, files: [...files].sort() } : meta);
   }
 
-  // Listed merges and nothing else of the unit's own: a merge carries only its resolutions, so the
-  // union is not the phase's work (a SUMMARY that lists just the phase-into-base merge sha).
-  const mergeOnly = merges.length > 0 && nonMergeFiles.size === 0;
+  // Every listed commit is a merge: a merge carries only its resolutions, so the union is not the
+  // phase's work (a SUMMARY that lists just the phase-into-base merge sha). A listed task commit that
+  // touched only excluded paths is still a task commit, so it keeps the pre-existing reasons.
+  const mergeOnly = merges.length > 0 && merges.length === commits.length;
   if (union.size > 0 && !mergeOnly) {
     scope.source = 'task-commits';
     scope.commits = commits;
@@ -663,7 +672,8 @@ function resolvePhase(
       const window = rangeFiles(git, scope.rangeBase, newestOf(git, [...listed], chunkSize));
       // The window still holds what a listed catch-up merge brought in from the base; that is base
       // work the union deliberately omits, not phase work another commit did.
-      const baseSide = baseSideMergeFiles(git, merges, parentsOf, listed);
+      const listedNonMerge = commits.filter((c) => (parentsOf.get(c.sha)?.length ?? 0) <= 1).map((c) => c.sha);
+      const baseSide = baseSideMergeFiles(git, merges, parentsOf, listed, listedNonMerge, scope.rangeBase);
       scope.outsideUnion = uniqueSorted(window.filter((f) => !union.has(f) && !baseSide.has(f)));
     }
     return;
