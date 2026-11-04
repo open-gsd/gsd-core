@@ -1255,17 +1255,33 @@ describe('#5715: config-dir rewrites are single-pass and literal', () => {
     ['A ' + prefix + 'x', 'B ' + bareOf(prefix), 'C ' + prefix + 'y', 'D ' + bareOf(prefix)].join('\n');
   const expectedSlash = (prefix) => ['A ' + prefix + 'x', 'B ' + prefix + 'y'].join('\n');
 
-  test('#5715: nested config dir rewritten once per profile', () => {
+  test('#5715: nested config dir rewritten once per profile (exact output)', () => {
     const prefix = '$HOME/.claude/profiles/work/';
     for (const id of ALL_IDS) {
-      const out = _applyRuntimeRewrites(SLASH_SRC, id, prefix, true, undefined);
-      assert.strictEqual(occurrences(out, 'profiles/work'), 2, `${id}: ${JSON.stringify(out)}`);
-      assert.ok(!out.includes('profiles/work/profiles/work'), `${id}: ${JSON.stringify(out)}`);
-    }
-    for (const id of BARE_IDS) {
       assert.strictEqual(_applyRuntimeRewrites(SLASH_SRC, id, prefix, true, undefined), expectedSlash(prefix), id);
     }
-    assert.strictEqual(_applyRuntimeRewrites(SLASH_SRC, 'codex', prefix, true, undefined), expectedSlash(prefix));
+  });
+
+  describe('branded profiles (qwen, hermes)', () => {
+    const src = ['A ~/.claude/x', 'B $HOME/.claude', 'C ./.claude/z', 'D .claude/skills/q', 'E a/.claude/b'].join('\n');
+    const expectedBranded = (id, prefix) =>
+      ['A ' + prefix + 'x', 'B ' + bareOf(prefix), `C ./.${id}/z`, `D .${id}/skills/q`, `E a/.${id}/b`].join('\n');
+    for (const id of ['qwen', 'hermes']) {
+      test(`#5715: ${id} nested prefix is emitted once and never re-branded`, () => {
+        const prefix = '$HOME/.claude/profiles/work/';
+        assert.strictEqual(_applyRuntimeRewrites(src, id, prefix, true, undefined), expectedBranded(id, prefix));
+      });
+
+      test(`#5715: ${id} default prefix output`, () => {
+        const prefix = `$HOME/.${id}/`;
+        assert.strictEqual(_applyRuntimeRewrites(src, id, prefix, true, undefined), expectedBranded(id, prefix));
+      });
+
+      test(`#5715: ${id} absolute prefix containing .claude/ is emitted once`, () => {
+        const prefix = '/opt/proj/.claude/home/';
+        assert.strictEqual(_applyRuntimeRewrites(src, id, prefix, true, undefined), expectedBranded(id, prefix));
+      });
+    }
   });
 
   test('#5715: bare form nested rewritten once', () => {
@@ -1387,33 +1403,59 @@ describe('#5715: config-dir rewrites are single-pass and literal', () => {
     }
   });
 
-  test('#5715: long config dir boundary', () => {
-    const NAME_MAX = 255;
-    for (const len of [NAME_MAX - 1, NAME_MAX, NAME_MAX + 1]) {
-      const prefix = `$HOME/.claude/${'a'.repeat(len)}/`;
-      for (const id of ['cline', 'cursor']) {
-        assert.strictEqual(_applyRuntimeRewrites(BARE_SRC, id, prefix, true, undefined), expectedBare(prefix), `${id} ${len}`);
+  // Reference model: the output for ANY prefix equals the output for a placeholder
+  // prefix that contains no source form, with the placeholder replaced literally.
+  // A prefix can only differ from the model if a rewrite pass re-scanned it.
+  const PLACEHOLDER = '$HOME/.zzplaceholder/';
+  const modelOf = (id, source, prefix) =>
+    _applyRuntimeRewrites(source, id, PLACEHOLDER, true, undefined)
+      .split(PLACEHOLDER)
+      .join(prefix)
+      .split(bareOf(PLACEHOLDER))
+      .join(bareOf(prefix));
+  const PROFILE_IDS = ['codex', 'cline', 'cursor', 'windsurf', 'augment', 'trae', 'codebuddy', 'claude', 'pi', 'qwen', 'hermes', 'kimi'];
+  const OWN_FORM = {
+    codex: '~/.codex/o', cline: '~/.cline/o', cursor: '~/.cursor/o', windsurf: '~/.codeium/windsurf/o',
+    augment: '~/.augment/o', trae: '~/.trae/o', codebuddy: '~/.codebuddy/o', qwen: '~/.qwen/o', hermes: '~/.hermes/o',
+  };
+  const SOURCE_FORMS = [
+    '~/.claude/x', '$HOME/.claude/y', '~/.claude', '$HOME/.claude', './.claude/z', './.claude',
+    '.claude/skills/q', '~/.claude.json', '~/.claude-plugin/q', '$HOME/.claudex', './.claude-x',
+    '~/.devin/skills/x', './.devin/skills/x', '.devin/skills/y', './.devin/x', '~/.devin', '$HOME/.devin',
+  ];
+
+  test('#5715: config dir name boundaries around .claude (limit-1, limit, limit+1)', () => {
+    // `.claud` is one short of a source form; `.claude` is the form itself; `.claude.`,
+    // `.claude-`, `.claudex` and `.claude/` are the characters just past it.
+    const source = SOURCE_FORMS.join('\n');
+    for (const cfg of ['.claud', '.claude', '.claude.', '.claude-', '.claudex', '.claude/', '.claude/profiles/work']) {
+      const prefix = `$HOME/${cfg}/`;
+      for (const id of PROFILE_IDS) {
+        if (id === 'claude' && cfg === '.claude') continue; // a default install keeps the bare spelling
+        assert.strictEqual(_applyRuntimeRewrites(source, id, prefix, true, undefined), modelOf(id, source, prefix), `${id} ${cfg}`);
       }
-    }
-    const PATH_MAX = 4096;
-    for (const total of [PATH_MAX - 1, PATH_MAX, PATH_MAX + 1]) {
-      const head = '$HOME/.claude/';
-      const prefix = head + 'b'.repeat(total - head.length - 1) + '/';
-      assert.strictEqual(prefix.length, total);
-      assert.strictEqual(_applyRuntimeRewrites(BARE_SRC, 'cline', prefix, true, undefined), expectedBare(prefix), `total ${total}`);
     }
   });
 
-  test('#5715: look-alike source forms preserved', () => {
-    const src = [
-      'a ~/.claude-plugin/plugin.json',
-      'b $HOME/.claudeignore',
-      'c ~/.claude.json',
-      'd $HOME/.claude.d/q',
-      'e ~/.claude.d',
-    ].join('\n');
-    for (const id of BARE_IDS) {
-      assert.strictEqual(_applyRuntimeRewrites(src, id, '$HOME/.claude-work/', true, undefined), src, id);
+  test('#5715: default-install output for .claude look-alikes equals the pre-#5715 output', () => {
+    // Goldens captured from a build of origin/next (the code before #5715).
+    const forms = ['~/.claude', '~/.claude.', '~/.claude-', '~/.claudex', '~/.claude/', '~/.claude.json', '~/.claude-plugin', '$HOME/.claude.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'];
+    const golden = {
+      codex: ['~/.claude', '~/.claude.', '~/.claude-', '~/.claudex', '$HOME/.codex/', '~/.claude.json', '~/.claude-plugin', '$HOME/.claude.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'],
+      cline: ['$HOME/.cline', '$HOME/.cline.', '$HOME/.cline-', '~/.claudex', '$HOME/.cline/', '$HOME/.cline.json', '$HOME/.cline-plugin', '$HOME/.cline.json', '$HOME/.cline-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'],
+      cursor: ['$HOME/.cursor', '$HOME/.cursor.', '~/.claude-', '~/.claudex', '$HOME/.cursor/', '$HOME/.cursor.json', '~/.claude-plugin', '$HOME/.cursor.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.cursor.json', './.claude-x', './.claudex'],
+      windsurf: ['$HOME/.windsurf', '$HOME/.windsurf.', '~/.claude-', '~/.claudex', '$HOME/.windsurf/', '$HOME/.windsurf.json', '~/.claude-plugin', '$HOME/.windsurf.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'],
+      augment: ['$HOME/.augment', '$HOME/.augment.', '~/.claude-', '~/.claudex', '$HOME/.augment/', '$HOME/.augment.json', '~/.claude-plugin', '$HOME/.augment.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.augment.json', './.claude-x', './.claudex'],
+      trae: ['$HOME/.trae', '$HOME/.trae.', '$HOME/.trae-', '~/.claudex', '$HOME/.trae/', '$HOME/.trae.json', '$HOME/.trae-plugin', '$HOME/.trae.json', '$HOME/.trae-plugin', '$HOME/.claudex', './.trae.json', './.trae-x', './.claudex'],
+      codebuddy: ['$HOME/.codebuddy', '$HOME/.codebuddy.', '$HOME/.codebuddy-', '~/.claudex', '$HOME/.codebuddy/', '$HOME/.codebuddy.json', '$HOME/.codebuddy-plugin', '$HOME/.codebuddy.json', '$HOME/.codebuddy-plugin', '$HOME/.claudex', './.codebuddy.json', './.codebuddy-x', './.claudex'],
+      claude: ['~/.claude', '~/.claude.', '~/.claude-', '~/.claudex', '$HOME/.claude/', '~/.claude.json', '~/.claude-plugin', '$HOME/.claude.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'],
+      pi: ['$HOME/.pi', '$HOME/.pi.', '~/.claude-', '~/.claudex', '$HOME/.pi/', '$HOME/.pi.json', '~/.claude-plugin', '$HOME/.pi.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.pi.json', './.claude-x', './.claudex'],
+      qwen: ['$HOME/.qwen', '$HOME/.qwen.', '~/.claude-', '~/.claudex', '$HOME/.qwen/', '$HOME/.qwen.json', '~/.claude-plugin', '$HOME/.qwen.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'],
+      hermes: ['$HOME/.hermes', '$HOME/.hermes.', '~/.claude-', '~/.claudex', '$HOME/.hermes/', '$HOME/.hermes.json', '~/.claude-plugin', '$HOME/.hermes.json', '$HOME/.claude-plugin', '$HOME/.claudex', './.claude.json', './.claude-x', './.claudex'],
+    };
+    for (const [id, expected] of Object.entries(golden)) {
+      const actual = forms.map((form) => _applyRuntimeRewrites(form, id, `$HOME/.${id}/`, true, undefined));
+      assert.deepStrictEqual(actual, expected, id);
     }
   });
 
@@ -1440,24 +1482,118 @@ describe('#5715: config-dir rewrites are single-pass and literal', () => {
     assert.ok(!skill.includes('.trae/profiles'), skill);
   });
 
-  test('#5715 property: rewrite is single-pass and idempotent', () => {
-    const piece = fc.constantFrom('~/.claude/x', '$HOME/.claude/y', '~/.claude', '$HOME/.claude');
-    const dir = fc.constantFrom('.claude', '.claude.', '.claude/profiles/work', '.cl$&ude', '.a$`b', ".a$'b", '.cfg', '.claude.d');
-    fc.assert(
-      fc.property(fc.array(piece, { maxLength: 8 }), dir, (pieces, cfg) => {
-        const prefix = `$HOME/${cfg}/`;
-        const source = pieces.join('\n');
-        const model = pieces.map((p) => (p.endsWith('/x') || p.endsWith('/y') ? prefix + p.slice(-1) : bareOf(prefix))).join('\n');
-        const out = _applyRuntimeRewrites(source, 'cline', prefix, true, undefined);
-        assert.strictEqual(out, model);
-        // one-to-one: every source form yields exactly one prefix
-        assert.strictEqual(occurrences(out, bareOf(prefix)), pieces.length);
-        // idempotent when the config dir does not itself contain a source form
-        if (cfg !== '.claude/profiles/work' && cfg !== '.claude.' && cfg !== '.claude.d') {
-          assert.strictEqual(_applyRuntimeRewrites(out, 'cline', prefix, true, undefined), out);
+  describe('windsurf .devin forms', () => {
+    const WS = '$HOME/.codeium/windsurf/';
+    // The pre-#5715 sequential output, pinned (the text before `.devin` survives).
+    const cases = [
+      ['~/.devin/skills/x', '~/$HOME/.codeium/windsurf/skills/x'],
+      ['$HOME/.devin/skills/x', '$HOME/$HOME/.codeium/windsurf/skills/x'],
+      ['./.devin/skills/x', './$HOME/.codeium/windsurf/skills/x'],
+      ['.devin/skills/y', '$HOME/.codeium/windsurf/skills/y'],
+      ['./.devin/x', '$HOME/.codeium/windsurf/x'],
+      ['~/.devin/x', '$HOME/.codeium/windsurf/x'],
+      ['~/.devin', '$HOME/.codeium/windsurf'],
+      ['~/.devin.json', '$HOME/.codeium/windsurf.json'],
+      ['~/.devin-x', '~/.devin-x'],
+    ];
+    test('#5715: global install keeps the pre-#5715 .devin output', () => {
+      for (const [input, expected] of cases) {
+        assert.strictEqual(_applyRuntimeRewrites(input, 'windsurf', WS, true, undefined), expected, input);
+      }
+    });
+
+    test('#5715: workspace install leaves .devin forms alone', () => {
+      for (const [input] of cases) {
+        assert.strictEqual(_applyRuntimeRewrites(input, 'windsurf', './.windsurf/', false, undefined), input, input);
+      }
+    });
+
+    test('#5715: a .devin-named prefix is emitted once (the sequential pass rescanned it)', () => {
+      assert.strictEqual(_applyRuntimeRewrites('~/.devin/x', 'windsurf', '$HOME/.devin/sub/', true, undefined), '$HOME/.devin/sub/x');
+      assert.strictEqual(_applyRuntimeRewrites('~/.devin', 'windsurf', '$HOME/.devin/sub/', true, undefined), '$HOME/.devin/sub');
+    });
+  });
+
+  describe('Trae agents and spec-tree paths (the prefix is emitted before the Trae converter)', () => {
+    const TRAE_SRC = 'See ~/.claude/gsd-core/x.md and $HOME/.claude y and .claude/skills/z and ./.claude/k';
+    const TRAE_PREFIXES = ['/opt/proj/.claude/trae-home/', './.claude/x/', '.claude/x/', '$HOME/.claude/profiles/work/'];
+    const expectedTrae = (prefix) => `See ${prefix}gsd-core/x.md and ${bareOf(prefix)} y and .trae/skills/z and ./.trae/k`;
+
+    test('#5715: spec-tree copy leaves a prefix containing .claude/ intact', () => {
+      for (const prefix of TRAE_PREFIXES) {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5715-trae-tree-'));
+        try {
+          fs.mkdirSync(path.join(root, 'from'));
+          fs.writeFileSync(path.join(root, 'from', 'a.md'), TRAE_SRC);
+          installJs.copyWithPathReplacement(path.join(root, 'from'), path.join(root, 'to'), prefix, 'trae', false, true, root);
+          assert.strictEqual(fs.readFileSync(path.join(root, 'to', 'a.md'), 'utf8'), expectedTrae(prefix), prefix);
+        } finally {
+          require('./helpers.cjs').cleanup(root);
         }
+      }
+    });
+
+    test('#5715: agents pipeline leaves a prefix containing .claude/ intact', () => {
+      const { stageAgentsForRuntimeWithConverter } = require('../gsd-core/bin/lib/install-profiles.cjs');
+      for (const prefix of TRAE_PREFIXES) {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5715-trae-agents-'));
+        let staged;
+        try {
+          const agentsDir = path.join(root, 'agents');
+          fs.mkdirSync(agentsDir);
+          fs.writeFileSync(path.join(agentsDir, 'probe.md'), '---\nname: probe\ndescription: d\n---\n' + TRAE_SRC);
+          staged = stageAgentsForRuntimeWithConverter(
+            agentsDir,
+            { name: 'full', skills: '*', agents: new Set() },
+            (content, isGlobal, meta) => conv.convertClaudeAgentToTraeAgent(content, isGlobal, meta),
+            true,
+            { runtime: 'trae', pathPrefix: prefix, attribution: undefined, targetDir: root, projectDir: root },
+          );
+          const out = fs.readFileSync(path.join(staged, 'probe.md'), 'utf8');
+          assert.ok(out.endsWith(expectedTrae(prefix)), `${prefix}: ${JSON.stringify(out)}`);
+          assert.strictEqual(occurrences(out, bareOf(prefix)), 2, `${prefix}: ${JSON.stringify(out)}`);
+        } finally {
+          require('./helpers.cjs').cleanup(root);
+          if (staged) require('./helpers.cjs').cleanup(staged);
+        }
+      }
+    });
+
+    test('#5715: the Trae layout threads the emitted prefix to the agent converter', () => {
+      const prefix = '/opt/proj/.claude/trae-home/';
+      const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5715-trae-layout-'));
+      let staged;
+      try {
+        // The marker names the shipped commands root, which locates the shipped agents/.
+        fs.writeFileSync(path.join(configDir, '.gsd-source'), path.resolve(__dirname, '..', 'commands', 'gsd'));
+        const layout = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs').resolveRuntimeArtifactLayout('trae', configDir, 'global');
+        const agents = layout.kinds.find((kind) => kind.kind === 'agents');
+        staged = agents.stage(
+          { name: 'full', skills: '*', agents: new Set() },
+          { runtime: 'trae', pathPrefix: prefix, attribution: undefined, targetDir: configDir, projectDir: configDir },
+        );
+        const files = fs.readdirSync(staged).filter((name) => name.endsWith('.md'));
+        assert.ok(files.length > 0);
+        const all = files.map((name) => fs.readFileSync(path.join(staged, name), 'utf8')).join('\n');
+        assert.ok(all.includes(prefix), 'the emitted prefix is present');
+        assert.ok(!all.includes('/opt/proj/.trae/'), 'the emitted prefix was not rewritten to .trae/');
+      } finally {
+        require('./helpers.cjs').cleanup(configDir);
+        if (staged) require('./helpers.cjs').cleanup(staged);
+      }
+    });
+  });
+
+  test('#5715 property: every profile emits the prefix once per source form and never rescans it', () => {
+    const cfg = fc.constantFrom('.claude', '.claude.', '.claude-', '.claudex', '.claude/', '.claude/profiles/work', '.claude.d', '.cl$&ude', '.a$`b', ".a$'b", '.cfg');
+    fc.assert(
+      fc.property(fc.constantFrom(...PROFILE_IDS), fc.array(fc.constantFrom(...SOURCE_FORMS), { maxLength: 8 }), cfg, (id, pieces, dir) => {
+        if (id === 'claude' && dir === '.claude') return; // a default install keeps the bare spelling
+        const prefix = `$HOME/${dir}/`;
+        const source = pieces.concat(OWN_FORM[id] ? [OWN_FORM[id]] : []).join('\n');
+        assert.strictEqual(_applyRuntimeRewrites(source, id, prefix, true, undefined), modelOf(id, source, prefix));
       }),
-      { seed: 5715, numRuns: 200 },
+      { seed: 5715, numRuns: 400 },
     );
   });
 });
