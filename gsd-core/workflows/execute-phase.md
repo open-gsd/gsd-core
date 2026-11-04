@@ -247,8 +247,15 @@ if [ "$TDD_MODE" = "true" ]; then
     # match at every depth. NOT widened to ordinary source — that would make
     # the gate pass on any in-scope commit. Trade-offs and the Rust gap:
     # references/tdd.md § Create first test file.
+    # #5766: every pathspec carries git's `:(icase)` magic prefix, because git
+    # pathspecs are case-SENSITIVE while the router (`isTestFilePath`) is not.
+    # Without it a RED commit touching only `Tests/foo.rs`, `__TESTS__/a.js` or
+    # `Foo.TEST.js` was invisible to the gate, and the task was asked for a RED
+    # commit that already existed. These literals are pinned to
+    # `TEST_FILE_GIT_PATHSPECS` (src/tdd-test-files.cts) by a contract test, so
+    # the router and this gate cannot drift apart again — in EITHER direction.
 
-    RED_COMMIT=$(gsd_run check evaluation-scope --plan "${PHASE_NUMBER}-${PLAN_ID}" --commits-only --milestone-bound --max-commits 1 --raw --pathspec "*.test.*" --pathspec "*.spec.*" --pathspec "tests/" --pathspec "__tests__/" --pathspec "*_test.go" --pathspec "test_*.py" --pathspec "*_test.py" --pathspec "*_test.exs" --pathspec "*_spec.rb" --pathspec "*_test.rb" 2>/dev/null) && RED_SCOPE_RC=0 || RED_SCOPE_RC=$?
+    RED_COMMIT=$(gsd_run check evaluation-scope --plan "${PHASE_NUMBER}-${PLAN_ID}" --commits-only --milestone-bound --max-commits 1 --raw --pathspec ":(icase)*.test.*" --pathspec ":(icase)*.spec.*" --pathspec ":(icase)tests/" --pathspec ":(icase)__tests__/" --pathspec ":(icase)*_test.go" --pathspec ":(icase)test_*.py" --pathspec ":(icase)*_test.py" --pathspec ":(icase)*_test.exs" --pathspec ":(icase)*_spec.rb" --pathspec ":(icase)*_test.rb" 2>/dev/null) && RED_SCOPE_RC=0 || RED_SCOPE_RC=$?
     # Exit 69 (UNAVAILABLE) = the scope could not be resolved: that is not "missing RED commit" (#5170).
     if [ "$RED_SCOPE_RC" -ne 0 ]; then echo "TDD GATE UNAVAILABLE: could not resolve the plan's commits for ${PLAN_ID}/${TASK_ID} (evaluation-scope exit ${RED_SCOPE_RC})"; exit 1; fi
     RED_COMMIT=$(printf '%s' "$RED_COMMIT" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const c=JSON.parse(s).commits;process.stdout.write(c.length?c[0].sha.slice(0,10)+' '+c[0].subject:'')}catch{}})")
