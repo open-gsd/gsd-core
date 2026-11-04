@@ -267,6 +267,43 @@ describe('#5726 phase write verbs on an unresolved STATE milestone', () => {
     }
   }
 
+  // One owner predicate: every spelling of "closed" that the window selection
+  // treats as closed is also refused as a shipped STATE milestone.
+  const closedShapes = [
+    ['a trailing title-case Shipped', '## v1.0 MVP Shipped'],
+    ['a lowercase status after a dash with a date', '## v1.0 MVP - shipped 2026-01-01'],
+    ['a lowercase status in a parenthetical beside another version', '## v1.0 MVP (shipped, replaces v0.9)'],
+    ['a leading check mark', '## ✅ v1.0'],
+    ['a trailing check mark and capitals', '## v1.0 Core ✅ SHIPPED'],
+  ];
+  for (const [shape, heading] of closedShapes) {
+    for (const [verb, run] of VERBS) {
+      test(`${verb} refuses a STATE milestone v1.0 whose heading is ${shape}`, () => {
+        const roadmap = `# Roadmap\n\n${heading}\n\n### Phase 1: One\n**Goal:** a\n\n## v2.0 Cur\n\n### Phase 2: Two\n**Goal:** b\n\n`;
+        setup({ roadmap, milestone: 'v1.0' });
+        const beforeRoadmap = roadmapBytes();
+
+        const result = run(tmpDir);
+
+        assert.equal(result.success, false, `${verb} must refuse: ${result.output}`);
+        assert.ok(/already shipped/.test(result.error), `must say already shipped: ${result.error}`);
+        assert.ok(roadmapBytes().equals(beforeRoadmap), 'ROADMAP.md must be byte-identical');
+      });
+    }
+  }
+
+  for (const summary of ['v1.0 MVP - shipped 2026-01-01', '✅ v1.0 MVP', 'v1.0 MVP Shipped']) {
+    test(`phase add refuses a STATE milestone v1.0 whose <details> summary is "${summary}"`, () => {
+      const roadmap = `# Roadmap\n\n## v2.0 Current\n\n### Phase 4: Four\n**Goal:** d\n\n<details>\n<summary>${summary}</summary>\n\n### Phase 1: One\n**Goal:** a\n\n</details>\n`;
+      setup({ roadmap, milestone: 'v1.0' });
+      const beforeRoadmap = roadmapBytes();
+      const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+      assert.equal(result.success, false, result.output);
+      assert.ok(/already shipped/.test(result.error), result.error);
+      assert.ok(roadmapBytes().equals(beforeRoadmap), 'ROADMAP.md must be byte-identical');
+    });
+  }
+
   test('STATE milestone v2.0 (not shipped) beside a shipped v1.0 heading still allocates normally', () => {
     setup({ roadmap: SHIPPED_HEADING, milestone: 'v2.0' });
     const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
@@ -336,7 +373,7 @@ describe('#5726 phase write verbs on an unresolved STATE milestone', () => {
     // Bidi controls, zero-width and format characters, and line separators are
     // invisible or reorder the terminal line: each must be shown as \uXXXX.
     // U+2028/U+2029 end the STATE line, so they are placed after a printable tail.
-    for (const codePoint of [0x7f, 0x85, 0x9f, 0x200b, 0x200f, 0x202a, 0x202e, 0x2066, 0x2069, 0xfeff, 0x2028, 0x2029]) {
+    for (const codePoint of [0x7f, 0x85, 0x9f, 0xad, 0x61c, 0x180e, 0x200b, 0x200f, 0x202a, 0x202e, 0x2060, 0x2064, 0x2066, 0x2069, 0x206f, 0xfeff, 0xfff9, 0xfffa, 0xfffb, 0x2028, 0x2029]) {
       const hex = codePoint.toString(16).padStart(4, '0');
       test(`U+${hex.toUpperCase()} in the echoed milestone is escaped, never raw`, () => {
         const result = refusalFor(`v9.9${String.fromCharCode(codePoint)}tail`);
