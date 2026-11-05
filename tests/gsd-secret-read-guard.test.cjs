@@ -804,19 +804,16 @@ describe('gsd-secret-read-guard: git command lines beyond -c keys (#5492)', () =
     assertBlocked(runHook(bash(cmd)), cmd, { code: 'alias-too-complex', tool: 'Bash' });
   });
 
-  // n flat definitions invoking the first: one expansion each, defined or
-  // invoked, so the 256-expansion budget is met exactly at n = 256.
+  // n flat definitions invoking the first: only the invoked one spends the
+  // 256-expansion budget (the others are scanned but never invoked), so n
+  // past 256 is allowed too.
   const flatAliases = (n) => `git ${Array.from({ length: n }, (_, k) => `-c alias.q${k + 1}=status`).join(' ')} q1`;
-  for (const n of [255, 256]) {
-    test(`${n} alias expansions in one git command are allowed`, () => {
+  for (const n of [255, 256, 257]) {
+    test(`${n} flat alias definitions in one git command are allowed`, () => {
       const cmd = flatAliases(n);
       assertAllowed(runHook(bash(cmd)), cmd);
     });
   }
-  test('257 alias expansions in one git command fail closed', () => {
-    const cmd = flatAliases(257);
-    assertBlocked(runHook(bash(cmd)), cmd, { code: 'alias-too-complex', tool: 'Bash' });
-  });
 
   // Only invocations spend the 256-expansion budget: `top` runs a script
   // that invokes `q` n − 1 times, so n aliases are invoked in all. A
