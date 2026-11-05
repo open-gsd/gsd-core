@@ -122,6 +122,7 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.match(pass, /\bone answers\b/, 'one real citation must not carry a second that is missing, and one must answer');
     assert.match(pass, /outside Claude's Discretion/, 'a Discretion entry delegates the choice, so it records no ruling');
     assert.match(pass, /not added during this planning run/);
+    assert.match(pass, /`git log -p` on CONTEXT\.md/, 'the not-added condition must name a check the checker can run');
   });
 
   test('no CONTEXT.md leaves every question a BLOCKER', () => {
