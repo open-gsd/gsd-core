@@ -1937,6 +1937,7 @@ function findDebuggerCliSpawnEitherWay(command) {
 function findSecretRead(command, depth) {
   if (depth > 0) return readEachWay(command, depth);
   if (!inHeredocPass) braceTagRead = false;
+  heldNested = null;
   scanUnfinished = false;
   readingsRan = false;
   scanBudget = MAX_SCAN_CHARACTERS;
@@ -1955,6 +1956,7 @@ function findSecretRead(command, depth) {
   const unfinished = scanUnfinished;
   if (hit === null && readingsRan && (!unfinished || failure !== null)) hit = readAsBefore(command);
   if (hit !== null) return hit;
+  if (heldNested !== null) return heldNested;
   if (unfinished || scanUnfinished) return { code: 'command-too-complex', text: '' };
   if (failure !== null) throw failure;
   return null;
@@ -2059,14 +2061,27 @@ function unfinishedBy(e) {
 
 // The first error in a reading that was not a limit: a bug. The hook reports it
 // when it has found nothing to deny (main), so that a reading that stopped
-// working does not go unseen, and no denial any scan would make is lost to it.
+// working does not go unseen. The other scans run on, and their denials stand;
+// what that reading alone would have denied at that level is lost with it.
 let readingBug = null;
 
-// findSecretRead below the top level: the readings of `command`, then the
-// plain scan, as described above. A secret read outranks a word with no value
-// to check, so which block a command gets does not hang on which reading
-// reported first.
+// A word with no value to check found in a body the scan rescans, held so that
+// a read anywhere later in the command is the block reported. Nested bodies
+// are reached from several scanners, and each stops at the first hit, so it is
+// held here, the one way into them, and each gets null.
+let heldNested = null;
+
+// The readings of `command`, then the plain scan, as described above.
 function readEachWay(command, depth) {
+  const hit = scanEachWay(command, depth);
+  if (depth === 0 || hit === null || hit.code === 'secret-read') return hit;
+  if (heldNested === null) heldNested = hit;
+  return null;
+}
+
+// A secret read outranks a word with no value to check, so which block a
+// command gets does not hang on which reading reported first.
+function scanEachWay(command, depth) {
   if (!readsEachWay(command)) return scanCommand(command, depth, false);
   readingsRan = true;
   let unreadable = null;
@@ -2112,18 +2127,10 @@ function scanCommand(command, depth, reading) {
   if (scanBudget < 0) throw SCAN_BUDGET_SPENT;
   const { tokens, nested, unreadable } = tokenize(command, reading);
 
-  // A secret read stops the scan. A word with no value to check found in a nested
-  // body is held, so a read later in the command is still the block reported.
-  let held = null;
-  const isRead = (hit) => {
-    if (hit && hit.code !== 'secret-read' && held === null) held = hit;
-    return Boolean(hit) && hit.code === 'secret-read';
-  };
-
   for (const sub of nested) {
     if (depth < MAX_NESTING_DEPTH) {
       const hit = findSecretRead(sub, depth + 1);
-      if (isRead(hit)) return hit;
+      if (hit) return hit;
     }
   }
 
@@ -2180,7 +2187,7 @@ function scanCommand(command, depth, reading) {
     if (base === 'eval') {
       if (depth < MAX_NESTING_DEPTH) {
         const hit = findSecretRead(operands.map((w) => w.text).join(' '), depth + 1);
-        if (isRead(hit)) return hit;
+        if (hit) return hit;
       }
       continue;
     }
@@ -2192,7 +2199,7 @@ function scanCommand(command, depth, reading) {
           const src = reconstructedProcsub(w.procsub, reading);
           if (src !== null) {
             const hit = findSecretRead(src, depth + 1);
-            if (isRead(hit)) return hit;
+            if (hit) return hit;
           }
         } else if (operandNamesSecret(w.text)) return secretRead(w.text);
       }
@@ -2202,21 +2209,21 @@ function scanCommand(command, depth, reading) {
     // xargs turns stdin file names into a sub-command's operands.
     if (base === 'xargs' && depth < MAX_NESTING_DEPTH) {
       const hit = scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading);
-      if (isRead(hit)) return hit;
+      if (hit) return hit;
       // `.env` given to xargs itself (`xargs -a .env cat`) is an ordinary
       // operand — fall through to the operand check below.
     }
 
     if (SHELL_INTERPRETERS.has(base) && depth < MAX_NESTING_DEPTH) {
       const hit = scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading);
-      if (isRead(hit)) return hit;
+      if (hit) return hit;
       // `bash .env` (file mode) is caught by the operand check below.
     }
 
     // Git -c can carry a shell script instead of a file-name operand (#5045).
     if ((base === 'git' || base === 'git.exe') && depth < MAX_NESTING_DEPTH) {
       const hit = scanGitConfig(operands, depth);
-      if (isRead(hit)) return hit;
+      if (hit) return hit;
     }
 
     if (NON_READING_COMMANDS.has(base)) continue;
@@ -2228,7 +2235,7 @@ function scanCommand(command, depth, reading) {
     }
   }
   // No secret read found; a `$'…'` word with no value to check still denies.
-  return unreadable || held;
+  return unreadable;
 }
 
 // ---------------------------------------------------------------------------
