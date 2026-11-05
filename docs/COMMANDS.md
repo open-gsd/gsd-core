@@ -491,7 +491,7 @@ Archive milestone, tag release.
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<version>` | No | Target milestone version (e.g. `v1.0`); provides identity on a project's first milestone, otherwise inferred from `STATE.md` |
+| `<version>` | No | Target milestone version (e.g. `v1.0`); required on a project's first milestone, otherwise read from the active milestone header in `ROADMAP.md` |
 | `--ws <name>` | No | Scope the milestone to a workstream; skips the shared `PROJECT.md` evolution review and leaves `PROJECT.md` out of the archive commit |
 
 **Prerequisites:** Milestone audit complete (recommended)
