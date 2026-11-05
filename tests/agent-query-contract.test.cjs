@@ -97,10 +97,28 @@ function runtimeRegisteredNames() {
       assert.doesNotMatch(message, /Unknown[^\n]*(?:subcommand|workflow|scaffold type)/i,
         `unrecognized router rejection for ${root}: ${message}`);
     }
-    if (bare && !/Unknown[^\n]*(?:subcommand|workflow|scaffold type)/i.test(bare.error || '')) bareAccepted.add(root);
+    if (bareCallAccepted(root, bare)) bareAccepted.add(root);
   }
   runtimeRegisteredNamesCache = { registered, subcommands, bareAccepted };
   return runtimeRegisteredNamesCache;
+}
+
+// Expected bare rejections, listed explicitly with their exact usage line. sync-skills.md:115
+// names `query skills-root` in prose; every real call there passes a runtime.
+const EXPECTED_BARE_REJECTIONS = new Map([
+  ['skills-root', 'Usage: gsd-tools query skills-root <runtime>'],
+]);
+
+/**
+ * A bare `query <root>` is registered only when the runtime ran it (exit 0), or when the
+ * root is a listed rejection failing with exactly its usage line. A usage error, missing
+ * argument or crash anywhere else is not acceptance.
+ */
+function bareCallAccepted(root, bare) {
+  if (!bare) return false;
+  if (bare.exitCode === 0) return true;
+  const expected = EXPECTED_BARE_REJECTIONS.get(root);
+  return expected !== undefined && (bare.error || '').trim().replace(/^Error:\s*/, '') === expected;
 }
 
 function isRegistered(parts, registry) {
@@ -335,6 +353,28 @@ const CLOSED_ROUTER_ROOTS = new Set([
   'effort', 'user-story', 'drift-guard', 'windows', 'skills-root',
 ]);
 const BOGUS_SUBCOMMAND = 'zz-agent-query-contract-probe';
+/** Every path under dir mapped to its file bytes' sha256, or 'dir'. */
+function treeSnapshot(dir) {
+  const snapshot = new Map();
+  const walk = (current) => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name);
+      const relative = path.relative(dir, full).split(path.sep).join('/');
+      if (entry.isDirectory()) { snapshot.set(relative, 'dir'); walk(full); }
+      else snapshot.set(relative, require('node:crypto').createHash('sha256').update(fs.readFileSync(full)).digest('hex'));
+    }
+  };
+  walk(dir);
+  return snapshot;
+}
+
+function snapshotChanges(before, after) {
+  const changes = [];
+  for (const [file, hash] of after) if (before.get(file) !== hash) changes.push(`${before.has(file) ? 'changed' : 'added'} ${file}`);
+  for (const file of before.keys()) if (!after.has(file)) changes.push(`removed ${file}`);
+  return changes.sort();
+}
+
 let hostRouterProbes;
 function probeHostRouters() {
   if (hostRouterProbes) return hostRouterProbes;
@@ -352,9 +392,10 @@ function probeHostRouters() {
       Object.assign(env, { HOME: dir, USERPROFILE: dir, PATH: process.env.PATH,
         TMPDIR: fs.realpathSync(require('node:os').tmpdir()), GIT_CONFIG_NOSYSTEM: '1',
         SystemRoot: process.env.SystemRoot });
+      const before = treeSnapshot(dir);
       const bogus = runGsdTools(['query', root, BOGUS_SUBCOMMAND], dir, env);
       const bare = bareRoots.has(root) ? runGsdTools(['query', root], dir, env) : null;
-      hostRouterProbes.set(root, { bogus, bare });
+      hostRouterProbes.set(root, { bogus, bare, sideEffects: snapshotChanges(before, treeSnapshot(dir)) });
     } finally {
       cleanup(dir);
     }
@@ -362,8 +403,27 @@ function probeHostRouters() {
   return hostRouterProbes;
 }
 
-test('closed-router probes do not execute leaf commands', () => {
-  assert.deepEqual([...probeHostRouters().keys()].sort(), [...CLOSED_ROUTER_ROOTS].sort());
+test('closed-router probes leave their scrubbed project unchanged', () => {
+  const probes = probeHostRouters();
+  assert.deepEqual([...probes.keys()].sort(), [...CLOSED_ROUTER_ROOTS].sort());
+  for (const [root, { sideEffects }] of probes) {
+    assert.deepEqual(sideEffects, [], `probing ${root} changed its project`);
+  }
+});
+
+test('a bare router call counts as accepted only when it exits zero or is a listed rejection', () => {
+  assert.equal(bareCallAccepted('loop', { exitCode: 0, error: '' }), true);
+  for (const error of ['Usage: gsd-tools query loop <op>', 'Missing argument: phase', 'TypeError: crash', '']) {
+    assert.equal(bareCallAccepted('loop', { exitCode: 1, error }), false, error);
+  }
+  assert.equal(bareCallAccepted('loop', { exitCode: 1, error: 'Unknown loop subcommand: x' }), false);
+  assert.equal(bareCallAccepted('loop', null), false);
+  // The one listed rejection: sync-skills.md names the family in prose; its real calls pass a runtime.
+  const usage = 'Usage: gsd-tools query skills-root <runtime>';
+  assert.equal(bareCallAccepted('skills-root', { exitCode: 1, error: usage }), true);
+  assert.equal(bareCallAccepted('skills-root', { exitCode: 1, error: 'TypeError: crash' }), false);
+  assert.equal(bareCallAccepted('skills-root', { exitCode: 1, error: `${usage} extra` }), false);
+  assert.equal(bareCallAccepted('loop', { exitCode: 1, error: usage }), false);
 });
 
 for (const root of CLOSED_ROUTER_ROOTS) {
