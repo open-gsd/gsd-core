@@ -34,6 +34,7 @@ module.exports = {
   "tests/capability-source.test.cjs",
   "tests/capability-state.test.cjs",
   "tests/capability-trust.test.cjs",
+  "tests/changeset-lint.test.cjs",
   "tests/changeset-parse.test.cjs",
   "tests/check-contract-drift.test.cjs",
   "tests/check-predicate.test.cjs",
