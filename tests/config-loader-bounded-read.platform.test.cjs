@@ -712,6 +712,79 @@ describe('#5759 platformWriteSync never blocks on or follows a planted temp file
     assert.deepStrictEqual(JSON.parse(r.stdout), { r1: 'ENXIO', r0: 'ENXIO', fifoBytes: 0 });
   });
 
+  test('a descriptor alias reached through `..` after a directory symlink is refused with ENXIO, flag or no flag', () => {
+    const fifo = path.join(tmpDir, 'dotdot.fifo');
+    makeFifo(fifo);
+    // `<tmp>/b -> /dev/fd`: the kernel resolves `<tmp>/b/../fd/N` to /dev/fd/N, a lexical
+    // path.resolve to `<tmp>/fd/N`. Three spellings: direct, relative link target, absolute link target.
+    const script = [
+      'const fs = require("node:fs"); const path = require("node:path");',
+      'const keep = fs.openSync(process.argv[2], fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);',
+      'const fd = fs.openSync(process.argv[2], fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);',
+      'const tmp = process.argv[3]; fs.symlinkSync("/dev/fd", tmp + "/b");',
+      'fs.symlinkSync("b/../fd/" + fd, tmp + "/rel"); fs.symlinkSync(tmp + "/b/../fd/" + fd, tmp + "/abs");',
+      'const targets = { direct: tmp + "/b/../fd/" + fd, rel: tmp + "/rel", abs: tmp + "/abs" };',
+      'const out = {};',
+      'for (const name of Object.keys(targets)) for (const opts of [{ allowSpecialTarget: true }, {}]) {',
+      '  const key = name + (opts.allowSpecialTarget ? "Flag" : "Plain");',
+      '  try { require(process.argv[1]).platformWriteSync(targets[name], "x", opts); out[key] = "ok"; }',
+      '  catch (e) { out[key] = e.code; }',
+      '}',
+      'let got = 0; try { got = fs.readSync(keep, Buffer.alloc(8), 0, 8, null); } catch (e) { got = e.code === "EAGAIN" ? 0 : -1; }',
+      'out.fifoBytes = got;',
+      'process.stdout.write(JSON.stringify(out));',
+    ].join('\n');
+
+    const r = runNode(['-e', script, SHELL_PROJECTION_PATH, fifo, tmpDir], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    assert.deepStrictEqual(JSON.parse(r.stdout), {
+      directFlag: 'ENXIO', directPlain: 'ENXIO',
+      relFlag: 'ENXIO', relPlain: 'ENXIO',
+      absFlag: 'ENXIO', absPlain: 'ENXIO',
+      fifoBytes: 0,
+    });
+  });
+
+  test('a read-only directory holding a relative link to /dev/fd/N, reached through a symlink chain, is refused and the victim is untouched', {
+    skip: typeof process.getuid === 'function' && process.getuid() === 0 ? 'root ignores the mode-555 directory' : false,
+  }, () => {
+    // Z (mode 555) holds `l -> <enough ..>/dev/fd/V`; `A/b/c/d -> Z`. The temp create in Z fails
+    // EACCES, so the write falls to the direct path, which must not open the victim through l.
+    const victim = path.join(tmpDir, 'victim.txt');
+    fs.writeFileSync(victim, 'ORIGINAL');
+    const script = [
+      'const fs = require("node:fs"); const path = require("node:path");',
+      'const tmp = fs.realpathSync(process.argv[3]);',
+      'const keep = fs.openSync(process.argv[2], fs.constants.O_RDWR);',
+      'const Z = tmp + "/Z"; fs.mkdirSync(Z); fs.mkdirSync(tmp + "/A/b/c", { recursive: true });',
+      'fs.symlinkSync(path.relative(Z, "/dev/fd/" + keep), Z + "/l");',
+      'fs.symlinkSync(Z, tmp + "/A/b/c/d"); fs.chmodSync(Z, 0o555);',
+      'const out = {};',
+      'for (const opts of [{ allowSpecialTarget: true }, {}]) {',
+      '  const key = opts.allowSpecialTarget ? "flag" : "plain";',
+      '  try { require(process.argv[1]).platformWriteSync(tmp + "/A/b/c/d/l", "PWNED", opts); out[key] = "ok"; }',
+      '  catch (e) { out[key] = e.code; }',
+      '}',
+      'fs.chmodSync(Z, 0o755);',
+      'process.stdout.write(JSON.stringify(out));',
+    ].join('\n');
+
+    const r = runNode(['-e', script, SHELL_PROJECTION_PATH, victim, tmpDir], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    assert.deepStrictEqual(JSON.parse(r.stdout), { flag: 'ENXIO', plain: 'ENXIO' });
+    assert.strictEqual(fs.readFileSync(victim, 'utf8'), 'ORIGINAL');
+  });
+
   test('profile-output --output /dev/null (a user-chosen device) is written', () => {
     fs.writeFileSync(path.join(tmpDir, 'analysis.json'), JSON.stringify({ data_source: 'x', dimensions: {} }));
     const script = [
@@ -990,6 +1063,100 @@ describe('#5759 openExclusiveTempSync creates the temp file exclusively and neve
 
     assert.notStrictEqual(a.tmpPath, b.tmpPath);
     assert.ok(a.tmpPath.startsWith(`${base}.tmp.`));
+  });
+
+  test('a creation mode of 0600 yields a temp with no group or other bit at creation, whatever the umask', () => {
+    const base = path.join(tmpDir, 'target.json');
+    const previous = process.umask(0);
+    let made;
+    try {
+      made = openExclusiveTempSync(base, undefined, 0o600);
+    } finally {
+      process.umask(previous);
+    }
+    try {
+      assert.strictEqual(fs.fstatSync(made.fd).mode & 0o777, 0o600);
+    } finally {
+      fs.closeSync(made.fd);
+    }
+  });
+
+  test('the default creation mode is 0666 narrowed by the umask', () => {
+    const base = path.join(tmpDir, 'target.json');
+    const previous = process.umask(0o022);
+    let made;
+    try {
+      made = openExclusiveTempSync(base);
+    } finally {
+      process.umask(previous);
+    }
+    try {
+      assert.strictEqual(fs.fstatSync(made.fd).mode & 0o777, 0o644);
+    } finally {
+      fs.closeSync(made.fd);
+    }
+  });
+
+  test('platformWriteSync keeps a 0600 target 0600 and gives a new file 0666 narrowed by the umask', () => {
+    const { platformWriteSync } = require(SHELL_PROJECTION_PATH);
+    const priv = path.join(tmpDir, 'private.json');
+    fs.writeFileSync(priv, '{}', { mode: 0o600 });
+    fs.chmodSync(priv, 0o600);
+    const fresh = path.join(tmpDir, 'fresh.json');
+    const previous = process.umask(0o022);
+    try {
+      platformWriteSync(priv, '{"a":1}\n');
+      platformWriteSync(fresh, '{"a":1}\n');
+    } finally {
+      process.umask(previous);
+    }
+    assert.strictEqual(fs.statSync(priv).mode & 0o777, 0o600);
+    assert.strictEqual(fs.statSync(fresh).mode & 0o777, 0o644);
+  });
+});
+
+describe('#5759 printablePath escapes invisible and bidirectional formatting characters', () => {
+  const { printablePath } = require(path.join(LIB_DIR, 'config-file-read.cjs'));
+  const escaped = (cp) => `\\u${cp.toString(16).padStart(4, '0')}`;
+  // [first, last] of each escaped range; the code points on both sides must pass through.
+  const RANGES = [[0x200b, 0x200f], [0x2028, 0x2029], [0x202a, 0x202e], [0x2066, 0x2069]];
+
+  for (const [lo, hi] of RANGES) {
+    test(`U+${lo.toString(16)}..U+${hi.toString(16)} are escaped and the neighbours are not`, () => {
+      assert.strictEqual(printablePath(`a${String.fromCodePoint(lo - 1)}b`), `a${String.fromCodePoint(lo - 1)}b`);
+      assert.strictEqual(printablePath(`a${String.fromCodePoint(hi + 1)}b`), `a${String.fromCodePoint(hi + 1)}b`);
+      for (let cp = lo; cp <= hi; cp++) {
+        assert.strictEqual(printablePath(`a${String.fromCodePoint(cp)}b`), `a${escaped(cp)}b`, `U+${cp.toString(16)}`);
+      }
+    });
+  }
+
+  test('the existing C0, DEL and C1 escapes are unchanged at their edges', () => {
+    const nbsp = String.fromCharCode(0xa0);
+    assert.strictEqual(printablePath(`\u001f ~\u007f\u009f${nbsp}`), `\\x1f ~\\x7f\\x9f${nbsp}`);
+  });
+});
+
+describe('#5759 the hook config reader opens with O_NOCTTY', () => {
+  const { mock } = require('node:test');
+  const { readConfigFileBounded } = require(path.join(__dirname, '..', 'hooks', 'lib', 'config-read.js'));
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-noctty-')); });
+  afterEach(() => { mock.restoreAll(); cleanup(tmpDir); });
+
+  test('the open flags carry O_NOCTTY where the platform defines it', () => {
+    const file = path.join(tmpDir, 'config.json');
+    fs.writeFileSync(file, '{}');
+    const seen = [];
+    const realOpen = fs.openSync;
+    mock.method(fs, 'openSync', (p, flags, ...rest) => { seen.push(flags); return realOpen(p, flags, ...rest); });
+
+    assert.strictEqual(readConfigFileBounded(file), '{}');
+
+    assert.strictEqual(seen.length, 1);
+    const noctty = fs.constants.O_NOCTTY || 0;
+    assert.strictEqual(seen[0] & noctty, noctty);
   });
 });
 
