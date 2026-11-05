@@ -2063,6 +2063,8 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       '<<${#;cat .env',
       '<<${ ;cat .env',
       '<<x${;cat .env',
+      ': <<${;cat .env #}', // a later `}` does not make it an expansion: a tag is not expanded
+      '<<${;cat .env\n}\n',
       "<<$'E'${; cat .env #",
       'cat <<}\nbody\n}\ncat .env',
       'cat <<} .env\nbody\n}',
@@ -2714,6 +2716,7 @@ describe('nothing the scanner denied before #5255 is allowed', () => {
     "'", '"', '`', '\\', '\\\n', '$', '$$', "$'", '$"', '${', '}', '$(', ')', '(', '((', '))', '$((', '$[', ']',
     '<<', '<<E', 'E\n', '<(', ':-', '%', 'x', "\\'", 'eval ', 'bash -c ', '{', '<<}', '<<{', '<<-', '<<<',
     "$'\\x41'", "$'.e\\x6ev'", '$${', '$$(', '$\\\n', 'case a in a) ', ';; esac',
+    ' E\r\n', 'E\r\n', ' E$(x y)F\n', 'E$(x y)F\n',
   );
   const command = fc.array(token, { minLength: 1, maxLength: 16 }).map((parts) => parts.join(''));
 
@@ -2728,6 +2731,27 @@ describe('nothing the scanner denied before #5255 is allowed', () => {
     }), { seed: 5285, numRuns: 30000 });
     // A soup that the frozen scanner never denied would pass this vacuously.
     assert.ok(denied >= 1000, `the frozen scanner denied ${denied} of 30,000`);
+  });
+
+  // A tag that holds a space in a substitution, or a CR, ends elsewhere under the
+  // reading of a brace as a group. No shell reads these, but they were denied.
+  for (const cmd of [
+    ': <<} E$(x y)F\nE$(x y)F\ncat .env\n',
+    ': <<{ E$(x y)F\nE$(x y)F\ncat .env\n',
+    ': <<} E\r\nE\r\ncat .env\n',
+    '<<{ E\r\nE\r\ncat .env\n',
+    ': <<{ E`x y`F\nE`x y`F\ncat .env\n',
+    '(: <<} E$(x y)F\nE$(x y)F\ncat .env\n)',
+  ]) {
+    test(`both deny ${JSON.stringify(cmd)}`, () => {
+      assert.notEqual(scan(base, cmd), null, 'the frozen scanner denies it');
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  test('the debugger-spawn check reads a brace in a heredoc tag both ways too', () => {
+    const cmd = ': <<} E\nE\nclaude --agent gsd-debugger\n';
+    assertBlocked(runHook(bash(cmd)), cmd, { code: 'debugger-cli-spawn', tool: 'Bash' });
   });
 
   test('the frozen scanner is what it says: it misses the reads #5255 is about', () => {
