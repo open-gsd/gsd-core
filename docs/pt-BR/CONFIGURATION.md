@@ -99,6 +99,7 @@ O GSD armazena as configurações do projeto em `.planning/config.json`. Criado 
   "git": {
     "branching_strategy": "none",
     "create_tag": true,
+    "repo_tagging": "single",
     "phase_branch_template": "gsd/phase-{phase}-{slug}",
     "milestone_branch_template": "gsd/{milestone}-{slug}",
     "quick_branch_template": null
@@ -264,7 +265,7 @@ Todos os controles de fluxo de trabalho seguem o padrão **ausente = habilitado*
 | `planner.stall_detection_enabled` | boolean | `true` | Controla a detecção limitada de travamento do planejador padrão, dos planejadores de esboço/por plano em chunks, do verificador de planos e do planejador de revisão. Use `gsd config-set planner.stall_detection_enabled false` para ignorar o polling do watchdog e aguardar cada agente pelo mecanismo de conclusão nativa do runtime. **Aviso:** `false` abre mão da recuperação limitada se o runtime perder a entrega da conclusão; pode ser necessário interromper e usar o fallback existente do sistema de arquivos. A execução e o tratamento do resultado nunca são ignorados. |
 | `planner.stall_detect_interval_minutes` | number | `5` | Minutos entre verificações de travamento enquanto um planejador ou verificador de planos está ativo. O orquestrador inspeciona a atividade em disco de `*-PLAN.md` nessa cadência (#2650). |
 | `planner.stall_threshold_minutes` | number | `10` | Minutos sem marcador de conclusão ou atividade recente em planos antes que a fase de planejamento ofereça automaticamente as opções aceitar/tentar novamente/parar (#2650). |
-| `workflow.inline_plan_threshold` | number | `3` | Número máximo de tasks em uma fase antes que o planejador gere um arquivo PLAN.md separado em vez de incorporar tasks no prompt |
+| `workflow.inline_plan_threshold` | number | `2` | Planos com esta quantidade de tasks ou menos são executados inline em vez de criar um subagente executor, evitando o custo de criação do subagente em planos pequenos. Use `0` para sempre criar um subagente. |
 | `workflow.drift_threshold` | number | `3` | Número mínimo de novos elementos estruturais (novos diretórios, exportações barrel, migrações, módulos de rota) introduzidos durante uma fase antes que o gate de deriva pós-execução da base de código tome ação. Consulte [#2003](https://github.com/open-gsd/gsd-core/issues/2003). Adicionado na v1.39 |
 | `workflow.drift_action` | string | `warn` | O que fazer quando `workflow.drift_threshold` é excedido após `/gsd-execute-phase`. `warn` imprime uma mensagem sugerindo `/gsd-map-codebase --paths …`; `auto-remap` gera `gsd-codebase-mapper` com escopo para os caminhos afetados. Adicionado na v1.39 |
 | `workflow.build_command` | string | (nenhum) | Comando shell para compilar o projeto no gate de build pós-merge (Passo A do passo 5.6 na fase de execução). Quando não definido, o gate detecta automaticamente: Xcode (`.xcodeproj` presente) → `xcodebuild build`, `Makefile` com alvo `build:` → `make build`, Justfile → `just build`, `Cargo.toml` → `cargo build`, `go.mod` → `go build ./...`, Python → `python -m py_compile`, `package.json` com script `build` → `npm run build`. Executa com timeout de 5 minutos; falha incrementa `WAVE_FAILURE_COUNT`. Adicionado na v1.39 |
@@ -548,9 +549,29 @@ Todos os quatro campos são **opcionais e aditivos** — arquivos STATE.md sem e
 | `git.branching_strategy` | enum | `none` | `none`, `phase` ou `milestone` |
 | `git.base_branch` | string | `main` | O branch de integração a partir do qual os branches de fase/marco são criados e nos quais são mesclados de volta. Substitua quando seu repositório usar `master` ou um branch de release |
 | `git.create_tag` | boolean | `true` | Cria uma tag git (`v[X.Y]`) na conclusão do marco. Defina como `false` para projetos com seu próprio fluxo de release |
+| `git.repo_tagging` | enum | `single` | Modo de tagging do marco (#5706): `single` ou `per_repo`. `single` é o comportamento existente. `per_repo` faz um projeto multi-repo registrar um release por repositório configurado (veja a seção "Mapeamento de release por repositório" abaixo). Independente de `git.create_tag`; `git.create_tag: false` com `per_repo` registra o mapa e não cria nenhuma tag. Um valor inválido em um `config.json` editado manualmente é lido como `single` |
 | `git.phase_branch_template` | string | `gsd/phase-{phase}-{slug}` | Template de nome de branch para estratégia de fase |
 | `git.milestone_branch_template` | string | `gsd/{milestone}-{slug}` | Template de nome de branch para estratégia de marco |
 | `git.quick_branch_template` | string ou null | `null` | Template opcional de nome de branch para tasks `/gsd-quick` |
+
+### Mapeamento de release por repositório
+
+Um projeto multi-repo pode registrar qual release cada repositório publicou para um marco. O registro é um mapa de release (release map): um array JSON fornecido a `milestone complete <version> --release-map <file>` e arquivado pelo valor registrado. `git.repo_tagging` seleciona o modo de tagging; `init complete-milestone` o expõe como `repo_tagging`, ao lado de `sub_repos` (os repositórios configurados, possivelmente vazio).
+
+Cada entrada do mapa de release tem estes campos:
+
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| `repo` | string | Nome do repositório. Obrigatório, não vazio, único dentro do mapa. Tratado como dado, nunca como caminho |
+| `release` | string ou null | A versão ou tag de release do repositório |
+| `reference` | string ou null | Um SHA de commit ou uma referência de pull request |
+| `environment` | string ou null | Ambiente de destino, texto livre (por exemplo `production`, `development`, `npm`) |
+| `status` | enum | Obrigatório. Status do mapa de release: `released`, `deployed`, `unreleased` |
+| `tag` | enum | Obrigatório. Estados de tag do mapa de release: `created`, `already_tagged`, `skipped`, `none` |
+
+Cada campo de texto é limitado a 200 caracteres e um mapa a 256 entradas. Campos desconhecidos são rejeitados. Uma entrada é arquivada como registrada: nunca é filtrada contra `planning.sub_repos`, então um repositório que foi ignorado, não lançado ou não está mais configurado permanece no mapa. O arquivo guarda os valores brutos em `.planning/milestones/<version>-RELEASE-MAP.json` (`{ "version", "entries" }`), e a entrada de MILESTONES.md ganha uma tabela **Release mapping:** com os valores escapados para markdown. Um marco arquivado sem mapa não é afetado.
+
+A versão de marco do GSD nomeia o trabalho planejado em `.planning/`; ela pode diferir da versão de release de cada repositório, e os repositórios não precisam compartilhar uma única sequência. Com `git.repo_tagging: per_repo` e `sub_repos` não vazio, `/gsd-complete-milestone` coleta o mapa, verifica cada tag solicitada antes de criar qualquer uma, cria as tags (`milestone release-tags`), arquiva o mapa e faz uma pergunta separada por repositório, nomeando o repositório e seu remote, antes de enviar uma tag. Nada é enviado por padrão. Veja [Como marcar um marco multi-repo](../how-to/tag-a-multi-repo-milestone.md).
 
 ### Comparação de Estratégias
 
@@ -686,15 +707,16 @@ Configure a seleção de modelo por CLI para `/gsd-review`. Quando definido, sub
 | `review.models.lm_studio` | string | (padrão do servidor) | Nome do modelo passado ao LM Studio quando o revisor `--lm-studio` é invocado. Se não definido, o primeiro modelo disponível reportado pelo servidor é usado. |
 | `review.models.llama_cpp` | string | (padrão do servidor) | Nome do modelo passado ao llama.cpp quando o revisor `--llama-cpp` é invocado. Se não definido, o primeiro modelo reportado por `/v1/models` é usado. |
 | `review.default_reviewers` | string[] \| null | (todos os revisores detectados) | Subconjunto de revisores padrão para `/gsd-review` sem flags. Exemplo: `["codex","claude"]`. Flags explícitas e `--all` substituem esta configuração. |
-| `review.max_prompt_tokens` | number\|null | null | Máximo padrão de tokens estimados para o prompt de revisão montado. Quando definido, o prompt é cortado deterministicamente antes de ser enviado a cada revisor. Substituições por revisor via `review.max_prompt_tokens_per_reviewer` têm precedência. null = sem corte (comportamento atual). |
-| `review.max_prompt_tokens_per_reviewer` | object | {} | Substituições de orçamento de tokens por revisor. As chaves são slugs de revisor (ollama, llama_cpp, lm_studio, claude, codex, opencode, qwen, cursor). Os valores substituem `review.max_prompt_tokens` para aquele revisor. Recomendado para servidores de modelos locais. |
+| `review.max_prompt_tokens` | number\|null | null | Limite de prompt, em tokens estimados, para toda lane de revisor cuja própria `review.max_prompt_tokens_per_reviewer.<slug>` não esteja definida. Uma lane cujo prompt excede o limite é recusada, não cortada. `0` desliga o limite, inclusive o padrão derivado da janela de contexto. null = sem limite global; cada lane usa o padrão da sua janela de contexto. |
+| `review.max_prompt_tokens_per_reviewer` | object | {} | Limites de prompt por lane. As chaves são slugs de revisor (`claude`, `codex`, `coderabbit`, `opencode`, `qwen`, `cursor`, `antigravity`, `kimi-code`, `ollama`, `lm_studio`, `llama_cpp`). `-1` (padrão) significa não definido e herda `review.max_prompt_tokens`; `0` desliga o limite daquela lane; qualquer outro número é o limite da lane. |
+| `review.context_window_tokens` | object | {} | Janela de contexto por lane, em tokens, usada para derivar o limite padrão (65% da janela) quando nenhuma das chaves de limite se aplica. `-1` (padrão) usa a janela declarada pela lane: `claude` 200000, `codex` 272000, `qwen` 131072, `kimi-code` 262144; as demais não declaram janela e ficam sem limite, a menos que você defina uma aqui. `0` desliga o padrão derivado daquela lane. |
 | `review.ollama_host` | string | `http://localhost:11434` | URL base do servidor Ollama. Substitua quando executar o Ollama em uma porta não padrão ou host remoto: `gsd config-set review.ollama_host http://192.168.1.10:11434` |
 | `review.lm_studio_host` | string | `http://localhost:1234` | URL base do servidor local LM Studio. Substitua quando usar uma porta não padrão. |
 | `review.llama_cpp_host` | string | `http://localhost:8080` | URL base do servidor llama.cpp (`llama-server`). Substitua quando usar uma porta não padrão. |
 
 ### Orçamentos de prompt para revisores com contexto pequeno
 
-Servidores de modelos locais (Ollama, llama.cpp, LM Studio) geralmente aceitam muito menos tokens que as APIs em nuvem. Definir `review.max_prompt_tokens_per_reviewer` (ou o fallback global `review.max_prompt_tokens`) aciona o corte determinístico do prompt antes de enviá-lo ao revisor: CONTEXT é descartado primeiro, depois RESEARCH, depois REQUIREMENTS; PROJECT.md é reduzido ao cabeçalho das primeiras 40 linhas; PLANs são truncados pela cauda proporcionalmente — instruções e roadmap são sempre preservados. Quando um revisor é cortado, uma nota de divulgação é injetada no topo do prompt e os metadados de corte (orçamento, seções omitidas, porcentagem de truncamento) são registrados no frontmatter de REVIEWS.md em `trimmed_reviewers`. Se até mesmo o conjunto mínimo de revisão (instruções + roadmap + stubs de plano) exceder o orçamento, o revisor é ignorado com um aviso em vez de enviar um prompt truncado que produziria feedback enganoso.
+Toda lane de revisor que recebe prompt tem um limite, resolvido nesta ordem: `review.max_prompt_tokens_per_reviewer.<slug>` (`-1` não definido, `0` sem limite) → `review.max_prompt_tokens` (`0` sem limite) → 65% de `review.context_window_tokens.<slug>` ou da janela declarada pela lane (padrão `claude` 130000, `codex` 176800, `qwen` 85196, `kimi-code` 170393) → sem limite. Quando o prompt excede o limite, **a lane não roda**: retorna o motivo `prompt_exceeds_context`, grava um stub que começa com `<slug> review did not run: prompt exceeds this lane's context cap` e é listada em `refused_reviewers` no frontmatter de REVIEWS.md. O prompt nunca é cortado. Veja a versão em inglês de [CONFIGURATION.md](../CONFIGURATION.md#prompt-budgets-for-reviewer-lanes).
 
 ### Exemplo
 

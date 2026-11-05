@@ -190,7 +190,7 @@ GSD 워크스페이스 관리 — 리포지토리 복사본과 독립적인 `.pl
 - `[SUS]` — 패키지 플래그 지정; 계획자가 설치 작업 전에 `checkpoint:human-verify` 삽입
 - `[OK]` — 패키지 승인; 체크포인트 없음
 
-WebSearch에서 가져온 패키지는 `[ASSUMED]`(`[VERIFIED]`가 아님)로 태그되며 `[SUS]`와 동일하게 처리됩니다 — 설치 전에 사람 체크포인트가 필요합니다. `slopcheck`를 설치할 수 없는 경우 추천된 모든 패키지는 `[ASSUMED]`로 태그되고 게이트 처리됩니다.
+WebSearch에서 가져온 패키지는 `[ASSUMED]`(`[VERIFIED]`가 아님)로 태그되며 `[SUS]`와 동일하게 처리됩니다 — 설치 전에 사람 체크포인트가 필요합니다. 레지스트리 조회가 실패하면 예외를 던지지 않고 `[SUS]`로 성능이 저하되므로, 조용히 승인되지 않고 게이트 처리됩니다. `slopcheck`은 출하되는 어떤 구성도 연결하지 않는 선택적 escalate-only 어댑터이며, 게이트 동작에 필요하지 않습니다.
 
 전체 체크포인트 형식, 판정 테이블, 문제 해결 방법은 [사용자 가이드의 패키지 적법성 게이트](USER-GUIDE.md#package-legitimacy-gate-v1421)를 참조하세요.
 
@@ -1006,7 +1006,7 @@ GSD 설정을 대화형으로 구성합니다 — 워크플로 토글, 고급 �
 
 | 섹션 | 키 |
 |---------|------|
-| 계획 조정 | `workflow.plan_bounce`, `workflow.plan_bounce_passes`, `workflow.plan_bounce_script`, `workflow.subagent_timeout`, `workflow.inline_plan_threshold` |
+| 계획 조정 | `planner.stall_detection_enabled`, `planner.stall_threshold_minutes`, `planner.stall_detect_interval_minutes`, `workflow.plan_bounce`, `workflow.plan_bounce_passes`, `workflow.plan_bounce_script`, `workflow.subagent_timeout`, `workflow.inline_plan_threshold` |
 | 실행 조정 | `workflow.node_repair`, `workflow.node_repair_budget`, `workflow.auto_prune_state` |
 | 논의 조정 | `workflow.max_discuss_passes` |
 | 크로스 AI 실행 | `workflow.cross_ai_execution`, `workflow.cross_ai_command`, `workflow.cross_ai_timeout` |

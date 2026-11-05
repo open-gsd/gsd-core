@@ -1,7 +1,7 @@
 {
   "id": "coderabbit",
   "role": "reviewer",
-  "version": "1.18.0",
+  "version": "1.20.1",
   "title": "CodeRabbit",
   "description": "CodeRabbit CLI — cross-AI /gsd:review reviewer lane only; not a GSD install target (no runtime body, no artifacts). Reviews the working-tree diff (`coderabbit review --prompt-only`), not the source tree, and accepts neither a prompt nor a model flag; findings are down-weighted in consensus (evidenceClass: diff-only).",
   "tier": "full",
@@ -37,6 +37,8 @@
     "evidenceClass": "diff-only",
     "requiresBinaries": [],
     "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.coderabbit",
+    "contextWindowTokens": null,
+    "contextWindowConfigKey": null,
     "modelConfigKey": null,
     "effortConfigKey": null,
     "defaultEffort": null,
@@ -46,7 +48,7 @@
     "review.max_prompt_tokens_per_reviewer.coderabbit": {
       "type": "number",
       "default": -1,
-      "description": "Prompt-token budget for the CodeRabbit reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+      "description": "Prompt-token budget for the CodeRabbit reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
     }
   }
 }

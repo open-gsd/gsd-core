@@ -9,8 +9,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
-import { retryRenameSync } from './shell-command-projection.cjs';
+import { execGit, retryRenameSync } from './shell-command-projection.cjs';
+import { phaseEntryPrefixSrc } from './phase-entry-grammar.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -1687,14 +1687,15 @@ function computeBracketPlan(cwd: string): MigrationPlan {
   // bullet stayed legacy after an otherwise-done migration, so the
   // bracket-mode milestone id set carried the stale legacy token alongside
   // the bracket ones.
-  const CHECKLIST_BULLET_PREFIX_SRC = '[-*]\\s*\\[[ x]\\]\\s*\\*{0,2}';
+  // #5764: the prefix is the phase-entry grammar's (line-anchored, indent included).
+  const CHECKLIST_BULLET_PREFIX_SRC = phaseEntryPrefixSrc();
   const CHECKLIST_PHASE_INTRO_SRC = phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, undefined, true);
   const mnnChecklistRe = new RegExp(
-    `^(\\s*${CHECKLIST_BULLET_PREFIX_SRC})${CHECKLIST_PHASE_INTRO_SRC}(${MNN_SOURCE_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})`,
+    `(${CHECKLIST_BULLET_PREFIX_SRC})${CHECKLIST_PHASE_INTRO_SRC}(${MNN_SOURCE_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})`,
     'i',
   );
   const legacyChecklistRe = new RegExp(
-    `^(\\s*${CHECKLIST_BULLET_PREFIX_SRC})${CHECKLIST_PHASE_INTRO_SRC}(${PHASE_NUMBER_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})`,
+    `(${CHECKLIST_BULLET_PREFIX_SRC})${CHECKLIST_PHASE_INTRO_SRC}(${PHASE_NUMBER_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})`,
     'i',
   );
 
@@ -2069,8 +2070,9 @@ function computeMigrationPlan(cwd: string, options: Record<string, unknown> = {}
     if (roadmapEdits.some(e => e.lineIndex === i)) continue;
 
     // Match checklist items: "- [ ] **Phase N:**" or "- [x] Phase N:"  (also decimal)
+    // The entry prefix (marker, box, bold token) is the phase-entry grammar's (#5764).
     const checklistMatch = line.match(
-      new RegExp(`^(\\s*-\\s*\\[[ x]\\]\\s*\\*{0,2}Phase\\s+)(${PHASE_NUMBER_TOKEN_SOURCE})(\\s*[:\\s*])`, 'i')
+      new RegExp(`(${phaseEntryPrefixSrc()}Phase[ \\t]+)(${PHASE_NUMBER_TOKEN_SOURCE})(\\s*[:\\s*])`, 'i')
     );
     if (checklistMatch) {
       const legacyNum = checklistMatch[2];
@@ -2100,7 +2102,7 @@ function computeMigrationPlan(cwd: string, options: Record<string, unknown> = {}
 
       if (newId) {
         const newLine = line.replace(
-          new RegExp(`^(\\s*-\\s*\\[[ x]\\]\\s*\\*{0,2}Phase\\s+)${PHASE_NUMBER_TOKEN_SOURCE}(\\s*[:\\s*])`, 'i'),
+          new RegExp(`(${phaseEntryPrefixSrc()}Phase[ \\t]+)${PHASE_NUMBER_TOKEN_SOURCE}(\\s*[:\\s*])`, 'i'),
           `$1${newId}$2`
         );
         if (newLine !== line) {
@@ -2261,7 +2263,46 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
   // ── Real run: verify clean working tree ───────────────────────────────────
   let gitStatus: string;
   try {
-    gitStatus = execSync('git status --porcelain', { cwd, encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+    // #5048: this is a read-only spawn, but git still refreshes the index under
+    // it and takes the optional `.git/index.lock` to write the refreshed copy
+    // back — which can lose a race against a real `git add` / `git commit` in
+    // the same repo. Routing through the shared execGit seam (CONTEXT.md, OS
+    // Shell Projection) is what gets GIT_OPTIONAL_LOCKS=0 here; a bare execSync
+    // bypassed the seam and therefore the opt-out, so this call site was the one
+    // read-only `git status` the seam change did not reach. shell-free, so no
+    // argv quoting or PATH-resolution policy is introduced.
+    const statusTimeoutMs = 10_000;
+    const result = execGit(['status', '--porcelain'], { cwd, timeout: statusTimeoutMs });
+    // #5048: execSync carried the cause on the thrown error. execGit reports a
+    // timeout, a spawn/buffer failure or a signal through `timedOut`/`error`/
+    // `signal` with an exit code of `status ?? 1` and often an empty stderr.
+    // Order matters: a maxBuffer overflow returns signal SIGTERM *and*
+    // error.code ENOBUFS — check `error` before `signal` so the real cause is
+    // not reported as "killed by SIGTERM". Only a genuine non-zero exit falls
+    // through. (ENOENT is rewritten by `_spawnResult` to exit 127 + stderr.)
+    if (result.timedOut) {
+      throw new Error(`git status timed out after ${statusTimeoutMs} ms`);
+    }
+    if (result.error) {
+      // The cause is not always a failed spawn: ENOBUFS and EPERM reach this
+      // branch with the process already started (a maxBuffer overflow returns
+      // signal SIGTERM *and* error.code ENOBUFS). So the message stays neutral
+      // about starting and names the code instead of inferring a cause from it.
+      const code = (result.error as { code?: string }).code;
+      const why = code === 'ENOBUFS' ? 'output exceeded the buffer' : code;
+      const detail =
+        why && !result.error.message.includes(why)
+          ? `${result.error.message} (${why})`
+          : result.error.message;
+      throw new Error(detail);
+    }
+    if (result.signal) {
+      throw new Error(`git status was killed by ${result.signal}`);
+    }
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr || `git exited ${result.exitCode}`);
+    }
+    gitStatus = result.stdout;
   } catch (err) {
     throw new Error(`git status failed: ${(err as Error).message}`);
   }

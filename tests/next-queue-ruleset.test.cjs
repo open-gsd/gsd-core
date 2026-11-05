@@ -34,8 +34,8 @@ describe('#5605: next-queue ruleset spec', () => {
     assert.ok(['disabled', 'evaluate'].includes(spec.enforcement));
   });
 
-  test('has no bypass actors until the back-merge actor is established from evaluate logs', () => {
-    assert.deepEqual(spec.bypass_actors, []);
+  test('has exactly one bypass actor: the repository Admin role, so a back-merge can land as a merge commit (#5894)', () => {
+    assert.deepEqual(spec.bypass_actors, [{ actor_id: 5, actor_type: 'RepositoryRole', bypass_mode: 'always' }]);
   });
 
   test('squashes, so each PR stays one commit on the default branch', () => {

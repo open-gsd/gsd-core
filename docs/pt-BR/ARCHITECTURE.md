@@ -689,13 +689,11 @@ O pipeline pesquisador → planner → executor inclui um portão de cadeia de s
 | Planejamento | `gsd-planner` | Lê a tabela de Auditoria; insere `checkpoint:human-verify` antes de qualquer tarefa de instalação `[ASSUMED]` ou `[SUS]`; adiciona linha STRIDE `T-{phase}-SC` supply-chain ao `<threat_model>` |
 | Execução | `gsd-executor` | REGRA 3 exclui a instalação de pacotes do escopo de correção automática; instalações com falha surgem como checkpoints, nunca substituições silenciosas |
 
-**Integração de proveniência de afirmações:** Nomes de pacotes descobertos via WebSearch são marcados como `[ASSUMED]` (não `[VERIFIED]`) independentemente do resultado do `npm view`. Isso estende o sistema de proveniência `[ASSUMED]` / `[VERIFIED]` / `[CITED]` existente, aplicando a tag de proveniência como um portão rígido no limite de instalação — `[ASSUMED]` sempre gera um `checkpoint:human-verify` no PLAN.md.
+**Integração de proveniência de afirmações:** Nomes de pacotes descobertos via WebSearch são marcados como `[ASSUMED]` (não `[VERIFIED]`) independentemente do veredicto da API de registro. Isso estende o sistema de proveniência `[ASSUMED]` / `[VERIFIED]` / `[CITED]` existente, aplicando a tag de proveniência como um portão rígido no limite de instalação — `[ASSUMED]` sempre gera um `checkpoint:human-verify` no PLAN.md.
 
-**Cobertura de ecossistemas:** O pesquisador usa comandos de verificação específicos de registro — `npm view` (Node), `pip index versions` (Python), `cargo search` (Rust) — em vez de uma única verificação genérica. Isso captura alucinações entre ecossistemas (taxa de ~9% documentada em pesquisa USENIX de 2025).
+**Cobertura de ecossistemas:** O portão resolve os sinais diretamente da API de registro de cada ecossistema, em vez de uma única verificação genérica — `registry.npmjs.org` + `api.npmjs.org/downloads` (Node), `pypi.org/pypi/<pkg>/json` (Python), a API do crates.io (Rust). Isso captura alucinações entre ecossistemas (taxa de ~9% documentada em pesquisa USENIX de 2025).
 
-**Degradação graceful:** Se o `slopcheck` não estiver disponível, cada pacote recomendado é marcado como `[ASSUMED]` e condicionado com um checkpoint. Pesquisa e planejamento prosseguem; o sistema nunca falha definitivamente por dependência de ferramenta ausente.
-
-**Dependência externa:** `slopcheck` (MIT, instalável via pip). Se abandonado, o fallback do portão `[ASSUMED]` mantém a cobertura de checkpoint humano.
+**Degradação graceful:** Cada adaptador de registro degrada para sinais nulos (nunca lança exceção) em uma consulta com falha; sinais ausentes levam um pacote a `[SUS]`, que é condicionado ao mesmo `checkpoint:human-verify` que `[ASSUMED]`. Pesquisa e planejamento prosseguem; o sistema nunca falha definitivamente por uma indisponibilidade de rede ou de ferramenta. `slopcheck` é um adaptador opcional que só escala veredictos — só pode elevar um veredicto, nunca rebaixá-lo — e não é o portão de instalar-ou-degradar. Nenhuma configuração distribuída o ativa.
 
 ---
 

@@ -657,13 +657,11 @@ Runtime Engine (Claude Code / Antigravity CLI)
 | 规划 | `gsd-planner` | 读取审计表；在任何 `[ASSUMED]` 或 `[SUS]` 安装任务之前插入 `checkpoint:human-verify`；向 `<threat_model>` 添加 `T-{phase}-SC` STRIDE 供应链行 |
 | 执行 | `gsd-executor` | 规则 3 将软件包安装排除在自动修复范围之外；失败的安装以检查点形式呈现，而非静默替换 |
 
-**声明溯源集成：** 通过 WebSearch 发现的软件包名称被标记为 `[ASSUMED]`（而非 `[VERIFIED]`），无论 `npm view` 结果如何。这通过在安装边界将溯源标签强制执行为硬关卡，扩展了现有的 `[ASSUMED]` / `[VERIFIED]` / `[CITED]` 溯源系统——`[ASSUMED]` 始终在 PLAN.md 中生成 `checkpoint:human-verify`。
+**声明溯源集成：** 通过 WebSearch 发现的软件包名称被标记为 `[ASSUMED]`（而非 `[VERIFIED]`），无论注册表 API 裁决如何。这通过在安装边界将溯源标签强制执行为硬关卡，扩展了现有的 `[ASSUMED]` / `[VERIFIED]` / `[CITED]` 溯源系统——`[ASSUMED]` 始终在 PLAN.md 中生成 `checkpoint:human-verify`。
 
-**生态系统覆盖：** 研究者使用特定于注册表的验证命令——`npm view`（Node）、`pip index versions`（Python）、`cargo search`（Rust）——而非单一通用检查。这能捕获跨生态系统幻觉（2025 年 USENIX 研究记录的发生率约为 9%）。
+**生态系统覆盖：** 门控直接从各生态系统的注册表 API 获取信号，而非单一通用检查——`registry.npmjs.org` + `api.npmjs.org/downloads`（Node）、`pypi.org/pypi/<pkg>/json`（Python）、crates.io API（Rust）。这能捕获跨生态系统幻觉（2025 年 USENIX 研究记录的发生率约为 9%）。
 
-**优雅降级：** 若 `slopcheck` 不可用，每个推荐软件包都被标记为 `[ASSUMED]` 并通过检查点设置关卡。研究和规划继续进行；系统不会因缺少工具依赖而硬性失败。
-
-**外部依赖：** `slopcheck`（MIT 协议，可通过 pip 安装）。若被废弃，`[ASSUMED]` 关卡回退机制维持人工检查点覆盖。
+**优雅降级：** 每个注册表适配器在查询失败时降级为空值信号（从不抛出异常）；缺失的信号会使软件包进入 `[SUS]`，它与 `[ASSUMED]` 受同一个 `checkpoint:human-verify` 检查点门控。研究和规划继续进行；系统不会因网络或工具中断而硬性失败。`slopcheck` 是可选的仅升级适配器——只能提高裁决，永远不能降低，也不是“安装或降级”门控。任何随附配置都没有接入它。
 
 ---
 

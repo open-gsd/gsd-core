@@ -86,5 +86,27 @@
       "consumes": []
     },
     "discussion": "https://github.com/open-gsd/gsd-core/discussions/5304"
+  },
+  {
+    "id": "musk",
+    "name": "musk: a subtraction pass for GSD",
+    "type": "capability",
+    "repo": "bitcreed/gsd-musk-simplification",
+    "description": "Applies Musk's algorithm (question requirements, delete, then simplify) to GSD planning. A one-shot milestone pass and discuss:pre and plan:pre contributions challenge phases, requirements and implementation before they are built; small phases take a lean lane (no gray-area questioning, no researcher or pattern mapper, one plan). Every cut is logged reversibly in an append-only ledger and can be reinstated with one command. A gsd-tools musk command family and a milestone retro price the savings from the project's own Claude Code token usage and report the add-back ratio.",
+    "author": "Andreas Brauchli",
+    "license": "MIT",
+    "enginesGsd": ">=1.15.0",
+    "install": "gsd capability install https://github.com/bitcreed/gsd-musk-simplification.git#v0.5.5",
+    "uninstall": "gsd capability remove musk",
+    "interactions": {
+      "loopExtensionPoints": ["discuss:pre", "plan:pre", "execute:post", "verify:post"],
+      "hookKinds": ["contribution", "step"],
+      "configKeys": ["musk.enabled", "musk.scope_cuts", "musk.lean_lane", "musk.milestone_pass"],
+      "requires": [],
+      "runtimeCompat": ["all"],
+      "produces": [".planning/musk/ledger.jsonl", ".planning/musk/calibration.json", ".planning/musk/RETRO-<milestone>.md"],
+      "consumes": ["ROADMAP.md", "REQUIREMENTS.md", "CONTEXT.md", ".planning/config.json", "Claude Code transcripts (~/.claude/projects/<slug>/)"]
+    },
+    "discussion": "https://github.com/open-gsd/gsd-core/discussions/5868"
   }
 ]

@@ -42,7 +42,7 @@ import ioMod = require('./io.cjs');
 const { output, error } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
-const { findPhaseInternal } = phaseLocatorMod;
+const { phaseDirectoryOptions, findPhaseInternal } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
 const { stripShippedMilestones } = roadmapParserMod;
@@ -1447,7 +1447,7 @@ function cmdVerifyPhaseCompleteness(cwd: string, phase: string, raw: boolean): v
   if (!phase) {
     error('phase required');
   }
-  const phaseInfoRaw = findPhaseInternal(cwd, phase);
+  const phaseInfoRaw = findPhaseInternal(cwd, phase, undefined, phaseDirectoryOptions(cwd));
   if (!phaseInfoRaw || !(phaseInfoRaw as unknown as Record<string, unknown>)['found']) {
     // An unresolvable phase is "could not look" (#5170): there is no phase to evaluate.
     emitVerbVerdict(gateUnreadable(false, { error: 'Phase not found', phase }), 'status', raw);
