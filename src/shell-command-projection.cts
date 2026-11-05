@@ -1636,9 +1636,6 @@ function writeTargetDirect(filePath: string, normalized: string, encoding: Buffe
  * whatever sits at the target by rename and is unaffected. A crash between the temp create
  * and the rename leaves `<file>.tmp.<pid>.<hex>` behind; such files are not reaped.
  */
-/** Longest total back-off, in milliseconds, a FIFO write waits for a slow reader to drain. */
-const FIFO_MAX_WAIT_MS = 30_000;
-
 function defaultSleep(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -1647,8 +1644,9 @@ function defaultSleep(ms: number): void {
  * Write `data` to a FIFO that has a reader, through ONE non-blocking descriptor — never a
  * reopen, so a reader that leaves cannot turn into a blocked open. The non-blocking open is the
  * reader probe (ENXIO = no reader). A full pipe (EAGAIN) backs off 1, 2, 4 … 50 ms through
- * `sleep` (Atomics.wait, no busy spin) until the summed back-off passes `maxWaitMs`, then throws
- * ETIMEDOUT; a reader that went away (EPIPE — Node ignores SIGPIPE, so it surfaces as an error)
+ * `sleep` (Atomics.wait, no busy spin) with no overall bound by default (a slow reader is the
+ * user's own pipeline); a test may set `maxWaitMs`, and once the summed back-off passes it the
+ * write throws ETIMEDOUT; a reader that went away (EPIPE — Node ignores SIGPIPE, so it surfaces as an error)
  * is rethrown with a clear message. Both seams are for tests.
  */
 function writeFifoNonBlocking(
@@ -1657,7 +1655,8 @@ function writeFifoNonBlocking(
   wait: { sleep?: (ms: number) => void; maxWaitMs?: number } = {},
 ): void {
   const sleep = wait.sleep ?? defaultSleep;
-  const maxWaitMs = wait.maxWaitMs ?? FIFO_MAX_WAIT_MS;
+  // No bound by default: a slow existing reader is the user's own pipeline (`| less`).
+  const maxWaitMs = wait.maxWaitMs ?? Infinity;
   const fd = fs.openSync(filePath, fs.constants.O_WRONLY | (fs.constants.O_NONBLOCK ?? 0));
   try {
     let off = 0;
@@ -1703,14 +1702,15 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
     // A user-chosen destination such as /dev/stdout: written in place, no temp file, no restore.
     let special: fs.Stats | null = null;
     try { special = fs.statSync(filePath); } catch { /* absent: the ordinary path below */ }
-    if (special !== null && (special.isBlockDevice() || special.isSocket())) {
-      throw Object.assign(new Error(`ENXIO: cannot write ${filePath}: block devices and sockets are never written`), { code: 'ENXIO' });
-    }
     // The process's own descriptor aliases: /dev/stdout may resolve to a regular file
-    // (`> out.txt`), which is then written in place. Any other regular file takes the atomic path.
+    // (`> out.txt`) or a socket (its own stdio), which is then written in place. Any other
+    // regular file takes the atomic path.
     const resolvedTarget = path.resolve(filePath);
     const isDescriptorAlias = /^\/dev\/(stdout|stderr|fd\/\d+)$/.test(resolvedTarget)
       || /^\/proc\/self\/fd\/\d+$/.test(resolvedTarget);
+    if (special !== null && (special.isBlockDevice() || (special.isSocket() && !isDescriptorAlias))) {
+      throw Object.assign(new Error(`ENXIO: cannot write ${filePath}: block devices and sockets are never written`), { code: 'ENXIO' });
+    }
     if (special !== null && (special.isCharacterDevice() || special.isFIFO() || isDescriptorAlias)) {
       if (special.isFIFO()) {
         writeFifoNonBlocking(filePath, Buffer.from(normalized, encoding), opts.specialTargetWait);
