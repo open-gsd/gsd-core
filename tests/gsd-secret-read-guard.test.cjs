@@ -840,7 +840,7 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
     ['after a process substitution', 'echo "$(cat <(echo a) case x in y)"; cat .env'],
     ['after a subshell closes, where no command can start', 'echo "$( (echo hi) case x in y )"; cat .env'],
     ['after an extended-glob command name', 'echo "$( !(a|b) case x in y )"; cat .env'],
-    ['after an extended-glob group holding a `#`', 'echo "$( !(a # b)\n)"; cat .env'],
+    ['after an extended-glob group holding a `#`', 'echo "$(ls !(a # b)\n)"; cat .env'],
     ['`time` after a pipe is a command', 'echo "$(true | time -- case x in y)"; cat .env'],
     ['`}` with no open group is a command', 'echo "$(} case x in y)"; cat .env'],
     ['a comment', 'echo "$(echo hi # (case insensitive in bash)\n)"; cat .env'],
@@ -866,6 +866,22 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
       assertAllowed(runHook(bash(quiet)), quiet);
     });
   }
+
+  // `!(` where a command can start is `!` and a subshell with extglob off,
+  // bash's default outside an interactive shell, so a `case` inside it ends
+  // its patterns where bash ends them. The counter reads the same text as a
+  // glob group, as bash does with extglob on, and the span is scanned both ways.
+  test('`!(` at a command start reads as `!` and a subshell: blocks a read in a later `case` arm', () => {
+    const cmd = 'echo "$( !(case x in y) a;; x) cat .env;; esac) )"';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+  // The cost of that reading, pinned. With extglob off bash rejects this line,
+  // and with it on the line only echoes, so this deny is a false positive on a
+  // command that reads nothing in either mode.
+  test('`!(` at a command start holding a `#` reads the `#` as a comment: blocks the string after it', () => {
+    const cmd = 'echo "$( !(a # b)\n)"; echo "; cat .env; "';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
 
   // Which bash runs the command decides where a span closes, and the guard
   // cannot know which will. bash 3.2 — the /bin/bash macOS ships — counts
@@ -946,7 +962,7 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
     ['in the span that opened it', 'echo "$(cat <<EOF\nbody )\nEOF\ncase x in x) cat .env;; esac)"'],
     ['after a nested span that opened it', 'echo "$(echo $(cat <<EOF) x\nbody )\nEOF\ncase x in x) cat .env;; esac)"'],
     ['inside an array literal', 'echo "$(cat <<EOF; a=(\nbody )\nEOF\nx); case x in x) cat .env;; esac)"'],
-    ['inside `!(`, which is closed as it was before', 'echo "$( !(cat <<EOF\nbody )\nEOF\n); case x in x) cat .env;; esac)"'],
+    ['inside `!(`, read as a subshell', 'echo "$( !(cat <<EOF\nbody )\nEOF\n); case x in x) cat .env;; esac)"'],
   ];
   for (const [where, cmd] of heredocThenArm) {
     test(`a heredoc body ${where} is skipped, and the case arm after it is read: blocks ${JSON.stringify(cmd)}`, () => {
