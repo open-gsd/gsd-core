@@ -10,22 +10,30 @@
  *   next-version-sync       chore/sync-next-version-<version>   next   scripts/sync-next-version.cjs
  *   main-to-next-backmerge  chore/backmerge-main-to-next-<sha>  next   auto-backmerge.yml (#1389)
  *
- * `Issue link required` (scripts/require-issue-link-policy.cjs) and
- * `validate-title` (.github/workflows/pr-title-validator.yml) both exempt
- * exactly these PRs through this one predicate, so the two gates cannot
- * disagree about which PRs are the pipeline's.
+ * Callers, each with its trust model:
  *
- * The exemption is from the issue-reference requirement only: validate-title
- * still enforces the title's type prefix (`bad-prefix`) on these PRs.
+ *   - scripts/require-issue-link-policy.cjs (`Issue link required`) and
+ *     .github/workflows/pr-title-validator.yml (`validate-title`) run on
+ *     pull_request_target and load this module from a BASE-branch checkout,
+ *     so a PR cannot edit the predicate that judges it.
+ *   - scripts/changeset/lint.cjs (changeset-lint, #5903) runs on pull_request
+ *     and executes PR-tree code, so the base-checkout guarantee does not apply
+ *     (a PR could already edit lint.cjs itself). The fork guard is what blocks
+ *     forgery: sameRepo is derived from the GitHub event payload.
+ *
+ * What each caller exempts:
+ *
+ *   - `Issue link required`: the closing-reference requirement.
+ *   - `validate-title`: only the missing-issue-ref verdict; the title's type
+ *     prefix (`bad-prefix`) is still enforced on these PRs.
+ *   - changeset-lint: the fragment requirement; a malformed fragment or `pr:`
+ *     drift still fails.
  *
  * Anti-forgery (#1389): a branch name alone is attacker-chosen — a fork can
  * name its branch anything. The exemption therefore also requires
  * `sameRepo === true` (head.repo.full_name == the base repository), which only
  * someone with push access to this repository can satisfy, and the exact base
  * branch each kind targets.
- *
- * Both callers load this module from a BASE-branch checkout, so a PR cannot
- * edit the predicate that judges it.
  */
 
 const { isReleaseVersion, SYNC_BRANCH_PREFIX } = require('./sync-next-version.cjs');
