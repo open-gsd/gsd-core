@@ -534,6 +534,39 @@ function getDirtyGitignores(root) {
 }
 
 /**
+ * Pure: may `rel` (a repo-relative, forward-slash path) be materialized under
+ * a sandbox directory? Rejects empty / `.` / `..` segments, backslashes and
+ * colons (Windows separators, drive letters, ADS), and any `.git` segment
+ * (case-insensitive).
+ * @param {string} rel
+ * @returns {boolean}
+ */
+function isSafeRepoPath(rel) {
+  if (!rel) return false;
+  return rel.split('/').every((seg) => (
+    seg !== '' && seg !== '.' && seg !== '..'
+    && !seg.includes('\\') && !seg.includes(':')
+    && seg.toLowerCase() !== '.git'
+  ));
+}
+
+/**
+ * The environment for git commands run in the scratch repo: the parent's with
+ * every variable that could redirect git to another repository, index,
+ * object store or config removed.
+ * @returns {NodeJS.ProcessEnv}
+ */
+function isolatedGitEnv() {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (/^GIT_(DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|CEILING_DIRECTORIES|CONFIG.*)$/.test(key)) {
+      delete env[key];
+    }
+  }
+  return env;
+}
+
+/**
  * Which of `paths` are ignored by the TRACKED `.gitignore` files alone, at
  * their HEAD versions. `check-ignore -v` reports only the highest-precedence
  * rule, so evaluating in the working tree lets an untracked or locally edited
@@ -547,37 +580,60 @@ function getDirtyGitignores(root) {
  */
 function ignoredByTrackedRules(root, paths) {
   if (paths.length === 0) return new Set();
-  const gitignores = cp.execFileSync('git', ['ls-tree', '-r', '-z', '--name-only', 'HEAD'], {
+  // `ls-tree -r -z HEAD` records: `<mode> <type> <oid>\t<path>`. Only regular
+  // blobs count — a symlinked .gitignore is not read by git >= 2.32.
+  const gitignores = [];
+  for (const record of cp.execFileSync('git', ['ls-tree', '-r', '-z', 'HEAD'], {
     cwd: root,
     encoding: 'utf8',
     timeout: 15000,
     maxBuffer: gitMaxBuffer(),
     stdio: ['ignore', 'pipe', 'ignore'],
-  }).split('\0').filter((p) => p.split('/').pop() === '.gitignore');
+  }).split('\0').filter(Boolean)) {
+    const tab = record.indexOf('\t');
+    const [mode, type] = record.slice(0, tab).split(' ');
+    const rel = record.slice(tab + 1);
+    if (type !== 'blob' || (mode !== '100644' && mode !== '100755')) continue;
+    if (rel.split('/').pop() !== '.gitignore') continue;
+    if (!isSafeRepoPath(rel)) throw new Error(`unsafe tracked .gitignore path ${sanitizeEcho(rel)}`);
+    gitignores.push(rel);
+  }
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-ignore-'));
+  const gitDir = path.join(tmp, '.git');
+  const isolated = { env: isolatedGitEnv(), cwd: tmp };
   try {
-    cp.execFileSync('git', ['init', '-q'], { cwd: tmp, timeout: 15000, stdio: ['ignore', 'pipe', 'ignore'] });
+    cp.execFileSync('git', ['--git-dir', gitDir, '--work-tree', tmp, 'init', '-q'], {
+      ...isolated,
+      timeout: 15000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const tmpPrefix = path.resolve(tmp) + path.sep;
     for (const rel of gitignores) {
+      const dest = path.resolve(tmp, ...rel.split('/'));
+      if (!dest.startsWith(tmpPrefix)) throw new Error(`tracked .gitignore path escapes the sandbox: ${sanitizeEcho(rel)}`);
       const blob = cp.execFileSync('git', ['show', `HEAD:${rel}`], {
         cwd: root,
         timeout: 15000,
         maxBuffer: gitMaxBuffer(),
         stdio: ['ignore', 'pipe', 'ignore'],
       });
-      const dest = path.join(tmp, ...rel.split('/'));
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.writeFileSync(dest, blob);
     }
     let out;
     try {
-      out = cp.execFileSync('git', ['-c', 'core.excludesFile=', 'check-ignore', '--no-index', '-v', '-z', '--stdin'], {
-        cwd: tmp,
-        encoding: 'utf8',
-        input: paths.map((f) => `${f}\0`).join(''),
-        timeout: 15000,
-        maxBuffer: gitMaxBuffer(),
-        stdio: ['pipe', 'pipe', 'ignore'],
-      });
+      out = cp.execFileSync(
+        'git',
+        ['--git-dir', gitDir, '--work-tree', tmp, '-c', 'core.excludesFile=', 'check-ignore', '--no-index', '-v', '-z', '--stdin'],
+        {
+          ...isolated,
+          encoding: 'utf8',
+          input: paths.map((f) => `${f}\0`).join(''),
+          timeout: 15000,
+          maxBuffer: gitMaxBuffer(),
+          stdio: ['pipe', 'pipe', 'ignore'],
+        },
+      );
     } catch (e) {
       if (e && e.status === 1) return new Set(); // none ignored
       throw e;
@@ -684,7 +740,7 @@ function buildCorpus(root) {
   return corpus;
 }
 
-function scan(root, baseRef) {
+function scan(root, baseRef, trackedFiles = null) {
   // One `git diff --name-status -z` per scan, shared by both consumers.
   const diffEntries = getDiffEntries(root, baseRef);
   const deletedFiles = getDeletedFiles(root, baseRef, diffEntries);
@@ -713,7 +769,7 @@ function scan(root, baseRef) {
   // already filesystem-walked corpus/testsCorpus file lists, which do see
   // them.
   const survivingBasenames = buildSurvivingBasenames([
-    ...getSurvivingFiles(root),
+    ...(trackedFiles || getSurvivingFiles(root)),
     ...corpus.map((c) => c.file),
     ...testsCorpus.map((t) => t.file),
   ]);
@@ -733,11 +789,11 @@ function scan(root, baseRef) {
  * @param {string} root
  * @returns {string[]} repo-relative paths
  */
-function getTrackedIgnoredFiles(root) {
+function getTrackedIgnoredFiles(root, trackedFiles = null) {
   // Every tracked file is judged against the tracked .gitignore files at HEAD
   // only (see ignoredByTrackedRules), so local/untracked rules cannot mask or
   // add a finding.
-  const ignored = ignoredByTrackedRules(root, getSurvivingFiles(root));
+  const ignored = ignoredByTrackedRules(root, trackedFiles || getSurvivingFiles(root));
   return [...ignored];
 }
 
@@ -801,8 +857,9 @@ function main() {
   let violations = [];
   let skipped = false;
   try {
-    trackedIgnored = getTrackedIgnoredFiles(ROOT);
-    if (isBaseResolvable(ROOT, baseRef)) violations = scan(ROOT, baseRef);
+    const trackedFiles = getSurvivingFiles(ROOT); // one `git ls-files`, two consumers
+    trackedIgnored = getTrackedIgnoredFiles(ROOT, trackedFiles);
+    if (isBaseResolvable(ROOT, baseRef)) violations = scan(ROOT, baseRef, trackedFiles);
     else skipped = true;
   } catch (e) {
     // A git failure on a resolvable base is NOT "base unreachable": exiting 0
@@ -862,6 +919,8 @@ module.exports = {
   getIgnoredDeletions,
   matchesByFullPath,
   getTrackedIgnoredFiles,
+  ignoredByTrackedRules,
+  isSafeRepoPath,
   resolveBaseBranch,
   isBaseResolvable,
   parseNameStatusZ,
