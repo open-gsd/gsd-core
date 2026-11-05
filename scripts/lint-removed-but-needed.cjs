@@ -894,10 +894,14 @@ function resolveBaseBranch(env) {
 function isSafeBranchName(name) {
   // A leading '-' would read as an option; shell metacharacters are refused
   // as defence in depth even though git is always spawned without a shell.
-  if (!name || name.startsWith('-') || NAME_DENY_RE.test(name)) return false;
+  // A bare `@` is valid ref syntax but is git's alias for HEAD.
+  if (!name || name === '@' || name.startsWith('-') || NAME_DENY_RE.test(name)) return false;
   // git's own rule (control characters, spaces, `..`, `//`, trailing `/` or
   // `.lock`, `@{`, `~^:?*[\`, ...); legal names like release+hotfix pass.
-  const r = cp.spawnSync('git', ['check-ref-format', '--branch', name], {
+  // Syntax-only form (`refs/heads/<name>`, no --branch): `--branch` would
+  // expand `@` / `@{-N}` against whatever repo the cwd is in.
+  const r = cp.spawnSync('git', ['check-ref-format', `refs/heads/${name}`], {
+    cwd: os.tmpdir(),
     encoding: 'utf8',
     timeout: 15000,
     stdio: ['ignore', 'pipe', 'ignore'],
