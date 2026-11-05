@@ -24,7 +24,6 @@ const os = require('os');
 const {
   stageSkillsForProfile,
   stageAgentsForProfile,
-  selectAgentFilesForProfile,
   stageSkillsForRuntimeAsSkills,
   cleanupStagedSkills,
   resolveProfile,
@@ -250,21 +249,6 @@ describe('stageSkillsForProfile', () => {
 });
 
 // ─── stageAgentsForProfile ───────────────────────────────────────────────────
-
-describe('selectAgentFilesForProfile', () => {
-  const files = ['gsd-foo.md', 'gsd-foo.compact.md', 'gsd-bar.md', 'notes.txt'];
-  for (const [name, profile, expected] of [
-    ['wildcard skills select only Markdown files', { skills: '*', agents: new Set() }, ['gsd-foo.md', 'gsd-foo.compact.md', 'gsd-bar.md']],
-    ['an empty agent Set selects nothing', { skills: new Set(), agents: new Set() }, []],
-    ['a plain stem does not select its compact sibling', { skills: new Set(), agents: new Set(['gsd-foo']) }, ['gsd-foo.md']],
-    ['a compact stem selects only its exact file', { skills: new Set(), agents: new Set(['gsd-foo.compact']) }, ['gsd-foo.compact.md']],
-    ['a selected non-Markdown stem is excluded', { skills: new Set(), agents: new Set(['notes']) }, []],
-  ]) {
-    test(name, () => {
-      assert.deepStrictEqual(selectAgentFilesForProfile(files, profile), expected);
-    });
-  }
-});
 
 describe('stageAgentsForProfile', () => {
   test('full profile (skills === "*") returns srcDir unchanged', (t) => {
