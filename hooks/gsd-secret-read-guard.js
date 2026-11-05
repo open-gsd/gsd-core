@@ -148,8 +148,13 @@
 //   strategy) whose program the hook cannot see, or a command inside the
 //   quoted argument of a program other than ssh's `-o` (`vim -c`). `core.pager`
 //   / `pager.*` / `GIT_PAGER` / `PAGER` are allowed on purpose (no TTY,
-//   nothing printed), except for
-//   a bare `git grep -O`, which runs the pager regardless.
+//   nothing printed), a value naming a secret file included, except for a
+//   bare `git grep -O`, which runs the pager regardless: its command is
+//   scanned, while a bare name (`core.pager=.env`) is only exec'd and stays
+//   allowed. The scan is bounded by alias hops, alias invocations and a work
+//   budget for the whole command (MAX_SCAN_WORK); past one it blocks
+//   (`alias-too-complex`, `command-too-complex`) rather than crash or stall, and
+//   a block names the git steps it went through (`via`).
 //
 // A second, unrelated contract is enforced on the Bash leg because this is the
 // one hook that already parses EVERY Bash command (#5214): a Bash command that
@@ -168,7 +173,7 @@
 // Triggers on: Read, Grep, Bash tool calls (Kimi: ReadFile, Grep, Shell)
 // Action: BLOCK (decision: 'block', exit 2) — codes secret-read |
 //         glob-too-complex | command-too-large | alias-too-complex |
-//         debugger-cli-spawn
+//         command-too-complex | debugger-cli-spawn
 // No-op: other tools, non-secret targets, hook errors (fail open — a parser
 //        bug in a hook that runs on EVERY Bash call must never brick a
 //        session; the crash policy is declared once below).
@@ -472,12 +477,36 @@ const GIT_COMMAND_OPTIONS = new Map([
   ['svn', [{ long: 'authors-prog' }]],
 ]);
 
-// Plain-alias hops on the current expansion path, and alias expansions
-// (defined or invoked) in one git command. Alias hops spend no scan depth
-// (#5492), so these bound the scan instead (git itself only stops a
-// repeated name); past either one the scan fails closed on the alias.
+// Plain-alias hops on the current expansion path, and alias invocations in
+// one git command (a definition nothing invokes is still scanned, but only
+// spends scan work). Alias hops spend no scan depth (#5492), so these bound
+// the scan instead (git itself only stops a repeated name); past either one
+// the scan fails closed on the alias.
 const MAX_ALIAS_HOPS = 16;
 const MAX_ALIAS_EXPANSIONS = 256;
+
+// Scan work for one Bash command, all its heredoc readings together (#5492).
+// A hook that crashes or outlives its runtime's timeout allows the command
+// (OpenCode kills it at 8 s), so every loop whose size comes from the command
+// charges this budget BEFORE it allocates or compares, and past it the scan
+// stops and blocks: `alias-too-complex` inside an alias expansion,
+// `command-too-complex` elsewhere. A unit is about one byte of work: each byte
+// rescanned (the command itself is not charged: MAX_COMMAND_LENGTH bounds
+// it), each git config value, alias expansion byte, URL rewrite comparison
+// and config entry the environment pairs up. The fixed charges price what
+// costs more than its bytes: a rescan's tokens (segment-dense text costs
+// about four times as much per byte as one long word), a git command, a
+// script git runs, a config entry.
+// Sized from measurement (Node 24, Ryzen AI 9 HX 370): payloads built to
+// reach the budget the costliest way (rescans of segment-dense text) decide
+// in about 1.3 s, and ordinary commands spend little of it: a script of 100
+// git commands 0.1%, 300 aliases under 1%, 1 MiB of shell nested three deep
+// about a quarter per reading. At 24 Mi the slowest case took 2.3 s.
+const MAX_SCAN_WORK = 16 * 1024 * 1024;
+const TOKEN_WORK = 4;
+const GIT_COMMAND_WORK = 64;
+const GIT_SCRIPT_WORK = 64;
+const GIT_ENTRY_WORK = 8;
 
 // ssh_config(5) options that ssh runs locally through the user's shell
 // (#5492), and the ssh options that take a value (`-o` among them).
@@ -1214,7 +1243,8 @@ function resolveCommand(words) {
     const spec = WRAPPERS.get(lastSegment(words[idx].text).toLowerCase());
     if (!spec) break;
     const next = skipWrapperArgs(words, idx + 1, spec);
-    if (spec.reads) reads.push(...wrapperReadValues(words, idx + 1, next, spec));
+    // A loop, not push(...): a spread of a command-sized array overflows the stack.
+    if (spec.reads) for (const value of wrapperReadValues(words, idx + 1, next, spec)) reads.push(value);
     idx = next;
   }
   if (idx >= words.length) return null;
@@ -1267,41 +1297,123 @@ function splitGitAlias(value) {
 
 const shellQuote = (word) => `'${word.replaceAll("'", "'\\''")}'`;
 
-// The -c values in force for the git command being scanned. git exports them
-// to every child git (GIT_CONFIG_PARAMETERS), so an alias or pager an outer
-// command sets reaches the git commands its scripts and aliases run.
-let gitConfigScope = null;
-let aliasHops = 0;
-let aliasExpansions = 0;
-// Set when the scan stopped at an alias limit, so the block says so.
-let aliasLimitHit = false;
+// The state of one scan, threaded through the recursion (one per reading of
+// the command; see scanBashCommand):
+//   gitScope         the git config in force: git exports -c values to every
+//                    child git (GIT_CONFIG_PARAMETERS), so an alias or pager an
+//                    outer command sets reaches the git commands its scripts
+//                    and aliases run. A stack of { parent, index } layers.
+//   aliasHops        plain-alias hops on the current expansion path
+//   aliasExpansions  alias invocations in the current git command
+//   alias            the alias key being expanded, which a work overrun names
+//   limit            set when the scan stopped at an alias limit
+//   shellVars        the shell variable frames in scope (see shellVarFrame)
+//   work             scan work spent on the command so far, by this reading
+//                    and the readings before it (see MAX_SCAN_WORK)
+//   via              the git steps that led to a hit, innermost first
+function newScanContext(work = 0) {
+  return {
+    gitScope: null, aliasHops: 0, aliasExpansions: 0, alias: null, limit: null, shellVars: null, work, via: [],
+  };
+}
 
-function withGitConfigs(configs, hops, scan) {
-  const saved = [gitConfigScope, aliasHops];
-  if (configs.length) gitConfigScope = { parent: gitConfigScope, configs };
-  aliasHops = hops;
+// Thrown past MAX_SCAN_WORK; the root scan turns it into a block, so it never
+// reaches main()'s fail-open catch.
+class ScanLimitError extends Error {
+  constructor(code, target) {
+    super(code);
+    this.code = code;
+    this.target = target;
+  }
+}
+
+function charge(ctx, units) {
+  ctx.work += units;
+  if (ctx.work > MAX_SCAN_WORK) {
+    throw ctx.alias === null ? new ScanLimitError('command-too-complex', '') : new ScanLimitError('alias-too-complex', ctx.alias);
+  }
+}
+
+// Records the git step a hit came through, as the hit unwinds.
+function via(ctx, label, hit) {
+  if (hit !== null) ctx.via.push(label);
+  return hit;
+}
+
+// One layer of config in force: its own entries, each key's values in order
+// (every one is kept: a later value does not hide an earlier one from the
+// scan), its url.<base>.insteadOf rewrites, and whether it sets
+// remote.<name>.vcs=ext. `next` is the layer below it in the same scope.
+function gitConfigIndex(entries, next) {
+  const byKey = new Map();
+  const rewrites = [];
+  let vcsExt = false;
+  for (const config of entries) {
+    const same = byKey.get(config.key);
+    if (same) same.push(config);
+    else byKey.set(config.key, [config]);
+    if (/^url\..*\.(?:push)?insteadof$/.test(config.key)) {
+      rewrites.push([config.value, config.rawKey.slice(4, config.rawKey.lastIndexOf('.'))]);
+    }
+    if (config.shape === 'remote.*.vcs' && config.value.toLowerCase() === 'ext') vcsExt = true;
+  }
+  return { entries, byKey, rewrites, vcsExt, next };
+}
+
+function withGitConfigs(ctx, index, hops, scan) {
+  const saved = [ctx.gitScope, ctx.aliasHops];
+  if (index !== null) ctx.gitScope = { parent: ctx.gitScope, index };
+  ctx.aliasHops = hops;
   try {
     return scan();
   } finally {
-    [gitConfigScope, aliasHops] = saved;
+    [ctx.gitScope, ctx.aliasHops] = saved;
   }
 }
 
-function* gitConfigsInForce() {
-  for (let scope = gitConfigScope; scope; scope = scope.parent) {
-    for (let i = scope.configs.length - 1; i >= 0; i--) yield scope.configs[i];
+// Every value of `key` in force, innermost first.
+function gitConfigsNamed(ctx, key) {
+  const found = [];
+  for (let scope = ctx.gitScope; scope; scope = scope.parent) {
+    for (let index = scope.index; index; index = index.next) {
+      const configs = index.byKey.get(key);
+      if (!configs) continue;
+      charge(ctx, configs.length);
+      for (let i = configs.length - 1; i >= 0; i--) found.push(configs[i]);
+    }
   }
+  return found;
 }
 
-// A config entry; `rawKey` keeps its case (url.<base>.insteadOf needs the base).
-function gitConfigEntry(rawKey, value, key = rawKey.toLowerCase()) {
-  return { rawKey, key, shape: gitConfigShape(key), value };
+// Every url.<base>.insteadOf rewrite in force, and whether vcs=ext is.
+function gitRewritesInForce(ctx) {
+  const rewrites = [];
+  let vcsExt = false;
+  for (let scope = ctx.gitScope; scope; scope = scope.parent) {
+    for (let index = scope.index; index; index = index.next) {
+      charge(ctx, index.rewrites.length);
+      for (const rewrite of index.rewrites) rewrites.push(rewrite);
+      vcsExt = vcsExt || index.vcsExt;
+    }
+  }
+  return { rewrites, vcsExt };
+}
+
+// A config entry; `rawKey` keeps its case (url.<base>.insteadOf needs the
+// base). `source` is where it was set (`-c`, `--config-env`, `$VAR`).
+function gitConfigEntry(source, rawKey, value, key = rawKey.toLowerCase()) {
+  return { source, rawKey, key, shape: gitConfigShape(key), value };
+}
+
+// The step a config contributes to a block's resolution chain.
+function configLabel(config) {
+  return config.source === `$${config.rawKey}` ? config.source : `${config.source} ${config.rawKey}`;
 }
 
 function parseGitConfig(text) {
   const eq = text.indexOf('=');
   if (eq === -1) return null;
-  return gitConfigEntry(text.slice(0, eq), text.slice(eq + 1));
+  return gitConfigEntry('-c', text.slice(0, eq), text.slice(eq + 1));
 }
 
 // Shell variables the command line sets (#5492), as a stack of frames: one
@@ -1309,9 +1421,8 @@ function parseGitConfig(text) {
 // in it) and one per command prefix (`VAR=… cmd`, `env`, `sudo`). Nested
 // scripts inherit them, as an exported environment is inherited. Every value
 // a name is given is kept, since assignment order and subshells decide which
-// one a command sees, and all of them are scanned.
-let shellVarScope = null;
-
+// one a command sees, and all of them are scanned. `gitEnv` caches the
+// frame's gitEnvIndex; `gitEnvScanned` is the scanGitInvocation memo.
 function shellVarFrame(parent, assignments) {
   if (!assignments.length) return parent;
   const vars = new Map();
@@ -1321,7 +1432,7 @@ function shellVarFrame(parent, assignments) {
     if (!vars.has(name)) vars.set(name, new Set());
     vars.get(name).add(text.slice(eq + 1));
   }
-  return { parent, vars };
+  return { parent, vars, gitEnv: undefined, gitEnvScanned: false };
 }
 
 // The `NAME=value` words of a script's declaration builtins and bare
@@ -1336,59 +1447,94 @@ function scriptAssignments(tokens) {
   const assignments = [];
   for (const words of bySeg.values()) {
     if (words.every((w) => ASSIGNMENT_RE.test(w)) || DECLARATION_COMMANDS.has(words[0])) {
-      assignments.push(...words.filter((w) => ASSIGNMENT_RE.test(w)));
+      for (const w of words) if (ASSIGNMENT_RE.test(w)) assignments.push(w);
     }
   }
   return assignments;
 }
 
-function shellVarValues(name) {
+// Every value `name` is given in `frame` and the frames above it.
+function shellVarValues(frame, name, ctx) {
   const values = new Set();
-  for (let frame = shellVarScope; frame; frame = frame.parent) {
-    for (const value of frame.vars.get(name) || []) values.add(value);
+  for (let f = frame; f; f = f.parent) {
+    for (const value of f.vars.get(name) || []) {
+      charge(ctx, 1);
+      values.add(value);
+    }
   }
   return [...values];
 }
 
-function shellVarNames() {
-  const names = new Set();
-  for (let frame = shellVarScope; frame; frame = frame.parent) for (const name of frame.vars.keys()) names.add(name);
-  return names;
-}
-
 // `--config-env=<key>=<var>`: the key ends at the last `=`, since a
 // subsection may hold one and a variable name may not (git's config.c).
-function gitConfigEnvEntries(spec) {
+function gitConfigEnvEntries(spec, ctx) {
   const eq = spec.lastIndexOf('=');
   if (eq <= 0) return [];
-  return shellVarValues(spec.slice(eq + 1)).map((value) => gitConfigEntry(spec.slice(0, eq), value));
+  const entries = [];
+  for (const value of shellVarValues(ctx.shellVars, spec.slice(eq + 1), ctx)) {
+    charge(ctx, spec.length + value.length + GIT_ENTRY_WORK);
+    entries.push(gitConfigEntry('--config-env', spec.slice(0, eq), value));
+  }
+  return entries;
 }
 
-// Config entries git takes from the environment the command line sets:
-// GIT_CONFIG_KEY_<n> / GIT_CONFIG_VALUE_<n> (whatever GIT_CONFIG_COUNT says,
-// which may come from the inherited environment), GIT_CONFIG_PARAMETERS
-// (its `'key'='value'` words, split at every `=` since a subsection may
-// hold one), and the GIT_ENV_CONFIG_KEYS twins, named by their variable.
-function gitEnvConfigs() {
-  const configs = [];
-  for (const name of shellVarNames()) {
-    const n = /^GIT_CONFIG_KEY_(\d+)$/.exec(name);
-    if (!n) continue;
-    for (const key of shellVarValues(name)) {
-      for (const value of shellVarValues(`GIT_CONFIG_VALUE_${n[1]}`)) configs.push(gitConfigEntry(key, value));
-    }
-  }
-  for (const parameters of shellVarValues('GIT_CONFIG_PARAMETERS')) {
-    for (const word of splitGitAlias(parameters) || []) {
-      for (let eq = word.indexOf('='); eq !== -1; eq = word.indexOf('=', eq + 1)) {
-        configs.push(gitConfigEntry(word.slice(0, eq), word.slice(eq + 1)));
+// The config git takes from the environment a frame and the frames above it
+// set: GIT_CONFIG_KEY_<n> / GIT_CONFIG_VALUE_<n> pairs (whatever
+// GIT_CONFIG_COUNT says, which may come from the inherited environment),
+// GIT_CONFIG_PARAMETERS (its `'key'='value'` words, split at every `=` since
+// a subsection may hold one), and the GIT_ENV_CONFIG_KEYS twins, named by
+// their variable; `secretFile` is a GIT_CONFIG_FILE_VARS value naming a
+// secret file. Built once per frame as a layer over its parent's (a pair may
+// take its key from one frame and its value from another), so the git
+// commands of a script do not each rebuild it.
+function gitEnvIndex(frame, ctx) {
+  if (frame === null) return null;
+  if (frame.gitEnv !== undefined) return frame.gitEnv;
+  const parent = gitEnvIndex(frame.parent, ctx);
+  const inherited = parent === null ? null : parent.secretFile;
+  const entries = [];
+  const add = (source, rawKey, value, key) => {
+    charge(ctx, rawKey.length + value.length + GIT_ENTRY_WORK);
+    entries.push(gitConfigEntry(source, rawKey, value, key));
+  };
+  let secretFile = inherited;
+  for (const [name, values] of frame.vars) {
+    const pair = /^GIT_CONFIG_(KEY|VALUE)_(\d+)$/.exec(name);
+    if (pair) {
+      // This frame's keys pair with the values set here or above; its values
+      // with the keys set above (the keys set here are paired already).
+      const keyName = `GIT_CONFIG_KEY_${pair[2]}`;
+      const own = pair[1] === 'KEY';
+      const keys = own ? values : shellVarValues(frame.parent, keyName, ctx);
+      const paired = own ? shellVarValues(frame, `GIT_CONFIG_VALUE_${pair[2]}`, ctx) : values;
+      for (const key of keys) for (const value of paired) add(`$${keyName}`, key, value);
+    } else if (name === 'GIT_CONFIG_PARAMETERS') {
+      for (const parameters of values) {
+        for (const word of splitGitAlias(parameters) || []) {
+          for (let eq = word.indexOf('='); eq !== -1; eq = word.indexOf('=', eq + 1)) {
+            charge(ctx, word.length + GIT_ENTRY_WORK);
+            entries.push(gitConfigEntry(`$${name}`, word.slice(0, eq), word.slice(eq + 1)));
+          }
+        }
+      }
+    } else if (GIT_ENV_CONFIG_KEYS.has(name)) {
+      for (const value of values) add(`$${name}`, name, value, GIT_ENV_CONFIG_KEYS.get(name));
+    } else if (GIT_CONFIG_FILE_VARS.includes(name) && secretFile === null) {
+      for (const value of values) {
+        if (namesSecret(value)) {
+          secretFile = { label: `$${name}`, value };
+          break;
+        }
       }
     }
   }
-  for (const [name, key] of GIT_ENV_CONFIG_KEYS) {
-    for (const value of shellVarValues(name)) configs.push(gitConfigEntry(name, value, key));
+  if (entries.length === 0 && secretFile === inherited) {
+    frame.gitEnv = parent;
+  } else {
+    frame.gitEnv = gitConfigIndex(entries, parent);
+    frame.gitEnv.secretFile = secretFile;
   }
-  return configs;
+  return frame.gitEnv;
 }
 
 // The script a command-valued key runs, or null (#5045, #5492).
@@ -1404,24 +1550,38 @@ function gitConfigScript({ shape, value }) {
   return null;
 }
 
-function aliasLimit(config) {
-  aliasLimitHit = true;
+function aliasLimit(config, ctx) {
+  ctx.limit = { code: 'alias-too-complex', key: config.rawKey };
   return config.rawKey;
 }
 
 // Scan alias `config` run with the words `rest` after it. A `!` alias is a
 // shell script; a plain alias is the git command its words (split as git
-// splits them) make, scanned at the same depth (#5492).
-function scanGitAlias(config, rest, depth) {
-  if (++aliasExpansions > MAX_ALIAS_EXPANSIONS) return aliasLimit(config);
+// splits them) make, scanned at the same depth (#5492). Only an `invoked`
+// alias spends the expansion budget; every expansion is charged its bytes
+// (quoting at most quadruples a word) before it is built.
+function scanGitAlias(config, rest, depth, ctx, invoked) {
+  if (invoked && ++ctx.aliasExpansions > MAX_ALIAS_EXPANSIONS) return aliasLimit(config, ctx);
   const { value } = config;
-  if (value.startsWith('!')) {
-    return withGitConfigs([], 0, () => findSecretRead([value.slice(1), ...rest.map(shellQuote)].join(' '), depth + 1));
+  let restBytes = 0;
+  for (const word of rest) restBytes += 4 * word.length + 3;
+  const saved = ctx.alias;
+  ctx.alias = config.rawKey;
+  try {
+    charge(ctx, value.length + restBytes + GIT_SCRIPT_WORK);
+    const label = `alias ${config.rawKey.slice('alias.'.length)}`;
+    if (value.startsWith('!')) {
+      return via(ctx, label, withGitConfigs(ctx, null, 0,
+        () => findSecretRead([value.slice(1), ...rest.map(shellQuote)].join(' '), depth + 1, ctx)));
+    }
+    const words = splitGitAlias(value);
+    if (!words) return null;
+    if (ctx.aliasHops >= MAX_ALIAS_HOPS) return aliasLimit(config, ctx);
+    return via(ctx, label, withGitConfigs(ctx, null, ctx.aliasHops + 1,
+      () => findSecretRead(['git', ...words, ...rest].map(shellQuote).join(' '), depth, ctx)));
+  } finally {
+    ctx.alias = saved;
   }
-  const words = splitGitAlias(value);
-  if (!words) return null;
-  if (aliasHops >= MAX_ALIAS_HOPS) return aliasLimit(config);
-  return withGitConfigs([], aliasHops + 1, () => findSecretRead(['git', ...words, ...rest].map(shellQuote).join(' '), depth));
 }
 
 // The values `args` gives the options in `specs` (see GIT_COMMAND_OPTIONS),
@@ -1462,15 +1622,19 @@ function gitOptionValues(specs, args) {
 // The pagers a bare `git grep -O` may run: GIT_PAGER, pager.grep unless it
 // is a boolean, core.pager and PAGER, in git's order; all are scanned. It
 // runs with no terminal, unlike paging.
-function gitGrepPagers() {
-  return [...gitConfigsInForce()].filter((config) => config.key === 'core.pager'
-    || (config.key === 'pager.grep' && !GIT_BOOLEAN_RE.test(config.value))).map((config) => config.value);
+function gitGrepPagers(ctx) {
+  return [...gitConfigsNamed(ctx, 'pager.grep').filter((config) => !GIT_BOOLEAN_RE.test(config.value)),
+    ...gitConfigsNamed(ctx, 'core.pager')];
 }
 
-// Scripts a subcommand runs from its trailing words, rebuilt the way git
-// runs them: `submodule foreach` as `sh -c '<first> "$@"'`, `bisect run` as
-// its words single-quoted under `sh -c`, `for-each-repo` as a nested git
-// command line, `remote-ext` as an ext:: command.
+// Pager keys run with no terminal, so their value is not a file git quotes.
+const isGitPagerKey = (key) => key === 'core.pager' || key.startsWith('pager.');
+
+// Scripts a subcommand runs from its trailing words, as [label, script]
+// pairs, rebuilt the way git runs them: `submodule foreach` as
+// `sh -c '<first> "$@"'`, `bisect run` as its words single-quoted under
+// `sh -c`, `for-each-repo` as a nested git command line, `remote-ext` as an
+// ext:: command.
 function gitTrailingScripts(sub, args) {
   if (sub === 'submodule' || sub === 'submodule--helper') {
     let k = 0;
@@ -1482,18 +1646,18 @@ function gitTrailingScripts(sub, args) {
         break;
       }
     }
-    return k < args.length ? [[args[k], ...args.slice(k + 1).map(shellQuote)].join(' ')] : [];
+    return k < args.length ? [[`${sub} foreach`, [args[k], ...args.slice(k + 1).map(shellQuote)].join(' ')]] : [];
   }
-  if (sub === 'bisect' && args[0] === 'run') return [args.slice(1).map(shellQuote).join(' ')];
+  if (sub === 'bisect' && args[0] === 'run') return [['bisect run', args.slice(1).map(shellQuote).join(' ')]];
   if (sub === 'for-each-repo') {
     let k = 0;
     while (k < args.length && args[k].startsWith('-')) {
       if (args[k++] === '--') break;
       if (args[k - 1] === '--config') k++;
     }
-    return [['git', ...args.slice(k)].map(shellQuote).join(' ')];
+    return [[sub, ['git', ...args.slice(k)].map(shellQuote).join(' ')]];
   }
-  if (sub === 'remote-ext' && args.length > 1) return [extCommand(args[1])];
+  if (sub === 'remote-ext' && args.length > 1) return [[sub, extCommand(args[1])]];
   return [];
 }
 
@@ -1520,32 +1684,59 @@ function extCommand(spec) {
   return argv.map(shellQuote).join(' ');
 }
 
+// A script git runs, scanned one level down.
+function scanGitScript(script, label, depth, ctx) {
+  if (!script) return null;
+  charge(ctx, GIT_SCRIPT_WORK);
+  return via(ctx, label, findSecretRead(script, depth + 1, ctx));
+}
+
 // The commands ext:: URLs run: in any subcommand word (after an option's
-// `=`) or -c value, after the url.<base>.insteadOf rewrites in force; with
-// remote.<name>.vcs=ext in force a plain URL is an ext command too.
-function gitExtScripts(words, own) {
-  const rewrites = [];
-  let vcsExt = false;
-  for (const config of gitConfigsInForce()) {
-    if (/^url\..*\.(?:push)?insteadof$/.test(config.key)) {
-      rewrites.push([config.value, config.rawKey.slice(4, config.rawKey.lastIndexOf('.'))]);
-    }
-    if (config.shape === 'remote.*.vcs' && config.value.toLowerCase() === 'ext') vcsExt = true;
-  }
-  const urls = [
-    ...words.map((w) => (w.startsWith('-') && w.includes('=') ? w.slice(w.indexOf('=') + 1) : w)),
-    ...own.map((config) => config.value), ...rewrites.map(([, base]) => base),
-  ];
-  const scripts = [];
+// `=`) or config value, after the url.<base>.insteadOf rewrites in force;
+// with remote.<name>.vcs=ext in force a plain URL is an ext command too.
+function scanGitExtUrls(urls, { rewrites, vcsExt }, depth, ctx) {
+  const scan = (candidate) => {
+    if (/^ext::/i.test(candidate)) return scanGitScript(extCommand(candidate.slice(5)), 'ext::', depth, ctx);
+    return vcsExt ? scanGitScript(extCommand(candidate), 'ext::', depth, ctx) : null;
+  };
   for (const url of urls) {
-    const rewritten = rewrites.filter(([prefix]) => prefix && url.startsWith(prefix))
-      .map(([prefix, base]) => base + url.slice(prefix.length));
-    for (const candidate of [url, ...rewritten]) {
-      if (/^ext::/i.test(candidate)) scripts.push(extCommand(candidate.slice(5)));
-      else if (vcsExt) scripts.push(extCommand(candidate));
+    let hit = scan(url);
+    if (hit !== null) return hit;
+    for (const [prefix, base] of rewrites) {
+      charge(ctx, Math.min(prefix.length, url.length) + 1);
+      if (!prefix || !url.startsWith(prefix)) continue;
+      charge(ctx, base.length + url.length - prefix.length);
+      hit = scan(base + url.slice(prefix.length));
+      if (hit !== null) return hit;
     }
   }
-  return scripts;
+  return null;
+}
+
+// The scripts of command-valued configs, and a config value naming a secret
+// file, which git may quote in an error (a pager's value is not one: with no
+// terminal git only execs it).
+function scanGitConfigValues(configs, depth, ctx) {
+  for (const config of configs) {
+    charge(ctx, config.value.length + GIT_ENTRY_WORK);
+    if (config.key.startsWith('alias.')) continue;
+    const script = gitConfigScript(config);
+    const hit = script === null ? null : scanGitScript(script, configLabel(config), depth, ctx);
+    if (hit !== null) return hit;
+    if (!isGitPagerKey(config.key) && namesSecret(config.value)) return via(ctx, configLabel(config), config.value);
+  }
+  return null;
+}
+
+// Another alias or script may run any alias defined here, so every
+// definition but the invoked one is scanned on its own as well.
+function scanGitAliasDefinitions(configs, invoked, depth, ctx) {
+  for (const config of configs) {
+    if (!config.key.startsWith('alias.') || config.key === invoked) continue;
+    const hit = scanGitAlias(config, [], depth, ctx, false);
+    if (hit !== null) return hit;
+  }
+  return null;
 }
 
 /**
@@ -1561,13 +1752,11 @@ function gitExtScripts(words, own) {
  * command line does not set, program-path keys, or keys outside those sets:
  * documented gaps, not a promise of complete Git config analysis.
  */
-function scanGitInvocation(operands, depth) {
+function scanGitInvocation(operands, depth, ctx) {
+  charge(ctx, GIT_COMMAND_WORK + operands.length);
   // The alias budget is per git command, however it is reached; a nested git
   // inside an alias or a script shares its outer command's budget.
-  if (aliasHops === 0 && !gitConfigScope) {
-    aliasExpansions = 0;
-    aliasLimitHit = false;
-  }
+  if (ctx.aliasHops === 0 && ctx.gitScope === null) ctx.aliasExpansions = 0;
   const { sub, configs: globals } = walkGitGlobals(operands);
   const name = sub === -1 ? null : operands[sub].text;
   const rest = sub === -1 ? [] : operands.slice(sub + 1).map((w) => w.text);
@@ -1575,51 +1764,74 @@ function scanGitInvocation(operands, depth) {
   // #4856 pathspec exemption stays case-sensitive: both fail closed).
   const command = name && name.toLowerCase();
   const options = gitOptionValues(GIT_COMMAND_OPTIONS.get(command) || [], rest);
-  for (const file of GIT_CONFIG_FILE_VARS.flatMap(shellVarValues)) if (namesSecret(file)) return file;
+  const envIndex = gitEnvIndex(ctx.shellVars, ctx);
+  if (envIndex !== null && envIndex.secretFile !== null) return via(ctx, envIndex.secretFile.label, envIndex.secretFile.value);
+  const own = [];
+  const addOwn = (entry) => {
+    if (entry !== null) own.push(entry);
+  };
+  for (const config of globals) {
+    if (typeof config === 'string') addOwn(parseGitConfig(config));
+    else for (const entry of gitConfigEnvEntries(config.configEnv, ctx)) own.push(entry);
+  }
+  for (const [spec, value] of options) if (spec.config) addOwn(parseGitConfig(value));
   // The environment's config comes in once, at the command the line runs: a
   // plain-alias hop re-enters with it already in force.
-  const own = [
-    ...(aliasHops === 0 ? gitEnvConfigs() : []),
-    ...[...globals, ...options.filter(([spec]) => spec.config).map(([, value]) => value)]
-      .flatMap((config) => (typeof config === 'string' ? [parseGitConfig(config)] : gitConfigEnvEntries(config.configEnv))),
-  ].filter(Boolean);
-  return withGitConfigs(own, aliasHops, () => {
-    for (const config of own) {
-      if (config.key.startsWith('alias.')) continue;
-      const script = gitConfigScript(config);
-      const hit = script === null ? null : findSecretRead(script, depth + 1);
-      if (hit) return hit;
-      if (namesSecret(config.value)) return config.value;
+  const env = ctx.aliasHops === 0 ? envIndex : null;
+  // A frame's environment config scans the same way at every depth-0 git
+  // command that sets no config of its own and runs inside no other, so it is
+  // scanned once per frame there (a prefix assignment makes a new frame).
+  const frame = ctx.shellVars;
+  const memo = env !== null && depth === 0 && ctx.gitScope === null && own.length === 0;
+  const invoked = name === null ? null : `alias.${name.toLowerCase()}`;
+  return withGitConfigs(ctx, own.length ? gitConfigIndex(own, env) : env, ctx.aliasHops, () => {
+    if (env !== null && !(memo && frame.gitEnvScanned)) {
+      const inForce = gitRewritesInForce(ctx);
+      for (let layer = env; layer; layer = layer.next) {
+        const hit = scanGitConfigValues(layer.entries, depth, ctx)
+          ?? scanGitAliasDefinitions(layer.entries, null, depth, ctx)
+          ?? scanGitExtUrls(layer.entries.map((config) => config.value), inForce, depth, ctx);
+        if (hit !== null) return hit;
+      }
+      if (memo) frame.gitEnvScanned = true;
     }
+    let hit = scanGitConfigValues(own, depth, ctx);
+    if (hit !== null) return hit;
     // Every definition of the invoked alias in force runs with the words
     // after it: a variable may hold several values, and only one of them wins.
-    const invoked = name === null ? null : `alias.${name.toLowerCase()}`;
-    for (const alias of invoked ? [...gitConfigsInForce()].filter((config) => config.key === invoked) : []) {
-      const hit = scanGitAlias(alias, rest, depth);
-      if (hit) return hit;
+    for (const alias of invoked === null ? [] : gitConfigsNamed(ctx, invoked)) {
+      hit = scanGitAlias(alias, rest, depth, ctx, true);
+      if (hit !== null) return hit;
     }
-    // Another alias or script may run any alias defined here.
-    for (const config of own) {
-      if (!config.key.startsWith('alias.') || config.key === invoked) continue;
-      const hit = scanGitAlias(config, [], depth);
-      if (hit) return hit;
+    hit = scanGitAliasDefinitions(own, invoked, depth, ctx);
+    if (hit !== null) return hit;
+    let bare = null;
+    for (const [spec, value] of options) {
+      if (spec.config) continue;
+      if (spec.optional && value === null) bare = spec;
+      else if ((hit = scanGitScript(value, `${command} --${spec.long}`, depth, ctx)) !== null) return hit;
     }
-    const scripts = [
-      ...options.filter(([spec]) => !spec.config).flatMap(([spec, value]) => (spec.optional && value === null ? gitGrepPagers() : [value])),
-      ...gitTrailingScripts(command, rest), ...gitExtScripts(rest, own),
-    ];
-    for (const script of scripts) {
-      if (!script) continue;
-      const hit = findSecretRead(script, depth + 1);
-      if (hit) return hit;
+    // A bare `grep -O` runs the pagers in force, however many times it is given.
+    for (const pager of bare === null ? [] : gitGrepPagers(ctx)) {
+      hit = via(ctx, `${command} --${bare.long}`, scanGitScript(pager.value, configLabel(pager), depth, ctx));
+      if (hit !== null) return hit;
     }
-    return null;
+    for (const [label, script] of gitTrailingScripts(command, rest)) {
+      hit = scanGitScript(script, label, depth, ctx);
+      if (hit !== null) return hit;
+    }
+    const inForce = gitRewritesInForce(ctx);
+    const urls = [];
+    for (const w of rest) urls.push(w.startsWith('-') && w.includes('=') ? w.slice(w.indexOf('=') + 1) : w);
+    for (const config of own) urls.push(config.value);
+    for (const [, base] of inForce.rewrites) urls.push(base);
+    return scanGitExtUrls(urls, inForce, depth, ctx);
   });
 }
 
 // The commands an ssh client's `-o` options run locally (#5492): the value
 // after `-o` (attached, or the next word, also at the end of a bundle), as
-// `Keyword=value` or `Keyword value`.
+// `Keyword=value` or `Keyword value`; [label, script] pairs.
 function sshOptionScripts(operands) {
   const scripts = [];
   for (let k = 0; k < operands.length; k++) {
@@ -1630,7 +1842,7 @@ function sshOptionScripts(operands) {
       if (!SSH_VALUE_FLAGS.includes(t[i])) continue;
       const value = i + 1 < t.length ? t.slice(i + 1) : operands[++k] && operands[k].text;
       const m = t[i] === 'o' && typeof value === 'string' && SSH_OPTION_RE.exec(value);
-      if (m && SSH_LOCAL_COMMAND_OPTIONS.has(m[1].toLowerCase())) scripts.push(m[2]);
+      if (m && SSH_LOCAL_COMMAND_OPTIONS.has(m[1].toLowerCase())) scripts.push([`-o ${m[1]}`, m[2]]);
       break;
     }
   }
@@ -1784,15 +1996,18 @@ function precedingOp(s, bySeg, sepAfter) {
 // #5513: the same scan under the other readings of a heredoc: bash 3.2.57's `$( )` span
 // (bodies not skipped) and the earlier tag reading (tag ends at any whitespace). Only a
 // command that opens a heredoc can read differently, so the extra passes are skipped for
-// every other command.
-function findSecretReadUnderOtherReadings(command) {
+// every other command. Each reading has its own context, but spends the work budget the
+// earlier readings left (`work`), so the budget bounds the whole command.
+function findSecretReadUnderOtherReadings(command, work) {
   if (!command.includes('<<')) return null;
   for (const [bodiesSkipped, tagsAsWords] of [[false, true], [true, false]]) {
     heredocBodiesSkippedInSpans = bodiesSkipped;
     heredocTagsAsWords = tagsAsWords;
     try {
-      const hit = findSecretRead(command, 0);
-      if (hit) return hit;
+      const ctx = newScanContext(work);
+      const found = scanBashCommand(command, ctx);
+      if (found !== null) return found;
+      work = ctx.work;
     } finally {
       heredocBodiesSkippedInSpans = true;
       heredocTagsAsWords = true;
@@ -1801,24 +2016,42 @@ function findSecretReadUnderOtherReadings(command) {
   return null;
 }
 
-// Returns the offending token text, or null. The script's own variable
-// assignments are in scope for everything it runs, nested spans included.
-function findSecretRead(command, depth) {
-  const tokenized = tokenize(command);
-  const saved = shellVarScope;
-  shellVarScope = shellVarFrame(saved, scriptAssignments(tokenized.tokens));
+// One reading of a Bash command, scanned with a fresh context: the block's
+// code, target and resolution chain (outermost step first), or null. A scan
+// past one of its limits blocks here rather than reaching main()'s catch.
+function scanBashCommand(command, ctx = newScanContext()) {
   try {
-    return scanScript(tokenized, depth);
-  } finally {
-    shellVarScope = saved;
+    const target = findSecretRead(command, 0, ctx, false);
+    if (target === null) return null;
+    return { code: ctx.limit === null ? 'secret-read' : ctx.limit.code, target, via: ctx.via.reverse() };
+  } catch (e) {
+    if (!(e instanceof ScanLimitError)) throw e;
+    return { code: e.code, target: e.target, via: [] };
   }
 }
 
-function scanScript({ tokens, nested }, depth) {
-  const scriptScope = shellVarScope;
+// Returns the offending token text, or null. The script's own variable
+// assignments are in scope for everything it runs, nested spans included.
+// A rescan is charged its bytes and tokens; the command itself is not, as
+// MAX_COMMAND_LENGTH bounds it.
+function findSecretRead(command, depth, ctx, rescan = true) {
+  if (rescan) charge(ctx, command.length);
+  const tokenized = tokenize(command);
+  if (rescan) charge(ctx, TOKEN_WORK * tokenized.tokens.length);
+  const saved = ctx.shellVars;
+  ctx.shellVars = shellVarFrame(saved, scriptAssignments(tokenized.tokens));
+  try {
+    return scanScript(tokenized, depth, ctx);
+  } finally {
+    ctx.shellVars = saved;
+  }
+}
+
+function scanScript({ tokens, nested }, depth, ctx) {
+  const scriptScope = ctx.shellVars;
   for (const sub of nested) {
     if (depth < MAX_NESTING_DEPTH) {
-      const hit = findSecretRead(sub, depth + 1);
+      const hit = findSecretRead(sub, depth + 1, ctx);
       if (hit) return hit;
     }
   }
@@ -1873,12 +2106,12 @@ function scanScript({ tokens, nested }, depth) {
     const heredocs = heredocsBySeg.get(s) || [];
     for (const file of cmd.reads) if (namesSecret(file)) return file;
     // A prefix's variables reach this command and everything it runs.
-    shellVarScope = shellVarFrame(scriptScope, cmd.assigns);
+    ctx.shellVars = shellVarFrame(scriptScope, cmd.assigns);
 
     // eval concatenates ALL its operands and runs the result.
     if (base === 'eval') {
       if (depth < MAX_NESTING_DEPTH) {
-        const hit = findSecretRead(operands.map((w) => w.text).join(' '), depth + 1);
+        const hit = findSecretRead(operands.map((w) => w.text).join(' '), depth + 1, ctx);
         if (hit) return hit;
       }
       continue;
@@ -1890,7 +2123,7 @@ function scanScript({ tokens, nested }, depth) {
         if (w.procsub !== undefined && depth < MAX_NESTING_DEPTH) {
           const src = reconstructedProcsub(w.procsub);
           if (src !== null) {
-            const hit = findSecretRead(src, depth + 1);
+            const hit = findSecretRead(src, depth + 1, ctx);
             if (hit) return hit;
           }
         } else if (operandNamesSecret(w.text)) return w.text;
@@ -1900,28 +2133,28 @@ function scanScript({ tokens, nested }, depth) {
 
     // xargs turns stdin file names into a sub-command's operands.
     if (base === 'xargs' && depth < MAX_NESTING_DEPTH) {
-      const hit = scanXargsPipe(operands, s, bySeg, sepAfter, depth);
+      const hit = scanXargsPipe(operands, s, bySeg, sepAfter, depth, ctx);
       if (hit) return hit;
       // `.env` given to xargs itself (`xargs -a .env cat`) is an ordinary
       // operand — fall through to the operand check below.
     }
 
     if (SHELL_INTERPRETERS.has(base) && depth < MAX_NESTING_DEPTH) {
-      const hit = scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth);
+      const hit = scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
       if (hit) return hit;
       // `bash .env` (file mode) is caught by the operand check below.
     }
 
     // Git runs commands from -c values, aliases, options and URLs (#5045, #5492).
     if ((base === 'git' || base === 'git.exe') && depth < MAX_NESTING_DEPTH) {
-      const hit = scanGitInvocation(operands, depth);
+      const hit = scanGitInvocation(operands, depth, ctx);
       if (hit) return hit;
     }
 
     // ssh runs ProxyCommand-style -o values locally (#5492).
     if (SSH_CLIENTS.has(base) && depth < MAX_NESTING_DEPTH) {
-      for (const script of sshOptionScripts(operands)) {
-        const hit = findSecretRead(script, depth + 1);
+      for (const [label, script] of sshOptionScripts(operands)) {
+        const hit = via(ctx, `${base} ${label}`, findSecretRead(script, depth + 1, ctx));
         if (hit) return hit;
       }
     }
@@ -2016,12 +2249,12 @@ function findDebuggerCliSpawn(command, depth) {
 }
 
 // A shell interpreter's script comes from `-c`, a file operand, or stdin.
-function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth) {
+function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx) {
   const cIdx = operands.findIndex((w) => DASH_C_RE.test(w.text));
   if (cIdx !== -1) {
     // Mode c: the next operand is the script; stdin is DATA (not scanned).
     const script = operands[cIdx + 1];
-    if (script) return findSecretRead(script.text, depth + 1);
+    if (script) return findSecretRead(script.text, depth + 1, ctx);
     return null;
   }
   let fileTok;
@@ -2033,23 +2266,23 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
     // Mode file: `bash <(echo 'cat .env')`; a plain file is checked as an operand.
     if (fileTok.procsub !== undefined) {
       const src = reconstructedProcsub(fileTok.procsub);
-      if (src !== null) return findSecretRead(src, depth + 1);
+      if (src !== null) return findSecretRead(src, depth + 1, ctx);
     }
     return null;
   }
   // Mode stdin: heredoc bodies, here-strings, and a piped echo/printf source.
   for (const h of heredocs) {
-    const hit = findSecretRead(h.text, depth + 1);
+    const hit = findSecretRead(h.text, depth + 1, ctx);
     if (hit) return hit;
   }
   for (const hs of hereStrings) {
-    const hit = findSecretRead(hs, depth + 1);
+    const hit = findSecretRead(hs, depth + 1, ctx);
     if (hit) return hit;
   }
   const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
   if ((op === '|' || op === '|&') && prevSeg >= 0) {
     const src = reconstructedScript((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
-    if (src !== null) return findSecretRead(src, depth + 1);
+    if (src !== null) return findSecretRead(src, depth + 1, ctx);
   }
   return null;
 }
@@ -2059,7 +2292,7 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
 // redirected by `-a`/`--arg-file`. A sub-command that is itself a shell
 // (`xargs -I{} sh -c 'cat .env'`) carries a literal script and is scanned in
 // mode c whether or not a pipe feeds it.
-function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
+function scanXargsPipe(operands, s, bySeg, sepAfter, depth, ctx) {
   let argFile = false;
   let subIdx = -1;
   for (let m = 0; m < operands.length; m++) {
@@ -2092,12 +2325,12 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
   const subBase = lastSegment(operands[subIdx].text).toLowerCase();
   if (SHELL_INTERPRETERS.has(subBase)) {
     // Heredocs/here-strings belong to xargs, not the sub-shell; pass none.
-    const hit = scanShellInterpreter(operands.slice(subIdx + 1), [], [], s, bySeg, sepAfter, depth);
+    const hit = scanShellInterpreter(operands.slice(subIdx + 1), [], [], s, bySeg, sepAfter, depth, ctx);
     if (hit) return hit;
   } else {
     // Any other sub-command (`git -c …`, `ssh -o …`) is scanned as the
     // command xargs runs; stdin words only add operands after it.
-    const hit = findSecretRead(operands.slice(subIdx).map((w) => shellQuote(w.text)).join(' '), depth + 1);
+    const hit = findSecretRead(operands.slice(subIdx).map((w) => shellQuote(w.text)).join(' '), depth + 1, ctx);
     if (hit) return hit;
   }
   if (argFile) return null; // stdin replaced by a file — no pipeline inference
@@ -2124,7 +2357,7 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
 
 const PATTERN_TEXT = '.env, .env.<suffix> (except .env.example/.sample/.template/.dist), .secrets';
 
-function reasonFor(code, tool, target) {
+function reasonFor(code, tool, target, via = []) {
   if (code === 'command-too-large') {
     return `Secret read guard: this Bash command is over ${MAX_COMMAND_LENGTH} characters and ` +
       'cannot be checked for secret-file reads. Split it into smaller commands.';
@@ -2135,8 +2368,13 @@ function reasonFor(code, tool, target) {
   }
   if (code === 'alias-too-complex') {
     return `Secret read guard: the git aliases in this command ('${target}') expand more than ${MAX_ALIAS_HOPS} ` +
-      `hops deep or ${MAX_ALIAS_EXPANSIONS} times and cannot be checked for secret-file reads. ` +
-      'Run the expanded git command instead.';
+      `hops deep, ${MAX_ALIAS_EXPANSIONS} times or past the scan budget, and cannot be checked for ` +
+      'secret-file reads. Run the expanded git command instead.';
+  }
+  if (code === 'command-too-complex') {
+    return 'Secret read guard: this command (its nested scripts, git configuration, aliases or URLs) takes more ' +
+      `than the scan budget (${MAX_SCAN_WORK} units) to resolve, so it cannot be checked for secret-file reads. ` +
+      'Split it into smaller commands.';
   }
   if (code === 'debugger-cli-spawn') {
     return `Debugger spawn guard: this Bash command launches the debugger as a CLI process ('--agent ${target}'). ` +
@@ -2144,7 +2382,8 @@ function reasonFor(code, tool, target) {
       'Spawn it with the Agent tool instead: Agent(subagent_type="gsd-debugger", run_in_background=false, ...) ' +
       'and wait for its structured return.';
   }
-  return `Secret read guard: ${tool} would read '${target}', which matches a protected secret-file ` +
+  const chain = via.length ? ` (via ${via.join(' → ')})` : '';
+  return `Secret read guard: ${tool} would read '${target}'${chain}, which matches a protected secret-file ` +
     `pattern (${PATTERN_TEXT}). Secret values must not be read into the conversation. ` +
     'If you need a specific value, ask the user for it; if you need the variable NAMES, ' +
     'read the non-secret template (.env.example) instead.' +
@@ -2154,10 +2393,12 @@ function reasonFor(code, tool, target) {
 }
 
 // stdout gets the typed JSON block; stderr gets the plain reason string
-// (Kimi's hook bus reads stderr verbatim back to the model — #3911).
-function emitBlock(code, tool, target) {
-  const reason = reasonFor(code, tool, target);
-  deny({ decision: 'block', code, tool, path: target, reason }, reason);
+// (Kimi's hook bus reads stderr verbatim back to the model — #3911). `via`,
+// the git steps a Bash read was reached through, is present only when there
+// are some.
+function emitBlock(code, tool, target, via = []) {
+  const reason = reasonFor(code, tool, target, via);
+  deny({ decision: 'block', code, tool, path: target, reason, ...(via.length ? { via } : {}) }, reason);
 }
 
 // Strips a `module:` prefix so Kimi's `kimi_cli.tools.file:Grep` (not in the
@@ -2304,8 +2545,9 @@ function main() {
       if (command === '') allow(undefined);
       if (command.length > MAX_COMMAND_LENGTH) emitBlock('command-too-large', tool, '');
       exemption.bashLine = command;
-      const hit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
-      if (hit !== null) emitBlock(aliasLimitHit ? 'alias-too-complex' : 'secret-read', tool, hit);
+      const first = newScanContext();
+      const found = scanBashCommand(command, first) || findSecretReadUnderOtherReadings(command, first.work);
+      if (found !== null) emitBlock(found.code, tool, found.target, found.via);
       const spawn = findDebuggerCliSpawn(command, 0);
       if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
       allow(undefined);
@@ -2322,5 +2564,14 @@ if (require.main === module) {
 }
 
 // Exported for tests only: the key sets and environment twins the git scan
-// uses, so a parity test compares them with its own oracle (#5492).
-module.exports = { GIT_COMMAND_CONFIG_KEYS, GIT_BANG_COMMAND_CONFIG_KEYS, GIT_CREDENTIAL_HELPER_KEYS, GIT_ENV_CONFIG_KEYS };
+// uses, so a parity test compares them with its own oracle (#5492), and the
+// scan budget with the work one reading of a command spends, so the budget's
+// boundary rows sit exactly at it.
+module.exports = {
+  GIT_COMMAND_CONFIG_KEYS, GIT_BANG_COMMAND_CONFIG_KEYS, GIT_CREDENTIAL_HELPER_KEYS, GIT_ENV_CONFIG_KEYS, MAX_SCAN_WORK,
+  scanWork(command) {
+    const ctx = newScanContext();
+    scanBashCommand(command, ctx);
+    return ctx.work;
+  },
+};
