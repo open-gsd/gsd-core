@@ -158,6 +158,13 @@ replaced your entire configuration with built-in defaults, and nothing said so (
 
 The warning is printed once per file per run, so a repeated command will not spam it.
 
+A section that is present but is not an object (for example, `"git": null`) is an explicit
+inheritance barrier. GSD does not silently recreate that section's flattened values from lower
+files or built-in defaults. This applies to project and global-defaults loading. The planner
+watchdog is the fail-safe exception: `"planner": null` still leaves
+`planner_stall_detection_enabled` enabled, while the raw per-key resolver reports
+`planner.stall_detection_enabled` as not configured.
+
 The same applies to the global `$GSD_HOME/.gsd/defaults.json`. If the project config is also unusable, the
 project one is reported, since that is the file you are most likely able to fix.
 

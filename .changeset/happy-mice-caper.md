@@ -1,5 +1,5 @@
 ---
-type: Added
+type: Changed
 pr: 5117
 ---
-**Per-key config provenance has a tested resolution foundation** — a new read-only module tracks project and runtime-setting origins for future caller migrations, reads each layer with a size bound and refuses a repository file symlinked outside its directory; existing commands and output remain unchanged.
+**Config resolution now exposes per-key provenance and honors section barriers** — a new read-only owner reports the producing layer for project and runtime-setting values, while the assembled loader no longer recreates lower/default projections beneath an explicitly non-object section. The default-on planner watchdog remains the documented fail-safe exception.

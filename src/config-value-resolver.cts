@@ -207,6 +207,7 @@ function resolveConfigValue(
   let emptyFile = false;
   let workstreamMissing = false;
   let blockedByParent = false;
+  const typeMismatchRanks: number[] = [];
   let detected: string[] | undefined;
   const layers = fileLayers(opts.cwd, family);
   for (const [rank, { layer, file }] of layers.entries()) {
@@ -238,9 +239,13 @@ function resolveConfigValue(
       }
     }
     const resolved = ownValue(data?.parsed ?? read.data, key);
-    if (resolved.found && (!federatedSlice || (isWellFormedSlice(federatedSlice)
-        && typeMatchesSlice(resolved.value, federatedSlice)))) {
-      entries.push({ layer, value: resolved.value, rank });
+    if (resolved.found) {
+      if (!federatedSlice || (isWellFormedSlice(federatedSlice)
+          && typeMatchesSlice(resolved.value, federatedSlice))) {
+        entries.push({ layer, value: resolved.value, rank });
+      } else {
+        typeMismatchRanks.push(rank);
+      }
     }
     if (resolved.blocked) {
       blockedByParent = true;
@@ -260,17 +265,20 @@ function resolveConfigValue(
   // loader keeps a global-defaults fault silent once a project config parsed.
   const winnerRank = entries.length === 0 || mergedKey !== null ? Infinity : entries[0].rank;
   const relevant = faults.filter(({ rank }) => rank < winnerRank);
+  const hasRelevantTypeMismatch = typeMismatchRanks.some((rank) => rank < winnerRank);
   for (const { fault } of relevant) {
     warnUnusableInput({ reason: UNUSABLE_REASON.CONFIG_UNREADABLE, source: fault.path });
   }
   const faultReason = relevant.length > 0 ? relevant[0].fault.reason : null;
+  const mismatchReason = hasRelevantTypeMismatch ? CONFIG_REASON.CONFIG_TYPE_MISMATCH : null;
   if (entries.length === 0) {
-    return missing(faultReason ?? (emptyFile ? CONFIG_REASON.CONFIGURED_EMPTY : CONFIG_REASON.NOT_CONFIGURED));
+    return missing(faultReason ?? mismatchReason
+      ?? (emptyFile ? CONFIG_REASON.CONFIGURED_EMPTY : CONFIG_REASON.NOT_CONFIGURED));
   }
   if (mergedKey === null) {
     const winner = entries[0];
     return { found: true, value: winner.value, layer: winner.layer,
-      reason: faultReason ?? (winner.layer === 'root' && workstreamMissing
+      reason: faultReason ?? mismatchReason ?? (winner.layer === 'root' && workstreamMissing
         ? CONFIG_REASON.WORKSTREAM_FALLBACK : CONFIG_REASON.RESOLVED) };
   }
   const composite: Record<string, ConfigLayer> = {};
@@ -285,7 +293,7 @@ function resolveConfigValue(
   // With no leaves, the highest present container is itself the producing value.
   if (isConfigSection(value) && Object.keys(composite).length === 0) layer = highestLayer;
   return { found: true, value, layer,
-    reason: faultReason ?? (layer === 'root' && workstreamMissing
+    reason: faultReason ?? mismatchReason ?? (layer === 'root' && workstreamMissing
       ? CONFIG_REASON.WORKSTREAM_FALLBACK : CONFIG_REASON.RESOLVED),
     ...(isConfigSection(value) ? { composite } : {}) };
 }

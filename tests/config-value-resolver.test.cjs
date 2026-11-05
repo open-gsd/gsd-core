@@ -9,6 +9,7 @@ const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { resolveConfigValue } = require('../gsd-core/bin/lib/config-value-resolver.cjs');
 const { loadConfigResolved } = require('../gsd-core/bin/lib/config-loader.cjs');
+const { parseJsonc } = require('../gsd-core/bin/lib/settings-jsonc.cjs');
 
 function withLayers(run) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-config-value-'));
@@ -40,6 +41,7 @@ function writeLayer(cwd, layer, value) {
     'runtime-shared': path.join(cwd, '.claude', 'settings.json'),
     'runtime-user': path.join(process.env.CLAUDE_CONFIG_DIR, 'settings.json'),
   };
+  if (!Object.hasOwn(paths, layer)) throw new RangeError(`unknown test layer: ${layer}`);
   const file = paths[layer];
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(value), 'utf8');
@@ -93,8 +95,11 @@ function expectedLadder(family, states, fallback) {
   let faults = 0;
   let empty = false;
   let workstreamMissing = false;
+  const ladder = LADDERS[family];
+  if (!Array.isArray(ladder)) throw new RangeError(`unknown test family: ${family}`);
   for (const [index, state] of states.entries()) {
-    const layer = LADDERS[family][index];
+    const layer = ladder[index];
+    if (typeof layer !== 'string') throw new RangeError(`missing layer ${index} for ${family}`);
     if (state.kind === 'absent' || state.kind === 'corrupt') {
       if (layer === 'workstream') workstreamMissing = true;
       if (state.kind === 'corrupt') {
@@ -126,6 +131,12 @@ function expectedLadder(family, states, fallback) {
 }
 
 describe('Config Value Resolution Module (#5096)', () => {
+  test('fast-check JSONC strict-input property preserves every JSON-safe value', () => {
+    fc.assert(fc.property(fc.jsonValue(), (value) => {
+      assert.deepEqual(parseJsonc(JSON.stringify(value)), value);
+    }));
+  });
+
   test('fast-check ladder property: value, layer, reason and diagnostics across both families', () => {
     const specs = [
       { key: 'project_code', family: 'A', dotted: false },
@@ -152,7 +163,13 @@ describe('Config Value Resolution Module (#5096)', () => {
       )),
       ([spec, states]) => {
         withLayers((cwd) => {
-          LADDERS[spec.family].forEach((layer, index) => writeState(cwd, layer, spec.key, states[index]));
+          const ladder = LADDERS[spec.family];
+          if (!Array.isArray(ladder)) throw new RangeError(`unknown test family: ${spec.family}`);
+          ladder.forEach((layer, index) => {
+            const state = states[index];
+            if (!state) throw new RangeError(`missing state ${index} for ${spec.family}`);
+            writeState(cwd, layer, spec.key, state);
+          });
           let actual;
           const diagnostics = captureConfigDiagnostics(() => {
             actual = resolveConfigValue(spec.key, { cwd });
@@ -491,6 +508,69 @@ describe('Config Value Resolution Module (#5096)', () => {
     });
   });
 
+  test('every assembled section projection obeys the barrier on project and global-defaults paths', () => {
+    const projectionsBySource = {
+      root: {
+        workflow: [
+          'research', 'plan_checker', 'verifier', 'nyquist_validation',
+          'post_planning_gaps', 'mvp_mode', 'tdd_mode', 'text_mode',
+          'auto_advance', '_auto_chain_active', 'subagent_timeout',
+        ],
+        git: [
+          'branching_strategy', 'base_branch', 'protected_branches',
+          'allow_default_branch_commits', 'repo_tagging', 'phase_branch_template',
+          'milestone_branch_template', 'quick_branch_template',
+        ],
+        planning: ['planning', 'commit_docs', 'search_gitignored', 'sub_repos', 'pr_strict'],
+        review: ['review'],
+      },
+      'global-defaults': {
+        workflow: [
+          'research', 'plan_checker', 'verifier', 'nyquist_validation',
+          'ai_integration_phase', 'api_coverage_gate', 'post_planning_gaps',
+          'research_before_questions', 'text_mode', 'compact_content',
+          'subagent_timeout', 'security_enforcement', 'security_asvs_level',
+          'security_block_on', 'smart_zone_tokens', 'inline_plan_threshold',
+        ],
+        git: [
+          'branching_strategy', 'phase_branch_template',
+          'milestone_branch_template', 'quick_branch_template',
+        ],
+        planning: ['planning', 'commit_docs', 'search_gitignored', 'sub_repos', 'pr_strict'],
+        review: ['max_prompt_tokens'],
+      },
+    };
+    for (const [source, projections] of Object.entries(projectionsBySource)) {
+      for (const [section, keys] of Object.entries(projections)) {
+        withLayers((cwd) => {
+          writeLayer(cwd, source, { [section]: {} });
+          const config = loadConfigResolved(cwd, { persist: false }).config;
+          for (const key of keys) {
+            assert.equal(Object.hasOwn(config, key), true, `positive control: ${source} ${section}.${key}`);
+          }
+        });
+        withLayers((cwd) => {
+          writeLayer(cwd, source, { [section]: null });
+          const config = loadConfigResolved(cwd, { persist: false }).config;
+          for (const key of keys) {
+            assert.equal(Object.hasOwn(config, key), false, `${source} ${section}.${key}`);
+          }
+        });
+      }
+    }
+  });
+
+  test('planner null keeps the assembled watchdog fail-safe while raw resolution stays absent', () => {
+    withLayers((cwd) => {
+      writeLayer(cwd, 'root', { planner: null });
+      const assembled = loadConfigResolved(cwd, { persist: false }).config;
+      assert.equal(assembled.planner_stall_detection_enabled, true);
+      assert.deepEqual(resolveConfigValue('planner.stall_detection_enabled', { cwd }), {
+        found: false, value: undefined, layer: null, reason: 'not_configured',
+      });
+    });
+  });
+
   test('any present non-object parent resolves what loadConfig assembles for the same files', () => {
     for (const parent of [null, 'text', [], 7, {}]) {
       withLayers((cwd) => {
@@ -566,7 +646,7 @@ describe('Config Value Resolution Module (#5096)', () => {
     });
   });
 
-  test('federated values with wrong type or invalid enum fall through to schema defaults', () => {
+  test('federated values with wrong type or invalid enum report the mismatch and fall through', () => {
     withLayers((cwd) => {
       writeLayer(cwd, 'root', { workflow: { ai_integration_phase: 'false', code_review_depth: 'invalid' } });
       for (const [key, expected] of [
@@ -576,6 +656,7 @@ describe('Config Value Resolution Module (#5096)', () => {
         const result = resolveConfigValue(key, { cwd });
         assert.equal(result.value, expected);
         assert.equal(result.layer, 'schema-default');
+        assert.equal(result.reason, 'config_type_mismatch');
       }
     });
   });

@@ -1,4 +1,6 @@
-/** JSONC parser shared by runtime settings readers. */
+/** JSONC parser shared by runtime settings readers.
+ * Known comment/trailing-comma edge defects remain tracked separately (#5937).
+ */
 
 /** Strip line/block comments without removing comment-like text inside strings. */
 function stripJsonComments(text: string): string {

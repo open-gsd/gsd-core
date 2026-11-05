@@ -6,6 +6,8 @@
  * merges built-in defaults (`CONFIG_DEFAULTS`/`CANONICAL_CONFIG_DEFAULTS`),
  * normalizes legacy keys, applies the active-workstream overlay, validates
  * against the config schema, and warns on unknown keys/profile overrides.
+ * A present non-object section blocks inherited projections from that section;
+ * fail-safe projections such as the planner watchdog remain default-on.
  * Behaviour is preserved byte-for-behaviour from the prior location; only
  * the module boundary moved. The core.cjs re-export spine was retired in
  * epic #1267; callers import loadConfig from config-loader.cjs directly.
@@ -136,17 +138,22 @@ function _getConfigNested(parsed: Record<string, unknown>, section: string, fiel
 const BLOCKED_SECTION_PROJECTIONS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   workflow: [
     'workflow', 'research', 'plan_checker', 'verifier', 'nyquist_validation',
-    'post_planning_gaps', 'mvp_mode', 'tdd_mode', 'text_mode', 'auto_advance',
-    '_auto_chain_active', 'subagent_timeout',
+    'ai_integration_phase', 'api_coverage_gate', 'post_planning_gaps',
+    'research_before_questions', 'mvp_mode', 'tdd_mode', 'text_mode',
+    'compact_content', 'auto_advance', '_auto_chain_active', 'subagent_timeout',
+    'security_enforcement', 'security_asvs_level', 'security_block_on',
+    'smart_zone_tokens', 'inline_plan_threshold',
   ],
   git: [
     'git', 'branching_strategy', 'base_branch', 'protected_branches',
-    'allow_default_branch_commits', 'phase_branch_template',
+    'allow_default_branch_commits', 'repo_tagging', 'phase_branch_template',
     'milestone_branch_template', 'quick_branch_template',
   ],
   planning: ['planning', 'commit_docs', 'search_gitignored', 'sub_repos', 'pr_strict'],
-  planner: ['planner', 'planner_stall_detection_enabled'],
-  review: ['review'],
+  // #4570 fail-safe exception: a malformed planner section must not disable
+  // the watchdog merely because consumers read an absent projection as falsy.
+  planner: ['planner'],
+  review: ['review', 'max_prompt_tokens'],
 });
 
 function _removeBlockedSectionDefaults(
@@ -604,6 +611,8 @@ const CONFIG_REASON = Object.freeze({
   CONFIG_UNPARSEABLE: 'config_unparseable',
   /** The file exists but could not be read (EACCES/EIO/…) — NOT applied. */
   CONFIG_UNREADABLE: 'config_unreadable',
+  /** A configured federated value has the wrong declared type or enum member. */
+  CONFIG_TYPE_MISMATCH: 'config_type_mismatch',
 } as const);
 
 type ConfigReason = (typeof CONFIG_REASON)[keyof typeof CONFIG_REASON];
@@ -630,7 +639,7 @@ interface ConfigResolution {
 }
 
 /**
- * Read + parse a config file, keeping *absent* distinguishable from
+ * Read + JSON-parse a config file, keeping *absent* distinguishable from
  * *unusable*. `platformReadSync` returns null on ENOENT and re-throws every
  * other errno, which is the seam that makes this separable at all.
  */
@@ -1174,11 +1183,14 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
         model_policy: (globalDefaults['model_policy']) || null,
       };
       // Branch D: global-defaults
+      let globalConfig: Record<string, unknown>;
       try {
-        return fallback({ config: _applyFederatedOverlay(_globalBaseCfg, globalDefaults, cwd), source: 'global-defaults', degraded: false });
+        globalConfig = _applyFederatedOverlay(_globalBaseCfg, globalDefaults, cwd);
       } catch {
-        return fallback({ config: _globalBaseCfg, source: 'global-defaults', degraded: false });
+        globalConfig = _globalBaseCfg;
       }
+      _removeBlockedSectionDefaults(globalDefaults, globalConfig);
+      return fallback({ config: globalConfig, source: 'global-defaults', degraded: false });
     } catch {
       // Branch E: no global defaults
       try {
