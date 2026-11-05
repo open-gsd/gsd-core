@@ -6789,6 +6789,17 @@ function writeStrippedCodexConfig(configPath, cleaned) {
   return false;
 }
 
+/**
+ * #5716: stripGsdFromCodexConfig as uninstall applies it to config.toml. An empty file
+ * behind a symlink is what an earlier uninstall left there, so it comes back unchanged
+ * instead of as null (GSD-only): a rerun neither rewrites it nor reports work it did not
+ * do, and without the opt-in it is not refused.
+ */
+function stripGsdFromCodexConfigOnUninstall(configPath, content) {
+  if (content === '' && fs.lstatSync(configPath).isSymbolicLink()) return content;
+  return stripGsdFromCodexConfig(content);
+}
+
 function mergeCodexConfig(configPath, gsdBlock) {
   // #5301: the write lands on the symlink's target, never replaces the link.
   configPath = resolveSymlinkWriteTarget(configPath);
@@ -8881,7 +8892,7 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
     const codexConfigPath = path.join(targetDir, 'config.toml');
     if (fs.existsSync(codexConfigPath)) {
       const content = fs.readFileSync(codexConfigPath, 'utf8');
-      if (stripGsdFromCodexConfig(content) !== content) assertCodexConfigLinkAllowed(codexConfigPath);
+      if (stripGsdFromCodexConfigOnUninstall(codexConfigPath, content) !== content) assertCodexConfigLinkAllowed(codexConfigPath);
     }
   }
 
@@ -8967,7 +8978,7 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
     const codexConfigPath = path.join(targetDir, 'config.toml');
     if (fs.existsSync(codexConfigPath)) {
       const content = fs.readFileSync(codexConfigPath, 'utf8');
-      const cleaned = stripGsdFromCodexConfig(content);
+      const cleaned = stripGsdFromCodexConfigOnUninstall(codexConfigPath, content);
       if (cleaned === null) {
         const removed = writeStrippedCodexConfig(codexConfigPath, cleaned);
         removedCount++;
