@@ -996,3 +996,20 @@ describe('gen-features CLI', () => {
     assert.deepEqual(rep.violations, []);
   });
 });
+
+describe("rewriteRelativeLinks: fragment links re-based for docs/FEATURES.md", () => {
+  const cases = [
+    ["](../how-to/a.md)", "](how-to/a.md)"],
+    ["](../../x.md)", "](../x.md)"],
+    ["](https://e.com/../a)", "](https://e.com/../a)"],
+    ["](#x)", "](#x)"],
+    ["](how-to/a.md)", "](how-to/a.md)"],
+    ["](/abs/a.md)", "](/abs/a.md)"],
+    ["](../../how-to/b.md)", "](how-to/b.md)", 2],
+  ];
+  for (const [input, expected, depth] of cases) {
+    test(`${input} -> ${expected}`, () => {
+      assert.strictEqual(gen.rewriteRelativeLinks(input, depth), expected);
+    });
+  }
+});

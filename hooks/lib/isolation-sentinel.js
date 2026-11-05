@@ -29,6 +29,12 @@
 // of the same repo are separate directories on disk, so each gets its own
 // sentinel with no cross-worktree collision, no lock file needed.
 //
+// #5682: the single slot above is last-writer-wins, so two orchestrators sharing one checkout
+// overwrote each other's decision and the guard discarded the foreign record. The writer now ALSO
+// records each plan-scoped decision at `<cwd>/.gsd/dispatch-isolation/<phase>--<plan>.json`
+// (same payload, same cwd-derived location and forgery posture), and `readSentinel` consults the
+// record keyed by the dispatch's own phase/plan first, falling back to the single slot.
+//
 // #3045 SECURITY F3 (LOW, accepted risk — documented, not redesigned for):
 // the sentinel lives at a fixed, predictable, gitignored path inside the
 // PRIMARY checkout. An agent already running inside a legitimately isolated
@@ -63,6 +69,31 @@ const { parseDispatchIdentity } = require('./dispatch-identity.js');
 const VALID_ISOLATION = new Set(['harness-worktree', 'orchestrator-worktree', 'none']);
 
 const SENTINEL_RELATIVE_PATH = path.join('.gsd', 'dispatch-isolation-sentinel.json');
+
+// #5682: per-dispatch records, one file per `<phase>--<plan>` under this directory.
+const KEYED_SENTINEL_DIR = path.join('.gsd', 'dispatch-isolation');
+const SAFE_SENTINEL_KEY_RE = /^[A-Za-z0-9._-]{1,100}$/;
+
+/** #5682: strict allow-list for a phase/plan string that becomes a path segment. */
+function isSafeSentinelKey(s) {
+  return typeof s === 'string' && SAFE_SENTINEL_KEY_RE.test(s) && s !== '.' && s !== '..';
+}
+
+/** #5682: keyed record path for a dispatch, or null unless BOTH phase and plan are safe keys. */
+function keyedSentinelPath(root, phase, plan) {
+  if (!isSafeSentinelKey(phase) || !isSafeSentinelKey(plan)) return null;
+  return path.join(root, KEYED_SENTINEL_DIR, `${phase}--${plan}.json`);
+}
+
+/**
+ * #5682: phase-level keyed record path (`<phase>.json`, written when a decision carries no plan),
+ * or null unless the phase is a safe key. Two orchestrators recording plan-less decisions for
+ * different phases each keep their own file.
+ */
+function phaseSentinelPath(root, phase) {
+  if (!isSafeSentinelKey(phase)) return null;
+  return path.join(root, KEYED_SENTINEL_DIR, `${phase}.json`);
+}
 
 // #3045 SECURITY F2 fix: how long a written sentinel is trusted as "this
 // dispatch's decision" before a reader falls back to the conservative
@@ -174,11 +205,51 @@ function resolveSentinelRoot(cwd) {
  * per the repo's clock-seam convention, so staleness is testable without
  * asserting on wall-clock time.
  */
-function readSentinel(cwd, { clock = Date } = {}) {
+function readSentinel(cwd, { clock = Date, dispatchIds = null } = {}) {
   const root = resolveSentinelRoot(cwd);
+
+  // #5682: candidates are the record keyed by this dispatch's own phase/plan, the phase-level
+  // record for its phase, and the single legacy slot. A keyed candidate counts only when it is
+  // well-formed and its contents agree with its own filename key; the legacy slot only when it
+  // applies to this dispatch. Among FRESH candidates the latest `writtenAt` wins, so a newer
+  // phase-level decision is not shadowed by an older plan-scoped one (and vice versa).
+  const keyedCandidates = [];
+  if (dispatchIds) {
+    const planFile = keyedSentinelPath(root, dispatchIds.phase, dispatchIds.plan);
+    if (planFile) {
+      const c = parseSentinelFile(planFile, clock);
+      if (c.present && !c.malformed && c.phase === dispatchIds.phase && c.plan === dispatchIds.plan) keyedCandidates.push(c);
+    }
+    const phaseFile = phaseSentinelPath(root, dispatchIds.phase);
+    if (phaseFile) {
+      const c = parseSentinelFile(phaseFile, clock);
+      if (c.present && !c.malformed && c.phase === dispatchIds.phase && c.plan === null) keyedCandidates.push(c);
+    }
+  }
+
+  const legacy = parseSentinelFile(sentinelPath(root), clock);
+  const legacyApplies = legacy.present && !legacy.malformed && sentinelAppliesToDispatch(legacy, dispatchIds);
+
+  const fresh = keyedCandidates.filter((c) => !c.stale);
+  if (legacyApplies && !legacy.stale) fresh.push(legacy);
+  if (fresh.length > 0) return latestWritten(fresh);
+
+  // Nothing fresh: a stale keyed record still feeds the aged-none path; otherwise the legacy
+  // slot is returned exactly as before.
+  if (keyedCandidates.length > 0) return latestWritten(keyedCandidates);
+  return legacy;
+}
+
+/** The candidate with the greatest `writtenAt` (ties keep the earlier-listed, i.e. most specific). */
+function latestWritten(candidates) {
+  return candidates.reduce((best, c) => (c.writtenAt > best.writtenAt ? c : best));
+}
+
+/** Parse and validate one sentinel file. Never throws. Shape: see `readSentinel`. */
+function parseSentinelFile(file, clock) {
   let raw;
   try {
-    raw = fs.readFileSync(sentinelPath(root), 'utf-8');
+    raw = fs.readFileSync(file, 'utf-8');
   } catch {
     return { present: false };
   }
@@ -348,6 +419,10 @@ function buildSentinelDiscard(sentinel, dispatchIds) {
 module.exports = {
   VALID_ISOLATION,
   SENTINEL_RELATIVE_PATH,
+  KEYED_SENTINEL_DIR,
+  isSafeSentinelKey,
+  keyedSentinelPath,
+  phaseSentinelPath,
   SENTINEL_STALE_MS,
   AGED_NONE_MAX_MS,
   sentinelPath,

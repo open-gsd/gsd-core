@@ -307,7 +307,7 @@ describe('renderProgressBar / progressBarFilledCells (#4294 — the render half 
 
 // #5165: the Progress table's Milestone column scopes the counts.
 {
-  const { normalizeMilestoneToken } = require('../gsd-core/bin/lib/phase-lifecycle.cjs');
+  const { normalizeMilestoneToken } = require('../gsd-core/bin/lib/roadmap-progress.cjs');
 
   describe('#5165 deriveProgressFromRoadmap: Milestone column scoping', () => {
     const table = (rows, withColumn = true) => [

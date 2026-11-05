@@ -103,6 +103,17 @@ jobs:
             fi
           done
 
+      # #5894: a squashed back-merge leaves main outside next's history, and the
+      # release → main merge then conflicts in every version field. Refuse to
+      # cut or finalize until main is an ancestor of next again. rc never touches
+      # main, and a hotfix is cut from a tag on main and merges back cleanly either
+      # way, so only a non-hotfix create or finalize is gated.
+      - name: Require main to be an ancestor of next
+        if: inputs.action != 'rc' && steps.validate.outputs.is_hotfix != 'true'
+        run: |
+          git fetch --no-tags origin main next
+          node scripts/release-ancestry.cjs --ancestor origin/main --descendant origin/next
+
   create:
     needs: validate-version
     if: inputs.action == 'create'
@@ -848,14 +859,14 @@ jobs:
             echo "PR #$EXISTING_PR already exists; updating"
             gh pr edit "$EXISTING_PR" \
               --title "chore: merge release v${VERSION} to main" \
-              --body "Merge release branch back to main after v${VERSION} stable release." \
+              --body "Merge release branch back to main after v${VERSION} stable release. Merge it as a merge commit, never squash, so v${VERSION} stays in main's history (#5894): node scripts/merge-commit-pr.cjs <this PR's number>." \
               || echo "::warning::Could not update merge-back PR (likely PR-creation policy disabled). Open it manually after release."
           else
             gh pr create \
               --base main \
               --head "$BRANCH" \
               --title "chore: merge release v${VERSION} to main" \
-              --body "Merge release branch back to main after v${VERSION} stable release." \
+              --body "Merge release branch back to main after v${VERSION} stable release. Merge it as a merge commit, never squash, so v${VERSION} stays in main's history (#5894): node scripts/merge-commit-pr.cjs <this PR's number>." \
               || echo "::warning::Could not create merge-back PR (likely PR-creation policy disabled). Open it manually after release."
           fi
 
@@ -920,8 +931,8 @@ jobs:
 
       # Auto-merge the release/hotfix → main PR when it is cleanly mergeable, so
       # the release's own branch lands on `main` without a manual merge click
-      # every release (#2515). Symmetric with auto-backmerge.yml's admin-merge of
-      # the main → next PR; the `main`-is-ancestor-of-`next` invariant restored
+      # every release (#2515). Symmetric with auto-backmerge.yml's merge-commit
+      # merge of the main → next PR (scripts/merge-commit-pr.cjs, #5894); the `main`-is-ancestor-of-`next` invariant restored
       # by #2504 makes this merge clean every release. Runs only after the tag +
       # npm publish are verified, so `main` never absorbs an unpublished release.
       # A non-clean PR (a genuine divergence) is left OPEN for manual resolution
@@ -933,8 +944,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN || secrets.GITHUB_TOKEN }}
           BRANCH: ${{ needs.validate-version.outputs.branch }}
+          HAS_ADMIN_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN != '' }}
         run: |
           set -uo pipefail
+          if [ "$HAS_ADMIN_TOKEN" != "true" ]; then
+            echo "::warning::GSD_BOT_PR_TOKEN is not set, so the release → main PR is left open: a merge made with GITHUB_TOKEN would not trigger auto-backmerge.yml, so main would never be merged back into next. Merge it as a repo admin: node scripts/merge-commit-pr.cjs <PR> (#5894)."
+            exit 0
+          fi
           PR=$(gh pr list --base main --head "$BRANCH" --state open --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
           if [ -z "$PR" ]; then
             echo "No open release→main PR for $BRANCH (creation may be blocked by org policy); nothing to auto-merge."
@@ -949,13 +965,14 @@ jobs:
             sleep 5
           done
           if [ "$STATE" = "MERGEABLE" ]; then
-            # Merge commit (not squash) keeps the release branch + its version tag
-            # in main's ancestry. --admin bypasses the review gate for this
-            # already-tested, already-published release branch.
-            if gh pr merge "$PR" --admin --merge; then
+            # #5894: a merge commit (not squash) keeps the release branch and its
+            # version tag in main's history. merge-commit-pr.cjs merges through
+            # the REST endpoint pinned to the head sha and fails unless the
+            # result is a two-parent commit that main now contains.
+            if node scripts/merge-commit-pr.cjs "$PR"; then
               echo "Auto-merged release→main PR #$PR."
             else
-              echo "::warning::PR #$PR is mergeable but admin-merge failed (token/policy?). Merge it manually."
+              echo "::warning::PR #$PR is mergeable but was not landed as a verified merge commit. Merge it with: node scripts/merge-commit-pr.cjs $PR (never squash)."
             fi
           else
             echo "::warning::Release→main PR #$PR is not cleanly mergeable (state: $STATE). Left open for manual resolution."

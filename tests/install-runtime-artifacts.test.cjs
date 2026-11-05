@@ -5430,6 +5430,81 @@ describe('rewriteStagedSkillBodies', () => {
     }
   });
 
+  // #5715: the Trae converter rewrites `~/.claude/` and `$HOME/.claude/` to the
+  // Trae dir; the `slash-bare-own-derived` profile then maps the Trae dir forms to
+  // the install prefix, in the pass that runs on the staged skill AFTER the
+  // converter. These tests pin the end-to-end result.
+  describe('#5715: Trae staged skill config-dir paths', () => {
+    const TRAE_SRC = [
+      '---',
+      'description: Probe',
+      '---',
+      '',
+      'See ~/.claude/gsd-core/x.md',
+      'and $HOME/.claude/gsd-core/y.md',
+      '',
+    ].join('\n');
+
+    // Stage exactly as stageSkillsForRuntimeAsSkills does (converter first, then
+    // the in-place rewrite), and return the staged SKILL.md lines.
+    function stageTraeSkill({ configDir, homedir }) {
+      const stagedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5715-trae-staged-'));
+      try {
+        const skillDir = path.join(stagedDir, 'gsd-probe');
+        fs.mkdirSync(skillDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(skillDir, 'SKILL.md'),
+          conversion.convertClaudeCommandToTraeSkill(TRAE_SRC, 'gsd-probe'),
+        );
+        conversion.rewriteStagedSkillBodies(stagedDir, {
+          runtime: 'trae',
+          configDir,
+          scope: 'global',
+          homedir: () => homedir,
+          platform: 'linux',
+        });
+        return splitLines(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'));
+      } finally {
+        cleanup(stagedDir);
+      }
+    }
+
+    test('both source forms become the $HOME/.trae/ prefix, no .claude/ and no doubled .trae', () => {
+      const HOME = path.resolve(os.tmpdir(), 'gsd-5715-fake-home');
+      const lines = stageTraeSkill({ configDir: path.join(HOME, '.trae'), homedir: HOME });
+      assert.ok(lines.includes('See $HOME/.trae/gsd-core/x.md'), lines.join('\n'));
+      assert.ok(lines.includes('and $HOME/.trae/gsd-core/y.md'), lines.join('\n'));
+      const out = lines.join('\n');
+      assert.ok(!out.includes('.claude/'), out);
+      assert.ok(!out.includes('.trae/.trae'), out);
+    });
+
+    test('absolute prefix containing .claude/ is emitted once and left as emitted', () => {
+      const base = path.resolve(os.tmpdir(), 'gsd-5715-opt');
+      const configDir = path.join(base, '.claude', 'trae-home');
+      const prefix = `${path.resolve(configDir).replace(/\\/g, '/')}/`;
+      // homedir is unrelated to configDir, so the absolute (non-$HOME) prefix is used.
+      const lines = stageTraeSkill({ configDir, homedir: '/home/u-5715' });
+      assert.ok(lines.includes(`See ${prefix}gsd-core/x.md`), lines.join('\n'));
+      assert.ok(lines.includes(`and ${prefix}gsd-core/y.md`), lines.join('\n'));
+      const out = lines.join('\n');
+      assert.strictEqual(out.split(prefix).length - 1, 2, out);
+      assert.ok(!out.includes('.trae/'), out);
+    });
+
+    test('absolute prefix with a .claude-alt segment is emitted once and left as emitted', () => {
+      const base = path.resolve(os.tmpdir(), 'gsd-5715-x');
+      const configDir = path.join(base, '.claude-alt');
+      const prefix = `${path.resolve(configDir).replace(/\\/g, '/')}/`;
+      const lines = stageTraeSkill({ configDir, homedir: '/home/u-5715' });
+      assert.ok(lines.includes(`See ${prefix}gsd-core/x.md`), lines.join('\n'));
+      assert.ok(lines.includes(`and ${prefix}gsd-core/y.md`), lines.join('\n'));
+      const out = lines.join('\n');
+      assert.strictEqual(out.split(prefix).length - 1, 2, out);
+      assert.ok(!out.includes('.trae/'), out);
+    });
+  });
+
   test('non-existent stagedDir is a no-op', () => {
     assert.doesNotThrow(() => {
       conversion.rewriteStagedSkillBodies('/nonexistent/dir', {

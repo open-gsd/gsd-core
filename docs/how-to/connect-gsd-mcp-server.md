@@ -91,8 +91,17 @@ Ask the host to read an existing planning file:
 ```
 
 It returns the file's contents. `gsd_invoke_command` takes
-`{family, subcommand, args}` and returns the command-routing hub's structured
-result (the same shape `gsd-tools` produces).
+`{family, subcommand?, args?}` and returns the command's stdout as text.
+`family` must be a non-empty string. Omit `subcommand` (or pass an empty
+string) for family-only commands such as `config-path` or `current-timestamp`:
+
+```jsonc
+{ "name": "gsd_invoke_command", "arguments": { "family": "config-path" } }
+```
+
+When supplied, `subcommand` must be a string; explicit JSON `null` is rejected
+(omit the field to invoke a family-only command). Commands that require one keep
+their existing CLI validation.
 
 ## 4. Browse the catalog (resources and prompts)
 
@@ -167,7 +176,7 @@ rather than a real marker.
 
 | Tool | Arguments | Returns |
 |------|-----------|---------|
-| `gsd_invoke_command` | `{family: string, subcommand: string, args?: unknown[]}` | the command-routing hub result (`{ok, …}`) as JSON text |
+| `gsd_invoke_command` | `{family: string, subcommand?: string, args?: unknown[]}` | the command's stdout as text |
 | `gsd_read_state` | `{path: string}` | the file contents as text |
 | `gsd_write_state` | `{path: string, content: string}` | `{ok: true, path}` as JSON text |
 
