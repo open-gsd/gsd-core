@@ -414,9 +414,7 @@ describe('comparePhaseStatus', () => {
 
 // Shared ROADMAP.md "Progress" table fixture builder (#1956/#2012). Used by
 // BOTH the CLI acceptance tests below (via writeRoadmap, which writes it to
-// disk) and the findRoadmapProgressTable/deriveProgressFromRoadmap parity
-// test (section 8), so the CLI-level decoy fixture and the parity fixture
-// can never independently drift into slightly different shapes.
+// disk), so the CLI-level decoy fixture stays in one shape.
 //
 // `opts.decoy`, when true, prepends an earlier `## Archive Notes` section
 // carrying a table with the EXACT SAME four column headers
@@ -650,31 +648,90 @@ Progress: [░░░░░░░░░░] 0%
   });
 });
 
-// ── 8. #1956/#2012 parity — findRoadmapProgressTable vs deriveProgressFromRoadmap ──
+// ── 8. (#5762) the parity assertion is gone: one owner, one locator ──
 //
-// Two SEPARATE implementations locate "the" ROADMAP Progress table:
-// roadmap-parser.cts's findRoadmapProgressTable (collectSection-based, used
-// by the drift-guard CLI) and phase-lifecycle.cts's deriveProgressFromRoadmap
-// (its own regex-based `## Progress` scope, used by the phase-lifecycle SDK
-// handler — deliberately NOT refactored onto the shared owner; its blast
-// radius is large). The repo requires a parity assertion whenever a parser is
-// expressed twice, so this test feeds both the SAME decoy-bearing ROADMAP
-// fixture from section 7 and asserts they agree about which table is real.
+// `findRoadmapProgressTable` was the second implementation of the Progress
+// table locator, held in agreement with `deriveProgressFromRoadmap` by a
+// parity test. The Roadmap Progress Module (src/roadmap-progress.cts) is now
+// the only locator and the `drift-guard phase-status` CLI reads it, so the
+// section 7 CLI acceptance tests above (decoy included) cover this seam, and
+// tests/roadmap-progress-owner.test.cjs / roadmap-progress-writers.test.cjs
+// pin that every reader and writer agrees with the owner.
 
-describe('#1956/#2012 parity — findRoadmapProgressTable vs deriveProgressFromRoadmap agree', () => {
-  const { findRoadmapProgressTable } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
-  const { deriveProgressFromRoadmap } = require('../gsd-core/bin/lib/phase-lifecycle.cjs');
+// ── #5675: phase-status under the milestone-prefixed convention ─────────────
+//
+// Without the convention every `M-NN` prose phase keyed as the bare milestone, so STATE's
+// `Phase: 3-02` matched the ROADMAP row `3-01` (the first row of milestone 3) and reported a
+// drift against the wrong phase's status.
+describe('#5675: drift-guard phase-status reads M-NN phases under milestone-prefixed', () => {
+  let tmpDir;
+  let planningDir;
 
-  test('both locators pick the real ## Progress table, not the decoy', () => {
-    const content = buildRoadmapProgressContent(3, 'Convergence', 'Complete', { decoy: true });
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5675-'));
+    planningDir = path.join(tmpDir, '.planning');
+    fs.mkdirSync(planningDir, { recursive: true });
+    fs.writeFileSync(path.join(planningDir, 'STATE.md'), [
+      '---',
+      "gsd_state_version: '1.0'",
+      'status: executing',
+      '---',
+      '',
+      '# Project State',
+      '',
+      '## Current Position',
+      '',
+      'Phase: 3-02 (Validator) — EXECUTING',
+      'Plan: 1 of 1 in current phase',
+      'Status: In progress',
+      '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(planningDir, 'ROADMAP.md'), [
+      '# Roadmap: Test Project',
+      '',
+      '## Progress',
+      '',
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|----------------|--------|-----------|',
+      '| 3-01. Create layer | 1/1 | Complete | - |',
+      '| 3-02. Validator | 0/1 | In Progress | - |',
+      '',
+    ].join('\n'));
+  });
 
-    const table = findRoadmapProgressTable(content);
-    assert.ok(table, 'findRoadmapProgressTable must find the real Progress table');
-    const row = table.rows.find((r) => r.Phase.startsWith('3.'));
-    assert.ok(row, 'expected a phase 3 row in the located table');
-    assert.equal(row.Status, 'Complete', 'must read the real ## Progress table\'s phase-3 status, not the decoy\'s "Not started"');
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
 
-    const progress = deriveProgressFromRoadmap(content);
-    assert.equal(progress.completedPhases, 1, 'deriveProgressFromRoadmap must count the real ## Progress table\'s Complete row, not be fooled by the decoy');
+  function setConvention(convention) {
+    fs.writeFileSync(path.join(planningDir, 'config.json'), JSON.stringify({ phase_id_convention: convention }));
+  }
+
+  test('--phase 3-02 matches the 3-02 row, not the first phase of the milestone', () => {
+    setConvention('milestone-prefixed');
+    const res = runGsdTools(['drift-guard', 'phase-status', '--phase', '3-02'], tmpDir);
+    assert.ok(res.success, `Expected success, got: ${res.error}`);
+    const result = JSON.parse(res.output);
+    assert.equal(result.phase, '03-02');
+    assert.equal(result.roadmapStatus, 'In Progress');
+    assert.equal(result.verdict, 'consistent');
+  });
+
+  test('with no --phase the STATE.md Current Position phase is the target', () => {
+    setConvention('milestone-prefixed');
+    const res = runGsdTools(['drift-guard', 'phase-status'], tmpDir);
+    assert.ok(res.success, `Expected success, got: ${res.error}`);
+    const result = JSON.parse(res.output);
+    assert.equal(result.phase, '03-02');
+    assert.equal(result.roadmapStatus, 'In Progress');
+    assert.equal(result.verdict, 'consistent');
+  });
+
+  test('without the convention phase-status keys keep the leading integer', () => {
+    const res = runGsdTools(['drift-guard', 'phase-status', '--phase', '3-02'], tmpDir);
+    assert.ok(res.success, `Expected success, got: ${res.error}`);
+    const result = JSON.parse(res.output);
+    assert.equal(result.phase, '03');
+    assert.equal(result.roadmapStatus, 'Complete', 'without the convention 3-02 keys as 03 and reads the first row of milestone 3, as before');
   });
 });

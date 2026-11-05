@@ -1315,11 +1315,23 @@ branch-protection reconfiguration: it rides the existing "Required tests"
 check, the same status GitHub already requires before merge.
 
 If your PR is itself the fix-forward and you need to land it while the base
-branch is still red, a maintainer applies the `fix-next` label directly to
-your PR to explicitly bypass this one check. Applying a label requires
-GitHub write access to the repo, so a PR author cannot self-apply it to
-bypass the gate — only a maintainer or another collaborator with label-write
-permission can. Full decision logic is in `scripts/ci-next-health.cjs`.
+branch is still red, a maintainer applies the `fix-next` label to your PR to
+explicitly bypass this one check, then enqueues it through the merge queue
+(direct merges are blocked by the queue ruleset; `--admin` does not get past
+it). The queue run cannot see event labels, so it reads them back from the
+API and honours the label only when all of these hold: the queue branch names
+the PR, the merge group holds that PR alone, the PR carries the label, and
+whoever applied the label has write or admin permission. A PR author cannot
+self-apply it to bypass the gate. If other entries are queued ahead of the
+fix, the group is larger than one commit and the bypass is refused; dequeue
+the others first. Remove the label once the fix has merged.
+
+A push run that is still in flight, including a re-run of a failed run, never
+counts as healthy: a re-run whose previous attempt failed is red, otherwise the
+newest finished run decides. Re-running a red `next` run therefore does not
+open the gate for other PRs; fix the cause (never re-run to green). Full
+runbook: [docs/research/merge-queue-red-next-recovery.md](docs/research/merge-queue-red-next-recovery.md).
+Decision logic is in `scripts/ci-next-health.cjs`.
 
 ### CI Test Quality Checks
 

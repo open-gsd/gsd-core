@@ -297,3 +297,30 @@ test('property: arbitrary go-shaped noise never throws and never accepts without
     }
   }));
 });
+
+test('#5721 property: a file-named load-failure entry is never a RED target; the real failure still is', () => {
+  const ext = fc.constantFrom('.test.js', '.spec.ts', '.test.mjs', '.test.cts', '.spec.mts', '.test.tsx', '.test.jsx');
+  const stem = fc.array(fc.constantFrom('a', 'Z', '7', '-', '_'), { minLength: 1, maxLength: 12 }).map(c => c.join(''));
+  // equal classname/name is the load-failure shape; any differing pair is a real test (and so a valid target).
+  fc.assert(fc.property(stem, ext, stem, fc.boolean(), (loadStem, extension, realStem, same) => {
+    const file = `L${loadStem}${extension}`;
+    const real = `R${realStem}`;
+    const sibling = `${file}x`;
+    const pair = parseTestReport(`<testsuite tests="1"><testcase classname="${file}" name="${same ? file : sibling}"><failure/></testcase></testsuite>`);
+    assert.equal(pair.tests[0].loadFailure === true, same);
+    const output = `<testsuites><testsuite tests="1"><testcase classname="${file}" name="${file}"><failure/></testcase></testsuite>`
+      + `<testsuite tests="1"><testcase classname="ok.test.js" name="${real}"><failure/></testcase></testsuite></testsuites>`;
+    const load = classifyRedEvidence(evidence(output, file));
+    assert.equal(load.verdict, 'INVALID_RED');
+    assert.equal(load.evidence.matched_test, null);
+    assert.equal(classifyRedEvidence(evidence(output, real)).verdict, 'RED_EVIDENCE_OK');
+  }));
+});
+
+test('#5721 property: classname "Test suite failed to run" is always flagged, whatever the name', () => {
+  const name = fc.string({ unit: fc.constantFrom('a', 'Z', '7', '-', '_', ' ', '.', '#', '>', 'ü'), maxLength: 30 });
+  fc.assert(fc.property(name, (title) => {
+    const report = parseTestReport(`<testsuite tests="1"><testcase classname="Test suite failed to run" name="${xmlEscape(title)}"><error/></testcase></testsuite>`);
+    assert.equal(report.tests[0].loadFailure, true);
+  }));
+});

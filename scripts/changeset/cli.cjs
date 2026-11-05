@@ -20,7 +20,7 @@ const path = require('node:path');
 const { ExitError, runMain } = require('../lib/cli-exit.cjs');
 const { parseFragment } = require('./parse.cjs');
 const { renderChangelog } = require('./render.cjs');
-const { serializeChangelog, parseChangelog } = require('./serialize.cjs');
+const { serializeChangelog, parseChangelog, EMPTY_RELEASE_PLACEHOLDER } = require('./serialize.cjs');
 const { renderGithubReleaseNotes } = require('./github-release-notes.cjs');
 const {
   compareSemverCore,
@@ -144,7 +144,7 @@ function assembleChangelog(lead, releaseBlock) {
 function injectEmptyPlaceholder(headerOnlyBlock) {
   return headerOnlyBlock.replace(
     /^(##\s+\[[^\]]+\][^\n]*)\n+/,
-    '$1\n\n_No notable changes._\n\n',
+    `$1\n\n${EMPTY_RELEASE_PLACEHOLDER}\n\n`,
   );
 }
 
