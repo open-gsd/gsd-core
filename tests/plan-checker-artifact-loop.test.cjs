@@ -48,6 +48,33 @@ function runArtifactBlock(t, shell, files, variable = 'phase_dir') {
   return { phaseDir, paths: result.stdout.split(/\r?\n/).filter(Boolean).sort() };
 }
 
+/** Run one plan-checker step's first bash fence against a real gsd-tools, on a one-plan phase. */
+function runStructureStep(t, shell, heading, content, prelude, epilogue = []) {
+  const dir = createTempProject('plan-checker-structure-5178-');
+  t.after(() => cleanup(dir));
+  fs.writeFileSync(path.join(dir, '01-01-PLAN.md'), content);
+  const section = collectSection(fs.readFileSync(AGENT_PATH, 'utf8'), (h) => h.text === heading);
+  assert.ok(section, `plan-checker ${heading} must exist`);
+  const lines = section.body.split(/\r?\n/);
+  const block = scanFencedBlocks(lines).find((fence) => fence.infoString === 'bash');
+  assert.ok(block, `${heading} must contain a bash block`);
+  const script = [
+    'PHASE_DIR="$1"; PHASE=01; NODE="$2"; TOOLS="$3"',
+    ...prelude,
+    lines.slice(block.openLineIdx + 1, block.closeLineIdx).join('\n'),
+    ...epilogue,
+  ].join('\n');
+  const result = runHook('-c', [script, 'structure-step', dir, process.execPath, path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs')], {
+    interpreter: shell,
+    cwd: dir,
+    env: { PATH: process.env.PATH, HOME: dir, ZDOTDIR: dir },
+    timeoutMs: PROBE_TIMEOUT_MS,
+  });
+  assert.equal(result.outcome, OUTCOME.EXITED, JSON.stringify(result));
+  assert.equal(result.exitCode, 0, result.stderr);
+  return result.stdout;
+}
+
 describe('plan-checker discovers research and summary artifacts (#5178)', {
   skip: skipUnless('bash'),
 }, () => {
@@ -86,29 +113,24 @@ describe('plan-checker discovers research and summary artifacts (#5178)', {
       ['escaped JSON', '---\nphase: 1\nplan: 1\ntype: execute\nwave: 1\ndepends_on: []\nfiles_modified: []\nautonomous: true\nmust_haves: {}\n---\n<tasks><task type="auto"><name>Line one\nLine two</name><files>x.js</files><action>Act</action><verify>node --test</verify><done>Done</done></task></tasks>\n', 0, 'Line one\nLine two'],
     ]) {
       test(`${shell}: Step 8 captures the ${label} structure verdict (#5178)`, { skip }, (t) => {
-        const dir = createTempProject('plan-checker-scope-5178-');
-        t.after(() => cleanup(dir));
-        fs.writeFileSync(path.join(dir, '01-01-PLAN.md'), content);
-        const section = collectSection(fs.readFileSync(AGENT_PATH, 'utf8'), (heading) => heading.text === 'Step 8: Assess Scope');
-        const lines = section.body.split(/\r?\n/);
-        const block = scanFencedBlocks(lines).find((fence) => fence.infoString === 'bash');
-        assert.ok(block);
-        const script = [
-          'PHASE_DIR="$1"; PHASE=01; NODE="$2"; TOOLS="$3"',
+        const stdout = runStructureStep(t, shell, 'Step 8: Assess Scope', content, [
           'gsd_run() { if [ "$2" = frontmatter.get ]; then printf "\\nFRONTMATTER\\n"; fi; "$NODE" "$TOOLS" "$@"; }',
-          lines.slice(block.openLineIdx + 1, block.closeLineIdx).join('\n'),
-          'printf "\\nSTATUS=%s\\n" "${STRUCTURE_EXIT:-uncaptured}"',
-        ].join('\n');
-        const result = runHook('-c', [script, 'scope-check', dir, process.execPath, path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs')], {
-          interpreter: shell,
-          cwd: dir,
-          env: { PATH: process.env.PATH, HOME: dir, ZDOTDIR: dir },
-          timeoutMs: PROBE_TIMEOUT_MS,
-        });
-        assert.equal(result.outcome, OUTCOME.EXITED, JSON.stringify(result));
-        assert.equal(result.exitCode, 0, result.stderr);
-        assert.ok(result.stdout.split(/\r?\n/).includes(`STATUS=${exitCode}`), result.stdout);
-        const structure = JSON.parse(result.stdout.split('\nFRONTMATTER\n')[0]);
+        ], ['printf "\\nSTATUS=%s\\n" "${STRUCTURE_EXIT:-uncaptured}"']);
+        assert.ok(stdout.split(/\r?\n/).includes(`STATUS=${exitCode}`), stdout);
+        const structure = JSON.parse(stdout.split('\nFRONTMATTER\n')[0]);
+        assert.equal(structure.valid, exitCode === 0);
+        if (taskName) assert.equal(structure.tasks[0].name, taskName);
+      });
+
+      test(`${shell}: Step 2 prints the ${label} structure verdict intact (#5178)`, { skip }, (t) => {
+        const stdout = runStructureStep(t, shell, 'Step 2: Load All Plans', content, [
+          'gsd_run() { "$NODE" "$TOOLS" "$@"; }',
+        ]);
+        const lines = stdout.split(/\r?\n/);
+        assert.match(lines[0], /^=== .*01-01-PLAN\.md ===$/, stdout);
+        const statusIdx = lines.findIndex((line) => line.startsWith('structure_exit='));
+        assert.equal(lines[statusIdx], `structure_exit=${exitCode}`, stdout);
+        const structure = JSON.parse(lines.slice(1, statusIdx).join('\n'));
         assert.equal(structure.valid, exitCode === 0);
         if (taskName) assert.equal(structure.tasks[0].name, taskName);
       });

@@ -772,7 +772,7 @@ shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
 for plan in "$PHASE_DIR"/*-PLAN.md; do
   echo "=== $plan ==="
   PLAN_STRUCTURE=$(gsd_run query verify.plan-structure "$plan") && STRUCTURE_EXIT=0 || STRUCTURE_EXIT=$?
-  echo "$PLAN_STRUCTURE"
+  printf '%s\n' "$PLAN_STRUCTURE"
   echo "structure_exit=$STRUCTURE_EXIT"
 done
 ```
