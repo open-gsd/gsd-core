@@ -548,7 +548,7 @@ function isSafeRepoPath(rel) {
     // Windows/NTFS aliases of `.git`: trailing dots/spaces are dropped, and
     // `GIT~1` is its 8.3 short name.
     const folded = seg.replace(/[. ]+$/, '').toLowerCase();
-    return folded !== '.git' && !/^git~\d+$/.test(folded);
+    return folded !== '' && folded !== '.git' && !/^git~\d+$/.test(folded);
   });
 }
 
@@ -652,7 +652,10 @@ function ignoredByTrackedRules(root, paths) {
         {
           ...isolated,
           encoding: 'utf8',
-          input: paths.map((f) => `${f}\0`).join(''),
+          // `check-ignore` rejects literal-pathspec mode, so a leading "./"
+          // is what keeps a name like `:(top)x` from being read as pathspec
+          // magic; it is stripped from the reported names below.
+          input: paths.map((f) => `./${f}\0`).join(''),
           timeout: 15000,
           maxBuffer: gitMaxBuffer(),
           stdio: ['pipe', 'pipe', 'ignore'],
@@ -662,7 +665,7 @@ function ignoredByTrackedRules(root, paths) {
       if (e && e.status === 1) return new Set(); // none ignored
       throw e;
     }
-    return new Set(parseCheckIgnoreZ(out).map((m) => m.pathname));
+    return new Set(parseCheckIgnoreZ(out).map((m) => (m.pathname.startsWith('./') ? m.pathname.slice(2) : m.pathname)));
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -851,7 +854,7 @@ function isCiEnvironment() {
   });
 }
 
-const SAFE_BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+const NAME_DENY_RE = /[;|&$`'"<>(){}!\s]/;
 const MERGE_QUEUE_REF_RE = /^refs\/heads\/gh-readonly-queue\/(.+)\/pr-\d+-[0-9a-f]+$/;
 
 /**
@@ -889,7 +892,18 @@ function resolveBaseBranch(env) {
  * @returns {boolean}
  */
 function isSafeBranchName(name) {
-  return SAFE_BRANCH_RE.test(name) && !name.includes('..') && !name.split('/').some((s) => s === '');
+  // A leading '-' would read as an option; shell metacharacters are refused
+  // as defence in depth even though git is always spawned without a shell.
+  if (!name || name.startsWith('-') || NAME_DENY_RE.test(name)) return false;
+  // git's own rule (control characters, spaces, `..`, `//`, trailing `/` or
+  // `.lock`, `@{`, `~^:?*[\`, ...); legal names like release+hotfix pass.
+  const r = cp.spawnSync('git', ['check-ref-format', '--branch', name], {
+    encoding: 'utf8',
+    timeout: 15000,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  if (r.error || r.signal) throw r.error || new Error(`git check-ref-format killed by ${r.signal}`);
+  return r.status === 0;
 }
 
 function main() {

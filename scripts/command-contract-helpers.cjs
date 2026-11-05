@@ -946,20 +946,23 @@ const REMEDIES = Object.freeze({
  */
 function sanitizeEcho(text) {
   let out = '';
+  let kept = 0;
+  // Cap by code point (a surrogate pair is never split) and stop scanning as
+  // soon as 200 code points are kept, so a huge input costs O(200) matches.
   for (const ch of String(text)) {
     if (isEchoHostile(ch.codePointAt(0))) continue;
     out += ch;
+    kept += 1;
+    if (kept === 200) break;
   }
-  // Cap by code point so a surrogate pair is never split.
-  const points = Array.from(out);
-  return points.length > 200 ? points.slice(0, 200).join('') : out;
+  return out;
 }
 
 /**
  * Code points sanitizeEcho drops: C0 + DEL, C1 (incl. 8-bit CSI U+009B),
  * line/paragraph separators, zero-width + LRM/RLM, bidi embeddings/overrides
  * and isolates, the Arabic letter mark, word joiner/invisible operators, the
- * Mongolian vowel separator, the soft hyphen and the BOM — all able to forge
+ * Mongolian vowel separator, the soft hyphen and the BOM; all able to forge
  * or hide output a reader (human or agent) trusts. Stripping U+200D breaks
  * joined emoji sequences, which is acceptable for echoed paths.
  * @param {number} code
@@ -975,7 +978,7 @@ function isEchoHostile(code) {
 // plus variation selectors and the invisible filler characters that are not Cf.
 // Each combining/variation/filler member is its own alternative so no
 // character class holds a combining sequence (no-misleading-character-class).
-const ECHO_HOSTILE_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}\p{Co}\p{Cn}]|[︀-️]|[\u{E0100}-\u{E01EF}]|͏|ᅟ|ᅠ|ㅤ|ﾠ|឴|឵|⠀/u;
+const ECHO_HOSTILE_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}\p{Co}\p{Cn}]|[\u{FE00}-\u{FE0F}]|[\u{E0100}-\u{E01EF}]|\u{180B}|\u{180C}|\u{180D}|\u{180F}|\u{34F}|\u{115F}|\u{1160}|\u{3164}|\u{FFA0}|\u{17B4}|\u{17B5}|\u{2800}/u;
 
 module.exports = {
   CANONICAL_TOOLS,
