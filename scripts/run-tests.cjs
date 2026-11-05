@@ -402,7 +402,7 @@ const RESERVED_TEMP_PREFIXES = ['gsd-test-home-', 'gsd-run-tests-events-'];
 /** True when THIS process created the active run temp root (see setupRunTempRoot). */
 let createdRunTempRoot = false;
 
-function setupRunTempRoot() {
+function setupRunTempRoot({ env = process.env, tmpdirFn = tmpdir } = {}) {
   // Ownership (a nested run-tests spawn REUSES an inherited root and must never
   // remove it on ITS exit — that would delete the outer run's root mid-suite,
   // mass-ENOENTing every later fixture). PRECEDENCE: the FIRST SET var in
@@ -411,18 +411,24 @@ function setupRunTempRoot() {
   // inherited TEMP/TMP, never be overridden by them (a CI-observed failure: the
   // child redirected TMPDIR but inherited TEMP=<outer root>, and the any-of-three
   // reuse check silently preferred the inherited root).
+  // #5688: the SAME first-set variable that decides inheritance also decides the
+  // parent of a fresh root, on every platform (os.tmpdir() reads TEMP/TMP on
+  // win32 and would ignore a TMPDIR redirect). tmpdirFn is the fallback only
+  // when none of the three is set.
   let inherited = '';
+  let parent = '';
   for (const key of ['TMPDIR', 'TEMP', 'TMP']) {
-    const v = process.env[key] || '';
+    const v = env[key] || '';
     if (!v) continue;
-    // #5688: resolve against THIS process's cwd now; a relative value would be
+    // Resolve against THIS process's cwd now; a relative value would be
     // re-resolved against each child's cwd. No realpath: absolute stays byte-identical.
-    inherited = basename(v).startsWith(RUN_TEMP_ROOT_PREFIX) ? resolve(v) : '';
+    parent = resolve(v);
+    inherited = basename(v).startsWith(RUN_TEMP_ROOT_PREFIX) ? parent : '';
     break;
   }
   createdRunTempRoot = !inherited;
-  const root = inherited || mkdtempSync(join(resolve(tmpdir()), RUN_TEMP_ROOT_PREFIX));
-  for (const key of ['TMPDIR', 'TEMP', 'TMP']) process.env[key] = root;
+  const root = inherited || mkdtempSync(join(parent || resolve(tmpdirFn()), RUN_TEMP_ROOT_PREFIX));
+  for (const key of ['TMPDIR', 'TEMP', 'TMP']) env[key] = root;
   return root;
 }
 
