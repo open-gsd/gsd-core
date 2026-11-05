@@ -1338,6 +1338,15 @@ export interface PlatformWriteOptions extends ContentNormalizationOptions {
   allowSpecialTarget?: boolean;
   /** Test seam for a FIFO target under `allowSpecialTarget`: the back-off sleep and its total bound. */
   specialTargetWait?: { sleep?: (ms: number) => void; maxWaitMs?: number };
+  /**
+   * Test seams for the window between the path walk and the write: `afterPathWalk` runs once the
+   * walk has recorded the identity of the target, `createTemp` replaces the exclusive temp
+   * create (a test throws from it to force the direct fallback). Not for production callers.
+   */
+  writeSeams?: {
+    afterPathWalk?: () => void;
+    createTemp?: (basePath: string, nextSuffix: undefined, mode: number) => { fd: number; tmpPath: string };
+  };
 }
 
 export function normalizeContent(filePath: string, content: string, opts: PlatformWriteOptions = {}): { content: string; encoding: BufferEncoding } {
@@ -1518,6 +1527,9 @@ export function openExclusiveTempSync(
   throw collision;
 }
 
+/** What the path walk in platformWriteSync saw at the final physical target: its identity, or 'absent'. */
+type WalkedTarget = { dev: number; ino: number } | 'absent';
+
 /**
  * Restore limit: an existing target is captured for restore only up to MAX_PRIOR_BYTES (2 MiB);
  * a larger one is refused with EFBIG BEFORE it is truncated. A failed write puts the old bytes
@@ -1528,7 +1540,12 @@ export function openExclusiveTempSync(
  * (a FIFO with no reader fails ENXIO) nor be written to: anything but a regular file is
  * refused with code ENXIO.
  */
-function writeTargetDirect(filePath: string, normalized: string, encoding: BufferEncoding): void {
+function writeTargetDirect(
+  filePath: string,
+  normalized: string,
+  encoding: BufferEncoding,
+  walked: WalkedTarget,
+): void {
   const nonBlock = (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOCTTY ?? 0);
   const refuse = (message: string, code: string): never => {
     throw Object.assign(new Error(`${code}: cannot write ${filePath}: ${message}`), { code });
@@ -1568,42 +1585,53 @@ function writeTargetDirect(filePath: string, normalized: string, encoding: Buffe
   };
 
   let created = false;
-  let fd: number | undefined;
+  let fd: number;
   let prior: Buffer | null = null;
-  for (let attempt = 0; fd === undefined; attempt++) {
-    const existing = probe();
-    if (existing !== null) {
-      fd = fs.openSync(filePath, fs.constants.O_WRONLY | nonBlock);
-      const st = fs.fstatSync(fd);
-      if (!st.isFile() || st.dev !== existing.dev || st.ino !== existing.ino) {
-        try { fs.closeSync(fd); } catch { /* already closed */ }
-        refuse('the target changed while it was being opened', 'ENXIO');
-      }
-      prior = existing.prior;
-    } else {
-      // Create exclusively and without following a link: a symlink planted since the probe (or
-      // a dangling one) makes this EEXIST, never a file created through it.
-      try {
-        fd = fs.openSync(
-          filePath,
-          fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0) | nonBlock,
-          0o666,
-        );
-        created = true;
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-        // Something appeared: probe once more as an existing target; a second miss means a
-        // dangling symlink (or a race), and nothing is created through it.
-        if (attempt >= 1) refuse('it is a dangling symlink — refusing to create through it', 'ENXIO');
-      }
+  const existing = probe();
+  if (existing !== null) {
+    // The path walk recorded what sat at the final physical target when it approved the path. A
+    // target the walk saw as absent, or as a different file than the one probed now, is refused
+    // before anything is opened for write: the path no longer leads where the walk looked.
+    if (walked === 'absent') return refuse('it appeared after the path was checked', 'ENXIO');
+    if (existing.dev !== walked.dev || existing.ino !== walked.ino) {
+      refuse('the target is not the file the path check approved', 'ENXIO');
+    }
+    fd = fs.openSync(filePath, fs.constants.O_WRONLY | nonBlock);
+    const st = fs.fstatSync(fd);
+    if (!st.isFile() || st.dev !== existing.dev || st.ino !== existing.ino) {
+      try { fs.closeSync(fd); } catch { /* already closed */ }
+      refuse('the target changed while it was being opened', 'ENXIO');
+    }
+    prior = existing.prior;
+  } else {
+    if (walked !== 'absent') return refuse('the target vanished after the path was checked', 'ENXIO');
+    // Create exclusively and without following a link: anything at the path now (a symlink
+    // planted since the probe, a dangling one, a descriptor alias reached through a swapped
+    // directory) makes this EEXIST, never a file created through it or written to.
+    try {
+      fd = fs.openSync(
+        filePath,
+        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0) | nonBlock,
+        0o666,
+      );
+      created = true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      return refuse('something appeared at the target (a dangling symlink, or a file created since the check) — refusing to create through it', 'ENXIO');
     }
   }
-  // What guards this write: the path walk in platformWriteSync refuses a descriptor alias before
-  // this function is reached, and the probe's fstat plus the dev/ino comparison above ensure the
-  // descriptor opened for write is the same regular file that was probed. There is deliberately NO
-  // post-open /proc check: opening /dev/fd/N re-opens the underlying object, so the new descriptor
-  // never reads back as an alias, and a path to a file this process happens to hold open is a
-  // legitimate write.
+  // What guards this write, and what does not. The path walk in platformWriteSync resolves the
+  // physical parent directory of every link hop, refuses a descriptor alias, and records what sat
+  // at the final physical target ({dev, ino}, or absent). Here: a target the walk saw absent is
+  // only ever CREATED with O_CREAT|O_EXCL|O_NOFOLLOW (an alias or link appearing there fails
+  // EEXIST); a target the walk saw present must probe as the same dev/ino, and the descriptor
+  // opened for write must match the probe, or nothing is truncated or written. There is
+  // deliberately NO post-open /proc check: opening /dev/fd/N re-opens the underlying object, so
+  // the new descriptor never reads back as an alias. Remaining race: the walk-to-probe and
+  // probe-to-open steps are separate syscalls, so a swap that restores the very same file (same
+  // dev/ino) between them is indistinguishable from no swap, and a file replaced after the final
+  // fstat is written under its old identity. Nothing here defends a directory an attacker can
+  // rewrite at will beyond refusing every identity change it can observe.
   let failure: (Error & { restoreFailed?: boolean }) | undefined;
   try {
     // Truncate BEFORE writing so a partial write can never leave the new prefix followed by the
@@ -1749,15 +1777,33 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
       );
     }
   };
+  // Only ENOENT (a component is absent) and ENOTDIR (a component is a non-directory) mean "nothing
+  // can exist there". Any other failure (EACCES, ELOOP, ENAMETOOLONG ...) leaves the path
+  // unclassified and is refused: guessing it harmless is the window an attacker needs.
+  const refuseUnresolved = (code: string | undefined): never => {
+    throw Object.assign(
+      new Error(`ENXIO: cannot write ${filePath}: a directory on its path cannot be resolved (${code ?? 'unknown error'}) — refusing`),
+      { code: 'ENXIO' },
+    );
+  };
+  const isMissing = (err: unknown): boolean => {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR';
+  };
   // The parent directory of a raw (un-normalised) path, resolved physically by the OS, or null
-  // when it is absent or unresolvable. `fs.realpathSync` (JS) would collapse `..` lexically first;
+  // when a component is absent (ENOENT/ENOTDIR); any other failure refuses with ENXIO.
+  // `fs.realpathSync` (JS) would collapse `..` lexically first;
   // the native form hands the whole string to realpath(3). A /proc/<own pid> prefix is folded to
   // /proc/self so the alias patterns see one spelling.
   const physicalDir = (rawPath: string): string | null => {
+    let real: string;
     try {
-      const real = fs.realpathSync.native(path.dirname(rawPath));
-      return real.replace(/^\/proc\/(\d+)\/(?=fd$|task\/)/, (m, pid) => (Number(pid) === process.pid ? '/proc/self/' : m));
-    } catch { return null; }
+      real = fs.realpathSync.native(path.dirname(rawPath));
+    } catch (err) {
+      if (isMissing(err)) return null;
+      return refuseUnresolved((err as NodeJS.ErrnoException).code);
+    }
+    return real.replace(/^\/proc\/(\d+)\/(?=fd$|task\/)/, (m, pid) => (Number(pid) === process.pid ? '/proc/self/' : m));
   };
   // A path may reach an alias through a DIRECTORY symlink (/tmp/d -> /dev/fd, then /tmp/d/7), or
   // through `..` after one (/tmp/b -> /dev/fd, then /tmp/b/../fd/7): classify a path by its
@@ -1787,17 +1833,26 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
     // file's type), so skipping regular-looking targets would reopen that gap.
     refuseViaRealDir(hop);
     let isLink = false;
-    try { isLink = fs.lstatSync(hop).isSymbolicLink(); } catch { /* absent: nothing to follow */ }
-    if (!isLink) break;
-    let next: string | null = null;
     try {
-      const link = fs.readlinkSync(hop);
-      const holder = physicalDir(hop);
-      // Kept raw (joined by string, never normalised): the next iteration's native realpath
-      // resolves any `..` in it against the symlinks it crosses.
-      if (path.isAbsolute(link)) next = link;
-      else if (holder !== null) next = `${holder === '/' ? '' : holder}/${link}`;
+      isLink = fs.lstatSync(hop).isSymbolicLink();
+    } catch (err) {
+      if (!isMissing(err)) refuseUnresolved((err as NodeJS.ErrnoException).code);
+      /* absent: nothing to follow */
+    }
+    if (!isLink) break;
+    let link: string;
+    try {
+      link = fs.readlinkSync(hop);
     } catch { break; }
+    let next: string | null = null;
+    // Kept raw (joined by string, never normalised): the next iteration's native realpath
+    // resolves any `..` in it against the symlinks it crosses.
+    if (path.isAbsolute(link)) {
+      next = link;
+    } else {
+      const holder = physicalDir(hop);
+      if (holder !== null) next = `${holder === '/' ? '' : holder}/${link}`;
+    }
     if (next === null) {
       // A relative link whose holding directory cannot be resolved cannot be classified: refuse.
       throw Object.assign(
@@ -1805,11 +1860,31 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
         { code: 'ENXIO' },
       );
     }
-    const physicalNext = physicalPath(next); // physical, never lexical: `..` follows symlinks
+    // physical, never lexical: `..` follows symlinks. A null result here means a component of the
+    // link target is absent; the final-target identity recorded below then reads it as absent.
+    const physicalNext = physicalPath(next);
     if (physicalNext !== null) refuseFdAlias(physicalNext);
     refuseViaRealDir(next);
     hop = next;
   }
+  // The identity of the final physical target as the walk saw it: {dev, ino}, or 'absent'. The
+  // direct fallback write is tied to it (see writeTargetDirect).
+  let walked: WalkedTarget = 'absent';
+  const finalPath = physicalPath(hop);
+  if (finalPath !== null) {
+    let st: fs.Stats | null = null;
+    try {
+      st = fs.lstatSync(finalPath);
+    } catch (err) {
+      if (!isMissing(err)) refuseUnresolved((err as NodeJS.ErrnoException).code);
+    }
+    if (st !== null) {
+      // Still a link after 40 hops: an unclassifiable chain.
+      if (st.isSymbolicLink()) refuseUnresolved('ELOOP');
+      walked = { dev: st.dev, ino: st.ino };
+    }
+  }
+  opts.writeSeams?.afterPathWalk?.();
   // #5165: a Markdown write is scoped to what it changed relative to the file it replaces.
   let prior = opts.prior;
   if (prior === undefined && opts.verbatim !== true && path.extname(filePath).toLowerCase() === '.md') {
@@ -1874,9 +1949,9 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   let tmpPath: string;
   let tmpFd: number;
   try {
-    ({ fd: tmpFd, tmpPath } = openExclusiveTempSync(filePath, undefined, targetMode ?? 0o666));
+    ({ fd: tmpFd, tmpPath } = (opts.writeSeams?.createTemp ?? openExclusiveTempSync)(filePath, undefined, targetMode ?? 0o666));
   } catch {
-    writeTargetDirect(filePath, normalized, encoding);
+    writeTargetDirect(filePath, normalized, encoding, walked);
     return;
   }
   if (targetMode !== null) {
@@ -1890,7 +1965,7 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   try { fs.closeSync(tmpFd); } catch { wrote = false; }
   if (!wrote) {
     try { fs.unlinkSync(tmpPath); } catch { /* already gone */ }
-    writeTargetDirect(filePath, normalized, encoding);
+    writeTargetDirect(filePath, normalized, encoding, walked);
     return;
   }
 
@@ -1907,7 +1982,7 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   }
   // Atomic publish is genuinely impossible here (e.g. EXDEV cross-device move):
   // fall back to a direct write to preserve write availability.
-  writeTargetDirect(filePath, normalized, encoding);
+  writeTargetDirect(filePath, normalized, encoding, walked);
 }
 
 export function platformReadSync(filePath: string, opts: { encoding?: BufferEncoding; required?: boolean } = {}): string | null {
