@@ -12,19 +12,19 @@ Read all files referenced by the invoking prompt's execution_context before star
 Ensure config exists and load current state:
 
 ```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
 _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; GSD_TOOLS="${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}"; _gsd_at() { for _p; do if [ -f "$_p" ]; then GSD_TOOLS="$_p"; return 0; fi; done; return 1; }; _gsd_id_ok() { case "$("$1" runtime-identity --raw 2>/dev/null || true)" in '{"packageName":"@opengsd/gsd-core"'*'}') return 0;; *) return 1;; esac; }; _gsd_homes() { set -- "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}" "$HOME/.gemini/antigravity-ide" "$HOME/.gemini/antigravity-cli" "${AUGMENT_CONFIG_DIR:-$HOME/.augment}" "${CLINE_CONFIG_DIR:-$HOME/.cline}" "${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}" "${CODEX_HOME:-$HOME/.codex}" "${COPILOT_CONFIG_DIR:-${COPILOT_HOME:-$HOME/.copilot}}" "${CURSOR_CONFIG_DIR:-$HOME/.cursor}" "${HERMES_HOME:-$HOME/.hermes}" "${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}" "${KIMI_CONFIG_DIR:-$HOME/.config/agents}" "$HOME/.agents" "${KIMI_CODE_HOME:-$HOME/.kimi-code}" "${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}" "${QWEN_CONFIG_DIR:-$HOME/.qwen}" "${TRAE_CONFIG_DIR:-$HOME/.trae}" "${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}" "${ZCODE_CONFIG_DIR:-$HOME/.zcode}" "${GROK_AGENTS_HOME:-$HOME/.agents}"; for _h; do _gsd_at "$_h/gsd-core/bin/${_GSD_SHIM_NAME}" && return 0; done; return 1; }; if _gsd_at "${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.claude/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.codex/gsd-core/bin/${_GSD_SHIM_NAME}"; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif _gsd_homes; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif unset -f gsd_run; _G="$(command -v gsd_run)"; [ -n "$_G" ] && _gsd_id_ok "$_G"; then GSD_TOOLS="$_G"; gsd_run() { "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and no identity-proving gsd_run is on PATH. Run: npx -y @opengsd/gsd-core@latest --claude --local" >&2; exit 1; fi; GSD_IDENTITY_STATUS=unverified; _gsd_id_ok gsd_run && GSD_IDENTITY_STATUS=ok; export GSD_IDENTITY_STATUS; [ "$GSD_IDENTITY_STATUS" = ok ] || echo "WARNING: \"$GSD_TOOLS\" did not prove it is @opengsd/gsd-core - it is either a different package or an @opengsd/gsd-core older than the runtime-identity verb. See docs/how-to/diagnose-a-foreign-gsd-tools.md" >&2; if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -n "${GSD_TOOLS:-}" ]; then printf "export PATH='%s':\"\$PATH\"\n" "${GSD_TOOLS%/*}" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true; fi
-RESPONSE_LANGUAGE=$(gsd_run query config-get response_language --raw --default "" 2>/dev/null || echo "")
-gsd_run query config-ensure-section
-INIT=$(gsd_run query state.load)
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+RESPONSE_LANGUAGE=$(gsd_run query config-get ${GSD_WS:+--ws=${GSD_WS##* }} response_language --raw --default "" 2>/dev/null || echo "")
+gsd_run query config-ensure-section ${GSD_WS:+--ws=${GSD_WS##* }}
+INIT=$(gsd_run query state.load ${GSD_WS:+--ws=${GSD_WS##* }})
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
-# `state.load` returns STATE frontmatter JSON from the SDK — it does not include `config_path`. Orchestrators may set `GSD_CONFIG_PATH` from init phase-op JSON; otherwise resolve the same path gsd-tools uses for flat vs active workstream (#2282).
+# `state.load` returns STATE frontmatter JSON from the SDK — it does not include `config_path`. Orchestrators may set `GSD_CONFIG_PATH` from init phase-op JSON; otherwise ask gsd-tools for the path it uses (`config-path`: the selected project's or workstream's config, honouring GSD_PROJECT, `--ws` and the session pointer; #2282, #5861).
 if [[ -z "${GSD_CONFIG_PATH:-}" ]]; then
-  if [[ -f .planning/active-workstream ]]; then
-    WS=$(tr -d '\n\r' < .planning/active-workstream)
-    GSD_CONFIG_PATH=".planning/workstreams/${WS}/config.json"
-  else
-    GSD_CONFIG_PATH=".planning/config.json"
-  fi
+  GSD_CONFIG_PATH=$(gsd_run query config-path ${GSD_WS:+--ws=${GSD_WS##* }} --raw)
 fi
 ```
 
@@ -97,6 +97,11 @@ internal resolution error — to `none` and exits 0, so `INSPECTED_RESOLVED=fals
 (#2486 review):
 
 ```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 _INSPECTED_RAW=$(gsd_run query inspect-dispatch-isolation --raw 2>/dev/null)
 _ISOLATION_RC=$?
 if [ $_ISOLATION_RC -ne 0 ] || [ -z "$_INSPECTED_RAW" ]; then
@@ -110,7 +115,7 @@ case "$INSPECTED_ISOLATION" in
   harness-worktree|orchestrator-worktree|none) ;;
   *) INSPECTED_ISOLATION=none; INSPECTED_RESOLVED=false ;;   # out of vocabulary is not a verdict either
 esac
-USE_WORKTREES_CURRENT=$(gsd_run query config-get workflow.use_worktrees --raw 2>/dev/null)
+USE_WORKTREES_CURRENT=$(gsd_run query config-get ${GSD_WS:+--ws=${GSD_WS##* }} workflow.use_worktrees --raw 2>/dev/null)
 ```
 
 Use AskUserQuestion with current values pre-selected. Questions are grouped into six visual sections; the first question in each section carries the section-denoting `header` field (AskUserQuestion renders abbreviated section tags for grouping, max 12 chars).
@@ -522,9 +527,9 @@ Merge new settings into existing config.json:
 
 **Safe merge:** Apply each chosen value so unrelated keys are never clobbered. Use the appropriate write path per key:
 
-- **Capability hook-gate keys** (owned by a capability in the registry — see `registry.configSchema`): write via the capability writer:
+- **Capability hook-gate keys** (owned by a capability in the registry — see `registry.configSchema`): write via the capability writer (pass `--ws=NAME` when this command was started with `--ws NAME`, so the gate lands in the config the values were read from):
   ```bash
-  gsd_run capability set <owner> --gate <key>=<value> [--config-dir "$RUNTIME_CONFIG_DIR"]
+  gsd_run capability set [--ws=NAME] <owner> --gate <key>=<value> [--config-dir "$RUNTIME_CONFIG_DIR"]
   ```
   The capability-owned keys written by this workflow and their owners are:
   | Key | Owner capability |
@@ -544,7 +549,7 @@ Merge new settings into existing config.json:
 
   `code_review_depth` is written only if the `code_review` question was answered `on`; otherwise leave the existing value in place.
 
-- **Non-capability keys** (`model_profile`, `commit_docs`, `workflow.plan_check`, `workflow.verifier`, `workflow.auto_advance`, `workflow.text_mode`, `workflow.compact_content`, `workflow.research_before_questions`, `workflow.discuss_mode`, `workflow.skip_discuss`, `workflow.use_worktrees`, `plan_review.source_grounding`, `graphify.auto_update`, `git.*`, `hooks.*`, `model_policy.*`): write via `gsd_run query config-set <key.path> <value>` as before.
+- **Non-capability keys** (`model_profile`, `commit_docs`, `workflow.plan_check`, `workflow.verifier`, `workflow.auto_advance`, `workflow.text_mode`, `workflow.compact_content`, `workflow.research_before_questions`, `workflow.discuss_mode`, `workflow.skip_discuss`, `workflow.use_worktrees`, `plan_review.source_grounding`, `graphify.auto_update`, `git.*`, `hooks.*`, `model_policy.*`): write via `gsd_run query config-set ${GSD_WS:+--ws=${GSD_WS##* }} <key.path> <value>` (the same scope the values were read from, #5861).
 
 `model_profile` is written on Q1 "Adaptive (Recommended)" (→ adaptive) or Q1 "Inherit" (→ inherit) immediately; for Q1 "Standard tier…", `model_profile` is written from Q2's answer. If Q1 = "Standard tier…" but Q2 is cancelled, leave the existing `model_profile` value unchanged — do not write any new value.
 

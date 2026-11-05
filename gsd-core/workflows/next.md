@@ -16,13 +16,21 @@ Read project state to determine current position:
 
 ```bash
 _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; GSD_TOOLS="${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}"; _gsd_at() { for _p; do if [ -f "$_p" ]; then GSD_TOOLS="$_p"; return 0; fi; done; return 1; }; _gsd_id_ok() { case "$("$1" runtime-identity --raw 2>/dev/null || true)" in '{"packageName":"@opengsd/gsd-core"'*'}') return 0;; *) return 1;; esac; }; _gsd_homes() { set -- "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}" "$HOME/.gemini/antigravity-ide" "$HOME/.gemini/antigravity-cli" "${AUGMENT_CONFIG_DIR:-$HOME/.augment}" "${CLINE_CONFIG_DIR:-$HOME/.cline}" "${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}" "${CODEX_HOME:-$HOME/.codex}" "${COPILOT_CONFIG_DIR:-${COPILOT_HOME:-$HOME/.copilot}}" "${CURSOR_CONFIG_DIR:-$HOME/.cursor}" "${HERMES_HOME:-$HOME/.hermes}" "${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}" "${KIMI_CONFIG_DIR:-$HOME/.config/agents}" "$HOME/.agents" "${KIMI_CODE_HOME:-$HOME/.kimi-code}" "${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}" "${QWEN_CONFIG_DIR:-$HOME/.qwen}" "${TRAE_CONFIG_DIR:-$HOME/.trae}" "${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}" "${ZCODE_CONFIG_DIR:-$HOME/.zcode}" "${GROK_AGENTS_HOME:-$HOME/.agents}"; for _h; do _gsd_at "$_h/gsd-core/bin/${_GSD_SHIM_NAME}" && return 0; done; return 1; }; if _gsd_at "${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.claude/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.codex/gsd-core/bin/${_GSD_SHIM_NAME}"; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif _gsd_homes; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif unset -f gsd_run; _G="$(command -v gsd_run)"; [ -n "$_G" ] && _gsd_id_ok "$_G"; then GSD_TOOLS="$_G"; gsd_run() { "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and no identity-proving gsd_run is on PATH. Run: npx -y @opengsd/gsd-core@latest --claude --local" >&2; exit 1; fi; GSD_IDENTITY_STATUS=unverified; _gsd_id_ok gsd_run && GSD_IDENTITY_STATUS=ok; export GSD_IDENTITY_STATUS; [ "$GSD_IDENTITY_STATUS" = ok ] || echo "WARNING: \"$GSD_TOOLS\" did not prove it is @opengsd/gsd-core - it is either a different package or an @opengsd/gsd-core older than the runtime-identity verb. See docs/how-to/diagnose-a-foreign-gsd-tools.md" >&2; if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -n "${GSD_TOOLS:-}" ]; then printf "export PATH='%s':\"\$PATH\"\n" "${GSD_TOOLS%/*}" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true; fi
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+# The selected project's or workstream's STATE.md and ROADMAP.md (.planning/ for the root project)
+echo "STATE_PATH=$(gsd_run query init.resume ${GSD_WS:+--ws=${GSD_WS##* }} --pick state_path)"
+echo "ROADMAP_PATH=$(gsd_run query init.resume ${GSD_WS:+--ws=${GSD_WS##* }} --pick roadmap_path)"
 # Get state snapshot
-gsd_run query state.json 2>/dev/null || echo "{}"
+gsd_run query state.json ${GSD_WS:+--ws=${GSD_WS##* }} 2>/dev/null || echo "{}"
 ```
 
-Also read:
-- `.planning/STATE.md` — current phase, progress, plan counts
-- `.planning/ROADMAP.md` — milestone structure and phase list
+Also read (the paths printed above):
+- `STATE_PATH` (STATE.md) — current phase, progress, plan counts
+- `ROADMAP_PATH` (ROADMAP.md) — milestone structure and phase list
 
 Extract:
 - `current_phase` — which phase is active
@@ -97,15 +105,20 @@ This catches the common failure mode where a session died mid-execution (hang, t
 
 **Why Route 0 runs here (after Gates 1-3, before the prior-phase defer prompt):** This step is a hard invariant independent of `current_phase`'s value — it must run before any routing rule that reads `current_phase`. Gates 1-3 are cheap repo/state validity checks that must always run — skipping them on the resume path would risk advancing into a broken-state project. The prior-phase completeness-scan DEFER PROMPT, however, must NOT run in the default (no-flag) case when Route 0 is about to resume the phase automatically: that would force a double-decision (prompt first, then resume anyway), overriding the user's choice. Route 0 placed here means: default = resume silently (no defer prompt); `--no-resume` = skip Route 0 and fall through to the prior-phase defer prompt in `prior_phase_completeness`; `--force` = jump straight to `determine_next_action` at `safety_gates` (never reaches Route 0 or `prior_phase_completeness` at all).
 
-Scan ALL phases in ROADMAP order (lowest-numbered to highest) for incomplete-execution state. Use `gsd_run query roadmap.analyze` to get the phase list, then for each phase number `N` query `gsd_run query find-phase <N>` JSON and inspect its `plans` and `summaries` arrays. A phase is **incomplete-execution** when `plans.length > summaries.length` (at least one PLAN.md has no matching SUMMARY.md).
+Scan ALL phases in ROADMAP order (lowest-numbered to highest) for incomplete-execution state. Use `gsd_run query roadmap.analyze` to get the phase list, then for each phase number `N` query `gsd_run query find-phase <N>` JSON (both with the run's `--ws` token, the scope the deferral commit uses) and inspect its `plans` and `summaries` arrays. A phase is **incomplete-execution** when `plans.length > summaries.length` (at least one PLAN.md has no matching SUMMARY.md).
 
 Stop at the first such phase. Record its phase number as `INCOMPLETE_PHASE`. This is the lowest-numbered phase that needs continued execution.
 
 Illustrative bash:
 
 ```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 INCOMPLETE_PHASE=""
-ROADMAP_JSON=$(gsd_run query roadmap.analyze)
+ROADMAP_JSON=$(gsd_run query roadmap.analyze ${GSD_WS:+--ws=${GSD_WS##* }})
 ROADMAP_SCOPE=$(echo "$ROADMAP_JSON" | jq -r '.scope // "complete"')
 if [ $? -ne 0 ] || [ -z "$ROADMAP_JSON" ]; then
   echo "⚠ WARNING: resume-incomplete-phase scan could not run (roadmap.analyze failed)." >&2
@@ -124,7 +137,7 @@ elif [ "$ROADMAP_SCOPE" != "complete" ]; then
   # Fall through to prior_phase_completeness rather than silently passing
 else
   for PHASE_NUM in $(echo "$ROADMAP_JSON" | jq -r '.phases[] | (.number // .phase_number // empty)'); do
-    PHASE_JSON=$(gsd_run query find-phase "$PHASE_NUM")
+    PHASE_JSON=$(gsd_run query find-phase ${GSD_WS:+--ws=${GSD_WS##* }} "$PHASE_NUM")
     if [ $? -ne 0 ] || [ -z "$PHASE_JSON" ]; then
       echo "⚠ WARNING: Could not query phase $PHASE_NUM — skipping in resume scan." >&2
       continue
@@ -156,7 +169,7 @@ Then invoke via SlashCommand. Do not continue to subsequent steps.
 **Prior-phase completeness scan (runs when `--no-resume` was passed and Route 0 was skipped, or when Route 0 found no incomplete-execution phases in the default case). NOT reached under `--force` — that flag jumps directly to `determine_next_action` at `safety_gates`.**
 
 **Prior-phase completeness scan:**
-Scan all phases that precede the current phase in ROADMAP.md order for incomplete work. For each prior phase number `N`, use `gsd_run query find-phase <N>` JSON (plans, summaries, incomplete_plans, etc.) to inspect that phase.
+Scan all phases that precede the current phase in ROADMAP.md order for incomplete work. For each prior phase number `N`, use `gsd_run query find-phase <N>` JSON, with the run's `--ws` token (plans, summaries, incomplete_plans, etc.) to inspect that phase.
 
 Detect three categories of incomplete work:
 1. **Plans without summaries** — a PLAN.md exists in a prior phase directory but no matching SUMMARY.md exists (execution started but not completed).
@@ -188,7 +201,7 @@ Choice [S]:
 **If the user chooses "Stop" (S or Enter/default):** Exit without routing.
 
 **If the user chooses "Continue and defer" (C):**
-1. For each incomplete item, create a backlog entry in `ROADMAP.md` under `## Backlog` using the existing `999.x` numbering scheme:
+1. For each incomplete item, create a backlog entry in the `ROADMAP_PATH` file printed in `detect_state` (the ROADMAP.md the commit below stages) under `## Backlog` using the existing `999.x` numbering scheme:
 ```markdown
 ### Phase 999.{N}: Follow-up — Phase {src} incomplete plans (BACKLOG)
 
@@ -200,8 +213,13 @@ Choice [S]:
 ```
 2. Commit the deferral record:
 ```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 gsd_run query commit "docs: defer incomplete Phase {src} items to backlog" \
-  --files .planning/ROADMAP.md
+  --files "$(gsd_run query init.resume ${GSD_WS:+--ws=${GSD_WS##* }} --pick roadmap_path)"
 ```
 3. Continue routing to `determine_next_action` immediately — no second prompt.
 

@@ -155,6 +155,27 @@ describe('T21: L2 negative space — a shared planning doc is inert', () => {
   });
 });
 
+describe('#5861: L2 — an init shared-doc placeholder names the selected scope\'s shared planning doc', () => {
+  const run = (pathspec) => {
+    const { scanText } = loadLint();
+    const text = ['```bash', `gsd_run query commit "defer" --files ${pathspec}`, '```', ''].join('\n');
+    return scanText('gsd-core/workflows/verify-work.md', text, { postFingerprint: true }).filter((v) => v.rule === 'L2');
+  };
+
+  test('{roadmap_path}, {state_path} and {requirements_path} are inert (quoted or bare)', () => {
+    for (const p of ['"{roadmap_path}"', '{state_path}', '"{requirements_path}"']) {
+      assert.deepStrictEqual(run(p), [], `${p} resolves to a doc directly under the scoped planning dir`);
+    }
+  });
+
+  test('any other placeholder, a phase artifact under one, or a near-miss name still fails closed', () => {
+    // {project_path} included: under a workstream it is the project-level PROJECT.md, outside the scope.
+    for (const p of ['"{phase_dir}/01-UAT.md"', '{roadmap_path}x', '{config_path}', '{project_path}', '"{project_path}"', '"{roadmap_path}/../x.md"']) {
+      assert.strictEqual(run(p).length, 1, `${p} must stay flagged`);
+    }
+  });
+});
+
 describe('T22: allowlist — a free-text reason and a stale entry are each a violation', () => {
   test('an allowlist entry whose reason does not match #\\d+ is itself a violation', () => {
     const { validateAllowlist } = loadLint();

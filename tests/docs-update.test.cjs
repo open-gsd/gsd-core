@@ -426,11 +426,12 @@ describe('#3135: gsd-core/workflows/add-backlog.md', () => {
     assert.ok(src.includes('ROADMAP.md'), 'add-backlog.md must write to ROADMAP.md');
   });
 
-  test('creates a .planning/phases/ directory', () => {
+  test('creates a phase directory under the planning directory\'s phases/', () => {
     const src = fs.readFileSync(WORKFLOW, 'utf8');
+    // #5861: the selected project's or workstream's planning directory, not the root literal.
     assert.ok(
-      src.includes('.planning/phases') || src.includes('planning/phases'),
-      'add-backlog.md must create a phase directory under .planning/phases/',
+      src.includes('PHASE_DIR="$PLANNING_DIR/phases/'),
+      'add-backlog.md must create a phase directory under <planning dir>/phases/',
     );
   });
 

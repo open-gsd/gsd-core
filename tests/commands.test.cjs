@@ -5688,7 +5688,8 @@ describe('query commit --files scoping (#2269)', () => {
     const idx = content.indexOf('defer incomplete Phase');
     assert.notEqual(idx, -1, 'must contain the deferral commit message');
     assert.match(content.slice(idx, idx + 200), /--files/);
-    assert.match(content.slice(idx, idx + 200), /ROADMAP\.md/);
+    // #5861: the selected project's or workstream's ROADMAP.md (init roadmap_path), not the root literal.
+    assert.match(content.slice(idx, idx + 200), /--pick roadmap_path/);
   });
 });
 

@@ -19,13 +19,15 @@ milestone sequence or remove stale entries.
 
 1. **List backlog items:**
    ```bash
-   _BACKLOG=( .planning/phases/999* )
+   PLANNING_DIR=$(gsd-tools query config-path --raw) && PLANNING_DIR=${PLANNING_DIR%/config.json}
+   : "${PLANNING_DIR:?planning directory not resolved for this scope}"
+   _BACKLOG=( "$PLANNING_DIR"/phases/999* )
    if [ -e "${_BACKLOG[0]}" ]; then ls -d "${_BACKLOG[@]}"; else echo "No backlog items found"; fi
    ```
 
 2. **Read ROADMAP.md** and extract all 999.x phase entries:
    ```bash
-   cat .planning/ROADMAP.md
+   cat "$(gsd-tools query init.resume --pick roadmap_path)"
    ```
    Show each backlog item with its description, any accumulated context (CONTEXT.md, RESEARCH.md), and creation date.
 
@@ -50,7 +52,7 @@ milestone sequence or remove stale entries.
 
 6. **Commit changes:**
    ```bash
-   gsd-tools query commit "docs: review backlog — promoted N, removed M" --files .planning/ROADMAP.md
+   gsd-tools query commit "docs: review backlog — promoted N, removed M" --files "$(gsd-tools query init.resume --pick roadmap_path)"
    ```
 
 7. **Report summary:**

@@ -5,8 +5,13 @@ Calculate the next decimal phase number for urgent insertions.
 ## Using gsd-tools
 
 ```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1) # Read-loaded file: write the command's original argument string in place of $GSD_ARGS
 # Get next decimal phase after phase 6
-gsd_run query phase.next-decimal 6
+gsd_run query phase.next-decimal ${GSD_WS:+--ws=${GSD_WS##* }} 6
 ```
 
 Output:
@@ -32,13 +37,23 @@ With existing decimals:
 ## Extract Values
 
 ```bash
-DECIMAL_PHASE=$(gsd_run query phase.next-decimal "${AFTER_PHASE}" --pick next)
-BASE_PHASE=$(gsd_run query phase.next-decimal "${AFTER_PHASE}" --pick base_phase)
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1) # Read-loaded file: write the command's original argument string in place of $GSD_ARGS
+DECIMAL_PHASE=$(gsd_run query phase.next-decimal ${GSD_WS:+--ws=${GSD_WS##* }} "${AFTER_PHASE}" --pick next)
+BASE_PHASE=$(gsd_run query phase.next-decimal ${GSD_WS:+--ws=${GSD_WS##* }} "${AFTER_PHASE}" --pick base_phase)
 ```
 
 Or with --raw flag:
 ```bash
-DECIMAL_PHASE=$(gsd_run query phase.next-decimal "${AFTER_PHASE}" --raw)
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1) # Read-loaded file: write the command's original argument string in place of $GSD_ARGS
+DECIMAL_PHASE=$(gsd_run query phase.next-decimal ${GSD_WS:+--ws=${GSD_WS##* }} "${AFTER_PHASE}" --raw)
 # Returns just: 06.1
 ```
 
@@ -56,8 +71,15 @@ DECIMAL_PHASE=$(gsd_run query phase.next-decimal "${AFTER_PHASE}" --raw)
 Decimal phase directories use the full decimal number:
 
 ```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1) # Read-loaded file: write the command's original argument string in place of $GSD_ARGS
 SLUG=$(gsd_run query generate-slug "$DESCRIPTION" --raw)
-PHASE_DIR=".planning/phases/${DECIMAL_PHASE}-${SLUG}"
+PLANNING_DIR=$(gsd_run query config-path ${GSD_WS:+--ws=${GSD_WS##* }} --raw) && PLANNING_DIR=${PLANNING_DIR%/config.json}
+: "${PLANNING_DIR:?planning directory not resolved for this scope}"
+PHASE_DIR="$PLANNING_DIR/phases/${DECIMAL_PHASE}-${SLUG}"
 mkdir -p "$PHASE_DIR"
 ```
 

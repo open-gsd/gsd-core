@@ -99,8 +99,9 @@ describe('verify-work deferred follow-up promotion (#4546)', () => {
         `complete_session promotion entry must reuse the next.md shape marker: ${marker}`);
     }
 
-    // The deferral record is committed scoped to the roadmap.
-    assert.match(block, /--files[^\n]*ROADMAP\.md/,
-      'the promotion commit must be scoped to .planning/ROADMAP.md via --files');
+    // The deferral record is committed scoped to the roadmap — init's roadmap_path, so a named
+    // project or workstream commits its own ROADMAP.md (#5861).
+    assert.match(block, /--files[^\n]*\{roadmap_path\}/,
+      'the promotion commit must be scoped to the roadmap ({roadmap_path}) via --files');
   });
 });

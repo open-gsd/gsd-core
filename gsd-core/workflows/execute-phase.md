@@ -96,9 +96,10 @@ GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/
 INIT=$(gsd_run query init.execute-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_ARG}" $WAVE_PARAM)
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 AGENT_SKILLS=$(gsd_run query agent-skills gsd-executor ${GSD_WS:+--ws=${GSD_WS##* }})
+PROJECT_PATH=$(gsd_run query init.resume ${GSD_WS:+--ws=${GSD_WS##* }} --pick project_path)
 ```
 
-Parse JSON for: `executor_model`, `verifier_model`, `commit_docs`, `parallelization`, `branching_strategy`, `branch_name`, `phase_found`, `phase_dir`, `phase_number`, `padded_phase`, `phase_name`, `phase_slug`, `plans`, `incomplete_plans`, `plan_count`, `incomplete_count`, `state_exists`, `roadmap_exists`, `phase_req_ids`, `response_language`, `requirements_path`, `section_manifest`, `threat_id_duplicate_count`.
+Parse JSON for: `executor_model`, `verifier_model`, `commit_docs`, `parallelization`, `branching_strategy`, `branch_name`, `phase_found`, `phase_dir`, `phase_number`, `padded_phase`, `phase_name`, `phase_slug`, `plans`, `incomplete_plans`, `plan_count`, `incomplete_count`, `state_exists`, `roadmap_exists`, `phase_req_ids`, `response_language`, `state_path`, `roadmap_path`, `config_path`, `requirements_path`, `section_manifest`, `threat_id_duplicate_count`. `PROJECT_PATH` is the scoped PROJECT.md. These paths fill the `{state_path}`, `{roadmap_path}`, `{config_path}`, `{requirements_path}` and `{project_path}` placeholders below, so a named project or workstream reads and commits its own files.
 
 **Threat-ID gate (#4683):** if `threat_id_duplicate_count` is non-zero, read and execute `execute-phase/steps/threat-id-gate.md` BEFORE any dispatch — it is a hard stop (the full duplicate list is in `threat_id_duplicates`).
 
@@ -137,7 +138,6 @@ EXECUTOR_STALL_THRESHOLD_MINUTES=$(gsd_run query config-get executor.stall_thres
 If the project uses git submodules, worktree isolation is unsafe **only when a plan touches a submodule path** — the executor commit protocol cannot correctly handle submodule commits inside isolated worktrees. Compute submodule paths once and intersect them per-plan with the plan's declared `files_modified` frontmatter.
 
 ```bash
-# Parse submodule paths from .gitmodules once (empty if no .gitmodules).
 # SUBMODULE_PATHS is a newline-separated list of repo-relative paths.
 if [ -f .gitmodules ]; then
   SUBMODULE_PATHS=$(git config --file .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null | awk '{print $2}')
@@ -235,6 +235,11 @@ Offer these recovery options:
 
 **TDD gate.** Task-scoped enforcement runs inside plan execution (immediately before each implementation step), where `TASK_FILE`, `PLAN_ID`, and `TASK_ID` are defined. #4011: the gate keys on `TDD_MODE` ALONE — a discipline gate coupled to the product-scope `MVP_MODE` flag was silently inert on every non-MVP phase, contradicting `gsd-core/references/tdd.md`'s contract that `workflow.tdd_mode` binds for all `type: tdd` plans. MVP mode remains free to imply TDD; it is no longer required by it. Keep the same predicate and RED-commit contract:
 ```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 if [ "$TDD_MODE" = "true" ]; then
   IS_BEHAVIOR_ADDING=$(gsd_run query task.is-behavior-adding "$TASK_FILE" --pick is_behavior_adding)
   if [ "$IS_BEHAVIOR_ADDING" = "true" ]; then
@@ -253,7 +258,7 @@ if [ "$TDD_MODE" = "true" ]; then
     if [ "$RED_SCOPE_RC" -ne 0 ]; then echo "TDD GATE UNAVAILABLE: could not resolve the plan's commits for ${PLAN_ID}/${TASK_ID} (evaluation-scope exit ${RED_SCOPE_RC})"; exit 1; fi
     RED_COMMIT=$(printf '%s' "$RED_COMMIT" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const c=JSON.parse(s).commits;process.stdout.write(c.length?c[0].sha.slice(0,10)+' '+c[0].subject:'')}catch{}})")
     if [ -z "$RED_COMMIT" ]; then
-      gsd_run query state.update last_gate_trip "${PLAN_ID}/${TASK_ID}" || true
+      gsd_run query state.update ${GSD_WS:+--ws=${GSD_WS##* }} last_gate_trip "${PLAN_ID}/${TASK_ID}" || true
       echo "TDD GATE TRIPPED: missing RED commit for ${PLAN_ID}/${TASK_ID}"
       exit 1
     fi
@@ -338,7 +343,12 @@ Report: "Found {plan_count} plans in {phase_dir} ({incomplete_count} incomplete)
 
 **Update STATE.md for phase start:**
 ```bash
-gsd_run query state.begin-phase --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+gsd_run query state.begin-phase ${GSD_WS:+--ws=${GSD_WS##* }} --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
 ```
 This updates Status, Last Activity, Current focus, Current Position, and plan counts in STATE.md so frontmatter and body text reflect the active phase immediately.
 </step>
@@ -630,7 +640,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    `[checkpoint] phase {PHASE_NUMBER} wave {N}/{M} plan {plan_id} starting ({P}/{Q} plans done)`
 
-   Pass paths only — executors read files themselves.
+   Pass paths only — executors read files themselves. **Path placeholders in the prompt below and its inlined files are project-root-relative** (minus `project_root/`), so an isolated executor resolves them in its own worktree (#3099). `{ws_token}` and their `$ARGUMENTS`: the run's `--ws` token (dispatch step 2).
 
    **Substitute `{plan_id}` in the prompt below with this plan's `id` field** from the `phase-plan-index` JSON loaded in step 1 (the same field referred to elsewhere in this workflow as `plan.id`) — unmodified and un-truncated, never a paraphrase. The guard hooks compare this value verbatim against the sentinel the per-plan gate wrote (`per-plan-worktree-gate.md`'s `plan_id`); a paraphrase or an omission costs the dispatch its recorded isolation decision.
 
@@ -686,6 +696,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
      prompt="
        <objective>
        Execute plan {plan_number} of phase {phase_number}-{phase_name}.
+       GSD_WS={ws_token}
        [gsd:dispatch phase="{phase_number}" plan="{plan_id}"]
        Commit each task atomically. Create SUMMARY.md.
        Do NOT update STATE.md or ROADMAP.md — the orchestrator owns those writes after all worktree agents in the wave complete.
@@ -731,9 +742,9 @@ increases monotonically across waves. `{status}` is `complete` (success),
        First resolve repo root so every path is anchored:
        \`PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)\`
        - ${PROJECT_ROOT}/{phase_dir}/{plan_file} (Plan)
-       - ${PROJECT_ROOT}/.planning/PROJECT.md (Project context — core value, requirements, evolution rules)
-       - ${PROJECT_ROOT}/.planning/STATE.md (State)
-       - ${PROJECT_ROOT}/.planning/config.json (Config, if exists)
+       - ${PROJECT_ROOT}/{project_path} (PROJECT.md: project context — core value, requirements, evolution rules)
+       - ${PROJECT_ROOT}/{state_path} (STATE.md: state)
+       - ${PROJECT_ROOT}/{config_path} (config.json: config, if exists)
        ${CONTEXT_WINDOW >= 500000 ? `
        - ${PROJECT_ROOT}/${phase_dir}/*-CONTEXT.md (User decisions from discuss-phase — honors locked choices)
        - ${PROJECT_ROOT}/${phase_dir}/*-RESEARCH.md (Technical research — pitfalls and patterns to follow)
@@ -952,25 +963,30 @@ increases monotonically across waves. `{status}` is `complete` (success),
    If tests failed or timed out, skip the tracking update — plans should
    not be marked as complete when integration tests are failing or inconclusive.
 
-   ```bash
-   # Guard: only update tracking if post-merge tests passed
-   # Timeout (124) is treated as inconclusive — do NOT mark plans complete
-   if [ "${TEST_EXIT}" -eq 0 ]; then
-     # Update ROADMAP plan progress for each completed plan in this wave
-     for plan_id in {completed_plan_ids}; do
-       PROGRESS=$(gsd_run query roadmap.update-plan-progress "${PHASE_NUMBER}" "${plan_id}" "complete") && REASON=$(jq -er '.reason//""' <<<"$PROGRESS") && [ "$REASON" != missing_phase_details ] || { echo "ERROR: ROADMAP update-plan-progress did not complete for ${PHASE_NUMBER}-${plan_id} (missing_phase_details decline, failed query, or jq not installed). STOP: skip this plan's completion steps." >&2; exit 1; }
-     done
+```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+if [ "${TEST_EXIT}" -eq 0 ]; then
+  for plan_id in {completed_plan_ids}; do
+    PROGRESS=$(gsd_run query roadmap.update-plan-progress ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}" "${plan_id}" "complete") && REASON=$(jq -er '.reason//""' <<<"$PROGRESS") && [ "$REASON" != missing_phase_details ] || { echo "ERROR: ROADMAP update-plan-progress did not complete for ${PHASE_NUMBER}-${plan_id} (missing_phase_details decline, failed query, or jq not installed). STOP: skip this plan's completion steps." >&2; exit 1; }
+  done
 
-     # Only commit tracking files if they actually changed
-     if ! git diff --quiet .planning/ROADMAP.md .planning/STATE.md 2>/dev/null; then
-       gsd_run query commit "docs(phase-${PHASE_NUMBER}): update tracking after wave ${N}" --files .planning/ROADMAP.md .planning/STATE.md
-     fi
-   elif [ "${TEST_EXIT}" -eq 124 ]; then
-     echo "⚠ Skipping tracking update — test suite timed out. Plans remain in-progress. Run tests manually to confirm."
-   else
-     echo "⚠ Skipping tracking update — post-merge tests failed (exit ${TEST_EXIT}). Plans remain in-progress until tests pass."
-   fi
-   ```
+  # Only commit tracking files if they actually changed (absent ones are left out)
+  ROADMAP_PATH=$(gsd_run query init.execute-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}" --pick roadmap_path)
+  STATE_PATH=$(gsd_run query init.execute-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}" --pick state_path)
+  DOCS=(); for f in "$ROADMAP_PATH" "$STATE_PATH"; do [ -f "$f" ] && DOCS+=("$f"); done
+  if [ ${#DOCS[@]} -gt 0 ] && ! git diff --quiet "${DOCS[@]}" 2>/dev/null; then
+    gsd_run query commit "docs(phase-${PHASE_NUMBER}): update tracking after wave ${N}" --files "${DOCS[@]}"
+  fi
+elif [ "${TEST_EXIT}" -eq 124 ]; then
+  echo "⚠ Skipping tracking update — test suite timed out. Plans remain in-progress. Run tests manually to confirm."
+else
+  echo "⚠ Skipping tracking update — post-merge tests failed (exit ${TEST_EXIT}). Plans remain in-progress until tests pass."
+fi
+```
 
    Where `WAVE_PLAN_IDS` is the space-separated list of plan IDs that completed in this wave.
 
@@ -1292,7 +1308,12 @@ above), which gates it on this id exactly as every section here is gated (#5118)
 **Mark phase complete and update all tracking files:**
 
 ```bash
-COMPLETION=$(gsd_run query phase.complete "${PHASE_NUMBER}")
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+COMPLETION=$(gsd_run query phase.complete ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}")
 ```
 
 The CLI handles:
@@ -1315,7 +1336,8 @@ These items are tracked and will appear in `/gsd:progress` and `/gsd:audit-uat`.
 ```
 
 ```bash
-gsd_run query commit "docs(phase-{X}): complete phase execution" --files .planning/ROADMAP.md .planning/STATE.md .planning/REQUIREMENTS.md {phase_dir}/*-VERIFICATION.md
+DOCS=(); for f in "{roadmap_path}" "{state_path}" "{requirements_path}"; do [ -f "$f" ] && DOCS+=("$f"); done
+gsd_run query commit "docs(phase-{X}): complete phase execution" --files "${DOCS[@]}" "{phase_dir}"/*-VERIFICATION.md
 ```
 </step>
 
@@ -1350,6 +1372,11 @@ Copy failure must NOT block phase completion.
 **Auto-close todos whose `resolves_phase` matches this phase (#2433)**, after `update_roadmap`.
 
 ```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
 PENDING_DIR=".planning/todos/pending"
 COMPLETED_DIR=".planning/todos/completed"
@@ -1372,7 +1399,8 @@ done
 if [ ${#CLOSED[@]} -gt 0 ]; then
   ADDED=(); REMOVED=()
   for f in "${CLOSED[@]}"; do ADDED+=("$COMPLETED_DIR/$f"); REMOVED+=("$PENDING_DIR/$f"); done
-  gsd_run query commit "docs(phase-${PHASE_NUMBER}): close ${#CLOSED[@]} resolved todo(s)" --files "${ADDED[@]}" .planning/STATE.md --files-removed "${REMOVED[@]}" || true
+  STATE_FILE=$(gsd_run query init.execute-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}" --pick state_path)  # empty if STATE.md is absent
+  gsd_run query commit "docs(phase-${PHASE_NUMBER}): close ${#CLOSED[@]} resolved todo(s)" --files "${ADDED[@]}" ${STATE_FILE:+"$STATE_FILE"} --files-removed "${REMOVED[@]}" || true
   echo "◆ Closed ${#CLOSED[@]} todo(s) for Phase ${PHASE_NUMBER}:"; printf '  ✓ %s\n' "${CLOSED[@]}"
 fi
 ```

@@ -74,15 +74,15 @@ Load execution context:
 @__GSD_PI_ENGINE_ROOT__/gsd-core/references/gsd-run-resolver.md
 
 ```bash
-INIT=$(gsd_run query init.execute-phase "${PHASE}")
+INIT=$(gsd_run query init.execute-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
-Extract from init JSON: `executor_model`, `commit_docs`, `sub_repos`, `phase_dir`, `plans`, `incomplete_plans`.
+Extract from init JSON: `executor_model`, `commit_docs`, `sub_repos`, `phase_dir`, `plans`, `incomplete_plans`, `state_path`, `roadmap_path`, `requirements_path`. The `{phase_dir}`, `{state_path}`, `{roadmap_path}` and `{requirements_path}` placeholders below are these values (the selected project's or workstream's files, never a root `.planning/` literal). `GSD_WS` is the `GSD_WS=` value in your prompt's objective (empty for the root project): pass it as shown so every verb resolves the orchestrator's scope.
 
 Also load planning state (position, decisions, blockers) via the SDK — **use `node` to invoke the CLI** (not `npx`):
 ```bash
-gsd_run query state.load 2>/dev/null
+gsd_run query state.load ${GSD_WS:+--ws=${GSD_WS##* }} 2>/dev/null
 ```
 If STATE.md missing but .planning/ exists: offer to reconstruct or continue without.
 If .planning/ missing: Error — project not initialized.
@@ -495,7 +495,7 @@ if [ "$IS_PROTECTED" = "__GSD_RUN_UNAVAILABLE__" ] || [ -z "$IS_PROTECTED" ]; th
 fi
 if [ "$IS_PROTECTED" != "false" ]; then
   echo "FATAL: refusing to commit — HEAD is on '$ACTUAL_BRANCH' (protected/default branch)." >&2
-  echo "Re-home onto a phase/agent branch (#2924, #3819); override: git.allow_default_branch_commits:true in .planning/config.json." >&2
+  echo "Re-home onto a phase/agent branch (#2924, #3819); override: git.allow_default_branch_commits:true in config.json (path: gsd_run query config-path --raw)." >&2
   exit 1
 fi
 # #4799: set SEQUENTIAL=true ONLY if your prompt has a `<sequential_execution>` block (the
@@ -638,13 +638,13 @@ file individually. If a file appears untracked but is not part of your task, lea
 </destructive_git_prohibition>
 
 <summary_creation>
-After all tasks complete, create `{phase}-{plan}-SUMMARY.md` at `.planning/phases/XX-name/`.
+After all tasks complete, create `{phase}-{plan}-SUMMARY.md` in `{phase_dir}/`.
 
 Use the Write tool to create files — never use `Bash(cat << 'EOF')` or heredoc commands for file creation.
 
 **Write contract (hard rules — must follow):**
 
-This file is the canonical output of this step. The orchestrator reads `.planning/phases/XX-name/{phase}-{plan}-SUMMARY.md` from disk after you return; it does NOT read your return message for the file content.
+This file is the canonical output of this step. The orchestrator reads `{phase_dir}/{phase}-{plan}-SUMMARY.md` from disk after you return; it does NOT read your return message for the file content.
 
 1. **Default: write the whole file in a single `Write` call.** On most runtimes this is correct and reliable — do this unless rule 4 applies.
 2. **Do NOT return the SUMMARY.md content in your response.** Your return message is a brief confirmation; the content lives on disk.
@@ -765,20 +765,20 @@ After SUMMARY.md, update ROADMAP.md progress FIRST, then STATE.md. The ROADMAP w
 
 ```bash
 # Update ROADMAP.md progress for this phase (plan counts, status). A decline stops here, before STATE.md moves.
-PROGRESS=$(gsd_run query roadmap.update-plan-progress "${PHASE_NUMBER}") && REASON=$(jq -er '.reason//""' <<<"$PROGRESS") && [ "$REASON" != missing_phase_details ] || { echo "ERROR: ROADMAP update-plan-progress did not complete for ${PHASE_NUMBER}-${PLAN} (missing_phase_details decline, failed query, or jq not installed). STOP: skip this plan's completion steps." >&2; exit 1; }
+PROGRESS=$(gsd_run query roadmap.update-plan-progress ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}") && REASON=$(jq -er '.reason//""' <<<"$PROGRESS") && [ "$REASON" != missing_phase_details ] || { echo "ERROR: ROADMAP update-plan-progress did not complete for ${PHASE_NUMBER}-${PLAN} (missing_phase_details decline, failed query, or jq not installed). STOP: skip this plan's completion steps." >&2; exit 1; }
 ```
 
 Then update STATE.md using `gsd-tools query` state handlers (named flags):
 
 ```bash
 # Advance plan counter (handles edge cases automatically)
-gsd_run query state.advance-plan
+gsd_run query state.advance-plan ${GSD_WS:+--ws=${GSD_WS##* }}
 
 # Recalculate progress bar from disk state
-gsd_run query state.update-progress
+gsd_run query state.update-progress ${GSD_WS:+--ws=${GSD_WS##* }}
 
 # Record execution metrics (phase, plan, duration, tasks, files)
-gsd_run query state.record-metric \
+gsd_run query state.record-metric ${GSD_WS:+--ws=${GSD_WS##* }} \
   --phase "${PHASE}" --plan "${PLAN}" --duration "${DURATION}" \
   --tasks "${TASK_COUNT}" --files "${FILE_COUNT}"
 
@@ -786,18 +786,18 @@ gsd_run query state.record-metric \
 # --phase is required here: without it the verb falls back to STATE.md's global
 # pointer, which misattributes decisions when plans execute out of pointer order (#4763).
 for decision in "${DECISIONS[@]}"; do
-  gsd_run query state.add-decision --phase "${PHASE}" --summary "${decision}"
+  gsd_run query state.add-decision ${GSD_WS:+--ws=${GSD_WS##* }} --phase "${PHASE}" --summary "${decision}"
 done
 
 # Update session info (stopped-at, resume-file; timestamp set automatically)
-gsd_run query state.record-session \
+gsd_run query state.record-session ${GSD_WS:+--ws=${GSD_WS##* }} \
   --stopped-at "Completed ${PHASE}-${PLAN}-PLAN.md" --resume-file "None"
 ```
 
 ```bash
 # Mark completed requirements from PLAN.md frontmatter
 # Extract the `requirements` array from the plan's frontmatter, then mark each complete
-gsd_run query requirements.mark-complete ${REQ_IDS}
+gsd_run query requirements.mark-complete ${GSD_WS:+--ws=${GSD_WS##* }} ${REQ_IDS}
 ```
 
 **Requirement IDs:** Extract from the PLAN.md frontmatter `requirements:` field (e.g., `requirements: [AUTH-01, AUTH-02]`). Pass all IDs to `requirements mark-complete`. If the plan has no requirements field, skip this step.
@@ -815,15 +815,16 @@ gsd_run query requirements.mark-complete ${REQ_IDS}
 
 **For blockers found during execution:**
 ```bash
-gsd_run query state.add-blocker --text "Blocker description"
+gsd_run query state.add-blocker ${GSD_WS:+--ws=${GSD_WS##* }} --text "Blocker description"
 ```
 </state_updates>
 
 <final_commit>
 This commit must re-run the Step 0 assertion above (#3819).
 ```bash
+DOCS=(); for f in "{state_path}" "{roadmap_path}" "{requirements_path}"; do [ -f "$f" ] && DOCS+=("$f"); done  # absent docs (null init paths) are left out
 gsd_run query commit "docs({phase}-{plan}): complete [plan-name] plan" --files \
-  .planning/phases/XX-name/{phase}-{plan}-SUMMARY.md .planning/STATE.md .planning/ROADMAP.md .planning/REQUIREMENTS.md
+  "{phase_dir}/{phase}-{plan}-SUMMARY.md" "${DOCS[@]}"
 ```
 
 Separate from per-task commits — captures execution results only.

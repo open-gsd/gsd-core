@@ -159,8 +159,24 @@ Assign the composed prompt to a shell variable so it can be passed as one argume
 #      An unreadable source file is a halt condition (#3637 fail-closed),
 #      never a skip — a child without these texts is not a gsd-executor.
 #   2. Substitute this plan's {plan_number}, {phase_number}, {phase_name},
-#      {phase_dir}, {plan_file}, {plan_id}, and {plan_padded} placeholders (same values the
-#      harness path substitutes into its Agent() prompt). {plan_id} is this
+#      {phase_dir}, {plan_file}, {plan_id}, {plan_padded}, {project_path}, {state_path},
+#      {roadmap_path}, {requirements_path} and {config_path} placeholders, here AND in
+#      the files inlined by step 1 (same values the harness path substitutes into its
+#      Agent() prompt). The path placeholders are the scoped init fields of those names
+#      (init.execute-phase, init.resume `project_path`) in PROJECT-ROOT-RELATIVE form:
+#      init's absolute value minus its leading `project_root` + "/" (e.g.
+#      .planning/beta/phases/01-x). The child's cwd is its own worktree, so a relative
+#      path resolves there; the absolute value names the MAIN checkout, and writes or
+#      commits through it would escape the worktree (#3099, worktree-path-safety.md
+#      step 0b). The scoped fields keep a named project or workstream on its own files,
+#      never the root project's. {ws_token} is this run's workstream token, resolved in
+#      the order every verb uses: the `--ws <name>` your own arguments carry, else
+#      `--ws $GSD_WORKSTREAM` when that variable is set, else `--ws <active>` when
+#      `gsd_run query workstream.get` names one, else nothing. Substitute it in the
+#      prompt's `GSD_WS=` line, and replace the literal `$ARGUMENTS` in the inlined
+#      execute-plan.md with it. A child has no arguments and a worktree cannot see the
+#      session pointer, so without it the writer verbs would update a different scope
+#      than the one the commit stages (#5861). {plan_id} is this
 #      plan's `id` field from the phase-plan-index JSON — the guard hooks
 #      compare it verbatim against the sentinel the per-plan gate wrote, so a
 #      paraphrase or omission costs the dispatch its recorded isolation
@@ -189,6 +205,7 @@ TDD_APPLICABLE="$_TDD_APPLICABLE_RAW"
 
 EXECUTOR_PROMPT='<objective>
 Execute plan {plan_number} of phase {phase_number}-{phase_name}.
+GSD_WS={ws_token}
 [gsd:dispatch phase="{phase_number}" plan="{plan_id}"]
 Commit each task atomically. Create SUMMARY.md.
 Do NOT update STATE.md or ROADMAP.md — the orchestrator owns those writes after all worktree agents in the wave complete.
@@ -223,12 +240,12 @@ REQUIRED ORDER: Write SUMMARY.md, commit, then any narration.
 
 <required_reading>
 Read these files at execution start using the Read tool.
-First resolve repo root so every path is anchored:
+First resolve repo root (your worktree) so every path is anchored; the `{…}` paths are project-root-relative:
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
 - ${PROJECT_ROOT}/{phase_dir}/{plan_file} (Plan — THE plan you are executing)
-- ${PROJECT_ROOT}/.planning/PROJECT.md (Project context — core value, requirements, evolution rules)
-- ${PROJECT_ROOT}/.planning/STATE.md (State)
-- ${PROJECT_ROOT}/.planning/config.json (Config, if exists)
+- ${PROJECT_ROOT}/{project_path} (PROJECT.md: project context — core value, requirements, evolution rules)
+- ${PROJECT_ROOT}/{state_path} (STATE.md: state)
+- ${PROJECT_ROOT}/{config_path} (config.json: config, if exists)
 - ${PROJECT_ROOT}/CLAUDE.md (Project instructions, if exists — follow project-specific guidelines and coding conventions)
 - ${PROJECT_ROOT}/.claude/skills/ or ${PROJECT_ROOT}/.agents/skills/ (Project skills, if either exists — list skills, read SKILL.md for each, follow relevant rules during implementation)
 - ${PROJECT_ROOT}/{phase_dir}/*-CONTEXT.md (User decisions from discuss-phase — honors locked choices; skip silently when none exist)

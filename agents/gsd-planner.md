@@ -575,7 +575,7 @@ INIT=$(gsd_run query init.plan-phase "${PHASE}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
-Extract from init JSON: `planner_model`, `researcher_model`, `checker_model`, `commit_docs`, `research_enabled`, `phase_dir`, `phase_number`, `has_research`, `has_context`.
+Extract from init JSON: `planner_model`, `researcher_model`, `checker_model`, `commit_docs`, `research_enabled`, `phase_dir`, `phase_number`, `has_research`, `has_context`, `roadmap_path`. `phase_dir` and `roadmap_path` are the selected project's or workstream's paths — use them, never a root `.planning/` literal.
 
 Also load planning state (position, decisions, blockers) via the SDK — **use `node` to invoke the CLI** (not `npx`):
 ```bash
@@ -628,8 +628,10 @@ without graph context.
 
 <step name="identify_phase">
 ```bash
-cat .planning/ROADMAP.md
-ls .planning/phases/
+cat "$roadmap_path"
+PLANNING_DIR=$(gsd_run query config-path --raw) && PLANNING_DIR=${PLANNING_DIR%/config.json}
+: "${PLANNING_DIR:?planning directory not resolved for this scope}"
+ls "$PLANNING_DIR/phases/"
 ```
 
 If multiple phases available, ask which to plan. If obvious (first incomplete), proceed.
@@ -663,7 +665,9 @@ Select top 2-4 phases. Skip phases with no relevance signal.
 
 **Step 3 — Read full SUMMARYs for selected phases:**
 ```bash
-_SUMMARIES=( .planning/phases/{selected-phase}/*-SUMMARY.md )
+PLANNING_DIR=$(gsd_run query config-path --raw) && PLANNING_DIR=${PLANNING_DIR%/config.json}
+: "${PLANNING_DIR:?planning directory not resolved for this scope}"
+_SUMMARIES=( "$PLANNING_DIR"/phases/{selected-phase}/*-SUMMARY.md )
 if [ -e "${_SUMMARIES[0]}" ]; then cat "${_SUMMARIES[@]}"; fi
 ```
 
@@ -806,7 +810,7 @@ Use template structure for each PLAN.md.
 
 **Write contract (hard rules — must follow):**
 
-These PLAN.md files are the canonical output of this agent. The orchestrator reads each `.planning/phases/{padded_phase}-{slug}/{padded_phase}-{NN}-PLAN.md` from disk after you return; it does NOT read your return message for the file content.
+These PLAN.md files are the canonical output of this agent. The orchestrator reads each `$phase_dir/{padded_phase}-{NN}-PLAN.md` (init's `phase_dir`) from disk after you return; it does NOT read your return message for the file content.
 
 **Write is for net-new PLAN.md only.** For any existing file (`ROADMAP.md`, `.planning/` files) use `Edit` (scoped replacement), never `Write`. See `update_roadmap`.
 
@@ -839,7 +843,7 @@ The filename MUST follow the exact pattern: `{padded_phase}-{NN}-PLAN.md`
 - ❌ `plan-01.md`
 - ❌ `01-01-plan.md` (lowercase)
 
-Full write path: `.planning/phases/{padded_phase}-{slug}/{padded_phase}-{NN}-PLAN.md`
+Full write path: `$phase_dir/{padded_phase}-{NN}-PLAN.md` (init's `phase_dir`, the directory `git_commit` stages)
 
 Include all frontmatter fields.
 </step>
@@ -874,7 +878,7 @@ Update ROADMAP.md to finalize phase placeholders:
 
 **CRITICAL — use `Edit` (scoped), NOT `Write`, for ROADMAP.md.** A whole-file `Write` destroys all phase entries outside your diff window. Use `Edit` to replace only the target section; use multiple `Edit` calls if needed. NEVER pass the entire ROADMAP.md content to `Write`.
 
-1. Read `.planning/ROADMAP.md`
+1. Read `$roadmap_path` (init's `roadmap_path`, the file `git_commit` stages)
 2. Find phase entry (`### Phase {N}:`)
 3. Update placeholders using `Edit` (scoped replacement only):
 
@@ -898,7 +902,7 @@ Plans:
 <step name="git_commit">
 ```bash
 gsd_run query commit "docs($PHASE): create phase plan" --files \
-  .planning/phases/$PHASE-*/$PHASE-*-PLAN.md .planning/ROADMAP.md
+  "$phase_dir"/$PHASE-*-PLAN.md "$roadmap_path"
 ```
 </step>
 

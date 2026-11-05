@@ -26,10 +26,12 @@ test('#3796: the audit report writer and readers agree on the single-version fil
     !md.includes('v{version}-v{version}'),
     '#3796: no doubled version segment may appear anywhere in the workflow',
   );
-  const writer = /^Create `\.planning\/v\{version\}-MILESTONE-AUDIT\.md` with:$/m;
+  // #5861: the report lives in the selected project's or workstream's planning directory
+  // (`.planning/` for the root project), where milestone.complete looks for it.
+  const writer = /^Create `v\{version\}-MILESTONE-AUDIT\.md` in the selected project's or workstream's planning directory \(.*`\.planning\/` for the root project.*\) with:$/m;
   assert.ok(
     writer.test(md),
-    '#3796: the writer line must create exactly .planning/v{version}-MILESTONE-AUDIT.md',
+    '#3796/#5861: the writer line must create exactly v{version}-MILESTONE-AUDIT.md in the scoped planning directory',
   );
   const readers = md.match(/v\{version\}-MILESTONE-AUDIT\.md/g) || [];
   assert.ok(

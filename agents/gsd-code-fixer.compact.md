@@ -120,17 +120,12 @@ After applying each fix:
 <step name="setup_worktree">
 **Isolation: create a dedicated git worktree BEFORE touching any files.** This agent runs as a background process that commits — operating on the main working tree would race the foreground session (shared index/HEAD/files). Every instance runs in its own isolated worktree.
 
-**Honor `workflow.use_worktrees` (the documented opt-out; the same flag the sibling writer workflows `/gsd:execute-phase` and `/gsd:quick`, plus the `execute-plan` and `diagnose-issues` workflows, all honor — this is the only writer that hand-rolls its own worktree).** Read it directly via `node` from `.planning/config.json` (NOT the gsd-tools CLI — this step runs before the launcher preamble is sourced). When `false`: edit/commit in the main checkout directly — `wt="."`, `reviewfix_branch="$branch"`, no temp branch, no sentinel, no `git worktree add`, skip the whole cleanup tail. The hand-rolled worktree has no `node_modules` and cannot run the project's gates safely, so the opt-out is also the safe path.
+**Honor `workflow.use_worktrees` (the documented opt-out; the same flag the sibling writer workflows `/gsd:execute-phase` and `/gsd:quick`, plus the `execute-plan` and `diagnose-issues` workflows, all honor — this is the only writer that hand-rolls its own worktree).** Take it from `use_worktrees` in the `<config>` block: the orchestrator resolves it through gsd-tools (`config-get`, so the selected project's or workstream's config is read; the CLI is not available here — this step runs before the launcher preamble is sourced). When `false`: edit/commit in the main checkout directly — `wt="."`, `reviewfix_branch="$branch"`, no temp branch, no sentinel, no `git worktree add`, skip the whole cleanup tail. The hand-rolled worktree has no `node_modules` and cannot run the project's gates safely, so the opt-out is also the safe path.
 
 ```bash
-USE_WORKTREES=$(node -e '
-  try {
-    const fs = require("fs");
-    const p = (process.env.GSD_PROJECT_DIR || process.cwd()) + "/.planning/config.json";
-    const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
-    process.stdout.write(String((cfg.workflow && cfg.workflow.use_worktrees) ?? true));
-  } catch { process.stdout.write("true"); }
-')
+# Resolved by the orchestrator (gsd-tools config-get) and passed in <config>; absent or unrecognised: worktrees stay on.
+USE_WORKTREES="${use_worktrees:-true}"
+[ "$USE_WORKTREES" = "false" ] || USE_WORKTREES=true
 
 branch=$(git branch --show-current)
 test -n "$branch" || { echo "Detached HEAD is not supported for review-fix (#2686)"; exit 1; }
@@ -256,7 +251,7 @@ Treat this as a finally-block obligation: even on early exit (config error, no f
 
 <step name="load_context">
 1. Read all `<required_reading>` files if present.
-2. Parse `<config>` block: `phase_dir`, `padded_phase`, `review_path` (full path to REVIEW.md), `fix_scope` ("critical_warning" default, or "all" includes Info and necessity), `fix_report_path` (output REVIEW-FIX.md path).
+2. Parse `<config>` block: `use_worktrees`, `phase_dir`, `padded_phase`, `review_path` (full path to REVIEW.md), `fix_scope` ("critical_warning" default, or "all" includes Info and necessity), `fix_report_path` (output REVIEW-FIX.md path).
 3. `cat {review_path}`.
 4. Parse frontmatter `status:`. If `"clean"` or `"skipped"`: exit with "No issues to fix -- REVIEW.md status is {status}." — do NOT create REVIEW-FIX.md, exit 0 (not an error).
 5. Load project context (`<project_context>`): CLAUDE.md, skills.

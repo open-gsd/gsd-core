@@ -250,10 +250,17 @@ Get plan/summary counts for the current phase from the single owner (#3218 — L
 counts, i.e. `status: superseded` plans excluded, matching "outstanding work"):
 
 ```bash
-PHASE_COUNTS=$(gsd_run query find-phase "${CURRENT_PHASE}")
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+PHASE_COUNTS=$(gsd_run query find-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${CURRENT_PHASE}")
 X=$(echo "$PHASE_COUNTS" | jq -r '.plan_count // 0')
 Y=$(echo "$PHASE_COUNTS" | jq -r '.summary_count // 0')
-(ls -1 .planning/phases/[current-phase-dir]/*-UAT.md 2>/dev/null || true) | wc -l
+PLANNING_DIR=$(gsd_run query config-path ${GSD_WS:+--ws=${GSD_WS##* }} --raw) && PLANNING_DIR=${PLANNING_DIR%/config.json}
+: "${PLANNING_DIR:?planning directory not resolved for this scope}"
+(ls -1 "$PLANNING_DIR"/phases/[current-phase-dir]/*-UAT.md 2>/dev/null || true) | wc -l
 ```
 
 State: "This phase has {X} plans, {Y} summaries."
@@ -263,8 +270,15 @@ State: "This phase has {X} plans, {Y} summaries."
 Check for UAT.md files with status "diagnosed" (has gaps needing fixes).
 
 ```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+PLANNING_DIR=$(gsd_run query config-path ${GSD_WS:+--ws=${GSD_WS##* }} --raw) && PLANNING_DIR=${PLANNING_DIR%/config.json}
+: "${PLANNING_DIR:?planning directory not resolved for this scope}"
 # Check for diagnosed UAT with gaps or partial (incomplete) testing
-grep -l "status: diagnosed\|status: partial" .planning/phases/[current-phase-dir]/*-UAT.md 2>/dev/null || true
+grep -l "status: diagnosed\|status: partial" "$PLANNING_DIR"/phases/[current-phase-dir]/*-UAT.md 2>/dev/null || true
 ```
 
 Track:

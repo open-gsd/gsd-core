@@ -7,7 +7,7 @@ Triggered when orchestrator provides `<revision_context>` with checker issues. N
 ### Step 1: Load Existing Plans
 
 ```bash
-cat .planning/phases/$PHASE-*/$PHASE-*-PLAN.md
+cat "$phase_dir"/$PHASE-*-PLAN.md   # phase_dir: init's scoped phase directory (load_project_state)
 ```
 
 Build mental model of current plan structure, existing tasks, must_haves.
@@ -96,7 +96,7 @@ plans, or apply a `fix_hint` that contradicts a constraint from Step 2.5 — tha
 ### Step 6: Commit
 
 ```bash
-gsd_run query commit "fix($PHASE): revise plans based on checker feedback" --files .planning/phases/$PHASE-*/$PHASE-*-PLAN.md
+gsd_run query commit "fix($PHASE): revise plans based on checker feedback" --files "$phase_dir"/$PHASE-*-PLAN.md
 ```
 
 ### Step 7: Return Revision Summary

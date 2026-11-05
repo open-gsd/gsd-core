@@ -39,12 +39,21 @@ integration_checker_model=$(gsd_run query resolve-model gsd-integration-checker 
 ## 1. Determine Milestone Scope
 
 ```bash
-# Get phases in milestone (sorted numerically, handles decimals)
-gsd_run query phases.list
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+PLANNING_DIR=$(gsd_run query config-path ${GSD_WS:+--ws=${GSD_WS##* }} --raw) && PLANNING_DIR=${PLANNING_DIR%/config.json}
+: "${PLANNING_DIR:?planning directory not resolved for this scope}"
+echo "PLANNING_DIR=$PLANNING_DIR"
+# Get phases in milestone (sorted numerically, handles decimals); the same scope as init and the step-5c SUMMARY scan.
+# Printed as full directory paths, one per line: `{phase_dirs}` for the step-3 integration checker.
+gsd_run query phases.list ${GSD_WS:+--ws=${GSD_WS##* }} --raw | while IFS= read -r d || [ -n "$d" ]; do [ -z "$d" ] || printf '%s\n' "$PLANNING_DIR/phases/$d"; done
 ```
 
 - Parse version from arguments or detect current from ROADMAP.md
-- Identify all phase directories in scope
+- Identify all phase directories in scope (the full paths printed above)
 - Extract milestone definition of done from ROADMAP.md
 - Extract requirements mapped to this milestone from REQUIREMENTS.md
 
@@ -53,8 +62,13 @@ gsd_run query phases.list
 For each phase directory, read the VERIFICATION.md:
 
 ```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 # For each phase, use find-phase to resolve the directory (handles archived phases)
-PHASE_INFO=$(gsd_run query find-phase 01 --raw)
+PHASE_INFO=$(gsd_run query find-phase ${GSD_WS:+--ws=${GSD_WS##* }} 01 --raw)
 # Extract directory from JSON, then read VERIFICATION.md from that directory
 # Repeat for each phase number from ROADMAP.md
 ```
@@ -84,7 +98,8 @@ Print: "Spawning integration checker (runs in a subagent — no output until it 
 Agent(
   prompt="Check cross-phase integration and E2E flows.
 
-Phases: {phase_dirs}
+Phases (full directory paths, one per line, as printed in step 1):
+{phase_dirs}
 Phase exports: {from SUMMARYs}
 API routes: {routes created}
 
@@ -131,10 +146,17 @@ For each phase's VERIFICATION.md, extract the expanded requirements table:
 
 For each phase's SUMMARY.md, extract `requirements-completed` from YAML frontmatter:
 ```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 # #2962: zsh aborts the block on an unmatched for-list glob (nomatch); bash passes it through. nullglob both.
 shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
+PLANNING_DIR=$(gsd_run query config-path ${GSD_WS:+--ws=${GSD_WS##* }} --raw) && PLANNING_DIR=${PLANNING_DIR%/config.json}
+: "${PLANNING_DIR:?planning directory not resolved for this scope}"
 
-for summary in .planning/phases/*-*/*-SUMMARY.md; do
+for summary in "$PLANNING_DIR"/phases/*-*/*-SUMMARY.md; do
   [ -e "$summary" ] || continue
   gsd_run query summary-extract "$summary" --fields requirements_completed --pick requirements_completed
 done
@@ -190,7 +212,7 @@ Discovery only — never auto-calls `/gsd:validate-phase`.
 
 ## 6. Aggregate into v{version}-MILESTONE-AUDIT.md
 
-Create `.planning/v{version}-MILESTONE-AUDIT.md` with:
+Create `v{version}-MILESTONE-AUDIT.md` in the selected project's or workstream's planning directory (`${PLANNING_DIR}`, printed in step 1; `.planning/` for the root project — where `milestone.complete`, `/gsd:complete-milestone` and the autonomous lifecycle look for it) with:
 
 ```yaml
 ---
@@ -247,7 +269,7 @@ Output this markdown directly (not as a code block). Route based on status:
 ## ✓ Milestone {version} — Audit Passed
 
 **Score:** {N}/{M} requirements satisfied
-**Report:** .planning/v{version}-MILESTONE-AUDIT.md
+**Report:** ${PLANNING_DIR}/v{version}-MILESTONE-AUDIT.md
 
 All requirements covered. Cross-phase integration verified. E2E flows complete.
 
@@ -270,7 +292,7 @@ All requirements covered. Cross-phase integration verified. E2E flows complete.
 ## ⚠ Milestone {version} — Gaps Found
 
 **Score:** {N}/{M} requirements satisfied
-**Report:** .planning/v{version}-MILESTONE-AUDIT.md
+**Report:** ${PLANNING_DIR}/v{version}-MILESTONE-AUDIT.md
 
 ### Unsatisfied Requirements
 
@@ -324,7 +346,7 @@ they may close the gap retroactively without a new phase.
 ---
 
 **Also available:**
-- cat .planning/v{version}-MILESTONE-AUDIT.md — see full report
+- cat "${PLANNING_DIR}/v{version}-MILESTONE-AUDIT.md" — see full report
 - /gsd:complete-milestone {version} — proceed anyway (accept tech debt)
 
 ---
@@ -336,7 +358,7 @@ they may close the gap retroactively without a new phase.
 ## ⚡ Milestone {version} — Tech Debt Review
 
 **Score:** {N}/{M} requirements satisfied
-**Report:** .planning/v{version}-MILESTONE-AUDIT.md
+**Report:** ${PLANNING_DIR}/v{version}-MILESTONE-AUDIT.md
 
 All requirements met. No critical blockers. Accumulated tech debt needs review.
 
