@@ -421,9 +421,21 @@ describe('#5726 phase write verbs on an unresolved STATE milestone', () => {
       test(`${verb} with an ${label} STATE milestone value behaves as with no milestone field`, () => {
         fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), TWO_MILESTONES);
         fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), `---\n${line}\nstatus: active\n---\n\n# State\n`);
-        const withValue = run(tmpDir);
-        assert.equal(withValue.success, true, withValue.error);
-        assert.ok(!withValue.error.includes('---'), `error output must not contain ---: ${withValue.error}`);
+        const emptyValueRun = run(tmpDir);
+        assert.equal(emptyValueRun.success, true, emptyValueRun.error);
+        assert.ok(!String(emptyValueRun.error ?? '').includes('---'), `error output must not contain ---: ${emptyValueRun.error}`);
+
+        const controlDir = createTempProject();
+        try {
+          fs.writeFileSync(path.join(controlDir, '.planning', 'config.json'), '{}');
+          fs.writeFileSync(path.join(controlDir, '.planning', 'ROADMAP.md'), TWO_MILESTONES);
+          fs.writeFileSync(path.join(controlDir, '.planning', 'STATE.md'), '---\nstatus: active\n---\n\n# State\n');
+          const controlRun = run(controlDir);
+          assert.equal(controlRun.success, true, controlRun.error);
+          assert.deepEqual(JSON.parse(emptyValueRun.output), JSON.parse(controlRun.output));
+        } finally {
+          cleanup(controlDir);
+        }
       });
     }
   }
