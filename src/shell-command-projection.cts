@@ -1744,6 +1744,11 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   };
   let hop = path.resolve(filePath);
   for (let hops = 0; hops < 40; hops++) {
+    // Runs on EVERY write, not only for symlinks: one realpath of the parent directory (about one
+    // lstat per path component). It stays unconditional because the target's own lstat type cannot
+    // distinguish a descriptor alias reached through a symlinked directory (on macOS lstat of
+    // /dev/fd/N reports the underlying file's type), so skipping regular-looking targets would
+    // reopen that gap.
     refuseViaRealDir(hop);
     let isLink = false;
     try { isLink = fs.lstatSync(hop).isSymbolicLink(); } catch { /* absent: nothing to follow */ }
