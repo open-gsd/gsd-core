@@ -2038,6 +2038,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       "echo $(#)'\n); cat $'.env' #'",
       'echo "$\\\n(cat .env)"', 'cat <<E\n$\\\n(cat .env)\nE',
       ": <<${x#'}'}\n${x#'}'}\ncat .env\n",
+      "echo $(( ' $(cat .env >&2) ' ))",
     ];
     for (const cmd of shapes) {
       test(`allowed: ${JSON.stringify(cmd)}`, () => {
@@ -2123,6 +2124,13 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       "echo $(('))|cat .env",
       'echo "a" $[ \' $(cat .env >&2) ]', // zsh runs a substitution in the skipped body
       "(( ' $(cat .env >&2) ' ))",
+      "x=1;echo ${x+$[ ' $(cat .env >&2) ' ]}",
+      'echo "$[ " \' $(cat .env >&2) \' " ]"',
+      'echo "$[ " \' `cat .env >&2` \' " ]"',
+      // A `${…}` in a `$( )` has no list to add to, and must not cost the reading.
+      "echo $(: ${x+$[ $(y) ]}) \"a\"; ((x' ));cat .env;''",
+      "echo $(echo \"${x+$[ $(y) ]}\") 'a'; ((x' ));cat .env;''",
+      "echo <(: ${x+$[ `y` ]}) \"a\"; ((x' ));cat .env;''",
     ];
     for (const cmd of blocks) {
       test(`blocks ${JSON.stringify(cmd)}`, () => {
@@ -2670,6 +2678,13 @@ describe('readings: an error, the block reported, and the heredoc tag', () => {
     });
     return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
   };
+
+  test('a substitution in a `$[ ]` in a `${…}` in a `$( )` is no failure of a reading', () => {
+    const cmd = 'echo "a" $(: ${x:-$[ $(date +%s) + 1 ]}); ls';
+    const r = runHook(bash(cmd));
+    assertAllowed(r, cmd);
+    assert.equal(r.stderr, '');
+  });
 
   test('a bug in a reading is reported on stderr when nothing else denies', () => {
     const r = faulty(R`echo $'\x41FAULT'; ls`);
