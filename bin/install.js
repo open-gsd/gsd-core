@@ -623,6 +623,8 @@ const {
   stageSkillsForRuntimeAsSkills,
 } = require(path.join(_gsdLibDir, 'install-profiles.cjs'));
 // ADR-857 phase 4c: load capability registry (optional; missing → falls back to undefined)
+// #5759: bounded config.json reader shared with the runtime (non-blocking open, regular file, 1 MiB cap).
+const { readConfigFileBounded } = require(path.join(_gsdLibDir, 'config-file-read.cjs'));
 let _capabilityRegistry;
 try {
   _capabilityRegistry = require(path.join(_gsdLibDir, 'capability-registry.cjs'));
@@ -13991,7 +13993,6 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
           try {
             // #5759: bounded regular-file read — a FIFO/device/oversized config throws to the
             // catch below (treated as enabled) instead of blocking the installer.
-            const { readConfigFileBounded } = require('../gsd-core/bin/lib/config-file-read.cjs');
             const parsed = JSON.parse(stripJsonComments(readConfigFileBounded(candidate) ?? ''));
             if (parsed && typeof parsed === 'object' &&
                 parsed.workflow && parsed.workflow.use_worktrees === false) {

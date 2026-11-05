@@ -1462,7 +1462,7 @@ function defaultTempSuffix(): string {
  * on; `O_NOFOLLOW` is added where the platform has it (absent on Windows). On EEXIST a new
  * suffix is drawn, up to EXCLUSIVE_TEMP_ATTEMPTS times, then the EEXIST is thrown. On
  * ENAMETOOLONG (a target whose name leaves no room for the default suffix) the suffix shrinks
- * first to 32 random bits of hex and then to a short counter before the error is thrown. Any
+ * to 4 random bytes of hex (retried once more) before the error is thrown. Any
  * other error is thrown at once. `nextSuffix` is a seam for tests; it applies until a shrink.
  *
  * Crash-orphaned temp files are named `<target>.tmp.<pid>.<12 hex>` and are NOT reaped: a
@@ -1475,9 +1475,9 @@ export function openExclusiveTempSync(
 ): { fd: number; tmpPath: string } {
   const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0);
   let collision: unknown;
-  let shrink = 0; // 0 = nextSuffix, 1 = short hex, 2 = counter
+  let shrink = 0; // 0 = nextSuffix, then 4 random hex bytes
   for (let attempt = 0; attempt < EXCLUSIVE_TEMP_ATTEMPTS; attempt++) {
-    const suffix = shrink === 0 ? nextSuffix() : shrink === 1 ? randomBytes(4).toString('hex') : String(attempt);
+    const suffix = shrink === 0 ? nextSuffix() : randomBytes(4).toString('hex');
     const tmpPath = `${basePath}.tmp.${suffix}`;
     try {
       return { fd: fs.openSync(tmpPath, flags, 0o666), tmpPath };
@@ -1496,6 +1496,10 @@ export function openExclusiveTempSync(
 }
 
 /**
+ * Restore limit: an existing target is captured for restore only up to MAX_PRIOR_BYTES (2 MiB);
+ * a larger one is refused with EFBIG BEFORE it is truncated. A failed write puts the old bytes
+ * back; if that restore itself fails the thrown error carries `restoreFailed = true`.
+ *
  * Write `normalized` to the target path itself (the non-atomic fallback). Opens non-blocking
  * and fstats the descriptor, so a FIFO or device at the target can neither block the open
  * (a FIFO with no reader fails ENXIO) nor be written to: anything but a regular file is
@@ -1571,7 +1575,7 @@ function writeTargetDirect(filePath: string, normalized: string, encoding: Buffe
       }
     }
   }
-  let failure: Error | undefined;
+  let failure: (Error & { restoreFailed?: boolean }) | undefined;
   try {
     // Truncate BEFORE writing so a partial write can never leave the new prefix followed by the
     // old tail; the old bytes held above are put back if the write fails.
@@ -1584,7 +1588,13 @@ function writeTargetDirect(filePath: string, normalized: string, encoding: Buffe
           fs.ftruncateSync(fd, 0);
           let put = 0;
           while (put < prior.length) put += fs.writeSync(fd, prior, put, prior.length - put, put);
-        } catch { /* best-effort restore; the original error is the one reported */ }
+        } catch {
+          // Best-effort restore; the original error is the one reported, flagged so the caller
+          // knows the target may now hold neither the old nor the new content.
+          const flagged = err instanceof Error ? err : new Error(String(err));
+          (flagged as Error & { restoreFailed?: boolean }).restoreFailed = true;
+          throw flagged;
+        }
       }
       throw err;
     }
@@ -1632,16 +1642,17 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
     writeTargetDirect(filePath, normalized, encoding);
     return;
   }
+  // An existing regular target keeps its permission bits (a 0600 config must not come back 0644
+  // after the rename): the temp file takes that mode BEFORE any byte is written, so it is never
+  // more permissive than the target it replaces. A new file keeps the default 0o666 & ~umask.
+  try {
+    const existing = fs.lstatSync(filePath);
+    if (existing.isFile()) fs.fchmodSync(tmpFd, existing.mode & 0o777);
+  } catch { /* no existing target, or no permission bits on this platform */ }
   let wrote = false;
   try {
     fs.writeFileSync(tmpFd, normalized, encoding);
     wrote = true;
-    // An existing regular target keeps its permission bits (a 0600 config must not come back
-    // 0644 after the rename). A new file keeps the default 0o666 & ~umask.
-    try {
-      const existing = fs.lstatSync(filePath);
-      if (existing.isFile()) fs.fchmodSync(tmpFd, existing.mode & 0o7777);
-    } catch { /* no existing target, or no permission bits on this platform */ }
   } catch { /* fall back below */ }
   try { fs.closeSync(tmpFd); } catch { wrote = false; }
   if (!wrote) {
