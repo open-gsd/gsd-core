@@ -519,6 +519,41 @@ function parseCheckIgnoreZ(out) {
 }
 
 /**
+ * Tracked `.gitignore` files with local (staged or unstaged) edits relative to
+ * HEAD. Throws if git fails.
+ * @param {string} root
+ * @returns {string[]} repo-relative paths
+ */
+function getDirtyGitignores(root) {
+  return cp.execFileSync(
+    'git',
+    ['diff', '--name-only', '-z', 'HEAD', '--', ':(glob)**/.gitignore'],
+    { cwd: root, encoding: 'utf8', timeout: 15000, maxBuffer: gitMaxBuffer(), stdio: ['ignore', 'pipe', 'ignore'] },
+  ).split('\0').filter(Boolean);
+}
+
+/**
+ * Of `sources`, those `git ls-files` lists as tracked. Throws if git fails.
+ * @param {string} root
+ * @param {string[]} sources
+ * @returns {Set<string>}
+ */
+function filterTrackedSources(root, sources) {
+  if (sources.length === 0) return new Set();
+  return new Set(
+    cp.execFileSync('git', ['--literal-pathspecs', 'ls-files', '-z', '--', ...sources], {
+      cwd: root,
+      encoding: 'utf8',
+      timeout: 15000,
+      maxBuffer: gitMaxBuffer(),
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .split('\0')
+      .filter(Boolean),
+  );
+}
+
+/**
  * Which of the deleted paths are gitignored (#3677). Only base-controlled
  * rules count (see the header's "Gitignored-path refinement"):
  *
@@ -547,12 +582,7 @@ function getIgnoredDeletions(root, deletedFiles, baseRef, entries = null) {
     if (touchesGitignore) return new Set();
     // A local (staged or unstaged) edit to a tracked .gitignore is just as
     // un-base-controlled as a committed one.
-    const dirtyGitignores = cp.execFileSync(
-      'git',
-      ['diff', '--name-only', '-z', 'HEAD', '--', ':(glob)**/.gitignore'],
-      { cwd: root, encoding: 'utf8', timeout: 15000, maxBuffer: gitMaxBuffer(), stdio: ['ignore', 'pipe', 'ignore'] },
-    ).split('\0').filter(Boolean);
-    if (dirtyGitignores.length > 0) return new Set();
+    if (getDirtyGitignores(root).length > 0) return new Set();
     const out = cp.execFileSync('git', ['check-ignore', '--no-index', '-v', '-z', '--stdin'], {
       cwd: root,
       encoding: 'utf8',
@@ -564,17 +594,7 @@ function getIgnoredDeletions(root, deletedFiles, baseRef, entries = null) {
     const matches = parseCheckIgnoreZ(out);
     if (matches.length === 0) return new Set();
     const sources = [...new Set(matches.map((m) => m.source))];
-    const tracked = new Set(
-      cp.execFileSync('git', ['--literal-pathspecs', 'ls-files', '-z', '--', ...sources], {
-        cwd: root,
-        encoding: 'utf8',
-        timeout: 15000,
-        maxBuffer: gitMaxBuffer(),
-        stdio: ['ignore', 'pipe', 'ignore'],
-      })
-        .split('\0')
-        .filter(Boolean),
-    );
+    const tracked = filterTrackedSources(root, sources);
     return new Set(matches.filter((m) => tracked.has(m.source)).map((m) => m.pathname));
   } catch {
     // exit 1 (none ignored) and any other failure: no refinement.
@@ -692,13 +712,30 @@ function scan(root, baseRef) {
  * @returns {string[]} repo-relative paths
  */
 function getTrackedIgnoredFiles(root) {
-  const out = cp.execFileSync('git', ['ls-files', '-z', '-c', '-i', '--exclude-per-directory=.gitignore'], {
+  // Candidate pass: ls-files reads EVERY per-directory .gitignore, including
+  // untracked ones, so it only nominates paths.
+  const candidates = cp.execFileSync('git', ['ls-files', '-z', '-c', '-i', '--exclude-per-directory=.gitignore'], {
     cwd: root,
     encoding: 'utf8',
     timeout: 15000,
     maxBuffer: gitMaxBuffer(),
+  }).split('\0').filter(Boolean);
+  if (candidates.length === 0) return [];
+  // Confirm pass: keep a candidate only when the rule that ignores it comes
+  // from a TRACKED .gitignore with no local edits (header: "tracked .gitignore
+  // rules unchanged from the base").
+  const out = cp.execFileSync('git', ['check-ignore', '--no-index', '-v', '-z', '--stdin'], {
+    cwd: root,
+    encoding: 'utf8',
+    input: candidates.map((f) => `${f}\0`).join(''),
+    timeout: 15000,
+    maxBuffer: gitMaxBuffer(),
+    stdio: ['pipe', 'pipe', 'ignore'],
   });
-  return out.split('\0').filter(Boolean);
+  const matches = parseCheckIgnoreZ(out);
+  const dirty = new Set(getDirtyGitignores(root));
+  const tracked = filterTrackedSources(root, [...new Set(matches.map((m) => m.source))]);
+  return [...new Set(matches.filter((m) => tracked.has(m.source) && !dirty.has(m.source)).map((m) => m.pathname))];
 }
 
 /**
@@ -731,8 +768,31 @@ function isCiEnvironment() {
   });
 }
 
+const SAFE_BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+const MERGE_QUEUE_REF_RE = /^refs\/heads\/gh-readonly-queue\/(.+)\/pr-\d+-[0-9a-f]+$/;
+
+/**
+ * The branch to diff against (without the `origin/` prefix), in order:
+ * `GSD_REMOVED_BUT_NEEDED_BASE`; `GITHUB_BASE_REF` (pull_request); for a
+ * `merge_group` event (GITHUB_BASE_REF is empty there) the base encoded in
+ * `GITHUB_REF` = `refs/heads/gh-readonly-queue/<base>/pr-<n>-<sha>`, validated
+ * against a safe branch-name pattern; otherwise the default `next` (this is
+ * also what a `push` or local run gets).
+ * @param {NodeJS.ProcessEnv} env
+ * @returns {string}
+ */
+function resolveBaseBranch(env) {
+  if (env.GSD_REMOVED_BUT_NEEDED_BASE) return env.GSD_REMOVED_BUT_NEEDED_BASE;
+  if (env.GITHUB_BASE_REF) return env.GITHUB_BASE_REF;
+  if (env.GITHUB_EVENT_NAME === 'merge_group') {
+    const m = MERGE_QUEUE_REF_RE.exec(env.GITHUB_REF || '');
+    if (m && SAFE_BRANCH_RE.test(m[1]) && !m[1].split('/').some((s) => s === '..' || s === '')) return m[1];
+  }
+  return 'next';
+}
+
 function main() {
-  const baseRef = `origin/${process.env.GSD_REMOVED_BUT_NEEDED_BASE || process.env.GITHUB_BASE_REF || 'next'}`;
+  const baseRef = `origin/${resolveBaseBranch(process.env)}`;
   const failures = [];
   let trackedIgnored;
   let violations = [];
@@ -799,6 +859,7 @@ module.exports = {
   getIgnoredDeletions,
   matchesByFullPath,
   getTrackedIgnoredFiles,
+  resolveBaseBranch,
   isBaseResolvable,
   parseNameStatusZ,
   parseCheckIgnoreZ,

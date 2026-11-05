@@ -950,14 +950,18 @@ function sanitizeEcho(text) {
     if (isEchoHostile(ch.codePointAt(0))) continue;
     out += ch;
   }
-  return out.length > 200 ? out.slice(0, 200) : out;
+  // Cap by code point so a surrogate pair is never split.
+  const points = Array.from(out);
+  return points.length > 200 ? points.slice(0, 200).join('') : out;
 }
 
 /**
  * Code points sanitizeEcho drops: C0 + DEL, C1 (incl. 8-bit CSI U+009B),
  * line/paragraph separators, zero-width + LRM/RLM, bidi embeddings/overrides
- * and isolates, and the BOM — all able to forge or hide output a reader
- * (human or agent) trusts.
+ * and isolates, the Arabic letter mark, word joiner/invisible operators, the
+ * Mongolian vowel separator, the soft hyphen and the BOM — all able to forge
+ * or hide output a reader (human or agent) trusts. Stripping U+200D breaks
+ * joined emoji sequences, which is acceptable for echoed paths.
  * @param {number} code
  * @returns {boolean}
  */
@@ -965,6 +969,8 @@ function isEchoHostile(code) {
   return (
     code <= 0x1f
     || (code >= 0x7f && code <= 0x9f)
+    || code === 0x00ad || code === 0x061c || code === 0x180e
+    || (code >= 0x2060 && code <= 0x2064)
     || code === 0x2028 || code === 0x2029
     || (code >= 0x200b && code <= 0x200f)
     || (code >= 0x202a && code <= 0x202e)
