@@ -376,6 +376,43 @@ describe('#5759 platformWriteSync never blocks on or follows a planted temp file
     assert.strictEqual(fs.readFileSync(target, 'utf8'), 'OLD CONTENT, LONGER THAN THE NEW PREFIX\n');
   });
 
+  test('direct fallback: a target too large to capture for restore is refused with EFBIG before it is truncated', () => {
+    const target = path.join(tmpDir, 'large.json');
+    const original = 'x'.repeat(2 * 1024 * 1024 + 1);
+    fs.writeFileSync(target, original);
+
+    const r = runNode(['-e', DIRECT_FALLBACK_SCRIPT, SHELL_PROJECTION_PATH, target], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    assert.strictEqual(JSON.parse(r.stdout).code, 'EFBIG');
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), original, 'the target is untouched');
+  });
+
+  test('an existing target keeps its permission bits across the atomic write', () => {
+    const target = path.join(tmpDir, 'private.json');
+    fs.writeFileSync(target, '{"old":true}');
+    fs.chmodSync(target, 0o600);
+    const plainWrite = [
+      'const { platformWriteSync } = require(process.argv[1]);',
+      'platformWriteSync(process.argv[2], "{\\"new\\":true}\\n");',
+      'process.stdout.write("done");',
+    ].join('\n');
+
+    const r = runNode(['-e', plainWrite, SHELL_PROJECTION_PATH, target], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    assert.ok(fs.readFileSync(target, 'utf8').includes('"new"'));
+    if (process.platform !== 'win32') assert.strictEqual(fs.statSync(target).mode & 0o777, 0o600);
+  });
+
   test('a target name too long for the default temp suffix is still written atomically (shorter suffix)', () => {
     const name = `${'n'.repeat(236)}.json`;
     const target = path.join(tmpDir, name);
