@@ -1996,13 +1996,14 @@ function convertClaudeToTraeMarkdownBody(content) {
   converted = converted.replace(/\.\/CLAUDE\.md/g, '.trae/rules/rules.md');
   converted = converted.replace(/`CLAUDE\.md`/g, '`.trae/rules/rules.md`');
   converted = converted.replace(/\bCLAUDE\.md\b/g, '.trae/rules/rules.md');
-  converted = converted.replace(/(?<!~\/|\$HOME\/)\.claude\/skills\//g, '.trae/skills/');
+  converted = converted.replace(/\.claude\/skills\//g, '.trae/skills/');
   converted = converted.replace(/\.\/\.claude\//g, './.trae/');
-  converted = converted.replace(/(?<!~\/|\$HOME\/)\.claude\//g, '.trae/');
+  converted = converted.replace(/\.claude\//g, '.trae/');
   // Bare forms (no trailing slash) — after slash forms to avoid double-rewrite.
   // Use negative lookahead (?![\w-]) to preserve .claude-plugin and .claudeignore.
-  converted = converted.replace(/~\/\.claude(?![\w\/-])/g, '~/.trae');
-  converted = converted.replace(/\$HOME\/\.claude(?![\w\/-])/g, () => '$HOME/.trae');
+  // #5715: convertClaudeToTraeMarkdown shields the emitted prefix, so these rules see only source text.
+  converted = converted.replace(/~\/\.claude(?![\w-])/g, '~/.trae');
+  converted = converted.replace(/\$HOME\/\.claude(?![\w-])/g, () => '$HOME/.trae');
   // Environment variable name rewrite
   converted = converted.replace(/\bCLAUDE_CONFIG_DIR\b/g, 'TRAE_CONFIG_DIR');
   converted = converted.replace(/\*\*Known Claude Code bug \(classifyHandoffIfNeeded\):\*\*[^\n]*\n/g, '');
