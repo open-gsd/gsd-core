@@ -567,6 +567,25 @@ function isolatedGitEnv() {
 }
 
 /**
+ * `git init` of the scratch repo at `dir/.git` with NO template (`--template=`
+ * empty), so neither `init.templateDir` nor `GIT_TEMPLATE_DIR` can seed hooks
+ * or an `info/exclude`. Exported as a seam so a test can prove the flag.
+ * @param {string} dir
+ * @param {NodeJS.ProcessEnv} [env] - defaults to {@link isolatedGitEnv}()
+ * @returns {string} the git dir
+ */
+function initScratchRepo(dir, env = isolatedGitEnv()) {
+  const gitDir = path.join(dir, '.git');
+  cp.execFileSync('git', ['--git-dir', gitDir, '--work-tree', dir, 'init', '-q', '--template='], {
+    cwd: dir,
+    env,
+    timeout: 15000,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  return gitDir;
+}
+
+/**
  * Which of `paths` are ignored by the TRACKED `.gitignore` files alone, at
  * their HEAD versions. `check-ignore -v` reports only the highest-precedence
  * rule, so evaluating in the working tree lets an untracked or locally edited
@@ -602,11 +621,7 @@ function ignoredByTrackedRules(root, paths) {
   const gitDir = path.join(tmp, '.git');
   const isolated = { env: isolatedGitEnv(), cwd: tmp };
   try {
-    cp.execFileSync('git', ['--git-dir', gitDir, '--work-tree', tmp, 'init', '-q', '--template='], {
-      ...isolated,
-      timeout: 15000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
+    initScratchRepo(tmp, isolated.env);
     const tmpPrefix = path.resolve(tmp) + path.sep;
     for (const rel of gitignores) {
       const dest = path.resolve(tmp, ...rel.split('/'));
@@ -921,6 +936,7 @@ module.exports = {
   getTrackedIgnoredFiles,
   ignoredByTrackedRules,
   isolatedGitEnv,
+  initScratchRepo,
   isSafeRepoPath,
   resolveBaseBranch,
   isBaseResolvable,
