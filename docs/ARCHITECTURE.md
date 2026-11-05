@@ -695,7 +695,8 @@ plan-phase
     │           T-{phase}-SC STRIDE row added for install-bearing plans
     ├── Plan Checker → Verify loop (max 3x)
     │       └── Research gate (Dimension 11): blocks until each RESEARCH.md question needing a ruling
-    │           cites a D-NN from CONTEXT.md <decisions>; a cited source settles only a factual gap
+    │           cites only D-NNs from CONTEXT.md <decisions>, outside Claude's Discretion and recorded
+    │           before the run, one answering it; a cited source settles only a factual gap
     ├── Requirements coverage gate (REQ-IDs → plans)
     └── Decision coverage gate (CONTEXT.md `<decisions>` → plans, BLOCKING — #2492)
     │

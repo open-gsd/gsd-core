@@ -8,7 +8,7 @@ group: v1.32 Features
 
 **Purpose:** Block planning when RESEARCH.md has unresolved open questions, preventing plans built on incomplete information.
 
-**Resolved means user-decided:** an open question counts as resolved only when every `D-NN` it cites sits under the phase's CONTEXT.md `<decisions>`, outside Claude's Discretion, and one answers it; a mark the researcher wrote itself, a `(RESOLVED)` heading suffix included, does not. A cited source settles a factual gap, so that is not an open question, but no source settles a choice that needs a user ruling. In an area CONTEXT.md leaves to Claude's Discretion, a sourced recommendation is enough.
+**Resolved means user-decided:** an open question counts as resolved only when every `D-NN` it cites sits under the phase's CONTEXT.md `<decisions>`, outside Claude's Discretion and recorded before the planning run, and one answers it; a mark the researcher wrote itself, a `(RESOLVED)` heading suffix included, does not. A cited source settles a factual gap, so that is not an open question, but no source settles a choice that needs a user ruling. In an area CONTEXT.md leaves to Claude's Discretion, a sourced recommendation is enough.
 
 **Enforcement point:** plan-checker Dimension 11, in plan-phase's verify loop after the planner runs (#5438). No plan-phase step gates at entry.
 
