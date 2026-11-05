@@ -110,6 +110,7 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.match(collect, /whatever status it claims/, 'a question the researcher calls closed is still collected');
     assert.match(collect, /a fact settled with a cited source/, 'research findings are not questions');
     assert.match(collect, /no source settles a ruling/, 'a source must not close a question that needs a ruling');
+    assert.match(collect, /Claude's Discretion area of CONTEXT\.md given a sourced recommendation/, 'a delegated area needs no ruling, and CONTEXT.md decides what is delegated');
     assert.match(collect, /assumption or risk, unless it names such a pending answer or ruling/, 'an assumption counts when it needs an answer, not only a ruling');
   });
 
@@ -119,6 +120,7 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.ok(pass, 'a step must state the one way a question passes');
     assert.ok(pass.includes('every `D-NN` it cites') && pass.includes("CONTEXT.md's `<decisions>`"), `pass rule not scoped to <decisions> for every citation: ${pass}`);
     assert.match(pass, /\bone answers\b/, 'one real citation must not carry a second that is missing, and one must answer');
+    assert.match(pass, /outside Claude's Discretion/, 'a Discretion entry delegates the choice, so it records no ruling');
     assert.match(pass, /not added during this planning run/);
   });
 
@@ -242,6 +244,8 @@ describe('researcher never resolves its own questions (#5438)', () => {
     assert.match(rule, /list\s+every\s+such\s+question\s+in\s+that\s+section/);
     assert.match(rule, /a\s+factual\s+question\s+you\s+settled/);
     assert.match(rule, /No\s+source\s+settles\s+a\s+choice\s+that\s+needs\s+a\s+user\s+ruling/);
+    assert.match(rule, /Claude's\s+Discretion,\s+recommend\s+with\s+a\s+source/);
+    assert.match(rule, /Claude's\s+Discretion\s+entry\s+is\s+no\s+ruling/);
     assert.match(rule, /CONTEXT\.md's\s+`<decisions>`/);
     assert.match(rule, /Never\s+add\s+a\s+decision\s+to\s+CONTEXT\.md/);
     // Anchored on the negation: matching `cite a plan` alone passes when "never" becomes "always".
@@ -269,5 +273,7 @@ describe('researcher never resolves its own questions (#5438)', () => {
     assert.match(guide, /CONTEXT\.md's `<decisions>`/);
     assert.match(guide, /List every open question in that section/);
     assert.match(guide, /No source settles a choice that needs a user ruling/);
+    assert.match(guide, /Claude's Discretion, recommend with a source/);
+    assert.match(guide, /Discretion entry is never a ruling/);
   });
 });
