@@ -2039,6 +2039,10 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       'echo "$\\\n(cat .env)"', 'cat <<E\n$\\\n(cat .env)\nE',
       ": <<${x#'}'}\n${x#'}'}\ncat .env\n",
       "echo $(( ' $(cat .env >&2) ' ))",
+      "if((' $(cat .env >&2) '));then :;fi",
+      "echo $[ \\] ' $(cat .env >&2) ' ]",
+      'echo "$$$[ " ]"; cat .env',
+      'echo ${x:-"$[ " \' $(cat .env >&2) \' " ]"}',
     ];
     for (const cmd of shapes) {
       test(`allowed: ${JSON.stringify(cmd)}`, () => {
@@ -2108,8 +2112,9 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
   });
 
   describe("zsh's arithmetic: a quote in `$(( ))`, `(( ))` or `$[ ]` is not a quote", () => {
-    // Each read the file in zsh 5.9 (Alpine 3, 2026-11-05), the `$((')` row in dash
-    // too; bash fails each line.
+    // Each read the file in zsh 5.9 (Alpine 3, 2026-11-05). The `$((')` row reads
+    // in dash too, and the `(( ' $( ) ' ))` and `${x+$[ ' $( ) ' ]}` rows in bash;
+    // bash fails the other lines.
     const blocks = [
       'x$(($"));cat .env',
       '$((")); cat .env #',
@@ -2127,7 +2132,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       "x=1;echo ${x+$[ ' $(cat .env >&2) ' ]}",
       'echo "$[ " \' $(cat .env >&2) \' " ]"',
       'echo "$[ " \' `cat .env >&2` \' " ]"',
-      // A `${…}` in a `$( )` has no list to add to, and must not cost the reading.
+      // A `${…}` in a `$( )` or `<( )` has no list to add to, and must not cost the reading.
       "echo $(: ${x+$[ $(y) ]}) \"a\"; ((x' ));cat .env;''",
       "echo $(echo \"${x+$[ $(y) ]}\") 'a'; ((x' ));cat .env;''",
       "echo <(: ${x+$[ `y` ]}) \"a\"; ((x' ));cat .env;''",
