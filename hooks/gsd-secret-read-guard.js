@@ -2043,6 +2043,11 @@ function unfinishedBy(e) {
   return e instanceof RangeError || e === SCAN_BUDGET_SPENT;
 }
 
+// The first error in a reading that was not a limit: a bug. The hook reports it
+// when it has found nothing to deny (main), so that a reading that stopped
+// working does not go unseen, and no denial any scan would make is lost to it.
+let readingBug = null;
+
 // findSecretRead below the top level: the readings of `command`, then the
 // plain scan, as described above. A secret read outranks a word with no value
 // to check, so which block a command gets does not hang on which reading
@@ -2051,7 +2056,6 @@ function readEachWay(command, depth) {
   if (!readsEachWay(command)) return scanCommand(command, depth, false);
   readingsRan = true;
   let unreadable = null;
-  let bug = null;
   for (const shell of READINGS) {
     let hit = null;
     try {
@@ -2063,19 +2067,14 @@ function readEachWay(command, depth) {
       // stack in findParenClose. An error here must not cost the plain
       // reading's verdict, which is the one the guard gave before #5255; an
       // overflow, or a spent budget, still leaves the command unfinished
-      // (findSecretRead). Any other error is a bug in the reading, and it
-      // goes on to the crash policy, once the plain reading has had its say.
+      // (findSecretRead).
       if (unfinishedBy(e)) scanUnfinished = true;
-      else if (bug === null) bug = e;
+      else if (readingBug === null) readingBug = e;
     }
     if (hit !== null && hit.code === 'secret-read') return hit;
     if (unreadable === null) unreadable = hit;
   }
-  const plain = scanCommand(command, depth, false);
-  if (plain !== null) return plain;
-  if (unreadable !== null) return unreadable;
-  if (bug !== null) throw bug;
-  return null;
+  return scanCommand(command, depth, false) || unreadable;
 }
 
 // Whether `command` holds a form the readings are for (findSecretRead).
@@ -2565,6 +2564,7 @@ function main() {
       if (hit !== null) emitBlock(hit.code, tool, hit.text);
       const spawn = findDebuggerCliSpawnEitherWay(command);
       if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
+      if (readingBug !== null) process.stderr.write(`gsd-secret-read-guard: a reading failed: ${readingBug.message}\n`);
       allow(undefined);
     } catch (e) {
       // A stack overflow is a limit, not a bug: failing open on it allows a
