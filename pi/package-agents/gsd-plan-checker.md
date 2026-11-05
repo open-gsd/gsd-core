@@ -604,8 +604,8 @@ issue:
 The researcher writes RESEARCH.md, so its own resolution closes nothing. Only the user closes a question, recorded as a `D-NN` under CONTEXT.md's `<decisions>`.
 
 **Process:**
-1. Collect every question RESEARCH.md leaves needing an answer or a user ruling before planning, under any heading, in prose or a list, whatever status it claims (resolved, decided, closed). Not one: a fact settled with a cited source (no source settles a ruling); an area CONTEXT.md lists under Claude's Discretion, given a sourced recommendation; an `[ASSUMED]` fact or risk naming no pending answer or ruling. None → PASS.
-2. A question passes only when every `D-NN` it cites is under CONTEXT.md's `<decisions>`, outside Claude's Discretion, and not added this run (see `git log -p`, `git diff` on CONTEXT.md), and one answers it.
+1. Collect every question RESEARCH.md leaves needing an answer or a user ruling before planning, under any heading, in prose or a list, whatever status it claims (resolved, decided, closed). Not one: a fact settled with a cited source (no source settles a ruling); a question with a sourced recommendation in an area CONTEXT.md lists under Claude's Discretion; an `[ASSUMED]` fact or risk naming no pending answer or ruling. None → PASS.
+2. A question passes only when every `D-NN` it cites is under CONTEXT.md's `<decisions>`, outside Claude's Discretion, and not added during this planning run (see `git log -p`, `git diff HEAD` on CONTEXT.md), and one answers it.
 3. Every other question is a BLOCKER, however it is marked, in any letter case: no `D-NN`; a cited `D-NN` CONTEXT.md lacks or holds outside `<decisions>`; only `D-NN`s that decide something else; or one resting on a plan, a "planning-time disposition", the research itself, or another agent's output.
 4. A `(RESOLVED)` heading suffix is never evidence. No CONTEXT.md: every question is a BLOCKER.
 
@@ -614,8 +614,8 @@ The researcher writes RESEARCH.md, so its own resolution closes nothing. Only th
 issue:
   dimension: research_resolution
   severity: blocker
-  required_property: "Every RESEARCH.md open question cites only D-NNs under CONTEXT.md <decisions> (not Discretion), recorded before this run, one of which answers it"
-  description: "RESEARCH.md has open questions with no user decision on record"
+  required_property: "Every RESEARCH.md open question cites only D-NNs under CONTEXT.md <decisions> (not Discretion), recorded before this planning run, one of which answers it"
+  description: "RESEARCH.md open questions have no user decision on record"
   file: "01-RESEARCH.md"
   unresolved_questions:
     - "Hash prefix — keep or change?"
@@ -623,7 +623,7 @@ issue:
   fix_hint: "Cite a D-NN under <decisions> that already answers it: 'RESOLVED (D-NN): <ruling>'. Otherwise add no decision: the user rules in /gsd:discuss-phase, or a source settles a factual gap; then re-run /gsd:plan-phase --research"
 ```
 
-**Example — self-resolved, no decision on record (BLOCKER):**
+**Example — self-resolved (BLOCKER):**
 ```markdown
 ## Open Questions (RESOLVED)
 
@@ -631,7 +631,7 @@ issue:
 2. **Cache TTL** — RESOLVED: 5 minutes, per plan 01-03
 ```
 
-**Example — resolved (PASS once CONTEXT.md `<decisions>` records D-03 and D-04):**
+**Example — resolved (PASS if `<decisions>` records D-03 and D-04):**
 ```markdown
 ## Open Questions
 

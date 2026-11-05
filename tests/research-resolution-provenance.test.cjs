@@ -123,7 +123,7 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.doesNotMatch(collected, /cited source|Discretion|ASSUMED/, 'an exclusion sits on the collecting side of its marker');
     assert.match(excluded, /a fact settled with a cited source/, 'research findings are not questions');
     assert.match(excluded, /no source settles a ruling/, 'a source must not close a question that needs a ruling');
-    assert.match(excluded, /an area CONTEXT\.md lists under Claude's Discretion, given a sourced recommendation/, 'a delegated area needs no ruling, and CONTEXT.md decides what is delegated');
+    assert.match(excluded, /a question with a sourced recommendation in an area CONTEXT\.md lists under Claude's Discretion/, 'the exclusion binds per question, and CONTEXT.md decides what is delegated');
     assert.match(excluded, /`\[ASSUMED\]` fact or risk naming no pending answer or ruling/, 'an Assumptions Log fact is not a question; a pending answer or ruling is, wherever it sits');
   });
 
@@ -134,8 +134,8 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.ok(pass.includes('every `D-NN` it cites') && pass.includes("CONTEXT.md's `<decisions>`"), `pass rule not scoped to <decisions> for every citation: ${pass}`);
     assert.match(pass, /\bone answers\b/, 'one real citation must not carry a second that is missing, and one must answer');
     assert.match(pass, /outside Claude's Discretion/, 'a Discretion entry delegates the choice, so it records no ruling');
-    assert.match(pass, /not added this run/);
-    assert.match(pass, /`git log -p`, `git diff` on CONTEXT\.md/, 'the not-added condition must name checks that see both committed and uncommitted additions');
+    assert.match(pass, /not added during this planning run/, 'the checker is its own invocation, so the boundary must name the planning run');
+    assert.match(pass, /`git log -p`, `git diff HEAD` on CONTEXT\.md/, 'the not-added condition must name checks that see committed, staged and unstaged additions');
   });
 
   test('no CONTEXT.md leaves every question a BLOCKER', () => {
@@ -176,7 +176,7 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     for (const prop of props) {
       assert.match(prop, /cites only D-NNs/);
       assert.match(prop, /CONTEXT\.md <decisions> \(not Discretion\)/, 'the binding property must carry the rule step 2 enforces, or the planner can satisfy it where the checker refuses');
-      assert.match(prop, /recorded before this run/, 'the binding property must carry the not-added-this-run condition');
+      assert.match(prop, /recorded before this planning run/, 'the binding property must carry the not-added-this-run condition, naming the planning run');
       assert.match(prop, /one of which answers it/);
     }
   });
