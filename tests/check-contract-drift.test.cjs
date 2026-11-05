@@ -577,9 +577,22 @@ describe('contract-drift: typed surface', () => {
     assert.equal(sanitizeEcho(String.fromCodePoint(0x85)), `${BS}u{85}`);
     assert.equal(sanitizeEcho(String.fromCodePoint(0x200b)), `${BS}u{200B}`);
     assert.equal(sanitizeEcho(String.fromCodePoint(0xe0041)), `${BS}u{E0041}`);
-    // 199 plain characters leave room for 1 more output code point: a 5-char escape does not fit.
-    assert.equal(sanitizeEcho(`${'a'.repeat(199)}${String.fromCodePoint(0x85)}`), 'a'.repeat(199));
-    assert.equal(sanitizeEcho(`${'a'.repeat(194)}${String.fromCodePoint(0x85)}`), `${'a'.repeat(194)}${BS}u{85}`);
+    // `\u{85}` is 6 output code points. n plain characters + the escape: n=193 -> 199 total,
+    // n=194 -> exactly 200 (kept), n=195 -> 201 would exceed the cap, so the escape is dropped whole.
+    const c1 = String.fromCodePoint(0x85);
+    assert.equal(sanitizeEcho(`${'a'.repeat(193)}${c1}`), `${'a'.repeat(193)}${BS}u{85}`);
+    assert.equal(sanitizeEcho(`${'a'.repeat(194)}${c1}`), `${'a'.repeat(194)}${BS}u{85}`);
+    assert.equal(Array.from(sanitizeEcho(`${'a'.repeat(194)}${c1}`)).length, 200);
+    assert.equal(sanitizeEcho(`${'a'.repeat(195)}${c1}`), 'a'.repeat(195));
+  });
+
+  test('sanitizeEcho escapes a literal backslash, so an ASCII spelling never collides with a hostile one', () => {
+    assert.equal(sanitizeEcho(`x${BS}y`), `x${BS}u{5C}y`);
+    const spelledOut = `x${BS}u{202E}y`; // ASCII text that merely looks like an escape
+    const hostile = `x${String.fromCodePoint(0x202e)}y`;
+    assert.notEqual(sanitizeEcho(spelledOut), sanitizeEcho(hostile));
+    assert.equal(sanitizeEcho(spelledOut), `x${BS}u{5C}u{202E}y`);
+    assert.equal(sanitizeEcho(hostile), `x${BS}u{202E}y`);
   });
 
   test('sanitizeEcho output is bounded and hostile-free for any input (property)', () => {
@@ -1205,6 +1218,7 @@ describe('contract-drift: end-to-end via check-contract-drift.cjs --root', () =>
   const ECHOED_AS = new Map([
     ['tdd.md\u0085xx', `tdd.md${BS}u{85}xx`],
     ['tdd.md\u200Bxx', `tdd.md${BS}u{200B}xx`],
+    ['tdd.md\\xx', `tdd.md${BS}u{5C}xx`], // a literal backslash is escaped too, so spellings never collide
   ]);
 
   test('#4930: every continuation spelling is reported once, as written', (t) => {
@@ -1234,7 +1248,7 @@ describe('contract-drift: end-to-end via check-contract-drift.cjs --root', () =>
       );
     }
     for (const d of details) {
-      assert.ok(!['\u0085', '\\u200B'].some((ch) => d.includes(ch)), `an invisible character reached the echoed detail: ${JSON.stringify(d)}`);
+      assert.ok(!['\u0085', String.fromCodePoint(0x200b)].some((ch) => d.includes(ch)),`an invisible character reached the echoed detail: ${JSON.stringify(d)}`);
     }
   });
 
