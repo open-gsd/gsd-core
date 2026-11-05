@@ -464,12 +464,14 @@ describe('check predicate — literal phase data through the CLI', { skip: NO_SH
   test('actual timeout is distinguished from a command terminating itself', () => {
     const dir = createTempProject('gate-phase-timeout-');
     try {
-      const deps = buildPredicateDeps();
-      // Fixture timeout: a busy shell has no background descendants; the tiny budget forces its own timeout.
-      const EXPIRING_TIMEOUT_SECONDS = 0.025;
-      const timedOut = evaluatePredicate({ kind: 'command-exit-zero', command: 'while :; do :; done', timeout: EXPIRING_TIMEOUT_SECONDS }, { cwd: dir }, deps);
+      const timedOut = evaluatePredicate(
+        { kind: 'command-exit-zero', command: 'while :; do :; done' },
+        { cwd: dir },
+        { runBoundedShell: () => ({ exitCode: null, stdout: '', stderr: '', signal: 'SIGTERM', timedOut: true }) },
+      );
       assert.equal(timedOut.block, true);
       assert.equal(timedOut.details.timedOut, true);
+      const deps = buildPredicateDeps();
       const terminated = evaluatePredicate({ kind: 'command-exit-zero', command: 'kill -TERM $$' }, { cwd: dir }, deps);
       assert.equal(terminated.block, true);
       assert.equal(terminated.details.exitCode, 1, 'execTool maps a signal-only termination to exit 1');
