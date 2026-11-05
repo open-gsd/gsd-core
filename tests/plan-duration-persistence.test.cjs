@@ -172,6 +172,21 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
     for (const mirror of mirrors) assert.deepEqual(mirror, owner);
   });
 
+  test('#5212: executor and inline STATE parts share the measured metric prelude', () => {
+    function metricPrelude(file, tag) {
+      const lines = splitLines(timingFence(file, tag, true, false));
+      const start = lines.findIndex((line) => line.trim() === '# plan-timing-key:start');
+      const call = lines.findIndex((line) => line.trimStart().startsWith('gsd_run query state.record-metric'));
+      assert.ok(start !== -1 && call > start, `${path.basename(file)} must carry the timing metric prelude`);
+      let end = call;
+      while (lines[end].trimEnd().endsWith('\\')) end++;
+      return lines.slice(start, end + 1).map((line) => line.trimStart());
+    }
+    const executor = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-plan', 'steps', 'executor-state-updates.md');
+    const inline = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-plan', 'steps', 'update-current-position.md');
+    assert.deepEqual(metricPrelude(inline, 'update_current_position'), metricPrelude(executor, 'state_updates'));
+  });
+
   for (const surface of surfaces) {
     describe(`#5212: ${surface.name} persists measured plan duration`, { skip: NO_BASH ? 'requires Bash on a POSIX host' : false }, () => {
       const start = () => timingFence(surface.file, 'record_start_time', true);
@@ -243,14 +258,47 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
         } finally { cleanup(dir); }
       });
 
-      test('the timing identity cannot terminate its capture delimiters', () => {
+      test('numeric prefixes in named phase spellings share one canonical marker', () => {
         const dir = fixture();
         try {
-          const identity = ['GSD_PLAN_PHASE', 'GSD_PLAN_NUMBER'];
-          runFresh(dir, start(), 1000, identity);
-          assert.deepEqual(runFresh(dir, finish(), 1060, identity), {
+          runFresh(dir, start(), 1000, ['5.1A', '1B']);
+          assert.deepEqual(runFresh(dir, finish(), 1060, ['05.01A', '01B']), {
             duration: '1 min', started: '1970-01-01T00:16:40Z', completed: '1970-01-01T00:17:40Z',
           });
+        } finally { cleanup(dir); }
+      });
+
+      test('every shipped capture delimiter fails closed or remains whole as identity data', () => {
+        const delimiters = [
+          'PLAN!PHASE!5212', 'PLAN!NUMBER!5212', 'PLAN!TASKS!5212',
+          'PLAN!FILES!5212', 'PLAN!SUMMARY!5212',
+        ];
+        for (const delimiter of delimiters) {
+          const dir = fixture();
+          const sentinel = path.join(dir, 'delimiter-ran');
+          const identity = [`prefix\n${delimiter}\ntouch ${sentinel}`, delimiter];
+          try {
+            if (delimiter === 'PLAN!PHASE!5212' || delimiter === 'PLAN!NUMBER!5212') {
+              assert.throws(() => runFresh(dir, start(), 1000, identity));
+            } else {
+              runFresh(dir, start(), 1000, identity);
+              assert.deepEqual(runFresh(dir, finish(), 1060, identity), {
+                duration: '1 min', started: '1970-01-01T00:16:40Z', completed: '1970-01-01T00:17:40Z',
+              });
+            }
+            assert.equal(fs.existsSync(sentinel), false, `${delimiter} must never execute identity text`);
+          } finally { cleanup(dir); }
+        }
+      });
+
+      test('unsubstituted phase and plan placeholders fail before creating a marker', () => {
+        const dir = fixture();
+        try {
+          assert.throws(
+            () => runFresh(dir, start(), 1000, ['{phase}', '{plan}']),
+            (error) => error.exitCode === 1 && /unsubstituted/.test(error.stderr),
+          );
+          assert.equal(fs.readdirSync(path.join(dir, '.git')).some((entry) => entry.startsWith('gsd-plan-timing-')), false);
         } finally { cleanup(dir); }
       });
 
