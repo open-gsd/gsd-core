@@ -2093,21 +2093,38 @@ describe('stripGsdFromCodexConfig', () => {
       ].join(eol);
       const cleaned = stripGsdFromCodexConfig(before + managed + after);
       assert.ok(cleaned, 'user config must keep the file alive');
-      assert.deepStrictEqual(parseTomlToObject(cleaned), parseTomlToObject([
-        before,
+      const expectedText = [
+        'model = "session-model"',
+        '',
+        '[mcp_servers.before]',
+        'command = "before-mcp"',
         '[features]',
         'user_feature = false',
-        after,
+        '',
+        '[mcp_servers.example]',
+        'command = "npx"',
+        'args = ["-y", "example-mcp"]',
+        '',
+        '[plugins.example]',
+        'enabled = false',
+        '',
+        '[projects."/tmp/example"]',
+        'trust_level = "trusted"',
+        '',
+        '[marketplaces.example]',
+        'url = "https://example.test/marketplace"',
+        '',
+        '[agents.custom]',
+        'description = "user agent"',
+        '',
         '[agents]',
         'max_threads = 7',
         'job_max_runtime_seconds = 0',
         'interrupt_message = false',
         '',
-      ].join(eol)));
-      assert.ok(cleaned.includes(after.trimEnd()), 'user tables retain their original bytes and ordering');
-      assert.ok(!cleaned.includes(GSD_CODEX_MARKER), 'managed marker is removed');
-      assert.ok(!cleaned.includes('GSD codex_hooks ownership:'), 'ownership line is removed');
-      if (eol === '\r\n') assert.doesNotMatch(cleaned, /(?<!\r)\n/, 'CRLF stays CRLF');
+      ].join(eol);
+      assert.deepStrictEqual(parseTomlToObject(cleaned), parseTomlToObject(expectedText));
+      assert.equal(cleaned, expectedText, 'user bytes, ordering, and line endings are exact');
       assert.strictEqual(stripGsdFromCodexConfig(cleaned), cleaned, 'repeated cleanup is idempotent');
     });
   }
@@ -2181,8 +2198,8 @@ describe('stripGsdFromCodexConfig', () => {
         mcp_servers: { user: { command: 'keep' } },
       });
       const separator = gap ? '\n\n' : '\n';
-      assert.ok(cleaned.includes(`# my MCP notes${separator}[mcp_servers.user]`),
-        'the trailing comment block belongs to the following user table');
+      assert.equal(cleaned, `# my MCP notes${separator}[mcp_servers.user]\ncommand = "keep"\n`,
+        'the trailing comment block belongs byte-for-byte to the following user table');
     });
   }
 
@@ -2213,7 +2230,7 @@ describe('stripGsdFromCodexConfig', () => {
     assert.deepStrictEqual(parseTomlToObject(cleaned), {
       mcp_servers: { user: { command: 'keep' } },
     });
-    assert.ok(cleaned.includes('# user MCP notes\n[mcp_servers.user]'));
+    assert.equal(cleaned, '# user MCP notes\n[mcp_servers.user]\ncommand = "keep"\n');
   });
 
   for (const eol of ['\n', '\r\n']) {
@@ -2232,7 +2249,7 @@ describe('stripGsdFromCodexConfig', () => {
       assert.deepStrictEqual(parseTomlToObject(cleaned), {
         mcp_servers: { user: { command: 'keep' } },
       });
-      if (eol === '\r\n') assert.doesNotMatch(cleaned, /(?<!\r)\n/);
+      assert.equal(cleaned, ['[mcp_servers.user]', 'command = "keep"', ''].join(eol));
     });
   }
 
@@ -2258,6 +2275,7 @@ describe('stripGsdFromCodexConfig', () => {
       GSD_CODEX_MARKER,
       '# GSD codex_hooks ownership: section',
       '[features]',
+      'multi_agent = true',
       'hooks = true',
       '# user note',
       '[mcp_servers.user]',
@@ -2268,8 +2286,8 @@ describe('stripGsdFromCodexConfig', () => {
     assert.deepStrictEqual(parseTomlToObject(cleaned), {
       mcp_servers: { user: { command: 'keep' } },
     });
-    assert.ok(cleaned.includes('# user note\n[mcp_servers.user]'));
-    assert.equal(cleaned.includes('[features]'), false);
+    assert.equal(cleaned, '# user note\n[mcp_servers.user]\ncommand = "keep"\n');
+    assert.equal(stripGsdFromCodexConfig(cleaned), cleaned, 'comment-only features cleanup is idempotent');
   });
 
   test('#5199: every managed marker and adjacent ownership line is removed idempotently', () => {
@@ -2289,8 +2307,7 @@ describe('stripGsdFromCodexConfig', () => {
     assert.deepStrictEqual(parseTomlToObject(cleaned), {
       mcp_servers: { user: { command: 'keep' } },
     });
-    assert.equal(cleaned.includes(GSD_CODEX_MARKER), false);
-    assert.equal(cleaned.includes('GSD codex_hooks ownership:'), false);
+    assert.equal(cleaned, '[mcp_servers.user]\ncommand = "keep"\n');
     assert.equal(stripGsdFromCodexConfig(cleaned), cleaned);
   });
 
@@ -2318,10 +2335,10 @@ describe('stripGsdFromCodexConfig', () => {
     ].join('\n');
     const cleaned = stripGsdFromCodexConfig(content);
     assert.deepStrictEqual(parseTomlToObject(cleaned), expected, 'only the real managed marker and injected features are removed');
-    assert.ok(cleaned.includes(user), 'literal marker and multiline bytes survive');
+    assert.equal(cleaned, user + userTable, 'literal marker and multiline bytes survive exactly');
   });
 
-  test('#5199: markerless cleanup stays byte-compatible with the legacy path', () => {
+  test('#5199: markerless cleanup keeps the legacy path outside the two approved safety fixes', () => {
     const input = ['multi_agent = true', '[features]', 'multi_agent = true',
       'default_mode_request_user_input = true', '[user]', 'multi_agent = true',
       'default_mode_request_user_input = true', ''].join('\n');
@@ -2330,6 +2347,16 @@ describe('stripGsdFromCodexConfig', () => {
       features: { multi_agent: true },
       user: { multi_agent: true, default_mode_request_user_input: true },
     });
+  });
+
+  test('#5199: markerless cleanup preserves a trailing user comment before the next table', () => {
+    const input = '[agents]\nmax_depth = 1\n# user note\n[mcp_servers.user]\ncommand = "keep"\n';
+    assert.equal(stripGsdFromCodexConfig(input), '# user note\n[mcp_servers.user]\ncommand = "keep"\n');
+  });
+
+  test('#5199: marker text inside a multiline string does not claim the file', () => {
+    const input = `notes = """\n${GSD_CODEX_MARKER}\n"""\n`;
+    assert.equal(stripGsdFromCodexConfig(input), input);
   });
 
   test('#5199: markerless cleanup leaves stale hook tables unchanged', () => {
@@ -2387,10 +2414,6 @@ describe('stripGsdFromCodexConfig', () => {
         const cleaned = stripGsdFromCodexConfig(content);
         assert.ok(cleaned, 'non-empty user tables prevent a null return');
         assert.deepStrictEqual(parseTomlToObject(cleaned), parseTomlToObject(expected));
-        for (const table of userTables) assert.ok(cleaned.includes(table.trimEnd()), 'user table bytes survive');
-        assert.ok(!cleaned.includes(GSD_CODEX_MARKER));
-        assert.ok(!cleaned.includes('GSD codex_hooks ownership:'));
-        if (eol === '\r\n') assert.doesNotMatch(cleaned, /(?<!\r)\n/);
       },
     ), { seed: 5199, numRuns: 100 });
   });
@@ -2946,10 +2969,10 @@ describe('mergeCodexConfig', () => {
     mergeCodexConfig(configPath, sampleBlock);
 
     const content = fs.readFileSync(configPath, 'utf8');
-    assert.equal(content.includes('GSD codex_hooks ownership:'), false);
-    assert.equal(content.includes('[features]'), false);
-    assert.equal((content.match(new RegExp(escapeRegex(GSD_CODEX_MARKER), 'g')) || []).length, 1);
-    assert.deepEqual(parseTomlToObject(content).model, { name: 'o3' });
+    assert.equal(content, `[model]\nname = "o3"\n\n${sampleBlock}\n\n[features]\nhooks = true\n`);
+    assert.deepEqual(parseTomlToObject(content), {
+      model: { name: 'o3' }, agents: { max_depth: 1 }, features: { hooks: true },
+    });
   });
 
   test('case 3: appends to config without GSD marker', () => {

@@ -220,7 +220,8 @@ describe('#5199: full Codex install followed by config cleanup', () => {
       runInstaller(home, ['--profile=full']);
       const configPath = path.join(home, 'config.toml');
       const installed = fs.readFileSync(configPath, 'utf8');
-      assert.ok(installed.includes(_GSD_CODEX_MARKER), 'exercise the marker-bearing full-install path');
+      assert.equal(_parseTomlToObject(installed).agents.max_depth, 1,
+        'exercise the managed full-install config path');
       const userConfig = [
         '[mcp_servers.example]',
         'command = "npx"',
@@ -250,9 +251,12 @@ describe('#5199: full Codex install followed by config cleanup', () => {
           'full-profile GSD agent registrations are removed while core tuning remains',
         );
       }
-      assert.ok(cleaned.includes(userConfig.trimEnd()), 'appended user table bytes remain intact');
+      const expectedAfterCleanup = operation === 'core-profile'
+        ? `[features]\nhooks = true\n\n${userConfig.trimEnd()}\n`
+        : userConfig.trimEnd() + '\n';
+      assert.equal(_stripGsdFromCodexConfig(cleaned), expectedAfterCleanup,
+        'cleanup preserves the appended user bytes and the legacy merge-owned feature state exactly');
       if (operation === 'uninstall') {
-        assert.ok(!cleaned.includes(_GSD_CODEX_MARKER), 'uninstall removes the managed marker');
         assert.deepStrictEqual(parsed, expected, 'only user config remains');
       }
     });

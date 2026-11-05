@@ -4724,9 +4724,10 @@ function stripGsdFromCodexConfig(content) {
     .find(Boolean) || null;
 
   if (!markerRecord) {
-    // Acceptance criterion 5: preserve the pre-#5199 markerless cleanup path
-    // byte-for-behaviour. Markerless legacy-hook or section-ownership changes
-    // need their own approved issue; this PR only narrows marker ownership.
+    // Acceptance criterion 5 keeps the legacy markerless cleanup path except
+    // for two approved safety fixes: trailing user comments survive managed
+    // section removal, and marker text inside a multiline string is not a
+    // managed marker (#5199 maintainer ruling).
     let cleaned = stripCodexHooksFeatureAssignments(content, codexHooksOwnership);
     cleaned = cleaned.replace(/^multi_agent\s*=\s*true\s*(?:\r?\n)?/m, '');
     cleaned = cleaned.replace(/^default_mode_request_user_input\s*=\s*true\s*(?:\r?\n)?/m, '');
@@ -4743,23 +4744,20 @@ function stripGsdFromCodexConfig(content) {
   }
 
   let cleaned = content;
-  {
-    // #5199: the marker identifies GSD's block, not ownership of every byte
-    // after it. Preserve both sides and let the uninstall section parser remove
-    // only managed agents, including legacy entries, below.
-    const removalRanges = [];
-    for (const managedMarker of markerRecords) {
-      removalRanges.push({ start: managedMarker.start, end: managedMarker.end + managedMarker.eol.length });
-      const ownershipRecord = lineRecords[lineRecords.indexOf(managedMarker) + 1];
-      if (ownershipRecord && !ownershipRecord.startsInMultilineString &&
-          /^# GSD codex_hooks ownership: (?:section|root_dotted)[ \t]*$/.test(ownershipRecord.text)) {
-        removalRanges.push({ start: ownershipRecord.start, end: ownershipRecord.end + ownershipRecord.eol.length });
-      }
+  // #5199: the marker identifies GSD's block, not ownership of every byte
+  // after it. Preserve both sides and let the uninstall section parser remove
+  // only managed agents, including legacy entries, below.
+  const removalRanges = [];
+  for (const managedMarker of markerRecords) {
+    removalRanges.push({ start: managedMarker.start, end: managedMarker.end + managedMarker.eol.length });
+    const ownershipRecord = lineRecords[lineRecords.indexOf(managedMarker) + 1];
+    if (ownershipRecord && !ownershipRecord.startsInMultilineString &&
+        /^# GSD codex_hooks ownership: (?:section|root_dotted)[ \t]*$/.test(ownershipRecord.text)) {
+      removalRanges.push({ start: ownershipRecord.start, end: ownershipRecord.end + ownershipRecord.eol.length });
     }
-    cleaned = removeContentRanges(content, removalRanges);
   }
+  cleaned = removeContentRanges(content, removalRanges);
 
-  cleaned = stripCodexHooksFeatureAssignments(cleaned, codexHooksOwnership);
   // Older installers wrote hook tables after the managed marker. The marker
   // no longer owns marker-to-EOF, so remove those tables through their existing
   // structural owner before preserving the remaining user content (#5199 F1).
@@ -4777,6 +4775,10 @@ function stripGsdFromCodexConfig(content) {
   cleaned = removeContentRanges(cleaned, injectedFeatureRecords.map((record) => ({
     start: record.start, end: findTomlAssignmentBlockEnd(cleaned, record),
   })));
+  // Remove the injected feature keys first. That lets the structural hooks
+  // owner recognize a now-comment-only [features] table and remove its header
+  // in the same pass instead of requiring a second cleanup (#5199 F4).
+  cleaned = stripCodexHooksFeatureAssignments(cleaned, codexHooksOwnership);
 
   // #2088: recover user AgentsToml scalars only when the section parser will
   // strip their table. A table with unknown user keys survives in place, so
@@ -4785,7 +4787,7 @@ function stripGsdFromCodexConfig(content) {
   const stripsAgentsTable = agentsSection && codexBareAgentsHasOnlyKnownScalars(cleaned.slice(agentsSection.headerEnd, agentsSection.end));
   const preservedScalars = stripsAgentsTable ? extractCodexUserAgentsScalars(cleaned) : [];
 
-  if (markerRecord && agentsSection && !stripsAgentsTable) {
+  if (agentsSection && !stripsAgentsTable) {
     // The managed max_depth can coexist with future user tuning keys. Drop only
     // that assignment, retaining the table and all unknown keys in place.
     const depthRecords = getTomlLineRecords(cleaned).filter((record) =>
@@ -6704,17 +6706,13 @@ function mergeCodexConfig(configPath, gsdBlock) {
     // is GSD-owned and is stripped from the trailing region so it is not duplicated alongside
     // the freshly regenerated block.
     const rawAfter = existing.substring(markerIndex);
-    const rawAfterRecords = getTomlLineRecords(rawAfter);
-    const rawMarkerRecord = rawAfterRecords.find((record) =>
-      !record.startsInMultilineString && record.text.trim() === GSD_CODEX_MARKER
-    );
-    const priorHooksOwnership = getManagedCodexHooksOwnership(rawAfter, rawMarkerRecord);
     const markerStripped = rawAfter
       .replace(GSD_CODEX_MARKER, '')
       .replace(/^\r?\n# GSD codex_hooks ownership: (?:section|root_dotted)[ \t]*\r?\n/, '');
-    const afterUser = stripLeakedGsdCodexSections(
-      stripCodexHooksFeatureAssignments(markerStripped, priorHooksOwnership),
-    ).trim();
+    // Keep install/update merge behavior outside #5199 unchanged. The only
+    // ownership-line change here is whitespace-tolerant marker removal above;
+    // uninstall owns structural hooks-feature cleanup.
+    const afterUser = stripLeakedGsdCodexSections(markerStripped).trim();
 
     // #3610: top-level keys that survived BELOW the marker were file-scoped
     // before this merge; the regenerated block opens with the `[agents]` table
