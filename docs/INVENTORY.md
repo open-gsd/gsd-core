@@ -776,6 +776,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `workstream-inventory.cjs` | Shared workstream inventory projection: state fields, phase/plan/summary counts, roadmap phase count, and active marker — thin orchestrator that delegates pure projection to `workstream-inventory-builder.cjs` |
 | `workstream-name-policy.cjs` | Canonical workstream name validation (`isValidActiveWorkstreamName`, `hasInvalidPathSegment`, `validateWorkstreamName`) and slug normalization (`toWorkstreamSlug`) |
 | `workstream.cjs` | Workstream CRUD, migration, session-scoped active pointer |
+| `gsd-tool-dir.cjs` | Tool-owned `.gsd/` directory owner (`ensureToolOwnedGsdDir`): refuses a symlinked or escaping `.gsd`, seeds and extends `.gsd/.gitignore`; shared by the fork-probe cache and the dispatch-isolation sentinel (#5757) |
 | `worktree-base-ref.cjs` | Worktree base-ref drift detection and degrade decision (`evaluateWorktreeBaseDegrade`) plus no-clobber `worktree.baseRef` settings management for the `base-check`/`set-baseref` subcommands (#683) |
 | `health-diagnostic-rules/worktree-health.cjs` | Health-diagnostic rules: worktree health checks (W020, W017, W027 — the split-off stale-worktree subject), ported behavior-preserving from `cmdValidateHealth` (ADR-3180 §8.2/§8.3/§8.5, Phase 11, #3309) |
 | `worktree-safety.cjs` | Worktree-root resolution and non-destructive prune policy decisions; owns W017 health-check logic |

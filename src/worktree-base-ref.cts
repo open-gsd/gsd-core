@@ -10,10 +10,12 @@
  * tests can run without touching the real filesystem or spawning real git.
  */
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { execGit as execGitSeam, isSpawnTimeout } from './shell-command-projection.cjs';
+import { ensureToolOwnedGsdDir } from './gsd-tool-dir.cjs';
+import { execGit as execGitSeam, isSpawnTimeout, retryRenameSync } from './shell-command-projection.cjs';
 import { getGlobalConfigDir } from './runtime-homes.cjs';
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -631,11 +633,26 @@ export function observeHarnessForkFromHead(deps: {
     }
   });
   const stateWrite = deps.stateWrite ?? ((file: string, content: string) => {
+    let tmpPath: string | null = null;
     try {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, content, 'utf8');
+      // #5757: the shared owner refuses a symlinked/escaping .gsd and keeps the
+      // directory git-ignored; the write is an exclusive random tmp + rename so
+      // a planted cache-file symlink is replaced, never followed.
+      const dir = ensureToolOwnedGsdDir(cwd, {
+        marker: '# gsd-core harness fork probe',
+        rules: ['/harness-fork-probe.json', '/harness-fork-probe.json.tmp-*', '/.gitignore'],
+      });
+      const target = path.join(dir, path.basename(file));
+      tmpPath = `${target}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
+      fs.writeFileSync(tmpPath, content, { encoding: 'utf8', flag: 'wx' });
+      retryRenameSync(tmpPath, target);
+      tmpPath = null;
     } catch {
       // A cache write must never break the check that produced the verdict.
+    } finally {
+      if (tmpPath) {
+        try { fs.unlinkSync(tmpPath); } catch { /* best-effort cleanup */ }
+      }
     }
   });
 
