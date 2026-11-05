@@ -2070,7 +2070,6 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     const shapes = [
       "cat ${x:-$'.env'}", "cat ${x-$'.e\\x6ev'}",
       "cat ${x:+a}$'.env'", 'cat .env${}',
-      '<<${;cat .env', "<<$'E'${; cat .env #", '<<}; cat .env #',
       'x$(($"));cat .env', '$((")); cat .env #',
       "echo ${x+$[ } ' ]}; cat $'.env' #'",
       "echo \"${x\\\n%'\"'$${y}'}\" $'\\'; cat .env #'",
@@ -2085,6 +2084,36 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       const cmd = '$(E<<\n)\ncat .env';
       assertBlocked(runHook(bash(cmd)), cmd);
     });
+  });
+
+  describe('a heredoc tag that is a brace, or holds a `${` that never closes', () => {
+    // Each read the file in a real shell (2026-11-05): `}` in bash 5.2 and dash
+    // 0.5.12, `{` in those and zsh 5.9, `${` in dash only. No trigger for the
+    // readings is needed: the plain scan took the brace as a group, or the
+    // rest of the line as the `${`, and the read's `cat` as the tag.
+    const blocks = [
+      '<<}; cat .env #',
+      '<<{; cat .env #',
+      '<<${;cat .env',
+      '<<${x;cat .env',
+      '<<${#;cat .env',
+      '<<${ ;cat .env',
+      '<<x${;cat .env',
+      "<<$'E'${; cat .env #",
+      'cat <<}\nbody\n}\ncat .env',
+      'cat <<} .env\nbody\n}',
+    ];
+    for (const cmd of blocks) {
+      test(`blocks ${JSON.stringify(cmd)}`, () => {
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      });
+    }
+
+    for (const cmd of ['cat <<}\n.env\n}\nls', '<<}\nls', '{ ls; }', 'cat <<EOF\n}\nEOF', 'cat <<{\n.env\n{']) {
+      test(`allows ${JSON.stringify(cmd)}: the name is heredoc data, or there is none`, () => {
+        assertAllowed(runHook(bash(cmd)), cmd);
+      });
+    }
   });
 
   describe('boundaries (#5255 review round 6, Minor 5)', () => {
