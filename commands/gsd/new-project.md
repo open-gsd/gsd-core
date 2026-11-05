@@ -9,7 +9,7 @@ allowed-tools:
   - Write
   - Agent
   - AskUserQuestion
-requires: [config, phase, plan-phase]
+requires: [config, phase, plan-phase, discuss-phase, execute-phase]
 ---
 
 <arguments>$ARGUMENTS</arguments>

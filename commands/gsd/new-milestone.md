@@ -9,7 +9,7 @@ allowed-tools:
   - Grep
   - Agent
   - AskUserQuestion
-requires: [new-project, phase, plan-phase]
+requires: [new-project, phase, plan-phase, discuss-phase, execute-phase]
 ---
 
 <arguments>$ARGUMENTS</arguments>
