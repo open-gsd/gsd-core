@@ -209,6 +209,11 @@ const FURTHER_WRAPPERS = new Map([
   ['repeat', { count: true, keyword: true }],
   ['time', { ...WRAPPERS.get('time'), keyword: true }],
 ]);
+// Homebrew's coreutils, findutils and gnu-time install these under a `g` name.
+for (const name of ['env', 'nice', 'nohup', 'timeout', 'stdbuf']) {
+  FURTHER_WRAPPERS.set(`g${name}`, FURTHER_WRAPPERS.get(name));
+}
+FURTHER_WRAPPERS.set('gtime', WRAPPERS.get('time')); // a program, not a keyword
 
 // Shell reserved words a command can follow in its segment: `then cmd`,
 // `do cmd`, `if cmd`, `! cmd`, `coproc cmd`. A word the tokenizer saw quoted is
@@ -1202,8 +1207,8 @@ function curlCertOpensSecret(words, k) {
 // find's actions that run the words after them, up to `;` (or `+` after
 // `{}`), as a command. bfs takes find's actions.
 const FIND_EXEC_ACTIONS = new Set(['-exec', '-execdir', '-ok', '-okdir']);
-const FIND_COMMANDS = new Set(['find', 'find.exe', 'bfs']);
-const XARGS_COMMANDS = new Set(['xargs', 'xargs.exe']);
+const FIND_COMMANDS = new Set(['find', 'gfind', 'find.exe', 'bfs']);
+const XARGS_COMMANDS = new Set(['xargs', 'gxargs', 'xargs.exe']);
 
 // Commands whose documented job is to run another command, other than the
 // wrappers resolveCommand unwraps and xargs/find, whose command position is
@@ -1221,7 +1226,7 @@ const CURL_WORD_LAUNCHERS = new Map([
   // Run their operands as a command.
   ...[
     // process, scheduling, privilege and namespace runners
-    'watch', 'ionice', 'taskset', 'chrt', 'flock', 'nsenter', 'unshare', 'chroot',
+    'watch', 'ionice', 'taskset', 'chrt', 'flock', 'nsenter', 'unshare', 'chroot', 'gchroot',
     'runuser', 'setpriv', 'pkexec', 'run0', 'gosu', 'su-exec', 'systemd-run',
     'systemd-inhibit', 'systemd-nspawn', 'bwrap', 'flatpak-spawn', 'prlimit',
     'numactl', 'cpulimit', 'setarch', 'arch', 'caffeinate', 'sandbox-exec', 'chpst',
