@@ -9,6 +9,7 @@ _To add your capability, see the [registry README](./README.md)._
 | Name | What it is | Latest release | GSD compat | Discussion |
 |---|---|---|---|---|
 | [Markdown Linting](https://github.com/davdittrich/markdown-linting) | Runs rumdl over .planning/, README.md and CLAUDE.md after verify:post, writes a LINT-REPORT.md violation count, and re-measures at ship:pre to advise \(never block\) /gsd-ship when markdown violations remain. | ![release](https://img.shields.io/github/v/release/davdittrich/markdown-linting?sort=semver&include_prereleases) | `>=1.6.0` | [discuss](https://github.com/open-gsd/gsd-core/discussions/5294) |
+| [musk: a subtraction pass for GSD](https://github.com/bitcreed/gsd-musk-simplification) | Applies Musk's algorithm \(question requirements, delete, then simplify\) to GSD planning. A one-shot milestone pass and discuss:pre and plan:pre contributions challenge phases, requirements and implementation before they are built; small phases take a lean lane \(no gray-area questioning, no researcher or pattern mapper, one plan\). Every cut is logged reversibly in an append-only ledger and can be reinstated with one command. A gsd-tools musk command family and a milestone retro price the savings from the project's own Claude Code token usage and report the add-back ratio. | ![release](https://img.shields.io/github/v/release/bitcreed/gsd-musk-simplification?sort=semver&include_prereleases) | `>=1.15.0` | [discuss](https://github.com/open-gsd/gsd-core/discussions/5868) |
 | [Ponytail Everywhere](https://github.com/davdittrich/ponytail-everywhere) | Brings lazy-ladder discipline \(YAGNI, reuse before writing, stdlib and native features before dependencies, shortest working diff\) to GSD as an advisory planner contribution at plan:pre, matching executor and verifier fragments, and a plan-review proportionality checker contribution. An optional Claude Code plugin adds a subagent banner and a pre-expansion check that recommends a smaller route before scope-expanding commands. | ![release](https://img.shields.io/github/v/release/davdittrich/ponytail-everywhere?sort=semver&include_prereleases) | `>=1.13.0` | [discuss](https://github.com/open-gsd/gsd-core/discussions/5292) |
 | [PR Workflow](https://github.com/davdittrich/pr-workflow) | Reads the open pull request and its checks for the current branch with gh, writes a PR.md report after each execute wave, and advises \(never blocks\) at ship:pre when the PR is not green. Fails open: a missing or erroring gh yields an unavailable report instead of a stale pass. | ![release](https://img.shields.io/github/v/release/davdittrich/pr-workflow?sort=semver&include_prereleases) | `>=1.6.0` | [discuss](https://github.com/open-gsd/gsd-core/discussions/5304) |
 | [SOTA Numerics](https://github.com/davdittrich/sota-numerics) | Advisory steering across the plan, execute, verify and ship lifecycle toward state-of-the-art numerics: internally consistent, project-consistent, unambiguous, complete, efficient, quiet-running, agent-facing code. Adds advisory fragments at plan:pre, execute:wave:pre, execute:wave:post and ship:pre, plus one blocking plan:post gate that requires an Alternatives Considered section with cited, dated alternatives and a Decided by line in every plan. | ![release](https://img.shields.io/github/v/release/davdittrich/sota-numerics?sort=semver&include_prereleases) | `>=1.16.0` | [discuss](https://github.com/open-gsd/gsd-core/discussions/5303) |
@@ -29,6 +30,23 @@ gsd capability remove markdown-linting
 - **GSD compatibility:** `>=1.6.0`
 - **License:** MIT
 - **Discussion / ranking:** https://github.com/open-gsd/gsd-core/discussions/5294
+
+## musk: a subtraction pass for GSD
+- **Repository:** https://github.com/bitcreed/gsd-musk-simplification — [latest release](https://github.com/bitcreed/gsd-musk-simplification/releases/latest)
+- **What it is:** Applies Musk's algorithm \(question requirements, delete, then simplify\) to GSD planning. A one-shot milestone pass and discuss:pre and plan:pre contributions challenge phases, requirements and implementation before they are built; small phases take a lean lane \(no gray-area questioning, no researcher or pattern mapper, one plan\). Every cut is logged reversibly in an append-only ledger and can be reinstated with one command. A gsd-tools musk command family and a milestone retro price the savings from the project's own Claude Code token usage and report the add-back ratio.
+- **Author:** Andreas Brauchli
+- **Every interaction with GSD:** Loop Extension Points: discuss:pre, plan:pre, execute:post, verify:post; hook kinds: contribution, step; configKeys: musk.enabled, musk.scope\_cuts, musk.lean\_lane, musk.milestone\_pass; runtimeCompat: all; produces: .planning/musk/ledger.jsonl, .planning/musk/calibration.json, .planning/musk/RETRO-\<milestone\>.md; consumes: ROADMAP.md, REQUIREMENTS.md, CONTEXT.md, .planning/config.json, Claude Code transcripts \(\~/.claude/projects/\<slug\>/\)
+- **Install:**
+```sh
+gsd capability install https://github.com/bitcreed/gsd-musk-simplification.git#v0.5.5
+```
+- **Uninstall:**
+```sh
+gsd capability remove musk
+```
+- **GSD compatibility:** `>=1.15.0`
+- **License:** MIT
+- **Discussion / ranking:** https://github.com/open-gsd/gsd-core/discussions/5868
 
 ## Ponytail Everywhere
 - **Repository:** https://github.com/davdittrich/ponytail-everywhere — [latest release](https://github.com/davdittrich/ponytail-everywhere/releases/latest)

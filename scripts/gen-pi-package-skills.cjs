@@ -85,7 +85,9 @@ function installIntoTemp() {
     windowsHide: true,
     // HOME is redirected too: the installer writes GSD's global defaults store under
     // $HOME/.gsd, and a generator run must not touch the developer's real one.
-    env: { ...process.env, PI_CODING_AGENT_DIR: tmp, HOME: home, USERPROFILE: home, GSD_HOME: home },
+    // GSD_ARGS_NONCE_OFF keeps the templates canonical: they ship in the package, so a per-install
+    // nonce stamped here would be a build-time constant and would change on every generation.
+    env: { ...process.env, PI_CODING_AGENT_DIR: tmp, HOME: home, USERPROFILE: home, GSD_HOME: home, GSD_ARGS_NONCE_OFF: '1' },
   });
   fs.rmSync(home, { recursive: true, force: true });
   if (res.status !== 0) {

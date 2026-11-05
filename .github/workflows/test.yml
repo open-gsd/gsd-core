@@ -71,17 +71,23 @@ jobs:
     permissions:
       contents: read
       actions: read
+      # merge_group carries no labels: the gate reads the fix-forward PR's
+      # labels, label events and the labeller's permission from the API.
+      pull-requests: read
+      issues: read
     steps:
       - name: Check out the next-health script from the base branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           # Same rationale as pr-mergeable-preflight.yml's checkout: pinned to
           # the BASE sha so the script that decides the gate comes from a
-          # trusted commit, never PR-supplied code. Empty on a non-pull_request
-          # event (e.g. merge_group), where actions/checkout falls back to the
-          # triggering ref — fine, since the script no-ops before reading
-          # anything on those events too.
-          ref: ${{ github.event.pull_request.base.sha }}
+          # trusted commit, never PR-supplied code. On merge_group the
+          # triggering ref is the queue commit, which CONTAINS the queued PR's
+          # own edits — a queued PR could rewrite the script that judges it —
+          # so merge_group's base_sha is used there. Empty on any other event,
+          # where checkout falls back to the triggering ref and the script
+          # no-ops before reading anything.
+          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           fetch-depth: 1
           sparse-checkout: |
             scripts
@@ -95,6 +101,9 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
           MERGE_GROUP_BASE_REF: ${{ github.event.merge_group.base_ref }}
+          MERGE_GROUP_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
         run: |
           # Bootstrap arm, mirroring pr-mergeable-preflight.yml's: the checkout
           # above is of the BASE sha, so this step runs the script as it exists
@@ -457,9 +466,25 @@ jobs:
           # `scope: targeted` lane runs no aux suite on its own, so this
           # must stay empty there. tests/ci-full-lane-sharding.test.cjs pins both
           # halves of this contract. Reserve-value derivation:
-          # .gsd/bug/fix-4070-shard1-aux-suite-budget/10-diagnosis.md.
-          RUN_TESTS_SHARD_RESERVE: ${{ matrix.scope == 'full' && '1:77' || '' }}
+          # .gsd/bug/fix-4070-shard1-aux-suite-budget/10-diagnosis.md (original
+          # 77, Docker-measured); #5805 re-derived it as 69 for the CI-measured
+          # table, see the derivation comment in tests/ci-full-lane-sharding.test.cjs.
+          RUN_TESTS_SHARD_RESERVE: ${{ matrix.scope == 'full' && '1:69' || '' }}
+          # Real per-file CI durations (c8-instrumented, GitHub runner), the
+          # same export the conformance lanes use (#5071). tests/test-timings.json
+          # was measured in Docker without coverage, so it under-prices the
+          # files that are costly under c8 and shard 2/3 stayed the long pole.
+          RUN_TESTS_TIMING_EVENTS_FILE: ${{ runner.temp }}/test-timings-ubuntu-unit-job${{ strategy.job-index }}.jsonl
         run: npm run test:coverage:unit:raw -- --shard ${{ matrix.shard }}
+
+      - name: Upload per-file unit test durations
+        if: always() && matrix.scope == 'full'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: test-timings-ubuntu-unit-job${{ strategy.job-index }}
+          path: ${{ runner.temp }}/test-timings-ubuntu-unit-job${{ strategy.job-index }}.jsonl
+          if-no-files-found: warn
+          retention-days: 14
 
       # Raw V8 dumps, not rendered reports — coverage-gate merges these. They
       # compress hard in the artifact zip, but they are still bulk: keep the
