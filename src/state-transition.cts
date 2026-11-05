@@ -25,7 +25,7 @@ import { milestoneVersionOf } from './roadmap-progress.cjs';
 import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
 import phaseIdMod = require('./phase-id.cjs');
-const { comparePhaseNum } = phaseIdMod;
+const { comparePhaseNum, parsePhaseFromProse } = phaseIdMod;
 // #4129: the completion-ratio kernel for the resync-arm ratchet's percent
 // (planning-scope's SCOPE — state-document's own dependency, no cycle here:
 // state-document never imports this module).
@@ -2235,8 +2235,12 @@ function nextPhaseWording(disk: NextPhaseDisk | null): { status: string; current
  * position; the caller combines this with "the phase is already complete in
  * ROADMAP.md" so a first-time out-of-order completion (#2028) still
  * transitions. An unparseable or absent current phase is "not past".
+ * #5676: under `milestone-prefixed` the id is the whole `M-NN` (`3-02`, not `3`); that read goes
+ * through `parsePhaseFromProse` (the #5626 grammar owner), so the two cannot drift.
  */
-export function isStatePastPhase(content: string, phaseNum: string | number, sourcePath?: string): boolean {
+export function isStatePastPhase(
+  content: string, phaseNum: string | number, sourcePath?: string, convention?: string | null,
+): boolean {
   const fm = extractFrontmatter(content, sourcePath) as Record<string, unknown>;
   const fromFm = fm['current_phase'];
   let raw: string | null = typeof fromFm === 'string' || typeof fromFm === 'number' ? String(fromFm) : null;
@@ -2245,9 +2249,14 @@ export function isStatePastPhase(content: string, phaseNum: string | number, sou
     raw = stateExtractField(body, 'Current Phase') || stateExtractField(body, 'Phase') || null;
   }
   // `Phase 4` / `phase 4 of 9` name phase 4 as surely as `4 of 9` does.
-  const m = raw === null ? null : /^\s*(?:phase\s+)?(\d+(?:\.\d+)*)/i.exec(raw);
-  if (!m) return false;
-  return comparePhaseNum(m[1], String(phaseNum)) > 0;
+  let id: string | null = null;
+  if (raw !== null) {
+    id = convention === 'milestone-prefixed'
+      ? parsePhaseFromProse(raw, 'milestone-prefixed').phase
+      : (/^\s*(?:phase\s+)?(\d+(?:\.\d+)*)/i.exec(raw)?.[1] ?? null);
+  }
+  if (id === null) return false;
+  return comparePhaseNum(id, String(phaseNum)) > 0;
 }
 
 /**
