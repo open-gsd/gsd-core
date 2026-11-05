@@ -1683,23 +1683,6 @@ describe('#5759 review round 15: the direct write is tied to the identity the pa
     assert.strictEqual(fs.readFileSync(target, 'utf8'), 'APPEARED');
   });
 
-  test('an unchanged target is still written directly when the temp create fails', () => {
-    const target = path.join(tmpDir, 'plain.txt');
-    fs.writeFileSync(target, 'old');
-
-    platformWriteSync(target, 'new', { verbatim: true, writeSeams: { createTemp: deniedTemp } });
-
-    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'new');
-  });
-
-  test('a parent directory that does not exist yet is still created and written', () => {
-    const target = path.join(tmpDir, 'a', 'b', 'new.txt');
-
-    platformWriteSync(target, 'fresh', { verbatim: true });
-
-    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'fresh');
-  });
-
   for (const errCode of ['EACCES', 'ELOOP', 'ENAMETOOLONG']) {
     test(`a parent whose resolution fails with ${errCode} is refused with ENXIO and nothing is created`, () => {
       const target = path.join(tmpDir, 'new.txt');
@@ -1734,6 +1717,126 @@ describe('#5759 review round 15: the direct write is tied to the identity the pa
     assert.strictEqual(code(() => platformWriteSync(link, 'x', { verbatim: true })), 'ENXIO');
     mock.restoreAll();
     assert.strictEqual(fs.readFileSync(target, 'utf8'), 'UNCHANGED');
+  });
+});
+
+// Runs on every platform, win32 included: the walk's {dev, ino} tie must not break a legitimate write.
+describe('#5759 legitimate writes pass the walk identity tie on every platform', () => {
+  const { platformWriteSync } = require(SHELL_PROJECTION_PATH);
+  let tmpDir;
+  beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-legit-')); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const deniedTemp = () => { throw Object.assign(new Error('EACCES: denied'), { code: 'EACCES' }); };
+
+  test('an unchanged target is still written directly when the temp create fails', () => {
+    const target = path.join(tmpDir, 'plain.txt');
+    fs.writeFileSync(target, 'old');
+
+    platformWriteSync(target, 'new', { verbatim: true, writeSeams: { createTemp: deniedTemp } });
+
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'new');
+  });
+
+  test('an absent target is created directly when the temp create fails', () => {
+    const target = path.join(tmpDir, 'absent.txt');
+
+    platformWriteSync(target, 'fresh', { verbatim: true, writeSeams: { createTemp: deniedTemp } });
+
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'fresh');
+  });
+
+  test('an existing target is replaced by the atomic path', () => {
+    const target = path.join(tmpDir, 'atomic.txt');
+    fs.writeFileSync(target, 'old');
+
+    platformWriteSync(target, 'new', { verbatim: true });
+
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'new');
+  });
+
+  test('a parent directory that does not exist yet is still created and written', () => {
+    const target = path.join(tmpDir, 'a', 'b', 'new.txt');
+
+    platformWriteSync(target, 'fresh', { verbatim: true });
+
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'fresh');
+  });
+});
+
+describe('#5759 a write through an intended symlink keeps the link and updates the real file', {
+  skip: process.platform === 'win32' ? 'symlinks need privileges on Windows' : false,
+}, () => {
+  const { platformWriteSync } = require(SHELL_PROJECTION_PATH);
+  let tmpDir;
+  beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-link-')); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const deniedTemp = () => { throw Object.assign(new Error('EACCES: denied'), { code: 'EACCES' }); };
+  const modes = [['the atomic path', {}], ['the forced direct path', { writeSeams: { createTemp: deniedTemp } }]];
+
+  for (const [label, extra] of modes) {
+    test(`same-directory link, via ${label}`, () => {
+      const real = path.join(tmpDir, 'real.txt');
+      const link = path.join(tmpDir, 'link.txt');
+      fs.writeFileSync(real, 'old');
+      fs.symlinkSync('real.txt', link);
+
+      platformWriteSync(link, 'new', { verbatim: true, ...extra });
+
+      assert.ok(fs.lstatSync(link).isSymbolicLink(), 'the link stays a link');
+      assert.strictEqual(fs.readFileSync(real, 'utf8'), 'new');
+      assert.deepStrictEqual(fs.readdirSync(tmpDir).sort(), ['link.txt', 'real.txt'], 'no temp file is left behind');
+    });
+
+    test(`link to a file in another directory, via ${label}`, () => {
+      const otherDir = path.join(tmpDir, 'elsewhere');
+      fs.mkdirSync(otherDir);
+      const real = path.join(otherDir, 'real.txt');
+      const link = path.join(tmpDir, 'link.txt');
+      fs.writeFileSync(real, 'old');
+      fs.symlinkSync(real, link);
+
+      platformWriteSync(link, 'new', { verbatim: true, ...extra });
+
+      assert.ok(fs.lstatSync(link).isSymbolicLink(), 'the link stays a link');
+      assert.strictEqual(fs.readFileSync(real, 'utf8'), 'new');
+      assert.deepStrictEqual(fs.readdirSync(otherDir), ['real.txt'], 'no temp file is left behind');
+    });
+
+    test(`chained links, via ${label}`, () => {
+      const real = path.join(tmpDir, 'real.txt');
+      fs.writeFileSync(real, 'old');
+      fs.symlinkSync('real.txt', path.join(tmpDir, 'mid.txt'));
+      fs.symlinkSync('mid.txt', path.join(tmpDir, 'top.txt'));
+
+      platformWriteSync(path.join(tmpDir, 'top.txt'), 'new', { verbatim: true, ...extra });
+
+      assert.ok(fs.lstatSync(path.join(tmpDir, 'top.txt')).isSymbolicLink());
+      assert.ok(fs.lstatSync(path.join(tmpDir, 'mid.txt')).isSymbolicLink());
+      assert.strictEqual(fs.readFileSync(real, 'utf8'), 'new');
+    });
+  }
+
+  test('a resolved target swapped for a different file after the walk is refused and untouched', () => {
+    const real = path.join(tmpDir, 'real.txt');
+    const other = path.join(tmpDir, 'other.txt');
+    const link = path.join(tmpDir, 'link.txt');
+    fs.writeFileSync(real, 'APPROVED');
+    fs.writeFileSync(other, 'OTHER');
+    fs.symlinkSync('real.txt', link);
+
+    let code = 'ok';
+    try {
+      platformWriteSync(link, 'PWNED', {
+        verbatim: true,
+        writeSeams: { afterPathWalk: () => { fs.renameSync(other, real); } },
+      });
+    } catch (e) { code = e.code; }
+
+    assert.strictEqual(code, 'ENXIO');
+    assert.strictEqual(fs.readFileSync(real, 'utf8'), 'OTHER');
+    assert.ok(fs.lstatSync(link).isSymbolicLink());
   });
 });
 
