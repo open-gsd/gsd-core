@@ -32,6 +32,14 @@ export interface ToolOwnedGsdDirOptions {
 
 const SYMLINK_IGNORE_MESSAGE = '.gsd/.gitignore is a symlink';
 
+/** Stable `code` values on the refusal errors; callers translate by code, never by message. */
+export const GSD_DIR_UNSAFE = 'GSD_DIR_UNSAFE';
+export const GSD_IGNORE_SYMLINK = 'GSD_IGNORE_SYMLINK';
+
+function codedError(message: string, code: string): Error {
+  return Object.assign(new Error(message), { code });
+}
+
 function hasLine(text: string, line: string): boolean {
   return text.split('\n').some((l) => l.replace(/\r$/, '') === line);
 }
@@ -77,7 +85,7 @@ function mergeExistingIgnore(ignorePath: string, options: ToolOwnedGsdDirOptions
     retryRenameSync(tmpPath, ignorePath);
     tmpPath = null;
   } catch (err) {
-    if (isLinkError(err)) throw new Error(SYMLINK_IGNORE_MESSAGE);
+    if (isLinkError(err)) throw codedError(SYMLINK_IGNORE_MESSAGE, GSD_IGNORE_SYMLINK);
     // Ignore seeding is best-effort; the caller's state is still useful if
     // this path cannot be read or updated.
   } finally {
@@ -98,7 +106,7 @@ export function ensureToolOwnedGsdDir(cwd: string, options: ToolOwnedGsdDirOptio
   fs.mkdirSync(dir, { recursive: true });
   if (fs.lstatSync(dir).isSymbolicLink() ||
       path.relative(fs.realpathSync(cwd), fs.realpathSync(dir)) !== '.gsd') {
-    throw new Error('.gsd directory is a symlink or resolves outside the project');
+    throw codedError('.gsd directory is a symlink or resolves outside the project', GSD_DIR_UNSAFE);
   }
   const ignorePath = path.join(dir, '.gitignore');
   try {

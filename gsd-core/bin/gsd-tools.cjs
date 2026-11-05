@@ -2978,31 +2978,51 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       plan: plan || null,
       written_at: clock.now(),
     };
+    let tmpPath = null;
     try {
       // #5757: the shared tool-owned .gsd owner refuses a project-supplied
       // symlink (or ancestor redirect) and seeds/extends .gsd/.gitignore, so
       // this writer and the fork-probe cache apply one policy. An ordinary
       // ignore-file IO failure must not prevent recording isolation.
-      require('./lib/gsd-tool-dir.cjs').ensureToolOwnedGsdDir(cwd, {
-        marker: '# gsd-core dispatch sentinel',
-        rules: [
-          '/dispatch-isolation-sentinel.json',
-          '/dispatch-isolation-sentinel.json.tmp-*',
-          '/dispatch-isolation/',
-          '/.gitignore',
-        ],
-      });
-      // Atomic write: unique temp file + rename, so a concurrent reader (a
-      // guard hook firing mid-write) never observes a partially-written
-      // sentinel. Unique per-process+time so concurrent orchestrator-worktree
-      // invocations sharing the same sentinelDir never collide on the temp name.
-      const tmpPath = `${sentinelPath}.tmp-${process.pid}-${Date.now()}`;
-      nodeFs.writeFileSync(tmpPath, JSON.stringify(payload));
-      nodeFs.renameSync(tmpPath, sentinelPath);
+      const toolDir = require('./lib/gsd-tool-dir.cjs');
+      try {
+        toolDir.ensureToolOwnedGsdDir(cwd, {
+          marker: '# gsd-core dispatch sentinel',
+          rules: [
+            '/dispatch-isolation-sentinel.json',
+            '/dispatch-isolation-sentinel.json.tmp-*',
+            '/dispatch-isolation/',
+            '/.gitignore',
+          ],
+        });
+      } catch (ownerError) {
+        // The recorded `error` text is observable JSON (hyrums-law): keep the
+        // sentinel's historical wording, translating by the owner's stable code.
+        if (ownerError && ownerError.code === toolDir.GSD_DIR_UNSAFE) {
+          throw new Error('sentinel directory is a symlink or resolves outside the project');
+        }
+        if (ownerError && ownerError.code === toolDir.GSD_IGNORE_SYMLINK) {
+          throw new Error('sentinel ignore file is a symlink');
+        }
+        throw ownerError;
+      }
+      // Atomic write: exclusive random temp file + rename, so a concurrent
+      // reader (a guard hook firing mid-write) never observes a
+      // partially-written sentinel, concurrent invocations sharing the same
+      // sentinelDir never collide on the temp name, and a planted link at a
+      // guessed temp name is never written through.
+      tmpPath = `${sentinelPath}.tmp-${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`;
+      nodeFs.writeFileSync(tmpPath, JSON.stringify(payload), { flag: 'wx' });
+      require('./lib/shell-command-projection.cjs').retryRenameSync(tmpPath, sentinelPath);
+      tmpPath = null;
       writeKeyedDispatchIsolationRecord(cwd, sentinelDir, payload, clock);
       return { recorded: true, path: '.gsd/dispatch-isolation-sentinel.json' };
     } catch (err) {
       return { recorded: false, path: '.gsd/dispatch-isolation-sentinel.json', error: err && err.message };
+    } finally {
+      if (tmpPath) {
+        try { nodeFs.unlinkSync(tmpPath); } catch (_) { /* best-effort cleanup */ }
+      }
     }
   }
 
