@@ -1775,7 +1775,7 @@ describe('#5759 a symlinked target is replaced on the atomic path and refused on
   const deniedTemp = () => { throw Object.assign(new Error('EACCES: denied'), { code: 'EACCES' }); };
   const direct = { writeSeams: { createTemp: deniedTemp } };
 
-  // Each fixture: [label, build(tmpDir) -> { entry, real, linkTargets }]
+  // Each fixture: [label, build() -> { entry, real, links }]
   const fixtures = [
     ['same-directory link', () => {
       const real = path.join(tmpDir, 'real.txt');
@@ -1833,6 +1833,136 @@ describe('#5759 a symlinked target is replaced on the atomic path and refused on
       assert.strictEqual(fs.readlinkSync(entry), links[entry]);
     });
   }
+});
+
+describe('#5759 review round: direct-path O_NOFOLLOW, multiply-linked targets, parent identity, walk refusals', {
+  skip: process.platform === 'win32' ? 'symlinks and hard links need privileges on Windows' : false,
+}, () => {
+  const { mock } = require('node:test');
+  const { platformWriteSync } = require(SHELL_PROJECTION_PATH);
+  let tmpDir;
+  beforeEach(() => { tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-nofollow-'))); });
+  afterEach(() => { mock.restoreAll(); cleanup(tmpDir); });
+
+  const deniedTemp = () => { throw Object.assign(new Error('EACCES: denied'), { code: 'EACCES' }); };
+  const attempt = (fn) => { try { fn(); return null; } catch (e) { return e; } };
+  const at = (name) => path.join(tmpDir, name);
+
+  test('a link swapped in right after the direct path lstat is not opened: ENXIO, the real file untouched', () => {
+    const real = at('real.txt');
+    const entry = at('entry.txt');
+    fs.writeFileSync(entry, 'old');
+
+    const err = attempt(() => platformWriteSync(entry, 'PWNED', {
+      verbatim: true,
+      writeSeams: {
+        createTemp: deniedTemp,
+        afterDirectLstat: () => { fs.renameSync(entry, real); fs.symlinkSync(real, entry); },
+      },
+    }));
+
+    assert.ok(err, 'the write is refused');
+    assert.strictEqual(err.code, 'ENXIO');
+    assert.match(err.message, /symbolic link/);
+    assert.strictEqual(fs.readFileSync(real, 'utf8'), 'old');
+  });
+
+  test('the direct path refuses a hard link to a sensitive file and leaves it untouched', () => {
+    const secret = at('secret.txt');
+    const target = at('target.txt');
+    fs.writeFileSync(secret, 'SECRET');
+    fs.linkSync(secret, target);
+
+    const err = attempt(() => platformWriteSync(target, 'PWNED', { verbatim: true, writeSeams: { createTemp: deniedTemp } }));
+
+    assert.ok(err, 'the write is refused');
+    assert.strictEqual(err.code, 'ENXIO');
+    assert.match(err.message, /multiply-linked target cannot be replaced atomically/);
+    assert.strictEqual(fs.readFileSync(secret, 'utf8'), 'SECRET');
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'SECRET');
+  });
+
+  test('control: the atomic path still replaces a multiply-linked entry and leaves the other name intact', () => {
+    const secret = at('secret.txt');
+    const target = at('target.txt');
+    fs.writeFileSync(secret, 'SECRET');
+    fs.linkSync(secret, target);
+
+    platformWriteSync(target, 'NEW', { verbatim: true });
+
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'NEW');
+    assert.strictEqual(fs.readFileSync(secret, 'utf8'), 'SECRET');
+    assert.strictEqual(fs.statSync(target).nlink, 1);
+  });
+
+  test('a parent directory swapped for a symlink to a victim directory after the walk is refused; nothing lands in either directory', () => {
+    const dir = at('d');
+    const victim = at('victim');
+    fs.mkdirSync(dir);
+    fs.mkdirSync(victim);
+    fs.writeFileSync(path.join(dir, 'f'), 'old');
+    fs.writeFileSync(path.join(victim, 'f'), 'VICTIM');
+
+    const err = attempt(() => platformWriteSync(path.join(dir, 'f'), 'PWNED', {
+      verbatim: true,
+      writeSeams: { afterPathWalk: () => { fs.renameSync(dir, `${dir}.moved`); fs.symlinkSync(victim, dir); } },
+    }));
+
+    assert.ok(err, 'the write is refused');
+    assert.strictEqual(err.code, 'ENXIO');
+    assert.strictEqual(fs.readFileSync(path.join(victim, 'f'), 'utf8'), 'VICTIM');
+    assert.deepStrictEqual(fs.readdirSync(victim), ['f'], 'no temp file left in the victim directory');
+    assert.deepStrictEqual(fs.readdirSync(`${dir}.moved`), ['f'], 'no temp file left in the original directory');
+  });
+
+  test('a symbolic link that cannot be read is refused with ENXIO', () => {
+    const entry = at('link.txt');
+    fs.writeFileSync(at('real.txt'), 'old');
+    fs.symlinkSync('real.txt', entry);
+    const realReadlink = fs.readlinkSync;
+    mock.method(fs, 'readlinkSync', (p, ...rest) => {
+      if (p === entry) throw Object.assign(new Error('EIO'), { code: 'EIO' });
+      return realReadlink(p, ...rest);
+    });
+
+    const err = attempt(() => platformWriteSync(entry, 'x', { verbatim: true }));
+
+    assert.ok(err, 'the write is refused');
+    assert.strictEqual(err.code, 'ENXIO');
+    assert.match(err.message, /a symbolic link on its path cannot be read \(EIO\)/);
+    assert.strictEqual(fs.readFileSync(at('real.txt'), 'utf8'), 'old');
+  });
+
+  test('a final target that cannot be inspected is refused with ENXIO', () => {
+    const entry = at('plain.txt');
+    fs.writeFileSync(entry, 'old');
+    const realLstat = fs.lstatSync;
+    let seen = 0;
+    mock.method(fs, 'lstatSync', (p, ...rest) => {
+      if (p === entry && ++seen === 2) throw Object.assign(new Error('EIO'), { code: 'EIO' });
+      return realLstat(p, ...rest);
+    });
+
+    const err = attempt(() => platformWriteSync(entry, 'x', { verbatim: true }));
+
+    assert.ok(err, 'the write is refused');
+    assert.strictEqual(err.code, 'ENXIO');
+    assert.match(err.message, /the target cannot be inspected \(EIO\)/);
+    assert.strictEqual(fs.readFileSync(entry, 'utf8'), 'old');
+  });
+
+  test('a circular link chain is refused with ENXIO', () => {
+    const a = at('a.txt');
+    const b = at('b.txt');
+    fs.symlinkSync('b.txt', a);
+    fs.symlinkSync('a.txt', b);
+
+    const err = attempt(() => platformWriteSync(a, 'x', { verbatim: true }));
+
+    assert.ok(err, 'the write is refused');
+    assert.strictEqual(err.code, 'ENXIO');
+    assert.match(err.message, /circular or longer than 40 links/);
+  });
 });
 
 describe('#5759 review round: printablePath escapes every format, separator and surrogate character', () => {
