@@ -413,4 +413,48 @@ describe('#5726 phase write verbs on an unresolved STATE milestone', () => {
       });
     }
   });
+
+  // An empty `milestone:` value is "no milestone field": the YAML delimiter that
+  // follows it must never be read as the milestone.
+  for (const [label, line] of [['empty', 'milestone:'], ['trailing space', 'milestone: ']]) {
+    for (const [verb, run] of VERBS) {
+      test(`${verb} with an ${label} STATE milestone value behaves as with no milestone field`, () => {
+        fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), TWO_MILESTONES);
+        fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), `---\n${line}\nstatus: active\n---\n\n# State\n`);
+        const withValue = run(tmpDir);
+        assert.equal(withValue.success, true, withValue.error);
+        assert.ok(!withValue.error.includes('---'), `error output must not contain ---: ${withValue.error}`);
+      });
+    }
+  }
+
+  test('an empty STATE milestone value directly before the closing --- allocates normally and never echoes ---', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), TWO_MILESTONES);
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone:\n---\n\n# State\n');
+    const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+    assert.equal(result.success, true, result.error);
+    assert.equal(JSON.parse(result.output).phase_number, 4);
+    assert.ok(!result.error.includes('---'), `error output must not contain ---: ${result.error}`);
+  });
+});
+
+describe('#5726 closed-marker vocabulary is one source', () => {
+  const { isClosedMilestoneHeading } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+  const WORDS = ['CLOSED', 'ARCHIVED', 'ABANDONED', 'SHIPPED', 'FAILED'];
+  const MARKS = ['\u{2705}', '\u{1f5c4}'];
+
+  for (const word of WORDS) {
+    for (const spelling of [word, word.toLowerCase(), word[0] + word.slice(1).toLowerCase()]) {
+      test(`status word ${spelling} closes a heading`, () => {
+        assert.equal(isClosedMilestoneHeading(`v1.0 MVP ${spelling}`), true);
+        assert.equal(isClosedMilestoneHeading(`v1.0 MVP ${spelling}x`), false);
+      });
+    }
+  }
+
+  for (const mark of MARKS) {
+    test(`status mark U+${mark.codePointAt(0).toString(16)} closes a heading`, () => {
+      assert.equal(isClosedMilestoneHeading(`${mark} v1.0 MVP`), true);
+    });
+  }
 });
