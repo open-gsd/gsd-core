@@ -230,9 +230,13 @@ describe('#4020 — run-tests temp root', () => {
     const { createFixture } = require('./fixtures/index.cjs');
 
     // os.tmpdir() reads TMPDIR on POSIX but TEMP then TMP on Windows, so TEMP and
-    // TMP default to the TMPDIR value: the relative value must reach every
-    // variable os.tmpdir() consults on the current platform.
-    function withTmpEnv({ cwd, tmpdir, temp = tmpdir, tmp = tmpdir }, fn) {
+    // TMP default to the TMPDIR value when the key is absent: the relative value
+    // must reach every variable os.tmpdir() consults on the current platform.
+    // An explicit `temp: undefined` / `tmp: undefined` means unset.
+    function withTmpEnv(opts, fn) {
+      const { cwd, tmpdir } = opts;
+      const temp = 'temp' in opts ? opts.temp : tmpdir;
+      const tmp = 'tmp' in opts ? opts.tmp : tmpdir;
       const keys = ['TMPDIR', 'TEMP', 'TMP'];
       const savedEnv = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
       const savedCwd = process.cwd();
@@ -262,7 +266,7 @@ describe('#4020 — run-tests temp root', () => {
 
     test('#5688: setupRunTempRoot resolves relative TMPDIR to absolute', (t) => {
       const base = sandboxWithRel(t, 'reltmp');
-      withTmpEnv({ cwd: base, tmpdir: 'reltmp', temp: 'reltmp', tmp: 'reltmp' }, () => {
+      withTmpEnv({ cwd: base, tmpdir: 'reltmp' }, () => {
         const expectedParent = path.resolve('reltmp');
         const root = runner.setupRunTempRoot();
         assert.ok(path.isAbsolute(root), `root must be absolute, got ${root}`);
@@ -287,7 +291,7 @@ describe('#4020 — run-tests temp root', () => {
       t.after(() => cleanup(base));
       const outer = path.join(base, 'outer');
       fs.mkdirSync(outer);
-      withTmpEnv({ cwd: base, tmpdir: outer, temp: outer, tmp: outer }, () => {
+      withTmpEnv({ cwd: base, tmpdir: outer }, () => {
         const root = runner.setupRunTempRoot();
         assert.equal(path.dirname(root), outer, 'absolute base is byte-identical (no realpath)');
         assert.equal(createFixture({ planning: false }).startsWith(root + path.sep), true);
@@ -395,7 +399,7 @@ describe('#4020 — run-tests temp root', () => {
     test('#5688: inherited relative run root exported absolute', (t) => {
       const rel = 'gsd-test-run-inherited5688';
       const base = sandboxWithRel(t, rel);
-      withTmpEnv({ cwd: base, tmpdir: rel, temp: rel, tmp: rel }, () => {
+      withTmpEnv({ cwd: base, tmpdir: rel }, () => {
         const expected = path.resolve(rel);
         const root = runner.setupRunTempRoot();
         assert.equal(root, expected, 'the inherited root is reused, resolved');
@@ -445,7 +449,7 @@ describe('#4020 — run-tests temp root', () => {
           // runSuffix generated => last segment is an inherited run root (gsd-test-run-*)
           const rel = (runSuffix === undefined ? segments : [...segments, `gsd-test-run-${runSuffix}`]).join('/');
           fs.mkdirSync(path.join(base, rel), { recursive: true });
-          withTmpEnv({ cwd: base, tmpdir: rel, temp: rel, tmp: rel }, () => {
+          withTmpEnv({ cwd: base, tmpdir: rel }, () => {
             const expectedParent = path.resolve(rel);
             const root = runner.setupRunTempRoot();
             const dir = createFixture({ planning: false });
