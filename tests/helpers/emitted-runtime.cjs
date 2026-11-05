@@ -373,9 +373,12 @@ function isReleaseMergePr(env = process.env, { readFile = (p) => fs.readFileSync
   }) === RELEASE_PIPELINE_PR_KIND.RELEASE_MERGE;
 }
 
-/** First of `origin/next`, `upstream/next`, `next` that resolves, or null. */
+/** Refs a release-merge PR tries, in order, to find `next`. */
+const RELEASE_MERGE_NEXT_CANDIDATES = Object.freeze(['origin/next', 'upstream/next', 'next']);
+
+/** First of RELEASE_MERGE_NEXT_CANDIDATES that resolves, or null. */
 function resolveNextRef({ cwd = REPO_ROOT } = {}) {
-  for (const candidate of ['origin/next', 'upstream/next', 'next']) {
+  for (const candidate of RELEASE_MERGE_NEXT_CANDIDATES) {
     try {
       const sha = git(['rev-parse', '--verify', `${candidate}^{commit}`], { cwd }).trim();
       if (/^[0-9a-f]{40}$/.test(sha)) return { ref: candidate, sha };
@@ -424,7 +427,8 @@ function resolveAttributionBase(env = process.env, { cwd = REPO_ROOT, diagnostic
   if (diagnostic) {
     diagnostic(
       `emitted-attribution resolved base: ${resolved ? `${resolved.ref}@${resolved.sha}` : 'none'}; ` +
-      'set GSD_EMITTED_BASE=<ref|sha> to override. Tried: ' + baseRefCandidates(env).join(', '),
+      'set GSD_EMITTED_BASE=<ref|sha> to override. Tried: ' +
+      (releaseMerge ? RELEASE_MERGE_NEXT_CANDIDATES : baseRefCandidates(env)).join(', '),
     );
   }
   if (!resolved) return null;
@@ -1154,6 +1158,7 @@ module.exports = {
   baseRefCandidates,
   resolveBase,
   isReleaseMergePr,
+  RELEASE_MERGE_NEXT_CANDIDATES,
   resolveAttributionBase,
   resolveAttributionInputs,
   baselineFamilyNamesAtRef,

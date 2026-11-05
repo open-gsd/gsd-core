@@ -45,6 +45,7 @@ const {
   resolveChangedPaths,
   resolveBase,
   isReleaseMergePr,
+  RELEASE_MERGE_NEXT_CANDIDATES,
   resolveAttributionBase,
   resolveAttributionInputs,
   baseRefCandidates,
@@ -2979,4 +2980,24 @@ for (const [label, baseEnv, readFile] of KEEPS_PIN) {
 
 test('#5902: the payload repo comparison is case-insensitive', () => {
   assert.equal(isReleaseMergePr(prEnv('release/1.2.0', 'main'), { readFile: payloadReader('Open-GSD/GSD-Core') }), true);
+});
+
+test('#5902: the "Tried:" diagnostic lists the candidates actually tried', () => {
+  const { root, mainSha } = makeReleaseMergeRepo();
+  try {
+    const triedOf = (env, readFile) => {
+      const messages = [];
+      resolveAttributionBase(env, { cwd: root, readFile, diagnostic: (m) => messages.push(m) });
+      const line = messages.find((m) => m.includes('Tried: '));
+      return line.slice(line.indexOf('Tried: ') + 'Tried: '.length);
+    };
+    const releaseEnv = prEnv('release/1.2.0', 'main', { GSD_EMITTED_BASE: mainSha });
+    assert.equal(triedOf(releaseEnv, payloadReader(SAME_REPO)), RELEASE_MERGE_NEXT_CANDIDATES.join(', '));
+    assert.deepEqual([...RELEASE_MERGE_NEXT_CANDIDATES], ['origin/next', 'upstream/next', 'next']);
+
+    const ordinaryEnv = prEnv('fix/1-x', 'main', { GSD_EMITTED_BASE: mainSha });
+    assert.equal(triedOf(ordinaryEnv, payloadReader(SAME_REPO)), baseRefCandidates(ordinaryEnv).join(', '));
+  } finally {
+    cleanup(root);
+  }
 });
