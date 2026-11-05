@@ -82,7 +82,7 @@ function snapshotInstallSymlinkTree(root, prefix) {
   return snapshot;
 }
 
-function prepareInstallSymlinkUpgrade(t, { allowOptIn = false } = {}) {
+function prepareInstallSymlinkUpgrade(t, { allowOptIn = false, legacyCleanup = false } = {}) {
   const { root, configDir } = preparedInstall(t, 'claude', 'global');
 
   const coreDir = path.join(configDir, 'gsd-core');
@@ -119,7 +119,7 @@ function prepareInstallSymlinkUpgrade(t, { allowOptIn = false } = {}) {
     ...beforeTarget,
   };
   const result = runNode(
-    [INSTALL_SCRIPT, '--claude', '--global', '--config-dir', configDir, '--no-legacy-cleanup'],
+    [INSTALL_SCRIPT, '--claude', '--global', '--config-dir', configDir, ...(legacyCleanup ? [] : ['--no-legacy-cleanup'])],
     {
       cwd: process.cwd(),
       env: installerEnv({
@@ -148,6 +148,12 @@ function prepareInstallSymlinkUpgrade(t, { allowOptIn = false } = {}) {
   };
 }
 
+function changedInstallPaths(fixture) {
+  return [...new Set([...Object.keys(fixture.before), ...Object.keys(fixture.after)])].sort()
+    .filter((key) => fixture.before[key] !== fixture.after[key])
+    .map((key) => ({ path: key, before: fixture.before[key] ?? null, after: fixture.after[key] ?? null }));
+}
+
 describe('#5179 install refusal preserves the previous install', () => {
   test('refuses an untrusted symlinked destination', (t) => {
     const fixture = prepareInstallSymlinkUpgrade(t);
@@ -156,6 +162,20 @@ describe('#5179 install refusal preserves the previous install', () => {
     assert.notEqual(fixture.result.exitCode, 0, 'the installer must exit non-zero');
     assert.ok(fixture.output.includes(messages.installRuntimeArtifactsSymlinkRefusalMessage(
       fixture.skillsDir, fixture.configDir)), fixture.output);
+  });
+
+  // The two rows above pass --no-legacy-cleanup so a refusal is attributable to the
+  // destination preflight alone. The issue's repro is the default command, where legacy
+  // cleanup also runs inside install(); this row runs that command unchanged.
+  test('refuses the default upgrade command and leaves the previous install byte-identical', (t) => {
+    const fixture = prepareInstallSymlinkUpgrade(t, { legacyCleanup: true });
+    if (!fixture) return;
+
+    assert.notEqual(fixture.result.exitCode, 0, 'the installer must exit non-zero');
+    assert.ok(fixture.output.includes(messages.installRuntimeArtifactsSymlinkRefusalMessage(
+      fixture.skillsDir, fixture.configDir)), fixture.output);
+    assert.deepStrictEqual(changedInstallPaths(fixture), [],
+      'a refused default upgrade must not remove, rewrite, or add paths under the config dir or skills target');
   });
 
   test('leaves the previous install byte-identical', (t) => {
