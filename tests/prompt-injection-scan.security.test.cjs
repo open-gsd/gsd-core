@@ -624,4 +624,13 @@ describe('shell scanner (scripts/prompt-injection-scan.sh) — #3175 left-bounda
     assert.equal(result.outcome, 'exited');
     assert.equal(result.exitCode, 1, 'real "DAN mode" payload must still fire');
   });
+
+  // #5904 — tests/core-utils.test.cjs drives RegExp.prototype.exec with a
+  // string-literal subject; the receiver-blind exec pattern must not fire on it.
+  test('regression #5904: tests/core-utils.test.cjs scans clean', () => {
+    const target = path.join(PROJECT_ROOT, 'tests', 'core-utils.test.cjs');
+    const result = runHook(SCAN_SCRIPT, ['--file', target], { interpreter: 'bash', timeoutMs: QUICK_SPAWN_TIMEOUT_MS });
+    assert.equal(result.outcome, 'exited');
+    assert.equal(result.exitCode, 0, `expected clean scan, got:\n${result.stdout}`);
+  });
 });
