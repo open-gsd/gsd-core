@@ -2659,7 +2659,15 @@ function convertSlashCommandsToTraeSkillMentions(content) {
   });
 }
 
-function convertClaudeToTraeMarkdown(content) {
+function convertClaudeToTraeMarkdown(content, pathPrefix) {
+  return runtimeArtifactConversion._shieldEmittedPrefix(
+    runtimeArtifactConversion._resolveTraeInstructionFileAtPrefix(content, pathPrefix),
+    pathPrefix,
+    convertClaudeToTraeMarkdownBody,
+  );
+}
+
+function convertClaudeToTraeMarkdownBody(content) {
   let converted = convertSlashCommandsToTraeSkillMentions(filterRuntimeNotesForTarget(content, 'trae'));
   converted = converted.replace(/\bBash\(/g, 'Shell(');
   converted = converted.replace(/\bEdit\(/g, 'StrReplace(');
@@ -2719,9 +2727,10 @@ function convertClaudeToTraeMarkdown(content) {
   converted = converted.replace(/\.\/\.claude\//g, './.trae/');
   converted = converted.replace(/\.claude\//g, '.trae/');
   // Bare forms (no trailing slash) — after slash forms to avoid double-rewrite.
-  // Use negative lookahead (?![\w-]) to preserve .claude-plugin and .claudeignore.
-  converted = converted.replace(/~\/\.claude(?![\w-])/g, '~/.trae');
-  converted = converted.replace(/\$HOME\/\.claude(?![\w-])/g, '$HOME/.trae');
+  // Use negative lookahead (?![\w-]|\.\w) to preserve .claude-plugin, .claudeignore and .claude.json.
+  // #5715: an emitted prefix is shielded by convertClaudeToTraeMarkdown; the skills path runs this before the prefix pass, and the profile maps the own-dir forms.
+  converted = converted.replace(/~\/\.claude(?![\w-]|\.\w)/g, '~/.trae');
+  converted = converted.replace(/\$HOME\/\.claude(?![\w-]|\.\w)/g, () => '$HOME/.trae');
   // Environment variable name rewrite
   converted = converted.replace(/\bCLAUDE_CONFIG_DIR\b/g, 'TRAE_CONFIG_DIR');
   converted = converted.replace(/\*\*Known Claude Code bug \(classifyHandoffIfNeeded\):\*\*[^\n]*\n/g, '');
@@ -2765,8 +2774,8 @@ function convertClaudeCommandToTraeSkill(content, skillName) {
   return `${fm}\n${body}`;
 }
 
-function convertClaudeAgentToTraeAgent(content) {
-  let converted = convertClaudeToTraeMarkdown(content);
+function convertClaudeAgentToTraeAgent(content, _isGlobal, meta) {
+  let converted = convertClaudeToTraeMarkdown(content, meta && meta.pathPrefix);
 
   const { frontmatter, body } = extractFrontmatterAndBody(converted);
   if (!frontmatter) return converted;
@@ -7279,14 +7288,16 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
     content = composeWorkflow(content, { sourcePath: agentTomlSourcePath });
     // Replace full .claude/gsd-core prefix so path resolves to the Codex
     // GSD install before generic .claude → .codex conversion rewrites it.
-    content = content.replace(/~\/\.claude\/gsd-core\//g, codexGsdPath);
-    content = content.replace(/\$HOME\/\.claude\/gsd-core\//g, codexGsdPath);
+    // #5715: one pass, function replacement: a string replacement would expand `$&` in a
+    // config dir, and a second pass would rescan the path the first emitted.
+    content = content.replace(/(?:~|\$HOME)\/\.claude\/gsd-core\//g, () => codexGsdPath);
     // Route TOML emit through the same full Claude→Codex conversion pipeline
     // used on the `.md` emit path (#2639). Covers: slash-command rewrites,
     // $ARGUMENTS → {{GSD_ARGS}}, /clear removal, anchored and bare .claude/
     // paths, .claudeignore → .codexignore, and standalone "Claude" /
     // CLAUDE.md neutralization via neutralizeAgentReferences(..., 'AGENTS.md').
-    content = convertClaudeToCodexMarkdown(content);
+    // #5715: the converter runs after the path above was emitted; shield it from the converter.
+    content = runtimeArtifactConversion._shieldEmittedPrefix(content, codexGsdPath, convertClaudeToCodexMarkdown);
     const { frontmatter } = extractFrontmatterAndBody(content);
     // #3897 security review F1 (blocker, post-merge): this loop used to key
     // the sandbox/hold decision off ONLY the filename stem while the emitted
@@ -7949,7 +7960,9 @@ const RUNTIME_CONTENT_DISPATCH = {
     },
   },
   trae: {
-    md: (content) => convertClaudeToTraeMarkdown(content),
+    // #5715: the Trae converter shields (and resolves) the emitted prefix itself.
+    mdShieldsPrefix: true,
+    md: (content, ctx) => convertClaudeToTraeMarkdown(content, ctx && ctx.pathPrefix),
     js: (content) => {
       content = content.replace(/\/gsd:([a-z0-9-]+)/g, (_, commandName) => {
         return `/gsd-${commandName}`;
@@ -8152,33 +8165,8 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
         // balanced masking grammar used by this path and the rewrite engine.
         const rewriteGenericPaths = (body) => {
           content = body;
-          const globalClaudeRegex = /~\/\.claude\//g;
-          const globalClaudeHomeRegex = /\$HOME\/\.claude\//g;
-          const localClaudeRegex = /\.\/\.claude\//g;
-          content = content.replace(globalClaudeRegex, pathPrefix);
-          content = content.replace(globalClaudeHomeRegex, pathPrefix);
-          content = content.replace(localClaudeRegex, `./${dirName}/`);
-          // #3544 review (Finding 1 fallout): guarded with the SAME
-          // negative-lookahead convention already used at ~:2859-2860 below
-          // ("preserve .claude-plugin and .claudeignore"). A naive `\b` here
-          // is satisfied by ANY non-word character, including '-' — so for a
-          // --config-dir whose name EXTENDS '.claude' (e.g. '.claude-work',
-          // pathPrefix '$HOME/.claude-work/'), this pass re-matched the
-          // '$HOME/.claude' PREFIX of its own slash-form output (lines above)
-          // and re-appended the full prefix, corrupting every emitted path to
-          // '$HOME/.claude-work-work/...'. Harmless no-op for the literal
-          // default '.claude' (self-replace with an identical string), which
-          // is why this went undetected until a non-default config-dir name
-          // was exercised.
-          content = content.replace(/~\/\.claude(?![\w-])/g, pathPrefix.replace(/\/$/, ''));
-          content = content.replace(/\$HOME\/\.claude(?![\w-])/g, pathPrefix.replace(/\/$/, ''));
-          content = content.replace(/\.\/\.claude\b/g, `./${dirName}`);
-          content = content.replace(/~\/\.qwen\//g, pathPrefix);
-          content = content.replace(/\$HOME\/\.qwen\//g, pathPrefix);
-          content = content.replace(/\.\/\.qwen\//g, `./${dirName}/`);
-          content = content.replace(/~\/\.hermes\//g, pathPrefix);
-          content = content.replace(/\$HOME\/\.hermes\//g, pathPrefix);
-          content = content.replace(/\.\/\.hermes\//g, `./${dirName}/`);
+          // #5715: every generic source form in ONE pass (no rescan of the emitted prefix).
+          content = runtimeArtifactConversion._rewriteSpecTreeConfigDirForms(content, pathPrefix, dirName);
           // #3544: restore @-file-reference lines to the tilde form Claude Code
           // actually expands — the SAME correction #3133 already applies to
           // skill/command bodies via _applyRuntimeRewrites's 'claude' case (see
@@ -8215,7 +8203,15 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
       content = normalizeAgentBodyForRuntime(content, runtime, readGsdCommandNames());
 
       // Apply per-runtime .md converter (if any)
-      if (dispatch.md) content = dispatch.md(content, ctx);
+      // #5715: the generic pass above emitted `pathPrefix`; shield it from the converter
+      // (a converter that skips the generic pass emitted nothing to shield).
+      if (dispatch.md) {
+        content = runtimeArtifactConversion._shieldEmittedPrefix(
+          content,
+          dispatch.mdSkipGenericRewrite || dispatch.mdShieldsPrefix ? undefined : pathPrefix,
+          (shielded) => dispatch.md(shielded, ctx),
+        );
+      }
 
       // Re-run attribution after converter for runtimes that need it (copilot, antigravity)
       if (dispatch.mdReattributeAfter) content = processAttribution(content, getCommitAttribution(runtime));
@@ -10087,8 +10083,8 @@ const MANIFEST_NAME = 'gsd-file-manifest.json';
  * Compute SHA256 hash of file contents
  */
 function fileHash(filePath) {
-  const content = fs.readFileSync(filePath);
-  return crypto.createHash('sha256').update(content).digest('hex');
+  // #5683: single owner of the per-file hash, shared with `effort sync`.
+  return require('../gsd-core/bin/lib/install-manifest-record.cjs').fileHash(filePath);
 }
 
 /**
