@@ -520,6 +520,95 @@ describe('#5759 platformWriteSync never blocks on or follows a planted temp file
     assert.ok(r.stdout.includes('via-dev-stdout'), r.stdout);
   });
 
+  test('profile-output --output /dev/null (a user-chosen device) is written', () => {
+    fs.writeFileSync(path.join(tmpDir, 'analysis.json'), JSON.stringify({ data_source: 'x', dimensions: {} }));
+    const script = [
+      'const m = require(process.argv[1]);',
+      'try { m.cmdGenerateClaudeProfile(process.cwd(), { output: "/dev/null", analysis: "analysis.json" }, true); process.stdout.write("\\nOK"); }',
+      'catch (e) { process.stdout.write("\\nERR " + e.message); }',
+    ].join('\n');
+    const r = runNode(['-e', script, path.join(LIB_DIR, 'profile-output.cjs')], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    assert.ok(r.stdout.endsWith('OK'), r.stdout);
+  });
+
+  test('a FIFO with a slowly draining reader receives every byte of a write larger than the pipe buffer', () => {
+    const fifo = path.join(tmpDir, 'big.fifo');
+    makeFifo(fifo);
+    const total = 256 * 1024;
+    const reader = [
+      'const fs = require("node:fs");',
+      'const fd = fs.openSync(process.argv[1], fs.constants.O_RDONLY);',
+      'const buf = Buffer.alloc(4096); let n = 0, r;',
+      'const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);',
+      'while ((r = fs.readSync(fd, buf, 0, buf.length, null)) > 0) { n += r; if (n % 65536 < 4096) sleep(5); }',
+      'process.stdout.write(String(n));',
+    ].join('\n');
+    const { spawn } = require('node:child_process');
+    const child = spawn(process.execPath, ['-e', reader, fifo], { stdio: ['ignore', 'pipe', 'ignore'] });
+    let received = '';
+    child.stdout.on('data', (d) => { received += d; });
+    const writer = [
+      'const { platformWriteSync } = require(process.argv[1]);',
+      `platformWriteSync(process.argv[2], "x".repeat(${total}), { allowSpecialTarget: true, verbatim: true });`,
+      'process.stdout.write("done");',
+    ].join('\n');
+    const r = runNode(['-e', writer, SHELL_PROJECTION_PATH, fifo], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+    return new Promise((resolve, reject) => {
+      const kill = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('reader did not finish')); }, PROBE_TIMEOUT_MS);
+      child.on('close', () => {
+        clearTimeout(kill);
+        try {
+          assertExitedByItself(r);
+          assert.strictEqual(Number(received), total);
+          resolve();
+        } catch (err) { reject(err); }
+      });
+    });
+  });
+
+  test('a regular file reached through /dev/../ takes the atomic path (no special handling)', () => {
+    const target = path.join(tmpDir, 'plain.json');
+    const viaDev = `/dev/../${path.relative('/', target)}`;
+    const r = runNode(['-e', SPECIAL_WRITE_SCRIPT, SHELL_PROJECTION_PATH, viaDev, 'allow'], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    assert.strictEqual(JSON.parse(r.stdout).code, 'ok');
+    assert.ok(fs.readFileSync(target, 'utf8').includes('hello'));
+    assert.deepStrictEqual(fs.readdirSync(tmpDir).filter((n) => n.includes('.tmp.')), []);
+  });
+
+  test('a block device or socket target is refused with ENXIO even with allowSpecialTarget', () => {
+    const script = [
+      'const fs = require("node:fs");',
+      'const real = fs.statSync;',
+      'fs.statSync = (p, ...rest) => (String(p).endsWith("fake-block") ? { isBlockDevice: () => true, isSocket: () => false, isCharacterDevice: () => false, isFIFO: () => false, isFile: () => false } : real(p, ...rest));',
+      'try { require(process.argv[1]).platformWriteSync(process.argv[2], "x", { allowSpecialTarget: true }); process.stdout.write("ok"); }',
+      'catch (e) { process.stdout.write(e.code); }',
+    ].join('\n');
+    const r = runNode(['-e', script, SHELL_PROJECTION_PATH, path.join(tmpDir, 'fake-block')], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    assert.strictEqual(r.stdout, 'ENXIO');
+  });
+
   test('without allowSpecialTarget a character device target is still refused with ENXIO', (t) => {
     if (typeof process.getuid === 'function' && process.getuid() === 0) { t.skip('root can create the temp file in /dev'); return; }
     const r = runNode(['-e', SPECIAL_WRITE_SCRIPT, SHELL_PROJECTION_PATH, '/dev/null', 'deny'], {
