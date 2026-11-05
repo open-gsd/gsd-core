@@ -1323,13 +1323,13 @@ export interface PlatformWriteOptions extends ContentNormalizationOptions {
    * FIFO that has a reader, is written in place instead of refused with ENXIO. Pass it only from
    * user-chosen-output callers; config and planning writes keep refusing special targets.
    * Special means a target that, with links followed, is a character device or a FIFO, or one of
-   * the descriptor aliases /dev/stdout, /dev/stderr, /dev/fd/N, /proc/self/fd/N; any other
-   * regular file takes the atomic path, and block devices and sockets are always refused (ENXIO).
-   * A descriptor alias is never reopened by path: the bytes go to the descriptor number it names
-   * (1, 2, N) with fs.writeSync, backing off on EAGAIN (an inherited O_NONBLOCK) and coding EPIPE;
+   * the descriptor aliases /dev/stdout, /dev/stderr, /dev/fd/0-2, /proc/self/fd/0-2; any other
+   * regular file takes the atomic path. Block devices and named sockets are refused (ENXIO); a
+   * socket reached through a descriptor alias is written. A descriptor alias is never reopened by
+   * path: the bytes go to the descriptor number it names (0, 1 or 2) with fs.writeSync, backing off on EAGAIN (an inherited O_NONBLOCK) and coding EPIPE;
    * this works where reopening fails (a Node child's stdio is a socketpair on Linux).
-   * A FIFO needs a reader (ENXIO otherwise). Caveats: a shell append redirect (`>> file`) is
-   * truncated by the in-place write of /dev/stdout exactly as the previous plain write did. On
+   * A FIFO needs a reader (ENXIO otherwise). Redirects: `>>` appends (O_APPEND is kept, since the
+   * descriptor is not reopened) and `>` writes at the offset the shell already truncated to. On
    * Windows the /dev/* and /proc aliases do not exist; NUL and CON are character devices and are
    * written in place like any other character device.
    */
@@ -1644,15 +1644,16 @@ function defaultSleep(ms: number): void {
 }
 
 /**
- * Write `data` to a FIFO that has a reader, through ONE non-blocking descriptor — never a
- * reopen, so a reader that leaves cannot turn into a blocked open. The non-blocking open is the
- * reader probe (ENXIO = no reader). A full pipe (EAGAIN) backs off 1, 2, 4 … 50 ms through
+ * Write `data` to a special target — a FIFO with a reader, or a process-own descriptor alias —
+ * through ONE descriptor, never a reopen, so a reader that leaves cannot turn into a blocked
+ * open. For a FIFO the non-blocking open is the reader probe (ENXIO = no reader); an alias
+ * writes to the descriptor number it names. A full pipe (EAGAIN) backs off 1, 2, 4 … 50 ms through
  * `sleep` (Atomics.wait, no busy spin) with no overall bound by default (a slow reader is the
  * user's own pipeline); a test may set `maxWaitMs`, and once the summed back-off passes it the
  * write throws ETIMEDOUT; a reader that went away (EPIPE — Node ignores SIGPIPE, so it surfaces as an error)
  * is rethrown with a clear message. Both seams are for tests.
  */
-function writeFifoNonBlocking(
+function writeSpecialTargetWithBackoff(
   filePath: string,
   data: Buffer,
   wait: { sleep?: (ms: number) => void; maxWaitMs?: number } = {},
@@ -1703,7 +1704,8 @@ function writeFifoNonBlocking(
 function descriptorAliasFd(resolvedTarget: string): number | null {
   if (resolvedTarget === '/dev/stdout') return 1;
   if (resolvedTarget === '/dev/stderr') return 2;
-  const m = /^\/(?:dev|proc\/self)\/fd\/(\d+)$/.exec(resolvedTarget);
+  // Only stdin/stdout/stderr: a larger N is some other descriptor the process happens to hold.
+  const m = /^\/(?:dev|proc\/self)\/fd\/([0-2])$/.exec(resolvedTarget);
   return m ? Number(m[1]) : null;
 }
 
@@ -1722,19 +1724,18 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
     // (`> out.txt`) or a socket (its own stdio), which is then written in place. Any other
     // regular file takes the atomic path.
     const resolvedTarget = path.resolve(filePath);
-    const isDescriptorAlias = /^\/dev\/(stdout|stderr|fd\/\d+)$/.test(resolvedTarget)
-      || /^\/proc\/self\/fd\/\d+$/.test(resolvedTarget);
+    const isDescriptorAlias = descriptorAliasFd(resolvedTarget) !== null;
     if (special !== null && (special.isBlockDevice() || (special.isSocket() && !isDescriptorAlias))) {
       throw Object.assign(new Error(`ENXIO: cannot write ${filePath}: block devices and sockets are never written`), { code: 'ENXIO' });
     }
     if (special !== null && (special.isCharacterDevice() || special.isFIFO() || isDescriptorAlias)) {
       const aliasFd = descriptorAliasFd(resolvedTarget);
       if (aliasFd !== null) {
-        writeFifoNonBlocking(filePath, Buffer.from(normalized, encoding), opts.specialTargetWait, aliasFd);
+        writeSpecialTargetWithBackoff(filePath, Buffer.from(normalized, encoding), opts.specialTargetWait, aliasFd);
         return;
       }
       if (special.isFIFO()) {
-        writeFifoNonBlocking(filePath, Buffer.from(normalized, encoding), opts.specialTargetWait);
+        writeSpecialTargetWithBackoff(filePath, Buffer.from(normalized, encoding), opts.specialTargetWait);
         return;
       }
       const fd = fs.openSync(filePath, fs.constants.O_WRONLY | (special.isFile() ? fs.constants.O_TRUNC : 0));
