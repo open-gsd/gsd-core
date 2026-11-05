@@ -2696,7 +2696,15 @@ describe('readings: an error, the block reported, and the heredoc tag', () => {
     assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
   });
 
-  for (const cmd of ["`echo $'a`; cat .env", "echo `echo $'a` `cat .env`"]) {
+  for (const cmd of [
+    "`echo $'a`; cat .env",
+    "echo `echo $'a` `cat .env`",
+    "bash <<A <<B\necho $'x\nA\ncat .env\nB\n",
+    "bash <<A <<<'cat .env'\necho $'x\nA\n",
+    "echo cat .env | bash <<E\necho $'x\nE\n",
+    'echo .env | xargs sh -c "echo \\$\'x"',
+    "git -c alias.a='!echo $'\"'\"'x' -c alias.b='!cat .env' a",
+  ]) {
     test(`a nested word with no value to check does not outrank a read: ${JSON.stringify(cmd)}`, () => {
       assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
     });
