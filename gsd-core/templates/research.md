@@ -582,6 +582,7 @@ function useVehicleControls(rigidBodyRef) {
 **Open Questions:**
 - Only the user closes an open question: never mark a question resolved yourself, and never add a `(RESOLVED)` suffix to the `## Open Questions` section heading
 - List every open question in that section, never in prose or under another heading
+- A cited source settles a factual question. No source settles a choice that needs a user ruling (a name, a TTL, a scope call): that stays an open question
 - A question is resolved only when it cites a `D-NN` decision recorded under CONTEXT.md's `<decisions>`, as `RESOLVED (D-NN): <ruling>`; the plan-checker blocks planning on any other (Dimension 11)
 
 **Integration with planning:**
