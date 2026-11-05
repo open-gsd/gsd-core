@@ -4679,12 +4679,17 @@ describe('#4636 RED: capability-skill symlink escape (isPathConfined has no real
 // ---------------------------------------------------------------------------
 
 describe('resolveSymlinkedLeafWritePath (#5037)', () => {
-  const { resolveSymlinkedLeafWritePath } = require('../gsd-core/bin/lib/install-engine.cjs');
+  const { resolveSymlinkedLeafWritePath, SYMLINKED_LEAF_REFUSAL } = require('../gsd-core/bin/lib/install-engine.cjs');
   const LABEL = 'test writer: file';
-  // The refusal is a plain Error with no code, while a filesystem error (for
-  // example from realpath) always carries one, so this tells the refusal apart
-  // from an fs failure without matching any text.
-  const isRefusal = (err) => err instanceof Error && err.code === undefined;
+  // Each refusal carries its own code, so a test names the one it expects and
+  // fails if a different refusal, or any other error, is thrown.
+  const refusedWith = (code) => (err) => err instanceof Error && err.code === code;
+
+  test('SYMLINKED_LEAF_REFUSAL is frozen and holds exactly the three refusals', () => {
+    assert.ok(Object.isFrozen(SYMLINKED_LEAF_REFUSAL), 'the codes must be frozen');
+    assert.deepStrictEqual(Object.keys(SYMLINKED_LEAF_REFUSAL).sort(), ['NOT_FOLLOWABLE', 'NOT_TRUSTED', 'TARGET_MISSING']);
+    assert.strictEqual(new Set(Object.values(SYMLINKED_LEAF_REFUSAL)).size, 3, 'each code must be distinct');
+  });
 
   let savedOptIn;
   beforeEach(() => {
@@ -4739,6 +4744,8 @@ describe('resolveSymlinkedLeafWritePath (#5037)', () => {
       assert.strictEqual(resolveSymlinkedLeafWritePath(root, filePath, LABEL), filePath);
     });
 
+    // Without the opt-in too, the refusal is "target does not exist", not a
+    // request for the opt-in, which would not help.
     test(`a dangling link is refused and left in place (${mode})`, (t) => {
       setOptIn(optIn);
       const l = layout(t, { link: true, targetExists: false });
@@ -4746,7 +4753,8 @@ describe('resolveSymlinkedLeafWritePath (#5037)', () => {
         t.skip('symlink creation unsupported on this platform/privilege');
         return;
       }
-      assert.throws(() => resolveSymlinkedLeafWritePath(l.root, l.filePath, LABEL), isRefusal);
+      assert.throws(() => resolveSymlinkedLeafWritePath(l.root, l.filePath, LABEL),
+        refusedWith(SYMLINKED_LEAF_REFUSAL.TARGET_MISSING));
       assert.ok(fs.lstatSync(l.filePath).isSymbolicLink(), 'the dangling link must survive');
       assert.strictEqual(fs.existsSync(l.targetPath), false, 'nothing may be created at the missing target');
     });
@@ -4772,7 +4780,7 @@ describe('resolveSymlinkedLeafWritePath (#5037)', () => {
     }
 
     setOptIn(undefined);
-    assert.throws(() => resolveSymlinkedLeafWritePath(root, filePath, LABEL), isRefusal);
+    assert.throws(() => resolveSymlinkedLeafWritePath(root, filePath, LABEL), refusedWith(SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED));
 
     setOptIn('1');
     assert.strictEqual(resolveSymlinkedLeafWritePath(root, filePath, LABEL), fs.realpathSync(finalTarget));
@@ -4792,7 +4800,8 @@ describe('resolveSymlinkedLeafWritePath (#5037)', () => {
         return;
       }
       setOptIn(optIn);
-      assert.throws(() => resolveSymlinkedLeafWritePath(root, filePath, LABEL), isRefusal);
+      assert.throws(() => resolveSymlinkedLeafWritePath(root, filePath, LABEL),
+        refusedWith(SYMLINKED_LEAF_REFUSAL.NOT_FOLLOWABLE));
       assert.strictEqual(fs.readlinkSync(filePath), filePath, 'the link must be left alone');
     });
   }
@@ -4808,13 +4817,15 @@ describe('resolveSymlinkedLeafWritePath (#5037)', () => {
       return;
     }
 
-    setOptIn(undefined);
-    assert.throws(() => resolveSymlinkedLeafWritePath(root, filePath, LABEL), isRefusal);
-
     // The opt-in never relaxes this case: a write there would land on the
-    // install root.
+    // install root. So the refusal says so either way, rather than asking for it.
+    setOptIn(undefined);
+    assert.throws(() => resolveSymlinkedLeafWritePath(root, filePath, LABEL),
+      refusedWith(SYMLINKED_LEAF_REFUSAL.NOT_FOLLOWABLE));
+
     setOptIn('1');
-    assert.throws(() => resolveSymlinkedLeafWritePath(root, filePath, LABEL), isRefusal);
+    assert.throws(() => resolveSymlinkedLeafWritePath(root, filePath, LABEL),
+      refusedWith(SYMLINKED_LEAF_REFUSAL.NOT_FOLLOWABLE));
     assert.strictEqual(fs.readlinkSync(filePath), root, 'the link must be left alone');
   });
 
@@ -4825,7 +4836,8 @@ describe('resolveSymlinkedLeafWritePath (#5037)', () => {
       t.skip('symlink creation unsupported on this platform/privilege');
       return;
     }
-    assert.throws(() => resolveSymlinkedLeafWritePath(l.root, l.filePath, LABEL), isRefusal);
+    assert.throws(() => resolveSymlinkedLeafWritePath(l.root, l.filePath, LABEL),
+      refusedWith(SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED));
     assert.ok(fs.lstatSync(l.filePath).isSymbolicLink(), 'the link must survive');
     assert.strictEqual(fs.readlinkSync(l.filePath), l.targetPath, 'the link must still point at the same target');
   });
@@ -4857,11 +4869,9 @@ describe('resolveSymlinkedLeafWritePath (#5037)', () => {
 // ---------------------------------------------------------------------------
 
 describe('the config.toml and settings.json symlink resolvers agree (#5037)', () => {
-  const { resolveSymlinkedLeafWritePath, hasExistingSymlinkBetween } = require('../gsd-core/bin/lib/install-engine.cjs');
+  const { resolveSymlinkedLeafWritePath, hasExistingSymlinkBetween, SYMLINKED_LEAF_REFUSAL } = require('../gsd-core/bin/lib/install-engine.cjs');
   const { resolveSymlinkWriteTarget } = require('../bin/install.js');
   const LABEL = 'parity: file';
-  // A refusal has no code; a filesystem error always has one.
-  const isRefusal = (err) => err instanceof Error && err.code === undefined;
 
   let savedOptIn;
   beforeEach(() => {
@@ -4900,7 +4910,8 @@ describe('the config.toml and settings.json symlink resolvers agree (#5037)', ()
   const installRoot = (l) => fs.realpathSync(l.root);
 
   // [layout, build it, per opt-in state: [the guard refuses it, what
-  // resolveSymlinkWriteTarget returns]]
+  // resolveSymlinkWriteTarget returns, the code resolveSymlinkedLeafWritePath
+  // refuses it with]]
   const CASES = [
     ['a plain file', ({ filePath }) => fs.writeFileSync(filePath, ''),
       { unset: [false, unchanged], optIn: [false, unchanged] }],
@@ -4909,18 +4920,18 @@ describe('the config.toml and settings.json symlink resolvers agree (#5037)', ()
     ['a link to a file outside the root', ({ outside, filePath }) => {
       fs.writeFileSync(path.join(outside, 'real.toml'), '');
       fs.symlinkSync(path.join(outside, 'real.toml'), filePath, 'file');
-    }, { unset: [true, unchanged], optIn: [false, outsideTarget] }],
+    }, { unset: [true, unchanged, SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED], optIn: [false, outsideTarget] }],
     ['a dangling link', ({ outside, filePath }) => fs.symlinkSync(path.join(outside, 'missing.toml'), filePath, 'file'),
-      { unset: [true, unchanged], optIn: [true, unchanged] }],
+      { unset: [true, unchanged, SYMLINKED_LEAF_REFUSAL.TARGET_MISSING], optIn: [true, unchanged, SYMLINKED_LEAF_REFUSAL.TARGET_MISSING] }],
     ['a link loop', ({ filePath }) => fs.symlinkSync(filePath, filePath, 'file'),
-      { unset: [true, unchanged], optIn: [true, unchanged] }],
+      { unset: [true, unchanged, SYMLINKED_LEAF_REFUSAL.NOT_FOLLOWABLE], optIn: [true, unchanged, SYMLINKED_LEAF_REFUSAL.NOT_FOLLOWABLE] }],
     ['a link to the install root itself', ({ root, filePath }) => fs.symlinkSync(root, filePath, 'dir'),
-      { unset: [true, unchanged], optIn: [true, installRoot] }],
+      { unset: [true, unchanged, SYMLINKED_LEAF_REFUSAL.NOT_FOLLOWABLE], optIn: [true, installRoot, SYMLINKED_LEAF_REFUSAL.NOT_FOLLOWABLE] }],
   ];
 
   for (const [name, make, byOptIn] of CASES) {
     for (const optIn of [undefined, '1']) {
-      const [guarded, configTomlTarget] = optIn ? byOptIn.optIn : byOptIn.unset;
+      const [guarded, configTomlTarget, refusalCode] = optIn ? byOptIn.optIn : byOptIn.unset;
       const outcome = guarded ? 'the guard refuses it and so does the settings.json resolver' : 'both resolvers return the same path';
       test(`${name}: ${outcome} (GSD_ALLOW_SYMLINKED_DEST=${optIn ?? 'unset'})`, (t) => {
         const l = build(t, make);
@@ -4933,7 +4944,8 @@ describe('the config.toml and settings.json symlink resolvers agree (#5037)', ()
           'the check installCodexConfig runs before the config.toml writes decides this layout');
         assert.strictEqual(resolveSymlinkWriteTarget(l.filePath), configTomlTarget(l));
         if (guarded) {
-          assert.throws(() => resolveSymlinkedLeafWritePath(l.root, l.filePath, LABEL), isRefusal);
+          assert.throws(() => resolveSymlinkedLeafWritePath(l.root, l.filePath, LABEL),
+            (err) => err instanceof Error && err.code === refusalCode);
         } else {
           assert.strictEqual(resolveSymlinkedLeafWritePath(l.root, l.filePath, LABEL), configTomlTarget(l));
         }
