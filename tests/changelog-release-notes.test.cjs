@@ -19,7 +19,7 @@ const fc = require('fast-check');
 const { cleanup } = require('./helpers.cjs');
 const { EMPTY_RELEASE_PLACEHOLDER } = require('../scripts/changeset/serialize.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { runNode } = require('./helpers/process-seam.cjs');
+const { runNode, OUTCOME, formatSeamResult, assertSeamExit } = require('./helpers/process-seam.cjs');
 
 const {
   buildChangelogReleaseNotes,
@@ -477,8 +477,12 @@ describe('changelog-release-notes CLI (#5922)', () => {
     }
   }
   function run(args) {
-    const r = runNode([SCRIPT, ...args], { timeoutMs: PROBE_TIMEOUT_MS });
-    return { status: r.exitCode, stderr: r.stderr };
+    return runNode([SCRIPT, ...args], { timeoutMs: PROBE_TIMEOUT_MS });
+  }
+  // A timeout or spawn failure has exitCode null and must not pass as "non-zero".
+  function assertFailed(r, label) {
+    assert.equal(r.outcome, OUTCOME.EXITED, `${label}: ${formatSeamResult(r)}`);
+    assert.notEqual(r.exitCode, 0, `${label} must fail`);
   }
 
   test('writes the body to --output', () => {
@@ -487,7 +491,7 @@ describe('changelog-release-notes CLI (#5922)', () => {
       const output = path.join(dir, 'notes.md');
       fs.writeFileSync(changelog, CHANGELOG);
       const res = run(['--version', '1.20.1', '--changelog', changelog, '--output', output, '--package', PKG, '--repo', SLUG]);
-      assert.equal(res.status, 0, res.stderr);
+      assertSeamExit(assert, res, 0);
       assert.equal(fs.readFileSync(output, 'utf8'), EXPECTED_1_20_1);
     });
   });
@@ -498,7 +502,7 @@ describe('changelog-release-notes CLI (#5922)', () => {
       const output = path.join(dir, 'notes.md');
       fs.writeFileSync(changelog, CHANGELOG);
       const res = run(['--tag', 'v1.20.1', '--changelog', changelog, '--output', output, '--previous', '1.19.0']);
-      assert.equal(res.status, 0, res.stderr);
+      assertSeamExit(assert, res, 0);
       assert.ok(fs.readFileSync(output, 'utf8').endsWith('compare/v1.19.0...v1.20.1\n'));
     });
   });
@@ -516,21 +520,21 @@ describe('changelog-release-notes CLI (#5922)', () => {
       ];
       for (const { args, reason } of cases) {
         const res = run([...args, '--changelog', changelog, '--output', output]);
-        assert.notEqual(res.status, 0, `${args.join(' ')} must fail`);
+        assertFailed(res, args.join(' '));
         assert.ok(res.stderr.includes(reason), `${args.join(' ')}: stderr should name ${reason}, got ${res.stderr}`);
         assert.equal(fs.existsSync(output), false, 'no body file on failure');
       }
       const missing = run(['--version', '1.20.1', '--changelog', path.join(dir, 'absent.md'), '--output', output]);
-      assert.notEqual(missing.status, 0);
+      assertFailed(missing, 'missing');
       const noOutput = run(['--version', '1.20.1', '--changelog', changelog]);
-      assert.notEqual(noOutput.status, 0);
+      assertFailed(noOutput, 'noOutput');
       const noVersion = run(['--changelog', changelog, '--output', output]);
-      assert.notEqual(noVersion.status, 0);
+      assertFailed(noVersion, 'noVersion');
       const outside = run(['--version', '1.20.1', '--changelog', changelog, '--output', '/etc/gsd-5922-notes.md']);
-      assert.notEqual(outside.status, 0);
+      assertFailed(outside, 'outside');
       assert.ok(outside.stderr.includes(CHANGELOG_NOTES_ERROR.OUTPUT_NOT_ALLOWED));
       const unknown = run(['--version', '1.20.1', '--changelog', changelog, '--output', output, '--bogus', 'x']);
-      assert.notEqual(unknown.status, 0);
+      assertFailed(unknown, 'unknown');
     });
   });
 });

@@ -17,6 +17,7 @@ const { spawnSync } = require('node:child_process');
 const yaml = require('js-yaml');
 const { cleanup } = require('./helpers.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { runNode, OUTCOME, formatSeamResult } = require('./helpers/process-seam.cjs');
 
 const {
   ChangelogNotesError,
@@ -54,6 +55,30 @@ const CHANGELOG = [
   '',
 ].join('\n');
 
+const shellSingleQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+
+// bash is spawned directly (the seam has no bash runner); a timeout or spawn
+// failure must not read as an ordinary non-zero exit.
+function assertBashExited(res) {
+  assert.equal(res.error, undefined, `bash did not run to completion: ${res.error && res.error.message}`);
+  assert.equal(res.signal, null, `bash was killed by ${res.signal}`);
+}
+
+// Symlink creation can be refused (Windows without privilege, restricted FS):
+// skip visibly rather than pass with no assertions.
+function trySymlink(t, target, linkPath) {
+  try {
+    fs.symlinkSync(target, linkPath);
+    return true;
+  } catch (err) {
+    if (err && (err.code === 'EPERM' || err.code === 'ENOTSUP' || err.code === 'EACCES')) {
+      t.skip('symlink creation unsupported');
+      return false;
+    }
+    throw err;
+  }
+}
+
 function codeOf(fn) {
   try {
     fn();
@@ -72,11 +97,14 @@ describe('release.yml finalize step bodies under a real bash (#5922)', () => {
   // The build step reads the repo-relative CHANGELOG.md; point it at the fixture
   // and run from the repo root (the step's `scripts/...` path is relative).
   function stepBody(step, workDir) {
-    const body = step.run.replace('--changelog CHANGELOG.md', `--changelog "${path.join(workDir, 'CHANGELOG.md')}"`);
+    const body = step.run.replace('--changelog CHANGELOG.md', `--changelog ${shellSingleQuote(path.join(workDir, 'CHANGELOG.md'))}`);
     assert.notEqual(body, step.run, 'the step passes --changelog CHANGELOG.md');
     return body;
   }
 
+  // Bounded by PROBE_TIMEOUT_MS on bash itself. process-seam offers no process-group
+  // kill, so a hung grandchild would outlive a timeout; the inner commands are a
+  // short-lived node CLI and a fake gh that exits immediately.
   test('executing the step publishes a non-empty What\'s Changed from the promoted CHANGELOG', {
     skip: process.platform === 'win32' ? 'bash step body' : false,
   }, () => {
@@ -109,6 +137,7 @@ describe('release.yml finalize step bodies under a real bash (#5922)', () => {
         timeout: PROBE_TIMEOUT_MS,
         env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, VERSION: '1.20.1', RUNNER_TEMP: tmp },
       });
+      assertBashExited(res);
       assert.equal(res.status, 0, res.stderr);
 
       const call = JSON.parse(fs.readFileSync(record, 'utf8'));
@@ -147,6 +176,7 @@ describe('release.yml finalize step bodies under a real bash (#5922)', () => {
         timeout: PROBE_TIMEOUT_MS,
         env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, VERSION: '9.9.9', RUNNER_TEMP: tmp },
       });
+      assertBashExited(res);
       assert.notEqual(res.status, 0);
       assert.equal(fs.existsSync(called), false);
       assert.equal(fs.existsSync(path.join(tmp, 'release-notes.md')), false, 'no empty body file');
@@ -161,31 +191,26 @@ describe('changelog-release-notes --output symlink guards (#5922)', () => {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5922-out-'));
   }
 
-  test('an existing symlink as the final component is refused, and the CLI does not write through it', () => {
+  test('an existing symlink as the final component is refused, and the CLI does not write through it', (t) => {
     const root = tmp();
     const outside = path.join(root, 'outside.md');
     const cwd = path.join(root, 'work');
     fs.mkdirSync(cwd);
     fs.writeFileSync(outside, 'untouched');
     try {
-      fs.symlinkSync(outside, path.join(cwd, 'notes.md'));
-    } catch (_e) {
-      cleanup(root);
-      return; // symlink creation unsupported here
-    }
-    try {
+      if (!trySymlink(t, outside, path.join(cwd, 'notes.md'))) return;
       assert.equal(
         codeOf(() => resolveOutputPath('notes.md', { cwd, tmpdir: '/nonexistent-5922', runnerTemp: null })),
         CHANGELOG_NOTES_ERROR.OUTPUT_NOT_ALLOWED,
       );
       const changelog = path.join(root, 'CHANGELOG.md');
       fs.writeFileSync(changelog, CHANGELOG);
-      const res = spawnSync(process.execPath, [SCRIPT, '--version', '1.20.1', '--changelog', changelog, '--output', 'notes.md'], {
+      const res = runNode([SCRIPT, '--version', '1.20.1', '--changelog', changelog, '--output', 'notes.md'], {
         cwd,
-        encoding: 'utf8',
-        timeout: PROBE_TIMEOUT_MS,
+        timeoutMs: PROBE_TIMEOUT_MS,
       });
-      assert.notEqual(res.status, 0);
+      assert.equal(res.outcome, OUTCOME.EXITED, formatSeamResult(res));
+      assert.notEqual(res.exitCode, 0);
       assert.ok(res.stderr.includes('error[output-not-allowed]'), res.stderr);
       assert.equal(fs.readFileSync(outside, 'utf8'), 'untouched');
     } finally {
@@ -195,17 +220,13 @@ describe('changelog-release-notes --output symlink guards (#5922)', () => {
 
   test('writeOutput refuses a final-component symlink (ELOOP) and leaves its target unchanged', {
     skip: fs.constants.O_NOFOLLOW === undefined ? 'O_NOFOLLOW unavailable' : false,
-  }, () => {
+  }, (t) => {
     const root = tmp();
     const outside = path.join(root, 'outside.md');
     const link = path.join(root, 'link.md');
     fs.writeFileSync(outside, 'untouched');
     try {
-      try {
-        fs.symlinkSync(outside, link);
-      } catch (_e) {
-        return; // symlink creation unsupported here
-      }
+      if (!trySymlink(t, outside, link)) return;
       assert.equal(codeOf(() => writeOutput(link, 'body')), CHANGELOG_NOTES_ERROR.OUTPUT_NOT_ALLOWED);
       assert.equal(fs.readFileSync(outside, 'utf8'), 'untouched');
       const plain = path.join(root, 'plain.md');
@@ -216,14 +237,14 @@ describe('changelog-release-notes --output symlink guards (#5922)', () => {
     }
   });
 
-  test('a symlinked parent that escapes the allowed root is rejected', () => {
+  test('a symlinked parent that escapes the allowed root is rejected', (t) => {
     const root = tmp();
     const outside = path.join(root, 'outside');
     const cwd = path.join(root, 'work');
     fs.mkdirSync(outside);
     fs.mkdirSync(cwd);
-    fs.symlinkSync(outside, path.join(cwd, 'link'));
     try {
+      if (!trySymlink(t, outside, path.join(cwd, 'link'))) return;
       assert.equal(
         codeOf(() => resolveOutputPath(path.join('link', 'n.md'), { cwd, tmpdir: '/nonexistent-5922', runnerTemp: null })),
         CHANGELOG_NOTES_ERROR.OUTPUT_NOT_ALLOWED,
