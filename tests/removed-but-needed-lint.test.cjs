@@ -16,6 +16,7 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
+const cp = require('node:child_process');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
@@ -33,10 +34,13 @@ const {
   getDeletedFiles,
   getSurvivingFiles,
   matchesByFullPath,
+  parseNameStatusZ,
+  parseCheckIgnoreZ,
   scan,
 } = require(LINT_SCRIPT);
 const fc = require('fast-check');
 const { cleanup } = require('./helpers.cjs');
+const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { copyScriptWithDeps } = require('./helpers/copy-script-fixture.cjs');
@@ -829,6 +833,20 @@ describe('removed-but-needed lint: gitignored-path refinement (#3677)', () => {
 const BASE_REF = 'origin/main';
 
 /**
+ * Positive control: prove git itself (in the CURRENT process env) treats
+ * `relPath` as ignored, so an "empty Set" assertion cannot pass vacuously
+ * because the machine-local rule never took effect.
+ */
+function assertRuleActive(cwd, relPath) {
+  const r = cp.spawnSync('git', ['check-ignore', '--no-index', '-q', '--', relPath], {
+    cwd,
+    encoding: 'utf8',
+    timeout: GIT_TIMEOUT_MS,
+  });
+  assert.equal(r.status, 0, `precondition: git must ignore ${relPath} (rule not active): ${r.stderr}`);
+}
+
+/**
  * A repo whose BASE commit tracks `.gitignore` (+ extra tracked files), with
  * `refs/remotes/origin/main` at the base and HEAD on a `pr` branch (no PR
  * commit yet). Ignore rules are therefore base-controlled.
@@ -897,6 +915,7 @@ describe('removed-but-needed lint: getIgnoredDeletions (#3677)', () => {
     t.after(() => cleanup(tmpDir));
     initIgnoreRepo(tmpDir);
     fs.appendFileSync(path.join(tmpDir, '.git', 'info', 'exclude'), 'local-only/\n');
+    assertRuleActive(tmpDir, 'local-only/a.md');
     const result = getIgnoredDeletions(tmpDir, ['local-only/a.md'], BASE_REF);
     assert.equal(result.size, 0);
   });
@@ -912,6 +931,7 @@ describe('removed-but-needed lint: getIgnoredDeletions (#3677)', () => {
     const prior = process.env.GIT_CONFIG_GLOBAL;
     process.env.GIT_CONFIG_GLOBAL = globalConfig;
     try {
+      assertRuleActive(tmpDir, 'globally-ignored/a.md');
       const result = getIgnoredDeletions(tmpDir, ['globally-ignored/a.md'], BASE_REF);
       assert.equal(result.size, 0);
     } finally {
@@ -926,8 +946,20 @@ describe('removed-but-needed lint: getIgnoredDeletions (#3677)', () => {
     initIgnoreRepo(tmpDir);
     fs.mkdirSync(path.join(tmpDir, 'sub'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, 'sub', '.gitignore'), '*.md\n');
+    assertRuleActive(tmpDir, 'sub/a.md');
     const result = getIgnoredDeletions(tmpDir, ['sub/a.md'], BASE_REF);
     assert.equal(result.size, 0);
+  });
+
+  test('a local uncommitted edit to a tracked .gitignore disables the refinement', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-ignored-dirty-'));
+    t.after(() => cleanup(tmpDir));
+    const git = initIgnoreRepo(tmpDir);
+    assert.deepEqual([...getIgnoredDeletions(tmpDir, ['.gsd/a/b.md'], BASE_REF)], ['.gsd/a/b.md']);
+    fs.appendFileSync(path.join(tmpDir, '.gitignore'), 'extra\n');
+    assert.equal(getIgnoredDeletions(tmpDir, ['.gsd/a/b.md'], BASE_REF).size, 0, 'unstaged edit');
+    git('add', '.gitignore');
+    assert.equal(getIgnoredDeletions(tmpDir, ['.gsd/a/b.md'], BASE_REF).size, 0, 'staged edit');
   });
 
   test('a diff that touches a .gitignore disables the refinement (the PR controls those rules)', (t) => {
@@ -951,6 +983,41 @@ describe('removed-but-needed lint: getIgnoredDeletions (#3677)', () => {
     git('commit', '-q', '-m', 'pr adds nested gitignore');
     const result = getIgnoredDeletions(tmpDir, ['.gsd/a/b.md'], BASE_REF);
     assert.equal(result.size, 0);
+  });
+});
+
+describe('removed-but-needed lint: NUL parsers (property)', () => {
+  const seg = fc.stringMatching(/^[a-z0-9._-]{1,10}$/);
+
+  test('parseNameStatusZ round-trips records, including two-path R/C entries', () => {
+    const record = fc.oneof(
+      fc.record({ status: fc.constantFrom('D', 'M', 'A', 'T'), paths: fc.array(seg, { minLength: 1, maxLength: 1 }) }),
+      fc.record({ status: fc.constantFrom('R100', 'R075', 'C050'), paths: fc.array(seg, { minLength: 2, maxLength: 2 }) }),
+    );
+    fc.assert(
+      fc.property(fc.array(record, { maxLength: 8 }), (records) => {
+        const out = records.map((r) => `${r.status}\0${r.paths.join('\0')}\0`).join('');
+        assert.deepEqual(parseNameStatusZ(out), records);
+      }),
+    );
+  });
+
+  test('parseCheckIgnoreZ keeps only non-negated rules from repo-relative .gitignore sources', () => {
+    const record = fc.record({
+      source: fc.constantFrom('.gitignore', 'sub/.gitignore', '.git/info/exclude', '/abs/.gitignore', '/home/u/ignore_global', 'x.gitignore'),
+      line: fc.integer({ min: 1, max: 99 }),
+      pattern: fc.constantFrom('.gsd', '*.md', '!keep', '!'),
+      pathname: seg,
+    });
+    fc.assert(
+      fc.property(fc.array(record, { maxLength: 8 }), (records) => {
+        const out = records.map((r) => `${r.source}\0${r.line}\0${r.pattern}\0${r.pathname}\0`).join('');
+        const expected = records
+          .filter((r) => (r.source === '.gitignore' || r.source === 'sub/.gitignore') && !r.pattern.startsWith('!'))
+          .map((r) => ({ source: r.source, pathname: r.pathname }));
+        assert.deepEqual(parseCheckIgnoreZ(out), expected);
+      }),
+    );
   });
 });
 
@@ -1017,17 +1084,24 @@ describe('removed-but-needed lint: gitignored refinement wired through scan() en
   test('exit 0: a bare-basename citation of a deleted gitignored path is not attributed to it', (t) => {
     const result = runScenario(t, 'gsd-rbn-e2e-bare-', 'see 40-design.md for the local design', false);
     assert.equal(result.exitCode, 0, `expected exit 0, got ${result.exitCode}: ${result.stderr}`);
+    // exit 0 is also the skip path ("could not resolve <base>, skipping")
+    assert.match(result.stdout, /ok lint-removed-but-needed/);
+    assert.doesNotMatch(result.stdout, /skipping/);
   });
 
   test('exit 1: the full deleted path is still caught', (t) => {
     const result = runScenario(t, 'gsd-rbn-e2e-full-', `see ${TRACKED_IGNORED} for the design`, false);
     assert.equal(result.exitCode, 1, `expected exit 1, got ${result.exitCode}: ${result.stderr}`);
+    assert.match(result.stderr, /deleted, but still referenced/);
     assert.match(result.stderr, /gitignored/);
+    assert.doesNotMatch(`${result.stdout}${result.stderr}`, /skipping/);
   });
 
   test('exit 1: a PR that also edits .gitignore cannot disable the basename check', (t) => {
     const result = runScenario(t, 'gsd-rbn-e2e-touched-', 'see 40-design.md for the local design', true);
     assert.equal(result.exitCode, 1, `expected exit 1, got ${result.exitCode}: ${result.stderr}`);
+    assert.match(result.stderr, /deleted, but still referenced/);
     assert.match(result.stderr, /basename '40-design\.md' still referenced/);
+    assert.doesNotMatch(`${result.stdout}${result.stderr}`, /skipping/);
   });
 });
