@@ -3238,10 +3238,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       // #4904 — WHEN the decision was first made, so a renewed hold
       // lapses ten minutes after the degrade itself, not after the last gate
       // that re-recorded it. A fresh decision is decided as it is written; a
-      // `--renew-held` re-record passes the held record's value through.
-      decided_at: typeof decidedAt === 'number' && Number.isFinite(decidedAt)
-        ? Math.min(decidedAt, writtenAt)
-        : writtenAt,
+      // `--renew-held` re-record passes the held record's value through; the
+      // reader clamps it to `written_at`, which covers every writer.
+      decided_at: decidedAt ?? writtenAt,
       written_at: writtenAt,
     };
     let tmpPath = null;

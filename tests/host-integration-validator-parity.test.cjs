@@ -524,7 +524,6 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
 
   test('the owner tuple is frozen, non-empty, duplicate-free, and contains `none` (the fail-closed member every degrade lands on)', () => {
     assert.ok(Object.isFrozen(DISPATCH_ISOLATION_MODES));
-    assert.ok(DISPATCH_ISOLATION_MODES.length >= 1);
     assert.equal(new Set(DISPATCH_ISOLATION_MODES).size, DISPATCH_ISOLATION_MODES.length);
     assert.ok(DISPATCH_ISOLATION_MODES.includes('none'));
     assert.deepEqual(sorted(DISPATCH_ISOLATION_VOCABULARY), sorted(DISPATCH_ISOLATION_MODES));
