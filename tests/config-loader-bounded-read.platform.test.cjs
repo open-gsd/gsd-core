@@ -488,6 +488,83 @@ describe('#5759 platformWriteSync never blocks on or follows a planted temp file
     assert.strictEqual(fs.readFileSync(target, 'utf8'), 'KEEP\n');
   });
 
+  const SPECIAL_WRITE_SCRIPT = [
+    'const { platformWriteSync } = require(process.argv[1]);',
+    'const opts = process.argv[3] === "allow" ? { allowSpecialTarget: true } : {};',
+    'try { platformWriteSync(process.argv[2], "hello\\n", opts); process.stdout.write(JSON.stringify({ code: "ok" })); }',
+    'catch (e) { process.stdout.write(JSON.stringify({ code: e.code })); }',
+  ].join('\n');
+
+  test('a user-chosen character device (allowSpecialTarget) is written in place', () => {
+    const r = runNode(['-e', SPECIAL_WRITE_SCRIPT, SHELL_PROJECTION_PATH, '/dev/null', 'allow'], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    assert.strictEqual(JSON.parse(r.stdout).code, 'ok');
+  });
+
+  test('a user-chosen /dev/stdout (allowSpecialTarget) reaches the captured stdout', () => {
+    const script = [
+      'require(process.argv[1]).platformWriteSync("/dev/stdout", "via-dev-stdout\\n", { allowSpecialTarget: true });',
+    ].join('\n');
+    const r = runNode(['-e', script, SHELL_PROJECTION_PATH], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    assert.ok(r.stdout.includes('via-dev-stdout'), r.stdout);
+  });
+
+  test('without allowSpecialTarget a character device target is still refused with ENXIO', (t) => {
+    if (typeof process.getuid === 'function' && process.getuid() === 0) { t.skip('root can create the temp file in /dev'); return; }
+    const r = runNode(['-e', SPECIAL_WRITE_SCRIPT, SHELL_PROJECTION_PATH, '/dev/null', 'deny'], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    assert.strictEqual(JSON.parse(r.stdout).code, 'ENXIO');
+  });
+
+  test('a FIFO with no reader is refused with ENXIO even with allowSpecialTarget', () => {
+    const fifo = path.join(tmpDir, 'out.fifo');
+    makeFifo(fifo);
+    const r = runNode(['-e', SPECIAL_WRITE_SCRIPT, SHELL_PROJECTION_PATH, fifo, 'allow'], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    assert.strictEqual(JSON.parse(r.stdout).code, 'ENXIO');
+  });
+
+  test('a name needing the second suffix shrink (2 random bytes) is still written atomically', () => {
+    const name = `${'n'.repeat(240)}.json`;
+    const target = path.join(tmpDir, name);
+    const plainWrite = [
+      'const { platformWriteSync } = require(process.argv[1]);',
+      'platformWriteSync(process.argv[2], "hello\\n");',
+      'process.stdout.write("done");',
+    ].join('\n');
+
+    const r = runNode(['-e', plainWrite, SHELL_PROJECTION_PATH, target], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    assert.deepStrictEqual(fs.readdirSync(tmpDir), [name]);
+    assert.ok(fs.readFileSync(target, 'utf8').includes('hello'));
+  });
+
   test('a target name too long for the default temp suffix is still written atomically (shorter suffix)', () => {
     const name = `${'n'.repeat(236)}.json`;
     const target = path.join(tmpDir, name);
