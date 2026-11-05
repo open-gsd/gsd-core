@@ -187,8 +187,21 @@ const WRAPPERS = new Map([
 //   keyword  a shell keyword, not only a program, so another keyword or an
 //            assignment may follow it (`time ! cmd`, `time A=b cmd`)
 //   count    the next word is a count, whatever it looks like (`repeat -1+2 cmd`)
+//   assigns  here a pattern, the wrapper's own rule for a word that sets a
+//            variable: env takes any word holding an `=`, sudo's parse_args one
+//            that does not start with `/` or `=`. doas has no such form
+//   dash     a lone `-` is an option (env's `-i`)
+// sudo's getopt string takes a value for `-a` and `-c` on every build, whether
+// or not the build acts on them.
 const FURTHER_WRAPPERS = new Map([
   ...WRAPPERS,
+  ['sudo', {
+    ...WRAPPERS.get('sudo'),
+    short: `ac${WRAPPERS.get('sudo').short}`,
+    long: ['--auth-type', '--login-class', ...WRAPPERS.get('sudo').long],
+    assigns: /^[^/=][^=]*=/,
+  }],
+  ['env', { ...WRAPPERS.get('env'), assigns: /=/, dash: true }],
   ['builtin', {}],
   ['noglob', {}],
   ['nocorrect', { keyword: true }],
@@ -1465,11 +1478,14 @@ function wrapperOptionWidth(word, spec) {
 // positional operands (`-n 5`, `-i A=1`, `-s KILL 5`, `--`).
 function skipWrapperArgs(words, start, spec) {
   if (spec.count) return Math.min(start + 1, words.length);
+  const assigns = spec.assigns === true ? ASSIGNMENT_RE : spec.assigns;
   let idx = start;
   let optionsEnded = false;
   while (idx < words.length) {
     const text = words[idx].text;
-    if (spec.assigns && ASSIGNMENT_RE.test(text)) {
+    if (assigns && assigns.test(text)) {
+      idx++;
+    } else if (spec.dash && text === '-') {
       idx++;
     } else if (!optionsEnded && text === '--') {
       optionsEnded = true;
