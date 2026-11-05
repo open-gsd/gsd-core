@@ -83,10 +83,13 @@ type Scope = planningScopeMod.Scope;
  * (`extractCurrentMilestone`, `currentMilestoneRawRanges`,
  * `isMilestoneShippedInRoadmap`) previously kept byte-identical copies.
  */
-const MILESTONE_CLOSED_MARKER_PATTERN = /\b(?:CLOSED|ARCHIVED|ABANDONED|SHIPPED|FAILED)\b|✅|🗄/i;
+const CLOSED_STATUS_WORD_SOURCE = '\\b(?:CLOSED|ARCHIVED|ABANDONED|SHIPPED|FAILED)\\b';
+const CLOSED_STATUS_MARK_SOURCE = '\u{2705}|\u{1f5c4}';
+// Same source, same flags as the pre-#5726 literal: no `u`, so `i` keeps ASCII-only folding.
+const MILESTONE_CLOSED_MARKER_PATTERN = new RegExp(`${CLOSED_STATUS_WORD_SOURCE}|${CLOSED_STATUS_MARK_SOURCE}`, 'i');
 const MILESTONE_ACTIVE_MARKER_PATTERN = /\b(?:STARTED|ACTIVE|WIP)\b|in\s+progress|🚧|🔄/i;
-const CLOSED_STATUS_WORD_RE = /\b(?:CLOSED|ARCHIVED|ABANDONED|SHIPPED|FAILED)\b/i;
-const CLOSED_STATUS_MARK_RE = /[\u{2705}\u{1f5c4}]/u;
+const CLOSED_STATUS_WORD_RE = new RegExp(CLOSED_STATUS_WORD_SOURCE, 'i');
+const CLOSED_STATUS_MARK_RE = new RegExp(CLOSED_STATUS_MARK_SOURCE, 'u');
 
 /**
  * THE closed-milestone predicate (#5726, ADR-3180): selection, masking, the
@@ -1388,8 +1391,11 @@ function readStateMilestoneScalar(stateRaw: string): string | null {
     // A non-string value keeps the pre-#4998 line read, which finds this
     // frontmatter line first.
   }
-  const m = stateRaw.match(/^milestone:\s*(.+)/m);
-  return m ? m[1] : null;
+  // `[ \t]*(\S.*)`: an empty value must not borrow the next line (`---` closing the
+  // frontmatter), and a value that is itself a frontmatter delimiter names nothing.
+  const m = stateRaw.match(/^milestone:[ \t]*(\S.*)/m);
+  if (!m || /^(?:---|\.\.\.)\s*$/.test(m[1])) return null;
+  return m[1];
 }
 
 /**

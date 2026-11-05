@@ -700,8 +700,8 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
       try {
         const stateRaw = fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf-8') : null;
         if (stateRaw) {
-          const milestoneMatch = stateRaw.match(/^milestone:\s*(.+)/m);
-          if (milestoneMatch) stateVersion = milestoneMatch[1].trim();
+          const milestoneMatch = stateRaw.match(/^milestone:[ \t]*(\S.*)/m);
+          if (milestoneMatch && !/^(?:---|\.\.\.)\s*$/.test(milestoneMatch[1])) stateVersion = milestoneMatch[1].trim();
         }
       } catch {
         /* skip — stateVersion stays null, scan still runs */
