@@ -78,49 +78,49 @@
       "id": "EXEC.CLASSIFY.classes",
       "klass": "EXEC",
       "value": "{class:'quota-exceeded'|'classify-handoff-bug'|'unknown-failure', sentinel?, retryAfterSeconds?}",
-      "line": 1078
+      "line": 1079
     },
     {
       "id": "EXEC.CLASSIFY.cross-runtime",
       "klass": "EXEC",
       "value": "Anthropic/CC: usage limit|rate limit|quota|429|retry-after; Copilot CLI: rate_limit (stem); Codex CLI: 429|usage_limit_reached|too many requests",
-      "line": 1080
+      "line": 1081
     },
     {
       "id": "EXEC.CLASSIFY.handler",
       "klass": "EXEC",
       "value": "gsd-core/bin/lib/agent-command-router.cjs:classifyAgentFailure (registered via command-aliases.cjs; mutation:false outputMode:json)",
-      "line": 1076
+      "line": 1077
     },
     {
       "id": "EXEC.CLASSIFY.precedence",
       "klass": "EXEC",
       "value": "quota sentinel wins over classifyHandoffIfNeeded bug when both appear",
-      "line": 1081
+      "line": 1082
     },
     {
       "id": "EXEC.CLASSIFY.proactive-signal-not-usable",
       "klass": "EXEC",
       "value": "Anthropic exposes anthropic-ratelimit-* headers + Agent SDK RateLimitEvent; Claude Code subprocess does NOT forward to hooks/statusline today (upstream #33820, #22407, #32796)",
-      "line": 1083
+      "line": 1084
     },
     {
       "id": "EXEC.CLASSIFY.retry-after-parser",
       "klass": "EXEC",
       "value": "\\bretry[-_ ]after[:\\s]+(\\d+)\\b avoids embedded-word false matches like noretry-after",
-      "line": 1082
+      "line": 1083
     },
     {
       "id": "EXEC.CLASSIFY.sentinel-order",
       "klass": "EXEC",
       "value": "most specific first: 429 beats too-many-requests; resource_exhausted beats quota (array order in src/agent-command-router.cts QUOTA_SENTINELS checks resource_exhausted before quota); case-insensitive; canonical sentinel value is lower-cased form",
-      "line": 1079
+      "line": 1080
     },
     {
       "id": "EXEC.CLASSIFY.workflow",
       "klass": "EXEC",
       "value": "gsd-core/workflows/execute-phase.md step 7; class-distinct prompts (quota-to-wait-for-reset; classify-handoff-bug-to-spot-check; unknown-to-continue/stop)",
-      "line": 1077
+      "line": 1078
     },
     {
       "id": "GSD-RESEARCH.CONTEXT-DISCIPLINE",
@@ -834,37 +834,37 @@
       "id": "PROC.PARALLEL-FIX-DISPATCH.observed",
       "klass": "PROC",
       "value": "#3541 + #3542 dispatched simultaneously this session; PRs #3546 #3547 opened green; one syntax slip caught by AGENT-RETIRED-SLASH-SYNTAX-DRIFT and fixed before second PR opened",
-      "line": 1087
+      "line": 1088
     },
     {
       "id": "PROC.PARALLEL-FIX-DISPATCH.pattern",
       "klass": "PROC",
       "value": "bot triage brief → worktree per branch → parallel sub-agents do rubber-duck/RCA/TDD implementation only → top-level orchestrator owns commit + gsd-test + push + PR + changeset-pr-backfill",
-      "line": 1085
+      "line": 1086
     },
     {
       "id": "PROC.PARALLEL-FIX-DISPATCH.rationale",
       "klass": "PROC",
       "value": "long-running test runs need cross-turn notifications (orchestrator-only); CONTRIBUTING.md gh-templates-first hook requires session-scoped Read calls sub-agents wouldn't otherwise make; sequencing test runs avoids GSD-TEST-CONCURRENT-OUTPUT-COLLISION",
-      "line": 1086
+      "line": 1087
     },
     {
       "id": "PROC.TRIAGE.comment-shape",
       "klass": "PROC",
       "value": "lead with \"duplicate of #NNNN, fixed by PR #MMMM, in v1.X.Y\"; show current code snippet proving bug-surface gone; give @latest and @next upgrade commands; close",
-      "line": 1090
+      "line": 1091
     },
     {
       "id": "PROC.TRIAGE.no-duplicate-label",
       "klass": "PROC",
       "value": "this repo has no duplicate label; framing lives in comment text + closing the issue",
-      "line": 1091
+      "line": 1092
     },
     {
       "id": "PROC.TRIAGE.routing-incoming",
       "klass": "PROC",
       "value": "stale-bug-already-fixed to close as duplicate of originating issue + cite fix PR + first stable tag; release-publish-or-backport to ready-for-human; reporter-can-self-test to awaiting-retest",
-      "line": 1089
+      "line": 1090
     },
     {
       "id": "PROHIB.canon-referral",
@@ -1266,7 +1266,7 @@
       "id": "RULESET.HARNESS.test-memory-guard",
       "klass": "RULESET",
       "value": "~/.claude/hooks/test-memory-guard.sh fires on every Bash PreToolUse; if argv[0]∈{node|vitest|jest|mocha|tsx|ts-node|tap|ava|playwright|cypress} OR matches (npm|pnpm|yarn|bun) (run )?(t|test|tests|vitest|jest); blocks via hookSpecificOutput.permissionDecision=deny when sum(RSS of running matching procs, excluding tsserver|*-mcp|claude|Electron|...) ≥ 4 GiB OR when argv[0] basename matches a running process's argv[0]. Exception: node --version|-v|--help|-h|-p|-e are trivial probes and skip the check. Designed for a 24 GB Mac where prior accidental fan-out exhausted RAM",
-      "line": 1066
+      "line": 1067
     },
     {
       "id": "RULESET.MANIFEST-CANONICAL-KEY",
@@ -1278,13 +1278,13 @@
       "id": "RULESET.PR-FLOW.docker-before-push",
       "klass": "RULESET",
       "value": "before ANY git push of any fix to any PR, run gsd-test (docker on the remote, mirrors ubuntu CI) and confirm exit 0. macOS-local node --test is NOT a substitute — many failures are platform-specific (path separators, case sensitivity, locale, fs semantics). Watchdog with Monitor on the output log; never set a sleep/timer and walk away. Source: user feedback 2026-05-16 — \"we don't set a timer we actively watch and record results in real time as possible\". SUPERSEDED 2026-07-17: 'confirm exit 0' is a false-green trap — piping/backgrounding can report exit 0 on a failed suite; gate on the verdict-line outcome:\"passed\" for the exact HEAD sha instead. See CLAUDE.md's gsd-test rule and the gsd-test-is-ref-based-commit-first predicate for the current, correct gating contract.",
-      "line": 1068
+      "line": 1069
     },
     {
       "id": "RULESET.PR-FLOW.templates-mandatory",
       "klass": "RULESET",
       "value": "every gh pr create|edit|gh issue create|edit MUST first invoke the gh-templates-first skill and Read (Read tool, not Bash cat — k321 read-tracking) the matching template in .github/. Apply ALL required sections; never write freeform bodies. Repo enforces this via gsd-pr-template-policy GitHub Action which flags any non-templated body — the bot allows the PR to stay open only because authors are contributors-or-higher, but the warning is a real complaint that must be cured. Source: user feedback 2026-05-16 (multi-message escalation) — \"the whole reason i have that github action is because you fucking blow through and ignore using the templates\"",
-      "line": 1070
+      "line": 1071
     },
     {
       "id": "RULESET.PR-SCOPE.one-concern-per-pr",
@@ -1758,55 +1758,55 @@
       "id": "SESSION.2026-05-05",
       "klass": "SESSION",
       "value": "[PRED.k320..k331 introduced; DEFECT.SOURCE-GREP-IN-NEW-TESTS, DEFECT.CHANGESET-PR-FIELD-DRIFT, DEFECT.PHASE-DIR-PREFIX-DRIFT, DEFECT.PROMPT-INJECTION-SCAN-COLLISION; ADR-0002 thin-wrapper pattern findings folded into RULESET.WORKFLOW_*]",
-      "line": 1056
+      "line": 1057
     },
     {
       "id": "SESSION.2026-05-05.sdk-bridge",
       "klass": "SESSION",
       "value": "PR #3158 SDK Runtime Bridge — observability isolation rule; strict-mode dispatchMode reporting invariant; transport decision ordering (guard before event emission); folded into Dispatch Policy Module glossary",
-      "line": 1057
+      "line": 1058
     },
     {
       "id": "SESSION.2026-05-09",
       "klass": "SESSION",
       "value": "[8-PR triage wave, 7 merged + 1 subsumed; META.RULE.* introduced; WAVE.LESSON.* captured; k320/k322/k323/k326/k331 evidence; AI Ops Memory predicate format established]",
-      "line": 1058
+      "line": 1059
     },
     {
       "id": "SESSION.2026-05-10",
       "klass": "SESSION",
       "value": "[ai-ops memory consolidation; release-notes standard taxonomy + templates; RELEASE-NOTES.* predicates introduced]",
-      "line": 1059
+      "line": 1060
     },
     {
       "id": "SESSION.2026-05-13",
       "klass": "SESSION",
       "value": "[Shell Command Projection Module expansion (#3465-#3468); ADR-0009 superseded; new exports for subprocess dispatch and platform file I/O; phase-gated migration plan; PR #3464 three-gate invariant CI+CR+unresolved=0; PR #3470 stash-include-untracked rebase pattern]",
-      "line": 1060
+      "line": 1061
     },
     {
       "id": "SESSION.2026-05-14",
       "klass": "SESSION",
       "value": "[#3095/PR #3490 EXEC.CLASSIFY.* introduced (Anthropic/Copilot/Codex/Gemini [runtime removed #1928] cross-runtime rate-limit sentinel coverage); #3489/PR #3499 DEFECT.STATE-TRAMPLE.idempotency-oracle (STATE.md current_phase field is oracle for state.complete-phase); #3488/PR #3501 DAG resolver same-phase short-form depends_on (shortFormToId index added to sdk/src/query/phase.ts); #3491/PR #3502 DEFECT.NESTED-GIT-INIT (gitWorktreeInfoInternal helper); #3493/PR #3500 extractCurrentMilestone generic Phase Details continuation past planned-milestone siblings; #3503/PR #3504 DEFECT.PATH-SUBSTRING-CHECK (trailing-slash anchor for homedir checks); #3346/PR #3505 codex AoT TOML leaf-key via extractFlatHookEventName; #3506/PR #3507 label-scoped stale-bot sub-job pattern; multi-PR triage operational lessons folded into PROC.TRIAGE.*; #3508 DEFECT.AGENT-ISOLATION-SILENT-FAIL; gsd-test image-missing auto-build (locally-built image via embedded heredoc Dockerfile); refined PRED.k322 threshold to 3 PRs/<10min]",
-      "line": 1061
+      "line": 1062
     },
     {
       "id": "SESSION.2026-05-15",
       "klass": "SESSION",
       "value": "[#3537/PR #3538 DEFECT.PHASE-REGEX-FANOUT — phaseMarkdownRegexSource promoted to core.cjs and wired to 7 sites; parity-style regression test established as DEFECT.GENERATIVE-FIX exemplar; trek-e/gsd-test-runner#1 filed for DEFECT.GSD-TEST-MIRROR-POISONED — chown-back-before-exec legacy gap (poisoned holodeck mirror unstuck via authorized docker chown to remote 1000:1000); RULESET.PR-FLOW.* codified from project CLAUDE.md load-bearing rule; first dispatch under run-tests-before-create held cleanly (PR #3520 worker stopped on Docker exit 12 infra failure, orchestrator opened PR after unblock); CONTEXT.md refactored from 882 lines of mixed prose+predicates into ~500 lines of pure-predicate format with chronological session log]",
-      "line": 1062
+      "line": 1063
     },
     {
       "id": "SESSION.2026-05-15.parallel-fix-dispatch",
       "klass": "SESSION",
       "value": "[#3542/PR #3546 prohibit git stash family in executor agents (shared refs/stash across worktrees); #3541/PR #3547 non-TTY resolution for installer prompt-user actions (default remove for SDK build artifacts, keep for skills/gsd-*/SKILL.md); #3545 filed for gsd-test-summary concurrent /tmp output collision; new predicates DEFECT.HOOK-OVER-ENFORCEMENT.read-tool-tracking, DEFECT.GSD-TEST-CONCURRENT-OUTPUT-COLLISION, DEFECT.SUBAGENT-LONG-RUNNING-BG-STALL, DEFECT.AGENT-RETIRED-SLASH-SYNTAX-DRIFT, PROC.PARALLEL-FIX-DISPATCH; agent-trust-but-verify caught /gsd-update retired-syntax comment slip in #3541 implementation before PR open]",
-      "line": 1063
+      "line": 1064
     },
     {
       "id": "SESSION.2026-05-16",
       "klass": "SESSION",
       "value": "[multi-PR triage wave (#3577/3581/3640/3641/3642/3648/3649/3637/3639). Established global PreToolUse hook ~/.claude/hooks/test-memory-guard.sh denying new node/test spawns when sum(RSS of node|vitest|jest|...) >= 4 GiB on the 24 GB Mac OR when a same-runner process is already in argv[0] — hard deny via hookSpecificOutput.permissionDecision=deny. PR #3577 fix: revert config-ensure-section dispatch to CJS cmdConfigEnsureSection (SDK author wrote single-section semantics under a name whose legacy callers expect full-default config init); plus 3 SDK parity carve-outs (configNewProject defaults align with sdk/shared/config-defaults.manifest.json, return relative .planning/config.json path, drop quotes from Unknown config key, lead malformed-JSON error with \"Failed to read config.json:\"). PR #3649 fix: chunk node --test spawn at 28K argv ceiling (Windows CreateProcess lpCommandLine cap 32,767 was instantly aborting unchunked spawn of 546 paths). Chunking fix surfaced 14 pre-existing Windows-only test bugs (4010 pass / 14 fail; vs 0/0 before — entire suite was un-runnable on Windows). PRs #3639 + #3637 confirmed unable to stand alone (legitimately depend on Phase 6 scaffolding only present on feat/3575-enforcement-hardening) — user decision: cherry-pick into #3577 and close. Five other PRs each had ≤1 unresolved CR thread of the changeset-pr-number / null-vs-throw / implicit-Claude-runtime / docs-stale-guidance / hardcoded-tests-path family — all quick wins. New predicates: DEFECT.SDK-PORT-NAME-COLLISION, DEFECT.WINDOWS-ARGV-OVERFLOW, DEFECT.STACKED-PR-CANNOT-STAND-ALONE, DEFECT.CANARY-VERSION-LEAK, DEFECT.GSD-TEST-HOST-MID-RUN-DEATH, RULESET.HARNESS.test-memory-guard, RULESET.PR-FLOW.docker-before-push, RULESET.PR-FLOW.templates-mandatory]",
-      "line": 1064
+      "line": 1065
     },
     {
       "id": "WAVE.LESSON.agent-narrative-unreliable",
