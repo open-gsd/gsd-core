@@ -6388,6 +6388,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { stripFencedCode } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+
 const repoRoot = path.resolve(__dirname, '..');
 const WORKTREE_BRANCH_CHECK_FRAGMENT = path.join(repoRoot, 'gsd-core', 'references', 'worktree-branch-check.md');
 
@@ -6437,16 +6439,24 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
     const heading = lines.indexOf('**Prohibited commands in worktree context:**');
     assert.ok(heading >= 0, 'gsd-executor.md must keep its "Prohibited commands in worktree context" list');
 
-    // Group the list into top-level bullets, each with its indented continuation lines.
+    // Group the list into top-level bullets, each with its indented continuation lines (spaces or tabs).
+    // An unindented line ends the list; directly under a bullet markdown can fold it in, so it stays
+    // with that bullet too, and the anchored check below rejects it.
     const bullets = [];
+    let afterBlank = false;
     for (const line of lines.slice(heading + 1)) {
+      const blank = line.trim() === '';
       if (line.startsWith('- ')) {
         bullets.push(line);
-      } else if (line.startsWith(' ') && bullets.length > 0) {
+      } else if (!blank && bullets.length > 0 && /^[ \t]/.test(line)) {
         bullets[bullets.length - 1] += `\n${line}`;
-      } else if (line.trim() !== '') {
+      } else if (!blank) {
+        if (bullets.length > 0 && !afterBlank) {
+          bullets[bullets.length - 1] += `\n${line}`;
+        }
         break;
       }
+      afterBlank = blank;
     }
 
     const resetBullets = bullets.filter((bullet) => bullet.includes('`git reset --hard`'));
@@ -6459,6 +6469,11 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
       resetBullets[0],
       /^- `git reset --hard`(?: \(no exception: `<worktree_branch_check>` is verify-only, #48\))?$/,
       `the \`git reset --hard\` prohibition must be unconditional: ${resetBullets[0]}`
+    );
+    // The bullet must be list text, not a line of a sample someone fenced off.
+    assert.ok(
+      stripFencedCode(executorSource).text.split(/\r?\n/).includes(resetBullets[0]),
+      'the `git reset --hard` prohibition must not sit inside a fenced code block'
     );
     // A re-grant elsewhere in the file (a later bullet or paragraph) would bypass the bullet itself.
     assert.equal(
