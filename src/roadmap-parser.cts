@@ -1815,6 +1815,31 @@ function scanArchiveSpans(content: string, active: Array<{ start: number; end: n
 }
 
 /**
+ * #5679: the milestone version that owns `offset`. An offset inside a `<details>`
+ * archive (or a plain closed-milestone section) belongs to that block's
+ * `<summary>` (or heading) version, wherever the block sits relative to the
+ * active heading; any other offset belongs to the last milestone heading before
+ * it. Blocks come from `scanArchiveSpans` (fence/comment-aware, depth-paired),
+ * innermost first, so a notes block inside an archive does not hide the archive.
+ * Null when neither names a version.
+ */
+function milestoneVersionAtOffset(content: string, offset: number): string | null {
+  const containing = scanArchiveSpans(content, []).spans
+    .filter((span) => span.start <= offset && offset < span.end)
+    .sort((a, b) => b.start - a.start);
+  for (const span of containing) {
+    const head = content.slice(span.start, span.start + 1200);
+    // Only a <details> span owns its <summary>; a plain closed-milestone section must not borrow a later block's.
+    const summary = /^<details\b/i.test(head) ? /<summary[^>]*>([\s\S]{0,1000}?)<\/summary>/i.exec(head) : null;
+    const text = summary ? summary[1].replace(/<[^>]{0,200}>/g, '') : head.split('\n', 1)[0];
+    const version = text.match(VERSION_TOKEN)?.[0];
+    if (version) return version;
+  }
+  const preceding = listMilestoneHeadings(content.slice(0, offset));
+  return preceding.length > 0 ? preceding[preceding.length - 1].version : null;
+}
+
+/**
  * #5553: hide every archived `<details>` block, and every closed milestone
  * written as a plain heading section, behind a placeholder; `restore` puts them
  * back unchanged. Tag case, attributes and archive position
@@ -3040,6 +3065,10 @@ export = {
   // #4304: destructive ROADMAP writers classify details blocks through
   // the same closed-summary rule as stripClosedMilestoneDetails.
   isClosedMilestoneDetails,
+  // #5679: the owning milestone version of a ROADMAP offset, archive-aware.
+  milestoneVersionAtOffset,
+  // #5679: same-length copy with fenced blocks, code spans and HTML comments blanked.
+  blankCodeAndComments,
   // #4144 round 5 Blocker 1: the readers' own phase-heading grammar, so the
   // bracket roadmap migrator's "phase-like but unparsed" refusal
   // (src/roadmap-upgrade.cts) can gate on it instead of a private, looser
