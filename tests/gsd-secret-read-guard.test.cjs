@@ -819,6 +819,25 @@ describe('gsd-secret-read-guard: git command lines beyond -c keys (#5492)', () =
     assertBlocked(runHook(bash(cmd)), cmd, { code: 'alias-too-complex', tool: 'Bash' });
   });
 
+  // Only invocations spend the 256-expansion budget: `top` runs a script
+  // that invokes `q` n − 1 times, so n aliases are invoked in all. A
+  // definition nothing invokes is still scanned, at no expansion cost.
+  const invokedAliases = (n) => `git -c alias.q=status -c alias.top=${sq(`!${'git q; '.repeat(n - 1)}`)} top`;
+  for (const n of [255, 256]) {
+    test(`${n} alias invocations in one git command are allowed`, () => {
+      const cmd = invokedAliases(n);
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+  test('257 alias invocations in one git command fail closed', () => {
+    const cmd = invokedAliases(257);
+    assertBlocked(runHook(bash(cmd)), cmd, { code: 'alias-too-complex', tool: 'Bash', path: 'alias.q' });
+  });
+  test('300 alias definitions nothing invokes are allowed', () => {
+    const cmd = `git ${Array.from({ length: 300 }, (_, k) => `-c alias.u${k}=status`).join(' ')} log`;
+    assertAllowed(runHook(bash(cmd)), cmd);
+  });
+
   // The budget is per git command, however the shell or the hook's other
   // readings of the command reach it.
   const G = flatAliases(100);
@@ -934,6 +953,195 @@ describe('gsd-secret-read-guard: git configuration set in the environment on the
       assertAllowed(runHook(bash(cmd)), cmd);
     });
   }
+});
+
+describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
+  // A hook that crashes or outlives its timeout allows the command, so each
+  // of these must decide. They are the reviewers' payloads, at a size that
+  // crashed (a stack overflow, a V8 heap abort) or ran past the hook timeout
+  // before the scan was budgeted. Each ends in a plain read: `secret-read`
+  // means the scan got through to it, a too-complex code that the budget
+  // stopped it first. Verdicts and codes are asserted, never the time.
+  const rep = (n, f) => Array.from({ length: n }, (_, i) => f(i)).join('');
+  const sq = (s) => `'${s.replaceAll("'", "'\\''")}'`;
+  const blocks = [
+    ['an alias body that re-expands with the words after it',
+      `git -c alias.z="${'z '.repeat(300000)}" z; cat .env`, 'alias-too-complex', 'alias.z'],
+    ['an environment twin with many values, read by many git commands',
+      `${rep(6000, (i) => `export GIT_EDITOR=v${i}; `)}${'git log; '.repeat(6000)}cat .env`, 'secret-read', '.env'],
+    ['many configs in force under many nested git commands',
+      `git ${'-c a.b=1 '.repeat(30000)}rebase -x '${'git a; '.repeat(40000)}' HEAD; cat .env`, 'secret-read', '.env'],
+    ['many configs in force under many bare grep -O options',
+      `git ${'-c a.b=1 '.repeat(30000)}grep ${'-O '.repeat(80000)} x f; cat .env`, 'secret-read', '.env'],
+    ['GIT_CONFIG_KEY_0 values paired with GIT_CONFIG_VALUE_0 values',
+      `${rep(6000, (i) => `export GIT_CONFIG_KEY_0=a.b${i}; `)}${rep(6000, (i) => `export GIT_CONFIG_VALUE_0=v${i}; `)}git log; cat .env`,
+      'command-too-complex', ''],
+    ['an export of many assignments', `export ${'A=1 '.repeat(150000)}; git log; cat .env`, 'secret-read', '.env'],
+    ['an sshpass with many options', `sshpass ${'-fa '.repeat(150000)}ssh h; cat .env`, 'secret-read', '.env'],
+    ['URL rewrites applied to many URLs',
+      `git ${'-c url.ext::true.insteadOf=a '.repeat(2500)}fetch ${'a '.repeat(2500)}; cat .env`, 'command-too-complex', ''],
+    ['URL rewrites applied to their own values',
+      `git ${'-c url.ext::a.insteadOf=a '.repeat(3000)}status; cat .env`, 'command-too-complex', ''],
+    ['URL rewrites applied to one long URL',
+      `git ${'-c url.ext::x.insteadOf=a '.repeat(2000)}fetch a${'b'.repeat(500000)}; cat .env`, 'command-too-complex', ''],
+    ['--config-env specs naming a variable with many values',
+      `export ${rep(5000, (i) => `E=${i} `)}; git ${'--config-env=a.b=E '.repeat(5000)}status; cat .env`, 'command-too-complex', ''],
+    ['a long GIT_CONFIG_PARAMETERS word split at every =',
+      `GIT_CONFIG_PARAMETERS="'${'a'.repeat(500000)}${'='.repeat(2000)}'" git status; cat .env`, 'command-too-complex', ''],
+    ['a config-file variable with many values, read by many git commands',
+      `export ${rep(10000, (i) => `GIT_CONFIG=v${i} `)}; ${'git status; '.repeat(10000)}cat .env`, 'secret-read', '.env'],
+    ['an editor script of git commands, rescanned by each of them',
+      `export GIT_EDITOR='${'git log; '.repeat(20000)}'; git log; cat .env`, 'command-too-complex', ''],
+    ['an editor script of short segments, rescanned by its git commands',
+      `export GIT_EDITOR='${'git log; '.repeat(30)}${'x;'.repeat(20000)}'; git log; cat .env`, 'command-too-complex', ''],
+  ];
+  for (const [shape, cmd, code, expectedPath] of blocks) {
+    test(`decides ${shape} (${(cmd.length / 1024).toFixed(0)} KB)`, () => {
+      assertBlocked(runHook(bash(cmd)), shape, { code, tool: 'Bash', path: expectedPath });
+    });
+  }
+
+  // The same shapes with nothing to find stay allowed: each twin value and
+  // each alias the environment defines is scanned once, not once per git
+  // command.
+  const allows = [
+    ['an environment twin with many values, read by many git commands',
+      `${rep(12000, (i) => `export GIT_EDITOR=v${i}; `)}${'git log; '.repeat(12000)}`],
+    ['an alias the environment defines and many git commands do not invoke',
+      `export GIT_CONFIG_PARAMETERS="'alias.q=status'"; ${'git log; '.repeat(50000)}`],
+  ];
+  for (const [shape, cmd] of allows) {
+    test(`allows ${shape} (${(cmd.length / 1024).toFixed(0)} KB)`, () => {
+      assertAllowed(runHook(bash(cmd)), shape);
+    });
+  }
+
+  // The environment's config is scanned once per shell-variable frame, and
+  // only for a depth-0 git command that sets no config of its own. A scan a
+  // nesting limit cut short, a frame with more variables, or a command whose
+  // own config changes what the environment's scripts run must not reuse it.
+  // Every definition of an alias is scanned, the one git would ignore too.
+  // `via` is the chain of git steps the read was reached through.
+  const chains = [
+    [`export GIT_EDITOR='bash -c "bash -c \\"cat .env\\""'; bash -c 'git log'; git log`, ['$GIT_EDITOR']],
+    [`export GIT_EDITOR='bash -c "git -c core.editor=\\"cat .env\\" commit"'; bash -c 'git log'; git log`,
+      ['$GIT_EDITOR', '-c core.editor']],
+    ["export GIT_EDITOR='git foo'; git a; GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.foo GIT_CONFIG_VALUE_0='!cat .env' git b",
+      ['alias foo']],
+    [`export GIT_EDITOR="git fetch 'zzsh -c cat% .env'"; git status; git -c url.ext::.insteadOf=zz log`, ['$GIT_EDITOR', 'ext::']],
+    ["git -c alias.x='!cat .env' -c alias.x=status x", ['alias x']],
+    [`GIT_CONFIG_PARAMETERS="'alias.x=!cat .env' 'alias.x=status'" git x`, ['alias x']],
+    ["git -c alias.r=rebase r -x 'cat .env' HEAD~1", ['alias r', 'rebase --exec']],
+    [`git -c core.editor='git -c alias.r=rebase r -x "cat .env" HEAD~1' commit`, ['-c core.editor', 'alias r', 'rebase --exec']],
+    [`GIT_SSH_COMMAND="ssh -o ProxyCommand='cat .env'" git fetch`, ['$GIT_SSH_COMMAND', 'ssh -o ProxyCommand']],
+    ["git -c core.pager='cat .env' grep -O x f", ['grep --open-files-in-pager', '-c core.pager']],
+    ["git -c 'url.ext::sh -c cat% .env.insteadOf=x' fetch x", ['ext::']],
+    ['GIT_CONFIG_GLOBAL=.env git status', ['$GIT_CONFIG_GLOBAL']],
+  ];
+  for (const [cmd, via] of chains) {
+    test(`blocks ${JSON.stringify(cmd)} via ${via.join(' → ')}`, () => {
+      const out = assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      assert.deepEqual(out.via, via, `${cmd}: via`);
+    });
+  }
+  test('a read reached through no git step carries no via', () => {
+    const out = assertBlocked(runHook(bash('cat .env')), 'cat .env', { tool: 'Bash', path: '.env' });
+    assert.equal(out.via, undefined);
+  });
+
+  // Every place the scan recurses reports a read found through it: a place
+  // that lost the scan's context would crash, and a crash allows.
+  const sites = [
+    'echo $(cat .env)', 'eval cat .env', 'source <(echo cat .env)', "bash -c 'cat .env'", 'bash <(echo cat .env)',
+    'bash <<EOF\ncat .env\nEOF', "bash <<< 'cat .env'", 'echo cat .env | bash', "xargs sh -c 'cat .env'",
+    "xargs git -c core.fsmonitor='cat .env' status", "git -c core.fsmonitor='cat .env' status",
+    "git -c alias.x='!cat .env' x", "git -c alias.x='log -- .env' x", "git rebase -x 'cat .env' HEAD",
+    "git -c core.pager='cat .env' grep -O x f", "git submodule foreach 'cat .env'", "git ls-remote 'ext::sh -c cat% .env'",
+    "GIT_EDITOR='cat .env' git commit", "E='cat .env' git --config-env=core.fsmonitor=E status",
+    "ssh -o ProxyCommand='cat .env' h", 'GIT_CONFIG_GLOBAL=.env git status',
+  ];
+  for (const cmd of sites) {
+    test(`a read through ${JSON.stringify(cmd)} is reported`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  // Pager values run with no terminal and print nothing, so a value naming a
+  // file is allowed like any other pager value. A bare `grep -O` runs the
+  // pager, so its command is scanned (the `'cat .env'` rows above), but a
+  // bare name is only exec'd.
+  for (const cmd of ['git -c core.pager=.env log', 'git -c pager.log=.env log', 'GIT_PAGER=.env git log', 'PAGER=.env git log',
+    'git -c core.pager=.env grep -O x f']) {
+    test(`allows ${JSON.stringify(cmd)}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  // The budget and the work each command's first reading spends, from the
+  // hook's test seam, read in a child Node.
+  const scanWork = (commands) => {
+    const script = `const h = require(${JSON.stringify(HOOK_PATH)}); let input = '';
+      process.stdin.on('data', (c) => { input += c; }).on('end', () => {
+        console.log(JSON.stringify({ max: h.MAX_SCAN_WORK, work: JSON.parse(input).map(h.scanWork) }));
+      });`;
+    const r = runNode(['-e', script], { input: JSON.stringify(commands), timeoutMs: QUICK_SPAWN_TIMEOUT_MS });
+    assert.equal(r.exitCode, 0, r.stderr);
+    return JSON.parse(r.stdout);
+  };
+
+  // URL rewrites that never match make the work (each comparison is charged
+  // the prefix length); each space in the trailing nested script adds one unit.
+  test('a scan spending exactly the work budget is allowed, and one unit more blocks', () => {
+    const defs = Array.from({ length: 64 }, () => `-c url.B.insteadOf=${'a'.repeat(1000)}`).join(' ');
+    const make = (urls, pad) => `git ${defs} fetch ${Array(urls).fill('b'.repeat(1000)).join(' ')}; bash -c '${' '.repeat(pad)}'`;
+    const { max, work: [w0, w1] } = scanWork([make(0, 0), make(1, 0)]);
+    const urls = Math.floor((max - w0) / (w1 - w0)) - 1;
+    const base = scanWork([make(urls, 0)]).work[0];
+    const commands = [-1, 0, 1].map((d) => make(urls, max - base + d));
+    assert.deepEqual(scanWork(commands).work, [max - 1, max, max + 1]);
+    assertAllowed(runHook(bash(commands[0])), 'budget − 1');
+    assertAllowed(runHook(bash(commands[1])), 'budget');
+    assertBlocked(runHook(bash(commands[2])), 'budget + 1', { code: 'command-too-complex', tool: 'Bash', path: '' });
+  });
+
+  // A command that opens a heredoc is scanned under three readings, all
+  // spending one budget: k prefixed git commands each rescan the editor
+  // script, the same work in every reading (past the first, which also builds
+  // the environment's config), so the smallest k whose three readings pass
+  // the budget together blocks, and one fewer is allowed.
+  test('the readings of a heredoc command share one budget', () => {
+    const make = (k) => `cat <<EOF\nx\nEOF\nexport GIT_EDITOR='git log; git log'\n${'X=1 git log; '.repeat(k)}`;
+    const { max, work: [w1, w2] } = scanWork([make(1), make(2)]);
+    const k = Math.floor((max / 3 - w1) / (w2 - w1)) + 2;
+    const { work: [under, over] } = scanWork([make(k - 1), make(k)]);
+    assert.ok(3 * under <= max && 3 * over > max && over <= max, `k=${k}: ${under}, ${over} against ${max}`);
+    assertAllowed(runHook(bash(make(k - 1))), `${k - 1} commands`);
+    assertBlocked(runHook(bash(make(k))), `${k} commands`, { code: 'command-too-complex', tool: 'Bash', path: '' });
+  });
+
+  // Whatever mix of the amplifying shapes and whatever their sizes, up to
+  // past the budget, a command ending in a plain read is blocked: the scan
+  // reaches the read or stops at a limit, and never crashes or stalls.
+  const SHAPE = fc.oneof(
+    fc.integer({ min: 1, max: 60000 }).map((n) => `git -c alias.z=${sq('z '.repeat(n))} z`),
+    fc.tuple(fc.integer({ min: 1, max: 3000 }), fc.integer({ min: 1, max: 3000 }))
+      .map(([n, m]) => `${rep(n, (i) => `export GIT_EDITOR=v${i}; `)}${'X=1 git log; '.repeat(m)}`),
+    fc.tuple(fc.integer({ min: 1, max: 1500 }), fc.integer({ min: 1, max: 1500 }))
+      .map(([n, m]) => `git ${'-c url.ext::true.insteadOf=a '.repeat(n)}fetch ${'a '.repeat(m)}`),
+    fc.tuple(fc.integer({ min: 1, max: 2000 }), fc.integer({ min: 1, max: 2000 }))
+      .map(([n, m]) => `${rep(n, (i) => `export GIT_CONFIG_KEY_0=a.b${i}; `)}${rep(m, (i) => `export GIT_CONFIG_VALUE_0=v${i}; `)}git log`),
+    fc.integer({ min: 1, max: 600 }).map((n) => `export GIT_EDITOR='${'git log; '.repeat(n)}'; git log`),
+  );
+  test('property: amplified git command lines always decide', () => {
+    fc.assert(fc.property(fc.array(SHAPE, { minLength: 1, maxLength: 3 }), (shapes) => {
+      const cmd = `${shapes.join('; ')}; cat .env`;
+      const r = runHook(bash(cmd));
+      assert.equal(r.status, 2, `${cmd.slice(0, 200)}: expected block, got exit ${r.status}`);
+      const out = JSON.parse(r.stdout);
+      assert.ok(['secret-read', 'command-too-complex', 'alias-too-complex'].includes(out.code), out.code);
+      if (out.code === 'secret-read') assert.equal(out.path, '.env');
+    }), { seed: 5492, numRuns: 20 });
+  });
 });
 
 describe('gsd-secret-read-guard: Read', () => {
