@@ -60,7 +60,18 @@ function withFifoReader(fifo, readerScript, extraOpts, total, cwd, killReader = 
     const reader = spawn(process.execPath, ['-e', readerScript, fifo], { stdio: ['ignore', 'pipe', 'pipe'] });
     let readerOut = '';
     let started = false;
-    const kill = setTimeout(() => { reader.kill('SIGKILL'); reject(new Error('FIFO reader did not finish')); }, PROBE_TIMEOUT_MS * 3);
+    // Registered at spawn: a reader that exits first (EPIPE case) must not be missed.
+    const readerClosed = new Promise((done) => { reader.on('close', done); });
+    let writerChild = null;
+    const kill = setTimeout(() => {
+      reader.kill('SIGKILL');
+      if (writerChild) {
+        writerChild.once('close', () => reject(new Error('FIFO writer did not finish')));
+        writerChild.kill('SIGKILL');
+      } else {
+        reject(new Error('FIFO reader never became ready'));
+      }
+    }, PROBE_TIMEOUT_MS * 3);
     reader.stdout.on('data', (d) => { readerOut += d; });
     reader.stderr.on('data', () => {
       if (started) return;
@@ -75,12 +86,13 @@ function withFifoReader(fifo, readerScript, extraOpts, total, cwd, killReader = 
       const w = spawn(process.execPath, ['-e', writerScript, SHELL_PROJECTION_PATH, fifo], {
         cwd, env: installSpawnEnv({}), stdio: ['ignore', 'pipe', 'ignore'],
       });
+      writerChild = w;
       let writer = '';
       w.stdout.on('data', (d) => { writer += d; });
       w.on('close', () => {
         // A reader that exits on EOF is awaited so its byte count arrives; a stalled one is killed.
         if (killReader) reader.kill('SIGKILL');
-        reader.on('close', () => { clearTimeout(kill); resolve({ writer, readerOut }); });
+        readerClosed.then(() => { clearTimeout(kill); resolve({ writer, readerOut }); });
       });
     });
   });
@@ -581,8 +593,11 @@ describe('#5759 platformWriteSync never blocks on or follows a planted temp file
     const total = 256 * 1024;
     const reader = [
       'const fs = require("node:fs");',
-      'const fd = fs.openSync(process.argv[1], fs.constants.O_RDONLY);',
+      // Non-blocking open first (no writer needed), announce, then the blocking descriptor we read from.
+      'const nb = fs.openSync(process.argv[1], fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);',
       'process.stderr.write("ready");',
+      'const fd = fs.openSync(process.argv[1], fs.constants.O_RDONLY);',
+      'fs.closeSync(nb);',
       'const buf = Buffer.alloc(4096); let n = 0, r;',
       'const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);',
       'while ((r = fs.readSync(fd, buf, 0, buf.length, null)) > 0) { n += r; if (n % 65536 < 4096) sleep(5); }',
@@ -600,13 +615,18 @@ describe('#5759 platformWriteSync never blocks on or follows a planted temp file
     makeFifo(fifo);
     const reader = [
       'const fs = require("node:fs");',
-      'const fd = fs.openSync(process.argv[1], fs.constants.O_RDONLY);',
+      // Non-blocking open first (no writer needed), announce, then the blocking descriptor we read from.
+      'const nb = fs.openSync(process.argv[1], fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);',
       'process.stderr.write("ready");',
+      'const fd = fs.openSync(process.argv[1], fs.constants.O_RDONLY);',
+      'fs.closeSync(nb);',
       'fs.readSync(fd, Buffer.alloc(65536), 0, 65536, null);',
+      'fs.closeSync(fd);',
       'process.exit(0);',
     ].join('\n');
 
-    return withFifoReader(fifo, reader, ', specialTargetWait: { sleep: () => {}, maxWaitMs: 100000 }', 256 * 1024, tmpDir)
+    // The default (real) back-off and a huge bound: EPIPE must win over ETIMEDOUT.
+    return withFifoReader(fifo, reader, ', specialTargetWait: { maxWaitMs: 1e12 }', 256 * 1024, tmpDir)
       .then(({ writer }) => { assert.strictEqual(writer, 'EPIPE'); });
   });
 
@@ -615,7 +635,7 @@ describe('#5759 platformWriteSync never blocks on or follows a planted temp file
     makeFifo(fifo);
     const reader = [
       'const fs = require("node:fs");',
-      'fs.openSync(process.argv[1], fs.constants.O_RDONLY);',
+      'fs.openSync(process.argv[1], fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);',
       'process.stderr.write("ready");',
       'setTimeout(() => {}, 60000);',
     ].join('\n');
@@ -637,6 +657,31 @@ describe('#5759 platformWriteSync never blocks on or follows a planted temp file
     assert.strictEqual(JSON.parse(r.stdout).code, 'ok');
     assert.ok(fs.readFileSync(target, 'utf8').includes('hello'));
     assert.deepStrictEqual(fs.readdirSync(tmpDir).filter((n) => n.includes('.tmp.')), []);
+  });
+
+  test('a socket is written in place only as a descriptor alias (/dev/stdout), refused otherwise', () => {
+    const script = [
+      'const fs = require("node:fs");',
+      'const real = fs.statSync;',
+      'const sock = { isBlockDevice: () => false, isSocket: () => true, isCharacterDevice: () => false, isFIFO: () => false, isFile: () => false };',
+      'fs.statSync = (p, ...rest) => (String(p).endsWith("fake-sock") || String(p) === "/dev/stdout" ? sock : real(p, ...rest));',
+      'const out = {};',
+      'for (const target of ["/dev/stdout", process.argv[2]]) {',
+      '  try { require(process.argv[1]).platformWriteSync(target, "", { allowSpecialTarget: true, verbatim: true }); out[target.slice(-9)] = "ok"; }',
+      '  catch (e) { out[target.slice(-9)] = e.code; }',
+      '}',
+      'process.stderr.write(JSON.stringify(out));',
+    ].join('\n');
+    const r = runNode(['-e', script, SHELL_PROJECTION_PATH, path.join(tmpDir, 'fake-sock')], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    const out = JSON.parse(r.stderr);
+    assert.strictEqual(out['fake-sock'], 'ENXIO');
+    assert.strictEqual(out['/dev/stdout'.slice(-9)], 'ok');
   });
 
   test('a block device or socket target is refused with ENXIO even with allowSpecialTarget', () => {
