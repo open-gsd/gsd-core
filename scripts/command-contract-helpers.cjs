@@ -947,8 +947,11 @@ const REMEDIES = Object.freeze({
  *
  * Escape format: each hostile code point (see isEchoHostile) is rendered as
  * `\u{X}` with UPPERCASE hex and no padding, e.g. U+0085 -> `\u{85}`,
- * U+200B -> `\u{200B}`, U+1F600-range tags -> `\u{E0041}`. The output is
- * therefore free of every hostile character.
+ * U+200B -> `\u{200B}`, tag characters (U+E0000-U+E007F) -> `\u{E0041}`. The
+ * escape introducer itself, a literal backslash U+005C, is escaped as `\u{5C}`
+ * so a spelled-out `\u{202E}` in the input can never print identically to a
+ * real U+202E: distinct inputs keep distinct output. The output is therefore
+ * free of every hostile character.
  *
  * Cap: 200 code points of OUTPUT (an escape counts as its own length, never
  * split), so the result is bounded however hostile the input; scanning stops
@@ -964,7 +967,7 @@ function sanitizeEcho(text) {
   let used = 0;
   for (const ch of String(text)) {
     const code = ch.codePointAt(0);
-    const hostile = isEchoHostile(code);
+    const hostile = code === 0x5c || isEchoHostile(code);
     const unit = hostile ? `\\u{${code.toString(16).toUpperCase()}}` : ch;
     const len = hostile ? unit.length : 1; // escapes are ASCII: one code point per char
     if (used + len > CAP) break;
