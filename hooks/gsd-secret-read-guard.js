@@ -110,9 +110,7 @@
 //   a `${…}` default spelled with `$'…'` (`cat ${x:-$'.env'}`,
 //   `cat ${x-$'.e\x6ev'}`), since the text inside `${…}` is not scanned; a
 //   name joined to an expansion (`cat ${x:+a}$'.env'`, `cat .env${}`), the
-//   `$VAR` gap; a heredoc tag holding `${` or starting with `}`
-//   (`<<${;cat .env`, `<<$'E'${; cat .env #`, `<<}; cat .env #`), near
-//   #5523's form C (`<<{`); zsh's `$((` holding a quote
+//   `$VAR` gap; zsh's `$((` holding a quote
 //   (`x$(($"));cat .env`, `$((")); cat .env #`), #5523's form I; and zsh's
 //   `$[ … ]` arithmetic, in which a `'` is not a quote, inside `${…}`
 //   (`echo ${x+$[ } ' ]}; cat $'.env' #'`), the same form; and a line
@@ -1426,6 +1424,14 @@ function tokenize(str, reading) {
       const j = reading ? ansiCBraceClose(str, i + 2, reading, inner, false) : str.indexOf('}', i);
       if (j !== -1) for (const cmd of inner) nested.push(cmd);
       const k = j === -1 && reading && !asBefore ? str.indexOf('}', i) : j;
+      // A heredoc tag is not expanded, and dash ends one whose `${` never
+      // closes at the next metacharacter (`<<${;cat .env` runs the read), where
+      // a word with such a `${` holds the rest of the line.
+      if (k === -1 && expectTag && heredocTagsAsWords) {
+        buf += '${';
+        i += 2;
+        continue;
+      }
       const e = k === -1 ? str.length - 1 : k;
       buf += str.slice(i, e + 1);
       i = e + 1;
@@ -1558,7 +1564,11 @@ function tokenize(str, reading) {
       i++;
       continue;
     }
-    if ((ch === '{' || ch === '}') && !hasWord && (i + 1 >= str.length || /[\s;&|)]/.test(str[i + 1]))) {
+    // A brace where a heredoc tag is due is the tag (`<<}; cat .env` is tag `}`,
+    // then the read), never a group: every shell takes a `{` there, and bash
+    // and dash a `}`. The earlier tag reading keeps the old grouping.
+    if ((ch === '{' || ch === '}') && !hasWord && !(expectTag && heredocTagsAsWords)
+      && (i + 1 >= str.length || /[\s;&|)]/.test(str[i + 1]))) {
       sep(ch);
       i++;
       continue;
