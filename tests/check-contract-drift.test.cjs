@@ -607,9 +607,14 @@ describe('contract-drift: typed surface', () => {
 
   test('sanitizeEcho round-trips: an untruncated output decodes back to the input (property)', () => {
     const decode = (out) => out.replace(/\\u\{([0-9A-F]+)\}/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)));
-    const special = [0x5c, 0x75, 0x7b, 0x7d, 0x30, 0x35, 0x41, 0x46, 0x202e, 0x85, 0x200b, 0xd800, 0xdfff, 0x1f600].map((cp) =>
-      String.fromCodePoint(cp),
-    );
+    const bs = String.fromCharCode(0x5c);
+    const special = [
+      ...[0x5c, 0x75, 0x7b, 0x7d, 0x30, 0x35, 0x41, 0x46, 0x202e, 0x85, 0x200b, 0xd800, 0xdfff, 0x1f600].map((cp) =>
+        String.fromCodePoint(cp),
+      ),
+      `${bs}u{`, // spelled-out escape prefix (ASCII text, not a hostile character)
+      `${bs}u{202E}`, // spelled-out full escape
+    ];
     const arb = fc
       .array(fc.oneof(fc.constantFrom(...special), fc.string({ unit: 'binary', maxLength: 8 })), { maxLength: 120 })
       .map((parts) => parts.join(''));
