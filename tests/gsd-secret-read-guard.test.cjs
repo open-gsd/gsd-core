@@ -2657,20 +2657,34 @@ describe("decodeAnsiC against bash 5.2 and zsh 5.9", () => {
 describe('readings: an error, the block reported, and the heredoc tag', () => {
   const R = String.raw;
 
-  test('a bug in a reading reaches the crash policy once the plain reading has found nothing', (t) => {
-    const { findSecretRead } = require(HOOK_PATH);
-    t.mock.method(Buffer, 'from', () => { throw new TypeError('decoder bug'); });
-    let thrown = null;
-    try {
-      findSecretRead(R`echo $'\x41'; ls`, 0);
-    } catch (e) {
-      thrown = e;
-    }
-    const plainVerdict = findSecretRead(R`cat .env; echo $'\x41'`, 0);
-    t.mock.restoreAll();
-    assert.ok(thrown instanceof TypeError, 'the decoder bug is not swallowed');
-    assert.deepEqual(plainVerdict, { code: 'secret-read', text: '.env' }, 'the plain reading keeps its verdict');
+  // The fixture makes the decoders throw on a span holding FAULT.
+  const faulty = (command) => {
+    const r = runHookSeam(HOOK_PATH, [], {
+      input: JSON.stringify(bash(command)),
+      env: { ...process.env, NODE_OPTIONS: `--require ${path.join(__dirname, 'fixtures', 'secret-read-guard-throwing-decoder.cjs')}` },
+      timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
+    });
+    return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
+  };
+
+  test('a bug in a reading is reported on stderr when nothing else denies', () => {
+    const r = faulty(R`echo $'\x41FAULT'; ls`);
+    assertAllowed(r, 'a faulty reading, no read');
+    assert.match(r.stderr, /a reading failed: decoder bug/);
   });
+
+  for (const cmd of [
+    R`cat .env; echo $'\x41FAULT'`,
+    R`echo $(echo $'\x41FAULT'); cat .env`,
+    R`echo "$(echo $'\x41FAULT')"; cat .env`,
+    R`echo ${'`'}echo $'\x41FAULT'${'`'}; cat .env`,
+    R`bash -c "echo \$'\\x41FAULT'"; cat .env`,
+    R`eval "echo \$'\\x41FAULT'"; cat .env`,
+  ]) {
+    test(`a bug in a nested reading costs no denial: ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(faulty(cmd), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
 
   test('a secret read outranks a word with no value to check, whichever reading reports first', () => {
     // bash's and zsh's readings see a span that never closes; dash's sees `cat .env`.
