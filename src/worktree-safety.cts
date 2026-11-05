@@ -2994,7 +2994,7 @@ function findUnregisteredResidue(
     return { results, status: 'scanned' };
   }
   const registered = new Set<string>();
-  for (const field of String(listed.stdout).split('\0')) {
+  for (const field of splitNulEntries(String(listed.stdout))) {
     if (field.startsWith('worktree ')) registered.add(comparablePath(field.slice('worktree '.length)));
   }
   // Child names under `.claude/worktrees` that git tracks a file in, Unicode-
@@ -3008,7 +3008,7 @@ function findUnregisteredResidue(
   const ownIndex = { cwd: top };
   const trackedList = execGit(['ls-files', '-z', '--', '.claude/worktrees'], ownIndex);
   const trackedNames = new Set<string>();
-  for (const file of gitResultOk(trackedList) ? String(trackedList.stdout).split('\0') : []) {
+  for (const file of gitResultOk(trackedList) ? splitNulEntries(String(trackedList.stdout)) : []) {
     const name = file.split('/')[2];
     if (name) trackedNames.add(name.normalize('NFC').toLowerCase());
   }
@@ -3216,11 +3216,9 @@ function residueHoldsWork(
       // invisible to them: anything there is work (Codex review).
       const staged = execGit([...repo, 'ls-files', '-s', '-z'], { cwd: dir, env });
       if (!gitResultOk(changed) || !gitResultOk(untracked) || !gitResultOk(ignoreFiles) || !gitResultOk(staged)) continue;
-      const atGitlink = String(staged.stdout).split('\0').some((entry) => {
-        const m = /^160000 [0-9a-f]+ \d+\t(.+)$/su.exec(entry);
-        if (!m) return false;
-        const held = lstatState(path.join(dir, m[1]));
-        return held === 'unreadable' || (held !== 'absent' && (!held.isDirectory() || (readDirOrNull(path.join(dir, m[1]))?.length ?? 1) > 0));
+      const atGitlink = gitlinkPaths(String(staged.stdout)).some((rel) => {
+        const held = lstatState(path.join(dir, rel));
+        return held === 'unreadable' || (held !== 'absent' && (!held.isDirectory() || (readDirOrNull(path.join(dir, rel))?.length ?? 1) > 0));
       });
       answered = true;
       if (String(changed.stdout).length === 0 && String(untracked.stdout).length === 0
@@ -3239,18 +3237,59 @@ function residueHoldsWork(
 }
 
 /**
+ * The entries of a git `-z` listing: each is NUL-terminated, and an empty field
+ * (the record separator in `worktree list --porcelain -z`) is not an entry.
+ * Names may hold newlines and leading spaces, so nothing is trimmed.
+ */
+function splitNulEntries(stdout: string): string[] {
+  return stdout.split('\0').filter((entry) => entry !== '');
+}
+
+/** The submodule (gitlink, mode 160000) paths in `git ls-files -s -z` output. */
+function gitlinkPaths(stdout: string): string[] {
+  const paths: string[] = [];
+  for (const entry of splitNulEntries(stdout)) {
+    const m = /^160000 [0-9a-f]+ \d+\t(.+)$/su.exec(entry);
+    if (m) paths.push(m[1]);
+  }
+  return paths;
+}
+
+/**
+ * The target a gitfile (`.git` as a file) names, read as git reads it: trailing
+ * CR and LF characters are stripped (any number; a trailing space or tab stays
+ * part of the path), then the `gitdir: ` prefix is required. `null` for
+ * anything else. The target may be relative to the gitfile.
+ */
+function parseGitdirFile(contents: string): string | null {
+  const trimmed = contents.replace(/[\r\n]+$/u, '');
+  if (!trimmed.startsWith('gitdir: ')) return null;
+  const target = trimmed.slice('gitdir: '.length);
+  return target === '' ? null : target;
+}
+
+/**
  * #5812 ruling: ignored files that keep a residue unless the harness copied
- * them in — secrets (`.env*`, `.secrets`) and GSD's own planning files, which
+ * them in — secrets and credentials (`.env*`, `.secrets`, `*.pem`, `*.key`,
+ * `.npmrc`, `.aws/`) and GSD's own planning files, which
  * `planning.commit_docs: false` leaves ignored. git cannot restore an ignored
  * file, so losing one of these cannot be undone. Every other ignored file stays
- * disposable, as it is to `git worktree remove` without `--force`.
+ * disposable, as it is to `git worktree remove` without `--force`. Files under
+ * `node_modules/` are installed packages, not user data: many ship a
+ * `.env.example` or a test key, which would otherwise keep every residue that
+ * has an install (#5233 review). ADR-5812 decision 4 names this list.
  */
 const RESIDUE_USER_DATA_PATHSPECS: readonly string[] = [
   ':(glob,icase)**/.env*',
   ':(glob,icase)**/.env*/**',
   ':(glob,icase)**/.secrets',
   ':(glob,icase)**/.secrets/**',
+  ':(glob,icase)**/*.pem',
+  ':(glob,icase)**/*.key',
+  ':(glob,icase)**/.npmrc',
+  ':(glob,icase)**/.aws/**',
   ':(glob,icase).planning/**',
+  ':(exclude,glob,icase)**/node_modules/**',
 ];
 
 /**
@@ -3278,7 +3317,7 @@ function residueHoldsUserData(
     );
     if (!gitResultOk(listed)) return null;
     const real = fs.realpathSync.native(dir);
-    return String(listed.stdout).split('\0').some((rel) => rel !== '' && !isHarnessCopy(dir, real, top, rel));
+    return splitNulEntries(String(listed.stdout)).some((rel) => !isHarnessCopy(dir, real, top, rel));
   } catch {
     return null;
   } finally {
@@ -3383,8 +3422,8 @@ function ownGitDir(top: string): string | null {
     const st = fs.lstatSync(entry);
     if (st.isDirectory()) return comparablePath(entry);
     if (!st.isFile()) return null;
-    const m = /^gitdir: (.+?)\r?\n?$/.exec(fs.readFileSync(entry, 'utf8'));
-    return m ? comparablePath(path.resolve(top, m[1])) : null;
+    const target = parseGitdirFile(fs.readFileSync(entry, 'utf8'));
+    return target === null ? null : comparablePath(path.resolve(top, target));
   } catch {
     return null;
   }
@@ -3966,6 +4005,9 @@ export = {
   // own git-backed residue — and pathCompareKey's win32 fold is unreachable
   // from the public surface on a POSIX host.
   residueNameList,
+  splitNulEntries,
+  gitlinkPaths,
+  parseGitdirFile,
   pathCompareKey,
   cmdWorktreeReapOrphans,
   workerRecordPath,

@@ -2456,15 +2456,61 @@ describe('#4941 regression: reap-orphans removes unregistered .claude/worktrees 
     ['an ignored .secrets', '.secrets'],
     ['a file inside an ignored .env directory', path.join('.env', 'db-password')],
     ['an ignored planning file (commit_docs: false)', path.join('.planning', 'phases', '01-x', '01-SUMMARY.md')],
+    // #5812 ruling 6648389758: common secret and credential files.
+    ['an ignored key.pem', 'key.pem'],
+    ['a nested ignored server.key', path.join('certs', 'server.key')],
+    ['an ignored .npmrc', '.npmrc'],
+    ['an ignored .aws/credentials', path.join('.aws', 'credentials')],
   ]) {
     test(`a residue holding ${label} the harness did not create is kept as residue_has_user_data`, () => {
       const { repoDir, residue } = repoWithResidue(`user-data-${label.split(' ').pop().replace(/[^a-z0-9]/gi, '')}`);
-      excludeLocally(repoDir, '.env*', '.secrets', '.planning/');
+      excludeLocally(repoDir, '.env*', '.secrets', '.planning/', '*.pem', '*.key', '.npmrc', '.aws/');
       fs.mkdirSync(path.dirname(path.join(residue, rel)), { recursive: true });
       fs.writeFileSync(path.join(residue, rel), 'only here\n');
       const row = onlyRow(reapOrphanWorktrees(repoDir, deadOwnerDeps()));
       assert.deepStrictEqual([row.status, row.reason], ['skipped', 'residue_has_user_data']);
       assert.strictEqual(fs.readFileSync(path.join(residue, rel), 'utf8'), 'only here\n');
+    });
+  }
+
+  // #5233 review: packages ship `.env.example` and test keys, so matching inside
+  // `node_modules/` kept nearly every residue that has an install.
+  test('secret-named files inside node_modules do not keep the residue', () => {
+    const { repoDir, residue } = repoWithResidue('user-data-node-modules');
+    excludeLocally(repoDir, 'node_modules/');
+    const pkg = path.join(residue, 'node_modules', 'p');
+    fs.mkdirSync(path.join(pkg, 'test'), { recursive: true });
+    fs.writeFileSync(path.join(pkg, '.env.example'), 'KEY=\n');
+    fs.writeFileSync(path.join(pkg, 'test', 'fixture.pem'), 'pem\n');
+    fs.writeFileSync(path.join(pkg, '.npmrc'), 'registry=x\n');
+    const row = onlyRow(reapOrphanWorktrees(repoDir, deadOwnerDeps()));
+    assert.deepStrictEqual([row.status, row.reason], ['reaped', 'unregistered_residue']);
+    assert.ok(!fs.existsSync(residue));
+  });
+
+  test('a top-level .env still keeps a residue that also has node_modules', () => {
+    const { repoDir, residue } = repoWithResidue('user-data-node-modules-env');
+    excludeLocally(repoDir, 'node_modules/', '.env*');
+    fs.mkdirSync(path.join(residue, 'node_modules', 'p'), { recursive: true });
+    fs.writeFileSync(path.join(residue, 'node_modules', 'p', '.env.example'), 'KEY=\n');
+    fs.writeFileSync(path.join(residue, '.env'), 'KEY=only\n');
+    const row = onlyRow(reapOrphanWorktrees(repoDir, deadOwnerDeps()));
+    assert.deepStrictEqual([row.status, row.reason], ['skipped', 'residue_has_user_data']);
+    assert.strictEqual(fs.readFileSync(path.join(residue, '.env'), 'utf8'), 'KEY=only\n');
+  });
+
+  // #5233 review: HARNESS_COPY_COMPARE_LIMIT (1 MiB) decides whether a
+  // byte-identical `.env` counts as a harness copy (removed) or user data (kept).
+  for (const [delta, expected] of [[-1, 'reaped'], [0, 'reaped'], [1, 'skipped']]) {
+    test(`a byte-identical .env of 1 MiB ${delta < 0 ? '- 1' : delta > 0 ? '+ 1' : 'exactly'} is ${expected === 'reaped' ? 'a harness copy' : 'kept as user data'}`, () => {
+      const { repoDir, residue } = repoWithResidue(`user-data-limit-${delta + 1}`);
+      excludeLocally(repoDir, '.env*');
+      const bytes = Buffer.alloc(1024 * 1024 + delta, 0x61);
+      fs.writeFileSync(path.join(repoDir, '.env'), bytes);
+      fs.writeFileSync(path.join(residue, '.env'), bytes);
+      const row = onlyRow(reapOrphanWorktrees(repoDir, deadOwnerDeps()));
+      assert.strictEqual(row.status, expected);
+      assert.strictEqual(fs.existsSync(residue), expected === 'skipped');
     });
   }
 
@@ -2735,5 +2781,60 @@ describe('#4941 regression: reap-orphans removes unregistered .claude/worktrees 
     const { parseWorktreePorcelain } = require('../gsd-core/bin/lib/worktree-safety.cjs');
     const parsed = parseWorktreePorcelain('worktree /r/main\nHEAD a\nbranch refs/heads/main\n\nworktree /r/ wt \r\nHEAD b\nbranch refs/heads/x\n');
     assert.deepStrictEqual(parsed.map((e) => e.path), ['/r/main', '/r/ wt ']);
+  });
+});
+
+// #5233 review: the parsers the residue guards read git's answers through.
+describe('#4941 property: the -z, gitlink and gitfile parsers', () => {
+  const fc = require('fast-check');
+  const { splitNulEntries, gitlinkPaths, parseGitdirFile } = require('../gsd-core/bin/lib/worktree-safety.cjs');
+  // A path segment git can report: anything but NUL and `/`, newlines, tabs,
+  // CR and leading or trailing spaces included.
+  const char = fc.oneof(fc.constantFrom(' ', '\n', '\r', '\t', 'a', 'é', '.', '\\'), fc.string({ minLength: 1, maxLength: 1 }))
+    .filter((c) => c !== '\0' && c !== '/');
+  const segment = fc.array(char, { minLength: 1, maxLength: 8 }).map((a) => a.join(''));
+  const relPath = fc.array(segment, { minLength: 1, maxLength: 3 }).map((a) => a.join('/'));
+
+  test('splitNulEntries returns every NUL-terminated entry unchanged', () => {
+    fc.assert(fc.property(fc.array(relPath, { maxLength: 8 }), (entries) => {
+      assert.deepStrictEqual(splitNulEntries(entries.map((e) => `${e}\0`).join('')), entries);
+    }), { numRuns: 300 });
+  });
+
+  test('splitNulEntries reads the worktree paths of porcelain -z records, separators dropped', () => {
+    fc.assert(fc.property(fc.array(relPath, { maxLength: 5 }), (paths) => {
+      const stdout = paths.map((p) => `worktree /r/${p}\0HEAD ${'a'.repeat(40)}\0branch refs/heads/x\0\0`).join('');
+      const worktrees = splitNulEntries(stdout).filter((f) => f.startsWith('worktree ')).map((f) => f.slice('worktree '.length));
+      assert.deepStrictEqual(worktrees, paths.map((p) => `/r/${p}`));
+    }), { numRuns: 300 });
+  });
+
+  test('gitlinkPaths returns exactly the mode-160000 paths of ls-files -s -z', () => {
+    const entry = fc.record({
+      mode: fc.constantFrom('100644', '100755', '120000', '160000'),
+      stage: fc.constantFrom(0, 1, 2, 3),
+      rel: relPath,
+    });
+    fc.assert(fc.property(fc.array(entry, { maxLength: 8 }), (entries) => {
+      const stdout = entries.map((e) => `${e.mode} ${'b'.repeat(40)} ${e.stage}\t${e.rel}\0`).join('');
+      assert.deepStrictEqual(gitlinkPaths(stdout), entries.filter((e) => e.mode === '160000').map((e) => e.rel));
+    }), { numRuns: 300 });
+  });
+
+  // Checked against git 2.54: `gitdir: <p>\n\n` and `\r\n` resolve to <p>;
+  // `gitdir: <p>  \n` names `<p>  `, trailing spaces included.
+  test('parseGitdirFile reads the target as git does: trailing CR/LF stripped, prefix required', () => {
+    const trailing = fc.array(fc.constantFrom('\r', '\n', '\r\n'), { maxLength: 4 }).map((a) => a.join(''));
+    const target = fc.oneof(relPath, relPath.map((p) => `/abs/${p}`), relPath.map((p) => `../${p}`))
+      .filter((t) => !/[\r\n]$/.test(t));
+    fc.assert(fc.property(target, trailing, (t, w) => {
+      assert.strictEqual(parseGitdirFile(`gitdir: ${t}${w}`), t);
+    }), { numRuns: 300 });
+    fc.assert(fc.property(fc.string(), (junk) => {
+      fc.pre(!junk.startsWith('gitdir: '));
+      assert.strictEqual(parseGitdirFile(junk), null);
+    }), { numRuns: 300 });
+    assert.strictEqual(parseGitdirFile('gitdir: \n'), null, 'an empty target names nothing');
+    assert.strictEqual(parseGitdirFile('gitdir: wt  \n'), 'wt  ', 'a trailing space is part of the path, as git reads it');
   });
 });
