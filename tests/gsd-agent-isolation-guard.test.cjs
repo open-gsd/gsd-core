@@ -3376,8 +3376,12 @@ describe('#4904: a renewed hold lapses ten minutes after the degrade was decided
         if (e.isDirectory()) walk(full);
         else if (e.name.endsWith('.md')) {
           const rel = path.relative(path.join(__dirname, '..'), full).split(path.sep).join('/');
+          // Inside a fenced block, anywhere on the line: an assignment or an `if` is
+          // a site too, while a prose line that quotes the command is not.
+          let fenced = false;
           splitLines(fs.readFileSync(full, 'utf8')).forEach((line, i) => {
-            if (/^\s*gsd_run query dispatch-isolation .*--force-isolation /.test(line)) sites.push({ rel, at: `${rel}:${i + 1}`, line });
+            if (/^\s*```/.test(line)) fenced = !fenced;
+            else if (fenced && /\bgsd_run query dispatch-isolation .*--force-isolation /.test(line)) sites.push({ rel, at: `${rel}:${i + 1}`, line });
           });
         }
       }
