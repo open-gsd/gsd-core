@@ -1485,16 +1485,24 @@ describe('#5715: config-dir rewrites are single-pass and literal', () => {
   });
 
   test('#5715: Trae own-dir forms follow the install prefix', () => {
-    const src = ['A ~/.trae/x', 'B $HOME/.trae/y', 'C ~/.trae', 'D $HOME/.trae', 'E ~/.trae-plugin', 'F $HOME/.traex'].join('\n');
+    const src = ['A ~/.trae/x', 'B $HOME/.trae/y', 'C ~/.trae', 'D $HOME/.trae', 'E ~/.trae-plugin', 'F $HOME/.traex', 'G ~/.trae.json', 'H $HOME/.trae.json'].join('\n');
+    const tail = ['E ~/.trae-plugin', 'F $HOME/.traex', 'G ~/.trae.json', 'H $HOME/.trae.json'];
     const cases = [
-      ['$HOME/.trae/', true, ['A $HOME/.trae/x', 'B $HOME/.trae/y', 'C ~/.trae', 'D $HOME/.trae', 'E ~/.trae-plugin', 'F $HOME/.traex']],
-      ['$HOME/.claude/profiles/work/', true, ['A $HOME/.claude/profiles/work/x', 'B $HOME/.claude/profiles/work/y', 'C $HOME/.claude/profiles/work', 'D $HOME/.claude/profiles/work', 'E ~/.trae-plugin', 'F $HOME/.traex']],
-      ['.trae/', false, ['A .trae/x', 'B .trae/y', 'C .trae', 'D .trae', 'E ~/.trae-plugin', 'F $HOME/.traex']],
-      ['/p/proj/.trae/', false, ['A /p/proj/.trae/x', 'B /p/proj/.trae/y', 'C /p/proj/.trae', 'D /p/proj/.trae', 'E ~/.trae-plugin', 'F $HOME/.traex']],
+      ['$HOME/.trae/', true, ['A $HOME/.trae/x', 'B $HOME/.trae/y', 'C ~/.trae', 'D $HOME/.trae', ...tail]],
+      ['$HOME/.claude/profiles/work/', true, ['A $HOME/.claude/profiles/work/x', 'B $HOME/.claude/profiles/work/y', 'C $HOME/.claude/profiles/work', 'D $HOME/.claude/profiles/work', ...tail]],
+      ['.trae/', false, ['A .trae/x', 'B .trae/y', 'C .trae', 'D .trae', ...tail]],
+      ['/p/proj/.trae/', false, ['A /p/proj/.trae/x', 'B /p/proj/.trae/y', 'C /p/proj/.trae', 'D /p/proj/.trae', ...tail]],
     ];
     for (const [prefix, isGlobal, expected] of cases) {
       assert.strictEqual(_applyRuntimeRewrites(src, 'trae', prefix, isGlobal, undefined), expected.join('\n'), prefix);
     }
+  });
+
+  test('#5715: Trae converter leaves .claude.json alone', () => {
+    assert.strictEqual(
+      installJs.convertClaudeToTraeMarkdown('Cfg ~/.claude.json and $HOME/.claude.json, dir ~/.claude/skills'),
+      'Cfg ~/.claude.json and $HOME/.claude.json, dir ~/.trae/skills',
+    );
   });
 
   describe('windsurf .devin forms', () => {
