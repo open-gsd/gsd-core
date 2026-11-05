@@ -1055,6 +1055,10 @@ describe('removed-but-needed lint: echoed paths are control-char-free', () => {
     }
     assert.equal(live.length, 1);
     assert.equal(tests.length, 1);
+    // Hostile characters are ESCAPED, not dropped, so the reader can trace the path as written.
+    const BS = String.fromCharCode(0x5c);
+    assert.ok(live[0].reason.includes(`bad${BS}u{A}name${BS}u{1B}[31m.md`), live[0].reason);
+    assert.ok(tests[0].reason.includes(`bad${BS}u{7}name${BS}u{1B}[31m.md`), tests[0].reason);
   });
 
   test('end-to-end output carries no raw control characters from a hostile path', (t) => {
