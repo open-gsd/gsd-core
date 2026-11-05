@@ -27,7 +27,7 @@ import path from 'node:path';
 import { execGit, platformWriteSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configFileReadMod = require('./config-file-read.cjs');
-const { CONFIG_MAX_BYTES, readConfigFileBounded } = configFileReadMod;
+const { CONFIG_MAX_BYTES, readConfigFileBounded, printablePath } = configFileReadMod;
 // #4717: runtime-identity fill — env rung + per-install marker rung.
 import { readInstallRuntimeMarker } from './runtime-slash.cjs';
 import { resolveGsdHome } from './runtime-homes.cjs';
@@ -655,22 +655,12 @@ const _warnedUnusableConfig = new Set<string>();
  * `.config` alone and would never surface it. Without this diagnostic the field
  * is unreachable to almost every consumer, and the user whose config was
  * silently discarded still gets no signal. That was the whole defect in #1880.
- */
-/**
- * Printable form of a path for a terminal: C0 controls, DEL and C1 controls become `\xNN`.
- * A project directory name can carry ESC (or a C1 CSI), and the path is written to stderr
- * verbatim otherwise — a terminal-escape injection through a directory name.
- */
-function _printablePath(p: string): string {
-  return p.replace(/[\u0000-\u001f\u007f-\u009f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
-}
-
-/**
- * What the caller falls back to when `fault.path` is unusable:
- *   'defaults' — nothing else supplies the settings, so built-in defaults apply;
- *   'root'     — a workstream config is unusable and the root config is applied instead;
- *   null       — unknown at report time (the root config of a workstream resolution), so no
- *                replacement is claimed.
+ *
+ * `fallback` says what replaces the unusable file: 'defaults' (built-in defaults apply), 'root'
+ * (a workstream config is unusable and the root config applies), or null (unknown at report
+ * time — the root config of a workstream resolution — so no replacement is claimed). The path
+ * is printed through printablePath, so a control character in a directory name cannot reach
+ * the terminal raw.
  */
 type ConfigFallback = 'defaults' | 'root' | null;
 
@@ -691,7 +681,7 @@ function _warnUnusableConfig(fault: ConfigFault, fallback: ConfigFallback = 'def
     : fallback === 'defaults' ? '; using defaults instead'
       : '';
   process.stderr.write(
-    `gsd-tools: warning: ${_printablePath(fault.path)} ${what} — its settings were NOT applied${instead}\n`,
+    `gsd-tools: warning: ${printablePath(fault.path)} ${what} — its settings were NOT applied${instead}\n`,
   );
 }
 

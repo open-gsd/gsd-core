@@ -31,6 +31,9 @@
 import path from 'node:path';
 import os from 'node:os';
 import { resolveGsdHome } from './runtime-homes.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
+import configFileReadMod = require('./config-file-read.cjs');
+const { unboundedConfigFileReason } = configFileReadMod;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- install-fs-adapter.cjs is an export= CommonJS module
 import installFsAdapter = require('./install-fs-adapter.cjs');
@@ -74,6 +77,7 @@ function readGsdGlobalModelOverrides(options: ReadOptions = {}): Record<string, 
     const home = resolveGsdHome(options.homedir ? options.homedir() : os.homedir());
     const defaultsPath = path.join(home, '.gsd', 'defaults.json');
     if (!installFs().existsSync(defaultsPath)) return null;
+    if (unboundedConfigFileReason(defaultsPath) !== null) return null; // #5759: never block on a planted FIFO
     const raw = installFs().readFileSync(defaultsPath, 'utf-8');
     const parsed = JSON.parse(raw) as { model_overrides?: unknown };
     const overrides = parsed.model_overrides;
@@ -111,6 +115,8 @@ function readGsdEffectiveModelOverrides(targetDir: string | null = null, options
     const candidate = _findAncestorGsdConfigPath(targetDir);
     if (candidate) {
       try {
+        // #5759: refuse a FIFO/device/oversized project config before the adapter's blocking read.
+        if (unboundedConfigFileReason(candidate) !== null) throw new Error('unbounded config file');
         const parsed = JSON.parse(installFs().readFileSync(candidate, 'utf-8')) as { model_overrides?: unknown };
         if (parsed && typeof parsed === 'object' && parsed.model_overrides && typeof parsed.model_overrides === 'object') {
           projectOverrides = parsed.model_overrides as Record<string, string>;

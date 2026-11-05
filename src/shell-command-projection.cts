@@ -1460,8 +1460,14 @@ function defaultTempSuffix(): string {
  * `O_CREAT|O_EXCL` fails with EEXIST on ANY existing entry — a regular file, a FIFO, or a
  * symlink (dangling or not) — so a planted entry is never opened, written through or blocked
  * on; `O_NOFOLLOW` is added where the platform has it (absent on Windows). On EEXIST a new
- * suffix is drawn, up to EXCLUSIVE_TEMP_ATTEMPTS times, then the EEXIST is thrown. Any other
- * error is thrown at once. `nextSuffix` is a seam for tests.
+ * suffix is drawn, up to EXCLUSIVE_TEMP_ATTEMPTS times, then the EEXIST is thrown. On
+ * ENAMETOOLONG (a target whose name leaves no room for the default suffix) the suffix shrinks
+ * first to 32 random bits of hex and then to a short counter before the error is thrown. Any
+ * other error is thrown at once. `nextSuffix` is a seam for tests; it applies until a shrink.
+ *
+ * Crash-orphaned temp files are named `<target>.tmp.<pid>.<12 hex>` and are NOT reaped: a
+ * process killed between the create and the rename leaves one beside its target, and a later
+ * write picks a fresh name rather than reusing it.
  */
 export function openExclusiveTempSync(
   basePath: string,
@@ -1469,12 +1475,20 @@ export function openExclusiveTempSync(
 ): { fd: number; tmpPath: string } {
   const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0);
   let collision: unknown;
+  let shrink = 0; // 0 = nextSuffix, 1 = short hex, 2 = counter
   for (let attempt = 0; attempt < EXCLUSIVE_TEMP_ATTEMPTS; attempt++) {
-    const tmpPath = `${basePath}.tmp.${nextSuffix()}`;
+    const suffix = shrink === 0 ? nextSuffix() : shrink === 1 ? randomBytes(4).toString('hex') : String(attempt);
+    const tmpPath = `${basePath}.tmp.${suffix}`;
     try {
       return { fd: fs.openSync(tmpPath, flags, 0o666), tmpPath };
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENAMETOOLONG' && shrink < 2) {
+        shrink += 1;
+        attempt -= 1; // a shorter name is a retry of the same attempt, not a collision
+        continue;
+      }
+      if (code !== 'EEXIST') throw err;
       collision = err;
     }
   }
@@ -1490,29 +1504,63 @@ export function openExclusiveTempSync(
 function writeTargetDirect(filePath: string, normalized: string, encoding: BufferEncoding): void {
   const nonBlock = fs.constants.O_NONBLOCK ?? 0;
   // Open an existing target WITHOUT truncating, so nothing is destroyed before the
-  // regular-file check; create it only when it is absent (a link is followed, as a plain
-  // write would). `created` lets a failed write remove the empty file it just made.
+  // regular-file check. It is created only when absent — and never through a dangling
+  // symlink, which would plant a file wherever the link points. `created` lets a failed
+  // write remove the empty file it just made (and only that: a symlink is never unlinked).
   let created = false;
   let fd: number;
   try {
-    fd = fs.openSync(filePath, fs.constants.O_WRONLY | nonBlock);
+    // O_RDWR: the old bytes are read back below so a failed write can restore them.
+    fd = fs.openSync(filePath, fs.constants.O_RDWR | nonBlock);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    let dangling = false;
+    try { dangling = fs.lstatSync(filePath).isSymbolicLink(); } catch { /* no entry at all */ }
+    if (dangling) {
+      throw Object.assign(
+        new Error(`ENXIO: cannot write ${filePath}: it is a dangling symlink — refusing to create through it`),
+        { code: 'ENXIO' },
+      );
+    }
     fd = fs.openSync(filePath, fs.constants.O_WRONLY | fs.constants.O_CREAT | nonBlock, 0o666);
     created = true;
   }
   let failure: Error | undefined;
   try {
-    if (!fs.fstatSync(fd).isFile()) {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) {
       throw Object.assign(
         new Error(`ENXIO: cannot write ${filePath}: not a regular file (FIFO/device) — refusing`),
         { code: 'ENXIO' },
       );
     }
-    // Write first, then cut to the new length: a write that fails before any byte lands leaves
-    // an existing file intact, as a failed path write did before the open became explicit.
-    fs.writeFileSync(fd, normalized, encoding);
-    fs.ftruncateSync(fd, Buffer.byteLength(normalized, encoding));
+    // Truncate BEFORE writing so a partial write can never leave the new prefix followed by the
+    // old tail. The old bytes (when small enough) are held so a failed write puts them back:
+    // the result is the whole new content or the whole old content, not a mixture.
+    let prior: Buffer | null = null;
+    if (!created && st.size > 0 && st.size <= MAX_PRIOR_BYTES) {
+      prior = Buffer.alloc(st.size);
+      let got = 0;
+      while (got < prior.length) {
+        const n = fs.readSync(fd, prior, got, prior.length - got, got);
+        if (n <= 0) break;
+        got += n;
+      }
+      if (got !== prior.length) prior = null;
+    }
+    fs.ftruncateSync(fd, 0);
+    try {
+      fs.writeFileSync(fd, normalized, encoding);
+    } catch (err) {
+      if (prior !== null) {
+        try {
+          fs.ftruncateSync(fd, 0);
+          let put = 0;
+          while (put < prior.length) put += fs.writeSync(fd, prior, put, prior.length - put, put);
+        } catch { /* best-effort restore; the original error is the one reported */ }
+      }
+      throw err;
+    }
   } catch (err) {
     failure = err instanceof Error ? err : new Error(String(err));
   }
@@ -1525,6 +1573,17 @@ function writeTargetDirect(filePath: string, normalized: string, encoding: Buffe
   }
 }
 
+/**
+ * Write `content` to `filePath` atomically: a sibling temp file (`<file>.tmp.<pid>.<12 hex>`,
+ * created exclusively, never following a link, never blocking on a planted FIFO) is renamed
+ * over the target. When that is impossible the write falls back to the target itself.
+ *
+ * The direct fallback refuses a target that is not a regular file — a FIFO, a character or
+ * block device such as `/dev/null`, a socket — with an error whose `code` is `ENXIO`, and
+ * refuses to create through a dangling symlink (also `ENXIO`). The atomic path replaces
+ * whatever sits at the target by rename and is unaffected. A crash between the temp create
+ * and the rename leaves `<file>.tmp.<pid>.<hex>` behind; such files are not reaped.
+ */
 export function platformWriteSync(filePath: string, content: string, opts: PlatformWriteOptions = {}): void {
   // #5165: a Markdown write is scoped to what it changed relative to the file it replaces.
   let prior = opts.prior;

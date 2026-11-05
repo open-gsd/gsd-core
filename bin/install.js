@@ -13989,7 +13989,10 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
         const candidate = path.join(probeDir, '.planning', 'config.json');
         if (fs.existsSync(candidate)) {
           try {
-            const parsed = JSON.parse(stripJsonComments(fs.readFileSync(candidate, 'utf-8')));
+            // #5759: bounded regular-file read — a FIFO/device/oversized config throws to the
+            // catch below (treated as enabled) instead of blocking the installer.
+            const { readConfigFileBounded } = require('../gsd-core/bin/lib/config-file-read.cjs');
+            const parsed = JSON.parse(stripJsonComments(readConfigFileBounded(candidate) ?? ''));
             if (parsed && typeof parsed === 'object' &&
                 parsed.workflow && parsed.workflow.use_worktrees === false) {
               worktreesEnabled = false;

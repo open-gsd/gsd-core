@@ -34,7 +34,7 @@ import path from 'node:path';
 import { resolveGsdHome } from './runtime-homes.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
 import configFileReadMod = require('./config-file-read.cjs');
-const { CONFIG_MAX_BYTES } = configFileReadMod;
+const { unboundedConfigFileReason, printablePath } = configFileReadMod;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- install-fs-adapter.cjs is an export= CommonJS module
 import installFsAdapter = require('./install-fs-adapter.cjs');
@@ -62,27 +62,24 @@ interface EffortConfig {
  */
 function _readGsdConfigFile(absPath: string, label: string): Record<string, unknown> | null {
   if (!installFs().existsSync(absPath)) return null;
-  // #5759: refuse a FIFO/device/socket or an oversized file BEFORE the adapter's blocking read.
-  // stat(2) follows links and never opens, so it cannot block. A path that is not on the real
-  // file system (a fake adapter's in-memory store) throws here and is left to the adapter.
-  try {
-    const st = fs.statSync(absPath);
-    if (!st.isFile() || st.size > CONFIG_MAX_BYTES) {
-      process.stderr.write(`gsd: warning — could not read ${label} (${absPath}): not a regular file within ${CONFIG_MAX_BYTES} bytes\n`);
-      return null;
-    }
-  } catch { /* not on the real fs — the adapter decides */ }
+  // #5759: refuse a FIFO/device/socket or an oversized file BEFORE the adapter's blocking read
+  // (shared guard; a path that is not on the real fs is left to the adapter).
+  const unbounded = unboundedConfigFileReason(absPath);
+  if (unbounded !== null) {
+    process.stderr.write(`gsd: warning — could not read ${label} (${printablePath(absPath)}): ${unbounded}\n`);
+    return null;
+  }
   let raw: string;
   try {
     raw = installFs().readFileSync(absPath, 'utf-8');
   } catch (err) {
-    process.stderr.write(`gsd: warning — could not read ${label} (${absPath}): ${(err as Error).message}\n`);
+    process.stderr.write(`gsd: warning — could not read ${label} (${printablePath(absPath)}): ${printablePath((err as Error).message)}\n`);
     return null;
   }
   try {
     return JSON.parse(raw) as Record<string, unknown>;
   } catch (err) {
-    process.stderr.write(`gsd: warning — invalid JSON in ${label} (${absPath}): ${(err as Error).message}\n`);
+    process.stderr.write(`gsd: warning — invalid JSON in ${label} (${printablePath(absPath)}): ${printablePath((err as Error).message)}\n`);
     return null;
   }
 }

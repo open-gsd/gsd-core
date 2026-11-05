@@ -6,13 +6,14 @@
  * `readConfigFileBounded`, so the loader, the resolve-model omit check, and the many
  * direct "read one key" helpers cannot diverge on how a non-regular or oversized file is treated.
  *
- * Leaf module: it imports only ./capability-ledger.cjs (itself a node-builtins-only leaf), so
+ * Leaf module: it imports only node:fs and ./capability-ledger.cjs (itself a node-builtins-only leaf), so
  * planning-workspace, config-loader and every other reader can import it without a require cycle.
  *
  * Dependencies (leaf modules only):
  *   - ./capability-ledger.cjs (readSmallRegularFile — non-blocking open, fstat regular-file check, size cap)
  */
 
+import fs from 'node:fs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import capabilityLedgerMod = require('./capability-ledger.cjs');
 const { readSmallRegularFile } = capabilityLedgerMod;
@@ -35,7 +36,36 @@ function readConfigFileBounded(filePath: string): string | null {
   return readSmallRegularFile(filePath, CONFIG_MAX_BYTES);
 }
 
+/**
+ * Why `absPath` — looked up on the REAL file system — must not be read blindly: it exists but is
+ * not a regular file (FIFO, device, socket, directory) or is larger than CONFIG_MAX_BYTES.
+ * Returns null when it is a regular file within the cap, and also when it cannot be stat'ed
+ * (absent, or not on the real file system at all, as with an installer fake-fs adapter), so the
+ * caller's own read decides. stat(2) follows links and never opens, so it cannot block. This is
+ * the guard for readers that must go through an injected fs seam and so cannot use
+ * `readConfigFileBounded`; it is a check-then-read, not the descriptor-bound read.
+ */
+function unboundedConfigFileReason(absPath: string): string | null {
+  try {
+    const st = fs.statSync(absPath);
+    if (!st.isFile()) return 'not a regular file';
+    if (st.size > CONFIG_MAX_BYTES) return `larger than ${CONFIG_MAX_BYTES} bytes`;
+  } catch { /* absent or not on the real fs — the caller's read decides */ }
+  return null;
+}
+
+/**
+ * A path as printed to a terminal: C0 controls, DEL and C1 controls become `\xNN`. A directory
+ * name can carry ESC (or a C1 CSI), and a path written to stderr verbatim is a terminal-escape
+ * injection through that name.
+ */
+function printablePath(p: string): string {
+  return p.replace(/[\u0000-\u001f\u007f-\u009f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
+}
+
 export = {
   CONFIG_MAX_BYTES,
   readConfigFileBounded,
+  unboundedConfigFileReason,
+  printablePath,
 };
