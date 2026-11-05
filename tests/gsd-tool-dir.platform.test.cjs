@@ -166,7 +166,7 @@ describe('#5757 case 13: parity - sentinel writer and probe writer share one pol
     const result = runGsdTools(
       ['record-dispatch-isolation', '--isolation', 'none'],
       root,
-      { NODE_OPTIONS: `--require ${JSON.stringify(preload)}` },
+      { NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require ${JSON.stringify(preload)}`].filter(Boolean).join(' ') },
     );
     assert.strictEqual(JSON.parse(result.output).recorded, false);
     assert.strictEqual(fs.readFileSync(victim, 'utf8'), 'original');
