@@ -998,6 +998,11 @@ function prepareCodexAgentConfigContent(source, sourcePath, targetDir) {
   // #5715: one pass, function replacement: a string replacement would expand `$&` in a
   // config dir, and a second pass would rescan the path the first emitted.
   content = content.replace(/(?:~|\$HOME)\/\.claude\/gsd-core\//g, () => codexGsdPath);
+  // Route TOML emit through the same full Claude→Codex conversion pipeline
+  // used on the `.md` emit path (#2639). Covers: slash-command rewrites,
+  // $ARGUMENTS → {{GSD_ARGS}}, /clear removal, anchored and bare .claude/
+  // paths, .claudeignore → .codexignore, and standalone "Claude" /
+  // CLAUDE.md neutralization via neutralizeAgentReferences(..., 'AGENTS.md').
   // #5715: the converter runs after the path above was emitted; shield it from the converter.
   return runtimeArtifactConversion._shieldEmittedPrefix(content, codexGsdPath, convertClaudeToCodexMarkdown);
 }
