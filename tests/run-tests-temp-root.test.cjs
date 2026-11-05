@@ -229,7 +229,10 @@ describe('#4020 — run-tests temp root', () => {
     const runner = require('../scripts/run-tests.cjs');
     const { createFixture } = require('./fixtures/index.cjs');
 
-    function withTmpEnv({ cwd, tmpdir, temp, tmp }, fn) {
+    // os.tmpdir() reads TMPDIR on POSIX but TEMP then TMP on Windows, so TEMP and
+    // TMP default to the TMPDIR value: the relative value must reach every
+    // variable os.tmpdir() consults on the current platform.
+    function withTmpEnv({ cwd, tmpdir, temp = tmpdir, tmp = tmpdir }, fn) {
       const keys = ['TMPDIR', 'TEMP', 'TMP'];
       const savedEnv = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
       const savedCwd = process.cwd();
