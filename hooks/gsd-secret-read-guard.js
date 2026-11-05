@@ -176,6 +176,38 @@ const WRAPPERS = new Map([
   ['exec', { short: 'a' }],
 ]);
 
+// A further reading of a segment's command (#5779). The walk over WRAPPERS
+// stops at a word it does not know and takes that word as the command, so
+// `then curl …`, `! bash -c …` and `time ! cat …` hide the command behind it.
+// This reading walks past those words too, and the guard runs it as a whole
+// scan of its own (furtherReading), after the plain scans have found nothing.
+// It only adds: the plain scan still checks the operands of the word it stopped
+// at, so what it denies stays denied whatever this reading finds there
+// (`! file -f .env`, `if [ -f .env ]; then`, a script named `repeat`).
+//   keyword  a shell keyword, not only a program, so another keyword or an
+//            assignment may follow it (`time ! cmd`, `time A=b cmd`)
+//   count    the next word is a count, whatever it looks like (`repeat -1+2 cmd`)
+const FURTHER_WRAPPERS = new Map([
+  ...WRAPPERS,
+  ['builtin', {}],
+  ['noglob', {}],
+  ['nocorrect', { keyword: true }],
+  ['-', {}],
+  ['repeat', { count: true, keyword: true }],
+  ['time', { ...WRAPPERS.get('time'), keyword: true }],
+]);
+
+// Shell reserved words a command can follow in its segment: `then cmd`,
+// `do cmd`, `if cmd`, `! cmd`, `coproc cmd`. A word the tokenizer saw quoted is
+// a command name.
+const SHELL_COMMAND_KEYWORDS = new Set(['!', 'if', 'elif', 'else', 'then', 'while', 'until', 'do', 'coproc']);
+// Loop heads a body can follow with no separator: `for i do cmd`, and zsh's
+// `for a b do cmd`. The first word is the variable, whatever it spells; an `in`
+// after it starts a word list, which only a separator ends.
+const LOOP_HEADS = new Set(['for', 'select']);
+
+let furtherReading = false;
+
 // Commands whose ordinary operands are file NAMES, never file CONTENTS. A
 // closed set on purpose: anything not listed is assumed to read.
 const NON_READING_COMMANDS = new Set([
@@ -1386,9 +1418,10 @@ function markLaunchedCurl(words, from, to, marks, depth) {
 // wrappers resolveCommand unwraps and their own options, or -1. Unlike a
 // shell, a launcher execs a leading `VAR=value` word, so none is skipped.
 function launchedCommandIndex(words, from, to) {
+  const wrappers = furtherReading ? FURTHER_WRAPPERS : WRAPPERS;
   let idx = from;
   while (idx < to) {
-    const spec = WRAPPERS.get(commandName(words[idx].text));
+    const spec = wrappers.get(commandName(words[idx].text));
     if (!spec) break;
     idx = skipWrapperArgs(words, idx + 1, spec);
   }
@@ -1431,6 +1464,7 @@ function wrapperOptionWidth(word, spec) {
 // Index of the first word after a wrapper's own options, assignments and
 // positional operands (`-n 5`, `-i A=1`, `-s KILL 5`, `--`).
 function skipWrapperArgs(words, start, spec) {
+  if (spec.count) return Math.min(start + 1, words.length);
   let idx = start;
   let optionsEnded = false;
   while (idx < words.length) {
@@ -1452,16 +1486,57 @@ function skipWrapperArgs(words, start, spec) {
   return idx < words.length && words[idx].text === '--' ? idx + 1 : idx;
 }
 
+// Index of the first word from `start` past `VAR=val` assignments and, under
+// the further reading, the reserved words in front of them.
+function skipShellPrefixes(words, start) {
+  let idx = furtherReading ? skipReservedWords(words, start) : start;
+  while (idx < words.length && ASSIGNMENT_RE.test(words[idx].text)) idx++;
+  return idx;
+}
+
+function skipReservedWords(words, start) {
+  let idx = start;
+  while (idx < words.length && words[idx].quoted === 'none') {
+    const text = words[idx].text;
+    if (SHELL_COMMAND_KEYWORDS.has(text)) {
+      idx++;
+    } else if (LOOP_HEADS.has(text)) {
+      const body = bareWordIndex(words, idx + 2, 'do', 'in');
+      if (body === -1) break;
+      idx = body + 1;
+    } else if (text === '[[') {
+      // zsh's short form runs the word after the test: `if [[ x ]] cmd`.
+      const close = bareWordIndex(words, idx + 1, ']]');
+      if (close === -1) break;
+      idx = close + 1;
+    } else {
+      break;
+    }
+  }
+  return idx;
+}
+
+// Index of the first unquoted `text` from `start`, or -1, or -1 at a `stop` first.
+function bareWordIndex(words, start, text, stop) {
+  for (let idx = start; idx < words.length; idx++) {
+    if (words[idx].quoted !== 'none') continue;
+    if (words[idx].text === text) return idx;
+    if (words[idx].text === stop) return -1;
+  }
+  return -1;
+}
+
 // Command base + operands after leading `VAR=val` assignments and prefix
 // wrappers with their own options (`sudo -u root`, `env -i VAR=x`,
 // `timeout -s KILL 5`, `nice -n 5`, …), or null when nothing but prefixes remain.
 function resolveCommand(words) {
-  let idx = 0;
-  while (idx < words.length && ASSIGNMENT_RE.test(words[idx].text)) idx++;
+  const wrappers = furtherReading ? FURTHER_WRAPPERS : WRAPPERS;
+  let idx = skipShellPrefixes(words, 0);
   while (idx < words.length) {
-    const spec = WRAPPERS.get(lastSegment(words[idx].text).toLowerCase());
+    const spec = wrappers.get(lastSegment(words[idx].text).toLowerCase());
     if (!spec) break;
     idx = skipWrapperArgs(words, idx + 1, spec);
+    if (spec.keyword) idx = skipShellPrefixes(words, idx);
   }
   if (idx >= words.length) return null;
   return { base: lastSegment(words[idx].text).toLowerCase(), operands: words.slice(idx + 1) };
@@ -2222,6 +2297,12 @@ process.stdin.on('end', () => {
     if (hit !== null) emitBlock('secret-read', tool, hit);
     const spawn = findDebuggerCliSpawn(command, 0);
     if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
+    // Last, so that a throw or a timeout in it leaves the verdict above.
+    furtherReading = true;
+    const furtherHit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
+    if (furtherHit !== null) emitBlock('secret-read', tool, furtherHit);
+    const furtherSpawn = findDebuggerCliSpawn(command, 0);
+    if (furtherSpawn !== null) emitBlock('debugger-cli-spawn', tool, furtherSpawn);
     allow(undefined);
   } catch {
     // Fail open — never block valid tool calls due to hook errors.
