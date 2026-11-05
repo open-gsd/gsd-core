@@ -1974,8 +1974,53 @@ describe('#5759 review round: direct-path O_NOFOLLOW, multiply-linked targets, p
 
     assert.ok(err, 'the write is refused');
     assert.strictEqual(err.code, 'ENXIO');
-    assert.match(err.message, /symbolic link/);
+    assert.match(err.message, /symlinked target cannot be replaced atomically/);
     assert.strictEqual(fs.readFileSync(real, 'utf8'), 'old');
+  });
+
+  test('a parent swapped after the temp create is refused by the pre-rename check: ENXIO, nothing lands in the attacker directory', () => {
+    const dir = at('d');
+    const attacker = at('attacker');
+    fs.mkdirSync(dir);
+    fs.mkdirSync(attacker);
+    fs.writeFileSync(path.join(dir, 'f'), 'old');
+
+    const createThenSwap = (basePath, _suffix, mode) => {
+      const tmpPath = `${basePath}.tmp.seam`;
+      const fd = fs.openSync(tmpPath, 'wx', mode);
+      fs.renameSync(dir, `${dir}.moved`);
+      fs.symlinkSync(attacker, dir);
+      return { fd, tmpPath };
+    };
+    const err = attempt(() => platformWriteSync(path.join(dir, 'f'), 'PWNED', {
+      verbatim: true,
+      writeSeams: { createTemp: createThenSwap },
+    }));
+
+    assert.ok(err, 'the write is refused');
+    assert.strictEqual(err.code, 'ENXIO');
+    assert.match(err.message, /its directory is not the one the path check approved/);
+    assert.deepStrictEqual(fs.readdirSync(attacker), [], 'no target file lands in the attacker directory');
+    assert.strictEqual(fs.readFileSync(path.join(`${dir}.moved`, 'f'), 'utf8'), 'old', 'the original target is untouched');
+  });
+
+  test('a hard link added after the probe is caught by the post-open check: ENXIO, the other name untouched', () => {
+    const target = at('target.txt');
+    const alias = at('alias.txt');
+    fs.writeFileSync(target, 'SECRET');
+    const realOpen = fs.openSync;
+    mock.method(fs, 'openSync', (p, flags, ...rest) => {
+      if (p === target && typeof flags === 'number' && (flags & 3) === fs.constants.O_WRONLY) fs.linkSync(target, alias);
+      return realOpen(p, flags, ...rest);
+    });
+
+    const err = attempt(() => platformWriteSync(target, 'PWNED', { verbatim: true, writeSeams: { createTemp: deniedTemp } }));
+
+    assert.ok(err, 'the write is refused');
+    assert.strictEqual(err.code, 'ENXIO');
+    assert.match(err.message, /multiply-linked target cannot be replaced atomically/);
+    assert.strictEqual(fs.readFileSync(alias, 'utf8'), 'SECRET');
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'SECRET');
   });
 
   test('the direct path refuses a hard link to a sensitive file and leaves it untouched', () => {
