@@ -186,7 +186,7 @@ describe('evaluatePredicate — command-exit-zero timeout', () => {
 describe('evaluatePredicate — phase context environment', () => {
   test('phase values are environment data and command text is unchanged', () => {
     const shell = fakeShell({ exitCode: 0 });
-    const command = 'check "$GSD_GATE_PHASE_DIR" "$GSD_GATE_PHASE_NUMBER" "$GSD_GATE_PHASE_REQ_IDS" ${HOME} $PHASE_DIR';
+    const command = 'check "$GSD_GATE_PHASE_DIR" "$GSD_GATE_PHASE_NUMBER" "$GSD_GATE_PHASE_REQ_IDS" ${HOME} $OTHER_VAR';
     evaluatePredicate(
       { kind: 'command-exit-zero', command },
       baseCtx,
@@ -214,21 +214,28 @@ describe('evaluatePredicate — phase context environment', () => {
 
   test('each retired context spelling is rejected before execution, including quoted forms', () => {
     for (const name of phaseContextVariableNames()) {
-      for (const quote of ['', "'", '"']) {
-        const shell = fakeShell({ exitCode: 0 });
-        assert.throws(
-          () => evaluatePredicate(
-            { kind: 'command-exit-zero', command: 'check ' + quote + '${' + name + '}' + quote },
-            baseCtx,
-            { runBoundedShell: shell.run },
-          ),
-          (err) => {
-            assert.ok(err.message.includes('${' + name + '}'));
-            assert.ok(err.message.includes('$GSD_GATE_' + name));
-            return true;
-          },
-        );
-        assert.deepEqual(shell.calls, []);
+      for (const spelling of [
+        [`\${${name}}`, ''],
+        [`$${name}`, ''],
+        [`\${${name}:-fallback}`, ''],
+        [`\${${name}%/*}`, ''],
+      ].map(([value]) => value)) {
+        for (const quote of ['', "'", '"']) {
+          const shell = fakeShell({ exitCode: 0 });
+          assert.throws(
+            () => evaluatePredicate(
+              { kind: 'command-exit-zero', command: 'check ' + quote + spelling + quote },
+              baseCtx,
+              { runBoundedShell: shell.run },
+            ),
+            (err) => {
+              assert.ok(err.message.includes('$'));
+              assert.ok(err.message.includes('$GSD_GATE_' + name));
+              return true;
+            },
+          );
+          assert.deepEqual(shell.calls, []);
+        }
       }
     }
   });

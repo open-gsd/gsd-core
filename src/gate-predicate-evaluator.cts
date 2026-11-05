@@ -76,7 +76,7 @@ interface PredicateResult {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Retired GSD spellings collide with shell expansion and must never reach the shell. */
-const LEGACY_CONTEXT_PLACEHOLDER_RE = /\$\{(PHASE_NUMBER|PHASE_DIR|PHASE_REQ_IDS)\}/;
+const LEGACY_CONTEXT_PLACEHOLDER_RE = /\$\{?PHASE_(NUMBER|DIR|REQ_IDS)\b/;
 
 /** Cap a string at COMMAND_MAX_OUTPUT_CHARS so gate messages stay context-bounded. */
 function trimToMax(s: string): string {
@@ -114,7 +114,7 @@ function evaluateCommandExitZero(
   const legacyPlaceholder = LEGACY_CONTEXT_PLACEHOLDER_RE.exec(command);
   if (legacyPlaceholder) {
     throw new Error(
-      `command-exit-zero predicate no longer accepts ${legacyPlaceholder[0]}; use "$GSD_GATE_${legacyPlaceholder[1]}" (phase context is passed as environment data)`,
+      `command-exit-zero predicate no longer accepts ${legacyPlaceholder[0]}; use "$GSD_GATE_PHASE_${legacyPlaceholder[1]}" (phase context is passed as environment data)`,
     );
   }
 

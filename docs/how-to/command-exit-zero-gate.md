@@ -52,6 +52,9 @@ Existing manifests using `${PHASE_NUMBER}`, `${PHASE_DIR}` or `${PHASE_REQ_IDS}`
 must migrate to the corresponding quoted shell expansions above. The old
 spellings are rejected before the command runs, with the replacement named in
 the diagnostic. See the [ADR-2008 amendment](../adr/2008-command-exit-zero-gate.md#amendment--2026-10-14-phase-context-is-environment-data).
+Migrate manifests before upgrading: a blocking gate that keeps a retired spelling
+and declares `onError: "skip"` degrades to a warning, so it temporarily stops
+enforcing its block until the command uses `GSD_GATE_PHASE_*`.
 
 ## Step 2 — declare the gate
 
