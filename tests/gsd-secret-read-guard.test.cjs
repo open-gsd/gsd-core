@@ -2725,6 +2725,46 @@ describe('readings: an error, the block reported, and the heredoc tag', () => {
   });
 });
 
+describe('nothing the scanner denied before #5255 is allowed', () => {
+  // tests/fixtures/secret-read-guard-base-scanner.cjs is `next`'s scanner, frozen.
+  // A seeded token soup of the shapes the readings change, in process, so the
+  // property can afford enough commands to reach them. The hook's own entry
+  // takes both passes, so both are compared; a throw in the frozen copy is that
+  // hook's crash policy, an allow.
+  const base = require('./fixtures/secret-read-guard-base-scanner.cjs');
+  const scan = (m, cmd) => {
+    try {
+      return m.findSecretRead(cmd, 0) || m.findSecretReadUnderOtherReadings(cmd);
+    } catch {
+      return null;
+    }
+  };
+  const token = fc.constantFrom(
+    'cat ', 'cat .env', '.env', 'echo ', 'ls', ' ', ' ', '; ', '\n', ' | ', ' && ', '#',
+    "'", '"', '`', '\\', '\\\n', '$', '$$', "$'", '$"', '${', '}', '$(', ')', '(', '((', '))', '$((', '$[', ']',
+    '<<', '<<E', 'E\n', '<(', ':-', '%', 'x', "\\'", 'eval ', 'bash -c ',
+  );
+  const command = fc.array(token, { minLength: 1, maxLength: 12 }).map((parts) => parts.join(''));
+
+  test('property: every command the frozen scanner denies, the hook denies', () => {
+    const { findSecretRead, findSecretReadUnderOtherReadings } = require(HOOK_PATH);
+    const head = { findSecretRead, findSecretReadUnderOtherReadings };
+    let denied = 0;
+    fc.assert(fc.property(command, (cmd) => {
+      if (scan(base, cmd) === null) return true;
+      denied++;
+      return scan(head, cmd) !== null;
+    }), { seed: 5285, numRuns: 20000 });
+    // A soup that the frozen scanner never denied would pass this vacuously.
+    assert.ok(denied >= 1000, `the frozen scanner denied ${denied} of 20,000`);
+  });
+
+  test('the frozen scanner is what it says: it misses the reads #5255 is about', () => {
+    assert.equal(scan(base, String.raw`echo $'x\'y'; cat .env`), null);
+    assert.equal(scan(base, 'cat .env').length > 0, true);
+  });
+});
+
 describe('findSecretRead returns one result shape (#5255 review round 6, Nit 3)', () => {
   const { findSecretRead } = require(HOOK_PATH);
   const R = String.raw;
