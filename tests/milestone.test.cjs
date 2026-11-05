@@ -2271,6 +2271,35 @@ describe('bug #2946: unstarted-phase guard runs independent of STATE.md mileston
     );
   });
 
+  // #5726: the mismatch check reads the STATE milestone through the one owner,
+  // so a value that spells the requested version (quoted), a null/empty value and
+  // a `milestone:` line in the body are not drift. The matching-version control
+  // shows the guard fires identically with no WARNING.
+  for (const [label, stateText] of [
+    ['a matching unquoted version (control)', '---\nmilestone: v1.0\nstatus: active\n---\n# State\n'],
+    ['a quoted matching version', '---\nmilestone: "v1.0"\nstatus: active\n---\n# State\n'],
+    ['an explicit null', '---\nmilestone: null\nstatus: active\n---\n# State\n'],
+    ['an empty quoted string', "---\nmilestone: ''\nstatus: active\n---\n# State\n"],
+    ['no frontmatter key and a fenced body example', '---\nstatus: active\n---\n# State\n\n```\nmilestone: v9.9\n```\n'],
+  ]) {
+    test(`no WARNING is emitted for ${label}`, () => {
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'ROADMAP.md'),
+        '# Roadmap v1.0\n\n### Phase 2: Real Work\n**Goal:** Not started\n',
+      );
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), stateText);
+      const result = runGsdTools(
+        ['milestone', 'complete', 'v1.0', '--name', 'Regression Test', '--dry-run'],
+        tmpDir,
+      );
+      assert.strictEqual(result.success, false, 'guard must still fire');
+      assert.ok(
+        !result.error.includes('WARNING:'),
+        `no WARNING expected for ${label}; got: ${result.error}`,
+      );
+    });
+  }
+
   test('guard is a no-op when the scoped ROADMAP has no Phase headings (fresh project)', () => {
     // STATE in sync, ROADMAP scopes for v1.0 but lists NO phase headings →
     // scan yields zero unstarted phases, guard must not fire.

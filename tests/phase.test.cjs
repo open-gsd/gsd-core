@@ -19128,6 +19128,15 @@ describe('issue #5844: ghost REQ-ID check accepts any checkbox mark and Status-l
   });
 });
 
+
+/**
+ * #5726 — `phase add`, `phase add-batch` and `phase insert` must not widen the
+ * milestone window to the whole unshipped roadmap when STATE.md names a
+ * milestone that has no heading in ROADMAP.md.
+ *
+ * Behavioral CLI tests: each case builds a fixture project, runs the real
+ * gsd-tools CLI, and asserts on exit status, stderr and the bytes left on disk.
+ */
 const TWO_MILESTONES = [
   '# Roadmap',
   '',
@@ -19554,6 +19563,17 @@ describe('#5726 phase write verbs on an unresolved STATE milestone', () => {
       });
     }
   }
+
+  test('a literal `milestone: ---` STATE value is an unresolved milestone: phase add refuses and writes nothing', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), TWO_MILESTONES);
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: ---\nstatus: active\n---\n\n# State\n');
+    const beforeRoadmap = roadmapBytes();
+    const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+    assert.equal(result.success, false, result.output);
+    assert.ok(/no milestone heading/.test(result.error), result.error);
+    assert.ok(roadmapBytes().equals(beforeRoadmap), 'ROADMAP.md must be byte-identical');
+    assert.deepEqual(phaseDirs(), []);
+  });
 
   test('an empty STATE milestone value directly before the closing --- allocates normally and never echoes ---', () => {
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), TWO_MILESTONES);
