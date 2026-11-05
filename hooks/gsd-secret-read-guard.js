@@ -1923,7 +1923,8 @@ function findDebuggerCliSpawnEitherWay(command) {
 // dollar-quoting section): bash's, zsh's and dash's readings first, then the
 // plain one, which is the scan as it was before #5255. A command holding neither
 // gets the plain scan alone, so for it the guard is the pre-#5255 guard by
-// construction. "Holding" is tested on the text with its `\<newline>`
+// construction, and for a brace in a heredoc tag by the extra passes
+// (findSecretReadUnderOtherReadings). "Holding" is tested on the text with its `\<newline>`
 // continuations removed, because bash joins them before it reads a quote:
 // `$\<newline>'x'` is `$'x'`. A run of 2+ `$` before `{` or `(` always ends in
 // `$${` or `$$(`, so a substring test finds it in linear time.
@@ -2002,7 +2003,7 @@ let scanUnfinished = false;
 let scanBudget = MAX_SCAN_CHARACTERS;
 
 // What is left of the characters the readings' readers (ansiCBraceClose,
-// bracketClose, and findParenClose and doubleQuoteEnd under a reading) may
+// zshMathEnd, and findParenClose and doubleQuoteEnd under a reading) may
 // pass in one findSecretRead pass, reset with scanBudget. They call each
 // other, and when a `${`, `$(` or `$[` inside does not close, the one that
 // called it goes on through the text after it and reads it again: so each
@@ -2015,7 +2016,7 @@ let scanBudget = MAX_SCAN_CHARACTERS;
 // not by step: every character between where it last charged and where it now
 // stands, however it got there (a helper's jump over a run of `$`, a quote, a
 // `$'…'` span, a heredoc, a nested reader's span), and on a `${` that does not
-// close, the rest of the string (unclosed). bracketClose, which only steps,
+// close, the rest of the string (unclosed). zshMathEnd, which only steps,
 // charges each step. A span a nested reader passed is charged again by the
 // reader that jumps over it, so one reader's charge covers another's. Spending
 // this throws SCAN_BUDGET_SPENT too, so the reading is unfinished: the read on
