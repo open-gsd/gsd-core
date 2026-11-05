@@ -2876,6 +2876,7 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     describe('stripping GSD content from a symlinked config.toml (#5716)', () => {
       const { loadSkillsManifest, writeActiveProfile } = require('../gsd-core/bin/lib/install-profiles.cjs');
       const { writeSurface } = require('../gsd-core/bin/lib/surface.cjs');
+      const crypto = require('node:crypto');
       const USER_KEYS = 'model = "gpt-5"\n';
       const withUserKeys = (gsdOnly) => `${USER_KEYS}\n${gsdOnly}`;
       // The error a symlinked config.toml is refused with, so an unrelated earlier throw in
@@ -2938,6 +2939,38 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
         assert.strictEqual(fs.realpathSync(configTomlPath()), fs.realpathSync(realConfig));
       }
 
+      // Every path under the Codex home (the skills root, agents/, hooks.json, gsd-core/, the
+      // link and its target included), mapped to a hash of a file's bytes, a link's target or
+      // 'dir'. A refused run must leave all of it as it found it.
+      function snapshotCodexHome() {
+        const tree = {};
+        (function visit(dir) {
+          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, entry.name);
+            const rel = path.relative(codexHome, full);
+            if (entry.isSymbolicLink()) {
+              tree[rel] = `link: ${fs.readlinkSync(full)}`;
+            } else if (entry.isDirectory()) {
+              tree[rel] = 'dir';
+              visit(full);
+            } else {
+              tree[rel] = crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');
+            }
+          }
+        })(codexHome);
+        return tree;
+      }
+
+      // Uninstall removes the skills, the agent .toml files and the hooks.json entries before
+      // it reaches config.toml, so a refusal test needs all three in place to show they stay.
+      function assertUninstallSurfacesPresent() {
+        const isGsdSkill = (name) => name.startsWith('gsd-');
+        const isGsdAgentToml = (name) => name.startsWith('gsd-') && path.extname(name) === '.toml';
+        assert.ok(fs.readdirSync(codexSkillsRoot(codexHome)).some(isGsdSkill), 'fixture: GSD skills are installed');
+        assert.ok(fs.readdirSync(path.join(codexHome, 'agents')).some(isGsdAgentToml), 'fixture: GSD agent .toml files are installed');
+        assert.ok(fs.statSync(path.join(codexHome, 'hooks.json')).isFile(), 'fixture: hooks.json is installed');
+      }
+
       test('uninstall with GSD_ALLOW_SYMLINKED_DEST=1 empties the target of a GSD-only link and keeps the link', () => {
         const realConfig = linkConfigToml(installGsdOnlyConfig());
         process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
@@ -2958,24 +2991,30 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
         assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), USER_KEYS);
       });
 
-      test('uninstall without the opt-in refuses a GSD-only link and changes neither the link nor its target', () => {
+      test('uninstall without the opt-in refuses a GSD-only link before it removes anything', () => {
         const realConfig = linkConfigToml(installGsdOnlyConfig());
+        assertUninstallSurfacesPresent();
         const before = fs.readFileSync(realConfig, 'utf8');
+        const tree = snapshotCodexHome();
 
         assert.throws(() => runCodexUninstall(codexHome), LINK_REFUSAL);
 
         assertLinkedTo(realConfig);
         assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), before);
+        assert.deepStrictEqual(snapshotCodexHome(), tree, 'a refused uninstall must leave the install as it was');
       });
 
-      test('uninstall without the opt-in refuses a link that also holds user keys and changes neither the link nor its target', () => {
+      test('uninstall without the opt-in refuses a link that also holds user keys before it removes anything', () => {
         const realConfig = linkConfigToml(withUserKeys(installGsdOnlyConfig()));
+        assertUninstallSurfacesPresent();
         const before = fs.readFileSync(realConfig, 'utf8');
+        const tree = snapshotCodexHome();
 
         assert.throws(() => runCodexUninstall(codexHome), LINK_REFUSAL);
 
         assertLinkedTo(realConfig);
         assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), before);
+        assert.deepStrictEqual(snapshotCodexHome(), tree, 'a refused uninstall must leave the install as it was');
       });
 
       test('uninstall without the opt-in leaves a link with no GSD content alone and does not refuse', () => {
@@ -3029,36 +3068,42 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
         assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), regularResult);
       });
 
-      test('a core install with no agent roles and without the opt-in refuses a GSD-only link and changes neither the link nor its target', () => {
+      test('a core install with no agent roles and without the opt-in refuses a GSD-only link before it writes anything', () => {
         const { content } = prepareAgentlessCoreInstall((gsdOnly) => gsdOnly);
         const realConfig = linkConfigToml(content);
+        const tree = snapshotCodexHome();
 
         assert.throws(() => runCodexInstall(codexHome), LINK_REFUSAL);
 
         assertLinkedTo(realConfig);
         assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), content);
+        assert.deepStrictEqual(snapshotCodexHome(), tree, 'a refused install must leave the install as it was');
       });
 
-      test('a core install with no agent roles and without the opt-in refuses a link that also holds user keys and changes neither the link nor its target', () => {
+      test('a core install with no agent roles and without the opt-in refuses a link that also holds user keys before it writes anything', () => {
         const { content } = prepareAgentlessCoreInstall(withUserKeys);
         const realConfig = linkConfigToml(content);
+        const tree = snapshotCodexHome();
 
         assert.throws(() => runCodexInstall(codexHome), LINK_REFUSAL);
 
         assertLinkedTo(realConfig);
         assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), content);
+        assert.deepStrictEqual(snapshotCodexHome(), tree, 'a refused install must leave the install as it was');
       });
 
       // The validated config.toml rewrite later in the install always writes the file, so
       // a link is refused even when the strip itself has nothing to change.
-      test('a core install with no agent roles and without the opt-in refuses a link with no GSD content and changes neither the link nor its target', () => {
+      test('a core install with no agent roles and without the opt-in refuses a link with no GSD content before it writes anything', () => {
         const { content } = prepareAgentlessCoreInstall(userKeysOnly);
         const realConfig = linkConfigToml(content);
+        const tree = snapshotCodexHome();
 
         assert.throws(() => runCodexInstall(codexHome), LINK_REFUSAL);
 
         assertLinkedTo(realConfig);
         assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), content);
+        assert.deepStrictEqual(snapshotCodexHome(), tree, 'a refused install must leave the install as it was');
       });
     });
   });
