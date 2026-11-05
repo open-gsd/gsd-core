@@ -444,17 +444,201 @@ function classifyGrepGlob(glob) {
 let heredocBodiesSkippedInSpans = true;
 let heredocTagsAsWords = true;
 
+// Index just past the newline at `i`. A heredoc opened inside a nested `$( )`
+// that closed before its body began is an orphan: bash reads its body from
+// the lines after the next newline, wherever that newline falls — in the span
+// around it, a sibling span or a quoted string. Every reader below steps over
+// a newline through here, so those lines are passed over by whichever one
+// reaches them. `ctx.orphans` is that list, shared by the nested readers of
+// one findParenClose call. It is only ever appended to, or replaced here by a
+// new empty one, which is what lets a read-ahead be undone by truncating.
+function afterNewline(str, i, ctx) {
+  if (ctx.orphans.length === 0) return i + 1;
+  const end = consumeHeredocBodies(str, i + 1, ctx.orphans).end;
+  ctx.orphans = [];
+  return end;
+}
+
+// Index just past the quoted span that starts at `i` — a backslash pair, a
+// '…' or "…" string (the `$( )` and backtick bodies inside "…" skipped whole)
+// or a backtick span — or -1 when `str[i]` starts none.
+function skipQuoted(str, i, ctx) {
+  const ch = str[i];
+  if (ch === '\\') return i + 2;
+  if (ch === "'" || ch === '`') {
+    i++;
+    while (i < str.length && str[i] !== ch) {
+      i = str[i] === '\n' ? afterNewline(str, i, ctx) : i + 1;
+    }
+    return i + 1;
+  }
+  if (ch === '"') {
+    i++;
+    while (i < str.length && str[i] !== '"') {
+      if (str[i] === '\\') { i += 2; continue; }
+      if (str[i] === '$' && str[i + 1] === '(') { i = readParenClose(str, i + 2, ctx) + 1; continue; }
+      if (str[i] === '`') { i = skipQuoted(str, i, ctx); continue; }
+      i = str[i] === '\n' ? afterNewline(str, i, ctx) : i + 1;
+    }
+    return i + 1;
+  }
+  return -1;
+}
+
+// Index of the `}` closing a `${` opened just before `i`, or str.length when
+// unterminated. The first unquoted `}` closes it; a nested `${` or `$(` is
+// skipped whole.
+function findBraceClose(str, i, ctx) {
+  while (i < str.length) {
+    const q = skipQuoted(str, i, ctx);
+    if (q !== -1) { i = q; continue; }
+    if (str[i] === '$' && str[i + 1] === '(') { i = readParenClose(str, i + 2, ctx) + 1; continue; }
+    if (str[i] === '$' && str[i + 1] === '{') { i = findBraceClose(str, i + 2, ctx) + 1; continue; }
+    if (str[i] === '}') return i;
+    i = str[i] === '\n' ? afterNewline(str, i, ctx) : i + 1;
+  }
+  return str.length;
+}
+
+// Index of the `)` matching a `(` opened just before `i` by counting parens
+// alone, or str.length when unterminated: the reading bash gives text that is
+// not a command list — an arithmetic expression, an extended-glob group, or
+// an array literal (`words` set: its elements are shell words, so a `#`
+// starts a comment, `<( )` is a span of its own, and a newline starts the body
+// of a heredoc the span around it has waiting, `pending`). Quoted spans,
+// `${ }` and `$( )` are skipped whole.
+function findPlainParenClose(str, i, words, ctx, pending) {
+  let depth = 1;
+  let wordStart = true;
+  while (i < str.length) {
+    // bash deletes a backslash-newline here too, so a `#` after one starts a word.
+    if (words && str[i] === '\\' && str[i + 1] === '\n') { i += 2; continue; }
+    const q = skipQuoted(str, i, ctx);
+    if (q !== -1) { i = q; wordStart = false; continue; }
+    const ch = str[i];
+    if (ch === '$' && str[i + 1] === '(') { i = readParenClose(str, i + 2, ctx) + 1; wordStart = false; continue; }
+    if (ch === '$' && str[i + 1] === '{') { i = findBraceClose(str, i + 2, ctx) + 1; wordStart = false; continue; }
+    if (words && (ch === '<' || ch === '>') && str[i + 1] === '(') { i = readParenClose(str, i + 2, ctx) + 1; wordStart = false; continue; }
+    if (words && ch === '#' && wordStart) {
+      const j = str.indexOf('\n', i);
+      i = j === -1 ? str.length : j;
+      continue;
+    }
+    if (ch === '\n') {
+      i = afterNewline(str, i, ctx);
+      if (pending && pending.length) {
+        i = consumeHeredocBodies(str, i, pending).end;
+        pending.length = 0;
+      }
+      wordStart = true;
+      continue;
+    }
+    if (ch === '(') depth++;
+    else if (ch === ')') {
+      depth--;
+      if (depth === 0) return i;
+    }
+    wordStart = ch === ' ' || ch === '\t' || ch === '(';
+    i++;
+  }
+  return str.length;
+}
+
+// Tokens after which a command can start, so a `case` read there is the
+// keyword; anywhere else it is an ordinary word. This is bash's rule for where
+// a word is reserved, less the places its grammar then rejects a new command.
+// Reserved words are named by their own text. `word` is any other word,
+// `redir` a redirection operator, `arith` a `(( ))` command, `pat)` the paren
+// that ends a case pattern, `fn()` the parens of a function definition, and
+// `sub)` the paren that closes a subshell.
+const RESERVED_WORD_FOLLOWS = new Set([
+  'start', '\n', ';', '&', '&&', '|', '|&', '||', '(', 'pat)', 'fn()', '{', '}', '!', ']]', 'arith',
+  'if', 'then', 'else', 'elif', 'fi', 'while', 'until', 'do', 'done', 'esac',
+  'time', 'time -p', 'time --', 'coproc',
+]);
+// After a subshell closes, only a word that continues the construct around it
+// is reserved: `if (a) then`, `while (a) do`, `{ (a) }`. A command cannot start
+// there, so `(a) case x in y` holds no `case` command.
+const SUBSHELL_FOLLOWS = new Set(['then', 'do', 'done', 'fi', 'esac', 'elif', 'else', '}']);
+// `time` is reserved only where a pipeline can start, so not after `|`.
+const TIME_FOLLOWS = new Set([
+  '&', '&&', '||', '(', 'pat)', '{', '!', 'if', 'then', 'else', 'elif', 'while', 'until', 'do',
+  'time', 'time -p', 'time --',
+]);
+// Reserved words that need no handling beyond being recorded as the last token.
+const PLAIN_RESERVED = new Set(['!', 'if', 'then', 'else', 'elif', 'fi', 'while', 'until', 'do', 'done', 'for', 'select', 'function', 'coproc']);
+
+// Deciding whether `((` opens an arithmetic command reads ahead over text the
+// scan then reads again. This caps the total, and no read-ahead starts inside
+// another, so neither a run of `((` nor a nest of them can make one command
+// quadratic; where it does not read ahead, `((` is read as two subshells.
+let probeBudget = MAX_COMMAND_LENGTH;
+
+// Which bash runs the command decides where a span closes, and the hook
+// cannot know which one will. bash 3.2, still the /bin/bash macOS ships, counts
+// parens: it ends `"$(case x in y)"; cat .env` at the pattern and runs the `cat`,
+// a line bash 5 rejects whole. bash 5 closes a span where its grammar does, so a
+// `case` pattern's `)` closes nothing, and `$(case x in x) cat .env;; esac)` runs
+// to its last `)` (#5267).
+// The Bash leg makes the scans it always made, by paren counting, with
+// `closeByCount` true. Only then, and only if one of them met a span (`spanSeen`),
+// does scanByGrammar scan again with it false. A hit there is a deny. Nothing that
+// goes wrong there can touch a verdict the counting scans reached.
+let closeByCount = true;
+let spanSeen = false;
+
+// Closes a span by bash 5's grammar, for scanByGrammar: to it a `)` is not the
+// close when it sits in a quoted string, a heredoc body, a comment, a `${ }`, or
+// ends a `case` pattern. The readers recurse once per nested span, so a command
+// that nests thousands deep exhausts the stack. The span that overflowed and every
+// span the scan starts after it are then closed by count: the counter can end such
+// a span early and leave the next `$(` to start the same climb, once per level,
+// which is quadratic. A reader already running around a heredoc tag that overflowed
+// reads on by the grammar, which errs toward a deny. If the counter overflows too,
+// the throw is scanByGrammar's to catch.
+function readSpanClose(str, i) {
+  try {
+    return readParenClose(str, i, { orphans: [] });
+  } catch (err) {
+    if (!(err instanceof RangeError)) throw err;
+    closeByCount = true;
+    return findParenClose(str, i);
+  }
+}
+
+function readParenClose(str, i, ctx) {
+  // `$((` / `<((`: bash finds this close by counting parens alone, whether the
+  // text turns out to be arithmetic or a subshell.
+  if (str[i] === '(') return findPlainParenClose(str, i, false, ctx);
+  return scanCommandParenClose(str, i, ctx);
+}
+
+// The close paren counting finds, from inside a reader.
+function countedClose(str, i) {
+  closeByCount = true;
+  const at = findParenClose(str, i);
+  closeByCount = false;
+  return at;
+}
+
 // Index of the `)` closing a `$(` / `<(` / `>(` opened just before `i`, or
 // str.length when unterminated. Quote- and heredoc-aware so a `)` inside a
-// quoted string or a heredoc body never closes the span early.
+// quoted string or a heredoc body never closes the span early. Under
+// scanByGrammar the readers above close it instead.
+// `j` is one slot for three skips, which keeps this frame smaller than it was:
+// the scans here recurse once per nested `"$(` until the stack runs out, so what
+// they deny depends on that, and calls added above them must not cost a level.
 function findParenClose(str, i) {
+  if (!closeByCount) return readSpanClose(str, i);
+  spanSeen = true;
   let depth = 1;
   let heredocTags = [];
+  let j;
   while (i < str.length) {
     const ch = str[i];
     if (ch === '\\') { i += 2; continue; }
     if (ch === "'") {
-      const j = str.indexOf("'", i + 1);
+      j = str.indexOf("'", i + 1);
       i = j === -1 ? str.length : j + 1;
       continue;
     }
@@ -464,7 +648,7 @@ function findParenClose(str, i) {
         if (str[i] === '\\') { i += 2; continue; }
         if (str[i] === '$' && str[i + 1] === '(') { i = findParenClose(str, i + 2) + 1; continue; }
         if (str[i] === '`') {
-          const j = str.indexOf('`', i + 1);
+          j = str.indexOf('`', i + 1);
           i = j === -1 ? str.length : j + 1;
           continue;
         }
@@ -474,7 +658,7 @@ function findParenClose(str, i) {
       continue;
     }
     if (ch === '`') {
-      const j = str.indexOf('`', i + 1);
+      j = str.indexOf('`', i + 1);
       i = j === -1 ? str.length : j + 1;
       continue;
     }
@@ -497,6 +681,291 @@ function findParenClose(str, i) {
     i++;
   }
   return str.length;
+}
+
+// findParenClose over a command list. It follows bash's rule for where a word
+// is reserved far enough to know when a `case` is open, because only there is
+// a `)` not a closing paren. One frame per open `case`: st 'subj' (its word is
+// next), 'in' (`in` is next), 'pat' (a pattern list; pd = depth of
+// extended-glob parens, start = nothing read yet) or 'body'. Only the top
+// frame acts, and only at its own paren depth. Text that is not a command
+// list (a comment, an array literal, arithmetic, an extended-glob group,
+// `[[ ]]`) is passed over without reading keywords in it: a phantom `case`
+// there would swallow the real `)` and hide what follows.
+function scanCommandParenClose(str, i, ctx) {
+  let depth = 1;
+  // Heredocs this span's own commands opened. Their bodies start at this
+  // span's next newline; a span nested here never reads them, and any still
+  // waiting when the span closes become orphans (see afterNewline).
+  const heredocTags = [];
+  const frames = [];
+  const close = (at) => {
+    for (const tag of heredocTags) ctx.orphans.push(tag);
+    return at;
+  };
+  // Past a newline bash reads as a token, in whatever state the reader is in:
+  // orphan bodies come first in the input, then the ones this span opened.
+  const pastNewline = (at) => {
+    let to = afterNewline(str, at, ctx);
+    if (heredocTags.length) {
+      to = consumeHeredocBodies(str, to, heredocTags).end;
+      heredocTags.length = 0;
+    }
+    return to;
+  };
+  let last = 'start';  // the last token read, and the one before it
+  let prev = 'start';
+  let braces = 0;      // open `{` groups: `}` is reserved only inside one
+  let cond = 0;        // paren depth of an open `[[`, else 0
+  let word = null;     // the word being read: { raw, quoted, lit, first }
+
+  const token = (t) => { prev = last; last = t; };
+  const reservedOk = (kw) => RESERVED_WORD_FOLLOWS.has(last) ||
+    (last === 'sub)' && SUBSHELL_FOLLOWS.has(kw)) ||
+    (last === 'word' && (prev === 'coproc' || prev === 'function'));
+  const active = () => {
+    const f = frames[frames.length - 1];
+    return f && f.depth === depth ? f : null;
+  };
+  // A word part. `quoted`: a quoted, escaped or expanded part, which keeps the
+  // word from being a keyword.
+  const wordPart = (quoted) => {
+    if (word === null) {
+      const f = active();
+      word = { raw: '', tail: '', quoted: false, lit: false, first: !!(f && f.st === 'pat' && f.start) };
+      if (f && f.st === 'pat') f.start = false;
+    }
+    if (quoted) word.quoted = true;
+    word.lit = !quoted;
+  };
+  const endWord = () => {
+    if (word === null) return;
+    const kw = word.quoted ? '' : word.raw;
+    const first = word.first;
+    word = null;
+    if (cond) {
+      if (kw === ']]' && depth === cond) { cond = 0; token(']]'); }
+      return;
+    }
+    let f = active();
+    if (f && f.st === 'subj') { f.st = 'in'; token('word'); return; }
+    if (f && f.st === 'in') {
+      if (kw === 'in') { f.st = 'pat'; f.start = true; f.pd = 0; token('in'); return; }
+      frames.pop(); // bash rejects this; read on by paren counting
+      f = active();
+    }
+    if (f && f.st === 'pat') {
+      if (first && kw === 'esac') { frames.pop(); token('esac'); }
+      return;
+    }
+    if (kw === '-p' && last === 'time') { token('time -p'); return; }
+    if (kw === '--' && (last === 'time' || last === 'time -p')) { token('time --'); return; }
+    if (last === 'word' && (prev === 'for' || prev === 'select') && (kw === 'in' || kw === 'do')) { token(kw); return; }
+    if (!reservedOk(kw)) { token('word'); return; }
+    if (kw === 'case') { frames.push({ depth, st: 'subj', pd: 0, start: false }); token('case'); return; }
+    if (kw === 'esac') {
+      if (f && f.st === 'body') frames.pop();
+      token('esac');
+      return;
+    }
+    if (kw === '[[') { cond = depth; token('[['); return; }
+    if (kw === 'time') {
+      const pipelineStart = last === 'start' || last === ';' || last === '\n' ? prev !== '|' : TIME_FOLLOWS.has(last);
+      token(pipelineStart ? 'time' : 'word');
+      return;
+    }
+    if (kw === '{') { braces++; token('{'); return; }
+    if (kw === '}' && braces > 0) { braces--; token('}'); return; }
+    token(PLAIN_RESERVED.has(kw) ? kw : 'word');
+  };
+
+  while (i < str.length) {
+    const ch = str[i];
+    // bash deletes a backslash-newline before it reads a token, so it is no
+    // word and leaves the word around it whole.
+    if (ch === '\\' && str[i + 1] === '\n') { i += 2; continue; }
+    const q = skipQuoted(str, i, ctx);
+    if (q !== -1) { wordPart(true); i = q; continue; }
+    const next = i + 1;
+    if (ch === '$' && str[next] === '(') { wordPart(true); i = readParenClose(str, next + 1, ctx) + 1; continue; }
+    if (ch === '$' && str[next] === '{') { wordPart(true); i = findBraceClose(str, next + 1, ctx) + 1; continue; }
+    // A process substitution is a part of the word it touches (`x<(a)` is one
+    // word), in a command, a case subject, a pattern or `[[ ]]`, where a `<`
+    // compares only when no `(` touches it.
+    if ((ch === '<' || ch === '>') && str[next] === '(') {
+      wordPart(true);
+      i = readParenClose(str, next + 1, ctx) + 1;
+      continue;
+    }
+    const top = active();
+    const inGlobPattern = !!(top && top.st === 'pat' && top.pd > 0);
+    if (ch === '#' && word === null && !inGlobPattern) {
+      const j = str.indexOf('\n', i);
+      i = j === -1 ? str.length : j;
+      continue;
+    }
+    // Space and tab only. A carriage return is a word character to bash, so
+    // `\rcase` is an ordinary word and must not open a pattern list.
+    const blank = ch === ' ' || ch === '\t';
+    if (!blank && ch !== '\n' && !';&|()<>'.includes(ch)) {
+      wordPart(false);
+      word.raw += ch;
+      word.tail = ch; // read in place of word.raw's last character, which would flatten it
+      i++;
+      continue;
+    }
+
+    // A delimiter. Two `(` belong to the word before them and do not end it.
+    if (ch === '(' && word !== null && !(top && top.st === 'pat')) {
+      // `!(` where a command can start is `!` and a subshell with extglob
+      // off, and an extended-glob word with it on. The two can close at
+      // different parens and neither can be preferred without reading the
+      // other mode wrong, so this one group is closed by the counter this
+      // file had before, exactly as it was.
+      if (word.raw === '!' && !word.quoted && !cond && reservedOk('!')) {
+        word.quoted = true;
+        i = countedClose(str, i + 1) + 1;
+        continue;
+      }
+      // An extended-glob group: `?(` `*(` `+(` `@(` `!(` inside a word.
+      if (word.lit && '?*+@!'.includes(word.tail)) {
+        word.quoted = true;
+        i = findPlainParenClose(str, i + 1, false, ctx) + 1;
+        continue;
+      }
+      // An array literal: `NAME=(` / `NAME+=(`.
+      if (!cond && !word.quoted && /^[A-Za-z_][A-Za-z0-9_]*\+?=$/.test(word.raw)) {
+        endWord();
+        i = findPlainParenClose(str, i + 1, true, ctx, heredocTags) + 1;
+        continue;
+      }
+    }
+    endWord();
+    if (blank) { i++; continue; }
+
+    if (cond) {
+      // Inside `[[ ]]` a paren groups, `<` / `>` compare, and no word is reserved.
+      if (ch === '(') depth++;
+      else if (ch === ')') {
+        depth--;
+        if (depth === 0) return close(i);
+        if (depth < cond) cond = 0;
+      }
+      i = ch === '\n' ? pastNewline(i) : i + 1;
+      continue;
+    }
+
+    let f = active();
+    if (f && (f.st === 'subj' || f.st === 'in')) {
+      if (ch === '\n' && f.st === 'in') { i = pastNewline(i); continue; }
+      frames.pop(); // bash rejects this; read on by paren counting
+      f = active();
+    }
+    if (f && f.st === 'pat') {
+      if (f.pd > 0) {
+        if (ch === '(') f.pd++;
+        else if (ch === ')') f.pd--;
+        i = ch === '\n' ? afterNewline(str, i, ctx) : i + 1;
+        continue;
+      }
+      if (ch === '\n') { i = pastNewline(i); continue; }
+      if (ch === '|') { i++; continue; }
+      if (ch === '(') {
+        if (f.start) f.start = false; // the optional paren before a pattern list
+        else f.pd++;
+        i++;
+        continue;
+      }
+      if (ch === ')') { f.st = 'body'; token('pat)'); i++; continue; } // ends the pattern, not the span
+      frames.pop(); // bash rejects this; read on by paren counting
+      f = active();
+    }
+    if (f && f.st === 'body' && ch === ';' && (str[next] === ';' || str[next] === '&')) {
+      f.st = 'pat';
+      f.start = true;
+      f.pd = 0;
+      token(';;');
+      i = str[next] === ';' && str[next + 1] === '&' ? next + 2 : next + 1;
+      continue;
+    }
+
+    if (ch === '\n') {
+      token('\n');
+      i = pastNewline(i);
+      continue;
+    }
+    if (ch === '<' || ch === '>') {
+      token('redir');
+      if (ch === '<' && str[next] === '<' && str[next + 1] !== '<') {
+        const tag = readHeredocTag(str, next + 1);
+        heredocTags.push(tag);
+        token('word');
+        i = tag.end;
+        continue;
+      }
+      i = str[next] === '&' || str[next] === '>' || (ch === '>' && str[next] === '|') ? next + 1 : i + 1;
+      continue;
+    }
+    if (ch === '&' && str[next] === '>') {
+      token('redir');
+      i = str[next + 1] === '>' ? next + 2 : next + 1;
+      continue;
+    }
+    if (ch === ';') { token(';'); i++; continue; }
+    if (ch === '&') {
+      const two = str[next] === '&';
+      token(two ? '&&' : '&');
+      i = two ? next + 1 : i + 1;
+      continue;
+    }
+    if (ch === '|') {
+      const op = str[next] === '|' ? '||' : str[next] === '&' ? '|&' : '|';
+      token(op);
+      i = op === '|' ? i + 1 : next + 1;
+      continue;
+    }
+    if (ch === '(') {
+      if (last === 'word') {
+        // `name()` / `name ( )`: the parens of a function definition.
+        let j = i + 1;
+        while (str[j] === ' ' || str[j] === '\t') j++;
+        if (str[j] === ')') { token('fn()'); i = j + 1; continue; }
+      }
+      if (str[next] === '(' && (last === 'for' || reservedOk('((')) && probeBudget > 0) {
+        // `((`: arithmetic when the inner paren's match is followed by `)`,
+        // otherwise two subshells — bash decides it the same way.
+        // The read-ahead shares the orphan list, and what it did to the list
+        // is kept only if the text is arithmetic and the scan resumes past
+        // it; otherwise its appends are dropped and the text is read again.
+        const orphans = ctx.orphans;
+        const waiting = orphans.length;
+        const probe = { orphans };
+        const budget = probeBudget;
+        probeBudget = 0; // none inside this one: each would re-read its text
+        const e = findPlainParenClose(str, next + 1, false, probe);
+        probeBudget = budget - (e - i);
+        if (e >= str.length) return close(str.length);
+        if (str[e + 1] === ')') {
+          ctx.orphans = probe.orphans;
+          token('arith');
+          i = e + 2;
+          continue;
+        }
+        orphans.length = waiting;
+      }
+      depth++;
+      token('(');
+      i++;
+      continue;
+    }
+    // ch === ')'
+    depth--;
+    if (depth === 0) return close(i);
+    while (frames.length && frames[frames.length - 1].depth > depth) frames.pop();
+    token('sub)');
+    i++;
+  }
+  return close(str.length);
 }
 
 // Reads the tag word after `<<` / `<<-` starting at `i`.
@@ -1111,6 +1580,22 @@ function findSecretReadUnderOtherReadings(command) {
   return null;
 }
 
+// `scan` over `command` with spans closed by bash 5's grammar, or null. Every check
+// that reads spans comes through here. A stack overflow is this reading giving up,
+// so it counts as no hit. The scans that close spans by count have already run, so
+// that can cost nothing they found.
+function scanByGrammar(scan, command) {
+  closeByCount = false;
+  try {
+    return scan(command, 0);
+  } catch (err) {
+    if (!(err instanceof RangeError)) throw err;
+    return null;
+  } finally {
+    closeByCount = true;
+  }
+}
+
 // Returns the offending token text, or null.
 function findSecretRead(command, depth) {
   const { tokens, nested } = tokenize(command);
@@ -1560,6 +2045,12 @@ process.stdin.on('end', () => {
     if (hit !== null) emitBlock('secret-read', tool, hit);
     const spawn = findDebuggerCliSpawn(command, 0);
     if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
+    if (spanSeen) {
+      const grammarHit = scanByGrammar(findSecretRead, command);
+      if (grammarHit !== null) emitBlock('secret-read', tool, grammarHit);
+      const grammarSpawn = scanByGrammar(findDebuggerCliSpawn, command);
+      if (grammarSpawn !== null) emitBlock('debugger-cli-spawn', tool, grammarSpawn);
+    }
     allow(undefined);
   } catch {
     // Fail open — never block valid tool calls due to hook errors.
