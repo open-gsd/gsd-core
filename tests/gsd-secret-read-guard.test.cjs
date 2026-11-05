@@ -991,6 +991,116 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
     });
   }
 
+  // Bash finds the delimiter word with nesting, then removes quotes across all of it,
+  // and only if the word held a quote of its own. Each pair was confirmed against bash
+  // 5.2: a line that is not the delimiter does not end the body, and this one does.
+  const delimiters = [
+    ['E"F"', 'EF'], ["E'F'", 'EF'], ['"E"F', 'EF'], ["'E'\"F\"", 'EF'],
+    ['E\\F', 'EF'], ['E" "F', 'E F'], ['E\\\nF', 'EF'], ['\\\nE', 'E'], ['\\\n E', 'E'], [' \\\n E', 'E'],
+    ['\\\\E', '\\E'], ["\\'E", "'E"], ['\\"E', '"E'], ['\\ E', ' E'],
+    ['"a\\\\b"', 'a\\b'], ['"\\$E"', '$E'], ['E"\\$F"', 'E$F'], ['"E\\\nF"', 'EF'],
+    ['"E\\"F"', 'E"F'], ["$'E'", 'E'], ['$"E"', 'E'], ["E$'F'", 'EF'], ["$'E\\'F'", "E'F"],
+    ['${a:-"}"}F', '${a:-"}"}F'], ["${a:-'}'}F", "${a:-'}'}F"], ['${"}"}', '${"}"}'],
+    ['\'E\'${x:-"a b"}', 'E${x:-a b}'], ['\'E\'$(echo "x")', 'E$(echo x)'],
+    ['"a$(echo "b c")d"', 'a$(echo b c)d'], ['"a`echo "b c"`d"', 'a`echo b c`d'],
+    ['"${x:-"b c"}"', '${x:-b c}'], ['E<(x)F', 'E<(x)F'], ['>(x)', '>(x)'],
+    ['E$[1 + 1]F', 'E$[1 + 1]F'], ['${a:-${b} c}', '${a:-${b} c}'],
+  ];
+  for (const [word, end] of delimiters) {
+    const span = (arm) => `x=$(case x in y) cat <<${word} ;;\nb\n${end}\nx) ${arm};; esac)`;
+    // A tag that never matches takes everything after it for the body, and a tag that
+    // matches early closes the span early. Either way this read is not seen.
+    test(`delimiter ${JSON.stringify(word)} ends at its own line: blocks a read after the span`, () => {
+      const cmd = `${span('echo ok')}; cat .env`;
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+    test(`delimiter ${JSON.stringify(word)}: blocks a read in the arm after it`, () => {
+      const cmd = span('cat .env');
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  // These `next` denies by count, so they cannot be held as allows.
+  const deniedByCount = new Set(['\\"E', '\\ E', '"E\\"F"']);
+  for (const [word, end] of delimiters.filter(([w]) => !deniedByCount.has(w))) {
+    test(`delimiter ${JSON.stringify(word)}: allows a quoted read after a case that holds it`, () => {
+      const cmd = `echo "$(case x in y) cat <<${word} ;;\nbody )\n${end}\nx) echo ok;; esac)"; echo "; cat .env; "`;
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  // A line that only looks like the delimiter must not end the body. If it did, the
+  // `)` after it would close the span and the arm would land in the outer string.
+  const notTheDelimiter = [
+    ['\\\\E', 'E', '\\E'],
+    ['E"\\$F"', 'E\\$F', 'E$F'],
+    ['"a\\\\b"', 'a\\\\b', 'a\\b'],
+    ["\\'E", 'E', "'E"],
+    ['\'E\'${x:-"a b"}', 'E${x:-"a b"}', 'E${x:-a b}'],
+    ['"E\\F"', 'EF', 'E\\F'],
+    ['"E\'F"', 'EF', "E'F"],
+  ];
+  for (const [word, lookalike, end] of notTheDelimiter) {
+    test(`delimiter ${JSON.stringify(word)} is not ended by the line ${JSON.stringify(lookalike)}: blocks the read`, () => {
+      const cmd = `echo "$(cat <<${word}\n${lookalike}\n)\n${end}\ncase x in x) cat .env;; esac)"`;
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  test('a delimiter quoted in part keeps its body literal: allows a substitution in the body', () => {
+    const cmd = 'echo "$(cat <<"E"F\n$(cat .env)\nEF\n)"';
+    assertAllowed(runHook(bash(cmd)), cmd);
+  });
+
+  test('a delimiter with a backslash keeps its body literal: allows a substitution in the body', () => {
+    const cmd = 'echo "$(case x in y) echo \'"\'; cat <<\\E ;;\n$(cat .env)\'\nE\nx) echo ok;; esac)"';
+    assertAllowed(runHook(bash(cmd)), cmd);
+  });
+
+  test("`$'…'` in a delimiter counts as quoting: allows a substitution in the body", () => {
+    const cmd = 'echo "$(cat <<$\'E\'\n$(cat .env)\nE\n)"';
+    assertAllowed(runHook(bash(cmd)), cmd);
+  });
+
+  test('a continuation in a delimiter is not quoting: blocks a substitution in the body', () => {
+    const cmd = 'echo "$(case x in x) echo \'"\'; cat <<E\\\nF ;;\n$(cat .env)\'\nEF\n;; esac)"';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  test('a substitution in a delimiter is part of the word: blocks the read in the arm after it', () => {
+    const cmd = 'echo "$(case x in y) cat <<E$(x)F ;;\nbody )\nE$(x)F\nx) cat .env;; esac)"';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  test('backticks in a delimiter are part of the word: allows a quoted read after the span', () => {
+    const cmd = 'echo "$(case x in y) cat <<E`x;`F ;;\nbody )\nE`x;`F\nx) echo ok;; esac)"; echo "; cat .env; "';
+    assertAllowed(runHook(bash(cmd)), cmd);
+  });
+
+  test('a `<<-` delimiter with quotes ends at its tab-indented line: blocks a read after the span', () => {
+    const cmd = 'x=$(case x in y) cat <<-E"F" ;;\nb\n\tEF\nx) echo ok;; esac); cat .env';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  test('a `<<-` split by a continuation still strips tabs: blocks a read after the span', () => {
+    const cmd = 'x=$(case x in y) cat <<\\\n-E ;;\nb\n\tE\nx) echo ok;; esac); cat .env';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  test('the word of a here-string is not a heredoc tag: allows a quoted read after the span', () => {
+    const cmd = 'echo "$(case x in y) cat <<<EOF ;;\nx) echo ok;; esac)"; echo "; cat .env; "';
+    assertAllowed(runHook(bash(cmd)), cmd);
+  });
+
+  for (const word of ['E"F"', "E'F'", 'E\\F']) {
+    test(`the counting scans read ${word} as they did before #5267`, () => {
+      // bash runs nothing secret here. The counting scan keeps the quoting in the tag and
+      // denies it, as `next` does: the delimiter reader belongs to the grammar scan.
+      const cmd = `echo "$(cat <<${word}\nbody )\nEF\necho ok)"; echo "; cat .env; "`;
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
   test('a read in front of a nest of 5000 unquoted `$(`: blocks', () => {
     // The counting scan walks this nest in a loop and finds the read, so the
     // grammar reading never runs. The next test is the one that reaches it.
@@ -1139,6 +1249,18 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
     assert.equal(verdict, null);
     assert.ok(steps <= linearSteps(cmd), `${steps} reader steps for ${cmd.length} characters`);
   });
+
+  for (const [shape, cmd] of [
+    ['unterminated', `echo "$(${'cat <<"E$('.repeat(2000)}x`],
+    ['closed', `echo "$(${'cat <<"E$('.repeat(2000)}x${')"'.repeat(2000)})"`],
+  ]) {
+    test(`a nest of quoted delimiters, ${shape}, takes reader steps linear in the command`, () => {
+      // Each delimiter holds the rest of the nest, so removing quotes from each one
+      // reads it again, which for 2,000 of them is several times this bound.
+      const { steps } = scanCounted(cmd);
+      assert.ok(steps <= linearSteps(cmd), `${steps} reader steps for ${cmd.length} characters`);
+    });
+  }
 
   test('a deep nest that paren counting closes early takes reader steps linear in the command', () => {
     // Past MAX_READER_DEPTH the counter ends each level at the comment's `)`,

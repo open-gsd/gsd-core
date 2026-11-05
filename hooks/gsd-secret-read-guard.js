@@ -704,6 +704,12 @@ const PLAIN_RESERVED = new Set(['!', 'if', 'then', 'else', 'elif', 'fi', 'while'
 // scanByGrammar refills it before each scan, so no scan reads `((` with
 // what an earlier one left: one hook run makes several.
 let probeBudget = MAX_COMMAND_LENGTH;
+// What quote removal may read in one grammar scan: the command's length, which covers
+// any delimiters that sit side by side. One holding a nested heredoc holds the rest of
+// the command too, so without this a nest of them is quadratic. Past it a word keeps
+// its quotes, its body runs to the end of the input, and the scans that ran first have
+// already said what they found.
+let unquoteBudget = 0;
 
 // Iterations of the span readers' loops, summed over the process: the work
 // the tests hold linear in the length of a command (module.exports).
@@ -1044,6 +1050,10 @@ function scanCommandParenClose(str, i, ctx) {
     }
     if (ch === '<' || ch === '>') {
       token('redir');
+      if (ch === '<' && str[next] === '<' && str[next + 1] === '<') {
+        i = next + 2; // a here-string, whose word is an ordinary word
+        continue;
+      }
       if (ch === '<' && str[next] === '<' && str[next + 1] !== '<') {
         const tag = readHeredocTag(str, next + 1);
         heredocTags.push(tag);
@@ -1118,6 +1128,7 @@ function scanCommandParenClose(str, i, ctx) {
 
 // Reads the tag word after `<<` / `<<-` starting at `i`.
 function readHeredocTag(str, i) {
+  if (!closeByCount) return readDelimiterWord(str, i);
   let stripTabs = false;
   if (str[i] === '-') { stripTabs = true; i++; }
   while (str[i] === ' ' || str[i] === '\t') i++;
@@ -1161,6 +1172,99 @@ function readHeredocTag(str, i) {
     }
   }
   return { tag, quoted, stripTabs, end: i };
+}
+
+// The heredoc at `i` (just past `<<`), read in bash's two steps, so that where a span
+// ends and what is scanned inside it cannot disagree. Step one finds the word: it ends
+// at a metacharacter outside any quote or nested construct. Step two runs only if the
+// word held a quote of its own, and removes quotes across all of its text, nested
+// constructs included. So `$(echo "x")` waits for itself and `'E'$(echo "x")` waits for
+// `E$(echo x)`. Escapes in `$'…'` other than `\'` and `\\` are not decoded: that reading
+// belongs to the ANSI-C work (#5255).
+function readDelimiterWord(str, i) {
+  const pastContinuations = () => { while (str[i] === '\\' && str[i + 1] === '\n') i += 2; };
+  pastContinuations();
+  const stripTabs = str[i] === '-';
+  if (stripTabs) i++;
+  pastContinuations();
+  while (str[i] === ' ' || str[i] === '\t') { i++; pastContinuations(); }
+  const ctx = { orphans: [], depth: 0 };
+  let word = '';
+  let quoted = false;
+  while (i < str.length) {
+    const ch = str[i];
+    if (ch === '\\' && str[i + 1] === '\n') { i += 2; continue; }
+    if (ch === '$' && str[i + 1] === '"') { i++; continue; }
+    if (ch === '$' && str[i + 1] === "'") {
+      let text = '';
+      for (i += 2; i < str.length && str[i] !== "'"; i++) {
+        if (str[i] === '\\' && (str[i + 1] === "'" || str[i + 1] === '\\')) i++;
+        text += str[i];
+      }
+      i++;
+      word += `'${text.replaceAll("'", "'\\''")}'`;
+      quoted = true;
+      continue;
+    }
+    if (ch === '\\' || ch === "'" || ch === '"') {
+      let end = ch === '"' ? i + 1 : skipQuoted(str, i, ctx);
+      // Bash reads a `${ }` inside "…" with quotes of its own, which skipQuoted does not.
+      while (ch === '"' && end < str.length) {
+        if (str[end] === '"') { end++; break; }
+        if (str[end] === '$' && str[end + 1] === '{') end = findBraceClose(str, end + 2, ctx) + 1;
+        else if (str[end] === '$' && str[end + 1] === '(') end = readSpanClose(str, end + 2) + 1;
+        else if (str[end] === '`') end = skipQuoted(str, end, ctx);
+        else end += str[end] === '\\' ? 2 : 1;
+      }
+      word += str.slice(i, end);
+      quoted = true;
+      i = end;
+      continue;
+    }
+    let close = -1;
+    if (ch === '`') close = skipQuoted(str, i, ctx) - 1;
+    else if ((ch === '$' || ch === '<' || ch === '>') && str[i + 1] === '(') close = readSpanClose(str, i + 2);
+    else if (ch === '$' && str[i + 1] === '{') close = findBraceClose(str, i + 2, ctx);
+    else if (ch === '$' && str[i + 1] === '[') close = str.indexOf(']', i);
+    if (close !== -1) {
+      word += str.slice(i, close + 1);
+      i = close + 1;
+      continue;
+    }
+    if (/[ \t\n;&|<>()]/.test(ch)) break;
+    word += ch;
+    i++;
+  }
+  if (!quoted || unquoteBudget < word.length) return { tag: word, quoted, stripTabs, end: i };
+  unquoteBudget -= word.length;
+  readerSteps += word.length;
+  return { tag: withoutQuotes(word), quoted, stripTabs, end: i };
+}
+
+// `word` with one level of shell quoting removed, reading it flat: a quote inside a
+// nested construct counts like any other.
+function withoutQuotes(word) {
+  let out = '';
+  let inDouble = false;
+  for (let i = 0; i < word.length; i++) {
+    const ch = word[i];
+    if (ch === '\\' && i + 1 < word.length) {
+      const next = word[++i];
+      if (next === '\n') continue;
+      if (inDouble && !'"\\$`'.includes(next)) out += ch;
+      out += next;
+    } else if (ch === "'" && !inDouble) {
+      const j = word.indexOf("'", i + 1);
+      const end = j === -1 ? word.length : j;
+      out += word.slice(i + 1, end);
+      i = end;
+    } else if (ch === '"') {
+      inDouble = !inDouble;
+    } else {
+      out += ch;
+    }
+  }
+  return out;
 }
 
 // From `i` (start of the line after the heredoc-opening line), consume one
@@ -1397,6 +1501,12 @@ function tokenize(str) {
       else if (str.startsWith('>>', j)) { text = '>>'; j += 2; }
       else if (str.startsWith('>|', j)) { text = '>|'; j += 2; }
       else { text = ch; j += 1; }
+      if ((text === '<<' || text === '<<-') && !closeByCount) {
+        const heredoc = readHeredocTag(str, i + 2);
+        heredocs.push({ tag: heredoc.tag, quoted: heredoc.quoted, stripTabs: heredoc.stripTabs, seg });
+        i = heredoc.end;
+        continue;
+      }
       if (text === '<<' || text === '<<-') {
         expectTag = { stripTabs: text === '<<-' };
         i = j;
@@ -1737,6 +1847,7 @@ function findSecretReadUnderOtherReadings(command) {
 function scanByGrammar(scan, command) {
   closeByCount = false;
   probeBudget = MAX_COMMAND_LENGTH;
+  unquoteBudget = command.length;
   try {
     return scan(command, 0);
   } catch (err) {
