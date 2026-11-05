@@ -28,6 +28,7 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
+const { extractFencedBashBlockContaining } = require('./qa/tdd-walk.cjs');
 
 const FRAGMENT = path.join(
   __dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'executor-isolation-dispatch.md',
@@ -37,16 +38,6 @@ const content = fs.readFileSync(FRAGMENT, 'utf8');
 
 const CREATE = 'PROMPT_FILE=$(mktemp';
 const READ = 'EXECUTOR_PROMPT=$(cat -- "$PROMPT_FILE")';
-
-/** The fenced ```bash block that contains `marker` (indexOf only, no backtracking regex over the file). */
-function bashBlock(marker) {
-  const at = content.indexOf(marker);
-  assert.ok(at !== -1, `the dispatch fragment must contain ${marker}`);
-  const open = content.lastIndexOf('```bash\n', at);
-  const close = content.indexOf('\n```', at);
-  assert.ok(open !== -1 && close !== -1 && content.indexOf('\n```', open + 8) === close, `${marker} must sit in one bash block`);
-  return content.slice(open + 8, close + 1);
-}
 
 /** A temp dir removed when the test `t` ends. */
 function tempDir(t) {
@@ -97,7 +88,7 @@ function readAndCheck(root, { text, asDir = false, strict = false } = {}) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   if (asDir) fs.mkdirSync(file);
   else if (text !== undefined) fs.writeFileSync(file, text);
-  const r = runBlock(root, bashBlock(READ), { strict, tail: 'printf "%s" "$EXECUTOR_PROMPT"' });
+  const r = runBlock(root, extractFencedBashBlockContaining(content, READ), { strict, tail: 'printf "%s" "$EXECUTOR_PROMPT"' });
   return { ...r, gone: !fs.existsSync(file) };
 }
 
@@ -216,7 +207,7 @@ test('#5531: apostrophe-bearing spliced content reaches the prompt unchanged thr
 
 test('#5531: block 1 creates the prompt file under ORCH_ROOT/.claude', (t) => {
   const root = path.join(tempDir(t), 'orch');
-  const block1 = `gsd_run() { echo false; }\n${bashBlock(CREATE)}`;
+  const block1 = `gsd_run() { echo false; }\n${extractFencedBashBlockContaining(content, CREATE)}`;
   // The path is judged in bash, never compared against a Node path (Git Bash prints /c/... on windows-latest).
   const ok = runBlock(root, block1, { tail: `case "$PROMPT_FILE" in "$ORCH_ROOT"/.claude/${STEM}-??????) ;; *) exit 3 ;; esac; [ -f "$PROMPT_FILE" ] || exit 4` });
   assert.equal(ok.exitCode, 0, ok.stderr);
@@ -238,7 +229,7 @@ test('#5531: block 1 removes a leftover file of the same plan and keeps another 
   const other = path.join(dir, `gsd-executor-prompt-${PHASE}-9-abcdef`);
   fs.writeFileSync(mine, 'old');
   fs.writeFileSync(other, 'other');
-  const r = runBlock(root, `gsd_run() { echo false; }\n${bashBlock(CREATE)}`);
+  const r = runBlock(root, `gsd_run() { echo false; }\n${extractFencedBashBlockContaining(content, CREATE)}`);
   assert.equal(r.exitCode, 0, r.stderr);
   assert.ok(!fs.existsSync(mine), 'the leftover of this plan must be removed');
   assert.ok(fs.existsSync(other), "another plan's file must stay");
@@ -273,8 +264,8 @@ test('#5531: ORCH_ROOT text is data: quotes, backticks, $(...), spaces and $ in 
   assert.ok(!fs.existsSync(path.join(dir, 'S')), 'ORCH_ROOT text must not be executed');
 });
 
-test('#5531: every halt of the read-and-check block runs with the prompt file already removed', (t) => {
-  const block = bashBlock(READ);
+test('#5531: the read-and-check block removes the prompt file before its first halt', (t) => {
+  const block = extractFencedBashBlockContaining(content, READ);
   assert.ok(block.indexOf('rm -f -- "$PROMPT_FILE"') !== -1 && block.indexOf('rm -f -- "$PROMPT_FILE"') < block.indexOf('exit 1'), 'the prompt file must be removed before the first halt');
   const dir = tempDir(t);
   const r = readAndCheck(dir, { text: '' });
@@ -284,6 +275,19 @@ test('#5531: every halt of the read-and-check block runs with the prompt file al
 
 test('#5531: the substitution instruction covers every bash block and every plan identifier it uses', () => {
   assert.match(content, /replace `\{phase_dir\}`, `\{plan_file\}`, `\{plan_number\}`, `\{phase_number\}` and `\{plan_padded\}`/, 'every bash block gets the identifiers substituted');
+});
+
+test('#5531: the prose, changeset and tdd-walk header state what the fix does', () => {
+  assert.ok(!content.includes('no shell variable crosses between them'), 'the blocks share a shell: ORCH_ROOT, EXPECTED_BASE, WAVE_WORKTREE_MANIFEST and EXECUTOR_PROMPT cross');
+  assert.match(content, /`\$ORCH_ROOT`[^\n]*`\$EXECUTOR_PROMPT`/, 'the prose names what does cross between blocks');
+  assert.ok(content.includes('halt before the read-and-check block'), 'cleanup covers every halt before the read-and-check block');
+  assert.ok(content.includes('CRLF'), 'the prose says what a CRLF or BOM in the written file does');
+  assert.ok(!/^#\s+\{plan_id\} is this$/m.test(content), 'the Step 2 comment must not break mid-clause');
+  assert.ok(content.includes('`quick` for `{phase_number}`'), 'a caller without a phase passes the literal quick');
+  // allow-test-rule: source-text-is-the-product the changeset and the harness header are the shipped text of this fix
+  const read = (...p) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  assert.ok(read('.changeset', 'proud-zebras-hop.md').includes('apart from trailing newlines'), 'the changeset must not claim byte-identical delivery');
+  assert.ok(read('tests', 'qa', 'tdd-walk.cjs').includes('mktemp creation, which this harness does not need'), 'the tdd-walk header names the mktemp creation unambiguously');
 });
 
 test('#5531: an un-substituted ${AGENT_SKILLS} or ${TDD_APPLICABLE marker halts', (t) => {
