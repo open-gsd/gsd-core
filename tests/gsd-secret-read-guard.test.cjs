@@ -2070,7 +2070,6 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     const shapes = [
       "cat ${x:-$'.env'}", "cat ${x-$'.e\\x6ev'}",
       "cat ${x:+a}$'.env'", 'cat .env${}',
-      "echo \"${x\\\n%'\"'$${y}'}\" $'\\'; cat .env #'",
     ];
     for (const cmd of shapes) {
       test(`allowed: ${JSON.stringify(cmd)}`, () => {
@@ -2112,6 +2111,29 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
         assertAllowed(runHook(bash(cmd)), cmd);
       });
     }
+  });
+
+  describe('a line continuation inside a ${…} within "…": dash removes it first', () => {
+    // Each read the file in dash 0.5.12 only (2026-11-05): dash takes the `'`
+    // after a pattern operator as a quote, so the "…" closes where the dash
+    // reading must end it. The other shells fail the line.
+    const blocks = [
+      "echo \"${x\\\n%'\"'$${y}'}\" $'\\'; cat .env #'",
+      "echo \"${\\\nx%'\"'$${y}'}\" $'\\'; cat .env #'",
+      "echo \"$\\\n{x%'\"'$${y}'}\" $'\\'; cat .env #'",
+      "echo \"${x\\\n\\\n#'\"'$${y}'}\" $'\\'; cat .env #'",
+    ];
+    for (const cmd of blocks) {
+      test(`blocks ${JSON.stringify(cmd)}`, () => {
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      });
+    }
+
+    test('a length is no pattern operator, line continuation or not', () => {
+      for (const cmd of ["echo \"${#x}\" $'a'; ls", "echo \"${#\\\nx}\" $'a'; ls", "echo \"$\\\n{x}\" $'a'; ls"]) {
+        assertAllowed(runHook(bash(cmd)), cmd);
+      }
+    });
   });
 
   describe("zsh's arithmetic: a quote in `$(( ))`, `(( ))` or `$[ ]` is not a quote", () => {
