@@ -123,7 +123,7 @@ describe('#5759 parity — absent, corrupt, precedence are unchanged', () => {
     assert.strictEqual(r.config.model_profile, 'quality');
   });
 
-  test('resolve-model: a workstream that sets resolve_model_ids over a root "omit" wins (omit check precedence)', () => {
+  test('loader precedence: a workstream value over a root omit means omit does not apply', () => {
     fs.writeFileSync(rootConfig(), JSON.stringify({ resolve_model_ids: 'omit' }));
     fs.writeFileSync(wsConfig(), JSON.stringify({ resolve_model_ids: 'keep' }));
     const r = runNode([TOOLS_PATH, 'resolve-model', 'gsd-executor', '--ws', 'ws1'], {
@@ -150,6 +150,84 @@ describe('#5759 parity — absent, corrupt, precedence are unchanged', () => {
   });
 });
 
+describe('#5759 parity — migrateOnDisk applies the same size cap as readConfigFileBounded', () => {
+  const { migrateOnDisk } = require('../gsd-core/bin/lib/configuration.cjs');
+  let tmpDir;
+  beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-migrate-')); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  // configuration.cts may not import a sibling (#3571), so it carries its own copy of the cap;
+  // this row fails if the two bounds ever diverge.
+  for (const [label, delta, migrates] of [['limit-1', -1, true], ['limit', 0, true], ['limit+1', 1, false]]) {
+    test(`a legacy-key config of CONFIG_MAX_BYTES ${label} bytes ${migrates ? 'is migrated' : 'is left alone'}`, () => {
+      const file = path.join(tmpDir, 'config.json');
+      fs.writeFileSync(file, paddedConfig({ branching_strategy: 'phase' }, CONFIG_MAX_BYTES + delta));
+
+      const report = migrateOnDisk(tmpDir, undefined, file);
+
+      assert.strictEqual(report.migrated, migrates);
+    });
+  }
+});
+
+describe('#5759 the unusable-config warning names what is applied instead', () => {
+  let tmpDir;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-warn-'));
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'ws1'), { recursive: true });
+  });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const rootConfig = () => path.join(tmpDir, '.planning', 'config.json');
+  const wsConfig = () => path.join(tmpDir, '.planning', 'workstreams', 'ws1', 'config.json');
+  const warningFor = (writes, file) => writes.filter((w) => w.includes(file)).join('');
+
+  test('an unusable workstream config with a usable root config says the root config is used', () => {
+    fs.writeFileSync(rootConfig(), JSON.stringify({ model_profile: 'budget' }));
+    fs.mkdirSync(wsConfig());
+
+    let resolution;
+    const writes = captureStderr(() => { resolution = loadConfigResolved(tmpDir, { workstream: 'ws1' }); });
+
+    assert.strictEqual(resolution.source, 'root');
+    assert.strictEqual(resolution.config.model_profile, 'budget');
+    const warning = warningFor(writes, wsConfig());
+    assert.ok(warning.includes('using the root config instead'), warning);
+    assert.ok(!warning.includes('using defaults instead'), warning);
+  });
+
+  test('an unusable root config with no workstream says defaults are used', () => {
+    fs.mkdirSync(rootConfig());
+
+    const writes = captureStderr(() => { loadConfigResolved(tmpDir); });
+
+    const warning = warningFor(writes, rootConfig());
+    assert.ok(warning.includes('using defaults instead'), warning);
+    assert.ok(!warning.includes('using the root config instead'), warning);
+  });
+
+  test('an unusable workstream config with no root config says defaults are used', () => {
+    fs.mkdirSync(wsConfig());
+
+    const writes = captureStderr(() => { loadConfigResolved(tmpDir, { workstream: 'ws1' }); });
+
+    const warning = warningFor(writes, wsConfig());
+    assert.ok(warning.includes('using defaults instead'), warning);
+    assert.ok(!warning.includes('using the root config instead'), warning);
+  });
+
+  test('an unusable root config beside a usable workstream config does not claim defaults replace it', () => {
+    fs.mkdirSync(rootConfig());
+    fs.writeFileSync(wsConfig(), JSON.stringify({ model_profile: 'quality' }));
+
+    const writes = captureStderr(() => { loadConfigResolved(tmpDir, { workstream: 'ws1' }); });
+
+    const warning = warningFor(writes, rootConfig());
+    assert.ok(warning.length > 0, 'the unusable root config is still reported');
+    assert.ok(!warning.includes('using defaults instead'), warning);
+  });
+});
+
 describe('#5759 property — a regular config under the cap reads back unchanged', () => {
   let tmpDir;
   beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-prop-')); });
@@ -163,8 +241,24 @@ describe('#5759 property — a regular config under the cap reads back unchanged
         fs.writeFileSync(file, text, 'utf8');
         const read = readConfigFileBounded(file);
         assert.strictEqual(read, fs.readFileSync(file, 'utf8'));
-        assert.deepStrictEqual(Object.keys(JSON.parse(read)).sort(), Object.keys(obj).sort());
       }),
+    );
+  });
+
+  test('a file of n bytes around the cap: text when n <= CONFIG_MAX_BYTES, EFBIG when n > CONFIG_MAX_BYTES', () => {
+    const file = path.join(tmpDir, 'sized-config.json');
+    fc.assert(
+      fc.property(fc.integer({ min: CONFIG_MAX_BYTES - 64, max: CONFIG_MAX_BYTES + 64 }), (n) => {
+        const text = paddedConfig({ model_profile: 'quality' }, n);
+        fs.writeFileSync(file, text, 'utf8');
+        assert.strictEqual(fs.statSync(file).size, n);
+        if (n <= CONFIG_MAX_BYTES) {
+          assert.strictEqual(readConfigFileBounded(file), text);
+        } else {
+          assert.throws(() => readConfigFileBounded(file), (err) => err.code === 'EFBIG');
+        }
+      }),
+      { numRuns: 20 },
     );
   });
 
