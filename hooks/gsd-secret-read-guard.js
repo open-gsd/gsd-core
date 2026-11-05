@@ -111,11 +111,7 @@
 //   a `${…}` default spelled with `$'…'` (`cat ${x:-$'.env'}`,
 //   `cat ${x-$'.e\x6ev'}`), since the text inside `${…}` is not scanned; a
 //   name joined to an expansion (`cat ${x:+a}$'.env'`, `cat .env${}`), the
-//   `$VAR` gap; and a line
-//   continuation inside a `${` or its name within "…", which dash removes
-//   first, so the dash reading misses its pattern operator and takes a `'`
-//   after it as text where dash takes a quote
-//   (`echo "${x\<newline>%'"'$${y}'}" $'\'; cat .env #'`). The tests
+//   `$VAR` gap. The tests
 //   pin each as allowed. The promise is "no looser than
 //   the retired rules on plain commands, without arming the compound-`cd`
 //   prompt". Writes to secret files are out of scope (Write/Edit were never
@@ -720,13 +716,30 @@ function ansiCBraceCloseBefore(str, i, shell) {
 
 // Whether the `${…}` whose text starts at `i` removes a pattern: its name
 // (dash has no arrays, so no subscript), then `#` or `%` (`${x#…}`,
-// `${x%%…}`; `${#x}` is a length).
+// `${x%%…}`; `${#x}` is a length). dash removes a line continuation before it
+// reads any of it, so `${x\<newline>%…` removes a pattern too.
 function bracePatternOp(str, i) {
-  BRACE_NAME.lastIndex = i;
-  const m = BRACE_NAME.exec(str);
-  return m !== null && (str[i + m[0].length] === '#' || str[i + m[0].length] === '%');
+  const skip = (p) => { while (str[p] === '\\' && str[p + 1] === '\n') p += 2; return p; };
+  const next = (p, re) => { while (p < str.length && re.test(str[p])) p = skip(p + 1); return p; };
+  const start = skip(i);
+  const ch = str[start] || '';
+  let end;
+  if (/[A-Za-z_]/.test(ch)) end = next(start, /[A-Za-z0-9_]/);
+  else if (/[0-9]/.test(ch)) end = next(start, /[0-9]/);
+  else if (ch !== '' && '@*#?$!-'.includes(ch)) end = skip(start + 1);
+  else return false;
+  return str[end] === '#' || str[end] === '%';
 }
-const BRACE_NAME = /[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-]/y;
+
+// The index of the `{` of a `${` at `i` inside "…", or -1: bash and dash remove
+// a line continuation first, so `"$\<newline>{x}"` is `"${x}"`. zsh keeps it as
+// text there (runParen).
+function quotedBraceOpen(str, i, shell) {
+  if (str[i + 1] === '{') return i + 1;
+  if (shell === 'zsh') return -1;
+  const run = dollarRun(str, i);
+  return run.dollars === 1 && str[run.end] === '{' ? run.end : -1;
+}
 
 // The readings a command holding dollar-quoting, or a run of `$` before `{`
 // or `(`, is scanned under before the plain one (findSecretRead).
@@ -1058,8 +1071,9 @@ function doubleQuoteEnd(str, i, reading, nested) {
     if (paren) { i = span(paren.open + 1, findParenClose(str, paren.open + 1, reading)); continue; }
     const dqRun = reading && str[i] === '$' ? quotedRun(str, i) : null;
     if (dqRun) { i = dqRun.next; if (str[i] !== '$') continue; }
-    if (reading && !asBefore && str[i] === '$' && str[i + 1] === '{') {
-      const j = ansiCBraceClose(str, i + 2, reading, nested, true);
+    const brace = reading && !asBefore && str[i] === '$' ? quotedBraceOpen(str, i, reading) : -1;
+    if (brace !== -1) {
+      const j = ansiCBraceClose(str, brace + 1, reading, nested, true);
       if (j !== -1) { i = j + 1; continue; }
     }
     if (str[i] === '$' && str[i + 1] === '(') { i = span(i + 2, findParenClose(str, i + 2, reading)); continue; }
@@ -1403,9 +1417,10 @@ function tokenize(str, reading) {
         if (dqRun) { buf += dqRun.text; i = dqRun.next; if (str[i] !== '$') continue; }
         // A "…" inside a `${…}` inside "…" does not end the outer one
         // (ansiCBraceClose). A heredoc tag word is not expanded.
-        if (reading && !asBefore && str[i] === '$' && str[i + 1] === '{' && expectTag === null) {
+        const brace = reading && !asBefore && str[i] === '$' && expectTag === null ? quotedBraceOpen(str, i, reading) : -1;
+        if (brace !== -1) {
           const inner = [];
-          const j = ansiCBraceClose(str, i + 2, reading, inner, true);
+          const j = ansiCBraceClose(str, brace + 1, reading, inner, true);
           if (j !== -1) {
             for (const cmd of inner) nested.push(cmd);
             buf += str.slice(i, j + 1);
