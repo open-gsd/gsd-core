@@ -620,6 +620,39 @@ describe('#5759 platformWriteSync never blocks on or follows a planted temp file
     assert.strictEqual(fs.readFileSync(plainFile, 'utf8'), 'UNCHANGED');
   });
 
+  test('a symlink to /dev/fd/<high fd> and a non-canonical /dev/fd/01 are refused with ENXIO', () => {
+    const fifo = path.join(tmpDir, 'link.fifo');
+    makeFifo(fifo);
+    const link = path.join(tmpDir, 'to-fd');
+    const script = [
+      'const fs = require("node:fs");',
+      'const keep = fs.openSync(process.argv[2], fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);',
+      'const fd = fs.openSync(process.argv[2], fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);',
+      'fs.symlinkSync("/dev/fd/" + fd, process.argv[3]);',
+      'const out = {};',
+      'for (const [label, target] of [["link", process.argv[3]], ["leading0", "/dev/fd/01"]]) {',
+      '  for (const opts of [{ allowSpecialTarget: true, verbatim: true }, { verbatim: true }]) {',
+      '    try { require(process.argv[1]).platformWriteSync(target, "x", opts); out[label + Object.keys(opts).length] = "ok"; }',
+      '    catch (e) { out[label + Object.keys(opts).length] = e.code; }',
+      '  }',
+      '}',
+      'let got = 0; try { got = fs.readSync(keep, Buffer.alloc(8), 0, 8, null); } catch (e) { got = e.code === "EAGAIN" ? 0 : -1; }',
+      'out.fifoBytes = got;',
+      'process.stdout.write(JSON.stringify(out));',
+    ].join('\n');
+
+    const r = runNode(['-e', script, SHELL_PROJECTION_PATH, fifo, link], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    const out = JSON.parse(r.stdout);
+    for (const key of ['link2', 'link1', 'leading02', 'leading01']) assert.strictEqual(out[key], 'ENXIO', key);
+    assert.strictEqual(out.fifoBytes, 0, 'the FIFO reader observed no bytes');
+  });
+
   test('profile-output --output /dev/null (a user-chosen device) is written', () => {
     fs.writeFileSync(path.join(tmpDir, 'analysis.json'), JSON.stringify({ data_source: 'x', dimensions: {} }));
     const script = [
