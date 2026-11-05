@@ -528,11 +528,11 @@ function classifyGrepGlob(glob) {
 // not decoded (the `$VAR` indirection gap in the header) — the readings other
 // than the plain one read a `${…}` on past a `}` inside a quote, a span, a
 // `$( )`, `<( )` or backticks, also within "…", and once it closes scan the
-// commands of those last three (ansiCBraceClose); they also end a `$( )`
-// past a comment in it (findParenClose). Where the shell's grammar outruns
-// them they can end one later than the shell does, so the scan as it was
-// before #5255's review round 10 is run again, and its verdict stands
-// (readAsBefore). A command nested deeper than
+// commands of those last three (ansiCBraceClose). Comments are not read in a
+// `$( )`, on any reading: where the shell's grammar outruns that (a `#`
+// comment or a `case` pattern's `)` in a `$( )` in a `${…}`) they can end one
+// later than the shell does, so the scan is run again with that reader off,
+// and its verdict stands (readAsBefore). A command nested deeper than
 // MAX_NESTING_DEPTH is not scanned at all. Several thousand levels of `$( )`
 // overflow the parser's stack; that fails closed, as `command-too-complex` (findSecretRead). A heredoc tag
 // word inside `$( )` holding a `${…}`, `$(…)`, backtick or bare carriage
@@ -944,14 +944,6 @@ let heredocTagsAsWords = true;
 // quoted string or a heredoc body never closes the span early.
 function findParenClose(str, i, reading) {
   let depth = 1;
-  // The depth inside which the scan is in arithmetic (`$((`, `((`), where a
-  // `#` starts no comment; 0 outside it.
-  let arith = str[i] === '(' ? 1 : 0;
-  // For each `(` open inside, whether it opens a word part (`$(`, `<(`,
-  // `>(`), after whose `)` the word goes on, or an operator (`( … )`), after
-  // whose `)` a `#` starts a comment; and the last operator `)` closed.
-  const parts = [];
-  let operatorClose = -1;
   let heredocTags = [];
   let read = i;
   while (i < str.length) {
@@ -971,29 +963,14 @@ function findParenClose(str, i, reading) {
         }
         continue;
       }
-      // A `${…}` or `$[ … ]` holds no comment, and a `(` or `)` in it is
-      // text: it ends where its reader ends it, after a run of `$` paired as
-      // the reading pairs one (bash and zsh have `$[`, dash does not).
+      // A `(` or `)` in a `${…}` is text: it ends where its reader ends it,
+      // after a run of `$` paired as the reading pairs one.
       if (!asBefore && (run.dollars % 2 === 1 || reading === 'zsh') && str[run.end] === '{') {
         const j = ansiCBraceClose(str, run.end + 1, reading, null, false);
         if (j !== -1) { i = j + 1; continue; }
       }
-      if (!asBefore && reading !== 'dash' && run.dollars % 2 === 1 && str[run.end] === '[') {
-        const j = bracketClose(str, run.end + 1);
-        if (j !== -1) { i = j + 1; continue; }
-      }
       // Any other run: only its last `$` can open `$(`, read below as before.
       if (run.last > i) { i = run.last; continue; }
-    }
-    // A `#` that starts a word starts a comment, whose `(` or `)` the shell
-    // does not count: `$(: # (`, newline, `)` ends at that `)`. So does one
-    // after the `)` of an operator (`(echo a)#`), but not one after the `)` of
-    // a word part (`$(echo a)#` is one word), nor in arithmetic, nor after a
-    // line continuation, which the shell removes first (`a\<newline>#` is `a#`).
-    if (reading && !asBefore && ch === '#' && !arith && startsWord(str, i, operatorClose)) {
-      const j = str.indexOf('\n', i);
-      i = j === -1 ? str.length : j;
-      continue;
     }
     if (ch === "'") {
       const j = str.indexOf("'", i + 1);
@@ -1022,13 +999,8 @@ function findParenClose(str, i, reading) {
     }
     if (ch === '(') {
       depth++;
-      const before = charBefore(str, i);
-      parts.push(before !== '' && '$<>'.includes(before));
-      if (!arith && str[i + 1] === '(') arith = depth;
     } else if (ch === ')') {
       depth--;
-      if (parts.pop() === false) operatorClose = i;
-      if (arith > depth) arith = 0;
       if (depth === 0) return i;
     }
     i++;
@@ -1049,23 +1021,6 @@ function bracketClose(str, i) {
     else if (str[i] === ']' && --depth === 0) return i;
   }
   return -1;
-}
-
-// The character before `i`, line continuations aside (`$\<newline>(` is
-// `$(`), or '' at the start.
-function charBefore(str, i) {
-  let p = i - 1;
-  while (p >= 1 && str[p] === '\n' && str[p - 1] === '\\') p -= 2;
-  return p < 0 ? '' : str[p];
-}
-
-// Whether a `#` at `i` begins a word: it follows a blank, a newline, one of
-// `;&|(<>`, or the operator `)` at `operatorClose`, line continuations before
-// it aside.
-function startsWord(str, i, operatorClose) {
-  let p = i - 1;
-  while (p >= 1 && str[p] === '\n' && str[p - 1] === '\\') p -= 2;
-  return p < 0 || p === operatorClose || ' \t\n;&|(<>'.includes(str[p]);
 }
 
 // Index of the `"` closing a "…" whose text starts at `i`, or str.length

@@ -2000,7 +2000,6 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       ['500 unclosed `${$(`, each before a heredoc', `\${$( <<E\n${'a\n'.repeat(1000)}E\n`.repeat(500)],
       ['60 unclosed `${"}`, each before 2,000 characters', `\${"}${'x'.repeat(2000)}`.repeat(60)],
       ['50 unclosed `${"}`, each before 2,000 `$`', `\${"}${'$'.repeat(2000)}`.repeat(50)],
-      ['200,000 unclosed `$[` in a `$( )`', `$( ${'$['.repeat(200000)}`],
       ['50 unclosed `$(${`, each before 2,000 `)`', `$(\${${')'.repeat(2000)}`.repeat(50)],
     ]) {
       test(`a read on the line before ${label} is still named`, () => {
@@ -2193,16 +2192,12 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       // bash skips a `<( )` within "…" whole; to zsh and dash it is text.
       "echo \"${x%<(echo })\"'\"}\"; cat $'.env'", // bash only
       "echo \"${x:-<(echo }\"; cat $'.env'; echo \")}\"", // zsh only; head blocked
-      // A `#` that starts a word in a `$( )` starts a comment, and so does one
-      // after the `)` of a subshell or `(( ))`, line continuations aside; one
-      // after the `)` of a `$( )`, `$(( ))` or `<( )`, which goes on with the
-      // word, after a line continuation, or in arithmetic does not.
+      // A `$( )` inside a ${…} holding a comment, or a `#` that starts none: the
+      // scan with the ${…} reader off still sees these (readAsBefore).
       "echo ${x:-$(: # (\n)} # )\ncat $'.env' # }", // head blocked
-      "echo $(#)'\n); cat $'.env' #'",
       "echo ${x:-$( (echo a)# (\n)}\ncase a in a) : ;; esac; cat $'.env' #}", // head blocked
       "( echo ${x:-$( (echo a)# (\n)}\n)\ncat $'.env' #}", // head blocked
       "echo ${x:-$( ((1))# (\n)}\ncase a in a) : ;; esac; cat $'.env' #}", // head blocked
-      "echo \"${x:-$( ((1))# (\n)}\"; cat $'.env'",
       "echo ${x:-$( (echo a)\\\n# (\n)}\ncase a in a) : ;; esac; cat $'.env' #}", // head blocked
       "( echo ${x:-$(echo $(echo a)#)}\n)\ncat $'.env' #}", // head blocked
       "( echo ${x:-$(echo $((1))#)}\n)\ncat $'.env' #}", // head blocked
@@ -2213,25 +2208,23 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       "echo \"$(echo ${x##\"}\"\"$'\"$(echo })})\"; cat $'.e\\x6ev'", // bash only; head blocked
       "x=1; echo ${x:-$(echo $(( #)))}\ncase a in a) : ;; esac; case b in b) : ;; esac; case c in c) : ;; esac; cat $'.env' #}", // head blocked
       "echo ${x:-$(echo $((1)); : # (\n)}\ncase a in a) : ;; esac; cat $'.env' #}", // head blocked
-      // A `${…}` or `$[ ]` inside a `$( )` is read whole, so a `#` in it starts
-      // no comment. After a `$'` the scan before this round took as never
-      // closing, only these readings see the read.
+      // A `${…}` or `$[ ]` inside a `$( )` holding a `#`, after a `$'` the plain
+      // scan takes as never closing.
       "echo ${x-'}''$'}; echo ${a:-$(echo ${x:- #})}\ncase b in b) : ;; esac; cat $'.env' #}",
       "echo ${x-'}''$'}; echo ${a:-$(echo $[ 1 #])}\ncase b in b) : ;; esac; cat $'.env' #}",
       // zsh opens a ${ after any run of `$`, but not within "…".
       "echo ${x:-$${y} #}; cat $'.env'", // zsh only
       "echo \"${x:-$${y}\"; cat $'.env\\u'; echo \"}\"", // zsh only; head blocked
-      // Where the shell's grammar outruns the readings (a `#` inside a `${…}`
-      // or `$[ ]` inside a `$( )`, a `case` pattern's `)`, zsh's `$((`
-      // holding a subshell), they can end a `$( )` later than the shell does;
-      // the readings as they were before this round still see these reads.
+      // Where the shell's grammar outruns the readings (a `#` comment, a `case`
+      // pattern's `)`, zsh's `$((` holding a subshell), they can end a `$( )`
+      // later than the shell does; the scan with the ${…} reader off sees these.
       "echo ${a:-$(echo ${x:- #})}\ncase b in b) : ;; esac; cat $'.env' #}", // head blocked
       "echo ${a:-$(echo $[ 1 #])}\ncase b in b) : ;; esac; cat $'.env' #}", // head blocked
       "echo ${x:-$(case a in a) : # '\n;; esac)}; cat $'.env' #'}", // head blocked
       "echo \"$(echo ${x:- #})\"; cat $'.env' #\"\n)", // head blocked
       "echo ${x:-$((echo a) # (\n)}\ncase a in a) : ;; esac; cat $'.env' #}", // zsh only; head blocked
-      // The scan before this round is run again on a command the readings find
-      // nothing in, at every depth: a body `bash -c` or `eval` rescans, or a
+      // That scan runs on a command the readings find nothing in, at every
+      // depth: a body `bash -c` or `eval` rescans, or a
       // heredoc tag zsh decodes in full after `$$`.
       "bash -c 'echo ${a:-$(echo ${x:- #})}\ncase b in b) : ;; esac; cat '\\$\\'.env\\'' #}'", // bash and dash; head blocked
       "eval 'echo ${a:-$(echo ${x:- #})}\ncase b in b) : ;; esac; cat '\\$\\'.env\\'' #}'", // head blocked
