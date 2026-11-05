@@ -110,7 +110,10 @@
 //   a `${…}` default spelled with `$'…'` (`cat ${x:-$'.env'}`,
 //   `cat ${x-$'.e\x6ev'}`), since the text inside `${…}` is not scanned; a
 //   name joined to an expansion (`cat ${x:+a}$'.env'`, `cat .env${}`), the
-//   `$VAR` gap; a `#` comment in a `$( )`, whose `(` or `)` the scan counts
+//   `$VAR` gap; a heredoc tag whose `${…}` holds a quoted `}`, which only
+//   the bash and zsh readings read and only with a trigger
+//   (`: <<${x#'}'}<newline>${x#'}'}<newline>cat .env`); a `#` comment in a
+//   `$( )`, whose `(` or `)` the scan counts
 //   (`echo $(#)'<newline>); cat $'.env' #'`); and a `$` before a line
 //   continuation that opens a `$(` inside "…" or a heredoc body
 //   (`echo "$\<newline>(cat .env)"`). The tests
@@ -191,8 +194,8 @@ const MAX_NESTING_DEPTH = 3;
 // as part of the heredoc's script, so that shape reaches it sooner: one level
 // at 83,903, two at 8,456. The most work any of 539,601 real agent commands
 // needed was about 250,000 characters. A command that needs more is denied as
-// `command-too-complex` rather than scanned on. readAsBefore's second look
-// at a command the readings finished has a budget of its own, and is denied
+// `command-too-complex` rather than scanned on. readAsBefore's scan of a
+// command the readings finished has a budget of its own, and is denied
 // the same way when it spends it. A command holding `<<` (a heredoc, or a
 // here-string or a shift) that is not denied is scanned again under each of
 // #5513's two other heredoc readings (findSecretReadUnderOtherReadings), each
@@ -954,11 +957,13 @@ function quoteExcerpt(str, i) {
 //  - heredocBraceTags: a `{` or `}` where a tag is due is the tag, and a `${` there is its
 //    text to dash and the plain reading, since a tag is not expanded. false is the earlier
 //    reading, where the brace was a group and the `${` an expansion. A command that met
-//    such a tag (braceTagRead) is scanned that way too, so nothing it denied is allowed.
+//    such a tag at any depth (braceTagRead) is scanned that way too, so nothing it denied
+//    is allowed. The flag is per command, so findSecretRead keeps it through a pass.
 let heredocBodiesSkippedInSpans = true;
 let heredocTagsAsWords = true;
 let heredocBraceTags = true;
 let braceTagRead = false;
+let inHeredocPass = false;
 
 // Index of the `)` closing a `$(` / `<(` / `>(` opened just before `i`, or
 // str.length when unterminated. Quote- and heredoc-aware so a `)` inside a
@@ -1399,7 +1404,6 @@ function tokenize(str, reading) {
         const math = c === '$' && str[i + 1] === '[' ? zshMathEnd(str, i + 1, reading) : -1;
         if (math !== -1) {
           buf += str.slice(i, math + 1);
-          collectSubstitutions(str.slice(i + 2, math), nested, reading);
           i = math + 1;
           continue;
         }
@@ -1884,22 +1888,24 @@ function precedingOp(s, bySeg, sepAfter) {
 // (bodies not skipped) and the earlier tag reading (tag ends at any whitespace). Only a
 // command that opens a heredoc can read differently, so the extra passes are skipped for
 // every other command. One that met a brace tag gets both span readings with the brace
-// read the earlier way as well. The flag stays set: the hook scans one command.
+// read the earlier way as well: that test is the flag, not the text, because a body can
+// spell its `<<` so that only the nested scan sees it (`eval ': <''<} …'`).
 function findSecretReadUnderOtherReadings(command) {
-  if (!command.includes('<<')) return null;
   const scanUnder = (bodiesSkipped, tagsAsWords, braceTags) => {
     heredocBodiesSkippedInSpans = bodiesSkipped;
     heredocTagsAsWords = tagsAsWords;
     heredocBraceTags = braceTags;
+    inHeredocPass = true;
     try {
       return findSecretRead(command, 0);
     } finally {
       heredocBodiesSkippedInSpans = true;
       heredocTagsAsWords = true;
       heredocBraceTags = true;
+      inHeredocPass = false;
     }
   };
-  const hit = scanUnder(false, true, true) || scanUnder(true, false, true);
+  const hit = command.includes('<<') ? scanUnder(false, true, true) || scanUnder(true, false, true) : null;
   if (hit || !braceTagRead) return hit;
   return scanUnder(true, true, false) || scanUnder(false, true, false);
 }
@@ -1930,6 +1936,7 @@ function findDebuggerCliSpawnEitherWay(command) {
 // `$${` or `$$(`, so a substring test finds it in linear time.
 function findSecretRead(command, depth) {
   if (depth > 0) return readEachWay(command, depth);
+  if (!inHeredocPass) braceTagRead = false;
   scanUnfinished = false;
   readingsRan = false;
   scanBudget = MAX_SCAN_CHARACTERS;

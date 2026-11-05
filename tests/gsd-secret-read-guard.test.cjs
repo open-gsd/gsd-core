@@ -2037,6 +2037,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       "cat ${x:+a}$'.env'", 'cat .env${}',
       "echo $(#)'\n); cat $'.env' #'",
       'echo "$\\\n(cat .env)"', 'cat <<E\n$\\\n(cat .env)\nE',
+      ": <<${x#'}'}\n${x#'}'}\ncat .env\n",
     ];
     for (const cmd of shapes) {
       test(`allowed: ${JSON.stringify(cmd)}`, () => {
@@ -2121,6 +2122,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       "((x' ));cat .env;''",
       "echo $(('))|cat .env",
       'echo "a" $[ \' $(cat .env >&2) ]', // zsh runs a substitution in the skipped body
+      "(( ' $(cat .env >&2) ' ))",
     ];
     for (const cmd of blocks) {
       test(`blocks ${JSON.stringify(cmd)}`, () => {
@@ -2738,7 +2740,7 @@ describe('nothing the scanner denied before #5255 is allowed', () => {
     "'", '"', '`', '\\', '\\\n', '$', '$$', "$'", '$"', '${', '}', '$(', ')', '(', '((', '))', '$((', '$[', ']',
     '<<', '<<E', 'E\n', '<(', ':-', '%', 'x', "\\'", 'eval ', 'bash -c ', '{', '<<}', '<<{', '<<-', '<<<',
     "$'\\x41'", "$'.e\\x6ev'", '$${', '$$(', '$\\\n', 'case a in a) ', ';; esac',
-    ' E\r\n', 'E\r\n', ' E$(x y)F\n', 'E$(x y)F\n',
+    ' E\r\n', 'E\r\n', ' E$(x y)F\n', 'E$(x y)F\n', "<''<", '<', "eval '", "bash -c '",
   );
   const command = fc.array(token, { minLength: 1, maxLength: 16 }).map((parts) => parts.join(''));
 
@@ -2764,6 +2766,11 @@ describe('nothing the scanner denied before #5255 is allowed', () => {
     '<<{ E\r\nE\r\ncat .env\n',
     ': <<{ E`x y`F\nE`x y`F\ncat .env\n',
     '(: <<} E$(x y)F\nE$(x y)F\ncat .env\n)',
+    "eval ': <''<${x:-a b}\n${x:-a b}\ncat .env\n'", // bash and zsh run this read; the nested scan alone sees `<<`
+    "bash -c ': <''<${x:-a b}\n${x:-a b}\ncat .env\n'",
+    "eval ': <''<} E$(x y)F\nE$(x y)F\ncat .env\n'",
+    '<<}\n$(<<\n) t .env', // read only under the pass that keeps bodies and groups the brace
+    '<<$(<<} E\r\n)\nE\r\nt .env', // read only under the pass that skips bodies and groups the brace
   ]) {
     test(`both deny ${JSON.stringify(cmd)}`, () => {
       assert.notEqual(scan(base, cmd), null, 'the frozen scanner denies it');
