@@ -1200,6 +1200,7 @@ describe('removed-but-needed lint: tracked-but-gitignored files (#3677 residual)
       '', '/abs/.gitignore', 'a//.gitignore', './.gitignore', 'a/./.gitignore', '../.gitignore', 'a/../.gitignore',
       'a\\b/.gitignore', 'C:/x/.gitignore', 'a:b/.gitignore', '.git/.gitignore', 'a/.GIT/.gitignore', '.Git/hooks/.gitignore',
       'a/.gitignore/',
+      'a/.../.gitignore', 'a/ /.gitignore', 'a/. ./.gitignore',
       '.git.', '.git ', '.git. .', 'a/.GIT../.gitignore', 'git~1/.gitignore', 'a/GIT~1/x', 'Git~2/.gitignore',
     ]) {
       assert.equal(isSafeRepoPath(bad), false, JSON.stringify(bad));
@@ -1291,6 +1292,17 @@ describe('removed-but-needed lint: tracked-but-gitignored files (#3677 residual)
     // The scratch repo does not.
     initScratchRepo(scratch, env);
     assert.equal(fs.existsSync(path.join(scratch, '.git', 'info', 'exclude')), false);
+  });
+
+  test('candidate paths are literal: pathspec magic cannot resolve to an ignored path', { skip: process.platform === 'win32' }, (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-literal-'));
+    t.after(() => cleanup(tmpDir));
+    initIgnoreRepo(tmpDir, { '.gsd/a.md': 'x\n' });
+    // `:(top).gsd/a.md` would resolve to the ignored `.gsd/a.md` as a pathspec,
+    // but as a LITERAL file name it is a different, non-ignored path.
+    const result = ignoredByTrackedRules(tmpDir, [':(top).gsd/a.md', ':(glob)x', ':!x']);
+    assert.equal(result.size, 0);
+    assert.deepEqual([...ignoredByTrackedRules(tmpDir, ['.gsd/a.md'])], ['.gsd/a.md']);
   });
 
   test('an ambient git template (GIT_TEMPLATE_DIR with info/exclude "src/") does not affect the result', (t) => {
@@ -1411,6 +1423,10 @@ describe('removed-but-needed lint: base branch selection (resolveBaseBranch)', (
   test('ordinary and slashed branch names are accepted from the env too', () => {
     assert.equal(resolveBaseBranch({ GITHUB_BASE_REF: 'release/1.20' }), 'release/1.20');
     assert.equal(resolveBaseBranch({ GSD_REMOVED_BUT_NEEDED_BASE: 'feat_x-1.2' }), 'feat_x-1.2');
+    // legal per `git check-ref-format --branch`
+    for (const ok of ['release+hotfix', 'feat@x', 'rel#1', 'été']) {
+      assert.equal(resolveBaseBranch({ GITHUB_BASE_REF: ok }), ok, ok);
+    }
   });
 
   test('a non-merge_group event ignores a queue-shaped GITHUB_REF', () => {

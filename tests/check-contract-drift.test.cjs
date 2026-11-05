@@ -593,7 +593,8 @@ describe('contract-drift: typed surface', () => {
       0x206a, 0x206f, // deprecated format controls (Cf; previously kept)
       0x034f, 0x115f, 0x1160, 0x3164, 0xffa0, 0x17b4, 0x17b5, 0x2800, // fillers
       0xe000, 0xf8ff, // private use (Co)
-      0x0378, 0x2065, // unassigned (Cn; U+2065 previously kept)
+      0xfdd0, 0xfffe, 0xffff, // permanent noncharacters (Cn in every Unicode version)
+      0x180b, 0x180c, 0x180d, 0x180f, // Mongolian free variation selectors (Mn)
       0xd800, 0xdfff, // lone surrogates (Cs)
     ];
     for (const c of points) {
@@ -602,10 +603,17 @@ describe('contract-drift: typed surface', () => {
   });
 
   test('sanitizeEcho keeps the neighbours of the stripped ranges and ordinary non-ASCII text', () => {
-    for (const c of [0xa0, 0xe9, 0x200a, 0x2010, 0x2027, 0x202f, 0x061b, 0x205f, 0x180d, 0xac, 0xae, 0x4e2d, 0x1f600]) {
+    for (const c of [0xa0, 0xe9, 0x200a, 0x2010, 0x2027, 0x202f, 0x061b, 0x205f, 0xac, 0xae, 0x4e2d, 0x1f600]) {
       const s = `a${String.fromCodePoint(c)}b`;
       assert.equal(sanitizeEcho(s), s, `U+${c.toString(16)} must be kept`);
     }
+  });
+
+  test('sanitizeEcho on a very long input keeps exactly the first 200 kept code points', () => {
+    const interleaved = 'a​'.repeat(500000); // 1M code points, half hostile
+    assert.equal(sanitizeEcho(interleaved), 'a'.repeat(200));
+    assert.equal(sanitizeEcho(`${'b'.repeat(300000)}tail`), 'b'.repeat(200));
+    assert.equal(sanitizeEcho('​'.repeat(1000000)), '');
   });
 
   test('sanitizeEcho caps by code point and never splits a surrogate pair', () => {
