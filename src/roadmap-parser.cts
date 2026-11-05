@@ -99,8 +99,43 @@ const CLOSED_STATUS_MARK_RE = /[\u{2705}\u{1f5c4}]/u;
  */
 function isClosedMilestoneHeading(headingText: string): boolean {
   if (!MILESTONE_CLOSED_MARKER_PATTERN.test(headingText) || MILESTONE_ACTIVE_MARKER_PATTERN.test(headingText)) return false;
-  return CLOSED_STATUS_WORD_RE.test(headingText)
-    || CLOSED_STATUS_MARK_RE.test(headingText.replace(/\([^)]*\bv\d[^)]*\)/gi, ''));
+  return CLOSED_STATUS_WORD_RE.test(headingText) || hasClosedStatusMark(headingText);
+}
+
+/**
+ * Does a check mark close the heading? One linear pass splits the heading into
+ * its top-level text and its top-level parentheticals. A parenthetical whose
+ * version (case-sensitive `v<digits>`) differs from the heading's own version
+ * (VERSION_TOKEN over the text outside every parenthetical) is exempt. An
+ * unbalanced or nested parenthesis anywhere disables the exemption, so such a
+ * heading reads exactly as before #5726.
+ */
+function hasClosedStatusMark(headingText: string): boolean {
+  let depth = 0;
+  let start = 0;
+  let outside = '';
+  const groups: string[] = [];
+  for (let i = 0; i < headingText.length; i++) {
+    const ch = headingText[i];
+    if (ch === '(') {
+      depth += 1;
+      if (depth > 1) return CLOSED_STATUS_MARK_RE.test(headingText);
+      start = i + 1;
+    } else if (ch === ')') {
+      depth -= 1;
+      if (depth < 0) return CLOSED_STATUS_MARK_RE.test(headingText);
+      if (depth === 0) groups.push(headingText.slice(start, i));
+    } else if (depth === 0) {
+      outside += ch;
+    }
+  }
+  if (depth !== 0) return CLOSED_STATUS_MARK_RE.test(headingText);
+  if (CLOSED_STATUS_MARK_RE.test(outside)) return true;
+  const ownVersion = outside.match(VERSION_TOKEN)?.[0];
+  return groups.some((group) => {
+    const named = group.match(/\bv\d+(?:\.\d+)*/)?.[0];
+    return (named === undefined || named === ownVersion) && CLOSED_STATUS_MARK_RE.test(group);
+  });
 }
 
 /**
