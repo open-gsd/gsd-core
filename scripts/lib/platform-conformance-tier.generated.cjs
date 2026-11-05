@@ -374,7 +374,6 @@ module.exports = {
   "tests/workstream-inventory.test.cjs",
   "tests/workstream-scoped-paths.test.cjs",
   "tests/workstream.test.cjs",
-  "tests/worktree-base-ref.platform.test.cjs",
   "tests/worktree-cleanup.test.cjs",
   "tests/worktree-safety.test.cjs",
   "tests/worktree-subdir-effective-root-4885.test.cjs",

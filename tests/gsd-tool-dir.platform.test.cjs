@@ -11,6 +11,7 @@
  * - "#5757: throws when .gsd is a symlink" - creates a real directory symlink; creation needs privilege on Windows (symlink-keyword)
  * - "#5757: throws when .gsd/.gitignore is a symlink" - creates a real file symlink (symlink-keyword)
  * - "#5757 case 13: parity" - both writers refuse a symlinked .gsd and run real git (symlink-keyword, raw-child-process)
+ * - "observeHarnessForkFromHead default cache writer" - the fork-probe cache rows (1-6): real symlinks (symlink-keyword) and a real git repo with a linked worktree (raw-child-process); kept in this one platform file so the conformance tier grows by one file, not two
  */
 
 const { describe, test } = require('node:test');
@@ -28,6 +29,10 @@ const { ensureToolOwnedGsdDir } = require(
 );
 const { observeHarnessForkFromHead } = require(
   path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'worktree-base-ref.cjs'),
+);
+
+const { splitLines } = require(
+  path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'text-lines.cjs'),
 );
 
 const OPTIONS = { marker: '# gsd-core test owner', rules: ['/thing.json', '/.gitignore'] };
@@ -191,5 +196,107 @@ describe('#5757 case 13: parity - sentinel writer and probe writer share one pol
     fs.symlinkSync(target, path.join(ignoreRoot, '.gsd', '.gitignore'));
     assert.match(sentinel(ignoreRoot).error, /sentinel ignore file is a symlink/);
     assert.strictEqual(fs.readFileSync(target, 'utf8'), 'precious\n');
+  });
+});
+
+describe('observeHarnessForkFromHead default cache writer (#5757)', () => {
+  /** Fresh git repo with one commit and a linked harness worktree at HEAD. */
+  function makeProject() {
+    const root = freshRepo();
+    fs.mkdirSync(path.join(root, '.claude', 'worktrees'), { recursive: true });
+    git(root, ['worktree', 'add', '-q', '--detach', path.join(root, '.claude', 'worktrees', 'agent-a'), 'HEAD']);
+    return { root, head: git(root, ['rev-parse', 'HEAD']) };
+  }
+
+  function gsdStatusLines(root) {
+    return git(root, ['status', '--porcelain']).split('\n').filter((l) => l.includes('.gsd'));
+  }
+
+  test('#5757: confirmed probe in a fresh repo ignores .gsd in git (case 1)', (t) => {
+    const { root, head } = makeProject();
+    t.after(() => cleanup(root));
+    const result = observeHarnessForkFromHead({ cwd: root, headSha: head });
+    assert.strictEqual(result.confirmed, true);
+    assert.strictEqual(result.source, 'probe');
+    assert.ok(fs.existsSync(path.join(root, '.gsd', 'harness-fork-probe.json')));
+    assert.ok(fs.existsSync(path.join(root, '.gsd', '.gitignore')));
+    assert.deepStrictEqual(gsdStatusLines(root), []);
+  });
+
+  test('#5757: a symlinked .gsd is never written through; the verdict still returns (case 2)', (t) => {
+    const { root, head } = makeProject();
+    const outside = tmp('gsd-5757-outside-');
+    t.after(() => cleanup(root));
+    t.after(() => cleanup(outside));
+    fs.symlinkSync(outside, path.join(root, '.gsd'), 'dir');
+    const result = observeHarnessForkFromHead({ cwd: root, headSha: head });
+    assert.strictEqual(result.confirmed, true);
+    assert.deepStrictEqual(fs.readdirSync(outside), []);
+  });
+
+  test('#5757: a symlinked cache file is never written through (case 3)', (t) => {
+    const { root, head } = makeProject();
+    const outsideDir = tmp('gsd-5757-outside-');
+    t.after(() => cleanup(root));
+    t.after(() => cleanup(outsideDir));
+    const victim = path.join(outsideDir, 'victim.txt');
+    fs.writeFileSync(victim, 'original');
+    fs.mkdirSync(path.join(root, '.gsd'));
+    fs.symlinkSync(victim, path.join(root, '.gsd', 'harness-fork-probe.json'));
+    const result = observeHarnessForkFromHead({ cwd: root, headSha: head });
+    assert.strictEqual(result.confirmed, true);
+    assert.strictEqual(fs.readFileSync(victim, 'utf8'), 'original');
+    // The planted link was replaced by a regular cache file, not followed.
+    const cacheFile = path.join(root, '.gsd', 'harness-fork-probe.json');
+    assert.strictEqual(fs.lstatSync(cacheFile).isFile(), true);
+  });
+
+  test('#5757: an existing user .gitignore without a catch-all keeps its rules and gains the probe rules once (case 4)', (t) => {
+    const { root, head } = makeProject();
+    t.after(() => cleanup(root));
+    const ignorePath = path.join(root, '.gsd', '.gitignore');
+    fs.mkdirSync(path.join(root, '.gsd'));
+    const userRules = '# mine\nkeep-me.txt\n!also-mine\n';
+    fs.writeFileSync(ignorePath, userRules);
+    observeHarnessForkFromHead({ cwd: root, headSha: head });
+    const after = fs.readFileSync(ignorePath, 'utf8');
+    assert.ok(after.startsWith(userRules), 'user lines stay a verbatim prefix');
+    assert.ok(splitLines(after).includes('/harness-fork-probe.json'));
+    // Probe again with the cache removed: the block is not duplicated.
+    cleanup(path.join(root, '.gsd', 'harness-fork-probe.json'));
+    observeHarnessForkFromHead({ cwd: root, headSha: head });
+    assert.strictEqual(fs.readFileSync(ignorePath, 'utf8'), after);
+    assert.deepStrictEqual(gsdStatusLines(root), []);
+  });
+
+  test('#5757: an existing catch-all .gitignore is left byte-for-byte unchanged (case 5)', (t) => {
+    const { root, head } = makeProject();
+    t.after(() => cleanup(root));
+    const ignorePath = path.join(root, '.gsd', '.gitignore');
+    fs.mkdirSync(path.join(root, '.gsd'));
+    fs.writeFileSync(ignorePath, '*\n');
+    observeHarnessForkFromHead({ cwd: root, headSha: head });
+    assert.strictEqual(fs.readFileSync(ignorePath, 'utf8'), '*\n');
+    assert.ok(fs.existsSync(path.join(root, '.gsd', 'harness-fork-probe.json')));
+  });
+
+  test('#5757: injected stateRead/stateWrite are called with the cache path and nothing hits disk (case 6)', (t) => {
+    const { root, head } = makeProject();
+    t.after(() => cleanup(root));
+    const reads = [];
+    const writes = [];
+    const result = observeHarnessForkFromHead({
+      cwd: root,
+      headSha: head,
+      stateRead: (file) => { reads.push(file); return null; },
+      stateWrite: (file, content) => { writes.push([file, content]); },
+    });
+    const cacheFile = path.join(root, '.gsd', 'harness-fork-probe.json');
+    assert.strictEqual(result.confirmed, true);
+    assert.deepStrictEqual(reads, [cacheFile]);
+    assert.strictEqual(writes.length, 1);
+    assert.strictEqual(writes[0][0], cacheFile);
+    assert.strictEqual(JSON.parse(writes[0][1]).headSha, head);
+    assert.strictEqual(fs.existsSync(path.join(root, '.gsd')), false);
   });
 });

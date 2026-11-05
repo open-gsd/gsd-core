@@ -268,7 +268,6 @@ module.exports = {
   "tests/workflow-shell-pinning.test.cjs",
   "tests/workstream-inventory.test.cjs",
   "tests/workstream.test.cjs",
-  "tests/worktree-base-ref.platform.test.cjs",
   "tests/worktree-safety.test.cjs",
   "tests/worktree.test.cjs",
   ],
