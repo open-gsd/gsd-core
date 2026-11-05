@@ -138,7 +138,7 @@ Every entry with `needsReconciliation: true` (recorded running, process gone) is
 
 Run the loop below once per runnable plan in the wave, **one plan at a time** (`git worktree add` races on `.git/config.lock`).
 
-**Before running each bash block below, substitute the plan's identifiers into it** exactly as you do for the `Agent()` prompt on the harness path: replace `{phase_dir}`, `{plan_file}`, `{plan_number}`, `{phase_number}` and `{plan_padded}` wherever the block uses them with this plan's values. They are template placeholders, not shell variables. A caller with no phase, such as quick-batch, passes `quick` for `{phase_number}`, which then reads as the phase in the prompt's objective and dispatch lines. `$ORCH_ROOT` and `$EXPECTED_BASE` are real shell variables, already assigned earlier in this step; `$WAVE_WORKTREE_MANIFEST` was initialized above.
+**Before running each bash block below, substitute the plan's identifiers into it** exactly as you do for the `Agent()` prompt on the harness path: replace `{phase_dir}`, `{plan_file}`, `{plan_number}`, `{phase_number}` and `{plan_padded}` wherever the block uses them with this plan's values. They are template placeholders, not shell variables. A caller with no phase, such as quick-batch, passes `quick` for `{phase_number}`. `$ORCH_ROOT` and `$EXPECTED_BASE` are real shell variables, already assigned earlier in this step; `$WAVE_WORKTREE_MANIFEST` was initialized above.
 
 First build the executor prompt. It is the **same prompt text the harness path's `Agent()` call uses** — same executor identity, same execution context, same required-reading contract — with only the harness-only framing removed: drop the `<worktree_branch_check>` build-time embed note (this backend pins the base itself via `worktree create --base` and verifies it at merge) and the `<parallel_execution>` harness block (its SUMMARY-commit semantics ride inside the embedded `execute-plan.md` worktree mode). Keep `<objective>`, `<execution_context>`, `<required_reading>`, `${AGENT_SKILLS}`, and `<success_criteria>` from the harness prompt — substituting the worktree-specific `<execution_context>` framing below. The checkpoint gate rule (#3370, in `per-plan-executor-routing.md`) applies here too: add no prompt text refusing or overriding auto-approval for the default `gate="blocking"` — only `blocking-human` always surfaces.
 
@@ -313,7 +313,7 @@ if printf '%s' "$EXECUTOR_PROMPT" | grep -q '\${TDD_APPLICABLE'; then
 fi
 ```
 
-The prompt reaches the shell only as file contents read by `cat`, so apostrophes, `$(...)`, backticks and quotes in the template or in any spliced embed are never parsed or run; do not escape them. `cat` keeps the file's bytes apart from the trailing newlines `$(...)` strips, so a CRLF or BOM the file tool writes reaches the executor as written.
+The prompt reaches the shell only as file contents read by `cat`, so apostrophes, `$(...)`, backticks and quotes in the template or in any spliced embed are never parsed or run; do not escape them. `cat` keeps the file's bytes apart from the trailing newlines and NUL bytes `$(...)` drops, so a CRLF or BOM the file tool writes reaches the executor as written.
 
 Run the blocks in one shell, each as its own command: `$ORCH_ROOT`, `$EXPECTED_BASE` and `$WAVE_WORKTREE_MANIFEST` stay set, and `$EXECUTOR_PROMPT` from the read-and-check block reaches the spawn block. No path text is handed from block 1 to the read-and-check block: it finds the file by the same plan-keyed glob block 1 created it with.
 
