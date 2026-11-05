@@ -1371,7 +1371,17 @@ function classifyMilestoneScalar(raw: string | null | undefined): { explicitNull
   if (trimmed === '') return { explicitNull: false, version: null };
   const bare = trimmed.replace(/\s+#.*$/, '').trim().replace(/^(['"])(.*)\1$/, '$2');
   if (/^(?:null|Null|NULL|~)$/.test(bare)) return { explicitNull: true, version: null };
-  return { explicitNull: false, version: trimmed };
+  return { explicitNull: false, version: bare === '' ? null : bare };
+}
+
+/**
+ * #5726: do two spellings name the same milestone version? Case-insensitive, the
+ * leading `v` optional (`1.0` / `v1.0`); a suffix is significant (`v1.0-closing`
+ * is a different version from `v1.0`).
+ */
+function sameMilestoneVersion(a: string, b: string): boolean {
+  const fold = (v: string): string => v.trim().replace(/^v(?=\d)/i, '').toLowerCase();
+  return fold(a) === fold(b);
 }
 
 /**
@@ -3181,6 +3191,7 @@ export = {
   getMilestoneInfo,
   classifyMilestoneScalar,
   readStateMilestoneScalar,
+  sameMilestoneVersion,
   getMilestonePhaseFilter,
   currentMilestoneRawRanges,
   withPhaseSection,
