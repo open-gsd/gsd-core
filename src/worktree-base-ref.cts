@@ -643,8 +643,11 @@ export function observeHarnessForkFromHead(deps: {
         rules: ['/harness-fork-probe.json', '/harness-fork-probe.json.tmp-*', '/.gitignore'],
       });
       const target = path.join(dir, path.basename(file));
-      tmpPath = `${target}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
-      fs.writeFileSync(tmpPath, content, { encoding: 'utf8', flag: 'wx' });
+      // `tmpPath` is assigned only once the exclusive create succeeded, so an
+      // EEXIST never unlinks an entry this process did not create.
+      const candidateTmp = `${target}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
+      fs.writeFileSync(candidateTmp, content, { encoding: 'utf8', flag: 'wx' });
+      tmpPath = candidateTmp;
       retryRenameSync(tmpPath, target);
       tmpPath = null;
     } catch {

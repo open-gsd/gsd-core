@@ -3011,8 +3011,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       // partially-written sentinel, concurrent invocations sharing the same
       // sentinelDir never collide on the temp name, and a planted link at a
       // guessed temp name is never written through.
-      tmpPath = `${sentinelPath}.tmp-${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`;
-      nodeFs.writeFileSync(tmpPath, JSON.stringify(payload), { flag: 'wx' });
+      // `tmpPath` is assigned only once the exclusive create succeeded, so an
+      // EEXIST never unlinks an entry this process did not create.
+      const candidateTmp = `${sentinelPath}.tmp-${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`;
+      nodeFs.writeFileSync(candidateTmp, JSON.stringify(payload), { flag: 'wx' });
+      tmpPath = candidateTmp;
       require('./lib/shell-command-projection.cjs').retryRenameSync(tmpPath, sentinelPath);
       tmpPath = null;
       writeKeyedDispatchIsolationRecord(cwd, sentinelDir, payload, clock);

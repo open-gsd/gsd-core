@@ -79,8 +79,11 @@ function mergeExistingIgnore(ignorePath: string, options: ToolOwnedGsdDirOptions
     fd = undefined;
     const additions = ignoreAdditions(current, options);
     if (additions === '') return;
-    tmpPath = `${ignorePath}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
-    fs.writeFileSync(tmpPath, current + additions, { flag: 'wx' });
+    // `tmpPath` is assigned only once the exclusive create succeeded, so an
+    // EEXIST never unlinks an entry this process did not create.
+    const candidateTmp = `${ignorePath}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
+    fs.writeFileSync(candidateTmp, current + additions, { flag: 'wx' });
+    tmpPath = candidateTmp;
     if (fs.lstatSync(ignorePath).isSymbolicLink()) throw new Error(SYMLINK_IGNORE_MESSAGE);
     retryRenameSync(tmpPath, ignorePath);
     tmpPath = null;
