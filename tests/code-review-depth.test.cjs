@@ -30,7 +30,7 @@ const {
   resolveCodeReviewDepth,
   normalizeRelPath,
 } = require('../gsd-core/bin/lib/code-review-depth.cjs');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, cleanup, homeSandboxEnv } = require('./helpers.cjs');
 
 // ─── enum lock ────────────────────────────────────────────────────────────
 
@@ -901,7 +901,7 @@ describe('workflow.code_review_depth_overrides — config registration', () => {
     const cwd = createTempProject();
     t.after(() => cleanup(cwd));
 
-    const ensureResult = runGsdTools('config-ensure-section', cwd, { HOME: cwd });
+    const ensureResult = runGsdTools('config-ensure-section', cwd, homeSandboxEnv(cwd));
     assert.strictEqual(ensureResult.success, true, `config-ensure-section failed: ${ensureResult.error}`);
 
     const configPath = path.join(cwd, '.planning', 'config.json');

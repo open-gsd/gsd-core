@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "query",
+    "check.decision-coverage-verify",
+    "1",
+    ".planning/phases/01-decisions/CONTEXT.md"
+  ],
+  "fixture": "dc",
+  "stdout": "{\n  \"skipped\": false,\n  \"blocking\": false,\n  \"reason\": \"phase directory not found\",\n  \"total\": null,\n  \"honored\": null,\n  \"not_honored\": [],\n  \"message\": \"Decision coverage verify (warning): the phase directory \\\"1\\\" does not exist, so no plans or summaries were scanned. Pass the phase DIRECTORY (e.g. .planning/phases/01-slug), not the phase number.\"\n}",
+  "stderr": "",
+  "exitCode": 0
+}

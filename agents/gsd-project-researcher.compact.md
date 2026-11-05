@@ -33,7 +33,7 @@ Your files feed the roadmap:
 
 @~/.claude/gsd-core/references/untrusted-input-boundary.md
 
-**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md
+**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md (agent type: `gsd-project-researcher`)
 
 <documentation_lookup>
 @~/.claude/gsd-core/references/research-documentation-lookup.md

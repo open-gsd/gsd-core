@@ -235,3 +235,124 @@ describe('W021 — milestone-prefixed phase ID convention', () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// #5626 — M-NN phase ids survive the state contract and the prose phase parser
+// ---------------------------------------------------------------------------
+//
+// Under phase_id_convention: milestone-prefixed the phase id is the whole "3-01". Three leading-integer
+// captures accepted only dotted segments, so state.json listed every phase as number "3", the checklist
+// names carried the "-01:" remainder, and state sync rewrote current_phase: 3-01 to 3.
+
+const { buildStateContract } = require('../gsd-core/bin/lib/state-contract.cjs');
+const { parsePhaseFromProse } = require('../gsd-core/bin/lib/phase-id.cjs');
+const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
+
+const MP = 'milestone-prefixed';
+
+const ROADMAP_TABLE = [
+  '# Roadmap', '', '## Milestone v3.0', '',
+  '- [ ] **Phase 3-01: Create layer**', '- [ ] **Phase 3-02: Validator**', '',
+  '### Phase 3-01: Create layer', '**Goal**: x', '', '### Phase 3-02: Validator', '**Goal**: y', '',
+  '## Progress', '',
+  '| Phase | Plans Complete | Status | Completed |',
+  '|-------|----------------|--------|-----------|',
+  '| 3-01. Create layer | 0/1 | Planned | - |',
+  '| 3-02. Validator | 0/0 | Not started | - |', '',
+].join('\n');
+
+const ROADMAP_CHECKLIST = [
+  '# Roadmap', '', '## Phases', '',
+  '- [ ] **Phase 3-01: Create layer**', '- [ ] **Phase 3-02: Validator**', '',
+].join('\n');
+
+const STATE_MD = [
+  '---', 'milestone: v3.0', 'current_phase: 3-01', 'status: planning', '---', '',
+  '# Project State', '', '## Current Position', '',
+  'Phase: 3-01 (Create layer) — READY TO EXECUTE', 'Status: Executing', 'Total Plans in Phase: 5', '',
+].join('\n');
+
+describe('#5626 milestone-prefixed M-NN phase ids', () => {
+  let projectDir;
+  beforeEach(() => { projectDir = createTempProject('gsd-5626-'); });
+  afterEach(() => { cleanup(projectDir); });
+
+  function writeProject({ roadmap, convention = MP }) {
+    const planning = path.join(projectDir, '.planning');
+    const phaseDir = path.join(planning, 'phases', '3-01-create-layer');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '3-01-01-PLAN.md'), '# plan\n');
+    fs.writeFileSync(path.join(phaseDir, '3-01-01-SUMMARY.md'), '# summary\n');
+    fs.writeFileSync(path.join(planning, 'config.json'), JSON.stringify(convention === null ? {} : { phase_id_convention: convention }));
+    fs.writeFileSync(path.join(planning, 'ROADMAP.md'), roadmap);
+    fs.writeFileSync(path.join(planning, 'STATE.md'), STATE_MD);
+  }
+
+  const view = (phases) => phases.map((p) => ({ number: p.number, name: p.name }));
+
+  test('state.json phases keep M-NN ids from the Progress table (#5626)', () => {
+    writeProject({ roadmap: ROADMAP_TABLE });
+    assert.deepEqual(view(buildStateContract(projectDir).phases), [
+      { number: '3-01', name: 'Create layer' },
+      { number: '3-02', name: 'Validator' },
+    ]);
+  });
+
+  test('state.json phases keep M-NN ids from the checklist and flag the current one (#5626)', () => {
+    writeProject({ roadmap: ROADMAP_CHECKLIST });
+    const phases = buildStateContract(projectDir).phases;
+    assert.deepEqual(view(phases), [
+      { number: '3-01', name: 'Create layer' },
+      { number: '3-02', name: 'Validator' },
+    ]);
+    assert.deepEqual(phases.map((p) => p.status), ['in_progress', 'pending'], 'only the current phase is in progress');
+  });
+
+  test('parsePhaseFromProse keeps M-NN under milestone-prefixed (#5626)', () => {
+    assert.equal(parsePhaseFromProse('3-01', MP).phase, '3-01');
+    const withName = parsePhaseFromProse('3-01 (Create layer) — EXECUTING', MP);
+    assert.equal(withName.phase, '3-01');
+    assert.equal(withName.name, 'Create layer');
+  });
+
+  test('state sync keeps current_phase 3-01 (#5626)', () => {
+    writeProject({ roadmap: ROADMAP_TABLE });
+    const synced = runGsdTools(['state', 'sync'], projectDir);
+    assert.equal(synced.success, true, synced.error);
+    const state = fs.readFileSync(path.join(projectDir, '.planning', 'STATE.md'), 'utf8');
+    assert.equal(extractFrontmatter(state).current_phase, '3-01', 'the frontmatter current_phase round-trips');
+  });
+
+  test('other id shapes parse as before under milestone-prefixed (#5626)', () => {
+    const cases = [
+      ['47', '47'], ['2.1', '2.1'], ['12A', '12A'], ['1.5', '1.5'], ['Phase 7', '7'],
+      ['Milestone v3.0 complete', null], ['', null],
+    ];
+    for (const [input, phase] of cases) {
+      assert.equal(parsePhaseFromProse(input, MP).phase, phase, JSON.stringify(input));
+    }
+    assert.equal(parsePhaseFromProse('[GSD.02] 05', MP).phase, parsePhaseFromProse('[GSD.02] 05').phase, 'bracket display ids read the same');
+  });
+
+  test('other conventions still read 3-01 as phase 3 (#5626)', () => {
+    for (const convention of [undefined, null, 'bracket']) {
+      assert.equal(parsePhaseFromProse('3-01', convention).phase, '3', String(convention));
+    }
+    assert.equal(parsePhaseFromProse('3-01').phase, '3');
+  });
+
+  test('state.json under no convention keeps the leading integer, as before (#5626)', () => {
+    writeProject({ roadmap: ROADMAP_TABLE, convention: null });
+    assert.deepEqual(buildStateContract(projectDir).phases.map((p) => p.number), ['3', '3']);
+  });
+
+  test('M-NN boundary shapes (#5626)', () => {
+    const cases = [
+      ['3-1', '3-1'], ['3-01', '3-01'], ['3-001', '3-001'],
+      ['3-', '3'], ['3--01', '3'], ['-01', null], ['3-01-02', '3-01'],
+    ];
+    for (const [input, phase] of cases) {
+      assert.equal(parsePhaseFromProse(input, MP).phase, phase, JSON.stringify(input));
+    }
+  });
+});

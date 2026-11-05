@@ -45,7 +45,11 @@ Load execution context (paths only to minimize orchestrator context):
 @~/.claude/gsd-core/references/gsd-run-resolver.md
 
 ```bash
-GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 INIT=$(gsd_run query init.execute-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
@@ -500,7 +504,7 @@ IS_WORKTREE=$([ -f .git ] && echo "true" || echo "false")
 
 if [ "$IS_WORKTREE" != "true" ]; then
   # use_worktrees: false → this handler is the sole post-plan sync point (#2661)
-  gsd_run query roadmap.update-plan-progress "${PHASE}"
+  PROGRESS=$(gsd_run query roadmap.update-plan-progress "${PHASE}") && REASON=$(jq -er '.reason//""' <<<"$PROGRESS") && [ "$REASON" != missing_phase_details ] || { echo "ERROR: ROADMAP update-plan-progress did not complete for ${PHASE}-${PLAN} (missing_phase_details decline, failed query, or jq not installed). STOP: skip this plan's completion steps." >&2; exit 1; }
 fi
 ```
 Counts PLAN vs SUMMARY files on disk. Updates progress table row with correct count and status (`In Progress` or `Complete` with date).

@@ -172,6 +172,21 @@ const KNOWN_BOILERPLATE_PREFIXES = [
 ];
 
 /**
+ * The four-line argument-capture block (#5143) every shell fence that reads the
+ * typed text opens with: a quoted heredoc whose body is the `$ARGUMENTS` token,
+ * then a trailing-newline strip. A Read-loaded detail file is a separate shell
+ * context from its spine, so each carries its own copy — the same sanctioned
+ * duplication as the launcher preamble. Exact lines only: nothing else that
+ * merely starts with `$ARGUMENTS` is exempt.
+ */
+const ARGUMENT_CAPTURE_LINES = new Set([
+  "IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true",
+  '$ARGUMENTS',
+  'GSD_ARGS_END',
+  "GSD_ARGS=${GSD_ARGS%$'\\n'}",
+]);
+
+/**
  * Is `line` one of the corpus's known sanctioned cross-file duplicates: the
  * canonical `gsd_run` launcher bootstrap preamble (see
  * `gsd-core/workflows/_runtime-launcher.snippet.sh`,
@@ -190,6 +205,7 @@ const KNOWN_BOILERPLATE_PREFIXES = [
  */
 function isKnownSanctionedBoilerplate(line) {
   if (line.startsWith('_GSD_SHIM_NAME="gsd-tools.cjs";')) return true;
+  if (ARGUMENT_CAPTURE_LINES.has(line)) return true;
   return KNOWN_BOILERPLATE_PREFIXES.some((prefix) => line.startsWith(prefix));
 }
 

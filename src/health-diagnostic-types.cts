@@ -47,6 +47,10 @@ const REMEDY_ACTION = Object.freeze({
   ADD_NYQUIST_KEY: 'addNyquistKey',
   ADD_AI_INTEGRATION_PHASE_KEY: 'addAiIntegrationPhaseKey',
   BACKFILL_MILESTONES: 'backfillMilestones',
+  // #5291: rewrite a KNOWN legacy verification `status` (W030) to its closed-set
+  // equivalent, keeping the original in `legacy_status`. Per-finding: only
+  // emitted when the raw value has a mapping; every other W030 stays ADVISE.
+  REPAIR_VERIFICATION_STATUS: 'repairVerificationStatus',
   // §8.3 rule 5 — every non-repairable finding's `fix` string becomes an
   // ADVISE payload; ADVISE never acts, only describes.
   ADVISE: 'advise',

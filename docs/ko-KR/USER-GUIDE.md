@@ -402,12 +402,7 @@ AI 코딩 도구는 패키지 이름을 환각합니다. 공격자는 npm, PyPI,
 | `[SUS]` | 의심스러운 신호 | 표시됨; 계획자가 `checkpoint:human-verify` 추가 |
 | `[SLOP]` | 고신뢰 환각 | RESEARCH.md에서 제거; 계획자에게 도달하지 않음 |
 
-슬롭체크를 수동으로 설치하려면:
-
-```bash
-pip install slopcheck
-# verify: slopcheck install express --json
-```
+판정은 라이브 레지스트리 API(npm, PyPI, crates.io)에서 계산되므로 별도로 설치할 도구가 없습니다. `slopcheck`은 선택적 escalate-only 어댑터(판정을 상향할 수만 있고 하향할 수 없음)이며, 출하되는 어떤 구성도 이를 연결하지 않고 없어도 게이트 동작은 바뀌지 않습니다.
 
 ---
 

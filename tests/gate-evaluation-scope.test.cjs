@@ -23,6 +23,7 @@ const {
   evaluateEvaluationScope,
   extractTaskCommitRefs,
   planSubjectPattern,
+  qualifiedPlanSubjectPattern,
   isSafeRefArgument,
   SCOPE_EXCLUSION_PATHSPECS,
 } = require('../gsd-core/bin/lib/gate-evaluation-scope.cjs');
@@ -307,12 +308,225 @@ describe('resolveEvaluationScope — plan and quick units', () => {
     assert.equal(planSubjectPattern('a b'), null);
     assert.equal(planSubjectPattern('x'.repeat(201)), null);
     assert.notEqual(planSubjectPattern('x'.repeat(200)), null);
+    // The length bound is on the WHOLE id, so a coded id is refused on the same boundary — the
+    // configured prefix does not buy back the characters it adds (#5271).
+    assert.equal(planSubjectPattern(`PRJ-${'x'.repeat(197)}`, 'PRJ'), null, 'a 201-char coded id');
+    assert.notEqual(planSubjectPattern(`PRJ-${'x'.repeat(196)}`, 'PRJ'), null, '200 chars is accepted');
+    assert.notEqual(planSubjectPattern(`PRJ-${'x'.repeat(195)}`, 'PRJ'), null, '199 chars is accepted');
     const repo = makeRepo();
     commit(repo, 'src/a.js', 'feat(abc-1): unrelated');
     const literal = resolveEvaluationScope(repo.dir, { kind: 'plan', planId: '.*-1' });
     assert.equal(literal.status, 'resolved');
     assert.deepEqual(literal.commits, [], '`.*-1` must not match feat(abc-1)');
     assert.equal(resolveEvaluationScope(repo.dir, { kind: 'plan', planId: '' }).reason, 'invalid-plan-id');
+  });
+
+  test('[regression] a project-coded plan id resolves the plan\'s own commits (#5271)', () => {
+    // `init.execute-phase` hands out `PRJ-01` where `init.plan-phase` hands out `01`, so the
+    // gates' `--plan PRJ-01-01` used to resolve "no-matching-commits" at exit 0 — the honest
+    // answer for a plan that has NOT started — for a plan that has.
+    const repo = makeRepo();
+    write(repo.dir, '.planning/config.json', JSON.stringify({ project_code: 'PRJ' }));
+    repo.git('add', '.planning/config.json');
+    repo.git('commit', '-m', 'docs(config): set project_code');
+    commit(repo, 'src/a.js', 'feat(01-01): a');
+    commit(repo, 'src/b.js', 'fix(01-01)!: breaking');
+    commit(repo, 'src/c.js', 'feat(01-02): another plan');
+    commit(repo, 'src/d.js', 'feat(01-010): not this plan');
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'plan', planId: 'PRJ-01-01' });
+    assert.equal(scope.status, 'resolved');
+    assert.equal(scope.source, 'plan-subjects');
+    assert.notEqual(scope.reason, 'no-matching-commits', 'the plan HAS commits, so an empty scope is not the answer');
+    assert.deepEqual(
+      scope.commits.map((c) => c.subject).sort(),
+      ['feat(01-01): a', 'fix(01-01)!: breaking'],
+      'the coded id resolves the plan\'s commits, and only its own',
+    );
+    const bare = resolveEvaluationScope(repo.dir, { kind: 'plan', planId: '01-01' });
+    assert.deepEqual(
+      scope.commits.map((c) => c.sha).sort(),
+      bare.commits.map((c) => c.sha).sort(),
+      'the coded and bare ids name ONE plan, so they resolve the same commits (#5177 grammar)',
+    );
+  });
+
+  test('[regression] a coded plan id matches a commit spelled either way (#5271)', () => {
+    const matches = (planId, subject, code) => new RegExp(planSubjectPattern(planId, code)).test(subject);
+    assert.ok(matches('PRJ-01-01', 'feat(01-01): a', 'PRJ'), 'the executor writes the BARE phase token');
+    assert.ok(matches('PRJ-01-01', 'feat(PRJ-01-01): a', 'PRJ'), 'and the coded spelling still resolves');
+    assert.ok(matches('PRJ-01-01', 'fix(PRJ-1-1)!: breaking', 'PRJ'), 'zero padding stays tolerant under the code');
+    assert.ok(!matches('PRJ-01-01', 'feat(OTHER-01-01): a', 'PRJ'), 'a DIFFERENT project code is a different plan');
+    assert.ok(!matches('PRJ-01-01', 'feat(01-010): a', 'PRJ'), 'and the id boundary is unchanged');
+    assert.ok(matches('PROJ_V2-03-01', 'feat(03-01): a', 'PROJ_V2'), 'an underscore-bearing code is the project_code grammar');
+    assert.ok(!matches('PRJ-01-01', 'feat(01-01): a', null), 'with NO configured code the coded id stays literal (#5271)');
+  });
+
+  test('[regression] only the CONFIGURED code is stripped; a lookalike id stays literal (#5271)', () => {
+    // The phase-id grammar `^[A-Z][A-Z0-9_]*-(?=\d)`/`i` recognises ANY letter prefix. Stripping it
+    // here made `AUTH-01-02` and `setup-1-2` resolve ANOTHER plan's commits (#5271).
+    const matches = (planId, subject) => new RegExp(planSubjectPattern(planId, 'PRJ')).test(subject);
+    assert.ok(matches('AUTH-01-02', 'feat(AUTH-01-02): its own'), 'a different code matches its own commit');
+    assert.ok(!matches('AUTH-01-02', 'feat(01-02): unrelated'), 'and NOT another plan\'s bare commits');
+    assert.ok(!matches('AUTH-01-02', 'feat(1-2):'), 'nor the unpadded spelling');
+    assert.ok(matches('setup-1-2', 'feat(setup-1-2): its own'), 'a hyphenated plan-file id stays literal');
+    assert.ok(!matches('setup-1-2', 'feat(1-2): unrelated'), 'and does not resolve a numbered plan either');
+    assert.ok(!matches('setup-1-2', 'feat(01-02): unrelated'), 'nor a padded one');
+    assert.ok(!matches('prj-01-01', 'feat(01-01): a'), 'the code match is CASE-SENSITIVE');
+    assert.ok(matches('prj-01-01', 'feat(prj-01-01): a'), 'so a lowercase code is matched literally');
+    assert.ok(!matches('PRJ-01', 'feat(01): a'), 'a code WITHOUT a plan segment takes the direct split (phase PRJ, plan 01), so it never strips the code');
+  });
+
+  test('[regression] the milestone-prefixed coded shape resolves both spellings (#5271)', () => {
+    // `PRJ-01-02-03` strips to `01-02-03`, whose plan half still carries a dash, so the literal
+    // fall-through previously emitted `PRJ-01-02-03` alone and never the bare spelling.
+    const matches = (planId, subject) => new RegExp(planSubjectPattern(planId, 'PRJ')).test(subject);
+    assert.equal(planSubjectPattern('PRJ-01-02-03', 'PRJ'), '^[a-z]+\\((PRJ-)?01-02-03\\)!?:',
+      'the fall-through literal keeps the OPTIONAL code group, so it is not bare `PRJ-01-02-03`');
+    assert.ok(matches('PRJ-01-02-03', 'feat(PRJ-01-02-03): a'), 'the coded spelling resolves');
+    assert.ok(matches('PRJ-01-02-03', 'feat(01-02-03): a'), 'and so does the BARE spelling, as for every other shape');
+    assert.ok(!matches('PRJ-01-02-03', 'feat(01-02-04): a'), 'but a different sub-phase does not');
+    assert.ok(matches('PRJ-01-01-extra', 'feat(PRJ-01-01-extra): a'), 'a trailing suffix is still literal, and resolves');
+  });
+
+  test('[regression] the coded id matches through REAL git, not only a JS RegExp (#5271)', () => {
+    // git's ERE has no `(?:…)`; the JS-side RegExp accepts it, so only a real `git log` proves the
+    // pattern is well-formed on the side that actually runs it.
+    const repo = makeRepo();
+    write(repo.dir, '.planning/config.json', JSON.stringify({ project_code: 'PRJ' }));
+    repo.git('add', '.planning/config.json');
+    repo.git('commit', '-m', 'docs(config): set project_code');
+    commit(repo, 'src/coded.js', 'feat(PRJ-01-01): coded spelling');
+    commit(repo, 'src/other.js', 'feat(02-01): another phase');
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'plan', planId: 'PRJ-01-01' });
+    assert.equal(scope.source, 'plan-subjects', 'the ERE reached git and matched, so it is not a syntax error');
+    assert.deepEqual(
+      scope.commits.map((c) => c.subject),
+      ['feat(PRJ-01-01): coded spelling'],
+      'the coded commit is found through real git',
+    );
+  });
+
+  test('[regression] a coded id with no commits resolves empty at exit 0 (#5271)', () => {
+    const repo = makeRepo();
+    write(repo.dir, '.planning/config.json', JSON.stringify({ project_code: 'PRJ' }));
+    repo.git('add', '.planning/config.json');
+    repo.git('commit', '-m', 'docs(config): set project_code');
+    commit(repo, 'src/other.js', 'feat(02-01): another phase');
+    for (const planId of ['PRJ-01-09', 'PRJ-1-1', 'PRJ-01-02-03']) {
+      const scope = resolveEvaluationScope(repo.dir, { kind: 'plan', planId });
+      assert.equal(scope.status, 'resolved', `${planId} resolves`);
+      assert.deepEqual(scope.commits, [], `${planId} has no commits of its own`);
+    }
+  });
+
+  // #5271: the OPTIONAL code group rode on the bare literal fall-through, so a remainder
+  // that is not a plan number kept it and the pattern widened past the pre-#5271 literal.
+  test('[regression] a coded id whose remainder is not a plan number stays literal (#5271)', () => {
+    assert.equal(planSubjectPattern('PRJ-', 'PRJ'), '^[a-z]+\\(PRJ-\\)!?:',
+      '`PRJ-` strips to an empty remainder, so the OPTIONAL group would match a bare `feat():`');
+    assert.equal(planSubjectPattern('PRJ-a.b', 'PRJ'), '^[a-z]+\\(PRJ-a\\.b\\)!?:',
+      'a non-numeric remainder keeps the whole id literal, not `(PRJ-)?a\\.b`');
+    for (const [planId, subject] of [
+      ['PRJ-', 'feat(): a subject no plan assigns'],
+      ['PRJ-a.b', 'feat(a.b): another plan\'s literal id'],
+    ]) {
+      const pattern = planSubjectPattern(planId, 'PRJ');
+      assert.ok(!new RegExp(pattern).test(subject), `${planId} must not match ${subject}`);
+    }
+    // A hyphenated code leaves a remainder the phase/plan split cannot parse; only the full
+    // N-segment shape may take the optional group, never a bare number or a dangling dash.
+    for (const planId of ['AUTH-X-1', 'AUTH-X-01-', 'AUTH-X-01-01-']) {
+      const pattern = planSubjectPattern(planId, 'AUTH-X');
+      assert.ok(!new RegExp(pattern).test('feat(1): another plan'), `${planId} must not match a bare feat(1):`);
+      assert.ok(!new RegExp(pattern).test('feat(01-): another plan'), `${planId} must not match a bare feat(01-):`);
+    }
+    // The shapes that legitimately take the group are unchanged by the narrowing.
+    assert.equal(planSubjectPattern('PRJ-01-01', 'PRJ'), '^[a-z]+\\((PRJ-)?0*1-0*1\\)!?:');
+    assert.equal(planSubjectPattern('PRJ-01-02-03', 'PRJ'), '^[a-z]+\\((PRJ-)?01-02-03\\)!?:',
+      'the milestone-prefixed coded shape still takes the group: its remainder starts with the phase number');
+  });
+
+  // #5271 (maintainer review of #5283): `config-set` stores `project_code` unvalidated and
+  // docs/CONFIGURATION.md calls it "any short string", so a lowercase or hyphenated code must resolve
+  // its coded id too. Only a value that is unusable in a pattern (empty, whitespace, control, over
+  // long) reads as absent, and then the id stays literal and never widens.
+  test('[regression] a configured project_code is validated by a safe-character check, not the uppercase grammar (#5271)', () => {
+    const configured = (value) => {
+      const repo = makeRepo();
+      write(repo.dir, '.planning/config.json', typeof value === 'string' && value.startsWith('{') ? value : JSON.stringify({ project_code: value }));
+      repo.git('add', '.planning/config.json');
+      repo.git('commit', '-m', 'docs(config): set project_code');
+      return repo;
+    };
+    const subjectsFor = (repo, planId) => {
+      commit(repo, 'src/coded.js', 'feat(01-01): the bare spelling');
+      const scope = resolveEvaluationScope(repo.dir, { kind: 'plan', planId });
+      assert.equal(scope.status, 'resolved');
+      return scope.commits.map((c) => c.subject);
+    };
+    for (const code of ['gsd', 'AUTH-X', 'Prj_2', 'a.b']) {
+      const subjects = subjectsFor(configured(code), `${code}-01-01`);
+      assert.deepEqual(subjects, ['feat(01-01): the bare spelling'], `${code}: the coded id resolves the bare spelling`);
+    }
+    // The strip stays case-sensitive and exact: a different spelling of the code is a literal id.
+    assert.deepEqual(subjectsFor(configured('gsd'), 'GSD-01-01'), [], 'GSD-01-01 is not the configured gsd');
+    // Unusable values read as absent: the id stays literal and resolves empty, never wider.
+    for (const [label, value] of [['an empty code', ''], ['a code with whitespace', 'a b'], ['an over-long code', 'A'.repeat(33)], ['a non-string code', 7]]) {
+      const repo = configured(value);
+      const planId = typeof value === 'string' && value.length > 0 && !/\s/.test(value) ? `${value}-01-01` : 'PRJ-01-01';
+      assert.deepEqual(subjectsFor(repo, planId), [], `${label} is unusable, so the id stays literal`);
+    }
+    assert.deepEqual(subjectsFor(configured('{ not json'), 'PRJ-01-01'), [], 'an unparseable config reads as absent, never as a wider pattern');
+    for (const code of ['PRJ', 'PROJ_V2', 'gsd']) {
+      const codedId = `${code}-01-01`;
+      const supported = planSubjectPattern(codedId, code);
+      assert.ok(new RegExp(supported).test('feat(01-01): the bare spelling'), `${codedId} resolves the bare spelling`);
+      assert.ok(new RegExp(supported).test(`feat(${codedId}): the coded spelling`), `${codedId} resolves the coded spelling`);
+    }
+  });
+
+  // #5271: hand-picked ids over a fixed fixture read as coverage. The transform's own
+  // invariant is the property: whatever the code and the id, the coded spelling adds exactly the
+  // CREDITS of its own commits, and a NON-configured prefix is never a substitute for one.
+  test('[property] a coded id resolves the same subjects as its bare id, plus the coded spelling (#5271)', () => {
+    const pad = (n) => String(n).padStart(2, '0');
+    fc.assert(
+      fc.property(
+        fc.stringMatching(/^[A-Z][A-Z0-9_]{0,6}$/),
+        fc.integer({ min: 0, max: 40 }),
+        fc.integer({ min: 0, max: 40 }),
+        fc.stringMatching(/^[A-Z][A-Z0-9_]{0,6}$/),
+        (code, phase, plan, otherCode) => {
+          // An "other" code equal to the configured one is the coded spelling itself, not another project's.
+          fc.pre(otherCode !== code);
+          const bareId = `${pad(phase)}-${pad(plan)}`;
+          const codedId = `${code}-${bareId}`;
+          const corpus = [
+            `feat(${bareId}): padded spelling`,
+            `fix(${bareId})!: padded with the breaking marker`,
+            `test(${phase}-${plan}): unpadded spelling`,
+            `feat(${codedId}): the coded spelling`,
+            `fix(${codedId})!: the coded spelling with the breaking marker`,
+            `feat(${otherCode}-${bareId}): another project's code`,
+            `feat(${otherCode}-${phase}-${plan}): another project's code, unpadded`,
+          ];
+          const matched = (pattern) => corpus.filter((subject) => new RegExp(pattern).test(subject));
+          const bareMatches = matched(planSubjectPattern(bareId));
+          const codedMatches = matched(planSubjectPattern(codedId, code));
+          assert.ok(
+            bareMatches.every((subject) => codedMatches.includes(subject)),
+            `${codedId} must match every subject ${bareId} matches`,
+          );
+          for (const subject of codedMatches) {
+            assert.ok(
+              bareMatches.includes(subject) || subject.startsWith(`feat(${codedId})`) || subject.startsWith(`fix(${codedId})`),
+              `${codedId} may add only its OWN coded spelling, but it also matched ${subject}`,
+            );
+          }
+        },
+      ),
+      { numRuns: 200 },
+    );
   });
 
   test('[regression] a plan commit that lives only on another branch is not returned', () => {
@@ -615,5 +829,125 @@ describe('resolveEvaluationScope — what a scope says when it finds little', ()
     const scope = resolveEvaluationScope(dir, { kind: 'phase', phase: '3' });
     assert.equal(scope.status, 'degraded');
     assert.deepEqual(scope.files, ['src/root.js']);
+  });
+});
+
+describe('check evaluation-scope — the CLI surface for a coded plan id (#5271)', () => {
+  // The unit tests above prove the RESOLVER answers; the four gates that actually read this are
+  // shell callers branching on `gsd_run check evaluation-scope`, so the exit code and the JSON on
+  // stdout are part of the contract, not an implementation detail of the resolver.
+  const { runTools } = require('./helpers/gsd-tools-cli.cjs');
+
+  function codedRepo() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-scope-cli-'));
+    dirs.push(dir);
+    const git = (...args) => gitOrThrow(args, { cwd: dir, env: { ...process.env, ...IDENTITY } }).trim();
+    git('init', '--initial-branch=main');
+    git('config', 'user.email', 'test@test.io');
+    git('config', 'user.name', 'Test');
+    write(dir, '.planning/config.json', JSON.stringify({ project_code: 'PRJ' }));
+    git('add', '.');
+    git('commit', '-m', 'docs(config): set project_code');
+    return { dir, git };
+  }
+
+  test('a coded id resolves the plan\'s commits and exits 0', () => {
+    const repo = codedRepo();
+    write(repo.dir, 'src/coded.js', 'coded\n');
+    repo.git('add', '.');
+    repo.git('commit', '-m', 'feat(01-01): bare spelling, what the executor writes');
+
+    const res = runTools(['check', 'evaluation-scope', '--plan', 'PRJ-01-01', '--raw'], repo.dir);
+    assert.equal(res.exitCode, 0, `expected exit 0, got ${res.exitCode}: ${res.stderr}`);
+    const payload = JSON.parse(res.stdout);
+    assert.equal(payload.status, 'resolved');
+    assert.equal(payload.reason, null);
+    assert.deepEqual(payload.commits.map((c) => c.subject), ['feat(01-01): bare spelling, what the executor writes']);
+  });
+
+  test('a coded id with no commits is ADVISORY at exit 0, not a silent pass', () => {
+    // The #5271 symptom at the shell: this used to be indistinguishable from "the plan has not
+    // started" for a plan that HAS. The reason must survive to stdout either way.
+    const repo = codedRepo();
+    const res = runTools(['check', 'evaluation-scope', '--plan', 'PRJ-01-09', '--raw'], repo.dir);
+    assert.equal(res.exitCode, 0, `an empty-but-resolved scope is not a failure, got ${res.exitCode}: ${res.stderr}`);
+    const payload = JSON.parse(res.stdout);
+    assert.equal(payload.status, 'resolved');
+    assert.equal(payload.reason, 'no-matching-commits');
+    assert.deepEqual(payload.commits, []);
+    assert.equal(evaluateEvaluationScope({ projectDir: repo.dir, args: ['--plan', 'PRJ-01-09'] }).outcome, 'advisory',
+      'the gate outcome for the empty coded scope is advisory, not pass');
+  });
+
+  test('a differently-cased id than the configured code stays LITERAL at the CLI', () => {
+    const repo = codedRepo();
+    write(repo.dir, '.planning/config.json', JSON.stringify({ project_code: 'prj' }));
+    repo.git('add', '.');
+    repo.git('commit', '-m', 'docs(config): lowercase code');
+    write(repo.dir, 'src/bare.js', 'bare\n');
+    repo.git('add', '.');
+    repo.git('commit', '-m', 'feat(01-01): still resolvable by its bare spelling');
+
+    const res = runTools(['check', 'evaluation-scope', '--plan', 'PRJ-01-01', '--raw'], repo.dir);
+    assert.equal(res.exitCode, 0, res.stderr);
+    assert.equal(JSON.parse(res.stdout).reason, 'no-matching-commits',
+      'with no usable configured code the coded id keeps its literal spelling');
+  });
+});
+
+describe('qualifiedPlanSubjectPattern — one builder for every plan-id spelling (#5271, #5177)', () => {
+  // The bare id, the id carrying the configured project code and the workstream-qualified id that
+  // #5177 proposes (`<ws>-<phase>-<plan>`) are three spellings of one grammar. planSubjectPattern
+  // must build the first two through the shared builder; the third has no resolver yet, so it is
+  // driven through the same builder that resolver would call. If planSubjectPattern stops routing
+  // through it, or the builder changes shape for one spelling, the equalities below fail.
+  const fragmentOf = (bareId) => {
+    const m = /^\^\[a-z\]\+\\\((.*)\\\)!\?:$/.exec(planSubjectPattern(bareId));
+    assert.ok(m, `bare pattern for ${bareId} has the subject shape`);
+    return m[1];
+  };
+  const PLAN_NUMBER = fc.integer({ min: 1, max: 120 }).map((n) => String(n).padStart(2, '0'));
+  // A workstream name is a path segment: no `/`, `\` or `..`, and it may carry `.` and `-`.
+  const WORKSTREAM = fc.stringMatching(/^[a-z][a-z0-9_-]{0,6}(\.[a-z0-9]{1,3})?$/);
+
+  test('the bare and coded ids are built by the shared builder', () => {
+    assert.equal(planSubjectPattern('01-01'), qualifiedPlanSubjectPattern('0*1-0*1'));
+    assert.equal(planSubjectPattern('PRJ-01-01', 'PRJ'), qualifiedPlanSubjectPattern('0*1-0*1', 'PRJ'));
+  });
+
+  test('the qualifier group is a real POSIX-ERE capture group and is escaped', () => {
+    assert.equal(qualifiedPlanSubjectPattern('0*1-0*1', 'PRJ'), '^[a-z]+\\((PRJ-)?0*1-0*1\\)!?:');
+    assert.equal(qualifiedPlanSubjectPattern('0*1-0*1', 'ws.b'), '^[a-z]+\\((ws\\.b-)?0*1-0*1\\)!?:');
+    assert.ok(!qualifiedPlanSubjectPattern('0*1-0*1', 'PRJ').includes('(?:'), 'no non-capturing group on the git side');
+  });
+
+  test('[property] bare, coded and workstream-qualified spellings resolve the same plan', () => {
+    fc.assert(fc.property(PLAN_NUMBER, PLAN_NUMBER, WORKSTREAM, (phase, plan, ws) => {
+      const bare = `${phase}-${plan}`;
+      const fragment = fragmentOf(bare);
+      const coded = planSubjectPattern(`PRJ-${bare}`, 'PRJ');
+      assert.equal(coded, qualifiedPlanSubjectPattern(fragment, 'PRJ'), 'coded id goes through the builder');
+      const codedRe = new RegExp(coded);
+      const wsRe = new RegExp(qualifiedPlanSubjectPattern(fragment, ws));
+      for (const re of [codedRe, wsRe]) {
+        assert.ok(re.test(`feat(${bare}): bare spelling`), `${re} accepts the bare spelling`);
+        assert.ok(!re.test(`feat(${phase}-${plan}0): x`), `${re} rejects a longer plan number`);
+      }
+      assert.ok(codedRe.test(`fix(PRJ-${bare})!: coded`), 'coded spelling accepted');
+      assert.ok(wsRe.test(`fix(${ws}-${bare})!: qualified`), 'workstream-qualified spelling accepted');
+      assert.ok(!wsRe.test(`feat(zz${ws}-${bare}): other workstream`), 'another workstream is rejected');
+      if (ws.includes('.')) {
+        assert.ok(!wsRe.test(`feat(${ws.replace('.', 'X')}-${bare}): x`), 'a `.` in the name is literal');
+      }
+    }), { numRuns: 100 });
+  });
+
+  test('a workstream-qualified pattern from the builder is valid for real git', () => {
+    const repo = makeRepo();
+    commit(repo, 'src/b.js', 'feat(ws.b-01-01): qualified spelling');
+    commit(repo, 'src/bare.js', 'feat(01-01): bare spelling');
+    commit(repo, 'src/a.js', 'feat(wsXb-01-01): another workstream');
+    const out = repo.git('log', '--extended-regexp', `--grep=${qualifiedPlanSubjectPattern('0*1-0*1', 'ws.b')}`, '--format=%s');
+    assert.deepEqual(out.split('\n').filter(Boolean).sort(), ['feat(01-01): bare spelling', 'feat(ws.b-01-01): qualified spelling']);
   });
 });

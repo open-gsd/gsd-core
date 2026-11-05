@@ -53,6 +53,8 @@
  * rediscovered.
  */
 
+import { splitLines } from './text-lines.cjs';
+
 /** ADR-2782 D2 — closed transport discriminator; selects the invoke sub-shape. */
 export type LaneTransport = 'spawn' | 'openai-http';
 
@@ -211,6 +213,22 @@ interface ReviewerLaneCommon {
   /** Dotted config key for per-lane prompt trimming, or null. */
   promptBudgetKey: string | null;
   /**
+   * The context window, in tokens, this lane's default CLI model is guaranteed to have, or null
+   * when GSD declares none (#4559).
+   *
+   * A declared FLOOR, not a measurement: it seeds the default prompt cap
+   * (`floor(window * CONTEXT_WINDOW_HEADROOM)`, see `resolveLaneCap`) so a prompt larger than the
+   * lane can read is refused instead of silently dropping the plan set. Operators on a larger
+   * plan raise it via `contextWindowConfigKey`. null for lanes whose model GSD cannot know
+   * (opencode, cursor, antigravity, local HTTP lanes) and for coderabbit (no prompt).
+   */
+  contextWindowTokens: number | null;
+  /**
+   * Dotted config key holding the operator's override of `contextWindowTokens`, or null when the
+   * lane is fed no prompt (#4559). Declared rather than derived, like `promptBudgetKey`.
+   */
+  contextWindowConfigKey: string | null;
+  /**
    * Dotted config key holding this lane's model override, or null when the lane accepts none.
    *
    * Added by Phase 5b (#2799). Phase 1 left the model key IMPLICIT (`review.models.<slug>`), and
@@ -318,6 +336,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     evidenceClass: 'source-grounded',
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.claude',
+    contextWindowTokens: 200000,
+    contextWindowConfigKey: 'review.context_window_tokens.claude',
     modelConfigKey: 'review.models.claude',
     effortConfigKey: 'review.effort.claude',
     defaultEffort: 'high',
@@ -349,6 +369,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     evidenceClass: 'source-grounded',
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.codex',
+    contextWindowTokens: 272000,
+    contextWindowConfigKey: 'review.context_window_tokens.codex',
     modelConfigKey: 'review.models.codex',
     effortConfigKey: 'review.effort.codex',
     defaultEffort: 'high',
@@ -377,6 +399,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     evidenceClass: 'diff-only',
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.coderabbit',
+    contextWindowTokens: null,
+    contextWindowConfigKey: null,
     // Accepts no model flag at all (review.md:367) — not merely "none configured".
     modelConfigKey: null,
     effortConfigKey: null,
@@ -407,6 +431,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     // stock Windows/Git-Bash (#2589) — is no longer a prerequisite for this lane.
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.opencode',
+    contextWindowTokens: null,
+    contextWindowConfigKey: 'review.context_window_tokens.opencode',
     modelConfigKey: 'review.models.opencode',
     effortConfigKey: 'review.effort.opencode',
     defaultEffort: 'high',
@@ -433,6 +459,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     evidenceClass: 'source-grounded',
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.qwen',
+    contextWindowTokens: 131072,
+    contextWindowConfigKey: 'review.context_window_tokens.qwen',
     modelConfigKey: null,
     effortConfigKey: null,
     defaultEffort: null,
@@ -461,6 +489,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     evidenceClass: 'source-grounded',
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.cursor',
+    contextWindowTokens: null,
+    contextWindowConfigKey: 'review.context_window_tokens.cursor',
     // #3653: cursor-agent exposes --model (204 selectable models); wired the same as codex.
     modelConfigKey: 'review.models.cursor',
     effortConfigKey: null,
@@ -497,6 +527,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     // Phase 5b: the handler reads the transcript with JSON.parse per line, not `jq`.
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.antigravity',
+    contextWindowTokens: null,
+    contextWindowConfigKey: 'review.context_window_tokens.antigravity',
     // NOT `review.models.antigravity` — the shipped key is `review.models.agy` (review.md:291) and
     // Phase 4 federated it under that name. This lane is why the key is declared, not derived.
     modelConfigKey: 'review.models.agy',
@@ -531,6 +563,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     // neither `jq` nor `curl` is a prerequisite any more (#2589's stated Windows hazard).
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.ollama',
+    contextWindowTokens: null,
+    contextWindowConfigKey: 'review.context_window_tokens.ollama',
     modelConfigKey: 'review.models.ollama',
     effortConfigKey: null,
     defaultEffort: null,
@@ -561,6 +595,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     evidenceClass: 'source-grounded',
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.lm_studio',
+    contextWindowTokens: null,
+    contextWindowConfigKey: 'review.context_window_tokens.lm_studio',
     modelConfigKey: 'review.models.lm_studio',
     effortConfigKey: null,
     defaultEffort: null,
@@ -591,6 +627,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     evidenceClass: 'source-grounded',
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.llama_cpp',
+    contextWindowTokens: null,
+    contextWindowConfigKey: 'review.context_window_tokens.llama_cpp',
     modelConfigKey: 'review.models.llama_cpp',
     effortConfigKey: null,
     defaultEffort: null,
@@ -639,6 +677,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     evidenceClass: 'source-grounded',
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.kimi-code',
+    contextWindowTokens: 262144,
+    contextWindowConfigKey: 'review.context_window_tokens.kimi-code',
     modelConfigKey: 'review.models.kimi-code',
     effortConfigKey: null,
     defaultEffort: null,
@@ -762,6 +802,7 @@ export const PARITY_VIOLATION = Object.freeze({
   REGISTRY_LANE_UNDECLARED: 'registry_lane_undeclared',
   DESCRIPTOR_LANE_NOT_IN_REGISTRY: 'descriptor_lane_not_in_registry',
   BESPOKE_LEG_PRESENT: 'bespoke_leg_present',
+  AVAILABILITY_FALLBACK_MISMATCH: 'availability_fallback_mismatch',
   DUPLICATE_SLUG: 'duplicate_slug',
   DUPLICATE_FLAG: 'duplicate_flag',
   DUPLICATE_SECTION: 'duplicate_section',
@@ -826,6 +867,11 @@ const LEG_MARKER_RE = /<!--\s*reviewer-lane:\s*([a-z0-9_-]+)\s*-->/g;
  */
 export const LANE_SLUG_RE = /^[a-z0-9][a-z0-9_-]*$/;
 
+/** The workflow's availability call: `gsd_run review-lane availability ...` at command position. */
+const AVAILABILITY_CALL_RE = /^\s*gsd_run review-lane availability(?:\s|$)/;
+/** One `<slug>:missing` row in the printf fallback; slug is LANE_SLUG_RE's grammar capped at 32 chars. */
+const AVAILABILITY_FALLBACK_ROW_RE = /(?:'|\\n)([a-z0-9][a-z0-9_-]{0,31}):missing/g;
+
 /** Bounds of the step a bespoke leg marker could appear inside. */
 const INVOKE_STEP_RE = /<step name="invoke_reviewers">([\s\S]*?)<\/step>/;
 
@@ -849,8 +895,10 @@ function countOccurrences(haystack: string, re: RegExp): Map<string, number> {
 
 /**
  * Bidirectional parity across three surfaces: the descriptor, the roster
- * (`KNOWN_REVIEWER_SLUGS`), and the generated capability **registry** — plus one anti-parity
- * assertion against the workflow.
+ * (`KNOWN_REVIEWER_SLUGS`), and the generated capability **registry** — plus two assertions
+ * against the workflow: the anti-parity check, and the availability-fallback check (the workflow
+ * makes the availability call, has a fallback row per lane, and the fallback slug set equals the
+ * openai-http lanes).
  *
  * **Re-pointed by Phase 5b (#2799).** Through Phase 5a this function also required a literal
  * `<!-- reviewer-lane: <slug> -->` per lane inside `invoke_reviewers` and a literal
@@ -895,6 +943,7 @@ export function checkReviewerLaneParity(input: ParityInput): ParityResult {
   const seenSlug = new Set<string>();
   const seenFlag = new Set<string>();
   const seenSection = new Set<string>();
+  const httpSlugs = new Set<string>();
 
   // The declared parameter type says `ReviewerLane[]`, but this function is a
   // trust boundary — narrow from `unknown` rather than believing the annotation.
@@ -914,6 +963,7 @@ export function checkReviewerLaneParity(input: ParityInput): ParityResult {
 
     if (seenSlug.has(slug)) add(PARITY_VIOLATION.DUPLICATE_SLUG, slug);
     seenSlug.add(slug);
+    if (lane.transport === 'openai-http') httpSlugs.add(slug);
 
     const flags: unknown[] = Array.isArray(lane.flags) ? (lane.flags as unknown[]) : [];
     for (const flag of flags) {
@@ -968,6 +1018,26 @@ export function checkReviewerLaneParity(input: ParityInput): ParityResult {
   const markerSlugs = countOccurrences(sliceStep(workflowText, INVOKE_STEP_RE), LEG_MARKER_RE);
   for (const slug of markerSlugs.keys()) {
     add(PARITY_VIOLATION.BESPOKE_LEG_PRESENT, slug);
+  }
+
+  // --- the availability call's `||` fallback must name exactly the openai-http lanes ---
+  //
+  // review.md prints these rows only when an older gsd-tools lacks `review-lane availability`, so
+  // they are a second hand-kept copy of the roster. Checked only when the call is present.
+  // Anchored to the command position so a comment or prose mention cannot shadow the real call;
+  // a missing call is itself a violation (otherwise deleting it would silently skip this check).
+  const availabilityLine = splitLines(workflowText).find((line) => AVAILABILITY_CALL_RE.test(line));
+  if (availabilityLine === undefined) {
+    add(PARITY_VIOLATION.AVAILABILITY_FALLBACK_MISMATCH, 'no-call');
+  } else {
+    if (!availabilityLine.includes('review-lane availability ||')) {
+      add(PARITY_VIOLATION.AVAILABILITY_FALLBACK_MISMATCH, 'no-fallback');
+    }
+    const fallback = new Set(
+      Array.from(availabilityLine.matchAll(AVAILABILITY_FALLBACK_ROW_RE), (m) => m[1]),
+    );
+    for (const slug of fallback) if (!httpSlugs.has(slug)) add(PARITY_VIOLATION.AVAILABILITY_FALLBACK_MISMATCH, slug);
+    for (const slug of httpSlugs) if (!fallback.has(slug)) add(PARITY_VIOLATION.AVAILABILITY_FALLBACK_MISMATCH, slug);
   }
 
   return { ok: violations.length === 0, violations };

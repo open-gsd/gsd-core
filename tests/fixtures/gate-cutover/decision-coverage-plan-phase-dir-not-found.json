@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "query",
+    "check.decision-coverage-plan",
+    "1",
+    ".planning/phases/01-decisions/CONTEXT.md"
+  ],
+  "fixture": "dc",
+  "stdout": "{\n  \"passed\": false,\n  \"skipped\": false,\n  \"reason\": \"phase directory not found\",\n  \"total\": null,\n  \"covered\": null,\n  \"message\": \"Decision coverage gate: the phase directory \\\"1\\\" does not exist, so no plans were scanned. Pass the phase DIRECTORY (e.g. .planning/phases/01-slug), not the phase number.\"\n}",
+  "stderr": "",
+  "exitCode": 0
+}
