@@ -24,6 +24,7 @@ const {
   sliceCurrentPositionSection,
   stateReplaceProgressPercent,
   isStatePastPhase,
+  readPlanPosition,
 } = require('../gsd-core/bin/lib/state-transition.cjs');
 const { stateExtractField, computeProgressPercent, toFiniteNumber } = require('../gsd-core/bin/lib/state-document.cjs');
 const { SCOPE } = require('../gsd-core/bin/lib/planning-scope.cjs');
@@ -5393,5 +5394,53 @@ describe('#5676: isStatePastPhase under milestone-prefixed', () => {
       assert.equal(isStatePastPhase(fm('4'), '3', undefined, c), true);
     }
     assert.equal(isStatePastPhase(fm('3-02'), '3-01'), false);
+  });
+});
+
+describe('#5786: readPlanPosition reads the recorded plan total', () => {
+  const total = (...lines) => {
+    const position = readPlanPosition(lines.join('\n'));
+    return position === null ? null : position.total;
+  };
+
+  test('#5786 compound `Plan: N of M` yields M', () => {
+    assert.equal(total('Plan: 1 of 5'), 5);
+    assert.deepEqual(readPlanPosition('Plan: 2 of 7'), { current: 2, total: 7 });
+  });
+
+  test('#5786 hybrid `Current Plan: N of M` yields M', () => {
+    assert.equal(total('Current Plan: 1 of 5'), 5);
+  });
+
+  test('#5786 legacy pair takes the total from `Total Plans in Phase`', () => {
+    assert.equal(total('Current Plan: 1', 'Total Plans in Phase: 5'), 5);
+    assert.equal(total('Current Plan: 1 of 9', 'Total Plans in Phase: 5'), 5);
+  });
+
+  test('#5786 explicit Total beats an `of M` in the Plan field', () => {
+    assert.equal(total('Current Plan: 1', 'Total Plans in Phase: 2', 'Plan: 1 of 5'), 2);
+  });
+
+  test('#5786 unreadable totals and absent fields yield no position', () => {
+    assert.equal(readPlanPosition('Plan: 1 of ?'), null);
+    assert.equal(readPlanPosition('Total Plans in Phase: TBD'), null);
+    assert.equal(readPlanPosition('Current Plan: 1'), null);
+    assert.equal(readPlanPosition('nothing here'), null);
+  });
+
+  test('#5786 trailing prose after the total is tolerated', () => {
+    assert.equal(total('Plan: 1 of 5 in current phase'), 5);
+  });
+
+  test('#5786 property: `Plan: N of M` yields M; an explicit Total T beside Current Plan N wins', () => {
+    fc.assert(fc.property(
+      fc.integer({ min: 1, max: 999 }),
+      fc.integer({ min: 1, max: 999 }),
+      fc.integer({ min: 1, max: 999 }),
+      (n, m, t) => {
+        assert.equal(total(`Plan: ${n} of ${m}`), m);
+        assert.equal(total(`Current Plan: ${n}`, `Total Plans in Phase: ${t}`, `Plan: ${n} of ${m}`), t);
+      },
+    ));
   });
 });
